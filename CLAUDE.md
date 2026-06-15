@@ -12,7 +12,13 @@ Update this file whenever you change architecture, invariants, or policies.
 
 **Lumen** — private, lightweight, transparent browser in Rust with a custom engine. Not a Chromium/WebKit wrapper; a standalone rendering engine with an embedded JS engine.
 
-Current phase: **Phase 0 (prototype)**. Goal: open local HTML+CSS and render it via own pipeline. Status: `samples/page.html` opens, backgrounds and text render via bundled Inter.
+Current phase: **Phase 2 — v0.5 «Interactive» (in progress)**, app version **v0.2.0**. Phase 0 (prototype) closed 2026-05-26; Phase 1 «Reader» largely complete. Phase 2 work active: QuickJS, Canvas 2D, CSS Grid, Shadow DOM, accessibility tree, forms, find-in-page, DevTools/CDP, knowledge layer.
+
+### Versioning & phase policy
+
+Single source of truth for the version is `[workspace.package] version` in `Cargo.toml`. All machine-readable version strings (User-Agent, Sec-CH-UA, CDP `Browser.getVersion`, window title, startup banner) derive from `CARGO_PKG_VERSION` — do **not** hardcode a version number in code. The one manual-bump site is the `navigator.userAgent` literal in `crates/js/src/dom.rs` (JS shim string).
+
+Version↔phase mapping (from `docs/plan/phases.md`): Phase 1 → v0.1, **Phase 2 → v0.5** (target on phase completion), Phase 3 → v1.0. Mid-phase the version climbs toward the target (currently **0.2.0** inside active Phase 2). When Phase 2 goals are met, bump to 0.5.0; reaching Phase 3 → 1.0.0. Keep the phase label in sync across `README.md`, `docs/plan/status.md`, `docs/plan/phases.md`, this file, and the shell startup banner.
 
 | File | Contents |
 |---|---|
@@ -21,7 +27,9 @@ Current phase: **Phase 0 (prototype)**. Goal: open local HTML+CSS and render it 
 | `STATUS-P2.md` | P2 sprint: in-progress task, next items, recent merge. Read at session start if you are P2. |
 | `STATUS-P3.md` | P3 sprint: in-progress task, next items, recent merge. Read at session start if you are P3. |
 | `STATUS-P4.md` | P4 sprint: CSS spec compliance. Read at session start if you are P4. |
-| `lumen-plan.md` | Full design doc (~2400 lines, 22 chapters): principles, scope, architecture, phases, roadmap, implementation history. Read for architecture/history; for daily status use `STATUS-PN.md` instead. |
+| `STATUS-P5.md` | P5 maintenance: code-health aliases + sweep workflow. Read at session start if you are P5. |
+| `lumen-plan.md` | TOC index: links to 14 section files in `docs/plan/`. Read for architecture/history; for daily status use `STATUS-PN.md` instead. |
+| `docs/plan/` | Design doc split into 14 files: status, roadmap, history, architecture, tech-stack, engine, web-apis-shell, privacy, features, knowledge, security-performance, testing, phases, meta. |
 | `CSS-SPECS.md` | Complete CSS property & spec roadmap: all W3C modules, per-property status (✅🟡⬜🚫), P4 priority queue. |
 | `CLAUDE.md` | (this file) Conventions and invariants for the assistant. |
 | `docs/decisions/` | Formal ADR files (one per architectural decision). See README.md + TEMPLATE.md inside. |
@@ -43,11 +51,11 @@ Exception: Claude memory (`~/.claude/projects/.../memory/`) lives outside the re
 
 ## Developer assignments
 
-Four parallel developers (4 Claude Code sessions, each in its own `git worktree`). Each owns a distinct domain:
+Five parallel developers (5 Claude Code sessions, each in its own `git worktree`). Each owns a distinct domain:
 
 **If the user says "you are developer N" at session start — read `STATUS-PN.md` and take the first item from "Next". If "In progress" is set — continue that task. If all your tasks are taken — ask the user which task to take next.**
 
-Crates: `shell` | `core` | `dom` `html-parser` `css-parser` `layout` `paint` `font` `encoding` `image` | `network` `storage` `knowledge` `bench`
+Crates: `shell` | `core` | `dom` `html-parser` `css-parser` `layout` `paint` `font` `encoding` `image` | `ipc` `network` `storage` `knowledge` `bench`
 
 | Developer | Domain | Crates |
 |---|---|---|
@@ -55,6 +63,7 @@ Crates: `shell` | `core` | `dom` `html-parser` `css-parser` `layout` `paint` `fo
 | **P2** | Feature development: any subsystem from roadmap (source → layout → paint → shell) | All crates (coordinated with P1/P4) |
 | **P3** | **Bug fixes ONLY**: BUGS.md OPEN items, graphic test regressions | All crates (read-only except bug fixes) |
 | **P4** | **CSS properties ONLY**: parsing, ComputedStyle, cascade, end-to-end wiring | `css-parser`, `layout` (style.rs), `paint` (display_list.rs) |
+| **P5** | **Code health ONLY**: audit, workspace-clippy, stub/branch/docs/dep sweeps, safe mechanical cleanup | All crates (read-only except trivial clippy fixes in own crate + branch/worktree/SYMBOLS.md cleanup) |
 
 ### Feature development: P1 and P2 collaboration
 
@@ -113,6 +122,23 @@ P4 writes:  ComputedStyle.filter field + apply_declaration("filter") + emits Fil
 
 **P4 workflow:** When P1/P2 add a `// CSS: <property>` comment, P4 picks it up from `STATUS-P4.md` "Needs wiring" section. P4 implements end-to-end, then moves to "Recent". Async workflow — no pre-coordination required.
 
+### Code health: P5 only
+
+**P5 is the periodic-maintenance role.** It does NOT write features (P1/P2), does NOT fix visual/geometry bugs (P3), does NOT implement CSS (P4). P5 keeps the codebase healthy across the noise generated by four parallel sessions.
+
+P5's mandate is **audit + cheap safe cleanup + filing tasks** — never solo refactoring that changes API or behaviour.
+
+- **Use the `/lumen-health-check <target>` skill** instead of running sweeps by hand. Targets: `full` (default), `clippy`, `stubs`, `branches`, `docs`, `deps`, `dupes`. Trigger phrases and the full alias→action table live in `STATUS-P5.md`.
+- **What P5 fixes directly (no separate task):** delete `--merged` branches, prune orphaned worktrees, regenerate `SYMBOLS.md`, trivial clippy fixes (unused import, stray `&`) **in its own crate only**.
+- **What P5 does NOT fix — it files instead:**
+  - visual/logic bug → `OPEN` line in `BUGS.md` (next BUG-NNN)
+  - duplication / needed refactor → "Next" item in `STATUS-P1.md`/`STATUS-P2.md` with `file:line`
+  - dangling `// CSS:` handoff → "Needs wiring" item in `STATUS-P4.md`
+- **Workspace-clippy exception.** P5 is the only role allowed `cargo clippy --workspace` (see Cargo output rules) — the full sweep is its whole point; it catches cross-crate breakage that per-crate checks hide after multi-session merges.
+- **Branch prefix:** `p5-health-<date>` or `p5-<topic>`. Worktree mandatory, same as P1–P4.
+
+Full role definition: `STATUS-P5.md`.
+
 ### Collaboration rules
 
 - **Crate ownership.** P1 stays out of `lumen-paint` without P2 agreement; P3 stays out of layout without P1 agreement. Reduces conflicts, doesn't block review.
@@ -135,7 +161,7 @@ Next step: <what to do first>  <file.rs:line>
 
 ## Project Skills
 
-4 skills in `.claude/skills/`. Use them instead of following protocols manually:
+5 skills in `.claude/skills/`. Use them instead of following protocols manually:
 
 | Skill | When to use |
 |---|---|
@@ -143,9 +169,10 @@ Next step: <what to do first>  <file.rs:line>
 | `/lumen-task-start <name>` | Starting a new roadmap task (creates worktree + reserves in plan) |
 | `/lumen-task-finish <name>` | Task ready to merge (clippy → tests → merge --no-ff → worktree remove) |
 | `/lumen-new-crate <name>` | Creating a new Cargo crate in the workspace |
+| `/lumen-health-check [target]` | P5 maintenance sweep (`full`/`clippy`/`stubs`/`branches`/`docs`/`deps`/`dupes`) |
 
 `lumen-task-start` and `lumen-task-finish` — explicit invocation only (`/`).
-`lumen-add-css-property` and `lumen-new-crate` — Claude may invoke automatically from context.
+`lumen-add-css-property`, `lumen-new-crate`, and `lumen-health-check` — Claude may invoke automatically from context.
 
 ---
 
@@ -205,9 +232,9 @@ cargo run -p lumen-shell -- --dump-layout samples/page.html 2>&1 | grep -A2 "mar
 cargo run -p lumen-shell -- --dump-display-list samples/page.html 2>&1 | grep -A2 "FillRect\|Text"
 ```
 
-**lumen-plan.md reading rule:**
-- **DO read if you need:** Principles (§1, 8 items), Dependency policy (§5, tables), Unique features (§12), Architecture decisions (docs/decisions/ADR-*.md)
-- **DON'T read:** Detailed roadmap tables (use `STATUS-PN.md` instead) · Implementation history (use `git log` instead) · Task queue (use `STATUS-PN.md`)
+**docs/plan/ reading rule:**
+- **DO read if you need:** `docs/plan/architecture.md` (§1 Principles, §5 Dependency policy), `docs/plan/knowledge.md` (§12 Unique features), `docs/decisions/ADR-*.md`
+- **DON'T read:** `docs/plan/roadmap.md` (use `STATUS-PN.md` instead) · `docs/plan/history.md` (use `git log` instead) · `docs/plan/status.md` (use `STATUS-PN.md`)
 
 **Grep instead of reading whole files.** Use targeted grep before opening large files:
 
@@ -242,12 +269,12 @@ Regenerate after adding/moving/renaming any public symbol: `python scripts/gen_s
 **Session start protocol.** At the beginning of each session:
 1. Read `STATUS-PN.md` (your developer number) — current "In progress" task
 2. Run `git branch` — verify you're on main
-3. If you need architecture context: read `lumen-plan.md` §1 (Principles) and §5 (Dependency policy)
+3. If you need architecture context: read `docs/plan/architecture.md` (§1 Principles) and `docs/plan/tech-stack.md` (§5 Dependency policy)
 4. If you need architectural decisions: read `docs/decisions/README.md` index
 
 ### Cargo output rules
 
-Always use `-p <crate>`, never `--workspace`.
+Always use `-p <crate>`, never `--workspace`. **Exception: P5** (code-health role) may run `cargo clippy --workspace` as part of its periodic sweep — that full pass is the role's purpose. No other role uses `--workspace`.
 
 - **Success** — one line: `cargo check OK`, `Clippy clean`, `All tests passed (23/23)`.
 - **Build/clippy failure** — show each full `error[...]` block (message + file:line + code + help lines), skip all `warning[...]` blocks entirely.
@@ -287,7 +314,7 @@ Not needed in cmd / PowerShell — PATH is correct there.
 
 ## Graphic tests
 
-`graphic_tests/NN-*.html` — 22 pages (00 calibration + 01-20 properties + `1000000-final.html`), one visual effect each, viewport 1024×720. Graphics only, no text.
+`graphic_tests/NN-*.html` — 70+ pages (00 calibration + 01–81 unit properties + 100–109 interactions + `1000000-final.html`), one visual effect each, viewport 1024×720. Graphics only, no text.
 
 **00-calibration.html** — required first test: magenta stripes (`#ff00ff`) 1024 px wide at top and bottom of body. Used to detect crop offset in the Lumen desktop screenshot.
 
@@ -307,13 +334,34 @@ Not needed in cmd / PowerShell — PATH is correct there.
 
 The 1px magenta body background shows through `.__f`'s margins on all 4 sides. Crop offset comes from TEST-00 (calibration), not from this frame. Trigger phrases: "find bugs from screenshots", "run graphic_tests".
 
+**Test layers (numbering ranges).**
+
+| Range | Layer | Purpose |
+|---|---|---|
+| `00–99` | Unit | One CSS property per file, isolated. A failure = bug in that property. |
+| `100–199` | Interaction | Combinations of properties already covered by unit tests (transform×overflow, opacity×z-index, …). A failure while the unit deps are green = bug in the *interaction*. Deps map: `DEPS` in `run.py`. |
+| `1000000` | Final | Kitchen-sink page; manual check in the Edge pipeline + CPU snapshot baseline. |
+
+Interaction tests share a fixed 6-cell 300×300 grid (`_CELL_GRID` in `run.py`); on FAIL `run.py` intersects the diff bounding box with the cells and prints which scenario diverged. To diagnose a failing interaction test run `python graphic_tests/run.py --bisect <id>` — it runs the unit deps first, then the test, and prints a verdict (broken property vs broken interaction).
+
 ### Running
 
 ```bash
-python graphic_tests/run.py                   # blocking pipeline: first fail = stop
-python graphic_tests/run.py --only 03         # single test
-python graphic_tests/run.py --continue-on-fail  # diagnostic mode
+python graphic_tests/run.py                          # blocking pipeline: first fail = stop
+python graphic_tests/run.py --only 03                # single test
+python graphic_tests/run.py --continue-on-fail       # diagnostic: run all, collect all results
+python graphic_tests/run.py --recheck                # re-run only FAIL tests from latest.json
+python graphic_tests/run.py --build                  # cargo build --release first, then run
+python graphic_tests/run.py --no-cache               # force re-capture Edge screenshots
+python graphic_tests/run.py --bisect 100             # run unit deps of an interaction test, then the test; prints verdict
 ```
+
+Results are saved to `graphic_tests/results/`:
+- `YYYYMMDD-HHMMSS.json` — full results: status, diff%, diff_region bounding box per test
+- `YYYYMMDD-HHMMSS.html` — visual report: Edge | Lumen | Diff images side by side for each FAIL
+- `latest.json` — always points to the last run (used by `--recheck`)
+
+Edge screenshots are cached: re-captured only when the HTML source is newer than the PNG.
 
 Pipeline: build Lumen release (if needed), then for each test — Edge headless + Lumen gdigrab + crop by magenta marker + pixel diff + % threshold. First test exceeding threshold stops the pipeline.
 
@@ -337,10 +385,13 @@ Current coverage — `graphic_tests/COVERAGE.md`.
 
 ### Run rules
 
-1. **No screenshots in the repo.** `graphic_tests/screenshots/*.png` are work artifacts — do not commit. Only the updated [`BUGS.md`](BUGS.md) goes in.
-2. **A bug is only a visually noticeable artifact.** Non-zero pixels in `NN-diff.png` alone are not a bug. Skip if only visible under pixel-by-pixel inspection.
+0. **Test-run history lives in `graphic_tests/results/*.json`.** JSON result files are committed to git (`.gitignore` excludes only `*.html` reports). After every full `--continue-on-fail` run: `git add graphic_tests/results/<timestamp>.json && git commit -m "тесты: прогон YYYY-MM-DD"`. Do NOT write manual "Прогон..." tables in `BUGS.md` — the JSON is the source of truth. Delta vs previous run is printed automatically by `run.py`. KNOWN_DEBTORS (Phase 2 tests) live in `KNOWN_DEBTORS` dict in `run.py`; BUGS.md carries only BUG-NNN entries.
+1. **No screenshots in the repo.** `graphic_tests/screenshots/*.png` are work artifacts — do not commit. HTML reports (`results/*.html`) are also gitignored (they reference gitignored PNGs). Only JSON results and [`BUGS.md`](BUGS.md) go in.
+2. **A bug is only a visually noticeable artifact.** Non-zero pixels in `<stem>-diff.png` alone are not a bug. Skip if only visible under pixel-by-pixel inspection.
 3. **Ignore text for now.** Glyph antialiasing will always diverge from Edge — not tracked until a dedicated task. Text-box geometry, padding/margin around text, line-height — that's layout, check as normal.
 4. **Never rewrite test pages to work around engine limitations.** Test pages are the ground truth — they represent correct CSS as Edge renders it. If a test fails, fix the engine, not the test. Simplifying HTML to make a test pass is a false positive: the engine didn't improve, the bar was lowered. The only valid reason to edit a test page is a bug in the test itself (wrong expected output).
+4a. **Never change test thresholds. The diff threshold is 0.5% for every test** — in `graphic_tests/run.py` and `crates/driver/tests/snapshot_vs_edge.rs`. Raising a threshold to make a test pass is forbidden (user rule, 2026-06-11): it masks real defects. Precedent: BUG-093 was "closed" by calibrating TEST-51 to 2.0% — the actual cause was BUG-123, a scroll-clip defect eating the container's border. If a test exceeds 0.5%, file a BUG-NNN and fix the engine.
+4b. **Known-debtors ratchet (user-approved 2026-06-11, implemented 2026-06-11).** The only sanctioned way to handle a page that cannot reach 0.5% because the required feature is deferred to a later phase: add an entry to `KNOWN_DEBTORS` dict in `graphic_tests/run.py` — `test_id → ("BUG-NNN", baseline_pct)`. The page is still rendered and diffed every run; its percentage is always printed (yellow ⚠). Ratchet semantics (±2% tolerance for gdigrab noise): actual > baseline+2 → FAIL (regression); |actual − baseline| ≤ 2 → DEBTOR (ok, pipeline continues); actual < baseline−2 → FAIL with "lower baseline to X" (ratchet — only moves down); actual ≤ 0.5% → FAIL with "remove entry". Exit from list happens **only by measurement**. Each entry requires an OPEN BUG-NNN. Thresholds still never change (rule 4a). Full plan for future Rust gate: `docs/plans/cpu-vs-edge-gate.md`.
 5. **Single tracker — `BUGS.md` in the repo root.** One line per bug, compact format:
    ```
    BUG-018 | OPEN  | inline padding wrong on nested divs | layout/src/flow.rs:312
@@ -366,7 +417,8 @@ resample of page-space layer through affine) / PushBlendMode + PopBlendMode (all
 PushFilter + PopFilter (Gaussian blur + 7 colour filters) / PushBackdropFilter + PopBackdropFilter /
 PushMaskLinearGradient + PushMaskRadialGradient + PushMaskConicGradient + PushMaskImage + PopMask.
 
-`PAGES` in `snapshot_cpu.rs` covers all 57 html files in `graphic_tests/`. Regenerate references:
+`PAGES` in `snapshot_cpu.rs` covers the unit pages plus the interaction series (100–109) and
+`1000000-final`. Regenerate references:
 `SAVE_CPU_SNAPSHOTS=1 cargo test -p lumen-driver --features cpu-render`.
 
 Next: 8A.7 (shell as first BrowserSession client, Phase 4) — not scheduled.
@@ -383,19 +435,23 @@ Dependency graph and crate scope — in [lumen-plan.md](lumen-plan.md). Directio
 
 **Sprint 0 stubs:** `UnicodeProvider`, `IdnaProvider`, `PublicSuffixList`, `ContentDecoder` (`UnsupportedContentDecoder`), `FontFormat`, `SpellChecker`, `HyphenationProvider`.
 
-**Planned:** `WindowingBackend`, `RenderBackend`, `TlsBackend`, `KnowledgeStore`, `AiBackend`.
+**Defined (Phase 2):** `KnowledgeStore` (`core/src/ext.rs`, impl `lumen-knowledge::DefaultKnowledgeStore` — §12.1–12.4; shell @notes omnibox wiring).
+
+**Defined (GG-1):** `AiBackend` (`core/src/ext.rs`; `query(prompt) -> String`; `NullAiBackend` stub; shell AI sidebar panel at `Ctrl+Shift+A`, `panels/ai_panel.rs`).
+
+**Planned:** `WindowingBackend`, `RenderBackend`, `TlsBackend`.
 
 ---
 
 ## Principles
 
-Full list (8 items) — [lumen-plan.md](lumen-plan.md) §1.
+Full list (8 items) — [docs/plan/architecture.md](docs/plan/architecture.md) §1.
 
 ---
 
 ## Dependency policy
 
-Full tables (permanent + provisional + Lumen core) — [lumen-plan.md](lumen-plan.md) §5.
+Full tables (permanent + provisional + Lumen core) — [docs/plan/tech-stack.md](docs/plan/tech-stack.md) §5.
 
 ### No new dep without justification
 
@@ -625,7 +681,7 @@ Per-crate state (scope, done, deferred, invariants) — [SUBSYSTEMS.md](SUBSYSTE
 
 ## Unique features (§12)
 
-Full list with phases — [lumen-plan.md](lumen-plan.md) §12.
+Full list with phases — [docs/plan/knowledge.md](docs/plan/knowledge.md) §12.
 
 ---
 

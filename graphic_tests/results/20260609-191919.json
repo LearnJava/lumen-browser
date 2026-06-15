@@ -1,0 +1,916 @@
+{
+  "timestamp": "2026-06-09T19:19:19",
+  "git": {
+    "commit": "6b4b66f0",
+    "branch": "main",
+    "subject": "Merge docs-p1-selector-rule-index: Р·Р°РґР°С‡Р° P-1 Selector rule index"
+  },
+  "crop_offset": [
+    8,
+    67
+  ],
+  "halted_at": null,
+  "summary": {
+    "total": 71,
+    "passed": 34,
+    "failed": 37,
+    "errors": 0,
+    "skipped": 0
+  },
+  "tests": [
+    {
+      "id": "00",
+      "label": "calibration",
+      "html": "00-calibration.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "01",
+      "label": "sanity",
+      "html": "01-sanity.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "02",
+      "label": "color-named",
+      "html": "02-color-named.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "03",
+      "label": "color-formats",
+      "html": "03-color-formats.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "04",
+      "label": "color-alpha",
+      "html": "04-color-alpha.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "05",
+      "label": "border-width",
+      "html": "05-border-width.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "06",
+      "label": "border-sides",
+      "html": "06-border-sides.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0176,
+      "diff_region": {
+        "top": 25,
+        "left": 25,
+        "bottom": 240,
+        "right": 904
+      }
+    },
+    {
+      "id": "07",
+      "label": "box-sizing",
+      "html": "07-box-sizing.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "08",
+      "label": "padding",
+      "html": "08-padding.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "09",
+      "label": "margin",
+      "html": "09-margin.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "10",
+      "label": "min-max-width",
+      "html": "10-min-max-width.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "11",
+      "label": "min-max-height",
+      "html": "11-min-max-height.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.434,
+      "diff_region": {
+        "top": 25,
+        "left": 201,
+        "bottom": 144,
+        "right": 864
+      }
+    },
+    {
+      "id": "12",
+      "label": "display",
+      "html": "12-display.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.2376,
+      "diff_region": {
+        "top": 308,
+        "left": 25,
+        "bottom": 544,
+        "right": 564
+      }
+    },
+    {
+      "id": "13",
+      "label": "visibility-opacity",
+      "html": "13-visibility-opacity.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.1191,
+      "diff_region": {
+        "top": 148,
+        "left": 153,
+        "bottom": 402,
+        "right": 964
+      }
+    },
+    {
+      "id": "14",
+      "label": "overflow",
+      "html": "14-overflow.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "15",
+      "label": "box-shadow",
+      "html": "15-box-shadow.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 1.0578,
+      "diff_region": {
+        "top": 19,
+        "left": 199,
+        "bottom": 274,
+        "right": 514
+      }
+    },
+    {
+      "id": "16",
+      "label": "outline",
+      "html": "16-outline.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "17",
+      "label": "calc",
+      "html": "17-calc.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "18",
+      "label": "images",
+      "html": "18-images.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 21.2115,
+      "diff_region": {
+        "top": 28,
+        "left": 25,
+        "bottom": 718,
+        "right": 908
+      }
+    },
+    {
+      "id": "19",
+      "label": "object-fit",
+      "html": "19-object-fit.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 13.1022,
+      "diff_region": {
+        "top": 26,
+        "left": 26,
+        "bottom": 449,
+        "right": 805
+      }
+    },
+    {
+      "id": "20",
+      "label": "quirks-bgcolor",
+      "html": "20-quirks-bgcolor.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 8.7941,
+      "diff_region": {
+        "top": 25,
+        "left": 25,
+        "bottom": 300,
+        "right": 904
+      }
+    },
+    {
+      "id": "21",
+      "label": "border-style dashed/dotted/double",
+      "html": "21-border-style.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 3.0216,
+      "diff_region": {
+        "top": 25,
+        "left": 25,
+        "bottom": 452,
+        "right": 804
+      }
+    },
+    {
+      "id": "22",
+      "label": "CSS transform translate/rotate/scale/skew/matrix",
+      "html": "22-transform.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0004,
+      "diff_region": {
+        "top": 443,
+        "left": 126,
+        "bottom": 524,
+        "right": 251
+      }
+    },
+    {
+      "id": "23",
+      "label": "::before / ::after block-level generation",
+      "html": "23-pseudo-elements.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.4796,
+      "diff_region": {
+        "top": 57,
+        "left": 291,
+        "bottom": 205,
+        "right": 378
+      }
+    },
+    {
+      "id": "24",
+      "label": "vertical-align inline y-offset + inline-block positioning",
+      "html": "24-vertical-align.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 0.9875,
+      "diff_region": {
+        "top": 21,
+        "left": 20,
+        "bottom": 227,
+        "right": 183
+      }
+    },
+    {
+      "id": "25",
+      "label": "table layout: cells horizontal, rows vertical",
+      "html": "25-table-layout.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "26",
+      "label": "mask-image: linear/radial gradient mask (Phase 0 fallback = no-op)",
+      "html": "26-mask-image.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 17.7355,
+      "diff_region": {
+        "top": 41,
+        "left": 41,
+        "bottom": 480,
+        "right": 470
+      }
+    },
+    {
+      "id": "27",
+      "label": "direction: rtl — LTR/RTL start/end alignment via colored bars",
+      "html": "27-direction-rtl.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.3803,
+      "diff_region": {
+        "top": 191,
+        "left": 140,
+        "bottom": 283,
+        "right": 984
+      }
+    },
+    {
+      "id": "28",
+      "label": "CSS Containment: contain:size (height=0) · contain:paint (clip) · contain:layout · contain:strict",
+      "html": "28-css-containment.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.2756,
+      "diff_region": {
+        "top": 31,
+        "left": 255,
+        "bottom": 158,
+        "right": 682
+      }
+    },
+    {
+      "id": "29",
+      "label": "@container queries: min-width applies/not · named container · max-width",
+      "html": "29-container-queries.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "30",
+      "label": "CSS filter: grayscale/sepia/brightness/invert/contrast/saturate/opacity/blur/hue-rotate",
+      "html": "30-css-filter.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 23.6054,
+      "diff_region": {
+        "top": 31,
+        "left": 31,
+        "bottom": 540,
+        "right": 998
+      }
+    },
+    {
+      "id": "31",
+      "label": "clip-path: inset/circle/ellipse/polygon bounding-box clip",
+      "html": "31-clip-path.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 2.8274,
+      "diff_region": {
+        "top": 181,
+        "left": 41,
+        "bottom": 719,
+        "right": 380
+      }
+    },
+    {
+      "id": "32",
+      "label": "list markers: ::marker box geometry, outside/inside, disc/decimal/alpha/roman",
+      "html": "32-list-markers.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 3.396,
+      "diff_region": {
+        "top": 33,
+        "left": 60,
+        "bottom": 494,
+        "right": 922
+      }
+    },
+    {
+      "id": "33",
+      "label": "multi-column: column-count/width layout + column-rule solid/dashed/dotted",
+      "html": "33-multi-column.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 16.1373,
+      "diff_region": {
+        "top": 172,
+        "left": 17,
+        "bottom": 579,
+        "right": 1006
+      }
+    },
+    {
+      "id": "34",
+      "label": "form controls: input/checkbox/radio/button/textarea/select static rendering",
+      "html": "34-forms.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 4.7777,
+      "diff_region": {
+        "top": 25,
+        "left": 25,
+        "bottom": 600,
+        "right": 590
+      }
+    },
+    {
+      "id": "35",
+      "label": "CSS Grid named areas: grid-template-areas + grid-area: <name>",
+      "html": "35-grid-named-areas.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0307,
+      "diff_region": {
+        "top": 661,
+        "left": 123,
+        "bottom": 718,
+        "right": 226
+      }
+    },
+    {
+      "id": "36",
+      "label": "border-radius: uniform/pill/circle/asymmetric SDF rendering",
+      "html": "36-border-radius.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 1.5039,
+      "diff_region": {
+        "top": 25,
+        "left": 24,
+        "bottom": 595,
+        "right": 774
+      }
+    },
+    {
+      "id": "37",
+      "label": "float: left/right placement + clear: both clearance",
+      "html": "37-float-clear.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "38",
+      "label": "z-index stacking context paint order (CSS 2.1 Appendix E)",
+      "html": "38-z-index.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "39",
+      "label": "linear-gradient / radial-gradient GPU pipeline",
+      "html": "39-gradients.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 5.2153,
+      "diff_region": {
+        "top": 117,
+        "left": 21,
+        "bottom": 332,
+        "right": 848
+      }
+    },
+    {
+      "id": "40",
+      "label": "conic-gradient / repeating-conic-gradient (CSS Images L4 §3.7)",
+      "html": "40-conic-gradients.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.4753,
+      "diff_region": {
+        "top": 21,
+        "left": 106,
+        "bottom": 504,
+        "right": 788
+      }
+    },
+    {
+      "id": "41",
+      "label": "display:table/row/cell with row groups (CSS 2.1 §17)",
+      "html": "41-table.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "42",
+      "label": "position:sticky — flow position + BeginStickyLayer/EndStickyLayer (CSS Positioning L3 §6.3)",
+      "html": "42-position-sticky.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.2713,
+      "diff_region": {
+        "top": 201,
+        "left": 1,
+        "bottom": 300,
+        "right": 130
+      }
+    },
+    {
+      "id": "43",
+      "label": "CSS Intrinsic Sizing L3 — width: max-content / min-content / fit-content",
+      "html": "43-intrinsic-sizing.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "44",
+      "label": "Media Queries L3 — @media screen/print/min-width(em)/orientation/aspect-ratio",
+      "html": "44-media-queries.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "45",
+      "label": "CSS Backgrounds L3 §3 — multiple background layers, position/size/repeat/clip/origin",
+      "html": "45-multiple-backgrounds.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 7.7941,
+      "diff_region": {
+        "top": 22,
+        "left": 21,
+        "bottom": 336,
+        "right": 795
+      }
+    },
+    {
+      "id": "46",
+      "label": "CSS Transforms L2 — individual translate / rotate / scale properties",
+      "html": "46-individual-transforms.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 4.6341,
+      "diff_region": {
+        "top": 43,
+        "left": 26,
+        "bottom": 564,
+        "right": 813
+      }
+    },
+    {
+      "id": "47",
+      "label": "SVG basic shapes — rect/circle/ellipse/line in document flow, viewBox scale",
+      "html": "47-svg-basic.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 3.709,
+      "diff_region": {
+        "top": 25,
+        "left": 29,
+        "bottom": 646,
+        "right": 987
+      }
+    },
+    {
+      "id": "48",
+      "label": "CSS Overflow L4 §3.2 — -webkit-line-clamp / line-clamp multi-line truncation, staircase heights 1–4 lines",
+      "html": "48-line-clamp.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.2604,
+      "diff_region": {
+        "top": 33,
+        "left": 256,
+        "bottom": 688,
+        "right": 767
+      }
+    },
+    {
+      "id": "49",
+      "label": "CSS Compositing L1 §8.3 — background-blend-mode: multiply/screen/overlay/darken/lighten/difference/exclusion/color-dodge/luminosity",
+      "html": "49-background-blend-mode.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 28.0999,
+      "diff_region": {
+        "top": 25,
+        "left": 25,
+        "bottom": 424,
+        "right": 988
+      }
+    },
+    {
+      "id": "50",
+      "label": "CSS Variables L1 — var() basic/nested/fallback + calc(var()) + inheritance",
+      "html": "50-css-variables.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0001,
+      "diff_region": {
+        "top": 21,
+        "left": 327,
+        "bottom": 21,
+        "right": 327
+      }
+    },
+    {
+      "id": "51",
+      "label": "Scrollbar rendering — overflow:scroll/auto vertical/horizontal/both DrawScrollbar track+thumb",
+      "html": "51-scrollbar-rendering.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 1.387,
+      "diff_region": {
+        "top": 22,
+        "left": 21,
+        "bottom": 314,
+        "right": 648
+      }
+    },
+    {
+      "id": "52",
+      "label": "text-shadow blur — PushFilter{Blur(sigma)} wrapping: sharp/4px/10px/20px blur progression + multi-shadow + glow",
+      "html": "52-text-shadow-blur.html",
+      "threshold": 4.0,
+      "status": "FAIL",
+      "diff_pct": 4.9506,
+      "diff_region": {
+        "top": 38,
+        "left": 35,
+        "bottom": 324,
+        "right": 919
+      }
+    },
+    {
+      "id": "53",
+      "label": "background-origin — positioning area: border-box/padding-box/content-box vs background-clip; 0%/100% anchoring",
+      "html": "53-background-origin.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 9.6216,
+      "diff_region": {
+        "top": 35,
+        "left": 32,
+        "bottom": 531,
+        "right": 801
+      }
+    },
+    {
+      "id": "54",
+      "label": "SVG <path> stroke tessellation — open/closed stroke, fill+stroke, miter join, butt cap, widths 2-14px",
+      "html": "54-svg-path-stroke.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 5.5802,
+      "diff_region": {
+        "top": 24,
+        "left": 19,
+        "bottom": 684,
+        "right": 976
+      }
+    },
+    {
+      "id": "55",
+      "label": "<video> replaced element — grey DrawImage placeholder; UA default 300×150; CSS/attr dimensions; border + border-radius",
+      "html": "55-video-placeholder.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 0.8936,
+      "diff_region": {
+        "top": 120,
+        "left": 119,
+        "bottom": 410,
+        "right": 712
+      }
+    },
+    {
+      "id": "56",
+      "label": "CSS Compositing L1 §5 — mix-blend-mode: normal/multiply/darken/color-burn/screen/lighten/color-dodge/overlay/hard-light/soft-light/difference/exclusion/hue/saturation/color/luminosity + nesting",
+      "html": "56-mix-blend-mode.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 14.1195,
+      "diff_region": {
+        "top": 50,
+        "left": 60,
+        "bottom": 518,
+        "right": 821
+      }
+    },
+    {
+      "id": "57",
+      "label": "HTML LS §4.12.4 — <canvas> getContext(\"2d\"): fillRect/strokeRect/arc/path fill; UA default 300×150; attr dimensions; CSS background + border + border-radius on the canvas element box",
+      "html": "57-canvas-2d.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 28.3451,
+      "diff_region": {
+        "top": 25,
+        "left": 25,
+        "bottom": 400,
+        "right": 750
+      }
+    },
+    {
+      "id": "58",
+      "label": "CSS Pseudo-elements L4 §5.3-5.4 — ::first-letter drop-cap (large yellow, float:left) + ::first-line green bold first line",
+      "html": "58-first-letter-line.html",
+      "threshold": 2.0,
+      "status": "FAIL",
+      "diff_pct": 5.612,
+      "diff_region": {
+        "top": 35,
+        "left": 33,
+        "bottom": 183,
+        "right": 988
+      }
+    },
+    {
+      "id": "59",
+      "label": "CSS Images L4 §5/§4 — image-set() DPR selection + cross-fade() two-image blend; -webkit- vendor prefix variants",
+      "html": "59-image-set-cross-fade.html",
+      "threshold": 2.0,
+      "status": "FAIL",
+      "diff_pct": 24.1832,
+      "diff_region": {
+        "top": 25,
+        "left": 25,
+        "bottom": 413,
+        "right": 1022
+      }
+    },
+    {
+      "id": "60",
+      "label": "SVG stroke advanced: stroke-linecap (butt/round/square), stroke-linejoin (miter/bevel/round), stroke-miterlimit, stroke-dasharray, stroke-dashoffset, fill-rule (nonzero/evenodd)",
+      "html": "60-svg-stroke-advanced.html",
+      "threshold": 1.0,
+      "status": "FAIL",
+      "diff_pct": 8.3655,
+      "diff_region": {
+        "top": 20,
+        "left": 27,
+        "bottom": 656,
+        "right": 989
+      }
+    },
+    {
+      "id": "61",
+      "label": "View Transitions API: document.startViewTransition(cb) — JS API, ViewTransition object, Begin/End events, 300 ms cross-fade",
+      "html": "61-view-transitions.html",
+      "threshold": 1.0,
+      "status": "FAIL",
+      "diff_pct": 99.5275,
+      "diff_region": {
+        "top": 1,
+        "left": 1,
+        "bottom": 718,
+        "right": 1022
+      }
+    },
+    {
+      "id": "62",
+      "label": "CSS Scroll Snap L1: scroll-snap-type (y/x mandatory, both proximity), scroll-snap-align (start), scroll-snap-stop (always); static layout geometry of snap containers",
+      "html": "62-scroll-snap.html",
+      "threshold": 1.0,
+      "status": "FAIL",
+      "diff_pct": 63.697,
+      "diff_region": {
+        "top": 9,
+        "left": 9,
+        "bottom": 710,
+        "right": 1014
+      }
+    },
+    {
+      "id": "63",
+      "label": "CSS Masonry layout (Houdini) Phase 0: waterfall grid — items placed in column with min height; column-count, gap",
+      "html": "63-masonry.html",
+      "threshold": 1.0,
+      "status": "FAIL",
+      "diff_pct": 2.0702,
+      "diff_region": {
+        "top": 34,
+        "left": 11,
+        "bottom": 439,
+        "right": 1023
+      }
+    },
+    {
+      "id": "64",
+      "label": "CSS 2.1 §17 Table layout: emit_table_box() renders table/thead/tbody/tr/td cells with separate border-spacing, cell backgrounds, borders; col_span/row_span in struct",
+      "html": "64-table.html",
+      "threshold": 1.0,
+      "status": "FAIL",
+      "diff_pct": 14.9011,
+      "diff_region": {
+        "top": 42,
+        "left": 21,
+        "bottom": 439,
+        "right": 1023
+      }
+    },
+    {
+      "id": "65",
+      "label": "CSS Flexbox align-content: flex-start/end/center/space-between/space-around/space-evenly/stretch for multi-line flex containers",
+      "html": "65-flex-align-content.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 16.3962,
+      "diff_region": {
+        "top": 10,
+        "left": 1,
+        "bottom": 694,
+        "right": 989
+      }
+    },
+    {
+      "id": "66",
+      "label": "CSS ::selection pseudo-element: background-color + color override; swatch boxes show parsed selection colours; page renders correctly with ::selection rules present",
+      "html": "66-selection-pseudo.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 5.2441,
+      "diff_region": {
+        "top": 43,
+        "left": 41,
+        "bottom": 411,
+        "right": 315
+      }
+    },
+    {
+      "id": "67",
+      "label": "CSS Values L4 §7.7 attr() typed substitution: content:attr(data-label) generates ::before labels from HTML attributes; 5 labelled bar rows with distinct colours and widths",
+      "html": "67-attr-typed.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 16.4098,
+      "diff_region": {
+        "top": 62,
+        "left": 41,
+        "bottom": 447,
+        "right": 690
+      }
+    },
+    {
+      "id": "68",
+      "label": "CSS Fonts L4 §6.3 font-variation-settings: parsing and layout stability; coloured boxes with varied wght/wdth/slnt axes and inherited settings",
+      "html": "68-font-variation-settings.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0011,
+      "diff_region": {
+        "top": 22,
+        "left": 21,
+        "bottom": 228,
+        "right": 632
+      }
+    },
+    {
+      "id": "69",
+      "label": "CSS 2.1 §17.6 border-spacing: equal and asymmetric gaps between table cells; three tables showing 12px equal, 8px/24px asymmetric, and 0 spacing",
+      "html": "69-border-spacing.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 3.6111,
+      "diff_region": {
+        "top": 21,
+        "left": 21,
+        "bottom": 464,
+        "right": 298
+      }
+    },
+    {
+      "id": "70",
+      "label": "CSS Images L3 §5.5 object-fit / object-position: SVG viewBox scaling modes fill/contain/cover/none/scale-down and object-position alignment",
+      "html": "70-object-fit.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 7.036,
+      "diff_region": {
+        "top": 27,
+        "left": 1,
+        "bottom": 718,
+        "right": 231
+      }
+    }
+  ]
+}

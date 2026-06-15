@@ -23,8 +23,17 @@ pub use headers::{HttpProfile, HeaderOrder, build_request_headers};
 pub use h2_settings::{H2Settings, H2StreamPriority};
 pub use client_hints::{ClientHintsProfile, should_send_client_hints, client_hints_headers};
 
-/// HTTP/1.1 User-Agent value for Lumen.
-pub const DEFAULT_USER_AGENT: &str = "Lumen/0.0.1";
+/// HTTP/1.1 User-Agent value for Lumen-native profile.
+///
+/// Tracks the workspace version (`CARGO_PKG_VERSION`) so it never drifts on a
+/// version bump — see the versioning policy in `CLAUDE.md`.
+pub const DEFAULT_USER_AGENT: &str = concat!("Lumen/", env!("CARGO_PKG_VERSION"));
+
+/// Chrome 130 User-Agent — used by `HttpProfile::Chrome` and `HttpProfile::Strict`
+/// to match current stable Chrome on Windows so sites that block unknown clients
+/// (e.g., redirect-loop on unrecognised UA) treat Lumen as a standard browser.
+pub const CHROME_USER_AGENT: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 
 /// Default Accept-Language header (does not leak real locale).
 pub const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";

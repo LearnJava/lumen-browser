@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>TEST-89: multiple anchor-name elements</title>
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f { background: white; width: 1022px; height: 718px; margin: 1px; padding: 0; overflow: hidden; }
+
+  .btn-primary { anchor-name: --primary; width: 90px; height: 50px; background: #4CAF50; position: absolute; top: 50px; left: 100px; }
+  .btn-secondary { anchor-name: --secondary; width: 90px; height: 50px; background: #FF9800; position: absolute; top: 50px; left: 250px; }
+  .tooltip1 { position-anchor: --primary; width: 100px; height: 40px; background: #8BC34A; position: absolute; top: 150px; left: 100px; }
+  .tooltip2 { position-anchor: --secondary; width: 100px; height: 40px; background: #FFB74D; position: absolute; top: 150px; left: 250px; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="btn-primary"></div>
+  <div class="btn-secondary"></div>
+  <div class="tooltip1"></div>
+  <div class="tooltip2"></div>
+</div>
+</body>
+</html>

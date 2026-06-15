@@ -14,12 +14,26 @@ lumen-core = { workspace = true }
 lumen-dom = { workspace = true }
 # lumen-paint: needed for GpuFingerprint (ADR-007 Layer 4, WebGL fingerprinting prevention).
 lumen-paint = { workspace = true }
+# lumen-canvas: needed for Canvas 2D API (canvas.getContext('2d')). Workspace-internal
+# crate (no new external dep) — CPU-rasterized drawing surface wired to JS via canvas2d.rs.
+lumen-canvas = { workspace = true }
 # lumen-css-parser: needed for window.matchMedia() — parses media queries and
 # evaluates them against the current MediaContext (viewport size + user prefs).
 lumen-css-parser = { workspace = true }
+# lumen-layout: needed for querySelector compound selector matching.
+# Provides query_all(doc, sel) which uses the full CSS3 selector engine from style.rs
+# (compound selectors, combinators, pseudo-classes). No circular dep: layout does not
+# depend on lumen-js. Workspace-internal, no new external dependency.
+lumen-layout = { workspace = true }
+# lumen-font: needed for Canvas 2D text rendering — fillText/strokeText/measureText (Phase 4).
+# Workspace-internal crate (no new external dep) — provides Font::parse, Rasterizer, cmap/hmtx
+# tables needed to lay out and rasterize glyph bitmaps for the canvas drawing surface.
+lumen-font = { workspace = true }
 # Permanent #5 (§5): JS engine. QuickJS for Phase 0–1; rusty_v8 planned for v1.0+.
 # Rationale: writing a JS engine from scratch is not in scope for Lumen.
-rquickjs = "0.11"
+# `loader` feature: enables ES6 module resolver/loader API (Resolver + Loader traits +
+# Runtime::set_loader) required for <script type=module> support.
+rquickjs = { version = "0.11", features = ["loader"] }
 # Permanent: OS CSPRNG bytes for Web Crypto API (getRandomValues/randomUUID).
 # Minimal dep — delegates directly to OS (CryptGenRandom/getrandom syscall).
 getrandom = "0.2"
@@ -31,5 +45,18 @@ sha1 = "0.10"
 # cap 5 MB/tab). Reuses the already-vendored flate2 (PNG iCCP path; also used by
 # lumen-storage for DOM-blob compression in §10J.1) — no new external dependency.
 flate2.workspace = true
+# Permanent (crypto exception #3): ECDSA P-256 for SubtleCrypto.generateKey/sign/verify/
+# importKey/exportKey. Same crate already used in lumen-network (WebAuthn, 9F).
+# pkcs8 feature: spki/pkcs8 key import/export formats.
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+# Provisional: HMAC-SHA256/384/512 for SubtleCrypto.sign/verify/generateKey/importKey.
+# Pure-Rust, minimal; graduation criterion: remove if built-in sha2-based MAC suffices.
+hmac = { version = "0.12", features = [] }
+# Provisional: AES-GCM 128/256 for SubtleCrypto.encrypt/decrypt/generateKey/importKey.
+# Standard AEAD for modern web crypto; pure-Rust via aes + ghash; no native code.
+aes-gcm = "0.10"
+# Import Maps (HTML LS §8.1.6.2) JSON parsing for <script type="importmap">.
+# Lightweight JSON parser; reuses serde which is already in the workspace.
+serde_json = "1.0"
 
 [dev-dependencies]

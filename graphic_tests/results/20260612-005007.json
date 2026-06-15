@@ -1,0 +1,1479 @@
+{
+  "timestamp": "2026-06-12T00:50:07",
+  "git": {
+    "commit": "d10bd43b",
+    "branch": "main",
+    "subject": "Merge p3-bug139-nested-transforms: BUG-139 РІР»РѕР¶РµРЅРЅС‹Рµ CSS transforms РЅРµ РєРѕРјРїРѕРЅСѓСЋС‚СЃСЏ"
+  },
+  "crop_offset": [
+    8,
+    67
+  ],
+  "halted_at": null,
+  "summary": {
+    "total": 95,
+    "passed": 37,
+    "failed": 54,
+    "errors": 0,
+    "debtors": 4,
+    "skipped": 0
+  },
+  "tests": [
+    {
+      "id": "00",
+      "stem": "00-calibration",
+      "label": "calibration",
+      "html": "00-calibration.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "01",
+      "stem": "01-sanity",
+      "label": "sanity",
+      "html": "01-sanity.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "02",
+      "stem": "02-color-named",
+      "label": "color-named",
+      "html": "02-color-named.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "03",
+      "stem": "03-color-formats",
+      "label": "color-formats",
+      "html": "03-color-formats.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "04",
+      "stem": "04-color-alpha",
+      "label": "color-alpha",
+      "html": "04-color-alpha.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "05",
+      "stem": "05-border-width",
+      "label": "border-width",
+      "html": "05-border-width.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "06",
+      "stem": "06-border-sides",
+      "label": "border-sides",
+      "html": "06-border-sides.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0176,
+      "diff_region": {
+        "top": 25,
+        "left": 25,
+        "bottom": 240,
+        "right": 904
+      }
+    },
+    {
+      "id": "07",
+      "stem": "07-box-sizing",
+      "label": "box-sizing",
+      "html": "07-box-sizing.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "08",
+      "stem": "08-padding",
+      "label": "padding",
+      "html": "08-padding.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "09",
+      "stem": "09-margin",
+      "label": "margin",
+      "html": "09-margin.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "10",
+      "stem": "10-min-max-width",
+      "label": "min-max-width",
+      "html": "10-min-max-width.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "11",
+      "stem": "11-min-max-height",
+      "label": "min-max-height",
+      "html": "11-min-max-height.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.434,
+      "diff_region": {
+        "top": 25,
+        "left": 201,
+        "bottom": 144,
+        "right": 864
+      }
+    },
+    {
+      "id": "12",
+      "stem": "12-display",
+      "label": "display",
+      "html": "12-display.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.2376,
+      "diff_region": {
+        "top": 308,
+        "left": 25,
+        "bottom": 544,
+        "right": 564
+      }
+    },
+    {
+      "id": "13",
+      "stem": "13-visibility-opacity",
+      "label": "visibility-opacity",
+      "html": "13-visibility-opacity.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.1191,
+      "diff_region": {
+        "top": 148,
+        "left": 153,
+        "bottom": 402,
+        "right": 964
+      }
+    },
+    {
+      "id": "14",
+      "stem": "14-overflow",
+      "label": "overflow",
+      "html": "14-overflow.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "15",
+      "stem": "15-box-shadow",
+      "label": "box-shadow",
+      "html": "15-box-shadow.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 1.0578,
+      "diff_region": {
+        "top": 19,
+        "left": 199,
+        "bottom": 274,
+        "right": 514
+      }
+    },
+    {
+      "id": "16",
+      "stem": "16-outline",
+      "label": "outline",
+      "html": "16-outline.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "17",
+      "stem": "17-calc",
+      "label": "calc",
+      "html": "17-calc.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "18",
+      "stem": "18-images",
+      "label": "images",
+      "html": "18-images.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 21.2115,
+      "diff_region": {
+        "top": 28,
+        "left": 25,
+        "bottom": 718,
+        "right": 908
+      }
+    },
+    {
+      "id": "19",
+      "stem": "19-object-fit",
+      "label": "object-fit",
+      "html": "19-object-fit.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 9.053,
+      "diff_region": {
+        "top": 26,
+        "left": 26,
+        "bottom": 449,
+        "right": 805
+      }
+    },
+    {
+      "id": "20",
+      "stem": "20-quirks-bgcolor",
+      "label": "quirks-bgcolor",
+      "html": "20-quirks-bgcolor.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 8.7941,
+      "diff_region": {
+        "top": 25,
+        "left": 25,
+        "bottom": 300,
+        "right": 904
+      }
+    },
+    {
+      "id": "21",
+      "stem": "21-border-style",
+      "label": "border-style dashed/dotted/double",
+      "html": "21-border-style.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.488,
+      "diff_region": {
+        "top": 25,
+        "left": 25,
+        "bottom": 452,
+        "right": 804
+      }
+    },
+    {
+      "id": "22",
+      "stem": "22-transform",
+      "label": "CSS transform translate/rotate/scale/skew/matrix",
+      "html": "22-transform.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0004,
+      "diff_region": {
+        "top": 443,
+        "left": 126,
+        "bottom": 524,
+        "right": 251
+      }
+    },
+    {
+      "id": "23",
+      "stem": "23-pseudo-elements",
+      "label": "::before / ::after block-level generation",
+      "html": "23-pseudo-elements.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.4796,
+      "diff_region": {
+        "top": 57,
+        "left": 291,
+        "bottom": 205,
+        "right": 378
+      }
+    },
+    {
+      "id": "24",
+      "stem": "24-vertical-align",
+      "label": "vertical-align inline y-offset + inline-block positioning",
+      "html": "24-vertical-align.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 0.9786,
+      "diff_region": {
+        "top": 21,
+        "left": 20,
+        "bottom": 227,
+        "right": 183
+      }
+    },
+    {
+      "id": "25",
+      "stem": "25-table-layout",
+      "label": "table layout: cells horizontal, rows vertical",
+      "html": "25-table-layout.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "26",
+      "stem": "26-mask-image",
+      "label": "mask-image: linear/radial gradient mask (Phase 0 fallback = no-op)",
+      "html": "26-mask-image.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 17.7355,
+      "diff_region": {
+        "top": 41,
+        "left": 41,
+        "bottom": 480,
+        "right": 470
+      }
+    },
+    {
+      "id": "27",
+      "stem": "27-direction-rtl",
+      "label": "direction: rtl — LTR/RTL start/end alignment via colored bars",
+      "html": "27-direction-rtl.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.3803,
+      "diff_region": {
+        "top": 191,
+        "left": 140,
+        "bottom": 283,
+        "right": 984
+      }
+    },
+    {
+      "id": "28",
+      "stem": "28-css-containment",
+      "label": "CSS Containment: contain:size (height=0) · contain:paint (clip) · contain:layout · contain:strict",
+      "html": "28-css-containment.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "29",
+      "stem": "29-container-queries",
+      "label": "@container queries: min-width applies/not · named container · max-width",
+      "html": "29-container-queries.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "30",
+      "stem": "30-css-filter",
+      "label": "CSS filter: grayscale/sepia/brightness/invert/contrast/saturate/opacity/blur/hue-rotate",
+      "html": "30-css-filter.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 23.6054,
+      "diff_region": {
+        "top": 31,
+        "left": 31,
+        "bottom": 540,
+        "right": 998
+      }
+    },
+    {
+      "id": "31",
+      "stem": "31-clip-path",
+      "label": "clip-path: inset/circle/ellipse/polygon bounding-box clip",
+      "html": "31-clip-path.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 2.3446,
+      "diff_region": {
+        "top": 181,
+        "left": 41,
+        "bottom": 719,
+        "right": 380
+      }
+    },
+    {
+      "id": "32",
+      "stem": "32-list-markers",
+      "label": "list markers: ::marker box geometry, outside/inside, disc/decimal/alpha/roman",
+      "html": "32-list-markers.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 3.3968,
+      "diff_region": {
+        "top": 33,
+        "left": 60,
+        "bottom": 494,
+        "right": 922
+      }
+    },
+    {
+      "id": "33",
+      "stem": "33-multi-column",
+      "label": "multi-column: column-count/width layout + column-rule solid/dashed/dotted",
+      "html": "33-multi-column.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 14.8858,
+      "diff_region": {
+        "top": 172,
+        "left": 17,
+        "bottom": 579,
+        "right": 1006
+      }
+    },
+    {
+      "id": "34",
+      "stem": "34-forms",
+      "label": "form controls: input/checkbox/radio/button/textarea/select static rendering",
+      "html": "34-forms.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 4.7777,
+      "diff_region": {
+        "top": 25,
+        "left": 25,
+        "bottom": 600,
+        "right": 590
+      }
+    },
+    {
+      "id": "35",
+      "stem": "35-grid-named-areas",
+      "label": "CSS Grid named areas: grid-template-areas + grid-area: <name>",
+      "html": "35-grid-named-areas.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0307,
+      "diff_region": {
+        "top": 661,
+        "left": 123,
+        "bottom": 718,
+        "right": 226
+      }
+    },
+    {
+      "id": "36",
+      "stem": "36-border-radius",
+      "label": "border-radius: uniform/pill/circle/asymmetric SDF rendering",
+      "html": "36-border-radius.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 1.5039,
+      "diff_region": {
+        "top": 25,
+        "left": 24,
+        "bottom": 595,
+        "right": 774
+      }
+    },
+    {
+      "id": "37",
+      "stem": "37-float-clear",
+      "label": "float: left/right placement + clear: both clearance",
+      "html": "37-float-clear.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "38",
+      "stem": "38-z-index",
+      "label": "z-index stacking context paint order (CSS 2.1 Appendix E)",
+      "html": "38-z-index.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "39",
+      "stem": "39-gradients",
+      "label": "linear-gradient / radial-gradient GPU pipeline",
+      "html": "39-gradients.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 5.2153,
+      "diff_region": {
+        "top": 117,
+        "left": 21,
+        "bottom": 332,
+        "right": 848
+      }
+    },
+    {
+      "id": "40",
+      "stem": "40-conic-gradients",
+      "label": "conic-gradient / repeating-conic-gradient (CSS Images L4 §3.7)",
+      "html": "40-conic-gradients.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.4753,
+      "diff_region": {
+        "top": 21,
+        "left": 106,
+        "bottom": 504,
+        "right": 788
+      }
+    },
+    {
+      "id": "41",
+      "stem": "41-table",
+      "label": "display:table/row/cell with row groups (CSS 2.1 §17)",
+      "html": "41-table.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "42",
+      "stem": "42-position-sticky",
+      "label": "position:sticky — flow position + BeginStickyLayer/EndStickyLayer (CSS Positioning L3 §6.3)",
+      "html": "42-position-sticky.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.2713,
+      "diff_region": {
+        "top": 201,
+        "left": 1,
+        "bottom": 300,
+        "right": 130
+      }
+    },
+    {
+      "id": "43",
+      "stem": "43-intrinsic-sizing",
+      "label": "CSS Intrinsic Sizing L3 — width: max-content / min-content / fit-content",
+      "html": "43-intrinsic-sizing.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "44",
+      "stem": "44-media-queries",
+      "label": "Media Queries L3 — @media screen/print/min-width(em)/orientation/aspect-ratio",
+      "html": "44-media-queries.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "45",
+      "stem": "45-multiple-backgrounds",
+      "label": "CSS Backgrounds L3 §3 — multiple background layers, position/size/repeat/clip/origin",
+      "html": "45-multiple-backgrounds.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 7.7941,
+      "diff_region": {
+        "top": 22,
+        "left": 21,
+        "bottom": 336,
+        "right": 795
+      }
+    },
+    {
+      "id": "46",
+      "stem": "46-individual-transforms",
+      "label": "CSS Transforms L2 — individual translate / rotate / scale properties",
+      "html": "46-individual-transforms.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 4.6341,
+      "diff_region": {
+        "top": 43,
+        "left": 26,
+        "bottom": 564,
+        "right": 813
+      }
+    },
+    {
+      "id": "47",
+      "stem": "47-svg-basic",
+      "label": "SVG basic shapes — rect/circle/ellipse/line in document flow, viewBox scale",
+      "html": "47-svg-basic.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 3.709,
+      "diff_region": {
+        "top": 25,
+        "left": 29,
+        "bottom": 646,
+        "right": 987
+      }
+    },
+    {
+      "id": "48",
+      "stem": "48-line-clamp",
+      "label": "CSS Overflow L4 §3.2 — -webkit-line-clamp / line-clamp multi-line truncation, staircase heights 1–4 lines",
+      "html": "48-line-clamp.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.2604,
+      "diff_region": {
+        "top": 33,
+        "left": 256,
+        "bottom": 688,
+        "right": 767
+      }
+    },
+    {
+      "id": "49",
+      "stem": "49-background-blend-mode",
+      "label": "CSS Compositing L1 §8.3 — background-blend-mode: multiply/screen/overlay/darken/lighten/difference/exclusion/color-dodge/luminosity",
+      "html": "49-background-blend-mode.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 28.0999,
+      "diff_region": {
+        "top": 25,
+        "left": 25,
+        "bottom": 424,
+        "right": 988
+      }
+    },
+    {
+      "id": "50",
+      "stem": "50-css-variables",
+      "label": "CSS Variables L1 — var() basic/nested/fallback + calc(var()) + inheritance",
+      "html": "50-css-variables.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0001,
+      "diff_region": {
+        "top": 21,
+        "left": 327,
+        "bottom": 21,
+        "right": 327
+      }
+    },
+    {
+      "id": "51",
+      "stem": "51-scrollbar-rendering",
+      "label": "Scrollbar rendering — overflow:scroll/auto vertical/horizontal/both DrawScrollbar track+thumb",
+      "html": "51-scrollbar-rendering.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 1.0886,
+      "diff_region": {
+        "top": 22,
+        "left": 21,
+        "bottom": 315,
+        "right": 648
+      }
+    },
+    {
+      "id": "52",
+      "stem": "52-text-shadow-blur",
+      "label": "text-shadow blur — PushFilter{Blur(sigma)} wrapping: sharp/4px/10px/20px blur progression + multi-shadow + glow",
+      "html": "52-text-shadow-blur.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 4.9506,
+      "diff_region": {
+        "top": 38,
+        "left": 35,
+        "bottom": 324,
+        "right": 919
+      }
+    },
+    {
+      "id": "53",
+      "stem": "53-background-origin",
+      "label": "background-origin — positioning area: border-box/padding-box/content-box vs background-clip; 0%/100% anchoring",
+      "html": "53-background-origin.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 9.6216,
+      "diff_region": {
+        "top": 35,
+        "left": 32,
+        "bottom": 531,
+        "right": 801
+      }
+    },
+    {
+      "id": "54",
+      "stem": "54-svg-path-stroke",
+      "label": "SVG <path> stroke tessellation — open/closed stroke, fill+stroke, miter join, butt cap, widths 2-14px",
+      "html": "54-svg-path-stroke.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 5.5802,
+      "diff_region": {
+        "top": 24,
+        "left": 19,
+        "bottom": 684,
+        "right": 976
+      }
+    },
+    {
+      "id": "55",
+      "stem": "55-video-placeholder",
+      "label": "<video> replaced element — grey DrawImage placeholder; UA default 300×150; CSS/attr dimensions; border + border-radius",
+      "html": "55-video-placeholder.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 0.8936,
+      "diff_region": {
+        "top": 120,
+        "left": 119,
+        "bottom": 410,
+        "right": 712
+      }
+    },
+    {
+      "id": "56",
+      "stem": "56-mix-blend-mode",
+      "label": "CSS Compositing L1 §5 — mix-blend-mode: normal/multiply/darken/color-burn/screen/lighten/color-dodge/overlay/hard-light/soft-light/difference/exclusion/hue/saturation/color/luminosity + nesting",
+      "html": "56-mix-blend-mode.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 14.1195,
+      "diff_region": {
+        "top": 50,
+        "left": 60,
+        "bottom": 518,
+        "right": 821
+      }
+    },
+    {
+      "id": "57",
+      "stem": "57-canvas-2d",
+      "label": "HTML LS §4.12.4 — <canvas> getContext(\"2d\"): fillRect/strokeRect/arc/path fill; UA default 300×150; attr dimensions; CSS background + border + border-radius on the canvas element box",
+      "html": "57-canvas-2d.html",
+      "threshold": 0.5,
+      "status": "DEBTOR",
+      "diff_pct": 28.3451,
+      "diff_region": {
+        "top": 25,
+        "left": 25,
+        "bottom": 400,
+        "right": 750
+      },
+      "debtor": {
+        "bug": "BUG-099",
+        "baseline": 28.35,
+        "verdict": "OK"
+      }
+    },
+    {
+      "id": "58",
+      "stem": "58-first-letter-line",
+      "label": "CSS Pseudo-elements L4 §5.3-5.4 — ::first-letter drop-cap (large yellow, float:left) + ::first-line green bold first line",
+      "html": "58-first-letter-line.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 5.612,
+      "diff_region": {
+        "top": 35,
+        "left": 33,
+        "bottom": 183,
+        "right": 988
+      }
+    },
+    {
+      "id": "59",
+      "stem": "59-image-set-cross-fade",
+      "label": "CSS Images L4 §5/§4 — image-set() DPR selection + cross-fade() two-image blend; -webkit- vendor prefix variants",
+      "html": "59-image-set-cross-fade.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 24.1832,
+      "diff_region": {
+        "top": 25,
+        "left": 25,
+        "bottom": 413,
+        "right": 1022
+      }
+    },
+    {
+      "id": "60",
+      "stem": "60-svg-stroke-advanced",
+      "label": "SVG stroke advanced: stroke-linecap (butt/round/square), stroke-linejoin (miter/bevel/round), stroke-miterlimit, stroke-dasharray, stroke-dashoffset, fill-rule (nonzero/evenodd)",
+      "html": "60-svg-stroke-advanced.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 8.3655,
+      "diff_region": {
+        "top": 20,
+        "left": 27,
+        "bottom": 656,
+        "right": 989
+      }
+    },
+    {
+      "id": "61",
+      "stem": "61-view-transitions",
+      "label": "View Transitions API: document.startViewTransition(cb) — JS API, ViewTransition object, Begin/End events, 300 ms cross-fade",
+      "html": "61-view-transitions.html",
+      "threshold": 0.5,
+      "status": "DEBTOR",
+      "diff_pct": 99.5275,
+      "diff_region": {
+        "top": 1,
+        "left": 1,
+        "bottom": 718,
+        "right": 1022
+      },
+      "debtor": {
+        "bug": "BUG-103",
+        "baseline": 99.53,
+        "verdict": "OK"
+      }
+    },
+    {
+      "id": "62",
+      "stem": "62-scroll-snap",
+      "label": "CSS Scroll Snap L1: scroll-snap-type (y/x mandatory, both proximity), scroll-snap-align (start), scroll-snap-stop (always); static layout geometry of snap containers",
+      "html": "62-scroll-snap.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 62.9645,
+      "diff_region": {
+        "top": 9,
+        "left": 9,
+        "bottom": 710,
+        "right": 1014
+      }
+    },
+    {
+      "id": "63",
+      "stem": "63-masonry",
+      "label": "CSS Masonry layout (Houdini) Phase 0: waterfall grid — items placed in column with min height; column-count, gap",
+      "html": "63-masonry.html",
+      "threshold": 0.5,
+      "status": "DEBTOR",
+      "diff_pct": 48.445,
+      "diff_region": {
+        "top": 34,
+        "left": 11,
+        "bottom": 679,
+        "right": 1023
+      },
+      "debtor": {
+        "bug": "BUG-105",
+        "baseline": 48.44,
+        "verdict": "OK"
+      }
+    },
+    {
+      "id": "64",
+      "stem": "64-table",
+      "label": "CSS 2.1 §17 Table layout: emit_table_box() renders table/thead/tbody/tr/td cells with separate border-spacing, cell backgrounds, borders; col_span/row_span in struct",
+      "html": "64-table.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 14.8456,
+      "diff_region": {
+        "top": 42,
+        "left": 21,
+        "bottom": 439,
+        "right": 1023
+      }
+    },
+    {
+      "id": "65",
+      "stem": "65-flex-align-content",
+      "label": "CSS Flexbox align-content: flex-start/end/center/space-between/space-around/space-evenly/stretch for multi-line flex containers",
+      "html": "65-flex-align-content.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 16.3962,
+      "diff_region": {
+        "top": 10,
+        "left": 1,
+        "bottom": 694,
+        "right": 989
+      }
+    },
+    {
+      "id": "66",
+      "stem": "66-selection-pseudo",
+      "label": "CSS ::selection pseudo-element: background-color + color override; swatch boxes show parsed selection colours; page renders correctly with ::selection rules present",
+      "html": "66-selection-pseudo.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 5.2441,
+      "diff_region": {
+        "top": 43,
+        "left": 41,
+        "bottom": 411,
+        "right": 315
+      }
+    },
+    {
+      "id": "67",
+      "stem": "67-attr-typed",
+      "label": "CSS Values L4 §7.7 attr() typed substitution: content:attr(data-label) generates ::before labels from HTML attributes; 5 labelled bar rows with distinct colours and widths",
+      "html": "67-attr-typed.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 16.4098,
+      "diff_region": {
+        "top": 62,
+        "left": 41,
+        "bottom": 447,
+        "right": 690
+      }
+    },
+    {
+      "id": "68",
+      "stem": "68-font-variation-settings",
+      "label": "CSS Fonts L4 §6.3 font-variation-settings: parsing and layout stability; coloured boxes with varied wght/wdth/slnt axes and inherited settings",
+      "html": "68-font-variation-settings.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0011,
+      "diff_region": {
+        "top": 22,
+        "left": 21,
+        "bottom": 228,
+        "right": 632
+      }
+    },
+    {
+      "id": "69",
+      "stem": "69-border-spacing",
+      "label": "CSS 2.1 §17.6 border-spacing: equal and asymmetric gaps between table cells; three tables showing 12px equal, 8px/24px asymmetric, and 0 spacing",
+      "html": "69-border-spacing.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 3.6111,
+      "diff_region": {
+        "top": 21,
+        "left": 21,
+        "bottom": 464,
+        "right": 298
+      }
+    },
+    {
+      "id": "70",
+      "stem": "70-object-fit",
+      "label": "CSS Images L3 §5.5 object-fit / object-position: SVG viewBox scaling modes fill/contain/cover/none/scale-down and object-position alignment",
+      "html": "70-object-fit.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 7.036,
+      "diff_region": {
+        "top": 27,
+        "left": 1,
+        "bottom": 718,
+        "right": 231
+      }
+    },
+    {
+      "id": "71",
+      "stem": "71-starting-style",
+      "label": "CSS Transitions L2 §3.4 @starting-style: entry animation support — @starting-style rules parse without crashing; static rendering of two coloured boxes is unaffected",
+      "html": "71-starting-style.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 17.8326,
+      "diff_region": {
+        "top": 1,
+        "left": 292,
+        "bottom": 459,
+        "right": 731
+      }
+    },
+    {
+      "id": "72",
+      "stem": "72-host-slotted",
+      "label": "CSS Scoping L1 §6.1-6.2 :host / ::slotted: shadow host gets blue background via :host; :host(.special) colours second host amber; :host(.missing) does not match third host; ::slotted children get coloured boxes",
+      "html": "72-host-slotted.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 11.2419,
+      "diff_region": {
+        "top": 31,
+        "left": 31,
+        "bottom": 444,
+        "right": 334
+      }
+    },
+    {
+      "id": "73",
+      "stem": "73-gap-rule",
+      "label": "CSS Gap Decorations L1: gap-rule-width/style/color — flex-row with solid red rules, flex-wrap with dashed cyan rules, grid with solid orange rules",
+      "html": "73-gap-rule.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
+    },
+    {
+      "id": "74",
+      "stem": "74-font-stretch",
+      "label": "CSS Fonts L4 §5.2: font-stretch keyword + % values, cascade/inheritance, no-double wdth injection — coloured boxes",
+      "html": "74-font-stretch.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.0117,
+      "diff_region": {
+        "top": 25,
+        "left": 25,
+        "bottom": 220,
+        "right": 996
+      }
+    },
+    {
+      "id": "75",
+      "stem": "75-masonry-auto-flow",
+      "label": "CSS Masonry Layout §9: masonry-auto-flow: next (source order) / ordered (CSS order property) / definite-first — coloured boxes in 3 masonry grids",
+      "html": "75-masonry-auto-flow.html",
+      "threshold": 0.5,
+      "status": "DEBTOR",
+      "diff_pct": 16.9689,
+      "diff_region": {
+        "top": 51,
+        "left": 21,
+        "bottom": 342,
+        "right": 1002
+      },
+      "debtor": {
+        "bug": "BUG-143",
+        "baseline": 16.97,
+        "verdict": "OK"
+      }
+    },
+    {
+      "id": "76",
+      "stem": "76-motion-path",
+      "label": "CSS Motion Path L1: offset-path + offset-distance + offset-rotate (auto/fixed) — boxes translated along horizontal, diagonal, and cubic-bezier paths",
+      "html": "76-motion-path.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 3.1764,
+      "diff_region": {
+        "top": 65,
+        "left": 6,
+        "bottom": 543,
+        "right": 1017
+      }
+    },
+    {
+      "id": "77",
+      "stem": "77-anchor-positioning",
+      "label": "CSS Anchor Positioning L1: anchor-name + position-anchor + inset-area corner/edge/span placement around a central anchor element",
+      "html": "77-anchor-positioning.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 53.4532,
+      "diff_region": {
+        "top": 41,
+        "left": 41,
+        "bottom": 515,
+        "right": 940
+      }
+    },
+    {
+      "id": "78",
+      "stem": "78-scroll-driven-animations",
+      "label": "CSS Scroll-Driven Animations L1: scroll-timeline-name/axis, view-timeline-name/axis, animation-timeline: scroll()/view()/named",
+      "html": "78-scroll-driven-animations.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 12.0194,
+      "diff_region": {
+        "top": 29,
+        "left": 25,
+        "bottom": 565,
+        "right": 904
+      }
+    },
+    {
+      "id": "79",
+      "stem": "79-text-underline-offset",
+      "label": "CSS Text Decoration L4: text-underline-offset (px/auto/negative) + text-underline-position (under) wired to push_text_decoration",
+      "html": "79-text-underline-offset.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 6.778,
+      "diff_region": {
+        "top": 45,
+        "left": 60,
+        "bottom": 486,
+        "right": 600
+      }
+    },
+    {
+      "id": "80",
+      "stem": "80-border-collapse",
+      "label": "CSS Tables L2 §17.6: border-collapse separate (4px spacing) vs collapse (no spacing) + mixed border widths + cell backgrounds",
+      "html": "80-border-collapse.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 16.8095,
+      "diff_region": {
+        "top": 23,
+        "left": 20,
+        "bottom": 516,
+        "right": 677
+      }
+    },
+    {
+      "id": "81",
+      "stem": "81-view-transition-name",
+      "label": "CSS View Transitions L1 §10: view-transition-name property — named elements render identically to un-named elements (property has no visual effect outside a transition)",
+      "html": "81-view-transition-name.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 100.0,
+      "diff_region": {
+        "top": 0,
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
+      }
+    },
+    {
+      "id": "82",
+      "stem": "82-svg-use",
+      "label": "SVG <use> element: clone shapes/groups/symbols from <defs>, x/y offset, xlink:href, nested chains",
+      "html": "82-svg-use.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 5.6072,
+      "diff_region": {
+        "top": 2,
+        "left": 20,
+        "bottom": 637,
+        "right": 610
+      }
+    },
+    {
+      "id": "83",
+      "stem": "83-scroll-behavior",
+      "label": "scroll-behavior: smooth/auto — overflow scroll containers + page-level scroll (CSS Scroll Behavior L1 §3)",
+      "html": "83-scroll-behavior.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 13.2312,
+      "diff_region": {
+        "top": 33,
+        "left": 50,
+        "bottom": 583,
+        "right": 973
+      }
+    },
+    {
+      "id": "84",
+      "stem": "84-text-decoration-skip-ink",
+      "label": "text-decoration-skip-ink: auto/none/all — underline gaps over glyph descenders (CSS Text Decoration L4 §3.5)",
+      "html": "84-text-decoration-skip-ink.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 6.2383,
+      "diff_region": {
+        "top": 33,
+        "left": 41,
+        "bottom": 429,
+        "right": 456
+      }
+    },
+    {
+      "id": "100",
+      "stem": "100-transform-overflow",
+      "label": "INTERACTION: transform × overflow:hidden — клиппинг трансформированных слоёв, поворот самого клип-контейнера",
+      "html": "100-transform-overflow.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 9.5718,
+      "diff_region": {
+        "top": 0,
+        "left": 225,
+        "bottom": 719,
+        "right": 1023
+      },
+      "deps": [
+        "22",
+        "14"
+      ],
+      "affected": [
+        "c0: translate clipped",
+        "c1: rotate corners clipped",
+        "c2: scale clipped",
+        "c3: CONTROL no clip",
+        "c4: negative translate clipped",
+        "c5: rotated clip container"
+      ]
+    },
+    {
+      "id": "101",
+      "stem": "101-radius-overflow",
+      "label": "INTERACTION: border-radius × overflow:hidden — скруглённый клип детей (углы, круг, pill, вложенность)",
+      "html": "101-radius-overflow.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 4.0449,
+      "diff_region": {
+        "top": 25,
+        "left": 25,
+        "bottom": 674,
+        "right": 1004
+      },
+      "deps": [
+        "36",
+        "14"
+      ],
+      "affected": [
+        "c0: rounded clip of bar",
+        "c1: circle clip",
+        "c2: CONTROL no clip",
+        "c3: nested rounded clips",
+        "c4: radius+border clip",
+        "c5: pill clip"
+      ]
+    },
+    {
+      "id": "102",
+      "stem": "102-opacity-stacking",
+      "label": "INTERACTION: opacity × z-index — атомарный stacking context, групповая композиция без двойного затемнения, вложенная opacity",
+      "html": "102-opacity-stacking.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 17.0356,
+      "diff_region": {
+        "top": 85,
+        "left": 85,
+        "bottom": 674,
+        "right": 664
+      },
+      "deps": [
+        "13",
+        "38"
+      ],
+      "affected": [
+        "c0: z-index trapped by opacity",
+        "c1: group opacity (no double-darken)",
+        "c3: negative z inside opacity",
+        "c4: nested opacity 0.6*0.5"
+      ]
+    },
+    {
+      "id": "103",
+      "stem": "103-filter-transform",
+      "label": "INTERACTION: filter × transform — фильтр поверх трансформированного слоя, filter как containing block",
+      "html": "103-filter-transform.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 29.1056,
+      "diff_region": {
+        "top": 35,
+        "left": 45,
+        "bottom": 654,
+        "right": 978
+      },
+      "deps": [
+        "30",
+        "22"
+      ],
+      "affected": [
+        "c0: grayscale on rotated",
+        "c1: blur on translated",
+        "c2: filter inside rotated parent",
+        "c3: filter as containing block",
+        "c4: hue-rotate on scaled",
+        "c5: CONTROL no filter"
+      ]
+    },
+    {
+      "id": "104",
+      "stem": "104-mask-gradient-radius",
+      "label": "INTERACTION: mask-image × gradients × border-radius — градиентная маска поверх градиентного фона и скруглений",
+      "html": "104-mask-gradient-radius.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 51.9689,
+      "diff_region": {
+        "top": 25,
+        "left": 24,
+        "bottom": 675,
+        "right": 1004
+      },
+      "deps": [
+        "26",
+        "39",
+        "40",
+        "36"
+      ],
+      "affected": [
+        "c0: linear mask + gradient + radius",
+        "c1: radial mask + radial bg",
+        "c2: linear mask + conic bg",
+        "c3: mask + circle shape",
+        "c4: CONTROL no mask",
+        "c5: mask over border"
+      ]
+    },
+    {
+      "id": "105",
+      "stem": "105-float-clear-margin",
+      "label": "INTERACTION: float/clear × margin — отступы флоатов, clearance+margin, перенос флоатов на новую строку",
+      "html": "105-float-clear-margin.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 4.8421,
+      "diff_region": {
+        "top": 25,
+        "left": 33,
+        "bottom": 578,
+        "right": 1004
+      },
+      "deps": [
+        "37",
+        "09"
+      ],
+      "affected": [
+        "c0: two left floats + margins",
+        "c1: left+right float + middle block",
+        "c2: clear:both + margin-top",
+        "c3: float wrap to next line",
+        "c4: tall float vs in-flow bg",
+        "c5: CONTROL plain blocks"
+      ]
+    },
+    {
+      "id": "106",
+      "stem": "106-transform-zindex",
+      "label": "INTERACTION: transform × z-index — transform создаёт stacking context, z-дети заперты внутри",
+      "html": "106-transform-zindex.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 4.0152,
+      "diff_region": {
+        "top": 29,
+        "left": 70,
+        "bottom": 638,
+        "right": 913
+      },
+      "deps": [
+        "22",
+        "38"
+      ],
+      "affected": [
+        "c0: negative z in transformed parent",
+        "c1: transformed (z:0) vs z:1 sibling",
+        "c2: z:2 over transformed z:1",
+        "c3: z children in rotated parent",
+        "c4: z children in scaled parent",
+        "c5: CONTROL no transform"
+      ]
+    },
+    {
+      "id": "107",
+      "stem": "107-shadow-radius-overflow",
+      "label": "INTERACTION: box-shadow × border-radius × overflow — скруглённый силуэт тени, клип тени родителем",
+      "html": "107-shadow-radius-overflow.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 2.1838,
+      "diff_region": {
+        "top": 65,
+        "left": 65,
+        "bottom": 621,
+        "right": 933
+      },
+      "deps": [
+        "15",
+        "36",
+        "14"
+      ],
+      "affected": [
+        "c0: rounded shadow",
+        "c1: spread shadow on circle",
+        "c2: shadow clipped by parent",
+        "c3: CONTROL shadow escapes",
+        "c4: two hard shadows + radius",
+        "c5: blur shadow + radius + border"
+      ]
+    },
+    {
+      "id": "108",
+      "stem": "108-nested-transforms",
+      "label": "INTERACTION: вложенные transform — композиция матриц (rotate∘rotate⁻¹=identity, scale×translate, 3×rotate=сумма)",
+      "html": "108-nested-transforms.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 4.6168,
+      "diff_region": {
+        "top": 77,
+        "left": 63,
+        "bottom": 620,
+        "right": 949
+      },
+      "deps": [
+        "22"
+      ],
+      "affected": [
+        "c0: rotate∘rotate⁻¹ = identity",
+        "c1: REFERENCE axis-aligned",
+        "c2: scale scales child translate",
+        "c3: translate then rotate",
+        "c4: 3× rotate(10deg)",
+        "c5: REFERENCE rotate(30deg)"
+      ]
+    },
+    {
+      "id": "109",
+      "stem": "109-clippath-transform",
+      "label": "INTERACTION: clip-path × transform × border-radius — клип в локальном боксе элемента сквозь трансформацию",
+      "html": "109-clippath-transform.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 14.1031,
+      "diff_region": {
+        "top": 29,
+        "left": 17,
+        "bottom": 714,
+        "right": 964
+      },
+      "deps": [
+        "31",
+        "22",
+        "36"
+      ],
+      "affected": [
+        "c0: circle clip on rotated",
+        "c1: inset clip on scaled",
+        "c2: triangle clip on translated",
+        "c3: clipped parent, transformed child",
+        "c4: clip-path ∩ border-radius",
+        "c5: CONTROL no clip"
+      ]
+    }
+  ]
+}

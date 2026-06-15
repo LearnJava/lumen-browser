@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<!--
+  TEST-72: CSS Scoping L1 §6.1-6.2 — :host and ::slotted pseudo-classes
+  Shadow host gets a coloured background via :host { }.
+  Two slotted light-tree children get coloured backgrounds via ::slotted(sel).
+-->
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; padding: 30px; box-sizing: border-box; overflow: hidden; }
+
+  /* Global :host rule — applied to any shadow host */
+  :host { background-color: #3366cc; }
+
+  /* Global ::slotted rules — applied to slotted light-tree children */
+  ::slotted(.red-box)   { background-color: #cc3300; }
+  ::slotted(.green-box) { background-color: #009933; }
+</style>
+<body>
+  <div class="__f">
+
+    <!-- Shadow host 1: :host styles the host div blue -->
+    <div id="host1" style="width:300px; height:120px; margin-bottom:20px;">
+      <template shadowrootmode="open">
+        <style>
+          :host { background-color: #3366cc; border-radius: 6px; }
+          ::slotted(.red-box) { display: block; width: 120px; height: 60px; margin: 10px auto; }
+        </style>
+        <slot></slot>
+      </template>
+      <div class="red-box"></div>
+    </div>
+
+    <!-- Shadow host 2: :host(.special) only applies when class matches -->
+    <div id="host2" class="special" style="width:300px; height:120px; margin-bottom:20px;">
+      <template shadowrootmode="open">
+        <style>
+          :host(.special) { background-color: #996600; border-radius: 6px; }
+          ::slotted(.green-box) { display: block; width: 120px; height: 60px; margin: 10px auto; }
+        </style>
+        <slot></slot>
+      </template>
+      <div class="green-box"></div>
+    </div>
+
+    <!-- Shadow host 3: :host(.missing) should NOT match — host stays white -->
+    <div id="host3" style="width:300px; height:120px; border: 2px solid #000;">
+      <template shadowrootmode="open">
+        <style>
+          :host(.missing) { background-color: #ff0000; }
+          ::slotted(.red-box) { display: block; width: 120px; height: 60px; margin: 10px auto; background-color: #cc3300; }
+        </style>
+        <slot></slot>
+      </template>
+      <div class="red-box"></div>
+    </div>
+
+  </div>
+</body>

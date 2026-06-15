@@ -62,11 +62,15 @@ pub enum PaintPhase {
     PositionedAndZAuto,
     /// 7. Дочерние stacking-контексты с положительным z-index.
     PositiveZ,
+    /// 8. Закрывает слои SC (PopTransform / PopOpacity / PopBlendMode / PopFilter
+    ///    и т.д.) — эмитится последним, ПОСЛЕ всех дочерних SC. Это гарантирует
+    ///    правильное вложение: Push-команды родителя охватывают Push-команды детей.
+    CloseLayer,
 }
 
 impl PaintPhase {
     /// Порядок обхода Painting Order traversal (CSS 2.1 Appendix E).
-    pub const ORDER: [PaintPhase; 7] = [
+    pub const ORDER: [PaintPhase; 8] = [
         PaintPhase::RootBackground,
         PaintPhase::NegativeZ,
         PaintPhase::BlockBackgrounds,
@@ -74,6 +78,7 @@ impl PaintPhase {
         PaintPhase::InlineContent,
         PaintPhase::PositionedAndZAuto,
         PaintPhase::PositiveZ,
+        PaintPhase::CloseLayer,
     ];
 }
 
@@ -372,6 +377,11 @@ fn paint_sc(
             paint_sc(tree, child_id, out);
         }
     }
+
+    // Phase 8: закрываем слои этого SC. Должен идти ПОСЛЕ всех дочерних SC,
+    // чтобы Pop-команды родителя (PopTransform, PopOpacity и т.д.) охватывали
+    // дочерние Push-команды — иначе вложенные transforms не компонуются (BUG-139).
+    out.push((sc_id, PaintPhase::CloseLayer));
 }
 
 #[cfg(test)]
@@ -402,8 +412,8 @@ mod tests {
     }
 
     #[test]
-    fn paint_order_has_seven_phases() {
-        assert_eq!(PaintPhase::ORDER.len(), 7);
+    fn paint_order_has_eight_phases() {
+        assert_eq!(PaintPhase::ORDER.len(), 8);
         // Phases отсортированы возрастающе (Ord-совместимость).
         let mut sorted = PaintPhase::ORDER;
         sorted.sort();
@@ -411,9 +421,8 @@ mod tests {
     }
 
     #[test]
-    fn paint_order_from_root_only_emits_four_phases() {
-        // Без child-SC: только paint-meaningful фазы root-а
-        // (RootBackground / BlockBackgrounds / Floats / InlineContent).
+    fn paint_order_from_root_only_emits_five_phases() {
+        // Без child-SC: root эмитит RB / BB / F / IC / CloseLayer.
         // Фазы NegativeZ / PositionedAndZAuto / PositiveZ — маркеры рекурсии
         // в child-SC; в выводе не появляются, если детей нет.
         let tree = StackingTree::empty_root();
@@ -425,6 +434,7 @@ mod tests {
                 (StackingContextId::ROOT, PaintPhase::BlockBackgrounds),
                 (StackingContextId::ROOT, PaintPhase::Floats),
                 (StackingContextId::ROOT, PaintPhase::InlineContent),
+                (StackingContextId::ROOT, PaintPhase::CloseLayer),
             ]
         );
     }
@@ -449,22 +459,25 @@ mod tests {
     #[test]
     fn negative_z_child_painted_after_root_background() {
         // root (z=None) → один child с z=-1
+        // root.RB → neg(RB/BB/F/IC/CL) → root.BB/F/IC/CL
+        // CloseLayer в neg приходит до root.BB — neg полностью завёрнут в root.
         let tree = build_synthetic_tree(&[None, Some(-1)], &[vec![1], vec![]]);
         let order = PaintOrder::from_tree(&tree);
         let root = StackingContextId::ROOT;
         let neg = StackingContextId(1);
-        // root.RB → neg.RB / neg.BB / neg.F / neg.IC → root.BB / root.F / root.IC
         assert_eq!(
             order.steps,
             vec![
                 (root, PaintPhase::RootBackground),
-                (neg, PaintPhase::RootBackground),
-                (neg, PaintPhase::BlockBackgrounds),
-                (neg, PaintPhase::Floats),
-                (neg, PaintPhase::InlineContent),
+                (neg,  PaintPhase::RootBackground),
+                (neg,  PaintPhase::BlockBackgrounds),
+                (neg,  PaintPhase::Floats),
+                (neg,  PaintPhase::InlineContent),
+                (neg,  PaintPhase::CloseLayer),
                 (root, PaintPhase::BlockBackgrounds),
                 (root, PaintPhase::Floats),
                 (root, PaintPhase::InlineContent),
+                (root, PaintPhase::CloseLayer),
             ]
         );
     }
@@ -472,6 +485,8 @@ mod tests {
     #[test]
     fn positive_z_child_painted_after_root_inline_content() {
         // root → один child с z=1
+        // root.RB/BB/F/IC → pos(RB/BB/F/IC/CL) → root.CL
+        // root.CloseLayer ПОСЛЕ pos — pos завёрнут в root.
         let tree = build_synthetic_tree(&[None, Some(1)], &[vec![1], vec![]]);
         let order = PaintOrder::from_tree(&tree);
         let root = StackingContextId::ROOT;
@@ -483,10 +498,12 @@ mod tests {
                 (root, PaintPhase::BlockBackgrounds),
                 (root, PaintPhase::Floats),
                 (root, PaintPhase::InlineContent),
-                (pos, PaintPhase::RootBackground),
-                (pos, PaintPhase::BlockBackgrounds),
-                (pos, PaintPhase::Floats),
-                (pos, PaintPhase::InlineContent),
+                (pos,  PaintPhase::RootBackground),
+                (pos,  PaintPhase::BlockBackgrounds),
+                (pos,  PaintPhase::Floats),
+                (pos,  PaintPhase::InlineContent),
+                (pos,  PaintPhase::CloseLayer),
+                (root, PaintPhase::CloseLayer),
             ]
         );
     }
@@ -494,14 +511,16 @@ mod tests {
     #[test]
     fn auto_z_child_painted_in_phase_six() {
         // root → один child с z=None (auto). Phase 6: auto и 0 идут вместе
-        // ПОСЛЕ inline content родителя, но ДО positive-z.
+        // ПОСЛЕ inline content родителя, но ДО root.CloseLayer.
         let tree = build_synthetic_tree(&[None, None], &[vec![1], vec![]]);
         let order = PaintOrder::from_tree(&tree);
-        // root.RB, root.BB, root.F, root.IC, then child fully
-        assert_eq!(order.len(), 8);
+        // root(RB/BB/F/IC) → child(RB/BB/F/IC/CL) → root(CL) = 10 steps
+        assert_eq!(order.len(), 10);
         assert_eq!(order.steps[3].1, PaintPhase::InlineContent);
         assert_eq!(order.steps[4].0, StackingContextId(1));
         assert_eq!(order.steps[4].1, PaintPhase::RootBackground);
+        // root.CloseLayer comes AFTER child's last step
+        assert_eq!(order.steps[9], (StackingContextId::ROOT, PaintPhase::CloseLayer));
     }
 
     #[test]
@@ -519,53 +538,69 @@ mod tests {
         // root c тремя детьми: neg(z=-1), auto(z=None), pos(z=2).
         // children_per_sc сохраняет порядок, в котором мы их добавляем —
         // именно так StackingTree::build делает stable sort.
+        // Порядок с CloseLayer:
+        //  root.RB → neg(RB/BB/F/IC/CL) → root.BB/F/IC → auto(RB/BB/F/IC/CL) → pos(RB/BB/F/IC/CL) → root.CL
+        //  1      +    5                  +    3         +       5              +        5            +   1  = 20
         let tree = build_synthetic_tree(
             &[None, Some(-1), None, Some(2)],
             &[vec![1, 2, 3], vec![], vec![], vec![]],
         );
         let order = PaintOrder::from_tree(&tree);
-        // root.RB → neg full → root.BB/F/IC → auto full → pos full
         let root = StackingContextId::ROOT;
-        let neg = StackingContextId(1);
+        let neg  = StackingContextId(1);
         let auto = StackingContextId(2);
-        let pos = StackingContextId(3);
+        let pos  = StackingContextId(3);
         assert_eq!(order.steps[0], (root, PaintPhase::RootBackground));
-        // negative-z child block
+        // negative-z child block (5 phases)
         assert_eq!(order.steps[1], (neg, PaintPhase::RootBackground));
         assert_eq!(order.steps[2], (neg, PaintPhase::BlockBackgrounds));
         assert_eq!(order.steps[3], (neg, PaintPhase::Floats));
         assert_eq!(order.steps[4], (neg, PaintPhase::InlineContent));
-        // own block/float/inline
-        assert_eq!(order.steps[5], (root, PaintPhase::BlockBackgrounds));
-        assert_eq!(order.steps[6], (root, PaintPhase::Floats));
-        assert_eq!(order.steps[7], (root, PaintPhase::InlineContent));
-        // auto child block
-        assert_eq!(order.steps[8], (auto, PaintPhase::RootBackground));
-        // ...auto.BB/F/IC then pos full
-        assert_eq!(order.steps[12], (pos, PaintPhase::RootBackground));
-        assert_eq!(order.len(), 16);
+        assert_eq!(order.steps[5], (neg, PaintPhase::CloseLayer));
+        // own block/float/inline (3 phases)
+        assert_eq!(order.steps[6],  (root, PaintPhase::BlockBackgrounds));
+        assert_eq!(order.steps[7],  (root, PaintPhase::Floats));
+        assert_eq!(order.steps[8],  (root, PaintPhase::InlineContent));
+        // auto child block (5 phases)
+        assert_eq!(order.steps[9],  (auto, PaintPhase::RootBackground));
+        assert_eq!(order.steps[13], (auto, PaintPhase::CloseLayer));
+        // pos full (5 phases)
+        assert_eq!(order.steps[14], (pos, PaintPhase::RootBackground));
+        assert_eq!(order.steps[18], (pos, PaintPhase::CloseLayer));
+        // root.CL last
+        assert_eq!(order.steps[19], (root, PaintPhase::CloseLayer));
+        assert_eq!(order.len(), 20);
     }
 
     #[test]
     fn nested_child_sc_recurses_correctly() {
         // root → child(z=1) → grandchild(z=-1).
-        // Между child.RB и child.BB должны вклиниться все 4 фазы grandchild-а.
+        // Порядок с CloseLayer:
+        //  root(RB/BB/F/IC) → child(RB) → grand(RB/BB/F/IC/CL) → child(BB/F/IC/CL) → root(CL)
+        //  4               +    1      +           5            +       4            +    1    = 15
         let tree = build_synthetic_tree(
             &[None, Some(1), Some(-1)],
             &[vec![1], vec![2], vec![]],
         );
         let order = PaintOrder::from_tree(&tree);
+        let root  = StackingContextId::ROOT;
         let child = StackingContextId(1);
         let grand = StackingContextId(2);
-        // root.RB, root.BB, root.F, root.IC, then child full (which includes grand inside)
+        // root's own phases come first (child has z=1 → phase 7)
+        assert_eq!(order.steps[0], (root, PaintPhase::RootBackground));
+        assert_eq!(order.steps[3], (root, PaintPhase::InlineContent));
         assert_eq!(order.steps[4], (child, PaintPhase::RootBackground));
-        // grandchild (z=-1) приходит сразу после child.RB
+        // grandchild (z=-1) вклинивается сразу после child.RB
         assert_eq!(order.steps[5], (grand, PaintPhase::RootBackground));
-        assert_eq!(order.steps[8], (grand, PaintPhase::InlineContent));
+        assert_eq!(order.steps[9], (grand, PaintPhase::CloseLayer));
         // child's own block/float/inline после grandchild
-        assert_eq!(order.steps[9], (child, PaintPhase::BlockBackgrounds));
-        assert_eq!(order.steps[10], (child, PaintPhase::Floats));
-        assert_eq!(order.steps[11], (child, PaintPhase::InlineContent));
+        assert_eq!(order.steps[10], (child, PaintPhase::BlockBackgrounds));
+        assert_eq!(order.steps[11], (child, PaintPhase::Floats));
+        assert_eq!(order.steps[12], (child, PaintPhase::InlineContent));
+        assert_eq!(order.steps[13], (child, PaintPhase::CloseLayer));
+        // root.CL last
+        assert_eq!(order.steps[14], (root, PaintPhase::CloseLayer));
+        assert_eq!(order.len(), 15);
     }
 
     #[test]
@@ -580,15 +615,15 @@ mod tests {
     #[test]
     fn real_document_with_opacity_paints_child_after_root_inline() {
         // E2E через layout: `<div style="opacity:0.5">x</div>` — div создаёт
-        // SC (z=None → phase 6). Дочерний SC рисуется после root.IC.
+        // SC (z=None → phase 6). Дочерний SC рисуется после root.IC, root.CL последним.
         let tree = build_tree(
             "<div>x</div>",
             "div { opacity: 0.5; }",
         );
         let order = PaintOrder::from_tree(&tree);
-        // root + 1 child SC, всего 8 steps (4 + 4).
+        // root + 1 child SC, всего 10 steps (5 + 5).
         assert_eq!(tree.contexts.len(), 2);
-        assert_eq!(order.len(), 8);
+        assert_eq!(order.len(), 10);
         // root inline content на 4-й позиции, дочерний SC начинается с 5-й.
         assert_eq!(
             order.steps[3],
@@ -600,6 +635,11 @@ mod tests {
             "child SC начинается с RootBackground"
         );
         assert_eq!(order.steps[4].0, StackingContextId(1));
+        // root.CloseLayer — последний, ПОСЛЕ child SC
+        assert_eq!(
+            order.steps[9],
+            (StackingContextId::ROOT, PaintPhase::CloseLayer)
+        );
     }
 
     #[test]

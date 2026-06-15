@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<!--
+  TEST-99: offset-path: ray(<angle>) — CSS Motion Path L1 §2.2
+  Eight boxes share a common center; each is pushed 150px along a ray at a
+  different angle (0deg = up, growing clockwise). They form a ring. A ninth
+  box stays at center (offset-distance 0). offset-rotate: 0deg keeps every box
+  axis-aligned so the diff is pure translation geometry, no rotated AA edges.
+-->
+<html>
+<head>
+  <title>Lumen — 99 offset-path ray</title>
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f {
+    background: #0d1117;
+    width: 1022px; height: 718px;
+    margin: 1px;
+    padding: 30px;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  .stage { position: relative; width: 960px; height: 640px; }
+
+  /* Each box's normal position is the stage center (480,320) minus half its
+     own 40px size, so the box is centred on the ray origin before the ray
+     displaces it. */
+  .box {
+    position: absolute;
+    top: 300px; left: 460px;
+    width: 40px; height: 40px;
+    offset-distance: 150px;
+    offset-rotate: 0deg;
+  }
+
+  .r0   { background: #e63946; offset-path: ray(0deg); }
+  .r45  { background: #f4a261; offset-path: ray(45deg); }
+  .r90  { background: #2a9d8f; offset-path: ray(90deg); }
+  .r135 { background: #457b9d; offset-path: ray(135deg); }
+  .r180 { background: #9d4edd; offset-path: ray(180deg); }
+  .r225 { background: #52b788; offset-path: ray(225deg); }
+  .r270 { background: #e9c46a; offset-path: ray(270deg); }
+  .r315 { background: #f77f00; offset-path: ray(315deg); }
+
+  /* Center marker: offset-distance 0 keeps it at origin regardless of angle. */
+  .center { background: #ffffff; offset-path: ray(0deg); offset-distance: 0px; }
+
+  /* turn-unit ray, far corner: 0.125turn = 45deg but a longer distance, placed
+     in its own quadrant so it does not overlap the ring. */
+  .turn { background: #00b4d8; offset-path: ray(0.125turn); offset-distance: 250px; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="stage">
+    <div class="box r0"></div>
+    <div class="box r45"></div>
+    <div class="box r90"></div>
+    <div class="box r135"></div>
+    <div class="box r180"></div>
+    <div class="box r225"></div>
+    <div class="box r270"></div>
+    <div class="box r315"></div>
+    <div class="box center"></div>
+    <div class="box turn"></div>
+  </div>
+</div>
+</body>
+</html>

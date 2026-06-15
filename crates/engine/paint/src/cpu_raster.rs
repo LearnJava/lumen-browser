@@ -4,8 +4,12 @@
 //! across Windows/macOS/Linux.
 
 use lumen_image::Image;
-use lumen_layout::{Color, FilterFn, GradientStop, Length};
+use lumen_layout::{BorderStyle, Color, FilterFn, GradientStop};
+use crate::dash_math::{dashed_border_offsets, dotted_border_offsets};
+use crate::gradient_math::{atan2_det, resolve_stop_positions, sample_gradient_color};
+use crate::matrix_util::mat4_to_2d_affine;
 use crate::{DisplayCommand, CornerRadii};
+use crate::display_list::ResolvedClipShape;
 use lumen_core::geom::Rect;
 
 /// Bundled Inter Regular — the only face the deterministic CPU path can
@@ -55,6 +59,24 @@ enum LayerComposite {
     /// and multiplied into the layer's alpha before it is composited down with
     /// plain `SourceOver`.
     Mask(MaskSpec),
+    /// BUG-140 — `clip-path` basic-shape (`PushClipPath`/`PopClip`). The
+    /// element's subtree renders into a transparent full-size layer (page
+    /// coordinates, pre-transform — the command is emitted inside the
+    /// element's `PushTransform`, so the enclosing transform layer carries
+    /// the clipped result); on close the shape's anti-aliased coverage is
+    /// rasterised (tiny-skia path fill — deterministic) and multiplied into
+    /// the layer's alpha before plain `SourceOver` compositing.
+    ClipShape(ResolvedClipShape),
+}
+
+/// Kind of clip opened by a `PushClip*` command, so the shared `PopClip`
+/// closes rect clips (pop `clip_stack`) and shape clips (close the layer)
+/// differently. Mirrors `ClipEntry` in the femtovg backend (BUG-140).
+enum CpuClipKind {
+    /// `PushClipRect` / `PushClipRoundedRect` — entry in `clip_stack`.
+    Rect,
+    /// `PushClipPath` — off-screen layer with `LayerComposite::ClipShape`.
+    Shape,
 }
 
 /// How a `LayerComposite::Mask` group computes its per-pixel mask alpha.
@@ -141,6 +163,9 @@ pub(crate) fn rasterize_cpu(
     let mut clip_stack: Vec<Rect> = Vec::new();
     let mut clip_mask: Option<tiny_skia::Mask> = None;
     let mut clip_rect: Option<Rect> = None;
+    // BUG-140: вид каждого открытого PushClip* — общий PopClip закрывает
+    // rect-клипы (pop clip_stack) и shape-клипы (закрытие слоя) по-разному.
+    let mut clip_kinds: Vec<CpuClipKind> = Vec::new();
 
     for cmd in commands {
         match cmd {
@@ -154,10 +179,10 @@ pub(crate) fn rasterize_cpu(
                     layers.last_mut().expect("base layer"), rect, color, radii, c,
                 )?;
             }
-            DisplayCommand::DrawBorder { rect, widths, colors, styles: _, radii } => {
+            DisplayCommand::DrawBorder { rect, widths, colors, styles, radii } => {
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
                 rasterize_draw_border(
-                    layers.last_mut().expect("base layer"), rect, widths, colors, radii, c,
+                    layers.last_mut().expect("base layer"), rect, widths, colors, styles, radii, c,
                 )?;
             }
             DisplayCommand::DrawOutline { rect, width, style: _, color, offset } => {
@@ -207,11 +232,42 @@ pub(crate) fn rasterize_cpu(
                 clip_stack.push(*rect);
                 clip_rect = clip_intersection(&clip_stack);
                 clip_mask = build_clip_mask(width, height, clip_rect);
+                clip_kinds.push(CpuClipKind::Rect);
             }
-            DisplayCommand::PopClip => {
-                clip_stack.pop();
+            // BUG-140: радиусы на CPU-пути не моделируются (как и scissor-
+            // fallback femtovg, BUG-132) — rect-клип. Явный обработчик нужен
+            // для баланса пар: раньше команда падала в `_ => {}`, а её парный
+            // PopClip попал чужой rect из clip_stack.
+            DisplayCommand::PushClipRoundedRect { rect, radii: _ } => {
+                clip_stack.push(*rect);
                 clip_rect = clip_intersection(&clip_stack);
                 clip_mask = build_clip_mask(width, height, clip_rect);
+                clip_kinds.push(CpuClipKind::Rect);
+            }
+            // BUG-140: shape-клип (clip-path circle/ellipse/polygon) — слой
+            // + альфа-покрытие формы на закрытии.
+            DisplayCommand::PushClipPath { shape } => {
+                let layer = tiny_skia::Pixmap::new(width, height)
+                    .ok_or("Failed to create clip-path layer")?;
+                layers.push(layer);
+                layer_ops.push(LayerComposite::ClipShape(shape.clone()));
+                clip_kinds.push(CpuClipKind::Shape);
+            }
+            DisplayCommand::PopClip => {
+                match clip_kinds.pop() {
+                    Some(CpuClipKind::Shape) => {
+                        if let (Some(top), Some(op)) = (layers.pop(), layer_ops.pop())
+                            && let Some(dst) = layers.last_mut()
+                        {
+                            close_layer(dst, &top, &op);
+                        }
+                    }
+                    Some(CpuClipKind::Rect) | None => {
+                        clip_stack.pop();
+                        clip_rect = clip_intersection(&clip_stack);
+                        clip_mask = build_clip_mask(width, height, clip_rect);
+                    }
+                }
             }
             // CSS Overflow L3 §3.2 — `overflow: scroll/auto` (and the `auto`
             // axis a mismatched `overflow` pair coerces to). Treated as a clip
@@ -229,7 +285,8 @@ pub(crate) fn rasterize_cpu(
                 clip_rect = clip_intersection(&clip_stack);
                 clip_mask = build_clip_mask(width, height, clip_rect);
             }
-            DisplayCommand::DrawImage { rect, .. } => {
+            DisplayCommand::DrawImage { rect, .. }
+            | DisplayCommand::LazyImageSlot { rect, .. } => {
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
                 rasterize_image_placeholder(layers.last_mut().expect("base layer"), rect, c)?;
             }
@@ -263,12 +320,10 @@ pub(crate) fn rasterize_cpu(
             // children) renders as an off-screen group, then composites down
             // through the 2D affine. Like `PushOpacity`, push a transparent
             // full-size layer; the affine maps page coordinates and is applied at
-            // composite time so geometry need not be transformed per-draw. The
-            // `Mat4` is column-major (`x' = a·x + c·y + e`, `y' = b·x + d·y + f`):
-            // `a=[0] b=[1] c=[4] d=[5] e=[12] f=[13]` → `Transform::from_row`.
+            // composite time so geometry need not be transformed per-draw.
             DisplayCommand::PushTransform { matrix } => {
-                let m = &matrix.0;
-                let t = tiny_skia::Transform::from_row(m[0], m[1], m[4], m[5], m[12], m[13]);
+                let [a, b, c, d, e, f] = mat4_to_2d_affine(matrix);
+                let t = tiny_skia::Transform::from_row(a, b, c, d, e, f);
                 let layer = tiny_skia::Pixmap::new(width, height)
                     .ok_or("Failed to create transform layer")?;
                 layers.push(layer);
@@ -293,7 +348,7 @@ pub(crate) fn rasterize_cpu(
             // effects, the wrapped draws accumulate into a transparent full-size
             // layer; the matching `PopFilter` applies the chain to that layer and
             // composites it down.
-            DisplayCommand::PushFilter { filters } => {
+            DisplayCommand::PushFilter { filters, bounds: _ } => {
                 let layer = tiny_skia::Pixmap::new(width, height)
                     .ok_or("Failed to create filter layer")?;
                 layers.push(layer);
@@ -433,7 +488,82 @@ fn close_layer(dst: &mut tiny_skia::Pixmap, src: &tiny_skia::Pixmap, op: &LayerC
         LayerComposite::Blend(mode) => composite_blend_layer(dst, src, *mode),
         LayerComposite::Filter(filters) => composite_filter_layer(dst, src, filters),
         LayerComposite::Mask(spec) => composite_mask_layer(dst, src, spec),
+        LayerComposite::ClipShape(shape) => composite_clip_shape_layer(dst, src, shape),
     }
+}
+
+/// BUG-140: применяет shape-клип (`clip-path` circle/ellipse/polygon) к
+/// off-screen слою `src` и композитит результат на `dst` (`SourceOver`).
+///
+/// Покрытие формы растеризуется заливкой tiny-skia пути (анти-алиасинг
+/// детерминирован — pure Rust), альфа покрытия умножается в слой как у
+/// `composite_mask_layer`. Координаты формы — page px (до transform
+/// элемента): команда эмитится внутри `PushTransform`, поэтому слой
+/// transform-группы выше переносит уже обрезанный результат.
+fn composite_clip_shape_layer(
+    dst: &mut tiny_skia::Pixmap,
+    src: &tiny_skia::Pixmap,
+    shape: &ResolvedClipShape,
+) {
+    let (w, h) = (src.width(), src.height());
+    let mut masked = src.clone();
+    if let Some(coverage) = rasterize_clip_shape_coverage(shape, w, h) {
+        multiply_alpha_by_mask(&mut masked, &coverage);
+    } else {
+        // Вырожденная форма (нулевой радиус / <3 вершин полигона) клиппит всё.
+        masked.data_mut().fill(0);
+    }
+    let paint = tiny_skia::PixmapPaint {
+        opacity: 1.0,
+        blend_mode: tiny_skia::BlendMode::SourceOver,
+        quality: tiny_skia::FilterQuality::Nearest,
+    };
+    dst.draw_pixmap(0, 0, masked.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+}
+
+/// Растеризует анти-алиасное покрытие формы клипа в transparent-pixmap
+/// (альфа = покрытие). `None`, если форма вырождена и путь не строится.
+fn rasterize_clip_shape_coverage(
+    shape: &ResolvedClipShape,
+    width: u32,
+    height: u32,
+) -> Option<tiny_skia::Pixmap> {
+    let mut pb = tiny_skia::PathBuilder::new();
+    match shape {
+        ResolvedClipShape::Circle { cx, cy, r } => {
+            pb.push_oval(tiny_skia::Rect::from_xywh(cx - r, cy - r, 2.0 * r, 2.0 * r)?);
+        }
+        ResolvedClipShape::Ellipse { cx, cy, rx, ry } => {
+            pb.push_oval(tiny_skia::Rect::from_xywh(cx - rx, cy - ry, 2.0 * rx, 2.0 * ry)?);
+        }
+        ResolvedClipShape::Polygon { verts, .. } => {
+            let mut iter = verts.iter();
+            let (x0, y0) = iter.next()?;
+            pb.move_to(*x0, *y0);
+            for (x, y) in iter {
+                pb.line_to(*x, *y);
+            }
+            pb.close();
+        }
+    }
+    // CSS Shapes L1 §3/§4 — even-odd vs nonzero для самопересекающихся форм.
+    let fill_rule = match shape {
+        ResolvedClipShape::Polygon { even_odd: true, .. } => tiny_skia::FillRule::EvenOdd,
+        _ => tiny_skia::FillRule::Winding,
+    };
+    let path = pb.finish()?;
+    let mut coverage = tiny_skia::Pixmap::new(width, height)?;
+    let mut paint = tiny_skia::Paint::default();
+    paint.set_color_rgba8(255, 255, 255, 255);
+    paint.anti_alias = true;
+    coverage.fill_path(
+        &path,
+        &paint,
+        fill_rule,
+        tiny_skia::Transform::identity(),
+        None,
+    );
+    Some(coverage)
 }
 
 /// Apply a `mask-image` (`MaskSpec`) to the off-screen element layer `src`, then
@@ -1083,87 +1213,113 @@ fn rasterize_draw_border(
     rect: &Rect,
     widths: &[f32; 4],
     colors: &[Color; 4],
+    styles: &[BorderStyle; 4],
     _radii: &CornerRadii,
     clip: Option<&tiny_skia::Mask>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use tiny_skia::Paint;
-
+    // Border edges are axis-aligned quads. `anti_alias: false` is both visually
+    // correct (GPU renderer draws without per-edge AA) and required to avoid
+    // tiny-skia's hairline_aa::fill_dot8 debug_assert for sub-pixel rects (BUG-052).
     let [top_w, right_w, bottom_w, left_w] = widths;
     let [top_c, right_c, bottom_c, left_c] = colors;
+    let [top_s, right_s, bottom_s, left_s] = styles;
 
-    // Simple solid border drawing (dashed/dotted skipped for now).
-    //
-    // Border edges are axis-aligned solid quads (the GPU renderer paints them
-    // without per-edge AA), so `anti_alias: false` is both visually correct and
-    // necessary: tiny-skia's AA `fill_rect` fast-path (`hairline_aa::fill_dot8`)
-    // hits a `debug_assert!(false)` for thin, sub-pixel-positioned rects whose
-    // fixed-point inner span rounds to zero width — which crashes the
-    // debug-assertions-on test profile (BUG-052). The non-AA path pixel-snaps
-    // and never enters that code.
-
-    // Top border.
-    if *top_w > 0.0 {
-        let paint = Paint {
-            shader: tiny_skia::Shader::SolidColor(color_to_skia(*top_c)),
-            anti_alias: false,
-            force_hq_pipeline: false,
-            blend_mode: tiny_skia::BlendMode::SourceOver,
-        };
-        let r = tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.width, *top_w)
-            .ok_or("Invalid rect")?;
-        pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
-    }
-
-    // Right border.
-    if *right_w > 0.0 {
-        let paint = Paint {
-            shader: tiny_skia::Shader::SolidColor(color_to_skia(*right_c)),
-            anti_alias: false,
-            force_hq_pipeline: false,
-            blend_mode: tiny_skia::BlendMode::SourceOver,
-        };
-        let r = tiny_skia::Rect::from_xywh(
-            rect.x + rect.width - right_w,
-            rect.y,
-            *right_w,
-            rect.height,
-        )
-        .ok_or("Invalid rect")?;
-        pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
-    }
-
-    // Bottom border.
-    if *bottom_w > 0.0 {
-        let paint = Paint {
-            shader: tiny_skia::Shader::SolidColor(color_to_skia(*bottom_c)),
-            anti_alias: false,
-            force_hq_pipeline: false,
-            blend_mode: tiny_skia::BlendMode::SourceOver,
-        };
-        let r = tiny_skia::Rect::from_xywh(
-            rect.x,
-            rect.y + rect.height - bottom_w,
-            rect.width,
-            *bottom_w,
-        )
-        .ok_or("Invalid rect")?;
-        pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
-    }
-
-    // Left border.
-    if *left_w > 0.0 {
-        let paint = Paint {
-            shader: tiny_skia::Shader::SolidColor(color_to_skia(*left_c)),
-            anti_alias: false,
-            force_hq_pipeline: false,
-            blend_mode: tiny_skia::BlendMode::SourceOver,
-        };
-        let r =
-            tiny_skia::Rect::from_xywh(rect.x, rect.y, *left_w, rect.height).ok_or("Invalid rect")?;
-        pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
-    }
-
+    draw_border_side_h(pixmap, rect.x, rect.y, rect.width, *top_w, *top_c, *top_s, clip)?;
+    draw_border_side_v(pixmap, rect.x + rect.width - right_w, rect.y, *right_w, rect.height, *right_c, *right_s, clip)?;
+    draw_border_side_h(pixmap, rect.x, rect.y + rect.height - bottom_w, rect.width, *bottom_w, *bottom_c, *bottom_s, clip)?;
+    draw_border_side_v(pixmap, rect.x, rect.y, *left_w, rect.height, *left_c, *left_s, clip)?;
     Ok(())
+}
+
+/// Draw one horizontal border side using segments from `dash_math` for
+/// Dashed/Dotted, or a single fill_rect for Solid/Double.
+fn draw_border_side_h(
+    pixmap: &mut tiny_skia::Pixmap,
+    x0: f32,
+    y: f32,
+    total: f32,
+    h: f32,
+    color: Color,
+    style: BorderStyle,
+    clip: Option<&tiny_skia::Mask>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if h <= 0.0 || total <= 0.0 {
+        return Ok(());
+    }
+    let paint = border_paint(color);
+    match style {
+        BorderStyle::None => {}
+        BorderStyle::Dashed => {
+            for (off, len) in dashed_border_offsets(total, h) {
+                if let Some(r) = tiny_skia::Rect::from_xywh(x0 + off, y, len, h) {
+                    pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
+                }
+            }
+        }
+        BorderStyle::Dotted => {
+            for (off, len) in dotted_border_offsets(total, h) {
+                if let Some(r) = tiny_skia::Rect::from_xywh(x0 + off, y, len, h) {
+                    pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
+                }
+            }
+        }
+        _ => {
+            if let Some(r) = tiny_skia::Rect::from_xywh(x0, y, total, h) {
+                pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Draw one vertical border side using segments from `dash_math` for
+/// Dashed/Dotted, or a single fill_rect for Solid/Double.
+fn draw_border_side_v(
+    pixmap: &mut tiny_skia::Pixmap,
+    x: f32,
+    y0: f32,
+    w: f32,
+    total: f32,
+    color: Color,
+    style: BorderStyle,
+    clip: Option<&tiny_skia::Mask>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if w <= 0.0 || total <= 0.0 {
+        return Ok(());
+    }
+    let paint = border_paint(color);
+    match style {
+        BorderStyle::None => {}
+        BorderStyle::Dashed => {
+            for (off, len) in dashed_border_offsets(total, w) {
+                if let Some(r) = tiny_skia::Rect::from_xywh(x, y0 + off, w, len) {
+                    pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
+                }
+            }
+        }
+        BorderStyle::Dotted => {
+            for (off, len) in dotted_border_offsets(total, w) {
+                if let Some(r) = tiny_skia::Rect::from_xywh(x, y0 + off, w, len) {
+                    pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
+                }
+            }
+        }
+        _ => {
+            if let Some(r) = tiny_skia::Rect::from_xywh(x, y0, w, total) {
+                pixmap.fill_rect(r, &paint, tiny_skia::Transform::identity(), clip);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn border_paint(color: Color) -> tiny_skia::Paint<'static> {
+    tiny_skia::Paint {
+        shader: tiny_skia::Shader::SolidColor(color_to_skia(color)),
+        anti_alias: false,
+        force_hq_pipeline: false,
+        blend_mode: tiny_skia::BlendMode::SourceOver,
+    }
 }
 
 fn rasterize_draw_outline(
@@ -1217,60 +1373,6 @@ fn rasterize_draw_outline(
     }
 
     Ok(())
-}
-
-/// CSS Images L3 §3.3 — resolve `GradientStop` positions to normalized [0,1].
-///
-/// Mirrors the GPU renderer's `resolve_gradient_stops`: unspecified first/last
-/// stops default to 0/100%, runs of unspecified positions between explicit ones
-/// are evenly distributed, and `Length::Px` stops are divided by `line_len`
-/// (the pixel length of the gradient line). Returns `(position, color)` pairs.
-fn resolve_stop_positions(stops: &[GradientStop], line_len: f32) -> Vec<(f32, Color)> {
-    if stops.is_empty() {
-        return vec![];
-    }
-    let n = stops.len();
-    let mut positions: Vec<Option<f32>> = stops
-        .iter()
-        .map(|s| {
-            s.position.as_ref().map(|l| match l {
-                Length::Percent(p) => p / 100.0,
-                Length::Px(v) if line_len > 0.0 => v / line_len,
-                _ => 0.0,
-            })
-        })
-        .collect();
-    if positions[0].is_none() {
-        positions[0] = Some(0.0);
-    }
-    if positions[n - 1].is_none() {
-        positions[n - 1] = Some(1.0);
-    }
-    let mut i = 0;
-    while i < n {
-        if positions[i].is_some() {
-            i += 1;
-            continue;
-        }
-        let lo_i = i - 1;
-        let lo_pos = positions[lo_i].unwrap_or(0.0);
-        let mut hi_i = i + 1;
-        while hi_i < n && positions[hi_i].is_none() {
-            hi_i += 1;
-        }
-        let hi_pos = positions[hi_i.min(n - 1)].unwrap_or(1.0);
-        let gap = (hi_i - lo_i) as f32;
-        for (offset, pos) in positions[i..hi_i].iter_mut().enumerate() {
-            let t = (i + offset - lo_i) as f32 / gap;
-            *pos = Some(lo_pos + (hi_pos - lo_pos) * t);
-        }
-        i = hi_i;
-    }
-    stops
-        .iter()
-        .enumerate()
-        .map(|(i, s)| (positions[i].unwrap_or(0.0), s.color))
-        .collect()
 }
 
 /// Build tiny-skia `GradientStop`s from resolved `(position, color)` pairs.
@@ -1520,72 +1622,6 @@ fn rasterize_conic_gradient(
         }
     }
     Ok(())
-}
-
-/// Deterministic `atan2(y, x)` returning radians in `(-π, π]`.
-///
-/// Pure approximation (Rajan's formula) using only IEEE-exact ops
-/// (`+`,`-`,`*`,`/`,`min`,`max`,`abs`) — no platform libm — so the result is
-/// bit-identical across Windows/macOS/Linux. Accuracy ≈ 0.004 rad, ample for an
-/// angular gradient whose reference PNG is self-generated by this same path.
-fn atan2_det(y: f32, x: f32) -> f32 {
-    use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
-    let ax = x.abs();
-    let ay = y.abs();
-    let max = ax.max(ay);
-    if max == 0.0 {
-        return 0.0;
-    }
-    let a = ax.min(ay) / max; // tan of the smaller angle, [0, 1]
-    let mut r = a * FRAC_PI_4 + 0.273 * a * (1.0 - a); // ≈ atan(a)
-    if ay > ax {
-        r = FRAC_PI_2 - r; // reflect across the 45° line
-    }
-    if x < 0.0 {
-        r = PI - r;
-    }
-    if y < 0.0 {
-        r = -r;
-    }
-    r
-}
-
-/// Sample a resolved gradient stop list at position `t` (straight-colour linear
-/// interpolation), mirroring the GPU `sample_grad`: `repeating` wraps `t` to
-/// `[0,1)`, otherwise it clamps; positions outside the first/last stop take the
-/// boundary colour.
-fn sample_gradient_color(resolved: &[(f32, Color)], t: f32, repeating: bool) -> Color {
-    let n = resolved.len();
-    if n == 0 {
-        return Color { r: 0, g: 0, b: 0, a: 0 };
-    }
-    if n == 1 {
-        return resolved[0].1;
-    }
-    let tc = if repeating { t - t.floor() } else { t.clamp(0.0, 1.0) };
-    if tc <= resolved[0].0 {
-        return resolved[0].1;
-    }
-    let last = n - 1;
-    if tc >= resolved[last].0 {
-        return resolved[last].1;
-    }
-    for i in 0..last {
-        let (ap, ac) = resolved[i];
-        let (bp, bc) = resolved[i + 1];
-        if tc >= ap && tc <= bp {
-            let s = bp - ap;
-            let f = if s > 1e-4 { (tc - ap) / s } else { 0.0 };
-            return lerp_color(ac, bc, f);
-        }
-    }
-    resolved[last].1
-}
-
-/// Linear interpolation between two straight (non-premultiplied) RGBA8 colours.
-fn lerp_color(a: Color, b: Color, f: f32) -> Color {
-    let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * f).round().clamp(0.0, 255.0) as u8;
-    Color { r: l(a.r, b.r), g: l(a.g, b.g), b: l(a.b, b.b), a: l(a.a, b.a) }
 }
 
 /// Composite a straight-alpha `src` colour `SourceOver` onto the premultiplied
@@ -2007,6 +2043,116 @@ mod tests {
         assert_eq!(px(&img, 60, 60), (255, 255, 255, 255), "inner-only region clipped");
     }
 
+    /// BUG-140 (TEST-109 c0): `PushClipPath` circle обрезает заливку по
+    /// окружности, а не по её bounding box — точка внутри bbox, но вне круга,
+    /// остаётся белой.
+    #[test]
+    fn clip_path_circle_clips_to_circle_not_bbox() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushClipPath {
+                shape: ResolvedClipShape::Circle { cx: 32.0, cy: 32.0, r: 10.0 },
+            },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: blue },
+            DisplayCommand::PopClip,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+
+        // Центр круга — синий.
+        assert_eq!(px(&img, 32, 32), (0, 0, 255, 255), "centre inside circle");
+        // Угол bbox (24,24): расстояние до центра ≈ 11.3 > 10 — вне круга,
+        // но внутри bounding box. Старое bbox-приближение красило его синим.
+        assert_eq!(px(&img, 24, 24), (255, 255, 255, 255), "bbox corner outside circle");
+        // Далеко за пределами — белый.
+        assert_eq!(px(&img, 5, 5), (255, 255, 255, 255), "far exterior stays white");
+    }
+
+    /// BUG-140 (TEST-109 c2): `PushClipPath` polygon (треугольник) обрезает
+    /// заливку по форме; вне треугольника (но внутри его bbox) — фон.
+    #[test]
+    fn clip_path_polygon_clips_to_triangle() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        // Треугольник (32,4) (60,60) (4,60) — как polygon(50% 0, 100% 100%, 0 100%).
+        let cmds = vec![
+            DisplayCommand::PushClipPath {
+                shape: ResolvedClipShape::Polygon {
+                    verts: vec![(32.0, 4.0), (60.0, 60.0), (4.0, 60.0)],
+                    even_odd: false,
+                },
+            },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: red },
+            DisplayCommand::PopClip,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+
+        // Центроид (32, 41) — внутри треугольника.
+        assert_eq!(px(&img, 32, 41), (255, 0, 0, 255), "triangle interior red");
+        // Верхние углы bbox — вне треугольника.
+        assert_eq!(px(&img, 8, 8), (255, 255, 255, 255), "top-left outside triangle");
+        assert_eq!(px(&img, 56, 8), (255, 255, 255, 255), "top-right outside triangle");
+    }
+
+    /// CSS Shapes L1 §3/§4 — `clip-path` fill-rule. Два перекрывающихся
+    /// квадрата одним контуром (одинаковая ориентация → область пересечения
+    /// имеет winding 2). `even_odd: false` (nonzero) заливает её; `even_odd:
+    /// true` оставляет «дырку» (чётное число пересечений).
+    #[test]
+    fn clip_path_polygon_even_odd_hole() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        // Квадрат A (8,8)-(40,40) и квадрат B (24,24)-(56,56), сшитые в один
+        // замкнутый контур; пересечение — (24,24)-(40,40), центр (32,32).
+        let verts = vec![
+            (8.0, 8.0), (40.0, 8.0), (40.0, 40.0), (8.0, 40.0), (8.0, 8.0),
+            (24.0, 24.0), (56.0, 24.0), (56.0, 56.0), (24.0, 56.0), (24.0, 24.0),
+        ];
+        let make = |even_odd: bool| {
+            let cmds = vec![
+                DisplayCommand::PushClipPath {
+                    shape: ResolvedClipShape::Polygon { verts: verts.clone(), even_odd },
+                },
+                DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: red },
+                DisplayCommand::PopClip,
+            ];
+            rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize")
+        };
+
+        let nz = make(false);
+        let eo = make(true);
+
+        // Зоны только-A (14,14) и только-B (50,50) заливаются при обоих правилах.
+        assert_eq!(px(&nz, 14, 14), (255, 0, 0, 255), "nonzero: square A red");
+        assert_eq!(px(&eo, 14, 14), (255, 0, 0, 255), "evenodd: square A red");
+        assert_eq!(px(&nz, 50, 50), (255, 0, 0, 255), "nonzero: square B red");
+        assert_eq!(px(&eo, 50, 50), (255, 0, 0, 255), "evenodd: square B red");
+
+        // Центр пересечения (32,32): nonzero заливает, evenodd — дырка (фон).
+        assert_eq!(px(&nz, 32, 32), (255, 0, 0, 255), "nonzero fills the overlap");
+        assert_eq!(px(&eo, 32, 32), (255, 255, 255, 255), "evenodd leaves a hole in the overlap");
+    }
+
+    /// BUG-140 (TEST-109 c0/c1): clip-path эмитится внутри PushTransform —
+    /// transform-слой переносит уже обрезанный результат, т.е. клип едет
+    /// вместе с элементом.
+    #[test]
+    fn clip_path_carried_through_transform() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushTransform { matrix: lumen_layout::Mat4::translation_2d(20.0, 0.0) },
+            DisplayCommand::PushClipPath {
+                shape: ResolvedClipShape::Circle { cx: 16.0, cy: 32.0, r: 8.0 },
+            },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: blue },
+            DisplayCommand::PopClip,
+            DisplayCommand::PopTransform,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+
+        // Круг задан вокруг (16,32); transform сдвигает результат на +20 по X
+        // → синий центр в (36,32), а исходная позиция (16,32) — белая.
+        assert_eq!(px(&img, 36, 32), (0, 0, 255, 255), "clipped circle translated to x=36");
+        assert_eq!(px(&img, 16, 32), (255, 255, 255, 255), "original position stays white");
+    }
+
     /// `DrawText` paints the bundled Inter glyphs: a large opaque-coloured run
     /// must darken/colour some pixels away from the white background. Exact
     /// glyph pixels are font-dependent, so we only assert "ink appeared" within
@@ -2024,6 +2170,7 @@ mod tests {
             font_style: lumen_layout::FontStyle::default(),
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
+            highlight_name: None,
         }];
         let img = rasterize_cpu(128, 48, &cmds, 0.0, 0.0).expect("rasterize");
 
@@ -2054,6 +2201,7 @@ mod tests {
             font_style: lumen_layout::FontStyle::default(),
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
+            highlight_name: None,
         }];
         let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 10, 10), (255, 255, 255, 255), "empty text left bg white");
@@ -2077,6 +2225,7 @@ mod tests {
                 font_style: lumen_layout::FontStyle::default(),
                 font_variation_axes: Vec::new(),
                 tab_size: 0.0,
+                highlight_name: None,
             },
             DisplayCommand::PopClip,
         ];
@@ -2263,7 +2412,7 @@ mod tests {
     fn filter_blur_spreads_ink() {
         let black = Color { r: 0, g: 0, b: 0, a: 255 };
         let cmds = vec![
-            DisplayCommand::PushFilter { filters: vec![FilterFn::Blur(4.0)] },
+            DisplayCommand::PushFilter { filters: vec![FilterFn::Blur(4.0)], bounds: None },
             DisplayCommand::FillRect { rect: rect(20.0, 20.0, 24.0, 24.0), color: black },
             DisplayCommand::PopFilter,
         ];
@@ -2282,7 +2431,7 @@ mod tests {
     fn filter_blur_zero_is_identity() {
         let blue = Color { r: 0, g: 0, b: 255, a: 255 };
         let cmds = vec![
-            DisplayCommand::PushFilter { filters: vec![FilterFn::Blur(0.0)] },
+            DisplayCommand::PushFilter { filters: vec![FilterFn::Blur(0.0)], bounds: None },
             DisplayCommand::FillRect { rect: rect(10.0, 10.0, 20.0, 20.0), color: blue },
             DisplayCommand::PopFilter,
         ];
@@ -2297,7 +2446,7 @@ mod tests {
     fn filter_grayscale_full() {
         let red = Color { r: 255, g: 0, b: 0, a: 255 };
         let cmds = vec![
-            DisplayCommand::PushFilter { filters: vec![FilterFn::Grayscale(1.0)] },
+            DisplayCommand::PushFilter { filters: vec![FilterFn::Grayscale(1.0)], bounds: None },
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 32.0, 32.0), color: red },
             DisplayCommand::PopFilter,
         ];
@@ -2314,7 +2463,7 @@ mod tests {
     fn filter_invert_full() {
         let black = Color { r: 0, g: 0, b: 0, a: 255 };
         let cmds = vec![
-            DisplayCommand::PushFilter { filters: vec![FilterFn::Invert(1.0)] },
+            DisplayCommand::PushFilter { filters: vec![FilterFn::Invert(1.0)], bounds: None },
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 32.0, 32.0), color: black },
             DisplayCommand::PopFilter,
         ];
@@ -2472,6 +2621,93 @@ mod tests {
         // Pre-fix this would panic via debug_assert! in tiny-skia hairline_aa::fill_dot8.
         let img = rasterize_cpu(128, 128, &cmds, 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 64, 64), (255, 255, 255, 255), "interior stays white");
+    }
+
+    /// Dashed border: top edge must have visible dashes (some red pixels) with
+    /// gaps between them (some white pixels). Interior must remain white.
+    #[test]
+    fn draw_border_dashed_top_has_gaps() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        // 100px wide box, 4px top dash border; all other sides None.
+        let cmds = vec![DisplayCommand::DrawBorder {
+            rect: rect(10.0, 10.0, 100.0, 60.0),
+            widths: [4.0, 0.0, 0.0, 0.0],
+            colors: [red, red, red, red],
+            styles: [
+                lumen_layout::BorderStyle::Dashed,
+                lumen_layout::BorderStyle::None,
+                lumen_layout::BorderStyle::None,
+                lumen_layout::BorderStyle::None,
+            ],
+            radii: CornerRadii::default(),
+        }];
+        let img = rasterize_cpu(200, 100, &cmds, 0.0, 0.0).expect("rasterize");
+        // Interior must be white.
+        assert_eq!(px(&img, 60, 40), (255, 255, 255, 255), "interior white");
+        // The top edge (y=11) should have at least one red pixel and one white pixel
+        // to confirm dashes (not a solid band) are drawn.
+        let has_red: bool = (10..110).any(|x| {
+            let (r, ..) = px(&img, x, 11);
+            r > 200
+        });
+        let has_gap: bool = (10..110).any(|x| {
+            let (r, g, b, _) = px(&img, x, 11);
+            r > 200 && g > 200 && b > 200
+        });
+        assert!(has_red, "dashed top border: no red pixels found on top edge");
+        assert!(has_gap, "dashed top border: no gaps (white pixels) found on top edge");
+    }
+
+    /// Dotted border: left vertical edge must have visible dots with gaps.
+    #[test]
+    fn draw_border_dotted_left_has_gaps() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        // 60px tall box, 4px left dotted border.
+        let cmds = vec![DisplayCommand::DrawBorder {
+            rect: rect(10.0, 10.0, 80.0, 60.0),
+            widths: [0.0, 0.0, 0.0, 4.0],
+            colors: [blue; 4],
+            styles: [
+                lumen_layout::BorderStyle::None,
+                lumen_layout::BorderStyle::None,
+                lumen_layout::BorderStyle::None,
+                lumen_layout::BorderStyle::Dotted,
+            ],
+            radii: CornerRadii::default(),
+        }];
+        let img = rasterize_cpu(200, 100, &cmds, 0.0, 0.0).expect("rasterize");
+        // Interior must be white.
+        assert_eq!(px(&img, 60, 40), (255, 255, 255, 255), "interior white");
+        // Left edge (x=11) should have at least one blue and one white pixel.
+        let has_blue: bool = (10..70).any(|y| {
+            let (.., b, _) = px(&img, 11, y);
+            b > 200
+        });
+        let has_gap: bool = (10..70).any(|y| {
+            let (r, g, b, _) = px(&img, 11, y);
+            r > 200 && g > 200 && b > 200
+        });
+        assert!(has_blue, "dotted left border: no blue pixels found");
+        assert!(has_gap, "dotted left border: no gaps (white pixels) found");
+    }
+
+    /// Dashed border: `BorderStyle::None` sides render nothing (zero colored pixels).
+    #[test]
+    fn draw_border_none_style_renders_nothing() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let cmds = vec![DisplayCommand::DrawBorder {
+            rect: rect(10.0, 10.0, 80.0, 60.0),
+            widths: [4.0, 4.0, 4.0, 4.0],
+            colors: [red; 4],
+            styles: [lumen_layout::BorderStyle::None; 4],
+            radii: CornerRadii::default(),
+        }];
+        let img = rasterize_cpu(200, 100, &cmds, 0.0, 0.0).expect("rasterize");
+        // All pixels should remain white.
+        let colored = (0..200u32)
+            .flat_map(|x| (0..100u32).map(move |y| (x, y)))
+            .any(|(x, y)| px(&img, x, y).0 < 200);
+        assert!(!colored, "BorderStyle::None must render nothing");
     }
 
     /// `mask-image: url(...)` has no decoded source on the deterministic CPU path,

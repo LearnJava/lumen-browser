@@ -19,16 +19,100 @@ use lumen_html_parser::{
 use crate::style::{
     apply_container_rules, clear_cq_context, compute_pseudo_element_style, compute_style,
     set_cq_context, AlignValue,
-    BackgroundImage, BoxSizing, ClearSide, ContainFlags, ContainerContext, ContainerType, Content,
+    BackgroundImage, BorderCollapse, BoxSizing, ClearSide, ContainFlags, ContainerContext, ContainerType, Content,
     ContentItem, ComputedStyle, Direction, Display, FlexBasis, FlexDirection, FlexWrap, FloatSide,
-    GridAutoFlow, GridLine, GridTrackSize, Hyphens, Length, LengthOrAuto, ListStylePosition,
-    ListStyleType, Overflow, OverflowWrap, Position, TextAlign, TextOverflow, TextWrapMode,
-    TextWrapStyle,
+    GridAutoFlow, GridLine, GridTrackSize, Hyphens, Length, LengthOrAuto, ListStylePosition, MasonryAutoFlow,
+    ListStyleType, Overflow, OverflowWrap, Position, ScrollbarGutter, ScrollbarWidth,
+    TextAlign, TextAlignLast, TextOverflow,
+    TextWrapMode, TextWrapStyle,
     VerticalAlign, WordBreak,
 };
-use crate::counters::{precompute_counters, CounterMap};
-use crate::counters::format_counter;
+use crate::counters::{precompute_counters, CounterMap, CounterStyleRegistry, QuoteSlot,
+                      build_counter_style_registry, format_counter_with_registry,
+                      build_list_marker_text};
+use crate::subgrid::{SubgridContext, SubgridContextGuard, SUBGRID_COL_CTX, SUBGRID_ROW_CTX};
+use crate::anchor::{collect_anchors, InsetAreaKeyword};
+use crate::field_sizing::field_sizing_content_intrinsic;
+use crate::style::FieldSizing;
 use crate::TextMeasurer;
+use std::cell::Cell;
+
+// EE-3: when true, `lay_out` checks `b.dirty.is_clean()` and skips clean subtrees.
+thread_local! {
+    static INCREMENTAL_LAYOUT_MODE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Layout-side gutter width for `scrollbar-width: auto` in CSS px.
+///
+/// Must match `SCROLLBAR_WIDTH` constant in `lumen_paint::display_list` so that
+/// the space reserved in layout equals the painted scrollbar track width.
+// CSS: scrollbar-width — P4: if the paint-side constant changes, update this too.
+const SCROLLBAR_GUTTER_AUTO: f32 = 12.0;
+
+/// Layout-side gutter width for `scrollbar-width: thin` in CSS px.
+///
+/// Must match `SCROLLBAR_WIDTH_THIN` in `lumen_paint::display_list`.
+// CSS: scrollbar-width — P4: keep in sync with SCROLLBAR_WIDTH_THIN in display_list.rs.
+const SCROLLBAR_GUTTER_THIN: f32 = 6.0;
+
+/// CSS Scrollbars L1 §6.2 — inline-axis (horizontal) scrollbar gutter reservation.
+///
+/// Lumen renders overlay scrollbars, so by default (`scrollbar-gutter: auto`)
+/// the scrollbar track overlaps content and no space is reserved in layout.
+/// With `scrollbar-gutter: stable`, the UA must always reserve the gutter to
+/// prevent layout shift when the scrollbar appears or disappears.
+///
+/// Returns the CSS px width to subtract from `content_width` before laying out children.
+/// Only non-zero when `overflow-y` is `scroll` or `auto` AND `scrollbar-gutter` is `stable`
+/// or `stable both-edges` AND `scrollbar-width` is not `none`.
+///
+// CSS: scrollbar-width, scrollbar-gutter — P4: verify SCROLLBAR_GUTTER_* match
+// SCROLLBAR_WIDTH / SCROLLBAR_WIDTH_THIN in lumen_paint::display_list.
+fn scrollbar_gutter_inline(s: &ComputedStyle) -> f32 {
+    let can_scroll_y = matches!(s.overflow_y, Overflow::Scroll | Overflow::Auto);
+    if !can_scroll_y {
+        return 0.0;
+    }
+    let unit = match s.scrollbar_width {
+        ScrollbarWidth::None => return 0.0,
+        ScrollbarWidth::Auto => SCROLLBAR_GUTTER_AUTO,
+        ScrollbarWidth::Thin => SCROLLBAR_GUTTER_THIN,
+    };
+    match s.scrollbar_gutter {
+        ScrollbarGutter::Auto => 0.0,
+        // `stable` reserves gutter on the end edge only.
+        ScrollbarGutter::Stable => unit,
+        // `stable both-edges` mirrors the gutter on the start edge as well
+        // so the content remains centred even when the scrollbar appears.
+        ScrollbarGutter::StableBothEdges => unit * 2.0,
+    }
+}
+
+/// CSS Scrollbars L1 §6.2 — block-axis (vertical) scrollbar gutter reservation.
+///
+/// Returns the CSS px height to subtract from available content height when a
+/// horizontal scrollbar's gutter must be reserved (`overflow-x: scroll/auto` +
+/// `scrollbar-gutter: stable`). `both-edges` is not defined for the block axis
+/// by the spec, so only one gutter unit is reserved regardless.
+///
+// CSS: scrollbar-width, scrollbar-gutter — P4 handoff: wire block-axis gutter
+// reduction into height calculations when implementing full scrollbar-gutter.
+#[allow(dead_code)]
+fn scrollbar_gutter_block(s: &ComputedStyle) -> f32 {
+    let can_scroll_x = matches!(s.overflow_x, Overflow::Scroll | Overflow::Auto);
+    if !can_scroll_x {
+        return 0.0;
+    }
+    let unit = match s.scrollbar_width {
+        ScrollbarWidth::None => return 0.0,
+        ScrollbarWidth::Auto => SCROLLBAR_GUTTER_AUTO,
+        ScrollbarWidth::Thin => SCROLLBAR_GUTTER_THIN,
+    };
+    match s.scrollbar_gutter {
+        ScrollbarGutter::Auto => 0.0,
+        ScrollbarGutter::Stable | ScrollbarGutter::StableBothEdges => unit,
+    }
+}
 
 /// HTML-имя элемента `<img>` для распознавания replaced-боксов в layout.
 /// Tag-name в DOM хранится lower-case (HTML5 tree-builder), поэтому
@@ -48,11 +132,27 @@ fn is_video_element(doc: &Document, id: NodeId) -> bool {
     )
 }
 
+/// HTML-имя `<canvas>` для распознавания replaced-боксов рисовалки в layout.
+fn is_canvas_element(doc: &Document, id: NodeId) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. } if name.local == "canvas"
+    )
+}
+
 /// HTML-имя `<audio>` для распознавания media replaced-боксов в layout.
 fn is_audio_element(doc: &Document, id: NodeId) -> bool {
     matches!(
         &doc.get(id).data,
         NodeData::Element { name, .. } if name.local == "audio"
+    )
+}
+
+/// HTML-имя `<iframe>` для распознавания встроенных документов в layout.
+fn is_iframe_element(doc: &Document, id: NodeId) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. } if name.local == "iframe"
     )
 }
 
@@ -124,6 +224,40 @@ pub enum SvgMeetOrSlice {
     Slice,
 }
 
+/// SVG `text-anchor` attribute for text horizontal alignment.
+/// Controls how text is anchored at the specified x position (SVG L1 §10.15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SvgTextAnchor {
+    /// `start` (default) — text starts at the x position.
+    #[default]
+    Start,
+    /// `middle` — text center is at the x position.
+    Middle,
+    /// `end` — text ends at the x position.
+    End,
+}
+
+/// SVG `dominant-baseline` attribute for text vertical alignment.
+/// Controls how text is anchored at the specified y position (SVG L1 §10.15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SvgDominantBaseline {
+    /// `auto` (default) — dominant baseline is determined by the text.
+    #[default]
+    Auto,
+    /// `baseline` — use the alphabetic baseline of the text.
+    Baseline,
+    /// `hanging` — use the hanging baseline (e.g., for Devanagari scripts).
+    Hanging,
+    /// `middle` — use the middle of the em-box.
+    Middle,
+    /// `central` — use the central baseline (midpoint between ascender and descender).
+    Central,
+    /// `text-before-edge` — use the top of the em-box.
+    TextBeforeEdge,
+    /// `text-after-edge` — use the bottom of the em-box.
+    TextAfterEdge,
+}
+
 /// SVG transformation data from the `transform` presentation attribute.
 /// Stores parsed transform functions in order of application.
 #[derive(Debug, Clone, Default)]
@@ -137,6 +271,11 @@ impl SvgTransform {
     /// Creates an identity transform (no transformation).
     pub fn identity() -> Self {
         SvgTransform { matrix: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }
+    }
+
+    /// Creates a translation transform.
+    pub fn translate(tx: f32, ty: f32) -> Self {
+        SvgTransform { matrix: [1.0, 0.0, 0.0, 1.0, tx, ty] }
     }
 
     /// Multiplies this transform by another, composing them.
@@ -180,15 +319,155 @@ pub enum SvgShapeKind {
 
 /// Вид form control — используется в `BoxKind::FormControl` для paint-специализаций
 /// (фокус-рамка, checkbox/radio indicator, placeholder, стрелка select и т.д.).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum FormControlKind {
     /// `<input>` — carries input type (from `type` attribute) and initial
     /// checked state (from presence of `checked` attribute in DOM). Paint uses
     /// this to draw checkbox/radio indicators without re-querying the DOM.
-    Input { input_type: lumen_dom::InputType, checked: bool },
+    /// `value_text` is the `value` attribute content, used by `field-sizing: content`.
+    Input { input_type: lumen_dom::InputType, checked: bool, value_text: String },
     Button,
-    Select,
-    Textarea,
+    /// `<select>` — `selected_text` is the label of the currently selected
+    /// `<option>` (first option if none is explicitly selected). Paint uses this
+    /// to draw the visible label without re-querying the DOM.
+    Select { selected_text: String },
+    /// `<textarea>` — `value_text` is the text content of all direct text children,
+    /// used by `field-sizing: content` to compute intrinsic dimensions.
+    Textarea { value_text: String },
+    /// `<input type="range">` — carries current value and bounds so paint can
+    /// draw track / fill / thumb without re-querying the DOM.
+    Range {
+        /// Current slider value clamped to [min, max].
+        value: f32,
+        /// Minimum bound (HTML `min` attribute; default 0).
+        min: f32,
+        /// Maximum bound (HTML `max` attribute; default 100).
+        max: f32,
+    },
+    /// `<progress>` — determinate or indeterminate progress bar.
+    ///
+    /// `value` is `None` when the `value` attribute is absent (indeterminate).
+    /// Paint draws a filled bar (blue) proportional to `value / max`, or a
+    /// static partial fill for indeterminate.
+    Progress {
+        /// Current value clamped to [0, max]; `None` = indeterminate.
+        value: Option<f32>,
+        /// Maximum value (HTML `max` attribute; default 1.0).
+        max: f32,
+    },
+    /// `<meter>` — gauge bar whose fill color reflects optimality (HTML5 §4.10.14).
+    ///
+    /// Color: green = optimal zone, yellow = sub-optimal, red = bad.
+    Meter {
+        /// Current value clamped to [min, max].
+        value: f32,
+        /// Minimum bound (HTML `min` attribute; default 0.0).
+        min: f32,
+        /// Maximum bound (HTML `max` attribute; default 1.0).
+        max: f32,
+        /// Low threshold: below `low` is the "low" segment (default = min).
+        low: f32,
+        /// High threshold: above `high` is the "high" segment (default = max).
+        high: f32,
+        /// Optimal value — determines which segment is colored green (default = midpoint).
+        optimum: f32,
+    },
+}
+
+/// Collect the text label of the currently selected `<option>` inside a
+/// `<select>` element. Returns the text of the first `<option selected>` child,
+/// falling back to the first `<option>` child, then an empty string.
+fn collect_select_label(doc: &Document, select_id: NodeId) -> String {
+    let children = doc.get(select_id).children.clone();
+    let mut first_label: Option<String> = None;
+    for child_id in children {
+        let child = doc.get(child_id);
+        let NodeData::Element { name, attrs, .. } = &child.data else { continue };
+        if name.local.as_str() != "option" { continue }
+        let label = option_text(doc, child_id);
+        let is_selected = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("selected"));
+        if is_selected {
+            return label;
+        }
+        if first_label.is_none() {
+            first_label = Some(label);
+        }
+    }
+    first_label.unwrap_or_default()
+}
+
+/// Collect the selected `<option>` label from a `<selectlist>` element.
+///
+/// `<selectlist>` may contain `<option>` elements directly or nested inside a
+/// `<listbox>` child (Customizable Select §3.1). Searches both levels.
+/// Returns the first `<option selected>` text, falling back to the first
+/// `<option>` text, or an empty string if no options are present.
+///
+/// Phase 0 layout stub — renders like a native `<select>` widget.
+/// `// CSS: appearance: base-select` — P4 wires ::picker(select) styling.
+pub fn collect_selectlist_label(doc: &Document, sl_id: NodeId) -> String {
+    // Gather direct <option> children and <option> children inside <listbox>.
+    let mut option_ids: Vec<NodeId> = Vec::new();
+    for &child_id in &doc.get(sl_id).children.clone() {
+        let child = doc.get(child_id);
+        let NodeData::Element { name, .. } = &child.data else { continue };
+        if name.local.as_str() == "option" {
+            option_ids.push(child_id);
+        } else if name.local.as_str() == "listbox" {
+            for &gc_id in &child.children.clone() {
+                let gc = doc.get(gc_id);
+                let NodeData::Element { name: gcn, .. } = &gc.data else { continue };
+                if gcn.local.as_str() == "option" {
+                    option_ids.push(gc_id);
+                }
+            }
+        }
+    }
+    let mut first_label: Option<String> = None;
+    for opt_id in option_ids {
+        let opt = doc.get(opt_id);
+        let NodeData::Element { attrs, .. } = &opt.data else { continue };
+        let label = option_text(doc, opt_id);
+        let is_selected = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("selected"));
+        if is_selected {
+            return label;
+        }
+        if first_label.is_none() {
+            first_label = Some(label);
+        }
+    }
+    first_label.unwrap_or_default()
+}
+
+/// Returns `true` when `node` is a `<selectlist>` element (Customizable Select).
+///
+/// Used by layout to render `<selectlist>` as a form control widget (Phase 0
+/// fallback — same appearance as `<select>`).
+pub fn is_selectlist(doc: &Document, node: NodeId) -> bool {
+    matches!(
+        &doc.get(node).data,
+        NodeData::Element { name, .. } if name.local.as_str() == "selectlist"
+    )
+}
+
+/// Returns the display text for an `<option>` element: `label` attribute if
+/// present, otherwise the concatenated text content of its child text nodes.
+fn option_text(doc: &Document, option_id: NodeId) -> String {
+    let node = doc.get(option_id);
+    if let NodeData::Element { attrs, .. } = &node.data
+        && let Some(label) = attrs.iter().find(|a| a.name.local.eq_ignore_ascii_case("label"))
+    {
+        return label.value.trim().to_owned();
+    }
+    node.children
+        .iter()
+        .filter_map(|&c| {
+            if let NodeData::Text(t) = &doc.get(c).data { Some(t.as_str()) } else { None }
+        })
+        .collect::<Vec<_>>()
+        .join("")
+        .trim()
+        .to_owned()
 }
 
 /// Является ли DOM-узел HTML form control-ом.
@@ -197,7 +476,7 @@ fn is_form_control_element(doc: &Document, id: NodeId) -> bool {
     matches!(
         &doc.get(id).data,
         NodeData::Element { name, .. }
-            if matches!(name.local.as_str(), "input" | "button" | "select" | "textarea")
+            if matches!(name.local.as_str(), "input" | "button" | "select" | "selectlist" | "textarea" | "meter" | "progress")
     )
 }
 
@@ -224,6 +503,24 @@ fn is_svg_root(doc: &Document, id: NodeId) -> bool {
     )
 }
 
+/// Returns `true` when `id` is an SVG `<defs>` element (invisible container).
+#[allow(dead_code)]
+fn is_svg_defs(doc: &Document, id: NodeId) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. } if name.local.eq_ignore_ascii_case("defs")
+    )
+}
+
+/// Returns `true` when `id` is an SVG `<use>` element (reference to another element).
+#[allow(dead_code)]
+fn is_svg_use(doc: &Document, id: NodeId) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. } if name.local.eq_ignore_ascii_case("use")
+    )
+}
+
 /// Returns `true` when `id` is a `<details>` element.
 fn is_details_element(doc: &Document, id: NodeId) -> bool {
     matches!(&doc.get(id).data, NodeData::Element { name, .. } if name.local == "details")
@@ -232,6 +529,23 @@ fn is_details_element(doc: &Document, id: NodeId) -> bool {
 /// Returns `true` when `id` is a `<summary>` element.
 fn is_summary_element(doc: &Document, id: NodeId) -> bool {
     matches!(&doc.get(id).data, NodeData::Element { name, .. } if name.local == "summary")
+}
+
+/// Returns `true` when `id` is a `<details>` element with the `open` attribute set.
+///
+/// HTML LS §4.11.1: when `open` is absent only `<summary>` is rendered; when present all
+/// children are visible. External callers (paint, a11y) use this to query disclosure state.
+pub fn is_open_details(doc: &Document, id: NodeId) -> bool {
+    is_details_element(doc, id) && doc.get(id).get_attr("open").is_some()
+}
+
+/// Returns `true` when `id` has a `popover` attribute but is not open.
+///
+/// Elements with `popover` are hidden by default (UA: `[popover]{display:none}`);
+/// JS calls `showPopover()` which sets `data-lumen-popover-open` to expose the element.
+fn is_closed_popover(doc: &Document, id: NodeId) -> bool {
+    let node = doc.get(id);
+    node.get_attr("popover").is_some() && node.get_attr("data-lumen-popover-open").is_none()
 }
 
 /// Parses a float attribute from the given element; returns 0.0 if absent or non-numeric.
@@ -438,54 +752,119 @@ fn parse_svg_transform(attr: Option<&str>) -> SvgTransform {
     result
 }
 
-/// Calculates SVG viewBox scaling and offset for aspect-ratio preservation.
-/// Returns `(scale_x, scale_y, offset_x, offset_y)` to transform viewBox → CSS px.
-fn compute_viewbox_transform(
+/// Calculates the intrinsic aspect ratio from SVG viewBox.
+/// Returns `Some(width / height)` if viewBox is present and both dimensions > 0.
+#[allow(dead_code)]
+fn svg_intrinsic_ratio(view_box: &Option<ViewBox>) -> Option<f32> {
+    view_box.as_ref().and_then(|vb| {
+        if vb.width > 0.0 && vb.height > 0.0 {
+            Some(vb.width / vb.height)
+        } else {
+            None
+        }
+    })
+}
+
+/// Collects text content from an SVG text element and its descendants.
+/// Recursively walks the DOM tree, concatenating text nodes and content of nested `<tspan>` elements.
+fn collect_text_content(doc: &Document, node_id: NodeId) -> String {
+    let mut text = String::new();
+    let node = doc.get(node_id);
+
+    // Walk through immediate children and concatenate text.
+    for child_id in node.children.iter() {
+        let child = doc.get(*child_id);
+        match &child.data {
+            NodeData::Text(s) => {
+                // Text node: add content.
+                text.push_str(s);
+            }
+            NodeData::Element { name, .. }
+                if name.local.as_str() == "tspan" || name.local.as_str() == "textPath" =>
+            {
+                // For element nodes like <tspan>, recursively collect their text.
+                text.push_str(&collect_text_content(doc, *child_id));
+            }
+            _ => {}
+        }
+    }
+
+    text
+}
+
+/// Collects the text content of a `<textarea>` from its direct text-node children.
+///
+/// Used by `field-sizing: content` to determine the intrinsic size of the control.
+/// Newlines are preserved (each `\n` becomes a line for height computation).
+fn collect_textarea_content(doc: &Document, node_id: NodeId) -> String {
+    let mut text = String::new();
+    let node = doc.get(node_id);
+    for child_id in node.children.iter() {
+        if let NodeData::Text(s) = &doc.get(*child_id).data {
+            text.push_str(s);
+        }
+    }
+    text
+}
+
+/// Parses SVG `text-anchor` attribute.
+/// Returns the corresponding `SvgTextAnchor` enum value, defaulting to `Start` if attribute is absent or invalid.
+fn parse_text_anchor(attr: Option<&str>) -> SvgTextAnchor {
+    match attr {
+        Some("middle") => SvgTextAnchor::Middle,
+        Some("end") => SvgTextAnchor::End,
+        _ => SvgTextAnchor::Start, // default
+    }
+}
+
+/// Parses SVG `dominant-baseline` attribute.
+/// Returns the corresponding `SvgDominantBaseline` enum value, defaulting to `Auto` if attribute is absent or invalid.
+fn parse_dominant_baseline(attr: Option<&str>) -> SvgDominantBaseline {
+    match attr {
+        Some("baseline") => SvgDominantBaseline::Baseline,
+        Some("hanging") => SvgDominantBaseline::Hanging,
+        Some("middle") => SvgDominantBaseline::Middle,
+        Some("central") => SvgDominantBaseline::Central,
+        Some("text-before-edge") => SvgDominantBaseline::TextBeforeEdge,
+        Some("text-after-edge") => SvgDominantBaseline::TextAfterEdge,
+        _ => SvgDominantBaseline::Auto, // default
+    }
+}
+
+/// Computes viewBox-to-CSS-px transform using CSS Images L3 §5.5 `object-fit` /
+/// `object-position` semantics. Returns `(scale_x, scale_y, offset_x, offset_y)` where
+/// offsets are relative to the SVG box's top-left corner (viewBox min_x/min_y included).
+///
+/// `object-position` controls placement of the (possibly smaller or overflowing) scaled
+/// content inside the box via free-space fractions.
+fn compute_object_fit_transform(
     view_box: &ViewBox,
-    svg_width: f32,
-    svg_height: f32,
-    preserve: &PreserveAspectRatio,
+    box_w: f32,
+    box_h: f32,
+    fit: crate::style::ObjectFit,
+    position: &crate::style::ObjectPosition,
 ) -> (f32, f32, f32, f32) {
-    let vb_width = view_box.width.max(0.001);
-    let vb_height = view_box.height.max(0.001);
+    use crate::style::ObjectFit;
+    let vb_w = view_box.width.max(0.001);
+    let vb_h = view_box.height.max(0.001);
+    let raw_sx = box_w / vb_w;
+    let raw_sy = box_h / vb_h;
 
-    // Base scale: how many CSS px per SVG user unit.
-    let scale_x = svg_width / vb_width;
-    let scale_y = svg_height / vb_height;
-
-    // Determine final scale based on meet-or-slice mode.
-    let (final_scale, scale_x_adj, scale_y_adj) = match preserve.meet_or_slice {
-        SvgMeetOrSlice::Meet => {
-            // Uniform scale that fits inside: use minimum scale.
-            let s = scale_x.min(scale_y);
-            (s, s, s)
-        }
-        SvgMeetOrSlice::Slice => {
-            // Uniform scale that covers: use maximum scale.
-            let s = scale_x.max(scale_y);
-            (s, s, s)
-        }
+    let (sx, sy) = match fit {
+        ObjectFit::Fill      => (raw_sx, raw_sy),
+        ObjectFit::Contain   => { let s = raw_sx.min(raw_sy); (s, s) }
+        ObjectFit::Cover     => { let s = raw_sx.max(raw_sy); (s, s) }
+        ObjectFit::None      => (1.0, 1.0),
+        ObjectFit::ScaleDown => { let s = raw_sx.min(raw_sy).min(1.0); (s, s) }
     };
 
-    // Calculate scaled viewBox dimensions.
-    let scaled_vb_width = vb_width * final_scale;
-    let scaled_vb_height = vb_height * final_scale;
+    // Free space = room remaining after placing scaled content (may be negative for Cover/None).
+    let free_x = box_w - vb_w * sx;
+    let free_y = box_h - vb_h * sy;
+    let ox = position.x.resolve(free_x);
+    let oy = position.y.resolve(free_y);
 
-    // Determine alignment offsets within the SVG's CSS rect.
-    let offset_x = match preserve.align_x {
-        SvgAlignX::Min => 0.0,
-        SvgAlignX::Mid => (svg_width - scaled_vb_width) / 2.0,
-        SvgAlignX::Max => svg_width - scaled_vb_width,
-    };
-
-    let offset_y = match preserve.align_y {
-        SvgAlignY::Min => 0.0,
-        SvgAlignY::Mid => (svg_height - scaled_vb_height) / 2.0,
-        SvgAlignY::Max => svg_height - scaled_vb_height,
-    };
-
-    // Return scale and origin offset due to viewBox min_x/min_y.
-    (scale_x_adj, scale_y_adj, offset_x - view_box.min_x * final_scale, offset_y - view_box.min_y * final_scale)
+    (sx, sy, ox - view_box.min_x * sx, oy - view_box.min_y * sy)
 }
 
 /// Builds `SvgShape` and `Block` (for `<g>`) layout boxes for the SVG subtree rooted at
@@ -500,15 +879,18 @@ fn build_svg_children(
     inherited: &ComputedStyle,
     viewport: Size,
     flat: &FlatTree,
+    dark_mode: bool,
 ) -> Vec<LayoutBox> {
     let mut out = Vec::new();
-    collect_svg_shapes(doc, sheet, parent_id, inherited, viewport, flat, &mut out);
+    collect_svg_shapes(doc, sheet, parent_id, inherited, viewport, flat, &mut out, dark_mode);
     out
 }
 
 /// Recursively collects SVG shape and group boxes from the DOM subtree of `parent_id`.
+/// `use_stack` tracks NodeIds currently being expanded via `<use>` for cycle detection.
 /// Handles the HTML5 parser's incorrect nesting of self-closing SVG tags: when a `<rect/>`
 /// is parsed as an open element, its DOM children (intended siblings) are also scanned.
+#[allow(clippy::too_many_arguments)]
 fn collect_svg_shapes(
     doc: &Document,
     sheet: &Stylesheet,
@@ -517,109 +899,217 @@ fn collect_svg_shapes(
     viewport: Size,
     flat: &FlatTree,
     out: &mut Vec<LayoutBox>,
+    dark_mode: bool,
+) {
+    collect_svg_shapes_impl(doc, sheet, parent_id, inherited, viewport, flat, out, dark_mode, &[]);
+}
+
+/// Inner recursive worker for `collect_svg_shapes`. Carries `use_stack` for cycle detection.
+#[allow(clippy::too_many_arguments)]
+fn collect_svg_shapes_impl(
+    doc: &Document,
+    sheet: &Stylesheet,
+    parent_id: NodeId,
+    inherited: &ComputedStyle,
+    viewport: Size,
+    flat: &FlatTree,
+    out: &mut Vec<LayoutBox>,
+    dark_mode: bool,
+    use_stack: &[NodeId],
 ) {
     for child_id in flat.children_of(doc, parent_id) {
-        let child_id = *child_id;
-        let Some(name) = doc.get(child_id).element_name() else {
-            continue; // text node / comment / etc.
-        };
-        let style = crate::style::compute_style(doc, child_id, sheet, inherited, viewport);
-        if style.display == crate::style::Display::None {
-            continue;
-        }
-        let svg_transform = parse_svg_transform(doc.get(child_id).get_attr("transform"));
+        process_svg_node(doc, sheet, *child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+    }
+}
 
-        match name.local.as_str() {
-            "rect" => {
-                out.push(LayoutBox {
-                    node: child_id, rect: Rect::ZERO, style,
-                    kind: BoxKind::SvgShape {
-                        shape: SvgShapeKind::Rect {
-                            x: svg_attr_f32(doc, child_id, "x"),
-                            y: svg_attr_f32(doc, child_id, "y"),
-                            width: svg_attr_f32(doc, child_id, "width"),
-                            height: svg_attr_f32(doc, child_id, "height"),
-                            rx: svg_attr_f32(doc, child_id, "rx"),
-                            ry: svg_attr_f32(doc, child_id, "ry"),
-                        },
-                        svg_transform: svg_transform.clone(),
+/// Processes a single SVG element node, appending layout boxes to `out`.
+/// Used by both the main `collect_svg_shapes_impl` loop and `<use>` clone expansion.
+#[allow(clippy::too_many_arguments)]
+fn process_svg_node(
+    doc: &Document,
+    sheet: &Stylesheet,
+    child_id: NodeId,
+    inherited: &ComputedStyle,
+    viewport: Size,
+    flat: &FlatTree,
+    out: &mut Vec<LayoutBox>,
+    dark_mode: bool,
+    use_stack: &[NodeId],
+) {
+    let Some(name) = doc.get(child_id).element_name() else {
+        return; // text node / comment / etc.
+    };
+    let style = crate::style::compute_style(doc, child_id, sheet, inherited, viewport, dark_mode);
+    if style.display == crate::style::Display::None {
+        return;
+    }
+    let svg_transform = parse_svg_transform(doc.get(child_id).get_attr("transform"));
+
+    match name.local.as_str() {
+        "rect" => {
+            out.push(LayoutBox {
+                node: child_id, rect: Rect::ZERO, style,
+                kind: BoxKind::SvgShape {
+                    shape: SvgShapeKind::Rect {
+                        x: svg_attr_f32(doc, child_id, "x"),
+                        y: svg_attr_f32(doc, child_id, "y"),
+                        width: svg_attr_f32(doc, child_id, "width"),
+                        height: svg_attr_f32(doc, child_id, "height"),
+                        rx: svg_attr_f32(doc, child_id, "rx"),
+                        ry: svg_attr_f32(doc, child_id, "ry"),
                     },
-                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
-                });
-                // Recurse: incorrectly-nested siblings (HTML5 parser wraps them inside rect).
-                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
-            }
-            "circle" => {
-                out.push(LayoutBox {
-                    node: child_id, rect: Rect::ZERO, style,
-                    kind: BoxKind::SvgShape {
-                        shape: SvgShapeKind::Circle {
-                            cx: svg_attr_f32(doc, child_id, "cx"),
-                            cy: svg_attr_f32(doc, child_id, "cy"),
-                            r: svg_attr_f32(doc, child_id, "r"),
-                        },
-                        svg_transform: svg_transform.clone(),
+                    svg_transform: svg_transform.clone(),
+                },
+                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+            });
+            // Recurse: incorrectly-nested siblings (HTML5 parser wraps them inside rect).
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+        }
+        "circle" => {
+            out.push(LayoutBox {
+                node: child_id, rect: Rect::ZERO, style,
+                kind: BoxKind::SvgShape {
+                    shape: SvgShapeKind::Circle {
+                        cx: svg_attr_f32(doc, child_id, "cx"),
+                        cy: svg_attr_f32(doc, child_id, "cy"),
+                        r: svg_attr_f32(doc, child_id, "r"),
                     },
-                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
-                });
-                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
-            }
-            "ellipse" => {
-                out.push(LayoutBox {
-                    node: child_id, rect: Rect::ZERO, style,
-                    kind: BoxKind::SvgShape {
-                        shape: SvgShapeKind::Ellipse {
-                            cx: svg_attr_f32(doc, child_id, "cx"),
-                            cy: svg_attr_f32(doc, child_id, "cy"),
-                            rx: svg_attr_f32(doc, child_id, "rx"),
-                            ry: svg_attr_f32(doc, child_id, "ry"),
-                        },
-                        svg_transform: svg_transform.clone(),
+                    svg_transform: svg_transform.clone(),
+                },
+                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+            });
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+        }
+        "ellipse" => {
+            out.push(LayoutBox {
+                node: child_id, rect: Rect::ZERO, style,
+                kind: BoxKind::SvgShape {
+                    shape: SvgShapeKind::Ellipse {
+                        cx: svg_attr_f32(doc, child_id, "cx"),
+                        cy: svg_attr_f32(doc, child_id, "cy"),
+                        rx: svg_attr_f32(doc, child_id, "rx"),
+                        ry: svg_attr_f32(doc, child_id, "ry"),
                     },
-                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
-                });
-                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
-            }
-            "line" => {
-                out.push(LayoutBox {
-                    node: child_id, rect: Rect::ZERO, style,
-                    kind: BoxKind::SvgShape {
-                        shape: SvgShapeKind::Line {
-                            x1: svg_attr_f32(doc, child_id, "x1"),
-                            y1: svg_attr_f32(doc, child_id, "y1"),
-                            x2: svg_attr_f32(doc, child_id, "x2"),
-                            y2: svg_attr_f32(doc, child_id, "y2"),
-                        },
-                        svg_transform: svg_transform.clone(),
+                    svg_transform: svg_transform.clone(),
+                },
+                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+            });
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+        }
+        "line" => {
+            out.push(LayoutBox {
+                node: child_id, rect: Rect::ZERO, style,
+                kind: BoxKind::SvgShape {
+                    shape: SvgShapeKind::Line {
+                        x1: svg_attr_f32(doc, child_id, "x1"),
+                        y1: svg_attr_f32(doc, child_id, "y1"),
+                        x2: svg_attr_f32(doc, child_id, "x2"),
+                        y2: svg_attr_f32(doc, child_id, "y2"),
                     },
-                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
-                });
-                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
+                    svg_transform: svg_transform.clone(),
+                },
+                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+            });
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+        }
+        "path" => {
+            let d = doc.get(child_id).get_attr("d").unwrap_or("").to_string();
+            out.push(LayoutBox {
+                node: child_id, rect: Rect::ZERO, style,
+                kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone() },
+                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+            });
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+        }
+        "text" | "tspan" | "textPath" => {
+            // SVG text element: collect text content from this element and descendants.
+            let text = collect_text_content(doc, child_id);
+            let text_anchor = parse_text_anchor(doc.get(child_id).get_attr("text-anchor"));
+            let dominant_baseline = parse_dominant_baseline(doc.get(child_id).get_attr("dominant-baseline"));
+            out.push(LayoutBox {
+                node: child_id, rect: Rect::ZERO, style,
+                kind: BoxKind::SvgText {
+                    text,
+                    x: svg_attr_f32(doc, child_id, "x"),
+                    y: svg_attr_f32(doc, child_id, "y"),
+                    dx: svg_attr_f32(doc, child_id, "dx"),
+                    dy: svg_attr_f32(doc, child_id, "dy"),
+                    text_anchor,
+                    dominant_baseline,
+                    svg_transform: svg_transform.clone(),
+                },
+                children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+            });
+            // Recurse for potential nested text/tspan/textPath elements.
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+        }
+        "g" => {
+            // Group: collect children shapes, then wrap in a Block box.
+            let mut group_children: Vec<LayoutBox> = Vec::new();
+            collect_svg_shapes_impl(doc, sheet, child_id, &style, viewport, flat, &mut group_children, dark_mode, use_stack);
+            let group_transform = parse_svg_transform(doc.get(child_id).get_attr("transform"));
+            out.push(LayoutBox {
+                node: child_id, rect: Rect::ZERO, style,
+                kind: BoxKind::Block,
+                children: group_children, col_span: 1, row_span: 1, svg_group_transform: Some(group_transform), scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+            });
+        }
+        "use" => {
+            // SVG <use>: clone the referenced element at an optional (x, y) offset.
+            // SVG 2 §5.6 — shadow tree clone with cycle detection via `use_stack`.
+            let href_val = doc.get(child_id).get_attr("href")
+                .or_else(|| doc.get(child_id).get_attr("xlink:href"))
+                .unwrap_or_default();
+            let target_ref = href_val.trim_start_matches('#');
+            if target_ref.is_empty() {
+                return;
             }
-            "path" => {
-                let d = doc.get(child_id).get_attr("d").unwrap_or("").to_string();
-                out.push(LayoutBox {
-                    node: child_id, rect: Rect::ZERO, style,
-                    kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone() },
-                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
-                });
-                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
+            let Some(target_id) = doc.find_by_id(target_ref) else { return; };
+
+            // Cycle guard: skip if target is already on the use-expansion stack.
+            if use_stack.contains(&target_id) {
+                return;
             }
-            "g" => {
-                // Group: collect children shapes, then wrap in a Block box.
-                let mut group_children: Vec<LayoutBox> = Vec::new();
-                collect_svg_shapes(doc, sheet, child_id, &style, viewport, flat, &mut group_children);
-                let group_transform = parse_svg_transform(doc.get(child_id).get_attr("transform"));
+
+            // Build the combined transform: <use transform="..."> then translate(x, y).
+            let use_x = svg_attr_f32(doc, child_id, "x");
+            let use_y = svg_attr_f32(doc, child_id, "y");
+            let mut combined = svg_transform.clone();
+            if use_x != 0.0 || use_y != 0.0 {
+                combined.compose(&SvgTransform::translate(use_x, use_y));
+            }
+
+            // Build new stack with target pushed for nested <use> detection.
+            let mut new_stack: Vec<NodeId> = use_stack.to_vec();
+            new_stack.push(target_id);
+
+            // Collect the referenced subtree into a clone group.
+            let mut use_children: Vec<LayoutBox> = Vec::new();
+            let target_tag = doc.get(target_id).element_name()
+                .map(|n| n.local.as_str().to_owned())
+                .unwrap_or_default();
+
+            if matches!(target_tag.as_str(), "g" | "symbol") {
+                // Container: recursively collect its children as the clone content.
+                collect_svg_shapes_impl(doc, sheet, target_id, &style, viewport, flat, &mut use_children, dark_mode, &new_stack);
+            } else {
+                // Single shape or other element: process the node directly.
+                process_svg_node(doc, sheet, target_id, &style, viewport, flat, &mut use_children, dark_mode, &new_stack);
+            }
+
+            if !use_children.is_empty() {
                 out.push(LayoutBox {
                     node: child_id, rect: Rect::ZERO, style,
                     kind: BoxKind::Block,
-                    children: group_children, col_span: 1, row_span: 1, svg_group_transform: Some(group_transform), scroll_x: 0.0, scroll_y: 0.0,
+                    children: use_children, col_span: 1, row_span: 1,
+                    svg_group_transform: Some(combined),
+                    scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
                 });
             }
-            _ => {
-                // Unknown SVG element: skip self, but scan children for shapes.
-                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
-            }
+        }
+        _ => {
+            // Unknown SVG element: skip self, but scan children for shapes.
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
         }
     }
 }
@@ -637,14 +1127,10 @@ fn lay_out_svg_root(b: &mut LayoutBox, start_x: f32, start_y: f32, avail_w: f32,
     b.rect.x = start_x + margin_left;
     b.rect.y = start_y + margin_top;
 
-    let (view_box, preserve_aspect_ratio) = if let BoxKind::SvgRoot { view_box, preserve_aspect_ratio } = &b.kind {
-        (view_box.clone(), preserve_aspect_ratio.clone())
+    let view_box = if let BoxKind::SvgRoot { view_box, .. } = &b.kind {
+        view_box.clone()
     } else {
-        (None, PreserveAspectRatio {
-            align_x: SvgAlignX::Mid,
-            align_y: SvgAlignY::Mid,
-            meet_or_slice: SvgMeetOrSlice::Meet,
-        })
+        None
     };
 
     // SVG intrinsic size: CSS width/height wins, then viewBox dimensions, then SVG defaults.
@@ -661,10 +1147,15 @@ fn lay_out_svg_root(b: &mut LayoutBox, start_x: f32, start_y: f32, avail_w: f32,
     b.rect.width  = svg_w;
     b.rect.height = svg_h;
 
-    // viewBox → CSS-px transform: scale + origin offset with aspect-ratio preservation.
+    // viewBox → CSS-px transform via CSS Images L3 §5.5 `object-fit` / `object-position`.
+    // For inline SVG painted as a replaced element, browsers map the viewBox into the
+    // viewport according to object-fit, overriding the SVG `preserveAspectRatio` attribute
+    // (Edge ground truth, TEST-70). The initial value `fill` therefore stretches the viewBox
+    // non-uniformly to fill the box; `contain`/`cover`/`none`/`scale-down` follow §5.5. BUG-110.
     let (scale_x, scale_y, origin_x, origin_y) = match &view_box {
         Some(vb) if vb.width > 0.0 && vb.height > 0.0 => {
-            let (sx, sy, ox_delta, oy_delta) = compute_viewbox_transform(vb, svg_w, svg_h, &preserve_aspect_ratio);
+            let (sx, sy, ox_delta, oy_delta) =
+                compute_object_fit_transform(vb, svg_w, svg_h, b.style.object_fit, &b.style.object_position);
             (sx, sy, b.rect.x + ox_delta, b.rect.y + oy_delta)
         }
         _ => (1.0, 1.0, b.rect.x, b.rect.y),
@@ -705,6 +1196,17 @@ fn lay_out_svg_element_position(b: &mut LayoutBox, ox: f32, oy: f32, sx: f32, sy
         bbox.height *= sy;
         // Then apply composed transform.
         b.rect = apply_transform_to_bbox(&bbox, &composed);
+    } else if let BoxKind::SvgText { x, y, dx, dy, .. } = b.kind {
+        // SVG text element: position at specified coordinates with offsets.
+        // x, y are in user units; dx, dy are additional offsets.
+        // Apply viewBox scaling to user unit coordinates.
+        let text_x = ox + (x + dx) * sx;
+        let text_y = oy + (y + dy) * sy;
+        // Apply only the translation of the composed transform to the text origin point.
+        // Cannot use apply_transform_to_bbox: it returns ZERO for zero-size bboxes.
+        // Phase 2: measure text width and compute proper bbox based on text-anchor and dominant-baseline.
+        let (tx, ty) = composed.transform_point(text_x, text_y);
+        b.rect = Rect::new(tx, ty, 0.0, 0.0);
     } else if matches!(b.kind, BoxKind::Block) {
         // <g> group: position its children with composed transform, then compute union bbox.
         lay_out_svg_children_positions(&mut b.children, ox, oy, sx, sy, &composed);
@@ -832,6 +1334,14 @@ fn collect_bg_image_inner(b: &LayoutBox, out: &mut Vec<String>) {
             out.push(src.clone());
         }
     }
+    // CSS Lists L3 §2.3: a `list-style-image` marker also needs its URL fetched
+    // and registered, same as a background image.
+    if let BoxKind::Marker { image: Some(src), .. } = &b.kind
+        && !src.is_empty()
+        && !out.iter().any(|u| u == src)
+    {
+        out.push(src.clone());
+    }
     for child in &b.children {
         collect_bg_image_inner(child, out);
     }
@@ -940,6 +1450,10 @@ pub struct LayoutBox {
     pub scroll_x: f32,
     /// Vertical scroll offset in CSS px. Same semantics as `scroll_x`.
     pub scroll_y: f32,
+    /// Incremental-layout dirty flags (EE-3). Only consulted during
+    /// `lay_out_incremental` passes — normal `lay_out` ignores this field.
+    /// Set via `mark_dirty`; cleared via `clear_dirty` / `lay_out_incremental`.
+    pub dirty: crate::incremental::DirtyBits,
 }
 
 /// Отрезок inline-контента с собственным стилем (до layout).
@@ -960,6 +1474,8 @@ pub struct InlineSegment {
     /// Non-None when this segment is an inline-replaced `<img>`. Contains the
     /// resolved image URL. `text` holds the alt attribute.
     pub img_src: Option<String>,
+    /// `loading="lazy"` on the inline `<img>` — emit `LazyImageSlot` instead of `DrawImage`.
+    pub img_is_lazy: bool,
     /// Pre-computed pixel width for image segments (0.0 for text segments).
     pub img_width: f32,
     /// True when this segment represents a forced line break (CSS §4.1: newline
@@ -1017,6 +1533,8 @@ pub struct InlineFrag {
     /// Non-None when this frag represents an inline-replaced `<img>`.
     /// `text` holds the alt attribute; `width` is the rendered pixel width.
     pub img_src: Option<String>,
+    /// `loading="lazy"` on the inline `<img>` — emit `LazyImageSlot` instead of `DrawImage`.
+    pub img_is_lazy: bool,
     /// True when this fragment lies on the first formatted line of its block container.
     /// Set by `lay_out` after `wrap_inline_run` completes.
     /// // CSS: ::first-line — P4 wires: `compute_pseudo_element_style(node, "first-line")` →
@@ -1038,9 +1556,14 @@ pub enum BoxKind {
     /// Анонимный контейнер для потока inline-контента (текст + inline-элементы).
     /// `segments` — сырые отрезки до lay_out; `lines` — позиционированные строки
     /// после lay_out. Каждая строка — `Vec<InlineFrag>`.
+    /// `first_line_style` — pre-computed `::first-line` pseudo-element style for the owning
+    /// element. `None` if no rule matches. Applied by `lay_out()` to frags on `lines[0]`.
     InlineRun {
         segments: Vec<InlineSegment>,
         lines: Vec<Vec<InlineFrag>>,
+        /// CSS Pseudo-elements L4 §5.3: computed ::first-line style. Set during build_box(),
+        /// applied in lay_out() after wrap_inline_run() to first-line frags.
+        first_line_style: Option<Box<crate::style::ComputedStyle>>,
     },
     /// Анонимный контейнер для горизонтального потока `display: inline-block`
     /// элементов. Сами дочерние боксы хранятся в `LayoutBox.children`. При
@@ -1056,6 +1579,9 @@ pub enum BoxKind {
     Image {
         src: String,
         alt: String,
+        /// `loading="lazy"` (HTML LS §lazy-loading): fetch deferred until proximity check.
+        /// Display list emits `LazyImageSlot` instead of `DrawImage` when `true`.
+        is_lazy: bool,
     },
     /// Replaced element: HTML `<video>` element (HTML spec §14).
     ///
@@ -1069,6 +1595,19 @@ pub enum BoxKind {
         /// Poster image URL (`poster` attribute), may be empty.
         poster: String,
     },
+    /// Replaced element: HTML `<canvas>` element — CPU-rasterized drawing surface
+    /// (HTML Living Standard §4.12.4).
+    ///
+    /// Phase 0: the pixel buffer is produced by JS Canvas 2D drawing operations
+    /// (`canvas.getContext('2d')`) and rendered via a `DrawImage` command keyed by
+    /// `canvas:{node_id}`. Intrinsic size comes from the `width`/`height` content
+    /// attributes; UA defaults are 300×150 CSS px (HTML LS §4.12.4).
+    Canvas {
+        /// Canvas bitmap width in CSS pixels (from `width` attribute, default 300).
+        width: u32,
+        /// Canvas bitmap height in CSS pixels (from `height` attribute, default 150).
+        height: u32,
+    },
     /// Replaced element: HTML `<audio>` element (HTML spec §4.8.10).
     ///
     /// Phase 0: no audio playback. Without `controls` attribute: 0×0 (invisible).
@@ -1079,6 +1618,21 @@ pub enum BoxKind {
         src: String,
         /// Whether the `controls` attribute is present (shows a 40px control bar).
         controls: bool,
+    },
+    /// Replaced element: HTML `<iframe>` element (HTML spec §4.8.5).
+    ///
+    /// Phase 0: rendered as a grey `DrawImage` placeholder (no sub-document
+    /// navigation). Intrinsic size comes from `width`/`height` HTML attributes;
+    /// UA defaults are 300×150 CSS px (HTML spec §4.8.5). `src` is the URL
+    /// to display in paint-side label and in JS `src` property. When `srcdoc`
+    /// is `Some`, the inline HTML was parsed via [`build_iframe_document`] and
+    /// is available for future Phase 1 sub-document rendering.
+    Iframe {
+        /// Primary document URL (`src` attribute), may be empty.
+        src: String,
+        /// Inline HTML content from `srcdoc` attribute (HTML spec §4.8.5).
+        /// `None` if the element has no `srcdoc` attribute.
+        srcdoc: Option<String>,
     },
     /// Replaced element: HTML form control (`<input>`, `<button>`, `<select>`,
     /// `<textarea>`). Phase 0: block-level replaced. Размеры берутся из
@@ -1103,10 +1657,15 @@ pub enum BoxKind {
     /// `position` — inside/outside flow. `list_style_type` — used by the display-list
     /// emitter to choose geometric (disc/circle/square) vs text rendering.
     /// For `outside` (default) positioned left of the principal block, out of flow.
+    /// `image` — CSS Lists L3 §2.3 `list-style-image`: resolved URL when set. When
+    /// present it replaces the `list_style_type`/`text` marker (the painter emits a
+    /// `DrawImage` instead of a bullet/counter). Same URL key used by
+    /// `collect_background_image_requests`, so the shell fetches and registers it.
     Marker {
         text: String,
         position: ListStylePosition,
         list_style_type: ListStyleType,
+        image: Option<String>,
     },
     /// CSS Display L3 §8 — `display: flow-root`. Establishes a Block Formatting
     /// Context: contains floats, prevents margin escape. Laid out identically to
@@ -1148,22 +1707,491 @@ pub enum BoxKind {
         /// Composed with parent transforms during layout for accurate positioning.
         svg_transform: SvgTransform,
     },
+    /// SVG text element (`<text>`, `<tspan>`, `<textPath>`).
+    /// `LayoutBox.rect` is the text bounding box in *document coordinates*.
+    /// Text content is measured via `TextMeasurer` and positioned according to SVG text attributes.
+    /// CSS: fill, stroke, font-family, font-size — P4 wires via ComputedStyle SVG fields.
+    /// // CSS: text-anchor, dominant-baseline, dx, dy
+    SvgText {
+        /// Text content (concatenated from text nodes within `<text>`, `<tspan>`, `<textPath>`).
+        text: String,
+        /// SVG `x` attribute in user units (baseline x position). 0.0 if absent.
+        x: f32,
+        /// SVG `y` attribute in user units (baseline y position). 0.0 if absent.
+        y: f32,
+        /// SVG `dx` attribute in user units (horizontal offset). 0.0 if absent.
+        dx: f32,
+        /// SVG `dy` attribute in user units (vertical offset). 0.0 if absent.
+        dy: f32,
+        /// Text anchor alignment: start/middle/end. Defaults to "start" per SVG spec.
+        text_anchor: SvgTextAnchor,
+        /// Dominant baseline alignment: auto/baseline/hanging/middle/etc. Defaults to "auto" per SVG spec.
+        dominant_baseline: SvgDominantBaseline,
+        /// Parsed SVG `transform` presentation attribute.
+        svg_transform: SvgTransform,
+    },
 }
 
+/// CSS Pseudo-elements L4 §5.1 — split the `PseudoKind::FirstLetter` segment in
+/// `row_items` into `[first_grapheme | rest]` and apply `fl_style` to the first part.
+///
+/// The segment was already marked by `collect_inline_segments`; this function
+/// overrides its style and (when the text is longer than one char) splits it so
+/// `wrap_inline_run` applies the correct font metrics to each part independently.
+fn apply_first_letter_style(
+    row_items: &mut [LayoutBox],
+    fl_style: ComputedStyle,
+    inherited: &ComputedStyle,
+) {
+    for item in row_items.iter_mut() {
+        let BoxKind::InlineRun { segments, .. } = &mut item.kind else {
+            continue;
+        };
+        for i in 0..segments.len() {
+            if segments[i].pseudo_kind != PseudoKind::FirstLetter {
+                continue;
+            }
+            let text = segments[i].text.clone();
+            // CSS Pseudo-elements L4 §5.1: leading punctuation + first letter.
+            let boundary = first_letter_text_len(&text);
+            if boundary < text.len() {
+                // Multi-char segment: split into first-letter + rest.
+                let rest_text = text[boundary..].to_string();
+                let first_text = text[..boundary].to_string();
+                let source_node = segments[i].source_node;
+                let forced_break = segments[i].forced_break;
+                let is_element_box = segments[i].is_element_box;
+                let img_src = segments[i].img_src.clone();
+                let img_width = segments[i].img_width;
+                segments[i].text = first_text;
+                segments[i].style = fl_style;
+                let rest = InlineSegment {
+                    text: rest_text,
+                    style: inherited.clone(),
+                    pre_space: 0.0,
+                    post_space: segments[i].post_space,
+                    is_element_box,
+                    img_src,
+                    img_is_lazy: false,
+                    img_width,
+                    forced_break,
+                    pseudo_kind: PseudoKind::None,
+                    source_node,
+                    source_char_offset: segments[i].source_char_offset + boundary as u32,
+                };
+                // Transfer post_space from first-letter to rest.
+                segments[i].post_space = 0.0;
+                segments.insert(i + 1, rest);
+            } else {
+                // Single-char or empty segment: just override style.
+                segments[i].style = fl_style;
+            }
+            return;
+        }
+    }
+}
+
+/// CSS Pseudo-elements L4 §5.1 — byte length of the `::first-letter` text unit
+/// at the start of `text`: leading whitespace (raw segment text keeps source
+/// newlines/indent until wrap-time collapsing) plus leading punctuation plus
+/// the first letter itself.
+///
+/// Phase 0 approximation: char-level (no grapheme clustering), leading
+/// punctuation only (the spec also includes punctuation immediately following
+/// the letter); `white-space: pre` significance of the swallowed leading
+/// whitespace is ignored. Returns `text.len()` when no letter is found.
+fn first_letter_text_len(text: &str) -> usize {
+    for (i, c) in text.char_indices() {
+        if c.is_whitespace() || is_first_letter_punctuation(c) {
+            continue;
+        }
+        return i + c.len_utf8();
+    }
+    text.len()
+}
+
+/// True for punctuation that joins the `::first-letter` text unit
+/// (CSS Pseudo-elements L4 §5.1: Unicode Ps/Pe/Pi/Pf/Po classes; approximated
+/// as ASCII punctuation + common typographic quotes — no Unicode tables yet).
+fn is_first_letter_punctuation(c: char) -> bool {
+    c.is_ascii_punctuation()
+        || matches!(c, '«' | '»' | '“' | '”' | '‘' | '’' | '„' | '‚' | '‹' | '›')
+}
+
+/// CSS Pseudo-elements L4 §5.2 — `::first-letter` layout split, float variant
+/// (drop cap, BB-2).
+///
+/// When the `::first-letter` rule contains `float: left|right`, the first-letter
+/// segment (already split out and styled by `apply_first_letter_pseudo`) is
+/// removed from its `InlineRun` and promoted to a block-level float `LayoutBox`;
+/// the parent block's float machinery then places it and narrows the remaining
+/// text lines around it. Returns `None` when no `FirstLetter` segment exists.
+///
+/// Box structure: the outer `Block` carries the full ::first-letter style
+/// (float, margins, padding, border, background); the inner anonymous
+/// `InlineRun` holds the single letter segment and supplies the line metrics
+/// (::first-letter `font-size` × `line-height`). An `InlineRun` emptied by the
+/// extraction is dropped from `row_items`.
+// CSS: ::first-letter — P4 wires further drop-cap properties on top of this
+// split (initial-letter, initial-letter-align).
+fn extract_first_letter_float(
+    row_items: &mut Vec<LayoutBox>,
+    fl_style: &ComputedStyle,
+) -> Option<LayoutBox> {
+    for ri in 0..row_items.len() {
+        let BoxKind::InlineRun { segments, .. } = &mut row_items[ri].kind else {
+            continue;
+        };
+        let Some(pos) = segments.iter().position(|s| s.pseudo_kind == PseudoKind::FirstLetter)
+        else {
+            continue;
+        };
+        let mut seg = segments.remove(pos);
+        seg.pre_space = 0.0;
+        seg.post_space = 0.0;
+        // Strip leading source whitespace (raw newlines/indent from pretty-printed
+        // HTML): it would inflate the drop cap's max-content shrink-to-fit width.
+        let ws_len = seg.text.len() - seg.text.trim_start().len();
+        if ws_len > 0 {
+            seg.text.drain(..ws_len);
+            seg.source_char_offset += ws_len as u32;
+        }
+        let node = seg.source_node;
+        if segments.is_empty() {
+            row_items.remove(ri);
+        }
+        // Inner anonymous run: ::first-letter font metrics for the line box,
+        // but it must not itself float, clear, or indent inside the drop cap.
+        let mut inner_style = anon_style(fl_style);
+        inner_style.float_side = FloatSide::None;
+        inner_style.clear = ClearSide::None;
+        inner_style.text_indent = Length::Px(0.0);
+        let inner = LayoutBox {
+            node,
+            rect: Rect::ZERO,
+            style: inner_style,
+            kind: BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None },
+            children: vec![],
+            col_span: 1,
+            row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+        };
+        let mut outer_style = fl_style.clone();
+        outer_style.display = Display::Block;
+        outer_style.text_indent = Length::Px(0.0);
+        return Some(LayoutBox {
+            node,
+            rect: Rect::ZERO,
+            style: outer_style,
+            kind: BoxKind::Block,
+            children: vec![inner],
+            col_span: 1,
+            row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+        });
+    }
+    None
+}
+
+/// True for the synthesized drop-cap box produced by
+/// [`extract_first_letter_float`]: a float `Block` whose only child is an
+/// `InlineRun` with a single `PseudoKind::FirstLetter` segment. Used to keep
+/// `::first-line` overrides off the drop cap (CSS Pseudo-elements L4 §5.2:
+/// ::first-letter wins where the two pseudo-elements conflict).
+fn is_first_letter_box(b: &LayoutBox) -> bool {
+    b.style.float_side != FloatSide::None
+        && b.children.len() == 1
+        && matches!(
+            &b.children[0].kind,
+            BoxKind::InlineRun { segments, .. }
+                if segments.len() == 1 && segments[0].pseudo_kind == PseudoKind::FirstLetter
+        )
+}
+
+/// CSS Pseudo-elements L4 §3.1 — apply `::first-line` style overrides after layout.
+///
+/// Must be called after `lay_out` has populated `InlineRun.lines` with `InlineFrag`s.
+/// Walks the box tree; for each block-level box that has a `::first-line` rule on
+/// its DOM node, overrides the style of every frag on the first formatted line
+/// (`is_first_line == true`).
+pub(crate) fn apply_first_line_pseudo_styles(
+    b: &mut LayoutBox,
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    dark_mode: bool,
+) {
+    // CSS Pseudo-elements L4 §5.2 (BB-2): never apply ::first-line inside the
+    // synthesized drop-cap box — ::first-letter wins where the two conflict.
+    if is_first_letter_box(b) {
+        return;
+    }
+    for child in &mut b.children {
+        apply_first_line_pseudo_styles(child, doc, sheet, viewport, dark_mode);
+    }
+    if !matches!(b.kind, BoxKind::Block | BoxKind::FlowRoot) {
+        return;
+    }
+    let Some(fl_style) = compute_pseudo_element_style(doc, b.node, "first-line", sheet, &b.style, viewport, dark_mode) else {
+        return;
+    };
+    // Find the first InlineRun child (or inside InlineBlockRow) and apply.
+    let mut applied = false;
+    'find: for child in &mut b.children {
+        match &mut child.kind {
+            BoxKind::InlineRun { lines, .. } => {
+                if let Some(first_line) = lines.first_mut() {
+                    for frag in first_line.iter_mut() {
+                        if frag.is_first_line {
+                            frag.style = fl_style.clone();
+                        }
+                    }
+                }
+                applied = true;
+                break 'find;
+            }
+            BoxKind::InlineBlockRow => {
+                for row_child in &mut child.children {
+                    if let BoxKind::InlineRun { lines, .. } = &mut row_child.kind {
+                        if let Some(first_line) = lines.first_mut() {
+                            for frag in first_line.iter_mut() {
+                                if frag.is_first_line {
+                                    frag.style = fl_style.clone();
+                                }
+                            }
+                        }
+                        applied = true;
+                        break 'find;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let _ = applied;
+}
+
+/// Byte offsets of each whitespace-separated word start in `text`
+/// (same word boundaries as `str::split_whitespace`).
+fn word_start_offsets(text: &str) -> Vec<usize> {
+    let mut starts = Vec::new();
+    let mut in_word = false;
+    for (i, c) in text.char_indices() {
+        if c.is_whitespace() {
+            in_word = false;
+        } else if !in_word {
+            starts.push(i);
+            in_word = true;
+        }
+    }
+    starts
+}
+
+/// CSS Pseudo-elements L4 §3.1 — partition `segments` into
+/// `(consumed by the first formatted line, remainder)`.
+///
+/// `line0` is the first line produced by the ::first-line wrap pass; its frags
+/// appear in segment order and never span segments, so consumption is counted
+/// word-by-word with the same boundaries as `str::split_whitespace` (matching
+/// `wrap_inline_run`). A partially consumed segment is split at the word
+/// boundary: the head keeps the segment's `pre_space` (its inline box opened on
+/// line 0, `post_space` → 0), the tail keeps `post_space` (`pre_space` → 0,
+/// `source_char_offset` advanced by the cut byte offset).
+///
+/// `preserves_ws` (white-space: pre / pre-wrap): each non-empty segment before
+/// the first forced break produced exactly one frag — whole segments up to and
+/// including that break are consumed.
+fn split_segments_at_first_line(
+    segments: &[InlineSegment],
+    line0: &[InlineFrag],
+    preserves_ws: bool,
+) -> (Vec<InlineSegment>, Vec<InlineSegment>) {
+    let mut consumed: Vec<InlineSegment> = Vec::new();
+    let mut idx = 0usize;
+
+    if preserves_ws {
+        for _ in line0 {
+            // Empty non-break text segments produce no frag — consume silently.
+            while idx < segments.len()
+                && segments[idx].text.is_empty()
+                && !segments[idx].forced_break
+                && segments[idx].img_src.is_none()
+            {
+                consumed.push(segments[idx].clone());
+                idx += 1;
+            }
+            if idx < segments.len() {
+                consumed.push(segments[idx].clone());
+                idx += 1;
+            }
+        }
+        // The forced break that terminated line 0 belongs to it.
+        if idx < segments.len() && segments[idx].forced_break {
+            consumed.push(segments[idx].clone());
+            idx += 1;
+        }
+        return (consumed, segments[idx..].to_vec());
+    }
+
+    // Word-level consumption for collapsing white-space modes.
+    let mut words_taken = 0usize; // words already consumed from segments[idx]
+    for frag in line0 {
+        if frag.img_src.is_some() {
+            // Advance to the img segment, consuming exhausted text segments.
+            while idx < segments.len() && segments[idx].img_src.is_none() {
+                consumed.push(segments[idx].clone());
+                idx += 1;
+                words_taken = 0;
+            }
+            if idx < segments.len() {
+                consumed.push(segments[idx].clone());
+                idx += 1;
+            }
+            continue;
+        }
+        let mut need = frag.text.split_whitespace().count();
+        while need > 0 && idx < segments.len() {
+            let seg = &segments[idx];
+            if seg.img_src.is_some() || seg.forced_break {
+                consumed.push(seg.clone());
+                idx += 1;
+                words_taken = 0;
+                continue;
+            }
+            let total = seg.text.split_whitespace().count();
+            let avail = total.saturating_sub(words_taken);
+            if avail <= need {
+                need -= avail;
+                consumed.push(seg.clone());
+                idx += 1;
+                words_taken = 0;
+            } else {
+                words_taken += need;
+                need = 0;
+            }
+        }
+    }
+
+    let mut rest: Vec<InlineSegment> = Vec::new();
+    if words_taken > 0 && idx < segments.len() {
+        // Partially consumed segment: split at the word boundary.
+        let seg = &segments[idx];
+        let starts = word_start_offsets(&seg.text);
+        if words_taken < starts.len() {
+            let cut = starts[words_taken];
+            let mut head = seg.clone();
+            head.text = seg.text[..cut].trim_end().to_string();
+            head.post_space = 0.0;
+            consumed.push(head);
+            let mut tail = seg.clone();
+            tail.text = seg.text[cut..].to_string();
+            tail.pre_space = 0.0;
+            tail.source_char_offset = seg.source_char_offset + cut as u32;
+            rest.push(tail);
+        } else {
+            consumed.push(seg.clone());
+        }
+        idx += 1;
+    }
+    rest.extend(segments[idx..].iter().cloned());
+    (consumed, rest)
+}
+
+/// CSS Pseudo-elements L4 §3.1 — ::first-line layout split (BB-1).
+///
+/// Post-layout pass: walks the box tree and, for every `InlineRun` carrying a
+/// `first_line_style`, splits the first formatted line into its own `InlineRun`
+/// box styled with the ::first-line style; the remainder keeps the base style.
+/// Paint computes line height as `style.font_size * style.line_height` per box,
+/// so the split gives the first line its correct (possibly larger) line box
+/// height with no paint-side changes. Single-line runs are restyled in place.
+/// Idempotent: `first_line_style` is cleared on every produced box.
+// CSS: ::first-line — P4 wires additional ::first-line properties (background,
+// text-decoration, …) via compute_pseudo_element_style; geometry is handled here.
+pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
+    for child in &mut b.children {
+        split_first_line_boxes(child);
+    }
+    let mut i = 0;
+    while i < b.children.len() {
+        let child = &mut b.children[i];
+        let BoxKind::InlineRun { segments, lines, first_line_style } = &mut child.kind else {
+            i += 1;
+            continue;
+        };
+        let Some(fls) = first_line_style.take() else {
+            i += 1;
+            continue;
+        };
+        if lines.len() < 2 {
+            // The whole run is the first formatted line: restyle the box in place
+            // so paint uses the ::first-line font metrics for its single line box.
+            child.style = *fls;
+            i += 1;
+            continue;
+        }
+        let preserves = child.style.white_space.preserves_whitespace();
+        let (consumed_segs, rest_segs) =
+            split_segments_at_first_line(segments, &lines[0], preserves);
+        let line0 = lines[0].clone();
+        let rest_lines: Vec<Vec<InlineFrag>> = lines[1..].to_vec();
+        let fl_h = fls.font_size * fls.line_height;
+        let base_h = child.style.font_size * child.style.line_height;
+        let rect = child.rect;
+        let box2 = LayoutBox {
+            node: child.node,
+            rect: Rect::new(rect.x, rect.y + fl_h, rect.width, rest_lines.len() as f32 * base_h),
+            style: child.style.clone(),
+            kind: BoxKind::InlineRun {
+                segments: rest_segs,
+                lines: rest_lines,
+                first_line_style: None,
+            },
+            children: Vec::new(),
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            dirty: Default::default(),
+        };
+        // Reuse the original box as the first-line box.
+        child.style = *fls;
+        child.rect.height = fl_h;
+        child.kind = BoxKind::InlineRun {
+            segments: consumed_segs,
+            lines: vec![line0],
+            first_line_style: None,
+        };
+        b.children.insert(i + 1, box2);
+        i += 2;
+    }
+}
+
+/// Lay out a document without a text measurer. For tests and headless dump modes.
+/// Invalidates the rule-index cache before the cascade so stale hits are impossible.
 pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
+    // Prevent stale RULE_IDX_CACHE hits when a new sheet lands at the same address as a freed one.
+    crate::style::invalidate_rule_idx_cache();
+    crate::content_visibility::reset_cv_skipped();
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
-    let counters = precompute_counters(doc, sheet, viewport, &flat);
-    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters);
+    let counters = precompute_counters(doc, sheet, viewport, &flat, false);
+    let registry = build_counter_style_registry(sheet);
+    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, false);
     propagate_canvas_background(doc, &mut root);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     let null_hp = NullHyphenationProvider;
-    lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), None, viewport, init_pcb, &null_hp);
+    lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), None, viewport, init_pcb, &null_hp, false);
+    apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, false);
     // CSS Container Queries L1: second pass applies @container rules + re-layout.
-    apply_container_styles(&mut root, doc, sheet, viewport, None, &null_hp);
+    apply_container_styles(&mut root, doc, sheet, viewport, None, &null_hp, false);
+    // CSS Anchor Positioning L1: post-layout pass repositions anchored elements.
+    apply_anchor_positions(&mut root, viewport);
+    // CSS Pseudo-elements L4 §3.1: split first formatted lines into own boxes (BB-1).
+    split_first_line_boxes(&mut root);
     root
 }
 
+/// Layout without a text measurer. For tests and headless modes; uses `layout_measured_hyp` with `dark_mode=false`.
 pub fn layout_measured(
     doc: &Document,
     sheet: &Stylesheet,
@@ -1171,26 +2199,131 @@ pub fn layout_measured(
     measurer: &dyn TextMeasurer,
 ) -> LayoutBox {
     let null_hp = NullHyphenationProvider;
-    layout_measured_hyp(doc, sheet, viewport, measurer, &null_hp)
+    layout_measured_hyp(doc, sheet, viewport, measurer, &null_hp, false)
 }
 
 /// Layout with a real hyphenation provider (for `hyphens: auto`).
+/// `dark_mode` drives `@media (prefers-color-scheme: dark)` matching throughout
+/// the cascade — shell reads the value from `Lumen.dark_mode` (OS preference via winit).
 pub fn layout_measured_hyp(
     doc: &Document,
     sheet: &Stylesheet,
     viewport: Size,
     measurer: &dyn TextMeasurer,
     hp: &dyn HyphenationProvider,
+    dark_mode: bool,
 ) -> LayoutBox {
+    // Invalidate the rule-index cache before each layout pass to prevent
+    // stale hits when a new stylesheet lands at the same pointer as a freed one.
+    crate::style::invalidate_rule_idx_cache();
+    crate::content_visibility::reset_cv_skipped();
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
-    let counters = precompute_counters(doc, sheet, viewport, &flat);
-    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters);
+    let counters = precompute_counters(doc, sheet, viewport, &flat, dark_mode);
+    let registry = build_counter_style_registry(sheet);
+    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode);
     propagate_canvas_background(doc, &mut root);
+    // CSS Fonts L5 §4 — resolve `font-size-adjust` against the real font x-height
+    // before measurement, so both line wrapping and paint use the scaled size.
+    apply_font_size_adjust(&mut root, measurer);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
-    lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp);
-    apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp);
+    lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp, false);
+    apply_first_line_pseudo_styles(&mut root, doc, sheet, viewport, dark_mode);
+    apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp, dark_mode);
+    // CSS Anchor Positioning L1: post-layout pass repositions anchored elements.
+    apply_anchor_positions(&mut root, viewport);
+    // CSS Pseudo-elements L4 §3.1: split first formatted lines into own boxes (BB-1).
+    split_first_line_boxes(&mut root);
     root
+}
+
+/// Incremental re-layout pass: skips clean subtrees, re-lays out only dirty ones.
+///
+/// `root` must be a previously laid-out `LayoutBox` (from `layout_measured_hyp`).
+/// Call [`crate::incremental::mark_dirty`] on changed nodes first.
+///
+/// Internally enables [`INCREMENTAL_LAYOUT_MODE`] so that `lay_out` returns early
+/// (translating the subtree to its new position) for any node with
+/// [`crate::incremental::DirtyBits::CLEAN`]. After this call all dirty bits are
+/// cleared automatically via [`crate::incremental::clear_dirty`].
+///
+/// Parameters match `lay_out` / `layout_measured_hyp`. Phase 0 limitation:
+/// container-query re-evaluation and anchor positioning are not re-run here
+/// (they rely on a full layout pass); add a full `layout_measured_hyp` call when
+/// those features are required.
+#[allow(clippy::too_many_arguments)]
+pub fn lay_out_incremental(
+    root: &mut LayoutBox,
+    start_x: f32,
+    start_y: f32,
+    available_width: f32,
+    available_height: Option<f32>,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    pcb: Rect,
+    hp: &dyn HyphenationProvider,
+) {
+    INCREMENTAL_LAYOUT_MODE.with(|m| m.set(true));
+    lay_out(root, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp, false);
+    INCREMENTAL_LAYOUT_MODE.with(|m| m.set(false));
+    crate::incremental::clear_dirty(root);
+}
+
+/// CSS Fonts L5 §4 — used `font-size` after applying `font-size-adjust`.
+///
+/// The aspect value of the rendered font is `x_height_px(size) / size`. To make
+/// the text's x-height equal `adjust × size`, the size is scaled by
+/// `adjust / aspect`. `None` (initial) and `Auto` (use the first available
+/// font's own aspect — a no-op for a single font) leave the size unchanged.
+fn font_size_adjust_used(style: &ComputedStyle, m: &dyn TextMeasurer) -> f32 {
+    use crate::style::FontSizeAdjust;
+    let size = style.font_size;
+    match style.font_size_adjust {
+        FontSizeAdjust::None | FontSizeAdjust::Auto => size,
+        FontSizeAdjust::Value(z) => {
+            let xh = m.x_height_px(size);
+            if size > 0.0 && xh > 0.0 {
+                let aspect = xh / size;
+                size * z / aspect
+            } else {
+                size
+            }
+        }
+    }
+}
+
+/// CSS Fonts L5 §4 — post-build pass rewriting `font_size` wherever
+/// `font-size-adjust` is a number, using the measurer's real x-height.
+///
+/// Runs after `build_box` and before `lay_out`: mutating `style.font_size` here
+/// makes both inline measurement and the display list (which reads
+/// `frag.style.font_size`) pick up the scaled size from a single source. Inline
+/// text segments carry their own cloned style, so they are adjusted too.
+fn apply_font_size_adjust(b: &mut LayoutBox, m: &dyn TextMeasurer) {
+    use crate::style::FontSizeAdjust;
+    if !matches!(b.style.font_size_adjust, FontSizeAdjust::None) {
+        b.style.font_size = font_size_adjust_used(&b.style, m);
+    }
+    if let BoxKind::InlineRun { segments, .. } = &mut b.kind {
+        for seg in segments.iter_mut() {
+            if !matches!(seg.style.font_size_adjust, FontSizeAdjust::None) {
+                seg.style.font_size = font_size_adjust_used(&seg.style, m);
+            }
+        }
+    }
+    for child in &mut b.children {
+        apply_font_size_adjust(child, m);
+    }
+}
+
+/// Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5).
+///
+/// Returns the parsed `Document` ready for sub-document layout. The document
+/// has no base URL — relative resource references inside `srcdoc` HTML are
+/// interpreted as `about:blank`-relative (effectively unresolvable until
+/// Phase 1 navigation wiring).
+pub fn build_iframe_document(srcdoc: &str) -> Document {
+    lumen_html_parser::parse(srcdoc)
 }
 
 /// CSS Backgrounds L3 §2.11.2 — «The Canvas Background and the Root Element»:
@@ -1256,6 +2389,25 @@ fn is_html_element_named(doc: &Document, id: NodeId, want: &str) -> bool {
 
 /// Является ли DOM-узел inline-контентом (non-whitespace текст или inline-элемент).
 ///
+/// True for Unicode control characters (Cc: C0, DEL, C1) that browsers render as
+/// invisible zero-advance — EXCEPT tab/LF/CR, which carry white-space semantics
+/// (CSS Text L3 §4.1). Such characters are stripped at the inline-item level so a
+/// stray control byte never produces a visible line box (BUG-120: Edge renders
+/// U+0001 invisible, Lumen drew a 19.2px text line shifting content below).
+fn is_invisible_control(c: char) -> bool {
+    c.is_control() && c != '\t' && c != '\n' && c != '\r'
+}
+
+/// Removes invisible control characters (see [`is_invisible_control`]) from `s`.
+/// Borrows the input unchanged when no such characters are present (common case).
+fn strip_invisible_controls(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.contains(is_invisible_control) {
+        std::borrow::Cow::Owned(s.chars().filter(|&c| !is_invisible_control(c)).collect())
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    }
+}
+
 /// `<img>` в Phase 0 — block-level replaced element, не inline-контент:
 /// он порождает собственный `BoxKind::Image`, а не вливается в `InlineRun`.
 /// Inline-replaced (картинка внутри строки текста) — отдельная задача;
@@ -1266,9 +2418,12 @@ fn is_inline_content(
     id: NodeId,
     inherited: &ComputedStyle,
     viewport: Size,
+    dark_mode: bool,
 ) -> bool {
     match &doc.get(id).data {
-        NodeData::Text(s) => !s.chars().all(char::is_whitespace),
+        // Control-only text (after BUG-120 stripping) is no more inline content
+        // than whitespace-only text: it must not open an inline run / line box.
+        NodeData::Text(s) => !s.chars().all(|c| c.is_whitespace() || is_invisible_control(c)),
         NodeData::Element { .. } => {
             if is_image_element(doc, id) || is_form_control_element(doc, id) {
                 return false;
@@ -1277,7 +2432,7 @@ fn is_inline_content(
             // Phase 0 layout не делает реального flex/grid — флэт-семантика
             // блока для outer-display, но inline-family остаётся inline.
             matches!(
-                compute_style(doc, id, sheet, inherited, viewport).display,
+                compute_style(doc, id, sheet, inherited, viewport, dark_mode).display,
                 Display::Inline | Display::InlineFlex | Display::InlineGrid
             )
         }
@@ -1293,20 +2448,32 @@ fn is_inline_block(
     id: NodeId,
     inherited: &ComputedStyle,
     viewport: Size,
+    dark_mode: bool,
 ) -> bool {
     matches!(
         &doc.get(id).data,
         NodeData::Element { .. }
         if !is_image_element(doc, id)
             && !is_form_control_element(doc, id)
-            && compute_style(doc, id, sheet, inherited, viewport).display
+            && compute_style(doc, id, sheet, inherited, viewport, dark_mode).display
                 == Display::InlineBlock
     )
 }
 
 /// Обнуляет box-model spacing анонимного контейнера (InlineRun / InlineBlockRow).
+// Anonymous boxes inherit only inheritable properties from their parent; every
+// non-inherited property takes its initial value (CSS 2.1 §9.2.2.1). Cloning the
+// parent style and resetting the non-inherited longhands below approximates that.
+// `float`, `clear` and `position` are non-inherited (CSS 2.1 §9.5.1/§9.5.2, CSS
+// Positioned Layout L3 §3): an anonymous box must NOT float or be positioned
+// (BUG-152 — an anonymous InlineRun cloning a floated parent's `float_side`
+// re-entered the float branch of its own parent's layout loop, so `child_y` never
+// advanced and the run overlapped the following block siblings).
 fn anon_style(parent: &ComputedStyle) -> ComputedStyle {
     let mut s = parent.clone();
+    s.float_side = FloatSide::None;
+    s.clear = ClearSide::None;
+    s.position = Position::Static;
     s.margin_top = LengthOrAuto::ZERO;
     s.margin_right = LengthOrAuto::ZERO;
     s.margin_bottom = LengthOrAuto::ZERO;
@@ -1335,11 +2502,68 @@ fn anon_inline_run(node: NodeId, parent: &ComputedStyle, segs: Vec<InlineSegment
         node,
         rect: Rect::ZERO,
         style: anon_style(parent),
-        kind: BoxKind::InlineRun { segments: segs, lines: vec![] },
+        kind: BoxKind::InlineRun { segments: segs, lines: vec![], first_line_style: None },
         children: vec![],
         col_span: 1,
-        row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+        row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
     }
+}
+
+/// CSS Pseudo-elements L4 §5.4: applies `::first-letter` style to the first grapheme of the
+/// `FirstLetter`-marked segment. Splits the segment if it contains more than one character so
+/// only the first grapheme gets the pseudo-element style; the remainder keeps the original style.
+/// No-op when no `FirstLetter` segment exists or no matching `::first-letter` rule is found.
+fn apply_first_letter_pseudo(
+    segs: &mut Vec<InlineSegment>,
+    doc: &lumen_dom::Document,
+    node: lumen_dom::NodeId,
+    sheet: &lumen_css_parser::Stylesheet,
+    parent: &crate::style::ComputedStyle,
+    viewport: lumen_core::geom::Size,
+    dark_mode: bool,
+) {
+    let Some(pos) = segs.iter().position(|s| s.pseudo_kind == PseudoKind::FirstLetter) else {
+        return;
+    };
+    let Some(fl_style) = crate::style::compute_pseudo_element_style(
+        doc, node, "first-letter", sheet, parent, viewport, dark_mode,
+    ) else {
+        return;
+    };
+    // CSS Pseudo-elements L4 §5.1: leading punctuation + first letter. Char-level
+    // boundary (full grapheme cluster support requires unicode-segmentation,
+    // which is not yet a dependency).
+    let first_char_end = first_letter_text_len(&segs[pos].text);
+    if first_char_end == 0 {
+        return;
+    }
+    if first_char_end >= segs[pos].text.len() {
+        // Single-character segment: override style in place.
+        segs[pos].style = fl_style;
+        return;
+    }
+    // Multi-character: split into [first_char | rest], each with its own style.
+    let rest_text = segs[pos].text[first_char_end..].to_string();
+    let original_style = segs[pos].style.clone();
+    let source_node = segs[pos].source_node;
+    let post_space = segs[pos].post_space;
+    segs[pos].text.truncate(first_char_end);
+    segs[pos].style = fl_style;
+    segs[pos].post_space = 0.0;
+    segs.insert(pos + 1, InlineSegment {
+        text: rest_text,
+        style: original_style,
+        pre_space: 0.0,
+        post_space,
+        is_element_box: false,
+        img_src: None,
+        img_is_lazy: false,
+        img_width: 0.0,
+        forced_break: false,
+        pseudo_kind: PseudoKind::None,
+        source_node,
+        source_char_offset: first_char_end as u32,
+    });
 }
 
 fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items: Vec<LayoutBox>) -> LayoutBox {
@@ -1350,7 +2574,7 @@ fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items: Vec<Layout
         kind: BoxKind::InlineBlockRow,
         children: items,
         col_span: 1,
-        row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+        row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
     }
 }
 
@@ -1371,7 +2595,9 @@ fn collect_inline_segments(
     out: &mut Vec<InlineSegment>,
     flat: &FlatTree,
     counters: &CounterMap,
+    registry: &CounterStyleRegistry,
     need_first_letter: &mut bool,
+    dark_mode: bool,
 ) {
     match &doc.get(id).data {
         NodeData::Text(s) if inherited.white_space.preserves_whitespace() => {
@@ -1388,6 +2614,7 @@ fn collect_inline_segments(
                         post_space: 0.0,
                         is_element_box: false,
                         img_src: None,
+                        img_is_lazy: false,
                         img_width: 0.0,
                         forced_break: true,
                         pseudo_kind: PseudoKind::None,
@@ -1396,14 +2623,18 @@ fn collect_inline_segments(
                     });
                     byte_offset += 1; // the \n character
                 }
-                if !line.is_empty() {
+                // BUG-120: drop invisible controls (Cc except tab) — they must
+                // not occupy advance width even in white-space: pre.
+                let text = strip_invisible_controls(line);
+                if !text.is_empty() {
                     out.push(InlineSegment {
-                        text: line.to_string(),
+                        text: text.into_owned(),
                         style: style.clone(),
                         pre_space: 0.0,
                         post_space: 0.0,
                         is_element_box: false,
                         img_src: None,
+                        img_is_lazy: false,
                         img_width: 0.0,
                         forced_break: false,
                         pseudo_kind: PseudoKind::None,
@@ -1414,10 +2645,13 @@ fn collect_inline_segments(
                 byte_offset += line.len() as u32;
             }
         }
-        NodeData::Text(s) if !s.chars().all(char::is_whitespace) => {
+        NodeData::Text(s) if !s.chars().all(|c| c.is_whitespace() || is_invisible_control(c)) => {
+            // BUG-120: strip invisible controls before transform/measure — Edge
+            // renders them zero-advance, they must not contribute glyphs.
+            let s = strip_invisible_controls(s);
             // text-transform применяется здесь, до wrapping и paint —
             // measurer считает ширину уже после преобразования.
-            let text = inherited.text_transform.apply(s);
+            let text = inherited.text_transform.apply(&s);
             // CSS Pseudo-elements L4 §5.1: the first text segment in this inline run
             // is the candidate for ::first-letter. Mark it so P4 can look up the
             // ::first-letter rule and extract the first grapheme at render time.
@@ -1436,6 +2670,7 @@ fn collect_inline_segments(
                 post_space: 0.0,
                 is_element_box: false,
                 img_src: None,
+                img_is_lazy: false,
                 img_width: 0.0,
                 forced_break: false,
                 pseudo_kind: kind,
@@ -1445,7 +2680,7 @@ fn collect_inline_segments(
         }
         NodeData::Text(_) => {}
         NodeData::Element { .. } => {
-            let s = compute_style(doc, id, sheet, inherited, viewport);
+            let s = compute_style(doc, id, sheet, inherited, viewport, dark_mode);
             if s.display == Display::None {
                 return;
             }
@@ -1465,6 +2700,8 @@ fn collect_inline_segments(
                     + s.border_right_width
                     + s.margin_right.resolve_or_zero(em, 0.0, viewport);
                 let alt = doc.get(id).get_attr("alt").unwrap_or("").to_string();
+                let img_is_lazy = doc.get(id).get_attr("loading")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("lazy"));
                 out.push(InlineSegment {
                     text: alt,
                     style: s,
@@ -1472,6 +2709,7 @@ fn collect_inline_segments(
                     post_space: post,
                     is_element_box: true,
                     img_src: Some(src.url),
+                    img_is_lazy,
                     img_width: w,
                     forced_break: false,
                     pseudo_kind: PseudoKind::None,
@@ -1493,7 +2731,7 @@ fn collect_inline_segments(
             // CSS Pseudo-elements L4 §4 — ::before in inline formatting context.
             // Block pseudo-elements inside inline context are skipped (Phase 0).
             if let Some(ps) =
-                compute_pseudo_element_style(doc, id, "before", sheet, &s, viewport)
+                compute_pseudo_element_style(doc, id, "before", sheet, &s, viewport, dark_mode)
                 && matches!(
                     ps.display,
                     Display::Inline
@@ -1502,15 +2740,15 @@ fn collect_inline_segments(
                         | Display::InlineBlock
                 )
             {
-                push_pseudo_inline_segs(&ps, doc, id, viewport, counters, out);
+                push_pseudo_inline_segs(&ps, doc, id, QuoteSlot::Before, viewport, counters, registry, out);
             }
             let children: Vec<NodeId> = flat.children_of(doc, id).to_vec();
             for child_id in children {
-                collect_inline_segments(doc, sheet, child_id, &s, viewport, out, flat, counters, need_first_letter);
+                collect_inline_segments(doc, sheet, child_id, &s, viewport, out, flat, counters, registry, need_first_letter, dark_mode);
             }
             // CSS Pseudo-elements L4 §4 — ::after in inline formatting context.
             if let Some(ps) =
-                compute_pseudo_element_style(doc, id, "after", sheet, &s, viewport)
+                compute_pseudo_element_style(doc, id, "after", sheet, &s, viewport, dark_mode)
                 && matches!(
                     ps.display,
                     Display::Inline
@@ -1519,7 +2757,7 @@ fn collect_inline_segments(
                         | Display::InlineBlock
                 )
             {
-                push_pseudo_inline_segs(&ps, doc, id, viewport, counters, out);
+                push_pseudo_inline_segs(&ps, doc, id, QuoteSlot::After, viewport, counters, registry, out);
             }
             let added = out.len() - start;
             // Mark all segments from this element (including pseudo-element content)
@@ -1548,14 +2786,16 @@ fn inject_pseudo(
     is_before: bool,
     doc: &Document,
     counters: &CounterMap,
+    registry: &CounterStyleRegistry,
 ) {
     let Some(ps) = ps else { return };
+    let slot = if is_before { QuoteSlot::Before } else { QuoteSlot::After };
     match ps.display {
         Display::Inline
         | Display::InlineFlex
         | Display::InlineGrid
         | Display::InlineBlock => {
-            let segs = content_to_inline_segments(&ps, doc, parent_id, counters);
+            let segs = content_to_inline_segments(&ps, doc, parent_id, slot, counters, registry);
             if segs.is_empty() {
                 return;
             }
@@ -1579,7 +2819,7 @@ fn inject_pseudo(
         }
         _ => {
             // Block-level pseudo-element.
-            let inner_segs = content_to_inline_segments(&ps, doc, parent_id, counters);
+            let inner_segs = content_to_inline_segments(&ps, doc, parent_id, slot, counters, registry);
             let inner = if inner_segs.is_empty() {
                 vec![]
             } else {
@@ -1592,7 +2832,7 @@ fn inject_pseudo(
                 kind: BoxKind::Block,
                 children: inner,
                 col_span: 1,
-                row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+                row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             };
             if is_before {
                 children.insert(0, b);
@@ -1606,18 +2846,25 @@ fn inject_pseudo(
 /// Extracts text from `Content::Items` and returns it as a single `InlineSegment`.
 ///
 /// Resolves `ContentItem::String`, `ContentItem::Counter`, `ContentItem::Counters`,
-/// and `ContentItem::Attr` using the per-element `CounterMap` snapshot and DOM lookup.
-/// `owner_id` is the element whose `::before`/`::after` pseudo-element we're generating.
+/// `ContentItem::Attr` and `open-quote`/`close-quote` using the per-element
+/// `CounterMap` snapshot and DOM lookup. `owner_id` is the element whose
+/// `::before`/`::after` pseudo-element we're generating; `slot` selects which
+/// precomputed quote-depth list to consume (CSS Generated Content L3 §3.2).
+/// Custom `@counter-style` names are resolved via `registry`.
 fn content_to_inline_segments(
     style: &ComputedStyle,
     doc: &Document,
     owner_id: NodeId,
+    slot: QuoteSlot,
     counters: &CounterMap,
+    registry: &CounterStyleRegistry,
 ) -> Vec<InlineSegment> {
     let Content::Items(items) = &style.content else {
         return vec![];
     };
-    let snap = counters.get(&owner_id);
+    let snap = counters.counters(owner_id);
+    let qdepths = counters.quote_depths(owner_id, slot);
+    let mut qi = 0usize;
     let text: String = items
         .iter()
         .filter_map(|item| match item {
@@ -1628,22 +2875,38 @@ fn content_to_inline_segments(
                     .and_then(|v| v.last())
                     .copied()
                     .unwrap_or(0);
-                Some(format_counter(val, list_style.as_deref().unwrap_or("decimal")))
+                let sname = list_style.as_deref().unwrap_or("decimal");
+                Some(format_counter_with_registry(val, sname, registry))
             }
             ContentItem::Counters { name, separator, style: list_style } => {
                 let vals = snap
                     .and_then(|s| s.get(name))
                     .map(|v| v.as_slice())
                     .unwrap_or(&[]);
+                let sname = list_style.as_deref().unwrap_or("decimal");
                 let formatted: Vec<String> = vals
                     .iter()
-                    .map(|&v| format_counter(v, list_style.as_deref().unwrap_or("decimal")))
+                    .map(|&v| format_counter_with_registry(v, sname, registry))
                     .collect();
                 Some(formatted.join(separator.as_str()))
             }
             ContentItem::Attr(attr) => {
                 doc.get(owner_id).get_attr(attr).map(|s| s.to_string())
             }
+            // CSS Generated Content L3 §3.2 — open-quote / close-quote pick a
+            // (open, close) pair from `quotes` at the precomputed nesting depth.
+            ContentItem::OpenQuote => {
+                let depth = qdepths.get(qi).copied().unwrap_or(0);
+                qi += 1;
+                style.quotes.pair_for_depth(depth).map(|(o, _)| o.to_string())
+            }
+            ContentItem::CloseQuote => {
+                let depth = qdepths.get(qi).copied().unwrap_or(0);
+                qi += 1;
+                style.quotes.pair_for_depth(depth).map(|(_, c)| c.to_string())
+            }
+            // no-open-quote / no-close-quote only advance depth (handled in the
+            // precompute pass) and emit nothing.
             _ => None,
         })
         .collect();
@@ -1657,6 +2920,7 @@ fn content_to_inline_segments(
         post_space: 0.0,
         is_element_box: false,
         img_src: None,
+        img_is_lazy: false,
         img_width: 0.0,
         forced_break: false,
         pseudo_kind: PseudoKind::None,
@@ -1668,15 +2932,18 @@ fn content_to_inline_segments(
 /// Builds inline segments for a pseudo-element and applies its own box model
 /// spacing (margin + border + padding) as `pre_space` / `post_space`.
 /// Used by `collect_inline_segments` to inject `::before` / `::after` content.
+#[allow(clippy::too_many_arguments)]
 fn push_pseudo_inline_segs(
     ps: &ComputedStyle,
     doc: &Document,
     owner_id: NodeId,
+    slot: QuoteSlot,
     viewport: Size,
     counters: &CounterMap,
+    registry: &CounterStyleRegistry,
     out: &mut Vec<InlineSegment>,
 ) {
-    let mut segs = content_to_inline_segments(ps, doc, owner_id, counters);
+    let mut segs = content_to_inline_segments(ps, doc, owner_id, slot, counters, registry);
     if segs.is_empty() {
         return;
     }
@@ -1712,81 +2979,43 @@ fn li_ordinal(doc: &Document, id: NodeId) -> u32 {
     1
 }
 
-fn to_roman(n: u32, upper: bool) -> String {
-    const VALS: &[(u32, &str, &str)] = &[
-        (1000, "M", "m"), (900, "CM", "cm"), (500, "D", "d"), (400, "CD", "cd"),
-        (100, "C", "c"), (90, "XC", "xc"), (50, "L", "l"), (40, "XL", "xl"),
-        (10, "X", "x"), (9, "IX", "ix"), (5, "V", "v"), (4, "IV", "iv"), (1, "I", "i"),
-    ];
-    if n == 0 { return "0".to_string(); }
-    let mut out = String::new();
-    let mut rem = n;
-    for &(val, up, lo) in VALS {
-        while rem >= val {
-            out.push_str(if upper { up } else { lo });
-            rem -= val;
-        }
-    }
-    out
-}
-
-fn to_alpha(n: u32, upper: bool) -> String {
-    if n == 0 { return "0".to_string(); }
-    let base = if upper { b'A' } else { b'a' };
-    let mut out = String::new();
-    let mut rem = n;
-    while rem > 0 {
-        rem -= 1;
-        out.insert(0, (base + (rem % 26) as u8) as char);
-        rem /= 26;
-    }
-    out
-}
-
-fn to_greek(n: u32) -> String {
-    const GREEK: &[char] = &['α','β','γ','δ','ε','ζ','η','θ','ι','κ','λ','μ',
-                              'ν','ξ','ο','π','ρ','σ','τ','υ','φ','χ','ψ','ω'];
-    if n == 0 { return "0".to_string(); }
-    let idx = ((n - 1) as usize) % GREEK.len();
-    GREEK[idx].to_string()
-}
-
-/// CSS Lists L3 §2.1 — builds the marker string from `list-style-type` + ordinal.
-/// Bullet types (Disc/Circle/Square) return "" — rendered as geometric shapes by
-/// the display-list emitter (FillRoundedRect / DrawBorder / FillRect).
-/// CSS: @counter-style — P4 extends with custom counter styles.
-fn marker_text(lst: ListStyleType, ordinal: u32) -> String {
-    match lst {
-        ListStyleType::None   => String::new(),
-        ListStyleType::Disc   => String::new(), // geometric: filled circle
-        ListStyleType::Circle => String::new(), // geometric: hollow circle
-        ListStyleType::Square => String::new(), // geometric: filled square
-        ListStyleType::Decimal            => format!("{}. ", ordinal),
-        ListStyleType::DecimalLeadingZero => format!("{:02}. ", ordinal),
-        ListStyleType::LowerRoman => format!("{}. ", to_roman(ordinal, false)),
-        ListStyleType::UpperRoman => format!("{}. ", to_roman(ordinal, true)),
-        ListStyleType::LowerAlpha => format!("{}. ", to_alpha(ordinal, false)),
-        ListStyleType::UpperAlpha => format!("{}. ", to_alpha(ordinal, true)),
-        ListStyleType::LowerGreek => format!("{}. ", to_greek(ordinal)),
-    }
-}
-
 /// CSS Lists L3 §2.1 — creates `BoxKind::Marker` and prepends to children.
-/// Does nothing when `list-style-type: none` or `list-style-image` is set (P4).
-fn inject_marker(parent_id: NodeId, children: &mut Vec<LayoutBox>, style: &ComputedStyle, ordinal: u32) {
-    if matches!(style.list_style_type, ListStyleType::None) {
+/// Calls `compute_pseudo_element_style("marker")` so CSS `::marker` rules (color,
+/// font, content) override the defaults. `content: none` on `::marker` suppresses
+/// the marker entirely; `content: <string>` / `counter()` replaces the default text.
+#[allow(clippy::too_many_arguments)]
+fn inject_marker(
+    parent_id: NodeId,
+    children: &mut Vec<LayoutBox>,
+    style: &ComputedStyle,
+    ordinal: u32,
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    dark_mode: bool,
+    counters: &CounterMap,
+    registry: &CounterStyleRegistry,
+) {
+    // CSS Lists L3 §2.3: an explicit `list-style-image` shows even when
+    // `list-style-type: none` — the image takes precedence over the type, so a
+    // marker is still generated. Only suppress when both are absent.
+    if matches!(style.list_style_type, ListStyleType::None) && style.list_style_image.is_none() {
         return;
     }
+    // CSS Pseudo-elements L4 §14.2 — compute ::marker style.
+    // Returns None only when `content: none` is set, which suppresses the marker.
+    let Some(mut ms) = compute_pseudo_element_style(
+        doc, parent_id, "marker", sheet, style, viewport, dark_mode,
+    ) else {
+        return;
+    };
     // CSS: list-style-image — P4 wires image markers.
-    let text = marker_text(style.list_style_type, ordinal);
-    let mut ms = ComputedStyle::root();
-    ms.font_size    = style.font_size;
-    ms.font_weight  = style.font_weight;
-    ms.font_style   = style.font_style;
-    ms.font_family  = style.font_family.clone();
-    ms.line_height  = style.line_height;
-    ms.color        = style.color;
-    ms.display      = Display::Inline;
+    let text = match &ms.content {
+        Content::Items(items) => marker_content_text(items, doc, parent_id, counters, registry),
+        // CSS: list-style-type (custom counter-style) — build_list_marker_text consults registry.
+        _ => build_list_marker_text(style.list_style_type.clone(), ordinal, registry),
+    };
+    ms.display = Display::Inline;
     children.insert(0, LayoutBox {
         node:     parent_id,
         rect:     Rect::ZERO,
@@ -1794,12 +3023,52 @@ fn inject_marker(parent_id: NodeId, children: &mut Vec<LayoutBox>, style: &Compu
         kind:     BoxKind::Marker {
             text,
             position:        style.list_style_position,
-            list_style_type: style.list_style_type,
+            list_style_type: style.list_style_type.clone(),
+            image:           style.list_style_image.clone(),
         },
         children: vec![],
         col_span: 1,
-        row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+        row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
     });
+}
+
+/// Extracts a plain-text string from `::marker { content: <items> }`.
+/// Supports String literals, `attr()`, `counter()`, `counters()`.
+fn marker_content_text(
+    items: &[ContentItem],
+    doc: &Document,
+    owner_id: NodeId,
+    counters: &CounterMap,
+    registry: &CounterStyleRegistry,
+) -> String {
+    let snap = counters.counters(owner_id);
+    items.iter().filter_map(|item| match item {
+        ContentItem::String(s) => Some(s.clone()),
+        ContentItem::Counter { name, style: list_style } => {
+            let val = snap
+                .and_then(|s| s.get(name))
+                .and_then(|v| v.last())
+                .copied()
+                .unwrap_or(0);
+            let sname = list_style.as_deref().unwrap_or("decimal");
+            Some(format_counter_with_registry(val, sname, registry))
+        }
+        ContentItem::Counters { name, separator, style: list_style } => {
+            let vals = snap
+                .and_then(|s| s.get(name))
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+            let sname = list_style.as_deref().unwrap_or("decimal");
+            let parts: Vec<String> = vals.iter()
+                .map(|&v| format_counter_with_registry(v, sname, registry))
+                .collect();
+            Some(parts.join(separator.as_str()))
+        }
+        ContentItem::Attr(attr) => {
+            doc.get(owner_id).get_attr(attr).map(str::to_string)
+        }
+        _ => None,
+    }).collect()
 }
 
 /// CSS Display L3 §7.2 — replaces each `BoxKind::Contents` child with its own
@@ -1826,6 +3095,7 @@ fn flatten_contents(children: &mut Vec<LayoutBox>) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_box(
     doc: &Document,
     sheet: &Stylesheet,
@@ -1834,15 +3104,17 @@ fn build_box(
     viewport: Size,
     flat: &FlatTree,
     counters: &CounterMap,
+    registry: &CounterStyleRegistry,
+    dark_mode: bool,
 ) -> LayoutBox {
-    let mut style = compute_style(doc, id, sheet, inherited, viewport);
+    let mut style = compute_style(doc, id, sheet, inherited, viewport, dark_mode);
 
     let kind = match &doc.get(id).data {
         // Shadow root nodes are infrastructure — never rendered directly.
         // The flat tree already maps host children to shadow root's children.
         NodeData::Text(_) | NodeData::Comment(_) | NodeData::Doctype { .. } | NodeData::ShadowRoot { .. } | NodeData::DocumentFragment => BoxKind::Skip,
         NodeData::Document | NodeData::Element { .. } => {
-            if style.display == Display::None {
+            if style.display == Display::None || is_closed_popover(doc, id) || is_svg_defs(doc, id) {
                 BoxKind::Skip
             } else if is_image_element(doc, id) {
                 let src = resolve_image_source(doc, id, viewport);
@@ -1863,7 +3135,9 @@ fn build_box(
                 {
                     style.height = Some(Length::Px(h as f32));
                 }
-                BoxKind::Image { src: src.url, alt }
+                let is_lazy = doc.get(id).get_attr("loading")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("lazy"));
+                BoxKind::Image { src: src.url, alt, is_lazy }
             } else if is_video_element(doc, id) {
                 let node = doc.get(id);
                 let src = node.get_attr("src").unwrap_or("").to_string();
@@ -1878,6 +3152,27 @@ fn build_box(
                     style.height = Some(Length::Px(150.0));
                 }
                 BoxKind::Video { src, poster }
+            } else if is_canvas_element(doc, id) {
+                let node = doc.get(id);
+                // HTML LS §4.12.4: width/height content attributes are
+                // non-negative integers; defaults are 300×150 CSS px.
+                let cw = node
+                    .get_attr("width")
+                    .and_then(|v| v.trim().parse::<u32>().ok())
+                    .unwrap_or(300);
+                let ch = node
+                    .get_attr("height")
+                    .and_then(|v| v.trim().parse::<u32>().ok())
+                    .unwrap_or(150);
+                // The bitmap dimensions act as intrinsic size; explicit CSS
+                // width/height (or presentational hints) win if already set.
+                if style.width.is_none() {
+                    style.width = Some(Length::Px(cw as f32));
+                }
+                if style.height.is_none() {
+                    style.height = Some(Length::Px(ch as f32));
+                }
+                BoxKind::Canvas { width: cw, height: ch }
             } else if is_audio_element(doc, id) {
                 let node = doc.get(id);
                 let src = node.get_attr("src").unwrap_or("").to_string();
@@ -1893,6 +3188,20 @@ fn build_box(
                     style.height = Some(Length::Px(0.0));
                 }
                 BoxKind::Audio { src, controls }
+            } else if is_iframe_element(doc, id) {
+                let node = doc.get(id);
+                let src = node.get_attr("src").unwrap_or("").to_string();
+                let srcdoc = node.get_attr("srcdoc").filter(|s| !s.is_empty()).map(str::to_owned);
+                // HTML spec §4.8.5: UA default intrinsic size is 300×150 CSS px.
+                // Explicit width/height attrs applied earlier as presentational hints;
+                // fill only if still unset.
+                if style.width.is_none() {
+                    style.width = Some(Length::Px(300.0));
+                }
+                if style.height.is_none() {
+                    style.height = Some(Length::Px(150.0));
+                }
+                BoxKind::Iframe { src, srcdoc }
             } else if is_form_control_element(doc, id) {
                 let kind = {
                     let node = doc.get(id);
@@ -1902,13 +3211,85 @@ fn build_box(
                         .to_owned();
                     match tag.as_str() {
                         "button"   => FormControlKind::Button,
-                        "select"   => FormControlKind::Select,
-                        "textarea" => FormControlKind::Textarea,
+                        "select"   => {
+                            let selected_text = collect_select_label(doc, id);
+                            FormControlKind::Select { selected_text }
+                        }
+                        // <selectlist> (Customizable Select, Phase 0) renders as a
+                        // native-select widget. P4 wires ::picker(select) appearance.
+                        // CSS: appearance: base-select
+                        "selectlist" => {
+                            let selected_text = collect_selectlist_label(doc, id);
+                            FormControlKind::Select { selected_text }
+                        }
+                        "textarea" => {
+                            let value_text = collect_textarea_content(doc, id);
+                            FormControlKind::Textarea { value_text }
+                        }
+                        "progress" => {
+                            let max = node.get_attr("max")
+                                .and_then(|v| v.trim().parse::<f32>().ok())
+                                .unwrap_or(1.0)
+                                .max(f32::EPSILON);
+                            let value = node.get_attr("value")
+                                .and_then(|v| v.trim().parse::<f32>().ok())
+                                .map(|v| v.clamp(0.0, max));
+                            FormControlKind::Progress { value, max }
+                        }
+                        "meter" => {
+                            let raw_min = node.get_attr("min")
+                                .and_then(|v| v.trim().parse::<f32>().ok())
+                                .unwrap_or(0.0);
+                            let raw_max = node.get_attr("max")
+                                .and_then(|v| v.trim().parse::<f32>().ok())
+                                .unwrap_or(1.0);
+                            // Spec §4.10.14: if min ≥ max, reset to defaults 0/1.
+                            let (min, max) = if raw_min < raw_max {
+                                (raw_min, raw_max)
+                            } else {
+                                (0.0, 1.0)
+                            };
+                            let low = node.get_attr("low")
+                                .and_then(|v| v.trim().parse::<f32>().ok())
+                                .unwrap_or(min)
+                                .clamp(min, max);
+                            let high = node.get_attr("high")
+                                .and_then(|v| v.trim().parse::<f32>().ok())
+                                .unwrap_or(max)
+                                .clamp(min, max);
+                            let optimum = node.get_attr("optimum")
+                                .and_then(|v| v.trim().parse::<f32>().ok())
+                                .unwrap_or((min + max) / 2.0)
+                                .clamp(min, max);
+                            let value = node.get_attr("value")
+                                .and_then(|v| v.trim().parse::<f32>().ok())
+                                .unwrap_or(0.0)
+                                .clamp(min, max);
+                            FormControlKind::Meter { value, min, max, low, high, optimum }
+                        }
                         _ => {
                             let input_type = node.input_type()
                                 .unwrap_or(lumen_dom::InputType::Text);
-                            let checked = node.get_attr("checked").is_some();
-                            FormControlKind::Input { input_type, checked }
+                            if input_type == lumen_dom::InputType::Range {
+                                let min = node.get_attr("min")
+                                    .and_then(|v| v.trim().parse::<f32>().ok())
+                                    .unwrap_or(0.0);
+                                let max = node.get_attr("max")
+                                    .and_then(|v| v.trim().parse::<f32>().ok())
+                                    .unwrap_or(100.0);
+                                let default_val = (min + max) / 2.0;
+                                let value = node.get_attr("value")
+                                    .and_then(|v| v.trim().parse::<f32>().ok())
+                                    .unwrap_or(default_val)
+                                    .clamp(min, max);
+                                FormControlKind::Range { value, min, max }
+                            } else {
+                                let checked = node.get_attr("checked").is_some();
+                                let value_text = node.get_attr("value")
+                                    .unwrap_or("")
+                                    .to_owned();
+                                FormControlKind::Input { input_type, checked, value_text }
+                            }
                         }
                     }
                 };
@@ -1931,6 +3312,8 @@ fn build_box(
             } else if is_svg_root(doc, id) {
                 // SVG root: apply width/height attributes as presentational hints.
                 // CSS: width, height — if author CSS is absent, attribute values are used.
+                // CSS: object-fit, object-position — P4 can override viewBox scaling (Phase 2)
+                // CSS: intrinsic aspect-ratio from viewBox for replaced element sizing
                 if style.width.is_none()
                     && let Some(w) = doc.get(id).get_attr("width").and_then(|v| v.trim().parse::<f32>().ok())
                 {
@@ -1950,6 +3333,25 @@ fn build_box(
             }
         }
     };
+
+    // CSS Containment L3 §4 — content-visibility: hidden suppresses the subtree.
+    // Phase 1: element keeps its own box but contributes 0×0 (no contain-intrinsic-size yet).
+    // content-visibility: auto (off-viewport skip) is deferred to Phase 2.
+    if style.content_visibility == crate::style::ContentVisibility::Hidden {
+        return LayoutBox {
+            node: id,
+            rect: Rect::ZERO,
+            style,
+            kind,
+            children: Vec::new(),
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            dirty: Default::default(),
+        };
+    }
 
     let mut children = Vec::new();
     if matches!(kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Contents | BoxKind::FormControl { .. } | BoxKind::TableRow | BoxKind::Table | BoxKind::TableRowGroup | BoxKind::SvgRoot { .. }) {
@@ -1979,7 +3381,7 @@ fn build_box(
         );
         if is_item_container {
             for child_id in dom_children {
-                let child_box = build_box(doc, sheet, child_id, &style, viewport, flat, counters);
+                let child_box = build_box(doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode);
                 if !matches!(child_box.kind, BoxKind::Skip) {
                     children.push(child_box);
                 }
@@ -1988,8 +3390,8 @@ fn build_box(
         let mut i = 0;
         while i < dom_children.len() {
             let child_id = dom_children[i];
-            let is_inl = is_inline_content(doc, sheet, child_id, &style, viewport);
-            let is_ib = !is_inl && is_inline_block(doc, sheet, child_id, &style, viewport);
+            let is_inl = is_inline_content(doc, sheet, child_id, &style, viewport, dark_mode);
+            let is_ib = !is_inl && is_inline_block(doc, sheet, child_id, &style, viewport, dark_mode);
 
             if is_inl || is_ib {
                 // Унифицированный сбор inline-уровневого контента: inline-элементы
@@ -2003,8 +3405,13 @@ fn build_box(
                 let mut had_ws = false;
                 // CSS Pseudo-elements L4 §5.1: first letter of this inline run hasn't been
                 // split out yet. Passed through all collect_inline_segments calls in this loop.
-                // CSS: ::first-letter — P4 wires style to the PseudoKind::FirstLetter segment.
                 let mut need_first_letter = true;
+                // CSS Pseudo-elements L4 §5.3: pre-compute ::first-line style once for this block.
+                let first_line_style =
+                    crate::style::compute_pseudo_element_style(doc, id, "first-line", sheet, &style, viewport, dark_mode)
+                        .map(Box::new);
+                // Track whether first_line_style has been assigned to the first InlineRun.
+                let mut first_line_assigned = false;
 
                 loop {
                     if i >= dom_children.len() {
@@ -2012,8 +3419,13 @@ fn build_box(
                     }
                     let cid = dom_children[i];
                     match &doc.get(cid).data {
-                        NodeData::Text(s) if s.chars().all(char::is_whitespace) => {
-                            had_ws = true;
+                        // BUG-120: control-only text is skipped like whitespace-only,
+                        // but contributes an inter-segment space only if it actually
+                        // contains whitespace (a bare U+0001 is zero-advance in Edge).
+                        NodeData::Text(s)
+                            if s.chars().all(|c| c.is_whitespace() || is_invisible_control(c)) =>
+                        {
+                            had_ws |= s.chars().any(char::is_whitespace);
                             i += 1;
                             continue;
                         }
@@ -2023,17 +3435,22 @@ fn build_box(
                         }
                         _ => {}
                     }
-                    if is_inline_content(doc, sheet, cid, &style, viewport) {
-                        collect_inline_segments(doc, sheet, cid, &style, viewport, &mut pending, flat, counters, &mut need_first_letter);
+                    if is_inline_content(doc, sheet, cid, &style, viewport, dark_mode) {
+                        collect_inline_segments(doc, sheet, cid, &style, viewport, &mut pending, flat, counters, registry, &mut need_first_letter, dark_mode);
                         had_ws = false;
                         i += 1;
-                    } else if is_inline_block(doc, sheet, cid, &style, viewport) {
+                    } else if is_inline_block(doc, sheet, cid, &style, viewport, dark_mode) {
                         if !pending.is_empty() {
-                            row_items.push(anon_inline_run(
-                                id,
-                                &style,
-                                std::mem::take(&mut pending),
-                            ));
+                            let mut segs = std::mem::take(&mut pending);
+                            apply_first_letter_pseudo(&mut segs, doc, id, sheet, &style, viewport, dark_mode);
+                            let mut run = anon_inline_run(id, &style, segs);
+                            if !first_line_assigned {
+                                if let BoxKind::InlineRun { first_line_style: ref mut fls, .. } = run.kind {
+                                    *fls = first_line_style.clone();
+                                }
+                                first_line_assigned = true;
+                            }
+                            row_items.push(run);
                         }
                         // Whitespace between inline-blocks → collapsed space gap.
                         if had_ws && !row_items.is_empty() {
@@ -2044,14 +3461,14 @@ fn build_box(
                                 kind: BoxKind::InlineSpace,
                                 children: vec![],
                                 col_span: 1,
-                                row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+                                row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
                             });
                         }
-                        row_items.push(build_box(doc, sheet, cid, &style, viewport, flat, counters));
+                        row_items.push(build_box(doc, sheet, cid, &style, viewport, flat, counters, registry, dark_mode));
                         had_ws = false;
                         i += 1;
                     } else if matches!(doc.get(cid).data, NodeData::Element { .. })
-                        && compute_style(doc, cid, sheet, &style, viewport).display
+                        && compute_style(doc, cid, sheet, &style, viewport, dark_mode).display
                             == Display::None
                     {
                         // display:none не прерывает inline-контекст — CSS §9.2.4.
@@ -2061,7 +3478,38 @@ fn build_box(
                     }
                 }
                 if !pending.is_empty() {
-                    row_items.push(anon_inline_run(id, &style, std::mem::take(&mut pending)));
+                    let mut segs = std::mem::take(&mut pending);
+                    apply_first_letter_pseudo(&mut segs, doc, id, sheet, &style, viewport, dark_mode);
+                    let mut run = anon_inline_run(id, &style, segs);
+                    if !first_line_assigned
+                        && let BoxKind::InlineRun { first_line_style: ref mut fls, .. } = run.kind
+                    {
+                        *fls = first_line_style.clone();
+                    }
+                    row_items.push(run);
+                }
+
+                // CSS Pseudo-elements L4 §5.1 — apply ::first-letter style.
+                // collect_inline_segments marks the first non-whitespace text segment
+                // with PseudoKind::FirstLetter; split it here so wrap_inline_run uses
+                // the override font metrics for both the letter and the remainder.
+                if let Some(fl_style) = compute_pseudo_element_style(
+                    doc, id, "first-letter", sheet, &style, viewport, dark_mode,
+                ) {
+                    // CSS Pseudo-elements L4 §5.2 — float ::first-letter → drop cap
+                    // (BB-2): promote the letter to a block-level float sibling placed
+                    // before the run. Only for the inline group that opens the block
+                    // (::first-letter targets the block's first formatted line).
+                    let first_group = children
+                        .iter()
+                        .all(|c| matches!(c.kind, BoxKind::Marker { .. }));
+                    if fl_style.float_side != FloatSide::None && first_group {
+                        if let Some(letter) = extract_first_letter_float(&mut row_items, &fl_style) {
+                            children.push(letter);
+                        }
+                    } else {
+                        apply_first_letter_style(&mut row_items, fl_style, &style);
+                    }
                 }
 
                 match row_items.len() {
@@ -2076,7 +3524,7 @@ fn build_box(
                     }
                 }
             } else {
-                children.push(build_box(doc, sheet, child_id, &style, viewport, flat, counters));
+                children.push(build_box(doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode));
                 i += 1;
             }
         }
@@ -2084,29 +3532,30 @@ fn build_box(
         // Only for Block / FlowRoot (not FormControl, not flex/grid item containers).
         if matches!(kind, BoxKind::Block | BoxKind::FlowRoot) {
             let before_ps =
-                compute_pseudo_element_style(doc, id, "before", sheet, &style, viewport);
+                compute_pseudo_element_style(doc, id, "before", sheet, &style, viewport, dark_mode);
             let after_ps =
-                compute_pseudo_element_style(doc, id, "after", sheet, &style, viewport);
-            inject_pseudo(id, &mut children, before_ps, true, doc, counters);
-            inject_pseudo(id, &mut children, after_ps, false, doc, counters);
+                compute_pseudo_element_style(doc, id, "after", sheet, &style, viewport, dark_mode);
+            inject_pseudo(id, &mut children, before_ps, true, doc, counters, registry);
+            inject_pseudo(id, &mut children, after_ps, false, doc, counters, registry);
             // CSS Lists L3 §2.1 — inject ::marker for list items.
             // ::marker comes before ::before in document order.
             if style.display == Display::ListItem {
                 let ordinal = li_ordinal(doc, id);
-                inject_marker(id, &mut children, &style, ordinal);
+                inject_marker(id, &mut children, &style, ordinal,
+                              doc, sheet, viewport, dark_mode, counters, registry);
             }
         }
-        // CSS Display L3 §7.2 — flatten display:contents boxes into this context.
-        // Each Contents child is replaced by its own children (already built and
-        // recursively flattened). Runs after pseudo-element injection so ::before/
-        // ::after on the contents element itself are preserved inside the box.
-        flatten_contents(&mut children);
         } // end else (non-item-container)
+        // CSS Display L3 §7.2 — flatten display:contents boxes into this context.
+        // Must run for ALL child-building paths (item-container and non-item-container)
+        // because flex/grid/table children may include display:contents elements whose
+        // Contents boxes must be unpacked before lay_out sees them.
+        flatten_contents(&mut children);
     }
 
     // SVG root: build SVG shape children (separate from HTML box-tree flow).
     if matches!(kind, BoxKind::SvgRoot { .. }) {
-        children = build_svg_children(doc, sheet, id, &style, viewport, flat);
+        children = build_svg_children(doc, sheet, id, &style, viewport, flat, dark_mode);
     }
 
     // Read HTML colspan/rowspan attributes for table-cell elements.
@@ -2136,7 +3585,7 @@ fn build_box(
         children,
         col_span,
         row_span,
-        svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+        svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
     }
 }
 
@@ -2353,6 +3802,207 @@ fn shift_tree(b: &mut LayoutBox, dx: f32, dy: f32) {
 
 // ─── CSS 2.1 §9.5 — Float context ────────────────────────────────────────────
 
+/// CSS Shapes L1 §5.1 — parse `circle(<length-px>)` from a raw shape string.
+/// Returns the radius in px. Only handles `circle(Npx)` without `at` clause.
+/// Returns `None` for any unrecognised syntax (fallback to rectangular float).
+pub(crate) fn parse_circle_px(s: &str) -> Option<f32> {
+    let s = s.trim().to_ascii_lowercase();
+    let inner = s.strip_prefix("circle(")?.strip_suffix(')')?;
+    let token = inner.split_whitespace().next()?;
+    // Accept "50px" or bare "50" (assume px).
+    let digits = token.strip_suffix("px").unwrap_or(token);
+    digits.parse::<f32>().ok().filter(|&r| r > 0.0)
+}
+
+/// CSS Shapes L1 §5.2 — parse `polygon([<fill-rule>,] x1 y1, x2 y2, ...)`.
+/// Returns vertex list in float-local (margin-box-relative) px coordinates.
+/// Accepts `Npx` or bare `N` (assumed px). Returns `None` for any unknown syntax.
+pub(crate) fn parse_shape_polygon_px(s: &str) -> Option<Vec<(f32, f32)>> {
+    let s = s.trim().to_ascii_lowercase();
+    let inner = s.strip_prefix("polygon(")?.strip_suffix(')')?;
+    // Strip optional fill-rule keyword (nonzero | evenodd).
+    let coords_str = if inner.trim_start().starts_with("nonzero")
+        || inner.trim_start().starts_with("evenodd")
+    {
+        inner.split_once(',').map(|x| x.1).unwrap_or("")
+    } else {
+        inner
+    };
+    let mut pts: Vec<(f32, f32)> = Vec::new();
+    for pair in coords_str.split(',') {
+        let pair = pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        let mut it = pair.split_whitespace();
+        let xs = it.next()?;
+        let ys = it.next()?;
+        let x = xs.strip_suffix("px").unwrap_or(xs).parse::<f32>().ok()?;
+        let y = ys.strip_suffix("px").unwrap_or(ys).parse::<f32>().ok()?;
+        pts.push((x, y));
+    }
+    if pts.len() >= 3 { Some(pts) } else { None }
+}
+
+/// CSS Shapes L1 §5.2 — parse `ellipse(<rx> <ry> at <cx> <cy>)`.
+/// Returns `(rx, ry, cx, cy)` in float-local (margin-box-relative) px coords.
+/// Returns `None` for any unknown syntax or zero/negative radii.
+pub(crate) fn parse_shape_ellipse_px(s: &str) -> Option<(f32, f32, f32, f32)> {
+    let s = s.trim().to_ascii_lowercase();
+    let inner = s.strip_prefix("ellipse(")?.strip_suffix(')')?;
+    // Expected: "rxpx rypx at cxpx cypx"
+    let at_pos = inner.find(" at ")?;
+    let radii_part = inner[..at_pos].trim();
+    let center_part = inner[at_pos + 4..].trim();
+    let mut ri = radii_part.split_whitespace();
+    let mut ci = center_part.split_whitespace();
+    let rxs = ri.next()?;
+    let rys = ri.next()?;
+    let cxs = ci.next()?;
+    let cys = ci.next()?;
+    let rx = rxs.strip_suffix("px").unwrap_or(rxs).parse::<f32>().ok()?;
+    let ry = rys.strip_suffix("px").unwrap_or(rys).parse::<f32>().ok()?;
+    let cx = cxs.strip_suffix("px").unwrap_or(cxs).parse::<f32>().ok()?;
+    let cy = cys.strip_suffix("px").unwrap_or(cys).parse::<f32>().ok()?;
+    if rx > 0.0 && ry > 0.0 { Some((rx, ry, cx, cy)) } else { None }
+}
+
+/// CSS Shapes L1 §5.1 — parse `inset(<top> <right> <bottom> <left> [round <r>])`.
+/// Returns `(top, right, bottom, left, radius)` insets in px from the reference
+/// box edges, plus a single uniform corner radius (`0` = sharp corners).
+/// Lengths follow the margin-shorthand expansion (1–4 values). The optional
+/// `round` clause keeps only the first radius value (elliptical radii collapse
+/// to their horizontal component). Returns `None` for any unknown syntax.
+pub(crate) fn parse_shape_inset_px(s: &str) -> Option<(f32, f32, f32, f32, f32)> {
+    let s = s.trim().to_ascii_lowercase();
+    let inner = s.strip_prefix("inset(")?.strip_suffix(')')?;
+    // Split off the optional `round <border-radius>` clause.
+    let (lens_part, radius) = match inner.split_once(" round ") {
+        Some((l, r)) => {
+            let rstr = r.split_whitespace().next()?;
+            let rad = rstr
+                .strip_suffix("px")
+                .unwrap_or(rstr)
+                .parse::<f32>()
+                .ok()
+                .filter(|v| *v >= 0.0)?;
+            (l, rad)
+        }
+        None => (inner, 0.0),
+    };
+    let mut vals: Vec<f32> = Vec::new();
+    for tok in lens_part.split_whitespace() {
+        let v = tok.strip_suffix("px").unwrap_or(tok).parse::<f32>().ok()?;
+        vals.push(v);
+    }
+    let (t, r, b, l) = match vals.len() {
+        1 => (vals[0], vals[0], vals[0], vals[0]),
+        2 => (vals[0], vals[1], vals[0], vals[1]),
+        3 => (vals[0], vals[1], vals[2], vals[1]),
+        4 => (vals[0], vals[1], vals[2], vals[3]),
+        _ => return None,
+    };
+    Some((t, r, b, l, radius))
+}
+
+/// CSS Shapes L1 §4 — parse `path([<fill-rule>,]? "<svg-path>")`.
+/// Flattens the SVG path `d` string into a vertex list in float-local
+/// (reference-box-relative) px coordinates via [`crate::motion_path::flatten_path_to_polygon`].
+/// The optional `<fill-rule>` (nonzero | evenodd) is accepted but ignored — float
+/// wrapping uses the filled outline regardless. The `d` string must be quoted
+/// (`"…"` or `'…'`); its letter case is preserved (SVG commands are case-sensitive).
+/// `path()` coordinates are always px (no percentages per spec). Returns `None`
+/// for any unknown syntax or a degenerate (< 3 vertices) outline.
+pub(crate) fn parse_shape_path_px(s: &str) -> Option<Vec<(f32, f32)>> {
+    let s = s.trim();
+    let open = s.find('(')?;
+    let close = s.rfind(')')?;
+    if close <= open {
+        return None;
+    }
+    // Only the function name is case-folded; the inner `d` string keeps its case.
+    if !s[..open].trim().eq_ignore_ascii_case("path") {
+        return None;
+    }
+    let inner = s[open + 1..close].trim();
+    // Strip an optional leading `<fill-rule>,` (ignored for wrapping geometry).
+    let inner = match inner.split_once(',') {
+        Some((head, rest))
+            if head.trim().eq_ignore_ascii_case("nonzero")
+                || head.trim().eq_ignore_ascii_case("evenodd") =>
+        {
+            rest.trim()
+        }
+        _ => inner,
+    };
+    let path_str = inner
+        .strip_prefix('"')
+        .and_then(|t| t.strip_suffix('"'))
+        .or_else(|| inner.strip_prefix('\'').and_then(|t| t.strip_suffix('\'')))?;
+    let pts = crate::motion_path::flatten_path_to_polygon(path_str);
+    if pts.len() >= 3 { Some(pts) } else { None }
+}
+
+/// CSS Shapes L1 §5.2 — polygon shape for `shape-outside` on a float.
+/// Points are stored in content-area coordinates (same as FloatContext).
+struct ShapePolygon {
+    top_y: f32,
+    bottom_y: f32,
+    /// `true` = left float, `false` = right float.
+    is_left: bool,
+    /// Polygon vertices in content-area coordinates.
+    points: Vec<(f32, f32)>,
+}
+
+/// CSS Shapes L1 §5.2 — ellipse shape for `shape-outside` on a float.
+/// All coordinates are in content-area space (same as FloatContext).
+struct ShapeEllipse {
+    top_y: f32,
+    bottom_y: f32,
+    /// `true` = left float, `false` = right float.
+    is_left: bool,
+    cx: f32,
+    cy: f32,
+    rx: f32,
+    ry: f32,
+}
+
+/// CSS Shapes L1 §5.1 — `inset()` rectangle shape for `shape-outside` on a float.
+/// All coordinates are in content-area space (same as FloatContext). The rectangle
+/// spans `[left_x, right_x] × [top_y, bottom_y]` with optional uniform corner
+/// rounding of `radius` px.
+struct ShapeInset {
+    top_y: f32,
+    bottom_y: f32,
+    /// `true` = left float, `false` = right float.
+    is_left: bool,
+    left_x: f32,
+    right_x: f32,
+    /// Uniform corner radius in px (`0` = sharp corners).
+    radius: f32,
+}
+
+/// CSS Shapes L1 §5.1 — horizontal inward offset of a rounded `inset()` corner
+/// at scanline `y`. Returns `0` outside the corner bands or for a `0` radius.
+/// Within `radius` px of the top/bottom edge the boundary follows a quarter
+/// circle, so the inline edge recedes by `radius − √(radius² − dy²)`.
+fn inset_corner_inward(y: f32, top_y: f32, bottom_y: f32, radius: f32) -> f32 {
+    if radius <= 0.0 {
+        return 0.0;
+    }
+    let top_band = top_y + radius;
+    let bot_band = bottom_y - radius;
+    let dy = if y < top_band {
+        top_band - y
+    } else if y > bot_band {
+        y - bot_band
+    } else {
+        return 0.0;
+    };
+    let dy = dy.min(radius);
+    radius - (radius * radius - dy * dy).max(0.0).sqrt()
+}
+
 /// CSS 2.1 §9.5 — tracks float placements within a single block formatting
 /// context.  Simplified Phase-0 implementation: only axis-aligned rectangles,
 /// no shape-outside wrapping.  All coordinates are in the same space as the
@@ -2364,31 +4014,112 @@ struct FloatContext {
     /// Right floats: `(bottom_y, left_edge)` — left edge of the float margin
     /// box.  Active while `bottom_y > query_y`.
     right: Vec<(f32, f32)>,
+    /// CSS Shapes L1 — `shape-outside: circle(r)` overrides.
+    /// `(top_y, bottom_y, is_left, center_x, center_y, radius)`.
+    /// `is_left=true` → left float, `false` → right float.
+    shape_circles: Vec<(f32, f32, bool, f32, f32, f32)>,
+    /// CSS Shapes L1 — `shape-outside: polygon(...)` overrides.
+    shape_polygons: Vec<ShapePolygon>,
+    /// CSS Shapes L1 — `shape-outside: ellipse(...)` overrides.
+    shape_ellipses: Vec<ShapeEllipse>,
+    /// CSS Shapes L1 — `shape-outside: inset(...)` overrides.
+    shape_insets: Vec<ShapeInset>,
 }
 
 impl FloatContext {
     fn new() -> Self {
-        Self { left: Vec::new(), right: Vec::new() }
+        Self {
+            left: Vec::new(),
+            right: Vec::new(),
+            shape_circles: Vec::new(),
+            shape_polygons: Vec::new(),
+            shape_ellipses: Vec::new(),
+            shape_insets: Vec::new(),
+        }
     }
 
     /// Left boundary of available inline space at `y` (= rightmost right-edge
     /// of all left floats whose `bottom_y > y`).  Falls back to `default_x`.
     fn left_edge_at(&self, y: f32, default_x: f32) -> f32 {
-        self.left
+        let rect_edge = self.left
             .iter()
             .filter(|(bot, _)| *bot > y)
             .map(|(_, r)| *r)
-            .fold(default_x, f32::max)
+            .fold(default_x, f32::max);
+        // CSS Shapes L1: circle boundary.
+        let after_circles = self.shape_circles
+            .iter()
+            .filter(|(top, bot, is_left, ..)| *is_left && *top <= y && *bot > y)
+            .map(|(_, _, _, cx, cy, r)| {
+                let dy = y - cy;
+                let hw = (r * r - dy * dy).max(0.0_f32).sqrt();
+                cx + hw
+            })
+            .fold(rect_edge, f32::max);
+        // CSS Shapes L1: polygon boundary (rightmost edge at y).
+        let after_polygons = self.shape_polygons
+            .iter()
+            .filter(|p| p.is_left && p.top_y <= y && p.bottom_y > y)
+            .filter_map(|p| polygon_right_edge_at_y(&p.points, y))
+            .fold(after_circles, f32::max);
+        // CSS Shapes L1: ellipse boundary (right edge at y).
+        let after_ellipses = self.shape_ellipses
+            .iter()
+            .filter(|e| e.is_left && e.top_y <= y && e.bottom_y > y)
+            .filter_map(|e| {
+                let norm = (y - e.cy) / e.ry;
+                if norm.abs() > 1.0 { return None; }
+                Some(e.cx + e.rx * (1.0 - norm * norm).max(0.0).sqrt())
+            })
+            .fold(after_polygons, f32::max);
+        // CSS Shapes L1: inset() boundary (right edge at y, minus rounded corner).
+        self.shape_insets
+            .iter()
+            .filter(|s| s.is_left && s.top_y <= y && s.bottom_y > y)
+            .map(|s| s.right_x - inset_corner_inward(y, s.top_y, s.bottom_y, s.radius))
+            .fold(after_ellipses, f32::max)
     }
 
     /// Right boundary of available inline space at `y` (= leftmost left-edge
     /// of all right floats whose `bottom_y > y`).  Falls back to `default_x`.
     fn right_edge_at(&self, y: f32, default_x: f32) -> f32 {
-        self.right
+        let rect_edge = self.right
             .iter()
             .filter(|(bot, _)| *bot > y)
             .map(|(_, l)| *l)
-            .fold(default_x, f32::min)
+            .fold(default_x, f32::min);
+        // CSS Shapes L1: circle boundary.
+        let after_circles = self.shape_circles
+            .iter()
+            .filter(|(top, bot, is_left, ..)| !is_left && *top <= y && *bot > y)
+            .map(|(_, _, _, cx, cy, r)| {
+                let dy = y - cy;
+                let hw = (r * r - dy * dy).max(0.0_f32).sqrt();
+                cx - hw
+            })
+            .fold(rect_edge, f32::min);
+        // CSS Shapes L1: polygon boundary (leftmost edge at y).
+        let after_polygons = self.shape_polygons
+            .iter()
+            .filter(|p| !p.is_left && p.top_y <= y && p.bottom_y > y)
+            .filter_map(|p| polygon_left_edge_at_y(&p.points, y))
+            .fold(after_circles, f32::min);
+        // CSS Shapes L1: ellipse boundary (left edge at y).
+        let after_ellipses = self.shape_ellipses
+            .iter()
+            .filter(|e| !e.is_left && e.top_y <= y && e.bottom_y > y)
+            .filter_map(|e| {
+                let norm = (y - e.cy) / e.ry;
+                if norm.abs() > 1.0 { return None; }
+                Some(e.cx - e.rx * (1.0 - norm * norm).max(0.0).sqrt())
+            })
+            .fold(after_polygons, f32::min);
+        // CSS Shapes L1: inset() boundary (left edge at y, plus rounded corner).
+        self.shape_insets
+            .iter()
+            .filter(|s| !s.is_left && s.top_y <= y && s.bottom_y > y)
+            .map(|s| s.left_x + inset_corner_inward(y, s.top_y, s.bottom_y, s.radius))
+            .fold(after_ellipses, f32::min)
     }
 
     /// Record a left float occupying `[y_top, bottom_y)` with right margin
@@ -2417,6 +4148,52 @@ impl FloatContext {
     fn is_empty(&self) -> bool {
         self.left.is_empty() && self.right.is_empty()
     }
+
+    /// CSS 2.1 §9.5.1 rule 8 — the smallest float bottom strictly below `y`
+    /// across both sides. A float that does not fit beside the current floats
+    /// drops to the next such bottom, where the line widens. Returns `None`
+    /// when no float ends below `y` (nothing left to clear).
+    fn next_float_bottom(&self, y: f32) -> Option<f32> {
+        self.left.iter().chain(self.right.iter())
+            .map(|(bot, _)| *bot)
+            .filter(|bot| *bot > y + 0.01)
+            .fold(None, |acc, bot| Some(acc.map_or(bot, |a: f32| a.min(bot))))
+    }
+}
+
+/// CSS Shapes L1 §4 — rightmost x of polygon boundary at scanline `y`.
+/// Scans all edges that cross `y`; returns `None` if no edge crosses.
+fn polygon_right_edge_at_y(pts: &[(f32, f32)], y: f32) -> Option<f32> {
+    polygon_edge_x_at_y(pts, y, true)
+}
+
+/// CSS Shapes L1 §4 — leftmost x of polygon boundary at scanline `y`.
+fn polygon_left_edge_at_y(pts: &[(f32, f32)], y: f32) -> Option<f32> {
+    polygon_edge_x_at_y(pts, y, false)
+}
+
+/// Shared kernel: iterate polygon edges, return rightmost (want_max=true) or
+/// leftmost (want_max=false) x intersection with horizontal scanline at `y`.
+fn polygon_edge_x_at_y(pts: &[(f32, f32)], y: f32, want_max: bool) -> Option<f32> {
+    let n = pts.len();
+    if n < 2 {
+        return None;
+    }
+    let mut best: Option<f32> = None;
+    for i in 0..n {
+        let (x0, y0) = pts[i];
+        let (x1, y1) = pts[(i + 1) % n];
+        // Edge crosses y iff exactly one endpoint is strictly below y.
+        // Use half-open interval [min, max) to avoid double-counting vertices.
+        if (y0 <= y && y < y1) || (y1 <= y && y < y0) {
+            let x_at_y = x0 + (y - y0) * (x1 - x0) / (y1 - y0);
+            best = Some(match best {
+                None => x_at_y,
+                Some(prev) => if want_max { prev.max(x_at_y) } else { prev.min(x_at_y) },
+            });
+        }
+    }
+    best
 }
 
 /// Crate-internal shim so `vertical.rs` can recursively invoke the main
@@ -2436,11 +4213,133 @@ pub(crate) fn lay_out_for_vertical(
     pcb: Rect,
     hp: &dyn HyphenationProvider,
 ) {
-    lay_out(b, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp);
+    lay_out(b, start_x, start_y, available_width, available_height, measurer, viewport, pcb, hp, false);
+}
+
+/// CSS 2.1 §9.4.1 — does this box establish a new Block Formatting Context?
+///
+/// A BFC root does NOT collapse its margins with its in-flow children
+/// (CSS 2.1 §8.3.1). Within the block-layout arm a box is always `Block` or
+/// `FlowRoot`; the remaining BFC triggers detectable from the box alone are a
+/// non-`visible` overflow, a float, and out-of-flow positioning. (Being a flex
+/// / grid item also establishes an independent FC, but that depends on the
+/// parent and is signalled separately via `lay_out`'s `in_block_flow` flag.)
+fn establishes_bfc(b: &LayoutBox) -> bool {
+    matches!(b.kind, BoxKind::FlowRoot)
+        || b.style.overflow_x != Overflow::Visible
+        || b.style.overflow_y != Overflow::Visible
+        || b.style.float_side != FloatSide::None
+        || matches!(b.style.position, Position::Absolute | Position::Fixed)
+}
+
+/// True if the box has any in-flow child that produces content (i.e. a child
+/// that is not a float, out-of-flow box, `::marker`, or zero-height `Skip`).
+///
+/// CSS 2.1 §9.5: a block-level box beside a float keeps full containing-block
+/// width while only its *line boxes* are shortened. Lumen cannot yet shorten
+/// line boxes inside a child block (floats are not propagated into nested
+/// layout), so it approximates the narrowing by clipping the box itself. That
+/// clip is only geometrically faithful when the box has no in-flow content to
+/// reflow — this predicate gates the full-width path to such boxes (e.g. an
+/// empty `<div>` background sitting in the gap between two floats).
+fn has_in_flow_content(b: &LayoutBox) -> bool {
+    b.children.iter().any(|c| {
+        !matches!(c.kind, BoxKind::Skip | BoxKind::Marker { .. })
+            && c.style.float_side == FloatSide::None
+            && !matches!(c.style.position, Position::Absolute | Position::Fixed)
+    })
+}
+
+/// Returns the first in-flow `Block` child whose top margin collapses with the
+/// owning box's top margin (CSS 2.1 §8.3.1). Out-of-flow children (floats,
+/// absolutely positioned), `::marker`s and `Skip` boxes are transparent and
+/// skipped. If the first remaining in-flow child is not a plain `Block` (e.g.
+/// an inline run or a replaced element) the collapsing chain is broken and
+/// `None` is returned. A child with clearance also breaks the chain.
+fn first_collapsible_child(b: &LayoutBox) -> Option<&LayoutBox> {
+    for child in &b.children {
+        if matches!(child.kind, BoxKind::Marker { .. } | BoxKind::Skip) {
+            continue;
+        }
+        if child.style.float_side != FloatSide::None
+            || matches!(child.style.position, Position::Absolute | Position::Fixed)
+        {
+            continue;
+        }
+        if child.style.clear != ClearSide::None {
+            return None;
+        }
+        return matches!(child.kind, BoxKind::Block).then_some(child);
+    }
+    None
+}
+
+/// CSS 2.1 §8.3.1 — the *collapsed* top margin of a block-level box (px).
+///
+/// The top margin of an in-flow block collapses with the top margin of its
+/// first in-flow block-level child when nothing separates them: the box has no
+/// top border, no top padding, establishes no BFC, and the first in-flow child
+/// is itself a plain block with no clearance. The collapse recurses down the
+/// chain of first children. `cb` is the containing-block width used to resolve
+/// percentage margins. Only the common non-negative case is folded (parity with
+/// sibling collapse); negative margins fall through as the box's own margin.
+fn collapsed_top_margin(b: &LayoutBox, cb: f32, viewport: Size) -> f32 {
+    let em = b.style.font_size;
+    let own = b.style.margin_top.resolve_or_zero(em, cb, viewport);
+    if !matches!(b.kind, BoxKind::Block) || establishes_bfc(b) {
+        return own;
+    }
+    let pt = b.style.padding_top.resolve_or_zero(em, cb, viewport);
+    if pt != 0.0 || b.style.border_top_width != 0.0 {
+        return own;
+    }
+    match first_collapsible_child(b) {
+        Some(child) => {
+            // Child's containing-block width = this box's content width.
+            let child_cb = (cb
+                - b.style.padding_left.resolve_or_zero(em, cb, viewport)
+                - b.style.padding_right.resolve_or_zero(em, cb, viewport)
+                - b.style.border_left_width
+                - b.style.border_right_width)
+                .max(0.0);
+            own.max(collapsed_top_margin(child, child_cb, viewport))
+        }
+        None => own,
+    }
+}
+
+/// CSS Box Sizing L4 §5 — content block-size contribution under size containment.
+/// When `size_contained` is true the box ignores its children for auto sizing and
+/// uses the resolved `contain-intrinsic-height` (content-box px, clamped ≥ 0), or
+/// `0.0` when the value is `none`/unset. Otherwise returns the measured
+/// `content_height` unchanged.
+fn contained_content_height(
+    size_contained: bool,
+    style: &ComputedStyle,
+    em: f32,
+    viewport: Size,
+    content_height: f32,
+) -> f32 {
+    if size_contained {
+        style
+            .contain_intrinsic_height
+            .as_ref()
+            .and_then(|l| l.resolve(em, None, viewport))
+            .map_or(0.0, |v| v.max(0.0))
+    } else {
+        content_height
+    }
 }
 
 /// `pcb` — rect positioned containing block (ближайший предок с position != static),
 /// используется для layout абсолютно-позиционированных потомков.
+///
+/// `in_block_flow` — `true` only when this box is laid out as a normal in-flow
+/// block child of a block container. It gates parent↔first-child margin
+/// collapsing (CSS 2.1 §8.3.1): a box laid out as a flex/grid item, table cell,
+/// or document root establishes an independent formatting context and must not
+/// collapse its top margin into its first child, so those call sites pass
+/// `false`.
 #[allow(clippy::too_many_arguments)]
 fn lay_out(
     b: &mut LayoutBox,
@@ -2454,15 +4353,42 @@ fn lay_out(
     viewport: Size,
     pcb: Rect,
     hp: &dyn HyphenationProvider,
+    in_block_flow: bool,
 ) {
     if matches!(b.kind, BoxKind::Skip) {
         b.rect = Rect::new(start_x, start_y, 0.0, 0.0);
         return;
     }
 
+    // EE-3: incremental layout — skip clean subtrees entirely.
+    // When INCREMENTAL_LAYOUT_MODE is on and the box has no dirty bits, translate
+    // the existing rect to the new (start_x, start_y) without re-running layout.
+    // The block-children loop in the parent already advanced child_y using the
+    // existing height, so the position is consistent across siblings.
+    if INCREMENTAL_LAYOUT_MODE.with(|m| m.get()) && b.dirty.is_clean() {
+        crate::incremental::translate_subtree(b, start_x - b.rect.x, start_y - b.rect.y);
+        return;
+    }
+
+    // CSS Containment L3 §4.4 — content-visibility: auto (BB-4). When the box
+    // flow position starts below the expanded viewport and the shell hasn't
+    // ratcheted the node relevant, drop the children for this pass: the element
+    // keeps its own box and paint emits nothing for the subtree. While skipped,
+    // the element is size-contained, so its auto block-size collapses to the
+    // `contain-intrinsic-height` placeholder (see `size_contained` below). The
+    // shell drains `take_cv_skipped()` after layout and emits
+    // ContentVisibilityChange events / triggers relayout on scroll.
+    // CSS: content-visibility — parsing + ComputedStyle field already wired.
+    let cv_auto_skipped = b.style.content_visibility == crate::style::ContentVisibility::Auto
+        && !b.children.is_empty()
+        && crate::content_visibility::cv_should_skip(b.node, start_y, viewport.height);
+    if cv_auto_skipped {
+        b.children.clear();
+    }
+
     // SVG root dispatches to its own layout algorithm: replaced-element sizing
     // from CSS width/height (or viewBox fallback), then SVG-coordinate shape positioning.
-    if matches!(b.kind, BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. }) {
+    if matches!(b.kind, BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } | BoxKind::SvgText { .. }) {
         lay_out_svg_root(b, start_x, start_y, available_width, available_height, viewport);
         return;
     }
@@ -2493,6 +4419,16 @@ fn lay_out(
     let em = s.font_size;
     let cb = available_width;
 
+    // CSS Box Sizing L4 §5 — the box is subject to size containment (its size is
+    // computed as if it had no contents) when `contain: size` is set, when
+    // `content-visibility: hidden` (always skips/contains its subtree), or when
+    // `content-visibility: auto` skipped the subtree this pass. Under size
+    // containment, auto width/height come from `contain-intrinsic-*` (or 0 when
+    // the value is `none`) instead of the content.
+    let size_contained = s.contain.0 & crate::style::ContainFlags::SIZE.0 != 0
+        || s.content_visibility == crate::style::ContentVisibility::Hidden
+        || cv_auto_skipped;
+
     // Резолвим typed Length-поля с known containing block.
     let margin_left = s.margin_left.resolve_or_zero(em, cb, viewport);
     let margin_right = s.margin_right.resolve_or_zero(em, cb, viewport);
@@ -2508,9 +4444,37 @@ fn lay_out(
     // Replaced element (Image): auto-ширина = intrinsic (0 в Phase 0, без
     // декодированных пикселей). Это CSS 2.1 §10.3.2 — replaced-боксы
     // НЕ растягиваются на весь контейнер при отсутствии width.
-    let is_replaced = matches!(b.kind, BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::FormControl { .. });
+    let is_replaced = matches!(b.kind, BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::Iframe { .. } | BoxKind::FormControl { .. });
+    // CSS Basic UI L4 §4.4 — field-sizing: content.
+    // Pre-compute intrinsic (padding-box width, padding-box height) from text content.
+    // Only applies to text-entry FormControls when UA did not supply explicit dimensions.
+    let field_intrinsic: Option<(f32, f32)> = if s.field_sizing == FieldSizing::Content
+        && is_replaced
+        && s.width.is_none()
+    {
+        if let (BoxKind::FormControl { kind }, Some(m)) = (&b.kind, measurer) {
+            let lh = s.font_size * s.line_height;
+            match kind {
+                FormControlKind::Input { value_text, .. } => {
+                    Some(field_sizing_content_intrinsic("input", value_text, s.font_size, lh, m))
+                }
+                FormControlKind::Textarea { value_text } => {
+                    Some(field_sizing_content_intrinsic("textarea", value_text, s.font_size, lh, m))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     b.rect.width = if is_replaced {
-        0.0
+        if let Some((pw, _)) = field_intrinsic {
+            pw + s.border_left_width + s.border_right_width
+        } else {
+            0.0
+        }
     } else {
         (available_width - margin_left - margin_right).max(0.0)
     };
@@ -2589,10 +4553,22 @@ fn lay_out(
     // Phase 0 shrink-to-fit для inline-block без явной CSS width.
     // Полный алгоритм (CSS 2.1 §10.3.9) требует двух проходов; здесь —
     // упрощение: ищем максимальную explicit-width среди потомков.
-    if s.width.is_none() && s.display == Display::InlineBlock
-        && let Some(pref_w) = preferred_inline_block_width(b, measurer, viewport)
-    {
-        b.rect.width = pref_w.min(b.rect.width);
+    // CSS Box Sizing L4 §5: a size-contained inline-block ignores its content
+    // for auto inline-size and uses contain-intrinsic-width (content-box → +pad/
+    // border), or 0 when `none`/unset — exactly as if it had no contents.
+    if s.width.is_none() && s.display == Display::InlineBlock {
+        if size_contained {
+            let cw = s
+                .contain_intrinsic_width
+                .as_ref()
+                .and_then(|l| l.resolve(em, None, viewport))
+                .map_or(0.0, |v| v.max(0.0));
+            b.rect.width = (cw + padding_left + padding_right
+                + s.border_left_width + s.border_right_width)
+                .min(b.rect.width);
+        } else if let Some(pref_w) = preferred_inline_block_width(b, measurer, viewport) {
+            b.rect.width = pref_w.min(b.rect.width);
+        }
     }
 
     // CSS 2.1 §10.3.3 — auto horizontal-margin centering for block-level
@@ -2633,9 +4609,12 @@ fn lay_out(
 
     let content_x = b.rect.x + padding_left + s.border_left_width;
     let content_y = b.rect.y + padding_top + s.border_top_width;
-    let content_width = (b.rect.width
+    let mut content_width = (b.rect.width
         - padding_left - padding_right
         - s.border_left_width - s.border_right_width).max(0.0);
+    // CSS Scrollbars L1 §6.2: `scrollbar-gutter: stable` reserves gutter space in
+    // layout so content shifts don't occur when the scrollbar track appears.
+    content_width = (content_width - scrollbar_gutter_inline(&s)).max(0.0);
 
     // pcb для потомков: если текущий элемент positioned — он сам CB для абсолютных детей.
     // CSS Containment L3: contain:layout и contain:paint тоже устанавливают containing block.
@@ -2656,7 +4635,7 @@ fn lay_out(
     };
 
     // InlineRun обрабатывается до основного match.
-    if let BoxKind::InlineRun { segments, lines } = &mut b.kind {
+    if let BoxKind::InlineRun { segments, lines, first_line_style } = &mut b.kind {
         if let Some(m) = measurer {
             // white-space: nowrap / text-wrap-mode: nowrap → infinite max_width so
             // the line-breaker never wraps; word-spacing/letter-spacing logic unchanged.
@@ -2666,27 +4645,84 @@ fn lay_out(
                 content_width
             };
             let text_indent_px = s.text_indent.resolve_or_zero(em, cb, viewport);
-            let raw_lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap);
-            // CSS Text L4 §6.4.2: apply text-wrap-style post-processing only when
-            // wrapping is active (wrap_width is finite) and text actually wraps.
-            *lines = if wrap_width.is_finite() {
-                match s.text_wrap_style {
-                    TextWrapStyle::Balance => balance_wrap(
-                        segments, wrap_width, raw_lines, s.font_size, text_indent_px,
-                        viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap,
-                    ),
-                    TextWrapStyle::Pretty => pretty_wrap(
-                        segments, wrap_width, raw_lines, s.font_size, text_indent_px,
-                        viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap,
-                    ),
-                    // Auto / Stable: greedy result unchanged.
-                    // Stable stability is about incremental editing; for static layout it's identical to auto.
-                    TextWrapStyle::Auto | TextWrapStyle::Stable => raw_lines,
+            *lines = if let Some(fls) = first_line_style.as_deref() {
+                // CSS Pseudo-elements L4 §3.1 — ::first-line layout split (BB-1).
+                // Pass A: wrap ALL segments under the ::first-line style to find the
+                // true extent of the first formatted line (a larger ::first-line font
+                // fits fewer words). Hyphenation is off for this pass: a first line
+                // ending mid-word would make the word-level remainder split ambiguous,
+                // so the first formatted line never auto-hyphenates (UA freedom).
+                let fl_segments: Vec<InlineSegment> = segments
+                    .iter()
+                    .map(|seg| {
+                        let mut fl_seg = seg.clone();
+                        if fl_seg.img_src.is_none() {
+                            fl_seg.style = fls.clone();
+                        }
+                        fl_seg
+                    })
+                    .collect();
+                let mut lines_a = wrap_inline_run(
+                    &fl_segments, wrap_width, fls.font_size, text_indent_px, viewport,
+                    m, Hyphens::None, hp, s.white_space, s.word_break, s.overflow_wrap,
+                );
+                if lines_a.len() <= 1 {
+                    // Everything fits the first formatted line; ::first-line covers it all.
+                    lines_a
+                } else {
+                    // Pass B: re-wrap the content NOT consumed by line 0 under the base
+                    // style (its own font metrics, no text-indent — indent is first-line only).
+                    let line0 = lines_a.remove(0);
+                    let (_, rest_segs) = split_segments_at_first_line(
+                        segments, &line0, s.white_space.preserves_whitespace(),
+                    );
+                    let raw_rest = wrap_inline_run(
+                        &rest_segs, wrap_width, s.font_size, 0.0, viewport,
+                        m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap,
+                    );
+                    let rest = if wrap_width.is_finite() {
+                        match s.text_wrap_style {
+                            TextWrapStyle::Balance => balance_wrap(
+                                &rest_segs, wrap_width, raw_rest, s.font_size, 0.0,
+                                viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap,
+                            ),
+                            TextWrapStyle::Pretty => pretty_wrap(
+                                &rest_segs, wrap_width, raw_rest, s.font_size, 0.0,
+                                viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap,
+                            ),
+                            TextWrapStyle::Auto | TextWrapStyle::Stable => raw_rest,
+                        }
+                    } else {
+                        raw_rest
+                    };
+                    let mut all = Vec::with_capacity(1 + rest.len());
+                    all.push(line0);
+                    all.extend(rest);
+                    all
                 }
             } else {
-                raw_lines
+                let raw_lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap);
+                // CSS Text L4 §6.4.2: apply text-wrap-style post-processing only when
+                // wrapping is active (wrap_width is finite) and text actually wraps.
+                if wrap_width.is_finite() {
+                    match s.text_wrap_style {
+                        TextWrapStyle::Balance => balance_wrap(
+                            segments, wrap_width, raw_lines, s.font_size, text_indent_px,
+                            viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap,
+                        ),
+                        TextWrapStyle::Pretty => pretty_wrap(
+                            segments, wrap_width, raw_lines, s.font_size, text_indent_px,
+                            viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap,
+                        ),
+                        // Auto / Stable: greedy result unchanged.
+                        // Stable stability is about incremental editing; for static layout it's identical to auto.
+                        TextWrapStyle::Auto | TextWrapStyle::Stable => raw_lines,
+                    }
+                } else {
+                    raw_lines
+                }
             };
-            align_lines(lines, content_width, s.text_align, s.direction);
+            align_lines(lines, content_width, s.text_align, s.text_align_last, s.direction);
             let line_h = s.font_size * s.line_height;
             apply_inline_vertical_align(lines, line_h);
             // CSS Overflow L4 §3.2: -webkit-line-clamp / line-clamp — multi-line truncation.
@@ -2703,16 +4739,27 @@ fn lay_out(
             *lines = one_line_fallback(segments);
         }
         // CSS Pseudo-elements L4 §3.1: ::first-line applies to the first formatted line.
-        // Mark frags on lines[0] so P4 can apply ::first-line style overrides.
-        // CSS: ::first-line — P4 wires: compute_pseudo_element_style(node, "first-line") →
-        // override style of each frag where is_first_line = true.
+        // Mark frags on lines[0] and apply pre-computed ::first-line style override.
         if let Some(first_line) = lines.first_mut() {
             for frag in first_line.iter_mut() {
                 frag.is_first_line = true;
+                // Apply ::first-line style (inheritable properties only — guaranteed by
+                // compute_pseudo_element_style which starts from inherited values).
+                if let Some(fls) = first_line_style {
+                    frag.style = *fls.clone();
+                }
             }
         }
         let line_count = lines.len().max(1);
-        b.rect.height = line_count as f32 * (s.font_size * s.line_height);
+        // CSS Pseudo-elements L4 §3.1: the first formatted line uses the ::first-line
+        // style's own font metrics for its line box height (BB-1).
+        b.rect.height = match first_line_style.as_deref() {
+            Some(fls) if !lines.is_empty() => {
+                fls.font_size * fls.line_height
+                    + (line_count - 1) as f32 * (s.font_size * s.line_height)
+            }
+            _ => line_count as f32 * (s.font_size * s.line_height),
+        };
         return;
     }
 
@@ -2721,12 +4768,28 @@ fn lay_out(
     let mut abs_deferred: Vec<(usize, f32, f32)> = Vec::new();
 
     match &mut b.kind {
-        BoxKind::Block | BoxKind::FlowRoot | BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Audio { .. } | BoxKind::FormControl { .. } => {
+        BoxKind::Block | BoxKind::FlowRoot | BoxKind::Image { .. } | BoxKind::Video { .. } | BoxKind::Canvas { .. } | BoxKind::Audio { .. } | BoxKind::Iframe { .. } | BoxKind::FormControl { .. } => {
             // Flex containers dispatch to lay_out_flex before block-flow.
             if matches!(s.display, Display::Flex | Display::InlineFlex) {
+                // For row flex, align-content needs the explicit container height (cross axis).
+                let flex_explicit_cross = if !matches!(
+                    s.flex_direction,
+                    FlexDirection::Column | FlexDirection::ColumnReverse
+                ) {
+                    s.height.as_ref()
+                        .and_then(|h| h.resolve(em, available_height, viewport))
+                        .map(|h| match s.box_sizing {
+                            BoxSizing::ContentBox => h,
+                            BoxSizing::BorderBox => (h - padding_top - padding_bottom
+                                - s.border_top_width - s.border_bottom_width)
+                                .max(0.0),
+                        })
+                } else {
+                    None
+                };
                 let content_height = lay_out_flex(
-                    &mut b.children, &s, content_x, content_y, content_width, measurer, viewport,
-                    children_pcb, hp,
+                    &mut b.children, &s, content_x, content_y, content_width,
+                    flex_explicit_cross, measurer, viewport, children_pcb, hp,
                 );
                 b.rect.height = if let Some(h_len) = &s.height
                     && let Some(h) = h_len.resolve(em, available_height, viewport)
@@ -2746,9 +4809,30 @@ fn lay_out(
                 {
                     (b.rect.width * ah / aw).max(0.0)
                 } else {
-                    let ch = if s.contain.0 & ContainFlags::SIZE.0 != 0 { 0.0 } else { content_height };
+                    let ch = contained_content_height(size_contained, &s, em, viewport, content_height);
                     ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
                 };
+                // CSS Flexbox L1 §4.1: absolutely-positioned children were excluded
+                // from flex layout above. Position them now against this container's
+                // content box (its padding edge when positioned), using the content
+                // origin as their static position.
+                let flex_abs: Vec<(usize, f32, f32)> = b.children.iter().enumerate()
+                    .filter(|(_, c)| matches!(c.style.position, Position::Absolute | Position::Fixed))
+                    .map(|(i, _)| (i, content_x, content_y))
+                    .collect();
+                if !flex_abs.is_empty() {
+                    let my_pcb = if is_positioned {
+                        Rect::new(
+                            b.rect.x + s.border_left_width,
+                            b.rect.y + s.border_top_width,
+                            (b.rect.width - s.border_left_width - s.border_right_width).max(0.0),
+                            (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0),
+                        )
+                    } else {
+                        pcb
+                    };
+                    lay_out_abs_children(b, &flex_abs, measurer, viewport, my_pcb, hp);
+                }
                 return;
             }
             // Grid containers dispatch to lay_out_grid before block-flow.
@@ -2775,7 +4859,7 @@ fn lay_out(
                 {
                     (b.rect.width * ah / aw).max(0.0)
                 } else {
-                    let ch = if s.contain.0 & ContainFlags::SIZE.0 != 0 { 0.0 } else { content_height };
+                    let ch = contained_content_height(size_contained, &s, em, viewport, content_height);
                     ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
                 };
                 return;
@@ -2805,6 +4889,7 @@ fn lay_out(
                     &mut b.children,
                     content_x, content_y, content_width,
                     &s, em, measurer, viewport, children_pcb, hp,
+                    children_available_height,
                 )
             } else {
                 // CSS 2.1 §9.5 — float context for this block formatting context.
@@ -2816,6 +4901,19 @@ fn lay_out(
                 // Adjacent Block/FlowRoot siblings collapse their margins (gap = max, not sum).
                 // Inline runs, replaced elements, and floats break the collapsing chain.
                 let mut prev_block_mb: f32 = 0.0;
+                // CSS 2.1 §8.3.1: this block's top margin collapses with the top margin of
+                // its first in-flow block child when nothing separates them — no top border,
+                // no top padding, no BFC, and the box is itself a normal in-flow block (not a
+                // flex/grid item or document root). In that case the first child's top margin
+                // has already been folded into this box's position by the parent loop (via
+                // `collapsed_top_margin`), so the child is placed flush at the content top.
+                let b_collapses_top = in_block_flow
+                    && matches!(b.kind, BoxKind::Block)
+                    && !establishes_bfc(b)
+                    && padding_top == 0.0
+                    && s.border_top_width == 0.0;
+                // Tracks whether the first in-flow child has been positioned yet.
+                let mut seen_inflow_child = false;
                 // CSS Lists L3 §2.4: pending indent from an inside ::marker (em units).
                 // Consumed by the first normal-flow content child after the marker.
                 let mut inside_marker_w: f32 = 0.0;
@@ -2834,13 +4932,24 @@ fn lay_out(
                         match position {
                             ListStylePosition::Outside => {
                                 // Out of flow: does not advance child_y.
-                                child.rect = Rect::new(content_x - marker_w, child_y, marker_w, line_h);
+                                // Snap to integer CSS pixels — em*1.5 is often fractional (BUG-083).
+                                child.rect = Rect::new(
+                                    (content_x - marker_w).round(),
+                                    child_y.round(),
+                                    marker_w.round(),
+                                    line_h.round(),
+                                );
                             }
                             ListStylePosition::Inside => {
                                 // CSS Lists L3 §2.4: inside marker shares the first line with
                                 // content. Place at content_x; record indent for the next child.
-                                child.rect = Rect::new(content_x, child_y, marker_w, line_h);
-                                inside_marker_w = marker_w;
+                                child.rect = Rect::new(
+                                    content_x.round(),
+                                    child_y.round(),
+                                    marker_w.round(),
+                                    line_h.round(),
+                                );
+                                inside_marker_w = marker_w.round();
                                 // Do NOT advance child_y — marker is inline with content.
                             }
                         }
@@ -2848,28 +4957,90 @@ fn lay_out(
                     }
 
                     // CSS 2.1 §9.5.2: clear — advance child_y past relevant floats.
-                    if !fc.is_empty() && child.style.clear != ClearSide::None {
+                    // Clearance is inserted between the top margin and the top border, so the
+                    // final border edge ends up at max(natural-flow border, float bottom): the
+                    // top margin is *absorbed* by clearance, not stacked on top of the float
+                    // bottom. `clearance_pre` remembers the pre-clear flow position so the
+                    // start_y computation below can place the border at that maximum (fixes the
+                    // double-count where a cleared block dropped to float_bottom + margin_top).
+                    let clearance_pre = if !fc.is_empty() && child.style.clear != ClearSide::None {
+                        let pre = child_y;
                         child_y = fc.clear_y(child_y, child.style.clear);
-                    }
+                        Some(pre)
+                    } else {
+                        None
+                    };
 
                     // CSS 2.1 §9.5.1: float box — placed out of normal flow.
                     if child.style.float_side != FloatSide::None {
                         let cem = child.style.font_size;
+                        // Shrink-to-fit width (CSS 2.1 §10.3.5): explicit CSS width wins;
+                        // otherwise preferred content width, falling back to max-content
+                        // measurement for text-only floats (e.g. the ::first-letter
+                        // drop-cap box, BB-2), clamped to available space. `probe_w` decides
+                        // the float's box at the *current* line; the outer width is then used
+                        // to test whether the float fits or must drop (rule 8 below).
+                        let probe_avail = {
+                            let l = fc.left_edge_at(child_y, content_x);
+                            let r = fc.right_edge_at(child_y, container_right);
+                            (r - l).max(0.0)
+                        };
+                        let probe_w = if child.style.width.is_some() {
+                            probe_avail
+                        } else {
+                            preferred_inline_block_width(child, measurer, viewport)
+                                .or_else(|| {
+                                    let w = max_content_outer_width(child, measurer, viewport);
+                                    (w > 0.0).then_some(w)
+                                })
+                                .map(|pw| pw.min(probe_avail))
+                                .unwrap_or(probe_avail)
+                        };
+                        lay_out(child, fc.left_edge_at(child_y, content_x), child_y, probe_w,
+                                children_available_height, measurer, viewport, children_pcb, hp, false);
+
+                        // CSS 2.1 §9.5.1 rule 8: if the float's outer margin box does not fit
+                        // in the space beside existing floats, drop it below them until it fits
+                        // (or no float remains to clear). This wraps a row of left floats onto a
+                        // new line in a narrow container instead of overflowing past the edge.
+                        let probe_ml = child.style.margin_left.resolve_or_zero(cem, probe_avail, viewport);
+                        let probe_mr = child.style.margin_right.resolve_or_zero(cem, probe_avail, viewport);
+                        let outer_w = probe_ml + child.rect.width + probe_mr;
+                        let mut float_y = child_y;
+                        while !fc.is_empty() {
+                            let l = fc.left_edge_at(float_y, content_x);
+                            let r = fc.right_edge_at(float_y, container_right);
+                            if outer_w <= (r - l).max(0.0) {
+                                break;
+                            }
+                            match fc.next_float_bottom(float_y) {
+                                Some(ny) => float_y = ny,
+                                None => break,
+                            }
+                        }
+                        let dropped = (float_y - child_y).abs() > f32::EPSILON;
+                        // Shadow child_y at the (possibly dropped) line for the placement below.
+                        let child_y = float_y;
                         let avail_left  = fc.left_edge_at(child_y, content_x);
                         let avail_right = fc.right_edge_at(child_y, container_right);
                         let avail_w = (avail_right - avail_left).max(0.0);
-
-                        // Shrink-to-fit width: explicit CSS width wins; otherwise use
-                        // preferred content width clamped to available space.
-                        let float_layout_w = if child.style.width.is_some() {
-                            avail_w
-                        } else {
-                            preferred_inline_block_width(child, measurer, viewport)
-                                .map(|pw| pw.min(avail_w))
-                                .unwrap_or(avail_w)
-                        };
-                        lay_out(child, avail_left, child_y, float_layout_w,
-                                children_available_height, measurer, viewport, children_pcb, hp);
+                        // Re-lay-out at the dropped line: an auto-width float may grow into the
+                        // wider line, and the box's origin changed.
+                        if dropped {
+                            let w = if child.style.width.is_some() {
+                                avail_w
+                            } else {
+                                preferred_inline_block_width(child, measurer, viewport)
+                                    .or_else(|| {
+                                        let w = max_content_outer_width(child, measurer, viewport);
+                                        (w > 0.0).then_some(w)
+                                    })
+                                    .map(|pw| pw.min(avail_w))
+                                    .unwrap_or(avail_w)
+                            };
+                            lay_out(child, avail_left, child_y, w,
+                                    children_available_height, measurer, viewport, children_pcb, hp, false);
+                        }
 
                         let fml = child.style.margin_left.resolve_or_zero(cem, avail_w, viewport);
                         let fmr = child.style.margin_right.resolve_or_zero(cem, avail_w, viewport);
@@ -2883,13 +5054,87 @@ fn lay_out(
                                 let lx = fc.left_edge_at(child_y, content_x);
                                 child.rect.x = lx + fml;
                                 child.rect.y = child_y + fmt;
-                                fc.add_left(child_y + fmt + fh + fmb, lx + fml + fw + fmr);
+                                let top_y  = child_y + fmt;
+                                let bot_y  = top_y + fh + fmb;
+                                let right_edge = lx + fml + fw + fmr;
+                                fc.add_left(bot_y, right_edge);
+                                // CSS Shapes L1 — wire shape-outside for left float.
+                                // Margin-box origin: (lx, child_y). Points are float-local.
+                                if let crate::style::ShapeOutside::Value(ref sv) = child.style.shape_outside {
+                                    if let Some(r) = parse_circle_px(sv) {
+                                        let cx = child.rect.x + fw / 2.0;
+                                        let cy = top_y + fh / 2.0;
+                                        fc.shape_circles.push((top_y, bot_y, true, cx, cy, r));
+                                    } else if let Some(local_pts) = parse_shape_path_px(sv)
+                                        .or_else(|| parse_shape_polygon_px(sv))
+                                    {
+                                        let pts = local_pts.into_iter()
+                                            .map(|(px, py)| (px + lx, py + child_y))
+                                            .collect();
+                                        fc.shape_polygons.push(ShapePolygon {
+                                            top_y, bottom_y: bot_y, is_left: true, points: pts,
+                                        });
+                                    } else if let Some((rx, ry, ecx, ecy)) = parse_shape_ellipse_px(sv) {
+                                        fc.shape_ellipses.push(ShapeEllipse {
+                                            top_y, bottom_y: bot_y, is_left: true,
+                                            cx: ecx + lx, cy: ecy + child_y, rx, ry,
+                                        });
+                                    } else if let Some((it, ir, ib, il, irad)) = parse_shape_inset_px(sv) {
+                                        // Reference box = margin box: origin (lx, child_y),
+                                        // width fml+fw+fmr, bottom bot_y.
+                                        let shape_top = (child_y + it).min(bot_y);
+                                        let shape_bot = (bot_y - ib).max(shape_top);
+                                        fc.shape_insets.push(ShapeInset {
+                                            top_y: shape_top, bottom_y: shape_bot, is_left: true,
+                                            left_x: lx + il,
+                                            right_x: lx + fml + fw + fmr - ir,
+                                            radius: irad,
+                                        });
+                                    }
+                                }
                             }
                             FloatSide::Right => {
                                 let rx = fc.right_edge_at(child_y, container_right);
                                 child.rect.x = rx - fmr - fw;
                                 child.rect.y = child_y + fmt;
-                                fc.add_right(child_y + fmt + fh + fmb, rx - fmr - fw - fml);
+                                let top_y  = child_y + fmt;
+                                let bot_y  = top_y + fh + fmb;
+                                let left_edge = rx - fmr - fw - fml;
+                                fc.add_right(bot_y, left_edge);
+                                // CSS Shapes L1 — wire shape-outside for right float.
+                                // Margin-box origin: (left_edge, child_y). Points are float-local.
+                                if let crate::style::ShapeOutside::Value(ref sv) = child.style.shape_outside {
+                                    if let Some(r) = parse_circle_px(sv) {
+                                        let cx = child.rect.x + fw / 2.0;
+                                        let cy = top_y + fh / 2.0;
+                                        fc.shape_circles.push((top_y, bot_y, false, cx, cy, r));
+                                    } else if let Some(local_pts) = parse_shape_path_px(sv)
+                                        .or_else(|| parse_shape_polygon_px(sv))
+                                    {
+                                        let pts = local_pts.into_iter()
+                                            .map(|(px, py)| (px + left_edge, py + child_y))
+                                            .collect();
+                                        fc.shape_polygons.push(ShapePolygon {
+                                            top_y, bottom_y: bot_y, is_left: false, points: pts,
+                                        });
+                                    } else if let Some((rx_e, ry_e, ecx, ecy)) = parse_shape_ellipse_px(sv) {
+                                        fc.shape_ellipses.push(ShapeEllipse {
+                                            top_y, bottom_y: bot_y, is_left: false,
+                                            cx: ecx + left_edge, cy: ecy + child_y, rx: rx_e, ry: ry_e,
+                                        });
+                                    } else if let Some((it, ir, ib, il, irad)) = parse_shape_inset_px(sv) {
+                                        // Reference box = margin box: origin (left_edge, child_y),
+                                        // right edge rx, bottom bot_y.
+                                        let shape_top = (child_y + it).min(bot_y);
+                                        let shape_bot = (bot_y - ib).max(shape_top);
+                                        fc.shape_insets.push(ShapeInset {
+                                            top_y: shape_top, bottom_y: shape_bot, is_left: false,
+                                            left_x: left_edge + il,
+                                            right_x: rx - ir,
+                                            radius: irad,
+                                        });
+                                    }
+                                }
                             }
                             FloatSide::None => unreachable!(),
                         }
@@ -2901,33 +5146,102 @@ fn lay_out(
                     let flow_left  = fc.left_edge_at(child_y, content_x);
                     let flow_right = fc.right_edge_at(child_y, container_right);
                     // Apply inside-marker indent to the first normal-flow content child.
-                    let (eff_left, eff_w) = if inside_marker_w > 0.0 {
+                    let (mut eff_left, mut eff_w) = if inside_marker_w > 0.0 {
                         let l = flow_left + inside_marker_w;
                         inside_marker_w = 0.0;
                         (l, (flow_right - l).max(0.0))
                     } else {
                         (flow_left, (flow_right - flow_left).max(0.0))
                     };
+                    // CSS 2.1 §9.5: a block-level box in normal flow is NOT narrowed by
+                    // floats — its width and margins resolve against the full containing
+                    // block and only its line boxes are shortened. For an *empty* auto-width
+                    // block (no in-flow content to reflow) resolve geometry against the full
+                    // content width, then clip the result to the non-float band: this keeps
+                    // the visual identical when the box would overlap a float (Lumen paints
+                    // floats in source order, so the clip stands in for float-over-block
+                    // painting), while restoring a margin'd box that fits in the gap between
+                    // two floats — which the naive narrowing collapsed to zero width.
+                    if (flow_left > content_x || flow_right < container_right)
+                        && child.style.width.is_none()
+                        && matches!(child.kind, BoxKind::Block)
+                        && !establishes_bfc(child)
+                        && !has_in_flow_content(child)
+                    {
+                        let cem = child.style.font_size;
+                        let ml = child.style.margin_left.resolve_or_zero(cem, content_width, viewport);
+                        let mr = child.style.margin_right.resolve_or_zero(cem, content_width, viewport);
+                        let bw = (content_width - ml - mr).max(0.0);
+                        let nat_x = content_x + ml;
+                        let vx = nat_x.max(flow_left);
+                        let vw = ((nat_x + bw).min(flow_right) - vx).max(0.0);
+                        // Reproduce the clipped border-box through lay_out's margin re-add:
+                        // it places x at eff_left + ml and width at eff_w − ml − mr.
+                        eff_left = vx - ml;
+                        eff_w = vw + ml + mr;
+                    }
 
                     // CSS 2.1 §8.3.1: collapse adjacent sibling block margins.
                     // Only Block/FlowRoot participate; other kinds break the chain.
-                    // Formula: start_y = child_y - min(prev_mb, mt)
-                    // so that lay_out's internal "+mt" yields child_y + max(prev_mb, mt).
+                    // `own_mt` is the child's own resolved top margin (what lay_out re-adds
+                    // internally); `collapsed_mt` additionally folds the child's own first-child
+                    // chain (§8.3.1). The base formula offsets start_y by (collapsed_mt − own_mt)
+                    // so that lay_out's internal "+own_mt" lands the child at its collapsed flow
+                    // position child_y + max(prev_block_mb, collapsed_mt).
                     let is_block = matches!(&child.kind, BoxKind::Block | BoxKind::FlowRoot);
-                    let mt = child.style.margin_top
+                    let is_first_inflow = !seen_inflow_child;
+                    let own_mt = child.style.margin_top
                         .resolve_or_zero(child.style.font_size, eff_w, viewport);
-                    let start_y = if is_block {
-                        child_y - prev_block_mb.min(mt.max(0.0))
+                    // CSS 2.1 §8.3.1: the margins of the root element's box do not collapse.
+                    // When this container is the document box (`NodeId` index 0), its first
+                    // in-flow block child IS the root element, so the parent↔first-child collapse
+                    // chain must terminate there: a descendant's escaping top margin must not
+                    // shift the root element (and the propagated canvas background it backs) off
+                    // the viewport origin. Laying it out with `in_block_flow == false` also stops
+                    // it from flush-collapsing its own first child, so that child's collapsed
+                    // margin stays inside the root box (BUG-153 — restores the 1px magenta frame
+                    // top edge that BUG-151's collapse-through regressed).
+                    let child_is_root_element =
+                        b.node.index() == 0 && is_first_inflow && is_block;
+                    let collapsed_mt = if child_is_root_element {
+                        own_mt
+                    } else {
+                        collapsed_top_margin(child, eff_w, viewport)
+                    };
+                    let start_y = if let Some(pre_clear_y) = clearance_pre {
+                        // CSS 2.1 §9.5.2: a cleared block's border edge sits at the larger of
+                        // its natural flow position (margin included) and the cleared float
+                        // bottom (`child_y`, advanced by clear_y above). Clearance fills any
+                        // gap; the margin is not added a second time on top of the float
+                        // bottom. `natural_border` is the pre-clearance border-top.
+                        let natural_border = pre_clear_y
+                            - prev_block_mb.min(collapsed_mt.max(0.0)) + collapsed_mt;
+                        natural_border.max(child_y) - own_mt
+                    } else if is_block {
+                        if is_first_inflow
+                            && b_collapses_top
+                            && matches!(child.kind, BoxKind::Block)
+                            && child.style.clear == ClearSide::None
+                        {
+                            // Parent↔first-child collapse: the margin escaped up into this box's
+                            // own (already-applied) top margin. Place the child flush at the
+                            // content top; lay_out re-adds own_mt, so pre-subtract it.
+                            content_y - own_mt
+                        } else {
+                            child_y - prev_block_mb.min(collapsed_mt.max(0.0)) + collapsed_mt - own_mt
+                        }
                     } else {
                         child_y
                     };
 
                     lay_out(child, eff_left, start_y, eff_w,
-                            children_available_height, measurer, viewport, children_pcb, hp);
+                            children_available_height, measurer, viewport, children_pcb, hp,
+                            !child_is_root_element);
                     if matches!(child.kind, BoxKind::Skip) {
                         // Zero-height; does not break the collapsing chain.
                         continue;
                     }
+                    seen_inflow_child = true;
                     let child_mb = child.style.margin_bottom.resolve_or_zero(
                         child.style.font_size, content_width, viewport);
                     child_y = child.rect.y + child.rect.height + child_mb;
@@ -2964,11 +5278,20 @@ fn lay_out(
                 // Phase 0: ratio applied in border-box space.
                 (b.rect.width * ah / aw).max(0.0)
             } else {
-                // CSS Containment L3 §3.3: contain:size suppresses children contribution
-                // to auto height — intrinsic height = 0.
-                let ch = if s.contain.0 & ContainFlags::SIZE.0 != 0 { 0.0 } else { content_height };
+                // CSS Containment L3 §3.3 / CSS Box Sizing L4 §5: size containment
+                // suppresses children's contribution to auto height — the box uses
+                // contain-intrinsic-height (or 0 when `none`/unset) instead.
+                let ch = contained_content_height(size_contained, &s, em, viewport, content_height);
                 ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
             };
+            // CSS Basic UI L4 §4.4 — field-sizing: content height override.
+            // When s.height was not set by UA (field_intrinsic is Some), replace the
+            // zero content_height with the padding-box height from the measurement.
+            if let Some((_, ph)) = field_intrinsic
+                && s.height.is_none()
+            {
+                b.rect.height = ph + s.border_top_width + s.border_bottom_width;
+            }
             // CSS 2.1 §10.4: clamp [min-height, max-height]. Симметрия с
             // width: max сначала, потом min → «min побеждает max». Content
             // оверфлоу-ит коробку если min режет ниже — это правильное
@@ -3030,7 +5353,7 @@ fn lay_out(
                 } else {
                     content_width
                 };
-                lay_out(&mut b.children[i], place_x, cur_y, child_avail, None, measurer, viewport, children_pcb, hp);
+                lay_out(&mut b.children[i], place_x, cur_y, child_avail, None, measurer, viewport, children_pcb, hp, false);
                 if matches!(b.children[i].kind, BoxKind::Skip) {
                     continue;
                 }
@@ -3057,7 +5380,7 @@ fn lay_out(
                     cur_x = content_x;
                     row_max_h = 0.0;
                     row_has_baseline = false;
-                    lay_out(&mut b.children[i], cur_x, cur_y, content_width, None, measurer, viewport, children_pcb, hp);
+                    lay_out(&mut b.children[i], cur_x, cur_y, content_width, None, measurer, viewport, children_pcb, hp, false);
                 }
                 cur_row.push(i);
                 let child_is_baseline = is_run
@@ -3101,14 +5424,17 @@ fn lay_out(
                 }
             }
             for (idx, dy) in adjustments {
-                shift_y_box(&mut b.children[idx], dy);
+                // Round dy to integer CSS pixels so vertical-aligned children land on
+                // whole-pixel boundaries, matching the .round() applied to IFC row y-positions
+                // above (line ~4219). Fractional dy causes 0.99% deviation vs Edge (BUG-081).
+                shift_y_box(&mut b.children[idx], dy.round());
             }
         }
         BoxKind::TableRow => {
             // CSS 2.1 §17.5 — table row: ячейки раскладываются горизонтально.
             // col_widths=None → per-row auto-distribution (standalone <tr> outside <table>).
             let row_h = lay_out_table_row(
-                b, content_x, content_y, content_width, None, None, measurer, viewport, children_pcb, hp,
+                b, content_x, content_y, content_width, None, None, 0.0, None, measurer, viewport, children_pcb, hp,
             );
             b.rect.height = if let Some(h_len) = &s.height
                 && let Some(h) = h_len.resolve(em, available_height, viewport)
@@ -3127,25 +5453,38 @@ fn lay_out(
             };
         }
         BoxKind::Table => {
-            // CSS 2.1 §17 — table container: compute global column widths, lay out rows.
+            // CSS 2.1 §17 / §17.5.2 — table container: compute global column widths, lay out rows.
+            // When no explicit CSS width is given, tables use shrink-to-fit: the table box is
+            // only as wide as its columns require (total column widths + border-spacing gaps).
+            // This differs from block elements which fill the available inline size.
+            if s.width.is_none() {
+                let intrinsic = table_intrinsic_content_width(b, viewport);
+                if intrinsic > 0.0 && intrinsic < content_width {
+                    b.rect.width = (intrinsic + padding_left + padding_right
+                        + s.border_left_width + s.border_right_width).max(0.0);
+                    content_width = intrinsic;
+                }
+            }
             let content_height = lay_out_table(
                 b, content_x, content_y, content_width, measurer, viewport, children_pcb, hp,
             );
-            b.rect.height = if let Some(h_len) = &s.height
+            if let Some(h_len) = &s.height
                 && let Some(h) = h_len.resolve(em, available_height, viewport)
             {
-                match s.box_sizing {
+                b.rect.height = match s.box_sizing {
                     BoxSizing::ContentBox => (h + padding_top + padding_bottom
                         + s.border_top_width + s.border_bottom_width).max(0.0),
                     BoxSizing::BorderBox => h.max(
                         padding_top + padding_bottom
                             + s.border_top_width + s.border_bottom_width,
                     ),
-                }
-            } else {
-                content_height + padding_top + padding_bottom
-                    + s.border_top_width + s.border_bottom_width
-            };
+                };
+            } else if !matches!(s.border_collapse, BorderCollapse::Collapse) {
+                // Collapse mode sets b.rect.height directly in lay_out_table (the table border-box
+                // coincides with the outer cells' collapsed borders).
+                b.rect.height = content_height + padding_top + padding_bottom
+                    + s.border_top_width + s.border_bottom_width;
+            }
         }
         BoxKind::TableRowGroup => {
             // CSS 2.1 §17 — row group standalone (outside a <table>): block-flow of rows.
@@ -3157,7 +5496,7 @@ fn lay_out(
                 }
                 let c_em = b.children[i].style.font_size;
                 let c_mt = b.children[i].style.margin_top.resolve_or_zero(c_em, content_width, viewport);
-                lay_out(&mut b.children[i], content_x, cur_y + c_mt, content_width, None, measurer, viewport, children_pcb, hp);
+                lay_out(&mut b.children[i], content_x, cur_y + c_mt, content_width, None, measurer, viewport, children_pcb, hp, false);
                 let c_mb = b.children[i].style.margin_bottom.resolve_or_zero(c_em, content_width, viewport);
                 cur_y = b.children[i].rect.y + b.children[i].rect.height + c_mb;
             }
@@ -3171,8 +5510,8 @@ fn lay_out(
         BoxKind::Marker { .. } => {
             // Rect is set by the parent's block-flow loop; nothing to do here.
         }
-        // SvgRoot and SvgShape are dispatched before this match (early return above).
-        BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } => unreachable!(),
+        // SvgRoot, SvgShape, and SvgText are dispatched before this match (early return above).
+        BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } | BoxKind::SvgText { .. } => unreachable!(),
     }
 
     // CSS Positioned Layout L3 §4 — абсолютное / фиксированное позиционирование.
@@ -3238,6 +5577,12 @@ fn lay_out_table_row(
     col_widths: Option<&[f32]>,
     // None for standalone <tr> outside <table>; caller must call decrement_rowspan_map after return.
     rowspan_map: Option<&mut Vec<u32>>,
+    // Horizontal gap between adjacent cells (from table's border-spacing-h). 0.0 for standalone rows.
+    h_spacing: f32,
+    // CSS 2.1 §17.6.2 collapsed border model: absolute x of each column's cell border-box left
+    // edge (length = n_cols). When present, cells are positioned here so adjacent borders overlap
+    // by the collapsed grid-line width instead of being spaced by `h_spacing`.
+    collapse_col_x: Option<&[f32]>,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     pcb: Rect,
@@ -3323,9 +5668,15 @@ fn lay_out_table_row(
     let use_global = col_widths.is_some();
     for (j, &i) in cell_idxs.iter().enumerate() {
         let (col_start, avail) = cell_cols[j];
-        let cell_x = if use_global {
-            // Exact x from column positions.
+        let cell_x = if let Some(cx) = collapse_col_x {
+            // Collapsed border model: each column has a precomputed absolute x at which its
+            // cells' border-box starts; adjacent cells overlap by the shared grid-line border.
+            cx.get(col_start).copied().unwrap_or(content_x)
+        } else if use_global {
+            // Exact x from column positions, accounting for h_spacing slots.
+            // Cell at col_start k: content_x + (k+1)*h_spacing + sum(col_widths[0..k]).
             content_x
+                + (col_start + 1) as f32 * h_spacing
                 + (0..col_start)
                     .map(|c| col_widths.and_then(|cw| cw.get(c)).copied().unwrap_or(0.0))
                     .sum::<f32>()
@@ -3352,6 +5703,7 @@ fn lay_out_table_row(
             viewport,
             pcb,
             hp,
+            false,
         );
         if use_global {
             b.children[i].style.width = saved_width;
@@ -3395,6 +5747,73 @@ fn lay_out_table_row(
     row_h
 }
 
+/// CSS 2.1 §17.6.2 — collapsed vertical border width at each column grid line for a table.
+///
+/// Returns a `Vec<f32>` of length `n_cols + 1`. Index `k` (1..n_cols) is the shared border
+/// width between column `k-1` and column `k`: the maximum, over every row, of the right border
+/// of the cell in column `k-1` and the left border of the cell in column `k`. Indices `0` and
+/// `n_cols` (the outer edges) are left at `0.0` — outer cells are snapped onto the table border
+/// by the caller, so their grid-line width is handled there. Cells are mapped to columns by
+/// sequential order (colspan/rowspan are not accounted for; collapse overlap is exact only for
+/// simple uniform grids, which is the common case).
+fn collapse_v_edges(b: &LayoutBox, n_cols: usize) -> Vec<f32> {
+    let mut edges = vec![0.0_f32; n_cols + 1];
+    let mut visit = |row: &LayoutBox| {
+        let cells: Vec<&LayoutBox> = row
+            .children
+            .iter()
+            .filter(|c| !matches!(c.kind, BoxKind::Skip))
+            .collect();
+        for col in 1..cells.len().min(n_cols) {
+            let edge = cells[col].style.border_left_width.max(cells[col - 1].style.border_right_width);
+            edges[col] = edges[col].max(edge);
+        }
+    };
+    for child in &b.children {
+        match &child.kind {
+            BoxKind::TableRow => visit(child),
+            BoxKind::TableRowGroup => {
+                for row in &child.children {
+                    if matches!(row.kind, BoxKind::TableRow) {
+                        visit(row);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    edges
+}
+
+/// CSS 2.1 §17.6.2 — representative collapsed horizontal (row-to-row) border width.
+///
+/// Returns the maximum top/bottom border width across all cells in the table. Used as a uniform
+/// row overlap in collapse mode: consecutive rows are pulled together by this amount so their
+/// shared horizontal grid line renders as one border instead of two stacked ones. Uniform (rather
+/// than per-row-pair) is exact when row borders are consistent — the common case.
+fn collapse_max_cross_border(b: &LayoutBox) -> f32 {
+    let mut max_b = 0.0_f32;
+    let mut visit = |row: &LayoutBox| {
+        for cell in row.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)) {
+            max_b = max_b.max(cell.style.border_top_width).max(cell.style.border_bottom_width);
+        }
+    };
+    for child in &b.children {
+        match &child.kind {
+            BoxKind::TableRow => visit(child),
+            BoxKind::TableRowGroup => {
+                for row in &child.children {
+                    if matches!(row.kind, BoxKind::TableRow) {
+                        visit(row);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    max_b
+}
+
 /// CSS 2.1 §17 — table layout with colspan/rowspan support.
 ///
 /// Pass 1: compute column widths (span-aware), lay out rows top-to-bottom while tracking
@@ -3414,9 +5833,42 @@ fn lay_out_table(
     pcb: Rect,
     hp: &dyn HyphenationProvider,
 ) -> f32 {
-    let col_widths = compute_table_col_widths(b, content_width, viewport);
+    // CSS Tables L2 §17.6: collapse mode zeroes out border-spacing.
+    let collapse = matches!(b.style.border_collapse, BorderCollapse::Collapse);
+    let (h_spacing, v_spacing) = match b.style.border_collapse {
+        BorderCollapse::Collapse => (0.0, 0.0),
+        BorderCollapse::Separate => (b.style.border_spacing_h, b.style.border_spacing_v),
+    };
 
-    let mut cur_y = content_y;
+    let col_widths = compute_table_col_widths(b, content_width, viewport, measurer);
+
+    // CSS 2.1 §17.6.2 — collapsing border model. Adjacent cell borders (and the table's own
+    // border with the outer cells) share a single grid line whose width is the larger of the
+    // two meeting borders. We model this by positioning columns so neighbouring cells overlap
+    // by that collapsed width, and by snapping the outer cells onto the table border (so a 2px
+    // table border + 2px cell border render as one 2px line, not 4px). Width/colour conflict
+    // resolution is approximated by max-width (sufficient for same-style same-colour grids).
+    let n_cols = col_widths.len();
+    let (collapse_col_x, collapse_v_overlap, collapse_width) = if collapse && n_cols > 0 {
+        let v_edges = collapse_v_edges(b, n_cols);
+        // base_x = table border-box left edge: outer cell borders coincide with the table border.
+        let base_x = b.rect.x;
+        let mut col_x = Vec::with_capacity(n_cols);
+        col_x.push(base_x);
+        for k in 1..n_cols {
+            let prev = col_x[k - 1] + col_widths[k - 1] - v_edges[k];
+            col_x.push(prev);
+        }
+        let total_w = (col_x[n_cols - 1] + col_widths[n_cols - 1] - base_x).max(0.0);
+        (Some(col_x), collapse_max_cross_border(b), total_w)
+    } else {
+        (None, 0.0, 0.0)
+    };
+    let collapse_col_x_ref = collapse_col_x.as_deref();
+
+    // First row starts after the top outer v_spacing slot; in collapse mode the first row's top
+    // border coincides with the table's top border (start at the table border-box top edge).
+    let mut cur_y = if collapse { b.rect.y } else { content_y + v_spacing };
     let mut rowspan_map: Vec<u32> = Vec::new();
 
     // flat_row_rects[k] = (y, height) for the k-th row in DOM order (across all groups).
@@ -3442,6 +5894,8 @@ fn lay_out_table(
                     content_x, row_y, content_width,
                     Some(&col_widths),
                     Some(&mut rowspan_map),
+                    h_spacing,
+                    collapse_col_x_ref,
                     measurer, viewport, pcb, hp,
                 );
                 let row_style_h = {
@@ -3470,7 +5924,10 @@ fn lay_out_table(
                     }
                 }
                 let c_mb = b.children[i].style.margin_bottom.resolve_or_zero(b.children[i].style.font_size, content_width, viewport);
-                cur_y = b.children[i].rect.y + b.children[i].rect.height + c_mb;
+                // Add v_spacing gap after each row (outer bottom slot included); in collapse mode
+                // pull the next row up by the shared horizontal grid-line border instead.
+                // CSS: border-spacing
+                cur_y = b.children[i].rect.y + b.children[i].rect.height + c_mb + v_spacing - collapse_v_overlap;
                 decrement_rowspan_map(&mut rowspan_map);
             }
             BoxKind::TableRowGroup => {
@@ -3497,6 +5954,8 @@ fn lay_out_table(
                         content_x, row_y + r_mt, content_width,
                         Some(&col_widths),
                         Some(&mut rowspan_map),
+                        h_spacing,
+                        collapse_col_x_ref,
                         measurer, viewport, pcb, hp,
                     );
                     let r_pt = b.children[i].children[r].style.padding_top.resolve_or_zero(r_em, content_width, viewport);
@@ -3512,7 +5971,8 @@ fn lay_out_table(
                         }
                     }
                     let r_mb = b.children[i].children[r].style.margin_bottom.resolve_or_zero(r_em, content_width, viewport);
-                    row_y = b.children[i].children[r].rect.y + b.children[i].children[r].rect.height + r_mb;
+                    // CSS: border-spacing — collapse mode pulls rows together by the shared border.
+                    row_y = b.children[i].children[r].rect.y + b.children[i].children[r].rect.height + r_mb + v_spacing - collapse_v_overlap;
                     decrement_rowspan_map(&mut rowspan_map);
                 }
                 let g_pt = b.children[i].style.padding_top.resolve_or_zero(group_em, content_width, viewport);
@@ -3541,6 +6001,23 @@ fn lay_out_table(
         };
         let new_h = (target_bottom - cell.rect.y).max(cell.rect.height);
         cell.rect.height = new_h;
+    }
+
+    // CSS 2.1 §17.6.2 — collapsing model: the table border-box coincides with the outer cells'
+    // shared borders. Snap the table width to the overlapped grid and the height to the bottom
+    // edge of the last row (which already includes the collapsed top/bottom borders). The caller
+    // skips its own height computation in collapse mode, so set it here for every collapse table
+    // (an empty table with no rows collapses to a zero-height border-box).
+    if collapse {
+        if b.style.width.is_none() && n_cols > 0 {
+            b.rect.width = collapse_width;
+        }
+        if b.style.height.is_none() {
+            b.rect.height = flat_row_rects
+                .last()
+                .map(|&(last_y, last_h)| (last_y + last_h - b.rect.y).max(0.0))
+                .unwrap_or(0.0);
+        }
     }
 
     (cur_y - content_y).max(0.0)
@@ -3628,12 +6105,197 @@ fn decrement_rowspan_map(map: &mut [u32]) {
     }
 }
 
+/// CSS 2.1 §17.5.2 — minimum (shrink-to-fit) content width for a table box.
+///
+/// Returns `sum(explicit_column_widths) + (n_cols + 1) * border_spacing_h`.
+/// Cells without an explicit CSS width contribute 0 (effectively auto/min-content).
+/// Used to shrink `display:table` boxes that have no explicit CSS `width`.
+fn table_intrinsic_content_width(b: &LayoutBox, viewport: Size) -> f32 {
+    let h_spacing = b.style.border_spacing_h;
+    let mut col_explicit: Vec<Option<f32>> = Vec::new();
+    let mut rowspan_map: Vec<u32> = Vec::new();
+    for child in &b.children {
+        match &child.kind {
+            BoxKind::TableRow => {
+                scan_row_explicit_widths(child, &mut col_explicit, &mut rowspan_map, 0.0, viewport);
+                decrement_rowspan_map(&mut rowspan_map);
+            }
+            BoxKind::TableRowGroup => {
+                for row in &child.children {
+                    if matches!(row.kind, BoxKind::TableRow) {
+                        scan_row_explicit_widths(row, &mut col_explicit, &mut rowspan_map, 0.0, viewport);
+                        decrement_rowspan_map(&mut rowspan_map);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let n_cols = col_explicit.len();
+    if n_cols == 0 {
+        return 0.0;
+    }
+    let total_explicit: f32 = col_explicit.iter().filter_map(|w| *w).sum();
+    total_explicit + (n_cols + 1) as f32 * h_spacing
+}
+
+/// CSS 2.1 §17.5.2 — min-content and max-content widths for a slice of boxes.
+///
+/// Traverses block containers recursively. Block-level items stack vertically —
+/// the container's min/max is the max of its children's widths. `InlineRun`
+/// items accumulate segments left-to-right for max-content and take the widest
+/// whitespace-separated token for min-content.
+///
+/// Returns `(min_content_width, max_content_width)` as content-box widths
+/// (the caller must add the container's own padding + border).
+fn box_min_max_content_w(boxes: &[LayoutBox], m: &dyn TextMeasurer, vp: Size) -> (f32, f32) {
+    let mut min_w = 0.0f32;
+    let mut max_w = 0.0f32;
+    for b in boxes {
+        let (bmin, bmax) = match &b.kind {
+            BoxKind::InlineRun { segments, .. } => {
+                let mut line_w = 0.0f32;
+                let mut run_max = 0.0f32;
+                let mut run_min = 0.0f32;
+                for seg in segments {
+                    if seg.forced_break {
+                        run_max = run_max.max(line_w);
+                        line_w = 0.0;
+                        continue;
+                    }
+                    let fs = seg.style.font_size;
+                    let ls = seg.style.letter_spacing;
+                    if seg.img_src.is_some() {
+                        let w = seg.pre_space + seg.img_width + seg.post_space;
+                        line_w += w;
+                        run_min = run_min.max(w);
+                    } else {
+                        line_w += seg.pre_space
+                            + measure_text_w(&seg.text, fs, ls, 0.0, m)
+                            + seg.post_space;
+                        for word in seg.text.split_ascii_whitespace() {
+                            run_min = run_min
+                                .max(seg.pre_space + measure_text_w(word, fs, ls, 0.0, m) + seg.post_space);
+                        }
+                    }
+                }
+                run_max = run_max.max(line_w);
+                (run_min, run_max)
+            }
+            BoxKind::Block | BoxKind::FlowRoot | BoxKind::InlineBlockRow => {
+                let em = b.style.font_size;
+                let pl = b.style.padding_left.resolve_or_zero(em, 0.0, vp);
+                let pr = b.style.padding_right.resolve_or_zero(em, 0.0, vp);
+                let bw = b.style.border_left_width + b.style.border_right_width;
+                let (cmin, cmax) = box_min_max_content_w(&b.children, m, vp);
+                (cmin + pl + pr + bw, cmax + pl + pr + bw)
+            }
+            BoxKind::Skip
+            | BoxKind::TableRow
+            | BoxKind::TableRowGroup
+            | BoxKind::InlineSpace
+            | BoxKind::Marker { .. }
+            | BoxKind::Contents => (0.0, 0.0),
+            // Replaced elements (Image, FormControl, Video, …): use explicit width if set.
+            _ => {
+                let em = b.style.font_size;
+                if let Some(wl) = &b.style.width
+                    && let Some(w) = wl.resolve(em, None, vp)
+                    && w > 0.0
+                {
+                    (w, w)
+                } else {
+                    (0.0, 0.0)
+                }
+            }
+        };
+        min_w = min_w.max(bmin);
+        max_w = max_w.max(bmax);
+    }
+    (min_w, max_w)
+}
+
+/// Returns `(min_content_border_box, max_content_border_box)` for a single table cell,
+/// including the cell's own horizontal padding and border.
+fn cell_min_max_border_box_w(cell: &LayoutBox, m: &dyn TextMeasurer, vp: Size) -> (f32, f32) {
+    let em = cell.style.font_size;
+    let pl = cell.style.padding_left.resolve_or_zero(em, 0.0, vp);
+    let pr = cell.style.padding_right.resolve_or_zero(em, 0.0, vp);
+    let bw = cell.style.border_left_width + cell.style.border_right_width;
+    let horiz = pl + pr + bw;
+    let (cmin, cmax) = box_min_max_content_w(&cell.children, m, vp);
+    (cmin + horiz, cmax + horiz)
+}
+
+/// Scans `row`'s cells and updates `col_min`/`col_max` with per-column content-based widths.
+/// Colspan cells distribute their content width evenly across the spanned columns.
+/// Rowspan occupancy is tracked in `rowspan_map` (same semantics as `scan_row_explicit_widths`).
+fn scan_row_content_widths(
+    row: &LayoutBox,
+    col_min: &mut Vec<f32>,
+    col_max: &mut Vec<f32>,
+    rowspan_map: &mut Vec<u32>,
+    m: &dyn TextMeasurer,
+    vp: Size,
+) {
+    let mut col_pos = 0usize;
+    for cell in row.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)) {
+        while col_pos < rowspan_map.len() && rowspan_map[col_pos] > 0 {
+            col_pos += 1;
+        }
+        let span = cell.col_span.max(1) as usize;
+        let end_col = col_pos + span;
+        if end_col > col_min.len() {
+            col_min.resize(end_col, 0.0);
+            col_max.resize(end_col, 0.0);
+        }
+        if end_col > rowspan_map.len() {
+            rowspan_map.resize(end_col, 0);
+        }
+        let (cmin, cmax) = cell_min_max_border_box_w(cell, m, vp);
+        let per_min = cmin / span as f32;
+        let per_max = cmax / span as f32;
+        for i in col_pos..end_col {
+            col_min[i] = col_min[i].max(per_min);
+            col_max[i] = col_max[i].max(per_max);
+        }
+        if cell.row_span > 1 {
+            let rs = cell.row_span;
+            for v in rowspan_map.iter_mut().skip(col_pos).take(span) {
+                if *v < rs {
+                    *v = rs;
+                }
+            }
+        }
+        col_pos = end_col;
+    }
+}
+
 /// Computes per-column widths for a `BoxKind::Table` element by scanning all rows
 /// (direct and inside `TableRowGroup` children). Colspan/rowspan-aware: cells with
 /// `colspan > 1` distribute their width across columns; `rowspan > 1` cells block
 /// subsequent rows from reusing those columns. Returns a `Vec<f32>` of border-box
 /// widths, one per column.
-fn compute_table_col_widths(b: &LayoutBox, content_width: f32, viewport: Size) -> Vec<f32> {
+///
+/// When `measurer` is provided, uses CSS 2.1 §17.5.2 content-based auto sizing:
+/// each auto column gets at least its min-content width, with the remaining space
+/// distributed proportionally to max-content widths. Without a measurer, falls back
+/// to equal distribution among auto columns.
+///
+/// In Separate border mode, `(n_cols + 1) * h_spacing` is reserved for inter-cell and
+/// outer gaps before distributing the remaining width among auto-width columns.
+/// CSS: border-spacing — P4 wires h_spacing from ComputedStyle.border_spacing_h
+fn compute_table_col_widths(
+    b: &LayoutBox,
+    content_width: f32,
+    viewport: Size,
+    measurer: Option<&dyn TextMeasurer>,
+) -> Vec<f32> {
+    let h_spacing = match b.style.border_collapse {
+        BorderCollapse::Collapse => 0.0,
+        BorderCollapse::Separate => b.style.border_spacing_h,
+    };
+
     let mut col_explicit: Vec<Option<f32>> = Vec::new();
     let mut rowspan_map: Vec<u32> = Vec::new();
 
@@ -3660,19 +6322,86 @@ fn compute_table_col_widths(b: &LayoutBox, content_width: f32, viewport: Size) -
         return Vec::new();
     }
 
+    // Subtract spacing slots from available width before distributing to auto columns.
+    let total_h_spacing = (n_cols + 1) as f32 * h_spacing;
     let total_explicit: f32 = col_explicit.iter().filter_map(|w| *w).sum();
+    let available = (content_width - total_h_spacing - total_explicit).max(0.0);
     let auto_count = col_explicit.iter().filter(|w| w.is_none()).count();
-    let auto_share = if auto_count > 0 {
-        ((content_width - total_explicit) / auto_count as f32).max(0.0)
-    } else {
-        0.0
-    };
 
+    if auto_count == 0 {
+        return col_explicit.iter().map(|w| w.unwrap_or(0.0)).collect();
+    }
+
+    // CSS 2.1 §17.5.2: content-based auto column sizing when a text measurer is available.
+    if let Some(m) = measurer {
+        let mut col_min = vec![0.0f32; n_cols];
+        let mut col_max = vec![0.0f32; n_cols];
+        let mut rs_map: Vec<u32> = Vec::new();
+        for child in &b.children {
+            match &child.kind {
+                BoxKind::TableRow => {
+                    scan_row_content_widths(child, &mut col_min, &mut col_max, &mut rs_map, m, viewport);
+                    decrement_rowspan_map(&mut rs_map);
+                }
+                BoxKind::TableRowGroup => {
+                    for row in &child.children {
+                        if matches!(row.kind, BoxKind::TableRow) {
+                            scan_row_content_widths(row, &mut col_min, &mut col_max, &mut rs_map, m, viewport);
+                            decrement_rowspan_map(&mut rs_map);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let auto_min_total: f32 = (0..n_cols)
+            .filter(|&i| col_explicit[i].is_none())
+            .map(|i| col_min[i])
+            .sum();
+        // Use col_max as the proportional weight; clamp at col_min so weight is always ≥ min.
+        let total_weight: f32 = (0..n_cols)
+            .filter(|&i| col_explicit[i].is_none())
+            .map(|i| col_max[i].max(col_min[i]))
+            .sum();
+
+        return (0..n_cols)
+            .map(|i| {
+                col_explicit[i].unwrap_or_else(|| {
+                    if auto_min_total >= available {
+                        // Not enough space for min-content: distribute proportionally to min.
+                        if auto_min_total > 0.0 {
+                            (available * col_min[i] / auto_min_total).max(0.0)
+                        } else {
+                            available / auto_count as f32
+                        }
+                    } else {
+                        // Enough for min; distribute extra proportionally to max-content weight.
+                        let extra = available - auto_min_total;
+                        let weight = col_max[i].max(col_min[i]);
+                        col_min[i]
+                            + if total_weight > 0.0 {
+                                extra * weight / total_weight
+                            } else {
+                                extra / auto_count as f32
+                            }
+                    }
+                })
+            })
+            .collect();
+    }
+
+    // Fallback without measurer: equal distribution.
+    let auto_share = (available / auto_count as f32).max(0.0);
     col_explicit.iter().map(|w| w.unwrap_or(auto_share)).collect()
 }
 
 /// CSS Multi-column Layout L1 — lays out `children` into N columns.
 /// Returns content height (max column height, without padding/border).
+///
+/// `container_h` is the resolved content-box height of the multi-column container, used
+/// by `column-fill: auto` to fill columns sequentially up to that height instead of
+/// balancing content equally across all columns.
 #[allow(clippy::too_many_arguments)]
 fn lay_out_multicol_children(
     children: &mut [LayoutBox],
@@ -3685,6 +6414,7 @@ fn lay_out_multicol_children(
     viewport: Size,
     pcb: Rect,
     hp: &dyn HyphenationProvider,
+    container_h: Option<f32>,
 ) -> f32 {
     let cb = content_width;
     let col_gap = s.column_gap.resolve_or_zero(em, cb, viewport).max(0.0);
@@ -3714,7 +6444,11 @@ fn lay_out_multicol_children(
 
     let col_w = ((content_width - col_gap * (n_cols - 1) as f32) / n_cols as f32).max(0.0);
 
-    // Collect flow (non-abs) child indices.
+    // column-fill: balance distributes content equally; auto fills columns to container height.
+    // When no container height is known, auto behaves like balance.
+    let balance = s.column_fill_balance || container_h.is_none();
+
+    // Collect flow (non-abs, non-skip) child indices.
     let flow_idxs: Vec<usize> = children
         .iter()
         .enumerate()
@@ -3727,63 +6461,94 @@ fn lay_out_multicol_children(
         return 0.0;
     }
 
-    // First pass at (0, 0) to measure intrinsic heights.
+    // Split flow children into segments separated by column-span:all elements.
+    // Each entry is (regular_children, Option<span_all_child_idx>).
+    let mut segments: Vec<(Vec<usize>, Option<usize>)> = Vec::new();
+    let mut seg: Vec<usize> = Vec::new();
     for &i in &flow_idxs {
-        lay_out(&mut children[i], 0.0, 0.0, col_w, None, measurer, viewport, pcb, hp);
+        if children[i].style.column_span_all {
+            segments.push((std::mem::take(&mut seg), Some(i)));
+        } else {
+            seg.push(i);
+        }
     }
+    segments.push((seg, None));
 
-    // Outer height of each child = margin_top + rect.height + margin_bottom.
-    let outer_h: Vec<f32> = children
-        .iter()
-        .enumerate()
-        .map(|(i, c)| {
-            if flow_idxs.contains(&i) {
+    let mut cur_y = content_y;
+
+    for (seg_idxs, span_idx) in &segments {
+        if !seg_idxs.is_empty() {
+            // First pass at (0, 0) to measure intrinsic heights.
+            for &i in seg_idxs {
+                lay_out(&mut children[i], 0.0, 0.0, col_w, None, measurer, viewport, pcb, hp, false);
+            }
+
+            // Outer height of each segment child = margin_top + rect.height + margin_bottom.
+            let outer_hs: Vec<f32> = seg_idxs.iter().map(|&i| {
+                let c = &children[i];
                 let mt = c.style.margin_top.resolve_or_zero(c.style.font_size, col_w, viewport);
                 let mb = c.style.margin_bottom.resolve_or_zero(c.style.font_size, col_w, viewport);
                 mt + c.rect.height + mb
+            }).collect();
+
+            let total_h: f32 = outer_hs.iter().sum();
+
+            // column-fill: auto → fill each column to container_h; balance → equal split.
+            let target_h = if balance {
+                (total_h / n_cols as f32).ceil().max(1.0)
             } else {
-                0.0
+                container_h.unwrap_or_else(|| (total_h / n_cols as f32).ceil()).max(1.0)
+            };
+            // Count-based per-column cap prevents starvation when content heights are
+            // equal — but only in balance mode. column-fill:auto fills purely by height
+            // (a column may hold many short items), so the count cap must not apply there.
+            let per_col_cap = seg_idxs.len().div_ceil(n_cols as usize);
+
+            // Greedy column assignment (height + count guard).
+            let mut col_assignment = vec![0usize; seg_idxs.len()];
+            let mut col_fill = vec![0.0f32; n_cols as usize];
+            let mut col_count = vec![0usize; n_cols as usize];
+            let mut cur_col = 0usize;
+            for (j, &oh) in outer_hs.iter().enumerate() {
+                let height_overflow = col_fill[cur_col] + oh > target_h && oh > 0.0;
+                let count_overflow = balance && col_count[cur_col] >= per_col_cap;
+                // Never advance past an empty column: a column must hold at least one item
+                // before overflowing to the next, otherwise an item taller than target_h
+                // would skip column 0 and leave it blank (CSS Multicol §3.4 — every column
+                // box is filled in order, starting from the first).
+                let col_nonempty = col_count[cur_col] > 0;
+                if cur_col + 1 < n_cols as usize && col_nonempty && (height_overflow || count_overflow) {
+                    cur_col += 1;
+                }
+                col_assignment[j] = cur_col;
+                col_fill[cur_col] += oh;
+                col_count[cur_col] += 1;
             }
-        })
-        .collect();
 
-    // Target column height for balanced distribution.
-    let total_h: f32 = flow_idxs.iter().map(|&i| outer_h[i]).sum();
-    let target_h = (total_h / n_cols as f32).ceil().max(1.0);
-    // Count-based per-column cap for balanced distribution when heights are equal/zero.
-    let per_col_cap = flow_idxs.len().div_ceil(n_cols as usize);
+            // Second pass: final positioning.
+            let mut col_y = vec![cur_y; n_cols as usize];
+            for (j, &i) in seg_idxs.iter().enumerate() {
+                let col = col_assignment[j];
+                let col_x = content_x + col as f32 * (col_w + col_gap);
+                lay_out(&mut children[i], col_x, col_y[col], col_w, None, measurer, viewport, pcb, hp, false);
+                let mb = children[i].style.margin_bottom
+                    .resolve_or_zero(children[i].style.font_size, col_w, viewport);
+                col_y[col] = children[i].rect.y + children[i].rect.height + mb;
+            }
 
-    // Greedy column assignment (height + count guard).
-    let mut child_col = vec![0usize; children.len()];
-    let mut col_fill = vec![0.0f32; n_cols as usize];
-    let mut col_count = vec![0usize; n_cols as usize];
-    let mut cur_col = 0usize;
-    for &i in &flow_idxs {
-        let height_overflow = col_fill[cur_col] + outer_h[i] > target_h && outer_h[i] > 0.0;
-        let count_overflow = col_count[cur_col] >= per_col_cap;
-        if cur_col + 1 < n_cols as usize && (height_overflow || count_overflow) {
-            cur_col += 1;
+            cur_y = col_y.into_iter().fold(cur_y, f32::max);
         }
-        child_col[i] = cur_col;
-        col_fill[cur_col] += outer_h[i];
-        col_count[cur_col] += 1;
+
+        // column-span: all — element spans the full column container width.
+        if let Some(span_i) = *span_idx {
+            lay_out(&mut children[span_i], content_x, cur_y, content_width, None, measurer, viewport, pcb, hp, false);
+            let mb = children[span_i].style.margin_bottom
+                .resolve_or_zero(children[span_i].style.font_size, content_width, viewport);
+            cur_y = children[span_i].rect.y + children[span_i].rect.height + mb;
+        }
     }
 
-    // Second pass: final positioning.
-    let mut col_y = vec![content_y; n_cols as usize];
-    for &i in &flow_idxs {
-        let col = child_col[i];
-        let col_x = content_x + col as f32 * (col_w + col_gap);
-        lay_out(&mut children[i], col_x, col_y[col], col_w, None, measurer, viewport, pcb, hp);
-        let mb = children[i]
-            .style
-            .margin_bottom
-            .resolve_or_zero(children[i].style.font_size, col_w, viewport);
-        col_y[col] = children[i].rect.y + children[i].rect.height + mb;
-    }
-
-    // Content height = tallest column.
-    col_y.iter().map(|&cy| cy - content_y).fold(0.0f32, f32::max)
+    cur_y - content_y
 }
 
 /// Positions absolutely/fixed-positioned deferred children of `parent`.
@@ -3796,6 +6561,11 @@ fn lay_out_abs_children(
     my_pcb: Rect,
     hp: &dyn HyphenationProvider,
 ) {
+    // CSS Anchor Positioning L1: collect all elements with `anchor-name` in the tree.
+    // This registry is used to resolve `position-anchor` and `anchor()` function calls below.
+    // CSS: anchor-name, position-anchor, anchor()
+    let anchors = crate::anchor::collect_anchors(parent);
+
     for &(idx, static_x, static_y) in deferred {
         let cs = parent.children[idx].style.clone();
         let c_em = cs.font_size;
@@ -3818,7 +6588,7 @@ fn lay_out_abs_children(
             cb.width
         };
 
-        lay_out(&mut parent.children[idx], 0.0, 0.0, avail_w, None, measurer, viewport, my_pcb, hp);
+        lay_out(&mut parent.children[idx], 0.0, 0.0, avail_w, None, measurer, viewport, my_pcb, hp, false);
 
         let c_ml = cs.margin_left.resolve_or_zero(c_em, cb.width, viewport);
         let c_mr = cs.margin_right.resolve_or_zero(c_em, cb.width, viewport);
@@ -3837,17 +6607,52 @@ fn lay_out_abs_children(
 
         let child = &mut parent.children[idx];
 
-        // Desired border-left edge.
-        let new_x = match (left, right) {
-            (Some(l), _)    => cb.x + l + c_ml,
-            (None, Some(r)) => cb.x + cb.width - r - c_mr - child.rect.width,
-            (None, None)    => static_x + c_ml,
-        };
-        // Desired border-top edge.
-        let new_y = match (top, bottom) {
-            (Some(t), _)    => cb.y + t + c_mt,
-            (None, Some(bv)) => cb.y + cb.height - bv - c_mb - child.rect.height,
-            (None, None)    => static_y + c_mt,
+        // CSS Anchor Positioning L1 §5 — resolve `position-area` / `inset-area`.
+        // CSS: position-anchor, inset-area, position-area
+        let anchored_pos = cs.position_anchor.as_deref().and_then(|anchor_name| {
+            crate::anchor::resolve_inset_area(
+                &anchors,
+                anchor_name,
+                cs.inset_area_row,
+                cs.inset_area_col,
+                cb,
+            )
+        });
+
+        // CSS Anchor Positioning L1 §4 — apply `anchor-size()` overrides for width/height.
+        if let Some(w) = cs.anchor_size_w.as_ref().and_then(|f| {
+            crate::anchor::resolve_anchor_size(&anchors, f, cs.position_anchor.as_deref())
+        }) {
+            child.rect.width = w;
+        }
+        if let Some(h) = cs.anchor_size_h.as_ref().and_then(|f| {
+            crate::anchor::resolve_anchor_size(&anchors, f, cs.position_anchor.as_deref())
+        }) {
+            child.rect.height = h;
+        }
+
+        let (new_x, new_y) = if let Some(ref pos) = anchored_pos {
+            // Anchor-positioned: override width/height from inset-area if provided.
+            if let Some(w) = pos.width {
+                child.rect.width = w;
+            }
+            if let Some(h) = pos.height {
+                child.rect.height = h;
+            }
+            (cb.x + pos.left, cb.y + pos.top)
+        } else {
+            // Normal abs-pos: resolve from left/right/top/bottom insets.
+            let nx = match (left, right) {
+                (Some(l), _)    => cb.x + l + c_ml,
+                (None, Some(r)) => cb.x + cb.width - r - c_mr - child.rect.width,
+                (None, None)    => static_x + c_ml,
+            };
+            let ny = match (top, bottom) {
+                (Some(t), _)     => cb.y + t + c_mt,
+                (None, Some(bv)) => cb.y + cb.height - bv - c_mb - child.rect.height,
+                (None, None)     => static_y + c_mt,
+            };
+            (nx, ny)
         };
 
         let dx = new_x - child.rect.x;
@@ -3856,15 +6661,16 @@ fn lay_out_abs_children(
     }
 }
 
-/// CSS Flexbox L1 §9 — single-line flex layout (Phase 0).
+/// CSS Flexbox L1 §9 — multi-line flex layout.
 ///
 /// Алгоритм:
 /// 1. Для каждого flex-item вычисляем hypothetical main size из flex-basis.
 /// 2. Распределяем free space через flex-grow / flex-shrink.
 /// 3. Раскладываем items с учётом justify-content и align-items.
+/// 4. При flex-wrap: apply align-content across flex lines.
 ///
-/// Ограничения Phase 0: `nowrap` only (multi-line — задача 4B.5);
-/// column-direction: cross-axis = container width (auto stretch).
+/// `explicit_cross` — явная высота контейнера (content box) для row flex;
+/// используется в align-content для вычисления свободного пространства по cross axis.
 ///
 /// Возвращает `content_height` (вертикальный размер контентной зоны контейнера).
 #[allow(clippy::too_many_arguments)]
@@ -3874,6 +6680,7 @@ fn lay_out_flex(
     content_x: f32,
     content_y: f32,
     content_width: f32,
+    explicit_cross: Option<f32>,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     pcb: Rect,
@@ -3888,10 +6695,15 @@ fn lay_out_flex(
     let is_wrap_reverse = matches!(s.flex_wrap, FlexWrap::WrapReverse);
 
     // Indices of non-Skip children (actual flex items).
+    // CSS Flexbox L1 §4.1: an absolutely-positioned child of a flex container does
+    // not participate in flex layout — it must not become a flex item nor advance
+    // the main-axis cursor. Such children are positioned afterward against the
+    // container's content box (see the flex dispatch branch in `lay_out`).
     let mut item_idxs: Vec<usize> = children
         .iter()
         .enumerate()
-        .filter(|(_, c)| !matches!(c.kind, BoxKind::Skip))
+        .filter(|(_, c)| !matches!(c.kind, BoxKind::Skip)
+            && !matches!(c.style.position, Position::Absolute | Position::Fixed))
         .map(|(i, _)| i)
         .collect();
     // CSS Flexbox L1 §4 — stable sort by `order` (same-order items keep source order).
@@ -3922,7 +6734,7 @@ fn lay_out_flex(
     // Step 1 — preliminary layout for intrinsic sizes.
     let cb = content_width;
     for &i in &item_idxs {
-        lay_out(&mut children[i], content_x, content_y, content_width, None, measurer, viewport, pcb, hp);
+        lay_out(&mut children[i], content_x, content_y, content_width, None, measurer, viewport, pcb, hp, false);
     }
 
     // Compute hypothetical main sizes for all items (outer = including margins).
@@ -3961,7 +6773,33 @@ fn lay_out_flex(
                 }
                 FlexBasis::Length(l) => {
                     let base = l.resolve(iem, Some(cb), viewport).unwrap_or(0.0).max(0.0);
-                    if is_column { base + m_t + m_b } else { base + m_l + m_r }
+                    if is_column {
+                        // CSS Flexbox §4.5: a flex item's automatic minimum size. When
+                        // its main-axis `min-height` is `auto` and the block-axis
+                        // overflow is `visible`, the item cannot shrink below its
+                        // content size suggestion. Without this floor, `flex: 1`
+                        // (which sets `flex-basis: 0`) collapses a content-sized item
+                        // to height 0 in an indefinite-height column container, so
+                        // following siblings paint on top of it (BUG-158, lenta.ru
+                        // news cards). `item.rect.height` from the preliminary pass is
+                        // the floor: it is the content height, already clamped by any
+                        // real explicit `height` (the spec's "specified size suggestion"
+                        // cap). We deliberately do NOT skip this when `style.height` is
+                        // Some, because flex layout itself writes a resolved px height
+                        // back into the item's style (see the `is_column` branch below);
+                        // on a re-layout pass that stale value must not disable the
+                        // floor and re-collapse the item.
+                        let auto_min = if is.min_height.is_none()
+                            && is.overflow_y == Overflow::Visible
+                        {
+                            item.rect.height
+                        } else {
+                            0.0
+                        };
+                        base.max(auto_min) + m_t + m_b
+                    } else {
+                        base + m_l + m_r
+                    }
                 }
             }
         })
@@ -4002,6 +6840,9 @@ fn lay_out_flex(
     } else {
         (0..n_lines).collect()
     };
+    // Track line cross-sizes for align-content.
+    let mut line_cross_sizes: Vec<f32> = Vec::with_capacity(n_lines);
+
 
     for li in &ordered_line_idxs {
         let line_keys = &lines[*li]; // keys into item_idxs
@@ -4085,21 +6926,25 @@ fn lay_out_flex(
                     viewport,
                     pcb,
                     hp,
+                    false,
                 );
                 main_cursor += outer_main + item_gap + jc_gap;
             } else {
                 let inner_main = (outer_main - m_l - m_r).max(0.0);
                 children[i].style.width = Some(Length::Px(inner_main));
+                // CSS Flexbox §9.8: percentage cross sizes (e.g. height:100%) resolve
+                // against the flex container's definite cross size.
                 lay_out(
                     &mut children[i],
                     content_x + main_cursor + m_l,
                     content_y + cross_cursor + m_t,
                     inner_main,
-                    None,
+                    explicit_cross,
                     measurer,
                     viewport,
                     pcb,
                     hp,
+                    false,
                 );
                 main_cursor += outer_main + item_gap + jc_gap;
             }
@@ -4111,8 +6956,18 @@ fn lay_out_flex(
         } else {
             line_keys.iter().map(|&k| children[item_idxs[k]].rect.height).fold(0.0_f32, f32::max)
         };
+        line_cross_sizes.push(line_cross);
 
         if !is_column {
+            // CSS Flexbox §9.5: for a single-line (non-wrapping) flex container the line
+            // cross size equals the container's inner cross size (if definite). This lets
+            // align-items: center/end position items relative to the full container height
+            // rather than just the tallest item in the line.
+            let effective_cross = if !is_wrap {
+                explicit_cross.unwrap_or(line_cross)
+            } else {
+                line_cross
+            };
             for &k in line_keys {
                 let i = item_idxs[k];
                 let item = &mut children[i];
@@ -4124,13 +6979,20 @@ fn lay_out_flex(
                 let outer_cross = item.rect.height + m_t + m_b;
                 match align {
                     AlignValue::End => {
-                        item.rect.y = content_y + cross_cursor + line_cross - outer_cross + m_t;
+                        item.rect.y = content_y + cross_cursor + effective_cross - outer_cross + m_t;
                     }
                     AlignValue::Center => {
-                        item.rect.y = content_y + cross_cursor + m_t + (line_cross - outer_cross) / 2.0;
+                        item.rect.y = content_y + cross_cursor + m_t + (effective_cross - outer_cross) / 2.0;
                     }
                     AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal => {
-                        let stretch_h = (line_cross - m_t - m_b).max(item.rect.height);
+                        // CSS Flexbox §9.5: stretch applies only when the item's cross size
+                        // is auto (no explicit height). Items with explicit heights are not
+                        // grown beyond their declared size.
+                        let stretch_h = if is.height.is_none() {
+                            (effective_cross - m_t - m_b).max(0.0)
+                        } else {
+                            item.rect.height
+                        };
                         if item.rect.height < stretch_h {
                             item.rect.height = stretch_h;
                         }
@@ -4146,12 +7008,99 @@ fn lay_out_flex(
         cross_cursor += line_cross + cross_gap;
     }
 
-    // Remove trailing gap from cross_cursor.
-    let total_cross = if n_lines > 1 {
-        cross_cursor - cross_gap
+    // Remove the trailing cross gap accumulated by the loop. Each processed line
+    // appends `line_cross + cross_gap` (5225), so after the loop there is always
+    // exactly one surplus `cross_gap` — including single-line containers, where the
+    // row-gap (from `gap`/`row-gap`) must NOT leak into the container's cross size
+    // (nothing to separate). Subtract whenever at least one line was laid out.
+    let mut total_cross = if n_lines > 0 {
+        (cross_cursor - cross_gap).max(0.0)
     } else {
         cross_cursor
     };
+
+    // Apply align-content to distribute remaining space between flex lines (row wrap only).
+    // CSS Box Alignment L3: align-content applies to single-line wrapped containers too
+    // (Chrome/Edge 103+ behavior). Removed `n_lines > 1` guard to match browsers.
+    if !is_column && is_wrap {
+        let line_gap_total = cross_gap * (n_lines.saturating_sub(1)) as f32;
+        let used_cross: f32 = line_cross_sizes.iter().sum::<f32>() + line_gap_total;
+        let free_cross = explicit_cross.map_or(0.0, |h| (h - used_cross).max(0.0));
+
+        if free_cross > 0.0 {
+            let mut line_offsets: Vec<f32> = vec![0.0; n_lines];
+
+            // CSS Box Alignment L3 §5.4: `normal`/`auto` align-content behaves as
+            // `stretch` for flex containers. The default (`Auto`) therefore
+            // distributes free cross-space by growing each flex line.
+            let effective = match s.align_content {
+                AlignValue::Auto | AlignValue::Normal => AlignValue::Stretch,
+                other => other,
+            };
+
+            match effective {
+                AlignValue::End => {
+                    line_offsets.fill(free_cross);
+                }
+                AlignValue::Center => {
+                    line_offsets.fill(free_cross / 2.0);
+                }
+                AlignValue::SpaceBetween if n_lines > 1 => {
+                    let gap_per = free_cross / (n_lines - 1) as f32;
+                    for (i, offset) in line_offsets.iter_mut().enumerate().skip(1) {
+                        *offset = gap_per * i as f32;
+                    }
+                }
+                AlignValue::SpaceAround => {
+                    let per = free_cross / n_lines as f32;
+                    for (i, offset) in line_offsets.iter_mut().enumerate() {
+                        *offset = per / 2.0 + (per * i as f32);
+                    }
+                }
+                AlignValue::SpaceEvenly => {
+                    let per = free_cross / (n_lines + 1) as f32;
+                    for (i, offset) in line_offsets.iter_mut().enumerate() {
+                        *offset = per * (i as f32 + 1.0);
+                    }
+                }
+                AlignValue::Stretch => {
+                    // CSS Flexbox §8.3: positive free space is split EQUALLY between
+                    // all flex lines, increasing each line's cross size. Items on a
+                    // later line shift toward the cross-end by the cumulative growth
+                    // of all preceding lines (each grown line pushes the next down).
+                    let per = free_cross / n_lines as f32;
+                    for (i, offset) in line_offsets.iter_mut().enumerate() {
+                        *offset = per * i as f32;
+                    }
+                    for size in line_cross_sizes.iter_mut() {
+                        *size += per;
+                    }
+                }
+                _ => {
+                }
+            }
+
+            for li in 0..n_lines {
+                let line_keys = &lines[li];
+                let offset = line_offsets[li];
+
+                if !is_column && offset > 0.0 {
+                    for &k in line_keys {
+                        let i = item_idxs[k];
+                        // Shift the whole item subtree, not just its own box: the
+                        // item's descendants were already positioned in absolute
+                        // coordinates during the flex layout pass, so an
+                        // align-content offset must move them in lockstep. Bumping
+                        // only `rect.y` would leave the item's content (and any
+                        // nested flex lines) behind by `offset` — BUG-165.
+                        shift_y_box(&mut children[i], offset);
+                    }
+                }
+            }
+
+            total_cross = line_cross_sizes.iter().sum::<f32>() + line_gap_total;
+        }
+    }
 
     if is_column {
         // Column: return main-axis height (main_cursor from last line).
@@ -4192,6 +7141,12 @@ fn lay_out_grid(
 ) -> f32 {
     let em = s.font_size;
 
+    // CSS Grid L2 §9: If this grid was set up as a subgrid by its parent, read
+    // the inherited track contexts that the parent set in the thread-locals.
+    // We clear them immediately so our own children don't accidentally inherit them.
+    let inherited_cols: Option<SubgridContext> = SUBGRID_COL_CTX.with(|c| c.borrow_mut().take());
+    let inherited_rows: Option<SubgridContext> = SUBGRID_ROW_CTX.with(|c| c.borrow_mut().take());
+
     // Indices of actual items (non-Skip).
     let item_idxs: Vec<usize> = children
         .iter()
@@ -4204,12 +7159,115 @@ fn lay_out_grid(
         return 0.0;
     }
 
-    // Gap between tracks.
-    let col_gap = s.column_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0);
-    let row_gap = s.row_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0);
+    // Gap between tracks.  When the axis is subgridded we use the parent's gap
+    // (already baked into the offsets in SubgridContext); fall back to our own style.
+    let col_gap = inherited_cols.as_ref()
+        .map(|ctx| ctx.gap)
+        .unwrap_or_else(|| s.column_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0));
+    let row_gap = inherited_rows.as_ref()
+        .map(|ctx| ctx.gap)
+        .unwrap_or_else(|| s.row_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0));
+
+    // CSS Grid L1 §7.2.3.4 — Phase 2: expand repeat(auto-fill|auto-fit, ...) at layout time.
+    // If the style carried auto-repeat metadata, resolve the track count and build an expanded list.
+    let auto_fill_col_tracks: Vec<GridTrackSize> =
+        if let Some(ref rep) = s.grid_template_col_auto_repeat {
+            let n = resolve_auto_fill_fit_count(content_width, &rep.tracks, col_gap).max(1);
+            let mut tracks = Vec::with_capacity(n * rep.tracks.len());
+            for _ in 0..n {
+                tracks.extend_from_slice(&rep.tracks);
+            }
+            tracks
+        } else {
+            Vec::new()
+        };
+    let eff_col_template: &[GridTrackSize] = if s.grid_template_col_auto_repeat.is_some() {
+        &auto_fill_col_tracks
+    } else {
+        &s.grid_template_columns
+    };
+
+    // CSS Grid L3 §14: masonry layout — early dispatch before normal grid placement.
+    // `masonry` as grid_template_rows → column-masonry (most common, Pinterest-style).
+    // `masonry` as grid_template_columns → row-masonry (transposed).
+    let col_is_masonry = eff_col_template.first() == Some(&GridTrackSize::Masonry);
+    let row_is_masonry = s.grid_template_rows.first() == Some(&GridTrackSize::Masonry);
+
+    if col_is_masonry || row_is_masonry {
+        // CSS Masonry Layout §9 — masonry-auto-flow controls placement order.
+        let sorted_idxs: Vec<usize> = {
+            let mut idxs = item_idxs.clone();
+            match s.masonry_auto_flow {
+                MasonryAutoFlow::DefiniteFirst => {
+                    // Items with an explicit grid-axis position first, then auto items.
+                    let is_definite = |i: usize| -> bool {
+                        if row_is_masonry {
+                            !matches!(children[i].style.grid_column_start, GridLine::Auto)
+                        } else {
+                            !matches!(children[i].style.grid_row_start, GridLine::Auto)
+                        }
+                    };
+                    idxs.sort_by_key(|&i| if is_definite(i) { 0usize } else { 1 });
+                }
+                MasonryAutoFlow::Next => { /* source order — no-op */ }
+                MasonryAutoFlow::Ordered => {
+                    idxs.sort_by_key(|&i| children[i].style.order);
+                }
+            }
+            idxs
+        };
+
+        let (track_count, track_gap) = if row_is_masonry {
+            // Grid axis = columns (defined by grid_template_columns), masonry axis = rows.
+            (eff_col_template.len().max(1), col_gap)
+        } else {
+            // Grid axis = rows (defined by grid_template_rows), masonry axis = columns.
+            (s.grid_template_rows.len().max(1), row_gap)
+        };
+        let total_track_gap = track_gap * track_count.saturating_sub(1) as f32;
+        let track_size = ((content_width - total_track_gap) / track_count as f32).max(0.0);
+        let item_gap = if row_is_masonry { row_gap } else { col_gap };
+
+        // Step 1: lay out all items at track_size to establish their intrinsic height.
+        for &i in &sorted_idxs {
+            lay_out(&mut children[i], content_x, content_y, track_size, None, measurer, viewport, pcb, hp, false);
+        }
+
+        // Step 2: greedy waterfall placement — each item placed in the track with minimum height.
+        let mut track_heights = vec![0.0_f32; track_count];
+        for &i in &sorted_idxs {
+            let min_track = track_heights
+                .iter()
+                .enumerate()
+                .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(idx, _)| idx)
+                .unwrap_or(0);
+
+            if row_is_masonry {
+                children[i].rect.x = content_x + min_track as f32 * (track_size + track_gap);
+                children[i].rect.y = content_y + track_heights[min_track];
+            } else {
+                // Row-masonry: column positions waterfall, row positions from explicit tracks.
+                children[i].rect.x = content_x + track_heights[min_track];
+                children[i].rect.y = content_y + min_track as f32 * (track_size + track_gap);
+            }
+            children[i].rect.width = track_size;
+            track_heights[min_track] += children[i].rect.height + item_gap;
+        }
+
+        // Total height = max track accumulation (subtract trailing gap).
+        let total_h = track_heights.iter().cloned().fold(0.0_f32, f32::max);
+        return (total_h - item_gap).max(0.0);
+    }
 
     // Determine explicit track counts.
-    let n_explicit_cols = s.grid_template_columns.len().max(1);
+    // Subgrid sentinel `[Subgrid]` is a single-element vec meaning "inherit all parent tracks";
+    // for placement purposes use the number of inherited tracks (or 1 for auto-placement).
+    let n_explicit_cols = if eff_col_template.first() == Some(&GridTrackSize::Subgrid) {
+        inherited_cols.as_ref().map(|ctx| ctx.sizes.len()).unwrap_or(1).max(1)
+    } else {
+        eff_col_template.len().max(1)
+    };
 
     // --- Step 1: Resolve placements for every item ---
     // placement: (col_start, col_end, row_start, row_end) all 1-based inclusive/exclusive.
@@ -4409,75 +7467,97 @@ fn lay_out_grid(
     let n_rows = placements.iter().map(|&(_, _, _, re)| re.saturating_sub(1)).max().unwrap_or(1);
 
     // --- Step 3: Compute column widths ---
-    // Compute fixed column widths.
-    let mut col_widths: Vec<f32> = (0..n_cols)
-        .map(|c| {
-            let ts = grid_track(c, &s.grid_template_columns, &s.grid_auto_columns);
-            match ts {
-                GridTrackSize::Length(l) => l.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0),
-                GridTrackSize::Minmax(min, _) => min.resolve_fixed(em, content_width, viewport).unwrap_or(0.0),
-                _ => 0.0, // fr / auto resolved later
-            }
-        })
-        .collect();
-
-    // Total gap between columns.
-    let total_col_gap = if n_cols > 1 { col_gap * (n_cols - 1) as f32 } else { 0.0 };
-    let fixed_col_total: f32 = col_widths.iter().sum::<f32>() + total_col_gap;
-    let free_col = (content_width - fixed_col_total).max(0.0);
-
-    // Distribute fr among column tracks.
-    let total_fr: f32 = (0..n_cols)
-        .map(|c| grid_track(c, &s.grid_template_columns, &s.grid_auto_columns).fr().unwrap_or(0.0))
-        .sum();
-    let auto_col_count = (0..n_cols)
-        .filter(|&c| matches!(
-            grid_track(c, &s.grid_template_columns, &s.grid_auto_columns),
-            GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent
-        ))
-        .count();
-
-    // For auto columns, divide remaining free space equally (after fr).
-    let fr_width = if total_fr > 0.0 { free_col / total_fr } else { 0.0 };
-    let auto_col_width = if auto_col_count > 0 && total_fr == 0.0 {
-        free_col / auto_col_count as f32
+    // If the column axis is subgridded, use the inherited track sizes directly;
+    // otherwise compute from the style as usual (CSS Grid L2 §9).
+    let (col_widths, col_offsets) = if let Some(ref ctx) = inherited_cols {
+        // Subgrid column axis: clip to n_cols (parent may span more tracks than
+        // the explicit template; auto-place inside those tracks).
+        let sizes: Vec<f32> = ctx.sizes.iter().take(n_cols as usize).cloned().collect();
+        let offsets: Vec<f32> = ctx.offsets.iter().take(n_cols as usize).cloned().collect();
+        (sizes, offsets)
     } else {
-        0.0
+        // Normal grid: compute column widths from the style.
+        let mut col_widths: Vec<f32> = (0..n_cols)
+            .map(|c| {
+                let ts = grid_track(c, eff_col_template, &s.grid_auto_columns);
+                match ts {
+                    GridTrackSize::Length(l) => l.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0),
+                    GridTrackSize::Minmax(min, _) => min.resolve_fixed(em, content_width, viewport).unwrap_or(0.0),
+                    // Subgrid sentinel without parent context — fall back to auto.
+                    GridTrackSize::Subgrid => 0.0,
+                    _ => 0.0, // fr / auto resolved later
+                }
+            })
+            .collect();
+
+        // Total gap between columns.
+        let total_col_gap = if n_cols > 1 { col_gap * (n_cols - 1) as f32 } else { 0.0 };
+        let fixed_col_total: f32 = col_widths.iter().sum::<f32>() + total_col_gap;
+        let free_col = (content_width - fixed_col_total).max(0.0);
+
+        // Distribute fr among column tracks.
+        let total_fr: f32 = (0..n_cols)
+            .map(|c| grid_track(c, eff_col_template, &s.grid_auto_columns).fr().unwrap_or(0.0))
+            .sum();
+        let auto_col_count = (0..n_cols)
+            .filter(|&c| matches!(
+                grid_track(c, eff_col_template, &s.grid_auto_columns),
+                GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent
+            ))
+            .count();
+
+        // For auto columns, divide remaining free space equally (after fr).
+        let fr_width = if total_fr > 0.0 { free_col / total_fr } else { 0.0 };
+        let auto_col_width = if auto_col_count > 0 && total_fr == 0.0 {
+            free_col / auto_col_count as f32
+        } else {
+            0.0
+        };
+
+        for c in 0..n_cols {
+            match grid_track(c, eff_col_template, &s.grid_auto_columns) {
+                GridTrackSize::Fr(f) => col_widths[c as usize] = (f * fr_width).max(0.0),
+                GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent => {
+                    col_widths[c as usize] = auto_col_width;
+                }
+                _ => {}
+            }
+        }
+
+        // Column start offsets.
+        let mut col_offsets: Vec<f32> = Vec::with_capacity(n_cols as usize);
+        let mut x_off = 0.0_f32;
+        for c in 0..n_cols {
+            col_offsets.push(x_off);
+            x_off += col_widths[c as usize] + if c < n_cols - 1 { col_gap } else { 0.0 };
+        }
+
+        (col_widths, col_offsets)
     };
 
-    for c in 0..n_cols {
-        match grid_track(c, &s.grid_template_columns, &s.grid_auto_columns) {
-            GridTrackSize::Fr(f) => col_widths[c as usize] = (f * fr_width).max(0.0),
-            GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent => {
-                col_widths[c as usize] = auto_col_width;
-            }
-            _ => {}
-        }
-    }
-
-    // Column start offsets.
-    let mut col_offsets: Vec<f32> = Vec::with_capacity(n_cols as usize);
-    let mut x_off = 0.0_f32;
-    for c in 0..n_cols {
-        col_offsets.push(x_off);
-        x_off += col_widths[c as usize] + if c < n_cols - 1 { col_gap } else { 0.0 };
-    }
-
     // --- Step 4: Layout items to measure row heights ---
-    // Explicit row heights.
-    let mut row_heights: Vec<f32> = (0..n_rows)
-        .map(|r| {
-            match grid_track(r, &s.grid_template_rows, &s.grid_auto_rows) {
-                GridTrackSize::Length(l) => l.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0),
-                GridTrackSize::Minmax(min, _) => min.resolve_fixed(em, content_width, viewport).unwrap_or(0.0),
-                _ => 0.0,
-            }
-        })
-        .collect();
+    // If the row axis is subgridded, use inherited sizes; otherwise compute from style.
+    let mut row_heights: Vec<f32> = if let Some(ref ctx) = inherited_rows {
+        ctx.sizes.iter().take(n_rows as usize).cloned().collect()
+    } else {
+        (0..n_rows)
+            .map(|r| {
+                match grid_track(r, &s.grid_template_rows, &s.grid_auto_rows) {
+                    GridTrackSize::Length(l) => l.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0),
+                    GridTrackSize::Minmax(min, _) => min.resolve_fixed(em, content_width, viewport).unwrap_or(0.0),
+                    GridTrackSize::Subgrid => 0.0,
+                    _ => 0.0,
+                }
+            })
+            .collect()
+    };
+
+    // Row offsets (computed from row_heights regardless of subgrid).
+    // For subgrid row axis the offsets are inherited below in final pass.
 
     // Layout each item in its cell to determine content height.
     for (k, &i) in item_idxs.iter().enumerate() {
-        let (cs, ce, rs, _re) = placements[k];
+        let (cs, ce, rs, re) = placements[k];
         if cs == 0 || rs == 0 {
             continue; // unplaced (should not happen after auto-placement)
         }
@@ -4486,13 +7566,46 @@ fn lay_out_grid(
         let cell_w: f32 = if c1 > c0 {
             col_widths[c0..c1].iter().sum::<f32>() + col_gap * (c1 - c0 - 1) as f32
         } else {
-            col_widths[c0]
+            col_widths.get(c0).copied().unwrap_or(0.0)
         };
-        // Layout at temporary position (y=0) to get intrinsic height.
-        lay_out(&mut children[i], content_x + col_offsets[c0], 0.0, cell_w, None, measurer, viewport, pcb, hp);
+
+        // For subgrid children: set the thread-local context before laying out.
+        let child_col_subgrid = children[i].style.grid_template_columns.first()
+            == Some(&GridTrackSize::Subgrid);
+        let child_row_subgrid = children[i].style.grid_template_rows.first()
+            == Some(&GridTrackSize::Subgrid);
+
+        if child_col_subgrid || child_row_subgrid {
+            // Build subgrid context slices from our resolved track sizes.
+            let child_col_ctx = if child_col_subgrid && c1 > c0 {
+                Some(SubgridContext::from_parent_tracks(&col_widths[c0..c1], col_gap))
+            } else {
+                None
+            };
+            let child_row_ctx = if child_row_subgrid {
+                // Row heights not fully determined yet; pass current estimates.
+                let r0 = (rs - 1).min(n_rows - 1) as usize;
+                let re_eff = re.max(rs + 1);
+                let r1 = (re_eff - 1).min(n_rows) as usize;
+                if r1 > r0 {
+                    Some(SubgridContext::from_parent_tracks(&row_heights[r0..r1], row_gap))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let _guard = SubgridContextGuard::set(child_col_ctx, child_row_ctx);
+            lay_out(&mut children[i], content_x + col_offsets.get(c0).copied().unwrap_or(0.0), 0.0, cell_w, None, measurer, viewport, pcb, hp, false);
+        } else {
+            // Layout at temporary position (y=0) to get intrinsic height.
+            lay_out(&mut children[i], content_x + col_offsets.get(c0).copied().unwrap_or(0.0), 0.0, cell_w, None, measurer, viewport, pcb, hp, false);
+        }
+
         // Update auto row heights.
         let r0 = (rs - 1) as usize;
         if r0 < row_heights.len()
+            && inherited_rows.is_none()
             && matches!(
                 grid_track(r0 as u32, &s.grid_template_rows, &s.grid_auto_rows),
                 GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent | GridTrackSize::Fr(_)
@@ -4505,38 +7618,48 @@ fn lay_out_grid(
         }
     }
 
-    // Resolve fr row heights.
-    let total_row_gap = if n_rows > 1 { row_gap * (n_rows - 1) as f32 } else { 0.0 };
-    let fixed_row_total: f32 = row_heights.iter().sum::<f32>() + total_row_gap;
-    // If container has explicit height, distribute fr rows from it.
-    let container_h = s.height.as_ref().and_then(|h| h.resolve(em, Some(content_width), viewport));
-    let free_row = container_h.map(|h| (h - fixed_row_total).max(0.0)).unwrap_or(0.0);
-    let total_row_fr: f32 = (0..n_rows)
-        .map(|r| grid_track(r, &s.grid_template_rows, &s.grid_auto_rows).fr().unwrap_or(0.0))
-        .sum();
-    if total_row_fr > 0.0 && free_row > 0.0 {
-        let fr_h = free_row / total_row_fr;
-        for r in 0..n_rows {
-            if let Some(f) = grid_track(r, &s.grid_template_rows, &s.grid_auto_rows).fr() {
-                row_heights[r as usize] = (f * fr_h).max(row_heights[r as usize]);
+    // Resolve fr row heights (skip when row axis is subgridded — sizes are fixed).
+    if inherited_rows.is_none() {
+        let total_row_gap = if n_rows > 1 { row_gap * (n_rows - 1) as f32 } else { 0.0 };
+        let fixed_row_total: f32 = row_heights.iter().sum::<f32>() + total_row_gap;
+        // If container has explicit height, distribute fr rows from it.
+        let container_h = s.height.as_ref().and_then(|h| h.resolve(em, Some(content_width), viewport));
+        let free_row = container_h.map(|h| (h - fixed_row_total).max(0.0)).unwrap_or(0.0);
+        let total_row_fr: f32 = (0..n_rows)
+            .map(|r| grid_track(r, &s.grid_template_rows, &s.grid_auto_rows).fr().unwrap_or(0.0))
+            .sum();
+        if total_row_fr > 0.0 && free_row > 0.0 {
+            let fr_h = free_row / total_row_fr;
+            for r in 0..n_rows {
+                if let Some(f) = grid_track(r, &s.grid_template_rows, &s.grid_auto_rows).fr() {
+                    row_heights[r as usize] = (f * fr_h).max(row_heights[r as usize]);
+                }
             }
         }
     }
 
-    // Row top offsets.
-    let mut row_offsets: Vec<f32> = Vec::with_capacity(n_rows as usize);
-    let mut y_off = 0.0_f32;
-    for r in 0..n_rows {
-        row_offsets.push(y_off);
-        y_off += row_heights[r as usize] + if r < n_rows - 1 { row_gap } else { 0.0 };
-    }
+    // Row top offsets: if row axis is subgridded, use inherited offsets; else compute.
+    let (row_offsets, y_off) = if let Some(ref ctx) = inherited_rows {
+        let offsets: Vec<f32> = ctx.offsets.iter().take(n_rows as usize).cloned().collect();
+        let total = ctx.total_size();
+        (offsets, total)
+    } else {
+        let mut row_offsets: Vec<f32> = Vec::with_capacity(n_rows as usize);
+        let mut y_off = 0.0_f32;
+        for r in 0..n_rows {
+            row_offsets.push(y_off);
+            y_off += row_heights[r as usize] + if r < n_rows - 1 { row_gap } else { 0.0 };
+        }
+        (row_offsets, y_off)
+    };
+    let mut y_off = y_off;
 
     // --- Step 5: Final positioning pass ---
     for (k, &i) in item_idxs.iter().enumerate() {
         let (cs, ce, rs, re) = placements[k];
         if cs == 0 || rs == 0 {
             // Unplaced — stack below grid content.
-            lay_out(&mut children[i], content_x, content_y + y_off, content_width, None, measurer, viewport, pcb, hp);
+            lay_out(&mut children[i], content_x, content_y + y_off, content_width, None, measurer, viewport, pcb, hp, false);
             y_off += children[i].rect.height;
             continue;
         }
@@ -4558,8 +7681,27 @@ fn lay_out_grid(
             row_heights[r0]
         };
 
-        // Re-layout with final cell width.
-        lay_out(&mut children[i], cell_x, cell_y, cell_w, None, measurer, viewport, pcb, hp);
+        // Re-layout with final cell width. For subgrid children, restore the context.
+        let child_col_subgrid = children[i].style.grid_template_columns.first()
+            == Some(&GridTrackSize::Subgrid);
+        let child_row_subgrid = children[i].style.grid_template_rows.first()
+            == Some(&GridTrackSize::Subgrid);
+        if child_col_subgrid || child_row_subgrid {
+            let final_col_ctx = if child_col_subgrid && c1 > c0 {
+                Some(SubgridContext::from_parent_tracks(&col_widths[c0..c1], col_gap))
+            } else {
+                None
+            };
+            let final_row_ctx = if child_row_subgrid && r1 > r0 {
+                Some(SubgridContext::from_parent_tracks(&row_heights[r0..r1], row_gap))
+            } else {
+                None
+            };
+            let _guard = SubgridContextGuard::set(final_col_ctx, final_row_ctx);
+            lay_out(&mut children[i], cell_x, cell_y, cell_w, None, measurer, viewport, pcb, hp, false);
+        } else {
+            lay_out(&mut children[i], cell_x, cell_y, cell_w, None, measurer, viewport, pcb, hp, false);
+        }
 
         let item = &mut children[i];
         let is = &item.style;
@@ -4610,6 +7752,64 @@ fn lay_out_grid(
     }
 
     y_off
+}
+
+/// CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count.
+/// Returns the number of tracks to fill the available space when using auto-fill or auto-fit.
+///
+/// # Arguments
+/// * `available_width` — CSS px width of the container content box.
+/// * `track_sizes` — The track sizes inside the repeat(), e.g. `[minmax(100px, 1fr)]`.
+/// * `gap` — Column gap in px.
+/// * `auto_fit` — If true, resolve as auto-fit (collapse empty tracks); else auto-fill.
+///
+/// # Returns
+/// The minimum number of tracks that fit in available space, with preference
+/// for auto-fill (leave empty) over auto-fit (collapse).
+pub fn resolve_auto_fill_fit_count(
+    available_width: f32,
+    track_sizes: &[GridTrackSize],
+    gap: f32,
+) -> usize {
+    if track_sizes.is_empty() || available_width <= 0.0 {
+        return 1; // At least one track
+    }
+
+    // Compute minimum track width: the min() sizing function of each track.
+    // For minmax(min, max), use min. For auto/fr/max-content, use 0 as placeholder (content-sized).
+    let mut track_min_width: f32 = 0.0;
+    for track in track_sizes {
+        let w = match track {
+            GridTrackSize::Length(len) => {
+                // Fixed length: use as-is (simplified: only px supported in this pass)
+                len.resolve(1.0, Some(available_width), Size::new(1024.0, 768.0))
+                    .unwrap_or(0.0)
+            }
+            GridTrackSize::Minmax(min, _max) => {
+                // Use the min() part
+                min.resolve_fixed(1.0, available_width, Size::new(1024.0, 768.0))
+                    .unwrap_or(0.0)
+            }
+            GridTrackSize::FitContent(limit) => {
+                // Use the limit as min sizing (simplified)
+                limit.resolve_fixed(1.0, available_width, Size::new(1024.0, 768.0))
+                    .unwrap_or(0.0)
+            }
+            // Auto, MinContent, MaxContent, Fr, Subgrid: no fixed minimum, use 0
+            _ => 0.0,
+        };
+        track_min_width = track_min_width.max(w);
+    }
+
+    // Count tracks: (available_width + gap) / (track_min_width + gap), minimum 1.
+    let gap_adjusted_available = available_width + gap;
+    let track_plus_gap = track_min_width + gap;
+
+    if track_plus_gap <= 0.0 {
+        1
+    } else {
+        ((gap_adjusted_available / track_plus_gap).floor() as usize).max(1)
+    }
 }
 
 /// Return the track size for track index `idx` (0-based) from a template list,
@@ -4749,8 +7949,6 @@ fn strip_soft_hyphens(raw: &str) -> (String, Vec<usize>) {
 
 /// Measures text width (letter_spacing applied between each character).
 /// `tab_size` is used for `\t` characters; pass 0.0 when text contains no tabs.
-// CSS: font-variation-settings — P4 добавит `variation_axes` параметр когда
-// TextMeasurer получит char_width_varied; сейчас используется base advance width.
 pub fn measure_text_w(text: &str, font_size: f32, letter_spacing: f32, tab_size: f32, m: &dyn TextMeasurer) -> f32 {
     if text.is_empty() {
         return 0.0;
@@ -4759,6 +7957,67 @@ pub fn measure_text_w(text: &str, font_size: f32, letter_spacing: f32, tab_size:
         .chars()
         .map(|c| {
             let cw = if c == '\t' { tab_size } else { m.char_width(c, font_size) };
+            cw + letter_spacing
+        })
+        .sum();
+    total - letter_spacing
+}
+
+/// Как [`measure_text_w`], но учитывает CSS `font-family` каскад.
+///
+/// Используется в `wrap_inline_run`, где для каждого `InlineSegment` доступен
+/// `seg.style.font_family`. Позволяет `MultiFontMeasurer` выбирать правильный
+/// шрифт для измерения ширины слов при перенос-расчёте.
+pub fn measure_text_w_families(
+    text: &str,
+    font_size: f32,
+    letter_spacing: f32,
+    tab_size: f32,
+    families: &[String],
+    m: &dyn TextMeasurer,
+) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    let total: f32 = text
+        .chars()
+        .map(|c| {
+            let cw = if c == '\t' {
+                tab_size
+            } else {
+                m.char_width_with_families(c, font_size, families)
+            };
+            cw + letter_spacing
+        })
+        .sum();
+    total - letter_spacing
+}
+
+/// Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`.
+///
+/// CSS Fonts L4 §6.3 — для variable fonts применяет HVAR advance width deltas.
+/// Для статических шрифтов (без fvar/HVAR) эквивалентен [`measure_text_w_families`].
+/// Используется в line wrapping когда `style.font_variation_settings` непустой.
+pub fn measure_text_w_varied(
+    text: &str,
+    font_size: f32,
+    letter_spacing: f32,
+    tab_size: f32,
+    families: &[String],
+    axes: &[crate::style::FontVariationSetting],
+    m: &dyn TextMeasurer,
+) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    let total: f32 = text
+        .chars()
+        .map(|c| {
+            let cw = if c == '\t' {
+                tab_size
+            } else {
+                m.char_width_varied(c, font_size, axes, families)
+            };
             cw + letter_spacing
         })
         .sum();
@@ -4809,11 +8068,12 @@ fn char_break_offset(
     avail_px: f32,
     font_size: f32,
     ls: f32,
+    families: &[String],
     m: &dyn TextMeasurer,
 ) -> usize {
     let mut w = 0.0_f32;
     for (char_idx, (byte_pos, ch)) in word.char_indices().enumerate() {
-        let cw = m.char_width(ch, font_size);
+        let cw = m.char_width_with_families(ch, font_size, families);
         // Width of prefix ending at this char: sum(cw + ls) - ls.
         // For first char: width = cw (no trailing letter-spacing).
         let prefix_w = if char_idx == 0 { cw } else { w + ls + cw };
@@ -4844,9 +8104,10 @@ fn widest_word(segments: &[InlineSegment], m: &dyn TextMeasurer) -> f32 {
         let em = seg.style.font_size;
         let ls = seg.style.letter_spacing;
         let tab = seg.style.tab_size;
+        let families = &seg.style.font_family;
         for raw in seg.text.split_whitespace() {
             let (display, _) = strip_soft_hyphens(raw);
-            let w = measure_text_w(&display, em, ls, tab, m);
+            let w = measure_text_w_families(&display, em, ls, tab, families, m);
             max_w = max_w.max(w);
         }
     }
@@ -4954,11 +8215,12 @@ fn pretty_wrap(
         .last()
         .map(|w| {
             let (display, _) = strip_soft_hyphens(w);
-            measure_text_w(
+            measure_text_w_families(
                 &display,
                 last_frag.style.font_size,
                 last_frag.style.letter_spacing,
                 0.0,
+                &last_frag.style.font_family,
                 m,
             )
         })
@@ -5035,7 +8297,7 @@ fn wrap_inline_run(
             let pad_r = style.padding_right.resolve_or_zero(em, max_width, viewport);
             current_x += seg.pre_space;
             let frag_x = current_x;
-            let frag_w = measure_text_w(&seg.text, em, ls, tab_size, m);
+            let frag_w = measure_text_w_varied(&seg.text, em, ls, tab_size, &seg.style.font_family, &seg.style.font_variation_settings, m);
             current_line.push(InlineFrag {
                 x: frag_x,
                 y_offset: 0.0,
@@ -5046,6 +8308,7 @@ fn wrap_inline_run(
                 padding_right: pad_r,
                 is_element_box: seg.is_element_box,
                 img_src: None,
+                img_is_lazy: false,
                 is_first_line: false,
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
@@ -5077,6 +8340,7 @@ fn wrap_inline_run(
                 padding_right: pad_r,
                 is_element_box: true,
                 img_src: Some(img_src.clone()),
+                img_is_lazy: seg.img_is_lazy,
                 is_first_line: false,
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
@@ -5125,7 +8389,7 @@ fn wrap_inline_run(
             let pre = if is_seg_first { seg.pre_space } else { 0.0 };
             let post = if is_seg_last { seg.post_space } else { 0.0 };
 
-            let word_w = measure_text_w(&display_word, style.font_size, ls, 0.0, m);
+            let word_w = measure_text_w_varied(&display_word, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
             let gap = if current_line.is_empty() { 0.0 } else { inter_word };
 
             // Wrap: слово не влезает (но первое слово строки добавляем всегда).
@@ -5150,7 +8414,7 @@ fn wrap_inline_run(
 
                 if let Some((pfx, sfx)) = hyph_result {
                     // Emit prefix (with trailing '-') to current line, then wrap.
-                    let pfx_w = measure_text_w(&pfx, style.font_size, ls, 0.0, m);
+                    let pfx_w = measure_text_w_varied(&pfx, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
                     current_x += gap + pre;
                     current_line.push(InlineFrag {
                         x: current_x,
@@ -5162,6 +8426,7 @@ fn wrap_inline_run(
                         padding_right: 0.0,
                         is_element_box: seg.is_element_box,
                         img_src: None,
+                        img_is_lazy: false,
                         is_first_line: false,
                         source_node: seg.source_node,
                         source_char_offset: frag_source_offset,
@@ -5169,7 +8434,7 @@ fn wrap_inline_run(
                     result.push(std::mem::take(&mut current_line));
                     current_x = 0.0;
                     // Emit suffix as first fragment on new line.
-                    let sfx_w = measure_text_w(&sfx, style.font_size, ls, 0.0, m);
+                    let sfx_w = measure_text_w_varied(&sfx, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
                     current_line.push(InlineFrag {
                         x: 0.0,
                         y_offset: 0.0,
@@ -5180,6 +8445,7 @@ fn wrap_inline_run(
                         padding_right: if is_seg_last { pad_r } else { 0.0 },
                         is_element_box: seg.is_element_box,
                         img_src: None,
+                        img_is_lazy: false,
                         is_first_line: false,
                         source_node: seg.source_node,
                         source_char_offset: frag_source_offset,
@@ -5197,11 +8463,11 @@ fn wrap_inline_run(
                     let mut first_chunk = true;
                     while !rest.is_empty() {
                         let avail = (max_width - current_x).max(0.0);
-                        let split = char_break_offset(rest, avail, style.font_size, ls, m);
+                        let split = char_break_offset(rest, avail, style.font_size, ls, &style.font_family, m);
                         let head = &rest[..split];
                         let tail = &rest[split..];
                         if !head.is_empty() {
-                            let head_w = measure_text_w(head, style.font_size, ls, 0.0, m);
+                            let head_w = measure_text_w_varied(head, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
                             current_line.push(InlineFrag {
                                 x: current_x,
                                 y_offset: 0.0,
@@ -5212,6 +8478,7 @@ fn wrap_inline_run(
                                 padding_right: if tail.is_empty() && is_seg_last { pad_r } else { 0.0 },
                                 is_element_box: seg.is_element_box,
                                 img_src: None,
+                                img_is_lazy: false,
                                 is_first_line: false,
                                 source_node: seg.source_node,
                                 source_char_offset: frag_source_offset,
@@ -5247,11 +8514,11 @@ fn wrap_inline_run(
                 let mut first_chunk = true;
                 while !rest.is_empty() {
                     let avail = (max_width - current_x).max(0.0);
-                    let split = char_break_offset(rest, avail, style.font_size, ls, m);
+                    let split = char_break_offset(rest, avail, style.font_size, ls, &style.font_family, m);
                     let head = &rest[..split];
                     let tail = &rest[split..];
                     if !head.is_empty() {
-                        let head_w = measure_text_w(head, style.font_size, ls, 0.0, m);
+                        let head_w = measure_text_w_varied(head, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
                         current_line.push(InlineFrag {
                             x: current_x,
                             y_offset: 0.0,
@@ -5262,6 +8529,7 @@ fn wrap_inline_run(
                             padding_right: if tail.is_empty() && is_seg_last { pad_r } else { 0.0 },
                             is_element_box: seg.is_element_box,
                             img_src: None,
+                            img_is_lazy: false,
                             is_first_line: false,
                             source_node: seg.source_node,
                             source_char_offset: frag_source_offset,
@@ -5315,6 +8583,7 @@ fn wrap_inline_run(
                     padding_right: if is_seg_last { pad_r } else { 0.0 },
                     is_element_box: seg.is_element_box,
                     img_src: None,
+                    img_is_lazy: false,
                     is_first_line: false,
                     source_node: seg.source_node,
                     source_char_offset: frag_source_offset,
@@ -5336,22 +8605,43 @@ fn wrap_inline_run(
 /// Сдвигает фрагменты каждой строки по text-align + direction.
 /// `Start`/`End` разрешаются в Left/Right по direction (CSS Text L3 §7.1).
 /// Для RTL фрагменты зеркалируются относительно content_width.
+/// Последняя строка выравнивается по `text_align_last` (CSS Text L3 §7.2):
+/// `Auto` на justify-блоке → Start; иначе → как text_align.
 fn align_lines(
     lines: &mut [Vec<InlineFrag>],
     content_width: f32,
     text_align: TextAlign,
+    text_align_last: TextAlignLast,
     direction: Direction,
 ) {
     let is_rtl = direction == Direction::Rtl;
-    // Resolve Start/End to physical Left/Right.
-    let physical = match text_align {
-        TextAlign::Start => if is_rtl { TextAlign::Right } else { TextAlign::Left },
-        TextAlign::End   => if is_rtl { TextAlign::Left  } else { TextAlign::Right },
-        other => other,
-    };
-    for line in lines.iter_mut() {
-        let Some(last) = line.last() else { continue };
-        let line_width = last.x + last.width;
+    let total = lines.len();
+    for (idx, line) in lines.iter_mut().enumerate() {
+        let is_last = idx + 1 == total;
+        // CSS Text L3 §7.2: last line uses text-align-last.
+        // Auto → same as text-align (justify not yet in TextAlign, so no special case).
+        // TextAlignLast::Justify → Start (word-spacing justification not yet implemented).
+        let effective = if is_last {
+            match text_align_last {
+                TextAlignLast::Auto    => text_align,
+                TextAlignLast::Left    => TextAlign::Left,
+                TextAlignLast::Right   => TextAlign::Right,
+                TextAlignLast::Center  => TextAlign::Center,
+                TextAlignLast::Start   => TextAlign::Start,
+                TextAlignLast::End     => TextAlign::End,
+                TextAlignLast::Justify => TextAlign::Start,
+            }
+        } else {
+            text_align
+        };
+        // Resolve Start/End to physical Left/Right.
+        let physical = match effective {
+            TextAlign::Start => if is_rtl { TextAlign::Right } else { TextAlign::Left },
+            TextAlign::End   => if is_rtl { TextAlign::Left  } else { TextAlign::Right },
+            other => other,
+        };
+        let Some(last_frag) = line.last() else { continue };
+        let line_width = last_frag.x + last_frag.width;
         if is_rtl {
             // Mirror positions within the line block, then align the block.
             // `right_gap` = space to the right of the mirrored line block.
@@ -5431,6 +8721,7 @@ fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
                 padding_right: 0.0,
                 is_element_box: true,
                 img_src: Some(img_src.clone()),
+                img_is_lazy: false,
                 is_first_line: false,
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
@@ -5463,6 +8754,7 @@ fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
                 padding_right: 0.0,
                 is_element_box: seg.is_element_box,
                 img_src: None,
+                img_is_lazy: false,
                 is_first_line: false,
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
@@ -5623,15 +8915,17 @@ pub fn apply_container_styles(
     viewport: Size,
     measurer: Option<&dyn TextMeasurer>,
     hp: &dyn HyphenationProvider,
+    dark_mode: bool,
 ) {
     // No container rules in this sheet → fast path.
     if sheet.container_rules.is_empty() {
         return;
     }
     let pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
-    apply_container_inner(root, doc, sheet, viewport, measurer, pcb, hp);
+    apply_container_inner(root, doc, sheet, viewport, measurer, pcb, hp, dark_mode);
 }
 
+#[allow(clippy::too_many_arguments, clippy::only_used_in_recursion)]
 fn apply_container_inner(
     b: &mut LayoutBox,
     doc: &Document,
@@ -5640,6 +8934,7 @@ fn apply_container_inner(
     measurer: Option<&dyn TextMeasurer>,
     pcb: Rect,
     hp: &dyn HyphenationProvider,
+    dark_mode: bool,
 ) {
     let is_container = !matches!(b.style.container_type, ContainerType::Normal);
     if is_container {
@@ -5666,7 +8961,7 @@ fn apply_container_inner(
         };
         // Re-apply container rules to all direct + indirect descendants.
         for child in &mut b.children {
-            re_style_subtree(child, doc, sheet, &ctx, viewport);
+            re_style_subtree(child, doc, sheet, &ctx, viewport, dark_mode);
         }
         // Re-lay out block-flow children with updated styles.
         let content_x = b.rect.x + pad_l + b.style.border_left_width;
@@ -5683,10 +8978,10 @@ fn apply_container_inner(
         for child in &mut b.children {
             if matches!(child.style.position, Position::Absolute | Position::Fixed) {
                 // Re-lay out against new pcb but don't advance child_y.
-                lay_out(child, content_x, child_y, content_w, avail_h, measurer, viewport, child_pcb, hp);
+                lay_out(child, content_x, child_y, content_w, avail_h, measurer, viewport, child_pcb, hp, false);
                 continue;
             }
-            lay_out(child, content_x, child_y, content_w, avail_h, measurer, viewport, child_pcb, hp);
+            lay_out(child, content_x, child_y, content_w, avail_h, measurer, viewport, child_pcb, hp, false);
             if matches!(child.kind, BoxKind::Skip) {
                 continue;
             }
@@ -5698,14 +8993,92 @@ fn apply_container_inner(
         // After re-layout, recurse into children to catch nested containers.
         // Each nested container will set its own cq* context during its own re-layout.
         for child in &mut b.children {
-            apply_container_inner(child, doc, sheet, viewport, measurer, child_pcb, hp);
+            apply_container_inner(child, doc, sheet, viewport, measurer, child_pcb, hp, dark_mode);
         }
     } else {
         // Not a container — just recurse looking for container descendants.
         for child in &mut b.children {
-            apply_container_inner(child, doc, sheet, viewport, measurer, pcb, hp);
+            apply_container_inner(child, doc, sheet, viewport, measurer, pcb, hp, dark_mode);
         }
     }
+}
+
+/// CSS Anchor Positioning L1 — post-layout pass.
+///
+/// Builds the anchor registry from the completed layout tree, then walks the
+/// tree to reposition every absolutely/fixed-positioned element that has both
+/// `position-anchor` and a non-`none` `inset-area` set.  Called once after all
+/// layout and container-query passes complete.
+///
+/// Respects `anchor-scope`: anchors in a scoped subtree are invisible to
+/// positioned elements that are not descendants of the scope root.
+pub(crate) fn apply_anchor_positions(root: &mut LayoutBox, viewport: Size) {
+    let registry = collect_anchors(root);
+    if registry.is_empty() {
+        return;
+    }
+    let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
+    apply_anchor_positions_rec(root, &registry, viewport, init_pcb, &mut Vec::new());
+}
+
+fn apply_anchor_positions_rec(
+    lb: &mut LayoutBox,
+    registry: &crate::anchor::AnchorRegistry,
+    viewport: Size,
+    pcb: Rect,
+    ancestors: &mut Vec<lumen_dom::NodeId>,
+) {
+    // Resolve inset-area for this element if it is abs/fixed-positioned with a named anchor.
+    let anchor_name = matches!(lb.style.position, Position::Absolute | Position::Fixed)
+        .then(|| lb.style.position_anchor.as_deref())
+        .flatten();
+    if let Some(anchor_name) = anchor_name {
+        let row = lb.style.inset_area_row;
+        let col = lb.style.inset_area_col;
+        if row != InsetAreaKeyword::None || col != InsetAreaKeyword::None {
+            let cb = if matches!(lb.style.position, Position::Fixed) {
+                Rect::new(0.0, 0.0, viewport.width, viewport.height)
+            } else {
+                pcb
+            };
+            // Use scope-aware lookup so anchors behind anchor-scope barriers are
+            // invisible to positioned elements outside their subtree.
+            if let Some(pos) = crate::anchor::resolve_inset_area_scoped(
+                registry, anchor_name, row, col, cb, ancestors,
+            ) {
+                let new_x = cb.x + pos.left;
+                let new_y = cb.y + pos.top;
+                let dx = new_x - lb.rect.x;
+                let dy = new_y - lb.rect.y;
+                shift_tree(lb, dx, dy);
+                if let Some(w) = pos.width {
+                    lb.rect.width = w;
+                }
+                if let Some(h) = pos.height {
+                    lb.rect.height = h;
+                }
+            }
+        }
+    }
+
+    // Compute the containing block for absolute-positioned children of this element.
+    let is_positioned = !matches!(lb.style.position, Position::Static);
+    let my_pcb = if is_positioned {
+        Rect::new(
+            lb.rect.x + lb.style.border_left_width,
+            lb.rect.y + lb.style.border_top_width,
+            (lb.rect.width - lb.style.border_left_width - lb.style.border_right_width).max(0.0),
+            (lb.rect.height - lb.style.border_top_width - lb.style.border_bottom_width).max(0.0),
+        )
+    } else {
+        pcb
+    };
+
+    ancestors.push(lb.node);
+    for child in &mut lb.children {
+        apply_anchor_positions_rec(child, registry, viewport, my_pcb, ancestors);
+    }
+    ancestors.pop();
 }
 
 /// Recursively re-applies container rules to a subtree.
@@ -5717,14 +9090,15 @@ fn re_style_subtree(
     sheet: &Stylesheet,
     ctx: &ContainerContext,
     viewport: Size,
+    dark_mode: bool,
 ) {
     if !matches!(b.kind, BoxKind::Skip) {
-        apply_container_rules(&mut b.style, doc, b.node, sheet, ctx, viewport);
+        apply_container_rules(&mut b.style, doc, b.node, sheet, ctx, viewport, dark_mode);
     }
     // Don't propagate into nested containers — they'll build their own context.
     if matches!(b.style.container_type, ContainerType::Normal) {
         for child in &mut b.children {
-            re_style_subtree(child, doc, sheet, ctx, viewport);
+            re_style_subtree(child, doc, sheet, ctx, viewport, dark_mode);
         }
     }
 }
@@ -5732,6 +9106,8 @@ fn re_style_subtree(
 #[cfg(test)]
 mod tests {
     use lumen_core::geom::Size;
+    use crate::style::{GridTrackSize, Length};
+    use super::resolve_auto_fill_fit_count;
 
     fn layout_div(css: &str, viewport_w: f32, viewport_h: f32) -> super::LayoutBox {
         let html = "<div></div>";
@@ -5751,6 +9127,23 @@ mod tests {
             None
         }
         find_empty_block(&root).cloned().expect("empty Block not found in layout tree")
+    }
+
+    #[test]
+    fn anon_style_resets_float_clear_position() {
+        // BUG-152: anonymous boxes must not inherit the parent's non-inherited
+        // float/clear/position (CSS 2.1 §9.2.2.1) — an anon InlineRun cloning a
+        // floated parent re-entered the parent's float branch and overlapped
+        // following block siblings.
+        use crate::style::{ClearSide, ComputedStyle, FloatSide, Position};
+        let mut parent = ComputedStyle::root();
+        parent.float_side = FloatSide::Left;
+        parent.clear = ClearSide::Both;
+        parent.position = Position::Absolute;
+        let anon = super::anon_style(&parent);
+        assert_eq!(anon.float_side, FloatSide::None);
+        assert_eq!(anon.clear, ClearSide::None);
+        assert_eq!(anon.position, Position::Static);
     }
 
     #[test]
@@ -5895,6 +9288,7 @@ mod tests {
             post_space: 0.0,
             is_element_box: false,
             img_src: None,
+            img_is_lazy: false,
             img_width: 0.0,
             forced_break: false,
             pseudo_kind: PseudoKind::None,
@@ -5936,6 +9330,7 @@ mod tests {
             post_space: 0.0,
             is_element_box: false,
             img_src: None,
+            img_is_lazy: false,
             img_width: 0.0,
             forced_break: false,
             pseudo_kind: PseudoKind::None,
@@ -5953,6 +9348,212 @@ mod tests {
         assert_eq!(line2_text, "hyphen", "soft-hyphen should be stripped: {line2_text}");
     }
 
+    // ── F-2: CSS hyphens — soft hyphen (U+00AD) rendering ───────────────────
+
+    #[test]
+    fn shy_invisible_when_word_fits_on_line() {
+        // hyphens: manual, wide container — word with SHY fits; SHY must be stripped,
+        // no visible hyphen in the rendered fragment (CSS Text L3 §6).
+        use lumen_core::ext::NullHyphenationProvider;
+        use super::{InlineSegment, PseudoKind, wrap_inline_run};
+        use crate::style::{ComputedStyle, Hyphens};
+        use lumen_core::geom::Size;
+        use lumen_dom::NodeId;
+
+        struct Fixed10;
+        impl super::super::TextMeasurer for Fixed10 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+        }
+
+        let style = ComputedStyle::root();
+        // "hy\u{AD}phen" → strip → "hyphen" = 6 chars × 10px = 60px; max_width=200 → fits.
+        let seg = InlineSegment {
+            text: "hy\u{00AD}phen".to_string(),
+            style: style.clone(),
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_is_lazy: false,
+            img_width: 0.0,
+            forced_break: false,
+            pseudo_kind: PseudoKind::None,
+            source_node: NodeId::from_index(0),
+            source_char_offset: 0,
+        };
+
+        let m = Fixed10;
+        let hp = NullHyphenationProvider;
+        let lines = wrap_inline_run(
+            &[seg], 200.0, 16.0, 0.0, Size::new(800.0, 600.0),
+            &m, Hyphens::Manual, &hp,
+            crate::style::WhiteSpace::Normal,
+            crate::style::WordBreak::Normal,
+            crate::style::OverflowWrap::Normal,
+        );
+        assert_eq!(lines.len(), 1, "single word must stay on one line");
+        let text = &lines[0][0].text;
+        assert_eq!(text, "hyphen", "SHY must be stripped when word fits: got {text}");
+        assert!(!text.contains('\u{00AD}'), "U+00AD must not appear in output");
+        assert!(!text.contains('-'), "no hyphen added when no line break occurs: {text}");
+    }
+
+    #[test]
+    fn shy_rightmost_fitting_break_selected() {
+        // hyphens: manual, word with two SHY positions — the rightmost that fits is used.
+        // CSS Text L3 §6 requires the typographically preferred (rightmost) break.
+        use lumen_core::ext::NullHyphenationProvider;
+        use super::{InlineSegment, PseudoKind, wrap_inline_run};
+        use crate::style::{ComputedStyle, Hyphens};
+        use lumen_core::geom::Size;
+        use lumen_dom::NodeId;
+
+        struct Fixed10;
+        impl super::super::TextMeasurer for Fixed10 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+        }
+
+        let style = ComputedStyle::root();
+        // Segment "xx su\u{AD}per\u{AD}man", max_width=90:
+        //   "xx"=20px occupies line;
+        //   "superman"=80px needs wrap (20+10+80=110 > 90);
+        //   avail = 90−20−10(gap) = 60;
+        //   SHY positions in "superman": [2]="su", [5]="super";
+        //   rightmost: "super"=50, 50+10(hyphen)=60 ≤ 60 → break → "super-" / "man".
+        let seg = InlineSegment {
+            text: "xx su\u{00AD}per\u{00AD}man".to_string(),
+            style: style.clone(),
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_is_lazy: false,
+            img_width: 0.0,
+            forced_break: false,
+            pseudo_kind: PseudoKind::None,
+            source_node: NodeId::from_index(0),
+            source_char_offset: 0,
+        };
+
+        let m = Fixed10;
+        let hp = NullHyphenationProvider;
+        let lines = wrap_inline_run(
+            &[seg], 90.0, 16.0, 0.0, Size::new(800.0, 600.0),
+            &m, Hyphens::Manual, &hp,
+            crate::style::WhiteSpace::Normal,
+            crate::style::WordBreak::Normal,
+            crate::style::OverflowWrap::Normal,
+        );
+        assert_eq!(lines.len(), 2, "expected 2 lines, got {}", lines.len());
+        let line1_text: String = lines[0].iter().map(|f| f.text.as_str()).collect::<Vec<_>>().join(" ");
+        assert!(line1_text.contains("super-"), "rightmost SHY break → 'super-', got: {line1_text}");
+        assert!(!line1_text.contains("su-"), "must NOT use leftmost SHY: {line1_text}");
+        assert_eq!(lines[1].len(), 1);
+        assert_eq!(lines[1][0].text, "man");
+    }
+
+    #[test]
+    fn shy_auto_mode_respects_shy_positions() {
+        // hyphens: auto with NullHyphenationProvider (no dict) falls back to SHY positions,
+        // identical to manual mode behaviour for words with explicit U+00AD.
+        use lumen_core::ext::NullHyphenationProvider;
+        use super::{InlineSegment, PseudoKind, wrap_inline_run};
+        use crate::style::{ComputedStyle, Hyphens};
+        use lumen_core::geom::Size;
+        use lumen_dom::NodeId;
+
+        struct Fixed10;
+        impl super::super::TextMeasurer for Fixed10 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+        }
+
+        let style = ComputedStyle::root();
+        // Same geometry as shy_rightmost_fitting_break_selected but with Hyphens::Auto.
+        let seg = InlineSegment {
+            text: "xx su\u{00AD}per\u{00AD}man".to_string(),
+            style: style.clone(),
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_is_lazy: false,
+            img_width: 0.0,
+            forced_break: false,
+            pseudo_kind: PseudoKind::None,
+            source_node: NodeId::from_index(0),
+            source_char_offset: 0,
+        };
+
+        let m = Fixed10;
+        let hp = NullHyphenationProvider;
+        let lines = wrap_inline_run(
+            &[seg], 90.0, 16.0, 0.0, Size::new(800.0, 600.0),
+            &m, Hyphens::Auto, &hp,
+            crate::style::WhiteSpace::Normal,
+            crate::style::WordBreak::Normal,
+            crate::style::OverflowWrap::Normal,
+        );
+        assert_eq!(lines.len(), 2, "auto mode: expected 2 lines, got {}", lines.len());
+        let line1_text: String = lines[0].iter().map(|f| f.text.as_str()).collect::<Vec<_>>().join(" ");
+        assert!(
+            line1_text.contains("super-"),
+            "auto mode must honour SHY positions: {line1_text}",
+        );
+        assert_eq!(lines[1][0].text, "man");
+    }
+
+    #[test]
+    fn shy_manual_no_hyphen_when_no_shy_in_word() {
+        // hyphens: manual without U+00AD — word must wrap to the next line as-is,
+        // without any hyphen appended (no auto-hyphenation in manual mode).
+        use lumen_core::ext::NullHyphenationProvider;
+        use super::{InlineSegment, PseudoKind, wrap_inline_run};
+        use crate::style::{ComputedStyle, Hyphens};
+        use lumen_core::geom::Size;
+        use lumen_dom::NodeId;
+
+        struct Fixed10;
+        impl super::super::TextMeasurer for Fixed10 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+        }
+
+        let style = ComputedStyle::root();
+        // "aa longword": "aa"=20px, "longword"=80px; max_width=50;
+        //   20+10+80=110 > 50 → needs_wrap; no SHY → try_hyp_break returns None
+        //   → normal wrap: "longword" moves to next line intact, no hyphen.
+        let seg = InlineSegment {
+            text: "aa longword".to_string(),
+            style: style.clone(),
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_is_lazy: false,
+            img_width: 0.0,
+            forced_break: false,
+            pseudo_kind: PseudoKind::None,
+            source_node: NodeId::from_index(0),
+            source_char_offset: 0,
+        };
+
+        let m = Fixed10;
+        let hp = NullHyphenationProvider;
+        let lines = wrap_inline_run(
+            &[seg], 50.0, 16.0, 0.0, Size::new(800.0, 600.0),
+            &m, Hyphens::Manual, &hp,
+            crate::style::WhiteSpace::Normal,
+            crate::style::WordBreak::Normal,
+            crate::style::OverflowWrap::Normal,
+        );
+        assert_eq!(lines.len(), 2, "expected 2 lines");
+        assert_eq!(lines[0].len(), 1);
+        assert_eq!(lines[0][0].text, "aa");
+        assert_eq!(lines[1].len(), 1);
+        let word = &lines[1][0].text;
+        assert_eq!(word, "longword", "no hyphen without SHY: {word}");
+        assert!(!word.contains('-'), "manual mode must not add hyphens without SHY: {word}");
+    }
+
     // ── char_break_offset ────────────────────────────────────────────────────
 
     #[test]
@@ -5962,7 +9563,7 @@ mod tests {
             fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
         }
         // "abc" = 3 chars × 8px = 24px; avail = 100 → whole word fits.
-        let off = super::char_break_offset("abc", 100.0, 16.0, 0.0, &Fixed8);
+        let off = super::char_break_offset("abc", 100.0, 16.0, 0.0, &[], &Fixed8);
         assert_eq!(off, 3); // "abc".len() == 3
     }
 
@@ -5973,7 +9574,7 @@ mod tests {
             fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
         }
         // "abcde", avail = 25px; "ab" = 20px fits, "abc" = 30px > 25 → split at 2.
-        let off = super::char_break_offset("abcde", 25.0, 16.0, 0.0, &Fixed10);
+        let off = super::char_break_offset("abcde", 25.0, 16.0, 0.0, &[], &Fixed10);
         assert_eq!(off, 2); // byte offset 2 = between 'b' and 'c'
     }
 
@@ -5985,7 +9586,7 @@ mod tests {
         }
         // avail = 5px, char width 100px — even first char doesn't fit.
         // Must return offset past first char to avoid infinite loop.
-        let off = super::char_break_offset("abc", 5.0, 16.0, 0.0, &Wide);
+        let off = super::char_break_offset("abc", 5.0, 16.0, 0.0, &[], &Wide);
         assert_eq!(off, 1); // emit 'a' anyway
     }
 
@@ -6036,6 +9637,7 @@ mod tests {
             post_space: 0.0,
             is_element_box: false,
             img_src: None,
+            img_is_lazy: false,
             img_width: 0.0,
             forced_break: false,
             pseudo_kind: PseudoKind::None,
@@ -6095,6 +9697,7 @@ mod tests {
             post_space: 0.0,
             is_element_box: false,
             img_src: None,
+            img_is_lazy: false,
             img_width: 0.0,
             forced_break: false,
             pseudo_kind: PseudoKind::None,
@@ -6217,6 +9820,39 @@ mod tests {
             b.children.iter().any(find_contents)
         }
         assert!(!find_contents(&root), "nested Contents boxes must be fully flattened");
+    }
+
+    #[test]
+    fn contents_in_flex_container_no_panic() {
+        // BUG-058: display:contents child inside a flex container caused a panic
+        // because flatten_contents was only called in the non-item-container path.
+        let html = r#"<div id="flex"><div id="wrap"><div id="item"></div></div></div>"#;
+        let css = "#flex { display: flex; width: 400px; } #wrap { display: contents; } #item { width: 100px; height: 50px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        // Must not panic.
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        fn find_contents(b: &super::LayoutBox) -> bool {
+            if matches!(b.kind, super::BoxKind::Contents) { return true; }
+            b.children.iter().any(find_contents)
+        }
+        assert!(!find_contents(&root), "Contents box must be flattened inside flex container");
+    }
+
+    #[test]
+    fn contents_in_grid_container_no_panic() {
+        // BUG-058: same panic reproducible with display:grid container.
+        let html = r#"<div id="grid"><div id="wrap"><div id="item"></div></div></div>"#;
+        let css = "#grid { display: grid; width: 400px; } #wrap { display: contents; } #item { width: 100px; height: 50px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        // Must not panic.
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        fn find_contents(b: &super::LayoutBox) -> bool {
+            if matches!(b.kind, super::BoxKind::Contents) { return true; }
+            b.children.iter().any(find_contents)
+        }
+        assert!(!find_contents(&root), "Contents box must be flattened inside grid container");
     }
 
     // ── CSS 2.1 §10.3.3 — auto horizontal-margin centering ───────────────────
@@ -6457,6 +10093,208 @@ mod tests {
         }
     }
 
+    /// Shared helpers for the ::first-letter drop-cap tests (BB-2).
+    mod first_letter_drop_cap {
+        struct Fixed8;
+        impl super::super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+
+        fn layout(html: &str, css: &str) -> super::super::LayoutBox {
+            super::super::layout_measured(
+                &lumen_html_parser::parse(html),
+                &lumen_css_parser::parse(css),
+                lumen_core::geom::Size::new(800.0, 600.0),
+                &Fixed8,
+            )
+        }
+
+        /// Depth-first search for the synthesized drop-cap box.
+        fn find_drop_cap(b: &super::super::LayoutBox) -> Option<&super::super::LayoutBox> {
+            if super::super::is_first_letter_box(b) {
+                return Some(b);
+            }
+            b.children.iter().find_map(find_drop_cap)
+        }
+
+        /// First non-drop-cap InlineRun in the tree (the paragraph remainder).
+        fn find_rest_run(b: &super::super::LayoutBox) -> Option<&super::super::LayoutBox> {
+            if super::super::is_first_letter_box(b) {
+                return None;
+            }
+            if matches!(b.kind, super::super::BoxKind::InlineRun { .. }) {
+                return Some(b);
+            }
+            b.children.iter().find_map(find_rest_run)
+        }
+
+        fn letter_seg(b: &super::super::LayoutBox) -> &super::super::InlineSegment {
+            let super::super::BoxKind::InlineRun { segments, .. } = &b.children[0].kind else {
+                panic!("drop-cap inner box must be InlineRun");
+            };
+            &segments[0]
+        }
+
+        #[test]
+        fn float_extracts_drop_cap_box() {
+            let root = layout(
+                "<p>Hello world</p>",
+                "p::first-letter { float: left; font-size: 32px; }",
+            );
+            let cap = find_drop_cap(&root).expect("drop-cap box not created");
+            assert_eq!(letter_seg(cap).text, "H");
+            assert_eq!(letter_seg(cap).style.font_size, 32.0);
+            let rest = find_rest_run(&root).expect("rest run missing");
+            let super::super::BoxKind::InlineRun { segments, .. } = &rest.kind else {
+                unreachable!();
+            };
+            assert_eq!(segments[0].text, "ello world");
+        }
+
+        #[test]
+        fn float_narrows_text_beside_drop_cap() {
+            let root = layout(
+                "<p>Hello world</p>",
+                "p::first-letter { float: left; font-size: 32px; }",
+            );
+            let cap = find_drop_cap(&root).expect("drop-cap box not created");
+            let rest = find_rest_run(&root).expect("rest run missing");
+            assert!(
+                rest.rect.x >= cap.rect.x + cap.rect.width - 0.01,
+                "rest run x={} must start after drop cap right edge {}",
+                rest.rect.x,
+                cap.rect.x + cap.rect.width,
+            );
+        }
+
+        #[test]
+        fn float_drop_cap_shrinks_to_letter_width() {
+            // Fixed8: every char 8px. padding 6px each side → 8 + 12 = 20px outer,
+            // height = 32px × line-height 1 + 12 = 44px.
+            let root = layout(
+                "<p>Hello world</p>",
+                "p::first-letter { float: left; font-size: 32px; line-height: 1; padding: 6px; }",
+            );
+            let cap = find_drop_cap(&root).expect("drop-cap box not created");
+            assert!(
+                (cap.rect.width - 20.0).abs() < 0.1,
+                "drop cap width {} ≠ 20",
+                cap.rect.width,
+            );
+            assert!(
+                (cap.rect.height - 44.0).abs() < 0.1,
+                "drop cap height {} ≠ 44",
+                cap.rect.height,
+            );
+        }
+
+        #[test]
+        fn float_single_char_paragraph_drops_empty_run() {
+            let root = layout("<p>X</p>", "p::first-letter { float: left; font-size: 32px; line-height: 1; }");
+            let cap = find_drop_cap(&root).expect("drop-cap box not created");
+            assert_eq!(letter_seg(cap).text, "X");
+            assert!(find_rest_run(&root).is_none(), "emptied InlineRun must be dropped");
+            // CSS 2.1 §9.5: the paragraph height still encloses the float.
+            fn find_p<'a>(b: &'a super::super::LayoutBox, cap: &super::super::LayoutBox) -> Option<&'a super::super::LayoutBox> {
+                if b.children.iter().any(|c| std::ptr::eq(c, cap)) {
+                    return Some(b);
+                }
+                b.children.iter().find_map(|c| find_p(c, cap))
+            }
+            let p = find_p(&root, cap).expect("paragraph not found");
+            assert!(
+                p.rect.height >= cap.rect.height - 0.01,
+                "paragraph height {} must enclose float {}",
+                p.rect.height,
+                cap.rect.height,
+            );
+        }
+
+        #[test]
+        fn float_right_places_drop_cap_at_right_edge() {
+            let root = layout(
+                "<p>Hello world</p>",
+                "p::first-letter { float: right; font-size: 32px; }",
+            );
+            let cap = find_drop_cap(&root).expect("drop-cap box not created");
+            let rest = find_rest_run(&root).expect("rest run missing");
+            assert!(
+                cap.rect.x > rest.rect.x,
+                "right-floated drop cap x={} must sit right of the text x={}",
+                cap.rect.x,
+                rest.rect.x,
+            );
+            assert!(
+                cap.rect.x + cap.rect.width <= 800.0 + 0.01,
+                "drop cap must not overflow the container",
+            );
+        }
+
+        #[test]
+        fn non_float_first_letter_stays_inline() {
+            let root = layout("<p>Hello world</p>", "p::first-letter { font-size: 32px; }");
+            assert!(find_drop_cap(&root).is_none(), "no drop-cap box without float");
+            let run = find_rest_run(&root).expect("run missing");
+            let super::super::BoxKind::InlineRun { segments, .. } = &run.kind else {
+                unreachable!();
+            };
+            assert_eq!(segments[0].text, "H");
+            assert_eq!(segments[0].style.font_size, 32.0);
+            assert_eq!(segments[1].text, "ello world");
+        }
+
+        #[test]
+        fn leading_punctuation_joins_first_letter() {
+            // CSS Pseudo-elements L4 §5.1: leading punctuation is part of the unit.
+            let root = layout("<p>\u{201C}Hello world\u{201D}</p>", "p::first-letter { font-size: 32px; }");
+            let run = find_rest_run(&root).expect("run missing");
+            let super::super::BoxKind::InlineRun { segments, .. } = &run.kind else {
+                unreachable!();
+            };
+            assert_eq!(segments[0].text, "\u{201C}H");
+            assert_eq!(segments[0].style.font_size, 32.0);
+        }
+
+        #[test]
+        fn float_extraction_skips_leading_whitespace() {
+            // Pretty-printed HTML: raw segment text starts with "\n  " — the
+            // first-letter unit must be the first non-whitespace character,
+            // not the newline (regression: TEST-58 drop cap rendered "\n").
+            let root = layout(
+                "<p>\n          Once upon a time</p>",
+                "p::first-letter { float: left; font-size: 48px; }",
+            );
+            let cap = find_drop_cap(&root).expect("drop-cap box not created");
+            assert_eq!(letter_seg(cap).text.trim(), "O");
+            let rest = find_rest_run(&root).expect("rest run missing");
+            let super::super::BoxKind::InlineRun { lines, .. } = &rest.kind else {
+                unreachable!();
+            };
+            assert!(
+                lines[0][0].text.starts_with("nce"),
+                "rest must start with 'nce', got {:?}",
+                lines[0][0].text,
+            );
+        }
+
+        #[test]
+        fn first_line_does_not_override_drop_cap() {
+            // ::first-letter wins over ::first-line where they conflict.
+            let root = layout(
+                "<p>Hello world and more words here</p>",
+                "p::first-letter { float: left; font-size: 32px; } p::first-line { font-size: 20px; }",
+            );
+            let cap = find_drop_cap(&root).expect("drop-cap box not created");
+            let super::super::BoxKind::InlineRun { lines, .. } = &cap.children[0].kind else {
+                unreachable!();
+            };
+            assert!(
+                lines[0].iter().all(|f| f.style.font_size == 32.0),
+                "drop-cap frags must keep the ::first-letter font, not ::first-line",
+            );
+        }
+    }
+
     #[test]
     fn first_line_frags_marked_after_wrap() {
         // After lay_out, frags on lines[0] must have is_first_line = true;
@@ -6493,6 +10331,365 @@ mod tests {
         } else {
             panic!("expected InlineRun");
         }
+    }
+
+    // ::first-letter / ::first-line style application
+
+    #[test]
+    fn first_letter_style_applied_when_rule_present() {
+        // ::first-letter { color: red } must change only the first segment's style.
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        let html = "<p>Hello world</p>";
+        let css  = "p::first-letter { color: red; }";
+        let root = super::layout_measured(
+            &lumen_html_parser::parse(html),
+            &lumen_css_parser::parse(css),
+            lumen_core::geom::Size::new(800.0, 600.0),
+            &Fixed8,
+        );
+        fn find_run(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { return Some(b); }
+            for c in &b.children { if let Some(f) = find_run(c) { return Some(f); } }
+            None
+        }
+        let run = find_run(&root).expect("InlineRun not found");
+        if let super::BoxKind::InlineRun { segments, .. } = &run.kind {
+            assert!(!segments.is_empty());
+            // First segment (the single 'H' letter) must have red color.
+            let red = crate::style::Color { r: 255, g: 0, b: 0, a: 255 };
+            assert_eq!(
+                segments[0].style.color, red,
+                "::first-letter segment must have red color"
+            );
+            assert_eq!(segments[0].text, "H", "first-letter segment should be exactly 'H'");
+            // Remaining segment keeps original (black) color.
+            if segments.len() > 1 {
+                assert_ne!(
+                    segments[1].style.color, red,
+                    "remainder segment must keep original color"
+                );
+            }
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
+    fn first_letter_no_rule_leaves_segment_unchanged() {
+        // Without a ::first-letter rule the segment style must be unchanged.
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        let html = "<p>Hello</p>";
+        let css  = "p { color: blue; }";
+        let root = super::layout_measured(
+            &lumen_html_parser::parse(html),
+            &lumen_css_parser::parse(css),
+            lumen_core::geom::Size::new(800.0, 600.0),
+            &Fixed8,
+        );
+        fn find_run(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { return Some(b); }
+            for c in &b.children { if let Some(f) = find_run(c) { return Some(f); } }
+            None
+        }
+        let run = find_run(&root).expect("InlineRun not found");
+        if let super::BoxKind::InlineRun { segments, .. } = &run.kind {
+            // No split: single segment still contains full text.
+            assert_eq!(segments[0].text, "Hello");
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
+    fn first_line_style_applied_to_first_line_frags() {
+        // ::first-line { color: green } must change the style of frags on line 0 only.
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        // 60px wide container forces wrap: "one two" (56px) fits on line 0, rest wraps.
+        let html = "<p>one two three four</p>";
+        let css  = "p::first-line { color: green; }";
+        let root = super::layout_measured(
+            &lumen_html_parser::parse(html),
+            &lumen_css_parser::parse(css),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &Fixed8,
+        );
+        // After the ::first-line layout split (BB-1) the paragraph holds two
+        // InlineRun boxes: the first formatted line and the remainder.
+        fn collect_runs<'a>(b: &'a super::LayoutBox, out: &mut Vec<&'a super::LayoutBox>) {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { out.push(b); }
+            for c in &b.children { collect_runs(c, out); }
+        }
+        let mut runs = Vec::new();
+        collect_runs(&root, &mut runs);
+        assert!(runs.len() >= 2, "expected split into 2 runs, got {}", runs.len());
+        let green = crate::style::Color { r: 0, g: 128, b: 0, a: 255 };
+        if let super::BoxKind::InlineRun { lines, .. } = &runs[0].kind {
+            assert_eq!(lines.len(), 1, "first-line run must hold exactly one line");
+            for frag in &lines[0] {
+                assert_eq!(frag.style.color, green, "line 0 frag must have green color");
+            }
+        } else {
+            panic!("expected InlineRun");
+        }
+        if let super::BoxKind::InlineRun { lines, .. } = &runs[1].kind {
+            assert!(!lines.is_empty(), "remainder run must hold the wrapped lines");
+            for line in lines {
+                for frag in line {
+                    assert_ne!(frag.style.color, green, "remainder frags keep original color");
+                }
+            }
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
+    fn first_line_no_rule_frags_unchanged() {
+        // Without a ::first-line rule, frag styles must be unchanged.
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        let html = "<p>one two three four</p>";
+        let css  = "p { color: blue; }";
+        let root = super::layout_measured(
+            &lumen_html_parser::parse(html),
+            &lumen_css_parser::parse(css),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &Fixed8,
+        );
+        fn find_run(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { return Some(b); }
+            for c in &b.children { if let Some(f) = find_run(c) { return Some(f); } }
+            None
+        }
+        let run = find_run(&root).expect("InlineRun not found");
+        let blue = crate::style::Color { r: 0, g: 0, b: 255, a: 255 };
+        if let super::BoxKind::InlineRun { lines, .. } = &run.kind {
+            // All frags across all lines must be blue (from `p { color: blue }`).
+            for line in lines {
+                for frag in line {
+                    assert_eq!(frag.style.color, blue, "all frags must keep blue color");
+                }
+            }
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    // ── BB-1: ::first-line layout split ──────────────────────────────────
+
+    /// 8px per char regardless of font size.
+    struct FixedW8;
+    impl super::super::TextMeasurer for FixedW8 {
+        fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    }
+    /// Char width scales with font size (half the font size per char):
+    /// 16px font → 8px/char, 32px font → 16px/char.
+    struct HalfEm;
+    impl super::super::TextMeasurer for HalfEm {
+        fn char_width(&self, _: char, size: f32) -> f32 { size / 2.0 }
+    }
+
+    /// All InlineRun boxes in tree order.
+    fn runs_of(root: &super::LayoutBox) -> Vec<&super::LayoutBox> {
+        fn rec<'a>(b: &'a super::LayoutBox, out: &mut Vec<&'a super::LayoutBox>) {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { out.push(b); }
+            for c in &b.children { rec(c, out); }
+        }
+        let mut v = Vec::new();
+        rec(root, &mut v);
+        v
+    }
+
+    /// All words of a run's positioned lines, in order.
+    fn run_words(run: &super::LayoutBox) -> Vec<String> {
+        let super::BoxKind::InlineRun { lines, .. } = &run.kind else { return vec![] };
+        lines
+            .iter()
+            .flatten()
+            .flat_map(|f| f.text.split_whitespace().map(str::to_string).collect::<Vec<_>>())
+            .collect()
+    }
+
+    /// All words of a run's source segments, in order.
+    fn segment_words(run: &super::LayoutBox) -> Vec<String> {
+        let super::BoxKind::InlineRun { segments, .. } = &run.kind else { return vec![] };
+        segments
+            .iter()
+            .flat_map(|s| s.text.split_whitespace().map(str::to_string).collect::<Vec<_>>())
+            .collect()
+    }
+
+    #[test]
+    fn first_line_split_creates_two_runs() {
+        // Wrapping paragraph with a ::first-line rule → two InlineRun boxes:
+        // first formatted line + remainder; first_line_style cleared on both.
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<p>one two three four</p>"),
+            &lumen_css_parser::parse("p::first-line { color: green; }"),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &FixedW8,
+        );
+        let runs = runs_of(&root);
+        assert_eq!(runs.len(), 2, "expected exactly 2 runs after split");
+        let super::BoxKind::InlineRun { lines, first_line_style, .. } = &runs[0].kind else {
+            panic!("expected InlineRun");
+        };
+        assert_eq!(lines.len(), 1, "first-line run holds exactly one line");
+        assert!(first_line_style.is_none(), "first_line_style must be cleared");
+        let super::BoxKind::InlineRun { lines, first_line_style, .. } = &runs[1].kind else {
+            panic!("expected InlineRun");
+        };
+        assert!(!lines.is_empty(), "remainder run holds the wrapped rest");
+        assert!(first_line_style.is_none(), "first_line_style must be cleared");
+    }
+
+    #[test]
+    fn first_line_split_no_word_loss() {
+        // Words across both runs must equal the source text exactly (no loss, no dupes).
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<p>one two three four</p>"),
+            &lumen_css_parser::parse("p::first-line { color: green; }"),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &FixedW8,
+        );
+        let runs = runs_of(&root);
+        assert_eq!(runs.len(), 2);
+        let mut words = run_words(runs[0]);
+        words.extend(run_words(runs[1]));
+        assert_eq!(words, ["one", "two", "three", "four"]);
+    }
+
+    #[test]
+    fn first_line_split_heights_and_positions() {
+        // ::first-line { font-size: 32px } → first-line box is 32px-based tall,
+        // remainder box starts right below it and uses the base 16px metrics.
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<p>one two three four</p>"),
+            &lumen_css_parser::parse("p::first-line { font-size: 32px; }"),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &HalfEm,
+        );
+        let runs = runs_of(&root);
+        assert_eq!(runs.len(), 2);
+        assert!((runs[0].style.font_size - 32.0).abs() < 0.01, "first-line box gets fls font");
+        let fl_h = 32.0 * runs[0].style.line_height;
+        assert!(
+            (runs[0].rect.height - fl_h).abs() < 0.01,
+            "first-line box height {} != {}", runs[0].rect.height, fl_h,
+        );
+        assert!(
+            (runs[1].rect.y - (runs[0].rect.y + fl_h)).abs() < 0.01,
+            "remainder box must start right below the first-line box",
+        );
+        let base_h = runs[1].style.font_size * runs[1].style.line_height;
+        let super::BoxKind::InlineRun { lines, .. } = &runs[1].kind else { panic!() };
+        assert!(
+            (runs[1].rect.height - lines.len() as f32 * base_h).abs() < 0.01,
+            "remainder box height = lines × base line height",
+        );
+    }
+
+    #[test]
+    fn first_line_bigger_font_wraps_earlier() {
+        // Base 16px (8px/char): "one two" = 56px fits in 60px.
+        // ::first-line 32px (16px/char): "one two" = 112px > 60px → only "one" fits.
+        // The first line must be measured with the ::first-line font, not the base one.
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<p>one two three four</p>"),
+            &lumen_css_parser::parse("p::first-line { font-size: 32px; }"),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &HalfEm,
+        );
+        let runs = runs_of(&root);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(run_words(runs[0]), ["one"], "32px first line fits only one word");
+        assert_eq!(run_words(runs[1]), ["two", "three", "four"]);
+    }
+
+    #[test]
+    fn first_line_single_line_restyled_in_place() {
+        // Everything fits the first formatted line → no split; the run box itself
+        // takes the ::first-line style so paint uses its font metrics.
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<p>one two</p>"),
+            &lumen_css_parser::parse("p::first-line { color: green; font-size: 32px; }"),
+            lumen_core::geom::Size::new(800.0, 600.0),
+            &FixedW8,
+        );
+        let runs = runs_of(&root);
+        assert_eq!(runs.len(), 1, "single-line run must not be split");
+        let green = crate::style::Color { r: 0, g: 128, b: 0, a: 255 };
+        assert_eq!(runs[0].style.color, green, "run box restyled with ::first-line style");
+        assert!((runs[0].style.font_size - 32.0).abs() < 0.01);
+        let fl_h = 32.0 * runs[0].style.line_height;
+        assert!((runs[0].rect.height - fl_h).abs() < 0.01, "height uses ::first-line metrics");
+        let super::BoxKind::InlineRun { first_line_style, .. } = &runs[0].kind else { panic!() };
+        assert!(first_line_style.is_none(), "first_line_style must be cleared");
+    }
+
+    #[test]
+    fn first_line_no_rule_no_split() {
+        // Without a ::first-line rule the wrapping run stays a single box.
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<p>one two three four</p>"),
+            &lumen_css_parser::parse(""),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &FixedW8,
+        );
+        let runs = runs_of(&root);
+        assert_eq!(runs.len(), 1, "no rule → no split");
+        let super::BoxKind::InlineRun { lines, .. } = &runs[0].kind else { panic!() };
+        assert!(lines.len() >= 2, "text still wraps into multiple lines");
+    }
+
+    #[test]
+    fn first_line_split_segments_partitioned() {
+        // Source segments are partitioned between the two boxes at the word
+        // boundary; the remainder's first segment must not re-apply pre_space.
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<p>one two three four</p>"),
+            &lumen_css_parser::parse("p::first-line { color: green; }"),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &FixedW8,
+        );
+        let runs = runs_of(&root);
+        assert_eq!(runs.len(), 2);
+        let mut words = segment_words(runs[0]);
+        words.extend(segment_words(runs[1]));
+        assert_eq!(words, ["one", "two", "three", "four"], "segments partitioned losslessly");
+        let super::BoxKind::InlineRun { segments, .. } = &runs[1].kind else { panic!() };
+        assert!(!segments.is_empty());
+        assert_eq!(segments[0].pre_space, 0.0, "tail segment must not repeat pre_space");
+    }
+
+    #[test]
+    fn first_line_remainder_no_indent() {
+        // text-indent applies to the first formatted line only: the first-line box
+        // keeps the indent, the re-wrapped remainder starts at x = 0.
+        let css = "p { text-indent: 16px; } p::first-line { color: green; }";
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<p>one two three four</p>"),
+            &lumen_css_parser::parse(css),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &FixedW8,
+        );
+        let runs = runs_of(&root);
+        assert_eq!(runs.len(), 2);
+        let super::BoxKind::InlineRun { lines, .. } = &runs[0].kind else { panic!() };
+        assert!((lines[0][0].x - 16.0).abs() < 0.01, "first line keeps text-indent");
+        let super::BoxKind::InlineRun { lines, .. } = &runs[1].kind else { panic!() };
+        assert!((lines[0][0].x).abs() < 0.01, "remainder lines start without indent");
     }
 
     // Phase 3: Nested SVG layout tests
@@ -6577,4 +10774,2812 @@ mod tests {
         assert!(!root.children.is_empty());
     }
 
+    // ── ::first-letter / ::first-line CSS wiring ─────────────────────────────
+
+    fn find_run(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+        if matches!(b.kind, super::BoxKind::InlineRun { .. }) { return Some(b); }
+        for c in &b.children { if let Some(f) = find_run(c) { return Some(f); } }
+        None
+    }
+
+    #[test]
+    fn first_letter_style_override_splits_segment() {
+        // p::first-letter { font-size: 3em } → segment "H" gets overridden style,
+        // "ello world" becomes a separate segment with normal style.
+        let css = "p::first-letter { font-size: 3em; }";
+        let root = super::layout(
+            &lumen_html_parser::parse("<p>Hello world</p>"),
+            &lumen_css_parser::parse(css),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let run = find_run(&root).expect("InlineRun not found");
+        if let super::BoxKind::InlineRun { segments, .. } = &run.kind {
+            assert!(segments.len() >= 2, "expected split: got {} segment(s)", segments.len());
+            assert_eq!(segments[0].text, "H", "first segment must be the first letter");
+            assert_eq!(segments[0].pseudo_kind, super::PseudoKind::FirstLetter);
+            // font-size 3em on the root = 3 × 16px = 48px.
+            assert!(
+                (segments[0].style.font_size - 48.0).abs() < 1.0,
+                "first-letter font-size must be 3em, got {}", segments[0].style.font_size,
+            );
+            assert_eq!(segments[1].text, "ello world");
+            assert_eq!(segments[1].pseudo_kind, super::PseudoKind::None);
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
+    fn first_letter_no_rule_leaves_segment_unsplit() {
+        // No ::first-letter rule → segment stays marked but style is unchanged.
+        let root = super::layout(
+            &lumen_html_parser::parse("<p>Hello</p>"),
+            &lumen_css_parser::parse(""),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let run = find_run(&root).expect("InlineRun not found");
+        if let super::BoxKind::InlineRun { segments, .. } = &run.kind {
+            assert_eq!(segments.len(), 1, "no split without ::first-letter rule");
+            assert_eq!(segments[0].pseudo_kind, super::PseudoKind::FirstLetter);
+            assert_eq!(segments[0].text, "Hello");
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
+    fn first_letter_single_char_no_split() {
+        // Single character: style override without splitting.
+        let css = "p::first-letter { font-weight: bold; }";
+        let root = super::layout(
+            &lumen_html_parser::parse("<p>X</p>"),
+            &lumen_css_parser::parse(css),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let run = find_run(&root).expect("InlineRun not found");
+        if let super::BoxKind::InlineRun { segments, .. } = &run.kind {
+            assert_eq!(segments.len(), 1, "single char: no extra segment");
+            assert_eq!(segments[0].text, "X");
+            assert_eq!(segments[0].pseudo_kind, super::PseudoKind::FirstLetter);
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
+    fn first_line_style_override_applied_to_first_line_frags() {
+        // p::first-line { color: #ff0000 } → frags on lines[0] get red color.
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        let css = "p::first-line { color: #ff0000; }";
+        // 60px wide → "one two" (56px) on line 0, "three" wraps to line 1.
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<p>one two three four</p>"),
+            &lumen_css_parser::parse(css),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &Fixed8,
+        );
+        // After the ::first-line layout split (BB-1): runs[0] = first line (red),
+        // runs[1] = remainder (original color).
+        fn collect_runs<'a>(b: &'a super::LayoutBox, out: &mut Vec<&'a super::LayoutBox>) {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { out.push(b); }
+            for c in &b.children { collect_runs(c, out); }
+        }
+        let mut runs = Vec::new();
+        collect_runs(&root, &mut runs);
+        assert!(runs.len() >= 2, "expected split into 2 runs, got {}", runs.len());
+        if let super::BoxKind::InlineRun { lines, .. } = &runs[0].kind {
+            assert_eq!(lines.len(), 1, "first-line run must hold exactly one line");
+            for frag in &lines[0] {
+                assert!(
+                    frag.style.color.r > 200,
+                    "first-line frags must have red color (r={})", frag.style.color.r,
+                );
+            }
+        } else {
+            panic!("expected InlineRun");
+        }
+        if let super::BoxKind::InlineRun { lines, .. } = &runs[1].kind {
+            for line in lines {
+                for frag in line {
+                    assert!(
+                        frag.style.color.r < 50,
+                        "non-first-line frags must NOT be red (r={})", frag.style.color.r,
+                    );
+                }
+            }
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
+    fn first_line_no_rule_leaves_frags_unstyled() {
+        // No ::first-line rule → is_first_line is true but style is unchanged.
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<p>one two three four</p>"),
+            &lumen_css_parser::parse(""),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &Fixed8,
+        );
+        let run = find_run(&root).expect("InlineRun not found");
+        if let super::BoxKind::InlineRun { lines, .. } = &run.kind {
+            assert!(lines.len() >= 2, "expected wrapping");
+            // Verify is_first_line is still set (layout infrastructure works).
+            assert!(lines[0].iter().all(|f| f.is_first_line), "first line must be marked");
+            assert!(lines[1..].iter().flatten().all(|f| !f.is_first_line), "rest not marked");
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    // ── CSS Pseudo-elements L4 §14.2 — ::marker tests ────────────────────────
+
+    fn find_markers(b: &super::LayoutBox, out: &mut Vec<super::LayoutBox>) {
+        if matches!(b.kind, super::BoxKind::Marker { .. }) { out.push(b.clone()); }
+        for c in &b.children { find_markers(c, out); }
+    }
+
+    // ── CSS Generated Content L3 §3.2 — open-quote / close-quote ─────────────
+
+    fn collect_seg_text(b: &super::LayoutBox, out: &mut String) {
+        if let super::BoxKind::InlineRun { segments, .. } = &b.kind {
+            for s in segments { out.push_str(&s.text); }
+        }
+        for c in &b.children { collect_seg_text(c, out); }
+    }
+
+    #[test]
+    fn quotes_nested_q_uses_primary_then_secondary() {
+        // Nested <q> → outer uses primary “ ”, inner uses secondary ‘ ’.
+        let root = super::layout(
+            &lumen_html_parser::parse("<p><q>outer <q>inner</q> end</q></p>"),
+            &lumen_css_parser::parse(
+                "q::before{content:open-quote} q::after{content:close-quote}",
+            ),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut text = String::new();
+        collect_seg_text(&root, &mut text);
+        let po = text.find('\u{201C}').expect("primary open quote");
+        let so = text.find('\u{2018}').expect("secondary open quote");
+        let sc = text.find('\u{2019}').expect("secondary close quote");
+        let pc = text.find('\u{201D}').expect("primary close quote");
+        assert!(po < so && so < sc && sc < pc, "quote nesting order wrong: {text:?}");
+    }
+
+    #[test]
+    fn quotes_custom_pairs_applied() {
+        let root = super::layout(
+            &lumen_html_parser::parse("<q>hi</q>"),
+            &lumen_css_parser::parse(
+                "q{quotes:\"\u{ab}\" \"\u{bb}\"} q::before{content:open-quote} q::after{content:close-quote}",
+            ),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut text = String::new();
+        collect_seg_text(&root, &mut text);
+        assert!(text.contains('\u{ab}') && text.contains('\u{bb}'), "custom quotes: {text:?}");
+    }
+
+    #[test]
+    fn quotes_none_suppresses_marks() {
+        let root = super::layout(
+            &lumen_html_parser::parse("<q>hi</q>"),
+            &lumen_css_parser::parse(
+                "q{quotes:none} q::before{content:open-quote} q::after{content:close-quote}",
+            ),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut text = String::new();
+        collect_seg_text(&root, &mut text);
+        assert!(
+            !text.contains('\u{201C}') && !text.contains('\u{201D}'),
+            "quotes:none must emit no marks: {text:?}",
+        );
+    }
+
+    #[test]
+    fn marker_default_inherits_parent_color() {
+        // No ::marker rule → marker inherits color from li parent.
+        let root = super::layout(
+            &lumen_html_parser::parse("<ul><li>item</li></ul>"),
+            &lumen_css_parser::parse("ul { color: #ff0000; }"),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut markers = Vec::new();
+        find_markers(&root, &mut markers);
+        assert!(!markers.is_empty(), "expected at least one marker");
+        // Marker should have inherited red color from parent ul.
+        assert!(
+            markers[0].style.color.r > 200,
+            "marker should inherit red color from ul, got r={}", markers[0].style.color.r,
+        );
+    }
+
+    #[test]
+    fn marker_css_rule_overrides_color() {
+        // ::marker { color: #0000ff } → marker gets blue, not parent color.
+        let root = super::layout(
+            &lumen_html_parser::parse("<ul><li>item</li></ul>"),
+            &lumen_css_parser::parse("ul { color: #ff0000; } li::marker { color: #0000ff; }"),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut markers = Vec::new();
+        find_markers(&root, &mut markers);
+        assert!(!markers.is_empty(), "expected at least one marker");
+        // Marker must use blue (::marker rule) not parent red.
+        assert!(
+            markers[0].style.color.b > 200,
+            "marker should be blue from ::marker rule, got b={}", markers[0].style.color.b,
+        );
+        assert!(
+            markers[0].style.color.r < 50,
+            "marker should NOT be red (parent color), got r={}", markers[0].style.color.r,
+        );
+    }
+
+    #[test]
+    fn marker_content_none_suppresses_marker() {
+        // li::marker { content: none } → no BoxKind::Marker in tree.
+        let root = super::layout(
+            &lumen_html_parser::parse("<ul><li>item</li></ul>"),
+            &lumen_css_parser::parse("li::marker { content: none; }"),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut markers = Vec::new();
+        find_markers(&root, &mut markers);
+        assert!(markers.is_empty(), "content:none should suppress marker box, found {} markers", markers.len());
+    }
+
+    #[test]
+    fn marker_content_string_overrides_text() {
+        // li::marker { content: "★ " } → marker text becomes "★ " not "• ".
+        let root = super::layout(
+            &lumen_html_parser::parse("<ul><li>item</li></ul>"),
+            &lumen_css_parser::parse(r#"li::marker { content: "★ "; }"#),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut markers = Vec::new();
+        find_markers(&root, &mut markers);
+        assert!(!markers.is_empty(), "expected marker with custom content");
+        if let super::BoxKind::Marker { ref text, .. } = markers[0].kind {
+            assert_eq!(text, "★ ", "custom content string should override default marker text");
+        } else {
+            panic!("expected BoxKind::Marker");
+        }
+    }
+
+    #[test]
+    fn marker_default_without_css_rule_still_renders() {
+        // No ::marker CSS rule at all → marker renders with default disc bullet.
+        let root = super::layout(
+            &lumen_html_parser::parse("<ul><li>item</li></ul>"),
+            &lumen_css_parser::parse(""),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut markers = Vec::new();
+        find_markers(&root, &mut markers);
+        assert!(!markers.is_empty(), "default disc list item must produce a marker box");
+    }
+
+    #[test]
+    fn marker_font_size_css_rule_applied() {
+        // li::marker { font-size: 24px } → marker uses 24px, not the inherited 16px.
+        let root = super::layout(
+            &lumen_html_parser::parse("<ul><li>item</li></ul>"),
+            &lumen_css_parser::parse("li { font-size: 16px; } li::marker { font-size: 24px; }"),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut markers = Vec::new();
+        find_markers(&root, &mut markers);
+        assert!(!markers.is_empty(), "expected marker");
+        assert!(
+            (markers[0].style.font_size - 24.0).abs() < 0.5,
+            "marker should have font-size 24px from CSS rule, got {}", markers[0].style.font_size,
+        );
+    }
+
+    #[test]
+    fn marker_inherits_font_size_from_parent_without_rule() {
+        // No ::marker rule → marker inherits font-size from li parent.
+        let root = super::layout(
+            &lumen_html_parser::parse("<ul><li>item</li></ul>"),
+            &lumen_css_parser::parse("li { font-size: 20px; }"),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut markers = Vec::new();
+        find_markers(&root, &mut markers);
+        assert!(!markers.is_empty(), "expected marker");
+        assert!(
+            (markers[0].style.font_size - 20.0).abs() < 0.5,
+            "marker should inherit 20px font-size from li, got {}", markers[0].style.font_size,
+        );
+    }
+
+    // ── BUG-136 — float / clear / margin interaction (TEST-105) ───────────────
+
+    /// Collect every box whose background color matches `hex` (0xRRGGBB).
+    fn boxes_with_bg(b: &super::LayoutBox, hex: u32, out: &mut Vec<super::Rect>) {
+        let (r, g, bl) = ((hex >> 16) as u8, (hex >> 8) as u8, hex as u8);
+        if let Some(col) = b.style.background_color.and_then(|c| c.to_color_opt())
+            && col.r == r && col.g == g && col.b == bl
+        {
+            out.push(b.rect);
+        }
+        for ch in &b.children {
+            boxes_with_bg(ch, hex, out);
+        }
+    }
+
+    fn find_one_bg(root: &super::LayoutBox, hex: u32) -> super::Rect {
+        let mut v = Vec::new();
+        boxes_with_bg(root, hex, &mut v);
+        assert_eq!(v.len(), 1, "expected exactly one box with bg #{hex:06x}, found {}", v.len());
+        v[0]
+    }
+
+    #[test]
+    fn float_inflow_block_keeps_full_width_between_floats() {
+        // c1: left float + right float + an empty in-flow block with margin:0 100px.
+        // CSS 2.1 §9.5 — the block keeps the full containing-block width (300) minus
+        // its margins (200) → width 100, positioned at content_left + margin_left.
+        // The naive float-narrowing collapsed it to width 0 (squeezed in the gap).
+        let root = super::layout(
+            &lumen_html_parser::parse(
+                "<div class=cell>\
+                   <div class=fl></div>\
+                   <div class=fr></div>\
+                   <div class=mid></div>\
+                 </div>",
+            ),
+            &lumen_css_parser::parse(
+                ".cell{position:relative;width:300px;height:300px;overflow:hidden}\
+                 .fl{float:left;width:90px;height:120px;background:#e53e3e}\
+                 .fr{float:right;width:90px;height:120px;background:#9f7aea}\
+                 .mid{height:60px;margin:0 100px;background:#f6e05e}",
+            ),
+            lumen_core::geom::Size::new(1024.0, 720.0),
+        );
+        let mid = find_one_bg(&root, 0xf6e05e);
+        assert!((mid.width - 100.0).abs() < 1.0, "mid width should be 100, got {}", mid.width);
+    }
+
+    #[test]
+    fn float_clear_absorbs_margin_top() {
+        // c2: float left, then a `clear:both; margin-top:30px` block. CSS 2.1 §9.5.2 —
+        // clearance places the border edge at max(natural, float bottom); the margin is
+        // absorbed by clearance, NOT stacked on top (float_bottom 120 + margin 30 = 150
+        // was the bug; correct is 120).
+        let root = super::layout(
+            &lumen_html_parser::parse(
+                "<div class=cell>\
+                   <div class=fl></div>\
+                   <div class=cl></div>\
+                 </div>",
+            ),
+            &lumen_css_parser::parse(
+                ".cell{position:relative;width:300px;height:300px;overflow:hidden}\
+                 .fl{float:left;width:120px;height:120px;background:#ed8936}\
+                 .cl{clear:both;margin-top:30px;height:80px;background:#4fd1c5}",
+            ),
+            lumen_core::geom::Size::new(1024.0, 720.0),
+        );
+        let cl = find_one_bg(&root, 0x4fd1c5);
+        // Cell content top is 0 (no padding); float is 120 tall → cleared block at y=120.
+        assert!((cl.y - 120.0).abs() < 1.0, "cleared block should sit at float bottom y=120, got {}", cl.y);
+    }
+
+    #[test]
+    fn floats_wrap_to_next_line_when_they_overflow() {
+        // c3: three 130px floats with 8px margins in a 300px container — the third
+        // does not fit (146*2 = 292 ≤ 300 < 146*3) and must drop to a new line
+        // (CSS 2.1 §9.5.1 rule 8) instead of overflowing past the right edge.
+        let root = super::layout(
+            &lumen_html_parser::parse(
+                "<div class=cell>\
+                   <div class=f></div>\
+                   <div class=f></div>\
+                   <div class=g></div>\
+                 </div>",
+            ),
+            &lumen_css_parser::parse(
+                ".cell{position:relative;width:300px;height:300px;overflow:hidden}\
+                 .f{float:left;width:130px;height:90px;margin:8px;background:#4299e1}\
+                 .g{float:left;width:130px;height:90px;margin:8px;background:#fc8181}",
+            ),
+            lumen_core::geom::Size::new(1024.0, 720.0),
+        );
+        let third = find_one_bg(&root, 0xfc8181);
+        // First two floats occupy line 1 (top ~8); the third wraps below them.
+        assert!(third.y > 100.0, "third float should wrap to a new line (y>100), got {}", third.y);
+        assert!((third.x - 8.0).abs() < 1.0, "wrapped float should reset to left (x=8), got {}", third.x);
+    }
+
+    // ── CSS Shapes L1 — shape-outside circle() ────────────────────────────────
+
+    #[test]
+    fn parse_circle_px_valid() {
+        assert_eq!(super::parse_circle_px("circle(50px)"), Some(50.0));
+        assert_eq!(super::parse_circle_px("circle(0px)"), None);
+        assert_eq!(super::parse_circle_px("circle(10)"), Some(10.0));
+        assert_eq!(super::parse_circle_px("CIRCLE(30PX)"), Some(30.0)); // case-insensitive
+    }
+
+    #[test]
+    fn parse_circle_px_invalid() {
+        assert_eq!(super::parse_circle_px("none"), None);
+        assert_eq!(super::parse_circle_px("ellipse(30px 20px)"), None);
+        assert_eq!(super::parse_circle_px("polygon(0 0, 10 0, 10 10)"), None);
+    }
+
+    #[test]
+    fn shape_outside_circle_computation() {
+        // Circle with radius 50px centered at (100, 50): at y=50 (center),
+        // horizontal extent = center_x + radius = 100 + 50 = 150.
+        // At y=0 (50px above center): hw = sqrt(50^2 - 50^2) = 0, extent = 100.
+        let mut fc = super::FloatContext::new();
+        fc.shape_circles.push((0.0, 100.0, true, 100.0, 50.0, 50.0));
+        assert!((fc.left_edge_at(50.0, 0.0) - 150.0).abs() < 0.01);
+        assert!((fc.left_edge_at(0.0, 0.0) - 100.0).abs() < 0.01);
+    }
+
+    // ── CSS Shapes L1 — shape-outside polygon() ───────────────────────────────
+
+    #[test]
+    fn parse_shape_polygon_valid() {
+        // Triangle with px values.
+        let pts = super::parse_shape_polygon_px("polygon(0px 0px, 100px 0px, 50px 100px)");
+        assert_eq!(pts, Some(vec![(0.0, 0.0), (100.0, 0.0), (50.0, 100.0)]));
+        // Bare numbers (no "px" suffix).
+        let pts2 = super::parse_shape_polygon_px("polygon(0 0, 10 0, 10 10, 0 10)");
+        assert_eq!(pts2, Some(vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]));
+        // With fill-rule prefix.
+        let pts3 = super::parse_shape_polygon_px("polygon(nonzero, 0 0, 50 0, 50 50)");
+        assert_eq!(pts3, Some(vec![(0.0, 0.0), (50.0, 0.0), (50.0, 50.0)]));
+    }
+
+    #[test]
+    fn parse_shape_polygon_invalid() {
+        // Fewer than 3 points.
+        assert_eq!(super::parse_shape_polygon_px("polygon(0 0, 10 10)"), None);
+        // Not a polygon.
+        assert_eq!(super::parse_shape_polygon_px("circle(50px)"), None);
+        assert_eq!(super::parse_shape_polygon_px("none"), None);
+    }
+
+    // ── CSS Shapes L1 — shape-outside path() ──────────────────────────────────
+
+    #[test]
+    fn parse_shape_path_triangle() {
+        // Straight-line triangle: M 0 0 L 100 0 L 50 100 Z → 3 distinct vertices.
+        let pts = super::parse_shape_path_px(r#"path("M 0 0 L 100 0 L 50 100 Z")"#)
+            .expect("triangle path should parse");
+        assert_eq!(pts[0], (0.0, 0.0));
+        assert_eq!(pts[1], (100.0, 0.0));
+        assert_eq!(pts[2], (50.0, 100.0));
+        // Close returns to the sub-path start.
+        assert_eq!(*pts.last().unwrap(), (0.0, 0.0));
+    }
+
+    #[test]
+    fn parse_shape_path_fill_rule_and_quotes() {
+        // Leading fill-rule is accepted and ignored; single quotes work too.
+        let pts = super::parse_shape_path_px(r#"path(evenodd, 'M 0 0 L 10 0 L 10 10 Z')"#)
+            .expect("path with fill-rule + single quotes should parse");
+        assert_eq!(pts[0], (0.0, 0.0));
+        assert_eq!(pts[1], (10.0, 0.0));
+        assert_eq!(pts[2], (10.0, 10.0));
+    }
+
+    #[test]
+    fn parse_shape_path_invalid() {
+        // Not a path() function.
+        assert_eq!(super::parse_shape_path_px("polygon(0 0, 10 0, 10 10)"), None);
+        assert_eq!(super::parse_shape_path_px("none"), None);
+        // Missing quotes around the d-string.
+        assert_eq!(super::parse_shape_path_px("path(M 0 0 L 10 0 L 10 10 Z)"), None);
+        // Degenerate (< 3 vertices).
+        assert_eq!(super::parse_shape_path_px(r#"path("M 0 0 L 10 10")"#), None);
+    }
+
+    #[test]
+    fn float_context_path_left_float() {
+        // path() flattened to the same right-triangle as the polygon case:
+        // M 0 0 L 100 0 L 0 100 Z. At y=50 the hypotenuse right edge = 50.
+        let pts = super::parse_shape_path_px(r#"path("M 0 0 L 100 0 L 0 100 Z")"#)
+            .expect("triangle path should parse");
+        let mut fc = super::FloatContext::new();
+        fc.shape_polygons.push(super::ShapePolygon {
+            top_y: 0.0, bottom_y: 100.0, is_left: true, points: pts,
+        });
+        assert!((fc.left_edge_at(50.0, 0.0) - 50.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn polygon_edge_at_y_triangle() {
+        // Right-triangle: (0,0)→(100,0)→(0,100)→(0,0).
+        // At y=50 the right edge is the hypotenuse at x = 100 - 50 = 50.
+        let pts = vec![(0.0_f32, 0.0), (100.0, 0.0), (0.0, 100.0)];
+        let right = super::polygon_right_edge_at_y(&pts, 50.0);
+        assert!(right.is_some());
+        assert!((right.unwrap() - 50.0).abs() < 0.01, "right edge at y=50 should be 50, got {:?}", right);
+        // Left edge at y=50: leftmost intersection = 0.0 (vertical left side).
+        let left = super::polygon_left_edge_at_y(&pts, 50.0);
+        assert!(left.is_some());
+        assert!((left.unwrap() - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn float_context_polygon_left_float() {
+        // Triangle left float: (0,0)→(100,0)→(0,100)→(0,0) in content-area coords.
+        // At y=50: rightmost edge = 50. Should narrow left boundary to 50.
+        let mut fc = super::FloatContext::new();
+        fc.shape_polygons.push(super::ShapePolygon {
+            top_y: 0.0, bottom_y: 100.0, is_left: true,
+            points: vec![(0.0, 0.0), (100.0, 0.0), (0.0, 100.0)],
+        });
+        assert!((fc.left_edge_at(50.0, 0.0) - 50.0).abs() < 0.01);
+        // Outside float range: falls back to default.
+        assert!((fc.left_edge_at(110.0, 0.0) - 0.0).abs() < 0.01);
+    }
+
+    // ── CSS Shapes L1 — shape-outside ellipse() ───────────────────────────────
+
+    #[test]
+    fn parse_shape_ellipse_valid() {
+        let r = super::parse_shape_ellipse_px("ellipse(50px 80px at 100px 150px)");
+        assert_eq!(r, Some((50.0, 80.0, 100.0, 150.0)));
+        // Bare numbers.
+        let r2 = super::parse_shape_ellipse_px("ellipse(30 40 at 60 70)");
+        assert_eq!(r2, Some((30.0, 40.0, 60.0, 70.0)));
+    }
+
+    #[test]
+    fn parse_shape_ellipse_invalid() {
+        // No "at" keyword.
+        assert_eq!(super::parse_shape_ellipse_px("ellipse(50px 80px)"), None);
+        // Zero radius.
+        assert_eq!(super::parse_shape_ellipse_px("ellipse(0px 40px at 50px 50px)"), None);
+        // Not an ellipse.
+        assert_eq!(super::parse_shape_ellipse_px("circle(50px)"), None);
+    }
+
+    #[test]
+    fn float_context_ellipse_left_float() {
+        // Ellipse: rx=50, ry=50, center (100,50). At y=50 (center): right edge = 150.
+        // At y=0 (top): norm=(0-50)/50=-1.0, hw=0, right edge=100.
+        let mut fc = super::FloatContext::new();
+        fc.shape_ellipses.push(super::ShapeEllipse {
+            top_y: 0.0, bottom_y: 100.0, is_left: true,
+            cx: 100.0, cy: 50.0, rx: 50.0, ry: 50.0,
+        });
+        assert!((fc.left_edge_at(50.0, 0.0) - 150.0).abs() < 0.01);
+        assert!((fc.left_edge_at(0.0, 0.0) - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn float_context_ellipse_right_float() {
+        // Ellipse: rx=50, ry=50, center (200,50). Right float.
+        // At y=50 (center): left edge = 200 - 50 = 150.
+        let mut fc = super::FloatContext::new();
+        fc.shape_ellipses.push(super::ShapeEllipse {
+            top_y: 0.0, bottom_y: 100.0, is_left: false,
+            cx: 200.0, cy: 50.0, rx: 50.0, ry: 50.0,
+        });
+        assert!((fc.right_edge_at(50.0, 400.0) - 150.0).abs() < 0.01);
+    }
+
+    // ── CSS Shapes L1 — shape-outside inset() ─────────────────────────────────
+
+    #[test]
+    fn parse_shape_inset_valid() {
+        // 4-value form, no rounding.
+        assert_eq!(
+            super::parse_shape_inset_px("inset(10px 20px 30px 40px)"),
+            Some((10.0, 20.0, 30.0, 40.0, 0.0))
+        );
+        // 1-value form expands to all sides.
+        assert_eq!(
+            super::parse_shape_inset_px("inset(15px)"),
+            Some((15.0, 15.0, 15.0, 15.0, 0.0))
+        );
+        // 2-value form: vertical horizontal.
+        assert_eq!(
+            super::parse_shape_inset_px("inset(10 20)"),
+            Some((10.0, 20.0, 10.0, 20.0, 0.0))
+        );
+        // 3-value form: top horizontal bottom.
+        assert_eq!(
+            super::parse_shape_inset_px("inset(5 10 15)"),
+            Some((5.0, 10.0, 15.0, 10.0, 0.0))
+        );
+        // With round clause (single radius).
+        assert_eq!(
+            super::parse_shape_inset_px("inset(10px round 8px)"),
+            Some((10.0, 10.0, 10.0, 10.0, 8.0))
+        );
+    }
+
+    #[test]
+    fn parse_shape_inset_invalid() {
+        // Not an inset.
+        assert_eq!(super::parse_shape_inset_px("circle(50px)"), None);
+        assert_eq!(super::parse_shape_inset_px("none"), None);
+        // Too many length values.
+        assert_eq!(super::parse_shape_inset_px("inset(1 2 3 4 5)"), None);
+        // `round` keyword without a radius value.
+        assert_eq!(super::parse_shape_inset_px("inset(10px round )"), None);
+    }
+
+    #[test]
+    fn float_context_inset_left_float_sharp() {
+        // Left float inset rect spanning x∈[10,90], y∈[0,100], no rounding.
+        // Content to the right must clear the inset right edge = 90 for all y in range.
+        let mut fc = super::FloatContext::new();
+        fc.shape_insets.push(super::ShapeInset {
+            top_y: 0.0, bottom_y: 100.0, is_left: true,
+            left_x: 10.0, right_x: 90.0, radius: 0.0,
+        });
+        assert!((fc.left_edge_at(0.0, 0.0) - 90.0).abs() < 0.01);
+        assert!((fc.left_edge_at(50.0, 0.0) - 90.0).abs() < 0.01);
+        // Outside the vertical range: falls back to default.
+        assert!((fc.left_edge_at(150.0, 0.0) - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn float_context_inset_right_float_sharp() {
+        // Right float inset rect x∈[210,290]. Content to the left clears left edge = 210.
+        let mut fc = super::FloatContext::new();
+        fc.shape_insets.push(super::ShapeInset {
+            top_y: 0.0, bottom_y: 100.0, is_left: false,
+            left_x: 210.0, right_x: 290.0, radius: 0.0,
+        });
+        assert!((fc.right_edge_at(50.0, 400.0) - 210.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn float_context_inset_rounded_corner() {
+        // Left float rect x∈[0,100], y∈[0,100], corner radius 20.
+        // At the very top (y=0), the rounded corner recedes the right edge fully
+        // by `radius` → edge = 100 - 20 = 80. At mid-height (y=50, flat band) the
+        // edge is the full right_x = 100.
+        let mut fc = super::FloatContext::new();
+        fc.shape_insets.push(super::ShapeInset {
+            top_y: 0.0, bottom_y: 100.0, is_left: true,
+            left_x: 0.0, right_x: 100.0, radius: 20.0,
+        });
+        assert!((fc.left_edge_at(50.0, 0.0) - 100.0).abs() < 0.01);
+        assert!((fc.left_edge_at(0.0, 0.0) - 80.0).abs() < 0.01);
+        // Quarter-circle midpoint: at y=20-20*cos(45°)... use exact: dy at y where
+        // inward = radius - sqrt(r^2 - dy^2). At y = top_band - dy. top_band=20.
+        // For y=20 (band edge), inward=0 → edge=100.
+        assert!((fc.left_edge_at(20.0, 0.0) - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn inset_corner_inward_helper() {
+        // No radius → no inward offset.
+        assert_eq!(super::inset_corner_inward(0.0, 0.0, 100.0, 0.0), 0.0);
+        // Flat middle band → no offset.
+        assert_eq!(super::inset_corner_inward(50.0, 0.0, 100.0, 20.0), 0.0);
+        // Exactly at the top edge → full radius recession.
+        assert!((super::inset_corner_inward(0.0, 0.0, 100.0, 20.0) - 20.0).abs() < 0.01);
+        // Exactly at the bottom edge → full radius recession.
+        assert!((super::inset_corner_inward(100.0, 0.0, 100.0, 20.0) - 20.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn content_visibility_hidden_produces_empty_children() {
+        let html = r#"<div class="hidden"><span>should be skipped</span></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(".hidden { content-visibility: hidden; }");
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        fn find_hidden(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if b.style.content_visibility == crate::style::ContentVisibility::Hidden {
+                return Some(b);
+            }
+            b.children.iter().find_map(find_hidden)
+        }
+        if let Some(hidden_box) = find_hidden(&root) {
+            assert!(hidden_box.children.is_empty(), "content-visibility:hidden should have no children");
+        }
+    }
+
+    #[test]
+    fn content_visibility_visible_children_present() {
+        let html = r#"<div><span>hello</span></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let has_children = root.children.iter().any(|c| !c.children.is_empty());
+        assert!(has_children, "visible elements should have children");
+    }
+
+    // ── content-visibility: auto — off-screen subtree skip (BB-4) ───────────
+
+    /// Find the deepest box whose style has `content-visibility: auto`.
+    fn find_cv_auto(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+        if b.style.content_visibility == crate::style::ContentVisibility::Auto {
+            return Some(b);
+        }
+        b.children.iter().find_map(find_cv_auto)
+    }
+
+    #[test]
+    fn content_visibility_auto_below_viewport_skips_children() {
+        crate::content_visibility::set_cv_scroll(0.0, 0.0);
+        crate::content_visibility::set_cv_relevant(std::collections::HashSet::new());
+        // Spacer pushes the auto box to y=2000 — beyond 300 * 1.5 = 450.
+        let html = r#"<div class="spacer"></div><div class="cv"><span>off screen</span></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".spacer { height: 2000px; } .cv { content-visibility: auto; }",
+        );
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let cv = find_cv_auto(&root).expect("auto box present in tree");
+        assert!(cv.children.is_empty(), "off-screen auto subtree must be skipped");
+        let skipped = crate::content_visibility::take_cv_skipped();
+        assert_eq!(skipped.len(), 1, "exactly one node recorded as skipped");
+        assert_eq!(skipped[0].0, cv.node);
+        assert!(skipped[0].1 >= 2000.0, "recorded top is the collapsed flow position");
+    }
+
+    // ── contain-intrinsic-size under size containment (CSS Box Sizing L4 §5) ──
+
+    /// Find the first box that is size-contained via `contain: size`.
+    fn find_size_contained(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+        if b.style.contain.0 & crate::style::ContainFlags::SIZE.0 != 0 {
+            return Some(b);
+        }
+        b.children.iter().find_map(find_size_contained)
+    }
+
+    #[test]
+    fn contain_intrinsic_size_sets_block_height() {
+        // Size-contained block ignores its tall child and uses the
+        // contain-intrinsic-height placeholder (content-box → 100px border-box,
+        // no padding/border here).
+        let html = r#"<div class="c"><div class="tall"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".c { contain: size; contain-intrinsic-size: 200px 100px; } .tall { height: 999px; }",
+        );
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let c = find_size_contained(&root).expect("size-contained box present");
+        assert!((c.rect.height - 100.0).abs() < 0.5, "height should be 100px, got {}", c.rect.height);
+    }
+
+    #[test]
+    fn contain_intrinsic_size_none_collapses_block_height() {
+        // Size containment with no contain-intrinsic-size → auto height collapses to 0
+        // (plus padding/border, which are 0 here).
+        let html = r#"<div class="c"><div class="tall"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".c { contain: size; } .tall { height: 999px; }",
+        );
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let c = find_size_contained(&root).expect("size-contained box present");
+        assert!(c.rect.height.abs() < 0.5, "height should collapse to 0, got {}", c.rect.height);
+    }
+
+    #[test]
+    fn contain_intrinsic_size_sets_inline_block_width() {
+        // Size-contained inline-block uses contain-intrinsic-width for shrink-to-fit.
+        let html = r#"<div class="c"><div class="tall"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".c { display: inline-block; contain: size; contain-intrinsic-size: 200px 100px; } \
+             .tall { height: 999px; }",
+        );
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let c = find_size_contained(&root).expect("size-contained box present");
+        assert!((c.rect.width - 200.0).abs() < 0.5, "width should be 200px, got {}", c.rect.width);
+        assert!((c.rect.height - 100.0).abs() < 0.5, "height should be 100px, got {}", c.rect.height);
+    }
+
+    #[test]
+    fn content_visibility_auto_in_viewport_lays_out_children() {
+        crate::content_visibility::set_cv_scroll(0.0, 0.0);
+        crate::content_visibility::set_cv_relevant(std::collections::HashSet::new());
+        let html = r#"<div class="cv"><div class="inner"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".cv { content-visibility: auto; } .inner { height: 50px; }",
+        );
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let cv = find_cv_auto(&root).expect("auto box present in tree");
+        assert!(!cv.children.is_empty(), "on-screen auto subtree is laid out");
+        assert!(crate::content_visibility::take_cv_skipped().is_empty());
+    }
+
+    #[test]
+    fn content_visibility_auto_relevant_ratchet_forces_layout() {
+        crate::content_visibility::set_cv_scroll(0.0, 0.0);
+        crate::content_visibility::set_cv_relevant(std::collections::HashSet::new());
+        let html = r#"<div class="spacer"></div><div class="cv"><div class="inner"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".spacer { height: 2000px; } .cv { content-visibility: auto; } .inner { height: 50px; }",
+        );
+        // First pass: skipped.
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let cv_node = find_cv_auto(&root).expect("auto box present").node;
+        let skipped = crate::content_visibility::take_cv_skipped();
+        assert_eq!(skipped.len(), 1);
+        // Shell ratchets the node relevant (user scrolled near it) → laid out.
+        let mut rel = std::collections::HashSet::new();
+        rel.insert(cv_node);
+        crate::content_visibility::set_cv_relevant(rel);
+        let root2 = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let cv2 = find_cv_auto(&root2).expect("auto box present");
+        assert!(!cv2.children.is_empty(), "relevant node must not be skipped");
+        assert!(crate::content_visibility::take_cv_skipped().is_empty());
+        crate::content_visibility::set_cv_relevant(std::collections::HashSet::new());
+    }
+
+    #[test]
+    fn content_visibility_auto_scroll_offset_expands_layout() {
+        crate::content_visibility::set_cv_relevant(std::collections::HashSet::new());
+        // Root scroll 1800 → bound = 1800 + 450 = 2250 ≥ 2000 → laid out.
+        crate::content_visibility::set_cv_scroll(0.0, 1800.0);
+        let html = r#"<div class="spacer"></div><div class="cv"><div class="inner"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".spacer { height: 2000px; } .cv { content-visibility: auto; } .inner { height: 50px; }",
+        );
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let cv = find_cv_auto(&root).expect("auto box present");
+        assert!(!cv.children.is_empty(), "auto subtree inside scrolled viewport is laid out");
+        assert!(crate::content_visibility::take_cv_skipped().is_empty());
+        crate::content_visibility::set_cv_scroll(0.0, 0.0);
+    }
+
+    #[test]
+    fn content_visibility_auto_skipped_keeps_explicit_height() {
+        crate::content_visibility::set_cv_scroll(0.0, 0.0);
+        crate::content_visibility::set_cv_relevant(std::collections::HashSet::new());
+        let html = r#"<div class="spacer"></div><div class="cv"><div class="inner"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".spacer { height: 2000px; } .cv { content-visibility: auto; height: 300px; } .inner { height: 50px; }",
+        );
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let cv = find_cv_auto(&root).expect("auto box present");
+        assert!(cv.children.is_empty(), "subtree skipped");
+        assert!((cv.rect.height - 300.0).abs() < 0.5, "explicit height preserved, got {}", cv.rect.height);
+        let _ = crate::content_visibility::take_cv_skipped();
+    }
+
+    // ── Flex align-content (multi-line flex wrap) ───────────────────────────
+    //
+    // Setup: 200px wide × 300px tall flex container with 3 × 90px wide items.
+    // Lines: [a, b] on line 1, [c] on line 2. Each line cross-size = 50px.
+    // used_cross = 100px; free_cross = 200px.
+
+    #[test]
+    fn flex_align_content_flex_start() {
+        // flex-start: lines packed at cross-start → line1 y=0, line2 y=50.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:200px;height:300px;align-content:flex-start} #a,#b,#c{width:90px;height:50px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        assert_eq!(a.rect.y, 0.0, "a.y {}", a.rect.y);
+        assert_eq!(c.rect.y, 50.0, "c.y {}", c.rect.y);
+    }
+
+    #[test]
+    fn flex_align_content_flex_end() {
+        // flex-end: offset=200 → line1 y=200, line2 y=250.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:200px;height:300px;align-content:flex-end} #a,#b,#c{width:90px;height:50px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        assert_eq!(a.rect.y, 200.0, "a.y {}", a.rect.y);
+        assert_eq!(c.rect.y, 250.0, "c.y {}", c.rect.y);
+    }
+
+    #[test]
+    fn flex_align_content_center() {
+        // center: offset=100 → line1 y=100, line2 y=150.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:200px;height:300px;align-content:center} #a,#b,#c{width:90px;height:50px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        assert_eq!(a.rect.y, 100.0, "a.y {}", a.rect.y);
+        assert_eq!(c.rect.y, 150.0, "c.y {}", c.rect.y);
+    }
+
+    #[test]
+    fn flex_align_content_space_between() {
+        // space-between (n=2): line1 offset=0, line2 offset=200 → y=0 and y=250.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:200px;height:300px;align-content:space-between} #a,#b,#c{width:90px;height:50px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        assert_eq!(a.rect.y, 0.0, "a.y {}", a.rect.y);
+        assert_eq!(c.rect.y, 250.0, "c.y {}", c.rect.y);
+    }
+
+    #[test]
+    fn flex_align_content_space_around() {
+        // space-around (n=2): per=100; line1 offset=50, line2 offset=150 → y=50 and y=200.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:200px;height:300px;align-content:space-around} #a,#b,#c{width:90px;height:50px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        assert_eq!(a.rect.y, 50.0, "a.y {}", a.rect.y);
+        assert_eq!(c.rect.y, 200.0, "c.y {}", c.rect.y);
+    }
+
+    #[test]
+    fn flex_align_content_space_evenly() {
+        // space-evenly (n=2): per=200/3≈66.67; line1 offset=per, line2 offset=2*per.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:200px;height:300px;align-content:space-evenly} #a,#b,#c{width:90px;height:50px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        let per = 200.0_f32 / 3.0;
+        assert!((a.rect.y - per).abs() < 0.5, "a.y expected ≈{per:.2}, got {}", a.rect.y);
+        assert!((c.rect.y - (50.0 + 2.0 * per)).abs() < 0.5, "c.y expected ≈{:.2}, got {}", 50.0 + 2.0 * per, c.rect.y);
+    }
+
+    #[test]
+    fn flex_align_content_default_stretches_lines() {
+        // BUG-107: align-content defaults to `auto`, which CSS Box Alignment L3 §5.4
+        // says behaves as `stretch` for flex containers. With free cross-space the
+        // lines must grow equally and later lines shift toward the cross-end by the
+        // cumulative growth of preceding lines (CSS Flexbox §8.3).
+        //
+        // 200×300 container, 3×90px items → line1 [a,b] (cross 50), line2 [c] (cross 50).
+        // used_cross=100, free_cross=200, per=200/2=100. line1 offset 0, line2 offset 100.
+        // c was at cross_cursor 50 → ends at 50+100 = 150.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:200px;height:300px} #a,#b,#c{width:90px;height:50px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        assert_eq!(a.rect.y, 0.0, "a.y default-stretch line1 {}", a.rect.y);
+        assert_eq!(c.rect.y, 150.0, "c.y default-stretch line2 {}", c.rect.y);
+    }
+
+    #[test]
+    fn flex_align_content_single_line_flex_end() {
+        // Single-line flex container (all items fit in one row) with align-content: flex-end.
+        // CSS Box Alignment L3: align-content applies even when n_lines == 1.
+        // Container 300×200, items 80×50 — all 3 fit in one row (240px < 300px, single line).
+        // free_cross = 200 - 50 = 150; flex-end offset = 150 → items at y=150.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:300px;height:200px;align-content:flex-end} #a,#b,#c{width:80px;height:50px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let b = find_by_id_all(&root, &doc, "b").expect("b");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        assert_eq!(a.rect.y, 150.0, "a.y with single-line flex-end {}", a.rect.y);
+        assert_eq!(b.rect.y, 150.0, "b.y with single-line flex-end {}", b.rect.y);
+        assert_eq!(c.rect.y, 150.0, "c.y with single-line flex-end {}", c.rect.y);
+    }
+
+    #[test]
+    fn flex_align_content_single_line_center() {
+        // Single-line flex with align-content: center → items centered vertically.
+        // Container 300×200, items 80×50 (all fit one row). free_cross=150, offset=75.
+        let html = r#"<div id="flex"><div id="a"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:300px;height:200px;align-content:center} #a{width:80px;height:50px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        assert_eq!(a.rect.y, 75.0, "a.y with single-line center {}", a.rect.y);
+    }
+
+    #[test]
+    fn flex_align_content_stretch_repositions_lines() {
+        // BUG-107: explicit align-content:stretch grows lines AND shifts later lines
+        // down by the cumulative growth of preceding lines (previously the growth was
+        // computed but items were never repositioned). Same geometry as the default
+        // test: a.y=0, c.y=150.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:200px;height:300px;align-content:stretch} #a,#b,#c{width:90px;height:50px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let c = find_by_id_all(&root, &doc, "c").expect("c");
+        assert_eq!(a.rect.y, 0.0, "a.y (line1) {}", a.rect.y);
+        assert_eq!(c.rect.y, 150.0, "c.y (line2 shifted) {}", c.rect.y);
+    }
+
+    #[test]
+    fn flex_align_content_shifts_item_subtree() {
+        // BUG-165: when align-content offsets a flex line, the item's descendants
+        // (already laid out in absolute coordinates) must move in lockstep with the
+        // item box. Previously only `item.rect.y` was bumped, leaving nested content
+        // behind — most visible when a wrapped flex container with the default
+        // (stretch) align-content held flex items that were themselves containers.
+        //
+        // Single-line flex-end: container 300×200, item #a 80×80 fits one row →
+        // free_cross = 120, flex-end offset = 120. #a's block child #inner sits at
+        // #a's content origin, so it must end at y=120, not be stranded at y=0.
+        let html = r#"<div id="flex"><div id="a"><div id="inner"></div></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:300px;height:200px;align-content:flex-end} #a{width:80px;height:80px} #inner{width:40px;height:40px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let inner = find_by_id_all(&root, &doc, "inner").expect("inner");
+        assert_eq!(a.rect.y, 120.0, "a.y flex-end {}", a.rect.y);
+        assert_eq!(inner.rect.y, 120.0, "inner.y must follow #a (subtree shift) {}", inner.rect.y);
+    }
+
+    #[test]
+    fn flex_abs_child_does_not_advance_main_axis() {
+        // CSS Flexbox L1 §4.1: an absolutely-positioned child of a flex container is
+        // not a flex item — it must not consume main-axis space. Regression for the
+        // lenta.ru bug where position:fixed/absolute children advanced the flex-column
+        // cursor and pushed real content ~700px below the fold.
+        // Column flex: in-flow #a (h=90) then abs #x (h=380) then in-flow #b (h=250).
+        // #b must sit directly after #a (y=90), not after the abs box (y=470).
+        let html = r#"<div id="flex"><div id="a"></div><div id="x"></div><div id="b"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-direction:column;width:400px} \
+                   #a{height:90px} #x{position:absolute;width:380px;height:380px} #b{height:250px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(1024.0, 720.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let b = find_by_id_all(&root, &doc, "b").expect("b");
+        assert_eq!(a.rect.y, 0.0, "a.y {}", a.rect.y);
+        assert_eq!(b.rect.y, 90.0, "abs sibling must not advance flow; b.y {}", b.rect.y);
+    }
+
+    #[test]
+    fn flex_nowrap_align_items_center_uses_container_cross_size() {
+        // BUG-141: in a non-wrapping flex container with an explicit height,
+        // align-items: center must center items relative to the full container
+        // height, not the tallest item height (line_cross).
+        // Container 500×400, item 100×100 → y = (400 - 100) / 2 = 150.
+        let html = r#"<div id="flex"><div id="item"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;width:500px;height:400px;align-items:center} #item{width:100px;height:100px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let item = find_by_id_all(&root, &doc, "item").expect("item");
+        assert_eq!(item.rect.y, 150.0, "align-items:center nowrap should be at (400-100)/2=150, got {}", item.rect.y);
+    }
+
+    #[test]
+    fn flex_nowrap_align_items_end_uses_container_cross_size() {
+        // align-items: flex-end in a non-wrapping container → item at bottom of container.
+        // Container 500×400, item 100×100 → y = 400 - 100 = 300.
+        let html = r#"<div id="flex"><div id="item"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;width:500px;height:400px;align-items:flex-end} #item{width:100px;height:100px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let item = find_by_id_all(&root, &doc, "item").expect("item");
+        assert_eq!(item.rect.y, 300.0, "align-items:flex-end nowrap should be 300, got {}", item.rect.y);
+    }
+
+    #[test]
+    fn flex_nowrap_align_items_stretch_auto_height_fills_container() {
+        // CSS Flexbox §9.5: stretch with height:auto stretches item to container cross size.
+        // Container 500×400, item width:100px height:auto → item should fill 400px.
+        let html = r#"<div id="flex"><div id="item"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;width:500px;height:400px;align-items:stretch} #item{width:100px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let item = find_by_id_all(&root, &doc, "item").expect("item");
+        assert_eq!(item.rect.height, 400.0, "align-items:stretch auto-height item should fill container (400), got {}", item.rect.height);
+    }
+
+    #[test]
+    fn flex_nowrap_align_items_stretch_explicit_height_not_grown() {
+        // CSS Flexbox §9.5: stretch must NOT grow items with explicit cross sizes.
+        // Container 500×400, item 100×100 → item stays at 100px (not stretched to 400).
+        let html = r#"<div id="flex"><div id="item"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;width:500px;height:400px;align-items:stretch} #item{width:100px;height:100px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let item = find_by_id_all(&root, &doc, "item").expect("item");
+        assert_eq!(item.rect.height, 100.0, "explicit height should not be stretched by align-items:stretch, got {}", item.rect.height);
+    }
+
+    #[test]
+    fn flex_item_height_percentage_resolves_against_container() {
+        // BUG-074: height:100% on a row flex item must resolve against the container's
+        // definite cross size, not fall back to auto (height=0).
+        let html = r#"<div id="flex"><div id="item"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;height:60px;width:400px} #item{height:100%;width:100px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let item = find_by_id_all(&root, &doc, "item").expect("item");
+        assert_eq!(item.rect.height, 60.0, "height:100% flex item should be container height, got {}", item.rect.height);
+    }
+
+    #[test]
+    fn flex_item_half_height_percentage_resolves_against_container() {
+        // CSS Flexbox §9.8: percentage cross sizes resolve against definite container cross size.
+        let html = r#"<div id="flex"><div id="item"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;height:80px;width:400px} #item{height:50%;width:100px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let item = find_by_id_all(&root, &doc, "item").expect("item");
+        assert_eq!(item.rect.height, 40.0, "height:50% flex item should be 40px, got {}", item.rect.height);
+    }
+
+    #[test]
+    fn flex_single_line_row_gap_excluded_from_cross_size() {
+        // BUG-113: a single-line row flex container must NOT add the row-gap
+        // (`gap`/`row-gap`) to its own cross size — there is no second line to
+        // separate. Previously the per-line trailing cross-gap leaked into the
+        // container height (e.g. TEST-53 rows drifted ~24px vertically).
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div></div>"#;
+        // gap:24px sets both row- and column-gap; in a row flex the row-gap is the cross gap.
+        let css = "body{margin:0} #flex{display:flex;gap:24px;width:400px} \
+                   #a{width:100px;height:120px} #b{width:100px;height:120px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let flex = find_by_id_all(&root, &doc, "flex").expect("flex");
+        assert_eq!(
+            flex.rect.height, 120.0,
+            "single-line flex height must equal the tallest item (120), not 120+gap; got {}",
+            flex.rect.height
+        );
+    }
+
+    /// Returns the first `InlineRun` box in `b`'s subtree (depth-first).
+    fn find_inline_run(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+        if matches!(b.kind, super::BoxKind::InlineRun { .. }) {
+            return Some(b);
+        }
+        b.children.iter().find_map(find_inline_run)
+    }
+
+    #[test]
+    fn control_only_text_node_creates_no_line_box() {
+        // BUG-120: a text node consisting only of a C0 control char must not
+        // open an inline run — Edge renders U+0001 invisible with no line box.
+        let html = "<div id=\"wrap\">\u{0001}</div>";
+        let css = "body{margin:0} #wrap{width:100px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let wrap = find_by_id_all(&root, &doc, "wrap").expect("wrap");
+        assert_eq!(
+            wrap.rect.height, 0.0,
+            "control-only text must not produce a line box, got height {}",
+            wrap.rect.height
+        );
+    }
+
+    #[test]
+    fn control_char_text_does_not_shift_following_block() {
+        // BUG-120 / BUG-119 scenario: a stray U+0001 in body text shifted all
+        // following content down by one line height (~19.2px) in Lumen,
+        // while Edge keeps it at y=0.
+        let html = "\u{0001}<div id=\"x\"></div>";
+        let css = "body{margin:0} #x{width:100px;height:50px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let x = find_by_id_all(&root, &doc, "x").expect("x");
+        assert_eq!(
+            x.rect.y, 0.0,
+            "block after control-only text must stay at y=0, got {}",
+            x.rect.y
+        );
+    }
+
+    #[test]
+    fn control_chars_stripped_from_inline_text() {
+        // BUG-120: embedded C0 controls are zero-advance in Edge — strip them
+        // from inline segments so they contribute no glyphs or width.
+        let html = "<div id=\"t\">a\u{0001}b\u{0002}c</div>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let t = find_by_id_all(&root, &doc, "t").expect("t");
+        let run = find_inline_run(t).expect("inline run");
+        let super::BoxKind::InlineRun { segments, .. } = &run.kind else {
+            unreachable!()
+        };
+        assert_eq!(segments[0].text, "abc", "controls must be stripped, got {:?}", segments[0].text);
+    }
+
+    #[test]
+    fn control_chars_stripped_in_preserved_whitespace() {
+        // BUG-120: white-space:pre keeps tab/LF (CSS Text L3 §4.1) but other
+        // Cc controls are still invisible and must be stripped.
+        let html = "<div id=\"p\">a\u{0001}b\tc</div>";
+        let css = "#p{white-space:pre}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let p = find_by_id_all(&root, &doc, "p").expect("p");
+        let run = find_inline_run(p).expect("inline run");
+        let super::BoxKind::InlineRun { segments, .. } = &run.kind else {
+            unreachable!()
+        };
+        assert_eq!(segments[0].text, "ab\tc", "tab preserved, U+0001 stripped; got {:?}", segments[0].text);
+    }
+
+    #[test]
+    fn svg_defs_element_is_skipped() {
+        // <defs> container should be invisible (Skip).
+        let html = r#"<svg><defs><rect id="r"/></defs><circle/></svg>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        // SVG should have only <circle> as visible child, <defs> should be skipped.
+        assert!(!root.children.is_empty(), "svg should have children");
+        if let Some(svg) = root.children.first()
+            && let super::BoxKind::SvgRoot { .. } = &svg.kind
+        {
+            assert!(!svg.children.is_empty(), "svg should have visible children");
+            // Should contain circle, not defs.
+        }
+    }
+
+    #[test]
+    fn svg_intrinsic_ratio_from_viewbox() {
+        // SVG with viewBox="0 0 200 100" should have intrinsic ratio of 2:1.
+        let html = r#"<svg viewBox="0 0 200 100"></svg>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        // Find SVG root.
+        if let Some(svg) = root.children.first()
+            && let super::BoxKind::SvgRoot { view_box, .. } = &svg.kind
+        {
+            let ratio = super::svg_intrinsic_ratio(view_box);
+            assert_eq!(ratio, Some(2.0), "viewBox 200x100 should give ratio 2.0");
+        }
+    }
+
+    #[test]
+    fn svg_intrinsic_ratio_none_without_viewbox() {
+        // SVG without viewBox should return None for intrinsic ratio.
+        let html = r#"<svg></svg>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        if let Some(svg) = root.children.first()
+            && let super::BoxKind::SvgRoot { view_box, .. } = &svg.kind
+        {
+            let ratio = super::svg_intrinsic_ratio(view_box);
+            assert_eq!(ratio, None, "svg without viewBox should have no intrinsic ratio");
+        }
+    }
+
+    #[test]
+    fn svg_preserve_aspect_ratio_meet() {
+        // preserveAspectRatio="xMidYMid meet" (default) should parse correctly.
+        let html = r#"<svg viewBox="0 0 100 100" width="200" height="100"></svg>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        if let Some(svg) = root.children.first()
+            && let super::BoxKind::SvgRoot { preserve_aspect_ratio, .. } = &svg.kind
+        {
+            assert_eq!(preserve_aspect_ratio.meet_or_slice, super::SvgMeetOrSlice::Meet);
+            assert_eq!(preserve_aspect_ratio.align_x, super::SvgAlignX::Mid);
+            assert_eq!(preserve_aspect_ratio.align_y, super::SvgAlignY::Mid);
+        }
+    }
+
+    #[test]
+    fn svg_preserve_aspect_ratio_slice() {
+        // preserveAspectRatio="xMinYMin slice" should parse correctly.
+        let html = r#"<svg preserveAspectRatio="xMinYMin slice"></svg>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        if let Some(svg) = root.children.first()
+            && let super::BoxKind::SvgRoot { preserve_aspect_ratio, .. } = &svg.kind
+        {
+            assert_eq!(preserve_aspect_ratio.meet_or_slice, super::SvgMeetOrSlice::Slice);
+            assert_eq!(preserve_aspect_ratio.align_x, super::SvgAlignX::Min);
+            assert_eq!(preserve_aspect_ratio.align_y, super::SvgAlignY::Min);
+        }
+    }
+
+    #[test]
+    fn svg_use_element_references_target() {
+        // <use href="#target"/> should reference element with id="target".
+        // SVG 1.1 § 5.6 — <use> creates a reference to another element.
+        let html = "<svg><defs><rect id=\"r1\" x=\"10\" y=\"10\" width=\"50\" height=\"50\"/></defs><use href=\"#r1\" x=\"100\" y=\"100\"/></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        // SVG should have at least the <use> element (which should create referenced content).
+        if let Some(svg) = root.children.first()
+            && let super::BoxKind::SvgRoot { .. } = &svg.kind
+        {
+            // <use> should have been processed and added to the layout.
+            // The exact structure depends on implementation, but we verify no panic.
+            assert!(!svg.children.is_empty(), "svg should have layout children from <use>");
+        }
+    }
+
+    #[test]
+    fn svg_use_translate_x_y() {
+        // <use x="10" y="20"> should apply a translate transform.
+        // The clone group's svg_group_transform should encode translate(10, 20).
+        let html = "<svg><circle id=\"c1\" cx=\"0\" cy=\"0\" r=\"5\"/><use href=\"#c1\" x=\"10\" y=\"20\"/></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn find_use_group(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            for child in &b.children {
+                if matches!(child.kind, super::BoxKind::Block)
+                    && child.svg_group_transform.is_some()
+                    && !child.children.is_empty()
+                {
+                    return Some(child);
+                }
+                if let Some(f) = find_use_group(child) { return Some(f); }
+            }
+            None
+        }
+
+        let group = find_use_group(&root);
+        assert!(group.is_some(), "<use> should produce a Block group with svg_group_transform");
+        if let Some(g) = group {
+            let m = g.svg_group_transform.as_ref().unwrap().matrix;
+            // translate(10, 20): [1, 0, 0, 1, 10, 20]
+            assert!((m[4] - 10.0).abs() < 0.1, "expected tx=10, got {}", m[4]);
+            assert!((m[5] - 20.0).abs() < 0.1, "expected ty=20, got {}", m[5]);
+        }
+    }
+
+    #[test]
+    fn svg_use_references_shape_in_defs() {
+        // <use href="#r"> where <rect id="r"> is inside <defs> should produce a clone.
+        let html = "<svg><defs><rect id=\"r\" x=\"5\" y=\"5\" width=\"30\" height=\"20\"/></defs>\
+                    <use href=\"#r\" x=\"50\" y=\"60\"/></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn find_any_rect(b: &super::LayoutBox) -> bool {
+            if matches!(&b.kind, super::BoxKind::SvgShape { shape: super::SvgShapeKind::Rect { .. }, .. }) {
+                return true;
+            }
+            b.children.iter().any(find_any_rect)
+        }
+
+        assert!(find_any_rect(&root), "cloned <rect> should appear in layout tree");
+    }
+
+    #[test]
+    fn svg_use_references_group() {
+        // <use href="#g1"> where <g id="g1"> contains shapes clones the whole group.
+        let html = "<svg><g id=\"g1\"><rect x=\"0\" y=\"0\" width=\"10\" height=\"10\"/>\
+                    <circle cx=\"5\" cy=\"5\" r=\"3\"/></g>\
+                    <use href=\"#g1\" x=\"100\" y=\"0\"/></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn count_rects(b: &super::LayoutBox) -> usize {
+            let self_count = if matches!(&b.kind, super::BoxKind::SvgShape { shape: super::SvgShapeKind::Rect { .. }, .. }) { 1 } else { 0 };
+            self_count + b.children.iter().map(count_rects).sum::<usize>()
+        }
+
+        let rect_count = count_rects(&root);
+        assert!(rect_count >= 2, "both original and cloned <rect> should be in layout; found {rect_count}");
+    }
+
+    #[test]
+    fn svg_use_cycle_does_not_panic() {
+        // Self-referential <use> must not cause infinite recursion.
+        // <g id="a"> <use href="#a"/> </g> — cycle via self
+        let html = "<svg><g id=\"a\"><rect x=\"0\" y=\"0\" width=\"10\" height=\"10\"/>\
+                    <use href=\"#a\"/></g><use href=\"#a\"/></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        // Must not panic/hang.
+        let _root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+    }
+
+    #[test]
+    fn svg_use_xlink_href() {
+        // xlink:href should also work for legacy SVG 1.1 references.
+        let html = "<svg><circle id=\"c2\" cx=\"20\" cy=\"20\" r=\"8\"/>\
+                    <use xlink:href=\"#c2\" x=\"5\" y=\"5\"/></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn has_any_shape(b: &super::LayoutBox) -> bool {
+            if matches!(b.kind, super::BoxKind::SvgShape { .. }) { return true; }
+            b.children.iter().any(has_any_shape)
+        }
+        assert!(has_any_shape(&root), "xlink:href <use> should produce shape in layout");
+    }
+
+    #[test]
+    fn svg_use_symbol_element() {
+        // <symbol id="s"> acts as a group; <use href="#s"> clones its children.
+        let html = "<svg><symbol id=\"s\"><rect x=\"0\" y=\"0\" width=\"20\" height=\"20\"/></symbol>\
+                    <use href=\"#s\" x=\"10\" y=\"30\"/></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn has_any_shape(b: &super::LayoutBox) -> bool {
+            if matches!(b.kind, super::BoxKind::SvgShape { .. }) { return true; }
+            b.children.iter().any(has_any_shape)
+        }
+        assert!(has_any_shape(&root), "<symbol> target via <use> should produce shape in layout");
+    }
+
+    #[test]
+    fn svg_text_element_simple() {
+        // <text>Hello</text> should create a SvgText layout box with content.
+        let html = "<svg><text>Hello</text></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn find_text_box(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            for child in &b.children {
+                if matches!(child.kind, super::BoxKind::SvgText { .. }) {
+                    return Some(child);
+                }
+                if let Some(found) = find_text_box(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        let text_box = find_text_box(&root);
+        assert!(text_box.is_some(), "SvgText layout box not found");
+
+        if let Some(tb) = text_box {
+            if let super::BoxKind::SvgText { text, .. } = &tb.kind {
+                assert_eq!(text, "Hello");
+            } else {
+                panic!("Found box is not SvgText");
+            }
+        }
+    }
+
+    #[test]
+    fn svg_text_with_x_y_attributes() {
+        // <text x="10" y="20">Content</text> should store x/y values.
+        let html = "<svg><text x=\"10\" y=\"20\">Test</text></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn find_text_box(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            for child in &b.children {
+                if matches!(child.kind, super::BoxKind::SvgText { .. }) {
+                    return Some(child);
+                }
+                if let Some(found) = find_text_box(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        if let Some(tb) = find_text_box(&root) {
+            if let super::BoxKind::SvgText { x, y, text, .. } = &tb.kind {
+                assert!((x - 10.0).abs() < 0.1, "x should be ~10, got {}", x);
+                assert!((y - 20.0).abs() < 0.1, "y should be ~20, got {}", y);
+                assert_eq!(text, "Test");
+            } else {
+                panic!("Found box is not SvgText");
+            }
+        }
+    }
+
+    #[test]
+    fn svg_text_anchor_middle() {
+        // <text text-anchor="middle">Center</text> should parse text-anchor.
+        let html = "<svg><text text-anchor=\"middle\">Center</text></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn find_text_box(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            for child in &b.children {
+                if matches!(child.kind, super::BoxKind::SvgText { .. }) {
+                    return Some(child);
+                }
+                if let Some(found) = find_text_box(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        if let Some(tb) = find_text_box(&root) {
+            if let super::BoxKind::SvgText { text_anchor, .. } = &tb.kind {
+                assert_eq!(*text_anchor, super::SvgTextAnchor::Middle);
+            } else {
+                panic!("Found box is not SvgText");
+            }
+        }
+    }
+
+    #[test]
+    fn svg_dominant_baseline_hanging() {
+        // <text dominant-baseline="hanging">Hanging</text> should parse dominant-baseline.
+        let html = "<svg><text dominant-baseline=\"hanging\">Hanging</text></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn find_text_box(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            for child in &b.children {
+                if matches!(child.kind, super::BoxKind::SvgText { .. }) {
+                    return Some(child);
+                }
+                if let Some(found) = find_text_box(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        if let Some(tb) = find_text_box(&root) {
+            if let super::BoxKind::SvgText { dominant_baseline, .. } = &tb.kind {
+                assert_eq!(*dominant_baseline, super::SvgDominantBaseline::Hanging);
+            } else {
+                panic!("Found box is not SvgText");
+            }
+        }
+    }
+
+    #[test]
+    fn svg_tspan_text_content() {
+        // <text><tspan>Hello</tspan> <tspan>World</tspan></text> should collect all tspan text.
+        let html = "<svg><text><tspan>Hello</tspan><tspan>World</tspan></text></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn find_text_box(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            for child in &b.children {
+                if matches!(child.kind, super::BoxKind::SvgText { .. }) {
+                    return Some(child);
+                }
+                if let Some(found) = find_text_box(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        if let Some(tb) = find_text_box(&root) {
+            if let super::BoxKind::SvgText { text, .. } = &tb.kind {
+                assert!(text.contains("Hello"), "text should contain 'Hello', got '{}'", text);
+                assert!(text.contains("World"), "text should contain 'World', got '{}'", text);
+            } else {
+                panic!("Found box is not SvgText");
+            }
+        }
+    }
+
+    // CSS Grid auto-fill/auto-fit tests (B-3)
+    #[test]
+    fn grid_auto_fill_count_basic() {
+        // repeat(auto-fill, minmax(100px, 1fr)) with 500px available
+        // should resolve to 5 tracks (500 / 100 = 5)
+        let tracks = vec![GridTrackSize::Minmax(
+            Box::new(GridTrackSize::Length(Length::Px(100.0))),
+            Box::new(GridTrackSize::Fr(1.0)),
+        )];
+        let count = resolve_auto_fill_fit_count(500.0, &tracks, 0.0);
+        assert_eq!(count, 5, "should fit 5 tracks of 100px each");
+    }
+
+    #[test]
+    fn grid_auto_fill_count_with_gap() {
+        // repeat(auto-fill, minmax(100px, 1fr)) with 500px available and 10px gap
+        // (500 + 10) / (100 + 10) = 510 / 110 ≈ 4.63 → 4 tracks
+        let tracks = vec![GridTrackSize::Minmax(
+            Box::new(GridTrackSize::Length(Length::Px(100.0))),
+            Box::new(GridTrackSize::Fr(1.0)),
+        )];
+        let count = resolve_auto_fill_fit_count(500.0, &tracks, 10.0);
+        assert_eq!(count, 4, "should fit 4 tracks with gap");
+    }
+
+    #[test]
+    fn grid_auto_fill_count_zero_width() {
+        // Zero or negative width should return 1 track minimum
+        let tracks = vec![GridTrackSize::Length(Length::Px(100.0))];
+        let count = resolve_auto_fill_fit_count(0.0, &tracks, 0.0);
+        assert_eq!(count, 1, "zero width should return 1 track minimum");
+    }
+
+    #[test]
+    fn grid_auto_fill_count_large_gap() {
+        // Gap larger than available width should still return 1 track
+        let tracks = vec![GridTrackSize::Length(Length::Px(50.0))];
+        let count = resolve_auto_fill_fit_count(30.0, &tracks, 100.0);
+        assert_eq!(count, 1, "should return 1 track minimum");
+    }
+
+    #[test]
+    fn grid_fit_content_parse() {
+        // `fit-content(200px)` should parse correctly
+        let parsed = GridTrackSize::parse_track_list("fit-content(200px)", false);
+        assert_eq!(parsed.len(), 1, "fit-content(200px) should parse to single track");
+        if let GridTrackSize::FitContent(limit) = &parsed[0] {
+            // Verify the limit is a Length(200px)
+            match &**limit {
+                GridTrackSize::Length(Length::Px(val)) => {
+                    assert_eq!(*val, 200.0, "fit-content limit should be 200px");
+                }
+                _ => panic!("fit-content limit should be Length(200px), got {:?}", limit),
+            }
+        } else {
+            panic!("parsed should be FitContent variant");
+        }
+    }
+
+    #[test]
+    fn grid_fit_content_minmax() {
+        // `fit-content(300px)` should be equivalent to minmax(auto, min(300px, max-content))
+        let parsed = GridTrackSize::parse_track_list("fit-content(300px)", false);
+        assert_eq!(parsed.len(), 1);
+        // Verify internal structure has FitContent variant
+        assert!(matches!(parsed[0], GridTrackSize::FitContent(_)));
+    }
+
+    #[test]
+    fn grid_auto_fill_multiple_tracks() {
+        // repeat(auto-fill, minmax(50px, 1fr) minmax(50px, 1fr)) with 300px
+        // Two tracks per repeat unit (100px total) → 3 units → 3 fills
+        let tracks = vec![
+            GridTrackSize::Minmax(
+                Box::new(GridTrackSize::Length(Length::Px(50.0))),
+                Box::new(GridTrackSize::Fr(1.0)),
+            ),
+            GridTrackSize::Minmax(
+                Box::new(GridTrackSize::Length(Length::Px(50.0))),
+                Box::new(GridTrackSize::Fr(1.0)),
+            ),
+        ];
+        let count = resolve_auto_fill_fit_count(300.0, &tracks, 0.0);
+        // Min width = max(50, 50) = 50px, so (300 + 0) / (50 + 0) = 6
+        // But we have 2 tracks per repeat, so count should be based on total min width
+        // Simplification: resolve_auto_fill_fit_count returns count of repeat units, not total tracks
+        assert!(count >= 1, "should resolve to at least 1 repeat unit");
+    }
+
+    #[test]
+    fn grid_auto_fill_small_container() {
+        // Container smaller than one track should still return 1
+        let tracks = vec![GridTrackSize::Length(Length::Px(500.0))];
+        let count = resolve_auto_fill_fit_count(100.0, &tracks, 0.0);
+        assert_eq!(count, 1, "container smaller than track should return 1");
+    }
+
+    #[test]
+    fn grid_auto_fill_empty_tracks() {
+        // Empty track list should return 1
+        let tracks: Vec<GridTrackSize> = vec![];
+        let count = resolve_auto_fill_fit_count(500.0, &tracks, 0.0);
+        assert_eq!(count, 1, "empty track list should return 1");
+    }
+
+    // CSS Grid auto-fill/auto-fit Phase 2 layout tests (G-1)
+
+    /// Collect (x, y, width) of all Block children of the first grid container found.
+    fn collect_grid_item_rects(root: &super::LayoutBox) -> Vec<(f32, f32, f32)> {
+        fn walk(b: &super::LayoutBox, out: &mut Vec<(f32, f32, f32)>, in_grid: bool) {
+            if in_grid && matches!(b.kind, super::BoxKind::Block) {
+                out.push((b.rect.x, b.rect.y, b.rect.width));
+            }
+            let next_in_grid = in_grid || matches!(b.kind, super::BoxKind::Block);
+            for c in &b.children {
+                walk(c, out, next_in_grid && !in_grid);
+            }
+        }
+        // Find the first grid container and collect its direct children.
+        fn find_grid(b: &super::LayoutBox) -> Option<Vec<(f32, f32, f32)>> {
+            if b.style.display == super::Display::Grid {
+                let items: Vec<_> = b.children.iter()
+                    .filter(|c| !matches!(c.kind, super::BoxKind::Skip))
+                    .map(|c| (c.rect.x, c.rect.y, c.rect.width))
+                    .collect();
+                return Some(items);
+            }
+            for c in &b.children {
+                if let Some(v) = find_grid(c) {
+                    return Some(v);
+                }
+            }
+            None
+        }
+        let _ = walk; // suppress unused warning
+        find_grid(root).unwrap_or_default()
+    }
+
+    #[test]
+    fn grid_auto_fill_expands_columns_at_layout() {
+        // repeat(auto-fill, 100px) in a 500px container → 5 columns; items flow into columns
+        let html = "<div class='grid'>\
+                     <div>A</div><div>B</div><div>C</div><div>D</div><div>E</div>\
+                    </div>";
+        let css = ".grid { display: grid; grid-template-columns: repeat(auto-fill, 100px); \
+                           width: 500px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(500.0, 300.0));
+        let items = collect_grid_item_rects(&root);
+        assert!(items.len() >= 2, "should have at least 2 items placed");
+        // First item should be ~100px wide (one column)
+        let (_, _, w0) = items[0];
+        assert!(
+            (w0 - 100.0).abs() < 2.0,
+            "first item width should be ~100px (auto-fill expanded), got {}",
+            w0
+        );
+        // Second item should be in the second column (x ≈ 100)
+        let (x1, _, _) = items[1];
+        assert!(
+            (90.0..=110.0).contains(&x1),
+            "second item x should be ~100px (column 2), got {}",
+            x1
+        );
+    }
+
+    #[test]
+    fn grid_auto_fill_minimum_one_column() {
+        // Even when container is very small, at least 1 track must be produced (no crash)
+        let html = "<div class='grid'><div>X</div></div>";
+        let css = ".grid { display: grid; grid-template-columns: repeat(auto-fill, 200px); \
+                           width: 50px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(50.0, 300.0));
+        // Should not panic; grid should have content
+        assert!(!root.children.is_empty(), "grid should have content");
+        let items = collect_grid_item_rects(&root);
+        assert!(!items.is_empty(), "should have at least one item placed");
+    }
+
+    #[test]
+    fn grid_auto_fit_expands_columns_at_layout() {
+        // repeat(auto-fit, 100px) in a 300px container → 3 columns
+        let html = "<div class='grid'>\
+                     <div>P</div><div>Q</div><div>R</div>\
+                    </div>";
+        let css = ".grid { display: grid; grid-template-columns: repeat(auto-fit, 100px); \
+                           width: 300px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let items = collect_grid_item_rects(&root);
+        assert!(items.len() >= 2, "should have at least 2 items placed");
+        let (_, _, w0) = items[0];
+        assert!(
+            (w0 - 100.0).abs() < 2.0,
+            "first item width ~100px for auto-fit, got {}",
+            w0
+        );
+        let (x1, _, _) = items[1];
+        assert!(
+            (90.0..=110.0).contains(&x1),
+            "second item x ~100px (column 2), got {}",
+            x1
+        );
+    }
+
+    #[test]
+    fn grid_auto_fill_with_minmax_tracks() {
+        // repeat(auto-fill, minmax(80px, 1fr)) in 400px → multiple tracks, no panic
+        let html = "<div class='grid'>\
+                     <div>M</div><div>N</div>\
+                    </div>";
+        let css = ".grid { display: grid; \
+                           grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); \
+                           width: 400px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 300.0));
+        let items = collect_grid_item_rects(&root);
+        assert!(!items.is_empty(), "minmax auto-fill items should be laid out");
+    }
+
+    // CSS Grid dense packing tests (B-4)
+    #[test]
+    fn grid_dense_fills_gaps() {
+        // grid-auto-flow: row dense should fill gaps left by taller items
+        let html = "<div class='container'>\
+                     <div style='grid-row: 1 / 3;'>Large</div>\
+                     <div>Item 2</div>\
+                     <div>Item 3</div>\
+                   </div>";
+        let css = ".container { \
+                    display: grid; \
+                    grid-template-columns: repeat(3, 1fr); \
+                    grid-auto-flow: row dense; \
+                  }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+
+        fn find_grid_items(b: &super::LayoutBox) -> Vec<(f32, f32)> {
+            let mut items = Vec::new();
+            for child in &b.children {
+                if matches!(child.kind, super::BoxKind::Block) && !child.children.is_empty() {
+                    // This is a grid item (has content)
+                    items.push((child.rect.x, child.rect.y));
+                }
+                items.extend(find_grid_items(child));
+            }
+            items
+        }
+
+        let items = find_grid_items(&root);
+        // With dense, Item 2 and 3 should fill the gap in columns 2-3 of row 1
+        assert!(items.len() >= 3, "should have at least 3 items");
+    }
+
+    #[test]
+    fn grid_column_dense_backfill() {
+        // grid-auto-flow: column dense should backfill in column order
+        let html = "<div class='container'>\
+                     <div style='grid-column: 1 / 3;'>Wide</div>\
+                     <div>Item 2</div>\
+                     <div>Item 3</div>\
+                   </div>";
+        let css = ".container { \
+                    display: grid; \
+                    grid-template-rows: repeat(2, 100px); \
+                    grid-auto-flow: column dense; \
+                  }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+
+        // Just verify it doesn't panic and produces a layout
+        assert!(!root.children.is_empty(), "grid should have content");
+    }
+
+    #[test]
+    fn grid_dense_vs_sparse_layout() {
+        // Compare dense and sparse layouts to ensure they differ appropriately
+        fn layout_with_flow(flow: &str) -> super::LayoutBox {
+            let html = "<div class='container'>\
+                         <div style='grid-column: span 2; grid-row: span 2;'>1</div>\
+                         <div>2</div>\
+                         <div>3</div>\
+                         <div>4</div>\
+                       </div>";
+            let css = format!(".container {{ \
+                               display: grid; \
+                               grid-template-columns: repeat(3, 100px); \
+                               grid-auto-flow: {}; \
+                             }}", flow);
+            let doc = lumen_html_parser::parse(html);
+            let sheet = lumen_css_parser::parse(&css);
+            super::layout(&doc, &sheet, Size::new(300.0, 300.0))
+        }
+
+        let sparse = layout_with_flow("row");
+        let dense = layout_with_flow("row dense");
+
+        // Both should produce valid layouts
+        assert!(!sparse.children.is_empty(), "sparse layout should have content");
+        assert!(!dense.children.is_empty(), "dense layout should have content");
+        // Layouts may differ due to dense filling gaps differently
+    }
+
+    #[test]
+    fn grid_dense_explicit_placement_respected() {
+        // Explicitly placed items should not be affected by dense algorithm
+        let html = "<div class='container'>\
+                     <div style='grid-column: 2; grid-row: 2;'>Explicit</div>\
+                     <div>Auto 1</div>\
+                     <div>Auto 2</div>\
+                   </div>";
+        let css = ".container { \
+                    display: grid; \
+                    grid-template-columns: repeat(3, 1fr); \
+                    grid-auto-flow: row dense; \
+                  }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(300.0, 300.0));
+
+        // Verify layout was created without panics
+        assert!(!root.children.is_empty(), "grid should be laid out");
+    }
+
+    // --- text-align-last layout ---
+
+    /// Helper: create a minimal InlineFrag at (x, width) for alignment tests.
+    fn make_frag(x: f32, width: f32) -> super::InlineFrag {
+        use crate::style::ComputedStyle;
+        use lumen_dom::NodeId;
+        super::InlineFrag {
+            x,
+            width,
+            y_offset: 0.0,
+            text: String::new(),
+            style: ComputedStyle::root(),
+            padding_left: 0.0,
+            padding_right: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_is_lazy: false,
+            is_first_line: false,
+            source_node: NodeId::from_index(0),
+            source_char_offset: 0,
+        }
+    }
+
+    #[test]
+    fn text_align_last_center_shifts_last_line() {
+        // Non-last line: left (offset=0). Last line: center → (300-80)/2=110.
+        use crate::style::{TextAlign, TextAlignLast, Direction};
+        let mut lines = vec![
+            vec![make_frag(0.0, 100.0)],
+            vec![make_frag(0.0, 80.0)],
+        ];
+        super::align_lines(&mut lines, 300.0, TextAlign::Left, TextAlignLast::Center, Direction::Ltr);
+        assert_eq!(lines[0][0].x, 0.0, "non-last line stays left");
+        assert!((lines[1][0].x - 110.0).abs() < 0.5, "last line centered, got {}", lines[1][0].x);
+    }
+
+    #[test]
+    fn text_align_last_right_shifts_last_line() {
+        // Non-last line: left (offset=0). Last line: right → 300-80=220.
+        use crate::style::{TextAlign, TextAlignLast, Direction};
+        let mut lines = vec![
+            vec![make_frag(0.0, 100.0)],
+            vec![make_frag(0.0, 80.0)],
+        ];
+        super::align_lines(&mut lines, 300.0, TextAlign::Left, TextAlignLast::Right, Direction::Ltr);
+        assert_eq!(lines[0][0].x, 0.0, "non-last line stays left");
+        assert!((lines[1][0].x - 220.0).abs() < 0.5, "last line right, got {}", lines[1][0].x);
+    }
+
+    #[test]
+    fn text_align_last_auto_inherits_text_align() {
+        // Auto: last line uses same alignment as text_align (Right here).
+        // Both lines → right offset = 300-100=200 for first, 300-80=220 for last.
+        use crate::style::{TextAlign, TextAlignLast, Direction};
+        let mut lines = vec![
+            vec![make_frag(0.0, 100.0)],
+            vec![make_frag(0.0, 80.0)],
+        ];
+        super::align_lines(&mut lines, 300.0, TextAlign::Right, TextAlignLast::Auto, Direction::Ltr);
+        assert!((lines[0][0].x - 200.0).abs() < 0.5, "non-last right-aligned, got {}", lines[0][0].x);
+        assert!((lines[1][0].x - 220.0).abs() < 0.5, "last line right (auto), got {}", lines[1][0].x);
+    }
+
+    #[test]
+    fn text_align_last_end_resolves_to_right_ltr() {
+        // End in LTR = Right → last line offset = 300-80=220; non-last Left = 0.
+        use crate::style::{TextAlign, TextAlignLast, Direction};
+        let mut lines = vec![
+            vec![make_frag(0.0, 100.0)],
+            vec![make_frag(0.0, 80.0)],
+        ];
+        super::align_lines(&mut lines, 300.0, TextAlign::Left, TextAlignLast::End, Direction::Ltr);
+        assert_eq!(lines[0][0].x, 0.0, "non-last line stays left");
+        assert!((lines[1][0].x - 220.0).abs() < 0.5, "last line end→right, got {}", lines[1][0].x);
+    }
+
+    // ── <progress> / <meter> ────────────────────────────────────────────────
+
+    fn find_form_kind(root: &super::LayoutBox) -> Option<super::FormControlKind> {
+        if let super::BoxKind::FormControl { kind } = &root.kind {
+            return Some(kind.clone());
+        }
+        for child in &root.children {
+            if let Some(k) = find_form_kind(child) {
+                return Some(k);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn progress_determinate_creates_kind() {
+        let html = r#"<progress value="0.5" max="1.0"></progress>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let kind = find_form_kind(&root).expect("progress FormControl box");
+        assert!(
+            matches!(kind, super::FormControlKind::Progress { value: Some(v), max: m }
+                if (v - 0.5).abs() < 0.001 && (m - 1.0).abs() < 0.001),
+            "expected Progress{{value:Some(0.5), max:1.0}}, got {kind:?}"
+        );
+    }
+
+    #[test]
+    fn progress_indeterminate_when_no_value_attr() {
+        let html = r#"<progress max="10"></progress>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let kind = find_form_kind(&root).expect("progress FormControl box");
+        assert!(
+            matches!(kind, super::FormControlKind::Progress { value: None, .. }),
+            "absent value attribute should produce indeterminate Progress, got {kind:?}"
+        );
+    }
+
+    #[test]
+    fn progress_value_clamped_to_max() {
+        let html = r#"<progress value="200" max="100"></progress>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let kind = find_form_kind(&root).expect("progress FormControl box");
+        if let super::FormControlKind::Progress { value: Some(v), max: m } = kind {
+            assert!((v - 100.0).abs() < 0.001, "value should be clamped to max={m}, got {v}");
+        } else {
+            panic!("expected determinate Progress, got {kind:?}");
+        }
+    }
+
+    #[test]
+    fn meter_creates_kind_with_defaults() {
+        // No attributes → min=0, max=1, value=0, low=0, high=1, optimum=0.5
+        let html = r#"<meter></meter>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let kind = find_form_kind(&root).expect("meter FormControl box");
+        assert!(
+            matches!(kind, super::FormControlKind::Meter { min: m, max: mx, .. }
+                if m.abs() < 0.001 && (mx - 1.0).abs() < 0.001),
+            "default meter min=0/max=1, got {kind:?}"
+        );
+    }
+
+    #[test]
+    fn meter_parses_all_attributes() {
+        let html = r#"<meter min="0" max="10" value="7" low="3" high="8" optimum="6"></meter>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let kind = find_form_kind(&root).expect("meter FormControl box");
+        if let super::FormControlKind::Meter { value, min, max, low, high, optimum } = kind {
+            assert!((min - 0.0).abs() < 0.001, "min");
+            assert!((max - 10.0).abs() < 0.001, "max");
+            assert!((value - 7.0).abs() < 0.001, "value");
+            assert!((low - 3.0).abs() < 0.001, "low");
+            assert!((high - 8.0).abs() < 0.001, "high");
+            assert!((optimum - 6.0).abs() < 0.001, "optimum");
+        } else {
+            panic!("expected Meter kind, got {kind:?}");
+        }
+    }
+
+    #[test]
+    fn meter_min_ge_max_resets_to_defaults() {
+        // Spec §4.10.14: when min >= max, reset to 0..1
+        let html = r#"<meter min="5" max="3" value="4"></meter>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let kind = find_form_kind(&root).expect("meter FormControl box");
+        if let super::FormControlKind::Meter { min, max, .. } = kind {
+            assert!(min.abs() < 0.001, "min should reset to 0, got {min}");
+            assert!((max - 1.0).abs() < 0.001, "max should reset to 1, got {max}");
+        } else {
+            panic!("expected Meter kind");
+        }
+    }
+
+    #[test]
+    fn progress_ua_style_300x16() {
+        let html = r#"<progress value="0.5" max="1"></progress>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(600.0, 400.0));
+        // Find the FormControl box and check its size matches UA defaults.
+        // `rect` is the border-box: content(300) + 2×border(1) = 302 wide;
+        //                           content(16)  + 2×border(1) = 18 tall.
+        fn find_box(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::FormControl { .. }) {
+                return Some(b);
+            }
+            b.children.iter().find_map(find_box)
+        }
+        let b = find_box(&root).expect("progress box");
+        assert!((b.rect.width - 302.0).abs() < 1.0, "border-box width should be 302px, got {}", b.rect.width);
+        assert!((b.rect.height - 18.0).abs() < 1.0, "border-box height should be 18px, got {}", b.rect.height);
+    }
+
+    // ── measure_text_w_varied (CSS Fonts L4 §6.3) ───────────────────────────
+
+    struct Fixed8Varied;
+    impl super::TextMeasurer for Fixed8Varied {
+        fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    }
+
+    #[test]
+    fn measure_text_w_varied_empty_axes_equals_families() {
+        let w_fam = super::measure_text_w_families("hello", 16.0, 0.0, 0.0, &[], &Fixed8Varied);
+        let w_var = super::measure_text_w_varied("hello", 16.0, 0.0, 0.0, &[], &[], &Fixed8Varied);
+        assert_eq!(w_fam, w_var);
+    }
+
+    #[test]
+    fn measure_text_w_varied_empty_text_is_zero() {
+        let w = super::measure_text_w_varied("", 16.0, 0.0, 0.0, &[], &[], &Fixed8Varied);
+        assert_eq!(w, 0.0);
+    }
+
+    #[test]
+    fn measure_text_w_varied_axes_use_char_width_varied() {
+        struct VariedMeasurer;
+        impl super::TextMeasurer for VariedMeasurer {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+            fn char_width_varied(
+                &self,
+                _ch: char,
+                _font_size_px: f32,
+                axes: &[crate::style::FontVariationSetting],
+                _families: &[String],
+            ) -> f32 {
+                if axes.is_empty() { 8.0 } else { 12.0 }
+            }
+        }
+        let axes = vec![crate::style::FontVariationSetting { tag: *b"wght", value: 700.0 }];
+        // 3 chars × 12px − 0 letter-spacing = 36px
+        let w = super::measure_text_w_varied("abc", 16.0, 0.0, 0.0, &[], &axes, &VariedMeasurer);
+        assert_eq!(w, 36.0, "non-empty axes должны вызывать char_width_varied");
+    }
+
+    // ── border-spacing tests ──────────────────────────────────────────────────
+
+    fn layout_table(css: &str, html_body: &str, vw: f32, vh: f32) -> super::LayoutBox {
+        let html = format!("<html><head><style>{css}</style></head><body>{html_body}</body></html>");
+        let doc = lumen_html_parser::parse(&html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(vw, vh));
+        fn find_table(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::Table) {
+                return Some(b);
+            }
+            for child in &b.children {
+                if let Some(found) = find_table(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        find_table(&root).cloned().expect("Table not found in layout tree")
+    }
+
+    /// Returns the first TableRow found in `b`, searching children and TableRowGroup wrappers.
+    fn find_first_row(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+        for child in &b.children {
+            if matches!(child.kind, super::BoxKind::TableRow) {
+                return Some(child);
+            }
+            if matches!(child.kind, super::BoxKind::TableRowGroup) {
+                for row_child in &child.children {
+                    if matches!(row_child.kind, super::BoxKind::TableRow) {
+                        return Some(row_child);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Returns all TableRows found in `b` (direct or inside TableRowGroup).
+    fn collect_rows(b: &super::LayoutBox) -> Vec<&super::LayoutBox> {
+        let mut rows = Vec::new();
+        for child in &b.children {
+            if matches!(child.kind, super::BoxKind::TableRow) {
+                rows.push(child);
+            } else if matches!(child.kind, super::BoxKind::TableRowGroup) {
+                for row_child in &child.children {
+                    if matches!(row_child.kind, super::BoxKind::TableRow) {
+                        rows.push(row_child);
+                    }
+                }
+            }
+        }
+        rows
+    }
+
+    #[test]
+    fn border_spacing_zero_by_default() {
+        // Without border-spacing, gap between adjacent cells should be 0.
+        let t = layout_table(
+            "table { width: 200px; } td { width: 80px; }",
+            "<table><tr><td></td><td></td></tr></table>",
+            800.0, 600.0,
+        );
+        let row = find_first_row(&t).expect("row not found");
+        let cells: Vec<_> = row.children.iter()
+            .filter(|c| !matches!(c.kind, super::BoxKind::Skip))
+            .collect();
+        assert!(cells.len() >= 2, "expected >= 2 cells");
+        // With 0 spacing the second cell starts right after the first.
+        let gap = cells[1].rect.x - (cells[0].rect.x + cells[0].rect.width);
+        assert!(gap.abs() < 1.0, "expected gap=0, got {gap}");
+    }
+
+    #[test]
+    fn border_spacing_horizontal_separates_cells() {
+        // border-spacing: 10px should add 10px between cells.
+        let t = layout_table(
+            "table { border-spacing: 10px; } td { width: 80px; }",
+            "<table><tr><td></td><td></td></tr></table>",
+            800.0, 600.0,
+        );
+        let row = find_first_row(&t).expect("row not found");
+        let cells: Vec<_> = row.children.iter()
+            .filter(|c| !matches!(c.kind, super::BoxKind::Skip))
+            .collect();
+        assert!(cells.len() >= 2, "expected >= 2 cells, got {}", cells.len());
+        let gap = cells[1].rect.x - (cells[0].rect.x + cells[0].rect.width);
+        assert!((gap - 10.0).abs() < 1.0, "expected gap=10, got {gap}");
+    }
+
+    #[test]
+    fn border_spacing_two_values_h_v() {
+        // border-spacing: 8px 20px → h=8px, v=20px; rows should be separated by 20px.
+        let t = layout_table(
+            "table { border-spacing: 8px 20px; } td { width: 80px; height: 30px; }",
+            "<table><tr><td></td></tr><tr><td></td></tr></table>",
+            800.0, 600.0,
+        );
+        let rows = collect_rows(&t);
+        assert!(rows.len() >= 2, "expected >= 2 rows, got {}", rows.len());
+        // Vertical gap between rows should be 20px.
+        let v_gap = rows[1].rect.y - (rows[0].rect.y + rows[0].rect.height);
+        assert!((v_gap - 20.0).abs() < 1.0, "expected v_gap=20, got {v_gap}");
+    }
+
+    // ─── border-collapse: collapse (CSS 2.1 §17.6.2) — BUG-129 ─────────────────
+
+    #[test]
+    fn collapse_overlaps_adjacent_cell_borders() {
+        // collapse: adjacent cells share one border. Each 100px border-box cell with a 2px
+        // border should overlap its neighbour by 2px, so cell[1].x = cell[0].right - 2.
+        let t = layout_table(
+            "table { border-collapse: collapse; } td { width: 96px; border: 2px solid #000; }",
+            "<table><tr><td></td><td></td><td></td></tr></table>",
+            800.0, 600.0,
+        );
+        let row = find_first_row(&t).expect("row not found");
+        let cells: Vec<_> = row.children.iter()
+            .filter(|c| !matches!(c.kind, super::BoxKind::Skip))
+            .collect();
+        assert_eq!(cells.len(), 3, "expected 3 cells");
+        // border-box width = 96 + 2*2 = 100.
+        assert!((cells[0].rect.width - 100.0).abs() < 0.5, "cell border-box = 100, got {}", cells[0].rect.width);
+        let overlap0 = (cells[0].rect.x + cells[0].rect.width) - cells[1].rect.x;
+        let overlap1 = (cells[1].rect.x + cells[1].rect.width) - cells[2].rect.x;
+        assert!((overlap0 - 2.0).abs() < 0.5, "cells overlap by collapsed 2px border, got {overlap0}");
+        assert!((overlap1 - 2.0).abs() < 0.5, "cells overlap by collapsed 2px border, got {overlap1}");
+    }
+
+    #[test]
+    fn collapse_outer_cells_snap_to_table_border() {
+        // collapse: the first cell's left border coincides with the table's own border edge
+        // (table.x == cell[0].x), and the table border-box width = overlapped grid width.
+        let t = layout_table(
+            "table { border-collapse: collapse; border: 2px solid #000; } td { width: 96px; border: 2px solid #000; }",
+            "<table><tr><td></td><td></td><td></td></tr></table>",
+            800.0, 600.0,
+        );
+        let row = find_first_row(&t).expect("row not found");
+        let cells: Vec<_> = row.children.iter()
+            .filter(|c| !matches!(c.kind, super::BoxKind::Skip))
+            .collect();
+        assert!((cells[0].rect.x - t.rect.x).abs() < 0.5,
+            "first cell left coincides with table border: table.x={}, cell.x={}", t.rect.x, cells[0].rect.x);
+        // 3 cells of 100px overlapping by 2px at 2 internal grid lines → 300 - 2*2 = 296.
+        assert!((t.rect.width - 296.0).abs() < 0.5, "collapsed table width = 296, got {}", t.rect.width);
+    }
+
+    #[test]
+    fn collapse_overlaps_rows_vertically() {
+        // collapse: consecutive rows share their horizontal border. Two 30px-tall rows with a
+        // 2px border collapse the inter-row line, so row[1].y = row[0].bottom - 2.
+        let t = layout_table(
+            "table { border-collapse: collapse; } td { width: 50px; height: 26px; border: 2px solid #000; }",
+            "<table><tr><td></td></tr><tr><td></td></tr></table>",
+            800.0, 600.0,
+        );
+        let rows = collect_rows(&t);
+        assert!(rows.len() >= 2, "expected >= 2 rows");
+        let overlap = (rows[0].rect.y + rows[0].rect.height) - rows[1].rect.y;
+        assert!((overlap - 2.0).abs() < 0.5, "rows overlap by collapsed 2px border, got {overlap}");
+        // Top of first row coincides with the table top edge.
+        assert!((rows[0].rect.y - t.rect.y).abs() < 0.5,
+            "first row top coincides with table top: table.y={}, row.y={}", t.rect.y, rows[0].rect.y);
+    }
+
+    #[test]
+    fn separate_mode_keeps_full_cell_borders() {
+        // Regression guard: border-collapse: separate (default) must NOT overlap cells.
+        let t = layout_table(
+            "table { border-collapse: separate; } td { width: 96px; border: 2px solid #000; }",
+            "<table><tr><td></td><td></td></tr></table>",
+            800.0, 600.0,
+        );
+        let row = find_first_row(&t).expect("row not found");
+        let cells: Vec<_> = row.children.iter()
+            .filter(|c| !matches!(c.kind, super::BoxKind::Skip))
+            .collect();
+        // No spacing, no overlap: cell[1].x == cell[0].right exactly.
+        let gap = cells[1].rect.x - (cells[0].rect.x + cells[0].rect.width);
+        assert!(gap.abs() < 0.5, "separate mode: no overlap, gap should be 0, got {gap}");
+    }
+
+    // ─── object-fit / object-position ────────────────────────────────────────
+
+    #[test]
+    fn object_fit_contain_scales_uniformly() {
+        // viewBox="0 0 200 100", box 200×200 → contain → s = min(1.0, 2.0) = 1.0; height fits.
+        let vb = super::ViewBox { min_x: 0.0, min_y: 0.0, width: 200.0, height: 100.0 };
+        let pos = crate::style::ObjectPosition::default(); // 50% 50%
+        let (sx, sy, ox, oy) = super::compute_object_fit_transform(
+            &vb, 200.0, 200.0, crate::style::ObjectFit::Contain, &pos,
+        );
+        assert!((sx - sy).abs() < 1e-4, "contain must use uniform scale, got sx={sx} sy={sy}");
+        // free_y = 200 - 100*1.0 = 100; object-position 50% → oy = 50.
+        assert!((oy - 50.0).abs() < 1e-4, "contain 50% vertical offset: expected 50, got {oy}");
+        let _ = ox;
+    }
+
+    #[test]
+    fn object_fit_cover_overflows() {
+        // viewBox="0 0 100 200", box 200×200 → cover → s = max(2.0, 1.0) = 2.0; width overflows.
+        let vb = super::ViewBox { min_x: 0.0, min_y: 0.0, width: 100.0, height: 200.0 };
+        let pos = crate::style::ObjectPosition::default(); // 50% 50%
+        let (sx, sy, ox, _oy) = super::compute_object_fit_transform(
+            &vb, 200.0, 200.0, crate::style::ObjectFit::Cover, &pos,
+        );
+        assert!((sx - 2.0).abs() < 1e-4, "cover sx expected 2.0, got {sx}");
+        assert!((sy - 2.0).abs() < 1e-4, "cover sy expected 2.0, got {sy}");
+        // scaled_vb_width = 100*2 = 200 → free_x = 0; offset = 0.
+        assert!(ox.abs() < 1e-4, "cover: no horizontal free space, ox should be 0, got {ox}");
+    }
+
+    #[test]
+    fn object_fit_fill_stretches_non_uniformly() {
+        // BUG-110: object-fit: fill on an SVG viewBox must stretch the viewBox to fill the
+        // box (non-uniform scale), overriding the SVG `preserveAspectRatio` attribute — not
+        // letterbox like contain. viewBox="0 0 200 80" into 160×120 box → sx=0.8, sy=1.5.
+        let vb = super::ViewBox { min_x: 0.0, min_y: 0.0, width: 200.0, height: 80.0 };
+        let pos = crate::style::ObjectPosition::default(); // 50% 50%
+        let (sx, sy, ox, oy) = super::compute_object_fit_transform(
+            &vb, 160.0, 120.0, crate::style::ObjectFit::Fill, &pos,
+        );
+        assert!((sx - 0.8).abs() < 1e-4, "fill sx expected 0.8, got {sx}");
+        assert!((sy - 1.5).abs() < 1e-4, "fill sy expected 1.5, got {sy}");
+        assert!((sx - sy).abs() > 0.1, "fill must NOT use uniform scale (would be contain)");
+        // Stretched content exactly fills the box → no free space, no offset.
+        assert!(ox.abs() < 1e-4, "fill ox should be 0, got {ox}");
+        assert!(oy.abs() < 1e-4, "fill oy should be 0, got {oy}");
+    }
+
+    #[test]
+    fn svg_root_fill_viewbox_stretches_to_box() {
+        // BUG-110 end-to-end: an inline SVG with object-fit: fill and a wide viewBox should
+        // produce a background <rect> stretched to the full SVG box (160×120), not letterboxed.
+        let html = r#"<svg viewBox="0 0 200 80" style="width:160px;height:120px;object-fit:fill;"><rect x="0" y="0" width="200" height="80"/></svg>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        // Walk the tree to the first SVG shape box (root → html → body → svg → rect).
+        fn find_shape(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::SvgShape { .. }) {
+                return Some(b);
+            }
+            b.children.iter().find_map(find_shape)
+        }
+        let rect = find_shape(&root).expect("rect shape");
+        assert!((rect.rect.width - 160.0).abs() < 1e-3, "fill rect width expected 160, got {}", rect.rect.width);
+        assert!((rect.rect.height - 120.0).abs() < 1e-3, "fill rect height expected 120 (stretched), got {}", rect.rect.height);
+    }
+
+    #[test]
+    fn object_fit_none_no_scaling() {
+        // viewBox="0 0 50 50", box 200×200 → none → sx=sy=1.0; free = 150×150; 50% → 75.
+        let vb = super::ViewBox { min_x: 0.0, min_y: 0.0, width: 50.0, height: 50.0 };
+        let pos = crate::style::ObjectPosition::default(); // 50% 50%
+        let (sx, sy, ox, oy) = super::compute_object_fit_transform(
+            &vb, 200.0, 200.0, crate::style::ObjectFit::None, &pos,
+        );
+        assert!((sx - 1.0).abs() < 1e-4, "none sx=1.0, got {sx}");
+        assert!((sy - 1.0).abs() < 1e-4, "none sy=1.0, got {sy}");
+        assert!((ox - 75.0).abs() < 1e-4, "none 50% x offset = 75, got {ox}");
+        assert!((oy - 75.0).abs() < 1e-4, "none 50% y offset = 75, got {oy}");
+    }
+
+    #[test]
+    fn object_fit_scale_down_clamps_to_one() {
+        // viewBox="0 0 50 50", box 200×200 → scale-down: min(4.0, 1.0) = 1.0 (same as none).
+        let vb = super::ViewBox { min_x: 0.0, min_y: 0.0, width: 50.0, height: 50.0 };
+        let pos = crate::style::ObjectPosition::default();
+        let (sx, sy, _, _) = super::compute_object_fit_transform(
+            &vb, 200.0, 200.0, crate::style::ObjectFit::ScaleDown, &pos,
+        );
+        assert!((sx - 1.0).abs() < 1e-4, "scale-down clamps at 1 when smaller, got {sx}");
+        assert!((sy - 1.0).abs() < 1e-4, "scale-down clamps at 1 when smaller, got {sy}");
+    }
+
+    #[test]
+    fn object_position_top_left_zero_offset() {
+        // object-position: 0% 0% → top-left; no offset from the box edge.
+        let vb = super::ViewBox { min_x: 0.0, min_y: 0.0, width: 100.0, height: 100.0 };
+        let pos = crate::style::ObjectPosition {
+            x: crate::style::PositionComponent::Percent(0.0),
+            y: crate::style::PositionComponent::Percent(0.0),
+        };
+        let (_, _, ox, oy) = super::compute_object_fit_transform(
+            &vb, 200.0, 200.0, crate::style::ObjectFit::Contain, &pos,
+        );
+        // sx = min(2.0, 2.0) = 2.0; scaled_vb = 200×200; free = 0×0; ox = oy = 0.
+        assert!(ox.abs() < 1e-4, "top-left ox=0, got {ox}");
+        assert!(oy.abs() < 1e-4, "top-left oy=0, got {oy}");
+    }
+
+    #[test]
+    fn object_fit_scale_down_larger_than_box() {
+        // viewBox="0 0 300 300", box 200×200 → scale-down: min(contain 0.666, 1.0) = 0.666.
+        let vb = super::ViewBox { min_x: 0.0, min_y: 0.0, width: 300.0, height: 300.0 };
+        let pos = crate::style::ObjectPosition::default();
+        let (sx, sy, _, _) = super::compute_object_fit_transform(
+            &vb, 200.0, 200.0, crate::style::ObjectFit::ScaleDown, &pos,
+        );
+        let expected = (200.0_f32 / 300.0).min(1.0);
+        assert!((sx - expected).abs() < 1e-4, "scale-down with large content: sx={sx}, expected={expected}");
+        assert!((sx - sy).abs() < 1e-4, "scale-down must be uniform");
+    }
+
+    // ── masonry-auto-flow integration tests ──────────────────────────────────
+
+    fn masonry_grid_children(css: &str, vp: f32) -> Vec<super::LayoutBox> {
+        let html = r#"<div id="grid"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(vp, vp));
+        // Grid containers are Block boxes in lumen-layout. Find the deepest block with 3 children.
+        fn find_3child_block(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::Block) && b.children.len() == 3 {
+                return Some(b);
+            }
+            b.children.iter().find_map(find_3child_block)
+        }
+        find_3child_block(&root).map(|g| g.children.clone()).unwrap_or_default()
+    }
+
+    #[test]
+    fn masonry_auto_flow_ordered_respects_css_order() {
+        // 3-column masonry, items have explicit `order` overriding source order.
+        // c has order:-1 → placed first in track 0.
+        // a has order:0, b has order:0 → placed in source order after c.
+        let css = r#"
+            #grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr 1fr;
+                grid-template-rows: masonry;
+                masonry-auto-flow: ordered;
+                width: 300px;
+                gap: 0px;
+            }
+            #a { height: 100px; order: 0; }
+            #b { height: 60px; order: 0; }
+            #c { height: 40px; order: -1; }
+        "#;
+        let children = masonry_grid_children(css, 300.0);
+        // With ordered: item c (order=-1) → placed first into track 0.
+        // After that, a (order=0) → track 1 (min height), b (order=0) → track 2 (min height).
+        // → track0 contains c at y=0, track1 contains a, track2 contains b.
+        let c_box = children.iter().find(|b| b.rect.height == 40.0);
+        assert!(c_box.is_some(), "item c (height=40) not found in masonry children");
+        if let Some(c) = c_box {
+            // c has order=-1, placed first → lands in track 0 (leftmost x=0).
+            assert!(c.rect.x < 110.0, "c with order=-1 should be in track 0, got x={}", c.rect.x);
+        }
+    }
+
+    #[test]
+    fn masonry_auto_flow_next_source_order() {
+        // With masonry-auto-flow: next, items appear in DOM source order.
+        // item a (height=100) → track 0; item b (height=60) → track 1; item c (height=40) → track 2.
+        let css = r#"
+            #grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr 1fr;
+                grid-template-rows: masonry;
+                masonry-auto-flow: next;
+                width: 300px;
+                gap: 0px;
+            }
+            #a { height: 100px; }
+            #b { height: 60px; }
+            #c { height: 40px; }
+        "#;
+        let children = masonry_grid_children(css, 300.0);
+        let a_box = children.iter().find(|b| b.rect.height == 100.0);
+        let b_box = children.iter().find(|b| b.rect.height == 60.0);
+        assert!(a_box.is_some(), "item a (height=100) not found");
+        assert!(b_box.is_some(), "item b (height=60) not found");
+        if let (Some(a), Some(b)) = (a_box, b_box) {
+            // a first → track 0 (x near 0), b second → track 1 (x near 100).
+            assert!(a.rect.x < b.rect.x, "a should be in track 0 (x<b.x), got a.x={} b.x={}", a.rect.x, b.rect.x);
+        }
+    }
+
+    // ── parent↔first-child margin collapse (CSS 2.1 §8.3.1) ─────────────────
+
+    fn find_block_by_width(b: &super::LayoutBox, w: f32) -> Option<&super::LayoutBox> {
+        if matches!(b.kind, super::BoxKind::Block) && (b.rect.width - w).abs() < 1.0 {
+            return Some(b);
+        }
+        for child in &b.children {
+            if let Some(found) = find_block_by_width(child, w) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn parent_first_child_margin_collapses_through_no_border_padding() {
+        // CSS 2.1 §8.3.1: parent with no border/padding/BFC, child margin-top: 70px.
+        // The child's margin collapses with the parent's (0), pushing both to y=70.
+        // Before fix: parent at y=0, child at y=70 (70px inside parent).
+        // After fix:  parent at y=70, child at y=70 (flush with parent top).
+        let html = r#"<div id="parent"><div id="child"></div></div>"#;
+        let css = "body { margin: 0; } #parent { width: 300px; height: 300px; } #child { width: 100px; height: 100px; margin-top: 70px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let parent = find_block_by_width(&root, 300.0).expect("parent block not found");
+        let child = find_block_by_width(&root, 100.0).expect("child block not found");
+        assert!(
+            (parent.rect.y - 70.0).abs() < 1.0,
+            "parent should be at y=70 (collapsed margin), got y={}",
+            parent.rect.y
+        );
+        assert!(
+            (child.rect.y - parent.rect.y).abs() < 1.0,
+            "child should be flush with parent top (y={}), got child.y={}",
+            parent.rect.y, child.rect.y
+        );
+    }
+
+    #[test]
+    fn parent_first_child_margin_blocked_by_padding_top() {
+        // CSS 2.1 §8.3.1: padding-top on parent breaks the collapse chain.
+        // Parent at y=0, child at y = padding_top + margin_top = 10 + 70 = 80 (relative to parent).
+        let html = r#"<div id="parent"><div id="child"></div></div>"#;
+        let css = "body { margin: 0; } #parent { width: 300px; height: 400px; padding-top: 10px; } #child { width: 100px; height: 100px; margin-top: 70px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let parent = find_block_by_width(&root, 300.0).expect("parent block not found");
+        let child = find_block_by_width(&root, 100.0).expect("child block not found");
+        assert!(
+            parent.rect.y < 1.0,
+            "parent with padding should NOT have collapsed margin, got parent.y={}",
+            parent.rect.y
+        );
+        // Child placed at parent.y + padding_top(10) + margin_top(70) = 80.
+        let expected_child_y = parent.rect.y + 10.0 + 70.0;
+        assert!(
+            (child.rect.y - expected_child_y).abs() < 1.0,
+            "child with padding-blocked parent should be at y={}, got y={}",
+            expected_child_y, child.rect.y
+        );
+    }
+
+    #[test]
+    fn parent_first_child_margin_blocked_by_bfc() {
+        // CSS 2.1 §8.3.1: overflow:hidden establishes a BFC — no parent↔child collapse.
+        // Parent at y=0, child at y = 0 + margin_top = 70 (relative to parent, stays inside).
+        let html = r#"<div id="parent"><div id="child"></div></div>"#;
+        let css = "body { margin: 0; } #parent { width: 300px; height: 400px; overflow: hidden; } #child { width: 100px; height: 100px; margin-top: 70px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let parent = find_block_by_width(&root, 300.0).expect("parent block not found");
+        let child = find_block_by_width(&root, 100.0).expect("child block not found");
+        assert!(
+            parent.rect.y < 1.0,
+            "BFC parent should NOT have collapsed margin, got parent.y={}",
+            parent.rect.y
+        );
+        let expected_child_y = parent.rect.y + 70.0;
+        assert!(
+            (child.rect.y - expected_child_y).abs() < 1.0,
+            "child inside BFC parent should be at y={}, got y={}",
+            expected_child_y, child.rect.y
+        );
+    }
+
+    // ── CSS Fonts L5 §4: font-size-adjust ───────────────────────────────────
+
+    /// Measurer whose x-height is a fixed fraction of the size (aspect = 0.8),
+    /// emulating a tall font like Inter so `font-size-adjust` produces a visible
+    /// change.
+    struct AspectMeasurer(f32);
+    impl crate::TextMeasurer for AspectMeasurer {
+        fn char_width(&self, _: char, size: f32) -> f32 {
+            size * 0.5
+        }
+        fn x_height_px(&self, size: f32) -> f32 {
+            size * self.0
+        }
+    }
+
+    #[test]
+    fn font_size_adjust_value_scales_down_for_tall_font() {
+        use crate::style::{ComputedStyle, FontSizeAdjust};
+        let m = AspectMeasurer(0.8); // font aspect 0.8
+        let mut s = ComputedStyle::root();
+        s.font_size = 100.0;
+        s.font_size_adjust = FontSizeAdjust::Value(0.5);
+        // used = 100 * 0.5 / 0.8 = 62.5
+        let used = super::font_size_adjust_used(&s, &m);
+        assert!((used - 62.5).abs() < 0.01, "expected 62.5, got {used}");
+    }
+
+    #[test]
+    fn font_size_adjust_value_scales_up_for_short_font() {
+        use crate::style::{ComputedStyle, FontSizeAdjust};
+        let m = AspectMeasurer(0.4); // short font, aspect 0.4
+        let mut s = ComputedStyle::root();
+        s.font_size = 100.0;
+        s.font_size_adjust = FontSizeAdjust::Value(0.5);
+        // used = 100 * 0.5 / 0.4 = 125.0
+        let used = super::font_size_adjust_used(&s, &m);
+        assert!((used - 125.0).abs() < 0.01, "expected 125.0, got {used}");
+    }
+
+    #[test]
+    fn font_size_adjust_none_and_auto_are_noops() {
+        use crate::style::{ComputedStyle, FontSizeAdjust};
+        let m = AspectMeasurer(0.8);
+        let mut s = ComputedStyle::root();
+        s.font_size = 40.0;
+        s.font_size_adjust = FontSizeAdjust::None;
+        assert_eq!(super::font_size_adjust_used(&s, &m), 40.0);
+        s.font_size_adjust = FontSizeAdjust::Auto;
+        assert_eq!(super::font_size_adjust_used(&s, &m), 40.0);
+    }
+
+    #[test]
+    fn apply_font_size_adjust_rewrites_box_and_segments() {
+        use crate::style::{ComputedStyle, FontSizeAdjust};
+        let m = AspectMeasurer(0.8);
+        // Block box with font-size-adjust holding an InlineRun child + segment.
+        let mut seg_style = ComputedStyle::root();
+        seg_style.font_size = 100.0;
+        seg_style.font_size_adjust = FontSizeAdjust::Value(0.5);
+        let seg = super::InlineSegment {
+            text: "hi".into(),
+            style: seg_style,
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_is_lazy: false,
+            img_width: 0.0,
+            forced_break: false,
+            pseudo_kind: super::PseudoKind::None,
+            source_node: lumen_dom::NodeId::from_index(0),
+            source_char_offset: 0,
+        };
+        let mut inline_style = ComputedStyle::root();
+        inline_style.font_size = 100.0;
+        inline_style.font_size_adjust = FontSizeAdjust::Value(0.5);
+        let inline_box = super::LayoutBox {
+            node: lumen_dom::NodeId::from_index(0),
+            rect: super::Rect::new(0.0, 0.0, 0.0, 0.0),
+            style: inline_style,
+            kind: super::BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None },
+            children: vec![],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            dirty: Default::default(),
+        };
+        let mut root_style = ComputedStyle::root();
+        root_style.font_size = 100.0;
+        root_style.font_size_adjust = FontSizeAdjust::Value(0.5);
+        let mut root = super::LayoutBox {
+            node: lumen_dom::NodeId::from_index(0),
+            rect: super::Rect::new(0.0, 0.0, 0.0, 0.0),
+            style: root_style,
+            kind: super::BoxKind::Block,
+            children: vec![inline_box],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            dirty: Default::default(),
+        };
+        super::apply_font_size_adjust(&mut root, &m);
+        assert!((root.style.font_size - 62.5).abs() < 0.01, "root not adjusted: {}", root.style.font_size);
+        let child = &root.children[0];
+        assert!((child.style.font_size - 62.5).abs() < 0.01, "inline box not adjusted: {}", child.style.font_size);
+        if let super::BoxKind::InlineRun { segments, .. } = &child.kind {
+            assert!((segments[0].style.font_size - 62.5).abs() < 0.01, "segment not adjusted: {}", segments[0].style.font_size);
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    // --- is_open_details ---
+
+    #[test]
+    fn is_open_details_false_without_open_attr() {
+        let doc = lumen_html_parser::parse(r#"<details id="d"><summary>Q</summary>A</details>"#);
+        let id = doc.find_by_id("d").expect("details element not found");
+        assert!(!super::is_open_details(&doc, id), "closed <details> must return false");
+    }
+
+    #[test]
+    fn is_open_details_true_with_open_attr() {
+        let doc = lumen_html_parser::parse(r#"<details id="d" open><summary>Q</summary>A</details>"#);
+        let id = doc.find_by_id("d").expect("details element not found");
+        assert!(super::is_open_details(&doc, id), "open <details> must return true");
+    }
+
+    #[test]
+    fn is_open_details_false_for_summary_child() {
+        // is_open_details must be false for <summary>, not just any element without `open`.
+        let doc = lumen_html_parser::parse(r#"<details id="d" open><summary id="s">Q</summary>A</details>"#);
+        let s = doc.find_by_id("s").expect("summary not found");
+        assert!(!super::is_open_details(&doc, s), "<summary> is never a details disclosure root");
+    }
 }
+

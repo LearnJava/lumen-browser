@@ -36,9 +36,121 @@
 - **Done (GPU depth buffer extended to text/image/rrect, P2 2026-05-30):** `TextVertex`, `ImageVertex`, `RRectVertex` все получили поле `z: f32` (CSS depth px). WGSL `TEXT_SHADER_SRC`/`IMAGE_SHADER_SRC`/`RRECT_SHADER_SRC` мапят z в WebGPU NDC через ту же формулу `clamp(0.5 - z/20000, 0, 1)`, что и `FillVertex`. text/image/rrect pipelines получили `DepthStencilState { Depth32Float, depth_write: true, compare: LessEqual }` — идентично fill pipeline. `VertexPos::set_depth` реализован для TextVertex/ImageVertex/RRectVertex, поэтому `apply_affine_to_verts` автоматически прокидывает projected z через 3D-путь (`project_point_z`). `apply_affine_to_rrect_verts` отдельная функция — тоже обновлена: 3D-путь пишет `RRectVertex.z`. Теперь cross-type depth testing полный: 3D-transformed текст/картинки/SDF-rrect корректно перекрываются с background-rect под `preserve-3d`. 8 новых unit-тестов (z карриит поля, push_image/push_rrect эмитят z=0, 3D affine прокидывает z в Text/Image/RRect).
 - **Done (CPU software rasterizer — tiny-skia, feature `cpu-render`, P3 8A.5+8A.6):** `crates/engine/paint/src/cpu_raster.rs` — deterministic pure-software renderer for cross-OS pixel-identical snapshot tests (no GPU, no driver variance). Covers: `FillRect`, `FillRoundedRect`, `DrawBorder`, `DrawOutline`, `DrawLinearGradient`/`DrawRadialGradient` (incl. repeating), `DrawConicGradient` (per-pixel libm-free atan2 sweep), `DrawSvgPath` (tessellated triangles, Winding), `DrawImage` (grey placeholder), `DrawText` (bundled Inter via `lumen_font::Rasterizer`), rectangular clipping (`PushClipRect`/`PopClip` + `PushScrollLayer`/`PopScrollLayer`), group opacity (`PushOpacity`/`PopOpacity`), 2D transforms (`PushTransform`/`PopTransform` bilinear), **mix-blend-mode** (`PushBlendMode`/`PopBlendMode` — all 16 CSS modes via `tiny_skia::BlendMode`, `plus-lighter` → `Plus`), **CSS `filter` chain** (`PushFilter`/`PopFilter` → `LayerComposite::Filter`; **Gaussian blur** via SVG Filter Effects three-box-blur approximation `r = round((√(4σ²+1)−1)/2)`, three separable running-sum passes per axis, integer-only so cross-OS bit-identical — no `f32::exp`; **colour filters** brightness/contrast/grayscale/hue-rotate/invert/opacity/saturate/sepia mirror the GPU `apply_filter_fn` on un-premultiplied sRGB, `hue-rotate` uses a libm-free sin/cos minimax polynomial; `walk` emits `PushFilter { Blur(σ) }` around box-shadow `FillRect` and text-shadow `DrawText`; `walk` also emits element-level `PushFilter`/`PopFilter` when `style.filter` is non-empty), **`backdrop-filter`** (`PushBackdropFilter`/`PopBackdropFilter`, CSS Filter Effects L1 §6.2; on Push the painted backdrop under the element bounds is filtered in-place — base layer cloned, filter chain applied, blitted back through a rect `Mask`, `Source` blend; `PopBackdropFilter` no-op), **gradient `mask-image`** (`PushMaskLinearGradient`/`PushMaskRadialGradient`/`PushMaskConicGradient`/`PushMaskImage` → `PopMask`, CSS Masking L1 §4; mask = gradient ALPHA channel × layer ALPHA, mirrors GPU `MASK_COMPOSITE_SHADER`; `PushMaskImage` maps to identity mask since CPU path has no decoded pixels; `mask-mode: luminance` for gradient masks is a CSS gap owned by P4). Opacity/transform/blend/filter/backdrop/mask share one `LayerComposite` stack (`LayerComposite::Opacity/Transform/Blend/Filter/Mask`). `snapshot_cpu.rs` in lumen-driver covers 33 pages pixel-for-pixel (incl. `15-box-shadow`, `52-text-shadow-blur`, `30-css-filter`, `26-mask-image`). 30+ unit tests in `cpu_raster::tests`.
 - **Done (Software WebGL backend, P1 §7F 2026-06-02):** `crates/engine/paint/src/webgl.rs` — `SoftwareWebGl`, a pure-Rust WebGL 1.0 state machine + CPU rasterizer behind `canvas.getContext('webgl')` (consistent with `cpu_raster`'s deterministic CPU path). Owns the RGBA framebuffer (top-left origin), vertex buffers, shader/program objects, vertex-attribute pointers (with captured `ARRAY_BUFFER` binding, byte stride/offset), uniform state and viewport. `draw_arrays` reads clip-space NDC positions from attribute 0 and flat-fills `TRIANGLES`/`TRIANGLE_STRIP`/`TRIANGLE_FAN`/`POINTS`/`LINES`/`LINE_STRIP` via barycentric triangle rasterization with source-over alpha blending. **No GLSL execution** — the fragment colour is the most recent `uniform4f` value (white if unset). NDC→pixel mapping flips GL's bottom-left Y to the framebuffer's top-left. Exported as `lumen_paint::SoftwareWebGl`; JS side in `lumen-js::webgl_canvas`. 19 unit tests.
+- **Done (PA-1 shared scalar modules, P2 2026-06-11):** four cross-backend scalar-math modules extracted per the paint-pipeline review (docs/paint-pipeline-review-2026-06.md, Key finding 2 — triple duplication across femtovg/cpu_raster/renderer). `gradient_math.rs`: `resolve_stop_positions` (canonical CSS Images L3 §3.3 stop resolution, **no [0,1] clamp** — repeating gradients need out-of-range positions; femtovg wrapper clamps for its library calls), `sample_gradient_color`, `lerp_color`, `conic_sample_t`, `atan2_det` (deterministic libm-free atan2). `dash_math.rs`: `dashed_border_offsets` / `dotted_border_offsets` (border, Edge/Skia counts) + `dash_segments` (outline, leading=gap/2) — PA-5 wires these into cpu_raster BorderStyle. `matrix_util.rs`: `mat4_to_2d_affine` (column-major Mat4 → `[a,b,c,d,e,f]`). `blend_modes.rs`: canonical CSS Compositing & Blending L1 §9–10 formulas in Rust — `blend_channel` (separable), `blend_rgb` (incl. non-separable Hue/Saturation/Color/Luminosity via SetLum/SetSat), `mix_blend_rgba` (§5 simple alpha compositing; PlusLighter = L2 §6 additive), helpers `lum`/`clip_color`/`set_lum`/`sat`/`set_sat`; mirrors the WGSL `BLEND_SHADER_SRC` (incl. Rec.601 lum weights) — femtovg offscreen blend (PA-3) must consume these. Call sites converted: cpu_raster (resolve/sample/atan2/transform), renderer (`resolve_gradient_stops` wrapper, `emit_border_side` dash/dot, `dash_segments` re-export), femtovg (`resolve_stops` wrapper, conic sampling, dash fns, PushTransform). CPU snapshot gate stayed bit-identical. 55 unit tests in the new modules.
 - **Deferred:** GPU-pipeline for shadows, exact breakdown of `build_display_list_ordered` into phases BlockBackgrounds / Floats / InlineContent, `BorderStyle::Groove` / `Ridge` / `Inset` / `Outset`, exact polygon masking for clip-path (Phase 1: stencil buffer), border-radius elliptical (rx≠ry). CPU cpu_raster deferred: `PushMaskLayer`/`PopMaskLayer` (SVG mask sources with `MaskMode`; gradient `mask-image` is done, only the SVG-mask-source path remains). WebGL deferred: GLSL execution (per-vertex colour/texture sampling — currently flat `uniform4f` fill), `drawElements`/indexed draws, real textures.
 - 340 unit tests + 21 snapshot tests = 361 tests (default build); 464 tests with `--features cpu-render`.
+
+## Planned: RenderBackend abstraction (ADR-010, Phase 2–3)
+
+See [ADR-010](../docs/decisions/ADR-010-render-backend-abstraction.md) for full rationale.
+
+### Goal
+
+Replace the single concrete `Renderer` (wgpu) with a `RenderBackend` trait so that
+femtovg, vello, wgpu, and the existing cpu_raster are interchangeable at compile time
+and testable side-by-side at runtime.
+
+### Stable contract — `RenderBackend` trait
+
+```rust
+// crates/engine/paint/src/backend.rs
+pub trait RenderBackend: Send {
+    fn render(&mut self, content: &[DisplayCommand], overlay: &[DisplayCommand],
+              scroll_y: f32, scroll_x: f32) -> Result<(), RenderError>;
+    fn resize(&mut self, width: u32, height: u32);
+    fn set_scale_factor(&mut self, scale: f64);
+    fn register_image(&mut self, src: String, image: &Image) -> Result<(), String>;
+    fn clear_images(&mut self);
+    fn set_font_provider(&mut self, provider: Option<Arc<dyn FontProvider>>);
+    // Extended API (RB-4, Phase 1):
+    fn viewport_size(&self) -> Size { Size { width: 1024.0, height: 720.0 } }
+    fn scale_factor(&self) -> f64 { 1.0 }
+    fn preload_curated_fallbacks(&mut self) {}
+    fn on_layer_memory_pressure(&mut self, _level: MemoryPressureLevel) {}
+    fn screenshot_rgba(&mut self) -> Option<Vec<u8>> { None }  // headless only
+}
+```
+
+`DisplayCommand` does not change. Layout and shell code never sees GPU-API types.
+
+**RB-4 (2026-06-03) — Shell wired to `Box<dyn RenderBackend>`:**
+- `Lumen.renderer: Option<Renderer>` → `Option<Box<dyn RenderBackend>>`
+- `backend_factory::create_backend(window, font_bytes)` reads `LUMEN_BACKEND` env var and creates the right backend (Phase 1: wgpu only; femtovg/vello log a warning and fallback to wgpu)
+- `WgpuBackend` implements the 4 new trait methods by delegating to inner `Renderer`
+- Shell no longer imports `Renderer` directly (except in `do_print_to_pdf` local scope for `render_print_pages`)
+
+### Backends
+
+| File | Feature flag | Status | Notes |
+|---|---|---|---|
+| `backends/wgpu_backend.rs` | `backend-wgpu` | ✅ exists (current `Renderer`) | wrapped, stays as fallback |
+| `backends/femtovg_backend.rs` | `backend-femtovg` | ⬜ Phase 2 | new default; OpenGL ES 2.0; no custom shaders |
+| `backends/vello_backend.rs` | `backend-vello` | ⬜ Phase 3 | compute-based; stub until vello API stabilises |
+| `backends/cpu_backend.rs` | `backend-cpu` | ✅ exists (`cpu_raster`) | CI / no-GPU |
+| `backends/compare_backend.rs` | `compare` | ⬜ Phase 2 | renders with two backends, pixel diff |
+
+### Feature flags
+
+```toml
+default        = ["backend-femtovg"]
+backend-wgpu   = ["dep:wgpu"]
+backend-femtovg = ["dep:femtovg", "dep:glutin"]
+backend-vello  = ["dep:vello", "dep:wgpu"]
+backend-cpu    = []
+compare        = []   # requires two other backend features
+```
+
+### vello isolation strategy
+
+ALL vello imports are confined to `backends/vello_backend.rs`. The file has two
+internal functions: `translate_to_scene(&[DisplayCommand]) -> vello::Scene` and
+`submit_scene(scene, renderer, surface)`. When vello releases a breaking API change,
+only these two functions change — zero impact on trait, shell, or layout code.
+
+### CompareBackend — parallel rendering
+
+`CompareBackend { primary, secondary }` renders the same `DisplayCommand` slice with
+both backends, calls `screenshot_rgba()` on each, and computes pixel diff percent.
+Used in `lumen-driver` compare tests to validate a new backend against the current
+reference before promoting it to default.
+
+```bash
+# validate vello against femtovg across all 57 snapshot pages
+cargo test -p lumen-driver --features compare-femtovg-vello
+```
+
+### Migration path
+
+```
+Phase 1 (now):  wgpu (DX12 on Win, BUG-057 fix)  fallback: cpu
+Phase 2:        femtovg default                    fallback: wgpu → cpu
+Phase 3:        vello default (once API stable)    fallback: femtovg → wgpu → cpu
+```
+
+Shell reads `LUMEN_BACKEND` env var to override at runtime.
+
+### Backend selection at runtime (shell)
+
+```
+LUMEN_BACKEND=wgpu    cargo run -p lumen-shell   # Phase 1: wgpu (default)
+LUMEN_BACKEND=femtovg cargo run -p lumen-shell   # Phase 2: not yet implemented (RB-5)
+LUMEN_BACKEND=vello   cargo run -p lumen-shell   # Phase 3: not yet implemented (RB-10)
+LUMEN_BACKEND=cpu     cargo run -p lumen-shell   # headless only — use lumen-driver
+```
+
+**Completed RB tasks:**
+- ✅ RB-1: `RenderBackend` trait + `RenderError` in `paint::backend`
+- ✅ RB-2: `WgpuBackend` wrapper over `Renderer`
+- ✅ RB-3: feature flags in `lumen-paint/Cargo.toml`
+- ✅ RB-4: Shell uses `Box<dyn RenderBackend>` + `LUMEN_BACKEND` env var + `backend_factory`
+- ⬜ RB-5: `FemtovgBackend` skeleton
+- ⬜ RB-6: `FemtovgBackend` full
+- ⬜ RB-7: `VelloBackend` stub
+- ⬜ RB-8: `CompareBackend`
+- ⬜ RB-9: FemtovgBackend → default
+- ⬜ RB-10: `VelloBackend` full
 
 ## Gotchas
 
 - **Tests in `lumen-paint::display_list` and `lumen-paint::atlas`** are unit tests. `renderer.rs` is visual, no auto-tests — verify via `cargo run`. Display list snapshot tests live in `tests/snapshot_tests.rs`.
+- **BUG-057 (FIXED 2026-06-03):** wgpu Vulkan double-panic on first render (Windows). Fix: `Backends::DX12` default in `new_async` + `new_headless_async`. `WGPU_BACKEND` env var overrides.

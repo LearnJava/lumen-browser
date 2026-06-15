@@ -18,7 +18,8 @@ use lumen_a11y;
 use lumen_core::error::{Error, Result};
 use lumen_core::geom::Size;
 use lumen_dom::{Document, NodeData, NodeId};
-use lumen_layout::LayoutBox;
+use lumen_layout::{LayoutBox, PaintOrder, PropertyTrees, StackingTree};
+use lumen_paint::compositor::{BasicLayerTree, Compositor, ThreadedCompositor};
 
 use crate::{
     A11yNode, AxQuery, BoxModel, BrowserSession, ComputedProperties, ComputedStyleSnapshot,
@@ -79,6 +80,12 @@ pub struct WinitSession {
     scroll_x: f32,
     /// Изолированный контекст сессии: cookies, storage, cache, fingerprint profile.
     context: SessionContext,
+    /// Thread-safe compositor for off-main-thread scroll and GPU compositor (PH1-7).
+    ///
+    /// Holds the two-buffer (pending/active) snapshot of `PropertyTrees` + `LayerTree`.
+    /// `run_pipeline()` commits after each layout; `scroll_page_by()` updates scroll
+    /// offsets without relayout. `CompositorThread` (P2) will drive the vsync tick.
+    compositor: ThreadedCompositor,
 }
 
 impl WinitSession {
@@ -93,6 +100,7 @@ impl WinitSession {
             scroll_y: 0.0,
             scroll_x: 0.0,
             context: SessionContext::new(),
+            compositor: ThreadedCompositor::new(),
         }
     }
 
@@ -107,6 +115,7 @@ impl WinitSession {
             scroll_y: 0.0,
             scroll_x: 0.0,
             context: SessionContext::new(),
+            compositor: ThreadedCompositor::new(),
         }
     }
 
@@ -117,6 +126,34 @@ impl WinitSession {
             .ok_or_else(|| {
                 Error::Other("сессия не инициализирована — вызовите navigate() первым".into())
             })
+    }
+
+    /// Active property trees snapshot from the threaded compositor (PH1-7).
+    ///
+    /// Returns `None` before the first navigation.
+    pub fn active_property_trees(&self) -> Option<Arc<PropertyTrees>> {
+        self.compositor.active_trees()
+    }
+
+    /// Off-main-thread page scroll via the threaded compositor (PH1-7).
+    ///
+    /// Updates root `ScrollNode` offsets without relayout. Returns `false`
+    /// if no page is loaded.
+    pub fn scroll_page_by(&mut self, delta_x: f32, delta_y: f32) -> bool {
+        let Some(active_trees) = self.compositor.active_trees() else {
+            return false;
+        };
+        let Some(active_layer_tree) = self.compositor.active_tree() else {
+            return false;
+        };
+        let mut new_trees = (*active_trees).clone();
+        if let Some(root_scroll) = new_trees.scroll.nodes.first_mut() {
+            root_scroll.offset_x = (root_scroll.offset_x + delta_x).max(0.0);
+            root_scroll.offset_y = (root_scroll.offset_y + delta_y).max(0.0);
+        }
+        self.compositor.commit(Arc::new(new_trees), active_layer_tree);
+        self.compositor.flush_pending();
+        true
     }
 }
 
@@ -144,8 +181,17 @@ impl WinitSession {
         let layout_root = lumen_layout::layout_measured(&doc, &sheet, self.viewport, &measurer);
         let flat_tree = lumen_dom::build_flat_tree(&doc);
 
-        // Build display list from layout tree.
-        let display_list = lumen_paint::build_display_list(&layout_root);
+        let sc_tree = StackingTree::build(&layout_root);
+        let sc_order = PaintOrder::from_tree(&sc_tree);
+        let display_list = lumen_paint::build_display_list_ordered(&layout_root, &sc_tree, &sc_order);
+
+        // Build property trees (PH1-7) and commit to the threaded compositor.
+        let property_trees = PropertyTrees::build(&layout_root);
+        let viewport_rect = lumen_core::geom::Rect::new(0.0, 0.0, self.viewport.width, self.viewport.height);
+        let layer_tree = BasicLayerTree::single_layer(viewport_rect, display_list.clone());
+        self.compositor.commit(Arc::new(property_trees.clone()), Arc::new(layer_tree));
+        // Flush immediately — no CompositorThread yet (P2 wires the vsync loop).
+        self.compositor.flush_pending();
 
         // Extract images from DOM and decode them.
         let images = extract_images(&doc);
@@ -594,7 +640,9 @@ impl BrowserSession for WinitSession {
         let state = self.state()?;
         let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
 
-        let display_list = lumen_paint::build_display_list(&state.layout_root);
+        let sc_tree = StackingTree::build(&state.layout_root);
+        let sc_order = PaintOrder::from_tree(&sc_tree);
+        let display_list = lumen_paint::build_display_list_ordered(&state.layout_root, &sc_tree, &sc_order);
         let width = self.viewport.width as u32;
         let height = self.viewport.height as u32;
         let mut renderer = lumen_paint::Renderer::new_headless(INTER_FONT.to_vec(), width, height)
@@ -900,6 +948,22 @@ impl BrowserSession for WinitSession {
     fn set_user_agent(&mut self, ua: &str) -> Result<()> {
         self.context.set_user_agent(ua)
     }
+
+    fn set_clock(&mut self, mode: crate::ClockMode) -> Result<()> {
+        self.context.set_clock_mode(mode);
+        Ok(())
+    }
+
+    fn set_rng_seed(&mut self, seed: Option<u64>) -> Result<()> {
+        self.context.set_rng_seed(seed);
+        Ok(())
+    }
+
+    fn freeze_fingerprint(&mut self, profile: FingerprintProfile) -> Result<()> {
+        self.context.set_fingerprint_profile(profile)?;
+        self.context.freeze_fingerprint();
+        Ok(())
+    }
 }
 
 impl WinitSession {
@@ -936,6 +1000,22 @@ impl WinitSession {
                 Ok(true)
             }
         }
+    }
+
+    #[allow(dead_code)]
+    fn deliver_lcp_entry(
+        &mut self,
+        _element_id: i32,
+        _size: u32,
+        _start_ms: f64,
+        _render_time_ms: f64,
+    ) -> crate::Result<()> {
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    fn deliver_layout_shift(&mut self, _value: f64, _session_id: u32, _had_input: bool) -> crate::Result<()> {
+        Ok(())
     }
 }
 

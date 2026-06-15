@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<!--
+  TEST-68: font-variation-settings — CSS Fonts L4 §6.3
+  Verifies that font-variation-settings parses and does not break layout.
+  Uses coloured boxes so the test is purely geometric (no glyph rasterization diff).
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 68 font variation settings</title>
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f {
+    background: #1a1a2e;
+    width: 1022px; height: 718px;
+    margin: 1px;
+    padding: 20px;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  /* Variation settings applied to containers — layout must be stable */
+  .row {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .box {
+    width: 140px;
+    height: 60px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Each box uses a different font-variation-settings value */
+  .b1 {
+    background: #e63946;
+    font-variation-settings: "wght" 100;
+  }
+  .b2 {
+    background: #457b9d;
+    font-variation-settings: "wght" 400;
+  }
+  .b3 {
+    background: #2a9d8f;
+    font-variation-settings: "wght" 700;
+  }
+  .b4 {
+    background: #e9c46a;
+    font-variation-settings: "wght" 900;
+  }
+  .b5 {
+    background: #f4a261;
+    font-variation-settings: "wdth" 75;
+  }
+  .b6 {
+    background: #264653;
+    font-variation-settings: "wdth" 125;
+  }
+
+  /* Multiple axes */
+  .b7 {
+    background: #6a0572;
+    font-variation-settings: "wght" 600, "wdth" 80;
+  }
+  .b8 {
+    background: #118ab2;
+    font-variation-settings: "wght" 300, "slnt" -10;
+  }
+
+  /* normal resets to defaults */
+  .b9 {
+    background: #06d6a0;
+    font-variation-settings: normal;
+  }
+
+  /* Inherited variation settings */
+  .parent-var {
+    font-variation-settings: "wght" 750;
+    display: flex;
+    gap: 12px;
+  }
+  .child-inherit {
+    background: #ef233c;
+    width: 140px;
+    height: 60px;
+    border-radius: 6px;
+  }
+  .child-override {
+    background: #8338ec;
+    width: 140px;
+    height: 60px;
+    border-radius: 6px;
+    font-variation-settings: "wght" 200;
+  }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="row">
+    <div class="box b1"></div>
+    <div class="box b2"></div>
+    <div class="box b3"></div>
+    <div class="box b4"></div>
+    <div class="box b5"></div>
+    <div class="box b6"></div>
+  </div>
+  <div class="row">
+    <div class="box b7"></div>
+    <div class="box b8"></div>
+    <div class="box b9"></div>
+  </div>
+  <div class="parent-var">
+    <div class="child-inherit"></div>
+    <div class="child-override"></div>
+  </div>
+</div>
+</body>
+</html>

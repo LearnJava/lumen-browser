@@ -1,7 +1,8 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="utf-8">
+  <meta charset="utf-8">
+  <title>Lumen — 32 list markers</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: #ff00ff; width: 1024px; height: 720px; }
@@ -45,6 +46,30 @@
     padding-left: 0;
   }
   ul.inside li { background: #0f3460; }
+  /* ::marker CSS override — color + content */
+  ul.custom-marker::marker,
+  ul.custom-marker li::marker { color: #fc8181; }
+  ul.content-marker li::marker { content: "→ "; color: #68d391; }
+  /* @counter-style custom — CSS Counter Styles L3 */
+  @counter-style bracket {
+    system: alphabetic;
+    symbols: "a" "b" "c" "d" "e";
+    prefix: "(";
+    suffix: ") ";
+  }
+  @counter-style hashnum {
+    system: numeric;
+    symbols: "0" "1" "2" "3" "4" "5" "6" "7" "8" "9";
+    prefix: "#";
+    suffix: ": ";
+  }
+  ol.custom-bracket { list-style-type: bracket; padding-left: 52px; }
+  ol.custom-hashnum { list-style-type: hashnum; padding-left: 52px; }
+  /* CSS Lists L3 §2.3 — list-style-image (image replaces the bullet) */
+  ul.img-marker {
+    list-style-image: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAHklEQVR42mP8z8BQz0AEYBxVSIqKYdQ6UkBqHSmgJgCzR8/HfUkLvQAAAABJRU5ErkJggg==);
+    padding-left: 32px;
+  }
 </style>
 </head>
 <body>
@@ -114,6 +139,46 @@
       <ul style="list-style-type: none; padding-left: 0;">
         <li>No bullet A</li>
         <li>No bullet B</li>
+      </ul>
+    </div>
+    <div class="col">
+      <div class="label">::marker { color: red }</div>
+      <ul class="custom-marker">
+        <li>Red marker</li>
+        <li>Red marker</li>
+      </ul>
+    </div>
+    <div class="col">
+      <div class="label">::marker { content: "→ " }</div>
+      <ul class="content-marker" style="list-style-type: disc;">
+        <li>Arrow A</li>
+        <li>Arrow B</li>
+      </ul>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col">
+      <div class="label">@counter-style: alphabetic + prefix</div>
+      <ol class="custom-bracket">
+        <li>Apple</li>
+        <li>Banana</li>
+        <li>Cherry</li>
+      </ol>
+    </div>
+    <div class="col">
+      <div class="label">@counter-style: numeric + prefix</div>
+      <ol class="custom-hashnum">
+        <li>One</li>
+        <li>Two</li>
+        <li>Three</li>
+      </ol>
+    </div>
+    <div class="col">
+      <div class="label">list-style-image: url(...)</div>
+      <ul class="img-marker">
+        <li>Image A</li>
+        <li>Image B</li>
+        <li>Image C</li>
       </ul>
     </div>
   </div>

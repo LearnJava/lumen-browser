@@ -159,11 +159,19 @@ impl<S: Read + Write> H2Conn<S> {
         stream.write_all(&preface).map_err(io_err)?;
         stream.flush().map_err(io_err)?;
 
+        // Our decoder accepts dynamic-table size updates from the peer up to the
+        // value we just advertised in SETTINGS_HEADER_TABLE_SIZE (RFC 7541 §6.3).
+        // Without this the proto-max stays at the 4096 default and a legal update
+        // from a server that honours our larger advertised limit is rejected as
+        // TableSizeTooLarge (BUG-161: ya.ru advertises 65536, sends an update).
+        let mut decoder = Decoder::new();
+        decoder.set_proto_max(settings.header_table_size as usize);
+
         let mut conn = Self {
             stream,
             buf: Vec::new(),
             encoder: Encoder::new(),
-            decoder: Decoder::new(),
+            decoder,
             remote_max_frame: MAX_FRAME_PAYLOAD_DEFAULT,
             remote_init_window: INITIAL_WINDOW,
             next_stream_id: 1,

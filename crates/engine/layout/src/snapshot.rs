@@ -12,7 +12,7 @@
 use crate::box_tree::{BoxKind, InlineFrag, InlineSegment, LayoutBox};
 use crate::style::{
     BorderStyle, BoxSizing, Color, ComputedStyle, CssColor, Cursor, Direction, Display,
-    FontStretch, FontStyle, FontVariant, FontWeight, Length, LengthOrAuto, OutlineColor,
+    FontStretch, FontStyle, FontVariant, FontWeight, Length, LengthOrAuto, OutlineColor, Position,
     OutlineStyle, Overflow, TextAlign, TextOverflow, TextTransform, Visibility, WhiteSpace,
 };
 
@@ -78,7 +78,9 @@ fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
         BoxKind::InlineSpace => "InlineSpace",
         BoxKind::Image { .. } => "Image",
         BoxKind::Video { .. } => "Video",
+        BoxKind::Canvas { .. } => "Canvas",
         BoxKind::Audio { .. } => "Audio",
+        BoxKind::Iframe { .. } => "Iframe",
         BoxKind::FormControl { .. } => "FormControl",
         BoxKind::Skip => "Skip",
         BoxKind::Marker { .. } => "Marker",
@@ -86,20 +88,27 @@ fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
         BoxKind::Contents => "Contents",
         BoxKind::SvgRoot { .. } => "SvgRoot",
         BoxKind::SvgShape { .. } => "SvgShape",
+        BoxKind::SvgText { .. } => "SvgText",
     };
     let _ = write!(
         out,
         "{indent}{kind} rect=({:.2}, {:.2}, {:.2}, {:.2})",
         b.rect.x, b.rect.y, b.rect.width, b.rect.height
     );
-    if let BoxKind::Image { src, alt } = &b.kind {
+    if let BoxKind::Image { src, alt, .. } = &b.kind {
         let _ = write!(out, " src={src:?} alt={alt:?}");
     }
     if let BoxKind::Video { src, poster } = &b.kind {
         let _ = write!(out, " src={src:?} poster={poster:?}");
     }
+    if let BoxKind::Canvas { width, height } = &b.kind {
+        let _ = write!(out, " canvas={width}x{height}");
+    }
     if let BoxKind::Audio { src, controls } = &b.kind {
         let _ = write!(out, " src={src:?} controls={controls}");
+    }
+    if let BoxKind::Iframe { src, .. } = &b.kind {
+        let _ = write!(out, " src={src:?}");
     }
     if let BoxKind::SvgShape { shape, .. } = &b.kind {
         use crate::box_tree::SvgShapeKind;
@@ -119,7 +128,7 @@ fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
     write_style_attrs(out, &b.style);
     out.push('\n');
 
-    if let BoxKind::InlineRun { segments, lines } = &b.kind {
+    if let BoxKind::InlineRun { segments, lines, .. } = &b.kind {
         let inner = "  ".repeat(depth + 1);
         for (i, seg) in segments.iter().enumerate() {
             write_segment(out, &inner, i, seg);
@@ -154,6 +163,13 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
         && bg.a > 0
     {
         let _ = write!(out, " bg={}", color_hex(bg));
+    }
+    match s.position {
+        Position::Static => {}
+        Position::Relative => out.push_str(" position=relative"),
+        Position::Absolute => out.push_str(" position=absolute"),
+        Position::Fixed => out.push_str(" position=fixed"),
+        Position::Sticky => out.push_str(" position=sticky"),
     }
     match s.display {
         Display::Block => {}
@@ -269,6 +285,7 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
                 CssColor::Rgba(col) => color_hex(col),
                 CssColor::CurrentColor => "currentColor".into(),
                 CssColor::Wide(f) => color_hex(f.to_srgb_color()),
+                CssColor::System(sc) => color_hex(sc.resolve_color(false)),
             };
             let _ = write!(
                 out,

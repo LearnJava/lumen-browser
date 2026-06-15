@@ -90,6 +90,7 @@ impl SidebarPanel {
     }
 
     /// Toggle panel visibility.  No-op when no URL has been set.
+    #[allow(dead_code)]
     pub fn toggle(&mut self) {
         if self.url.is_some() {
             self.visible = !self.visible;
@@ -253,6 +254,7 @@ pub fn build_panel(
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
 
     // Close button background.
@@ -274,6 +276,7 @@ pub fn build_panel(
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
 
     // ── Content area ──────────────────────────────────────────────────────────
@@ -306,6 +309,7 @@ pub fn build_panel(
             font_style: FontStyle::Normal,
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
+            highlight_name: None,
         });
         out.push(DisplayCommand::DrawText {
             rect: Rect::new(px + 10.0, content_y + 38.0, PANEL_WIDTH - 20.0, FONT_SZ * 1.4),
@@ -317,6 +321,7 @@ pub fn build_panel(
             font_style: FontStyle::Normal,
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
+            highlight_name: None,
         });
     }
 

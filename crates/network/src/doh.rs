@@ -26,7 +26,7 @@
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use lumen_core::error::{Error, Result};
 use lumen_core::ext::{DnsResolver, NetworkTransport};
@@ -390,6 +390,70 @@ impl DnsResolver for DohResolver {
                 ))
             }));
         }
+        Ok(addrs)
+    }
+}
+
+/// TTL-aware DNS resolution cache. Wraps any `DnsResolver`, caches results with
+/// per-entry TTL (default 60 seconds), returning cached addresses if fresh.
+/// Expired entries are re-queried from the underlying resolver.
+///
+/// Cached DNS entries: (host, port) → (addresses, expiry_timestamp_ms).
+type DnsCacheMap = std::collections::HashMap<(String, u16), (Vec<SocketAddr>, u64)>;
+
+/// Used to reduce DoH / system DNS lookups when resolving frequently-used hosts.
+pub struct CachedDnsResolver {
+    inner: Arc<dyn DnsResolver>,
+    /// (host, port) → (addresses, expiry_timestamp_ms)
+    cache: Arc<Mutex<DnsCacheMap>>,
+}
+
+impl CachedDnsResolver {
+    /// Create a new cached resolver wrapping `inner`.
+    pub fn new(inner: Arc<dyn DnsResolver>) -> Self {
+        Self {
+            inner,
+            cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        }
+    }
+
+    fn now_ms() -> u64 {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    }
+}
+
+impl DnsResolver for CachedDnsResolver {
+    fn resolve(&self, hostname: &str, port: u16) -> Result<Vec<SocketAddr>> {
+        let key = (hostname.to_string(), port);
+        let now = Self::now_ms();
+
+        // Check cache
+        {
+            let mut cache = self.cache.lock().unwrap();
+            if let Some((addrs, expiry)) = cache.get(&key) {
+                if now < *expiry {
+                    return Ok(addrs.clone());
+                }
+                // Expired; remove
+                cache.remove(&key);
+            }
+        }
+
+        // Cache miss or expired; resolve via inner
+        let addrs = self.inner.resolve(hostname, port)?;
+        let ttl_ms = 60_000; // default 60 seconds
+        let expiry = now.saturating_add(ttl_ms);
+
+        // Store in cache
+        {
+            let mut cache = self.cache.lock().unwrap();
+            cache.insert(key, (addrs.clone(), expiry));
+        }
+
         Ok(addrs)
     }
 }
@@ -865,5 +929,46 @@ mod tests {
         let endpoint = Url::parse("https://example-dns.test/dns-query").unwrap();
         let resolver: Arc<dyn DnsResolver> = Arc::new(DohResolver::new(endpoint, transport));
         let _ = resolver;
+    }
+
+    // ── CachedDnsResolver ──
+
+    #[test]
+    fn cached_dns_resolver_returns_cached_address() {
+        let aaaa_empty = build_response(0x8180, 0, &[]);
+        let a_resp = build_response(0x8180, 1, &a_record_via_pointer([2, 2, 2, 2]));
+        let (inner, _t) = mock_doh(vec![Ok(aaaa_empty), Ok(a_resp)]);
+        let cached = CachedDnsResolver::new(Arc::new(inner));
+
+        // First resolve — hits inner
+        let addrs1 = cached.resolve("test.com", 443).unwrap();
+        assert_eq!(addrs1.len(), 1);
+        assert_eq!(addrs1[0].ip(), IpAddr::V4(Ipv4Addr::new(2, 2, 2, 2)));
+
+        // Second resolve (within TTL) — returns cached
+        let addrs2 = cached.resolve("test.com", 443).unwrap();
+        assert_eq!(addrs2, addrs1);
+    }
+
+    #[test]
+    fn cached_dns_resolver_caches_separately_by_port() {
+        let aaaa_empty = build_response(0x8180, 0, &[]);
+        let a_resp1 = build_response(0x8180, 1, &a_record_via_pointer([1, 1, 1, 1]));
+        let a_resp2 = build_response(0x8180, 1, &a_record_via_pointer([2, 2, 2, 2]));
+        let (inner, _t) =
+            mock_doh(vec![Ok(aaaa_empty.clone()), Ok(a_resp1), Ok(aaaa_empty), Ok(a_resp2)]);
+        let cached = CachedDnsResolver::new(Arc::new(inner));
+
+        let addrs1 = cached.resolve("example.com", 443).unwrap();
+        let addrs2 = cached.resolve("example.com", 8443).unwrap();
+
+        // Different ports should have different cache entries
+        assert_ne!(addrs1[0].port(), addrs2[0].port());
+    }
+
+    #[test]
+    fn cached_dns_resolver_is_send_sync() {
+        fn check<T: Send + Sync>() {}
+        check::<CachedDnsResolver>();
     }
 }

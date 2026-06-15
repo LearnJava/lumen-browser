@@ -6,8 +6,15 @@ authors.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[[bin]]
+name = "lumen-network-service"
+path = "src/bin/network_service.rs"
+
 [dependencies]
 lumen-core = { workspace = true }
+# PH1-4: IPC channel for RemoteNetworkTransport and network service binary.
+# Permanent — network service process is a long-term architecture goal (ADR-009).
+lumen-ipc = { workspace = true }
 # Exception #3 (§5): TLS / X.509 / crypto. Своя реализация — security antipattern.
 rustls = { version = "0.23", features = ["std"] }
 webpki-roots = "0.26"
@@ -25,3 +32,16 @@ sha2 = "0.10"
 # Permanent: OS CSPRNG для генерации passkey-ключей и credential ID в
 # VirtualAuthenticator. Delegates directly to OS (как в lumen-js Web Crypto).
 getrandom = "0.2"
+# HTTP Cache (RFC 7234): LRU cache with size-based eviction for HTTP responses.
+# Pure-Rust, no unsafe in logic. Trait-anchor: none (internal HTTP cache impl).
+lru = "0.12"
+# Persistent HTTP cache backend (C-2). Bundled SQLite — same rationale as lumen-storage.
+# Trait-anchor: DiskHttpCache (HttpCacheBackend impl). No graduation — disk I/O needs OS SQLite.
+rusqlite = { workspace = true }
+# Provisional accelerator (§5): DEFLATE for WebSocket permessage-deflate (RFC 7692, C-3).
+# Trait-anchor: none (internal WebSocket compression). Same crate used by lumen-image for
+# PNG ICC profiles. Graduation criterion: would need no-std DEFLATE for WASM target (not planned).
+flate2 = { workspace = true }
+# Exception #6 (§5): regex — EasyList /regex/ pattern matching; same workspace entry used
+# by find-in-page. Trait-anchor: RequestFilter (easylist.rs /regex/ rule variant).
+regex = { workspace = true }

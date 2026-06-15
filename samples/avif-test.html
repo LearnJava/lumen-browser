@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AVIF Image Test</title>
+    <style>
+        body {
+            margin: 20px;
+            font-family: system-ui, -apple-system, sans-serif;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .test-section h2 {
+            margin-top: 0;
+            color: #666;
+            font-size: 1.1em;
+        }
+        img, picture {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        .info {
+            color: #666;
+            font-size: 0.9em;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>AVIF Image Decoder Test</h1>
+
+        <div class="test-section">
+            <h2>Test 1: Direct AVIF Image</h2>
+            <p>If AVIF support is available, a test gradient image should display below:</p>
+            <img src="data:image/avif;base64,AAAAIGZ0eXBhdmlmAAAAAG1pZjEAAACrcmF3bAAAAGn/4JDsRQAA"
+                 alt="Test AVIF gradient" style="width: 200px; height: 200px; background: linear-gradient(135deg, red, blue);">
+            <div class="info">Status: If the browser loads this image, AVIF is supported and working.</div>
+        </div>
+
+        <div class="test-section">
+            <h2>Test 2: Picture Element with AVIF</h2>
+            <p>Using the &lt;picture&gt; element with AVIF and PNG fallback:</p>
+            <picture>
+                <source type="image/avif" srcset="data:image/avif;base64,AAAAIGZ0eXBhdmlmAAAAAG1pZjEAAACrcmF3bAAAAGn/4JDsRQAA">
+                <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+                     alt="PNG fallback" style="width: 200px; height: 200px;">
+            </picture>
+            <div class="info">If AVIF loads, it shows the AVIF; otherwise the PNG fallback is used.</div>
+        </div>
+
+        <div class="test-section">
+            <h2>Test 3: Supported MIME Types</h2>
+            <p>Check if image/avif is in supported types:</p>
+            <script>
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+
+                // Try to detect supported image types
+                const img = new Image();
+                let avifSupported = false;
+
+                img.onload = function() {
+                    avifSupported = true;
+                    document.getElementById('avif-status').textContent = '✓ AVIF is supported';
+                    document.getElementById('avif-status').style.color = 'green';
+                };
+
+                img.onerror = function() {
+                    document.getElementById('avif-status').textContent = '✗ AVIF is not supported or failed to load';
+                    document.getElementById('avif-status').style.color = 'red';
+                };
+
+                // Try to load a minimal AVIF
+                img.src = 'data:image/avif;base64,AAAAIGZ0eXBhdmlmAAAAAG1pZjEAAACrcmF3bAAAAGn/4JDsRQAA';
+            </script>
+            <p id="avif-status" style="font-weight: bold;">Loading...</p>
+        </div>
+
+        <div class="test-section">
+            <h2>AVIF Format Information</h2>
+            <p>AVIF (AV1 Image File Format) is a modern image format based on the AV1 video codec.</p>
+            <ul>
+                <li><strong>Container:</strong> ISOBMFF (ISO Base Media File Format)</li>
+                <li><strong>Codec:</strong> AV1 (Alliance for Open Media)</li>
+                <li><strong>Advantages:</strong> Better compression than JPEG/WebP, supports HDR</li>
+                <li><strong>Browser Support:</strong> Modern browsers (Chrome 85+, Firefox 93+, Safari 16+)</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>

@@ -49,6 +49,12 @@ pub struct HitTestResult {
     /// DOM-узел верхнего слоя, попавшего под курсор. Для InlineRun — это
     /// DOM-предок (тот же, кому принадлежит inline-контент).
     pub node: NodeId,
+    /// Конкретный DOM-узел, породивший попавший под курсор `InlineFrag`.
+    /// Для `InlineRun` это текстовый DOM-узел (дочерний по отношению к `<a>`,
+    /// `<span>` и т.д.), что позволяет `find_link_href` найти `<a>` при
+    /// обходе вверх: `text_node → <a href="…"> → найдено`.
+    /// Для не-InlineRun боксов равен `node`.
+    pub source_node: NodeId,
     /// Координаты попадания в системе hit-узла после всех transform-инверсий
     /// по цепочке предков (та же система, в которой `b.rect` валиден).
     pub local_point: Point,
@@ -145,13 +151,54 @@ fn hit_test_box(point: Point, b: &LayoutBox) -> Option<HitTestResult> {
     if matches!(b.style.pointer_events, PointerEvents::None) {
         return None;
     }
+    let source_node = find_inline_source(b, child_point);
     Some(HitTestResult {
         node: b.node,
+        source_node,
         local_point: child_point,
         path: vec![b.node],
         cursor: b.style.cursor,
         user_select: b.style.user_select,
     })
+}
+
+/// Для `InlineRun`-бокса возвращает `source_node` того `InlineFrag`, под
+/// который попала точка. Это позволяет `find_link_href` в shell стартовать
+/// обход DOM с текстового узла (child of `<a>`), а не с блочного контейнера
+/// (`<p>`), и правильно найти ссылку.
+///
+/// Возвращает `b.node` если бокс не `InlineRun`, строки пустые, или ни один
+/// фрагмент не попал под точку. `source_node == NodeId(0)` используется в
+/// layout как маркер анонимного/сгенерированного контента — такие узлы не
+/// несут реального DOM-предка и тоже заменяются на `b.node`.
+fn find_inline_source(b: &LayoutBox, point: Point) -> NodeId {
+    let BoxKind::InlineRun { lines, .. } = &b.kind else {
+        return b.node;
+    };
+    let line_h = b.style.font_size * b.style.line_height;
+    if line_h <= 0.0 || lines.is_empty() {
+        return b.node;
+    }
+    let rel_y = point.y - b.rect.y;
+    let line_idx = (rel_y / line_h).floor().max(0.0) as usize;
+    let line = lines.get(line_idx).or_else(|| lines.last());
+    let Some(line) = line else { return b.node; };
+    let rel_x = point.x - b.rect.x;
+    for frag in line {
+        let start = frag.x - frag.padding_left;
+        let end = frag.x + frag.width + frag.padding_right;
+        if rel_x >= start && rel_x < end {
+            let src = frag.source_node;
+            if src.index() != 0 {
+                return src;
+            }
+        }
+    }
+    // Fallback: return source_node of the last frag on the line (closest to right edge).
+    if let Some(last) = line.last() && last.source_node.index() != 0 {
+        return last.source_node;
+    }
+    b.node
 }
 
 /// `Rect::contains(Point)`. Включаем левую/верхнюю границы, исключаем
@@ -194,13 +241,23 @@ fn transform_fn_to_mat4(f: &TransformFn) -> Mat4 {
         TransformFn::Translate(x, y) => Mat4::translation_2d(x, y),
         TransformFn::TranslateX(x) => Mat4::translation_2d(x, 0.0),
         TransformFn::TranslateY(y) => Mat4::translation_2d(0.0, y),
+        TransformFn::TranslateZ(tz) => Mat4::translate_3d(0.0, 0.0, tz),
+        TransformFn::Translate3d(tx, ty, tz) => Mat4::translate_3d(tx, ty, tz),
         TransformFn::Rotate(theta) => Mat4::rotate_2d(theta),
+        TransformFn::RotateX(theta) => Mat4::rotate_x(theta),
+        TransformFn::RotateY(theta) => Mat4::rotate_y(theta),
+        TransformFn::RotateZ(theta) => Mat4::rotate_z(theta),
+        TransformFn::Rotate3d(x, y, z, theta) => Mat4::rotate_3d(x, y, z, theta),
         TransformFn::Scale(sx, sy) => Mat4::scale_2d(sx, sy),
         TransformFn::ScaleX(sx) => Mat4::scale_2d(sx, 1.0),
         TransformFn::ScaleY(sy) => Mat4::scale_2d(1.0, sy),
+        TransformFn::ScaleZ(sz) => Mat4::scale_3d(1.0, 1.0, sz),
+        TransformFn::Scale3d(sx, sy, sz) => Mat4::scale_3d(sx, sy, sz),
         TransformFn::SkewX(a) => Mat4::skew_x(a),
         TransformFn::SkewY(a) => Mat4::skew_y(a),
         TransformFn::Matrix([a, b, c, d, e, f]) => Mat4::from_2d_affine(a, b, c, d, e, f),
+        TransformFn::Matrix3d(vals) => Mat4::from_3d(vals),
+        TransformFn::Perspective(d) => Mat4::perspective(d),
     }
 }
 

@@ -228,7 +228,7 @@ impl EventSource {
     /// Establish (or re-establish) the HTTP connection.
     fn open_connection(&mut self) -> Result<()> {
         let (host, port, is_tls) = require_http_scheme(&self.url)?;
-        let conn = connect(&host, port, is_tls, self.resolver.as_ref(), crate::tls::TlsProfile::Standard)?;
+        let conn = connect(&host, port, is_tls, self.resolver.as_ref(), crate::tls::TlsProfile::Standard, None)?;
 
         // Build SSE request: must send Accept and Cache-Control per spec §9.2.1.
         let last_id = self.parser.last_event_id().to_owned();
@@ -239,10 +239,11 @@ impl EventSource {
         };
 
         let path = self.url.path_and_query();
+        let ua = crate::http::DEFAULT_USER_AGENT;
         let request = format!(
             "GET {path} HTTP/1.1\r\n\
              Host: {host}\r\n\
-             User-Agent: Lumen/0.0.1\r\n\
+             User-Agent: {ua}\r\n\
              Accept: text/event-stream\r\n\
              Cache-Control: no-store\r\n\
              Connection: keep-alive\r\n\

@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<!--
+  TEST-71: @starting-style — CSS Transitions L2 §3.4 entry transition support.
+  Tests that @starting-style rules are parsed without crashing and that normal
+  (non-entering) elements are rendered correctly alongside @starting-style rules.
+  Two colored boxes should appear at their declared CSS colors without interference.
+-->
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; }
+  .__f {
+    background: #1a1a2e;
+    width: 1022px; height: 718px;
+    margin: 1px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 40px;
+    overflow: hidden;
+  }
+
+  /* @starting-style: defines entry state for boxes if they were newly inserted.
+     In static rendering these do NOT affect appearance (no active transition). */
+  @starting-style {
+    .box-a { opacity: 0; transform: scale(0.5); }
+    .box-b { opacity: 0; transform: translateX(-80px); }
+  }
+
+  .box-a {
+    width: 200px;
+    height: 200px;
+    background-color: #e94560;
+    border-radius: 12px;
+    opacity: 1;
+    transition: opacity 0.4s ease, transform 0.4s ease;
+  }
+
+  .box-b {
+    width: 200px;
+    height: 200px;
+    background-color: #0f3460;
+    border-radius: 12px;
+    opacity: 1;
+    transition: opacity 0.4s ease, transform 0.4s ease;
+  }
+</style>
+<body>
+  <div class="__f">
+    <div class="box-a"></div>
+    <div class="box-b"></div>
+  </div>
+</body>

@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 60 svg stroke advanced</title>
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f { background: #0d1117; width: 1022px; height: 718px; margin: 1px; padding: 0; overflow: hidden; }
+  svg { display: block; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <!-- Row 1: stroke-linecap variants (butt / round / square) -->
+  <!-- butt cap (default) -->
+  <svg width="240" height="120" style="position:absolute;left:10px;top:10px;">
+    <path d="M 30 40 H 210" fill="none" stroke="#58a6ff" stroke-width="20" stroke-linecap="butt"/>
+    <path d="M 30 80 H 210" fill="none" stroke="#58a6ff" stroke-width="20" stroke-linecap="butt"/>
+  </svg>
+  <!-- round cap -->
+  <svg width="240" height="120" style="position:absolute;left:265px;top:10px;">
+    <path d="M 30 40 H 210" fill="none" stroke="#3fb950" stroke-width="20" stroke-linecap="round"/>
+    <path d="M 30 80 H 210" fill="none" stroke="#3fb950" stroke-width="20" stroke-linecap="round"/>
+  </svg>
+  <!-- square cap -->
+  <svg width="240" height="120" style="position:absolute;left:520px;top:10px;">
+    <path d="M 30 40 H 210" fill="none" stroke="#f85149" stroke-width="20" stroke-linecap="square"/>
+    <path d="M 30 80 H 210" fill="none" stroke="#f85149" stroke-width="20" stroke-linecap="square"/>
+  </svg>
+  <!-- Diagonal with each cap -->
+  <svg width="200" height="120" style="position:absolute;left:785px;top:10px;">
+    <path d="M 20 100 L 80 20"  fill="none" stroke="#58a6ff" stroke-width="14" stroke-linecap="butt"/>
+    <path d="M 80 100 L 140 20" fill="none" stroke="#3fb950" stroke-width="14" stroke-linecap="round"/>
+    <path d="M 140 100 L 200 20" fill="none" stroke="#f85149" stroke-width="14" stroke-linecap="square"/>
+  </svg>
+
+  <!-- Row 2: stroke-linejoin variants (miter / bevel / round) + miterlimit -->
+  <!-- miter join right-angle -->
+  <svg width="240" height="160" style="position:absolute;left:10px;top:150px;">
+    <path d="M 30 130 L 30 40 L 210 40" fill="none" stroke="#58a6ff" stroke-width="16" stroke-linejoin="miter"/>
+  </svg>
+  <!-- bevel join right-angle -->
+  <svg width="240" height="160" style="position:absolute;left:265px;top:150px;">
+    <path d="M 30 130 L 30 40 L 210 40" fill="none" stroke="#3fb950" stroke-width="16" stroke-linejoin="bevel"/>
+  </svg>
+  <!-- round join right-angle -->
+  <svg width="240" height="160" style="position:absolute;left:520px;top:150px;">
+    <path d="M 30 130 L 30 40 L 210 40" fill="none" stroke="#f85149" stroke-width="16" stroke-linejoin="round"/>
+  </svg>
+  <!-- miter-limit: acute angle, low limit collapses to bevel -->
+  <svg width="200" height="160" style="position:absolute;left:785px;top:150px;">
+    <path d="M 20 130 L 100 20 L 180 130" fill="none" stroke="#d2a8ff" stroke-width="14"
+          stroke-linejoin="miter" stroke-miterlimit="1"/>
+  </svg>
+
+  <!-- Row 3: stroke-dasharray / stroke-dashoffset -->
+  <!-- Simple dash pattern: 20px dash, 8px gap -->
+  <svg width="460" height="100" style="position:absolute;left:10px;top:340px;">
+    <path d="M 20 30 H 440" fill="none" stroke="#58a6ff" stroke-width="8" stroke-dasharray="20 8"/>
+    <path d="M 20 65 H 440" fill="none" stroke="#3fb950" stroke-width="8" stroke-dasharray="30 10"/>
+  </svg>
+  <!-- Dashoffset shifts pattern -->
+  <svg width="460" height="100" style="position:absolute;left:490px;top:340px;">
+    <path d="M 20 30 H 440" fill="none" stroke="#f85149" stroke-width="8"
+          stroke-dasharray="20 8" stroke-dashoffset="0"/>
+    <path d="M 20 65 H 440" fill="none" stroke="#d2a8ff" stroke-width="8"
+          stroke-dasharray="20 8" stroke-dashoffset="14"/>
+  </svg>
+
+  <!-- Row 4: fill-rule (nonzero vs evenodd) + dash on curves -->
+  <!-- Star: nonzero fill (everything filled) -->
+  <svg width="220" height="180" style="position:absolute;left:10px;top:470px;">
+    <path d="M 110 15 L 132 78 L 200 78 L 145 117 L 167 180 L 110 142 L 53 180 L 75 117 L 20 78 L 88 78 Z"
+          fill="#58a6ff" fill-rule="nonzero" stroke="#ffffff" stroke-width="1"/>
+  </svg>
+  <!-- Star: evenodd fill (center cut out) -->
+  <svg width="220" height="180" style="position:absolute;left:245px;top:470px;">
+    <path d="M 110 15 L 132 78 L 200 78 L 145 117 L 167 180 L 110 142 L 53 180 L 75 117 L 20 78 L 88 78 Z"
+          fill="#f85149" fill-rule="evenodd" stroke="#ffffff" stroke-width="1"/>
+  </svg>
+  <!-- Dashed circle arc with round caps -->
+  <svg width="220" height="180" style="position:absolute;left:490px;top:470px;">
+    <path d="M 110 20 C 170 20 200 60 200 100 C 200 150 160 180 110 180 C 60 180 20 150 20 100 C 20 60 50 20 110 20 Z"
+          fill="none" stroke="#3fb950" stroke-width="10"
+          stroke-dasharray="25 15" stroke-linecap="round"/>
+  </svg>
+  <!-- Combined: linejoin + dasharray on zigzag -->
+  <svg width="280" height="180" style="position:absolute;left:725px;top:470px;">
+    <path d="M 20 150 L 80 30 L 140 150 L 200 30 L 260 150"
+          fill="none" stroke="#d2a8ff" stroke-width="8"
+          stroke-dasharray="18 6" stroke-linejoin="round" stroke-linecap="round"/>
+  </svg>
+</div>
+</body>
+</html>

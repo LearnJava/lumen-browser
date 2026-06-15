@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Lumen — 67 attr typed</title>
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f {
+    background: #f8f8f8;
+    width: 1022px; height: 718px;
+    margin: 1px; padding: 40px;
+    overflow: hidden; box-sizing: border-box;
+  }
+
+  /* attr() string substitution in content — CSS 2.1 / Values L4 §7.7 */
+  .swatch {
+    display: flex;
+    align-items: center;
+    height: 60px;
+    margin-bottom: 16px;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  /* Label generated from data-label attribute via attr() */
+  .swatch::before {
+    content: attr(data-label);
+    display: flex;
+    align-items: center;
+    width: 200px;
+    height: 100%;
+    padding: 0 16px;
+    background: #2c3e50;
+    color: #ecf0f1;
+    font-family: monospace;
+    font-size: 13px;
+    box-sizing: border-box;
+  }
+
+  .bar {
+    height: 100%;
+    background: #3498db;
+  }
+  .bar-green  { background: #27ae60; }
+  .bar-orange { background: #e67e22; }
+  .bar-purple { background: #9b59b6; }
+  .bar-red    { background: #e74c3c; }
+
+  /* Bar widths are static (attr typed width is tested via unit tests) */
+  .w200 { width: 200px; }
+  .w350 { width: 350px; }
+  .w150 { width: 150px; }
+  .w300 { width: 300px; }
+  .w450 { width: 450px; }
+
+  .row-label {
+    font-family: sans-serif;
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 8px;
+    margin-top: 20px;
+  }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="row-label">content: attr(data-label) — label from HTML attribute</div>
+
+  <div class="swatch" data-label="Width: 200px">
+    <div class="bar w200"></div>
+  </div>
+
+  <div class="swatch" data-label="Width: 350px">
+    <div class="bar bar-green w350"></div>
+  </div>
+
+  <div class="swatch" data-label="Width: 150px">
+    <div class="bar bar-orange w150"></div>
+  </div>
+
+  <div class="swatch" data-label="Width: 300px">
+    <div class="bar bar-purple w300"></div>
+  </div>
+
+  <div class="swatch" data-label="Width: 450px">
+    <div class="bar bar-red w450"></div>
+  </div>
+</div>
+</body>
+</html>

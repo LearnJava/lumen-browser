@@ -1,0 +1,38 @@
+{
+  "timestamp": "2026-06-12T00:39:16",
+  "git": {
+    "commit": "d10bd43b",
+    "branch": "main",
+    "subject": "Merge p3-bug139-nested-transforms: BUG-139 РІР»РѕР¶РµРЅРЅС‹Рµ CSS transforms РЅРµ РєРѕРјРїРѕРЅСѓСЋС‚СЃСЏ"
+  },
+  "crop_offset": [
+    8,
+    67
+  ],
+  "halted_at": null,
+  "summary": {
+    "total": 95,
+    "passed": 1,
+    "failed": 0,
+    "errors": 0,
+    "debtors": 0,
+    "skipped": 94
+  },
+  "tests": [
+    {
+      "id": "13",
+      "stem": "13-visibility-opacity",
+      "label": "visibility-opacity",
+      "html": "13-visibility-opacity.html",
+      "threshold": 0.5,
+      "status": "PASS",
+      "diff_pct": 0.1191,
+      "diff_region": {
+        "top": 148,
+        "left": 153,
+        "bottom": 402,
+        "right": 964
+      }
+    }
+  ]
+}

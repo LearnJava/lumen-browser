@@ -33,6 +33,25 @@ pub(crate) fn perform<S: Read + Write>(
     extra_headers: &[(&str, &str)],
 ) -> Result<()> {
     send_upgrade_request(stream, host, path, key_b64, extra_headers)?;
+    expect_101(stream, key_b64).map(|_| ())
+}
+
+/// Like [`perform`] but offers `permessage-deflate` extension (RFC 7692).
+///
+/// Returns `true` if the server confirmed the extension in its 101 response.
+/// Uses `client_no_context_takeover; server_no_context_takeover` so each
+/// message is independently compressed — no shared zlib state between messages.
+pub(crate) fn perform_with_deflate<S: Read + Write>(
+    stream:  &mut S,
+    host:    &str,
+    path:    &str,
+    key_b64: &str,
+) -> Result<bool> {
+    let deflate_ext = [(
+        "Sec-WebSocket-Extensions",
+        "permessage-deflate; client_no_context_takeover; server_no_context_takeover",
+    )];
+    send_upgrade_request(stream, host, path, key_b64, &deflate_ext)?;
     expect_101(stream, key_b64)
 }
 
@@ -70,7 +89,8 @@ fn send_upgrade_request<W: Write>(
 
 // ── Response parsing ──────────────────────────────────────────────────────────
 
-fn expect_101<R: Read>(r: &mut R, key_b64: &str) -> Result<()> {
+/// Parse the 101 response. Returns `true` if the server agreed to permessage-deflate.
+fn expect_101<R: Read>(r: &mut R, key_b64: &str) -> Result<bool> {
     let status = read_line(r)?;
     if !status.contains("101") {
         return Err(Error::Network(format!(
@@ -81,6 +101,7 @@ fn expect_101<R: Read>(r: &mut R, key_b64: &str) -> Result<()> {
 
     let expected = compute_accept(key_b64);
     let mut got_accept = false;
+    let mut deflate_negotiated = false;
     loop {
         let line = read_line(r)?;
         let line = line.trim_end_matches(['\r', '\n']);
@@ -92,6 +113,11 @@ fn expect_101<R: Read>(r: &mut R, key_b64: &str) -> Result<()> {
         {
             got_accept = true;
         }
+        if let Some(val) = header_value(line, "Sec-WebSocket-Extensions")
+            && val.to_ascii_lowercase().contains("permessage-deflate")
+        {
+            deflate_negotiated = true;
+        }
     }
 
     if !got_accept {
@@ -99,7 +125,7 @@ fn expect_101<R: Read>(r: &mut R, key_b64: &str) -> Result<()> {
             "ws: missing or invalid Sec-WebSocket-Accept".into(),
         ));
     }
-    Ok(())
+    Ok(deflate_negotiated)
 }
 
 /// Read one CRLF-terminated line (≤ 8 KiB) byte-by-byte.
@@ -344,7 +370,8 @@ mod tests {
             "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
         );
         let mut cur = std::io::Cursor::new(response.as_bytes());
-        assert!(expect_101(&mut cur, key).is_ok());
+        // No deflate header → returns false (no deflate negotiated), but not an error.
+        assert!(!expect_101(&mut cur, key).unwrap());
     }
 
     #[test]
@@ -362,5 +389,55 @@ mod tests {
         let response = "HTTP/1.1 101 Switching Protocols\r\nSec-WebSocket-Accept: wrong==\r\n\r\n";
         let mut cur = std::io::Cursor::new(response.as_bytes());
         assert!(expect_101(&mut cur, key).is_err());
+    }
+
+    /// Upgrade request with permessage-deflate must include the extension header.
+    #[test]
+    fn upgrade_request_includes_permessage_deflate_header() {
+        let key = "dGhlIHNhbXBsZSBub25jZQ==";
+        let ext_header = [(
+            "Sec-WebSocket-Extensions",
+            "permessage-deflate; client_no_context_takeover; server_no_context_takeover",
+        )];
+        let mut buf = Vec::new();
+        send_upgrade_request(&mut buf, "example.com", "/ws", key, &ext_header).unwrap();
+        let req = String::from_utf8(buf).unwrap();
+        assert!(req.contains("Sec-WebSocket-Extensions:"));
+        assert!(req.contains("permessage-deflate"));
+        assert!(req.contains("client_no_context_takeover"));
+        assert!(req.contains("server_no_context_takeover"));
+    }
+
+    /// If the server responds with permessage-deflate in Sec-WebSocket-Extensions, expect_101 returns true.
+    #[test]
+    fn expect_101_deflate_negotiated() {
+        let key = "dGhlIHNhbXBsZSBub25jZQ==";
+        let accept = compute_accept(key);
+        let response = format!(
+            "HTTP/1.1 101 Switching Protocols\r\n\
+             Upgrade: websocket\r\n\
+             Connection: Upgrade\r\n\
+             Sec-WebSocket-Accept: {accept}\r\n\
+             Sec-WebSocket-Extensions: permessage-deflate; server_no_context_takeover\r\n\
+             \r\n"
+        );
+        let mut cur = std::io::Cursor::new(response.as_bytes());
+        assert!(expect_101(&mut cur, key).unwrap());
+    }
+
+    /// If the server does not include the extension, expect_101 returns false (no deflate).
+    #[test]
+    fn expect_101_deflate_not_negotiated_when_absent() {
+        let key = "dGhlIHNhbXBsZSBub25jZQ==";
+        let accept = compute_accept(key);
+        let response = format!(
+            "HTTP/1.1 101 Switching Protocols\r\n\
+             Upgrade: websocket\r\n\
+             Connection: Upgrade\r\n\
+             Sec-WebSocket-Accept: {accept}\r\n\
+             \r\n"
+        );
+        let mut cur = std::io::Cursor::new(response.as_bytes());
+        assert!(!expect_101(&mut cur, key).unwrap());
     }
 }

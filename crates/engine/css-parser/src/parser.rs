@@ -313,8 +313,30 @@ pub enum PseudoClass {
     /// Specificity вычисляется как для `:is` — максимум по списку.
     /// None = простой `:host`; Some(list) = `:host(selector-list)`.
     Host(Option<Vec<ComplexSelector>>),
-    /// `:hover`, `:focus`, `:active`, и т.п. — парсятся, но в Phase 0 никогда
-    /// не матчат (нет интерактивного состояния). Хранится имя для отладки.
+    /// `:hover` (CSS Selectors L4 §4.3) — элемент под указателем или с потомком
+    /// под указателем. Состояние хранится thread-locally в `lumen-layout`
+    /// через `set_interactive_state`; matcher проверяет, является ли тестируемый
+    /// элемент предком или самим hovered-узлом (CSS Selectors L4 §4.3 «or one
+    /// of its descendants»).
+    Hover,
+    /// `:focus` (CSS Selectors L4 §4.4) — элемент, у которого есть keyboard
+    /// focus. Хранится thread-locally; matcher — точное совпадение с focus-узлом
+    /// (в отличие от `:hover`, фокус не «наследуется» предками — для этого есть
+    /// `:focus-within`).
+    Focus,
+    /// `:active` (CSS Selectors L4 §4.5) — элемент, активированный пользователем
+    /// (кнопка мыши нажата и не отпущена). По спеке матчит элемент И его предков.
+    Active,
+    /// `:focus-within` (CSS Selectors L4 §4.4.2) — элемент или его потомок имеет
+    /// keyboard focus. Matcher проверяет, является ли тестируемый элемент
+    /// предком-или-собой focus-узла.
+    FocusWithin,
+    /// `:focus-visible` (CSS Selectors L4 §4.4.3) — как `:focus`, но только
+    /// если индикатор фокуса должен быть виден по эвристике UA (обычно
+    /// при навигации клавиатурой, не мышью). В Phase 0 синоним `:focus`.
+    FocusVisible,
+    /// Неизвестные или ещё-не-реализованные псевдо-классы. Всегда `false`.
+    /// Хранится имя для отладки и корректного подсчёта specificity (0-1-0).
     Unsupported(String),
 }
 
@@ -343,6 +365,10 @@ pub enum PseudoElementKind {
     /// `::selection` (CSS Pseudo-Elements L4 §5.6) — selected text.
     /// В Phase 0 парсится как имя; P3 интеграция с DOM selection для highlight.
     Selection,
+    /// `::highlight(name)` (CSS Highlight API L1 §3) — custom text highlight.
+    /// Аргумент `name` — ключ в `CSS.highlights` реестре. Phase 0: парсирует имя,
+    /// Phase 1: вызывает `emit_text_with_highlights()` для рендеринга.
+    Highlight(String),
     /// Неизвестный pseudo-element (например, `::custom-pseudo` или typo).
     /// Хранится имя для диагностики.
     Unknown(String),
@@ -441,6 +467,158 @@ impl ComplexSelector {
             accumulate_specificity(comp, &mut spec);
         }
         spec
+    }
+
+    /// Serialise this selector back to a CSS selector string.
+    ///
+    /// Best-effort round-trip for DevTools display (§PH3-1 Styles panel).
+    /// Structurally equivalent to the original; whitespace may differ slightly.
+    pub fn to_css_str(&self) -> String {
+        let mut s = compound_to_css_str(&self.head);
+        for (combinator, compound) in &self.tail {
+            match combinator {
+                Combinator::Descendant => s.push(' '),
+                Combinator::Child => s.push_str(" > "),
+                Combinator::NextSibling => s.push_str(" + "),
+                Combinator::LaterSibling => s.push_str(" ~ "),
+            }
+            s.push_str(&compound_to_css_str(compound));
+        }
+        s
+    }
+}
+
+fn compound_to_css_str(c: &CompoundSelector) -> String {
+    c.parts.iter().map(simple_to_css_str).collect()
+}
+
+fn simple_to_css_str(s: &SimpleSelector) -> String {
+    match s {
+        SimpleSelector::Type(name) => name.clone(),
+        SimpleSelector::Class(name) => format!(".{name}"),
+        SimpleSelector::Id(name) => format!("#{name}"),
+        SimpleSelector::Universal => "*".into(),
+        SimpleSelector::Attribute(attr) => attr_to_css_str(attr),
+        SimpleSelector::PseudoClass(pc) => pc_to_css_str(pc),
+        SimpleSelector::PseudoElement(pe) => pe_to_css_str(pe),
+    }
+}
+
+fn attr_to_css_str(attr: &AttrSelector) -> String {
+    match (&attr.op, &attr.value) {
+        (None, _) => format!("[{}]", attr.name),
+        (Some(op), val) => {
+            let op_str = match op {
+                AttrOp::Equals => "=",
+                AttrOp::Includes => "~=",
+                AttrOp::DashMatch => "|=",
+                AttrOp::Prefix => "^=",
+                AttrOp::Suffix => "$=",
+                AttrOp::Substring => "*=",
+            };
+            let v = val.as_deref().unwrap_or("");
+            if attr.case_insensitive {
+                format!("[{}{}\"{}\" i]", attr.name, op_str, v)
+            } else {
+                format!("[{}{}\"{}\"", attr.name, op_str, v)
+            }
+        }
+    }
+}
+
+fn nth_to_css_str(spec: &NthSpec) -> String {
+    if spec.a == 0 {
+        return spec.b.to_string();
+    }
+    if spec.b == 0 {
+        return format!("{}n", spec.a);
+    }
+    if spec.b < 0 {
+        format!("{}n{}", spec.a, spec.b)
+    } else {
+        format!("{}n+{}", spec.a, spec.b)
+    }
+}
+
+fn sels_to_css_str(sels: &[ComplexSelector]) -> String {
+    sels.iter().map(ComplexSelector::to_css_str).collect::<Vec<_>>().join(", ")
+}
+
+fn pc_to_css_str(pc: &PseudoClass) -> String {
+    match pc {
+        PseudoClass::FirstChild => ":first-child".into(),
+        PseudoClass::LastChild => ":last-child".into(),
+        PseudoClass::OnlyChild => ":only-child".into(),
+        PseudoClass::Empty => ":empty".into(),
+        PseudoClass::Root => ":root".into(),
+        PseudoClass::FirstOfType => ":first-of-type".into(),
+        PseudoClass::LastOfType => ":last-of-type".into(),
+        PseudoClass::OnlyOfType => ":only-of-type".into(),
+        PseudoClass::NthChild(spec, _) => format!(":nth-child({})", nth_to_css_str(spec)),
+        PseudoClass::NthLastChild(spec, _) => format!(":nth-last-child({})", nth_to_css_str(spec)),
+        PseudoClass::NthOfType(spec) => format!(":nth-of-type({})", nth_to_css_str(spec)),
+        PseudoClass::NthLastOfType(spec) => format!(":nth-last-of-type({})", nth_to_css_str(spec)),
+        PseudoClass::Not(sels) => format!(":not({})", sels_to_css_str(sels)),
+        PseudoClass::Is(sels) => format!(":is({})", sels_to_css_str(sels)),
+        PseudoClass::Where(sels) => format!(":where({})", sels_to_css_str(sels)),
+        PseudoClass::Has(_) => ":has(…)".into(),
+        PseudoClass::PlaceholderShown => ":placeholder-shown".into(),
+        PseudoClass::Required => ":required".into(),
+        PseudoClass::Optional => ":optional".into(),
+        PseudoClass::ReadOnly => ":read-only".into(),
+        PseudoClass::ReadWrite => ":read-write".into(),
+        PseudoClass::Disabled => ":disabled".into(),
+        PseudoClass::Enabled => ":enabled".into(),
+        PseudoClass::Checked => ":checked".into(),
+        PseudoClass::Indeterminate => ":indeterminate".into(),
+        PseudoClass::Default => ":default".into(),
+        PseudoClass::Lang(tags) => format!(":lang({})", tags.join(", ")),
+        PseudoClass::Link => ":link".into(),
+        PseudoClass::Visited => ":visited".into(),
+        PseudoClass::AnyLink => ":any-link".into(),
+        PseudoClass::InRange => ":in-range".into(),
+        PseudoClass::OutOfRange => ":out-of-range".into(),
+        PseudoClass::Dir(DirArg::Ltr) => ":dir(ltr)".into(),
+        PseudoClass::Dir(DirArg::Rtl) => ":dir(rtl)".into(),
+        PseudoClass::Scope => ":scope".into(),
+        PseudoClass::Target => ":target".into(),
+        PseudoClass::TargetWithin => ":target-within".into(),
+        PseudoClass::Defined => ":defined".into(),
+        PseudoClass::Fullscreen => ":fullscreen".into(),
+        PseudoClass::Modal => ":modal".into(),
+        PseudoClass::PopoverOpen => ":popover-open".into(),
+        PseudoClass::Current => ":current".into(),
+        PseudoClass::Past => ":past".into(),
+        PseudoClass::Future => ":future".into(),
+        PseudoClass::Valid => ":valid".into(),
+        PseudoClass::Invalid => ":invalid".into(),
+        PseudoClass::UserValid => ":user-valid".into(),
+        PseudoClass::UserInvalid => ":user-invalid".into(),
+        PseudoClass::Host(None) => ":host".into(),
+        PseudoClass::Host(Some(sels)) => format!(":host({})", sels_to_css_str(sels)),
+        PseudoClass::Hover => ":hover".into(),
+        PseudoClass::Focus => ":focus".into(),
+        PseudoClass::Active => ":active".into(),
+        PseudoClass::FocusWithin => ":focus-within".into(),
+        PseudoClass::FocusVisible => ":focus-visible".into(),
+        PseudoClass::Unsupported(name) => format!(":{name}"),
+    }
+}
+
+fn pe_to_css_str(pe: &PseudoElementKind) -> String {
+    match pe {
+        PseudoElementKind::Before => "::before".into(),
+        PseudoElementKind::After => "::after".into(),
+        PseudoElementKind::FirstLine => "::first-line".into(),
+        PseudoElementKind::FirstLetter => "::first-letter".into(),
+        PseudoElementKind::Slotted(None) => "::slotted()".into(),
+        PseudoElementKind::Slotted(Some(sels)) => {
+            format!("::slotted({})", sels_to_css_str(sels))
+        }
+        PseudoElementKind::Marker => "::marker".into(),
+        PseudoElementKind::Selection => "::selection".into(),
+        PseudoElementKind::Highlight(name) => format!("::highlight({name})"),
+        PseudoElementKind::Unknown(name) => format!("::{name}"),
     }
 }
 
@@ -635,6 +813,28 @@ pub struct Stylesheet {
     /// Условие хранится как сырая строка (типизация query — отложена,
     /// нужна полная media-query-like grammar для container features).
     pub container_rules: Vec<ContainerRule>,
+    /// CSS Fonts L4 §13 — `@font-palette-values --name { ... }`. Phase 0:
+    /// parse+store. Matching against `font-palette` property and CPAL index
+    /// resolution happen in layout (`resolve_font_palette_for_family`).
+    pub font_palette_values: Vec<FontPaletteValuesRule>,
+}
+
+/// `@font-palette-values --name { font-family: ...; base-palette: N; override-colors: ... }`
+/// CSS Fonts L4 §13. Defines a named custom color palette for a COLR color font.
+/// Matched against an element's `font-palette` property value to resolve which
+/// palette overrides apply at render time.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FontPaletteValuesRule {
+    /// Dashed-ident name, e.g. `--my-palette`. Used to match `font-palette` property values.
+    pub name: String,
+    /// `font-family` descriptor — the font family this palette applies to (without quotes).
+    pub font_family: Option<String>,
+    /// `base-palette` descriptor — 0-based index of the built-in CPAL palette to start from.
+    /// None means start from palette index 0 (the default palette).
+    pub base_palette: Option<u16>,
+    /// `override-colors` descriptor — raw `"<index> <color>"` pairs as strings.
+    /// Stored raw for layout-side parsing via `parse_color`. Each entry is `(index, color_str)`.
+    pub override_colors: Vec<(u16, String)>,
 }
 
 /// `@container <name>? <condition> { rules }` — CSS Containment L3 §3.
@@ -895,6 +1095,17 @@ pub enum MediaFeature {
     // User preferences (MQ L5, commonly used)
     PrefersColorScheme(ColorScheme),
     PrefersReducedMotion(bool),
+    // CSS Forced Colors Mode (Forced Colors L1) — опубликована (active/none)
+    ForcedColors(bool),
+    // Interaction media features (Media Queries L4 §5.3-5.6)
+    /// `(hover: none | hover)` — hover-способность основного указателя.
+    Hover(MediaHover),
+    /// `(any-hover: none | hover)` — hover-способность любого указателя.
+    AnyHover(MediaHover),
+    /// `(pointer: none | coarse | fine)` — точность основного указателя.
+    Pointer(MediaPointer),
+    /// `(any-pointer: none | coarse | fine)` — точность любого указателя.
+    AnyPointer(MediaPointer),
 }
 
 impl Eq for MediaFeature {}
@@ -903,6 +1114,26 @@ impl Eq for MediaFeature {}
 pub enum MediaOrientation {
     Portrait,
     Landscape,
+}
+
+/// Media Queries L4 §5.3/§5.5 — hover-способность указателя.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaHover {
+    /// Указатель не может наводиться без активации (тач-экран).
+    None,
+    /// Указатель может удобно наводиться (мышь).
+    Hover,
+}
+
+/// Media Queries L4 §5.4/§5.6 — точность указателя.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaPointer {
+    /// Указывающего устройства нет.
+    None,
+    /// Грубый указатель (палец на тач-экране).
+    Coarse,
+    /// Точный указатель (мышь, стилус).
+    Fine,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -923,16 +1154,32 @@ pub struct MediaContext {
     pub prefers_dark: bool,
     /// Соответствует `prefers-reduced-motion: reduce`.
     pub prefers_reduced_motion: bool,
+    /// CSS Forced Colors: соответствует `(forced-colors: active)` media feature.
+    pub forced_colors: bool,
+    /// hover-способность основного указателя (`hover` media feature).
+    pub hover: MediaHover,
+    /// hover-способность любого указателя (`any-hover` media feature).
+    pub any_hover: MediaHover,
+    /// Точность основного указателя (`pointer` media feature).
+    pub pointer: MediaPointer,
+    /// Точность любого указателя (`any-pointer` media feature).
+    pub any_pointer: MediaPointer,
 }
 
 impl Default for MediaContext {
     fn default() -> Self {
+        // Desktop-дефолты: есть мышь → hover-способность и точный указатель.
         Self {
             media_type: "screen".into(),
             width: 0.0,
             height: 0.0,
             prefers_dark: false,
             prefers_reduced_motion: false,
+            forced_colors: false,
+            hover: MediaHover::Hover,
+            any_hover: MediaHover::Hover,
+            pointer: MediaPointer::Fine,
+            any_pointer: MediaPointer::Fine,
         }
     }
 }
@@ -1015,6 +1262,11 @@ impl MediaFeature {
                 ColorScheme::Light => !ctx.prefers_dark,
             },
             Self::PrefersReducedMotion(reduce) => ctx.prefers_reduced_motion == *reduce,
+            Self::ForcedColors(active) => ctx.forced_colors == *active,
+            Self::Hover(h) => ctx.hover == *h,
+            Self::AnyHover(h) => ctx.any_hover == *h,
+            Self::Pointer(p) => ctx.pointer == *p,
+            Self::AnyPointer(p) => ctx.any_pointer == *p,
         }
     }
 }
@@ -1043,6 +1295,7 @@ enum AtRuleOutcome {
     Media(MediaRule),
     Import(ImportRule),
     FontFace(FontFaceRule),
+    FontPaletteValues(FontPaletteValuesRule),
     LayerNames(Vec<String>),
     LayerBlock {
         name: Option<String>,
@@ -1203,6 +1456,30 @@ pub fn parse_supports_condition(s: &str) -> SupportsCondition {
     if pos < bytes.len() {
         // Если что-то осталось — это синтаксическая ошибка; возвращаем
         // частично разобранное (lenient).
+    }
+    result
+}
+
+/// Парсит значение `override-colors` из `@font-palette-values`.
+/// Формат: comma-separated `<u16-index> <color-string>` пары.
+/// CSS Fonts L4 §13.3. Хранит color как raw string — resolve через
+/// `parse_color` выполняется в layout при использовании palette.
+fn parse_override_colors(s: &str) -> Vec<(u16, String)> {
+    let mut result = Vec::new();
+    for pair in s.split(',') {
+        let pair = pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        let mut parts = pair.splitn(2, char::is_whitespace);
+        if let (Some(idx_str), Some(color_str)) = (parts.next(), parts.next())
+            && let Ok(idx) = idx_str.trim().parse::<u16>()
+        {
+            let color = color_str.trim().to_string();
+            if !color.is_empty() {
+                result.push((idx, color));
+            }
+        }
     }
     result
 }
@@ -1536,6 +1813,36 @@ fn parse_media_feature(s: &str) -> MediaCondition {
             "no-preference" => MediaCondition::Feature(MediaFeature::PrefersReducedMotion(false)),
             _ => MediaCondition::Unsupported,
         },
+        "forced-colors" => match val.to_ascii_lowercase().as_str() {
+            "active" => MediaCondition::Feature(MediaFeature::ForcedColors(true)),
+            "none" => MediaCondition::Feature(MediaFeature::ForcedColors(false)),
+            _ => MediaCondition::Unsupported,
+        },
+        "hover" | "any-hover" => {
+            let h = match val.to_ascii_lowercase().as_str() {
+                "none" => MediaHover::None,
+                "hover" => MediaHover::Hover,
+                _ => return MediaCondition::Unsupported,
+            };
+            MediaCondition::Feature(if key == "hover" {
+                MediaFeature::Hover(h)
+            } else {
+                MediaFeature::AnyHover(h)
+            })
+        }
+        "pointer" | "any-pointer" => {
+            let p = match val.to_ascii_lowercase().as_str() {
+                "none" => MediaPointer::None,
+                "coarse" => MediaPointer::Coarse,
+                "fine" => MediaPointer::Fine,
+                _ => return MediaCondition::Unsupported,
+            };
+            MediaCondition::Feature(if key == "pointer" {
+                MediaFeature::Pointer(p)
+            } else {
+                MediaFeature::AnyPointer(p)
+            })
+        }
         _ => MediaCondition::Unsupported,
     }
 }
@@ -1600,6 +1907,7 @@ impl<'a> Parser<'a> {
         let mut media_rules = Vec::new();
         let mut imports = Vec::new();
         let mut font_faces = Vec::new();
+        let mut font_palette_values: Vec<FontPaletteValuesRule> = Vec::new();
         let mut layer_order: Vec<String> = Vec::new();
         let mut layers: Vec<LayerRule> = Vec::new();
         let mut supports_rules: Vec<SupportsRule> = Vec::new();
@@ -1619,6 +1927,7 @@ impl<'a> Parser<'a> {
                     AtRuleOutcome::Media(m) => media_rules.push(m),
                     AtRuleOutcome::Import(i) => imports.push(i),
                     AtRuleOutcome::FontFace(f) => font_faces.push(f),
+                    AtRuleOutcome::FontPaletteValues(fp) => font_palette_values.push(fp),
                     AtRuleOutcome::LayerNames(names) => {
                         for n in names {
                             if !layer_order.iter().any(|e| e == &n) {
@@ -1693,6 +2002,7 @@ impl<'a> Parser<'a> {
             media_rules,
             imports,
             font_faces,
+            font_palette_values,
             layer_order,
             layers,
             supports_rules,
@@ -1726,6 +2036,11 @@ impl<'a> Parser<'a> {
             return self
                 .parse_font_face_body()
                 .map_or(AtRuleOutcome::None, AtRuleOutcome::FontFace);
+        }
+        if name.eq_ignore_ascii_case("font-palette-values") {
+            return self
+                .parse_font_palette_values_body()
+                .map_or(AtRuleOutcome::None, AtRuleOutcome::FontPaletteValues);
         }
         if name.eq_ignore_ascii_case("layer") {
             return self.parse_layer_at_rule();
@@ -1904,6 +2219,55 @@ impl<'a> Parser<'a> {
             variant,
             feature_settings,
             variation_settings,
+        })
+    }
+
+    /// Парсит `@font-palette-values --name { font-family: …; base-palette: N; override-colors: … }`.
+    /// CSS Fonts L4 §13. Prelude — dashed-ident (e.g. `--cool`). Block contains
+    /// descriptors: `font-family`, `base-palette` (u16 index), `override-colors`
+    /// (comma-separated `<index> <color>` pairs). Returns `None` if the
+    /// name is missing or no `{` follows.
+    fn parse_font_palette_values_body(&mut self) -> Option<FontPaletteValuesRule> {
+        self.skip_ws_and_comments();
+        // Prelude: dashed-ident starting with '--'
+        let name = self.parse_ident()?;
+        if !name.starts_with("--") {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.skip_ws_and_comments();
+        if self.peek() != Some('{') {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.consume(); // '{'
+        let declarations = self.parse_declaration_block();
+
+        let mut font_family: Option<String> = None;
+        let mut base_palette: Option<u16> = None;
+        let mut override_colors: Vec<(u16, String)> = Vec::new();
+
+        for d in &declarations {
+            match d.property.to_ascii_lowercase().as_str() {
+                "font-family" => {
+                    let v = d.value.trim();
+                    font_family =
+                        Some(strip_css_string(v).map_or_else(|| v.to_string(), str::to_string));
+                }
+                "base-palette" => {
+                    base_palette = d.value.trim().parse::<u16>().ok();
+                }
+                "override-colors" => {
+                    override_colors = parse_override_colors(d.value.trim());
+                }
+                _ => {}
+            }
+        }
+        Some(FontPaletteValuesRule {
+            name,
+            font_family,
+            base_palette,
+            override_colors,
         })
     }
 
@@ -3117,6 +3481,11 @@ impl<'a> Parser<'a> {
             "checked" => PseudoClass::Checked,
             "indeterminate" => PseudoClass::Indeterminate,
             "default" => PseudoClass::Default,
+            "hover" => PseudoClass::Hover,
+            "focus" => PseudoClass::Focus,
+            "active" => PseudoClass::Active,
+            "focus-within" => PseudoClass::FocusWithin,
+            "focus-visible" => PseudoClass::FocusVisible,
             "link" => PseudoClass::Link,
             "visited" => PseudoClass::Visited,
             "any-link" => PseudoClass::AnyLink,
@@ -3311,7 +3680,7 @@ impl<'a> Parser<'a> {
         out
     }
 
-    /// Парсит тело функционального pseudo-element (например `::slotted(...)`).
+    /// Парсит тело функционального pseudo-element (например `::slotted(...)` или `::highlight(...)`).
     /// Возвращает `None` для неизвестных или невалидных тел — caller обернёт
     /// в `Unknown(name)` и проглотит остаток до `)`.
     fn parse_functional_pseudo_element(&mut self, name_lower: &str) -> Option<PseudoElementKind> {
@@ -3326,6 +3695,17 @@ impl<'a> Parser<'a> {
                     return None;
                 }
                 Some(PseudoElementKind::Slotted(Some(list)))
+            }
+            "highlight" => {
+                // CSS Highlight API L1 §3: `::highlight(name)` матчит элемент,
+                // который стилизуется через highlight с заданным именем.
+                self.skip_ws_and_comments();
+                let name = self.parse_ident().unwrap_or_default();
+                self.skip_ws_and_comments();
+                if self.peek() != Some(')') || name.is_empty() {
+                    return None;
+                }
+                Some(PseudoElementKind::Highlight(name))
             }
             _ => None,
         }
@@ -3663,6 +4043,60 @@ fn expand_nesting(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── to_css_str tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn to_css_str_type_selector() {
+        let sel = parse_selector_list("div");
+        assert_eq!(sel[0].to_css_str(), "div");
+    }
+
+    #[test]
+    fn to_css_str_class_and_id() {
+        let sel = parse_selector_list(".foo#bar");
+        assert_eq!(sel[0].to_css_str(), ".foo#bar");
+    }
+
+    #[test]
+    fn to_css_str_descendant_combinator() {
+        let sel = parse_selector_list("div p");
+        assert_eq!(sel[0].to_css_str(), "div p");
+    }
+
+    #[test]
+    fn to_css_str_child_combinator() {
+        let sel = parse_selector_list("ul > li");
+        assert_eq!(sel[0].to_css_str(), "ul > li");
+    }
+
+    #[test]
+    fn to_css_str_pseudo_class() {
+        let sel = parse_selector_list("a:hover");
+        assert_eq!(sel[0].to_css_str(), "a:hover");
+    }
+
+    #[test]
+    fn to_css_str_first_child() {
+        let sel = parse_selector_list("p:first-child");
+        assert_eq!(sel[0].to_css_str(), "p:first-child");
+    }
+
+    #[test]
+    fn to_css_str_nth_child() {
+        let sel = parse_selector_list("li:nth-child(2n+1)");
+        let s = sel[0].to_css_str();
+        assert!(s.contains(":nth-child"), "got: {s}");
+    }
+
+    #[test]
+    fn to_css_str_attribute() {
+        let sel = parse_selector_list("[type=\"text\"]");
+        let s = sel[0].to_css_str();
+        assert!(s.contains("[type") && s.contains("text"), "got: {s}");
+    }
+
+    // ── existing test helpers ──────────────────────────────────────────────────
 
     /// Удобный конструктор для тестов: ComplexSelector из одной compound с
     /// единственным simple-селектором.
@@ -4181,8 +4615,8 @@ mod tests {
         let s = parse(":hover { color: red; }");
         let p = &s.rules[0].selectors[0].head.parts[0];
         match p {
-            SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) => assert_eq!(n, "hover"),
-            _ => panic!("expected unsupported pseudo-class"),
+            SimpleSelector::PseudoClass(PseudoClass::Hover) => {},
+            _ => panic!("expected Hover pseudo-class"),
         }
     }
 
@@ -5888,6 +6322,8 @@ mod tests {
             height: 600.0,
             prefers_dark: false,
             prefers_reduced_motion: false,
+            forced_colors: false,
+            ..Default::default()
         }
     }
 
@@ -6099,6 +6535,120 @@ mod tests {
         assert!(q.matches(&ctx));
     }
 
+    // ── MQ: forced-colors (CSS Forced Colors Mode L1) ──
+
+    #[test]
+    fn media_query_forced_colors_active() {
+        let q = parse_media_query("(forced-colors: active)");
+        let mut ctx = screen_ctx(1024.0);
+        ctx.forced_colors = true;
+        assert!(q.matches(&ctx));
+        ctx.forced_colors = false;
+        assert!(!q.matches(&ctx));
+    }
+
+    #[test]
+    fn media_query_forced_colors_none() {
+        let q = parse_media_query("(forced-colors: none)");
+        let ctx = screen_ctx(1024.0); // forced_colors = false по умолчанию
+        assert!(q.matches(&ctx));
+        let mut active = screen_ctx(1024.0);
+        active.forced_colors = true;
+        assert!(!q.matches(&active));
+    }
+
+    #[test]
+    fn media_query_not_forced_colors_active() {
+        let q = parse_media_query("not all and (forced-colors: active)");
+        assert!(q.clauses[0].negated);
+        let ctx = screen_ctx(1024.0); // forced_colors = false
+        assert!(q.matches(&ctx));
+        let mut active = screen_ctx(1024.0);
+        active.forced_colors = true;
+        assert!(!q.matches(&active));
+    }
+
+    #[test]
+    fn media_query_forced_colors_case_insensitive() {
+        let q = parse_media_query("(forced-colors: ACTIVE)");
+        let mut ctx = screen_ctx(1024.0);
+        ctx.forced_colors = true;
+        assert!(q.matches(&ctx));
+    }
+
+    // ── MQ: hover / any-hover / pointer / any-pointer (Media Queries L4 §5.3-5.6) ──
+
+    #[test]
+    fn media_query_hover_hover_matches_desktop() {
+        // screen_ctx наследует desktop-дефолты (hover: Hover).
+        let q = parse_media_query("(hover: hover)");
+        assert!(q.matches(&screen_ctx(1024.0)));
+        let mut touch = screen_ctx(1024.0);
+        touch.hover = MediaHover::None;
+        assert!(!q.matches(&touch));
+    }
+
+    #[test]
+    fn media_query_hover_none() {
+        let q = parse_media_query("(hover: none)");
+        assert!(!q.matches(&screen_ctx(1024.0)));
+        let mut touch = screen_ctx(1024.0);
+        touch.hover = MediaHover::None;
+        assert!(q.matches(&touch));
+    }
+
+    #[test]
+    fn media_query_any_hover() {
+        let q = parse_media_query("(any-hover: hover)");
+        assert!(q.matches(&screen_ctx(1024.0)));
+        let mut touch = screen_ctx(1024.0);
+        touch.any_hover = MediaHover::None;
+        assert!(!q.matches(&touch));
+    }
+
+    #[test]
+    fn media_query_pointer_fine_matches_desktop() {
+        let q = parse_media_query("(pointer: fine)");
+        assert!(q.matches(&screen_ctx(1024.0)));
+        let mut coarse = screen_ctx(1024.0);
+        coarse.pointer = MediaPointer::Coarse;
+        assert!(!q.matches(&coarse));
+    }
+
+    #[test]
+    fn media_query_pointer_coarse_and_none() {
+        let coarse_q = parse_media_query("(pointer: coarse)");
+        let none_q = parse_media_query("(pointer: none)");
+        let mut ctx = screen_ctx(1024.0);
+        ctx.pointer = MediaPointer::Coarse;
+        assert!(coarse_q.matches(&ctx));
+        assert!(!none_q.matches(&ctx));
+        ctx.pointer = MediaPointer::None;
+        assert!(none_q.matches(&ctx));
+    }
+
+    #[test]
+    fn media_query_any_pointer() {
+        let q = parse_media_query("(any-pointer: fine)");
+        assert!(q.matches(&screen_ctx(1024.0)));
+        let mut coarse = screen_ctx(1024.0);
+        coarse.any_pointer = MediaPointer::Coarse;
+        assert!(!q.matches(&coarse));
+    }
+
+    #[test]
+    fn media_query_hover_pointer_case_insensitive() {
+        let q = parse_media_query("(POINTER: FINE)");
+        assert!(q.matches(&screen_ctx(1024.0)));
+    }
+
+    #[test]
+    fn media_query_pointer_invalid_value_unsupported() {
+        // Невалидное значение → Unsupported → clause никогда не матчит.
+        let q = parse_media_query("(pointer: medium)");
+        assert!(!q.matches(&screen_ctx(1024.0)));
+    }
+
     // ── Стиль: @media с новыми фичами применяется в каскаде ──
 
     #[test]
@@ -6112,6 +6662,8 @@ mod tests {
             height: 720.0,
             prefers_dark: false,
             prefers_reduced_motion: false,
+            forced_colors: false,
+            ..Default::default()
         };
         assert!(s.media_rules[0].query.matches(&ctx));
         let ctx_narrow = MediaContext { width: 600.0, ..ctx.clone() };
@@ -6606,5 +7158,107 @@ mod tests {
             }
             _ => panic!("Expected Slotted(Some(...)), got {:?}", sel.head.parts[0]),
         }
+    }
+
+    // ────────────────── ::highlight pseudo-element (CSS Highlight API L1 §3) ──
+
+    #[test]
+    fn highlight_pseudo_element_simple() {
+        // `::highlight(search) { color: red; background: yellow; }` — simple name
+        let s = parse("::highlight(search) { color: red; background: yellow; }");
+        assert_eq!(s.rules.len(), 1);
+        let sel = &s.rules[0].selectors[0];
+        assert_eq!(sel.head.parts.len(), 1);
+        match &sel.head.parts[0] {
+            SimpleSelector::PseudoElement(PseudoElementKind::Highlight(name)) => {
+                assert_eq!(name, "search");
+            }
+            _ => panic!("Expected Highlight(\"search\"), got {:?}", sel.head.parts[0]),
+        }
+    }
+
+    #[test]
+    fn highlight_pseudo_element_custom_name() {
+        // `::highlight(custom-highlight-name) { ... }` — hyphenated name
+        let s = parse("::highlight(custom-highlight-name) { color: blue; }");
+        assert_eq!(s.rules.len(), 1);
+        let sel = &s.rules[0].selectors[0];
+        match &sel.head.parts[0] {
+            SimpleSelector::PseudoElement(PseudoElementKind::Highlight(name)) => {
+                assert_eq!(name, "custom-highlight-name");
+            }
+            _ => panic!("Expected Highlight with name, got {:?}", sel.head.parts[0]),
+        }
+    }
+
+    #[test]
+    fn highlight_pseudo_element_with_combinator() {
+        // `span::highlight(spelling) { color: red; }` — type selector + highlight
+        let s = parse("span::highlight(spelling) { color: red; }");
+        assert_eq!(s.rules.len(), 1);
+        let sel = &s.rules[0].selectors[0];
+        assert_eq!(sel.head.parts.len(), 2);
+        assert_eq!(sel.head.parts[0], SimpleSelector::Type("span".into()));
+        match &sel.head.parts[1] {
+            SimpleSelector::PseudoElement(PseudoElementKind::Highlight(name)) => {
+                assert_eq!(name, "spelling");
+            }
+            _ => panic!("Expected Highlight pseudo-element, got {:?}", sel.head.parts[1]),
+        }
+    }
+
+    // ── @font-palette-values tests ──────────────────────────────────────────
+
+    #[test]
+    fn font_palette_values_basic() {
+        let s = parse(r#"@font-palette-values --warm { font-family: "Bungee Spore"; base-palette: 0; }"#);
+        assert_eq!(s.font_palette_values.len(), 1);
+        let fp = &s.font_palette_values[0];
+        assert_eq!(fp.name, "--warm");
+        assert_eq!(fp.font_family.as_deref(), Some("Bungee Spore"));
+        assert_eq!(fp.base_palette, Some(0));
+        assert!(fp.override_colors.is_empty());
+    }
+
+    #[test]
+    fn font_palette_values_override_colors() {
+        let s = parse("@font-palette-values --cool { override-colors: 0 #ff0000, 1 #00ff00; }");
+        let fp = &s.font_palette_values[0];
+        assert_eq!(fp.override_colors.len(), 2);
+        assert_eq!(fp.override_colors[0], (0, "#ff0000".to_string()));
+        assert_eq!(fp.override_colors[1], (1, "#00ff00".to_string()));
+    }
+
+    #[test]
+    fn font_palette_values_multiple_rules() {
+        let s = parse(
+            "@font-palette-values --a { base-palette: 1; } @font-palette-values --b { base-palette: 2; }",
+        );
+        assert_eq!(s.font_palette_values.len(), 2);
+        assert_eq!(s.font_palette_values[0].name, "--a");
+        assert_eq!(s.font_palette_values[1].name, "--b");
+    }
+
+    #[test]
+    fn font_palette_values_no_double_dash_ignored() {
+        // Prelude without '--' is invalid per CSS Fonts L4 §13 — treated as unknown.
+        let s = parse("@font-palette-values myname { base-palette: 0; }");
+        assert!(s.font_palette_values.is_empty());
+    }
+
+    #[test]
+    fn font_palette_values_base_palette_none_when_absent() {
+        let s = parse("@font-palette-values --x { font-family: F; }");
+        assert_eq!(s.font_palette_values[0].base_palette, None);
+    }
+
+    #[test]
+    fn font_palette_values_coexists_with_other_rules() {
+        let s = parse(
+            r#"div { color: red; } @font-palette-values --p { base-palette: 3; } p { margin: 0; }"#,
+        );
+        assert_eq!(s.rules.len(), 2);
+        assert_eq!(s.font_palette_values.len(), 1);
+        assert_eq!(s.font_palette_values[0].base_palette, Some(3));
     }
 }

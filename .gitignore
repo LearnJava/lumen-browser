@@ -24,6 +24,7 @@ Thumbs.db
 
 # Автосохранённая сессия — рабочий артефакт, не для репо.
 *.lsession
+last_session.db
 
 # Оркестратор: стоп-файлы, файлы статуса и состояния сессии.
 /scripts/.stop-*
@@ -36,3 +37,5 @@ __pycache__/
 # См. CLAUDE.md → «Графические тесты», правило №1.
 /graphic_tests/screenshots/
 /graphic_tests/debug/
+# results/*.json коммитятся (история прогонов в git); HTML-отчёты — нет (ссылаются на gitignored PNG).
+/graphic_tests/results/*.html

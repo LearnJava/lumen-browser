@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use lumen_core::error::Result;
+use lumen_core::ext::ClockMode;
 
 use crate::FingerprintProfile;
 
@@ -15,25 +16,32 @@ type CookieStore = HashMap<(String, String), String>;
 type HttpCache = HashMap<String, Vec<u8>>;
 
 /// Isolated context for a single BrowserSession.
-/// # Phase 1b (8E, May 2026)
-/// Implements: fingerprint profile, User-Agent, cookies, HTTP cache, storage
-/// # Phase 1c (8F, May 2026)
-/// Extends: deterministic mode (frozen clock, RNG seed, fingerprint lock)
+///
+/// # Phase 1b (8E) — fingerprint profile, User-Agent, cookies, HTTP cache, storage
+/// # Phase 1c (8F) — deterministic mode: frozen/monotonic clock, RNG seed, fingerprint lock
 pub struct SessionContext {
+    /// Active fingerprint profile (controls HTTP/TLS headers, UA, JS API returns).
     fingerprint_profile: FingerprintProfile,
+    /// Optional User-Agent override; `None` → derive from `fingerprint_profile`.
     user_agent_override: Option<String>,
+    /// Per-origin cookies: key is `(origin, path)`.
     cookies: CookieStore,
+    /// Simple HTTP byte-cache keyed by URL.
     http_cache: HttpCache,
+    /// Per-origin key/value storage (localStorage/sessionStorage mirror).
     storage: HashMap<String, HashMap<String, Vec<u8>>>,
-    /// Frozen clock timestamp (ms since epoch). None = use system clock.
-    frozen_clock_ms: Option<u64>,
-    /// RNG seed for deterministic randomness. None = use OS entropy.
+    /// Active clock mode for `Date.now()` / `performance.now()` (8F.1).
+    clock_mode: ClockMode,
+    /// Monotonic counter in ms — incremented by `step_ms` on each `read_monotonic_clock_ms()`.
+    monotonic_counter_ms: u64,
+    /// RNG seed for deterministic `Math.random()`. `None` = OS entropy.
     rng_seed: Option<u64>,
-    /// If true, fingerprint profile changes are rejected (freeze current profile).
+    /// When `true`, calls to `set_fingerprint_profile()` are rejected (fingerprint locked).
     fingerprint_frozen: bool,
 }
 
 impl SessionContext {
+    /// Create a new context with default (Standard) fingerprint profile and real system clock.
     pub fn new() -> Self {
         Self {
             fingerprint_profile: FingerprintProfile::Standard,
@@ -41,12 +49,14 @@ impl SessionContext {
             cookies: CookieStore::new(),
             http_cache: HttpCache::new(),
             storage: HashMap::new(),
-            frozen_clock_ms: None,
+            clock_mode: ClockMode::Real,
+            monotonic_counter_ms: 0,
             rng_seed: None,
             fingerprint_frozen: false,
         }
     }
 
+    /// Create a context with a specific fingerprint profile and real system clock.
     pub fn with_fingerprint_profile(profile: FingerprintProfile) -> Self {
         Self {
             fingerprint_profile: profile,
@@ -54,7 +64,8 @@ impl SessionContext {
             cookies: CookieStore::new(),
             http_cache: HttpCache::new(),
             storage: HashMap::new(),
-            frozen_clock_ms: None,
+            clock_mode: ClockMode::Real,
+            monotonic_counter_ms: 0,
             rng_seed: None,
             fingerprint_frozen: false,
         }
@@ -94,20 +105,54 @@ impl SessionContext {
         self.user_agent_override = None;
     }
 
-    /// Get current frozen clock timestamp (ms since epoch), or None if system clock is used.
+    /// Returns the active clock mode.
+    pub fn clock_mode(&self) -> ClockMode {
+        self.clock_mode
+    }
+
+    /// Set clock mode for `Date.now()` / `performance.now()` overrides (8F.1).
+    ///
+    /// `ClockMode::Frozen(ms)` — all reads return `ms`.
+    /// `ClockMode::Monotonic { step_ms }` — each read advances by `step_ms`.
+    /// `ClockMode::Real` — restore system clock (default).
+    pub fn set_clock_mode(&mut self, mode: ClockMode) {
+        self.clock_mode = mode;
+        if matches!(mode, ClockMode::Monotonic { .. }) {
+            self.monotonic_counter_ms = 0;
+        }
+    }
+
+    /// Read the current clock value in ms, advancing the monotonic counter if active.
+    ///
+    /// Returns `None` for `ClockMode::Real` (caller should use system clock).
+    pub fn read_clock_ms(&mut self) -> Option<u64> {
+        match self.clock_mode {
+            ClockMode::Real => None,
+            ClockMode::Frozen(ms) => Some(ms),
+            ClockMode::Monotonic { step_ms } => {
+                let t = self.monotonic_counter_ms;
+                self.monotonic_counter_ms = self.monotonic_counter_ms.saturating_add(step_ms);
+                Some(t)
+            }
+        }
+    }
+
+    /// Convenience: returns `Some(ms)` only when clock is frozen (backward-compat).
     pub fn frozen_clock_ms(&self) -> Option<u64> {
-        self.frozen_clock_ms
+        match self.clock_mode {
+            ClockMode::Frozen(ms) => Some(ms),
+            _ => None,
+        }
     }
 
-    /// Set frozen clock to a specific timestamp (ms since epoch) for deterministic testing.
-    /// Once set, all `Date.now()` / `performance.now()` calls use this value (not advancing).
+    /// Set frozen clock (backward-compat wrapper; use `set_clock_mode` for new code).
     pub fn set_frozen_clock(&mut self, timestamp_ms: u64) {
-        self.frozen_clock_ms = Some(timestamp_ms);
+        self.clock_mode = ClockMode::Frozen(timestamp_ms);
     }
 
-    /// Clear frozen clock; resume using system time.
+    /// Restore system clock (backward-compat wrapper; use `set_clock_mode` for new code).
     pub fn clear_frozen_clock(&mut self) {
-        self.frozen_clock_ms = None;
+        self.clock_mode = ClockMode::Real;
     }
 
     /// Get RNG seed for deterministic randomness, or None if OS entropy is used.
@@ -116,9 +161,9 @@ impl SessionContext {
     }
 
     /// Set RNG seed for deterministic random numbers in JS Math.random() and crypto.getRandomValues().
-    /// Used for repeatable test automation.
-    pub fn set_rng_seed(&mut self, seed: u64) {
-        self.rng_seed = Some(seed);
+    /// Used for repeatable test automation. `None` clears the seed (resume OS entropy).
+    pub fn set_rng_seed(&mut self, seed: Option<u64>) {
+        self.rng_seed = seed;
     }
 
     /// Clear RNG seed; resume using OS entropy.

@@ -28,14 +28,17 @@ use lumen_core::error::{Error, Result};
 use lumen_core::event::{Event, RequestStage, TabId};
 use lumen_core::ext::{
     ContentDecoder, CookieProvider, DnsResolver, EventSink, FetchInterceptor, HstsEnforcement,
-    HttpAuthScheme, HttpCredentialProvider, JsFetchProvider, JsFetchResult, JsWebSocketProvider,
-    JsWebSocketSession, JsWsEvent, NetworkTransport, NoopEventSink, RequestFilter, SseProvider,
-    SseSession, WebSocketProvider, WebSocketSession,
+    HttpAuthScheme, HttpCredentialProvider, JsFetchProvider, JsFetchResult, JsSseEvent, JsSseProvider,
+    JsSseSession, JsWebSocketProvider, JsWebSocketSession, JsWsEvent, NetworkTransport, NoopEventSink,
+    RequestFilter, SseProvider, SseSession, WebSocketProvider, WebSocketSession,
 };
 use lumen_core::url::Url;
 
 mod auth;
 mod brotli;
+pub mod coop;
+pub mod csp;
+pub mod permissions_policy;
 mod cors;
 mod dns;
 mod doh;
@@ -45,25 +48,32 @@ pub mod h2;
 pub mod http;
 pub mod http_cache;
 mod hsts;
+mod hsts_preload;
 mod mixed_content;
 mod mock;
 mod origin;
 mod pool;
 mod range;
 mod sandbox;
+pub mod socks5;
 pub mod sse;
 pub mod tls;
+pub mod ctap2;
 pub mod webauthn;
 pub(crate) mod websocket;
+pub mod remote;
+pub use remote::RemoteNetworkTransport;
 pub use auth::StaticCredentialProvider;
+pub use ctap2::{CompositeCredentialProvider, CtapRoamingTransport};
+pub use socks5::Socks5Proxy;
 pub use webauthn::VirtualAuthenticator;
 pub use brotli::BrotliContentDecoder;
-pub use filter::{EasyListFilter, HostsFilter, CompositeFilter};
-pub use http_cache::HttpCache;
+pub use filter::{DefaultFilterList, EasyListFilter, HostsFilter, CompositeFilter};
+pub use http_cache::{HttpCache, HttpCacheBackend, DiskHttpCache, lumen_cache_dir};
 pub use http::{HttpProfile, H2Settings, H2StreamPriority, ClientHintsProfile, HeaderOrder};
 pub use mock::MockTransport;
 pub use tls::{
-    TlsProfile, TlsHandshakeInfo, CHROME_130_JA3_SNAPSHOT, CHROME_130_JA4_SNAPSHOT,
+    CertInfo, TlsProfile, TlsHandshakeInfo, CHROME_130_JA3_SNAPSHOT, CHROME_130_JA4_SNAPSHOT,
     ChromeJa3Snapshot, JA4ChromeSnapshot, http_to_tls_profile,
 };
 pub use cors::{
@@ -74,13 +84,18 @@ pub use cors::{
     needs_preflight, unsafe_request_header_names,
 };
 pub use dns::SystemDnsResolver;
-pub use doh::DohResolver;
+pub use doh::{CachedDnsResolver, DohResolver};
 pub use dot::{DotResolver, DOT_DEFAULT_PORT};
+pub use hsts_preload::{HstsPreloadList, get_preload_list};
 pub use mixed_content::{
     MixedContentLevel, MixedContentMode, MixedContentPolicy, RequestDestination,
     block_reason as mixed_content_block_reason, classify_subresource_request,
 };
 pub use origin::{Origin, OriginError};
+pub use coop::{
+    CrossOriginOpenerPolicy, CrossOriginEmbedderPolicy, CrossOriginResourcePolicy,
+    CrossOriginIsolationState, check_corp_allowed,
+};
 pub use h2::pool::H2Pool;
 pub use pool::ConnectionPool;
 pub use range::{
@@ -89,6 +104,14 @@ pub use range::{
     parse_multipart_byteranges,
 };
 pub use sandbox::{SandboxFlags, parse_sandbox_value};
+pub use csp::{
+    CspDirective, CspPolicy, CspSource, HashAlgorithm,
+    parse_csp_header, parse_csp_report_only_header,
+};
+pub use permissions_policy::{
+    PermissionsAllowlist, PermissionsPolicy,
+    parse_permissions_policy_header, parse_feature_policy_header,
+};
 
 use pool::PoolKey;
 
@@ -554,35 +577,71 @@ fn connect(
     is_tls: bool,
     resolver: &dyn DnsResolver,
     tls_profile: tls::TlsProfile,
+    socks5: Option<&socks5::Socks5Proxy>,
 ) -> Result<Connection> {
-    // Префикс `resolve ` на всех DNS-ошибках (включая ошибку самого
-    // resolver-а) — чтобы `classify_failure_stage` надёжно отнёс их к
-    // `RequestStage::Dns` без знания внутреннего формата resolver-сообщения.
-    let addrs = resolver
-        .resolve(host, port)
-        .map_err(|e| Error::Network(format!("resolve {host}:{port}: {e}")))?;
-    if addrs.is_empty() {
-        return Err(Error::Network(format!(
-            "resolve {host}:{port}: no addresses"
-        )));
-    }
-
-    let mut last_err: Option<Error> = None;
-    let mut tcp_opt: Option<TcpStream> = None;
-    for addr in &addrs {
-        match TcpStream::connect(addr) {
-            Ok(s) => {
-                tcp_opt = Some(s);
-                break;
-            }
-            Err(e) => {
-                last_err = Some(Error::Network(format!("connect {addr}: {e}")));
+    let tcp = if let Some(s5) = socks5 {
+        // SOCKS5 path: connect TCP to proxy server, then SOCKS5-tunnel to target.
+        // DNS is resolved by the proxy (no local leak) — required for Tor.
+        let proxy_addrs = resolver
+            .resolve(&s5.host, s5.port)
+            .map_err(|e| Error::Network(format!("resolve SOCKS5 proxy {}:{}: {e}", s5.host, s5.port)))?;
+        if proxy_addrs.is_empty() {
+            return Err(Error::Network(format!(
+                "resolve SOCKS5 proxy {}:{}: no addresses",
+                s5.host, s5.port
+            )));
+        }
+        let mut last_err: Option<Error> = None;
+        let mut tcp_opt: Option<TcpStream> = None;
+        for addr in &proxy_addrs {
+            match TcpStream::connect(addr) {
+                Ok(s) => {
+                    tcp_opt = Some(s);
+                    break;
+                }
+                Err(e) => {
+                    last_err = Some(Error::Network(format!("connect SOCKS5 proxy {addr}: {e}")));
+                }
             }
         }
-    }
-    let tcp = tcp_opt.ok_or_else(|| {
-        last_err.unwrap_or_else(|| Error::Network(format!("connect {host}:{port}: no addresses")))
-    })?;
+        let proxy_tcp = tcp_opt.ok_or_else(|| {
+            last_err.unwrap_or_else(|| {
+                Error::Network(format!("connect SOCKS5 proxy {}:{}: no addresses", s5.host, s5.port))
+            })
+        })?;
+        // Perform the SOCKS5 handshake to request a tunnel to (host, port).
+        socks5::socks5_connect(proxy_tcp, host, port, s5.auth.as_ref())?
+    } else {
+        // Direct path: resolve DNS locally and connect.
+        // Префикс `resolve ` на всех DNS-ошибках (включая ошибку самого
+        // resolver-а) — чтобы `classify_failure_stage` надёжно отнёс их к
+        // `RequestStage::Dns` без знания внутреннего формата resolver-сообщения.
+        let addrs = resolver
+            .resolve(host, port)
+            .map_err(|e| Error::Network(format!("resolve {host}:{port}: {e}")))?;
+        if addrs.is_empty() {
+            return Err(Error::Network(format!(
+                "resolve {host}:{port}: no addresses"
+            )));
+        }
+        let mut last_err: Option<Error> = None;
+        let mut tcp_opt: Option<TcpStream> = None;
+        for addr in &addrs {
+            match TcpStream::connect(addr) {
+                Ok(s) => {
+                    tcp_opt = Some(s);
+                    break;
+                }
+                Err(e) => {
+                    last_err = Some(Error::Network(format!("connect {addr}: {e}")));
+                }
+            }
+        }
+        tcp_opt.ok_or_else(|| {
+            last_err
+                .unwrap_or_else(|| Error::Network(format!("connect {host}:{port}: no addresses")))
+        })?
+    };
 
     if !is_tls {
         return Ok(Connection::new(RawStream::Plain(tcp)));
@@ -657,6 +716,11 @@ fn check_negotiated_alpn(alpn: Option<&[u8]>) -> Result<bool> {
 /// Решить, выглядит ли ошибка как «stale keep-alive»: сервер закрыл idle
 /// соединение, и наш write / первый read получил EOF или RST. Такие ошибки
 /// заслуживают однократного retry на свежем соединении.
+///
+/// На Windows `io::Error::from_raw_os_error` форматируется с локализованным
+/// OS-сообщением вместо Rust `ErrorKind` имени, поэтому "ConnectionReset" /
+/// "ConnectionAborted" не появятся в строке. Проверяем Windows-коды явно:
+/// os error 10053 = WSAECONNABORTED, os error 10054 = WSAECONNRESET.
 fn is_stale_error(err: &Error) -> bool {
     let msg = format!("{err:?}");
     msg.contains("BrokenPipe")
@@ -665,6 +729,8 @@ fn is_stale_error(err: &Error) -> bool {
         || msg.contains("UnexpectedEof")
         || msg.contains("EOF before status line")
         || msg.contains("EOF in headers")
+        || msg.contains("os error 10053")
+        || msg.contains("os error 10054")
 }
 
 /// Один полный HTTP-запрос: acquire из пула (или connect), write_request,
@@ -689,16 +755,33 @@ fn fetch_single(
     authorization: Option<&str>,
     accept_encoding: Option<&str>,
     extra_headers: &str,
+    proxy: Option<&HttpProxy>,
+    socks5_proxy: Option<&socks5::Socks5Proxy>,
 ) -> Result<Response> {
+    // SOCKS5 takes precedence over HTTP proxy when both are set.
+    // With SOCKS5 the tunnel is established by the proxy itself, so we
+    // connect to the target host:port directly (the pool key uses the
+    // real target, not the SOCKS5 server).
+    let effective_proxy = if socks5_proxy.is_some() { None } else { proxy };
+
+    // Если HTTP-proxy используется, определяем актуальный host:port для подключения.
+    let (connect_host, connect_port, connect_is_tls) = if let Some(p) = effective_proxy {
+        // HTTP proxy — подключаемся к прокси-серверу через незащищённое TCP.
+        (p.host.as_str(), p.port, false)
+    } else {
+        // Нет прокси (или SOCKS5) — подключаемся напрямую / через SOCKS5 туннель.
+        (host, port, is_tls)
+    };
+
     let key = PoolKey {
-        host: host.to_owned(),
-        port,
-        is_tls,
+        host: connect_host.to_owned(),
+        port: connect_port,
+        is_tls: connect_is_tls,
     };
 
     // HTTP/2 pool: try reusing an existing H2 connection for this origin.
     if let Some(h2p) = h2_pool {
-        let h2_key = pool::PoolKey { host: host.to_owned(), port, is_tls };
+        let h2_key = pool::PoolKey { host: connect_host.to_owned(), port: connect_port, is_tls: connect_is_tls };
         if let Some(h2_conn) = h2p.acquire(&h2_key) {
             let scheme = if is_tls { "https" } else { "http" };
             match h2_do_request_conn(h2_conn, scheme, request_host_header, request_path, extra_headers) {
@@ -709,7 +792,7 @@ fn fetch_single(
                 Err(e) if is_stale_error(&e) => {
                     // H2 conn went stale (server sent GOAWAY or closed socket).
                     // Evict and fall through to fresh connect below.
-                    h2p.evict(&pool::PoolKey { host: host.to_owned(), port, is_tls });
+                    h2p.evict(&pool::PoolKey { host: connect_host.to_owned(), port: connect_port, is_tls: connect_is_tls });
                 }
                 Err(e) => return Err(e),
             }
@@ -745,7 +828,80 @@ fn fetch_single(
     }
 
     // Попытка 2 (или 1, если пул был пуст): свежий connect.
-    let conn = connect(host, port, is_tls, resolver, tls_profile)?;
+    let mut conn = connect(connect_host, connect_port, connect_is_tls, resolver, tls_profile, socks5_proxy)?;
+
+    // Если используется HTTPS HTTP-прокси: выполнить CONNECT-туннель.
+    #[allow(clippy::collapsible_if)]
+    if let Some(proxy) = effective_proxy {
+        if is_tls {
+            // RFC 7230 §5.3.2: CONNECT запрос для установления туннеля к целевому хосту через прокси.
+            let mut stream = conn.into_stream();
+            let connect_request = format!(
+                "CONNECT {host}:{port} HTTP/1.1\r\n\
+                Host: {host}:{port}\r\n\
+                Connection: keep-alive\r\n"
+            );
+            let auth_header = if let Some(auth) = &proxy.auth {
+                format!("Proxy-Authorization: Basic {auth}\r\n")
+            } else {
+                String::new()
+            };
+            let full_request = format!("{}{}\r\n", connect_request, auth_header);
+
+            stream.write_all(full_request.as_bytes())
+                .map_err(|e| Error::Network(format!("write CONNECT request: {e}")))?;
+            stream.flush()
+                .map_err(|e| Error::Network(format!("flush CONNECT request: {e}")))?;
+
+            // Читаем ответ на CONNECT (должен быть 200 OK).
+            let mut reader = BufReader::new(stream);
+            let mut status_line = String::new();
+            let n = reader.read_line(&mut status_line)
+                .map_err(|e| Error::Network(format!("read CONNECT status: {e}")))?;
+            if n == 0 {
+                return Err(Error::Network("EOF before CONNECT status line".to_owned()));
+            }
+
+            if !status_line.contains(" 200 ") && !status_line.contains(" 2") {
+                return Err(Error::Network(format!("CONNECT tunnel failed: {}", status_line.trim())));
+            }
+
+            // Читаем оставшиеся заголовки CONNECT ответа (до пустой строки).
+            loop {
+                let mut line = String::new();
+                let n = reader.read_line(&mut line)
+                    .map_err(|e| Error::Network(format!("read CONNECT header: {e}")))?;
+                if n == 0 || line.trim_end_matches(['\r', '\n']).is_empty() {
+                    break;
+                }
+            }
+
+            // Теперь stream находится над HTTP-туннелем. Устанавливаем TLS.
+            let tunnel_stream = reader.into_inner();
+
+            // RawStream::Plain содержит TcpStream внутри.
+            let tcp = match tunnel_stream {
+                RawStream::Plain(t) => t,
+                _ => return Err(Error::Network("unexpected tunnel stream type".to_owned())),
+            };
+
+            let server_name = ServerName::try_from(host.to_owned())
+                .map_err(|e| Error::Network(format!("invalid hostname '{host}': {e}")))?;
+
+            let tls_config = tls_config_for_profile(tls_profile);
+            let mut tls_conn = ClientConnection::new(tls_config, server_name)
+                .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
+
+            let mut tcp_copy = tcp;
+            tls_conn.complete_io(&mut tcp_copy)
+                .map_err(|e| Error::Network(format!("TLS handshake over tunnel: {e}")))?;
+
+            let is_h2 = check_negotiated_alpn(tls_conn.alpn_protocol())?;
+
+            conn = Connection::new(RawStream::Tls(Box::new(rustls::StreamOwned::new(tls_conn, tcp_copy))));
+            conn.is_h2 = is_h2;
+        }
+    }
 
     // HTTP/2: establish fresh H2Conn, use it, then store back in h2_pool.
     if conn.is_h2 {
@@ -753,11 +909,19 @@ fn fetch_single(
         return h2_do_request(conn, scheme, request_host_header, request_path, extra_headers, h2_pool, host, port, is_tls, http_profile);
     }
 
+    // Для HTTP-прокси: отправляем абсолютный URL вместо относительного пути.
+    // SOCKS5 туннелирует до реального хоста, поэтому relative path.
+    let request_path_to_use = if effective_proxy.is_some() && !is_tls {
+        format!("http://{host}:{port}{request_path}")
+    } else {
+        request_path.to_string()
+    };
+
     let (resp, conn) = do_request(
         conn,
         method,
         request_host_header,
-        request_path,
+        &request_path_to_use,
         range,
         if_range,
         authorization,
@@ -1033,6 +1197,8 @@ fn fetch_with_redirect(
     cache_extra_headers: &str,
     cookie_jar: Option<&dyn CookieProvider>,
     top_level_site: Option<&str>,
+    proxy: Option<&HttpProxy>,
+    socks5_proxy: Option<&socks5::Socks5Proxy>,
 ) -> Result<Response> {
     if hops_left == 0 {
         return Err(Error::Network("too many redirects".to_owned()));
@@ -1158,6 +1324,8 @@ fn fetch_with_redirect(
                 None,
                 None,
                 &preflight_extra,
+                proxy,
+                socks5_proxy,
             ) {
                 Ok(r) => r,
                 Err(e) => return Err(emit_request_failed(sink, tab_id, url, e)),
@@ -1259,6 +1427,8 @@ fn fetch_with_redirect(
             authorization.as_deref(),
             accept_encoding,
             &actual_extra_headers,
+            proxy,
+            socks5_proxy,
         ) {
             Ok(r) => r,
             Err(e) => return Err(emit_request_failed(sink, tab_id, url, e)),
@@ -1366,6 +1536,8 @@ fn fetch_with_redirect(
                     "",
                     cookie_jar,
                     top_level_site,
+                    proxy,
+                    socks5_proxy,
                 );
             }
             401 if authorization.is_none() && credentials.is_some() => {
@@ -1410,6 +1582,67 @@ fn fetch_with_redirect(
 
 // ── Публичный API ────────────────────────────────────────────────────────────
 
+/// HTTP proxy configuration (RFC 7230 proxy behavior).
+///
+/// Для HTTP: запрос отправляется на proxy-host:proxy-port с абсолютным URL в request line.
+/// Для HTTPS: используется CONNECT-туннель (RFC 7231 §4.3.6) — отправляем
+/// `CONNECT target-host:target-port HTTP/1.1` на proxy, затем TLS handshake
+/// над полученным туннелем, затем обычный HTTPS-запрос с относительным путём.
+/// Если auth присутствует, Proxy-Authorization (Basic) отправляется в обоих случаях.
+pub struct HttpProxy {
+    /// Hostname или IP адрес прокси-сервера.
+    pub host: String,
+    /// Порт прокси-сервера (обычно 3128 для Squid, 8080 для других).
+    pub port: u16,
+    /// Optional username:password для базовой аутентификации прокси.
+    /// Формат: base64(username:password).
+    pub auth: Option<String>,
+}
+
+impl HttpProxy {
+    /// Создать новый прокси без аутентификации.
+    pub fn new(host: String, port: u16) -> Self {
+        Self {
+            host,
+            port,
+            auth: None,
+        }
+    }
+
+    /// Создать прокси с базовой аутентификацией (username:password).
+    pub fn with_basic_auth(mut self, username: &str, password: &str) -> Self {
+        let creds = format!("{}:{}", username, password);
+        self.auth = Some(base64_encode(&creds));
+        self
+    }
+}
+
+/// Encode string to base64 (используется для Basic auth в Proxy-Authorization).
+fn base64_encode(s: &str) -> String {
+    const BASE64_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes = s.as_bytes();
+    let mut result = String::new();
+    for chunk in bytes.chunks(3) {
+        let b1 = chunk[0];
+        let b2 = chunk.get(1).copied().unwrap_or(0);
+        let b3 = chunk.get(2).copied().unwrap_or(0);
+        let n = ((b1 as u32) << 16) | ((b2 as u32) << 8) | (b3 as u32);
+        result.push(BASE64_CHARS[((n >> 18) & 0x3F) as usize] as char);
+        result.push(BASE64_CHARS[((n >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            result.push(BASE64_CHARS[((n >> 6) & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(BASE64_CHARS[(n & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    result
+}
+
 /// HTTP/1.1 + HTTPS клиент.
 ///
 /// По умолчанию события никуда не уходят (sink не подключён), блокировок нет
@@ -1434,7 +1667,7 @@ pub struct HttpClient {
     mixed_content: Option<MixedContentPolicy>,
     cors_cache: Option<Arc<cors::PreflightCache>>,
     /// RFC 7234 response cache. Optional — without it every request goes to the network.
-    http_cache: Option<Arc<http_cache::HttpCache>>,
+    http_cache: Option<Arc<dyn http_cache::HttpCacheBackend>>,
     /// RFC 6265 cookie jar. Injects `Cookie:` headers and persists `Set-Cookie:` responses.
     cookie_jar: Option<Arc<dyn CookieProvider>>,
     /// Registrable domain of the top-level page, used for Total Cookie Protection partitioning.
@@ -1445,6 +1678,17 @@ pub struct HttpClient {
     /// TLS fingerprinting profile — cipher suite order, kx_groups, ALPN, protocol versions.
     /// Derived from `fingerprint_profile` by default; can be overridden with `with_tls_profile`.
     tls_profile: tls::TlsProfile,
+    /// HTTP proxy (RFC 7230) for routing requests through proxy server.
+    /// Optional — without it requests go directly to target. With proxy:
+    /// — HTTP: direct GET to proxy with absolute URL
+    /// — HTTPS: CONNECT tunnel to proxy, then TLS over tunnel
+    proxy: Option<Arc<HttpProxy>>,
+    /// SOCKS5 proxy (RFC 1928) for tunnelling all TCP connections.
+    /// When set, TCP is established to the SOCKS5 server first, then the
+    /// SOCKS5 CONNECT command is sent so the proxy opens the tunnel to the
+    /// real target.  DNS is resolved by the proxy (not leaked locally) —
+    /// required for Tor-mode operation.
+    socks5_proxy: Option<Arc<Socks5Proxy>>,
 }
 
 impl HttpClient {
@@ -1467,6 +1711,8 @@ impl HttpClient {
             top_level_site: None,
             fingerprint_profile: HttpProfile::Chrome,
             tls_profile: tls::TlsProfile::Standard,
+            proxy: None,
+            socks5_proxy: None,
         }
     }
 
@@ -1693,8 +1939,32 @@ impl HttpClient {
     /// POST/PUT и запросы с явным `cors_ctx` кэш пропускают; `Vary` не
     /// поддерживается (unsafe Vary не помечается).
     #[must_use]
-    pub fn with_http_cache(mut self, cache: Arc<http_cache::HttpCache>) -> Self {
+    pub fn with_http_cache(mut self, cache: Arc<dyn http_cache::HttpCacheBackend>) -> Self {
         self.http_cache = Some(cache);
+        self
+    }
+
+    /// Подключить HTTP прокси (RFC 7230). По умолчанию прокси не подключён — запросы
+    /// идут напрямую на целевой сервер. С подключённым прокси:
+    /// — HTTP: запрос отправляется на прокси с абсолютным URL в request line
+    /// — HTTPS: используется CONNECT-туннель (RFC 7231 §4.3.6)
+    /// — оба: если прокси требует аутентификацию, добавляется Proxy-Authorization header
+    #[must_use]
+    pub fn with_proxy(mut self, proxy: Arc<HttpProxy>) -> Self {
+        self.proxy = Some(proxy);
+        self
+    }
+
+    /// Подключить SOCKS5 прокси (RFC 1928) для туннелирования всех TCP-соединений.
+    ///
+    /// Когда установлен, TCP открывается к SOCKS5-серверу, затем отправляется
+    /// команда CONNECT для создания туннеля к целевому хосту.  DNS разрешается
+    /// прокси (не утекает локально) — обязательно для работы через Tor.
+    ///
+    /// Типичная конфигурация Tor: `Socks5Proxy::new("127.0.0.1", 9050)`.
+    #[must_use]
+    pub fn with_socks5_proxy(mut self, proxy: Arc<Socks5Proxy>) -> Self {
+        self.socks5_proxy = Some(proxy);
         self
     }
 
@@ -1805,6 +2075,8 @@ impl HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.proxy.as_deref(),
+                    self.socks5_proxy.as_deref(),
         )
         .map(|resp| resp.body)
     }
@@ -1841,6 +2113,8 @@ impl HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.proxy.as_deref(),
+                    self.socks5_proxy.as_deref(),
         )?;
         let content_range = if resp.status == 206 {
             header_value(&resp.headers, "content-range").and_then(parse_content_range)
@@ -1911,6 +2185,8 @@ impl HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.proxy.as_deref(),
+                    self.socks5_proxy.as_deref(),
         )?;
         Ok(parse_multi_range_response(resp))
     }
@@ -1998,6 +2274,8 @@ impl HttpClient {
                     &snap.conditional_headers,
                     self.cookie_jar.as_deref(),
                     self.top_level_site.as_deref(),
+                    self.proxy.as_deref(),
+                    self.socks5_proxy.as_deref(),
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -2031,11 +2309,69 @@ impl HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.proxy.as_deref(),
+                    self.socks5_proxy.as_deref(),
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
         }
         Ok(resp.body)
+    }
+}
+
+impl HttpClient {
+    /// Fetch a top-level page and return the response body together with all
+    /// response headers. Unlike `NetworkTransport::fetch`, this exposes headers
+    /// so the shell can read `Cross-Origin-Opener-Policy` / `Cross-Origin-Embedder-Policy`
+    /// to compute `crossOriginIsolated` for the JS context.
+    #[allow(clippy::type_complexity)]
+    pub fn fetch_page(&self, url: &Url) -> Result<(Vec<u8>, Vec<(String, String)>)> {
+        if let Some(ref interceptor) = self.interceptor {
+            let origin = build_origin(url);
+            if let Some(body) = interceptor.intercept(url, &origin) {
+                return Ok((body, Vec::new()));
+            }
+        }
+        let url_str = url.to_string();
+        let accept_encoding = self.accept_encoding_header();
+        let destination = self.mixed_content.as_ref().map(|_| RequestDestination::Other);
+        if let Some(cache) = &self.http_cache
+            && let Some(snap) = cache.get(&url_str)
+        {
+            if snap.is_fresh {
+                return Ok((snap.body, Vec::new()));
+            }
+            if !snap.conditional_headers.is_empty() {
+                let resp = fetch_with_redirect(
+                    url, 5, &self.pool, self.h2_pool.as_deref(), self.resolver.as_ref(),
+                    self.tls_profile, self.fingerprint_profile, self.sink.as_deref(),
+                    self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
+                    &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
+                    self.mixed_content.as_ref(), destination, None, &snap.conditional_headers,
+                    self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
+                    self.proxy.as_deref(), self.socks5_proxy.as_deref(),
+                )?;
+                if resp.status == 304 {
+                    cache.revalidate(&url_str, &resp.headers);
+                    return Ok((snap.body, Vec::new()));
+                }
+                cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
+                return Ok((resp.body, resp.headers));
+            }
+        }
+        let resp = fetch_with_redirect(
+            url, 5, &self.pool, self.h2_pool.as_deref(), self.resolver.as_ref(),
+            self.tls_profile, self.fingerprint_profile, self.sink.as_deref(),
+            self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
+            &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
+            self.mixed_content.as_ref(), destination, None, "",
+            self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
+            self.proxy.as_deref(), self.socks5_proxy.as_deref(),
+        )?;
+        if let Some(cache) = &self.http_cache {
+            cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
+        }
+        Ok((resp.body, resp.headers))
     }
 }
 
@@ -2089,6 +2425,8 @@ impl NetworkTransport for HttpClient {
                     &snap.conditional_headers,
                     self.cookie_jar.as_deref(),
                     self.top_level_site.as_deref(),
+                    self.proxy.as_deref(),
+                    self.socks5_proxy.as_deref(),
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -2122,6 +2460,8 @@ impl NetworkTransport for HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.proxy.as_deref(),
+                    self.socks5_proxy.as_deref(),
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -2195,6 +2535,8 @@ impl JsFetchProvider for HttpClient {
             "",
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
+            self.proxy.as_deref(),
+                    self.socks5_proxy.as_deref(),
         )?;
         Ok(JsFetchResult {
             status_text: http_status_text(resp.status).to_string(),
@@ -2232,12 +2574,12 @@ impl JsFetchProvider for HttpClient {
         let mut conn = if let Some(pooled) = self.pool.acquire(&key) {
             pooled
         } else {
-            connect(&host_ascii, port, is_tls, self.resolver.as_ref(), self.tls_profile)?
+            connect(&host_ascii, port, is_tls, self.resolver.as_ref(), self.tls_profile, self.socks5_proxy.as_deref())?
         };
 
         // HTTP/2 connections don't support the body path yet — fall back to H1.
         if conn.is_h2 {
-            let fresh = connect(&host_ascii, port, is_tls, self.resolver.as_ref(), self.tls_profile)?;
+            let fresh = connect(&host_ascii, port, is_tls, self.resolver.as_ref(), self.tls_profile, self.socks5_proxy.as_deref())?;
             conn = fresh;
         }
 
@@ -2380,17 +2722,114 @@ impl JsWebSocketProvider for HttpClient {
     fn connect(&self, url: &str) -> Result<Box<dyn JsWebSocketSession>> {
         let parsed = Url::parse(url)
             .map_err(|e| Error::Network(format!("ws: invalid URL: {e}")))?;
-        let ws = websocket::WebSocket::connect(
+        // Always offer permessage-deflate (RFC 7692) — browsers do this by default.
+        // compress=false: outgoing frames are uncompressed until JS sets WebSocket.compress.
+        let ws = websocket::WebSocket::connect_deflate(
             &parsed,
             self.resolver.as_ref(),
             self.hsts.as_deref(),
             Arc::new(NoopEventSink),
             lumen_core::event::TabId(0),
+            false,
         )?;
         let impl_ = JsWebSocketSessionImpl::new(ws);
         // Push the Open event immediately — handshake already completed.
         impl_.queue.lock().unwrap().push_back(JsWsEvent::Open);
         Ok(Box::new(impl_))
+    }
+}
+
+// ── JsSseSession ──────────────────────────────────────────────────────────────
+
+/// Background-threaded SSE session for the JS runtime.
+///
+/// Spawns a receive thread that drains the blocking [`SseSession::next_event`]
+/// loop and pushes [`JsSseEvent`]s into a shared queue. JS calls `poll()` to
+/// drain the queue without blocking the script thread — mirroring
+/// [`JsWebSocketSessionImpl`].
+struct JsSseSessionImpl {
+    /// Buffered events produced by the background recv thread.
+    queue: Arc<std::sync::Mutex<std::collections::VecDeque<JsSseEvent>>>,
+    /// Set by `close()` to ask the background thread to stop reconnecting.
+    closed: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl JsSseSessionImpl {
+    /// Create a new session, spawning a background thread that buffers events.
+    ///
+    /// The thread pushes [`JsSseEvent::Open`] first, then forwards every server
+    /// event until the stream ends ([`JsSseEvent::Close`]) or errors
+    /// ([`JsSseEvent::Error`]). The blocking [`SseSession::next_event`] cannot be
+    /// interrupted mid-call, so `close()` sets a flag the loop checks before each
+    /// read; an in-flight read finishes naturally when the server closes.
+    fn new(mut session: Box<dyn SseSession>) -> Self {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let queue: Arc<std::sync::Mutex<std::collections::VecDeque<JsSseEvent>>> =
+            Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
+        let closed = Arc::new(AtomicBool::new(false));
+
+        let q2 = Arc::clone(&queue);
+        let c2 = Arc::clone(&closed);
+
+        std::thread::spawn(move || {
+            q2.lock().unwrap().push_back(JsSseEvent::Open);
+            loop {
+                if c2.load(Ordering::Relaxed) {
+                    session.close();
+                    break;
+                }
+                match session.next_event() {
+                    Ok(Some(ev)) => {
+                        let mut q = q2.lock().unwrap();
+                        if let Some(ms) = ev.retry_ms {
+                            q.push_back(JsSseEvent::Retry(ms));
+                        }
+                        q.push_back(JsSseEvent::Message {
+                            event_type: ev.event_type,
+                            data: ev.data,
+                            id: ev.id,
+                        });
+                    }
+                    Ok(None) => {
+                        q2.lock().unwrap().push_back(JsSseEvent::Close);
+                        break;
+                    }
+                    Err(e) => {
+                        q2.lock().unwrap().push_back(JsSseEvent::Error(e.to_string()));
+                        break;
+                    }
+                }
+            }
+        });
+
+        Self { queue, closed }
+    }
+}
+
+impl JsSseSession for JsSseSessionImpl {
+    fn poll(&self) -> Option<JsSseEvent> {
+        self.queue.lock().unwrap().pop_front()
+    }
+
+    fn close(&mut self) {
+        self.closed
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl JsSseProvider for HttpClient {
+    fn connect_sse(&self, url: &str) -> Result<Box<dyn JsSseSession>> {
+        let parsed = Url::parse(url)
+            .map_err(|e| Error::Network(format!("sse: invalid URL: {e}")))?;
+        // Reuse the synchronous SseProvider path; the EventSource handshake runs
+        // here, then the background thread takes over event delivery.
+        let session = <Self as SseProvider>::connect_sse(
+            self,
+            &parsed,
+            lumen_core::event::TabId(0),
+            Arc::new(NoopEventSink),
+        )?;
+        Ok(Box::new(JsSseSessionImpl::new(session)))
     }
 }
 
@@ -2444,6 +2883,60 @@ impl FetchInterceptor for InMemoryFetchInterceptor {
 mod tests {
     use super::*;
     use lumen_core::ext::{HttpAuthChallenge, HttpCredentials};
+
+    // ── JsSseSessionImpl (HTML Living Standard §9.2) ─────────────────────────
+
+    /// Mock `SseSession` yielding a fixed event sequence, then `Ok(None)` (close).
+    struct MockSseSession {
+        events: std::collections::VecDeque<lumen_core::ext::SseEvent>,
+    }
+    impl SseSession for MockSseSession {
+        fn next_event(&mut self) -> Result<Option<lumen_core::ext::SseEvent>> {
+            Ok(self.events.pop_front())
+        }
+        fn close(&mut self) {}
+    }
+
+    /// Drain the JS-side queue until `want` events are collected or a deadline hits.
+    fn drain_js_sse(sess: &JsSseSessionImpl, want: usize) -> Vec<JsSseEvent> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut out = Vec::new();
+        while out.len() < want && std::time::Instant::now() < deadline {
+            if let Some(ev) = sess.poll() {
+                out.push(ev);
+            } else {
+                std::thread::yield_now();
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn js_sse_session_poll_delivers_open_message_close() {
+        use lumen_core::ext::SseEvent;
+        let mut events = std::collections::VecDeque::new();
+        events.push_back(SseEvent {
+            event_type: "message".into(),
+            data: "hi".into(),
+            id: Some("7".into()),
+            retry_ms: None,
+        });
+        let session: Box<dyn SseSession> = Box::new(MockSseSession { events });
+        let impl_ = JsSseSessionImpl::new(session);
+        // Expect: Open, Message{hi,7}, Close.
+        let evs = drain_js_sse(&impl_, 3);
+        assert_eq!(evs.len(), 3, "got {evs:?}");
+        assert_eq!(evs[0], JsSseEvent::Open);
+        assert_eq!(
+            evs[1],
+            JsSseEvent::Message {
+                event_type: "message".into(),
+                data: "hi".into(),
+                id: Some("7".into()),
+            }
+        );
+        assert_eq!(evs[2], JsSseEvent::Close);
+    }
 
     // ── ALPN (5A.1) ──────────────────────────────────────────────────────────
 
@@ -2623,6 +3116,15 @@ mod tests {
         )));
         assert!(is_stale_error(&Error::Network(
             "read body: ConnectionReset".to_owned()
+        )));
+        // Windows: WSAECONNABORTED (10053) и WSAECONNRESET (10054) форматируются
+        // с локализованным OS-сообщением — "ConnectionAborted"/"ConnectionReset"
+        // в строке отсутствуют, но код "(os error 10053/10054)" присутствует.
+        assert!(is_stale_error(&Error::Network(
+            "read status: An established connection was aborted by the software in your host machine. (os error 10053)".to_owned()
+        )));
+        assert!(is_stale_error(&Error::Network(
+            "read status: An existing connection was forcibly closed by the remote host. (os error 10054)".to_owned()
         )));
         assert!(!is_stale_error(&Error::Network("HTTP 500".to_owned())));
         assert!(!is_stale_error(&Error::Network("blocked: tracker".to_owned())));
@@ -5551,7 +6053,8 @@ mod http_cache_tests {
         // If the cache is used, the server never gets a request → test passes.
         // If cache is bypassed, the server closes after 1 response and the
         // second request would also go there (we only start 1 server accept).
-        let cache = Arc::new(http_cache::HttpCache::new());
+        let cache: Arc<dyn http_cache::HttpCacheBackend> =
+            Arc::new(http_cache::HttpCache::new());
         let url = "http://127.0.0.1:0/resource"; // port 0 → unused, never connected
         // Pre-populate cache with a fresh entry (max-age=3600).
         cache.store(
@@ -5581,7 +6084,8 @@ mod http_cache_tests {
                 .to_vec()
         });
 
-        let cache = Arc::new(http_cache::HttpCache::new());
+        let mem_cache = Arc::new(http_cache::HttpCache::new());
+        let cache: Arc<dyn http_cache::HttpCacheBackend> = Arc::clone(&mem_cache) as _;
         let url = format!("http://127.0.0.1:{port}/data");
         let parsed = Url::parse(&url).unwrap();
 
@@ -5590,7 +6094,7 @@ mod http_cache_tests {
         // First fetch — goes to network.
         let body1 = client.fetch(&parsed).unwrap();
         assert_eq!(body1, b"body");
-        assert_eq!(cache.len(), 1, "should have stored the response");
+        assert_eq!(mem_cache.len(), 1, "should have stored the response");
 
         // Second fetch — served from cache (server thread has exited).
         let body2 = client.fetch(&parsed).unwrap();
@@ -5611,7 +6115,8 @@ mod http_cache_tests {
                 .to_vec(),
         });
 
-        let cache = Arc::new(http_cache::HttpCache::new());
+        let cache: Arc<dyn http_cache::HttpCacheBackend> =
+            Arc::new(http_cache::HttpCache::new());
         let url = format!("http://127.0.0.1:{port}/data");
         let parsed = Url::parse(&url).unwrap();
         let client = HttpClient::new().with_http_cache(Arc::clone(&cache));
@@ -5638,7 +6143,8 @@ mod http_cache_tests {
                 .to_vec(),
         });
 
-        let cache = Arc::new(http_cache::HttpCache::new());
+        let cache: Arc<dyn http_cache::HttpCacheBackend> =
+            Arc::new(http_cache::HttpCache::new());
         let url = format!("http://127.0.0.1:{port}/data");
         let parsed = Url::parse(&url).unwrap();
         let client = HttpClient::new().with_http_cache(Arc::clone(&cache));
@@ -5662,17 +6168,68 @@ mod http_cache_tests {
                 .to_vec()
         });
 
-        let cache = Arc::new(http_cache::HttpCache::new());
+        let mem_cache = Arc::new(http_cache::HttpCache::new());
+        let cache: Arc<dyn http_cache::HttpCacheBackend> = Arc::clone(&mem_cache) as _;
         let url = format!("http://127.0.0.1:{port}/secret");
         let parsed = Url::parse(&url).unwrap();
         let client = HttpClient::new().with_http_cache(Arc::clone(&cache));
 
         client.fetch(&parsed).unwrap();
-        assert_eq!(cache.len(), 0, "no-store must not be cached");
+        assert_eq!(mem_cache.len(), 0, "no-store must not be cached");
 
         // Second fetch also goes to network (not cached).
         client.fetch(&parsed).unwrap();
 
         server.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod proxy_tests {
+    use super::*;
+
+    #[test]
+    fn http_proxy_new_no_auth() {
+        let proxy = HttpProxy::new("proxy.local".to_string(), 3128);
+        assert_eq!(proxy.host, "proxy.local");
+        assert_eq!(proxy.port, 3128);
+        assert_eq!(proxy.auth, None);
+    }
+
+    #[test]
+    fn http_proxy_with_basic_auth() {
+        let proxy = HttpProxy::new("proxy.local".to_string(), 3128)
+            .with_basic_auth("user", "pass");
+        assert_eq!(proxy.host, "proxy.local");
+        assert_eq!(proxy.port, 3128);
+        assert!(proxy.auth.is_some());
+        // Basic auth for "user:pass" should be base64-encoded "dXNlcjpwYXNz"
+        assert_eq!(proxy.auth.as_ref().unwrap(), "dXNlcjpwYXNz");
+    }
+
+    #[test]
+    fn http_client_with_proxy() {
+        let proxy = Arc::new(HttpProxy::new("proxy.local".to_string(), 3128));
+        let client = HttpClient::new().with_proxy(Arc::clone(&proxy));
+        // Verify that the proxy was attached (no public accessor, so we just verify it doesn't crash)
+        assert!(client.proxy.is_some());
+    }
+
+    #[test]
+    fn base64_encode_empty_string() {
+        let encoded = base64_encode("");
+        assert_eq!(encoded, "");
+    }
+
+    #[test]
+    fn base64_encode_single_byte() {
+        let encoded = base64_encode("a");
+        assert_eq!(encoded, "YQ==");
+    }
+
+    #[test]
+    fn base64_encode_user_pass() {
+        let encoded = base64_encode("user:pass");
+        assert_eq!(encoded, "dXNlcjpwYXNz");
     }
 }

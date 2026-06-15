@@ -13,7 +13,8 @@ use serde_json;
 use lumen_dom::Document;
 use lumen_dom::NodeData;
 use lumen_dom::NodeId;
-use lumen_layout::{computed_style_by_selector, LayoutBox};
+use lumen_layout::{computed_style_by_selector, LayoutBox, PaintOrder, PropertyTrees, StackingTree};
+use lumen_paint::compositor::{BasicLayerTree, Compositor, InProcessCompositor};
 
 use crate::{
     A11yNode, AxQuery, BoxModel, BrowserSession, ComputedProperties, ComputedStyleSnapshot,
@@ -76,6 +77,13 @@ pub struct InProcessSession {
     /// В headless-режиме без JS-движка всегда 0.
     /// Shell-интеграция: вызывать `set_pending_js_tasks()` при изменении очереди.
     pending_js_microtasks: usize,
+    /// In-process compositor: two-buffer (pending/active) model for property trees.
+    ///
+    /// `run_pipeline()` commits new `PropertyTrees` + `BasicLayerTree` after each
+    /// layout. `active_property_trees()` returns the active snapshot. Off-main-thread
+    /// scroll mutates only the scroll offsets in a cloned `PropertyTrees` and
+    /// recommits — no relayout.
+    compositor: InProcessCompositor,
 }
 
 impl InProcessSession {
@@ -91,6 +99,7 @@ impl InProcessSession {
             isolation: None,
             active_network_requests: 0,
             pending_js_microtasks: 0,
+            compositor: InProcessCompositor::new(),
         }
     }
 
@@ -106,6 +115,7 @@ impl InProcessSession {
             isolation: None,
             active_network_requests: 0,
             pending_js_microtasks: 0,
+            compositor: InProcessCompositor::new(),
         }
     }
 
@@ -137,6 +147,7 @@ impl InProcessSession {
             isolation: Some(OriginIsolationContext::new(origin)),
             active_network_requests: 0,
             pending_js_microtasks: 0,
+            compositor: InProcessCompositor::new(),
         }
     }
 
@@ -180,6 +191,45 @@ impl InProcessSession {
             .with_fingerprint_profile(self.context.fingerprint_profile().to_http_profile())
     }
 
+    /// Active property trees snapshot from the compositor (PH1-7).
+    ///
+    /// Returns the four-tree snapshot (Transform / Scroll / Effect / Clip) that
+    /// the compositor promoted from pending in the last `flush_pending()`. Before
+    /// the first navigation this returns `None`.
+    ///
+    /// Callers can read scroll offsets, transform matrices, and effect flags from
+    /// the active trees without holding any layout lock.
+    pub fn active_property_trees(&self) -> Option<Arc<PropertyTrees>> {
+        self.compositor.active_trees()
+    }
+
+    /// Off-main-thread page scroll (PH1-7).
+    ///
+    /// Clones the current active `PropertyTrees`, updates the root `ScrollNode`
+    /// offsets by `(delta_x, delta_y)` CSS-px, and recommits to the compositor —
+    /// **no relayout**. The next call to `active_property_trees()` or `screenshot*()`
+    /// will see the updated offsets.
+    ///
+    /// Returns `false` if no page has been loaded yet.
+    pub fn scroll_page_by(&mut self, delta_x: f32, delta_y: f32) -> bool {
+        let Some(active_trees) = self.compositor.active_trees() else {
+            return false;
+        };
+        let Some(active_layer_tree) = self.compositor.active_tree() else {
+            return false;
+        };
+        let mut new_trees = (*active_trees).clone();
+        // Root scroll node is always nodes[0] (guaranteed by PropertyTrees::empty()).
+        if let Some(root_scroll) = new_trees.scroll.nodes.first_mut() {
+            root_scroll.offset_x = (root_scroll.offset_x + delta_x).max(0.0);
+            root_scroll.offset_y = (root_scroll.offset_y + delta_y).max(0.0);
+        }
+        self.compositor.commit(Arc::new(new_trees), active_layer_tree);
+        // Promote immediately in the single-thread model (no separate compositor tick).
+        self.compositor.flush_pending();
+        true
+    }
+
     /// Загрузить HTML-строку без навигации по URL. Используется для тестов.
     pub fn navigate_html(&mut self, html: &str) -> Result<()> {
         self.run_pipeline(html.as_bytes(), Some("text/html"), "about:blank".to_owned())
@@ -207,6 +257,23 @@ impl InProcessSession {
 
         let layout_root = lumen_layout::layout_measured(&doc, &sheet, self.viewport, &measurer);
         let flat_tree = lumen_dom::build_flat_tree(&doc);
+
+        // Build property trees (PH1-7): four parallel trees (Transform / Scroll /
+        // Effect / Clip) from the completed layout root. Committed to the in-process
+        // compositor so that off-main-thread scroll can update offsets without relayout.
+        let property_trees = PropertyTrees::build(&layout_root);
+
+        // Build the page display list and commit it together with the property trees
+        // to the compositor (two-buffer model: pending → active on flush_pending).
+        let stacking_tree = StackingTree::build(&layout_root);
+        let paint_order = PaintOrder::from_tree(&stacking_tree);
+        let commands = lumen_paint::build_display_list_ordered(&layout_root, &stacking_tree, &paint_order);
+        let viewport_rect = lumen_core::geom::Rect::new(0.0, 0.0, self.viewport.width, self.viewport.height);
+        let layer_tree = BasicLayerTree::single_layer(viewport_rect, commands);
+        self.compositor.commit(Arc::new(property_trees.clone()), Arc::new(layer_tree));
+        // Flush immediately in the single-thread model so active trees are always
+        // current after navigation (no separate compositor tick needed).
+        self.compositor.flush_pending();
 
         self.current_url = url;
         self.state = Some(SessionState { doc, layout_root, flat_tree });
@@ -242,7 +309,9 @@ impl InProcessSession {
     #[cfg(feature = "cpu-render")]
     pub fn screenshot_cpu_rgba(&self) -> Result<lumen_image::Image> {
         let state = self.state()?;
-        let display_list = lumen_paint::build_display_list(&state.layout_root);
+        let tree = StackingTree::build(&state.layout_root);
+        let order = PaintOrder::from_tree(&tree);
+        let display_list = lumen_paint::build_display_list_ordered(&state.layout_root, &tree, &order);
         let width = self.viewport.width as u32;
         let height = self.viewport.height as u32;
         lumen_paint::Renderer::render_to_image_cpu(width, height, &display_list, &[], 0.0, 0.0)
@@ -261,6 +330,23 @@ impl InProcessSession {
         lumen_image::encode_png_rgba8(&image)
             .map_err(|e| Error::Other(format!("PNG encoding: {e}")))
     }
+
+    /// Строит [`lumen_paint::DisplayList`] из текущего состояния страницы.
+    ///
+    /// Используется в `CompareBackend` тестах (ADR-010 RB-8): тест загружает страницу
+    /// через InProcessSession, получает display list, затем рендерит его двумя
+    /// бэкендами через [`lumen_paint::CompareBackend`].
+    ///
+    /// # Errors
+    /// Возвращает `Err` если сессия не инициализирована (navigate() не вызывался).
+    pub fn display_list_for_compare(
+        &self,
+    ) -> Result<Vec<lumen_paint::DisplayCommand>> {
+        let state = self.state()?;
+        let tree = StackingTree::build(&state.layout_root);
+        let order = PaintOrder::from_tree(&tree);
+        Ok(lumen_paint::build_display_list_ordered(&state.layout_root, &tree, &order))
+    }
 }
 
 impl Default for InProcessSession {
@@ -275,8 +361,9 @@ impl BrowserSession for InProcessSession {
     fn screenshot(&self) -> Result<Vec<u8>> {
         let state = self.state()?;
 
-        // Build display list from layout tree.
-        let display_list = lumen_paint::build_display_list(&state.layout_root);
+        let tree = StackingTree::build(&state.layout_root);
+        let order = PaintOrder::from_tree(&tree);
+        let display_list = lumen_paint::build_display_list_ordered(&state.layout_root, &tree, &order);
 
         // Create headless renderer for off-screen rendering.
         let width = self.viewport.width as u32;
@@ -556,6 +643,24 @@ impl BrowserSession for InProcessSession {
     fn set_user_agent(&mut self, ua: &str) -> Result<()> {
         self.context.set_user_agent(ua)
     }
+
+    // ── Deterministic mode (Task 8F, Phase 1) ────────────────────────────────
+
+    fn set_clock(&mut self, mode: crate::ClockMode) -> Result<()> {
+        self.context.set_clock_mode(mode);
+        Ok(())
+    }
+
+    fn set_rng_seed(&mut self, seed: Option<u64>) -> Result<()> {
+        self.context.set_rng_seed(seed);
+        Ok(())
+    }
+
+    fn freeze_fingerprint(&mut self, profile: FingerprintProfile) -> Result<()> {
+        self.context.set_fingerprint_profile(profile)?;
+        self.context.freeze_fingerprint();
+        Ok(())
+    }
 }
 
 /// Adapter: InProcessSession также реализует базовый BrowserSession из lumen-core::ext.
@@ -593,10 +698,12 @@ impl lumen_core::ext::BrowserSession for InProcessSession {
     }
 
     fn scroll_by(&mut self, delta: f32) -> Result<f32> {
-        // Phase 1: прокрутка документа (требует persistent window state).
-        // Пока что заглушка — возвращаем текущую позицию (всегда 0).
-        let _ = delta;
-        Ok(0.0)
+        // PH1-7: off-main-thread page scroll via compositor (no relayout).
+        self.scroll_page_by(0.0, delta);
+        let offset_y = self.compositor.active_trees()
+            .and_then(|t| t.scroll.nodes.first().map(|n| n.offset_y))
+            .unwrap_or(0.0);
+        Ok(offset_y)
     }
 
     fn wait_for_navigation(&mut self) -> Result<String> {
@@ -628,6 +735,59 @@ impl lumen_core::ext::BrowserSession for InProcessSession {
 
     fn eval(&mut self, script: &str) -> Result<String> {
         <Self as BrowserSession>::eval(self, script)
+    }
+
+    fn set_clock(&mut self, mode: lumen_core::ClockMode) -> Result<()> {
+        self.context.set_clock_mode(mode);
+        Ok(())
+    }
+
+    fn set_rng_seed(&mut self, seed: Option<u64>) -> Result<()> {
+        self.context.set_rng_seed(seed);
+        Ok(())
+    }
+
+    fn deliver_lcp_entry(
+        &mut self,
+        element_id: i32,
+        size: u32,
+        start_ms: f64,
+        render_time_ms: f64,
+    ) -> Result<()> {
+        let script = format!(
+            "_lumen_deliver_lcp_entry({}, {}, {}, {})",
+            element_id, size, start_ms, render_time_ms
+        );
+        self.eval(&script)?;
+        Ok(())
+    }
+
+    fn deliver_layout_shift(&mut self, value: f64, session_id: u32, had_input: bool) -> Result<()> {
+        let script = format!(
+            "_lumen_deliver_layout_shift({}, {}, {})",
+            value, session_id, had_input as u8
+        );
+        self.eval(&script)?;
+        Ok(())
+    }
+
+    fn deliver_perf_entry(
+        &mut self,
+        entry_type: &str,
+        name: &str,
+        start_ms: f64,
+        duration_ms: f64,
+        detail_json: Option<&str>,
+    ) -> Result<()> {
+        let detail = detail_json.unwrap_or("null");
+        // {:?} produces a Rust Debug string which is a valid JS double-quoted literal
+        // for the ASCII/UTF-8 entry type and name values used in practice.
+        let script = format!(
+            "_lumen_deliver_perf_entry({:?}, {:?}, {}, {}, {})",
+            entry_type, name, start_ms, duration_ms, detail
+        );
+        self.eval(&script)?;
+        Ok(())
     }
 }
 
@@ -948,6 +1108,21 @@ fn resolve_target_point(state: &SessionState, target: &Target) -> Result<(f32, f
 }
 
 impl InProcessSession {
+    /// Возвращает полный набор computed-style свойств первого элемента,
+    /// совпадающего с `selector`, в виде JSON-объекта (`{"prop":"value",...}`).
+    ///
+    /// Используется панелью DevTools «Computed» (lumen-plan §7E.2). В отличие от
+    /// [`computed_style`](lumen_core::ext::BrowserSession::computed_style)
+    /// (≈13 свойств), охватывает ~70 свойств `ComputedStyle` через
+    /// `lumen_layout::computed_style_json`. Ключи отсортированы (детерминизм).
+    ///
+    /// Ошибка [`Error::NotFound`], если ни один элемент не совпал с селектором.
+    pub fn computed_style_json(&self, selector: &str) -> Result<String> {
+        let state = self.state()?;
+        lumen_layout::computed_style_json_by_selector(&state.layout_root, &state.doc, selector)
+            .ok_or_else(|| Error::NotFound(format!("элемент не найден: {selector}")))
+    }
+
     /// Проверить выполнение условия ожидания.
     fn check_wait_condition(&self, cond: &WaitCondition) -> Result<bool> {
         match cond {
@@ -1293,6 +1468,26 @@ mod tests {
     }
 
     #[test]
+    fn computed_style_json_full_map() {
+        let s = make_session(r#"<html><body><div id="x" style="color:red;font-size:20px"></div></body></html>"#);
+        let json_str = s.computed_style_json("#x").expect("computed_style_json");
+        let obj: serde_json::Value =
+            serde_json::from_str(&json_str).expect("valid JSON object");
+        let map = obj.as_object().expect("object");
+        // Full map covers far more than the ~13-property BrowserSession::computed_style.
+        assert!(map.len() > 30, "expected full property map, got {}", map.len());
+        assert_eq!(map["color"], "rgb(255, 0, 0)");
+        assert_eq!(map["font-size"], "20px");
+        assert_eq!(map["display"], "block");
+    }
+
+    #[test]
+    fn computed_style_json_missing_selector_errors() {
+        let s = make_session(r#"<html><body><div></div></body></html>"#);
+        assert!(s.computed_style_json("#nope").is_err());
+    }
+
+    #[test]
     fn core_session_viewport() {
         let s = make_session("<html><body></body></html>");
         let (w, h) = lumen_core::ext::BrowserSession::viewport(&s);
@@ -1343,5 +1538,100 @@ mod tests {
             s.build_http_client().fingerprint_profile(),
             lumen_network::HttpProfile::Strict
         );
+    }
+
+    #[test]
+    fn set_clock_frozen_stores_timestamp() {
+        let mut sess = InProcessSession::new();
+        lumen_core::ext::BrowserSession::set_clock(&mut sess, lumen_core::ClockMode::Frozen(1_700_000_000_000)).unwrap();
+        assert_eq!(sess.context.frozen_clock_ms(), Some(1_700_000_000_000));
+    }
+
+    #[test]
+    fn set_clock_real_clears_timestamp() {
+        let mut sess = InProcessSession::new();
+        lumen_core::ext::BrowserSession::set_clock(&mut sess, lumen_core::ClockMode::Frozen(42)).unwrap();
+        lumen_core::ext::BrowserSession::set_clock(&mut sess, lumen_core::ClockMode::Real).unwrap();
+        assert_eq!(sess.context.frozen_clock_ms(), None);
+    }
+
+    #[test]
+    fn set_rng_seed_stores_and_clears() {
+        let mut sess = InProcessSession::new();
+        lumen_core::ext::BrowserSession::set_rng_seed(&mut sess, Some(12345)).unwrap();
+        assert_eq!(sess.context.rng_seed(), Some(12345));
+        lumen_core::ext::BrowserSession::set_rng_seed(&mut sess, None).unwrap();
+        assert_eq!(sess.context.rng_seed(), None);
+    }
+
+    // ── Deterministic mode (8F) driver trait tests ────────────────────────────
+
+    #[test]
+    fn driver_set_clock_frozen() {
+        let mut sess = InProcessSession::new();
+        BrowserSession::set_clock(&mut sess, crate::ClockMode::Frozen(999_000)).unwrap();
+        assert_eq!(sess.context.frozen_clock_ms(), Some(999_000));
+    }
+
+    #[test]
+    fn driver_set_clock_real_clears() {
+        let mut sess = InProcessSession::new();
+        BrowserSession::set_clock(&mut sess, crate::ClockMode::Frozen(1)).unwrap();
+        BrowserSession::set_clock(&mut sess, crate::ClockMode::Real).unwrap();
+        assert_eq!(sess.context.frozen_clock_ms(), None);
+    }
+
+    #[test]
+    fn driver_set_clock_monotonic_advances() {
+        use lumen_core::ext::ClockMode;
+        let mut sess = InProcessSession::new();
+        BrowserSession::set_clock(&mut sess, ClockMode::Monotonic { step_ms: 10 }).unwrap();
+        // First read returns 0.
+        assert_eq!(sess.context.read_clock_ms(), Some(0));
+        // Second read advances by step_ms.
+        assert_eq!(sess.context.read_clock_ms(), Some(10));
+        assert_eq!(sess.context.read_clock_ms(), Some(20));
+    }
+
+    #[test]
+    fn driver_set_rng_seed() {
+        let mut sess = InProcessSession::new();
+        BrowserSession::set_rng_seed(&mut sess, Some(42)).unwrap();
+        assert_eq!(sess.context.rng_seed(), Some(42));
+        BrowserSession::set_rng_seed(&mut sess, None).unwrap();
+        assert_eq!(sess.context.rng_seed(), None);
+    }
+
+    #[test]
+    fn driver_freeze_fingerprint_locks_profile() {
+        let mut sess = InProcessSession::new();
+        BrowserSession::freeze_fingerprint(&mut sess, FingerprintProfile::Strict).unwrap();
+        assert_eq!(sess.fingerprint_profile(), FingerprintProfile::Strict);
+        // Profile is now locked — change must fail.
+        assert!(BrowserSession::set_fingerprint_profile(&mut sess, FingerprintProfile::Standard).is_err());
+    }
+
+    #[test]
+    fn driver_freeze_fingerprint_standard_profile() {
+        let mut sess = InProcessSession::new();
+        BrowserSession::freeze_fingerprint(&mut sess, FingerprintProfile::Standard).unwrap();
+        assert_eq!(sess.fingerprint_profile(), FingerprintProfile::Standard);
+        assert!(sess.context.is_fingerprint_frozen());
+    }
+
+    #[test]
+    fn deterministic_config_apply() {
+        use crate::determinism::DeterministicConfig;
+        let mut sess = InProcessSession::new();
+        let cfg = DeterministicConfig {
+            clock: crate::ClockMode::Frozen(1234),
+            rng_seed: Some(99),
+            freeze_fingerprint: Some(FingerprintProfile::Strict),
+        };
+        cfg.apply(&mut sess).unwrap();
+        assert_eq!(sess.context.frozen_clock_ms(), Some(1234));
+        assert_eq!(sess.context.rng_seed(), Some(99));
+        assert_eq!(sess.fingerprint_profile(), FingerprintProfile::Strict);
+        assert!(sess.context.is_fingerprint_frozen());
     }
 }

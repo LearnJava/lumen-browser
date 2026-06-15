@@ -26,7 +26,8 @@ lumen-html-parser = { workspace = true }
 lumen-css-parser = { workspace = true }
 lumen-dom = { workspace = true }
 lumen-layout = { workspace = true }
-lumen-paint = { workspace = true }
+# backend-wgpu: driver uses Renderer directly for headless GPU snapshots (WinitSession).
+lumen-paint = { workspace = true, features = ["backend-wgpu"] }
 lumen-a11y = { workspace = true }
 lumen-font = { workspace = true }
 lumen-image = { workspace = true }
@@ -44,3 +45,7 @@ serde_json = "1.0"
 # lumen-paint's tiny-skia path so InProcessSession can render cross-OS-identical
 # pixels without a GPU. Off by default; enable with --features cpu-render.
 cpu-render = ["lumen-paint/cpu-render"]
+
+# CompareBackend integration tests (ADR-010 RB-8): enables CompareBackend + CpuBackend
+# for pixel-diff comparison between two headless backends.
+compare-backends = ["lumen-paint/compare"]

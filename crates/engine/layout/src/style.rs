@@ -14,16 +14,44 @@
 //! вложенными `a`-предками могут промахнуться — это известное упрощение, до
 //! фазы со «честным» Selectors-движком.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
+use crate::color_mix::{MixColorSpace, mix_colors};
+use crate::rule_index::RuleIndex;
+use crate::scroll_timeline::ScrollAxis;
+
 use lumen_core::geom::Size;
+use lumen_core::ColorSpace;
 use lumen_css_parser::{
     parse_inline_style, AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector,
     Declaration, DirArg, MediaContext, PropertyRule, PseudoClass, PseudoElementKind, SimpleSelector, Specificity,
-    Stylesheet,
+    Stylesheet, SUPPORTED_PROPERTIES,
 };
 use lumen_dom::{Attribute, Document, DocumentMode, NodeData, NodeId};
+
+thread_local! {
+    /// Per-thread rule-index cache. Keyed by (sheet pointer, rules count) to
+    /// detect stylesheet changes between layout passes. Rebuilt only when the
+    /// key changes; reused for every node in the same pass (O(1) amortised).
+    ///
+    /// SAFETY: raw-pointer keys are vulnerable to address reuse across sessions
+    /// (freed sheet → new session → same address). Call `invalidate_rule_idx_cache`
+    /// at the start of every layout pass to prevent stale hits.
+    static RULE_IDX_CACHE: RefCell<(usize, usize, RuleIndex)> =
+        RefCell::new((0, 0, RuleIndex::empty()));
+}
+
+/// Invalidate the thread-local rule-index cache.
+///
+/// Must be called at the start of every layout pass (`layout_measured_hyp`).
+/// Without this call the raw-pointer key can match a freed stylesheet when a
+/// new one is allocated at the same address, returning a stale index.
+pub fn invalidate_rule_idx_cache() {
+    RULE_IDX_CACHE.with(|cell| {
+        cell.borrow_mut().0 = 0; // pointer 0 never matches a real sheet
+    });
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Display {
@@ -512,6 +540,29 @@ pub enum TextDecorationThickness {
     Percentage(f32),
 }
 
+/// CSS Text Decoration L4 §3.5 — `text-decoration-skip-ink`. Controls whether
+/// underlines and overlines skip over glyph ink (descenders).
+///
+/// Spec inherited: yes. Initial: `Auto`.
+///
+/// - `Auto` — UA may skip underlines/overlines where they cross glyph ink.
+///   Only characters with known ink below baseline (g, j, p, q, y, Q, J)
+///   receive gaps. Applies to underlines; overlines are unaffected (they sit
+///   above the cap height in normal text).
+/// - `All` — UA must skip over all glyphs, including those wholly above/below
+///   the decoration line (more aggressive than Auto).
+/// - `None` — Never skip; decoration is always a continuous line.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TextDecorationSkipInk {
+    /// Skip where decoration crosses glyph descenders (default).
+    #[default]
+    Auto,
+    /// Skip over all glyphs, even those above/below the line.
+    All,
+    /// Never skip; draw a continuous line.
+    None,
+}
+
 /// CSS Text Decoration L4 §5.3 — `text-emphasis-style`. Форма emphasis-marks
 /// (точечный набор над/под глифами).
 ///
@@ -605,8 +656,9 @@ pub enum ForcedColorAdjust {
 
 /// CSS Color Adjustment L1 §3 — `color-scheme`. Inherited. Initial: `Normal`.
 /// Подсказывает UA, какую цветовую тему поддерживает элемент.
-/// Phase 0: parse + store; реальное переключение системных цветов / UA-тем
-/// (`Canvas`, `ButtonFace` и т.д.) — отдельная задача с согласованием P2.
+/// Используется через [`ColorScheme::used_dark`] для определения «used
+/// color scheme» (§2.3) и через [`system_color`] для резолва системных
+/// цветовых ключевых слов (`Canvas`, `ButtonFace` и т.д.).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ColorScheme {
     /// `normal` — элемент не заявляет предпочтений; UA выбирает самостоятельно.
@@ -624,6 +676,31 @@ pub enum ColorScheme {
     OnlyLight,
     /// `only dark` — только тёмная тема.
     OnlyDark,
+}
+
+impl ColorScheme {
+    /// CSS Color Adjustment L1 §2.3 — резолвит «used color scheme» элемента
+    /// в булев флаг «тёмная тема».
+    ///
+    /// `prefer_dark` — предпочтение пользователя / ОС (`@media
+    /// (prefers-color-scheme: dark)`, в shell — `Lumen.dark_mode`).
+    ///
+    /// Алгоритм:
+    /// - `light` / `only light` → всегда светлая (форсирует тему, игнорируя ОС);
+    /// - `dark` / `only dark` → всегда тёмная;
+    /// - `normal` / `light dark` / `dark light` → следуют предпочтению ОС.
+    ///   `normal` рендерится в дефолтной теме UA, которая у Lumen совпадает
+    ///   с предпочтением ОС (страница без `color-scheme` темнеет в dark-mode).
+    ///
+    /// Возвращает `true`, если элемент должен рендериться в тёмной теме.
+    #[must_use]
+    pub fn used_dark(self, prefer_dark: bool) -> bool {
+        match self {
+            ColorScheme::Light | ColorScheme::OnlyLight => false,
+            ColorScheme::Dark | ColorScheme::OnlyDark => true,
+            ColorScheme::Normal | ColorScheme::LightDark | ColorScheme::DarkLight => prefer_dark,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -656,14 +733,6 @@ impl Color {
 }
 
 /// CSS Color L4 §10 — цветовое пространство для wide-gamut значений.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ColorSpace {
-    #[default]
-    Srgb,
-    DisplayP3,
-    Rec2020,
-}
-
 /// Wide-gamut цвет с float-каналами [0..1 для in-gamut, за пределами — out-of-gamut].
 /// Используется для `color(display-p3 …)`, `color(rec2020 …)`, `color(srgb …)`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -733,6 +802,85 @@ impl ColorFloat {
     }
 }
 
+/// CSS Color L4 §17 — XYZ (D65) → linear sRGB (sRGB primary matrix, CIE 1931).
+/// Constants match the D65→linear-sRGB block already used in `lab_to_srgb`.
+fn xyz_d65_to_srgb_linear(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
+    let lr = 3.240_625_5 * x - 1.537_208 * y - 0.498_628_6 * z;
+    let lg = -0.968_930_7 * x + 1.875_756_1 * y + 0.041_517_5 * z;
+    let lb = 0.055_710_1 * x - 0.204_021_1 * y + 1.056_995_9 * z;
+    (lr, lg, lb)
+}
+
+/// CSS Color L4 §11 — Bradford D50 → D65 chromatic adaptation of XYZ.
+/// Constants match the D50→D65 block already used in `lab_to_srgb`.
+fn xyz_d50_to_d65(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
+    let xn = 0.955_576_6 * x - 0.023_039_3 * y + 0.063_163_6 * z;
+    let yn = -0.028_289_5 * x + 1.009_941_6 * y + 0.021_007_7 * z;
+    let zn = 0.012_298_2 * x - 0.020_483_0 * y + 1.329_909_8 * z;
+    (xn, yn, zn)
+}
+
+/// CSS Color L4 §10 — convert a non-displayable predefined `color()` space to
+/// linear sRGB. `c1`/`c2`/`c3` are the raw channel values. Returns `None` for
+/// an unknown space token (caller treats the whole `color()` as invalid).
+///
+/// Displayable spaces (`srgb`/`display-p3`/`rec2020`) are *not* handled here —
+/// they are stored verbatim as `ColorFloat` to preserve linear precision for
+/// GPU paint. The spaces below have no sRGB-displayable representation, so they
+/// are gamut-mapped to sRGB at parse time.
+fn predefined_to_srgb_linear(space: &str, c1: f32, c2: f32, c3: f32) -> Option<(f32, f32, f32)> {
+    Some(match space {
+        // Linear-light sRGB primaries — channels are already linear sRGB.
+        "srgb-linear" => (c1, c2, c3),
+        // Adobe RGB (1998): gamma 563/256, then A98 linear → XYZ(D65) → sRGB.
+        "a98-rgb" => {
+            let dec = |c: f32| c.signum() * c.abs().powf(563.0 / 256.0);
+            let (r, g, b) = (dec(c1), dec(c2), dec(c3));
+            let x = 0.576_669 * r + 0.185_558 * g + 0.188_229 * b;
+            let y = 0.297_345 * r + 0.627_364 * g + 0.075_291 * b;
+            let z = 0.027_031 * r + 0.070_689 * g + 0.991_338 * b;
+            xyz_d65_to_srgb_linear(x, y, z)
+        }
+        // ProPhoto RGB: gamma 1.8 (linear toe below 16·Et), linear → XYZ(D50)
+        // → D65 → sRGB.
+        "prophoto-rgb" => {
+            let dec = |c: f32| {
+                if c.abs() <= 16.0 / 512.0 {
+                    c / 16.0
+                } else {
+                    c.signum() * c.abs().powf(1.8)
+                }
+            };
+            let (r, g, b) = (dec(c1), dec(c2), dec(c3));
+            let x = 0.797_761 * r + 0.135_186 * g + 0.031_349 * b;
+            let y = 0.288_071 * r + 0.711_843 * g + 0.000_086 * b;
+            let z = 0.825_105 * b;
+            let (x65, y65, z65) = xyz_d50_to_d65(x, y, z);
+            xyz_d65_to_srgb_linear(x65, y65, z65)
+        }
+        // CIE XYZ with a D65 white point (`xyz` is an alias for `xyz-d65`).
+        "xyz" | "xyz-d65" => xyz_d65_to_srgb_linear(c1, c2, c3),
+        // CIE XYZ with a D50 white point — adapt to D65 first.
+        "xyz-d50" => {
+            let (x65, y65, z65) = xyz_d50_to_d65(c1, c2, c3);
+            xyz_d65_to_srgb_linear(x65, y65, z65)
+        }
+        _ => return None,
+    })
+}
+
+/// Linear sRGB → gamma sRGB float in [0,1] (IEC 61966-2-1). Float twin of
+/// [`encode_srgb`], used to store gamut-mapped wide-gamut colours back into a
+/// `ColorFloat` with `space = Srgb`.
+fn encode_srgb_f32(c: f32) -> f32 {
+    let c = c.clamp(0.0, 1.0);
+    if c <= 0.003_130_8 {
+        12.92 * c
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
 /// Display P3 linear → sRGB linear (ICC/CSS Color L4 §10.9 matrix).
 fn p3_linear_to_srgb_linear(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
     let sr =  1.224_94 * r - 0.224_94 * g;
@@ -769,25 +917,155 @@ fn rec2020_gamma_decode(c: f32) -> f32 {
     }
 }
 
+/// CSS Color Level 4 §6.2 — system color keywords. Stored as a `Copy` enum to
+/// avoid heap allocation in `CssColor`. Resolved to a concrete RGB at cascade
+/// used-value time via `system_color()`, not at parse time, so the element's
+/// used color scheme (`light`/`dark`) is taken into account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemColor {
+    /// `Canvas` / `Window`
+    Canvas,
+    /// `CanvasText` / `WindowText` / `FieldText`
+    CanvasText,
+    /// `Field` (input/textarea backgrounds)
+    Field,
+    /// `ButtonFace`
+    ButtonFace,
+    /// `ButtonText`
+    ButtonText,
+    /// `ButtonBorder` / `ThreeDFace`
+    ButtonBorder,
+    /// `LinkText`
+    LinkText,
+    /// `VisitedText`
+    VisitedText,
+    /// `ActiveText`
+    ActiveText,
+    /// `Highlight` / `SelectedItem`
+    Highlight,
+    /// `HighlightText` / `SelectedItemText`
+    HighlightText,
+    /// `GrayText` / `GreyText`
+    GrayText,
+    /// `Mark`
+    Mark,
+    /// `MarkText`
+    MarkText,
+    /// `AccentColor`
+    AccentColor,
+    /// `AccentColorText`
+    AccentColorText,
+    /// `ThreeDHighlight`
+    ThreeDHighlight,
+    /// `ThreeDShadow`
+    ThreeDShadow,
+    /// `ThreeDLightShadow`
+    ThreeDLightShadow,
+    /// `ThreeDDarkShadow`
+    ThreeDDarkShadow,
+    /// `Scrollbar`
+    Scrollbar,
+    /// `ScrollbarTrack`
+    ScrollbarTrack,
+    /// `ScrollbarThumb`
+    ScrollbarThumb,
+}
+
+impl SystemColor {
+    /// Parse a CSS system color keyword (case-insensitive). Returns `None` for
+    /// non-system-color strings; aliases are normalised to their canonical variant.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "canvas" | "window" => Some(Self::Canvas),
+            "canvastext" | "windowtext" | "fieldtext" => Some(Self::CanvasText),
+            "field" => Some(Self::Field),
+            "buttonface" => Some(Self::ButtonFace),
+            "buttontext" => Some(Self::ButtonText),
+            "buttonborder" | "threedface" => Some(Self::ButtonBorder),
+            "linktext" => Some(Self::LinkText),
+            "visitedtext" => Some(Self::VisitedText),
+            "activetext" => Some(Self::ActiveText),
+            "highlight" | "selecteditem" => Some(Self::Highlight),
+            "highlighttext" | "selecteditemtext" => Some(Self::HighlightText),
+            "graytext" | "greytext" => Some(Self::GrayText),
+            "mark" => Some(Self::Mark),
+            "marktext" => Some(Self::MarkText),
+            "accentcolor" => Some(Self::AccentColor),
+            "accentcolortext" => Some(Self::AccentColorText),
+            "threedhighlight" => Some(Self::ThreeDHighlight),
+            "threedshadow" => Some(Self::ThreeDShadow),
+            "threedlightshadow" => Some(Self::ThreeDLightShadow),
+            "threeddarkshadow" => Some(Self::ThreeDDarkShadow),
+            "scrollbar" => Some(Self::Scrollbar),
+            "scrollbartrack" => Some(Self::ScrollbarTrack),
+            "scrollbarthumb" => Some(Self::ScrollbarThumb),
+            _ => None,
+        }
+    }
+
+    /// Returns the canonical lowercase CSS keyword name for this variant.
+    fn css_name(self) -> &'static str {
+        match self {
+            Self::Canvas => "canvas",
+            Self::CanvasText => "canvastext",
+            Self::Field => "field",
+            Self::ButtonFace => "buttonface",
+            Self::ButtonText => "buttontext",
+            Self::ButtonBorder => "buttonborder",
+            Self::LinkText => "linktext",
+            Self::VisitedText => "visitedtext",
+            Self::ActiveText => "activetext",
+            Self::Highlight => "highlight",
+            Self::HighlightText => "highlighttext",
+            Self::GrayText => "graytext",
+            Self::Mark => "mark",
+            Self::MarkText => "marktext",
+            Self::AccentColor => "accentcolor",
+            Self::AccentColorText => "accentcolortext",
+            Self::ThreeDHighlight => "threedhighlight",
+            Self::ThreeDShadow => "threedshadow",
+            Self::ThreeDLightShadow => "threedlightshadow",
+            Self::ThreeDDarkShadow => "threeddarkshadow",
+            Self::Scrollbar => "scrollbar",
+            Self::ScrollbarTrack => "scrollbartrack",
+            Self::ScrollbarThumb => "scrollbarthumb",
+        }
+    }
+
+    /// Resolve to a concrete sRGB `Color` for the given used color scheme.
+    /// `dark` — result of `ColorScheme::used_dark(prefer_dark)` for this element.
+    pub fn resolve_color(self, dark: bool) -> Color {
+        system_color(self.css_name(), dark)
+            .unwrap_or(Color { r: 0, g: 0, b: 0, a: 255 })
+    }
+}
+
 /// CSS Color L4 §4.2 — типизированное цветовое значение каскада.
 ///
 /// `Rgba` — разрешённый конкретный цвет; `CurrentColor` — keyword `currentcolor`,
 /// который разрешается в вычисленное значение `color` элемента при рендеринге.
 /// `Wide` — wide-gamut цвет из `color()` функции (Display P3, Rec2020, sRGB float).
+/// `System` — CSS Color 4 §6.2 system color keyword; resolved to Rgba at cascade
+/// used-value time by `resolve_system_colors` at the end of `compute_style`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CssColor {
     Rgba(Color),
     CurrentColor,
     Wide(ColorFloat),
+    /// System color keyword (e.g. `Canvas`, `ButtonFace`). Resolved to `Rgba`
+    /// at the end of `compute_style` via `resolve_system_colors_in_style`.
+    System(SystemColor),
 }
 
 impl CssColor {
     /// Разрешает значение в sRGB u8 Color. `Wide` конвертируется через матрицу.
+    /// `System` — fallback light-mode resolution (post-pass should have resolved).
     pub fn resolve(self, current_color: Color) -> Color {
         match self {
             CssColor::Rgba(c) => c,
             CssColor::CurrentColor => current_color,
             CssColor::Wide(f) => f.to_srgb_color(),
+            CssColor::System(sc) => sc.resolve_color(false),
         }
     }
 
@@ -798,6 +1076,7 @@ impl CssColor {
             CssColor::Rgba(c) => Some(c),
             CssColor::Wide(f) => Some(f.to_srgb_color()),
             CssColor::CurrentColor => None,
+            CssColor::System(sc) => Some(sc.resolve_color(false)),
         }
     }
 
@@ -820,6 +1099,15 @@ impl CssColor {
                 ]
             }
             CssColor::Wide(f) => f.to_linear_srgb(),
+            CssColor::System(sc) => {
+                let c = sc.resolve_color(false);
+                [
+                    srgb_gamma_decode(c.r as f32 / 255.0),
+                    srgb_gamma_decode(c.g as f32 / 255.0),
+                    srgb_gamma_decode(c.b as f32 / 255.0),
+                    c.a as f32 / 255.0,
+                ]
+            }
         }
     }
 }
@@ -851,6 +1139,166 @@ impl SvgPaint {
             SvgPaint::None => None,
             SvgPaint::CurrentColor => Some(current_color),
             SvgPaint::Color(c) => Some(c),
+        }
+    }
+}
+
+/// CSS Tables L2 §17.6 — `border-collapse`. Inherited. Initial: `Separate`.
+/// Controls whether adjacent cell borders are merged (`collapse`) or kept separate (`separate`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BorderCollapse {
+    /// Each cell has its own borders separated by `border-spacing`.
+    #[default]
+    Separate,
+    /// Adjacent borders are merged into a single shared border (no `border-spacing`).
+    Collapse,
+}
+
+impl BorderCollapse {
+    /// Parse CSS keyword; returns `None` for unrecognised values.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "separate" => Some(Self::Separate),
+            "collapse" => Some(Self::Collapse),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Tables L2 §17.6.1.1 — `empty-cells`. Inherited. Initial: `Show`.
+/// In the separated-borders model, controls whether borders and backgrounds
+/// are drawn around table cells that have no in-flow content. Has no effect
+/// when `border-collapse: collapse`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EmptyCells {
+    /// Empty cells are painted normally (borders + background drawn).
+    #[default]
+    Show,
+    /// Empty cells suppress their borders and background.
+    Hide,
+}
+
+impl EmptyCells {
+    /// Parse CSS keyword; returns `None` for unrecognised values.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "show" => Some(Self::Show),
+            "hide" => Some(Self::Hide),
+            _ => None,
+        }
+    }
+}
+
+/// SVG §11.3 — `fill-rule`. Inherited. Initial: `NonZero`.
+/// Controls how the interior of a shape is determined for overlapping contours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FillRule {
+    /// Nonzero winding rule: count crossings, fill if winding number ≠ 0.
+    #[default]
+    NonZero,
+    /// Even-odd rule: count crossings, fill if count is odd.
+    EvenOdd,
+}
+
+/// SVG §11.4 — `stroke-linecap`. Inherited. Initial: `Butt`.
+/// Shape of the cap at the end of open sub-paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StrokeLinecap {
+    /// Flat cap exactly at the endpoint (default).
+    #[default]
+    Butt,
+    /// Semicircular cap extending `stroke-width/2` past the endpoint.
+    Round,
+    /// Rectangular cap extending `stroke-width/2` past the endpoint.
+    Square,
+}
+
+/// SVG §11.4 — `stroke-linejoin`. Inherited. Initial: `Miter`.
+/// Shape of join between connected path segments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StrokeLinejoin {
+    /// Pointed join, bounded by `stroke-miterlimit` (default).
+    #[default]
+    Miter,
+    /// Circular join.
+    Round,
+    /// Flat bevel cut at the join.
+    Bevel,
+}
+
+/// CSS Fill & Stroke L3 §6 / SVG 2 §13.7 — one component of `paint-order`.
+/// Identifies which of fill, stroke or markers occupies a given paint slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaintOrderSlot {
+    /// The element's fill.
+    Fill,
+    /// The element's stroke.
+    Stroke,
+    /// SVG markers. Lumen does not yet render markers; the slot is preserved so
+    /// that fill/stroke ordering around it stays spec-correct.
+    Markers,
+}
+
+/// CSS Fill & Stroke L3 §6 / SVG 2 §13.7 — `paint-order`. Inherited.
+/// Resolved order in which the three components are painted, first slot drawn
+/// first (so the last slot ends up on top). Initial value `normal` resolves to
+/// `[Fill, Stroke, Markers]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SvgPaintOrder(pub [PaintOrderSlot; 3]);
+
+impl Default for SvgPaintOrder {
+    fn default() -> Self {
+        Self([PaintOrderSlot::Fill, PaintOrderSlot::Stroke, PaintOrderSlot::Markers])
+    }
+}
+
+impl SvgPaintOrder {
+    /// Parses `normal | [ fill || stroke || markers ]` (CSS Fill & Stroke L3 §6).
+    /// Returns `None` for an unknown token or a repeated component. Components
+    /// omitted from an otherwise-valid list are appended in the canonical
+    /// `fill, stroke, markers` order, as the spec requires.
+    pub fn parse(value: &str) -> Option<Self> {
+        use PaintOrderSlot::{Fill, Markers, Stroke};
+        let v = value.trim();
+        if v.eq_ignore_ascii_case("normal") {
+            return Some(Self::default());
+        }
+        let mut order: Vec<PaintOrderSlot> = Vec::with_capacity(3);
+        for tok in v.split_whitespace() {
+            let slot = if tok.eq_ignore_ascii_case("fill") {
+                Fill
+            } else if tok.eq_ignore_ascii_case("stroke") {
+                Stroke
+            } else if tok.eq_ignore_ascii_case("markers") {
+                Markers
+            } else {
+                return None;
+            };
+            if order.contains(&slot) {
+                return None; // repeated component — invalid per grammar
+            }
+            order.push(slot);
+        }
+        if order.is_empty() {
+            return None;
+        }
+        for slot in [Fill, Stroke, Markers] {
+            if !order.contains(&slot) {
+                order.push(slot);
+            }
+        }
+        Some(Self([order[0], order[1], order[2]]))
+    }
+
+    /// True when fill is painted before stroke (so the stroke is drawn on top).
+    /// Markers are ignored — Lumen does not render them. Default `normal`
+    /// (fill, stroke, markers) returns `true`; `paint-order: stroke` → `false`.
+    pub fn fill_before_stroke(&self) -> bool {
+        let fill_idx = self.0.iter().position(|s| *s == PaintOrderSlot::Fill);
+        let stroke_idx = self.0.iter().position(|s| *s == PaintOrderSlot::Stroke);
+        match (fill_idx, stroke_idx) {
+            (Some(f), Some(s)) => f <= s,
+            _ => true,
         }
     }
 }
@@ -1702,6 +2150,26 @@ impl AnimationPlayState {
     }
 }
 
+/// CSS Scroll-Driven Animations L1 §3.3 — `animation-timeline` CSS value.
+///
+/// Parsed from `animation-timeline: auto | scroll([axis] [scroller]) | view([axis]) | <custom-ident>`.
+/// Stored per-animation parallel to `animation_names`. Resolution to a concrete
+/// `ScrollTimeline` / `ViewTimeline` happens at runtime in the animation scheduler.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum AnimationTimeline {
+    /// Default: time-driven animation (normal `@keyframes` clock).
+    #[default]
+    Auto,
+    /// `scroll([<axis>] [nearest | root | self])` — scroll container progress.
+    /// `nearest: true` = nearest scroll ancestor (default); `false` = root viewport.
+    Scroll { axis: ScrollAxis, nearest: bool },
+    /// `view([<axis>])` — element visibility in scroll container (cover range).
+    View { axis: ScrollAxis },
+    /// `<custom-ident>` — matched against `scroll-timeline-name` / `view-timeline-name`
+    /// at runtime.
+    Named(String),
+}
+
 /// CSS-wide keywords (CSS Cascade L4 §7) — применимы к любому свойству.
 /// - `Inherit` — взять computed value родителя.
 /// - `Initial` — взять initial value свойства из спецификации.
@@ -1814,9 +2282,16 @@ pub struct ComputedStyle {
     /// Initial: `OverRight` (horizontal writing-mode).
     pub text_emphasis_position: TextEmphasisPosition,
     /// CSS Text Decoration L3 §6.1 / L4 §5.1 — `text-underline-position`.
-    /// Inherited. Initial: `Auto`. Phase 0: parse + store; реальный offset
-    /// при рисовании underline — задача P2.
+    /// Inherited. Initial: `Auto`. Controls whether underline is placed below
+    /// the alphabetic baseline (`Under`) or uses font metrics (`FromFont`).
     pub text_underline_position: TextUnderlinePosition,
+    /// CSS Text Decoration L4 §5.3 — `text-underline-offset`. Inherited.
+    /// Initial: `None` (auto ≡ 0). `Some(px)` = additional offset added to
+    /// the intrinsic underline position. Positive shifts down (away from text).
+    pub text_underline_offset: Option<f32>,
+    /// CSS Text Decoration L4 §3.5 — `text-decoration-skip-ink`. Inherited.
+    /// Initial: `Auto`. Controls whether underlines skip over glyph descenders.
+    pub text_decoration_skip_ink: TextDecorationSkipInk,
     /// Явная ширина (CSS `width`). `None` = auto. Typed `Length`; `%`
     /// резолвится при layout с known cb_width.
     pub width: Option<Length>,
@@ -1916,6 +2391,9 @@ pub struct ComputedStyle {
     /// CSS Overflow L3 — отдельные поля для X и Y. Не наследуются.
     pub overflow_x: Overflow,
     pub overflow_y: Overflow,
+    /// CSS Overflow L3 §overflow-clip-margin — расширяет clip region при overflow:clip.
+    /// Default: 0px. Не наследуется.
+    pub overflow_clip_margin: Option<Length>,
     /// CSS UI L4 §10.1 — text-overflow. Не наследуется.
     pub text_overflow: TextOverflow,
     /// CSS Color L3 §3.2 — opacity (0.0..=1.0). Не наследуется. Работает
@@ -1965,6 +2443,11 @@ pub struct ComputedStyle {
     /// CSS Lists L3 §3 — `counter-increment: name [N]?`. Каждый element
     /// инкрементирует названный counter на N (default +1). Не наследуется.
     pub counter_increment: Vec<(String, i32)>,
+    /// CSS Lists L3 §4 — `counter-set: name [N]?`. Каждый element
+    /// устанавливает названный counter в N (default 0). Не наследуется.
+    /// Применяется ПОСЛЕ counter-reset и counter-increment (порядок по spec).
+    /// Если счётчика с таким именем нет в области видимости — создаёт его.
+    pub counter_set: Vec<(String, i32)>,
     /// CSS Masking L1 §3 — `clip-path: <basic-shape> | none`. Не
     /// наследуется. Phase 0: parsing only — real geometric clipping
     /// в paint pipeline отложен.
@@ -2010,6 +2493,28 @@ pub struct ComputedStyle {
     pub column_rule_style: BorderStyle,
     /// CSS Multi-column L1 §4.3 — `column-rule-color`. Initial = `CurrentColor`.
     pub column_rule_color: CssColor,
+    /// CSS Gap Decorations L1 — `gap-rule-width` (px). Default 0. Non-inherited.
+    /// Thickness of the visual rule drawn in flex/grid/multicol gaps.
+    pub gap_rule_width: f32,
+    /// CSS Gap Decorations L1 — `gap-rule-style`. Default `None`. Non-inherited.
+    /// Rule is only visible when style != None and width > 0.
+    pub gap_rule_style: BorderStyle,
+    /// CSS Gap Decorations L1 — `gap-rule-color`. Default `CurrentColor`. Non-inherited.
+    pub gap_rule_color: CssColor,
+    /// CSS Tables L2 §17.6 — `border-collapse`. Inherited. Default `Separate`.
+    /// When `Collapse`, `border-spacing` has no effect and adjacent cell borders merge.
+    pub border_collapse: BorderCollapse,
+    /// CSS Tables L2 §17.6.1.1 — `empty-cells`. Inherited. Default `Show`.
+    /// When `Hide`, a table cell with no in-flow content draws neither borders nor
+    /// background. No effect under `border-collapse: collapse`.
+    pub empty_cells: EmptyCells,
+    /// CSS 2.1 §17.6 — `border-spacing: <length> [<length>]?`. Inherited. Default 0.
+    /// Horizontal gap (px) between adjacent table cells in separate-border mode.
+    /// Only applies when `border-collapse: separate` (CSS 2.1 default).
+    pub border_spacing_h: f32,
+    /// CSS 2.1 §17.6 — `border-spacing` vertical component (px). Inherited.
+    /// Vertical gap between adjacent table rows in separate-border mode.
+    pub border_spacing_v: f32,
     /// CSS Multi-column L1 §6.1 — `column-span: none | all`. По умолчанию
     /// `None` (False), `Some(true)` = `all` (элемент растягивается через
     /// все колонки). Не наследуется. Phase 0: parse+store.
@@ -2051,6 +2556,10 @@ pub struct ComputedStyle {
     /// CSS Basic UI L4 §5 — `appearance`. NOT inherited. Initial: `Auto`.
     /// Phase 0: parse + store; form-widget styling — P2/P3 task.
     pub appearance: Appearance,
+    /// CSS Basic UI L4 §4.4 — `field-sizing`. NOT inherited. Initial: `Fixed`.
+    /// When `Content`, UA-default dimensions are suppressed and `lay_out_box` calls
+    /// `field_sizing_content_intrinsic()` to size the control from its text.
+    pub field_sizing: FieldSizing,
     /// CSS UI L4 §6.2 — `user-select`. Inherited (по спеке).
     pub user_select: UserSelect,
     /// CSS Basic UI L4 §6 — `resize`. NOT inherited. Initial: `None`.
@@ -2103,6 +2612,12 @@ pub struct ComputedStyle {
     /// CSS Transforms L2 §4 — `perspective: <length> | none`.
     /// `None` = no perspective; `Some(px)` = distance to camera.
     pub perspective: Option<f32>,
+    /// CSS Transforms L2 §4 — `perspective-origin: <x> <y>`.
+    /// Default `50% 50%`. Resolved at display-list time against border-box.
+    pub perspective_origin: (PositionComponent, PositionComponent),
+    /// CSS Transforms L2 §6 — `transform-style: flat | preserve-3d`.
+    /// `Preserve3d` makes children participate in 3D rendering context.
+    pub transform_style: TransformStyle,
     /// CSS Lists L3 §2.1 — `list-style-type`.
     pub list_style_type: ListStyleType,
     /// CSS Lists L3 §2.3 — `list-style-position`.
@@ -2145,6 +2660,21 @@ pub struct ComputedStyle {
     pub animation_fill_modes: Vec<AnimationFillMode>,
     /// CSS Animations L1 §3.8 — `animation-play-state: <single-animation-play-state>#`.
     pub animation_play_states: Vec<AnimationPlayState>,
+    /// CSS Scroll-Driven Animations L1 §3.3 — `animation-timeline: auto | scroll() | view() | <ident>#`.
+    /// Non-inherited. Parallel list to `animation_names`. Default empty = all `Auto`.
+    pub animation_timelines: Vec<AnimationTimeline>,
+    /// CSS Scroll-Driven Animations L1 §3.1 — `scroll-timeline-name: none | <custom-ident>`.
+    /// Non-inherited. Names this element as a scroll container for a named scroll timeline.
+    pub scroll_timeline_name: Option<String>,
+    /// CSS Scroll-Driven Animations L1 §3.2 — `scroll-timeline-axis: block | inline | x | y`.
+    /// Non-inherited. Which axis drives the named scroll timeline. Default `Block`.
+    pub scroll_timeline_axis: ScrollAxis,
+    /// CSS Scroll-Driven Animations L1 §3.3 — `view-timeline-name: none | <custom-ident>`.
+    /// Non-inherited. Names this element as a view-timeline subject.
+    pub view_timeline_name: Option<String>,
+    /// CSS Scroll-Driven Animations L1 §3.4 — `view-timeline-axis: block | inline | x | y`.
+    /// Non-inherited. Which axis drives the named view timeline. Default `Block`.
+    pub view_timeline_axis: ScrollAxis,
     /// CSS Masking L1 §4 — `mask-image: url(...) | linear-gradient(...) | none`.
     /// `BackgroundImage` переиспользуется как тип (same structure: None/Url/Gradient).
     pub mask_image: BackgroundImage,
@@ -2204,12 +2734,23 @@ pub struct ComputedStyle {
     /// CSS Grid Layout L1 §7.2 — `grid-template-rows`. Non-inherited.
     /// Default `[]` (no explicit tracks). Parsed track-list.
     pub grid_template_rows: Vec<GridTrackSize>,
+    /// CSS Grid Layout L1 §7.2 — auto-fill/auto-fit repeat metadata for columns.
+    /// `Some` when `grid-template-columns` contains `repeat(auto-fill|auto-fit, ...)`.
+    /// Resolved at layout time via `resolve_auto_fill_fit_count`. Non-inherited. Default `None`.
+    pub grid_template_col_auto_repeat: Option<GridRepeat>,
+    /// CSS Grid Layout L1 §7.2 — auto-fill/auto-fit repeat metadata for rows.
+    /// `Some` when `grid-template-rows` contains `repeat(auto-fill|auto-fit, ...)`.
+    /// Resolved at layout time via `resolve_auto_fill_fit_count`. Non-inherited. Default `None`.
+    pub grid_template_row_auto_repeat: Option<GridRepeat>,
     /// CSS Grid Layout L1 §7.3 — `grid-template-areas`. Non-inherited.
     /// Default `[]` (none). Outer vec = rows (top-to-bottom), inner vec = columns
     /// (left-to-right). Each string is a cell name; `"."` means unnamed cell.
     pub grid_template_areas: Vec<Vec<String>>,
     /// CSS Grid Layout L1 §8.5 — `grid-auto-flow`. Non-inherited. Default `Row`.
     pub grid_auto_flow: GridAutoFlow,
+    /// CSS Masonry Layout §9 — `masonry-auto-flow`. Controls placement order in
+    /// masonry containers. Non-inherited. Default `DefiniteFirst`.
+    pub masonry_auto_flow: MasonryAutoFlow,
     /// CSS Grid Layout L1 §8.6 — `grid-auto-columns`. Non-inherited. Default `Auto`.
     pub grid_auto_columns: GridTrackSize,
     /// CSS Grid Layout L1 §8.6 — `grid-auto-rows`. Non-inherited. Default `Auto`.
@@ -2254,6 +2795,22 @@ pub struct ComputedStyle {
     /// CSS Containment L3 §4 — `content-visibility`. NOT inherited. Initial: `Visible`.
     /// Phase 0: parse + store; skip-content optimization — deferred.
     pub content_visibility: ContentVisibility,
+    /// CSS Box Sizing L4 §5 — `contain-intrinsic-width`. NOT inherited. Initial: `None`.
+    /// Placeholder inline-size used as the box's intrinsic width when the element
+    /// is subject to size containment (`contain: size`, `content-visibility: hidden`,
+    /// or `content-visibility: auto` while skipped off-screen). `None` = the CSS
+    /// keyword `none` (no placeholder; content-based width collapses). The optional
+    /// `auto` keyword (last-remembered size) is parsed but treated as the length.
+    /// Stored as a content-box `Length`, resolved against the font-size at layout.
+    pub contain_intrinsic_width: Option<Length>,
+    /// CSS Box Sizing L4 §5 — `contain-intrinsic-height`. NOT inherited. Initial: `None`.
+    /// Placeholder block-size under size containment. See `contain_intrinsic_width`.
+    pub contain_intrinsic_height: Option<Length>,
+    /// CSS Sizing L4 §4.5 — `interpolate-size`. **Inherited.** Initial: `NumericOnly`.
+    /// Controls whether keyword sizes (`auto`, `min-content`, …) participate in
+    /// transitions/animations. Read by `TransitionScheduler::sync()` to gate
+    /// `height: auto` interpolation.
+    pub interpolate_size: InterpolateSizeMode,
     /// CSS Container Queries L1 §3.1 — `container-type`. NOT inherited. Initial: `Normal`.
     /// Phase 0: parse + store; @container query matching — deferred.
     pub container_type: ContainerType,
@@ -2267,7 +2824,8 @@ pub struct ComputedStyle {
     /// Phase 0: parse + store; print rendering path — deferred.
     pub print_color_adjust: PrintColorAdjust,
     /// CSS Fonts L5 §4 — `font-size-adjust`. Inherited. Initial: `None`.
-    /// Phase 0: parse + store; real x-height based font-size scaling — deferred.
+    /// Wired: `box_tree::apply_font_size_adjust` rescales the used `font_size`
+    /// to `size · adjust / aspect` (aspect = font x-height / em) before layout.
     pub font_size_adjust: FontSizeAdjust,
     /// CSS Writing Modes L3 §2.1 — `writing-mode`. Inherited. Initial: `HorizontalTb`.
     /// Phase 0: parse + store; vertical layout — deferred.
@@ -2302,6 +2860,89 @@ pub struct ComputedStyle {
     pub svg_stroke_opacity: f32,
     /// SVG §11.4 — `stroke-width`. Inherited. In resolved px. Initial: 1.0.
     pub svg_stroke_width: f32,
+    /// SVG §11.3 — `fill-rule`. Inherited. Initial: `NonZero`.
+    pub svg_fill_rule: FillRule,
+    /// SVG §11.4 — `stroke-linecap`. Inherited. Initial: `Butt`.
+    pub svg_stroke_linecap: StrokeLinecap,
+    /// SVG §11.4 — `stroke-linejoin`. Inherited. Initial: `Miter`.
+    pub svg_stroke_linejoin: StrokeLinejoin,
+    /// SVG §11.4 — `stroke-miterlimit`. Inherited. Range ≥ 1.0. Initial: 4.0.
+    pub svg_stroke_miterlimit: f32,
+    /// SVG §11.4 — `stroke-dasharray`. Inherited. Empty = solid line (none).
+    /// Resolved dash/gap lengths in px, repeated cyclically.
+    pub svg_stroke_dasharray: Vec<f32>,
+    /// SVG §11.4 — `stroke-dashoffset`. Inherited. In resolved px. Initial: 0.0.
+    pub svg_stroke_dashoffset: f32,
+    /// CSS Fill & Stroke L3 §6 / SVG 2 §13.7 — `paint-order`. Inherited.
+    /// Order fill/stroke/markers are painted; initial `normal` = fill, stroke,
+    /// markers (fill drawn first, markers on top).
+    pub paint_order: SvgPaintOrder,
+    // CSS Logical Properties L1 §2 — temporary storage for logical properties.
+    // These are resolved to physical properties in resolve_logical_properties().
+    /// CSS Logical Properties L1 — `inline-size`. `None` = auto.
+    pub inline_size: Option<Length>,
+    /// CSS Logical Properties L1 — `block-size`. `None` = auto.
+    pub block_size: Option<Length>,
+    /// CSS Logical Properties L1 — `inset-inline-start`.
+    pub inset_inline_start: LengthOrAuto,
+    /// CSS Logical Properties L1 — `inset-inline-end`.
+    pub inset_inline_end: LengthOrAuto,
+    /// CSS Logical Properties L1 — `inset-block-start`.
+    pub inset_block_start: LengthOrAuto,
+    /// CSS Logical Properties L1 — `inset-block-end`.
+    pub inset_block_end: LengthOrAuto,
+    /// CSS Logical Properties L1 — `margin-inline-start`.
+    pub margin_inline_start: LengthOrAuto,
+    /// CSS Logical Properties L1 — `margin-inline-end`.
+    pub margin_inline_end: LengthOrAuto,
+    /// CSS Logical Properties L1 — `margin-block-start`.
+    pub margin_block_start: LengthOrAuto,
+    /// CSS Logical Properties L1 — `margin-block-end`.
+    pub margin_block_end: LengthOrAuto,
+    /// CSS Logical Properties L1 — `padding-inline-start`.
+    pub padding_inline_start: Length,
+    /// CSS Logical Properties L1 — `padding-inline-end`.
+    pub padding_inline_end: Length,
+    /// CSS Logical Properties L1 — `padding-block-start`.
+    pub padding_block_start: Length,
+    /// CSS Logical Properties L1 — `padding-block-end`.
+    pub padding_block_end: Length,
+    /// CSS Logical Properties L1 — `border-inline-start-width`.
+    pub border_inline_start_width: f32,
+    /// CSS Logical Properties L1 — `border-inline-end-width`.
+    pub border_inline_end_width: f32,
+    /// CSS Logical Properties L1 — `border-block-start-width`.
+    pub border_block_start_width: f32,
+    /// CSS Logical Properties L1 — `border-block-end-width`.
+    pub border_block_end_width: f32,
+    /// CSS Anchor Positioning L1 §2 — `anchor-name`. Custom-ident with `--` prefix.
+    /// Non-inherited. When set, this element is registered as an anchor for positioned elements.
+    pub anchor_name: Option<Box<str>>,
+    /// CSS Anchor Positioning L1 §3 — `position-anchor`. Custom-ident with `--` prefix.
+    /// Non-inherited. Names the default anchor element for `inset-area` and `anchor()` resolution.
+    pub position_anchor: Option<Box<str>>,
+    /// CSS Anchor Positioning L1 §5 — `inset-area` row (vertical axis) keyword. Non-inherited.
+    pub inset_area_row: crate::anchor::InsetAreaKeyword,
+    /// CSS Anchor Positioning L1 §5 — `inset-area` column (horizontal axis) keyword. Non-inherited.
+    pub inset_area_col: crate::anchor::InsetAreaKeyword,
+    /// CSS Anchor Positioning L1 §2.1 — `anchor-scope`. Non-inherited. Initial: `None`.
+    /// Restricts which named anchors from this element's subtree are visible outside.
+    pub anchor_scope: crate::anchor::AnchorScope,
+    /// CSS Anchor Positioning L1 §4 — `anchor-size()` in `width`. Non-inherited. Initial: `None`.
+    /// When set, the element's used width is the referenced anchor's dimension.
+    pub anchor_size_w: Option<crate::anchor::AnchorSizeFunc>,
+    /// CSS Anchor Positioning L1 §4 — `anchor-size()` in `height`. Non-inherited. Initial: `None`.
+    /// When set, the element's used height is the referenced anchor's dimension.
+    pub anchor_size_h: Option<crate::anchor::AnchorSizeFunc>,
+
+    /// CSS View Transitions L1 §10 — `view-transition-name`. Non-inherited. Initial: `None` (none).
+    /// Custom-ident that marks this element as a named view-transition capture target.
+    /// During a `document.startViewTransition()` call the shell matches old/new snapshots
+    /// by name and cross-fades them. `None` means the property is `none`.
+    pub view_transition_name: Option<Box<str>>,
+    /// CSS Generated Content L3 §3.2 — `quotes`. Inherited. Initial `auto`.
+    /// Supplies the glyph pairs for `content: open-quote` / `close-quote`.
+    pub quotes: Quotes,
 }
 
 /// CSS Content L3 — value свойства `content`.
@@ -2344,6 +2985,52 @@ pub enum ContentItem {
     CloseQuote,
     NoOpenQuote,
     NoCloseQuote,
+}
+
+/// CSS Generated Content L3 §3.2 — `quotes`. Inherited. Initial: `auto`.
+///
+/// Controls the quotation marks produced by `content: open-quote` /
+/// `close-quote`. The nesting depth (which pair is used) is tracked in
+/// document order by the counters pre-pass; this value only supplies the
+/// glyph pairs to choose from.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Quotes {
+    /// `auto` — UA language-appropriate quotation marks. Lumen uses English
+    /// curly quotes: primary “ ”, secondary ‘ ’.
+    #[default]
+    Auto,
+    /// `none` — `open-quote` / `close-quote` produce no marks (depth still
+    /// advances).
+    None,
+    /// Explicit `[<string> <string>]+` pairs — outermost (depth 0) first.
+    /// Each tuple is `(open, close)`.
+    Pairs(Vec<(String, String)>),
+}
+
+impl Quotes {
+    /// Returns the `(open, close)` glyph strings for the given nesting `depth`.
+    ///
+    /// `Auto` uses the built-in English pairs; `Pairs` clamps `depth` to the
+    /// last available pair (CSS Content L3 §3.2). Returns `None` for `quotes:
+    /// none` or an empty explicit list — the caller emits nothing in that case.
+    pub fn pair_for_depth(&self, depth: usize) -> Option<(&str, &str)> {
+        const AUTO: &[(&str, &str)] = &[("\u{201C}", "\u{201D}"), ("\u{2018}", "\u{2019}")];
+        match self {
+            Quotes::None => None,
+            Quotes::Auto => {
+                let idx = depth.min(AUTO.len() - 1);
+                Some(AUTO[idx])
+            }
+            Quotes::Pairs(pairs) => {
+                if pairs.is_empty() {
+                    return None;
+                }
+                let idx = depth.min(pairs.len() - 1);
+                let (o, c) = &pairs[idx];
+                Some((o.as_str(), c.as_str()))
+            }
+        }
+    }
 }
 
 /// CSS Scrollbars 1 — `scrollbar-width`. Inherited.
@@ -2400,7 +3087,7 @@ impl ScrollbarGutter {
 }
 
 /// CSS Lists L3 §2.1 — markers для list items.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum ListStyleType {
     /// `none` — без marker.
     None,
@@ -2425,6 +3112,8 @@ pub enum ListStyleType {
     UpperAlpha,
     /// `lower-greek` — α, β, γ, ...
     LowerGreek,
+    /// `<custom-ident>` — ссылка на именованный `@counter-style`.
+    Custom(Box<str>),
 }
 
 impl ListStyleType {
@@ -2441,6 +3130,8 @@ impl ListStyleType {
             "lower-alpha" | "lower-latin" => Some(Self::LowerAlpha),
             "upper-alpha" | "upper-latin" => Some(Self::UpperAlpha),
             "lower-greek" => Some(Self::LowerGreek),
+            // Any unrecognised ident is a reference to a named @counter-style.
+            s if !s.is_empty() => Some(Self::Custom(s.into())),
             _ => None,
         }
     }
@@ -2583,6 +3274,18 @@ pub enum Appearance {
     Compat,
 }
 
+/// CSS Basic UI L4 §4.4 — `field-sizing`. NOT inherited. Initial: `Fixed`.
+/// `Fixed` — UA-specified dimensions apply (default browser behaviour).
+/// `Content` — intrinsic size comes from the control's text content.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FieldSizing {
+    /// UA default dimensions (e.g. `<input>` is 174×21 px).
+    #[default]
+    Fixed,
+    /// Size the control to fit its text content (CSS Basic UI L4 §4.4).
+    Content,
+}
+
 /// CSS Pointer Events L1. Default `auto`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum PointerEvents {
@@ -2655,6 +3358,30 @@ pub enum ContentVisibility {
     Visible,
     Auto,
     Hidden,
+}
+
+/// CSS Sizing L4 §4.5 — `interpolate-size` property value.
+///
+/// Controls whether keyword sizes (`auto`, `min-content`, `max-content`,
+/// `fit-content`) can participate in CSS transitions and animations.
+/// When `AllowKeywords` is active, the layout engine resolves keyword sizes
+/// to their px equivalent at transition start, enabling smooth
+/// `height: 0 → height: auto` transitions.
+///
+/// # CSS: interpolate-size
+/// P4 wires this enum via `apply_declaration("interpolate-size", ...)` and
+/// stores the result in `ComputedStyle::interpolate_size`. The engine reads
+/// it in `TransitionScheduler::sync()` to decide whether to allow keyword
+/// size interpolation for a given element.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum InterpolateSizeMode {
+    /// CSS Sizing L4 §4.5.1 initial value — keyword sizes are discrete.
+    /// Transitions that start or end at a keyword size snap at `t = 0.5`.
+    #[default]
+    NumericOnly,
+    /// CSS Sizing L4 §4.5 `allow-keywords` value — keyword sizes resolve
+    /// to their px value at transition start, enabling smooth animations.
+    AllowKeywords,
 }
 
 /// CSS Container Queries L1 §3.1 — `container-type`. NOT inherited. Initial: `Normal`.
@@ -2768,6 +3495,7 @@ pub fn apply_container_rules(
     sheet: &Stylesheet,
     ctx: &ContainerContext,
     viewport: Size,
+    dark_mode: bool,
 ) {
     let is_quirks = doc.mode() == DocumentMode::Quirks;
     for container_rule in &sheet.container_rules {
@@ -2797,7 +3525,15 @@ pub fn apply_container_rules(
                 let pw = style.font_weight;
                 let inherited = style.clone();
                 for decl in &rule.declarations {
-                    apply_declaration(style, decl, em, viewport, pw, &inherited, is_quirks);
+                    let attr_buf;
+                    let effective_decl: &Declaration = if decl.value.contains("attr(") {
+                        let Some(v) = expand_attr_val(&decl.value, doc, node) else { continue };
+                        attr_buf = Declaration { property: decl.property.clone(), value: v, important: decl.important };
+                        &attr_buf
+                    } else {
+                        decl
+                    };
+                    apply_declaration(style, effective_decl, em, viewport, pw, &inherited, is_quirks, dark_mode);
                 }
             }
         }
@@ -3013,16 +3749,32 @@ pub enum ParsedGradient {
     Unknown(String),
 }
 
-/// CSS Backgrounds L3 §3.1 — `background-image` value.
+/// CSS Backgrounds L3 §3.1 / CSS Images L4 §4 — `background-image` value.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub enum BackgroundImage {
     #[default]
     None,
-    /// `url("path")` — внешний image-ресурс. Хранится без resolve
-    /// относительно base-href.
+    /// `url("path")` or raw `image-set(…)` / `-webkit-image-set(…)` string.
+    ///
+    /// `image-set()` strings are stored verbatim — paint resolves them to the
+    /// best URL for the current DPR via `select_image_set_url` (CSS Images L4 §5).
     Url(String),
     /// Parsed gradient. Phase 0 renders linear / radial / conic.
     Gradient(ParsedGradient),
+    /// CSS Images L4 §4 — `cross-fade(<image-a>, <image-b>, <percentage>)`.
+    ///
+    /// `t` is the blend factor in `[0.0, 1.0]`: `0.0` = fully `a`, `1.0` = fully `b`.
+    CrossFade {
+        /// First image (`t = 0.0`).
+        a: Box<BackgroundImage>,
+        /// Second image (`t = 1.0`).
+        b: Box<BackgroundImage>,
+        /// Blend factor clamped to `[0.0, 1.0]`.
+        t: f32,
+    },
+    /// CSS Paint API (Houdini) — `paint(name)` generates dynamic image via registered worklet.
+    /// Phase 0: stored as placeholder grey `DrawImage`; Phase 1: calls worklet `paint()` callback.
+    Paint(String),
 }
 
 /// CSS Backgrounds L3 §3.4 — `background-repeat`.
@@ -3414,6 +4166,28 @@ impl FlexBasis {
     }
 }
 
+/// CSS Grid Layout L3 §9 — `repeat(auto-fill | auto-fit | <count>, <track-list>)`.
+/// Stored in grid_template_columns/rows during Phase 0 to preserve repeat information
+/// until resolution time (lay_out_grid). Expanded via `resolve_grid_template` before layout.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GridRepeat {
+    /// `Count::Fixed(N)` for `repeat(N, ...)`, `AutoFill` for auto-fill, `AutoFit` for auto-fit.
+    pub count: RepeatCount,
+    /// The track sizing functions inside the parentheses, e.g. `minmax(100px, 1fr)`.
+    pub tracks: Vec<GridTrackSize>,
+}
+
+/// Count type for grid-template-columns/rows `repeat()`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RepeatCount {
+    /// Fixed count: `repeat(3, ...)`.
+    Fixed(usize),
+    /// Auto-fill: `repeat(auto-fill, ...)` — fill available space, prefer empty tracks over overflow.
+    AutoFill,
+    /// Auto-fit: `repeat(auto-fit, ...)` — fill available space, collapse empty tracks.
+    AutoFit,
+}
+
 /// CSS Grid Layout L1 §7.2 — sizing function for a grid track.
 /// Non-inherited. Appears in `grid-template-columns` / `grid-template-rows`
 /// and `grid-auto-columns` / `grid-auto-rows`.
@@ -3432,15 +4206,30 @@ pub enum GridTrackSize {
     MaxContent,
     /// `minmax(min, max)` — track between min and max sizing functions.
     Minmax(Box<GridTrackSize>, Box<GridTrackSize>),
+    /// `fit-content(N)` — track sized to fit content with max limit (CSS Grid L3 §9.1).
+    /// Equivalent to `minmax(auto, max(auto, min(N, max-content)))`.
+    FitContent(Box<GridTrackSize>),
+    /// `subgrid` — inherit track sizes from the spanning tracks of the parent grid
+    /// (CSS Grid Layout L2 §9). The grid item must itself be a grid container;
+    /// its column/row tracks are replaced by the parent's resolved track sizes
+    /// for the cells it spans. Stored as a sentinel `vec![GridTrackSize::Subgrid]`
+    /// in `grid_template_columns` or `grid_template_rows`.
+    Subgrid,
+    /// `masonry` — CSS Grid L3 §14 waterfall layout axis sentinel.
+    /// Stored as `vec![GridTrackSize::Masonry]` in `grid_template_columns` or
+    /// `grid_template_rows` to signal that the axis uses masonry placement.
+    /// The perpendicular axis defines track sizes; `masonry.rs` handles placement.
+    /// P4 handoff: `masonry-auto-flow`, `align-tracks`, `justify-tracks` in ComputedStyle.
+    Masonry,
 }
 
 impl GridTrackSize {
     /// Resolve to a concrete pixel size given container width, em, viewport.
-    /// For `fr` and `auto` returns `None` — caller handles those specially.
+    /// For `fr`, `auto`, `fit-content`, `subgrid`, and `masonry` returns `None` — caller handles those specially.
     pub fn resolve_fixed(&self, em: f32, cb: f32, viewport: Size) -> Option<f32> {
         match self {
             Self::Length(l) => l.resolve(em, Some(cb), viewport),
-            Self::Fr(_) | Self::Auto | Self::MinContent | Self::MaxContent => None,
+            Self::Fr(_) | Self::Auto | Self::MinContent | Self::MaxContent | Self::FitContent(_) | Self::Subgrid | Self::Masonry => None,
             Self::Minmax(min, _max) => min.resolve_fixed(em, cb, viewport),
         }
     }
@@ -3455,6 +4244,16 @@ impl GridTrackSize {
         if let Self::Fr(v) = self { Some(*v) } else { None }
     }
 
+    /// True when this track inherits its size from the parent grid (subgrid axis).
+    pub fn is_subgrid(&self) -> bool {
+        matches!(self, Self::Subgrid)
+    }
+
+    /// True when this axis uses masonry placement (CSS Grid L3 §14).
+    pub fn is_masonry(&self) -> bool {
+        matches!(self, Self::Masonry)
+    }
+
     /// Parse a single track sizing keyword / value (no `repeat()`).
     fn parse_single(s: &str, is_quirks: bool) -> Option<Self> {
         let lc = s.trim().to_ascii_lowercase();
@@ -3462,6 +4261,9 @@ impl GridTrackSize {
             "auto" => return Some(Self::Auto),
             "min-content" => return Some(Self::MinContent),
             "max-content" => return Some(Self::MaxContent),
+            // `subgrid` / `masonry` as single tokens are handled in parse_track_list;
+            // reaching here means they appeared inside a repeat() context — treat as auto.
+            "subgrid" | "masonry" => return Some(Self::Auto),
             _ => {}
         }
         // `<number>fr`
@@ -3479,9 +4281,12 @@ impl GridTrackSize {
                 return Some(Self::Minmax(Box::new(min), Box::new(max)));
             }
         }
-        // `fit-content(<length>)` — treat as auto for Phase 0
-        if lc.starts_with("fit-content(") {
-            return Some(Self::Auto);
+        // `fit-content(<length-percentage>)` (CSS Grid L3 §9.1)
+        if lc.starts_with("fit-content(") && lc.ends_with(')') {
+            let inner = &s.trim()[12..s.trim().len() - 1];
+            if let Some(limit) = Self::parse_single(inner.trim(), is_quirks) {
+                return Some(Self::FitContent(Box::new(limit)));
+            }
         }
         // length / percentage
         parse_length_q(s.trim(), is_quirks).map(Self::Length)
@@ -3489,19 +4294,59 @@ impl GridTrackSize {
 
     /// Parse a track-list value string into a Vec of GridTrackSize.
     /// Handles `repeat(N, <track-list>)` by expanding.
+    /// `subgrid` as the entire value returns `vec![Subgrid]` (sentinel for the whole axis).
+    /// `masonry` as the entire value returns `vec![Masonry]` (CSS Grid L3 §14 sentinel).
     pub fn parse_track_list(s: &str, is_quirks: bool) -> Vec<Self> {
+        let trimmed = s.trim();
+        // CSS Grid L2 §9: `subgrid` replaces the entire track list for that axis.
+        if trimmed.eq_ignore_ascii_case("subgrid") {
+            return vec![Self::Subgrid];
+        }
+        // CSS Grid L3 §14: `masonry` replaces the entire track list — waterfall placement axis.
+        if trimmed.eq_ignore_ascii_case("masonry") {
+            return vec![Self::Masonry];
+        }
         let mut result = Vec::new();
-        for token in split_track_list_tokens(s) {
+        for token in split_track_list_tokens(trimmed) {
             let t = token.trim();
             let lc = t.to_ascii_lowercase();
             if lc.starts_with("repeat(") && lc.ends_with(')') {
                 let inner = &t[7..t.len() - 1];
-                if let Some((count_s, rest)) = split_paren_aware_comma(inner)
-                    && let Ok(n) = count_s.trim().parse::<usize>()
-                {
-                    let repeated: Vec<Self> = Self::parse_track_list(rest.trim(), is_quirks);
-                    for _ in 0..n {
-                        result.extend(repeated.iter().cloned());
+                if let Some((count_s, rest)) = split_paren_aware_comma(inner) {
+                    let count_s_trim = count_s.trim();
+                    let count_lc = count_s_trim.to_ascii_lowercase();
+                    let count = if count_lc == "auto-fill" {
+                        RepeatCount::AutoFill
+                    } else if count_lc == "auto-fit" {
+                        RepeatCount::AutoFit
+                    } else if let Ok(n) = count_s_trim.parse::<usize>() {
+                        RepeatCount::Fixed(n)
+                    } else {
+                        continue; // Invalid repeat count, skip
+                    };
+
+                    let tracks = Self::parse_track_list(rest.trim(), is_quirks);
+                    if count == RepeatCount::Fixed(0) {
+                        // zero repeat, add nothing
+                    } else if matches!(count, RepeatCount::Fixed(_)) {
+                        // Expand fixed repeat immediately
+                        let n = match count {
+                            RepeatCount::Fixed(n) => n,
+                            _ => unreachable!(),
+                        };
+                        for _ in 0..n {
+                            result.extend(tracks.iter().cloned());
+                        }
+                    } else {
+                        // For auto-fill / auto-fit, store GridRepeat sentinel for resolution at layout time
+                        // Phase 1: Add first track as GridRepeat sentinel. Caller (lay_out_grid) resolves count.
+                        // For now, expand as single "repeat" marker that resolver can recognize and expand.
+                        if !tracks.is_empty() {
+                            // Store info in a way resolver can find: mark with a sentinel or new enum variant.
+                            // Currently: add the first track once, and store GridRepeat in ComputedStyle separately.
+                            // Phase 1 simplified: treat as auto (no expansion) until resolver wire-up
+                            result.extend(tracks.iter().cloned());
+                        }
                     }
                 }
             } else if let Some(ts) = Self::parse_single(t, is_quirks) {
@@ -3510,6 +4355,32 @@ impl GridTrackSize {
         }
         result
     }
+}
+
+/// Extracts auto-fill/auto-fit repeat metadata from a track-list string.
+/// Returns `Some(GridRepeat)` when the string is exactly `repeat(auto-fill|auto-fit, ...)`.
+/// Used in Phase 2 of CSS Grid auto-repeat expansion (CSS Grid L1 §7.2.3.4).
+pub(crate) fn parse_auto_repeat(s: &str) -> Option<GridRepeat> {
+    let trimmed = s.trim();
+    // Must start with "repeat(" (case-insensitive) and end with ")"
+    let lc = trimmed.to_ascii_lowercase();
+    let inner = lc.strip_prefix("repeat(")?.strip_suffix(')')?;
+    let (count_s, rest) = split_paren_aware_comma(inner)?;
+    let count = match count_s.trim() {
+        "auto-fill" => RepeatCount::AutoFill,
+        "auto-fit" => RepeatCount::AutoFit,
+        _ => return None,
+    };
+    // Re-parse from original string to preserve case in track sizes
+    let orig_inner = trimmed
+        .get("repeat(".len()..trimmed.len() - 1)?;
+    let (_, orig_rest) = split_paren_aware_comma(orig_inner)?;
+    let tracks = GridTrackSize::parse_track_list(orig_rest.trim(), false);
+    if tracks.is_empty() {
+        return None;
+    }
+    let _ = rest; // suppress unused warning from lc version
+    Some(GridRepeat { count, tracks })
 }
 
 /// Split a comma inside a track-list token that may contain nested parens.
@@ -3575,6 +4446,32 @@ impl GridAutoFlow {
             "column" => Some(Self::Column),
             "row dense" | "dense row" => Some(Self::RowDense),
             "column dense" | "dense column" => Some(Self::ColumnDense),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Masonry Layout §9 — `masonry-auto-flow`. Controls the placement order
+/// of auto-placed items in a masonry container. Non-inherited.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum MasonryAutoFlow {
+    /// `definite-first` (initial) — items with an explicit grid-axis position are
+    /// placed first, then auto items in source order.
+    #[default]
+    DefiniteFirst,
+    /// `next` — all items placed in source order, no definite-first prioritisation.
+    Next,
+    /// `ordered` — items sorted by their CSS `order` property before placement.
+    Ordered,
+}
+
+impl MasonryAutoFlow {
+    /// Parse a CSS `masonry-auto-flow` value string.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "definite-first" => Some(Self::DefiniteFirst),
+            "next" => Some(Self::Next),
+            "ordered" => Some(Self::Ordered),
             _ => None,
         }
     }
@@ -3840,45 +4737,119 @@ impl AlignValue {
     }
 }
 
+/// CSS Masking L1 §3.5 — `<length-percentage>` значение координаты/размера
+/// basic-shape для `clip-path`. Проценты резолвятся на этапе paint
+/// относительно reference box (border-box элемента): горизонтальные — по
+/// width, вертикальные — по height, радиус `circle()` — по
+/// `sqrt(w²+h²)/√2` (CSS Shapes L1 §5.1, BUG-140).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ShapeValue {
+    /// Абсолютное значение в px (em/rem уже приведены к px при парсинге).
+    Px(f32),
+    /// Процент соответствующего базиса reference box (0–100).
+    Pct(f32),
+}
+
+impl ShapeValue {
+    /// Резолвит значение в px. `basis` — размер reference box по
+    /// соответствующей оси (px); для `Px` игнорируется.
+    pub fn resolve(self, basis: f32) -> f32 {
+        match self {
+            Self::Px(v) => v,
+            Self::Pct(p) => p / 100.0 * basis,
+        }
+    }
+}
+
 /// CSS Masking L1 §3.5 — basic-shapes для `clip-path`. Phase 0
 /// поддерживает: `inset(...)`, `circle(...)`, `ellipse(...)`,
 /// `polygon(...)`. URL / `path()` / `none` отложены.
+/// Координаты — `ShapeValue` (px или %), проценты резолвятся по
+/// border-box на этапе paint (BUG-140: `circle(40% at 50% 50%)` раньше
+/// молча отбрасывался целиком).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClipPath {
-    /// `inset(top right bottom left)` — 1..=4 length-значения.
-    Inset(Vec<f32>),
+    /// `inset(top right bottom left)` — 1..=4 length-percentage значения
+    /// (top/bottom — % от height, left/right — % от width).
+    Inset(Vec<ShapeValue>),
     /// `circle(radius at cx cy)` — radius и center (опц.).
     Circle {
-        radius: f32,
-        center: Option<(f32, f32)>,
+        /// Радиус: % резолвится по `sqrt(w²+h²)/√2`.
+        radius: ShapeValue,
+        /// Центр (cx — % от width, cy — % от height); `None` = 50% 50%.
+        center: Option<(ShapeValue, ShapeValue)>,
     },
-    /// `ellipse(rx ry at cx cy)`.
+    /// `ellipse(rx ry at cx cy)` — rx — % от width, ry — % от height.
     Ellipse {
-        rx: f32,
-        ry: f32,
-        center: Option<(f32, f32)>,
+        /// Горизонтальный радиус.
+        rx: ShapeValue,
+        /// Вертикальный радиус.
+        ry: ShapeValue,
+        /// Центр; `None` = 50% 50%.
+        center: Option<(ShapeValue, ShapeValue)>,
     },
-    /// `polygon(x1 y1, x2 y2, ...)` — список вершин.
-    Polygon(Vec<(f32, f32)>),
+    /// `polygon([<fill-rule>,]? x1 y1, x2 y2, ...)` — список вершин (x — % от
+    /// width, y — % от height) + правило заливки. `FillRule` (CSS Shapes L1
+    /// §3) управляет самопересекающимися полигонами: `EvenOdd` оставляет
+    /// «дырки» в местах перекрытия, `NonZero` (default) заливает их.
+    Polygon(Vec<(ShapeValue, ShapeValue)>, FillRule),
+    /// `path([<fill-rule>,]? "<svg-path>")` — CSS Shapes L1 §4. Хранит
+    /// предварительно флэттенный полигон в px-координатах системы пути
+    /// (origin = верхний левый угол reference box; проценты в `path()`
+    /// недопустимы по спецификации). Кривые разбиты на отрезки на этапе
+    /// парсинга через `motion_path::flatten_path_to_polygon`. Второе поле —
+    /// `FillRule` (default `NonZero`); `EvenOdd` делает дырки в
+    /// самопересекающихся путях (звёзды-пентаграммы и т. п.).
+    Path(Vec<(f32, f32)>, FillRule),
 }
 
 /// CSS Transforms L1 §11 — функции `transform`. Phase 0 поддерживает
 /// translate/translateX/translateY, rotate, scale/scaleX/scaleY,
-/// skew/skewX/skewY, matrix. 3D-варианты (translate3d, rotate3d,
-/// и т.д.) отложены.
+/// CSS Transforms L2 §6 — `transform-style: flat | preserve-3d`.
+/// `Flat` = children are flattened into the parent plane (default).
+/// `Preserve3d` = children participate in the parent 3D rendering context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TransformStyle {
+    #[default]
+    Flat,
+    Preserve3d,
+}
+
+/// CSS transform functions — translate/scale/rotate/skew/skewX/skewY/matrix
+/// and all 3D variants (CSS Transforms L2).
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransformFn {
     Translate(f32, f32),
     TranslateX(f32),
     TranslateY(f32),
+    /// `translateZ(<length>)` — translate along Z axis in px.
+    TranslateZ(f32),
+    /// `translate3d(<tx>, <ty>, <tz>)` — all three axes in px.
+    Translate3d(f32, f32, f32),
     /// Угол в радианах (нормализован парсером из deg/rad/turn/grad).
     Rotate(f32),
+    /// `rotateX(<angle>)` — angle in radians.
+    RotateX(f32),
+    /// `rotateY(<angle>)` — angle in radians.
+    RotateY(f32),
+    /// `rotateZ(<angle>)` — alias for 2D rotate, angle in radians.
+    RotateZ(f32),
+    /// `rotate3d(<x>, <y>, <z>, <angle>)` — arbitrary axis rotation.
+    Rotate3d(f32, f32, f32, f32),
     Scale(f32, f32),
     ScaleX(f32),
     ScaleY(f32),
+    /// `scaleZ(<s>)` — scale along Z axis.
+    ScaleZ(f32),
+    /// `scale3d(<sx>, <sy>, <sz>)` — all three axes.
+    Scale3d(f32, f32, f32),
     SkewX(f32),
     SkewY(f32),
     Matrix([f32; 6]),
+    /// `matrix3d(<16 values>)` — column-major 4×4 matrix.
+    Matrix3d([f32; 16]),
+    /// `perspective(<length>)` — perspective distance in px (> 0).
+    Perspective(f32),
 }
 
 /// CSS Filter Effects L1 §3 — функции `filter`. Phase 0 поддерживает
@@ -3987,6 +4958,8 @@ impl ComputedStyle {
             text_emphasis_color: CssColor::CurrentColor,
             text_emphasis_position: TextEmphasisPosition::OverRight,
             text_underline_position: TextUnderlinePosition::Auto,
+            text_underline_offset: None,
+            text_decoration_skip_ink: TextDecorationSkipInk::Auto,
             width: None,
             height: None,
             min_width: None,
@@ -4038,6 +5011,7 @@ impl ComputedStyle {
             text_shadow: Vec::new(),
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
+            overflow_clip_margin: None,
             text_overflow: TextOverflow::Clip,
             opacity: 1.0,
             outline_width: 3.0,
@@ -4050,6 +5024,7 @@ impl ComputedStyle {
             custom_props: HashMap::new(),
             counter_reset: Vec::new(),
             counter_increment: Vec::new(),
+            counter_set: Vec::new(),
             clip_path: None,
             transform: Vec::new(),
             translate: None,
@@ -4063,6 +5038,13 @@ impl ComputedStyle {
             column_rule_width: 0.0,
             column_rule_style: BorderStyle::None,
             column_rule_color: CssColor::CurrentColor,
+            gap_rule_width: 0.0,
+            gap_rule_style: BorderStyle::None,
+            gap_rule_color: CssColor::CurrentColor,
+            border_collapse: BorderCollapse::Separate,
+            empty_cells: EmptyCells::Show,
+            border_spacing_h: 0.0,
+            border_spacing_v: 0.0,
             column_span_all: false,
             column_fill_balance: false,
             break_before: BreakValue::Auto,
@@ -4080,6 +5062,7 @@ impl ComputedStyle {
             pointer_events: PointerEvents::Auto,
             touch_action: TouchAction::Auto,
             appearance: Appearance::Auto,
+            field_sizing: FieldSizing::Fixed,
             user_select: UserSelect::Auto,
             resize: Resize::None,
             scroll_behavior: ScrollBehavior::Auto,
@@ -4106,6 +5089,8 @@ impl ComputedStyle {
             hyphens: Hyphens::Manual,
             transform_origin: (PositionComponent::Percent(0.5), PositionComponent::Percent(0.5), 0.0),
             perspective: None,
+            perspective_origin: (PositionComponent::Percent(0.5), PositionComponent::Percent(0.5)),
+            transform_style: TransformStyle::Flat,
             list_style_type: ListStyleType::Disc,
             list_style_position: ListStylePosition::Outside,
             list_style_image: None,
@@ -4122,6 +5107,11 @@ impl ComputedStyle {
             animation_directions: Vec::new(),
             animation_fill_modes: Vec::new(),
             animation_play_states: Vec::new(),
+            animation_timelines: Vec::new(),
+            scroll_timeline_name: None,
+            scroll_timeline_axis: ScrollAxis::Block,
+            view_timeline_name: None,
+            view_timeline_axis: ScrollAxis::Block,
             mask_image: BackgroundImage::None,
             mask_repeat: BackgroundRepeat::Repeat,
             mask_size: BackgroundSize::Auto,
@@ -4141,8 +5131,11 @@ impl ComputedStyle {
             order: 0,
             grid_template_columns: Vec::new(),
             grid_template_rows: Vec::new(),
+            grid_template_col_auto_repeat: None,
+            grid_template_row_auto_repeat: None,
             grid_template_areas: Vec::new(),
             grid_auto_flow: GridAutoFlow::Row,
+            masonry_auto_flow: MasonryAutoFlow::DefiniteFirst,
             grid_auto_columns: GridTrackSize::Auto,
             grid_auto_rows: GridTrackSize::Auto,
             grid_column_start: GridLine::Auto,
@@ -4156,6 +5149,9 @@ impl ComputedStyle {
             widows: 2,
             contain: ContainFlags::NONE,
             content_visibility: ContentVisibility::Visible,
+            contain_intrinsic_width: None,
+            contain_intrinsic_height: None,
+            interpolate_size: InterpolateSizeMode::NumericOnly,
             container_type: ContainerType::Normal,
             container_name: Vec::new(),
             backdrop_filter: Vec::new(),
@@ -4176,16 +5172,55 @@ impl ComputedStyle {
             svg_stroke: SvgPaint::None,
             svg_stroke_opacity: 1.0,
             svg_stroke_width: 1.0,
+            svg_fill_rule: FillRule::NonZero,
+            svg_stroke_linecap: StrokeLinecap::Butt,
+            svg_stroke_linejoin: StrokeLinejoin::Miter,
+            svg_stroke_miterlimit: 4.0,
+            svg_stroke_dasharray: Vec::new(),
+            svg_stroke_dashoffset: 0.0,
+            paint_order: SvgPaintOrder::default(),
+            // CSS Logical Properties L1 — initial values.
+            inline_size: None,
+            block_size: None,
+            inset_inline_start: LengthOrAuto::Auto,
+            inset_inline_end: LengthOrAuto::Auto,
+            inset_block_start: LengthOrAuto::Auto,
+            inset_block_end: LengthOrAuto::Auto,
+            margin_inline_start: LengthOrAuto::ZERO,
+            margin_inline_end: LengthOrAuto::ZERO,
+            margin_block_start: LengthOrAuto::ZERO,
+            margin_block_end: LengthOrAuto::ZERO,
+            padding_inline_start: Length::Px(0.0),
+            padding_inline_end: Length::Px(0.0),
+            padding_block_start: Length::Px(0.0),
+            padding_block_end: Length::Px(0.0),
+            border_inline_start_width: 0.0,
+            border_inline_end_width: 0.0,
+            border_block_start_width: 0.0,
+            border_block_end_width: 0.0,
+            anchor_name: None,
+            position_anchor: None,
+            inset_area_row: crate::anchor::InsetAreaKeyword::None,
+            inset_area_col: crate::anchor::InsetAreaKeyword::None,
+            anchor_scope: crate::anchor::AnchorScope::None,
+            anchor_size_w: None,
+            anchor_size_h: None,
+            view_transition_name: None,
+            quotes: Quotes::Auto,
         }
     }
 }
 
+/// Computes the `ComputedStyle` for `node` by running the CSS cascade.
+///
+/// `dark_mode` is forwarded to `@media (prefers-color-scheme: dark)` matching.
 pub fn compute_style(
     doc: &Document,
     node: NodeId,
     sheet: &Stylesheet,
     inherited: &ComputedStyle,
     viewport: Size,
+    dark_mode: bool,
 ) -> ComputedStyle {
     let mut style = ComputedStyle {
         display: default_display(doc, node),
@@ -4216,6 +5251,8 @@ pub fn compute_style(
         text_emphasis_color: inherited.text_emphasis_color,
         text_emphasis_position: inherited.text_emphasis_position,
         text_underline_position: inherited.text_underline_position,
+        text_underline_offset: inherited.text_underline_offset,
+        text_decoration_skip_ink: inherited.text_decoration_skip_ink,
         accent_color: inherited.accent_color,
         color_scheme: inherited.color_scheme,
         // CSS Color Adjustment L1 §4: forced-color-adjust is NOT inherited — reset.
@@ -4281,6 +5318,7 @@ pub fn compute_style(
         box_shadow: Vec::new(),
         overflow_x: Overflow::Visible,
         overflow_y: Overflow::Visible,
+        overflow_clip_margin: None,
         text_overflow: TextOverflow::Clip,
         opacity: 1.0,
         outline_width: 3.0,
@@ -4290,6 +5328,7 @@ pub fn compute_style(
         // CSS Lists L3 §3 — не наследуются.
         counter_reset: Vec::new(),
         counter_increment: Vec::new(),
+        counter_set: Vec::new(),
         // CSS Masking / Transforms / Filter — не наследуются.
         clip_path: None,
         transform: Vec::new(),
@@ -4306,6 +5345,9 @@ pub fn compute_style(
         column_rule_width: 0.0,
         column_rule_style: BorderStyle::None,
         column_rule_color: CssColor::CurrentColor,
+        gap_rule_width: 0.0,
+        gap_rule_style: BorderStyle::None,
+        gap_rule_color: CssColor::CurrentColor,
         column_span_all: false,
         column_fill_balance: false,
         break_before: BreakValue::Auto,
@@ -4326,6 +5368,7 @@ pub fn compute_style(
         pointer_events: PointerEvents::Auto,
         touch_action: TouchAction::Auto,
         appearance: Appearance::Auto,
+        field_sizing: FieldSizing::Fixed,
         text_align_last: TextAlignLast::Auto,
         // User Select / Scroll Behavior — наследуются.
         user_select: inherited.user_select,
@@ -4345,6 +5388,11 @@ pub fn compute_style(
         scroll_padding_left: 0.0,
         overscroll_behavior_x: OverscrollBehavior::Auto,
         overscroll_behavior_y: OverscrollBehavior::Auto,
+        // CSS Table — border-collapse and border-spacing are inherited (CSS Tables L2 §17.6).
+        border_collapse: inherited.border_collapse,
+        empty_cells: inherited.empty_cells,
+        border_spacing_h: inherited.border_spacing_h,
+        border_spacing_v: inherited.border_spacing_v,
         // CSS Text typography — все inherited.
         tab_size: inherited.tab_size,
         caret_color: inherited.caret_color,
@@ -4352,11 +5400,13 @@ pub fn compute_style(
         word_break: inherited.word_break,
         line_break: inherited.line_break,
         hyphens: inherited.hyphens,
-        // CSS Transforms transform-origin + perspective — не наследуются.
+        // CSS Transforms — не наследуются.
         transform_origin: (PositionComponent::Percent(0.5), PositionComponent::Percent(0.5), 0.0),
         perspective: None,
+        perspective_origin: (PositionComponent::Percent(0.5), PositionComponent::Percent(0.5)),
+        transform_style: TransformStyle::Flat,
         // CSS Lists — list-style-* наследуются.
-        list_style_type: inherited.list_style_type,
+        list_style_type: inherited.list_style_type.clone(),
         list_style_position: inherited.list_style_position,
         list_style_image: inherited.list_style_image.clone(),
         // CSS Transitions / Animations — не наследуются. Initial = empty list.
@@ -4373,6 +5423,11 @@ pub fn compute_style(
         animation_directions: Vec::new(),
         animation_fill_modes: Vec::new(),
         animation_play_states: Vec::new(),
+        animation_timelines: Vec::new(),
+        scroll_timeline_name: None,
+        scroll_timeline_axis: ScrollAxis::Block,
+        view_timeline_name: None,
+        view_timeline_axis: ScrollAxis::Block,
         // CSS Masking — не наследуется.
         mask_image: BackgroundImage::None,
         mask_repeat: BackgroundRepeat::Repeat,
@@ -4401,8 +5456,11 @@ pub fn compute_style(
         // CSS Grid Layout L1 — grid properties не наследуются.
         grid_template_columns: Vec::new(),
         grid_template_rows: Vec::new(),
+        grid_template_col_auto_repeat: None,
+        grid_template_row_auto_repeat: None,
         grid_template_areas: Vec::new(),
         grid_auto_flow: GridAutoFlow::Row,
+        masonry_auto_flow: MasonryAutoFlow::DefiniteFirst,
         grid_auto_columns: GridTrackSize::Auto,
         grid_auto_rows: GridTrackSize::Auto,
         grid_column_start: GridLine::Auto,
@@ -4420,6 +5478,11 @@ pub fn compute_style(
         // CSS Containment L3 — не наследуются. Initial values.
         contain: ContainFlags::NONE,
         content_visibility: ContentVisibility::Visible,
+        // CSS Box Sizing L4 §5 — contain-intrinsic-* are NOT inherited.
+        contain_intrinsic_width: None,
+        contain_intrinsic_height: None,
+        // CSS Sizing L4 §4.5 — interpolate-size is inherited.
+        interpolate_size: inherited.interpolate_size,
         container_type: ContainerType::Normal,
         container_name: Vec::new(),
         // CSS Filter Effects L2 — backdrop-filter не наследуется.
@@ -4445,6 +5508,42 @@ pub fn compute_style(
         svg_stroke: inherited.svg_stroke,
         svg_stroke_opacity: inherited.svg_stroke_opacity,
         svg_stroke_width: inherited.svg_stroke_width,
+        svg_fill_rule: inherited.svg_fill_rule,
+        svg_stroke_linecap: inherited.svg_stroke_linecap,
+        svg_stroke_linejoin: inherited.svg_stroke_linejoin,
+        svg_stroke_miterlimit: inherited.svg_stroke_miterlimit,
+        svg_stroke_dasharray: inherited.svg_stroke_dasharray.clone(),
+        svg_stroke_dashoffset: inherited.svg_stroke_dashoffset,
+        paint_order: inherited.paint_order,
+        // CSS Logical Properties L1 — not inherited. Initial values.
+        inline_size: None,
+        block_size: None,
+        inset_inline_start: LengthOrAuto::Auto,
+        inset_inline_end: LengthOrAuto::Auto,
+        inset_block_start: LengthOrAuto::Auto,
+        inset_block_end: LengthOrAuto::Auto,
+        margin_inline_start: LengthOrAuto::ZERO,
+        margin_inline_end: LengthOrAuto::ZERO,
+        margin_block_start: LengthOrAuto::ZERO,
+        margin_block_end: LengthOrAuto::ZERO,
+        padding_inline_start: Length::Px(0.0),
+        padding_inline_end: Length::Px(0.0),
+        padding_block_start: Length::Px(0.0),
+        padding_block_end: Length::Px(0.0),
+        border_inline_start_width: 0.0,
+        border_inline_end_width: 0.0,
+        border_block_start_width: 0.0,
+        border_block_end_width: 0.0,
+        anchor_name: None,
+        position_anchor: None,
+        inset_area_row: crate::anchor::InsetAreaKeyword::None,
+        inset_area_col: crate::anchor::InsetAreaKeyword::None,
+        anchor_scope: crate::anchor::AnchorScope::None,
+        anchor_size_w: None,
+        anchor_size_h: None,
+        view_transition_name: None,
+        // CSS Generated Content L3 §3.2 — quotes inherited.
+        quotes: inherited.quotes.clone(),
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -4500,10 +5599,26 @@ pub fn compute_style(
     if let Some(va) = ua_vertical_align(doc, node) {
         style.vertical_align = va;
     }
+    // UA stylesheet: <h1>–<h6> → font-size + vertical margins. HTML Rendering §15.3.3.
+    // Set font-size here (before the author font-size pre-pass) so author CSS overrides it.
+    apply_ua_heading_style(doc, node, inherited, &mut style);
     apply_ua_hr_style(doc, node, &mut style);
-    // UA stylesheet: form controls — display, intrinsic dimensions, border.
-    // HTML5 §15.5. Author CSS поверх перекроет.
-    apply_ua_form_controls(doc, node, &mut style);
+    // UA stylesheet: form controls — display, intrinsic dimensions, border,
+    // background, and foreground color. HTML5 §15.5. Author CSS поверх перекроет.
+    //
+    // CSS Color Adjustment L1 §2.3: тема UA-виджета определяется «used color
+    // scheme» элемента, а не сырым предпочтением ОС. `color-scheme` наследуется,
+    // поэтому на этапе UA-фазы (до author-каскада) берём inherited-значение —
+    // оно покрывает типовой паттерн `:root { color-scheme: dark }`, спускающийся
+    // к контролам. Так `color-scheme: light` форсирует светлый виджет даже в
+    // OS-dark, а `dark` — тёмный в OS-light.
+    //
+    // CSS: system-color — P4 wires `system_color()` into the color cascade
+    // (a `CssColor::System(name)` variant resolved at used-value time against
+    // the element's used color scheme) for `Canvas`/`CanvasText`/`ButtonFace`/…
+    // keyword support. The resolution table already lives in `system_color()`.
+    let widget_dark = inherited.color_scheme.used_dark(dark_mode);
+    apply_ua_form_controls(doc, node, &mut style, widget_dark);
     // UA stylesheet: <dialog> without `open` → display:none. HTML5 §15.3.9.
     apply_ua_dialog_display(doc, node, &mut style);
 
@@ -4585,7 +5700,29 @@ pub fn compute_style(
         if imp { -layer_idx } else { layer_idx }
     };
     let mut matched: Vec<(bool, bool, i32, Specificity, usize, usize, &Declaration)> = Vec::new();
-    for (rule_idx, rule) in sheet.rules.iter().enumerate() {
+
+    // Build or reuse a per-stylesheet rule index (thread-local, keyed by
+    // pointer+length). Amortised O(1): rebuilt only when the sheet changes.
+    let node_data = doc.get(node);
+    let node_tag = node_data.element_name().map_or("", |q| q.local.as_str());
+    let node_id = node_data.get_attr("id");
+    let class_attr = node_data.get_attr("class").unwrap_or("");
+    let node_classes: Vec<&str> = class_attr.split_whitespace().collect();
+
+    let sheet_ptr = sheet as *const Stylesheet as usize;
+    let sheet_rules_len = sheet.rules.len();
+    RULE_IDX_CACHE.with(|cell| {
+        let mut cached = cell.borrow_mut();
+        if cached.0 != sheet_ptr || cached.1 != sheet_rules_len {
+            *cached = (sheet_ptr, sheet_rules_len, RuleIndex::build(sheet));
+        }
+    });
+    let cands = RULE_IDX_CACHE.with(|cell| {
+        cell.borrow().2.candidates(node_tag, node_id, &node_classes)
+    });
+
+    for &rule_idx in &cands {
+        let rule = &sheet.rules[rule_idx];
         let mut best: Option<Specificity> = None;
         for complex in &rule.selectors {
             if matches_complex(complex, doc, node) {
@@ -4641,10 +5778,10 @@ pub fn compute_style(
     // CSS Media Queries L4: rules внутри `@media`-блока, чей query
     // совпадает с текущим MediaContext, добавляются в каскад. В Phase 0
     // упрощённый MediaContext: media_type="screen", width/height из
-    // viewport, prefers_dark=false. Source-order между обычными и
+    // viewport. Source-order между обычными и
     // @media-rules не сохраняется идеально (все @media идут после
     // обычных) — это известное ограничение.
-    let media_ctx = media_context_from_viewport(viewport);
+    let media_ctx = media_context_from_viewport(viewport, dark_mode);
     let mut next_rule_idx = sheet.rules.len();
     for media in &sheet.media_rules {
         if !media.query.matches(&media_ctx) {
@@ -4671,6 +5808,90 @@ pub fn compute_style(
             next_rule_idx += 1;
         }
     }
+    // CSS Conditional Rules L3 §2 — `@supports`: evaluate condition against
+    // Lumen's supported-properties list; include contained rules only when
+    // condition is true (same ordering semantics as @media).
+    for supports in &sheet.supports_rules {
+        if !supports.condition.evaluate(SUPPORTED_PROPERTIES) {
+            next_rule_idx += supports.rules.len();
+            continue;
+        }
+        for rule in &supports.rules {
+            let mut best: Option<Specificity> = None;
+            for complex in &rule.selectors {
+                if matches_complex(complex, doc, node) {
+                    let spec = complex.specificity();
+                    best = Some(match best {
+                        Some(prev) if prev >= spec => prev,
+                        _ => spec,
+                    });
+                }
+            }
+            if let Some(spec) = best {
+                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                    let lp = layer_pri(decl.important, layer_n);
+                    matched.push((decl.important, false, lp, spec, next_rule_idx, decl_idx, decl));
+                }
+            }
+            next_rule_idx += 1;
+        }
+    }
+    // CSS Cascade L6 §5 — @scope rules: apply only when node is in scope.
+    for scope_rule in &sheet.scope_rules {
+        if !node_is_in_scope(doc, node, &scope_rule.root) {
+            next_rule_idx += scope_rule.rules.len();
+            continue;
+        }
+        // Scope limit: if `to (<limit>)` is set, skip nodes that are
+        // descendants of the limit selector *within* this scope.
+        if let Some(ref limit_sel) = scope_rule.limit
+            && node_is_in_scope(doc, node, limit_sel) {
+            next_rule_idx += scope_rule.rules.len();
+            continue;
+        }
+        for rule in &scope_rule.rules {
+            let mut best: Option<Specificity> = None;
+            for complex in &rule.selectors {
+                if matches_complex(complex, doc, node) {
+                    let spec = complex.specificity();
+                    best = Some(match best {
+                        Some(prev) if prev >= spec => prev,
+                        _ => spec,
+                    });
+                }
+            }
+            if let Some(spec) = best {
+                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                    let lp = layer_pri(decl.important, layer_n);
+                    matched.push((decl.important, false, lp, spec, next_rule_idx, decl_idx, decl));
+                }
+            }
+            next_rule_idx += 1;
+        }
+    }
+    // CSS Scoping L1 §6.2 — `::slotted(sel)`: if this node is a slotted element
+    // (direct DOM child of a shadow host), match against all `::slotted()` rules.
+    // These declarations participate in the same cascade as author rules.
+    if is_slotted_element(doc, node) {
+        for (rule_idx, rule) in sheet.rules.iter().enumerate() {
+            let mut best: Option<Specificity> = None;
+            for complex in &rule.selectors {
+                if let Some(spec) = matches_slotted_complex(complex, doc, node) {
+                    best = Some(match best {
+                        Some(prev) if prev >= spec => prev,
+                        _ => spec,
+                    });
+                }
+            }
+            if let Some(spec) = best {
+                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                    let lp = layer_pri(decl.important, layer_n);
+                    matched.push((decl.important, false, lp, spec, rule_idx, decl_idx, decl));
+                }
+            }
+        }
+    }
+
     // Inline-style declarations подключаются с `is_inline = true` и
     // synthetic specificity = default (Cascade L4 §6.4.3 — реальная
     // specificity inline-стиля игнорируется в сортировке: за порядок
@@ -4691,6 +5912,47 @@ pub fn compute_style(
         (imp, inline, lp, spec, rule_idx, decl_idx)
     });
 
+    // CSS Cascade L5 §6.4.6 — `revert-layer`: a declaration whose value is
+    // `revert-layer` rolls the cascaded value back to what it would be if all
+    // declarations of that property in the *current* cascade layer (same
+    // importance) were removed. We resolve it as a pre-pass over the already
+    // cascade-sorted `matched` set: for every property whose winning
+    // declaration (the last occurrence in sort order) is `revert-layer`, drop
+    // every declaration of that property belonging to the winning layer, then
+    // repeat — a lower layer may itself contain `revert-layer`. The normal
+    // last-wins apply loop below then yields the reverted value automatically;
+    // when nothing remains the property keeps its inherited/initial value.
+    //
+    // `revert-layer` is intentionally NOT a `CssWideKeyword`: it depends on the
+    // declaration's own layer, so it cannot be applied per-declaration like
+    // `inherit`/`initial`. Shorthand↔longhand reverts across layers are a known
+    // limitation (grouping is by exact property name).
+    loop {
+        use std::collections::HashMap;
+        // Winner per property = last occurrence in the cascade-sorted vec.
+        // (lp, important, is_revert_layer)
+        let mut winners: HashMap<String, (i32, bool, bool)> = HashMap::new();
+        for &(imp, _inline, lp, _, _, _, decl) in &matched {
+            let key = decl.property.to_ascii_lowercase();
+            let is_revert = decl.value.trim().eq_ignore_ascii_case("revert-layer");
+            winners.insert(key, (lp, imp, is_revert));
+        }
+        let targets: Vec<(String, i32, bool)> = winners
+            .into_iter()
+            .filter(|&(_, (_, _, is_revert))| is_revert)
+            .map(|(k, (lp, imp, _))| (k, lp, imp))
+            .collect();
+        if targets.is_empty() {
+            break;
+        }
+        matched.retain(|&(imp, _inline, lp, _, _, _, decl)| {
+            let key = decl.property.to_ascii_lowercase();
+            !targets
+                .iter()
+                .any(|(tk, tlp, timp)| *tk == key && *tlp == lp && *timp == imp)
+        });
+    }
+
     // Pre-pass: применяем font-size раньше, потому что em/% других свойств
     // считаются относительно computed font-size этого же элемента, а em для
     // самого font-size — относительно inherited (родительского) font-size.
@@ -4698,6 +5960,16 @@ pub fn compute_style(
     let is_quirks = doc.mode() == DocumentMode::Quirks;
     for (_, _, _, _, _, _, decl) in &matched {
         apply_font_size(&mut style, decl, parent_fs, viewport, is_quirks);
+    }
+
+    // Pre-pass: применяем color-scheme раньше main-pass, чтобы системные
+    // цвета (Canvas, ButtonFace, …) резолвились против правильной темы
+    // ещё в ходе main-pass (для поля `color: Color`; CssColor-поля
+    // резолвятся отдельным post-pass в конце compute_style).
+    for (_, _, _, _, _, _, decl) in &matched {
+        if decl.property.eq_ignore_ascii_case("color-scheme") {
+            apply_declaration(&mut style, decl, parent_fs, viewport, FontWeight::NORMAL, inherited, is_quirks, dark_mode);
+        }
     }
 
     // Custom-properties pass: все `--name: value` декларации применяются
@@ -4738,15 +6010,92 @@ pub fn compute_style(
     // `inherited` целиком — для CSS-wide keywords (CSS Cascade L4 §7).
     let em_basis = style.font_size;
     let parent_weight = inherited.font_weight;
+
+    // SVG 2 §6.4: presentation attributes act as author rules of the lowest
+    // priority. Apply them before the matched-declaration loop so any CSS rule
+    // (stylesheet or inline) overrides them.
+    apply_svg_presentational_hints(
+        doc, node, &mut style, em_basis, viewport, parent_weight, inherited, is_quirks,
+    );
+
     for (_, _, _, _, _, _, decl) in &matched {
-        apply_declaration(&mut style, decl, em_basis, viewport, parent_weight, inherited, is_quirks);
+        // CSS Cascade L5 §6.4.6: a `revert-layer` declaration that survived the
+        // pre-pass was overridden by a higher layer for the same property, so it
+        // has no effect — skip it instead of letting it fail property parsing.
+        if decl.value.trim().eq_ignore_ascii_case("revert-layer") {
+            continue;
+        }
+        // CSS Values L4 §7.7: expand attr() typed references before applying.
+        let attr_buf;
+        let effective_decl: &Declaration = if decl.value.contains("attr(") {
+            let Some(v) = expand_attr_val(&decl.value, doc, node) else { continue };
+            attr_buf = Declaration { property: decl.property.clone(), value: v, important: decl.important };
+            &attr_buf
+        } else {
+            decl
+        };
+        apply_declaration(&mut style, effective_decl, em_basis, viewport, parent_weight, inherited, is_quirks, dark_mode);
     }
+
+    // CSS Color 4 §6.2 — post-pass: resolve any CssColor::System variants in
+    // CssColor-typed fields (border-color, background-color, etc.) now that
+    // style.color_scheme is final. The `color` field (Color, not CssColor) was
+    // already resolved inline in the `"color"` branch of apply_declaration.
+    resolve_system_colors_in_style(&mut style, dark_mode);
 
     // CSS Overflow L3 §2.1: if one axis is `visible` and the other is not,
     // the `visible` axis becomes `auto` (both axes must agree on visibility).
     (style.overflow_x, style.overflow_y) = coerce_overflow_axes(style.overflow_x, style.overflow_y);
 
+    // CSS Logical Properties L1 — resolve logical properties to physical.
+    resolve_logical_properties(&mut style);
+
+    // CSS Basic UI L4 §5 — appearance: none removes UA styling from form controls.
+    // Applied after CSS declarations so author `appearance: none` takes effect.
+    apply_ua_appearance(doc, node, &mut style);
+
+    // CSS Basic UI L4 §4.4 — field-sizing: content post-pass.
+    // apply_ua_form_controls ran before the cascade and may have set explicit UA
+    // dimensions. Now that field_sizing is final, clear width/height for text-entry
+    // controls so lay_out picks up field_sizing_content_intrinsic dimensions instead.
+    if style.field_sizing == FieldSizing::Content {
+        apply_ua_form_controls_field_sizing_clear(doc, node, &mut style);
+    }
+
     style
+}
+
+/// CSS Color 4 §6.2 — resolve `CssColor::System` variants in all CssColor-typed
+/// fields of `style` to `CssColor::Rgba` using the element's final used color
+/// scheme. Called once at the end of `compute_style`, after all declarations
+/// have been applied so `style.color_scheme` is final.
+fn resolve_system_colors_in_style(style: &mut ComputedStyle, dark_mode: bool) {
+    let dark = style.color_scheme.used_dark(dark_mode);
+
+    macro_rules! resolve_opt {
+        ($field:expr) => {
+            if let Some(CssColor::System(sc)) = $field {
+                *$field = Some(CssColor::Rgba(sc.resolve_color(dark)));
+            }
+        };
+    }
+    macro_rules! resolve {
+        ($field:expr) => {
+            if let CssColor::System(sc) = $field {
+                *$field = CssColor::Rgba(sc.resolve_color(dark));
+            }
+        };
+    }
+
+    resolve_opt!(&mut style.background_color);
+    resolve!(&mut style.text_decoration_color);
+    resolve!(&mut style.text_emphasis_color);
+    resolve!(&mut style.border_top_color);
+    resolve!(&mut style.border_right_color);
+    resolve!(&mut style.border_bottom_color);
+    resolve!(&mut style.border_left_color);
+    resolve!(&mut style.column_rule_color);
+    resolve!(&mut style.gap_rule_color);
 }
 
 /// CSS Overflow L3 §2.1: coerce mismatched overflow axes.
@@ -4755,6 +6104,80 @@ fn coerce_overflow_axes(ox: Overflow, oy: Overflow) -> (Overflow, Overflow) {
     let new_ox = if ox == Overflow::Visible && oy != Overflow::Visible { Overflow::Auto } else { ox };
     let new_oy = if oy == Overflow::Visible && ox != Overflow::Visible { Overflow::Auto } else { oy };
     (new_ox, new_oy)
+}
+
+/// CSS Logical Properties L1 — resolve logical properties to physical.
+/// Depends on writing-mode to determine which physical properties correspond to inline/block axis.
+/// Phase 0: horizontal-tb only (inline-start=left, inline-end=right, block-start=top, block-end=bottom).
+fn resolve_logical_properties(style: &mut ComputedStyle) {
+    // In horizontal-tb writing mode (default, Phase 0):
+    // inline-start = left, inline-end = right, block-start = top, block-end = bottom.
+    // For other writing modes, mapping differs; Phase 1+ will implement full support.
+
+    // CSS Logical Properties L1 §2 — inline-size / block-size → width / height.
+    if style.inline_size.is_some() && style.width.is_none() {
+        style.width = style.inline_size.clone();
+    }
+    if style.block_size.is_some() && style.height.is_none() {
+        style.height = style.block_size.clone();
+    }
+
+    // CSS Logical Properties L1 §4 — inset-inline-* / inset-block-* → top/right/bottom/left.
+    // Phase 0: horizontal-tb (inline-start=left, inline-end=right).
+    if style.inset_inline_start != LengthOrAuto::Auto && style.left == LengthOrAuto::Auto {
+        style.left = style.inset_inline_start.clone();
+    }
+    if style.inset_inline_end != LengthOrAuto::Auto && style.right == LengthOrAuto::Auto {
+        style.right = style.inset_inline_end.clone();
+    }
+    if style.inset_block_start != LengthOrAuto::Auto && style.top == LengthOrAuto::Auto {
+        style.top = style.inset_block_start.clone();
+    }
+    if style.inset_block_end != LengthOrAuto::Auto && style.bottom == LengthOrAuto::Auto {
+        style.bottom = style.inset_block_end.clone();
+    }
+
+    // CSS Logical Properties L1 §5 — margin-inline-* / margin-block-* → margin-left/right/top/bottom.
+    if style.margin_inline_start != LengthOrAuto::ZERO && style.margin_left == LengthOrAuto::ZERO {
+        style.margin_left = style.margin_inline_start.clone();
+    }
+    if style.margin_inline_end != LengthOrAuto::ZERO && style.margin_right == LengthOrAuto::ZERO {
+        style.margin_right = style.margin_inline_end.clone();
+    }
+    if style.margin_block_start != LengthOrAuto::ZERO && style.margin_top == LengthOrAuto::ZERO {
+        style.margin_top = style.margin_block_start.clone();
+    }
+    if style.margin_block_end != LengthOrAuto::ZERO && style.margin_bottom == LengthOrAuto::ZERO {
+        style.margin_bottom = style.margin_block_end.clone();
+    }
+
+    // CSS Logical Properties L1 §6 — padding-inline-* / padding-block-* → padding-left/right/top/bottom.
+    if style.padding_inline_start != Length::Px(0.0) && style.padding_left == Length::Px(0.0) {
+        style.padding_left = style.padding_inline_start.clone();
+    }
+    if style.padding_inline_end != Length::Px(0.0) && style.padding_right == Length::Px(0.0) {
+        style.padding_right = style.padding_inline_end.clone();
+    }
+    if style.padding_block_start != Length::Px(0.0) && style.padding_top == Length::Px(0.0) {
+        style.padding_top = style.padding_block_start.clone();
+    }
+    if style.padding_block_end != Length::Px(0.0) && style.padding_bottom == Length::Px(0.0) {
+        style.padding_bottom = style.padding_block_end.clone();
+    }
+
+    // CSS Logical Properties L1 §7 — border-inline-*-width / border-block-*-width.
+    if style.border_inline_start_width > 0.0 && style.border_left_width == 0.0 {
+        style.border_left_width = style.border_inline_start_width;
+    }
+    if style.border_inline_end_width > 0.0 && style.border_right_width == 0.0 {
+        style.border_right_width = style.border_inline_end_width;
+    }
+    if style.border_block_start_width > 0.0 && style.border_top_width == 0.0 {
+        style.border_top_width = style.border_block_start_width;
+    }
+    if style.border_block_end_width > 0.0 && style.border_bottom_width == 0.0 {
+        style.border_bottom_width = style.border_block_end_width;
+    }
 }
 
 // ── Pseudo-element style matching ───────────────────────────────────────────
@@ -4775,6 +6198,7 @@ fn pseudo_element_matches(kind: &PseudoElementKind, name: &str) -> bool {
         PseudoElementKind::Slotted(_) => name.eq_ignore_ascii_case("slotted"),
         PseudoElementKind::Marker => name.eq_ignore_ascii_case("marker"),
         PseudoElementKind::Selection => name.eq_ignore_ascii_case("selection"),
+        PseudoElementKind::Highlight(_) => name.eq_ignore_ascii_case("highlight"),
         PseudoElementKind::Unknown(s) => s.eq_ignore_ascii_case(name),
     }
 }
@@ -4813,9 +6237,28 @@ fn matches_complex_for_pseudo(
     }
 }
 
+/// Build a `ComputedStyle` from a flat list of declarations with neutral context.
+///
+/// Used by `@starting-style` cascade wiring: converts the declarations returned by
+/// `resolve_starting_style()` into a `ComputedStyle` that serves as the
+/// *before-change* style for CSS entry transitions (CSS Transitions L2 §3.4).
+///
+/// Context defaults: em_basis = 16 px, inherited = default, non-quirks mode.
+/// Suitable for transition value extraction (`opacity`, `color`, `background-color`,
+/// `transform`).
+pub fn compute_style_from_declarations(decls: &[Declaration], viewport: Size) -> ComputedStyle {
+    let inherited = ComputedStyle::root();
+    let mut style = inherited.clone();
+    for decl in decls {
+        apply_declaration(&mut style, decl, 16.0, viewport, FontWeight::NORMAL, &inherited, false, false);
+    }
+    style
+}
+
 /// Вычисляет стиль для псевдоэлемента `::before` или `::after` элемента `node`.
 ///
-/// `pseudo` — "before" или "after" (без "::").
+/// `pseudo` — "before" или "after" (без "::"). `dark_mode` forwarded to
+/// `@media (prefers-color-scheme: dark)` matching.
 ///
 /// Возвращает `None` если:
 /// - нет CSS-правил для данного псевдоэлемента на этом узле, или
@@ -4827,6 +6270,7 @@ pub fn compute_pseudo_element_style(
     sheet: &Stylesheet,
     parent: &ComputedStyle,
     viewport: Size,
+    dark_mode: bool,
 ) -> Option<ComputedStyle> {
     if !matches!(doc.get(node).data, NodeData::Element { .. }) {
         return None;
@@ -4864,6 +6308,8 @@ pub fn compute_pseudo_element_style(
     style.text_emphasis_color = parent.text_emphasis_color;
     style.text_emphasis_position = parent.text_emphasis_position;
     style.text_underline_position = parent.text_underline_position;
+    style.text_underline_offset = parent.text_underline_offset;
+    style.text_decoration_skip_ink = parent.text_decoration_skip_ink;
     style.accent_color = parent.accent_color;
     style.color_scheme = parent.color_scheme;
     style.custom_props = parent.custom_props.clone();
@@ -4878,7 +6324,7 @@ pub fn compute_pseudo_element_style(
     style.word_break = parent.word_break;
     style.line_break = parent.line_break;
     style.hyphens = parent.hyphens;
-    style.list_style_type = parent.list_style_type;
+    style.list_style_type = parent.list_style_type.clone();
     style.list_style_position = parent.list_style_position;
     style.list_style_image = parent.list_style_image.clone();
     style.orphans = parent.orphans;
@@ -4891,6 +6337,8 @@ pub fn compute_pseudo_element_style(
     style.font_size_adjust = parent.font_size_adjust;
     style.text_wrap_mode = parent.text_wrap_mode;
     style.text_wrap_style = parent.text_wrap_style;
+    style.interpolate_size = parent.interpolate_size;
+    style.quotes = parent.quotes.clone();
 
     // Собираем matching declarations из всех правил.
     let mut matched: Vec<(bool, Specificity, usize, usize, &Declaration)> = Vec::new();
@@ -4911,7 +6359,7 @@ pub fn compute_pseudo_element_style(
         }
     }
 
-    let media_ctx = media_context_from_viewport(viewport);
+    let media_ctx = media_context_from_viewport(viewport, dark_mode);
     let mut next_rule_idx = sheet.rules.len();
     for media in &sheet.media_rules {
         if !media.query.matches(&media_ctx) {
@@ -4936,8 +6384,37 @@ pub fn compute_pseudo_element_style(
             next_rule_idx += 1;
         }
     }
+    // CSS Conditional Rules L3 §2 — @supports in pseudo-element context.
+    for supports in &sheet.supports_rules {
+        if !supports.condition.evaluate(SUPPORTED_PROPERTIES) {
+            next_rule_idx += supports.rules.len();
+            continue;
+        }
+        for rule in &supports.rules {
+            let mut best: Option<Specificity> = None;
+            for complex in &rule.selectors {
+                if let Some(spec) = matches_complex_for_pseudo(complex, pseudo, doc, node) {
+                    best = Some(match best {
+                        Some(prev) if prev >= spec => prev,
+                        _ => spec,
+                    });
+                }
+            }
+            if let Some(spec) = best {
+                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                    matched.push((decl.important, spec, next_rule_idx, decl_idx, decl));
+                }
+            }
+            next_rule_idx += 1;
+        }
+    }
 
     if matched.is_empty() {
+        // CSS Lists L3 §2.1: ::marker always generates a marker box from list-style-type
+        // without any explicit CSS rule. Other pseudo-elements require a matching declaration.
+        if pseudo.eq_ignore_ascii_case("marker") {
+            return Some(style);
+        }
         return None;
     }
 
@@ -4951,13 +6428,58 @@ pub fn compute_pseudo_element_style(
     let em_basis = style.font_size;
     let parent_weight = parent.font_weight;
     for (_, _, _, _, decl) in &matched {
-        apply_declaration(&mut style, decl, em_basis, viewport, parent_weight, parent, is_quirks);
+        let attr_buf;
+        let effective_decl: &Declaration = if decl.value.contains("attr(") {
+            let Some(v) = expand_attr_val(&decl.value, doc, node) else { continue };
+            attr_buf = Declaration { property: decl.property.clone(), value: v, important: decl.important };
+            &attr_buf
+        } else {
+            decl
+        };
+        apply_declaration(&mut style, effective_decl, em_basis, viewport, parent_weight, parent, is_quirks, dark_mode);
     }
 
-    match &style.content {
-        Content::Items(_) => Some(style),
-        _ => None,
+    // ::before/::after require content: to render; ::first-letter/::first-line do not.
+    // ::marker renders by default (content comes from list-style-type); content:none suppresses it.
+    // ::selection applies to active text selection — no content required (CSS Pseudo-elements L4 §5.6).
+    if pseudo.eq_ignore_ascii_case("first-letter")
+        || pseudo.eq_ignore_ascii_case("first-line")
+        || pseudo.eq_ignore_ascii_case("selection")
+    {
+        Some(style)
+    } else if pseudo.eq_ignore_ascii_case("marker") {
+        match &style.content {
+            Content::None => None,
+            _ => Some(style),
+        }
+    } else {
+        match &style.content {
+            Content::Items(_) => Some(style),
+            _ => None,
+        }
     }
+}
+
+/// Computes the `::selection` override style for a DOM element.
+///
+/// Collects all CSS rules targeting `element::selection`, applies declarations
+/// in specificity order, and returns the computed style. Returns `None` when
+/// no `::selection` rules match `node` (callers should fall back to the OS
+/// default selection highlight colour in that case).
+///
+/// Only a limited subset of properties are honoured by `::selection` per
+/// CSS Pseudo-elements L4 §5.6: `color`, `background-color`,
+/// `text-decoration-*`, `text-shadow`. Other declared properties are parsed
+/// and stored but should be ignored by the paint layer.
+pub fn compute_selection_style(
+    doc: &Document,
+    node: NodeId,
+    sheet: &Stylesheet,
+    parent: &ComputedStyle,
+    viewport: Size,
+    dark_mode: bool,
+) -> Option<ComputedStyle> {
+    compute_pseudo_element_style(doc, node, "selection", sheet, parent, viewport, dark_mode)
 }
 
 /// CSS Properties and Values L1 §1.1: для каждого зарегистрированного
@@ -5206,6 +6728,80 @@ fn matches_chain(
     }
 }
 
+/// CSS Scoping L1 §6.2: true if `node` is a direct light-tree child of a shadow host,
+/// meaning it is eligible to be slotted via a `<slot>` in the shadow tree.
+fn is_slotted_element(doc: &Document, node: NodeId) -> bool {
+    doc.get(node).parent
+        .map(|p| doc.is_shadow_host(p))
+        .unwrap_or(false)
+}
+
+/// CSS Scoping L1 §6.2 — attempts to match a complex selector containing
+/// `::slotted(inner_sel)` against `node`.
+///
+/// Returns `Some(specificity)` when all conditions hold:
+/// 1. The last compound of `complex` contains `::slotted(inner_sel)`.
+/// 2. `node` is a slotted element (DOM parent is a shadow host).
+/// 3. `node` matches every selector in `inner_sel`.
+/// 4. The outer context (compound minus `::slotted`) matches the shadow host (node's parent).
+///    If the outer context is empty, no ancestor check is needed.
+pub(crate) fn matches_slotted_complex(
+    complex: &ComplexSelector,
+    doc: &Document,
+    node: NodeId,
+) -> Option<Specificity> {
+    // Locate the last compound, which must contain ::slotted.
+    let last = complex.tail.last().map(|(_, c)| c).unwrap_or(&complex.head);
+    let slotted_inner: Option<&Vec<ComplexSelector>> = last.parts.iter().find_map(|p| {
+        if let SimpleSelector::PseudoElement(PseudoElementKind::Slotted(inner)) = p {
+            Some(inner.as_ref()?)
+        } else {
+            None
+        }
+    });
+    // Rule must contain ::slotted.
+    let inner_selectors = slotted_inner?;
+
+    // Node must be a slotted element.
+    if !is_slotted_element(doc, node) {
+        return None;
+    }
+
+    // Node must match the inner selector list.
+    if !inner_selectors.iter().any(|s| matches_complex(s, doc, node)) {
+        return None;
+    }
+
+    // Build the outer complex selector (strip ::slotted from the last compound).
+    let stripped_last = CompoundSelector {
+        parts: last.parts.iter()
+            .filter(|p| !matches!(p, SimpleSelector::PseudoElement(PseudoElementKind::Slotted(_))))
+            .cloned()
+            .collect(),
+    };
+
+    // If there is no outer context at all, the rule matches.
+    if complex.tail.is_empty() && stripped_last.parts.is_empty() {
+        return Some(complex.specificity());
+    }
+
+    // Outer context: match against the shadow host (node's DOM parent).
+    let host = doc.get(node).parent.expect("is_slotted_element ensures parent");
+    let outer = if complex.tail.is_empty() {
+        ComplexSelector { head: stripped_last, tail: vec![] }
+    } else {
+        let mut tail = complex.tail.clone();
+        tail.last_mut().expect("non-empty tail").1 = stripped_last;
+        ComplexSelector { head: complex.head.clone(), tail }
+    };
+
+    if matches_complex(&outer, doc, host) {
+        Some(complex.specificity())
+    } else {
+        None
+    }
+}
+
 fn matches_compound(compound: &CompoundSelector, doc: &Document, node: NodeId) -> bool {
     let NodeData::Element { name, attrs } = &doc.get(node).data else {
         return false;
@@ -5406,22 +7002,19 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         // registry, проверка станет `built-in || registry.has(name)`.
         PseudoClass::Defined => matches_defined(doc, node),
         // Fullscreen API §4.2 `:fullscreen` — runtime-only: top-layer
-        // элементов, поднятых через `Element.requestFullscreen()`. Phase 0
-        // без Fullscreen API в shell — всегда `false` (privacy-/UX-safe
-        // default: страница не может имитировать fullscreen-стили
-        // вне реального fullscreen-режима).
-        PseudoClass::Fullscreen => false,
-        // CSS Selectors L4 §16.5.2 `:modal` — `<dialog>` после
-        // `dialog.showModal()` (но не `dialog.show()` non-modal) или
-        // элемент в fullscreen top-layer. Runtime-only: атрибут `open`
-        // не разделяет modal vs non-modal dialog. Phase 0 без dialog
-        // runtime — всегда `false`.
-        PseudoClass::Modal => false,
+        // элементов, поднятых через `Element.requestFullscreen()`. JS API
+        // реализован (p1-fullscreen-api); sentinel — `data-lumen-fullscreen`.
+        // CSS: :fullscreen — P4: check doc.get_attr(node.id,"data-lumen-fullscreen").is_some()
+        PseudoClass::Fullscreen => doc.get(node).get_attr("data-lumen-fullscreen").is_some(),
+        // CSS Selectors L4 §16.5.2 `:modal` — `<dialog>` opened via
+        // `showModal()`. JS sets `data-lumen-modal` sentinel; `show()` / author
+        // attribute do not set it, so non-modal dialogs stay unmatched.
+        PseudoClass::Modal => doc.get(node).get_attr("data-lumen-modal").is_some(),
         // HTML LS §6.12.2 `:popover-open` — popover в открытом состоянии
         // после `element.showPopover()` / клика по `popovertarget`.
         // Runtime-only: атрибут `popover` декларирует тип, но не открытое
         // состояние. Phase 0 без Popover API runtime — всегда `false`.
-        PseudoClass::PopoverOpen => false,
+        PseudoClass::PopoverOpen => doc.get(node).get_attr("data-lumen-popover-open").is_some(),
         // CSS Selectors L4 §11.4 time-dimensional pseudo-classes —
         // `:current` / `:past` / `:future` matches на active / elapsed /
         // upcoming моменты в timed-text потоке (WebVTT cue rendering при
@@ -5437,8 +7030,46 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         PseudoClass::Invalid => form_validity(doc, node) == Some(false),
         // Phase 0: без интерактивного состояния пользователя — всегда false.
         PseudoClass::UserValid | PseudoClass::UserInvalid => false,
+        // ── Interactive pseudo-classes ────────────────────────────────────────────
+        // State is set thread-locally by `set_interactive_state` before layout.
+        // `:hover` — element under pointer, or its ancestors (CSS Selectors L4 §4.3).
+        PseudoClass::Hover => {
+            let hid = HOVER_NID.with(Cell::get);
+            if hid == u32::MAX { return false; }
+            is_self_or_ancestor(doc, node, NodeId::from_index(hid as usize))
+        }
+        // `:focus` — exact keyboard-focused element (no ancestor propagation).
+        PseudoClass::Focus => {
+            FOCUS_NID.with(Cell::get) == node.index() as u32
+        }
+        // `:active` — mouse-pressed element and its ancestors (CSS Selectors L4 §4.5).
+        PseudoClass::Active => {
+            let aid = ACTIVE_NID.with(Cell::get);
+            if aid == u32::MAX { return false; }
+            is_self_or_ancestor(doc, node, NodeId::from_index(aid as usize))
+        }
+        // `:focus-within` — element or any descendant has focus (CSS Selectors L4 §4.4.2).
+        PseudoClass::FocusWithin => {
+            let fid = FOCUS_NID.with(Cell::get);
+            if fid == u32::MAX { return false; }
+            is_self_or_ancestor(doc, node, NodeId::from_index(fid as usize))
+        }
+        // `:focus-visible` — Phase 0: identical to `:focus` (no keyboard-vs-mouse distinction yet).
+        PseudoClass::FocusVisible => {
+            FOCUS_NID.with(Cell::get) == node.index() as u32
+        }
         PseudoClass::Unsupported(_) => false,
-        PseudoClass::Host(_) => false,
+        // CSS Scoping L1 §6.1: `:host` matches the shadow host element from within the shadow tree.
+        // `:host` without args — any shadow host; `:host(sel)` — host must also match `sel`.
+        PseudoClass::Host(opt_list) => {
+            if !doc.is_shadow_host(node) {
+                return false;
+            }
+            match opt_list {
+                None => true,
+                Some(list) => list.iter().any(|s| matches_complex(s, doc, node)),
+            }
+        }
     }
 }
 
@@ -6692,8 +8323,8 @@ fn ua_vertical_align(doc: &Document, node: NodeId) -> Option<VerticalAlign> {
     }
 }
 
-/// Применяет HTML presentational hints для `<img>` и `<video>`: `width`/`height`,
-/// `hspace`/`vspace` (→ margin), `border` (→ border-width + style=solid) для `<img>`.
+/// Применяет HTML presentational hints для `<img>`, `<video>`, `<iframe>`:
+/// `width`/`height`, `hspace`/`vspace` (→ margin), `border` для `<img>`.
 /// HTML5 §15.3.9. Author CSS поверх — выигрывает.
 fn apply_image_presentational_hints(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
     let NodeData::Element { name, .. } = &doc.get(node).data else {
@@ -6701,7 +8332,8 @@ fn apply_image_presentational_hints(doc: &Document, node: NodeId, style: &mut Co
     };
     let is_img = name.local == "img";
     let is_video = name.local == "video";
-    if !is_img && !is_video {
+    let is_iframe = name.local == "iframe";
+    if !is_img && !is_video && !is_iframe {
         return;
     }
     let node_ref = doc.get(node);
@@ -6734,6 +8366,75 @@ fn apply_image_presentational_hints(doc: &Document, node: NodeId, style: &mut Co
             }
         }
     }
+}
+
+/// SVG 2 §6.4 — SVG presentation attributes. Geometry and paint properties on
+/// SVG elements may be given as plain XML attributes (e.g. `<path fill="none"
+/// stroke="#e94560" stroke-width="8">`) instead of CSS. Each maps onto the
+/// corresponding CSS property, but with the **lowest author-origin priority**:
+/// any matching CSS rule (stylesheet selector or inline `style=""`) overrides it.
+///
+/// We therefore apply them *before* the matched-declaration cascade loop, reusing
+/// `apply_declaration` for parsing so the attribute and the CSS form share one
+/// code path. Gated by SVG tag name so HTML attributes coincidentally named
+/// `fill`/`stroke`/`color` on non-SVG elements are not reinterpreted as paint.
+#[allow(clippy::too_many_arguments)]
+fn apply_svg_presentational_hints(
+    doc: &Document,
+    node: NodeId,
+    style: &mut ComputedStyle,
+    em_basis: f32,
+    viewport: Size,
+    parent_weight: FontWeight,
+    inherited: &ComputedStyle,
+    is_quirks: bool,
+) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    if !is_svg_presentational_element(name.local.as_ref()) {
+        return;
+    }
+    // Presentation attributes recognised by `apply_declaration`
+    // (SVG §11 paint + §13 stroke geometry, plus `color` for `currentColor`).
+    const ATTRS: &[&str] = &[
+        "fill",
+        "fill-opacity",
+        "fill-rule",
+        "stroke",
+        "stroke-opacity",
+        "stroke-width",
+        "stroke-linecap",
+        "stroke-linejoin",
+        "stroke-miterlimit",
+        "stroke-dasharray",
+        "stroke-dashoffset",
+        "color",
+        "opacity",
+    ];
+    let node_ref = doc.get(node);
+    for &attr in ATTRS {
+        let Some(val) = node_ref.get_attr(attr) else { continue };
+        if val.trim().is_empty() {
+            continue;
+        }
+        let decl = Declaration {
+            property: attr.to_string(),
+            value: val.to_string(),
+            important: false,
+        };
+        apply_declaration(style, &decl, em_basis, viewport, parent_weight, inherited, is_quirks, false);
+    }
+}
+
+/// True for SVG element local names that accept SVG presentation attributes.
+/// Covers the shapes/containers Lumen lays out plus text elements.
+fn is_svg_presentational_element(local: &str) -> bool {
+    matches!(
+        local,
+        "svg" | "g" | "rect" | "circle" | "ellipse" | "line" | "path"
+            | "polygon" | "polyline" | "text" | "tspan" | "textPath" | "use"
+    )
 }
 
 /// HTML5 §15: `bgcolor` атрибут на `<body>` / table-related элементах
@@ -7212,8 +8913,73 @@ fn apply_ua_hr_style(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
     style.margin_right = LengthOrAuto::Auto;
 }
 
+/// UA stylesheet для `<h1>`–`<h6>` (HTML Rendering §15.3.3 «Sections and headings»).
+///
+/// Браузеры задают заголовкам увеличенный `font-size` (em относительно
+/// родителя) и вертикальные `margin` (em относительно собственного
+/// computed font-size). `font-weight: bold` уже выставляется `ua_font_weight`.
+///
+/// `font_size` пишется как computed px (`inherited.font_size * factor`) — так же,
+/// как `ua_font_size_factor` для `<small>`/`<sub>`/`<sup>`; author `font-size`
+/// перекроет его в font-size pre-pass. Маргины задаются как `Em`, поэтому
+/// резолвятся против финального font-size заголовка на этапе layout; author CSS
+/// перекроет их в main-pass каскада.
+///
+/// Значения (font-size factor, vertical margin em):
+/// h1 2.0/0.67, h2 1.5/0.83, h3 1.17/1.0, h4 1.0/1.33, h5 0.83/1.67, h6 0.67/2.33.
+fn apply_ua_heading_style(doc: &Document, node: NodeId, inherited: &ComputedStyle, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    let (size_factor, margin_em) = match name.local.as_str() {
+        "h1" => (2.0, 0.67),
+        "h2" => (1.5, 0.83),
+        "h3" => (1.17, 1.0),
+        "h4" => (1.0, 1.33),
+        "h5" => (0.83, 1.67),
+        "h6" => (0.67, 2.33),
+        _ => return,
+    };
+    style.font_size = inherited.font_size * size_factor;
+    style.margin_top = LengthOrAuto::Length(Length::Em(margin_em));
+    style.margin_bottom = LengthOrAuto::Length(Length::Em(margin_em));
+}
+
 /// UA stylesheet для HTML form controls (HTML5 §15.5 «Rendering»).
 ///
+/// Returns UA colors `(border, background, foreground)` for form controls.
+///
+/// Approximates CSS Color 4 system-color keywords (`ButtonFace`, `Field`,
+/// `ButtonText`, `FieldText`) without a full system-color implementation.
+/// Used by `apply_ua_form_controls` to theme controls for light/dark mode.
+///
+/// - Light: border #767676 / bg white (inputs) or #efefef (button) / fg black
+/// - Dark:  border #616161 / bg #1e1e1e (inputs) or #3a3a3c (button) / fg white
+///
+/// `// CSS: color-scheme` — P4 wires this to `ComputedStyle.color_scheme`
+/// for full system-color keyword support.
+pub fn ua_form_element_colors(tag: &str, dark_mode: bool) -> (CssColor, CssColor, Color) {
+    if dark_mode {
+        let border = CssColor::Rgba(Color { r: 97, g: 97, b: 97, a: 255 });
+        let fg = Color { r: 255, g: 255, b: 255, a: 255 };
+        let bg = if tag == "button" {
+            CssColor::Rgba(Color { r: 58, g: 58, b: 60, a: 255 })
+        } else {
+            CssColor::Rgba(Color { r: 30, g: 30, b: 30, a: 255 })
+        };
+        (border, bg, fg)
+    } else {
+        let border = CssColor::Rgba(Color { r: 118, g: 118, b: 118, a: 255 });
+        let fg = Color { r: 0, g: 0, b: 0, a: 255 };
+        let bg = if tag == "button" {
+            CssColor::Rgba(Color { r: 239, g: 239, b: 239, a: 255 })
+        } else {
+            CssColor::Rgba(Color { r: 255, g: 255, b: 255, a: 255 })
+        };
+        (border, bg, fg)
+    }
+}
+
 /// Применяется ДО CSS-каскада — любой author-rule перекрывает.
 /// - `<input type=hidden>` → `display: none`
 /// - `<input type=checkbox|radio>` → 13×13 px
@@ -7221,10 +8987,13 @@ fn apply_ua_hr_style(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
 /// - `<button>` → height 21 px
 /// - `<textarea>` → 200×48 px
 /// - `<select>` → height 21 px
-/// - Все кроме hidden → border: 1px solid #767676
-fn apply_ua_form_controls(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+/// - `<progress>` → 300×16 px
+/// - `<meter>` → 300×16 px
+/// - Все кроме hidden → border, background, color по `ua_form_element_colors`
+fn apply_ua_form_controls(doc: &Document, node: NodeId, style: &mut ComputedStyle, dark_mode: bool) {
     let NodeData::Element { name, .. } = &doc.get(node).data else { return; };
-    match name.local.as_str() {
+    let tag = name.local.as_str();
+    match tag {
         "input" => {
             let ty = doc
                 .get(node)
@@ -7239,6 +9008,12 @@ fn apply_ua_form_controls(doc: &Document, node: NodeId, style: &mut ComputedStyl
                 "checkbox" | "radio" => {
                     style.width = Some(Length::Px(13.0));
                     style.height = Some(Length::Px(13.0));
+                }
+                "range" => {
+                    style.width = Some(Length::Px(129.0));
+                    style.height = Some(Length::Px(20.0));
+                    // Range input has no visible border — track/thumb are drawn by paint.
+                    return;
                 }
                 _ => {
                     style.width = Some(Length::Px(174.0));
@@ -7256,9 +9031,13 @@ fn apply_ua_form_controls(doc: &Document, node: NodeId, style: &mut ComputedStyl
         "select" => {
             style.height = Some(Length::Px(21.0));
         }
+        "progress" | "meter" => {
+            style.width = Some(Length::Px(300.0));
+            style.height = Some(Length::Px(16.0));
+        }
         _ => return,
     }
-    let gray = CssColor::Rgba(Color { r: 118, g: 118, b: 118, a: 255 });
+    let (border, bg, fg) = ua_form_element_colors(tag, dark_mode);
     style.border_top_width = 1.0;
     style.border_right_width = 1.0;
     style.border_bottom_width = 1.0;
@@ -7267,10 +9046,71 @@ fn apply_ua_form_controls(doc: &Document, node: NodeId, style: &mut ComputedStyl
     style.border_right_style = BorderStyle::Solid;
     style.border_bottom_style = BorderStyle::Solid;
     style.border_left_style = BorderStyle::Solid;
-    style.border_top_color = gray;
-    style.border_right_color = gray;
-    style.border_bottom_color = gray;
-    style.border_left_color = gray;
+    style.border_top_color = border;
+    style.border_right_color = border;
+    style.border_bottom_color = border;
+    style.border_left_color = border;
+    style.background_color = Some(bg);
+    style.color = fg;
+}
+
+/// CSS Basic UI L4 §4.4 — post-cascade pass: when `field-sizing: content` was set
+/// by the author stylesheet, clears any UA-supplied `width`/`height` on text-entry
+/// controls so that `lay_out` will call `field_sizing_content_intrinsic` instead.
+///
+/// Must run AFTER the CSS cascade so that author `field-sizing: content` is final.
+fn apply_ua_form_controls_field_sizing_clear(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else { return; };
+    match name.local.as_str() {
+        "input" => {
+            let ty = doc
+                .get(node)
+                .get_attr("type")
+                .map(|s| s.to_ascii_lowercase())
+                .unwrap_or_else(|| "text".to_string());
+            // Only text-entry types are eligible; checkbox/radio/range use fixed sizes.
+            match ty.trim() {
+                "checkbox" | "radio" | "range" | "hidden" => {}
+                _ => {
+                    style.width = None;
+                    style.height = None;
+                }
+            }
+        }
+        "textarea" => {
+            style.width = None;
+            style.height = None;
+        }
+        _ => {}
+    }
+}
+
+/// CSS Basic UI L4 §5 — when `appearance: none`, removes UA styling
+/// (border, padding, background) from form controls.
+/// Applies to: <input>, <button>, <select>, <textarea>, <progress>, <meter>.
+fn apply_ua_appearance(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    if style.appearance != Appearance::None {
+        return;
+    }
+
+    let NodeData::Element { name, .. } = &doc.get(node).data else { return; };
+    match name.local.as_str() {
+        "input" | "button" | "select" | "textarea" | "progress" | "meter" => {
+            // Remove UA border
+            style.border_top_width = 0.0;
+            style.border_right_width = 0.0;
+            style.border_bottom_width = 0.0;
+            style.border_left_width = 0.0;
+            // Remove UA padding
+            style.padding_top = Length::Px(0.0);
+            style.padding_right = Length::Px(0.0);
+            style.padding_bottom = Length::Px(0.0);
+            style.padding_left = Length::Px(0.0);
+            // Remove UA background (fully transparent)
+            style.background_color = Some(CssColor::Rgba(Color { r: 0, g: 0, b: 0, a: 0 }));
+        }
+        _ => {}
+    }
 }
 
 /// UA stylesheet: `<dialog>` without the `open` attribute → `display: none`.
@@ -7449,6 +9289,78 @@ pub fn set_cq_context(width: f32, height: Option<f32>) {
 /// Clears the `cq*` context after the container re-layout pass completes.
 pub fn clear_cq_context() {
     CONTAINER_CQ.with(|c| c.set(None));
+}
+
+thread_local! {
+    /// Raw NodeId.0 of the currently-hovered element, or `u32::MAX` if none.
+    /// Set by `set_interactive_state` before layout; cleared with `clear_interactive_state`.
+    /// `:hover` matches the hovered element and all its ancestors (CSS Selectors L4 §4.3).
+    static HOVER_NID:  Cell<u32> = const { Cell::new(u32::MAX) };
+    /// Raw NodeId.0 of the keyboard-focused element, or `u32::MAX` if none.
+    /// `:focus` matches exactly; `:focus-within` matches the element and its ancestors.
+    static FOCUS_NID:  Cell<u32> = const { Cell::new(u32::MAX) };
+    /// Raw NodeId.0 of the mouse-pressed element, or `u32::MAX` if none.
+    /// `:active` matches the active element and all its ancestors (CSS Selectors L4 §4.5).
+    static ACTIVE_NID: Cell<u32> = const { Cell::new(u32::MAX) };
+}
+
+/// Sets the interactive hover/focus/active state for the next layout pass.
+///
+/// Call this before `layout_measured` / `layout_measured_hyp` on the layout thread.
+/// The thread-locals are read by `matches_pseudo_class` for `:hover`, `:focus`,
+/// `:active`, `:focus-within`, and `:focus-visible`.
+///
+/// Call `clear_interactive_state()` after layout to reset the thread-locals.
+pub fn set_interactive_state(
+    hover: Option<NodeId>,
+    focus: Option<NodeId>,
+    active: Option<NodeId>,
+) {
+    HOVER_NID .with(|h| h.set(hover .map(|n| n.index() as u32).unwrap_or(u32::MAX)));
+    FOCUS_NID .with(|f| f.set(focus .map(|n| n.index() as u32).unwrap_or(u32::MAX)));
+    ACTIVE_NID.with(|a| a.set(active.map(|n| n.index() as u32).unwrap_or(u32::MAX)));
+}
+
+/// Clears hover/focus/active state after layout.
+pub fn clear_interactive_state() {
+    set_interactive_state(None, None, None);
+}
+
+/// CSS Cascade L6 §5.1 — true when `node` is a descendant of (or is) an element
+/// matching any selector in `root_sel_str`. Empty `root_sel_str` → always true
+/// (implicit scope = document root, i.e. the rule applies everywhere).
+fn node_is_in_scope(doc: &Document, node: NodeId, root_sel_str: &str) -> bool {
+    if root_sel_str.trim().is_empty() {
+        return true;
+    }
+    let selectors = lumen_css_parser::parse_selector_list(root_sel_str);
+    if selectors.is_empty() {
+        return false;
+    }
+    // Walk node and its ancestors; return true if any matches the scope root.
+    let mut cur = Some(node);
+    while let Some(n) = cur {
+        if n == doc.root() { break; }
+        for complex in &selectors {
+            if matches_complex(complex, doc, n) {
+                return true;
+            }
+        }
+        cur = doc.get(n).parent;
+    }
+    false
+}
+
+/// Returns `true` if `ancestor` is `node` itself, or a proper ancestor of `node` in the tree.
+fn is_self_or_ancestor(doc: &Document, ancestor: NodeId, node: NodeId) -> bool {
+    if ancestor == node { return true; }
+    let mut cur = doc.get(node).parent;
+    while let Some(parent_id) = cur {
+        if parent_id == ancestor { return true; }
+        if parent_id == doc.root() { break; }
+        cur = doc.get(parent_id).parent;
+    }
+    false
 }
 
 /// CSS `<length> | auto` — для margin и offset-свойств, где `auto` имеет
@@ -8600,6 +10512,112 @@ fn empty_env_registry() -> HashMap<String, String> {
     HashMap::new()
 }
 
+/// CSS dimension units recognised in `attr(<name> <unit>)` substitution.
+/// When the type annotation matches one of these, the attribute value (a
+/// numeric string) gets the unit appended: `attr(data-w px)` with
+/// `data-w="100"` → `"100px"`.
+const ATTR_UNIT_SUFFIXES: &[&str] = &[
+    "px", "em", "rem", "ex", "ch", "vw", "vh", "vmin", "vmax",
+    "cm", "mm", "in", "pt", "pc", "q",
+    "%",
+    "deg", "rad", "grad", "turn",
+    "s", "ms",
+    "hz", "khz",
+    "dpi", "dpcm", "dppx",
+    "fr",
+];
+
+/// Finds the byte offset of the first `attr(` token in `s` that is
+/// outside string literals (single or double quotes).
+fn find_attr_open(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut in_string: Option<u8> = None;
+    while i + 5 <= bytes.len() {
+        let b = bytes[i];
+        match (in_string, b) {
+            (Some(q), c) if c == q => {
+                in_string = None;
+                i += 1;
+            }
+            (None, b'"') | (None, b'\'') => {
+                in_string = Some(b);
+                i += 1;
+            }
+            (None, b'a') if bytes[i..].starts_with(b"attr(") => return Some(i),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// CSS Values L4 §7.7 — `attr()` typed substitution.
+///
+/// Expands the first `attr(...)` occurrence in `value` using the DOM
+/// attribute values of `node`. Supports the full L4 typed form:
+///
+/// ```text
+/// attr( <attr-name> [ <type> ]? [ , <fallback> ]? )
+/// ```
+///
+/// * If `<type>` is a CSS dimension unit (`px`, `em`, `%`, …), the
+///   attribute value is concatenated with the unit: `attr(data-w px)` with
+///   `data-w="100"` → `"100px"`.
+/// * Otherwise (`color`, `string`, `integer`, `number`, …) the attribute
+///   value is used verbatim as a CSS token.
+/// * If the attribute is absent: use `<fallback>` when present, else
+///   `None` (declaration treated as invalid per CSS Values L4 §7.7.1).
+fn expand_attr_val(value: &str, doc: &Document, node: NodeId) -> Option<String> {
+    let start = find_attr_open(value)?;
+    let prefix = &value[..start];
+    let after_open = &value[start + 5..]; // skip "attr("
+    let (args, after_close) = parse_balanced_to_close(after_open)?;
+
+    // Split by the first top-level comma to separate spec from fallback.
+    let (attr_spec, fallback_opt) = split_var_args(args);
+
+    // attr_spec: "<name>" or "<name> <type>".
+    let mut parts = attr_spec.splitn(2, |c: char| c.is_ascii_whitespace());
+    let attr_name = parts.next().unwrap_or("").trim();
+    let attr_type = parts.next().unwrap_or("").trim().to_ascii_lowercase();
+
+    if attr_name.is_empty() {
+        return None;
+    }
+
+    let node_ref = doc.get(node);
+    let resolved: String = if let Some(raw_val) = node_ref.get_attr(attr_name) {
+        let raw = raw_val.trim();
+        if attr_type.is_empty() || attr_type == "string" {
+            // CSS Values L4 §7.7.1: default type is `string` — return a CSS
+            // string literal so downstream parsers (e.g. `content`) treat the
+            // value as a quoted string token rather than an identifier.
+            // Escape embedded double-quotes and backslashes per CSS §9.
+            let escaped = raw.replace('\\', "\\\\").replace('"', "\\\"");
+            format!("\"{escaped}\"")
+        } else if ATTR_UNIT_SUFFIXES.contains(&attr_type.as_str()) {
+            // Numeric attribute value + CSS unit.
+            format!("{raw}{attr_type}")
+        } else {
+            // color, integer, number, length, angle, time, frequency, url …
+            // Treat as a raw CSS token; the property-specific parser handles it.
+            raw.to_string()
+        }
+    } else {
+        // Attribute absent — use fallback or signal invalid.
+        let fb = fallback_opt?;
+        fb.to_string()
+    };
+
+    let combined = format!("{prefix}{resolved}{after_close}");
+    // There may be more attr() in the combined result.
+    if combined.contains("attr(") {
+        expand_attr_val(&combined, doc, node)
+    } else {
+        Some(combined)
+    }
+}
+
 /// Находит позицию первого `var(` в `s` вне строковых литералов. Возвращает
 /// индекс символа `v`. Учитывает одинарные и двойные кавычки, чтобы
 /// `content: "var(x)"` не давал ложного матча.
@@ -8688,6 +10706,7 @@ fn expand_grouped_transition_property(prop: &str) -> Vec<String> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_declaration(
     style: &mut ComputedStyle,
     decl: &Declaration,
@@ -8696,6 +10715,7 @@ fn apply_declaration(
     parent_font_weight: FontWeight,
     inherited: &ComputedStyle,
     is_quirks: bool,
+    dark_mode: bool,
 ) {
     let prop = decl.property.as_str();
 
@@ -8823,6 +10843,14 @@ fn apply_declaration(
                 Some(CssColor::Wide(f)) => {
                     style.color = f.to_srgb_color();
                     style.color_space = f.space;
+                }
+                // CSS Color 4 §6.2 — system color keywords resolve against
+                // the element's used color scheme (pre-pass already set
+                // style.color_scheme for this element).
+                Some(CssColor::System(sc)) => {
+                    let dark = style.color_scheme.used_dark(dark_mode);
+                    style.color = sc.resolve_color(dark);
+                    style.color_space = ColorSpace::Srgb;
                 }
                 None => {}
             }
@@ -9001,15 +11029,21 @@ fn apply_declaration(
         "grid-template-columns" => {
             if !val.trim().eq_ignore_ascii_case("none") {
                 style.grid_template_columns = GridTrackSize::parse_track_list(val, is_quirks);
+                // Phase 2: capture auto-fill/auto-fit repeat metadata for layout-time expansion.
+                style.grid_template_col_auto_repeat = parse_auto_repeat(val.trim());
             } else {
                 style.grid_template_columns = Vec::new();
+                style.grid_template_col_auto_repeat = None;
             }
         }
         "grid-template-rows" => {
             if !val.trim().eq_ignore_ascii_case("none") {
                 style.grid_template_rows = GridTrackSize::parse_track_list(val, is_quirks);
+                // Phase 2: capture auto-fill/auto-fit repeat metadata for layout-time expansion.
+                style.grid_template_row_auto_repeat = parse_auto_repeat(val.trim());
             } else {
                 style.grid_template_rows = Vec::new();
+                style.grid_template_row_auto_repeat = None;
             }
         }
         "grid-template-areas" => {
@@ -9034,6 +11068,11 @@ fn apply_declaration(
                 style.grid_auto_flow = v;
             }
         }
+        "masonry-auto-flow" => {
+            if let Some(v) = MasonryAutoFlow::parse(val) {
+                style.masonry_auto_flow = v;
+            }
+        }
         "grid-template" => {
             // CSS Grid L1 §7.4: shorthand for grid-template-rows / -columns / -areas.
             // Phase 0: treat as "rows / columns" split if `/` present; else columns only.
@@ -9041,13 +11080,18 @@ fn apply_declaration(
             if trimmed.eq_ignore_ascii_case("none") {
                 style.grid_template_columns = Vec::new();
                 style.grid_template_rows = Vec::new();
+                style.grid_template_col_auto_repeat = None;
+                style.grid_template_row_auto_repeat = None;
             } else if let Some(pos) = find_slash(trimmed) {
                 let rows_s = trimmed[..pos].trim();
                 let cols_s = trimmed[pos + 1..].trim();
                 style.grid_template_rows = GridTrackSize::parse_track_list(rows_s, is_quirks);
+                style.grid_template_row_auto_repeat = parse_auto_repeat(rows_s);
                 style.grid_template_columns = GridTrackSize::parse_track_list(cols_s, is_quirks);
+                style.grid_template_col_auto_repeat = parse_auto_repeat(cols_s);
             } else {
                 style.grid_template_columns = GridTrackSize::parse_track_list(trimmed, is_quirks);
+                style.grid_template_col_auto_repeat = parse_auto_repeat(trimmed);
             }
         }
         "grid" => {
@@ -9059,9 +11103,12 @@ fn apply_declaration(
                     let rows_s = trimmed[..pos].trim();
                     let cols_s = trimmed[pos + 1..].trim();
                     style.grid_template_rows = GridTrackSize::parse_track_list(rows_s, is_quirks);
+                    style.grid_template_row_auto_repeat = parse_auto_repeat(rows_s);
                     style.grid_template_columns = GridTrackSize::parse_track_list(cols_s, is_quirks);
+                    style.grid_template_col_auto_repeat = parse_auto_repeat(cols_s);
                 } else {
                     style.grid_template_columns = GridTrackSize::parse_track_list(trimmed, is_quirks);
+                    style.grid_template_col_auto_repeat = parse_auto_repeat(trimmed);
                 }
             }
         }
@@ -9099,11 +11146,29 @@ fn apply_declaration(
             apply_grid_area_shorthand(val, style);
         }
         "width" => {
-            // `auto` = None; intrinsic keywords = MinContent/MaxContent/FitContent.
-            style.width = parse_sizing_length(val, is_quirks);
+            // CSS Anchor Positioning L1 §4 — intercept `anchor-size()` before normal sizing.
+            if let Some(func) = parse_anchor_size_func(val) {
+                style.anchor_size_w = Some(func);
+            } else {
+                // `auto` = None; intrinsic keywords = MinContent/MaxContent/FitContent.
+                style.width = parse_sizing_length(val, is_quirks);
+                style.anchor_size_w = None;
+            }
         }
         "height" => {
-            style.height = parse_sizing_length(val, is_quirks);
+            if let Some(func) = parse_anchor_size_func(val) {
+                style.anchor_size_h = Some(func);
+            } else {
+                style.height = parse_sizing_length(val, is_quirks);
+                style.anchor_size_h = None;
+            }
+        }
+        // CSS Logical Properties L1 §2.1 — inline-size / block-size.
+        "inline-size" => {
+            style.inline_size = parse_sizing_length(val, is_quirks);
+        }
+        "block-size" => {
+            style.block_size = parse_sizing_length(val, is_quirks);
         }
         // CSS 2.1 §10.4: min-/max- ширина и высота. Отрицательные `<length>`
         // запрещены — сохраняем typed, фильтрация при resolve в box_tree.
@@ -9293,6 +11358,10 @@ fn apply_declaration(
                 style.overflow_y = o;
             }
         }
+        "overflow-clip-margin" => {
+            // CSS Overflow L3: <visual-box> | <length>. Phase 0: поддерживаем только <length>.
+            style.overflow_clip_margin = parse_length(val);
+        }
         "text-overflow" => {
             // CSS UI L4: clip | ellipsis. <string> (custom marker) и
             // two-value формы не поддерживаем в Phase 0.
@@ -9418,6 +11487,17 @@ fn apply_declaration(
             // CSS Lists L3 §3 — `none | (<custom-ident> <integer>?)+`.
             // Default value = 1 (по spec).
             style.counter_increment = parse_counter_list(val, 1);
+        }
+        "counter-set" => {
+            // CSS Lists L3 §4 — `none | (<custom-ident> <integer>?)+`.
+            // Default value на счётчик при отсутствии числа = 0 (по spec).
+            style.counter_set = parse_counter_list(val, 0);
+        }
+        "quotes" => {
+            // CSS Generated Content L3 §3.2 — `auto | none | [<string> <string>]+`.
+            if let Some(q) = parse_quotes(val) {
+                style.quotes = q;
+            }
         }
         "clip-path" => {
             // CSS Masking L1 §3 — basic-shape | none. `none` чистит.
@@ -9608,6 +11688,39 @@ fn apply_declaration(
                 }
             }
         }
+        "border-collapse" => {
+            // CSS Tables L2 §17.6 — `border-collapse: separate | collapse`.
+            if let Some(v) = BorderCollapse::parse(val.trim()) {
+                style.border_collapse = v;
+            }
+        }
+        "empty-cells" => {
+            // CSS Tables L2 §17.6.1.1 — `empty-cells: show | hide`.
+            if let Some(v) = EmptyCells::parse(val.trim()) {
+                style.empty_cells = v;
+            }
+        }
+        "border-spacing" => {
+            // CSS 2.1 §17.6 — `border-spacing: <length> [<length>]?`.
+            // One value: both h and v. Two values: h then v. Negatives invalid — skip.
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            if let Some(first) = parts.first()
+                && let Some(h) = parse_length_q(first, is_quirks)
+                && let Length::Px(hpx) = h
+                && hpx >= 0.0
+            {
+                let vpx = if parts.len() >= 2 {
+                    parse_length_q(parts[1], is_quirks)
+                        .and_then(|v| if let Length::Px(px) = v { Some(px) } else { None })
+                        .filter(|px| *px >= 0.0)
+                        .unwrap_or(hpx)
+                } else {
+                    hpx
+                };
+                style.border_spacing_h = hpx;
+                style.border_spacing_v = vpx;
+            }
+        }
         "column-count" => {
             // CSS Multi-column L1 §3.2: <integer> | auto.
             let trimmed = val.trim();
@@ -9706,6 +11819,51 @@ fn apply_declaration(
                 && let Some(c) = parse_css_color_legacy(rest, is_quirks)
             {
                 style.column_rule_color = c;
+            }
+        }
+        // CSS Gap Decorations L1 — visual rules inside flex/grid/multicol gaps.
+        "gap-rule-width" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport, is_quirks) {
+                style.gap_rule_width = px.max(0.0);
+            }
+        }
+        "gap-rule-style" => {
+            style.gap_rule_style = parse_border_style_opt(val.trim()).unwrap_or(BorderStyle::None);
+        }
+        "gap-rule-color" => {
+            if let Some(c) = parse_css_color_legacy(val.trim(), is_quirks) {
+                style.gap_rule_color = c;
+            }
+        }
+        "gap-rule" => {
+            // Shorthand: <width> || <style> || <color>. Any order (mirrors column-rule).
+            let mut rest = val.trim().to_string();
+            let mut color_set = false;
+            for tok in val.split_whitespace() {
+                if let Some(s) = parse_border_style_opt(tok) {
+                    style.gap_rule_style = s;
+                    rest = rest.replacen(tok, "", 1);
+                    continue;
+                }
+                if let Some(px) = resolve_box_length(tok, em_basis, viewport, is_quirks)
+                    && px >= 0.0
+                {
+                    style.gap_rule_width = px;
+                    rest = rest.replacen(tok, "", 1);
+                    continue;
+                }
+                if let Some(c) = parse_css_color_legacy(tok, is_quirks) {
+                    style.gap_rule_color = c;
+                    color_set = true;
+                    rest = rest.replacen(tok, "", 1);
+                }
+            }
+            let rest = rest.trim();
+            if !rest.is_empty()
+                && !color_set
+                && let Some(c) = parse_css_color_legacy(rest, is_quirks)
+            {
+                style.gap_rule_color = c;
             }
         }
         "column-span" => {
@@ -9828,6 +11986,14 @@ fn apply_declaration(
                 let s = s.trim();
                 let image = if s.eq_ignore_ascii_case("none") {
                     BackgroundImage::None
+                } else if is_image_set_value(s) {
+                    // Store raw image-set(…) string; paint resolves per-DPR (CSS Images L4 §5).
+                    BackgroundImage::Url(s.to_string())
+                } else if let Some((a, b, t)) = parse_cross_fade(s) {
+                    BackgroundImage::CrossFade { a: Box::new(a), b: Box::new(b), t }
+                } else if let Some(paint_name) = parse_paint_function(s) {
+                    // CSS Paint API (Houdini) — `paint(name)` invokes registered worklet.
+                    BackgroundImage::Paint(paint_name)
                 } else if let Some(url) = parse_url_value(s) {
                     BackgroundImage::Url(url)
                 } else if is_gradient_function(s) {
@@ -9977,6 +12143,66 @@ fn apply_declaration(
                 style.position = v;
             }
         }
+        // CSS Anchor Positioning L1 §2 — anchor-name: <custom-ident> | none.
+        "anchor-name" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("none") {
+                style.anchor_name = None;
+            } else if v.starts_with("--") {
+                style.anchor_name = Some(v.into());
+            }
+        }
+        // CSS Anchor Positioning L1 §3 — position-anchor: <custom-ident> | auto.
+        "position-anchor" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("auto") || v.eq_ignore_ascii_case("none") {
+                style.position_anchor = None;
+            } else if v.starts_with("--") {
+                style.position_anchor = Some(v.into());
+            }
+        }
+        // CSS Anchor Positioning L1 §5 — inset-area: [<inset-area-kw>]{1,2}.
+        // `position-area` is the updated spec name; both are identical.
+        "inset-area" | "position-area" => {
+            let toks: Vec<&str> = val.split_whitespace().collect();
+            let (row_tok, col_tok) = match toks.as_slice() {
+                [a] => (*a, *a),
+                [a, b] => (*a, *b),
+                _ => return,
+            };
+            if let Some(r) = parse_inset_area_keyword(row_tok) {
+                style.inset_area_row = r;
+            }
+            if let Some(c) = parse_inset_area_keyword(col_tok) {
+                style.inset_area_col = c;
+            }
+        }
+        // CSS Anchor Positioning L1 §2.1 — anchor-scope: none | all | <custom-ident>.
+        "anchor-scope" => {
+            use crate::anchor::AnchorScope;
+            let v = val.trim();
+            style.anchor_scope = if v.eq_ignore_ascii_case("none") {
+                AnchorScope::None
+            } else if v.eq_ignore_ascii_case("all") {
+                AnchorScope::All
+            } else if v.starts_with("--") {
+                AnchorScope::Named(v.into())
+            } else {
+                AnchorScope::None
+            };
+        }
+        // CSS View Transitions L1 §10 — view-transition-name: none | <custom-ident>.
+        // Names this element as a capture target during document.startViewTransition().
+        // `none` (default) opts out; any other ident opts in. Per-page names must be unique,
+        // but that constraint is not enforced here (shell deduplicates at capture time).
+        "view-transition-name" => {
+            let v = val.trim();
+            style.view_transition_name = if v.eq_ignore_ascii_case("none") {
+                None
+            } else {
+                Some(v.into())
+            };
+        }
         "top" => set_margin_side(&mut style.top, val, is_quirks),
         "right" => set_margin_side(&mut style.right, val, is_quirks),
         "bottom" => set_margin_side(&mut style.bottom, val, is_quirks),
@@ -9997,21 +12223,22 @@ fn apply_declaration(
             set_margin_side(&mut style.left, l, is_quirks);
         }
         // CSS Logical Properties L1 §8.2 — inset-inline-* / inset-block-*.
-        "inset-inline-start" => set_margin_side(&mut style.left, val, is_quirks),
-        "inset-inline-end"   => set_margin_side(&mut style.right, val, is_quirks),
-        "inset-block-start"  => set_margin_side(&mut style.top, val, is_quirks),
-        "inset-block-end"    => set_margin_side(&mut style.bottom, val, is_quirks),
+        // Stored in logical fields; resolved to physical (top/right/bottom/left) in resolve_logical_properties().
+        "inset-inline-start" => set_margin_side(&mut style.inset_inline_start, val, is_quirks),
+        "inset-inline-end"   => set_margin_side(&mut style.inset_inline_end, val, is_quirks),
+        "inset-block-start"  => set_margin_side(&mut style.inset_block_start, val, is_quirks),
+        "inset-block-end"    => set_margin_side(&mut style.inset_block_end, val, is_quirks),
         "inset-inline" => {
             let toks = split_box_tokens(val);
             let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return };
-            set_margin_side(&mut style.left, s, is_quirks);
-            set_margin_side(&mut style.right, e, is_quirks);
+            set_margin_side(&mut style.inset_inline_start, s, is_quirks);
+            set_margin_side(&mut style.inset_inline_end, e, is_quirks);
         }
         "inset-block" => {
             let toks = split_box_tokens(val);
             let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return };
-            set_margin_side(&mut style.top, s, is_quirks);
-            set_margin_side(&mut style.bottom, e, is_quirks);
+            set_margin_side(&mut style.inset_block_start, s, is_quirks);
+            set_margin_side(&mut style.inset_block_end, e, is_quirks);
         }
         "z-index" => {
             // CSS Positioned Layout L3 §9.3 — `auto | <integer>`.
@@ -10082,6 +12309,12 @@ fn apply_declaration(
                 _ => Appearance::Compat,
             };
         }
+        "field-sizing" => {
+            style.field_sizing = match val.trim() {
+                "content" => FieldSizing::Content,
+                _ => FieldSizing::Fixed,
+            };
+        }
         "contain" => {
             let v = val.trim();
             style.contain = if v.eq_ignore_ascii_case("none") {
@@ -10111,6 +12344,35 @@ fn apply_declaration(
                 "auto" => ContentVisibility::Auto,
                 "hidden" => ContentVisibility::Hidden,
                 _ => style.content_visibility,
+            };
+        }
+        // CSS Box Sizing L4 §5 — contain-intrinsic-size and its longhands.
+        // Each value is `auto? [ none | <length> ]`. `none` → field stays/becomes
+        // `None`; the optional `auto` (last-remembered size) is accepted and
+        // ignored (we always use the length). Logical `*-block-size` /
+        // `*-inline-size` map to height / width under horizontal-tb writing modes.
+        "contain-intrinsic-width" | "contain-intrinsic-inline-size" => {
+            if let Some(v) = parse_contain_intrinsic_one(val) {
+                style.contain_intrinsic_width = v;
+            }
+        }
+        "contain-intrinsic-height" | "contain-intrinsic-block-size" => {
+            if let Some(v) = parse_contain_intrinsic_one(val) {
+                style.contain_intrinsic_height = v;
+            }
+        }
+        "contain-intrinsic-size" => {
+            if let Some((w, h)) = parse_contain_intrinsic_size(val) {
+                style.contain_intrinsic_width = w;
+                style.contain_intrinsic_height = h;
+            }
+        }
+        "interpolate-size" => {
+            // CSS Sizing L4 §4.5 — gates keyword-size interpolation in transitions.
+            style.interpolate_size = match val.trim() {
+                "numeric-only" => InterpolateSizeMode::NumericOnly,
+                "allow-keywords" => InterpolateSizeMode::AllowKeywords,
+                _ => style.interpolate_size,
             };
         }
         "container-type" => {
@@ -10361,6 +12623,26 @@ fn apply_declaration(
                 style.perspective = if px > 0.0 { Some(px) } else { None };
             }
         }
+        "perspective-origin" => {
+            // CSS Transforms L2 §4 — `perspective-origin: <x> <y>`.
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            let x = parts.first()
+                .and_then(|s| parse_position_component(s, em_basis, viewport, false))
+                .unwrap_or(PositionComponent::Percent(0.5));
+            let y = parts.get(1)
+                .and_then(|s| parse_position_component(s, em_basis, viewport, true))
+                .unwrap_or(PositionComponent::Percent(0.5));
+            style.perspective_origin = (x, y);
+        }
+        "transform-style" => {
+            // CSS Transforms L2 §6 — `transform-style: flat | preserve-3d`.
+            let trimmed = val.trim();
+            style.transform_style = if trimmed.eq_ignore_ascii_case("preserve-3d") {
+                TransformStyle::Preserve3d
+            } else {
+                TransformStyle::Flat
+            };
+        }
         "list-style-type" => {
             if let Some(v) = ListStyleType::parse(val) {
                 style.list_style_type = v;
@@ -10381,15 +12663,10 @@ fn apply_declaration(
         }
         "list-style" => {
             // Shorthand: type | position | image, в любом порядке.
-            // Простой парсер: пытаемся каждое слово.
+            // Позиция проверяется раньше типа — иначе "inside"/"outside" могут
+            // быть поглощены как Custom counter-style ident.
             for token in val.split_whitespace() {
-                if let Some(t) = ListStyleType::parse(token) {
-                    style.list_style_type = t;
-                } else if let Some(p) = ListStylePosition::parse(token) {
-                    style.list_style_position = p;
-                } else if let Some(u) = parse_url_value(token) {
-                    style.list_style_image = Some(u);
-                } else if token.eq_ignore_ascii_case("none") {
+                if token.eq_ignore_ascii_case("none") {
                     // `none` неоднозначен: type=None И image=None. Per spec,
                     // `none` сначала применяется к type, потом к image (если
                     // повторяется). Простая трактовка: первый none → type=None,
@@ -10399,6 +12676,12 @@ fn apply_declaration(
                     } else {
                         style.list_style_image = None;
                     }
+                } else if let Some(p) = ListStylePosition::parse(token) {
+                    style.list_style_position = p;
+                } else if let Some(u) = parse_url_value(token) {
+                    style.list_style_image = Some(u);
+                } else if let Some(t) = ListStyleType::parse(token) {
+                    style.list_style_type = t;
                 }
             }
         }
@@ -10472,6 +12755,41 @@ fn apply_declaration(
         }
         "animation-play-state" => {
             style.animation_play_states = AnimationPlayState::parse_list(val);
+        }
+        "animation-timeline" => {
+            style.animation_timelines = parse_animation_timeline_list(val);
+        }
+        "scroll-timeline-name" => {
+            let t = val.trim();
+            style.scroll_timeline_name = if t.eq_ignore_ascii_case("none") {
+                None
+            } else {
+                Some(t.to_string())
+            };
+        }
+        "scroll-timeline-axis" => {
+            if let Some(axis) = parse_scroll_axis(val.trim()) {
+                style.scroll_timeline_axis = axis;
+            }
+        }
+        "scroll-timeline" => {
+            apply_scroll_timeline_shorthand(style, val);
+        }
+        "view-timeline-name" => {
+            let t = val.trim();
+            style.view_timeline_name = if t.eq_ignore_ascii_case("none") {
+                None
+            } else {
+                Some(t.to_string())
+            };
+        }
+        "view-timeline-axis" => {
+            if let Some(axis) = parse_scroll_axis(val.trim()) {
+                style.view_timeline_axis = axis;
+            }
+        }
+        "view-timeline" => {
+            apply_view_timeline_shorthand(style, val);
         }
         "mask-image" => {
             let trimmed = val.trim();
@@ -10647,6 +12965,68 @@ fn apply_declaration(
                 style.svg_stroke_width = w.max(0.0);
             }
         }
+        "fill-rule" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("evenodd") {
+                style.svg_fill_rule = FillRule::EvenOdd;
+            } else if v.eq_ignore_ascii_case("nonzero") {
+                style.svg_fill_rule = FillRule::NonZero;
+            }
+        }
+        "stroke-linecap" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("round") {
+                style.svg_stroke_linecap = StrokeLinecap::Round;
+            } else if v.eq_ignore_ascii_case("square") {
+                style.svg_stroke_linecap = StrokeLinecap::Square;
+            } else if v.eq_ignore_ascii_case("butt") {
+                style.svg_stroke_linecap = StrokeLinecap::Butt;
+            }
+        }
+        "stroke-linejoin" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("round") {
+                style.svg_stroke_linejoin = StrokeLinejoin::Round;
+            } else if v.eq_ignore_ascii_case("bevel") {
+                style.svg_stroke_linejoin = StrokeLinejoin::Bevel;
+            } else if v.eq_ignore_ascii_case("miter") {
+                style.svg_stroke_linejoin = StrokeLinejoin::Miter;
+            }
+        }
+        "stroke-miterlimit" => {
+            if let Ok(v) = val.trim().parse::<f32>()
+                && v >= 1.0
+            {
+                style.svg_stroke_miterlimit = v;
+            }
+        }
+        "stroke-dasharray" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("none") {
+                style.svg_stroke_dasharray = Vec::new();
+            } else {
+                let dashes: Vec<f32> = v
+                    .split(|c: char| c == ',' || c.is_ascii_whitespace())
+                    .filter(|s| !s.is_empty())
+                    .filter_map(|s| resolve_box_length(s, em_basis, viewport, is_quirks))
+                    .filter(|&v| v >= 0.0)
+                    .collect();
+                if !dashes.is_empty() {
+                    style.svg_stroke_dasharray = dashes;
+                }
+            }
+        }
+        "stroke-dashoffset" => {
+            if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) {
+                style.svg_stroke_dashoffset = v;
+            }
+        }
+        "paint-order" => {
+            // CSS Fill & Stroke L3 §6 / SVG 2 §13.7.
+            if let Some(o) = SvgPaintOrder::parse(val) {
+                style.paint_order = o;
+            }
+        }
         "line-height" => {
             // `1.5` (unitless) — коэффициент. `1.5em` — то же самое.
             // `150%` — то же самое. `24px` / `5vh` — конкретная высота,
@@ -10704,21 +13084,22 @@ fn apply_declaration(
         // CSS Logical Properties L1 §6.1 — margin-inline-* / margin-block-*.
         // Phase 0: LTR horizontal → inline-start=left, inline-end=right,
         //          block-start=top, block-end=bottom.
-        "margin-inline-start" => set_margin_side(&mut style.margin_left, val, is_quirks),
-        "margin-inline-end"   => set_margin_side(&mut style.margin_right, val, is_quirks),
-        "margin-block-start"  => set_margin_side(&mut style.margin_top, val, is_quirks),
-        "margin-block-end"    => set_margin_side(&mut style.margin_bottom, val, is_quirks),
+        // Stored in logical fields; resolved to physical (left/right/top/bottom) in resolve_logical_properties().
+        "margin-inline-start" => set_margin_side(&mut style.margin_inline_start, val, is_quirks),
+        "margin-inline-end"   => set_margin_side(&mut style.margin_inline_end, val, is_quirks),
+        "margin-block-start"  => set_margin_side(&mut style.margin_block_start, val, is_quirks),
+        "margin-block-end"    => set_margin_side(&mut style.margin_block_end, val, is_quirks),
         "margin-inline" => {
             let toks = split_box_tokens(val);
             let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return };
-            set_margin_side(&mut style.margin_left, s, is_quirks);
-            set_margin_side(&mut style.margin_right, e, is_quirks);
+            set_margin_side(&mut style.margin_inline_start, s, is_quirks);
+            set_margin_side(&mut style.margin_inline_end, e, is_quirks);
         }
         "margin-block" => {
             let toks = split_box_tokens(val);
             let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return };
-            set_margin_side(&mut style.margin_top, s, is_quirks);
-            set_margin_side(&mut style.margin_bottom, e, is_quirks);
+            set_margin_side(&mut style.margin_block_start, s, is_quirks);
+            set_margin_side(&mut style.margin_block_end, e, is_quirks);
         }
         "padding" => {
             if let Some((t, r, b, l)) = parse_padding_shorthand(val, is_quirks) {
@@ -10733,21 +13114,22 @@ fn apply_declaration(
         "padding-bottom" => set_padding_side(&mut style.padding_bottom, val, is_quirks),
         "padding-left" => set_padding_side(&mut style.padding_left, val, is_quirks),
         // CSS Logical Properties L1 §6.2 — padding-inline-* / padding-block-*.
-        "padding-inline-start" => set_padding_side(&mut style.padding_left, val, is_quirks),
-        "padding-inline-end"   => set_padding_side(&mut style.padding_right, val, is_quirks),
-        "padding-block-start"  => set_padding_side(&mut style.padding_top, val, is_quirks),
-        "padding-block-end"    => set_padding_side(&mut style.padding_bottom, val, is_quirks),
+        // Stored in logical fields; resolved to physical (left/right/top/bottom) in resolve_logical_properties().
+        "padding-inline-start" => set_padding_side(&mut style.padding_inline_start, val, is_quirks),
+        "padding-inline-end"   => set_padding_side(&mut style.padding_inline_end, val, is_quirks),
+        "padding-block-start"  => set_padding_side(&mut style.padding_block_start, val, is_quirks),
+        "padding-block-end"    => set_padding_side(&mut style.padding_block_end, val, is_quirks),
         "padding-inline" => {
             let toks = split_box_tokens(val);
             let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return };
-            set_padding_side(&mut style.padding_left, s, is_quirks);
-            set_padding_side(&mut style.padding_right, e, is_quirks);
+            set_padding_side(&mut style.padding_inline_start, s, is_quirks);
+            set_padding_side(&mut style.padding_inline_end, e, is_quirks);
         }
         "padding-block" => {
             let toks = split_box_tokens(val);
             let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return };
-            set_padding_side(&mut style.padding_top, s, is_quirks);
-            set_padding_side(&mut style.padding_bottom, e, is_quirks);
+            set_padding_side(&mut style.padding_block_start, s, is_quirks);
+            set_padding_side(&mut style.padding_block_end, e, is_quirks);
         }
         "text-decoration" => {
             // Shorthand: `<line> || <style> || <color>` в любом порядке (CSS Text
@@ -10822,6 +13204,24 @@ fn apply_declaration(
                 _ => style.text_underline_position,
             };
         }
+        "text-underline-offset" => {
+            // CSS Text Decoration L4 §5.3: auto | <length>.
+            // Positive offset shifts underline away from text (downward for horizontal).
+            style.text_underline_offset = if val.trim() == "auto" {
+                None
+            } else {
+                parse_length_px(val.trim())
+            };
+        }
+        "text-decoration-skip-ink" => {
+            // CSS Text Decoration L4 §3.5: auto | all | none.
+            style.text_decoration_skip_ink = match val.trim() {
+                "auto" => TextDecorationSkipInk::Auto,
+                "all" => TextDecorationSkipInk::All,
+                "none" => TextDecorationSkipInk::None,
+                _ => return,
+            };
+        }
         "text-emphasis" => {
             // CSS Text Decoration L4 §5.6 — shorthand для -style и -color
             // (НЕ включает -position по spec). Сбрасывает обе longhand-ы в
@@ -10871,10 +13271,12 @@ fn apply_declaration(
                 &mut style.border_bottom_width, &mut style.border_bottom_style,
                 &mut style.border_bottom_color, val, em_basis, viewport, is_quirks);
         }
-        "border-inline-start-width" => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_left_width = v; } }
-        "border-inline-end-width"   => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_right_width = v; } }
-        "border-block-start-width"  => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_top_width = v; } }
-        "border-block-end-width"    => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_bottom_width = v; } }
+        // CSS Logical Properties L1 — border-inline-*-width / border-block-*-width.
+        // Stored in logical fields; resolved to physical (left/right/top/bottom) in resolve_logical_properties().
+        "border-inline-start-width" => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_inline_start_width = v; } }
+        "border-inline-end-width"   => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_inline_end_width = v; } }
+        "border-block-start-width"  => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_block_start_width = v; } }
+        "border-block-end-width"    => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_block_end_width = v; } }
         "border-inline-start-style" => style.border_left_style = parse_border_style_kw(val),
         "border-inline-end-style"   => style.border_right_style = parse_border_style_kw(val),
         "border-block-start-style"  => style.border_top_style = parse_border_style_kw(val),
@@ -11029,21 +13431,154 @@ pub(crate) struct ParsedTextDecorationShorthand {
     pub any_recognized: bool,
 }
 
-/// Разбирает `text-decoration` shorthand или `text-decoration-line`.
+// parse_text_decoration_shorthand_q: разбирает `text-decoration` shorthand или
+// `text-decoration-line`. CSS Text Decoration L3 §2.1 shorthand: `<line> || <style>
+// || <color>` в любом порядке. `text-decoration-thickness` исключена из L3
+// shorthand-а. Phase 0 keyword-ы линий: `underline`, `overline`, `line-through`,
+// `none`. `none` сбрасывает все линии. `currentcolor` keyword сбрасывает color в
+// None. Wrapper для тестов: parse_text_decoration_shorthand (#[cfg(test)]).
+
+/// Resolve CSS Logical Properties based on writing-mode.
 ///
-/// CSS Text Decoration L3 §2.1 shorthand: `<line> || <style> || <color>` в любом
-/// порядке. `text-decoration-thickness` исключена из L3 shorthand-а (L4
-/// собирается её туда вернуть; пока следуем L3).
+/// Logical properties (CSS Logical Properties and Values L1) map to physical
+/// properties depending on the writing mode:
+/// - `inline-size` → `width` (horizontal) or `height` (vertical)
+/// - `block-size` → `height` (horizontal) or `width` (vertical)
+/// - `margin-inline` → `margin-left` / `margin-right` (ltr) or opposite (rtl)
+/// - `inset-inline-start/end` → `left` / `right` or opposite depending on direction
 ///
-/// Phase 0 keyword-ы линий: `underline`, `overline`, `line-through`, `none`.
-/// `none` сбрасывает все линии (CSS3 «none — initial value», явный сброс
-/// побеждает другие line-keyword-ы).
-/// Стиль: `solid`/`wavy`/`dashed`/`dotted`/`double`. `blink` (CSS2 deprecated)
-/// тихо поглощаем, чтобы не попадал в color-парсер.
-///
-/// `currentcolor` keyword сбрасывает color в None (= fallback на currentColor
-/// при рендеринге).
-/// Wrapper для тестов и потребителей вне quirks-aware каскада.
+/// Phase 0: simplified horizontal (LTR) only. Full vertical/RTL support in Phase 2.
+/// Returns the physical property name to apply the value to.
+/// Returns None if not a recognized logical property.
+pub fn resolve_logical_property(logical_name: &str, writing_mode: &str) -> Option<&'static str> {
+    // Phase 0: Only horizontal LTR. Other writing modes return None.
+    if writing_mode != "horizontal-tb" && writing_mode != "horizontal" {
+        return None;
+    }
+
+    match logical_name {
+        // Block-direction properties (vertical in horizontal LTR).
+        "block-size" => Some("height"),
+        "min-block-size" => Some("min-height"),
+        "max-block-size" => Some("max-height"),
+        "margin-block" => Some("margin-top"), // would need split for full handling
+        "margin-block-start" => Some("margin-top"),
+        "margin-block-end" => Some("margin-bottom"),
+        "padding-block" => Some("padding-top"), // would need split
+        "padding-block-start" => Some("padding-top"),
+        "padding-block-end" => Some("padding-bottom"),
+        "border-block" => Some("border-top"), // simplified
+        "border-block-start" => Some("border-top"),
+        "border-block-end" => Some("border-bottom"),
+        "inset-block" => Some("top"), // simplified
+        "inset-block-start" => Some("top"),
+        "inset-block-end" => Some("bottom"),
+
+        // Inline-direction properties (horizontal in horizontal LTR).
+        "inline-size" => Some("width"),
+        "min-inline-size" => Some("min-width"),
+        "max-inline-size" => Some("max-width"),
+        "margin-inline" => Some("margin-left"), // would need split
+        "margin-inline-start" => Some("margin-left"),
+        "margin-inline-end" => Some("margin-right"),
+        "padding-inline" => Some("padding-left"), // would need split
+        "padding-inline-start" => Some("padding-left"),
+        "padding-inline-end" => Some("padding-right"),
+        "border-inline" => Some("border-left"), // simplified
+        "border-inline-start" => Some("border-left"),
+        "border-inline-end" => Some("border-right"),
+        "inset-inline" => Some("left"), // simplified
+        "inset-inline-start" => Some("left"),
+        "inset-inline-end" => Some("right"),
+
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod logical_properties_tests {
+    use super::resolve_logical_property;
+
+    #[test]
+    fn resolve_inline_size() {
+        assert_eq!(
+            resolve_logical_property("inline-size", "horizontal-tb"),
+            Some("width")
+        );
+    }
+
+    #[test]
+    fn resolve_block_size() {
+        assert_eq!(
+            resolve_logical_property("block-size", "horizontal-tb"),
+            Some("height")
+        );
+    }
+
+    #[test]
+    fn resolve_margin_inline_start() {
+        assert_eq!(
+            resolve_logical_property("margin-inline-start", "horizontal"),
+            Some("margin-left")
+        );
+    }
+
+    #[test]
+    fn resolve_padding_block_end() {
+        assert_eq!(
+            resolve_logical_property("padding-block-end", "horizontal-tb"),
+            Some("padding-bottom")
+        );
+    }
+
+    #[test]
+    fn resolve_inset_inline() {
+        assert_eq!(
+            resolve_logical_property("inset-inline", "horizontal"),
+            Some("left")
+        );
+    }
+
+    #[test]
+    fn resolve_unknown_property() {
+        assert_eq!(resolve_logical_property("color", "horizontal"), None);
+        assert_eq!(resolve_logical_property("display", "horizontal-tb"), None);
+    }
+
+    #[test]
+    fn resolve_vertical_mode_unsupported() {
+        // Phase 0: vertical modes return None
+        assert_eq!(
+            resolve_logical_property("inline-size", "vertical-rl"),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_border_logical() {
+        assert_eq!(
+            resolve_logical_property("border-inline-start", "horizontal-tb"),
+            Some("border-left")
+        );
+        assert_eq!(
+            resolve_logical_property("border-block-start", "horizontal"),
+            Some("border-top")
+        );
+    }
+
+    #[test]
+    fn resolve_min_max_size() {
+        assert_eq!(
+            resolve_logical_property("min-inline-size", "horizontal-tb"),
+            Some("min-width")
+        );
+        assert_eq!(
+            resolve_logical_property("max-block-size", "horizontal"),
+            Some("max-height")
+        );
+    }
+}
+
 #[cfg(test)]
 fn parse_text_decoration_shorthand(val: &str) -> ParsedTextDecorationShorthand {
     parse_text_decoration_shorthand_q(val, false)
@@ -11363,6 +13898,55 @@ fn apply_text_emphasis_shorthand(style: &mut ComputedStyle, val: &str, is_quirks
 /// `<'text-wrap-mode'> || <'text-wrap-style'>` — 1..=2 keyword-а, любой
 /// порядок, без повторов внутри своего слота. Нераспознанный токен ⇒
 /// весь shorthand невалиден (initial-значения сохраняются как «после reset»).
+/// CSS Box Sizing L4 §5 — parse one `contain-intrinsic-*` component:
+/// `auto? [ none | <length> ]`. Returns `Some(None)` for `none` (no placeholder),
+/// `Some(Some(len))` for a length, and `None` on a parse error (declaration is
+/// then ignored, leaving the previous value). The leading `auto` keyword
+/// (last-remembered-size hint) is accepted and discarded.
+fn parse_contain_intrinsic_one(val: &str) -> Option<Option<Length>> {
+    let mut v = val.trim();
+    if let Some(rest) = v.strip_prefix("auto")
+        && (rest.is_empty() || rest.starts_with(char::is_whitespace))
+    {
+        v = rest.trim_start();
+    }
+    if v.eq_ignore_ascii_case("none") {
+        return Some(None);
+    }
+    parse_length(v).map(Some)
+}
+
+/// CSS Box Sizing L4 §5 — parse the `contain-intrinsic-size` shorthand:
+/// `[ auto? [ none | <length> ] ]{1,2}`. One component sets both axes; two set
+/// width then height. Returns `None` on any parse error.
+fn parse_contain_intrinsic_size(val: &str) -> Option<(Option<Length>, Option<Length>)> {
+    let tokens: Vec<&str> = val.split_whitespace().collect();
+    let mut comps: Vec<Option<Length>> = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if tokens[i].eq_ignore_ascii_case("auto") {
+            i += 1;
+            if i >= tokens.len() {
+                return None;
+            }
+        }
+        let t = tokens[i];
+        if t.eq_ignore_ascii_case("none") {
+            comps.push(None);
+        } else if let Some(l) = parse_length(t) {
+            comps.push(Some(l));
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+    match comps.len() {
+        1 => Some((comps[0].clone(), comps[0].clone())),
+        2 => Some((comps[0].clone(), comps[1].clone())),
+        _ => None,
+    }
+}
+
 fn apply_text_wrap_shorthand(style: &mut ComputedStyle, val: &str) {
     style.text_wrap_mode = TextWrapMode::Wrap;
     style.text_wrap_style = TextWrapStyle::Auto;
@@ -11683,6 +14267,10 @@ fn apply_css_wide_keyword(
                 init.text_align_last
             };
         }
+        "interpolate-size" => {
+            style.interpolate_size =
+                if inh { inherited.interpolate_size } else { init.interpolate_size };
+        }
         "direction" => {
             style.direction = if inh { inherited.direction } else { init.direction };
         }
@@ -11778,6 +14366,20 @@ fn apply_css_wide_keyword(
                 init.text_underline_position
             };
         }
+        "text-underline-offset" => {
+            style.text_underline_offset = if inh {
+                inherited.text_underline_offset
+            } else {
+                init.text_underline_offset
+            };
+        }
+        "text-decoration-skip-ink" => {
+            style.text_decoration_skip_ink = if inh {
+                inherited.text_decoration_skip_ink
+            } else {
+                init.text_decoration_skip_ink
+            };
+        }
         "text-shadow" => {
             style.text_shadow = if inh {
                 inherited.text_shadow.clone()
@@ -11830,6 +14432,29 @@ fn apply_css_wide_keyword(
             } else {
                 init.content_visibility
             };
+        }
+        "contain-intrinsic-width" | "contain-intrinsic-inline-size" => {
+            style.contain_intrinsic_width = if inh_only_inherit {
+                inherited.contain_intrinsic_width.clone()
+            } else {
+                init.contain_intrinsic_width.clone()
+            };
+        }
+        "contain-intrinsic-height" | "contain-intrinsic-block-size" => {
+            style.contain_intrinsic_height = if inh_only_inherit {
+                inherited.contain_intrinsic_height.clone()
+            } else {
+                init.contain_intrinsic_height.clone()
+            };
+        }
+        "contain-intrinsic-size" => {
+            if inh_only_inherit {
+                style.contain_intrinsic_width = inherited.contain_intrinsic_width.clone();
+                style.contain_intrinsic_height = inherited.contain_intrinsic_height.clone();
+            } else {
+                style.contain_intrinsic_width = init.contain_intrinsic_width.clone();
+                style.contain_intrinsic_height = init.contain_intrinsic_height.clone();
+            }
         }
         "container-type" => {
             style.container_type = if inh_only_inherit {
@@ -11926,6 +14551,9 @@ fn apply_css_wide_keyword(
         }
         "width" => style.width = if inh_only_inherit { inherited.width.clone() } else { init.width.clone() },
         "height" => style.height = if inh_only_inherit { inherited.height.clone() } else { init.height.clone() },
+        // CSS Logical Properties L1 — inline-size / block-size.
+        "inline-size" => style.inline_size = if inh_only_inherit { inherited.inline_size.clone() } else { init.inline_size.clone() },
+        "block-size" => style.block_size = if inh_only_inherit { inherited.block_size.clone() } else { init.block_size.clone() },
         "min-width" => style.min_width = if inh_only_inherit { inherited.min_width.clone() } else { init.min_width.clone() },
         "max-width" => style.max_width = if inh_only_inherit { inherited.max_width.clone() } else { init.max_width.clone() },
         "min-height" => style.min_height = if inh_only_inherit { inherited.min_height.clone() } else { init.min_height.clone() },
@@ -11941,19 +14569,20 @@ fn apply_css_wide_keyword(
             style.margin_bottom = src.margin_bottom.clone();
             style.margin_left = src.margin_left.clone();
         }
-        "margin-inline-start" => style.margin_left = if inh_only_inherit { inherited.margin_left.clone() } else { init.margin_left.clone() },
-        "margin-inline-end"   => style.margin_right = if inh_only_inherit { inherited.margin_right.clone() } else { init.margin_right.clone() },
-        "margin-block-start"  => style.margin_top = if inh_only_inherit { inherited.margin_top.clone() } else { init.margin_top.clone() },
-        "margin-block-end"    => style.margin_bottom = if inh_only_inherit { inherited.margin_bottom.clone() } else { init.margin_bottom.clone() },
+        // CSS Logical Properties L1 — margin-inline-* / margin-block-*.
+        "margin-inline-start" => style.margin_inline_start = if inh_only_inherit { inherited.margin_inline_start.clone() } else { init.margin_inline_start.clone() },
+        "margin-inline-end"   => style.margin_inline_end = if inh_only_inherit { inherited.margin_inline_end.clone() } else { init.margin_inline_end.clone() },
+        "margin-block-start"  => style.margin_block_start = if inh_only_inherit { inherited.margin_block_start.clone() } else { init.margin_block_start.clone() },
+        "margin-block-end"    => style.margin_block_end = if inh_only_inherit { inherited.margin_block_end.clone() } else { init.margin_block_end.clone() },
         "margin-inline" => {
             let src = if inh_only_inherit { inherited } else { &init };
-            style.margin_left = src.margin_left.clone();
-            style.margin_right = src.margin_right.clone();
+            style.margin_inline_start = src.margin_inline_start.clone();
+            style.margin_inline_end = src.margin_inline_end.clone();
         }
         "margin-block" => {
             let src = if inh_only_inherit { inherited } else { &init };
-            style.margin_top = src.margin_top.clone();
-            style.margin_bottom = src.margin_bottom.clone();
+            style.margin_block_start = src.margin_block_start.clone();
+            style.margin_block_end = src.margin_block_end.clone();
         }
         "padding-top" => style.padding_top = if inh_only_inherit { inherited.padding_top.clone() } else { init.padding_top.clone() },
         "padding-right" => style.padding_right = if inh_only_inherit { inherited.padding_right.clone() } else { init.padding_right.clone() },
@@ -11966,8 +14595,9 @@ fn apply_css_wide_keyword(
             style.padding_bottom = src.padding_bottom.clone();
             style.padding_left = src.padding_left.clone();
         }
-        "padding-inline-start" => style.padding_left = if inh_only_inherit { inherited.padding_left.clone() } else { init.padding_left.clone() },
-        "padding-inline-end"   => style.padding_right = if inh_only_inherit { inherited.padding_right.clone() } else { init.padding_right.clone() },
+        // CSS Logical Properties L1 — padding-inline-* / padding-block-*.
+        "padding-inline-start" => style.padding_inline_start = if inh_only_inherit { inherited.padding_inline_start.clone() } else { init.padding_inline_start.clone() },
+        "padding-inline-end"   => style.padding_inline_end = if inh_only_inherit { inherited.padding_inline_end.clone() } else { init.padding_inline_end.clone() },
         "padding-block-start"  => style.padding_top = if inh_only_inherit { inherited.padding_top.clone() } else { init.padding_top.clone() },
         "padding-block-end"    => style.padding_bottom = if inh_only_inherit { inherited.padding_bottom.clone() } else { init.padding_bottom.clone() },
         "padding-inline" => {
@@ -12000,6 +14630,28 @@ fn apply_css_wide_keyword(
         }
         "stroke-width" => {
             style.svg_stroke_width = if inh_only_inherit { inherited.svg_stroke_width } else { init.svg_stroke_width };
+        }
+        "fill-rule" => {
+            style.svg_fill_rule = if inh_only_inherit { inherited.svg_fill_rule } else { init.svg_fill_rule };
+        }
+        "stroke-linecap" => {
+            style.svg_stroke_linecap = if inh_only_inherit { inherited.svg_stroke_linecap } else { init.svg_stroke_linecap };
+        }
+        "stroke-linejoin" => {
+            style.svg_stroke_linejoin = if inh_only_inherit { inherited.svg_stroke_linejoin } else { init.svg_stroke_linejoin };
+        }
+        "stroke-miterlimit" => {
+            style.svg_stroke_miterlimit = if inh_only_inherit { inherited.svg_stroke_miterlimit } else { init.svg_stroke_miterlimit };
+        }
+        "stroke-dasharray" => {
+            style.svg_stroke_dasharray = if inh_only_inherit { inherited.svg_stroke_dasharray.clone() } else { init.svg_stroke_dasharray.clone() };
+        }
+        "stroke-dashoffset" => {
+            style.svg_stroke_dashoffset = if inh_only_inherit { inherited.svg_stroke_dashoffset } else { init.svg_stroke_dashoffset };
+        }
+        // CSS Fill & Stroke L3 §6 — paint-order is inherited: unset/revert → inherited.
+        "paint-order" => {
+            style.paint_order = if inh { inherited.paint_order } else { init.paint_order };
         }
         "overflow" => {
             let (x, y) = if inh_only_inherit {
@@ -12099,6 +14751,16 @@ fn apply_css_wide_keyword(
             style.border_right_color = v.1;
             style.border_bottom_color = v.2;
             style.border_left_color = v.3;
+        }
+        "border-collapse" => {
+            style.border_collapse = if inh_only_inherit { inherited.border_collapse } else { init.border_collapse };
+        }
+        "empty-cells" => {
+            style.empty_cells = if inh_only_inherit { inherited.empty_cells } else { init.empty_cells };
+        }
+        "border-spacing" => {
+            style.border_spacing_h = if inh_only_inherit { inherited.border_spacing_h } else { init.border_spacing_h };
+            style.border_spacing_v = if inh_only_inherit { inherited.border_spacing_v } else { init.border_spacing_v };
         }
         // border / border-top / -right / -bottom / -left shorthand: width + style + color на сторону.
         "border" => {
@@ -12231,6 +14893,17 @@ fn apply_css_wide_keyword(
                 init.counter_increment.clone()
             };
         }
+        "counter-set" => {
+            style.counter_set = if inh_only_inherit {
+                inherited.counter_set.clone()
+            } else {
+                init.counter_set.clone()
+            };
+        }
+        // CSS Generated Content L3 §3.2 — quotes inherited.
+        "quotes" => {
+            style.quotes = if inh { inherited.quotes.clone() } else { init.quotes.clone() };
+        }
         // Masking / Transforms / Filter — все non-inherited.
         "clip-path" => {
             style.clip_path = if inh_only_inherit { inherited.clip_path.clone() } else { init.clip_path.clone() };
@@ -12254,6 +14927,23 @@ fn apply_css_wide_keyword(
         "position" => {
             style.position = if inh_only_inherit { inherited.position } else { init.position };
         }
+        // CSS Anchor Positioning L1 — non-inherited properties.
+        "anchor-name" => {
+            style.anchor_name = if inh_only_inherit { inherited.anchor_name.clone() } else { None };
+        }
+        "position-anchor" => {
+            style.position_anchor = if inh_only_inherit { inherited.position_anchor.clone() } else { None };
+        }
+        "inset-area" | "position-area" => {
+            style.inset_area_row = if inh_only_inherit { inherited.inset_area_row } else { init.inset_area_row };
+            style.inset_area_col = if inh_only_inherit { inherited.inset_area_col } else { init.inset_area_col };
+        }
+        "anchor-scope" => {
+            style.anchor_scope = if inh_only_inherit { inherited.anchor_scope.clone() } else { init.anchor_scope.clone() };
+        }
+        "view-transition-name" => {
+            style.view_transition_name = if inh_only_inherit { inherited.view_transition_name.clone() } else { None };
+        }
         "top" => {
             style.top = if inh_only_inherit { inherited.top.clone() } else { init.top.clone() };
         }
@@ -12272,17 +14962,20 @@ fn apply_css_wide_keyword(
             style.bottom = if inh_only_inherit { inherited.bottom.clone() } else { init.bottom.clone() };
             style.left = if inh_only_inherit { inherited.left.clone() } else { init.left.clone() };
         }
-        "inset-inline-start" => style.left   = if inh_only_inherit { inherited.left.clone()   } else { init.left.clone()   },
-        "inset-inline-end"   => style.right  = if inh_only_inherit { inherited.right.clone()  } else { init.right.clone()  },
-        "inset-block-start"  => style.top    = if inh_only_inherit { inherited.top.clone()    } else { init.top.clone()    },
-        "inset-block-end"    => style.bottom = if inh_only_inherit { inherited.bottom.clone() } else { init.bottom.clone() },
+        // CSS Logical Properties L1 — inset-inline-* / inset-block-*.
+        "inset-inline-start" => style.inset_inline_start = if inh_only_inherit { inherited.inset_inline_start.clone() } else { init.inset_inline_start.clone() },
+        "inset-inline-end"   => style.inset_inline_end = if inh_only_inherit { inherited.inset_inline_end.clone() } else { init.inset_inline_end.clone() },
+        "inset-block-start"  => style.inset_block_start = if inh_only_inherit { inherited.inset_block_start.clone() } else { init.inset_block_start.clone() },
+        "inset-block-end"    => style.inset_block_end = if inh_only_inherit { inherited.inset_block_end.clone() } else { init.inset_block_end.clone() },
         "inset-inline" => {
-            style.left  = if inh_only_inherit { inherited.left.clone()  } else { init.left.clone()  };
-            style.right = if inh_only_inherit { inherited.right.clone() } else { init.right.clone() };
+            let src = if inh_only_inherit { inherited } else { &init };
+            style.inset_inline_start = src.inset_inline_start.clone();
+            style.inset_inline_end = src.inset_inline_end.clone();
         }
         "inset-block" => {
-            style.top    = if inh_only_inherit { inherited.top.clone()    } else { init.top.clone()    };
-            style.bottom = if inh_only_inherit { inherited.bottom.clone() } else { init.bottom.clone() };
+            let src = if inh_only_inherit { inherited } else { &init };
+            style.inset_block_start = src.inset_block_start.clone();
+            style.inset_block_end = src.inset_block_end.clone();
         }
         "z-index" => {
             style.z_index = if inh_only_inherit { inherited.z_index } else { init.z_index };
@@ -12438,6 +15131,8 @@ fn apply_css_wide_keyword(
                 // inherit: copy from parent (non-inherited → initial)
                 style.grid_template_columns = init.grid_template_columns.clone();
                 style.grid_template_rows = init.grid_template_rows.clone();
+                style.grid_template_col_auto_repeat = init.grid_template_col_auto_repeat.clone();
+                style.grid_template_row_auto_repeat = init.grid_template_row_auto_repeat.clone();
                 style.grid_template_areas = init.grid_template_areas.clone();
                 style.grid_auto_flow = init.grid_auto_flow;
                 style.grid_auto_columns = init.grid_auto_columns.clone();
@@ -12449,6 +15144,8 @@ fn apply_css_wide_keyword(
             } else {
                 style.grid_template_columns = init.grid_template_columns.clone();
                 style.grid_template_rows = init.grid_template_rows.clone();
+                style.grid_template_col_auto_repeat = init.grid_template_col_auto_repeat.clone();
+                style.grid_template_row_auto_repeat = init.grid_template_row_auto_repeat.clone();
                 style.grid_template_areas = init.grid_template_areas.clone();
                 style.grid_auto_flow = init.grid_auto_flow;
                 style.grid_auto_columns = init.grid_auto_columns.clone();
@@ -12511,6 +15208,77 @@ fn is_css_ident(s: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// CSS Generated Content L3 §3.2 — parse the `quotes` value.
+///
+/// `auto` → [`Quotes::Auto`]; `none` → [`Quotes::None`]; otherwise an even
+/// number of CSS strings forms `(open, close)` pairs (outermost first).
+/// Returns `None` if the value is malformed (odd string count or none found).
+fn parse_quotes(value: &str) -> Option<Quotes> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("auto") {
+        return Some(Quotes::Auto);
+    }
+    if v.eq_ignore_ascii_case("none") {
+        return Some(Quotes::None);
+    }
+    let strings = parse_css_string_sequence(v);
+    if strings.is_empty() || !strings.len().is_multiple_of(2) {
+        return None;
+    }
+    let pairs = strings
+        .chunks_exact(2)
+        .map(|c| (c[0].clone(), c[1].clone()))
+        .collect();
+    Some(Quotes::Pairs(pairs))
+}
+
+/// Extracts consecutive CSS string literals from `s` (single- or double-quoted),
+/// unescaping `\XXXXXX` hex escapes and `\<char>` literals. Non-string tokens are
+/// skipped. Used by [`parse_quotes`].
+fn parse_css_string_sequence(s: &str) -> Vec<String> {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '"' || chars[i] == '\'' {
+            let quote = chars[i];
+            i += 1;
+            let mut cur = String::new();
+            while i < chars.len() && chars[i] != quote {
+                if chars[i] == '\\' {
+                    i += 1;
+                    let mut hex = String::new();
+                    while i < chars.len() && chars[i].is_ascii_hexdigit() && hex.len() < 6 {
+                        hex.push(chars[i]);
+                        i += 1;
+                    }
+                    if !hex.is_empty() {
+                        if i < chars.len() && chars[i].is_whitespace() {
+                            i += 1;
+                        }
+                        if let Ok(code) = u32::from_str_radix(&hex, 16)
+                            && let Some(ch) = char::from_u32(code)
+                        {
+                            cur.push(ch);
+                        }
+                    } else if i < chars.len() {
+                        cur.push(chars[i]);
+                        i += 1;
+                    }
+                } else {
+                    cur.push(chars[i]);
+                    i += 1;
+                }
+            }
+            i += 1; // skip closing quote
+            out.push(cur);
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 /// Парсит угол в радианах из строки вида `45deg`, `1.5rad`, `0.25turn`,
 /// `100grad`. Без единицы — number-as-radians (для совместимости).
 fn parse_angle_to_radians(s: &str) -> Option<f32> {
@@ -12558,9 +15326,20 @@ fn parse_length_px(s: &str) -> Option<f32> {
     s.parse::<f32>().ok()
 }
 
+/// Распарсить `<length-percentage>` координату basic-shape: `%` →
+/// `ShapeValue::Pct`, остальное через `parse_length_px` → `ShapeValue::Px`.
+fn parse_shape_value(s: &str) -> Option<ShapeValue> {
+    let s = s.trim();
+    if let Some(num) = s.strip_suffix('%') {
+        return num.trim().parse::<f32>().ok().map(ShapeValue::Pct);
+    }
+    parse_length_px(s).map(ShapeValue::Px)
+}
+
 /// Парсит `<basic-shape>` для `clip-path` (CSS Masking L1 §3.5).
 /// Поддерживает: `inset(t r b l)`, `circle(r at cx cy)`,
-/// `ellipse(rx ry at cx cy)`, `polygon(x1 y1, x2 y2, ...)`.
+/// `ellipse(rx ry at cx cy)`, `polygon(x1 y1, x2 y2, ...)`,
+/// `path([<fill-rule>,]? "<svg>")` (CSS Shapes L1 §4).
 fn parse_clip_path(s: &str) -> Option<ClipPath> {
     let s = s.trim();
     let open = s.find('(')?;
@@ -12571,10 +15350,35 @@ fn parse_clip_path(s: &str) -> Option<ClipPath> {
     let func = s[..open].trim().to_ascii_lowercase();
     let inner = s[open + 1..close].trim();
     match func.as_str() {
+        "path" => {
+            // `path([<fill-rule>,]? "<svg-path>")`. Опциональный fill-rule
+            // (nonzero|evenodd) управляет заливкой самопересекающихся путей
+            // (CSS Shapes L1 §4). Строка пути — в кавычках.
+            let mut fill_rule = FillRule::NonZero;
+            let inner = match inner.split_once(',') {
+                Some((head, rest)) if matches!(head.trim(), "nonzero" | "evenodd") => {
+                    if head.trim().eq_ignore_ascii_case("evenodd") {
+                        fill_rule = FillRule::EvenOdd;
+                    }
+                    rest.trim()
+                }
+                _ => inner,
+            };
+            let path_str = inner
+                .strip_prefix('"')
+                .and_then(|t| t.strip_suffix('"'))
+                .or_else(|| inner.strip_prefix('\'').and_then(|t| t.strip_suffix('\'')))?;
+            let pts = crate::motion_path::flatten_path_to_polygon(path_str);
+            if pts.len() < 3 {
+                None
+            } else {
+                Some(ClipPath::Path(pts, fill_rule))
+            }
+        }
         "inset" => {
-            let parts: Vec<f32> = inner
+            let parts: Vec<ShapeValue> = inner
                 .split_whitespace()
-                .filter_map(parse_length_px)
+                .filter_map(parse_shape_value)
                 .collect();
             if parts.is_empty() {
                 None
@@ -12589,7 +15393,7 @@ fn parse_clip_path(s: &str) -> Option<ClipPath> {
             } else {
                 (inner, None)
             };
-            let radius = parse_length_px(radius_part.trim())?;
+            let radius = parse_shape_value(radius_part.trim())?;
             let center = at_part.and_then(parse_at_pair);
             Some(ClipPath::Circle { radius, center })
         }
@@ -12599,9 +15403,9 @@ fn parse_clip_path(s: &str) -> Option<ClipPath> {
             } else {
                 (inner, None)
             };
-            let radii: Vec<f32> = radii_part
+            let radii: Vec<ShapeValue> = radii_part
                 .split_whitespace()
-                .filter_map(parse_length_px)
+                .filter_map(parse_shape_value)
                 .collect();
             if radii.len() < 2 {
                 return None;
@@ -12614,11 +15418,24 @@ fn parse_clip_path(s: &str) -> Option<ClipPath> {
             })
         }
         "polygon" => {
+            // `polygon([<fill-rule>,]? x1 y1, ...)`. Опциональный fill-rule —
+            // первый токен перед первой запятой (CSS Shapes L1 §3).
+            let mut fill_rule = FillRule::NonZero;
+            let mut inner = inner;
+            if let Some((head, rest)) = inner.split_once(',') {
+                let head = head.trim();
+                if head.eq_ignore_ascii_case("nonzero") || head.eq_ignore_ascii_case("evenodd") {
+                    if head.eq_ignore_ascii_case("evenodd") {
+                        fill_rule = FillRule::EvenOdd;
+                    }
+                    inner = rest.trim();
+                }
+            }
             let mut vertices = Vec::new();
             for pair in inner.split(',') {
-                let coords: Vec<f32> = pair
+                let coords: Vec<ShapeValue> = pair
                     .split_whitespace()
-                    .filter_map(parse_length_px)
+                    .filter_map(parse_shape_value)
                     .collect();
                 if coords.len() >= 2 {
                     vertices.push((coords[0], coords[1]));
@@ -12627,15 +15444,15 @@ fn parse_clip_path(s: &str) -> Option<ClipPath> {
             if vertices.is_empty() {
                 None
             } else {
-                Some(ClipPath::Polygon(vertices))
+                Some(ClipPath::Polygon(vertices, fill_rule))
             }
         }
         _ => None,
     }
 }
 
-fn parse_at_pair(s: &str) -> Option<(f32, f32)> {
-    let parts: Vec<f32> = s.split_whitespace().filter_map(parse_length_px).collect();
+fn parse_at_pair(s: &str) -> Option<(ShapeValue, ShapeValue)> {
+    let parts: Vec<ShapeValue> = s.split_whitespace().filter_map(parse_shape_value).collect();
     if parts.len() >= 2 {
         Some((parts[0], parts[1]))
     } else {
@@ -12700,7 +15517,27 @@ fn parse_transform_fn(name: &str, args: &str) -> Option<TransformFn> {
         }
         "translatex" => parse_length_px(parts.first()?).map(TransformFn::TranslateX),
         "translatey" => parse_length_px(parts.first()?).map(TransformFn::TranslateY),
+        "translatez" => parse_length_px(parts.first()?).map(TransformFn::TranslateZ),
+        "translate3d" => {
+            let x = parse_length_px(parts.first()?)?;
+            let y = parse_length_px(parts.get(1)?)?;
+            let z = parts.get(2).and_then(|s| parse_length_px(s)).unwrap_or(0.0);
+            Some(TransformFn::Translate3d(x, y, z))
+        }
         "rotate" => parse_angle_to_radians(parts.first()?).map(TransformFn::Rotate),
+        "rotatex" => parse_angle_to_radians(parts.first()?).map(TransformFn::RotateX),
+        "rotatey" => parse_angle_to_radians(parts.first()?).map(TransformFn::RotateY),
+        "rotatez" => parse_angle_to_radians(parts.first()?).map(TransformFn::RotateZ),
+        "rotate3d" => {
+            if parts.len() < 4 {
+                return None;
+            }
+            let x = parts[0].parse::<f32>().ok()?;
+            let y = parts[1].parse::<f32>().ok()?;
+            let z = parts[2].parse::<f32>().ok()?;
+            let angle = parse_angle_to_radians(parts[3])?;
+            Some(TransformFn::Rotate3d(x, y, z, angle))
+        }
         "scale" => {
             let x = parts.first()?.parse::<f32>().ok()?;
             let y = parts
@@ -12711,6 +15548,13 @@ fn parse_transform_fn(name: &str, args: &str) -> Option<TransformFn> {
         }
         "scalex" => parts.first()?.parse::<f32>().ok().map(TransformFn::ScaleX),
         "scaley" => parts.first()?.parse::<f32>().ok().map(TransformFn::ScaleY),
+        "scalez" => parts.first()?.parse::<f32>().ok().map(TransformFn::ScaleZ),
+        "scale3d" => {
+            let x = parts.first()?.parse::<f32>().ok()?;
+            let y = parts.get(1)?.parse::<f32>().ok()?;
+            let z = parts.get(2).and_then(|s| s.parse::<f32>().ok()).unwrap_or(1.0);
+            Some(TransformFn::Scale3d(x, y, z))
+        }
         "skewx" => parse_angle_to_radians(parts.first()?).map(TransformFn::SkewX),
         "skewy" => parse_angle_to_radians(parts.first()?).map(TransformFn::SkewY),
         "skew" => {
@@ -12726,6 +15570,21 @@ fn parse_transform_fn(name: &str, args: &str) -> Option<TransformFn> {
                 m[i] = p.parse::<f32>().ok()?;
             }
             Some(TransformFn::Matrix(m))
+        }
+        "matrix3d" => {
+            if parts.len() != 16 {
+                return None;
+            }
+            let mut m = [0.0f32; 16];
+            for (i, p) in parts.iter().enumerate() {
+                m[i] = p.parse::<f32>().ok()?;
+            }
+            Some(TransformFn::Matrix3d(m))
+        }
+        "perspective" => {
+            parse_length_px(parts.first()?).and_then(|px| {
+                if px > 0.0 { Some(TransformFn::Perspective(px)) } else { None }
+            })
         }
         _ => None,
     }
@@ -12884,6 +15743,112 @@ fn parse_content_fn(name: &str, args: &str) -> Option<ContentItem> {
         }
         _ => None,
     }
+}
+
+/// Parse `scroll-timeline-axis` / `view-timeline-axis` keyword.
+fn parse_scroll_axis(s: &str) -> Option<ScrollAxis> {
+    match s.to_ascii_lowercase().as_str() {
+        "block" => Some(ScrollAxis::Block),
+        "inline" => Some(ScrollAxis::Inline),
+        "x" => Some(ScrollAxis::X),
+        "y" => Some(ScrollAxis::Y),
+        _ => None,
+    }
+}
+
+/// Parse `scroll()` function: `scroll([<axis>] [nearest | root | self])`.
+/// Returns `AnimationTimeline::Scroll { axis, nearest }`.
+fn parse_scroll_fn(s: &str) -> AnimationTimeline {
+    let inner = s
+        .trim_start_matches("scroll(")
+        .trim_end_matches(')')
+        .trim();
+    let mut axis = ScrollAxis::Block;
+    let mut nearest = true;
+    for token in inner.split_whitespace() {
+        match token.to_ascii_lowercase().as_str() {
+            "block" => axis = ScrollAxis::Block,
+            "inline" => axis = ScrollAxis::Inline,
+            "x" => axis = ScrollAxis::X,
+            "y" => axis = ScrollAxis::Y,
+            "root" => nearest = false,
+            "nearest" | "self" => nearest = true,
+            _ => {}
+        }
+    }
+    AnimationTimeline::Scroll { axis, nearest }
+}
+
+/// Parse `view()` function: `view([<axis>])`.
+fn parse_view_fn(s: &str) -> AnimationTimeline {
+    let inner = s
+        .trim_start_matches("view(")
+        .trim_end_matches(')')
+        .trim();
+    let axis = parse_scroll_axis(inner).unwrap_or(ScrollAxis::Block);
+    AnimationTimeline::View { axis }
+}
+
+/// Parse comma-separated `animation-timeline` list.
+fn parse_animation_timeline_list(val: &str) -> Vec<AnimationTimeline> {
+    split_top_level_commas(val)
+        .into_iter()
+        .map(|item| {
+            let t = item.trim();
+            let lower = t.to_ascii_lowercase();
+            if lower == "auto" || lower == "none" {
+                AnimationTimeline::Auto
+            } else if lower.starts_with("scroll(") || lower == "scroll()" {
+                parse_scroll_fn(t)
+            } else if lower.starts_with("view(") || lower == "view()" {
+                parse_view_fn(t)
+            } else {
+                AnimationTimeline::Named(t.to_string())
+            }
+        })
+        .collect()
+}
+
+/// CSS Scroll-Driven Animations — `scroll-timeline` shorthand.
+/// Syntax: `<custom-ident> [<axis>]` (resets both name and axis).
+fn apply_scroll_timeline_shorthand(style: &mut ComputedStyle, val: &str) {
+    let trimmed = val.trim();
+    if trimmed.eq_ignore_ascii_case("none") {
+        style.scroll_timeline_name = None;
+        style.scroll_timeline_axis = ScrollAxis::Block;
+        return;
+    }
+    let mut parts = trimmed.splitn(2, char::is_whitespace);
+    let name = parts.next().unwrap_or("").trim();
+    let axis_str = parts.next().unwrap_or("").trim();
+    style.scroll_timeline_name = if name.eq_ignore_ascii_case("none") {
+        None
+    } else {
+        Some(name.to_string())
+    };
+    style.scroll_timeline_axis =
+        parse_scroll_axis(axis_str).unwrap_or(ScrollAxis::Block);
+}
+
+/// CSS Scroll-Driven Animations — `view-timeline` shorthand.
+/// Syntax: `<custom-ident> [<axis>]` (resets both name and axis).
+fn apply_view_timeline_shorthand(style: &mut ComputedStyle, val: &str) {
+    let trimmed = val.trim();
+    if trimmed.eq_ignore_ascii_case("none") {
+        style.view_timeline_name = None;
+        style.view_timeline_axis = ScrollAxis::Block;
+        return;
+    }
+    let mut parts = trimmed.splitn(2, char::is_whitespace);
+    let name = parts.next().unwrap_or("").trim();
+    let axis_str = parts.next().unwrap_or("").trim();
+    style.view_timeline_name = if name.eq_ignore_ascii_case("none") {
+        None
+    } else {
+        Some(name.to_string())
+    };
+    style.view_timeline_axis =
+        parse_scroll_axis(axis_str).unwrap_or(ScrollAxis::Block);
 }
 
 /// CSS Animations L1 §4 — `animation` shorthand.
@@ -13246,6 +16211,95 @@ fn is_gradient_function(s: &str) -> bool {
         || s.starts_with("repeating-conic-gradient(")
 }
 
+/// CSS Images L4 §5 — is `s` an `image-set()` / `-webkit-image-set()` expression?
+fn is_image_set_value(s: &str) -> bool {
+    let v = s.trim().to_ascii_lowercase();
+    v.starts_with("image-set(") || v.starts_with("-webkit-image-set(")
+}
+
+/// CSS Paint API (Houdini) — parse `paint(name)` and extract the worklet name.
+/// Returns `Some(name)` if the function is recognized; `None` otherwise.
+fn parse_paint_function(s: &str) -> Option<String> {
+    let s = s.trim();
+    let lower = s.to_ascii_lowercase();
+    if lower.starts_with("paint(") && s.ends_with(')') && !lower.ends_with("))") {
+        // Extract content between "paint(" and the final ")".
+        let start = "paint(".len();
+        let end = s.len() - 1;
+        if start >= end {
+            return None;  // Empty payload.
+        }
+        let inner = s[start..end].trim();
+        // Check for any stray closing parens in the extracted part.
+        if inner.contains(')') {
+            return None;
+        }
+        // Remove surrounding quotes if present (e.g., `paint("my-paint")` → `my-paint`).
+        let name = if (inner.starts_with('"') && inner.ends_with('"')) ||
+                     (inner.starts_with('\'') && inner.ends_with('\'')) {
+            if inner.len() < 2 {
+                return None;  // Quote-only string.
+            }
+            &inner[1..inner.len() - 1]
+        } else {
+            inner
+        };
+        if name.is_empty() {
+            return None;  // Empty name.
+        }
+        return Some(name.to_string());
+    }
+    None
+}
+
+/// Parse one image value into a `BackgroundImage` (used by `parse_cross_fade`).
+fn parse_bg_image_value(s: &str) -> Option<BackgroundImage> {
+    let s = s.trim();
+    if s.eq_ignore_ascii_case("none") {
+        return Some(BackgroundImage::None);
+    }
+    if is_image_set_value(s) {
+        return Some(BackgroundImage::Url(s.to_string()));
+    }
+    if let Some(url) = parse_url_value(s) {
+        return Some(BackgroundImage::Url(url));
+    }
+    if is_gradient_function(s) {
+        return Some(BackgroundImage::Gradient(parse_background_gradient(s)));
+    }
+    None
+}
+
+/// CSS Images L4 §4 — parse `cross-fade(<image-a>, <image-b>, <percentage>)`.
+///
+/// Supports both `cross-fade(…)` and `-webkit-cross-fade(…)` syntax.
+/// Returns `None` if `s` does not start with the function prefix or has an
+/// unexpected argument count.
+fn parse_cross_fade(s: &str) -> Option<(BackgroundImage, BackgroundImage, f32)> {
+    let s = s.trim();
+    let lower = s.to_ascii_lowercase();
+    let inner = if lower.starts_with("cross-fade(") && s.ends_with(')') {
+        &s["cross-fade(".len()..s.len() - 1]
+    } else if lower.starts_with("-webkit-cross-fade(") && s.ends_with(')') {
+        &s["-webkit-cross-fade(".len()..s.len() - 1]
+    } else {
+        return None;
+    };
+    let parts = split_top_level_commas(inner);
+    if parts.len() != 3 {
+        return None;
+    }
+    let a = parse_bg_image_value(parts[0].trim())?;
+    let b = parse_bg_image_value(parts[1].trim())?;
+    let t_str = parts[2].trim();
+    let t = if let Some(pct) = t_str.strip_suffix('%') {
+        pct.trim().parse::<f32>().ok()? / 100.0
+    } else {
+        t_str.parse::<f32>().ok()?
+    };
+    Some((a, b, t.clamp(0.0, 1.0)))
+}
+
 /// CSS Backgrounds L3 §3 — разбить строку одного слоя на токены.
 ///
 /// Делит по пробелам и `/` только на depth=0 (не трогает содержимое функций
@@ -13336,7 +16390,7 @@ fn parse_single_bg_layer(
     while idx < n {
         let t = tokens[idx];
 
-        // image: none / url(...) / gradient(...)
+        // image: none / url(...) / gradient(...) / paint(...) / cross-fade(...)
         if t.eq_ignore_ascii_case("none") && layer.image == BackgroundImage::None {
             // "none" as image — keep None (default already)
             idx += 1;
@@ -13344,6 +16398,25 @@ fn parse_single_bg_layer(
         }
         if is_gradient_function(t) {
             layer.image = BackgroundImage::Gradient(parse_background_gradient(t));
+            idx += 1;
+            continue;
+        }
+        if let Some(name) = parse_paint_function(t) {
+            // CSS Paint API (Houdini) — `paint(name)` → fetch registered worklet.
+            // Phase 0: stores as Paint(name); Phase 1: invokes worklet paint() callback.
+            // `// CSS: background: paint(name)`
+            layer.image = BackgroundImage::Paint(name);
+            idx += 1;
+            continue;
+        }
+        if is_image_set_value(t) {
+            // Store raw image-set(…) string; paint resolves per-DPR (CSS Images L4 §5).
+            layer.image = BackgroundImage::Url(t.to_string());
+            idx += 1;
+            continue;
+        }
+        if let Some((a, b, cf_t)) = parse_cross_fade(t) {
+            layer.image = BackgroundImage::CrossFade { a: Box::new(a), b: Box::new(b), t: cf_t };
             idx += 1;
             continue;
         }
@@ -13442,8 +16515,13 @@ fn parse_single_bg_layer(
             continue;
         }
 
-        // color — пробуем последним, чтобы не спутать с keywords
-        if let Some(c) = parse_css_color_legacy(t, is_quirks) {
+        // color — пробуем последним, чтобы не спутать с keywords.
+        // BUG-079: hashless-hex quirk (Quirks Mode §3.4) применяется ТОЛЬКО к
+        // лонгхендам `background-color` / `color` / `border-*-color`, но НЕ к
+        // шортхенду `background`. Поэтому здесь quirks-флаг всегда `false`:
+        // `background: ff4444` в quirks-mode невалиден (Edge не красит), хотя
+        // `background-color: ff4444` — валиден.
+        if let Some(c) = parse_css_color_legacy(t, false) {
             color = Some(c);
             idx += 1;
             continue;
@@ -13571,21 +16649,34 @@ pub fn parse_background_gradient(s: &str) -> ParsedGradient {
 
     let segments = split_top_level_commas(inner);
 
+    // CSS Images L4 §3.1 — the prelude (first comma-segment) may carry a
+    // `<color-interpolation-method>` (`in <space> [<hue> hue]?`) in any order
+    // with the direction/shape. Strip it so the direction parsers see a clean
+    // prelude, and apply the resulting space to the stop list.
+    let first_seg = segments.first().map(|s| s.trim()).unwrap_or("");
+    let (clean_first, interp_space) = extract_gradient_interpolation(first_seg);
+
+    let interp = |stops: Vec<GradientStop>| -> Vec<GradientStop> {
+        match interp_space {
+            Some(sp) if sp != MixColorSpace::Srgb => densify_gradient_stops_for_space(&stops, sp),
+            _ => stops,
+        }
+    };
+
     if is_linear {
         // The first segment may be an angle / "to <side>" direction.
-        let angle_deg = parse_linear_gradient_angle(segments.first().map(|s| s.trim()).unwrap_or(""));
-        let stops = parse_gradient_stops(s);
+        let angle_deg = parse_linear_gradient_angle(&clean_first);
+        let stops = interp(parse_gradient_stops(s));
         ParsedGradient::Linear { angle_deg, stops, repeating: repeating_linear }
     } else if is_radial {
         // Radial: look for `at <x> <y>` in the first segment.
-        let (cx, cy) = parse_radial_gradient_center(segments.first().map(|s| s.trim()).unwrap_or(""));
-        let stops = parse_gradient_stops(s);
+        let (cx, cy) = parse_radial_gradient_center(&clean_first);
+        let stops = interp(parse_gradient_stops(s));
         ParsedGradient::Radial { center_x_pct: cx, center_y_pct: cy, stops, repeating: repeating_radial }
     } else {
         // Conic: `[from <angle>]? [at <x> <y>]?` in the first segment.
-        let (from_angle_deg, cx, cy) =
-            parse_conic_gradient_params(segments.first().map(|s| s.trim()).unwrap_or(""));
-        let stops = parse_gradient_stops(s);
+        let (from_angle_deg, cx, cy) = parse_conic_gradient_params(&clean_first);
+        let stops = interp(parse_gradient_stops(s));
         ParsedGradient::Conic {
             center_x_pct: cx,
             center_y_pct: cy,
@@ -13594,6 +16685,153 @@ pub fn parse_background_gradient(s: &str) -> ParsedGradient {
             repeating: repeating_conic,
         }
     }
+}
+
+/// CSS Images L4 §3.1 — parse and strip the `<color-interpolation-method>`
+/// (`in <space> [<hue> hue]?`) from a gradient prelude segment.
+///
+/// Returns the prelude with the clause removed plus the parsed interpolation
+/// space (`None` if absent). The hue-interpolation method keyword (for polar
+/// spaces) is parsed and dropped — [`mix_colors`](crate::color_mix::mix_colors)
+/// always interpolates hue over the shortest arc, the CSS default.
+///
+/// Tokens that are not part of the interpolation clause (direction, `to <side>`,
+/// `circle`/`ellipse`, `from <angle>`, `at <x> <y>`) are preserved in order, so
+/// `linear-gradient(45deg in oklch, …)` and `linear-gradient(in oklch 45deg, …)`
+/// both yield `("45deg", Some(Oklch))`.
+fn extract_gradient_interpolation(prelude: &str) -> (String, Option<MixColorSpace>) {
+    let tokens: Vec<&str> = prelude.split_whitespace().collect();
+    let mut space = None;
+    let mut kept: Vec<&str> = Vec::with_capacity(tokens.len());
+    let mut i = 0;
+    while i < tokens.len() {
+        if space.is_none()
+            && tokens[i].eq_ignore_ascii_case("in")
+            && let Some(sp) = tokens.get(i + 1).and_then(|t| MixColorSpace::from_css(t))
+        {
+            space = Some(sp);
+            i += 2;
+            // Optional `<hue-interpolation-method> hue` for polar spaces.
+            if let (Some(h), Some(hue_kw)) = (tokens.get(i), tokens.get(i + 1))
+                && matches!(
+                    h.to_ascii_lowercase().as_str(),
+                    "shorter" | "longer" | "increasing" | "decreasing"
+                )
+                && hue_kw.eq_ignore_ascii_case("hue")
+            {
+                i += 2;
+            }
+            continue;
+        }
+        kept.push(tokens[i]);
+        i += 1;
+    }
+    (kept.join(" "), space)
+}
+
+/// CSS Images L4 §3.1 — approximate gradient color interpolation in a non-sRGB
+/// `space` by subdividing every adjacent stop pair into intermediate stops whose
+/// colors are computed via [`mix_colors`](crate::color_mix::mix_colors) in that
+/// space. The renderer then interpolates the dense stop list linearly in sRGB,
+/// which closely matches true interpolation in `space` (e.g. `in oklch` keeps
+/// red→blue vivid instead of the muddy grey-purple of sRGB).
+///
+/// Stop positions are first resolved to percentages per CSS Images §3.4.3
+/// (first→0%, last→100%, interior runs evenly distributed, monotonic clamp).
+/// Returns the stops unchanged when there are fewer than two, or when any stop
+/// uses a non-percentage (`px`) position — px positions need the gradient line
+/// length, which is unknown at parse time.
+fn densify_gradient_stops_for_space(stops: &[GradientStop], space: MixColorSpace) -> Vec<GradientStop> {
+    if stops.len() < 2 {
+        return stops.to_vec();
+    }
+    // Resolve positions to percentages [0, 100]; bail on any non-percentage.
+    let mut pos: Vec<Option<f32>> = Vec::with_capacity(stops.len());
+    for st in stops {
+        match &st.position {
+            None => pos.push(None),
+            Some(Length::Percent(p)) => pos.push(Some(*p)),
+            Some(_) => return stops.to_vec(),
+        }
+    }
+    let last = pos.len() - 1;
+    if pos[0].is_none() {
+        pos[0] = Some(0.0);
+    }
+    if pos[last].is_none() {
+        pos[last] = Some(100.0);
+    }
+    // Evenly distribute interior runs of unpositioned stops between anchors.
+    let mut i = 1;
+    while i < pos.len() {
+        if pos[i].is_some() {
+            i += 1;
+            continue;
+        }
+        let prev = pos[i - 1].unwrap_or(0.0);
+        let mut k = i;
+        while k < pos.len() && pos[k].is_none() {
+            k += 1;
+        }
+        let next = pos.get(k).and_then(|p| *p).unwrap_or(100.0);
+        let gaps = (k - i + 1) as f32;
+        for (offset, idx) in (i..k).enumerate() {
+            let frac = (offset + 1) as f32 / gaps;
+            pos[idx] = Some(prev + (next - prev) * frac);
+        }
+        i = k;
+    }
+    // Enforce monotonic non-decreasing positions.
+    let mut resolved: Vec<f32> = pos.into_iter().map(|p| p.unwrap_or(0.0)).collect();
+    for n in 1..resolved.len() {
+        if resolved[n] < resolved[n - 1] {
+            resolved[n] = resolved[n - 1];
+        }
+    }
+
+    let to_f = |c: Color| -> [f32; 4] {
+        [
+            c.r as f32 / 255.0,
+            c.g as f32 / 255.0,
+            c.b as f32 / 255.0,
+            c.a as f32 / 255.0,
+        ]
+    };
+    let from_f = |m: [f32; 4]| -> Color {
+        Color {
+            r: (m[0] * 255.0).round().clamp(0.0, 255.0) as u8,
+            g: (m[1] * 255.0).round().clamp(0.0, 255.0) as u8,
+            b: (m[2] * 255.0).round().clamp(0.0, 255.0) as u8,
+            a: (m[3] * 255.0).round().clamp(0.0, 255.0) as u8,
+        }
+    };
+
+    // Number of sub-segments per stop pair. 16 keeps the polyfill within the
+    // 0.5% diff budget against true space interpolation while bounding output.
+    const SEGMENTS: usize = 16;
+    let mut out: Vec<GradientStop> = Vec::with_capacity((stops.len() - 1) * SEGMENTS + 1);
+    out.push(GradientStop {
+        color: stops[0].color,
+        position: Some(Length::Percent(resolved[0])),
+    });
+    for w in 0..stops.len() - 1 {
+        let a = to_f(stops[w].color);
+        let b = to_f(stops[w + 1].color);
+        let p0 = resolved[w];
+        let p1 = resolved[w + 1];
+        for j in 1..SEGMENTS {
+            let t = j as f32 / SEGMENTS as f32;
+            out.push(GradientStop {
+                color: from_f(mix_colors(space, a, 1.0 - t, b, t)),
+                position: Some(Length::Percent(p0 + (p1 - p0) * t)),
+            });
+        }
+        out.push(GradientStop {
+            color: stops[w + 1].color,
+            position: Some(Length::Percent(p1)),
+        });
+    }
+    out
 }
 
 /// Parse the direction/angle portion of a `linear-gradient`.
@@ -13862,16 +17100,19 @@ fn parse_filter_fn(name: &str, args: &str) -> Option<FilterFn> {
     }
 }
 
-/// Контекст для `@media`-запросов из viewport-а. Phase 0 упрощение:
-/// media_type всегда "screen", prefers_dark = false. Shell может в
-/// будущем переопределить через явный API.
-fn media_context_from_viewport(viewport: Size) -> MediaContext {
+/// Контекст для `@media`-запросов из viewport-а и флага тёмной темы.
+/// `dark_mode` отражает OS-предпочтение `prefers-color-scheme: dark`,
+/// прокинутое shell-ом через `layout_measured_hyp`.
+fn media_context_from_viewport(viewport: Size, dark_mode: bool) -> MediaContext {
+    // hover/pointer берут desktop-дефолты (мышь) из `MediaContext::default()`.
     MediaContext {
         media_type: "screen".into(),
         width: viewport.width,
         height: viewport.height,
-        prefers_dark: false,
+        prefers_dark: dark_mode,
         prefers_reduced_motion: false,
+        forced_colors: false,
+        ..Default::default()
     }
 }
 
@@ -14197,6 +17438,61 @@ fn parse_overscroll_behavior(s: &str) -> Option<OverscrollBehavior> {
 }
 
 /// Парсит CSS Fragmentation L3 §3.1 `break-*` keyword.
+/// CSS Anchor Positioning L1 §5 — parses a single `inset-area` axis keyword.
+fn parse_inset_area_keyword(s: &str) -> Option<crate::anchor::InsetAreaKeyword> {
+    use crate::anchor::InsetAreaKeyword as K;
+    match s.trim().to_ascii_lowercase().as_str() {
+        "none"       => Some(K::None),
+        "start"      => Some(K::Start),
+        "center"     => Some(K::Center),
+        "end"        => Some(K::End),
+        "span-start" => Some(K::SpanStart),
+        "span-end"   => Some(K::SpanEnd),
+        "span-all"   => Some(K::SpanAll),
+        "self-start" => Some(K::SelfStart),
+        "self-end"   => Some(K::SelfEnd),
+        // Physical keywords that map to logical equivalents in LTR.
+        "top" | "left"   => Some(K::Start),
+        "bottom" | "right" => Some(K::End),
+        "x-start" | "y-start" | "inline-start" | "block-start" => Some(K::Start),
+        "x-end" | "y-end" | "inline-end" | "block-end" => Some(K::End),
+        "span-x-start" | "span-y-start" | "span-inline-start" | "span-block-start" => Some(K::SpanStart),
+        "span-x-end" | "span-y-end" | "span-inline-end" | "span-block-end" => Some(K::SpanEnd),
+        _ => None,
+    }
+}
+
+/// CSS Anchor Positioning L1 §4 — parse `anchor-size(<anchor-el>? <anchor-size>)`.
+///
+/// Accepts forms:
+/// - `anchor-size(width)` / `anchor-size(height)` / `anchor-size(block)` / etc.
+/// - `anchor-size(--name, width)` / `anchor-size(--name, height)` / etc.
+///
+/// Returns `None` when `val` is not an `anchor-size()` expression.
+fn parse_anchor_size_func(val: &str) -> Option<crate::anchor::AnchorSizeFunc> {
+    use crate::anchor::{AnchorSizeDimension, AnchorSizeFunc};
+    let v = val.trim();
+    let inner = v.strip_prefix("anchor-size(")?.strip_suffix(')')?;
+    let parts: Vec<&str> = inner.splitn(2, ',').map(str::trim).collect();
+    let (anchor_name, dim_str) = if parts.len() == 2 {
+        let name = parts[0];
+        let anchor_name = if name.starts_with("--") { Some(name.into()) } else { return None };
+        (anchor_name, parts[1])
+    } else {
+        (None, parts[0])
+    };
+    let dimension = match dim_str.to_ascii_lowercase().as_str() {
+        "width"       => AnchorSizeDimension::Width,
+        "height"      => AnchorSizeDimension::Height,
+        "block"       => AnchorSizeDimension::Block,
+        "inline"      => AnchorSizeDimension::Inline,
+        "self-block"  => AnchorSizeDimension::SelfBlock,
+        "self-inline" => AnchorSizeDimension::SelfInline,
+        _ => return None,
+    };
+    Some(AnchorSizeFunc { anchor_name, dimension })
+}
+
 fn parse_break_value(s: &str) -> Option<BreakValue> {
     match s.trim().to_ascii_lowercase().as_str() {
         "auto" => Some(BreakValue::Auto),
@@ -14368,6 +17664,12 @@ fn parse_css_color_legacy(s: &str, is_quirks: bool) -> Option<CssColor> {
     if s.eq_ignore_ascii_case("currentcolor") {
         return Some(CssColor::CurrentColor);
     }
+    // CSS Color 4 §6.2 — system color keywords (Canvas, ButtonFace, …).
+    // Stored as CssColor::System so the cascade post-pass can resolve them
+    // against the element's used color scheme.
+    if let Some(sc) = SystemColor::parse(s) {
+        return Some(CssColor::System(sc));
+    }
     // CSS Color L4 §10: color() function with predefined color spaces.
     if let Some(wide) = parse_css_color_fn(s) {
         return Some(CssColor::Wide(wide));
@@ -14376,7 +17678,14 @@ fn parse_css_color_legacy(s: &str, is_quirks: bool) -> Option<CssColor> {
 }
 
 /// CSS Color L4 §10.1 — парсит `color(<space> c1 c2 c3 [/ alpha])`.
-/// Поддерживаемые пространства: `srgb`, `display-p3`, `rec2020`.
+///
+/// Displayable spaces — `srgb`, `display-p3`, `rec2020` — хранятся как
+/// `ColorFloat` со своим `ColorSpace`, чтобы сохранить линейную точность для
+/// GPU-paint. Остальные предопределённые пространства CSS Color L4 §10
+/// (`srgb-linear`, `a98-rgb`, `prophoto-rgb`, `xyz`, `xyz-d65`, `xyz-d50`) не
+/// представимы на sRGB-экране, поэтому гамут-маппятся в sRGB сразу при разборе
+/// и хранятся как `ColorFloat { space: Srgb }` с gamma-encoded каналами.
+///
 /// Каналы: unitless float или % (100% = 1.0). Слэш — разделитель alpha.
 fn parse_css_color_fn(s: &str) -> Option<ColorFloat> {
     let lower = s.to_ascii_lowercase();
@@ -14386,21 +17695,29 @@ fn parse_css_color_fn(s: &str) -> Option<ColorFloat> {
     if tokens.len() < 4 {
         return None;
     }
-    let space = match tokens[0] {
-        "srgb" => ColorSpace::Srgb,
-        "display-p3" => ColorSpace::DisplayP3,
-        "rec2020" => ColorSpace::Rec2020,
-        _ => return None,
-    };
-    let r = parse_color_fn_channel(tokens[1])?;
-    let g = parse_color_fn_channel(tokens[2])?;
-    let b = parse_color_fn_channel(tokens[3])?;
+    let c1 = parse_color_fn_channel(tokens[1])?;
+    let c2 = parse_color_fn_channel(tokens[2])?;
+    let c3 = parse_color_fn_channel(tokens[3])?;
     let a = if tokens.len() >= 5 {
         parse_color_fn_channel(tokens[4])?.clamp(0.0, 1.0)
     } else {
         1.0
     };
-    Some(ColorFloat { r, g, b, a, space })
+    match tokens[0] {
+        "srgb" => Some(ColorFloat { r: c1, g: c2, b: c3, a, space: ColorSpace::Srgb }),
+        "display-p3" => Some(ColorFloat { r: c1, g: c2, b: c3, a, space: ColorSpace::DisplayP3 }),
+        "rec2020" => Some(ColorFloat { r: c1, g: c2, b: c3, a, space: ColorSpace::Rec2020 }),
+        other => {
+            let (lr, lg, lb) = predefined_to_srgb_linear(other, c1, c2, c3)?;
+            Some(ColorFloat {
+                r: encode_srgb_f32(lr),
+                g: encode_srgb_f32(lg),
+                b: encode_srgb_f32(lb),
+                a,
+                space: ColorSpace::Srgb,
+            })
+        }
+    }
 }
 
 /// Парсит channel для `color()`: unitless float или процент (100% = 1.0).
@@ -14434,6 +17751,87 @@ fn named_color(name_lc: &str) -> Option<Color> {
             let (_, (r, g, b)) = NAMED_COLORS[i];
             Color { r, g, b, a: 255 }
         })
+}
+
+/// CSS Color Module Level 4 §6.2 — резолв системных цветовых ключевых слов
+/// (`Canvas`, `CanvasText`, `ButtonFace` и т.д.) в конкретный RGB.
+///
+/// `name_lc` — имя ключевого слова уже в нижнем регистре. `dark` — «used
+/// color scheme» элемента (см. [`ColorScheme::used_dark`]): системные цвета
+/// контекстно-зависимы и резолвятся против темы элемента, а не глобально.
+///
+/// Значения подобраны под штатные light/dark палитры современных UA
+/// (близко к Chrome/Edge). Возвращает `None` для не-системного имени —
+/// caller трактует это как «не системный цвет» и идёт по обычному пути
+/// `named_color` / hex / функция.
+///
+/// Этот резолвер — алгоритмическая часть; подключение к каскаду (вариант
+/// `CssColor::System`, резолв на used-value time) — за P4 (`// CSS:
+/// system-color` в `compute_style`).
+#[must_use]
+pub fn system_color(name_lc: &str, dark: bool) -> Option<Color> {
+    let rgb = |r: u8, g: u8, b: u8| Color { r, g, b, a: 255 };
+    Some(match (name_lc, dark) {
+        // App content background / text.
+        ("canvas", false) | ("window", false) => rgb(255, 255, 255),
+        ("canvas", true) | ("window", true) => rgb(30, 30, 30),
+        ("canvastext", false) | ("windowtext", false) | ("fieldtext", false) => rgb(0, 0, 0),
+        ("canvastext", true) | ("windowtext", true) | ("fieldtext", true) => rgb(255, 255, 255),
+        // Input/textarea/select backgrounds.
+        ("field", false) => rgb(255, 255, 255),
+        ("field", true) => rgb(30, 30, 30),
+        // Push-button surfaces.
+        ("buttonface", false) => rgb(239, 239, 239),
+        ("buttonface", true) => rgb(58, 58, 60),
+        ("buttontext", false) => rgb(0, 0, 0),
+        ("buttontext", true) => rgb(255, 255, 255),
+        ("buttonborder", false) | ("threedface", false) => rgb(118, 118, 118),
+        ("buttonborder", true) | ("threedface", true) => rgb(97, 97, 97),
+        // Hyperlinks.
+        ("linktext", false) => rgb(0, 0, 238),
+        ("linktext", true) => rgb(158, 158, 255),
+        ("visitedtext", false) => rgb(85, 26, 139),
+        ("visitedtext", true) => rgb(209, 134, 255),
+        ("activetext", false) => rgb(255, 0, 0),
+        ("activetext", true) => rgb(255, 158, 158),
+        // Selection highlight.
+        ("highlight", false) => rgb(181, 215, 255),
+        ("highlight", true) => rgb(38, 79, 120),
+        ("highlighttext", false) => rgb(0, 0, 0),
+        ("highlighttext", true) => rgb(255, 255, 255),
+        ("selecteditem", false) => rgb(181, 215, 255),
+        ("selecteditem", true) => rgb(38, 79, 120),
+        ("selecteditemtext", false) => rgb(0, 0, 0),
+        ("selecteditemtext", true) => rgb(255, 255, 255),
+        // Disabled / placeholder text.
+        ("graytext", false) | ("greytext", false) => rgb(128, 128, 128),
+        ("graytext", true) | ("greytext", true) => rgb(124, 124, 124),
+        // <mark> highlight (CSS Color 4 §6.2 `Mark`/`MarkText`).
+        ("mark", false) => rgb(255, 255, 0),
+        ("mark", true) => rgb(255, 255, 0),
+        ("marktext", false) | ("marktext", true) => rgb(0, 0, 0),
+        // Accent colour for form controls (CSS Color 4 — `AccentColor`).
+        ("accentcolor", false) => rgb(0, 95, 204),
+        ("accentcolor", true) => rgb(76, 156, 255),
+        ("accentcolortext", false) | ("accentcolortext", true) => rgb(255, 255, 255),
+        // Legacy 3D effects (CSS Color 4 §11).
+        ("threedhighlight", false) => rgb(239, 239, 239),
+        ("threedhighlight", true) => rgb(97, 97, 97),
+        ("threedshadow", false) => rgb(112, 112, 112),
+        ("threedshadow", true) => rgb(58, 58, 60),
+        ("threedlightshadow", false) => rgb(220, 220, 220),
+        ("threedlightshadow", true) => rgb(124, 124, 124),
+        ("threeddarkshadow", false) => rgb(49, 49, 49),
+        ("threeddarkshadow", true) => rgb(30, 30, 30),
+        // Scrollbar (CSS Color 4 §11, deprecated).
+        ("scrollbar", false) => rgb(192, 192, 192),
+        ("scrollbar", true) => rgb(64, 64, 64),
+        ("scrollbartrack", false) => rgb(255, 255, 255),
+        ("scrollbartrack", true) => rgb(30, 30, 30),
+        ("scrollbarthumb", false) => rgb(192, 192, 192),
+        ("scrollbarthumb", true) => rgb(97, 97, 97),
+        _ => return None,
+    })
 }
 
 /// Таблица CSS3 named colors (147 имён), отсортированная по имени для
@@ -14634,6 +18032,10 @@ fn parse_hex_color(s: &str) -> Option<Color> {
 ///   - alpha (4-й компонент): float 0..1 или процент 0–100%. По умолчанию 1.
 fn parse_function_color(s: &str) -> Option<Color> {
     let lower = s.to_ascii_lowercase();
+    // CSS Color L5 §10.2 color-mix().
+    if lower.starts_with("color-mix(") && s.ends_with(')') {
+        return parse_color_mix(&s["color-mix(".len()..s.len() - 1]);
+    }
     let (kind, body) = if let Some(b) = lower.strip_prefix("rgba(").and_then(|t| t.strip_suffix(')')) {
         (ColorFn::Rgb, b)
     } else if let Some(b) = lower.strip_prefix("rgb(").and_then(|t| t.strip_suffix(')')) {
@@ -14653,6 +18055,10 @@ fn parse_function_color(s: &str) -> Option<Color> {
     } else {
         return None;
     };
+    // CSS Color L5 §4 — relative color: `<fn>(from <origin> c1 c2 c3 [/ a])`.
+    if let Some(rest) = body.trim_start().strip_prefix("from ") {
+        return parse_relative_color(kind, rest.trim());
+    }
     let parts = split_color_args(body);
     if !(parts.len() == 3 || parts.len() == 4) {
         return None;
@@ -14715,6 +18121,7 @@ fn parse_function_color(s: &str) -> Option<Color> {
     }
 }
 
+#[derive(Clone, Copy)]
 enum ColorFn {
     Rgb,
     Hsl,
@@ -14723,6 +18130,280 @@ enum ColorFn {
     Lab,
     Lch,
     // Прочие CSS4 расширения (color()) — позже.
+}
+
+impl ColorFn {
+    /// Interpolation space whose channels back this color function — used to
+    /// resolve relative-color origin channels (CSS Color L5 §4.1).
+    fn mix_space(self) -> crate::color_mix::MixColorSpace {
+        use crate::color_mix::MixColorSpace as M;
+        match self {
+            ColorFn::Rgb => M::Srgb,
+            ColorFn::Hsl => M::Hsl,
+            ColorFn::Oklch => M::Oklch,
+            ColorFn::Oklab => M::Oklab,
+            ColorFn::Lab => M::Lab,
+            ColorFn::Lch => M::Lch,
+        }
+    }
+
+    /// The three relative-color channel keyword names, in component order
+    /// (CSS Color L5 §4.1). `alpha` is always available as a fourth keyword.
+    fn channel_keywords(self) -> [&'static str; 3] {
+        match self {
+            ColorFn::Rgb => ["r", "g", "b"],
+            ColorFn::Hsl => ["h", "s", "l"],
+            ColorFn::Oklch | ColorFn::Lch => ["l", "c", "h"],
+            ColorFn::Oklab | ColorFn::Lab => ["l", "a", "b"],
+        }
+    }
+
+    /// Percent reference basis for each of the three components: a `<percentage>`
+    /// in a component resolves to `pct/100 * basis` in the channel's canonical
+    /// unit (CSS Color L4 §10 reference ranges). `0.0` marks a hue slot where
+    /// percentages are invalid.
+    fn channel_pct_basis(self) -> [f32; 3] {
+        match self {
+            ColorFn::Rgb => [255.0, 255.0, 255.0],
+            ColorFn::Hsl => [0.0, 100.0, 100.0],
+            ColorFn::Lab => [100.0, 125.0, 125.0],
+            ColorFn::Lch => [100.0, 150.0, 0.0],
+            ColorFn::Oklab => [1.0, 0.4, 0.4],
+            ColorFn::Oklch => [1.0, 0.4, 0.0],
+        }
+    }
+
+    /// Rebuild a non-relative color function string from resolved canonical
+    /// channel values + alpha (0–1), to be re-parsed by [`parse_function_color`].
+    fn format_resolved(self, c: [f32; 3], alpha: f32) -> String {
+        match self {
+            ColorFn::Rgb => format!("rgb({} {} {} / {})", c[0], c[1], c[2], alpha),
+            // s / l are percentages in hsl().
+            ColorFn::Hsl => format!("hsl({} {}% {}% / {})", c[0], c[1], c[2], alpha),
+            ColorFn::Lab => format!("lab({} {} {} / {})", c[0], c[1], c[2], alpha),
+            ColorFn::Lch => format!("lch({} {} {} / {})", c[0], c[1], c[2], alpha),
+            ColorFn::Oklab => format!("oklab({} {} {} / {})", c[0], c[1], c[2], alpha),
+            ColorFn::Oklch => format!("oklch({} {} {} / {})", c[0], c[1], c[2], alpha),
+        }
+    }
+}
+
+/// CSS Color L5 §4 — parse the relative-color body `<origin> c1 c2 c3 [/ a]`
+/// (without the surrounding `<fn>(from ` and `)`), for the color function
+/// `kind`. The origin color is parsed recursively and converted into `kind`'s
+/// channel space; each component keyword (`r`/`g`/`b`, `h`/`s`/`l`, …, plus
+/// `alpha`) resolves to the origin's channel value, optionally combined with
+/// numbers/percentages inside `calc()`. Returns `None` on any parse error.
+fn parse_relative_color(kind: ColorFn, body: &str) -> Option<Color> {
+    let toks = tokenize_with_parens(body);
+    if toks.len() < 4 {
+        return None;
+    }
+    let origin = parse_color(&toks[0])?;
+    let comps = &toks[1..];
+    // Modern slash-separated alpha: `c1 c2 c3 / a`.
+    let (chan_toks, alpha_tok): (&[String], Option<&str>) =
+        if let Some(i) = comps.iter().position(|t| t == "/") {
+            (&comps[..i], comps.get(i + 1).map(String::as_str))
+        } else {
+            (comps, None)
+        };
+    if chan_toks.len() != 3 {
+        return None;
+    }
+
+    let srgb = [
+        f32::from(origin.r) / 255.0,
+        f32::from(origin.g) / 255.0,
+        f32::from(origin.b) / 255.0,
+        f32::from(origin.a) / 255.0,
+    ];
+    let chans = crate::color_mix::relative_origin_channels(kind.mix_space(), srgb);
+    let names = kind.channel_keywords();
+    let vars: [(&str, f32); 4] = [
+        (names[0], chans[0]),
+        (names[1], chans[1]),
+        (names[2], chans[2]),
+        ("alpha", chans[3]),
+    ];
+    let basis = kind.channel_pct_basis();
+    let mut resolved = [0.0f32; 3];
+    for (i, slot) in resolved.iter_mut().enumerate() {
+        *slot = eval_color_component(&chan_toks[i], &vars, basis[i])?;
+    }
+    // alpha uses a 0–1 reference basis (100% = 1.0).
+    let alpha = match alpha_tok {
+        Some(a) => eval_color_component(a, &vars, 1.0)?,
+        None => chans[3],
+    };
+    parse_function_color(&kind.format_resolved(resolved, alpha))
+}
+
+/// Resolve one relative-color component to its canonical channel value.
+///
+/// Accepts a bare channel keyword (`r`, `h`, `alpha`, …), `none` (→ 0), a
+/// literal number / `<percentage>` / `<angle>`, or a `calc()` expression mixing
+/// keywords, numbers and percentages with `+ - * /` and parentheses. `pct_basis`
+/// is the channel's percent reference (`50%` → `0.5 * pct_basis`).
+fn eval_color_component(raw: &str, vars: &[(&str, f32)], pct_basis: f32) -> Option<f32> {
+    // `calc(` wrappers (including nested) become plain parens; bare tokens pass through.
+    let normalized = raw.trim().replace("calc(", "(");
+    let tokens = tokenize_color_expr(&normalized, pct_basis)?;
+    let mut pos = 0usize;
+    let v = eval_color_add(&tokens, &mut pos, vars)?;
+    if pos != tokens.len() {
+        return None;
+    }
+    Some(v)
+}
+
+/// Token in a relative-color component expression.
+enum ColorTok {
+    /// A numeric literal with its unit already resolved to a canonical value.
+    Val(f32),
+    /// A bare identifier (channel keyword, `alpha`, or `none`).
+    Ident(String),
+    /// One of `+ - * /`.
+    Op(char),
+    Open,
+    Close,
+}
+
+/// Tokenize a relative-color component expression, resolving number units
+/// (`%` → `pct_basis`, `deg`/`turn`/`grad`/`rad` → degrees) at scan time.
+fn tokenize_color_expr(s: &str, pct_basis: f32) -> Option<Vec<ColorTok>> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if c.is_whitespace() {
+            i += 1;
+            continue;
+        }
+        match c {
+            '(' => {
+                out.push(ColorTok::Open);
+                i += 1;
+            }
+            ')' => {
+                out.push(ColorTok::Close);
+                i += 1;
+            }
+            '+' | '-' | '*' | '/' => {
+                out.push(ColorTok::Op(c));
+                i += 1;
+            }
+            _ if c.is_ascii_digit() || c == '.' => {
+                let start = i;
+                while i < bytes.len() && ((bytes[i] as char).is_ascii_digit() || bytes[i] == b'.') {
+                    i += 1;
+                }
+                let num: f32 = s[start..i].parse().ok()?;
+                let unit_start = i;
+                while i < bytes.len() && ((bytes[i] as char).is_ascii_alphabetic() || bytes[i] == b'%') {
+                    i += 1;
+                }
+                let val = apply_color_unit(num, &s[unit_start..i], pct_basis)?;
+                out.push(ColorTok::Val(val));
+            }
+            _ if c.is_ascii_alphabetic() => {
+                let start = i;
+                while i < bytes.len() && (bytes[i] as char).is_ascii_alphabetic() {
+                    i += 1;
+                }
+                out.push(ColorTok::Ident(s[start..i].to_string()));
+            }
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
+/// Convert a numeric literal + unit suffix to a canonical channel value.
+fn apply_color_unit(num: f32, unit: &str, pct_basis: f32) -> Option<f32> {
+    match unit {
+        "" => Some(num),
+        "%" => Some(num / 100.0 * pct_basis),
+        "deg" => Some(num),
+        "turn" => Some(num * 360.0),
+        "grad" => Some(num * 0.9),
+        "rad" => Some(num.to_degrees()),
+        _ => None,
+    }
+}
+
+fn eval_color_add(tokens: &[ColorTok], pos: &mut usize, vars: &[(&str, f32)]) -> Option<f32> {
+    let mut v = eval_color_mul(tokens, pos, vars)?;
+    while let Some(ColorTok::Op(op @ ('+' | '-'))) = tokens.get(*pos) {
+        let op = *op;
+        *pos += 1;
+        let rhs = eval_color_mul(tokens, pos, vars)?;
+        v = if op == '+' { v + rhs } else { v - rhs };
+    }
+    Some(v)
+}
+
+fn eval_color_mul(tokens: &[ColorTok], pos: &mut usize, vars: &[(&str, f32)]) -> Option<f32> {
+    let mut v = eval_color_unary(tokens, pos, vars)?;
+    while let Some(ColorTok::Op(op @ ('*' | '/'))) = tokens.get(*pos) {
+        let op = *op;
+        *pos += 1;
+        let rhs = eval_color_unary(tokens, pos, vars)?;
+        if op == '*' {
+            v *= rhs;
+        } else {
+            if rhs == 0.0 {
+                return None;
+            }
+            v /= rhs;
+        }
+    }
+    Some(v)
+}
+
+fn eval_color_unary(tokens: &[ColorTok], pos: &mut usize, vars: &[(&str, f32)]) -> Option<f32> {
+    match tokens.get(*pos) {
+        Some(ColorTok::Op('-')) => {
+            *pos += 1;
+            eval_color_unary(tokens, pos, vars).map(|v| -v)
+        }
+        Some(ColorTok::Op('+')) => {
+            *pos += 1;
+            eval_color_unary(tokens, pos, vars)
+        }
+        _ => eval_color_primary(tokens, pos, vars),
+    }
+}
+
+fn eval_color_primary(tokens: &[ColorTok], pos: &mut usize, vars: &[(&str, f32)]) -> Option<f32> {
+    match tokens.get(*pos)? {
+        ColorTok::Val(v) => {
+            *pos += 1;
+            Some(*v)
+        }
+        ColorTok::Ident(name) => {
+            *pos += 1;
+            if name.eq_ignore_ascii_case("none") {
+                return Some(0.0);
+            }
+            vars.iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, val)| *val)
+        }
+        ColorTok::Open => {
+            *pos += 1;
+            let v = eval_color_add(tokens, pos, vars)?;
+            match tokens.get(*pos) {
+                Some(ColorTok::Close) => {
+                    *pos += 1;
+                    Some(v)
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Парсит lightness для oklch: число 0..1 или процент 0..100% → 0..1.
@@ -14883,6 +18564,64 @@ fn oklch_to_srgb(l: f32, c: f32, h_deg: f32) -> (u8, u8, u8) {
         clamp_byte(v * 255.0)
     }
     (encode(lr), encode(lg), encode(lb))
+}
+
+/// CSS Color L5 §10.2 — parse `color-mix(in <space>, <c1> [pct]?, <c2> [pct]?)`
+/// from the inner body (without outer `color-mix(` and `)`).
+/// Returns `None` on any parse error; invalid inputs are silently ignored per spec.
+fn parse_color_mix(body: &str) -> Option<Color> {
+    let parts = split_top_level_commas(body);
+    if parts.len() != 3 {
+        return None;
+    }
+    // Part 0: "in <space>" — case-insensitive per CSS Values §3.
+    let part0 = parts[0].trim().to_ascii_lowercase();
+    let space_str = part0.strip_prefix("in ")?.trim();
+    let space = crate::color_mix::MixColorSpace::from_css(space_str)?;
+
+    let (c1, w1_raw) = parse_color_with_pct(parts[1].trim())?;
+    let (c2, w2_raw) = parse_color_with_pct(parts[2].trim())?;
+
+    // Normalize weights: CSS Color L5 §10.2 §3 weight normalization.
+    let (w1, w2) = match (w1_raw, w2_raw) {
+        (None, None) => (0.5, 0.5),
+        (Some(w), None) => (w, 1.0 - w),
+        (None, Some(w)) => (1.0 - w, w),
+        (Some(w1), Some(w2)) => (w1, w2),
+    };
+
+    let to_f = |c: Color| -> [f32; 4] {
+        [
+            c.r as f32 / 255.0,
+            c.g as f32 / 255.0,
+            c.b as f32 / 255.0,
+            c.a as f32 / 255.0,
+        ]
+    };
+    let out = crate::color_mix::mix_colors(space, to_f(c1), w1, to_f(c2), w2);
+    Some(Color {
+        r: (out[0] * 255.0).round().clamp(0.0, 255.0) as u8,
+        g: (out[1] * 255.0).round().clamp(0.0, 255.0) as u8,
+        b: (out[2] * 255.0).round().clamp(0.0, 255.0) as u8,
+        a: (out[3] * 255.0).round().clamp(0.0, 255.0) as u8,
+    })
+}
+
+/// Parse `"<color> [N%]?"` → `(Color, Option<fraction>)`.
+/// Fraction = percentage / 100. Returns `None` only when color itself is invalid.
+fn parse_color_with_pct(s: &str) -> Option<(Color, Option<f32>)> {
+    // Check if the last whitespace-separated token looks like "N%".
+    if let Some(sp_pos) = s.rfind(char::is_whitespace) {
+        let last = s[sp_pos + 1..].trim();
+        if let Some(digits) = last.strip_suffix('%')
+            && let Ok(v) = digits.parse::<f32>()
+        {
+            let color_str = s[..sp_pos].trim();
+            return Some((parse_color(color_str)?, Some(v / 100.0)));
+        }
+    }
+    // No percentage suffix; entire string is the color.
+    Some((parse_color(s)?, None))
 }
 
 /// Разбивает тело функции по запятой или whitespace (CSS4 разрешает оба),
@@ -15213,6 +18952,66 @@ mod tests {
         assert_eq!(parse_color("oklch(abc def ghi)"), None);
     }
 
+    // ── CSS Color L5 §4 — relative color syntax ──
+
+    #[test]
+    fn relative_rgb_identity() {
+        // `rgb(from red r g b)` reproduces the origin exactly.
+        assert_eq!(parse_color("rgb(from red r g b)"), Some(rgba(255, 0, 0, 255)));
+        assert_eq!(parse_color("rgb(from #336699 r g b)"), Some(rgba(0x33, 0x66, 0x99, 255)));
+    }
+
+    #[test]
+    fn relative_rgb_channel_reorder() {
+        // Swapping keywords swaps channels: red → blue.
+        assert_eq!(parse_color("rgb(from red g b r)"), Some(rgba(0, 0, 255, 255)));
+    }
+
+    #[test]
+    fn relative_rgb_calc_on_channel() {
+        // calc() with a channel keyword.
+        assert_eq!(parse_color("rgb(from red calc(r - 50) g b)"), Some(rgba(205, 0, 0, 255)));
+    }
+
+    #[test]
+    fn relative_rgb_alpha_slash_and_keyword() {
+        // Explicit alpha via percentage on the origin's channels.
+        let c = parse_color("rgb(from #336699 r g b / 50%)").unwrap();
+        assert_eq!((c.r, c.g, c.b), (0x33, 0x66, 0x99));
+        assert!(near(c.a, 128, 1), "alpha = {}", c.a);
+        // The `alpha` keyword resolves to the origin's alpha (here opaque).
+        assert_eq!(parse_color("rgb(from red r g b / alpha)"), Some(rgba(255, 0, 0, 255)));
+    }
+
+    #[test]
+    fn relative_hsl_identity_and_calc() {
+        // hsl(from red h s l) round-trips back to red.
+        assert_eq!(parse_color("hsl(from red h s l)"), Some(rgba(255, 0, 0, 255)));
+        // Halving the lightness channel darkens red to ~maroon.
+        let c = parse_color("hsl(from red h s calc(l * 0.5))").unwrap();
+        assert!(near(c.r, 128, 3), "r = {}", c.r);
+        assert_eq!((c.g, c.b), (0, 0));
+    }
+
+    #[test]
+    fn relative_oklch_identity_with_alpha() {
+        // White origin round-trips to white.
+        let w = parse_color("oklch(from white l c h)").unwrap();
+        assert!(near(w.r, 255, 4) && near(w.g, 255, 4) && near(w.b, 255, 4));
+        // Red origin with explicit alpha; round-trip stays near red.
+        let r = parse_color("oklch(from red l c h / 0.5)").unwrap();
+        assert!(r.r > 240, "r = {}", r.r);
+        assert!(near(r.a, 128, 2), "alpha = {}", r.a);
+    }
+
+    #[test]
+    fn relative_color_invalid_returns_none() {
+        // Bad origin color.
+        assert_eq!(parse_color("rgb(from notacolor r g b)"), None);
+        // Wrong component count.
+        assert_eq!(parse_color("rgb(from red r g)"), None);
+    }
+
     // ── CSS Color L4 §10.4 — oklab() ──
 
     #[test]
@@ -15432,6 +19231,32 @@ mod tests {
         // Quirks НЕ должна попытаться повторно добавить `#`.
         // (4-digit с `#` валиден; без `#` — длина 4 не в списке 3/6/8 → None.)
         assert_eq!(parse_color_legacy("ffff", true), None);
+    }
+
+    #[test]
+    fn quirks_hashless_hex_not_applied_in_background_shorthand() {
+        // BUG-079: hashless-hex quirk применяется только к лонгхендам
+        // (`background-color` / `color` / `border-*-color`), но НЕ к шортхенду
+        // `background`. Edge в quirks-mode сбрасывает `background: ff4444` как
+        // невалидный → фон отсутствует.
+        let vp = Size { width: 1024.0, height: 768.0 };
+        let (_, color) = parse_single_bg_layer("ff4444", 16.0, vp, true);
+        assert_eq!(color, None, "hashless hex недопустим в шортхенде background");
+        // Контроль: валидные формы цвета по-прежнему работают в шортхенде.
+        let (_, named) = parse_single_bg_layer("red", 16.0, vp, true);
+        assert_eq!(named, Some(CssColor::Rgba(rgba(255, 0, 0, 255))));
+        let (_, hexed) = parse_single_bg_layer("#3366cc", 16.0, vp, true);
+        assert_eq!(hexed, Some(CssColor::Rgba(rgba(0x33, 0x66, 0xcc, 255))));
+    }
+
+    #[test]
+    fn quirks_hashless_hex_still_applied_in_background_color_longhand() {
+        // Контроль обратной стороны BUG-079: лонгхенд `background-color`
+        // ДОЛЖЕН принимать hashless hex в quirks-mode.
+        assert_eq!(
+            parse_css_color_legacy("ff4444", true),
+            Some(CssColor::Rgba(rgba(0xff, 0x44, 0x44, 255)))
+        );
     }
 
     #[test]
@@ -15809,10 +19634,10 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { text-decoration-color: red; }");
         let root_style = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.text_decoration_color, CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 }));
         let p = doc.get(div).children[0];
-        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0));
+        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(p_style.text_decoration_color, CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 }));
     }
 
@@ -15896,10 +19721,10 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { text-decoration-style: dotted; }");
         let root_style = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.text_decoration_style, TextDecorationStyle::Dotted);
         let p = doc.get(div).children[0];
-        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0));
+        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(p_style.text_decoration_style, TextDecorationStyle::Dotted);
     }
 
@@ -15982,9 +19807,9 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { text-decoration-thickness: 4px; }");
         let root_style = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0), false);
         let p = doc.get(div).children[0];
-        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0));
+        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0), false);
         match p_style.text_decoration_thickness {
             TextDecorationThickness::Length(px) => assert!((px - 4.0).abs() < 0.01),
             other => panic!("expected inherited Length(4.0), got {other:?}"),
@@ -16013,7 +19838,7 @@ mod tests {
         let sheet = lumen_css_parser::parse(&format!("p {{ {css} }}"));
         let root_style = ComputedStyle::root();
         let p = doc.get(doc.body().unwrap()).children[0];
-        compute_style(&doc, p, &sheet, &root_style, Size::new(800.0, 600.0))
+        compute_style(&doc, p, &sheet, &root_style, Size::new(800.0, 600.0), false)
     }
 
     #[test]
@@ -16151,8 +19976,8 @@ mod tests {
         let root_style = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
         let p = doc.get(div).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0));
-        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0), false);
+        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.box_sizing, BoxSizing::BorderBox);
         assert_eq!(p_style.box_sizing, BoxSizing::ContentBox);
     }
@@ -16251,8 +20076,8 @@ mod tests {
         let root_style = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
         let p = doc.get(div).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0));
-        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0), false);
+        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0), false);
         // Inherited custom prop виден у потомка.
         assert_eq!(p_style.custom_props.get("--main").map(String::as_str), Some("green"));
         assert_eq!(p_style.color, Color { r: 0, g: 128, b: 0, a: 255 });
@@ -16297,7 +20122,7 @@ mod tests {
         );
         let root_style = ComputedStyle::root();
         let p = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, p, &sheet, &root_style, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, p, &sheet, &root_style, Size::new(800.0, 600.0), false);
         assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
     }
 
@@ -16343,10 +20168,10 @@ mod tests {
         // not to the implicit <html> wrapper injected by the HTML5 parser.
         let mut id = doc.body().unwrap_or_else(|| doc.root());
         let mut style =
-            compute_style(&doc, id, &sheet, &ComputedStyle::root(), viewport);
+            compute_style(&doc, id, &sheet, &ComputedStyle::root(), viewport, false);
         for &idx in path {
             id = doc.get(id).children[idx];
-            style = compute_style(&doc, id, &sheet, &style, viewport);
+            style = compute_style(&doc, id, &sheet, &style, viewport, false);
         }
         style
     }
@@ -18018,6 +21843,85 @@ mod tests {
         assert_eq!(s.background_layers[0].image, BackgroundImage::Url("c.png".into()));
     }
 
+    // ── CSS Images L4 §5 — image-set() / §4 — cross-fade() ──
+
+    #[test]
+    fn image_set_stored_as_raw_url_string() {
+        // CSS Images L4 §5: image-set() stored verbatim so paint can resolve per-DPR.
+        let s = cascade_at(
+            "<div></div>",
+            r#"div { background-image: image-set("a.png" 1x, "a@2x.png" 2x); }"#,
+            &[0],
+        );
+        assert_eq!(s.background_layers.len(), 1);
+        assert!(
+            matches!(&s.background_layers[0].image, BackgroundImage::Url(u) if u.contains("image-set(")),
+            "image-set() should be stored as Url containing the raw function string"
+        );
+    }
+
+    #[test]
+    fn webkit_image_set_stored_as_raw_url_string() {
+        // -webkit-image-set() vendor prefix handled identically.
+        let s = cascade_at(
+            "<div></div>",
+            r#"div { background-image: -webkit-image-set(url("x.png") 1x); }"#,
+            &[0],
+        );
+        assert_eq!(s.background_layers.len(), 1);
+        assert!(
+            matches!(&s.background_layers[0].image, BackgroundImage::Url(u) if u.contains("image-set(")),
+            "-webkit-image-set() should be stored as Url containing the raw function string"
+        );
+    }
+
+    #[test]
+    fn cross_fade_two_urls_parsed() {
+        // CSS Images L4 §4: cross-fade(<image-a>, <image-b>, <pct>) → CrossFade variant.
+        let s = cascade_at(
+            "<div></div>",
+            r#"div { background-image: cross-fade(url("a.png"), url("b.png"), 30%); }"#,
+            &[0],
+        );
+        assert_eq!(s.background_layers.len(), 1);
+        match &s.background_layers[0].image {
+            BackgroundImage::CrossFade { a, b, t } => {
+                assert_eq!(a.as_ref(), &BackgroundImage::Url("a.png".into()));
+                assert_eq!(b.as_ref(), &BackgroundImage::Url("b.png".into()));
+                assert!((t - 0.30).abs() < 0.001, "t should be 0.30, got {t}");
+            }
+            other => panic!("expected CrossFade, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn webkit_cross_fade_parsed() {
+        // -webkit-cross-fade() vendor prefix.
+        let s = cascade_at(
+            "<div></div>",
+            r#"div { background-image: -webkit-cross-fade(url("x.png"), url("y.png"), 50%); }"#,
+            &[0],
+        );
+        assert_eq!(s.background_layers.len(), 1);
+        assert!(
+            matches!(&s.background_layers[0].image, BackgroundImage::CrossFade { t, .. } if (t - 0.5).abs() < 0.001),
+            "expected CrossFade with t≈0.5"
+        );
+    }
+
+    #[test]
+    fn cross_fade_t_clamped_to_unit_interval() {
+        // t > 1.0 should be clamped to 1.0.
+        let s = cascade_at(
+            "<div></div>",
+            r#"div { background-image: cross-fade(url("a.png"), url("b.png"), 150%); }"#,
+            &[0],
+        );
+        if let BackgroundImage::CrossFade { t, .. } = &s.background_layers[0].image {
+            assert!(*t <= 1.0, "t should be clamped to ≤ 1.0, got {t}");
+        }
+    }
+
     // ── CSS Text Module Level 4 §6.4 — text-wrap-mode / text-wrap-style / text-wrap ──
 
     #[test]
@@ -18704,6 +22608,80 @@ mod tests {
         assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
     }
 
+    // ─── revert-layer (CSS Cascade L5 §6.4.6) ────────────────────────────────
+
+    #[test]
+    fn revert_layer_falls_back_to_lower_layer() {
+        // `.r` wins layer `b` with `revert-layer` → layer `b` is rolled back for
+        // `color`, falling to layer `a` (green). Plain `p` stays red.
+        let s = cascade_at(
+            r#"<p class="r">x</p>"#,
+            "@layer a { p { color: green; } } \
+             @layer b { p { color: red; } .r { color: revert-layer; } }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn revert_layer_unlayered_falls_to_highest_layer() {
+        // Unlayered `revert-layer` reverts the unlayered declarations, so the
+        // value falls to the highest-priority layer `b` (red), not back to `a`.
+        let s = cascade_at(
+            "<p>x</p>",
+            "@layer a { p { color: green; } } \
+             @layer b { p { color: red; } } \
+             p { color: revert-layer; }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn revert_layer_with_no_lower_decl_keeps_inherited() {
+        // No lower-priority author declaration for `color` → reverting the only
+        // layer leaves the inherited value (blue from <body>).
+        let s = cascade_at(
+            "<p>x</p>",
+            "body { color: blue; } \
+             @layer a { p { color: revert-layer; } }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn revert_layer_overridden_has_no_effect() {
+        // A `revert-layer` declaration overridden by a higher (unlayered) rule
+        // has no effect — red still wins.
+        let s = cascade_at(
+            "<p>x</p>",
+            "@layer a { p { color: green; } } \
+             @layer b { p { color: revert-layer; } } \
+             p { color: red; }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn revert_layer_only_affects_its_own_property() {
+        // `revert-layer` on `color` must not touch `background-color`:
+        // color reverts to green (layer a), background-color stays blue (layer b).
+        let s = cascade_at(
+            r#"<p class="r">x</p>"#,
+            "@layer a { p { color: green; background-color: yellow; } } \
+             @layer b { p { color: red; background-color: blue; } \
+                        .r { color: revert-layer; } }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+        assert_eq!(
+            s.background_color.map(|c| c.resolve(s.color)),
+            Some(Color { r: 0, g: 0, b: 255, a: 255 })
+        );
+    }
+
     // === animation shorthand parsing (CSS Animations L1 §4) ===
 
     fn shorthand(val: &str) -> ComputedStyle {
@@ -18961,7 +22939,7 @@ mod tests {
             value: "2s ease-in-out 0.5s 2 alternate forwards paused fade".to_string(),
             important: false,
         };
-        apply_declaration(&mut s, &decl, 16.0, viewport, FontWeight::default(), &inherited, false);
+        apply_declaration(&mut s, &decl, 16.0, viewport, FontWeight::default(), &inherited, false, false);
         assert_eq!(s.animation_names, vec!["fade".to_string()]);
         assert!((s.animation_durations[0] - 2.0).abs() < 1e-4);
         assert!((s.animation_delays[0] - 0.5).abs() < 1e-4);
@@ -18980,6 +22958,132 @@ mod tests {
         // Внутри скобок пробелы и запятые сохраняются — это один токен.
         assert_eq!(tokens[1], "cubic-bezier(0.1, 0.2, 0.3, 0.4)");
         assert_eq!(tokens[2], "b");
+    }
+
+    /// Helper: apply a single CSS property to a fresh ComputedStyle.
+    fn ts_prop(prop: &str, val: &str) -> ComputedStyle {
+        let mut s = ComputedStyle::root();
+        let decl = Declaration { property: prop.to_string(), value: val.to_string(), important: false };
+        let vp = Size::new(800.0, 600.0);
+        apply_declaration(&mut s, &decl, 16.0, vp, FontWeight::NORMAL, &ComputedStyle::root(), false, false);
+        s
+    }
+
+    // === paint-order parsing (CSS Fill & Stroke L3 §6 / SVG 2 §13.7) ===
+
+    #[test]
+    fn paint_order_normal_is_default() {
+        use PaintOrderSlot::{Fill, Markers, Stroke};
+        assert_eq!(ts_prop("paint-order", "normal").paint_order.0, [Fill, Stroke, Markers]);
+        // Root initial value is also normal.
+        assert_eq!(ComputedStyle::root().paint_order, SvgPaintOrder::default());
+    }
+
+    #[test]
+    fn paint_order_stroke_first_then_canonical_rest() {
+        use PaintOrderSlot::{Fill, Markers, Stroke};
+        // Single component → remaining appended in canonical fill, stroke, markers order.
+        assert_eq!(ts_prop("paint-order", "stroke").paint_order.0, [Stroke, Fill, Markers]);
+        assert_eq!(ts_prop("paint-order", "markers").paint_order.0, [Markers, Fill, Stroke]);
+    }
+
+    #[test]
+    fn paint_order_two_components_keep_order() {
+        use PaintOrderSlot::{Fill, Markers, Stroke};
+        assert_eq!(
+            ts_prop("paint-order", "stroke markers").paint_order.0,
+            [Stroke, Markers, Fill]
+        );
+    }
+
+    #[test]
+    fn paint_order_invalid_rejected() {
+        // Unknown token and repeated component are invalid → keep current value.
+        assert!(SvgPaintOrder::parse("bogus").is_none());
+        assert!(SvgPaintOrder::parse("fill fill").is_none());
+        assert!(SvgPaintOrder::parse("").is_none());
+        // apply_declaration leaves the (default) value unchanged on invalid input.
+        assert_eq!(ts_prop("paint-order", "bogus").paint_order, SvgPaintOrder::default());
+    }
+
+    #[test]
+    fn paint_order_fill_before_stroke_decision() {
+        assert!(SvgPaintOrder::parse("normal").unwrap().fill_before_stroke());
+        assert!(SvgPaintOrder::parse("fill stroke").unwrap().fill_before_stroke());
+        assert!(!SvgPaintOrder::parse("stroke").unwrap().fill_before_stroke());
+        assert!(!SvgPaintOrder::parse("stroke fill").unwrap().fill_before_stroke());
+        // markers-first but fill still before stroke.
+        assert!(SvgPaintOrder::parse("markers fill stroke").unwrap().fill_before_stroke());
+    }
+
+    #[test]
+    fn paint_order_inherited_via_unset() {
+        // paint-order is inherited: `unset` resolves to the inherited value.
+        let mut parent = ComputedStyle::root();
+        parent.paint_order = SvgPaintOrder::parse("stroke").unwrap();
+        let mut s = ComputedStyle::root();
+        let decl = Declaration {
+            property: "paint-order".to_string(),
+            value: "unset".to_string(),
+            important: false,
+        };
+        let vp = Size::new(800.0, 600.0);
+        apply_declaration(&mut s, &decl, 16.0, vp, FontWeight::NORMAL, &parent, false, false);
+        assert_eq!(s.paint_order, parent.paint_order);
+    }
+
+    // === quotes parsing (CSS Generated Content L3 §3.2) ===
+
+    #[test]
+    fn quotes_auto_and_none() {
+        assert_eq!(ts_prop("quotes", "auto").quotes, Quotes::Auto);
+        assert_eq!(ts_prop("quotes", "none").quotes, Quotes::None);
+    }
+
+    #[test]
+    fn quotes_explicit_pairs() {
+        let s = ts_prop("quotes", "\"«\" \"»\" \"‹\" \"›\"");
+        assert_eq!(
+            s.quotes,
+            Quotes::Pairs(vec![
+                ("«".to_string(), "»".to_string()),
+                ("‹".to_string(), "›".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn quotes_odd_string_count_rejected() {
+        // Three strings → malformed → value unchanged (stays initial Auto).
+        let s = ts_prop("quotes", "\"a\" \"b\" \"c\"");
+        assert_eq!(s.quotes, Quotes::Auto);
+    }
+
+    #[test]
+    fn quotes_hex_escape_decoded() {
+        // \201C “ and \201D ”.
+        let s = ts_prop("quotes", "\"\\201C\" \"\\201D\"");
+        assert_eq!(
+            s.quotes,
+            Quotes::Pairs(vec![("\u{201C}".to_string(), "\u{201D}".to_string())])
+        );
+    }
+
+    #[test]
+    fn quotes_pair_for_depth_clamps() {
+        let q = Quotes::Pairs(vec![
+            ("«".to_string(), "»".to_string()),
+            ("‹".to_string(), "›".to_string()),
+        ]);
+        assert_eq!(q.pair_for_depth(0), Some(("«", "»")));
+        assert_eq!(q.pair_for_depth(1), Some(("‹", "›")));
+        // Beyond the last pair → clamp to last.
+        assert_eq!(q.pair_for_depth(5), Some(("‹", "›")));
+        // Auto uses the built-in English pairs.
+        assert_eq!(Quotes::Auto.pair_for_depth(0), Some(("\u{201C}", "\u{201D}")));
+        assert_eq!(Quotes::Auto.pair_for_depth(1), Some(("\u{2018}", "\u{2019}")));
+        // none → no glyphs.
+        assert_eq!(Quotes::None.pair_for_depth(0), None);
     }
 
     // === transition shorthand parsing (CSS Transitions L1 §3) ===
@@ -19153,7 +23257,7 @@ mod tests {
             value: "transform 0.4s ease-in-out 0.1s".to_string(),
             important: false,
         };
-        apply_declaration(&mut s, &decl, 16.0, viewport, FontWeight::default(), &inherited, false);
+        apply_declaration(&mut s, &decl, 16.0, viewport, FontWeight::default(), &inherited, false, false);
         assert_eq!(s.transition_properties, vec!["transform".to_string()]);
         assert!((s.transition_durations[0] - 0.4).abs() < 1e-4);
         assert!((s.transition_delays[0] - 0.1).abs() < 1e-4);
@@ -19339,7 +23443,7 @@ mod tests {
                 body_id
             }
         };
-        compute_style(&doc, node, &sheet, &root_style, Size::new(800.0, 600.0))
+        compute_style(&doc, node, &sheet, &root_style, Size::new(800.0, 600.0), false)
     }
 
     #[test]
@@ -19391,7 +23495,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("body { background-color: blue; }");
         let root_style = ComputedStyle::root();
         let body = doc.body().unwrap();
-        let s = compute_style(&doc, body, &sheet, &root_style, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, body, &sheet, &root_style, Size::new(800.0, 600.0), false);
         assert_eq!(s.background_color, Some(CssColor::Rgba(rgba(0, 0, 255, 255))));
     }
 
@@ -19406,7 +23510,7 @@ mod tests {
         let tbody = doc.get(table).children[0]; // implicit tbody
         let tr = doc.get(tbody).children[0];
         let td = doc.get(tr).children[0];
-        let s = compute_style(&doc, td, &sheet, &root_style, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, td, &sheet, &root_style, Size::new(800.0, 600.0), false);
         assert_eq!(s.background_color, Some(CssColor::Rgba(rgba(0xab, 0xcd, 0xef, 255))));
     }
 
@@ -19455,7 +23559,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("body { color: blue; }");
         let root_style = ComputedStyle::root();
         let body = doc.body().unwrap();
-        let s = compute_style(&doc, body, &sheet, &root_style, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, body, &sheet, &root_style, Size::new(800.0, 600.0), false);
         assert_eq!(s.color, rgba(0, 0, 255, 255));
     }
 
@@ -19468,8 +23572,8 @@ mod tests {
         let root_style = ComputedStyle::root();
         let body = doc.body().unwrap();
         let div = doc.get(body).children[0]; // first child of body = <div>
-        let body_style = compute_style(&doc, body, &sheet, &root_style, Size::new(800.0, 600.0));
-        let div_style = compute_style(&doc, div, &sheet, &body_style, Size::new(800.0, 600.0));
+        let body_style = compute_style(&doc, body, &sheet, &root_style, Size::new(800.0, 600.0), false);
+        let div_style = compute_style(&doc, div, &sheet, &body_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.color, rgba(255, 0, 0, 255));
     }
 
@@ -19482,7 +23586,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root_style = ComputedStyle::root();
         let font = find_first_element(&doc, doc.root(), "font").expect("font found");
-        let s = compute_style(&doc, font, &sheet, &root_style, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, font, &sheet, &root_style, Size::new(800.0, 600.0), false);
         assert_eq!(s.color, rgba(255, 0, 0, 255));
     }
 
@@ -19492,7 +23596,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root_style = ComputedStyle::root();
         let font = find_first_element(&doc, doc.root(), "font").expect("font found");
-        let s = compute_style(&doc, font, &sheet, &root_style, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, font, &sheet, &root_style, Size::new(800.0, 600.0), false);
         assert_eq!(s.color, rgba(0xab, 0xcd, 0xef, 255));
     }
 
@@ -19502,7 +23606,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("font { color: blue; }");
         let root_style = ComputedStyle::root();
         let font = find_first_element(&doc, doc.root(), "font").expect("font found");
-        let s = compute_style(&doc, font, &sheet, &root_style, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, font, &sheet, &root_style, Size::new(800.0, 600.0), false);
         assert_eq!(s.color, rgba(0, 0, 255, 255));
     }
 
@@ -19514,9 +23618,9 @@ mod tests {
         let root_style = ComputedStyle::root();
         let font = find_first_element(&doc, doc.root(), "font").expect("font found");
         let span = find_first_element(&doc, font, "span").expect("span found");
-        let font_style = compute_style(&doc, font, &sheet, &root_style, Size::new(800.0, 600.0));
+        let font_style = compute_style(&doc, font, &sheet, &root_style, Size::new(800.0, 600.0), false);
         let span_style =
-            compute_style(&doc, span, &sheet, &font_style, Size::new(800.0, 600.0));
+            compute_style(&doc, span, &sheet, &font_style, Size::new(800.0, 600.0), false);
         assert_eq!(span_style.color, rgba(255, 0, 0, 255));
     }
 
@@ -19528,7 +23632,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root_style = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0), false);
         assert_eq!(s.color, Color::BLACK);
     }
 
@@ -19605,9 +23709,9 @@ mod tests {
         let my_card = doc.get(body).children[0];
         let div = doc.get(body).children[1];
         let my_card_style =
-            compute_style(&doc, my_card, &sheet, &root_style, Size::new(800.0, 600.0));
+            compute_style(&doc, my_card, &sheet, &root_style, Size::new(800.0, 600.0), false);
         let div_style =
-            compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0));
+            compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0), false);
         assert_eq!(my_card_style.display, Display::None);
         assert_ne!(div_style.display, Display::None);
     }
@@ -19620,7 +23724,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let node = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.flex_direction, FlexDirection::Row);
     }
 
@@ -19638,7 +23742,7 @@ mod tests {
                 lumen_css_parser::parse(&format!("div {{ flex-direction: {css_val}; }}"));
             let root = ComputedStyle::root();
             let node = doc.get(doc.body().unwrap()).children[0];
-            let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+            let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
             assert_eq!(s.flex_direction, expected, "flex-direction: {css_val}");
         }
     }
@@ -19650,8 +23754,8 @@ mod tests {
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
         let span = doc.get(div).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.flex_direction, FlexDirection::Column);
         assert_eq!(span_style.flex_direction, FlexDirection::Row); // initial, не наследуется
     }
@@ -19662,7 +23766,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { flex-direction: diagonal; }");
         let root = ComputedStyle::root();
         let node = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.flex_direction, FlexDirection::Row);
     }
 
@@ -19674,7 +23778,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let node = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.flex_wrap, FlexWrap::Nowrap);
     }
 
@@ -19690,7 +23794,7 @@ mod tests {
             let sheet = lumen_css_parser::parse(&format!("div {{ flex-wrap: {css_val}; }}"));
             let root = ComputedStyle::root();
             let node = doc.get(doc.body().unwrap()).children[0];
-            let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+            let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
             assert_eq!(s.flex_wrap, expected, "flex-wrap: {css_val}");
         }
     }
@@ -19702,8 +23806,8 @@ mod tests {
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
         let span = doc.get(div).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.flex_wrap, FlexWrap::Wrap);
         assert_eq!(span_style.flex_wrap, FlexWrap::Nowrap); // initial, не наследуется
     }
@@ -19714,7 +23818,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { flex-wrap: yes; }");
         let root = ComputedStyle::root();
         let node = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.flex_wrap, FlexWrap::Nowrap);
     }
 
@@ -19726,7 +23830,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { flex-flow: column wrap; }");
         let root = ComputedStyle::root();
         let node = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.flex_direction, FlexDirection::Column);
         assert_eq!(s.flex_wrap, FlexWrap::Wrap);
     }
@@ -19737,7 +23841,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { flex-flow: row-reverse; }");
         let root = ComputedStyle::root();
         let node = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.flex_direction, FlexDirection::RowReverse);
         assert_eq!(s.flex_wrap, FlexWrap::Nowrap); // reset to initial
     }
@@ -19748,7 +23852,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { flex-flow: wrap-reverse; }");
         let root = ComputedStyle::root();
         let node = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.flex_direction, FlexDirection::Row); // reset to initial
         assert_eq!(s.flex_wrap, FlexWrap::WrapReverse);
     }
@@ -19761,7 +23865,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let node = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.flex_grow, 0.0);
     }
 
@@ -19771,7 +23875,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { flex-grow: 2.5; }");
         let root = ComputedStyle::root();
         let node = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.flex_grow, 2.5);
     }
 
@@ -19781,7 +23885,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { flex-grow: -1; }");
         let root = ComputedStyle::root();
         let node = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.flex_grow, 0.0); // initial, negative rejected
     }
 
@@ -19792,8 +23896,8 @@ mod tests {
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
         let span = doc.get(div).children[0];
-        let div_s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
-        let span_s = compute_style(&doc, span, &sheet, &div_s, Size::new(800.0, 600.0));
+        let div_s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span_s = compute_style(&doc, span, &sheet, &div_s, Size::new(800.0, 600.0), false);
         assert_eq!(div_s.flex_grow, 3.0);
         assert_eq!(span_s.flex_grow, 0.0); // initial, не наследуется
     }
@@ -19806,7 +23910,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let node = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.flex_shrink, 1.0);
     }
 
@@ -19816,7 +23920,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { flex-shrink: 0; }");
         let root = ComputedStyle::root();
         let node = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.flex_shrink, 0.0);
     }
 
@@ -19826,7 +23930,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { flex-shrink: -0.5; }");
         let root = ComputedStyle::root();
         let node = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.flex_shrink, 1.0); // initial
     }
 
@@ -19837,8 +23941,8 @@ mod tests {
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
         let span = doc.get(div).children[0];
-        let div_s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
-        let span_s = compute_style(&doc, span, &sheet, &div_s, Size::new(800.0, 600.0));
+        let div_s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span_s = compute_style(&doc, span, &sheet, &div_s, Size::new(800.0, 600.0), false);
         assert_eq!(div_s.flex_shrink, 4.0);
         assert_eq!(span_s.flex_shrink, 1.0); // initial
     }
@@ -19851,7 +23955,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let node = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.flex_basis, FlexBasis::Auto);
     }
 
@@ -19861,7 +23965,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { flex-basis: content; }");
         let root = ComputedStyle::root();
         let node = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.flex_basis, FlexBasis::Content);
     }
 
@@ -19871,7 +23975,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { flex-basis: 120px; }");
         let root = ComputedStyle::root();
         let node = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.flex_basis, FlexBasis::Length(Length::Px(120.0)));
     }
 
@@ -19882,8 +23986,8 @@ mod tests {
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
         let span = doc.get(div).children[0];
-        let div_s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
-        let span_s = compute_style(&doc, span, &sheet, &div_s, Size::new(800.0, 600.0));
+        let div_s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span_s = compute_style(&doc, span, &sheet, &div_s, Size::new(800.0, 600.0), false);
         assert_eq!(div_s.flex_basis, FlexBasis::Length(Length::Px(50.0)));
         assert_eq!(span_s.flex_basis, FlexBasis::Auto); // initial
     }
@@ -19896,7 +24000,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { flex: none; }");
         let root = ComputedStyle::root();
         let node = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.flex_grow, 0.0);
         assert_eq!(s.flex_shrink, 0.0);
         assert_eq!(s.flex_basis, FlexBasis::Auto);
@@ -19908,7 +24012,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { flex: auto; }");
         let root = ComputedStyle::root();
         let node = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.flex_grow, 1.0);
         assert_eq!(s.flex_shrink, 1.0);
         assert_eq!(s.flex_basis, FlexBasis::Auto);
@@ -19921,7 +24025,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { flex: 3; }");
         let root = ComputedStyle::root();
         let node = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.flex_grow, 3.0);
         assert_eq!(s.flex_shrink, 1.0);
         assert_eq!(s.flex_basis, FlexBasis::Length(Length::Px(0.0)));
@@ -19933,7 +24037,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { flex: 2 1 100px; }");
         let root = ComputedStyle::root();
         let node = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.flex_grow, 2.0);
         assert_eq!(s.flex_shrink, 1.0);
         assert_eq!(s.flex_basis, FlexBasis::Length(Length::Px(100.0)));
@@ -19979,7 +24083,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let node = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
         assert!(s.font_variation_settings.is_empty());
     }
 
@@ -19989,7 +24093,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { font-variation-settings: \"wght\" 900; }");
         let root = ComputedStyle::root();
         let node = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.font_variation_settings, vec![
             FontVariationSetting { tag: *b"wght", value: 900.0 }
         ]);
@@ -20003,8 +24107,8 @@ mod tests {
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
         let span = doc.get(div).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(span_style.font_variation_settings, vec![
             FontVariationSetting { tag: *b"wght", value: 800.0 }
         ]);
@@ -20021,8 +24125,8 @@ mod tests {
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
         let span = doc.get(div).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(span_style.font_variation_settings, vec![
             FontVariationSetting { tag: *b"wght", value: 400.0 }
         ]);
@@ -20056,8 +24160,8 @@ mod tests {
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
         let span = doc.get(div).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.font_optical_sizing, FontOpticalSizing::None);
         assert_eq!(span_style.font_optical_sizing, FontOpticalSizing::None);
     }
@@ -20072,8 +24176,8 @@ mod tests {
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
         let span = doc.get(div).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.font_optical_sizing, FontOpticalSizing::None);
         assert_eq!(span_style.font_optical_sizing, FontOpticalSizing::Auto);
     }
@@ -20174,7 +24278,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { -webkit-line-clamp: 3; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.line_clamp, Some(3));
     }
 
@@ -20184,7 +24288,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { line-clamp: 5; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.line_clamp, Some(5));
     }
 
@@ -20194,7 +24298,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.line_clamp, None);
     }
 
@@ -20204,7 +24308,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { -webkit-line-clamp: none; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.line_clamp, None);
     }
 
@@ -20215,8 +24319,8 @@ mod tests {
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
         let span = doc.get(div).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.line_clamp, Some(2));
         assert_eq!(span_style.line_clamp, None);
     }
@@ -20227,7 +24331,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { -webkit-line-clamp: 0; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.line_clamp, None);
     }
 
@@ -20237,7 +24341,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.orphans, 2);
     }
 
@@ -20247,7 +24351,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.widows, 2);
     }
 
@@ -20257,7 +24361,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { orphans: 4; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.orphans, 4);
     }
 
@@ -20267,7 +24371,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { widows: 3; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.widows, 3);
     }
 
@@ -20278,8 +24382,8 @@ mod tests {
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
         let p = doc.get(div).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
-        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.orphans, 5);
         assert_eq!(p_style.orphans, 5);
     }
@@ -20291,8 +24395,8 @@ mod tests {
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
         let p = doc.get(div).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
-        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.widows, 6);
         assert_eq!(p_style.widows, 6);
     }
@@ -20304,7 +24408,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { orphans: 0; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.orphans, 2);
     }
 
@@ -20314,7 +24418,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { widows: 0; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.widows, 2);
     }
 
@@ -20448,7 +24552,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.text_underline_position, TextUnderlinePosition::Auto);
     }
 
@@ -20458,7 +24562,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { text-underline-position: from-font; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.text_underline_position, TextUnderlinePosition::FromFont);
     }
 
@@ -20468,7 +24572,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { text-underline-position: under; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.text_underline_position, TextUnderlinePosition::Under);
     }
 
@@ -20480,8 +24584,8 @@ mod tests {
         let root = ComputedStyle::root();
         let span = doc.get(doc.body().unwrap()).children[0];
         let em = doc.get(doc.body().unwrap()).children[1];
-        let left_style = compute_style(&doc, span, &left_sheet, &root, Size::new(800.0, 600.0));
-        let right_style = compute_style(&doc, em, &right_sheet, &root, Size::new(800.0, 600.0));
+        let left_style = compute_style(&doc, span, &left_sheet, &root, Size::new(800.0, 600.0), false);
+        let right_style = compute_style(&doc, em, &right_sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(left_style.text_underline_position, TextUnderlinePosition::Left);
         assert_eq!(right_style.text_underline_position, TextUnderlinePosition::Right);
     }
@@ -20493,8 +24597,8 @@ mod tests {
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
         let span = doc.get(div).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.text_underline_position, TextUnderlinePosition::Under);
         assert_eq!(span_style.text_underline_position, TextUnderlinePosition::Under);
     }
@@ -20505,8 +24609,122 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { text-underline-position: banana; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.text_underline_position, TextUnderlinePosition::Auto);
+    }
+
+    // ── text-underline-offset ─────────────────────────────────────────────────
+
+    #[test]
+    fn text_underline_offset_initial_none() {
+        let style = ComputedStyle::root();
+        assert_eq!(style.text_underline_offset, None);
+    }
+
+    #[test]
+    fn text_underline_offset_px() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-underline-offset: 4px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.text_underline_offset, Some(4.0));
+    }
+
+    #[test]
+    fn text_underline_offset_auto_resets_to_none() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-underline-offset: auto; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.text_underline_offset, None);
+    }
+
+    #[test]
+    fn text_underline_offset_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { text-underline-offset: 6px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(div_style.text_underline_offset, Some(6.0));
+        assert_eq!(span_style.text_underline_offset, Some(6.0));
+    }
+
+    #[test]
+    fn text_underline_offset_negative_px() {
+        // Negative offset shifts underline toward text (CSS allows it).
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-underline-offset: -2px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.text_underline_offset, Some(-2.0));
+    }
+
+    // ── text-decoration-skip-ink ──────────────────────────────────────────────
+
+    #[test]
+    fn text_decoration_skip_ink_initial_auto() {
+        let style = ComputedStyle::root();
+        assert_eq!(style.text_decoration_skip_ink, TextDecorationSkipInk::Auto);
+    }
+
+    #[test]
+    fn text_decoration_skip_ink_none() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-decoration-skip-ink: none; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.text_decoration_skip_ink, TextDecorationSkipInk::None);
+    }
+
+    #[test]
+    fn text_decoration_skip_ink_all() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-decoration-skip-ink: all; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.text_decoration_skip_ink, TextDecorationSkipInk::All);
+    }
+
+    #[test]
+    fn text_decoration_skip_ink_auto_explicit() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-decoration-skip-ink: auto; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.text_decoration_skip_ink, TextDecorationSkipInk::Auto);
+    }
+
+    #[test]
+    fn text_decoration_skip_ink_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { text-decoration-skip-ink: none; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(div_style.text_decoration_skip_ink, TextDecorationSkipInk::None);
+        assert_eq!(span_style.text_decoration_skip_ink, TextDecorationSkipInk::None);
+    }
+
+    #[test]
+    fn text_decoration_skip_ink_invalid_ignored() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-decoration-skip-ink: edges; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        // Invalid keyword — property stays at inherited initial (Auto).
+        assert_eq!(style.text_decoration_skip_ink, TextDecorationSkipInk::Auto);
     }
 
     // ── color-scheme ──────────────────────────────────────────────────────────
@@ -20523,7 +24741,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { color-scheme: light; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.color_scheme, ColorScheme::Light);
     }
 
@@ -20533,7 +24751,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { color-scheme: dark; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.color_scheme, ColorScheme::Dark);
     }
 
@@ -20545,8 +24763,8 @@ mod tests {
         let root = ComputedStyle::root();
         let span = doc.get(doc.body().unwrap()).children[0];
         let em = doc.get(doc.body().unwrap()).children[1];
-        let ld = compute_style(&doc, span, &ld_sheet, &root, Size::new(800.0, 600.0));
-        let dl = compute_style(&doc, em, &dl_sheet, &root, Size::new(800.0, 600.0));
+        let ld = compute_style(&doc, span, &ld_sheet, &root, Size::new(800.0, 600.0), false);
+        let dl = compute_style(&doc, em, &dl_sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(ld.color_scheme, ColorScheme::LightDark);
         assert_eq!(dl.color_scheme, ColorScheme::DarkLight);
     }
@@ -20559,8 +24777,8 @@ mod tests {
         let root = ComputedStyle::root();
         let span = doc.get(doc.body().unwrap()).children[0];
         let em = doc.get(doc.body().unwrap()).children[1];
-        let ol = compute_style(&doc, span, &ol_sheet, &root, Size::new(800.0, 600.0));
-        let od = compute_style(&doc, em, &od_sheet, &root, Size::new(800.0, 600.0));
+        let ol = compute_style(&doc, span, &ol_sheet, &root, Size::new(800.0, 600.0), false);
+        let od = compute_style(&doc, em, &od_sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(ol.color_scheme, ColorScheme::OnlyLight);
         assert_eq!(od.color_scheme, ColorScheme::OnlyDark);
     }
@@ -20571,9 +24789,9 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { color-scheme: dark; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let span = doc.get(div).children[0];
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.color_scheme, ColorScheme::Dark);
         assert_eq!(span_style.color_scheme, ColorScheme::Dark);
     }
@@ -20584,8 +24802,253 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { color-scheme: rainbow; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.color_scheme, ColorScheme::Normal);
+    }
+
+    // ── color-scheme used-scheme switching (CSS Color Adjustment L1 §2.3, Y-4) ──
+
+    #[test]
+    fn used_dark_forces_light_regardless_of_os() {
+        // `light` / `only light` force the light theme even in OS dark mode.
+        assert!(!ColorScheme::Light.used_dark(true));
+        assert!(!ColorScheme::OnlyLight.used_dark(true));
+        assert!(!ColorScheme::Light.used_dark(false));
+    }
+
+    #[test]
+    fn used_dark_forces_dark_regardless_of_os() {
+        // `dark` / `only dark` force the dark theme even in OS light mode.
+        assert!(ColorScheme::Dark.used_dark(false));
+        assert!(ColorScheme::OnlyDark.used_dark(false));
+        assert!(ColorScheme::Dark.used_dark(true));
+    }
+
+    #[test]
+    fn used_dark_follows_os_for_normal_and_dual() {
+        // `normal` / `light dark` / `dark light` defer to the OS preference.
+        for cs in [ColorScheme::Normal, ColorScheme::LightDark, ColorScheme::DarkLight] {
+            assert!(cs.used_dark(true), "{cs:?} should be dark under OS dark");
+            assert!(!cs.used_dark(false), "{cs:?} should be light under OS light");
+        }
+    }
+
+    /// Computes the `<input>` style through the full html → body → input
+    /// inheritance chain so that a `:root { color-scheme }` rule propagates to
+    /// the form control. `os_dark` is the OS `prefers-color-scheme: dark` value.
+    fn input_style_with_scheme(css: &str, os_dark: bool) -> ComputedStyle {
+        let doc = lumen_html_parser::parse("<input type=\"text\">");
+        let sheet = lumen_css_parser::parse(css);
+        let vp = Size::new(800.0, 600.0);
+        let html = doc.get(doc.root()).children.iter().copied().find(|&c| {
+            matches!(&doc.get(c).data, NodeData::Element { name, .. } if name.local == "html")
+        }).unwrap();
+        let html_style = compute_style(&doc, html, &sheet, &ComputedStyle::root(), vp, os_dark);
+        let body = doc.body().unwrap();
+        let body_style = compute_style(&doc, body, &sheet, &html_style, vp, os_dark);
+        let input = doc.get(body).children[0];
+        compute_style(&doc, input, &sheet, &body_style, vp, os_dark)
+    }
+
+    #[test]
+    fn color_scheme_light_forces_light_form_control_in_os_dark() {
+        // OS dark mode, but `:root { color-scheme: light }` inherits to the
+        // input → it must render with the LIGHT UA palette (white background).
+        let style = input_style_with_scheme(":root { color-scheme: light; }", true);
+        assert_eq!(
+            style.background_color,
+            Some(CssColor::Rgba(Color { r: 255, g: 255, b: 255, a: 255 })),
+            "light color-scheme must force light input bg in OS dark mode"
+        );
+        assert_eq!(style.color, Color { r: 0, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn color_scheme_dark_forces_dark_form_control_in_os_light() {
+        // OS light mode, but `:root { color-scheme: dark }` inherits to the
+        // input → it must render with the DARK UA palette.
+        let style = input_style_with_scheme(":root { color-scheme: dark; }", false);
+        assert_eq!(
+            style.background_color,
+            Some(CssColor::Rgba(Color { r: 30, g: 30, b: 30, a: 255 })),
+            "dark color-scheme must force dark input bg in OS light mode"
+        );
+        assert_eq!(style.color, Color { r: 255, g: 255, b: 255, a: 255 });
+    }
+
+    // ── system-color resolution (CSS Color 4 §6.2, Y-4) ──
+
+    #[test]
+    fn system_color_canvas_switches_by_scheme() {
+        assert_eq!(system_color("canvas", false), Some(Color { r: 255, g: 255, b: 255, a: 255 }));
+        assert_eq!(system_color("canvas", true), Some(Color { r: 30, g: 30, b: 30, a: 255 }));
+    }
+
+    #[test]
+    fn system_color_canvastext_switches_by_scheme() {
+        assert_eq!(system_color("canvastext", false), Some(Color { r: 0, g: 0, b: 0, a: 255 }));
+        assert_eq!(system_color("canvastext", true), Some(Color { r: 255, g: 255, b: 255, a: 255 }));
+    }
+
+    #[test]
+    fn system_color_buttonface_distinct_per_scheme() {
+        let light = system_color("buttonface", false).unwrap();
+        let dark = system_color("buttonface", true).unwrap();
+        assert_ne!(light, dark, "ButtonFace must differ between light and dark");
+    }
+
+    #[test]
+    fn system_color_unknown_returns_none() {
+        assert_eq!(system_color("notasystemcolor", false), None);
+        assert_eq!(system_color("rebeccapurple", true), None);
+    }
+
+    #[test]
+    fn system_color_threedhighlight_differs_per_scheme() {
+        let light = system_color("threedhighlight", false).unwrap();
+        let dark = system_color("threedhighlight", true).unwrap();
+        assert_ne!(light, dark, "ThreeDHighlight must differ between light and dark");
+    }
+
+    #[test]
+    fn system_color_threedshadow_differs_per_scheme() {
+        let light = system_color("threedshadow", false).unwrap();
+        let dark = system_color("threedshadow", true).unwrap();
+        assert_ne!(light, dark, "ThreeDShadow must differ between light and dark");
+    }
+
+    #[test]
+    fn system_color_threedlightshadow_differs_per_scheme() {
+        let light = system_color("threedlightshadow", false).unwrap();
+        let dark = system_color("threedlightshadow", true).unwrap();
+        assert_ne!(light, dark, "ThreeDLightShadow must differ between light and dark");
+    }
+
+    #[test]
+    fn system_color_threeddarkshadow_differs_per_scheme() {
+        let light = system_color("threeddarkshadow", false).unwrap();
+        let dark = system_color("threeddarkshadow", true).unwrap();
+        assert_ne!(light, dark, "ThreeDDarkShadow must differ between light and dark");
+    }
+
+    #[test]
+    fn system_color_scrollbar_differs_per_scheme() {
+        let light = system_color("scrollbar", false).unwrap();
+        let dark = system_color("scrollbar", true).unwrap();
+        assert_ne!(light, dark, "Scrollbar must differ between light and dark");
+    }
+
+    #[test]
+    fn system_color_scrollbarthumb_differs_per_scheme() {
+        let light = system_color("scrollbarthumb", false).unwrap();
+        let dark = system_color("scrollbarthumb", true).unwrap();
+        assert_ne!(light, dark, "ScrollbarThumb must differ between light and dark");
+    }
+
+    #[test]
+    fn system_color_scrollbartrack_differs_per_scheme() {
+        let light = system_color("scrollbartrack", false).unwrap();
+        let dark = system_color("scrollbartrack", true).unwrap();
+        assert_ne!(light, dark, "ScrollbarTrack must differ between light and dark");
+    }
+
+    // ── CSS Color 4 §6.2 — cascade integration tests ──
+
+    #[test]
+    fn system_color_parse_keyword_canvas() {
+        assert!(SystemColor::parse("Canvas").is_some());
+        assert!(SystemColor::parse("canvas").is_some());
+        assert!(SystemColor::parse("CANVAS").is_some());
+        // canonical aliases
+        assert_eq!(SystemColor::parse("window"), SystemColor::parse("canvas"));
+    }
+
+    #[test]
+    fn system_color_parse_returns_none_for_named_color() {
+        // "blue" is a named color, NOT a system color
+        assert!(SystemColor::parse("blue").is_none());
+        assert!(SystemColor::parse("red").is_none());
+        assert!(SystemColor::parse("rebeccapurple").is_none());
+    }
+
+    #[test]
+    fn system_color_in_css_cascade_color_property_light() {
+        // color: Canvas on a light-scheme element → white (Canvas light)
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { color: Canvas; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, lumen_core::geom::Size { width: 800.0, height: 600.0 }, false);
+        assert_eq!(style.color, Color { r: 255, g: 255, b: 255, a: 255 }, "Canvas light = white");
+    }
+
+    #[test]
+    fn system_color_in_css_cascade_color_property_dark() {
+        // color: CanvasText in dark mode → white text
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { color: CanvasText; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, lumen_core::geom::Size { width: 800.0, height: 600.0 }, true);
+        assert_eq!(style.color, Color { r: 255, g: 255, b: 255, a: 255 }, "CanvasText dark = white");
+    }
+
+    #[test]
+    fn system_color_in_background_color_light() {
+        // background-color: Canvas on a light element → white
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { background-color: Canvas; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, lumen_core::geom::Size { width: 800.0, height: 600.0 }, false);
+        let bg = style.background_color.expect("background-color should be set");
+        assert_eq!(bg, CssColor::Rgba(Color { r: 255, g: 255, b: 255, a: 255 }), "Canvas light bg = white");
+    }
+
+    #[test]
+    fn system_color_in_background_color_dark() {
+        // background-color: Canvas in dark mode → #1e1e1e
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { background-color: Canvas; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, lumen_core::geom::Size { width: 800.0, height: 600.0 }, true);
+        let bg = style.background_color.expect("background-color should be set");
+        assert_eq!(bg, CssColor::Rgba(Color { r: 30, g: 30, b: 30, a: 255 }), "Canvas dark bg = #1e1e1e");
+    }
+
+    #[test]
+    fn system_color_color_scheme_overrides_dark_mode() {
+        // element with `color-scheme: light` uses light system colors even when dark_mode=true
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { color-scheme: light; background-color: Canvas; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, lumen_core::geom::Size { width: 800.0, height: 600.0 }, true);
+        let bg = style.background_color.expect("background-color should be set");
+        // color-scheme: light forces light Canvas regardless of OS dark_mode
+        assert_eq!(bg, CssColor::Rgba(Color { r: 255, g: 255, b: 255, a: 255 }), "Canvas light-forced = white");
+    }
+
+    #[test]
+    fn system_color_border_color_resolved() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { border-top-color: ButtonFace; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let style_light = compute_style(&doc, div, &sheet, &root, lumen_core::geom::Size { width: 800.0, height: 600.0 }, false);
+        let style_dark = compute_style(&doc, div, &sheet, &root, lumen_core::geom::Size { width: 800.0, height: 600.0 }, true);
+        // After post-pass, no System variants should remain
+        assert!(!matches!(style_light.border_top_color, CssColor::System(_)), "System should be resolved in light");
+        assert!(!matches!(style_dark.border_top_color, CssColor::System(_)), "System should be resolved in dark");
+        // Light and dark ButtonFace should differ
+        assert_ne!(style_light.border_top_color, style_dark.border_top_color, "ButtonFace differs by scheme");
     }
 
     // ──────────── CSS Units ────────────
@@ -20688,7 +25151,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { forced-color-adjust: none; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.forced_color_adjust, ForcedColorAdjust::None);
     }
 
@@ -20698,7 +25161,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { forced-color-adjust: preserve-parent-color; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.forced_color_adjust, ForcedColorAdjust::PreserveParentColor);
     }
 
@@ -20708,9 +25171,9 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { forced-color-adjust: none; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let span = doc.get(div).children[0];
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.forced_color_adjust, ForcedColorAdjust::None);
         assert_eq!(span_style.forced_color_adjust, ForcedColorAdjust::Auto);
     }
@@ -20721,7 +25184,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { forced-color-adjust: always; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.forced_color_adjust, ForcedColorAdjust::Auto);
     }
 
@@ -20739,7 +25202,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { order: 3; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.order, 3);
     }
 
@@ -20749,7 +25212,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { order: -1; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.order, -1);
     }
 
@@ -20759,9 +25222,9 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { order: 5; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let span = doc.get(div).children[0];
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.order, 5);
         assert_eq!(span_style.order, 0);
     }
@@ -20772,7 +25235,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { order: auto; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.order, 0);
     }
 
@@ -20790,7 +25253,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { resize: both; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.resize, Resize::Both);
     }
 
@@ -20802,8 +25265,8 @@ mod tests {
         let root = ComputedStyle::root();
         let span = doc.get(doc.body().unwrap()).children[0];
         let em = doc.get(doc.body().unwrap()).children[1];
-        let h = compute_style(&doc, span, &hs, &root, Size::new(800.0, 600.0));
-        let v = compute_style(&doc, em, &vs, &root, Size::new(800.0, 600.0));
+        let h = compute_style(&doc, span, &hs, &root, Size::new(800.0, 600.0), false);
+        let v = compute_style(&doc, em, &vs, &root, Size::new(800.0, 600.0), false);
         assert_eq!(h.resize, Resize::Horizontal);
         assert_eq!(v.resize, Resize::Vertical);
     }
@@ -20814,9 +25277,9 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { resize: both; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let span = doc.get(div).children[0];
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.resize, Resize::Both);
         assert_eq!(span_style.resize, Resize::None);
     }
@@ -20827,7 +25290,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { resize: all; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.resize, Resize::None);
     }
 
@@ -20845,7 +25308,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { line-break: strict; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.line_break, LineBreak::Strict);
     }
 
@@ -20861,7 +25324,7 @@ mod tests {
             let sheet = lumen_css_parser::parse(&format!("div {{ line-break: {css}; }}"));
             let root = ComputedStyle::root();
             let div = doc.get(doc.body().unwrap()).children[0];
-            let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+            let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
             assert_eq!(style.line_break, expected, "css={css}");
         }
     }
@@ -20872,9 +25335,9 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { line-break: strict; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let span = doc.get(div).children[0];
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.line_break, LineBreak::Strict);
         assert_eq!(span_style.line_break, LineBreak::Strict);
     }
@@ -20885,7 +25348,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { line-break: always; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.line_break, LineBreak::Auto);
     }
 
@@ -20897,7 +25360,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { text-align-last: justify; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.text_align_last, TextAlignLast::Justify);
     }
 
@@ -20907,7 +25370,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.text_align_last, TextAlignLast::Auto);
     }
 
@@ -20917,9 +25380,9 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { text-align-last: right; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let span = doc.get(div).children[0];
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.text_align_last, TextAlignLast::Right);
         assert_eq!(span_style.text_align_last, TextAlignLast::Auto);
     }
@@ -20930,7 +25393,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { text-align-last: bogus; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.text_align_last, TextAlignLast::Auto);
     }
 
@@ -20942,7 +25405,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { touch-action: none; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.touch_action, TouchAction::None);
     }
 
@@ -20952,7 +25415,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.touch_action, TouchAction::Auto);
     }
 
@@ -20962,9 +25425,9 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { touch-action: manipulation; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let span = doc.get(div).children[0];
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.touch_action, TouchAction::Manipulation);
         assert_eq!(span_style.touch_action, TouchAction::Auto);
     }
@@ -20975,7 +25438,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { touch-action: pan-y; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.touch_action, TouchAction::PanY);
     }
 
@@ -20987,7 +25450,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { appearance: none; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.appearance, Appearance::None);
     }
 
@@ -20997,7 +25460,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.appearance, Appearance::Auto);
     }
 
@@ -21007,9 +25470,9 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { appearance: none; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let span = doc.get(div).children[0];
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.appearance, Appearance::None);
         assert_eq!(span_style.appearance, Appearance::Auto);
     }
@@ -21020,8 +25483,230 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { -webkit-appearance: none; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.appearance, Appearance::None);
+    }
+
+    #[test]
+    fn appearance_none_removes_input_ua_styling() {
+        let doc = lumen_html_parser::parse("<input />");
+        let sheet = lumen_css_parser::parse("input { appearance: none; }");
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
+        // appearance: none should remove borders and padding
+        assert_eq!(style.appearance, Appearance::None);
+        assert_eq!(style.border_top_width, 0.0);
+        assert_eq!(style.border_right_width, 0.0);
+        assert_eq!(style.border_bottom_width, 0.0);
+        assert_eq!(style.border_left_width, 0.0);
+        assert_eq!(style.padding_top, Length::Px(0.0));
+        assert_eq!(style.padding_right, Length::Px(0.0));
+        assert_eq!(style.padding_bottom, Length::Px(0.0));
+        assert_eq!(style.padding_left, Length::Px(0.0));
+        // Check background is transparent (alpha = 0)
+        match style.background_color {
+            Some(CssColor::Rgba(Color { a, .. })) => assert_eq!(a, 0),
+            _ => panic!("Expected rgba color"),
+        }
+    }
+
+    #[test]
+    fn appearance_none_removes_button_ua_styling() {
+        let doc = lumen_html_parser::parse("<button></button>");
+        let sheet = lumen_css_parser::parse("button { appearance: none; }");
+        let root = ComputedStyle::root();
+        let button = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, button, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.border_top_width, 0.0);
+        assert_eq!(style.padding_top, Length::Px(0.0));
+        match style.background_color {
+            Some(CssColor::Rgba(Color { a, .. })) => assert_eq!(a, 0),
+            _ => panic!("Expected rgba color"),
+        }
+    }
+
+    #[test]
+    fn appearance_none_removes_select_ua_styling() {
+        let doc = lumen_html_parser::parse("<select></select>");
+        let sheet = lumen_css_parser::parse("select { appearance: none; }");
+        let root = ComputedStyle::root();
+        let select = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, select, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.border_top_width, 0.0);
+        assert_eq!(style.padding_top, Length::Px(0.0));
+    }
+
+    #[test]
+    fn appearance_auto_preserves_ua_styling() {
+        let doc = lumen_html_parser::parse("<input />");
+        let sheet = lumen_css_parser::parse(""); // appearance: auto (default)
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
+        // appearance: auto should preserve UA styling (border from apply_ua_form_controls)
+        assert_eq!(style.border_top_width, 1.0);
+        assert_eq!(style.border_right_width, 1.0);
+        assert_eq!(style.appearance, Appearance::Auto);
+    }
+
+    #[test]
+    fn appearance_none_removes_textarea_ua_styling() {
+        let doc = lumen_html_parser::parse("<textarea></textarea>");
+        let sheet = lumen_css_parser::parse("textarea { appearance: none; }");
+        let root = ComputedStyle::root();
+        let textarea = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, textarea, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.border_top_width, 0.0);
+        assert_eq!(style.padding_top, Length::Px(0.0));
+        match style.background_color {
+            Some(CssColor::Rgba(Color { a, .. })) => assert_eq!(a, 0),
+            _ => panic!("Expected rgba color"),
+        }
+    }
+
+    // --- field-sizing ---
+
+    #[test]
+    fn field_sizing_default_is_fixed() {
+        let doc = lumen_html_parser::parse("<input />");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.field_sizing, FieldSizing::Fixed);
+    }
+
+    #[test]
+    fn field_sizing_content_parses() {
+        let doc = lumen_html_parser::parse("<input />");
+        let sheet = lumen_css_parser::parse("input { field-sizing: content; }");
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.field_sizing, FieldSizing::Content);
+    }
+
+    #[test]
+    fn field_sizing_content_suppresses_ua_width() {
+        // With field-sizing: content, apply_ua_form_controls should NOT set width/height.
+        let doc = lumen_html_parser::parse("<input />");
+        let sheet = lumen_css_parser::parse("input { field-sizing: content; }");
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.field_sizing, FieldSizing::Content);
+        assert!(style.width.is_none(), "field-sizing: content must clear UA width");
+        assert!(style.height.is_none(), "field-sizing: content must clear UA height");
+    }
+
+    #[test]
+    fn field_sizing_fixed_preserves_ua_dimensions() {
+        // Default (fixed): UA dimensions are preserved.
+        let doc = lumen_html_parser::parse("<input />");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.width, Some(Length::Px(174.0)));
+        assert_eq!(style.height, Some(Length::Px(21.0)));
+    }
+
+    #[test]
+    fn field_sizing_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><input /></div>");
+        let sheet = lumen_css_parser::parse("div { field-sizing: content; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let input = doc.get(div).children[0];
+        let input_style = compute_style(&doc, input, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(div_style.field_sizing, FieldSizing::Content);
+        // field-sizing is not inherited → input keeps Fixed
+        assert_eq!(input_style.field_sizing, FieldSizing::Fixed);
+    }
+
+    // --- contain-intrinsic-size (CSS Box Sizing L4 §5) ---
+
+    #[test]
+    fn contain_intrinsic_size_default_is_none() {
+        let s = ComputedStyle::root();
+        assert!(s.contain_intrinsic_width.is_none());
+        assert!(s.contain_intrinsic_height.is_none());
+    }
+
+    #[test]
+    fn contain_intrinsic_size_shorthand_two_values() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { contain-intrinsic-size: 200px 100px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(s.contain_intrinsic_width, Some(Length::Px(200.0)));
+        assert_eq!(s.contain_intrinsic_height, Some(Length::Px(100.0)));
+    }
+
+    #[test]
+    fn contain_intrinsic_size_shorthand_one_value_both_axes() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { contain-intrinsic-size: 50px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(s.contain_intrinsic_width, Some(Length::Px(50.0)));
+        assert_eq!(s.contain_intrinsic_height, Some(Length::Px(50.0)));
+    }
+
+    #[test]
+    fn contain_intrinsic_size_auto_keyword_uses_length() {
+        // `auto <length>` — the `auto` last-remembered hint is accepted and the
+        // length is used as the placeholder.
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { contain-intrinsic-size: auto 300px auto 150px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(s.contain_intrinsic_width, Some(Length::Px(300.0)));
+        assert_eq!(s.contain_intrinsic_height, Some(Length::Px(150.0)));
+    }
+
+    #[test]
+    fn contain_intrinsic_size_none_is_no_placeholder() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { contain-intrinsic-size: none; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert!(s.contain_intrinsic_width.is_none());
+        assert!(s.contain_intrinsic_height.is_none());
+    }
+
+    #[test]
+    fn contain_intrinsic_height_longhand_and_logical_alias() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "div { contain-intrinsic-height: 80px; contain-intrinsic-inline-size: 40px; }",
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(s.contain_intrinsic_height, Some(Length::Px(80.0)));
+        // inline-size maps to width under horizontal-tb.
+        assert_eq!(s.contain_intrinsic_width, Some(Length::Px(40.0)));
+    }
+
+    #[test]
+    fn contain_intrinsic_size_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { contain-intrinsic-size: 200px 100px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(div_style.contain_intrinsic_height, Some(Length::Px(100.0)));
+        assert!(span_style.contain_intrinsic_width.is_none());
+        assert!(span_style.contain_intrinsic_height.is_none());
     }
 
     // --- Display extended values ---
@@ -21032,7 +25717,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { display: flow-root; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.display, Display::FlowRoot);
     }
 
@@ -21042,7 +25727,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { display: contents; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.display, Display::Contents);
     }
 
@@ -21052,7 +25737,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { display: table; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.display, Display::Table);
     }
 
@@ -21062,7 +25747,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { display: table-cell; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.display, Display::TableCell);
     }
 
@@ -21072,7 +25757,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { display: list-item; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.display, Display::ListItem);
     }
 
@@ -21082,7 +25767,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let table = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, table, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, table, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.display, Display::Table);
     }
 
@@ -21092,7 +25777,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let li = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, li, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, li, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.display, Display::ListItem);
     }
 
@@ -21102,7 +25787,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { display: bogus-value; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.display, Display::Block);
     }
 
@@ -21114,7 +25799,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { contain: none; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.contain, ContainFlags::NONE);
     }
 
@@ -21124,7 +25809,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { contain: strict; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.contain, ContainFlags::STRICT);
     }
 
@@ -21134,7 +25819,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { contain: layout paint; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let expected = ContainFlags(ContainFlags::LAYOUT.0 | ContainFlags::PAINT.0);
         assert_eq!(style.contain, expected);
     }
@@ -21145,9 +25830,9 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { contain: content; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let span = doc.get(div).children[0];
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.contain, ContainFlags::CONTENT);
         assert_eq!(span_style.contain, ContainFlags::NONE);
     }
@@ -21160,7 +25845,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { content-visibility: hidden; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.content_visibility, ContentVisibility::Hidden);
     }
 
@@ -21170,7 +25855,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { content-visibility: auto; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.content_visibility, ContentVisibility::Auto);
     }
 
@@ -21180,7 +25865,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.content_visibility, ContentVisibility::Visible);
     }
 
@@ -21190,11 +25875,74 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { content-visibility: hidden; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let span = doc.get(div).children[0];
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.content_visibility, ContentVisibility::Hidden);
         assert_eq!(span_style.content_visibility, ContentVisibility::Visible);
+    }
+
+    // --- interpolate-size (CSS Sizing L4 §4.5) ---
+
+    #[test]
+    fn interpolate_size_allow_keywords() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { interpolate-size: allow-keywords; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.interpolate_size, InterpolateSizeMode::AllowKeywords);
+    }
+
+    #[test]
+    fn interpolate_size_numeric_only() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { interpolate-size: numeric-only; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.interpolate_size, InterpolateSizeMode::NumericOnly);
+    }
+
+    #[test]
+    fn interpolate_size_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.interpolate_size, InterpolateSizeMode::NumericOnly);
+    }
+
+    #[test]
+    fn interpolate_size_inherited() {
+        // CSS Sizing L4 §4.5 — interpolate-size IS inherited.
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { interpolate-size: allow-keywords; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span = doc.get(div).children[0];
+        let span_style =
+            compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(div_style.interpolate_size, InterpolateSizeMode::AllowKeywords);
+        assert_eq!(span_style.interpolate_size, InterpolateSizeMode::AllowKeywords);
+    }
+
+    #[test]
+    fn interpolate_size_unset_inherits() {
+        // `unset` on an inherited property = inherit.
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse(
+            "div { interpolate-size: allow-keywords; } span { interpolate-size: unset; }",
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span = doc.get(div).children[0];
+        let span_style =
+            compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(span_style.interpolate_size, InterpolateSizeMode::AllowKeywords);
     }
 
     // --- container-type ---
@@ -21205,7 +25953,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { container-type: inline-size; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.container_type, ContainerType::InlineSize);
     }
 
@@ -21215,7 +25963,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.container_type, ContainerType::Normal);
     }
 
@@ -21225,7 +25973,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { container-name: sidebar; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.container_name, vec!["sidebar"]);
     }
 
@@ -21235,7 +25983,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { container: sidebar / inline-size; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.container_name, vec!["sidebar"]);
         assert_eq!(style.container_type, ContainerType::InlineSize);
     }
@@ -21248,7 +25996,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { backdrop-filter: blur(4px); }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert!(!style.backdrop_filter.is_empty());
         assert!(matches!(style.backdrop_filter[0], FilterFn::Blur(_)));
     }
@@ -21259,7 +26007,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { backdrop-filter: none; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert!(style.backdrop_filter.is_empty());
     }
 
@@ -21269,7 +26017,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert!(style.backdrop_filter.is_empty());
     }
 
@@ -21279,9 +26027,9 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { backdrop-filter: blur(4px); }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let span = doc.get(div).children[0];
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert!(!div_style.backdrop_filter.is_empty());
         assert!(span_style.backdrop_filter.is_empty());
     }
@@ -21294,7 +26042,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { print-color-adjust: exact; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.print_color_adjust, PrintColorAdjust::Exact);
     }
 
@@ -21304,7 +26052,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.print_color_adjust, PrintColorAdjust::Economy);
     }
 
@@ -21314,7 +26062,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { color-adjust: exact; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.print_color_adjust, PrintColorAdjust::Exact);
     }
 
@@ -21324,9 +26072,9 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { print-color-adjust: exact; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let span = doc.get(div).children[0];
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.print_color_adjust, PrintColorAdjust::Exact);
         assert_eq!(span_style.print_color_adjust, PrintColorAdjust::Economy);
     }
@@ -21339,7 +26087,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { font-size-adjust: 0.5; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.font_size_adjust, FontSizeAdjust::Value(0.5));
     }
 
@@ -21349,7 +26097,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.font_size_adjust, FontSizeAdjust::None);
     }
 
@@ -21359,9 +26107,9 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { font-size-adjust: 0.47; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let span = doc.get(div).children[0];
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.font_size_adjust, FontSizeAdjust::Value(0.47));
         assert_eq!(span_style.font_size_adjust, FontSizeAdjust::Value(0.47));
     }
@@ -21372,7 +26120,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { font-size-adjust: auto; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.font_size_adjust, FontSizeAdjust::Auto);
     }
 
@@ -21384,7 +26132,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.writing_mode, WritingMode::HorizontalTb);
     }
 
@@ -21394,7 +26142,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { writing-mode: vertical-rl; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.writing_mode, WritingMode::VerticalRl);
     }
 
@@ -21404,7 +26152,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { writing-mode: vertical-lr; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.writing_mode, WritingMode::VerticalLr);
     }
 
@@ -21414,9 +26162,9 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { writing-mode: vertical-rl; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let span = doc.get(div).children[0];
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.writing_mode, WritingMode::VerticalRl);
         assert_eq!(span_style.writing_mode, WritingMode::VerticalRl);
     }
@@ -21427,7 +26175,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { writing-mode: tb-rl; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.writing_mode, WritingMode::VerticalRl);
     }
 
@@ -21439,7 +26187,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.text_orientation, TextOrientation::Mixed);
     }
 
@@ -21449,7 +26197,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { text-orientation: upright; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.text_orientation, TextOrientation::Upright);
     }
 
@@ -21459,7 +26207,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { text-orientation: sideways; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.text_orientation, TextOrientation::Sideways);
     }
 
@@ -21469,9 +26217,9 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { writing-mode: vertical-rl; text-orientation: upright; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let span = doc.get(div).children[0];
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.text_orientation, TextOrientation::Upright);
         assert_eq!(span_style.text_orientation, TextOrientation::Upright);
     }
@@ -21484,7 +26232,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let input = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.width, Some(Length::Px(174.0)));
         assert_eq!(style.height, Some(Length::Px(21.0)));
         assert_eq!(style.border_top_width, 1.0);
@@ -21496,7 +26244,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let input = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.display, Display::None);
     }
 
@@ -21506,7 +26254,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let input = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.width, Some(Length::Px(13.0)));
         assert_eq!(style.height, Some(Length::Px(13.0)));
     }
@@ -21517,7 +26265,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let ta = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, ta, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, ta, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.width, Some(Length::Px(200.0)));
         assert_eq!(style.height, Some(Length::Px(48.0)));
         assert_eq!(style.border_top_width, 1.0);
@@ -21529,7 +26277,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let btn = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, btn, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, btn, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.height, Some(Length::Px(21.0)));
         assert_eq!(style.border_top_width, 1.0);
     }
@@ -21540,7 +26288,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let sel = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, sel, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, sel, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.height, Some(Length::Px(21.0)));
         assert_eq!(style.border_top_width, 1.0);
     }
@@ -21551,9 +26299,51 @@ mod tests {
         let sheet = lumen_css_parser::parse("input { width: 300px; height: 40px; }");
         let root = ComputedStyle::root();
         let input = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.width, Some(Length::Px(300.0)));
         assert_eq!(style.height, Some(Length::Px(40.0)));
+    }
+
+    // CSS color-scheme UA form element colors — F-4
+
+    #[test]
+    fn ua_form_colors_light_mode_input() {
+        // Light mode: input gets white background and dark border.
+        let (border, bg, fg) = ua_form_element_colors("input", false);
+        assert_eq!(border, CssColor::Rgba(Color { r: 118, g: 118, b: 118, a: 255 }));
+        assert_eq!(bg, CssColor::Rgba(Color { r: 255, g: 255, b: 255, a: 255 }));
+        assert_eq!(fg, Color { r: 0, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn ua_form_colors_dark_mode_input() {
+        // Dark mode: input gets dark background, lighter border, white text.
+        let (border, bg, fg) = ua_form_element_colors("input", true);
+        assert_eq!(border, CssColor::Rgba(Color { r: 97, g: 97, b: 97, a: 255 }));
+        assert_eq!(bg, CssColor::Rgba(Color { r: 30, g: 30, b: 30, a: 255 }));
+        assert_eq!(fg, Color { r: 255, g: 255, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn ua_form_colors_dark_mode_button_distinct_bg() {
+        // Dark mode: button has a lighter background than text inputs.
+        let (_, input_bg, _) = ua_form_element_colors("input", true);
+        let (_, btn_bg, _) = ua_form_element_colors("button", true);
+        assert_ne!(input_bg, btn_bg, "button bg should differ from input bg in dark mode");
+        assert_eq!(btn_bg, CssColor::Rgba(Color { r: 58, g: 58, b: 60, a: 255 }));
+    }
+
+    #[test]
+    fn ua_form_colors_applied_to_computed_style_dark() {
+        // When dark_mode=true, compute_style applies dark UA colors to <input>.
+        let doc = lumen_html_parser::parse("<input type=\"text\">");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), true);
+        assert_eq!(style.background_color, Some(CssColor::Rgba(Color { r: 30, g: 30, b: 30, a: 255 })));
+        assert_eq!(style.color, Color { r: 255, g: 255, b: 255, a: 255 });
+        assert_eq!(style.border_top_color, CssColor::Rgba(Color { r: 97, g: 97, b: 97, a: 255 }));
     }
 
     // CSS Shapes L1 — shape-outside
@@ -21563,7 +26353,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.shape_outside, ShapeOutside::None);
     }
 
@@ -21573,7 +26363,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { shape-outside: circle(50%); }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.shape_outside, ShapeOutside::Value("circle(50%)".to_string()));
     }
 
@@ -21583,9 +26373,9 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { shape-outside: circle(50%); }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let span = doc.get(div).children[0];
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.shape_outside, ShapeOutside::Value("circle(50%)".to_string()));
         assert_eq!(span_style.shape_outside, ShapeOutside::None);
     }
@@ -21596,7 +26386,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { shape-outside: none; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.shape_outside, ShapeOutside::None);
     }
 
@@ -21607,7 +26397,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.shape_margin, Length::Px(0.0));
     }
 
@@ -21617,7 +26407,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { shape-margin: 10px; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.shape_margin, Length::Px(10.0));
     }
 
@@ -21627,9 +26417,9 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { shape-margin: 5px; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let span = doc.get(div).children[0];
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.shape_margin, Length::Px(5.0));
         assert_eq!(span_style.shape_margin, Length::Px(0.0));
     }
@@ -21640,7 +26430,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { shape-margin: -5px; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         // Negative shape-margin is invalid per spec — ignored.
         assert_eq!(style.shape_margin, Length::Px(0.0));
     }
@@ -21652,7 +26442,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert!((style.shape_image_threshold - 0.0).abs() < f32::EPSILON);
     }
 
@@ -21662,7 +26452,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { shape-image-threshold: 0.5; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert!((style.shape_image_threshold - 0.5).abs() < 1e-5);
     }
 
@@ -21672,7 +26462,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { shape-image-threshold: 1.5; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert!((style.shape_image_threshold - 1.0).abs() < f32::EPSILON);
     }
 
@@ -21682,9 +26472,9 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { shape-image-threshold: 0.8; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let span = doc.get(div).children[0];
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert!((div_style.shape_image_threshold - 0.8).abs() < 1e-5);
         assert!((span_style.shape_image_threshold - 0.0).abs() < f32::EPSILON);
     }
@@ -21696,7 +26486,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.offset_path, None);
     }
 
@@ -21706,7 +26496,7 @@ mod tests {
         let sheet = lumen_css_parser::parse(r#"div { offset-path: path("M 0 0 L 100 100"); }"#);
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert!(style.offset_path.is_some());
     }
 
@@ -21716,7 +26506,7 @@ mod tests {
         let sheet = lumen_css_parser::parse(r#"div { offset-path: none; }"#);
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.offset_path, None);
     }
 
@@ -21726,9 +26516,9 @@ mod tests {
         let sheet = lumen_css_parser::parse(r#"div { offset-path: path("M0 0 L100 0"); }"#);
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let span = doc.get(div).children[0];
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert!(div_style.offset_path.is_some());
         assert_eq!(span_style.offset_path, None);
     }
@@ -21740,7 +26530,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.offset_distance, Length::Px(0.0));
     }
 
@@ -21750,7 +26540,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { offset-distance: 50px; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.offset_distance, Length::Px(50.0));
     }
 
@@ -21760,9 +26550,9 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { offset-distance: 20px; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let span = doc.get(div).children[0];
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.offset_distance, Length::Px(20.0));
         assert_eq!(span_style.offset_distance, Length::Px(0.0));
     }
@@ -21773,7 +26563,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { offset-distance: bogus; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.offset_distance, Length::Px(0.0));
     }
 
@@ -21784,7 +26574,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.offset_rotate, OffsetRotate::Auto);
     }
 
@@ -21794,7 +26584,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { offset-rotate: reverse; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.offset_rotate, OffsetRotate::Reverse);
     }
 
@@ -21804,7 +26594,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { offset-rotate: 90deg; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         if let OffsetRotate::Angle(rad) = style.offset_rotate {
             assert!((rad - std::f32::consts::FRAC_PI_2).abs() < 1e-4);
         } else {
@@ -21818,9 +26608,9 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { offset-rotate: reverse; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let span = doc.get(div).children[0];
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.offset_rotate, OffsetRotate::Reverse);
         assert_eq!(span_style.offset_rotate, OffsetRotate::Auto);
     }
@@ -21832,7 +26622,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.offset_anchor, None);
     }
 
@@ -21842,7 +26632,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { offset-anchor: auto; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.offset_anchor, None);
     }
 
@@ -21852,9 +26642,9 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { offset-anchor: 50% 50%; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         let span = doc.get(div).children[0];
-        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert!(div_style.offset_anchor.is_some());
         assert_eq!(span_style.offset_anchor, None);
     }
@@ -21865,7 +26655,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { offset-anchor: bogus; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.offset_anchor, None);
     }
 
@@ -21878,7 +26668,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { border-radius: 10px; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.border_top_left_radius,       Length::Px(10.0));
         assert_eq!(s.border_top_left_radius_y,     Length::Px(10.0));
         assert_eq!(s.border_top_right_radius,      Length::Px(10.0));
@@ -21896,7 +26686,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { border-radius: 20px / 10px; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.border_top_left_radius,       Length::Px(20.0));
         assert_eq!(s.border_top_left_radius_y,     Length::Px(10.0));
         assert_eq!(s.border_top_right_radius,      Length::Px(20.0));
@@ -21914,7 +26704,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { border-radius: 10px 20px / 5px 15px; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.border_top_left_radius,        Length::Px(10.0)); // TL rx
         assert_eq!(s.border_top_left_radius_y,      Length::Px(5.0));  // TL ry
         assert_eq!(s.border_top_right_radius,       Length::Px(20.0)); // TR rx
@@ -21932,7 +26722,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { border-top-left-radius: 30px 15px; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.border_top_left_radius,   Length::Px(30.0));
         assert_eq!(s.border_top_left_radius_y, Length::Px(15.0));
         // Other corners untouched.
@@ -21947,7 +26737,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { border-top-right-radius: 8px; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.border_top_right_radius,   Length::Px(8.0));
         assert_eq!(s.border_top_right_radius_y, Length::Px(8.0));
     }
@@ -21959,7 +26749,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { border-radius: 1px 2px 3px 4px / 5px 6px 7px 8px; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.border_top_left_radius,        Length::Px(1.0));
         assert_eq!(s.border_top_right_radius,       Length::Px(2.0));
         assert_eq!(s.border_bottom_right_radius,    Length::Px(3.0));
@@ -21977,7 +26767,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("div { border-radius: 50%; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.body().unwrap()).children[0];
-        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(s.border_top_left_radius,       Length::Percent(50.0));
         assert_eq!(s.border_top_left_radius_y,     Length::Percent(50.0));
         assert_eq!(s.border_top_right_radius,      Length::Percent(50.0));
@@ -22126,6 +26916,44 @@ mod tests {
         assert_eq!(oy, Overflow::Auto);
     }
 
+    // ── CSS Overflow L3 §2 — apply_declaration parsing ──
+
+    #[test]
+    fn overflow_scroll_single_value_sets_both_axes() {
+        let s = ts_prop("overflow", "scroll");
+        assert_eq!(s.overflow_x, Overflow::Scroll);
+        assert_eq!(s.overflow_y, Overflow::Scroll);
+    }
+
+    #[test]
+    fn overflow_auto_single_value_sets_both_axes() {
+        let s = ts_prop("overflow", "auto");
+        assert_eq!(s.overflow_x, Overflow::Auto);
+        assert_eq!(s.overflow_y, Overflow::Auto);
+    }
+
+    #[test]
+    fn overflow_two_value_scroll_auto() {
+        // CSS Overflow L3: two-value form — first token = x, second = y.
+        let s = ts_prop("overflow", "scroll auto");
+        assert_eq!(s.overflow_x, Overflow::Scroll);
+        assert_eq!(s.overflow_y, Overflow::Auto);
+    }
+
+    #[test]
+    fn overflow_x_scroll_only_sets_x_axis() {
+        let s = ts_prop("overflow-x", "scroll");
+        assert_eq!(s.overflow_x, Overflow::Scroll);
+        assert_eq!(s.overflow_y, Overflow::Visible);
+    }
+
+    #[test]
+    fn overflow_y_auto_only_sets_y_axis() {
+        let s = ts_prop("overflow-y", "auto");
+        assert_eq!(s.overflow_x, Overflow::Visible);
+        assert_eq!(s.overflow_y, Overflow::Auto);
+    }
+
     // ── CSS Compositing L1 §8.3 — background-blend-mode ──
 
     #[test]
@@ -22209,7 +27037,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let dlg = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, dlg, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, dlg, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.display, Display::None);
     }
 
@@ -22219,7 +27047,7 @@ mod tests {
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
         let dlg = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, dlg, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, dlg, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_ne!(style.display, Display::None);
     }
 
@@ -22229,8 +27057,1618 @@ mod tests {
         let sheet = lumen_css_parser::parse("dialog { display: block; }");
         let root = ComputedStyle::root();
         let dlg = doc.get(doc.body().unwrap()).children[0];
-        let style = compute_style(&doc, dlg, &sheet, &root, Size::new(800.0, 600.0));
+        let style = compute_style(&doc, dlg, &sheet, &root, Size::new(800.0, 600.0), false);
         // Author CSS overrides the UA display:none.
         assert_ne!(style.display, Display::None);
     }
+
+    /// `@media (prefers-color-scheme: dark)` must match when `dark_mode=true`
+    /// and must NOT match when `dark_mode=false`.
+    #[test]
+    fn media_prefers_color_scheme_dark_mode_false() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@media (prefers-color-scheme: dark) { div { color: #ffffff; } }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        // dark_mode=false → media query should NOT match → color stays initial (0,0,0)
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.color.r, 0, "dark_mode=false: @media dark should not apply");
+    }
+
+    /// `@media (prefers-color-scheme: dark)` must match when `dark_mode=true`.
+    #[test]
+    fn media_prefers_color_scheme_dark_mode_true() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@media (prefers-color-scheme: dark) { div { color: #ffffff; } }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        // dark_mode=true → media query matches → color becomes white (255,255,255)
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), true);
+        assert_eq!(style.color.r, 255, "dark_mode=true: @media dark should apply");
+        assert_eq!(style.color.g, 255);
+        assert_eq!(style.color.b, 255);
+    }
+
+    /// `@media (prefers-color-scheme: light)` must match when `dark_mode=false`.
+    #[test]
+    fn media_prefers_color_scheme_light_mode() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@media (prefers-color-scheme: light) { div { color: #ff0000; } }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.color.r, 255, "light mode: @media light should apply");
+        assert_eq!(style.color.g, 0);
+        assert_eq!(style.color.b, 0);
+    }
+
+    // --- CSS 3D transforms: TransformFn variants ---
+
+    #[test]
+    fn parse_transform_translatez() {
+        let t = parse_transform_list("translateZ(50px)");
+        assert_eq!(t, vec![TransformFn::TranslateZ(50.0)]);
+    }
+
+    #[test]
+    fn parse_transform_translate3d() {
+        let t = parse_transform_list("translate3d(10px, 20px, 30px)");
+        assert_eq!(t, vec![TransformFn::Translate3d(10.0, 20.0, 30.0)]);
+    }
+
+    #[test]
+    fn parse_transform_rotatex() {
+        let t = parse_transform_list("rotateX(45deg)");
+        assert!(matches!(t[..], [TransformFn::RotateX(_)]));
+        if let TransformFn::RotateX(a) = t[0] {
+            assert!((a - std::f32::consts::FRAC_PI_4).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn parse_transform_rotatey() {
+        let t = parse_transform_list("rotateY(90deg)");
+        assert!(matches!(t[..], [TransformFn::RotateY(_)]));
+    }
+
+    #[test]
+    fn parse_transform_rotatez() {
+        let t = parse_transform_list("rotateZ(180deg)");
+        assert!(matches!(t[..], [TransformFn::RotateZ(_)]));
+    }
+
+    #[test]
+    fn parse_transform_rotate3d() {
+        let t = parse_transform_list("rotate3d(1, 0, 0, 45deg)");
+        assert!(matches!(t[..], [TransformFn::Rotate3d(_, _, _, _)]));
+        if let TransformFn::Rotate3d(x, y, z, _) = t[0] {
+            assert_eq!((x, y, z), (1.0, 0.0, 0.0));
+        }
+    }
+
+    #[test]
+    fn parse_transform_scale3d() {
+        let t = parse_transform_list("scale3d(2, 3, 4)");
+        assert_eq!(t, vec![TransformFn::Scale3d(2.0, 3.0, 4.0)]);
+    }
+
+    #[test]
+    fn parse_transform_scalez() {
+        let t = parse_transform_list("scaleZ(0.5)");
+        assert_eq!(t, vec![TransformFn::ScaleZ(0.5)]);
+    }
+
+    #[test]
+    fn parse_transform_matrix3d() {
+        // identity matrix3d
+        let t = parse_transform_list(
+            "matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1)"
+        );
+        assert!(matches!(t[..], [TransformFn::Matrix3d(_)]));
+    }
+
+    #[test]
+    fn parse_transform_perspective_fn() {
+        let t = parse_transform_list("perspective(800px)");
+        assert_eq!(t, vec![TransformFn::Perspective(800.0)]);
+    }
+
+    #[test]
+    fn parse_transform_style_flat_default() {
+        let s = ts_prop("transform-style", "flat");
+        assert_eq!(s.transform_style, TransformStyle::Flat);
+    }
+
+    #[test]
+    fn parse_transform_style_preserve_3d() {
+        let s = ts_prop("transform-style", "preserve-3d");
+        assert_eq!(s.transform_style, TransformStyle::Preserve3d);
+    }
+
+    #[test]
+    fn parse_perspective_origin_default() {
+        let s = ComputedStyle::root();
+        assert_eq!(
+            s.perspective_origin,
+            (PositionComponent::Percent(0.5), PositionComponent::Percent(0.5))
+        );
+    }
+
+    #[test]
+    fn parse_perspective_origin_keywords() {
+        let s = ts_prop("perspective-origin", "left top");
+        assert_eq!(s.perspective_origin.0, PositionComponent::Percent(0.0));
+        assert_eq!(s.perspective_origin.1, PositionComponent::Percent(0.0));
+    }
+
+    #[test]
+    fn parse_perspective_origin_percent() {
+        let s = ts_prop("perspective-origin", "25% 75%");
+        assert_eq!(s.perspective_origin.0, PositionComponent::Percent(0.25));
+        assert_eq!(s.perspective_origin.1, PositionComponent::Percent(0.75));
+    }
+
+    // ── @supports cascade wiring ──────────────────────────────────────────────
+
+    #[test]
+    fn at_supports_known_property_applies_rules() {
+        let doc = lumen_html_parser::parse("<div>x</div>");
+        let sheet = lumen_css_parser::parse("@supports (color: red) { div { color: blue; } }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn at_supports_unknown_property_skips_rules() {
+        let doc = lumen_html_parser::parse("<div>x</div>");
+        let sheet = lumen_css_parser::parse(
+            "@supports (unknown-xyz-prop: 1) { div { color: blue; } }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        // Color stays default (black) because rule was filtered out.
+        assert_eq!(s.color, Color::BLACK);
+    }
+
+    #[test]
+    fn scope_rule_applies_to_descendant() {
+        // @scope (.wrapper) { color: blue; } applies to .child inside .wrapper.
+        let doc = lumen_html_parser::parse(
+            r#"<style>@scope (.wrapper) { .child { color: blue; } }</style>
+            <div class="wrapper"><span class="child">x</span></div>"#
+        );
+        let sheet = lumen_css_parser::parse(r#"@scope (.wrapper) { .child { color: blue; } }"#);
+        let root = ComputedStyle::root();
+        // Find .child
+        let wrapper = doc.get(doc.body().unwrap()).children[0];
+        let child = doc.get(wrapper).children[0];
+        let style = compute_style(&doc, child, &sheet, &root, Size::new(400.0, 400.0), false);
+        assert_eq!(style.color.b, 255, "scope rule should apply to .child inside .wrapper");
+    }
+
+    #[test]
+    fn scope_rule_does_not_apply_outside() {
+        // @scope (.wrapper) { color: blue; } does NOT apply to .child outside .wrapper.
+        let doc = lumen_html_parser::parse(r#"<div class="child">x</div>"#);
+        let sheet = lumen_css_parser::parse(r#"@scope (.wrapper) { .child { color: blue; } }"#);
+        let root = ComputedStyle::root();
+        let child = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, child, &sheet, &root, Size::new(400.0, 400.0), false);
+        assert_eq!(style.color.b, 0, "scope rule should NOT apply outside .wrapper");
+    }
+
+    #[test]
+    fn scope_rule_empty_root_applies_everywhere() {
+        // @scope { color: red; } (no root) applies to any element.
+        let doc = lumen_html_parser::parse(r#"<span>x</span>"#);
+        let sheet = lumen_css_parser::parse(r#"@scope { span { color: red; } }"#);
+        let root = ComputedStyle::root();
+        let span = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, span, &sheet, &root, Size::new(400.0, 400.0), false);
+        assert_eq!(style.color.r, 255, "empty-root scope should apply everywhere");
+    }
+
+    #[test]
+    fn fullscreen_pseudo_matches_sentinel_attr() {
+        let html = r#"<div id="el" data-lumen-fullscreen="">x</div>"#;
+        let css = r#":fullscreen { color: red; }"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let el = doc.get(doc.body().unwrap()).children[0];
+        let root = ComputedStyle::root();
+        let style = compute_style(&doc, el, &sheet, &root, Size::new(200.0, 200.0), false);
+        assert_eq!(style.color.r, 255, ":fullscreen rule should apply when sentinel attr present");
+    }
+
+    #[test]
+    fn popover_open_pseudo_matches_sentinel_attr() {
+        let html = r#"<div id="p" data-lumen-popover-open="">x</div>"#;
+        let css = r#":popover-open { color: blue; }"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let el = doc.get(doc.body().unwrap()).children[0];
+        let root = ComputedStyle::root();
+        let style = compute_style(&doc, el, &sheet, &root, Size::new(200.0, 200.0), false);
+        assert_eq!(style.color.b, 255, ":popover-open rule should apply when sentinel attr present");
+        assert_eq!(style.color.r, 0);
+    }
+
+    #[test]
+    fn modal_pseudo_matches_data_lumen_modal_attr() {
+        // :modal matches only when showModal() sets `data-lumen-modal` sentinel.
+        let html = r#"<dialog id="d" data-lumen-modal="" open>content</dialog>"#;
+        let css = r#":modal { color: red; }"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let dlg = doc.get(doc.body().unwrap()).children[0];
+        let root = ComputedStyle::root();
+        let style = compute_style(&doc, dlg, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.color.r, 255, ":modal rule should apply when sentinel attr present");
+    }
+
+    #[test]
+    fn modal_pseudo_does_not_match_show_dialog() {
+        // Non-modal dialog (show() — no data-lumen-modal attr) must NOT match :modal.
+        let html = r#"<dialog id="d" open>content</dialog>"#;
+        let css = r#":modal { color: red; }"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let dlg = doc.get(doc.body().unwrap()).children[0];
+        let root = ComputedStyle::root();
+        let style = compute_style(&doc, dlg, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_ne!(style.color.r, 255, ":modal rule must NOT apply without sentinel attr");
+    }
+
+    #[test]
+    fn parse_paint_function_basic() {
+        // CSS Paint API (Houdini) — parse paint(name) function.
+        assert_eq!(parse_paint_function("paint(my-paint)"), Some("my-paint".to_string()));
+        assert_eq!(parse_paint_function("paint('my-paint')"), Some("my-paint".to_string()));
+        assert_eq!(parse_paint_function("paint(\"my-paint\")"), Some("my-paint".to_string()));
+    }
+
+    #[test]
+    fn parse_paint_function_with_whitespace() {
+        // paint() name trimmed; outer whitespace ignored, inner whitespace preserved.
+        assert_eq!(parse_paint_function("  paint(test)  "), Some("test".to_string()));
+        // Interior whitespace is trimmed during parsing (inner trim).
+        assert_eq!(parse_paint_function("paint( test )"), Some("test".to_string()));
+    }
+
+    #[test]
+    fn parse_paint_function_invalid() {
+        // Invalid: missing parentheses, wrong function name, or no closing paren.
+        assert_eq!(parse_paint_function("paint"), None);
+        assert_eq!(parse_paint_function("gradient(test)"), None);
+        assert_eq!(parse_paint_function("paint(test"), None);
+        assert_eq!(parse_paint_function("paint(test))"), None);
+    }
+
+    #[test]
+    fn background_image_paint_function_parsed_to_paint_variant() {
+        // CSS Paint API (Houdini) — `background-image: paint(name)` must produce BackgroundImage::Paint.
+        let s = cascade_at("<div></div>", "div { background-image: paint(my-worklet); }", &[0]);
+        assert_eq!(s.background_layers.len(), 1);
+        assert_eq!(s.background_layers[0].image, BackgroundImage::Paint("my-worklet".to_string()));
+    }
+
+    #[test]
+    fn background_image_paint_function_with_quotes_parsed() {
+        // paint("name") with double-quotes must strip quotes and produce Paint("name").
+        let s = cascade_at("<div></div>", r#"div { background-image: paint("checker"); }"#, &[0]);
+        assert_eq!(s.background_layers.len(), 1);
+        assert_eq!(s.background_layers[0].image, BackgroundImage::Paint("checker".to_string()));
+    }
+
+    #[test]
+    fn css_properties_values_api_parse_property_rule() {
+        // CSS Properties and Values L1 — @property at-rule parsing
+        let sheet = lumen_css_parser::parse(
+            "@property --my-color { syntax: \"<color>\"; inherits: true; initial-value: blue; }"
+        );
+        assert_eq!(sheet.properties.len(), 1);
+        let prop = &sheet.properties[0];
+        assert_eq!(prop.name, "--my-color");
+        assert_eq!(prop.syntax, "<color>");
+        assert!(prop.inherits);
+        assert_eq!(prop.initial_value, Some("blue".to_string()));
+    }
+
+    #[test]
+    fn css_properties_values_api_initial_value_fallback() {
+        // CSS Properties and Values L1 §1.1 — initial-value fallback when property not set
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@property --size { syntax: \"<length>\"; inherits: false; initial-value: 10px; }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.custom_props.get("--size").map(String::as_str), Some("10px"));
+    }
+
+    #[test]
+    fn svg_presentation_attributes_applied() {
+        // BUG-096: SVG presentation attributes (fill / stroke / stroke-width as
+        // plain XML attributes) must map onto the SVG paint properties. Without
+        // this, `<path fill="none" stroke="#e94560">` kept the default black fill
+        // and no stroke, so every <path> painted as a black blob.
+        let doc = lumen_html_parser::parse(
+            "<svg><path d='M 0 0 L 10 10' fill='none' stroke='#e94560' stroke-width='8'/></svg>",
+        );
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+
+        // Locate the <path> element wherever the HTML parser placed it.
+        fn find_path(doc: &Document, id: NodeId) -> Option<NodeId> {
+            if doc.get(id).element_name().is_some_and(|n| n.local.as_str() == "path") {
+                return Some(id);
+            }
+            for &c in &doc.get(id).children {
+                if let Some(found) = find_path(doc, c) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        let path = find_path(&doc, doc.root()).expect("path element present");
+
+        let style = compute_style(&doc, path, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert!(matches!(style.svg_fill, SvgPaint::None), "fill=none must map to SvgPaint::None");
+        assert!(
+            matches!(style.svg_stroke, SvgPaint::Color(c) if c.r == 233 && c.g == 69 && c.b == 96),
+            "stroke=#e94560 must map to its colour, got {:?}",
+            style.svg_stroke,
+        );
+        assert_eq!(style.svg_stroke_width, 8.0, "stroke-width attribute must apply");
+    }
+
+    #[test]
+    fn svg_presentation_attribute_overridden_by_css() {
+        // SVG 2 §6.4: a presentation attribute has the lowest author priority —
+        // any matching CSS rule wins. `style="stroke:#00ff00"` overrides stroke="red".
+        let doc = lumen_html_parser::parse(
+            "<svg><path d='M 0 0 L 10 10' stroke='red' style='stroke:#00ff00'/></svg>",
+        );
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        fn find_path(doc: &Document, id: NodeId) -> Option<NodeId> {
+            if doc.get(id).element_name().is_some_and(|n| n.local.as_str() == "path") {
+                return Some(id);
+            }
+            doc.get(id).children.iter().find_map(|&c| find_path(doc, c))
+        }
+        let path = find_path(&doc, doc.root()).expect("path element present");
+        let style = compute_style(&doc, path, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert!(
+            matches!(style.svg_stroke, SvgPaint::Color(c) if c.r == 0 && c.g == 255 && c.b == 0),
+            "inline CSS stroke must override the stroke presentation attribute, got {:?}",
+            style.svg_stroke,
+        );
+    }
+
+    #[test]
+    fn css_properties_values_api_no_initial_value() {
+        // CSS Properties and Values L1 — no initial-value means property stays empty
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@property --no-initial { syntax: \"<custom-ident>\"; inherits: true; }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert!(!style.custom_props.contains_key("--no-initial"));
+    }
+
+    #[test]
+    fn css_properties_values_api_declared_overrides_initial() {
+        // CSS Properties and Values L1 — declared value overrides initial-value
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@property --color-prop { syntax: \"<color>\"; inherits: false; initial-value: red; } div { --color-prop: green; }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.custom_props.get("--color-prop").map(String::as_str), Some("green"));
+    }
+
+    #[test]
+    fn css_properties_values_api_inherits_true() {
+        // CSS Properties and Values L1 — inherits: true property inherits from parent
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@property --inherit-prop { syntax: \"<custom-ident>\"; inherits: true; initial-value: initial-val; } body { --inherit-prop: parent-val; }"
+        );
+        let root = ComputedStyle::root();
+        let body = doc.body().unwrap();
+
+        let body_style = compute_style(&doc, body, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(body_style.custom_props.get("--inherit-prop").map(String::as_str), Some("parent-val"));
+
+        let div = doc.get(body).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &body_style, Size::new(800.0, 600.0), false);
+        assert_eq!(div_style.custom_props.get("--inherit-prop").map(String::as_str), Some("parent-val"));
+    }
+
+    #[test]
+    fn css_properties_values_api_multiple_properties() {
+        // CSS Properties and Values L1 — multiple @property rules
+        let sheet = lumen_css_parser::parse(
+            "@property --col1 { syntax: \"<color>\"; inherits: true; initial-value: red; } @property --col2 { syntax: \"<color>\"; inherits: false; initial-value: blue; }"
+        );
+        assert_eq!(sheet.properties.len(), 2);
+    }
+
+    #[test]
+    fn css_properties_values_api_universal_syntax() {
+        // CSS Properties and Values L1 — universal syntax "*" accepts any value
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@property --any-value { syntax: \"*\"; inherits: true; initial-value: calc(100% - 10px); }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        // Universal syntax should accept any value including calc()
+        assert_eq!(style.custom_props.get("--any-value").map(String::as_str), Some("calc(100% - 10px)"));
+    }
+
+    #[test]
+    fn css_properties_values_api_var_substitution_with_fallback() {
+        // CSS Properties and Values L1 — var() with fallback when initial-value not used
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@property --size { syntax: \"<length>\"; inherits: false; initial-value: 5px; } div { width: var(--size, 10px); }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+
+        // Compute style for div — should use initial-value for --size
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        // Custom property should be set via initial-value
+        assert_eq!(style.custom_props.get("--size").map(String::as_str), Some("5px"));
+    }
+
+    // CSS Grid auto-fill/auto-fit/fit-content parsing tests (B-3)
+    #[test]
+    fn grid_track_size_parse_fit_content() {
+        let parsed = GridTrackSize::parse_track_list("fit-content(200px)", false);
+        assert_eq!(parsed.len(), 1);
+        assert!(matches!(parsed[0], GridTrackSize::FitContent(_)));
+    }
+
+    #[test]
+    fn grid_track_size_parse_fit_content_percentage() {
+        let parsed = GridTrackSize::parse_track_list("fit-content(50%)", false);
+        assert_eq!(parsed.len(), 1);
+        assert!(matches!(parsed[0], GridTrackSize::FitContent(_)));
+    }
+
+    #[test]
+    fn grid_template_columns_auto_fill_parse() {
+        // `repeat(auto-fill, minmax(100px, 1fr))` should parse without errors
+        let parsed = GridTrackSize::parse_track_list("repeat(auto-fill, minmax(100px, 1fr))", false);
+        // Phase 1: auto-fill expands as single repeat unit (not yet full resolution)
+        assert!(!parsed.is_empty(), "parse_track_list should not return empty for auto-fill repeat");
+    }
+
+    #[test]
+    fn grid_template_columns_auto_fit_parse() {
+        // `repeat(auto-fit, minmax(80px, 1fr))` should parse without errors
+        let parsed = GridTrackSize::parse_track_list("repeat(auto-fit, minmax(80px, 1fr))", false);
+        assert!(!parsed.is_empty(), "parse_track_list should not return empty for auto-fit repeat");
+    }
+
+    #[test]
+    fn grid_template_columns_fixed_repeat_parse() {
+        // `repeat(3, 100px)` should parse to 3 copies of 100px
+        let parsed = GridTrackSize::parse_track_list("repeat(3, 100px)", false);
+        assert_eq!(parsed.len(), 3, "repeat(3, ...) should expand to 3 tracks");
+        for track in parsed {
+            assert!(matches!(track, GridTrackSize::Length(_)), "each track should be Length");
+        }
+    }
+
+    #[test]
+    fn grid_template_columns_mixed_repeat() {
+        // `100px repeat(2, 200px) 300px` should parse to [100px, 200px, 200px, 300px]
+        let parsed = GridTrackSize::parse_track_list("100px repeat(2, 200px) 300px", false);
+        assert_eq!(parsed.len(), 4, "mixed repeat should expand correctly");
+    }
+
+    #[test]
+    fn grid_template_columns_auto_fill_fit_content() {
+        // `repeat(auto-fill, fit-content(200px))` should parse
+        let parsed = GridTrackSize::parse_track_list("repeat(auto-fill, fit-content(200px))", false);
+        assert!(!parsed.is_empty(), "auto-fill with fit-content should parse");
+    }
+
+    #[test]
+    fn color_mix_srgb_equal_weights() {
+        // color-mix(in srgb, red, blue) → 50% blend → rgb(128, 0, 128)
+        let c = parse_color("color-mix(in srgb, red, blue)").expect("should parse");
+        assert!(c.r >= 127 && c.r <= 128, "r={}", c.r);
+        assert_eq!(c.g, 0, "g");
+        assert!(c.b >= 127 && c.b <= 128, "b={}", c.b);
+    }
+
+    #[test]
+    fn color_mix_with_percentages() {
+        // color-mix(in srgb, red 100%, blue 0%) → pure red
+        let c = parse_color("color-mix(in srgb, red 100%, blue 0%)").expect("should parse");
+        assert_eq!(c.r, 255);
+        assert_eq!(c.b, 0);
+    }
+
+    #[test]
+    fn color_mix_invalid_returns_none() {
+        // Missing "in" keyword → None
+        assert!(parse_color("color-mix(srgb, red, blue)").is_none());
+        // Only 2 comma-separated parts → None
+        assert!(parse_color("color-mix(in srgb, red)").is_none());
+    }
+
+    // ── gradient color-interpolation-method (CSS Images L4 §3.1) ──────────────
+
+    /// `extract_gradient_interpolation` strips the `in <space>` clause and
+    /// returns the parsed space, preserving an accompanying angle in any order.
+    #[test]
+    fn gradient_interp_extract_space_and_angle() {
+        let (clean, sp) = extract_gradient_interpolation("45deg in oklch");
+        assert_eq!(clean, "45deg");
+        assert_eq!(sp, Some(MixColorSpace::Oklch));
+
+        let (clean, sp) = extract_gradient_interpolation("in oklch 45deg");
+        assert_eq!(clean, "45deg");
+        assert_eq!(sp, Some(MixColorSpace::Oklch));
+
+        // Polar hue-interpolation keyword is parsed and dropped.
+        let (clean, sp) = extract_gradient_interpolation("to right in hsl longer hue");
+        assert_eq!(clean, "to right");
+        assert_eq!(sp, Some(MixColorSpace::Hsl));
+
+        // No interpolation clause — prelude untouched, no space.
+        let (clean, sp) = extract_gradient_interpolation("to bottom right");
+        assert_eq!(clean, "to bottom right");
+        assert_eq!(sp, None);
+    }
+
+    /// A plain `linear-gradient(red, blue)` (no `in <space>`) keeps exactly two
+    /// stops — the densify path must not fire without an interpolation method.
+    #[test]
+    fn gradient_srgb_default_not_densified() {
+        let g = parse_background_gradient("linear-gradient(red, blue)");
+        match g {
+            ParsedGradient::Linear { stops, angle_deg, .. } => {
+                assert_eq!(stops.len(), 2, "no interpolation method → no extra stops");
+                assert!((angle_deg - 180.0).abs() < 0.01, "default direction = to bottom");
+            }
+            other => panic!("expected linear, got {other:?}"),
+        }
+    }
+
+    /// `in oklab` subdivides the stop list, preserves the direction, and the
+    /// ~50% stop matches perceptual interpolation — distinct from the naive
+    /// sRGB blend (sRGB red→blue midpoint is rgb(127,0,127) with **no green**,
+    /// whereas oklab introduces a visible green component, ~rgb(140,83,162)).
+    #[test]
+    fn gradient_oklab_densifies_and_differs_from_srgb() {
+        let g = parse_background_gradient("linear-gradient(90deg in oklab, red, blue)");
+        let ParsedGradient::Linear { stops, angle_deg, .. } = g else {
+            panic!("expected linear");
+        };
+        assert!((angle_deg - 90.0).abs() < 0.01, "angle preserved past `in oklab`");
+        assert!(stops.len() > 2, "oklab interpolation should add intermediate stops");
+        // First/last endpoints unchanged.
+        assert_eq!((stops[0].color.r, stops[0].color.b), (255, 0), "starts red");
+        let last = stops.last().unwrap().color;
+        assert_eq!((last.r, last.b), (0, 255), "ends blue");
+        // Midpoint (~50%): oklab introduces green that the sRGB blend lacks.
+        let mid = stops
+            .iter()
+            .min_by(|a, b| {
+                let key = |s: &GradientStop| match s.position {
+                    Some(Length::Percent(v)) => (v - 50.0).abs(),
+                    _ => f32::INFINITY,
+                };
+                key(a).partial_cmp(&key(b)).unwrap()
+            })
+            .unwrap()
+            .color;
+        assert!(
+            mid.g > 20,
+            "oklab midpoint has visible green (sRGB would be 0), got g={}",
+            mid.g
+        );
+    }
+
+    /// Densification keeps resolved stop positions monotonic and within [0,100],
+    /// and an unknown interpolation space falls back gracefully (parses fine,
+    /// no densify because `MixColorSpace::from_css` rejects the token).
+    #[test]
+    fn gradient_interp_positions_and_unknown_space() {
+        let g = parse_background_gradient("radial-gradient(in oklab, red 10%, lime 40%, blue 90%)");
+        let ParsedGradient::Radial { stops, .. } = g else {
+            panic!("expected radial");
+        };
+        assert!(stops.len() > 3);
+        let mut prev = -1.0_f32;
+        for st in &stops {
+            if let Some(Length::Percent(p)) = st.position {
+                assert!(p >= prev - 0.01, "positions monotonic: {p} after {prev}");
+                assert!((0.0..=100.0).contains(&p), "position in range: {p}");
+                prev = p;
+            }
+        }
+
+        // Unknown space token: not stripped, treated as a (skipped) prelude
+        // token; stops parse normally and are not densified.
+        let g = parse_background_gradient("linear-gradient(in bogus, red, blue)");
+        if let ParsedGradient::Linear { stops, .. } = g {
+            assert_eq!(stops.len(), 2, "unknown space → no densify");
+        } else {
+            panic!("expected linear");
+        }
+    }
+
+    // ── color() predefined color spaces (CSS Color L4 §10) ─────────────────────
+
+    /// Parse a `color()` string through the cascade colour path and resolve to
+    /// a displayable sRGB `Color`.
+    fn color_fn_srgb(s: &str) -> Color {
+        match parse_css_color_legacy(s, false).expect("color() should parse") {
+            CssColor::Wide(f) => f.to_srgb_color(),
+            CssColor::Rgba(c) => c,
+            other => panic!("unexpected CssColor variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn color_fn_srgb_linear_extremes() {
+        let black = color_fn_srgb("color(srgb-linear 0 0 0)");
+        assert_eq!((black.r, black.g, black.b), (0, 0, 0));
+        let white = color_fn_srgb("color(srgb-linear 1 1 1)");
+        assert_eq!((white.r, white.g, white.b), (255, 255, 255));
+        // Linear 0.5 → gamma-encoded sRGB ≈ 0.735 → ~188.
+        let mid = color_fn_srgb("color(srgb-linear 0.5 0.5 0.5)");
+        assert!(mid.r >= 186 && mid.r <= 190, "mid grey r={}", mid.r);
+    }
+
+    #[test]
+    fn color_fn_xyz_d65_white_and_black() {
+        // D65 reference white in XYZ → sRGB white.
+        let white = color_fn_srgb("color(xyz-d65 0.9505 1.0 1.089)");
+        assert!(white.r >= 253 && white.g >= 253 && white.b >= 253, "white={white:?}");
+        // `xyz` is an alias for `xyz-d65`.
+        let black = color_fn_srgb("color(xyz 0 0 0)");
+        assert_eq!((black.r, black.g, black.b), (0, 0, 0));
+    }
+
+    #[test]
+    fn color_fn_xyz_d50_black() {
+        let black = color_fn_srgb("color(xyz-d50 0 0 0)");
+        assert_eq!((black.r, black.g, black.b), (0, 0, 0));
+    }
+
+    #[test]
+    fn color_fn_a98_and_prophoto_white() {
+        // Each space's (1,1,1) is its own reference white → maps to sRGB white.
+        let a98 = color_fn_srgb("color(a98-rgb 1 1 1)");
+        assert!(a98.r >= 252 && a98.g >= 252 && a98.b >= 252, "a98 white={a98:?}");
+        let pp = color_fn_srgb("color(prophoto-rgb 1 1 1)");
+        assert!(pp.r >= 250 && pp.g >= 250 && pp.b >= 250, "prophoto white={pp:?}");
+        let pp_black = color_fn_srgb("color(prophoto-rgb 0 0 0)");
+        assert_eq!((pp_black.r, pp_black.g, pp_black.b), (0, 0, 0));
+    }
+
+    #[test]
+    fn color_fn_predefined_alpha() {
+        let c = color_fn_srgb("color(srgb-linear 0 0 0 / 0.5)");
+        assert!(c.a >= 127 && c.a <= 128, "alpha={}", c.a);
+    }
+
+    #[test]
+    fn color_fn_unknown_space_is_none() {
+        // Unknown predefined space → whole color() is invalid.
+        assert!(parse_css_color_legacy("color(foobar 1 2 3)", false).is_none());
+    }
+
+    // ── ::selection pseudo-element ─────────────────────────────────────────────
+
+    fn make_selection_doc() -> (lumen_dom::Document, lumen_dom::NodeId) {
+        let mut doc = lumen_dom::Document::new();
+        let root = doc.root();
+        let div = doc.create_element(lumen_dom::QualName::html("div"));
+        doc.append_child(root, div);
+        (doc, div)
+    }
+
+    #[test]
+    fn selection_style_returns_some_when_rules_match() {
+        // ::selection rule with matching div selector
+        let css = "div::selection { background-color: #0078D4; color: white; }";
+        let sheet = lumen_css_parser::parse(css);
+        let (doc, node) = make_selection_doc();
+        let parent = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let result = compute_selection_style(&doc, node, &sheet, &parent, vp, false);
+        assert!(result.is_some(), "::selection rules should produce Some(style)");
+        let s = result.unwrap();
+        // background-color #0078D4 = rgb(0, 120, 212)
+        if let Some(CssColor::Rgba(bg)) = s.background_color {
+            assert_eq!(bg.r, 0,   "r should be 0");
+            assert_eq!(bg.g, 120, "g should be 120");
+            assert_eq!(bg.b, 212, "b should be 212");
+        } else {
+            panic!("background_color should be CssColor::Rgba, got {:?}", s.background_color);
+        }
+    }
+
+    #[test]
+    fn selection_style_returns_none_when_no_rules() {
+        // No ::selection rules at all → None
+        let sheet = lumen_css_parser::parse("div { color: red; }");
+        let (doc, node) = make_selection_doc();
+        let parent = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let result = compute_selection_style(&doc, node, &sheet, &parent, vp, false);
+        assert!(result.is_none(), "no ::selection rules → None");
+    }
+
+    #[test]
+    fn selection_style_no_content_required() {
+        // ::selection without 'content' property should still return Some
+        let sheet = lumen_css_parser::parse("div::selection { color: green; }");
+        let (doc, node) = make_selection_doc();
+        let parent = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let result = compute_selection_style(&doc, node, &sheet, &parent, vp, false);
+        assert!(result.is_some(), "::selection without content should still return Some");
+        let s = result.unwrap();
+        // color: green = rgb(0, 128, 0)
+        assert_eq!(s.color.r, 0,   "color red should be 0");
+        assert_eq!(s.color.g, 128, "color green should be 128");
+    }
+
+    #[test]
+    fn selection_style_inherits_font_from_parent() {
+        // ::selection should inherit font-size from originating element
+        let sheet = lumen_css_parser::parse("div::selection { background-color: yellow; }");
+        let (doc, node) = make_selection_doc();
+        let mut parent = ComputedStyle::root();
+        parent.font_size = 24.0;
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let result = compute_selection_style(&doc, node, &sheet, &parent, vp, false);
+        assert!(result.is_some());
+        let s = result.unwrap();
+        assert!((s.font_size - 24.0).abs() < 0.01, "font-size should inherit: got {}", s.font_size);
+    }
+
+    // === CSS Values L4 §7.7 attr() typed substitution ===
+
+    fn make_doc_with_div(html: &str) -> (lumen_dom::Document, lumen_dom::NodeId) {
+        let doc = lumen_html_parser::parse(html);
+        let body = doc.body().expect("body");
+        let node = doc.get(body).children[0];
+        (doc, node)
+    }
+
+    #[test]
+    fn attr_typed_width_px() {
+        // attr(data-w px) with data-w="200" should set width to 200px.
+        let (doc, node) = make_doc_with_div(r#"<div data-w="200"></div>"#);
+        let sheet = lumen_css_parser::parse("div { width: attr(data-w px); }");
+        let parent = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let style = compute_style(&doc, node, &sheet, &parent, vp, false);
+        assert_eq!(style.width, Some(Length::Px(200.0)), "width should be 200px via attr(data-w px)");
+    }
+
+    #[test]
+    fn attr_typed_fallback_when_absent() {
+        // attr(data-missing px, 50px) — attribute absent, fallback 50px used.
+        let (doc, node) = make_doc_with_div("<div></div>");
+        let sheet = lumen_css_parser::parse("div { width: attr(data-missing px, 50px); }");
+        let parent = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let style = compute_style(&doc, node, &sheet, &parent, vp, false);
+        assert_eq!(style.width, Some(Length::Px(50.0)), "fallback 50px should apply when attr absent");
+    }
+
+    #[test]
+    fn attr_typed_absent_no_fallback_skipped() {
+        // attr(data-missing px) with no fallback — declaration invalid, width stays None.
+        let (doc, node) = make_doc_with_div("<div></div>");
+        let sheet = lumen_css_parser::parse("div { width: attr(data-missing px); }");
+        let parent = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let style = compute_style(&doc, node, &sheet, &parent, vp, false);
+        assert_eq!(style.width, None, "absent attr without fallback should leave width at None");
+    }
+
+    #[test]
+    fn attr_typed_color() {
+        // attr(data-bg color) — attribute value used as CSS color for background-color.
+        let (doc, node) = make_doc_with_div(r#"<div data-bg="red"></div>"#);
+        let sheet = lumen_css_parser::parse("div { background-color: attr(data-bg color); }");
+        let parent = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let style = compute_style(&doc, node, &sheet, &parent, vp, false);
+        // red = rgb(255, 0, 0)
+        let bg = style.background_color.expect("background-color should be set via attr(data-bg color)");
+        let CssColor::Rgba(c) = bg else { panic!("expected Rgba, got {:?}", bg) };
+        assert_eq!(c.r, 255, "red component");
+        assert_eq!(c.g, 0,   "green component");
+        assert_eq!(c.b, 0,   "blue component");
+    }
+
+}
+
+/// Regression: indexed compute_style produces identical results to brute-force.
+///
+/// These tests verify that the `RuleIndex` optimisation in `compute_style`
+/// does not change which declarations are applied or their cascade order.
+#[cfg(test)]
+mod rule_index_regression {
+    use super::*;
+    use lumen_core::geom::Size;
+
+    const VP: Size = Size { width: 800.0, height: 600.0 };
+
+    fn first_child_style(html: &str, css: &str) -> ComputedStyle {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let child = doc.get(body).children.first().copied().expect("child");
+        compute_style(&doc, child, &sheet, &root, VP, false)
+    }
+
+    #[test]
+    fn id_selector_applies_correctly() {
+        let s = first_child_style(r#"<div id="hero"></div>"#, "#hero { color: red; }");
+        // `color` field on ComputedStyle is Color (plain struct, not CssColor)
+        assert_eq!((s.color.r, s.color.g, s.color.b), (255, 0, 0));
+    }
+
+    #[test]
+    fn class_selector_applies_correctly() {
+        let s = first_child_style(
+            r#"<div class="card active"></div>"#,
+            ".card { width: 200px; } .active { background-color: blue; }",
+        );
+        assert_eq!(s.width, Some(Length::Px(200.0)));
+        let bg = s.background_color.expect("bg").resolve(s.color);
+        assert_eq!((bg.r, bg.g, bg.b), (0, 0, 255));
+    }
+
+    #[test]
+    fn type_selector_applies_correctly() {
+        let s = first_child_style("<p></p>", "p { color: green; }");
+        assert_eq!((s.color.r, s.color.g, s.color.b), (0, 128, 0));
+    }
+
+    #[test]
+    fn descendant_selector_applies_via_index() {
+        // `.card .title` — subject is `.title`; only `.title` nodes are candidates.
+        let doc = lumen_html_parser::parse(r#"<div class="card"><span class="title"></span></div>"#);
+        let sheet = lumen_css_parser::parse(".card .title { color: red; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().unwrap();
+        let card = doc.get(body).children[0];
+        let title = doc.get(card).children[0];
+        // `.card` alone must NOT pick up the rule (no .title class)
+        let card_style = compute_style(&doc, card, &sheet, &root, VP, false);
+        assert_ne!((card_style.color.r, card_style.color.g, card_style.color.b), (255, 0, 0),
+            "card must not pick up .card .title rule");
+        // `.title` inside `.card` MUST pick up the rule
+        let title_style = compute_style(&doc, title, &sheet, &root, VP, false);
+        assert_eq!((title_style.color.r, title_style.color.g, title_style.color.b), (255, 0, 0),
+            "title inside card must match .card .title");
+    }
+
+    #[test]
+    fn multi_class_compound_not_false_positive() {
+        // `.a.b` must match only nodes with BOTH classes; node with only `.a` must not match.
+        let doc = lumen_html_parser::parse(r#"<div class="a"></div>"#);
+        let sheet = lumen_css_parser::parse(".a.b { color: red; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().unwrap();
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert_ne!((s.color.r, s.color.g, s.color.b), (255, 0, 0),
+            "node with only .a must not match .a.b");
+    }
+
+    #[test]
+    fn universal_applies_to_all() {
+        let s = first_child_style("<span></span>", "* { color: blue; }");
+        assert_eq!((s.color.r, s.color.g, s.color.b), (0, 0, 255));
+    }
+
+    #[test]
+    fn specificity_order_preserved() {
+        // `.card` (0,1,0) overrides `div` (0,0,1).
+        let s = first_child_style(
+            r#"<div class="card"></div>"#,
+            "div { color: blue; } .card { color: red; }",
+        );
+        assert_eq!((s.color.r, s.color.g, s.color.b), (255, 0, 0), ".card must win over div");
+    }
+
+    #[test]
+    fn source_order_preserved_within_same_specificity() {
+        // Two class rules, same specificity → later wins.
+        let s = first_child_style(
+            r#"<div class="a b"></div>"#,
+            ".a { color: red; } .b { color: blue; }",
+        );
+        assert_eq!((s.color.r, s.color.g, s.color.b), (0, 0, 255),
+            "later same-specificity rule must win");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shadow DOM pseudo-class / pseudo-element tests (CSS Scoping L1 §6.1-6.2)
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod shadow_dom_selectors {
+    use super::*;
+    use lumen_core::geom::Size;
+    use lumen_dom::ShadowRootMode;
+
+    const VP: Size = Size { width: 800.0, height: 600.0 };
+
+    /// Build a minimal Document: `<div id="host">` as the shadow host with an
+    /// attached open shadow root. Returned tuple: (doc, host_id).
+    fn make_shadow_host() -> (lumen_dom::Document, NodeId) {
+        let mut doc = lumen_html_parser::parse(r#"<div id="host"></div>"#);
+        let body = doc.body().expect("body");
+        let host = doc.get(body).children[0];
+        doc.attach_shadow(host, ShadowRootMode::Open);
+        (doc, host)
+    }
+
+    /// Build a Document with shadow host + one light-tree child `<span class="item">`.
+    fn make_shadow_host_with_slotted() -> (lumen_dom::Document, NodeId, NodeId) {
+        let mut doc = lumen_html_parser::parse(
+            r#"<div id="host"><span class="item"></span></div>"#,
+        );
+        let body = doc.body().expect("body");
+        let host = doc.get(body).children[0];
+        let slotted = doc.get(host).children[0];
+        doc.attach_shadow(host, ShadowRootMode::Open);
+        (doc, host, slotted)
+    }
+
+    #[test]
+    fn host_simple_matches_shadow_host() {
+        // `:host { background-color: red; }` must apply to the shadow host element.
+        let (doc, host) = make_shadow_host();
+        let sheet = lumen_css_parser::parse(":host { background-color: red; }");
+        let root = ComputedStyle::root();
+        let s = compute_style(&doc, host, &sheet, &root, VP, false);
+        let bg = s.background_color.expect("background-color set").resolve(s.color);
+        assert_eq!((bg.r, bg.g, bg.b), (255, 0, 0), ":host must apply to shadow host");
+    }
+
+    #[test]
+    fn host_with_selector_matches_when_host_satisfies_inner() {
+        // `:host(#host) { background-color: blue; }` — host has id="host", must match.
+        let (doc, host) = make_shadow_host();
+        let sheet = lumen_css_parser::parse(":host(#host) { background-color: blue; }");
+        let root = ComputedStyle::root();
+        let s = compute_style(&doc, host, &sheet, &root, VP, false);
+        let bg = s.background_color.expect("background-color set").resolve(s.color);
+        assert_eq!((bg.r, bg.g, bg.b), (0, 0, 255), ":host(#host) must match host with id=host");
+    }
+
+    #[test]
+    fn host_with_selector_does_not_match_when_inner_fails() {
+        // `:host(.missing) { background-color: red; }` — host has no class "missing".
+        let (doc, host) = make_shadow_host();
+        let sheet = lumen_css_parser::parse(":host(.missing) { background-color: red; }");
+        let root = ComputedStyle::root();
+        let s = compute_style(&doc, host, &sheet, &root, VP, false);
+        assert!(s.background_color.is_none(), ":host(.missing) must NOT match when class absent");
+    }
+
+    #[test]
+    fn slotted_applies_to_light_tree_child_of_shadow_host() {
+        // `::slotted(.item) { color: green; }` must apply to the slotted element.
+        let (doc, _host, slotted) = make_shadow_host_with_slotted();
+        let sheet = lumen_css_parser::parse("::slotted(.item) { color: green; }");
+        let root = ComputedStyle::root();
+        let s = compute_style(&doc, slotted, &sheet, &root, VP, false);
+        assert_eq!((s.color.r, s.color.g, s.color.b), (0, 128, 0),
+            "::slotted(.item) must apply to light-tree child");
+    }
+
+    #[test]
+    fn slotted_does_not_apply_to_non_slotted_element() {
+        // Regular `<span class="item">` not inside a shadow host must not match `::slotted`.
+        let doc = lumen_html_parser::parse(r#"<span class="item"></span>"#);
+        let sheet = lumen_css_parser::parse("::slotted(.item) { color: green; }");
+        let body = doc.body().expect("body");
+        let span = doc.get(body).children[0];
+        let root = ComputedStyle::root();
+        let s = compute_style(&doc, span, &sheet, &root, VP, false);
+        // Default text color is black (0,0,0).
+        assert_ne!((s.color.r, s.color.g, s.color.b), (0, 128, 0),
+            "::slotted must not apply to non-slotted span");
+    }
+
+    #[test]
+    fn slotted_inner_selector_filters_correctly() {
+        // `::slotted(.other)` must NOT apply to `<span class="item">` (wrong class).
+        let (doc, _host, slotted) = make_shadow_host_with_slotted();
+        let sheet = lumen_css_parser::parse("::slotted(.other) { color: red; }");
+        let root = ComputedStyle::root();
+        let s = compute_style(&doc, slotted, &sheet, &root, VP, false);
+        // Should retain default color, not red.
+        assert_ne!((s.color.r, s.color.g, s.color.b), (255, 0, 0),
+            "::slotted(.other) must not match span with class=item");
+    }
+}
+
+#[cfg(test)]
+mod gap_rule_tests {
+    use super::*;
+    use lumen_core::geom::Size;
+
+    const VP: Size = Size { width: 800.0, height: 600.0 };
+
+    fn parse_gap_rule(css: &str) -> ComputedStyle {
+        let doc = lumen_html_parser::parse(r#"<div></div>"#);
+        let sheet = lumen_css_parser::parse(&format!("div {{ display: flex; {} }}", css));
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let child = doc.get(body).children.first().copied().expect("div");
+        compute_style(&doc, child, &sheet, &root, VP, false)
+    }
+
+    #[test]
+    fn gap_rule_width_parses() {
+        let s = parse_gap_rule("gap-rule-width: 4px;");
+        assert!((s.gap_rule_width - 4.0).abs() < 0.01, "gap_rule_width={}", s.gap_rule_width);
+    }
+
+    #[test]
+    fn gap_rule_style_solid_parses() {
+        let s = parse_gap_rule("gap-rule-style: solid;");
+        assert_eq!(s.gap_rule_style, BorderStyle::Solid);
+    }
+
+    #[test]
+    fn gap_rule_color_parses() {
+        let s = parse_gap_rule("gap-rule-color: #ff0000;");
+        if let CssColor::Rgba(c) = s.gap_rule_color {
+            assert_eq!((c.r, c.g, c.b), (255, 0, 0));
+        } else {
+            panic!("expected Rgba, got {:?}", s.gap_rule_color);
+        }
+    }
+
+    #[test]
+    fn gap_rule_shorthand_parses_all_components() {
+        let s = parse_gap_rule("gap-rule: 3px dashed blue;");
+        assert!((s.gap_rule_width - 3.0).abs() < 0.01, "width={}", s.gap_rule_width);
+        assert_eq!(s.gap_rule_style, BorderStyle::Dashed);
+        if let CssColor::Rgba(c) = s.gap_rule_color {
+            assert_eq!((c.r, c.g, c.b), (0, 0, 255));
+        } else {
+            panic!("expected Rgba color for gap-rule shorthand");
+        }
+    }
+
+    #[test]
+    fn gap_rule_not_inherited() {
+        // gap-rule-* are non-inherited; child div should get default 0/None/CurrentColor.
+        let doc = lumen_html_parser::parse(r#"<div><span></span></div>"#);
+        let sheet = lumen_css_parser::parse("div { gap-rule-width: 5px; gap-rule-style: solid; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children.first().copied().expect("div");
+        let span = doc.get(div).children.first().copied().expect("span");
+        let div_style = compute_style(&doc, div, &sheet, &root, VP, false);
+        let span_style = compute_style(&doc, span, &sheet, &div_style, VP, false);
+        assert!((div_style.gap_rule_width - 5.0).abs() < 0.01);
+        assert_eq!(span_style.gap_rule_width, 0.0, "gap_rule_width must not be inherited");
+        assert_eq!(span_style.gap_rule_style, BorderStyle::None, "gap_rule_style must not be inherited");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// masonry-auto-flow tests (CSS Masonry Layout §9)
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod masonry_auto_flow_tests {
+    use super::*;
+
+    #[test]
+    fn masonry_auto_flow_parse_definite_first() {
+        assert_eq!(MasonryAutoFlow::parse("definite-first"), Some(MasonryAutoFlow::DefiniteFirst));
+    }
+
+    #[test]
+    fn masonry_auto_flow_parse_next() {
+        assert_eq!(MasonryAutoFlow::parse("next"), Some(MasonryAutoFlow::Next));
+    }
+
+    #[test]
+    fn masonry_auto_flow_parse_ordered() {
+        assert_eq!(MasonryAutoFlow::parse("ordered"), Some(MasonryAutoFlow::Ordered));
+    }
+
+    #[test]
+    fn masonry_auto_flow_parse_unknown_is_none() {
+        assert_eq!(MasonryAutoFlow::parse("dense"), None);
+        assert_eq!(MasonryAutoFlow::parse(""), None);
+    }
+
+    #[test]
+    fn masonry_auto_flow_default_is_definite_first() {
+        assert_eq!(MasonryAutoFlow::default(), MasonryAutoFlow::DefiniteFirst);
+    }
+
+    #[test]
+    fn masonry_auto_flow_root_style_default() {
+        let s = ComputedStyle::root();
+        assert_eq!(s.masonry_auto_flow, MasonryAutoFlow::DefiniteFirst);
+    }
+
+    #[test]
+    fn masonry_auto_flow_apply_declaration() {
+        let doc = lumen_html_parser::parse(r#"<div></div>"#);
+        let sheet = lumen_css_parser::parse("div { masonry-auto-flow: ordered; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, lumen_core::geom::Size { width: 800.0, height: 600.0 }, false);
+        assert_eq!(style.masonry_auto_flow, MasonryAutoFlow::Ordered);
+    }
+
+    #[test]
+    fn masonry_auto_flow_not_inherited() {
+        let doc = lumen_html_parser::parse(r#"<div><span></span></div>"#);
+        let sheet = lumen_css_parser::parse("div { masonry-auto-flow: next; }");
+        let root = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 800.0, height: 600.0 };
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, vp, false);
+        let span_style = compute_style(&doc, span, &sheet, &div_style, vp, false);
+        assert_eq!(div_style.masonry_auto_flow, MasonryAutoFlow::Next);
+        assert_eq!(span_style.masonry_auto_flow, MasonryAutoFlow::DefiniteFirst, "masonry_auto_flow must not be inherited");
+    }
+
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CSS Anchor Positioning L1 tests
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod anchor_positioning_tests {
+    use super::*;
+    use crate::anchor::InsetAreaKeyword;
+    use lumen_core::geom::Size;
+
+    const VP: Size = Size { width: 800.0, height: 600.0 };
+
+    fn first_div_style(html: &str, css: &str) -> ComputedStyle {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let child = doc.get(body).children[0];
+        compute_style(&doc, child, &sheet, &root, VP, false)
+    }
+
+    #[test]
+    fn anchor_name_parsed() {
+        let s = first_div_style("<div></div>", "div { anchor-name: --btn; }");
+        assert_eq!(s.anchor_name.as_deref(), Some("--btn"));
+    }
+
+    #[test]
+    fn anchor_name_none_clears() {
+        let s = first_div_style("<div></div>", "div { anchor-name: none; }");
+        assert!(s.anchor_name.is_none());
+    }
+
+    #[test]
+    fn position_anchor_parsed() {
+        let s = first_div_style(
+            "<div></div>",
+            "div { position: absolute; position-anchor: --tooltip-anchor; }",
+        );
+        assert_eq!(s.position_anchor.as_deref(), Some("--tooltip-anchor"));
+    }
+
+    #[test]
+    fn inset_area_two_keywords() {
+        let s = first_div_style(
+            "<div></div>",
+            "div { position: absolute; inset-area: end start; }",
+        );
+        assert_eq!(s.inset_area_row, InsetAreaKeyword::End);
+        assert_eq!(s.inset_area_col, InsetAreaKeyword::Start);
+    }
+
+    #[test]
+    fn inset_area_single_keyword_sets_both_axes() {
+        let s = first_div_style(
+            "<div></div>",
+            "div { position: absolute; inset-area: center; }",
+        );
+        assert_eq!(s.inset_area_row, InsetAreaKeyword::Center);
+        assert_eq!(s.inset_area_col, InsetAreaKeyword::Center);
+    }
+
+    #[test]
+    fn position_area_alias_parsed() {
+        let s = first_div_style(
+            "<div></div>",
+            "div { position: absolute; position-area: start end; }",
+        );
+        assert_eq!(s.inset_area_row, InsetAreaKeyword::Start);
+        assert_eq!(s.inset_area_col, InsetAreaKeyword::End);
+    }
+
+    #[test]
+    fn anchor_name_not_inherited() {
+        let doc = lumen_html_parser::parse(r#"<div><span></span></div>"#);
+        let sheet = lumen_css_parser::parse("div { anchor-name: --parent; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, VP, false);
+        let span_style = compute_style(&doc, span, &sheet, &div_style, VP, false);
+        assert_eq!(div_style.anchor_name.as_deref(), Some("--parent"));
+        assert!(span_style.anchor_name.is_none(), "anchor-name must not be inherited");
+    }
+
+    // ── CSS View Transitions L1 ───────────────────────────────────────────────
+
+    #[test]
+    fn view_transition_name_parsed() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { view-transition-name: hero; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert_eq!(s.view_transition_name.as_deref(), Some("hero"));
+    }
+
+    #[test]
+    fn view_transition_name_none_clears() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { view-transition-name: none; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert!(s.view_transition_name.is_none());
+    }
+
+    #[test]
+    fn view_transition_name_default_is_none() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert!(s.view_transition_name.is_none());
+    }
+
+    #[test]
+    fn view_transition_name_not_inherited() {
+        let doc = lumen_html_parser::parse(r#"<div><span></span></div>"#);
+        let sheet = lumen_css_parser::parse("div { view-transition-name: parent-el; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, VP, false);
+        let span_style = compute_style(&doc, span, &sheet, &div_style, VP, false);
+        assert_eq!(div_style.view_transition_name.as_deref(), Some("parent-el"));
+        assert!(span_style.view_transition_name.is_none(), "view-transition-name must not be inherited");
+    }
+
+    #[test]
+    fn view_transition_name_dashed_ident() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { view-transition-name: --my-element; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert_eq!(s.view_transition_name.as_deref(), Some("--my-element"));
+    }
+
+    // ── CSS Scroll-Driven Animations ─────────────────────────────────────────
+
+    #[test]
+    fn scroll_timeline_name_parsed() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { scroll-timeline-name: --my-tl; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert_eq!(s.scroll_timeline_name.as_deref(), Some("--my-tl"));
+        assert_eq!(s.scroll_timeline_axis, ScrollAxis::Block);
+    }
+
+    #[test]
+    fn scroll_timeline_axis_inline() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "div { scroll-timeline-name: --t; scroll-timeline-axis: inline; }",
+        );
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert_eq!(s.scroll_timeline_axis, ScrollAxis::Inline);
+    }
+
+    #[test]
+    fn scroll_timeline_shorthand() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { scroll-timeline: --tl x; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert_eq!(s.scroll_timeline_name.as_deref(), Some("--tl"));
+        assert_eq!(s.scroll_timeline_axis, ScrollAxis::X);
+    }
+
+    #[test]
+    fn view_timeline_shorthand() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { view-timeline: --vt y; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert_eq!(s.view_timeline_name.as_deref(), Some("--vt"));
+        assert_eq!(s.view_timeline_axis, ScrollAxis::Y);
+    }
+
+    #[test]
+    fn animation_timeline_auto() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { animation-timeline: auto; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert_eq!(s.animation_timelines, vec![AnimationTimeline::Auto]);
+    }
+
+    #[test]
+    fn animation_timeline_scroll_fn() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { animation-timeline: scroll(inline root); }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert_eq!(
+            s.animation_timelines,
+            vec![AnimationTimeline::Scroll { axis: ScrollAxis::Inline, nearest: false }]
+        );
+    }
+
+    #[test]
+    fn animation_timeline_view_fn() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { animation-timeline: view(inline); }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert_eq!(
+            s.animation_timelines,
+            vec![AnimationTimeline::View { axis: ScrollAxis::Inline }]
+        );
+    }
+
+    #[test]
+    fn animation_timeline_named() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { animation-timeline: --my-scroll; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let div = doc.get(body).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, VP, false);
+        assert_eq!(
+            s.animation_timelines,
+            vec![AnimationTimeline::Named("--my-scroll".into())]
+        );
+    }
+
+    // ── border-collapse ────────────────────────────────────────────────────────
+
+    #[test]
+    fn p4_border_collapse_default_is_separate() {
+        let doc = lumen_html_parser::parse("<table></table>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let s = compute_style(&doc, table, &sheet, &root, VP, false);
+        assert_eq!(s.border_collapse, BorderCollapse::Separate);
+    }
+
+    #[test]
+    fn p4_border_collapse_parse_collapse() {
+        let doc = lumen_html_parser::parse("<table></table>");
+        let sheet = lumen_css_parser::parse("table { border-collapse: collapse; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let s = compute_style(&doc, table, &sheet, &root, VP, false);
+        assert_eq!(s.border_collapse, BorderCollapse::Collapse);
+    }
+
+    #[test]
+    fn p4_border_collapse_parse_separate_explicit() {
+        let doc = lumen_html_parser::parse("<table></table>");
+        let sheet = lumen_css_parser::parse("table { border-collapse: separate; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let s = compute_style(&doc, table, &sheet, &root, VP, false);
+        assert_eq!(s.border_collapse, BorderCollapse::Separate);
+    }
+
+    #[test]
+    fn p4_border_collapse_inherited_by_cells() {
+        // border-collapse is inherited: td should see the table's collapse value.
+        // Must walk the ancestor chain: root → body → table → (tbody) → tr → td.
+        let doc = lumen_html_parser::parse("<table><tr><td>x</td></tr></table>");
+        let sheet = lumen_css_parser::parse("table { border-collapse: collapse; }");
+        let root_style = ComputedStyle::root();
+        let body_node = doc.body().expect("body");
+        let body_style = compute_style(&doc, body_node, &sheet, &root_style, VP, false);
+        // Walk children to find the table, then tbody/tr, then td.
+        fn find_tag(doc: &lumen_dom::Document, parent: lumen_dom::NodeId, tag_name: &str) -> Option<lumen_dom::NodeId> {
+            for &c in &doc.get(parent).children {
+                if let lumen_dom::NodeData::Element { name, .. } = &doc.get(c).data
+                    && name.local == tag_name
+                {
+                    return Some(c);
+                }
+                if let Some(found) = find_tag(doc, c, tag_name) { return Some(found); }
+            }
+            None
+        }
+        let table = find_tag(&doc, body_node, "table").expect("table");
+        let table_style = compute_style(&doc, table, &sheet, &body_style, VP, false);
+        assert_eq!(table_style.border_collapse, BorderCollapse::Collapse, "table should have collapse");
+        // TD inherits via tr; tr uses table_style (or intermediate row-group).
+        let tr = find_tag(&doc, table, "tr").expect("tr");
+        let tr_style = compute_style(&doc, tr, &sheet, &table_style, VP, false);
+        let td = find_tag(&doc, tr, "td").expect("td");
+        let td_style = compute_style(&doc, td, &sheet, &tr_style, VP, false);
+        assert_eq!(td_style.border_collapse, BorderCollapse::Collapse, "td inherits collapse from table");
+    }
+
+    #[test]
+    fn p4_border_collapse_initial_via_keyword() {
+        let doc = lumen_html_parser::parse("<table></table>");
+        let sheet = lumen_css_parser::parse(
+            "table { border-collapse: collapse; } table { border-collapse: initial; }",
+        );
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let s = compute_style(&doc, table, &sheet, &root, VP, false);
+        assert_eq!(s.border_collapse, BorderCollapse::Separate, "initial resets to Separate");
+    }
+
+    // ── empty-cells ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn p4_empty_cells_default_is_show() {
+        let doc = lumen_html_parser::parse("<table></table>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let s = compute_style(&doc, table, &sheet, &root, VP, false);
+        assert_eq!(s.empty_cells, EmptyCells::Show);
+    }
+
+    #[test]
+    fn p4_empty_cells_parse_hide() {
+        let doc = lumen_html_parser::parse("<table></table>");
+        let sheet = lumen_css_parser::parse("table { empty-cells: hide; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let s = compute_style(&doc, table, &sheet, &root, VP, false);
+        assert_eq!(s.empty_cells, EmptyCells::Hide);
+    }
+
+    #[test]
+    fn p4_empty_cells_parse_show_explicit() {
+        let doc = lumen_html_parser::parse("<table></table>");
+        let sheet = lumen_css_parser::parse("table { empty-cells: show; }");
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let s = compute_style(&doc, table, &sheet, &root, VP, false);
+        assert_eq!(s.empty_cells, EmptyCells::Show);
+    }
+
+    #[test]
+    fn p4_empty_cells_inherited_by_cells() {
+        // empty-cells is inherited: td should see the table's hide value.
+        let doc = lumen_html_parser::parse("<table><tr><td>x</td></tr></table>");
+        let sheet = lumen_css_parser::parse("table { empty-cells: hide; }");
+        let root_style = ComputedStyle::root();
+        let body_node = doc.body().expect("body");
+        let body_style = compute_style(&doc, body_node, &sheet, &root_style, VP, false);
+        fn find_tag(doc: &lumen_dom::Document, parent: lumen_dom::NodeId, tag_name: &str) -> Option<lumen_dom::NodeId> {
+            for &c in &doc.get(parent).children {
+                if let lumen_dom::NodeData::Element { name, .. } = &doc.get(c).data
+                    && name.local == tag_name
+                {
+                    return Some(c);
+                }
+                if let Some(found) = find_tag(doc, c, tag_name) { return Some(found); }
+            }
+            None
+        }
+        let table = find_tag(&doc, body_node, "table").expect("table");
+        let table_style = compute_style(&doc, table, &sheet, &body_style, VP, false);
+        let tr = find_tag(&doc, table, "tr").expect("tr");
+        let tr_style = compute_style(&doc, tr, &sheet, &table_style, VP, false);
+        let td = find_tag(&doc, tr, "td").expect("td");
+        let td_style = compute_style(&doc, td, &sheet, &tr_style, VP, false);
+        assert_eq!(td_style.empty_cells, EmptyCells::Hide, "td inherits hide from table");
+    }
+
+    #[test]
+    fn p4_empty_cells_initial_via_keyword() {
+        let doc = lumen_html_parser::parse("<table></table>");
+        let sheet = lumen_css_parser::parse(
+            "table { empty-cells: hide; } table { empty-cells: initial; }",
+        );
+        let root = ComputedStyle::root();
+        let body = doc.body().expect("body");
+        let table = doc.get(body).children[0];
+        let s = compute_style(&doc, table, &sheet, &root, VP, false);
+        assert_eq!(s.empty_cells, EmptyCells::Show, "initial resets to Show");
+    }
+
+    #[test]
+    fn p4_empty_cells_keyword_parse() {
+        assert_eq!(EmptyCells::parse("show"), Some(EmptyCells::Show));
+        assert_eq!(EmptyCells::parse("hide"), Some(EmptyCells::Hide));
+        assert_eq!(EmptyCells::parse("bogus"), None);
+    }
+
 }

@@ -250,6 +250,7 @@ mod tests {
             padding_right: 0.0,
             is_element_box: false,
             img_src: None,
+            img_is_lazy: false,
             is_first_line: true,
             source_node,
             source_char_offset,
@@ -265,11 +266,13 @@ mod tests {
             kind: BoxKind::InlineRun {
                 segments: vec![],
                 lines,
+                first_line_style: None,
             },
             children: vec![],
             col_span: 1,
             row_span: 1,
             svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+            dirty: Default::default(),
         }
     }
 

@@ -23,6 +23,7 @@
 //! device_memory       = 8
 //! platform            = "Win32"
 //! languages           = "en-US,en"      # comma-separated; first entry = navigator.language
+//! doh_url             = "https://cloudflare-dns.com/dns-query"  # DNS over HTTPS resolver (optional)
 //! ```
 //!
 //! Applied at startup: [`FingerprintProfile::install_navigator`] pushes the
@@ -30,7 +31,8 @@
 //! [`FingerprintProfile::apply_http`] stamps the HTTP/TLS fingerprint onto an
 //! [`HttpClient`].
 
-use lumen_network::{HttpClient, HttpProfile, TlsProfile};
+use lumen_core::url::Url;
+use lumen_network::{HttpClient, HttpProfile, Socks5Proxy, TlsProfile};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -81,6 +83,23 @@ pub struct FingerprintProfile {
     pub color_depth: u32,
     /// `Date.prototype.getTimezoneOffset()` value in minutes (+ = behind UTC).
     pub timezone_offset: i32,
+    /// DNS over HTTPS resolver URL. `None` disables DoH; falls back to system DNS.
+    /// Example: `https://cloudflare-dns.com/dns-query`.
+    pub doh_url: Option<String>,
+    /// HTTP proxy URL. `None` means no proxy; goes directly to target.
+    /// Example: `http://proxy.local:3128` or `http://user:pass@proxy.local:8080`.
+    pub proxy: Option<String>,
+    /// SOCKS5 proxy URL for tunnelling all connections (RFC 1928).
+    /// Format: `socks5://[user:pass@]host:port`.
+    /// `None` with `http_profile = TorBrowser` auto-wires `socks5://127.0.0.1:9050`
+    /// (local Tor daemon default); set explicitly to override the address or
+    /// to use SOCKS5 without the TorBrowser HTTP fingerprint.
+    pub socks5_proxy: Option<String>,
+    /// When `true`, no cookies, localStorage, or session data are written to
+    /// disk.  All storage is in-memory and discarded when the session ends.
+    /// Automatically `true` when `http_profile = TorBrowser` and not
+    /// overridden explicitly.
+    pub no_persistent_state: bool,
 }
 
 impl Default for FingerprintProfile {
@@ -98,6 +117,10 @@ impl Default for FingerprintProfile {
             screen_height: 1080,
             color_depth: 24,
             timezone_offset: 0,
+            doh_url: None,
+            proxy: None,
+            socks5_proxy: None,
+            no_persistent_state: false,
         }
     }
 }
@@ -112,18 +135,30 @@ impl FingerprintProfile {
     }
 
     /// Build the JS-side [`lumen_js::NavigatorProfile`] from this config.
+    ///
+    /// When `http_profile == TorBrowser`, screen is pinned to 1000×900 and
+    /// `platform` to `"Win32"` to match the Tor Browser uniform fingerprint
+    /// (anti-fingerprinting via population uniformity, TB §10.3).
     #[cfg(feature = "quickjs")]
     #[must_use]
     pub fn navigator_profile(&self) -> lumen_js::NavigatorProfile {
+        let is_tor = self.http_profile == HttpProfile::TorBrowser;
         lumen_js::NavigatorProfile {
             hardware_concurrency: self.hardware_concurrency,
             device_memory: self.device_memory,
-            platform: self.platform.clone(),
-            languages: self.languages.clone(),
-            screen_width: self.screen_width,
-            screen_height: self.screen_height,
+            // Tor Browser always reports "Win32" regardless of actual OS.
+            platform: if is_tor { "Win32".to_string() } else { self.platform.clone() },
+            // Tor Browser pins Accept-Language to en-US to avoid locale leakage.
+            languages: if is_tor {
+                vec!["en-US".to_string(), "en".to_string()]
+            } else {
+                self.languages.clone()
+            },
+            // Tor Browser letterboxes viewport; screen reports 1000×900 default.
+            screen_width: if is_tor { 1000 } else { self.screen_width },
+            screen_height: if is_tor { 900 } else { self.screen_height },
             color_depth: self.color_depth,
-            timezone_offset: self.timezone_offset,
+            timezone_offset: if is_tor { 0 } else { self.timezone_offset },
         }
     }
 
@@ -136,10 +171,61 @@ impl FingerprintProfile {
 
     /// Stamp the HTTP and TLS fingerprint onto an [`HttpClient`] builder.
     #[must_use]
-    pub fn apply_http(&self, client: HttpClient) -> HttpClient {
-        client
+    pub fn apply_http(&self, mut client: HttpClient) -> HttpClient {
+        client = client
             .with_fingerprint_profile(self.http_profile)
-            .with_tls_profile(self.effective_tls_profile())
+            .with_tls_profile(self.effective_tls_profile());
+
+        // Wire DoH resolver if configured
+        if let Some(doh_url) = &self.doh_url
+            && let Ok(endpoint) = Url::parse(doh_url)
+        {
+            let bootstrap_client = std::sync::Arc::new(
+                HttpClient::new()
+                    .with_fingerprint_profile(self.http_profile)
+                    .with_tls_profile(self.effective_tls_profile()),
+            );
+            let doh_resolver = std::sync::Arc::new(
+                lumen_network::DohResolver::new(endpoint, bootstrap_client),
+            );
+            let cached = std::sync::Arc::new(
+                lumen_network::CachedDnsResolver::new(doh_resolver),
+            );
+            client = client.with_dns_resolver(cached);
+        }
+
+        // Wire HTTP proxy if configured
+        if let Some(proxy_str) = &self.proxy
+            && let Some(proxy) = parse_http_proxy(proxy_str)
+        {
+            client = client.with_proxy(std::sync::Arc::new(proxy));
+        }
+
+        // Wire SOCKS5 proxy.
+        // Explicit `socks5_proxy` field takes precedence; otherwise, when the
+        // TorBrowser HTTP profile is active, auto-wire to the local Tor daemon
+        // at 127.0.0.1:9050 (the standard Tor socks5 port).
+        if let Some(s5) = self.effective_socks5_proxy() {
+            client = client.with_socks5_proxy(std::sync::Arc::new(s5));
+        }
+
+        client
+    }
+
+    /// Resolve the effective SOCKS5 proxy: explicit override first, then
+    /// auto-detect for TorBrowser profile.
+    ///
+    /// Returns `None` when no SOCKS5 tunnel should be used.
+    #[must_use]
+    pub fn effective_socks5_proxy(&self) -> Option<Socks5Proxy> {
+        if let Some(s5_str) = &self.socks5_proxy {
+            return parse_socks5_proxy(s5_str);
+        }
+        // Auto-wire for TorBrowser: connect through local Tor daemon.
+        if self.http_profile == HttpProfile::TorBrowser {
+            return Some(Socks5Proxy::new("127.0.0.1", 9050));
+        }
+        None
     }
 }
 
@@ -281,6 +367,18 @@ fn apply_key(p: &mut FingerprintProfile, key: &str, value: &str) {
                 p.timezone_offset = v;
             }
         }
+        "doh_url" if !value.is_empty() => {
+            p.doh_url = Some(value.to_string());
+        }
+        "proxy" if !value.is_empty() => {
+            p.proxy = Some(value.to_string());
+        }
+        "socks5_proxy" | "socks5" if !value.is_empty() => {
+            p.socks5_proxy = Some(value.to_string());
+        }
+        "no_persistent_state" => {
+            p.no_persistent_state = matches!(value.to_ascii_lowercase().as_str(), "true" | "1" | "yes");
+        }
         _ => {}
     }
 }
@@ -307,6 +405,65 @@ fn parse_tls_profile(value: &str) -> Option<TlsProfile> {
         "tor" => Some(TlsProfile::Tor),
         _ => None,
     }
+}
+
+/// Parse HTTP proxy URL into an [`HttpProxy`] struct.
+/// Format: `http://[user:pass@]host:port` or `https://[user:pass@]host:port` (both treated as plain HTTP).
+fn parse_http_proxy(proxy_url: &str) -> Option<lumen_network::HttpProxy> {
+    use lumen_network::HttpProxy;
+
+    // Strip scheme (http:// or https://)
+    let url_str = proxy_url
+        .strip_prefix("http://")
+        .or_else(|| proxy_url.strip_prefix("https://"))?;
+
+    // Parse [user:pass@]host:port
+    let (auth_part, host_port) = if let Some(at_idx) = url_str.rfind('@') {
+        (&url_str[..at_idx], &url_str[at_idx + 1..])
+    } else {
+        ("", url_str)
+    };
+
+    // Parse host:port
+    let (host, port_str) = host_port.rsplit_once(':')?;
+    let port: u16 = port_str.parse().ok()?;
+
+    let mut proxy = HttpProxy::new(host.to_string(), port);
+    if !auth_part.is_empty()
+        && let Some(colon_idx) = auth_part.find(':')
+    {
+        let user = &auth_part[..colon_idx];
+        let pass = &auth_part[colon_idx + 1..];
+        proxy = proxy.with_basic_auth(user, pass);
+    }
+    Some(proxy)
+}
+
+/// Parse a SOCKS5 proxy URL into a [`Socks5Proxy`] struct.
+///
+/// Format: `socks5://[user:pass@]host:port`
+fn parse_socks5_proxy(proxy_url: &str) -> Option<Socks5Proxy> {
+
+    let url_str = proxy_url.strip_prefix("socks5://")?;
+
+    let (auth_part, host_port) = if let Some(at_idx) = url_str.rfind('@') {
+        (&url_str[..at_idx], &url_str[at_idx + 1..])
+    } else {
+        ("", url_str)
+    };
+
+    let (host, port_str) = host_port.rsplit_once(':')?;
+    let port: u16 = port_str.parse().ok()?;
+
+    let mut proxy = Socks5Proxy::new(host, port);
+    if !auth_part.is_empty()
+        && let Some(colon_idx) = auth_part.find(':')
+    {
+        let user = &auth_part[..colon_idx];
+        let pass = &auth_part[colon_idx + 1..];
+        proxy = proxy.with_auth(user, pass);
+    }
+    Some(proxy)
 }
 
 #[cfg(test)]
@@ -454,5 +611,78 @@ mod tests {
         assert!(config_path().is_some());
         let path = config_path().unwrap();
         assert!(path.ends_with("lumen/fingerprint.toml") || path.ends_with("lumen\\fingerprint.toml"));
+    }
+
+    // ── Tor / SOCKS5 tests ────────────────────────────────────────────────
+
+    #[test]
+    fn tor_profile_auto_wires_socks5() {
+        let p = parse("http_profile = tor");
+        let s5 = p.effective_socks5_proxy().expect("TorBrowser must auto-wire SOCKS5");
+        assert_eq!(s5.host, "127.0.0.1");
+        assert_eq!(s5.port, 9050);
+        assert!(s5.auth.is_none());
+    }
+
+    #[test]
+    fn non_tor_profile_no_auto_socks5() {
+        let p = parse("http_profile = chrome");
+        assert!(p.effective_socks5_proxy().is_none());
+    }
+
+    #[test]
+    fn explicit_socks5_proxy_parsed() {
+        let p = parse("socks5_proxy = socks5://127.0.0.1:9150");
+        let s5 = p.effective_socks5_proxy().expect("explicit socks5");
+        assert_eq!(s5.host, "127.0.0.1");
+        assert_eq!(s5.port, 9150);
+    }
+
+    #[test]
+    fn socks5_proxy_with_auth() {
+        let p = parse("socks5_proxy = socks5://alice:secret@proxy.lan:1080");
+        let s5 = p.effective_socks5_proxy().expect("socks5 with auth");
+        assert_eq!(s5.host, "proxy.lan");
+        assert_eq!(s5.port, 1080);
+        let (user, pass) = s5.auth.expect("auth present");
+        assert_eq!(user, "alice");
+        assert_eq!(pass, "secret");
+    }
+
+    #[test]
+    fn explicit_socks5_overrides_tor_auto() {
+        // Explicit socks5 address overrides the auto-9050 even in Tor mode.
+        let p = parse("http_profile = tor\nsocks5_proxy = socks5://10.0.0.1:9999");
+        let s5 = p.effective_socks5_proxy().expect("explicit override");
+        assert_eq!(s5.host, "10.0.0.1");
+        assert_eq!(s5.port, 9999);
+    }
+
+    #[test]
+    fn no_persistent_state_parsed() {
+        let p = parse("no_persistent_state = true");
+        assert!(p.no_persistent_state);
+        let p2 = parse("no_persistent_state = false");
+        assert!(!p2.no_persistent_state);
+        let p3 = parse("no_persistent_state = 1");
+        assert!(p3.no_persistent_state);
+    }
+
+    #[test]
+    fn socks5_alias_key_works() {
+        let p = parse("socks5 = socks5://127.0.0.1:9050");
+        assert_eq!(p.socks5_proxy, Some("socks5://127.0.0.1:9050".to_string()));
+    }
+
+    #[cfg(feature = "quickjs")]
+    #[test]
+    fn tor_navigator_profile_pins_screen_and_platform() {
+        let p = parse("http_profile = tor");
+        let nav = p.navigator_profile();
+        assert_eq!(nav.screen_width, 1000);
+        assert_eq!(nav.screen_height, 900);
+        assert_eq!(nav.platform, "Win32");
+        assert_eq!(nav.languages, vec!["en-US".to_string(), "en".to_string()]);
+        assert_eq!(nav.timezone_offset, 0);
     }
 }

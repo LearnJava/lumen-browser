@@ -22,7 +22,9 @@
 
 mod address_bar;
 mod animation_scheduler;
-mod bidi;
+mod click_log;
+mod backend_factory;
+use lumen_bidi_server::spawn as bidi_spawn;
 mod config;
 mod deterministic;
 mod devtools;
@@ -32,6 +34,7 @@ mod forms;
 mod gc_tick;
 mod hints;
 mod memory_poll;
+mod newtab;
 mod input;
 mod links;
 mod momentum_anim;
@@ -39,15 +42,19 @@ mod notification;
 mod omnibox;
 mod panels;
 mod platform;
+mod reader_view;
+mod source_view;
 pub mod surface;
 mod runtime;
 mod scroll;
 mod scroll_anim;
+mod extensions;
 mod scrollbar;
 mod session_persist;
 mod tab_lifecycle;
 mod tabs;
 mod zoom;
+mod network_service;
 
 use crate::tab_lifecycle::state::TabState;
 use std::cell::Cell;
@@ -65,17 +72,20 @@ use lumen_devtools::DevToolsServer;
 use lumen_driver::BrowserSession;
 use lumen_knowledge::HistoryFts;
 use lumen_storage::session_export::{self, ExportedTab, SessionFile};
-use lumen_storage::{BfCache, BfCacheEntry, SearchHistory};
+use lumen_storage::{BfCache, BfCacheEntry, History, SearchHistory};
 use lumen_dom::{
     Document, NodeData, NodeId, check_form_gate, check_navigation_gate,
     collect_iframes, check_popup_gate,
 };
 use std::collections::HashMap;
-use lumen_layout::{LayoutBox, Mat4, PaintOrder, StackingTree, TransitionScheduler};
+use lumen_layout::{LayoutBox, Mat4, PaintOrder, SnapContainer, StackingTree, TransitionScheduler};
+use lumen_layout::{StartingStyleTracker, compute_style_from_declarations, resolve_starting_style};
+use lumen_layout::{collect_scroll_containers, collect_snap_containers, find_scroll_container_at, find_snap_target, set_scroll_position};
 #[cfg(feature = "quickjs")]
-use lumen_layout::{collect_computed_styles, collect_scroll_containers, set_scroll_position};
-use lumen_layout::style::ComputedStyle;
-use lumen_paint::{build_display_list_ordered, build_display_list_ordered_with_anim, hit_test, DisplayList, Renderer};
+use lumen_layout::collect_computed_styles;
+use lumen_layout::style::{ComputedStyle, ScrollBehavior};
+use lumen_layout::computed_style_to_map;
+use lumen_paint::{build_display_list_ordered, build_display_list_ordered_with_anim, hit_test, DisplayList, RenderBackend};
 use lumen_layout::Cursor as CssCursor;
 use winit::application::ApplicationHandler;
 
@@ -97,6 +107,9 @@ enum LoadEvent {
     /// `IncrementalTreeBuilder::feed_bytes` буферизует незавершённые
     /// code-point-ы внутри.
     HtmlChunk(Vec<u8>),
+    /// CSS загружен параллельным потоком для промежуточных streaming-кадров.
+    /// Мёрджится в `Lumen::stream_sheet` и применяется в `paint_partial_dom`.
+    CssLoaded(Box<lumen_css_parser::Stylesheet>),
     /// Все байты получены — для финального полного pipeline.
     LoadDone(RawPage),
     /// Ошибка при загрузке страницы.
@@ -105,8 +118,13 @@ enum LoadEvent {
 
 /// Размер одного HTML-chunk при разбивке для инкрементального парсинга.
 const STREAM_CHUNK_BYTES: usize = 8 * 1024;
-/// Минимальный интервал между промежуточными кадрами при streaming (мс).
-const STREAM_PAINT_INTERVAL_MS: u128 = 150;
+/// Минимальный интервал между промежуточными кадрами при streaming (мс) — ~60 Гц.
+const STREAM_PAINT_INTERVAL_MS: u128 = 16;
+/// Minimum interval between rAF batches (ms) — vsync gate at 60 Hz.
+///
+/// Prevents `requestAnimationFrame` from firing more than once per display frame
+/// when `RedrawRequested` is delivered at higher frequency (e.g. from scroll events).
+const RAF_MIN_INTERVAL_MS: f64 = 1000.0 / 60.0;
 
 /// EventSink, который печатает сетевые события в stdout — это и есть
 /// «network log» Phase 0, реализующий принцип №4 «каждый исходящий байт
@@ -193,9 +211,50 @@ fn main() -> ExitCode {
         }
     };
     let (no_scrollbar, rest_args) = extract_no_scrollbar(&rest_args);
-    let (det_mode, rest_args) = deterministic::extract_deterministic(&rest_args);
+    let (click_log_flag, rest_args) = extract_click_log(&rest_args);
+    click_log::init(click_log_flag);
+    let (det_cfg, rest_args) = deterministic::extract_deterministic(&rest_args);
+    let det_mode = det_cfg.enabled;
     let (pdf_output, rest_args) = extract_print_to_pdf(&rest_args);
     let (mcp_mode, rest_args) = extract_mcp_mode(&rest_args);
+    let (use_network_service, rest_args) = extract_network_service(&rest_args);
+    let (proxy, rest_args) = match extract_proxy(&rest_args) {
+        Ok(r) => r,
+        Err(err) => {
+            eprintln!("Ошибка --proxy: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Если прокси передан в командной строке, переопределить конфиг.
+    if let Some(proxy_str) = proxy {
+        let mut cfg = config::global().clone();
+        cfg.proxy = Some(proxy_str);
+        config::init_global(cfg);
+    }
+
+    let (tor_port, rest_args) = extract_tor_mode(&rest_args);
+
+    // --tor: переключить на профиль TorBrowser + SOCKS5 + без персистентного хранилища.
+    if let Some(port) = tor_port {
+        if !check_tor_connectivity(port) {
+            eprintln!(
+                "lumen --tor: Tor-демон недоступен на 127.0.0.1:{port} — \
+                 запустите Tor перед запуском Lumen"
+            );
+            return ExitCode::FAILURE;
+        }
+        let mut cfg = config::global().clone();
+        cfg.http_profile = lumen_network::HttpProfile::TorBrowser;
+        cfg.socks5_proxy = Some(format!("socks5://127.0.0.1:{port}"));
+        cfg.no_persistent_state = true;
+        config::init_global(cfg);
+        eprintln!(
+            "lumen: Tor-режим активирован (socks5://127.0.0.1:{port}, \
+             профиль TorBrowser, без персистентного хранилища)"
+        );
+    }
+
     let cli = if let Some(output) = pdf_output {
         let source = PageSource::from_arg(rest_args.first().map(|s| s.as_str()));
         CliMode::PrintToPdf { source, output }
@@ -220,7 +279,7 @@ fn main() -> ExitCode {
     }
 
     if let Some(port) = bidi_port
-        && let Err(e) = bidi::spawn(port)
+        && let Err(e) = bidi_spawn(port)
     {
         eprintln!("Ошибка запуска BiDi на порту {port}: {e}");
         return ExitCode::FAILURE;
@@ -241,6 +300,25 @@ fn main() -> ExitCode {
         }),
         log: Arc::clone(&blocked_log),
     });
+
+    // PH1-4: Запустить сетевой сервис как дочерний процесс (если --network-service).
+    // Хендл живёт до конца main() — при дропе убивает дочерний процесс.
+    // _transport хранит Arc, чтобы не дропнуть IPC-соединение до конца сессии.
+    let (_network_svc, _transport) = if use_network_service {
+        match network_service::NetworkServiceHandle::spawn() {
+            Ok((handle, transport)) => {
+                eprintln!("lumen: сетевой сервис запущен (PH1-4, --network-service)");
+                (Some(handle), Some(transport))
+            }
+            Err(e) => {
+                eprintln!("lumen: не удалось запустить сетевой сервис: {e}");
+                eprintln!("lumen: продолжаю со встроенным HttpClient");
+                (None, None)
+            }
+        }
+    } else {
+        (None, None)
+    };
 
     // --import-session переопределяет источник страницы и начальный scroll.
     let (cli, initial_scroll) = match import_session {
@@ -265,13 +343,20 @@ fn run_window_mode(
     no_scrollbar: bool,
     deterministic: bool,
 ) -> ExitCode {
-    println!("Lumen v{} — Phase 0 prototype", env!("CARGO_PKG_VERSION"));
+    println!("Lumen v{} — Phase 2 (Interactive, in progress)", env!("CARGO_PKG_VERSION"));
 
     // Wire navigator.clipboard to the OS clipboard (task #26). Process-global,
     // installed once; the JS bindings _lumen_clipboard_read/_write forward here.
     #[cfg(feature = "quickjs")]
     lumen_js::set_clipboard_provider(std::sync::Arc::new(
         platform::clipboard::PlatformClipboard,
+    ));
+
+    // Wire navigator.mediaDevices.getUserMedia({audio}) to the platform audio
+    // capture backend (PH3-3). Process-global; installed before any JS context starts.
+    #[cfg(feature = "quickjs")]
+    lumen_js::set_audio_capture_provider(std::sync::Arc::new(
+        platform::audio_capture::PlatformAudioCapture,
     ));
 
     // Apply the fingerprint profile's navigator/screen/timezone values (9F.1).
@@ -290,8 +375,12 @@ fn run_window_mode(
     };
     let load_proxy = event_loop.create_proxy();
     let (input_tx, input_rx) = input::channel();
+    let (read_later_tx, read_later_rx) =
+        std::sync::mpsc::channel::<(String, String, Vec<u8>)>();
     let mut app = Lumen {
         display_list: Vec::new(),
+        tile_grid: lumen_paint::TileGrid::default_size(),
+        display_list_cache: lumen_paint::DisplayListCache::new(),
         title: None,
         pending_images: Vec::new(),
         source,
@@ -302,10 +391,14 @@ fn run_window_mode(
         runtime: runtime::EventLoop::new(),
         animation_scheduler: animation_scheduler::AnimationScheduler::new(),
         transition_scheduler: TransitionScheduler::new(),
+        starting_style_tracker: StartingStyleTracker::new(),
         prev_styles: HashMap::new(),
         anim_frame: None,
         layout_box: None,
+        snap_containers: Vec::new(),
+        scroll_containers: Vec::new(),
         epoch: std::time::Instant::now(),
+        last_raf_batch_ms: -RAF_MIN_INTERVAL_MS,
         find: find::FindState::default(),
         address_bar: address_bar::AddressBarState::default(),
         hint: hints::HintState::default(),
@@ -313,8 +406,14 @@ fn run_window_mode(
         scroll_x: initial_scroll.0,
         content_height: 0.0,
         content_width: 0.0,
+        cv_skipped: Vec::new(),
+        cv_relevant: std::collections::HashSet::new(),
+        cv_events: Vec::new(),
         dark_mode: false,
         cursor_position: None,
+        hovered_nid: None,
+        hovered_tab_idx: None,
+        active_nid: None,
         scroll_drag: None,
         scroll_anim: None,
         momentum_anim: None,
@@ -327,6 +426,7 @@ fn run_window_mode(
         load_proxy,
         stream_builder: None,
         stream_last_paint: std::time::Instant::now(),
+        stream_sheet: lumen_css_parser::Stylesheet::default(),
         preload_dispatched: std::collections::HashSet::new(),
         ime_composing: None,
         bfcache: BfCache::new(16),
@@ -335,14 +435,23 @@ fn run_window_mode(
         form_state: HashMap::new(),
         validation_tooltip: None,
         color_picker_node: None,
+        date_picker_node: None,
+        date_picker_year: 0,
+        date_picker_month: 0,
+        select_dropdown_node: None,
         ls_storage: HashMap::new(),
-        idb_backend: Arc::new(std::sync::Mutex::new(lumen_storage::store::InMemoryStorage::new())),
+        idb_dir: lumen_idb_dir(),
         sw_backend: Arc::new(std::sync::Mutex::new(lumen_storage::store::InMemoryStorage::new())),
+        cookie_jar: Arc::new(
+            lumen_storage::CookieJar::open_in_memory().expect("cookie_jar init"),
+        ),
         js_ctx: None,
         no_scrollbar,
         first_paint_delivered: false,
         first_contentful_paint_delivered: false,
+        nav_start: None,
         history_fts: HistoryFts::open_in_memory().expect("history_fts init"),
+        notes_store: lumen_knowledge::Notes::open_in_memory().expect("notes_store init"),
         search_history: SearchHistory::open_in_memory().expect("search_history init"),
         next_history_id: 1,
         hyp_provider: KnuthLiangHyphenation::new(),
@@ -359,6 +468,9 @@ fn run_window_mode(
         hibernated_tabs: HashMap::new(),
         tab_snapshots: lumen_storage::TabSnapshotStore::open_in_memory()
             .expect("tab_snapshots in-memory"),
+        t2_store: lumen_storage::SleepingTabStore::open_in_memory()
+            .expect("t2_store in-memory"),
+        t2_restore_start_ms: None,
         session_store: session_persist::open_store(),
         lifecycle_mgr: {
             let mut mgr = tab_lifecycle::TabLifecycleManager::new(
@@ -380,16 +492,28 @@ fn run_window_mode(
         shields: panels::shields_panel::ShieldsPanel::new(blocked_log),
         permission: panels::permission_panel::PermissionPanel::new(),
         sidebar: panels::sidebar_panel::SidebarPanel::new(),
+        ai_panel: panels::ai_panel::AiPanel::new(),
+        note_viewer: panels::note_viewer::NoteViewerPanel::new(),
+        ai_backend: Box::new(lumen_core::NullAiBackend),
         bookmarks: lumen_storage::Bookmarks::open_in_memory().expect("bookmarks in-memory"),
         bookmark_panel: panels::bookmark_panel::BookmarkPanel::new(),
+        tab_groups: lumen_storage::TabGroups::open_in_memory().expect("tab_groups in-memory"),
+        history_store: History::open_in_memory().expect("history_store in-memory"),
+        history_panel: panels::history_panel::HistoryPanel::new(),
         command_palette: panels::command_palette::CommandPalette::new(),
         focus: panels::focus_panel::FocusModePanel::new(),
         pip: panels::pip_window::PipWindow::new(),
+        pip_controller: panels::pip_os_window::PipController::new(),
+        pip_os: None,
         gesture: input::gesture::GestureRecognizer::new(),
         omnibox_aliases: lumen_storage::OmniboxAliases::open_in_memory()
             .expect("omnibox_aliases init"),
         notes: Vec::new(),
-        read_later: Vec::new(),
+        read_later_store: lumen_knowledge::ReadLater::open_in_memory()
+            .expect("read_later in-memory"),
+        read_later_panel: panels::read_later_panel::ReadLaterPanel::new(),
+        read_later_rx,
+        read_later_tx,
         cookie_banner_dismiss: true,
         gc_tick: gc_tick::GcTick::new(),
         memory_poll: memory_poll::MemoryPollTick::new(memory_poll::platform_source()),
@@ -401,8 +525,34 @@ fn run_window_mode(
             &network_log,
         )),
         privacy: panels::privacy_panel::PrivacyPanel::new(network_log),
+        a11y_store: lumen_storage::A11yPrefs::open_in_memory()
+            .expect("a11y_prefs in-memory"),
+        a11y_panel: panels::a11y_panel::A11yPanel::new(),
+        platform_bridge: lumen_a11y::platform::platform_bridge(),
+        print_panel: panels::print_panel::PrintPanel::new(),
+        settings_store: lumen_storage::BrowserSettings::open_in_memory()
+            .expect("settings in-memory"),
+        settings_panel: panels::settings_panel::SettingsPanel::new(),
+        shortcuts_panel: {
+            let ks = lumen_storage::KeyboardShortcuts::open_in_memory()
+                .expect("shortcuts in-memory");
+            panels::shortcuts_panel::ShortcutsPanel::new(&ks.all())
+        },
         fallbacks_preloaded: false,
         zoom_factor: zoom::ZOOM_DEFAULT,
+        display_url: None,
+        current_history_state_json: String::from("null"),
+        fullscreen_nid: None,
+        view_transition: None,
+        archive: tabs::archive::TabArchive::new(),
+        restore_spinner_start_ms: None,
+        resize_active: None,
+        tab_drag: None,
+        tab_context_menu: tabs::context_menu::TabContextMenu::default(),
+        shell_theme: panels::themes::ShellTheme::default(),
+        reader_original_source: None,
+        cert_info: None,
+        cert_panel: panels::cert_panel::CertPanel::new(),
     };
     // Restore the previous session only when launched without an explicit page
     // (no file/url argument and no --import-session), so we never clobber an
@@ -458,7 +608,7 @@ fn do_print_to_pdf(
     use lumen_layout::{paginate, PaginationContext};
     use lumen_paint::{build_print_display_list, split_at_page_breaks, Renderer};
 
-    let raw = source.load_bytes(event_sink.clone())?;
+    let raw = source.load_bytes(event_sink.clone(), None)?;
     let vp = Size::new(PDF_PAGE_W as f32, PDF_PAGE_H as f32);
     let parsed = parse_and_layout(
         &raw.bytes,
@@ -473,6 +623,9 @@ fn do_print_to_pdf(
         &NullHyphenationProvider,
         false, // headless PDF mode: no interactive JS needed
         false, // deterministic: not needed for PDF rendering
+        false, // dark_mode: light mode for PDF output
+        None,  // cookie_jar: not available in standalone PDF mode
+        raw.cross_origin_isolated,
     )?;
 
     let ctx = PaginationContext {
@@ -483,7 +636,10 @@ fn do_print_to_pdf(
         margin_left: 48.0,
         margin_right: 48.0,
     };
-    let pages = paginate(&parsed.layout, &ctx);
+    let mut pages = paginate(&parsed.layout, &ctx);
+    let page_count_total = pages.len() as u32;
+    // Attach @page margin-box data: page N of M at bottom-center.
+    attach_page_boxes(&mut pages, page_count_total, &ctx);
     let cmds = build_print_display_list(&pages);
     let split_pages = split_at_page_breaks(cmds);
 
@@ -498,6 +654,121 @@ fn do_print_to_pdf(
     let pdf_bytes = encode_images_as_pdf(&images, PDF_PAGE_W, PDF_PAGE_H);
     std::fs::write(output, &pdf_bytes)?;
     Ok(page_count)
+}
+
+/// Print with custom margin values (in CSS px) from the print dialog (E-1).
+///
+/// `margin_tb` applies to top + bottom; `margin_lr` applies to left + right.
+fn do_print_to_pdf_with_opts(
+    source: &PageSource,
+    output: &std::path::Path,
+    event_sink: Arc<dyn EventSink>,
+    margin_tb: f32,
+    margin_lr: f32,
+    scale: i32,
+    print_backgrounds: bool,
+) -> Result<usize, Box<dyn Error>> {
+    use lumen_layout::{paginate, PaginationContext};
+    use lumen_paint::{
+        build_print_display_list, split_at_page_breaks, strip_background_graphics, Renderer,
+    };
+
+    let raw = source.load_bytes(event_sink.clone(), None)?;
+    // Apply scale to viewport (W-2b): 50–200% zoom
+    let scale_factor = scale as f32 / 100.0;
+    let scaled_w = (PDF_PAGE_W as f32 * scale_factor).ceil();
+    let scaled_h = (PDF_PAGE_H as f32 * scale_factor).ceil();
+    let vp = Size::new(scaled_w, scaled_h);
+    let parsed = parse_and_layout(
+        &raw.bytes,
+        raw.content_type,
+        &raw.base,
+        &event_sink,
+        vp,
+        &mut std::collections::HashSet::new(),
+        None,
+        None,
+        None,
+        &NullHyphenationProvider,
+        false,
+        false,
+        false,
+        None,
+        raw.cross_origin_isolated,
+    )?;
+
+    let ctx = PaginationContext {
+        page_width: scaled_w,
+        page_height: scaled_h,
+        margin_top: margin_tb,
+        margin_bottom: margin_tb,
+        margin_left: margin_lr,
+        margin_right: margin_lr,
+    };
+    let mut pages = paginate(&parsed.layout, &ctx);
+    let page_count_total = pages.len() as u32;
+    attach_page_boxes(&mut pages, page_count_total, &ctx);
+    let cmds = build_print_display_list(&pages);
+    let mut split_pages = split_at_page_breaks(cmds);
+    // CC-8: drop CSS background graphics when the dialog toggle is off.
+    strip_background_graphics(&mut split_pages, print_backgrounds);
+
+    let images = Renderer::render_print_pages(
+        INTER_FONT.to_vec(),
+        &split_pages,
+        PDF_PAGE_W,
+        PDF_PAGE_H,
+    )?;
+
+    let page_count = images.len();
+    let pdf_bytes = encode_images_as_pdf(&images, PDF_PAGE_W, PDF_PAGE_H);
+    std::fs::write(output, &pdf_bytes)?;
+    Ok(page_count)
+}
+
+/// Attaches `PageBox` data to each page with default @page content: page N of M at bottom-center.
+///
+/// Uses a fixed-width measurer (8 px/char at any font size) for margin-box text layout,
+/// matching the Phase 0 text-measurement approach used in layout tests. Shell has no
+/// access to a real `TextMeasurer` outside the full layout pipeline, and margin-box
+/// text is short (page numbers) so the approximation is acceptable.
+fn attach_page_boxes(
+    pages: &mut [lumen_layout::pagination::Page],
+    total: u32,
+    ctx: &lumen_layout::PaginationContext,
+) {
+    use lumen_layout::{MarginBoxPosition, PageBox, PageProperties, TextMeasurer};
+
+    /// Fixed 8 px per character at any size — matches the Phase 0 layout test measurer.
+    struct Fixed8;
+    impl TextMeasurer for Fixed8 {
+        fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+    }
+
+    let props = PageProperties {
+        width: ctx.page_width,
+        height: ctx.page_height,
+        orientation: if ctx.page_width > ctx.page_height { "landscape".to_string() } else { "portrait".to_string() },
+        margin_top: ctx.margin_top,
+        margin_bottom: ctx.margin_bottom,
+        margin_left: ctx.margin_left,
+        margin_right: ctx.margin_right,
+    };
+
+    for page in pages.iter_mut() {
+        let mut page_box = PageBox::new(page.number, props.clone());
+        page_box.layout_margin_boxes();
+
+        let label = format!("{} / {}", page.number + 1, total);
+        let font_size = 10.0_f32;
+        let line_height = font_size * 1.5;
+        if let Some(mb) = page_box.margin_boxes.get_mut(&MarginBoxPosition::BottomCenter) {
+            mb.content = Some(label.clone());
+            mb.layout_text(&label, font_size, line_height, &Fixed8);
+        }
+
+        page.page_box = Some(page_box);
+    }
 }
 
 /// Кодирует набор растровых изображений в PDF-файл (по одному на страницу).
@@ -584,7 +855,8 @@ fn run_dump(
     kind: DumpKind,
     event_sink: Arc<dyn EventSink>,
 ) -> Result<(), Box<dyn Error>> {
-    let raw = source.load_bytes(event_sink.clone())?;
+    let cookie_jar = Arc::new(lumen_storage::CookieJar::open_in_memory()?);
+    let raw = source.load_bytes(event_sink.clone(), Some(cookie_jar))?;
     match kind {
         DumpKind::Source => {
             let encoding = lumen_encoding::detect(&raw.bytes, raw.content_type);
@@ -595,13 +867,13 @@ fn run_dump(
         }
         DumpKind::Layout => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None, false)?;
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None, false)?;
             let dl = paint_ordered(&parsed.layout);
             print!("{}", lumen_paint::serialize_display_list(&dl));
             Ok(())
@@ -619,9 +891,12 @@ fn print_usage() {
     eprintln!("  lumen --print-to-pdf <out.pdf> <path-or-url>   — сохранить страницу как PDF");
     eprintln!("  [--devtools-port <N>]                           — DevTools WS сервер (любой режим)");
     eprintln!("  [--bidi-port <N>]                               — WebDriver BiDi WS сервер (любой режим)");
+    eprintln!("  [--proxy <url>]                                 — HTTP прокси (http://host:port или user:pass@host:port)");
+    eprintln!("  [--tor [--tor-port <N>]]                        — Tor-режим: TorBrowser fingerprint + SOCKS5 9050 (или N)");
     eprintln!("  --import-session <file.lsession>                — восстановить сессию из файла");
     eprintln!("  --mcp [url]                                     — MCP-сервер (stdio) для AI-агентов");
     eprintln!("  --mcp-port <N> [url]                            — MCP-сервер (TCP) на порту N");
+    eprintln!("  [--network-service]                             — вынести HTTP/TLS/DNS в отдельный процесс (PH1-4)");
 }
 
 /// Извлечь `--print-to-pdf <output.pdf>` из аргументов.
@@ -786,6 +1061,39 @@ fn extract_no_scrollbar(args: &[String]) -> (bool, Vec<String>) {
     (found, rest)
 }
 
+/// Извлечь `--network-service` из аргументов (PH1-4).
+///
+/// Когда флаг присутствует, шелл запускает `lumen-network-service` как дочерний процесс
+/// и делегирует все HTTP/TLS/DNS запросы через IPC вместо встроенного `HttpClient`.
+fn extract_network_service(args: &[String]) -> (bool, Vec<String>) {
+    let mut found = false;
+    let mut rest = Vec::new();
+    for arg in args {
+        if arg == "--network-service" {
+            found = true;
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    (found, rest)
+}
+
+/// Извлечь `--activity-log` (или `--click-log`) из аргументов.
+/// Также активируется переменной окружения `LUMEN_ACTIVITY_LOG=1`.
+fn extract_click_log(args: &[String]) -> (bool, Vec<String>) {
+    let mut found = std::env::var("LUMEN_ACTIVITY_LOG").is_ok_and(|v| v == "1")
+        || std::env::var("LUMEN_CLICK_LOG").is_ok_and(|v| v == "1");
+    let mut rest = Vec::new();
+    for arg in args {
+        if arg == "--activity-log" || arg == "--click-log" {
+            found = true;
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    (found, rest)
+}
+
 /// Извлечь `--devtools-port N` из аргументов, вернуть (port, остальные аргументы).
 fn extract_devtools_port(args: &[String]) -> Result<(Option<u16>, Vec<String>), String> {
     let mut port: Option<u16> = None;
@@ -822,6 +1130,67 @@ fn extract_bidi_port(args: &[String]) -> Result<(Option<u16>, Vec<String>), Stri
     Ok((port, rest))
 }
 
+/// Извлечь `--proxy http://host:port` из аргументов.
+fn extract_proxy(args: &[String]) -> Result<(Option<String>, Vec<String>), String> {
+    let mut proxy: Option<String> = None;
+    let mut rest = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--proxy" {
+            i += 1;
+            let s = args.get(i).ok_or("--proxy требует адрес (http://host:port или https://host:port)")?;
+            proxy = Some(s.clone());
+        } else {
+            rest.push(args[i].clone());
+        }
+        i += 1;
+    }
+    Ok((proxy, rest))
+}
+
+/// Извлечь `--tor` / `--tor-port N` из аргументов.
+///
+/// `--tor` активирует Tor-режим: профиль TorBrowser, SOCKS5 через локальный демон,
+/// без персистентного хранилища. `--tor-port N` переопределяет порт SOCKS5
+/// (по умолчанию 9050; Tor Browser bundle использует 9150).
+///
+/// Возвращает `(Some(port), остальные_аргументы)` или `(None, все_аргументы)`.
+fn extract_tor_mode(args: &[String]) -> (Option<u16>, Vec<String>) {
+    let mut port: u16 = 9050;
+    let mut tor_found = false;
+    let mut rest = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--tor" {
+            tor_found = true;
+        } else if args[i] == "--tor-port" {
+            i += 1;
+            if let Some(p) = args.get(i).and_then(|s| s.parse().ok()) {
+                port = p;
+            }
+        } else {
+            rest.push(args[i].clone());
+        }
+        i += 1;
+    }
+    if tor_found {
+        (Some(port), rest)
+    } else {
+        (None, rest)
+    }
+}
+
+/// Проверить доступность Tor-демона: попытаться открыть TCP-соединение к SOCKS5-порту.
+///
+/// Возвращает `true` если порт принимает соединения (таймаут 2 с). Не выполняет
+/// SOCKS5-хэндшейк — только проверяет что сокет слушает.
+fn check_tor_connectivity(port: u16) -> bool {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
+    use std::time::Duration;
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port);
+    TcpStream::connect_timeout(&addr, Duration::from_secs(2)).is_ok()
+}
+
 /// Источник страницы. Запоминается в `Lumen`, чтобы reload (F5/Ctrl+R) мог
 /// заново выполнить fetch/parse/layout/paint без аргументов командной строки.
 #[derive(Debug, Clone)]
@@ -830,10 +1199,17 @@ enum PageSource {
     Empty,
     File(PathBuf),
     Url(String),
+    /// `about:blank` — пустой документ без сетевого запроса (HTML spec §7.5).
+    /// `url_str()` возвращает "about:blank" для адресной строки и истории.
+    AboutBlank,
     /// Страница восстанавливается из bfcache: HTML уже есть в памяти,
     /// сетевой запрос не нужен. `base_url` — оригинальный URL страницы
     /// (для разрешения относительных ссылок внутри HTML).
     Snapshot { html: String, base_url: String },
+    /// Внутренняя статическая страница (`about:newtab`): HTML генерируется
+    /// в памяти, сетевой запрос не нужен. `url` — канонический about-URL,
+    /// показывается в адресной строке и истории.
+    Static { html: String, url: String },
 }
 
 /// Запись в стеке истории навигации браузера.
@@ -841,6 +1217,14 @@ struct NavEntry {
     source: PageSource,
     scroll_x: f32,
     scroll_y: f32,
+    /// Overrides `source.url_str()` in the address bar for same-document entries.
+    /// `None` for full-document navigation entries; `Some(url)` when this entry
+    /// was created by `history.pushState` (the virtual URL at that point).
+    display_url: Option<String>,
+    /// State JSON for a same-document `history.pushState` entry.
+    /// `None` → full navigation (popping this entry reloads the page).
+    /// `Some(json)` → same-document (popping fires `popstate` with this state).
+    same_doc_state_json: Option<String>,
 }
 
 /// Навигационный запрос от JS (location.href=, assign, replace, reload).
@@ -888,6 +1272,11 @@ pub(crate) trait PersistentJs {
     /// Shell requests another redraw when this returns `true` so animation loops
     /// continue without busy-polling.
     fn take_raf_pending(&self) -> bool;
+    /// Non-consuming peek: `true` if rAF callbacks are queued (does not clear).
+    ///
+    /// Used by the vsync gate: check without consuming so the signal is not lost
+    /// when the gate defers firing to the next frame.
+    fn has_raf_pending(&self) -> bool;
     /// Push a fresh snapshot of layout bounding rects into the JS runtime.
     ///
     /// Called after every `relayout_page`. The JS side uses this for
@@ -931,6 +1320,24 @@ pub(crate) trait PersistentJs {
     /// Calls `_lumen_deliver_paint_entry(name, start_ms)` in QuickJS.
     #[allow(dead_code)]
     fn deliver_paint_timing(&self, name: &str, start_ms: f64);
+    /// Deliver a PerformanceNavigationTiming entry to JS PerformanceObservers.
+    ///
+    /// Called after a page load completes. `url` is the navigation URL;
+    /// `duration_ms` is total load time (Navigation Timing L2 §4.2 `duration`).
+    /// Calls `_lumen_deliver_perf_entry('navigation', url, 0.0, duration_ms, detail)`.
+    fn deliver_nav_timing(&self, url: &str, duration_ms: f64);
+    /// Deliver a LargestContentfulPaint entry to JS PerformanceObservers.
+    ///
+    /// Called when a large content element (>500px²) is rendered.
+    /// `element_id` = NID; `size` = area in pixels; `render_time_ms` = render completion timestamp.
+    #[allow(dead_code)]
+    fn deliver_lcp_entry(&self, element_id: u32, size: u32, start_ms: f64, render_time_ms: f64);
+    /// Deliver a LayoutShift entry to JS PerformanceObservers (CLS metric).
+    ///
+    /// Called when layout shift is detected during reflow (shift >5px).
+    /// `value` = fractional shift distance; `had_input` = whether user input occurred recently.
+    #[allow(dead_code)]
+    fn deliver_layout_shift(&self, value: f64, had_input: bool);
     /// Push a fresh snapshot of computed CSS styles into the JS runtime.
     ///
     /// Called after every `relayout_page`. The JS side uses this for
@@ -955,9 +1362,9 @@ pub(crate) trait PersistentJs {
     ///
     /// Must be called after `update_viewport_size` so JS reads consistent
     /// dimensions. Shell calls it after every `relayout_page` and any
-    /// `prefers-color-scheme` toggle.
+    /// `prefers-color-scheme` or `prefers-reduced-motion` toggle.
     #[allow(dead_code)]
-    fn deliver_media_query_changes(&self, width: f32, height: f32, prefers_dark: bool);
+    fn deliver_media_query_changes(&self, width: f32, height: f32, prefers_dark: bool, reduced_motion: bool);
     /// Poll all live `WebSocket` instances and deliver queued events to JS.
     ///
     /// Must be called on every event-loop step so that `onopen`/`onmessage`/
@@ -965,6 +1372,13 @@ pub(crate) trait PersistentJs {
     /// which drains `_lumen_ws_poll()` for every open handle.
     #[allow(dead_code)]
     fn pump_websockets(&self);
+    /// Poll all live `EventSource` instances and deliver queued SSE events to JS.
+    ///
+    /// Must be called on every event-loop step so that `onopen`/`onmessage`/
+    /// `onerror` handlers fire promptly. Calls `_lumen_pump_sse()` which drains
+    /// `_lumen_sse_poll()` for every open handle (HTML Living Standard §9.2).
+    #[allow(dead_code)]
+    fn pump_sse(&self);
     /// Deliver messages posted by Web Worker threads to their `Worker` JS instances.
     ///
     /// Must be called on every event-loop tick alongside `tick_timers()` so that
@@ -1028,6 +1442,130 @@ pub(crate) trait PersistentJs {
     /// applies each via `set_scroll_position()`. Empty when none are pending.
     #[allow(dead_code)]
     fn take_scroll_requests(&self) -> Vec<(u32, f32, f32)>;
+    /// Drain `history.pushState` / `history.replaceState` URL-update notifications.
+    ///
+    /// Each entry is `(is_push, url, new_state_json)` where `is_push = true`
+    /// means `pushState` (adds a same-document entry to nav_back) and `false`
+    /// means `replaceState` (updates the displayed URL only).
+    #[allow(dead_code)]
+    fn take_history_url_updates(&self) -> Vec<(bool, String, String)>;
+    /// Fire a `popstate` event in JS for a same-document back/forward navigation.
+    ///
+    /// `state_json` is the already-serialised state for the destination entry.
+    /// `url` is the virtual address-bar URL to restore (may be empty).
+    /// Calls `_lumen_deliver_popstate(state_json, url)` via `eval_js`.
+    #[allow(dead_code)]
+    fn fire_popstate(&self, state_json: &str, url: &str);
+    /// Drain dirty `<canvas>` 2D pixel buffers for upload to the renderer.
+    ///
+    /// Returns `(node_index, width, height, rgba)` for every canvas drawn to
+    /// since the last drain. Shell registers each as
+    /// `Renderer::register_image("canvas:{nid}", ...)` and requests a repaint.
+    /// Returns an empty vec when no canvas was drawn (HTML LS §4.12.4).
+    #[allow(dead_code)]
+    fn flush_canvas_updates(&self) -> Vec<(u32, u32, u32, Vec<u8>)>;
+    /// Drain fullscreen requests queued by `element.requestFullscreen()` and
+    /// `document.exitFullscreen()` (WHATWG Fullscreen §4).
+    ///
+    /// Each entry is `(enter, nid)`: `enter = true` means enter OS fullscreen
+    /// for the element with the given node index; `false` means exit fullscreen
+    /// (`nid` is ignored). Shell calls `window.set_fullscreen(Borderless)` /
+    /// `window.set_fullscreen(None)` accordingly.
+    #[allow(dead_code)]
+    fn take_fullscreen_requests(&self) -> Vec<(bool, u32)>;
+    /// Drain CSS View Transition events from `document.startViewTransition`.
+    ///
+    /// Shell drains these in `about_to_wait`: `Begin` captures old display list,
+    /// `End` triggers relayout and starts 300 ms cross-fade.
+    #[allow(dead_code)]
+    fn take_view_transition_events(&self) -> Vec<ViewTransitionEvent>;
+    /// Drain print requests emitted by `window.print()` (W-2).
+    ///
+    /// Shell drains these in `about_to_wait`: each entry triggers print-preview
+    /// dialog or direct PDF export.
+    #[allow(dead_code)]
+    fn take_print_requests(&self) -> Vec<lumen_js::PrintRequest>;
+    /// Drain page-level scroll requests from JS `window.scrollTo` / `window.scrollBy`.
+    ///
+    /// Returns `(target_y, smooth)` pairs where `smooth` indicates whether the scroll
+    /// should be animated (CSS Scroll Behavior L1).
+    #[allow(dead_code)]
+    fn take_page_scroll_requests(&self) -> Vec<(f32, bool)>;
+    /// Synchronize the current page scroll position (`window.scrollY`) into the JS runtime.
+    ///
+    /// Called after scroll updates to keep JS reads of `window.scrollY` accurate.
+    #[allow(dead_code)]
+    fn set_page_scroll_y(&self, y: f32);
+    /// Adjust the QuickJS GC based on the tab's lifecycle tier (10L).
+    ///
+    /// `level` encodes aggressiveness: 0 = Soft (active tab, reset threshold),
+    /// 1 = Moderate (T1 background, one GC cycle), 2 = Aggressive (T2+ background,
+    /// full GC + lowered threshold to keep heap small during long idle).
+    #[allow(dead_code)]
+    fn run_gc_pass(&self, level: u8);
+    /// Push viewport scroll progress into all active root-viewport `ScrollTimeline` instances.
+    ///
+    /// `progress_y` = block-axis fraction `[0.0, 1.0]` (scroll_y / max_scroll_y).
+    /// `progress_x` = inline-axis fraction `[0.0, 1.0]` (scroll_x / max_scroll_x).
+    ///
+    /// Called after each scroll update in `RedrawRequested` step 1. Drives
+    /// CSS Scroll-Driven Animations L1 §3 (CSS Scroll-Driven Animations Level 1).
+    #[allow(dead_code)]
+    fn deliver_scroll_progress(&self, progress_y: f32, progress_x: f32);
+
+    /// Fire a non-bubbling `scroll` Event on the element identified by `nid`.
+    ///
+    /// Called after every overflow-container scroll-position change (both
+    /// wheel-driven and JS-programmatic). Per WHATWG HTML §8.1.6.2.
+    #[allow(dead_code)]
+    fn fire_element_scroll(&self, nid: u32);
+
+    /// Fire a non-bubbling `scroll` Event on the `window` object.
+    ///
+    /// Called whenever the page-level scroll position changes.
+    /// Per WHATWG HTML §8.1.6.2.
+    #[allow(dead_code)]
+    fn fire_window_scroll(&self);
+
+    /// Pause the JS event loop (T0 → T1 lifecycle transition).
+    ///
+    /// Sets `document.visibilityState = "hidden"`, fires `visibilitychange`.
+    /// Called when a tab is sent to background in `switch_tab`.
+    /// No-op default for runtimes that don't support it.
+    #[allow(dead_code)]
+    fn pause_event_loop(&self) {}
+
+    /// Resume the JS event loop (T1 → T0 lifecycle transition).
+    ///
+    /// Sets `document.visibilityState = "visible"`, fires `visibilitychange`.
+    /// Called when a background tab is brought to foreground in `switch_tab`.
+    /// No-op default for runtimes that don't support it.
+    #[allow(dead_code)]
+    fn unpause_event_loop(&self) {}
+
+    /// Drain JS focus requests queued by `_lumen_request_focus` / `_lumen_request_blur`.
+    ///
+    /// `None` = clear focus (blur); `Some(nid)` = focus that node. Populated by
+    /// `showModal()` (focus autofocus descendant or dialog) and `close()` (restore
+    /// previous focus). Shell applies each to `self.focused_node` and requests a
+    /// relayout so `:focus` / `:focus-within` CSS rules update.
+    #[allow(dead_code)]
+    fn take_focus_requests(&self) -> Vec<Option<u32>> { Vec::new() }
+
+    /// Close a `<dialog>` as a result of a `<form method="dialog">` submission.
+    ///
+    /// Calls `dialog.close(return_value)` in the JS runtime so the `close` event
+    /// fires and `returnValue` is updated. `dialog_nid` is the dialog's node index;
+    /// `return_value` is the submit button's `value` attribute (empty string if none).
+    #[allow(dead_code)]
+    fn fire_dialog_close(&self, _dialog_nid: u32, _return_value: &str) {}
+
+    /// Notify the JS runtime that the shell moved keyboard focus to a new node.
+    ///
+    /// Updates `_lumen_last_focused_nid` so `showModal()` can record it for
+    /// restoration when the dialog closes. `nid = None` means focus was cleared.
+    #[allow(dead_code)]
+    fn notify_focus_changed(&self, _nid: Option<u32>) {}
 }
 
 #[cfg(feature = "quickjs")]
@@ -1067,6 +1605,9 @@ impl PersistentJs for QuickPersistentJs {
     fn take_raf_pending(&self) -> bool {
         self.rt.take_raf_pending()
     }
+    fn has_raf_pending(&self) -> bool {
+        self.rt.has_raf_pending()
+    }
     fn update_layout_rects(&self, rects: HashMap<u32, [f32; 4]>) {
         self.rt.update_layout_rects(rects);
     }
@@ -1074,7 +1615,7 @@ impl PersistentJs for QuickPersistentJs {
         self.rt.update_viewport_size(width, height);
     }
     fn deliver_layout_observers(&self) {
-        self.eval_js("_lumen_deliver_resize_observers();_lumen_deliver_intersection_observers();");
+        self.eval_js("_lumen_deliver_resize_observers();_lumen_deliver_intersection_observers();_lumen_deliver_canvas_css_resize();");
     }
     fn register_lazy_images(&self, pairs: &[(u32, &str)]) {
         if pairs.is_empty() {
@@ -1099,6 +1640,24 @@ impl PersistentJs for QuickPersistentJs {
             js_string_literal(name),
         ));
     }
+    fn deliver_nav_timing(&self, url: &str, duration_ms: f64) {
+        self.eval_js(&format!(
+            "_lumen_deliver_perf_entry('navigation', {}, 0.0, {duration_ms}, null)",
+            js_string_literal(url),
+        ));
+    }
+    fn deliver_lcp_entry(&self, element_id: u32, size: u32, start_ms: f64, render_time_ms: f64) {
+        self.eval_js(&format!(
+            "_lumen_deliver_lcp_entry({element_id}, {size}, {start_ms}, {render_time_ms})"
+        ));
+    }
+    fn deliver_layout_shift(&self, value: f64, had_input: bool) {
+        let had_input_js = if had_input { "true" } else { "false" };
+        self.eval_js(&format!(
+            "_lumen_deliver_layout_shift({}, 0, {had_input_js})",
+            value
+        ));
+    }
     fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>) {
         self.rt.update_computed_styles(styles);
     }
@@ -1108,15 +1667,18 @@ impl PersistentJs for QuickPersistentJs {
     fn notify_window_loaded(&self) {
         self.rt.notify_window_loaded();
     }
-    fn deliver_media_query_changes(&self, width: f32, height: f32, prefers_dark: bool) {
+    fn deliver_media_query_changes(&self, width: f32, height: f32, prefers_dark: bool, reduced_motion: bool) {
         let dark = if prefers_dark { "true" } else { "false" };
-        // prefers_reduced_motion: shell doesn't yet expose this preference, hard-coded false.
+        let rm = if reduced_motion { "true" } else { "false" };
         self.eval_js(&format!(
-            "if(typeof _lumen_deliver_media_changes==='function')_lumen_deliver_media_changes({width},{height},{dark},false);"
+            "if(typeof _lumen_deliver_media_changes==='function')_lumen_deliver_media_changes({width},{height},{dark},{rm});"
         ));
     }
     fn pump_websockets(&self) {
         self.eval_js("if(typeof _lumen_pump_websockets==='function')_lumen_pump_websockets();");
+    }
+    fn pump_sse(&self) {
+        self.eval_js("if(typeof _lumen_pump_sse==='function')_lumen_pump_sse();");
     }
     fn pump_workers(&self) {
         self.rt.pump_workers();
@@ -1163,6 +1725,96 @@ impl PersistentJs for QuickPersistentJs {
     fn take_scroll_requests(&self) -> Vec<(u32, f32, f32)> {
         self.rt.take_scroll_requests()
     }
+    fn take_history_url_updates(&self) -> Vec<(bool, String, String)> {
+        self.rt
+            .take_history_url_updates()
+            .into_iter()
+            .map(|u| match u {
+                lumen_js::HistoryUrlUpdate::Push { url, new_state_json } => {
+                    (true, url, new_state_json)
+                }
+                lumen_js::HistoryUrlUpdate::Replace { url, new_state_json } => {
+                    (false, url, new_state_json)
+                }
+            })
+            .collect()
+    }
+    fn fire_popstate(&self, state_json: &str, url: &str) {
+        // Escape url for embedding in a JS string literal (single-quoted).
+        let escaped = url.replace('\\', "\\\\").replace('\'', "\\'");
+        // state_json is already valid JSON — embed directly without quoting.
+        self.eval_js(&format!("_lumen_deliver_popstate({state_json}, '{escaped}')"));
+    }
+    fn flush_canvas_updates(&self) -> Vec<(u32, u32, u32, Vec<u8>)> {
+        self.rt.flush_canvas_updates()
+    }
+    fn take_fullscreen_requests(&self) -> Vec<(bool, u32)> {
+        self.rt
+            .take_fullscreen_requests()
+            .into_iter()
+            .map(|r| match r {
+                lumen_js::FullscreenRequest::Enter { nid } => (true, nid),
+                lumen_js::FullscreenRequest::Exit => (false, 0),
+            })
+            .collect()
+    }
+    fn take_view_transition_events(&self) -> Vec<ViewTransitionEvent> {
+        self.rt
+            .take_view_transition_events()
+            .into_iter()
+            .map(|ev| match ev {
+                lumen_js::ViewTransitionEvent::Begin => ViewTransitionEvent::Begin,
+                lumen_js::ViewTransitionEvent::End => ViewTransitionEvent::End,
+                lumen_js::ViewTransitionEvent::Cancel => ViewTransitionEvent::Cancel,
+            })
+            .collect()
+    }
+    fn take_print_requests(&self) -> Vec<lumen_js::PrintRequest> {
+        self.rt.take_print_requests()
+    }
+    fn take_page_scroll_requests(&self) -> Vec<(f32, bool)> {
+        self.rt.take_page_scroll_requests()
+    }
+    fn set_page_scroll_y(&self, y: f32) {
+        self.rt.set_page_scroll_y(y)
+    }
+    fn run_gc_pass(&self, level: u8) {
+        use lumen_js::gc_policy::GcLevel;
+        let gc_level = match level {
+            0 => GcLevel::Soft,
+            1 => GcLevel::Moderate,
+            _ => GcLevel::Aggressive,
+        };
+        self.rt.run_gc_pass(gc_level);
+    }
+    fn deliver_scroll_progress(&self, progress_y: f32, progress_x: f32) {
+        self.rt.deliver_scroll_progress(progress_y, progress_x);
+    }
+    fn fire_element_scroll(&self, nid: u32) {
+        self.rt.fire_element_scroll(nid);
+    }
+    fn fire_window_scroll(&self) {
+        self.rt.fire_window_scroll();
+    }
+    fn pause_event_loop(&self) {
+        // T0 → T1: mark document hidden, fire visibilitychange.
+        // Timer/rAF ticking is halted structurally: background tabs' js_ctx
+        // is moved into bg_tabs and the shell only ticks self.js_ctx (active tab).
+        self.rt.set_document_visibility(true);
+    }
+    fn unpause_event_loop(&self) {
+        // T1 → T0: mark document visible again, fire visibilitychange.
+        self.rt.set_document_visibility(false);
+    }
+    fn take_focus_requests(&self) -> Vec<Option<u32>> {
+        self.rt.take_focus_requests()
+    }
+    fn fire_dialog_close(&self, dialog_nid: u32, return_value: &str) {
+        self.rt.fire_dialog_close(dialog_nid, return_value);
+    }
+    fn notify_focus_changed(&self, nid: Option<u32>) {
+        self.rt.notify_focus_changed(nid);
+    }
 }
 
 impl PageSource {
@@ -1171,6 +1823,7 @@ impl PageSource {
             Some(s) if s.starts_with("http://") || s.starts_with("https://") => {
                 PageSource::Url(s.to_owned())
             }
+            Some("about:blank") => PageSource::AboutBlank,
             Some(s) => PageSource::File(PathBuf::from(s)),
             None => PageSource::Empty,
         }
@@ -1181,7 +1834,9 @@ impl PageSource {
             PageSource::Empty => "(пустая вкладка)".to_owned(),
             PageSource::File(p) => p.display().to_string(),
             PageSource::Url(u) => u.clone(),
+            PageSource::AboutBlank => "about:blank".to_owned(),
             PageSource::Snapshot { base_url, .. } => format!("[bfcache] {base_url}"),
+            PageSource::Static { url, .. } => url.clone(),
         }
     }
 
@@ -1191,7 +1846,7 @@ impl PageSource {
         let url_s = match self {
             PageSource::Url(u) => u.as_str(),
             PageSource::Snapshot { base_url, .. } => base_url.as_str(),
-            _ => return None,
+                _ => return None,
         };
         lumen_core::url::Url::parse(url_s).ok().map(|u| {
             let port = u.port().map(|p| format!(":{p}")).unwrap_or_default();
@@ -1204,6 +1859,8 @@ impl PageSource {
         match self {
             PageSource::Url(u) => Some(u.as_str()),
             PageSource::Snapshot { base_url, .. } => Some(base_url.as_str()),
+            PageSource::AboutBlank => Some("about:blank"),
+            PageSource::Static { url, .. } => Some(url.as_str()),
             _ => None,
         }
     }
@@ -1216,7 +1873,9 @@ impl PageSource {
             PageSource::File(p) => ResourceBase::File(p.clone()),
             PageSource::Url(u) => ResourceBase::Url(u.clone()),
             PageSource::Snapshot { base_url, .. } => ResourceBase::Url(base_url.clone()),
-            PageSource::Empty => return href.to_owned(),
+            PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => {
+                return href.to_owned();
+            }
         };
         base.resolve_str(href)
     }
@@ -1224,34 +1883,57 @@ impl PageSource {
     /// Прочитать байты страницы с диска или из сети, плюс вернуть базу для
     /// относительных URL и подсказку о content-type. Используется и обычным
     /// `load`, и dump-режимами.
-    fn load_bytes(&self, sink: Arc<dyn EventSink>) -> Result<RawPage, Box<dyn Error>> {
+    fn load_bytes(
+        &self,
+        sink: Arc<dyn EventSink>,
+        cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    ) -> Result<RawPage, Box<dyn Error>> {
         match self {
             PageSource::Empty => Err("источник пуст — нечего загружать".into()),
+            PageSource::AboutBlank => Ok(RawPage {
+                bytes: b"<!DOCTYPE html><html><head></head><body></body></html>".to_vec(),
+                base: ResourceBase::Url("about:blank".to_owned()),
+                content_type: Some("text/html"),
+                cross_origin_isolated: false,
+            }),
             PageSource::File(path) => {
                 let bytes = std::fs::read(path)?;
                 Ok(RawPage {
                     bytes,
                     base: ResourceBase::File(path.clone()),
                     content_type: None,
+                    cross_origin_isolated: false,
                 })
             }
             PageSource::Url(url) => {
-                use lumen_core::ext::NetworkTransport;
                 use lumen_core::url::Url;
                 use lumen_network::{BrotliContentDecoder, HttpClient};
 
                 let lumen_url = Url::parse(url)?;
-                let client = crate::config::global().apply_http(
-                    HttpClient::new()
-                        .with_sink(sink)
-                        .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new())),
-                );
-                let bytes = client.fetch(&lumen_url)?;
+                let mut builder = HttpClient::new()
+                    .with_sink(sink)
+                    .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()));
+                if let Some(jar) = cookie_jar {
+                    builder = builder.with_cookie_jar(
+                        Arc::new(lumen_storage::CookieJarProvider::new(jar)),
+                        None,
+                    );
+                }
+                let client = crate::config::global().apply_http(builder);
+                let (bytes, resp_headers) = client.fetch_page(&lumen_url)?;
                 eprintln!("Получено {} байт", bytes.len());
+                let coop = resp_headers.iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case("cross-origin-opener-policy"))
+                    .map(|(_, v)| v.as_str());
+                let coep = resp_headers.iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case("cross-origin-embedder-policy"))
+                    .map(|(_, v)| v.as_str());
+                let cross_origin_isolated = lumen_network::CrossOriginIsolationState::from_headers(coop, coep).is_cross_origin_isolated();
                 Ok(RawPage {
                     bytes,
                     base: ResourceBase::Url(url.clone()),
                     content_type: Some("text/html"),
+                    cross_origin_isolated,
                 })
             }
             PageSource::Snapshot { html, base_url } => {
@@ -1260,6 +1942,16 @@ impl PageSource {
                     bytes: html.as_bytes().to_vec(),
                     base: ResourceBase::Url(base_url.clone()),
                     content_type: Some("text/html"),
+                    cross_origin_isolated: false,
+                })
+            }
+            PageSource::Static { html, url } => {
+                // Internal about: page: HTML generated in memory, no network request.
+                Ok(RawPage {
+                    bytes: html.as_bytes().to_vec(),
+                    base: ResourceBase::Url(url.clone()),
+                    content_type: Some("text/html"),
+                    cross_origin_isolated: false,
                 })
             }
         }
@@ -1276,12 +1968,12 @@ impl PageSource {
         hp: &dyn HyphenationProvider,
         cookie_banner_dismiss: bool,
     ) -> Result<(LoadedPage, Option<LayoutSource>, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
-        if matches!(self, PageSource::Empty) {
+        if matches!(self, PageSource::Empty | PageSource::AboutBlank) {
             return Ok((LoadedPage::empty(), None, None));
         }
-        let raw = self.load_bytes(sink.clone())?;
+        let raw = self.load_bytes(sink.clone(), None)?;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, false)?;
+            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, false, false, None, raw.cross_origin_isolated)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }
@@ -1292,6 +1984,10 @@ struct RawPage {
     bytes: Vec<u8>,
     base: ResourceBase,
     content_type: Option<&'static str>,
+    /// True when the server sent `Cross-Origin-Opener-Policy: same-origin` +
+    /// `Cross-Origin-Embedder-Policy: require-corp` on this document, enabling
+    /// `window.crossOriginIsolated` and unlocking SharedArrayBuffer / high-res timers.
+    cross_origin_isolated: bool,
 }
 
 /// Режим запуска shell. Решается на основе CLI-аргументов в `parse_cli`.
@@ -1423,6 +2119,7 @@ impl LoadedPage {
                 col_span: 1,
                 row_span: 1,
                 svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
+                dirty: lumen_layout::DirtyBits::CLEAN,
             },
             font_registry: Arc::new(lumen_font::SystemFontIndex::new()),
             js_navigate: None,
@@ -1489,10 +2186,16 @@ enum KeyCommand {
     TogglePermissions,
     /// Включить/выключить авто-закрытие cookie-баннеров (Ctrl+Shift+K, 7C.3).
     ToggleCookieBannerDismiss,
-    /// Показать/скрыть правую боковую панель (Ctrl+Shift+A, 7D.3).
-    ToggleSidebar,
+    /// Показать/скрыть AI-панель (Ctrl+Shift+A, §12.8).
+    ToggleAiPanel,
+    /// Открыть/закрыть панель настроек доступности (Ctrl+Shift+Q, E-2).
+    ToggleA11y,
     /// Показать/скрыть менеджер закладок (Ctrl+Shift+O, task #22).
     ToggleBookmarks,
+    /// Показать/скрыть панель истории браузера (Ctrl+H, task D-5).
+    ToggleHistory,
+    /// Открыть/закрыть страницу настроек браузера (Ctrl+,, task D-7).
+    ToggleSettings,
     /// Показать/скрыть командную палитру (Ctrl+K, §7E.2, task #23).
     ToggleCommandPalette,
     /// Войти/выйти из focus mode + Pomodoro (Ctrl+Shift+F, task #25, V4).
@@ -1509,6 +2212,18 @@ enum KeyCommand {
     TogglePrivacy,
     /// Открыть/закрыть picture-in-picture окно видео (Ctrl+Shift+V, task #21).
     TogglePip,
+    /// Показать/скрыть панель Read-later (Ctrl+Shift+R, §12.3).
+    ToggleReadLater,
+    /// Включить/выключить Reader View (F9, §D-3): clean article layout.
+    ToggleReaderView,
+    /// Открыть просмотр исходного кода текущей страницы (Ctrl+U, §D-2).
+    ViewSource,
+    /// Открыть/закрыть панель горячих клавиш (Ctrl+Shift+/, §D-4).
+    ToggleShortcuts,
+    /// Открыть/закрыть диалог печати страницы (Ctrl+P, E-1).
+    TogglePrint,
+    /// Открыть/закрыть просмотр TLS-сертификата (Ctrl+Shift+C, §D-1).
+    ToggleCert,
     /// Назначить контейнер активной вкладке (7D.2). Не привязано к клавише —
     /// диспатчится программно (контекстное меню вкладки / omnibox-команда
     /// `container <name>`). См. `tabs::containers::ContainerKind`.
@@ -1571,6 +2286,7 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::Space if shift_only => Some(KeyCommand::ScrollPageUp),
         KeyCode::Home if no_mods => Some(KeyCommand::ScrollHome),
         KeyCode::End if no_mods => Some(KeyCommand::ScrollEnd),
+        KeyCode::KeyJ if ctrl_only => Some(KeyCommand::DownloadsPanel),
         KeyCode::KeyJ if ctrl_and_shift => Some(KeyCommand::DownloadsPanel),
         // Ctrl+\ — toggle split view (show active + next tab side-by-side)
         KeyCode::Backslash if ctrl_only => Some(KeyCommand::SplitView),
@@ -1602,14 +2318,18 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::KeyK if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleCookieBannerDismiss)
         }
-        // Ctrl+Shift+A — toggle right sidebar web panel (7D.3)
+        // Ctrl+Shift+A — toggle AI sidebar panel (§12.8)
         KeyCode::KeyA if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
-            Some(KeyCommand::ToggleSidebar)
+            Some(KeyCommand::ToggleAiPanel)
         }
         // Ctrl+Shift+O — toggle bookmark manager panel (task #22)
         KeyCode::KeyO if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleBookmarks)
         }
+        // Ctrl+H — toggle browser history panel (task D-5)
+        KeyCode::KeyH if ctrl_only => Some(KeyCommand::ToggleHistory),
+        // Ctrl+, — open browser settings (task D-7)
+        KeyCode::Comma if ctrl_only => Some(KeyCommand::ToggleSettings),
         // Ctrl+Shift+F — toggle focus mode + Pomodoro timer (task #25, V4)
         KeyCode::KeyF if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleFocusMode)
@@ -1636,6 +2356,24 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::KeyV if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::TogglePip)
         }
+        // Ctrl+Shift+Q — toggle accessibility settings panel (E-2)
+        KeyCode::KeyQ if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
+            Some(KeyCommand::ToggleA11y)
+        }
+        // Ctrl+Shift+R — toggle Read-later panel (§12.3)
+        KeyCode::KeyR if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
+            Some(KeyCommand::ToggleReadLater)
+        }
+        // F9 — toggle Reader View (§D-3)
+        KeyCode::F9 if no_mods => Some(KeyCommand::ToggleReaderView),
+        // Ctrl+U — view page source (§D-2)
+        KeyCode::KeyU if ctrl_only => Some(KeyCommand::ViewSource),
+        // Ctrl+Shift+/ — toggle keyboard shortcuts panel (§D-4)
+        KeyCode::Slash if ctrl_and_shift => Some(KeyCommand::ToggleShortcuts),
+        // Ctrl+P — print dialog (E-1)
+        KeyCode::KeyP if ctrl_only => Some(KeyCommand::TogglePrint),
+        // Ctrl+Shift+C — certificate viewer (§D-1)
+        KeyCode::KeyC if ctrl_and_shift => Some(KeyCommand::ToggleCert),
         // Ctrl+= — zoom in
         KeyCode::Equal if ctrl_only => Some(KeyCommand::ZoomIn),
         // Ctrl+- — zoom out
@@ -1708,13 +2446,19 @@ impl ResourceBase {
     fn http_client_for_subresource(
         &self,
         sink: Arc<dyn EventSink>,
+        cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     ) -> lumen_network::HttpClient {
         use lumen_network::{BrotliContentDecoder, HttpClient, MixedContentMode};
-        let client = crate::config::global().apply_http(
-            HttpClient::new()
-                .with_sink(sink)
-                .with_content_decoder(Arc::new(BrotliContentDecoder::new())),
-        );
+        let mut builder = HttpClient::new()
+            .with_sink(sink)
+            .with_content_decoder(Arc::new(BrotliContentDecoder::new()));
+        if let Some(jar) = cookie_jar {
+            builder = builder.with_cookie_jar(
+                Arc::new(lumen_storage::CookieJarProvider::new(jar)),
+                None,
+            );
+        }
+        let client = crate::config::global().apply_http(builder);
         if let Some(origin) = self.origin()
             && origin.is_potentially_trustworthy()
         {
@@ -1731,7 +2475,25 @@ enum ResolvedResource {
 
 // ── Загрузка внешних CSS ─────────────────────────────────────────────────────
 
-fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>) -> String {
+/// Загрузить текст CSS по уже разрешённому абсолютному URL или пути файла.
+/// Используется параллельными CSS-потоками в PH1-2 streaming pipeline.
+/// Ошибки не критичны — промежуточный кадр рисуется без CSS-файла.
+fn load_css_for_streaming(resolved: &str) -> Option<String> {
+    if resolved.starts_with("http://") || resolved.starts_with("https://") {
+        use lumen_core::ext::NetworkTransport;
+        use lumen_core::url::Url;
+        use lumen_network::{BrotliContentDecoder, HttpClient};
+        let url = Url::parse(resolved).ok()?;
+        let client = HttpClient::new()
+            .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()));
+        let bytes = client.fetch(&url).ok()?;
+        String::from_utf8(bytes).ok()
+    } else {
+        std::fs::read_to_string(resolved).ok()
+    }
+}
+
+fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>, cookie_jar: Option<Arc<lumen_storage::CookieJar>>) -> String {
     let mut hrefs = Vec::new();
     collect_link_hrefs(doc, doc.root(), &mut hrefs);
 
@@ -1747,30 +2509,23 @@ fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn E
                 Err(e) => eprintln!("Пропуск CSS {}: {e}", path.display()),
             },
             ResolvedResource::Url(url) => {
-                use lumen_core::event::{Event, TabId};
                 use lumen_core::url::Url;
-                use lumen_network::{Origin, RequestDestination};
+                use lumen_network::RequestDestination;
 
                 let sub_url = match Url::parse(&url) {
                     Ok(u) => u,
                     Err(e) => { eprintln!("Пропуск CSS {url}: {e}"); continue; }
                 };
 
-                // SOP: cross-origin stylesheets blocked without CORS in Phase 0.
-                // Same-origin и file-base — пропускают проверку.
-                if let Some(page_origin) = base.origin()
-                    && let Ok(sub_origin) = Origin::from_url(&sub_url)
-                    && !page_origin.same_origin(&sub_origin)
-                {
-                    sink.emit(&Event::RequestBlocked {
-                        tab_id: TabId(0),
-                        url: sub_url,
-                        reason: "sop: cross-origin stylesheet".to_owned(),
-                    });
-                    continue;
-                }
+                // Cross-origin stylesheets are allowed by the web platform:
+                // `<link rel=stylesheet>` is fetched in no-cors mode and the
+                // resulting styles apply normally (Fetch §request, HTML §link).
+                // CORS only gates script-level CSSOM reads (cssRules), not the
+                // visual application — so we fetch cross-origin CSS like any
+                // browser. Real sites host CSS on CDN subdomains (icdn.*,
+                // static.*); blocking them left pages unstyled.
 
-                let client = base.http_client_for_subresource(sink.clone());
+                let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
                 match client.fetch_subresource(&sub_url, RequestDestination::Style) {
                     Ok(bytes) => {
                         let content = String::from_utf8_lossy(&bytes);
@@ -1835,6 +2590,7 @@ fn fetch_and_decode_images(
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     viewport: lumen_core::geom::Size,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> (Vec<(String, lumen_image::Image)>, Vec<(String, lumen_image::AnimatedGif)>, Vec<(u32, String)>) {
     let requests = lumen_layout::collect_image_requests(doc, viewport);
 
@@ -1847,7 +2603,7 @@ fn fetch_and_decode_images(
             lazy_pairs.push((req.node_id.index() as u32, req.url));
             continue;
         }
-        let bytes = match fetch_image_bytes(&req.url, base, sink) {
+        let bytes = match fetch_image_bytes(&req.url, base, sink, cookie_jar.clone()) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("Пропуск картинки {}: {e}", req.url);
@@ -1937,6 +2693,7 @@ fn fetch_image_bytes(
     raw_src: &str,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
     match base.resolve(raw_src) {
         ResolvedResource::File(path) => std::fs::read(&path).map_err(|e| {
@@ -1949,7 +2706,7 @@ fn fetch_image_bytes(
             // Images are loaded in no-cors mode: cross-origin allowed, but
             // mixed-content enforcement still applies for HTTPS pages.
             let lumen_url = Url::parse(&url)?;
-            let client = base.http_client_for_subresource(sink.clone());
+            let client = base.http_client_for_subresource(sink.clone(), cookie_jar);
             Ok(client.fetch_subresource(&lumen_url, RequestDestination::Image)?)
         }
     }
@@ -2034,6 +2791,7 @@ struct PageSnapshot {
     runtime: runtime::EventLoop,
     animation_scheduler: animation_scheduler::AnimationScheduler,
     transition_scheduler: TransitionScheduler,
+    starting_style_tracker: StartingStyleTracker,
     prev_styles: HashMap<NodeId, ComputedStyle>,
     anim_frame: Option<lumen_layout::AnimationFrame>,
     layout_box: Option<lumen_layout::LayoutBox>,
@@ -2049,6 +2807,8 @@ struct PageSnapshot {
     pending_js_navigate: Option<JsNavigateRequest>,
     stream_builder: Option<lumen_html_parser::IncrementalTreeBuilder>,
     stream_last_paint: std::time::Instant,
+    /// CSS accumulated from parallel CSS-loader threads during streaming; applied to intermediate frames.
+    stream_sheet: lumen_css_parser::Stylesheet,
     preload_dispatched: std::collections::HashSet<String>,
     ime_composing: Option<String>,
     bfcache: BfCache,
@@ -2057,17 +2817,42 @@ struct PageSnapshot {
     form_state: forms::FormState,
     validation_tooltip: Option<(Rect, String)>,
     color_picker_node: Option<NodeId>,
+    /// NodeId of the `<input type="date/…">` whose calendar picker is open in this tab snapshot.
+    date_picker_node: Option<NodeId>,
+    /// NodeId of the `<select>` whose dropdown is open in this tab snapshot.
+    select_dropdown_node: Option<NodeId>,
     ls_storage: HashMap<String, Arc<Mutex<lumen_core::WebStorage>>>,
-    idb_backend: Arc<Mutex<dyn lumen_core::ext::StorageBackend>>,
+    /// Directory for per-origin IndexedDB SQLite files. Cloned from the active
+    /// tab's `idb_dir` when saving a snapshot; restored on tab switch-back.
+    idb_dir: Option<std::path::PathBuf>,
     sw_backend: Arc<Mutex<dyn lumen_core::ext::StorageBackend>>,
     js_ctx: Option<Box<dyn PersistentJs>>,
     first_paint_delivered: bool,
     first_contentful_paint_delivered: bool,
+    /// Instant at which the current navigation began (set in `reload()`).
+    /// Used to compute `duration` for the W3C Navigation Timing entry.
+    nav_start: Option<std::time::Instant>,
     animated_gifs: HashMap<String, lumen_image::AnimatedGif>,
     gif_last_frame: HashMap<String, usize>,
     image_cache: lumen_image::ImageDecodeCache,
     /// Per-tab user zoom factor. Preserved when the tab goes to background.
     zoom_factor: f32,
+    /// Virtual URL shown in the address bar when `history.pushState` /
+    /// `history.replaceState` changed the displayed URL without a page load.
+    /// `None` → use `source.url_str()`.  Reset to `None` on any full navigation.
+    display_url: Option<String>,
+    /// Serialised JS state object for the current history entry, mirrored from
+    /// the JS side so the shell can store it in `NavEntry` when pushState fires.
+    /// Initialised to `"null"` (the default initial `history.state`).
+    current_history_state_json: String,
+    /// Original page source preserved while Reader View (§D-3) is active.
+    /// `None` = this tab is not in reader mode.
+    reader_original_source: Option<PageSource>,
+    /// TLS certificate data for the current page (§D-1).
+    ///
+    /// Populated when a successful HTTPS connection is made; `None` for HTTP pages
+    /// or when cert extraction is not yet wired (Phase 0 uses stubs).
+    cert_info: Option<panels::cert_panel::PanelCertData>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2084,6 +2869,9 @@ fn parse_and_layout(
     hp: &dyn HyphenationProvider,
     cookie_banner_dismiss: bool,
     deterministic: bool,
+    dark_mode: bool,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cross_origin_isolated: bool,
 ) -> Result<ParsedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
@@ -2103,23 +2891,41 @@ fn parse_and_layout(
 
     // Гейт выполнения скриптов: top-level документ не sandboxed.
     // QuickJS + install_dom дают скриптам полный доступ к DOM-дереву.
-    // fetch_provider пробрасывается в window.fetch(); ws_provider — в new WebSocket().
-    let (fetch_provider, ws_provider) = match base {
+    // fetch_provider пробрасывается в window.fetch(); ws_provider — в new WebSocket();
+    // sse_provider — в new EventSource(). Все три используют один HttpClient.
+    let (fetch_provider, ws_provider, sse_provider) = match base {
         ResourceBase::Url(_) => {
-            let client = base.http_client_for_subresource(Arc::clone(sink));
+            let client = base.http_client_for_subresource(Arc::clone(sink), cookie_jar.clone());
             let arc_client = Arc::new(client);
             let fp: Option<Arc<dyn lumen_core::ext::JsFetchProvider>> =
                 Some(Arc::clone(&arc_client) as Arc<dyn lumen_core::ext::JsFetchProvider>);
             let wp: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>> =
-                Some(arc_client as Arc<dyn lumen_core::ext::JsWebSocketProvider>);
-            (fp, wp)
+                Some(Arc::clone(&arc_client) as Arc<dyn lumen_core::ext::JsWebSocketProvider>);
+            let sp: Option<Arc<dyn lumen_core::ext::JsSseProvider>> =
+                Some(arc_client as Arc<dyn lumen_core::ext::JsSseProvider>);
+            (fp, wp, sp)
         }
-        ResourceBase::File(_) => (None, None),
+        ResourceBase::File(_) => (None, None, None),
     };
     // URL страницы для инициализации window.location в JS.
     let page_url = match base {
         ResourceBase::Url(u) => u.as_str().to_owned(),
         ResourceBase::File(p) => format!("file://{}", p.display()),
+    };
+    // Extension content scripts: collect JS sources that match the page URL.
+    let ext_registry = extensions::ExtensionRegistry::load();
+    let ext_scripts = ext_registry.content_scripts_for_url(&page_url);
+    // BUG-164: collect classic + module scripts in document order and fetch
+    // external `<script src>` bodies via the subresource fetcher, so SPA
+    // bundles execute (lenta.ru owlBundle.js etc.), not just inline scripts.
+    let (classic_scripts, module_scripts) = {
+        let mut classic_items = Vec::new();
+        let mut module_items = Vec::new();
+        collect_scripts_ordered(&doc, doc.root(), &mut classic_items, &mut module_items);
+        (
+            resolve_script_sources(&classic_items, base, sink, cookie_jar.clone()),
+            resolve_script_sources(&module_items, base, sink, cookie_jar.clone()),
+        )
     };
     let (doc_arc, js_nav, js_ctx) = run_scripts_with_dom(
         doc,
@@ -2127,11 +2933,16 @@ fn parse_and_layout(
         &page_url,
         fetch_provider,
         ws_provider,
+        sse_provider,
         ls_store,
         idb_backend,
         sw_backend,
         cookie_banner_dismiss,
         deterministic,
+        cross_origin_isolated,
+        &ext_scripts,
+        classic_scripts,
+        module_scripts,
     );
     // HTML LS §8.2.3 — after HTML parse + inline scripts: readyState → "interactive"
     // + DOMContentLoaded event. Fires before images/fonts are decoded.
@@ -2170,14 +2981,14 @@ fn parse_and_layout(
     // loading="lazy" изображения возвращаются в lazy_pairs и не загружаются сейчас.
     let (images, animated_gifs, lazy_pairs) = {
         let mut d = doc_arc.lock().unwrap();
-        fetch_and_decode_images(&mut d, base, sink, viewport)
+        fetch_and_decode_images(&mut d, base, sink, viewport, cookie_jar.clone())
     };
 
     // Встроенные <style> + внешние <link rel=stylesheet>.
     let css = {
         let d = doc_arc.lock().unwrap();
         let mut css = extract_style_blocks(&d);
-        css.push_str(&load_linked_stylesheets(&d, base, sink));
+        css.push_str(&load_linked_stylesheets(&d, base, sink, cookie_jar.clone()));
         css
     };
 
@@ -2185,8 +2996,7 @@ fn parse_and_layout(
 
     // @font-face: загружаем url()-источники до layout.
     // CSS: @font-face multi-font TextMeasurer — P1 нужно поддержать font-family в layout
-    let font_registry = load_font_faces(&sheet.font_faces, base, sink);
-    let font_provider: Arc<dyn lumen_core::FontProvider> = Arc::new(font_registry);
+    let font_registry = load_font_faces(&sheet.font_faces, base, sink, cookie_jar.clone());
 
     // Populate document.fonts with FontFace objects from @font-face rules.
     // Phase 1: store FontFace metadata; status marked as Loaded after successful load.
@@ -2203,12 +3013,27 @@ fn parse_and_layout(
 
     let font = lumen_font::Font::parse(INTER_FONT)
         .map_err(|e| format!("ошибка разбора шрифта: {e}"))?;
-    let measurer = lumen_paint::FontMeasurer::new(&font)
+    // Многошрифтовый измеритель: Inter как fallback + @font-face семьи.
+    // CSS: @font-face multi-font TextMeasurer — wired здесь.
+    let mut measurer = lumen_paint::MultiFontMeasurer::new(&font)
         .map_err(|e| format!("ошибка метрик шрифта: {e}"))?;
+    for rule in &sheet.font_faces {
+        if !rule.family.is_empty()
+            && let Some(bytes) = font_registry.face_bytes_for_family(&rule.family)
+        {
+            // CSS Fonts L4 §5.1: передаём unicode-range из @font-face дескриптора.
+            let ranges = rule.unicode_range.as_deref()
+                .map(lumen_font::parse_unicode_ranges)
+                .unwrap_or_default();
+            measurer.register_family_with_ranges(&rule.family, bytes, ranges);
+        }
+    }
+    // Move font_registry into Arc after using it above (face_bytes_for_family).
+    let font_provider: Arc<dyn lumen_core::FontProvider> = Arc::new(font_registry);
 
     let layout = {
         let d = doc_arc.lock().unwrap();
-        lumen_layout::layout_measured_hyp(&d, &sheet, viewport, &measurer, hp)
+        lumen_layout::layout_measured_hyp(&d, &sheet, viewport, &measurer, hp, dark_mode)
     };
 
     // CSS Backgrounds L3 §3.10 — собираем `background-image: url(...)` уже
@@ -2216,7 +3041,7 @@ fn parse_and_layout(
     // и добавляем к `images` тем же ключом, что эмиттер кладёт в
     // `DisplayCommand::DrawBackgroundImage.src`.
     let mut images = images;
-    for (src, image) in fetch_and_decode_background_images(&layout, base, sink) {
+    for (src, image) in fetch_and_decode_background_images(&layout, base, sink, cookie_jar.clone()) {
         images.push((src, image));
     }
 
@@ -2247,11 +3072,12 @@ fn fetch_and_decode_background_images(
     layout: &LayoutBox,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> Vec<(String, lumen_image::Image)> {
     let urls = lumen_layout::collect_background_image_requests(layout);
     let mut out: Vec<(String, lumen_image::Image)> = Vec::new();
     for url in urls {
-        let bytes = match fetch_image_bytes(&url, base, sink) {
+        let bytes = match fetch_image_bytes(&url, base, sink, cookie_jar.clone()) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("Пропуск bg-картинки {url}: {e}");
@@ -2314,6 +3140,7 @@ fn load_font_faces(
     font_faces: &[lumen_css_parser::FontFaceRule],
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> lumen_font::FontRegistry {
     use lumen_css_parser::FontFaceSourceKind;
     use lumen_core::FontStyle;
@@ -2333,35 +3160,46 @@ fn load_font_faces(
             .unwrap_or(FontStyle::Normal);
 
         for src in &rule.sources {
-            if src.kind == FontFaceSourceKind::Local {
-                continue;
-            }
+            // CSS Fonts L4 §4.1: try each source in order; first successful wins.
+            let bytes = if src.kind == FontFaceSourceKind::Local {
+                // CSS §4.3: match by family name (case-insensitive) against system fonts.
+                // Phase 0: PostScript / full-name matching not yet implemented.
+                match registry.resolve_local_bytes(&src.value, weight, style) {
+                    Some(b) => b,
+                    None => continue, // not found locally — try next source
+                }
+            } else {
+                let raw = match fetch_image_bytes(&src.value, base, sink, cookie_jar.clone()) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        eprintln!("@font-face «{}»: не загружен {}: {e}", rule.family, src.value);
+                        continue;
+                    }
+                };
 
-            let raw = match fetch_image_bytes(&src.value, base, sink) {
-                Ok(b) => b,
-                Err(e) => {
-                    eprintln!("@font-face «{}»: не загружен {}: {e}", rule.family, src.value);
+                let decoded = match lumen_font::maybe_decode_font(&raw) {
+                    Ok(Some(d)) => d,
+                    Ok(None) => raw,
+                    Err(e) => {
+                        eprintln!("@font-face «{}»: не декодирован WOFF: {e}", rule.family);
+                        continue;
+                    }
+                };
+
+                if lumen_font::Font::parse(&decoded).is_err() {
+                    eprintln!("@font-face «{}»: невалидный шрифт {}", rule.family, src.value);
                     continue;
                 }
-            };
 
-            let bytes = match lumen_font::maybe_decode_font(&raw) {
-                Ok(Some(decoded)) => decoded,
-                Ok(None) => raw,
-                Err(e) => {
-                    eprintln!("@font-face «{}»: не декодирован WOFF: {e}", rule.family);
-                    continue;
-                }
+                decoded
             };
-
-            if lumen_font::Font::parse(&bytes).is_err() {
-                eprintln!("@font-face «{}»: невалидный шрифт {}", rule.family, src.value);
-                continue;
-            }
 
             eprintln!(
-                "@font-face загружен: «{}» weight={} src={}",
-                rule.family, weight, src.value
+                "@font-face загружен: «{}» weight={} src={} ({})",
+                rule.family,
+                weight,
+                src.value,
+                if src.kind == FontFaceSourceKind::Local { "local" } else { "url" },
             );
             registry.register_from_bytes(&rule.family, weight, style, bytes);
             break;
@@ -2393,6 +3231,30 @@ fn collect_box_styles(lb: &LayoutBox, map: &mut HashMap<NodeId, ComputedStyle>) 
     map.insert(lb.node, lb.style.clone());
     for child in &lb.children {
         collect_box_styles(child, map);
+    }
+}
+
+/// Traverse the layout tree and promote nodes with `will-change: transform/opacity/filter`
+/// to their own GPU layers via `RenderBackend::promote_layer`.
+///
+/// Called after every relayout so the promoted-layer set stays current.
+/// Nodes removed from the DOM are cleaned up automatically by `sync_promoted_layers`
+/// (called by each backend's `promote_layer` impl via `LayerCache`).
+fn promote_will_change_layers(lb: &LayoutBox, renderer: &mut dyn RenderBackend) {
+    promote_will_change_rec(lb, renderer);
+}
+
+fn promote_will_change_rec(lb: &LayoutBox, renderer: &mut dyn RenderBackend) {
+    let needs_layer = lb.style.will_change.iter().any(|p| {
+        matches!(p.as_str(), "transform" | "opacity" | "filter")
+    });
+    if needs_layer {
+        let w = lb.rect.width.max(1.0) as u32;
+        let h = lb.rect.height.max(1.0) as u32;
+        renderer.promote_layer(lb.node.index() as u32, w, h);
+    }
+    for child in &lb.children {
+        promote_will_change_rec(child, renderer);
     }
 }
 
@@ -2441,14 +3303,67 @@ fn paint_ordered(layout: &lumen_layout::LayoutBox) -> DisplayList {
 
 /// Повторный layout+paint по сохранённому `LayoutSource` с новым viewport.
 /// Возвращает `(DisplayList, LayoutBox)` — LayoutBox нужен для animation scheduler.
-fn relayout_page(src: &LayoutSource, viewport: Size, hp: &dyn HyphenationProvider) -> (DisplayList, lumen_layout::LayoutBox) {
+/// `dark_mode` is forwarded to `layout_measured_hyp` so `@media (prefers-color-scheme: dark)`
+/// rules take effect on relayout (e.g. after OS theme change or window resize).
+fn relayout_page(src: &LayoutSource, viewport: Size, hp: &dyn HyphenationProvider, dark_mode: bool) -> (DisplayList, lumen_layout::LayoutBox) {
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
     let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let doc = src.document.lock().unwrap();
-    let layout = lumen_layout::layout_measured_hyp(&doc, &src.stylesheet, viewport, &measurer, hp);
+    let layout = lumen_layout::layout_measured_hyp(&doc, &src.stylesheet, viewport, &measurer, hp, dark_mode);
     drop(doc);
     let dl = paint_ordered(&layout);
     (dl, layout)
+}
+
+/// CSS Containment L3 §4.4 (BB-4) — shell-событие: элемент с
+/// `content-visibility: auto` сменил skipped-состояние между layout-проходами.
+/// `skipped == true` — поддерево выпало из расширенного viewport и пропущено;
+/// `false` — узел стал relevant и его содержимое снова выложено.
+/// Phase 2: P3 доставляет как `contentvisibilityautostatechange` в JS.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ContentVisibilityChange {
+    /// DOM-узел элемента с `content-visibility: auto`.
+    node: NodeId,
+    /// Новое состояние: `true` — содержимое пропущено, `false` — выложено.
+    skipped: bool,
+}
+
+/// Собрать `(node, top_y)` всех `content-visibility: auto` боксов, чьё поддерево
+/// пропущено layout-ом (children пусты). top_y — страница-координаты схлопнутого
+/// бокса. Скан по дереву (а не thread-local) — работает и для layout-а,
+/// выполненного в фоновом потоке загрузки страницы.
+fn collect_cv_skipped(b: &lumen_layout::LayoutBox, out: &mut Vec<(NodeId, f32)>) {
+    if b.style.content_visibility == lumen_layout::style::ContentVisibility::Auto
+        && b.children.is_empty()
+    {
+        out.push((b.node, b.rect.y));
+    }
+    for c in &b.children {
+        collect_cv_skipped(c, out);
+    }
+}
+
+/// Дифф skipped-состояния между двумя layout-проходами → события
+/// [`ContentVisibilityChange`]: появившиеся узлы — `skipped: true`,
+/// исчезнувшие — `skipped: false`.
+fn diff_cv_skipped(
+    prev: &[(NodeId, f32)],
+    next: &[(NodeId, f32)],
+) -> Vec<ContentVisibilityChange> {
+    let prev_set: std::collections::HashSet<NodeId> = prev.iter().map(|&(n, _)| n).collect();
+    let next_set: std::collections::HashSet<NodeId> = next.iter().map(|&(n, _)| n).collect();
+    let mut out = Vec::new();
+    for &(n, _) in next {
+        if !prev_set.contains(&n) {
+            out.push(ContentVisibilityChange { node: n, skipped: true });
+        }
+    }
+    for &(n, _) in prev {
+        if !next_set.contains(&n) {
+            out.push(ContentVisibilityChange { node: n, skipped: false });
+        }
+    }
+    out
 }
 
 /// Extract `initial-scale` from the `<meta name=viewport>` of a page's document.
@@ -2464,6 +3379,34 @@ fn meta_initial_scale(src: &LayoutSource) -> f32 {
 
 /// Get-or-create the localStorage partition for the given `ResourceBase` origin.
 /// Returns `None` for file: bases (no persistent origin-partitioned storage).
+/// Returns the platform-specific directory for per-origin IndexedDB SQLite files,
+/// creating it if it does not exist.
+///
+/// - Windows: `%APPDATA%\lumen\idb\`
+/// - Unix:    `$HOME/.config/lumen/idb/`
+/// - Fallback (env vars missing): `./lumen-idb/` (relative to working directory)
+///
+/// Returns `None` when directory creation fails — the caller falls back to
+/// ephemeral in-memory IDB storage for the session.
+fn lumen_idb_dir() -> Option<std::path::PathBuf> {
+    let dir = if cfg!(target_os = "windows") {
+        std::env::var("APPDATA")
+            .ok()
+            .map(|p| std::path::PathBuf::from(p).join("lumen").join("idb"))
+    } else {
+        std::env::var("HOME")
+            .ok()
+            .map(|p| std::path::PathBuf::from(p).join(".config").join("lumen").join("idb"))
+    }
+    .unwrap_or_else(|| std::path::PathBuf::from("lumen-idb"));
+
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("idb: не удалось создать директорию {}: {e}", dir.display());
+        return None;
+    }
+    Some(dir)
+}
+
 fn ls_store_for_base(
     base: &ResourceBase,
     ls_storage: &mut HashMap<String, Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
@@ -2483,21 +3426,49 @@ fn ls_store_for_base(
 }
 
 /// Build the per-origin IndexedDB persistence handle for the given `ResourceBase`.
-/// Returns `None` for `file:` bases (no origin-partitioned persistent storage),
-/// matching `ls_store_for_base`. The returned `IdbStore` shares `backend`, so
-/// the same origin sees its databases across reloads.
+///
+/// Returns `None` for `file:` bases (no origin storage).
+/// When `idb_dir` is `Some`, opens or creates a dedicated SQLite file
+/// `{idb_dir}/{sha256_hex(eTLD+1)[:16]}.db`; when `None` uses an ephemeral
+/// in-memory store (tests / headless — no cross-reload persistence).
 fn idb_store_for_base(
     base: &ResourceBase,
-    backend: &Arc<std::sync::Mutex<dyn lumen_core::ext::StorageBackend>>,
+    idb_dir: Option<&std::path::Path>,
 ) -> Option<Arc<dyn lumen_core::ext::IdbBackend>> {
-    let origin = match base {
-        ResourceBase::Url(u) => lumen_core::url::Url::parse(u).ok().map(|parsed| {
-            let port = parsed.port().map(|p| format!(":{p}")).unwrap_or_default();
-            format!("{}://{}{}", parsed.scheme(), parsed.host(), port)
-        })?,
+    let url = match base {
+        ResourceBase::Url(u) => u.as_str(),
         ResourceBase::File(_) => return None,
     };
-    Some(Arc::new(lumen_storage::IdbStore::new(Arc::clone(backend), origin)))
+    idb_store_for_url(url, idb_dir)
+}
+
+/// Core IDB store builder — shared by [`idb_store_for_base`] and the reload path.
+fn idb_store_for_url(
+    url: &str,
+    idb_dir: Option<&std::path::Path>,
+) -> Option<Arc<dyn lumen_core::ext::IdbBackend>> {
+    let parsed = lumen_core::url::Url::parse(url).ok()?;
+    let host = parsed.host();
+    if host.is_empty() {
+        return None;
+    }
+    // eTLD+1 for key derivation; falls back to raw host (IPs, localhost, unknown TLDs).
+    let etld_plus_one = {
+        use lumen_core::ext::PublicSuffixList;
+        lumen_storage::PslProvider::new()
+            .registrable_domain(host)
+            .unwrap_or(host)
+            .to_string()
+    };
+    if let Some(dir) = idb_dir {
+        lumen_storage::IdbStore::for_origin(&etld_plus_one, dir).ok()
+    } else {
+        let origin = format!("{}://{}", parsed.scheme(), parsed.host());
+        Some(Arc::new(lumen_storage::IdbStore::new(
+            Arc::new(Mutex::new(lumen_storage::store::InMemoryStorage::new())),
+            origin,
+        )))
+    }
 }
 
 /// Build the per-origin Service Worker registration persistence handle for the
@@ -2531,8 +3502,11 @@ fn render_bytes(
     hp: &dyn HyphenationProvider,
     cookie_banner_dismiss: bool,
     deterministic: bool,
+    dark_mode: bool,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cross_origin_isolated: bool,
 ) -> Result<(LoadedPage, LayoutSource, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -2672,11 +3646,83 @@ fn extract_style_blocks(doc: &Document) -> String {
     out
 }
 
-fn collect_inline_scripts(doc: &Document, id: NodeId, out: &mut Vec<String>) {
+/// A `<script>` to execute: either an inline body or an external `src`.
+///
+/// Produced by [`collect_scripts_ordered`] in document order; external entries
+/// are resolved + fetched by [`resolve_script_sources`].
+enum ScriptSource {
+    /// Inline `<script>` body (concatenated text children).
+    Inline(String),
+    /// External `<script src="...">` — raw `src` attribute, resolved relative
+    /// to the document base.
+    External(String),
+}
+
+/// True for `type` values that designate an executable classic script
+/// (HTML LS §2.1.5 "JavaScript MIME type"). An absent/empty `type` is classic.
+/// Everything else (`module`, `importmap`, `application/json`,
+/// `application/ld+json`, `speculationrules`, templates) is data, not code.
+fn is_classic_script_type(t: Option<&str>) -> bool {
+    match t {
+        None => true,
+        Some(t) => {
+            let t = t.trim();
+            t.is_empty()
+                || matches!(
+                    t.to_ascii_lowercase().as_str(),
+                    "text/javascript"
+                        | "application/javascript"
+                        | "application/ecmascript"
+                        | "application/x-ecmascript"
+                        | "application/x-javascript"
+                        | "text/ecmascript"
+                        | "text/javascript1.0"
+                        | "text/javascript1.1"
+                        | "text/javascript1.2"
+                        | "text/javascript1.3"
+                        | "text/javascript1.4"
+                        | "text/javascript1.5"
+                        | "text/jscript"
+                        | "text/livescript"
+                        | "text/x-ecmascript"
+                        | "text/x-javascript"
+                )
+        }
+    }
+}
+
+/// Walk the DOM in document order, classifying `<script>` elements into
+/// `classic` and `module` execution lists (HTML LS §8.1.3.1). Unlike
+/// [`collect_inline_scripts`], external `<script src>` are recorded as
+/// [`ScriptSource::External`] so the caller can fetch and execute their bodies
+/// (BUG-164). `defer`/`async` are not modelled separately — the shell runs
+/// every script synchronously in document order, which matches the eventual
+/// classic-then-module execution in [`run_scripts_with_dom`].
+fn collect_scripts_ordered(
+    doc: &Document,
+    id: NodeId,
+    classic: &mut Vec<ScriptSource>,
+    modules: &mut Vec<ScriptSource>,
+) {
     let node = doc.get(id);
     if let NodeData::Element { name, .. } = &node.data
         && name.local == "script"
     {
+        let script_type = node.get_attr("type").map(|t| t.trim());
+        let is_module = script_type.is_some_and(|t| t.eq_ignore_ascii_case("module"));
+        // Only module + classic-JS scripts execute; everything else is data.
+        if !is_module && !is_classic_script_type(script_type) {
+            return;
+        }
+        let target = if is_module { modules } else { classic };
+        // `src` wins over inline body (HTML LS §4.12.1 — inline ignored if set).
+        if let Some(src) = node.get_attr("src") {
+            let src = src.trim();
+            if !src.is_empty() {
+                target.push(ScriptSource::External(src.to_owned()));
+            }
+            return;
+        }
         let mut text = String::new();
         for &child in &node.children {
             if let NodeData::Text(s) = &doc.get(child).data {
@@ -2684,44 +3730,207 @@ fn collect_inline_scripts(doc: &Document, id: NodeId, out: &mut Vec<String>) {
             }
         }
         if !text.trim().is_empty() {
-            out.push(text);
+            target.push(ScriptSource::Inline(text));
         }
         return;
     }
     for &child in &node.children {
-        collect_inline_scripts(doc, child, out);
+        collect_scripts_ordered(doc, child, classic, modules);
     }
 }
 
-/// Применить sandbox-ограничения для всех `<iframe sandbox>` элементов документа.
+/// Resolve [`ScriptSource`] items to JS source strings in document order,
+/// fetching external `<script src>` bodies via the subresource fetcher
+/// (mirrors [`load_linked_stylesheets`]). Failed fetches are logged and
+/// skipped — one broken script must not abort the rest of the page.
+fn resolve_script_sources(
+    items: &[ScriptSource],
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+) -> Vec<String> {
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        match item {
+            ScriptSource::Inline(body) => out.push(body.clone()),
+            ScriptSource::External(src) => match base.resolve(src) {
+                ResolvedResource::File(path) => match std::fs::read_to_string(&path) {
+                    Ok(content) => {
+                        eprintln!("Загружен скрипт: {}", path.display());
+                        out.push(content);
+                    }
+                    Err(e) => eprintln!("Пропуск скрипта {}: {e}", path.display()),
+                },
+                ResolvedResource::Url(url) => {
+                    use lumen_core::url::Url;
+                    use lumen_network::RequestDestination;
+                    let sub_url = match Url::parse(&url) {
+                        Ok(u) => u,
+                        Err(e) => {
+                            eprintln!("Пропуск скрипта {url}: {e}");
+                            continue;
+                        }
+                    };
+                    let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
+                    match client.fetch_subresource(&sub_url, RequestDestination::Script) {
+                        Ok(bytes) => {
+                            eprintln!("Загружен скрипт: {url}");
+                            out.push(String::from_utf8_lossy(&bytes).into_owned());
+                        }
+                        Err(e) => eprintln!("Пропуск скрипта {url}: {e}"),
+                    }
+                }
+            },
+        }
+    }
+    out
+}
+
+/// Collect `<script>` elements from the DOM, separating classic from module scripts.
 ///
-/// Для каждого sandboxed iframe вызывает соответствующие gate-функции:
-/// - [`check_form_gate`] с `SandboxFlags::FORMS` если формы запрещены
-/// - [`check_navigation_gate`] с `SandboxFlags::NAVIGATION` если навигация запрещена
-/// - [`check_popup_gate`] с `SandboxFlags::AUXILIARY_NAVIGATION` если popups запрещены
+/// `scripts` receives classic `<script>` bodies (no `type` attribute, or `type=text/javascript`).
+/// `module_scripts` receives `<script type=module>` bodies (HTML LS §8.1.3.1).
+/// Both skip `<script src="...">` (external-only) and empty inline bodies.
+fn collect_inline_scripts(
+    doc: &Document,
+    id: NodeId,
+    scripts: &mut Vec<String>,
+    module_scripts: &mut Vec<String>,
+) {
+    let node = doc.get(id);
+    if let NodeData::Element { name, .. } = &node.data
+        && name.local == "script"
+    {
+        let script_type = node.get_attr("type").map(|t| t.trim());
+        let is_module = script_type.is_some_and(|t| t.eq_ignore_ascii_case("module"));
+        let is_importmap = script_type.is_some_and(|t| t.eq_ignore_ascii_case("importmap"));
+
+        let mut text = String::new();
+        for &child in &node.children {
+            if let NodeData::Text(s) = &doc.get(child).data {
+                text.push_str(s);
+            }
+        }
+        if !text.trim().is_empty() {
+            if is_importmap {
+                // Import maps are handled separately by the caller
+                // For now, skip them here; caller will collect them separately
+            } else if is_module {
+                module_scripts.push(text);
+            } else {
+                scripts.push(text);
+            }
+        }
+        return;
+    }
+    for &child in &node.children {
+        collect_inline_scripts(doc, child, scripts, module_scripts);
+    }
+}
+
+/// Collect the first `<script type="importmap">` import map from the document.
 ///
-/// Phase 0: iframe sub-документы не загружаются; гейты применяются к самому
-/// iframe-элементу через его sandbox-флаги. Логируют ограничения в stderr.
-fn apply_iframe_sandbox_gates(doc: &Document) {
+/// Returns the parsed ImportMap if found, or None if not present or invalid JSON.
+#[cfg(feature = "quickjs")]
+fn collect_import_map(doc: &Document) -> Option<lumen_js::esm::ImportMap> {
+    collect_import_map_impl(doc, doc.root())
+}
+
+#[cfg(feature = "quickjs")]
+fn collect_import_map_impl(
+    doc: &Document,
+    id: NodeId,
+) -> Option<lumen_js::esm::ImportMap> {
+    let node = doc.get(id);
+    if let NodeData::Element { name, .. } = &node.data
+        && name.local == "script"
+    {
+        let script_type = node.get_attr("type").map(|t| t.trim());
+        let is_importmap = script_type.is_some_and(|t| t.eq_ignore_ascii_case("importmap"));
+
+        if is_importmap {
+            let mut text = String::new();
+            for &child in &node.children {
+                if let NodeData::Text(s) = &doc.get(child).data {
+                    text.push_str(s);
+                }
+            }
+            if let Some(map) = lumen_js::esm::ImportMap::parse(&text) {
+                return Some(map);
+            }
+        }
+    }
+    for &child in &node.children {
+        if let Some(map) = collect_import_map_impl(doc, child) {
+            return Some(map);
+        }
+    }
+    None
+}
+
+/// Apply sandbox restrictions for all `<iframe sandbox>` elements in the document.
+///
+/// Two paths depending on whether the iframe has a `srcdoc` attribute:
+/// - **`srcdoc` iframes** — inline HTML is parsed and sandbox gates are applied to
+///   the inner document: scripts blocked (if `SCRIPTS`), forms blocked (if `FORMS`),
+///   navigation blocked (if `NAVIGATION`), popups blocked (if `AUXILIARY_NAVIGATION`).
+/// - **URL-based iframes** — Phase 0: sub-document is not loaded; logs each active
+///   restriction to stderr without applying gates to the host document.
+///
+/// Returns the total number of blocked capabilities across all sandboxed iframes
+/// (script count + form count + navigation link count + popup gate hits).
+fn apply_iframe_sandbox_gates(doc: &Document) -> usize {
     let iframes = collect_iframes(doc);
+    let mut blocked = 0usize;
     for info in &iframes {
         if !info.is_sandboxed {
             continue;
         }
         let sb = info.sandbox;
-        let src = info.src.as_deref().unwrap_or("<no src>");
-        if sb.contains(lumen_core::SandboxFlags::SCRIPTS) {
-            eprintln!("sandbox: iframe '{src}' — скрипты запрещены (sandbox=scripts)");
+
+        if let Some(html) = &info.srcdoc {
+            // srcdoc iframe: parse inline HTML and apply gates to the inner document.
+            let inner = lumen_html_parser::parse(html);
+
+            if sb.contains(lumen_core::SandboxFlags::SCRIPTS) {
+                let mut scripts = Vec::new();
+                let mut modules = Vec::new();
+                collect_inline_scripts(&inner, inner.root(), &mut scripts, &mut modules);
+                let n = scripts.len() + modules.len();
+                if n > 0 {
+                    eprintln!(
+                        "sandbox: srcdoc iframe — заблокировано {n} скрипт(ов) (sandbox=scripts)"
+                    );
+                    blocked += n;
+                }
+            }
+            if sb.contains(lumen_core::SandboxFlags::FORMS) {
+                blocked += check_form_gate(&inner, sb);
+            }
+            if sb.contains(lumen_core::SandboxFlags::NAVIGATION) {
+                blocked += check_navigation_gate(&inner, sb);
+            }
+            if check_popup_gate(sb) {
+                blocked += 1;
+            }
+        } else {
+            // URL-based iframe: Phase 0 — sub-document not loaded, log restrictions only.
+            let src = info.src.as_deref().unwrap_or("<no src>");
+            if sb.contains(lumen_core::SandboxFlags::SCRIPTS) {
+                eprintln!("sandbox: iframe '{src}' — скрипты запрещены (sandbox=scripts)");
+            }
+            if sb.contains(lumen_core::SandboxFlags::FORMS) {
+                eprintln!("sandbox: iframe '{src}' — формы запрещены (sandbox=forms)");
+            }
+            if sb.contains(lumen_core::SandboxFlags::NAVIGATION) {
+                eprintln!(
+                    "sandbox: iframe '{src}' — навигация запрещена (sandbox=top-navigation)"
+                );
+            }
+            check_popup_gate(sb);
         }
-        if sb.contains(lumen_core::SandboxFlags::FORMS) {
-            eprintln!("sandbox: iframe '{src}' — формы запрещены (sandbox=forms)");
-            check_form_gate(doc, sb);
-        }
-        if sb.contains(lumen_core::SandboxFlags::NAVIGATION) {
-            check_navigation_gate(doc, sb);
-        }
-        check_popup_gate(sb);
     }
+    blocked
 }
 
 /// Выполнить inline `<script>` блоки с DOM-доступом (QuickJS + install_dom).
@@ -2737,8 +3946,12 @@ fn apply_iframe_sandbox_gates(doc: &Document) {
 /// `page_url` пробрасывается в `window.location` (инициализация).
 /// `fetch_provider` пробрасывается в `window.fetch()`.
 /// `ws_provider` пробрасывается в `new WebSocket(url)`.
+/// `sse_provider` пробрасывается в `new EventSource(url)`.
 /// `ls_store` — localStorage partition для текущего origin (persists across reloads).
 /// `None` = no network (sandboxed context или отключён quickjs feature).
+/// `scripts` / `module_scripts` — уже разрешённые тела classic / module скриптов
+/// в порядке документа, включая дозагруженные внешние `<script src>` (BUG-164);
+/// собираются вызывающим через [`collect_scripts_ordered`] + [`resolve_script_sources`].
 #[allow(clippy::needless_return)] // `return` inside #[cfg] block is needed for correct control flow
 #[allow(unused_variables, clippy::type_complexity, clippy::too_many_arguments)]
 fn run_scripts_with_dom(
@@ -2747,24 +3960,33 @@ fn run_scripts_with_dom(
     page_url: &str,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
+    sse_provider: Option<Arc<dyn lumen_core::ext::JsSseProvider>>,
     ls_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
     cookie_banner_dismiss: bool,
     deterministic: bool,
+    cross_origin_isolated: bool,
+    extra_scripts: &[String],
+    scripts: Vec<String>,
+    module_scripts: Vec<String>,
 ) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Box<dyn PersistentJs>>) {
-    let mut scripts: Vec<String> = Vec::new();
-    collect_inline_scripts(&doc, doc.root(), &mut scripts);
+    // `scripts` / `module_scripts` are already resolved by the caller in
+    // document order, including fetched external `<script src>` bodies (BUG-164).
+    // Import map must be captured before `doc` moves into the Arc and applied
+    // to the runtime before any module evaluation (HTML LS §8.1.6.2).
+    #[cfg(feature = "quickjs")]
+    let import_map = collect_import_map(&doc);
 
     let doc_arc = Arc::new(Mutex::new(doc));
 
-    if scripts.is_empty() {
+    if scripts.is_empty() && module_scripts.is_empty() && extra_scripts.is_empty() {
         return (doc_arc, None, None);
     }
     if sandbox.contains(lumen_core::SandboxFlags::SCRIPTS) {
         eprintln!(
-            "sandbox: заблокировано {} скрипт(ов) (sandbox=scripts)",
-            scripts.len()
+            "sandbox: заблокировано {} скрипт(ов) + {} модул(ей) (sandbox=scripts)",
+            scripts.len(), module_scripts.len()
         );
         return (doc_arc, None, None);
     }
@@ -2778,9 +4000,13 @@ fn run_scripts_with_dom(
                 if deterministic {
                     rt.set_deterministic_mode();
                 }
-                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, ls_store, idb_backend, sw_backend) {
+                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend, None, cross_origin_isolated) {
                     eprintln!("JS DOM init failed: {e}");
                 }
+                if let Some(map) = import_map {
+                    rt.set_import_map(map);
+                }
+                // Classic scripts run first (HTML LS §8.1.3 execution order).
                 for src in &scripts {
                     match rt.eval(src) {
                         Ok(_) => {}
@@ -2791,6 +4017,32 @@ fn run_scripts_with_dom(
                             );
                         }
                         Err(e) => eprintln!("script error: {e}"),
+                    }
+                }
+                // Module scripts run after classic scripts (HTML LS §8.1.3.1 deferred).
+                for src in &module_scripts {
+                    match rt.eval_module(src) {
+                        Ok(()) => {}
+                        Err(lumen_core::JsError::NotImplemented) => {
+                            eprintln!(
+                                "module: engine=quickjs, выполнение пропущено ({} байт)",
+                                src.len()
+                            );
+                        }
+                        Err(e) => eprintln!("module error: {e}"),
+                    }
+                }
+                // Extension content scripts run last (after all page scripts).
+                for src in extra_scripts {
+                    match rt.eval(src) {
+                        Ok(_) => {}
+                        Err(lumen_core::JsError::NotImplemented) => {
+                            eprintln!(
+                                "extension: engine=quickjs, выполнение пропущено ({} байт)",
+                                src.len()
+                            );
+                        }
+                        Err(e) => eprintln!("extension script error: {e}"),
                     }
                 }
                 let nav_req = rt.take_navigate_request().map(|r| match r {
@@ -2814,6 +4066,7 @@ fn run_scripts_with_dom(
         let _ = page_url;
         let _ = fetch_provider;
         let _ = ws_provider;
+        let _ = sse_provider;
         use lumen_core::ext::JsRuntime as _;
         for src in &scripts {
             match lumen_core::NullJsRuntime.eval(src) {
@@ -2844,7 +4097,8 @@ fn run_scripts(
     runtime: &dyn lumen_core::JsRuntime,
 ) -> usize {
     let mut scripts: Vec<String> = Vec::new();
-    collect_inline_scripts(doc, doc.root(), &mut scripts);
+    let mut _module_scripts: Vec<String> = Vec::new();
+    collect_inline_scripts(doc, doc.root(), &mut scripts, &mut _module_scripts);
     if scripts.is_empty() {
         return 0;
     }
@@ -2904,6 +4158,15 @@ fn window_title(page_title: Option<&str>) -> String {
 
 struct Lumen {
     display_list: DisplayList,
+    /// Tile-based dirty-rect tracker. Updated on every display-list change via
+    /// [`lumen_paint::TileGrid::update_from_diff`]. Dirty tiles are re-rendered
+    /// on the next frame; clean tiles reuse the previous output (Phase 2).
+    tile_grid: lumen_paint::TileGrid,
+    /// Per-subtree display-list cache. Keyed by stacking-context root `NodeId`.
+    /// Hit on a matching `content_hash` → skip re-traversing the layout tree for
+    /// that subtree. Registered with `cache_registry` so OS memory-pressure
+    /// events evict it via `EvictableCache::on_memory_pressure` (EE-4).
+    display_list_cache: lumen_paint::DisplayListCache,
     title: Option<String>,
     /// Декодированные `<img>` ресурсы. До создания Renderer-а — хранятся
     /// в Vec и заливаются в GPU в `resumed`; после — register_image идёт
@@ -2914,7 +4177,7 @@ struct Lumen {
     event_sink: Arc<dyn EventSink>,
     modifiers: ModifiersState,
     window: Option<Arc<Window>>,
-    renderer: Option<Renderer>,
+    renderer: Option<Box<dyn RenderBackend>>,
     /// HTML event loop runtime. На каждой итерации winit-loop (AboutToWait)
     /// выполняется одна task, на RedrawRequested — run_rendering_step
     /// (вызывает rAF-callback-и), на WindowEvent::Resized —
@@ -2929,6 +4192,10 @@ struct Lumen {
     /// `sync()` вызывается после каждого layout-обновления; `tick()` — на каждом
     /// RedrawRequested вместе с animation_scheduler. Очищается при load/reload.
     transition_scheduler: TransitionScheduler,
+    /// Tracks nodes that are "entering" the document (inserted or display:none→visible)
+    /// so that `@starting-style` rules can provide the before-change style for their
+    /// entry transitions (CSS Transitions L2 §3.4). Consumed in `relayout()`.
+    starting_style_tracker: StartingStyleTracker,
     /// Computed styles предыдущего layout-дерева — нужны `transition_scheduler.sync()`
     /// для определения изменившихся свойств. Обновляется после каждого layout.
     prev_styles: HashMap<NodeId, ComputedStyle>,
@@ -2938,10 +4205,28 @@ struct Lumen {
     /// Layout-дерево текущей страницы — нужен scheduler-у для обхода узлов
     /// и извлечения animation-longhands. Обновляется при load/reload/relayout.
     layout_box: Option<lumen_layout::LayoutBox>,
+    /// CSS Scroll Snap L1 containers collected from `layout_box` after every
+    /// layout update. Used by `start_smooth_scroll` / `scroll_x_by` to apply
+    /// snap positions. Empty when `layout_box` is `None` or the page has no
+    /// `scroll-snap-type` declarations. Cleared on navigation, recomputed on
+    /// relayout / tab switch.
+    snap_containers: Vec<SnapContainer>,
+    /// Overflow scroll containers collected from `layout_box` after every layout
+    /// update. Used by `MouseWheel` handler to route wheel events into the correct
+    /// overflow container instead of always scrolling the page. Also used to fire
+    /// `scroll` events after position changes. Cleared on navigation, recomputed on
+    /// relayout / tab switch.
+    scroll_containers: Vec<lumen_layout::ScrollContainer>,
     /// Эпоха для rAF-timestamp-ов в миллисекундах от старта shell-а
     /// (DOMHighResTimeStamp — HTML §8.1.5.1: «timestamp passed to callback
     /// should be the current high resolution time»).
     epoch: std::time::Instant,
+    /// Timestamp (ms from `epoch`) of the last `requestAnimationFrame` batch fire.
+    ///
+    /// Used by the vsync gate: rAF callbacks fire at most once per `RAF_MIN_INTERVAL_MS`
+    /// (~16.67 ms, 60 Hz). Initialized to `-RAF_MIN_INTERVAL_MS` so the first frame
+    /// fires immediately.
+    last_raf_batch_ms: f64,
     /// Состояние Ctrl+F. Открыт ли bar, текущий query и индекс активного
     /// совпадения. Содержимое поиска не сохраняется между reload-ами
     /// (close() полностью очищает state); это сознательно: после reload
@@ -2968,6 +4253,19 @@ struct Lumen {
     /// Полная ширина контента в CSS px — `max(rect.x + rect.width)` по
     /// текущему display list-у. Обновляется после load/reload. 0 — нет контента.
     content_width: f32,
+    /// CSS Containment L3 §4.4 (BB-4): `(node, top_y)` поддеревьев, пропущенных
+    /// последним layout-проходом из-за `content-visibility: auto` вне расширенного
+    /// viewport. top_y — страница-координаты (scroll 0) схлопнутого бокса.
+    /// Обновляется в `refresh_cv_state` после каждой смены `layout_box`.
+    cv_skipped: Vec<(NodeId, f32)>,
+    /// Ratchet-набор auto-узлов, ставших relevant (вошли в расширенный viewport
+    /// при скролле): прокидывается в layout через `set_cv_relevant`, такие узлы
+    /// больше не пропускаются. Сбрасывается при загрузке страницы.
+    cv_relevant: std::collections::HashSet<NodeId>,
+    /// Очередь shell-событий `ContentVisibilityChange` — диффы skipped-состояния
+    /// между layout-проходами. Потребитель Phase 2: P3 доставляет
+    /// `contentvisibilityautostatechange` в JS. Кап 256 записей.
+    cv_events: Vec<ContentVisibilityChange>,
     /// OS-level `prefers-color-scheme` preference. `true` — система в тёмной теме.
     /// Читается из winit `Window::theme()` при создании окна и обновляется на
     /// `WindowEvent::ThemeChanged`. Прокидывается в JS `matchMedia` через
@@ -2984,6 +4282,17 @@ struct Lumen {
     /// `None` пока курсор не вошёл в окно. Конвертируется в CSS px через
     /// `scale_factor()` непосредственно в hit-test / drag callback-ах.
     cursor_position: Option<winit::dpi::PhysicalPosition<f64>>,
+    /// DOM node currently under the mouse pointer (CSS `:hover` target).
+    /// Updated on every `CursorMoved`; triggers relayout when it changes so
+    /// `:hover` rules re-evaluate. `None` when cursor is outside the content area.
+    hovered_nid: Option<NodeId>,
+    /// Tab bar: index of the hovered tab for displaying tier-tooltip. Updated on
+    /// every `CursorMoved` when cursor is over the tab bar (y < TAB_BAR_HEIGHT).
+    /// `None` when cursor is outside the tab bar or no tabs exist.
+    hovered_tab_idx: Option<usize>,
+    /// DOM node whose mouse button is currently held down (CSS `:active` target).
+    /// Set on `MouseInput(Pressed)`, cleared on `MouseInput(Released)`.
+    active_nid: Option<NodeId>,
     /// Активный drag scrollbar-thumb-а: `Some` пока зажата левая кнопка после
     /// click-а по thumb-у. `MouseInput Released` или `CursorLeft` сбрасывают
     /// в `None`. Снапшот `(start_scroll_y, start_mouse_y)` фиксирован на момент
@@ -3027,6 +4336,10 @@ struct Lumen {
     stream_builder: Option<lumen_html_parser::IncrementalTreeBuilder>,
     /// Момент последнего промежуточного кадра при streaming — для throttling.
     stream_last_paint: std::time::Instant,
+    /// CSS-таблица из параллельных потоков загрузки CSS (PH1-2). Применяется
+    /// в `paint_partial_dom` вместо пустой таблицы. Сбрасывается на каждый
+    /// новый страничный load.
+    stream_sheet: lumen_css_parser::Stylesheet,
     /// URL subresource-хинтов, уже отправленных в sink во время streaming
     /// (`EarlyPreloadHints`). Финальный `dispatch_preload_hints` в `LoadDone`
     /// пропускает URL из этого набора — без дублей в stderr и без повторных
@@ -3054,19 +4367,34 @@ struct Lumen {
     /// NodeId of the `<input type="color">` whose picker is currently open.
     /// The picker overlay is viewport-locked; clicking a swatch closes it.
     color_picker_node: Option<NodeId>,
+    /// NodeId of the `<input type="date/datetime-local/time/month/week">` whose
+    /// calendar picker overlay is open. `None` when no picker is visible.
+    date_picker_node: Option<NodeId>,
+    /// Calendar year currently displayed in the open date picker (1-based).
+    date_picker_year: i32,
+    /// Calendar month currently displayed in the open date picker (1-based, 1=January).
+    date_picker_month: u8,
+    /// NodeId of the `<select>` whose dropdown is currently open.
+    /// The dropdown overlay is viewport-locked; clicking an option closes it.
+    select_dropdown_node: Option<NodeId>,
     /// Persistent `localStorage` partitions keyed by origin (scheme+host+port).
     /// Each entry survives page reloads within the same session.
     /// Partitioned by origin to enforce Same-Origin Policy for storage access.
     ls_storage: HashMap<String, Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
-    /// Shared backend for IndexedDB persistence (one per process, origin-partitioned
-    /// inside). A per-origin `IdbStore` is built over this for each page load, so
-    /// IndexedDB databases survive page reloads within the session (mirrors
-    /// `ls_storage`). Swap `InMemoryStorage` for `SqliteStorage` to persist on disk.
-    idb_backend: Arc<std::sync::Mutex<dyn lumen_core::ext::StorageBackend>>,
+    /// Directory for per-origin IndexedDB SQLite files (`{sha256(eTLD+1)[:16]}.db`).
+    /// `None` → ephemeral in-memory store per page (headless / tests).
+    /// `Some(dir)` → each origin gets its own SQLite file in `dir`; data persists
+    /// across page reloads and is shared across tabs of the same origin.
+    idb_dir: Option<std::path::PathBuf>,
     /// Shared backend for Service Worker registration persistence. A per-origin
     /// `SwStore` is built over this for each page load so SW registrations survive
     /// page navigations within the session (same pattern as `idb_backend`).
     sw_backend: Arc<std::sync::Mutex<dyn lumen_core::ext::StorageBackend>>,
+    /// Session-scoped cookie jar. Shared across all `HttpClient` instances so
+    /// `Set-Cookie` headers received on one hop (including 3xx redirects) are
+    /// sent back on subsequent requests to the same domain. In-memory in Phase 0;
+    /// wired to a per-profile SQLite file in Phase 2.
+    cookie_jar: Arc<lumen_storage::CookieJar>,
     /// Live JS context for the current page — keeps event listeners active after
     /// initial script execution. `None` when `quickjs` feature is disabled or
     /// no scripts were registered. Must be dropped before `layout_source` on
@@ -3081,9 +4409,15 @@ struct Lumen {
     first_paint_delivered: bool,
     /// `true` once `first-contentful-paint` has been delivered to JS.
     first_contentful_paint_delivered: bool,
+    /// Instant at which the current navigation began (set in `reload()`).
+    /// Used to compute `duration` for the W3C Navigation Timing entry.
+    nav_start: Option<std::time::Instant>,
     /// FTS5-индекс по тексту посещённых страниц — используется omnibox (@history).
     /// In-memory в Phase 0; в Phase 2 открывается из профильной БД.
     history_fts: HistoryFts,
+    /// Хранилище пользовательских заметок (§12.2) — omnibox `@notes <query>`.
+    /// In-memory в Phase 0; в Phase 2 открывается из профильной БД.
+    notes_store: lumen_knowledge::Notes,
     /// История поисковых запросов для prefix-match autocomplete в omnibox.
     /// In-memory в Phase 0; в Phase 2 открывается из профильной БД.
     search_history: SearchHistory,
@@ -3147,6 +4481,16 @@ struct Lumen {
     hibernated_tabs: HashMap<usize, tab_lifecycle::TabMetadata>,
     /// SQLite-backed blob store for T3 DOM snapshots (ADR-008 §10J).
     tab_snapshots: lumen_storage::TabSnapshotStore,
+    /// SQLite-backed checkpoint store for T2 (BackgroundOld) tabs (ADR-008 §10I).
+    ///
+    /// Written on every T1→T2 transition so scroll + form state survive a crash.
+    /// Restored on T2→T0 when `bg_tabs` is empty (crash-recovery path).
+    t2_store: lumen_storage::SleepingTabStore,
+    /// Monotonic timestamp (ms since epoch) when a T2 SQLite restore started.
+    ///
+    /// `None` when no restore is in progress.  The `sleep_hint` overlay is shown
+    /// once this exceeds 100 ms.
+    t2_restore_start_ms: Option<f64>,
     /// SQLite-backed store for the last session — all open tabs at window close
     /// (§10I). Overwritten wholesale on `CloseRequested`, read back on launch to
     /// reopen the previous set of tabs. On-disk at `session_persist::SESSION_DB_PATH`.
@@ -3208,10 +4552,28 @@ struct Lumen {
     /// Right-docked sidebar web panel state (7D.3).
     ///
     /// Shows a secondary web viewport in a 300 CSS px slot at the right edge.
-    /// `Ctrl+Shift+A` toggles visibility; `Lumen::open_sidebar_page` supplies
-    /// the page display list.  When visible, `page_content_width_css()`
-    /// subtracts [`panels::sidebar_panel::PANEL_WIDTH`] and `relayout()` fires.
+    /// `Lumen::open_sidebar_page` supplies the page display list.
+    /// When visible, `page_content_width_css()` subtracts
+    /// [`panels::sidebar_panel::PANEL_WIDTH`] and `relayout()` fires.
     sidebar: panels::sidebar_panel::SidebarPanel,
+    /// AI assistant sidebar panel (§12.8, GG-1).
+    ///
+    /// Right-docked 200 CSS px panel with a prompt input field and response area.
+    /// `Ctrl+Shift+A` toggles visibility. When visible, `page_content_width_css()`
+    /// subtracts [`panels::ai_panel::PANEL_WIDTH`] and `relayout()` fires.
+    /// Queries are dispatched to [`Self::ai_backend`] synchronously (Phase 0).
+    ai_panel: panels::ai_panel::AiPanel,
+    /// Floating overlay showing a single user annotation (§12.2, GG-2).
+    ///
+    /// Opened when the user selects a `@notes`-search result from the omnibox
+    /// dropdown and presses Enter. The committed value (`note-viewer:<id>`)
+    /// is intercepted in `handle_omnibox_commit`. `Escape` closes the overlay.
+    note_viewer: panels::note_viewer::NoteViewerPanel,
+    /// AI inference backend for the AI sidebar (§12.8).
+    ///
+    /// Defaults to [`lumen_core::NullAiBackend`] (returns a stub message).
+    /// Replace with a real implementation to enable AI functionality.
+    ai_backend: Box<dyn lumen_core::AiBackend>,
     /// SQLite-backed bookmark store (in-memory for the session).
     ///
     /// Backs the bookmark manager panel. `@read-later <url>` omnibox commands and
@@ -3224,6 +4586,23 @@ struct Lumen {
     /// visibility. Folder tree + bookmark list + search + drag-and-drop re-file
     /// (move bookmark to folder, persisted via `Bookmarks::set_folder`).
     bookmark_panel: panels::bookmark_panel::BookmarkPanel,
+    /// SQLite-backed tab-group metadata store (CC-6, in-memory for the session).
+    ///
+    /// Persists group label/colour/collapsed state created via the tab context
+    /// menu ("В новую группу"). Membership is session state on `TabStrip`.
+    tab_groups: lumen_storage::TabGroups,
+    /// SQLite-backed browsing history store (in-memory for the session, task D-5).
+    ///
+    /// Records each page visit. The history panel reads via `History::recent`
+    /// (50 entries, grouped by date). `History::delete` / `History::clear` are
+    /// called from the panel's delete and clear-all buttons.
+    history_store: History,
+    /// Browser history panel state (task D-5).
+    ///
+    /// Centred floating overlay. `Ctrl+H` toggles visibility. Shows recent pages
+    /// grouped by date with search (via `HistoryFts`), delete per-entry, and a
+    /// "Очистить всё" button.
+    history_panel: panels::history_panel::HistoryPanel,
     /// Command palette modal state (task #23, §7E.2).
     ///
     /// `Ctrl+K` toggles a centred modal that fuzzy-searches across commands,
@@ -3245,6 +4624,16 @@ struct Lumen {
     /// convention) — a true second OS window awaits multi-window support. The
     /// card can be dragged by its title bar.
     pip: panels::pip_window::PipWindow,
+    /// CC-7 enter/exit state machine for the real OS-level PiP window, driven by
+    /// the JS `_lumen_pip_enter` / `_lumen_pip_exit` requests. Pure data; the
+    /// live window + backend it tracks live in [`Self::pip_os`].
+    pip_controller: panels::pip_os_window::PipController,
+    /// The live always-on-top OS window backing video Picture-in-Picture
+    /// (CC-7), with its own render backend, or `None` when no `<video>` is in
+    /// OS PiP. Created on `_lumen_pip_enter`; dropped on exit / close button.
+    /// Falls back to the in-window [`Self::pip`] overlay when a second GPU
+    /// surface cannot be created.
+    pip_os: Option<PipOsWindow>,
     /// Right-button drag gesture recognizer (§7B.3).
     ///
     /// Tracks right-button drags, classifies the trajectory into L/R/U/D/LD/RD,
@@ -3262,11 +4651,22 @@ struct Lumen {
     /// Persisted in-memory for the session; each entry is a raw text string.
     /// Displayed nowhere yet — UI is a future task.
     notes: Vec<String>,
-    /// In-session read-later list created via `@read-later <url>` in the omnibox.
+    /// §12.3 Read-later storage: persists HTML snapshots of saved pages.
     ///
-    /// Each entry is a URL string.  Persisted in-memory; future task wires this
-    /// to the bookmarks backend with a `read-later` tag.
-    read_later: Vec<String>,
+    /// Populated by the `@read-later <url>` omnibox command: a background thread
+    /// fetches the page HTML and calls `save()`. In-memory only (no SQLite path
+    /// for the first ship — drop-in replacement once a `read_later.db` path is
+    /// wired through the profile directory).
+    read_later_store: lumen_knowledge::ReadLater,
+    /// §12.3 Read-later panel state (Ctrl+Shift+R).
+    read_later_panel: panels::read_later_panel::ReadLaterPanel,
+    /// Channel receiver for completed background read-later fetches.
+    ///
+    /// Background threads send `(url, title, html_bytes)` here when done.
+    /// Drained in `about_to_wait` to call `read_later_store.save()`.
+    read_later_rx: std::sync::mpsc::Receiver<(String, String, Vec<u8>)>,
+    /// Sender half of the read-later fetch channel (cloned into each background thread).
+    read_later_tx: std::sync::mpsc::Sender<(String, String, Vec<u8>)>,
     /// Cookie-banner auto-dismiss preference (7C.3).
     ///
     /// When `true` (default) the JS shim in `lumen-js` auto-clicks consent-banner
@@ -3321,6 +4721,49 @@ struct Lumen {
     ///
     /// [`network_panel`]: Lumen::network_panel
     privacy: panels::privacy_panel::PrivacyPanel,
+    /// Persistent accessibility preferences store (task E-2).
+    ///
+    /// Backed by SQLite (in-memory for the session). Stores font-size
+    /// multiplier, prefers-reduced-motion, forced-colors, and cursor size.
+    /// Read on panel open; written when panel closes.
+    a11y_store: lumen_storage::A11yPrefs,
+    /// Accessibility settings panel overlay (task E-2, `Ctrl+Shift+Q`).
+    ///
+    /// A centred 300×260 px modal. Holds a working draft; on close the draft
+    /// is persisted to `a11y_store` and media changes are re-delivered to JS.
+    a11y_panel: panels::a11y_panel::A11yPanel,
+    /// Platform accessibility bridge (O-5).
+    ///
+    /// Receives `AXTree` updates after every page load and focus change.
+    /// Routes them to the OS accessibility API (UIA / NSAccessibility / AT-SPI2).
+    platform_bridge: Box<dyn lumen_a11y::platform::PlatformBridge>,
+    /// Print dialog overlay (task E-1, `Ctrl+P`).
+    ///
+    /// A centred 560×400 px modal with paper size, orientation, margins,
+    /// page range, colour mode, and output-file fields. Clicking **Print**
+    /// calls `do_print_to_pdf()` with the configured settings.
+    print_panel: panels::print_panel::PrintPanel,
+    /// Persistent browser settings store (task D-7).
+    ///
+    /// Backed by SQLite (in-memory for the session). Stores homepage, search
+    /// engine ID, shields, fingerprint mode, DoH, font size, theme, and
+    /// download path. Read on panel open; written when panel closes.
+    settings_store: lumen_storage::BrowserSettings,
+    /// Settings page overlay state (task D-7, `about:settings`).
+    ///
+    /// `Ctrl+,` (or navigating to `about:settings`) toggles a centred
+    /// 640×480 overlay with four tabbed sections: General, Privacy,
+    /// Appearance, Downloads.
+    settings_panel: panels::settings_panel::SettingsPanel,
+    /// Keyboard shortcuts panel (Ctrl+Shift+/, §D-4).
+    ///
+    /// Shows all `KeyCommand` bindings with rebind-on-click support.
+    shortcuts_panel: panels::shortcuts_panel::ShortcutsPanel,
+    /// Certificate viewer panel (Ctrl+Shift+C, §D-1).
+    ///
+    /// Centred 500×440 overlay showing X.509 cert data (subject CN/Org, issuer,
+    /// validity dates, SHA-256 fingerprint, SAN list, TLS version).
+    cert_panel: panels::cert_panel::CertPanel,
     /// Whether the curated system-font fallback chain has been preloaded into
     /// the renderer (CSS Fonts L4 §5.3 codepoint cascade).
     ///
@@ -3332,9 +4775,150 @@ struct Lumen {
     /// fonts, identical across pages), so this guard runs it once after the
     /// first page provides a `FontProvider`.
     fallbacks_preloaded: bool,
+    /// Virtual URL shown in the address bar after `history.pushState` /
+    /// `history.replaceState`.  `None` → use `source.url_str()`.
+    /// Reset to `None` on any full navigation.
+    display_url: Option<String>,
+    /// Serialised JS state JSON for the current history entry, mirrored from JS
+    /// so the shell can populate `NavEntry::same_doc_state_json` on pushState.
+    /// `"null"` until a `pushState`/`replaceState` call updates it.
+    current_history_state_json: String,
+    /// Node ID of the currently fullscreen element, or `None` if not fullscreen.
+    ///
+    /// Set when `requestFullscreen()` is called in JS and cleared when
+    /// `document.exitFullscreen()` or `Escape` exits fullscreen.  Used to deliver
+    /// `_lumen_notify_fullscreen_exit()` when the OS exits fullscreen externally.
+    fullscreen_nid: Option<u32>,
+    /// Active CSS View Transition (CSS View Transitions L1 §4).
+    ///
+    /// Set when `document.startViewTransition(callback)` fires `_lumen_vt_end`.
+    /// The `old_dl` snapshot fades out over the new display list for `duration_ms`.
+    /// `None` when no transition is active.
+    view_transition: Option<ViewTransitionState>,
+    /// Tab auto-archive state (7A.5).
+    ///
+    /// Background tabs idle for more than `ARCHIVE_AFTER_MS` are moved here from
+    /// the visible tab strip.  Only a title + URL string is retained; restoring
+    /// opens a fresh navigation to that URL.  The archive button (rightmost 36 px
+    /// of the tab bar) shows a count badge and toggles the archive panel.
+    archive: tabs::archive::TabArchive,
+    /// Timestamp (wall ms) when restore of a hibernated tab began.
+    ///
+    /// `Some(ms)` = spinner overlay is active; `None` = no restoration in progress.
+    /// Set at the start of `restore_hibernated_tab` and cleared when restore completes.
+    restore_spinner_start_ms: Option<f64>,
+    /// Active element resize: `Some((node_id, start_x, start_y))` when user is dragging
+    /// the resize grip. `None` when no resize is active.
+    /// Set on MouseInput Pressed over a resize grip, cleared on MouseInput Released.
+    /// During CursorMoved, width/height are updated via JS binding.
+    resize_active: Option<(lumen_dom::NodeId, f32, f32)>,
+    /// In-progress tab drag-and-drop (§O-9).
+    ///
+    /// `Some` from the moment the user presses on a tab until they release.
+    /// Transitions to `active = true` after the cursor crosses
+    /// [`tabs::strip::DRAG_THRESHOLD`] px.  On release, calls
+    /// `tab_strip.move_tab` if the drag was active.
+    tab_drag: Option<tabs::strip::TabDragState>,
+    /// Right-click tab context menu (CC-4): Duplicate / Pin / Move to new
+    /// window / Close others / Close to the right. Hidden unless `open`.
+    tab_context_menu: tabs::context_menu::TabContextMenu,
+    /// Shell UI theme: base brightness + accent colour (§O-9).
+    ///
+    /// Initialised from `BrowserSettings` on startup.  Updated when the user
+    /// changes the theme or accent in the settings panel (Appearance section).
+    /// The accent drives the active-tab indicator colour passed to
+    /// `build_tab_bar`.
+    shell_theme: panels::themes::ShellTheme,
+    /// Original page source stored when Reader View (§D-3) is active.
+    ///
+    /// `Some` when the current page is showing the clean reader HTML (F9 toggle);
+    /// `None` in normal browsing mode.  Toggling F9 again restores this source.
+    reader_original_source: Option<PageSource>,
+    /// TLS certificate information for the current tab (§D-1).
+    ///
+    /// Populated when a page loads over HTTPS; cleared on tab switch / navigation.
+    /// Phase 0: shell can set this to a stub value via `CertInfo::stub_for`.
+    cert_info: Option<panels::cert_panel::PanelCertData>,
+}
+
+/// State for an in-progress CSS View Transition cross-fade (CSS View Transitions L1).
+///
+/// Holds the captured old display list and timing parameters.
+struct ViewTransitionState {
+    /// Display list captured before the JS callback mutated the DOM.
+    old_dl: lumen_paint::DisplayList,
+    /// Wall-clock epoch offset (ms) when the cross-fade animation started.
+    start_ms: f64,
+    /// Total cross-fade duration in milliseconds (currently 300 ms).
+    duration_ms: f64,
+}
+
+/// CSS View Transitions L1 — event kind emitted by `document.startViewTransition`.
+#[derive(Debug)]
+#[allow(dead_code)]
+enum ViewTransitionEvent {
+    /// Callback is about to run — shell should snapshot the current frame.
+    Begin,
+    /// Callback finished — shell should relayout and start the cross-fade animation.
+    End,
+    /// Transition was cancelled (nested startViewTransition or explicit abort).
+    Cancel,
 }
 
 impl Lumen {
+    /// Finds a layout box with a resize grip at position (x, y) in the layout tree.
+    /// Returns the NodeId of that element, or None if no grip is found.
+    /// This is used in B-7: CSS Resize property Phase 1 to detect mouse clicks on grips.
+    fn find_resize_grip_node(
+        &self,
+        b: &lumen_layout::LayoutBox,
+        x: f32,
+        y: f32,
+    ) -> Option<lumen_dom::NodeId> {
+        // Check this box first
+        if lumen_paint::point_on_resize_grip(b, x, y) {
+            return Some(b.node);
+        }
+
+        // Recursively check children
+        for child in &b.children {
+            if let Some(nid) = self.find_resize_grip_node(child, x, y) {
+                return Some(nid);
+            }
+        }
+
+        None
+    }
+
+    /// Open the OS native file-picker for `<input type="file">` at `id`.
+    ///
+    /// Reads the `accept` and `multiple` attributes from the DOM, invokes the
+    /// platform file dialog (blocking), then delivers the result to JS via
+    /// `_lumen_deliver_file_list(nid, json)`.
+    fn open_file_picker(&mut self, id: NodeId) {
+        let (accept, multiple) = if let Some(src) = self.layout_source.as_ref() {
+            let doc = src.document.lock().unwrap();
+            let n = doc.get(id);
+            let accept = n.get_attr("accept").unwrap_or("").to_string();
+            let multiple = n.get_attr("multiple").is_some();
+            (accept, multiple)
+        } else {
+            (String::new(), false)
+        };
+        let entries = platform::file_dialog::open_file_dialog(&accept, multiple);
+        if entries.is_empty() {
+            // User cancelled — no event fired (HTML LS §4.10.5.1.16.3 step 3).
+            return;
+        }
+        #[cfg(feature = "quickjs")]
+        if let Some(js) = self.js_ctx.as_ref() {
+            let json = platform::file_dialog::entries_to_json(&entries);
+            js.eval_js(&format!("_lumen_deliver_file_list({}, {})", id.index(), json));
+        }
+        #[cfg(not(feature = "quickjs"))]
+        let _ = entries;
+    }
+
     /// Повторный layout+paint при изменении размера viewport.
     /// Использует сохранённый `LayoutSource`; парсинг не повторяется.
     fn relayout(&mut self) {
@@ -3348,11 +4932,27 @@ impl Lumen {
         // Apply <meta viewport initial-scale> + user zoom to derive the CSS layout viewport.
         let meta_scale = meta_initial_scale(src);
         let (css_w, css_h) =
-            zoom::effective_viewport(vp_size.width as f32, vp_size.height as f32, meta_scale, self.zoom_factor);
+            zoom::effective_viewport(vp_size.width, vp_size.height, meta_scale, self.zoom_factor);
         let viewport = Size::new(css_w, css_h);
-        let (new_dl, lb) = relayout_page(src, viewport, &self.hyp_provider);
+        // Set interactive hover/focus/active state for this layout pass so that
+        // :hover / :focus / :active / :focus-within CSS rules evaluate correctly.
+        lumen_layout::set_interactive_state(self.hovered_nid, self.focused_node, self.active_nid);
+        // content-visibility: auto (BB-4) — relevance-проверка против текущего
+        // scroll-положения + ratchet-набора. Сброс к дефолтам после прохода,
+        // чтобы layout других документов (sidebar, фоновый парс) не унаследовал
+        // чужой scroll/relevant.
+        lumen_layout::set_cv_scroll(self.scroll_x, self.scroll_y);
+        lumen_layout::set_cv_relevant(self.cv_relevant.clone());
+        let (new_dl, lb) = relayout_page(src, viewport, &self.hyp_provider, self.dark_mode);
+        lumen_layout::clear_interactive_state();
+        lumen_layout::set_cv_scroll(0.0, 0.0);
+        lumen_layout::set_cv_relevant(std::collections::HashSet::new());
         self.content_height = content_height_of(&new_dl);
         self.content_width = content_width_of(&new_dl);
+        self.tile_grid.update_from_diff(&self.display_list, &new_dl);
+        // Cache display list directly (avoid &mut self while layout_source is borrowed).
+        let _dl_hash = lumen_paint::hash_commands(&new_dl);
+        self.display_list_cache.insert(lb.node.index() as u32, new_dl.clone(), _dl_hash, None);
         self.display_list = new_dl;
         // Sync transitions: compare prev styles with new layout before replacing.
         let now_s = self.epoch.elapsed().as_secs_f32();
@@ -3363,8 +4963,53 @@ impl Lumen {
                 self.transition_scheduler.sync(*node, old_style, new_style, now_s);
             }
         }
+        // @starting-style (CSS Transitions L2 §3.4): newly visible nodes (not in
+        // prev_styles) use @starting-style rules as the before-change style so that
+        // entry transitions start from the declared starting values.
+        if !src.stylesheet.starting_style_rules.is_empty() {
+            let entering: Vec<NodeId> = new_styles
+                .keys()
+                .filter(|n| !self.prev_styles.contains_key(*n))
+                .copied()
+                .collect();
+            if !entering.is_empty() {
+                let mut entry_styles: Vec<(NodeId, ComputedStyle)> = Vec::new();
+                if let Ok(doc) = src.document.lock() {
+                    for node in &entering {
+                        if let Some(decls) =
+                            resolve_starting_style(*node, &doc, &src.stylesheet)
+                        {
+                            entry_styles.push((
+                                *node,
+                                compute_style_from_declarations(&decls, viewport),
+                            ));
+                        }
+                    }
+                }
+                // MutexGuard dropped — apply entry transitions outside the lock.
+                for (node, starting_style) in &entry_styles {
+                    if let Some(new_style) = new_styles.get(node) {
+                        self.transition_scheduler.sync(
+                            *node,
+                            starting_style,
+                            new_style,
+                            now_s,
+                        );
+                    }
+                }
+            }
+        }
         self.prev_styles = new_styles;
         self.layout_box = Some(lb);
+        self.refresh_cv_state();
+        // Promote nodes with will-change: transform/opacity/filter to GPU layers so
+        // animation ticks can update only the layer matrix, bypassing relayout.
+        // CSS: will-change — P4 wires ComputedStyle.will_change to promote_layer calls here.
+        if let (Some(lb_ref), Some(r)) = (self.layout_box.as_ref(), self.renderer.as_mut()) {
+            promote_will_change_layers(lb_ref, r.as_mut());
+        }
+        self.update_snap_containers();
+        self.update_scroll_containers();
         self.animation_scheduler.clear();
         // Do NOT reset transition_scheduler here: active transitions must survive
         // relayout (viewport resize, DOM mutations) so that in-flight animations
@@ -3387,7 +5032,7 @@ impl Lumen {
                 // CSS MQ L4 §4.2: re-evaluate matchMedia() lists against the new
                 // viewport. `dark_mode` mirrors the OS `prefers-color-scheme`,
                 // read from winit at window creation / refreshed on ThemeChanged.
-                js.deliver_media_query_changes(viewport.width, viewport.height, self.dark_mode);
+                js.deliver_media_query_changes(viewport.width, viewport.height, self.dark_mode, self.a11y_store.reduced_motion());
                 // After fresh rects are in JS: fire lazy-load proximity check.
                 // Images that entered the viewport+margin are queued by JS via
                 // _lumen_request_lazy_image_load; we drain and fetch them below.
@@ -3422,10 +5067,10 @@ impl Lumen {
             PageSource::File(p) => ResourceBase::File(p.clone()),
             PageSource::Url(u) => ResourceBase::Url(u.clone()),
             PageSource::Snapshot { base_url, .. } => ResourceBase::Url(base_url.clone()),
-            PageSource::Empty => return,
+            PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => return,
         };
         for (nid, url) in requests {
-            let bytes = match fetch_image_bytes(&url, &base, &self.event_sink) {
+            let bytes = match fetch_image_bytes(&url, &base, &self.event_sink, Some(Arc::clone(&self.cookie_jar))) {
                 Ok(b) => b,
                 Err(e) => {
                     eprintln!("Lazy: пропуск {url}: {e}");
@@ -3542,9 +5187,26 @@ impl Lumen {
                 .and_then(|lb| forms::find_box_rect(lb, nid))
                 .map(|r| r.y)
         });
+        click_log::log_fragment(&fragment, target_y.is_some());
         if let Some(y) = target_y {
-            self.scroll_to(y);
+            // CSS Scroll Behavior L1 §3: respect scroll-behavior on the scrolling box.
+            // The page viewport's scroll-behavior comes from the root (<html>) element.
+            if self.page_scroll_behavior() == ScrollBehavior::Smooth {
+                self.start_smooth_scroll(y);
+            } else {
+                self.scroll_to(y);
+            }
         }
+    }
+
+    /// Returns the effective `scroll-behavior` for the page viewport (CSS Scroll Behavior L1 §3).
+    /// Reads from the first non-root layout box (the `<html>` element's style).
+    fn page_scroll_behavior(&self) -> ScrollBehavior {
+        self.layout_box
+            .as_ref()
+            .and_then(|lb| lb.children.first())
+            .map(|html_box| html_box.style.scroll_behavior)
+            .unwrap_or(ScrollBehavior::Auto)
     }
 
     /// Перезагрузить текущий источник: fetch/parse/layout/paint снова. На
@@ -3554,6 +5216,9 @@ impl Lumen {
         if matches!(self.source, PageSource::Empty) {
             return;
         }
+        // Record navigation start for PerformanceNavigationTiming (Navigation Timing L2 §4.2).
+        self.nav_start = Some(std::time::Instant::now());
+        click_log::log_load_start(&self.source.describe());
         println!("Reload: {}", self.source.describe());
 
         // Phase 4c: попробовать загрузить через GpuSession (WinitSession)
@@ -3567,7 +5232,7 @@ impl Lumen {
                 || Size::new(1024.0, 720.0),
                 |r| {
                     let s = r.viewport_size();
-                    Size::new(s.width as f32, s.height as f32)
+                    Size::new(s.width, s.height)
                 },
             );
             let ls_store = self.source.origin_str().map(|o| {
@@ -3575,10 +5240,10 @@ impl Lumen {
                     Arc::new(std::sync::Mutex::new(lumen_core::WebStorage::default()))
                 }))
             });
-            let idb_backend = self.source.origin_str().map(|o| {
-                Arc::new(lumen_storage::IdbStore::new(Arc::clone(&self.idb_backend), o))
-                    as Arc<dyn lumen_core::ext::IdbBackend>
-            });
+            let idb_backend = self
+                .source
+                .url_str()
+                .and_then(|u| idb_store_for_url(u, self.idb_dir.as_deref()));
             let sw_backend = self.source.origin_str().map(|o| {
                 Arc::new(lumen_storage::SwStore::new(Arc::clone(&self.sw_backend), o))
                     as Arc<dyn lumen_core::ext::SwBackend>
@@ -3595,12 +5260,22 @@ impl Lumen {
                 self.js_ctx = new_js_ctx;
                 self.content_height = content_height_of(&page.display_list);
                 self.content_width = content_width_of(&page.display_list);
+                // On full page load, mark all tiles dirty — content has changed completely.
+                self.tile_grid.mark_all_dirty(self.content_width, self.content_height);
                 self.display_list = page.display_list;
                 self.animation_scheduler.clear();
                 self.transition_scheduler = TransitionScheduler::new();
+                self.starting_style_tracker = StartingStyleTracker::new();
                 self.prev_styles.clear();
                 collect_box_styles(&page.layout_box, &mut self.prev_styles);
                 self.layout_box = Some(page.layout_box);
+                // content-visibility: auto (BB-4): новая страница — ratchet с нуля.
+                self.cv_relevant.clear();
+                self.cv_events.clear();
+                self.cv_skipped.clear();
+                self.refresh_cv_state();
+                self.update_snap_containers();
+        self.update_scroll_containers();
                 // Push initial layout geometry so JS can query bounding rects
                 // immediately after page load (before the first relayout).
                 #[cfg(feature = "quickjs")]
@@ -3609,7 +5284,7 @@ impl Lumen {
                         || Size::new(1024.0, 720.0),
                         |r| {
                             let s = r.viewport_size();
-                            Size::new(s.width as f32, s.height as f32)
+                            Size::new(s.width, s.height)
                         },
                     );
                     js.update_layout_rects(collect_layout_rects(lb_ref));
@@ -3662,8 +5337,23 @@ impl Lumen {
                 // JS may have requested navigation via location.href= etc.
                 // Store it for processing in about_to_wait (after first render).
                 self.pending_js_navigate = page.js_navigate;
+                let title = self.title.as_deref().unwrap_or("");
+                // Deliver W3C Navigation Timing L2 entry (§4.2) to JS PerformanceObservers.
+                #[cfg(feature = "quickjs")]
+                if let (Some(js), Some(start), Some(url)) =
+                    (&self.js_ctx, self.nav_start.take(), self.source.url_str())
+                {
+                    let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+                    js.deliver_nav_timing(url, duration_ms);
+                } else {
+                    self.nav_start = None;
+                }
+                click_log::log_load_ok(&self.source.describe(), title);
+                click_log::log_page_ready(&self.source.describe(), self.scroll_y);
             }
             Err(err) => {
+                self.nav_start = None;
+                click_log::log_load_err(&self.source.describe(), &err.to_string());
                 eprintln!("Ошибка reload {}: {err}", self.source.describe());
             }
         }
@@ -3690,7 +5380,7 @@ impl Lumen {
             || Size::new(1024.0, 720.0),
             |r| {
                 let s = r.viewport_size();
-                Size::new(s.width as f32, s.height as f32)
+                Size::new(s.width, s.height)
             },
         );
 
@@ -3734,23 +5424,26 @@ impl Lumen {
     ///
     /// Поток fetches байты, затем:
     ///
-    /// 1. Отправляет `EarlyPreloadHints` из первого STREAM_CHUNK_BYTES байт —
-    ///    это даёт sink возможность начать загружать CSS/шрифты ещё до того,
-    ///    как main parser дойдёт до `<head>` (HTML LS §13.2.6.4.7).
-    /// 2. Разбивает на STREAM_CHUNK_BYTES-кусочки и шлёт `HtmlChunk` через proxy.
+    /// 1. Для каждого STREAM_CHUNK_BYTES-chunk: прогоняет через `PreloadScanner`
+    ///    (PH1-8, HTML LS §13.2.6.4.7), отправляет `EarlyPreloadHints`, затем
+    ///    `HtmlChunk`. Hint-ы эмитятся из **каждого** chunk-а, не только первого —
+    ///    это даёт реальный выигрыш для stylesheet/шрифтов, стоящих за первыми 8 КБ.
+    /// 2. PH1-2: для каждого `Stylesheet`-hint запускает параллельный CSS-загрузчик,
+    ///    который присылает `CssLoaded` ещё до `LoadDone`.
     /// 3. По завершении — `LoadDone(raw)` для финального pipeline.
     ///
     /// При ошибке — `LoadError`.
     fn start_streaming_load(&self) {
-        if matches!(self.source, PageSource::Empty) {
+        if matches!(self.source, PageSource::Empty | PageSource::AboutBlank) {
             return;
         }
         let source = self.source.clone();
         let sink = Arc::clone(&self.event_sink);
         let proxy = self.load_proxy.clone();
+        let cookie_jar = Arc::clone(&self.cookie_jar);
 
         std::thread::spawn(move || {
-            let raw = match source.load_bytes(Arc::clone(&sink)) {
+            let raw = match source.load_bytes(Arc::clone(&sink), Some(cookie_jar)) {
                 Ok(r) => r,
                 Err(e) => {
                     let _ = proxy.send_event(LoadEvent::LoadError(e.to_string()));
@@ -3758,37 +5451,60 @@ impl Lumen {
                 }
             };
 
-            // Ранний preload-скан первого chunk-а (обычно содержит весь <head>).
-            // Отправляем ДО первого HtmlChunk, чтобы sink начал prefetch
-            // сразу, пока парсер ещё не стартовал (real streaming win).
-            let scan_end = STREAM_CHUNK_BYTES.min(raw.bytes.len());
-            let partial = String::from_utf8_lossy(&raw.bytes[..scan_end]);
-            let early = lumen_html_parser::scan_preload_hints(&partial);
-            if !early.is_empty() {
-                let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(early, raw.base.clone()));
-            }
+            // PH1-8: инкрементальный preload-сканер — обрабатывает каждый chunk.
+            // Hint-ы отправляются ДО соответствующего HtmlChunk, чтобы fetch
+            // начался параллельно с DOM-парсингом (spec §13.2.6.4.7).
+            let mut preload_scanner = lumen_html_parser::PreloadScanner::new();
 
-            // Разбить сырые байты на chunk-и. Выравнивание по UTF-8 не нужно:
-            // feed_bytes буферизует незавершённые code-point-ы на границах chunk-ов.
             let mut pos = 0;
             while pos < raw.bytes.len() {
                 let end = (pos + STREAM_CHUNK_BYTES).min(raw.bytes.len());
                 let chunk = raw.bytes[pos..end].to_vec();
+
+                // Сканируем chunk на hint-ы перед отправкой DOM-парсеру.
+                let early = preload_scanner.feed_bytes(&chunk);
+                if !early.is_empty() {
+                    let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(
+                        early.clone(),
+                        raw.base.clone(),
+                    ));
+                    // PH1-2: параллельная загрузка CSS для промежуточных кадров.
+                    for hint in &early {
+                        if let lumen_html_parser::PreloadHint::Stylesheet { url } = hint {
+                            let css_url = raw.base.resolve_str(url);
+                            let proxy2 = proxy.clone();
+                            std::thread::spawn(move || {
+                                if let Some(text) = load_css_for_streaming(&css_url) {
+                                    let sheet = lumen_css_parser::parse(&text);
+                                    let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::new(sheet)));
+                                }
+                            });
+                        }
+                    }
+                }
+
                 if proxy.send_event(LoadEvent::HtmlChunk(chunk)).is_err() {
                     return; // event loop завершён
                 }
                 pos = end;
             }
+
+            // Финальные hint-ы из буферизованного хвоста сканера.
+            let tail = preload_scanner.end();
+            if !tail.is_empty() {
+                let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(tail, raw.base.clone()));
+            }
+
             let _ = proxy.send_event(LoadEvent::LoadDone(raw));
         });
     }
 
-    /// Обновить display list на основе снапшота частичного DOM (без CSS).
-    /// Используется для промежуточных кадров во время streaming.
+    /// Обновить display list на основе снапшота частичного DOM.
+    /// Применяет `stream_sheet` — CSS, загруженный параллельными потоками (PH1-2).
     fn paint_partial_dom(&mut self, doc: &lumen_dom::Document) {
         let Some(renderer) = self.renderer.as_ref() else { return };
         let vp_size = renderer.viewport_size();
-        let viewport = Size::new(vp_size.width as f32, vp_size.height as f32);
+        let viewport = Size::new(vp_size.width, vp_size.height);
 
         let font = match lumen_font::Font::parse(INTER_FONT) {
             Ok(f) => f,
@@ -3799,14 +5515,15 @@ impl Lumen {
             Err(_) => return,
         };
 
-        let empty_sheet = lumen_css_parser::Stylesheet::default();
-        let layout = lumen_layout::layout_measured(doc, &empty_sheet, viewport, &measurer);
+        let layout = lumen_layout::layout_measured(doc, &self.stream_sheet, viewport, &measurer);
         let dl = paint_ordered(&layout);
 
         self.content_height = content_height_of(&dl);
         self.content_width = content_width_of(&dl);
         self.display_list = dl;
         self.layout_box = Some(layout);
+        self.update_snap_containers();
+        self.update_scroll_containers();
 
         if let Some(w) = self.window.as_ref() {
             w.request_redraw();
@@ -3823,12 +5540,22 @@ impl Lumen {
         self.js_ctx = new_js_ctx;
         self.content_height = content_height_of(&page.display_list);
         self.content_width = content_width_of(&page.display_list);
+        // Full page load: force all tiles dirty.
+        self.tile_grid.mark_all_dirty(self.content_width, self.content_height);
         self.display_list = page.display_list;
         self.animation_scheduler.clear();
         self.transition_scheduler = TransitionScheduler::new();
+        self.starting_style_tracker = StartingStyleTracker::new();
         self.prev_styles.clear();
         collect_box_styles(&page.layout_box, &mut self.prev_styles);
         self.layout_box = Some(page.layout_box);
+        // content-visibility: auto (BB-4): новая страница — ratchet с нуля.
+        self.cv_relevant.clear();
+        self.cv_events.clear();
+        self.cv_skipped.clear();
+        self.refresh_cv_state();
+        self.update_snap_containers();
+        self.update_scroll_containers();
         self.title = page.title.clone();
         if let Some(t) = &self.title {
             self.tab_strip.set_active_title(t.as_str());
@@ -3845,17 +5572,26 @@ impl Lumen {
         self.form_state.clear();
         self.validation_tooltip = None;
         self.color_picker_node = None;
+        self.date_picker_node = None;
+        self.date_picker_year = 0;
+        self.date_picker_month = 0;
+        self.select_dropdown_node = None;
         // Reset paint timing guards so new page fires fresh PerformancePaintTiming entries.
         self.first_paint_delivered = false;
         self.first_contentful_paint_delivered = false;
 
-        // Индексировать страницу в history_fts для omnibox (@history).
-        // На Phase 0 используем текущий URL и title; extraction текста отложен.
-        // Пропускаем Empty и File sources — только HTTP(S) и bfcache snapshots индексируются.
+        // Индексировать страницу в history_fts для omnibox (@history) и записать
+        // в history_store для панели истории (Ctrl+H).
+        // Пропускаем Empty и File sources — только HTTP(S) и bfcache snapshots.
         if let Some(url) = self.source.url_str() {
             let title = page.title.as_deref().unwrap_or("");
             let _ = self.history_fts.index(self.next_history_id, url, title, "");
             self.next_history_id += 1;
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let _ = self.history_store.record_visit(url, title, now_secs);
         }
         // Clear GIF animation state from previous page.
         self.animated_gifs.clear();
@@ -3927,11 +5663,47 @@ impl Lumen {
         }
         // Register lazy images with JS so _lumen_deliver_lazy_images can check them
         // on subsequent redraws (scroll, resize) via proximity threshold.
+        //
+        // After registration we run an immediate proximity check: push fresh
+        // layout rects into JS, fire the IntersectionObserver, drain and fetch.
+        // Without this, above-the-fold `loading="lazy"` images (most cards on
+        // sites like lenta.ru) never load on first paint — `relayout()` is the
+        // only other path that delivers observers, and it only runs on
+        // scroll/resize/zoom, not on the initial load. (BUG-163)
         #[cfg(feature = "quickjs")]
-        if let Some(js) = &self.js_ctx {
-            let pairs: Vec<(u32, &str)> =
-                page.lazy_pairs.iter().map(|(n, u)| (*n, u.as_str())).collect();
-            js.register_lazy_images(&pairs);
+        let initial_lazy_reqs: Vec<(u32, String)> = {
+            let mut reqs = Vec::new();
+            if let Some(js) = &self.js_ctx {
+                let pairs: Vec<(u32, &str)> =
+                    page.lazy_pairs.iter().map(|(n, u)| (*n, u.as_str())).collect();
+                js.register_lazy_images(&pairs);
+                if !pairs.is_empty()
+                    && let Some(lb_ref) = self.layout_box.as_ref()
+                {
+                    let viewport = self.renderer.as_ref().map_or_else(
+                        || Size::new(1024.0, 720.0),
+                        |r| {
+                            let s = r.viewport_size();
+                            Size::new(s.width, s.height)
+                        },
+                    );
+                    js.update_layout_rects(collect_layout_rects(lb_ref));
+                    js.update_viewport_size(viewport.width, viewport.height);
+                    js.deliver_layout_observers();
+                    js.deliver_lazy_images();
+                    reqs = js.take_lazy_image_requests();
+                }
+            }
+            reqs
+        };
+        #[cfg(feature = "quickjs")]
+        if !initial_lazy_reqs.is_empty() {
+            self.fetch_and_register_lazy_images(initial_lazy_reqs);
+            // Images were registered after the request_redraw above — request
+            // another so the first paint actually shows them.
+            if let Some(w) = self.window.as_ref() {
+                w.request_redraw();
+            }
         }
         // JS may have requested navigation via location.href= etc.
         self.pending_js_navigate = page.js_navigate;
@@ -3941,6 +5713,9 @@ impl Lumen {
             js.notify_window_loaded();
         }
 
+        // Rebuild accessibility tree and push to OS platform bridge (O-5).
+        self.update_platform_ax_tree();
+
         // If zoom or <meta viewport initial-scale> is active, relayout with the
         // correct effective viewport. The initial load used the raw physical size.
         let zoom = self.zoom_factor;
@@ -3949,11 +5724,46 @@ impl Lumen {
             self.relayout();
         }
     }
+
+    /// Rebuild the platform accessibility tree from the current DOM and push it to
+    /// the OS bridge. Called after every full page load.
+    fn update_platform_ax_tree(&mut self) {
+        let Some(src) = &self.layout_source else { return };
+        let Ok(doc) = src.document.lock() else { return };
+        let flat_tree = lumen_dom::build_flat_tree(&doc);
+        let ax_tree = lumen_a11y::build_ax_tree(&doc, doc.root(), &flat_tree);
+        self.platform_bridge.update(&ax_tree);
+    }
+}
+
+/// The live OS-level picture-in-picture window (CC-7): a separate always-on-top
+/// `winit::Window` with its own [`RenderBackend`] surface, floating above every
+/// application and showing a tab's `<video>` (poster placeholder) frame.
+///
+/// Owned by [`Lumen::pip_os`]; created from a `_lumen_pip_enter` request and
+/// dropped on exit. The drop closes the OS window (winit destroys the window
+/// when the last `Arc<Window>` is released) and frees the GPU surface.
+struct PipOsWindow {
+    /// The floating OS window. Identified against `WindowEvent`s by its id.
+    window: Arc<Window>,
+    /// Dedicated render backend drawing the forwarded `<video>` content.
+    renderer: Box<dyn RenderBackend>,
+    /// Poster image URL drawn (object-fit: contain) into the window; empty → grey.
+    poster_url: String,
+    /// Source `<video>` border-box (page coords); only its aspect ratio is used
+    /// to letterbox the poster as the user resizes the floating window.
+    video_rect: Rect,
 }
 
 impl ApplicationHandler<LoadEvent> for Lumen {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let (win_w, win_h) = if self.deterministic { (1280.0, 800.0) } else { (1024.0, 720.0) };
+        let (win_w, win_h) = if self.deterministic {
+            (1280.0, 800.0)
+        } else {
+            // Высота окна = CSS viewport (720) + tab bar (36) = 756, чтобы
+            // веб-контент получал ровно 720 CSS px, как ожидают graphic tests.
+            (1024.0, 720.0 + tabs::strip::TAB_BAR_HEIGHT)
+        };
         let attrs = Window::default_attributes()
             .with_title(window_title(self.title.as_deref()))
             .with_inner_size(LogicalSize::new(win_w, win_h))
@@ -3968,7 +5778,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
         };
 
-        let mut renderer = match Renderer::new(window.clone(), INTER_FONT.to_vec()) {
+        let mut renderer = match backend_factory::create_backend(window.clone(), INTER_FONT.to_vec()) {
             Ok(r) => r,
             Err(err) => {
                 eprintln!("Не удалось инициализировать рендер: {err}");
@@ -3994,13 +5804,37 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             self.dark_mode = platform::dark_mode::theme_prefers_dark(window.theme());
         }
 
+        // PH2-7 Phase 1: pass the native HWND to the a11y bridge so it can fire
+        // Win32 WinEvent notifications (NotifyWinEvent) for focus and tree changes.
+        // Only attempted on Windows where WinUiaBridge is active; on other OSes
+        // init_hwnd() is a no-op (default PlatformBridge impl).
+        #[cfg(target_os = "windows")]
+        {
+            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            if let Ok(handle) = window.window_handle()
+                && let RawWindowHandle::Win32(h) = handle.as_raw()
+            {
+                self.platform_bridge.init_hwnd(h.hwnd.get());
+            }
+        }
+
         self.window = Some(window);
         self.renderer = Some(renderer);
 
+        // GG-4: Restore vertical-tab layout from persisted settings.
+        if tabs::strip::TabLayout::from_str(&self.settings_store.tab_layout())
+            == tabs::strip::TabLayout::Vertical
+        {
+            self.vertical_tabs.visible = true;
+        }
+
         // Запустить background-загрузку сразу после создания окна —
         // первый кадр (пустой) уже виден, пока идёт fetch/parse.
-        // Сбрасываем набор уже отправленных preload-хинтов — новая страница.
+        // Сбрасываем состояние предыдущего streaming-цикла — новая страница.
         self.preload_dispatched.clear();
+        self.stream_sheet = lumen_css_parser::Stylesheet::default();
+        // Record navigation start for the initial streaming load.
+        self.nav_start = Some(std::time::Instant::now());
         self.start_streaming_load();
     }
 
@@ -4023,31 +5857,70 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.stream_last_paint = std::time::Instant::now();
                 }
             }
+            LoadEvent::CssLoaded(boxed) => {
+                // PH1-2: CSS загружен параллельным потоком — мёрджим в stream_sheet.
+                // Применится в следующем paint_partial_dom (16 мс throttle).
+                let sheet = *boxed;
+                let s = &mut self.stream_sheet;
+                s.rules.extend(sheet.rules);
+                s.properties.extend(sheet.properties);
+                s.media_rules.extend(sheet.media_rules);
+                s.imports.extend(sheet.imports);
+                s.font_faces.extend(sheet.font_faces);
+                s.layer_order.extend(sheet.layer_order);
+                s.layers.extend(sheet.layers);
+                s.supports_rules.extend(sheet.supports_rules);
+                s.keyframes.extend(sheet.keyframes);
+                s.counter_styles.extend(sheet.counter_styles);
+                s.page_rules.extend(sheet.page_rules);
+                s.scope_rules.extend(sheet.scope_rules);
+                s.starting_style_rules.extend(sheet.starting_style_rules);
+                s.container_rules.extend(sheet.container_rules);
+                s.font_palette_values.extend(sheet.font_palette_values);
+            }
             LoadEvent::LoadDone(raw) => {
                 eprintln!("Streaming завершён, финальный pipeline");
                 self.stream_builder = None;
+                self.stream_sheet = lumen_css_parser::Stylesheet::default();
                 let viewport = self.renderer.as_ref().map_or_else(
                     || Size::new(1024.0, 720.0),
                     |r| {
                         let s = r.viewport_size();
-                        Size::new(s.width as f32, s.height as f32)
+                        Size::new(s.width, s.height)
                     },
                 );
                 let ls_store = ls_store_for_base(&raw.base, &mut self.ls_storage);
-                let idb_backend = idb_store_for_base(&raw.base, &self.idb_backend);
+                let idb_backend = idb_store_for_base(&raw.base, self.idb_dir.as_deref());
                 let sw_backend = sw_store_for_base(&raw.base, &self.sw_backend);
-                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, idb_backend, sw_backend, &self.hyp_provider, self.cookie_banner_dismiss, self.deterministic) {
+                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, idb_backend, sw_backend, &self.hyp_provider, self.cookie_banner_dismiss, self.deterministic, self.dark_mode, Some(Arc::clone(&self.cookie_jar)), raw.cross_origin_isolated) {
                     Ok((page, new_layout_source, new_js_ctx)) => {
+                        click_log::log_load_ok(&self.source.describe(), page.title.as_deref().unwrap_or(""));
                         self.apply_loaded_page(page, Some(new_layout_source), new_js_ctx);
+                        // Deliver W3C Navigation Timing L2 entry after streaming load completes.
+                        #[cfg(feature = "quickjs")]
+                        if let (Some(js), Some(start), Some(url)) =
+                            (&self.js_ctx, self.nav_start.take(), self.source.url_str())
+                        {
+                            let duration_ms = start.elapsed().as_secs_f64() * 1000.0;
+                            js.deliver_nav_timing(url, duration_ms);
+                        } else {
+                            self.nav_start = None;
+                        }
+                        click_log::log_page_ready(&self.source.describe(), self.scroll_y);
                     }
                     Err(e) => {
+                        self.nav_start = None;
+                        click_log::log_load_err(&self.source.describe(), &e.to_string());
                         eprintln!("Ошибка финального render {}: {e}", self.source.describe());
                     }
                 }
             }
             LoadEvent::LoadError(msg) => {
+                self.nav_start = None;
+                click_log::log_load_err(&self.source.describe(), &msg);
                 eprintln!("Ошибка загрузки {}: {msg}", self.source.describe());
                 self.stream_builder = None;
+                self.stream_sheet = lumen_css_parser::Stylesheet::default();
             }
         }
     }
@@ -4091,6 +5964,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         if let Some(js) = &self.js_ctx {
             js.tick_timers();
             js.pump_websockets();
+            js.pump_sse();
             js.pump_workers();
             js.pump_broadcast_channels();
             js.pump_shared_workers();
@@ -4106,6 +5980,66 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 let wakeup = std::time::Instant::now()
                     + std::time::Duration::from_millis(delay_ms as u64 + 1);
                 event_loop.set_control_flow(ControlFlow::WaitUntil(wakeup));
+            }
+        }
+
+        // ── Canvas 2D: upload dirty <canvas> bitmaps to the renderer ──────────
+        // JS Canvas 2D draws into per-node CPU buffers (lumen_canvas::Context2D).
+        // Each frame we drain the dirty buffers and register them under the same
+        // `canvas:{nid}` key the display list emits, then request a repaint.
+        let canvas_updates = self
+            .js_ctx
+            .as_ref()
+            .map(|js| js.flush_canvas_updates())
+            .unwrap_or_default();
+        if !canvas_updates.is_empty() {
+            if let Some(r) = self.renderer.as_mut() {
+                for (nid, w, h, rgba) in &canvas_updates {
+                    let image = lumen_image::Image {
+                        width: *w,
+                        height: *h,
+                        format: lumen_image::PixelFormat::Rgba8,
+                        data: rgba.clone(),
+                        icc_profile: None,
+                    };
+                    if let Err(e) = r.register_image(format!("canvas:{nid}"), &image) {
+                        eprintln!("Canvas: не зарегистрирован canvas:{nid}: {e}");
+                    }
+                }
+            }
+            if let Some(w) = self.window.as_ref() {
+                w.request_redraw();
+            }
+        }
+
+        // ── History API: pushState/replaceState URL updates ───────────────────
+        // Drain URL-update notifications from history.pushState/replaceState.
+        // pushState adds a same-document back-stack entry; replaceState updates
+        // the displayed URL only.  Neither triggers a page load.
+        #[cfg(feature = "quickjs")]
+        if let Some(js) = &self.js_ctx {
+            let updates = js.take_history_url_updates();
+            for (is_push, url, new_state_json) in updates {
+                if is_push {
+                    // pushState: save current state to nav_back as same-doc entry.
+                    let old_display = self.display_url.take();
+                    let old_state = std::mem::replace(
+                        &mut self.current_history_state_json,
+                        new_state_json,
+                    );
+                    self.nav_back.push(NavEntry {
+                        source: self.source.clone(),
+                        scroll_x: self.scroll_x,
+                        scroll_y: self.scroll_y,
+                        display_url: old_display,
+                        same_doc_state_json: Some(old_state),
+                    });
+                    self.display_url = Some(url);
+                } else {
+                    // replaceState: update URL + state, no nav_back push.
+                    self.current_history_state_json = new_state_json;
+                    self.display_url = Some(url);
+                }
             }
         }
 
@@ -4134,11 +6068,57 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         w.request_redraw();
                     }
                 }
+                input::InputCommand::KeyDown { code } => {
+                    self.inject_special_key(&code);
+                }
             }
         }
 
         // Download manager: drain completion events from background threads.
         self.downloads.poll();
+
+        // _lumen_network_download(url, filename): start downloads requested by
+        // page scripts / <a download>. Relative URLs are resolved against the
+        // active document URL.
+        {
+            let reqs = lumen_js::download_bindings::take_download_requests();
+            if !reqs.is_empty() {
+                let base = self.current_display_url().to_owned();
+                for req in reqs {
+                    let abs = lumen_core::url::Url::parse(&base)
+                        .and_then(|b| b.resolve(&req.url))
+                        .map(|u| u.to_string())
+                        .unwrap_or(req.url);
+                    self.downloads.start_url_download(abs, req.filename);
+                }
+                self.request_redraw();
+            }
+        }
+
+        // _lumen_log_network_request(method, url, status, duration_ms): fold
+        // JS-logged requests into the shared NetworkLog so they appear in the
+        // DevTools Network panel / inspector Network tab (CC-9).
+        {
+            let recs = lumen_js::network_log_bindings::take_network_log_records();
+            if !recs.is_empty() {
+                for r in recs {
+                    self.network_panel
+                        .record_js_request(&r.method, &r.url, r.status, r.duration_ms);
+                }
+                self.request_redraw();
+            }
+        }
+
+        // §12.3 Read-later: drain completed background page fetches and persist.
+        while let Ok((url, title, html)) = self.read_later_rx.try_recv() {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let _ = self.read_later_store.save(&url, &title, &html, "", &[], now);
+            self.refresh_read_later();
+            self.request_redraw();
+        }
 
         // Web Notifications API: deliver pending OS notifications queued by JS.
         if let Some(js) = &self.js_ctx {
@@ -4160,6 +6140,102 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     url
                 };
                 self.navigate_to(PageSource::Url(url));
+            }
+        }
+
+        // Fullscreen API: apply OS fullscreen on requestFullscreen() / exitFullscreen().
+        #[cfg(feature = "quickjs")]
+        if let Some(js) = &self.js_ctx {
+            for (enter, nid) in js.take_fullscreen_requests() {
+                if enter {
+                    self.fullscreen_nid = Some(nid);
+                    if let Some(w) = self.window.as_ref() {
+                        w.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+                    }
+                } else {
+                    self.fullscreen_nid = None;
+                    if let Some(w) = self.window.as_ref() {
+                        w.set_fullscreen(None);
+                    }
+                }
+            }
+        }
+
+        // CC-7: Video Picture-in-Picture — open/close the real OS floating window.
+        // Drained from the process-global queue fed by `_lumen_pip_enter` /
+        // `_lumen_pip_exit` (see `lumen_js::pip_bindings`).
+        for req in lumen_js::pip_bindings::take_pip_requests() {
+            use lumen_js::pip_bindings::PipRequest;
+            use panels::pip_os_window::PipAction;
+            let action = match req {
+                PipRequest::Enter { nid } => self.pip_controller.on_enter(nid),
+                PipRequest::Exit { .. } => self.pip_controller.on_exit(),
+            };
+            match action {
+                PipAction::Open(nid) => self.open_pip_os(event_loop, nid),
+                PipAction::Close => self.close_pip_os(),
+                PipAction::None => {}
+            }
+        }
+
+        // Print API: window.print() exports current document as PDF (W-2).
+        #[cfg(feature = "quickjs")]
+        if let Some(js) = &self.js_ctx {
+            let print_reqs = js.take_print_requests();
+            for req in print_reqs {
+                self.handle_print_request(&req);
+            }
+        }
+
+        // Dialog focus management (HTML LS §6.6.3): apply focus changes requested by
+        // showModal() / close() in JS via _lumen_request_focus / _lumen_request_blur.
+        #[cfg(feature = "quickjs")]
+        if let Some(js) = &self.js_ctx {
+            let focus_reqs = js.take_focus_requests();
+            if !focus_reqs.is_empty() {
+                // Only the last request in the batch matters.
+                if let Some(last_req) = focus_reqs.into_iter().last() {
+                    let new_nid = last_req.map(|n| lumen_dom::NodeId::from_index(n as usize));
+                    if new_nid != self.focused_node {
+                        self.focused_node = new_nid;
+                        self.relayout();
+                        self.platform_bridge.focused_node_changed(new_nid);
+                    }
+                }
+            }
+        }
+
+        // CSS View Transitions API: drain snapshot/animation events from JS.
+        #[cfg(feature = "quickjs")]
+        if let Some(js) = &self.js_ctx {
+            for event in js.take_view_transition_events() {
+                match event {
+                    ViewTransitionEvent::Begin => {
+                        // Capture current display list as the "before" snapshot.
+                        self.view_transition = Some(ViewTransitionState {
+                            old_dl: self.display_list.clone(),
+                            start_ms: 0.0,
+                            duration_ms: 300.0,
+                        });
+                    }
+                    ViewTransitionEvent::End => {
+                        // Callback finished — relayout picks up DOM mutations,
+                        // then the render step blends old_dl (fading out) over
+                        // the new display list.
+                        let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+                        if let Some(vt) = &mut self.view_transition {
+                            vt.start_ms = now_ms;
+                        }
+                        self.relayout();
+                        if let Some(w) = self.window.as_ref() {
+                            w.request_redraw();
+                        }
+                    }
+                    ViewTransitionEvent::Cancel => {
+                        // Transition was cancelled — abort the animation.
+                        self.view_transition = None;
+                    }
+                }
             }
         }
 
@@ -4186,23 +6262,50 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 && let Some(lb) = self.layout_box.as_mut()
             {
                 let mut changed = false;
+                let mut scrolled_nids: Vec<u32> = Vec::new();
                 for (nid, x, y) in scroll_reqs {
                     if set_scroll_position(lb, NodeId::from_index(nid as usize), x, y) {
                         changed = true;
+                        scrolled_nids.push(nid);
                     }
                 }
                 if changed {
                     // Rebuild display list with the updated scroll offsets.
-                    self.display_list = paint_ordered(lb);
+                    let new_dl = paint_ordered(lb);
+                    let root_id = lb.node.index() as u32;
+                    self.tile_grid.update_from_diff(&self.display_list, &new_dl);
+                    // Cache directly — lb mutably borrows self.layout_box; only self.display_list_cache is touched here.
+                    let dl_hash = lumen_paint::hash_commands(&new_dl);
+                    self.display_list_cache.insert(root_id, new_dl.clone(), dl_hash, None);
+                    self.display_list = new_dl;
                     // Sync JS cache so scrollTop/scrollLeft reads are accurate.
                     let states = collect_scroll_containers(lb)
                         .iter()
                         .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
                         .collect();
                     js.update_scroll_states(states);
+                    // Fire non-bubbling scroll events on each scrolled container.
+                    for nid in scrolled_nids {
+                        js.fire_element_scroll(nid);
+                    }
                     if let Some(w) = self.window.as_ref() {
                         w.request_redraw();
                     }
+                }
+            }
+        }
+
+        // Page-level scroll requests from JS window.scrollTo / window.scrollBy.
+        // Smooth requests go through the rAF-based animation; instant ones set
+        // scroll_y directly (CSS Scroll Behavior L1 §3).
+        #[cfg(feature = "quickjs")]
+        if let Some(js) = &self.js_ctx {
+            let page_reqs = js.take_page_scroll_requests();
+            for (target_y, smooth) in page_reqs {
+                if smooth {
+                    self.start_smooth_scroll(target_y);
+                } else {
+                    self.scroll_to(target_y);
                 }
             }
         }
@@ -4239,8 +6342,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // Memory pressure: poll OS every 5 s; evict caches on Medium+ pressure.
         if let Some(level) = self.memory_poll.tick(&mut self.cache_registry) {
             self.image_cache.on_memory_pressure(level);
+            self.display_list_cache.on_memory_pressure(level);
             if let Some(renderer) = &mut self.renderer {
-                renderer.layer_cache_mut().on_memory_pressure(level);
+                renderer.on_layer_memory_pressure(level);
+                renderer.on_atlas_memory_pressure(level);
             }
         }
 
@@ -4256,9 +6361,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // before the redirect completes (matches browser behaviour).
         if let Some(nav) = self.pending_js_navigate.take() {
             match nav {
-                JsNavigateRequest::Push(url)    => self.navigate_to(PageSource::Url(url)),
-                JsNavigateRequest::Replace(url) => self.navigate_replace(PageSource::Url(url)),
-                JsNavigateRequest::Reload       => self.reload(),
+                JsNavigateRequest::Push(url) => {
+                    click_log::log_js_nav("pushState/location.href", &url);
+                    self.navigate_to(PageSource::Url(url));
+                }
+                JsNavigateRequest::Replace(url) => {
+                    click_log::log_js_nav("replaceState/location.replace", &url);
+                    self.navigate_replace(PageSource::Url(url));
+                }
+                JsNavigateRequest::Reload => {
+                    click_log::log_js_nav("location.reload", &self.source.describe());
+                    self.reload();
+                }
             }
         }
     }
@@ -4266,9 +6380,51 @@ impl ApplicationHandler<LoadEvent> for Lumen {
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
+        window_id: WindowId,
         event: WindowEvent,
     ) {
+        // CC-7: events for the separate OS PiP window are handled here and never
+        // fall through to the main-window logic below (which assumes the single
+        // page window and ignores the id). Close button exits PiP; resize keeps
+        // the floating surface in sync; redraw re-letterboxes the poster.
+        if self.pip_os.as_ref().is_some_and(|p| p.window.id() == window_id) {
+            match event {
+                WindowEvent::CloseRequested => {
+                    self.close_pip_os();
+                    self.pip_controller.on_exit();
+                    // Mirror the close into JS so `leavepictureinpicture` fires
+                    // and `document.pictureInPictureElement` clears.
+                    #[cfg(feature = "quickjs")]
+                    if let Some(js) = &self.js_ctx {
+                        js.eval_js(
+                            "if(typeof document!=='undefined'&&document.pictureInPictureElement)\
+                             {try{document.exitPictureInPicture();}catch(e){}}",
+                        );
+                    }
+                }
+                WindowEvent::Resized(size) => {
+                    if size.width == 0 || size.height == 0 {
+                        return;
+                    }
+                    if let Some(p) = self.pip_os.as_mut() {
+                        p.renderer.resize(size.width, size.height);
+                    }
+                    self.render_pip_os();
+                }
+                WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                    if let Some(p) = self.pip_os.as_mut() {
+                        p.renderer.set_scale_factor(scale_factor);
+                    }
+                    self.render_pip_os();
+                }
+                WindowEvent::RedrawRequested => {
+                    self.render_pip_os();
+                }
+                _ => {}
+            }
+            return;
+        }
+
         match event {
             WindowEvent::CloseRequested => {
                 self.save_session_on_close();
@@ -4365,6 +6521,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         (position.y as f32) / dpr,
                     );
                 }
+                // Tab drag-and-drop (§O-9): update ghost position; activate after threshold.
+                if let Some(ref mut tab_drag) = self.tab_drag {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                        .max(1e-6);
+                    let x_css = (position.x as f32) / dpr;
+                    tab_drag.ghost_x = x_css;
+                    if !tab_drag.active
+                        && (x_css - tab_drag.press_x).abs() >= tabs::strip::DRAG_THRESHOLD
+                    {
+                        tab_drag.active = true;
+                    }
+                    if tab_drag.active {
+                        self.request_redraw();
+                    }
+                }
                 // Активный drag — пересчитать scroll по новой позиции.
                 if let Some(drag) = self.scroll_drag {
                     let dpr = self
@@ -4398,9 +6572,140 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     );
                     self.request_redraw();
                 }
+                // CSS :hover tracking — find the element under the cursor and
+                // trigger relayout when it changes so :hover rules re-evaluate.
+                {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                        .max(1e-6);
+                    let x_css = (position.x as f32) / dpr;
+                    let y_css = (position.y as f32) / dpr;
+                    let new_hovered = if y_css < tabs::strip::TAB_BAR_HEIGHT {
+                        None
+                    } else {
+                        let (page_x, page_y) = self.page_point(x_css, y_css);
+                        self.layout_box
+                            .as_ref()
+                            .and_then(|lb| hit_test(Point::new(page_x, page_y), lb))
+                            .map(|r| r.node)
+                    };
+                    if new_hovered != self.hovered_nid {
+                        #[cfg(feature = "quickjs")]
+                        let old_nid = self.hovered_nid;
+                        self.hovered_nid = new_hovered;
+                        self.relayout();
+                        self.request_redraw();
+                        // Dispatch hover-change events per W3C UI Events §17.5 / Pointer Events L2 §10.
+                        #[cfg(feature = "quickjs")]
+                        {
+                            // Leave events on the element losing hover.
+                            if let Some(old) = old_nid {
+                                let nid = old.index() as u32;
+                                self.js_pointer_event(nid, "pointerout",   x_css, y_css, 0, 0);
+                                self.js_mouse_event(nid,   "mouseout",     x_css, y_css, 0, 0);
+                                self.js_pointer_event(nid, "pointerleave", x_css, y_css, 0, 0);
+                                self.js_mouse_event(nid,   "mouseleave",   x_css, y_css, 0, 0);
+                            }
+                            // Enter events on the element gaining hover.
+                            if let Some(nw) = new_hovered {
+                                let nid = nw.index() as u32;
+                                self.js_pointer_event(nid, "pointerover",  x_css, y_css, 0, 0);
+                                self.js_mouse_event(nid,   "mouseover",    x_css, y_css, 0, 0);
+                                self.js_pointer_event(nid, "pointerenter", x_css, y_css, 0, 0);
+                                self.js_mouse_event(nid,   "mouseenter",   x_css, y_css, 0, 0);
+                            }
+                        }
+                    }
+                }
+                // Tab bar: update hovered_tab_idx for tooltip rendering.
+                {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                        .max(1e-6);
+                    let x_css = (position.x as f32) / dpr;
+                    let y_css = (position.y as f32) / dpr;
+                    let win_w = self.viewport_width_css();
+                    self.hovered_tab_idx = if y_css < tabs::strip::TAB_BAR_HEIGHT {
+                        let tab_area_w = win_w
+                            - tabs::archive::ARCHIVE_BTN_W
+                            - tabs::strip::LAYOUT_BTN_W;
+                        match tabs::strip::hit_test(&self.tab_strip, x_css, y_css, tab_area_w) {
+                            tabs::strip::TabHit::Tab(idx) => Some(idx),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+                }
+                // CC-4: update tab context-menu hover highlight.
+                if self.tab_context_menu.is_open() {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                        .max(1e-6);
+                    let x_css = (position.x as f32) / dpr;
+                    let y_css = (position.y as f32) / dpr;
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.window_height_css();
+                    let new_hover = tabs::context_menu::item_at(
+                        &self.tab_context_menu,
+                        x_css,
+                        y_css,
+                        win_w,
+                        win_h,
+                    );
+                    if new_hover != self.tab_context_menu.hovered {
+                        self.tab_context_menu.hovered = new_hover;
+                        self.request_redraw();
+                    }
+                }
+                // B-7: Active resize — update element width/height as mouse moves.
+                #[cfg(feature = "quickjs")]
+                if let Some((node_id, start_x, start_y)) = self.resize_active {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                        .max(1e-6);
+                    let x_css = (position.x as f32) / dpr;
+                    let y_css = (position.y as f32) / dpr;
+                    let delta_x = x_css - start_x;
+                    let delta_y = y_css - start_y;
+                    let nid_u32 = node_id.index() as u32;
+                    #[cfg(feature = "quickjs")]
+                    if let Some(js) = self.js_ctx.as_ref() {
+                        js.eval_js(&format!(
+                            "_lumen_apply_resize({}, {}, {});",
+                            nid_u32, delta_x, delta_y
+                        ));
+                    }
+                    self.request_redraw();
+                }
             }
             WindowEvent::CursorLeft { .. } => {
                 self.cursor_position = None;
+                self.hovered_tab_idx = None;
+                self.resize_active = None; // Clear resize when cursor leaves window
+                // Clear hover state when cursor leaves the window.
+                if self.hovered_nid.is_some() {
+                    // Dispatch leave events before clearing hovered state.
+                    #[cfg(feature = "quickjs")]
+                    if let Some(old) = self.hovered_nid {
+                        let nid = old.index() as u32;
+                        self.js_pointer_event(nid, "pointerout",   0.0, 0.0, 0, 0);
+                        self.js_mouse_event(nid,   "mouseout",     0.0, 0.0, 0, 0);
+                        self.js_pointer_event(nid, "pointerleave", 0.0, 0.0, 0, 0);
+                        self.js_mouse_event(nid,   "mouseleave",   0.0, 0.0, 0, 0);
+                    }
+                    self.hovered_nid = None;
+                    self.relayout();
+                    self.request_redraw();
+                }
                 self.gesture.cancel();
                 // Драг продолжается даже когда курсор вышел из окна — winit
                 // продолжит слать CursorMoved-события за пределами client area,
@@ -4420,6 +6725,25 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .cursor_position
                         .map(|p| ((p.x as f32) / dpr, (p.y as f32) / dpr))
                         .unwrap_or((0.0, 0.0));
+                    // CC-4: right-click on a tab opens the tab context menu
+                    // instead of starting a mouse gesture.
+                    if state == ElementState::Pressed && !self.focus.active {
+                        let tab_area_w = self.viewport_width_css()
+                            - tabs::archive::ARCHIVE_BTN_W
+                            - tabs::strip::LAYOUT_BTN_W;
+                        if let tabs::strip::TabHit::Tab(idx) =
+                            tabs::strip::hit_test(&self.tab_strip, x_css, y_css, tab_area_w)
+                        {
+                            let pinned = self.tab_strip.is_pinned(idx);
+                            let group = self.tab_strip.group_of(idx);
+                            let grouped = group.is_some();
+                            let collapsed = group.is_some_and(|g| self.tab_strip.is_collapsed(g));
+                            self.tab_context_menu
+                                .open_for(idx, pinned, grouped, collapsed, x_css, y_css);
+                            self.request_redraw();
+                            return;
+                        }
+                    }
                     if state == ElementState::Pressed {
                         self.gesture.begin(x_css, y_css);
                     } else if state == ElementState::Released
@@ -4430,6 +6754,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 } else if button != MouseButton::Left {
                     // Middle / back / forward — ignore.
                 } else if state == ElementState::Pressed {
+                    // CSS :active — set immediately on press so :active rules apply.
+                    if self.active_nid != self.hovered_nid {
+                        self.active_nid = self.hovered_nid;
+                        self.relayout();
+                        self.request_redraw();
+                    }
                     let Some(cursor) = self.cursor_position else {
                         // Без CursorMoved-snapshot-а до Press — не знаем где
                         // клик; bail out. Реалистично — Press всегда приходит
@@ -4443,6 +6773,73 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .max(1e-6);
                     let x_css = (cursor.x as f32) / dpr;
                     let y_css = (cursor.y as f32) / dpr;
+                    // CC-4: while the tab context menu is open it captures the
+                    // click — picking a row runs the action, anywhere else just
+                    // dismisses it. The click never reaches the page / panels.
+                    if self.tab_context_menu.is_open() {
+                        let win_w = self.viewport_width_css();
+                        let win_h = self.window_height_css();
+                        let action = tabs::context_menu::action_at(
+                            &self.tab_context_menu,
+                            x_css,
+                            y_css,
+                            win_w,
+                            win_h,
+                        );
+                        self.tab_context_menu.close();
+                        if let Some(action) = action {
+                            self.exec_tab_menu_action(action, event_loop);
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+                    // CC-2: the download panel is a top-most bottom overlay — it
+                    // captures clicks on its buttons / close / body before they
+                    // reach the page. A click outside the panel closes it.
+                    if self.downloads.visible {
+                        let win = (
+                            self.viewport_width_css() as u32,
+                            self.window_height_css() as u32,
+                        );
+                        if let Some(action) = download::hit_test(&self.downloads, x_css, y_css, win) {
+                            use download::DownloadAction;
+                            match action {
+                                DownloadAction::Open(id) => {
+                                    self.downloads.open_download(id);
+                                }
+                                DownloadAction::Reveal(id) => {
+                                    self.downloads.show_in_folder(id);
+                                }
+                                DownloadAction::Cancel(id) => {
+                                    self.downloads.cancel(id);
+                                }
+                                DownloadAction::Close | DownloadAction::Outside => {
+                                    self.downloads.close();
+                                }
+                                DownloadAction::Inside => {}
+                            }
+                            self.request_redraw();
+                            return;
+                        }
+                    }
+                    // Fire mousedown + pointerdown on the hovered DOM element.
+                    // Per W3C UI Events §17.6 + Pointer Events L2 §10 — fires before
+                    // any default action (click). Only when cursor is over page content.
+                    #[cfg(feature = "quickjs")]
+                    if let Some(hov) = self.hovered_nid {
+                        let nid = hov.index() as u32;
+                        self.js_pointer_event(nid, "pointerdown", x_css, y_css, 0, 1);
+                        self.js_mouse_event(nid, "mousedown", x_css, y_css, 0, 1);
+                    }
+
+                    // B-7: Check if click is on resize grip of any element in layout tree.
+                    // If so, activate resize mode. This must be checked before other UI panels.
+                    if let Some(ref layout_box) = self.layout_box
+                        && let Some(nid) = self.find_resize_grip_node(layout_box, x_css, y_css) {
+                            self.resize_active = Some((nid, x_css, y_css));
+                            self.request_redraw();
+                            return;
+                        }
 
                     // Command palette (task #23): modal — captures every click.
                     // A click on a row activates it; a click on the scrim closes.
@@ -4514,14 +6911,123 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // Tab bar occupies y = 0..TAB_BAR_HEIGHT — dispatch first.
                     if y_css < tabs::strip::TAB_BAR_HEIGHT {
                         let win_w = self.viewport_width_css();
-                        match tabs::strip::hit_test(&self.tab_strip, x_css, y_css, win_w) {
-                            tabs::strip::TabHit::Tab(idx) => self.switch_tab(idx),
+                        // Archive panel: close on click-outside before checking button.
+                        if self.archive.visible {
+                            match tabs::archive::hit_test_panel(
+                                &self.archive,
+                                x_css,
+                                y_css,
+                                win_w,
+                                tabs::strip::TAB_BAR_HEIGHT,
+                            ) {
+                                Some(tabs::archive::ArchiveHit::Restore(id)) => {
+                                    if let Some(entry) = self.archive.take(id)
+                                        && !entry.url.is_empty()
+                                    {
+                                        self.navigate_to(PageSource::Url(entry.url));
+                                    }
+                                    self.archive.close();
+                                    self.request_redraw();
+                                    return;
+                                }
+                                Some(tabs::archive::ArchiveHit::Dismiss(id)) => {
+                                    self.archive.take(id);
+                                    self.request_redraw();
+                                    return;
+                                }
+                                Some(tabs::archive::ArchiveHit::Inside) => {
+                                    self.request_redraw();
+                                    return;
+                                }
+                                Some(tabs::archive::ArchiveHit::Outside) => {
+                                    self.archive.close();
+                                    self.request_redraw();
+                                }
+                                None => {}
+                            }
+                        }
+                        // Archive toolbar button (rightmost 36 px of the tab bar).
+                        if tabs::archive::hit_test_button(
+                            x_css,
+                            y_css,
+                            win_w,
+                            tabs::strip::TAB_BAR_HEIGHT,
+                        ) {
+                            self.archive.toggle();
+                            self.request_redraw();
+                            return;
+                        }
+                        // Layout toggle button (GG-4): between tabs and archive button.
+                        let layout_btn_x = win_w
+                            - tabs::archive::ARCHIVE_BTN_W
+                            - tabs::strip::LAYOUT_BTN_W;
+                        if tabs::strip::hit_test_layout_btn(x_css, y_css, layout_btn_x) {
+                            self.vertical_tabs.toggle();
+                            let new_layout = if self.vertical_tabs.visible {
+                                tabs::strip::TabLayout::Vertical
+                            } else {
+                                tabs::strip::TabLayout::Horizontal
+                            };
+                            let _ = self.settings_store.set_tab_layout(new_layout.as_str());
+                            self.request_redraw();
+                            return;
+                        }
+                        // Tab area: pass effective width (excluding archive + layout buttons).
+                        let tab_area_w =
+                            win_w - tabs::archive::ARCHIVE_BTN_W - tabs::strip::LAYOUT_BTN_W;
+                        match tabs::strip::hit_test(&self.tab_strip, x_css, y_css, tab_area_w) {
+                            tabs::strip::TabHit::Tab(idx) => {
+                                // Record a potential drag; switch tab only if no drag occurs
+                                // (resolved on MouseInput Release).
+                                self.tab_drag = Some(tabs::strip::TabDragState {
+                                    src_idx: idx,
+                                    press_x: x_css,
+                                    ghost_x: x_css,
+                                    active: false,
+                                });
+                                self.switch_tab(idx);
+                            }
                             tabs::strip::TabHit::Close(idx) => {
                                 self.close_tab(idx, event_loop);
                             }
                             tabs::strip::TabHit::Empty => {}
                         }
                         return;
+                    }
+                    // Archive panel: close on click below tab bar when open.
+                    if self.archive.visible {
+                        let win_w = self.viewport_width_css();
+                        match tabs::archive::hit_test_panel(
+                            &self.archive,
+                            x_css,
+                            y_css,
+                            win_w,
+                            tabs::strip::TAB_BAR_HEIGHT,
+                        ) {
+                            Some(tabs::archive::ArchiveHit::Restore(id)) => {
+                                if let Some(entry) = self.archive.take(id)
+                                    && !entry.url.is_empty()
+                                {
+                                    self.navigate_to(PageSource::Url(entry.url));
+                                }
+                                self.archive.close();
+                                self.request_redraw();
+                                return;
+                            }
+                            Some(tabs::archive::ArchiveHit::Dismiss(id)) => {
+                                self.archive.take(id);
+                                self.request_redraw();
+                                return;
+                            }
+                            Some(tabs::archive::ArchiveHit::Inside) => {
+                                self.request_redraw();
+                                return;
+                            }
+                            Some(tabs::archive::ArchiveHit::Outside) | None => {
+                                self.archive.close();
+                                self.request_redraw();
+                            }
+                        }
                     }
 
                     // Vertical tab panel: intercept clicks in x < PANEL_WIDTH area.
@@ -4535,6 +7041,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             y_css,
                             tabs::strip::TAB_BAR_HEIGHT,
                             win_h,
+                            self.vertical_tabs.scroll_y,
                         ) {
                             Some(panels::vertical_tabs::VTabHit::Tab(idx)) => {
                                 self.switch_tab(idx);
@@ -4663,6 +7170,54 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
 
+                    // §12.3 Read-later panel (Ctrl+Shift+R): right-docked overlay.
+                    if self.read_later_panel.visible {
+                        use panels::read_later_panel::ReadLaterHit;
+                        let win_w = self.viewport_width_css();
+                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                        let px = win_w - panels::read_later_panel::PANEL_W - 4.0;
+                        let py = tab_h + 4.0;
+                        let hit = panels::read_later_panel::hit_test(
+                            x_css,
+                            y_css,
+                            px,
+                            py,
+                            &self.read_later_panel.entries,
+                            self.read_later_panel.scroll_offset,
+                        );
+                        match hit {
+                            ReadLaterHit::Close => {
+                                self.read_later_panel.visible = false;
+                                self.request_redraw();
+                            }
+                            ReadLaterHit::Open(id) => {
+                                // Load from offline HTML snapshot.
+                                if let Ok(Some(entry)) = self.read_later_store.get(id) {
+                                    let html = String::from_utf8_lossy(&entry.html_snapshot)
+                                        .into_owned();
+                                    let base_url = entry.url.clone();
+                                    let _ = self.read_later_store.set_status(
+                                        id,
+                                        lumen_knowledge::ReadStatus::Read,
+                                    );
+                                    self.read_later_panel.visible = false;
+                                    self.navigate_to(PageSource::Snapshot { html, base_url });
+                                }
+                            }
+                            ReadLaterHit::Delete(id) => {
+                                let _ = self.read_later_store.delete(id);
+                                self.refresh_read_later();
+                                self.request_redraw();
+                            }
+                            ReadLaterHit::Inside => { /* swallow */ }
+                            ReadLaterHit::Outside => {
+                                self.read_later_panel.visible = false;
+                                self.request_redraw();
+                            }
+                        }
+                        return;
+                    }
+
                     // Bookmark manager panel (task #22): floating overlay.
                     if self.bookmark_panel.visible {
                         let (ax, ay) = self.bookmark_anchor();
@@ -4708,6 +7263,371 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 }
                             }
                             self.request_redraw();
+                            return;
+                        }
+                    }
+
+                    // Accessibility settings panel (E-2): centred overlay.
+                    if self.a11y_panel.visible {
+                        let win_w = self.viewport_width_css();
+                        let win_h = self.viewport_height_css();
+                        use panels::a11y_panel::A11yHit;
+                        let hit = panels::a11y_panel::hit_test(
+                            &self.a11y_panel,
+                            x_css,
+                            y_css,
+                            win_w,
+                            win_h,
+                        );
+                        match hit {
+                            A11yHit::Close => {
+                                let _ = self.a11y_store.apply_snapshot(&self.a11y_panel.draft);
+                                self.a11y_panel.visible = false;
+                                self.deliver_a11y_media_changes();
+                            }
+                            A11yHit::FontMultiplier(v) => {
+                                self.a11y_panel.draft.font_size_multiplier = v as f64;
+                            }
+                            A11yHit::ReducedMotion => {
+                                self.a11y_panel.draft.reduced_motion =
+                                    !self.a11y_panel.draft.reduced_motion;
+                            }
+                            A11yHit::ForcedColors => {
+                                self.a11y_panel.draft.forced_colors =
+                                    !self.a11y_panel.draft.forced_colors;
+                            }
+                            A11yHit::CursorSizeOption(size) => {
+                                self.a11y_panel.draft.cursor_size = size;
+                            }
+                            A11yHit::Inside => { /* swallow */ }
+                            A11yHit::Outside => {
+                                let _ = self.a11y_store.apply_snapshot(&self.a11y_panel.draft);
+                                self.a11y_panel.visible = false;
+                                self.deliver_a11y_media_changes();
+                            }
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+
+                    // Print dialog (E-1): centred overlay, Ctrl+P.
+                    if self.print_panel.visible {
+                        let win_w = self.viewport_width_css();
+                        let win_h = self.viewport_height_css();
+                        use panels::print_panel::PrintHit;
+                        let hit = panels::print_panel::hit_test(
+                            &self.print_panel,
+                            x_css,
+                            y_css,
+                            win_w,
+                            win_h,
+                        );
+                        match hit {
+                            PrintHit::Close | PrintHit::Cancel => {
+                                self.print_panel.close();
+                            }
+                            PrintHit::Print => {
+                                let path = std::path::PathBuf::from(
+                                    self.print_panel.output_path.clone()
+                                );
+                                let source = self.source.clone();
+                                let sink = Arc::clone(&self.event_sink);
+                                let (margin_tb, margin_lr) = self.print_panel.margin_px();
+                                let scale = self.print_panel.scale;
+                                let print_backgrounds = self.print_panel.print_backgrounds;
+                                if let Err(e) = do_print_to_pdf_with_opts(
+                                    &source,
+                                    &path,
+                                    sink,
+                                    margin_tb,
+                                    margin_lr,
+                                    scale,
+                                    print_backgrounds,
+                                ) {
+                                    eprintln!("Ошибка печати: {e}");
+                                }
+                                self.print_panel.close();
+                            }
+                            PrintHit::PaperSize(s) => {
+                                self.print_panel.paper = s;
+                            }
+                            PrintHit::Orientation(o) => {
+                                self.print_panel.orientation = o;
+                            }
+                            PrintHit::Margins(m) => {
+                                self.print_panel.margins = m;
+                            }
+                            PrintHit::ScaleDecrease => {
+                                self.print_panel.scale = (self.print_panel.scale - 10).max(50);
+                            }
+                            PrintHit::ScaleIncrease => {
+                                self.print_panel.scale = (self.print_panel.scale + 10).min(200);
+                            }
+                            PrintHit::PageRangeField => {
+                                self.print_panel.editing_field =
+                                    Some(panels::print_panel::PrintField::PageRange);
+                            }
+                            PrintHit::ColorMode(c) => {
+                                self.print_panel.color_mode = c;
+                            }
+                            PrintHit::Backgrounds(on) => {
+                                self.print_panel.print_backgrounds = on;
+                            }
+                            PrintHit::OutputPathField => {
+                                self.print_panel.editing_field =
+                                    Some(panels::print_panel::PrintField::OutputPath);
+                            }
+                            PrintHit::Inside => { /* swallow */ }
+                            PrintHit::Outside => {
+                                self.print_panel.close();
+                            }
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+
+                    // Settings panel (task D-7): centred overlay.
+                    if self.settings_panel.visible {
+                        let win_w = self.viewport_width_css();
+                        let win_h = self.viewport_height_css();
+                        let sp_x = (win_w - panels::settings_panel::PANEL_W) * 0.5;
+                        let sp_y = (win_h - panels::settings_panel::PANEL_H) * 0.5;
+                        use panels::settings_panel::SettingsHit;
+                        let hit = panels::settings_panel::hit_test(
+                            &self.settings_panel,
+                            x_css,
+                            y_css,
+                            sp_x,
+                            sp_y,
+                        );
+                        match hit {
+                            SettingsHit::Close => {
+                                let draft = self.settings_panel.apply_draft();
+                                // Apply theme & accent from draft when panel closes.
+                                self.shell_theme =
+                                    panels::themes::ShellTheme::parse(&draft.theme);
+                                // Mirror explicit dark/light lock to dark_mode so that
+                                // @media prefers-color-scheme reflects the user choice.
+                                // For System theme, is_dark(self.dark_mode) = self.dark_mode
+                                // (no change); for Dark/Light it overrides.
+                                let new_dark = self.shell_theme.is_dark(self.dark_mode);
+                                if new_dark != self.dark_mode {
+                                    self.dark_mode = new_dark;
+                                    self.relayout();
+                                }
+                                let _ = self.settings_store.apply_snapshot(&draft);
+                                self.settings_panel.visible = false;
+                            }
+                            SettingsHit::TabSelect(sec) => {
+                                self.settings_panel.section = sec;
+                                self.settings_panel.scroll_y = 0.0;
+                            }
+                            SettingsHit::ToggleShields => {
+                                self.settings_panel.draft.shields_enabled =
+                                    !self.settings_panel.draft.shields_enabled;
+                            }
+                            SettingsHit::ToggleDoh => {
+                                self.settings_panel.draft.doh_enabled =
+                                    !self.settings_panel.draft.doh_enabled;
+                            }
+                            SettingsHit::SetFingerprintMode(mode) => {
+                                self.settings_panel.draft.fingerprint_mode = mode;
+                            }
+                            SettingsHit::SetTheme(base) => {
+                                // Preserve the existing accent when changing the base.
+                                let current = panels::themes::ShellTheme::parse(
+                                    &self.settings_panel.draft.theme,
+                                );
+                                let new_theme = panels::themes::ShellTheme {
+                                    base: panels::themes::ShellTheme::parse(&base).base,
+                                    accent: current.accent,
+                                };
+                                self.settings_panel.draft.theme = new_theme.to_settings_str();
+                                self.shell_theme = new_theme;
+                            }
+                            SettingsHit::SetAccent(accent_key) => {
+                                // Preserve the existing base when changing the accent.
+                                let current = panels::themes::ShellTheme::parse(
+                                    &self.settings_panel.draft.theme,
+                                );
+                                let new_theme = panels::themes::ShellTheme {
+                                    base: current.base,
+                                    accent: panels::themes::AccentPreset::from_key(&accent_key),
+                                };
+                                self.settings_panel.draft.theme = new_theme.to_settings_str();
+                                self.shell_theme = new_theme;
+                            }
+                            SettingsHit::FontSizeDecrease => {
+                                self.settings_panel.draft.font_size =
+                                    (self.settings_panel.draft.font_size - 2.0).max(8.0);
+                            }
+                            SettingsHit::FontSizeIncrease => {
+                                self.settings_panel.draft.font_size =
+                                    (self.settings_panel.draft.font_size + 2.0).min(36.0);
+                            }
+                            SettingsHit::FocusHomepage => {
+                                self.settings_panel.focused_input =
+                                    Some(panels::settings_panel::SettingInput::Homepage);
+                            }
+                            SettingsHit::FocusDownloadPath => {
+                                self.settings_panel.focused_input =
+                                    Some(panels::settings_panel::SettingInput::DownloadPath);
+                            }
+                            SettingsHit::Inside => { /* swallow */ }
+                            SettingsHit::Outside => {
+                                let draft = self.settings_panel.apply_draft();
+                                let _ = self.settings_store.apply_snapshot(&draft);
+                                self.settings_panel.visible = false;
+                            }
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+
+                    // Keyboard shortcuts panel (§D-4): centred overlay.
+                    if self.shortcuts_panel.visible {
+                        let win_w = self.viewport_width_css();
+                        let win_h = self.viewport_height_css();
+                        let kp_x = (win_w - panels::shortcuts_panel::PANEL_W) * 0.5;
+                        let kp_y = (win_h - panels::shortcuts_panel::PANEL_H) * 0.5;
+                        use panels::shortcuts_panel::ShortcutsHit;
+                        let lx = x_css - kp_x;
+                        let ly = y_css - kp_y;
+                        if (0.0..panels::shortcuts_panel::PANEL_W).contains(&lx)
+                            && (0.0..panels::shortcuts_panel::PANEL_H).contains(&ly)
+                        {
+                            match self.shortcuts_panel.hit_test(lx, ly) {
+                                ShortcutsHit::Close => {
+                                    self.shortcuts_panel.close();
+                                }
+                                ShortcutsHit::StartRebind(idx) => {
+                                    self.shortcuts_panel.rebinding = Some(idx);
+                                }
+                                ShortcutsHit::Consumed => {}
+                            }
+                        } else {
+                            self.shortcuts_panel.close();
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+
+                    // Certificate viewer panel (§D-1): centred overlay.
+                    if self.cert_panel.visible {
+                        let win_w = self.viewport_width_css();
+                        let win_h = self.viewport_height_css();
+                        let cp_x = (win_w - panels::cert_panel::PANEL_W) * 0.5;
+                        let cp_y = (win_h - panels::cert_panel::PANEL_H) * 0.5;
+                        let lx = x_css - cp_x;
+                        let ly = y_css - cp_y;
+                        if (0.0..panels::cert_panel::PANEL_W).contains(&lx)
+                            && (0.0..panels::cert_panel::PANEL_H).contains(&ly)
+                        {
+                            use panels::cert_panel::CertHit;
+                            match self.cert_panel.hit_test(lx, ly) {
+                                CertHit::Close | CertHit::Header => {
+                                    self.cert_panel.close();
+                                }
+                                CertHit::Body => { /* swallow */ }
+                            }
+                        } else {
+                            self.cert_panel.close();
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+
+                    // History panel (task D-5): centred floating overlay.
+                    if self.history_panel.visible {
+                        let (px, py) = self.history_panel_anchor();
+                        use panels::history_panel::HistoryHit;
+                        let hit =
+                            panels::history_panel::hit_test(&self.history_panel, x_css, y_css, px, py);
+                        match hit {
+                            HistoryHit::Close => {
+                                self.history_panel.visible = false;
+                                self.history_panel.search_active = false;
+                            }
+                            HistoryHit::FocusSearch => {
+                                self.history_panel.search_active = true;
+                            }
+                            HistoryHit::ClearAll => {
+                                let _ = self.history_store.clear();
+                                let _ = self.history_fts.clear();
+                                self.refresh_history();
+                            }
+                            HistoryHit::Delete(id) => {
+                                if let Some(url) = self
+                                    .history_panel
+                                    .rows
+                                    .iter()
+                                    .find_map(|r| {
+                                        if let panels::history_panel::HistoryRow::Entry(e) = r {
+                                            if e.id == id { Some(e.url.clone()) } else { None }
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                {
+                                    let _ = self.history_store.delete(&url);
+                                    self.refresh_history();
+                                }
+                            }
+                            HistoryHit::Navigate(url) => {
+                                self.history_panel.visible = false;
+                                self.navigate_to(PageSource::Url(url));
+                            }
+                            HistoryHit::Inside => { /* swallow */ }
+                            HistoryHit::Outside => {
+                                self.history_panel.visible = false;
+                                self.history_panel.search_active = false;
+                            }
+                        }
+                        self.request_redraw();
+                        return;
+                    }
+
+                    // Note viewer overlay (§12.2, GG-2): click [×] to close.
+                    if self.note_viewer.visible {
+                        let win_size = self.window.as_ref().map_or((1024, 720), |w| {
+                            let s = w.inner_size();
+                            (s.width, s.height)
+                        });
+                        if let Some(hit) = self.note_viewer.hit_test(x_css, y_css, win_size) {
+                            match hit {
+                                panels::note_viewer::NoteHit::Close => {
+                                    self.note_viewer.close();
+                                    self.request_redraw();
+                                }
+                                panels::note_viewer::NoteHit::Body => {}
+                            }
+                            return;
+                        }
+                    }
+
+                    // AI sidebar panel (§12.8): right-docked AI assistant.
+                    if self.ai_panel.visible {
+                        let win_w = self.viewport_width_css();
+                        let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                        let win_h = self.viewport_height_css() + tab_h;
+                        if let Some(hit) = panels::ai_panel::hit_test(
+                            &self.ai_panel,
+                            x_css,
+                            y_css,
+                            win_w,
+                            tab_h,
+                            win_h,
+                        ) {
+                            match hit {
+                                panels::ai_panel::AiHit::Close => {
+                                    self.ai_panel.close();
+                                    self.relayout();
+                                    self.request_redraw();
+                                }
+                                panels::ai_panel::AiHit::Input
+                                | panels::ai_panel::AiHit::Response
+                                | panels::ai_panel::AiHit::Header => {}
+                            }
                             return;
                         }
                     }
@@ -4839,7 +7759,51 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
                 } else {
-                    // Released — завершаем drag (если он был).
+                    // Released — завершаем drag (если был) и сбрасываем resize.
+                    self.resize_active = None;
+                    // CSS :active — clear on release.
+                    if self.active_nid.is_some() {
+                        self.active_nid = None;
+                        self.relayout();
+                        self.request_redraw();
+                    }
+                    // Fire mouseup + pointerup on the hovered DOM element.
+                    // Per W3C UI Events §17.6 + Pointer Events L2 §10.
+                    #[cfg(feature = "quickjs")]
+                    if let (Some(hov), Some(pos)) = (self.hovered_nid, self.cursor_position) {
+                        let dpr = self.renderer.as_ref()
+                            .map_or(1.0_f32, |r| r.scale_factor() as f32).max(1e-6);
+                        let xu = (pos.x as f32) / dpr;
+                        let yu = (pos.y as f32) / dpr;
+                        let nid = hov.index() as u32;
+                        self.js_pointer_event(nid, "pointerup", xu, yu, 0, 0);
+                        self.js_mouse_event(nid, "mouseup", xu, yu, 0, 0);
+                    }
+                    // Tab drag-and-drop (§O-9): resolve the drop and reorder.
+                    if let Some(drag) = self.tab_drag.take()
+                        && drag.active {
+                            let dpr = self
+                                .renderer
+                                .as_ref()
+                                .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                                .max(1e-6);
+                            let win_w = self.viewport_width_css();
+                            let tab_area_w = win_w
+                                - tabs::archive::ARCHIVE_BTN_W
+                                - tabs::strip::LAYOUT_BTN_W;
+                            let release_x = self.cursor_position
+                                .map(|p| (p.x as f32) / dpr)
+                                .unwrap_or(drag.ghost_x);
+                            let updated = tabs::strip::TabDragState {
+                                ghost_x: release_x,
+                                ..drag
+                            };
+                            let dst = updated.drop_target(self.tab_strip.len(), tab_area_w);
+                            if dst != updated.src_idx {
+                                self.tab_strip.move_tab(updated.src_idx, dst);
+                            }
+                            self.request_redraw();
+                        }
                     // Bookmark drag-and-drop: if a bookmark drag is in progress,
                     // resolve the drop target. Dropping on a folder re-files the
                     // bookmark; dropping anywhere else opens it (a plain click).
@@ -4860,6 +7824,26 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
             }
             WindowEvent::MouseWheel { delta, phase, .. } => {
+                // DevTools inspector intercepts the wheel while visible (§7E.2):
+                // scroll the active tab's property list. The Network tab is
+                // page-wide and scrolls even without a pinned element.
+                if self.dom_inspector.visible
+                    && (self.dom_inspector.selected.is_some()
+                        || self.dom_inspector.active_tab
+                            == devtools::inspector::InspectorTab::Network)
+                {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, l) => l,
+                        MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
+                    };
+                    if lines > 0.0 {
+                        self.dom_inspector.scroll_up(lines.abs().ceil() as usize);
+                    } else if lines < 0.0 {
+                        self.dom_inspector.scroll_down(lines.abs().ceil() as usize);
+                    }
+                    self.request_redraw();
+                    return;
+                }
                 // Privacy network panel intercepts the wheel while visible:
                 // scroll the request list instead of the page.
                 if self.privacy.visible {
@@ -4893,6 +7877,21 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.request_redraw();
                     return;
                 }
+                // §12.3 Read-later panel intercepts the wheel while visible.
+                if self.read_later_panel.visible {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, l) => l,
+                        MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
+                    };
+                    let max_scroll = self.read_later_panel.max_scroll();
+                    if lines > 0.0 {
+                        self.read_later_panel.scroll_up();
+                    } else if lines < 0.0 {
+                        self.read_later_panel.scroll_down(max_scroll);
+                    }
+                    self.request_redraw();
+                    return;
+                }
                 // Bookmark panel intercepts the wheel while visible: scroll the
                 // bookmark list rather than the page.
                 if self.bookmark_panel.visible {
@@ -4902,6 +7901,53 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     };
                     // winit: wheel up → lines > 0 → scroll content up (scroll_y -=).
                     self.bookmark_panel.scroll_by(-lines * LINE_STEP_CSS_PX);
+                    self.request_redraw();
+                    return;
+                }
+                // History panel intercepts the wheel while visible.
+                if self.history_panel.visible {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, l) => l,
+                        MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
+                    };
+                    self.history_panel.scroll_by(-lines * LINE_STEP_CSS_PX);
+                    self.request_redraw();
+                    return;
+                }
+                // Keyboard shortcuts panel intercepts the wheel while visible (§D-4).
+                if self.shortcuts_panel.visible {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, l) => l,
+                        MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
+                    };
+                    self.shortcuts_panel.scroll_by(-lines * LINE_STEP_CSS_PX);
+                    self.request_redraw();
+                    return;
+                }
+                // Certificate viewer panel intercepts the wheel while visible (§D-1).
+                if self.cert_panel.visible {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, l) => l,
+                        MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
+                    };
+                    self.cert_panel.scroll_by(-lines * LINE_STEP_CSS_PX);
+                    self.request_redraw();
+                    return;
+                }
+                // Vertical tabs panel (GG-4) intercepts the wheel while visible.
+                if self.vertical_tabs.visible {
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, l) => l,
+                        MouseScrollDelta::PixelDelta(p) => (p.y as f32) / 40.0,
+                    };
+                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let win_h = self.viewport_height_css() + tab_h;
+                    let panel_h = win_h - tab_h;
+                    self.vertical_tabs.scroll_by(
+                        -lines * LINE_STEP_CSS_PX,
+                        self.tab_strip.len(),
+                        panel_h,
+                    );
                     self.request_redraw();
                     return;
                 }
@@ -4949,9 +7995,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 }
                             }
                             self.request_redraw();
+                        } else if self.try_scroll_overflow_container(dx_css, dy_css) {
+                            // Wheel was consumed by an overflow container — do not
+                            // scroll the page.
                         } else {
                             if dx_css != 0.0 { self.scroll_x_by(dx_css); }
                             self.scroll_by_smooth(dy_css);
+                            #[cfg(feature = "quickjs")]
+                            if let Some(js) = &self.js_ctx {
+                                js.fire_window_scroll();
+                            }
                         }
                     }
                     MouseScrollDelta::PixelDelta(p) => {
@@ -4991,6 +8044,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                             (sv.right.scroll_y + dy_css).clamp(0.0, max);
                                     }
                                     self.request_redraw();
+                                } else if self.try_scroll_overflow_container(dx_css, dy_css) {
+                                    // Touchpad gesture started over overflow container.
                                 } else {
                                     if dx_css != 0.0 { self.scroll_x_by(dx_css); }
                                     self.scroll_by_smooth(dy_css);
@@ -5022,6 +8077,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                             (sv.right.scroll_y + dy_css).clamp(0.0, max);
                                     }
                                     self.request_redraw();
+                                } else if self.try_scroll_overflow_container(dx_css, dy_css) {
+                                    // Touchpad move over overflow container.
                                 } else {
                                     if dx_css != 0.0 { self.scroll_x_by(dx_css); }
                                     self.scroll_by_smooth(dy_css);
@@ -5033,13 +8090,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
             WindowEvent::RedrawRequested => {
                 // HTML §8.1.5.1 «Update the rendering» — spec-correct order:
-                //   1. scroll             ← advance_scroll_anim + advance_momentum
-                //   2. CSS Animations + Transitions tick  (spec: update animations before rAF)
-                //   3. rAF callbacks      ← runtime.run_rendering_step + JS run_animation_frame
-                //   4. layout invalidation ← relayout() if dom_dirty after rAF
-                //      → deliver_layout_observers() (ResizeObserver + IntersectionObserver)
-                //   5. paint timing       ← PerformanceObserver 'paint' entries
-                //   6. paint              ← r.render(...)
+                //   1.   scroll              ← advance_scroll_anim + advance_momentum
+                //   1.5  scroll-driven anims ← deliver_scroll_progress → ScrollTimeline.currentTime
+                //   2.   CSS Animations + Transitions tick  (spec: update animations before rAF)
+                //   3.   rAF callbacks       ← runtime.run_rendering_step + JS run_animation_frame
+                //   4.   layout invalidation ← relayout() if dom_dirty after rAF
+                //        → deliver_layout_observers() (ResizeObserver + IntersectionObserver)
+                //   5.   paint timing        ← PerformanceObserver 'paint' entries
+                //   6.   paint               ← r.render(...)
                 //
                 // Scroll before CSS/rAF so callbacks read current scroll position.
                 // CSS animations/transitions before rAF: spec §8.1.5.1 step «update
@@ -5054,8 +8112,45 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 if self.advance_momentum(timestamp_ms) {
                     self.request_redraw();
                 }
+                // Sync window.scrollY to current scroll_y so JS reads are accurate.
+                #[cfg(feature = "quickjs")]
+                if let Some(js) = &self.js_ctx {
+                    js.set_page_scroll_y(self.scroll_y);
+                }
                 // ADR-008 §10E.4: after scroll, evict CPU-decoded images beyond gate zone.
                 self.try_discard_offscreen_images();
+                // Step 1.6: content-visibility: auto (BB-4) — пропущенный узел
+                // вошёл в расширенный viewport → ratchet relevant + relayout.
+                self.maybe_expand_cv_relevant();
+
+                // Step 1.5: CSS Scroll-Driven Animations — update ScrollTimeline.currentTime.
+                // Spec §8.1.5.1 step «update scroll-linked animations» precedes CSS animations.
+                // Compute root-viewport block/inline progress and deliver to JS.
+                {
+                    let (p_y, p_x) = if let Some(lb) = &self.layout_box {
+                        let vp = lumen_layout::Viewport {
+                            width: self.viewport_width_css(),
+                            height: self.viewport_height_css(),
+                        };
+                        let tl_y = lumen_layout::ScrollTimeline {
+                            element: None,
+                            axis: lumen_layout::ScrollAxis::Block,
+                        };
+                        let tl_x = lumen_layout::ScrollTimeline {
+                            element: None,
+                            axis: lumen_layout::ScrollAxis::Inline,
+                        };
+                        (
+                            lumen_layout::resolve_scroll_progress(&tl_y, lb, self.scroll_x, self.scroll_y, vp),
+                            lumen_layout::resolve_scroll_progress(&tl_x, lb, self.scroll_x, self.scroll_y, vp),
+                        )
+                    } else {
+                        (0.0_f32, 0.0_f32)
+                    };
+                    if let Some(js) = &self.js_ctx {
+                        js.deliver_scroll_progress(p_y, p_x);
+                    }
+                }
 
                 // Step 2: CSS Animations + Transitions tick (spec order: before rAF).
                 // Both schedulers are ticked once per frame and merged into a single
@@ -5127,14 +8222,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 self.runtime.run_rendering_step(timestamp_ms);
 
                 // Step 3.1: JS requestAnimationFrame callbacks.
-                // Snapshot-pattern: callbacks registered during this call go into
-                // the next frame. If any new rAF was registered (animation loop),
-                // request another redraw immediately.
-                // In deterministic mode (8F) pass 0.0 to suppress wall-clock jitter.
+                // Vsync gate (EE-5): fire rAF at most once per RAF_MIN_INTERVAL_MS (~16.67ms).
+                // Multiple requestAnimationFrame() calls within one frame period are coalesced
+                // into a single batch (snapshot-pattern in JS shim). When RedrawRequested fires
+                // faster than vsync (e.g. from scroll), we defer the batch without losing the
+                // "pending" signal so it fires on the next eligible frame.
+                // Pass -1.0 → JS captures performance.now() at batch start (DOMHighResTimeStamp).
+                // Pass 0.0 in deterministic mode → frozen timestamp per HTML §8.1.5.1.
                 if let Some(js) = &self.js_ctx {
-                    let raf_ts = if self.deterministic { 0.0 } else { timestamp_ms };
-                    js.run_animation_frame(raf_ts);
-                    if js.take_raf_pending() {
+                    let raf_due = timestamp_ms - self.last_raf_batch_ms >= RAF_MIN_INTERVAL_MS;
+                    if raf_due && js.has_raf_pending() {
+                        // Consume the flag and fire the batch.
+                        js.take_raf_pending();
+                        self.last_raf_batch_ms = timestamp_ms;
+                        let raf_ts = if self.deterministic { 0.0 } else { -1.0 };
+                        js.run_animation_frame(raf_ts);
+                    }
+                    // Schedule next redraw if callbacks remain queued (animation loop or deferred).
+                    if js.has_raf_pending() {
                         self.request_redraw();
                     }
                 }
@@ -5229,6 +8334,51 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     picker.append(&mut overlay_buf);
                     overlay_buf = picker;
                 }
+                if let (Some(dp_node), Some(lb)) =
+                    (self.date_picker_node, &self.layout_box)
+                    && let Some(anchor) = forms::find_box_rect(lb, dp_node)
+                {
+                    let mut dp = forms::build_date_picker(anchor, self.scroll_y, vp_w, self.date_picker_year, self.date_picker_month);
+                    dp.append(&mut overlay_buf);
+                    overlay_buf = dp;
+                }
+                if let (Some(sel_node), Some(lb)) =
+                    (self.select_dropdown_node, &self.layout_box)
+                    && let Some(anchor) = forms::find_box_rect(lb, sel_node)
+                {
+                    let doc = self.layout_source.as_ref().map(|s| s.document.lock().unwrap());
+                    if let Some(doc) = doc {
+                        let opts = forms::collect_select_options(&doc, sel_node);
+                        let vp_h = self.viewport_height_css();
+                        let mut dd = forms::build_select_dropdown(anchor, &opts, self.scroll_y, vp_w, vp_h);
+                        dd.append(&mut overlay_buf);
+                        overlay_buf = dd;
+                    }
+                }
+
+                // <dialog> modal overlay (L-2) — ::backdrop + centered dialog above page.
+                if let Some(lb) = &self.layout_box {
+                    let doc =
+                        self.layout_source.as_ref().map(|s| s.document.lock().unwrap());
+                    if let Some(doc) = doc {
+                        let modal_nids = forms::collect_modal_dialogs(&doc);
+                        if !modal_nids.is_empty() {
+                            let vp_h = self.viewport_height_css();
+                            for &dlg_nid in &modal_nids {
+                                if let Some(dlg_lb) = forms::find_layout_box(lb, dlg_nid) {
+                                    let mut dlg_overlay = forms::build_dialog_overlay(
+                                        dlg_lb,
+                                        self.scroll_y,
+                                        vp_w,
+                                        vp_h,
+                                    );
+                                    dlg_overlay.append(&mut overlay_buf);
+                                    overlay_buf = dlg_overlay;
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // Адресная строка (Ctrl+L) — рисуется поверх всего остального.
                 if self.address_bar.is_open() {
@@ -5264,6 +8414,37 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 let scroll_y = self.scroll_y;
                 let scroll_x = self.scroll_x;
 
+                // CSS View Transitions: fade old display list over new content.
+                // Renders old_dl wrapped in PushOpacity(1-progress)/PopOpacity so it
+                // fades out while the new display list (rendered underneath) fades in.
+                // Runs at most `duration_ms`; after that, view_transition is cleared.
+                let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+                if let Some(ref vt) = self.view_transition {
+                    let elapsed = now_ms - vt.start_ms;
+                    let progress = (elapsed / vt.duration_ms).clamp(0.0, 1.0) as f32;
+                    let alpha = 1.0 - progress;
+                    if alpha > 0.0 {
+                        let mut vt_cmds = Vec::with_capacity(vt.old_dl.len() + 2);
+                        vt_cmds.push(lumen_paint::DisplayCommand::PushOpacity { alpha });
+                        vt_cmds.extend_from_slice(&vt.old_dl);
+                        vt_cmds.push(lumen_paint::DisplayCommand::PopOpacity);
+                        // Prepend so old content renders before (under) UI panels.
+                        vt_cmds.append(&mut overlay_buf);
+                        overlay_buf = vt_cmds;
+                        if let Some(w) = self.window.as_ref() {
+                            w.request_redraw();
+                        }
+                    }
+                }
+                // Clear completed transition (separate borrow from the block above).
+                let transition_done = self
+                    .view_transition
+                    .as_ref()
+                    .is_some_and(|vt| now_ms - vt.start_ms >= vt.duration_ms);
+                if transition_done {
+                    self.view_transition = None;
+                }
+
                 // Hint overlay: viewport-locked бейджи kbd-навигации.
                 // Добавляются последними → рисуются поверх scrollbar/tooltip.
                 if self.hint.is_active() {
@@ -5274,10 +8455,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Download panel: viewport-locked bottom-right panel.
                 // Rendered before the tab bar so it appears below the tab strip.
                 if self.downloads.visible {
-                    let win_size = self.window.as_ref().map_or((1024, 720), |w| {
-                        let s = w.inner_size();
-                        (s.width, s.height)
-                    });
+                    let win_size = (
+                        self.viewport_width_css() as u32,
+                        self.window_height_css() as u32,
+                    );
                     let mut dl_cmds = download::build_download_bar(&self.downloads, win_size);
                     overlay_buf.append(&mut dl_cmds);
                 }
@@ -5341,6 +8522,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         (pw as f32 / dpr) as u32,
                         (ph as f32 / dpr) as u32,
                     );
+                    // Feed the inspector's Network tab a fresh request snapshot
+                    // from the shared NetworkLog (CC-9).
+                    let net_entries = self.network_panel.entries_clone();
+                    self.dom_inspector.set_network_entries(net_entries);
                     let mut insp_cmds = devtools::inspector::build_inspector_panel(
                         &self.dom_inspector,
                         win_css,
@@ -5353,10 +8538,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Rendered before the tab bar so tab bar draws on top.
                 if self.vertical_tabs.visible {
                     let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
-                    let mut vt_cmds = panels::vertical_tabs::build_panel(
+                    let mut vt_cmds = panels::vertical_tabs::build_tab_bar_vertical(
                         &self.tab_strip,
                         tabs::strip::TAB_BAR_HEIGHT,
                         win_h,
+                        self.vertical_tabs.scroll_y,
                     );
                     overlay_buf.append(&mut vt_cmds);
                 }
@@ -5399,6 +8585,30 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut perm_cmds);
                 }
 
+                // Note viewer overlay (§12.2, GG-2): floating annotation panel.
+                if self.note_viewer.visible {
+                    let win_size = self.window.as_ref().map_or((1024, 720), |w| {
+                        let s = w.inner_size();
+                        (s.width, s.height)
+                    });
+                    let mut nv_cmds = panels::note_viewer::build_note_viewer(&self.note_viewer, win_size);
+                    overlay_buf.append(&mut nv_cmds);
+                }
+
+                // AI sidebar panel (§12.8, GG-1): right-docked AI assistant.
+                if self.ai_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let win_h = self.viewport_height_css() + tab_h;
+                    let mut ai_cmds = panels::ai_panel::build_panel(
+                        &self.ai_panel,
+                        win_w,
+                        tab_h,
+                        win_h,
+                    );
+                    overlay_buf.append(&mut ai_cmds);
+                }
+
                 // Sidebar web panel (7D.3): right-docked secondary viewport.
                 if self.sidebar.visible {
                     let win_w = self.viewport_width_css();
@@ -5439,6 +8649,80 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut bm_cmds);
                 }
 
+                // Accessibility settings panel (E-2): centred overlay, Ctrl+Shift+Q.
+                if self.a11y_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.viewport_height_css();
+                    let win_size = (win_w as u32, win_h as u32);
+                    let mut a11y_cmds =
+                        panels::a11y_panel::build_a11y_panel(&self.a11y_panel, win_size);
+                    overlay_buf.append(&mut a11y_cmds);
+                }
+
+                // Print dialog (E-1): centred overlay, Ctrl+P.
+                if self.print_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.viewport_height_css();
+                    let pp_x = (win_w - panels::print_panel::PANEL_W) * 0.5;
+                    let pp_y = (win_h - panels::print_panel::PANEL_H) * 0.5;
+                    // Dim backdrop behind the modal.
+                    overlay_buf.push(lumen_paint::DisplayCommand::FillRect {
+                        rect: lumen_core::geom::Rect::new(0.0, 0.0, win_w, win_h),
+                        color: lumen_layout::Color { r: 0, g: 0, b: 0, a: 110 },
+                    });
+                    let mut pp_cmds =
+                        panels::print_panel::build_panel(&self.print_panel, pp_x, pp_y);
+                    overlay_buf.append(&mut pp_cmds);
+                }
+
+                // Settings panel (task D-7): centred overlay, Ctrl+, or about:settings.
+                if self.settings_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.viewport_height_css();
+                    let sp_x = (win_w - panels::settings_panel::PANEL_W) * 0.5;
+                    let sp_y = (win_h - panels::settings_panel::PANEL_H) * 0.5;
+                    panels::settings_panel::build_panel(&self.settings_panel, &mut overlay_buf, sp_x, sp_y);
+                }
+
+                // Keyboard shortcuts panel (§D-4): centred floating overlay.
+                if self.shortcuts_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.viewport_height_css();
+                    let kp_x = (win_w - panels::shortcuts_panel::PANEL_W) * 0.5;
+                    let kp_y = (win_h - panels::shortcuts_panel::PANEL_H) * 0.5;
+                    self.shortcuts_panel.build_panel(&mut overlay_buf, kp_x, kp_y);
+                }
+
+                // Certificate viewer panel (§D-1): centred floating overlay.
+                if self.cert_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.viewport_height_css();
+                    let cp_x = (win_w - panels::cert_panel::PANEL_W) * 0.5;
+                    let cp_y = (win_h - panels::cert_panel::PANEL_H) * 0.5;
+                    panels::cert_panel::build_panel(&self.cert_panel, &mut overlay_buf, cp_x, cp_y);
+                }
+
+                // History panel (task D-5): centred floating overlay.
+                if self.history_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let mut hist_cmds =
+                        panels::history_panel::build_panel(&self.history_panel, win_w, tab_h);
+                    overlay_buf.append(&mut hist_cmds);
+                }
+
+                // §12.3 Read-later panel: right-docked overlay.
+                if self.read_later_panel.visible {
+                    let win_w = self.viewport_width_css();
+                    let tab_h = tabs::strip::TAB_BAR_HEIGHT;
+                    let mut rl_cmds = panels::read_later_panel::build_panel(
+                        &self.read_later_panel,
+                        win_w,
+                        tab_h,
+                    );
+                    overlay_buf.append(&mut rl_cmds);
+                }
+
                 // Tab bar: viewport-locked strip at y=0..TAB_BAR_HEIGHT.
                 // Rendered last → always on top of all other overlays.
                 // Hidden in focus mode (task #25) for a distraction-free view;
@@ -5446,9 +8730,65 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // mode never reflows content (the strip shows page background).
                 if !self.focus.active {
                     let win_w = self.viewport_width_css();
-                    let mut tab_cmds =
-                        tabs::strip::build_tab_bar(&self.tab_strip, win_w);
+                    // Tab strip uses the area to the left of the layout toggle + archive buttons.
+                    let tab_area_w = win_w
+                        - tabs::archive::ARCHIVE_BTN_W
+                        - tabs::strip::LAYOUT_BTN_W;
+                    let mut tab_cmds = tabs::strip::build_tab_bar(
+                        &self.tab_strip,
+                        tab_area_w,
+                        self.shell_theme.accent_color(),
+                        self.tab_drag.as_ref(),
+                    );
                     overlay_buf.append(&mut tab_cmds);
+                    // Tab tier tooltip on hover.
+                    if let Some(idx) = self.hovered_tab_idx
+                        && let Some(tab) = self.tab_strip.tabs.get(idx) {
+                            let tab_w = tab_area_w / self.tab_strip.tabs.len().max(1) as f32;
+                            let tab_center_x = (idx as f32 + 0.5) * tab_w;
+                            if let Some(mut tooltip_cmds) = tabs::strip::build_tab_tooltip(
+                                tab,
+                                tab_center_x,
+                                tabs::strip::TAB_BAR_HEIGHT,
+                            ) {
+                                overlay_buf.append(&mut tooltip_cmds);
+                            }
+                        }
+                    // Layout toggle button (GG-4): between tabs and archive button.
+                    let layout_btn_x = win_w
+                        - tabs::archive::ARCHIVE_BTN_W
+                        - tabs::strip::LAYOUT_BTN_W;
+                    let tab_layout = tabs::strip::TabLayout::from_str(
+                        &self.settings_store.tab_layout(),
+                    );
+                    let mut layout_btn = tabs::strip::build_layout_toggle_btn(tab_layout, layout_btn_x);
+                    overlay_buf.append(&mut layout_btn);
+                    // Archive toolbar button (rightmost 36 px of tab bar).
+                    let mut arch_btn = tabs::archive::build_button(
+                        &self.archive,
+                        win_w,
+                        tabs::strip::TAB_BAR_HEIGHT,
+                    );
+                    overlay_buf.append(&mut arch_btn);
+                    // Archive panel: floating drop-down anchored below the button.
+                    let mut arch_panel = tabs::archive::build_panel(
+                        &self.archive,
+                        win_w,
+                        tabs::strip::TAB_BAR_HEIGHT,
+                    );
+                    overlay_buf.append(&mut arch_panel);
+                }
+
+                // CC-4: tab context menu — drawn above the tab strip.
+                if self.tab_context_menu.is_open() {
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.window_height_css();
+                    let mut menu_cmds = tabs::context_menu::build_overlay(
+                        &self.tab_context_menu,
+                        win_w,
+                        win_h,
+                    );
+                    overlay_buf.append(&mut menu_cmds);
                 }
 
                 // Command palette (task #23): modal — drawn above everything,
@@ -5480,6 +8820,33 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 if self.pip.active {
                     let mut pip_cmds = panels::pip_window::build_panel(&self.pip);
                     overlay_buf.append(&mut pip_cmds);
+                }
+
+                // Loading spinner for hibernated tab restore >200ms (10K.3).
+                if let Some(start_ms) = self.restore_spinner_start_ms {
+                    let elapsed_ms = now_ms - start_ms;
+                    let win_w = self.viewport_width_css();
+                    let win_h =
+                        self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                    if let Some(mut spinner) =
+                        panels::restore_spinner::build_spinner(elapsed_ms, win_w, win_h)
+                    {
+                        overlay_buf.append(&mut spinner);
+                        // Keep animating the spinner while it's visible.
+                        self.request_redraw();
+                    }
+                }
+
+                // Sleep hint for T2 SQLite restore >100 ms (10I).
+                if let Some(start_ms) = self.t2_restore_start_ms {
+                    let elapsed_ms = now_ms - start_ms;
+                    let win_w = self.viewport_width_css();
+                    if let Some(mut hint) =
+                        panels::sleep_hint::build_sleep_hint(elapsed_ms, win_w)
+                    {
+                        overlay_buf.append(&mut hint);
+                        self.request_redraw();
+                    }
                 }
 
                 // Build the split-view combined DL before borrowing renderer,
@@ -5582,12 +8949,61 @@ impl Lumen {
         self.input_tx.clone()
     }
 
+    /// Return the current keyboard modifier flags as a bitmask.
+    ///
+    /// Bit layout: bit0=ctrl, bit1=shift, bit2=alt, bit3=meta (super).
+    #[cfg(feature = "quickjs")]
+    fn mod_flags(&self) -> u8 {
+        (self.modifiers.control_key() as u8)
+            | ((self.modifiers.shift_key()  as u8) << 1)
+            | ((self.modifiers.alt_key()    as u8) << 2)
+            | ((self.modifiers.super_key()  as u8) << 3)
+    }
+
+    /// Dispatch a `MouseEvent` of the given `event_type` to DOM node `nid`.
+    ///
+    /// `button` = which button (0=left, 1=middle, 2=right).
+    /// `buttons` = bitmask of currently-held buttons.
+    /// Coordinates are CSS viewport pixels.
+    #[cfg(feature = "quickjs")]
+    fn js_mouse_event(&self, nid: u32, event_type: &str, x_css: f32, y_css: f32, button: u8, buttons: u8) {
+        if let Some(ctx) = &self.js_ctx {
+            let script = format!(
+                "_lumen_dispatch_mouse_event({}, '{}', {}, {}, {}, {}, {})",
+                nid, event_type,
+                x_css as i32, y_css as i32,
+                button, buttons,
+                self.mod_flags(),
+            );
+            ctx.eval_js(&script);
+        }
+    }
+
+    /// Dispatch a `PointerEvent` of the given `event_type` to DOM node `nid`.
+    ///
+    /// Always uses pointerId=1, pointerType='mouse', isPrimary=true (mouse input).
+    /// Non-bubbling types (`pointerenter`/`pointerleave`) have `bubbles:false` per spec.
+    #[cfg(feature = "quickjs")]
+    fn js_pointer_event(&self, nid: u32, event_type: &str, x_css: f32, y_css: f32, button: u8, buttons: u8) {
+        if let Some(ctx) = &self.js_ctx {
+            let script = format!(
+                "_lumen_dispatch_pointer_event({}, '{}', {}, {}, {}, {}, {})",
+                nid, event_type,
+                x_css as i32, y_css as i32,
+                button, buttons,
+                self.mod_flags(),
+            );
+            ctx.eval_js(&script);
+        }
+    }
+
     /// Dispatch a synthetic `mousemove` event at CSS-pixel viewport coordinates.
     ///
     /// Hit-tests the position (accounting for current scroll offset) and fires
     /// `_lumen_dispatch_mouse_event` with event type `"mousemove"`.  Used by
     /// [`input::humanlike::HumanLikeSender`] to trace Bézier-curve paths before
     /// a click.  No-op when there is no JS context or no element at the position.
+    /// Also fires the matching W3C `pointermove` event per Pointer Events L2 §10.
     fn dispatch_mouse_move(&mut self, x_css: f32, y_css: f32) {
         let panel_x_offset = if self.vertical_tabs.visible {
             panels::vertical_tabs::PANEL_WIDTH
@@ -5597,25 +9013,16 @@ impl Lumen {
             0.0
         };
         let page_x = (x_css - panel_x_offset) + self.scroll_x;
-        let page_y = y_css + self.scroll_y;
+        let page_y = (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y;
         let hit = self.layout_box.as_ref().and_then(|lb| {
             hit_test(Point::new(page_x, page_y), lb)
         });
         #[cfg(feature = "quickjs")]
-        if let (Some(result), Some(ctx)) = (hit.as_ref(), self.js_ctx.as_ref()) {
-            let mod_flags: u8 =
-                (self.modifiers.control_key() as u8)
-                | ((self.modifiers.shift_key()  as u8) << 1)
-                | ((self.modifiers.alt_key()    as u8) << 2)
-                | ((self.modifiers.super_key()  as u8) << 3);
-            let script = format!(
-                "_lumen_dispatch_mouse_event({}, 'mousemove', {}, {}, 0, 0, {})",
-                result.node.index(),
-                x_css as i32,
-                y_css as i32,
-                mod_flags,
-            );
-            ctx.eval_js(&script);
+        if let Some(result) = hit.as_ref() {
+            let nid = result.node.index() as u32;
+            // Pointer Events L2 §10.5 — pointermove fires before mousemove.
+            self.js_pointer_event(nid, "pointermove", x_css, y_css, 0, 0);
+            self.js_mouse_event(nid, "mousemove", x_css, y_css, 0, 0);
         }
         #[cfg(not(feature = "quickjs"))]
         let _ = hit;
@@ -5638,7 +9045,10 @@ impl Lumen {
         } else {
             0.0
         };
-        ((x_css - panel_x_offset) + self.scroll_x, y_css + self.scroll_y)
+        (
+            (x_css - panel_x_offset) + self.scroll_x,
+            (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y,
+        )
     }
 
     fn handle_click_at(&mut self, x_css: f32, y_css: f32) {
@@ -5649,6 +9059,18 @@ impl Lumen {
         // DevTools inspector: a click pins the box under the cursor and shows
         // its computed style, suppressing normal navigation / JS dispatch.
         if self.dom_inspector.visible {
+            let win_w_css = self.viewport_width_css();
+            // Click inside the right-docked panel → UI interaction (tab switch).
+            if self.dom_inspector.is_panel_click(x_css, win_w_css) {
+                if self.dom_inspector.click_tab_at(
+                    x_css, y_css, win_w_css,
+                    tabs::strip::TAB_BAR_HEIGHT,
+                ) {
+                    self.request_redraw();
+                }
+                return;
+            }
+            // Click on the page → pin the box under cursor.
             let (page_x, page_y) = self.page_point(x_css, y_css);
             if let Some(hit) = self
                 .layout_box
@@ -5669,7 +9091,29 @@ impl Lumen {
                     .and_then(|lb| devtools::inspector::find_box(lb, node))
                     .map(devtools::inspector::computed_style_map)
                     .unwrap_or_default();
-                self.dom_inspector.select(node, label, props);
+                let computed_props = self
+                    .layout_box
+                    .as_ref()
+                    .and_then(|lb| devtools::inspector::find_box(lb, node))
+                    .map(|lb| {
+                        let mut entries: Vec<(String, String)> =
+                            computed_style_to_map(&lb.style).into_iter().collect();
+                        entries.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+                        entries
+                    })
+                    .unwrap_or_default();
+                let styles_rules: Vec<(String, Vec<(String, String)>)> = self
+                    .layout_source
+                    .as_ref()
+                    .map(|src| {
+                        let doc = src.document.lock().unwrap();
+                        lumen_layout::matched_rules_for_node(&doc, node, &src.stylesheet)
+                            .into_iter()
+                            .map(|r| (r.selector, r.declarations))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.dom_inspector.select(node, label, props, styles_rules, computed_props);
                 self.request_redraw();
             }
             return;
@@ -5704,10 +9148,89 @@ impl Lumen {
         // Any click outside the picker closes it.
         self.color_picker_node = None;
 
+        // ── Date picker hit ──────────────────────────────
+        let date_hit: Option<(NodeId, forms::DatePickerHit)> = {
+            let dp_node = self.date_picker_node;
+            dp_node.and_then(|dn| {
+                let anchor = forms::find_box_rect(self.layout_box.as_ref()?, dn)?;
+                let vp_w2 = self.viewport_width_css();
+                let hit = forms::hit_date_picker(anchor, scroll_y, vp_w2, self.date_picker_year, self.date_picker_month, x_css, y_css);
+                Some((dn, hit))
+            })
+        };
+        if let Some((dn, hit)) = date_hit {
+            match hit {
+                forms::DatePickerHit::Prev => {
+                    let (ny, nm) = forms::advance_month(self.date_picker_year, self.date_picker_month, -1);
+                    self.date_picker_year = ny;
+                    self.date_picker_month = nm;
+                    self.request_redraw();
+                    return;
+                }
+                forms::DatePickerHit::Next => {
+                    let (ny, nm) = forms::advance_month(self.date_picker_year, self.date_picker_month, 1);
+                    self.date_picker_year = ny;
+                    self.date_picker_month = nm;
+                    self.request_redraw();
+                    return;
+                }
+                forms::DatePickerHit::Day(day) => {
+                    self.date_picker_node = None;
+                    let date_str = forms::format_date_value(self.date_picker_year, self.date_picker_month, day);
+                    if let Some(src) = self.layout_source.as_mut() {
+                        forms::set_value(&mut src.document.lock().unwrap(), dn, &date_str);
+                    }
+                    self.form_state.entry(dn).or_default().value = date_str;
+                    self.relayout();
+                    return;
+                }
+                forms::DatePickerHit::None => {}
+            }
+        }
+        // Any click outside the date picker closes it.
+        self.date_picker_node = None;
+
+        // ── Select dropdown option hit ───────────────────
+        // Check if click lands on an open <select> dropdown.
+        let select_hit: Option<(NodeId, usize)> = {
+            let sel_node = self.select_dropdown_node;
+            sel_node.and_then(|sn| {
+                let anchor = forms::find_box_rect(self.layout_box.as_ref()?, sn)?;
+                let opts_count = self.layout_source.as_ref()
+                    .map(|src| forms::collect_select_options(&src.document.lock().unwrap(), sn).len())
+                    .unwrap_or(0);
+                let vp_h = self.viewport_height_css();
+                let vp_w2 = self.viewport_width_css();
+                let idx = forms::hit_select_option(anchor, opts_count, scroll_y, vp_w2, vp_h, x_css, y_css)?;
+                Some((sn, idx))
+            })
+        };
+        if let Some((sn, idx)) = select_hit {
+            self.select_dropdown_node = None;
+            if let Some(src) = self.layout_source.as_mut() {
+                let mut doc = src.document.lock().unwrap();
+                let opts = forms::collect_select_options(&doc, sn);
+                if !opts.get(idx).is_some_and(|o| o.disabled) {
+                    forms::apply_select_choice(&mut doc, &opts, idx);
+                    // Update form_state value so form submission includes the chosen value.
+                    if let Some(chosen) = opts.get(idx) {
+                        self.form_state.entry(sn).or_default().value = chosen.value.clone();
+                    }
+                    drop(doc);
+                    self.relayout();
+                }
+            }
+            return;
+        }
+        // Any click outside the dropdown closes it.
+        self.select_dropdown_node = None;
+
         // ── Form control + link click ────────────────────
         // Single hit test shared by form dispatch and link navigation.
         // When the vertical/tree tabs panel is visible, page content is shifted
         // right by PANEL_WIDTH, so we subtract that offset to convert to page coords.
+        // Page content is also shifted down by TAB_BAR_HEIGHT via PushTransform,
+        // so we subtract that offset from y to get layout coordinates.
         let panel_x_offset = if self.vertical_tabs.visible {
             panels::vertical_tabs::PANEL_WIDTH
         } else if self.tree_tabs.visible {
@@ -5716,12 +9239,71 @@ impl Lumen {
             0.0
         };
         let page_x = (x_css - panel_x_offset) + self.scroll_x;
-        let page_y = y_css + self.scroll_y;
+        let page_y = (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y;
         let hit_result = self.layout_box.as_ref().and_then(|lb| {
             hit_test(Point::new(page_x, page_y), lb)
         });
-        // Track focused node for TypeText injection.
-        self.focused_node = hit_result.as_ref().map(|r| r.node);
+
+        // Debug click log — активируется флагом --click-log или LUMEN_CLICK_LOG=1.
+        // For click log: report both the hit box node (<p>) and the inline source_node
+        // (<a> text node) so the log shows what find_link_href actually searches from.
+        let click_log_hit: Option<(u32, String, String, String)> =
+            if click_log::is_enabled() {
+                hit_result.as_ref().and_then(|r| {
+                    self.layout_source.as_ref().map(|src| {
+                        let doc = src.document.lock().unwrap();
+                        // Use source_node for tag/class info — it reveals the inline element.
+                        let effective_id = r.source_node;
+                        let node = doc.get(effective_id);
+                        let (tag, id_attr, class_attr) =
+                            if let NodeData::Element { name, attrs } = &node.data {
+                                let id = attrs.iter()
+                                    .find(|a| a.name.local == "id")
+                                    .map(|a| a.value.as_str())
+                                    .unwrap_or("");
+                                let cls = attrs.iter()
+                                    .find(|a| a.name.local == "class")
+                                    .map(|a| a.value.as_str())
+                                    .unwrap_or("");
+                                (name.local.to_string(), id.to_owned(), cls.to_owned())
+                            } else if let NodeData::Text(t) = &node.data {
+                                // Show which text we clicked and note the parent element.
+                                let parent_tag = node.parent
+                                    .map(|pid| {
+                                        let pn = doc.get(pid);
+                                        if let NodeData::Element { name, .. } = &pn.data {
+                                            format!("<{}>", name.local)
+                                        } else {
+                                            "?".to_owned()
+                                        }
+                                    })
+                                    .unwrap_or_default();
+                                let preview: String = t.chars().take(30).collect();
+                                (format!("#text in {parent_tag}"), String::new(), format!("\"{preview}\""))
+                            } else {
+                                ("#other".to_owned(), String::new(), String::new())
+                            };
+                        (effective_id.index() as u32, tag, id_attr, class_attr)
+                    })
+                })
+            } else {
+                None
+            };
+
+        // Track focused node for TypeText injection and CSS :focus matching.
+        let new_focused = hit_result.as_ref().map(|r| r.node);
+        let focus_changed = new_focused != self.focused_node;
+        self.focused_node = new_focused;
+        // Trigger relayout if :focus state changed so :focus / :focus-within rules update.
+        if focus_changed {
+            self.relayout();
+            // Notify platform accessibility bridge so screen readers can track focus.
+            self.platform_bridge.focused_node_changed(new_focused);
+            // Keep JS _lumen_last_focused_nid in sync so showModal() can save/restore it.
+            if let Some(js) = &self.js_ctx {
+                js.notify_focus_changed(new_focused.map(|n| n.index() as u32));
+            }
+        }
         // Dispatch JS click event (bubbles from hit node to document).
         // Passes viewport coordinates and modifier key state so
         // handlers can read event.clientX/clientY/ctrlKey/etc.
@@ -5753,6 +9335,80 @@ impl Lumen {
             } else {
                 forms::FormClickAction::Nothing
             };
+
+        // Log form actions (non-link outcomes).
+        if click_log::is_enabled() {
+            let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
+                node_id: *nid, tag, id_attr: id, class_attr: cls,
+            });
+            match &form_action {
+                forms::FormClickAction::Nothing => {} // logged in the Nothing branch below
+                forms::FormClickAction::ToggleCheckbox(_) => {
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("ToggleCheckbox"),
+                    });
+                }
+                forms::FormClickAction::ToggleRadio { .. } => {
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("ToggleRadio"),
+                    });
+                }
+                forms::FormClickAction::OpenColorPicker(_) => {
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("OpenColorPicker"),
+                    });
+                }
+                forms::FormClickAction::OpenDatePicker(_) => {
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("OpenDatePicker"),
+                    });
+                }
+                forms::FormClickAction::OpenSelectDropdown(_) => {
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("OpenSelectDropdown"),
+                    });
+                }
+                forms::FormClickAction::OpenFilePicker(_) => {
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("OpenFilePicker"),
+                    });
+                }
+                forms::FormClickAction::SubmitForm(_) => {
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("SubmitForm"),
+                    });
+                }
+                forms::FormClickAction::ToggleDetails(_) => {
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("ToggleDetails"),
+                    });
+                }
+                forms::FormClickAction::SlideRange(_) => {
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome: click_log::ClickOutcome::FormAction("SlideRange"),
+                    });
+                }
+            }
+        }
+
         match form_action {
             forms::FormClickAction::ToggleCheckbox(id) => {
                 if let Some(src) = self.layout_source.as_mut() {
@@ -5775,6 +9431,58 @@ impl Lumen {
                     w.request_redraw();
                 }
             }
+            forms::FormClickAction::OpenDatePicker(id) => {
+                let (y, m) = self.layout_source.as_ref()
+                    .and_then(|src| {
+                        let doc = src.document.lock().ok()?;
+                        let val = doc.get(id).get_attr("value").unwrap_or("").to_owned();
+                        forms::parse_date_value(&val).map(|(y, m, _)| (y, m))
+                    })
+                    .unwrap_or_else(forms::today_year_month);
+                self.date_picker_node = Some(id);
+                self.date_picker_year = y;
+                self.date_picker_month = m;
+                if let Some(w) = self.window.as_ref() {
+                    w.request_redraw();
+                }
+            }
+            forms::FormClickAction::OpenSelectDropdown(id) => {
+                self.select_dropdown_node = Some(id);
+                if let Some(w) = self.window.as_ref() {
+                    w.request_redraw();
+                }
+            }
+            forms::FormClickAction::OpenFilePicker(id) => {
+                self.open_file_picker(id);
+            }
+            forms::FormClickAction::ToggleDetails(id) => {
+                if let Some(src) = self.layout_source.as_mut() {
+                    forms::toggle_details_open(&mut src.document.lock().unwrap(), id);
+                }
+                // Fire HTML5 §4.11.1 `toggle` event on the <details> element.
+                #[cfg(feature = "quickjs")]
+                if let Some(ctx) = &self.js_ctx {
+                    ctx.eval_js(&format!(
+                        "_lumen_make_element({}).dispatchEvent(new Event('toggle'))",
+                        id.index()
+                    ));
+                }
+                self.relayout();
+            }
+            forms::FormClickAction::SlideRange(id) => {
+                if let (Some(src), Some(lb)) =
+                    (self.layout_source.as_mut(), self.layout_box.as_ref())
+                    && let Some(rect) = forms::find_box_rect(lb, id)
+                {
+                    forms::apply_range_value(
+                        &mut src.document.lock().unwrap(),
+                        id,
+                        rect,
+                        page_x,
+                    );
+                }
+                self.relayout();
+            }
             forms::FormClickAction::SubmitForm(submit_node) => {
                 // Phase 3: HTML5 form submission algorithm integration.
                 // Execute submit_form() which performs constraint validation.
@@ -5783,8 +9491,16 @@ impl Lumen {
                     if let Some(submit_event) = forms::build_form_submit_event(&doc, submit_node) {
                         match submit_event {
                             lumen_dom::FormSubmitEvent::Valid { action, method, fields } => {
-                                // Form passed validation — collect fields and submit.
-                                let body = forms::encode_form_fields(&fields);
+                                // Form passed validation — encode using enctype (HTML LS §4.10.21.6).
+                                let enctype = forms::get_form_enctype(&doc, submit_node);
+                                let body = if enctype == "multipart/form-data" {
+                                    // Multipart: deterministic boundary for Phase 0.
+                                    let boundary = "----LumenFormBoundary0000000000000000";
+                                    let (_ct, bytes) = forms::encode_form_fields_multipart(&fields, boundary);
+                                    String::from_utf8_lossy(&bytes).into_owned()
+                                } else {
+                                    forms::encode_form_fields(&fields)
+                                };
                                 use lumen_core::event::{Event, TabId};
                                 self.event_sink.emit(&Event::FormSubmit {
                                     tab_id: TabId(0),
@@ -5793,17 +9509,36 @@ impl Lumen {
                                     body: body.clone(),
                                 });
                                 match method.as_str() {
+                                    "dialog" => {
+                                        // HTML LS §4.10.18.3: form with method="dialog" closes
+                                        // the nearest ancestor <dialog>, setting its returnValue
+                                        // to the submit button's value attribute.
+                                        let rv = fields.iter()
+                                            .find(|(n, _)| n.is_empty() || n == "value")
+                                            .map(|(_, v)| v.as_str())
+                                            .unwrap_or("");
+                                        let dialog_nid = lumen_dom::find_ancestor_dialog(&doc, submit_node);
+                                        drop(doc);
+                                        if let (Some(dnid), Some(js)) = (dialog_nid, &self.js_ctx) {
+                                            js.fire_dialog_close(dnid.index() as u32, rv);
+                                        }
+                                    }
                                     "get" => {
                                         // HTML LS §form-submission step 23: navigate
-                                        // to action + query-string.
-                                        let get_url = forms::make_get_url(&action, &body);
+                                        // to action + query-string (only urlencoded for GET).
+                                        let url_body = if enctype == "multipart/form-data" {
+                                            forms::encode_form_fields(&fields)
+                                        } else {
+                                            body.clone()
+                                        };
+                                        let get_url = forms::make_get_url(&action, &url_body);
                                         let resolved = self.source.resolve_href(&get_url);
                                         drop(doc);
                                         self.navigate_to(PageSource::from_arg(Some(&resolved)));
                                     }
                                     _ => {
                                         // POST: emit event; real network send is P3 task.
-                                        eprintln!("[forms] POST {} body={}", action, body);
+                                        eprintln!("[forms] POST {} enctype={} body-len={}", action, enctype, body.len());
                                     }
                                 }
                             }
@@ -5832,20 +9567,71 @@ impl Lumen {
                 // ── Link click ───────────────────────────
                 // No form control was activated — check if
                 // the clicked node is inside an <a href>.
+                // Use source_node (text node inside inline element) so find_link_href
+                // can walk up and find the <a> parent: text → <a href="…"> → found.
+                // Falls back to r.node for non-inline boxes.
                 let href = hit_result.as_ref().and_then(|r| {
                     self.layout_source
                         .as_ref()
-                        .and_then(|src| links::find_link_href(&src.document.lock().unwrap(), r.node))
+                        .and_then(|src| links::find_link_href(&src.document.lock().unwrap(), r.source_node))
                 });
                 if let Some(href) = href {
                     if let Some(frag) = links::fragment_only(&href) {
+                        if click_log::is_enabled() {
+                            let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
+                                node_id: *nid, tag, id_attr: id, class_attr: cls,
+                            });
+                            click_log::log_click(&click_log::ClickInfo {
+                                win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                                hit: hit_ref,
+                                outcome: click_log::ClickOutcome::LinkFragment(frag),
+                            });
+                        }
                         // Same-page fragment navigation.
                         self.navigate_fragment(frag.to_owned());
                     } else if links::is_navigable_href(&href) {
                         let resolved = self.source.resolve_href(&href);
+                        if click_log::is_enabled() {
+                            let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
+                                node_id: *nid, tag, id_attr: id, class_attr: cls,
+                            });
+                            click_log::log_click(&click_log::ClickInfo {
+                                win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                                hit: hit_ref,
+                                outcome: click_log::ClickOutcome::LinkNavigate {
+                                    href: &href,
+                                    resolved: &resolved,
+                                },
+                            });
+                        }
                         let target = PageSource::from_arg(Some(&resolved));
                         self.navigate_to(target);
+                    } else {
+                        if click_log::is_enabled() {
+                            let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
+                                node_id: *nid, tag, id_attr: id, class_attr: cls,
+                            });
+                            click_log::log_click(&click_log::ClickInfo {
+                                win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                                hit: hit_ref,
+                                outcome: click_log::ClickOutcome::LinkBlocked(&href),
+                            });
+                        }
                     }
+                } else if click_log::is_enabled() {
+                    let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
+                        node_id: *nid, tag, id_attr: id, class_attr: cls,
+                    });
+                    let outcome = if hit_result.is_none() {
+                        click_log::ClickOutcome::NoHit
+                    } else {
+                        click_log::ClickOutcome::NoLink
+                    };
+                    click_log::log_click(&click_log::ClickInfo {
+                        win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                        hit: hit_ref,
+                        outcome,
+                    });
                 }
             }
         }
@@ -5853,6 +9639,28 @@ impl Lumen {
 
     /// Inject a typed character into the focused element (TypeText injection path).
     ///
+    /// Inject a special (non-printable) key press: `keydown` → `keyup`.
+    ///
+    /// `code` is a W3C `KeyboardEvent.code` string, e.g. `"Enter"`, `"Backspace"`.
+    /// The matching `KeyboardEvent.key` value is resolved via [`input::native::code_to_key`]
+    /// (`"Space"` → `" "`, everything else passes through unchanged).
+    /// Events have `isTrusted=true`; JS `dispatchEvent()` is never used.
+    fn inject_special_key(&mut self, code: &str) {
+        let Some(ctx) = self.js_ctx.as_ref() else { return };
+        let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
+        let key = input::native::code_to_key(code);
+        for event_type in &["keydown", "keyup"] {
+            let script = format!(
+                "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, false, false)",
+                node_id, event_type, key, code,
+            );
+            ctx.eval_js(&script);
+        }
+        if let Some(nav) = ctx.take_navigate_request() {
+            self.pending_js_navigate = Some(nav);
+        }
+    }
+
     /// Fires `keydown` → `input` → `keyup` JS events via `_lumen_dispatch_key_event`
     /// on the last-focused node so events have `isTrusted=true`.
     fn inject_char(&mut self, ch: char) {
@@ -5918,6 +9726,37 @@ impl Lumen {
             && self.bookmark_panel.search_active
             && self.handle_bookmark_key(code, key_event)
         {
+            return;
+        }
+
+        // History panel search box: printable input + Backspace + Esc route here.
+        // Arrow keys scroll the list. Modified keys fall through for global shortcuts.
+        if self.history_panel.visible && self.handle_history_key(code, key_event) {
+            return;
+        }
+
+        // Note viewer overlay: Escape closes it.
+        if self.note_viewer.visible && code == KeyCode::Escape && !key_event.repeat {
+            self.note_viewer.close();
+            self.request_redraw();
+            return;
+        }
+
+        // AI panel input: printable text, Backspace, Enter. Ctrl/Meta fall through.
+        if self.ai_panel.visible && self.handle_ai_panel_key(code, key_event) {
+            return;
+        }
+
+        // Settings panel text inputs + Esc. Modified keys fall through for global shortcuts.
+        if self.print_panel.visible && self.handle_print_key(code, key_event) {
+            return;
+        }
+        if self.settings_panel.visible && self.handle_settings_key(code, key_event) {
+            return;
+        }
+
+        // Keyboard shortcuts panel — capture any keypress when rebinding (§D-4).
+        if self.shortcuts_panel.visible && self.handle_shortcuts_key(code, key_event) {
             return;
         }
 
@@ -6001,6 +9840,37 @@ impl Lumen {
             }
         }
 
+        // Fullscreen API (WHATWG Fullscreen §4.6): Escape always exits fullscreen first.
+        // If we are fullscreen and the user presses Escape (no repeat, no mods), exit
+        // fullscreen before processing any other shortcut.
+        if self.fullscreen_nid.is_some()
+            && code == KeyCode::Escape
+            && self.modifiers.is_empty()
+            && !key_event.repeat
+        {
+            self.fullscreen_nid = None;
+            if let Some(w) = self.window.as_ref() {
+                w.set_fullscreen(None);
+            }
+            // Notify JS so fullscreenchange fires and document.fullscreenElement clears.
+            #[cfg(feature = "quickjs")]
+            if let Some(js) = &self.js_ctx {
+                js.eval_js("if(typeof _lumen_notify_fullscreen_exit==='function')_lumen_notify_fullscreen_exit()");
+            }
+            return;
+        }
+
+        // CC-4: Escape closes the tab context menu before any other handling.
+        if self.tab_context_menu.is_open()
+            && code == KeyCode::Escape
+            && self.modifiers.is_empty()
+            && !key_event.repeat
+        {
+            self.tab_context_menu.close();
+            self.request_redraw();
+            return;
+        }
+
         // Focus mode (task #25): while active, Escape exits focus mode instead of
         // quitting the app. Ctrl+Shift+F falls through to the keybinding table so
         // it can toggle focus mode off.
@@ -6012,6 +9882,76 @@ impl Lumen {
             self.focus.exit();
             self.request_redraw();
             return;
+        }
+
+        // contenteditable key routing — before global keybindings so that
+        // typing inside an editable region is not swallowed by scroll commands.
+        // Only active when the focused node is inside a contenteditable host
+        // and no modifier (Ctrl/Alt/Meta) is held (those go to keybindings).
+        if (self.modifiers.is_empty() || self.modifiers == ModifiersState::SHIFT)
+            && let (Some(nid), Some(src)) = (self.focused_node, self.layout_source.as_ref())
+        {
+            #[cfg(feature = "quickjs")]
+            if let Some(js) = &self.js_ctx {
+                // Check contenteditable by reading the DOM directly (eval_js returns ()).
+                let editing_host = src
+                    .document
+                    .lock()
+                    .ok()
+                    .and_then(|doc| lumen_dom::find_editing_host(&doc, nid));
+                if let Some(host) = editing_host {
+                    let host_nid = host.index();
+                    let handled = match code {
+                        KeyCode::Backspace => {
+                            js.eval_js(&format!(
+                                "_lumen_handle_contenteditable_key('deleteContentBackward',null,{})",
+                                host_nid
+                            ));
+                            true
+                        }
+                        KeyCode::Delete => {
+                            js.eval_js(&format!(
+                                "_lumen_handle_contenteditable_key('deleteContentForward',null,{})",
+                                host_nid
+                            ));
+                            true
+                        }
+                        KeyCode::Enter | KeyCode::NumpadEnter => {
+                            let input_type = if self.modifiers == ModifiersState::SHIFT {
+                                "insertLineBreak"
+                            } else {
+                                "insertParagraph"
+                            };
+                            js.eval_js(&format!(
+                                "_lumen_handle_contenteditable_key('{}',null,{})",
+                                input_type, host_nid
+                            ));
+                            true
+                        }
+                        _ => {
+                            // Printable key — extract text from logical key.
+                            if let Some(text) = key_event.logical_key.to_text()
+                                && !text.is_empty()
+                                && text.chars().all(|c| !c.is_control())
+                            {
+                                let escaped =
+                                    text.replace('\\', "\\\\").replace('\'', "\\'");
+                                js.eval_js(&format!(
+                                    "_lumen_handle_contenteditable_key('insertText','{}',{})",
+                                    escaped, host_nid
+                                ));
+                                self.request_redraw();
+                                return;
+                            }
+                            false
+                        }
+                    };
+                    if handled {
+                        self.request_redraw();
+                        return;
+                    }
+                }
+            }
         }
 
         let Some(cmd) = keybinding_for(code, self.modifiers) else {
@@ -6055,7 +9995,7 @@ impl Lumen {
             }
             KeyCommand::OpenAddressBar => {
                 self.hint.close();
-                let current = self.source.url_str().unwrap_or("").to_owned();
+                let current = self.current_display_url().to_owned();
                 self.address_bar.open(&current);
                 self.request_redraw();
             }
@@ -6152,10 +10092,10 @@ impl Lumen {
                 self.cookie_banner_dismiss = !self.cookie_banner_dismiss;
                 // Preference takes effect on the next page load.
             }
-            KeyCommand::ToggleSidebar => {
-                self.sidebar.toggle();
-                // Sidebar occupies right PANEL_WIDTH — relayout so main page
-                // content width adjusts accordingly.
+            KeyCommand::ToggleAiPanel => {
+                self.ai_panel.toggle();
+                // AI panel occupies right PANEL_WIDTH — relayout so main content
+                // width adjusts accordingly.
                 self.relayout();
                 self.request_redraw();
             }
@@ -6163,6 +10103,36 @@ impl Lumen {
                 self.bookmark_panel.toggle();
                 if self.bookmark_panel.visible {
                     self.refresh_bookmarks();
+                }
+                self.request_redraw();
+            }
+            KeyCommand::ToggleHistory => {
+                self.history_panel.toggle();
+                if self.history_panel.visible {
+                    self.refresh_history();
+                }
+                self.request_redraw();
+            }
+            KeyCommand::ToggleA11y => {
+                if self.a11y_panel.visible {
+                    let _ = self.a11y_store.apply_snapshot(&self.a11y_panel.draft);
+                    self.a11y_panel.visible = false;
+                    self.deliver_a11y_media_changes();
+                } else {
+                    self.a11y_panel.load_draft(self.a11y_store.snapshot());
+                    self.a11y_panel.visible = true;
+                }
+                self.request_redraw();
+            }
+            KeyCommand::ToggleSettings => {
+                let snap = self.settings_store.snapshot();
+                if self.settings_panel.visible {
+                    // Flush draft to store on close.
+                    let draft = self.settings_panel.apply_draft();
+                    let _ = self.settings_store.apply_snapshot(&draft);
+                    self.settings_panel.visible = false;
+                } else {
+                    self.settings_panel.open(snap);
                 }
                 self.request_redraw();
             }
@@ -6211,6 +10181,32 @@ impl Lumen {
                 self.toggle_pip();
                 self.request_redraw();
             }
+            KeyCommand::ToggleReadLater => {
+                self.read_later_panel.toggle();
+                if self.read_later_panel.visible {
+                    self.refresh_read_later();
+                }
+                self.request_redraw();
+            }
+            KeyCommand::ToggleReaderView => {
+                self.toggle_reader_view();
+            }
+            KeyCommand::ViewSource => {
+                self.show_view_source();
+            }
+            KeyCommand::ToggleShortcuts => {
+                self.shortcuts_panel.toggle();
+                self.request_redraw();
+            }
+            KeyCommand::TogglePrint => {
+                self.print_panel.toggle();
+                self.request_redraw();
+            }
+            KeyCommand::ToggleCert => {
+                let cert = self.cert_info.clone();
+                self.cert_panel.toggle(cert);
+                self.request_redraw();
+            }
             KeyCommand::ZoomIn => {
                 self.zoom_factor = zoom::zoom_in(self.zoom_factor);
                 self.relayout();
@@ -6232,6 +10228,23 @@ impl Lumen {
     /// layout for the first `<video>` element and embeds its `src` / `poster`;
     /// if the page has no video, the card opens with a placeholder so the user
     /// still gets feedback (and can drag / close it).
+    /// Re-deliver media query changes to JS after accessibility prefs change.
+    ///
+    /// Called when the a11y panel closes so `prefers-reduced-motion` MQLs fire.
+    fn deliver_a11y_media_changes(&self) {
+        #[cfg(feature = "quickjs")]
+        if let Some(js) = &self.js_ctx {
+            let w = self.viewport_width_css();
+            let h = self.viewport_height_css();
+            let dark = if self.dark_mode { "true" } else { "false" };
+            let rm = if self.a11y_store.reduced_motion() { "true" } else { "false" };
+            js.eval_js(&format!(
+                "if(typeof _lumen_deliver_media_changes==='function')\
+                 _lumen_deliver_media_changes({w},{h},{dark},{rm});"
+            ));
+        }
+    }
+
     fn toggle_pip(&mut self) {
         if self.pip.active {
             self.pip.close();
@@ -6248,10 +10261,119 @@ impl Lumen {
         self.pip.open(src, poster, title, win_w, win_h);
     }
 
+    /// Open the in-window overlay PiP card (the [`Self::pip`] panel) from current
+    /// page state. Used as the fallback when a real OS PiP window cannot be
+    /// created (no GPU surface, window-creation failure).
+    fn open_pip_overlay(&mut self) {
+        let win_w = self.viewport_width_css();
+        let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+        let (src, poster) = self
+            .layout_box
+            .as_ref()
+            .and_then(find_video_source)
+            .unwrap_or_default();
+        let title = self.title.clone().unwrap_or_default();
+        self.pip.open(src, poster, title, win_w, win_h);
+    }
+
+    /// CC-7: open (or re-target) the real OS-level PiP window for `<video>` node
+    /// `nid`. Resolves the element's border-box (for aspect ratio) and poster,
+    /// then creates a separate always-on-top winit window with its own render
+    /// backend. On any window/backend failure, falls back to [`Self::pip`] so the
+    /// feature still works without multi-surface support.
+    fn open_pip_os(&mut self, event_loop: &ActiveEventLoop, nid: u32) {
+        use panels::pip_os_window::{pip_window_attributes, PipOsConfig};
+
+        let (video_rect, poster_url) = self
+            .layout_box
+            .as_ref()
+            .and_then(|root| forms::find_layout_box(root, NodeId::from_index(nid as usize)))
+            .map(|lb| {
+                let poster = match &lb.kind {
+                    lumen_layout::BoxKind::Video { poster, .. } => poster.clone(),
+                    _ => String::new(),
+                };
+                (lb.rect, poster)
+            })
+            .or_else(|| {
+                // Node id has no box yet — fall back to the first <video>'s poster.
+                self.layout_box.as_ref().and_then(|root| {
+                    find_video_source(root)
+                        .map(|(_, poster)| (Rect::new(0.0, 0.0, 16.0, 9.0), poster))
+                })
+            })
+            .unwrap_or((Rect::new(0.0, 0.0, 16.0, 9.0), String::new()));
+
+        let title = self
+            .title
+            .clone()
+            .unwrap_or_else(|| "Picture-in-Picture".to_owned());
+        let attrs = pip_window_attributes(&title, PipOsConfig::DEFAULT);
+
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => Arc::new(w),
+            Err(err) => {
+                eprintln!("PiP: не удалось создать OS-окно ({err}); fallback на overlay");
+                self.open_pip_overlay();
+                return;
+            }
+        };
+        let renderer = match backend_factory::create_backend(window.clone(), INTER_FONT.to_vec()) {
+            Ok(r) => r,
+            Err(err) => {
+                eprintln!("PiP: не удалось создать рендер OS-окна ({err}); fallback на overlay");
+                self.open_pip_overlay();
+                return;
+            }
+        };
+
+        self.pip_os = Some(PipOsWindow {
+            window,
+            renderer,
+            poster_url,
+            video_rect,
+        });
+        self.render_pip_os();
+    }
+
+    /// CC-7: tear down the OS PiP window. Releasing the last `Arc<Window>` makes
+    /// winit destroy the OS window and free its GPU surface; the overlay fallback
+    /// (if it was used instead) is cleared too.
+    fn close_pip_os(&mut self) {
+        self.pip_os = None;
+        self.pip.close();
+    }
+
+    /// CC-7: redraw the OS PiP window with the forwarded `<video>` content —
+    /// the poster letterboxed (`object-fit: contain`) into the floating window's
+    /// current client area. No-op when no OS PiP window is open.
+    fn render_pip_os(&mut self) {
+        let Some(pip) = self.pip_os.as_mut() else {
+            return;
+        };
+        let size = pip.window.inner_size();
+        let scale = pip.window.scale_factor() as f32;
+        let (win_w, win_h) = if scale > 0.0 {
+            (size.width as f32 / scale, size.height as f32 / scale)
+        } else {
+            (size.width as f32, size.height as f32)
+        };
+        let content = panels::pip_os_window::build_pip_content(
+            pip.video_rect,
+            &pip.poster_url,
+            win_w,
+            win_h,
+        );
+        if let Err(err) = pip.renderer.render(&[], &content, 0.0, 0.0) {
+            eprintln!("PiP OS render error: {err:?}");
+        }
+    }
+
     /// Сохранить текущую страницу в bfcache и стек навигации,
     /// затем загрузить `source` как новую страницу.
     /// Очищает `nav_fwd` (аналог браузера при навигации вперёд из середины истории).
     fn navigate_to(&mut self, source: PageSource) {
+        click_log::log_nav(&source.describe());
         self.hint.close();
         // Snapshot current page into bfcache if it has an HTML source.
         if let Some(ref ls) = self.layout_source
@@ -6266,14 +10388,18 @@ impl Lumen {
                 title: self.title.clone(),
             });
         }
-        // Push current page to back stack.
+        // Push current page to back stack (full-doc entry: no same_doc_state_json).
         self.nav_back.push(NavEntry {
             source: self.source.clone(),
             scroll_x: self.scroll_x,
             scroll_y: self.scroll_y,
+            display_url: None,
+            same_doc_state_json: None,
         });
-        // New navigation invalidates forward history.
+        // New navigation invalidates forward history and resets same-doc state.
         self.nav_fwd.clear();
+        self.display_url = None;
+        self.current_history_state_json = String::from("null");
         // Load new page.
         self.source = source;
         self.reload();
@@ -6284,6 +10410,8 @@ impl Lumen {
     fn navigate_replace(&mut self, source: PageSource) {
         // New navigation invalidates forward history but does NOT push to back stack.
         self.nav_fwd.clear();
+        self.display_url = None;
+        self.current_history_state_json = String::from("null");
         self.source = source;
         self.reload();
     }
@@ -6291,11 +10419,45 @@ impl Lumen {
     /// Перейти на предыдущую страницу в истории (Alt+Left).
     fn navigate_back(&mut self) {
         let Some(prev) = self.nav_back.pop() else { return };
-        // Save current page to forward stack.
+
+        if let Some(state_json) = prev.same_doc_state_json {
+            // Same-document navigation: fire popstate, update address bar, don't reload.
+            // Push current same-doc state to forward stack so Alt+Right restores it.
+            let cur_display = self.display_url.take();
+            let cur_state = std::mem::replace(
+                &mut self.current_history_state_json,
+                state_json.clone(),
+            );
+            self.nav_fwd.push(NavEntry {
+                source: self.source.clone(),
+                scroll_x: self.scroll_x,
+                scroll_y: self.scroll_y,
+                display_url: cur_display,
+                same_doc_state_json: Some(cur_state),
+            });
+            let url = prev.display_url.unwrap_or_default();
+            self.display_url = if url.is_empty() { None } else { Some(url.clone()) };
+            if let Some(js) = &self.js_ctx {
+                js.fire_popstate(&state_json, &url);
+            }
+            self.request_redraw();
+            return;
+        }
+
+        // Full-document navigation: restore page and reload.
+        // Push current page to forward stack.
+        let cur_display = self.display_url.take();
+        let cur_state = std::mem::replace(
+            &mut self.current_history_state_json,
+            String::from("null"),
+        );
         self.nav_fwd.push(NavEntry {
             source: self.source.clone(),
             scroll_x: self.scroll_x,
             scroll_y: self.scroll_y,
+            display_url: cur_display,
+            // If we were in a same-doc state before this full-page nav, record it.
+            same_doc_state_json: if cur_state != "null" { Some(cur_state) } else { None },
         });
         // Try bfcache first.
         let restored_scroll = if let Some(url) = prev.source.url_str() {
@@ -6325,11 +10487,42 @@ impl Lumen {
     /// Перейти на следующую страницу в истории (Alt+Right).
     fn navigate_forward(&mut self) {
         let Some(next) = self.nav_fwd.pop() else { return };
-        // Save current page to back stack.
+
+        if let Some(state_json) = next.same_doc_state_json {
+            // Same-document forward navigation: fire popstate, update address bar.
+            let cur_display = self.display_url.take();
+            let cur_state = std::mem::replace(
+                &mut self.current_history_state_json,
+                state_json.clone(),
+            );
+            self.nav_back.push(NavEntry {
+                source: self.source.clone(),
+                scroll_x: self.scroll_x,
+                scroll_y: self.scroll_y,
+                display_url: cur_display,
+                same_doc_state_json: Some(cur_state),
+            });
+            let url = next.display_url.unwrap_or_default();
+            self.display_url = if url.is_empty() { None } else { Some(url.clone()) };
+            if let Some(js) = &self.js_ctx {
+                js.fire_popstate(&state_json, &url);
+            }
+            self.request_redraw();
+            return;
+        }
+
+        // Full-document forward navigation.
+        let cur_display = self.display_url.take();
+        let cur_state = std::mem::replace(
+            &mut self.current_history_state_json,
+            String::from("null"),
+        );
         self.nav_back.push(NavEntry {
             source: self.source.clone(),
             scroll_x: self.scroll_x,
             scroll_y: self.scroll_y,
+            display_url: cur_display,
+            same_doc_state_json: if cur_state != "null" { Some(cur_state) } else { None },
         });
         // Try bfcache first.
         let restored_scroll = if let Some(url) = next.source.url_str() {
@@ -6468,14 +10661,71 @@ impl Lumen {
     ///
     /// Order: `sidebar:` prefix → bang aliases (`!g`) → `@notes` / `@read-later`
     /// → record in search_history → plain navigate.
+    /// Build a fresh `about:newtab` [`PageSource::Static`] from the current
+    /// history. Reads the top-[`newtab::MAX_TILES`] most-visited sites from
+    /// `history_store`; an empty/failed read yields a tile-less page.
+    fn build_newtab_source(&self) -> PageSource {
+        let sites: Vec<newtab::TopSite> = self
+            .history_store
+            .most_visited(newtab::MAX_TILES as i64)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|e| {
+                let title = if e.title.trim().is_empty() {
+                    e.url.clone()
+                } else {
+                    e.title
+                };
+                newtab::TopSite { url: e.url, title }
+            })
+            .collect();
+        PageSource::Static {
+            html: newtab::build_newtab_html(&sites),
+            url: newtab::NEWTAB_URL.to_owned(),
+        }
+    }
+
     fn handle_omnibox_commit(&mut self, value: String) {
+        // `view-source:<url>` — fetch and display syntax-highlighted source (§D-2).
+        if let Some(target_url) = value.trim().strip_prefix("view-source:") {
+            let target_url = target_url.trim().to_owned();
+            self.show_view_source_for_url(&target_url);
+            return;
+        }
+
+        // `note-viewer:<id>` — open the note viewer overlay (§12.2, GG-2).
+        if let Some(id_str) = value.trim().strip_prefix("note-viewer:") {
+            if let Ok(id) = id_str.parse::<i64>()
+                && let Ok(Some(note)) = self.notes_store.get(id)
+            {
+                self.note_viewer.open(id, &note.url, &note.selection, &note.comment);
+                self.request_redraw();
+            }
+            return;
+        }
+
+        // `about:settings` — open the browser settings overlay (task D-7).
+        if value.trim() == "about:settings" {
+            let snap = self.settings_store.snapshot();
+            self.settings_panel.open(snap);
+            self.request_redraw();
+            return;
+        }
+
+        // `about:newtab` — internal start page with a speed dial of the
+        // top-5 most-visited sites (task CC-5).
+        if value.trim() == newtab::NEWTAB_URL {
+            self.navigate_to(self.build_newtab_source());
+            return;
+        }
+
         // `sidebar:<url>` — load the URL into the right-docked sidebar panel (7D.3).
         if let Some(sidebar_url) = value.strip_prefix("sidebar:") {
             let sidebar_url = sidebar_url.trim().to_owned();
             if !sidebar_url.is_empty() {
                 let sink = Arc::clone(&self.event_sink);
                 let src = PageSource::from_arg(Some(&sidebar_url));
-                match src.load_bytes(sink) {
+                match src.load_bytes(sink, Some(Arc::clone(&self.cookie_jar))) {
                     Ok(raw) => {
                         self.open_sidebar_page(sidebar_url, &raw.bytes, String::new());
                     }
@@ -6501,7 +10751,21 @@ impl Lumen {
                     self.notes.push(text);
                 }
                 omnibox::AliasAction::SaveReadLater(url) => {
-                    self.read_later.push(url.clone());
+                    // Spawn a background thread to fetch the page HTML and title.
+                    // The result is sent back through `read_later_tx` and processed
+                    // in `about_to_wait` via `read_later_rx`.
+                    let tx = self.read_later_tx.clone();
+                    let url_clone = url.clone();
+                    std::thread::spawn(move || {
+                        use lumen_core::ext::NetworkTransport;
+                        use lumen_core::url::Url;
+                        use lumen_network::HttpClient;
+                        let Ok(parsed) = Url::parse(&url_clone) else { return };
+                        let Ok(html) = HttpClient::new().fetch(&parsed) else { return };
+                        let title = panels::read_later_panel::extract_title_from_html(&html);
+                        let title = if title.is_empty() { url_clone.clone() } else { title };
+                        let _ = tx.send((url_clone, title, html));
+                    });
                     // Also persist into the bookmark store under a dedicated
                     // folder so the bookmark manager panel shows it.
                     let now = std::time::SystemTime::now()
@@ -6538,6 +10802,7 @@ impl Lumen {
     /// Запрашивает подсказки для текущего ввода в адресной строке.
     ///
     /// `@history <query>` → FTS5-поиск по истории страниц.
+    /// `@notes <query>` → FTS5-поиск по заметкам (§12.2).
     /// Обычный ввод → prefix-match по search_history + FTS5.
     fn query_omnibox_suggestions(&self) -> Vec<address_bar::OmniboxSuggestion> {
         use address_bar::{OmniboxPrefix, OmniboxSuggestion, parse_omnibox_prefix};
@@ -6563,6 +10828,20 @@ impl Lumen {
                     }
                 }
             }
+            OmniboxPrefix::Notes => {
+                // @notes <query> — FTS5-поиск по заметкам §12.2 (до 5 результатов).
+                if !query.is_empty() && let Ok(hits) = self.notes_store.search(query, 5) {
+                    for hit in hits {
+                        let viewer_url = format!("note-viewer:{}", hit.note.id);
+                        suggestions.push(OmniboxSuggestion::Note {
+                            url: hit.note.url,
+                            selection: hit.note.selection,
+                            snippet: hit.snippet,
+                            viewer_url,
+                        });
+                    }
+                }
+            }
             OmniboxPrefix::Plain => {
                 // prefix-match по search_history (до 4 строк).
                 if let Ok(queries) = self.search_history.prefix_match(query, 4) {
@@ -6573,14 +10852,30 @@ impl Lumen {
                         });
                     }
                 }
-                // FTS5 по истории страниц (до 4 строк, итого ≤ 8).
-                if let Ok(hits) = self.history_fts.search(query, 4) {
+                // URL/title substring match по history_store (до 5 строк).
+                // Даёт результаты по URL-фрагменту даже без FTS5-индекса.
+                if let Ok(hits) = self.history_store.search_prefix(query, 5) {
                     for hit in hits {
                         suggestions.push(OmniboxSuggestion::HistoryFts {
                             url: hit.url,
                             title: hit.title,
-                            snippet: hit.snippet,
+                            snippet: String::new(),
                         });
+                    }
+                }
+                // FTS5 по истории страниц (до 4 строк, итого ≤ 8).
+                if let Ok(hits) = self.history_fts.search(query, 4) {
+                    for hit in hits {
+                        // Дедупликация: FTS5 может повторить URL из search_prefix выше.
+                        if !suggestions.iter().any(|s| {
+                            matches!(s, OmniboxSuggestion::HistoryFts { url, .. } if url == &hit.url)
+                        }) {
+                            suggestions.push(OmniboxSuggestion::HistoryFts {
+                                url: hit.url,
+                                title: hit.title,
+                                snippet: hit.snippet,
+                            });
+                        }
                     }
                 }
             }
@@ -6603,6 +10898,8 @@ impl Lumen {
                 self.scroll_to_active_match();
                 self.request_redraw();
             }
+            // Enter / F3 — следующий матч (Shift — предыдущий).
+            // Ctrl+G / Cmd+G — то же (Firefox-стиль find-next), Shift — предыдущий.
             KeyCode::Enter | KeyCode::F3 => {
                 if !key_event.repeat {
                     let total = self.current_matches().len();
@@ -6614,6 +10911,16 @@ impl Lumen {
                     self.scroll_to_active_match();
                     self.request_redraw();
                 }
+            }
+            KeyCode::KeyG if ctrl_or_super && !key_event.repeat => {
+                let total = self.current_matches().len();
+                if shift {
+                    self.find.prev(total);
+                } else {
+                    self.find.next(total);
+                }
+                self.scroll_to_active_match();
+                self.request_redraw();
             }
             // Ctrl+R — переключить plain-text ↔ regex режим.
             KeyCode::KeyR if ctrl_or_super && !key_event.repeat => {
@@ -6671,6 +10978,282 @@ impl Lumen {
                 false
             }
         }
+    }
+
+    /// Handle keyboard input when the history panel is visible.
+    ///
+    /// When `search_active`: printable chars → search query, Backspace → delete
+    /// char, Escape → blur search (panel stays open). Arrow keys scroll the list.
+    /// Returns `true` if the key was consumed.
+    fn handle_history_key(&mut self, code: KeyCode, key_event: &KeyEvent) -> bool {
+        if self.modifiers.control_key() || self.modifiers.super_key() {
+            return false;
+        }
+        match code {
+            KeyCode::Escape if !key_event.repeat => {
+                if self.history_panel.search_active {
+                    self.history_panel.search_active = false;
+                } else {
+                    self.history_panel.visible = false;
+                }
+                self.request_redraw();
+                true
+            }
+            KeyCode::Backspace if self.history_panel.search_active => {
+                self.history_panel.backspace_search();
+                self.refresh_history();
+                self.request_redraw();
+                true
+            }
+            KeyCode::ArrowDown => {
+                self.history_panel.scroll_by(LINE_STEP_CSS_PX);
+                self.request_redraw();
+                true
+            }
+            KeyCode::ArrowUp => {
+                self.history_panel.scroll_by(-LINE_STEP_CSS_PX);
+                self.request_redraw();
+                true
+            }
+            _ => {
+                if self.history_panel.search_active
+                    && let Some(text) = key_event.text.as_ref()
+                        && !text.is_empty()
+                        && !text.chars().any(char::is_control)
+                    {
+                        for ch in text.chars() {
+                            self.history_panel.append_search(ch);
+                        }
+                        self.refresh_history();
+                        self.request_redraw();
+                        return true;
+                    }
+                false
+            }
+        }
+    }
+
+    /// Handle keyboard input when the print dialog is visible (E-1).
+    ///
+    /// Printable chars go to the focused text field. Escape closes the dialog.
+    /// Returns `true` if the key was consumed.
+    /// Handle keyboard input while the AI panel is visible.
+    ///
+    /// Returns `true` if the event was consumed (swallowed from the global
+    /// keybinding table).  Modified keys (Ctrl, Meta) fall through so that
+    /// `Ctrl+Shift+A` (toggle AI panel) still works.
+    fn handle_ai_panel_key(&mut self, code: KeyCode, key_event: &KeyEvent) -> bool {
+        if self.modifiers.control_key() || self.modifiers.super_key() {
+            return false;
+        }
+        match code {
+            KeyCode::Escape if !key_event.repeat => {
+                self.ai_panel.close();
+                self.relayout();
+                self.request_redraw();
+                true
+            }
+            KeyCode::Backspace => {
+                self.ai_panel.backspace();
+                self.request_redraw();
+                true
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter => {
+                // Split borrows: inline the submit logic to let Rust prove
+                // ai_panel and ai_backend are disjoint fields.
+                let prompt = self.ai_panel.input.clone();
+                if !prompt.trim().is_empty() {
+                    let response = self.ai_backend.query(&prompt);
+                    self.ai_panel.response = response;
+                    self.ai_panel.input.clear();
+                    self.ai_panel.scroll_y = 0.0;
+                }
+                self.request_redraw();
+                true
+            }
+            _ => {
+                if let Some(text) = key_event.text.as_ref()
+                    && !text.is_empty()
+                    && !text.chars().any(char::is_control)
+                {
+                    for ch in text.chars() {
+                        self.ai_panel.push_char(ch);
+                    }
+                    self.request_redraw();
+                    return true;
+                }
+                false
+            }
+        }
+    }
+
+    fn handle_print_key(&mut self, code: KeyCode, key_event: &KeyEvent) -> bool {
+        if self.modifiers.control_key() || self.modifiers.super_key() {
+            return false;
+        }
+        match code {
+            KeyCode::Escape if !key_event.repeat => {
+                self.print_panel.close();
+                self.request_redraw();
+                true
+            }
+            KeyCode::Backspace if self.print_panel.editing_field.is_some() => {
+                self.print_panel.pop_char();
+                self.request_redraw();
+                true
+            }
+            _ => {
+                if self.print_panel.editing_field.is_some()
+                    && let Some(text) = key_event.text.as_ref()
+                        && !text.is_empty()
+                        && !text.chars().any(char::is_control)
+                    {
+                        for ch in text.chars() {
+                            self.print_panel.push_char(ch);
+                        }
+                        self.request_redraw();
+                        return true;
+                    }
+                false
+            }
+        }
+    }
+
+    /// Export current document as PDF using parameters from PrintRequest (W-2 Phase 3b).
+    fn handle_print_request(&mut self, req: &lumen_js::PrintRequest) {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        // Determine output path: use provided path or generate default.
+        let output_path = if let Some(custom_path) = &req.output_path {
+            std::path::PathBuf::from(custom_path)
+        } else {
+            // Default: document.pdf in current directory (or Documents folder).
+            let mut path = std::env::current_dir().unwrap_or_default();
+            path.push("document.pdf");
+
+            // If file exists, append timestamp to avoid overwrite.
+            if path.exists() {
+                let ts = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let filename = format!("document_{}.pdf", ts);
+                path.set_file_name(filename);
+            }
+            path
+        };
+
+        // Convert margins from CSS px (96 DPI) to points (1 point = 1/72 inch).
+        // 1 CSS px at 96 DPI = 72/96 points = 0.75 points (not used here; we keep px).
+
+        let margin_top = req.margin_top;
+        let margin_bottom = req.margin_bottom;
+        let margin_left = req.margin_left;
+        let margin_right = req.margin_right;
+
+        match do_print_to_pdf_with_opts(
+            &self.source,
+            &output_path,
+            self.event_sink.clone(),
+            (margin_top + margin_bottom) / 2.0,  // Simplified: average for TB and LR.
+            (margin_left + margin_right) / 2.0,
+            100,  // Default scale: 100%
+            true, // print background graphics (JS print request default)
+        ) {
+            Ok(page_count) => {
+                eprintln!(
+                    "[shell] PDF exported to {}: {} pages",
+                    output_path.display(),
+                    page_count
+                );
+                // Phase 2 future: show user feedback notification.
+            }
+            Err(e) => {
+                eprintln!("[shell] PDF export failed: {}", e);
+                // Phase 2 future: show error dialog to user.
+            }
+        }
+    }
+
+    /// Handle keyboard input when the settings panel is visible.
+    ///
+    /// Printable chars go to the focused text input. Escape closes panel (flushing
+    /// draft). Returns `true` if the key was consumed.
+    fn handle_settings_key(&mut self, code: KeyCode, key_event: &KeyEvent) -> bool {
+        if self.modifiers.control_key() || self.modifiers.super_key() {
+            return false;
+        }
+        match code {
+            KeyCode::Escape if !key_event.repeat => {
+                let draft = self.settings_panel.apply_draft();
+                let _ = self.settings_store.apply_snapshot(&draft);
+                self.settings_panel.visible = false;
+                self.request_redraw();
+                true
+            }
+            KeyCode::Backspace if self.settings_panel.focused_input.is_some() => {
+                self.settings_panel.backspace();
+                self.request_redraw();
+                true
+            }
+            _ => {
+                if self.settings_panel.focused_input.is_some()
+                    && let Some(text) = key_event.text.as_ref()
+                        && !text.is_empty()
+                        && !text.chars().any(char::is_control)
+                    {
+                        for ch in text.chars() {
+                            self.settings_panel.append_char(ch);
+                        }
+                        self.request_redraw();
+                        return true;
+                    }
+                false
+            }
+        }
+    }
+
+    /// Обрабатывает клавишный ввод для панели горячих клавиш (§D-4).
+    ///
+    /// Когда активен rebind mode (`rebinding.is_some()`): захватывает
+    /// следующую клавишу и передаёт в `accept_rebind`. Esc отменяет rebind.
+    /// Возвращает `true`, если событие поглощено.
+    fn handle_shortcuts_key(&mut self, code: KeyCode, key_event: &KeyEvent) -> bool {
+        if key_event.repeat {
+            return false;
+        }
+        if self.shortcuts_panel.rebinding.is_some() {
+            if code == KeyCode::Escape {
+                self.shortcuts_panel.cancel_rebind();
+                self.request_redraw();
+                return true;
+            }
+            let modifier = {
+                let m = self.modifiers;
+                let ctrl = m.control_key();
+                let shift = m.shift_key();
+                let alt = m.alt_key();
+                match (ctrl, shift, alt) {
+                    (true, true, false) => "ctrl+shift",
+                    (true, false, true) => "ctrl+alt",
+                    (true, false, false) => "ctrl",
+                    (false, true, false) => "shift",
+                    (false, false, true) => "alt",
+                    _ => "",
+                }
+            };
+            let key = format!("{:?}", code);
+            let key = key.trim_start_matches("Key").trim_start_matches("Digit").to_string();
+            self.shortcuts_panel.accept_rebind(modifier, &key);
+            self.request_redraw();
+            return true;
+        }
+        if code == KeyCode::Escape {
+            self.shortcuts_panel.close();
+            self.request_redraw();
+            return true;
+        }
+        false
     }
 
     /// Обрабатывает клавишный ввод пока hint-режим активен.
@@ -6744,6 +11327,45 @@ impl Lumen {
                     w.request_redraw();
                 }
             }
+            forms::FormClickAction::OpenDatePicker(id) => {
+                let (y, m) = self.layout_source.as_ref()
+                    .and_then(|src| {
+                        let doc = src.document.lock().ok()?;
+                        let val = doc.get(id).get_attr("value").unwrap_or("").to_owned();
+                        forms::parse_date_value(&val).map(|(y, m, _)| (y, m))
+                    })
+                    .unwrap_or_else(forms::today_year_month);
+                self.date_picker_node = Some(id);
+                self.date_picker_year = y;
+                self.date_picker_month = m;
+                if let Some(w) = self.window.as_ref() {
+                    w.request_redraw();
+                }
+            }
+            forms::FormClickAction::OpenSelectDropdown(id) => {
+                self.select_dropdown_node = Some(id);
+                if let Some(w) = self.window.as_ref() {
+                    w.request_redraw();
+                }
+            }
+            forms::FormClickAction::OpenFilePicker(id) => {
+                self.open_file_picker(id);
+            }
+            forms::FormClickAction::ToggleDetails(id) => {
+                if let Some(src) = self.layout_source.as_mut() {
+                    forms::toggle_details_open(&mut src.document.lock().unwrap(), id);
+                }
+                #[cfg(feature = "quickjs")]
+                if let Some(ctx) = &self.js_ctx {
+                    ctx.eval_js(&format!(
+                        "_lumen_make_element({}).dispatchEvent(new Event('toggle'))",
+                        id.index()
+                    ));
+                }
+                self.relayout();
+            }
+            // Range slide via keyboard activation: no-op (no position known).
+            forms::FormClickAction::SlideRange(_) => {}
             forms::FormClickAction::SubmitForm(_) | forms::FormClickAction::Nothing => {
                 // Link navigation.
                 let href = self.layout_source.as_ref().and_then(|src| {
@@ -6786,6 +11408,17 @@ impl Lumen {
         }
     }
 
+    /// Returns the URL to display in the address bar and use for history / bookmarks.
+    ///
+    /// When `history.pushState` / `history.replaceState` has updated the virtual
+    /// URL without a page load, `display_url` overrides the real `source` URL.
+    fn current_display_url(&self) -> &str {
+        self.display_url
+            .as_deref()
+            .or_else(|| self.source.url_str())
+            .unwrap_or("")
+    }
+
     /// Текущая логическая (CSS px) высота viewport-а. Если окно ещё не создано —
     /// fallback на layout-viewport 720 px, который у нас hardcoded в pipeline.
     fn viewport_height_css(&self) -> f32 {
@@ -6803,6 +11436,19 @@ impl Lumen {
             0.0
         };
         (total - tabs::strip::TAB_BAR_HEIGHT - ws_bar).max(0.0)
+    }
+
+    /// Full logical (CSS px) window height including the tab bar. Used to
+    /// clamp the tab context menu (CC-4) so it stays on-screen. Fallback 720.
+    fn window_height_css(&self) -> f32 {
+        match (self.window.as_ref(), self.renderer.as_ref()) {
+            (Some(w), Some(r)) => {
+                let phys = w.inner_size().height as f32;
+                let dpr = (r.scale_factor() as f32).max(1e-6);
+                phys / dpr
+            }
+            _ => 720.0,
+        }
     }
 
     /// CSS px ширина viewport-а — полная ширина окна, нужна scrollbar-overlay-у
@@ -6830,7 +11476,9 @@ impl Lumen {
         } else {
             0.0
         };
-        let right_offset = if self.sidebar.visible {
+        let right_offset = if self.ai_panel.visible {
+            panels::ai_panel::PANEL_WIDTH
+        } else if self.sidebar.visible {
             panels::sidebar_panel::PANEL_WIDTH
         } else {
             0.0
@@ -6872,7 +11520,7 @@ impl Lumen {
             panels::sidebar_panel::PANEL_WIDTH,
             self.viewport_height_css().max(100.0),
         );
-        let (dl, _lb) = relayout_page(&src, sidebar_vp, &self.hyp_provider);
+        let (dl, _lb) = relayout_page(&src, sidebar_vp, &self.hyp_provider, self.dark_mode);
         let content_h = content_height_of(&dl);
         self.sidebar.set_page(dl, doc_title, content_h);
 
@@ -6908,6 +11556,98 @@ impl Lumen {
     ///
     /// Call this after every bookmark mutation (add / delete / move) so the
     /// panel renders up-to-date rows on the next redraw.
+    /// Reload the read-later entry list from the in-memory store into the panel cache.
+    ///
+    /// Called after every save/delete and when the panel opens.  Shows the 50
+    /// most recent items (unread first, then read, then archived).
+    /// Toggle Reader View (§D-3, F9).
+    ///
+    /// When entering reader mode: extracts the article region from the current
+    /// page's HTML source, wraps it in a clean reading template, and re-renders
+    /// it as an in-memory `PageSource::Snapshot` without a network round-trip.
+    /// The original source is stashed in `reader_original_source`.
+    ///
+    /// When exiting: restores the stashed source and reloads.
+    fn toggle_reader_view(&mut self) {
+        if let Some(original) = self.reader_original_source.take() {
+            // Exit reader mode — restore original page.
+            self.source = original;
+            self.reload();
+            return;
+        }
+
+        // Enter reader mode — extract article from current HTML source.
+        let html = match self.layout_source.as_ref().and_then(|ls| ls.html_source.as_deref()) {
+            Some(s) if !s.is_empty() => s.to_owned(),
+            _ => return, // nothing to extract from
+        };
+
+        let Some(article) = reader_view::extract_article(&html) else { return };
+        let reader_html = reader_view::build_reader_html(&article);
+
+        let base_url = self.source.url_str()
+            .map(|s| s.to_owned())
+            .unwrap_or_else(|| "about:reader".to_owned());
+
+        self.reader_original_source = Some(self.source.clone());
+        self.source = PageSource::Snapshot { html: reader_html, base_url };
+        self.reload();
+    }
+
+    /// Show syntax-highlighted source of the current page (Ctrl+U, §D-2).
+    ///
+    /// Uses the already-parsed HTML stored in `layout_source.html_source`.
+    /// No-op when the page has no HTML source (e.g. empty tab).
+    fn show_view_source(&mut self) {
+        let html = match self.layout_source.as_ref().and_then(|ls| ls.html_source.as_deref()) {
+            Some(s) if !s.is_empty() => s.to_owned(),
+            _ => return,
+        };
+        let url = self.source.url_str()
+            .map(|s| s.to_owned())
+            .unwrap_or_else(|| "about:source".to_owned());
+        let source_html = source_view::build_view_source_html(&url, &html);
+        self.navigate_to(PageSource::Snapshot {
+            html: source_html,
+            base_url: format!("view-source:{url}"),
+        });
+    }
+
+    /// Fetch `url` and display its raw bytes as syntax-highlighted source (§D-2).
+    ///
+    /// Used when the user types `view-source:<url>` in the address bar.
+    fn show_view_source_for_url(&mut self, url: &str) {
+        let source = PageSource::from_arg(Some(url));
+        let sink = Arc::clone(&self.event_sink);
+        let jar = Arc::clone(&self.cookie_jar);
+        match source.load_bytes(sink, Some(jar)) {
+            Ok(raw) => {
+                let html_str = String::from_utf8_lossy(&raw.bytes).into_owned();
+                let source_html = source_view::build_view_source_html(url, &html_str);
+                self.navigate_to(PageSource::Snapshot {
+                    html: source_html,
+                    base_url: format!("view-source:{url}"),
+                });
+            }
+            Err(e) => {
+                eprintln!("view-source: не удалось загрузить {url}: {e}");
+            }
+        }
+    }
+
+    fn refresh_read_later(&mut self) {
+        let mut entries = self
+            .read_later_store
+            .list_by_status(lumen_knowledge::ReadStatus::Unread, 50)
+            .unwrap_or_default();
+        entries.extend(
+            self.read_later_store
+                .list_by_status(lumen_knowledge::ReadStatus::Read, 50)
+                .unwrap_or_default(),
+        );
+        self.read_later_panel.refresh(entries);
+    }
+
     fn refresh_bookmarks(&mut self) {
         let entries = self
             .bookmarks
@@ -6922,6 +11662,51 @@ impl Lumen {
             })
             .collect();
         self.bookmark_panel.set_data(entries);
+    }
+
+    /// Reload the history panel data from `history_store`.
+    ///
+    /// When `history_panel.query` is non-empty, uses `HistoryFts::search` for
+    /// full-text matching. Otherwise falls back to `History::recent(50)`.
+    fn refresh_history(&mut self) {
+        let query = self.history_panel.query.trim().to_owned();
+        let items: Vec<panels::history_panel::HistoryItem> = if query.is_empty() {
+            self.history_store
+                .recent(50)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|e| panels::history_panel::HistoryItem {
+                    id: e.id,
+                    url: e.url,
+                    title: e.title,
+                    visit_date: e.visit_date,
+                    visit_count: e.visit_count,
+                })
+                .collect()
+        } else {
+            self.history_fts
+                .search(&query, 50)
+                .unwrap_or_default()
+                .into_iter()
+                .enumerate()
+                .map(|(i, hit)| panels::history_panel::HistoryItem {
+                    id: i as i64 + 1,
+                    url: hit.url,
+                    title: hit.title,
+                    visit_date: 0,
+                    visit_count: 1,
+                })
+                .collect()
+        };
+        self.history_panel.set_items(items);
+    }
+
+    /// Top-left corner of the history panel in window-space CSS px.
+    fn history_panel_anchor(&self) -> (f32, f32) {
+        let win_w = self.viewport_width_css();
+        let px = (win_w - panels::history_panel::PANEL_W) * 0.5;
+        let py = tabs::strip::TAB_BAR_HEIGHT + 4.0;
+        (px, py)
     }
 
     /// Rebuild the command-palette item list: curated commands, every bookmark,
@@ -7038,7 +11823,7 @@ impl Lumen {
                 }
                 PaletteAction::OpenAddressBar => {
                     self.hint.close();
-                    let current = self.source.url_str().unwrap_or("").to_owned();
+                    let current = self.current_display_url().to_owned();
                     self.address_bar.open(&current);
                 }
                 PaletteAction::ToggleBookmarks => {
@@ -7071,7 +11856,8 @@ impl Lumen {
     /// No-op when the current page has no URL (e.g. blank tab). The active tab
     /// title is used when available, otherwise the URL stands in as the title.
     fn bookmark_current_page(&mut self) {
-        let Some(url) = self.source.url_str().map(str::to_owned) else {
+        let url = self.current_display_url().to_owned();
+        if url.is_empty() {
             return;
         };
         let title = self
@@ -7146,11 +11932,172 @@ impl Lumen {
         (self.content_width - self.page_content_width_css()).max(0.0)
     }
 
+    /// Rebuild `snap_containers` from the current `layout_box`.
+    ///
+    /// Called whenever `layout_box` changes (relayout, page load, tab switch).
+    /// Cheap when the page has no `scroll-snap-type` declarations (returns empty).
+    fn update_snap_containers(&mut self) {
+        match &self.layout_box {
+            Some(lb) => self.snap_containers = collect_snap_containers(lb),
+            None => self.snap_containers.clear(),
+        }
+    }
+
+    /// Rebuild `scroll_containers` from the current `layout_box`.
+    ///
+    /// Called whenever `layout_box` changes (relayout, page load, tab switch).
+    /// Used by the wheel handler to route scroll events to overflow containers.
+    fn update_scroll_containers(&mut self) {
+        match &self.layout_box {
+            Some(lb) => self.scroll_containers = collect_scroll_containers(lb),
+            None => self.scroll_containers.clear(),
+        }
+    }
+
+    /// Try to scroll an overflow container under the cursor by `(dx, dy)` CSS px.
+    ///
+    /// Returns `true` if a container was found and scrolled, `false` if no
+    /// overflow container is under the cursor (caller should scroll the page).
+    ///
+    /// The cursor position is converted from physical pixels to document-space
+    /// CSS px (adds page scroll offsets so hit-testing works on scrolled pages).
+    fn try_scroll_overflow_container(&mut self, dx: f32, dy: f32) -> bool {
+        let Some(cursor) = self.cursor_position else { return false };
+        if self.layout_box.is_none() { return false; }
+
+        let dpr = self.renderer.as_ref().map_or(1.0_f32, |r| r.scale_factor() as f32);
+        let x_css = (cursor.x as f32) / dpr + self.scroll_x;
+        let y_css = (cursor.y as f32) / dpr + self.scroll_y;
+
+        let Some(target) = find_scroll_container_at(&self.scroll_containers, x_css, y_css) else {
+            return false;
+        };
+        let target_nid = target.index() as u32;
+
+        // Find current position and compute new target.
+        let current = self.scroll_containers.iter()
+            .find(|c| c.node == target)
+            .map(|c| (c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height,
+                      c.clip_rect.width, c.clip_rect.height,
+                      c.overscroll_behavior_x, c.overscroll_behavior_y));
+        let Some((cur_x, cur_y, sw, sh, clip_w, clip_h, ob_x, ob_y)) = current else { return false };
+
+        let new_x = (cur_x + dx).clamp(0.0, (sw - clip_w).max(0.0));
+        let new_y = (cur_y + dy).clamp(0.0, (sh - clip_h).max(0.0));
+
+        // CSS Overscroll Behavior L1 §3 — scroll-chain stop. If the container is
+        // at its boundary on every axis and `overscroll-behavior` permits it, let
+        // the residual delta propagate to the page; otherwise the chain stops
+        // here (event consumed even if the container did not move).
+        let moved_x = (new_x - cur_x).abs() > f32::EPSILON;
+        let moved_y = (new_y - cur_y).abs() > f32::EPSILON;
+        if lumen_layout::overscroll_should_propagate(ob_x, ob_y, dx, dy, moved_x, moved_y) {
+            return false;
+        }
+        if !moved_x && !moved_y {
+            // Boundary reached but propagation is blocked (contain/none) — consume
+            // the gesture without a relayout/redraw.
+            return true;
+        }
+
+        // Borrow layout_box mutably after releasing the immutable scroll_containers borrow.
+        let scrolled = if let Some(lb) = self.layout_box.as_mut() {
+            set_scroll_position(lb, target, new_x, new_y)
+        } else {
+            false
+        };
+        if scrolled {
+            // Rebuild display list and update JS scroll state cache.
+            let new_dl = paint_ordered(self.layout_box.as_ref().unwrap());
+            self.tile_grid.update_from_diff(&self.display_list, &new_dl);
+            self.display_list = new_dl;
+            self.update_scroll_containers();
+            let states: std::collections::HashMap<_, _> = self.scroll_containers.iter()
+                .map(|c| (c.node.index() as u32, [c.scroll_x, c.scroll_y, c.scroll_width, c.scroll_height]))
+                .collect();
+            if let Some(js) = &self.js_ctx {
+                js.update_scroll_states(states);
+                js.fire_element_scroll(target_nid);
+            }
+            self.request_redraw();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Apply CSS Scroll Snap L1 to a proposed page-level Y scroll offset.
+    ///
+    /// Finds the snap container whose node matches the root layout box (html
+    /// element), overrides its rect with the viewport dimensions (the snap port
+    /// for page scroll is the viewport, not the full document), then calls
+    /// `find_snap_target`. Returns `target_y` unchanged if no snap applies.
+    fn apply_page_y_snap(&self, target_y: f32) -> f32 {
+        let root_node = match &self.layout_box {
+            Some(lb) => lb.node,
+            None => return target_y,
+        };
+        let vw = self.viewport_width_css();
+        let vh = self.viewport_height_css();
+        for sc in &self.snap_containers {
+            if sc.node == root_node {
+                // Proximity threshold uses viewport size, not full document size.
+                let mut sc_viewport = sc.clone();
+                sc_viewport.rect = lumen_core::geom::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: vw,
+                    height: vh,
+                };
+                if let Some((_, sy)) = find_snap_target(
+                    &sc_viewport,
+                    (self.scroll_x, self.scroll_y),
+                    (self.scroll_x, target_y),
+                ) {
+                    return clamp_scroll(sy, self.max_scroll());
+                }
+            }
+        }
+        target_y
+    }
+
+    /// Apply CSS Scroll Snap L1 to a proposed page-level X scroll offset.
+    ///
+    /// Mirror of `apply_page_y_snap` for horizontal scroll.
+    fn apply_page_x_snap(&self, target_x: f32) -> f32 {
+        let root_node = match &self.layout_box {
+            Some(lb) => lb.node,
+            None => return target_x,
+        };
+        let vw = self.viewport_width_css();
+        let vh = self.viewport_height_css();
+        for sc in &self.snap_containers {
+            if sc.node == root_node {
+                let mut sc_viewport = sc.clone();
+                sc_viewport.rect = lumen_core::geom::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: vw,
+                    height: vh,
+                };
+                if let Some((sx, _)) = find_snap_target(
+                    &sc_viewport,
+                    (self.scroll_x, self.scroll_y),
+                    (target_x, self.scroll_y),
+                ) {
+                    return clamp_scroll(sx, self.max_scroll_x());
+                }
+            }
+        }
+        target_x
+    }
+
     /// Горизонтальный скролл на delta CSS px (инстантный).
     fn scroll_x_by(&mut self, delta: f32) {
         let clamped = clamp_scroll(self.scroll_x + delta, self.max_scroll_x());
-        if (clamped - self.scroll_x).abs() > f32::EPSILON {
-            self.scroll_x = clamped;
+        let snapped = self.apply_page_x_snap(clamped);
+        if (snapped - self.scroll_x).abs() > f32::EPSILON {
+            self.scroll_x = snapped;
             self.request_redraw();
         }
     }
@@ -7175,10 +12122,14 @@ impl Lumen {
 
     /// Запустить smooth-scroll к target Y. Cancel-ит активную анимацию.
     /// Target клампится. Если target == текущему scroll_y — анимация не
-    /// стартует (и текущая сбрасывается).
+    /// стартует (и текущая сбрасывается). Применяет CSS Scroll Snap L1 если
+    /// страница объявляет `scroll-snap-type` на корневом элементе.
     fn start_smooth_scroll(&mut self, target: f32) {
         let max = self.max_scroll();
         let target_clamped = clamp_scroll(target, max);
+        // Apply page-level CSS Scroll Snap L1: snap to the nearest declared
+        // snap point before starting the animation.
+        let target_clamped = self.apply_page_y_snap(target_clamped);
         if (target_clamped - self.scroll_y).abs() <= f32::EPSILON {
             self.scroll_anim = None;
             return;
@@ -7244,6 +12195,54 @@ impl Lumen {
         self.start_smooth_scroll(target);
     }
 
+    /// CSS Containment L3 §4.4 (BB-4): обновить skipped-состояние
+    /// `content-visibility: auto` после смены `layout_box` — пересканировать
+    /// дерево, задиффать с предыдущим проходом, добавить события в `cv_events`.
+    /// Дренирует thread-local layout-крейта, чтобы записи не пережили проход.
+    fn refresh_cv_state(&mut self) {
+        let _ = lumen_layout::take_cv_skipped();
+        let mut next = Vec::new();
+        if let Some(lb) = self.layout_box.as_ref() {
+            collect_cv_skipped(lb, &mut next);
+        }
+        self.cv_events.extend(diff_cv_skipped(&self.cv_skipped, &next));
+        // Кап очереди: без потребителя (P3 Phase 2) храним только хвост.
+        if self.cv_events.len() > 256 {
+            let drop_n = self.cv_events.len() - 256;
+            self.cv_events.drain(..drop_n);
+        }
+        self.cv_skipped = next;
+    }
+
+    /// Шаг 1.6 «Update the rendering»: если при скролле пропущенный
+    /// `content-visibility: auto` узел вошёл в расширенный viewport —
+    /// ratchet в `cv_relevant` + relayout (его содержимое выкладывается).
+    fn maybe_expand_cv_relevant(&mut self) {
+        if self.cv_skipped.is_empty() {
+            return;
+        }
+        let bound = self.scroll_y
+            + self.viewport_height_css() * (1.0 + lumen_layout::CV_SLACK_FACTOR);
+        let newly: Vec<NodeId> = self
+            .cv_skipped
+            .iter()
+            .filter(|(n, top)| *top <= bound && !self.cv_relevant.contains(n))
+            .map(|&(n, _)| n)
+            .collect();
+        if newly.is_empty() {
+            return;
+        }
+        self.cv_relevant.extend(newly);
+        self.relayout();
+    }
+
+    /// Дренировать очередь [`ContentVisibilityChange`] событий.
+    /// Phase 2: P3 доставляет их в JS как `contentvisibilityautostatechange`.
+    #[allow(dead_code)] // потребитель появится при P3 wiring (STATUS-P3)
+    fn take_cv_events(&mut self) -> Vec<ContentVisibilityChange> {
+        std::mem::take(&mut self.cv_events)
+    }
+
     /// Тик анимации перед `Renderer::render`. Если анимация активна —
     /// обновляет `scroll_y` по out-cubic easing и возвращает `true`,
     /// сигнализируя caller-у запросить ещё один redraw. Сбрасывает
@@ -7299,7 +12298,7 @@ impl Lumen {
             return;
         };
         let vp_size = renderer.viewport_size();
-        let viewport = Size::new(vp_size.width as f32, vp_size.height as f32);
+        let viewport = Size::new(vp_size.width, vp_size.height);
         scroll::decode_gating::discard_offscreen_images(
             &mut self.image_cache,
             root,
@@ -7338,8 +12337,9 @@ impl Lumen {
             scrollbar_icon
         } else if let Some(lb) = &self.layout_box {
             // Hit-test layout tree in page coordinates (viewport + scroll offset).
+            // Page content is shifted down by TAB_BAR_HEIGHT via PushTransform.
             let page_x = x_css + self.scroll_x;
-            let page_y = y_css + self.scroll_y;
+            let page_y = (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y;
             match hit_test(Point::new(page_x, page_y), lb) {
                 Some(result) => css_cursor_to_winit(result.cursor),
                 None => CursorIcon::Default,
@@ -7385,7 +12385,7 @@ impl Lumen {
     /// Silent — ошибки записи не ломают выход. Не сохраняет Empty-страницу.
     fn save_session_on_close(&self) {
         let url = match &self.source {
-            PageSource::Empty => return,
+            PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => return,
             PageSource::File(p) => p.display().to_string(),
             PageSource::Url(u) => u.clone(),
             PageSource::Snapshot { base_url, .. } => base_url.clone(),
@@ -7502,6 +12502,9 @@ impl Lumen {
                 tab_state: TabState::Active,
                 opener_id: None,
                 container: tabs::containers::ContainerKind::None,
+                last_activated_ms: 0.0,
+                pinned: false,
+                group_id: None,
             });
             self.lifecycle_mgr.open_tab(id as u64);
 
@@ -7564,7 +12567,7 @@ impl Lumen {
             PageSource::Url(u) => u.clone(),
             PageSource::File(p) => format!("file://{}", p.display()),
             PageSource::Snapshot { base_url, .. } => base_url.clone(),
-            PageSource::Empty => String::new(),
+            PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => String::new(),
         };
         let title = snap.title.clone().unwrap_or_default();
         let scroll_x = snap.scroll_x;
@@ -7598,6 +12601,31 @@ impl Lumen {
         }
     }
 
+    /// Restore a T2 (BackgroundOld) tab from SQLite crash-recovery checkpoint.
+    ///
+    /// Used only when `bg_tabs` is empty for this tab (process-restart path).
+    /// Reads scroll + form state from `t2_store` and applies them to the current
+    /// (blank-reset) active slot.  The page URL is not stored in `t2_store`, so
+    /// the tab will appear blank; a future enhancement may store the URL to
+    /// trigger a background reload (10I Phase 2).
+    ///
+    /// Shows `sleep_hint` overlay if restore takes >100 ms.
+    fn restore_t2_tab(&mut self, tab_id: usize) {
+        self.t2_restore_start_ms = Some(self.epoch.elapsed().as_secs_f64() * 1000.0);
+        if let Some(w) = self.window.as_ref() {
+            w.request_redraw();
+        }
+
+        if let Ok(Some(data)) = self.t2_store.fetch(tab_id as i64) {
+            self.scroll_x = data.scroll_x;
+            self.scroll_y = data.scroll_y;
+            self.form_state = tab_lifecycle::deserialize_form_state(&data.form_state_json);
+            let _ = self.t2_store.delete(tab_id as i64);
+        }
+
+        self.t2_restore_start_ms = None;
+    }
+
     /// Restore a T3-hibernated tab into the active slot.
     ///
     /// Fetches the DOM blob from SQLite, reconstructs the `Document` via
@@ -7605,7 +12633,14 @@ impl Lumen {
     /// layout+paint.  Returns `true` on success so `switch_tab` knows
     /// whether to fall back to a blank tab.
     fn restore_hibernated_tab(&mut self, tab_id: usize) -> bool {
+        // Start spinner timer for long restore operations (>200ms).
+        self.restore_spinner_start_ms = Some(self.epoch.elapsed().as_secs_f64() * 1000.0);
+        if let Some(w) = self.window.as_ref() {
+            w.request_redraw();
+        }
+
         let Some(meta) = self.hibernated_tabs.remove(&tab_id) else {
+            self.restore_spinner_start_ms = None;
             return false;
         };
 
@@ -7618,11 +12653,13 @@ impl Lumen {
                 eprintln!("tab {tab_id}: snapshot missing (url={})", meta.url);
                 // Put metadata back so the strip still shows Hibernated.
                 self.hibernated_tabs.insert(tab_id, meta);
+                self.restore_spinner_start_ms = None;
                 return false;
             }
             Err(e) => {
                 eprintln!("tab {tab_id}: snapshot read error (url={}): {e}", meta.url);
                 self.hibernated_tabs.insert(tab_id, meta);
+                self.restore_spinner_start_ms = None;
                 return false;
             }
         };
@@ -7633,6 +12670,7 @@ impl Lumen {
             Err(e) => {
                 eprintln!("Ошибка десериализации DOM вкладки {tab_id}: {e}");
                 self.hibernated_tabs.insert(tab_id, meta);
+                self.restore_spinner_start_ms = None;
                 return false;
             }
         };
@@ -7658,10 +12696,11 @@ impl Lumen {
             doc,
             event_sink,
             &mut self.ls_storage,
-            &self.idb_backend,
+            self.idb_dir.as_deref(),
             &self.sw_backend,
             cookie_banner_dismiss,
             deterministic,
+            Some(Arc::clone(&self.cookie_jar)),
         );
 
         let layout_source = LayoutSource {
@@ -7675,19 +12714,28 @@ impl Lumen {
             || (1024.0_f32, 720.0_f32),
             |r| {
                 let s = r.viewport_size();
-                (s.width as f32, s.height as f32)
+                (s.width, s.height)
             },
         );
         let meta_scale = meta_initial_scale(&layout_source);
         let (css_w, css_h) = zoom::effective_viewport(phys.0, phys.1, meta_scale, self.zoom_factor);
         let viewport = lumen_core::geom::Size::new(css_w, css_h);
-        let (display_list, lb) = relayout_page(&layout_source, viewport, &self.hyp_provider);
+        // content-visibility: auto (BB-4): relevance против восстановленного
+        // scroll-положения; ratchet новой страницы стартует с нуля.
+        lumen_layout::set_cv_scroll(data.scroll_x, data.scroll_y);
+        lumen_layout::set_cv_relevant(std::collections::HashSet::new());
+        let (display_list, lb) = relayout_page(&layout_source, viewport, &self.hyp_provider, self.dark_mode);
+        lumen_layout::set_cv_scroll(0.0, 0.0);
 
         // Install into the active slot.
         self.display_list = display_list;
         self.title = Some(data.title);
         self.layout_source = Some(layout_source);
         self.layout_box = Some(lb);
+        self.cv_relevant.clear();
+        self.cv_events.clear();
+        self.cv_skipped.clear();
+        self.refresh_cv_state();
         self.js_ctx = js_ctx;
         self.scroll_x = data.scroll_x;
         self.scroll_y = data.scroll_y;
@@ -7705,6 +12753,9 @@ impl Lumen {
 
         // Remove the SQLite entry — it is no longer needed.
         let _ = self.tab_snapshots.delete(tab_id as i64);
+
+        // Restore complete — hide the spinner overlay.
+        self.restore_spinner_start_ms = None;
 
         true
     }
@@ -7733,9 +12784,88 @@ impl Lumen {
                 continue;
             }
 
+            // T1 → T2: checkpoint scroll + form state to SQLite for crash recovery.
+            if tr.to == tab_lifecycle::TabState::BackgroundOld
+                && let Some(snap) = self.bg_tabs.get(&tab_id)
+            {
+                let data = lumen_storage::T2SleepData {
+                    js_heap_blob: vec![],
+                    dom_blob: vec![],
+                    scroll_x: snap.scroll_x,
+                    scroll_y: snap.scroll_y,
+                    form_state_json: tab_lifecycle::serialize_form_state(&snap.form_state),
+                    ts: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_secs() as i64),
+                };
+                let _ = self.t2_store.store(tab_id as i64, &data);
+            }
+
+            // GC tuning per tier (10L): run progressively aggressive GC as a
+            // background tab ages, reclaiming heap without full hibernation cost.
+            let gc_level_opt: Option<u8> = match tr.to {
+                tab_lifecycle::TabState::BackgroundRecent => Some(1), // moderate
+                tab_lifecycle::TabState::BackgroundOld => Some(2),    // aggressive
+                _ => None,
+            };
+            if let (Some(gc_level), Some(js)) = (
+                gc_level_opt,
+                self.bg_tabs.get(&tab_id).and_then(|s| s.js_ctx.as_ref()),
+            ) {
+                js.run_gc_pass(gc_level);
+            }
+
             // Update strip badge for BackgroundOld (amber) or other tier changes.
             if let Some(idx) = self.tab_strip.tabs.iter().position(|t| t.id == tab_id) {
                 self.tab_strip.set_tab_state(idx, tr.to);
+            }
+        }
+
+        // Auto-archive (7A.5): move background tabs idle for > 12 h out of the
+        // strip.  Only runs when there are ≥ 2 tabs (the active tab is never
+        // archived) and the tab is not already hibernated (RAM already saved).
+        if self.tab_strip.len() >= 2 {
+            let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+            let threshold = tabs::archive::ARCHIVE_AFTER_MS;
+            // Collect IDs to archive (avoiding borrow conflict on tab_strip).
+            let to_archive: Vec<usize> = self
+                .tab_strip
+                .tabs
+                .iter()
+                .enumerate()
+                .filter(|(i, t)| {
+                    *i != self.tab_strip.active
+                        && t.tab_state != tab_lifecycle::TabState::Hibernated
+                        && (now_ms - t.last_activated_ms) > threshold
+                })
+                .map(|(_, t)| t.id)
+                .collect();
+
+            for tab_id in to_archive {
+                // Guard: never archive down to 0 tabs.
+                if self.tab_strip.len() <= 1 {
+                    break;
+                }
+                let Some(idx) = self.tab_strip.tabs.iter().position(|t| t.id == tab_id) else {
+                    continue;
+                };
+                let title = self.tab_strip.tabs[idx].title.clone();
+                let container = self.tab_strip.tabs[idx].container;
+                let url = self
+                    .bg_tabs
+                    .get(&tab_id)
+                    .and_then(|s| s.source.url_str().map(|u| u.to_owned()))
+                    .unwrap_or_default();
+                self.archive.push(tabs::archive::ArchivedTab {
+                    id: tab_id,
+                    title,
+                    url,
+                    container,
+                });
+                // Evict in-memory snapshot and remove from strip + lifecycle.
+                self.bg_tabs.remove(&tab_id);
+                self.lifecycle_mgr.close_tab(tab_id as u64);
+                self.tab_strip.remove(idx);
             }
         }
     }
@@ -7758,6 +12888,7 @@ impl Lumen {
                 animation_scheduler::AnimationScheduler::new(),
             ),
             transition_scheduler: std::mem::take(&mut self.transition_scheduler),
+            starting_style_tracker: std::mem::take(&mut self.starting_style_tracker),
             prev_styles: std::mem::take(&mut self.prev_styles),
             anim_frame: self.anim_frame.take(),
             layout_box: self.layout_box.take(),
@@ -7776,6 +12907,7 @@ impl Lumen {
             pending_js_navigate: self.pending_js_navigate.take(),
             stream_builder: self.stream_builder.take(),
             stream_last_paint: self.stream_last_paint,
+            stream_sheet: std::mem::take(&mut self.stream_sheet),
             preload_dispatched: std::mem::take(&mut self.preload_dispatched),
             ime_composing: self.ime_composing.take(),
             bfcache: std::mem::replace(&mut self.bfcache, BfCache::new(16)),
@@ -7784,13 +12916,10 @@ impl Lumen {
             form_state: std::mem::take(&mut self.form_state),
             validation_tooltip: self.validation_tooltip.take(),
             color_picker_node: self.color_picker_node.take(),
+            date_picker_node: self.date_picker_node.take(),
+            select_dropdown_node: self.select_dropdown_node.take(),
             ls_storage: std::mem::take(&mut self.ls_storage),
-            idb_backend: std::mem::replace(
-                &mut self.idb_backend,
-                Arc::new(std::sync::Mutex::new(
-                    lumen_storage::store::InMemoryStorage::new(),
-                )),
-            ),
+            idb_dir: self.idb_dir.clone(),
             sw_backend: std::mem::replace(
                 &mut self.sw_backend,
                 Arc::new(std::sync::Mutex::new(
@@ -7800,6 +12929,7 @@ impl Lumen {
             js_ctx: self.js_ctx.take(),
             first_paint_delivered: self.first_paint_delivered,
             first_contentful_paint_delivered: self.first_contentful_paint_delivered,
+            nav_start: self.nav_start.take(),
             animated_gifs: std::mem::take(&mut self.animated_gifs),
             gif_last_frame: std::mem::take(&mut self.gif_last_frame),
             image_cache: std::mem::replace(
@@ -7807,6 +12937,13 @@ impl Lumen {
                 lumen_image::ImageDecodeCache::new(),
             ),
             zoom_factor: self.zoom_factor,
+            display_url: self.display_url.take(),
+            current_history_state_json: std::mem::replace(
+                &mut self.current_history_state_json,
+                String::from("null"),
+            ),
+            reader_original_source: self.reader_original_source.take(),
+            cert_info: self.cert_info.take(),
         }
     }
 
@@ -7821,6 +12958,7 @@ impl Lumen {
         self.runtime = snap.runtime;
         self.animation_scheduler = snap.animation_scheduler;
         self.transition_scheduler = snap.transition_scheduler;
+        self.starting_style_tracker = snap.starting_style_tracker;
         self.prev_styles = snap.prev_styles;
         self.anim_frame = snap.anim_frame;
         self.layout_box = snap.layout_box;
@@ -7836,6 +12974,7 @@ impl Lumen {
         self.pending_js_navigate = snap.pending_js_navigate;
         self.stream_builder = snap.stream_builder;
         self.stream_last_paint = snap.stream_last_paint;
+        self.stream_sheet = snap.stream_sheet;
         self.preload_dispatched = snap.preload_dispatched;
         self.ime_composing = snap.ime_composing;
         self.bfcache = snap.bfcache;
@@ -7844,16 +12983,25 @@ impl Lumen {
         self.form_state = snap.form_state;
         self.validation_tooltip = snap.validation_tooltip;
         self.color_picker_node = snap.color_picker_node;
+        self.date_picker_node = snap.date_picker_node;
+        self.select_dropdown_node = snap.select_dropdown_node;
         self.ls_storage = snap.ls_storage;
-        self.idb_backend = snap.idb_backend;
+        self.idb_dir = snap.idb_dir;
         self.sw_backend = snap.sw_backend;
         self.js_ctx = snap.js_ctx;
         self.first_paint_delivered = snap.first_paint_delivered;
         self.first_contentful_paint_delivered = snap.first_contentful_paint_delivered;
+        self.nav_start = snap.nav_start;
         self.animated_gifs = snap.animated_gifs;
         self.gif_last_frame = snap.gif_last_frame;
         self.image_cache = snap.image_cache;
         self.zoom_factor = snap.zoom_factor;
+        self.display_url = snap.display_url;
+        self.current_history_state_json = snap.current_history_state_json;
+        self.reader_original_source = snap.reader_original_source;
+        self.cert_info = snap.cert_info;
+        // Notify platform bridge with the restored tab's accessibility tree.
+        self.update_platform_ax_tree();
     }
 
     /// Reset all per-page fields to blank-tab defaults.
@@ -7868,6 +13016,7 @@ impl Lumen {
         self.runtime = runtime::EventLoop::new();
         self.animation_scheduler = animation_scheduler::AnimationScheduler::new();
         self.transition_scheduler = TransitionScheduler::new();
+        self.starting_style_tracker = StartingStyleTracker::new();
         self.prev_styles = HashMap::new();
         self.anim_frame = None;
         self.layout_box = None;
@@ -7883,6 +13032,7 @@ impl Lumen {
         self.pending_js_navigate = None;
         self.stream_builder = None;
         self.stream_last_paint = std::time::Instant::now();
+        self.stream_sheet = lumen_css_parser::Stylesheet::default();
         self.preload_dispatched = std::collections::HashSet::new();
         self.ime_composing = None;
         self.bfcache = BfCache::new(16);
@@ -7891,20 +13041,27 @@ impl Lumen {
         self.form_state = HashMap::new();
         self.validation_tooltip = None;
         self.color_picker_node = None;
+        self.date_picker_node = None;
+        self.date_picker_year = 0;
+        self.date_picker_month = 0;
+        self.select_dropdown_node = None;
         self.ls_storage = HashMap::new();
-        self.idb_backend = Arc::new(std::sync::Mutex::new(
-            lumen_storage::store::InMemoryStorage::new(),
-        ));
+        // idb_dir is session-level — intentionally not reset here.
         self.sw_backend = Arc::new(std::sync::Mutex::new(
             lumen_storage::store::InMemoryStorage::new(),
         ));
         self.js_ctx = None;
         self.first_paint_delivered = false;
         self.first_contentful_paint_delivered = false;
+        self.nav_start = None;
         self.animated_gifs = HashMap::new();
         self.gif_last_frame = HashMap::new();
         self.image_cache = lumen_image::ImageDecodeCache::new();
         self.zoom_factor = zoom::ZOOM_DEFAULT;
+        self.display_url = None;
+        self.current_history_state_json = String::from("null");
+        self.reader_original_source = None;
+        self.cert_info = None;
         // Cancel in-flight scroll animations.
         self.scroll_anim = None;
         self.momentum_anim = None;
@@ -7915,11 +13072,12 @@ impl Lumen {
     fn open_new_tab(&mut self) {
         // In tree-style tab mode, new tabs become children of the active tab,
         // building the parent-child tree automatically.
+        let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
         let new_idx = if self.tree_tabs.visible {
             let opener_id = self.tab_strip.tabs[self.tab_strip.active].id;
-            self.tab_strip.push_with_opener(opener_id)
+            self.tab_strip.push_with_opener(opener_id, now_ms)
         } else {
-            self.tab_strip.push_blank()
+            self.tab_strip.push_blank(now_ms)
         };
         let new_id = self.tab_strip.tabs[new_idx].id;
         // Save current page into bg_tabs under the old active tab's id.
@@ -8002,11 +13160,163 @@ impl Lumen {
                 self.restore_hibernated_tab(new_id);
             }
         } else {
-            // Closing a background tab: drop snapshot and any hibernated data.
+            // Closing a background tab: drop snapshot and any hibernated/sleeping data.
             self.bg_tabs.remove(&closing_id);
             self.hibernated_tabs.remove(&closing_id);
             let _ = self.tab_snapshots.delete(closing_id as i64);
+            let _ = self.t2_store.delete(closing_id as i64);
             self.tab_strip.remove(idx);
+        }
+        self.request_redraw();
+    }
+
+    /// Execute a tab context-menu action (CC-4) on `tab_context_menu.target_idx`.
+    fn exec_tab_menu_action(
+        &mut self,
+        action: tabs::context_menu::MenuAction,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+    ) {
+        use tabs::context_menu::MenuAction;
+        let idx = self.tab_context_menu.target_idx;
+        if idx >= self.tab_strip.len() {
+            return;
+        }
+        match action {
+            MenuAction::TogglePin => {
+                self.tab_strip.toggle_pin(idx);
+                self.request_redraw();
+            }
+            MenuAction::Duplicate => self.duplicate_tab(idx),
+            MenuAction::MoveToNewWindow => self.move_tab_to_new_window(idx, event_loop),
+            MenuAction::AddToNewGroup => {
+                // CC-6: bundle the target tab into a fresh group, cycling the
+                // colour by group count so successive groups differ. Persist
+                // the group metadata so a future restore can recover it.
+                use tabs::groups::GroupColor;
+                let color = GroupColor::from_index((self.tab_strip.groups.len() % 8) as u8);
+                let gid = self.tab_strip.create_group("Группа", color);
+                self.tab_strip.assign_to_group(idx, gid);
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                let _ = self.tab_groups.create("Группа", color.index(), now);
+                self.request_redraw();
+            }
+            MenuAction::ToggleGroupCollapse => {
+                if let Some(gid) = self.tab_strip.group_of(idx) {
+                    let now_collapsed = self.tab_strip.toggle_collapse(gid);
+                    // If the active tab is hidden by collapsing, move focus to
+                    // the group's chip tab so a valid page stays displayed.
+                    if now_collapsed
+                        && !self.tab_strip.visible_indices().contains(&self.tab_strip.active)
+                        && let Some(&chip) = self.tab_strip.group_members(gid).first()
+                    {
+                        self.switch_tab(chip);
+                    }
+                    self.request_redraw();
+                }
+            }
+            MenuAction::RemoveFromGroup => {
+                if let Some(gid) = self.tab_strip.group_of(idx) {
+                    self.tab_strip.ungroup(idx);
+                    // Drop the group entirely once its last member leaves.
+                    if self.tab_strip.group_members(gid).is_empty() {
+                        self.tab_strip.remove_group(gid);
+                    }
+                    self.request_redraw();
+                }
+            }
+            MenuAction::CloseOthers => {
+                // Keep the target visible: switch to it first so a surviving
+                // page is shown, then drop everything else (non-pinned).
+                if idx != self.tab_strip.active {
+                    self.switch_tab(idx);
+                }
+                let keep = self.tab_strip.active;
+                let removed = self.tab_strip.close_others(keep);
+                self.discard_tab_resources(&removed);
+                self.request_redraw();
+            }
+            MenuAction::CloseRight => {
+                // If the active tab would be removed, switch to the target
+                // (which always survives) so the displayed page stays valid.
+                let active = self.tab_strip.active;
+                if active > idx && !self.tab_strip.is_pinned(active) {
+                    self.switch_tab(idx);
+                }
+                let removed = self.tab_strip.close_right(idx);
+                self.discard_tab_resources(&removed);
+                self.request_redraw();
+            }
+        }
+    }
+
+    /// Drop the cached page resources of background tabs removed in bulk
+    /// (CC-4 "Close others" / "Close to the right"). Mirrors the background
+    /// branch of [`close_tab`].
+    fn discard_tab_resources(&mut self, ids: &[usize]) {
+        for &id in ids {
+            self.lifecycle_mgr.close_tab(id as u64);
+            self.bg_tabs.remove(&id);
+            self.hibernated_tabs.remove(&id);
+            let _ = self.tab_snapshots.delete(id as i64);
+            let _ = self.t2_store.delete(id as i64);
+        }
+    }
+
+    /// Duplicate the tab at `idx` (CC-4): insert a copy right after it and
+    /// load the same page into it. Phase 0 re-fetches the source URL rather
+    /// than deep-cloning live page/JS state.
+    fn duplicate_tab(&mut self, idx: usize) {
+        // Bring the source tab to the foreground so `self.source` is its page.
+        if idx != self.tab_strip.active {
+            self.switch_tab(idx);
+        }
+        let src_idx = self.tab_strip.active;
+        let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+        let Some(new_idx) = self.tab_strip.duplicate(src_idx, now_ms) else {
+            return;
+        };
+        let src_source = self.source.clone();
+        // Park the source page in bg_tabs under its own id.
+        let old_id = self.tab_strip.tabs[src_idx].id;
+        self.tab_strip.set_tab_state(src_idx, TabState::BackgroundRecent);
+        let snap = self.save_page_snapshot();
+        self.bg_tabs.insert(old_id, snap);
+        // Activate the duplicate and load a fresh copy of the page.
+        let new_id = self.tab_strip.tabs[new_idx].id;
+        self.lifecycle_mgr.open_tab(new_id as u64);
+        self.tab_strip.active = new_idx;
+        self.tab_strip.set_tab_state(new_idx, TabState::Active);
+        self.tab_strip.update_last_activated(new_idx, now_ms);
+        self.reset_to_blank_tab();
+        self.source = src_source;
+        self.reload();
+        self.request_redraw();
+    }
+
+    /// Move the tab at `idx` into a new OS window (CC-4). Phase 0 launches a
+    /// fresh Lumen process for the tab's URL and removes the tab from this
+    /// window. The last remaining tab is duplicated rather than moved (closing
+    /// it would quit the app).
+    fn move_tab_to_new_window(
+        &mut self,
+        idx: usize,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+    ) {
+        if idx != self.tab_strip.active {
+            self.switch_tab(idx);
+        }
+        let url = self.source.url_str().map(str::to_owned);
+        if let Some(url) = url
+            && let Ok(exe) = std::env::current_exe()
+        {
+            let _ = std::process::Command::new(exe).arg(&url).spawn();
+        }
+        // Remove the tab here unless it is the only one (closing it would exit).
+        if self.tab_strip.len() > 1 {
+            self.close_tab(self.tab_strip.active, event_loop);
         }
         self.request_redraw();
     }
@@ -8048,22 +13358,44 @@ impl Lumen {
         let old_active = self.tab_strip.active;
         let old_id = self.tab_strip.tabs[old_active].id;
         self.tab_strip.set_tab_state(old_active, TabState::BackgroundRecent);
+        // T0 → T1: fire visibilitychange(hidden=true) before parking.
+        if let Some(js) = &self.js_ctx {
+            js.pause_event_loop();
+        }
         let snap = self.save_page_snapshot();
         self.bg_tabs.insert(old_id, snap);
+        // GC tuning (10L): run one moderate collection on the tab that just
+        // went to background so it releases unreachable objects quickly.
+        if let Some(js) = self.bg_tabs.get(&old_id).and_then(|s| s.js_ctx.as_ref()) {
+            js.run_gc_pass(1);
+        }
 
         // Sync lifecycle manager: deactivate old, activate new.
         let new_id = self.tab_strip.tabs[idx].id;
         self.lifecycle_mgr.activate_tab(new_id as u64);
 
         // Restore new active tab, marking it Active so any badge clears.
+        let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
         self.tab_strip.active = idx;
         self.tab_strip.set_tab_state(idx, TabState::Active);
+        self.tab_strip.update_last_activated(idx, now_ms);
 
         self.reset_to_blank_tab();
 
         if let Some(snap) = self.bg_tabs.remove(&new_id) {
             // T1/T2: fast in-memory restore.
             self.restore_page_snapshot(snap);
+            // T1 → T0: fire visibilitychange(hidden=false) after restore.
+            if let Some(js) = &self.js_ctx {
+                js.unpause_event_loop();
+                // GC tuning (10L): reset threshold to active level so the heap
+                // can grow freely now that this tab is in the foreground.
+                js.run_gc_pass(0);
+            }
+        } else if self.t2_store.exists(new_id as i64).unwrap_or(false) {
+            // T2 crash-recovery: bg_tabs was lost (process restart) but SQLite
+            // checkpoint exists — restore scroll + form state from it.
+            self.restore_t2_tab(new_id);
         } else if self.hibernated_tabs.contains_key(&new_id) {
             // T3: restore from SQLite — Document::from_bytes() + relayout.
             self.restore_hibernated_tab(new_id);
@@ -8085,7 +13417,7 @@ fn winit_modifiers_state(mods: &Modifiers) -> ModifiersState {
 /// (нечего восстанавливать). `File` → путь, `Snapshot` → `base_url`.
 fn source_url_string(src: &PageSource) -> Option<String> {
     match src {
-        PageSource::Empty => None,
+        PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => None,
         PageSource::File(p) => Some(p.display().to_string()),
         PageSource::Url(u) => Some(u.clone()),
         PageSource::Snapshot { base_url, .. } => Some(base_url.clone()),
@@ -8209,12 +13541,14 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::DrawBorder { rect, .. }
             | DisplayCommand::DrawText { rect, .. }
             | DisplayCommand::DrawImage { rect, .. }
+            | DisplayCommand::LazyImageSlot { rect, .. }
             | DisplayCommand::DrawBackgroundImage { rect, .. }
             | DisplayCommand::DrawOutline { rect, .. }
             | DisplayCommand::DrawLinearGradient { rect, .. }
             | DisplayCommand::DrawRadialGradient { rect, .. }
             | DisplayCommand::DrawConicGradient { rect, .. }
             | DisplayCommand::PushClipRect { rect, .. }
+            | DisplayCommand::PushClipRoundedRect { rect, .. }
             | DisplayCommand::PushMaskImage { rect, .. }
             | DisplayCommand::PushMaskLinearGradient { rect, .. }
             | DisplayCommand::PushMaskRadialGradient { rect, .. }
@@ -8222,6 +13556,7 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PushMaskLayer { rect, .. } => rect,
             DisplayCommand::DrawCrossFade { dest, .. } => dest,
             DisplayCommand::PopClip
+            | DisplayCommand::PushClipPath { .. }
             | DisplayCommand::PushOpacity { .. }
             | DisplayCommand::PopOpacity
             | DisplayCommand::PushBlendMode { .. }
@@ -8264,12 +13599,14 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::DrawBorder { rect, .. }
             | DisplayCommand::DrawText { rect, .. }
             | DisplayCommand::DrawImage { rect, .. }
+            | DisplayCommand::LazyImageSlot { rect, .. }
             | DisplayCommand::DrawBackgroundImage { rect, .. }
             | DisplayCommand::DrawOutline { rect, .. }
             | DisplayCommand::DrawLinearGradient { rect, .. }
             | DisplayCommand::DrawRadialGradient { rect, .. }
             | DisplayCommand::DrawConicGradient { rect, .. }
             | DisplayCommand::PushClipRect { rect, .. }
+            | DisplayCommand::PushClipRoundedRect { rect, .. }
             | DisplayCommand::PushMaskImage { rect, .. }
             | DisplayCommand::PushMaskLinearGradient { rect, .. }
             | DisplayCommand::PushMaskRadialGradient { rect, .. }
@@ -8277,6 +13614,7 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PushMaskLayer { rect, .. } => rect,
             DisplayCommand::DrawCrossFade { dest, .. } => dest,
             DisplayCommand::PopClip
+            | DisplayCommand::PushClipPath { .. }
             | DisplayCommand::PushOpacity { .. }
             | DisplayCommand::PopOpacity
             | DisplayCommand::PushBlendMode { .. }
@@ -8334,6 +13672,7 @@ fn build_split_placeholder(url: &str) -> lumen_paint::DisplayList {
             font_style: FontStyle::Normal,
             font_variation_axes: vec![],
             tab_size: 0.0,
+            highlight_name: None,
         },
     ]
 }
@@ -8359,6 +13698,68 @@ fn escape_js_string_char(ch: char) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── content-visibility: auto — shell state (BB-4) ───────────────────────
+
+    fn cv_nid(n: usize) -> NodeId {
+        NodeId::from_index(n)
+    }
+
+    #[test]
+    fn diff_cv_skipped_emits_skipped_true_for_new_nodes() {
+        let prev = vec![(cv_nid(1), 100.0)];
+        let next = vec![(cv_nid(1), 100.0), (cv_nid(2), 2000.0)];
+        let events = diff_cv_skipped(&prev, &next);
+        assert_eq!(events, vec![ContentVisibilityChange { node: cv_nid(2), skipped: true }]);
+    }
+
+    #[test]
+    fn diff_cv_skipped_emits_skipped_false_for_removed_nodes() {
+        let prev = vec![(cv_nid(1), 100.0), (cv_nid(2), 2000.0)];
+        let next = vec![(cv_nid(2), 2000.0)];
+        let events = diff_cv_skipped(&prev, &next);
+        assert_eq!(events, vec![ContentVisibilityChange { node: cv_nid(1), skipped: false }]);
+    }
+
+    #[test]
+    fn diff_cv_skipped_no_changes_no_events() {
+        let state = vec![(cv_nid(1), 100.0)];
+        assert!(diff_cv_skipped(&state, &state).is_empty());
+        assert!(diff_cv_skipped(&[], &[]).is_empty());
+    }
+
+    #[test]
+    fn collect_cv_skipped_finds_collapsed_auto_boxes() {
+        lumen_layout::set_cv_scroll(0.0, 0.0);
+        lumen_layout::set_cv_relevant(std::collections::HashSet::new());
+        let html = r#"<div class="spacer"></div><div class="cv"><span>off</span></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".spacer { height: 2000px; } .cv { content-visibility: auto; }",
+        );
+        let lb = lumen_layout::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let _ = lumen_layout::take_cv_skipped();
+        let mut found = Vec::new();
+        collect_cv_skipped(&lb, &mut found);
+        assert_eq!(found.len(), 1, "ровно один пропущенный auto-бокс");
+        assert!(found[0].1 >= 2000.0, "top_y — позиция схлопнутого бокса");
+    }
+
+    #[test]
+    fn collect_cv_skipped_ignores_on_screen_auto_boxes() {
+        lumen_layout::set_cv_scroll(0.0, 0.0);
+        lumen_layout::set_cv_relevant(std::collections::HashSet::new());
+        let html = r#"<div class="cv"><div class="inner"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".cv { content-visibility: auto; } .inner { height: 50px; }",
+        );
+        let lb = lumen_layout::layout(&doc, &sheet, Size::new(300.0, 300.0));
+        let _ = lumen_layout::take_cv_skipped();
+        let mut found = Vec::new();
+        collect_cv_skipped(&lb, &mut found);
+        assert!(found.is_empty(), "видимый auto-бокс выложен и не считается skipped");
+    }
 
     fn expect_resolved_url(base: &str, href: &str) -> String {
         match ResourceBase::Url(base.to_owned()).resolve(href) {
@@ -8717,12 +14118,11 @@ mod tests {
     }
 
     #[test]
-    fn keybinding_ctrl_shift_r_is_none() {
-        // Shift+Ctrl+R обычно «force-reload» в web-браузерах. Не делаем
-        // сейчас (нет cache), но и не путаем с обычным reload.
+    fn keybinding_ctrl_shift_r_is_read_later() {
+        // Ctrl+Shift+R → toggle Read-later panel (§12.3).
         assert_eq!(
             keybinding_for(KeyCode::KeyR, ModifiersState::CONTROL | ModifiersState::SHIFT),
-            None,
+            Some(KeyCommand::ToggleReadLater),
         );
     }
 
@@ -8827,6 +14227,24 @@ mod tests {
             PageSource::File(PathBuf::from("a.html")).describe(),
             "a.html",
         );
+    }
+
+    #[test]
+    fn page_source_about_blank_from_arg() {
+        assert!(matches!(
+            PageSource::from_arg(Some("about:blank")),
+            PageSource::AboutBlank
+        ));
+    }
+
+    #[test]
+    fn page_source_about_blank_url_str() {
+        assert_eq!(PageSource::AboutBlank.url_str(), Some("about:blank"));
+    }
+
+    #[test]
+    fn page_source_about_blank_describe() {
+        assert_eq!(PageSource::AboutBlank.describe(), "about:blank");
     }
 
     #[test]
@@ -9268,9 +14686,11 @@ mod tests {
             r#"<html><head></head><body><script>console.log(1);</script></body></html>"#,
         );
         let mut scripts = Vec::new();
-        collect_inline_scripts(&doc, doc.root(), &mut scripts);
+        let mut mods = Vec::new();
+        collect_inline_scripts(&doc, doc.root(), &mut scripts, &mut mods);
         assert_eq!(scripts.len(), 1);
         assert!(scripts[0].contains("console.log"));
+        assert!(mods.is_empty());
     }
 
     #[test]
@@ -9279,8 +14699,10 @@ mod tests {
             r#"<html><head></head><body><script>   </script></body></html>"#,
         );
         let mut scripts = Vec::new();
-        collect_inline_scripts(&doc, doc.root(), &mut scripts);
+        let mut mods = Vec::new();
+        collect_inline_scripts(&doc, doc.root(), &mut scripts, &mut mods);
         assert!(scripts.is_empty());
+        assert!(mods.is_empty());
     }
 
     #[test]
@@ -9289,8 +14711,112 @@ mod tests {
             r#"<html><body><script>a=1;</script><script>b=2;</script></body></html>"#,
         );
         let mut scripts = Vec::new();
-        collect_inline_scripts(&doc, doc.root(), &mut scripts);
+        let mut mods = Vec::new();
+        collect_inline_scripts(&doc, doc.root(), &mut scripts, &mut mods);
         assert_eq!(scripts.len(), 2);
+        assert!(mods.is_empty());
+    }
+
+    #[test]
+    fn collect_inline_scripts_separates_modules() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><body>
+              <script>var x = 1;</script>
+              <script type="module">export const y = 2;</script>
+            </body></html>"#,
+        );
+        let mut scripts = Vec::new();
+        let mut mods = Vec::new();
+        collect_inline_scripts(&doc, doc.root(), &mut scripts, &mut mods);
+        assert_eq!(scripts.len(), 1, "classic script counted");
+        assert_eq!(mods.len(), 1, "module script counted");
+        assert!(scripts[0].contains("var x"));
+        assert!(mods[0].contains("export const y"));
+    }
+
+    // ── BUG-164: external <script src> collection ─────────────────────────────
+
+    /// External `<script src>` is recorded as `External` in document order,
+    /// interleaved with inline classic scripts (HTML LS §8.1.3.1).
+    #[test]
+    fn collect_scripts_ordered_records_external_in_order() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><body>
+              <script>a=1;</script>
+              <script src="/bundle.js"></script>
+              <script>b=2;</script>
+            </body></html>"#,
+        );
+        let mut classic = Vec::new();
+        let mut modules = Vec::new();
+        collect_scripts_ordered(&doc, doc.root(), &mut classic, &mut modules);
+        assert!(modules.is_empty());
+        assert_eq!(classic.len(), 3, "two inline + one external");
+        assert!(matches!(&classic[0], ScriptSource::Inline(s) if s.contains("a=1")));
+        assert!(matches!(&classic[1], ScriptSource::External(s) if s == "/bundle.js"));
+        assert!(matches!(&classic[2], ScriptSource::Inline(s) if s.contains("b=2")));
+    }
+
+    /// `<script type=module src>` lands in the module list as `External`.
+    #[test]
+    fn collect_scripts_ordered_external_module() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><script type="module" src="/app.mjs"></script></body></html>"#,
+        );
+        let mut classic = Vec::new();
+        let mut modules = Vec::new();
+        collect_scripts_ordered(&doc, doc.root(), &mut classic, &mut modules);
+        assert!(classic.is_empty());
+        assert_eq!(modules.len(), 1);
+        assert!(matches!(&modules[0], ScriptSource::External(s) if s == "/app.mjs"));
+    }
+
+    /// Non-JS script blocks (`application/ld+json`, `importmap`) are data, not
+    /// code — they must not be collected for execution, with or without `src`.
+    #[test]
+    fn collect_scripts_ordered_skips_non_js_types() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><body>
+              <script type="application/ld+json">{"@type":"Article"}</script>
+              <script type="importmap">{"imports":{}}</script>
+              <script type="application/json" src="/data.json"></script>
+              <script>real=1;</script>
+            </body></html>"#,
+        );
+        let mut classic = Vec::new();
+        let mut modules = Vec::new();
+        collect_scripts_ordered(&doc, doc.root(), &mut classic, &mut modules);
+        assert!(modules.is_empty());
+        assert_eq!(classic.len(), 1, "only the executable classic script");
+        assert!(matches!(&classic[0], ScriptSource::Inline(s) if s.contains("real=1")));
+    }
+
+    /// When both `src` and an inline body are present, `src` wins and the inline
+    /// body is ignored (HTML LS §4.12.1).
+    #[test]
+    fn collect_scripts_ordered_src_wins_over_inline_body() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><script src="/x.js">ignored=1;</script></body></html>"#,
+        );
+        let mut classic = Vec::new();
+        let mut modules = Vec::new();
+        collect_scripts_ordered(&doc, doc.root(), &mut classic, &mut modules);
+        assert_eq!(classic.len(), 1);
+        assert!(matches!(&classic[0], ScriptSource::External(s) if s == "/x.js"));
+    }
+
+    /// Inline items resolve to their body verbatim without any fetch (the
+    /// no-network path of `resolve_script_sources`).
+    #[test]
+    fn resolve_script_sources_passes_inline_through() {
+        let items = vec![
+            ScriptSource::Inline("var a = 1;".to_owned()),
+            ScriptSource::Inline("var b = 2;".to_owned()),
+        ];
+        let base = ResourceBase::Url("https://example.com/".to_owned());
+        let sink: Arc<dyn EventSink> = Arc::new(StdoutEventSink);
+        let out = resolve_script_sources(&items, &base, &sink, None);
+        assert_eq!(out, vec!["var a = 1;".to_owned(), "var b = 2;".to_owned()]);
     }
 
     #[test]
@@ -9345,5 +14871,143 @@ mod tests {
             r#"<html><body><p>no links</p></body></html>"#,
         );
         assert_eq!(check_navigation_gate(&doc, lumen_core::SandboxFlags::NAVIGATION), 0);
+    }
+
+    // ── apply_iframe_sandbox_gates ───────────────────────────────────────────
+
+    #[test]
+    fn iframe_sandbox_no_iframes_returns_zero() {
+        let doc = lumen_html_parser::parse(r#"<html><body><p>hello</p></body></html>"#);
+        assert_eq!(apply_iframe_sandbox_gates(&doc), 0);
+    }
+
+    #[test]
+    fn iframe_sandbox_url_based_no_blocking() {
+        // URL-based iframes are Phase 0 (not loaded); gate returns 0 blocked.
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><iframe src="http://example.com" sandbox></iframe></body></html>"#,
+        );
+        assert_eq!(apply_iframe_sandbox_gates(&doc), 0);
+    }
+
+    #[test]
+    fn iframe_sandbox_srcdoc_scripts_blocked() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><iframe sandbox srcdoc="<script>x=1;</script><script>y=2;</script>"></iframe></body></html>"#,
+        );
+        // 2 scripts + 1 popup capability (AUXILIARY_NAVIGATION set in full sandbox).
+        assert_eq!(apply_iframe_sandbox_gates(&doc), 3);
+    }
+
+    #[test]
+    fn iframe_sandbox_srcdoc_scripts_allowed() {
+        // allow-scripts lifts SCRIPTS; AUXILIARY_NAVIGATION still set → popup blocked (+1).
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><iframe sandbox="allow-scripts" srcdoc="<script>x=1;</script>"></iframe></body></html>"#,
+        );
+        assert_eq!(apply_iframe_sandbox_gates(&doc), 1);
+    }
+
+    #[test]
+    fn iframe_sandbox_srcdoc_forms_blocked() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><iframe sandbox srcdoc="<form action='/submit'><input type='submit'></form>"></iframe></body></html>"#,
+        );
+        // 1 form + 1 popup capability (full sandbox).
+        assert_eq!(apply_iframe_sandbox_gates(&doc), 2);
+    }
+
+    #[test]
+    fn iframe_sandbox_srcdoc_navigation_blocked() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><iframe sandbox srcdoc="<a href='/page1'>link1</a><a href='/page2'>link2</a>"></iframe></body></html>"#,
+        );
+        // 2 navigation links + 1 popup capability (full sandbox).
+        assert_eq!(apply_iframe_sandbox_gates(&doc), 3);
+    }
+
+    #[test]
+    fn iframe_sandbox_srcdoc_no_sandbox_attr_no_blocking() {
+        // iframe without sandbox attribute: is_sandboxed = false, no blocking.
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><iframe srcdoc="<script>x=1;</script>"></iframe></body></html>"#,
+        );
+        assert_eq!(apply_iframe_sandbox_gates(&doc), 0);
+    }
+
+    // ── PH1-2: Progressive streaming pipeline ──────────────────────────────────
+
+    // Compile-time: streaming throttle must be ≤16 ms (~60 Hz).
+    // Prevents accidental reversion to the old 150 ms value.
+    const _: () = assert!(STREAM_PAINT_INTERVAL_MS <= 16);
+    const _: () = assert!(STREAM_PAINT_INTERVAL_MS >= 14);
+
+    #[test]
+    fn load_css_for_streaming_reads_file() {
+        let tmp = std::env::temp_dir().join("lumen_ph1_2_test.css");
+        std::fs::write(&tmp, "body { color: red; }").unwrap();
+        let path = tmp.to_string_lossy().into_owned();
+        let result = load_css_for_streaming(&path);
+        let _ = std::fs::remove_file(&tmp);
+        assert_eq!(result.as_deref(), Some("body { color: red; }"));
+    }
+
+    #[test]
+    fn load_css_for_streaming_missing_file_returns_none() {
+        let result = load_css_for_streaming("/nonexistent/path/style.css");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn load_css_for_streaming_http_bad_url_returns_none() {
+        // Malformed URL — should return None without panicking.
+        let result = load_css_for_streaming("http://");
+        assert!(result.is_none());
+    }
+
+    // ── extract_tor_mode ─────────────────────────────────────────────────────
+
+    #[test]
+    fn tor_mode_not_present() {
+        let (port, rest) = extract_tor_mode(&args(&["page.html"]));
+        assert!(port.is_none());
+        assert_eq!(rest, args(&["page.html"]));
+    }
+
+    #[test]
+    fn tor_mode_basic() {
+        let (port, rest) = extract_tor_mode(&args(&["--tor", "page.html"]));
+        assert_eq!(port, Some(9050));
+        assert_eq!(rest, args(&["page.html"]));
+    }
+
+    #[test]
+    fn tor_mode_custom_port() {
+        let (port, rest) = extract_tor_mode(&args(&["--tor", "--tor-port", "9150", "page.html"]));
+        assert_eq!(port, Some(9150));
+        assert_eq!(rest, args(&["page.html"]));
+    }
+
+    #[test]
+    fn tor_mode_port_before_tor_flag() {
+        // --tor-port before --tor is consumed regardless of order.
+        let (port, rest) = extract_tor_mode(&args(&["--tor-port", "9150", "--tor"]));
+        assert_eq!(port, Some(9150));
+        assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn tor_mode_no_flag_no_extra_port() {
+        // --tor-port without --tor → tor_found=false → return None (port consumed but no tor).
+        let (port, rest) = extract_tor_mode(&args(&["--tor-port", "9150", "page.html"]));
+        assert!(port.is_none());
+        assert_eq!(rest, args(&["page.html"]));
+    }
+
+    #[test]
+    fn tor_mode_empty_args() {
+        let (port, rest) = extract_tor_mode(&[]);
+        assert!(port.is_none());
+        assert!(rest.is_empty());
     }
 }

@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 62 scroll snap</title>
+</head>
+<!--
+  TEST-62: CSS Scroll Snap L1
+  Tests: scroll-snap-type (y mandatory / x mandatory), scroll-snap-align (start/center/end),
+         scroll-snap-stop (always), scroll-snap-type (both proximity).
+  Visual check: colored sections inside scroll containers positioned by snap geometry.
+  Scroll snap affects runtime behavior; this static render confirms container/section
+  layout geometry is correct (sections fill the container, colors distinct).
+-->
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f {
+    background: #1a1a2e;
+    width: 1022px; height: 718px;
+    margin: 1px;
+    display: flex;
+    gap: 8px;
+    padding: 8px;
+    overflow: hidden;
+  }
+
+  /* Vertical snap container — y mandatory, 3 sections */
+  .snap-y {
+    width: 320px; height: 702px;
+    overflow-y: scroll;
+    scroll-snap-type: y mandatory;
+    border: 2px solid #4a4a8a;
+    border-radius: 4px;
+    scrollbar-width: none;
+  }
+  .snap-y .section {
+    width: 100%; height: 702px;
+    scroll-snap-align: start;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 48px;
+    font-family: sans-serif;
+    color: white;
+    flex-shrink: 0;
+  }
+  .sec-a { background: #e94560; }
+  .sec-b { background: #0f3460; }
+  .sec-c { background: #16213e; }
+
+  /* Horizontal snap container — x mandatory, 3 panels */
+  .snap-x {
+    flex: 1; height: 220px;
+    overflow-x: scroll;
+    scroll-snap-type: x mandatory;
+    border: 2px solid #4a8a4a;
+    border-radius: 4px;
+    display: flex;
+    scrollbar-width: none;
+  }
+  .snap-x .panel {
+    flex-shrink: 0;
+    width: 100%;
+    height: 100%;
+    scroll-snap-align: start;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 32px;
+    font-family: sans-serif;
+    color: white;
+  }
+  .pan-a { background: #2d6a4f; }
+  .pan-b { background: #52b788; }
+  .pan-c { background: #1b4332; }
+
+  /* Both-axis snap, proximity */
+  .snap-both {
+    flex: 1; height: 220px;
+    overflow: scroll;
+    scroll-snap-type: both proximity;
+    border: 2px solid #8a4a4a;
+    border-radius: 4px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    scrollbar-width: none;
+  }
+  .snap-both .cell {
+    min-width: 100%;
+    scroll-snap-align: start;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 24px;
+    font-family: sans-serif;
+    color: white;
+  }
+  .cell-1 { background: #9b2335; }
+  .cell-2 { background: #c1440e; }
+  .cell-3 { background: #7a1c2e; }
+  .cell-4 { background: #a33b20; }
+
+  /* snap-stop: always demo container */
+  .snap-stop {
+    flex: 1; height: 220px;
+    overflow-y: scroll;
+    scroll-snap-type: y mandatory;
+    border: 2px solid #6a6a4a;
+    border-radius: 4px;
+    scrollbar-width: none;
+  }
+  .snap-stop .stop-item {
+    height: 80px;
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+    font-family: sans-serif;
+    color: white;
+    border-bottom: 1px solid rgba(255,255,255,0.2);
+  }
+  .si-1 { background: #4a4a6a; }
+  .si-2 { background: #3a3a5a; }
+  .si-3 { background: #5a5a7a; }
+
+  .right-col {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: 1;
+  }
+</style>
+<body>
+  <div class="__f">
+    <!-- Vertical snap container (y mandatory) -->
+    <div class="snap-y">
+      <div class="section sec-a">A</div>
+      <div class="section sec-b">B</div>
+      <div class="section sec-c">C</div>
+    </div>
+
+    <div class="right-col">
+      <!-- Horizontal snap container (x mandatory) -->
+      <div class="snap-x">
+        <div class="panel pan-a">1</div>
+        <div class="panel pan-b">2</div>
+        <div class="panel pan-c">3</div>
+      </div>
+
+      <!-- Both-axis proximity snap -->
+      <div class="snap-both">
+        <div class="cell cell-1">NW</div>
+        <div class="cell cell-2">NE</div>
+        <div class="cell cell-3">SW</div>
+        <div class="cell cell-4">SE</div>
+      </div>
+
+      <!-- scroll-snap-stop: always -->
+      <div class="snap-stop">
+        <div class="stop-item si-1">Stop 1</div>
+        <div class="stop-item si-2">Stop 2</div>
+        <div class="stop-item si-3">Stop 3</div>
+        <div class="stop-item si-1">Stop 4</div>
+        <div class="stop-item si-2">Stop 5</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

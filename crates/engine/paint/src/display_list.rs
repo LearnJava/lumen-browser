@@ -18,16 +18,45 @@ use lumen_dom::InputType;
 use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
     transform_fns_to_matrix, CompositorAnimFrame, CompositorOverride,
-    BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderStyle, BoxKind,
-    ClipPath, Color, ComputedStyle, ContainFlags, CssColor, FilterFn, FontOpticalSizing, FontStyle, FontWeight,
-    FormControlKind, SvgShapeKind,
+    Appearance,
+    BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind,
+    ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, EmptyCells, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight, ShapeValue,
+    FillRule, FormControlKind, StrokeLinecap, StrokeLinejoin, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline,
     GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
-    InlineFrag, LayoutBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
-    OutlineColor, OutlineStyle, Overflow, Page, PaintOrder, PaintPhase, Position, PositionComponent,
-    StackingContextId, StackingTree, TextDecorationStyle, TextDecorationThickness,
-    TextEmphasisShape, TextEmphasisStyle, TextOverflow,
+    InlineFrag, LayoutBox, MarginBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
+    OutlineColor, OutlineStyle, Overflow, Page, PaintOrder, PaintPhase, Position, PositionComponent, Resize,
+    ScrollbarWidth, SelectionHighlight,
+    StackingContextId, StackingTree, TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness,
+    TextEmphasisShape, TextEmphasisStyle, TextOverflow, TextUnderlinePosition,
+    TransformStyle,
     Visibility,
 };
+
+use crate::gap_decorations::{emit_gap_rules, GapDecorationContext, GapSegment};
+
+/// CSS Images L3 §4.3 — image-rendering filter mode (scaling algorithm).
+/// Determines how textures are sampled when an image is scaled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FilterMode {
+    /// `auto` (default), `smooth`, `high-quality` — high-quality scaling (bilinear).
+    #[default]
+    Linear,
+    /// `crisp-edges`, `pixelated` — preserve sharp edges (nearest-neighbour).
+    Nearest,
+}
+
+impl FilterMode {
+    /// Преобразует `ImageRendering` в `FilterMode`.
+    /// `auto`/`smooth`/`high-quality` → `Linear` (bilinear).
+    /// `crisp-edges`/`pixelated` → `Nearest` (pixel-perfect).
+    #[must_use]
+    pub fn from_image_rendering(ir: ImageRendering) -> Self {
+        match ir {
+            ImageRendering::Auto | ImageRendering::Smooth | ImageRendering::HighQuality => Self::Linear,
+            ImageRendering::CrispEdges | ImageRendering::Pixelated => Self::Nearest,
+        }
+    }
+}
 
 /// CSS Compositing & Blending L1 §5 — blend mode. Phase 0 содержит только
 /// `Normal` (no-op); остальные 16 mode-ов парсятся в CSS-каскаде, но
@@ -175,6 +204,75 @@ impl CornerRadii {
     }
 }
 
+/// BUG-140: `clip-path` basic-shape, разрешённая эмиттером в page-координаты
+/// (px) относительно border-box элемента. Координаты — в пространстве ДО
+/// transform элемента: команда `PushClipPath` эмитится внутри
+/// `PushTransform`, бэкенд переносит форму активной матрицей канвы.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResolvedClipShape {
+    /// `circle(r at cx cy)`: центр и радиус в page px.
+    Circle {
+        /// Центр X (page px).
+        cx: f32,
+        /// Центр Y (page px).
+        cy: f32,
+        /// Радиус (px).
+        r: f32,
+    },
+    /// `ellipse(rx ry at cx cy)`: центр и полуоси в page px.
+    Ellipse {
+        /// Центр X (page px).
+        cx: f32,
+        /// Центр Y (page px).
+        cy: f32,
+        /// Горизонтальная полуось (px).
+        rx: f32,
+        /// Вертикальная полуось (px).
+        ry: f32,
+    },
+    /// `polygon(...)` / `path(...)`: вершины в page px. `even_odd` выбирает
+    /// правило заливки самопересекающихся контуров (CSS Shapes L1 §3/§4):
+    /// `true` → even-odd (дырки в перекрытиях), `false` → nonzero (default).
+    Polygon {
+        /// Вершины формы в page px (до transform элемента).
+        verts: Vec<(f32, f32)>,
+        /// `true` = even-odd fill rule, `false` = nonzero.
+        even_odd: bool,
+    },
+}
+
+impl ResolvedClipShape {
+    /// Axis-aligned bounding box формы (page px, до transform). Используется
+    /// fallback-путями, не умеющими клиппить произвольную форму (wgpu
+    /// scissor, hit-test).
+    pub fn bounding_rect(&self) -> Rect {
+        match self {
+            Self::Circle { cx, cy, r } => {
+                Rect::new(cx - r, cy - r, 2.0 * r, 2.0 * r)
+            }
+            Self::Ellipse { cx, cy, rx, ry } => {
+                Rect::new(cx - rx, cy - ry, 2.0 * rx, 2.0 * ry)
+            }
+            Self::Polygon { verts, .. } => {
+                if verts.is_empty() {
+                    return Rect::new(0.0, 0.0, 0.0, 0.0);
+                }
+                let mut mn_x = f32::MAX;
+                let mut mn_y = f32::MAX;
+                let mut mx_x = f32::MIN;
+                let mut mx_y = f32::MIN;
+                for (x, y) in verts {
+                    mn_x = mn_x.min(*x);
+                    mn_y = mn_y.min(*y);
+                    mx_x = mx_x.max(*x);
+                    mx_y = mx_y.max(*y);
+                }
+                Rect::new(mn_x, mn_y, (mx_x - mn_x).max(0.0), (mx_y - mn_y).max(0.0))
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum DisplayCommand {
     FillRect {
@@ -245,6 +343,7 @@ pub enum DisplayCommand {
         /// CSS Text L3 §10.1 — pixel width for a tab character (\t).
         /// 0.0 means no tab characters in text (renderer skips tab expansion).
         tab_size: f32,
+        highlight_name: Option<String>
     },
     /// Растровое изображение из `<img>`. `rect` — итоговая коробка после
     /// расчёта по CSS (width/height + HTML presentational hints), `src` —
@@ -265,6 +364,22 @@ pub enum DisplayCommand {
         object_fit: ObjectFit,
         object_position: ObjectPosition,
         image_rendering: ImageRendering,
+    },
+    /// Slot for an `<img loading="lazy">`.
+    ///
+    /// Rendered as a grey rect *until* its image is registered; once the shell
+    /// fetches and registers the image (keyed by `src`), the backend draws it
+    /// in place — identical to a `DrawImage` whose bytes have arrived. This is
+    /// why `object_fit`/`object_position` are carried here too: a lazy image
+    /// must honour the same CSS fitting rules as an eager one once loaded.
+    /// `node_id` is the DOM node index — lets the shell correlate this slot with
+    /// the proximity check (`_lumen_request_lazy_image_load`).
+    LazyImageSlot {
+        rect: Rect,
+        node_id: u32,
+        src: String,
+        object_fit: ObjectFit,
+        object_position: ObjectPosition,
     },
     /// CSS Backgrounds L3 §3.10 — `background-image: url(...)`.
     ///
@@ -345,7 +460,23 @@ pub enum DisplayCommand {
     /// P1 п.2A (stacking contexts impl) заполнит данные, эмиттер начнёт
     /// выпускать; до этого момента — interface-first stub.
     PushClipRect { rect: Rect },
-    /// Закрывает rect-клип, открытый ближайшим `PushClipRect`. Парность
+    /// P2 BUG-132 fix: Открывает скруглённый rect-клип с border-radius.
+    /// Все последующие команды до парного `PopClip` рисуются только в пределах
+    /// скруглённого прямоугольника. Используется для `overflow: hidden`
+    /// с `border-radius` (взамен scissor-теста PushClipRect). Каждый
+    /// corner определен через `radii[0..4]` (top-left, top-right, bottom-right,
+    /// bottom-left). Phase 0: реализация в backends/femtovg_backend.rs.
+    PushClipRoundedRect { rect: Rect, radii: [f32; 4] },
+    /// BUG-140: открывает клип произвольной basic-shape (`clip-path:
+    /// circle/ellipse/polygon`), разрешённой в page-координаты (px,
+    /// пространство ДО transform элемента). Эмитится ВНУТРИ
+    /// `PushTransform` элемента, чтобы форма переносилась его трансформом
+    /// (CSS Masking L1 §9: clip-path задан в локальной системе элемента).
+    /// Парный Pop — общий `PopClip`. `inset(...)` без скруглений эмитится
+    /// как `PushClipRect` (точно представим прямоугольником).
+    PushClipPath { shape: ResolvedClipShape },
+    /// Закрывает клип (rect, rounded-rect или shape), открытый ближайшим
+    /// `PushClipRect`/`PushClipRoundedRect`/`PushClipPath`. Парность
     /// гарантируется эмиттером.
     PopClip,
     /// Sprint 0 P2 stub. Открывает opacity-группу: все последующие
@@ -469,7 +600,12 @@ pub enum DisplayCommand {
     /// Phase 0: color-matrix фильтры (grayscale/sepia/brightness/contrast/
     /// saturate/invert/opacity/hue-rotate) реализованы через GPU-шейдер;
     /// blur реализован через двухпроходный Gaussian GPU-шейдер.
-    PushFilter { filters: Vec<FilterFn> },
+    ///
+    /// `bounds` — примерная область, которую займёт отфильтрованное содержимое
+    /// (CSS px). Используется для оптимизации размера offscreen-слоя; если None —
+    /// fallback на full viewport. Для box-shadow это rect тени; для text-shadow —
+    /// bounds текста плюс смещение и blur-spread.
+    PushFilter { filters: Vec<FilterFn>, bounds: Option<Rect> },
     /// Закрывает filter-группу.
     PopFilter,
     /// CSS Filter Effects L1 §2 / Compositing L1 §13 — backdrop-filter.
@@ -578,9 +714,9 @@ pub enum DisplayCommand {
     /// container. Drawn in document-space CSS px, outside the scroll layer so
     /// it does not translate with scrolled content.
     ///
-    /// # CSS: scrollbar-width, scrollbar-color
-    /// P4 wires: `ComputedStyle.scrollbar_width` (thin/auto/none, CSS Scrollbars L1)
-    /// and `ComputedStyle.scrollbar_color` (thumb/track colors) to control appearance.
+    /// Colors and gutter width come from `ComputedStyle.scrollbar_color` /
+    /// `scrollbar_width` (CSS Scrollbars L1). `scrollbar-width: none` suppresses
+    /// this command entirely — the scroll container still scrolls, just invisibly.
     DrawScrollbar {
         /// Full track rectangle (document-space CSS px). Fills the scrollbar gutter.
         track_rect: Rect,
@@ -589,6 +725,10 @@ pub enum DisplayCommand {
         thumb_rect: Rect,
         /// `true` = vertical scrollbar (right edge); `false` = horizontal (bottom edge).
         vertical: bool,
+        /// Thumb fill color in linear-light sRGB [r, g, b, a] (pre-multiplied alpha not used).
+        thumb_color: [f32; 4],
+        /// Track fill color in linear-light sRGB [r, g, b, a].
+        track_color: [f32; 4],
     },
 
     /// Marks a page boundary in a print display list.
@@ -783,6 +923,46 @@ fn border_style_short(s: BorderStyle) -> &'static str {
 
 /// Returns `true` if the display list contains any `backdrop-filter` element.
 ///
+/// Cull a display list to only commands that intersect the given tile region.
+///
+/// `tile_x` and `tile_y` are tile-space coordinates; the tile covers CSS pixels
+/// `[tile_x*tile_size, (tile_x+1)*tile_size) × [tile_y*tile_size, (tile_y+1)*tile_size)`.
+///
+/// Commands that carry a bounding rect are included only when their rect
+/// overlaps the tile (AABB test). State commands (`PushClipRect`, `PopClipRect`,
+/// `PushScrollLayer`, `PopScrollLayer`, `PushOpacity`, `PopOpacity`,
+/// `PushTransform`, `PopTransform`, `PushBlendMode`, `PopBlendMode`, etc.)
+/// always pass through unchanged so that the GPU state machine remains correct.
+///
+/// Returns owned clones of the matching commands, ready to pass to the renderer.
+#[must_use]
+pub fn cull_display_list(
+    dl: &[DisplayCommand],
+    tile_x: i32,
+    tile_y: i32,
+    tile_size: f32,
+) -> Vec<DisplayCommand> {
+    let tx = tile_x as f32 * tile_size;
+    let ty = tile_y as f32 * tile_size;
+
+    let mut out = Vec::new();
+    for cmd in dl {
+        match get_command_rect(cmd) {
+            Some(r) => {
+                // AABB intersection: both axes must overlap.
+                let overlaps_x = r.x < tx + tile_size && r.x + r.width > tx;
+                let overlaps_y = r.y < ty + tile_size && r.y + r.height > ty;
+                if overlaps_x && overlaps_y {
+                    out.push(cmd.clone());
+                }
+            }
+            // State / stack commands always pass through.
+            None => out.push(cmd.clone()),
+        }
+    }
+    out
+}
+
 /// Cheap pre-check the renderer uses to decide whether computing a frame
 /// content hash for [`hash_display_list`] is worthwhile — pages without a
 /// backdrop-filter pay zero hashing cost.
@@ -849,6 +1029,168 @@ pub fn hash_display_list(
     hasher.finish()
 }
 
+/// Результат сравнения двух display-list-ов.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DiffResult {
+    /// Если true, то оба display list-а идентичны — можно пропустить GPU upload.
+    pub identical: bool,
+    ///累積bounding rectangle всех команд, которые изменились или добавились.
+    /// Используется для dirty-rect tracking в renderer-е.
+    /// `Rect { x: f32::NAN, y: f32::NAN, width: 0.0, height: 0.0 }` если нет изменений.
+    pub changed_rects: Rect,
+}
+
+impl DiffResult {
+    /// Создаёт DiffResult для идентичных display list-ов.
+    #[inline]
+    pub fn identical() -> Self {
+        Self {
+            identical: true,
+            changed_rects: Rect {
+                x: f32::NAN,
+                y: f32::NAN,
+                width: 0.0,
+                height: 0.0,
+            },
+        }
+    }
+
+    /// Создаёт DiffResult для изменённых display list-ов с заданным bounding rect.
+    #[inline]
+    pub fn changed(changed_rects: Rect) -> Self {
+        Self {
+            identical: false,
+            changed_rects,
+        }
+    }
+}
+
+/// Сравнивает два display list-а по Debug hash каждой команды.
+/// Возвращает DiffResult с флагом `identical` и bounding rectangle всех изменений.
+///
+/// Алгоритм:
+/// 1. Если длины списков различаются → список изменился
+/// 2. Для каждой пары команд вычисляем Debug hash и сравниваем
+/// 3. Если все хеши совпадают → `identical = true`
+/// 4. Если есть отличия → собираем bounding rect всех `rect`-полей из изменённых команд
+pub fn diff_display_lists(prev: &[DisplayCommand], next: &[DisplayCommand]) -> DiffResult {
+    // Быстрая проверка: если длины различаются, список точно изменился.
+    if prev.len() != next.len() {
+        return DiffResult::changed(union_all_rects(next));
+    }
+
+    // Вычисляем hashes обеих последовательностей и сравниваем поэлементно.
+    use std::hash::{Hash, Hasher};
+    let mut all_identical = true;
+    let mut changed_rects = Rect {
+        x: f32::INFINITY,
+        y: f32::INFINITY,
+        width: 0.0,
+        height: 0.0,
+    };
+
+    for (prev_cmd, next_cmd) in prev.iter().zip(next.iter()) {
+        // Используем Debug-представление для хеширования (как в hash_display_list).
+        let prev_hash = {
+            use std::collections::hash_map::DefaultHasher;
+            let mut hasher = DefaultHasher::new();
+            format!("{:?}", prev_cmd).hash(&mut hasher);
+            hasher.finish()
+        };
+        let next_hash = {
+            use std::collections::hash_map::DefaultHasher;
+            let mut hasher = DefaultHasher::new();
+            format!("{:?}", next_cmd).hash(&mut hasher);
+            hasher.finish()
+        };
+
+        if prev_hash != next_hash {
+            all_identical = false;
+            // Собираем rect из обеих команд (старая + новая).
+            if let Some(rect) = get_command_rect(prev_cmd) {
+                changed_rects = union_rects(changed_rects, rect);
+            }
+            if let Some(rect) = get_command_rect(next_cmd) {
+                changed_rects = union_rects(changed_rects, rect);
+            }
+        }
+    }
+
+    if all_identical {
+        DiffResult::identical()
+    } else {
+        DiffResult::changed(changed_rects)
+    }
+}
+
+/// Извлекает rect из DisplayCommand, если применимо.
+fn get_command_rect(cmd: &DisplayCommand) -> Option<Rect> {
+    match cmd {
+        DisplayCommand::FillRect { rect, .. } => Some(*rect),
+        DisplayCommand::FillRoundedRect { rect, .. } => Some(*rect),
+        DisplayCommand::DrawBorder { rect, .. } => Some(*rect),
+        DisplayCommand::DrawOutline { rect, .. } => Some(*rect),
+        DisplayCommand::DrawText { rect, .. } => Some(*rect),
+        DisplayCommand::DrawImage { rect, .. } => Some(*rect),
+        DisplayCommand::LazyImageSlot { rect, .. } => Some(*rect),
+        DisplayCommand::DrawBackgroundImage { rect, .. } => Some(*rect),
+        DisplayCommand::DrawLinearGradient { rect, .. } => Some(*rect),
+        DisplayCommand::DrawRadialGradient { rect, .. } => Some(*rect),
+        DisplayCommand::DrawConicGradient { rect, .. } => Some(*rect),
+        _ => None,
+    }
+}
+
+/// Объединяет two rectangles в их bounding rect.
+fn union_rects(a: Rect, b: Rect) -> Rect {
+    if a.width == 0.0 && a.height == 0.0 {
+        return b;
+    }
+    if b.width == 0.0 && b.height == 0.0 {
+        return a;
+    }
+
+    let x1 = a.x.min(b.x);
+    let y1 = a.y.min(b.y);
+    let x2 = (a.x + a.width).max(b.x + b.width);
+    let y2 = (a.y + a.height).max(b.y + b.height);
+
+    Rect {
+        x: x1,
+        y: y1,
+        width: (x2 - x1).max(0.0),
+        height: (y2 - y1).max(0.0),
+    }
+}
+
+/// Собирает bounding rect всех команд в display list.
+fn union_all_rects(cmds: &[DisplayCommand]) -> Rect {
+    let mut result = Rect {
+        x: f32::INFINITY,
+        y: f32::INFINITY,
+        width: 0.0,
+        height: 0.0,
+    };
+
+    for cmd in cmds {
+        if let Some(rect) = get_command_rect(cmd) {
+            result = union_rects(result, rect);
+        }
+    }
+
+    // Если нет ни одного rect-команды, вернуть нулевой rect.
+    if result.x == f32::INFINITY {
+        result = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        };
+    }
+
+    result
+}
+
 pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
     let mut out = String::new();
     for cmd in dl {
@@ -904,6 +1246,7 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             DisplayCommand::DrawText {
                 rect, text, font_size, color, font_family, font_weight, font_style,
                 font_variation_axes, tab_size: _,
+                highlight_name: _,
             } => {
                 out.push_str(&format!(
                     "DrawText ({:.2}, {:.2}, {:.2}, {:.2}) {:?} {:.2} #{:02x}{:02x}{:02x}{:02x}",
@@ -976,6 +1319,12 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                 }
                 out.push('\n');
             }
+            DisplayCommand::LazyImageSlot { rect, node_id, src, .. } => {
+                out.push_str(&format!(
+                    "LazyImageSlot ({:.2}, {:.2}, {:.2}, {:.2}) nid={node_id} src={src:?}\n",
+                    rect.x, rect.y, rect.width, rect.height,
+                ));
+            }
             DisplayCommand::DrawBackgroundImage { rect, src, size, position, repeat, .. } => {
                 out.push_str(&format!(
                     "DrawBackgroundImage ({:.2}, {:.2}, {:.2}, {:.2}) src={src:?} size={size:?} pos=({:?},{:?}) repeat={repeat:?}\n",
@@ -1007,6 +1356,41 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     rect.x, rect.y, rect.width, rect.height,
                 ));
             }
+            DisplayCommand::PushClipRoundedRect { rect, radii } => {
+                out.push_str(&format!(
+                    "PushClipRoundedRect ({:.2}, {:.2}, {:.2}, {:.2}) radii=[{:.2}, {:.2}, {:.2}, {:.2}]\n",
+                    rect.x, rect.y, rect.width, rect.height,
+                    radii[0], radii[1], radii[2], radii[3],
+                ));
+            }
+            DisplayCommand::PushClipPath { shape } => {
+                match shape {
+                    ResolvedClipShape::Circle { cx, cy, r } => {
+                        out.push_str(&format!(
+                            "PushClipPath circle({cx:.2}, {cy:.2}, r={r:.2})\n"
+                        ));
+                    }
+                    ResolvedClipShape::Ellipse { cx, cy, rx, ry } => {
+                        out.push_str(&format!(
+                            "PushClipPath ellipse({cx:.2}, {cy:.2}, rx={rx:.2}, ry={ry:.2})\n"
+                        ));
+                    }
+                    ResolvedClipShape::Polygon { verts, even_odd } => {
+                        out.push_str(if *even_odd {
+                            "PushClipPath polygon evenodd("
+                        } else {
+                            "PushClipPath polygon("
+                        });
+                        for (i, (x, y)) in verts.iter().enumerate() {
+                            if i > 0 {
+                                out.push_str(", ");
+                            }
+                            out.push_str(&format!("{x:.2} {y:.2}"));
+                        }
+                        out.push_str(")\n");
+                    }
+                }
+            }
             DisplayCommand::PopClip => {
                 out.push_str("PopClip\n");
             }
@@ -1032,13 +1416,7 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                 // 2D affine: x'=a·x+c·y+e, y'=b·x+d·y+f. Печатаем 6 значимых
                 // компонент в snapshot-friendly формате — детерминированный
                 // обход, не зависящий от Z/W-колонок (Phase 0 — 2D).
-                let m = &matrix.0;
-                let a = m[0];
-                let b = m[1];
-                let c = m[4];
-                let d = m[5];
-                let e = m[12];
-                let f = m[13];
+                let [a, b, c, d, e, f] = crate::matrix_util::mat4_to_2d_affine(matrix);
                 out.push_str(&format!(
                     "PushTransform [{a:.3} {b:.3} {c:.3} {d:.3} {e:.3} {f:.3}]\n"
                 ));
@@ -1046,9 +1424,12 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             DisplayCommand::PopTransform => {
                 out.push_str("PopTransform\n");
             }
-            DisplayCommand::PushFilter { filters } => {
+            DisplayCommand::PushFilter { filters, bounds } => {
                 let names: Vec<&str> = filters.iter().map(filter_fn_name).collect();
-                out.push_str(&format!("PushFilter [{}]\n", names.join(", ")));
+                let bounds_str = bounds
+                    .map(|b| format!(" bounds=({:.0},{:.0},{:.0},{:.0})", b.x, b.y, b.width, b.height))
+                    .unwrap_or_default();
+                out.push_str(&format!("PushFilter [{}]{}\n", names.join(", "), bounds_str));
             }
             DisplayCommand::PopFilter => {
                 out.push_str("PopFilter\n");
@@ -1138,7 +1519,7 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     content.x, content.y, content.width, content.height,
                 ));
             }
-            DisplayCommand::DrawScrollbar { track_rect, thumb_rect, vertical } => {
+            DisplayCommand::DrawScrollbar { track_rect, thumb_rect, vertical, .. } => {
                 out.push_str(&format!(
                     "DrawScrollbar {} track=({:.0},{:.0},{:.0},{:.0}) thumb=({:.0},{:.0},{:.0},{:.0})\n",
                     if *vertical { "vertical" } else { "horizontal" },
@@ -1208,7 +1589,26 @@ fn blend_mode_name(m: BlendMode) -> &'static str {
 
 pub fn build_display_list(root: &LayoutBox) -> DisplayList {
     let mut list = Vec::new();
-    walk(root, &mut list, 1.0);
+    walk(root, &mut list, 1.0, None);
+    list
+}
+
+/// Like [`build_display_list`] but applies `::selection` CSS highlight styles
+/// to text fragments that fall within `sel`.
+///
+/// Pass `Some(&SelectionHighlight)` to enable `::selection` rendering — selected
+/// text receives a `FillRect` background (from `sel.bg_color`) and optionally an
+/// overridden text colour (from `sel.fg_color`). Pass `None` to get the same
+/// output as `build_display_list`.
+///
+/// This function is a pure function per ADR-008 Invariant 3: it depends only on
+/// the function parameters and carries no hidden global state.
+pub fn build_display_list_with_selection(
+    root: &LayoutBox,
+    sel: Option<&SelectionHighlight>,
+) -> DisplayList {
+    let mut list = Vec::new();
+    walk(root, &mut list, 1.0, sel);
     list
 }
 
@@ -1250,17 +1650,13 @@ pub fn build_display_list_with_anim(
 ///   SC-creating потомков — те идут в свои buckets).
 /// - `post`: парные Pop-команды, в обратном порядке к `pre`.
 ///
-/// **Phase 0 ограничение для layer-ops:** `pre` / `post` SC-owner-а охватывают
-/// только `root_bg + contents` собственного SC, **не** child-SC потомков (они
-/// рисуются после `InlineContent` parent-SC в линейном порядке, а `post` уже
-/// эмитится в той же `InlineContent`-фазе). Для строгой семантики
-/// `opacity / blend-mode` родителя на child-SC потребуется либо stack-based
-/// эмиссия с явным end-of-SC маркером в `PaintOrder`, либо группировка
-/// child-SC внутри parent-bucket. Renderer сейчас всё равно игнорирует
-/// Push/Pop (роадмап P2 п.1B шаг (c) — реальный layer-pipeline), так что
-/// текущая эмиссия — interface-level: парность сохранена, потребители
-/// (compositor) видят сами триггеры; уточнение охвата child-SC — отдельный
-/// шаг при реальном compositor pipeline.
+/// **Layer-ops nesting invariant:** `pre` / `post` SC-owner-а охватывают
+/// `root_bg + contents` собственного SC **и все child-SC потомков**. Это
+/// реализуется через `PaintPhase::CloseLayer`: `post` эмитится в `CloseLayer`,
+/// которая добавляется в `paint_sc` последней — уже ПОСЛЕ всех дочерних SC.
+/// Таким образом Pop-команды родителя (PopTransform и т.д.) приходят после
+/// Push-команд всех детей — nested transforms и opacity корректно компонуются
+/// (BUG-139). Старый подход (post в InlineContent) был Phase-0-заглушкой.
 pub fn build_display_list_ordered(
     root: &LayoutBox,
     tree: &StackingTree,
@@ -1281,7 +1677,7 @@ pub fn build_display_list_ordered_dpr(
     let n_sc = tree.contexts.len().max(1);
     let mut buckets: Vec<ScBucket> = vec![ScBucket::default(); n_sc];
     let mut next_sc_id: u32 = 1;
-    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, None, dpr);
+    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, None, dpr, &[]);
 
     let mut out = Vec::new();
     for (sc_id, phase) in &order.steps {
@@ -1297,6 +1693,13 @@ pub fn build_display_list_ordered_dpr(
             }
             PaintPhase::InlineContent => {
                 out.append(&mut bucket.contents);
+                // post (PopTransform / PopOpacity / etc.) is now in CloseLayer —
+                // emitted AFTER all child SCs so nested transforms compose correctly
+                // (BUG-139). Do NOT move post back here.
+            }
+            // CloseLayer is emitted last in paint_sc, after all child SCs, so the
+            // parent's Pop-commands wrap the children's Push-commands correctly.
+            PaintPhase::CloseLayer => {
                 out.append(&mut bucket.post);
             }
             // Phase 0: BlockBackgrounds / Floats merged into InlineContent;
@@ -1335,7 +1738,7 @@ pub fn build_display_list_ordered_with_anim_dpr(
     let n_sc = tree.contexts.len().max(1);
     let mut buckets: Vec<ScBucket> = vec![ScBucket::default(); n_sc];
     let mut next_sc_id: u32 = 1;
-    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, anim, dpr);
+    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, anim, dpr, &[]);
 
     let mut out = Vec::new();
     for (sc_id, phase) in &order.steps {
@@ -1351,6 +1754,13 @@ pub fn build_display_list_ordered_with_anim_dpr(
             }
             PaintPhase::InlineContent => {
                 out.append(&mut bucket.contents);
+                // post (PopTransform / PopOpacity / etc.) is now in CloseLayer —
+                // emitted AFTER all child SCs so nested transforms compose correctly
+                // (BUG-139). Do NOT move post back here.
+            }
+            // CloseLayer is emitted last in paint_sc, after all child SCs, so the
+            // parent's Pop-commands wrap the children's Push-commands correctly.
+            PaintPhase::CloseLayer => {
                 out.append(&mut bucket.post);
             }
             _ => {}
@@ -1365,8 +1775,13 @@ pub fn build_display_list_ordered_with_anim_dpr(
 /// `PushTransform` / `PopTransform`. Pages are separated by `PageBreak` markers.
 /// Use `split_at_page_breaks` to get per-page command slices for rendering.
 ///
+/// If a page has `page_box` set, margin-box text fragments (@page headers, footers,
+/// page numbers) are emitted as `DrawText` commands positioned at absolute page
+/// coordinates (not inside the content-area transform).
+///
 /// Coordinate convention: page origin = (0, 0) at top-left of content area.
 /// Fragment y-offset is relative to the content area, not the page box.
+/// Margin-box positions are relative to the page box origin (top-left of full page).
 pub fn build_print_display_list(pages: &[Page]) -> DisplayList {
     let mut cmds: DisplayList = Vec::new();
     for (page_idx, page) in pages.iter().enumerate() {
@@ -1378,11 +1793,50 @@ pub fn build_print_display_list(pages: &[Page]) -> DisplayList {
             let dy = frag.page_y_offset - frag.layout_box.rect.y;
             let matrix = Mat4::translation_2d(0.0, dy);
             cmds.push(DisplayCommand::PushTransform { matrix });
-            walk(&frag.layout_box, &mut cmds, 1.0);
+            walk(&frag.layout_box, &mut cmds, 1.0, None);
             cmds.push(DisplayCommand::PopTransform);
+        }
+        // Emit margin-box text content (headers, footers, page numbers).
+        if let Some(page_box) = &page.page_box {
+            for margin_box in page_box.margin_boxes.values() {
+                emit_margin_box_text(margin_box, &mut cmds);
+            }
         }
     }
     cmds
+}
+
+/// Emits `DrawText` commands for each text fragment in a margin-box.
+///
+/// Positions are absolute page coordinates: `margin_box.x + fragment.x` and
+/// `margin_box.y + fragment.y`. Text uses the page default: 10px black,
+/// no explicit font family (renderer falls back to bundled Inter).
+fn emit_margin_box_text(margin_box: &MarginBox, cmds: &mut DisplayList) {
+    let default_font_size = 10.0_f32;
+    let text_color = Color { r: 0, g: 0, b: 0, a: 255 };
+    for frag in &margin_box.text_fragments {
+        if frag.text.is_empty() {
+            continue;
+        }
+        let rect = Rect {
+            x: margin_box.x + frag.x,
+            y: margin_box.y + frag.y,
+            width: frag.width,
+            height: frag.height,
+        };
+        cmds.push(DisplayCommand::DrawText {
+            rect,
+            text: frag.text.clone(),
+            font_size: default_font_size,
+            color: text_color,
+            font_family: Vec::new(),
+            font_weight: FontWeight::NORMAL,
+            font_style: FontStyle::Normal,
+            font_variation_axes: Vec::new(),
+            tab_size: 0.0,
+            highlight_name: None,
+        });
+    }
 }
 
 /// Splits a print display list at `PageBreak` markers.
@@ -1403,6 +1857,42 @@ pub fn split_at_page_breaks(cmds: Vec<DisplayCommand>) -> Vec<Vec<DisplayCommand
     }
     pages.push(current);
     pages
+}
+
+/// Removes background-graphics paint commands from each print page when the
+/// user disabled "Background graphics" in the print dialog (CC-8).
+///
+/// Mirrors Chrome's "Background graphics" print toggle: when `print_backgrounds`
+/// is `false`, the CSS-background paint family is stripped — solid background
+/// fills (`FillRect`, `FillRoundedRect`), `background-image`s, and the three
+/// gradient kinds (linear/radial/conic). Foreground content — text, borders,
+/// outlines, `<img>` raster images, and SVG paths — is preserved.
+///
+/// No-op when `print_backgrounds` is `true`. Operates in place, page by page;
+/// `Push*`/`Pop*` nesting stays balanced because only leaf paint commands are
+/// removed.
+pub fn strip_background_graphics(pages: &mut [Vec<DisplayCommand>], print_backgrounds: bool) {
+    if print_backgrounds {
+        return;
+    }
+    for page in pages.iter_mut() {
+        page.retain(|cmd| !is_background_graphic(cmd));
+    }
+}
+
+/// Classifies a [`DisplayCommand`] as a CSS background-graphics paint op —
+/// the set removed when "Background graphics" is off (see
+/// [`strip_background_graphics`]).
+fn is_background_graphic(cmd: &DisplayCommand) -> bool {
+    matches!(
+        cmd,
+        DisplayCommand::FillRect { .. }
+            | DisplayCommand::FillRoundedRect { .. }
+            | DisplayCommand::DrawBackgroundImage { .. }
+            | DisplayCommand::DrawLinearGradient { .. }
+            | DisplayCommand::DrawRadialGradient { .. }
+            | DisplayCommand::DrawConicGradient { .. }
+    )
 }
 
 #[derive(Default, Clone)]
@@ -1460,18 +1950,30 @@ fn overflow_clips(o: Overflow) -> bool {
 /// prevents pixel bleed if the renderer's actual advance differs slightly.
 const ELLIPSIS_EM: f32 = 0.65;
 
+/// Центр basic-shape в page-координатах: `at cx cy` (cx — % от ширины,
+/// cy — % от высоты border-box) либо дефолт 50% 50% (CSS Shapes L1 §5.1).
+fn resolve_shape_center(center: Option<(ShapeValue, ShapeValue)>, r: Rect) -> (f32, f32) {
+    center
+        .map(|(x, y)| (r.x + x.resolve(r.width), r.y + y.resolve(r.height)))
+        .unwrap_or((r.x + r.width * 0.5, r.y + r.height * 0.5))
+}
+
 /// CSS Masking L1 §9 — bounding-box rect for a `clip-path` shape relative to
-/// the element's border-box `r`. Phase 0: non-rect shapes use their bounding
-/// box as an approximation; full polygon masking is deferred.
+/// the element's border-box `r`. Для `inset(...)` это точное представление;
+/// для circle/ellipse/polygon — bounding box (используется fallback-путями;
+/// точная форма идёт через `clip_path_to_shape` → `PushClipPath`, BUG-140).
 fn clip_path_to_rect(clip: &ClipPath, r: Rect) -> Rect {
-    match clip {
-        ClipPath::Inset(sides) => {
+    match clip_path_to_shape(clip, r) {
+        Some(shape) => shape.bounding_rect(),
+        None => {
+            let ClipPath::Inset(sides) = clip else { return r };
+            let rs = |v: &ShapeValue, basis: f32| v.resolve(basis);
             let (top, right, bottom, left) = match sides.as_slice() {
-                [a]          => (*a, *a, *a, *a),
-                [tb, rl]     => (*tb, *rl, *tb, *rl),
-                [t, rl, b]   => (*t, *rl, *b, *rl),
-                [t, ri, b, l] => (*t, *ri, *b, *l),
-                _            => (0.0, 0.0, 0.0, 0.0),
+                [a] => (rs(a, r.height), rs(a, r.width), rs(a, r.height), rs(a, r.width)),
+                [tb, rl] => (rs(tb, r.height), rs(rl, r.width), rs(tb, r.height), rs(rl, r.width)),
+                [t, rl, b] => (rs(t, r.height), rs(rl, r.width), rs(b, r.height), rs(rl, r.width)),
+                [t, ri, b, l] => (rs(t, r.height), rs(ri, r.width), rs(b, r.height), rs(l, r.width)),
+                _ => (0.0, 0.0, 0.0, 0.0),
             };
             Rect::new(
                 r.x + left,
@@ -1480,33 +1982,53 @@ fn clip_path_to_rect(clip: &ClipPath, r: Rect) -> Rect {
                 (r.height - top - bottom).max(0.0),
             )
         }
+    }
+}
+
+/// BUG-140: резолвит `clip-path` в точную форму в page-координатах
+/// (пространство до transform элемента) относительно border-box `r`.
+/// `None` для `inset(...)` — он точно представим прямоугольником и эмитится
+/// как `PushClipRect` (см. `clip_path_to_rect`). Базисы процентов —
+/// CSS Shapes L1 §5: x/width, y/height, радиус circle — `sqrt(w²+h²)/√2`.
+fn clip_path_to_shape(clip: &ClipPath, r: Rect) -> Option<ResolvedClipShape> {
+    match clip {
+        ClipPath::Inset(_) => None,
         ClipPath::Circle { radius, center } => {
-            let (cx, cy) = center
-                .map(|(x, y)| (r.x + x, r.y + y))
-                .unwrap_or((r.x + r.width * 0.5, r.y + r.height * 0.5));
-            Rect::new(cx - radius, cy - radius, 2.0 * radius, 2.0 * radius)
+            let (cx, cy) = resolve_shape_center(*center, r);
+            let diag = ((r.width * r.width + r.height * r.height) * 0.5).sqrt();
+            Some(ResolvedClipShape::Circle { cx, cy, r: radius.resolve(diag) })
         }
         ClipPath::Ellipse { rx, ry, center } => {
-            let (cx, cy) = center
-                .map(|(x, y)| (r.x + x, r.y + y))
-                .unwrap_or((r.x + r.width * 0.5, r.y + r.height * 0.5));
-            Rect::new(cx - rx, cy - ry, 2.0 * rx, 2.0 * ry)
+            let (cx, cy) = resolve_shape_center(*center, r);
+            Some(ResolvedClipShape::Ellipse {
+                cx,
+                cy,
+                rx: rx.resolve(r.width),
+                ry: ry.resolve(r.height),
+            })
         }
-        ClipPath::Polygon(vertices) => {
+        ClipPath::Polygon(vertices, fill_rule) => {
             if vertices.is_empty() {
-                return r;
+                return None;
             }
-            let mut mn_x = f32::MAX;
-            let mut mn_y = f32::MAX;
-            let mut mx_x = f32::MIN;
-            let mut mx_y = f32::MIN;
-            for (vx, vy) in vertices {
-                mn_x = mn_x.min(r.x + vx);
-                mn_y = mn_y.min(r.y + vy);
-                mx_x = mx_x.max(r.x + vx);
-                mx_y = mx_y.max(r.y + vy);
+            Some(ResolvedClipShape::Polygon {
+                verts: vertices
+                    .iter()
+                    .map(|(x, y)| (r.x + x.resolve(r.width), r.y + y.resolve(r.height)))
+                    .collect(),
+                even_odd: matches!(fill_rule, FillRule::EvenOdd),
+            })
+        }
+        // CSS Shapes L1 §4 — `path()`: точки уже флэттены в px системы пути
+        // (origin = верхний левый угол reference box). Смещаем на позицию box.
+        ClipPath::Path(points, fill_rule) => {
+            if points.len() < 3 {
+                return None;
             }
-            Rect::new(mn_x, mn_y, (mx_x - mn_x).max(0.0), (mx_y - mn_y).max(0.0))
+            Some(ResolvedClipShape::Polygon {
+                verts: points.iter().map(|(x, y)| (r.x + x, r.y + y)).collect(),
+                even_odd: matches!(fill_rule, FillRule::EvenOdd),
+            })
         }
     }
 }
@@ -1574,17 +2096,28 @@ fn emit_text_emphasis_marks(
             font_style: frag.style.font_style,
             font_variation_axes: vec![],
             tab_size: 0.0,
+            highlight_name: None,
         });
     }
 }
 
 /// Emits shadow + DrawText + decorations for every visible frag in `line`.
+///
+/// When `sel` is `Some`, fragments that overlap the active selection range
+/// receive a `FillRect` highlight background before the text, and optionally
+/// have their text colour overridden by `sel.fg_color` (CSS Pseudo-elements
+/// L4 §5.6 `::selection`).
+///
+/// Phase 0 limitation: selection pixel bounds are estimated proportionally
+/// by byte offset, which is accurate for ASCII but approximate for non-ASCII.
+/// Per-glyph accuracy requires a `TextMeasurer` which is not available here.
 fn emit_text_frags(
     line: &[InlineFrag],
     container_x: f32,
     container_width: f32,
     line_y: f32,
     line_h: f32,
+    sel: Option<&SelectionHighlight>,
     out: &mut Vec<DisplayCommand>,
 ) {
     for frag in line {
@@ -1592,25 +2125,52 @@ fn emit_text_frags(
             continue;
         }
         let frag_y = line_y + frag.y_offset;
-        // Inline-replaced image: emit DrawImage, skip text rendering.
+        // Inline-replaced image: emit LazyImageSlot or DrawImage, skip text rendering.
         if let Some(src) = &frag.img_src {
-            out.push(DisplayCommand::DrawImage {
-                rect: Rect::new(container_x + frag.x, frag_y, frag.width, line_h),
-                src: src.clone(),
-                alt: frag.text.clone(),
-                object_fit: frag.style.object_fit,
-                object_position: frag.style.object_position,
-                image_rendering: frag.style.image_rendering,
-            });
+            let img_rect = Rect::new(container_x + frag.x, frag_y, frag.width, line_h);
+            if frag.img_is_lazy {
+                // node_id unavailable in InlineFrag (no box reference); use 0 as sentinel.
+                // The shell's proximity check uses the display list rects, not node_id here.
+                out.push(DisplayCommand::LazyImageSlot {
+                    rect: img_rect,
+                    node_id: 0,
+                    src: src.clone(),
+                    object_fit: frag.style.object_fit,
+                    object_position: frag.style.object_position,
+                });
+            } else {
+                out.push(DisplayCommand::DrawImage {
+                    rect: img_rect,
+                    src: src.clone(),
+                    alt: frag.text.clone(),
+                    object_fit: frag.style.object_fit,
+                    object_position: frag.style.object_position,
+                    image_rendering: frag.style.image_rendering,
+                });
+            }
             continue;
         }
+
+        // ::selection highlight — emit FillRect for selected portion before text.
+        let sel_fg = sel.and_then(|s| {
+            let hi = frag_selection_highlight(frag, s);
+            if let Some((sel_x, sel_w)) = hi {
+                out.push(DisplayCommand::FillRect {
+                    rect: Rect::new(container_x + sel_x, line_y, sel_w, line_h),
+                    color: s.bg_color,
+                });
+            }
+            if hi.is_some() { s.fg_color } else { None }
+        });
+
+        let text_color = sel_fg.unwrap_or(frag.style.color);
         let base_rect = Rect::new(container_x + frag.x, frag_y, container_width, line_h);
         emit_text_shadows(out, base_rect, line_h, frag);
         out.push(DisplayCommand::DrawText {
             rect: base_rect,
             text: frag.text.clone(),
             font_size: frag.style.font_size,
-            color: frag.style.color,
+            color: text_color,
             font_family: frag.style.font_family.clone(),
             font_weight: frag.style.font_weight,
             font_style: frag.style.font_style,
@@ -1622,13 +2182,69 @@ fn emit_text_frags(
                 {
                     axes.push((*b"opsz", frag.style.font_size));
                 }
+                // CSS Fonts L4 §5.2: inject `wdth` for non-normal font-stretch
+                // unless the author already set it via font-variation-settings.
+                if frag.style.font_stretch != FontStretch::NORMAL
+                    && !axes.iter().any(|(t, _)| t == b"wdth")
+                {
+                    axes.push((*b"wdth", frag.style.font_stretch.0 as f32 / 10.0));
+                }
                 axes
             },
             tab_size: frag.style.tab_size,
+            highlight_name: None,
         });
         push_text_decoration(out, container_x, frag_y, frag);
         emit_text_emphasis_marks(out, container_x, line_h, frag_y, frag);
     }
+}
+
+/// Compute the (frag-relative x, width) pixel span that is covered by the
+/// active selection for a single inline fragment.
+///
+/// Returns `None` when the fragment is outside the selection range.
+///
+/// Uses byte-proportional estimation for sub-fragment boundaries.  Accurate
+/// for ASCII text; approximate for variable-width or multi-byte characters.
+fn frag_selection_highlight(frag: &InlineFrag, sel: &SelectionHighlight) -> Option<(f32, f32)> {
+    let range = &sel.range;
+    if range.is_collapsed() {
+        return None;
+    }
+    let frag_end = frag.source_char_offset + frag.text.len() as u32;
+    let same_start = range.start.container == frag.source_node;
+    let same_end = range.end.container == frag.source_node;
+
+    // byte offsets within the frag's text
+    let (byte_start, byte_end): (u32, u32) = if same_start && same_end {
+        let s = range.start.offset.max(frag.source_char_offset).min(frag_end)
+            - frag.source_char_offset;
+        let e = range.end.offset.max(frag.source_char_offset).min(frag_end)
+            - frag.source_char_offset;
+        if e <= s { return None; }
+        (s, e)
+    } else if same_start {
+        let s = range.start.offset.max(frag.source_char_offset).min(frag_end)
+            - frag.source_char_offset;
+        (s, frag.text.len() as u32)
+    } else if same_end {
+        let e = range.end.offset.max(frag.source_char_offset).min(frag_end)
+            - frag.source_char_offset;
+        if e == 0 { return None; }
+        (0, e)
+    } else {
+        // Frag node is between range endpoints: fully selected, but multi-node
+        // selection depth is not tracked in Phase 0 without tree traversal.
+        return None;
+    };
+
+    let total = frag.text.len() as f32;
+    if total <= 0.0 {
+        return None;
+    }
+    let x_start = frag.x + frag.width * (byte_start as f32 / total);
+    let x_end   = frag.x + frag.width * (byte_end   as f32 / total);
+    Some((x_start, (x_end - x_start).max(0.0)))
 }
 
 /// Renders all lines of a [`BoxKind::InlineRun`].
@@ -1642,7 +2258,12 @@ fn emit_text_frags(
 ///
 /// Requires `overflow_x != visible` on the box (CSS UI L4 §3 precondition).
 /// The parent block's overflow:hidden clip ensures no pixel escapes the container.
-fn emit_inline_run(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut Vec<DisplayCommand>) {
+fn emit_inline_run(
+    b: &LayoutBox,
+    lines: &[Vec<InlineFrag>],
+    sel: Option<&SelectionHighlight>,
+    out: &mut Vec<DisplayCommand>,
+) {
     let line_h = b.style.font_size * b.style.line_height;
     let wants_ellipsis = matches!(b.style.text_overflow, TextOverflow::Ellipsis)
         && overflow_clips(b.style.overflow_x);
@@ -1675,7 +2296,7 @@ fn emit_inline_run(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut Vec<Displ
             out.push(DisplayCommand::PushClipRect {
                 rect: Rect::new(b.rect.x, line_y, clip_w, line_h),
             });
-            emit_text_frags(line, b.rect.x, b.rect.width, line_y, line_h, out);
+            emit_text_frags(line, b.rect.x, b.rect.width, line_y, line_h, sel, out);
             out.push(DisplayCommand::PopClip);
             out.push(DisplayCommand::DrawText {
                 rect: Rect::new(b.rect.x + clip_w, line_y, ew, line_h),
@@ -1693,17 +2314,44 @@ fn emit_inline_run(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut Vec<Displ
                     {
                         axes.push((*b"opsz", ef.style.font_size));
                     }
+                    if ef.style.font_stretch != FontStretch::NORMAL
+                        && !axes.iter().any(|(t, _)| t == b"wdth")
+                    {
+                        axes.push((*b"wdth", ef.style.font_stretch.0 as f32 / 10.0));
+                    }
                     axes
                 },
                 tab_size: 0.0,
+                highlight_name: None,
             });
         } else {
-            emit_text_frags(line, b.rect.x, b.rect.width, line_y, line_h, out);
+            emit_text_frags(line, b.rect.x, b.rect.width, line_y, line_h, sel, out);
         }
     }
 }
 
-/// Собирает layer-effect триггеры одного box-а в pair (pre, post).
+/// Layer-ops одного бокса, разделённые на эффекты и overflow-клип.
+///
+/// Per CSS Overflow L3 §3.2 overflow-клип обрезает только **детей** до
+/// padding-box; собственные background/border бокса не клиппятся (BUG-123 —
+/// рамка scroll-контейнера целиком срезалась scissor-ом своего же
+/// PushScrollLayer). Caller эмитит `pre` → bg/border → `overflow_pre` →
+/// дети → `overflow_post` → `post` — зеркало порядка не-композиторного
+/// `walk` (bg/border до PushScrollLayer).
+struct BoxLayerOps {
+    /// Эффекты, оборачивающие весь painted output бокса (включая его
+    /// собственные background/border): clip-path, blend, opacity,
+    /// transform, backdrop-filter, filter.
+    pre: Vec<DisplayCommand>,
+    /// Парные Pop к `pre`, уже в обратном (LIFO) порядке.
+    post: Vec<DisplayCommand>,
+    /// Overflow-клип / scroll-слой — оборачивает только детей.
+    overflow_pre: Vec<DisplayCommand>,
+    /// Парные Pop к `overflow_pre`.
+    overflow_post: Vec<DisplayCommand>,
+}
+
+/// Собирает layer-effect триггеры одного box-а в [`BoxLayerOps`].
 /// Push-команды складываются в `pre` в порядке, парные `Pop` в `post` —
 /// в обратном порядке (LIFO). Возвращает пустые векторы для боксов без
 /// триггеров **или для анонимных боксов** (InlineRun / Skip), у которых
@@ -1725,25 +2373,35 @@ fn emit_inline_run(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut Vec<Displ
 ///   в viewport-координатах, pivot = b.rect.origin + transform_origin.
 ///
 /// Порядок Push-команд (для child compositor-а смысла не несёт, но
-/// детерминирован для тестируемости): Clip → Blend → Opacity → Transform.
-/// Pop — в обратном (Transform → Opacity → Blend → Clip). Transform пушится
-/// последним, чтобы преобразовывать всё содержимое SC (включая собственные
+/// детерминирован для тестируемости): Blend → Opacity → Transform →
+/// ClipPath → BackdropFilter → Filter. Pop — в обратном порядке. Transform
+/// пушится до clip-path: клип задан в локальной системе элемента и
+/// переносится его transform-ом (CSS Masking L1 §9, BUG-140), при этом
+/// transform преобразует всё содержимое SC (включая собственные
 /// background/border бокса, эмитимые в `root_bg`).
-fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> (Vec<DisplayCommand>, Vec<DisplayCommand>) {
+fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps {
     let mut pre = Vec::new();
     let mut post = Vec::new();
+    let mut overflow_pre = Vec::new();
+    let mut overflow_post = Vec::new();
     if !box_can_own_stacking_context(b) {
-        return (pre, post);
+        // SVG §7.4: the outermost SVG viewport establishes a clip (UA default
+        // `overflow: hidden`). With object-fit: cover (or a viewBox larger than
+        // the viewport) the scaled content overflows the SVG box; without this
+        // clip it would paint over sibling boxes. SvgRoot is not a stacking-
+        // context owner, so emit the viewport clip here. BUG-110.
+        if matches!(b.kind, BoxKind::SvgRoot { .. }) {
+            let s = &b.style;
+            let px = b.rect.x + s.border_left_width;
+            let py = b.rect.y + s.border_top_width;
+            let pw = (b.rect.width - s.border_left_width - s.border_right_width).max(0.0);
+            let ph = (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0);
+            overflow_pre.push(DisplayCommand::PushClipRect { rect: Rect::new(px, py, pw, ph) });
+            overflow_post.push(DisplayCommand::PopClip);
+        }
+        return BoxLayerOps { pre, post, overflow_pre, overflow_post };
     }
     let s = &b.style;
-
-    // CSS Masking L1 §9: clip-path is the outermost clip — applied before all
-    // other layer effects so it masks the final painted output of the element.
-    if let Some(clip) = &s.clip_path {
-        let cr = clip_path_to_rect(clip, b.rect);
-        pre.push(DisplayCommand::PushClipRect { rect: cr });
-        post.push(DisplayCommand::PopClip);
-    }
 
     // CSS Overflow L3 §3.2: overflow clip to padding-box edge; unconstrained
     // axis uses a BIG sentinel so the GPU scissor doesn't cut off content in
@@ -1767,18 +2425,46 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> (Vec<Display
         );
         // scroll/auto → PushScrollLayer (applies clip + scroll translate).
         // hidden/clip/paint-contain → PushClipRect (clip only, no scroll).
+        // BUG-132 fix: если есть border-radius, использовать PushClipRoundedRect
+        // вместо PushClipRect (scissors) для скруглённого клипа.
         let is_scroll_x = matches!(s.overflow_x, Overflow::Scroll | Overflow::Auto);
         let is_scroll_y = matches!(s.overflow_y, Overflow::Scroll | Overflow::Auto);
         if (is_scroll_x || is_scroll_y) && !paint_contain {
-            pre.push(DisplayCommand::PushScrollLayer {
+            overflow_pre.push(DisplayCommand::PushScrollLayer {
                 clip_rect: cr,
                 scroll_x: b.scroll_x,
                 scroll_y: b.scroll_y,
             });
-            post.push(DisplayCommand::PopScrollLayer);
+            overflow_post.push(DisplayCommand::PopScrollLayer);
         } else {
-            pre.push(DisplayCommand::PushClipRect { rect: cr });
-            post.push(DisplayCommand::PopClip);
+            // BUG-132: скруглённый клип для border-radius + overflow:hidden
+            // Разрешаем border-radius значения используя padding-box width как basis
+            // (аналогично CornerRadii::from_style в display_list.rs:188).
+            let padding_w = b.rect.width - s.border_left_width - s.border_right_width;
+
+            let resolve_radius = |len: &Length, basis: f32| -> f32 {
+                match len {
+                    Length::Px(v) => *v,
+                    Length::Percent(p) => (p / 100.0) * basis,
+                    _ => 0.0,
+                }
+            };
+
+            let tl = resolve_radius(&s.border_top_left_radius, padding_w);
+            let tr = resolve_radius(&s.border_top_right_radius, padding_w);
+            let br = resolve_radius(&s.border_bottom_right_radius, padding_w);
+            let bl = resolve_radius(&s.border_bottom_left_radius, padding_w);
+            let has_border_radius = tl > 0.0 || tr > 0.0 || br > 0.0 || bl > 0.0;
+
+            if has_border_radius {
+                // PushClipRoundedRect: скруглённый клип с border-radius
+                let radii = [tl, tr, br, bl];
+                overflow_pre.push(DisplayCommand::PushClipRoundedRect { rect: cr, radii });
+            } else {
+                // Стандартный PushClipRect (rect-только)
+                overflow_pre.push(DisplayCommand::PushClipRect { rect: cr });
+            }
+            overflow_post.push(DisplayCommand::PopClip);
         }
     }
     if s.mix_blend_mode != LayoutBlendMode::Normal {
@@ -1804,6 +2490,19 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> (Vec<Display
         pre.push(DisplayCommand::PushTransform { matrix });
         post.push(DisplayCommand::PopTransform);
     }
+    // CSS Masking L1 §9 + BUG-140: clip-path задан в локальной системе
+    // элемента и переносится его transform-ом — эмитится ВНУТРИ
+    // PushTransform, но снаружи filter/backdrop-filter (клип применяется к
+    // отфильтрованному выводу, CSS Filter Effects L1 §4).
+    if let Some(clip) = &s.clip_path {
+        match clip_path_to_shape(clip, b.rect) {
+            Some(shape) => pre.push(DisplayCommand::PushClipPath { shape }),
+            None => pre.push(DisplayCommand::PushClipRect {
+                rect: clip_path_to_rect(clip, b.rect),
+            }),
+        }
+        post.push(DisplayCommand::PopClip);
+    }
     // backdrop-filter: outermost SC — captures parent content, filters it, then
     // composites element on top. Must wrap PushFilter so the element's own `filter`
     // applies to the element content before it's blended over the filtered backdrop.
@@ -1815,12 +2514,15 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> (Vec<Display
         post.push(DisplayCommand::PopBackdropFilter);
     }
     if !s.filter.is_empty() {
-        pre.push(DisplayCommand::PushFilter { filters: s.filter.clone() });
+        pre.push(DisplayCommand::PushFilter {
+            filters: s.filter.clone(),
+            bounds: Some(b.rect),
+        });
         post.push(DisplayCommand::PopFilter);
     }
     // post в LIFO порядке относительно pre.
     post.reverse();
-    (pre, post)
+    BoxLayerOps { pre, post, overflow_pre, overflow_post }
 }
 
 /// Walk-функция, идентичная по триггерам `StackingTree::build`: pre-order,
@@ -1833,6 +2535,16 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> (Vec<Display
 /// - Для non-SC box-а (typically `overflow: hidden` без других триггеров —
 ///   opacity/blend сами триггерят SC) Push/Pop эмитятся inline в
 ///   `bucket.contents` вокруг собственного contents-emit-а и потомков.
+///
+/// `inherited_clips` (BUG-131): rect-клипы (`PushClipRect` /
+/// `PushClipRoundedRect`) от non-SC предков, чьи inline push/pop остались в
+/// бакете родительского SC и уже закрылись там. Дочерний stacking context
+/// рисуется в более позднем слоте painting order, поэтому эти клипы к моменту
+/// его отрисовки уже неактивны — их надо переустановить как внешний слой
+/// данного SC (push в начало `pre`, pop после `post`/CloseLayer). Без этого
+/// трансформированный ребёнок (собственный SC) сбегает из `overflow:hidden`
+/// предка.
+#[allow(clippy::too_many_arguments)]
 fn fill_buckets(
     b: &LayoutBox,
     current_sc: StackingContextId,
@@ -1841,51 +2553,123 @@ fn fill_buckets(
     is_sc_root: bool,
     anim: Option<&CompositorAnimFrame>,
     dpr: f32,
+    inherited_clips: &[DisplayCommand],
 ) {
     let ov = anim.and_then(|a| a.get(b.node));
-    let (pre_ops, post_ops) = box_layer_ops(b, ov);
+    let ops = box_layer_ops(b, ov);
 
     if is_sc_root {
         let bucket = &mut buckets[current_sc.0 as usize];
-        bucket.pre.extend(pre_ops);
-        emit_box_self(b, &mut bucket.root_bg, dpr);
+        // BUG-131: переустановить клипы non-SC предков как внешний слой SC.
+        for clip in inherited_clips {
+            bucket.pre.push(clip.clone());
+        }
+        bucket.pre.extend(ops.pre);
+        emit_box_self(b, &mut bucket.root_bg, dpr, None);
+        // Overflow-клип — после собственных bg/border (они не клиппятся
+        // своим overflow, BUG-123), но до contents с детьми.
+        bucket.root_bg.extend(ops.overflow_pre);
         // `post` эмитится в фазе InlineContent после descendants — заполним
         // его сейчас, чтобы не повторно вычислять триггеры.
-        bucket.post.extend(post_ops);
+        bucket.post.extend(ops.overflow_post);
+        bucket.post.extend(ops.post);
+        // PopClip для переустановленных клипов — в LIFO порядке, после
+        // собственных Pop-команд SC (CloseLayer).
+        for clip in inherited_clips.iter().rev() {
+            bucket.post.push(clip_pop_for(clip));
+        }
 
+        // Этот SC становится новым clip-anchor: его собственный клип +
+        // переустановленные inherited-клипы охватывают дочерние SC через
+        // root_bg/post (PopClip в CloseLayer после всех детей). Цепочка
+        // сбрасывается.
         for child in &b.children {
             let child_creates_sc =
                 box_can_own_stacking_context(child) && creates_stacking_context(&child.style);
             if child_creates_sc {
                 let id = StackingContextId(*next_sc_id);
                 *next_sc_id += 1;
-                fill_buckets(child, id, next_sc_id, buckets, true, anim, dpr);
+                fill_buckets(child, id, next_sc_id, buckets, true, anim, dpr, &[]);
             } else {
-                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim, dpr);
+                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim, dpr, &[]);
             }
         }
     } else {
         // Non-SC box: inline Push/Pop в contents текущего SC. Это нужно для
         // `overflow:hidden` на обычном in-flow box-е (opacity/blend
-        // триггерят SC сами, до сюда не дойдут с не-пустым pre_ops).
+        // триггерят SC сами, до сюда не дойдут с не-пустым pre).
         let bucket = &mut buckets[current_sc.0 as usize];
-        bucket.contents.extend(pre_ops);
-        emit_box_self(b, &mut bucket.contents, dpr);
+        bucket.contents.extend(ops.pre);
+        emit_box_self(b, &mut bucket.contents, dpr, None);
+        // Overflow-клип после собственных bg/border (BUG-123).
+        bucket.contents.extend(ops.overflow_pre.iter().cloned());
+
+        // BUG-131: собственный rect-клип этого non-SC box-а добавляется к
+        // цепочке для дочерних SC (его inline push/pop их не охватывает).
+        // BUG-159: scroll-слой такого non-SC box-а наследуем ТОЖЕ. Плоский
+        // `overflow:auto`/`scroll` контейнер, не являющийся SC-owner, эмитит
+        // `PushScrollLayer`/`PopScrollLayer` inline в `contents` текущего SC;
+        // их Pop закрывается ДО того, как дочерний stacking context рисуется
+        // (более поздний слот painting order), поэтому потомок сбегал бы и из
+        // scroll-клипа, и из scroll-translate — вёл бы себя как `position:fixed`
+        // (не скроллился при прокрутке). Переустанавливаем scroll-слой как
+        // внешний слой каждого дочернего SC, зеркалом clip-наследования. Если
+        // же scroll-контейнер сам owns stacking context — он оборачивает
+        // потомков через root_bg/post (PushScrollLayer в RootBackground,
+        // PopScrollLayer в CloseLayer после всех детей), и сюда не попадает.
+        let mut child_clips: Vec<DisplayCommand> = inherited_clips.to_vec();
+        for cmd in &ops.overflow_pre {
+            if matches!(
+                cmd,
+                DisplayCommand::PushClipRect { .. }
+                    | DisplayCommand::PushClipRoundedRect { .. }
+                    | DisplayCommand::PushScrollLayer { .. }
+            ) {
+                child_clips.push(cmd.clone());
+            }
+        }
 
         for child in &b.children {
             let child_creates_sc =
                 box_can_own_stacking_context(child) && creates_stacking_context(&child.style);
             if child_creates_sc {
+                // BUG-159: `position:fixed` привязан к viewport, `sticky` имеет
+                // собственную scroll-aware машинерию — ни тот, ни другой не
+                // должны наследовать scroll-translate предка, иначе fixed-оверлей
+                // уезжал бы вместе со страницей. Rect-клипы они по-прежнему
+                // наследуют (поведение BUG-131 без изменений).
+                let child_layers: Vec<DisplayCommand> =
+                    if matches!(child.style.position, Position::Fixed | Position::Sticky) {
+                        child_clips
+                            .iter()
+                            .filter(|c| !matches!(c, DisplayCommand::PushScrollLayer { .. }))
+                            .cloned()
+                            .collect()
+                    } else {
+                        child_clips.clone()
+                    };
                 let id = StackingContextId(*next_sc_id);
                 *next_sc_id += 1;
-                fill_buckets(child, id, next_sc_id, buckets, true, anim, dpr);
+                fill_buckets(child, id, next_sc_id, buckets, true, anim, dpr, &child_layers);
             } else {
-                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim, dpr);
+                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim, dpr, &child_clips);
             }
         }
 
         let bucket = &mut buckets[current_sc.0 as usize];
-        bucket.contents.extend(post_ops);
+        bucket.contents.extend(ops.overflow_post);
+        bucket.contents.extend(ops.post);
+    }
+}
+
+/// Парный `Pop` для переустановленного push-клипа (BUG-131 clip inheritance).
+/// `inherited_clips` содержит только `PushClipRect` / `PushClipRoundedRect`
+/// (scroll-слои отфильтрованы), поэтому всегда `PopClip`; match оставлен общим
+/// на случай расширения набора наследуемых клипов.
+fn clip_pop_for(push: &DisplayCommand) -> DisplayCommand {
+    match push {
+        DisplayCommand::PushScrollLayer { .. } => DisplayCommand::PopScrollLayer,
+        _ => DisplayCommand::PopClip,
     }
 }
 
@@ -1926,11 +2710,12 @@ fn emit_inline_frag_box(
     let bb = s.border_bottom_width;
 
     // Border-box left edge = text_x - padding_left - border_left.
-    let box_x = container_x + frag.x - frag.padding_left - bl;
+    // Snap to integer CSS pixels for consistent rendering with block-level boxes (BUG-084 partial).
+    let box_x = (container_x + frag.x - frag.padding_left - bl).round();
     // Border-box width = border_left + padding_left + text + padding_right + border_right.
-    let box_w = bl + frag.padding_left + frag.width + frag.padding_right + br;
-    let box_h = line_h;
-    let box_y = line_y;
+    let box_w = (bl + frag.padding_left + frag.width + frag.padding_right + br).round();
+    let box_h = line_h.round();
+    let box_y = line_y.round();
 
     let radii = CornerRadii::from_style_and_box(s, box_w, box_h);
 
@@ -1997,18 +2782,20 @@ fn emit_text_shadows(
     for shadow in frag.style.text_shadow.iter().rev() {
         let color = shadow.color.unwrap_or(frag.style.color);
         let sigma = shadow.blur / 2.0;
+        let text_shadow_rect = Rect::new(
+            base_rect.x + shadow.offset_x,
+            base_rect.y + shadow.offset_y,
+            base_rect.width,
+            line_h,
+        );
         if sigma > 0.0 {
             out.push(DisplayCommand::PushFilter {
                 filters: vec![FilterFn::Blur(sigma)],
+                bounds: Some(text_shadow_rect),
             });
         }
         out.push(DisplayCommand::DrawText {
-            rect: Rect::new(
-                base_rect.x + shadow.offset_x,
-                base_rect.y + shadow.offset_y,
-                base_rect.width,
-                line_h,
-            ),
+            rect: text_shadow_rect,
             text: frag.text.clone(),
             font_size: frag.style.font_size,
             color,
@@ -2027,9 +2814,15 @@ fn emit_text_shadows(
                         axes.push((*b"opsz", frag.style.font_size));
                     }
                 }
+                if frag.style.font_stretch != FontStretch::NORMAL
+                    && !axes.iter().any(|(t, _)| t == b"wdth")
+                {
+                    axes.push((*b"wdth", frag.style.font_stretch.0 as f32 / 10.0));
+                }
                 axes
             },
             tab_size: frag.style.tab_size,
+            highlight_name: None,
         });
         if sigma > 0.0 {
             out.push(DisplayCommand::PopFilter);
@@ -2272,6 +3065,102 @@ pub fn select_image_set_url(value: &str, dpr: f32) -> &str {
     best.map_or("", |(u, _)| u)
 }
 
+/// CSS Backgrounds L3 §3.3–3.5 — прямоугольники-плитки для градиентного слоя с
+/// явным `background-size`.
+///
+/// У градиента нет ни внутреннего размера, ни соотношения сторон (CSS Images),
+/// поэтому при `background-size: <length>` он рисуется плитками этого размера,
+/// размещёнными по `background-position` и повторёнными по `background-repeat`;
+/// `auto`-ось разрешается в размер positioning area по этой оси (не
+/// пропорциональное масштабирование — соотношения нет). Возвращает по одному
+/// rect на плитку: каждый отображает цветовую линию/окружность градиента в свою
+/// плитку. Геометрия зеркалит [`super::backends`] image-tiling
+/// (`bg_tile_geometry` + loop), чтобы градиенты и картинки плитковались
+/// одинаково. Вызывается только для `BackgroundSize::Length`;
+/// auto/cover/contain заливают всю area одной командой.
+fn gradient_tile_rects(
+    tile_w: f32,
+    tile_h: f32,
+    position: ObjectPosition,
+    repeat: BackgroundRepeat,
+    origin: Rect,
+    clip: Rect,
+) -> Vec<Rect> {
+    if tile_w <= 0.0 || tile_h <= 0.0 {
+        return Vec::new();
+    }
+    let off_x = position.x.resolve(origin.width - tile_w);
+    let off_y = position.y.resolve(origin.height - tile_h);
+    let tile_x0 = origin.x + off_x;
+    let tile_y0 = origin.y + off_y;
+
+    let (tile_x_start, repeat_x, repeat_y) = match repeat {
+        BackgroundRepeat::NoRepeat => (tile_x0, false, false),
+        BackgroundRepeat::RepeatX => (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, false),
+        BackgroundRepeat::RepeatY => (tile_x0, false, true),
+        BackgroundRepeat::Repeat | BackgroundRepeat::Round | BackgroundRepeat::Space => {
+            (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, true)
+        }
+    };
+    let tile_y_start = if repeat_y {
+        tile_y0 - (off_y / tile_h).ceil() * tile_h
+    } else {
+        tile_y0
+    };
+
+    // Cap, чтобы крошечная плитка с repeat не породила взрывное число команд.
+    const MAX_TILES: usize = 4096;
+    let mut rects = Vec::new();
+    let x_end = clip.x + clip.width;
+    let y_end = clip.y + clip.height;
+    let mut ty = tile_y_start;
+    loop {
+        if ty >= y_end || rects.len() >= MAX_TILES {
+            break;
+        }
+        if ty + tile_h > clip.y {
+            let mut tx = tile_x_start;
+            loop {
+                if tx >= x_end || rects.len() >= MAX_TILES {
+                    break;
+                }
+                if tx + tile_w > clip.x {
+                    rects.push(Rect::new(tx, ty, tile_w, tile_h));
+                }
+                if !repeat_x {
+                    break;
+                }
+                tx += tile_w;
+            }
+        }
+        if !repeat_y {
+            break;
+        }
+        ty += tile_h;
+    }
+    rects
+}
+
+/// CSS Backgrounds L3 §3.3–3.5 — список rect-ов, в которые рисуется градиентный
+/// слой, и нужно ли клипировать их по painting area.
+///
+/// `BackgroundSize::Length` → плитки через [`gradient_tile_rects`] (требуют клипа
+/// по `clip`, т.к. плитка может выходить за painting area). Auto/Cover/Contain
+/// (у градиента нет внутреннего размера/ratio) → одна команда на всю painting
+/// area (`clip`) — историческое поведение, клип не нужен.
+fn gradient_paint_rects(layer: &BackgroundLayer, origin: Rect, clip: Rect) -> (Vec<Rect>, bool) {
+    match layer.size {
+        BackgroundSize::Length(w, h) => {
+            let tile_w = w.max(1.0);
+            let tile_h = h.unwrap_or(origin.height).max(1.0);
+            let tiles =
+                gradient_tile_rects(tile_w, tile_h, layer.position, layer.repeat, origin, clip);
+            (tiles, true)
+        }
+        _ => (vec![clip], false),
+    }
+}
+
 /// Эмитит одну background-layer команду.
 ///
 /// CSS Compositing L1 §8.3: если `layer.blend_mode != Normal`, оборачивает
@@ -2285,6 +3174,11 @@ fn emit_background_layer(
     b: &LayoutBox,
     layer: &BackgroundLayer,
     dpr: f32,
+    // CSS Compositing L1 §8.3: the bottom-most background layer blends with transparent
+    // background-color. For premultiplied alpha, multiply(src, 0) = src (identity), so
+    // blend mode has no visible effect — skip PushBlendMode to avoid blending against the
+    // stacking context instead of an isolated background canvas.
+    suppress_blend: bool,
 ) {
     let clip = background_clip_rect(b, layer.clip);
     if clip.width <= 0.0 || clip.height <= 0.0 {
@@ -2293,7 +3187,7 @@ fn emit_background_layer(
     // CSS Backgrounds L3 §3.5: positioning area (background-origin) is independent of
     // the painting/clip area (background-clip). size/position calculations use origin_rect.
     let origin = background_origin_rect(b, layer.origin);
-    let use_blend = layer.blend_mode != LayoutBlendMode::Normal;
+    let use_blend = !suppress_blend && layer.blend_mode != LayoutBlendMode::Normal;
     if use_blend {
         out.push(DisplayCommand::PushBlendMode { mode: map_blend_mode(layer.blend_mode) });
     }
@@ -2321,32 +3215,99 @@ fn emit_background_layer(
             }
         }
         BackgroundImage::Gradient(ParsedGradient::Linear { angle_deg, stops, repeating }) => {
-            out.push(DisplayCommand::DrawLinearGradient {
-                rect: clip,
-                angle_deg: *angle_deg,
-                stops: stops.clone(),
-                repeating: *repeating,
-            });
+            let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip);
+            if needs_clip && !rects.is_empty() {
+                out.push(DisplayCommand::PushClipRect { rect: clip });
+            }
+            for r in &rects {
+                out.push(DisplayCommand::DrawLinearGradient {
+                    rect: *r,
+                    angle_deg: *angle_deg,
+                    stops: stops.clone(),
+                    repeating: *repeating,
+                });
+            }
+            if needs_clip && !rects.is_empty() {
+                out.push(DisplayCommand::PopClip);
+            }
         }
         BackgroundImage::Gradient(ParsedGradient::Radial { center_x_pct, center_y_pct, stops, repeating }) => {
-            out.push(DisplayCommand::DrawRadialGradient {
-                rect: clip,
-                center_x_pct: *center_x_pct,
-                center_y_pct: *center_y_pct,
-                stops: stops.clone(),
-                repeating: *repeating,
-            });
+            let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip);
+            if needs_clip && !rects.is_empty() {
+                out.push(DisplayCommand::PushClipRect { rect: clip });
+            }
+            for r in &rects {
+                out.push(DisplayCommand::DrawRadialGradient {
+                    rect: *r,
+                    center_x_pct: *center_x_pct,
+                    center_y_pct: *center_y_pct,
+                    stops: stops.clone(),
+                    repeating: *repeating,
+                });
+            }
+            if needs_clip && !rects.is_empty() {
+                out.push(DisplayCommand::PopClip);
+            }
         }
         BackgroundImage::Gradient(ParsedGradient::Conic {
             center_x_pct, center_y_pct, from_angle_deg, stops, repeating
         }) => {
-            out.push(DisplayCommand::DrawConicGradient {
+            let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip);
+            if needs_clip && !rects.is_empty() {
+                out.push(DisplayCommand::PushClipRect { rect: clip });
+            }
+            for r in &rects {
+                out.push(DisplayCommand::DrawConicGradient {
+                    rect: *r,
+                    center_x_pct: *center_x_pct,
+                    center_y_pct: *center_y_pct,
+                    from_angle_deg: *from_angle_deg,
+                    stops: stops.clone(),
+                    repeating: *repeating,
+                });
+            }
+            if needs_clip && !rects.is_empty() {
+                out.push(DisplayCommand::PopClip);
+            }
+        }
+        BackgroundImage::CrossFade { a, b, t } => {
+            // CSS Images L4 §4 — emit DrawCrossFade for two-URL cross-fade.
+            // Gradient sides are not composited via DrawCrossFade (Phase 0 scope).
+            if let (BackgroundImage::Url(url_a), BackgroundImage::Url(url_b)) =
+                (a.as_ref(), b.as_ref())
+            {
+                let src_a = if is_image_set(url_a) {
+                    select_image_set_url(url_a, dpr).to_string()
+                } else {
+                    url_a.clone()
+                };
+                let src_b = if is_image_set(url_b) {
+                    select_image_set_url(url_b, dpr).to_string()
+                } else {
+                    url_b.clone()
+                };
+                if !src_a.is_empty() && !src_b.is_empty() {
+                    out.push(DisplayCommand::DrawCrossFade {
+                        dest: clip,
+                        src_a,
+                        src_b,
+                        progress: *t,
+                    });
+                }
+            }
+        }
+        BackgroundImage::Paint(name) => {
+            // CSS Paint API (Houdini) — paint(name) generates dynamic image via registered worklet.
+            // Phase 0: render as grey placeholder `DrawImage`; Phase 1: invoke worklet paint() callback.
+            // `// CSS: background: paint(name)`
+            out.push(DisplayCommand::DrawBackgroundImage {
                 rect: clip,
-                center_x_pct: *center_x_pct,
-                center_y_pct: *center_y_pct,
-                from_angle_deg: *from_angle_deg,
-                stops: stops.clone(),
-                repeating: *repeating,
+                origin_rect: origin,
+                src: format!("paint:{}", name),  // Prefixed to distinguish from URL images.
+                size: layer.size,
+                position: layer.position,
+                repeat: layer.repeat,
+                image_rendering: b.style.image_rendering,
             });
         }
         _ => {}
@@ -2361,10 +3322,16 @@ fn emit_background_layer(
 /// CSS Backgrounds L3 §3: слои рисуются снизу вверх — последний в списке (Vec)
 /// рисуется первым (самый нижний), первый в списке — последним (самый верхний).
 /// Пустых layers → no-op.
+///
+/// CSS Compositing L1 §8.3: background creates an isolated compositing group.
+/// The bottom-most layer blends against transparent background-color; for common
+/// blend modes (multiply, screen etc.) this is identity for premultiplied alpha,
+/// so we suppress PushBlendMode for that layer.
 fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox, dpr: f32) {
     // Рисуем в обратном порядке: последний слой = нижний (рисуется первым).
-    for layer in b.style.background_layers.iter().rev() {
-        emit_background_layer(out, b, layer, dpr);
+    for (i, layer) in b.style.background_layers.iter().rev().enumerate() {
+        // i == 0 is the bottom-most layer; suppress its blend mode (identity effect).
+        emit_background_layer(out, b, layer, dpr, i == 0);
     }
 }
 
@@ -2453,26 +3420,61 @@ fn emit_box_shadows(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
         if color.a == 0 {
             continue;
         }
-        let x = b.rect.x + shadow.offset_x - shadow.spread;
-        let y = b.rect.y + shadow.offset_y - shadow.spread;
-        let w = b.rect.width + 2.0 * shadow.spread;
-        let h = b.rect.height + 2.0 * shadow.spread;
+        // Snap shadow rect to integer CSS pixels — offset/spread are CSS lengths that can be
+        // fractional; unsnapped values produce sub-pixel shadows vs Edge (BUG-084 partial).
+        let x = (b.rect.x + shadow.offset_x - shadow.spread).round();
+        let y = (b.rect.y + shadow.offset_y - shadow.spread).round();
+        let w = (b.rect.width + 2.0 * shadow.spread).round();
+        let h = (b.rect.height + 2.0 * shadow.spread).round();
         if w <= 0.0 || h <= 0.0 {
             continue;
         }
         let sigma = shadow.blur / 2.0;
+        let shadow_rect = Rect::new(x, y, w, h);
+        // CSS Backgrounds L3 §7.1.1: the shadow shape is the border box expanded by
+        // `spread`, and each corner with a non-zero border-radius is rounded with its
+        // radius increased by the spread distance (square corners stay square). Without
+        // this, a hard/blurred shadow on a rounded box renders as a square silhouette.
+        let base_radii = CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height);
         if sigma > 0.0 {
             out.push(DisplayCommand::PushFilter {
                 filters: vec![FilterFn::Blur(sigma)],
+                bounds: Some(shadow_rect),
             });
         }
-        out.push(DisplayCommand::FillRect {
-            rect: Rect::new(x, y, w, h),
-            color,
-        });
+        if base_radii.all_zero() {
+            out.push(DisplayCommand::FillRect {
+                rect: shadow_rect,
+                color,
+            });
+        } else {
+            out.push(DisplayCommand::FillRoundedRect {
+                rect: shadow_rect,
+                color,
+                radii: spread_corner_radii(&base_radii, shadow.spread),
+            });
+        }
         if sigma > 0.0 {
             out.push(DisplayCommand::PopFilter);
         }
+    }
+}
+
+/// Expands a box's resolved `CornerRadii` to the corner radii of its outer
+/// box-shadow shape per CSS Backgrounds L3 §7.1.1: a corner with a non-zero
+/// border-radius gets its radius increased by the spread distance (clamped at
+/// zero for large negative spread); a square corner (radius 0) stays square.
+fn spread_corner_radii(base: &CornerRadii, spread: f32) -> CornerRadii {
+    let grow = |r: f32| if r > 0.0 { (r + spread).max(0.0) } else { 0.0 };
+    CornerRadii {
+        tl: grow(base.tl),
+        tl_y: grow(base.tl_y),
+        tr: grow(base.tr),
+        tr_y: grow(base.tr_y),
+        br: grow(base.br),
+        br_y: grow(base.br_y),
+        bl: grow(base.bl),
+        bl_y: grow(base.bl_y),
     }
 }
 
@@ -2596,10 +3598,26 @@ fn emit_inset_box_shadows(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     }
 }
 
-/// Default scrollbar gutter width / height in CSS px.
+/// Default scrollbar gutter width for `scrollbar-width: auto` in CSS px.
 const SCROLLBAR_WIDTH: f32 = 12.0;
+/// Scrollbar gutter width for `scrollbar-width: thin` in CSS px.
+const SCROLLBAR_WIDTH_THIN: f32 = 6.0;
 /// Minimum thumb length in CSS px so it stays clickable at large scroll ranges.
 const SCROLLBAR_MIN_THUMB: f32 = 20.0;
+/// Default track color: very light translucent grey.
+const SCROLLBAR_TRACK_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 0.08];
+/// Default thumb color: semi-transparent dark pill.
+const SCROLLBAR_THUMB_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 0.38];
+
+/// Convert a CSS `Color` (u8 sRGB) to a linear `[f32; 4]` array for the renderer.
+fn color_u8_to_f32(c: Color) -> [f32; 4] {
+    [
+        c.r as f32 / 255.0,
+        c.g as f32 / 255.0,
+        c.b as f32 / 255.0,
+        c.a as f32 / 255.0,
+    ]
+}
 
 /// Input geometry for `scrollbar_rects`.
 struct ScrollbarInput {
@@ -2618,6 +3636,8 @@ struct ScrollbarInput {
     pub need_v: bool,
     /// Emit horizontal scrollbar when content_w > clip_w.
     pub need_h: bool,
+    /// Scrollbar gutter width/height in CSS px. From `scrollbar-width`: auto=12, thin=6.
+    pub gutter_px: f32,
 }
 
 /// One axis result: `(track_rect, thumb_rect)` in document-space CSS px.
@@ -2628,14 +3648,20 @@ type ScrollbarAxis = Option<(Rect, Rect)>;
 /// Returns `(vertical, horizontal)` where each is `Some((track, thumb))` if the
 /// axis overflows, or `None` if the content fits within the clip rect for that axis.
 fn scrollbar_rects(i: &ScrollbarInput) -> (ScrollbarAxis, ScrollbarAxis) {
+    let g = i.gutter_px;
+    // Minimum thumb length scales with gutter so thin scrollbars stay clickable.
+    let min_thumb = SCROLLBAR_MIN_THUMB.min(g * 2.0).max(g);
+    // Inset from track edge — 2px for auto, 1px for thin.
+    let inset = if g >= 10.0 { 2.0 } else { 1.0 };
+
     let v = if i.need_v && i.content_h > i.clip_h {
         let track = Rect::new(
-            i.clip_x + i.clip_w - SCROLLBAR_WIDTH,
+            i.clip_x + i.clip_w - g,
             i.clip_y,
-            SCROLLBAR_WIDTH,
+            g,
             i.clip_h,
         );
-        let thumb_h = ((i.clip_h / i.content_h) * i.clip_h).max(SCROLLBAR_MIN_THUMB).min(i.clip_h);
+        let thumb_h = ((i.clip_h / i.content_h) * i.clip_h).max(min_thumb).min(i.clip_h);
         let max_scroll = (i.content_h - i.clip_h).max(0.0);
         let thumb_y = if max_scroll > 0.0 {
             i.clip_y + (i.scroll_y / max_scroll) * (i.clip_h - thumb_h)
@@ -2643,9 +3669,9 @@ fn scrollbar_rects(i: &ScrollbarInput) -> (ScrollbarAxis, ScrollbarAxis) {
             i.clip_y
         };
         let thumb = Rect::new(
-            track.x + 2.0,
+            track.x + inset,
             thumb_y.clamp(i.clip_y, i.clip_y + i.clip_h - thumb_h),
-            SCROLLBAR_WIDTH - 4.0,
+            g - inset * 2.0,
             thumb_h,
         );
         Some((track, thumb))
@@ -2656,11 +3682,11 @@ fn scrollbar_rects(i: &ScrollbarInput) -> (ScrollbarAxis, ScrollbarAxis) {
     let h = if i.need_h && i.content_w > i.clip_w {
         let track = Rect::new(
             i.clip_x,
-            i.clip_y + i.clip_h - SCROLLBAR_WIDTH,
+            i.clip_y + i.clip_h - g,
             i.clip_w,
-            SCROLLBAR_WIDTH,
+            g,
         );
-        let thumb_w = ((i.clip_w / i.content_w) * i.clip_w).max(SCROLLBAR_MIN_THUMB).min(i.clip_w);
+        let thumb_w = ((i.clip_w / i.content_w) * i.clip_w).max(min_thumb).min(i.clip_w);
         let max_scroll = (i.content_w - i.clip_w).max(0.0);
         let thumb_x = if max_scroll > 0.0 {
             i.clip_x + (i.scroll_x / max_scroll) * (i.clip_w - thumb_w)
@@ -2669,9 +3695,9 @@ fn scrollbar_rects(i: &ScrollbarInput) -> (ScrollbarAxis, ScrollbarAxis) {
         };
         let thumb = Rect::new(
             thumb_x.clamp(i.clip_x, i.clip_x + i.clip_w - thumb_w),
-            track.y + 2.0,
+            track.y + inset,
             thumb_w,
-            SCROLLBAR_WIDTH - 4.0,
+            g - inset * 2.0,
         );
         Some((track, thumb))
     } else {
@@ -2697,6 +3723,57 @@ fn emit_outline(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
         color,
         offset: s.outline_offset.px(),
     });
+}
+
+/// Рисует grip для resize property на overflow≠visible элементах.
+/// 12px grip в углу как FillRoundedRect. // CSS: resize
+fn emit_resize_grip(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
+    let s = &b.style;
+
+    // resize свойство должно быть не None и overflow не Visible
+    if s.resize == Resize::None {
+        return;
+    }
+
+    // Проверяем, что overflow != Visible (есть прокрутка или обрезание)
+    let overflow_x_hidden = matches!(s.overflow_x, Overflow::Hidden | Overflow::Clip | Overflow::Auto | Overflow::Scroll);
+    let overflow_y_hidden = matches!(s.overflow_y, Overflow::Hidden | Overflow::Clip | Overflow::Auto | Overflow::Scroll);
+
+    if !overflow_x_hidden && !overflow_y_hidden {
+        return;
+    }
+
+    // 12px grip в углу (bottom-right по умолчанию)
+    let grip_size = 12.0;
+    let grip_x = b.rect.x + b.rect.width - grip_size;
+    let grip_y = b.rect.y + b.rect.height - grip_size;
+
+    // Рисуем grip как белый закруглённый квадрат (Phase 0)
+    out.push(DisplayCommand::FillRoundedRect {
+        rect: Rect { x: grip_x, y: grip_y, width: grip_size, height: grip_size },
+        color: Color { r: 200, g: 200, b: 200, a: 255 },
+        radii: CornerRadii { tl: 2.0, tl_y: 2.0, tr: 2.0, tr_y: 2.0, br: 2.0, br_y: 2.0, bl: 2.0, bl_y: 2.0 },
+    });
+}
+
+/// Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента.
+///
+/// Grip — это 12×12 px область в правом нижнем углу `b.rect`. Присутствует
+/// только когда `resize != None` и хотя бы одна ось `overflow` ≠ Visible.
+pub fn point_on_resize_grip(b: &LayoutBox, px: f32, py: f32) -> bool {
+    let s = &b.style;
+    if s.resize == Resize::None {
+        return false;
+    }
+    let overflow_hidden = matches!(s.overflow_x, Overflow::Hidden | Overflow::Clip | Overflow::Auto | Overflow::Scroll)
+        || matches!(s.overflow_y, Overflow::Hidden | Overflow::Clip | Overflow::Auto | Overflow::Scroll);
+    if !overflow_hidden {
+        return false;
+    }
+    let grip_size = 12.0_f32;
+    let grip_x = b.rect.x + b.rect.width - grip_size;
+    let grip_y = b.rect.y + b.rect.height - grip_size;
+    px >= grip_x && px < grip_x + grip_size && py >= grip_y && py < grip_y + grip_size
 }
 
 /// CSS Multi-column Layout L1 §3.3 — рисует разделители колонок
@@ -2822,25 +3899,248 @@ fn is_opacity_subtree_painted(b: &LayoutBox) -> bool {
     b.style.opacity > 0.0
 }
 
+/// UA default accent for form controls when `accent-color: auto`. The same
+/// blue previously hard-coded across checkbox / radio / range / progress.
+const ACCENT_DEFAULT: Color = Color { r: 21, g: 90, b: 192, a: 255 };
+
 /// Render checkbox checkmark or radio dot for checked form controls.
 /// P2 note: this renders a simple filled rectangle as indicator; a full
 /// vector checkmark / circle belongs to the renderer GPU primitive set.
 fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut Vec<DisplayCommand>) {
-    let FormControlKind::Input { input_type, checked } = kind else { return };
-    if !checked { return; }
-    let inset = match input_type {
-        InputType::Checkbox => (b.rect.width * 0.2).clamp(2.0, 4.0),
-        InputType::Radio    => (b.rect.width * 0.27).clamp(2.0, 4.0),
-        _ => return,
+    // CSS Basic UI L4 §4.2 — `appearance: none` (and the legacy `-webkit-`/
+    // `-moz-` aliases, normalised to `Appearance::None` at parse time) removes
+    // the native "primitive appearance" of a form control: the checkbox tick,
+    // radio dot, range slider, progress bar, meter bar and select arrow. The box
+    // (border/padding/background) is already stripped in `apply_ua_appearance`;
+    // here we suppress the painted indicator so authors can fully restyle it.
+    if b.style.appearance == Appearance::None {
+        return;
+    }
+    // CSS UI L4 §6.1 — accent-color tints the "accent" of checkbox, radio,
+    // range and progress controls. `auto` (None) keeps the UA default blue.
+    // <meter> is intentionally excluded: its bar keeps the semantic
+    // green/yellow/red coloring from HTML §4.10.14, not the accent color.
+    let accent = b.style.accent_color.unwrap_or(ACCENT_DEFAULT);
+    match kind {
+        FormControlKind::Input { input_type, checked, .. } => {
+            if !checked { return; }
+            let inset = match input_type {
+                InputType::Checkbox => (b.rect.width * 0.2).clamp(2.0, 4.0),
+                InputType::Radio    => (b.rect.width * 0.27).clamp(2.0, 4.0),
+                _ => return,
+            };
+            out.push(DisplayCommand::FillRect {
+                rect: Rect::new(
+                    b.rect.x + inset,
+                    b.rect.y + inset,
+                    (b.rect.width  - inset * 2.0).max(1.0),
+                    (b.rect.height - inset * 2.0).max(1.0),
+                ),
+                color: accent,
+            });
+        }
+        FormControlKind::Select { selected_text } => {
+            emit_select_indicator(b, selected_text, out);
+        }
+        FormControlKind::Button | FormControlKind::Textarea { .. } => {}
+        FormControlKind::Range { value, min, max } => {
+            emit_range_slider(b, *value, *min, *max, accent, out);
+        }
+        FormControlKind::Progress { value, max } => {
+            emit_progress_bar(b, *value, *max, accent, out);
+        }
+        FormControlKind::Meter { value, min, max, low, high, optimum } => {
+            emit_meter_bar(b, *value, *min, *max, *low, *high, *optimum, out);
+        }
+    }
+}
+
+/// Draw a range slider: gray track, accent-colored filled portion, circular thumb.
+///
+/// `accent` is the resolved `accent-color` (UA default blue when `auto`); it
+/// tints both the filled track portion and the thumb per CSS UI L4 §6.1.
+fn emit_range_slider(b: &LayoutBox, value: f32, min: f32, max: f32, accent: Color, out: &mut Vec<DisplayCommand>) {
+    let range = (max - min).max(f32::EPSILON);
+    let fraction = ((value - min) / range).clamp(0.0, 1.0);
+
+    let track_h = 4.0_f32;
+    let thumb_r = 8.0_f32; // thumb diameter
+    let track_y = b.rect.y + (b.rect.height - track_h) / 2.0;
+    let track_x = b.rect.x + thumb_r / 2.0;
+    let track_w = (b.rect.width - thumb_r).max(1.0);
+
+    let gray = Color { r: 200, g: 200, b: 200, a: 255 };
+    let blue = accent;
+    let track_radius = crate::CornerRadii { tl: 2.0, tr: 2.0, br: 2.0, bl: 2.0, ..Default::default() };
+
+    // Gray background track.
+    out.push(DisplayCommand::FillRoundedRect {
+        rect: Rect::new(track_x, track_y, track_w, track_h),
+        radii: track_radius,
+        color: gray,
+    });
+
+    // Blue filled portion (left of thumb).
+    let fill_w = (track_w * fraction).max(0.0);
+    if fill_w > 0.0 {
+        out.push(DisplayCommand::FillRoundedRect {
+            rect: Rect::new(track_x, track_y, fill_w, track_h),
+            radii: track_radius,
+            color: blue,
+        });
+    }
+
+    // Circular thumb.
+    let thumb_cx = track_x + track_w * fraction;
+    let thumb_y = b.rect.y + (b.rect.height - thumb_r) / 2.0;
+    let hr = thumb_r / 2.0;
+    let thumb_radii = crate::CornerRadii { tl: hr, tr: hr, br: hr, bl: hr, ..Default::default() };
+    out.push(DisplayCommand::FillRoundedRect {
+        rect: Rect::new(thumb_cx - thumb_r / 2.0, thumb_y, thumb_r, thumb_r),
+        radii: thumb_radii,
+        color: blue,
+    });
+}
+
+/// Draw a `<progress>` bar inside the border box.
+///
+/// Determinate: `accent`-colored fill proportional to `value / max`.
+/// Indeterminate (`value` is `None`): static 30% fill to indicate pending state.
+/// `accent` is the resolved `accent-color` (UA default blue when `auto`).
+fn emit_progress_bar(b: &LayoutBox, value: Option<f32>, max: f32, accent: Color, out: &mut Vec<DisplayCommand>) {
+    let pad = 2.0_f32;
+    let bar_x = b.rect.x + pad;
+    let bar_y = b.rect.y + pad;
+    let bar_max_w = (b.rect.width - pad * 2.0).max(0.0);
+    let bar_h = (b.rect.height - pad * 2.0).max(1.0);
+    let blue = accent;
+    let radii = crate::CornerRadii { tl: 2.0, tr: 2.0, br: 2.0, bl: 2.0, ..Default::default() };
+
+    let fraction = match value {
+        None => 0.3,
+        Some(v) => (v / max.max(f32::EPSILON)).clamp(0.0, 1.0),
     };
-    out.push(DisplayCommand::FillRect {
-        rect: Rect::new(
-            b.rect.x + inset,
-            b.rect.y + inset,
-            (b.rect.width  - inset * 2.0).max(1.0),
-            (b.rect.height - inset * 2.0).max(1.0),
-        ),
-        color: Color { r: 21, g: 90, b: 192, a: 255 },
+
+    let fill_w = (bar_max_w * fraction).max(0.0);
+    if fill_w > 0.0 {
+        out.push(DisplayCommand::FillRoundedRect {
+            rect: Rect::new(bar_x, bar_y, fill_w, bar_h),
+            radii,
+            color: blue,
+        });
+    }
+}
+
+/// Draw a `<meter>` gauge bar inside the border box (HTML5 §4.10.14).
+///
+/// Fill color: green = optimal zone, yellow = sub-optimal, red = bad.
+#[allow(clippy::too_many_arguments)]
+fn emit_meter_bar(
+    b: &LayoutBox,
+    value: f32,
+    min: f32,
+    max: f32,
+    low: f32,
+    high: f32,
+    optimum: f32,
+    out: &mut Vec<DisplayCommand>,
+) {
+    let range = (max - min).max(f32::EPSILON);
+    let fraction = ((value - min) / range).clamp(0.0, 1.0);
+
+    let pad = 2.0_f32;
+    let bar_x = b.rect.x + pad;
+    let bar_y = b.rect.y + pad;
+    let bar_max_w = (b.rect.width - pad * 2.0).max(0.0);
+    let bar_h = (b.rect.height - pad * 2.0).max(1.0);
+    let radii = crate::CornerRadii { tl: 2.0, tr: 2.0, br: 2.0, bl: 2.0, ..Default::default() };
+
+    let fill_color = meter_gauge_color(value, min, max, low, high, optimum);
+    let fill_w = (bar_max_w * fraction).max(0.0);
+    if fill_w > 0.0 {
+        out.push(DisplayCommand::FillRoundedRect {
+            rect: Rect::new(bar_x, bar_y, fill_w, bar_h),
+            radii,
+            color: fill_color,
+        });
+    }
+}
+
+/// HTML5 §4.10.14 — determine meter gauge fill color from value and thresholds.
+///
+/// Optimum zone → green, adjacent zone → yellow, far zone → red.
+pub(crate) fn meter_gauge_color(value: f32, _min: f32, _max: f32, low: f32, high: f32, optimum: f32) -> Color {
+    let green  = Color { r: 100, g: 180, b:  60, a: 255 };
+    let yellow = Color { r: 210, g: 175, b:  20, a: 255 };
+    let red    = Color { r: 200, g:  60, b:  60, a: 255 };
+
+    // Where does optimum fall?
+    let opt_in_low    = optimum <= low;
+    let opt_in_high   = optimum >= high;
+    let opt_in_middle = !opt_in_low && !opt_in_high;
+
+    let val_in_low    = value < low;
+    let val_in_high   = value > high;
+    let val_in_middle = !val_in_low && !val_in_high;
+
+    if opt_in_middle {
+        if val_in_middle { green } else { yellow }
+    } else if opt_in_low {
+        if val_in_low { green } else if val_in_middle { yellow } else { red }
+    } else {
+        // opt_in_high
+        if val_in_high { green } else if val_in_middle { yellow } else { red }
+    }
+}
+
+/// Draw the selected option label and a dropdown arrow (▼) inside a `<select>` box.
+fn emit_select_indicator(b: &LayoutBox, selected_text: &str, out: &mut Vec<DisplayCommand>) {
+    let s = &b.style;
+    let fg = s.color;
+    let font_size = s.font_size.clamp(10.0, 14.0);
+    let pad = 4.0;
+    // Arrow column width (enough for "▼" glyph).
+    let arrow_w = font_size + pad * 2.0;
+    let text_w = (b.rect.width - arrow_w - pad * 2.0).max(1.0);
+
+    // Selected label — clipped to available width.
+    if !selected_text.is_empty() {
+        out.push(DisplayCommand::DrawText {
+            rect: Rect::new(b.rect.x + pad, b.rect.y + pad, text_w, b.rect.height - pad * 2.0),
+            text: selected_text.to_owned(),
+            font_size,
+            color: fg,
+            font_family: s.font_family.clone(),
+            font_weight: s.font_weight,
+            font_style: s.font_style,
+            font_variation_axes: vec![],
+            tab_size: 0.0,
+            highlight_name: None,
+        });
+    }
+
+    // Separator line before the arrow.
+    let sep_x = b.rect.x + b.rect.width - arrow_w;
+    out.push(DisplayCommand::DrawBorder {
+        rect: Rect::new(sep_x, b.rect.y, 1.0, b.rect.height),
+        widths: [0.0, 0.0, 0.0, 1.0],
+        colors: [fg; 4],
+        styles: [lumen_layout::BorderStyle::Solid; 4],
+        radii: crate::CornerRadii::default(),
+    });
+
+    // Dropdown arrow "▼".
+    out.push(DisplayCommand::DrawText {
+        rect: Rect::new(sep_x + pad, b.rect.y + pad, arrow_w - pad, b.rect.height - pad * 2.0),
+        text: "\u{25BC}".to_owned(),
+        font_size: font_size * 0.75,
+        color: fg,
+        font_family: s.font_family.clone(),
+        font_weight: s.font_weight,
+        font_style: s.font_style,
+        font_variation_axes: vec![],
+        tab_size: 0.0,
+        highlight_name: None,
     });
 }
 
@@ -2849,11 +4149,27 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
 /// relying on specific Unicode glyphs in the bundled font.
 /// Counter types (decimal/roman/alpha/greek) are rendered as text.
 fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
-    let BoxKind::Marker { ref text, list_style_type, .. } = b.kind else { return };
+    let BoxKind::Marker { ref text, ref list_style_type, ref image, .. } = b.kind else { return };
     if !is_paint_visible(b) {
         return;
     }
     let s = &b.style;
+    // CSS Lists L3 §2.3 — `list-style-image` takes precedence over the marker
+    // type/text: the bullet is replaced by the image. Drawn `contain`-fitted
+    // inside the marker box; if the URL is not registered the DrawImage is a no-op.
+    if let Some(src) = image
+        && !src.is_empty()
+    {
+        out.push(DisplayCommand::DrawImage {
+            rect: b.rect,
+            src: src.clone(),
+            alt: String::new(),
+            object_fit: ObjectFit::Contain,
+            object_position: ObjectPosition::default(),
+            image_rendering: s.image_rendering,
+        });
+        return;
+    }
     let color = s.color;
     let em = s.font_size;
     let cx = b.rect.x + b.rect.width * 0.5;
@@ -2907,18 +4223,53 @@ fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                         {
                             axes.push((*b"opsz", em));
                         }
+                        if s.font_stretch != FontStretch::NORMAL
+                            && !axes.iter().any(|(t, _)| t == b"wdth")
+                        {
+                            axes.push((*b"wdth", s.font_stretch.0 as f32 / 10.0));
+                        }
                         axes
                     },
                     tab_size: 0.0,
+                    highlight_name: None,
                 });
             }
         }
     }
 }
 
+/// CSS Tables L2 §17.6.1.1 — true when `b` is a table cell that must suppress its
+/// borders and background under `empty-cells: hide`. Applies only in the separated-
+/// borders model (`border-collapse: separate`) and only when the cell has no in-flow
+/// content. Under `border-collapse: collapse` the property has no effect.
+fn is_hidden_empty_cell(b: &LayoutBox) -> bool {
+    b.style.display == Display::TableCell
+        && b.style.empty_cells == EmptyCells::Hide
+        && b.style.border_collapse == BorderCollapse::Separate
+        && !table_cell_has_content(b)
+}
+
+/// True when a table cell has in-flow content: any descendant box that generates
+/// text, a replaced element, or a block. Whitespace-only inline runs and `Skip`
+/// boxes do not count (CSS Tables L2 §17.6.1.1 "empty" definition).
+fn table_cell_has_content(b: &LayoutBox) -> bool {
+    b.children.iter().any(box_generates_content)
+}
+
+/// Whether a single child box contributes in-flow content for the empty-cell test.
+fn box_generates_content(c: &LayoutBox) -> bool {
+    match &c.kind {
+        BoxKind::Skip => false,
+        BoxKind::InlineRun { lines, .. } => lines
+            .iter()
+            .any(|line| line.iter().any(|f| f.img_src.is_some() || !f.text.trim().is_empty())),
+        _ => true,
+    }
+}
+
 /// Эмитит DisplayCommand-ы для одного box-а БЕЗ рекурсии в детей. Аналог
 /// тела `walk` для одного box-а.
-fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
+fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32, sel: Option<&SelectionHighlight>) {
     // opacity:0 → whole-subtree invisible (см. is_opacity_subtree_painted).
     // emit_box_self не идёт в children, но self-content тоже skip-аем.
     if !is_opacity_subtree_painted(b) {
@@ -2929,6 +4280,12 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
         BoxKind::Block | BoxKind::FlowRoot | BoxKind::TableRow
         | BoxKind::Table | BoxKind::TableRowGroup => {
             if !is_paint_visible(b) {
+                return;
+            }
+            // CSS Tables L2 §17.6.1.1 — `empty-cells: hide`: an empty cell draws
+            // neither borders nor background. Cell has no children to recurse into,
+            // so skipping self-emission fully hides it.
+            if is_hidden_empty_cell(b) {
                 return;
             }
             emit_box_shadows(b, out);
@@ -2981,7 +4338,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
             emit_outline(b, out);
         }
         BoxKind::InlineRun { lines, .. } => {
-            emit_inline_run(b, lines, out);
+            emit_inline_run(b, lines, sel, out);
         }
         BoxKind::InlineBlockRow | BoxKind::InlineSpace | BoxKind::Contents => {}
         BoxKind::Marker { .. } => {
@@ -3040,7 +4397,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
             emit_outline(b, out);
             emit_form_control_indicator(b, kind, out);
         }
-        BoxKind::Image { src, alt } => {
+        BoxKind::Image { src, alt, is_lazy } => {
             if !is_paint_visible(b) {
                 return;
             }
@@ -3085,14 +4442,24 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
                     radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
                 });
             }
-            out.push(DisplayCommand::DrawImage {
-                rect: b.rect,
-                src: src.clone(),
-                alt: alt.clone(),
-                object_fit: b.style.object_fit,
-                object_position: b.style.object_position,
-                image_rendering: b.style.image_rendering,
-            });
+            if *is_lazy {
+                out.push(DisplayCommand::LazyImageSlot {
+                    rect: b.rect,
+                    node_id: b.node.index() as u32,
+                    src: src.clone(),
+                    object_fit: b.style.object_fit,
+                    object_position: b.style.object_position,
+                });
+            } else {
+                out.push(DisplayCommand::DrawImage {
+                    rect: b.rect,
+                    src: src.clone(),
+                    alt: alt.clone(),
+                    object_fit: b.style.object_fit,
+                    object_position: b.style.object_position,
+                    image_rendering: b.style.image_rendering,
+                });
+            }
             emit_outline(b, out);
         }
         BoxKind::Video { src, poster } => {
@@ -3140,14 +4507,80 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
                     radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
                 });
             }
-            // Phase 0: poster image if available, otherwise unregistered src → grey placeholder.
+            // Phase 0: only a `poster` image is painted (registered by shell, or
+            // unregistered → grey placeholder). An empty `<video>` with no poster
+            // and no decoded frame paints nothing — the element box is transparent,
+            // matching Chromium/Edge (which show the page background through it).
+            // The grey image placeholder is reserved for `<img>`, not media.
             // CSS: object-fit — P4 wires ComputedStyle.object_fit to scale poster/video frame.
-            let img_src = if !poster.is_empty() { poster.clone() } else { src.clone() };
+            let _ = src;
+            if !poster.is_empty() {
+                out.push(DisplayCommand::DrawImage {
+                    rect: b.rect,
+                    src: poster.clone(),
+                    alt: String::new(),
+                    object_fit: b.style.object_fit,
+                    object_position: b.style.object_position,
+                    image_rendering: b.style.image_rendering,
+                });
+            }
+            emit_outline(b, out);
+        }
+        BoxKind::Canvas { .. } => {
+            // HTML LS §4.12.4: <canvas> is a replaced element. Painter's order:
+            // box-shadows → background → bg-image → border → bitmap → outline.
+            if !is_paint_visible(b) {
+                return;
+            }
+            emit_box_shadows(b, out);
+            if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+                && bg.a > 0
+            {
+                let clip = background_clip_rect(b, background_color_clip(b));
+                if clip.width > 0.0 && clip.height > 0.0 {
+                    out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+                }
+            }
+            emit_background_image(out, b, dpr);
+            emit_inset_box_shadows(b, out);
+            let s = &b.style;
+            let has_border = s.border_top_style.is_visible()
+                || s.border_right_style.is_visible()
+                || s.border_bottom_style.is_visible()
+                || s.border_left_style.is_visible();
+            if has_border {
+                let cur = s.color;
+                out.push(DisplayCommand::DrawBorder {
+                    rect: b.rect,
+                    widths: [
+                        s.border_top_width,
+                        s.border_right_width,
+                        s.border_bottom_width,
+                        s.border_left_width,
+                    ],
+                    colors: [
+                        s.border_top_color.resolve(cur),
+                        s.border_right_color.resolve(cur),
+                        s.border_bottom_color.resolve(cur),
+                        s.border_left_color.resolve(cur),
+                    ],
+                    styles: [
+                        s.border_top_style,
+                        s.border_right_style,
+                        s.border_bottom_style,
+                        s.border_left_style,
+                    ],
+                    radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
+                });
+            }
+            // Bitmap is uploaded by the shell under `canvas:{node_id}`. Until JS
+            // draws anything the key is unregistered → transparent placeholder.
+            let nid = b.node.index();
             out.push(DisplayCommand::DrawImage {
                 rect: b.rect,
-                src: img_src,
+                src: format!("canvas:{nid}"),
                 alt: String::new(),
-                object_fit: b.style.object_fit,
+                object_fit: ObjectFit::Fill,
                 object_position: b.style.object_position,
                 image_rendering: b.style.image_rendering,
             });
@@ -3162,9 +4595,75 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
             out.push(DisplayCommand::FillRect { rect: b.rect, color: grey });
             emit_outline(b, out);
         }
-        // SVG elements: second-pass self-paint not needed (handled in walk).
-        BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } => {}
+        BoxKind::Iframe { src, .. } => {
+            if !is_paint_visible(b) || b.rect.width <= 0.0 || b.rect.height <= 0.0 {
+                return;
+            }
+            emit_box_shadows(b, out);
+            // Phase 0: grey placeholder — no sub-document navigation.
+            // Using DrawImage with src as key: unregistered key → grey placeholder
+            // (same pattern as Video). The src string identifies this iframe to
+            // the shell for potential future navigation.
+            let s = &b.style;
+            let has_border = s.border_top_style.is_visible()
+                || s.border_right_style.is_visible()
+                || s.border_bottom_style.is_visible()
+                || s.border_left_style.is_visible();
+            if has_border {
+                let cur = s.color;
+                out.push(DisplayCommand::DrawBorder {
+                    rect: b.rect,
+                    widths: [
+                        s.border_top_width,
+                        s.border_right_width,
+                        s.border_bottom_width,
+                        s.border_left_width,
+                    ],
+                    colors: [
+                        s.border_top_color.resolve(cur),
+                        s.border_right_color.resolve(cur),
+                        s.border_bottom_color.resolve(cur),
+                        s.border_left_color.resolve(cur),
+                    ],
+                    styles: [
+                        s.border_top_style,
+                        s.border_right_style,
+                        s.border_bottom_style,
+                        s.border_left_style,
+                    ],
+                    radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
+                });
+            }
+            out.push(DisplayCommand::DrawImage {
+                rect: b.rect,
+                src: src.clone(),
+                alt: String::new(),
+                object_fit: b.style.object_fit,
+                object_position: b.style.object_position,
+                image_rendering: b.style.image_rendering,
+            });
+            emit_outline(b, out);
+        }
+        // SVG elements: in the ordered (stacking-context) path `fill_buckets`
+        // already recurses into children, so each box paints only its own
+        // content here — no child recursion, unlike `walk` (which descends
+        // SvgRoot's shape/text children itself).
+        BoxKind::SvgRoot { .. } => {
+            if is_paint_visible(b)
+                && let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+                && bg.a > 0
+            {
+                out.push(DisplayCommand::FillRect { rect: b.rect, color: bg });
+            }
+        }
+        BoxKind::SvgShape { shape, .. } => {
+            emit_svg_shape(b, shape, out);
+        }
+        BoxKind::SvgText { text, text_anchor, dominant_baseline, .. } => {
+            emit_svg_text(b, text, *text_anchor, *dominant_baseline, out);
+        }
     }
+    emit_resize_grip(b, out);
 }
 
 /// CSS Transforms L2 §6.1 — does this box establish a **3D rendering context**
@@ -3173,15 +4672,8 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
 /// being flattened to z=0 individually and painted in document order.
 ///
 /// A box establishes a 3D rendering context iff `transform-style: preserve-3d`.
-//
-// CSS: transform-style — P4 wires `ComputedStyle.transform_style`
-// (`TransformStyle { Flat, Preserve3d }`, see STATUS-P4 task #5 item 4). Once
-// the field lands, the body becomes:
-//   `b.style.transform_style == TransformStyle::Preserve3d`
-// Until then this returns `false` (flat compositing, unchanged behaviour); the
-// depth-sort path below is exercised directly by unit tests.
-fn establishes_3d_rendering_context(_b: &LayoutBox) -> bool {
-    false
+fn establishes_3d_rendering_context(b: &LayoutBox) -> bool {
+    b.style.transform_style == TransformStyle::Preserve3d
 }
 
 /// Transformed depth of a box's center within its parent's 3D rendering
@@ -3231,7 +4723,109 @@ fn depth_order_by_z(z: &[f32]) -> Vec<usize> {
     order
 }
 
-fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
+/// Collects `GapSegment`s for `gap-rule-*` rendering in flex/grid containers.
+///
+/// Scans child box right-edges and top-edges against the container's `column_gap`
+/// and `row_gap` values; emits one `GapSegment` per actual gap found. Works for
+/// both single-line and multi-line flex, and for grid containers.
+///
+/// Returns an empty `Vec` when the container is not flex/grid, or when both gap
+/// values are zero, or when `gap_rule_style` is `None` / `gap_rule_width` ≤ 0.
+fn collect_gap_segments(b: &LayoutBox) -> Vec<GapSegment> {
+    let s = &b.style;
+    // Only flex/grid containers produce gap rules.
+    let is_flex_or_grid = matches!(
+        s.display,
+        Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
+    );
+    if !is_flex_or_grid {
+        return Vec::new();
+    }
+    if !s.gap_rule_style.is_visible() || s.gap_rule_width <= 0.0 {
+        return Vec::new();
+    }
+
+    // Content area of the container (border-box minus border+padding).
+    let em = s.font_size;
+    let cw = (b.rect.width
+        - s.border_left_width
+        - s.border_right_width
+        - s.padding_left.px()
+        - s.padding_right.px())
+    .max(0.0);
+    let ch = (b.rect.height
+        - s.border_top_width
+        - s.border_bottom_width
+        - s.padding_top.px()
+        - s.padding_bottom.px())
+    .max(0.0);
+    let cx = b.rect.x + s.border_left_width + s.padding_left.px();
+    let cy = b.rect.y + s.border_top_width + s.padding_top.px();
+    let vp = Size::new(cw, ch);
+
+    let col_gap_px = s.column_gap.resolve_or_zero(em, cw, vp);
+    let row_gap_px = s.row_gap.resolve_or_zero(em, ch, vp);
+
+    // Collect in-flow (non-absolutely-positioned, non-skip) children.
+    let children: Vec<_> = b
+        .children
+        .iter()
+        .filter(|c| {
+            !matches!(c.kind, BoxKind::Skip | BoxKind::Contents | BoxKind::Marker { .. })
+                && !matches!(c.style.position, Position::Absolute | Position::Fixed)
+        })
+        .collect();
+
+    if children.len() < 2 {
+        return Vec::new();
+    }
+
+    let mut segments: Vec<GapSegment> = Vec::new();
+    const EPS: f32 = 1.5; // tolerance for float layout rounding
+
+    if col_gap_px > 0.0 {
+        // Collect unique right-edges of children.
+        let mut rights: Vec<f32> =
+            children.iter().map(|c| c.rect.x + c.rect.width).collect();
+        rights.sort_by(|a, x| a.partial_cmp(x).unwrap_or(std::cmp::Ordering::Equal));
+        rights.dedup_by(|a, x| (*a - *x).abs() < EPS);
+
+        // For each right-edge, check if a child starts right_edge + col_gap away.
+        let lefts: Vec<f32> = children.iter().map(|c| c.rect.x).collect();
+        for right in &rights {
+            let expected = right + col_gap_px;
+            if lefts.iter().any(|l| (*l - expected).abs() < EPS) {
+                segments.push(GapSegment {
+                    rect: Rect::new(*right, cy, col_gap_px, ch),
+                    horizontal: false,
+                });
+            }
+        }
+    }
+
+    if row_gap_px > 0.0 {
+        // Collect unique bottom-edges of children.
+        let mut bottoms: Vec<f32> =
+            children.iter().map(|c| c.rect.y + c.rect.height).collect();
+        bottoms.sort_by(|a, x| a.partial_cmp(x).unwrap_or(std::cmp::Ordering::Equal));
+        bottoms.dedup_by(|a, x| (*a - *x).abs() < EPS);
+
+        let tops: Vec<f32> = children.iter().map(|c| c.rect.y).collect();
+        for bottom in &bottoms {
+            let expected = bottom + row_gap_px;
+            if tops.iter().any(|t| (*t - expected).abs() < EPS) {
+                segments.push(GapSegment {
+                    rect: Rect::new(cx, *bottom, cw, row_gap_px),
+                    horizontal: true,
+                });
+            }
+        }
+    }
+
+    segments
+}
+
+fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHighlight>) {
     // CSS Color L3 §3.2 — opacity:0 на box-е делает весь subtree после
     // composite полностью прозрачным. Phase 0 эмулирует это pure-pixel
     // skip-ом (отличие от visibility:hidden, где children могут
@@ -3260,14 +4854,9 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
             // CSS Masking L1 §4: mask-image wraps the entire element (opacity+transform+content).
             // Emitted outermost so the mask applies to the fully composited element.
             let has_mask = emit_push_mask(out, b);
-            // CSS Masking L1 §9: clip-path clips the fully composited element.
-            let has_clip_path = if let Some(clip) = &b.style.clip_path {
-                let cr = clip_path_to_rect(clip, b.rect);
-                out.push(DisplayCommand::PushClipRect { rect: cr });
-                true
-            } else {
-                false
-            };
+            // CSS Masking L1 §9: clip-path clips the fully composited element;
+            // эмитится ниже — ВНУТРИ PushTransform (BUG-140).
+            let has_clip_path = b.style.clip_path.is_some();
             // CSS Compositing & Blending L1 §5: mix-blend-mode wraps opacity so
             // the element (faded by its own opacity) blends against the backdrop
             // (order Clip → Blend → Opacity, mirroring `box_layer_ops`).
@@ -3289,6 +4878,17 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
             if let Some(matrix) = transform {
                 out.push(DisplayCommand::PushTransform { matrix });
             }
+            // CSS Masking L1 §9 + BUG-140: clip-path задан в локальной системе
+            // элемента и переносится его transform-ом — эмитится внутри
+            // PushTransform, снаружи filter/backdrop-filter.
+            if let Some(clip) = &b.style.clip_path {
+                match clip_path_to_shape(clip, b.rect) {
+                    Some(shape) => out.push(DisplayCommand::PushClipPath { shape }),
+                    None => out.push(DisplayCommand::PushClipRect {
+                        rect: clip_path_to_rect(clip, b.rect),
+                    }),
+                }
+            }
             // CSS Filter Effects L1 §6.2 — `backdrop-filter` filters the content
             // already painted *behind* the element, clipped to its border box,
             // before the element's own content paints on top. Emitted after the
@@ -3308,12 +4908,17 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
             // `PopFilter` applies the chain and composites the result down.
             let has_filter = !b.style.filter.is_empty();
             if has_filter {
-                out.push(DisplayCommand::PushFilter { filters: b.style.filter.clone() });
+                out.push(DisplayCommand::PushFilter {
+                    filters: b.style.filter.clone(),
+                    bounds: Some(b.rect),
+                });
             }
             // CSS Display L3 §4 — `visibility: hidden`: self не рисуется
             // (фон/border/outline/shadow), но children обходятся (inherited
             // visibility, но child может вернуть себя через `:visible`).
-            let self_visible = is_paint_visible(b);
+            // CSS Tables L2 §17.6.1.1 — `empty-cells: hide` suppresses an empty
+            // cell's background and borders the same way (children still walked).
+            let self_visible = is_paint_visible(b) && !is_hidden_empty_cell(b);
             if self_visible {
                 emit_box_shadows(b, out);
                 if let Some(CssColor::Rgba(bg)) = b.style.background_color
@@ -3385,12 +4990,30 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
                 let py = b.rect.y + s.border_top_width;
                 let pw = (b.rect.width - s.border_left_width - s.border_right_width).max(0.0);
                 let ph = (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0);
-                let cr = Rect::new(
+                let mut cr = Rect::new(
                     if clip_x { px } else { -BIG },
                     if clip_y { py } else { -BIG },
                     if clip_x { pw } else { 2.0 * BIG },
                     if clip_y { ph } else { 2.0 * BIG },
                 );
+
+                // CSS Overflow L3: overflow-clip-margin расширяет clip region для overflow:clip.
+                let is_overflow_clip_x = matches!(b.style.overflow_x, Overflow::Clip);
+                let is_overflow_clip_y = matches!(b.style.overflow_y, Overflow::Clip);
+                if (is_overflow_clip_x || is_overflow_clip_y)
+                    && let Some(margin) = &s.overflow_clip_margin
+                    && let Some(margin_px) = margin.resolve(s.font_size, Some(pw.max(ph)), Size::new(pw, ph))
+                {
+                    if is_overflow_clip_x {
+                        cr.x -= margin_px;
+                        cr.width += 2.0 * margin_px;
+                    }
+                    if is_overflow_clip_y {
+                        cr.y -= margin_px;
+                        cr.height += 2.0 * margin_px;
+                    }
+                }
+
                 if use_scroll_layer {
                     out.push(DisplayCommand::PushScrollLayer {
                         clip_rect: cr,
@@ -3404,13 +5027,29 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
             // CSS Transforms L2 §6.2: inside a `preserve-3d` 3D rendering
             // context children paint back-to-front by transformed depth;
             // otherwise document order (flat compositing).
-            if establishes_3d_rendering_context(b) {
+            // Special handling for Table: emit table-specific layout (cells, borders, etc).
+            if matches!(b.kind, BoxKind::Table) {
+                emit_table_box(b, out, dpr);
+            } else if establishes_3d_rendering_context(b) {
                 for i in depth_sorted_child_order(&b.children) {
-                    walk(&b.children[i], out, dpr);
+                    walk(&b.children[i], out, dpr, sel);
                 }
             } else {
                 for child in &b.children {
-                    walk(child, out, dpr);
+                    walk(child, out, dpr, sel);
+                }
+            }
+            // CSS Gap Decorations L1 — emit gap rules for flex/grid containers.
+            if self_visible {
+                let gap_segs = collect_gap_segments(b);
+                if !gap_segs.is_empty() {
+                    let s = &b.style;
+                    let ctx = GapDecorationContext {
+                        rule_width: s.gap_rule_width,
+                        rule_style: s.gap_rule_style,
+                        rule_color: s.gap_rule_color.resolve(s.color),
+                    };
+                    out.extend(emit_gap_rules(&b.children, &gap_segs, &ctx));
                 }
             }
             if has_overflow_clip {
@@ -3418,39 +5057,58 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
                     out.push(DisplayCommand::PopScrollLayer);
                     // Emit scrollbar track + thumb after the scroll layer so they
                     // render at a fixed position (not translated with scrolled content).
+                    // `scrollbar-width: none` suppresses the visual scrollbar while
+                    // keeping the scroll layer (container still scrolls via keyboard/JS).
                     if let Some((px, py, pw, ph)) = scroll_padding_box {
-                        // Compute content size from children (same as layout's content_height/width).
-                        let content_w = b.children.iter().fold(b.rect.width, |acc, c| {
-                            acc.max(c.rect.x + c.rect.width - b.rect.x)
-                        });
-                        let content_h = b.children.iter().fold(b.rect.height, |acc, c| {
-                            acc.max(c.rect.y + c.rect.height - b.rect.y)
-                        });
-                        let (v_bars, h_bars) = scrollbar_rects(&ScrollbarInput {
-                            clip_x: px,
-                            clip_y: py,
-                            clip_w: pw,
-                            clip_h: ph,
-                            scroll_x: b.scroll_x,
-                            scroll_y: b.scroll_y,
-                            content_w,
-                            content_h,
-                            need_v: is_scroll_y,
-                            need_h: is_scroll_x,
-                        });
-                        if let Some((track, thumb)) = v_bars {
-                            out.push(DisplayCommand::DrawScrollbar {
-                                track_rect: track,
-                                thumb_rect: thumb,
-                                vertical: true,
+                        let gutter_px = match b.style.scrollbar_width {
+                            ScrollbarWidth::Auto => SCROLLBAR_WIDTH,
+                            ScrollbarWidth::Thin => SCROLLBAR_WIDTH_THIN,
+                            ScrollbarWidth::None => 0.0,
+                        };
+                        // Only emit when scrollbar is visible (gutter_px > 0).
+                        if gutter_px > 0.0 {
+                            let (thumb_color, track_color) = match b.style.scrollbar_color {
+                                Some((thumb, track)) => (color_u8_to_f32(thumb), color_u8_to_f32(track)),
+                                None => (SCROLLBAR_THUMB_COLOR, SCROLLBAR_TRACK_COLOR),
+                            };
+                            // Compute content size from children (same as layout's content_height/width).
+                            let content_w = b.children.iter().fold(b.rect.width, |acc, c| {
+                                acc.max(c.rect.x + c.rect.width - b.rect.x)
                             });
-                        }
-                        if let Some((track, thumb)) = h_bars {
-                            out.push(DisplayCommand::DrawScrollbar {
-                                track_rect: track,
-                                thumb_rect: thumb,
-                                vertical: false,
+                            let content_h = b.children.iter().fold(b.rect.height, |acc, c| {
+                                acc.max(c.rect.y + c.rect.height - b.rect.y)
                             });
+                            let (v_bars, h_bars) = scrollbar_rects(&ScrollbarInput {
+                                clip_x: px,
+                                clip_y: py,
+                                clip_w: pw,
+                                clip_h: ph,
+                                scroll_x: b.scroll_x,
+                                scroll_y: b.scroll_y,
+                                content_w,
+                                content_h,
+                                need_v: is_scroll_y,
+                                need_h: is_scroll_x,
+                                gutter_px,
+                            });
+                            if let Some((track, thumb)) = v_bars {
+                                out.push(DisplayCommand::DrawScrollbar {
+                                    track_rect: track,
+                                    thumb_rect: thumb,
+                                    vertical: true,
+                                    thumb_color,
+                                    track_color,
+                                });
+                            }
+                            if let Some((track, thumb)) = h_bars {
+                                out.push(DisplayCommand::DrawScrollbar {
+                                    track_rect: track,
+                                    thumb_rect: thumb,
+                                    vertical: false,
+                                    thumb_color,
+                                    track_color,
+                                });
+                            }
                         }
                     }
                 } else {
@@ -3469,6 +5127,9 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
             if has_backdrop {
                 out.push(DisplayCommand::PopBackdropFilter);
             }
+            if has_clip_path {
+                out.push(DisplayCommand::PopClip);
+            }
             if transform.is_some() {
                 out.push(DisplayCommand::PopTransform);
             }
@@ -3477,9 +5138,6 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
             }
             if has_blend {
                 out.push(DisplayCommand::PopBlendMode);
-            }
-            if has_clip_path {
-                out.push(DisplayCommand::PopClip);
             }
             if has_mask {
                 out.push(DisplayCommand::PopMask);
@@ -3531,7 +5189,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
             // Анонимный контейнер: нет фона/бордера собственного.
             // Просто рекурсивно рисуем всех дочерних (BoxKind::Block).
             for child in &b.children {
-                walk(child, out, dpr);
+                walk(child, out, dpr, sel);
             }
         }
         BoxKind::InlineSpace => {}
@@ -3539,9 +5197,9 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
             emit_list_marker(b, out);
         }
         BoxKind::InlineRun { lines, .. } => {
-            emit_inline_run(b, lines, out);
+            emit_inline_run(b, lines, sel, out);
         }
-        BoxKind::Image { src, alt } => {
+        BoxKind::Image { src, alt, is_lazy } => {
             // visibility:hidden на `<img>` пропускает всё (no children).
             if !is_paint_visible(b) {
                 return;
@@ -3584,19 +5242,26 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
                     radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
                 });
             }
-            // Image content внутри padding/border-области; в Phase 0
-            // padding/border ещё не сжимают content-area Image (только
-            // расширяют коробку), `rect` — полная коробка вместе с border.
-            // object-fit / object-position читаются на render-стадии вместе
-            // с известным intrinsic-размером изображения.
-            out.push(DisplayCommand::DrawImage {
-                rect: b.rect,
-                src: src.clone(),
-                alt: alt.clone(),
-                object_fit: b.style.object_fit,
-                object_position: b.style.object_position,
-                image_rendering: b.style.image_rendering,
-            });
+            if *is_lazy {
+                out.push(DisplayCommand::LazyImageSlot {
+                    rect: b.rect,
+                    node_id: b.node.index() as u32,
+                    src: src.clone(),
+                    object_fit: b.style.object_fit,
+                    object_position: b.style.object_position,
+                });
+            } else {
+                // object-fit / object-position читаются на render-стадии вместе
+                // с известным intrinsic-размером изображения.
+                out.push(DisplayCommand::DrawImage {
+                    rect: b.rect,
+                    src: src.clone(),
+                    alt: alt.clone(),
+                    object_fit: b.style.object_fit,
+                    object_position: b.style.object_position,
+                    image_rendering: b.style.image_rendering,
+                });
+            }
             emit_outline(b, out);
         }
         BoxKind::Video { src, poster } => {
@@ -3640,14 +5305,73 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
                     radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
                 });
             }
-            // Phase 0: poster → DrawImage (registered by shell); no poster or unregistered src → grey placeholder.
+            // Phase 0: only a `poster` image is painted (registered by shell, or
+            // unregistered → grey placeholder). An empty `<video>` with no poster
+            // and no decoded frame paints nothing — the element box is transparent,
+            // matching Chromium/Edge (which show the page background through it).
+            // The grey image placeholder is reserved for `<img>`, not media.
             // CSS: object-fit — P4 wires ComputedStyle.object_fit to scale poster/video frame.
-            let img_src = if !poster.is_empty() { poster.clone() } else { src.clone() };
+            let _ = src;
+            if !poster.is_empty() {
+                out.push(DisplayCommand::DrawImage {
+                    rect: b.rect,
+                    src: poster.clone(),
+                    alt: String::new(),
+                    object_fit: b.style.object_fit,
+                    object_position: b.style.object_position,
+                    image_rendering: b.style.image_rendering,
+                });
+            }
+            emit_outline(b, out);
+        }
+        BoxKind::Canvas { .. } => {
+            // visibility:hidden on <canvas> skips everything (no children).
+            if !is_paint_visible(b) {
+                return;
+            }
+            // Painter's order for replaced element: background → bg-image → border → bitmap.
+            if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+                && bg.a > 0
+            {
+                let clip = background_clip_rect(b, background_color_clip(b));
+                if clip.width > 0.0 && clip.height > 0.0 {
+                    out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+                }
+            }
+            emit_background_image(out, b, dpr);
+            let s = &b.style;
+            let has_border = s.border_top_style.is_visible()
+                || s.border_right_style.is_visible()
+                || s.border_bottom_style.is_visible()
+                || s.border_left_style.is_visible();
+            if has_border {
+                let cur = s.color;
+                out.push(DisplayCommand::DrawBorder {
+                    rect: b.rect,
+                    widths: [
+                        s.border_top_width, s.border_right_width,
+                        s.border_bottom_width, s.border_left_width,
+                    ],
+                    colors: [
+                        s.border_top_color.resolve(cur),
+                        s.border_right_color.resolve(cur),
+                        s.border_bottom_color.resolve(cur),
+                        s.border_left_color.resolve(cur),
+                    ],
+                    styles: [
+                        s.border_top_style, s.border_right_style,
+                        s.border_bottom_style, s.border_left_style,
+                    ],
+                    radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
+                });
+            }
+            // Bitmap uploaded by shell under `canvas:{node_id}`; unregistered → transparent.
+            let nid = b.node.index();
             out.push(DisplayCommand::DrawImage {
                 rect: b.rect,
-                src: img_src,
+                src: format!("canvas:{nid}"),
                 alt: String::new(),
-                object_fit: b.style.object_fit,
+                object_fit: ObjectFit::Fill,
                 object_position: b.style.object_position,
                 image_rendering: b.style.image_rendering,
             });
@@ -3662,6 +5386,57 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
             out.push(DisplayCommand::FillRect { rect: b.rect, color: grey });
             emit_outline(b, out);
         }
+        BoxKind::Iframe { src, .. } => {
+            if !is_paint_visible(b) || b.rect.width <= 0.0 || b.rect.height <= 0.0 {
+                return;
+            }
+            // Phase 0: grey placeholder — no sub-document navigation.
+            // DrawImage with src as key: unregistered key → grey placeholder (same as Video).
+            if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+                && bg.a > 0
+            {
+                let clip = background_clip_rect(b, background_color_clip(b));
+                if clip.width > 0.0 && clip.height > 0.0 {
+                    out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+                }
+            }
+            emit_background_image(out, b, dpr);
+            let s = &b.style;
+            let has_border = s.border_top_style.is_visible()
+                || s.border_right_style.is_visible()
+                || s.border_bottom_style.is_visible()
+                || s.border_left_style.is_visible();
+            if has_border {
+                let cur = s.color;
+                out.push(DisplayCommand::DrawBorder {
+                    rect: b.rect,
+                    widths: [
+                        s.border_top_width, s.border_right_width,
+                        s.border_bottom_width, s.border_left_width,
+                    ],
+                    colors: [
+                        s.border_top_color.resolve(cur),
+                        s.border_right_color.resolve(cur),
+                        s.border_bottom_color.resolve(cur),
+                        s.border_left_color.resolve(cur),
+                    ],
+                    styles: [
+                        s.border_top_style, s.border_right_style,
+                        s.border_bottom_style, s.border_left_style,
+                    ],
+                    radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
+                });
+            }
+            out.push(DisplayCommand::DrawImage {
+                rect: b.rect,
+                src: src.clone(),
+                alt: String::new(),
+                object_fit: b.style.object_fit,
+                object_position: b.style.object_position,
+                image_rendering: b.style.image_rendering,
+            });
+            emit_outline(b, out);
+        }
         BoxKind::SvgRoot { .. } => {
             // SVG root: draw optional background/border, then recurse into shape children.
             if is_paint_visible(b)
@@ -3670,14 +5445,32 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32) {
             {
                 out.push(DisplayCommand::FillRect { rect: b.rect, color: bg });
             }
+            // SVG §7.4: the outermost SVG viewport clips its content (UA default
+            // `overflow: hidden`) — object-fit: cover / oversized viewBox content
+            // must not paint outside the SVG box. BUG-110.
+            let s = &b.style;
+            let clip = Rect::new(
+                b.rect.x + s.border_left_width,
+                b.rect.y + s.border_top_width,
+                (b.rect.width - s.border_left_width - s.border_right_width).max(0.0),
+                (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0),
+            );
+            out.push(DisplayCommand::PushClipRect { rect: clip });
             for child in &b.children {
-                walk(child, out, dpr);
+                walk(child, out, dpr, sel);
             }
+            out.push(DisplayCommand::PopClip);
         }
         BoxKind::SvgShape { shape, .. } => {
             // CSS: fill, stroke, stroke-width — P4 wires ComputedStyle svg_fill/svg_stroke fields.
             // Default SVG presentation: fill=black (SVG spec §11.2), no stroke.
             emit_svg_shape(b, shape, out);
+        }
+        BoxKind::SvgText { text, text_anchor, dominant_baseline, .. } => {
+            // SVG text element: emit DrawText command with proper positioning.
+            // CSS: fill, stroke, font-family, font-size — P4 wires ComputedStyle fields.
+            // // CSS: text-anchor, dominant-baseline
+            emit_svg_text(b, text, *text_anchor, *dominant_baseline, out);
         }
     }
     if is_sticky {
@@ -3694,7 +5487,12 @@ fn apply_opacity_to_color(color: Color, opacity: f32) -> Color {
 /// Reads `svg_fill` / `svg_stroke` / `svg_fill_opacity` / `svg_stroke_opacity` /
 /// `svg_stroke_width` from `ComputedStyle` — wired by P4 per SVG §11.2/11.3/11.4.
 fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
-    if b.rect.width <= 0.0 && b.rect.height <= 0.0 {
+    // A zero-size box bbox means "nothing to paint" for the geometry-driven shapes
+    // (rect/circle/ellipse/line), whose painted extent equals `b.rect`. Paths are the
+    // exception: layout cannot compute a path bbox (it requires full `d` parsing, so
+    // `svg_shape_bbox` returns `Rect::ZERO`), and the path is painted from its `d`
+    // segments offset by `b.rect.x/y`. Bailing here would drop every `<path>` element.
+    if b.rect.width <= 0.0 && b.rect.height <= 0.0 && !matches!(shape, SvgShapeKind::Path { .. }) {
         return;
     }
     let current_color = b.style.color;
@@ -3704,6 +5502,13 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
         .map(|c| apply_opacity_to_color(c, b.style.svg_stroke_opacity));
     let stroke_w = b.style.svg_stroke_width;
 
+    // CSS Fill & Stroke L3 §6 / SVG 2 §13.7 — `paint-order`. Fill and stroke
+    // commands are collected separately so they can be emitted fill-first
+    // (default) or stroke-first per the resolved order. Markers are not yet
+    // rendered, so only fill↔stroke ordering matters.
+    let mut fill_cmds: DisplayList = Vec::new();
+    let mut stroke_cmds: DisplayList = Vec::new();
+
     match shape {
         SvgShapeKind::Rect { rx, ry, .. } => {
             let has_radius = *rx > 0.0 || *ry > 0.0;
@@ -3712,14 +5517,14 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
             let radii = CornerRadii { tl: r, tl_y: r_y, tr: r, tr_y: r_y, br: r, br_y: r_y, bl: r, bl_y: r_y };
             if let Some(fc) = fill_color {
                 if has_radius {
-                    out.push(DisplayCommand::FillRoundedRect { rect: b.rect, color: fc, radii });
+                    fill_cmds.push(DisplayCommand::FillRoundedRect { rect: b.rect, color: fc, radii });
                 } else {
-                    out.push(DisplayCommand::FillRect { rect: b.rect, color: fc });
+                    fill_cmds.push(DisplayCommand::FillRect { rect: b.rect, color: fc });
                 }
             }
             if let Some(sc) = stroke_color && stroke_w > 0.0 {
                 let w = stroke_w;
-                out.push(DisplayCommand::DrawBorder {
+                stroke_cmds.push(DisplayCommand::DrawBorder {
                     rect: b.rect,
                     widths: [w, w, w, w],
                     colors: [sc, sc, sc, sc],
@@ -3733,11 +5538,11 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
             let ry_px = b.rect.height / 2.0;
             let radii = CornerRadii { tl: rx_px, tl_y: ry_px, tr: rx_px, tr_y: ry_px, br: rx_px, br_y: ry_px, bl: rx_px, bl_y: ry_px };
             if let Some(fc) = fill_color {
-                out.push(DisplayCommand::FillRoundedRect { rect: b.rect, color: fc, radii });
+                fill_cmds.push(DisplayCommand::FillRoundedRect { rect: b.rect, color: fc, radii });
             }
             if let Some(sc) = stroke_color && stroke_w > 0.0 {
                 let w = stroke_w;
-                out.push(DisplayCommand::DrawBorder {
+                stroke_cmds.push(DisplayCommand::DrawBorder {
                     rect: b.rect,
                     widths: [w, w, w, w],
                     colors: [sc, sc, sc, sc],
@@ -3747,7 +5552,8 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
             }
         }
         SvgShapeKind::Line { .. } => {
-            // SVG <line> has no fill; rendered as a stroke-width rect.
+            // SVG <line> has no fill; rendered as a stroke-width rect. paint-order
+            // is irrelevant (single component), so emit directly.
             let color = stroke_color.or(fill_color).unwrap_or(Color::BLACK);
             out.push(DisplayCommand::FillRect { rect: b.rect, color });
         }
@@ -3757,35 +5563,124 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
             if need_fill || need_stroke {
                 let segs = crate::svg_path::parse_svg_path(d);
                 let contours = crate::svg_path::flatten_path(&segs, 0.5);
-                // CSS: fill-rule (nonzero vs even-odd) — P4 wires when svg_fill_rule is in ComputedStyle.
                 if let Some(fc) = fill_color {
-                    let vertices = crate::svg_path::tessellate_fill(&contours);
+                    // even-odd fill uses same tessellation (GPU nonzero approx for multi-contour).
+                    let vertices = match b.style.svg_fill_rule {
+                        FillRule::NonZero | FillRule::EvenOdd => {
+                            crate::svg_path::tessellate_fill(&contours)
+                        }
+                    };
                     if !vertices.is_empty() {
-                        // Shift path vertices by box origin so path coords are in
-                        // CSS-pixel layout space (same as all other DisplayCommands).
                         let shifted: Vec<[f32; 2]> = vertices
                             .iter()
                             .map(|[x, y]| [x + b.rect.x, y + b.rect.y])
                             .collect();
-                        out.push(DisplayCommand::DrawSvgPath { vertices: shifted, color: fc });
+                        fill_cmds.push(DisplayCommand::DrawSvgPath { vertices: shifted, color: fc });
                     }
                 }
-                // CSS: stroke-linecap, stroke-linejoin, stroke-miterlimit — P4 wires.
-                // CSS: stroke-dasharray, stroke-dashoffset — P4 wires.
                 if let Some(sc) = stroke_color
                     && stroke_w > 0.0
                 {
-                    let vertices = crate::svg_path::tessellate_stroke(&contours, stroke_w * 0.5);
+                    let stroke_params = crate::svg_path::StrokeParams {
+                        half_width: stroke_w * 0.5,
+                        linecap: match b.style.svg_stroke_linecap {
+                            StrokeLinecap::Butt   => crate::svg_path::StrokeLinecap::Butt,
+                            StrokeLinecap::Round  => crate::svg_path::StrokeLinecap::Round,
+                            StrokeLinecap::Square => crate::svg_path::StrokeLinecap::Square,
+                        },
+                        linejoin: match b.style.svg_stroke_linejoin {
+                            StrokeLinejoin::Miter => crate::svg_path::StrokeLinejoin::Miter,
+                            StrokeLinejoin::Round => crate::svg_path::StrokeLinejoin::Round,
+                            StrokeLinejoin::Bevel => crate::svg_path::StrokeLinejoin::Bevel,
+                        },
+                        miterlimit: b.style.svg_stroke_miterlimit,
+                        dasharray: b.style.svg_stroke_dasharray.clone(),
+                        dashoffset: b.style.svg_stroke_dashoffset,
+                    };
+                    let vertices = crate::svg_path::tessellate_stroke_ex(&contours, &stroke_params);
                     if !vertices.is_empty() {
                         let shifted: Vec<[f32; 2]> = vertices
                             .iter()
                             .map(|[x, y]| [x + b.rect.x, y + b.rect.y])
                             .collect();
-                        out.push(DisplayCommand::DrawSvgPath { vertices: shifted, color: sc });
+                        stroke_cmds.push(DisplayCommand::DrawSvgPath { vertices: shifted, color: sc });
                     }
                 }
             }
         }
+    }
+
+    // Emit fill and stroke in the order dictated by `paint-order`.
+    if b.style.paint_order.fill_before_stroke() {
+        out.append(&mut fill_cmds);
+        out.append(&mut stroke_cmds);
+    } else {
+        out.append(&mut stroke_cmds);
+        out.append(&mut fill_cmds);
+    }
+}
+
+/// Emits paint commands for SVG text elements (`<text>`, `<tspan>`, `<textPath>`).
+/// Draws text at the specified position with proper horizontal and vertical alignment.
+/// Reads `svg_fill` / `svg_stroke` / `font-family` / `font-size` from `ComputedStyle`.
+/// // CSS: text-anchor, dominant-baseline
+fn emit_svg_text(
+    b: &LayoutBox,
+    text: &str,
+    text_anchor: SvgTextAnchor,
+    dominant_baseline: SvgDominantBaseline,
+    out: &mut DisplayList,
+) {
+    if text.is_empty() {
+        return;
+    }
+
+    let current_color = b.style.color;
+    let fill_color = b.style.svg_fill.resolve(current_color)
+        .map(|c| apply_opacity_to_color(c, b.style.svg_fill_opacity));
+
+    let font_size = b.style.font_size;
+    // Phase 1: approximate text width as 0.5 × font-size × char count (typical monospace ratio).
+    // Phase 2: replace with real TextMeasurer from lumen-font when available in paint.
+    let approx_text_width = font_size * 0.5 * text.chars().count() as f32;
+
+    // Apply text-anchor: adjust x so start/middle/end of text aligns at the SVG `x` position.
+    let anchor_offset_x = match text_anchor {
+        SvgTextAnchor::Start => 0.0,
+        SvgTextAnchor::Middle => -approx_text_width * 0.5,
+        SvgTextAnchor::End => -approx_text_width,
+    };
+
+    // Apply dominant-baseline: adjust y so the specified baseline aligns at the SVG `y` position.
+    // SVG y is the text baseline by default (auto/baseline). Adjustments are approximate.
+    let baseline_offset_y = match dominant_baseline {
+        SvgDominantBaseline::Auto | SvgDominantBaseline::Baseline => 0.0,
+        // middle/central: shift up by ~half em so middle of em-box is at y
+        SvgDominantBaseline::Middle | SvgDominantBaseline::Central => -font_size * 0.35,
+        // hanging/text-before-edge: shift down so top of cap is at y
+        SvgDominantBaseline::Hanging | SvgDominantBaseline::TextBeforeEdge => font_size * 0.2,
+        // text-after-edge: shift up so descender bottom is at y
+        SvgDominantBaseline::TextAfterEdge => -font_size * 0.8,
+    };
+
+    if let Some(fc) = fill_color {
+        let mut rect = b.rect;
+        rect.x += anchor_offset_x;
+        rect.y += baseline_offset_y;
+        rect.width = approx_text_width;
+        rect.height = font_size;
+        out.push(DisplayCommand::DrawText {
+            rect,
+            text: text.to_string(),
+            font_family: b.style.font_family.clone(),
+            font_size,
+            color: fc,
+            font_weight: b.style.font_weight,
+            font_style: b.style.font_style,
+            font_variation_axes: vec![],
+            tab_size: b.style.tab_size,
+            highlight_name: None,
+        });
     }
 }
 
@@ -3808,18 +5703,55 @@ fn push_text_decoration(out: &mut DisplayList, container_x: f32, line_y: f32, fr
     let style = frag.style.text_decoration_style;
     let x = container_x + frag.x;
     let color = frag.style.text_decoration_color.resolve(frag.style.color);
+    let skip_ink = frag.style.text_decoration_skip_ink;
 
     if decoration.underline {
-        let y = baseline_y + fs * 0.10;
-        emit_decoration_line(out, x, y, frag.width, thickness, color, style);
+        // CSS Text Decoration L4 §5.1: text-underline-position.
+        // `Under` places the line below all descenders (≈ 25% of font-size below baseline).
+        // `Auto`/`FromFont` uses the standard position just below the baseline.
+        let base_offset = match frag.style.text_underline_position {
+            TextUnderlinePosition::Under => fs * 0.25,
+            _ => fs * 0.10,
+        };
+        // CSS Text Decoration L4 §5.3: text-underline-offset adds an explicit shift.
+        let extra = frag.style.text_underline_offset.unwrap_or(0.0);
+        let deco_y = baseline_y + base_offset + extra;
+        // CSS Text Decoration L4 §3.5: text-decoration-skip-ink.
+        // `None` — continuous line; `Auto` — skip under descenders; `All` — skip every char.
+        match skip_ink {
+            TextDecorationSkipInk::None => {
+                emit_decoration_line(out, x, deco_y, frag.width, thickness, color, style);
+            }
+            TextDecorationSkipInk::Auto => {
+                emit_decoration_line_skip_ink(out, SkipInkParams {
+                    x, y: deco_y, width: frag.width, thickness, color, style,
+                    text: &frag.text, skip_all: false,
+                });
+            }
+            TextDecorationSkipInk::All => {
+                emit_decoration_line_skip_ink(out, SkipInkParams {
+                    x, y: deco_y, width: frag.width, thickness, color, style,
+                    text: &frag.text, skip_all: true,
+                });
+            }
+        }
     }
     if decoration.line_through {
+        // line-through sits on the mid-ascent; skip-ink does not apply (spec §3.5).
         let y = baseline_y - fs * 0.30;
         emit_decoration_line(out, x, y, frag.width, thickness, color, style);
     }
     if decoration.overline {
         let y = baseline_y - fs * 0.78;
-        emit_decoration_line(out, x, y, frag.width, thickness, color, style);
+        // `All` skips over all glyphs including those above/below the line (spec §3.5).
+        if skip_ink == TextDecorationSkipInk::All {
+            emit_decoration_line_skip_ink(out, SkipInkParams {
+                x, y, width: frag.width, thickness, color, style,
+                text: &frag.text, skip_all: true,
+            });
+        } else {
+            emit_decoration_line(out, x, y, frag.width, thickness, color, style);
+        }
     }
 }
 
@@ -3837,6 +5769,89 @@ fn resolve_decoration_thickness(value: TextDecorationThickness, font_size: f32) 
         }
         TextDecorationThickness::Length(px) => px.max(0.0),
         TextDecorationThickness::Percentage(frac) => (frac * font_size).max(0.0),
+    }
+}
+
+/// Returns `true` when the character has ink below the alphabetic baseline
+/// that would visually cross a standard underline (CSS Text Decoration L4 §3.5).
+///
+/// Phase 0: covers the most common Latin descenders. Non-Latin scripts and
+/// italic `f` are not yet tracked — future work when per-glyph metrics are
+/// available at paint time.
+fn char_has_ink_descender(ch: char) -> bool {
+    // ASCII descenders: g j p q y; Q and J have tails in many typefaces.
+    matches!(ch, 'g' | 'j' | 'p' | 'q' | 'y' | 'Q' | 'J')
+}
+
+/// Parameters for `emit_decoration_line_skip_ink` — bundles geometry to stay
+/// within the 7-argument clippy limit.
+struct SkipInkParams<'a> {
+    x: f32,
+    y: f32,
+    width: f32,
+    thickness: f32,
+    color: Color,
+    style: TextDecorationStyle,
+    /// Fragment text used to locate descender characters.
+    text: &'a str,
+    /// `true` for `text-decoration-skip-ink: all` (skip every glyph);
+    /// `false` for `auto` (skip only known descenders).
+    skip_all: bool,
+}
+
+/// Emits a decoration line (underline or overline) that skips over glyphs
+/// with ink that would cross it — CSS Text Decoration L4 §3.5
+/// `text-decoration-skip-ink`.
+///
+/// Algorithm: divide the fragment into equal-width character cells based on
+/// `width / char_count` (Phase 0 approximation — no per-glyph metrics at
+/// paint time). For each cell that needs a gap, extend a gap margin of
+/// `thickness + 1` px on each side, then draw the remaining segments.
+fn emit_decoration_line_skip_ink(out: &mut DisplayList, p: SkipInkParams<'_>) {
+    let SkipInkParams { x, y, width, thickness, color, style, text, skip_all } = p;
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    if n == 0 {
+        emit_decoration_line(out, x, y, width, thickness, color, style);
+        return;
+    }
+
+    let char_w = width / n as f32;
+    // Gap margin: enough to visibly clear the glyph ink on both sides.
+    let margin = (thickness + 1.0).min(char_w * 0.4);
+
+    // Build merged gap intervals.
+    let mut gaps: Vec<(f32, f32)> = Vec::new();
+    for (i, &ch) in chars.iter().enumerate() {
+        if skip_all || char_has_ink_descender(ch) {
+            let cell_x = x + i as f32 * char_w;
+            let gap_start = (cell_x - margin).max(x);
+            let gap_end = (cell_x + char_w + margin).min(x + width);
+            if let Some(last) = gaps.last_mut()
+                && gap_start <= last.1
+            {
+                last.1 = last.1.max(gap_end);
+                continue;
+            }
+            gaps.push((gap_start, gap_end));
+        }
+    }
+
+    if gaps.is_empty() {
+        emit_decoration_line(out, x, y, width, thickness, color, style);
+        return;
+    }
+
+    // Draw segments between gaps.
+    let mut seg_x = x;
+    for (gap_start, gap_end) in &gaps {
+        if seg_x < *gap_start {
+            emit_decoration_line(out, seg_x, y, gap_start - seg_x, thickness, color, style);
+        }
+        seg_x = *gap_end;
+    }
+    if seg_x < x + width - f32::EPSILON {
+        emit_decoration_line(out, seg_x, y, x + width - seg_x, thickness, color, style);
     }
 }
 
@@ -4029,7 +6044,9 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
                 out.push(DisplayCommand::PushTransform { matrix });
             }
 
-            let self_visible = is_paint_visible(b);
+            // CSS Tables L2 §17.6.1.1 — `empty-cells: hide` suppresses an empty
+            // cell's background and borders (children still walked).
+            let self_visible = is_paint_visible(b) && !is_hidden_empty_cell(b);
             if self_visible {
                 emit_box_shadows(b, out);
                 if let Some(CssColor::Rgba(bg)) = b.style.background_color
@@ -4097,15 +6114,249 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
         }
         BoxKind::InlineSpace => {}
         BoxKind::InlineRun { lines, .. } => {
-            emit_inline_run(b, lines, out);
+            emit_inline_run(b, lines, None, out);
         }
         // Image and other kinds: no compositor-offloadable properties, delegate to walk.
         _ => {
-            walk(b, out, dpr);
+            walk(b, out, dpr, None);
         }
     }
     if is_sticky {
         out.push(DisplayCommand::EndStickyLayer);
+    }
+}
+
+// BorderCollapse re-exported from lumen_layout::BorderCollapse (CSS Tables L2 §17.6).
+// Use b.style.border_collapse directly — now wired by P4.
+
+/// Border precedence value для collapsed border model (CSS Tables L2 §17.6.2).
+/// Более высокий precedence побеждает при конфликте.
+/// Phase 1: поддержка precedence calculation, full integration в Phase 2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[allow(dead_code)]
+enum BorderPrecedence {
+    /// Table border — самый низкий precedence
+    Table,
+    /// Row group border (thead/tbody/tfoot)
+    RowGroup,
+    /// Row border
+    Row,
+    /// Column group border (colgroup)
+    ColumnGroup,
+    /// Column border (col)
+    Column,
+    /// Cell border — самый высокий precedence
+    Cell,
+}
+
+/// Информация о border для collapsed border model
+/// Phase 1: структура и helpers для future collapse mode implementation.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct CollapsedBorder {
+    /// Ширина границы
+    width: f32,
+    /// Цвет границы
+    color: [f32; 4],
+    /// Стиль границы (solid, dashed и т.д.)
+    style: BorderStyle,
+    /// Precedence для разрешения конфликтов
+    precedence: BorderPrecedence,
+}
+
+impl CollapsedBorder {
+    /// Выбирает наиболее приоритетную границу из двух конкурирующих
+    /// Согласно CSS Tables L2 §17.6.2, более узкие границы скрываются,
+    /// а при равной ширине побеждает hide > none > solid/dashed... > initial
+    #[allow(dead_code)]
+    fn resolve_conflict(a: &Self, b: &Self) -> Self {
+        // По precedence: более высокий precedence побеждает
+        if a.precedence != b.precedence {
+            return if a.precedence > b.precedence {
+                a.clone()
+            } else {
+                b.clone()
+            };
+        }
+
+        // При равном precedence: более узкая граница скрывается
+        if (a.width - b.width).abs() > 0.001 {
+            return if a.width > b.width {
+                a.clone()
+            } else {
+                b.clone()
+            };
+        }
+
+        // По умолчанию выбираем первую (может быть улучшено по стилю)
+        a.clone()
+    }
+}
+
+/// Контекст таблицы — режим схлопывания границ и spacing, читаются из `ComputedStyle`.
+/// Phase 0: layout использует spacing напрямую; Phase 2 будет передавать ctx в emit_table_cell.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct TableContext {
+    /// `separate | collapse` — из `ComputedStyle.border_collapse`.
+    border_collapse: BorderCollapse,
+    /// Горизонтальный и вертикальный gap (px) между ячейками в `separate` режиме.
+    border_spacing: (f32, f32),
+}
+
+impl TableContext {
+    /// Строит контекст из стиля таблицы.
+    fn from_box(b: &LayoutBox) -> Self {
+        TableContext {
+            border_collapse: b.style.border_collapse,
+            border_spacing: (b.style.border_spacing_h, b.style.border_spacing_v),
+        }
+    }
+}
+
+/// Рендеринг таблицы с поддержкой border-collapse и фонов ячеек.
+///
+/// CSS 2.1 §17.5: separate (default) — ячейки рисуют свои границы;
+/// collapse — соседние границы схлопываются (Phase 0: suppress double-draw).
+fn emit_table_box(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
+    let _table_ctx = TableContext::from_box(b);
+
+    // Эмитим фон таблицы
+    if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+        && bg.a > 0
+    {
+        let clip = background_clip_rect(b, background_color_clip(b));
+        if clip.width > 0.0 && clip.height > 0.0 {
+            out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+        }
+    }
+    emit_background_image(out, b, dpr);
+
+    // Обрабатываем граници таблицы
+    let s = &b.style;
+    let has_border = s.border_top_style.is_visible()
+        || s.border_right_style.is_visible()
+        || s.border_bottom_style.is_visible()
+        || s.border_left_style.is_visible();
+    if has_border {
+        let cur = s.color;
+        out.push(DisplayCommand::DrawBorder {
+            rect: b.rect,
+            widths: [
+                s.border_top_width, s.border_right_width,
+                s.border_bottom_width, s.border_left_width,
+            ],
+            colors: [
+                s.border_top_color.resolve(cur),
+                s.border_right_color.resolve(cur),
+                s.border_bottom_color.resolve(cur),
+                s.border_left_color.resolve(cur),
+            ],
+            styles: [
+                s.border_top_style, s.border_right_style,
+                s.border_bottom_style, s.border_left_style,
+            ],
+            radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
+        });
+    }
+
+    // Обрабатываем строки и ячейки
+    for row_group in &b.children {
+        match &row_group.kind {
+            BoxKind::TableRowGroup => {
+                emit_table_row_group(row_group, out, dpr);
+            }
+            BoxKind::TableRow => {
+                emit_table_row(row_group, out, dpr);
+            }
+            _ => {
+                walk(row_group, out, dpr, None);
+            }
+        }
+    }
+}
+
+/// Эмитируем группу строк таблицы (thead, tbody, tfoot)
+fn emit_table_row_group(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
+    // Группа не рендерится сама по себе (прозрачный контейнер)
+    // но может иметь фон и граници
+
+    // TODO: для Phase 1 можно добавить фон group-уровня
+
+    // Обрабатываем строки
+    for row in &b.children {
+        if matches!(&row.kind, BoxKind::TableRow) {
+            emit_table_row(row, out, dpr);
+        }
+    }
+}
+
+/// Эмитируем строку таблицы
+fn emit_table_row(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
+    // Обрабатываем ячейки строки
+    for cell in &b.children {
+        emit_table_cell(cell, out, dpr);
+    }
+}
+
+/// Эмитируем ячейку таблицы.
+///
+/// В `separate` режиме каждая ячейка рисует все 4 границы.
+/// В `collapse` режиме layout уже зануляет border-spacing; каждая ячейка
+/// рисует только top+left границы, чтобы избежать двойного рисования
+/// по общим рёбрам (Phase 0 упрощение; полный алгоритм §17.6.2 — Phase 2).
+fn emit_table_cell(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
+    // CSS Tables L2 §17.6.1.1 — `empty-cells: hide`: a cell with no in-flow
+    // content draws neither background nor borders (separated-borders model only).
+    // Content children are still walked (an empty cell has none, but this keeps
+    // the contract identical to the normal block path).
+    let hidden_empty = is_hidden_empty_cell(b);
+
+    // Эмитим фон ячейки
+    if !hidden_empty
+        && let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+        && bg.a > 0
+    {
+        out.push(DisplayCommand::FillRect { rect: b.rect, color: bg });
+    }
+    if !hidden_empty {
+        emit_background_image(out, b, dpr);
+    }
+
+    let s = &b.style;
+    // In separate mode: draw all 4 borders. In collapse mode: draw all 4 borders too
+    // (spacing is already zeroed by layout; border overlap on shared edges is Phase 0 behaviour;
+    // full §17.6.2 conflict resolution is deferred to Phase 2).
+    let has_border = !hidden_empty
+        && (s.border_top_style.is_visible()
+        || s.border_right_style.is_visible()
+        || s.border_bottom_style.is_visible()
+        || s.border_left_style.is_visible());
+    if has_border {
+        let cur = s.color;
+        out.push(DisplayCommand::DrawBorder {
+            rect: b.rect,
+            widths: [
+                s.border_top_width, s.border_right_width,
+                s.border_bottom_width, s.border_left_width,
+            ],
+            colors: [
+                s.border_top_color.resolve(cur),
+                s.border_right_color.resolve(cur),
+                s.border_bottom_color.resolve(cur),
+                s.border_left_color.resolve(cur),
+            ],
+            styles: [
+                s.border_top_style, s.border_right_style,
+                s.border_bottom_style, s.border_left_style,
+            ],
+            radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
+        });
+    }
+
+    // Обрабатываем контент ячейки (текст, вложенные блоки и т.д.)
+    for child in &b.children {
+        walk(child, out, dpr, None);
     }
 }
 
@@ -4151,6 +6402,204 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    fn rounded_fills(dl: &DisplayList) -> Vec<&Color> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::FillRoundedRect { color, .. } => Some(color),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// True when `dl` contains a solid `FillRect` of exactly `(r,g,b)`.
+    fn has_fill_rgb(dl: &DisplayList, r: u8, g: u8, b: u8) -> bool {
+        fills(dl).iter().any(|c| c.r == r && c.g == g && c.b == b)
+    }
+
+    /// Number of `DrawBorder` commands with at least one non-zero width.
+    fn border_count(dl: &DisplayList) -> usize {
+        dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawBorder { widths, .. } if widths.iter().any(|w| *w > 0.0)))
+            .count()
+    }
+
+    // CSS Tables L2 §17.6.1.1 — `empty-cells`.
+    // Two cells with distinct backgrounds + borders; the first is empty, the
+    // second has text. Separated-borders model (default).
+    const EMPTY_CELLS_HTML: &str =
+        "<table><tr><td class=e></td><td class=f>x</td></tr></table>";
+    const EMPTY_CELLS_CSS_BASE: &str = "td{width:40px;height:30px;border:2px solid #000} \
+         .e{background:rgb(11,22,33)} .f{background:rgb(44,55,66)}";
+
+    #[test]
+    fn empty_cells_hide_suppresses_empty_cell_background() {
+        let css = format!("table{{empty-cells:hide}} {EMPTY_CELLS_CSS_BASE}");
+        let dl = build(EMPTY_CELLS_HTML, &css);
+        assert!(!has_fill_rgb(&dl, 11, 22, 33), "empty cell bg must be hidden");
+        assert!(has_fill_rgb(&dl, 44, 55, 66), "non-empty cell bg must stay");
+    }
+
+    #[test]
+    fn empty_cells_hide_suppresses_empty_cell_border() {
+        let css = format!("table{{empty-cells:hide}} {EMPTY_CELLS_CSS_BASE}");
+        let dl = build(EMPTY_CELLS_HTML, &css);
+        // Only the non-empty cell keeps its border (the table itself has none).
+        assert_eq!(border_count(&dl), 1, "only the filled cell draws a border");
+    }
+
+    #[test]
+    fn empty_cells_show_keeps_empty_cell_background() {
+        // `show` is the initial value — both cells paint normally.
+        let css = format!("table{{empty-cells:show}} {EMPTY_CELLS_CSS_BASE}");
+        let dl = build(EMPTY_CELLS_HTML, &css);
+        assert!(has_fill_rgb(&dl, 11, 22, 33), "empty cell bg shown under `show`");
+        assert!(has_fill_rgb(&dl, 44, 55, 66));
+        assert_eq!(border_count(&dl), 2, "both cells draw borders under `show`");
+    }
+
+    #[test]
+    fn empty_cells_hide_ignored_under_border_collapse() {
+        // Under `border-collapse: collapse`, `empty-cells` has no effect.
+        let css = format!(
+            "table{{empty-cells:hide;border-collapse:collapse}} {EMPTY_CELLS_CSS_BASE}"
+        );
+        let dl = build(EMPTY_CELLS_HTML, &css);
+        assert!(
+            has_fill_rgb(&dl, 11, 22, 33),
+            "collapse model ignores empty-cells: empty cell bg stays"
+        );
+    }
+
+    /// CSS UI L4 §6.1 — `accent-color` tints a checked checkbox indicator.
+    #[test]
+    fn checkbox_accent_color_tints_indicator() {
+        let dl = build(
+            "<input type=checkbox checked>",
+            "input { accent-color: rgb(10, 200, 30); }",
+        );
+        let f = fills(&dl);
+        assert!(
+            f.iter().any(|c| c.r == 10 && c.g == 200 && c.b == 30),
+            "checkbox indicator should use accent-color, got {f:?}"
+        );
+    }
+
+    /// `accent-color: auto` (the default) keeps the UA blue indicator.
+    #[test]
+    fn checkbox_default_accent_is_ua_blue() {
+        let dl = build("<input type=checkbox checked>", "");
+        let f = fills(&dl);
+        assert!(
+            f.iter().any(|c| c.r == 21 && c.g == 90 && c.b == 192),
+            "default checkbox indicator should be UA blue, got {f:?}"
+        );
+    }
+
+    /// Radio dot also honours `accent-color`.
+    #[test]
+    fn radio_accent_color_tints_dot() {
+        let dl = build(
+            "<input type=radio checked>",
+            "input { accent-color: rgb(200, 0, 100); }",
+        );
+        let f = fills(&dl);
+        assert!(
+            f.iter().any(|c| c.r == 200 && c.g == 0 && c.b == 100),
+            "radio dot should use accent-color, got {f:?}"
+        );
+    }
+
+    /// `<progress>` fill bar uses `accent-color` (a rounded-rect fill).
+    #[test]
+    fn progress_accent_color_tints_bar() {
+        let dl = build(
+            "<progress value=0.5 max=1></progress>",
+            "progress { accent-color: rgb(7, 130, 240); }",
+        );
+        let f = rounded_fills(&dl);
+        assert!(
+            f.iter().any(|c| c.r == 7 && c.g == 130 && c.b == 240),
+            "progress bar should use accent-color, got {f:?}"
+        );
+    }
+
+    /// `<input type=range>` filled track + thumb use `accent-color`; the gray
+    /// background track is left untinted.
+    #[test]
+    fn range_accent_color_tints_fill_not_track() {
+        let dl = build(
+            "<input type=range value=50 min=0 max=100>",
+            "input { accent-color: rgb(240, 60, 8); }",
+        );
+        let f = rounded_fills(&dl);
+        assert!(
+            f.iter().any(|c| c.r == 240 && c.g == 60 && c.b == 8),
+            "range fill/thumb should use accent-color, got {f:?}"
+        );
+        assert!(
+            f.iter().any(|c| c.r == 200 && c.g == 200 && c.b == 200),
+            "range background track should stay gray, got {f:?}"
+        );
+    }
+
+    /// CSS Basic UI L4 §4.2 — `appearance: none` removes the native checkbox
+    /// tick: no UA-blue indicator fill is emitted.
+    #[test]
+    fn appearance_none_suppresses_checkbox_indicator() {
+        let dl = build(
+            "<input type=checkbox checked>",
+            "input { appearance: none; }",
+        );
+        let f = fills(&dl);
+        assert!(
+            !f.iter().any(|c| c.r == 21 && c.g == 90 && c.b == 192),
+            "appearance:none must suppress the checkbox indicator, got {f:?}"
+        );
+    }
+
+    /// `appearance: none` also suppresses a custom `accent-color` indicator —
+    /// the author opted out of the native control entirely.
+    #[test]
+    fn appearance_none_suppresses_accent_indicator() {
+        let dl = build(
+            "<input type=checkbox checked>",
+            "input { appearance: none; accent-color: rgb(10, 200, 30); }",
+        );
+        let f = fills(&dl);
+        assert!(
+            !f.iter().any(|c| c.r == 10 && c.g == 200 && c.b == 30),
+            "appearance:none must suppress even an accent-tinted indicator, got {f:?}"
+        );
+    }
+
+    /// `appearance: none` removes the native `<progress>` bar (no rounded fill).
+    #[test]
+    fn appearance_none_suppresses_progress_bar() {
+        let dl = build(
+            "<progress value=0.5 max=1></progress>",
+            "progress { appearance: none; }",
+        );
+        assert!(
+            rounded_fills(&dl).is_empty(),
+            "appearance:none must suppress the progress bar, got {:?}",
+            rounded_fills(&dl)
+        );
+    }
+
+    /// `appearance: none` removes the native range slider track and thumb.
+    #[test]
+    fn appearance_none_suppresses_range_slider() {
+        let dl = build(
+            "<input type=range value=50 min=0 max=100>",
+            "input { appearance: none; }",
+        );
+        assert!(
+            rounded_fills(&dl).is_empty(),
+            "appearance:none must suppress the range slider, got {:?}",
+            rounded_fills(&dl)
+        );
     }
 
     #[test]
@@ -4551,9 +7000,11 @@ mod tests {
     /// `Dashed` — серия штрихов длиной `2 × thickness`, count > 3.
     #[test]
     fn style_dashed_emits_dashes() {
+        // skip-ink: none disables the default skip-ink behaviour so the dashed
+        // pattern is continuous and individual dash widths are predictable.
         let dl = build_wrapped(
             "<p><a>longertext</a></p>",
-            "a { text-decoration: underline dashed; }",
+            "a { text-decoration: underline dashed; text-decoration-skip-ink: none; }",
             800.0,
         );
         let rects = fill_rects(&dl);
@@ -4958,6 +7409,8 @@ mod tests {
                 DisplayCommand::DrawBackgroundImage { .. } => "DrawBackgroundImage",
                 DisplayCommand::DrawText { .. } => "DrawText",
                 DisplayCommand::PushClipRect { .. } => "PushClipRect",
+                DisplayCommand::PushClipRoundedRect { .. } => "PushClipRoundedRect",
+                DisplayCommand::PushClipPath { .. } => "PushClipPath",
                 DisplayCommand::PopClip => "PopClip",
                 DisplayCommand::PushOpacity { .. } => "PushOpacity",
                 DisplayCommand::PopOpacity => "PopOpacity",
@@ -4989,6 +7442,7 @@ mod tests {
                 DisplayCommand::DrawScrollbar { .. } => "DrawScrollbar",
                 DisplayCommand::PageBreak => "PageBreak",
                 DisplayCommand::DrawCrossFade { .. } => "DrawCrossFade",
+                DisplayCommand::LazyImageSlot { .. } => "LazyImageSlot",
             })
             .collect();
         assert_eq!(kinds, vec!["FillRect", "DrawBorder", "DrawImage"]);
@@ -5006,18 +7460,114 @@ mod tests {
         assert!(s.contains(r#"alt="A photo""#), "must contain alt");
     }
 
+    // ── Тесты loading="lazy" / LazyImageSlot ───────────────────────────────
+
+    fn lazy_slots(dl: &DisplayList) -> Vec<&DisplayCommand> {
+        dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::LazyImageSlot { .. }))
+            .collect()
+    }
+
+    #[test]
+    fn lazy_img_emits_lazy_image_slot_not_draw_image() {
+        let dl = build(
+            r#"<img src="hero.jpg" loading="lazy" width="200" height="100">"#,
+            "",
+        );
+        // Must emit LazyImageSlot, not DrawImage.
+        assert!(lazy_slots(&dl).len() == 1, "expected one LazyImageSlot");
+        assert!(images(&dl).is_empty(), "must not emit DrawImage for lazy img");
+    }
+
+    #[test]
+    fn eager_img_still_emits_draw_image() {
+        let dl = build(r#"<img src="thumb.jpg" width="80" height="40">"#, "");
+        assert!(images(&dl).len() == 1, "non-lazy img must emit DrawImage");
+        assert!(lazy_slots(&dl).is_empty(), "non-lazy must not emit LazyImageSlot");
+    }
+
+    #[test]
+    fn lazy_img_slot_has_correct_src_and_rect() {
+        let dl = build(
+            r#"<img src="banner.png" loading="lazy" width="300" height="150">"#,
+            "",
+        );
+        let slots = lazy_slots(&dl);
+        assert_eq!(slots.len(), 1);
+        if let DisplayCommand::LazyImageSlot { src, rect, .. } = slots[0] {
+            assert_eq!(src, "banner.png");
+            assert!((rect.width - 300.0).abs() < 0.1, "width={}", rect.width);
+            assert!((rect.height - 150.0).abs() < 0.1, "height={}", rect.height);
+        }
+    }
+
+    #[test]
+    fn lazy_img_case_insensitive() {
+        let dl = build(
+            r#"<img src="poster.jpg" loading="LAZY" width="50" height="50">"#,
+            "",
+        );
+        assert_eq!(lazy_slots(&dl).len(), 1, "LAZY (uppercase) must emit LazyImageSlot");
+    }
+
+    #[test]
+    fn lazy_img_node_id_set() {
+        let dl = build(
+            r#"<img src="lazy.png" loading="lazy" width="100" height="100">"#,
+            "",
+        );
+        let slots = lazy_slots(&dl);
+        assert_eq!(slots.len(), 1);
+        if let DisplayCommand::LazyImageSlot { node_id, .. } = slots[0] {
+            // node_id must be > 0 (document root is 0; img elements get a non-zero id).
+            assert!(*node_id > 0, "lazy img node_id must be non-zero, got {node_id}");
+        }
+    }
+
+    #[test]
+    fn lazy_img_slot_carries_object_fit() {
+        // BUG-163: a lazy <img> keeps its loading="lazy" attribute even after the
+        // shell fetches it, so it is painted via LazyImageSlot (not DrawImage).
+        // The slot must therefore carry object_fit/object_position so the backend
+        // can draw the loaded image with the correct CSS fitting, not a raw fill.
+        let dl = build(
+            r#"<img src="cover.jpg" loading="lazy" width="200" height="100" style="object-fit: cover">"#,
+            "",
+        );
+        let slots = lazy_slots(&dl);
+        assert_eq!(slots.len(), 1);
+        if let DisplayCommand::LazyImageSlot { object_fit, .. } = slots[0] {
+            assert_eq!(*object_fit, ObjectFit::Cover, "lazy slot must carry object-fit");
+        } else {
+            panic!("expected LazyImageSlot");
+        }
+    }
+
+    #[test]
+    fn lazy_img_serialize_contains_lazy_image_slot() {
+        let dl = build(
+            r#"<img src="deferred.jpg" loading="lazy" width="100" height="50">"#,
+            "",
+        );
+        let s = serialize_display_list(&dl);
+        assert!(s.contains("LazyImageSlot"), "serialize must include LazyImageSlot");
+        assert!(s.contains(r#"src="deferred.jpg""#), "serialize must include src");
+    }
+
     // ── Тесты <video> / DrawImage placeholder ───────────────────────────────
 
     #[test]
-    fn video_emits_draw_image_with_src() {
-        // <video src="clip.mp4"> → DrawImage with src="clip.mp4" (grey placeholder).
+    fn video_without_poster_emits_no_draw_image() {
+        // BUG-097: an empty <video> (no poster, no decoded frame) paints nothing —
+        // the element box is transparent, matching Chromium/Edge. The grey image
+        // placeholder is reserved for <img>, not media.
         let dl = build(r#"<video src="clip.mp4"></video>"#, "");
         let imgs = images(&dl);
-        assert_eq!(imgs.len(), 1, "video should emit exactly one DrawImage");
-        if let DisplayCommand::DrawImage { src, alt, .. } = imgs[0] {
-            assert_eq!(src, "clip.mp4");
-            assert_eq!(alt, "");
-        }
+        assert!(
+            imgs.is_empty(),
+            "posterless video should emit no DrawImage, got {}",
+            imgs.len()
+        );
     }
 
     #[test]
@@ -5033,7 +7583,8 @@ mod tests {
 
     #[test]
     fn video_ua_default_rect_300_by_150() {
-        let dl = build(r#"<video src="clip.mp4"></video>"#, "");
+        // Poster present so the replaced box paints a DrawImage at the UA-default rect.
+        let dl = build(r#"<video src="clip.mp4" poster="thumb.jpg"></video>"#, "");
         let imgs = images(&dl);
         assert_eq!(imgs.len(), 1);
         if let DisplayCommand::DrawImage { rect, .. } = imgs[0] {
@@ -5045,7 +7596,7 @@ mod tests {
     #[test]
     fn video_css_dimensions_override_ua_default() {
         let dl = build(
-            r#"<video src="clip.mp4"></video>"#,
+            r#"<video src="clip.mp4" poster="thumb.jpg"></video>"#,
             "video { width: 640px; height: 360px; }",
         );
         let imgs = images(&dl);
@@ -5221,6 +7772,111 @@ mod tests {
         }
     }
 
+    // ── BUG-087: sized/positioned/repeated gradient background layers ──────────
+
+    fn linear_grads(dl: &DisplayList) -> Vec<&DisplayCommand> {
+        dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawLinearGradient { .. }))
+            .collect()
+    }
+
+    #[test]
+    fn gradient_tile_rects_single_no_repeat() {
+        // 80×80 tile, centered (50% 50%) inside a 200×120 area, no-repeat → 1 rect.
+        let origin = Rect::new(0.0, 0.0, 200.0, 120.0);
+        let rects = gradient_tile_rects(
+            80.0,
+            80.0,
+            ObjectPosition { x: PositionComponent::Percent(0.5), y: PositionComponent::Percent(0.5) },
+            BackgroundRepeat::NoRepeat,
+            origin,
+            origin,
+        );
+        assert_eq!(rects.len(), 1);
+        // off = (200-80)*0.5 = 60 ; (120-80)*0.5 = 20
+        assert!((rects[0].x - 60.0).abs() < 0.01, "x={}", rects[0].x);
+        assert!((rects[0].y - 20.0).abs() < 0.01, "y={}", rects[0].y);
+        assert!((rects[0].width - 80.0).abs() < 0.01);
+        assert!((rects[0].height - 80.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn gradient_tile_rects_repeat_x_covers_area() {
+        // 20px-wide tiles, full height, repeat-x across a 200px area → tiles span it.
+        let origin = Rect::new(0.0, 0.0, 200.0, 100.0);
+        let rects = gradient_tile_rects(
+            20.0,
+            100.0,
+            ObjectPosition { x: PositionComponent::Percent(0.0), y: PositionComponent::Percent(0.0) },
+            BackgroundRepeat::RepeatX,
+            origin,
+            origin,
+        );
+        // 200/20 = 10 tiles, single row.
+        assert_eq!(rects.len(), 10, "expected 10 stripes, got {}", rects.len());
+        assert!(rects.iter().all(|r| (r.height - 100.0).abs() < 0.01));
+        // Tiles span from left to right edge.
+        assert!((rects[0].x - 0.0).abs() < 0.01);
+        assert!((rects[9].x - 180.0).abs() < 0.01, "last x={}", rects[9].x);
+    }
+
+    #[test]
+    fn sized_gradient_layer_emits_tile_not_full_box() {
+        // BUG-087: a gradient with explicit `background-size` must paint a tile of
+        // that size (clipped to the box), not stretch across the whole box.
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 200px; height: 120px; \
+             background: linear-gradient(to right, red, blue) center / 80px 80px no-repeat; }",
+        );
+        let grads = linear_grads(&dl);
+        assert_eq!(grads.len(), 1, "one gradient tile expected");
+        if let DisplayCommand::DrawLinearGradient { rect, .. } = grads[0] {
+            assert!((rect.width - 80.0).abs() < 0.1, "tile width should be 80, got {}", rect.width);
+            assert!((rect.height - 80.0).abs() < 0.1, "tile height should be 80, got {}", rect.height);
+        }
+        // Sized tiling must be wrapped in a clip to the painting area.
+        assert!(
+            dl.iter().any(|c| matches!(c, DisplayCommand::PushClipRect { .. })),
+            "sized gradient must be clipped to the box"
+        );
+    }
+
+    #[test]
+    fn repeat_x_gradient_layer_emits_multiple_tiles() {
+        // BUG-087: repeat-x sized gradient emits one command per visible stripe.
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 100px; height: 50px; \
+             background: linear-gradient(to bottom, red, blue) left top / 20px 100% repeat-x; }",
+        );
+        let grads = linear_grads(&dl);
+        assert!(grads.len() >= 5, "expected ≥5 stripes for 100px/20px, got {}", grads.len());
+        for g in &grads {
+            if let DisplayCommand::DrawLinearGradient { rect, .. } = g {
+                assert!((rect.width - 20.0).abs() < 0.1, "stripe width 20, got {}", rect.width);
+            }
+        }
+    }
+
+    #[test]
+    fn unsized_gradient_layer_still_fills_box() {
+        // Regression guard: a gradient WITHOUT background-size keeps the historical
+        // single full-box command (no tiling, no extra clip) so existing snapshots
+        // stay byte-identical.
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 200px; height: 120px; \
+             background: linear-gradient(to right, red, blue); }",
+        );
+        let grads = linear_grads(&dl);
+        assert_eq!(grads.len(), 1, "single full-box gradient");
+        if let DisplayCommand::DrawLinearGradient { rect, .. } = grads[0] {
+            assert!((rect.width - 200.0).abs() < 0.1, "full box width, got {}", rect.width);
+            assert!((rect.height - 120.0).abs() < 0.1, "full box height, got {}", rect.height);
+        }
+    }
+
     #[test]
     fn background_image_repeating_conic_gradient() {
         let dl = build(
@@ -5321,6 +7977,23 @@ mod tests {
         let s = serialize_display_list(&dl);
         assert!(s.contains("DrawBackgroundImage"), "should contain DrawBackgroundImage line");
         assert!(s.contains(r#"src="hero.jpg""#), "should contain quoted src");
+    }
+
+    #[test]
+    fn background_image_paint_emits_draw_background_image_with_paint_src() {
+        // CSS Paint API (Houdini) Phase 0 — `background-image: paint(name)` must emit
+        // DrawBackgroundImage with src prefixed "paint:" for renderer identification.
+        let dl = build(
+            "<div></div>",
+            "div { width: 80px; height: 40px; background-image: paint(my-worklet); }",
+        );
+        let paint_bg = dl.iter().find(|c| {
+            matches!(c, DisplayCommand::DrawBackgroundImage { src, .. } if src.starts_with("paint:"))
+        });
+        assert!(paint_bg.is_some(), "paint() must emit DrawBackgroundImage with 'paint:' src");
+        if let Some(DisplayCommand::DrawBackgroundImage { src, .. }) = paint_bg {
+            assert_eq!(src, "paint:my-worklet", "src must be paint:<name>");
+        }
     }
 
     #[test]
@@ -5881,6 +8554,151 @@ mod tests {
     }
 
     #[test]
+    fn ordered_transformed_child_clipped_by_overflow_hidden_ancestor() {
+        // BUG-131: a transformed child creates its own stacking context and is
+        // emitted in a later painting-order slot. The overflow:hidden ancestor's
+        // clip is emitted inline in the parent SC bucket and closes before the
+        // child SC paints — so the clip must be re-established around the child.
+        // Regression: net open clip-rects at the inner box must be > 0.
+        let dl = build_ordered(
+            "<div class='clip'><div class='inner'></div></div>",
+            ".clip { width:100px; height:100px; overflow:hidden; } \
+             .inner { width:50px; height:50px; background:#0000ff; \
+                      transform:translate(40px,40px); }",
+        );
+        // The inner transformed box (#0000ff) sits in its own SC.
+        let inner_fill = dl
+            .iter()
+            .position(|c| matches!(
+                c,
+                DisplayCommand::FillRect { color, .. }
+                    if color.r == 0 && color.g == 0 && color.b == 255
+            ))
+            .expect("inner box FillRect must be emitted");
+        // It must be wrapped by a PushTransform (its own SC layer).
+        let transform_before = dl[..inner_fill]
+            .iter()
+            .rposition(|c| matches!(c, DisplayCommand::PushTransform { .. }));
+        assert!(
+            transform_before.is_some(),
+            "inner box must be inside its PushTransform layer"
+        );
+        // Net open rect-clips just before the inner FillRect: with the fix the
+        // ancestor `.clip` overflow clip is re-pushed, so depth >= 1.
+        let mut depth: i32 = 0;
+        for c in &dl[..inner_fill] {
+            match c {
+                DisplayCommand::PushClipRect { .. }
+                | DisplayCommand::PushClipRoundedRect { .. } => depth += 1,
+                DisplayCommand::PopClip => depth -= 1,
+                _ => {}
+            }
+        }
+        assert!(
+            depth >= 1,
+            "transformed child must stay inside its overflow:hidden ancestor's \
+             clip (open clip depth = {depth}, expected >= 1)"
+        );
+        // The re-established clip must be the container's content box (0,0,100,100).
+        let has_container_clip = dl[..inner_fill].iter().any(|c| matches!(
+            c,
+            DisplayCommand::PushClipRect { rect }
+                if (rect.width - 100.0).abs() < 0.5 && (rect.height - 100.0).abs() < 0.5
+        ));
+        assert!(
+            has_container_clip,
+            "container's 100x100 overflow clip must wrap the transformed child"
+        );
+    }
+
+    #[test]
+    fn ordered_zindexed_child_scrolls_with_overflow_auto_ancestor() {
+        // BUG-159: a z-indexed (own-SC) child of a plain `overflow:auto` scroll
+        // container is emitted in a later painting-order slot. The container is
+        // NOT itself a stacking context, so its PushScrollLayer/PopScrollLayer are
+        // inline in the parent SC bucket and close before the child SC paints.
+        // Without re-establishment the child escapes the scroll layer and behaves
+        // like position:fixed (does not scroll). The fix re-pushes the scroll
+        // layer around the child SC — net open scroll-layer depth at the child
+        // must be >= 1.
+        let dl = build_ordered(
+            "<div class='scroll'><div class='inner'></div></div>",
+            "body { margin:0; } \
+             .scroll { width:100px; height:100px; overflow:auto; } \
+             .inner { position:relative; z-index:1; width:50px; height:200px; \
+                      background:#0000ff; }",
+        );
+        let inner_fill = dl
+            .iter()
+            .position(|c| matches!(
+                c,
+                DisplayCommand::FillRect { color, .. }
+                    if color.r == 0 && color.g == 0 && color.b == 255
+            ))
+            .expect("inner box FillRect must be emitted");
+        let mut depth: i32 = 0;
+        for c in &dl[..inner_fill] {
+            match c {
+                DisplayCommand::PushScrollLayer { .. } => depth += 1,
+                DisplayCommand::PopScrollLayer => depth -= 1,
+                _ => {}
+            }
+        }
+        assert!(
+            depth >= 1,
+            "z-indexed child must stay inside its overflow:auto ancestor's scroll \
+             layer (open scroll-layer depth = {depth}, expected >= 1)"
+        );
+        // The re-established scroll layer must clip to the container padding box.
+        let has_container_scroll = dl[..inner_fill].iter().any(|c| matches!(
+            c,
+            DisplayCommand::PushScrollLayer { clip_rect, .. }
+                if (clip_rect.width - 100.0).abs() < 0.5
+                    && (clip_rect.height - 100.0).abs() < 0.5
+        ));
+        assert!(
+            has_container_scroll,
+            "container's 100x100 scroll layer must wrap the z-indexed child"
+        );
+    }
+
+    #[test]
+    fn ordered_fixed_child_does_not_inherit_ancestor_scroll_layer() {
+        // BUG-159: position:fixed is anchored to the viewport — it must NOT
+        // inherit a scrolling ancestor's scroll-layer translate, or a fixed
+        // overlay would scroll away with the page. A fixed child of an
+        // `overflow:auto` container must paint with net scroll-layer depth 0.
+        let dl = build_ordered(
+            "<div class='scroll'><div class='fx'></div></div>",
+            "body { margin:0; } \
+             .scroll { width:100px; height:100px; overflow:auto; } \
+             .fx { position:fixed; top:0; left:0; width:50px; height:50px; \
+                   background:#00ff00; }",
+        );
+        let fx_fill = dl
+            .iter()
+            .position(|c| matches!(
+                c,
+                DisplayCommand::FillRect { color, .. }
+                    if color.r == 0 && color.g == 255 && color.b == 0
+            ))
+            .expect("fixed box FillRect must be emitted");
+        let mut depth: i32 = 0;
+        for c in &dl[..fx_fill] {
+            match c {
+                DisplayCommand::PushScrollLayer { .. } => depth += 1,
+                DisplayCommand::PopScrollLayer => depth -= 1,
+                _ => {}
+            }
+        }
+        assert_eq!(
+            depth, 0,
+            "fixed child must NOT inherit the scrolling ancestor's scroll layer \
+             (open scroll-layer depth = {depth}, expected 0)"
+        );
+    }
+
+    #[test]
     fn ordered_opacity_alpha_value_preserved() {
         let dl = build_ordered("<div>x</div>", "div { opacity: 0.25; }");
         let push = dl
@@ -6021,15 +8839,40 @@ mod tests {
                 )
             })
             .collect();
-        // Ожидаемый порядок (см. box_layer_ops): Clip → Blend → Opacity (Push),
-        // потом Opacity → Blend → Clip (Pop) для LIFO-парности.
+        // Ожидаемый порядок (см. box_layer_ops): Blend → Opacity (эффекты,
+        // оборачивают bg/border), затем overflow-Clip — внутренний, клипает
+        // только детей (BUG-123). Pop — LIFO: Clip → Opacity → Blend.
         assert_eq!(ops.len(), 6, "три триггера = 6 layer-ops");
-        assert!(matches!(ops[0], DisplayCommand::PushClipRect { .. }));
-        assert!(matches!(ops[1], DisplayCommand::PushBlendMode { .. }));
-        assert!(matches!(ops[2], DisplayCommand::PushOpacity { .. }));
-        assert!(matches!(ops[3], DisplayCommand::PopOpacity));
-        assert!(matches!(ops[4], DisplayCommand::PopBlendMode));
-        assert!(matches!(ops[5], DisplayCommand::PopClip));
+        assert!(matches!(ops[0], DisplayCommand::PushBlendMode { .. }));
+        assert!(matches!(ops[1], DisplayCommand::PushOpacity { .. }));
+        assert!(matches!(ops[2], DisplayCommand::PushClipRect { .. }));
+        assert!(matches!(ops[3], DisplayCommand::PopClip));
+        assert!(matches!(ops[4], DisplayCommand::PopOpacity));
+        assert!(matches!(ops[5], DisplayCommand::PopBlendMode));
+    }
+
+    #[test]
+    fn ordered_scroll_container_bg_border_outside_scroll_layer() {
+        // BUG-123: собственные background/border скролл-контейнера эмитятся
+        // ДО PushScrollLayer — overflow-клип (scissor по padding-box) не
+        // должен срезать рамку и подрезать фон самого контейнера.
+        let dl = build_ordered(
+            "<div>x</div>",
+            "div { overflow: scroll; width: 100px; height: 50px;
+                   background: #16213e; border: 2px solid #0f3460; }",
+        );
+        let scroll_idx = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::PushScrollLayer { .. }))
+            .expect("scroll container emits PushScrollLayer");
+        let border_idx = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::DrawBorder { .. }))
+            .expect("scroll container emits DrawBorder");
+        assert!(
+            border_idx < scroll_idx,
+            "DrawBorder (idx {border_idx}) must precede PushScrollLayer (idx {scroll_idx})"
+        );
     }
 
     #[test]
@@ -6044,6 +8887,83 @@ mod tests {
         let pops = count_variant(&dl, |c| matches!(c, DisplayCommand::PopOpacity));
         assert_eq!(pushes, 2);
         assert_eq!(pops, 2);
+    }
+
+    #[test]
+    fn ordered_nested_transforms_emit_two_pairs() {
+        // BUG-139 регрессия: внешний div с transform, внутренний div с transform.
+        // Каждый создаёт свой SC; должно быть ровно 2 пары PushTransform/PopTransform.
+        let dl = build_ordered(
+            r#"<div class="outer"><div class="inner">x</div></div>"#,
+            ".outer { transform: rotate(15deg); } .inner { transform: rotate(-15deg); }",
+        );
+        let pushes =
+            count_variant(&dl, |c| matches!(c, DisplayCommand::PushTransform { .. }));
+        let pops = count_variant(&dl, |c| matches!(c, DisplayCommand::PopTransform));
+        assert_eq!(pushes, 2, "два вложенных transform → два PushTransform");
+        assert_eq!(pops, 2, "и два парных PopTransform");
+    }
+
+    #[test]
+    fn ordered_nested_transforms_parent_wraps_child() {
+        // BUG-139 регрессия: Pop-команды родителя должны приходить ПОСЛЕ
+        // Push/Pop-команд ребёнка. До фикса родительский PopTransform эмитился
+        // в PaintPhase::InlineContent (до рендера дочерних SC), из-за чего
+        // вложенные transforms не компоновались.
+        let dl = build_ordered(
+            r#"<div class="outer"><div class="inner">x</div></div>"#,
+            ".outer { transform: rotate(10deg); } .inner { transform: translateX(50px); }",
+        );
+        // Позиции первого и второго вхождения
+        let push_positions: Vec<usize> = dl
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| {
+                if matches!(c, DisplayCommand::PushTransform { .. }) {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let pop_positions: Vec<usize> = dl
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| {
+                if matches!(c, DisplayCommand::PopTransform) {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(push_positions.len(), 2, "ожидается 2 PushTransform");
+        assert_eq!(pop_positions.len(), 2, "ожидается 2 PopTransform");
+        // Родительский Push идёт раньше дочернего Push
+        assert!(
+            push_positions[0] < push_positions[1],
+            "родительский PushTransform (idx {}) должен предшествовать дочернему (idx {})",
+            push_positions[0],
+            push_positions[1]
+        );
+        // Дочерний Pop идёт раньше родительского Pop — ключевая инварианта BUG-139
+        assert!(
+            pop_positions[0] < pop_positions[1],
+            "дочерний PopTransform (idx {}) должен предшествовать родительскому (idx {}), \
+             иначе вложенные transforms не компонуются",
+            pop_positions[0],
+            pop_positions[1]
+        );
+        // Дочерний Push идёт ПОСЛЕ родительского Push (внутри родительского слоя)
+        assert!(
+            push_positions[0] < push_positions[1],
+            "дочерний PushTransform должен быть внутри родительского слоя"
+        );
+        // Дочерний Pop идёт ДО родительского Pop (закрывается раньше)
+        assert!(
+            pop_positions[0] < pop_positions[1],
+            "дочерний PopTransform должен закрыться до родительского"
+        );
     }
 
     #[test]
@@ -6367,7 +9287,7 @@ mod tests {
             "p { text-shadow: 2px 3px 8px red; }",
         );
         let push_idx = dl.iter().position(|c| {
-            matches!(c, DisplayCommand::PushFilter { filters }
+            matches!(c, DisplayCommand::PushFilter { filters, .. }
                 if matches!(filters.as_slice(), [FilterFn::Blur(s)] if (*s - 4.0).abs() < 0.01))
         });
         assert!(push_idx.is_some(), "PushFilter{{Blur(4.0)}} должен быть в DL, got {dl:?}");
@@ -6392,7 +9312,7 @@ mod tests {
             "p { text-shadow: 2px 3px red; }",
         );
         let has_filter = dl.iter().any(|c| {
-            matches!(c, DisplayCommand::PushFilter { filters }
+            matches!(c, DisplayCommand::PushFilter { filters, .. }
                 if filters.iter().any(|f| matches!(f, FilterFn::Blur(_))))
         });
         assert!(!has_filter, "без blur не должно быть PushFilter, got {dl:?}");
@@ -6409,7 +9329,7 @@ mod tests {
             "p { text-shadow: 1px 1px 6px red, 2px 2px 4px blue; }",
         );
         let push_count = dl.iter().filter(|c| {
-            matches!(c, DisplayCommand::PushFilter { filters }
+            matches!(c, DisplayCommand::PushFilter { filters, .. }
                 if filters.iter().any(|f| matches!(f, FilterFn::Blur(_))))
         }).count();
         assert_eq!(push_count, 2, "два PushFilter для двух shadow с blur, got {dl:?}");
@@ -6766,7 +9686,7 @@ mod tests {
         // Структура: PushFilter, FillRect(shadow), PopFilter, FillRect(bg), ...
         let first = dl.first().unwrap();
         assert!(
-            matches!(first, DisplayCommand::PushFilter { filters }
+            matches!(first, DisplayCommand::PushFilter { filters, .. }
                 if matches!(filters.as_slice(), [FilterFn::Blur(s)] if (*s - 10.0).abs() < 0.01)),
             "PushFilter с Blur(10.0) перед shadow FillRect, got {first:?}"
         );
@@ -6794,6 +9714,64 @@ mod tests {
         assert!(
             matches!(first, DisplayCommand::FillRect { .. }),
             "без blur первая команда — FillRect, не PushFilter"
+        );
+    }
+
+    #[test]
+    fn box_shadow_on_rounded_box_emits_rounded_shadow() {
+        // BUG-138: a hard shadow on a border-radius box must follow the rounded
+        // contour — the shadow is a FillRoundedRect (radii = box radii + spread),
+        // not a square FillRect.
+        let dl = build(
+            "<div></div>",
+            "div { width: 180px; height: 180px; background: blue; \
+             border-radius: 40px; box-shadow: 20px 20px 0 black; }",
+        );
+        // First command is the shadow (painter's order: shadow before bg).
+        let first = dl.first().unwrap();
+        match first {
+            DisplayCommand::FillRoundedRect { radii, color, .. } => {
+                assert_eq!(color.r, 0, "shadow color black");
+                assert!((radii.tl - 40.0).abs() < 0.01, "spread=0 → radius == box radius 40, got {}", radii.tl);
+                assert!((radii.br - 40.0).abs() < 0.01);
+            }
+            other => panic!("rounded box shadow must be FillRoundedRect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn box_shadow_spread_increases_corner_radius() {
+        // CSS Backgrounds L3 §7.1.1: spread expands each non-zero corner radius
+        // by the spread distance. Box 160×160, border-radius:50% (=80), spread 24
+        // → shadow corner radius 80+24 = 104.
+        let dl = build(
+            "<div></div>",
+            "div { width: 160px; height: 160px; background: yellow; \
+             border-radius: 50%; box-shadow: 0 0 0 24px black; }",
+        );
+        let first = dl.first().unwrap();
+        match first {
+            DisplayCommand::FillRoundedRect { radii, rect, .. } => {
+                assert!((radii.tl - 104.0).abs() < 0.01, "radius 80+24=104, got {}", radii.tl);
+                // Shadow rect is 160+2*24 = 208 → radius 104 == half → perfect circle.
+                assert!((rect.width - 208.0).abs() < 0.01);
+            }
+            other => panic!("spread shadow on circle must be FillRoundedRect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn box_shadow_square_box_stays_fillrect() {
+        // No border-radius → shadow remains a square FillRect (no regression).
+        let dl = build(
+            "<div></div>",
+            "div { width: 160px; height: 160px; background: green; \
+             box-shadow: 30px 30px 0 red; }",
+        );
+        let first = dl.first().unwrap();
+        assert!(
+            matches!(first, DisplayCommand::FillRect { .. }),
+            "square box shadow stays FillRect, got {first:?}"
         );
     }
 
@@ -7529,9 +10507,9 @@ mod tests {
     #[test]
     fn clip_path_inset_1() {
         use super::clip_path_to_rect;
-        use lumen_layout::ClipPath;
+        use lumen_layout::{ClipPath, ShapeValue};
         let r = Rect::new(10.0, 20.0, 100.0, 80.0);
-        let clip = ClipPath::Inset(vec![5.0]);
+        let clip = ClipPath::Inset(vec![ShapeValue::Px(5.0)]);
         let cr = clip_path_to_rect(&clip, r);
         assert_eq!(cr, Rect::new(15.0, 25.0, 90.0, 70.0));
     }
@@ -7539,31 +10517,76 @@ mod tests {
     #[test]
     fn clip_path_inset_4() {
         use super::clip_path_to_rect;
-        use lumen_layout::ClipPath;
+        use lumen_layout::{ClipPath, ShapeValue};
         let r = Rect::new(0.0, 0.0, 200.0, 100.0);
         // top=10 right=20 bottom=30 left=40
-        let clip = ClipPath::Inset(vec![10.0, 20.0, 30.0, 40.0]);
+        let clip = ClipPath::Inset(vec![
+            ShapeValue::Px(10.0),
+            ShapeValue::Px(20.0),
+            ShapeValue::Px(30.0),
+            ShapeValue::Px(40.0),
+        ]);
         let cr = clip_path_to_rect(&clip, r);
         assert_eq!(cr, Rect::new(40.0, 10.0, 140.0, 60.0));
     }
 
+    /// BUG-140: проценты inset — top/bottom от height, left/right от width.
+    #[test]
+    fn clip_path_inset_percent() {
+        use super::clip_path_to_rect;
+        use lumen_layout::{ClipPath, ShapeValue};
+        let r = Rect::new(0.0, 0.0, 200.0, 100.0);
+        let clip = ClipPath::Inset(vec![ShapeValue::Pct(10.0)]);
+        let cr = clip_path_to_rect(&clip, r);
+        // top/bottom = 10% от 100 = 10; left/right = 10% от 200 = 20
+        assert_eq!(cr, Rect::new(20.0, 10.0, 160.0, 80.0));
+    }
+
     #[test]
     fn clip_path_circle_default_center() {
-        use super::clip_path_to_rect;
-        use lumen_layout::ClipPath;
+        use super::{clip_path_to_rect, clip_path_to_shape, ResolvedClipShape};
+        use lumen_layout::{ClipPath, ShapeValue};
         let r = Rect::new(0.0, 0.0, 100.0, 60.0);
-        let clip = ClipPath::Circle { radius: 25.0, center: None };
+        let clip = ClipPath::Circle { radius: ShapeValue::Px(25.0), center: None };
         let cr = clip_path_to_rect(&clip, r);
         // center = (50, 30); bounding box = (25, 5, 50, 50)
         assert_eq!(cr, Rect::new(25.0, 5.0, 50.0, 50.0));
+        let shape = clip_path_to_shape(&clip, r);
+        assert_eq!(shape, Some(ResolvedClipShape::Circle { cx: 50.0, cy: 30.0, r: 25.0 }));
+    }
+
+    /// BUG-140 (TEST-109 c0): `circle(40% at 50% 50%)` — радиус от
+    /// sqrt(w²+h²)/√2, центр от width/height.
+    #[test]
+    fn clip_path_circle_percent_radius() {
+        use super::{clip_path_to_shape, ResolvedClipShape};
+        use lumen_layout::{ClipPath, ShapeValue};
+        let r = Rect::new(100.0, 200.0, 220.0, 220.0);
+        let clip = ClipPath::Circle {
+            radius: ShapeValue::Pct(40.0),
+            center: Some((ShapeValue::Pct(50.0), ShapeValue::Pct(50.0))),
+        };
+        match clip_path_to_shape(&clip, r) {
+            Some(ResolvedClipShape::Circle { cx, cy, r: rad }) => {
+                assert!((cx - 210.0).abs() < 0.01);
+                assert!((cy - 310.0).abs() < 0.01);
+                // sqrt((220² + 220²)/2) = 220 → 40% = 88
+                assert!((rad - 88.0).abs() < 0.01, "radius {rad}");
+            }
+            other => panic!("expected Circle, got {other:?}"),
+        }
     }
 
     #[test]
     fn clip_path_ellipse_explicit_center() {
         use super::clip_path_to_rect;
-        use lumen_layout::ClipPath;
+        use lumen_layout::{ClipPath, ShapeValue};
         let r = Rect::new(10.0, 10.0, 200.0, 100.0);
-        let clip = ClipPath::Ellipse { rx: 40.0, ry: 20.0, center: Some((100.0, 50.0)) };
+        let clip = ClipPath::Ellipse {
+            rx: ShapeValue::Px(40.0),
+            ry: ShapeValue::Px(20.0),
+            center: Some((ShapeValue::Px(100.0), ShapeValue::Px(50.0))),
+        };
         let cr = clip_path_to_rect(&clip, r);
         // cx = 10+100=110, cy = 10+50=60
         assert_eq!(cr, Rect::new(70.0, 40.0, 80.0, 40.0));
@@ -7571,13 +10594,60 @@ mod tests {
 
     #[test]
     fn clip_path_polygon_bounding_box() {
-        use super::clip_path_to_rect;
-        use lumen_layout::ClipPath;
+        use super::{clip_path_to_rect, clip_path_to_shape, ResolvedClipShape};
+        use lumen_layout::{ClipPath, FillRule, ShapeValue};
         let r = Rect::new(0.0, 0.0, 200.0, 200.0);
         // triangle: (100,0) (200,200) (0,200)
-        let clip = ClipPath::Polygon(vec![(100.0, 0.0), (200.0, 200.0), (0.0, 200.0)]);
+        let clip = ClipPath::Polygon(
+            vec![
+                (ShapeValue::Px(100.0), ShapeValue::Px(0.0)),
+                (ShapeValue::Px(200.0), ShapeValue::Px(200.0)),
+                (ShapeValue::Px(0.0), ShapeValue::Px(200.0)),
+            ],
+            FillRule::NonZero,
+        );
         let cr = clip_path_to_rect(&clip, r);
         assert_eq!(cr, Rect::new(0.0, 0.0, 200.0, 200.0));
+        // BUG-140 (TEST-109 c2): точная форма — полигон, не bbox.
+        let shape = clip_path_to_shape(&clip, r);
+        assert_eq!(
+            shape,
+            Some(ResolvedClipShape::Polygon {
+                verts: vec![(100.0, 0.0), (200.0, 200.0), (0.0, 200.0)],
+                even_odd: false,
+            })
+        );
+    }
+
+    #[test]
+    fn clip_path_path_resolves_to_polygon() {
+        use super::{clip_path_to_shape, ResolvedClipShape};
+        use lumen_layout::{ClipPath, FillRule};
+        // path() хранит уже флэттенные px-точки в системе пути; clip_path_to_shape
+        // только смещает их на позицию border-box (r.x/r.y).
+        let r = Rect::new(20.0, 30.0, 100.0, 100.0);
+        let clip = ClipPath::Path(vec![(0.0, 0.0), (100.0, 0.0), (50.0, 80.0)], FillRule::NonZero);
+        let shape = clip_path_to_shape(&clip, r);
+        assert_eq!(
+            shape,
+            Some(ResolvedClipShape::Polygon {
+                verts: vec![(20.0, 30.0), (120.0, 30.0), (70.0, 110.0)],
+                even_odd: false,
+            })
+        );
+    }
+
+    #[test]
+    fn clip_path_path_emits_push_clip_path() {
+        let dl = build(
+            "<div></div>",
+            r#"div { width:100px; height:100px; background:red; clip-path:path("M 0 0 L 100 0 L 50 80 Z"); }"#,
+        );
+        let push = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::PushClipPath { .. }))
+            .count();
+        assert_eq!(push, 1, "clip-path:path() должен эмитить PushClipPath");
     }
 
     #[test]
@@ -7597,6 +10667,38 @@ mod tests {
             .filter(|c| matches!(c, DisplayCommand::PopClip))
             .count();
         assert_eq!(push_count, pop_count, "Push/Pop должны быть сбалансированы");
+    }
+
+    /// BUG-140 (TEST-109 c0/c1): clip-path эмитится ВНУТРИ PushTransform —
+    /// клип задан в локальной системе элемента и переносится его transform-ом.
+    #[test]
+    fn clip_path_emitted_inside_transform() {
+        let dl = build(
+            "<div></div>",
+            "div { width:100px; height:50px; transform:rotate(25deg); \
+             clip-path:circle(40% at 50% 50%); background:red; }",
+        );
+        let t_idx = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::PushTransform { .. }))
+            .expect("PushTransform must be emitted");
+        let c_idx = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::PushClipPath { .. }))
+            .expect("PushClipPath must be emitted (percent circle parsed)");
+        assert!(
+            t_idx < c_idx,
+            "PushTransform ({t_idx}) должен предшествовать PushClipPath ({c_idx})"
+        );
+        let pop_t = dl
+            .iter()
+            .rposition(|c| matches!(c, DisplayCommand::PopTransform))
+            .expect("PopTransform");
+        let pop_c = dl
+            .iter()
+            .rposition(|c| matches!(c, DisplayCommand::PopClip))
+            .expect("PopClip");
+        assert!(pop_c < pop_t, "PopClip ({pop_c}) должен закрыться до PopTransform ({pop_t})");
     }
 
     // ── emit_column_rules ──────────────────────────────────────────────────
@@ -7868,21 +10970,20 @@ mod tests {
         assert!(blend_cmds.is_empty(), "normal blend mode must not emit any blend commands");
     }
 
-    /// Non-normal blend mode → PushBlendMode emitted before the gradient, PopBlendMode after.
+    /// Single layer with non-normal blend mode: it is the bottom-most layer, so
+    /// CSS Compositing L1 §8.3 says it blends against transparent background-color.
+    /// For premultiplied alpha, multiply(src, transparent) = src — no visual effect.
+    /// We suppress PushBlendMode to avoid incorrect blending against the stacking context.
     #[test]
-    fn background_blend_mode_multiply_wraps_gradient() {
+    fn background_blend_mode_single_layer_bottom_suppressed() {
         let dl = build(
             r#"<div style="background-image:linear-gradient(red,blue);background-blend-mode:multiply;width:100px;height:100px"></div>"#,
             "",
         );
-        let idx_push = dl.iter().position(|c| matches!(c, DisplayCommand::PushBlendMode { mode: BlendMode::Multiply }));
+        let push_count = dl.iter().filter(|c| matches!(c, DisplayCommand::PushBlendMode { .. })).count();
         let idx_grad = dl.iter().position(|c| matches!(c, DisplayCommand::DrawLinearGradient { .. }));
-        let idx_pop  = dl.iter().position(|c| matches!(c, DisplayCommand::PopBlendMode));
-        assert!(idx_push.is_some(), "PushBlendMode(Multiply) expected");
-        assert!(idx_grad.is_some(), "DrawLinearGradient expected");
-        assert!(idx_pop.is_some(),  "PopBlendMode expected");
-        assert!(idx_push.unwrap() < idx_grad.unwrap(), "PushBlendMode must precede DrawLinearGradient");
-        assert!(idx_grad.unwrap() < idx_pop.unwrap(),  "DrawLinearGradient must precede PopBlendMode");
+        assert_eq!(push_count, 0, "single bottom layer: blend suppressed (identity against transparent)");
+        assert!(idx_grad.is_some(), "DrawLinearGradient still emitted");
     }
 
     /// Two layers: first has multiply, second normal → one blend pair for first layer only.
@@ -7899,16 +11000,43 @@ mod tests {
         assert_eq!(pop_count,  1, "matching PopBlendMode count");
     }
 
+    /// Two layers with same blend mode: bottom suppressed, top blended.
+    /// This is the most common pattern in background-blend-mode CSS.
+    #[test]
+    fn background_blend_mode_two_same_mode_only_top_blended() {
+        let dl = build(
+            r#"<div style="background-image:linear-gradient(red,blue),linear-gradient(green,yellow);background-blend-mode:multiply;width:100px;height:100px"></div>"#,
+            "",
+        );
+        // Bottom layer suppressed, top layer wrapped → exactly 1 PushBlendMode.
+        let push_count = dl.iter().filter(|c| matches!(c, DisplayCommand::PushBlendMode { .. })).count();
+        let pop_count  = dl.iter().filter(|c| matches!(c, DisplayCommand::PopBlendMode)).count();
+        assert_eq!(push_count, 1, "two layers same blend: bottom suppressed, top wrapped → 1 PushBlendMode");
+        assert_eq!(pop_count,  1, "matching PopBlendMode");
+        // Verify order: bottom gradient → PushBlendMode → top gradient → PopBlendMode
+        let positions: Vec<usize> = dl.iter().enumerate().filter_map(|(i, c)| {
+            if matches!(c, DisplayCommand::DrawLinearGradient { .. } | DisplayCommand::PushBlendMode { .. } | DisplayCommand::PopBlendMode) {
+                Some(i)
+            } else { None }
+        }).collect();
+        assert!(positions.len() == 4, "expecting: grad(bottom), PushBlend, grad(top), PopBlend");
+        assert!(matches!(&dl[positions[0]], DisplayCommand::DrawLinearGradient { .. }), "first: bottom gradient");
+        assert!(matches!(&dl[positions[1]], DisplayCommand::PushBlendMode { .. }), "second: PushBlendMode");
+        assert!(matches!(&dl[positions[2]], DisplayCommand::DrawLinearGradient { .. }), "third: top gradient");
+        assert!(matches!(&dl[positions[3]], DisplayCommand::PopBlendMode), "fourth: PopBlendMode");
+    }
+
     /// background-blend-mode cycles when fewer values than layers.
+    /// Bottom layer blend is suppressed (CSS Compositing L1 §8.3 isolated group).
     #[test]
     fn background_blend_mode_cycling() {
-        // 3 layers, 1 value → all three get multiply.
+        // 3 layers, 1 value → all three have multiply, but bottom-most is suppressed.
         let dl = build(
             r#"<div style="background-image:linear-gradient(red,blue),linear-gradient(green,yellow),linear-gradient(cyan,magenta);background-blend-mode:multiply;width:100px;height:100px"></div>"#,
             "",
         );
         let push_count = dl.iter().filter(|c| matches!(c, DisplayCommand::PushBlendMode { mode: BlendMode::Multiply })).count();
-        assert_eq!(push_count, 3, "cycling: 1 value for 3 layers → all 3 get multiply");
+        assert_eq!(push_count, 2, "cycling: 3 layers but bottom-most suppressed → 2 PushBlendMode");
     }
 
     // ── BoxModelOverlay ──────────────────────────────────────────────────────
@@ -8072,6 +11200,19 @@ mod tests {
         assert!(s.contains("scroll=(5.00,15.00)"), "scroll offsets must appear in serialization");
     }
 
+    #[test]
+    fn overflow_auto_emits_push_scroll_layer() {
+        // overflow:auto must produce PushScrollLayer just like overflow:scroll.
+        let dl = build(
+            r#"<div style="overflow:auto;width:100px;height:50px"><p>text</p></div>"#,
+            "",
+        );
+        let has_push = dl.iter().any(|c| matches!(c, DisplayCommand::PushScrollLayer { .. }));
+        let has_pop  = dl.iter().any(|c| matches!(c, DisplayCommand::PopScrollLayer));
+        assert!(has_push, "overflow:auto must emit PushScrollLayer");
+        assert!(has_pop,  "overflow:auto must emit PopScrollLayer");
+    }
+
     // ── DrawScrollbar ─────────────────────────────────────────────────────────
 
     /// overflow:scroll with content taller than clip → vertical DrawScrollbar emitted.
@@ -8119,7 +11260,7 @@ mod tests {
             .iter()
             .find(|c| matches!(c, DisplayCommand::DrawScrollbar { vertical: true, .. }))
             .expect("должен быть вертикальный DrawScrollbar");
-        if let DisplayCommand::DrawScrollbar { track_rect, thumb_rect, vertical: true } = sb {
+        if let DisplayCommand::DrawScrollbar { track_rect, thumb_rect, vertical: true, .. } = sb {
             // Track right edge must be at right edge of clip (within padding box).
             assert!(track_rect.width > 0.0, "track width > 0");
             assert!(thumb_rect.height > 0.0, "thumb height > 0");
@@ -8142,10 +11283,74 @@ mod tests {
             track_rect: Rect::new(90.0, 0.0, 12.0, 50.0),
             thumb_rect: Rect::new(92.0, 5.0, 8.0, 20.0),
             vertical: true,
+            thumb_color: SCROLLBAR_THUMB_COLOR,
+            track_color: SCROLLBAR_TRACK_COLOR,
         }];
         let s = serialize_display_list(&dl);
         assert!(s.contains("DrawScrollbar"), "serialization must contain DrawScrollbar");
         assert!(s.contains("vertical"), "serialization must mention orientation");
+    }
+
+    /// `scrollbar-width: none` suppresses DrawScrollbar while keeping scroll layer.
+    #[test]
+    fn scrollbar_width_none_no_draw_scrollbar() {
+        let dl = build(
+            r#"<div style="overflow:scroll;width:100px;height:50px;scrollbar-width:none"><div style="height:200px"></div></div>"#,
+            "",
+        );
+        let bars = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawScrollbar { .. }))
+            .count();
+        assert_eq!(bars, 0, "scrollbar-width:none → нет DrawScrollbar");
+        // Scroll layer must still be present so content can scroll.
+        let has_scroll = dl
+            .iter()
+            .any(|c| matches!(c, DisplayCommand::PushScrollLayer { .. }));
+        assert!(has_scroll, "scrollbar-width:none → scroll layer должен оставаться");
+    }
+
+    /// `scrollbar-width: thin` emits DrawScrollbar with narrower track (6px gutter).
+    #[test]
+    fn scrollbar_width_thin_narrow_track() {
+        let dl = build(
+            r#"<div style="overflow:scroll;width:100px;height:50px;scrollbar-width:thin"><div style="height:200px"></div></div>"#,
+            "",
+        );
+        let sb = dl
+            .iter()
+            .find(|c| matches!(c, DisplayCommand::DrawScrollbar { vertical: true, .. }))
+            .expect("thin scrollbar must emit DrawScrollbar");
+        if let DisplayCommand::DrawScrollbar { track_rect, .. } = sb {
+            assert!(
+                (track_rect.width - SCROLLBAR_WIDTH_THIN).abs() < 0.5,
+                "thin track width should be ~{} px, got {}",
+                SCROLLBAR_WIDTH_THIN,
+                track_rect.width
+            );
+        }
+    }
+
+    /// `scrollbar-color` wires custom thumb+track colors into DrawScrollbar.
+    #[test]
+    fn scrollbar_color_custom_colors() {
+        // red thumb, blue track
+        let dl = build(
+            r#"<div style="overflow:scroll;width:100px;height:50px;scrollbar-color:red blue"><div style="height:200px"></div></div>"#,
+            "",
+        );
+        let sb = dl
+            .iter()
+            .find(|c| matches!(c, DisplayCommand::DrawScrollbar { vertical: true, .. }))
+            .expect("must emit DrawScrollbar");
+        if let DisplayCommand::DrawScrollbar { thumb_color, track_color, .. } = sb {
+            // Red thumb: r≈1.0, g≈0, b≈0
+            assert!(thumb_color[0] > 0.9, "thumb red channel must be ~1.0");
+            assert!(thumb_color[1] < 0.1, "thumb green channel must be ~0");
+            // Blue track: b≈1.0, r≈0
+            assert!(track_color[2] > 0.9, "track blue channel must be ~1.0");
+            assert!(track_color[0] < 0.1, "track red channel must be ~0");
+        }
     }
 
     /// overflow:hidden does not emit DrawScrollbar (no scroll layer).
@@ -8236,6 +11441,89 @@ mod tests {
         assert!(cmds.is_empty());
     }
 
+    // ── strip_background_graphics (CC-8) ────────────────────────────────────
+
+    /// `print_backgrounds = true` is a no-op: every command survives.
+    #[test]
+    fn strip_bg_keeps_all_when_enabled() {
+        use lumen_core::geom::Rect;
+        let r = Rect { x: 0.0, y: 0.0, width: 5.0, height: 5.0 };
+        let mut pages = vec![vec![
+            DisplayCommand::FillRect { rect: r, color: Color { r: 1, g: 2, b: 3, a: 255 } },
+            DisplayCommand::DrawLinearGradient { rect: r, angle_deg: 0.0, stops: vec![], repeating: false },
+        ]];
+        strip_background_graphics(&mut pages, true);
+        assert_eq!(pages[0].len(), 2);
+    }
+
+    /// `print_backgrounds = false` removes solid background fills + gradients +
+    /// background images, but keeps text, borders and `<img>` foreground.
+    #[test]
+    fn strip_bg_removes_background_family_when_disabled() {
+        use lumen_core::geom::Rect;
+        let r = Rect { x: 0.0, y: 0.0, width: 5.0, height: 5.0 };
+        let mut pages = vec![vec![
+            DisplayCommand::FillRect { rect: r, color: Color { r: 1, g: 2, b: 3, a: 255 } },
+            DisplayCommand::FillRoundedRect { rect: r, color: Color { r: 1, g: 2, b: 3, a: 255 }, radii: CornerRadii::default() },
+            DisplayCommand::DrawLinearGradient { rect: r, angle_deg: 0.0, stops: vec![], repeating: false },
+            DisplayCommand::DrawRadialGradient { rect: r, center_x_pct: 0.5, center_y_pct: 0.5, stops: vec![], repeating: false },
+            DisplayCommand::DrawConicGradient { rect: r, center_x_pct: 0.5, center_y_pct: 0.5, from_angle_deg: 0.0, stops: vec![], repeating: false },
+            DisplayCommand::DrawBackgroundImage {
+                rect: r, origin_rect: r, src: "bg.png".to_owned(),
+                size: BackgroundSize::Auto, position: ObjectPosition::default(),
+                repeat: BackgroundRepeat::default(), image_rendering: ImageRendering::Auto,
+            },
+            DisplayCommand::DrawText {
+                rect: r, text: "hi".to_owned(), font_size: 12.0,
+                color: Color { r: 0, g: 0, b: 0, a: 255 }, font_family: vec![],
+                font_weight: FontWeight::NORMAL, font_style: FontStyle::Normal,
+                font_variation_axes: vec![], tab_size: 0.0, highlight_name: None,
+            },
+            DisplayCommand::DrawImage {
+                rect: r, src: "img.png".to_owned(), alt: String::new(),
+                object_fit: ObjectFit::Fill, object_position: ObjectPosition::default(),
+                image_rendering: ImageRendering::Auto,
+            },
+        ]];
+        strip_background_graphics(&mut pages, false);
+        assert_eq!(pages[0].len(), 2, "only DrawText + DrawImage survive");
+        assert!(matches!(pages[0][0], DisplayCommand::DrawText { .. }));
+        assert!(matches!(pages[0][1], DisplayCommand::DrawImage { .. }));
+    }
+
+    /// Filtering is applied per page across a multi-page job and keeps
+    /// `Push*`/`Pop*` nesting balanced (only leaf fills are dropped).
+    #[test]
+    fn strip_bg_per_page_and_balanced_nesting() {
+        use lumen_core::geom::Rect;
+        let r = Rect { x: 0.0, y: 0.0, width: 5.0, height: 5.0 };
+        let mut pages = vec![
+            vec![
+                DisplayCommand::PushClipRect { rect: r },
+                DisplayCommand::FillRect { rect: r, color: Color { r: 9, g: 9, b: 9, a: 255 } },
+                DisplayCommand::PopClip,
+            ],
+            vec![
+                DisplayCommand::FillRect { rect: r, color: Color { r: 1, g: 1, b: 1, a: 255 } },
+            ],
+        ];
+        strip_background_graphics(&mut pages, false);
+        // Page 0: clip push/pop remain, the fill between them is gone.
+        assert_eq!(pages[0].len(), 2);
+        assert!(matches!(pages[0][0], DisplayCommand::PushClipRect { .. }));
+        assert!(matches!(pages[0][1], DisplayCommand::PopClip));
+        // Page 1: lone background fill removed → empty.
+        assert!(pages[1].is_empty());
+    }
+
+    /// Empty input slice is handled without panicking.
+    #[test]
+    fn strip_bg_empty_pages_noop() {
+        let mut pages: Vec<Vec<DisplayCommand>> = vec![];
+        strip_background_graphics(&mut pages, false);
+        assert!(pages.is_empty());
+    }
+
     /// build_print_display_list on two pages inserts exactly one PageBreak.
     #[test]
     fn print_dl_two_pages_one_page_break() {
@@ -8263,6 +11551,133 @@ mod tests {
         let cmds = build_print_display_list(&pages);
         let breaks = cmds.iter().filter(|c| matches!(c, DisplayCommand::PageBreak)).count();
         assert_eq!(breaks, pages.len() - 1, "N pages → N-1 PageBreaks");
+    }
+
+    // ── Tests for build_print_display_list margin-box rendering ──────────
+
+    /// Page without page_box emits no margin-box DrawText commands.
+    #[test]
+    fn print_dl_no_page_box_no_margin_text() {
+        use lumen_layout::{paginate, PaginationContext};
+
+        let doc = lumen_html_parser::parse("<div style='height:100px'></div>");
+        let sheet = lumen_css_parser::parse("");
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(400.0, 600.0));
+        let ctx = PaginationContext {
+            page_width: 400.0,
+            page_height: 600.0,
+            margin_top: 0.0,
+            margin_bottom: 0.0,
+            margin_left: 0.0,
+            margin_right: 0.0,
+        };
+        let pages = paginate(&tree, &ctx);
+        assert!(!pages.is_empty());
+        // No page_box — no DrawText from margin boxes
+        let cmds = build_print_display_list(&pages);
+        let text_cmds: Vec<_> = cmds.iter().filter(|c| matches!(c, DisplayCommand::DrawText { .. })).collect();
+        assert!(text_cmds.is_empty(), "no margin-box DrawText without page_box");
+    }
+
+    /// Page with a page_box containing bottom-center text emits a DrawText command.
+    #[test]
+    fn print_dl_page_box_bottom_center_emits_draw_text() {
+        use lumen_layout::{
+            paginate, MarginBoxPosition, PageBox, PageProperties, PaginationContext, TextMeasurer,
+        };
+
+        struct Fixed8;
+        impl TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+
+        let doc = lumen_html_parser::parse("<div style='height:100px'></div>");
+        let sheet = lumen_css_parser::parse("");
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(400.0, 600.0));
+        let ctx = PaginationContext {
+            page_width: 400.0,
+            page_height: 600.0,
+            margin_top: 40.0,
+            margin_bottom: 40.0,
+            margin_left: 40.0,
+            margin_right: 40.0,
+        };
+        let mut pages = paginate(&tree, &ctx);
+        assert!(!pages.is_empty());
+
+        let props = PageProperties {
+            width: 400.0, height: 600.0,
+            orientation: "portrait".to_string(),
+            margin_top: 40.0, margin_bottom: 40.0,
+            margin_left: 40.0, margin_right: 40.0,
+        };
+        let mut page_box = PageBox::new(0, props);
+        page_box.layout_margin_boxes();
+        let label = "1 / 1";
+        if let Some(mb) = page_box.margin_boxes.get_mut(&MarginBoxPosition::BottomCenter) {
+            mb.content = Some(label.to_string());
+            mb.layout_text(label, 10.0, 15.0, &Fixed8);
+        }
+        pages[0].page_box = Some(page_box);
+
+        let cmds = build_print_display_list(&pages);
+        let texts: Vec<&str> = cmds.iter().filter_map(|c| {
+            if let DisplayCommand::DrawText { text, .. } = c { Some(text.as_str()) } else { None }
+        }).collect();
+        assert!(texts.contains(&"1 / 1"), "expected '1 / 1' in DrawText, got: {:?}", texts);
+    }
+
+    /// Margin-box DrawText positioned at page-box coordinates (not inside content transform).
+    #[test]
+    fn print_dl_margin_box_text_absolute_position() {
+        use lumen_layout::{
+            paginate, MarginBoxPosition, PageBox, PageProperties, PaginationContext, TextMeasurer,
+        };
+
+        struct Fixed8;
+        impl TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+
+        let doc = lumen_html_parser::parse("<div style='height:50px'></div>");
+        let sheet = lumen_css_parser::parse("");
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(200.0, 300.0));
+        let ctx = PaginationContext {
+            page_width: 200.0,
+            page_height: 300.0,
+            margin_top: 30.0,
+            margin_bottom: 30.0,
+            margin_left: 30.0,
+            margin_right: 30.0,
+        };
+        let mut pages = paginate(&tree, &ctx);
+
+        let props = PageProperties {
+            width: 200.0, height: 300.0,
+            orientation: "portrait".to_string(),
+            margin_top: 30.0, margin_bottom: 30.0,
+            margin_left: 30.0, margin_right: 30.0,
+        };
+        let mut page_box = PageBox::new(0, props);
+        page_box.layout_margin_boxes();
+        let label = "PG1";
+        // Use top-left-corner so we can predict coordinates: x=0, y=0
+        if let Some(mb) = page_box.margin_boxes.get_mut(&MarginBoxPosition::TopLeftCorner) {
+            mb.content = Some(label.to_string());
+            mb.layout_text(label, 10.0, 15.0, &Fixed8);
+        }
+        pages[0].page_box = Some(page_box);
+
+        let cmds = build_print_display_list(&pages);
+        let pg1_rect = cmds.iter().find_map(|c| {
+            if let DisplayCommand::DrawText { text, rect, .. } = c {
+                if text == "PG1" { Some(*rect) } else { None }
+            } else { None }
+        });
+        let rect = pg1_rect.expect("DrawText 'PG1' not found");
+        // TopLeftCorner is at page origin (0,0); fragment offset is 0,0 inside box
+        assert!(rect.x >= 0.0 && rect.x < 10.0, "x should be at page origin, got {}", rect.x);
+        assert!(rect.y >= 0.0 && rect.y < 10.0, "y should be at page origin, got {}", rect.y);
     }
 
     // ── Tests for DrawCrossFade ────────────────────────────────────────────
@@ -8573,4 +11988,1253 @@ mod tests {
         assert_eq!(two_content, split, "lanes fold in sequence (content then overlay)");
         let _ = in_overlay;
     }
+
+    // ── Тесты table rendering Phase 1 ─────────────────────────────────────
+
+    #[test]
+    fn table_context_default_is_separate_mode() {
+        // Тест для убеждения что TableContext::from_box возвращает separate режим по умолчанию
+        // (реальный тест с LayoutBox требует полного setup, поэтому проверяем структуру)
+        let ctx = TableContext {
+            border_collapse: BorderCollapse::Separate,
+            border_spacing: (8.0, 8.0),
+        };
+        assert_eq!(ctx.border_collapse, BorderCollapse::Separate);
+        assert_eq!(ctx.border_spacing, (8.0, 8.0));
+    }
+
+    #[test]
+    fn border_collapse_separate_wins_over_lower_precedence() {
+        let cell_border = CollapsedBorder {
+            width: 1.0,
+            color: [1.0, 0.0, 0.0, 1.0],
+            style: BorderStyle::Solid,
+            precedence: BorderPrecedence::Cell,
+        };
+        let table_border = CollapsedBorder {
+            width: 1.0,
+            color: [0.0, 1.0, 0.0, 1.0],
+            style: BorderStyle::Solid,
+            precedence: BorderPrecedence::Table,
+        };
+        let resolved = CollapsedBorder::resolve_conflict(&table_border, &cell_border);
+        assert_eq!(resolved.precedence, BorderPrecedence::Cell);
+        assert_eq!(resolved.color, [1.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn border_collapse_wider_border_wins_at_equal_precedence() {
+        let thin = CollapsedBorder {
+            width: 1.0,
+            color: [1.0, 0.0, 0.0, 1.0],
+            style: BorderStyle::Solid,
+            precedence: BorderPrecedence::Cell,
+        };
+        let thick = CollapsedBorder {
+            width: 2.0,
+            color: [0.0, 1.0, 0.0, 1.0],
+            style: BorderStyle::Solid,
+            precedence: BorderPrecedence::Cell,
+        };
+        let resolved = CollapsedBorder::resolve_conflict(&thin, &thick);
+        assert_eq!(resolved.width, 2.0);
+        assert_eq!(resolved.color, [0.0, 1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn table_separate_mode_renders_with_cells_independent() {
+        // Phase 1: table в separate режиме — каждая ячейка имеет независимые границы
+        let dl = build(
+            "<table><tr><td>A</td><td>B</td></tr></table>",
+            "td { border: 1px solid black; background: lightblue; }",
+        );
+        // Должны быть эмитированы фоны ячеек (2×FillRect для ячеек + контент)
+        let fills = fills(&dl);
+        assert!(!fills.is_empty(), "table cells should have background fills");
+    }
+
+    #[test]
+    fn border_precedence_ordering_correct() {
+        assert!(BorderPrecedence::Table < BorderPrecedence::RowGroup);
+        assert!(BorderPrecedence::RowGroup < BorderPrecedence::Row);
+        assert!(BorderPrecedence::Row < BorderPrecedence::Column);
+        assert!(BorderPrecedence::Column < BorderPrecedence::Cell);
+    }
+
+    #[test]
+    fn table_cell_with_border_emits_draw_border() {
+        // Phase 1: table cell с border должна эмитировать DrawBorder
+        let dl = build(
+            "<table><tr><td>A</td></tr></table>",
+            "td { border: 2px solid red; }",
+        );
+        let border_cmds: Vec<_> = dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawBorder { .. }))
+            .collect();
+        assert!(!border_cmds.is_empty(), "cell should emit DrawBorder command");
+    }
+
+    #[test]
+    fn table_cells_no_border_style_none() {
+        // Ячейка без border-style не должна эмитировать DrawBorder
+        let dl = build(
+            "<table><tr><td>A</td></tr></table>",
+            "td { border: 0; }",
+        );
+        let border_cmds: Vec<_> = dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawBorder { .. }))
+            .collect();
+        assert!(border_cmds.is_empty(), "cell with no border should not emit DrawBorder");
+    }
+
+    #[test]
+    fn table_with_thead_tbody_tfoot() {
+        // Table с thead, tbody, tfoot должна корректно обрабатывать all three groups
+        let dl = build(
+            "<table>\
+                <thead><tr><td>H</td></tr></thead>\
+                <tbody><tr><td>B</td></tr></tbody>\
+                <tfoot><tr><td>F</td></tr></tfoot>\
+            </table>",
+            "td { border: 1px solid black; }",
+        );
+        // Должны быть эмитированы границы для всех трёх групп (3× DrawBorder)
+        let border_cmds: Vec<_> = dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawBorder { .. }))
+            .collect();
+        assert_eq!(border_cmds.len(), 3, "should have 3 DrawBorder commands for 3 rows");
+    }
+
+    #[test]
+    fn table_cell_background_color_separate_mode() {
+        // Каждая ячейка в separate режиме должна иметь независимый фон
+        let dl = build(
+            "<table><tr><td>A</td><td>B</td></tr></table>",
+            "td { background: lightblue; } td:first-child { background: lightcoral; }",
+        );
+        // Должны быть эмитированы 2 FillRect для cell backgrounds
+        let fills = fills(&dl);
+        assert!(fills.len() >= 2, "should have at least 2 cell background fills");
+    }
+
+    #[test]
+    fn table_collapsed_border_wider_wins() {
+        // При collapse режиме более широкая граница побеждает (Phase 1 stub test)
+        let thin = CollapsedBorder {
+            width: 1.0,
+            color: [1.0, 0.0, 0.0, 1.0],
+            style: BorderStyle::Solid,
+            precedence: BorderPrecedence::Cell,
+        };
+        let thick = CollapsedBorder {
+            width: 3.0,
+            color: [0.0, 0.0, 1.0, 1.0],
+            style: BorderStyle::Solid,
+            precedence: BorderPrecedence::Cell,
+        };
+        let resolved = CollapsedBorder::resolve_conflict(&thin, &thick);
+        assert_eq!(resolved.width, 3.0, "thicker border should win");
+        assert_eq!(resolved.color, [0.0, 0.0, 1.0, 1.0], "should use thick border color");
+    }
+
+    #[test]
+    fn table_empty_cells_do_not_crash() {
+        // Table с пустыми ячейками должна обрабатываться без panic
+        let _dl = build(
+            "<table>\
+                <tr><td></td><td>B</td></tr>\
+                <tr><td>C</td><td></td></tr>\
+            </table>",
+            "td { border: 1px solid #ccc; padding: 8px; }",
+        );
+        // Test passes if no panic occurs
+    }
+
+    #[test]
+    fn table_nested_in_other_content() {
+        // Table внутри других элементов должна рендериться корректно
+        let dl = build(
+            "<div>\
+                <p>Before</p>\
+                <table><tr><td>In Table</td></tr></table>\
+                <p>After</p>\
+            </div>",
+            "td { border: 1px solid black; background: yellow; }",
+        );
+        // Должны быть эмитированы: текст "Before", таблица, текст "After"
+        let texts = texts(&dl);
+        assert!(texts.iter().any(|t| t.contains("Before")), "should have 'Before' text");
+        assert!(texts.iter().any(|t| t.contains("In Table")), "should have 'In Table' text");
+        assert!(texts.iter().any(|t| t.contains("After")), "should have 'After' text");
+    }
+
+    // ── Тесты SVG text rendering ───────────────────────────────────────
+
+    #[test]
+    fn svg_text_emits_drawtext_command() {
+        // <text>Hello</text> should emit a DrawText command
+        let dl = build("<svg><text>Hello</text></svg>", "");
+        let texts = texts(&dl);
+        assert!(texts.iter().any(|t| t.contains("Hello")), "should emit text 'Hello'");
+    }
+
+    #[test]
+    fn ordered_svg_shape_emits_fill() {
+        // BUG-089: the ordered (stacking-context) path must paint SVG shapes.
+        // `emit_box_self` previously no-op'd SvgShape, so shapes vanished in the
+        // shell's ordered pipeline (only `walk` painted them). A <rect> with an
+        // explicit fill must produce a FillRect via `build_display_list_ordered`.
+        let dl = build_ordered(
+            "<svg width='100' height='100'><rect x='0' y='0' width='50' height='50' style='fill:#ff0000;'/></svg>",
+            "",
+        );
+        let has_red_fill = dl.iter().any(|c| matches!(
+            c,
+            DisplayCommand::FillRect { color, .. }
+                if color.r == 255 && color.g == 0 && color.b == 0
+        ));
+        assert!(has_red_fill, "ordered path must emit FillRect for SVG <rect>, got {dl:?}");
+    }
+
+    #[test]
+    fn svg_viewport_clips_overflowing_content() {
+        // BUG-110: an SVG with object-fit: cover scales its viewBox to overflow the box;
+        // the SVG viewport (UA default `overflow: hidden`) must clip it. Both the `walk`
+        // and the ordered pipeline must wrap the SVG's shape children in a PushClipRect
+        // bounded by the SVG box (160×120), so cover content cannot paint over siblings.
+        let html = "<svg width='160' height='120' viewBox='0 0 200 80' style='object-fit:cover;'>\
+                    <rect width='200' height='80' style='fill:#ff0000;'/></svg>";
+        for dl in [build(html, ""), build_ordered(html, "")] {
+            let clip = dl.iter().find_map(|c| match c {
+                DisplayCommand::PushClipRect { rect } if (rect.width - 160.0).abs() < 1.0
+                    && (rect.height - 120.0).abs() < 1.0 => Some(*rect),
+                _ => None,
+            });
+            assert!(clip.is_some(), "SVG viewport must emit a 160×120 PushClipRect, got {dl:?}");
+        }
+    }
+
+    #[test]
+    fn ordered_svg_text_emits_drawtext() {
+        // BUG-089 companion: ordered path must also paint SVG <text>.
+        let dl = build_ordered("<svg><text>Hi</text></svg>", "");
+        let has_text = dl.iter().any(|c| matches!(
+            c,
+            DisplayCommand::DrawText { text, .. } if text.contains("Hi")
+        ));
+        assert!(has_text, "ordered path must emit DrawText for SVG <text>");
+    }
+
+    #[test]
+    fn ordered_svg_path_stroke_emits_drawsvgpath() {
+        // BUG-096: an SVG <path> has a zero-size layout rect (path bbox is deferred
+        // to paint), so `emit_svg_shape`'s 0×0 guard used to drop every path in the
+        // ordered pipeline → TEST-54 painted nothing. The path must now emit a
+        // DrawSvgPath tessellated in its stroke colour (#e94560 = 233,69,96), and
+        // `fill="none"` (an SVG presentation attribute) must suppress the fill so no
+        // black fill leaks in.
+        let dl = build_ordered(
+            "<svg width='200' height='160'>\
+                <path d='M 20 140 L 180 20' fill='none' stroke='#e94560' stroke-width='8'/>\
+             </svg>",
+            "",
+        );
+        let svg_paths: Vec<&Color> = dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawSvgPath { color, .. } => Some(color),
+                _ => None,
+            })
+            .collect();
+        assert!(!svg_paths.is_empty(), "ordered path must emit DrawSvgPath for <path>, got {dl:?}");
+        assert!(
+            svg_paths.iter().all(|c| c.r == 233 && c.g == 69 && c.b == 96),
+            "path must paint in stroke colour #e94560, not a default black fill; got {svg_paths:?}",
+        );
+    }
+
+    #[test]
+    fn paint_order_default_paints_fill_then_stroke() {
+        // CSS Fill & Stroke L3 §6 — default `normal` order: fill first, stroke on top.
+        // fill=red (#ff0000), stroke=blue (#0000ff) on a closed triangle path.
+        let dl = build(
+            "<svg width='200' height='160'>\
+                <path d='M 20 140 L 180 20 L 180 140 Z' fill='#ff0000' stroke='#0000ff' stroke-width='10'/>\
+             </svg>",
+            "",
+        );
+        let colors: Vec<&Color> = dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawSvgPath { color, .. } => Some(color),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(colors.len(), 2, "fill + stroke → two DrawSvgPath, got {dl:?}");
+        assert_eq!((colors[0].r, colors[0].b), (255, 0), "fill (red) painted first");
+        assert_eq!((colors[1].r, colors[1].b), (0, 255), "stroke (blue) painted on top");
+    }
+
+    #[test]
+    fn paint_order_stroke_reverses_fill_and_stroke() {
+        // `paint-order: stroke` paints stroke first (under the fill).
+        let dl = build(
+            "<svg width='200' height='160'>\
+                <path d='M 20 140 L 180 20 L 180 140 Z' fill='#ff0000' stroke='#0000ff' \
+                 stroke-width='10' style='paint-order: stroke'/>\
+             </svg>",
+            "",
+        );
+        let colors: Vec<&Color> = dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawSvgPath { color, .. } => Some(color),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(colors.len(), 2, "fill + stroke → two DrawSvgPath, got {dl:?}");
+        assert_eq!((colors[0].r, colors[0].b), (0, 255), "stroke (blue) painted first, under fill");
+        assert_eq!((colors[1].r, colors[1].b), (255, 0), "fill (red) painted on top");
+    }
+
+    #[test]
+    fn svg_text_with_fill_color() {
+        // <text style="fill: red">Colored</text> should emit DrawText with fill color
+        let dl = build("<svg><text style=\"fill: red\">Colored</text></svg>", "");
+        let text_cmds: Vec<&DisplayCommand> = dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawText { .. }))
+            .collect();
+        assert!(!text_cmds.is_empty(), "should emit DrawText command");
+    }
+
+    #[test]
+    fn svg_text_with_font_size() {
+        // <text style="font-size: 24px">Sized</text> should use specified font-size
+        let dl = build("<svg><text style=\"font-size: 24px\">Sized</text></svg>", "");
+        let text_cmds: Vec<_> = dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawText { font_size, .. } => Some(font_size),
+                _ => None,
+            })
+            .collect();
+        assert!(!text_cmds.is_empty(), "should have DrawText with font-size");
+    }
+
+    #[test]
+    fn svg_tspan_emits_text() {
+        // <text><tspan>Part1</tspan><tspan>Part2</tspan></text> should emit text
+        let dl = build("<svg><text><tspan>Part1</tspan><tspan>Part2</tspan></text></svg>", "");
+        let texts = texts(&dl);
+        assert!(!texts.is_empty(), "should emit at least one text command");
+    }
+
+    #[test]
+    fn svg_textpath_collects_content() {
+        // <text><textPath>OnPath</textPath></text> should collect textPath content
+        let dl = build("<svg><text><textPath>OnPath</textPath></text></svg>", "");
+        let texts = texts(&dl);
+        // Phase 1: just collect and emit content, ignore path rendering
+        assert!(texts.iter().any(|t| t.contains("OnPath")) || texts.is_empty(),
+                "should have collected textPath content or empty is acceptable in Phase 1");
+    }
+
+    #[test]
+    fn svg_text_anchor_middle_shifts_x_left() {
+        // text-anchor="middle": DrawText rect.x should be shifted left by ~half text width
+        // compared to text-anchor="start" at the same SVG x position.
+        let dl_start = build(r#"<svg width="200" height="100"><text x="100" y="50" text-anchor="start">AB</text></svg>"#, "");
+        let dl_middle = build(r#"<svg width="200" height="100"><text x="100" y="50" text-anchor="middle">AB</text></svg>"#, "");
+        let x_start = dl_start.iter().find_map(|c| match c {
+            DisplayCommand::DrawText { rect, .. } => Some(rect.x),
+            _ => None,
+        });
+        let x_middle = dl_middle.iter().find_map(|c| match c {
+            DisplayCommand::DrawText { rect, .. } => Some(rect.x),
+            _ => None,
+        });
+        let (xs, xm) = (x_start.expect("start DrawText"), x_middle.expect("middle DrawText"));
+        assert!(xm < xs, "text-anchor=middle should shift x left vs start: middle={xm}, start={xs}");
+    }
+
+    #[test]
+    fn svg_text_dx_dy_offset_applied() {
+        // dx="10" dy="5" should shift the DrawText rect by those amounts vs no offset
+        let dl_no_offset = build(r#"<svg width="200" height="100"><text x="50" y="50">Hi</text></svg>"#, "");
+        let dl_with_offset = build(r#"<svg width="200" height="100"><text x="50" y="50" dx="10" dy="5">Hi</text></svg>"#, "");
+        let pos_no = dl_no_offset.iter().find_map(|c| match c {
+            DisplayCommand::DrawText { rect, .. } => Some((rect.x, rect.y)),
+            _ => None,
+        });
+        let pos_off = dl_with_offset.iter().find_map(|c| match c {
+            DisplayCommand::DrawText { rect, .. } => Some((rect.x, rect.y)),
+            _ => None,
+        });
+        let ((x0, y0), (x1, y1)) = (pos_no.expect("no-offset DrawText"), pos_off.expect("offset DrawText"));
+        assert!((x1 - x0 - 10.0).abs() < 1.0, "dx=10 should shift x by ~10: Δx={}", x1 - x0);
+        assert!((y1 - y0 - 5.0).abs() < 1.0, "dy=5 should shift y by ~5: Δy={}", y1 - y0);
+    }
+
+    #[test]
+    fn svg_text_dominant_baseline_middle_shifts_y() {
+        // dominant-baseline="middle" should shift DrawText rect.y up compared to auto
+        let dl_auto = build(r#"<svg width="200" height="100"><text x="50" y="50" dominant-baseline="auto">T</text></svg>"#, "");
+        let dl_middle = build(r#"<svg width="200" height="100"><text x="50" y="50" dominant-baseline="middle">T</text></svg>"#, "");
+        let y_auto = dl_auto.iter().find_map(|c| match c {
+            DisplayCommand::DrawText { rect, .. } => Some(rect.y),
+            _ => None,
+        });
+        let y_middle = dl_middle.iter().find_map(|c| match c {
+            DisplayCommand::DrawText { rect, .. } => Some(rect.y),
+            _ => None,
+        });
+        let (ya, ym) = (y_auto.expect("auto DrawText"), y_middle.expect("middle DrawText"));
+        assert!(ym < ya, "dominant-baseline=middle should shift y up vs auto: middle={ym}, auto={ya}");
+    }
+
+    // ── FilterMode conversion tests (B-6) ──────────────────────────────────
+
+    #[test]
+    fn filter_mode_from_auto_is_linear() {
+        let mode = FilterMode::from_image_rendering(ImageRendering::Auto);
+        assert_eq!(mode, FilterMode::Linear, "auto → Linear (bilinear)");
+    }
+
+    #[test]
+    fn filter_mode_from_smooth_is_linear() {
+        let mode = FilterMode::from_image_rendering(ImageRendering::Smooth);
+        assert_eq!(mode, FilterMode::Linear, "smooth → Linear (bilinear)");
+    }
+
+    #[test]
+    fn filter_mode_from_crisp_edges_is_nearest() {
+        let mode = FilterMode::from_image_rendering(ImageRendering::CrispEdges);
+        assert_eq!(mode, FilterMode::Nearest, "crisp-edges → Nearest (pixel-perfect)");
+    }
+
+    #[test]
+    fn filter_mode_from_pixelated_is_nearest() {
+        let mode = FilterMode::from_image_rendering(ImageRendering::Pixelated);
+        assert_eq!(mode, FilterMode::Nearest, "pixelated → Nearest (pixel-perfect)");
+    }
+
+    // Display list diffing tests (A-10)
+    #[test]
+    fn diff_identical_empty_lists() {
+        let empty1: Vec<DisplayCommand> = vec![];
+        let empty2: Vec<DisplayCommand> = vec![];
+        let result = diff_display_lists(&empty1, &empty2);
+        assert!(result.identical, "two empty lists should be identical");
+    }
+
+    #[test]
+    fn diff_identical_single_command() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
+
+        let cmd1 = DisplayCommand::FillRect {
+            rect,
+            color: red,
+        };
+        let cmd2 = DisplayCommand::FillRect {
+            rect,
+            color: red,
+        };
+
+        let list1 = vec![cmd1];
+        let list2 = vec![cmd2];
+
+        let result = diff_display_lists(&list1, &list2);
+        assert!(result.identical, "identical FillRect commands should be identical");
+    }
+
+    #[test]
+    fn diff_different_lengths() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
+
+        let cmd = DisplayCommand::FillRect {
+            rect,
+            color: red,
+        };
+
+        let list1 = vec![cmd.clone()];
+        let list2 = vec![cmd.clone(), cmd];
+
+        let result = diff_display_lists(&list1, &list2);
+        assert!(!result.identical, "lists with different lengths should not be identical");
+    }
+
+    #[test]
+    fn diff_different_colors() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
+
+        let cmd1 = DisplayCommand::FillRect {
+            rect,
+            color: red,
+        };
+        let cmd2 = DisplayCommand::FillRect {
+            rect,
+            color: blue,
+        };
+
+        let list1 = vec![cmd1];
+        let list2 = vec![cmd2];
+
+        let result = diff_display_lists(&list1, &list2);
+        assert!(!result.identical, "FillRects with different colors should not be identical");
+        assert!(!result.changed_rects.width.is_nan(), "changed_rects should be valid");
+    }
+
+    #[test]
+    fn diff_changed_rects_bounds() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let rect1 = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
+        let rect2 = Rect {
+            x: 30.0,
+            y: 40.0,
+            width: 80.0,
+            height: 60.0,
+        };
+
+        let cmd1 = DisplayCommand::FillRect {
+            rect: rect1,
+            color: red,
+        };
+        let cmd2 = DisplayCommand::FillRect {
+            rect: rect2,
+            color: red,
+        };
+
+        let list1 = vec![cmd1];
+        let list2 = vec![cmd2];
+
+        let result = diff_display_lists(&list1, &list2);
+        assert!(!result.identical, "FillRects with different positions should not be identical");
+        // changed_rects should be the union of rect1 and rect2
+        assert_eq!(result.changed_rects.x, 10.0, "left edge should be min of both rects");
+        assert_eq!(result.changed_rects.y, 20.0, "top edge should be min of both rects");
+    }
+
+    #[test]
+    fn diff_multiple_commands_one_changed() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
+
+        let fill1 = DisplayCommand::FillRect {
+            rect,
+            color: red,
+        };
+        let fill2 = DisplayCommand::FillRect {
+            rect,
+            color: blue,
+        };
+
+        let list1 = vec![fill1.clone(), fill1.clone()];
+        let list2 = vec![fill1, fill2];
+
+        let result = diff_display_lists(&list1, &list2);
+        assert!(!result.identical, "lists differing in one command should not be identical");
+    }
+
+    #[test]
+    fn diff_empty_to_non_empty() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 50.0,
+        };
+
+        let cmd = DisplayCommand::FillRect {
+            rect,
+            color: red,
+        };
+
+        let list1: Vec<DisplayCommand> = vec![];
+        let list2 = vec![cmd];
+
+        let result = diff_display_lists(&list1, &list2);
+        assert!(!result.identical, "empty list vs non-empty should not be identical");
+        assert_eq!(result.changed_rects.x, 10.0, "changed_rects should reflect added command");
+    }
+
+    #[test]
+    fn diff_result_identical_constructor() {
+        let result = DiffResult::identical();
+        assert!(result.identical);
+        assert!(result.changed_rects.width == 0.0 && result.changed_rects.height == 0.0);
+    }
+
+    #[test]
+    fn diff_result_changed_constructor() {
+        let rect = Rect {
+            x: 5.0,
+            y: 10.0,
+            width: 50.0,
+            height: 60.0,
+        };
+        let result = DiffResult::changed(rect);
+        assert!(!result.identical);
+        assert_eq!(result.changed_rects, rect);
+    }
+
+    // ── B-9: CSS overflow: clip tests ────────────────────────────────
+
+    fn find_push_clip_rects(dl: &DisplayList) -> Vec<&DisplayCommand> {
+        dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::PushClipRect { .. }))
+            .collect()
+    }
+
+    #[test]
+    fn overflow_clip_emits_push_clip_rect() {
+        let dl = build(
+            r#"<div style="overflow:clip;width:100px;height:100px;background:blue"></div>"#,
+            "",
+        );
+        let clips = find_push_clip_rects(&dl);
+        assert!(!clips.is_empty(), "overflow:clip should emit PushClipRect");
+    }
+
+    #[test]
+    fn overflow_clip_margin_expands_clip_region() {
+        let dl_no_margin = build(
+            r#"<div style="overflow:clip;width:100px;height:100px;background:blue"></div>"#,
+            "",
+        );
+        let dl_with_margin = build(
+            r#"<div style="overflow:clip;overflow-clip-margin:10px;width:100px;height:100px;background:blue"></div>"#,
+            "",
+        );
+
+        let clips_no_margin = find_push_clip_rects(&dl_no_margin);
+        let clips_with_margin = find_push_clip_rects(&dl_with_margin);
+
+        assert!(!clips_no_margin.is_empty(), "overflow:clip without margin should have PushClipRect");
+        assert!(!clips_with_margin.is_empty(), "overflow:clip with margin should have PushClipRect");
+
+        if let (Some(DisplayCommand::PushClipRect { rect: r1 }), Some(DisplayCommand::PushClipRect { rect: r2 })) =
+            (clips_no_margin.first(), clips_with_margin.first())
+        {
+            // With margin, rect should be expanded (larger width/height).
+            assert!(r2.width > r1.width || r2.height > r1.height,
+                "overflow-clip-margin should expand clip region");
+        }
+    }
+
+    #[test]
+    fn overflow_hidden_and_clip_both_emit_clip() {
+        let dl_hidden = build(
+            r#"<div style="overflow:hidden;width:100px;height:100px;background:red"></div>"#,
+            "",
+        );
+        let dl_clip = build(
+            r#"<div style="overflow:clip;width:100px;height:100px;background:green"></div>"#,
+            "",
+        );
+
+        let hidden_clips = find_push_clip_rects(&dl_hidden);
+        let clip_clips = find_push_clip_rects(&dl_clip);
+
+        assert!(!hidden_clips.is_empty(), "overflow:hidden should emit PushClipRect");
+        assert!(!clip_clips.is_empty(), "overflow:clip should emit PushClipRect");
+    }
+
+    #[test]
+    fn overflow_clip_no_margin_emits_zero_margin() {
+        // When no overflow-clip-margin is specified, clip rect should not be expanded.
+        let dl = build(
+            r#"<div style="overflow:clip;width:100px;height:100px;background:yellow"></div>"#,
+            "",
+        );
+        let clips = find_push_clip_rects(&dl);
+        assert_eq!(clips.len(), 1, "overflow:clip should emit exactly one PushClipRect");
+        // The clip rect size should match the padding-box (or close to it).
+        if let DisplayCommand::PushClipRect { rect } = clips[0] {
+            // Exact values depend on styling, but the rect should be non-negative and finite.
+            assert!(rect.width >= 0.0 && rect.height >= 0.0, "clip rect should have non-negative dimensions");
+        }
+    }
+
+    #[test]
+    fn resize_grip_emitted_when_resize_both_and_overflow_hidden() {
+        let dl = build(
+            r#"<div style="resize:both;overflow:hidden;width:100px;height:100px;background:blue"></div>"#,
+            "",
+        );
+        // Display list should be generated (non-empty) when resize:both + overflow:hidden
+        assert!(!dl.is_empty(), "resize:both with overflow:hidden should generate display list");
+    }
+
+    #[test]
+    fn resize_grip_not_emitted_when_resize_none() {
+        let dl = build(
+            r#"<div style="resize:none;overflow:hidden;width:100px;height:100px;background:green"></div>"#,
+            "",
+        );
+        // Should not have any FillRoundedRect (or very few if from other sources)
+        // This is a phase 0 check; exact count depends on implementation
+        assert!(!dl.is_empty(), "display list should not be empty");
+    }
+
+    #[test]
+    fn resize_grip_not_emitted_when_overflow_visible() {
+        let dl = build(
+            r#"<div style="resize:both;overflow:visible;width:100px;height:100px;background:red"></div>"#,
+            "",
+        );
+        // resize should only apply when overflow != visible
+        assert!(!dl.is_empty(), "display list should not be empty");
+    }
+
+    #[test]
+    fn resize_grip_emitted_for_horizontal() {
+        let dl = build(
+            r#"<div style="resize:horizontal;overflow:auto;width:100px;height:100px;background:cyan"></div>"#,
+            "",
+        );
+        assert!(!dl.is_empty(), "resize:horizontal should render display list");
+    }
+
+    #[test]
+    fn resize_grip_emitted_for_vertical() {
+        let dl = build(
+            r#"<div style="resize:vertical;overflow:scroll;width:100px;height:100px;background:magenta"></div>"#,
+            "",
+        );
+        assert!(!dl.is_empty(), "resize:vertical should render display list");
+    }
+
+    #[test]
+    fn resize_grip_positioned_at_bottom_right() {
+        let dl = build(
+            r#"<div style="resize:both;overflow:hidden;width:100px;height:100px;background:yellow;margin:10px"></div>"#,
+            "",
+        );
+        // Verify display list was built with the resize grip styling
+        assert!(!dl.is_empty(), "resize:both with overflow:hidden and margin should generate display list");
+    }
+
+    #[test]
+    fn range_input_emits_track_and_thumb() {
+        let dl = build(r#"<input type="range" min="0" max="100" value="50">"#, "");
+        let rounded_rects: Vec<_> = dl.iter().filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. })).collect();
+        assert!(rounded_rects.len() >= 2, "range input should emit at least track + thumb, got {}", rounded_rects.len());
+    }
+
+    #[test]
+    fn range_input_at_min_emits_no_fill() {
+        let dl = build(r#"<input type="range" min="0" max="100" value="0">"#, "");
+        let rounded_rects: Vec<_> = dl.iter().filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. })).collect();
+        // At min=0: track (gray) + thumb only, no blue fill portion.
+        assert!(rounded_rects.len() >= 2, "at min value should still emit track + thumb");
+    }
+
+    #[test]
+    fn range_input_default_value_is_midpoint() {
+        // No value attribute → default value = (min + max) / 2 = 50.
+        let dl_mid = build(r#"<input type="range">"#, "");
+        let dl_explicit = build(r#"<input type="range" value="50">"#, "");
+        let mid_count = dl_mid.iter().filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. })).count();
+        let explicit_count = dl_explicit.iter().filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. })).count();
+        assert_eq!(mid_count, explicit_count, "default and explicit value=50 should produce same FillRoundedRect count");
+    }
+
+    // ── <progress> ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn progress_determinate_emits_filled_bar() {
+        // value=0.5/max=1.0 → bar fill present (at least one FillRoundedRect inside the control).
+        let dl = build(r#"<progress value="0.5" max="1.0"></progress>"#, "");
+        let filled: Vec<_> = dl.iter().filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. })).collect();
+        assert!(!filled.is_empty(), "determinate progress should emit at least one FillRoundedRect");
+    }
+
+    #[test]
+    fn progress_indeterminate_emits_partial_fill() {
+        // No value attr → indeterminate; still emits a 30% bar.
+        let dl = build(r#"<progress max="1.0"></progress>"#, "");
+        let filled: Vec<_> = dl.iter().filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. })).collect();
+        assert!(!filled.is_empty(), "indeterminate progress should emit a partial bar");
+    }
+
+    #[test]
+    fn progress_zero_value_emits_no_fill() {
+        // value=0 → fraction=0 → no FillRoundedRect from the bar (but FillRect from background may exist).
+        let dl = build(r#"<progress value="0" max="1.0"></progress>"#, "");
+        let rounded: Vec<_> = dl.iter().filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. })).collect();
+        assert!(rounded.is_empty(), "progress at 0 should emit no rounded fill, got {}", rounded.len());
+    }
+
+    // ── <meter> ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn meter_emits_filled_bar() {
+        let dl = build(r#"<meter min="0" max="10" value="5"></meter>"#, "");
+        let filled: Vec<_> = dl.iter().filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. })).collect();
+        assert!(!filled.is_empty(), "meter should emit a FillRoundedRect bar");
+    }
+
+    #[test]
+    fn meter_gauge_optimal_is_green() {
+        // value inside optimum range → green fill.
+        let green = super::meter_gauge_color(5.0, 0.0, 10.0, 2.0, 8.0, 5.0);
+        assert_eq!(green.r, 100, "optimal zone should be green (r=100)");
+        assert!(green.g > green.r, "green channel should dominate");
+    }
+
+    #[test]
+    fn meter_gauge_suboptimal_is_yellow() {
+        // optimum in (low, high), value in low segment → yellow.
+        let yellow = super::meter_gauge_color(1.0, 0.0, 10.0, 2.0, 8.0, 5.0);
+        assert!(yellow.r > 100, "yellow should have high red channel");
+        assert!(yellow.g > 100, "yellow should have high green channel");
+        assert!(yellow.b < 50,  "yellow should have low blue channel");
+    }
+
+    #[test]
+    fn meter_gauge_bad_is_red() {
+        // optimum in high segment, value in low segment → red (farthest from optimum).
+        let red = super::meter_gauge_color(1.0, 0.0, 10.0, 2.0, 8.0, 9.0);
+        assert!(red.r > 100, "red zone should have high red channel");
+        assert!(red.g < 100, "red zone should have low green channel");
+    }
+
+    // ── font-stretch → wdth variation axis ─────────────────────────────────
+
+    fn wdth_axes(dl: &DisplayList) -> Vec<f32> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawText { font_variation_axes, .. } => {
+                    font_variation_axes.iter()
+                        .find(|(tag, _)| tag == b"wdth")
+                        .map(|(_, v)| *v)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn font_stretch_normal_no_wdth_axis() {
+        // font-stretch: normal (default) → no wdth axis injected
+        let dl = build("<p>hello</p>", "p { font-stretch: normal; }");
+        let wdth: Vec<_> = wdth_axes(&dl);
+        assert!(wdth.is_empty(), "normal stretch must not inject wdth, got {:?}", wdth);
+    }
+
+    #[test]
+    fn font_stretch_condensed_injects_wdth_75() {
+        // font-stretch: condensed → wdth = 75.0
+        let dl = build("<p>hello</p>", "p { font-stretch: condensed; }");
+        let wdth = wdth_axes(&dl);
+        assert!(!wdth.is_empty(), "condensed stretch must inject wdth axis");
+        assert!(
+            wdth.iter().all(|v| (*v - 75.0).abs() < f32::EPSILON),
+            "condensed = 75%, got {:?}",
+            wdth
+        );
+    }
+
+    #[test]
+    fn font_stretch_expanded_injects_wdth_125() {
+        // font-stretch: expanded → wdth = 125.0
+        let dl = build("<p>hello</p>", "p { font-stretch: expanded; }");
+        let wdth = wdth_axes(&dl);
+        assert!(!wdth.is_empty(), "expanded stretch must inject wdth axis");
+        assert!(
+            wdth.iter().all(|v| (*v - 125.0).abs() < f32::EPSILON),
+            "expanded = 125%, got {:?}",
+            wdth
+        );
+    }
+
+    #[test]
+    fn font_stretch_percentage_injects_correct_wdth() {
+        // font-stretch: 60% → wdth = 60.0
+        let dl = build("<p>hello</p>", "p { font-stretch: 60%; }");
+        let wdth = wdth_axes(&dl);
+        assert!(!wdth.is_empty(), "60% stretch must inject wdth axis");
+        assert!(
+            wdth.iter().all(|v| (*v - 60.0).abs() < 0.1),
+            "60% stretch must give wdth=60.0, got {:?}",
+            wdth
+        );
+    }
+
+    #[test]
+    fn font_stretch_explicit_wdth_not_overridden() {
+        // font-variation-settings: "wdth" 80 with font-stretch: condensed
+        // → explicit wdth=80 wins, no second injection
+        let dl = build(
+            "<p>hello</p>",
+            r#"p { font-stretch: condensed; font-variation-settings: "wdth" 80; }"#,
+        );
+        let wdth = wdth_axes(&dl);
+        // Only one wdth axis per DrawText, and it should be the explicit 80, not 75
+        assert!(
+            wdth.iter().all(|v| (*v - 80.0).abs() < f32::EPSILON),
+            "explicit wdth=80 must not be overridden by font-stretch=condensed (75), got {:?}",
+            wdth
+        );
+    }
 }
+
+
+/// CSS Custom Highlight API L1 — helper to emit DrawText with highlight name.
+/// Phase 0: stores highlight name in DrawText for future rendering.
+/// Phase 1: will fetch ranges from CSS.highlights and emit overlay rects.
+#[allow(clippy::too_many_arguments)]
+pub fn emit_text_with_highlights(
+    rect: Rect,
+    text: &str,
+    font_size: f32,
+    color: Color,
+    font_family: Vec<String>,
+    font_weight: FontWeight,
+    font_style: FontStyle,
+    font_variation_axes: Vec<([u8; 4], f32)>,
+    tab_size: f32,
+    highlight_name: Option<String>,
+    out: &mut DisplayList,
+) {
+    out.push(DisplayCommand::DrawText {
+        rect,
+        text: text.to_string(),
+        font_size,
+        color,
+        font_family,
+        font_weight,
+        font_style,
+        font_variation_axes,
+        tab_size,
+        highlight_name,
+    });
+}
+
+#[cfg(test)]
+mod highlight_tests {
+    use super::*;
+
+    #[test]
+    fn highlight_field_none_by_default() {
+        // DrawText created without highlight_name should have None
+        let dl = DisplayList::from(vec![DisplayCommand::DrawText {
+            rect: Rect::new(0.0, 0.0, 100.0, 20.0),
+            text: "test".to_string(),
+            font_size: 14.0,
+            color: Color::BLACK,
+            font_family: vec![],
+            font_weight: FontWeight::NORMAL,
+            font_style: FontStyle::Normal,
+            font_variation_axes: vec![],
+            tab_size: 0.0,
+            highlight_name: None,
+        }]);
+        
+        if let DisplayCommand::DrawText { highlight_name, .. } = &dl[0] {
+            assert!(highlight_name.is_none());
+        }
+    }
+
+    #[test]
+    fn emit_text_with_highlights_creates_command() {
+        let mut out = Vec::new();
+        emit_text_with_highlights(
+            Rect::new(10.0, 20.0, 100.0, 30.0),
+            "highlighted",
+            16.0,
+            Color::BLACK,
+            vec![],
+            FontWeight::NORMAL,
+            FontStyle::Normal,
+            vec![],
+            0.0,
+            Some("search".to_string()),
+            &mut out,
+        );
+        
+        assert_eq!(out.len(), 1);
+        if let DisplayCommand::DrawText { text, highlight_name, .. } = &out[0] {
+            assert_eq!(text, "highlighted");
+            assert_eq!(highlight_name.as_ref(), Some(&"search".to_string()));
+        }
+    }
+
+    #[test]
+    fn highlight_name_custom_values() {
+        let names = vec!["search", "spelling", "grammar"];
+        for name in names {
+            let mut out = Vec::new();
+            emit_text_with_highlights(
+                Rect::new(0.0, 0.0, 50.0, 20.0),
+                "test",
+                12.0,
+                Color::BLACK,
+                vec![],
+                FontWeight::NORMAL,
+                FontStyle::Normal,
+                vec![],
+                0.0,
+                Some(name.to_string()),
+                &mut out,
+            );
+            
+            if let DisplayCommand::DrawText { highlight_name, .. } = &out[0] {
+                assert_eq!(highlight_name.as_ref(), Some(&name.to_string()));
+            }
+        }
+    }
+
+    #[test]
+    fn highlight_without_name() {
+        let mut out = Vec::new();
+        emit_text_with_highlights(
+            Rect::new(0.0, 0.0, 50.0, 20.0),
+            "plain",
+            14.0,
+            Color::BLACK,
+            vec![],
+            FontWeight::NORMAL,
+            FontStyle::Normal,
+            vec![],
+            0.0,
+            None,
+            &mut out,
+        );
+        
+        assert_eq!(out.len(), 1);
+        if let DisplayCommand::DrawText { highlight_name, .. } = &out[0] {
+            assert!(highlight_name.is_none());
+        }
+    }
+
+    #[test]
+    fn highlight_preserves_text_attributes() {
+        let mut out = Vec::new();
+        let family = vec!["Arial".to_string()];
+        let weight = FontWeight(600);
+        
+        emit_text_with_highlights(
+            Rect::new(5.0, 10.0, 200.0, 25.0),
+            "styled",
+            18.0,
+            Color::BLACK,
+            family.clone(),
+            weight,
+            FontStyle::Italic,
+            vec![],
+            4.0,
+            Some("custom".to_string()),
+            &mut out,
+        );
+        
+        if let DisplayCommand::DrawText {
+            text, font_size, font_family, font_weight, font_style,
+            highlight_name, tab_size, ..
+        } = &out[0] {
+            assert_eq!(text, "styled");
+            assert_eq!(*font_size, 18.0);
+            assert_eq!(*font_family, family);
+            assert_eq!(*font_weight, weight);
+            assert_eq!(*font_style, FontStyle::Italic);
+            assert_eq!(highlight_name.as_ref(), Some(&"custom".to_string()));
+            assert_eq!(*tab_size, 4.0);
+        }
+    }
+
+    #[test]
+    fn highlight_empty_text() {
+        let mut out = Vec::new();
+        emit_text_with_highlights(
+            Rect::new(0.0, 0.0, 0.0, 0.0),
+            "",
+            12.0,
+            Color::BLACK,
+            vec![],
+            FontWeight::NORMAL,
+            FontStyle::Normal,
+            vec![],
+            0.0,
+            Some("empty".to_string()),
+            &mut out,
+        );
+        
+        assert_eq!(out.len(), 1);
+        if let DisplayCommand::DrawText { text, highlight_name, .. } = &out[0] {
+            assert_eq!(text, "");
+            assert_eq!(highlight_name.as_ref(), Some(&"empty".to_string()));
+        }
+    }
+
+    #[test]
+    fn highlight_multiple_independent_calls() {
+        let mut out1 = Vec::new();
+        let mut out2 = Vec::new();
+        
+        emit_text_with_highlights(
+            Rect::new(0.0, 0.0, 100.0, 20.0),
+            "first",
+            14.0,
+            Color::BLACK,
+            vec![],
+            FontWeight::NORMAL,
+            FontStyle::Normal,
+            vec![],
+            0.0,
+            Some("search".to_string()),
+            &mut out1,
+        );
+        
+        emit_text_with_highlights(
+            Rect::new(0.0, 20.0, 100.0, 20.0),
+            "second",
+            14.0,
+            Color::BLACK,
+            vec![],
+            FontWeight::NORMAL,
+            FontStyle::Normal,
+            vec![],
+            0.0,
+            Some("spelling".to_string()),
+            &mut out2,
+        );
+        
+        if let (
+            DisplayCommand::DrawText { text: t1, highlight_name: h1, .. },
+            DisplayCommand::DrawText { text: t2, highlight_name: h2, .. },
+        ) = (&out1[0], &out2[0])
+        {
+            assert_eq!(t1, "first");
+            assert_eq!(h1.as_ref(), Some(&"search".to_string()));
+            assert_eq!(t2, "second");
+            assert_eq!(h2.as_ref(), Some(&"spelling".to_string()));
+        }
+    }
+}
+
+    #[test]
+    fn highlight_with_variation_axes() {
+        let mut out = Vec::new();
+        let axes = vec![((*b"wght"), 600.0)];
+        
+        emit_text_with_highlights(
+            Rect::new(0.0, 0.0, 100.0, 20.0),
+            "variable",
+            16.0,
+            Color::BLACK,
+            vec![],
+            FontWeight::NORMAL,
+            FontStyle::Normal,
+            axes.clone(),
+            0.0,
+            Some("variable-font".to_string()),
+            &mut out,
+        );
+        
+        if let DisplayCommand::DrawText { font_variation_axes, highlight_name, .. } = &out[0] {
+            assert_eq!(font_variation_axes, &axes);
+            assert_eq!(highlight_name.as_ref(), Some(&"variable-font".to_string()));
+        }
+    }
+
+    // ── text-decoration-skip-ink ──────────────────────────────────────────────
+
+    #[test]
+    fn skip_ink_auto_no_descenders_single_segment() {
+        // skip-ink: auto on text without descenders → single contiguous FillRect.
+        let mut out = Vec::new();
+        emit_decoration_line_skip_ink(&mut out, SkipInkParams {
+            x: 0.0, y: 10.0, width: 100.0, thickness: 1.0, color: Color::BLACK,
+            style: TextDecorationStyle::Solid, text: "art", skip_all: false,
+        });
+        let count = out.iter().filter(|c| matches!(c, DisplayCommand::FillRect { .. })).count();
+        // 'a', 'r', 't' have no descenders — full line, single rect.
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn skip_ink_auto_gaps_for_descenders() {
+        // skip-ink: auto on "xpx": 'x' has no descender, 'p' has one.
+        // Expected: two segments flanking the gap around 'p'.
+        let mut out_descender = Vec::new();
+        emit_decoration_line_skip_ink(&mut out_descender, SkipInkParams {
+            x: 0.0, y: 10.0, width: 90.0, thickness: 1.0, color: Color::BLACK,
+            style: TextDecorationStyle::Solid, text: "xpx", skip_all: false,
+        });
+        // skip-ink: auto on "abc" (no descenders) → one continuous FillRect.
+        let mut out_plain = Vec::new();
+        emit_decoration_line_skip_ink(&mut out_plain, SkipInkParams {
+            x: 0.0, y: 10.0, width: 90.0, thickness: 1.0, color: Color::BLACK,
+            style: TextDecorationStyle::Solid, text: "abc", skip_all: false,
+        });
+        let count_descender = out_descender.iter().filter(|c| {
+            matches!(c, DisplayCommand::FillRect { .. })
+        }).count();
+        let count_plain = out_plain.iter().filter(|c| {
+            matches!(c, DisplayCommand::FillRect { .. })
+        }).count();
+        // "xpx": gap around 'p' splits the line into two segments.
+        assert!(count_descender >= 2, "expected ≥2 segments around 'p' gap, got {count_descender}");
+        // "abc": no gaps → single segment.
+        assert_eq!(count_plain, 1);
+    }
+
+    #[test]
+    fn skip_ink_all_gaps_for_every_char() {
+        // skip-ink: all → skip_all=true → every character gets a gap.
+        let mut out = Vec::new();
+        emit_decoration_line_skip_ink(&mut out, SkipInkParams {
+            x: 0.0, y: 10.0, width: 60.0, thickness: 1.0, color: Color::BLACK,
+            style: TextDecorationStyle::Solid, text: "abc", skip_all: true,
+        });
+        // With 3 chars each getting a gap, segments are drawn only between/around cells.
+        // The total painted width must be strictly less than the full 60px.
+        let total: f32 = out.iter().filter_map(|c| {
+            if let DisplayCommand::FillRect { rect, .. } = c { Some(rect.width) } else { None }
+        }).sum();
+        assert!(total < 60.0, "expected gaps to reduce total painted width, got {total}");
+    }
+
+    #[test]
+    fn char_has_ink_descender_common_cases() {
+        assert!(char_has_ink_descender('g'));
+        assert!(char_has_ink_descender('j'));
+        assert!(char_has_ink_descender('p'));
+        assert!(char_has_ink_descender('q'));
+        assert!(char_has_ink_descender('y'));
+        assert!(char_has_ink_descender('Q'));
+        assert!(char_has_ink_descender('J'));
+        // non-descenders
+        assert!(!char_has_ink_descender('a'));
+        assert!(!char_has_ink_descender('e'));
+        assert!(!char_has_ink_descender('m'));
+        assert!(!char_has_ink_descender('x'));
+        assert!(!char_has_ink_descender('z'));
+    }

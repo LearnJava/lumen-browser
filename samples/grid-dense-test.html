@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body { margin: 0; }
+.grid-sparse {
+  display: grid;
+  grid-template-columns: repeat(3, 100px);
+  grid-auto-flow: row;
+  gap: 10px;
+  margin-bottom: 20px;
+  background: #f0f0f0;
+  padding: 10px;
+}
+.grid-dense {
+  display: grid;
+  grid-template-columns: repeat(3, 100px);
+  grid-auto-flow: row dense;
+  gap: 10px;
+  background: #f0f0f0;
+  padding: 10px;
+}
+.item {
+  background: #66ccff;
+  padding: 10px;
+  text-align: center;
+}
+.item:nth-child(1) {
+  grid-column: span 2;
+  grid-row: span 2;
+  background: #ff9999;
+}
+.item:nth-child(2) { background: #99ff99; }
+.item:nth-child(3) { background: #ffff99; }
+.item:nth-child(4) { background: #ff99ff; }
+</style>
+</head>
+<body>
+<h3>Sparse (row)</h3>
+<div class="grid-sparse">
+  <div class="item">1 (2x2)</div>
+  <div class="item">2</div>
+  <div class="item">3</div>
+  <div class="item">4</div>
+</div>
+
+<h3>Dense (row dense)</h3>
+<div class="grid-dense">
+  <div class="item">1 (2x2)</div>
+  <div class="item">2</div>
+  <div class="item">3</div>
+  <div class="item">4</div>
+</div>
+</body>
+</html>

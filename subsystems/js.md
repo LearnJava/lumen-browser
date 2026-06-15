@@ -21,7 +21,7 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   - DOM read: `getElementById`, `querySelector`, `querySelectorAll`, `getAttribute`, `tagName`, `textContent`, `parentElement`, `children`.
   - DOM write: `setAttribute`, `removeAttribute`, `textContent =`, `innerHTML =`, `createElement`, `createTextNode`, `appendChild`, `removeChild`.
   - `document.title` get/set.
-  - Phase 0 querySelector: supports `#id`, `.class`, `tagname`, `*` (no compound selectors).
+  - querySelector uses full CSS3 selector engine (lumen_layout::query_all): compound selectors, combinators ( > + ~), pseudo-classes, attribute selectors. element.matches() and element.closest() use per-node matches_selector. (P2 2026-06-03)
   - 19 DOM tests + 16 runtime tests = 35 total. All pass.
   - Shell integration: `run_scripts_with_dom` wraps `Document` in `Arc<Mutex<>>`, calls `install_dom`, drops runtime to release Arc clones, recovers `Document`.
 - **Fetch API JS shim** (`install_dom_api`, `crates/js/src/dom.rs`). 2026-05-22.
@@ -31,6 +31,8 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   - `Response.ok` (200–299), `Response.text()` / `Response.json()` returning Promises, `Headers` case-insensitive get/set/has/delete.
   - `AbortController.abort()` sets `signal.aborted = true`.
   - 109 JS tests (was 35 before). All pass.
+  - **AA-4 (2026-06-12):** `AbortSignal.abort(reason)` / `AbortSignal.timeout(ms)` (TimeoutError via setTimeout shim) / `AbortSignal.any(signals)` statics per DOM §3.2.2. `any()` adopts the first aborting source's reason and detaches listeners once the race is decided. `onabort` handler fires alongside `addEventListener` listeners (shared `_lumen_abort_signal_fire` helper). `fetch()` pre-flight check: already-aborted `init.signal`/`Request.signal` rejects with `signal.reason` before any network call (Fetch §4.1 step 13; no in-flight abort — fetch is synchronous).
+  - **AA-5 (2026-06-12):** Trusted Types per W3C TT L2 (`crates/js/src/trusted_types.rs`, rewrite of the A-9 stub). `createPolicy(name, rules)` invokes the policy's own rule callbacks (missing rule → `TypeError`); `"default"` registers `trustedTypes.defaultPolicy` exactly once (second registration throws — DefaultPolicy guard); duplicate non-default names allowed (no CSP in Phase 0). `TrustedHTML`/`TrustedScript`/`TrustedScriptURL`/`TrustedTypePolicy` are non-constructible from page script (construction token + WeakMap brand; `isHTML`/`isScript`/`isScriptURL` reject forged prototypes). Added `emptyHTML`/`emptyScript` and `getAttributeType`/`getPropertyType` sink tables. No sink enforcement (Phase 0). Non-spec `TrustedURL`/`getPolicy`/`getPolicyNames` removed. 8 new + 11 updated unit tests.
 - **Web Storage API** (`install_dom_api`, `crates/js/src/dom.rs`). 2026-05-25.
   - 12 native `_lumen_ls_*` / `_lumen_ss_*` bindings (length, key, get, set, remove, clear for localStorage + sessionStorage).
   - `install_dom` now accepts `ls_store: Option<Arc<Mutex<WebStorage>>>` — `None` → fresh in-memory store.
@@ -147,6 +149,25 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   - Preserves ADR-007 Layer 4: `getParameter(UNMASKED_VENDOR/RENDERER_WEBGL)` + `getParameter(VENDOR/RENDERER)` return normalized `GpuFingerprint` strings; `toDataURL`/`toBlob` stay blank.
   - 10 unit tests (functional object, 2d→null, context caching, fingerprint normalization, blank toDataURL, clear→readPixels roundtrip, full compile→buffer→draw→readback pipeline, attrib location, non-canvas, lose-context extension). The 19 `no_automation_markers.rs` integration tests still pass.
 
+- **Functional Canvas 2D context** (`crates/js/src/canvas2d.rs` + `dom.rs`, HTML LS §4.12.4, task 5A.2). 2026-06-02.
+  - `install_canvas2d_bindings(ctx)` registers `_lumen_canvas2d_*` natives backed by `lumen_canvas::Context2D` in a per-thread registry keyed by **DOM node index** (`__nid__`). Installed in `install_dom` right after WebGL.
+  - The `getContext('2d')` shim lives in `dom.rs::_lumen_make_element` (not the WebGL-style `document.createElement` patch) because element wrappers are ephemeral — every wrapper for a node carries `getContext`/`toDataURL`/reflected `width`/`height`. The `CanvasRenderingContext2D` object is cached in the module-level `_canvas2d_ctxs[nid]` map (same persistence pattern as `_input_values`). The native key `nid` matches `LayoutBox::node.index()`, so the display list's `DrawImage src="canvas:{nid}"` resolves to the right bitmap.
+  - Forwarded surface: `fillRect`/`clearRect`/`strokeRect`, `beginPath`/`moveTo`/`lineTo`/`closePath`/`arc`/`fill`/`stroke`, `rect`/`ellipse` (ellipse≈circle in Phase 0), `fillStyle`/`strokeStyle` (via `CanvasColor::from_css_str`), `lineWidth`/`globalAlpha` (spec-validated ranges), `getImageData` (applies per-session fingerprint noise via `Context2D::get_image_data`). Transforms/text/shadows/gradients/clip are accepted as no-ops/stubs. `toDataURL`/`toBlob` stay blank (ADR-007 anti-fingerprint).
+  - Draw ops mark the canvas dirty; `QuickJsRuntime::flush_canvas_updates()` (→ `canvas2d::flush_dirty()`) drains `(nid, w, h, rgba)` once per frame. The shell registers each via `Renderer::register_image("canvas:{nid}", ...)` and requests a redraw. Unregistered canvases (no JS drawing, e.g. the cpu_raster snapshot driver which runs no JS) render as the transparent `DrawImage` placeholder.
+  - 16 unit tests in `canvas2d.rs` (create/clamp/idempotent, fill/clear/stroke/path dirty-tracking, flush-once, line-width/alpha validation, resize, get_image_data, unknown-canvas no-ops, isolation) + 6 e2e tests in `dom.rs` (getContext object/caching, default 300×150, draw→flush, webgl→null, non-canvas→null). Graphic test `57-canvas-2d.html` + demo in `1000000-final.html`.
+
+- **HTML Popover API** (`crates/js/src/dom.rs`, WHATWG HTML §6.12). 2026-06-03.
+  - `showPopover/hidePopover/togglePopover` + `popover` getter/setter on every HTMLElement (in `_lumen_make_element`).
+  - Top-layer emulation: `showPopover()` sets `data-lumen-popover-open` sentinel (read by `is_closed_popover` in `layout/box_tree.rs` to skip hidden popovers) + applies `position:fixed;z-index:2147483647` inline style. `hidePopover()` removes sentinel + restores saved style.
+  - `popover="auto"` stack: opening a new auto-popover closes all previously open auto-popovers (newest-first). `popover="manual"` is independent.
+  - `beforetoggle` / `toggle` events with `oldState`/`newState` fired synchronously on show and hide.
+  - Click-outside capture handler: clicks outside all open auto-popovers close them from newest to oldest.
+  - Escape keydown: closes topmost auto-popover (dialog modal takes priority if present).
+  - `popovertarget`/`popovertargetaction` attributes on buttons: click dispatches to `showPopover`/`hidePopover`/`togglePopover` on the element with matching `id`. Default action is `toggle`.
+  - Layout side: `is_closed_popover(doc, id)` in `box_tree.rs` returns `true` when `popover` attribute is set but `data-lumen-popover-open` is absent → `BoxKind::Skip` (mirrors `<details>` child hiding pattern).
+  - 14 unit tests: getter/setter, show/hide/toggle, events, auto-stack, manual isolation, fixed style on show, style restore on hide, popovertarget button click.
+  - Note: `:popover-open` CSS pseudo-class (already parsed by css-parser) always returns `false` until P4 wires it to `data-lumen-popover-open` attribute.
+
 - **Heap-snapshot deflate compression + 5 MB cap** (`crates/js/src/heap_snapshot.rs`, ADR-008 §10C.3). 2026-06-02.
   - `compress_heap(&[u8]) -> Result<SuspendedHeap, HeapSnapshotError>` — `LJH1` magic prefix + zlib (deflate) stream; rejects with `HeapSnapshotError::TooLarge` when the compressed result exceeds `MAX_HEAP_SNAPSHOT_BYTES` (5 MiB).
   - `decompress_heap(&SuspendedHeap) -> Result<Vec<u8>, HeapSnapshotError>` — strips magic + inflates; payload without the magic prefix is returned verbatim (raw/legacy), empty → empty.
@@ -154,11 +175,63 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   - Wired into `QuickJsRuntime::suspend()` (pause → `capture_raw_heap` → compress; `TooLarge` → empty snapshot so hibernation never blocks) and `resume()` (validate-inflate → fresh runtime). `capture_raw_heap` returns empty until full heap serialisation (task 10C.2) lands — blocked by native-function bindings that `JS_ReadObject` cannot reconstruct; the shell re-runs inline scripts on restore instead.
   - 10 unit tests (roundtrip simple/empty/binary, magic prefix, repetitive shrink >4×, cap rejects incompressible, large-compressible fits, legacy passthrough, corrupt stream, error Display) + 3 runtime tests (`suspend_produces_compressed_snapshot`, `resume_rebuilds_runtime_from_valid_snapshot`, `resume_rejects_corrupt_snapshot`).
 
+- **HTMLIFrameElement JS stubs** (`crates/js/src/iframe_element.rs`, HTML spec §4.8.5, P1 2026-06-03).
+  - `src`/`name`/`srcdoc`/`width`/`height`/`sandbox`/`allow`/`referrerPolicy`/`loading` properties reflect HTML attributes via `reflectAttr` helper.
+  - `contentDocument` getter → `null` (Phase 0 — no sub-document navigation; matches cross-origin spec behaviour).
+  - `contentWindow` getter → `null` (same reason).
+  - `getSVGDocument()` → `null`.
+  - Patches existing `<iframe>` elements at load time + intercepts `document.createElement('iframe')`.
+  - 10 unit tests: install_succeeds, src getter/setter, contentDocument null, contentWindow null, name getter/setter, width/height attrs, sandbox reflects, getSVGDocument null, src default empty string. **922 lumen-js lib tests total.**
+
+- **Gamepad API** (`crates/js/src/gamepad.rs`, W3C Gamepad Level 2 §4, P1 2026-06-03).
+  - `navigator.getGamepads()` → sparse array of 4 null slots (Phase 0, no hardware polling).
+  - `Gamepad` class: id/index/connected/timestamp/mapping/axes(4)/buttons(17)/vibrationActuator/hapticActuators.
+  - `GamepadButton` class: pressed/touched/value.
+  - `GamepadHapticActuator` stub: type, `playEffect(type, params) → Promise<'complete'>`, `reset() → Promise<'complete'>`.
+  - `GamepadEvent` class: gamepad property.
+  - Shell integration helpers: `_lumen_gamepad_connect(index, id, mapping)` fires `gamepadconnected`; `_lumen_gamepad_disconnect(index)` fires `gamepaddisconnected`. P3 shell calls these when polling OS gamepad APIs.
+  - `window.Gamepad`, `window.GamepadButton`, `window.GamepadHapticActuator`, `window.GamepadEvent` exported as globals.
+  - 15 unit tests. **1086 lumen-js lib tests total** (after combining with speech task's 1071 base).
+
+- **MediaSession API** (`crates/js/src/media_session.rs`, W3C Media Session API L1/L2 §5, P1 2026-06-03).
+  - `navigator.mediaSession` singleton.
+  - `MediaMetadata` class: title/artist/album/artwork[].
+  - `mediaSession.metadata` getter/setter (accepts MediaMetadata or null).
+  - `mediaSession.playbackState` getter/setter: "none" | "paused" | "playing" (invalid values ignored).
+  - `mediaSession.setActionHandler(action, cb)`: play/pause/stop/seekbackward/seekforward/seekto/previoustrack/nexttrack/skipad/togglemicrophone/togglecamera/hangup/togglecaptionstrack/enterpictureinpicture. Passing `null` removes handler.
+  - `mediaSession.setPositionState(state)`: duration/playbackRate/position; `null` resets.
+  - `mediaSession.setCameraActive(active)` / `setMicrophoneActive(active)` (L2 §5.4).
+  - Shell integration: `_lumen_take_media_session_update()` → JSON snapshot (returns null if no change since last call, detected by sequence counter). P3 shell polls this to forward metadata to OS (SMTC/MPRIS/Now Playing).
+  - OS → JS direction: `_lumen_fire_media_action(action, details)` invokes the registered handler (e.g. OS media keys trigger play/pause).
+  - `window.MediaMetadata` exported as global.
+  - 16 unit tests. **1101 lumen-js lib tests total.**
+
+- **TC39 Decorators (Stage 3) Phase 0** (`crates/js/src/decorators.rs`). 2026-06-12 (P1, AA-1).
+  - Pure-JS source-to-source transformer `__lumen_transform_decorators(src)`: minimal lexer (strings/comments/templates/regex opaque) + rewrite of `@dec` on named class declarations, instance/static methods and fields into ES2023 + runtime helper calls.
+  - Runtime helpers: `__lumen_apply_class_decorators` (bottom-up, return value replaces class), `__lumen_apply_method_decorators` (`(fn, context) -> fn?`), `__lumen_apply_field_decorators` (composed init transformer, called with `this` = instance).
+  - Well-known symbols `Symbol.ClassDecorator` / `Symbol.MethodDecorator` — `true` tags on decorator `context`.
+  - Hooked into `JsRuntime::eval` and `eval_module` (fast path: no `@` in source → no transform; fail-open on transformer errors).
+  - Phase 0 limits (documented in module): field decorator exprs evaluated per instantiation; class expressions / anonymous classes / accessors / `#private` / computed names unsupported.
+  - 10 unit tests. All pass.
+
+- **AsyncContext (TC39 Stage 2.7) Phase 0** (`crates/js/src/async_context.rs`). 2026-06-12 (P1, AA-2).
+  - `AsyncContext.Variable` (`{name, defaultValue}` options; `get()` / `run(value, fn, ...args)`) and `AsyncContext.Snapshot` (`run(fn, ...args)`, static `wrap(fn)`). Pure-JS shim, installed after the DOM shim.
+  - Context mapping = copy-on-write `Map` keyed by Variable identity; internals in WeakMaps (untamperable). `run` restores the previous mapping on exit, including on throw.
+  - Microtask propagation: `Promise.prototype.then` patched to capture the mapping at registration and restore it around reactions. `catch`/`finally` delegate to the public `then`, `queueMicrotask` is `Promise.resolve().then(fn)` in the DOM shim — all covered by the single patch.
+  - Phase 0 limits (documented in module): `await` continuations (engine-internal `PerformPromiseThen`) and tasks (`setTimeout`, event handlers) do not propagate — use `Snapshot.wrap` manually.
+  - 8 unit tests. All pass.
+
+- **Import Attributes (TC39 Stage 3) Phase 0** (`crates/js/src/import_attributes.rs`). 2026-06-12 (P1, AA-3).
+  - QuickJS can't parse `with { … }` and `Loader::load` gets no attributes → Rust source preprocessor `strip_import_attributes`: strips `with { … }` / legacy `assert { … }` clauses from static `import` / `export … from` statements, records declared types in a shared `ModuleTypeRegistry` (specifier resolved exactly like the ESM resolver will).
+  - `LumenLoader::with_types`: `type: 'json'` modules are validated as JSON (JSON-assert guard — invalid JSON fails the load) and compiled as synthetic `export default JSON.parse(...)`; any other declared type fails the load with `Error::new_loading_message`.
+  - Hooked into `eval_module` (base = page URL) and `register_module_source` (base = the module's own specifier). Minimal lexer keeps strings / comments / templates / regex opaque, so `with` inside them is never a clause.
+  - Phase 0 limits (documented in module): dynamic `import(spec, { with: { … } })` options left untouched; attribute keys other than `type` stripped and ignored.
+  - 11 unit tests (7 transformer + 4 end-to-end). All pass.
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
 - PerformanceObserver API.
-- querySelector compound selectors (e.g. `div.class`, `#id > p`).
 - `rusty_v8` backend (v1.0+).
 
 ## Invariants

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  /* CSS Lists L3 §4 — counter-set.
+     Each row manipulates a single counter `c` and shows its value via the
+     ::before content. Processing order per element is reset → increment → set,
+     so counter-set wins over a same-element increment, and counter-set on a
+     never-reset counter creates it. Solid colour boxes dominate the pixel
+     area; the small black numbers are labels demonstrating the resolved value. */
+  body { background: #ff00ff; margin: 0; counter-reset: c 0; }
+  .__f {
+    background: #ffffff;
+    width: 1022px; height: 718px;
+    margin: 1px; padding: 0;
+    overflow: hidden;
+    font-family: sans-serif;
+  }
+  .row {
+    height: 120px;
+    margin: 14px;
+    background: #e8eef7;
+    border: 3px solid #2050a0;
+    color: #102040;
+    font-size: 56px;
+    line-height: 120px;
+    padding-left: 28px;
+    box-sizing: border-box;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .row::before { content: counter(c) "  "; }
+
+  /* set 5 on a counter reset to 0 (no increment) → shows 5 */
+  .r1 { counter-set: c 5; }
+  /* increment from 5 → shows 6 */
+  .r2 { counter-increment: c; }
+  /* increment to 7, then set to 0 (set wins) → shows 0 */
+  .r3 { counter-increment: c; counter-set: c 0; background: #f7e8e8; border-color: #a02020; color: #401010; }
+  /* increment from 0 → shows 1 */
+  .r4 { counter-increment: c; background: #f7e8e8; border-color: #a02020; color: #401010; }
+  /* set to 42 → shows 42 */
+  .r5 { counter-set: c 42; background: #e8f7ea; border-color: #208040; color: #104020; }
+</style>
+</head>
+<body>
+  <div class="__f">
+    <div class="row r1">set 5</div>
+    <div class="row r2">inc &rarr; 6</div>
+    <div class="row r3">inc+set 0</div>
+    <div class="row r4">inc &rarr; 1</div>
+    <div class="row r5">set 42</div>
+  </div>
+</body>
+</html>

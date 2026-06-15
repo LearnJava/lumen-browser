@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 59 image set cross fade</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+    .__f { background: #1a202c; width: 1022px; height: 718px; margin: 1px; padding: 24px 24px 0 24px; overflow: hidden; }
+
+    .row { display: flex; gap: 16px; margin-bottom: 16px; align-items: flex-start; }
+    .cell { width: 220px; height: 160px; background-repeat: no-repeat; background-size: cover; border: 3px solid #4a5568; }
+    .label { font: 11px/1.3 monospace; color: #a0aec0; margin-top: 4px; }
+    .group { display: flex; flex-direction: column; }
+
+    /* image-set() — DPR=1.0 in CPU renderer → selects first (1x) candidate */
+    .is-1x {
+      background-image: image-set(
+        url("../samples/images/agi_illustration.png") 1x,
+        url("../samples/images/perceptron.png") 2x
+      );
+    }
+    .is-webkit {
+      background-image: -webkit-image-set(
+        url("../samples/images/perceptron.png") 1x,
+        url("../samples/images/agi_illustration.png") 2x
+      );
+    }
+    /* regular url() for comparison */
+    .url-plain {
+      background-image: url("../samples/images/agi_illustration.png");
+    }
+    .url-plain2 {
+      background-image: url("../samples/images/perceptron.png");
+    }
+
+    /* cross-fade() between two images at 30% progress */
+    .cf-30 {
+      background-image: cross-fade(
+        url("../samples/images/agi_illustration.png"),
+        url("../samples/images/sad_brain.png"),
+        30%
+      );
+    }
+    /* cross-fade() at 70% progress */
+    .cf-70 {
+      background-image: cross-fade(
+        url("../samples/images/agi_illustration.png"),
+        url("../samples/images/sad_brain.png"),
+        70%
+      );
+    }
+    /* -webkit-cross-fade() */
+    .cf-webkit {
+      background-image: -webkit-cross-fade(
+        url("../samples/images/sad_brain.png"),
+        url("../samples/images/perceptron.png"),
+        50%
+      );
+    }
+    /* image-set() inside background shorthand */
+    .is-shorthand {
+      background: image-set(
+        url("../samples/images/sad_brain.png") 1x,
+        url("../samples/images/agi_illustration.png") 2x
+      ) no-repeat center / contain;
+    }
+  </style>
+</head>
+<body>
+  <div class="__f">
+
+    <!-- Row 1: image-set() vs plain url() -->
+    <div class="row">
+      <div class="group">
+        <div class="cell url-plain"></div>
+        <div class="label">url() 1x ref</div>
+      </div>
+      <div class="group">
+        <div class="cell is-1x"></div>
+        <div class="label">image-set() 1x=agi 2x=perc</div>
+      </div>
+      <div class="group">
+        <div class="cell url-plain2"></div>
+        <div class="label">url() perc ref</div>
+      </div>
+      <div class="group">
+        <div class="cell is-webkit"></div>
+        <div class="label">-webkit-image-set() 1x=perc</div>
+      </div>
+      <div class="group">
+        <div class="cell is-shorthand"></div>
+        <div class="label">image-set() in shorthand</div>
+      </div>
+    </div>
+
+    <!-- Row 2: cross-fade() at varying percentages -->
+    <div class="row">
+      <div class="group">
+        <div class="cell cf-30"></div>
+        <div class="label">cross-fade() 30%</div>
+      </div>
+      <div class="group">
+        <div class="cell cf-70"></div>
+        <div class="label">cross-fade() 70%</div>
+      </div>
+      <div class="group">
+        <div class="cell cf-webkit"></div>
+        <div class="label">-webkit-cross-fade() 50%</div>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>

@@ -780,6 +780,19 @@ pub trait JsRuntime: Send + Sync {
     /// Выполнить script-text и вернуть результат последнего выражения.
     fn eval(&self, script: &str) -> JsResult<JsValue>;
 
+    /// Evaluate `source` as an ES module (`<script type=module>`, HTML LS §8.1.3).
+    ///
+    /// Default implementation falls back to `eval` for runtimes without module support.
+    /// Implementations that support modules (QuickJS with `loader` feature) override this.
+    fn eval_module(&self, source: &str) -> JsResult<()> {
+        self.eval(source).map(|_| ())
+    }
+
+    /// Pre-register an ES module `source` by `specifier` so it can be `import`-ed.
+    ///
+    /// Default: no-op for runtimes without module support.
+    fn register_module_source(&self, _specifier: &str, _source: &str) {}
+
     /// Записать глобальную переменную в текущий runtime context.
     fn set_global(&self, name: &str, value: JsValue) -> JsResult<()>;
 
@@ -1354,6 +1367,58 @@ pub trait SseProvider: Send + Sync {
     ) -> Result<Box<dyn SseSession>>;
 }
 
+/// A single queued event from an SSE connection, ready for delivery to JS.
+///
+/// Produced by the background recv thread (which drains the blocking
+/// [`SseSession::next_event`]); consumed non-blocking by [`JsSseSession::poll`].
+/// Mirrors the WebSocket [`JsWsEvent`] design so the JS runtime can poll SSE
+/// without blocking the script execution thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JsSseEvent {
+    /// Connection established (HTTP 200, `Content-Type: text/event-stream`).
+    Open,
+    /// A complete SSE event dispatched by the server.
+    Message {
+        /// Event name — `"message"` by default, overridden by the `event:` field.
+        event_type: String,
+        /// Event payload (joined `data:` lines, trailing `\n` stripped).
+        data: String,
+        /// Last event ID from the `id:` field, if the server set one.
+        id: Option<String>,
+    },
+    /// Server requested a specific reconnect delay via `retry:` field (milliseconds).
+    Retry(u64),
+    /// Connection closed (server closed the stream or reconnect exhausted).
+    Close,
+    /// Network or protocol error; the connection will not recover.
+    Error(String),
+}
+
+/// A live SSE connection from the JS runtime's perspective.
+///
+/// The implementation runs the blocking [`SseSession::next_event`] loop on a
+/// background thread and buffers events in a queue. JS calls [`poll`](Self::poll)
+/// to drain that queue without blocking script execution — mirroring the
+/// WebSocket [`JsWebSocketSession`] design.
+pub trait JsSseSession: Send {
+    /// Non-blocking: return the next queued event, or `None` if the queue is empty.
+    fn poll(&self) -> Option<JsSseEvent>;
+    /// Request the background thread to stop and close the connection.
+    fn close(&mut self);
+}
+
+/// Factory that opens SSE connections for the JS runtime.
+///
+/// Implemented by `lumen-network::HttpClient`; `lumen-js` references only this
+/// trait from `lumen-core`, keeping the crate dependency graph acyclic.
+pub trait JsSseProvider: Send + Sync {
+    /// Open an `http://` or `https://` SSE connection to `url`.
+    ///
+    /// The HTTP request runs on a background thread; the returned session begins
+    /// buffering [`JsSseEvent::Open`] followed by server events immediately.
+    fn connect_sse(&self, url: &str) -> Result<Box<dyn JsSseSession>>;
+}
+
 // ============================================================================
 // Service Worker fetch interception (HTML Living Standard §10.2.2).
 // ============================================================================
@@ -1719,9 +1784,64 @@ pub trait SwBackend: Send + Sync {
     fn save(&self, snapshot: &str);
 }
 
+/// Per-origin Cache API persistence (W3C Service Worker spec §cache-objects).
+///
+/// All methods are best-effort: errors are silently discarded so a storage
+/// failure never aborts a JS `cache.put()` / `cache.match()` call.
+///
+/// `meta_json` carries the full response metadata as the JS shim serialises it:
+/// `{"method":"GET","status":200,"statusText":"OK","headers":{…}}`.
+/// Implementations store it opaquely and return it verbatim on reads.
+///
+/// Implemented in `lumen-storage::CacheStorage`; `lumen-js` references only
+/// this trait, keeping the dependency graph acyclic.
+pub trait CacheBackend: Send + Sync {
+    /// Insert or replace a cache entry. `meta_json` is stored opaquely.
+    fn cache_put(&self, origin: &str, name: &str, url: &str, meta_json: &str, body: &[u8]);
+
+    /// Look up a single entry by URL (method defaults to GET).
+    /// Returns `(meta_json, body)` or `None` when not found.
+    fn cache_match(&self, origin: &str, name: &str, url: &str) -> Option<(String, Vec<u8>)>;
+
+    /// Look up an entry across all caches for the origin (first match wins).
+    fn cache_match_any(&self, origin: &str, url: &str) -> Option<(String, Vec<u8>)>;
+
+    /// Remove one entry by URL (method defaults to GET). Returns `true` if removed.
+    fn cache_delete(&self, origin: &str, name: &str, url: &str) -> bool;
+
+    /// All `(url, method)` pairs in a named cache, ordered by insertion time.
+    fn cache_keys(&self, origin: &str, name: &str) -> Vec<(String, String)>;
+
+    /// `true` if the named cache exists (has at least one entry) for this origin.
+    fn cache_has(&self, origin: &str, name: &str) -> bool;
+
+    /// Remove an entire named cache. Returns `true` if the cache existed.
+    fn cache_delete_cache(&self, origin: &str, name: &str) -> bool;
+
+    /// Names of all caches for this origin, in insertion order.
+    fn cache_names(&self, origin: &str) -> Vec<String>;
+}
+
 // ============================================================================
 // ADR-006: Automation API — first-class engine surface
 // ============================================================================
+
+/// Clock mode for deterministic testing (BrowserSession::set_clock, 8F.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClockMode {
+    /// Freeze clock at this many milliseconds since Unix epoch.
+    ///
+    /// `Date.now()` and `performance.now()` always return `ms`.
+    Frozen(u64),
+    /// Use system real-time clock (default).
+    Real,
+    /// Monotonically increasing clock starting from 0.
+    ///
+    /// Each call to `Date.now()` / `performance.now()` advances the counter
+    /// by `step_ms` milliseconds. Useful for deterministic animation/timer tests
+    /// without depending on wall-clock time.
+    Monotonic { step_ms: u64 },
+}
 
 /// Browser automation session — unified interface for in-process tests, MCP agents,
 /// and BiDi servers. All automation consumers (tests, drivers, external clients)
@@ -1799,6 +1919,69 @@ pub trait BrowserSession: Send {
     /// Returns a JSON-compatible value (primitive / array / object).
     /// Scripts that throw return Err with the exception message.
     fn eval(&mut self, script: &str) -> Result<String>;
+
+    /// Freeze the session clock to a fixed timestamp for deterministic testing (8F.1).
+    ///
+    /// `ClockMode::Frozen(ms)` — `Date.now()` and `performance.now()` always return `ms`.
+    /// `ClockMode::Monotonic { step_ms }` — clock advances by `step_ms` on each read.
+    /// `ClockMode::Real` — restore system time (default).
+    fn set_clock(&mut self, mode: ClockMode) -> Result<()> {
+        let _ = mode;
+        Ok(()) // default: no-op (NullBrowserSession-compatible)
+    }
+
+    /// Set the RNG seed for deterministic `Math.random()` (8F.2).
+    ///
+    /// `Some(seed)` — xorshift32 PRNG seeded at `seed`; same seed = same sequence.
+    /// `None` — restore OS entropy.
+    fn set_rng_seed(&mut self, seed: Option<u64>) -> Result<()> {
+        let _ = seed;
+        Ok(())
+    }
+
+    /// Deliver a Largest Contentful Paint (LCP) entry to the Performance Timeline.
+    ///
+    /// Called by shell pipeline when a large content element (img/text >500px²) is first rendered.
+    /// Registers a 'largest-contentful-paint' entry accessible via PerformanceObserver.
+    fn deliver_lcp_entry(
+        &mut self,
+        element_id: i32,
+        size: u32,
+        start_ms: f64,
+        render_time_ms: f64,
+    ) -> Result<()> {
+        let _ = (element_id, size, start_ms, render_time_ms);
+        Ok(()) // default: no-op
+    }
+
+    /// Deliver a Layout Shift entry to the Performance Timeline for CLS (Cumulative Layout Shift).
+    ///
+    /// Called by shell when a layout reflow causes visible displacement >5px.
+    /// Registers a 'layout-shift' entry with fractional shift distance and input-blocking info.
+    fn deliver_layout_shift(&mut self, value: f64, session_id: u32, had_input: bool) -> Result<()> {
+        let _ = (value, session_id, had_input);
+        Ok(()) // default: no-op
+    }
+
+    /// Deliver a generic PerformanceEntry to the Performance Timeline.
+    ///
+    /// Creates a `{entryType, name, startTime, duration}` entry and merges in any
+    /// extra properties from `detail_json` (an optional JSON object string).
+    /// Notifies all matching `PerformanceObserver` callbacks synchronously.
+    ///
+    /// Use for entry types without a dedicated binding: 'longtask', 'element',
+    /// 'event', 'navigation', etc.
+    fn deliver_perf_entry(
+        &mut self,
+        entry_type: &str,
+        name: &str,
+        start_ms: f64,
+        duration_ms: f64,
+        detail_json: Option<&str>,
+    ) -> Result<()> {
+        let _ = (entry_type, name, start_ms, duration_ms, detail_json);
+        Ok(()) // default: no-op
+    }
 }
 
 /// Null implementation of `BrowserSession` — all methods return `NotImplemented`.
@@ -1864,6 +2047,15 @@ impl BrowserSession for NullBrowserSession {
         Err(crate::error::Error::Other(
             "BrowserSession not implemented".into(),
         ))
+    }
+    fn deliver_lcp_entry(&mut self, _: i32, _: u32, _: f64, _: f64) -> Result<()> {
+        Ok(())
+    }
+    fn deliver_layout_shift(&mut self, _: f64, _: u32, _: bool) -> Result<()> {
+        Ok(())
+    }
+    fn deliver_perf_entry(&mut self, _: &str, _: &str, _: f64, _: f64, _: Option<&str>) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -2413,5 +2605,441 @@ mod tests {
         fn check(_c: &dyn EvictableCache) {}
         let c = MockCache::new("test", 0, 0);
         check(&c);
+    }
+}
+
+// ── KnowledgeStore ────────────────────────────────────────────────────────────
+
+/// Result of a full-text history search. Mirrors `lumen_knowledge::SearchHit`
+/// but lives in `lumen-core` so the trait can be defined without a dependency
+/// on `lumen-knowledge`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KnowledgeHistoryHit {
+    /// Row-id in the FTS index; matches `lumen_storage::history::HistoryEntry.id`.
+    pub rowid: i64,
+    /// Page URL.
+    pub url: String,
+    /// Page title at indexing time.
+    pub title: String,
+    /// BM25 snippet from the extracted text, markdown-bold `**word**` around
+    /// matches, up to ~32 tokens, ellipsis-truncated.
+    pub snippet: String,
+    /// BM25 score; lower value = more relevant (FTS5 negated convention).
+    pub score: f64,
+}
+
+/// Result of a full-text notes search.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KnowledgeNoteHit {
+    /// Note id.
+    pub id: i64,
+    /// Page URL the note is anchored to.
+    pub url: String,
+    /// Highlighted text selection.
+    pub selection: String,
+    /// User comment.
+    pub comment: String,
+    /// BM25 snippet.
+    pub snippet: String,
+    /// BM25 score; lower = more relevant.
+    pub score: f64,
+}
+
+/// Result of a full-text read-later search.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KnowledgeReadLaterHit {
+    /// Entry id.
+    pub id: i64,
+    /// Saved page URL.
+    pub url: String,
+    /// Saved page title.
+    pub title: String,
+    /// BM25 snippet from the extracted text.
+    pub snippet: String,
+    /// BM25 score; lower = more relevant.
+    pub score: f64,
+}
+
+/// Result of a live open-tabs search.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KnowledgeTabHit {
+    /// Shell tab identifier (live, not persisted).
+    pub tab_id: i64,
+    /// Current URL of the tab.
+    pub url: String,
+    /// Current title of the tab.
+    pub title: String,
+    /// BM25 snippet from the tab's extracted text.
+    pub snippet: String,
+    /// BM25 score; lower = more relevant.
+    pub score: f64,
+}
+
+/// Unified knowledge-store interface covering the §12 feature set:
+/// history FTS (§12.1), notes (§12.2), read-later (§12.3), and live
+/// open-tabs search (§12.4).
+///
+/// Designed as a replaceable backend: current implementation uses SQLite
+/// FTS5; Phase 3+ target is tantivy (pure-Rust, see §5 dependency table).
+/// Shell, omnibox, and JS bindings depend only on this trait — they never
+/// import `lumen-knowledge` types directly.
+pub trait KnowledgeStore: Send + Sync {
+    // ── History FTS (§12.1) ───────────────────────────────────────────────
+
+    /// Add or update a history page in the FTS index. `rowid` must equal the
+    /// corresponding `lumen_storage::history::HistoryEntry.id`. If an entry
+    /// with the same rowid already exists it is replaced (DELETE + INSERT).
+    ///
+    /// `text` is the readability-extracted plain text from the page body.
+    /// May be empty when the page has not been processed yet.
+    fn index_history(&self, rowid: i64, url: &str, title: &str, text: &str) -> Result<()>;
+
+    /// Remove a page from the FTS history index. No-op if the rowid is absent.
+    fn unindex_history(&self, rowid: i64) -> Result<()>;
+
+    /// Full-text search over indexed history pages, ranked by BM25 relevance.
+    ///
+    /// `query` uses FTS5 syntax: implicit AND for multiple words, `OR`, quoted
+    /// phrases, `^prefix`, etc. Returns at most `limit` results.
+    fn search_history(&self, query: &str, limit: i64) -> Result<Vec<KnowledgeHistoryHit>>;
+
+    // ── Notes (§12.2) ─────────────────────────────────────────────────────
+
+    /// Add a new note. Returns the new note's id.
+    ///
+    /// `selection` — highlighted text from the page; `context` — surrounding
+    /// paragraph; `comment` — user annotation; `created_at` — Unix timestamp.
+    fn add_note(
+        &self,
+        url: &str,
+        selection: &str,
+        context: &str,
+        comment: &str,
+        created_at: i64,
+    ) -> Result<i64>;
+
+    /// Delete a note by id.
+    fn delete_note(&self, id: i64) -> Result<()>;
+
+    /// Full-text search over notes (selection + comment), ranked by BM25.
+    fn search_notes(&self, query: &str, limit: i64) -> Result<Vec<KnowledgeNoteHit>>;
+
+    // ── Read-later (§12.3) ────────────────────────────────────────────────
+
+    /// Save or update a read-later entry. Returns its id. `html_snapshot` is
+    /// the full page HTML BLOB for offline rendering; `text` is the
+    /// readability extract that goes into the FTS index.
+    fn save_read_later(
+        &self,
+        url: &str,
+        title: &str,
+        html_snapshot: &[u8],
+        text: &str,
+        tags: &[String],
+        saved_at: i64,
+    ) -> Result<i64>;
+
+    /// Full-text search over read-later entries (title + text), ranked by BM25.
+    fn search_read_later(&self, query: &str, limit: i64) -> Result<Vec<KnowledgeReadLaterHit>>;
+
+    // ── Open tabs (§12.4) ─────────────────────────────────────────────────
+
+    /// Add or update a live open tab in the in-memory FTS index.
+    ///
+    /// `tab_id` is the shell's live tab identifier (not persisted). Calling
+    /// this with the same `tab_id` replaces the previous entry (navigation).
+    fn index_tab(&self, tab_id: i64, url: &str, title: &str, text: &str) -> Result<()>;
+
+    /// Remove a tab from the live index (e.g. on tab close). No-op if absent.
+    fn remove_tab(&self, tab_id: i64) -> Result<()>;
+
+    /// Full-text search over currently open tabs, ranked by BM25.
+    fn search_tabs(&self, query: &str, limit: i64) -> Result<Vec<KnowledgeTabHit>>;
+}
+
+#[cfg(test)]
+mod knowledge_store_tests {
+    use super::{KnowledgeStore, Result};
+
+    /// Verify that `KnowledgeStore` is object-safe (can be used as `dyn`).
+    fn _assert_object_safe(_: &dyn KnowledgeStore) {}
+
+    struct NullStore;
+
+    impl KnowledgeStore for NullStore {
+        fn index_history(&self, _: i64, _: &str, _: &str, _: &str) -> Result<()> {
+            Ok(())
+        }
+        fn unindex_history(&self, _: i64) -> Result<()> {
+            Ok(())
+        }
+        fn search_history(&self, _: &str, _: i64) -> Result<Vec<super::KnowledgeHistoryHit>> {
+            Ok(vec![])
+        }
+        fn add_note(&self, _: &str, _: &str, _: &str, _: &str, _: i64) -> Result<i64> {
+            Ok(0)
+        }
+        fn delete_note(&self, _: i64) -> Result<()> {
+            Ok(())
+        }
+        fn search_notes(&self, _: &str, _: i64) -> Result<Vec<super::KnowledgeNoteHit>> {
+            Ok(vec![])
+        }
+        fn save_read_later(
+            &self,
+            _: &str,
+            _: &str,
+            _: &[u8],
+            _: &str,
+            _: &[String],
+            _: i64,
+        ) -> Result<i64> {
+            Ok(0)
+        }
+        fn search_read_later(&self, _: &str, _: i64) -> Result<Vec<super::KnowledgeReadLaterHit>> {
+            Ok(vec![])
+        }
+        fn index_tab(&self, _: i64, _: &str, _: &str, _: &str) -> Result<()> {
+            Ok(())
+        }
+        fn remove_tab(&self, _: i64) -> Result<()> {
+            Ok(())
+        }
+        fn search_tabs(&self, _: &str, _: i64) -> Result<Vec<super::KnowledgeTabHit>> {
+            Ok(vec![])
+        }
+    }
+
+    #[test]
+    fn null_store_is_object_safe() {
+        let s: Box<dyn KnowledgeStore> = Box::new(NullStore);
+        assert!(s.search_history("x", 10).unwrap().is_empty());
+        assert!(s.search_notes("x", 10).unwrap().is_empty());
+        assert!(s.search_read_later("x", 10).unwrap().is_empty());
+        assert!(s.search_tabs("x", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn null_store_index_unindex_noop() {
+        let s = NullStore;
+        s.index_history(1, "https://a/", "t", "text").unwrap();
+        s.unindex_history(1).unwrap();
+        s.index_tab(1, "https://a/", "t", "text").unwrap();
+        s.remove_tab(1).unwrap();
+    }
+
+    #[test]
+    fn null_store_add_delete_note_noop() {
+        let s = NullStore;
+        let id = s.add_note("https://a/", "sel", "ctx", "cmt", 100).unwrap();
+        assert_eq!(id, 0);
+        s.delete_note(id).unwrap();
+    }
+}
+
+// ── AI backend (§12.8) ────────────────────────────────────────────────────────
+
+/// Synchronous AI inference backend for the sidebar AI assistant (§12.8).
+///
+/// Called from the shell when the user submits a prompt in the AI sidebar.
+/// Phase 0: synchronous, no streaming.  Phase 1 will add streaming via
+/// `query_stream(prompt) -> impl Iterator<Item = String>`.
+///
+/// Implementations must be `Send + Sync` (called from the main event loop).
+/// Response time should be under 100 ms on local hardware; remote backends
+/// should be wrapped with a timeout.
+pub trait AiBackend: Send + Sync {
+    /// Send `prompt` to the AI model and return the full response text.
+    ///
+    /// Returns an empty string on error rather than `Result` so the caller
+    /// can display it inline ("(no response)") without error-handling boiler.
+    fn query(&self, prompt: &str) -> String;
+}
+
+/// Null AI backend — always returns an informational stub.
+///
+/// Used when no real AI model is configured.  The shell installs this by
+/// default so the AI sidebar compiles and renders without any AI dependency.
+pub struct NullAiBackend;
+
+impl AiBackend for NullAiBackend {
+    fn query(&self, _prompt: &str) -> String {
+        "AI backend is not configured. \
+         Set up an AiBackend implementation to enable the assistant."
+            .to_owned()
+    }
+}
+
+#[cfg(test)]
+mod ai_backend_tests {
+    use super::*;
+
+    #[test]
+    fn null_backend_is_object_safe() {
+        let b: Box<dyn AiBackend> = Box::new(NullAiBackend);
+        let r = b.query("hello");
+        assert!(!r.is_empty());
+    }
+
+    #[test]
+    fn null_backend_returns_stub_for_any_prompt() {
+        let b = NullAiBackend;
+        let r1 = b.query("what is 2+2?");
+        let r2 = b.query("");
+        assert_eq!(r1, r2, "NullAiBackend should return same stub regardless of input");
+    }
+}
+
+// ── Audio capture (getUserMedia Phase 1) ─────────────────────────────────────
+
+/// Describes a single audio input or output device available on the host platform.
+///
+/// Returned by [`AudioCaptureProvider::enumerate_devices`] and mapped to W3C
+/// `MediaDeviceInfo` objects in the JS shim.
+pub struct AudioDeviceDescriptor {
+    /// Opaque per-device identifier, stable across sessions on the same machine.
+    pub device_id: String,
+    /// Group identifier linking physically related input/output pairs.
+    ///
+    /// Empty string when the platform does not expose group information.
+    pub group_id: String,
+    /// Human-readable device name.
+    ///
+    /// Only populated after a successful `getUserMedia` grant; empty otherwise
+    /// to avoid fingerprinting before permission is granted (W3C Media Capture §4.3.3).
+    pub label: String,
+    /// W3C device kind: `"audioinput"`, `"audiooutput"`, or `"videoinput"`.
+    pub kind: &'static str,
+    /// Whether this is the platform's default capture device.
+    pub is_default: bool,
+}
+
+/// Constraints forwarded from JS `getUserMedia({audio: {…}})`.
+///
+/// All fields are hints; the implementation picks the nearest supported values.
+#[derive(Debug, Clone, Default)]
+pub struct AudioCaptureConfig {
+    /// Preferred sample rate in Hz.  `None` → use device default.
+    pub sample_rate: Option<u32>,
+    /// Preferred number of channels (1 = mono, 2 = stereo).  `None` → use device default.
+    pub channel_count: Option<u32>,
+    /// Hint: request echo cancellation from the platform capture stack.
+    pub echo_cancellation: bool,
+    /// Hint: request noise suppression from the platform capture stack.
+    pub noise_suppression: bool,
+    /// Hint: request automatic gain control from the platform capture stack.
+    pub auto_gain_control: bool,
+    /// Optional device ID from `enumerateDevices`.  `None` → use the default device.
+    pub device_id: Option<String>,
+}
+
+/// Errors returned by [`AudioCaptureProvider::capture`].
+#[derive(Debug)]
+pub enum AudioCaptureError {
+    /// The user denied microphone permission or the OS blocked access.
+    NotAllowed,
+    /// No matching audio input device was found.
+    NotFound,
+    /// The requested device is in use by another application (exclusive-mode lock).
+    DeviceInUse,
+    /// Platform error not covered by the above categories.
+    Other(String),
+}
+
+/// Live audio capture stream returned by [`AudioCaptureProvider::capture`].
+///
+/// Holds an active OS capture session.  Dropping the handle stops capture.
+/// All methods are called exclusively from the JS thread (rquickjs single-threaded runtime),
+/// so implementors do not need interior mutability on `&self`.
+pub trait AudioCaptureHandle: 'static {
+    /// Actual sample rate in Hz used by the capture stream.
+    fn sample_rate(&self) -> u32;
+    /// Actual number of channels used by the capture stream (1 = mono, 2 = stereo).
+    fn channel_count(&self) -> u32;
+    /// Opaque device ID matching the value from [`AudioDeviceDescriptor::device_id`].
+    fn device_id(&self) -> &str;
+    /// Human-readable device name, always populated after capture starts.
+    fn device_label(&self) -> &str;
+    /// Non-blocking drain.  Returns all PCM samples accumulated since the last call.
+    ///
+    /// Samples are interleaved: `[L0, R0, L1, R1, …]` for stereo.
+    /// Returns an empty `Vec` when no new samples are available yet.
+    fn read_pcm_f32(&mut self) -> Vec<f32>;
+    /// Stop capture and release the OS audio device.
+    ///
+    /// After `stop`, `read_pcm_f32` must return an empty `Vec`.
+    fn stop(&mut self);
+}
+
+/// Platform audio capture backend backing `navigator.mediaDevices.getUserMedia({audio})`.
+///
+/// Installed process-globally by the shell via `lumen_js::set_audio_capture_provider`.
+/// The JS bridge holds an `Arc<dyn AudioCaptureProvider>` and calls `capture()` on each
+/// `getUserMedia({audio})` call.
+///
+/// Shell implementation: `lumen_shell::platform::audio_capture::PlatformAudioCapture`
+/// (WASAPI on Windows, ALSA on Linux via `cpal`).
+pub trait AudioCaptureProvider: Send + Sync {
+    /// Return all available audio input devices on the host platform.
+    ///
+    /// Device labels are empty until the user grants microphone permission (W3C §4.3.3).
+    fn enumerate_devices(&self) -> Vec<AudioDeviceDescriptor>;
+
+    /// Start capturing audio from the device specified in `config.device_id`, or the
+    /// system default when `config.device_id` is `None`.
+    ///
+    /// Returns a live `AudioCaptureHandle` on success.  The handle must remain alive
+    /// for as long as capture should continue; dropping it stops the stream.
+    fn capture(
+        &self,
+        config: AudioCaptureConfig,
+    ) -> std::result::Result<Box<dyn AudioCaptureHandle>, AudioCaptureError>;
+}
+
+/// Stub `AudioCaptureProvider` that returns zero devices and always rejects capture.
+///
+/// Installed when no real audio backend is available (headless mode, tests, CI without a mic).
+pub struct NullAudioCaptureProvider;
+
+impl AudioCaptureProvider for NullAudioCaptureProvider {
+    fn enumerate_devices(&self) -> Vec<AudioDeviceDescriptor> {
+        Vec::new()
+    }
+
+    fn capture(
+        &self,
+        _config: AudioCaptureConfig,
+    ) -> std::result::Result<Box<dyn AudioCaptureHandle>, AudioCaptureError> {
+        Err(AudioCaptureError::NotAllowed)
+    }
+}
+
+#[cfg(test)]
+mod audio_capture_tests {
+    use super::*;
+
+    #[test]
+    fn null_provider_enumerate_empty() {
+        let p = NullAudioCaptureProvider;
+        assert!(p.enumerate_devices().is_empty());
+    }
+
+    #[test]
+    fn null_provider_capture_rejects_with_not_allowed() {
+        let p = NullAudioCaptureProvider;
+        let result = p.capture(AudioCaptureConfig::default());
+        assert!(result.is_err());
+        assert!(matches!(result.err().unwrap(), AudioCaptureError::NotAllowed));
+    }
+
+    #[test]
+    fn audio_capture_config_default_fields() {
+        let c = AudioCaptureConfig::default();
+        assert!(c.sample_rate.is_none());
+        assert!(c.channel_count.is_none());
+        assert!(!c.echo_cancellation);
+        assert!(!c.noise_suppression);
+        assert!(!c.auto_gain_control);
+        assert!(c.device_id.is_none());
     }
 }

@@ -269,6 +269,7 @@ pub fn build_panel(panel: &WorkspacePanel, window_w: f32, window_h: f32) -> Disp
             font_style: FontStyle::Normal,
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
+            highlight_name: None,
         });
 
         // Workspace name (truncated to leave room for "×").
@@ -285,6 +286,7 @@ pub fn build_panel(panel: &WorkspacePanel, window_w: f32, window_h: f32) -> Disp
             font_style: FontStyle::Normal,
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
+            highlight_name: None,
         });
 
         cursor_x = chip_right + CHIP_GAP;
@@ -308,6 +310,7 @@ pub fn build_panel(panel: &WorkspacePanel, window_w: f32, window_h: f32) -> Disp
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
 
     out

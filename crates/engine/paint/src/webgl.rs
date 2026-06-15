@@ -5,15 +5,18 @@
 //! so WebGL is backed by a software rasterizer rather than a live GPU context.
 //! [`SoftwareWebGl`] is a pure-Rust WebGL 1.0 state machine: it owns the
 //! framebuffer, vertex buffers, shader/program objects, vertex-attribute
-//! pointers and uniform state, and rasterizes `drawArrays` into an RGBA buffer.
+//! pointers, uniform state, and a GLSL ES 1.0 interpreter (task #34).
 //!
 //! # Fragment colour model
 //!
-//! Lumen does not execute GLSL. The rasterizer fills primitives with a flat
-//! "draw colour" — the most recent `uniform4f` value applied to the active
-//! program, or opaque white if none was set. This covers the common
-//! flat-shaded WebGL idiom (clip-space positions in attribute 0 + a colour
-//! uniform) deterministically and cross-OS bit-identically.
+//! Vertex and fragment shaders are parsed and executed by [`crate::glsl`].
+//! `drawArrays` runs the vertex shader per vertex (computing `gl_Position` and
+//! varyings), then rasterizes primitives by interpolating varyings and running
+//! the fragment shader per pixel.
+//!
+//! Fallback: if no linked program is active (or parsing fails), the rasterizer
+//! flat-fills with the most-recent `uniform4f` colour — old behaviour from
+//! task #28 — so existing tests continue to pass unchanged.
 //!
 //! # Coordinate model
 //!
@@ -23,6 +26,9 @@
 //! layer; GL's bottom-left Y is flipped on write).
 
 use std::collections::HashMap;
+use std::sync::Arc;
+
+use crate::glsl::{self, exec_main, interp_varyings, Val};
 
 // ── WebGL enum constants (subset actually consumed by the rasterizer) ────────
 
@@ -61,9 +67,10 @@ struct Shader {
     kind: u32,
     /// GLSL source set via `shaderSource`.
     source: String,
-    /// Whether `compileShader` was called. Compilation always "succeeds":
-    /// the software backend ignores shader logic and flat-fills.
+    /// Whether `compileShader` was called.
     compiled: bool,
+    /// Parsed AST, produced by `compile_shader` via the GLSL interpreter.
+    parsed: Option<Arc<glsl::ParsedShader>>,
 }
 
 /// A linked program object: a vertex + fragment shader pair.
@@ -134,7 +141,25 @@ pub struct SoftwareWebGl {
     /// Vertex attribute pointers by attribute index.
     attribs: HashMap<u32, AttribPointer>,
     /// Flat fragment colour (most recent `uniform4f`), RGBA in `[0, 1]`.
+    /// Used as the fallback colour when no shader program is active.
     draw_color: [f32; 4],
+    /// Uniform values by location, set via `uniform*` calls.
+    uniform_vals: HashMap<i32, Val>,
+    /// Textures uploaded via `texImage2D`, keyed by a per-context texture id.
+    /// Each texture is stored as a 1×1 averaged RGBA value for simple sampling.
+    texture_solid: HashMap<u32, [f32; 4]>,
+    /// Currently bound texture id per texture unit (unit → texture id).
+    bound_textures: HashMap<u32, u32>,
+    /// Active texture unit (set by `activeTexture`).
+    active_texture_unit: u32,
+}
+
+/// Per-vertex output produced by the vertex shader execution.
+struct VertexOutput {
+    /// Clip-space NDC position `[x, y, z, w]` assigned to `gl_Position`.
+    position: [f32; 4],
+    /// Varying values written by the vertex shader, keyed by variable name.
+    varyings: HashMap<String, Val>,
 }
 
 impl SoftwareWebGl {
@@ -161,6 +186,10 @@ impl SoftwareWebGl {
             current_program: 0,
             attribs: HashMap::new(),
             draw_color: [1.0, 1.0, 1.0, 1.0],
+            uniform_vals: HashMap::new(),
+            texture_solid: HashMap::new(),
+            bound_textures: HashMap::new(),
+            active_texture_unit: 0,
         }
     }
 
@@ -256,11 +285,7 @@ impl SoftwareWebGl {
         self.next_shader_id += 1;
         self.shaders.insert(
             id,
-            Shader {
-                kind,
-                source: String::new(),
-                compiled: false,
-            },
+            Shader { kind, source: String::new(), compiled: false, parsed: None },
         );
         id
     }
@@ -269,13 +294,16 @@ impl SoftwareWebGl {
     pub fn shader_source(&mut self, shader: u32, source: String) {
         if let Some(s) = self.shaders.get_mut(&shader) {
             s.source = source;
+            s.parsed = None; // invalidate cached parse on source change
         }
     }
 
-    /// `gl.compileShader(shader)`. Always marks the shader compiled; the
-    /// software backend does not execute GLSL.
+    /// `gl.compileShader(shader)`. Parses the GLSL source into an AST so
+    /// that `drawArrays` can execute vertex and fragment programs.
     pub fn compile_shader(&mut self, shader: u32) {
         if let Some(s) = self.shaders.get_mut(&shader) {
+            let parsed = Arc::new(glsl::parse(&s.source));
+            s.parsed = Some(parsed);
             s.compiled = true;
         }
     }
@@ -390,21 +418,96 @@ impl SoftwareWebGl {
         entry.offset_floats = offset_bytes / 4;
     }
 
-    /// `gl.uniform4f(location, x, y, z, w)`. Treated as the active flat
-    /// fragment colour (RGBA, clamped to `[0, 1]`).
-    pub fn uniform4f(&mut self, _location: i32, x: f32, y: f32, z: f32, w: f32) {
+    /// `gl.uniform4f(location, x, y, z, w)`.
+    pub fn uniform4f(&mut self, location: i32, x: f32, y: f32, z: f32, w: f32) {
         self.draw_color = [clamp01(x), clamp01(y), clamp01(z), clamp01(w)];
+        if location >= 0 {
+            self.uniform_vals.insert(location, Val::Vec4([x, y, z, w]));
+        }
     }
 
-    /// `gl.drawArrays(mode, first, count)`. Reads clip-space positions from
-    /// attribute 0 and flat-fills the assembled primitives with the current
-    /// draw colour. Unsupported modes are ignored.
+    /// `gl.uniform3f(location, x, y, z)`.
+    pub fn uniform3f(&mut self, location: i32, x: f32, y: f32, z: f32) {
+        if location >= 0 {
+            self.uniform_vals.insert(location, Val::Vec3([x, y, z]));
+        }
+    }
+
+    /// `gl.uniform2f(location, x, y)`.
+    pub fn uniform2f(&mut self, location: i32, x: f32, y: f32) {
+        if location >= 0 {
+            self.uniform_vals.insert(location, Val::Vec2([x, y]));
+        }
+    }
+
+    /// `gl.uniform1f(location, x)`.
+    pub fn uniform1f(&mut self, location: i32, x: f32) {
+        if location >= 0 {
+            self.uniform_vals.insert(location, Val::Float(x));
+        }
+    }
+
+    /// `gl.uniform1i(location, v)`. Used to bind sampler2D to a texture unit.
+    pub fn uniform1i(&mut self, location: i32, v: i32) {
+        if location >= 0 {
+            self.uniform_vals.insert(location, Val::Sampler(v.max(0) as u32));
+        }
+    }
+
+    /// `gl.uniformMatrix4fv(location, transpose, values)`. Stores a 4×4 float
+    /// matrix (column-major, 16 elements).
+    pub fn uniform_matrix4fv(&mut self, location: i32, values: &[f32]) {
+        if location >= 0 && values.len() >= 16 {
+            let mut m = [0f32; 16];
+            m.copy_from_slice(&values[..16]);
+            self.uniform_vals.insert(location, Val::Mat4(m));
+        }
+    }
+
+    /// `gl.activeTexture(unit_enum)`. Sets the active texture unit.
+    pub fn active_texture(&mut self, unit_enum: u32) {
+        self.active_texture_unit = unit_enum.saturating_sub(0x84C0); // GL_TEXTURE0
+    }
+
+    /// `gl.bindTexture(target, texture_id)`. Records binding for the active unit.
+    pub fn bind_texture(&mut self, _target: u32, texture_id: u32) {
+        self.bound_textures.insert(self.active_texture_unit, texture_id);
+    }
+
+    /// `gl.texImage2D(…, data)`. Averages pixel data to a 1×1 solid colour for
+    /// simple texture sampling in the GLSL interpreter.
+    pub fn tex_image_2d_rgba(&mut self, texture_id: u32, width: u32, height: u32, data: &[u8]) {
+        if width == 0 || height == 0 || data.len() < (width * height * 4) as usize {
+            return;
+        }
+        let total = (width * height) as usize;
+        let (mut r, mut g, mut b, mut a) = (0u32, 0u32, 0u32, 0u32);
+        for px in data.chunks_exact(4).take(total) {
+            r += u32::from(px[0]);
+            g += u32::from(px[1]);
+            b += u32::from(px[2]);
+            a += u32::from(px[3]);
+        }
+        let n = total as f32 * 255.0;
+        self.texture_solid.insert(texture_id, [r as f32/n, g as f32/n, b as f32/n, a as f32/n]);
+    }
+
+    /// `gl.drawArrays(mode, first, count)`. Executes vertex and fragment shaders
+    /// if a linked program is active; falls back to flat-fill with `draw_color`
+    /// when no shader program is present.
     pub fn draw_arrays(&mut self, mode: u32, first: i32, count: i32) {
         if count <= 0 || first < 0 {
             return;
         }
         let first = first as usize;
         let count = count as usize;
+
+        // Try shaded path (returns false → fall through to flat-fill fallback).
+        if self.draw_arrays_shaded(mode, first, count) {
+            return;
+        }
+
+        // ── Flat-fill fallback (task #28 behaviour) ───────────────────────
         let positions = match self.collect_positions(first, count) {
             Some(p) if !p.is_empty() => p,
             _ => return,
@@ -450,6 +553,248 @@ impl SoftwareWebGl {
             }
             _ => {}
         }
+    }
+
+    // ── GLSL shaded draw path ────────────────────────────────────────────────
+
+    /// Try to execute the active vertex + fragment program for `drawArrays`.
+    /// Returns `false` when no program is active or shaders are not yet parsed,
+    /// in which case the caller should fall back to flat-fill.
+    fn draw_arrays_shaded(&mut self, mode: u32, first: usize, count: usize) -> bool {
+        let prog_id = self.current_program;
+        if prog_id == 0 { return false; }
+
+        // Extract Arc-clones of parsed shaders (cheap refcount bumps).
+        let (vs_arc, fs_arc, attrib_locs) = {
+            let prog = match self.programs.get(&prog_id) { Some(p) => p, None => return false };
+            let vs_id = match prog.vertex { Some(id) => id, None => return false };
+            let fs_id = match prog.fragment { Some(id) => id, None => return false };
+            let vs_arc = match self.shaders.get(&vs_id).and_then(|s| s.parsed.clone()) {
+                Some(p) => p, None => return false,
+            };
+            let fs_arc = match self.shaders.get(&fs_id).and_then(|s| s.parsed.clone()) {
+                Some(p) => p, None => return false,
+            };
+            // location → attribute name (reverse of prog.attribs: name → loc)
+            let attrib_locs: HashMap<u32, String> = prog.attribs.iter()
+                .map(|(name, &loc)| (loc as u32, name.clone()))
+                .collect();
+            (vs_arc, fs_arc, attrib_locs)
+        };
+
+        // Build uniform name → value map for the active program.
+        let uniform_map = self.build_uniform_map(prog_id);
+
+        // Execute vertex shader for each vertex.
+        let mut vertices: Vec<VertexOutput> = Vec::with_capacity(count);
+        for vi in first..first + count {
+            let attrs = self.collect_vertex_attribs(vi, &attrib_locs);
+            let mut env = glsl::ShaderEnv::new(&uniform_map);
+            // Seed gl_Position from attribute 0 (conventional position attribute)
+            // so that shaders that don't write gl_Position explicitly still produce
+            // correct clip-space positions — backward-compatible with task #28.
+            if let Some(attr0_name) = attrib_locs.get(&0) && let Some(val) = attrs.get(attr0_name) {
+                env.position = val.to_vec4();
+            }
+            env.attributes = attrs;
+            exec_main(&vs_arc, &mut env);
+            vertices.push(VertexOutput { position: env.position, varyings: env.varyings });
+        }
+
+        // Rasterize with fragment shader.
+        self.rasterize_shaded(mode, &vertices, &fs_arc, &uniform_map);
+        true
+    }
+
+    /// Build a `name → Val` uniform map for the given program by looking up
+    /// `uniform_vals` (which stores values by location) through the program's
+    /// `uniforms` (name → location) table.
+    fn build_uniform_map(&self, prog_id: u32) -> HashMap<String, Val> {
+        let prog = match self.programs.get(&prog_id) { Some(p) => p, None => return HashMap::new() };
+        let mut map = HashMap::with_capacity(prog.uniforms.len());
+        for (name, &loc) in &prog.uniforms {
+            if let Some(val) = self.uniform_vals.get(&loc) {
+                // For sampler2D uniforms, inject the averaged texture colour so
+                // that `texture2D(u_sampler, v_uv)` can return a meaningful value.
+                let final_val = if let Val::Sampler(unit) = val {
+                    let tex_id = self.bound_textures.get(unit).copied().unwrap_or(0);
+                    if let Some(&rgba) = self.texture_solid.get(&tex_id) {
+                        // Store the sampler handle; also store the resolved colour
+                        // under a magic key `__tex_<unit>` so texture2D can find it.
+                        map.insert(format!("__tex_{}", unit), Val::Vec4(rgba));
+                    }
+                    val.clone()
+                } else {
+                    val.clone()
+                };
+                map.insert(name.clone(), final_val);
+            }
+        }
+        map
+    }
+
+    /// Read all enabled vertex attributes for vertex index `vi`, returning a
+    /// map from attribute name to its `Val`.
+    fn collect_vertex_attribs(
+        &self,
+        vi: usize,
+        attrib_locs: &HashMap<u32, String>,
+    ) -> HashMap<String, Val> {
+        let mut out = HashMap::new();
+        for (&loc, name) in attrib_locs {
+            let ap = match self.attribs.get(&loc) { Some(a) => a, None => continue };
+            if !ap.enabled { continue; }
+            let data = match self.buffers.get(&ap.buffer) { Some(d) => d, None => continue };
+            let stride = if ap.stride_floats == 0 { ap.size } else { ap.stride_floats };
+            let base = ap.offset_floats + vi * stride;
+            let val = match ap.size {
+                1 => data.get(base).map(|&v| Val::Float(v)),
+                2 => if base + 1 < data.len() {
+                    Some(Val::Vec2([data[base], data[base + 1]]))
+                } else { None },
+                3 => if base + 2 < data.len() {
+                    Some(Val::Vec3([data[base], data[base + 1], data[base + 2]]))
+                } else { None },
+                _ => if base + 3 < data.len() {
+                    Some(Val::Vec4([data[base], data[base + 1], data[base + 2], data[base + 3]]))
+                } else { None },
+            };
+            if let Some(v) = val { out.insert(name.clone(), v); }
+        }
+        out
+    }
+
+    /// Rasterize `vertices` using the fragment shader `fs`.
+    fn rasterize_shaded(
+        &mut self,
+        mode: u32,
+        vertices: &[VertexOutput],
+        fs: &glsl::ParsedShader,
+        uniforms: &HashMap<String, Val>,
+    ) {
+        match mode {
+            TRIANGLES => {
+                for tri in vertices.chunks_exact(3) {
+                    self.fill_triangle_shaded(&tri[0], &tri[1], &tri[2], fs, uniforms);
+                }
+            }
+            TRIANGLE_STRIP => {
+                for i in 0..vertices.len().saturating_sub(2) {
+                    let (a, b, c) = if i % 2 == 0 {
+                        (&vertices[i], &vertices[i + 1], &vertices[i + 2])
+                    } else {
+                        (&vertices[i + 1], &vertices[i], &vertices[i + 2])
+                    };
+                    self.fill_triangle_shaded(a, b, c, fs, uniforms);
+                }
+            }
+            TRIANGLE_FAN => {
+                let hub = &vertices[0];
+                for i in 1..vertices.len().saturating_sub(1) {
+                    self.fill_triangle_shaded(hub, &vertices[i], &vertices[i + 1], fs, uniforms);
+                }
+            }
+            POINTS => {
+                for v in vertices {
+                    let (px, py) = self.ndc_to_screen(v.position[0], v.position[1]);
+                    let (rgba, discard) = self.run_fragment_at(fs, uniforms, &v.varyings);
+                    if !discard { self.blend_pixel(px, py, rgba); }
+                }
+            }
+            LINES => {
+                for seg in vertices.chunks_exact(2) {
+                    self.draw_line_shaded(&seg[0], &seg[1], fs, uniforms);
+                }
+            }
+            LINE_STRIP => {
+                for i in 0..vertices.len().saturating_sub(1) {
+                    self.draw_line_shaded(&vertices[i], &vertices[i + 1], fs, uniforms);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Rasterize a triangle using barycentric interpolation of varyings and the
+    /// fragment shader.
+    fn fill_triangle_shaded(
+        &mut self,
+        a: &VertexOutput,
+        b: &VertexOutput,
+        c: &VertexOutput,
+        fs: &glsl::ParsedShader,
+        uniforms: &HashMap<String, Val>,
+    ) {
+        let pa = self.ndc_to_screen(a.position[0], a.position[1]);
+        let pb = self.ndc_to_screen(b.position[0], b.position[1]);
+        let pc = self.ndc_to_screen(c.position[0], c.position[1]);
+
+        let min_x = pa.0.min(pb.0).min(pc.0).floor().max(0.0) as i32;
+        let max_x = pa.0.max(pb.0).max(pc.0).ceil().min(self.width as f32) as i32;
+        let min_y = pa.1.min(pb.1).min(pc.1).floor().max(0.0) as i32;
+        let max_y = pa.1.max(pb.1).max(pc.1).ceil().min(self.height as f32) as i32;
+
+        let area = edge(pa, pb, pc);
+        if area.abs() < f32::EPSILON { return; }
+
+        for y in min_y..max_y {
+            for x in min_x..max_x {
+                let p = (x as f32 + 0.5, y as f32 + 0.5);
+                let w0 = edge(pb, pc, p);
+                let w1 = edge(pc, pa, p);
+                let w2 = edge(pa, pb, p);
+                let inside = (w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0)
+                    || (w0 <= 0.0 && w1 <= 0.0 && w2 <= 0.0);
+                if !inside { continue; }
+
+                // Normalised barycentric weights (λA, λB, λC).
+                let total = w0 + w1 + w2;
+                let (la, lb, lc) = (w0 / total, w1 / total, w2 / total);
+                let varyings = interp_varyings(&a.varyings, &b.varyings, &c.varyings, la, lb, lc);
+
+                let (color, discard) = self.run_fragment_at(fs, uniforms, &varyings);
+                if !discard { self.blend_pixel(p.0, p.1, color); }
+            }
+        }
+    }
+
+    /// Rasterize a line segment using the fragment shader at each step.
+    fn draw_line_shaded(
+        &mut self,
+        a: &VertexOutput,
+        b: &VertexOutput,
+        fs: &glsl::ParsedShader,
+        uniforms: &HashMap<String, Val>,
+    ) {
+        let pa = self.ndc_to_screen(a.position[0], a.position[1]);
+        let pb = self.ndc_to_screen(b.position[0], b.position[1]);
+        let dx = pb.0 - pa.0;
+        let dy = pb.1 - pa.1;
+        let steps = dx.abs().max(dy.abs()).ceil().max(1.0) as i32;
+        for i in 0..=steps {
+            let t = i as f32 / steps as f32;
+            let varyings = interp_varyings(&a.varyings, &b.varyings, &HashMap::new(),
+                                           1.0 - t, t, 0.0);
+            let (color, discard) = self.run_fragment_at(fs, uniforms, &varyings);
+            if !discard { self.blend_pixel(pa.0 + dx * t, pa.1 + dy * t, color); }
+        }
+    }
+
+    /// Run the fragment shader at a single sample point. Returns `(color, discard)`.
+    ///
+    /// `frag_color` is pre-seeded from `self.draw_color` so that shaders that
+    /// do not assign `gl_FragColor` fall back to the flat uniform colour.
+    fn run_fragment_at(
+        &self,
+        fs: &glsl::ParsedShader,
+        uniforms: &HashMap<String, Val>,
+        varyings: &HashMap<String, Val>,
+    ) -> ([f32; 4], bool) {
+        let mut env = glsl::ShaderEnv::new(uniforms);
+        env.frag_color = self.draw_color;
+        env.varyings = varyings.clone();
+        exec_main(fs, &mut env);
+        (env.frag_color, env.discard)
     }
 
     // ── Internal rasterization ──────────────────────────────────────────────

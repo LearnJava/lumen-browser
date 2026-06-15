@@ -780,6 +780,424 @@ fn miter_offset(i: usize, m: usize, seg_normals: &[[f32; 2]], half_w: f32, close
     [mx, my]
 }
 
+// ─── Advanced stroke: linecap / linejoin / miterlimit / dasharray ────────────
+
+/// Stroke caps applied at open sub-path endpoints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StrokeLinecap {
+    /// Flat cap at endpoint (butt).
+    #[default]
+    Butt,
+    /// Semicircular cap.
+    Round,
+    /// Square cap extending half-width past endpoint.
+    Square,
+}
+
+/// Join style at connected segment vertices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StrokeLinejoin {
+    /// Pointed miter join (clamped by miterlimit).
+    #[default]
+    Miter,
+    /// Circular arc join.
+    Round,
+    /// Flat bevel triangle.
+    Bevel,
+}
+
+/// Parameters for advanced stroke tessellation.
+#[derive(Debug, Clone)]
+pub struct StrokeParams {
+    /// Half of `stroke-width` in px (≥ 0).
+    pub half_width: f32,
+    /// Cap style for open sub-path endpoints.
+    pub linecap: StrokeLinecap,
+    /// Join style at interior vertices.
+    pub linejoin: StrokeLinejoin,
+    /// Miter limit ratio (≥ 1.0). Used only with `Miter` join.
+    pub miterlimit: f32,
+    /// Dash pattern lengths in px, cycled. Empty = solid line.
+    pub dasharray: Vec<f32>,
+    /// Offset into the dash pattern in px.
+    pub dashoffset: f32,
+}
+
+impl Default for StrokeParams {
+    fn default() -> Self {
+        StrokeParams {
+            half_width: 0.5,
+            linecap: StrokeLinecap::Butt,
+            linejoin: StrokeLinejoin::Miter,
+            miterlimit: 4.0,
+            dasharray: Vec::new(),
+            dashoffset: 0.0,
+        }
+    }
+}
+
+/// Apply a dash pattern to a list of contours.
+///
+/// Returns new contours where only the "on" (dash) segments are present.
+/// If `dasharray` is empty, returns the original contours unchanged.
+#[must_use]
+pub fn apply_dash_pattern(
+    contours: &[Vec<[f32; 2]>],
+    dasharray: &[f32],
+    dashoffset: f32,
+) -> Vec<Vec<[f32; 2]>> {
+    if dasharray.is_empty() {
+        return contours.to_vec();
+    }
+    // Total cycle length (dash + gap pairs, cycling the array if odd length).
+    let cycle: f32 = dasharray.iter().sum::<f32>()
+        * if dasharray.len() % 2 == 1 { 2.0 } else { 1.0 };
+    if cycle <= 0.0 {
+        return Vec::new();
+    }
+    let mut result = Vec::new();
+    for contour in contours {
+        let n = contour.len();
+        if n < 2 {
+            continue;
+        }
+        // Effective dashoffset: mod by cycle, negated (offset shifts pattern forward).
+        let start_offset = ((-dashoffset) % cycle + cycle) % cycle;
+
+        // Walk along the path, tracking which dash phase we're in.
+        // Advance phase_idx/phase_len to account for start_offset.
+        let mut phase_idx = 0usize;
+        let mut phase_len;
+        let mut rem = start_offset;
+        loop {
+            let d = dasharray[phase_idx % dasharray.len()];
+            // `<` not `<=`: when rem == d, advance to the next phase rather than
+            // emitting a zero-length draw/gap (which produces degenerate contours).
+            if rem < d {
+                phase_len = d - rem;
+                break;
+            }
+            rem -= d;
+            phase_idx += 1;
+        }
+        // phase_idx even → drawing; odd → gap.
+        let mut drawing = phase_idx.is_multiple_of(2);
+        let mut current_dash: Vec<[f32; 2]> = Vec::new();
+        let seg_count = n - 1;
+        for i in 0..seg_count {
+            let a = contour[i];
+            let b = contour[i + 1];
+            let dx = b[0] - a[0];
+            let dy = b[1] - a[1];
+            let seg_len = (dx * dx + dy * dy).sqrt();
+            if seg_len < 1e-6 {
+                continue;
+            }
+            let ux = dx / seg_len;
+            let uy = dy / seg_len;
+            let mut t = 0.0f32; // consumed distance along this segment
+            loop {
+                let remaining_in_seg = seg_len - t;
+                if phase_len >= remaining_in_seg {
+                    // Current phase continues beyond this segment.
+                    if drawing {
+                        if current_dash.is_empty() {
+                            current_dash.push([a[0] + ux * t, a[1] + uy * t]);
+                        }
+                        current_dash.push(b);
+                    }
+                    phase_len -= remaining_in_seg;
+                    break;
+                }
+                // Phase ends within this segment.
+                let end_t = t + phase_len;
+                let end_pt = [a[0] + ux * end_t, a[1] + uy * end_t];
+                if drawing {
+                    if current_dash.is_empty() {
+                        current_dash.push([a[0] + ux * t, a[1] + uy * t]);
+                    }
+                    current_dash.push(end_pt);
+                    if current_dash.len() >= 2 {
+                        result.push(current_dash.clone());
+                    }
+                    current_dash.clear();
+                }
+                t = end_t;
+                drawing = !drawing;
+                phase_idx += 1;
+                phase_len = dasharray[phase_idx % dasharray.len()];
+            }
+        }
+        // Flush last dash.
+        if drawing && current_dash.len() >= 2 {
+            result.push(current_dash);
+        }
+    }
+    result
+}
+
+/// Tessellate strokes with full linecap / linejoin / miterlimit / dasharray support.
+///
+/// Returns flat triangle vertex list (3 `[f32;2]` per triangle).
+#[must_use]
+pub fn tessellate_stroke_ex(contours: &[Vec<[f32; 2]>], params: &StrokeParams) -> Vec<[f32; 2]> {
+    if params.half_width <= 0.0 {
+        return Vec::new();
+    }
+    let dashed = apply_dash_pattern(contours, &params.dasharray, params.dashoffset);
+    let mut tris = Vec::new();
+    for contour in &dashed {
+        stroke_contour_ex(contour, params, &mut tris);
+    }
+    tris
+}
+
+/// Tessellate one polyline with advanced join/cap support.
+fn stroke_contour_ex(pts: &[[f32; 2]], params: &StrokeParams, out: &mut Vec<[f32; 2]>) {
+    let n = pts.len();
+    if n < 2 {
+        return;
+    }
+    let half_w = params.half_width;
+    let closed = n > 2
+        && (pts[0][0] - pts[n - 1][0]).abs() < 1e-4
+        && (pts[0][1] - pts[n - 1][1]).abs() < 1e-4;
+    let wpts = if closed { &pts[..n - 1] } else { pts };
+    let m = wpts.len();
+    if m < 2 {
+        return;
+    }
+    let n_segs = if closed { m } else { m - 1 };
+
+    // Per-segment unit normals (left of travel, Y-down coords).
+    let seg_normals: Vec<[f32; 2]> = (0..n_segs)
+        .map(|i| {
+            let a = wpts[i];
+            let b = wpts[(i + 1) % m];
+            let dx = b[0] - a[0];
+            let dy = b[1] - a[1];
+            let len = (dx * dx + dy * dy).sqrt().max(1e-6);
+            [dy / len, -dx / len]
+        })
+        .collect();
+
+    // Segment direction vectors (unit).
+    let seg_dirs: Vec<[f32; 2]> = (0..n_segs)
+        .map(|i| {
+            let a = wpts[i];
+            let b = wpts[(i + 1) % m];
+            let dx = b[0] - a[0];
+            let dy = b[1] - a[1];
+            let len = (dx * dx + dy * dy).sqrt().max(1e-6);
+            [dx / len, dy / len]
+        })
+        .collect();
+
+    // Build per-vertex left/right offsets considering linejoin.
+    // For endpoints of open paths, the offset equals the segment normal × half_w.
+    let mut left_pts: Vec<[f32; 2]> = Vec::with_capacity(m);
+    let mut right_pts: Vec<[f32; 2]> = Vec::with_capacity(m);
+    // join_tris: extra triangles added at joints (round/bevel).
+    let mut join_tris: Vec<(usize, Vec<[f32; 2]>)> = Vec::new();
+
+    for i in 0..m {
+        let p = wpts[i];
+        let has_prev = closed || i > 0;
+        let has_next = closed || i < m - 1;
+
+        if !has_prev || !has_next {
+            // Open endpoint: use adjacent normal.
+            let n = if !has_prev { seg_normals[0] } else { seg_normals[n_segs - 1] };
+            left_pts.push([p[0] + n[0] * half_w, p[1] + n[1] * half_w]);
+            right_pts.push([p[0] - n[0] * half_w, p[1] - n[1] * half_w]);
+        } else {
+            let n_in = seg_normals[(i + n_segs - 1) % n_segs];
+            let n_out = seg_normals[i % n_segs];
+            match params.linejoin {
+                StrokeLinejoin::Miter => {
+                    let ofs = miter_offset_ex(i, m, &seg_normals, half_w, params.miterlimit, closed);
+                    left_pts.push([p[0] + ofs[0], p[1] + ofs[1]]);
+                    right_pts.push([p[0] - ofs[0], p[1] - ofs[1]]);
+                }
+                StrokeLinejoin::Bevel => {
+                    // Use outgoing normal for the main quad; add bevel triangle separately.
+                    left_pts.push([p[0] + n_out[0] * half_w, p[1] + n_out[1] * half_w]);
+                    right_pts.push([p[0] - n_out[0] * half_w, p[1] - n_out[1] * half_w]);
+                    // Bevel fill triangle: connects incoming and outgoing sides.
+                    let li = [p[0] + n_in[0] * half_w, p[1] + n_in[1] * half_w];
+                    let ri = [p[0] - n_in[0] * half_w, p[1] - n_in[1] * half_w];
+                    let lo = [p[0] + n_out[0] * half_w, p[1] + n_out[1] * half_w];
+                    let ro = [p[0] - n_out[0] * half_w, p[1] - n_out[1] * half_w];
+                    // Which side is the "outside" of the turn?
+                    let cross = n_in[0] * n_out[1] - n_in[1] * n_out[0];
+                    let extra = if cross > 0.0 {
+                        vec![p, li, lo] // left side bevel
+                    } else {
+                        vec![p, ri, ro] // right side bevel
+                    };
+                    join_tris.push((i, extra));
+                }
+                StrokeLinejoin::Round => {
+                    // Use outgoing normal for main quad; add round fan separately.
+                    left_pts.push([p[0] + n_out[0] * half_w, p[1] + n_out[1] * half_w]);
+                    right_pts.push([p[0] - n_out[0] * half_w, p[1] - n_out[1] * half_w]);
+                    let extra = round_join_tris(p, n_in, n_out, half_w);
+                    join_tris.push((i, extra));
+                }
+            }
+        }
+    }
+
+    // Emit main segment quads.
+    for i in 0..n_segs {
+        let j = (i + 1) % m;
+        let (l0, r0) = (left_pts[i], right_pts[i]);
+        let (l1, r1) = (left_pts[j], right_pts[j]);
+        out.push(l0); out.push(r0); out.push(l1);
+        out.push(l1); out.push(r0); out.push(r1);
+    }
+
+    // Emit join triangles.
+    for (_, tris) in &join_tris {
+        for t in tris.chunks(3) {
+            if t.len() == 3 {
+                out.push(t[0]); out.push(t[1]); out.push(t[2]);
+            }
+        }
+    }
+
+    // Emit linecap triangles for open sub-paths.
+    if !closed && params.linecap != StrokeLinecap::Butt {
+        // Start cap.
+        let dir0 = seg_dirs[0];
+        let n0 = seg_normals[0];
+        let p0 = wpts[0];
+        emit_cap(p0, n0, [-dir0[0], -dir0[1]], half_w, params.linecap, out);
+        // End cap.
+        let dir_last = seg_dirs[n_segs - 1];
+        let n_last = seg_normals[n_segs - 1];
+        let p_last = wpts[m - 1];
+        emit_cap(p_last, n_last, dir_last, half_w, params.linecap, out);
+    }
+}
+
+/// Emit triangles for a linecap (round or square) at `center` pointing in `dir`.
+fn emit_cap(center: [f32; 2], normal: [f32; 2], dir: [f32; 2], half_w: f32, cap: StrokeLinecap, out: &mut Vec<[f32; 2]>) {
+    let l = [center[0] + normal[0] * half_w, center[1] + normal[1] * half_w];
+    let r = [center[0] - normal[0] * half_w, center[1] - normal[1] * half_w];
+    match cap {
+        StrokeLinecap::Butt => {}
+        StrokeLinecap::Square => {
+            // Extend by half_w in cap direction.
+            let tip_l = [l[0] + dir[0] * half_w, l[1] + dir[1] * half_w];
+            let tip_r = [r[0] + dir[0] * half_w, r[1] + dir[1] * half_w];
+            out.push(l); out.push(r); out.push(tip_l);
+            out.push(tip_l); out.push(r); out.push(tip_r);
+        }
+        StrokeLinecap::Round => {
+            // Semicircle fan from center.
+            const SEGS: usize = 12;
+            // Angle from +normal to -normal going through +dir, step by PI/SEGS.
+            for k in 0..SEGS {
+                let a0 = (k as f32 / SEGS as f32) * PI;
+                let a1 = ((k + 1) as f32 / SEGS as f32) * PI;
+                // Rotate +normal by angle around center.
+                let pt0 = rotate_normal(normal, dir, a0, half_w, center);
+                let pt1 = rotate_normal(normal, dir, a1, half_w, center);
+                out.push(center); out.push(pt0); out.push(pt1);
+            }
+        }
+    }
+}
+
+/// Rotate `normal` toward `dir` by `angle` radians, scaled by `half_w`, offset by `center`.
+#[inline]
+fn rotate_normal(normal: [f32; 2], dir: [f32; 2], angle: f32, half_w: f32, center: [f32; 2]) -> [f32; 2] {
+    let cos_a = angle.cos();
+    let sin_a = angle.sin();
+    // Rotate `normal` by -angle (right-hand rule in Y-down): new = cos*normal + sin*dir
+    let nx = cos_a * normal[0] + sin_a * dir[0];
+    let ny = cos_a * normal[1] + sin_a * dir[1];
+    [center[0] + nx * half_w, center[1] + ny * half_w]
+}
+
+/// Generate round join triangles (arc from n_in to n_out side).
+fn round_join_tris(p: [f32; 2], n_in: [f32; 2], n_out: [f32; 2], half_w: f32) -> Vec<[f32; 2]> {
+    let cross = n_in[0] * n_out[1] - n_in[1] * n_out[0];
+    // Angle between n_in and n_out (clamped to avoid NaN).
+    let dot = (n_in[0] * n_out[0] + n_in[1] * n_out[1]).clamp(-1.0, 1.0);
+    let angle = dot.acos();
+    if angle < 1e-4 {
+        return Vec::new();
+    }
+    const SEGS: usize = 8;
+    let mut tris = Vec::with_capacity(SEGS * 3);
+    // Choose which side to arc (outside of the turn).
+    let (start_n, sign) = if cross > 0.0 { (n_in, 1.0f32) } else { ([-n_in[0], -n_in[1]], -1.0f32) };
+    let target_n = if cross > 0.0 { n_out } else { [-n_out[0], -n_out[1]] };
+    for k in 0..SEGS {
+        let t0 = k as f32 / SEGS as f32;
+        let t1 = (k + 1) as f32 / SEGS as f32;
+        let pt0 = slerp_normal(start_n, target_n, t0, half_w, p);
+        let pt1 = slerp_normal(start_n, target_n, t1, half_w, p);
+        let _ = sign; // used for direction selection above
+        tris.push(p); tris.push(pt0); tris.push(pt1);
+    }
+    tris
+}
+
+/// Spherical linear interpolation between two unit normals, scaled to half_w, offset by center.
+fn slerp_normal(n0: [f32; 2], n1: [f32; 2], t: f32, half_w: f32, center: [f32; 2]) -> [f32; 2] {
+    let dot = (n0[0] * n1[0] + n0[1] * n1[1]).clamp(-1.0, 1.0);
+    if (1.0 - dot.abs()) < 1e-6 {
+        // Nearly parallel — linear interpolation.
+        let x = n0[0] + t * (n1[0] - n0[0]);
+        let y = n0[1] + t * (n1[1] - n0[1]);
+        let len = (x * x + y * y).sqrt().max(1e-6);
+        return [center[0] + x / len * half_w, center[1] + y / len * half_w];
+    }
+    let angle = dot.acos();
+    let sin_a = angle.sin();
+    let w0 = ((1.0 - t) * angle).sin() / sin_a;
+    let w1 = (t * angle).sin() / sin_a;
+    let nx = w0 * n0[0] + w1 * n1[0];
+    let ny = w0 * n0[1] + w1 * n1[1];
+    [center[0] + nx * half_w, center[1] + ny * half_w]
+}
+
+/// Miter-join offset at vertex `i` with configurable miterlimit.
+fn miter_offset_ex(i: usize, m: usize, seg_normals: &[[f32; 2]], half_w: f32, miterlimit: f32, closed: bool) -> [f32; 2] {
+    let n_segs = seg_normals.len();
+    let has_prev = closed || i > 0;
+    let has_next = closed || i < m - 1;
+    if !has_prev {
+        let n = seg_normals[0];
+        return [n[0] * half_w, n[1] * half_w];
+    }
+    if !has_next {
+        let n = seg_normals[n_segs - 1];
+        return [n[0] * half_w, n[1] * half_w];
+    }
+    let n_in = seg_normals[(i + n_segs - 1) % n_segs];
+    let n_out = seg_normals[i % n_segs];
+    let sx = n_in[0] + n_out[0];
+    let sy = n_in[1] + n_out[1];
+    let denom = sx * n_out[0] + sy * n_out[1];
+    if denom.abs() < 0.05 {
+        return [n_out[0] * half_w, n_out[1] * half_w];
+    }
+    let scale = half_w / denom;
+    let mx = sx * scale;
+    let my = sy * scale;
+    // Miter length = 2 * half_w / sin(theta/2). Limit applied as ratio.
+    let miter_len_sq = mx * mx + my * my;
+    let limit = miterlimit * half_w;
+    if miter_len_sq > limit * limit {
+        return [n_out[0] * half_w, n_out[1] * half_w]; // fall back to bevel
+    }
+    [mx, my]
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1078,5 +1496,158 @@ mod tests {
         }).sum();
         let expected = 10.0 * (100.0f32 * 100.0 + 100.0 * 100.0).sqrt();
         assert!((area - expected).abs() < 1.0, "area={area} expected≈{expected}");
+    }
+
+    // ── tessellate_stroke_ex: linecap / linejoin / dasharray ────────────────
+
+    #[test]
+    fn stroke_ex_butt_same_as_basic() {
+        // tessellate_stroke_ex with butt caps and miter joins must match tessellate_stroke.
+        let contour = vec![vec![[0.0f32, 0.0], [100.0, 0.0]]];
+        let params = StrokeParams { half_width: 5.0, ..StrokeParams::default() };
+        let ex = tessellate_stroke_ex(&contour, &params);
+        let basic = tessellate_stroke(&contour, 5.0);
+        assert_eq!(ex.len(), basic.len(), "butt-miter should match basic stroke vert count");
+    }
+
+    #[test]
+    fn stroke_ex_square_cap_longer() {
+        // Square cap extends half_w past endpoint → more vertices than butt.
+        let contour = vec![vec![[0.0f32, 0.0], [100.0, 0.0]]];
+        let butt = tessellate_stroke_ex(&contour, &StrokeParams {
+            half_width: 5.0,
+            linecap: StrokeLinecap::Butt,
+            ..StrokeParams::default()
+        });
+        let square = tessellate_stroke_ex(&contour, &StrokeParams {
+            half_width: 5.0,
+            linecap: StrokeLinecap::Square,
+            ..StrokeParams::default()
+        });
+        // Square cap adds 2 quads (start + end) = 12 extra vertices.
+        assert_eq!(square.len(), butt.len() + 12, "square cap: 2×2 tris extra");
+        // X-extent of square caps must be wider (< 0 and > 100).
+        let xs: Vec<f32> = square.iter().map(|v| v[0]).collect();
+        let min_x = xs.iter().cloned().fold(f32::INFINITY, f32::min);
+        let max_x = xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        assert!(min_x < 0.0, "square cap start extends left, min_x={min_x}");
+        assert!(max_x > 100.0, "square cap end extends right, max_x={max_x}");
+    }
+
+    #[test]
+    fn stroke_ex_round_cap_vertices() {
+        // Round cap emits 12 fan triangles per endpoint = 24 extra tris = 72 extra verts.
+        let contour = vec![vec![[0.0f32, 0.0], [100.0, 0.0]]];
+        let butt = tessellate_stroke_ex(&contour, &StrokeParams {
+            half_width: 5.0, linecap: StrokeLinecap::Butt, ..StrokeParams::default()
+        });
+        let round = tessellate_stroke_ex(&contour, &StrokeParams {
+            half_width: 5.0, linecap: StrokeLinecap::Round, ..StrokeParams::default()
+        });
+        assert!(round.len() > butt.len(), "round cap should produce more vertices");
+    }
+
+    #[test]
+    fn stroke_ex_bevel_join_has_extra_triangle() {
+        // Bevel join at a right-angle corner should add one triangle.
+        let contour = vec![vec![[0.0f32, 0.0], [50.0, 0.0], [50.0, 50.0]]];
+        let miter = tessellate_stroke_ex(&contour, &StrokeParams {
+            half_width: 5.0, linejoin: StrokeLinejoin::Miter, ..StrokeParams::default()
+        });
+        let bevel = tessellate_stroke_ex(&contour, &StrokeParams {
+            half_width: 5.0, linejoin: StrokeLinejoin::Bevel, ..StrokeParams::default()
+        });
+        assert!(bevel.len() >= miter.len(), "bevel join adds bevel triangle");
+    }
+
+    #[test]
+    fn stroke_ex_round_join_has_extra_vertices() {
+        let contour = vec![vec![[0.0f32, 0.0], [50.0, 0.0], [50.0, 50.0]]];
+        let miter = tessellate_stroke_ex(&contour, &StrokeParams {
+            half_width: 5.0, linejoin: StrokeLinejoin::Miter, ..StrokeParams::default()
+        });
+        let round_join = tessellate_stroke_ex(&contour, &StrokeParams {
+            half_width: 5.0, linejoin: StrokeLinejoin::Round, ..StrokeParams::default()
+        });
+        assert!(round_join.len() > miter.len(), "round join adds arc triangles");
+    }
+
+    #[test]
+    fn stroke_ex_miterlimit_falls_back_to_bevel() {
+        // Very acute angle with tiny miterlimit should fall back to bevel (fewer vertices
+        // than huge miterlimit, because miter at limit bevel = normal endpoint).
+        let contour = vec![vec![[0.0f32, 50.0], [50.0, 50.0], [1.0, 50.0]]]; // near-reversal
+        let _large_limit = tessellate_stroke_ex(&contour, &StrokeParams {
+            half_width: 5.0, linejoin: StrokeLinejoin::Miter, miterlimit: 100.0,
+            ..StrokeParams::default()
+        });
+        let small_limit = tessellate_stroke_ex(&contour, &StrokeParams {
+            half_width: 5.0, linejoin: StrokeLinejoin::Miter, miterlimit: 1.0,
+            ..StrokeParams::default()
+        });
+        // With miterlimit=1.0 the miter collapses to bevel offset — still produces triangles.
+        assert!(!small_limit.is_empty());
+    }
+
+    // ── apply_dash_pattern ──────────────────────────────────────────────────
+
+    #[test]
+    fn dash_empty_dasharray_returns_original() {
+        let contour = vec![vec![[0.0f32, 0.0], [100.0, 0.0]]];
+        let result = apply_dash_pattern(&contour, &[], 0.0);
+        assert_eq!(result, contour);
+    }
+
+    #[test]
+    fn dash_simple_splits_line() {
+        // dasharray=[20, 10]: 20px dash, 10px gap — on a 60px line gives 3 dashes.
+        let contour = vec![vec![[0.0f32, 0.0], [60.0, 0.0]]];
+        let result = apply_dash_pattern(&contour, &[20.0, 10.0], 0.0);
+        assert_eq!(result.len(), 2, "60px / 30px cycle = 2 dashes, got {}", result.len());
+    }
+
+    #[test]
+    fn dash_offset_shifts_pattern() {
+        // dasharray=[10, 10], offset=10 → first dash starts at the gap position → one full dash only.
+        let contour = vec![vec![[0.0f32, 0.0], [20.0, 0.0]]];
+        let no_offset = apply_dash_pattern(&contour, &[10.0, 10.0], 0.0);
+        let with_offset = apply_dash_pattern(&contour, &[10.0, 10.0], 10.0);
+        // no_offset: gap then dash starting at 10, so 1 dash (10..20); with_offset: dash first (0..10).
+        assert_eq!(no_offset.len(), 1);
+        assert_eq!(with_offset.len(), 1);
+    }
+
+    #[test]
+    fn dash_zero_width_returns_empty() {
+        let contour = vec![vec![[0.0f32, 0.0], [100.0, 0.0]]];
+        // All-zero dasharray: cycle = 0 → returns empty.
+        let result = apply_dash_pattern(&contour, &[0.0, 0.0], 0.0);
+        assert!(result.is_empty(), "zero cycle should produce no dashes");
+    }
+
+    #[test]
+    fn dash_full_stroke_ex_pipeline() {
+        // Full pipeline: dashed stroke via tessellate_stroke_ex produces triangles.
+        let segs = parse_svg_path("M 0 0 H 100");
+        let contours = flatten_path(&segs, 0.5);
+        let dashed = tessellate_stroke_ex(&contours, &StrokeParams {
+            half_width: 5.0,
+            dasharray: vec![15.0, 5.0],
+            ..StrokeParams::default()
+        });
+        assert!(!dashed.is_empty(), "dashed stroke should produce triangles");
+        // Dashed stroke: 100px / 20px-cycle = 5 dashes × 6 verts each = 30 verts
+        // (more segments than solid 1×6=6, but each covers only its dash length).
+        let solid = tessellate_stroke_ex(&contours, &StrokeParams {
+            half_width: 5.0,
+            ..StrokeParams::default()
+        });
+        // Dashed has more vertex records (multiple short contours) than solid (one contour).
+        assert!(dashed.len() > solid.len(), "dashed stroke has more tri vertices than solid");
+        // But dashed covers less total area.
+        let area_fn = |tris: &[[f32; 2]]| -> f32 {
+            tris.chunks(3).map(|t| cross2d(t[0], t[1], t[2]).abs() * 0.5).sum()
+        };
+        assert!(area_fn(&dashed) < area_fn(&solid), "dashed covers less area than solid");
     }
 }

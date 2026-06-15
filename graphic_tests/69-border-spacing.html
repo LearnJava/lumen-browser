@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<!-- TEST-69: border-spacing — CSS 2.1 §17.6 -->
+<html>
+<head>
+  <title>Lumen — 69 border spacing</title>
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; }
+  .__f { background: #f0f0f0; width: 1022px; height: 718px; margin: 1px; overflow: hidden; }
+
+  /* Table with border-spacing: 12px (equal h and v) */
+  .t1 {
+    border-spacing: 12px;
+    background: #333;
+    margin: 20px;
+  }
+  .t1 td {
+    background: #4a90d9;
+    width: 60px;
+    height: 40px;
+  }
+
+  /* Table with border-spacing: 8px 24px (different h and v) */
+  .t2 {
+    border-spacing: 8px 24px;
+    background: #555;
+    margin: 20px;
+    margin-top: 0;
+  }
+  .t2 td {
+    background: #e87d2e;
+    width: 80px;
+    height: 35px;
+  }
+
+  /* Table with border-spacing: 0 (default — no gaps) */
+  .t3 {
+    border-spacing: 0;
+    background: #333;
+    margin: 20px;
+    margin-top: 0;
+  }
+  .t3 td {
+    background: #5cb85c;
+    width: 60px;
+    height: 40px;
+  }
+</style>
+</head>
+<body>
+<div class="__f">
+  <!-- 3×3 grid with 12px equal border-spacing (blue cells on dark bg) -->
+  <table class="t1">
+    <tr><td></td><td></td><td></td></tr>
+    <tr><td></td><td></td><td></td></tr>
+    <tr><td></td><td></td><td></td></tr>
+  </table>
+
+  <!-- 3×2 grid with 8px h / 24px v border-spacing (orange cells) -->
+  <table class="t2">
+    <tr><td></td><td></td><td></td></tr>
+    <tr><td></td><td></td><td></td></tr>
+  </table>
+
+  <!-- 3×2 grid with 0 border-spacing (green cells touching) -->
+  <table class="t3">
+    <tr><td></td><td></td><td></td></tr>
+    <tr><td></td><td></td><td></td></tr>
+  </table>
+</div>
+</body>
+</html>

@@ -40,6 +40,16 @@ pub fn detect(bytes: &[u8], content_type_hint: Option<&str>) -> Encoding {
         return Encoding::Utf8;
     }
 
+    // 4b. Чистый ASCII (ни одного байта >= 0x80): все кодировки декодируют его
+    //     одинаково, выбирать не на чем. Возвращаем UTF-8 — дефолт современного
+    //     веба и WHATWG-совместимый ответ для ASCII. Без этой ветки чистый ASCII
+    //     проваливался в кириллическую эвристику, где все три таблицы дают score
+    //     0.0, а `max_by` среди равных возвращает ПОСЛЕДНИЙ элемент — Cp866
+    //     (ibm866). Так example.com детектился как ibm866 (BUG-162).
+    if !bytes.iter().any(|&b| b >= 0x80) {
+        return Encoding::Utf8;
+    }
+
     // 5. Частотная эвристика по русским буквам. Между cp1251 / koi8-r / cp866
     //    различия достаточны, чтобы простой подсчёт работал.
     heuristic_pick(bytes)
@@ -380,17 +390,29 @@ mod tests {
     }
 
     #[test]
-    fn ascii_only_falls_back_to_utf8_via_heuristic() {
-        // Чистый ASCII: looks_like_utf8 вернёт false (нет high-bit),
-        // эвристика всем даст 0.0 → выберем cp1251 (первый). Не идеально,
-        // но для чистого ASCII все три кодировки декодируют одинаково.
+    fn ascii_only_resolves_to_utf8() {
+        // Чистый ASCII без BOM / meta / hint: looks_like_utf8 вернёт false
+        // (нет high-bit), но мы НЕ должны проваливаться в кириллическую
+        // эвристику — там все три таблицы дают 0.0 и max_by вернул бы Cp866.
+        // Корректный ответ — UTF-8 (ASCII ⊂ UTF-8). См. BUG-162.
         let bytes = b"<html><body>hello world</body></html>";
-        // Здесь мы проверяем, что хотя бы не паникуем.
-        let enc = detect(bytes, None);
-        assert!(matches!(
-            enc,
-            Encoding::Utf8 | Encoding::Windows1251 | Encoding::Koi8R | Encoding::Cp866
-        ));
+        assert_eq!(detect(bytes, None), Encoding::Utf8);
+    }
+
+    #[test]
+    fn bug162_example_com_ascii_not_ibm866() {
+        // Регрессия BUG-162: example.com (чистый ASCII) детектился как ibm866
+        // (= Cp866), потому что max_by среди равных score возвращает последний
+        // элемент (Cp866). Должен быть UTF-8.
+        let bytes = b"<!doctype html>\n<html>\n<head><title>Example Domain</title></head>\n\
+            <body><h1>Example Domain</h1><p>This domain is for use in examples.</p></body>\n</html>\n";
+        assert_eq!(detect(bytes, None), Encoding::Utf8);
+    }
+
+    #[test]
+    fn empty_input_resolves_to_utf8() {
+        // Пустой вход тоже не должен уходить в кириллическую эвристику.
+        assert_eq!(detect(b"", None), Encoding::Utf8);
     }
 
     #[test]

@@ -70,6 +70,29 @@ impl fmt::Display for DomSnapshotError {
 
 impl std::error::Error for DomSnapshotError {}
 
+/// Hard limit on the number of nodes in a single `Document` arena.
+///
+/// JS-driven `document.createElement()` returns a `QuotaExceededError` when this
+/// threshold is reached. HTML-parser allocations are not gated (they use
+/// `create_element` directly), so overly large HTML files may still exceed the
+/// limit in the arena — this guard is a JS-mutation fence, not a hard memory cap.
+pub const MAX_DOM_NODES: usize = 50_000;
+
+/// Soft warning threshold — `console.warn` fires once when node count crosses this.
+pub const WARN_DOM_NODES: usize = 40_000;
+
+/// Returned by [`Document::try_create_element`] when [`MAX_DOM_NODES`] is reached.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeLimitExceeded;
+
+impl fmt::Display for NodeLimitExceeded {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "DOM node limit exceeded (max {MAX_DOM_NODES})")
+    }
+}
+
+impl std::error::Error for NodeLimitExceeded {}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NodeId(u32);
 
@@ -1162,11 +1185,33 @@ impl Document {
         id
     }
 
+    /// Number of nodes currently allocated in this document's arena (including the root).
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Create an element unconditionally. Used by the HTML parser — does **not** enforce
+    /// [`MAX_DOM_NODES`]. JS-driven mutations should use [`try_create_element`][Self::try_create_element].
     pub fn create_element(&mut self, name: QualName) -> NodeId {
         self.alloc(NodeData::Element {
             name,
             attrs: Vec::new(),
         })
+    }
+
+    /// Create an element, returning `Err(`[`NodeLimitExceeded`]`)` if the arena already
+    /// holds [`MAX_DOM_NODES`] or more nodes.
+    ///
+    /// Called by the `_lumen_create_element` JS binding so that JS-driven DOM mutations
+    /// cannot grow the tree beyond the safety limit.
+    pub fn try_create_element(&mut self, name: QualName) -> Result<NodeId, NodeLimitExceeded> {
+        if self.nodes.len() >= MAX_DOM_NODES {
+            return Err(NodeLimitExceeded);
+        }
+        Ok(self.alloc(NodeData::Element {
+            name,
+            attrs: Vec::new(),
+        }))
     }
 
     pub fn create_text(&mut self, content: impl Into<String>) -> NodeId {
@@ -1714,6 +1759,56 @@ pub fn find_ancestor_form(doc: &Document, mut node: NodeId) -> Option<NodeId> {
         node = parent;
     }
     None
+}
+
+/// Walk up the DOM from `node` and return the first ancestor `<dialog>` element.
+///
+/// Returns `None` if no dialog ancestor exists. Used by `<form method="dialog">`
+/// processing: when a form inside a dialog is submitted, this finds the dialog to close.
+pub fn find_ancestor_dialog(doc: &Document, mut node: NodeId) -> Option<NodeId> {
+    while let Some(parent) = doc.get(node).parent {
+        if doc
+            .get(parent)
+            .element_name()
+            .map(|q| q.local.eq_ignore_ascii_case("dialog"))
+            .unwrap_or(false)
+        {
+            return Some(parent);
+        }
+        node = parent;
+    }
+    None
+}
+
+/// True when `node` carries `contenteditable=""` or `contenteditable="true"`.
+///
+/// Per HTML LS §3.1.11 the attribute value is ASCII case-insensitive.  A missing
+/// attribute or `contenteditable="false"` returns `false`.
+pub fn node_is_contenteditable(doc: &Document, node: NodeId) -> bool {
+    if let NodeData::Element { attrs, .. } = &doc.get(node).data {
+        for attr in attrs {
+            if attr.name.local.eq_ignore_ascii_case("contenteditable") {
+                return !attr.value.eq_ignore_ascii_case("false");
+            }
+        }
+    }
+    false
+}
+
+/// Walk up the tree from `node` (inclusive) and return the nearest element
+/// with `contenteditable` set to a truthy value — the *editing host*.
+///
+/// Returns `None` when no such ancestor exists.
+pub fn find_editing_host(doc: &Document, mut node: NodeId) -> Option<NodeId> {
+    loop {
+        if node_is_contenteditable(doc, node) {
+            return Some(node);
+        }
+        match doc.get(node).parent {
+            Some(p) => node = p,
+            None => return None,
+        }
+    }
 }
 
 /// Собрать имена и значения submittable-контролов формы из DOM-атрибутов.
@@ -2321,6 +2416,9 @@ pub fn check_navigation_gate(doc: &Document, sandbox: SandboxFlags) -> usize {
 pub struct IframeInfo {
     /// Значение атрибута `src`, если задан.
     pub src: Option<String>,
+    /// Inline HTML content from `srcdoc` attribute (HTML spec §4.8.5).
+    /// When present, this HTML is used instead of fetching `src`.
+    pub srcdoc: Option<String>,
     /// Sandbox-флаги согласно HTML §7.6.5. `SandboxFlags::empty()` если атрибута нет.
     pub sandbox: SandboxFlags,
     /// `true` если у элемента есть атрибут `sandbox` (независимо от значения).
@@ -2335,9 +2433,10 @@ fn collect_iframes_inner(doc: &Document, id: NodeId, out: &mut Vec<IframeInfo>) 
         .unwrap_or(false)
     {
         let src = node.get_attr("src").filter(|s| !s.is_empty()).map(str::to_owned);
+        let srcdoc = node.get_attr("srcdoc").filter(|s| !s.is_empty()).map(str::to_owned);
         let is_sandboxed = node.get_attr("sandbox").is_some();
         let sandbox = node.sandbox_flags().unwrap_or_else(SandboxFlags::empty);
-        out.push(IframeInfo { src, sandbox, is_sandboxed });
+        out.push(IframeInfo { src, srcdoc, sandbox, is_sandboxed });
     }
     for &child in &node.children.clone() {
         collect_iframes_inner(doc, child, out);
@@ -2899,6 +2998,15 @@ fn utf8_floor(s: &str, mut off: usize) -> usize {
     }
     off
 }
+
+// Compile-time gate (ADR-008 §11.4, trk 10B): Document must stay Send + Sync so
+// tabs can be moved between threads and T3 hibernation snapshots are safe to hand
+// off across thread boundaries. Adding Rc<RefCell<_>> or any other !Send/!Sync
+// type to Document's fields breaks this assertion — use NodeId indices instead.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Document>();
+};
 
 #[cfg(test)]
 mod tests {
@@ -3847,6 +3955,112 @@ mod tests {
     }
 
     #[test]
+    fn find_ancestor_dialog_direct() {
+        let mut doc = Document::new();
+        let dialog = doc.create_element(QualName::html("dialog"));
+        let form = doc.create_element(QualName::html("form"));
+        doc.append_child(doc.root(), dialog);
+        doc.append_child(dialog, form);
+        assert_eq!(find_ancestor_dialog(&doc, form), Some(dialog));
+    }
+
+    #[test]
+    fn find_ancestor_dialog_nested() {
+        let mut doc = Document::new();
+        let dialog = doc.create_element(QualName::html("dialog"));
+        let div = doc.create_element(QualName::html("div"));
+        let btn = doc.create_element(QualName::html("button"));
+        doc.append_child(doc.root(), dialog);
+        doc.append_child(dialog, div);
+        doc.append_child(div, btn);
+        assert_eq!(find_ancestor_dialog(&doc, btn), Some(dialog));
+    }
+
+    #[test]
+    fn find_ancestor_dialog_none() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        let btn = doc.create_element(QualName::html("button"));
+        doc.append_child(doc.root(), div);
+        doc.append_child(div, btn);
+        assert_eq!(find_ancestor_dialog(&doc, btn), None);
+    }
+
+    // ── node_is_contenteditable / find_editing_host ───────────────────────────
+
+    #[test]
+    fn node_is_contenteditable_true_for_empty_attr() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(div).data {
+            attrs.push(Attribute { name: QualName::html("contenteditable"), value: String::new() });
+        }
+        assert!(node_is_contenteditable(&doc, div));
+    }
+
+    #[test]
+    fn node_is_contenteditable_true_for_value_true() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(div).data {
+            attrs.push(Attribute { name: QualName::html("contenteditable"), value: "true".into() });
+        }
+        assert!(node_is_contenteditable(&doc, div));
+    }
+
+    #[test]
+    fn node_is_contenteditable_false_for_value_false() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(div).data {
+            attrs.push(Attribute { name: QualName::html("contenteditable"), value: "false".into() });
+        }
+        assert!(!node_is_contenteditable(&doc, div));
+    }
+
+    #[test]
+    fn node_is_contenteditable_false_without_attr() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        assert!(!node_is_contenteditable(&doc, div));
+    }
+
+    #[test]
+    fn find_editing_host_self() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(div).data {
+            attrs.push(Attribute { name: QualName::html("contenteditable"), value: String::new() });
+        }
+        assert_eq!(find_editing_host(&doc, div), Some(div));
+    }
+
+    #[test]
+    fn find_editing_host_ancestor() {
+        let mut doc = Document::new();
+        let outer = doc.create_element(QualName::html("div"));
+        let inner = doc.create_element(QualName::html("span"));
+        let text = doc.create_text("hi");
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(outer).data {
+            attrs.push(Attribute { name: QualName::html("contenteditable"), value: String::new() });
+        }
+        doc.append_child(doc.root(), outer);
+        doc.append_child(outer, inner);
+        doc.append_child(inner, text);
+        assert_eq!(find_editing_host(&doc, text), Some(outer));
+    }
+
+    #[test]
+    fn find_editing_host_none_when_no_editable() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        let text = doc.create_text("hi");
+        doc.append_child(doc.root(), div);
+        doc.append_child(div, text);
+        assert_eq!(find_editing_host(&doc, text), None);
+    }
+
+    #[test]
     fn collect_dom_form_fields_basic() {
         let (doc, form, _, _) = make_form_doc();
         let fields = collect_dom_form_fields(&doc, form);
@@ -4747,6 +4961,27 @@ mod tests {
         assert!(!frames[1].sandbox.contains(SandboxFlags::FORMS));
         assert!(frames[2].is_sandboxed);
         assert_eq!(frames[2].sandbox, SandboxFlags::all_restrictions());
+    }
+
+    #[test]
+    fn collect_iframes_srcdoc_attribute() {
+        let mut doc = Document::new();
+        let body = doc.create_element(QualName::html("body"));
+        doc.append_child(doc.root(), body);
+
+        let f = doc.create_element(QualName::html("iframe"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(f).data {
+            attrs.push(Attribute {
+                name: QualName::html("srcdoc"),
+                value: "<p>hello</p>".to_string(),
+            });
+        }
+        doc.append_child(body, f);
+
+        let frames = collect_iframes(&doc);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].srcdoc.as_deref(), Some("<p>hello</p>"));
+        assert!(frames[0].src.is_none());
     }
 
     // ── check_popup_gate ──────────────────────────────────────────────────────
@@ -5963,5 +6198,45 @@ mod tests {
         // Even with zero JS refs, shadow root must not be collected
         let dead = doc.dead_node_ids();
         assert!(!dead.contains(&shadow_root));
+    }
+
+    // ── DOM node count / limit tests ──────────────────────────────────────────
+
+    #[test]
+    fn node_count_returns_arena_length() {
+        let mut doc = Document::new();
+        let before = doc.node_count();
+        doc.create_element(QualName::html("div"));
+        assert_eq!(doc.node_count(), before + 1);
+    }
+
+    #[test]
+    fn try_create_element_ok_below_limit() {
+        let mut doc = Document::new();
+        let result = doc.try_create_element(QualName::html("span"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn try_create_element_err_at_limit() {
+        let mut doc = Document::new();
+        // Fill arena to exactly MAX_DOM_NODES nodes.
+        while doc.node_count() < MAX_DOM_NODES {
+            doc.create_element(QualName::html("div"));
+        }
+        assert_eq!(doc.node_count(), MAX_DOM_NODES);
+        let result = doc.try_create_element(QualName::html("p"));
+        assert_eq!(result, Err(NodeLimitExceeded));
+    }
+
+    #[test]
+    fn node_limit_exceeded_display() {
+        let msg = NodeLimitExceeded.to_string();
+        assert!(msg.contains("50000"), "display should mention MAX_DOM_NODES");
+    }
+
+    #[test]
+    fn warn_threshold_less_than_max() {
+        const { assert!(WARN_DOM_NODES < MAX_DOM_NODES) };
     }
 }

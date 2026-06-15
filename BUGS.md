@@ -1,619 +1,206 @@
 # BUGS.md — Баг-трекер Lumen Browser
 
-Живой список известных багов движка. Пополняется из `python graphic_tests/run.py`.
+Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Скопируй скриншот в `graphic_tests/screenshots/bug-NNN-краткое-имя.png` (не коммитится)
-2. Добавь запись в таблицу ниже
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-165)
+2. Добавь строку в таблицу ниже со ссылкой на файл
+
+**При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
 
 **Статусы:** `OPEN` · `IN PROGRESS` · `FIXED <date>` · `WONTFIX (Phase N+)`
 
 ---
 
-## Сводная таблица
+## Список багов
 
-```
-BUG-001 | FIXED 2026-05-15 | layout          | display:none on inline elements not working
-BUG-003 | FIXED 2026-05-15 | layout          | style="" attribute not processed by cascade
-BUG-007 | FIXED 2026-05-20 | layout          | <sub>/<sup>/<small> missing UA styles
-BUG-008 | FIXED 2026-05-20 | layout          | <del>/<ins>/<u>/<s> text-decoration missing UA styles
-BUG-009 | FIXED 2026-05-20 | layout          | <a> missing UA styles (no blue color, no underline)
-BUG-012 | FIXED 2026-05-20 | layout          | <del>/<ins> break inline flow (each on new line)
-BUG-016 | FIXED 2026-05-20 | css-parser/paint| border-style: dashed/double now work; dotted still square (→ BUG-029)
-BUG-019 | FIXED 2026-05-20 | css-parser/paint| outline not rendered at all
-BUG-027 | FIXED 2026-05-20 | layout          | block element ignores explicit width — body stretches to viewport
-BUG-030 | FIXED 2026-05-20 | layout          | IFC: no whitespace gap between inline-block siblings (CSS §4.1.2)
-BUG-031 | FIXED 2026-05-20 | layout          | IFC: missing strut descent causes rows to be ~4px too short
-BUG-002 | FIXED 2026-05-20 | layout/paint    | inline padding/border/margin stacks vertically instead of flowing
-BUG-004 | FIXED 2026-05-24 | layout          | height on inline elements (display:inline-block applies; display:inline ignores per CSS 2.1 §10.6.1)
-BUG-005 | FIXED 2026-05-21 | layout+paint    | <img> inside <span> not rendered
-BUG-010 | FIXED 2026-05-20 | layout          | <hr> renders nothing
-BUG-011 | FIXED 2026-05-22 | layout/paint    | list markers (bullet, numbers) not rendered
-BUG-013 | FIXED 2026-05-22 | layout          | adjacent <span style="..."> stack vertically without separator
-BUG-014 | FIXED 2026-05-21 | image           | JPEG not decoded (PNG only)
-BUG-015 | FIXED 2026-05-25 | paint           | broken <img> src shows no alt text
-BUG-017 | FIXED 2026-05-22 | layout/paint    | text-decoration-style ignored (all render as solid)
-BUG-018 | FIXED 2026-05-22 | layout          | text-decoration-color ignored (always inherits text color)
-BUG-023 | FIXED 2026-05-26 | layout+paint    | opacity deviation — P1: strut fix 2026-05-26; P5 paint: premultiplied alpha double-mult at edge-AA pixels in composite shader → TEST-13 0.24%
-BUG-024 | FIXED 2026-05-21 | layout          | box-sizing: content-box — border not added to outer size; height% resolved against width
-BUG-025 | FIXED 2026-05-22 | layout          | max-height does not clamp block height; InlineSpace not included in shrink-to-fit width
-BUG-026 | FIXED 2026-05-22 | layout/paint    | <img> CSS/HTML width+height ignored — renders at natural size (remaining TEST-18 ~10%: BUG-032)
-BUG-028 | FIXED 2026-05-26 | shell           | relayout-on-resize + maximized window triggers BUG-027
-BUG-029 | FIXED 2026-05-21 | paint           | border-style: dotted renders square dots instead of circles
-BUG-020 | FIXED 2026-05-26 | layout          | overflow axis coercion: visible+hidden combo не клипало ось; CSS Overflow L3 §2.1 visible→auto в compute_style; TEST-14: 1.70%→0.03% PASS
-BUG-006 | FIXED 2026-05-21 | layout          | table layout not implemented (td/th render as blocks)
-BUG-021 | FIXED 2026-05-22 | html-parser     | HTML bgcolor attribute ignored
-BUG-022 | FIXED 2026-05-22 | css-parser      | Quirks-mode hashless hex colors not parsed
-BUG-032 | FIXED 2026-05-22 | paint/image     | object-fit image quality ~16%: area averaging заменяет bilinear при downscale
-BUG-033 | FIXED 2026-05-22 | paint           | box-shadow: нет Gaussian blur — рендерится solid прямоугольник вместо размытой тени
-BUG-034 | FIXED 2026-05-22 | layout          | transform-origin 50% 50% default not resolved against box size — pivot at (0,0) instead of center
-BUG-035 | FIXED 2026-05-22 | layout          | ::before/::after pseudo-elements не генерируются в box_tree (реализация частичная)
-BUG-036 | FIXED 2026-05-26 | layout          | border-radius: % значения (50%, etc.) не резолвятся → radius=0; только px работает
-BUG-037 | FIXED 2026-05-26 | paint           | CSS filter effects не применяются визуально (grayscale/sepia/blur/etc.) — shared filter_uniform перезаписывался; fix: per-pass буфер через mapped_at_creation
-BUG-038 | FIXED 2026-05-26 | layout          | list-style-position: inside — маркер занимал отдельную строку; li высотой 2× от нормы; fix: не продвигать child_y, сдвигать InlineRun вправо на marker_w
-BUG-039 | FIXED 2026-05-26 | paint           | dashed/dotted border mismatch vs Chrome/Edge: dash ratio 3:1→Skia algo, corner squares→circle quads for dotted, 1px linear SDF AA
-BUG-040 | FIXED 2026-05-27 | layout          | table layout unit tests assume direct <tr> children of <table>; html-full-tree-builder now injects implicit <tbody> breaking them | layout/src/lib.rs:9996
-BUG-041 | FIXED 2026-05-27 | css-parser      | style::tests::line_clamp_integer_value / _standard_property / _not_inherited fail: CSS rule `div { -webkit-line-clamp: 3 }` produces None — test accesses doc.root().children[0] which is <html> after full HTML5 parsing, so rule doesn't match <div> | layout/src/style.rs:19855
-BUG-042 | FIXED 2026-05-29 | js              | QuickJsRuntime missing JsRuntime::resume() impl — all lumen-js tests fail to compile | js/src/lib.rs:253
-BUG-043 | FIXED 2026-05-29 | paint           | lumen-paint test suite красный (19 падений, не только 7): (1) 5 golden устарели — DrawText теперь несёт var=["opsz"=16] (font-optical-sizing 27fda15) → регенерированы; (2) overflow visible+hidden coercion (BUG-020) → visible computes to auto; auto = scroll-container, поэтому клип идёт через PushScrollLayer (p2-scroll-layer), обе оси к padding-box; 5 тестов (2 snapshot + 2 lib ordered_clip + чужой ordered_overflow_x_alone_triggers_clip) ждали PushClipRect/single-axis sentinel → переписаны под PushScrollLayer; (3) первая строка несёт half-leading 1.6px (CSS 2.1 §10.8.1), 5 baseline/wrap lib-тестов ждали line_y=0 → обновлены | paint/tests/snapshot_tests.rs, paint/src/display_list.rs
-BUG-044 | FIXED 2026-05-29 | shell           | lumen-shell не компилируется (default + --features quickjs): non-exhaustive match по DisplayCommand в content_height_of/content_width_of — новые варианты PushMaskLayer/PopMaskLayer/DrawSvgPath/BoxModelOverlay (P2-мерджи) не обработаны; PushMaskLayer несёт rect → в rect-ветку, остальные → continue | shell/src/main.rs:4219, 4265
-BUG-045 | FIXED 2026-05-29 | layout          | backdrop-filter не создавал stacking context: creates_stacking_context() проверял filter, но не backdrop_filter (CSS Filter Effects L2 §2) → box_layer_ops дропал PushBackdropFilter, пустой DL для backdrop-only div. Добавлена проверка + regression-тест | layout/src/stacking.rs:201
-BUG-046 | FIXED 2026-05-30 | layout          | 3 устаревших теста lumen-layout --lib: webp теперь декодируется (в supported_mime_types) → picture-тесты обновлены (avif для fallback, webp для supported); non_cell_col_row_span: `lay` возвращает body-box напрямую, убран лишний first_element_child | layout/src/lib.rs:12253,12269,979
-BUG-047 | FIXED 2026-05-30 | layout          | НЕ баг (мисдиагноз): line-clamp реально усекает контент — InlineRun внутри .box = 40/80/120/160 (1-4 строки). .box=160 у всех — корректный flex align-items:stretch, Edge рендерит так же (48-edge.png). Тест переписан на ground-truth, #[ignore] снят | crates/driver/tests/test_48.rs
-BUG-048 | FIXED 2026-05-30 | shell           | lumen-shell не компилируется: non-exhaustive match по DisplayCommand в content_height_of/content_width_of — новый вариант DrawScrollbar (p2-scrollbar-rendering merge) не обработан; скроллбар — UI, не контент → ветка continue (как BUG-044) | shell/src/main.rs:4219,4271
-BUG-049 | FIXED 2026-05-30 | shell           | lumen-shell не компилируется: non-exhaustive match по DisplayCommand в content_height_of/content_width_of — новый вариант PageBreak (p2 print-pages merge) не обработан; маркер пагинации печати, не контент, без rect → ветка continue (как BUG-048) | shell/src/main.rs:4219,4272
-BUG-050 | FIXED 2026-05-31 | network         | doctest mock.rs:16 не компилировался — fetch() is a trait method, но `use NetworkTransport` не импортирован в примере → добавлен импорт | crates/network/src/mock.rs:9
-BUG-051 | FIXED 2026-05-31 | layout          | abs-pos с top+bottom+height:auto (inset:0) схлопывался в height 0 — lay_out_abs_children резолвил ширину из left+right, но симметричной высоты из top+bottom не было (CSS Position L3 §6); страница 30 backdrop-filter рендерилась без фона | crates/engine/layout/src/box_tree.rs:3698
-BUG-052 | FIXED 2026-05-31 | paint/cpu_raster | DrawBorder использовал anti_alias:true → tiny-skia hairline_aa::fill_dot8 бьёт debug_assert!(false) для тонких sub-pixel-positioned рамок (inner span округляется в 0) → паника в debug-профиле; fix: anti_alias:false для axis-aligned border quads | crates/engine/paint/src/cpu_raster.rs:1087
-BUG-053 | FIXED 2026-06-02 | shell | `cargo build -p lumen-shell --features quickjs` не компилировался: trait PersistentJs не объявлял update_scroll_states/take_scroll_requests (merge p1-js-scroll-drain/p1-clickable-iterator потерял декларации в trait+impl при разрешении конфликта), а call-site в relayout() брал self иммутабельно (js+lb_ref) и тут же звал self.fetch_and_register_lazy_images(&mut self) → E0502. Default-gate (без quickjs) собирался, поэтому регрессия не ловилась. Fix: восстановил декларации+forwarding методов в trait/impl, вынес lazy fetch за пределы иммутабельного borrow. Восстановлено при работе над задачей #26 (clipboard) — feature gated на quickjs, иначе не верифицируема | crates/shell/src/main.rs:927,1051,3112
-BUG-054 | OPEN | network | tests::stale_pooled_connection_triggers_retry падает на Windows (os error 10053 — хост разорвал соединение): тест поднимает loopback TcpListener, кладёт соединение в пул, закрывает сервер и ждёт retry; на Windows закрытое сокет-соединение даёт WSAECONNRESET на read status вместо ожидаемого EOF/retry. Pre-existing (воспроизводится на чистом main), не связан с Tor-fingerprint. | crates/network/src/lib.rs:3161
-```
-
----
-
-## Прогон 2026-05-26 v7 (graphic_tests, --continue-on-fail, порог 1%) — fix-inline-block-baseline
-
-Исправлен IFC strut: добавляется только в строках с baseline-выровненными элементами (CSS §10.8).
-TEST-12 (display) перешёл FAIL 1.56% → PASS 0.18%. TEST-13 бонусом улучшился 2.12% → PASS 0.24%.
-
-```
-TEST-00: PASS  0.00%   calibration
-TEST-11: PASS  0.43%   min-max-height
-TEST-12: PASS  0.18%   display                ← fix-inline-block-baseline FIXED
-TEST-13: PASS  0.24%   visibility-opacity     ← бонус от strut-фикса
-TEST-24: PASS  0.99%   vertical-align
-```
-
----
-
-## Прогон 2026-05-25 v6 (graphic_tests, --continue-on-fail, порог 1%) — свежая release-сборка
-
-Release-бинарь пересобран (был от 2026-05-21, пропускал все фиксы BUG-025 и пр.).
-TEST-11 перешёл в PASS (max-height/min-height корректны). TEST-12 улучшился с 11.27% → 1.56%.
-Добавлены тесты 38–44. Рост diff в TEST-02/04 и TEST-13 — вероятно погрешность gdigrab (не регрессия кода).
-
-```
-TEST-00: PASS  0.00%   calibration
-TEST-01: PASS  0.00%   sanity
-TEST-02: FAIL  3.11%   color-named            ← антиалиасинг/gdigrab (было 0.39% со стар. бинарём)
-TEST-03: FAIL  1.41%   color-formats          ← то же
-TEST-04: FAIL  3.11%   color-alpha            ← то же
-TEST-05: FAIL  1.66%   border-width           ← то же
-TEST-06: FAIL  1.86%   border-sides           ← то же
-TEST-07: PASS  0.70%   box-sizing
-TEST-08: PASS  0.28%   padding
-TEST-09: PASS  0.00%   margin
-TEST-10: PASS  0.00%   min-max-width
-TEST-11: PASS  0.43%   min-max-height         ← BUG-025 FIXED (старый бинарь не имел фикса)
-TEST-12: FAIL  1.56%   display                ← inline-block baseline (fix-inline-block-baseline)
-TEST-13: PASS  0.24%   visibility-opacity     ← BUG-023 FIXED 2026-05-26 (premultiplied alpha в composite shader)
-TEST-14: FAIL  2.35%   overflow               ← BUG-020 (scrollbar UI)
-TEST-15: PASS  0.72%   box-shadow
-TEST-16: PASS  0.41%   outline
-TEST-17: PASS  0.00%   calc
-TEST-18: FAIL 13.43%   images                 ← BUG-032 (image scaling)
-TEST-19: FAIL 10.56%   object-fit             ← BUG-032
-TEST-20: FAIL  9.59%   quirks-bgcolor         ← BUG-021+BUG-022
-TEST-21: FAIL  6.97%   border-style           ← остаточный dotted/dashed
-TEST-22: PASS  1.08%   CSS transform
-TEST-23: PASS  0.48%   pseudo-elements
-TEST-24: PASS  0.99%   vertical-align
-TEST-25: PASS  0.00%   table-layout
-TEST-26: FAIL  8.82%   mask-image             ← не реализован (Phase 0: fallback)
-TEST-27: FAIL  9.35%   direction-rtl          ← RTL partial (P1: layout alignment)
-TEST-28: FAIL 12.60%   css-containment        ← contain:size/paint/strict
-TEST-29: FAIL  6.63%   container-queries      ← @container
-TEST-30: FAIL 24.05%   css-filter             ← BUG-037 FIXED; остаток — linear-gradient не реализован (P4)
-TEST-31: FAIL 11.89%   clip-path              ← circle/ellipse/polygon
-TEST-32: FAIL  8.61%   list-markers           ← маркеры (fix-list-markers-test32)
-TEST-33: FAIL 19.71%   multi-column           ← column-count/column-width
-TEST-34: FAIL  7.02%   forms                  ← UA styles for form controls
-TEST-35: PASS  0.78%   grid-named-areas       ← CSS Grid named areas работает
-TEST-36: FAIL  9.16%   border-radius          ← BUG-036 (border-radius %)
-TEST-37: PASS  0.00%   float-clear            ← float реализован
-TEST-38: PASS  2.22%   z-index                ← (порог 3.0%)
-TEST-39: FAIL 31.30%   gradients              ← linear/radial gradient GPU
-TEST-40: FAIL 45.26%   conic-gradients        ← conic-gradient
-TEST-41: FAIL  3.52%   table                  ← display:table/row/cell (порог 3.0%)
-TEST-42: FAIL  3.79%   position-sticky        ← (порог 3.0%)
-TEST-43: FAIL  3.52%   intrinsic-sizing       ← max-content/min-content (порог 2.0%)
-TEST-44: FAIL  3.52%   media-queries          ← @media queries (порог 2.0%)
-```
-
----
-
-## Прогон 2026-05-25 v5 (graphic_tests, --continue-on-fail, порог 1%)
-
-Добавлены тесты 26–37 (новые CSS-свойства). Тесты 00–25 без изменений относительно v3.
-Два новых бага: BUG-036 (border-radius %) и BUG-037 (CSS filter рендерер).
-
-```
-TEST-00: PASS  0.00%   calibration
-TEST-01: PASS  0.00%   sanity
-TEST-02: PASS  0.39%   color-named
-TEST-03: PASS  0.11%   color-formats
-TEST-04: PASS  0.39%   color-alpha
-TEST-05: PASS  0.37%   border-width
-TEST-06: PASS  0.26%   border-sides
-TEST-07: PASS  0.70%   box-sizing
-TEST-08: PASS  0.93%   padding
-TEST-09: PASS  0.00%   margin
-TEST-10: PASS  0.00%   min-max-width
-TEST-11: FAIL 13.77%   min-max-height     ← см. примечание ниже
-TEST-12: FAIL 11.27%   display            ← inline-block без baseline
-TEST-13: PASS  0.24%   visibility-opacity
-TEST-14: FAIL  2.68%   overflow           ← BUG-020 (scrollbar UI)
-TEST-15: FAIL  1.92%   box-shadow         ← остаточное (blur spread)
-TEST-16: FAIL  1.88%   outline            ← sub-pixel геометрия
-TEST-17: PASS  0.00%   calc
-TEST-18: FAIL 10.77%   images             ← BUG-032 (image scaling)
-TEST-19: FAIL 13.00%   object-fit         ← BUG-032 (image scaling)
-TEST-20: FAIL  8.68%   quirks-bgcolor     ← BUG-021+BUG-022
-TEST-21: FAIL  1.75%   border-style       ← остаточный dotted
-TEST-22: FAIL  9.79%   CSS transform      ← sub-pixel transform-origin
-TEST-23: PASS  0.00%   pseudo-elements
-TEST-24: PASS  1.10%   vertical-align
-TEST-25: PASS  0.00%   table-layout
-TEST-26: FAIL  8.82%   mask-image         ← не реализован (Phase 0: fallback to full-opacity)
-TEST-27: FAIL  9.76%   direction-rtl      ← RTL direction partial; alignment bands отсутствуют
-TEST-28: FAIL 14.81%   css-containment    ← contain:size/paint/strict не работают
-TEST-29: FAIL 11.04%   container-queries  ← @container не реализован
-TEST-30: FAIL 24.05%   css-filter         ← BUG-037 FIXED; остаток — linear-gradient не реализован (P4)
-TEST-31: FAIL 20.57%   clip-path          ← circle/ellipse/polygon только bbox-clip (известное ограничение)
-TEST-32: FAIL  6.05%   list-markers       ← маркеры отсутствуют (6% порог = текст+антиалиасинг)
-TEST-33: FAIL 32.88%   multi-column       ← column-count/column-width не реализованы
-TEST-34: FAIL  6.89%   forms              ← UA стили для form controls не реализованы
-TEST-35: FAIL 83.20%   grid-named-areas   ← CSS Grid Phase 2 (grid-template-areas не работает)
-TEST-36: FAIL 11.10%   border-radius      ← BUG-036 (border-radius: % → radius=0)
-TEST-37: FAIL 41.83%   float-clear        ← float Phase 1 (не реализован)
-```
-
-**Примечание по TEST-11/TEST-12 (устарело):** значения в v5 были высокими потому что release-бинарь
-был от 2026-05-21 (до BUG-025 фикса). В v6 после пересборки TEST-11 PASS 0.43%, TEST-12 1.56%.
-
----
-
-## Прогон 2026-05-21 v3 (graphic_tests, --continue-on-fail, порог 1%)
-
-BUG-024 FIXED: height% теперь резолвится против высоты containing block, а не ширины. TEST-06 и TEST-07 перешли в PASS.
-TableRow добавлен в paint (display_list.rs), TEST-25 PASS.
-
-```
-TEST-00: PASS  0.00%   calibration
-TEST-01: PASS  0.00%   sanity
-TEST-02: PASS  0.39%   color-named
-TEST-03: PASS  0.11%   color-formats
-TEST-04: PASS  0.39%   color-alpha
-TEST-05: PASS  0.37%   border-width
-TEST-06: PASS  0.26%   border-sides       ← BUG-024 FIXED
-TEST-07: PASS  0.70%   box-sizing         ← BUG-024 FIXED
-TEST-08: PASS  0.93%   padding
-TEST-09: PASS  0.00%   margin
-TEST-10: PASS  0.00%   min-max-width
-TEST-11: FAIL 13.77%   min-max-height     ← BUG-025
-TEST-12: FAIL 11.27%   display            ← BUG-025 + display modes
-TEST-13: PASS  0.24%   visibility-opacity
-TEST-14: FAIL  2.68%   overflow           ← BUG-020
-TEST-15: FAIL  1.92%   box-shadow         ← BUG-033
-TEST-16: FAIL  1.88%   outline            ← sub-pixel геометрия
-TEST-17: PASS  0.00%   calc
-TEST-18: FAIL 10.77%   images             ← BUG-026
-TEST-19: FAIL 13.00%   object-fit         ← BUG-032
-TEST-20: FAIL  8.68%   quirks-bgcolor     ← BUG-021 + BUG-022
-TEST-21: FAIL  1.75%   border-style       ← остаточный BUG-029
-TEST-22: FAIL  9.79%   CSS transform      ← BUG-034
-TEST-23: PASS  0.00%   pseudo-elements
-TEST-24: PASS  1.10%   vertical-align
-TEST-25: PASS  0.00%   table-layout       ← TableRow paint FIXED
-```
-
----
-
-## Прогон 2026-05-21 v2 (graphic_tests, --continue-on-fail, порог 1%)
-
-Инфраструктура: полная 1px магента-рамка (body #ff00ff + .__f wrapper), overflow:hidden на body.
-Устранены ложные срабатывания от Edge-scrollbar: 10 тестов перешли FAIL→PASS.
-
-```
-TEST-00: PASS  0.00%   calibration
-TEST-01: PASS  0.00%   sanity
-TEST-02: PASS  0.39%   color-named
-TEST-03: PASS  0.11%   color-formats
-TEST-04: PASS  0.39%   color-alpha
-TEST-05: PASS  0.37%   border-width
-TEST-06: FAIL  2.43%   border-sides       ← BUG-024 (box-sizing) + BUG-020 overflow
-TEST-07: FAIL  6.56%   box-sizing         ← BUG-024
-TEST-08: PASS  0.93%   padding
-TEST-09: PASS  0.00%   margin
-TEST-10: PASS  0.00%   min-max-width
-TEST-11: FAIL 14.02%   min-max-height     ← BUG-025
-TEST-12: FAIL 11.27%   display            ← BUG-025 + display modes
-TEST-13: PASS  0.24%   visibility-opacity
-TEST-14: FAIL  6.89%   overflow           ← BUG-020 (scrollbar UI отсутствует)
-TEST-15: FAIL  1.92%   box-shadow         ← BUG-033 (solid тень, нет blur)
-TEST-16: FAIL  1.88%   outline            ← sub-pixel геометрия
-TEST-17: PASS  0.00%   calc
-TEST-18: FAIL 11.06%   images             ← BUG-026
-TEST-19: FAIL 12.62%   object-fit         ← BUG-032
-TEST-20: FAIL 27.84%   quirks-bgcolor     ← BUG-021 + BUG-022
-TEST-21: FAIL  1.77%   border-style       ← BUG-029 частично исправлен, ещё >1%
-TEST-22: FAIL  8.39%   CSS transform      ← BUG-034 (transform не реализован)
-TEST-23: FAIL  5.97%   pseudo-elements    ← BUG-035 (::before/::after не рендерятся)
-```
-
-**Сравнение с предыдущим прогоном (v1, старая .__m полоска):**
-
-| Тест | Было | Стало | |
+| ID | Статус | Компонент | Описание |
 |---|---|---|---|
-| TEST-01 sanity | 0.00% | 0.00% | = |
-| TEST-02 color-named | 2.35% FAIL | 0.39% PASS | ▼ ложный FAIL устранён |
-| TEST-03 color-formats | 2.06% FAIL | 0.11% PASS | ▼ |
-| TEST-04 color-alpha | 2.35% FAIL | 0.39% PASS | ▼ |
-| TEST-05 border-width | 3.89% FAIL | 0.37% PASS | ▼ |
-| TEST-08 padding | 4.45% FAIL | 0.93% PASS | ▼ |
-| TEST-09 margin | 1.95% FAIL | 0.00% PASS | ▼ |
-| TEST-10 min-max-width | 3.52% FAIL | 0.00% PASS | ▼ |
-| TEST-13 opacity | 2.20% FAIL | 0.24% PASS | ▼ |
-| TEST-17 calc | 3.52% FAIL | 0.00% PASS | ▼ |
-
-Все улучшения — устранение ложных FAIL от Edge scrollbar (3.52% = 15px scrollbar × 2 стороны).
-
----
-
-## Прогон 2026-05-21 (graphic_tests, --continue-on-fail, порог 1%)
-
-Инфраструктура: foreground-window fix (Alt-trick), Edge timeout 60s, калибровка по периметру.
-
-```
-TEST-00: PASS  0.00%   calibration
-TEST-01: PASS  0.00%   sanity                 ← было 38.98% — foreground fix устранил смещение
-TEST-02: FAIL  2.35%   color-named            ← sub-pixel антиалиасинг
-TEST-03: FAIL  2.06%   color-formats          ← sub-pixel антиалиасинг
-TEST-04: FAIL  2.35%   color-alpha            ← rgba edge rendering
-TEST-05: FAIL  3.89%   border-width           ← sub-pixel рендеринг границы
-TEST-06: FAIL  5.95%   border-sides           ← BUG-024 (box-sizing)
-TEST-07: FAIL  8.60%   box-sizing             ← BUG-024
-TEST-08: FAIL  4.45%   padding                ← padding + sub-pixel
-TEST-09: FAIL  1.95%   margin                 ← margin edge
-TEST-10: FAIL  3.52%   min-max-width          ← min/max width clamping
-TEST-11: FAIL 17.54%   min-max-height         ← BUG-025
-TEST-12: FAIL 13.23%   display                ← BUG-025 + display modes
-TEST-13: FAIL  2.20%   visibility-opacity     ← BUG-023
-TEST-14: FAIL 10.41%   overflow               ← BUG-020
-TEST-15: FAIL  3.87%   box-shadow
-TEST-16: FAIL  5.40%   outline                ← BUG-024 геометрия
-TEST-17: FAIL  3.52%   calc
-TEST-18: FAIL 14.58%   images                 ← BUG-026 (было 14.68%)
-TEST-19: FAIL 16.54%   object-fit             ← BUG-032 (86% было ложным — устаревший бинарник; реальный baseline 16%)
-TEST-20: FAIL 30.49%   quirks-bgcolor         ← BUG-021 + BUG-022
-TEST-21: FAIL  5.28%   border-style
-TEST-22: FAIL 13.31%   CSS transform          ← первый прогон
-```
-
----
-
-## Прогон 2026-05-20 v2 (graphic_tests, --continue-on-fail, порог 1%)
-
-Порог снижен с 5% до 1%. Видно значительное улучшение по многим тестам после мержа IFC-фиксов (BUG-030, BUG-031).
-
-```
-TEST-00: PASS  0.00%   calibration
-TEST-01: PASS  0.00%   sanity
-TEST-02: FAIL  2.35%   color-named        ← sub-pixel антиалиасинг границ
-TEST-03: FAIL  2.06%   color-formats      ← sub-pixel антиалиасинг
-TEST-04: FAIL  2.35%   color-alpha        ← rgba edge rendering
-TEST-05: FAIL  3.89%   border-width       ← sub-pixel рендеринг границы
-TEST-06: FAIL  5.95%   border-sides       ← BUG-024 (box-sizing)
-TEST-07: FAIL  8.60%   box-sizing         ← BUG-024
-TEST-08: FAIL  4.45%   padding            ← padding + sub-pixel
-TEST-09: FAIL  1.95%   margin             ← margin edge (1px over threshold)
-TEST-10: FAIL  3.52%   min-max-width      ← min/max width clamping
-TEST-11: FAIL 17.54%   min-max-height     ← BUG-025
-TEST-12: FAIL 13.23%   display            ← BUG-025 + display modes
-TEST-13: FAIL  2.20%   visibility-opacity ← BUG-023 (улучшилось: 16.58%→2.20%)
-TEST-14: FAIL 10.41%   overflow           ← BUG-020
-TEST-15: FAIL  3.87%   box-shadow         ← box-shadow rendering
-TEST-16: FAIL  5.40%   outline            ← BUG-024 влияет на геометрию
-TEST-17: FAIL  3.52%   calc               ← calc() sub-pixel
-TEST-18: FAIL 14.68%   images             ← BUG-026
-TEST-19: FAIL 16.14%   object-fit         ← object-fit не реализован
-TEST-20: FAIL 30.49%   quirks-bgcolor     ← BUG-021 + BUG-022
-TEST-21: FAIL  5.28%   border-style       ← BUG-029 (dotted=square)
-```
-
-**Сравнение с предыдущим прогоном (до IFC-фиксов):**
-
-| Тест | Было | Стало | Δ |
-|---|---|---|---|
-| TEST-02 color-named | 22.04% | 2.35% | ▼19.7 — BUG-027 устранён |
-| TEST-03 color-formats | 32.12% | 2.06% | ▼30.1 — BUG-027 устранён |
-| TEST-04 color-alpha | 15.67% | 2.35% | ▼13.3 — BUG-027 устранён |
-| TEST-05 border-width | 13.67% | 3.89% | ▼9.8 — BUG-027 устранён |
-| TEST-06 border-sides | 23.12% | 5.95% | ▼17.2 — BUG-027 устранён |
-| TEST-08 padding | 11.35% | 4.45% | ▼6.9 — BUG-027 устранён |
-| TEST-13 opacity | 16.58% | 2.20% | ▼14.4 — BUG-023 в основном исправлен |
-| TEST-14 overflow | 20.39% | 10.41% | ▼10.0 |
-| TEST-15 box-shadow | 6.44% | 3.87% | ▼2.6 |
-| TEST-16 outline | 20.37% | 5.40% | ▼15.0 — BUG-027 устранён |
-| TEST-18 images | 31.73% | 14.68% | ▼17.1 |
-| TEST-19 object-fit | 22.53% | 16.14% | ▼6.4 |
-| TEST-21 border-style | 19.07% | 5.28% | ▼13.8 — BUG-027 устранён |
-
-**Выводы:**
-- BUG-027 (block width) **фактически устранён** — все зависящие тесты упали на 10–30%
-- BUG-023 (opacity) **существенно улучшился**: 16.58% → 2.20% (порог 1% не проходит, но регрессия устранена)
-- Главные оставшиеся блокеры: BUG-024 (box-sizing), BUG-025 (max-height), BUG-020 (overflow), BUG-026 (images), BUG-021/022 (quirks-bgcolor)
-- TEST-02..05, 08, 09, 13 проваливаются только из-за sub-pixel антиалиасинга: реальная разница < 4%, при пороге 1% неизбежны
-
----
-
-## Прогон 2026-05-20 v1 (graphic_tests, --continue-on-fail, порог 5%)
-
-```
-TEST-00: PASS  0.00%   calibration
-TEST-01: PASS  0.00%   sanity
-TEST-02: FAIL 22.04%   color-named       ← BUG-027 (layout only, colors OK)
-TEST-03: FAIL 32.12%   color-formats     ← BUG-027 (layout only, colors OK)
-TEST-04: FAIL 15.67%   color-alpha       ← BUG-027 (layout only)
-TEST-05: FAIL 13.67%   border-width      ← BUG-027 (layout only)
-TEST-06: FAIL 23.12%   border-sides      ← BUG-027 (layout only)
-TEST-07: FAIL  8.60%   box-sizing        ← BUG-024
-TEST-08: FAIL 11.35%   padding           ← BUG-027 (layout only)
-TEST-09: PASS  1.95%   margin
-TEST-10: PASS  3.52%   min-max-width
-TEST-11: FAIL 15.90%   min-max-height    ← BUG-025
-TEST-12: FAIL 13.76%   display           ← BUG-027 + BUG-025
-TEST-13: FAIL 16.58%   visibility-opacity← BUG-023 (regression)
-TEST-14: FAIL 20.39%   overflow          ← BUG-020
-TEST-15: FAIL  6.44%   box-shadow        ← BUG-027 (layout only)
-TEST-16: FAIL 20.37%   outline           ← BUG-027 (outline itself works)
-TEST-17: PASS  3.52%   calc
-TEST-18: FAIL 31.73%   images            ← BUG-026 + BUG-027
-TEST-19: FAIL 22.53%   object-fit        ← BUG-027 (layout only)
-TEST-20: FAIL 30.62%   quirks-bgcolor    ← BUG-006/021/022
-TEST-21: FAIL 19.07%   border-style      ← BUG-027 + BUG-029 (dotted=square)
-```
-
-**Выводы:**
-- outline работает (BUG-019 закрыт визуально, TEST-16 fails из-за BUG-027)
-- dashed / double рамки работают корректно
-- BUG-023 (opacity) — была регрессия 2026-05-19; **FIXED 2026-05-26** (premultiplied alpha в composite shader)
-
----
-
-## Детали багов
-
-### BUG-027 · Block-элемент игнорирует explicit `width` [P1]
-
-**Статус:** FIXED 2026-05-20
-**Компонент:** `lumen-layout` — block width computation
-
-Block-элемент с `width: 400px` берёт 100% ширины viewport. После фикса: если задан явно (не `auto`) — использовать это значение; если `auto` — брать `available_width`.
-
----
-
-### BUG-028 · relayout-on-resize + `.with_maximized(true)` [P3]
-
-**Статус:** FIXED 2026-05-26  
-**Компонент:** `lumen-shell` — `Lumen::relayout()` + `WindowEvent::Resized` handler
-
-Окно открывается максимизированным, winit сразу стреляет `Resized(~1920×1040)`. `relayout()` пересчитывает с viewport 1920px → BUG-027 проявляется.
-
-**Фикс:** 1) guard в `WindowEvent::Resized` — skip при `size == 0` (минимизация на Windows); 2) defensive guard в `relayout()` при `vp_size <= 0`; 3) BUG-027 FIXED — explicit width больше не игнорируется при любом viewport. Временная мера (убрать `with_maximized`) оставлена: окно стартует 1024×720 для корректной работы графических тестов.
-
----
-
-### BUG-023 · opacity sub-pixel deviation
-
-**Статус:** FIXED 2026-05-26 (остаточный sub-1% edge-AA — TEST-13 0.24%; см. сводную таблицу)  
-**Компонент:** `lumen-paint` + `lumen-layout`
-
-Opacity compositing математически корректен: `PushOpacity`/`PopOpacity` + off-screen layer composite shader (`c.rgb * in.alpha + white * (1 - in.alpha)`). TEST-13 (2.20%) не хуже TEST-02 color-named (2.35%) без opacity — т.е. opacity не добавляет ошибку.
-
-**P1-часть FIXED 2026-05-24** (commit на ветке p1-bug-023-strut): InlineBlockRow больше не добавляет strut_descent в строках без InlineRun. Edge/Blink не расширяют line box font-strut'ом, когда в строке только inline-block/replaced элементы; ранее каждый такой ряд накапливал ~3.86 px (Inter, font-size:16) лишнего descender, смещая последующие блоки.
-
-Оставшиеся ~1.6% — edge antialiasing: Edge сглаживает рёбра, Lumen нет. Для снижения ниже 1% — MSAA/SSAA в renderer (P2).
-
----
-
-### BUG-024 · box-sizing: content-box — border не добавляется к outer size
-
-**Статус:** FIXED 2026-05-21 (см. сводную таблицу)  
-**Компонент:** `lumen-layout` — box model
-
-TEST-07: content-box боксы в Lumen уже чем в Edge на `2 × border_width`.
-
-**Где смотреть:** `crates/engine/layout/src/box_tree.rs` — вычисление `rect.width` / `rect.height` для `content-box`.
-
----
-
-### BUG-025 · max-height не зажимает высоту блока
-
-**Статус:** FIXED 2026-05-22 (см. сводную таблицу)  
-**Компонент:** `lumen-layout` — block height clamping
-
-TEST-11: При `height: 160px; max-height: 80px` блок рендерится 160px (max-height игнорируется).
-
-**Где смотреть:** `crates/engine/layout/src/box_tree.rs` — после вычисления `height`, найти применение `min_height`/`max_height`.
-
----
-
-### BUG-026 · `<img>` не масштабируется по CSS/HTML width/height
-
-**Статус:** FIXED 2026-05-22 (остаток качества — BUG-032; см. сводную таблицу)  
-**Компонент:** `lumen-layout` / `lumen-paint`
-
-TEST-18: `<img width="300" height="225">` рендерится в натуральном размере файла. Команда `DrawImage` должна использовать layout-rect, не натуральный размер текстуры.
-
----
-
-### BUG-029 · border-style: dotted — квадратные точки вместо круглых
-
-**Статус:** FIXED 2026-05-21 (см. сводную таблицу; круглые dots — BUG-039)  
-**Компонент:** `lumen-paint` — border rendering
-
-TEST-21: `border-style: dotted` рисует квадратные точки. По CSS-спеке dots должны быть круглыми (filled circles). dashed и double работают корректно.
-
-**Где смотреть:** `crates/engine/paint/src/display_list.rs` — секция отрисовки dotted-border, заменить FillRect на рисование окружностей через примитив или GPU-path.
-
----
-
-### BUG-020 · overflow: scroll/auto/hidden не реализован
-
-**Статус:** FIXED 2026-05-26 (overflow axis coercion; TEST-14 0.03%; см. сводную таблицу)  
-**Компонент:** `lumen-layout` / `lumen-paint`
-
-TEST-14: все варианты overflow ведут себя как `visible`. В Edge видны scrollbar-ы и клиппинг.
-
----
-
-### BUG-021 · HTML-атрибут bgcolor игнорируется
-
-**Статус:** FIXED 2026-05-22 (см. сводную таблицу)  
-**Компонент:** `lumen-html-parser` (presentational hints)
-
-TEST-20: `<body bgcolor="#1a2030">` даёт белый фон вместо тёмно-синего.
-
----
-
-### BUG-022 · CSS hashless hex colors (Quirks-mode) не парсятся
-
-**Статус:** FIXED 2026-05-22 (см. сводную таблицу)  
-**Компонент:** `lumen-css-parser`
-
-TEST-20: `bgcolor="44aa66"` не распознаётся как `#44aa66` в quirks-mode.
-
----
-
-### BUG-032 · Качество масштабирования изображений: ~16% расхождение с Edge
-
-**Статус:** FIXED 2026-05-22 (area averaging при downscale; см. сводную таблицу)  
-**Компонент:** `lumen-paint`, `lumen-image`
-
-TEST-19 (object-fit), TEST-18 (images): пиксельная разница ~16% при большом коэффициенте уменьшения (~4.7x, 852×725 → 180×120).
-
-#### Что сделано (2026-05-21)
-
-1. **CPU-side bilinear resize** — реализован в `lumen-image/src/lib.rs`:
-   - `Image::to_rgba8()` — конвертация любого формата в RGBA8
-   - `pub fn resize_bilinear(src: &Image, dst_w: u32, dst_h: u32) -> Image` — 4-tap bilnear с half-pixel offset
-   - В `renderer.rs` добавлен pre-pass перед render loop: для каждого `DrawImage` вызывается `ensure_image_gpu_key()`, которая создаёт CPU-ресайзированную текстуру и кеширует под ключом `"src@WxH"`.
-   - Разделение на `compute_image_gpu_key(&self)` (иммутабельный) + `ensure_image_gpu_key(&mut self)` (мутабельный pre-pass) обязательно — иначе borrow-checker блокирует (в render loop `parsed_faces: Vec<Option<ParsedFace<'_>>>` держит `&self.faces`).
-
-2. **Результат:** минимальное улучшение: TEST-18 14.68% → 14.44%, TEST-19 16.14% → 16.54% (шум, не улучшение).
-
-#### Почему не помогло
-
-CPU bilinear ≈ GPU bilinear — оба делают 4-выборки. При коэффициенте уменьшения 4.7x область покрытия одного выходного пикселя = 4.7×4.7 = ~22 исходных пикселей, из которых bilinear учитывает лишь 4. Антиалиасинг не обеспечивается.
-
-Edge/Chrome используют **Skia**, который при downscale применяет **Lanczos-3** (или area averaging) — усредняет все пиксели в области покрытия. Поэтому разные браузеры дают одинаковый результат: они используют одну библиотеку (Skia).
-
-Дополнительная причина: текстуры загружаются как `Rgba8Unorm` (linear), хотя PNG-файлы хранят sRGB. Блендинг в linear-пространстве при правильных финальных значениях дал бы совпадение, но sRGB→linear конвертация при загрузке не выполняется → цветовые ошибки ~2-5%.
-
-#### Что нужно сделать
-
-1. **[Приоритет 1] Area averaging (box filter) для downscale:**
-   ```rust
-   // Заменить resize_bilinear на resize_area_avg для случаев (dst < src)
-   pub fn resize_area_avg(src: &Image, dst_w: u32, dst_h: u32) -> Image;
-   // Алгоритм: для каждого dst-пикселя вычислить float-прямоугольник в src-координатах,
-   // усреднить все целые пиксели + частичные веса по краям.
-   ```
-   Ожидаемый результат: совпадение с Edge ~2-4% (только sRGB-девиация останется).
-
-2. **[Приоритет 2] sRGB при загрузке текстур:**  
-   Изменить формат текстуры с `Rgba8Unorm` на `Rgba8UnormSrgb` в `renderer.rs` → wgpu автоматически конвертирует sRGB→linear при sampling. Требует также перевода surface в sRGB (`TextureFormat::Bgra8UnormSrgb`). Запланировано на Phase 3+.
-
-#### Файлы
-
-- `crates/engine/image/src/lib.rs` — `to_rgba8()`, `resize_bilinear()`
-- `crates/engine/paint/src/renderer.rs` — pre-pass, `ensure_image_gpu_key()`, `compute_image_gpu_key()`, `make_gpu_image_entry()`
-
----
-
----
-
-### BUG-036 · border-radius: % значения не резолвятся [P4]
-
-**Статус:** FIXED 2026-05-26 (см. сводную таблицу)  
-**Компонент:** `lumen-layout` — `style.rs:13479`
-
-`border-radius: 50%` и любые % значения оставляют радиус = 0.0. Только пиксельные значения (4px, 32px, 999px) работают корректно.
-
-**Корень:** `resolve_box_length()` возвращает `None` для `Length::Percent(_)`:
-```rust
-fn resolve_box_length(val: &str, em_basis: f32, viewport: Size, is_quirks: bool) -> Option<f32> {
-    let len = parse_length_q(val, is_quirks)?;
-    match len {
-        Length::Percent(_) => None,   // ← здесь баг
-        other => other.resolve(em_basis, None, viewport),
-    }
-}
-```
-
-По спеке CSS Backgrounds L3 §5.5: % для border-radius — относительно border-box (ширина для H-радиуса, высота для V-радиуса). Нужно хранить типизированное `Length` и резолвить при layout, когда известен размер бокса.
-
-**Где смотреть:** `crates/engine/layout/src/style.rs:13479` — `resolve_box_length`, `crates/engine/layout/src/style.rs:10684` — применение `border-radius` shorthand.
-
----
-
-### BUG-037 · CSS filter effects не применяются визуально [P2]
-
-**Статус:** FIXED 2026-05-26 (per-pass buffer через mapped_at_creation; см. сводную таблицу)  
-**Компонент:** `lumen-paint` — `renderer.rs` (filter composite pipeline)
-
-CSS-фильтры `grayscale`, `sepia`, `brightness`, `invert`, `contrast`, `saturate`, `hue-rotate`, `blur` и `backdrop-filter` присутствуют в дисплей-листе с правильной структурой (`PushFilter [grayscale]` / `FillRect` / `PopFilter`). Шейдер WGSL (`FILTER_SHADER_SRC`) корректно реализует все виды фильтров. Но визуально элементы отображаются без фильтрации — как если бы `PushFilter`/`PopFilter` игнорировались.
-
-**Что работает:**
-- Дисплей-лист: `PushFilter`/`PopFilter` генерируются корректно с правильными `FilterFn`
-- `filter_fn_to_entry`: корректно маппит Grayscale→kind=3, Sepia→kind=8 и т.д.
-- WGSL shader: логика `apply_filter_fn` математически верна
-
-**Что не работает:**
-- Итоговый рендер: все элементы с фильтром показывают исходный цвет без изменений
-- backdrop-filter: полупрозрачные боксы с backdrop-filter рендерятся как пустые
-
-**Где смотреть:**
-- `crates/engine/paint/src/renderer.rs:4653` — `RenderPlanItem::FilterComposite` (исполнение)
-- `crates/engine/paint/src/renderer.rs:3994` — `DisplayCommand::PushFilter` (планирование)
-- Подозрение: offscreen texture не получает draw-команды, или FilterComposite читает неправильный слой
+| [BUG-001](bugs/BUG-001-FIXED.md) | FIXED 2026-05-15 | layout | display:none on inline elements not working |
+| [BUG-002](bugs/BUG-002-FIXED.md) | FIXED 2026-05-20 | layout/paint | inline padding/border/margin stacks vertically instead of flowing |
+| [BUG-003](bugs/BUG-003-FIXED.md) | FIXED 2026-05-15 | layout | style="" attribute not processed by cascade |
+| [BUG-004](bugs/BUG-004-FIXED.md) | FIXED 2026-05-24 | layout | height on inline elements (display:inline-block applies; display:inline ignores per CSS 2.1 §10.6.1) |
+| [BUG-005](bugs/BUG-005-FIXED.md) | FIXED 2026-05-21 | layout+paint | `<img>` inside `<span>` not rendered |
+| [BUG-006](bugs/BUG-006-FIXED.md) | FIXED 2026-05-21 | layout | table layout not implemented (td/th render as blocks) |
+| [BUG-007](bugs/BUG-007-FIXED.md) | FIXED 2026-05-20 | layout | `<sub>`/`<sup>`/`<small>` missing UA styles |
+| [BUG-008](bugs/BUG-008-FIXED.md) | FIXED 2026-05-20 | layout | `<del>`/`<ins>`/`<u>`/`<s>` text-decoration missing UA styles |
+| [BUG-009](bugs/BUG-009-FIXED.md) | FIXED 2026-05-20 | layout | `<a>` missing UA styles (no blue color, no underline) |
+| [BUG-010](bugs/BUG-010-FIXED.md) | FIXED 2026-05-20 | layout | `<hr>` renders nothing |
+| [BUG-011](bugs/BUG-011-FIXED.md) | FIXED 2026-05-22 | layout/paint | list markers (bullet, numbers) not rendered |
+| [BUG-012](bugs/BUG-012-FIXED.md) | FIXED 2026-05-20 | layout | `<del>`/`<ins>` break inline flow (each on new line) |
+| [BUG-013](bugs/BUG-013-FIXED.md) | FIXED 2026-05-22 | layout | adjacent `<span style="...">` stack vertically without separator |
+| [BUG-014](bugs/BUG-014-FIXED.md) | FIXED 2026-05-21 | image | JPEG not decoded (PNG only) |
+| [BUG-015](bugs/BUG-015-FIXED.md) | FIXED 2026-05-25 | paint | broken `<img>` src shows no alt text |
+| [BUG-016](bugs/BUG-016-FIXED.md) | FIXED 2026-05-20 | css-parser/paint | border-style: dashed/double now work; dotted still square (→ BUG-029) |
+| [BUG-017](bugs/BUG-017-FIXED.md) | FIXED 2026-05-22 | layout/paint | text-decoration-style ignored (all render as solid) |
+| [BUG-018](bugs/BUG-018-FIXED.md) | FIXED 2026-05-22 | layout | text-decoration-color ignored (always inherits text color) |
+| [BUG-019](bugs/BUG-019-FIXED.md) | FIXED 2026-05-20 | css-parser/paint | outline not rendered at all |
+| [BUG-020](bugs/BUG-020-FIXED.md) | FIXED 2026-05-26 | layout | overflow axis coercion: visible+hidden combo не клипало ось; CSS Overflow L3 §2.1 visible→auto в compute_style; TEST-14: 1.70%→0.03% PASS |
+| [BUG-021](bugs/BUG-021-FIXED.md) | FIXED 2026-05-22 | html-parser | HTML bgcolor attribute ignored |
+| [BUG-022](bugs/BUG-022-FIXED.md) | FIXED 2026-05-22 | css-parser | Quirks-mode hashless hex colors not parsed |
+| [BUG-023](bugs/BUG-023-FIXED.md) | FIXED 2026-05-26 | layout+paint | opacity deviation — P1: strut fix 2026-05-26; P5 paint: premultiplied alpha double-mult at edge-AA pixels in composite shader → TEST-13 0.24% |
+| [BUG-024](bugs/BUG-024-FIXED.md) | FIXED 2026-05-21 | layout | box-sizing: content-box — border not added to outer size; height% resolved against width |
+| [BUG-025](bugs/BUG-025-FIXED.md) | FIXED 2026-05-22 | layout | max-height does not clamp block height; InlineSpace not included in shrink-to-fit width |
+| [BUG-026](bugs/BUG-026-FIXED.md) | FIXED 2026-05-22 | layout/paint | `<img>` CSS/HTML width+height ignored — renders at natural size (remaining TEST-18 ~10%: BUG-032) |
+| [BUG-027](bugs/BUG-027-FIXED.md) | FIXED 2026-05-20 | layout | block element ignores explicit width — body stretches to viewport |
+| [BUG-028](bugs/BUG-028-FIXED.md) | FIXED 2026-05-26 | shell | relayout-on-resize + maximized window triggers BUG-027 |
+| [BUG-029](bugs/BUG-029-FIXED.md) | FIXED 2026-05-21 | paint | border-style: dotted renders square dots instead of circles |
+| [BUG-030](bugs/BUG-030-FIXED.md) | FIXED 2026-05-20 | layout | IFC: no whitespace gap between inline-block siblings (CSS §4.1.2) |
+| [BUG-031](bugs/BUG-031-FIXED.md) | FIXED 2026-05-20 | layout | IFC: missing strut descent causes rows to be ~4px too short |
+| [BUG-032](bugs/BUG-032-FIXED.md) | FIXED 2026-05-22 | paint/image | object-fit image quality ~16%: area averaging заменяет bilinear при downscale |
+| [BUG-033](bugs/BUG-033-FIXED.md) | FIXED 2026-05-22 | paint | box-shadow: нет Gaussian blur — рендерится solid прямоугольник вместо размытой тени |
+| [BUG-034](bugs/BUG-034-FIXED.md) | FIXED 2026-05-22 | layout | transform-origin 50% 50% default not resolved against box size — pivot at (0,0) instead of center |
+| [BUG-035](bugs/BUG-035-FIXED.md) | FIXED 2026-05-22 | layout | ::before/::after pseudo-elements не генерируются в box_tree (реализация частичная) |
+| [BUG-036](bugs/BUG-036-FIXED.md) | FIXED 2026-05-26 | layout | border-radius: % значения (50%, etc.) не резолвятся → radius=0; только px работает |
+| [BUG-037](bugs/BUG-037-FIXED.md) | FIXED 2026-05-26 | paint | CSS filter effects не применяются визуально (grayscale/sepia/blur/etc.) — shared filter_uniform перезаписывался; fix: per-pass буфер через mapped_at_creation |
+| [BUG-038](bugs/BUG-038-FIXED.md) | FIXED 2026-05-26 | layout | list-style-position: inside — маркер занимал отдельную строку; li высотой 2× от нормы; fix: не продвигать child_y, сдвигать InlineRun вправо на marker_w |
+| [BUG-039](bugs/BUG-039-FIXED.md) | FIXED 2026-05-26 | paint | dashed/dotted border mismatch vs Chrome/Edge: dash ratio 3:1→Skia algo, corner squares→circle quads for dotted, 1px linear SDF AA |
+| [BUG-040](bugs/BUG-040-FIXED.md) | FIXED 2026-05-27 | layout | table layout unit tests assume direct `<tr>` children of `<table>`; html-full-tree-builder now injects implicit `<tbody>` breaking them |
+| [BUG-041](bugs/BUG-041-FIXED.md) | FIXED 2026-05-27 | css-parser | style::tests::line_clamp_integer_value / _standard_property / _not_inherited fail: CSS rule `div { -webkit-line-clamp: 3 }` produces None — test accesses doc.root().children[0] which is `<html>` after full HTML5 parsing, so rule doesn't match `<div>` |
+| [BUG-042](bugs/BUG-042-FIXED.md) | FIXED 2026-05-29 | js | QuickJsRuntime missing JsRuntime::resume() impl — all lumen-js tests fail to compile |
+| [BUG-043](bugs/BUG-043-FIXED.md) | FIXED 2026-05-29 | paint | lumen-paint test suite красный (19 падений): устаревшие golden + overflow coercion + half-leading |
+| [BUG-044](bugs/BUG-044-FIXED.md) | FIXED 2026-05-29 | shell | lumen-shell не компилируется: non-exhaustive match по DisplayCommand — новые варианты PushMaskLayer/PopMaskLayer/DrawSvgPath/BoxModelOverlay |
+| [BUG-045](bugs/BUG-045-FIXED.md) | FIXED 2026-05-29 | layout | backdrop-filter не создавал stacking context |
+| [BUG-046](bugs/BUG-046-FIXED.md) | FIXED 2026-05-30 | layout | 3 устаревших теста lumen-layout --lib: webp теперь декодируется → picture-тесты обновлены |
+| [BUG-047](bugs/BUG-047-FIXED.md) | FIXED 2026-05-30 | layout | НЕ баг (мисдиагноз): line-clamp реально усекает контент — тест переписан на ground-truth |
+| [BUG-048](bugs/BUG-048-FIXED.md) | FIXED 2026-05-30 | shell | lumen-shell не компилируется: non-exhaustive match — новый вариант DrawScrollbar |
+| [BUG-049](bugs/BUG-049-FIXED.md) | FIXED 2026-05-30 | shell | lumen-shell не компилируется: non-exhaustive match — новый вариант PageBreak |
+| [BUG-050](bugs/BUG-050-FIXED.md) | FIXED 2026-05-31 | network | doctest mock.rs:16 не компилировался — `use NetworkTransport` не импортирован |
+| [BUG-051](bugs/BUG-051-FIXED.md) | FIXED 2026-05-31 | layout | abs-pos с top+bottom+height:auto (inset:0) схлопывался в height 0 |
+| [BUG-052](bugs/BUG-052-FIXED.md) | FIXED 2026-05-31 | paint/cpu_raster | DrawBorder anti_alias:true → паника в debug-профиле для sub-pixel рамок |
+| [BUG-053](bugs/BUG-053-FIXED.md) | FIXED 2026-06-02 | shell | `cargo build -p lumen-shell --features quickjs` не компилировался: trait PersistentJs потерял декларации |
+| [BUG-054](bugs/BUG-054-FIXED.md) | FIXED 2026-06-04 | network | stale_pooled_connection_triggers_retry падает на Windows (WSAECONNRESET) |
+| [BUG-055](bugs/BUG-055-FIXED.md) | FIXED 2026-06-04 | layout | tests::collect_picture_unsupported_type_falls_back: AVIF теперь поддерживается |
+| [BUG-056](bugs/BUG-056-FIXED.md) | FIXED 2026-06-03 | shell | font_registry used after move in parse_and_layout: clippy E0382 |
+| [BUG-057](bugs/BUG-057-FIXED.md) | FIXED 2026-06-03 | paint | wgpu Vulkan crash on first render — fix: DX12 backend по умолчанию на Windows |
+| [BUG-058](bugs/BUG-058-FIXED.md) | FIXED 2026-06-04 | layout | display:contents не сглажен перед lay_out: паника при открытии cnn.com |
+| [BUG-059](bugs/BUG-059-FIXED.md) | FIXED 2026-06-04 | font | WOFF2-декодер отклоняет шрифты с контурами из 0 точек |
+| [BUG-060](bugs/BUG-060-FIXED.md) | FIXED 2026-06-04 | font | WOFF2-декодер обрывается с «unexpected end of font data» — routing потоков |
+| [BUG-061](bugs/BUG-061-FIXED.md) | FIXED 2026-06-04 | driver | test_32_list_markers падал: ожидания не обновлены после добавления секций |
+| [BUG-062](bugs/BUG-062-FIXED.md) | FIXED 2026-06-04 | network | clippy «very complex type» в doh.rs → type alias DnsCacheMap |
+| [BUG-063](bugs/BUG-063-FIXED.md) | FIXED 2026-06-04 | layout | clippy: manual_clamp, dead_code, collapsible_if в mathml.rs |
+| [BUG-064](bugs/BUG-064-FIXED.md) | FIXED 2026-06-08 | driver | test_33_multi_column падал: ожидания не обновлены после изменения высот |
+| [BUG-065](bugs/BUG-065-FIXED.md) | FIXED 2026-06-04 | shell | Клик по `<a href>` не срабатывал: hit-test не вычитал TAB_BAR_HEIGHT |
+| [BUG-066](bugs/BUG-066-FIXED.md) | FIXED 2026-06-07 | paint | render_tile() без cfg(cpu-render) вызывает cpu_raster → clippy падает |
+| [BUG-067](bugs/BUG-067-FIXED.md) | FIXED 2026-06-08 | js | EventTarget не определён глобально → `class X extends EventTarget` бросает ReferenceError |
+| [BUG-068](bugs/BUG-068-FIXED.md) | FIXED 2026-06-08 | shell | clippy: collapsible_if в reader_view.rs |
+| [BUG-069](bugs/BUG-069-FIXED.md) | FIXED 2026-06-08 | image | collect_picture_unsupported_type_falls_back: stub-форматы jxl/heic/heif убраны из supported_mime_types |
+| [BUG-070](bugs/BUG-070-FIXED.md) | FIXED 2026-06-08 | js | Дубликат BUG-067 (тот же корень: EventTarget) |
+| [BUG-071](bugs/BUG-071-FIXED.md) | FIXED 2026-06-08 | mcp | MockSession не реализует set_clock/set_rng_seed/freeze_fingerprint |
+| [BUG-072](bugs/BUG-072-FIXED.md) | FIXED 2026-06-08 | js | Form Constraint Validation API: ReferenceError «HTMLInputElement is not defined» |
+| [BUG-073](bugs/BUG-073-FIXED.md) | FIXED 2026-06-08 | js | chrome_runtime_absent ломается: window.chrome.runtime ставился безусловно |
+| [BUG-074](bugs/BUG-074-FIXED.md) | FIXED 2026-06-08 | layout | height:100% на flex-item не резолвится → TEST-67 bar рендерится h=0 |
+| [BUG-075](bugs/BUG-075-FIXED.md) | FIXED 2026-06-08 | layout | display:table без явной ширины растягивается до контейнера вместо shrink-to-fit |
+| [BUG-076](bugs/BUG-076-FIXED.md) | FIXED 2026-06-11 | paint | box-shadow blur spread ~1% deviation — TEST-15: 1.06% |
+| [BUG-077](bugs/BUG-077-FIXED.md) | FIXED 2026-06-09 | image/paint | femtovg-бэкенд алиасинг при downscale — area avg ресемплинг |
+| [BUG-078](bugs/BUG-078-FIXED.md) | FIXED 2026-06-11 | layout/paint | object-fit contain/cover image quality ~13% deviation — TEST-19: 12.68% |
+| [BUG-079](bugs/BUG-079-FIXED.md) | FIXED 2026-06-14 | layout | quirks-bgcolor: hashless-hex quirk применялся к шортхенду `background:` |
+| [BUG-080](bugs/BUG-080-FIXED.md) | FIXED 2026-06-11 | paint | border-style: residual dotted/dashed 3% deviation — TEST-21: 3.02% |
+| [BUG-081](bugs/BUG-081-FIXED.md) | FIXED 2026-06-11 | layout | vertical-align: sub-pixel 0.99% deviation |
+| [BUG-082](bugs/BUG-082-FIXED.md) | FIXED 2026-06-11 | paint | css-filter 33% deviation — TEST-30: 33.07% |
+| [BUG-083](bugs/BUG-083-FIXED.md) | FIXED 2026-06-11 | layout/paint | list-markers residual 3.4% deviation |
+| [BUG-084](bugs/BUG-084-FIXED.md) | FIXED 2026-06-12 | paint | border-radius residual 1.5% deviation — TEST-36: 1.50% |
+| [BUG-085](bugs/BUG-085-OPEN.md) | OPEN | paint | linear/radial gradient 12% deviation — TEST-39: 12.05% |
+| [BUG-086](bugs/BUG-086-FIXED.md) | FIXED 2026-06-09 | paint | conic-gradient: triangle-fan не обрезался по box + игнорировал repeating |
+| [BUG-087](bugs/BUG-087-FIXED.md) | FIXED 2026-06-09 | paint | gradient layers ignored background-size/position/repeat — TEST-45: 17.29% |
+| [BUG-088](bugs/BUG-088-FIXED.md) | FIXED 2026-06-12 | css-parser/layout | individual CSS transform properties (translate/rotate/scale) — TEST-46: 4.63% |
+| [BUG-089](bugs/BUG-089-FIXED.md) | FIXED 2026-06-09 | paint | SVG basic shapes not rendered (rect/circle/ellipse/line) — TEST-47: 21.71% |
+| [BUG-090](bugs/BUG-090-FIXED.md) | FIXED 2026-06-12 | layout | -webkit-line-clamp multi-line truncation — TEST-48: PASS 0.26% |
+| [BUG-091](bugs/BUG-091-FIXED.md) | FIXED 2026-06-08 | paint | background-blend-mode: bottom layer wrapped in PushBlendMode — TEST-49: 30.62% |
+| [BUG-092](bugs/BUG-092-FIXED.md) | FIXED 2026-06-12 | css-parser/layout | CSS variables var() in cascade — TEST-50: PASS 0.0001% |
+| [BUG-093](bugs/BUG-093-FIXED.md) | FIXED 2026-06-11 | paint | scrollbar rendering TEST-51: threshold calibration замаскировала реальный дефект BUG-123 |
+| [BUG-094](bugs/BUG-094-FIXED.md) | FIXED 2026-06-11 | paint | text-shadow with blur ~7% deviation — TEST-52: 6.82% |
+| [BUG-095](bugs/BUG-095-FIXED.md) | FIXED 2026-06-09 | layout/paint | background-origin/background-clip positioning ~32% deviation — TEST-53: 31.78% |
+| [BUG-096](bugs/BUG-096-FIXED.md) | FIXED 2026-06-09 | paint/layout | SVG `<path>` stroke tessellation not rendered — TEST-54: 9.50% |
+| [BUG-097](bugs/BUG-097-FIXED.md) | FIXED 2026-06-09 | layout/paint | `<video>` placeholder: posterless video painted grey instead of transparent |
+| [BUG-098](bugs/BUG-098-FIXED.md) | FIXED 2026-06-11 | paint | mix-blend-mode: ~14% deviation — PA-3: offscreen CPU mix_blend_rgba |
+| [BUG-099](bugs/BUG-099-OPEN.md) | OPEN | js/paint | `<canvas>` 2D context not implemented — TEST-57: 28.66%; Phase 2 |
+| [BUG-100](bugs/BUG-100-OPEN.md) | OPEN | layout | ::first-letter drop-cap / ::first-line not implemented — TEST-58: 6.04% |
+| [BUG-101](bugs/BUG-101-OPEN.md) | OPEN | css-parser/paint | image-set() DPR selection / cross-fade() not implemented — TEST-59: 27.63% |
+| [BUG-102](bugs/BUG-102-OPEN.md) | OPEN | paint | SVG stroke-linecap/linejoin/dasharray not rendered — TEST-60: 11.51% |
+| [BUG-103](bugs/BUG-103-OPEN.md) | OPEN | js | View Transitions API not implemented — TEST-61: 99.53%; Phase 2 |
+| [BUG-104](bugs/BUG-104-OPEN.md) | OPEN | layout | CSS Scroll Snap not implemented — TEST-62: 63.70%; Phase 1 |
+| [BUG-105](bugs/BUG-105-OPEN.md) | OPEN | layout | CSS Masonry layout not implemented — TEST-63: 26.13%; Phase 2 |
+| [BUG-106](bugs/BUG-106-FIXED.md) | FIXED 2026-06-09 | layout | TEST-64 table: missing UA heading defaults → h3 без размера и margin |
+| [BUG-107](bugs/BUG-107-FIXED.md) | FIXED 2026-06-09 | layout | flex align-content: normal/stretch не распределял свободное пространство |
+| [BUG-108](bugs/BUG-108-OPEN.md) | OPEN | paint | ::selection pseudo-element: background-color/color не применяются — TEST-66: 6.18% |
+| [BUG-109](bugs/BUG-109-OPEN.md) | OPEN | css-parser/font | font-variation-settings: wght/wdth/slnt не передаются растеризатору — TEST-68: 3.21% |
+| [BUG-110](bugs/BUG-110-FIXED.md) | FIXED 2026-06-14 | layout/paint | object-fit: SVG viewBox scaling ~8% deviation — TEST-70: 8.03% |
+| [BUG-111](bugs/BUG-111-FIXED.md) | FIXED 2026-06-08 | paint/shell | lumen-paint/shell не компилировались после мержа A-2 CSS Custom Highlight API |
+| [BUG-112](bugs/BUG-112-FIXED.md) | FIXED 2026-06-08 | driver | test_32_list_markers регрессия: P4 добавил 2 @counter-style списка |
+| [BUG-113](bugs/BUG-113-FIXED.md) | FIXED 2026-06-09 | layout | TEST-53 row-2 drift ~24px: trailing cross_gap утекал в single-line flex |
+| [BUG-114](bugs/BUG-114-OPEN.md) | OPEN | css-parser | `font` shorthand drops font-size/line-height — TEST-53 residual ~4px |
+| [BUG-115](bugs/BUG-115-OPEN.md) | OPEN | css-parser | percent `background-size` not supported — TEST-45 residual |
+| [BUG-116](bugs/BUG-116-FIXED.md) | FIXED 2026-06-09 | layout | auto table column widths: content-based sizing (CSS 2.1 §17.5.2) |
+| [BUG-117](bugs/BUG-117-FIXED.md) | FIXED 2026-06-09 | layout | multi-column greedy assignment two bugs — TEST-33 16.14% |
+| [BUG-118](bugs/BUG-118-FIXED.md) | FIXED 2026-06-09 | test/snapshot | snapshot_cpu reference PNGs outdated for 12 pages |
+| [BUG-119](bugs/BUG-119-FIXED.md) | FIXED 2026-06-10 | test/html | raw U+0001 byte в `<head>` 17 тест-страниц → content shifted 20px |
+| [BUG-120](bugs/BUG-120-FIXED.md) | FIXED 2026-06-10 | layout/text | C0 control chars render as 1-line text box instead of invisible |
+| [BUG-121](bugs/BUG-121-FIXED.md) | FIXED 2026-06-10 | test/driver | snapshot_vs_edge gate red: wgpu vs femtovg бэкенды дают разный результат |
+| [BUG-122](bugs/BUG-122-FIXED.md) | FIXED 2026-06-15 | test/paint | flaky compositor tests: wall-clock deadline зависел от планировщика ОС |
+| [BUG-123](bugs/BUG-123-FIXED.md) | FIXED 2026-06-11 | paint | scroll container's own bg+border clipped by its own overflow scissor |
+| [BUG-124](bugs/BUG-124-OPEN.md) | OPEN | layout/paint | TEST-51 residual 1.09%: fractional layout Y coords vs Edge pixel snapping |
+| [BUG-125](bugs/BUG-125-OPEN.md) | OPEN | layout/paint | CSS Motion Path L1 (offset-path/offset-distance/offset-rotate) — TEST-76: 3.18% |
+| [BUG-126](bugs/BUG-126-OPEN.md) | OPEN | layout | CSS Anchor Positioning L1 (anchor-name/position-anchor) — TEST-77: 53.45% |
+| [BUG-127](bugs/BUG-127-OPEN.md) | OPEN | layout/js | CSS Scroll-Driven Animations L1 (scroll-timeline/view-timeline) — TEST-78: 12.02% |
+| [BUG-128](bugs/BUG-128-OPEN.md) | OPEN | font | text-underline TEST-79: 6.78% — font-parity issue (serif vs sans), кандидат в KNOWN_DEBTORS |
+| [BUG-129](bugs/BUG-129-FIXED.md) | FIXED 2026-06-14 | layout | CSS Tables border-collapse: collapse — TEST-80 16.81% |
+| [BUG-130](bugs/BUG-130-FIXED.md) | FIXED 2026-06-13 | paint | view-transition-name: TEST-81 32.47% — ложная причина, реальная = BUG-141 |
+| [BUG-131](bugs/BUG-131-FIXED.md) | FIXED 2026-06-13 | paint | INTERACTION TEST-100 (transform×overflow) 9.57%: overflow-клип закрывался до дочернего SC |
+| [BUG-132](bugs/BUG-132-FIXED.md) | FIXED 2026-06-12 | paint | INTERACTION TEST-101 (border-radius×overflow) 4.04%: PushClipRoundedRect добавлена |
+| [BUG-133](bugs/BUG-133-FIXED.md) | FIXED 2026-06-12 | paint | INTERACTION TEST-102 (opacity×z-index) 17.04%: per-draw alpha вместо offscreen |
+| [BUG-134](bugs/BUG-134-FIXED.md) | FIXED 2026-06-15 | paint | INTERACTION TEST-103 (filter×transform): ложная регрессия — устаревший бинарь |
+| [BUG-135](bugs/BUG-135-OPEN.md) | OPEN | paint | INTERACTION TEST-104 (mask×gradient×radius) 51.97% |
+| [BUG-136](bugs/BUG-136-FIXED.md) | FIXED 2026-06-13 | layout | INTERACTION TEST-105 (float/clear×margin) 4.84%: три дефекта float-раскладки |
+| [BUG-137](bugs/BUG-137-FIXED.md) | FIXED 2026-06-12 | paint | INTERACTION TEST-106 (transform×z-index) 4.02%→PASS 0.02% |
+| [BUG-138](bugs/BUG-138-FIXED.md) | FIXED 2026-06-13 | paint | INTERACTION TEST-107 (shadow×radius×overflow): box-shadow на скруглённом боксе — квадратный FillRect |
+| [BUG-139](bugs/BUG-139-FIXED.md) | FIXED 2026-06-12 | paint | INTERACTION TEST-108 (вложенные transform) 4.62%: PopTransform эмитировался до дочерних SC |
+| [BUG-140](bugs/BUG-140-FIXED.md) | FIXED 2026-06-13 | paint | INTERACTION TEST-109 (clip-path×transform×radius) 14.10%→4.80% |
+| [BUG-141](bugs/BUG-141-FIXED.md) | FIXED 2026-06-13 | layout | TEST-71 17.83%: flex align-items:center в non-wrap контейнере игнорировал cross size |
+| [BUG-142](bugs/BUG-142-OPEN.md) | OPEN | paint/shadow-dom | :host / ::slotted rendering diverges — TEST-72: 11.24% |
+| [BUG-143](bugs/BUG-143-OPEN.md) | OPEN | layout | masonry-auto-flow placement diverges — TEST-75: 16.97% |
+| [BUG-144](bugs/BUG-144-OPEN.md) | OPEN | paint | CSS filter visual rendering rows 1-3 — TEST-30: 18.81% residual |
+| [BUG-145](bugs/BUG-145-FIXED.md) | FIXED 2026-06-12 | paint | РЕГРЕССИЯ: offscreen filter layer сайзился по bounds → viewport stretch |
+| [BUG-146](bugs/BUG-146-FIXED.md) | FIXED 2026-06-12 | paint | TEST-15 box-shadow регрессия 1.06%→6.58%: blur-FBO без FLIP_Y |
+| [BUG-147](bugs/BUG-147-FIXED.md) | FIXED 2026-06-12 | shell | clippy -D warnings fails: redundant use, dead code, unnecessary cast |
+| [BUG-148](bugs/BUG-148-FIXED.md) | FIXED 2026-06-12 | shell | test hit_page_range_field fails: W-2b добавил строку Scale, row сдвинулся |
+| [BUG-149](bugs/BUG-149-FIXED.md) | FIXED 2026-06-13 | test/snapshot | snapshot_cpu красный: эталоны устарели после PA-5 dashed/dotted бордеров |
+| [BUG-151](bugs/BUG-151-FIXED.md) | FIXED 2026-06-13 | layout | Parent-first-child margin collapse не применяется (CSS 2.1 §8.3.1) |
+| [BUG-152](bugs/BUG-152-FIXED.md) | FIXED 2026-06-13 | layout | anon_style клонирует float_side/clear/position родителя → анонимный бокс флоатится |
+| [BUG-153](bugs/BUG-153-FIXED.md) | FIXED 2026-06-14 | test | CPU-эталоны протухли: регрессия от BUG-151 + 1024-byte сдвиг |
+| [BUG-154](bugs/BUG-154-FIXED.md) | FIXED 2026-06-15 | layout | mix_polar путает индекс hue для LCH/Oklch (hue на индексе 2, не 0) |
+| [BUG-155](bugs/BUG-155-FIXED.md) | FIXED 2026-06-15 | js | perf_observer_lcp_entry: index out of bounds — element_nid=42 за пределами тест-дока |
+| [BUG-156](bugs/BUG-156-FIXED.md) | FIXED 2026-06-15 | paint/layout | ЛОЖНАЯ РЕГРЕССИЯ TEST-27: устаревший lumen.exe в прогоне 06-15 |
+| [BUG-157](bugs/BUG-157-FIXED.md) | FIXED 2026-06-15 | paint | ЛОЖНАЯ РЕГРЕССИЯ TEST-40: та же причина — устаревший lumen.exe |
+| [BUG-158](bugs/BUG-158-FIXED.md) | FIXED 2026-06-15 | layout | карточки новостей lenta.ru налезают друг на друга: `flex:1` (flex-basis:0) item в column-flex схлопывался в height=0 — нет automatic minimum size (§4.5) |
+| [BUG-159](bugs/BUG-159-FIXED.md) | FIXED 2026-06-15 | paint | z-indexed потомок плоского overflow:auto scroll-контейнера сбегал из scroll-слоя (рисовался после PopScrollLayer) → fill_buckets переустанавливает scroll-слой для дочерних SC (кроме fixed/sticky) |
+| [BUG-160](bugs/BUG-160-FIXED.md) | FIXED 2026-06-15 | font | WOFF2-шрифты не декодируются («unexpected end of font data»), спасает только woff-fallback — затрагивает большинство сайтов |
+| [BUG-161](bugs/BUG-161-FIXED.md) | FIXED 2026-06-15 | network | HTTP/2 HPACK «dynamic table size update exceeds negotiated max» → ya.ru не грузится |
+| [BUG-162](bugs/BUG-162-FIXED.md) | FIXED 2026-06-15 | encoding | детектор кодировки выдаёт ibm866 на чистом ASCII (example.com) вместо UTF-8 |
+| [BUG-163](bugs/BUG-163-FIXED.md) | FIXED 2026-06-15 | shell/paint | lazy `<img>` на lenta.ru не рисовались: `LazyImageSlot` всегда красил серый placeholder даже после загрузки картинки + above-the-fold lazy-картинки не дозагружались на initial paint (proximity-check был только в relayout) |
+| [BUG-164](bugs/BUG-164-FIXED.md) | FIXED 2026-06-15 | shell/js | внешние `<script src>` не скачиваются и не исполняются (collect_inline_scripts берёт только инлайны) → JS бандлы (lenta.ru owlBundle.js и т.д.) не работают, первопричина BUG-163 |
+| [BUG-165](bugs/BUG-165-FIXED.md) | FIXED 2026-06-15 | layout | flex `align-content` сдвигал строку, не двигая поддерево item-ов: вложенный контент оставался на месте → items вылезали из контейнеров (TEST-65: 16.40%) |
 
 ---
 
 ## Ограничения Phase 0 (не баги — запланировано позже)
 
-| Фича | Фаза | TEST |
+Тесты, перешедшие в PASS: TEST-27 (direction-rtl), TEST-29 (@container), TEST-35 (grid), TEST-37 (float).
+
+| Фича | Фаза | TEST (последний прогон) |
 |---|---|---|
-| `float: left/right` | Phase 1 | TEST-37: 41.83% |
 | `position:absolute/fixed/relative` | Phase 1 | — |
-| `flexbox` (`display:flex`) | Phase 1 | — |
-| `grid` / `grid-template-areas` | Phase 2 | TEST-35: 83.20% |
 | CSS-анимации / transitions | Phase 2 | — |
 | HiDPI / DPR-масштабирование | Phase 1 | — |
-| `column-count` / `column-width` (multi-column) | Phase 1 | TEST-33: 32.88% |
-| `@container` container queries | Phase 1 | TEST-29: 11.04% |
-| `mask-image` | Phase 1 | TEST-26: 8.82% |
-| `contain:` CSS containment | Phase 1 | TEST-28: 14.81% |
-| Form controls UA styles | Phase 1 | TEST-34: 6.89% |
-| `clip-path: circle/ellipse/polygon` — точная форма | Phase 1 | TEST-31: 20.57% (bbox работает) |
-| `direction: rtl` alignment | Phase 1 | TEST-27: 9.76% |
+| `column-count` / `column-width` (multi-column) | Phase 1 | TEST-33: 16.14% → BUG-083 |
+| `mask-image` | Phase 1 | TEST-26: 20.26% → BUG (Phase 1) |
+| `contain:` CSS containment | Phase 1 | TEST-28: 1.82% → BUG (Phase 1) |
+| Form controls UA styles | Phase 1 | TEST-34: 4.78% → BUG (Phase 1) |
+| `clip-path: circle/ellipse/polygon` — точная форма | Phase 1 | TEST-31: 8.85% (bbox работает) |
+| SVG rendering | Phase 1 | TEST-47: FIXED 2026-06-09 → BUG-089 |
+| SVG `<path>` stroke | Phase 1 | TEST-54: FIXED 2026-06-09 → BUG-096 |
+| SVG stroke advanced | Phase 1 | TEST-60: 11.51% → BUG-102 |
+| `<canvas>` 2D context | Phase 2 | TEST-57: 28.66% → BUG-099 |
+| View Transitions API | Phase 2 | TEST-61: 99.53% → BUG-103 |
+| CSS Scroll Snap | Phase 1 | TEST-62: 63.70% → BUG-104 |
+| CSS Masonry | Phase 2 | TEST-63: 26.13% → BUG-105 |

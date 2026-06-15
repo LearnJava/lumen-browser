@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<!-- CSS Generated Content L3 §3.2 — quotes + content: open-quote/close-quote.
+     The `quotes` property supplies the (open, close) glyph pairs that
+     `content: open-quote` / `close-quote` emit; the nesting depth (which pair is
+     used) is tracked in document order across ::before/::after. Each row pins a
+     different scenario so the quotation marks are the only variable:
+       1. default `auto` curly quotes “ ”
+       2. nested <q> → outer primary “ ”, inner secondary ‘ ’
+       3. custom pairs « » / ‹ ›
+       4. quotes:none → open/close-quote emit nothing
+     Large 40px glyphs keep the marks legible; text antialiasing is not gated. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; overflow: hidden; padding: 40px; box-sizing: border-box; }
+
+  q::before { content: open-quote; }
+  q::after  { content: close-quote; }
+
+  .row { display: block; font-size: 40px; line-height: 1.6; color: #102a43; }
+
+  /* Row 3: custom quotation marks (French guillemets + single angle). */
+  .fr { quotes: "\00ab" "\00bb" "\2039" "\203a"; }
+  /* Row 4: quotes:none suppresses the marks entirely. */
+  .silent { quotes: none; }
+</style>
+</head>
+<body>
+<div class="__f">
+
+  <div class="row"><q>auto quotes</q></div>
+
+  <div class="row"><q>outer <q>inner</q> tail</q></div>
+
+  <div class="row fr"><q>guillemets <q>nested</q></q></div>
+
+  <div class="row silent"><q>no marks</q></div>
+
+</div>
+</body>
+</html>

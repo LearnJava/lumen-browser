@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<!--
+  TEST-74: font-stretch — CSS Fonts L4 §5.2
+  Verifies that font-stretch parses, cascades, and does not break layout.
+  Uses coloured boxes so the test is purely geometric (no glyph rasterization diff).
+-->
+<html>
+<head>
+  <title>Lumen — 74 font-stretch</title>
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f {
+    background: #0d1b2a;
+    width: 1022px; height: 718px;
+    margin: 1px;
+    padding: 24px;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  .row {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  .box {
+    width: 120px;
+    height: 56px;
+    border-radius: 5px;
+  }
+
+  /* keyword values */
+  .ultra-condensed { background: #e63946; font-stretch: ultra-condensed; }
+  .extra-condensed { background: #f4a261; font-stretch: extra-condensed; }
+  .condensed       { background: #2a9d8f; font-stretch: condensed; }
+  .semi-condensed  { background: #457b9d; font-stretch: semi-condensed; }
+  .normal-stretch  { background: #6d6875; font-stretch: normal; }
+  .semi-expanded   { background: #b5838d; font-stretch: semi-expanded; }
+  .expanded        { background: #e9c46a; font-stretch: expanded; }
+  .extra-expanded  { background: #52b788; font-stretch: extra-expanded; }
+  .ultra-expanded  { background: #9d4edd; font-stretch: ultra-expanded; }
+
+  /* percentage form */
+  .pct50  { background: #e63946; font-stretch: 50%; }
+  .pct75  { background: #f4a261; font-stretch: 75%; }
+  .pct100 { background: #2a9d8f; font-stretch: 100%; }
+  .pct125 { background: #457b9d; font-stretch: 125%; }
+  .pct150 { background: #6d6875; font-stretch: 150%; }
+  .pct200 { background: #9d4edd; font-stretch: 200%; }
+
+  /* inheritance: parent condenses, child overrides to expanded */
+  .parent-stretch {
+    font-stretch: condensed;
+    display: flex;
+    gap: 10px;
+  }
+  .child-inherit  { background: #e76f51; width: 120px; height: 56px; border-radius: 5px; }
+  .child-override { background: #264653; width: 120px; height: 56px; border-radius: 5px; font-stretch: expanded; }
+
+  /* font-stretch alongside font-variation-settings: wdth must not be doubled */
+  .no-double {
+    background: #118ab2;
+    width: 120px; height: 56px; border-radius: 5px;
+    font-stretch: condensed;
+    font-variation-settings: "wdth" 80;
+  }
+</style>
+</head>
+<body>
+<div class="__f">
+  <!-- row 1: keyword values ultra-condensed → condensed -->
+  <div class="row">
+    <div class="box ultra-condensed"></div>
+    <div class="box extra-condensed"></div>
+    <div class="box condensed"></div>
+    <div class="box semi-condensed"></div>
+    <div class="box normal-stretch"></div>
+    <div class="box semi-expanded"></div>
+    <div class="box expanded"></div>
+    <div class="box extra-expanded"></div>
+  </div>
+
+  <!-- row 2: ultra-expanded + percentage forms -->
+  <div class="row">
+    <div class="box ultra-expanded"></div>
+    <div class="box pct50"></div>
+    <div class="box pct75"></div>
+    <div class="box pct100"></div>
+    <div class="box pct125"></div>
+    <div class="box pct150"></div>
+    <div class="box pct200"></div>
+  </div>
+
+  <!-- row 3: inheritance + no-double -->
+  <div class="parent-stretch">
+    <div class="child-inherit"></div>
+    <div class="child-override"></div>
+    <div class="no-double"></div>
+  </div>
+</div>
+</body>
+</html>

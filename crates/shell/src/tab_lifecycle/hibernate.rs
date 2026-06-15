@@ -66,41 +66,64 @@ pub(crate) fn restore_js_context(
     doc: Document,
     event_sink: Arc<dyn EventSink>,
     ls_storage: &mut HashMap<String, Arc<Mutex<lumen_core::WebStorage>>>,
-    idb_backend: &Arc<Mutex<dyn lumen_core::ext::StorageBackend>>,
+    idb_dir: Option<&std::path::Path>,
     sw_backend: &Arc<Mutex<dyn lumen_core::ext::StorageBackend>>,
     cookie_banner_dismiss: bool,
     deterministic: bool,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> (Arc<Mutex<Document>>, Option<Box<dyn PersistentJs>>) {
     let base = resource_base_from_url(url);
 
+    // BUG-164: re-collect classic + module scripts in document order and
+    // re-fetch external `<script src>` bodies, so a restored tab re-runs the
+    // same scripts a fresh load would (mirrors `parse_and_layout`).
+    let (classic_scripts, module_scripts) = {
+        let mut classic_items = Vec::new();
+        let mut module_items = Vec::new();
+        crate::collect_scripts_ordered(&doc, doc.root(), &mut classic_items, &mut module_items);
+        (
+            crate::resolve_script_sources(&classic_items, &base, &event_sink, cookie_jar.clone()),
+            crate::resolve_script_sources(&module_items, &base, &event_sink, cookie_jar.clone()),
+        )
+    };
+
     // Per-origin persistence + network providers, identical to a fresh load.
     let ls_store = crate::ls_store_for_base(&base, ls_storage);
-    let idb = crate::idb_store_for_base(&base, idb_backend);
+    let idb = crate::idb_store_for_base(&base, idb_dir);
     let sw = crate::sw_store_for_base(&base, sw_backend);
-    let (fetch_provider, ws_provider) = match &base {
+    let (fetch_provider, ws_provider, sse_provider) = match &base {
         ResourceBase::Url(_) => {
-            let client = base.http_client_for_subresource(event_sink);
+            let client = base.http_client_for_subresource(event_sink, cookie_jar);
             let arc_client = Arc::new(client);
             let fp: Option<Arc<dyn lumen_core::ext::JsFetchProvider>> =
                 Some(Arc::clone(&arc_client) as Arc<dyn lumen_core::ext::JsFetchProvider>);
             let wp: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>> =
-                Some(arc_client as Arc<dyn lumen_core::ext::JsWebSocketProvider>);
-            (fp, wp)
+                Some(Arc::clone(&arc_client) as Arc<dyn lumen_core::ext::JsWebSocketProvider>);
+            let sp: Option<Arc<dyn lumen_core::ext::JsSseProvider>> =
+                Some(arc_client as Arc<dyn lumen_core::ext::JsSseProvider>);
+            (fp, wp, sp)
         }
-        ResourceBase::File(_) => (None, None),
+        ResourceBase::File(_) => (None, None, None),
     };
 
+    let ext_registry = crate::extensions::ExtensionRegistry::load();
+    let ext_scripts = ext_registry.content_scripts_for_url(url);
     let (doc_arc, _nav, js_ctx) = crate::run_scripts_with_dom(
         doc,
         lumen_core::SandboxFlags::empty(),
         url,
         fetch_provider,
         ws_provider,
+        sse_provider,
         ls_store,
         idb,
         sw,
         cookie_banner_dismiss,
         deterministic,
+        false, // cross_origin_isolated: not preserved across hibernation
+        &ext_scripts,
+        classic_scripts,
+        module_scripts,
     );
 
     // HTML LS §8.2.3: signal DOMContentLoaded so handlers attached during

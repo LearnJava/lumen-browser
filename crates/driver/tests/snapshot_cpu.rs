@@ -131,6 +131,7 @@ const PAGES: &[&str] = &[
     "47-svg-basic",
     "55-text-rendering",
     "56-mix-blend-mode",
+    "57-canvas-2d",
     "15-box-shadow",
     "52-text-shadow-blur",
     "30-css-filter",
@@ -163,6 +164,51 @@ const PAGES: &[&str] = &[
     "53-background-origin",
     // б-20: SVG path stroke — open/closed stroked paths via tessellate_stroke → DrawSvgPath
     "54-svg-path-stroke",
+    // б-21: CSS Pseudo-elements L4 §5.3-5.4 — ::first-letter / ::first-line
+    "58-first-letter-line",
+    // б-22: CSS Images L4 §5/§4 — image-set() + cross-fade()
+    "59-image-set-cross-fade",
+    // Interaction layer (series 100+): pairwise property combinations whose unit
+    // tests already pass individually. A regression here with green unit pages
+    // points at the interaction (clip-of-transformed-layer, stacking-context
+    // atomicity, matrix composition, …), not at the property itself.
+    // Deps map lives in graphic_tests/run.py (DEPS) — same ids.
+    "100-transform-overflow",
+    "101-radius-overflow",
+    "102-opacity-stacking",
+    "103-filter-transform",
+    "104-mask-gradient-radius",
+    "105-float-clear-margin",
+    "106-transform-zindex",
+    "107-shadow-radius-overflow",
+    "108-nested-transforms",
+    "109-clippath-transform",
+    // CSS Box Sizing L4 §5 — contain-intrinsic-size: size-contained boxes take the
+    // declared placeholder size, ignoring an oversized child. Pure FillRect geometry;
+    // a GUI-independent gate for geometry the Edge/gdigrab pipeline can't capture
+    // headlessly (the gdigrab capture is blank without a foreground window).
+    "114-contain-intrinsic-size",
+    // CSS Images L4 §3.1 — gradient color-interpolation-method (`in <space>`).
+    // Dense gradient stops (color-mix maths) rendered as linear gradients; a
+    // GUI-independent gate since the Edge/gdigrab pipeline can't capture
+    // headlessly. Polar oklch/lch excluded pending BUG-154.
+    "116-gradient-interpolation",
+    // CSS Generated Content L3 §3.2 — quotes + content open-quote/close-quote.
+    // Nesting depth computed in document order via the counters pre-pass.
+    "117-quotes",
+    // Media Queries L4 §5.3-5.6 — hover/any-hover/pointer/any-pointer. Desktop
+    // (mouse) context: matched swatches green, no-match swatches red. A GUI-
+    // independent gate; run.py's Edge pipeline can't capture interaction MQs.
+    "118-media-hover-pointer",
+    // CSS Fill & Stroke L3 §6 / SVG 2 §13.7 — paint-order. Thick-stroked <path>
+    // squares: `normal` (fill then stroke on top) vs `paint-order: stroke` (fill
+    // over stroke, hiding its inner half). A GUI-independent gate for the
+    // fill/stroke emission order in emit_svg_shape.
+    "119-paint-order",
+    // Kitchen-sink final page: ~80 objects combining every implemented property.
+    // Manual-only in the Edge pipeline (no run.py entry); here it serves as a
+    // broad regression baseline for the CPU path.
+    "1000000-final",
 ];
 
 /// Workspace root (two parents up from the driver crate manifest).

@@ -31,8 +31,8 @@ use lumen_font::{
     Bitmap, Cmap, Font, Head, Hhea, Hmtx, Outline, Rasterizer, SystemFontIndex,
     maybe_decode_font,
 };
-use lumen_image::{Image, PixelFormat};
-use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStyle, FontWeight, GradientStop, ImageRendering, Length, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent};
+use lumen_image::{correct_rgba_pixels, Image, PixelFormat};
+use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStyle, FontWeight, GradientStop, ImageRendering, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent};
 use winit::window::Window;
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
@@ -1575,7 +1575,19 @@ impl Renderer {
         // ScaleFactorChanged-event-е через `set_scale_factor`.
         let scale_factor = window.scale_factor();
 
-        let instance = wgpu::Instance::default();
+        // BUG-057: on Windows the Vulkan backend causes a double-panic on the first
+        // rendered frame (encoder invalidated, then Surface drop races SurfaceTexture).
+        // DX12 does not exhibit this issue. Default to DX12 on Windows; allow the
+        // WGPU_BACKEND env-var to override for debugging / fallback.
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: if cfg!(target_os = "windows") {
+                wgpu::Backends::DX12
+            } else {
+                wgpu::Backends::PRIMARY
+            },
+            ..Default::default()
+        }
+        .with_env());
         let surface = instance.create_surface(window)?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -1646,7 +1658,16 @@ impl Renderer {
         width: u32,
         height: u32,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let instance = wgpu::Instance::default();
+        // Mirror the windowed-mode backend choice (BUG-057).
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: if cfg!(target_os = "windows") {
+                wgpu::Backends::DX12
+            } else {
+                wgpu::Backends::PRIMARY
+            },
+            ..Default::default()
+        }
+        .with_env());
         // No surface needed — request adapter without compatible_surface constraint.
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -1913,7 +1934,13 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -2378,7 +2405,13 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -2483,7 +2516,13 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -2568,7 +2607,13 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -2623,7 +2668,13 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -2648,7 +2699,13 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -2724,7 +2781,13 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -2806,7 +2869,13 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -2839,12 +2908,20 @@ impl Renderer {
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
+                    // Write only RGB — preserve destination alpha so the parent
+                    // layer's opacity isn't reduced by blur-edge transparency.
+                    write_mask: wgpu::ColorWrites::COLOR,
                 })],
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -2908,7 +2985,13 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -3089,9 +3172,13 @@ impl Renderer {
             let bytes = match maybe_decode_font(&raw) {
                 Ok(Some(decoded)) => decoded,
                 Ok(None) => raw,
-                Err(_) => continue,
+                Err(e) => {
+                    eprintln!("[font] WOFF decode failed {}: {e}", rec.path.display());
+                    continue;
+                }
             };
-            if Font::parse(&bytes).is_err() {
+            if let Err(e) = Font::parse(&bytes) {
+                eprintln!("[font] parse failed {}: {e}", rec.path.display());
                 continue;
             }
             let id = self.faces.len();
@@ -3136,7 +3223,12 @@ impl Renderer {
         // Загружаем оригинал в GPU (без resize — используется только когда
         // layout-size == intrinsic-size, т.е. для object-fit:none / scale-down
         // на маленьких картинках).
-        let rgba = convert_to_rgba(image);
+        let mut rgba = convert_to_rgba(image);
+        // Apply ICC colour correction before GPU upload so wide-gamut (Display P3,
+        // Rec2020) photos render correctly on sRGB displays.
+        if let Some(ref profile) = image.icc_profile {
+            correct_rgba_pixels(&mut rgba, profile);
+        }
         let gi = self.make_gpu_image_entry(&rgba, image.width, image.height);
         self.images.insert(src, gi);
         Ok(())
@@ -3189,7 +3281,11 @@ impl Renderer {
                 } else {
                     resize_bilinear(&raw, tw, th)
                 };
-                let rgba = convert_to_rgba(&resized);
+                let mut rgba = convert_to_rgba(&resized);
+                // ICC profile is on the original `raw`; resize_* drops it.
+                if let Some(ref profile) = raw.icc_profile {
+                    correct_rgba_pixels(&mut rgba, profile);
+                }
                 let gi = self.make_gpu_image_entry(&rgba, tw, th);
                 self.images.insert(gpu_key, gi);
             }
@@ -3407,6 +3503,13 @@ impl Renderer {
         }
     }
 
+    /// Forwards a memory-pressure signal to the glyph atlas so it can evict
+    /// cached entries (ADR-008 §10H).  Medium: evict ~50% LRU glyphs.
+    /// High: clear entirely.  Wire into the shell's `MemoryPressureSource` poll loop.
+    pub fn atlas_on_memory_pressure(&mut self, level: lumen_core::ext::MemoryPressureLevel) {
+        self.atlas.on_memory_pressure(level);
+    }
+
     /// Получить мutable ссылку для прямого управления кэшем (advanced usage).
     pub fn layer_cache_mut(&mut self) -> &mut crate::layer_cache::LayerCache {
         &mut self.layer_cache
@@ -3436,6 +3539,30 @@ impl Renderer {
             height: layer.height,
         };
         self.texture_pool.release(pooled);
+    }
+
+    /// Promote a node to its own GPU layer for `will-change: transform/opacity/filter`.
+    ///
+    /// Creates a `LayerCache` entry for the node so that subsequent animation ticks
+    /// can update only the layer's transform matrix without triggering a full relayout.
+    /// // CSS: will-change — P4 wires ComputedStyle.will_change to call this after relayout.
+    pub fn promote_layer(
+        &mut self,
+        node_id: u32,
+        width: u32,
+        height: u32,
+    ) -> crate::layer_cache::LayerKey {
+        self.layer_cache.promote_layer(node_id, width, height)
+    }
+
+    /// Returns `true` if the given node has a promoted GPU layer.
+    pub fn is_layer_promoted(&self, node_id: u32) -> bool {
+        self.layer_cache.is_layer_promoted(node_id)
+    }
+
+    /// Remove the promoted GPU layer for a node, freeing its cache entry.
+    pub fn demote_layer(&mut self, node_id: u32) {
+        self.layer_cache.demote_layer(node_id);
     }
 
     /// Очистить весь layer cache (полная эвикция) и очистить texture pool.
@@ -3745,8 +3872,12 @@ impl Renderer {
         // parsed_faces займёт &self.faces. Scroll offset не влияет на SIZE
         // (только на position), поэтому используем rect напрямую.
         for cmd in content.iter().chain(overlay.iter()) {
-            if let DisplayCommand::DrawImage { rect, src, object_fit, object_position, .. } = cmd {
-                self.ensure_image_gpu_key(src, *rect, *object_fit, *object_position);
+            match cmd {
+                DisplayCommand::DrawImage { rect, src, object_fit, object_position, .. }
+                | DisplayCommand::LazyImageSlot { rect, src, object_fit, object_position, .. } => {
+                    self.ensure_image_gpu_key(src, *rect, *object_fit, *object_position);
+                }
+                _ => {}
             }
         }
 
@@ -4161,6 +4292,7 @@ impl Renderer {
                     font_style: _,
                     font_variation_axes,
                     tab_size,
+                    highlight_name: _,
                 } => {
                     let primary_face_id = text_face_iter.next().unwrap_or(0);
                     if parsed_faces
@@ -4380,6 +4512,53 @@ impl Renderer {
                         }
                     }
                 }
+                DisplayCommand::LazyImageSlot { rect, src, object_fit, object_position, .. } => {
+                    // A lazy `<img>` stays a LazyImageSlot even after the shell
+                    // fetches it (the `loading="lazy"` attribute never clears).
+                    // Draw the registered image if present, else the grey
+                    // placeholder — same behaviour as DrawImage. (BUG-163)
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                        continue;
+                    }
+                    let alpha = 1.0_f32;
+                    let scrolled = translate_rect(*rect, dx, dy);
+                    let fit = *object_fit;
+                    let pos = *object_position;
+                    let gpu_key = self.compute_image_gpu_key(src, scrolled, fit, pos);
+                    if let Some(gpu) = self.images.get(&gpu_key) {
+                        if let Some((visible, uv_min, uv_max)) = fit_image_quad(
+                            scrolled,
+                            (gpu.width, gpu.height),
+                            fit,
+                            pos,
+                        ) {
+                            let v_start = image_vertices.len() as u32;
+                            push_image_quad(&mut image_vertices, visible, uv_min, uv_max, alpha);
+                            if let Some(m) = transform_stack.last() {
+                                apply_affine_to_verts(&mut image_vertices[v_start as usize..], m);
+                            }
+                            let v_count = image_vertices.len() as u32 - v_start;
+                            let image_batch_idx = image_bind_groups.len() as u32;
+                            image_bind_groups.push(gpu.bind_group_linear.clone());
+                            draw_ops.push(DrawOp::Image { v_start, v_count, image_batch_idx });
+                        }
+                        continue;
+                    }
+                    // Not yet fetched — grey placeholder.
+                    let v_start = fill_vertices.len() as u32;
+                    push_fill_quad(
+                        &mut fill_vertices,
+                        scrolled,
+                        apply_alpha_to_color([0.85, 0.85, 0.85, 1.0], 1.0),
+                    );
+                    if let Some(m) = transform_stack.last() {
+                        apply_affine_to_verts(&mut fill_vertices[v_start as usize..], m);
+                    }
+                    let v_count = fill_vertices.len() as u32 - v_start;
+                    if v_count > 0 {
+                        draw_ops.push(DrawOp::Fill { v_start, v_count });
+                    }
+                }
                 // Clip-stack управление. PushClipRect добавляет пересечение
                 // с топом (CSS Masking L1 §3 — clip-rect = intersection всех
                 // ancestor clip-region-ов). PopClip снимает топ. Scissor для
@@ -4387,6 +4566,26 @@ impl Renderer {
                 // sync_scissor_to_stack.
                 DisplayCommand::PushClipRect { rect } => {
                     let scrolled = translate_rect(*rect, dx, dy);
+                    let new = match clip_stack.last() {
+                        Some(prev) => intersect_rects(*prev, scrolled),
+                        None => scrolled,
+                    };
+                    clip_stack.push(new);
+                }
+                DisplayCommand::PushClipRoundedRect { rect, radii: _ } => {
+                    let scrolled = translate_rect(*rect, dx, dy);
+                    let new = match clip_stack.last() {
+                        Some(prev) => intersect_rects(*prev, scrolled),
+                        None => scrolled,
+                    };
+                    clip_stack.push(new);
+                }
+                // BUG-140: wgpu-fallback клиппит shape-клип bounding box-ом
+                // (scissor не умеет произвольные формы; точная форма — в
+                // femtovg/cpu_raster путях). Push обязателен для баланса
+                // пар с общим PopClip.
+                DisplayCommand::PushClipPath { shape } => {
+                    let scrolled = translate_rect(shape.bounding_rect(), dx, dy);
                     let new = match clip_stack.last() {
                         Some(prev) => intersect_rects(*prev, scrolled),
                         None => scrolled,
@@ -4883,7 +5082,7 @@ impl Renderer {
                 }
                 // CSS Filter Effects L1 — PushFilter opens an offscreen level;
                 // PopFilter composites it onto the parent with filter applied.
-                DisplayCommand::PushFilter { filters } => {
+                DisplayCommand::PushFilter { filters, bounds: _ } => {
                     flush_batch!();
                     filter_stack.push(filters.clone());
                     current_level += 1;
@@ -5025,19 +5224,14 @@ impl Renderer {
                     }));
                     current_level -= 1;
                 }
-                // Scrollbar track (light) + thumb (dark): two fill quads drawn
-                // with the current clip/transform stack (parent's, NOT scroll layer's).
-                // CSS Scrollbars L1 §3 — `scrollbar-width` / `scrollbar-color` P4 wires.
-                DisplayCommand::DrawScrollbar { track_rect, thumb_rect, .. } => {
+                // Scrollbar track + thumb: two fill quads drawn with the current
+                // clip/transform stack (parent's, NOT scroll layer's).
+                // Colors from `scrollbar-color` (CSS Scrollbars L1 §3).
+                DisplayCommand::DrawScrollbar { track_rect, thumb_rect, track_color, thumb_color, .. } => {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
-                    // Track: very light translucent background.
-                    const TRACK_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 0.08];
-                    // Thumb: semi-transparent dark pill.
-                    const THUMB_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 0.38];
-
-                    for (rect, color) in &[(*track_rect, TRACK_COLOR), (*thumb_rect, THUMB_COLOR)] {
+                    for (rect, color) in &[(*track_rect, *track_color), (*thumb_rect, *thumb_color)] {
                         let v_start = fill_vertices.len() as u32;
                         push_fill_quad(
                             &mut fill_vertices,
@@ -5512,27 +5706,29 @@ impl Renderer {
                         }
                         LoadOpChoice::Load => wgpu::LoadOp::Load,
                     };
-                    // Depth attachment only for the frame surface (level 0).
-                    // Off-screen layers don't participate in 3D depth sorting.
-                    let depth_attachment = if batch.target_level == 0 {
-                        self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
-                            view: dv,
-                            depth_ops: Some(wgpu::Operations {
-                                // Clear depth at frame start (ClearWhite/ClearTransparent);
-                                // load otherwise to accumulate depth across same-frame batches
-                                // so 3D-sorted elements preserve relative depth ordering.
-                                load: if matches!(batch.load_op, LoadOpChoice::Load) {
-                                    wgpu::LoadOp::Load
-                                } else {
-                                    wgpu::LoadOp::Clear(1.0)
-                                },
-                                store: wgpu::StoreOp::Store,
-                            }),
-                            stencil_ops: None,
-                        })
-                    } else {
-                        None
-                    };
+                    // All render passes must supply a depth attachment because the
+                    // fill/rrect/circle pipelines use depth_write_enabled:true.
+                    // wgpu validation requires: pipeline has depth → pass has depth attachment.
+                    // Off-screen opacity layers don't need depth sorting, so they always
+                    // clear to 1.0 (far plane) — correct result; they are composited by alpha.
+                    let depth_attachment = self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                        view: dv,
+                        depth_ops: Some(wgpu::Operations {
+                            // Level 0: clear at frame start (ClearWhite/ClearTransparent),
+                            //          load to accumulate depth across same-frame batches.
+                            // Level > 0: always clear to 1.0 so depth sorting within the
+                            //            offscreen layer is independent of the parent frame.
+                            load: if batch.target_level > 0 {
+                                wgpu::LoadOp::Clear(1.0)
+                            } else if matches!(batch.load_op, LoadOpChoice::Load) {
+                                wgpu::LoadOp::Load
+                            } else {
+                                wgpu::LoadOp::Clear(1.0)
+                            },
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    });
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("draw-pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -5609,7 +5805,11 @@ impl Renderer {
                                         store: wgpu::StoreOp::Store,
                                     },
                                 })],
-                                depth_stencil_attachment: None,
+                                depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
@@ -5636,7 +5836,11 @@ impl Renderer {
                                         store: wgpu::StoreOp::Store,
                                     },
                                 })],
-                                depth_stencil_attachment: None,
+                                depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
@@ -5733,7 +5937,11 @@ impl Renderer {
                                         store: wgpu::StoreOp::Store,
                                     },
                                 })],
-                                depth_stencil_attachment: None,
+                                depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
@@ -5783,7 +5991,11 @@ impl Renderer {
                                         store: wgpu::StoreOp::Store,
                                     },
                                 })],
-                                depth_stencil_attachment: None,
+                                depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
@@ -5822,7 +6034,11 @@ impl Renderer {
                                     store: wgpu::StoreOp::Store,
                                 },
                             })],
-                            depth_stencil_attachment: None,
+                            depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                             timestamp_writes: None,
                             occlusion_query_set: None,
                         });
@@ -5874,7 +6090,11 @@ impl Renderer {
                                     depth_slice: None,
                                     ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                                 })],
-                                depth_stencil_attachment: None,
+                                depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
@@ -5907,7 +6127,11 @@ impl Renderer {
                                     depth_slice: None,
                                     ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                                 })],
-                                depth_stencil_attachment: None,
+                                depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                                 timestamp_writes: None,
                                 occlusion_query_set: None,
                             });
@@ -5959,7 +6183,11 @@ impl Renderer {
                                 depth_slice: None,
                                 ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
                             })],
-                            depth_stencil_attachment: None,
+                            depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                             timestamp_writes: None,
                             occlusion_query_set: None,
                         });
@@ -5977,13 +6205,19 @@ impl Renderer {
                 //   3. blit scratch → parent at bounds with optional color filter (REPLACE blend)
                 //   4. composite element layer → parent (ALPHA_BLENDING, same as FilterComposite)
                 //
-                // Phase 0 limitation: skipped when from_level <= 1 (parent = surface texture,
-                // which lacks TEXTURE_BINDING and cannot be used as a copy source).
+                // When from_level < 2 (parent = surface texture, lacks TEXTURE_BINDING),
+                // steps 1-3 are skipped (can't copy from surface), but step 4 still runs so
+                // the element content is visible (no silent drop).
                 RenderPlanItem::BackdropFilterComposite(plan) => {
-                    // Need from_level >= 2: parent_idx = from_level - 2 indexes layer_textures.
-                    if plan.from_level < 2 { continue; }
                     let Some(cvb) = &comp_vbuf else { continue };
+                    // from_level < 2 means parent is the surface — backdrop blur/blit impossible.
+                    let skip_backdrop = plan.from_level < 2;
 
+                    // Ordinals evicted by `store()` whose textures must be freed once the
+                    // current element's passes (which borrow the cache map) have ended.
+                    let mut evicted_ordinals: Vec<u32> = Vec::new();
+
+                    if !skip_backdrop {
                     let parent_idx = plan.from_level - 2;
                     let parent_w = self.layer_textures[parent_idx].width;
                     let parent_h = self.layer_textures[parent_idx].height;
@@ -6009,9 +6243,6 @@ impl Renderer {
                         _ => None,
                     });
 
-                    // Ordinals evicted by `store()` whose textures must be freed once the
-                    // current element's passes (which borrow the cache map) have ended.
-                    let mut evicted_ordinals: Vec<u32> = Vec::new();
                     if !cache_hit {
                         if let Some(sigma) = blur_sigma {
                             // Step 1: copy parent layer → scratch (blur H-pass input).
@@ -6047,7 +6278,11 @@ impl Renderer {
                                         depth_slice: None,
                                         ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                                     })],
-                                    depth_stencil_attachment: None,
+                                    depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                                     timestamp_writes: None,
                                     occlusion_query_set: None,
                                 });
@@ -6080,7 +6315,11 @@ impl Renderer {
                                         depth_slice: None,
                                         ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                                     })],
-                                    depth_stencil_attachment: None,
+                                    depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                                     timestamp_writes: None,
                                     occlusion_query_set: None,
                                 });
@@ -6109,9 +6348,10 @@ impl Renderer {
                         }
                     }
 
-                    // Step 3: blit cache texture → parent at element bounds (REPLACE blend).
+                    // Step 3: blit cache texture → parent at element bounds.
+                    // Uses backdrop_blit_pipeline (REPLACE RGB, preserve dst alpha) to
+                    // write the filtered backdrop into the parent layer at element bounds.
                     // Applies color filters (count > 0) or passthrough (count = 0).
-                    // Bounded quad ensures only the element's bounds region is overwritten.
                     let mut bd_entries = [FilterEntryCpu { kind: 0, amount: 0.0, _p0: 0, _p1: 0 }; 8];
                     let mut bd_color_count = 0u32;
                     for f in &plan.filters {
@@ -6126,8 +6366,7 @@ impl Renderer {
                     };
                     let bd_fp_buf = make_filter_param_buf(&self.device, &bd_filter_params);
                     let parent_dst_view = &self.layer_textures[parent_idx].view;
-                    // Source is the cache texture — holds the blurred (or copied) backdrop,
-                    // whether freshly produced this frame or reused from a previous frame.
+                    // Source is the cache texture — holds the blurred (or copied) backdrop.
                     let bd_src_view = &self.backdrop_cache_textures[&plan.ordinal].view;
                     let bd_blit_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some("backdrop-blit-bg"),
@@ -6148,7 +6387,11 @@ impl Renderer {
                                 depth_slice: None,
                                 ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
                             })],
-                            depth_stencil_attachment: None,
+                            depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                             timestamp_writes: None,
                             occlusion_query_set: None,
                         });
@@ -6158,9 +6401,20 @@ impl Renderer {
                         pass.draw(plan.bounds_v_start..plan.bounds_v_start + 6, 0..1);
                     }
 
+                    } // end if !skip_backdrop
+
                     // Step 4: composite element layer → parent (ALPHA_BLENDING).
-                    // This is identical to FilterComposite's color-filter pass but with
-                    // count=0 (no element-level filter here; PushFilter handles that separately).
+                    // Runs even when skip_backdrop (from_level < 2) so element content
+                    // is always visible; only the filtered backdrop blit is skipped.
+                    let parent_dst_view4 = if plan.from_level >= 2 {
+                        &self.layer_textures[plan.from_level - 2].view as *const _
+                    } else {
+                        &frame_view as *const _
+                    };
+                    // SAFETY: we hold &mut self for the encoder lifetime and frame_view
+                    // is valid for the duration of this frame. layer_textures is not
+                    // mutated after this point within the current plan item.
+                    let parent_dst_view4: &wgpu::TextureView = unsafe { &*parent_dst_view4 };
                     let elem_filter_params = FilterParamsCpu {
                         count: 0, _pad0: 0, _pad1: 0, _pad2: 0,
                         entries: [FilterEntryCpu { kind: 0, amount: 0.0, _p0: 0, _p1: 0 }; 8],
@@ -6181,12 +6435,16 @@ impl Renderer {
                         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("backdrop-elem-composite-pass"),
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: parent_dst_view,
+                                view: parent_dst_view4,
                                 resolve_target: None,
                                 depth_slice: None,
                                 ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
                             })],
-                            depth_stencil_attachment: None,
+                            depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                             timestamp_writes: None,
                             occlusion_query_set: None,
                         });
@@ -6273,7 +6531,11 @@ impl Renderer {
                                     store: wgpu::StoreOp::Store,
                                 },
                             })],
-                            depth_stencil_attachment: None,
+                            depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
                             timestamp_writes: None,
                             occlusion_query_set: None,
                         });
@@ -6313,6 +6575,49 @@ impl Renderer {
         scroll_y: f32,
     ) -> Result<lumen_image::Image, Box<dyn std::error::Error>> {
         crate::cpu_raster::rasterize_cpu(width, height, commands, scroll_x, scroll_y)
+    }
+
+    /// Render a single `tile_size × tile_size` tile at tile coordinates
+    /// `(tile_x, tile_y)` using the CPU rasterizer.
+    ///
+    /// The display list is culled to only commands that intersect the tile
+    /// region before rasterization. Scroll offsets are applied so that the
+    /// rendered pixels match what the user would see at that scroll position.
+    ///
+    /// Tile coordinates are in tile space: CSS pixel `p` is in tile
+    /// `(p / tile_size).floor()`. The returned `Image` has dimensions
+    /// `tile_size × tile_size` (RGBA8).
+    ///
+    /// # Errors
+    /// Propagates errors from the CPU rasterizer (e.g., invalid display commands).
+    // BUG-066: guard was missing; render_tile uses cpu_raster which requires cpu-render.
+    #[cfg(feature = "cpu-render")]
+    pub fn render_tile(
+        content: &[crate::DisplayCommand],
+        overlay: &[crate::DisplayCommand],
+        scroll_x: f32,
+        scroll_y: f32,
+        tile_x: i32,
+        tile_y: i32,
+        tile_size: u32,
+    ) -> Result<lumen_image::Image, Box<dyn std::error::Error>> {
+        let ts = tile_size as f32;
+
+        // Cull both lanes to commands that touch this tile.
+        let culled_content = crate::display_list::cull_display_list(content, tile_x, tile_y, ts);
+        let culled_overlay = crate::display_list::cull_display_list(overlay, tile_x, tile_y, ts);
+
+        // Merge both lanes (overlay on top).
+        let mut all = culled_content;
+        all.extend(culled_overlay);
+
+        // Translate so the tile origin is at (0,0) in the rasterised image.
+        // The scroll offset shifts content upward (subtract scroll) so that
+        // what is visible at scroll_y appears at y=0.
+        let offset_x = scroll_x + tile_x as f32 * ts;
+        let offset_y = scroll_y + tile_y as f32 * ts;
+
+        crate::cpu_raster::rasterize_cpu(tile_size, tile_size, &all, offset_x, offset_y)
     }
 
     // Note: render_to_image for GPU path has different signature:
@@ -6746,64 +7051,22 @@ fn push_grad_quad(out: &mut Vec<GradVertex>, rect: Rect) {
 
 /// CSS Images L3 §3.3 — resolve `GradientStop` positions to normalized [0,1].
 ///
-/// CSS spec: if first/last stop position is unspecified, default to 0/100%.
-/// Runs of unspecified positions between explicit ones are evenly distributed.
-/// `line_len`: pixel length of gradient line (for `Length::Px` stops).
+/// Thin wrapper over the shared [`crate::gradient_math::resolve_stop_positions`]
+/// (single source of truth for all backends, PA-1) converting colours to the
+/// `[f32; 4]` straight-RGBA layout the GPU vertex buffers use.
 fn resolve_gradient_stops(stops: &[GradientStop], line_len: f32) -> Vec<(f32, [f32; 4])> {
-    if stops.is_empty() {
-        return vec![];
-    }
-    let n = stops.len();
-    let mut positions: Vec<Option<f32>> = stops
-        .iter()
-        .map(|s| {
-            s.position.as_ref().map(|l| match l {
-                Length::Percent(p) => p / 100.0,
-                Length::Px(v) if line_len > 0.0 => v / line_len,
-                _ => 0.0,
-            })
-        })
-        .collect();
-    if positions[0].is_none() {
-        positions[0] = Some(0.0);
-    }
-    if positions[n - 1].is_none() {
-        positions[n - 1] = Some(1.0);
-    }
-    // Distribute runs of None between two explicit positions.
-    let mut i = 0;
-    while i < n {
-        if positions[i].is_some() {
-            i += 1;
-            continue;
-        }
-        let lo_i = i - 1;
-        let lo_pos = positions[lo_i].unwrap_or(0.0);
-        let mut hi_i = i + 1;
-        while hi_i < n && positions[hi_i].is_none() {
-            hi_i += 1;
-        }
-        let hi_pos = positions[hi_i.min(n - 1)].unwrap_or(1.0);
-        let gap = (hi_i - lo_i) as f32;
-        for (offset, pos) in positions[i..hi_i].iter_mut().enumerate() {
-            let t = (i + offset - lo_i) as f32 / gap;
-            *pos = Some(lo_pos + (hi_pos - lo_pos) * t);
-        }
-        i = hi_i;
-    }
-    stops
-        .iter()
-        .enumerate()
-        .map(|(i, s)| {
-            let pos = positions[i].unwrap_or(0.0);
-            let c = s.color;
-            let col = [
-                c.r as f32 / 255.0,
-                c.g as f32 / 255.0,
-                c.b as f32 / 255.0,
-                c.a as f32 / 255.0,
-            ];
-            (pos, col)
+    crate::gradient_math::resolve_stop_positions(stops, line_len)
+        .into_iter()
+        .map(|(pos, c)| {
+            (
+                pos,
+                [
+                    c.r as f32 / 255.0,
+                    c.g as f32 / 255.0,
+                    c.b as f32 / 255.0,
+                    c.a as f32 / 255.0,
+                ],
+            )
         })
         .collect()
 }
@@ -7316,43 +7579,8 @@ pub(crate) fn apply_alpha_to_color(color: [f32; 4], alpha: f32) -> [f32; 4] {
     [color[0], color[1], color[2], color[3] * alpha]
 }
 
-/// Разбивает полосу длиной `total_length` на серию dash-сегментов
-/// `(offset, length)` по pattern-у `(dash_len, gap_len)`. Совпадает с
-/// Chrome/Edge (Skia): `n = floor(total / period)`, `leading = gap / 2`.
-///
-/// Возвращает empty при degenerate-входе: `total_length <= 0`,
-/// `dash_len <= 0`. При `gap_len <= 0` возвращает один full-length сегмент
-/// (= Solid fallback). Если полоса короче одного даша, возвращает один
-/// сегмент с offset=0.
-pub(crate) fn dash_segments(
-    total_length: f32,
-    dash_len: f32,
-    gap_len: f32,
-) -> Vec<(f32, f32)> {
-    if total_length <= 0.0 || dash_len <= 0.0 {
-        return Vec::new();
-    }
-    if gap_len <= 0.0 {
-        return vec![(0.0, total_length)];
-    }
-    let period = dash_len + gap_len;
-    let n_floor = (total_length / period).floor() as i32;
-    let n_dashes = n_floor.max(1) as usize;
-    // leading=gap/2 matches Chrome/Edge (Skia) phase offset.
-    // For too-short fallback (n_floor<1) start at corner (offset=0).
-    let leading = if n_floor >= 1 { gap_len * 0.5 } else { 0.0 };
-    let mut out = Vec::with_capacity(n_dashes);
-    let mut x = leading;
-    for _ in 0..n_dashes {
-        let seg_start = x.max(0.0);
-        let seg_end = (x + dash_len).min(total_length);
-        if seg_end > seg_start {
-            out.push((seg_start, seg_end - seg_start));
-        }
-        x += period;
-    }
-    out
-}
+// Dash/dot геометрия для outline — общая для всех бэкендов (PA-1).
+pub(crate) use crate::dash_math::dash_segments;
 
 /// Рисует одну сторону border (top / right / bottom / left) с учётом
 /// `BorderStyle`. Логика идентична `emit_outline_side` (Solid → один
@@ -7374,65 +7602,33 @@ fn emit_border_side(
     let total = if horizontal { side_rect.width } else { side_rect.height };
     match style {
         BorderStyle::Dashed => {
-            // Chrome/Edge (Skia): full side width, n=round(total/period), leading=0.
-            // Dash=max(6,2w) and gap=max(4,w) reproduce Edge's observed n values:
-            //   2px→n=18, 4px→n=15, 8px→n=8, 16px→n=4 on a 180px side.
-            // Dash size is fixed (native); only gap (step) is adjusted to anchor the last
-            // dash end exactly at total. This matches Skia's dash rendering more closely.
-            // Positions use floor() to match Chrome/Edge pixel-snapping behaviour.
-            let target_dash = (width * 2.0).max(6.0);
-            let target_gap = width.max(4.0);
-            let target_period = target_dash + target_gap;
-            let n = ((total / target_period).round() as usize).max(1);
-            // Step between dash start positions; last dash end is clamped to total.
-            let step = if n > 1 { (total - target_dash) / (n - 1) as f32 } else { 0.0 };
-            for i in 0..n {
-                let offset = (i as f32 * step).floor();
-                let seg_end = (offset + target_dash).min(total);
-                if seg_end > offset {
-                    let seg = if horizontal {
-                        Rect::new(side_rect.x + offset, side_rect.y, seg_end - offset, side_rect.height)
-                    } else {
-                        Rect::new(side_rect.x, side_rect.y + offset, side_rect.width, seg_end - offset)
-                    };
-                    push_fill_quad(out, seg, color);
-                }
+            // Сегменты считает общий crate::dash_math (PA-1): dash=max(6,2w),
+            // gap=max(4,w), floor-snapping — совпадает с Edge/Skia.
+            for (offset, len) in crate::dash_math::dashed_border_offsets(total, width) {
+                let seg = if horizontal {
+                    Rect::new(side_rect.x + offset, side_rect.y, len, side_rect.height)
+                } else {
+                    Rect::new(side_rect.x, side_rect.y + offset, side_rect.width, len)
+                };
+                push_fill_quad(out, seg, color);
             }
         }
         BorderStyle::Dotted => {
-            // Chrome/Edge (Skia): n = floor(total/period) + 1 dots evenly distributed.
-            // Symmetric placement: floor(i*step) for first half, span-floor((n-1-i)*step)
-            // for second half. This matches the symmetric Bresenham pattern Edge uses,
-            // where the "short" gaps appear at both ends, all middle gaps are equal.
-            //   2px→n=46, 4px→n=23, 8px→n=12, 16px→n=6 on a 180px side.
-            // For dot_len ≤ 2px: use fill_quad (rectangle) instead of SDF circle —
-            // Chrome/Edge renders thin dotted borders as squares, not antialiased circles.
-            let dot_len = width.max(1.0);
-            let period = dot_len * 2.0;
-            let n = ((total / period).floor() as usize + 1).max(1);
-            let span = total - dot_len;
-            let step = if n > 1 { span / (n - 1) as f32 } else { 0.0 };
-            let mid = if n > 0 { (n - 1) / 2 } else { 0 };
-            let use_rect = dot_len <= 2.0;
-            for i in 0..n {
-                let offset = if i <= mid {
-                    (i as f32 * step).floor()
+            // Сегменты считает общий crate::dash_math (PA-1): симметричный
+            // Bresenham-паттерн Edge. For dot_len ≤ 2px: use fill_quad
+            // (rectangle) instead of SDF circle — Chrome/Edge renders thin
+            // dotted borders as squares, not antialiased circles.
+            let use_rect = width.max(1.0) <= 2.0;
+            for (offset, len) in crate::dash_math::dotted_border_offsets(total, width) {
+                let seg = if horizontal {
+                    Rect::new(side_rect.x + offset, side_rect.y, len, side_rect.height)
                 } else {
-                    let j = (n - 1 - i) as f32;
-                    span.floor() - (j * step).floor()
+                    Rect::new(side_rect.x, side_rect.y + offset, side_rect.width, len)
                 };
-                let seg_end = (offset + dot_len).min(total);
-                if seg_end > offset {
-                    let seg = if horizontal {
-                        Rect::new(side_rect.x + offset, side_rect.y, seg_end - offset, side_rect.height)
-                    } else {
-                        Rect::new(side_rect.x, side_rect.y + offset, side_rect.width, seg_end - offset)
-                    };
-                    if use_rect {
-                        push_fill_quad(out, seg, color);
-                    } else {
-                        push_circle_quad(circle_out, seg, color);
-                    }
+                if use_rect {
+                    push_fill_quad(out, seg, color);
+                } else {
+                    push_circle_quad(circle_out, seg, color);
                 }
             }
         }
@@ -7927,81 +8123,7 @@ mod tests {
         assert_eq!(out, [1.0, 0.5, 0.25, 0.0]);
     }
 
-    // ── dash_segments ────────────────────────────────────────────────────
-
-    #[test]
-    fn dash_segments_zero_length_returns_empty() {
-        assert!(dash_segments(0.0, 4.0, 2.0).is_empty());
-        assert!(dash_segments(-5.0, 4.0, 2.0).is_empty());
-    }
-
-    #[test]
-    fn dash_segments_zero_dash_returns_empty() {
-        assert!(dash_segments(10.0, 0.0, 2.0).is_empty());
-        assert!(dash_segments(10.0, -1.0, 2.0).is_empty());
-    }
-
-    #[test]
-    fn dash_segments_zero_gap_returns_single_full() {
-        // gap=0 — это solid, не разрывается.
-        let segs = dash_segments(10.0, 4.0, 0.0);
-        assert_eq!(segs, vec![(0.0, 10.0)]);
-    }
-
-    #[test]
-    fn dash_segments_exact_fit() {
-        // dash=4, gap=2 → period=6; total=10 → floor(10/6)=1 dash;
-        // leading=gap/2=1; сегмент: (1, 4).
-        let segs = dash_segments(10.0, 4.0, 2.0);
-        assert_eq!(segs.len(), 1);
-        assert!((segs[0].0 - 1.0).abs() < 1e-6);
-        assert!((segs[0].1 - 4.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn dash_segments_centered_leftover() {
-        // dash=2, gap=2 → period=4; total=10 → floor(10/4)=2 dashes;
-        // leading=gap/2=1; сегменты (1,2),(5,2).
-        let segs = dash_segments(10.0, 2.0, 2.0);
-        assert_eq!(segs.len(), 2);
-        assert_eq!(segs[0], (1.0, 2.0));
-        assert_eq!(segs[1], (5.0, 2.0));
-    }
-
-    #[test]
-    fn dash_segments_with_leftover_centers() {
-        // dash=2, gap=2 → period=4; total=11 → floor(11/4)=2 dashes;
-        // leading=gap/2=1; segs[0].0=1.0.
-        let segs = dash_segments(11.0, 2.0, 2.0);
-        assert_eq!(segs.len(), 2);
-        assert!((segs[0].0 - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn dash_segments_too_short_one_dash() {
-        // total=3, dash=4, gap=2 — n_floor=floor(3/6)=0 → max(1)=1;
-        // leading=0 (too-short fallback); сегмент (0,3) обрезается до total.
-        let segs = dash_segments(3.0, 4.0, 2.0);
-        assert_eq!(segs.len(), 1);
-        assert_eq!(segs[0].0, 0.0);
-        assert!((segs[0].1 - 3.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn dash_segments_dotted_pattern() {
-        // dot_len=2, gap=2 (Dotted width=2): total=10 → floor(10/4)=2 dots;
-        // leading=1; dots at (1,2),(5,2).
-        let segs = dash_segments(10.0, 2.0, 2.0);
-        assert_eq!(segs.len(), 2);
-    }
-
-    #[test]
-    fn dash_segments_count_for_typical_outline() {
-        // Outline width=2, dashed: dash=4, gap=2; полоса 100 px.
-        // n=floor(100/6)=16 dashes; leading=1.
-        let segs = dash_segments(100.0, 4.0, 2.0);
-        assert_eq!(segs.len(), 16);
-    }
+    // dash_segments unit-тесты переехали в crate::dash_math (PA-1).
 
     // ── emit_border_side ──────────────────────────────────────────────────
 

@@ -15,11 +15,26 @@ rusqlite.workspace = true
 # в lumen-core::ext. Graduation criterion: реалистично — никогда (формат
 # PSL стабилен, обновления списка приходят снаружи через bump версии crate-а).
 psl = "2"
+# Permanent (§5): SHA-256 for per-origin IDB file key derivation (C-5).
+# Already in the dependency graph via lumen-js and lumen-network (sha2 0.10).
+sha2 = "0.10"
 # Provisional (§5): deflate compression for T3-hibernated DOM blobs (ADR-008 §10J.1).
 # Reuses the already-vendored flate2 (PNG iCCP path) — no new external dependency.
 # Pure-Rust miniz_oxide backend, cross-OS bit-stable, no C toolchain. Graduation
 # criterion: replace with a higher-ratio pure-Rust zstd when one matures.
 flate2.workspace = true
+# Provisional (§5): LZ4 frame compression for T2 sleeping-tab JS heap blobs (GG-5).
+# Faster compress/decompress than zlib at comparable ratio for binary/mixed data.
+lz4_flex.workspace = true
+# Permanent (§5, ADR-011): AES-256-GCM for per-profile storage key wrapping.
+# Already in the dependency graph via lumen-js — zero incremental build cost.
+aes-gcm = "0.10"
+# Permanent (§5, ADR-011): HMAC-SHA256 for PBKDF2 key derivation in profile vault.
+# Already in the dependency graph via lumen-js — zero incremental cost.
+hmac = "0.12"
+# Permanent (§5): OS CSPRNG for generating random key material (keys, salts, nonces).
+# Already in the dependency graph via lumen-js and lumen-network.
+getrandom = "0.2"
 
 [dev-dependencies]
 # Integration test only: serialise a real parsed `Document` to verify the

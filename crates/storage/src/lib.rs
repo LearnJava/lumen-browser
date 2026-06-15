@@ -12,7 +12,10 @@
 //! Оба бэкенда соблюдают одинаковую семантику origin-партиционирования
 //! (`None` и `Some("")` — один namespace) и реализуют тот же trait.
 
+pub mod a11y_prefs;
 pub mod autofill;
+pub mod browser_settings;
+pub mod keyboard_shortcuts;
 pub mod omnibox_aliases;
 pub mod bfcache;
 pub mod bookmarks;
@@ -28,9 +31,11 @@ pub mod hsts;
 pub mod http_cache;
 pub mod indexed_db;
 pub mod notifications;
+pub mod print_prefs;
 pub mod permissions;
 pub mod permissions_policy;
 pub mod plugins;
+pub mod profile_vault;
 pub mod profiles;
 pub mod psl;
 pub mod push_subscriptions;
@@ -46,12 +51,16 @@ pub mod sw_interceptor;
 pub mod sw_store;
 pub mod sqlite_store;
 pub mod store;
+pub mod tab_groups;
 pub mod tab_sessions;
 pub mod tab_snapshot;
 pub mod web_manifest;
 pub mod workspaces;
 
+pub use a11y_prefs::{A11yPrefs, A11yPrefsSnapshot, CursorSize};
 pub use autofill::{Autofill, AutofillEntry};
+pub use browser_settings::{BrowserSettings, BrowserSettingsSnapshot};
+pub use keyboard_shortcuts::{KeyboardShortcutEntry, KeyboardShortcuts};
 pub use bfcache::{BfCache, BfCacheEntry};
 pub use bookmarks::{Bookmark, Bookmarks};
 pub use broadcast_channels::{BroadcastChannels, ChannelRegistration};
@@ -66,6 +75,7 @@ pub use history::{History, HistoryEntry};
 pub use http_cache::{CacheControl, CachedResponse, HttpCache};
 pub use indexed_db::IdbStore;
 pub use notifications::{Notification, Notifications};
+pub use print_prefs::{PrintPrefs, PrintPrefsSnapshot};
 pub use permissions::{PermissionEntry, PermissionKind, PermissionState, Permissions};
 pub use permissions_policy::{
     parse_permissions_policy, PermissionsAllowlist, PermissionsPolicies, PermissionsPolicy,
@@ -90,8 +100,9 @@ pub use store::InMemoryStorage;
 pub use session_export::{active_tab, from_json as session_from_json, to_json as session_to_json,
     ExportedTab, SessionFile};
 pub use session_store::{PersistedTab, SessionStore};
+pub use tab_groups::{PersistedGroup, TabGroups};
 pub use tab_sessions::{SessionSnapshot, TabSession, TabSessions};
-pub use tab_snapshot::{HibernatedTabData, TabSnapshotStore};
+pub use tab_snapshot::{HibernatedTabData, TabSnapshotStore, SleepingTabStore, T2SleepData};
 pub use web_manifest::{WebManifest, WebManifests};
 pub use workspaces::{Workspace, Workspaces};
 pub use omnibox_aliases::{OmniboxAlias, OmniboxAliases};

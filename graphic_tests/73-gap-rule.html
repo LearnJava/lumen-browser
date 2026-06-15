@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>TEST-73: gap-rule-width / gap-rule-style / gap-rule-color</title>
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f {
+    background: #1a1a2e;
+    width: 1022px; height: 718px;
+    margin: 1px;
+    padding: 40px;
+    overflow: hidden;
+    box-sizing: border-box;
+  }
+
+  /* Flex row: vertical gap rules between items */
+  .flex-row-demo {
+    display: flex;
+    flex-direction: row;
+    gap: 20px;
+    gap-rule-width: 2px;
+    gap-rule-style: solid;
+    gap-rule-color: #e94560;
+    background: #16213e;
+    padding: 10px;
+    margin-bottom: 30px;
+    width: 880px;
+  }
+  .flex-row-demo .item {
+    flex: 1;
+    height: 80px;
+    background: #0f3460;
+  }
+
+  /* Flex wrap: gap rules in both column and row gaps */
+  .flex-wrap-demo {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 16px;
+    gap-rule-width: 3px;
+    gap-rule-style: dashed;
+    gap-rule-color: #53d8fb;
+    background: #16213e;
+    padding: 10px;
+    margin-bottom: 30px;
+    width: 500px;
+  }
+  .flex-wrap-demo .item {
+    width: 140px;
+    height: 60px;
+    background: #0f3460;
+  }
+
+  /* grid: gap rules in column and row gaps */
+  .grid-demo {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: repeat(2, 80px);
+    gap: 14px;
+    gap-rule-width: 4px;
+    gap-rule-style: solid;
+    gap-rule-color: #f5a623;
+    background: #16213e;
+    padding: 10px;
+    width: 500px;
+  }
+  .grid-demo .cell {
+    background: #0f3460;
+  }
+</style>
+</head>
+<body>
+<div class="__f">
+  <!-- Flex row: 4 items with solid red vertical gap rules -->
+  <div class="flex-row-demo">
+    <div class="item"></div>
+    <div class="item"></div>
+    <div class="item"></div>
+    <div class="item"></div>
+  </div>
+
+  <!-- Flex wrap: 5 items wrapping to 2 rows, dashed cyan rules -->
+  <div class="flex-wrap-demo">
+    <div class="item"></div>
+    <div class="item"></div>
+    <div class="item"></div>
+    <div class="item"></div>
+    <div class="item"></div>
+  </div>
+
+  <!-- Grid: 3×2, solid orange gap rules -->
+  <div class="grid-demo">
+    <div class="cell"></div>
+    <div class="cell"></div>
+    <div class="cell"></div>
+    <div class="cell"></div>
+    <div class="cell"></div>
+    <div class="cell"></div>
+  </div>
+</div>
+</body>
+</html>

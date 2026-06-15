@@ -1,0 +1,12 @@
+[package]
+name = "lumen-bidi-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "WebDriver BiDi WebSocket server for Lumen browser (W3C WebDriver BiDi, Phase 1)"
+
+[dependencies]
+lumen-core.workspace = true
+lumen-devtools.workspace = true

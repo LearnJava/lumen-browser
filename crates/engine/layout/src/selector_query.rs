@@ -10,10 +10,11 @@ use std::collections::HashMap;
 
 use lumen_css_parser::{parse_selector_list, ComplexSelector};
 use lumen_dom::{Document, NodeId};
+use lumen_core::ColorSpace;
 
 use crate::box_tree::{BoxKind, LayoutBox};
 use crate::style::{
-    matches_complex, AlignValue, BorderStyle, BoxSizing, ClearSide, Color, ColorSpace, CssColor,
+    matches_complex, AlignValue, BorderStyle, BoxSizing, ClearSide, Color, CssColor,
     Cursor, Direction, Display, FilterFn, FloatSide, FontStretch, FontStyle, FontWeight,
     FontVariant, Isolation, Length, LengthOrAuto, MixBlendMode, Overflow, OutlineColor,
     OutlineStyle, PointerEvents, Position, TextAlign, TextDecorationLine, TextDecorationStyle,
@@ -355,6 +356,26 @@ fn query_all_rec(
     }
 }
 
+// ──────────────── matches_selector ────────────────
+
+/// Returns `true` if `node` matches **any** selector in `sel`.
+///
+/// Uses the full CSS3 selector engine: tag, `.class`, `#id`, attribute
+/// selectors, compound selectors, descendant/child/sibling combinators,
+/// `:nth-child`, `:not()`, `:is()`, `:where()`.
+///
+/// Returns `false` when `sel` is empty, all selectors are invalid, or `node`
+/// does not match. Non-element nodes always return `false`.
+///
+/// Implements `element.matches()` semantics.
+pub fn matches_selector(doc: &Document, node: NodeId, sel: &str) -> bool {
+    let selectors = parse_selector_list(sel);
+    if selectors.is_empty() {
+        return false;
+    }
+    node_matches(node, doc, &selectors)
+}
+
 // ──────────────── CSS computed style serialisation ────────────────
 
 /// Serialises a single CSS pixel value as a CSS string (`"16px"`, `"0px"`).
@@ -384,6 +405,7 @@ fn css_color_to_css(c: &CssColor) -> String {
         CssColor::Rgba(col) => color_to_css(*col),
         CssColor::Wide(f) => color_to_css(f.to_srgb_color()),
         CssColor::CurrentColor => "currentcolor".into(),
+        CssColor::System(sc) => color_to_css(sc.resolve_color(false)),
     }
 }
 
@@ -459,6 +481,10 @@ fn transform_fn_to_css(f: &TransformFn) -> String {
         TransformFn::Translate(x, y) => format!("translate({}, {})", px_str(*x), px_str(*y)),
         TransformFn::TranslateX(x) => format!("translateX({})", px_str(*x)),
         TransformFn::TranslateY(y) => format!("translateY({})", px_str(*y)),
+        TransformFn::TranslateZ(z) => format!("translateZ({})", px_str(*z)),
+        TransformFn::Translate3d(x, y, z) => {
+            format!("translate3d({}, {}, {})", px_str(*x), px_str(*y), px_str(*z))
+        }
         TransformFn::Rotate(a) => {
             let deg = a.to_degrees();
             if deg.fract() == 0.0 {
@@ -467,15 +493,29 @@ fn transform_fn_to_css(f: &TransformFn) -> String {
                 format!("rotate({}deg)", deg)
             }
         }
+        TransformFn::RotateX(a) => format!("rotateX({}deg)", a.to_degrees()),
+        TransformFn::RotateY(a) => format!("rotateY({}deg)", a.to_degrees()),
+        TransformFn::RotateZ(a) => format!("rotateZ({}deg)", a.to_degrees()),
+        TransformFn::Rotate3d(x, y, z, a) => {
+            format!("rotate3d({}, {}, {}, {}deg)", x, y, z, a.to_degrees())
+        }
         TransformFn::Scale(sx, sy) => format!("scale({}, {})", sx, sy),
         TransformFn::ScaleX(sx) => format!("scaleX({})", sx),
         TransformFn::ScaleY(sy) => format!("scaleY({})", sy),
+        TransformFn::ScaleZ(sz) => format!("scaleZ({})", sz),
+        TransformFn::Scale3d(sx, sy, sz) => format!("scale3d({}, {}, {})", sx, sy, sz),
         TransformFn::SkewX(a) => format!("skewX({}deg)", a.to_degrees()),
         TransformFn::SkewY(a) => format!("skewY({}deg)", a.to_degrees()),
         TransformFn::Matrix(m) => format!(
             "matrix({}, {}, {}, {}, {}, {})",
             m[0], m[1], m[2], m[3], m[4], m[5]
         ),
+        TransformFn::Matrix3d(m) => format!(
+            "matrix3d({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+            m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7],
+            m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]
+        ),
+        TransformFn::Perspective(d) => format!("perspective({})", px_str(*d)),
     }
 }
 
@@ -815,6 +855,117 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
     m
 }
 
+/// Serialises a [`ComputedStyle`] into a deterministic JSON object string.
+///
+/// Each key is a CSS property name and each value is the resolved value as
+/// produced by [`computed_style_to_map`] (e.g. `{"font-size":"16px",...}`).
+/// Keys are emitted in sorted order so the output is byte-stable across runs —
+/// suitable for the DevTools "Computed" panel (lumen-plan §7E.2) and snapshot
+/// assertions.
+///
+/// Dependency-free: builds the JSON text by hand (the layout crate does not
+/// depend on `serde`).
+pub fn computed_style_json(style: &ComputedStyle) -> String {
+    let map = computed_style_to_map(style);
+    let mut keys: Vec<&String> = map.keys().collect();
+    keys.sort_unstable();
+    let mut out = String::with_capacity(map.len() * 32 + 2);
+    out.push('{');
+    for (i, k) in keys.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        json_escape_into(k, &mut out);
+        out.push(':');
+        json_escape_into(&map[*k], &mut out);
+    }
+    out.push('}');
+    out
+}
+
+/// Like [`computed_style_by_selector`] but returns the full computed-style JSON
+/// (see [`computed_style_json`]) for the first box matching `sel`.
+///
+/// Returns `None` under the same conditions as [`find_box_by_selector`].
+pub fn computed_style_json_by_selector(
+    root: &LayoutBox,
+    doc: &Document,
+    sel: &str,
+) -> Option<String> {
+    find_box_by_selector(root, doc, sel).map(|b| computed_style_json(&b.style))
+}
+
+// ──────────────── Matched CSS rules for DevTools Styles panel ────────────────
+
+/// One CSS rule that matched a specific DOM node.
+///
+/// Used by the DevTools Styles panel (§PH3-1) to show the source CSS rules
+/// alongside their selectors and declarations, similar to Chrome DevTools.
+#[derive(Debug, Clone)]
+pub struct MatchedRule {
+    /// The matching CSS selector text, e.g. `"div.container > p"`.
+    pub selector: String,
+    /// CSS Selectors L3 specificity `(a, b, c)`.
+    pub specificity: (u32, u32, u32),
+    /// Property-value pairs from the rule's declarations, in source order.
+    /// Values are the raw CSS strings as written in the stylesheet.
+    pub declarations: Vec<(String, String)>,
+}
+
+/// Return all CSS rules from `sheet` whose selectors match `node` in `doc`.
+///
+/// Iterates `sheet.rules` in source order. Each rule is included at most once:
+/// the first selector in the rule that matches `node` is used as the display
+/// selector, and the whole rule's declaration list is included. Only toplevel
+/// rules are checked (media/layer/supports blocks are skipped in this pass —
+/// they contribute their matched-rule set separately if the condition holds).
+///
+/// Used by [`crate::shell::devtools::inspector`] to populate the Styles tab
+/// when the user clicks on a DOM element.
+pub fn matched_rules_for_node(
+    doc: &lumen_dom::Document,
+    node: lumen_dom::NodeId,
+    sheet: &lumen_css_parser::Stylesheet,
+) -> Vec<MatchedRule> {
+    let mut out = Vec::new();
+    for rule in &sheet.rules {
+        for selector in &rule.selectors {
+            if matches_complex(selector, doc, node) {
+                let spec = selector.specificity();
+                out.push(MatchedRule {
+                    selector: selector.to_css_str(),
+                    specificity: (spec.a, spec.b, spec.c),
+                    declarations: rule
+                        .declarations
+                        .iter()
+                        .map(|d| (d.property.clone(), d.value.clone()))
+                        .collect(),
+                });
+                break; // include each rule at most once
+            }
+        }
+    }
+    out
+}
+
+/// Appends `s` to `out` as a JSON string literal (with surrounding quotes),
+/// escaping `"`, `\`, and ASCII control characters per RFC 8259.
+fn json_escape_into(s: &str, out: &mut String) {
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -967,5 +1118,182 @@ mod tests {
         assert!(found.is_some());
         let snap = found.unwrap().style_snapshot();
         assert!((snap.opacity - 0.5).abs() < 0.001);
+    }
+
+    // ──────────────── computed_style_json ────────────────
+
+    #[test]
+    fn json_is_well_formed_object() {
+        let (doc, tree) = layout_tree(
+            r#"<div id="x" style="font-size:20px;color:red"></div>"#,
+            "",
+        );
+        let json = computed_style_json_by_selector(&tree, &doc, "#x").expect("box found");
+        assert!(json.starts_with('{') && json.ends_with('}'));
+        // Contains a couple of known properties.
+        assert!(json.contains(r#""font-size":"20px""#), "json: {json}");
+        assert!(json.contains(r#""color":"rgb(255, 0, 0)""#), "json: {json}");
+    }
+
+    #[test]
+    fn json_keys_are_sorted() {
+        let (doc, tree) = layout_tree(r#"<div id="x"></div>"#, "");
+        let json = computed_style_json_by_selector(&tree, &doc, "#x").expect("box found");
+        // Keys are emitted in sorted order, so the byte offset of each successive
+        // `"<key>":` marker must be strictly increasing. (Naive comma-splitting
+        // would break on values like `rgb(255, 0, 0)`, so probe by marker.)
+        let markers = [
+            "\"align-items\":",
+            "\"color\":",
+            "\"display\":",
+            "\"opacity\":",
+            "\"width\":",
+            "\"z-index\":",
+        ];
+        let mut last = 0usize;
+        for m in markers {
+            let pos = json.find(m).unwrap_or_else(|| panic!("missing key marker {m}"));
+            assert!(pos >= last, "key {m} out of sorted order");
+            last = pos;
+        }
+    }
+
+    #[test]
+    fn json_missing_selector_returns_none() {
+        let (doc, tree) = layout_tree(r#"<div></div>"#, "");
+        assert!(computed_style_json_by_selector(&tree, &doc, "#nope").is_none());
+    }
+
+    #[test]
+    fn json_round_trips_via_string_parsing() {
+        // The output must be parseable back into the same key/value map.
+        let (doc, tree) = layout_tree(
+            r#"<div id="x" style="display:flex;opacity:0.5"></div>"#,
+            "",
+        );
+        let json = computed_style_json_by_selector(&tree, &doc, "#x").expect("box found");
+        assert!(json.contains(r#""display":"flex""#), "json: {json}");
+        assert!(json.contains(r#""opacity":"0.5""#), "json: {json}");
+        // No trailing comma / empty entries.
+        assert!(!json.contains(",,"));
+        assert!(!json.contains("{,") && !json.contains(",}"));
+    }
+
+    #[test]
+    fn json_escapes_font_family_quotes() {
+        // A multi-word family name is quoted inside the value; the surrounding
+        // JSON string must escape those inner quotes.
+        let (doc, tree) = layout_tree(
+            r#"<div id="x" style="font-family:Times New Roman"></div>"#,
+            "",
+        );
+        let json = computed_style_json_by_selector(&tree, &doc, "#x").expect("box found");
+        assert!(json.contains(r#"\"Times New Roman\""#), "json: {json}");
+    }
+
+    // ──────────────── matched_rules_for_node ────────────────
+
+    fn parse_doc_sheet(html: &str, css: &str) -> (lumen_dom::Document, lumen_css_parser::Stylesheet) {
+        (lumen_html_parser::parse(html), lumen_css_parser::parse(css))
+    }
+
+    #[test]
+    fn matched_rules_empty_sheet_returns_empty() {
+        let (doc, sheet) = parse_doc_sheet(r#"<div id="box">text</div>"#, "");
+        let node = doc.find_by_id("box").expect("node exists");
+        let rules = matched_rules_for_node(&doc, node, &sheet);
+        assert!(rules.is_empty());
+    }
+
+    #[test]
+    fn matched_rules_tag_selector_matches() {
+        let (doc, sheet) = parse_doc_sheet(r#"<div id="x">text</div>"#, "div { color: red; }");
+        let node = doc.find_by_id("x").expect("node exists");
+        let rules = matched_rules_for_node(&doc, node, &sheet);
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].selector, "div");
+        assert_eq!(rules[0].specificity, (0, 0, 1));
+        assert!(rules[0].declarations.iter().any(|(p, v)| p == "color" && v == "red"));
+    }
+
+    #[test]
+    fn matched_rules_id_selector_matches() {
+        let (doc, sheet) = parse_doc_sheet(
+            r#"<div id="box">text</div>"#,
+            "#box { opacity: 0.5; display: flex; }",
+        );
+        let node = doc.find_by_id("box").expect("node exists");
+        let rules = matched_rules_for_node(&doc, node, &sheet);
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].selector, "#box");
+        assert_eq!(rules[0].specificity, (1, 0, 0));
+        assert!(rules[0].declarations.iter().any(|(p, v)| p == "opacity" && v == "0.5"));
+        assert!(rules[0].declarations.iter().any(|(p, v)| p == "display" && v == "flex"));
+    }
+
+    #[test]
+    fn matched_rules_class_selector_matches() {
+        let (doc, sheet) = parse_doc_sheet(
+            r#"<p id="intro-p" class="intro">text</p>"#,
+            ".intro { font-size: 18px; }",
+        );
+        let node = doc.find_by_id("intro-p").expect("node exists");
+        let rules = matched_rules_for_node(&doc, node, &sheet);
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].selector, ".intro");
+        assert_eq!(rules[0].specificity, (0, 1, 0));
+    }
+
+    #[test]
+    fn matched_rules_non_matching_selector_not_included() {
+        let (doc, sheet) = parse_doc_sheet(
+            r#"<div id="box">text</div>"#,
+            "#other { color: red; }",
+        );
+        let node = doc.find_by_id("box").expect("node exists");
+        let rules = matched_rules_for_node(&doc, node, &sheet);
+        assert!(rules.is_empty());
+    }
+
+    #[test]
+    fn matched_rules_multiple_matching_rules() {
+        let (doc, sheet) = parse_doc_sheet(
+            r#"<div id="box" class="card">text</div>"#,
+            "div { color: blue; } .card { margin: 10px; } #box { opacity: 1; }",
+        );
+        let node = doc.find_by_id("box").expect("node exists");
+        let rules = matched_rules_for_node(&doc, node, &sheet);
+        assert_eq!(rules.len(), 3);
+        let selectors: Vec<&str> = rules.iter().map(|r| r.selector.as_str()).collect();
+        assert!(selectors.contains(&"div"));
+        assert!(selectors.contains(&".card"));
+        assert!(selectors.contains(&"#box"));
+    }
+
+    #[test]
+    fn matched_rules_specificity_correct_for_tag_and_class() {
+        let (doc, sheet) = parse_doc_sheet(
+            r#"<div id="x" class="hero">text</div>"#,
+            "div.hero { display: block; }",
+        );
+        let node = doc.find_by_id("x").expect("node exists");
+        let rules = matched_rules_for_node(&doc, node, &sheet);
+        assert_eq!(rules.len(), 1);
+        // tag (0,0,1) + class (0,1,0) = (0,1,1)
+        assert_eq!(rules[0].specificity, (0, 1, 1));
+    }
+
+    #[test]
+    fn matched_rules_rule_included_once_per_matching_selector() {
+        // A rule with comma selectors — each matching selector yields one entry.
+        let (doc, sheet) = parse_doc_sheet(
+            r#"<div id="foo">text</div>"#,
+            "#foo, #bar { color: green; }",
+        );
+        let node = doc.find_by_id("foo").expect("node exists");
+        let rules = matched_rules_for_node(&doc, node, &sheet);
+        // Only "#foo" matches; the rule appears once with the matching selector.
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].selector, "#foo");
     }
 }

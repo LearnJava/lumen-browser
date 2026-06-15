@@ -48,11 +48,11 @@ pub fn should_send_client_hints(
 /// Build Client Hints headers for the given UA string (Lumen).
 ///
 /// Standard Client Hints sent by Chrome:
-/// - Sec-CH-UA: `"Lumen/0.0.1"`
+/// - Sec-CH-UA: `"Lumen/<version>"` (version tracks `CARGO_PKG_VERSION`)
 /// - Sec-CH-UA-Mobile: `?0` (not mobile)
 /// - Sec-CH-UA-Platform: `"Windows"` / `"Linux"` / `"macOS"` (detected from OS)
 ///
-/// Note: Sec-CH-UA values are quoted and prefixed with version (e.g., `"Lumen/0.0.1"`)
+/// Note: Sec-CH-UA values are quoted and prefixed with the brand+version.
 pub fn client_hints_headers(
     profile: HttpProfile,
     server_requested: bool,
@@ -63,7 +63,7 @@ pub fn client_hints_headers(
     }
 
     vec![
-        ("Sec-CH-UA".to_string(), r#""Lumen/0.0.1""#.to_string()),
+        ("Sec-CH-UA".to_string(), format!(r#""Lumen/{}""#, env!("CARGO_PKG_VERSION"))),
         ("Sec-CH-UA-Mobile".to_string(), "?0".to_string()),
         ("Sec-CH-UA-Platform".to_string(), format!(r#""{}""#, os_platform)),
     ]

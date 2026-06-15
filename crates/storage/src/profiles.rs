@@ -10,8 +10,11 @@
 //! настроек (settings JSON-blob — текстовое поле без типизации; UI
 //! десериализует по контексту).
 //!
-//! Отложено: шифрование (XChaCha20-Poly1305 + Argon2id KDF — §9.3),
-//! capability tokens (§11.4) для plugin-permission boundary,
+//! Phase 1 (PH2-3) добавляет: per-profile AES-256-GCM ключ шифрования
+//! (`set_password` / `unlock` / `clear_password`). Ключ хранится в поле
+//! `encrypted_key_blob` — формат описан в [`crate::profile_vault`].
+//!
+//! Отложено: capability tokens (§11.4) для plugin-permission boundary,
 //! миграции схемы, telemetry-counters per profile.
 
 use std::path::Path;
@@ -20,19 +23,27 @@ use std::sync::Mutex;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::profile_vault;
+
 /// Один профиль пользователя.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Profile {
+    /// Уникальный идентификатор профиля.
     pub id: i64,
+    /// Отображаемое имя (уникальное в рамках БД).
     pub name: String,
     /// Путь к storage-каталогу профиля (где живут history.db, cookies.db,
     /// и т.д.). Каждый профиль — отдельная папка.
     pub storage_path: String,
+    /// UNIX timestamp создания профиля.
     pub created_at: i64,
     /// JSON-строка с настройками (UI десериализует по своему типу).
     /// Пустая строка `""` — значения по умолчанию.
     pub settings_json: String,
+    /// `true` если этот профиль является активным (текущим).
     pub is_default: bool,
+    /// `true` если профиль защищён паролем (encrypted_key_blob присутствует).
+    pub is_encrypted: bool,
 }
 
 pub struct ProfileRegistry {
@@ -64,11 +75,12 @@ impl ProfileRegistry {
             PRAGMA journal_mode = WAL;
             PRAGMA synchronous = NORMAL;
             CREATE TABLE IF NOT EXISTS profiles (
-                id           INTEGER PRIMARY KEY,
-                name         TEXT NOT NULL UNIQUE,
-                storage_path TEXT NOT NULL,
-                created_at   INTEGER NOT NULL,
-                settings_json TEXT NOT NULL DEFAULT ''
+                id                 INTEGER PRIMARY KEY,
+                name               TEXT NOT NULL UNIQUE,
+                storage_path       TEXT NOT NULL,
+                created_at         INTEGER NOT NULL,
+                settings_json      TEXT NOT NULL DEFAULT '',
+                encrypted_key_blob BLOB DEFAULT NULL
             );
             CREATE TABLE IF NOT EXISTS active_profile (
                 lock INTEGER PRIMARY KEY CHECK (lock = 0),  -- singleton
@@ -81,6 +93,14 @@ impl ProfileRegistry {
             "#,
         )
         .map_err(|e| Error::Storage(format!("profiles init: {e}")))?;
+
+        // Schema migration: add encrypted_key_blob if the table was created
+        // by an older version that didn't have this column. ALTER TABLE ADD COLUMN
+        // is idempotent-ish — we catch the "duplicate column" error and ignore it.
+        let _ = conn.execute_batch(
+            "ALTER TABLE profiles ADD COLUMN encrypted_key_blob BLOB DEFAULT NULL;",
+        );
+
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -117,7 +137,7 @@ impl ProfileRegistry {
         let active_id = active_id_locked(&conn)?;
         let p = conn
             .query_row(
-                "SELECT id, name, storage_path, created_at, settings_json
+                "SELECT id, name, storage_path, created_at, settings_json, encrypted_key_blob
                  FROM profiles WHERE id = ?1",
                 params![id],
                 row_to_profile_partial,
@@ -139,7 +159,7 @@ impl ProfileRegistry {
         let active_id = active_id_locked(&conn)?;
         let p = conn
             .query_row(
-                "SELECT id, name, storage_path, created_at, settings_json
+                "SELECT id, name, storage_path, created_at, settings_json, encrypted_key_blob
                  FROM profiles WHERE name = ?1",
                 params![name],
                 row_to_profile_partial,
@@ -161,7 +181,7 @@ impl ProfileRegistry {
         let active_id = active_id_locked(&conn)?;
         let mut stmt = conn
             .prepare_cached(
-                "SELECT id, name, storage_path, created_at, settings_json
+                "SELECT id, name, storage_path, created_at, settings_json, encrypted_key_blob
                  FROM profiles ORDER BY created_at ASC",
             )
             .map_err(|e| Error::Storage(format!("profiles list prepare: {e}")))?;
@@ -257,7 +277,7 @@ impl ProfileRegistry {
         };
         let p = conn
             .query_row(
-                "SELECT id, name, storage_path, created_at, settings_json
+                "SELECT id, name, storage_path, created_at, settings_json, encrypted_key_blob
                  FROM profiles WHERE id = ?1",
                 params![id],
                 row_to_profile_partial,
@@ -268,6 +288,95 @@ impl ProfileRegistry {
             p.is_default = true;
             p
         }))
+    }
+
+    /// Защитить профиль паролем.
+    ///
+    /// Генерирует новый случайный AES-256 ключ хранилища, оборачивает его
+    /// через PBKDF2-HMAC-SHA256 + AES-256-GCM и сохраняет в `encrypted_key_blob`.
+    /// Если профиль уже имеет пароль — он перезаписывается (ключ хранилища меняется).
+    pub fn set_password(&self, id: i64, password: &str) -> Result<()> {
+        let storage_key = profile_vault::generate_storage_key()?;
+        let blob = profile_vault::seal(&storage_key, password.as_bytes())?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Storage("profiles mutex poisoned".into()))?;
+        let n = conn
+            .execute(
+                "UPDATE profiles SET encrypted_key_blob = ?1 WHERE id = ?2",
+                params![blob, id],
+            )
+            .map_err(|e| Error::Storage(format!("profiles set_password: {e}")))?;
+        if n == 0 {
+            return Err(Error::NotFound(format!("profile id {id}")));
+        }
+        Ok(())
+    }
+
+    /// Снять пароль с профиля.
+    ///
+    /// Требует правильный `current_password` для верификации перед снятием.
+    /// После вызова профиль становится незашифрованным.
+    pub fn clear_password(&self, id: i64, current_password: &str) -> Result<()> {
+        // First unlock to verify password is correct.
+        self.unlock(id, current_password)?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Storage("profiles mutex poisoned".into()))?;
+        conn.execute(
+            "UPDATE profiles SET encrypted_key_blob = NULL WHERE id = ?1",
+            params![id],
+        )
+        .map_err(|e| Error::Storage(format!("profiles clear_password: {e}")))?;
+        Ok(())
+    }
+
+    /// Разблокировать профиль и получить 32-байтовый ключ хранилища.
+    ///
+    /// Возвращает `Err` если профиль не защищён паролем, пароль неверный,
+    /// или blob повреждён.
+    pub fn unlock(&self, id: i64, password: &str) -> Result<[u8; profile_vault::KEY_LEN]> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Storage("profiles mutex poisoned".into()))?;
+        let blob: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT encrypted_key_blob FROM profiles WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| Error::Storage(format!("profiles unlock query: {e}")))?
+            .flatten();
+
+        let blob = blob.ok_or_else(|| {
+            Error::Storage(format!("profile id {id} is not password-protected"))
+        })?;
+        drop(conn);
+        profile_vault::open(&blob, password.as_bytes())
+    }
+
+    /// Проверить, защищён ли профиль паролем.
+    pub fn is_encrypted(&self, id: i64) -> Result<bool> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| Error::Storage("profiles mutex poisoned".into()))?;
+        let has_key: Option<Option<Vec<u8>>> = conn
+            .query_row(
+                "SELECT encrypted_key_blob FROM profiles WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| Error::Storage(format!("profiles is_encrypted: {e}")))?;
+        match has_key {
+            None => Err(Error::NotFound(format!("profile id {id}"))),
+            Some(blob) => Ok(blob.is_some()),
+        }
     }
 
     pub fn count(&self) -> Result<i64> {
@@ -292,13 +401,15 @@ fn active_id_locked(conn: &Connection) -> Result<Option<i64>> {
 }
 
 fn row_to_profile_partial(row: &rusqlite::Row<'_>) -> rusqlite::Result<Profile> {
+    let blob: Option<Vec<u8>> = row.get(5)?;
     Ok(Profile {
         id: row.get(0)?,
         name: row.get(1)?,
         storage_path: row.get(2)?,
         created_at: row.get(3)?,
         settings_json: row.get(4)?,
-        is_default: false,  // заполняется caller-ом
+        is_default: false,      // заполняется caller-ом
+        is_encrypted: blob.is_some(),
     })
 }
 

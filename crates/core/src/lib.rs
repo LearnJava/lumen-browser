@@ -5,6 +5,7 @@
 //! только то, что нужно более чем одному модулю.
 
 pub mod capability;
+pub mod color;
 pub mod crash;
 pub mod error;
 pub mod event;
@@ -23,15 +24,17 @@ pub mod url;
 pub mod web_storage;
 
 pub use capability::{Capability, CapabilityToken};
+pub use color::{ColorSpace, detect_color_space_from_icc};
 pub use crash::{format_crash_dump, write_crash_dump, CrashRecorder};
 pub use error::{Error, Result};
 pub use event::{Event, FetchPriority, RequestStage, SubresourceKind, TabId};
 pub use ext::{
-    match_face, BrowserSession, EventSink, FaceRecord, FontProvider, FontStyle,
+    match_face, BrowserSession, ClockMode, EventSink, FaceRecord, FontProvider, FontStyle,
     HyphenationProvider, NullBrowserSession, NullHyphenationProvider,
     JsError, JsResult, JsRuntime, JsValue, NoopEventSink, NullJsRuntime, SuspendedHeap,
     MemoryPressureLevel, MemoryPressureSource, NullMemoryPressureSource,
     CacheRegistry, EvictableCache,
+    AiBackend, NullAiBackend,
 };
 pub use form::{
     decode_form_value, encode_form_multipart, encode_form_urlencoded, FormEntry, FormValue,

@@ -188,6 +188,30 @@
     <div class="pe-box"></div>
   </div>
 
+  <!-- ── quotes / open-quote demo (CSS Generated Content L3 §3.2) ───────────── -->
+  <style>
+    .q-row { margin-top: 10px; margin-left: 24px; font-size: 20px; color: #102a43; }
+    .q-row q::before { content: open-quote; }
+    .q-row q::after  { content: close-quote; }
+    .q-fr { quotes: "\00ab" "\00bb" "\2039" "\203a"; }
+  </style>
+  <div class="q-row"><q>outer <q>inner</q></q></div>
+  <div class="q-row q-fr"><q>guillemets</q></div>
+
+  <!-- ── hover / pointer media features demo (Media Queries L4 §5.3-5.6) ──────── -->
+  <style>
+    .mq-row { margin-top: 10px; margin-left: 24px; }
+    .mq-sw { display: inline-block; width: 56px; height: 40px; background: #d64545; margin-right: 8px; }
+    @media (hover: hover)      { .mq-h { background: #2f855a; } }
+    @media (pointer: fine)     { .mq-p { background: #2f855a; } }
+    @media (any-pointer: fine) { .mq-ap { background: #2f855a; } }
+  </style>
+  <div class="mq-row">
+    <div class="mq-sw mq-h"></div>
+    <div class="mq-sw mq-p"></div>
+    <div class="mq-sw mq-ap"></div>
+  </div>
+
   <!-- ── vertical-align demo ───────────────────────────────────────────────── -->
   <style>
     .va-row { margin-top: 12px; margin-left: 24px; white-space: nowrap; }
@@ -201,11 +225,14 @@
     <div class="va-bot"></div>
   </div>
 
-  <!-- ── table layout demo ────────────────────────────────────────────────── -->
+  <!-- ── table layout demo (border-collapse + border-spacing) ──────────────── -->
   <style>
     .tbl-row { margin-top: 8px; margin-left: 24px; }
     .tbl-row table { border-collapse: collapse; border-spacing: 0; }
     .tbl-row td { padding: 0; border: 0; }
+    /* border-spacing demo: separate mode with 6px equal gaps */
+    .tbl-spacing { border-spacing: 6px; background: #444; margin-top: 6px; margin-left: 24px; }
+    .tbl-spacing td { width: 40px; height: 20px; }
   </style>
   <div class="tbl-row">
     <table>
@@ -223,6 +250,30 @@
       </tr>
     </table>
   </div>
+
+  <!-- border-spacing: 6px equal gap demo -->
+  <table class="tbl-spacing">
+    <tr>
+      <td style="background:#4a90d9"></td><td style="background:#e87d2e"></td><td style="background:#5cb85c"></td>
+    </tr>
+    <tr>
+      <td style="background:#9b59b6"></td><td style="background:#e74c3c"></td><td style="background:#f1c40f"></td>
+    </tr>
+  </table>
+
+  <!-- empty-cells: hide — empty <td> in the right column drops border + bg -->
+  <table style="border-collapse:separate;border-spacing:5px;empty-cells:hide;background:#444;margin-top:6px;margin-left:24px">
+    <tr>
+      <td style="width:40px;height:20px;background:#4a90d9;border:2px solid #9ecbff"></td>
+      <td style="width:40px;height:20px;background:#5cb85c;border:2px solid #9ecbff"></td>
+      <td style="width:40px;height:20px;border:2px solid #9ecbff"></td>
+    </tr>
+    <tr>
+      <td style="width:40px;height:20px;background:#e87d2e;border:2px solid #9ecbff"></td>
+      <td style="width:40px;height:20px;border:2px solid #9ecbff"></td>
+      <td style="width:40px;height:20px;background:#9b59b6;border:2px solid #9ecbff"></td>
+    </tr>
+  </table>
 
   <!-- mask-image / PushMaskLayer demo: gradient masks + mask-mode -->
   <div style="margin-top:8px;display:flex;gap:8px">
@@ -250,6 +301,17 @@
     </div>
     <div style="contain:paint;width:70px;height:30px;background:#238636;border:1px solid #2ea043;overflow:visible">
       <div style="background:#3fb950;height:20px;width:90px;margin-top:5px"></div>
+    </div>
+  </div>
+
+  <!-- contain-intrinsic-size: size-contained boxes take the declared placeholder
+       size, ignoring the oversized child (CSS Box Sizing L4 §5). -->
+  <div style="margin-top:8px;display:flex;gap:6px;align-items:flex-start">
+    <div style="display:inline-block;contain:size;contain-intrinsic-size:90px 40px;background:#7e3ff2;overflow:hidden">
+      <div style="width:300px;height:300px;background:#b794f6"></div>
+    </div>
+    <div style="display:inline-block;contain:size;contain-intrinsic-size:50px 60px;background:#c0501a;overflow:hidden">
+      <div style="width:300px;height:300px;background:#f6ad55"></div>
     </div>
   </div>
 
@@ -304,6 +366,10 @@
     <div style="width:50px;height:50px;background:#457b9d;clip-path:circle(20px);"></div>
     <div style="width:60px;height:40px;background:#2a9d8f;clip-path:ellipse(25px 15px);"></div>
     <div style="width:50px;height:50px;background:#e9c46a;clip-path:polygon(25px 0px,50px 50px,0px 50px);"></div>
+    <div style="width:50px;height:50px;background:#c77dff;clip-path:path('M 25 0 L 50 50 L 0 50 Z');"></div>
+    <!-- fill-rule: evenodd — полая середина self-intersecting пентаграммы -->
+    <div style="width:50px;height:50px;background:#f4a261;clip-path:path(evenodd,'M 25 2 L 10 45 L 49 17 L 1 17 L 40 45 Z');"></div>
+    <div style="width:50px;height:50px;background:#90be6d;clip-path:polygon(evenodd,25px 2px,10px 45px,49px 17px,1px 17px,40px 45px);"></div>
   </div>
 
   <!-- list markers -->
@@ -339,6 +405,26 @@
     <div style="background:#4a5568;height:40px;"></div>
   </div>
 
+  <!-- gap-rule-* (CSS Gap Decorations L1) -->
+  <div style="margin-top:8px; font-size:10px; color:#888;">gap-rule-width/style/color (flex + grid):</div>
+  <div style="display:flex;flex-direction:row;gap:14px;gap-rule-width:2px;gap-rule-style:solid;gap-rule-color:#e94560;
+              background:#2d3748;padding:6px;width:600px;margin-bottom:6px;">
+    <div style="flex:1;height:36px;background:#4a5568;"></div>
+    <div style="flex:1;height:36px;background:#4a5568;"></div>
+    <div style="flex:1;height:36px;background:#4a5568;"></div>
+    <div style="flex:1;height:36px;background:#4a5568;"></div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(2,30px);
+              gap:12px;gap-rule-width:3px;gap-rule-style:dashed;gap-rule-color:#53d8fb;
+              background:#2d3748;padding:6px;width:400px;">
+    <div style="background:#4a5568;"></div>
+    <div style="background:#4a5568;"></div>
+    <div style="background:#4a5568;"></div>
+    <div style="background:#4a5568;"></div>
+    <div style="background:#4a5568;"></div>
+    <div style="background:#4a5568;"></div>
+  </div>
+
   <!-- CSS Grid named areas -->
   <div style="margin-top:8px; font-size:10px; color:#888;">CSS Grid named areas (grid-template-areas):</div>
   <div style="display:grid;
@@ -357,6 +443,13 @@
     <div style="float:right; width:80px; height:40px; background:#38a169;"></div>
     <div style="height:40px; background:#bee3f8;"></div>
     <div style="clear:both;  height:14px; background:#fc8181;"></div>
+  </div>
+
+  <!-- shape-outside: path() — inline squares wrap around a triangular float -->
+  <div style="margin-top:8px; font-size:10px; color:#888;">shape-outside: path():</div>
+  <div style="width:200px; height:100px; overflow:hidden; background:#16213e;">
+    <div style="float:left; width:100px; height:100px; background:#e63946; shape-outside:path('M 0 0 L 100 0 L 0 100 Z'); clip-path:path('M 0 0 L 100 0 L 0 100 Z');"></div>
+    <span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span><span style="display:inline-block;width:12px;height:12px;margin:1px;background:#4ade80;vertical-align:top;"></span>
   </div>
 
   <!-- z-index stacking: red(z3) > blue(z2) > green(z1) -->
@@ -383,6 +476,15 @@
     <div style="width:60px; height:60px;background:conic-gradient(at 25% 25%,#fb5607,#ffbe0b,#8338ec,#fb5607);"></div>
     <div style="width:60px; height:60px;background:conic-gradient(red 0deg,red 90deg,yellow 90deg,yellow 180deg,green 180deg,green 270deg,blue 270deg,blue 360deg);"></div>
     <div style="width:60px; height:60px;background:repeating-conic-gradient(#1a1a2e 0deg,#1a1a2e 45deg,#f1faee 45deg,#f1faee 90deg);"></div>
+  </div>
+
+  <!-- gradient color-interpolation-method (CSS Images L4 §3.1) -->
+  <div style="display:flex; gap:6px; margin-top:8px; flex-wrap:wrap;">
+    <div style="width:120px;height:30px;background:linear-gradient(to right in srgb,red,blue);"></div>
+    <div style="width:120px;height:30px;background:linear-gradient(to right in srgb-linear,red,blue);"></div>
+    <div style="width:120px;height:30px;background:linear-gradient(to right in oklab,red,blue);"></div>
+    <div style="width:120px;height:30px;background:linear-gradient(to right in lab,red,blue);"></div>
+    <div style="width:120px;height:30px;background:linear-gradient(to right in hsl,red,blue);"></div>
   </div>
 
 
@@ -539,6 +641,84 @@
   </svg>
 </div>
 
+<!-- ─── SVG stroke advanced: linecap / linejoin / dasharray / fill-rule ─── -->
+<div style="margin-top:4px;">
+  <svg width="1000" height="55" style="display:block;">
+    <!-- stroke-linecap: butt / round / square -->
+    <line x1="10" y1="20" x2="90" y2="20" stroke="#58a6ff" stroke-width="12" stroke-linecap="butt"/>
+    <line x1="10" y1="42" x2="90" y2="42" stroke="#3fb950" stroke-width="12" stroke-linecap="round"/>
+    <line x1="10" y1="8" x2="90" y2="8" stroke="#f85149" stroke-width="12" stroke-linecap="square"/>
+    <!-- stroke-linejoin: miter / bevel / round -->
+    <path d="M 110 50 L 140 10 L 170 50" fill="none" stroke="#58a6ff" stroke-width="8" stroke-linejoin="miter"/>
+    <path d="M 190 50 L 220 10 L 250 50" fill="none" stroke="#3fb950" stroke-width="8" stroke-linejoin="bevel"/>
+    <path d="M 270 50 L 300 10 L 330 50" fill="none" stroke="#f85149" stroke-width="8" stroke-linejoin="round"/>
+    <!-- stroke-dasharray + dashoffset -->
+    <path d="M 350 28 H 550" fill="none" stroke="#d2a8ff" stroke-width="6" stroke-dasharray="18 6"/>
+    <path d="M 350 44" fill="none" stroke="#ffa657" stroke-width="6" stroke-dasharray="18 6" stroke-dashoffset="9"/>
+    <!-- fill-rule: nonzero vs evenodd on star -->
+    <path d="M 630 5 L 645 40 L 685 40 L 655 62 L 665 97 L 630 75 L 595 97 L 605 62 L 575 40 L 615 40 Z"
+          fill="#58a6ff" fill-rule="nonzero" stroke="#ffffff" stroke-width="1"/>
+    <path d="M 750 5 L 765 40 L 805 40 L 775 62 L 785 97 L 750 75 L 715 97 L 725 62 L 695 40 L 735 40 Z"
+          fill="#f85149" fill-rule="evenodd" stroke="#ffffff" stroke-width="1"/>
+    <!-- dashed stroke with round caps on a curve -->
+    <path d="M 850 28 C 870 5 940 5 960 28 C 980 50 990 50 1000 28"
+          fill="none" stroke="#3fb950" stroke-width="7" stroke-dasharray="14 7" stroke-linecap="round"/>
+  </svg>
+</div>
+
+<!-- ─── paint-order: normal vs stroke ────────────────────────── -->
+<div style="margin-top:4px;">
+  <svg width="500" height="60" style="display:block;">
+    <!-- normal: stroke painted over fill (full band visible) -->
+    <path d="M 20 8 L 110 8 L 110 52 L 20 52 Z" fill="#ffd400" stroke="#101010" stroke-width="18"/>
+    <!-- paint-order: stroke — fill over stroke (visible stroke ~half as thick) -->
+    <path d="M 150 8 L 240 8 L 240 52 L 150 52 Z" fill="#ffd400" stroke="#101010" stroke-width="18"
+          style="paint-order: stroke"/>
+    <path d="M 280 8 L 370 8 L 370 52 L 280 52 Z" fill="#0e8f8f" stroke="#c81e3a" stroke-width="18"/>
+    <path d="M 400 8 L 490 8 L 490 52 L 400 52 Z" fill="#0e8f8f" stroke="#c81e3a" stroke-width="18"
+          style="paint-order: stroke"/>
+  </svg>
+</div>
+
+<!-- ─── SVG <use> element ────────────────────────────────────── -->
+<div style="margin-top:4px;">
+  <svg width="500" height="55" style="display:block;">
+    <defs>
+      <rect id="uf-r" x="0" y="0" width="40" height="35" fill="#e74c3c"/>
+      <circle id="uf-c" cx="0" cy="0" r="16" fill="#3498db"/>
+      <g id="uf-g"><rect x="0" y="0" width="35" height="25" fill="#2ecc71"/><circle cx="17" cy="12" r="7" fill="#f1c40f"/></g>
+    </defs>
+    <use href="#uf-r" x="10" y="10"/>
+    <use href="#uf-r" x="60" y="10"/>
+    <use href="#uf-c" x="130" y="27"/>
+    <use href="#uf-c" x="175" y="27"/>
+    <use href="#uf-g" x="210" y="15"/>
+    <use href="#uf-g" x="260" y="15"/>
+    <use xlink:href="#uf-r" x="320" y="10"/>
+  </svg>
+</div>
+
+<!-- ─── text-decoration-skip-ink ────────────────────────────── -->
+<div style="margin-top:4px;">
+  <div style="font-size:20px;color:#e0e0ff;text-decoration:underline;text-decoration-color:#60b0ff;text-decoration-skip-ink:auto;">gjpqy auto</div>
+  <div style="font-size:20px;color:#e0e0ff;text-decoration:underline;text-decoration-color:#ff8060;text-decoration-skip-ink:none;">gjpqy none</div>
+  <div style="font-size:20px;color:#e0e0ff;text-decoration:underline;text-decoration-color:#80ff80;text-decoration-skip-ink:all;">gjpqy all</div>
+</div>
+
+<!-- ─── scroll-behavior ─────────────────────────────────────── -->
+<div style="margin-top:4px;display:flex;gap:8px;">
+  <div style="width:140px;height:60px;overflow-y:scroll;scroll-behavior:smooth;border:1px solid #5555ff;background:#1a1a3e;padding:4px;">
+    <div style="height:20px;color:#aac;font-size:11px;">scroll-behavior:smooth</div>
+    <div style="height:20px;color:#aac;font-size:11px;">item 2</div>
+    <div style="height:20px;color:#aac;font-size:11px;">item 3</div>
+  </div>
+  <div style="width:140px;height:60px;overflow-y:scroll;scroll-behavior:auto;border:1px solid #55aa55;background:#1a3e1a;padding:4px;">
+    <div style="height:20px;color:#aea;font-size:11px;">scroll-behavior:auto</div>
+    <div style="height:20px;color:#aea;font-size:11px;">item 2</div>
+    <div style="height:20px;color:#aea;font-size:11px;">item 3</div>
+  </div>
+</div>
+
 <!-- ─── background-blend-mode ────────────────────────────────── -->
 <div style="margin-top:4px;display:flex;gap:6px;">
   <div style="width:80px;height:50px;background:linear-gradient(135deg,#e74c3c,#c0392b),linear-gradient(to bottom,#3498db,#1a5276);background-blend-mode:normal;"></div>
@@ -597,6 +777,13 @@
   <video src="nonexistent.mp4" style="width:80px;height:45px;border-radius:6px;"></video>
 </div>
 
+<!-- iframe placeholder — HTML spec §4.8.5: 300×150 UA default, grey DrawImage -->
+<div style="margin-top:12px;display:flex;gap:12px;align-items:flex-end;">
+  <iframe src="https://example.com" style="width:240px;height:135px;border:1px solid #718096;"></iframe>
+  <iframe src="https://lumen-browser.example" width="160" height="90"></iframe>
+  <iframe style="width:80px;height:45px;border:2px solid #e53e3e;"></iframe>
+</div>
+
 <!-- background-origin -->
 <div style="margin-top:12px;display:flex;gap:12px;align-items:flex-end;">
   <div style="width:80px;height:60px;border:10px solid #e53e3e;padding:10px;background-color:#2d3748;background-image:url(../samples/images/perceptron.png);background-size:30px 24px;background-repeat:no-repeat;background-position:0% 0%;background-origin:border-box;"></div>
@@ -604,6 +791,627 @@
   <div style="width:80px;height:60px;border:10px solid #3182ce;padding:10px;background-color:#2d3748;background-image:url(../samples/images/perceptron.png);background-size:30px 24px;background-repeat:no-repeat;background-position:0% 0%;background-origin:content-box;"></div>
 </div>
 
+<!-- canvas 2D (HTML LS §4.12.4): getContext('2d') fillRect/arc/path -->
+<div style="margin-top:12px;display:flex;gap:12px;align-items:flex-start;">
+  <canvas id="final-canvas" width="200" height="80" style="background:#1e293b;border:1px solid #38bdf8;"></canvas>
+</div>
+<script>
+  (function () {
+    var el = document.getElementById('final-canvas');
+    if (!el || !el.getContext) return;
+    var ctx = el.getContext('2d');
+    if (!ctx) return;
+    ctx.fillStyle = '#f97316';
+    ctx.fillRect(10, 15, 50, 50);
+    ctx.fillStyle = '#22c55e';
+    ctx.beginPath();
+    ctx.arc(110, 40, 28, 0, Math.PI * 2, false);
+    ctx.fill();
+    ctx.fillStyle = '#ec4899';
+    ctx.beginPath();
+    ctx.moveTo(160, 15);
+    ctx.lineTo(190, 65);
+    ctx.lineTo(150, 65);
+    ctx.closePath();
+    ctx.fill();
+  })();
+</script>
+
+<!-- ::first-letter / ::first-line demo row -->
+<style>
+  .pseudo-row { margin-top: 10px; display: flex; gap: 16px; }
+  .fl-mini { width: 200px; font: 13px/1.6 sans-serif; color: #e2e8f0; background: #1a202c; padding: 6px; border-radius: 3px; }
+  .fl-mini::first-letter { font-size: 36px; font-weight: 700; color: #f6e05e; float: left; line-height: 1; margin-right: 3px; }
+  .fline-mini { width: 200px; font: 13px/1.6 sans-serif; color: #e2e8f0; background: #1a202c; padding: 6px; border-radius: 3px; }
+  .fline-mini::first-line { color: #68d391; font-weight: 700; }
+</style>
+<div class="pseudo-row">
+  <div class="fl-mini">Once upon a time there was a CSS engine.</div>
+  <div class="fline-mini">The first line is green and bold via ::first-line style override.</div>
+</div>
+
+<!-- View Transitions API demo -->
+<style>
+  .vt-row { margin-top: 10px; display: flex; gap: 12px; align-items: center; }
+  .vt-btn {
+    background: #4a5568; border: 1px solid #718096; border-radius: 4px;
+    color: #e2e8f0; padding: 6px 14px; font-size: 12px; cursor: pointer;
+  }
+  .vt-status { font: 11px/1.4 monospace; color: #a0aec0; flex: 1; }
+  .vt-target {
+    width: 120px; height: 40px; border-radius: 4px;
+    background: #2d3748; border: 1px solid #4a5568;
+    display: flex; align-items: center; justify-content: center;
+    color: #68d391; font-size: 12px; font-weight: bold;
+    transition: background 0.3s;
+  }
+  .vt-target.activated { background: #2c7a4e; border-color: #48bb78; }
+</style>
+<div class="vt-row">
+  <div class="vt-target" id="vtBox">Before</div>
+  <span class="vt-status" id="vtStatus">startViewTransition() not yet called</span>
+</div>
+<script>
+(function() {
+  var box = document.getElementById('vtBox');
+  var status = document.getElementById('vtStatus');
+  if (typeof document.startViewTransition === 'function') {
+    document.startViewTransition(function() {
+      box.classList.add('activated');
+      box.textContent = 'After';
+    });
+    status.textContent = 'startViewTransition() called: ViewTransition API active (300ms cross-fade)';
+  } else {
+    status.textContent = 'document.startViewTransition: not available';
+  }
+})();
+</script>
+
 </div><!-- /card -->
+
+<!-- CSS Scroll Snap L1 -->
+<div class="card">
+<div class="label">CSS Scroll Snap L1 (shell integration)</div>
+<style>
+  .snap-demo { display: flex; gap: 8px; height: 120px; }
+  .snap-demo-y {
+    width: 100px; height: 120px; overflow-y: scroll;
+    scroll-snap-type: y mandatory; scrollbar-width: none;
+    border: 1px solid #4a5568; border-radius: 3px;
+  }
+  .snap-demo-y .snap-section {
+    width: 100%; height: 120px; flex-shrink: 0;
+    scroll-snap-align: start;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; color: white;
+  }
+  .snap-demo-x {
+    flex: 1; height: 120px; overflow-x: scroll;
+    scroll-snap-type: x mandatory; scrollbar-width: none;
+    border: 1px solid #4a5568; border-radius: 3px;
+    display: flex;
+  }
+  .snap-demo-x .snap-panel {
+    flex-shrink: 0; width: 100%; height: 100%;
+    scroll-snap-align: start;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; color: white;
+  }
+</style>
+<div class="snap-demo">
+  <div class="snap-demo-y">
+    <div class="snap-section" style="background:#e94560">A</div>
+    <div class="snap-section" style="background:#0f3460">B</div>
+    <div class="snap-section" style="background:#16213e">C</div>
+  </div>
+  <div class="snap-demo-x">
+    <div class="snap-panel" style="background:#2d6a4f">1</div>
+    <div class="snap-panel" style="background:#52b788">2</div>
+    <div class="snap-panel" style="background:#1b4332">3</div>
+  </div>
+</div>
+
+<!-- ══ Flex align-content ══════════════════════════════════════════ -->
+<style>
+  .flex-align-container {
+    width: 450px; height: 120px;
+    display: flex; flex-wrap: wrap; gap: 4px;
+    padding: 8px;
+    background: white; border-radius: 4px;
+    margin-top: 10px;
+  }
+  .flex-align-item { width: 45px; height: 40px; background: #4299e1; border-radius: 2px; }
+  .flex-align-center { align-content: center; }
+  .flex-align-space-around { align-content: space-around; }
+  .flex-align-space-between { align-content: space-between; }
+</style>
+<div style="font-size: 12px; color: #666; margin-top: 12px;">Flex align-content (wrap):</div>
+<div class="flex-align-container flex-align-center">
+  <div class="flex-align-item"></div>
+  <div class="flex-align-item"></div>
+  <div class="flex-align-item"></div>
+  <div class="flex-align-item"></div>
+  <div class="flex-align-item"></div>
+  <div class="flex-align-item"></div>
+  <div class="flex-align-item"></div>
+  <div class="flex-align-item"></div>
+</div>
+<div class="flex-align-container flex-align-space-around">
+  <div class="flex-align-item"></div>
+  <div class="flex-align-item"></div>
+  <div class="flex-align-item"></div>
+  <div class="flex-align-item"></div>
+  <div class="flex-align-item"></div>
+  <div class="flex-align-item"></div>
+  <div class="flex-align-item"></div>
+  <div class="flex-align-item"></div>
+</div>
+<div class="flex-align-container flex-align-space-between">
+  <div class="flex-align-item"></div>
+  <div class="flex-align-item"></div>
+  <div class="flex-align-item"></div>
+  <div class="flex-align-item"></div>
+  <div class="flex-align-item"></div>
+  <div class="flex-align-item"></div>
+  <div class="flex-align-item"></div>
+  <div class="flex-align-item"></div>
+</div>
+
+</div><!-- /card -->
+
+<!-- ::selection demo card -->
+<div class="card">
+<style>
+  .sel-swatch { display:inline-block; width:120px; height:32px; border-radius:3px; margin:4px; }
+  .sel-default { background:#0078D4; }
+  .sel-alt     { background:#e74c3c; }
+  .sel-custom  { background:#2ecc71; }
+  ::selection        { background-color:#0078D4; color:#fff; }
+  .sel-alt::selection{ background-color:#e74c3c; color:#fff; }
+</style>
+<div class="sel-swatch sel-default"></div>
+<div class="sel-swatch sel-alt"></div>
+<div class="sel-swatch sel-custom"></div>
+</div><!-- /::selection card -->
+
+<!-- attr() typed demo card -->
+<style>
+  .attr-card { margin: 8px; padding: 12px; background: #fff; border: 1px solid #ddd; border-radius: 4px; }
+  .attr-card h4 { margin: 0 0 8px; font-size: 11px; font-family: sans-serif; color: #555; }
+  .attr-bar {
+    height: 28px; margin-bottom: 6px; border-radius: 3px; background: #3498db;
+    display: flex; align-items: center;
+  }
+  .attr-bar::before {
+    content: attr(data-label);
+    font-family: monospace; font-size: 11px; color: #fff;
+    padding: 0 8px;
+  }
+  .ab1 { width: 120px; background: #3498db; }
+  .ab2 { width: 220px; background: #27ae60; }
+  .ab3 { width: 80px;  background: #e74c3c; }
+</style>
+<div class="attr-card">
+  <h4>attr() — content:attr(data-label)</h4>
+  <div class="attr-bar ab1" data-label="A: 120px"></div>
+  <div class="attr-bar ab2" data-label="B: 220px"></div>
+  <div class="attr-bar ab3" data-label="C: 80px"></div>
+</div><!-- /attr() card -->
+
+<!-- font-variation-settings demo card -->
+<style>
+  .fvs-card { background:#16213e; padding:8px; border-radius:4px; }
+  .fvs-row { display:flex; gap:8px; margin-top:8px; }
+  .fvs-box { width:50px; height:30px; border-radius:3px; }
+  .fvs-b1 { background:#e63946; font-variation-settings:"wght" 100; }
+  .fvs-b2 { background:#457b9d; font-variation-settings:"wght" 400; }
+  .fvs-b3 { background:#2a9d8f; font-variation-settings:"wght" 700; }
+  .fvs-b4 { background:#e9c46a; font-variation-settings:"wght" 900; }
+</style>
+<div class="card fvs-card">
+  <h4>font-variation-settings</h4>
+  <div class="fvs-row">
+    <div class="fvs-box fvs-b1"></div>
+    <div class="fvs-box fvs-b2"></div>
+    <div class="fvs-box fvs-b3"></div>
+    <div class="fvs-box fvs-b4"></div>
+  </div>
+</div><!-- /font-variation-settings card -->
+
+<!-- font-size-adjust demo card -->
+<style>
+  .fsa-card { background:#16213e; padding:8px; border-radius:4px; color:#e8eef7; }
+  .fsa-row { font-size:34px; line-height:38px; margin-top:4px; white-space:nowrap; }
+  .fsa-a0 { font-size-adjust:none; }
+  .fsa-a1 { font-size-adjust:0.45; }
+  .fsa-a2 { font-size-adjust:0.28; }
+</style>
+<div class="card fsa-card">
+  <h4>font-size-adjust</h4>
+  <div class="fsa-row fsa-a0">xoxo</div>
+  <div class="fsa-row fsa-a1">xoxo</div>
+  <div class="fsa-row fsa-a2">xoxo</div>
+</div><!-- /font-size-adjust card -->
+
+<!-- masonry-auto-flow demo card -->
+<style>
+  .maf-card { background:#0d1b2a; padding:8px; border-radius:4px; }
+  .maf-wrap { display:flex; gap:8px; margin-top:6px; }
+  .maf-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-rows: masonry;
+    gap: 3px;
+    width: 90px;
+  }
+  .maf-item { border-radius:2px; }
+  /* ordered: blue (order:-1) jumps to first */
+  .maf-ord { masonry-auto-flow: ordered; }
+  .maf-r { background:#e63946; height:28px; order:1; }
+  .maf-b { background:#457b9d; height:18px; order:-1; }
+  .maf-g { background:#2a9d8f; height:22px; order:0; }
+  /* next: source order */
+  .maf-next { masonry-auto-flow: next; }
+  .maf-r2 { background:#e63946; height:28px; }
+  .maf-b2 { background:#457b9d; height:18px; }
+  .maf-g2 { background:#2a9d8f; height:22px; }
+</style>
+<div class="card maf-card">
+  <h4>masonry-auto-flow</h4>
+  <div class="maf-wrap">
+    <div class="maf-grid maf-next">
+      <div class="maf-item maf-r2"></div>
+      <div class="maf-item maf-b2"></div>
+      <div class="maf-item maf-g2"></div>
+    </div>
+    <div class="maf-grid maf-ord">
+      <div class="maf-item maf-r"></div>
+      <div class="maf-item maf-b"></div>
+      <div class="maf-item maf-g"></div>
+    </div>
+  </div>
+</div><!-- /masonry-auto-flow card -->
+
+<!-- font-stretch demo card -->
+<style>
+  .fs-card { background:#0d1b2a; padding:8px; border-radius:4px; }
+  .fs-row { display:flex; gap:6px; margin-top:6px; }
+  .fs-box { width:40px; height:28px; border-radius:3px; }
+  .fs-uc { background:#e63946; font-stretch:ultra-condensed; }
+  .fs-c  { background:#2a9d8f; font-stretch:condensed; }
+  .fs-n  { background:#6d6875; font-stretch:normal; }
+  .fs-e  { background:#e9c46a; font-stretch:expanded; }
+  .fs-ue { background:#9d4edd; font-stretch:ultra-expanded; }
+  .fs-p  { background:#118ab2; font-stretch:60%; }
+</style>
+<div class="card fs-card">
+  <h4>font-stretch</h4>
+  <div class="fs-row">
+    <div class="fs-box fs-uc"></div>
+    <div class="fs-box fs-c"></div>
+    <div class="fs-box fs-n"></div>
+    <div class="fs-box fs-e"></div>
+    <div class="fs-box fs-ue"></div>
+    <div class="fs-box fs-p"></div>
+  </div>
+</div><!-- /font-stretch card -->
+
+<!-- offset-path demo card -->
+<style>
+  .mp-card { background:#16213e; padding:8px; border-radius:4px; }
+  .mp-scene { position:relative; height:80px; }
+  .mp-box { position:absolute; width:28px; height:28px; top:26px; left:0; }
+  .mp-r { background:#e63946; offset-path: path("M 0 0 L 300 0"); offset-distance: 0px;   offset-rotate:0deg; }
+  .mp-o { background:#f4a261; offset-path: path("M 0 0 L 300 0"); offset-distance: 136px; offset-rotate:0deg; }
+  .mp-g { background:#2a9d8f; offset-path: path("M 0 0 L 300 0"); offset-distance: 272px; offset-rotate:0deg; }
+</style>
+<div class="card mp-card">
+  <h4>offset-path / offset-distance (Motion Path L1)</h4>
+  <div class="mp-scene">
+    <div class="mp-box mp-r"></div>
+    <div class="mp-box mp-o"></div>
+    <div class="mp-box mp-g"></div>
+  </div>
+</div><!-- /offset-path card -->
+
+<!-- offset-path: ray() demo card -->
+<style>
+  .ray-scene { position:relative; height:120px; }
+  .ray-box { position:absolute; width:20px; height:20px; top:50px; left:140px;
+             offset-distance:46px; offset-rotate:0deg; }
+  .ray-0   { background:#e63946; offset-path: ray(0deg); }
+  .ray-90  { background:#2a9d8f; offset-path: ray(90deg); }
+  .ray-180 { background:#9d4edd; offset-path: ray(180deg); }
+  .ray-270 { background:#e9c46a; offset-path: ray(270deg); }
+  .ray-c   { background:#ffffff; offset-path: ray(0deg); offset-distance:0px; }
+</style>
+<div class="card mp-card">
+  <h4>offset-path: ray(&lt;angle&gt;) (Motion Path L1)</h4>
+  <div class="ray-scene">
+    <div class="ray-box ray-0"></div>
+    <div class="ray-box ray-90"></div>
+    <div class="ray-box ray-180"></div>
+    <div class="ray-box ray-270"></div>
+    <div class="ray-box ray-c"></div>
+  </div>
+</div><!-- /offset-path ray card -->
+
+<!-- anchor-positioning demo card -->
+<style>
+  .anc-card { background:#16213e; padding:8px; border-radius:4px; }
+  .anc-box { position:relative; width:280px; height:160px; background:#161b22; margin-top:6px; }
+  .anc-anchor { position:absolute; anchor-name:--demo-anchor; width:50px; height:50px; background:#f0f6fc; top:55px; left:115px; }
+  .anc-el { position:absolute; position-anchor:--demo-anchor; width:40px; height:40px; }
+  .anc-tl { inset-area: start start; background:#e63946; }
+  .anc-tc { inset-area: start center; background:#f4a261; }
+  .anc-tr { inset-area: start end; background:#2a9d8f; }
+  .anc-ml { inset-area: center start; background:#457b9d; }
+  .anc-mr { inset-area: center end; background:#9d4edd; }
+  .anc-bl { inset-area: end start; background:#52b788; }
+  .anc-br { inset-area: end end; background:#f77f00; }
+</style>
+<div class="card anc-card">
+  <h4>anchor-name / position-anchor / inset-area (Anchor Positioning L1)</h4>
+  <div class="anc-box">
+    <div class="anc-anchor"></div>
+    <div class="anc-el anc-tl"></div>
+    <div class="anc-el anc-tc"></div>
+    <div class="anc-el anc-tr"></div>
+    <div class="anc-el anc-ml"></div>
+    <div class="anc-el anc-mr"></div>
+    <div class="anc-el anc-bl"></div>
+    <div class="anc-el anc-br"></div>
+  </div>
+</div><!-- /anchor-positioning card -->
+
+<!-- scroll-driven animations demo card -->
+<style>
+  .sda-card { display:inline-block; vertical-align:top; width:200px; padding:10px; margin:4px; background:#0d1b2a; border:1px solid #4fc3f7; border-radius:6px; }
+  .sda-title { color:#4fc3f7; font:700 10px/1.4 sans-serif; margin-bottom:6px; letter-spacing:.5px; }
+  .sda-scroll-container { scroll-timeline-name:--demo-scroll; scroll-timeline-axis:block; width:100%; height:60px; background:#1a237e; border-radius:4px; overflow:hidden; }
+  .sda-view-subject { view-timeline-name:--demo-view; view-timeline-axis:block; width:100%; height:60px; background:linear-gradient(90deg,#1b5e20,#388e3c); border-radius:4px; }
+  @keyframes sda-move { from{transform:translateX(0);background:#e65100} to{transform:translateX(80px);background:#ff8f00} }
+  .sda-anim-scroll { animation-name:sda-move; animation-duration:1s; animation-timeline:scroll(); animation-fill-mode:both; width:40px; height:40px; background:#e65100; border-radius:4px; }
+  .sda-anim-named { animation-name:sda-move; animation-duration:1s; animation-timeline:--demo-scroll; animation-fill-mode:both; width:40px; height:40px; background:#6a1b9a; border-radius:50%; }
+  @keyframes sda-view-anim { from{transform:scale(1);background:#00838f} to{transform:scale(1.4);background:#00bcd4} }
+  .sda-anim-view { animation-name:sda-view-anim; animation-duration:1s; animation-timeline:view(block); animation-fill-mode:both; width:40px; height:40px; background:#00838f; border-radius:4px; }
+</style>
+<div style="padding:6px">
+  <div class="sda-card">
+    <div class="sda-title">scroll-timeline-name<br>+ axis: block</div>
+    <div class="sda-scroll-container"></div>
+  </div>
+  <div class="sda-card">
+    <div class="sda-title">view-timeline-name<br>+ axis: block</div>
+    <div class="sda-view-subject"></div>
+  </div>
+  <div class="sda-card">
+    <div class="sda-title">animation-timeline:<br>scroll()</div>
+    <div class="sda-anim-scroll"></div>
+  </div>
+  <div class="sda-card">
+    <div class="sda-title">animation-timeline:<br>--demo-scroll</div>
+    <div class="sda-anim-named"></div>
+  </div>
+  <div class="sda-card">
+    <div class="sda-title">animation-timeline:<br>view(block)</div>
+    <div class="sda-anim-view"></div>
+  </div>
+</div><!-- /scroll-driven animations card -->
+
+<!-- text-underline-offset demo card -->
+<style>
+  .tuo-card { background:#1a1a2e; padding:10px; border-radius:4px; }
+  .tuo-row { margin:6px 0; font-size:18px; text-decoration:underline; }
+  .tuo-auto  { color:#e0e0ff; }
+  .tuo-8px   { color:#7ec8e3; text-underline-offset:8px; }
+  .tuo-neg   { color:#f9c846; text-underline-offset:-2px; }
+  .tuo-under { color:#a8e6cf; text-underline-position:under; }
+</style>
+<div class="card tuo-card">
+  <div class="card-title">text-underline-offset / position</div>
+  <div class="tuo-row tuo-auto">auto (default)</div>
+  <div class="tuo-row tuo-8px">+8px offset</div>
+  <div class="tuo-row tuo-neg">-2px offset</div>
+  <div class="tuo-row tuo-under">position: under</div>
+</div><!-- /text-underline-offset card -->
+
+<!-- list-style-type custom @counter-style demo card -->
+<style>
+  @counter-style bracket {
+    system: alphabetic;
+    symbols: "a" "b" "c" "d" "e";
+    prefix: "(";
+    suffix: ") ";
+  }
+  .lst-card { background:#16213e; padding:8px; border-radius:4px; }
+  .lst-row { display:flex; gap:16px; margin-top:8px; }
+  .lst-col { flex:1; }
+  .lst-col ol { padding-left:40px; list-style-type: bracket; margin:0; }
+  .lst-col li { color:#e0e0e0; font-size:14px; line-height:1.5; }
+  .lst-col ul.lsi { padding-left:32px; margin:0; list-style-image: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAHklEQVR42mP8z8BQz0AEYBxVSIqKYdQ6UkBqHSmgJgCzR8/HfUkLvQAAAABJRU5ErkJggg==); }
+</style>
+<div class="card lst-card">
+  <h4>list-style-type: custom @counter-style</h4>
+  <div class="lst-row">
+    <div class="lst-col">
+      <ol>
+        <li>Apple</li>
+        <li>Banana</li>
+        <li>Cherry</li>
+      </ol>
+    </div>
+    <div class="lst-col">
+      <ul class="lsi">
+        <li>Image A</li>
+        <li>Image B</li>
+        <li>Image C</li>
+      </ul>
+    </div>
+  </div>
+</div><!-- /list-style-type custom card -->
+
+
+<!-- counter-set demo card (TEST-97) -->
+<style>
+  .cset-card { background:#16213e; padding:8px; border-radius:4px; margin-top:16px; counter-reset: step 0; }
+  .cset-card h4 { margin:0 0 8px 0; }
+  .cset-row { display:flex; gap:10px; }
+  .cset-item { flex:1; height:48px; line-height:48px; text-align:center; color:#102040;
+               background:#cfe0ff; border-radius:4px; font-size:20px; }
+  .cset-item::before { content: "#" counter(step) "  "; font-weight:bold; }
+  .cset-jump { counter-set: step 10; background:#ffd9b0; }
+  .cset-item { counter-increment: step; }
+</style>
+<div class="card cset-card">
+  <h4>counter-set (reset→increment→set)</h4>
+  <div class="cset-row">
+    <div class="cset-item">a</div>
+    <div class="cset-item">b</div>
+    <div class="cset-item cset-jump">jump→10</div>
+    <div class="cset-item">d</div>
+  </div>
+</div><!-- /counter-set card -->
+
+
+<!-- revert-layer demo card (TEST-98) -->
+<style>
+  .rl-card { background:#16213e; padding:8px; border-radius:4px; margin-top:16px; }
+  .rl-card h4 { margin:0 0 8px 0; }
+  .rl-row { display:flex; gap:10px; }
+  @layer rl-base, rl-theme;
+  @layer rl-base  { .rl-cell { background:#2e7d32; } }   /* green, lower layer */
+  @layer rl-theme {
+    .rl-cell { background:#c62828; }                     /* red, higher layer */
+    .rl-rev  { background:revert-layer; }                /* → back to green */
+  }
+  .rl-cell { flex:1; height:48px; border-radius:4px; }
+</style>
+<div class="card rl-card">
+  <h4>revert-layer (theme → base)</h4>
+  <div class="rl-row">
+    <div class="rl-cell"></div>
+    <div class="rl-cell"></div>
+    <div class="rl-cell rl-rev"></div>
+    <div class="rl-cell rl-rev"></div>
+  </div>
+</div><!-- /revert-layer card -->
+
+
+<!-- @starting-style entry animation demo (TEST-71) -->
+<style>
+  .ss-card { background:#1a1a2e; border-radius:8px; padding:16px; margin-top:16px; display:flex; gap:16px; align-items:center; }
+  @starting-style {
+    .ss-box-a { opacity:0; transform:scale(0.5); }
+    .ss-box-b { opacity:0; transform:translateX(-40px); }
+  }
+  .ss-box-a { width:80px; height:80px; background:#e94560; border-radius:8px; opacity:1; transition:opacity 0.4s,transform 0.4s; }
+  .ss-box-b { width:80px; height:80px; background:#0f3460; border-radius:8px; opacity:1; transition:opacity 0.4s,transform 0.4s; }
+  .ss-label { color:#aaa; font-size:13px; }
+</style>
+<div class="card ss-card">
+  <div class="ss-box-a"></div>
+  <div class="ss-box-b"></div>
+  <span class="ss-label">@starting-style (entry transitions)</span>
+</div>
+
+<!-- :host / ::slotted shadow DOM demo (TEST-72) -->
+<style>
+  .shadow-card { margin-top:16px; display:flex; gap:16px; align-items:stretch; }
+</style>
+<div class="card shadow-card">
+  <!-- shadow host: :host colours the container blue -->
+  <div id="shadow-demo-1" style="width:140px; height:80px;">
+    <template shadowrootmode="open">
+      <style>
+        :host { background:#3366cc; border-radius:6px; display:flex; align-items:center; justify-content:center; }
+        ::slotted(.slot-red) { width:60px; height:40px; background:#cc3300; border-radius:4px; }
+      </style>
+      <slot></slot>
+    </template>
+    <div class="slot-red"></div>
+  </div>
+  <!-- :host(.special) only matches when class is present -->
+  <div id="shadow-demo-2" class="special" style="width:140px; height:80px;">
+    <template shadowrootmode="open">
+      <style>
+        :host(.special) { background:#996600; border-radius:6px; display:flex; align-items:center; justify-content:center; }
+        ::slotted(.slot-green) { width:60px; height:40px; background:#009933; border-radius:4px; }
+      </style>
+      <slot></slot>
+    </template>
+    <div class="slot-green"></div>
+  </div>
+</div>
+
+<!-- ── view-transition-name (CSS View Transitions L1 §10) ──────────────────── -->
+<div style="margin-top:24px;padding:12px;background:#1a2035;border-radius:8px;display:flex;gap:24px;align-items:center;">
+  <div style="width:80px;height:80px;background:#e63946;border-radius:8px;"></div>
+  <div style="width:80px;height:80px;background:#2a9d8f;border-radius:8px;view-transition-name:hero;"></div>
+  <div style="width:80px;height:80px;background:#457b9d;border-radius:8px;view-transition-name:--named;"></div>
+</div>
+
+<!-- ── relative color syntax (CSS Color L5 §4) ─────────────────────────────── -->
+<div style="margin-top:24px;padding:12px;background:#1a2035;border-radius:8px;display:flex;gap:18px;align-items:center;">
+  <div style="width:80px;height:80px;border-radius:8px;background:rgb(from #336699 r g b);"></div>
+  <div style="width:80px;height:80px;border-radius:8px;background:rgb(from #336699 calc(r + 80) g b);"></div>
+  <div style="width:80px;height:80px;border-radius:8px;background:hsl(from #e94560 h s calc(l * 0.6));"></div>
+  <div style="width:80px;height:80px;border-radius:8px;background:oklch(from #0f3460 calc(l + 0.12) c h);"></div>
+</div>
+
+<!-- ── color() predefined spaces (CSS Color 4 §10) ───────────────────────────── -->
+<div style="margin-top:24px;padding:12px;background:#1a2035;border-radius:8px;display:flex;gap:12px;align-items:center;">
+  <div style="width:72px;height:72px;border-radius:8px;background:color(srgb-linear 1 0 0);"></div>
+  <div style="width:72px;height:72px;border-radius:8px;background:color(srgb-linear 0.2140 0.2140 0.2140);"></div>
+  <div style="width:72px;height:72px;border-radius:8px;background:color(xyz-d65 0.9505 1.0 1.089);"></div>
+  <div style="width:72px;height:72px;border-radius:8px;background:color(a98-rgb 0 0 0);"></div>
+  <div style="width:72px;height:72px;border-radius:8px;background:color(prophoto-rgb 1 1 1);"></div>
+</div>
+
+<!-- ── system color keywords (CSS Color 4 §6.2) ──────────────────────────────── -->
+<div style="margin-top:24px;padding:12px;background:#f0f0f0;border-radius:8px;display:flex;gap:8px;flex-wrap:wrap;">
+  <div style="width:80px;height:48px;background:Canvas;border:3px solid CanvasText;border-radius:4px;"></div>
+  <div style="width:80px;height:48px;background:ButtonFace;border:3px solid ButtonBorder;border-radius:4px;"></div>
+  <div style="width:80px;height:48px;background:Field;border:3px solid ButtonBorder;border-radius:4px;"></div>
+  <div style="width:80px;height:48px;background:Highlight;border:3px solid HighlightText;border-radius:4px;"></div>
+  <div style="width:80px;height:48px;background:AccentColor;border:3px solid AccentColorText;border-radius:4px;"></div>
+  <div style="width:80px;height:48px;background:GrayText;border:3px solid Canvas;border-radius:4px;"></div>
+</div>
+
+<!-- ── field-sizing: content (CSS Basic UI L4 §4.4) ──────────────────────────── -->
+<div style="margin-top:24px;padding:12px;background:#1a2035;border-radius:8px;display:flex;gap:18px;align-items:flex-start;">
+  <input type="text" value="ab" style="field-sizing:content;appearance:none;font:16px monospace;border:2px solid #003366;background:#b3d9ff;padding:0;">
+  <input type="text" value="abcdefghijklmnop" style="field-sizing:content;appearance:none;font:16px monospace;border:2px solid #003366;background:#b3d9ff;padding:0;">
+  <input type="text" value="fixed" style="field-sizing:fixed;appearance:none;font:16px monospace;border:2px solid #663300;background:#ffd9b3;padding:0;">
+</div>
+
+<!-- ── interpolate-size: allow-keywords (CSS Sizing L4 §4.5) ──────────────────── -->
+<!-- Inherited opt-in; at rest the auto-height box sizes to its strips only. -->
+<div style="margin-top:24px;interpolate-size:allow-keywords;">
+  <div style="width:280px;height:auto;background:#2f6db5;padding:8px;box-sizing:border-box;">
+    <div style="height:24px;margin-bottom:6px;background:#ffd23f;"></div>
+    <div style="height:24px;background:#ffd23f;"></div>
+  </div>
+</div>
+
+<!-- ── accent-color (CSS UI L4 §6.1) ─────────────────────────────────────────── -->
+<!-- Tints the checked checkbox/radio indicator, range fill+thumb and progress bar. -->
+<div style="margin-top:24px;padding:12px;background:#f0f0f0;border-radius:8px;display:flex;gap:18px;align-items:center;">
+  <input type="checkbox" checked style="accent-color:#d12f2f;width:18px;height:18px;">
+  <input type="radio" checked style="accent-color:#1f9d3a;width:18px;height:18px;">
+  <input type="range" value="70" min="0" max="100" style="accent-color:#e8820c;width:140px;">
+  <progress value="0.6" max="1" style="accent-color:#7a2fd1;width:140px;height:16px;"></progress>
+</div>
+
+<!-- ── appearance: none (CSS Basic UI L4 §4.2) ────────────────────────────────── -->
+<!-- Strips native control UI: the checkbox/radio/range/progress render as blank
+     boxes inside the light wrappers — no native tick or bar is painted. -->
+<div style="margin-top:24px;padding:12px;background:#f0f0f0;border-radius:8px;display:flex;gap:18px;align-items:center;">
+  <span style="display:inline-block;width:40px;height:40px;background:#cfe3ff;border-radius:6px;"><input type="checkbox" checked style="appearance:none;-webkit-appearance:none;display:block;width:24px;height:24px;margin:8px;"></span>
+  <span style="display:inline-block;width:40px;height:40px;background:#cfe3ff;border-radius:6px;"><input type="radio" checked style="appearance:none;-webkit-appearance:none;display:block;width:24px;height:24px;margin:8px;"></span>
+  <span style="display:inline-block;width:40px;height:40px;background:#cfe3ff;border-radius:6px;"><input type="range" value="50" min="0" max="100" style="appearance:none;-webkit-appearance:none;display:block;width:24px;height:24px;margin:8px;"></span>
+  <span style="display:inline-block;width:40px;height:40px;background:#cfe3ff;border-radius:6px;"><progress value="0.6" max="1" style="appearance:none;-webkit-appearance:none;display:block;width:24px;height:12px;margin:14px 8px;"></progress></span>
+</div>
+
 </body>
 </html>

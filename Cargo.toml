@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/shell",
     "crates/core",
+    "crates/bidi-server",
     "crates/devtools",
     "crates/driver",
     "crates/mcp",
@@ -11,6 +12,7 @@ members = [
     "crates/storage",
     "crates/knowledge",
     "crates/bench",
+    "crates/ipc",
     "crates/engine/html-parser",
     "crates/engine/css-parser",
     "crates/engine/dom",
@@ -24,7 +26,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.2.0"
 edition = "2024"
 authors = ["Lumen contributors"]
 license = "MPL-2.0"
@@ -32,6 +34,8 @@ rust-version = "1.95"
 
 [workspace.dependencies]
 lumen-core = { path = "crates/core" }
+lumen-ipc = { path = "crates/ipc" }
+lumen-bidi-server = { path = "crates/bidi-server" }
 lumen-devtools = { path = "crates/devtools" }
 lumen-js = { path = "crates/js" }
 lumen-network = { path = "crates/network" }
@@ -43,7 +47,10 @@ lumen-html-parser = { path = "crates/engine/html-parser" }
 lumen-css-parser = { path = "crates/engine/css-parser" }
 lumen-dom = { path = "crates/engine/dom" }
 lumen-layout = { path = "crates/engine/layout" }
-lumen-paint = { path = "crates/engine/paint" }
+# default-features = false: each crate opts in to the backend it needs.
+# Shell opts in to backend-femtovg (Phase 2 default, ADR-010 RB-9).
+# Driver/bench/js opt in to nothing (they don't need a windowed GPU backend).
+lumen-paint = { path = "crates/engine/paint", default-features = false }
 lumen-font = { path = "crates/engine/font" }
 lumen-encoding = { path = "crates/engine/encoding" }
 lumen-image = { path = "crates/engine/image" }
@@ -73,6 +80,11 @@ serde = { version = "1", features = ["derive"] }
 bincode = "1"
 # Provisional: flate2 для ICC profile decompression в PNG (iCCP chunk uses deflate).
 flate2 = "1"
+# Provisional: lz4_flex — LZ4 frame compression for T2 sleeping-tab JS heap blobs
+# (GG-5, ADR-008 §10I). Pure-Rust, zero unsafe, no C toolchain. Faster than zlib
+# at comparable ratio for binary blobs (QuickJS heap = mixed data). Graduation
+# criterion: replace with zstd frame when a stable pure-Rust impl matures (§5).
+lz4_flex = "0.11"
 # Provisional: hyphenation — Knuth-Liang алгоритм переносов для CSS `hyphens: auto`.
 # Trait-anchor: `lumen-core::ext::HyphenationProvider`. Graduation: permanent когда
 # перенос слов станет стандартной частью pipeline (§5, Phase 2-3).

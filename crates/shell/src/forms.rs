@@ -12,15 +12,15 @@
 
 use std::collections::HashMap;
 
-use lumen_core::form::{encode_form_urlencoded, FormEntry, FormValue};
+use lumen_core::form::{encode_form_multipart, encode_form_urlencoded, FormEntry, FormValue};
 use lumen_core::geom::Rect;
 use lumen_dom::{
     check_validity_form, collect_dom_form_fields, element_validity, find_ancestor_form,
     invalid_controls_in_form, submit_form, Attribute, Document, FormSubmitEvent, InputType,
     NodeData, NodeId, QualName,
 };
-use lumen_layout::{BorderStyle, BoxKind, Color, FontStyle, FontWeight, LayoutBox};
-use lumen_paint::{DisplayCommand, DisplayList};
+use lumen_layout::{BorderStyle, BoxKind, Color, FontStyle, FontWeight, LayoutBox, Mat4};
+use lumen_paint::{build_display_list, DisplayCommand, DisplayList};
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Runtime state
@@ -50,7 +50,21 @@ pub enum FormClickAction {
     ToggleCheckbox(NodeId),
     ToggleRadio { clicked: NodeId, _group_name: String },
     OpenColorPicker(NodeId),
+    /// Open a calendar date-picker overlay for `<input type="date/datetime-local/time/month/week">`.
+    OpenDatePicker(NodeId),
+    /// Open a dropdown overlay showing the `<option>` children of the `<select>`.
+    OpenSelectDropdown(NodeId),
+    /// Open the OS native file-picker dialog for `<input type="file">`.
+    ///
+    /// Shell reads `accept` + `multiple` attributes, calls `platform::file_dialog::open_file_dialog`,
+    /// then evals `_lumen_deliver_file_list(nid, json)` to push results into JS.
+    OpenFilePicker(NodeId),
     SubmitForm(NodeId),
+    /// Toggle the `open` attribute on a `<details>` element (HTML5 §4.11.1).
+    /// NodeId is the `<details>` parent of the clicked `<summary>`.
+    ToggleDetails(NodeId),
+    /// Slide a range input. Shell resolves the new value from click coords + box rect.
+    SlideRange(NodeId),
     Nothing,
 }
 
@@ -68,7 +82,14 @@ pub fn classify_click(doc: &Document, node: NodeId) -> FormClickAction {
                     FormClickAction::ToggleRadio { clicked: node, _group_name: name }
                 }
                 InputType::Color => FormClickAction::OpenColorPicker(node),
+                InputType::Date
+                | InputType::DateTimeLocal
+                | InputType::Time
+                | InputType::Month
+                | InputType::Week => FormClickAction::OpenDatePicker(node),
+                InputType::File => FormClickAction::OpenFilePicker(node),
                 InputType::Submit => FormClickAction::SubmitForm(node),
+                InputType::Range => FormClickAction::SlideRange(node),
                 _ => FormClickAction::Nothing,
             }
         }
@@ -80,13 +101,44 @@ pub fn classify_click(doc: &Document, node: NodeId) -> FormClickAction {
                 FormClickAction::Nothing
             }
         }
+        "select" => FormClickAction::OpenSelectDropdown(node),
+        // HTML5 §4.11.1 — clicking <summary> toggles its parent <details>.
+        "summary" => find_parent_details(doc, node)
+            .map_or(FormClickAction::Nothing, FormClickAction::ToggleDetails),
         _ => FormClickAction::Nothing,
+    }
+}
+
+/// Walk up the DOM tree from `node` to find the nearest `<details>` ancestor.
+fn find_parent_details(doc: &Document, node: NodeId) -> Option<NodeId> {
+    let mut current = doc.get(node).parent?;
+    loop {
+        let n = doc.get(current);
+        if n.element_name().map(|q| q.local.as_str()) == Some("details") {
+            return Some(current);
+        }
+        current = n.parent?;
     }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
 // DOM mutation helpers
 // ──────────────────────────────────────────────────────────────────────────────
+
+/// Toggle the `open` attribute on a `<details>` element in the live DOM.
+///
+/// Adds `open` when absent (expand), removes it when present (collapse).
+/// After calling this, relayout is needed so hidden children become visible.
+pub fn toggle_details_open(doc: &mut Document, id: NodeId) {
+    let node = doc.get_mut(id);
+    if let NodeData::Element { ref mut attrs, .. } = node.data {
+        if attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("open")) {
+            attrs.retain(|a| !a.name.local.eq_ignore_ascii_case("open"));
+        } else {
+            attrs.push(Attribute { name: QualName::html("open"), value: String::new() });
+        }
+    }
+}
 
 /// Toggle the `checked` attribute on a checkbox input in the live DOM.
 /// After calling this, relayout is needed to update `:checked` pseudo-class.
@@ -111,6 +163,29 @@ pub fn set_value(doc: &mut Document, id: NodeId, value: &str) {
             attrs.push(Attribute { name: QualName::html("value"), value: value.to_owned() });
         }
     }
+}
+
+/// Update a range input's `value` attribute from a click at `click_x` within
+/// its bounding rect. Reads `min`/`max` from the DOM and clamps the result.
+///
+/// `slider_rect` is the content-box rect of the `<input type="range">` element.
+/// `click_x` is the page-space x coordinate.
+pub fn apply_range_value(doc: &mut Document, id: NodeId, slider_rect: lumen_core::geom::Rect, click_x: f32) {
+    let thumb_r = 8.0_f32;
+    let track_x = slider_rect.x + thumb_r / 2.0;
+    let track_w = (slider_rect.width - thumb_r).max(1.0);
+
+    let fraction = ((click_x - track_x) / track_w).clamp(0.0, 1.0);
+
+    let min: f32 = doc.get(id).get_attr("min")
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(0.0);
+    let max: f32 = doc.get(id).get_attr("max")
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(100.0);
+
+    let value = min + fraction * (max - min);
+    set_value(doc, id, &format!("{:.6}", value));
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -279,6 +354,77 @@ pub fn find_box_rect(root: &LayoutBox, node: NodeId) -> Option<Rect> {
     None
 }
 
+/// Find the LayoutBox subtree for `node`. Returns `None` if the node has no box.
+pub fn find_layout_box(root: &LayoutBox, node: NodeId) -> Option<&LayoutBox> {
+    if root.node == node {
+        return Some(root);
+    }
+    for child in &root.children {
+        if let Some(lb) = find_layout_box(child, node) {
+            return Some(lb);
+        }
+    }
+    None
+}
+
+/// Walk `doc` and collect all NodeIds with `data-lumen-modal` attribute
+/// (set by `dialog.showModal()`, cleared by `close()` and Escape handler).
+/// Returns them in DOM order (first opened first).
+pub fn collect_modal_dialogs(doc: &Document) -> Vec<NodeId> {
+    let mut out = Vec::new();
+    collect_modal_dialogs_in(doc, doc.root(), &mut out);
+    out
+}
+
+fn collect_modal_dialogs_in(doc: &Document, node: NodeId, out: &mut Vec<NodeId>) {
+    if doc.get(node).get_attr("data-lumen-modal").is_some() {
+        out.push(node);
+    }
+    for &child in &doc.get(node).children.clone() {
+        collect_modal_dialogs_in(doc, child, out);
+    }
+}
+
+/// Build a `::backdrop` + translated dialog overlay for a modal `<dialog>`.
+///
+/// Renders the `::backdrop` (full-viewport dim) followed by the dialog content
+/// shifted to the center of the viewport. The dialog paint commands are produced
+/// by re-walking `dialog_lb` via `build_display_list`, then wrapped in a
+/// `PushTransform`/`PopTransform` pair that translates document-space coords
+/// to viewport-space center. (HTML5 §4.11.7 — top-layer rendering emulation.)
+///
+/// `scroll_y` is the current page scroll in CSS px (document-space → viewport-space).
+pub fn build_dialog_overlay(
+    dialog_lb: &LayoutBox,
+    scroll_y: f32,
+    vp_w: f32,
+    vp_h: f32,
+) -> DisplayList {
+    let r = dialog_lb.rect;
+    // Center the dialog in the viewport.
+    // dialog center in viewport-space: x stays, y adjusted for scroll.
+    let dlg_cx_doc = r.x + r.width * 0.5;
+    let dlg_cy_vp = r.y + r.height * 0.5 - scroll_y;
+    let dx = vp_w * 0.5 - dlg_cx_doc;
+    let dy = vp_h * 0.5 - dlg_cy_vp;
+
+    let mut out: DisplayList = Vec::new();
+
+    // ::backdrop — full viewport, semi-transparent (HTML5 §15.3.9 UA default).
+    out.push(DisplayCommand::FillRect {
+        rect: Rect::new(0.0, 0.0, vp_w, vp_h),
+        color: Color { r: 0, g: 0, b: 0, a: 100 },
+    });
+
+    // Dialog content: re-paint from layout subtree, shifted to viewport center.
+    let dialog_dl = build_display_list(dialog_lb);
+    out.push(DisplayCommand::PushTransform { matrix: Mat4::translation_2d(dx, dy) });
+    out.extend(dialog_dl);
+    out.push(DisplayCommand::PopTransform);
+
+    out
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Validation tooltip overlay
 // ──────────────────────────────────────────────────────────────────────────────
@@ -330,6 +476,7 @@ pub fn build_validation_tooltip(
         font_style: FontStyle::Normal,
         font_variation_axes: vec![],
         tab_size: 0.0,
+        highlight_name: None,
     });
     out
 }
@@ -404,6 +551,40 @@ pub fn encode_form_fields(fields: &[(String, String)]) -> String {
         .map(|(name, value)| FormEntry { name: name.clone(), value: FormValue::Text(value.clone()) })
         .collect();
     encode_form_urlencoded(&entries)
+}
+
+/// Encode form fields as `multipart/form-data` (RFC 7578).
+///
+/// Returns `(content_type, body_bytes)` where `content_type` is
+/// `multipart/form-data; boundary=<boundary>`.
+/// Boundary is deterministic for Phase 0; callers may supply their own.
+pub fn encode_form_fields_multipart(fields: &[(String, String)], boundary: &str) -> (String, Vec<u8>) {
+    let entries: Vec<FormEntry> = fields
+        .iter()
+        .map(|(name, value)| FormEntry { name: name.clone(), value: FormValue::Text(value.clone()) })
+        .collect();
+    let body = encode_form_multipart(&entries, boundary);
+    let ct = format!("multipart/form-data; boundary={boundary}");
+    (ct, body)
+}
+
+/// Return the `enctype` attribute of the `<form>` ancestor of `submit_node`,
+/// normalised to lower-case. Default: `"application/x-www-form-urlencoded"`.
+pub fn get_form_enctype(doc: &Document, submit_node: NodeId) -> String {
+    if let Some(form_id) = find_ancestor_form(doc, submit_node) {
+        let enctype = doc
+            .get(form_id)
+            .get_attr("enctype")
+            .unwrap_or("application/x-www-form-urlencoded")
+            .to_ascii_lowercase();
+        // HTML LS §4.10.18.6: valid enctype values.
+        match enctype.as_str() {
+            "multipart/form-data" | "text/plain" => enctype,
+            _ => "application/x-www-form-urlencoded".to_string(),
+        }
+    } else {
+        "application/x-www-form-urlencoded".to_string()
+    }
 }
 
 #[allow(dead_code)]
@@ -541,10 +722,543 @@ pub fn swatch_to_css_color(c: [u8; 3]) -> String {
     format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// <select> dropdown overlay
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// One entry in a `<select>` dropdown list.
+#[derive(Debug, Clone)]
+pub struct SelectOption {
+    /// Visible label text.
+    pub label: String,
+    /// `value` attribute, or `label` if absent.
+    pub value: String,
+    /// Whether this option carries the `selected` attribute.
+    pub selected: bool,
+    /// Whether this option is `disabled`.
+    pub disabled: bool,
+    /// NodeId of the `<option>` element.
+    pub node_id: NodeId,
+}
+
+/// Row height for each option row in the dropdown.
+pub const DROPDOWN_ROW_H: f32 = 22.0;
+const DROPDOWN_FONT: f32 = 13.0;
+const DROPDOWN_PAD_X: f32 = 8.0;
+const DROPDOWN_PAD_Y: f32 = 4.0;
+const DROPDOWN_MIN_W: f32 = 120.0;
+const DROPDOWN_MAX_ROWS_VISIBLE: usize = 8;
+
+/// Collect all direct `<option>` children of a `<select>` DOM node.
+/// `<optgroup>` children are flattened (their `<option>` children are included).
+pub fn collect_select_options(doc: &Document, select_id: NodeId) -> Vec<SelectOption> {
+    let mut opts = Vec::new();
+    collect_options_from(doc, select_id, &mut opts);
+    opts
+}
+
+fn collect_options_from(doc: &Document, parent_id: NodeId, out: &mut Vec<SelectOption>) {
+    let children = doc.get(parent_id).children.clone();
+    for child_id in children {
+        let child = doc.get(child_id);
+        let NodeData::Element { name, attrs, .. } = &child.data else { continue };
+        match name.local.as_str() {
+            "option" => {
+                let disabled = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("disabled"));
+                let selected = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("selected"));
+                let label = if let Some(a) = attrs.iter().find(|a| a.name.local.eq_ignore_ascii_case("label")) {
+                    a.value.trim().to_owned()
+                } else {
+                    // text content of children
+                    child.children.iter().filter_map(|&c| {
+                        if let NodeData::Text(t) = &doc.get(c).data { Some(t.as_str()) } else { None }
+                    }).collect::<Vec<_>>().join("").trim().to_owned()
+                };
+                let value = attrs.iter()
+                    .find(|a| a.name.local.eq_ignore_ascii_case("value"))
+                    .map(|a| a.value.clone())
+                    .unwrap_or_else(|| label.clone());
+                out.push(SelectOption { label, value, selected, disabled, node_id: child_id });
+            }
+            "optgroup" => collect_options_from(doc, child_id, out),
+            _ => {}
+        }
+    }
+}
+
+/// Build a dropdown overlay anchored below (or above if near the bottom of the
+/// viewport) `anchor`. `scroll_y` converts document-space anchor to viewport-space.
+pub fn build_select_dropdown(
+    anchor: Rect,
+    options: &[SelectOption],
+    scroll_y: f32,
+    viewport_w: f32,
+    viewport_h: f32,
+) -> DisplayList {
+    let mut out: DisplayList = Vec::new();
+    if options.is_empty() {
+        return out;
+    }
+
+    let rows = options.len().min(DROPDOWN_MAX_ROWS_VISIBLE);
+    let w = (anchor.width).max(DROPDOWN_MIN_W).min(viewport_w);
+    let h = rows as f32 * DROPDOWN_ROW_H + DROPDOWN_PAD_Y * 2.0;
+
+    // Position: below anchor, flip above if it would overflow viewport bottom.
+    let anchor_bottom_vp = anchor.y - scroll_y + anchor.height;
+    let vp_y = if anchor_bottom_vp + h > viewport_h && anchor.y - scroll_y >= h {
+        anchor.y - scroll_y - h
+    } else {
+        anchor_bottom_vp + 1.0
+    };
+    let vp_x = anchor.x.min(viewport_w - w).max(0.0);
+
+    let bg = Rect::new(vp_x, vp_y, w, h);
+
+    // Background + shadow border.
+    out.push(DisplayCommand::FillRect {
+        rect: bg,
+        color: Color { r: 255, g: 255, b: 255, a: 255 },
+    });
+    out.push(DisplayCommand::DrawBorder {
+        rect: bg,
+        widths: [1.0; 4],
+        colors: [Color { r: 180, g: 180, b: 180, a: 255 }; 4],
+        styles: [BorderStyle::Solid; 4],
+        radii: lumen_paint::CornerRadii::default(),
+    });
+
+    for (i, opt) in options.iter().take(DROPDOWN_MAX_ROWS_VISIBLE).enumerate() {
+        let row_y = vp_y + DROPDOWN_PAD_Y + i as f32 * DROPDOWN_ROW_H;
+        let row_rect = Rect::new(vp_x, row_y, w, DROPDOWN_ROW_H);
+
+        // Highlight selected option.
+        if opt.selected {
+            out.push(DisplayCommand::FillRect {
+                rect: row_rect,
+                color: Color { r: 0, g: 120, b: 215, a: 255 },
+            });
+        }
+
+        let text_color = if opt.disabled {
+            Color { r: 150, g: 150, b: 150, a: 255 }
+        } else if opt.selected {
+            Color { r: 255, g: 255, b: 255, a: 255 }
+        } else {
+            Color { r: 20, g: 20, b: 20, a: 255 }
+        };
+
+        out.push(DisplayCommand::DrawText {
+            rect: Rect::new(
+                vp_x + DROPDOWN_PAD_X,
+                row_y + (DROPDOWN_ROW_H - DROPDOWN_FONT) * 0.5,
+                w - DROPDOWN_PAD_X * 2.0,
+                DROPDOWN_FONT,
+            ),
+            text: opt.label.clone(),
+            font_size: DROPDOWN_FONT,
+            color: text_color,
+            font_family: vec![],
+            font_weight: FontWeight(400),
+            font_style: FontStyle::Normal,
+            font_variation_axes: vec![],
+            tab_size: 0.0,
+            highlight_name: None,
+        });
+    }
+
+    out
+}
+
+/// If viewport-space point `(px, py)` lands on an option row, return its index.
+pub fn hit_select_option(
+    anchor: Rect,
+    options_count: usize,
+    scroll_y: f32,
+    viewport_w: f32,
+    viewport_h: f32,
+    px: f32,
+    py: f32,
+) -> Option<usize> {
+    if options_count == 0 {
+        return None;
+    }
+    let rows = options_count.min(DROPDOWN_MAX_ROWS_VISIBLE);
+    let w = anchor.width.max(DROPDOWN_MIN_W).min(viewport_w);
+    let h = rows as f32 * DROPDOWN_ROW_H + DROPDOWN_PAD_Y * 2.0;
+
+    let anchor_bottom_vp = anchor.y - scroll_y + anchor.height;
+    let vp_y = if anchor_bottom_vp + h > viewport_h && anchor.y - scroll_y >= h {
+        anchor.y - scroll_y - h
+    } else {
+        anchor_bottom_vp + 1.0
+    };
+    let vp_x = anchor.x.min(viewport_w - w).max(0.0);
+
+    if px < vp_x || px > vp_x + w || py < vp_y || py > vp_y + h {
+        return None;
+    }
+    let rel_y = py - vp_y - DROPDOWN_PAD_Y;
+    if rel_y < 0.0 {
+        return None;
+    }
+    let row = (rel_y / DROPDOWN_ROW_H) as usize;
+    if row < rows { Some(row) } else { None }
+}
+
+/// Apply the selection of option at `opt_idx` to the `<select>` DOM node:
+/// removes all `selected` attributes, then sets `selected` on the chosen option.
+pub fn apply_select_choice(doc: &mut Document, options: &[SelectOption], opt_idx: usize) {
+    for opt in options {
+        let node = doc.get_mut(opt.node_id);
+        if let NodeData::Element { ref mut attrs, .. } = node.data {
+            attrs.retain(|a| !a.name.local.eq_ignore_ascii_case("selected"));
+        }
+    }
+    if let Some(chosen) = options.get(opt_idx) {
+        let node = doc.get_mut(chosen.node_id);
+        if let NodeData::Element { ref mut attrs, .. } = node.data {
+            attrs.push(Attribute { name: QualName::html("selected"), value: String::new() });
+        }
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Date picker overlay
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// What a viewport-space click hit inside an open date picker.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DatePickerHit {
+    /// Click landed on the previous-month arrow.
+    Prev,
+    /// Click landed on the next-month arrow.
+    Next,
+    /// Click landed on calendar day `day` (1-based).
+    Day(u8),
+    /// Click outside the picker (or in an empty cell).
+    None,
+}
+
+const DATE_CELL_W: f32 = 24.0;
+const DATE_CELL_H: f32 = 24.0;
+const DATE_CELL_GAP: f32 = 2.0;
+const DATE_PICKER_PAD: f32 = 6.0;
+const DATE_HEADER_H: f32 = 26.0;
+const DATE_DAYNAME_H: f32 = 18.0;
+const DATE_ROWS: usize = 6;
+
+fn date_picker_size() -> (f32, f32) {
+    let w = 7.0 * (DATE_CELL_W + DATE_CELL_GAP) - DATE_CELL_GAP + DATE_PICKER_PAD * 2.0;
+    let h = DATE_PICKER_PAD * 2.0
+        + DATE_HEADER_H
+        + DATE_DAYNAME_H
+        + DATE_ROWS as f32 * (DATE_CELL_H + DATE_CELL_GAP);
+    (w, h)
+}
+
+/// True if `year` is a leap year.
+pub fn is_leap_year(year: i32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
+/// Number of days in the given month (1-based month, Gregorian calendar).
+pub fn days_in_month(year: i32, month: u8) -> u8 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => if is_leap_year(year) { 29 } else { 28 },
+        _ => 30,
+    }
+}
+
+/// ISO weekday (0=Mon … 6=Sun) of the first day of the given month.
+/// Uses Zeller's congruence converted to ISO day-of-week.
+pub fn first_weekday_of_month(year: i32, month: u8) -> u8 {
+    let (y, m) = if month <= 2 {
+        (year - 1, month as i32 + 12)
+    } else {
+        (year, month as i32)
+    };
+    let k = y % 100;
+    let j = y / 100;
+    // Zeller: h=0 Sat, h=1 Sun, h=2 Mon … h=6 Fri
+    let h = (1 + (13 * (m + 1)) / 5 + k + k / 4 + j / 4 - 2 * j).rem_euclid(7);
+    // Convert to ISO: (h + 5) % 7  → Mon=0 … Sun=6
+    ((h + 5) % 7) as u8
+}
+
+/// English month name, 1-based.
+pub fn month_name(month: u8) -> &'static str {
+    match month {
+        1 => "January", 2 => "February", 3 => "March",
+        4 => "April",   5 => "May",       6 => "June",
+        7 => "July",    8 => "August",    9 => "September",
+        10 => "October", 11 => "November", 12 => "December",
+        _ => "?",
+    }
+}
+
+/// Parse an ISO 8601 date string `YYYY-MM-DD` → `(year, month, day)`.
+/// Returns `None` if the string is malformed.
+pub fn parse_date_value(value: &str) -> Option<(i32, u8, u8)> {
+    let parts: Vec<&str> = value.splitn(3, '-').collect();
+    if parts.len() != 3 { return None; }
+    let y: i32 = parts[0].parse().ok()?;
+    let m: u8 = parts[1].parse().ok()?;
+    let d: u8 = parts[2].parse().ok()?;
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) { return None; }
+    Some((y, m, d))
+}
+
+/// Format `(year, month, day)` as `YYYY-MM-DD`.
+pub fn format_date_value(year: i32, month: u8, day: u8) -> String {
+    format!("{:04}-{:02}-{:02}", year, month, day)
+}
+
+/// Return the current year and month derived from the system clock.
+/// Falls back to (2026, 1) if the clock is unavailable.
+pub fn today_year_month() -> (i32, u8) {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0) as i64;
+    // Howard Hinnant civil_from_days algorithm.
+    let days = (secs / 86400) as i32;
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y_final = if m <= 2 { y + 1 } else { y };
+    (y_final, m as u8)
+}
+
+/// Build a calendar date-picker overlay anchored below `anchor` (document coords).
+///
+/// `year`/`month` define which month to display (1-based month).
+/// The overlay is viewport-locked: `scroll_y` converts document-space anchor to
+/// viewport-space. Navigation arrows (Prev/Next) are rendered at the header ends.
+pub fn build_date_picker(
+    anchor: Rect,
+    scroll_y: f32,
+    viewport_w: f32,
+    year: i32,
+    month: u8,
+) -> DisplayList {
+    let mut out: DisplayList = Vec::new();
+    let (pw, ph) = date_picker_size();
+
+    let vp_y = anchor.y - scroll_y + anchor.height + 4.0;
+    let vp_x = anchor.x.min(viewport_w - pw).max(0.0);
+    let bg = Rect::new(vp_x, vp_y, pw, ph);
+
+    // Background
+    out.push(DisplayCommand::FillRect {
+        rect: bg,
+        color: Color { r: 255, g: 255, b: 255, a: 255 },
+    });
+    out.push(DisplayCommand::DrawBorder {
+        rect: bg,
+        widths: [1.0; 4],
+        colors: [Color { r: 160, g: 160, b: 160, a: 255 }; 4],
+        styles: [BorderStyle::Solid; 4],
+        radii: lumen_paint::CornerRadii::default(),
+    });
+
+    let content_x = vp_x + DATE_PICKER_PAD;
+    let content_w = pw - DATE_PICKER_PAD * 2.0;
+    let header_y = vp_y + DATE_PICKER_PAD;
+
+    // ── Header: "← June 2026 →" ─────────────────────────────────────
+    let arrow_w = DATE_HEADER_H;
+    // Prev arrow background on hover — rendered as a grey rect
+    out.push(DisplayCommand::FillRect {
+        rect: Rect::new(content_x, header_y, arrow_w, DATE_HEADER_H),
+        color: Color { r: 235, g: 235, b: 235, a: 255 },
+    });
+    out.push(DisplayCommand::DrawText {
+        rect: Rect::new(content_x, header_y + 4.0, arrow_w, DATE_HEADER_H - 4.0),
+        text: "<".to_owned(),
+        font_size: 14.0,
+        color: Color { r: 40, g: 40, b: 40, a: 255 },
+        font_family: vec![],
+        font_weight: FontWeight(700),
+        font_style: FontStyle::Normal,
+        font_variation_axes: vec![],
+        tab_size: 0.0,
+        highlight_name: None,
+    });
+    // Month/year label centered
+    let label = format!("{} {}", month_name(month), year);
+    out.push(DisplayCommand::DrawText {
+        rect: Rect::new(content_x + arrow_w, header_y + 4.0, content_w - arrow_w * 2.0, DATE_HEADER_H - 4.0),
+        text: label,
+        font_size: 12.0,
+        color: Color { r: 20, g: 20, b: 20, a: 255 },
+        font_family: vec![],
+        font_weight: FontWeight(600),
+        font_style: FontStyle::Normal,
+        font_variation_axes: vec![],
+        tab_size: 0.0,
+        highlight_name: None,
+    });
+    // Next arrow
+    out.push(DisplayCommand::FillRect {
+        rect: Rect::new(content_x + content_w - arrow_w, header_y, arrow_w, DATE_HEADER_H),
+        color: Color { r: 235, g: 235, b: 235, a: 255 },
+    });
+    out.push(DisplayCommand::DrawText {
+        rect: Rect::new(content_x + content_w - arrow_w, header_y + 4.0, arrow_w, DATE_HEADER_H - 4.0),
+        text: ">".to_owned(),
+        font_size: 14.0,
+        color: Color { r: 40, g: 40, b: 40, a: 255 },
+        font_family: vec![],
+        font_weight: FontWeight(700),
+        font_style: FontStyle::Normal,
+        font_variation_axes: vec![],
+        tab_size: 0.0,
+        highlight_name: None,
+    });
+
+    // ── Day-of-week header ───────────────────────────────────────────
+    let daynames = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
+    let daynames_y = header_y + DATE_HEADER_H;
+    for (i, name) in daynames.iter().enumerate() {
+        let cell_x = content_x + i as f32 * (DATE_CELL_W + DATE_CELL_GAP);
+        out.push(DisplayCommand::DrawText {
+            rect: Rect::new(cell_x, daynames_y, DATE_CELL_W, DATE_DAYNAME_H),
+            text: (*name).to_owned(),
+            font_size: 10.0,
+            color: Color { r: 100, g: 100, b: 100, a: 255 },
+            font_family: vec![],
+            font_weight: FontWeight(400),
+            font_style: FontStyle::Normal,
+            font_variation_axes: vec![],
+            tab_size: 0.0,
+            highlight_name: None,
+        });
+    }
+
+    // ── Day cells ────────────────────────────────────────────────────
+    let days_start_y = daynames_y + DATE_DAYNAME_H;
+    let first_col = first_weekday_of_month(year, month) as usize;
+    let num_days = days_in_month(year, month) as usize;
+
+    for day in 1..=num_days {
+        let cell_idx = first_col + day - 1;
+        let row = cell_idx / 7;
+        let col = cell_idx % 7;
+        let cx = content_x + col as f32 * (DATE_CELL_W + DATE_CELL_GAP);
+        let cy = days_start_y + row as f32 * (DATE_CELL_H + DATE_CELL_GAP);
+        let cell_rect = Rect::new(cx, cy, DATE_CELL_W, DATE_CELL_H);
+
+        // Highlight weekend days slightly
+        if col >= 5 {
+            out.push(DisplayCommand::FillRect {
+                rect: cell_rect,
+                color: Color { r: 248, g: 245, b: 255, a: 255 },
+            });
+        }
+        out.push(DisplayCommand::DrawText {
+            rect: cell_rect,
+            text: day.to_string(),
+            font_size: 12.0,
+            color: Color { r: 20, g: 20, b: 20, a: 255 },
+            font_family: vec![],
+            font_weight: FontWeight(400),
+            font_style: FontStyle::Normal,
+            font_variation_axes: vec![],
+            tab_size: 0.0,
+            highlight_name: None,
+        });
+    }
+
+    out
+}
+
+/// Hit-test a viewport-space click `(px, py)` against an open date picker.
+///
+/// Returns `DatePickerHit::Day(d)` when a day cell is clicked,
+/// `DatePickerHit::Prev`/`Next` for navigation arrows, or
+/// `DatePickerHit::None` when the click is outside the picker.
+pub fn hit_date_picker(
+    anchor: Rect,
+    scroll_y: f32,
+    viewport_w: f32,
+    year: i32,
+    month: u8,
+    px: f32,
+    py: f32,
+) -> DatePickerHit {
+    let (pw, ph) = date_picker_size();
+    let vp_y = anchor.y - scroll_y + anchor.height + 4.0;
+    let vp_x = anchor.x.min(viewport_w - pw).max(0.0);
+
+    if px < vp_x || px > vp_x + pw || py < vp_y || py > vp_y + ph {
+        return DatePickerHit::None;
+    }
+
+    let rel_x = px - vp_x - DATE_PICKER_PAD;
+    let rel_y = py - vp_y - DATE_PICKER_PAD;
+    let content_w = pw - DATE_PICKER_PAD * 2.0;
+    let arrow_w = DATE_HEADER_H;
+
+    // Header row
+    if rel_y < DATE_HEADER_H {
+        if rel_x < arrow_w {
+            return DatePickerHit::Prev;
+        }
+        if rel_x > content_w - arrow_w {
+            return DatePickerHit::Next;
+        }
+        return DatePickerHit::None;
+    }
+
+    // Day name row
+    if rel_y < DATE_HEADER_H + DATE_DAYNAME_H {
+        return DatePickerHit::None;
+    }
+
+    // Day cells grid
+    let grid_y = rel_y - DATE_HEADER_H - DATE_DAYNAME_H;
+    let col = (rel_x / (DATE_CELL_W + DATE_CELL_GAP)) as usize;
+    let row = (grid_y / (DATE_CELL_H + DATE_CELL_GAP)) as usize;
+    if col >= 7 { return DatePickerHit::None; }
+
+    // Ensure click is within the cell (not in the gap)
+    let cell_rel_x = rel_x % (DATE_CELL_W + DATE_CELL_GAP);
+    let cell_rel_y = grid_y % (DATE_CELL_H + DATE_CELL_GAP);
+    if cell_rel_x > DATE_CELL_W || cell_rel_y > DATE_CELL_H {
+        return DatePickerHit::None;
+    }
+
+    let first_col = first_weekday_of_month(year, month) as usize;
+    let cell_idx = row * 7 + col;
+    if cell_idx < first_col { return DatePickerHit::None; }
+    let day = cell_idx - first_col + 1;
+    let num_days = days_in_month(year, month) as usize;
+    if day < 1 || day > num_days { return DatePickerHit::None; }
+    DatePickerHit::Day(day as u8)
+}
+
+/// Advance display month by `delta` months (positive = forward, negative = backward).
+/// Returns the new `(year, month)` pair, clamped to valid Gregorian range.
+pub fn advance_month(year: i32, month: u8, delta: i32) -> (i32, u8) {
+    let total = (year * 12 + month as i32 - 1) + delta;
+    let new_year = total.div_euclid(12);
+    let new_month = (total.rem_euclid(12) + 1) as u8;
+    (new_year, new_month)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use lumen_dom::{Attribute, Document, NodeData, NodeId, QualName};
+    use lumen_layout::{ComputedStyle, DirtyBits};
 
     fn make_submit_doc() -> (Document, NodeId) {
         // <form action="/go" method="get">
@@ -785,5 +1499,550 @@ mod tests {
         // This would need a proper LayoutBox tree to test. For now just verify
         // that find_all_validation_errors function exists and compiles.
         let _ = find_all_validation_errors;
+    }
+
+    // ──── multipart encoding + enctype tests ────────────────────────────────
+
+    fn make_enctype_doc(enctype: &str) -> (Document, NodeId) {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(form).data {
+            attrs.push(Attribute { name: QualName::html("action"), value: "/upload".into() });
+            attrs.push(Attribute { name: QualName::html("method"), value: "post".into() });
+            attrs.push(Attribute { name: QualName::html("enctype"), value: enctype.into() });
+        }
+        let inp = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp).data {
+            attrs.push(Attribute { name: QualName::html("name"), value: "file".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "data".into() });
+        }
+        let submit = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(submit).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "submit".into() });
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, inp);
+        doc.append_child(form, submit);
+        (doc, submit)
+    }
+
+    #[test]
+    fn encode_form_fields_multipart_contains_boundary() {
+        let fields = vec![("name".to_string(), "alice".to_string())];
+        let (ct, body) = encode_form_fields_multipart(&fields, "testboundary");
+        assert_eq!(ct, "multipart/form-data; boundary=testboundary");
+        let s = String::from_utf8(body).unwrap();
+        assert!(s.contains("--testboundary"), "body must contain boundary");
+        assert!(s.contains("name=\"name\""), "body must contain field name");
+        assert!(s.contains("alice"), "body must contain field value");
+        assert!(s.ends_with("--testboundary--\r\n"), "body must end with closing boundary");
+    }
+
+    #[test]
+    fn encode_form_fields_multipart_two_fields() {
+        let fields = vec![
+            ("a".to_string(), "1".to_string()),
+            ("b".to_string(), "2".to_string()),
+        ];
+        let (_ct, body) = encode_form_fields_multipart(&fields, "B");
+        let s = String::from_utf8(body).unwrap();
+        let a_pos = s.find("name=\"a\"").unwrap();
+        let b_pos = s.find("name=\"b\"").unwrap();
+        assert!(a_pos < b_pos, "fields must appear in order");
+    }
+
+    #[test]
+    fn get_form_enctype_default_urlencoded() {
+        let (doc, submit) = make_submit_doc(); // no enctype attr
+        let enctype = get_form_enctype(&doc, submit);
+        assert_eq!(enctype, "application/x-www-form-urlencoded");
+    }
+
+    #[test]
+    fn get_form_enctype_multipart() {
+        let (doc, submit) = make_enctype_doc("multipart/form-data");
+        let enctype = get_form_enctype(&doc, submit);
+        assert_eq!(enctype, "multipart/form-data");
+    }
+
+    #[test]
+    fn get_form_enctype_text_plain() {
+        let (doc, submit) = make_enctype_doc("text/plain");
+        let enctype = get_form_enctype(&doc, submit);
+        assert_eq!(enctype, "text/plain");
+    }
+
+    #[test]
+    fn get_form_enctype_unknown_falls_back_to_urlencoded() {
+        let (doc, submit) = make_enctype_doc("application/json");
+        let enctype = get_form_enctype(&doc, submit);
+        assert_eq!(enctype, "application/x-www-form-urlencoded");
+    }
+
+    #[test]
+    fn get_form_enctype_no_ancestor_form_defaults() {
+        let mut doc = Document::new();
+        let orphan = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(orphan).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "submit".into() });
+        }
+        doc.append_child(doc.root(), orphan);
+        let enctype = get_form_enctype(&doc, orphan);
+        assert_eq!(enctype, "application/x-www-form-urlencoded");
+    }
+
+    // ──── <select> dropdown tests ────────────────────────────────────────────
+
+    fn make_select_doc() -> (Document, NodeId) {
+        // <select>
+        //   <option value="a">Apple</option>
+        //   <option value="b" selected>Banana</option>
+        //   <option value="c" disabled>Cherry</option>
+        // </select>
+        let mut doc = Document::new();
+        let sel = doc.create_element(QualName::html("select"));
+
+        let opt_a = doc.create_element(QualName::html("option"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(opt_a).data {
+            attrs.push(Attribute { name: QualName::html("value"), value: "a".into() });
+        }
+        let txt_a = doc.create_text(String::from("Apple"));
+
+        let opt_b = doc.create_element(QualName::html("option"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(opt_b).data {
+            attrs.push(Attribute { name: QualName::html("value"), value: "b".into() });
+            attrs.push(Attribute { name: QualName::html("selected"), value: String::new() });
+        }
+        let txt_b = doc.create_text(String::from("Banana"));
+
+        let opt_c = doc.create_element(QualName::html("option"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(opt_c).data {
+            attrs.push(Attribute { name: QualName::html("value"), value: "c".into() });
+            attrs.push(Attribute { name: QualName::html("disabled"), value: String::new() });
+        }
+        let txt_c = doc.create_text(String::from("Cherry"));
+
+        doc.append_child(doc.root(), sel);
+        doc.append_child(sel, opt_a);
+        doc.append_child(opt_a, txt_a);
+        doc.append_child(sel, opt_b);
+        doc.append_child(opt_b, txt_b);
+        doc.append_child(sel, opt_c);
+        doc.append_child(opt_c, txt_c);
+        (doc, sel)
+    }
+
+    #[test]
+    fn collect_select_options_labels_and_values() {
+        let (doc, sel) = make_select_doc();
+        let opts = collect_select_options(&doc, sel);
+        assert_eq!(opts.len(), 3);
+        assert_eq!(opts[0].label, "Apple");
+        assert_eq!(opts[0].value, "a");
+        assert!(!opts[0].selected);
+        assert!(!opts[0].disabled);
+        assert_eq!(opts[1].label, "Banana");
+        assert_eq!(opts[1].value, "b");
+        assert!(opts[1].selected);
+        assert!(!opts[1].disabled);
+        assert!(opts[2].disabled);
+    }
+
+    #[test]
+    fn classify_click_select_returns_open_dropdown() {
+        let (doc, sel) = make_select_doc();
+        let action = classify_click(&doc, sel);
+        assert!(matches!(action, FormClickAction::OpenSelectDropdown(_)));
+    }
+
+    #[test]
+    fn hit_select_option_returns_correct_row() {
+        let anchor = Rect::new(100.0, 200.0, 120.0, 22.0);
+        // dropdown appears below anchor (no flip needed for default viewport)
+        let vp_w = 1024.0;
+        let vp_h = 720.0;
+        let scroll_y = 0.0;
+        // Click on first row: just below the anchor + border + PAD_Y
+        let anchor_bottom_vp = 200.0 + 22.0;
+        let dd_y = anchor_bottom_vp + 1.0;
+        let click_y = dd_y + DROPDOWN_PAD_Y + DROPDOWN_ROW_H * 0.5;
+        let result = hit_select_option(anchor, 3, scroll_y, vp_w, vp_h, 110.0, click_y);
+        assert_eq!(result, Some(0));
+    }
+
+    #[test]
+    fn hit_select_option_second_row() {
+        let anchor = Rect::new(100.0, 200.0, 120.0, 22.0);
+        let vp_w = 1024.0;
+        let vp_h = 720.0;
+        let scroll_y = 0.0;
+        let anchor_bottom_vp = 200.0 + 22.0;
+        let dd_y = anchor_bottom_vp + 1.0;
+        let click_y = dd_y + DROPDOWN_PAD_Y + DROPDOWN_ROW_H * 1.5;
+        let result = hit_select_option(anchor, 3, scroll_y, vp_w, vp_h, 110.0, click_y);
+        assert_eq!(result, Some(1));
+    }
+
+    #[test]
+    fn hit_select_option_outside_returns_none() {
+        let anchor = Rect::new(100.0, 200.0, 120.0, 22.0);
+        // Click far outside the dropdown area.
+        let result = hit_select_option(anchor, 3, 0.0, 1024.0, 720.0, 500.0, 500.0);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn apply_select_choice_moves_selected_attr() {
+        let (mut doc, sel) = make_select_doc();
+        let opts = collect_select_options(&doc, sel);
+        // Initially "b" (idx=1) is selected. Pick idx=0.
+        apply_select_choice(&mut doc, &opts, 0);
+        let updated = collect_select_options(&doc, sel);
+        assert!(updated[0].selected);
+        assert!(!updated[1].selected);
+        assert!(!updated[2].selected);
+    }
+
+    #[test]
+    fn build_select_dropdown_non_empty() {
+        let (doc, sel) = make_select_doc();
+        let opts = collect_select_options(&doc, sel);
+        let anchor = Rect::new(10.0, 10.0, 100.0, 22.0);
+        let dl = build_select_dropdown(anchor, &opts, 0.0, 1024.0, 720.0);
+        assert!(!dl.is_empty(), "dropdown display list should not be empty");
+    }
+
+    // ── <details>/<summary> tests ─────────────────────────────────────────────
+
+    /// Build <details><summary>S</summary><p>content</p></details>.
+    fn make_details_doc() -> (Document, NodeId, NodeId) {
+        let mut doc = Document::new();
+        let details = doc.create_element(QualName::html("details"));
+        let summary = doc.create_element(QualName::html("summary"));
+        let p = doc.create_element(QualName::html("p"));
+        doc.append_child(doc.root(), details);
+        doc.append_child(details, summary);
+        doc.append_child(details, p);
+        (doc, details, summary)
+    }
+
+    #[test]
+    fn classify_click_summary_returns_toggle_details() {
+        let (doc, details, summary) = make_details_doc();
+        match classify_click(&doc, summary) {
+            FormClickAction::ToggleDetails(id) => assert_eq!(id, details),
+            other => panic!("expected ToggleDetails, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn toggle_details_open_adds_open_attr() {
+        let (mut doc, details, _) = make_details_doc();
+        // Initially no `open` attribute.
+        assert!(doc.get(details).get_attr("open").is_none());
+        toggle_details_open(&mut doc, details);
+        assert!(doc.get(details).get_attr("open").is_some());
+    }
+
+    #[test]
+    fn toggle_details_open_removes_open_attr() {
+        let (mut doc, details, _) = make_details_doc();
+        // Add `open` first.
+        if let NodeData::Element { ref mut attrs, .. } = doc.get_mut(details).data {
+            attrs.push(Attribute { name: QualName::html("open"), value: String::new() });
+        }
+        toggle_details_open(&mut doc, details);
+        assert!(doc.get(details).get_attr("open").is_none());
+    }
+
+    #[test]
+    fn classify_click_non_summary_returns_nothing_for_p() {
+        let mut doc = Document::new();
+        let p = doc.create_element(QualName::html("p"));
+        doc.append_child(doc.root(), p);
+        matches!(classify_click(&doc, p), FormClickAction::Nothing);
+    }
+
+    #[test]
+    fn summary_without_details_parent_returns_nothing() {
+        // <summary> that is NOT inside a <details> should return Nothing.
+        let mut doc = Document::new();
+        let summary = doc.create_element(QualName::html("summary"));
+        doc.append_child(doc.root(), summary);
+        matches!(classify_click(&doc, summary), FormClickAction::Nothing);
+    }
+
+    // ── <dialog> modal overlay tests ─────────────────────────────────────────
+
+    fn make_dialog_doc() -> (Document, NodeId) {
+        let mut doc = Document::new();
+        let dlg = doc.create_element(QualName::html("dialog"));
+        doc.append_child(doc.root(), dlg);
+        (doc, dlg)
+    }
+
+    fn make_dialog_lb(node: NodeId, rect: Rect) -> LayoutBox {
+        LayoutBox {
+            node,
+            rect,
+            style: ComputedStyle::root(),
+            kind: BoxKind::Block,
+            children: vec![],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            dirty: DirtyBits::CLEAN,
+        }
+    }
+
+    #[test]
+    fn collect_modal_dialogs_empty_without_sentinel() {
+        let (doc, _) = make_dialog_doc();
+        // No `data-lumen-modal` attr → empty result.
+        assert!(collect_modal_dialogs(&doc).is_empty());
+    }
+
+    #[test]
+    fn collect_modal_dialogs_finds_sentinel() {
+        let (mut doc, dlg) = make_dialog_doc();
+        if let NodeData::Element { ref mut attrs, .. } = doc.get_mut(dlg).data {
+            attrs.push(Attribute {
+                name: QualName::html("data-lumen-modal"),
+                value: String::new(),
+            });
+        }
+        let result = collect_modal_dialogs(&doc);
+        assert_eq!(result, vec![dlg]);
+    }
+
+    #[test]
+    fn collect_modal_dialogs_finds_multiple_in_order() {
+        let mut doc = Document::new();
+        let d1 = doc.create_element(QualName::html("dialog"));
+        let d2 = doc.create_element(QualName::html("dialog"));
+        doc.append_child(doc.root(), d1);
+        doc.append_child(doc.root(), d2);
+        for &id in &[d1, d2] {
+            if let NodeData::Element { ref mut attrs, .. } = doc.get_mut(id).data {
+                attrs.push(Attribute {
+                    name: QualName::html("data-lumen-modal"),
+                    value: String::new(),
+                });
+            }
+        }
+        assert_eq!(collect_modal_dialogs(&doc), vec![d1, d2]);
+    }
+
+    #[test]
+    fn build_dialog_overlay_starts_with_backdrop() {
+        let mut _doc = Document::new();
+        let nid = _doc.create_element(QualName::html("dialog"));
+        let lb = make_dialog_lb(nid, Rect::new(200.0, 100.0, 300.0, 200.0));
+        let overlay = build_dialog_overlay(&lb, 0.0, 1024.0, 720.0);
+        // First command must be a full-viewport FillRect (the ::backdrop).
+        match overlay.first() {
+            Some(DisplayCommand::FillRect { rect, .. }) => {
+                assert!((rect.width - 1024.0).abs() < 1.0);
+                assert!((rect.height - 720.0).abs() < 1.0);
+            }
+            other => panic!("expected FillRect backdrop, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_dialog_overlay_wraps_with_transform() {
+        let mut _doc = Document::new();
+        let nid = _doc.create_element(QualName::html("dialog"));
+        let lb = make_dialog_lb(nid, Rect::new(0.0, 0.0, 200.0, 100.0));
+        let overlay = build_dialog_overlay(&lb, 0.0, 1024.0, 720.0);
+        let has_push = overlay.iter().any(|c| matches!(c, DisplayCommand::PushTransform { .. }));
+        let has_pop = overlay.iter().any(|c| matches!(c, DisplayCommand::PopTransform));
+        assert!(has_push, "overlay must contain PushTransform");
+        assert!(has_pop, "overlay must contain PopTransform");
+    }
+
+    // ── Range input tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn classify_click_range_input_returns_slide_range() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { ref mut attrs, .. } = doc.get_mut(input).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "range".to_owned() });
+        }
+        doc.append_child(doc.root(), input);
+        assert!(matches!(classify_click(&doc, input), FormClickAction::SlideRange(_)));
+    }
+
+    #[test]
+    fn apply_range_value_sets_correct_value() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { ref mut attrs, .. } = doc.get_mut(input).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "range".to_owned() });
+            attrs.push(Attribute { name: QualName::html("min"), value: "0".to_owned() });
+            attrs.push(Attribute { name: QualName::html("max"), value: "100".to_owned() });
+        }
+        doc.append_child(doc.root(), input);
+
+        // Click at exact midpoint of a 100px-wide slider rect.
+        let rect = lumen_core::geom::Rect::new(0.0, 0.0, 100.0, 20.0);
+        apply_range_value(&mut doc, input, rect, 50.0);
+
+        let val: f32 = doc.get(input)
+            .get_attr("value")
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(-1.0);
+        assert!((40.0..=60.0).contains(&val), "expected ~50.0, got {val}");
+    }
+
+    #[test]
+    fn apply_range_value_clamps_to_bounds() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { ref mut attrs, .. } = doc.get_mut(input).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "range".to_owned() });
+            attrs.push(Attribute { name: QualName::html("min"), value: "0".to_owned() });
+            attrs.push(Attribute { name: QualName::html("max"), value: "100".to_owned() });
+        }
+        doc.append_child(doc.root(), input);
+
+        // Click far to the left of the track → value should be min (0).
+        let rect = lumen_core::geom::Rect::new(10.0, 0.0, 100.0, 20.0);
+        apply_range_value(&mut doc, input, rect, -1000.0);
+
+        let val: f32 = doc.get(input)
+            .get_attr("value")
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(-1.0);
+        assert!(val >= 0.0, "value clamped below min should be >= 0, got {val}");
+    }
+
+    // ── Date picker tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn days_in_month_common_cases() {
+        assert_eq!(days_in_month(2026, 1), 31);
+        assert_eq!(days_in_month(2026, 2), 28);
+        assert_eq!(days_in_month(2024, 2), 29); // leap year
+        assert_eq!(days_in_month(2026, 4), 30);
+        assert_eq!(days_in_month(2026, 12), 31);
+    }
+
+    #[test]
+    fn is_leap_year_cases() {
+        assert!(is_leap_year(2000)); // divisible by 400
+        assert!(!is_leap_year(1900)); // divisible by 100 but not 400
+        assert!(is_leap_year(2024));
+        assert!(!is_leap_year(2023));
+    }
+
+    #[test]
+    fn first_weekday_of_month_june_2026() {
+        // June 1, 2026 is a Monday (ISO weekday 0).
+        assert_eq!(first_weekday_of_month(2026, 6), 0);
+    }
+
+    #[test]
+    fn first_weekday_of_month_january_2024() {
+        // January 1, 2024 is a Monday.
+        assert_eq!(first_weekday_of_month(2024, 1), 0);
+    }
+
+    #[test]
+    fn first_weekday_of_month_february_2026() {
+        // February 1, 2026 is a Sunday (ISO weekday 6).
+        assert_eq!(first_weekday_of_month(2026, 2), 6);
+    }
+
+    #[test]
+    fn parse_date_value_valid() {
+        assert_eq!(parse_date_value("2026-06-09"), Some((2026, 6, 9)));
+        assert_eq!(parse_date_value("2000-01-01"), Some((2000, 1, 1)));
+    }
+
+    #[test]
+    fn parse_date_value_invalid() {
+        assert_eq!(parse_date_value("not-a-date"), None);
+        assert_eq!(parse_date_value("2026-13-01"), None); // month out of range
+        assert_eq!(parse_date_value("2026-06"), None);   // too short
+    }
+
+    #[test]
+    fn format_date_value_roundtrip() {
+        let s = format_date_value(2026, 6, 9);
+        assert_eq!(s, "2026-06-09");
+        assert_eq!(parse_date_value(&s), Some((2026, 6, 9)));
+    }
+
+    #[test]
+    fn advance_month_forward() {
+        assert_eq!(advance_month(2026, 12, 1), (2027, 1));
+        assert_eq!(advance_month(2026, 6, 1), (2026, 7));
+    }
+
+    #[test]
+    fn advance_month_backward() {
+        assert_eq!(advance_month(2026, 1, -1), (2025, 12));
+        assert_eq!(advance_month(2026, 6, -1), (2026, 5));
+    }
+
+    #[test]
+    fn hit_date_picker_outside_returns_none() {
+        let anchor = Rect::new(100.0, 100.0, 120.0, 22.0);
+        // Click far outside the overlay area.
+        let hit = hit_date_picker(anchor, 0.0, 1024.0, 2026, 6, 0.0, 0.0);
+        assert_eq!(hit, DatePickerHit::None);
+    }
+
+    #[test]
+    fn hit_date_picker_prev_arrow() {
+        let anchor = Rect::new(100.0, 100.0, 120.0, 22.0);
+        let (pw, _) = date_picker_size();
+        // Click on prev-arrow: left part of header, inside overlay.
+        let vp_y = 100.0 + 22.0 + 4.0; // anchor bottom + gap
+        let vp_x = 100.0_f32.min(1024.0 - pw).max(0.0);
+        // Click in the middle of the prev arrow (left side of header).
+        let px = vp_x + DATE_PICKER_PAD + DATE_HEADER_H / 2.0;
+        let py = vp_y + DATE_PICKER_PAD + DATE_HEADER_H / 2.0;
+        let hit = hit_date_picker(anchor, 0.0, 1024.0, 2026, 6, px, py);
+        assert_eq!(hit, DatePickerHit::Prev);
+    }
+
+    #[test]
+    fn hit_date_picker_next_arrow() {
+        let anchor = Rect::new(100.0, 100.0, 120.0, 22.0);
+        let (pw, _) = date_picker_size();
+        let vp_y = 100.0 + 22.0 + 4.0;
+        let vp_x = 100.0_f32.min(1024.0 - pw).max(0.0);
+        let content_w = pw - DATE_PICKER_PAD * 2.0;
+        // Click in the middle of the next arrow (right side of header).
+        let px = vp_x + DATE_PICKER_PAD + content_w - DATE_HEADER_H / 2.0;
+        let py = vp_y + DATE_PICKER_PAD + DATE_HEADER_H / 2.0;
+        let hit = hit_date_picker(anchor, 0.0, 1024.0, 2026, 6, px, py);
+        assert_eq!(hit, DatePickerHit::Next);
+    }
+
+    #[test]
+    fn hit_date_picker_first_day() {
+        // June 2026: first_weekday=Mon=0 → day 1 is in column 0, row 0.
+        let anchor = Rect::new(100.0, 100.0, 120.0, 22.0);
+        let (pw, _) = date_picker_size();
+        let vp_y = 100.0 + 22.0 + 4.0;
+        let vp_x = 100.0_f32.min(1024.0 - pw).max(0.0);
+        // Day 1: col=0, row=0 in the grid.
+        let cell_x = vp_x + DATE_PICKER_PAD + DATE_CELL_W / 2.0;
+        let cell_y = vp_y + DATE_PICKER_PAD + DATE_HEADER_H + DATE_DAYNAME_H + DATE_CELL_H / 2.0;
+        let hit = hit_date_picker(anchor, 0.0, 1024.0, 2026, 6, cell_x, cell_y);
+        assert_eq!(hit, DatePickerHit::Day(1));
+    }
+
+    #[test]
+    fn build_date_picker_is_nonempty() {
+        let anchor = Rect::new(10.0, 10.0, 120.0, 22.0);
+        let dl = build_date_picker(anchor, 0.0, 1024.0, 2026, 6);
+        assert!(!dl.is_empty(), "date picker display list should not be empty");
     }
 }

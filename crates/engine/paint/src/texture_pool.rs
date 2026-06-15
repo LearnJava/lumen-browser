@@ -28,6 +28,8 @@ impl TextureKey {
 
 /// A pooled GPU texture resource.
 /// Wraps `wgpu::Texture` and metadata for reuse management.
+/// Only available with the `backend-wgpu` feature (ADR-010).
+#[cfg(feature = "backend-wgpu")]
 #[derive(Debug)]
 pub struct PooledTexture {
     /// GPU texture object.

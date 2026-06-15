@@ -40,7 +40,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Text Decoration L3 | [css-text-decor-3](https://www.w3.org/TR/css-text-decor-3/) | ✅ | underline/overline/line-through; style/color/thickness |
 | Selectors L3 | [css3-selectors](https://www.w3.org/TR/css3-selectors/) | ✅ | type/class/id/attr; combinators; :nth-*; :not() |
 | CSS Logical Properties L1 | [css-logical-1](https://www.w3.org/TR/css-logical-1/) | ✅ | margin/padding/border/inset logical → physical (LTR) |
-| CSS Color L4 | [css-color-4](https://www.w3.org/TR/css-color-4/) | 🟡 | oklch ✅; color-mix() ⬜; wide-gamut display ⬜ |
+| CSS Color L4 | [css-color-4](https://www.w3.org/TR/css-color-4/) | 🟡 | oklch ✅; color-mix() ✅ (p4-color-mix-parsing 2026-06-08); system color keywords ✅ (p4-system-colors 2026-06-13); color() predefined spaces ✅ (srgb-linear/a98-rgb/prophoto-rgb/xyz/xyz-d65/xyz-d50, p4-color-function-spaces 2026-06-13); wide-gamut display output ⬜ |
 
 ### Tier 1 — Critical gaps (break most web pages when missing)
 
@@ -68,12 +68,12 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | Compositing & Blending | [compositing](https://www.w3.org/TR/compositing/) | ✅ | mix-blend-mode blend pipeline ✅; background-blend-mode comma-list cycling ✅ 2026-05-27 | **#15** |
 | CSS Pseudo-Elements L4 | [css-pseudo-4](https://www.w3.org/TR/css-pseudo-4/) | 🟡 | ::first-line/::first-letter split; ::marker; ::selection | **#16** |
 | CSS Images L3 | [css3-images](https://www.w3.org/TR/css3-images/) | ✅ | conic-gradient() ✅ 2026-05-24; multiple bg layers ✅ 2026-05-26 | **#17** |
-| CSS Images L4 | [css4-images](https://www.w3.org/TR/css4-images/) | ⬜ | image-set(), cross-fade() | **#18** |
+| CSS Images L4 | [css4-images](https://www.w3.org/TR/css4-images/) | 🟡 | image-set() ✅ 2026-06-02; cross-fade() ✅ 2026-06-02; gradient `<color-interpolation-method>` (`in <space>`) ✅ 2026-06-14 (p4-gradient-interpolation: srgb/srgb-linear/oklab/lab/hsl/hwb/xyz via dense-stop polyfill; polar oklch/lch blocked by BUG-154) | **#18** |
 | CSS Grid L1 | [css-grid-1](https://www.w3.org/TR/css-grid-1/) | 🟡 | grid-template-areas ✅ 2026-05-22; dense auto-flow ✅ 2026-05-24 | **#19** |
 | CSS Fonts L4 | [css-fonts-4](https://www.w3.org/TR/css-fonts-4/) | 🟡 | @font-face actual loading ⬜; font-optical-sizing ✅ 2026-05-29 | **#20** |
 | CSS Intrinsic Sizing L3 | [css3-sizing](https://www.w3.org/TR/css3-sizing/) | ✅ | min-content/max-content/fit-content/fit-content(L) for width/height/min-max; 11 tests 2026-05-24 | **#21** |
 | CSS Overflow L3 (scroll) | [css-overflow-3](https://www.w3.org/TR/css-overflow-3/) | 🟡 | scrollable containers; overflow:scroll rendering | **#22** |
-| CSS Text L3/L4 | [css3-text](https://www.w3.org/TR/css3-text/) | 🟡 | text-align-last; hyphens:auto | **#23** |
+| CSS Text L3/L4 | [css3-text](https://www.w3.org/TR/css3-text/) | 🟡 | text-align-last ✅ 2026-06-08; hyphens:auto ⬜ | **#23** |
 | CSS Transforms L2 | [css-transforms-2](https://www.w3.org/TR/css-transforms-2/) | 🟡 | individual translate/rotate/scale ✅ 2026-05-26; 3D matrix primitive + perspective-correct rendering ✅ 2026-05-29 (P2); 3D function parsing/`perspective` wiring ⬜ (P4) | **#24** |
 | CSS Values L4/L5 | [css-values-4](https://www.w3.org/TR/css-values-4/) | 🟡 | env(); attr() with type; cq* units | **#25** |
 
@@ -81,19 +81,19 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 
 | Module | Spec | Status | Missing piece | Priority |
 |--------|------|--------|--------------|---------|
-| CSS Scroll Snap L1 | [css-scroll-snap-1](https://www.w3.org/TR/css-scroll-snap-1/) | 🟡 | shell scroll integration | **#26** |
+| CSS Scroll Snap L1 | [css-scroll-snap-1](https://www.w3.org/TR/css-scroll-snap-1/) | ✅ | scroll-snap-type (y/x/both mandatory+proximity), scroll-snap-align (start/end/center), scroll-snap-stop (always); shell integration: collect_snap_containers + find_snap_target wired to start_smooth_scroll/scroll_x_by with viewport snap-port 2026-06-03 | **#26** |
 | CSS Multi-column L1 | [css3-multicol](https://www.w3.org/TR/css3-multicol/) | 🟡 | column-rule rendering; column-span; column-fill | **#27** |
 | CSS Containment L2/L3 | [css-contain-2](https://www.w3.org/TR/css-contain-2/) | 🟡 | content-visibility skip-content; cq* units | **#28** |
 | CSS Counter Styles L3 | [css-counter-styles-3](https://www.w3.org/TR/css-counter-styles-3/) | 🟡 | counter-reset/increment resolution ✅ 2026-05-25; @counter-style ⬜ | **#29** |
 | CSS Box Alignment L3 | [css3-align](https://www.w3.org/TR/css3-align/) | 🟡 | justify-items/justify-self for grid | **#30** |
 | CSS Inline L3 | [css-inline-3](https://www.w3.org/TR/css-inline-3/) | 🟡 | line-height leading; baseline grid | **#31** |
-| CSS Text Decoration L4 | [css-text-decor-4](https://www.w3.org/TR/css-text-decor-4/) | 🟡 | text-emphasis rendering; text-underline-offset | **#32** |
+| CSS Text Decoration L4 | [css-text-decor-4](https://www.w3.org/TR/css-text-decor-4/) | 🟡 | text-emphasis rendering; text-underline-offset ✅ 2026-06-10 | **#32** |
 | CSS Scrollbars L1 | [css-scrollbars-1](https://www.w3.org/TR/css-scrollbars-1/) | 🟡 | scrollbar-width/color rendering | **#33** |
-| CSS Basic UI L3/L4 | [css3-ui](https://www.w3.org/TR/css3-ui/) | 🟡 | resize drag-UI; appearance form widgets | **#34** |
-| Media Queries L4/L5 | [mediaqueries-4](https://www.w3.org/TR/mediaqueries-4/) | 🟡 | prefers-reduced-motion; hover; pointer | **#35** |
+| CSS Basic UI L3/L4 | [css3-ui](https://www.w3.org/TR/css3-ui/) | 🟡 | resize drag-UI; appearance form widgets; field-sizing ✅ 2026-06-13 | **#34** |
+| Media Queries L4/L5 | [mediaqueries-4](https://www.w3.org/TR/mediaqueries-4/) | 🟡 | prefers-reduced-motion ✅; hover/any-hover/pointer/any-pointer ✅ 2026-06-14 (p4-media-hover-pointer: desktop defaults hover/fine) | **#35** |
 | CSS Conditional L4 | [css-conditional-4](https://www.w3.org/TR/css-conditional-4/) | 🟡 | @supports full feature detection | **#36** |
 | CSS Color Adjust L1 | [css-color-adjust-1](https://www.w3.org/TR/css-color-adjust-1/) | 🟡 | color-scheme UA switching | **#37** |
-| CSS Box Sizing L4 | [css-sizing-4](https://www.w3.org/TR/css-sizing-4/) | 🟡 | contain-intrinsic-size; interpolate-size | **#38** |
+| CSS Box Sizing L4 | [css-sizing-4](https://www.w3.org/TR/css-sizing-4/) | ✅ | contain-intrinsic-size ✅ 2026-06-14 (p4-contain-intrinsic-size: longhands + logical aliases + shorthand; size-containment wiring for block/flex/grid height + inline-block width); interpolate-size ✅ | **#38** |
 | CSS Overflow L4 | [css-overflow-4](https://www.w3.org/TR/css-overflow-4/) | ✅ | line-clamp multi-line truncation (layout algorithm done; -webkit-line-clamp/line-clamp, ellipsis, N-line truncation) | **#39** |
 | CSS Easing L1 | [css-easing-1](https://www.w3.org/TR/css-easing-1/) | 🟡 | cubic-bezier/steps interpolation wiring | **#40** |
 
@@ -102,24 +102,24 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | Module | Spec | Status | Missing piece | Priority |
 |--------|------|--------|--------------|---------|
 | CSS Writing Modes L4 | [css-writing-modes-4](https://www.w3.org/TR/css-writing-modes-4/) | 🟡 | vertical-rl/lr layout axis swap | **#41** |
-| CSS Grid L2 | [css-grid-2](https://www.w3.org/TR/css-grid-2/) | ⬜ | subgrid; masonry | **#42** |
-| CSS Shapes L1 | [css-shapes-1](https://www.w3.org/TR/css-shapes-1/) | 🟡 | shape-outside float wrapping | **#43** |
-| Motion Path L1 | [motion-1](https://www.w3.org/TR/motion-1/) | 🟡 | offset-path motion layout | **#44** |
-| CSS Fragmentation L3 | [css3-break](https://www.w3.org/TR/css3-break/) | ⬜ | break-before/after/inside | **#45** |
-| CSS Color L5 | [css-color-5](https://www.w3.org/TR/css-color-5/) | ⬜ | color-mix(); relative color syntax | **#46** |
+| CSS Grid L2 | [css-grid-2](https://www.w3.org/TR/css-grid-2/) | 🟡 | subgrid layout algorithm ✅ 2026-06-03 (`subgrid.rs`, `GridTrackSize::Subgrid`, thread-local track inheritance); masonry ✅ 2026-06-10 (`masonry.rs`, `GridTrackSize::Masonry`, greedy waterfall algorithm) | **#42** |
+| CSS Shapes L1 | [css-shapes-1](https://www.w3.org/TR/css-shapes-1/) | 🟡 | circle() ✅ 2026-06-03; polygon/ellipse ✅ (`shape_polygons`/`shape_ellipses`); inset() ✅ 2026-06-10 (`shape_insets`, `parse_shape_inset_px`, rounded corners); `clip-path: path()` ✅ 2026-06-14 (p4-clip-path-path); `path()`/`polygon()` `<fill-rule>` evenodd/nonzero ✅ 2026-06-14 (p4-clip-path-fill-rule); `shape-outside: path()` ✅ 2026-06-14 (p4-shape-outside-path: `parse_shape_path_px` flattens SVG path → wrapping polygon) | **#43** |
+| Motion Path L1 | [motion-1](https://www.w3.org/TR/motion-1/) | 🟡 | `offset-path: path()` ✅ 2026-06-10 (P4: ComputedStyle fields + resolve_motion_transform wiring in property_trees); `offset-distance`/`offset-rotate` ✅; `ray(<angle>)` ✅ 2026-06-13 (p4-offset-ray: deg/grad/rad/turn, size/contain/at parsed-and-ignored for px distance); `offset-anchor` ⬜ Phase 3; `url()` paths ⬜ | **#44** |
+| CSS Fragmentation L3 | [css3-break](https://www.w3.org/TR/css3-break/) | ✅ | break-before/after/inside + orphans/widows in `ComputedStyle`; `pagination.rs` applies rules | **#45** |
+| CSS Color L5 | [css-color-5](https://www.w3.org/TR/css-color-5/) | ✅ | color-mix() ✅ (p4-color-mix-parsing 2026-06-08); relative color syntax ✅ (p4-relative-color 2026-06-13) | **#46** |
 | CSS Fonts L5 | [css-fonts-5](https://www.w3.org/TR/css-fonts-5/) | ⬜ | font-palette; @font-palette-values | **#47** |
 | CSS Easing L2 | [css-easing-2](https://www.w3.org/TR/css-easing-2/) | ✅ | linear() easing TimingFunction::LinearStops 2026-05-24 | **#48** |
 | CSS Overscroll L1 | [css-overscroll-1](https://www.w3.org/TR/css-overscroll-1/) | 🟡 | gesture boundary handling | **#49** |
-| CSS Gap Decorations L1 | [css-gaps-1](https://www.w3.org/TR/css-gaps-1/) | ⬜ | decorative lines in gaps | **#50** |
-| CSS Env Variables L1 | [css-env-1](https://www.w3.org/TR/css-env-1/) | ⬜ | env() safe-area-inset-* | **#51** |
-| CSS Selectors L5 | [selectors-5](https://www.w3.org/TR/selectors-5/) | ⬜ | :nth-child(An+B of S) | **#52** |
-| CSS Nesting (scope) | [css-scoping-1](https://www.w3.org/TR/css-scoping-1/) | ⬜ | @scope rule | **#53** |
+| CSS Gap Decorations L1 | [css-gaps-1](https://www.w3.org/TR/css-gaps-1/) | ✅ | `gap-rule-width/style/color` shorthand+longhands; `collect_gap_segments()` in display_list.rs; flex + grid containers wired (p4-gap-rule, 2026-06-10) | **#50** |
+| CSS Env Variables L1 | [css-env-1](https://www.w3.org/TR/css-env-1/) | ✅ | `env()` + fallback + nested `calc(env(...)+...)` implemented in `style.rs:8798` (`expand_env_vars`); `safe-area-inset-*` returns fallback when not set | **#51** |
+| CSS Selectors L5 | [selectors-5](https://www.w3.org/TR/selectors-5/) | ✅ | `:nth-child(An+B of S)` selector filter implemented in `style.rs:6464` + `css-parser` parser; 4 layout tests | **#52** |
+| CSS Nesting (scope) | [css-scoping-1](https://www.w3.org/TR/css-scoping-1/) | 🟡 | @scope root matching ✅ (P1 2026-06-03); limit/inner-scope — Phase 2 | **#53** |
 | CSS Functions & Mixins | [css-mixins-1](https://www.w3.org/TR/css-mixins-1/) | ⬜ | @function rule | **#54** |
-| Scroll-driven Animations | [scroll-animations-1](https://www.w3.org/TR/scroll-animations-1/) | 🟡 | scroll-timeline; animation-timeline | **#55** |
-| CSS Anchor Positioning | [css-anchor-position-1](https://www.w3.org/TR/css-anchor-position-1/) | ⬜ | anchor-name; position-anchor; inset-area | **#56** |
-| CSS View Transitions L1 | [css-view-transitions-1](https://www.w3.org/TR/css-view-transitions-1/) | ⬜ | view-transition-name (needs JS) | **#57** |
-| CSS Fill & Stroke L3 | [fill-stroke-3](https://www.w3.org/TR/fill-stroke-3/) | 🟡 | fill/stroke/fill-opacity/stroke-opacity/stroke-width ✅ 2026-05-27; fill-rule/stroke-dasharray ⬜ | **#58** |
-| CSS Scroll Snap L2 | [css-scroll-snap-2](https://www.w3.org/TR/css-scroll-snap-2/) | ⬜ | snapChanging/snapChanged events | **#59** |
+| Scroll-driven Animations | [scroll-animations-1](https://www.w3.org/TR/scroll-animations-1/) | ✅ | scroll-timeline-name/axis, view-timeline-name/axis, animation-timeline (auto/scroll()/view()/named); collect_named_* walks layout tree; P4 2026-06-10 | **#55** |
+| CSS Anchor Positioning | [css-anchor-position-1](https://www.w3.org/TR/css-anchor-position-1/) | 🟡 | algorithm stub ready (P1 2026-06-03): AnchorRegistry, collect_anchors, resolve_anchor_function, resolve_inset_area; CSS wiring pending (P4) | **#56** |
+| CSS View Transitions L1 | [css-view-transitions-1](https://www.w3.org/TR/css-view-transitions-1/) | 🟡 | `document.startViewTransition` JS API + 300 ms cross-fade ✅ 2026-06-03; `view-transition-name` ✅ P4 2026-06-10 (ComputedStyle field + parsing + collect_view_transition_names); `::view-transition-*` pseudos ⬜ Phase 3 | **#57** |
+| CSS Fill & Stroke L3 | [fill-stroke-3](https://www.w3.org/TR/fill-stroke-3/) | 🟡 | fill/stroke/fill-opacity/stroke-opacity/stroke-width ✅ 2026-05-27; fill-rule/stroke-dasharray ⬜; paint-order ✅ 2026-06-14 (p4-paint-order: `SvgPaintOrder` inherited field + `emit_svg_shape` fill/stroke reorder) | **#58** |
+| CSS Scroll Snap L2 | [css-scroll-snap-2](https://www.w3.org/TR/css-scroll-snap-2/) | 🟡 | snapchanging/snapchanged events: SnapChangeEvent (snapTargetBlock/Inline) + лэйаут-резолв снапнутых узлов (find_snapped_nodes/SnapTargets) + QuickJsRuntime::fire_snap_changing/changed; shell-диспатч при scroll-snap завершении — Phase 1 2026-06-10 | **#59** |
 
 ### Out of scope 🚫
 
@@ -159,7 +159,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `initial` | ✅ | |
 | `unset` | ✅ | inherit if inheritable, else initial |
 | `revert` | 🟡 | parsed; UA stylesheet revert ⬜ |
-| `revert-layer` | ⬜ | CSS Cascading L5 |
+| `revert-layer` | ✅ | CSS Cascade L5 §6.4.6; pre-pass in compute_style drops winning layer; 5 tests; test 98 (P4 2026-06-13) |
 
 ### [T0] Box Model
 
@@ -193,7 +193,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `border-*-width` | ✅ | f32 px |
 | `border-*-style` | ✅ | solid/dashed/dotted/double |
 | `border-*-color` | ✅ | CssColor; currentColor |
-| `border-radius` / `border-*-*-radius` | ✅ | circular SDF rendering ✅; elliptical (rx≠ry syntax `10px / 20px`) ⬜ |
+| `border-radius` / `border-*-*-radius` | ✅ | circular SDF rendering ✅; elliptical (rx≠ry syntax `10px / 20px`) ✅ FemtovgBackend |
 | `box-shadow` | ✅ | offset/blur/spread/color/inset; multiple |
 | `outline` / `outline-*` | ✅ | width/style/color/offset |
 
@@ -206,8 +206,9 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `color-scheme` | 🟡 | parsed; UA switching ⬜ |
 | `forced-color-adjust` | 🟡 | parsed; Forced Colors Mode ⬜ |
 | `print-color-adjust` / `color-adjust` | 🟡 | parsed/stored; print rendering ⬜ |
-| `accent-color` | 🟡 | parsed; UA default ⬜ |
-| `color-mix()` | ⬜ | CSS Color L5 |
+| `accent-color` | ✅ | parsed + wired to form controls (checkbox/radio/range/progress) in display_list.rs (P4 2026-06-14); 5 tests + graphic 110 |
+| `color-mix()` | ✅ | parse_color_mix() in style.rs (P4 2026-06-08); 3 tests |
+| `color()` predefined spaces | ✅ | srgb/display-p3/rec2020 + srgb-linear/a98-rgb/prophoto-rgb/xyz/xyz-d65/xyz-d50 (P4 2026-06-13); non-displayable gamut-mapped to sRGB; 11 tests; test 96 |
 
 ### [T0] Fonts
 
@@ -218,7 +219,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `font-stretch` | 🟡 | % parsed; matcher ⬜ |
 | `font-variation-settings` | ✅ | fvar+avar normalization |
 | `font-feature-settings` | ⬜ | OT feature flags |
-| `font-size-adjust` | 🟡 | parsed; x-height scaling ⬜ |
+| `font-size-adjust` | ✅ | real OS/2 x-height scaling (P4 2026-06-13); тест 95 |
 | `font-optical-sizing` | ✅ | auto injects opsz=font-size into variation axes; none skips |
 | `font-palette` | ⬜ | CSS Fonts L5 |
 | `@font-face` | 🟡 | all descriptors parsed; file loading ⬜ |
@@ -237,12 +238,12 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `text-decoration` / `text-decoration-*` | ✅ | line/style/color/thickness |
 | `text-shadow` | ✅ | |
 | `vertical-align` | ✅ | baseline/top/middle/bottom/sub/super/length/% |
-| `text-align-last` | 🟡 | parsed; last-line apply ⬜ |
+| `text-align-last` | ✅ | parsed + wired in align_lines; last-line override (CSS Text L3 §7.2); 4 tests |
 | `hyphens` | 🟡 | none/manual ✅; auto (HyphenationProvider) ⬜ |
 | `tab-size` | ✅ | parsed; \t expanded in pre/pre-wrap; renderer advances cursor by tab_size |
 | `line-break` | 🟡 | parsed; CJK-aware breaking ⬜ |
 | `text-wrap-mode` / `text-wrap-style` | 🟡 | parsed; integration ⬜ |
-| `text-underline-position` / `text-underline-offset` | 🟡 | parsed; paint offset ⬜ |
+| `text-underline-position` / `text-underline-offset` | ✅ | wired in push_text_decoration(); Under→fs*0.25; offset adds to base (p4-text-underline 2026-06-10) |
 | `text-emphasis` / `text-emphasis-*` | ✅ | per-char marks rendered (emit_text_emphasis_marks) |
 
 ### [T0] Selectors
@@ -253,9 +254,9 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `A B`, `A > B`, `A + B`, `A ~ B` | ✅ | all combinators |
 | `:root`, `:first/last-child`, `:nth-*`, `:only-*`, `:empty` | ✅ | |
 | `:not(S)` | ✅ | L3 simple; L4 any selector |
-| `:hover`, `:active` | 🟡 | parsed; shell wiring partial |
-| `:focus`, `:focus-within` | 🟡 | parsed; focus tracking ⬜ |
-| `:focus-visible` | ⬜ | Selectors L4 |
+| `:hover`, `:active` | ✅ | shell hit-test wiring 2026-06-03; ancestor propagation per spec |
+| `:focus`, `:focus-within` | ✅ | shell click-focus wiring 2026-06-03 |
+| `:focus-visible` | ✅ | Phase 0: synonym for `:focus` 2026-06-03 |
 | `:link`, `:visited` | 🟡 | parsed; navigation state ⬜ |
 | `:target` | ⬜ | fragment navigation |
 | `:enabled`, `:disabled`, `:checked` | 🟡 | parsed; form state ⬜ |
@@ -328,7 +329,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `animation-timing-function` | 🟡 | |
 | `animation-iteration-count` / `animation-direction` | 🟡 | |
 | `animation-fill-mode` / `animation-play-state` | 🟡 | |
-| `animation-timeline` / `animation-range` | 🟡 | Scroll-driven Animations — algorithm stub ready (P1); CSS wiring pending (P4) |
+| `animation-timeline` / `animation-range` | ✅ | animation-timeline parsed (Auto/Scroll/View/Named); P4 2026-06-10 |
 | `@keyframes` | 🟡 | parsed; AnimationScheduler::tick ⬜ |
 
 ### [T1] CSS Nesting
@@ -346,7 +347,9 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `display: table-row` | 🟡 | parsed |
 | `display: table-cell` | 🟡 | parsed |
 | `display: table-header-group` / `table-footer-group` | 🟡 | parsed |
-| `border-collapse` / `border-spacing` | 🟡 | parsed |
+| `border-collapse` | ✅ | ComputedStyle.border_collapse wired; collapse zeroes spacing; 5 unit-тестов + graphic test 80 (P4 2026-06-10) |
+| `border-spacing` | ✅ | border_spacing_h/v in ComputedStyle; zero when collapse mode |
+| `empty-cells` | ✅ | ComputedStyle.empty_cells (inherited); `hide` suppresses border+bg of empty cells in separate mode; wired in emit_table_cell; 6 unit + 5 paint tests + graphic test 115 (P4 2026-06-14) |
 | `caption-side` / `table-layout` | 🟡 | parsed |
 
 ### [T1] Positioning (sticky & z-index)
@@ -372,9 +375,9 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |----------|--------|-------|
 | `list-style` / `list-style-type` | 🟡 | disc/circle/square/decimal/roman parsed; marker render ⬜ |
 | `list-style-position` | 🟡 | inside/outside; positioning ⬜ |
-| `list-style-image` | 🟡 | url(); image marker ⬜ |
+| `list-style-image` | ✅ | url() parsed; image marker rendered (DrawImage replaces bullet, CSS Lists L3 §2.3) |
 | `counter-reset` / `counter-increment` | 🟡 | Vec<(name,val)>; resolution ⬜ |
-| `counter-set` | ⬜ | |
+| `counter-set` | ✅ | CSS Lists L3 §4; Vec<(name,val)>; apply_set после reset/increment; тест 97 2026-06-13 |
 | `@counter-style` | ⬜ | |
 
 ### [T1] @layer / Cascade Layers
@@ -383,7 +386,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |---------|--------|-------|
 | `@layer` declaration | ✅ | parsed; cascade ordering wired: layer_priority sort key in compute_style |
 | `@import layer()` | 🟡 | URL parsed; layer() modifier ⬜ |
-| `revert-layer` | ⬜ | |
+| `revert-layer` | ✅ | CSS Cascade L5 §6.4.6; reverts current cascade layer (P4 2026-06-13) |
 
 ### [T1] Selectors L4
 
@@ -400,7 +403,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `@media` | ✅ | width/height exact ✅; min/max ✅; em/rem units ✅; orientation ✅; aspect-ratio ✅; re-eval on resize ✅ |
 | `prefers-color-scheme` | ✅ | |
 | `prefers-reduced-motion` | ✅ | parsed + matched; OS integration deferred (always `no-preference` until shell wires OS pref) |
-| `hover`, `pointer` | ⬜ | |
+| `hover`, `pointer` | ✅ | Media Queries L4 §5.3-5.6; `hover`/`any-hover` (none/hover) + `pointer`/`any-pointer` (none/coarse/fine); desktop defaults hover/fine in `MediaContext`; 8 tests + graphic 118 (P4 2026-06-14) |
 | `prefers-contrast` / `prefers-reduced-data` | ⬜ | MQ L5 |
 
 ---
@@ -416,8 +419,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `clip-path` | ✅ | inset/circle/ellipse/polygon rendered (bbox-clip); complex paths ⬜ |
-| `clip-rule` | ⬜ | evenodd/nonzero |
+| `clip-path` | ✅ | inset/circle/ellipse/polygon/path() rendered; `<fill-rule>` (nonzero/evenodd) in path()/polygon() ✅ 2026-06-14 |
+| `clip-rule` | ⬜ | evenodd/nonzero (SVG-only; CSS clip-path uses path()/polygon() fill-rule ✅ 2026-06-14) |
 | `mask` (shorthand) | 🟡 | |
 | `mask-image` | 🟡 | GPU mask composite pipeline ✅ (PushMask/PopMask + PushMaskLayer/PopMaskLayer); alpha compositing ✅; luminance mode ✅ 2026-05-29 |
 | `mask-repeat` / `mask-size` / `mask-position` | 🟡 | parsed |
@@ -455,6 +458,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `object-fit` / `object-position` | ✅ | |
 | `image-set()` | ⬜ | CSS Images L4 |
 | `conic-gradient()` | ✅ | ParsedGradient::Conic + DrawConicGradient + GPU shader 2026-05-24 |
+| gradient `in <space>` (color-interpolation-method) | 🟡 | rectangular + hsl/hwb ✅ 2026-06-14 (dense-stop polyfill via color-mix); polar oklch/lch ⬜ BUG-154 |
 | `cross-fade()` | ⬜ | CSS Images L4 |
 
 ### [T2] CSS Grid
@@ -467,8 +471,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `grid-auto-columns` / `grid-auto-rows` | 🟡 | |
 | `grid-auto-flow` | ✅ | row/column/dense/column dense ✅ 2026-05-24 |
 | `grid-column*` / `grid-row*` / `grid-area` | 🟡 | auto/int/span |
-| `subgrid` | ⬜ | CSS Grid L2 |
-| `masonry` | ⬜ | CSS Grid L3 |
+| `subgrid` | 🟡 | CSS Grid L2; layout algorithm ✅ 2026-06-03; CSS parsing ✅ (subgrid keyword) |
+| `masonry` | 🟡 | CSS Grid L3; layout algorithm ✅ 2026-06-10 (`masonry.rs`, greedy waterfall); CSS: masonry-auto-flow P4 |
 
 ### [T2] Intrinsic Sizing
 
@@ -508,7 +512,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `scroll-margin*` / `scroll-padding*` | 🟡 | parsed |
 | `scroll-behavior` | 🟡 | auto/smooth parsed |
 | `overscroll-behavior*` | 🟡 | parsed; gesture boundary ⬜ |
-| `scroll-timeline` / `view-timeline` | 🟡 | Scroll-driven Animations — algorithm stub ready (P1); CSS wiring pending (P4) |
+| `scroll-timeline` / `view-timeline` | ✅ | scroll-timeline-name/axis, view-timeline-name/axis shorthands+longhands; collect_named_* wired; P4 2026-06-10 |
 
 ### [T3] Multi-column
 
@@ -542,7 +546,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `content` | 🟡 | string ✅; attr() ✅ 2026-05-25; counter()/counters() ✅ 2026-05-25; url() ⬜ |
+| `content` | 🟡 | string ✅; attr() ✅ 2026-05-25; counter()/counters() ✅ 2026-05-25; open-quote/close-quote ✅ 2026-06-14; url() ⬜ |
+| `quotes` | ✅ | CSS Generated Content L3 §3.2; auto/none/[<string> <string>]+; nesting depth tracked in document order via counters pre-pass; тест 117 2026-06-14 |
 
 ### [T3] Box Alignment (grid)
 
@@ -574,7 +579,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `pointer-events` | 🟡 | none ✅ (cursor wired); auto/shell enforcement ⬜ |
 | `touch-action` | 🟡 | parsed; gesture ⬜ |
 | `resize` | 🟡 | parsed; drag-UI ⬜ |
-| `appearance` | 🟡 | parsed; form widgets ⬜ |
+| `appearance` | ✅ | none/auto/compat; `appearance:none` strips UA box + suppresses native indicator (p4-appearance-none 2026-06-14) |
 | `caret-color` | 🟡 | parsed; text input ⬜ |
 | `will-change` | 🟡 | parsed; GPU hints ⬜ |
 
@@ -616,7 +621,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `cqw`/`cqh`/`cqi`/`cqb`/`cqmin`/`cqmax` | ✅ | container query units 2026-05-25 |
 | `env()` | ⬜ | |
 | `attr()` | 🟡 | string ✅ 2026-05-25 in content; type casting ⬜ |
-| `color-mix()` | ⬜ | CSS Color L5 |
+| `color-mix()` | ✅ | CSS Color L5; parse_color_mix() 2026-06-08 |
 | `counter()`/`counters()` | ✅ | in content; resolution 2026-05-25 |
 | `linear()` | ⬜ | CSS Easing L2 |
 
@@ -636,34 +641,34 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `shape-outside` / `shape-margin` / `shape-image-threshold` | 🟡 | parsed; float wrapping ⬜ |
-| `offset` / `offset-path` / `offset-distance` / `offset-rotate` / `offset-anchor` | 🟡 | parsed; motion layout ⬜ |
+| `offset` / `offset-path` / `offset-distance` / `offset-rotate` / `offset-anchor` | 🟡 | parsed; motion layout algorithm stub ready (P1 2026-06-02); CSS wiring pending (P4) |
 
 ### [T4] Containment (advanced)
 
 | Property | Status | Notes |
 |----------|--------|-------|
 | `contain` | 🟡 | size/layout/paint enforcement ✅; content-visibility skip-content ⬜ |
-| `content-visibility` | 🟡 | parsed; skip-content ⬜ |
+| `content-visibility` | 🟡 | hidden ✅ (P1 2026-06-03); auto ✅ below-viewport skip + shell ratchet/relayout (P1 BB-4 2026-06-13); above-viewport skip + contain-intrinsic-size ⬜ |
 
 ### [T4] Scroll-driven Animations
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `scroll-timeline` / `view-timeline` | 🟡 | algorithm stub ready (P1); CSS wiring pending (P4) |
-| `animation-timeline` / `animation-range` | 🟡 | algorithm stub ready (P1); CSS wiring pending (P4) |
+| `scroll-timeline` / `view-timeline` | ✅ | CSS wiring done: P4 2026-06-10 |
+| `animation-timeline` / `animation-range` | ✅ | animation-timeline parsed; P4 2026-06-10 |
 
 ### [T4] Anchor Positioning
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `anchor-name` / `position-anchor` / `inset-area` | ⬜ | entirely new spec |
+| `anchor-name` / `position-anchor` / `inset-area` | ✅ | ComputedStyle + collect_anchors + apply_anchor_positions post-layout pass; position-area alias |
 | `anchor()` / `anchor-size()` functions | ⬜ | |
 
 ### [T4] Color L5
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| `color-mix()` | ⬜ | |
+| `color-mix()` | ✅ | parse_color_mix() 2026-06-08 |
 | `color-contrast()` | ⬜ | |
 | Relative color syntax `oklch(from ...)` | ⬜ | |
 | `@color-profile` | ⬜ | |

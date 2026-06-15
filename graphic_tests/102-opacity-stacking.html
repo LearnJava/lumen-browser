@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Lumen — 102 opacity + stacking context interaction</title>
+<style>
+  /* Interaction test: opacity (TEST-13) × z-index stacking (TEST-38).
+     opacity < 1 creates a stacking context: children composite as ONE group
+     (no double-darkening at overlaps) and cannot escape it via z-index. */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+  .__f { background: #1a202c; width: 1022px; height: 718px; margin: 1px; overflow: hidden; position: relative; }
+
+  .cell { position: absolute; width: 300px; height: 300px; }
+  .c0 { left: 24px;  top: 24px; }
+  .c1 { left: 364px; top: 24px; }
+  .c2 { left: 704px; top: 24px; }
+  .c3 { left: 24px;  top: 374px; }
+  .c4 { left: 364px; top: 374px; }
+  .c5 { left: 704px; top: 374px; }
+</style>
+</head>
+<body>
+<div class="__f">
+
+  <!-- c0: z-index trapped by opacity context.
+       Parent opacity:0.5 contains a z-index:10 child; the red sibling has z-index:1.
+       The sibling must still paint ON TOP — the child cannot escape its parent's
+       stacking context (opacity context is atomic, z:auto → treated as z:0). -->
+  <div class="cell c0">
+    <div style="position:absolute;left:0;top:0;width:220px;height:220px;background:#2b6cb0;opacity:0.5;">
+      <div style="position:absolute;left:60px;top:60px;width:160px;height:160px;background:#f6e05e;z-index:10;"></div>
+    </div>
+    <div style="position:absolute;left:140px;top:140px;width:160px;height:160px;background:#e53e3e;z-index:1;"></div>
+  </div>
+
+  <!-- c1: group opacity. Two overlapping children inside an opacity:0.5 parent —
+       the overlap region must NOT be darker (the group composites once). -->
+  <div class="cell c1">
+    <div style="position:absolute;left:0;top:0;width:300px;height:300px;opacity:0.5;">
+      <div style="position:absolute;left:0;top:0;width:200px;height:200px;background:#48bb78;"></div>
+      <div style="position:absolute;left:100px;top:100px;width:200px;height:200px;background:#48bb78;"></div>
+    </div>
+  </div>
+
+  <!-- c2: CONTROL for c1 — each child has its OWN opacity:0.5:
+       the overlap region IS visibly darker (two blends). -->
+  <div class="cell c2">
+    <div style="position:absolute;left:0;top:0;width:200px;height:200px;background:#48bb78;opacity:0.5;"></div>
+    <div style="position:absolute;left:100px;top:100px;width:200px;height:200px;background:#48bb78;opacity:0.5;"></div>
+  </div>
+
+  <!-- c3: negative z-index inside an opacity context paints behind the parent's
+       content but in front of the parent's own background. -->
+  <div class="cell c3">
+    <div style="position:absolute;left:0;top:0;width:300px;height:300px;background:#2d3748;opacity:0.8;">
+      <div style="position:absolute;left:120px;top:120px;width:160px;height:160px;background:#ed8936;z-index:-1;"></div>
+      <div style="position:absolute;left:40px;top:40px;width:160px;height:160px;background:#4299e1;"></div>
+    </div>
+  </div>
+
+  <!-- c4: nested opacity multiplies: 0.6 × 0.5 = 0.3 effective. -->
+  <div class="cell c4">
+    <div style="opacity:0.6;">
+      <div style="width:300px;height:300px;background:#9f7aea;opacity:0.5;"></div>
+    </div>
+  </div>
+
+  <!-- c5: reference for c4 — single opacity:0.3 box must look identical to c4. -->
+  <div class="cell c5">
+    <div style="width:300px;height:300px;background:#9f7aea;opacity:0.3;"></div>
+  </div>
+
+</div>
+</body>
+</html>

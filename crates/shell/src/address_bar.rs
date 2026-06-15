@@ -10,7 +10,8 @@
 //! передавая результаты из `HistoryFts` + `SearchHistory`. Стрелки Up/Down
 //! перемещают выделение; Enter коммитит выделенную строку или raw input.
 //!
-//! `@history <query>` — FTS-поиск по истории; без префикса — prefix-match по
+//! `@history <query>` — FTS-поиск по истории; `@notes <query>` — поиск по
+//! пользовательским заметкам (§12.2); без префикса — prefix-match по
 //! search_history + FTS по умолчанию.
 
 use lumen_layout::{Color, FontStyle, FontWeight};
@@ -55,6 +56,8 @@ const MAX_INPUT_LEN: usize = 2048;
 pub enum OmniboxPrefix {
     /// `@history <query>` — поиск по FTS5-индексу истории посещённых страниц.
     History,
+    /// `@notes <query>` — поиск по пользовательским заметкам (§12.2).
+    Notes,
     /// Обычный ввод: URL или поисковый запрос.
     Plain,
 }
@@ -62,11 +65,14 @@ pub enum OmniboxPrefix {
 /// Разбирает raw ввод → `(OmniboxPrefix, query_str)`.
 ///
 /// `@history foo bar` → `(History, "foo bar")`.
+/// `@notes foo bar` → `(Notes, "foo bar")`.
 /// Всё остальное → `(Plain, trimmed_input)`.
 pub fn parse_omnibox_prefix(input: &str) -> (OmniboxPrefix, &str) {
     let s = input.trim_start();
     if let Some(rest) = s.strip_prefix("@history") {
         (OmniboxPrefix::History, rest.trim_start())
+    } else if let Some(rest) = s.strip_prefix("@notes") {
+        (OmniboxPrefix::Notes, rest.trim_start())
     } else {
         (OmniboxPrefix::Plain, s)
     }
@@ -86,6 +92,23 @@ pub enum OmniboxSuggestion {
         /// Сниппет совпадения из текста страницы.
         snippet: String,
     },
+    /// Результат FTS5-поиска по заметкам (§12.2, `@notes <query>`).
+    ///
+    /// При выборе пользователем `commit_value()` возвращает `viewer_url`
+    /// (`note-viewer:<id>`), который перехватывается в `handle_omnibox_commit`
+    /// для открытия `NoteViewerPanel`. Данные заметки (comment и проч.)
+    /// запрашиваются напрямую из `notes_store` по id, поэтому хранить их
+    /// здесь не нужно.
+    Note {
+        /// URL, к которому привязана заметка (отображается в dropdown label).
+        url: String,
+        /// Выделенный текст (selection) заметки.
+        selection: String,
+        /// BM25 сниппет вокруг совпадения.
+        snippet: String,
+        /// `note-viewer:<id>` — committed value, opens the note viewer.
+        viewer_url: String,
+    },
     /// Ранее введённый поисковый запрос (`SearchHistory::prefix_match`).
     SearchQuery {
         /// Исходная строка запроса (case-preserved).
@@ -97,10 +120,12 @@ pub enum OmniboxSuggestion {
 
 impl OmniboxSuggestion {
     /// Строка, которая будет зафиксирована при выборе этой подсказки.
-    /// HistoryFts → URL. SearchQuery → текст запроса.
+    /// HistoryFts → URL навигации. Note → `note-viewer:<id>` (перехват в shell).
+    /// SearchQuery → текст запроса.
     pub fn commit_value(&self) -> &str {
         match self {
             OmniboxSuggestion::HistoryFts { url, .. } => url,
+            OmniboxSuggestion::Note { viewer_url, .. } => viewer_url,
             OmniboxSuggestion::SearchQuery { query, .. } => query,
         }
     }
@@ -111,16 +136,21 @@ impl OmniboxSuggestion {
             OmniboxSuggestion::HistoryFts { title, url, .. } => {
                 if title.is_empty() { url } else { title }
             }
+            OmniboxSuggestion::Note { selection, .. } => selection,
             OmniboxSuggestion::SearchQuery { query, .. } => query,
         }
     }
 
     /// Дополнительный текст под основным label.
     /// HistoryFts: сниппет если непуст, иначе URL.
+    /// Note: сниппет вокруг совпадения (или URL если сниппет пуст).
     /// SearchQuery: пустая строка (вся информация в label).
     pub fn sub_label(&self) -> &str {
         match self {
             OmniboxSuggestion::HistoryFts { snippet, url, .. } => {
+                if !snippet.is_empty() { snippet } else { url }
+            }
+            OmniboxSuggestion::Note { snippet, url, .. } => {
                 if !snippet.is_empty() { snippet } else { url }
             }
             OmniboxSuggestion::SearchQuery { .. } => "",
@@ -132,6 +162,7 @@ impl OmniboxSuggestion {
     fn tag(&self) -> String {
         match self {
             OmniboxSuggestion::HistoryFts { .. } => "история".to_string(),
+            OmniboxSuggestion::Note { .. } => "заметка".to_string(),
             OmniboxSuggestion::SearchQuery { frequency, .. } if *frequency > 1 => {
                 format!("×{frequency}")
             }
@@ -142,6 +173,7 @@ impl OmniboxSuggestion {
     fn tag_color(&self) -> Color {
         match self {
             OmniboxSuggestion::HistoryFts { .. } => BAR_BORDER,
+            OmniboxSuggestion::Note { .. } => Color { r: 180, g: 120, b: 60, a: 255 },
             OmniboxSuggestion::SearchQuery { .. } => ITEM_TAG,
         }
     }
@@ -346,6 +378,7 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay) -> DisplayLis
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
 
     // Курсор — вертикальная линия. Не рисуется если выбрана подсказка.
@@ -414,6 +447,7 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay) -> DisplayLis
                 font_style: FontStyle::Normal,
                 font_variation_axes: Vec::new(),
                 tab_size: 0.0,
+                highlight_name: None,
             });
             out.push(DisplayCommand::DrawText {
                 rect: Rect::new(
@@ -430,6 +464,7 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay) -> DisplayLis
                 font_style: FontStyle::Normal,
                 font_variation_axes: Vec::new(),
                 tab_size: 0.0,
+                highlight_name: None,
             });
         } else {
             // Одна строка по центру высоты строки.
@@ -448,6 +483,7 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay) -> DisplayLis
                 font_style: FontStyle::Normal,
                 font_variation_axes: Vec::new(),
                 tab_size: 0.0,
+                highlight_name: None,
             });
         }
 
@@ -467,6 +503,7 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay) -> DisplayLis
             font_style: FontStyle::Normal,
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
+            highlight_name: None,
         });
     }
 
@@ -720,5 +757,65 @@ mod tests {
         let text_count = dl.iter().filter(|c| matches!(c, DisplayCommand::DrawText { .. })).count();
         // Input text + label1 + sub1 + tag1 + label2 + tag2 >= 6
         assert!(text_count >= 6);
+    }
+
+    // ── @notes prefix ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_prefix_notes() {
+        let (prefix, q) = parse_omnibox_prefix("@notes rust ownership");
+        assert_eq!(prefix, OmniboxPrefix::Notes);
+        assert_eq!(q, "rust ownership");
+    }
+
+    #[test]
+    fn parse_prefix_notes_empty_query() {
+        let (prefix, q) = parse_omnibox_prefix("@notes ");
+        assert_eq!(prefix, OmniboxPrefix::Notes);
+        assert_eq!(q, "");
+    }
+
+    #[test]
+    fn parse_prefix_notes_no_match_for_plain() {
+        let (prefix, _) = parse_omnibox_prefix("notes something");
+        assert_eq!(prefix, OmniboxPrefix::Plain);
+    }
+
+    fn make_note_suggestion(note_id: i64) -> OmniboxSuggestion {
+        OmniboxSuggestion::Note {
+            url: "https://example.com/".into(),
+            selection: "interesting text".into(),
+            snippet: "interesting **text** here".into(),
+            viewer_url: format!("note-viewer:{note_id}"),
+        }
+    }
+
+    #[test]
+    fn note_suggestion_commit_value_is_viewer_url() {
+        let s = make_note_suggestion(7);
+        assert_eq!(s.commit_value(), "note-viewer:7");
+    }
+
+    #[test]
+    fn note_suggestion_label_is_selection() {
+        let s = make_note_suggestion(1);
+        assert_eq!(s.label(), "interesting text");
+    }
+
+    #[test]
+    fn note_suggestion_sub_label_is_snippet() {
+        let s = make_note_suggestion(2);
+        assert_eq!(s.sub_label(), "interesting **text** here");
+    }
+
+    #[test]
+    fn note_suggestion_sub_label_falls_back_to_url_when_snippet_empty() {
+        let s = OmniboxSuggestion::Note {
+            url: "https://example.com/".into(),
+            selection: "sel".into(),
+            snippet: String::new(),
+            viewer_url: "note-viewer:3".into(),
+        };
+        assert_eq!(s.sub_label(), "https://example.com/");
     }
 }

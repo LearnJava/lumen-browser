@@ -287,6 +287,7 @@ pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32) -> DisplayList {
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
     let origin_label = panel
         .current_origin
@@ -303,6 +304,7 @@ pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32) -> DisplayList {
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
 
     // Close "×" button.
@@ -317,6 +319,7 @@ pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32) -> DisplayList {
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
+        highlight_name: None,
     });
 
     // Divider line between header and rows.
@@ -341,6 +344,7 @@ pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32) -> DisplayList {
             font_style: FontStyle::Normal,
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
+            highlight_name: None,
         });
 
         // Label.
@@ -354,6 +358,7 @@ pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32) -> DisplayList {
             font_style: FontStyle::Normal,
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
+            highlight_name: None,
         });
 
         // Toggle button: coloured badge on the right.
@@ -375,6 +380,7 @@ pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32) -> DisplayList {
             font_style: FontStyle::Normal,
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
+            highlight_name: None,
         });
     }
 

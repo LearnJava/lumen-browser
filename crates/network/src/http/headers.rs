@@ -76,7 +76,7 @@ impl HeaderOrder {
     /// ```text
     /// Host: example.com\r\n
     /// Connection: keep-alive\r\n
-    /// User-Agent: Lumen/0.0.1\r\n
+    /// User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) ...\r\n
     /// Accept: */*\r\n
     /// \r\n
     /// ```
@@ -128,7 +128,7 @@ pub fn build_request_headers(
             headers.add("Host", host);
             headers.add("Connection", "keep-alive");
             headers.add("Cache-Control", "max-age=0");
-            headers.add("User-Agent", super::DEFAULT_USER_AGENT);
+            headers.add("User-Agent", super::CHROME_USER_AGENT);
             headers.add("Accept", "*/*");
 
             if !accept_encoding.is_empty() {
@@ -261,7 +261,7 @@ mod tests {
     fn test_header_order_contains_required_headers() {
         let headers = build_request_headers("example.com", "gzip, deflate, br", "", HttpProfile::Chrome);
         assert!(headers.contains("Host: example.com"));
-        assert!(headers.contains("User-Agent: Lumen/0.0.1"));
+        assert!(headers.contains("User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)"));
         assert!(headers.contains("Accept: */*"));
         assert!(headers.contains("Accept-Language: en-US,en;q=0.9"));
         assert!(headers.contains("Connection: keep-alive"));
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn test_lumen_profile_custom_ua() {
         let headers = build_request_headers("example.com", "", "", HttpProfile::Lumen);
-        assert!(headers.contains("User-Agent: Lumen/0.0.1"));
+        assert!(headers.contains(&format!("User-Agent: Lumen/{}", env!("CARGO_PKG_VERSION"))));
         assert!(headers.contains("Accept: */*"));
         assert!(headers.contains("Accept-Language: en-US,en;q=0.9"));
     }

@@ -15,6 +15,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use lumen_core::ext::HstsEnforcement;
 use lumen_core::url::Url;
 
+use crate::hsts_preload::get_preload_list;
+
 /// Парсер `Strict-Transport-Security` header (RFC 6797 §6.1.1). Возвращает
 /// `(max_age, include_subdomains, preload)` или `None` если header невалиден.
 ///
@@ -88,7 +90,15 @@ pub(crate) fn maybe_upgrade_url_to_https(
     if host_ascii.is_empty() {
         return Ok(None);
     }
-    if !hsts.is_https_only(&host_ascii, now_unix) {
+
+    // Проверяем HSTS Preload List первым (не требует редиректа, работает
+    // без сохранённого policy). Затем проверяем HstsStore для динамически
+    // полученных HSTS headers.
+    let preload_list = get_preload_list();
+    let should_upgrade = preload_list.is_preloaded(&host_ascii)
+        || hsts.is_https_only(&host_ascii, now_unix);
+
+    if !should_upgrade {
         return Ok(None);
     }
     let port_str = match url.port() {

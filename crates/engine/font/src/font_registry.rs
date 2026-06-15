@@ -33,6 +33,16 @@ impl FontRegistry {
         }
     }
 
+    /// Registry backed by a custom-dir `SystemFontIndex` — for tests and
+    /// headless modes that need predictable font resolution without scanning OS dirs.
+    pub fn with_dirs(dirs: Vec<std::path::PathBuf>) -> Self {
+        Self {
+            system: SystemFontIndex::with_dirs(dirs),
+            custom: RwLock::new(HashMap::new()),
+            bytes_store: RwLock::new(HashMap::new()),
+        }
+    }
+
     /// Регистрирует шрифт из байт-буфера (TrueType / sfnt после декодирования
     /// WOFF/WOFF2). Параметры `family`/`weight`/`style` берутся из дескрипторов
     /// @font-face; байты хранятся в памяти и возвращаются через `read_face_bytes`.
@@ -77,6 +87,31 @@ impl FontRegistry {
     /// Количество зарегистрированных @font-face face-ов. Для тестов.
     pub fn custom_face_count(&self) -> usize {
         self.custom.read().unwrap().values().map(|v| v.len()).sum()
+    }
+
+    /// Resolves a `local()` @font-face source by matching the name against the system
+    /// font index (CSS Fonts L4 §4.3: case-insensitive family-name match). If a
+    /// system face is found, reads it from disk and returns the raw bytes. Returns
+    /// `None` if no matching face exists or the file cannot be read.
+    ///
+    /// `weight` and `style` are the @font-face rule's own descriptors, used to pick
+    /// the closest face from the family (CSS §5.2 matching algorithm).
+    pub fn resolve_local_bytes(&self, name: &str, weight: u16, style: FontStyle) -> Option<Vec<u8>> {
+        let face = self.system.pick_face(name, weight, style)?;
+        std::fs::read(&face.path).ok()
+    }
+
+    /// Возвращает байты первого загруженного face для данной семьи.
+    ///
+    /// Используется [`lumen_paint::MultiFontMeasurer`] в shell для построения
+    /// per-family измерителей из @font-face URL-источников.
+    pub fn face_bytes_for_family(&self, family: &str) -> Option<Vec<u8>> {
+        let key = family.to_ascii_lowercase();
+        let custom = self.custom.read().unwrap();
+        let face = custom.get(&key)?.first()?;
+        let path = face.path.clone();
+        drop(custom);
+        self.bytes_store.read().unwrap().get(&path).cloned()
     }
 }
 
@@ -190,5 +225,42 @@ mod tests {
         reg.register_from_bytes("CustomSerif", 400, FontStyle::Normal, make_minimal_ttf());
         let families = reg.list_families();
         assert!(families.iter().any(|f| f == "CustomSerif"));
+    }
+
+    fn assets_dir() -> std::path::PathBuf {
+        // CARGO_MANIFEST_DIR = crates/engine/font → 3 levels up = repo/worktree root
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..").join("..").join("..")
+            .join("assets").join("fonts")
+    }
+
+    #[test]
+    fn resolve_local_finds_bundled_inter() {
+        let reg = FontRegistry::with_dirs(vec![assets_dir()]);
+        let bytes = reg.resolve_local_bytes("Inter", 400, FontStyle::Normal);
+        assert!(bytes.is_some(), "Inter must be found in assets/fonts");
+        let b = bytes.unwrap();
+        assert!(!b.is_empty());
+        // Bytes should parse as a valid font.
+        assert!(crate::Font::parse(&b).is_ok());
+    }
+
+    #[test]
+    fn resolve_local_unknown_family_returns_none() {
+        let reg = FontRegistry::with_dirs(vec![assets_dir()]);
+        assert!(reg.resolve_local_bytes("NoSuchFontXYZ", 400, FontStyle::Normal).is_none());
+    }
+
+    #[test]
+    fn resolve_local_case_insensitive() {
+        let reg = FontRegistry::with_dirs(vec![assets_dir()]);
+        assert!(reg.resolve_local_bytes("inter", 400, FontStyle::Normal).is_some());
+        assert!(reg.resolve_local_bytes("INTER", 400, FontStyle::Normal).is_some());
+    }
+
+    #[test]
+    fn resolve_local_empty_dir_returns_none() {
+        let reg = FontRegistry::with_dirs(vec![std::path::PathBuf::from("/no/such/dir")]);
+        assert!(reg.resolve_local_bytes("Inter", 400, FontStyle::Normal).is_none());
     }
 }

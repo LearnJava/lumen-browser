@@ -1128,6 +1128,45 @@ mod tests {
         }
     }
 
+    // ── Dynamic table size update vs proto_max (RFC 7541 §6.3) — BUG-161 ───
+
+    #[test]
+    fn decode_size_update_within_proto_max() {
+        // Server raises the dynamic table size to 65536 after the client
+        // advertised SETTINGS_HEADER_TABLE_SIZE=65536. Must be accepted.
+        // Regression for BUG-161: ya.ru sent this update; the decoder rejected
+        // it because proto_max was left at the 4096 default.
+        let mut dec = Decoder::new();
+        dec.set_proto_max(65536);
+        // Dynamic Table Size Update for 65536: 001 prefix, 5-bit integer.
+        let block = encode_int(65536, 5, 0x20);
+        let fields = dec.decode(&block).unwrap();
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn decode_size_update_exceeds_proto_max_rejected() {
+        // With the default proto_max (4096), an update above it is a decoding
+        // error per RFC 7541 §6.3.
+        let mut dec = Decoder::new();
+        let block = encode_int(65536, 5, 0x20);
+        assert_eq!(dec.decode(&block), Err(HpackError::TableSizeTooLarge));
+    }
+
+    #[test]
+    fn decode_size_update_then_header_within_raised_max() {
+        // After raising proto_max and accepting a size update, a normal header
+        // block decodes correctly (size update must precede other fields, §4.2).
+        let mut dec = Decoder::new();
+        dec.set_proto_max(65536);
+        let mut block = encode_int(65536, 5, 0x20);
+        block.push(0x82); // indexed :method: GET
+        let fields = dec.decode(&block).unwrap();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name_str(), ":method");
+        assert_eq!(fields[0].value_str(), "GET");
+    }
+
     #[test]
     fn encoder_uses_indexed_for_static_entries() {
         let mut enc = Encoder::new().with_huffman(false);

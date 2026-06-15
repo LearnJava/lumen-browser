@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Lumen — 113 shape-outside path()</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f {
+    background: #1a1a2e;
+    width: 1022px; height: 718px;
+    margin: 1px;
+    padding: 40px;
+    overflow: hidden;
+  }
+
+  .row { display: flex; gap: 40px; }
+  .box {
+    width: 440px; height: 280px;
+    background: #16213e;
+    overflow: hidden;
+  }
+
+  /* Triangular left float, wide at the top edge and tapering to the left
+     bottom corner. The float box itself is 200×200; shape-outside replaces
+     its wrapping geometry with the SVG outline.
+     CSS Shapes L1 §4 — path("M 0 0 L 200 0 L 0 200 Z"): the right (wrapping)
+     edge runs from x=200 at y=0 down to x=0 at y=200, so the inline squares
+     start far right at the top and march leftward each line. */
+  .fl {
+    float: left;
+    width: 200px; height: 200px;
+    background: #e63946;
+  }
+  .fl-path { shape-outside: path("M 0 0 L 200 0 L 0 200 Z"); clip-path: path("M 0 0 L 200 0 L 0 200 Z"); }
+  /* Reference: the same triangle expressed as polygon() (already supported).
+     If path() wrapping is correct, both columns produce an identical staircase. */
+  .fl-poly { shape-outside: polygon(0px 0px, 200px 0px, 0px 200px); clip-path: polygon(0px 0px, 200px 0px, 0px 200px); }
+
+  /* Inline-block squares flow around the float and reveal the shape boundary. */
+  .sq {
+    display: inline-block;
+    width: 20px; height: 20px;
+    margin: 2px;
+    background: #4ade80;
+    vertical-align: top;
+  }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="row">
+    <!-- Column 1: shape-outside: path() -->
+    <div class="box">
+      <div class="fl fl-path"></div>
+      <span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span>
+    </div>
+    <!-- Column 2: shape-outside: polygon() reference (identical triangle) -->
+    <div class="box">
+      <div class="fl fl-poly"></div>
+      <span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span><span class="sq"></span>
+    </div>
+  </div>
+</div>
+</body>
+</html>

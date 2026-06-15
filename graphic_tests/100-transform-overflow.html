@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Lumen — 100 transform + overflow interaction</title>
+<style>
+  /* Interaction test: CSS transform (TEST-22) × overflow clipping (TEST-14).
+     If this test fails while 22 and 14 pass — the bug is in the interaction
+     (clipping of transformed layers), not in either property alone. */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+  .__f { background: #1a202c; width: 1022px; height: 718px; margin: 1px; overflow: hidden; position: relative; }
+
+  /* Fixed 6-cell grid — cell rects are mirrored in run.py REGIONS for diff localization. */
+  .cell { position: absolute; width: 300px; height: 300px; }
+  .c0 { left: 24px;  top: 24px; }
+  .c1 { left: 364px; top: 24px; }
+  .c2 { left: 704px; top: 24px; }
+  .c3 { left: 24px;  top: 374px; }
+  .c4 { left: 364px; top: 374px; }
+  .c5 { left: 704px; top: 374px; }
+
+  .box { background: #2d3748; }
+  .clip { overflow: hidden; }
+</style>
+</head>
+<body>
+<div class="__f">
+
+  <!-- c0: translated child clipped at container's bottom-right edge -->
+  <div class="cell c0 box clip">
+    <div style="width:160px;height:160px;margin:80px 0 0 80px;background:#4299e1;transform:translate(120px,120px);"></div>
+  </div>
+
+  <!-- c1: rotated child — corners extend past the container and must be cut -->
+  <div class="cell c1 box clip">
+    <div style="width:240px;height:240px;margin:30px 0 0 30px;background:#48bb78;transform:rotate(45deg);"></div>
+  </div>
+
+  <!-- c2: scaled child larger than the container — edges clipped on all sides -->
+  <div class="cell c2 box clip">
+    <div style="width:160px;height:160px;margin:70px 0 0 70px;background:#ed8936;transform:scale(2.4);"></div>
+  </div>
+
+  <!-- c3: CONTROL — same translate as c0 but overflow:visible: child must escape the cell -->
+  <div class="cell c3 box">
+    <div style="width:160px;height:160px;margin:80px 0 0 80px;background:#4299e1;transform:translate(120px,120px);"></div>
+  </div>
+
+  <!-- c4: negative translate — child clipped at container's top-left edge -->
+  <div class="cell c4 box clip">
+    <div style="width:160px;height:160px;margin:40px 0 0 40px;background:#9f7aea;transform:translate(-100px,-100px);"></div>
+  </div>
+
+  <!-- c5: the clipping container itself is rotated — clip region rotates with it -->
+  <div class="cell c5 box clip" style="transform:rotate(15deg);">
+    <div style="width:380px;height:80px;margin:110px 0 0 -40px;background:#fc8181;"></div>
+  </div>
+
+</div>
+</body>
+</html>

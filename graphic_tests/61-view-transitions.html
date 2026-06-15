@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 61 view transitions</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f {
+    background: #0f0f1a;
+    width: 1022px; height: 718px;
+    margin: 1px;
+    padding: 30px 40px;
+    overflow: hidden;
+  }
+  h2 { color: #a0a8c0; font-size: 14px; margin-bottom: 16px; font-family: monospace; }
+  .demo { display: flex; gap: 24px; margin-bottom: 32px; align-items: flex-start; }
+  .card {
+    background: #1a1a2e;
+    border: 1px solid #2a2a4e;
+    border-radius: 8px;
+    padding: 20px;
+    flex: 1;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .card.active { background: #2a2a6e; border-color: #4a4aae; }
+  .card-title { color: #e0e4f0; font-size: 15px; font-weight: bold; margin-bottom: 8px; }
+  .card-body { color: #8090b0; font-size: 13px; line-height: 1.5; }
+  .indicator {
+    background: #111124;
+    border: 1px solid #222244;
+    border-radius: 6px;
+    padding: 16px 20px;
+    color: #6878a0;
+    font-size: 12px;
+    font-family: monospace;
+    line-height: 1.6;
+  }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .dot.green { background: #4caf82; }
+  .dot.amber { background: #e0a840; }
+  .dot.grey { background: #555570; }
+  /* ::view-transition pseudo-elements — stubs in Phase 0 */
+  ::view-transition { pointer-events: none; }
+  ::view-transition-group(*) { animation-duration: 300ms; }
+  ::view-transition-old(root) { animation-name: -ua-view-transition-fade-out; }
+  ::view-transition-new(root) { animation-name: -ua-view-transition-fade-in; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <h2>View Transitions API — document.startViewTransition(callback)</h2>
+
+  <div class="demo">
+    <div class="card active" id="card1">
+      <div class="card-title">Before transition</div>
+      <div class="card-body">Initial DOM state.<br>Card is highlighted (active).</div>
+    </div>
+    <div class="card" id="card2">
+      <div class="card-title">After transition</div>
+      <div class="card-body">DOM updated by callback.<br>Card changes state.</div>
+    </div>
+    <div class="card" id="card3">
+      <div class="card-title">Cross-fade</div>
+      <div class="card-body">Old DL fades out over<br>new DL — 300 ms animation.</div>
+    </div>
+  </div>
+
+  <div class="indicator" id="log">
+    <span class="dot amber"></span>Waiting for startViewTransition() call...
+  </div>
+
+  <script>
+  (function() {
+    var log = document.getElementById('log');
+    var card1 = document.getElementById('card1');
+    var card2 = document.getElementById('card2');
+
+    if (typeof document.startViewTransition === 'function') {
+      // Trigger a transition: move the "active" class from card1 to card2.
+      var vt = document.startViewTransition(function() {
+        card1.classList.remove('active');
+        card2.classList.add('active');
+      });
+
+      log.innerHTML = '<span class="dot green"></span>startViewTransition() called. ' +
+        'typeof ready=' + (typeof vt.ready) + ', ' +
+        'typeof finished=' + (typeof vt.finished) + ', ' +
+        'typeof updateCallbackDone=' + (typeof vt.updateCallbackDone) + ', ' +
+        'typeof skipTransition=' + (typeof vt.skipTransition);
+    } else {
+      log.innerHTML = '<span class="dot grey"></span>document.startViewTransition not available (Phase 0 stub missing)';
+    }
+  })();
+  </script>
+</div>
+</body>
+</html>

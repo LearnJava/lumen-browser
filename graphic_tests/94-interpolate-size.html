@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<!-- CSS Sizing L4 §4.5 — interpolate-size: allow-keywords.
+     This property only changes behaviour DURING a transition/animation that
+     starts or ends at a keyword size (auto, min-content, …). At rest the box
+     lays out at its normal computed size, so a static snapshot must match a
+     page without the property. The test verifies that declaring
+     `interpolate-size: allow-keywords` (inherited) and a `numeric-only`
+     override do not disturb resting layout: each auto-height box sizes to the
+     stacked fixed-height colour strips it contains, exactly as it would with
+     the initial `numeric-only`. No text — pure box geometry. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; overflow: hidden; padding: 16px; box-sizing: border-box; }
+
+  /* Inherited root opt-in — children pick up allow-keywords per §4.5. */
+  .root { interpolate-size: allow-keywords; }
+
+  /* Auto-height boxes: height is determined purely by the stacked strips. The
+     property must not change this resting size. */
+  .box {
+    width: 280px;
+    height: auto;
+    background: #2f6db5;
+    margin: 0 0 16px 0;
+    padding: 8px;
+    box-sizing: border-box;
+  }
+  .tall { min-height: 140px; background: #1f8a4c; }
+  .reset { interpolate-size: numeric-only; background: #b5482f; }
+  .strip { height: 24px; margin: 0 0 6px 0; background: #ffd23f; }
+  .strip:last-child { margin-bottom: 0; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="root">
+    <!-- Opted-in container; boxes inherit allow-keywords. Two strips → auto height. -->
+    <div class="box">
+      <div class="strip"></div>
+      <div class="strip"></div>
+    </div>
+    <!-- min-height floor wins over the single strip's content height. -->
+    <div class="box tall">
+      <div class="strip"></div>
+    </div>
+    <!-- Child overrides back to numeric-only; resting layout still identical. -->
+    <div class="box reset">
+      <div class="strip"></div>
+      <div class="strip"></div>
+      <div class="strip"></div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

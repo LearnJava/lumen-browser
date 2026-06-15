@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<!--
+  TEST-75: masonry-auto-flow — CSS Masonry Layout §9
+  Verifies that masonry-auto-flow: next keeps source order and
+  masonry-auto-flow: ordered respects the CSS `order` property.
+  Pure geometry test — no text involved.
+-->
+<html>
+<head>
+  <title>Lumen — 75 masonry-auto-flow</title>
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f {
+    background: #1a1a2e;
+    width: 1022px; height: 718px;
+    margin: 1px;
+    padding: 20px;
+    box-sizing: border-box;
+    overflow: hidden;
+    display: flex;
+    gap: 20px;
+  }
+
+  /* ── Section labels ────────────────────────────────────────────────── */
+  .section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .label {
+    height: 28px;
+    background: #16213e;
+    border: 2px solid #0f3460;
+  }
+
+  /* ── Masonry container ─────────────────────────────────────────────── */
+  .mason {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-rows: masonry;
+    gap: 6px;
+  }
+
+  /* ── next: source order (red first, then blue, then green) ─────────── */
+  .next-grid { masonry-auto-flow: next; }
+
+  .n-red   { background: #e63946; height: 110px; }
+  .n-blue  { background: #457b9d; height: 60px; }
+  .n-green { background: #2a9d8f; height: 80px; }
+  .n-orange{ background: #f4a261; height: 50px; }
+  .n-purple{ background: #9d4edd; height: 90px; }
+  .n-teal  { background: #52b788; height: 70px; }
+
+  /* ── ordered: CSS order overrides source order ──────────────────────── */
+  /* Source: red(order:2), blue(order:-1), green(order:1), orange(order:0) */
+  /* Sorted: blue(-1), orange(0), green(1), red(2) */
+  .ord-grid { masonry-auto-flow: ordered; }
+
+  .o-red   { background: #e63946; height: 110px; order: 2; }
+  .o-blue  { background: #457b9d; height: 60px;  order: -1; }
+  .o-green { background: #2a9d8f; height: 80px;  order: 1; }
+  .o-orange{ background: #f4a261; height: 50px;  order: 0; }
+  .o-purple{ background: #9d4edd; height: 90px;  order: 3; }
+  .o-teal  { background: #52b788; height: 70px;  order: 0; }
+
+  /* ── definite-first: items with grid-column-start first ─────────────── */
+  .def-grid { masonry-auto-flow: definite-first; }
+
+  /* item with explicit column goes first even if it is last in source */
+  .d-auto1  { background: #e63946; height: 90px; }
+  .d-auto2  { background: #f4a261; height: 60px; }
+  .d-auto3  { background: #2a9d8f; height: 70px; }
+  .d-auto4  { background: #9d4edd; height: 50px; }
+  .d-auto5  { background: #52b788; height: 80px; }
+  .d-definite { background: #e9c46a; height: 100px; grid-column-start: 1; }
+</style>
+</head>
+<body>
+<div class="__f">
+
+  <!-- Section 1: masonry-auto-flow: next -->
+  <div class="section">
+    <div class="label"></div>
+    <div class="mason next-grid">
+      <div class="n-red"></div>
+      <div class="n-blue"></div>
+      <div class="n-green"></div>
+      <div class="n-orange"></div>
+      <div class="n-purple"></div>
+      <div class="n-teal"></div>
+    </div>
+  </div>
+
+  <!-- Section 2: masonry-auto-flow: ordered -->
+  <div class="section">
+    <div class="label"></div>
+    <div class="mason ord-grid">
+      <div class="o-red"></div>
+      <div class="o-blue"></div>
+      <div class="o-green"></div>
+      <div class="o-orange"></div>
+      <div class="o-purple"></div>
+      <div class="o-teal"></div>
+    </div>
+  </div>
+
+  <!-- Section 3: masonry-auto-flow: definite-first -->
+  <div class="section">
+    <div class="label"></div>
+    <div class="mason def-grid">
+      <div class="d-auto1"></div>
+      <div class="d-auto2"></div>
+      <div class="d-auto3"></div>
+      <div class="d-auto4"></div>
+      <div class="d-auto5"></div>
+      <div class="d-definite"></div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

@@ -28,9 +28,10 @@
 //! Phase 0: ни одно из этих деревьев пока не подгружается в compositor —
 //! commit реализует P2 в п.1B (compositor-scaffolding).
 
-use lumen_core::geom::Rect;
+use lumen_core::geom::{Rect, Size};
 
 use crate::box_tree::{BoxKind, LayoutBox};
+use crate::motion_path::resolve_motion_transform;
 use crate::style::{ComputedStyle, FilterFn, Isolation, MixBlendMode, Overflow, TransformFn};
 
 /// Идентификатор узла в любом из четырёх деревьев. Уникален в пределах своего
@@ -618,13 +619,23 @@ pub fn compute_local_transform(fns: &[TransformFn], origin: (f32, f32, f32)) -> 
             TransformFn::Translate(x, y) => Mat4::translation_2d(x, y),
             TransformFn::TranslateX(x) => Mat4::translation_2d(x, 0.0),
             TransformFn::TranslateY(y) => Mat4::translation_2d(0.0, y),
+            TransformFn::TranslateZ(tz) => Mat4::translate_3d(0.0, 0.0, tz),
+            TransformFn::Translate3d(tx, ty, tz) => Mat4::translate_3d(tx, ty, tz),
             TransformFn::Rotate(theta) => Mat4::rotate_2d(theta),
+            TransformFn::RotateX(theta) => Mat4::rotate_x(theta),
+            TransformFn::RotateY(theta) => Mat4::rotate_y(theta),
+            TransformFn::RotateZ(theta) => Mat4::rotate_z(theta),
+            TransformFn::Rotate3d(x, y, z, theta) => Mat4::rotate_3d(x, y, z, theta),
             TransformFn::Scale(sx, sy) => Mat4::scale_2d(sx, sy),
             TransformFn::ScaleX(sx) => Mat4::scale_2d(sx, 1.0),
             TransformFn::ScaleY(sy) => Mat4::scale_2d(1.0, sy),
+            TransformFn::ScaleZ(sz) => Mat4::scale_3d(1.0, 1.0, sz),
+            TransformFn::Scale3d(sx, sy, sz) => Mat4::scale_3d(sx, sy, sz),
             TransformFn::SkewX(a) => Mat4::skew_x(a),
             TransformFn::SkewY(a) => Mat4::skew_y(a),
             TransformFn::Matrix([a, b, c, d, e, f]) => Mat4::from_2d_affine(a, b, c, d, e, f),
+            TransformFn::Matrix3d(vals) => Mat4::from_3d(vals),
+            TransformFn::Perspective(d) => Mat4::perspective(d),
         };
         m = m.multiply(&step);
     }
@@ -654,7 +665,8 @@ pub fn forward_box_transform(b: &LayoutBox) -> Option<Mat4> {
     let has_individual = b.style.translate.is_some()
         || b.style.rotate.is_some()
         || b.style.scale.is_some();
-    if b.style.transform.is_empty() && !has_individual {
+    let has_motion = b.style.offset_path.is_some();
+    if b.style.transform.is_empty() && !has_individual && !has_motion {
         return None;
     }
     let (ox, oy, _) = b.style.transform_origin;
@@ -679,21 +691,40 @@ pub fn forward_box_transform(b: &LayoutBox) -> Option<Mat4> {
             TransformFn::Translate(x, y) => Mat4::translation_2d(x, y),
             TransformFn::TranslateX(x) => Mat4::translation_2d(x, 0.0),
             TransformFn::TranslateY(y) => Mat4::translation_2d(0.0, y),
+            TransformFn::TranslateZ(tz) => Mat4::translate_3d(0.0, 0.0, tz),
+            TransformFn::Translate3d(tx, ty, tz) => Mat4::translate_3d(tx, ty, tz),
             TransformFn::Rotate(theta) => Mat4::rotate_2d(theta),
+            TransformFn::RotateX(theta) => Mat4::rotate_x(theta),
+            TransformFn::RotateY(theta) => Mat4::rotate_y(theta),
+            TransformFn::RotateZ(theta) => Mat4::rotate_z(theta),
+            TransformFn::Rotate3d(x, y, z, theta) => Mat4::rotate_3d(x, y, z, theta),
             TransformFn::Scale(sx, sy) => Mat4::scale_2d(sx, sy),
             TransformFn::ScaleX(sx) => Mat4::scale_2d(sx, 1.0),
             TransformFn::ScaleY(sy) => Mat4::scale_2d(1.0, sy),
+            TransformFn::ScaleZ(sz) => Mat4::scale_3d(1.0, 1.0, sz),
+            TransformFn::Scale3d(sx, sy, sz) => Mat4::scale_3d(sx, sy, sz),
             TransformFn::SkewX(a) => Mat4::skew_x(a),
             TransformFn::SkewY(a) => Mat4::skew_y(a),
             TransformFn::Matrix([a, b_, c, d, e, f]) => Mat4::from_2d_affine(a, b_, c, d, e, f),
-            // CSS: rotateX/rotateY/rotateZ/rotate3d/translateZ/translate3d/
-            // scaleZ/scale3d/perspective()/matrix3d — P4 adds these TransformFn
-            // variants + their parsing, then maps each to the matching Mat4 3D
-            // constructor (Mat4::rotate_x/rotate_y/rotate_z/rotate_3d/
-            // translate_3d/scale_3d/perspective/from_3d). The renderer already
-            // projects any non-2D-affine matrix perspective-correctly.
+            TransformFn::Matrix3d(vals) => Mat4::from_3d(vals),
+            TransformFn::Perspective(d) => Mat4::perspective(d),
         };
         m = m.multiply(&step);
+    }
+    // CSS Motion Path L1: prepend translate+rotate from offset-path before CSS transform.
+    if let Some(path) = &b.style.offset_path {
+        let diagonal = (b.rect.width * b.rect.width + b.rect.height * b.rect.height).sqrt();
+        let dist_px = b
+            .style
+            .offset_distance
+            .resolve(b.style.font_size, Some(diagonal), Size::default())
+            .unwrap_or(0.0);
+        if let Some(mt) = resolve_motion_transform(path, dist_px, b.style.offset_rotate) {
+            let rad = mt.rotation_deg * (core::f32::consts::PI / 180.0);
+            let motion = Mat4::translation_2d(mt.translate_x, mt.translate_y)
+                .multiply(&Mat4::rotate_2d(rad));
+            m = motion.multiply(&m);
+        }
     }
     if pivot_x == 0.0 && pivot_y == 0.0 {
         Some(m)
@@ -722,13 +753,23 @@ pub fn transform_fns_to_matrix(fns: &[TransformFn], pivot_x: f32, pivot_y: f32) 
             TransformFn::Translate(x, y) => Mat4::translation_2d(x, y),
             TransformFn::TranslateX(x) => Mat4::translation_2d(x, 0.0),
             TransformFn::TranslateY(y) => Mat4::translation_2d(0.0, y),
+            TransformFn::TranslateZ(tz) => Mat4::translate_3d(0.0, 0.0, tz),
+            TransformFn::Translate3d(tx, ty, tz) => Mat4::translate_3d(tx, ty, tz),
             TransformFn::Rotate(theta) => Mat4::rotate_2d(theta),
+            TransformFn::RotateX(theta) => Mat4::rotate_x(theta),
+            TransformFn::RotateY(theta) => Mat4::rotate_y(theta),
+            TransformFn::RotateZ(theta) => Mat4::rotate_z(theta),
+            TransformFn::Rotate3d(x, y, z, theta) => Mat4::rotate_3d(x, y, z, theta),
             TransformFn::Scale(sx, sy) => Mat4::scale_2d(sx, sy),
             TransformFn::ScaleX(sx) => Mat4::scale_2d(sx, 1.0),
             TransformFn::ScaleY(sy) => Mat4::scale_2d(1.0, sy),
+            TransformFn::ScaleZ(sz) => Mat4::scale_3d(1.0, 1.0, sz),
+            TransformFn::Scale3d(sx, sy, sz) => Mat4::scale_3d(sx, sy, sz),
             TransformFn::SkewX(a) => Mat4::skew_x(a),
             TransformFn::SkewY(a) => Mat4::skew_y(a),
             TransformFn::Matrix([a, b, c, d, e, f_]) => Mat4::from_2d_affine(a, b, c, d, e, f_),
+            TransformFn::Matrix3d(vals) => Mat4::from_3d(vals),
+            TransformFn::Perspective(d) => Mat4::perspective(d),
         };
         m = m.multiply(&step);
     }
@@ -752,7 +793,7 @@ fn overflow_creates_clip(o: Overflow) -> bool {
 }
 
 fn creates_transform(style: &ComputedStyle) -> bool {
-    !style.transform.is_empty()
+    !style.transform.is_empty() || style.offset_path.is_some()
 }
 
 fn creates_scroll(style: &ComputedStyle) -> bool {
@@ -799,7 +840,24 @@ fn walk(
             let id = PropertyTreeNodeId(trees.transform.nodes.len() as u32);
             let (raw_ox, raw_oy, oz) = style.transform_origin;
             let resolved_origin = (raw_ox.resolve(b.rect.width), raw_oy.resolve(b.rect.height), oz);
-            let local = compute_local_transform(&style.transform, resolved_origin);
+            let mut local = compute_local_transform(&style.transform, resolved_origin);
+            // CSS Motion Path L1 (offset-path / offset-distance / offset-rotate).
+            if let Some(path) = &style.offset_path {
+                let diagonal =
+                    (b.rect.width * b.rect.width + b.rect.height * b.rect.height).sqrt();
+                let dist_px = style
+                    .offset_distance
+                    .resolve(style.font_size, Some(diagonal), Size::default())
+                    .unwrap_or(0.0);
+                if let Some(mt) = resolve_motion_transform(path, dist_px, style.offset_rotate) {
+                    let motion = Mat4::translation_2d(mt.translate_x, mt.translate_y)
+                        .multiply(&Mat4::rotate_2d(
+                            mt.rotation_deg * (core::f32::consts::PI / 180.0),
+                        ));
+                    // Motion path positions first; CSS transform refines within that frame.
+                    local = motion.multiply(&local);
+                }
+            }
             trees.transform.nodes.push(TransformNode {
                 id,
                 parent: Some(transform_parent),
@@ -1384,5 +1442,52 @@ mod tests {
         let css = "div { transform: scale(1.5); }";
         let trees = build(&html, css);
         assert_eq!(trees.transform.nodes.len(), 6);
+    }
+
+    // ----- CSS Motion Path L1 (offset-path / offset-distance / offset-rotate) -----
+
+    #[test]
+    fn offset_path_alone_creates_transform_node() {
+        // offset-path без CSS transform тоже должен породить TransformNode.
+        let trees = build(
+            "<div>x</div>",
+            r#"div { width:100px; height:100px; offset-path: path("M 0 0 L 200 0"); offset-distance: 50px; }"#,
+        );
+        assert_eq!(trees.transform.nodes.len(), 2);
+        let n = &trees.transform.nodes[1];
+        assert!(!n.local.is_identity());
+    }
+
+    #[test]
+    fn offset_path_at_zero_distance_is_at_path_start() {
+        // offset-distance: 0 → элемент у начала пути → translate(0, 0) → identity.
+        let trees = build(
+            "<div>x</div>",
+            r#"div { width:100px; height:100px; offset-path: path("M 0 0 L 200 0"); offset-distance: 0px; offset-rotate: 0deg; }"#,
+        );
+        assert_eq!(trees.transform.nodes.len(), 2);
+        // Нулевое смещение + нулевой поворот → identity (нет реального сдвига).
+        assert!(trees.transform.nodes[1].local.is_identity());
+    }
+
+    #[test]
+    fn offset_path_combined_with_css_transform_composes() {
+        // offset-path + CSS transform → оба учитываются: matrix non-identity.
+        let trees = build(
+            "<div>x</div>",
+            r#"div { width:100px; height:100px; offset-path: path("M 0 0 L 200 0"); offset-distance: 30px; transform: scale(2); }"#,
+        );
+        assert_eq!(trees.transform.nodes.len(), 2);
+        let n = &trees.transform.nodes[1];
+        assert!(!n.local.is_identity());
+        // С scale(2) должен иметь элемент (0,0) = 2.0 (масштаб).
+        assert!(approx(n.local.0[0], 2.0));
+    }
+
+    #[test]
+    fn offset_path_none_no_transform_node() {
+        // offset-path: none — не создаёт TransformNode (нет ни path, ни transform).
+        let trees = build("<div>x</div>", "div { offset-path: none; }");
+        assert_eq!(trees.transform.nodes.len(), 1);
     }
 }

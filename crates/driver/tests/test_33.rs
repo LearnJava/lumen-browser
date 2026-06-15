@@ -1,10 +1,20 @@
-//! Test 33-multi-column.html — column-count / column-width / column-gap / column-rule.
+//! Test 33-multi-column.html — column-count / column-width / column-gap / column-rule /
+//! column-span:all / column-fill:auto.
 //!
-//! Seven `.mc` multi-column containers (60px tall, widths 480/690/740/480/680/320/900)
-//! each hold N `.col` children that the engine distributes across columns. The
-//! load-bearing checks: 22 `.col` boxes total, and in the first container
-//! (column-count:2, gap:20, width:480) the two columns are 230px wide and advance
-//! by 250px (column width + gap), proving the gap is honoured.
+//! Seven `.mc` multi-column containers. After commit cefb8475 (C8/P4) the HTML was extended
+//! with column-span:all (container 5) and column-fill:auto (container 6), which changed
+//! widths and heights. Ground-truth sizes verified via --dump-layout:
+//!
+//!   mc[0]: 480×52   column-count:2, gap:20  — 2 .col children
+//!   mc[1]: 690×52   column-count:3, gap:30  — 3 .col children
+//!   mc[2]: 740×52   column-count:4, gap:20  — 4 .col children
+//!   mc[3]: 480×52   column-count:2, gap:60  — 2 .col children
+//!   mc[4]: 660×88   column-count:3, gap:12, column-span:all — auto height from content
+//!   mc[5]: 660×80   column-count:3, gap:12, column-fill:auto — explicit height
+//!   mc[6]: 900×52   column-count:5, gap:16  — 5 .col children
+//!
+//! Load-bearing checks: 16 `.col` boxes total; first container columns are 230px wide
+//! with 250px advance (230 width + 20 gap).
 
 use lumen_driver::{BrowserSession, InProcessSession};
 
@@ -25,22 +35,32 @@ fn test_33_multi_column() {
     let mut session = InProcessSession::new();
     navigate(&mut session, "graphic_tests/33-multi-column.html");
 
-    // Seven containers, declared widths in document order; all 60px tall.
     let mc = session.all_layout_boxes_by_selector(".mc").expect("query .mc");
-    let widths = [480.0, 690.0, 740.0, 480.0, 680.0, 320.0, 900.0];
     assert_eq!(mc.len(), 7, "expected 7 multi-column containers");
-    for (i, w) in widths.iter().enumerate() {
+
+    // Width and height per container (ground-truth from --dump-layout).
+    let expected: [(f32, f32); 7] = [
+        (480.0, 52.0),
+        (690.0, 52.0),
+        (740.0, 52.0),
+        (480.0, 52.0),
+        (660.0, 88.0), // column-span:all, auto height
+        (660.0, 80.0), // column-fill:auto, explicit height
+        (900.0, 52.0),
+    ];
+    for (i, (w, h)) in expected.iter().enumerate() {
         assert!(
-            (mc[i].border_box.width - w).abs() < 1.0 && (mc[i].border_box.height - 60.0).abs() < 1.0,
-            ".mc[{i}] should be {w}x60, got {}x{}",
+            (mc[i].border_box.width - w).abs() < 1.0 && (mc[i].border_box.height - h).abs() < 1.0,
+            ".mc[{i}] should be {w}x{h}, got {}x{}",
             mc[i].border_box.width,
             mc[i].border_box.height
         );
     }
 
-    // Children: 2+3+4+2+4+2+5 = 22 columns total.
+    // Containers 5 and 6 use .col-sm; only containers 1-4 and 7 use .col.
+    // 2+3+4+2+5 = 16 total.
     let cols = session.all_layout_boxes_by_selector(".col").expect("query .col");
-    assert_eq!(cols.len(), 22, "expected 22 column boxes");
+    assert_eq!(cols.len(), 16, "expected 16 .col boxes");
 
     // First container (column-count:2, gap:20, width:480): each column is
     // (480 − 20) / 2 = 230px wide and the second starts 250px (230 + 20 gap) right.

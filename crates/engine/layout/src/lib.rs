@@ -12,24 +12,57 @@
 //! Не поддерживается (Phase 2+): flex, grid, float, absolute positioning,
 //! font-weight/style на уровне inline.
 
+pub use lumen_core::ColorSpace;
+
+pub mod anchor;
 pub mod animation;
 pub mod box_tree;
+pub mod color_mix;
+pub mod incremental;
+pub mod content_visibility;
+pub mod field_sizing;
+pub mod hyphenation;
 pub mod counters;
+pub mod font_palette;
 pub mod image_gating;
+pub mod image_set;
+pub mod mathml;
+pub mod motion_path;
 pub mod page;
 pub mod pagination;
 pub mod property_trees;
+pub mod ruby;
+pub mod rule_index;
 pub mod selection;
 pub mod selector_query;
 pub mod scroll_timeline;
 pub mod snapshot;
+pub mod inert;
 pub mod stacking;
+pub mod starting_style;
 pub mod style;
+pub mod masonry;
+pub mod subgrid;
+pub mod table;
 pub mod text_iter;
 pub(crate) mod vertical;
 
-pub use counters::{format_counter, precompute_counters, CounterMap, CounterSnapshot};
+pub use counters::{
+    format_counter, format_counter_with_registry, precompute_counters,
+    build_counter_style_registry, build_list_marker_text, resolve_counter_value,
+    CounterMap, CounterSnapshot, CounterStyleDef, CounterStyleRegistry,
+    CounterSystem, CounterRange, QuoteSlot, RangeBound,
+};
+pub use color_mix::{MixColorSpace, mix_colors};
+pub use field_sizing::field_sizing_content_intrinsic;
+pub use hyphenation::{collect_hyphen_points, SoftHyphenPoint};
 pub use image_gating::gate_image_requests;
+pub use image_set::{
+    parse_image_set, select_image_set_candidate, select_image_set_url,
+    ImageSetOption, SupportedTypes,
+};
+pub use mathml::{MathmlBox, MathmlElementKind, lay_out_mathml, collect_mathml_structure};
+pub use ruby::{RubyBox, RubyPosition, lay_out_ruby};
 pub use animation::{
     AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator,
     LinearInterpolator, NoopInterpolator, parse_keyframe_style, KeyframeStyle,
@@ -37,11 +70,12 @@ pub use animation::{
     AnimationScheduler, TransitionScheduler,
 };
 pub use box_tree::{
-    apply_container_styles,
-    collect_background_image_requests, collect_image_requests, layout, layout_measured,
-    layout_measured_hyp, BoxKind, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox,
-    PseudoKind, SvgShapeKind, ViewBox,
+    apply_container_styles, build_iframe_document,
+    collect_background_image_requests, collect_image_requests, is_open_details, layout, layout_measured,
+    layout_measured_hyp, lay_out_incremental, BoxKind, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox,
+    PseudoKind, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, ViewBox,
 };
+pub use incremental::{DirtyBits, mark_dirty, mark_dirty_set, clear_dirty, translate_subtree};
 pub use page::{MarginBox, MarginBoxPosition, PageBox, PageProperties, MarginBoxTextFragment};
 pub use pagination::{paginate, Page, PageFragment, PaginationContext};
 pub use property_trees::{
@@ -50,10 +84,17 @@ pub use property_trees::{
     Mat4, PropertyTreeNodeId, PropertyTrees, ScrollNode, ScrollTree, TransformNode, TransformTree,
 };
 pub use selection::{caret_at_point, selection_rects};
+pub use style::{compute_selection_style, compute_style_from_declarations};
 pub use selector_query::{
-    computed_style_by_selector, computed_style_to_map, find_all_by_selector,
-    find_box_by_selector, query_all, ComputedStyleSnapshot,
+    computed_style_by_selector, computed_style_json, computed_style_json_by_selector,
+    computed_style_to_map, find_all_by_selector, find_box_by_selector, matched_rules_for_node,
+    matches_selector, query_all, ComputedStyleSnapshot, MatchedRule,
 };
+pub use anchor::{
+    collect_anchors, register_anchor, resolve_anchor_function, resolve_inset_area,
+    AnchorEntry, AnchorRegistry, AnchorSide, AnchoredPosition, InsetAreaKeyword,
+};
+pub use motion_path::{resolve_motion_transform, MotionTransform};
 pub use text_iter::{collect_visible_text, TextFragment};
 pub use scroll_timeline::{
     collect_named_scroll_timelines, collect_named_view_timelines,
@@ -61,48 +102,106 @@ pub use scroll_timeline::{
     NamedScrollTimeline, NamedViewTimeline, ScrollAxis, ScrollTimeline, ViewTimeline, Viewport,
 };
 pub use snapshot::serialize_layout_tree;
+pub use inert::{collect_inert_regions, is_inert, InertRegion};
+pub use starting_style::{resolve_starting_style, StartingStyleTracker};
+pub use subgrid::{collect_subgrid_items, SubgridContext, SubgridItem};
+pub use content_visibility::{set_cv_scroll, set_cv_relevant, take_cv_skipped, CV_SLACK_FACTOR};
 pub use stacking::{
     box_can_own_stacking_context, creates_stacking_context, PaintOrder, PaintPhase,
     StackingContext, StackingContextId, StackingTree,
 };
 pub use style::{
     apply_container_rules, evaluate_container_condition,
+    set_interactive_state, clear_interactive_state,
     parse_background_gradient, parse_color, parse_css_wide_keyword, parse_gradient_stops,
     parse_grid_template_areas, parse_transform_list,
-    AlignValue, AnimationDirection, ContainerContext,
+    AlignValue, AnimationDirection, Appearance, ContainerContext,
     AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat,
-    BackgroundSize, BorderStyle,
-    BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ColorFloat, ColorSpace,
+    BackgroundSize, BorderCollapse, BorderStyle,
+    BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ColorFloat,
     ClearSide, ContainFlags, ComputedStyle, Content,
-    ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, FilterFn, FloatSide, FontOpticalSizing, FontStretch,
+    ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, EmptyCells, FilterFn, FloatSide, FontOpticalSizing, FontStretch,
     FontStyle,
-    FontVariant, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,
+    FontVariant, FontVariationSetting, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,
+    MasonryAutoFlow,
     Isolation, IterationCount, Length,
     LengthOrAuto, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
-    OutlineColor, OutlineStyle, Overflow, OverflowWrap, OverscrollBehavior, ParsedGradient,
+    OutlineColor, OutlineStyle, Overflow, OverflowWrap, OverscrollBehavior, ParsedGradient, Resize,
     PointerEvents,
-    Position, PositionComponent, ScrollBehavior, ScrollSnapAlign, ScrollSnapAlignKeyword,
+    Position, PositionComponent, Quotes, ScrollBehavior, ScrollSnapAlign, ScrollSnapAlignKeyword,
     ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, ScrollSnapType, ScrollbarGutter,
-    ScrollbarWidth, StepPosition, SvgPaint, TextAlign, TextDecorationLine, TextDecorationStyle,
-    TextDecorationThickness, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
-    TextOverflow, TextShadow, TextTransform, TimingFunction, TransformFn, UserSelect, Visibility,
+    FillRule, ScrollbarWidth, ShapeValue, StepPosition, StrokeLinecap, StrokeLinejoin, SvgPaint, TextAlign, TextDecorationLine, TextDecorationStyle,
+    TextDecorationSkipInk, TextDecorationThickness, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
+    TextOverflow, TextShadow, TextTransform, TextUnderlinePosition,
+    TimingFunction, TransformFn, TransformStyle,
+    UserSelect, Visibility,
     WhiteSpace, WordBreak,
 };
+
+/// Computed `::selection` highlight data — passed to the paint layer so it can
+/// apply `::selection` CSS overrides when rendering selected text.
+///
+/// CSS Pseudo-elements L4 §5.6 restricts `::selection` to a limited set of
+/// properties: `color`, `background-color`, `text-decoration-*`, `text-shadow`.
+/// The paint layer reads only `fg_color` and `bg_color`; other properties from
+/// the full `ComputedStyle` are ignored during selection rendering.
+///
+/// Build via [`compute_selection_style`] or construct directly with OS-default
+/// colours when no `::selection` rules are present.
+#[derive(Debug, Clone)]
+pub struct SelectionHighlight {
+    /// The active DOM selection range. Must not be collapsed.
+    pub range: lumen_dom::Range,
+    /// Text colour override from `::selection { color: ... }`. `None` = inherit
+    /// (keep each fragment's own `color`).
+    pub fg_color: Option<Color>,
+    /// Selection background from `::selection { background-color: ... }`.
+    /// The default when no `::selection` rule is present is the OS accent colour;
+    /// callers should supply a sensible fallback (e.g. `#308aff`).
+    pub bg_color: Color,
+}
 
 /// Интерфейс измерения ширины символов для line wrapping.
 ///
 /// Реализуется на стороне вызывающего кода (paint/shell), где есть доступ
 /// к шрифтовым данным. Layout использует его только в `layout_measured()`.
-// CSS: font-variation-settings — P4 расширяет этот трейт методом
-// char_width_varied(ch, font_size_px, axes: &[([u8;4], f32)]) -> f32
-// чтобы layout учитывал HVAR advance widths при line wrapping для VF шрифтов.
 pub trait TextMeasurer {
     /// Ширина символа `ch` при размере шрифта `font_size_px` пикселей.
     /// Возвращает 0.0 для неизвестных символов.
-    // CSS: font-variation-settings — вариационные оси здесь не передаются;
-    // P4 добавит вариантную версию этого метода после cascade для font-variation-settings.
     fn char_width(&self, ch: char, font_size_px: f32) -> f32;
+
+    /// Ширина символа `ch` с учётом CSS `font-family` каскада.
+    ///
+    /// Перебирает `families` по порядку и возвращает ширину из первого шрифта,
+    /// в котором есть глиф для `ch`. Если ни одна семья не загружена или не
+    /// содержит глиф, делегирует к [`Self::char_width`] (Inter-fallback).
+    ///
+    /// Реализации, поддерживающие несколько шрифтов, должны переопределить
+    /// этот метод. По умолчанию игнорирует `families`.
+    fn char_width_with_families(&self, ch: char, font_size_px: f32, families: &[String]) -> f32 {
+        let _ = families;
+        self.char_width(ch, font_size_px)
+    }
+
+    /// Ширина символа `ch` с учётом CSS `font-family` и `font-variation-settings`.
+    ///
+    /// CSS Fonts L4 §6.3 — вариационные оси передаются в порядке каскада.
+    /// Для шрифтов без fvar/HVAR игнорирует `axes` и делегирует к
+    /// [`Self::char_width_with_families`]. Для variable fonts применяет
+    /// HVAR delta через нормализованные координаты осей.
+    ///
+    /// Дефолтная реализация игнорирует `axes` — достаточно для статических шрифтов.
+    fn char_width_varied(
+        &self,
+        ch: char,
+        font_size_px: f32,
+        axes: &[FontVariationSetting],
+        families: &[String],
+    ) -> f32 {
+        let _ = axes;
+        self.char_width_with_families(ch, font_size_px, families)
+    }
 
     /// Descent шрифта в пикселях при размере `font_size_px`.
     /// Используется для IFC strut: определяет, насколько линия строки
@@ -117,6 +216,16 @@ pub trait TextMeasurer {
     /// внутри line-box с учётом half-leading (CSS 2.1 §10.8.1).
     fn ascent_px(&self, font_size_px: f32) -> f32 {
         font_size_px * 0.8
+    }
+
+    /// x-height шрифта в пикселях при размере `font_size_px` — высота строчной
+    /// `x` без выносных элементов (таблица OS/2 `sxHeight`).
+    ///
+    /// CSS Fonts L5 §4 — основа для `font-size-adjust`: aspect value шрифта =
+    /// `x_height_px(size) / size`. Реализации без доступа к метрикам возвращают
+    /// приближение `0.5 × size` (то же, что `ex`-юнит в style.rs).
+    fn x_height_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.5
     }
 }
 
@@ -187,13 +296,33 @@ fn collect_clickable_rec(
         return;
     }
 
+    // CSS: inert — P4 should add `[inert] { pointer-events: none; }` to the UA
+    // stylesheet. This guard provides the complementary layout-level filter:
+    // inert elements are never included in the clickable set.
+    if inert::is_inert(doc, b.node) {
+        return;
+    }
+
+    // CSS Pointer Events L1: `pointer-events: none` on a block box excludes the box
+    // itself from the clickable set. Children are always visited — a child's
+    // pointer-events is independent (the property is not inherited).
+    //
+    // InlineRun boxes carry the BLOCK CONTAINER'S style (not the inline element's
+    // own style), so we cannot use `b.style.pointer_events` to gate InlineRun
+    // processing. Instead, each inline link is gated by `frag.style.pointer_events`,
+    // which reflects the actual inline element's computed value.
+    let block_pe_none = b.style.pointer_events == PointerEvents::None;
+
     match &b.kind {
-        BoxKind::FormControl { kind } => {
+        BoxKind::FormControl { kind } if !block_pe_none => {
             let ck = match kind {
                 FormControlKind::Button => ClickableKind::Button,
                 FormControlKind::Input { .. }
-                | FormControlKind::Select
-                | FormControlKind::Textarea => ClickableKind::Input,
+                | FormControlKind::Select { .. }
+                | FormControlKind::Textarea { .. }
+                | FormControlKind::Range { .. }
+                | FormControlKind::Progress { .. }
+                | FormControlKind::Meter { .. } => ClickableKind::Input,
             };
             out.push(ClickableElement {
                 node_id: b.node,
@@ -202,7 +331,7 @@ fn collect_clickable_rec(
                 kind: ck,
             });
         }
-        BoxKind::Block | BoxKind::FlowRoot => {
+        BoxKind::Block | BoxKind::FlowRoot if !block_pe_none => {
             if let Some(href) = element_href(doc, b.node) {
                 out.push(ClickableElement {
                     node_id: b.node,
@@ -229,6 +358,8 @@ fn collect_clickable_rec(
         BoxKind::InlineRun { lines, .. } => {
             // Collect rects for inline <a href> links by walking frag source_nodes.
             // Groups consecutive frags with the same link ancestor into one entry.
+            // Skip links whose frag.style.pointer_events is None (the frag carries
+            // the inline element's own computed style, not the block container's).
             let line_y_offset = b.rect.y;
             let line_x_offset = b.rect.x;
             for line in lines {
@@ -236,7 +367,12 @@ fn collect_clickable_rec(
                 let mut cur_href = String::new();
                 let mut cur_rect: Option<Rect> = None;
                 for frag in line {
-                    let link = link_ancestor(doc, frag.source_node);
+                    // Treat pointer-events:none inline elements as if they have no link.
+                    let link = if frag.style.pointer_events == PointerEvents::None {
+                        None
+                    } else {
+                        link_ancestor(doc, frag.source_node)
+                    };
                     if link == cur_link_node {
                         if let Some(ref mut r) = cur_rect {
                             let fx = line_x_offset + frag.x;
@@ -557,6 +693,14 @@ pub struct SnapContainer {
     pub snap_type: style::ScrollSnapType,
     /// Border-box of the scroll container in CSS px (document-relative).
     pub rect: lumen_core::geom::Rect,
+    /// CSS `scroll-padding-top` in CSS px — shrinks the snap port from the block-start edge.
+    pub scroll_padding_top: f32,
+    /// CSS `scroll-padding-right` in CSS px — shrinks the snap port from the inline-end edge.
+    pub scroll_padding_right: f32,
+    /// CSS `scroll-padding-bottom` in CSS px — shrinks the snap port from the block-end edge.
+    pub scroll_padding_bottom: f32,
+    /// CSS `scroll-padding-left` in CSS px — shrinks the snap port from the inline-start edge.
+    pub scroll_padding_left: f32,
     /// All snap areas found inside this container, in document order.
     pub points: Vec<SnapPoint>,
 }
@@ -605,6 +749,10 @@ fn collect_snap_rec(
             node: b.node,
             snap_type: b.style.scroll_snap_type,
             rect: b.rect,
+            scroll_padding_top: b.style.scroll_padding_top,
+            scroll_padding_right: b.style.scroll_padding_right,
+            scroll_padding_bottom: b.style.scroll_padding_bottom,
+            scroll_padding_left: b.style.scroll_padding_left,
             points: Vec::new(),
         });
         container_stack.push(idx);
@@ -619,8 +767,25 @@ fn collect_snap_rec(
     if let Some(&cidx) = container_stack.last() {
         let align = b.style.scroll_snap_align;
         let cr = out[cidx].rect;
-        let snap_x = snap_offset_x(align.inline, b.rect, cr);
-        let snap_y = snap_offset_y(align.block, b.rect, cr);
+        // scroll-margin expands the snap area; scroll-padding shrinks the snap port.
+        let snap_x = snap_offset_x(
+            align.inline,
+            b.rect,
+            cr,
+            b.style.scroll_margin_left,
+            b.style.scroll_margin_right,
+            out[cidx].scroll_padding_left,
+            out[cidx].scroll_padding_right,
+        );
+        let snap_y = snap_offset_y(
+            align.block,
+            b.rect,
+            cr,
+            b.style.scroll_margin_top,
+            b.style.scroll_margin_bottom,
+            out[cidx].scroll_padding_top,
+            out[cidx].scroll_padding_bottom,
+        );
         if (snap_x.is_some() || snap_y.is_some()) && seen_areas.insert(b.node) {
             let stop_always =
                 b.style.scroll_snap_stop == style::ScrollSnapStop::Always;
@@ -640,45 +805,71 @@ fn collect_snap_rec(
 
 /// Compute the x-axis snap offset for `align` keyword relative to `container`.
 ///
-/// Returns the container scroll-x value at which the snap area's inline edge
-/// aligns with the scroll port per the spec (CSS Scroll Snap §6.1).
+/// `margin_left`/`margin_right` expand the snap area (CSS `scroll-margin`).
+/// `padding_left`/`padding_right` shrink the snap port (CSS `scroll-padding`).
+///
+/// Returns the container scroll-x value at which the (margin-expanded) snap
+/// area edge aligns with the (padding-shrunk) snap port edge per CSS Scroll
+/// Snap L1 §6.1 and §6.3.
 fn snap_offset_x(
     align: style::ScrollSnapAlignKeyword,
     area: lumen_core::geom::Rect,
     container: lumen_core::geom::Rect,
+    margin_left: f32,
+    margin_right: f32,
+    padding_left: f32,
+    padding_right: f32,
 ) -> Option<f32> {
     use style::ScrollSnapAlignKeyword;
-    // scroll-x = area_content_offset that aligns area edge with port edge
-    // area_content_x = area.x - container.x  (offset within container content)
+    // Content offset of the area's origin within the container's content space.
     let ax = area.x - container.x;
     match align {
         ScrollSnapAlignKeyword::None => None,
-        ScrollSnapAlignKeyword::Start => Some(ax),
-        ScrollSnapAlignKeyword::End => Some(ax + area.width - container.width),
-        ScrollSnapAlignKeyword::Center => {
-            Some(ax + area.width * 0.5 - container.width * 0.5)
+        // Align expanded-area start with port start: scroll_x = area_left − port_left
+        ScrollSnapAlignKeyword::Start => Some(ax - margin_left - padding_left),
+        // Align expanded-area end with port end: scroll_x = area_right − port_right
+        ScrollSnapAlignKeyword::End => {
+            Some(ax + area.width + margin_right - container.width + padding_right)
         }
+        // Align expanded-area center with port center.
+        ScrollSnapAlignKeyword::Center => Some(
+            ax + area.width * 0.5 - container.width * 0.5
+                + (margin_right - margin_left) * 0.5
+                + (padding_right - padding_left) * 0.5,
+        ),
     }
 }
 
 /// Compute the y-axis snap offset for `align` keyword relative to `container`.
 ///
-/// Returns the container scroll-y value at which the snap area's block edge
-/// aligns with the scroll port per the spec (CSS Scroll Snap §6.1).
+/// `margin_top`/`margin_bottom` expand the snap area (CSS `scroll-margin`).
+/// `padding_top`/`padding_bottom` shrink the snap port (CSS `scroll-padding`).
+///
+/// Returns the container scroll-y value at which the (margin-expanded) snap
+/// area edge aligns with the (padding-shrunk) snap port edge per CSS Scroll
+/// Snap L1 §6.1 and §6.3.
 fn snap_offset_y(
     align: style::ScrollSnapAlignKeyword,
     area: lumen_core::geom::Rect,
     container: lumen_core::geom::Rect,
+    margin_top: f32,
+    margin_bottom: f32,
+    padding_top: f32,
+    padding_bottom: f32,
 ) -> Option<f32> {
     use style::ScrollSnapAlignKeyword;
     let ay = area.y - container.y;
     match align {
         ScrollSnapAlignKeyword::None => None,
-        ScrollSnapAlignKeyword::Start => Some(ay),
-        ScrollSnapAlignKeyword::End => Some(ay + area.height - container.height),
-        ScrollSnapAlignKeyword::Center => {
-            Some(ay + area.height * 0.5 - container.height * 0.5)
+        ScrollSnapAlignKeyword::Start => Some(ay - margin_top - padding_top),
+        ScrollSnapAlignKeyword::End => {
+            Some(ay + area.height + margin_bottom - container.height + padding_bottom)
         }
+        ScrollSnapAlignKeyword::Center => Some(
+            ay + area.height * 0.5 - container.height * 0.5
+                + (margin_bottom - margin_top) * 0.5
+                + (padding_bottom - padding_top) * 0.5,
+        ),
     }
 }
 
@@ -721,9 +912,17 @@ pub fn find_snap_target(
     let axis = container.snap_type.axis;
     let strictness = container.snap_type.strictness;
 
-    // Proximity threshold: 50% of the scroll port on each axis.
-    let prox_x = container.rect.width * 0.5;
-    let prox_y = container.rect.height * 0.5;
+    // Proximity threshold: 50% of the effective snap port (after scroll-padding).
+    let port_w = (container.rect.width
+        - container.scroll_padding_left
+        - container.scroll_padding_right)
+        .max(0.0);
+    let port_h = (container.rect.height
+        - container.scroll_padding_top
+        - container.scroll_padding_bottom)
+        .max(0.0);
+    let prox_x = port_w * 0.5;
+    let prox_y = port_h * 0.5;
 
     let snaps_x = matches!(axis, ScrollSnapAxis::X | ScrollSnapAxis::Inline | ScrollSnapAxis::Both);
     let snaps_y = matches!(axis, ScrollSnapAxis::Y | ScrollSnapAxis::Block | ScrollSnapAxis::Both);
@@ -787,6 +986,82 @@ pub fn find_snap_target(
     best
 }
 
+/// The snap areas a container is currently snapped to, one per axis.
+///
+/// CSS Scroll Snap L2 §`snapchanging`/`snapchanged`: the snap events expose
+/// `snapTargetBlock` / `snapTargetInline` — the elements snapped on the block
+/// and inline axes respectively. Either may be `None` when no area is snapped
+/// on that axis (e.g. the container only snaps on one axis, or no area aligns).
+///
+/// `block` corresponds to the y axis and `inline` to the x axis under the
+/// default `horizontal-tb` writing mode (matching [`snap_offset_x`] /
+/// [`snap_offset_y`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SnapTargets {
+    /// DOM node snapped on the block axis (y under `horizontal-tb`), or `None`.
+    pub block: Option<lumen_dom::NodeId>,
+    /// DOM node snapped on the inline axis (x under `horizontal-tb`), or `None`.
+    pub inline: Option<lumen_dom::NodeId>,
+}
+
+/// Determine which snap areas a container is snapped to at scroll offset `scroll`.
+///
+/// For each axis the container actually snaps on (per its `scroll-snap-type`),
+/// picks the snap area whose required offset on that axis is closest to the
+/// container's current scroll position. Returns the node ids as [`SnapTargets`].
+///
+/// Returns the default (both `None`) when the container has no snap areas.
+///
+/// # Integration
+///
+/// Shell scroll handler: after [`find_snap_target`] resolves a new scroll
+/// offset, call this to learn the snapped elements, then dispatch the snap
+/// events via [`crate`]-external JS bindings — fire `snapchanging` while the
+/// gesture is in flight and `snapchanged` once the scroll settles, passing
+/// `block`/`inline` node ids as `snapTargetBlock` / `snapTargetInline`
+/// (`QuickJsRuntime::fire_snap_changing` / `fire_snap_changed`).
+pub fn find_snapped_nodes(container: &SnapContainer, scroll: (f32, f32)) -> SnapTargets {
+    use style::ScrollSnapAxis;
+
+    if container.points.is_empty() {
+        return SnapTargets::default();
+    }
+
+    let axis = container.snap_type.axis;
+    let snaps_x = matches!(
+        axis,
+        ScrollSnapAxis::X | ScrollSnapAxis::Inline | ScrollSnapAxis::Both
+    );
+    let snaps_y = matches!(
+        axis,
+        ScrollSnapAxis::Y | ScrollSnapAxis::Block | ScrollSnapAxis::Both
+    );
+
+    let mut inline = None;
+    let mut block = None;
+    let mut best_inline = f32::INFINITY;
+    let mut best_block = f32::INFINITY;
+
+    for pt in &container.points {
+        if snaps_x && let Some(sx) = pt.snap_x {
+            let d = (sx - scroll.0).abs();
+            if d < best_inline {
+                best_inline = d;
+                inline = Some(pt.node);
+            }
+        }
+        if snaps_y && let Some(sy) = pt.snap_y {
+            let d = (sy - scroll.1).abs();
+            if d < best_block {
+                best_block = d;
+                block = Some(pt.node);
+            }
+        }
+    }
+
+    SnapTargets { block, inline }
+}
+
 // ---------------------------------------------------------------------------
 // Scroll container infrastructure
 // CSS: overflow — P4 wires: check style.overflow_x/overflow_y == Overflow::Scroll | Auto,
@@ -809,6 +1084,13 @@ pub struct ScrollContainer {
     pub scroll_x: f32,
     /// Current vertical scroll offset in CSS px. Clamped to [0, scroll_height - clip_rect.height].
     pub scroll_y: f32,
+    /// CSS Overscroll Behavior L1 §2 — `overscroll-behavior-x`. Governs whether a
+    /// horizontal scroll delta this container cannot consume propagates to the
+    /// ancestor scroll chain (`Auto` propagates; `Contain`/`None` stop it).
+    pub overscroll_behavior_x: style::OverscrollBehavior,
+    /// CSS Overscroll Behavior L1 §2 — `overscroll-behavior-y`. Same semantics
+    /// as `overscroll_behavior_x` for the vertical axis.
+    pub overscroll_behavior_y: style::OverscrollBehavior,
 }
 
 /// Collect all `overflow: scroll` / `overflow: auto` containers from the layout tree.
@@ -851,11 +1133,46 @@ fn collect_scroll_containers_inner(b: &LayoutBox, out: &mut Vec<ScrollContainer>
             scroll_height,
             scroll_x: b.scroll_x,
             scroll_y: b.scroll_y,
+            overscroll_behavior_x: s.overscroll_behavior_x,
+            overscroll_behavior_y: s.overscroll_behavior_y,
         });
     }
     for child in &b.children {
         collect_scroll_containers_inner(child, out);
     }
+}
+
+/// CSS Overscroll Behavior L1 §3 — decide whether a scroll delta a container
+/// could not consume should propagate up the ancestor scroll chain (e.g. to the
+/// page).
+///
+/// `dx`/`dy` are the requested deltas in CSS px; `moved_x`/`moved_y` report
+/// whether the container actually scrolled on each axis (false ⇒ the container
+/// is at its boundary in that direction). Returns `true` when the residual delta
+/// is allowed to bubble to the parent.
+///
+/// Rules:
+/// - If the container moved on either axis it has consumed the gesture, so the
+///   chain stops here (returns `false`).
+/// - Otherwise the container is fully at its boundary. Propagation is blocked
+///   when any axis carrying a non-zero delta has `Contain` or `None`; if every
+///   delta-bearing axis is `Auto` the delta propagates.
+#[must_use]
+pub fn overscroll_should_propagate(
+    overscroll_x: style::OverscrollBehavior,
+    overscroll_y: style::OverscrollBehavior,
+    dx: f32,
+    dy: f32,
+    moved_x: bool,
+    moved_y: bool,
+) -> bool {
+    use style::OverscrollBehavior;
+    if moved_x || moved_y {
+        return false;
+    }
+    let blocked = (dx != 0.0 && overscroll_x != OverscrollBehavior::Auto)
+        || (dy != 0.0 && overscroll_y != OverscrollBehavior::Auto);
+    !blocked
 }
 
 /// Compute the content scroll-width of a box: rightmost child edge relative to container left.
@@ -931,6 +1248,58 @@ pub fn set_scroll_position(root: &mut LayoutBox, node: lumen_dom::NodeId, x: f32
         }
     }
     false
+}
+
+/// Find the innermost scroll container whose `clip_rect` contains `(x, y)`.
+///
+/// Returns the `NodeId` of the topmost (in DOM order, last in the list wins for nesting)
+/// overflow container whose clip rectangle contains the given document-space coordinate.
+/// Shell uses this to route `MouseWheel` events to the correct overflow container
+/// instead of always scrolling the page.
+///
+/// CSS View Transitions L1 §10 — collect all elements with a `view-transition-name` set.
+///
+/// Returns one `(node, name)` pair per named element in document order. Elements with
+/// `display: none` (no layout box) are skipped. The shell passes this list to the
+/// transition engine during `document.startViewTransition()` to match old/new snapshots.
+///
+/// Duplicate names are allowed in this list — per-page uniqueness is enforced by the
+/// caller (only the first occurrence should be used as a capture source).
+pub fn collect_view_transition_names(root: &LayoutBox) -> Vec<(lumen_dom::NodeId, Box<str>)> {
+    let mut out = Vec::new();
+    collect_vt_names_rec(root, &mut out);
+    out
+}
+
+fn collect_vt_names_rec(b: &LayoutBox, out: &mut Vec<(lumen_dom::NodeId, Box<str>)>) {
+    use box_tree::BoxKind;
+    if matches!(b.kind, BoxKind::Skip) {
+        return;
+    }
+    if let Some(ref name) = b.style.view_transition_name {
+        out.push((b.node, name.clone()));
+    }
+    for child in &b.children {
+        collect_vt_names_rec(child, out);
+    }
+}
+
+/// `x` and `y` are in CSS px, document-relative (same coordinate space as
+/// `ScrollContainer::clip_rect`).
+pub fn find_scroll_container_at(
+    containers: &[ScrollContainer],
+    x: f32,
+    y: f32,
+) -> Option<lumen_dom::NodeId> {
+    // Iterate in reverse so later (deeper, visually on top) containers win.
+    containers.iter().rev().find_map(|c| {
+        let r = &c.clip_rect;
+        if x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height {
+            Some(c.node)
+        } else {
+            None
+        }
+    })
 }
 
 #[cfg(test)]
@@ -1523,8 +1892,112 @@ mod tests {
     fn pseudo_hover_never_matches() {
         let root = lay("<p>x</p>", "p:hover { color: red; }");
         let p = first_element_child(&root);
-        // :hover в Phase 0 никогда не матчит.
+        // :hover без set_interactive_state не матчит.
         assert_eq!(p.style.color.r, 0);
+    }
+
+    // ── Interactive pseudo-classes: :hover / :focus / :active ────────────────
+
+    fn node_named(lb: &LayoutBox, doc: &lumen_dom::Document, local: &str) -> Option<lumen_dom::NodeId> {
+        if let lumen_dom::NodeData::Element { name, .. } = &doc.get(lb.node).data
+            && name.local == local { return Some(lb.node); }
+        for c in &lb.children { if let Some(n) = node_named(c, doc, local) { return Some(n); } }
+        None
+    }
+
+    fn lb_named<'a>(lb: &'a LayoutBox, doc: &lumen_dom::Document, local: &str) -> Option<&'a LayoutBox> {
+        if let lumen_dom::NodeData::Element { name, .. } = &doc.get(lb.node).data
+            && name.local == local { return Some(lb); }
+        for c in &lb.children { if let Some(f) = lb_named(c, doc, local) { return Some(f); } }
+        None
+    }
+
+    #[test]
+    fn hover_matches_when_node_is_hovered() {
+        let html = "<p>x</p>";
+        let css = "p:hover { color: red; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root_lb = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
+        let p_nid = first_element_child(&root_lb).node;
+        set_interactive_state(Some(p_nid), None, None);
+        let root_hover = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
+        clear_interactive_state();
+        let p_hover = first_element_child(&root_hover);
+        assert_eq!(p_hover.style.color.r, 255, ":hover should apply (color red)");
+        assert_eq!(p_hover.style.color.g, 0);
+    }
+
+    #[test]
+    fn hover_matches_ancestor_of_hovered_node() {
+        // :hover applies to all ancestors of the hovered node (CSS Selectors L4 §4.3).
+        // Use block-level <p> child so it gets its own LayoutBox (inline elements don't).
+        let html = "<div><p>x</p></div>";
+        let css = "div:hover { background-color: blue; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root_lb = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
+        let p_nid = node_named(&root_lb, &doc, "p").expect("<p> not found");
+        set_interactive_state(Some(p_nid), None, None);
+        let root_hover = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
+        clear_interactive_state();
+        let div_bg = lb_named(&root_hover, &doc, "div").expect("<div> not found").style.background_color;
+        assert!(
+            matches!(div_bg, Some(CssColor::Rgba(Color { b: 255, .. }))),
+            "parent :hover should match when child is hovered"
+        );
+    }
+
+    #[test]
+    fn hover_does_not_match_non_hovered_node() {
+        // Use block-level <div> as the non-hovered element to get a LayoutBox.
+        let html = "<p>x</p><div>y</div>";
+        let css = "p:hover { color: red; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root_lb = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
+        let div_nid = node_named(&root_lb, &doc, "div").expect("<div> not found");
+        set_interactive_state(Some(div_nid), None, None);
+        let root_hover = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
+        clear_interactive_state();
+        let p = first_element_child(&root_hover);
+        assert_eq!(p.style.color.r, 0, "non-hovered <p> should not match :hover");
+    }
+
+    #[test]
+    fn focus_matches_exact_node() {
+        let html = "<input type='text' />";
+        let css = "input:focus { border-color: blue; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root_lb = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
+        let input_nid = first_element_child(&root_lb).node;
+        set_interactive_state(None, Some(input_nid), None);
+        let root_focus = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
+        clear_interactive_state();
+        let input = first_element_child(&root_focus);
+        assert!(
+            matches!(input.style.border_top_color, CssColor::Rgba(Color { b: 255, .. })),
+            ":focus border-color blue"
+        );
+    }
+
+    #[test]
+    fn active_matches_element_and_ancestor() {
+        let html = "<div><button>click</button></div>";
+        let css = "div:active { background-color: red; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root_lb = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
+        let btn_nid = node_named(&root_lb, &doc, "button").expect("<button> not found");
+        set_interactive_state(None, None, Some(btn_nid));
+        let root_active = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
+        clear_interactive_state();
+        let div_bg = lb_named(&root_active, &doc, "div").expect("<div> not found").style.background_color;
+        assert!(
+            matches!(div_bg, Some(CssColor::Rgba(Color { r: 255, .. }))),
+            "parent :active should match when child is active"
+        );
     }
 
     // ── :placeholder-shown (CSS Selectors L4 §15.1) ──
@@ -2389,7 +2862,7 @@ mod tests {
         let sheet = lumen_css_parser::parse(css);
         let root_style = ComputedStyle::root();
         let target = find_first_element(&doc, doc.root(), tag).expect("element not found");
-        compute_style(&doc, target, &sheet, &root_style, Size::new(800.0, 600.0)).color
+        compute_style(&doc, target, &sheet, &root_style, Size::new(800.0, 600.0), false).color
     }
 
     fn find_first_element(
@@ -2567,7 +3040,7 @@ mod tests {
         let sheet = lumen_css_parser::parse(css);
         let root_style = ComputedStyle::root();
         let target_node = find_first_element(&doc, doc.root(), tag).expect("element not found");
-        compute_style(&doc, target_node, &sheet, &root_style, Size::new(800.0, 600.0)).color
+        compute_style(&doc, target_node, &sheet, &root_style, Size::new(800.0, 600.0), false).color
     }
 
     #[test]
@@ -4510,6 +4983,7 @@ mod tests {
                 &lumen_css_parser::Stylesheet::default(),
                 &ComputedStyle::root(),
                 Size::new(800.0, 600.0),
+                false,
             );
             assert_eq!(style.font_style, FontStyle::Italic, "tag = {tag}");
         }
@@ -4572,9 +5046,76 @@ mod tests {
                 &lumen_css_parser::Stylesheet::default(),
                 &ComputedStyle::root(),
                 Size::new(800.0, 600.0),
+                false,
             );
             assert_eq!(style.font_weight, FontWeight::BOLD, "tag = {tag}");
         }
+    }
+
+    /// UA stylesheet: `<h1>`–`<h6>` получают увеличенный font-size и
+    /// вертикальные margin (HTML Rendering §15.3.3). Регрессия BUG-106:
+    /// без этих дефолтов заголовки рендерились 16px без отступов, из-за чего
+    /// таблицы (TEST-64) уезжали вверх относительно Edge.
+    #[test]
+    fn headings_get_ua_font_size_and_margins() {
+        let root_fs = ComputedStyle::root().font_size;
+        // (tag, font-size factor, vertical margin em)
+        let cases = [
+            ("h1", 2.0_f32, 0.67_f32),
+            ("h2", 1.5, 0.83),
+            ("h3", 1.17, 1.0),
+            ("h4", 1.0, 1.33),
+            ("h5", 0.83, 1.67),
+            ("h6", 0.67, 2.33),
+        ];
+        for (tag, size_factor, margin_em) in cases {
+            let html = format!("<{tag}>x</{tag}>");
+            let doc = lumen_html_parser::parse(&html);
+            let id = doc.get(doc.body().unwrap()).children[0];
+            let style = crate::style::compute_style(
+                &doc,
+                id,
+                &lumen_css_parser::Stylesheet::default(),
+                &ComputedStyle::root(),
+                Size::new(800.0, 600.0),
+                false,
+            );
+            assert!(
+                (style.font_size - root_fs * size_factor).abs() < 0.01,
+                "{tag} font-size: expected {}, got {}",
+                root_fs * size_factor,
+                style.font_size,
+            );
+            assert_eq!(
+                style.margin_top,
+                LengthOrAuto::Length(Length::Em(margin_em)),
+                "{tag} margin-top",
+            );
+            assert_eq!(
+                style.margin_bottom,
+                LengthOrAuto::Length(Length::Em(margin_em)),
+                "{tag} margin-bottom",
+            );
+        }
+    }
+
+    /// UA-дефолты заголовка перекрываются author-CSS (font-size через
+    /// pre-pass, margin через main-pass каскада).
+    #[test]
+    fn heading_ua_defaults_overridden_by_author_css() {
+        let doc = lumen_html_parser::parse("<h3>x</h3>");
+        let id = doc.get(doc.body().unwrap()).children[0];
+        let ss = lumen_css_parser::parse("h3 { font-size: 30px; margin-top: 5px; }");
+        let style = crate::style::compute_style(
+            &doc,
+            id,
+            &ss,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        assert!((style.font_size - 30.0).abs() < 0.01, "author font-size wins");
+        assert_eq!(style.margin_top, LengthOrAuto::Length(Length::Px(5.0)));
     }
 
     /// CSS `font-weight: bold` → 700.
@@ -6221,6 +6762,7 @@ mod tests {
             &lumen_css_parser::parse("a a span { color: red; }"),
             &ComputedStyle::root(),
             Size::new(800.0, 600.0),
+            false,
         );
         assert_eq!(style.color.r, 255);
     }
@@ -6248,6 +6790,7 @@ mod tests {
             &sheet,
             &ComputedStyle::root(),
             Size::new(800.0, 600.0),
+            false,
         );
         assert_eq!(
             style.color.r, 255,
@@ -6495,9 +7038,9 @@ mod tests {
         let div2 = doc.get(body).children[1];
         let h2_b = doc.get(div2).children[0];
         let style_a = crate::style::compute_style(
-            &doc, h2_a, &sheet, &root_style, Size::new(800.0, 600.0));
+            &doc, h2_a, &sheet, &root_style, Size::new(800.0, 600.0), false);
         let style_b = crate::style::compute_style(
-            &doc, h2_b, &sheet, &root_style, Size::new(800.0, 600.0));
+            &doc, h2_b, &sheet, &root_style, Size::new(800.0, 600.0), false);
         assert_eq!(style_a.color.r, 255, "h2 + p должен сматчить");
         assert_eq!(style_b.color.r, 0, "h2 без p после — нет");
     }
@@ -6813,7 +7356,7 @@ mod tests {
         let root = lay(r#"<img src="logo.png" alt="logo">"#, "");
         let img = first_image_child(&root);
         match &img.kind {
-            BoxKind::Image { src, alt } => {
+            BoxKind::Image { src, alt, .. } => {
                 assert_eq!(src, "logo.png");
                 assert_eq!(alt, "logo");
             }
@@ -6825,7 +7368,7 @@ mod tests {
     fn img_without_src_or_alt_has_empty_strings() {
         let root = lay("<img>", "");
         let img = first_image_child(&root);
-        if let BoxKind::Image { src, alt } = &img.kind {
+        if let BoxKind::Image { src, alt, .. } = &img.kind {
             assert_eq!(src, "");
             assert_eq!(alt, "");
         }
@@ -6999,6 +7542,108 @@ mod tests {
         let vid = first_video_child(&root);
         // UA default 300px, not 800px (viewport width).
         assert!((vid.rect.width - 300.0).abs() < 0.1, "width={}", vid.rect.width);
+    }
+
+    // ──────── <iframe> placeholder layout ───────────────────────────────────
+
+    fn first_iframe_child(b: &LayoutBox) -> &LayoutBox {
+        b.children
+            .iter()
+            .find(|c| matches!(c.kind, BoxKind::Iframe { .. }))
+            .expect("expected at least one Iframe box")
+    }
+
+    #[test]
+    fn iframe_creates_iframe_box_with_src() {
+        let root = lay(r#"<iframe src="https://example.com"></iframe>"#, "");
+        let frame = first_iframe_child(&root);
+        match &frame.kind {
+            BoxKind::Iframe { src, .. } => assert_eq!(src, "https://example.com"),
+            other => panic!("expected BoxKind::Iframe, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn iframe_ua_default_size_300_by_150() {
+        // HTML spec §4.8.5: UA default intrinsic size is 300×150 CSS px.
+        let root = lay(r#"<iframe src="x.html"></iframe>"#, "");
+        let frame = first_iframe_child(&root);
+        assert!((frame.rect.width - 300.0).abs() < 0.1, "width={}", frame.rect.width);
+        assert!((frame.rect.height - 150.0).abs() < 0.1, "height={}", frame.rect.height);
+    }
+
+    #[test]
+    fn iframe_html_attribute_dimensions_override_ua_default() {
+        let root = lay(r#"<iframe src="x.html" width="800" height="600"></iframe>"#, "");
+        let frame = first_iframe_child(&root);
+        assert!((frame.rect.width - 800.0).abs() < 0.1, "width={}", frame.rect.width);
+        assert!((frame.rect.height - 600.0).abs() < 0.1, "height={}", frame.rect.height);
+    }
+
+    #[test]
+    fn iframe_css_overrides_ua_default() {
+        let root = lay(
+            r#"<iframe src="x.html"></iframe>"#,
+            "iframe { width: 400px; height: 300px; }",
+        );
+        let frame = first_iframe_child(&root);
+        assert!((frame.rect.width - 400.0).abs() < 0.1, "width={}", frame.rect.width);
+        assert!((frame.rect.height - 300.0).abs() < 0.1, "height={}", frame.rect.height);
+    }
+
+    #[test]
+    fn iframe_is_replaced_element_does_not_stretch() {
+        // Replaced elements do NOT stretch to fill container width (CSS 2.1 §10.3.2).
+        let root = lay(r#"<iframe src="x.html"></iframe>"#, "");
+        let frame = first_iframe_child(&root);
+        // UA default 300px, not 800px (viewport width).
+        assert!((frame.rect.width - 300.0).abs() < 0.1, "width={}", frame.rect.width);
+    }
+
+    #[test]
+    fn iframe_empty_src_is_valid() {
+        let root = lay(r#"<iframe></iframe>"#, "");
+        let frame = first_iframe_child(&root);
+        match &frame.kind {
+            BoxKind::Iframe { src, .. } => assert_eq!(src, ""),
+            other => panic!("expected BoxKind::Iframe, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn iframe_srcdoc_stored_in_box_kind() {
+        let root = lay(r#"<iframe srcdoc="<p>hello</p>"></iframe>"#, "");
+        let frame = first_iframe_child(&root);
+        match &frame.kind {
+            BoxKind::Iframe { srcdoc, .. } => {
+                assert_eq!(srcdoc.as_deref(), Some("<p>hello</p>"));
+            }
+            other => panic!("expected BoxKind::Iframe, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_iframe_document_empty_html_returns_document() {
+        let doc = build_iframe_document("");
+        // Empty input still produces a valid Document with a root node that has children.
+        // lumen_html_parser::parse always inserts implicit html/head/body.
+        assert!(!doc.get(doc.root()).children.is_empty());
+    }
+
+    #[test]
+    fn build_iframe_document_parses_inline_html() {
+        let doc = build_iframe_document("<p>hello world</p>");
+        // The parsed document should contain a paragraph element somewhere in the tree.
+        let mut found = false;
+        let mut stack = vec![doc.root()];
+        while let Some(id) = stack.pop() {
+            if doc.get(id).element_name().is_some_and(|n| n.local == "p") {
+                found = true;
+                break;
+            }
+            stack.extend_from_slice(&doc.get(id).children);
+        }
+        assert!(found, "expected <p> in parsed srcdoc document");
     }
 
     // ──────── <picture> / <img srcset> source-selection integration ────────
@@ -7622,6 +8267,55 @@ mod tests {
     }
 
     #[test]
+    fn counter_set_default_zero() {
+        // CSS Lists L3 §4 — `counter-set: name` без числа → значение 0.
+        let root = lay("<p>x</p>", "p { counter-set: section; }");
+        let s = first_block_style(&root);
+        assert_eq!(s.counter_set, vec![("section".to_string(), 0)]);
+    }
+
+    #[test]
+    fn counter_set_with_explicit_value() {
+        let root = lay("<p>x</p>", "p { counter-set: section 5; }");
+        let s = first_block_style(&root);
+        assert_eq!(s.counter_set, vec![("section".to_string(), 5)]);
+    }
+
+    #[test]
+    fn counter_set_multiple_with_mixed_defaults() {
+        let root = lay("<p>x</p>", "p { counter-set: a 3 b c 5; }");
+        let s = first_block_style(&root);
+        assert_eq!(
+            s.counter_set,
+            vec![
+                ("a".to_string(), 3),
+                ("b".to_string(), 0), // default = 0
+                ("c".to_string(), 5),
+            ]
+        );
+    }
+
+    #[test]
+    fn counter_set_none_yields_empty() {
+        let root = lay("<p>x</p>", "p { counter-set: none; }");
+        let s = first_block_style(&root);
+        assert!(s.counter_set.is_empty());
+    }
+
+    #[test]
+    fn counter_set_not_inherited_by_default() {
+        // counter-set не наследуется (CSS Lists L3 §4).
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { counter-set: section 3; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert!(p.style.counter_set.is_empty());
+        assert!(!div.style.counter_set.is_empty());
+    }
+
+    #[test]
     fn counter_not_inherited_by_default() {
         // counter-reset / -increment не наследуются (CSS Lists L3 §3).
         let root = lay(
@@ -8131,7 +8825,15 @@ mod tests {
         let cp = first_p_style(&root).clip_path.clone();
         match cp {
             Some(ClipPath::Inset(parts)) => {
-                assert_eq!(parts, vec![10.0, 20.0, 30.0, 40.0]);
+                assert_eq!(
+                    parts,
+                    vec![
+                        ShapeValue::Px(10.0),
+                        ShapeValue::Px(20.0),
+                        ShapeValue::Px(30.0),
+                        ShapeValue::Px(40.0)
+                    ]
+                );
             }
             _ => panic!("expected Inset, got {cp:?}"),
         }
@@ -8143,8 +8845,23 @@ mod tests {
         let cp = first_p_style(&root).clip_path.clone();
         match cp {
             Some(ClipPath::Circle { radius, center }) => {
-                assert!((radius - 50.0).abs() < 0.01);
-                assert_eq!(center, Some((100.0, 200.0)));
+                assert_eq!(radius, ShapeValue::Px(50.0));
+                assert_eq!(center, Some((ShapeValue::Px(100.0), ShapeValue::Px(200.0))));
+            }
+            _ => panic!("expected Circle, got {cp:?}"),
+        }
+    }
+
+    /// BUG-140: `circle(40% at 50% 50%)` (TEST-109 c0) раньше молча
+    /// отбрасывался целиком — проценты не парсились.
+    #[test]
+    fn clip_path_circle_percent() {
+        let root = lay("<p>x</p>", "p { clip-path: circle(40% at 50% 50%); }");
+        let cp = first_p_style(&root).clip_path.clone();
+        match cp {
+            Some(ClipPath::Circle { radius, center }) => {
+                assert_eq!(radius, ShapeValue::Pct(40.0));
+                assert_eq!(center, Some((ShapeValue::Pct(50.0), ShapeValue::Pct(50.0))));
             }
             _ => panic!("expected Circle, got {cp:?}"),
         }
@@ -8156,8 +8873,8 @@ mod tests {
         let cp = first_p_style(&root).clip_path.clone();
         match cp {
             Some(ClipPath::Ellipse { rx, ry, center: None }) => {
-                assert!((rx - 30.0).abs() < 0.01);
-                assert!((ry - 60.0).abs() < 0.01);
+                assert_eq!(rx, ShapeValue::Px(30.0));
+                assert_eq!(ry, ShapeValue::Px(60.0));
             }
             _ => panic!("expected Ellipse, got {cp:?}"),
         }
@@ -8171,14 +8888,96 @@ mod tests {
         );
         let cp = first_p_style(&root).clip_path.clone();
         match cp {
-            Some(ClipPath::Polygon(verts)) => {
+            Some(ClipPath::Polygon(verts, rule)) => {
                 assert_eq!(verts.len(), 3);
-                assert_eq!(verts[0], (0.0, 0.0));
-                assert_eq!(verts[1], (100.0, 0.0));
-                assert_eq!(verts[2], (50.0, 100.0));
+                assert_eq!(verts[0], (ShapeValue::Px(0.0), ShapeValue::Px(0.0)));
+                assert_eq!(verts[1], (ShapeValue::Px(100.0), ShapeValue::Px(0.0)));
+                assert_eq!(verts[2], (ShapeValue::Px(50.0), ShapeValue::Px(100.0)));
+                assert_eq!(rule, FillRule::NonZero, "default fill-rule = nonzero");
             }
             _ => panic!("expected Polygon, got {cp:?}"),
         }
+    }
+
+    /// BUG-140: `polygon(50% 0%, 100% 100%, 0% 100%)` (TEST-109 c2) раньше
+    /// молча отбрасывался целиком — проценты не парсились.
+    #[test]
+    fn clip_path_polygon_percent() {
+        let root = lay(
+            "<p>x</p>",
+            "p { clip-path: polygon(50% 0%, 100% 100%, 0% 100%); }",
+        );
+        let cp = first_p_style(&root).clip_path.clone();
+        match cp {
+            Some(ClipPath::Polygon(verts, _)) => {
+                assert_eq!(verts.len(), 3);
+                assert_eq!(verts[0], (ShapeValue::Pct(50.0), ShapeValue::Pct(0.0)));
+                assert_eq!(verts[1], (ShapeValue::Pct(100.0), ShapeValue::Pct(100.0)));
+                assert_eq!(verts[2], (ShapeValue::Pct(0.0), ShapeValue::Pct(100.0)));
+            }
+            _ => panic!("expected Polygon, got {cp:?}"),
+        }
+    }
+
+    #[test]
+    fn clip_path_path_triangle() {
+        // CSS Shapes L1 §4 — path() флэттится в полигон; прямые сегменты
+        // (M/L/Z) сохраняют вершины 1:1.
+        let root = lay(
+            "<p>x</p>",
+            r#"p { clip-path: path("M 0 0 L 100 0 L 50 80 Z"); }"#,
+        );
+        let cp = first_p_style(&root).clip_path.clone();
+        match cp {
+            Some(ClipPath::Path(pts, rule)) => {
+                assert!(pts.contains(&(0.0, 0.0)));
+                assert!(pts.contains(&(100.0, 0.0)));
+                assert!(pts.contains(&(50.0, 80.0)));
+                assert_eq!(rule, FillRule::NonZero, "default fill-rule = nonzero");
+            }
+            _ => panic!("expected Path, got {cp:?}"),
+        }
+    }
+
+    #[test]
+    fn clip_path_path_with_fill_rule() {
+        // CSS Shapes L1 §4 — опциональный fill-rule перед строкой пути
+        // сохраняется и управляет заливкой самопересекающихся путей.
+        let root = lay(
+            "<p>x</p>",
+            r#"p { clip-path: path(evenodd, "M 0 0 L 10 0 L 10 10 Z"); }"#,
+        );
+        let cp = first_p_style(&root).clip_path.clone();
+        match cp {
+            Some(ClipPath::Path(_, rule)) => {
+                assert_eq!(rule, FillRule::EvenOdd, "evenodd должен сохраниться");
+            }
+            _ => panic!("expected Path, got {cp:?}"),
+        }
+    }
+
+    #[test]
+    fn clip_path_polygon_evenodd() {
+        // CSS Shapes L1 §3 — polygon() принимает опциональный fill-rule.
+        let root = lay(
+            "<p>x</p>",
+            "p { clip-path: polygon(evenodd, 0 0, 100px 0, 50px 100px); }",
+        );
+        let cp = first_p_style(&root).clip_path.clone();
+        match cp {
+            Some(ClipPath::Polygon(verts, rule)) => {
+                assert_eq!(verts.len(), 3, "fill-rule не должен поглотить вершину");
+                assert_eq!(rule, FillRule::EvenOdd);
+            }
+            _ => panic!("expected Polygon, got {cp:?}"),
+        }
+    }
+
+    #[test]
+    fn clip_path_path_degenerate_rejected() {
+        // Путь без замкнутой области (< 3 точек) не создаёт клип.
+        let root = lay("<p>x</p>", r#"p { clip-path: path("M 0 0"); }"#);
+        assert_eq!(first_p_style(&root).clip_path, None);
     }
 
     #[test]
@@ -8805,6 +9604,210 @@ mod tests {
         assert_eq!(p.scroll_snap_type.axis, ScrollSnapAxis::None);
     }
 
+    // ──────── collect_snap_containers / find_snap_target ────────
+
+    fn make_snap_container(
+        w: f32,
+        h: f32,
+        axis: ScrollSnapAxis,
+        strictness: ScrollSnapStrictness,
+    ) -> SnapContainer {
+        SnapContainer {
+            node: lumen_dom::NodeId::from_index(0),
+            snap_type: ScrollSnapType { axis, strictness },
+            rect: lumen_core::geom::Rect { x: 0.0, y: 0.0, width: w, height: h },
+            scroll_padding_top: 0.0,
+            scroll_padding_right: 0.0,
+            scroll_padding_bottom: 0.0,
+            scroll_padding_left: 0.0,
+            points: Vec::new(),
+        }
+    }
+
+    fn snap_pt(y: f32) -> SnapPoint {
+        SnapPoint { node: lumen_dom::NodeId::from_index(1), snap_x: None, snap_y: Some(y), stop_always: false }
+    }
+
+    #[test]
+    fn find_snap_target_mandatory_y() {
+        let mut sc = make_snap_container(
+            1024.0, 720.0, ScrollSnapAxis::Y, ScrollSnapStrictness::Mandatory,
+        );
+        sc.points = vec![snap_pt(0.0), snap_pt(720.0), snap_pt(1440.0)];
+        // Target 400 → nearest is 0 (dist=160000) vs 720 (dist=102400) → snap 720.
+        let result = find_snap_target(&sc, (0.0, 0.0), (0.0, 400.0));
+        assert!(result.is_some());
+        let (_, sy) = result.unwrap();
+        assert!((sy - 720.0).abs() < 1e-3, "expected 720, got {sy}");
+    }
+
+    #[test]
+    fn find_snap_target_mandatory_first_section() {
+        let mut sc = make_snap_container(
+            1024.0, 720.0, ScrollSnapAxis::Y, ScrollSnapStrictness::Mandatory,
+        );
+        sc.points = vec![snap_pt(0.0), snap_pt(720.0), snap_pt(1440.0)];
+        // Target 300 → nearest is 0 (dist=90000) vs 720 (dist=176400) → snap 0.
+        let result = find_snap_target(&sc, (0.0, 0.0), (0.0, 300.0));
+        assert!(result.is_some());
+        let (_, sy) = result.unwrap();
+        assert!((sy - 0.0).abs() < 1e-3, "expected 0, got {sy}");
+    }
+
+    #[test]
+    fn find_snap_target_proximity_within_threshold() {
+        let mut sc = make_snap_container(
+            1024.0, 720.0, ScrollSnapAxis::Y, ScrollSnapStrictness::Proximity,
+        );
+        sc.points = vec![snap_pt(720.0)];
+        // Proximity threshold = 720 * 0.5 = 360. Target 450 → dist from 720 = 270 ≤ 360 → snaps.
+        let result = find_snap_target(&sc, (0.0, 0.0), (0.0, 450.0));
+        assert!(result.is_some());
+        let (_, sy) = result.unwrap();
+        assert!((sy - 720.0).abs() < 1e-3, "expected 720, got {sy}");
+    }
+
+    #[test]
+    fn find_snap_target_proximity_out_of_threshold() {
+        let mut sc = make_snap_container(
+            1024.0, 720.0, ScrollSnapAxis::Y, ScrollSnapStrictness::Proximity,
+        );
+        sc.points = vec![snap_pt(720.0)];
+        // Proximity threshold = 360. Target 200 → dist from 720 = 520 > 360 → no snap.
+        let result = find_snap_target(&sc, (0.0, 0.0), (0.0, 200.0));
+        assert!(result.is_none(), "should not snap when beyond proximity threshold");
+    }
+
+    #[test]
+    fn find_snap_target_stop_always_barrier_viewport() {
+        let mut sc = make_snap_container(
+            1024.0, 720.0, ScrollSnapAxis::Y, ScrollSnapStrictness::Mandatory,
+        );
+        sc.points = vec![
+            SnapPoint { node: lumen_dom::NodeId::from_index(1), snap_x: None, snap_y: Some(720.0), stop_always: true },
+            snap_pt(1440.0),
+        ];
+        // Scrolling from 0 to 1500 would pass 720 (stop_always) → forced to 720.
+        let result = find_snap_target(&sc, (0.0, 0.0), (0.0, 1500.0));
+        assert!(result.is_some());
+        let (_, sy) = result.unwrap();
+        assert!((sy - 720.0).abs() < 1e-3, "stop_always barrier should force snap to 720, got {sy}");
+    }
+
+    #[test]
+    fn find_snap_target_no_points_returns_none() {
+        let sc = make_snap_container(
+            1024.0, 720.0, ScrollSnapAxis::Y, ScrollSnapStrictness::Mandatory,
+        );
+        assert!(find_snap_target(&sc, (0.0, 0.0), (0.0, 400.0)).is_none());
+    }
+
+    // ──────── find_snapped_nodes (CSS Scroll Snap L2 events) ────────
+
+    fn snap_pt_node(idx: u32, x: Option<f32>, y: Option<f32>) -> SnapPoint {
+        SnapPoint {
+            node: lumen_dom::NodeId::from_index(idx as usize),
+            snap_x: x,
+            snap_y: y,
+            stop_always: false,
+        }
+    }
+
+    #[test]
+    fn find_snapped_nodes_empty_container_is_default() {
+        let sc = make_snap_container(
+            1024.0, 720.0, ScrollSnapAxis::Y, ScrollSnapStrictness::Mandatory,
+        );
+        let t = find_snapped_nodes(&sc, (0.0, 0.0));
+        assert_eq!(t, SnapTargets::default());
+    }
+
+    #[test]
+    fn find_snapped_nodes_block_axis_picks_nearest() {
+        let mut sc = make_snap_container(
+            1024.0, 720.0, ScrollSnapAxis::Y, ScrollSnapStrictness::Mandatory,
+        );
+        sc.points = vec![
+            snap_pt_node(1, None, Some(0.0)),
+            snap_pt_node(2, None, Some(720.0)),
+            snap_pt_node(3, None, Some(1440.0)),
+        ];
+        // Scroll at 700 → nearest block snap is node 2 (720).
+        let t = find_snapped_nodes(&sc, (0.0, 700.0));
+        assert_eq!(t.block, Some(lumen_dom::NodeId::from_index(2)));
+        // Y-only container does not snap on the inline axis.
+        assert_eq!(t.inline, None);
+    }
+
+    #[test]
+    fn find_snapped_nodes_both_axes() {
+        let mut sc = make_snap_container(
+            1024.0, 720.0, ScrollSnapAxis::Both, ScrollSnapStrictness::Mandatory,
+        );
+        sc.points = vec![
+            snap_pt_node(1, Some(0.0), Some(0.0)),
+            snap_pt_node(2, Some(500.0), Some(720.0)),
+        ];
+        // Inline near 480 → node 2 (x=500); block near 30 → node 1 (y=0).
+        let t = find_snapped_nodes(&sc, (480.0, 30.0));
+        assert_eq!(t.inline, Some(lumen_dom::NodeId::from_index(2)));
+        assert_eq!(t.block, Some(lumen_dom::NodeId::from_index(1)));
+    }
+
+    #[test]
+    fn find_snapped_nodes_x_only_ignores_block() {
+        let mut sc = make_snap_container(
+            1024.0, 720.0, ScrollSnapAxis::X, ScrollSnapStrictness::Mandatory,
+        );
+        sc.points = vec![
+            snap_pt_node(1, Some(0.0), Some(0.0)),
+            snap_pt_node(2, Some(1024.0), Some(720.0)),
+        ];
+        let t = find_snapped_nodes(&sc, (900.0, 700.0));
+        assert_eq!(t.inline, Some(lumen_dom::NodeId::from_index(2)));
+        assert_eq!(t.block, None);
+    }
+
+    #[test]
+    fn find_snapped_nodes_skips_points_without_axis_offset() {
+        let mut sc = make_snap_container(
+            1024.0, 720.0, ScrollSnapAxis::Both, ScrollSnapStrictness::Mandatory,
+        );
+        // Node 1 snaps only on block; node 2 only on inline.
+        sc.points = vec![
+            snap_pt_node(1, None, Some(0.0)),
+            snap_pt_node(2, Some(300.0), None),
+        ];
+        let t = find_snapped_nodes(&sc, (290.0, 10.0));
+        assert_eq!(t.inline, Some(lumen_dom::NodeId::from_index(2)));
+        assert_eq!(t.block, Some(lumen_dom::NodeId::from_index(1)));
+    }
+
+    #[test]
+    fn collect_snap_containers_empty_when_no_snap_type() {
+        let root = lay(
+            "<div><p>first</p><p>second</p></div>",
+            "div { width: 1024px; height: 720px; overflow: scroll; }",
+        );
+        // No scroll-snap-type → empty containers list.
+        let containers = collect_snap_containers(&root);
+        assert!(containers.is_empty(), "expected no snap containers");
+    }
+
+    #[test]
+    fn collect_snap_containers_finds_y_mandatory() {
+        let root = lay(
+            "<div><p>first</p><p>second</p></div>",
+            "div { width: 1024px; height: 720px; overflow: scroll; scroll-snap-type: y mandatory; } p { height: 720px; scroll-snap-align: start; }",
+        );
+        let containers = collect_snap_containers(&root);
+        // At least one snap container should be found (the div).
+        assert!(!containers.is_empty(), "expected a snap container");
+        let sc = &containers[0];
+        assert_eq!(sc.snap_type.axis, ScrollSnapAxis::Y);
+        assert_eq!(sc.snap_type.strictness, ScrollSnapStrictness::Mandatory);
+    }
+
     // ──────── mask-* + scrollbar-* ────────
 
     #[test]
@@ -8894,6 +9897,87 @@ mod tests {
             first_p_style(&root).scrollbar_gutter,
             ScrollbarGutter::StableBothEdges
         );
+    }
+
+    // ──────── scrollbar-gutter layout algorithm ────────
+
+    /// `scrollbar-gutter: stable` + `overflow-y: scroll` reserves 12px (auto gutter)
+    /// in the inline axis so children are narrower than the container's content edge.
+    #[test]
+    fn scrollbar_gutter_stable_reduces_child_width() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { width: 200px; overflow-y: scroll; scrollbar-gutter: stable; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        // 200 border-box → content = 200; minus 12 gutter = 188.
+        assert!((div.rect.width - 200.0).abs() < 0.01, "div={}", div.rect.width);
+        assert!((p.rect.width - 188.0).abs() < 0.01, "p child={}", p.rect.width);
+    }
+
+    /// `scrollbar-gutter: auto` (default) with overlay scrollbars = no gutter reserved.
+    #[test]
+    fn scrollbar_gutter_auto_no_reduction() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { width: 200px; overflow-y: scroll; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        // No gutter reserved: child fills full content width.
+        assert!((p.rect.width - 200.0).abs() < 0.01, "p child={}", p.rect.width);
+    }
+
+    /// `scrollbar-width: none` suppresses the gutter even with `scrollbar-gutter: stable`.
+    #[test]
+    fn scrollbar_gutter_stable_none_no_reduction() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { width: 200px; overflow-y: scroll; scrollbar-gutter: stable; scrollbar-width: none; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!((p.rect.width - 200.0).abs() < 0.01, "p child={}", p.rect.width);
+    }
+
+    /// `scrollbar-gutter: stable both-edges` reserves gutter on start AND end of
+    /// the inline axis (2 × 12 = 24 px).
+    #[test]
+    fn scrollbar_gutter_stable_both_edges_double_reduction() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { width: 200px; overflow-y: scroll; scrollbar-gutter: stable both-edges; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        // 200 − 12*2 = 176.
+        assert!((p.rect.width - 176.0).abs() < 0.01, "p child={}", p.rect.width);
+    }
+
+    /// `scrollbar-width: thin` uses 6 px gutter instead of 12.
+    #[test]
+    fn scrollbar_gutter_stable_thin_reduces_by_6() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { width: 200px; overflow-y: scroll; scrollbar-gutter: stable; scrollbar-width: thin; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        // 200 − 6 = 194.
+        assert!((p.rect.width - 194.0).abs() < 0.01, "p child={}", p.rect.width);
+    }
+
+    /// Without `overflow-y: scroll/auto`, `scrollbar-gutter: stable` has no effect.
+    #[test]
+    fn scrollbar_gutter_stable_no_scroll_no_reduction() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { width: 200px; scrollbar-gutter: stable; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!((p.rect.width - 200.0).abs() < 0.01, "p child={}", p.rect.width);
     }
 
     // ──────── transform-origin / perspective / list-style-* / transition-* ────────
@@ -11388,6 +12472,46 @@ mod tests {
         );
     }
 
+    /// CSS 2.1 §17.5.2 — table without explicit CSS width shrinks to fit its columns.
+    /// 3×3 grid with border-spacing:12px and cell width:60px should be 228px
+    /// (3×60 + 4×12), not the full container width.
+    #[test]
+    fn table_without_explicit_width_shrinks_to_fit() {
+        let root = lay(
+            "<body><table><tr>\
+               <td style=\"width:60px;height:20px\"></td>\
+               <td style=\"width:60px;height:20px\"></td>\
+               <td style=\"width:60px;height:20px\"></td>\
+             </tr></table></body>",
+            "body { width:800px } table { border-spacing:12px } td { margin:0; padding:0 }",
+        );
+        let table = find_box(&root, |k| matches!(k, BoxKind::Table)).unwrap();
+        // Expected: 3×60 + 4×12 = 180 + 48 = 228px
+        assert!(
+            (table.rect.width - 228.0).abs() < 0.01,
+            "table should shrink to 228px, got {}",
+            table.rect.width
+        );
+    }
+
+    /// CSS 2.1 §17.5.2 — table with explicit CSS width is NOT shrunk to fit.
+    #[test]
+    fn table_with_explicit_width_keeps_that_width() {
+        let root = lay(
+            "<body><table><tr>\
+               <td style=\"width:60px;height:20px\"></td>\
+               <td style=\"width:60px;height:20px\"></td>\
+             </tr></table></body>",
+            "body { width:800px } table { width:400px; border-spacing:8px } td { margin:0; padding:0 }",
+        );
+        let table = find_box(&root, |k| matches!(k, BoxKind::Table)).unwrap();
+        assert!(
+            (table.rect.width - 400.0).abs() < 0.01,
+            "table with explicit width:400px should stay 400px, got {}",
+            table.rect.width
+        );
+    }
+
     /// Author CSS `background-color` выигрывает у presentational hint `bgcolor`.
     #[test]
     fn author_css_overrides_bgcolor_hint() {
@@ -12282,6 +13406,119 @@ mod tests {
         assert!((c.rect.y - 100.0).abs() < 1.0, "c.y={}: dense col must back-fill col1 row3", c.rect.y);
     }
 
+    // ── CSS Grid L2 Subgrid ───────────────────────────────────────────────────
+
+    /// `grid-template-columns: subgrid` parses to the sentinel `[Subgrid]`.
+    #[test]
+    fn grid_subgrid_parse_columns() {
+        let root = lay(
+            "<body><div id='g'><div id='sg'></div></div></body>",
+            "#g { display: grid; grid-template-columns: 100px 200px; } \
+             #sg { grid-template-columns: subgrid; }",
+        );
+        let grid = first_element_child(&root);
+        let subgrid = first_element_child(grid);
+        assert_eq!(subgrid.style.grid_template_columns.len(), 1);
+        assert_eq!(subgrid.style.grid_template_columns[0], GridTrackSize::Subgrid);
+    }
+
+    /// `grid-template-rows: subgrid` parses to the sentinel `[Subgrid]`.
+    #[test]
+    fn grid_subgrid_parse_rows() {
+        let root = lay(
+            "<body><div id='g'><div id='sg'></div></div></body>",
+            "#g { display: grid; grid-template-rows: 50px 100px; } \
+             #sg { grid-template-rows: subgrid; }",
+        );
+        let grid = first_element_child(&root);
+        let subgrid = first_element_child(grid);
+        assert_eq!(subgrid.style.grid_template_rows.len(), 1);
+        assert_eq!(subgrid.style.grid_template_rows[0], GridTrackSize::Subgrid);
+    }
+
+    /// A subgrid item spanning 2 columns inherits those column widths from the parent.
+    /// Two items inside the subgrid are placed in the inherited columns (100px + 200px).
+    #[test]
+    fn grid_subgrid_column_layout() {
+        let root = lay(
+            "<body>\
+               <div id='g'>\
+                 <div id='sg'>\
+                   <span id='a'></span>\
+                   <span id='b'></span>\
+                 </div>\
+               </div>\
+             </body>",
+            r#"
+            body { width: 400px; }
+            #g {
+                display: grid;
+                grid-template-columns: 100px 200px;
+                grid-template-rows: 50px;
+                width: 300px;
+            }
+            #sg {
+                display: grid;
+                grid-template-columns: subgrid;
+                grid-column: 1 / 3;
+            }
+            #a { height: 30px; }
+            #b { height: 30px; }
+            "#,
+        );
+        let grid = first_element_child(&root);
+        // The subgrid item spans both columns → width = 300px.
+        let sg = first_element_child(grid);
+        assert!(
+            (sg.rect.width - 300.0).abs() < 2.0,
+            "subgrid width should be ~300, got {}",
+            sg.rect.width
+        );
+        // Items inside subgrid are placed in the inherited 100px and 200px columns.
+        let items: Vec<_> = sg.children.iter()
+            .filter(|c| !matches!(c.kind, BoxKind::Skip))
+            .collect();
+        assert_eq!(items.len(), 2, "expected 2 items in subgrid");
+        let a = &items[0];
+        let b = &items[1];
+        // a in col 1 (x=0, w=100), b in col 2 (x=100, w=200).
+        assert!((a.rect.x - sg.rect.x).abs() < 2.0, "a.x rel={}", a.rect.x - sg.rect.x);
+        assert!((a.rect.width - 100.0).abs() < 2.0, "a.w={}", a.rect.width);
+        assert!((b.rect.x - sg.rect.x - 100.0).abs() < 2.0, "b.x rel={}", b.rect.x - sg.rect.x);
+        assert!((b.rect.width - 200.0).abs() < 2.0, "b.w={}", b.rect.width);
+    }
+
+    /// `collect_subgrid_items` finds both column-subgrid and row-subgrid containers.
+    #[test]
+    fn grid_collect_subgrid_items() {
+        use crate::subgrid::collect_subgrid_items;
+        let root = lay(
+            "<body>\
+               <div id='g'>\
+                 <div id='col_sg'></div>\
+                 <div id='row_sg'></div>\
+                 <div id='both_sg'></div>\
+                 <div id='normal'></div>\
+               </div>\
+             </body>",
+            r#"
+            #g { display: grid; grid-template-columns: 100px 200px; grid-template-rows: 50px 50px; }
+            #col_sg { grid-template-columns: subgrid; grid-column: 1 / 3; }
+            #row_sg { grid-template-rows: subgrid; grid-row: 1 / 3; }
+            #both_sg { grid-template-columns: subgrid; grid-template-rows: subgrid; }
+            "#,
+        );
+        let items = collect_subgrid_items(&root);
+        // col_sg, row_sg, both_sg should appear; normal should not.
+        assert_eq!(items.len(), 3, "expected 3 subgrid items, got {:?}", items.len());
+        let col_sg = items.iter().find(|it| it.subgrid_columns && !it.subgrid_rows);
+        assert!(col_sg.is_some(), "missing col-subgrid item");
+        let row_sg = items.iter().find(|it| it.subgrid_rows && !it.subgrid_columns);
+        assert!(row_sg.is_some(), "missing row-subgrid item");
+        let both_sg = items.iter().find(|it| it.subgrid_columns && it.subgrid_rows);
+        assert!(both_sg.is_some(), "missing both-subgrid item");
+    }
+
     // ── collect_image_requests ────────────────────────────────────────────────
 
     fn vp() -> Size {
@@ -12351,19 +13588,19 @@ mod tests {
         assert_eq!(reqs[0].url, "hd.webp");
     }
 
-    /// `<picture><source type="image/avif" srcset="hero.avif"><img src="hero.jpg"></picture>` →
-    /// avif нет в `supported_mime_types()` → picker пропускает source → fallback на `<img src>`.
+    /// `<picture><source type="image/heic" srcset="hero.heic"><img src="hero.jpg"></picture>` →
+    /// heic нет в `supported_mime_types()` → picker пропускает source → fallback на `<img src>`.
     #[test]
     fn collect_picture_unsupported_type_falls_back() {
         let doc = lumen_html_parser::parse(concat!(
             r#"<body><picture>"#,
-            r#"<source type="image/avif" srcset="hero.avif">"#,
+            r#"<source type="image/heic" srcset="hero.heic">"#,
             r#"<img src="hero.jpg">"#,
             r#"</picture></body>"#,
         ));
         let reqs = collect_image_requests(&doc, vp());
         assert_eq!(reqs.len(), 1, "должен быть один запрос — fallback PNG/JPEG");
-        assert_eq!(reqs[0].url, "hero.jpg", "avif source скипается, выбирается img src");
+        assert_eq!(reqs[0].url, "hero.jpg", "heic source скипается, выбирается img src");
     }
 
     /// `<picture>` с первым поддерживаемым `<source type="image/webp">` →
@@ -13169,6 +14406,175 @@ mod tests {
         assert!(ch1.rect.y > ch0.rect.y, "b should be below a");
     }
 
+    #[test]
+    fn multicol_column_span_all_spans_full_width() {
+        // A child with column-span:all should be laid out at the full container width,
+        // not squeezed into a single column.
+        // Layout: 2 column children → span-all → 2 more column children.
+        let root = lay_measured(
+            r#"<div id='c'>
+              <div id='a'></div>
+              <div id='s'></div>
+              <div id='b'></div>
+            </div>"#,
+            r#"#c { width: 300px; column-count: 2; column-gap: 10px; }
+               #a { height: 20px; }
+               #b { height: 20px; }
+               #s { column-span: all; height: 10px; }"#,
+            800.0,
+        );
+        let container = first_element_child(&root);
+        // Find the span-all child by height (10px).
+        let span_child = container.children.iter()
+            .find(|c| (c.rect.height - 10.0).abs() < 1.0)
+            .expect("span-all child not found");
+        // Span-all element must cover the full container width (300px).
+        assert!(
+            (span_child.rect.width - 300.0).abs() < 1.0,
+            "span-all child width={} should be 300px",
+            span_child.rect.width
+        );
+        // Span-all element must start at container's content_x.
+        assert!(
+            span_child.rect.x < 10.0,
+            "span-all child x={} should be near container left edge",
+            span_child.rect.x
+        );
+    }
+
+    #[test]
+    fn multicol_column_span_all_children_below_span() {
+        // Children after a column-span:all element must be positioned below it.
+        let root = lay_measured(
+            r#"<div id='c'>
+              <div id='s'></div>
+              <div id='b'></div>
+            </div>"#,
+            r#"#c { width: 300px; column-count: 2; column-gap: 10px; }
+               #s { column-span: all; height: 15px; }
+               #b { height: 20px; }"#,
+            800.0,
+        );
+        let container = first_element_child(&root);
+        let span_child = container.children.iter()
+            .find(|c| (c.rect.height - 15.0).abs() < 1.0)
+            .expect("span-all child not found");
+        let after_child = container.children.iter()
+            .find(|c| (c.rect.height - 20.0).abs() < 1.0)
+            .expect("child after span not found");
+        // Child after span must be below the span-all element.
+        assert!(
+            after_child.rect.y >= span_child.rect.y + span_child.rect.height,
+            "after_child.y={} must be >= span bottom={}",
+            after_child.rect.y,
+            span_child.rect.y + span_child.rect.height
+        );
+    }
+
+    #[test]
+    fn multicol_column_fill_auto_sequential() {
+        // column-fill: auto — each column is filled up to the container height before
+        // spilling to the next column, rather than distributing content evenly.
+        // With height:40px and 3 children of 15px each, the per_col_cap=2 guard ensures
+        // col0 holds 2 children (30px, fits in 40px) and col1 holds the third.
+        // The x-position of the third child must equal col1_x = content_x + col_w.
+        let root = lay_measured(
+            "<div id='c'><div id='a'></div><div id='b'></div><div id='d'></div></div>",
+            "#c { width: 300px; column-count: 2; column-gap: 0px; height: 40px; column-fill: auto; } \
+             #a { height: 15px; } #b { height: 15px; } #d { height: 15px; }",
+            800.0,
+        );
+        let container = first_element_child(&root);
+        assert_eq!(container.children.len(), 3, "expected 3 column children");
+        let ch0 = &container.children[0];
+        let ch1 = &container.children[1];
+        let ch2 = &container.children[2];
+        // col_w = 300 / 2 = 150. col1 starts at content_x + 150.
+        // With per_col_cap=2: ch0 and ch1 go to col0, ch2 overflows to col1.
+        assert!(
+            (ch0.rect.x - ch1.rect.x).abs() < 1.0,
+            "ch0 and ch1 should share col0 (x0={}, x1={})",
+            ch0.rect.x, ch1.rect.x
+        );
+        assert!(
+            ch2.rect.x > ch0.rect.x + 1.0,
+            "ch2 should be in col1 (x2={} vs x0={})",
+            ch2.rect.x, ch0.rect.x
+        );
+    }
+
+    #[test]
+    fn multicol_column_fill_balance_vs_auto_target() {
+        // Verify that column-fill:balance uses total/n_cols as target, not container height.
+        // With height:20px and 2 children of 15px each and 2 columns:
+        //   balance: target = ceil(30/2) = 15 → ch0 fills col0 (15px), ch1 overflows to col1
+        //   auto:    target = 20 → ch0(15)+ch1(15)=30>20 with count_cap=1, so still col0+col1
+        // Both end up with same layout here; test that column_fill_balance is parsed.
+        let root = lay("<p>x</p>", "p { column-fill: balance; }");
+        assert!(first_p_style(&root).column_fill_balance, "balance should set column_fill_balance=true");
+        let root2 = lay("<p>x</p>", "p { column-fill: auto; }");
+        assert!(!first_p_style(&root2).column_fill_balance, "auto should set column_fill_balance=false");
+    }
+
+    #[test]
+    fn multicol_balance_does_not_skip_first_column() {
+        // Regression (BUG-117): with column-count:3 and items each taller than the
+        // balanced target height, the greedy assigner advanced past the EMPTY first
+        // column (height_overflow fires on column 0 because item height > target),
+        // placing items in columns 1 and 2 and leaving column 0 blank. Items must
+        // fill column 0 first (CSS Multicol §3.4 — columns filled in order).
+        let root = lay_measured(
+            "<div id='c'><div id='a'></div><div id='b'></div></div>",
+            "#c { width: 300px; column-count: 3; column-gap: 0px; } \
+             #a { height: 40px; } #b { height: 40px; }",
+            800.0,
+        );
+        let container = first_element_child(&root);
+        let a = &container.children[0];
+        let b = &container.children[1];
+        // col_w = 300/3 = 100. col0 at content_x, col1 at content_x + 100.
+        assert!(
+            (a.rect.x - container.rect.x).abs() < 1.0,
+            "first item must be in column 0 (a.x={}, container.x={})",
+            a.rect.x, container.rect.x
+        );
+        assert!(
+            (b.rect.x - a.rect.x - 100.0).abs() < 1.0,
+            "second item must be in column 1, not column 2 (b.x={}, a.x={})",
+            b.rect.x, a.rect.x
+        );
+    }
+
+    #[test]
+    fn multicol_fill_auto_ignores_count_cap() {
+        // Regression (BUG-117): column-fill:auto must fill a column purely by height.
+        // The per-column count cap (a balance-mode anti-starvation guard) wrongly forced
+        // one item per column even in auto mode. With 3 short items and a tall container,
+        // all three must stack in column 0.
+        let root = lay_measured(
+            "<div id='c'><div id='a'></div><div id='b'></div><div id='d'></div></div>",
+            "#c { width: 300px; column-count: 3; column-gap: 0px; height: 100px; column-fill: auto; } \
+             #a { height: 10px; } #b { height: 10px; } #d { height: 10px; }",
+            800.0,
+        );
+        let container = first_element_child(&root);
+        let a = &container.children[0];
+        let b = &container.children[1];
+        let d = &container.children[2];
+        // All three fit in column 0 (30px < 100px) → identical x.
+        assert!(
+            (a.rect.x - b.rect.x).abs() < 1.0 && (a.rect.x - d.rect.x).abs() < 1.0,
+            "auto must stack all items in col0 (xs: {} {} {})",
+            a.rect.x, b.rect.x, d.rect.x
+        );
+        // And they stack vertically within the column.
+        assert!(
+            b.rect.y > a.rect.y && d.rect.y > b.rect.y,
+            "items must stack vertically in col0 (ys: {} {} {})",
+            a.rect.y, b.rect.y, d.rect.y
+        );
+    }
+
     // ── ::marker box (BUG-011) ───────────────────────────────────────────
 
     #[test]
@@ -13178,12 +14584,46 @@ mod tests {
         let li = ul.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
         let marker = li.children.iter().find(|c| matches!(&c.kind, BoxKind::Marker { .. }));
         assert!(marker.is_some(), "list-item must have a ::marker child");
-        if let BoxKind::Marker { text, position, list_style_type } = &marker.unwrap().kind {
+        if let BoxKind::Marker { text, position, list_style_type, .. } = &marker.unwrap().kind {
             // Disc renders geometrically — marker_text returns "" for bullet types.
             assert!(text.is_empty(), "disc marker text must be empty (geometric rendering)");
             assert_eq!(*list_style_type, ListStyleType::Disc, "default list-style-type is disc");
             assert_eq!(*position, ListStylePosition::Outside);
         }
+    }
+
+    #[test]
+    fn list_style_image_marker_carries_url() {
+        // CSS Lists L3 §2.3 — `list-style-image` populates the Marker box's
+        // `image` field and the URL is collected for fetching.
+        let root = lay(
+            "<ul><li>item</li></ul>",
+            "li { list-style-image: url(\"bullet.png\"); }",
+        );
+        let ul = first_element_child(&root);
+        let li = ul.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
+        let marker = li.children.iter().find(|c| matches!(&c.kind, BoxKind::Marker { .. })).unwrap();
+        if let BoxKind::Marker { image, .. } = &marker.kind {
+            assert_eq!(image.as_deref(), Some("bullet.png"));
+        } else {
+            panic!("expected Marker box");
+        }
+        let urls = collect_background_image_requests(&root);
+        assert!(urls.iter().any(|u| u == "bullet.png"), "marker image must be fetched");
+    }
+
+    #[test]
+    fn list_style_image_marker_shown_with_type_none() {
+        // CSS Lists L3 §2.3 — an explicit image still produces a marker even when
+        // `list-style-type: none`.
+        let root = lay(
+            "<ul><li>item</li></ul>",
+            "li { list-style-type: none; list-style-image: url(\"b.png\"); }",
+        );
+        let ul = first_element_child(&root);
+        let li = ul.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
+        let marker = li.children.iter().find(|c| matches!(&c.kind, BoxKind::Marker { .. }));
+        assert!(marker.is_some(), "list-style-image must generate a marker despite type:none");
     }
 
     #[test]
@@ -13603,7 +15043,7 @@ mod tests {
         let div_id = children.into_iter().find(|&id| {
             matches!(&doc.get(id).data, lumen_dom::NodeData::Element { name, .. } if name.local == "div")
         }).unwrap();
-        let div_style = compute_style(&doc, div_id, &sheet, &ComputedStyle::root(), vp);
+        let div_style = compute_style(&doc, div_id, &sheet, &ComputedStyle::root(), vp, false);
         assert!(
             matches!(div_style.width, Some(Length::MaxContent)),
             "expected MaxContent, got {:?}", div_style.width
@@ -13622,8 +15062,8 @@ mod tests {
         let mut it = children.into_iter().filter(|&id| matches!(&doc.get(id).data, lumen_dom::NodeData::Element { .. }));
         let a_id = it.next().unwrap();
         let b_id = it.next().unwrap();
-        let a_style = compute_style(&doc, a_id, &sheet, &root_style, vp);
-        let b_style = compute_style(&doc, b_id, &sheet, &root_style, vp);
+        let a_style = compute_style(&doc, a_id, &sheet, &root_style, vp, false);
+        let b_style = compute_style(&doc, b_id, &sheet, &root_style, vp, false);
         assert!(matches!(a_style.width, Some(Length::MinContent)), "got {:?}", a_style.width);
         assert!(matches!(b_style.width, Some(Length::FitContent(None))), "got {:?}", b_style.width);
     }
@@ -13639,7 +15079,7 @@ mod tests {
         let div_id = children.into_iter().find(|&id| {
             matches!(&doc.get(id).data, lumen_dom::NodeData::Element { name, .. } if name.local == "div")
         }).unwrap();
-        let style = compute_style(&doc, div_id, &sheet, &ComputedStyle::root(), vp);
+        let style = compute_style(&doc, div_id, &sheet, &ComputedStyle::root(), vp, false);
         assert!(
             matches!(style.width, Some(Length::FitContent(Some(_)))),
             "expected FitContent(Some(200px)), got {:?}", style.width
@@ -13678,6 +15118,20 @@ mod tests {
         let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
         let text = counter_first_inline_text(div);
         assert_eq!(text, "1. ", "counter(section) should resolve to '1'");
+    }
+
+    #[test]
+    fn counter_set_resolves_in_content() {
+        // counter-set runs after counter-increment (CSS Lists L3 §4): the set
+        // value wins, so counter(section) resolves to the set value, not +1.
+        let root = lay(
+            "<div id='a'></div>",
+            "div { counter-reset: section; counter-increment: section; counter-set: section 42; } \
+             div::before { content: counter(section) \". \"; display: block; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let text = counter_first_inline_text(div);
+        assert_eq!(text, "42. ", "counter-set should override the increment");
     }
 
     #[test]
@@ -13908,6 +15362,59 @@ mod tests {
         assert!(
             elems.iter().any(|e| matches!(&e.kind, ClickableKind::Link { href } if href == "/visible")),
             "display:block link should be collected"
+        );
+    }
+
+
+    #[test]
+    fn clickable_skips_pointer_events_none_link() {
+        // Use display:block so links create Block boxes (layout() without measurer
+        // can't detect inline <a> links — they require a text measurer to populate
+        // InlineRun.lines). Block-level links are found via element_href on the box.
+        let doc = lumen_html_parser::parse(
+            r#"<a href="/blocked" style="display:block;pointer-events:none">Blocked</a>
+               <a href="/ok" style="display:block">OK</a>"#,
+        );
+        let sheet = lumen_css_parser::parse("");
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let elems = collect_clickable_elements(&root, &doc);
+        assert!(
+            !elems.iter().any(|e| matches!(&e.kind, ClickableKind::Link { href } if href == "/blocked")),
+            "pointer-events:none link must not be in clickable set"
+        );
+        assert!(
+            elems.iter().any(|e| matches!(&e.kind, ClickableKind::Link { href } if href == "/ok")),
+            "normal link must still be collected"
+        );
+    }
+
+    #[test]
+    fn clickable_pointer_events_none_skips_element_but_not_children() {
+        // Parent has pointer-events:none; child link has default (auto).
+        // Child must still be clickable even though parent is not.
+        let doc = lumen_html_parser::parse(
+            r#"<div style="pointer-events:none"><a href="/child">Child</a></div>"#,
+        );
+        let sheet = lumen_css_parser::parse("");
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let elems = collect_clickable_elements(&root, &doc);
+        assert!(
+            elems.iter().any(|e| matches!(&e.kind, ClickableKind::Link { href } if href == "/child")),
+            "child link inside pointer-events:none parent must remain clickable"
+        );
+    }
+
+    #[test]
+    fn clickable_pointer_events_none_on_button() {
+        let doc = lumen_html_parser::parse(
+            r#"<button style="pointer-events:none">Disabled</button>"#,
+        );
+        let sheet = lumen_css_parser::parse("");
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let elems = collect_clickable_elements(&root, &doc);
+        assert!(
+            !elems.iter().any(|e| matches!(e.kind, ClickableKind::Button)),
+            "button with pointer-events:none must not be in clickable set"
         );
     }
 
@@ -14325,6 +15832,10 @@ mod tests {
                 width: 800.0,
                 height: 600.0,
             },
+            scroll_padding_top: 0.0,
+            scroll_padding_right: 0.0,
+            scroll_padding_bottom: 0.0,
+            scroll_padding_left: 0.0,
             points: vec![
                 SnapPoint {
                     node: lumen_dom::NodeId::from_index(1),
@@ -14368,6 +15879,10 @@ mod tests {
                 width: 800.0,
                 height: 600.0,
             },
+            scroll_padding_top: 0.0,
+            scroll_padding_right: 0.0,
+            scroll_padding_bottom: 0.0,
+            scroll_padding_left: 0.0,
             points: vec![SnapPoint {
                 node: lumen_dom::NodeId::from_index(1),
                 snap_x: None,
@@ -14397,6 +15912,10 @@ mod tests {
                 width: 800.0,
                 height: 600.0,
             },
+            scroll_padding_top: 0.0,
+            scroll_padding_right: 0.0,
+            scroll_padding_bottom: 0.0,
+            scroll_padding_left: 0.0,
             points: vec![SnapPoint {
                 node: lumen_dom::NodeId::from_index(1),
                 snap_x: None,
@@ -14426,6 +15945,10 @@ mod tests {
                 width: 800.0,
                 height: 600.0,
             },
+            scroll_padding_top: 0.0,
+            scroll_padding_right: 0.0,
+            scroll_padding_bottom: 0.0,
+            scroll_padding_left: 0.0,
             points: vec![
                 SnapPoint {
                     node: lumen_dom::NodeId::from_index(1),
@@ -14463,6 +15986,10 @@ mod tests {
                 width: 800.0,
                 height: 600.0,
             },
+            scroll_padding_top: 0.0,
+            scroll_padding_right: 0.0,
+            scroll_padding_bottom: 0.0,
+            scroll_padding_left: 0.0,
             points: vec![SnapPoint {
                 node: lumen_dom::NodeId::from_index(1),
                 snap_x: Some(800.0),
@@ -14493,12 +16020,177 @@ mod tests {
                 width: 800.0,
                 height: 600.0,
             },
+            scroll_padding_top: 0.0,
+            scroll_padding_right: 0.0,
+            scroll_padding_bottom: 0.0,
+            scroll_padding_left: 0.0,
             points: vec![],
         };
         assert!(
             find_snap_target(&container, (0.0, 0.0), (0.0, 300.0)).is_none(),
             "no points → no snap"
         );
+    }
+
+    // ── scroll-margin / scroll-padding snap offset tests (BB-7) ──────────────
+
+    #[test]
+    fn snap_margin_start_shifts_x_offset() {
+        // scroll-margin-left: 20px on the snap area pulls the snap-x position
+        // 20 px earlier (spec CSS Scroll Snap §6.3: margin expands the snap area).
+        // Container 0..800, area at x=100 w=400, align=start, margin_left=20.
+        // Expected: ax - margin_left = (100-0) - 20 = 80.
+        let container_rect = lumen_core::geom::Rect { x: 0.0, y: 0.0, width: 800.0, height: 600.0 };
+        let area_rect = lumen_core::geom::Rect { x: 100.0, y: 50.0, width: 400.0, height: 300.0 };
+        let result = snap_offset_x(
+            style::ScrollSnapAlignKeyword::Start,
+            area_rect,
+            container_rect,
+            20.0, // margin_left
+            0.0,  // margin_right
+            0.0,  // padding_left
+            0.0,  // padding_right
+        );
+        assert_eq!(result, Some(80.0), "scroll-margin-left shifts snap-x left");
+    }
+
+    #[test]
+    fn snap_padding_start_shifts_x_offset() {
+        // scroll-padding-left: 15px on the container shifts the snap port inward,
+        // which reduces the required scroll-x (the port's left edge is further right).
+        // Container 0..800, area at x=100 w=400, align=start, padding_left=15.
+        // Expected: ax - 0 - padding_left = 100 - 15 = 85.
+        let container_rect = lumen_core::geom::Rect { x: 0.0, y: 0.0, width: 800.0, height: 600.0 };
+        let area_rect = lumen_core::geom::Rect { x: 100.0, y: 50.0, width: 400.0, height: 300.0 };
+        let result = snap_offset_x(
+            style::ScrollSnapAlignKeyword::Start,
+            area_rect,
+            container_rect,
+            0.0,  // margin_left
+            0.0,  // margin_right
+            15.0, // padding_left
+            0.0,  // padding_right
+        );
+        assert_eq!(result, Some(85.0), "scroll-padding-left shifts snap-x left");
+    }
+
+    #[test]
+    fn snap_margin_end_shifts_y_offset() {
+        // scroll-margin-bottom: 10px on the snap area.
+        // Container 0..600h, area at y=500 h=200, align=end, margin_bottom=10.
+        // Expected: ay + area.h + margin_bottom - container.h + padding_bottom
+        //         = 500 + 200 + 10 - 600 + 0 = 110.
+        let container_rect = lumen_core::geom::Rect { x: 0.0, y: 0.0, width: 800.0, height: 600.0 };
+        let area_rect = lumen_core::geom::Rect { x: 0.0, y: 500.0, width: 200.0, height: 200.0 };
+        let result = snap_offset_y(
+            style::ScrollSnapAlignKeyword::End,
+            area_rect,
+            container_rect,
+            0.0,  // margin_top
+            10.0, // margin_bottom
+            0.0,  // padding_top
+            0.0,  // padding_bottom
+        );
+        assert_eq!(result, Some(110.0), "scroll-margin-bottom shifts snap-y end");
+    }
+
+    #[test]
+    fn snap_margin_center_splits_evenly() {
+        // Center alignment: margins shift center by (margin_right - margin_left)/2.
+        // Container 0..800w, area at x=200 w=200, align=center, margin_left=20, margin_right=20.
+        // Without margins: ax + w/2 - W/2 = 200 + 100 - 400 = -100.
+        // Margin contribution: (20-20)/2 = 0 → same result -100.
+        let container_rect = lumen_core::geom::Rect { x: 0.0, y: 0.0, width: 800.0, height: 600.0 };
+        let area_rect = lumen_core::geom::Rect { x: 200.0, y: 0.0, width: 200.0, height: 100.0 };
+        let result = snap_offset_x(
+            style::ScrollSnapAlignKeyword::Center,
+            area_rect,
+            container_rect,
+            20.0, // margin_left
+            20.0, // margin_right
+            0.0,
+            0.0,
+        );
+        // Symmetric margins cancel: same as no margins.
+        assert!((result.unwrap() - (-100.0_f32)).abs() < 0.01,
+            "symmetric margins don't shift center, got {:?}", result);
+
+        // Asymmetric: margin_right=30 > margin_left=10 → shifted right by (30-10)/2 = 10.
+        let result2 = snap_offset_x(
+            style::ScrollSnapAlignKeyword::Center,
+            area_rect,
+            container_rect,
+            10.0, // margin_left
+            30.0, // margin_right
+            0.0,
+            0.0,
+        );
+        assert!((result2.unwrap() - (-90.0_f32)).abs() < 0.01,
+            "asymmetric margins shift center by (right-left)/2, got {:?}", result2);
+    }
+
+    #[test]
+    fn snap_collect_containers_applies_scroll_margin() {
+        // Verify that collect_snap_containers wires scroll-margin into the snap
+        // point offset: element with scroll-margin-top: 20px + align=start
+        // should produce snap_y = (area.y - container.y) - 20.
+        let root = lay_full(
+            "<div id=c><p id=a>item</p></div>",
+            "#c { scroll-snap-type: y mandatory; height: 600px; } \
+             #a { scroll-snap-align: start; scroll-margin-top: 20px; }",
+        );
+        let containers = collect_snap_containers(&root);
+        assert_eq!(containers.len(), 1);
+        let pts = &containers[0].points;
+        assert_eq!(pts.len(), 1, "one snap area");
+        let snap_y = pts[0].snap_y.expect("snap_y must be Some");
+        // Without margin snap_y would be area.y - container.y (≈ 0 for first child).
+        // With margin_top=20, snap_y = area.y - container.y - 20 ≈ -20.
+        assert!(snap_y < 0.0,
+            "scroll-margin-top shifts snap_y negative for first child, got {snap_y}");
+        // The offset should be roughly -20px (margin_top).
+        assert!((snap_y - (-20.0_f32)).abs() < 5.0,
+            "snap_y should be ≈ −20 (scroll-margin-top), got {snap_y}");
+    }
+
+    #[test]
+    fn snap_padding_reduces_proximity_threshold() {
+        // scroll-padding reduces the effective snap port, which shrinks the
+        // proximity threshold from 50%×viewport to 50%×(viewport−padding).
+        // Container height=600, padding_top=100, padding_bottom=100 → port height=400
+        // → proximity threshold = 200.
+        // snap_y=600, target=380 → dy=220 > 200 → no snap.
+        // Without padding (threshold=300): dy=220 < 300 → would snap.
+        let snap_type = style::ScrollSnapType {
+            axis: style::ScrollSnapAxis::Y,
+            strictness: style::ScrollSnapStrictness::Proximity,
+        };
+        let mut container = SnapContainer {
+            node: lumen_dom::NodeId::from_index(0),
+            snap_type,
+            rect: lumen_core::geom::Rect { x: 0.0, y: 0.0, width: 800.0, height: 600.0 },
+            scroll_padding_top: 100.0,
+            scroll_padding_right: 0.0,
+            scroll_padding_bottom: 100.0,
+            scroll_padding_left: 0.0,
+            points: vec![SnapPoint {
+                node: lumen_dom::NodeId::from_index(1),
+                snap_x: None,
+                snap_y: Some(600.0),
+                stop_always: false,
+            }],
+        };
+        // With padding: threshold = (600-200)*0.5 = 200. dy=220 > 200 → no snap.
+        let result = find_snap_target(&container, (0.0, 0.0), (0.0, 380.0));
+        assert!(result.is_none(),
+            "scroll-padding shrinks proximity threshold — should not snap at 380");
+
+        // Verify that removing padding (threshold=300) would snap the same target.
+        container.scroll_padding_top = 0.0;
+        container.scroll_padding_bottom = 0.0;
+        let result_no_pad = find_snap_target(&container, (0.0, 0.0), (0.0, 380.0));
+        assert!(result_no_pad.is_some(),
+            "without padding threshold=300 > dy=220 → should snap");
     }
 
     // ─── Scroll container tests ───────────────────────────────────────────────
@@ -14765,4 +16457,311 @@ mod tests {
         );
     }
 
+    #[test]
+    fn range_input_creates_range_kind() {
+        use box_tree::FormControlKind;
+        let doc = lumen_html_parser::parse(r#"<input type="range" min="10" max="90" value="50">"#);
+        let sheet = lumen_css_parser::parse("");
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let found = find_range_kind(&root);
+        assert!(found.is_some(), "range input should produce FormControlKind::Range");
+        if let Some(FormControlKind::Range { value, min, max }) = found {
+            assert!((value - 50.0).abs() < 0.001, "value should be 50, got {value}");
+            assert!((min - 10.0).abs() < 0.001, "min should be 10, got {min}");
+            assert!((max - 90.0).abs() < 0.001, "max should be 90, got {max}");
+        }
+    }
+
+    #[test]
+    fn range_input_defaults_min_max() {
+        use box_tree::FormControlKind;
+        let doc = lumen_html_parser::parse(r#"<input type="range">"#);
+        let sheet = lumen_css_parser::parse("");
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let found = find_range_kind(&root);
+        assert!(found.is_some(), "range input without min/max should produce FormControlKind::Range");
+        if let Some(FormControlKind::Range { value, min, max }) = found {
+            assert!((min - 0.0).abs() < 0.001, "default min should be 0");
+            assert!((max - 100.0).abs() < 0.001, "default max should be 100");
+            assert!((value - 50.0).abs() < 0.001, "default value should be midpoint 50");
+        }
+    }
+
+    #[test]
+    fn range_input_value_clamped_to_max() {
+        use box_tree::FormControlKind;
+        let doc = lumen_html_parser::parse(r#"<input type="range" min="0" max="10" value="999">"#);
+        let sheet = lumen_css_parser::parse("");
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        if let Some(FormControlKind::Range { value, max, .. }) = find_range_kind(&root) {
+            assert!(value <= max, "value {value} should be clamped to max {max}");
+        }
+    }
+
+    #[test]
+    fn range_input_is_clickable() {
+        let doc = lumen_html_parser::parse(r#"<input type="range">"#);
+        let sheet = lumen_css_parser::parse("");
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let elems = collect_clickable_elements(&root, &doc);
+        assert!(
+            elems.iter().any(|e| matches!(e.kind, ClickableKind::Input)),
+            "range input should be collected as clickable Input"
+        );
+    }
+
+    fn find_range_kind(root: &LayoutBox) -> Option<box_tree::FormControlKind> {
+        if let BoxKind::FormControl { kind } = &root.kind
+            && matches!(kind, box_tree::FormControlKind::Range { .. })
+        {
+            return Some(kind.clone());
+        }
+        for child in &root.children {
+            if let Some(k) = find_range_kind(child) {
+                return Some(k);
+            }
+        }
+        None
+    }
+
+    // ── find_scroll_container_at ──────────────────────────────────────────────
+
+    fn make_scroll_container(node_idx: usize, x: f32, y: f32, w: f32, h: f32) -> ScrollContainer {
+        use lumen_core::geom::Rect;
+        ScrollContainer {
+            node: lumen_dom::NodeId::from_index(node_idx),
+            clip_rect: Rect::new(x, y, w, h),
+            scroll_width: w + 200.0,
+            scroll_height: h + 400.0,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            overscroll_behavior_x: style::OverscrollBehavior::Auto,
+            overscroll_behavior_y: style::OverscrollBehavior::Auto,
+        }
+    }
+
+    #[test]
+    fn find_scroll_container_at_hit() {
+        let c = make_scroll_container(1, 10.0, 20.0, 100.0, 200.0);
+        let result = find_scroll_container_at(&[c], 50.0, 80.0);
+        assert_eq!(result, Some(lumen_dom::NodeId::from_index(1)));
+    }
+
+    #[test]
+    fn find_scroll_container_at_miss() {
+        let c = make_scroll_container(1, 10.0, 20.0, 100.0, 200.0);
+        // Point outside the container
+        assert_eq!(find_scroll_container_at(&[c], 5.0, 80.0), None);
+    }
+
+    #[test]
+    fn find_scroll_container_at_empty() {
+        assert_eq!(find_scroll_container_at(&[], 50.0, 50.0), None);
+    }
+
+    #[test]
+    fn find_scroll_container_at_innermost_wins() {
+        // Outer container covers (0,0,200,200), inner covers (50,50,50,50).
+        // A point inside both should return the inner (last in list = deeper in DOM).
+        let outer = make_scroll_container(1, 0.0, 0.0, 200.0, 200.0);
+        let inner = make_scroll_container(2, 50.0, 50.0, 50.0, 50.0);
+        let result = find_scroll_container_at(&[outer, inner], 60.0, 60.0);
+        assert_eq!(result, Some(lumen_dom::NodeId::from_index(2)));
+    }
+
+    #[test]
+    fn find_scroll_container_at_only_outer_when_point_outside_inner() {
+        let outer = make_scroll_container(1, 0.0, 0.0, 200.0, 200.0);
+        let inner = make_scroll_container(2, 50.0, 50.0, 50.0, 50.0);
+        // Point in outer but not in inner
+        let result = find_scroll_container_at(&[outer, inner], 10.0, 10.0);
+        assert_eq!(result, Some(lumen_dom::NodeId::from_index(1)));
+    }
+
+    // ── collect_view_transition_names ─────────────────────────────────────────
+
+    #[test]
+    fn vt_names_empty_without_property() {
+        let root = lay("<div></div>", "div { width: 100px; height: 50px; }");
+        let names = collect_view_transition_names(&root);
+        assert!(names.is_empty(), "no view-transition-name set → empty");
+    }
+
+    #[test]
+    fn vt_names_single_named_element() {
+        let root = lay(
+            "<div></div>",
+            "div { view-transition-name: hero; width: 100px; height: 50px; }",
+        );
+        let names = collect_view_transition_names(&root);
+        assert_eq!(names.len(), 1, "one named element");
+        assert_eq!(names[0].1.as_ref(), "hero");
+    }
+
+    #[test]
+    fn vt_names_multiple_elements_document_order() {
+        let root = lay(
+            "<div id='a'></div><div id='b'></div>",
+            "#a { view-transition-name: first; width: 100px; height: 50px; } \
+             #b { view-transition-name: second; width: 100px; height: 50px; }",
+        );
+        let names = collect_view_transition_names(&root);
+        assert_eq!(names.len(), 2);
+        assert_eq!(names[0].1.as_ref(), "first");
+        assert_eq!(names[1].1.as_ref(), "second");
+    }
+
+    #[test]
+    fn vt_names_none_value_excluded() {
+        let root = lay(
+            "<div></div>",
+            "div { view-transition-name: none; width: 100px; height: 50px; }",
+        );
+        let names = collect_view_transition_names(&root);
+        assert!(names.is_empty(), "view-transition-name:none should not appear");
+    }
+
+    // BUG-130: view-transition-name must not affect normal-flow rendering — a box
+    // carrying the property lays out identically to a plain box (CSS View
+    // Transitions L1 §10; the property only marks elements for capture during
+    // document.startViewTransition()). Regression mirrors TEST-81: two equal boxes
+    // in a centered flex row, one named, one not — same y/size/height.
+    #[test]
+    fn vt_name_does_not_affect_layout_geometry() {
+        let root = lay_viewport(
+            "<div class='f'><div class='box plain'></div><div class='box named'></div></div>",
+            ".f { display: flex; align-items: center; justify-content: center; gap: 60px; \
+                  width: 1022px; height: 718px; } \
+             .box { width: 200px; height: 200px; } \
+             .named { view-transition-name: hero; }",
+            Size::new(1024.0, 720.0),
+        );
+        let flex = first_element_child(&root);
+        let plain = &flex.children[0];
+        let named = &flex.children[1];
+        // align-items:center → both vertically centered at the same y in the 718px row.
+        assert_eq!(plain.rect.y, named.rect.y, "named box must share the plain box y");
+        assert_eq!(plain.rect.height, named.rect.height, "same height");
+        assert_eq!(plain.rect.width, named.rect.width, "same width");
+        // Centered cross-size: (718 - 200) / 2 = 259 (BUG-141), not pinned to row top.
+        assert!(
+            (plain.rect.y - 259.0).abs() < 0.5,
+            "boxes centered on cross axis, got y={}",
+            plain.rect.y
+        );
+    }
+
+    // ──────────── CSS Overscroll Behavior L1 — scroll chain stop ────────────
+
+    #[test]
+    fn overscroll_collected_from_style() {
+        let root = lay(
+            "<div class='s'><div class='t'></div></div>",
+            ".s { width: 100px; height: 100px; overflow: scroll; \
+               overscroll-behavior-x: contain; overscroll-behavior-y: none; } \
+             .t { width: 300px; height: 300px; }",
+        );
+        let containers = collect_scroll_containers(&root);
+        let c = containers
+            .iter()
+            .find(|c| matches!(c.overscroll_behavior_x, style::OverscrollBehavior::Contain))
+            .expect("scroll container with overscroll-behavior-x: contain");
+        assert_eq!(c.overscroll_behavior_x, style::OverscrollBehavior::Contain);
+        assert_eq!(c.overscroll_behavior_y, style::OverscrollBehavior::None);
+    }
+
+    #[test]
+    fn overscroll_auto_propagates_at_boundary() {
+        use style::OverscrollBehavior::Auto;
+        // At boundary (no movement), default `auto` lets the delta bubble up.
+        assert!(overscroll_should_propagate(Auto, Auto, 0.0, 30.0, false, false));
+        assert!(overscroll_should_propagate(Auto, Auto, 30.0, 0.0, false, false));
+    }
+
+    #[test]
+    fn overscroll_contain_blocks_propagation() {
+        use style::OverscrollBehavior::{Auto, Contain, None};
+        // Vertical delta at boundary with overscroll-behavior-y: contain stays put.
+        assert!(!overscroll_should_propagate(Auto, Contain, 0.0, 30.0, false, false));
+        // None behaves like contain for chain-stopping.
+        assert!(!overscroll_should_propagate(None, Auto, 30.0, 0.0, false, false));
+    }
+
+    #[test]
+    fn overscroll_blocked_axis_only_matters_for_its_delta() {
+        use style::OverscrollBehavior::{Auto, Contain};
+        // contain on Y, but the delta is purely horizontal on an `auto` X axis →
+        // the horizontal delta is free to propagate.
+        assert!(overscroll_should_propagate(Auto, Contain, 30.0, 0.0, false, false));
+        // contain on X but delta is vertical on `auto` Y → propagates.
+        assert!(overscroll_should_propagate(Contain, Auto, 0.0, 30.0, false, false));
+    }
+
+    #[test]
+    fn overscroll_consumed_when_container_moves() {
+        use style::OverscrollBehavior::Auto;
+        // Any actual movement consumes the gesture — chain never reaches parent,
+        // regardless of overscroll-behavior.
+        assert!(!overscroll_should_propagate(Auto, Auto, 0.0, 30.0, false, true));
+        assert!(!overscroll_should_propagate(Auto, Auto, 30.0, 30.0, true, false));
+    }
+
+    /// BUG-158: a `flex: 1` item (which sets `flex-basis: 0`) in an
+    /// indefinite-height column flex container must not collapse to height 0 —
+    /// CSS Flexbox §4.5 automatic minimum size keeps it at its content height.
+    ///
+    /// The container is itself a flex item of a row-flex grandparent, so the row
+    /// flex lays the column out twice (preliminary + final pass). The first pass
+    /// writes a resolved px `height` back into the item's style; the regression
+    /// is that the second pass saw that stale `height` and re-collapsed the item
+    /// to 0, so sibling cards painted on top of each other (lenta.ru news cards).
+    #[test]
+    fn flex_column_basis_zero_item_keeps_content_height() {
+        let body = lay_measured(
+            "<div class=g>\
+               <div class=col>\
+                 <div class=a>First card single line</div>\
+                 <div class=mid>Middle card has enough text to wrap onto two lines here ok</div>\
+                 <div class=b>Last card single line</div>\
+               </div>\
+             </div>",
+            ".g { display: flex; } \
+             .col { display: flex; flex-direction: column; width: 280px; } \
+             .a, .b { flex: none; } \
+             .mid { flex: 1; }",
+            800.0,
+        );
+
+        let grand = body.children.iter().find(|c| !matches!(c.kind, BoxKind::Skip)).unwrap();
+        let col = grand.children.iter().find(|c| !matches!(c.kind, BoxKind::Skip)).unwrap();
+        // (y, height) of each card, in source order.
+        let cards: Vec<(f32, f32)> = col
+            .children
+            .iter()
+            .filter(|c| !matches!(c.kind, BoxKind::Skip))
+            .map(|c| (c.rect.y, c.rect.height))
+            .collect();
+        assert_eq!(cards.len(), 3, "expected 3 cards, got {}", cards.len());
+
+        // The middle `flex: 1` card must keep a real content height, not collapse.
+        assert!(
+            cards[1].1 > 10.0,
+            "middle flex:1 card collapsed to height {} (BUG-158)",
+            cards[1].1
+        );
+
+        // Cards stack without overlap: each starts at the bottom edge of the
+        // previous one (no two share a y, which is the painted symptom).
+        assert!(
+            (cards[1].0 - (cards[0].0 + cards[0].1)).abs() < 0.5,
+            "card 1 (y={}) does not stack under card 0 (y={}, h={})",
+            cards[1].0, cards[0].0, cards[0].1
+        );
+        assert!(
+            (cards[2].0 - (cards[1].0 + cards[1].1)).abs() < 0.5,
+            "card 2 (y={}) does not stack under card 1 (y={}, h={})",
+            cards[2].0, cards[1].0, cards[1].1
+        );
+    }
 }
+
