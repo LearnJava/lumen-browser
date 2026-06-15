@@ -6,10 +6,7 @@
 
 ## In progress
 
-**PH2-7: Accessibility tree + platform bridges (Phase 1 runtime)**  
-Branch: p1-ph2-7-a11y-bridges  
-Next step: WinUiaBridge — NotifyWinEvent для focus/structure; init_hwnd() + shell wiring  
-Files: `crates/engine/a11y/src/platform/windows.rs`, `crates/engine/a11y/src/platform/mod.rs`, `crates/shell/src/main.rs`
+—
 
 ---
 
@@ -55,6 +52,7 @@ Files: `crates/engine/a11y/src/platform/windows.rs`, `crates/engine/a11y/src/pla
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-15 | PH2-7: Accessibility tree + platform bridges Phase 1 | `WinUiaBridge` Phase 1: `init_hwnd()` + `NotifyWinEvent` (EVENT_OBJECT_FOCUS/REORDER/STATECHANGE) + `handle_wm_get_object` (CreateStdAccessibleObject + LresultFromObject для OBJID_CLIENT) + `ax_role_to_msaa()` (60 вариантов). Shell: init_hwnd подключён после создания окна через winit::raw_window_handle. 125 тестов в lumen-a11y. |
 | 2026-06-15 | PH2-3: Профили + шифрование | `profile_vault` — AES-256-GCM key wrapping, PBKDF2-HMAC-SHA256 (100k iter, NIST SP 800-132). Sealed blob 92 байта. `ProfileRegistry`: `set_password`, `clear_password`, `unlock`, `is_encrypted`. 11 unit-тестов. |
 | 2026-06-15 | PH2-2: Site isolation Phase 1 | `lumen-network::coop` — COOP/COEP/CORP парсинг, `CrossOriginIsolationState::from_headers()`, `check_corp_allowed()`; 27 тестов. `HttpClient::fetch_page()` возвращает `(body, headers)`. `window.crossOriginIsolated` динамически через `_LUMEN_CROSS_ORIGIN_ISOLATED`; параметр `cross_origin_isolated: bool` прокинут через весь pipeline (load_bytes → render_bytes → install_dom). |
 | 2026-06-15 | PH1-8: Preload scanner | `PreloadScanner` struct поверх `PushTokenizer`: инкрементальный scan каждого HtmlChunk вместо первых 8 КБ. `collect_hints_from_tokens` — общая логика без дублирования. Shell `start_streaming_load` обновлён: hints + CSS-загрузчики стартуют из каждого chunk-а. 35 тестов (27 batch + 8 streaming). |
