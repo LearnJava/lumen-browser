@@ -112,6 +112,7 @@ pub mod shared_storage;
 pub mod idle_detection;
 pub mod topics_api;
 pub mod attribution_reporting;
+pub mod pointer_capture;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -298,6 +299,12 @@ pub struct QuickJsRuntime {
     /// `register_module_source` (specifiers resolved the same way the ESM
     /// resolver will); read by the `LumenLoader` at module load time.
     module_types: import_attributes::ModuleTypeRegistry,
+    /// Active pointer capture target nid (W3C Pointer Events L3 §4.1).
+    ///
+    /// Set by `_lumen_set_capture_state(nid)` when JS calls `element.setPointerCapture()`.
+    /// Cleared by `_lumen_release_capture_state()` or implicitly on `pointerup`/`pointercancel`.
+    /// Shell reads via `pointer_capture_nid()` to route pointer events to the captured element.
+    pointer_capture_nid: Arc<Mutex<Option<u32>>>,
 }
 
 struct Inner {
@@ -358,6 +365,7 @@ impl QuickJsRuntime {
             module_page_url,
             module_import_map,
             module_types,
+            pointer_capture_nid: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -1246,6 +1254,16 @@ impl QuickJsRuntime {
                 eprintln!("Attribution Reporting API init failed: {}", e);
             }
 
+            // W3C Pointer Events Level 3 §4.1 — pointer capture native bindings.
+            // _lumen_set_capture_state(nid) / _lumen_release_capture_state()
+            // Called by JS setPointerCapture/releasePointerCapture on Element.
+            if let Err(e) = pointer_capture::install_pointer_capture_bindings(
+                &ctx,
+                Arc::clone(&self.pointer_capture_nid),
+            ) {
+                eprintln!("Pointer capture bindings init failed: {}", e);
+            }
+
             Ok(())
         })
     }
@@ -1561,6 +1579,23 @@ impl QuickJsRuntime {
     /// `window.print()` calls have been made since the last drain.
     pub fn take_print_requests(&self) -> Vec<dom::PrintRequest> {
         std::mem::take(&mut self.print_requests.lock().unwrap())
+    }
+
+    /// Returns the DOM node nid that currently holds pointer capture (pointer_id=1).
+    ///
+    /// Shell calls this before dispatching pointer events to redirect them to the
+    /// capture target instead of the hit-tested element (W3C Pointer Events L3 §4.1).
+    /// Returns `None` when no capture is active.
+    pub fn pointer_capture_nid(&self) -> Option<u32> {
+        *self.pointer_capture_nid.lock().unwrap()
+    }
+
+    /// Release the active pointer capture, returning the former capture target nid.
+    ///
+    /// Called by the shell implicitly on `pointerup`/`pointercancel` per spec §4.1.
+    /// Returns `None` if no capture was active.
+    pub fn take_pointer_capture(&self) -> Option<u32> {
+        self.pointer_capture_nid.lock().unwrap().take()
     }
 
     /// Drain all `console.log/warn/error` messages queued since the last call.
