@@ -6,7 +6,7 @@
 
 ## In progress
 
-—
+— (idle, ожидание следующей задачи)
 
 ---
 
@@ -27,6 +27,7 @@
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-16 | PH3-8: Web Animations API Level 1 (JS runtime) | `DocumentTimeline`, `KeyframeEffect`, `Animation` (play/pause/cancel/finish/reverse), `AnimationPlaybackEvent`; `element.animate()` + `element.getAnimations()`; `document.timeline` + `document.getAnimations()`; интерполяция (числа/цвета/transform), easing (linear/ease/cubic-bezier/steps), fill/direction/iterations. 21 тест. |
 | 2026-06-16 | PH3-7: `contentEditable` + Input Events Level 2 + Selection routing | `node_is_contenteditable()`, `find_editing_host()` в lumen-dom; 5 Rust-биндингов + JS-свойства (`contentEditable`, `isContentEditable`) + `_lumen_handle_contenteditable_key()` в lumen-js; маршрутизация клавиш в shell через DOM (не eval_js). 17 новых тестов. |
 | 2026-06-16 | PH3-6: `<dialog>` focus management + `<form method="dialog">` | `showModal()` фокусирует [autofocus]-потомок или сам диалог; `close()` восстанавливает предыдущий фокус; `<form method="dialog">` закрывает родительский `<dialog>`. `find_ancestor_dialog()` в lumen-dom. 8 новых тестов. |
 | 2026-06-15 | PH3-5: Web Workers Phase 1 | `importScripts()` для data: и blob:lumen/ URL; `WorkerBlobStore` (Arc-shared); `atob`/`btoa` в worker globals; WORKER_SHIM оборачивает createObjectURL для auto-регистрации blob'ов. 20 новых тестов, итого 47 worker-тестов. |
