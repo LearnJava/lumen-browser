@@ -23703,6 +23703,74 @@ mod tests {
         assert_eq!(v, lumen_core::JsValue::Bool(true));
     }
 
+    #[test]
+    fn lumen_dispatch_drag_event_fires_on_element() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var el = document.getElementById('main');
+            var fired = false;
+            el.addEventListener('dragstart', function(e) { fired = true; });
+            var nid = el.__nid__;
+            _lumen_dispatch_drag_event(nid, 'dragstart', 10, 20, '{}');
+            fired
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn lumen_dispatch_drag_event_passes_coordinates() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var el = document.getElementById('main');
+            var cx = -1, cy = -1;
+            el.addEventListener('drag', function(e) { cx = e.clientX; cy = e.clientY; });
+            _lumen_dispatch_drag_event(el.__nid__, 'drag', 55, 77, '{}');
+            cx === 55 && cy === 77
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn lumen_dispatch_drag_event_populates_data_transfer() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var el = document.getElementById('main');
+            var payload = '';
+            el.addEventListener('drop', function(e) {
+                payload = e.dataTransfer.getData('text/plain');
+            });
+            _lumen_dispatch_drag_event(el.__nid__, 'drop', 0, 0, '{"text/plain":"transferred"}');
+            payload
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::String("transferred".into()));
+    }
+
+    #[test]
+    fn lumen_dispatch_drag_event_bubbles_to_parent() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var parent = document.getElementById('main');
+            var child = document.createElement('div');
+            parent.appendChild(child);
+            var bubbled = false;
+            parent.addEventListener('dragover', function() { bubbled = true; });
+            _lumen_dispatch_drag_event(child.__nid__, 'dragover', 0, 0, '{}');
+            bubbled
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn drag_event_default_not_prevented_without_handler() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval(r#"
+            var el = document.getElementById('main');
+            // returns true when default is not prevented
+            _lumen_dispatch_drag_event(el.__nid__, 'dragstart', 0, 0, '{}')
+        "#).unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
     // ── window scroll API (CSSOM View Module §4) ─────────────────────────────
 
     #[test]

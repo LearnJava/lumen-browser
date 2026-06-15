@@ -6,7 +6,10 @@
 
 ## In progress
 
-— (idle, ожидание следующей задачи)
+**PH3-9 — HTML5 Drag and Drop API (shell-side dispatch)**  
+Branch: p1-ph3-9-dnd  
+Next step: добавить `is_element_draggable()` в `lumen-dom`, затем `DragState` в shell и диспатч событий drag/drop  
+Files: `crates/dom/src/lib.rs`, `crates/shell/src/main.rs`
 
 ---
 
@@ -20,6 +23,7 @@
 | PH3-3 | ~~**getUserMedia Phase 1**~~ ✅ завершена | L | `lumen-js`, `lumen-shell` |
 | PH3-4 | ~~**Offscreen Canvas Phase 1**~~ ✅ завершена | M | `lumen-js`, `lumen-paint` |
 | PH3-5 | ~~**Web Workers Phase 1**~~ ✅ завершена | L | `lumen-js` |
+| PH3-9 | **HTML5 Drag and Drop API** 🟡 в работе | M | `lumen-dom`, `lumen-shell` |
 
 ---
 
