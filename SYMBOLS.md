@@ -1080,7 +1080,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/ipc/src/lib.rs:180` **fn** `connect` — Connect to the network service listening on `127.0.0.1:port`
 `crates/ipc/src/lib.rs:190` **fn** `request` — Send a request and block until the matching response arrives
 
-## lumen-js  (265 symbols)
+## lumen-js  (266 symbols)
 
 `crates/js/src/async_context.rs:32` **fn** `install_async_context` — Install the `AsyncContext` global (Variable + Snapshot) into the context
 `crates/js/src/attribution_reporting.rs:23` **fn** `install_attribution_reporting_api` — Install Attribution Reporting API bindings into the JS context
@@ -1099,8 +1099,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/broadcast_channel.rs:119` **fn** `close` — Remove the channel instance `id` from the global hub and this runtime
 `crates/js/src/broadcast_channel.rs:135` **fn** `drain` — Drain all pending messages addressed to this runtime's channels
 `crates/js/src/broadcast_channel.rs:150` **fn** `install_broadcast_channel_bindings` — Install the `_lumen_bc_*` native bindings and the `BroadcastChannel` JS class
-`crates/js/src/canvas2d.rs:247` **fn** `flush_dirty` — Drain dirty canvases and return their current RGBA buffers
-`crates/js/src/canvas2d.rs:274` **fn** `install_canvas2d_bindings` — Register the `_lumen_canvas2d_*` native functions on `globals`
+`crates/js/src/canvas2d.rs:251` **fn** `flush_dirty` — Drain dirty canvases and return their current RGBA buffers
+`crates/js/src/canvas2d.rs:278` **fn** `install_canvas2d_bindings` — Register the `_lumen_canvas2d_*` native functions on `globals`
 `crates/js/src/clipboard.rs:33` **fn** `set_clipboard_provider` — Install the host clipboard provider backing `navigator.clipboard`
 `crates/js/src/close_watcher.rs:19` **fn** `install_close_watcher` — Install `CloseWatcher` class + Escape key handler into the JS context
 `crates/js/src/compute_pressure.rs:8` **fn** `install_compute_pressure_bindings` — Install Compute Pressure API bindings into the JS context
@@ -1258,8 +1258,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/offscreen_canvas.rs:62` **fn** `width` — Get canvas width in CSS pixels
 `crates/js/src/offscreen_canvas.rs:67` **fn** `height` — Get canvas height in CSS pixels
 `crates/js/src/offscreen_canvas.rs:72` **fn** `transfer_to_image_bitmap` — Transfer pixel buffer to ImageBitmap and clear the canvas
-`crates/js/src/offscreen_canvas.rs:113` **fn** `flush_dirty` — Drain dirty offscreen canvases and return their RGBA buffers
-`crates/js/src/offscreen_canvas.rs:137` **fn** `install_offscreen_canvas_bindings` — Install OffscreenCanvas bindings and JS shim into the QuickJS runtime
+`crates/js/src/offscreen_canvas.rs:113` **fn** `create_offscreen_from_pixels` — Create a new OffscreenCanvas pre-filled with existing RGBA8 pixel data
+`crates/js/src/offscreen_canvas.rs:127` **fn** `flush_dirty` — Drain dirty offscreen canvases and return their RGBA buffers
+`crates/js/src/offscreen_canvas.rs:151` **fn** `install_offscreen_canvas_bindings` — Install OffscreenCanvas bindings and JS shim into the QuickJS runtime
 `crates/js/src/paint_worklet.rs:13` **struct** `PaintWorkletRegistry` — Maps worklet name (e.g. "my-paint") to its definition
 `crates/js/src/paint_worklet.rs:18` **fn** `new`
 `crates/js/src/paint_worklet.rs:23` **fn** `register` — Register a paint worklet definition
@@ -3933,4 +3934,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3862 symbols in 22 crates*
+*Total: 3863 symbols in 22 crates*
