@@ -18,9 +18,11 @@
 
 ## Текущее состояние
 
-**Phase 0 — прототип.** Цель этапа: открыть простую текстовую статью с CSS в окне через собственный движок.
+**Phase 2 — v0.5 «Interactive» (в работе), версия приложения v0.2.0.** Phase 0 (прототип) закрыта, Phase 1 «Reader» в основном выполнена. Сейчас в активной разработке интерактивный слой: QuickJS, Canvas 2D, CSS Grid, Shadow DOM, accessibility tree, формы, find-in-page, DevTools/CDP, knowledge layer; часть фич Phase 3 (IndexedDB, Service Workers, WebSockets, WOFF2, печать в PDF) уже подтянута вперёд.
 
-Что уже работает:
+> Актуальный детальный статус реализации — в [docs/plan/status.md](docs/plan/status.md) и `STATUS-PN.md`. Список ниже — ранние вехи прототипа (Phase 0); полный набор возможностей давно шире.
+
+Базовые вехи движка:
 
 - ✅ Свой HTML-парсер (~30 тестов, обрабатывает `samples/page.html` с кириллицей, entities, комментариями)
 - ✅ Свой CSS-парсер (~20 тестов, селекторы type/class/id/universal, кириллический `.привет`)
@@ -28,9 +30,9 @@
 - ✅ Окно через winit + wgpu, рисуем фоновые прямоугольники
 - ✅ Свой TrueType-парсер (~60 тестов, парсит bundled Inter-Regular.ttf)
 - ✅ Scanline-растеризатор глифов (квадратичные Безье, even-odd fill, 4×4 AA)
-- 🟡 Текст в окне — в работе сейчас (atlas + glyph shader)
+- ✅ Текст в окне (glyph atlas + рендеринг через femtovg-бэкенд)
 
-Всего тестов: ~145, все зелёные, `cargo clippy --workspace -- -D warnings` чист.
+Тесты прогоняются покрейтно (`cargo test -p <crate>`), `cargo clippy -p <crate> --all-targets -- -D warnings` чист перед каждым коммитом.
 
 ## Требования
 
@@ -89,14 +91,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 ## Что увидишь
 
 ### `cargo run -p lumen-shell`
-Окно 1024×720 с заголовком «Lumen 0.0.1», белый фон. Закрытие — крестик в углу. Это «нулевая» проверка, что winit/wgpu работают на твоей системе.
+Окно 1024×720 с заголовком «Lumen 0.2.0» (версия берётся из `Cargo.toml`), белый фон. Закрытие — крестик в углу. Это «нулевая» проверка, что winit/wgpu работают на твоей системе.
 
 ### `cargo run -p lumen-shell -- samples/page.html`
-Окно с распарсенной [`samples/page.html`](samples/page.html). На данный момент видишь **фоновые цвета блоков** (`<body>`, `<h1>`, `<p>`, `<ul>`, `<li>` с применённым CSS из встроенного `<style>`-блока). Текст ещё не рисуется — это следующий шаг разработки. Сравнить с тем, как страницу показывает «настоящий» браузер, можно открыв тот же HTML в Chrome/Firefox.
+Окно с распарсенной [`samples/page.html`](samples/page.html): фоновые цвета блоков, текст через bundled Inter, рамки, инлайн-поток. Сравнить с тем, как страницу показывает «настоящий» браузер, можно открыв тот же HTML в Chrome/Firefox.
 
 В консоль печатается:
 ```
-Lumen v0.0.1 — Phase 0 prototype
+Lumen v0.2.0 — Phase 2 (Interactive, in progress)
 Распарсено: 47 DOM-узлов, 7 CSS-правил, 8 paint-команд
 ```
 
@@ -188,15 +190,14 @@ cargo build --release
 - IntelliJ IDEA / RustRover
 - Helix, Neovim с LSP, и т.д.
 
-## Известные ограничения Phase 0
+## Известные ограничения
 
-Текущий прототип сознательно урезан — расширяется по мере необходимости:
+Движок Phase 2 многое уже умеет (полный список и текущие пробелы — в [docs/plan/status.md](docs/plan/status.md), [BUGS.md](BUGS.md) и `CSS-SPECS.md`). Крупные нереализованные блоки:
 
-- HTML parser не делает полную HTML5 insertion modes (in_table, in_select, и т.д.) — обрабатывает базовый HTML, lenient к ошибкам.
-- CSS — только селекторы tag/class/id/universal, без pseudo-классов и combinators. Значения хранятся как строки без типизации.
-- Layout — только block flow. Inline (текст в строке), flex, grid — позже.
-- Paint — рисует фоновые прямоугольники. Текст — в работе.
-- Сеть — нет. Только локальные HTML-файлы.
+- HTML parser — без полного набора HTML5 insertion modes; lenient к ошибкам.
+- JS-движок — QuickJS (rquickjs), не V8; переход на `rusty_v8` запланирован на Phase 3.
+- Сетевой стек — HTTP/1.1 + HTTP/2; HTTP/3 (QUIC) — позже.
+- Часть CSS-свойств и WPT-покрытие ещё в работе (см. `CSS-SPECS.md`).
 - JavaScript — нет.
 - Кодировки — только UTF-8 на входе. cp1251/KOI8-R — задача §10.1 плана.
 - Composite glyphs в шрифтах не растеризуются (например, кириллическая `А` в Inter, которая собрана из латинской `A`). Уникальные кириллические буквы (Я, ж, п и т.д.) — работают.
