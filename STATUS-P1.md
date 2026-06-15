@@ -6,7 +6,8 @@
 
 ## In progress
 
-—
+PH3-4: Offscreen Canvas Phase 1  branch: p1-ph3-4-offscreen-canvas
+Next step: done — transferControlToOffscreen() + postMessage transfer  crates/js/src/canvas2d.rs + dom.rs + worker.rs
 
 ---
 

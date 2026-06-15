@@ -19,7 +19,7 @@
 //! dirty buffers via [`flush_dirty`] each frame and uploads them to the GPU.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use lumen_canvas::{
     CanvasColor, CanvasGradient, CanvasPattern, Path2dData, PaintSource, RepeatMode,
@@ -42,6 +42,10 @@ thread_local! {
     static PATHS: RefCell<HashMap<u32, Path2dData>> = RefCell::new(HashMap::new());
     /// Auto-increment for Path2D object IDs.
     static NEXT_PATH_ID: Cell<u32> = const { Cell::new(1) };
+    /// DOM canvas node indices whose control has been transferred to an OffscreenCanvas.
+    ///
+    /// Once transferred, `getContext()` returns null for these nids (HTML LS §4.12.14).
+    static TRANSFERRED: RefCell<HashSet<u32>> = RefCell::new(HashSet::new());
 }
 
 /// Allocate a new unique object ID for a gradient or pattern.
@@ -1145,6 +1149,41 @@ pub fn install_canvas2d_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
         }),
     )?;
 
+    // ── transferControlToOffscreen (HTML LS §4.12.14) ────────────────────────
+    //
+    // _lumen_canvas_transfer_control_to_offscreen(nid) -> JSON string
+    // Creates a new OffscreenCanvas backed by the current DOM canvas pixel
+    // buffer, marks the nid as transferred, and returns
+    // {__canvas_id__, width, height} so the JS shim can wrap it without
+    // going through the OffscreenCanvas constructor.
+    g.set(
+        "_lumen_canvas_transfer_control_to_offscreen",
+        rquickjs::Function::new(ctx.clone(), |nid: u32| -> String {
+            let (w, h, pixels) = CANVASES.with(|c| {
+                let Ok(mut map) = c.try_borrow_mut() else {
+                    return (1u32, 1u32, vec![0u8; 4]);
+                };
+                let ctx2d = map.entry(nid).or_insert_with(|| Context2D::new(1, 1));
+                (ctx2d.width(), ctx2d.height(), ctx2d.pixels().to_vec())
+            });
+            let offscreen_id =
+                crate::offscreen_canvas::create_offscreen_from_pixels(w, h, pixels);
+            TRANSFERRED.with(|t| {
+                t.borrow_mut().insert(nid);
+            });
+            format!("{{\"__canvas_id__\":{offscreen_id},\"width\":{w},\"height\":{h}}}")
+        }),
+    )?;
+
+    // _lumen_canvas_is_transferred(nid) -> bool
+    // Returns true if transferControlToOffscreen() was already called for this nid.
+    g.set(
+        "_lumen_canvas_is_transferred",
+        rquickjs::Function::new(ctx.clone(), |nid: u32| -> bool {
+            TRANSFERRED.with(|t| t.borrow().contains(&nid))
+        }),
+    )?;
+
     Ok(())
 }
 
@@ -1597,6 +1636,52 @@ mod tests {
             ).unwrap();
             let updates = flush_dirty();
             assert_eq!(updates.len(), 1, "strokeText should mark canvas dirty");
+        });
+    }
+
+    // ── transferControlToOffscreen tests ─────────────────────────────────────
+
+    #[test]
+    fn transfer_control_creates_offscreen_canvas_id() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            reset_state();
+            install_canvas2d_bindings(&ctx).unwrap();
+            // Create a DOM canvas context for nid=50 (40×30)
+            ctx.eval::<(), _>("_lumen_canvas2d_create(50, 40, 30);").unwrap();
+            let result: String = ctx
+                .eval("_lumen_canvas_transfer_control_to_offscreen(50)")
+                .unwrap();
+            let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+            assert!(parsed["__canvas_id__"].as_u64().unwrap() > 0, "should have a canvas ID");
+            assert_eq!(parsed["width"].as_u64().unwrap(), 40);
+            assert_eq!(parsed["height"].as_u64().unwrap(), 30);
+        });
+    }
+
+    #[test]
+    fn transfer_control_marks_as_transferred() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            reset_state();
+            install_canvas2d_bindings(&ctx).unwrap();
+            ctx.eval::<(), _>("_lumen_canvas2d_create(51, 10, 10);").unwrap();
+            let before: bool = ctx.eval("_lumen_canvas_is_transferred(51)").unwrap();
+            assert!(!before, "not transferred yet");
+            ctx.eval::<(), _>("_lumen_canvas_transfer_control_to_offscreen(51);").unwrap();
+            let after: bool = ctx.eval("_lumen_canvas_is_transferred(51)").unwrap();
+            assert!(after, "should be marked as transferred");
+        });
+    }
+
+    #[test]
+    fn is_transferred_false_for_unknown_nid() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            reset_state();
+            install_canvas2d_bindings(&ctx).unwrap();
+            let result: bool = ctx.eval("_lumen_canvas_is_transferred(999999)").unwrap();
+            assert!(!result);
         });
     }
 }

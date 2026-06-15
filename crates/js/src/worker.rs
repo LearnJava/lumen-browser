@@ -276,9 +276,40 @@ fn install_worker_globals(
     }}
   }};
 
+  // Reconstruct transferred OffscreenCanvas sentinels inside received data.
+  // Called recursively on the parsed data object before delivering to handlers.
+  function _deserializeTransfers(obj) {{
+    if (!obj || typeof obj !== 'object') return obj;
+    if (obj.__lumen_sentinel__ === '__lumen_offscreen_transfer__') {{
+      // Restore OffscreenCanvas from pixel data using the existing native binding.
+      var cid = _lumen_offscreen_canvas_from_image_data(obj.w >>> 0, obj.h >>> 0, obj.p || '');
+      if (cid === 0) return null;
+      var oc = Object.create(OffscreenCanvas.prototype);
+      oc.__canvas_id__ = cid;
+      oc.width = obj.w >>> 0;
+      oc.height = obj.h >>> 0;
+      oc._2d_context = null;
+      return oc;
+    }}
+    if (Array.isArray(obj)) {{
+      return obj.map(_deserializeTransfers);
+    }}
+    var out = {{}};
+    for (var k in obj) {{
+      if (Object.prototype.hasOwnProperty.call(obj, k)) {{
+        out[k] = _deserializeTransfers(obj[k]);
+      }}
+    }}
+    return out;
+  }}
+
   // Called by the worker message loop for each incoming postMessage.
   globalThis._lumen_worker_dispatch_message = function(data) {{
-    var ev = {{ data: data, type: 'message', target: globalThis,
+    // Reconstruct any OffscreenCanvas objects serialized by the main thread.
+    var resolved = (typeof _lumen_offscreen_canvas_from_image_data !== 'undefined')
+      ? _deserializeTransfers(data)
+      : data;
+    var ev = {{ data: resolved, type: 'message', target: globalThis,
                 bubbles: false, cancelable: false }};
     if (_onmessage) {{ try {{ _onmessage(ev); }} catch(e) {{}} }}
     for (var i = 0; i < _msgListeners.length; i++) {{
@@ -349,6 +380,53 @@ const WORKER_SHIM: &str = r#"(function() {
   // Registry: worker id (u32) → Worker instance.
   var _workerRegistry = {};
 
+  // ── Structured transfer helpers (Phase 1: OffscreenCanvas only) ─────────────
+
+  // Sentinel marker embedded in JSON for transferred OffscreenCanvas objects.
+  var _OFFSCREEN_SENTINEL = '__lumen_offscreen_transfer__';
+
+  // Deep-walk `obj`, replacing any OffscreenCanvas found in `transferSet` with
+  // a JSON-serializable sentinel that includes pixel data.
+  function _serializeObj(obj, transferSet) {
+    if (!obj || typeof obj !== 'object') return obj;
+    if (typeof obj.__canvas_id__ === 'number' && transferSet[obj.__canvas_id__]) {
+      // Serialize the pixel buffer via the existing native transfer binding.
+      var raw = _lumen_offscreen_canvas_transfer_to_image_bitmap(obj.__canvas_id__);
+      if (!raw) return null;
+      var comma1 = raw.indexOf(',');
+      var comma2 = raw.indexOf(',', comma1 + 1);
+      var w = parseInt(raw.slice(0, comma1), 10);
+      var h = parseInt(raw.slice(comma1 + 1, comma2), 10);
+      var p = raw.slice(comma2 + 1);
+      return { __lumen_sentinel__: _OFFSCREEN_SENTINEL, w: w, h: h, p: p };
+    }
+    if (Array.isArray(obj)) {
+      var arr = [];
+      for (var i = 0; i < obj.length; i++) arr.push(_serializeObj(obj[i], transferSet));
+      return arr;
+    }
+    var out = {};
+    for (var k in obj) {
+      if (Object.prototype.hasOwnProperty.call(obj, k)) {
+        out[k] = _serializeObj(obj[k], transferSet);
+      }
+    }
+    return out;
+  }
+
+  // Serialize `data` to JSON, replacing transferred OffscreenCanvas objects
+  // with sentinels containing pixel data.
+  function _lumenSerializeWithTransfers(data, transfer) {
+    if (!transfer || !transfer.length) return JSON.stringify(data);
+    var transferSet = {};
+    for (var i = 0; i < transfer.length; i++) {
+      var t = transfer[i];
+      if (t && typeof t.__canvas_id__ === 'number') transferSet[t.__canvas_id__] = true;
+    }
+    if (!Object.keys(transferSet).length) return JSON.stringify(data);
+    return JSON.stringify(_serializeObj(data, transferSet));
+  }
+
   function Worker(url) {
     var script;
     var u = String(url || '');
@@ -392,8 +470,11 @@ const WORKER_SHIM: &str = r#"(function() {
   }
 
   // postMessage(data[, transfer]) — send structured data to the worker thread.
-  Worker.prototype.postMessage = function(data) {
-    _lumen_worker_post(this._id, JSON.stringify(data));
+  // When transfer contains OffscreenCanvas objects (identified by __canvas_id__),
+  // their pixel buffers are serialized into the payload so the worker can
+  // reconstruct them as OffscreenCanvas instances.
+  Worker.prototype.postMessage = function(data, transfer) {
+    _lumen_worker_post(this._id, _lumenSerializeWithTransfers(data, transfer));
   };
 
   // terminate() — immediately stop the worker; no more messages delivered.
@@ -439,6 +520,9 @@ const WORKER_SHIM: &str = r#"(function() {
   // Also expose on the window snapshot created by WEB_API_SHIM.
   if (typeof window !== 'undefined') window.Worker = Worker;
 
+  // Also expose the serialization helper for use in tests and advanced callers.
+  globalThis._lumenSerializeWithTransfers = _lumenSerializeWithTransfers;
+
   // Called by QuickJsRuntime::pump_workers() with an array of
   // { id: u32, json: String } objects representing messages from worker threads.
   globalThis._lumen_deliver_worker_messages = function(msgs) {
@@ -450,3 +534,77 @@ const WORKER_SHIM: &str = r#"(function() {
   };
 })();
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::offscreen_canvas::install_offscreen_canvas_bindings;
+    use rquickjs::{Context, Runtime};
+
+    fn make_ctx() -> (Runtime, Context) {
+        let rt = Runtime::new().unwrap();
+        let ctx = Context::full(&rt).unwrap();
+        (rt, ctx)
+    }
+
+    #[test]
+    fn worker_shim_installs_without_error() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            // install the native bindings workers need
+            install_offscreen_canvas_bindings(&ctx).unwrap();
+
+            let reg: WorkerRegistry = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+            let queue: WorkerMessageQueue = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let nid = std::sync::Arc::new(std::sync::Mutex::new(0u32));
+            install_worker_bindings(&ctx, &reg, &queue, &nid).unwrap();
+
+            let result: bool = ctx.eval("typeof Worker === 'function'").unwrap();
+            assert!(result, "Worker class should be defined");
+        });
+    }
+
+    #[test]
+    fn serialize_with_no_transfers_is_standard_json() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install_offscreen_canvas_bindings(&ctx).unwrap();
+            let reg: WorkerRegistry = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+            let queue: WorkerMessageQueue = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let nid = std::sync::Arc::new(std::sync::Mutex::new(0u32));
+            install_worker_bindings(&ctx, &reg, &queue, &nid).unwrap();
+
+            let result: String = ctx.eval(
+                r#"_lumenSerializeWithTransfers({x: 1, y: "hello"}, [])"#,
+            ).unwrap();
+            assert_eq!(result, r#"{"x":1,"y":"hello"}"#);
+        });
+    }
+
+    #[test]
+    fn serialize_with_offscreen_canvas_transfer_embeds_sentinel() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install_offscreen_canvas_bindings(&ctx).unwrap();
+            let reg: WorkerRegistry = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+            let queue: WorkerMessageQueue = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let nid = std::sync::Arc::new(std::sync::Mutex::new(0u32));
+            install_worker_bindings(&ctx, &reg, &queue, &nid).unwrap();
+
+            let result: String = ctx.eval(r#"
+                var oc = new OffscreenCanvas(2, 2);
+                var ctx2d = oc.getContext('2d');
+                ctx2d.fillStyle = '#ff0000';
+                ctx2d.fillRect(0, 0, 2, 2);
+                _lumenSerializeWithTransfers({canvas: oc}, [oc])
+            "#).unwrap();
+            // Result should be JSON containing the sentinel
+            let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+            let sentinel = &v["canvas"]["__lumen_sentinel__"];
+            assert_eq!(sentinel.as_str().unwrap(), "__lumen_offscreen_transfer__");
+            assert_eq!(v["canvas"]["w"].as_u64().unwrap(), 2);
+            assert_eq!(v["canvas"]["h"].as_u64().unwrap(), 2);
+            assert!(!v["canvas"]["p"].as_str().unwrap().is_empty(), "pixel data should be present");
+        });
+    }
+}
