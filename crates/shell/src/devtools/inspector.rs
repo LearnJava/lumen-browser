@@ -1,4 +1,5 @@
-//! DevTools DOM inspector panel (§7E.1) with Computed tab (§7E.2).
+//! DevTools DOM inspector panel (§7E.1) with Computed tab (§7E.2) and Styles
+//! panel (§PH3-1).
 //!
 //! Lets the user inspect the rendered page: while the inspector is active,
 //! moving the mouse highlights the box under the cursor with a Chrome-style
@@ -6,10 +7,13 @@
 //! and clicking a box "pins" it — showing its DOM label, [`NodeId`] and a
 //! computed-style map in a right-docked side panel.
 //!
-//! The panel has two tabs:
+//! The panel has four tabs:
 //! - **Elements** — box-model geometry + most-used CSS properties (§7E.1).
+//! - **Styles** — CSS rules that matched the selected element, with selectors
+//!   and raw declaration values as written in the stylesheet (§PH3-1).
 //! - **Computed** — full CSS computed-style map (~55 properties) from P4's
 //!   [`lumen_layout::computed_style_to_map`] (§7E.2).
+//! - **Network** — HTTP request log table (§7E.4, CC-9).
 //!
 //! Toggle with `Ctrl+Shift+I` (the standard DevTools inspector binding; `F12`
 //! is already taken by the JS console, see [`super::console_panel`]).
@@ -60,18 +64,27 @@ pub const TAB_ROW_H: f32 = 26.0;
 const LINE_H: f32 = 18.0;
 const FONT_SIZE: f32 = 12.0;
 const H_PAD: f32 = 10.0;
-/// Width of the "Elements" tab button.
-const TAB_ELEMENTS_W: f32 = 82.0;
+/// Width of each of the four inspector tab buttons.
+///
+/// All four are equal: 75 × 4 = 300 = [`PANEL_WIDTH`].
+const TAB_ELEMENTS_W: f32 = 75.0;
+/// Width of the "Styles" tab button (§PH3-1).
+const TAB_STYLES_W: f32 = 75.0;
 /// Width of the "Computed" tab button.
-const TAB_COMPUTED_W: f32 = 90.0;
+const TAB_COMPUTED_W: f32 = 75.0;
 /// Width of the "Network" tab button.
-const TAB_NETWORK_W: f32 = 80.0;
+const TAB_NETWORK_W: f32 = 75.0;
 /// Maximum number of property rows visible without scrolling.
 const MAX_VISIBLE_ROWS: usize = 22;
 /// Maximum number of request rows visible on the Network tab without scrolling.
 /// Larger than [`MAX_VISIBLE_ROWS`] because the Network tab has no per-element
 /// label / NodeId header, only a single column-title row.
 const NET_MAX_VISIBLE_ROWS: usize = 24;
+
+/// Selector header colour in the Styles tab (like Chrome DevTools).
+const FG_SELECTOR: Color = Color { r: 200, g: 130, b: 240, a: 255 };
+/// Separator line colour between rule blocks in the Styles tab.
+const STYLES_SEP: Color = Color { r: 48, g: 50, b: 58, a: 255 };
 
 // ── Network tab colours / columns ─────────────────────────────────────────────
 
@@ -106,6 +119,9 @@ pub enum InspectorTab {
     /// Elements tab — box-model geometry and most-used CSS properties.
     #[default]
     Elements,
+    /// Styles tab — CSS rules matched by the selected element, with selectors
+    /// and raw declaration values (§PH3-1).
+    Styles,
     /// Computed tab — full CSS computed-style map (~55 properties, §7E.2).
     Computed,
     /// Network tab — request log table: method / status / time / URL (§7E.4, CC-9).
@@ -121,10 +137,17 @@ pub struct SelectedNode {
     pub label: String,
     /// Elements-tab: box-model geometry + most-used CSS properties.
     pub props: Vec<(String, String)>,
+    /// Styles-tab: CSS rules matched by this element (§PH3-1).
+    ///
+    /// Each entry is `(selector_text, declarations)`. Rules are in source
+    /// order from the stylesheet.
+    pub styles_rules: Vec<(String, Vec<(String, String)>)>,
     /// Computed-tab: full CSS computed-style map sorted alphabetically (§7E.2).
     pub computed_props: Vec<(String, String)>,
     /// First property row to show in the Elements tab (scroll position, 0 = top).
     pub scroll_offset: usize,
+    /// First visual line to skip in the Styles tab (header + decl lines).
+    pub styles_scroll_offset: usize,
     /// First property row to show in the Computed tab.
     pub computed_scroll_offset: usize,
 }
@@ -185,20 +208,24 @@ impl DomInspectorPanel {
     /// Pin a node as the current selection.
     ///
     /// `props` — Elements-tab list (box-model geometry + most-used CSS properties).
+    /// `styles_rules` — Styles-tab list: `(selector, declarations)` pairs in source order.
     /// `computed_props` — Computed-tab list (full CSS map, sorted alphabetically).
     pub fn select(
         &mut self,
         node: NodeId,
         label: String,
         props: Vec<(String, String)>,
+        styles_rules: Vec<(String, Vec<(String, String)>)>,
         computed_props: Vec<(String, String)>,
     ) {
         self.selected = Some(SelectedNode {
             node,
             label,
             props,
+            styles_rules,
             computed_props,
             scroll_offset: 0,
+            styles_scroll_offset: 0,
             computed_scroll_offset: 0,
         });
     }
@@ -238,11 +265,15 @@ impl DomInspectorPanel {
             self.switch_tab(InspectorTab::Elements);
             return true;
         }
-        if local_x < TAB_ELEMENTS_W + TAB_COMPUTED_W {
+        if local_x < TAB_ELEMENTS_W + TAB_STYLES_W {
+            self.switch_tab(InspectorTab::Styles);
+            return true;
+        }
+        if local_x < TAB_ELEMENTS_W + TAB_STYLES_W + TAB_COMPUTED_W {
             self.switch_tab(InspectorTab::Computed);
             return true;
         }
-        if local_x < TAB_ELEMENTS_W + TAB_COMPUTED_W + TAB_NETWORK_W {
+        if local_x < TAB_ELEMENTS_W + TAB_STYLES_W + TAB_COMPUTED_W + TAB_NETWORK_W {
             self.switch_tab(InspectorTab::Network);
             return true;
         }
@@ -251,8 +282,8 @@ impl DomInspectorPanel {
 
     /// Scroll the active tab's list up.
     ///
-    /// For the Elements/Computed tabs "up" means towards the top of the property
-    /// list; for the Network tab it means towards older requests.
+    /// For the Elements/Styles/Computed tabs "up" means towards the top of the
+    /// property list; for the Network tab it means towards older requests.
     pub fn scroll_up(&mut self, n: usize) {
         if self.active_tab == InspectorTab::Network {
             let max = self.network_entries.len().saturating_sub(NET_MAX_VISIBLE_ROWS);
@@ -264,6 +295,9 @@ impl DomInspectorPanel {
             InspectorTab::Elements => {
                 sel.scroll_offset = sel.scroll_offset.saturating_sub(n);
             }
+            InspectorTab::Styles => {
+                sel.styles_scroll_offset = sel.styles_scroll_offset.saturating_sub(n);
+            }
             InspectorTab::Computed => {
                 sel.computed_scroll_offset = sel.computed_scroll_offset.saturating_sub(n);
             }
@@ -273,8 +307,8 @@ impl DomInspectorPanel {
 
     /// Scroll the active tab's list down, clamped so the last page stays visible.
     ///
-    /// For the Elements/Computed tabs "down" means towards the bottom of the
-    /// property list; for the Network tab it means towards newer requests.
+    /// For the Elements/Styles/Computed tabs "down" means towards the bottom of
+    /// the property list; for the Network tab it means towards newer requests.
     pub fn scroll_down(&mut self, n: usize) {
         if self.active_tab == InspectorTab::Network {
             self.network_scroll_offset = self.network_scroll_offset.saturating_sub(n);
@@ -285,6 +319,11 @@ impl DomInspectorPanel {
             InspectorTab::Elements => {
                 let max = sel.props.len().saturating_sub(MAX_VISIBLE_ROWS);
                 sel.scroll_offset = (sel.scroll_offset + n).min(max);
+            }
+            InspectorTab::Styles => {
+                let total_lines = styles_total_lines(&sel.styles_rules);
+                let max = total_lines.saturating_sub(MAX_VISIBLE_ROWS);
+                sel.styles_scroll_offset = (sel.styles_scroll_offset + n).min(max);
             }
             InspectorTab::Computed => {
                 let max = sel.computed_props.len().saturating_sub(MAX_VISIBLE_ROWS);
@@ -527,6 +566,19 @@ fn fmt_color(c: Color) -> String {
     }
 }
 
+// ── Styles-tab helpers ─────────────────────────────────────────────────────────
+
+/// Count the total visual lines in the Styles-tab flat view.
+///
+/// Each rule contributes 1 line for the selector + N lines for its declarations
+/// + 1 separator line (except after the last rule). Used for scroll clamping.
+fn styles_total_lines(rules: &[(String, Vec<(String, String)>)]) -> usize {
+    if rules.is_empty() {
+        return 0;
+    }
+    rules.iter().map(|(_, decls)| 1 + decls.len()).sum::<usize>() + rules.len() - 1
+}
+
 // ── Rendering: side panel ─────────────────────────────────────────────────────────
 
 /// Build the right-docked inspector side panel.
@@ -588,8 +640,16 @@ pub fn build_inspector_panel(
     );
     draw_tab(
         &mut out,
-        "Computed",
+        "Styles",
         panel_x + TAB_ELEMENTS_W,
+        tab_y,
+        TAB_STYLES_W,
+        panel.active_tab == InspectorTab::Styles,
+    );
+    draw_tab(
+        &mut out,
+        "Computed",
+        panel_x + TAB_ELEMENTS_W + TAB_STYLES_W,
         tab_y,
         TAB_COMPUTED_W,
         panel.active_tab == InspectorTab::Computed,
@@ -597,7 +657,7 @@ pub fn build_inspector_panel(
     draw_tab(
         &mut out,
         "Network",
-        panel_x + TAB_ELEMENTS_W + TAB_COMPUTED_W,
+        panel_x + TAB_ELEMENTS_W + TAB_STYLES_W + TAB_COMPUTED_W,
         tab_y,
         TAB_NETWORK_W,
         panel.active_tab == InspectorTab::Network,
@@ -645,12 +705,19 @@ pub fn build_inspector_panel(
     ));
     y += LINE_H + 4.0;
 
-    // Property rows for the active tab. The Network tab returns early above, so
-    // only the two per-element tabs reach here.
+    // Styles tab: render rule blocks (selector header + declarations).
+    if panel.active_tab == InspectorTab::Styles {
+        build_styles_tab(&mut out, sel, panel_x, y, top, win_h as f32);
+        return out;
+    }
+
+    // Property rows for Elements / Computed tabs.
     let (props, scroll_offset) = match panel.active_tab {
         InspectorTab::Elements => (&sel.props, sel.scroll_offset),
         InspectorTab::Computed => (&sel.computed_props, sel.computed_scroll_offset),
-        InspectorTab::Network => unreachable!("Network tab is rendered before this point"),
+        InspectorTab::Styles | InspectorTab::Network => {
+            unreachable!("Styles/Network tabs return early above")
+        }
     };
 
     let total = props.len();
@@ -688,6 +755,113 @@ pub fn build_inspector_panel(
     }
 
     out
+}
+
+// ── Rendering: Styles tab ──────────────────────────────────────────────────────
+
+/// Render the Styles-tab content into `out`.
+///
+/// Each rule is displayed as a selector header line (FG_SELECTOR) followed by
+/// property:value rows. Rules are separated by a 1 px hairline. Scrolling is
+/// controlled by `sel.styles_scroll_offset` — a flat line count from the top.
+fn build_styles_tab(
+    out: &mut DisplayList,
+    sel: &SelectedNode,
+    panel_x: f32,
+    content_top: f32,
+    header_top: f32,
+    win_h: f32,
+) {
+    if sel.styles_rules.is_empty() {
+        out.push(make_text(
+            "(no CSS rules matched)".into(),
+            panel_x + H_PAD,
+            content_top,
+            PANEL_WIDTH - H_PAD * 2.0,
+            FONT_SIZE,
+            FG_DIM,
+        ));
+        return;
+    }
+
+    // Build a flat list of visual lines for scrolling.
+    // Each entry: (is_selector, key_or_selector_text, value_or_empty)
+    let mut lines: Vec<(bool, &str, &str)> = Vec::new();
+    for (idx, (selector, decls)) in sel.styles_rules.iter().enumerate() {
+        if idx > 0 {
+            // Separator placeholder: we render a hairline, no text.
+            lines.push((false, "", ""));
+        }
+        lines.push((true, selector.as_str(), ""));
+        for (prop, val) in decls {
+            lines.push((false, prop.as_str(), val.as_str()));
+        }
+    }
+
+    let total = lines.len();
+    let scroll = sel.styles_scroll_offset.min(total);
+    let max_rows = ((win_h - content_top) / LINE_H).floor().max(1.0) as usize;
+    let visible = max_rows.min(MAX_VISIBLE_ROWS);
+    let end = (scroll + visible).min(total);
+
+    // Track whether we need a separator hairline before the current line.
+    // We walk the flat slice and figure out line type to reconstruct separators.
+    let mut y = content_top;
+    let mut sep_pending = false;
+    for (is_sel, key, val) in &lines[scroll..end] {
+        if key.is_empty() && !*is_sel {
+            // Separator line.
+            sep_pending = true;
+            continue;
+        }
+        if sep_pending {
+            out.push(DisplayCommand::FillRect {
+                rect: Rect::new(panel_x + H_PAD, y - 2.0, PANEL_WIDTH - H_PAD * 2.0, 1.0),
+                color: STYLES_SEP,
+            });
+            sep_pending = false;
+        }
+        if *is_sel {
+            out.push(make_text(
+                key.to_string(),
+                panel_x + H_PAD,
+                y,
+                PANEL_WIDTH - H_PAD * 2.0,
+                FONT_SIZE,
+                FG_SELECTOR,
+            ));
+        } else {
+            out.push(make_text(
+                format!("{key}:"),
+                panel_x + H_PAD + 8.0,
+                y,
+                PANEL_WIDTH * 0.42,
+                FONT_SIZE,
+                FG_KEY,
+            ));
+            out.push(make_text(
+                val.to_string(),
+                panel_x + H_PAD + 8.0 + PANEL_WIDTH * 0.43,
+                y,
+                PANEL_WIDTH * 0.5,
+                FONT_SIZE,
+                FG_VAL,
+            ));
+        }
+        y += LINE_H;
+    }
+
+    // Scroll indicator.
+    if total > visible {
+        out.push(make_text(
+            format!("{end}/{total}"),
+            panel_x + PANEL_WIDTH - 60.0,
+            header_top + (HEADER_H - FONT_SIZE) / 2.0,
+            54.0,
+            FONT_SIZE,
+            FG_DIM,
+        ));
+    }
 }
 
 // ── Rendering: Network tab ──────────────────────────────────────────────────────
@@ -1033,6 +1207,7 @@ mod tests {
             NodeId::from_index(7),
             "div".to_string(),
             vec![("display".into(), "block".into())],
+            vec![],
             vec![("color".into(), "rgb(0,0,0)".into())],
         );
         let sel = p.selected.as_ref().unwrap();
@@ -1064,8 +1239,11 @@ mod tests {
         p.switch_tab(InspectorTab::Computed);
         assert!(p.click_tab_at(panel_x + 10.0, tab_y, win_w, top));
         assert_eq!(p.active_tab, InspectorTab::Elements);
+        // Click "Styles" tab.
+        assert!(p.click_tab_at(panel_x + TAB_ELEMENTS_W + 5.0, tab_y, win_w, top));
+        assert_eq!(p.active_tab, InspectorTab::Styles);
         // Click "Computed" tab.
-        assert!(p.click_tab_at(panel_x + TAB_ELEMENTS_W + 10.0, tab_y, win_w, top));
+        assert!(p.click_tab_at(panel_x + TAB_ELEMENTS_W + TAB_STYLES_W + 5.0, tab_y, win_w, top));
         assert_eq!(p.active_tab, InspectorTab::Computed);
         // Click outside tab row → not consumed.
         assert!(!p.click_tab_at(panel_x + 10.0, top + 5.0, win_w, top));
@@ -1084,7 +1262,7 @@ mod tests {
         let mut p = DomInspectorPanel::new();
         let many: Vec<(String, String)> =
             (0..MAX_VISIBLE_ROWS + 5).map(|i| (format!("k{i}"), "v".into())).collect();
-        p.select(NodeId::from_index(1), "div".into(), many.clone(), many);
+        p.select(NodeId::from_index(1), "div".into(), many.clone(), vec![], many);
         // Elements tab scroll.
         p.scroll_down(3);
         assert_eq!(p.selected.as_ref().unwrap().scroll_offset, 3);
@@ -1101,7 +1279,7 @@ mod tests {
         let mut p = DomInspectorPanel::new();
         let props: Vec<(String, String)> =
             (0..MAX_VISIBLE_ROWS + 10).map(|i| (format!("k{i}"), "v".into())).collect();
-        p.select(NodeId::from_index(1), "div".into(), props.clone(), props);
+        p.select(NodeId::from_index(1), "div".into(), props.clone(), vec![], props);
         p.scroll_down(9999);
         assert_eq!(p.selected.as_ref().unwrap().scroll_offset, 10);
         p.scroll_up(9999);
@@ -1135,12 +1313,14 @@ mod tests {
         let mut p = DomInspectorPanel::new();
         p.toggle();
         let dl = build_inspector_panel(&p, (1280, 800), 36.0);
-        assert!(dl.iter().any(|c| matches!(
-            c, DisplayCommand::DrawText { text, .. } if text == "Elements"
-        )));
-        assert!(dl.iter().any(|c| matches!(
-            c, DisplayCommand::DrawText { text, .. } if text == "Computed"
-        )));
+        for label in ["Elements", "Styles", "Computed", "Network"] {
+            assert!(
+                dl.iter().any(|c| matches!(
+                    c, DisplayCommand::DrawText { text, .. } if text == label
+                )),
+                "tab button {label} must be drawn"
+            );
+        }
     }
 
     #[test]
@@ -1151,6 +1331,7 @@ mod tests {
             NodeId::from_index(42),
             "p#intro".to_string(),
             vec![("display".into(), "block".into())],
+            vec![],
             vec![("color".into(), "rgb(0,0,0)".into())],
         );
         let dl = build_inspector_panel(&p, (1280, 800), 36.0);
@@ -1173,6 +1354,7 @@ mod tests {
             NodeId::from_index(1),
             "div".into(),
             vec![("display".into(), "block".into())],
+            vec![],
             vec![("color".into(), "rgb(255,0,0)".into())],
         );
         p.switch_tab(InspectorTab::Computed);
@@ -1197,8 +1379,8 @@ mod tests {
     }
 
     #[test]
-    fn network_is_third_tab_variant() {
-        // The enum carries a third, page-wide tab distinct from the per-element ones.
+    fn network_is_fourth_tab_variant() {
+        // Network is the fourth tab (after Elements, Styles, Computed).
         let mut p = DomInspectorPanel::new();
         p.switch_tab(InspectorTab::Network);
         assert_eq!(p.active_tab, InspectorTab::Network);
@@ -1206,18 +1388,18 @@ mod tests {
     }
 
     #[test]
-    fn click_third_tab_selects_network() {
+    fn click_fourth_tab_selects_network() {
         let mut p = DomInspectorPanel::new();
         let win_w = 1280.0_f32;
         let top = 36.0_f32;
         let panel_x = win_w - PANEL_WIDTH;
         let tab_y = top + HEADER_H + TAB_ROW_H / 2.0;
-        // Click within the third (Network) tab slot.
-        let net_x = panel_x + TAB_ELEMENTS_W + TAB_COMPUTED_W + 5.0;
+        // Click within the fourth (Network) tab slot.
+        let net_x = panel_x + TAB_ELEMENTS_W + TAB_STYLES_W + TAB_COMPUTED_W + 5.0;
         assert!(p.click_tab_at(net_x, tab_y, win_w, top));
         assert_eq!(p.active_tab, InspectorTab::Network);
-        // A click past all three tab buttons is not consumed.
-        let beyond = panel_x + TAB_ELEMENTS_W + TAB_COMPUTED_W + TAB_NETWORK_W + 5.0;
+        // A click past all four tab buttons is not consumed.
+        let beyond = panel_x + TAB_ELEMENTS_W + TAB_STYLES_W + TAB_COMPUTED_W + TAB_NETWORK_W + 5.0;
         assert!(!p.click_tab_at(beyond, tab_y, win_w, top));
     }
 
@@ -1232,11 +1414,11 @@ mod tests {
     }
 
     #[test]
-    fn network_panel_shows_three_tab_buttons() {
+    fn network_panel_shows_four_tab_buttons() {
         let mut p = DomInspectorPanel::new();
         p.toggle();
         let dl = build_inspector_panel(&p, (1280, 800), 36.0);
-        for label in ["Elements", "Computed", "Network"] {
+        for label in ["Elements", "Styles", "Computed", "Network"] {
             assert!(
                 dl.iter().any(|c| matches!(
                     c, DisplayCommand::DrawText { text, .. } if text == label
@@ -1329,7 +1511,7 @@ mod tests {
         let mut p = DomInspectorPanel::new();
         let many: Vec<(String, String)> =
             (0..MAX_VISIBLE_ROWS + 5).map(|i| (format!("k{i}"), "v".into())).collect();
-        p.select(NodeId::from_index(1), "div".into(), many.clone(), many);
+        p.select(NodeId::from_index(1), "div".into(), many.clone(), vec![], many);
         p.switch_tab(InspectorTab::Network);
         let rows: Vec<(&str, &str, u16)> =
             (0..NET_MAX_VISIBLE_ROWS + 3).map(|_| ("GET", "https://a/x", 200)).collect();

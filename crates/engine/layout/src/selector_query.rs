@@ -895,6 +895,59 @@ pub fn computed_style_json_by_selector(
     find_box_by_selector(root, doc, sel).map(|b| computed_style_json(&b.style))
 }
 
+// ──────────────── Matched CSS rules for DevTools Styles panel ────────────────
+
+/// One CSS rule that matched a specific DOM node.
+///
+/// Used by the DevTools Styles panel (§PH3-1) to show the source CSS rules
+/// alongside their selectors and declarations, similar to Chrome DevTools.
+#[derive(Debug, Clone)]
+pub struct MatchedRule {
+    /// The matching CSS selector text, e.g. `"div.container > p"`.
+    pub selector: String,
+    /// CSS Selectors L3 specificity `(a, b, c)`.
+    pub specificity: (u32, u32, u32),
+    /// Property-value pairs from the rule's declarations, in source order.
+    /// Values are the raw CSS strings as written in the stylesheet.
+    pub declarations: Vec<(String, String)>,
+}
+
+/// Return all CSS rules from `sheet` whose selectors match `node` in `doc`.
+///
+/// Iterates `sheet.rules` in source order. Each rule is included at most once:
+/// the first selector in the rule that matches `node` is used as the display
+/// selector, and the whole rule's declaration list is included. Only toplevel
+/// rules are checked (media/layer/supports blocks are skipped in this pass —
+/// they contribute their matched-rule set separately if the condition holds).
+///
+/// Used by [`crate::shell::devtools::inspector`] to populate the Styles tab
+/// when the user clicks on a DOM element.
+pub fn matched_rules_for_node(
+    doc: &lumen_dom::Document,
+    node: lumen_dom::NodeId,
+    sheet: &lumen_css_parser::Stylesheet,
+) -> Vec<MatchedRule> {
+    let mut out = Vec::new();
+    for rule in &sheet.rules {
+        for selector in &rule.selectors {
+            if matches_complex(selector, doc, node) {
+                let spec = selector.specificity();
+                out.push(MatchedRule {
+                    selector: selector.to_css_str(),
+                    specificity: (spec.a, spec.b, spec.c),
+                    declarations: rule
+                        .declarations
+                        .iter()
+                        .map(|d| (d.property.clone(), d.value.clone()))
+                        .collect(),
+                });
+                break; // include each rule at most once
+            }
+        }
+    }
+    out
+}
+
 /// Appends `s` to `out` as a JSON string literal (with surrounding quotes),
 /// escaping `"`, `\`, and ASCII control characters per RFC 8259.
 fn json_escape_into(s: &str, out: &mut String) {
@@ -1136,5 +1189,111 @@ mod tests {
         );
         let json = computed_style_json_by_selector(&tree, &doc, "#x").expect("box found");
         assert!(json.contains(r#"\"Times New Roman\""#), "json: {json}");
+    }
+
+    // ──────────────── matched_rules_for_node ────────────────
+
+    fn parse_doc_sheet(html: &str, css: &str) -> (lumen_dom::Document, lumen_css_parser::Stylesheet) {
+        (lumen_html_parser::parse(html), lumen_css_parser::parse(css))
+    }
+
+    #[test]
+    fn matched_rules_empty_sheet_returns_empty() {
+        let (doc, sheet) = parse_doc_sheet(r#"<div id="box">text</div>"#, "");
+        let node = doc.find_by_id("box").expect("node exists");
+        let rules = matched_rules_for_node(&doc, node, &sheet);
+        assert!(rules.is_empty());
+    }
+
+    #[test]
+    fn matched_rules_tag_selector_matches() {
+        let (doc, sheet) = parse_doc_sheet(r#"<div id="x">text</div>"#, "div { color: red; }");
+        let node = doc.find_by_id("x").expect("node exists");
+        let rules = matched_rules_for_node(&doc, node, &sheet);
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].selector, "div");
+        assert_eq!(rules[0].specificity, (0, 0, 1));
+        assert!(rules[0].declarations.iter().any(|(p, v)| p == "color" && v == "red"));
+    }
+
+    #[test]
+    fn matched_rules_id_selector_matches() {
+        let (doc, sheet) = parse_doc_sheet(
+            r#"<div id="box">text</div>"#,
+            "#box { opacity: 0.5; display: flex; }",
+        );
+        let node = doc.find_by_id("box").expect("node exists");
+        let rules = matched_rules_for_node(&doc, node, &sheet);
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].selector, "#box");
+        assert_eq!(rules[0].specificity, (1, 0, 0));
+        assert!(rules[0].declarations.iter().any(|(p, v)| p == "opacity" && v == "0.5"));
+        assert!(rules[0].declarations.iter().any(|(p, v)| p == "display" && v == "flex"));
+    }
+
+    #[test]
+    fn matched_rules_class_selector_matches() {
+        let (doc, sheet) = parse_doc_sheet(
+            r#"<p id="intro-p" class="intro">text</p>"#,
+            ".intro { font-size: 18px; }",
+        );
+        let node = doc.find_by_id("intro-p").expect("node exists");
+        let rules = matched_rules_for_node(&doc, node, &sheet);
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].selector, ".intro");
+        assert_eq!(rules[0].specificity, (0, 1, 0));
+    }
+
+    #[test]
+    fn matched_rules_non_matching_selector_not_included() {
+        let (doc, sheet) = parse_doc_sheet(
+            r#"<div id="box">text</div>"#,
+            "#other { color: red; }",
+        );
+        let node = doc.find_by_id("box").expect("node exists");
+        let rules = matched_rules_for_node(&doc, node, &sheet);
+        assert!(rules.is_empty());
+    }
+
+    #[test]
+    fn matched_rules_multiple_matching_rules() {
+        let (doc, sheet) = parse_doc_sheet(
+            r#"<div id="box" class="card">text</div>"#,
+            "div { color: blue; } .card { margin: 10px; } #box { opacity: 1; }",
+        );
+        let node = doc.find_by_id("box").expect("node exists");
+        let rules = matched_rules_for_node(&doc, node, &sheet);
+        assert_eq!(rules.len(), 3);
+        let selectors: Vec<&str> = rules.iter().map(|r| r.selector.as_str()).collect();
+        assert!(selectors.contains(&"div"));
+        assert!(selectors.contains(&".card"));
+        assert!(selectors.contains(&"#box"));
+    }
+
+    #[test]
+    fn matched_rules_specificity_correct_for_tag_and_class() {
+        let (doc, sheet) = parse_doc_sheet(
+            r#"<div id="x" class="hero">text</div>"#,
+            "div.hero { display: block; }",
+        );
+        let node = doc.find_by_id("x").expect("node exists");
+        let rules = matched_rules_for_node(&doc, node, &sheet);
+        assert_eq!(rules.len(), 1);
+        // tag (0,0,1) + class (0,1,0) = (0,1,1)
+        assert_eq!(rules[0].specificity, (0, 1, 1));
+    }
+
+    #[test]
+    fn matched_rules_rule_included_once_per_matching_selector() {
+        // A rule with comma selectors — each matching selector yields one entry.
+        let (doc, sheet) = parse_doc_sheet(
+            r#"<div id="foo">text</div>"#,
+            "#foo, #bar { color: green; }",
+        );
+        let node = doc.find_by_id("foo").expect("node exists");
+        let rules = matched_rules_for_node(&doc, node, &sheet);
+        // Only "#foo" matches; the rule appears once with the matching selector.
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].selector, "#foo");
     }
 }

@@ -8856,7 +8856,18 @@ impl Lumen {
                         entries
                     })
                     .unwrap_or_default();
-                self.dom_inspector.select(node, label, props, computed_props);
+                let styles_rules: Vec<(String, Vec<(String, String)>)> = self
+                    .layout_source
+                    .as_ref()
+                    .map(|src| {
+                        let doc = src.document.lock().unwrap();
+                        lumen_layout::matched_rules_for_node(&doc, node, &src.stylesheet)
+                            .into_iter()
+                            .map(|r| (r.selector, r.declarations))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.dom_inspector.select(node, label, props, styles_rules, computed_props);
                 self.request_redraw();
             }
             return;
