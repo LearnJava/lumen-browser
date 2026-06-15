@@ -6,8 +6,7 @@
 
 ## In progress
 
-PH3-4: Offscreen Canvas Phase 1  branch: p1-ph3-4-offscreen-canvas
-Next step: done — transferControlToOffscreen() + postMessage transfer  crates/js/src/canvas2d.rs + dom.rs + worker.rs
+—
 
 ---
 
@@ -19,7 +18,7 @@ Next step: done — transferControlToOffscreen() + postMessage transfer  crates/
 |---|--------|--------|--------|
 | PH3-1 | ~~**DevTools Elements styled-rules panel**~~ ✅ завершена | M | `lumen-shell` (devtools/) |
 | PH3-3 | ~~**getUserMedia Phase 1**~~ ✅ завершена | L | `lumen-js`, `lumen-shell` |
-| PH3-4 | **Offscreen Canvas Phase 1** — `new OffscreenCanvas(w,h)` + `transferControlToOffscreen()` + `postMessage` transfer; CPU render path | M | `lumen-js`, `lumen-paint` |
+| PH3-4 | ~~**Offscreen Canvas Phase 1**~~ ✅ завершена | M | `lumen-js`, `lumen-paint` |
 | PH3-5 | **Web Workers Phase 1** — `new Worker(url)` → отдельный QuickJS-контекст в треде; `postMessage` / `onmessage` channel; `importScripts()` | L | `lumen-js`, `lumen-shell` |
 
 ---
@@ -28,6 +27,7 @@ Next step: done — transferControlToOffscreen() + postMessage transfer  crates/
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-15 | PH3-4: Offscreen Canvas Phase 1 | `create_offscreen_from_pixels()` + `transferControlToOffscreen()` + `postMessage(data,[transfer])` с сериализацией OffscreenCanvas через сентинели. 8 новых тестов. |
 | 2026-06-15 | PH3-3: getUserMedia Phase 1 | `AudioCaptureProvider` + `PlatformAudioCapture` (cpal/WASAPI/ALSA); `__lumen_start_audio_capture` + JS MediaStreamTrack. 247 тестов. |
 | 2026-06-15 | PH3-2: `lumen-bidi-server` standalone крейт | WebDriver BiDi сервер вынесен из `shell/src/bidi/` в отдельный крейт. `lumen_bidi_server::spawn` — единственный публичный API. 89 тестов. |
 | 2026-06-15 | PH3-1: DevTools Styles-таб | `ComplexSelector::to_css_str()`, `matched_rules_for_node()`, `InspectorTab::Styles` — CSS правила для выбранного узла в DevTools. 16 новых тестов. |
