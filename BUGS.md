@@ -179,6 +179,7 @@
 | [BUG-162](bugs/BUG-162-FIXED.md) | FIXED 2026-06-15 | encoding | детектор кодировки выдаёт ibm866 на чистом ASCII (example.com) вместо UTF-8 |
 | [BUG-163](bugs/BUG-163-OPEN.md) | OPEN | shell/layout | `<link rel=preload as=image>` хинты не дозагружаются и не рендерятся: на lenta.ru 94 preload-картинки игнорируются (в DOM нет `<img>` — контент строит JS) |
 | [BUG-164](bugs/BUG-164-FIXED.md) | FIXED 2026-06-15 | shell/js | внешние `<script src>` не скачиваются и не исполняются (collect_inline_scripts берёт только инлайны) → JS бандлы (lenta.ru owlBundle.js и т.д.) не работают, первопричина BUG-163 |
+| [BUG-165](bugs/BUG-165-FIXED.md) | FIXED 2026-06-15 | layout | flex `align-content` сдвигал строку, не двигая поддерево item-ов: вложенный контент оставался на месте → items вылезали из контейнеров (TEST-65: 16.40%) |
 
 ---
 

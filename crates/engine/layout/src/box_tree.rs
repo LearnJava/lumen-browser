@@ -7087,7 +7087,13 @@ fn lay_out_flex(
                 if !is_column && offset > 0.0 {
                     for &k in line_keys {
                         let i = item_idxs[k];
-                        children[i].rect.y += offset;
+                        // Shift the whole item subtree, not just its own box: the
+                        // item's descendants were already positioned in absolute
+                        // coordinates during the flex layout pass, so an
+                        // align-content offset must move them in lockstep. Bumping
+                        // only `rect.y` would leave the item's content (and any
+                        // nested flex lines) behind by `offset` — BUG-165.
+                        shift_y_box(&mut children[i], offset);
                     }
                 }
             }
@@ -11811,6 +11817,28 @@ mod tests {
         let c = find_by_id_all(&root, &doc, "c").expect("c");
         assert_eq!(a.rect.y, 0.0, "a.y (line1) {}", a.rect.y);
         assert_eq!(c.rect.y, 150.0, "c.y (line2 shifted) {}", c.rect.y);
+    }
+
+    #[test]
+    fn flex_align_content_shifts_item_subtree() {
+        // BUG-165: when align-content offsets a flex line, the item's descendants
+        // (already laid out in absolute coordinates) must move in lockstep with the
+        // item box. Previously only `item.rect.y` was bumped, leaving nested content
+        // behind — most visible when a wrapped flex container with the default
+        // (stretch) align-content held flex items that were themselves containers.
+        //
+        // Single-line flex-end: container 300×200, item #a 80×80 fits one row →
+        // free_cross = 120, flex-end offset = 120. #a's block child #inner sits at
+        // #a's content origin, so it must end at y=120, not be stranded at y=0.
+        let html = r#"<div id="flex"><div id="a"><div id="inner"></div></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-wrap:wrap;width:300px;height:200px;align-content:flex-end} #a{width:80px;height:80px} #inner{width:40px;height:40px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let inner = find_by_id_all(&root, &doc, "inner").expect("inner");
+        assert_eq!(a.rect.y, 120.0, "a.y flex-end {}", a.rect.y);
+        assert_eq!(inner.rect.y, 120.0, "inner.y must follow #a (subtree shift) {}", inner.rect.y);
     }
 
     #[test]
