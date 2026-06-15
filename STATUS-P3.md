@@ -117,6 +117,16 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
 
+- **BUG-163** (2026-06-15) — картинки на lenta.ru показывались серыми боксами. Все
+  116 `<img>` там `loading="lazy"`. Две причины: (1) `LazyImageSlot` всегда красил
+  серый placeholder даже после загрузки картинки (атрибут `loading=lazy` не
+  сбрасывается → при relayout снова `LazyImageSlot`) → теперь несёт
+  `object_fit`/`object_position`, бэкенды femtovg+wgpu рисуют по нему
+  зарегистрированную картинку с fallback на серый; (2) proximity-check был только в
+  `relayout()`, на initial paint не выполнялся → `apply_loaded_page` после
+  `register_lazy_images` сразу прогоняет proximity-check + redraw. Регресс-тест
+  `lazy_img_slot_carries_object_fit`. Подтверждено скриншотом vs Edge.
+
 - **BUG-165** (2026-06-15) — flex `align-content` (TEST-65: 16.40%) сдвигал строку,
   прибавляя `offset` только к `children[i].rect.y`, но не к поддереву item-а. Потомки
   flex-item-а уже разложены в абсолютных координатах, поэтому при сдвиге строки
