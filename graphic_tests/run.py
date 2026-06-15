@@ -198,7 +198,7 @@ TESTS: list[tuple[str, str, float, str]] = [
 # Добавлять ТОЛЬКО Phase 2+ фичи с OPEN BUG-NNN и diff-изображением,
 # подтверждающим что расхождение локализовано в области нереализованной фичи.
 KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
-    '57': ('BUG-099', 28.35),   # <canvas> getContext("2d") — Phase 2
+    '57': ('BUG-099', 4.14),    # <canvas> getContext("2d") — Phase 2
     '61': ('BUG-103', 99.53),   # View Transitions API — Phase 2
     '63': ('BUG-105', 48.44),   # CSS Masonry layout — Phase 2
     '75': ('BUG-143', 16.97),   # masonry-auto-flow — Phase 2
