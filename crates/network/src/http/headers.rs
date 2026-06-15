@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn test_lumen_profile_custom_ua() {
         let headers = build_request_headers("example.com", "", "", HttpProfile::Lumen);
-        assert!(headers.contains("User-Agent: Lumen/0.0.1"));
+        assert!(headers.contains(&format!("User-Agent: Lumen/{}", env!("CARGO_PKG_VERSION"))));
         assert!(headers.contains("Accept: */*"));
         assert!(headers.contains("Accept-Language: en-US,en;q=0.9"));
     }

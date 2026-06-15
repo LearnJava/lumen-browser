@@ -12,7 +12,13 @@ Update this file whenever you change architecture, invariants, or policies.
 
 **Lumen** — private, lightweight, transparent browser in Rust with a custom engine. Not a Chromium/WebKit wrapper; a standalone rendering engine with an embedded JS engine.
 
-Current phase: **Phase 0 (prototype)**. Goal: open local HTML+CSS and render it via own pipeline. Status: `samples/page.html` opens, backgrounds and text render via bundled Inter.
+Current phase: **Phase 2 — v0.5 «Interactive» (in progress)**, app version **v0.2.0**. Phase 0 (prototype) closed 2026-05-26; Phase 1 «Reader» largely complete. Phase 2 work active: QuickJS, Canvas 2D, CSS Grid, Shadow DOM, accessibility tree, forms, find-in-page, DevTools/CDP, knowledge layer.
+
+### Versioning & phase policy
+
+Single source of truth for the version is `[workspace.package] version` in `Cargo.toml`. All machine-readable version strings (User-Agent, Sec-CH-UA, CDP `Browser.getVersion`, window title, startup banner) derive from `CARGO_PKG_VERSION` — do **not** hardcode a version number in code. The one manual-bump site is the `navigator.userAgent` literal in `crates/js/src/dom.rs` (JS shim string).
+
+Version↔phase mapping (from `docs/plan/phases.md`): Phase 1 → v0.1, **Phase 2 → v0.5** (target on phase completion), Phase 3 → v1.0. Mid-phase the version climbs toward the target (currently **0.2.0** inside active Phase 2). When Phase 2 goals are met, bump to 0.5.0; reaching Phase 3 → 1.0.0. Keep the phase label in sync across `README.md`, `docs/plan/status.md`, `docs/plan/phases.md`, this file, and the shell startup banner.
 
 | File | Contents |
 |---|---|

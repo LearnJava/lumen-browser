@@ -343,7 +343,7 @@ fn run_window_mode(
     no_scrollbar: bool,
     deterministic: bool,
 ) -> ExitCode {
-    println!("Lumen v{} — Phase 0 prototype", env!("CARGO_PKG_VERSION"));
+    println!("Lumen v{} — Phase 2 (Interactive, in progress)", env!("CARGO_PKG_VERSION"));
 
     // Wire navigator.clipboard to the OS clipboard (task #26). Process-global,
     // installed once; the JS bindings _lumen_clipboard_read/_write forward here.
