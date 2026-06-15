@@ -5510,6 +5510,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             self.dark_mode = platform::dark_mode::theme_prefers_dark(window.theme());
         }
 
+        // PH2-7 Phase 1: pass the native HWND to the a11y bridge so it can fire
+        // Win32 WinEvent notifications (NotifyWinEvent) for focus and tree changes.
+        // Only attempted on Windows where WinUiaBridge is active; on other OSes
+        // init_hwnd() is a no-op (default PlatformBridge impl).
+        #[cfg(target_os = "windows")]
+        {
+            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            if let Ok(handle) = window.window_handle() {
+                if let RawWindowHandle::Win32(h) = handle.as_raw() {
+                    self.platform_bridge.init_hwnd(h.hwnd.get());
+                }
+            }
+        }
+
         self.window = Some(window);
         self.renderer = Some(renderer);
 

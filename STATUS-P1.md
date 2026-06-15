@@ -6,7 +6,10 @@
 
 ## In progress
 
-—
+**PH2-7: Accessibility tree + platform bridges (Phase 1 runtime)**  
+Branch: p1-ph2-7-a11y-bridges  
+Next step: WinUiaBridge — NotifyWinEvent для focus/structure; init_hwnd() + shell wiring  
+Files: `crates/engine/a11y/src/platform/windows.rs`, `crates/engine/a11y/src/platform/mod.rs`, `crates/shell/src/main.rs`
 
 ---
 

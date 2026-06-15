@@ -11,6 +11,15 @@ rust-version.workspace = true
 lumen-dom = { workspace = true }
 serde = { workspace = true }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+# Provisional: windows-sys — Win32 accessibility (NotifyWinEvent, EVENT_OBJECT_FOCUS).
+# Already a transitive dep via winit; no new Cargo.lock entries.
+# Graduation: permanent when UIA COM provider is implemented (Phase 2).
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_UI_Accessibility",
+] }
+
 [dev-dependencies]
 lumen-html-parser = { workspace = true }
 serde_json = "1"
