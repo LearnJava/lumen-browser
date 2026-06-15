@@ -131,14 +131,16 @@ pub fn mix_colors(
         MixColorSpace::Hsl => {
             let h1 = srgb_to_hsl(pre1);
             let h2 = srgb_to_hsl(pre2);
-            let mixed = mix_polar(h1, h2, p2);
+            // HSL stores the hue at component 0.
+            let mixed = mix_polar(h1, h2, p2, 0);
             hsl_to_srgb(mixed)
         }
 
         MixColorSpace::Hwb => {
             let h1 = srgb_to_hwb(pre1);
             let h2 = srgb_to_hwb(pre2);
-            let mixed = mix_polar(h1, h2, p2);
+            // HWB stores the hue at component 0.
+            let mixed = mix_polar(h1, h2, p2, 0);
             hwb_to_srgb(mixed)
         }
 
@@ -152,7 +154,8 @@ pub fn mix_colors(
         MixColorSpace::Lch => {
             let l1 = srgb_to_lch(pre1);
             let l2 = srgb_to_lch(pre2);
-            let mixed = mix_polar(l1, l2, p2);
+            // LCH stores the hue at component 2 ([L, C, h, a]).
+            let mixed = mix_polar(l1, l2, p2, 2);
             lch_to_srgb(mixed)
         }
 
@@ -166,7 +169,8 @@ pub fn mix_colors(
         MixColorSpace::Oklch => {
             let l1 = srgb_to_oklch(pre1);
             let l2 = srgb_to_oklch(pre2);
-            let mixed = mix_polar(l1, l2, p2);
+            // Oklch stores the hue at component 2 ([L, C, h, a]).
+            let mixed = mix_polar(l1, l2, p2, 2);
             oklch_to_srgb(mixed)
         }
 
@@ -192,22 +196,23 @@ pub fn mix_colors(
 
 // ─── Hue interpolation (shortest path per CSS Color L5 §12.4) ────────────────
 
-/// For polar spaces: interpolate [L_or_H_idx=0, x, y, a] where component 0
-/// is the hue (in degrees). Uses "shorter" hue interpolation method (CSS default).
-fn mix_polar(from: [f32; 4], to: [f32; 4], t: f32) -> [f32; 4] {
-    let h1 = from[0];
-    let h2 = to[0];
+/// For polar spaces: interpolate a 4-component color where `hue_idx` selects
+/// which component holds the hue (in degrees). The hue uses the "shorter" arc
+/// interpolation method (CSS default, §12.4); all other components — including
+/// alpha — are interpolated linearly.
+///
+/// `hue_idx` differs by space: HSL/HWB store the hue at component 0
+/// (`[h, …]`), whereas LCH/Oklch store it at component 2 (`[L, C, h, a]`).
+/// Passing the wrong index makes the hue interpolate linearly while a
+/// non-hue component is wrapped on the circle — see BUG-154.
+fn mix_polar(from: [f32; 4], to: [f32; 4], t: f32, hue_idx: usize) -> [f32; 4] {
+    let mut out = lerp4(from, to, t);
 
-    // Shortest arc on the hue circle.
-    let delta = normalize_hue(h2 - h1);
-    let hue = h1 + t * delta;
+    // Shortest arc on the hue circle for the hue component only.
+    let delta = normalize_hue(to[hue_idx] - from[hue_idx]);
+    out[hue_idx] = from[hue_idx] + t * delta;
 
-    [
-        hue,
-        lerp(from[1], to[1], t),
-        lerp(from[2], to[2], t),
-        lerp(from[3], to[3], t),
-    ]
+    out
 }
 
 /// Normalize hue delta to [-180, 180] for shortest-arc interpolation.
@@ -757,6 +762,41 @@ mod tests {
         // Oklch mix goes through the hue arc; result should be a visible color.
         assert!(result[0] >= 0.0 && result[0] <= 1.0);
         assert!(result[3] >= 0.99);
+    }
+
+    // BUG-154 regression: srgb_to_oklch/srgb_to_lch store the hue at component 2
+    // ([L, C, h, a]), so mix_polar must read the hue from index 2 — not index 0.
+    // Red→blue 50/50 in a polar space takes the shorter hue arc (~329° → ~25°,
+    // i.e. through magenta), so the result is magenta-ish: red and blue channels
+    // dominate, green stays low. The pre-fix bug interpolated hue linearly
+    // through green and produced rgb(0,146,0) instead.
+    #[test]
+    fn mix_red_blue_oklch_goes_through_magenta_not_green() {
+        let red = [1.0_f32, 0.0, 0.0, 1.0];
+        let blue = [0.0_f32, 0.0, 1.0, 1.0];
+        let result = mix_colors(MixColorSpace::Oklch, red, 0.5, blue, 0.5);
+        // Magenta arc: red and blue present, green suppressed.
+        assert!(result[0] > 0.4, "r should be high (magenta arc): {}", result[0]);
+        assert!(result[2] > 0.4, "b should be high (magenta arc): {}", result[2]);
+        assert!(
+            result[1] < result[0] && result[1] < result[2],
+            "g must stay below r and b (not the green arc): {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn mix_red_blue_lch_goes_through_magenta_not_green() {
+        let red = [1.0_f32, 0.0, 0.0, 1.0];
+        let blue = [0.0_f32, 0.0, 1.0, 1.0];
+        let result = mix_colors(MixColorSpace::Lch, red, 0.5, blue, 0.5);
+        assert!(result[0] > 0.4, "r should be high (magenta arc): {}", result[0]);
+        assert!(result[2] > 0.4, "b should be high (magenta arc): {}", result[2]);
+        assert!(
+            result[1] < result[0] && result[1] < result[2],
+            "g must stay below r and b (not the green arc): {:?}",
+            result
+        );
     }
 
     #[test]
