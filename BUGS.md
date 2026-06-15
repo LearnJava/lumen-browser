@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-163)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-164)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -177,6 +177,7 @@
 | [BUG-160](bugs/BUG-160-FIXED.md) | FIXED 2026-06-15 | font | WOFF2-шрифты не декодируются («unexpected end of font data»), спасает только woff-fallback — затрагивает большинство сайтов |
 | [BUG-161](bugs/BUG-161-FIXED.md) | FIXED 2026-06-15 | network | HTTP/2 HPACK «dynamic table size update exceeds negotiated max» → ya.ru не грузится |
 | [BUG-162](bugs/BUG-162-FIXED.md) | FIXED 2026-06-15 | encoding | детектор кодировки выдаёт ibm866 на чистом ASCII (example.com) вместо UTF-8 |
+| [BUG-163](bugs/BUG-163-OPEN.md) | OPEN | shell/layout | `<link rel=preload as=image>` хинты не дозагружаются и не рендерятся: на lenta.ru 94 preload-картинки игнорируются (в DOM нет `<img>` — контент строит JS) |
 
 ---
 
