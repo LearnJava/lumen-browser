@@ -6,8 +6,7 @@
 
 ## In progress
 
-PH3-6: `<dialog>` focus management + `<form method="dialog">`  branch: p1-ph3-6-dialog-focus
-Next step: add `_lumen_set_focused_node` binding in dom.rs, then `showModal()` autofocus + `close()` focus-restore + `method="dialog"` in shell
+—
 
 ---
 
@@ -28,6 +27,7 @@ Next step: add `_lumen_set_focused_node` binding in dom.rs, then `showModal()` a
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-16 | PH3-6: `<dialog>` focus management + `<form method="dialog">` | `showModal()` фокусирует [autofocus]-потомок или сам диалог; `close()` восстанавливает предыдущий фокус; `<form method="dialog">` закрывает родительский `<dialog>`. `find_ancestor_dialog()` в lumen-dom. 8 новых тестов. |
 | 2026-06-15 | PH3-5: Web Workers Phase 1 | `importScripts()` для data: и blob:lumen/ URL; `WorkerBlobStore` (Arc-shared); `atob`/`btoa` в worker globals; WORKER_SHIM оборачивает createObjectURL для auto-регистрации blob'ов. 20 новых тестов, итого 47 worker-тестов. |
 | 2026-06-15 | PH3-4: Offscreen Canvas Phase 1 | `create_offscreen_from_pixels()` + `transferControlToOffscreen()` + `postMessage(data,[transfer])` с сериализацией OffscreenCanvas через сентинели. 8 новых тестов. |
 | 2026-06-15 | PH3-3: getUserMedia Phase 1 | `AudioCaptureProvider` + `PlatformAudioCapture` (cpal/WASAPI/ALSA); `__lumen_start_audio_capture` + JS MediaStreamTrack. 247 тестов. |
