@@ -2121,6 +2121,136 @@ fn install_primitives(
             }
         );
     }
+    // ── contenteditable mutation bindings (Input Events Level 2 §4.1) ─────────
+    // These are called by the JS shim's _lumen_handle_contenteditable_key()
+    // which fires beforeinput → calls here → fires input.
+    {
+        // True if nid or any ancestor has contenteditable set to a truthy value.
+        let d = Arc::clone(&doc);
+        reg!("_lumen_is_contenteditable", move |nid: u32| -> bool {
+            let doc = d.lock().unwrap();
+            lumen_dom::find_editing_host(&doc, NodeId::from_index(nid as usize)).is_some()
+        });
+    }
+    {
+        // Insert `text` at the current selection (or caret) inside contenteditable.
+        // Replaces selected content if the selection is non-collapsed.
+        // Returns true on success.
+        let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
+        reg!("_lumen_contenteditable_insert_text", move |text: String| -> bool {
+            if text.is_empty() { return false; }
+            let mut doc = d.lock().unwrap();
+            let sel = doc.get_selection().clone();
+            let Some(anchor) = sel.anchor else { return false; };
+            let insert_pos = if let Some(r) = sel.get_range().filter(|r| !r.is_collapsed()) {
+                lumen_dom::delete_range(&mut doc, &r)
+            } else {
+                anchor
+            };
+            let new_pos = lumen_dom::insert_text_at(&mut doc, insert_pos, &text);
+            doc.set_selection(Selection { anchor: Some(new_pos), focus: Some(new_pos) });
+            dirty.store(true, Ordering::Relaxed);
+            true
+        });
+    }
+    {
+        // Delete one grapheme cluster before the caret (Backspace key).
+        // If the selection is non-collapsed, deletes the selection instead.
+        let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
+        reg!("_lumen_contenteditable_delete_backward", move || -> bool {
+            let mut doc = d.lock().unwrap();
+            let sel = doc.get_selection().clone();
+            // Non-collapsed selection: delete it.
+            if let Some(r) = sel.get_range().filter(|r| !r.is_collapsed()) {
+                let pos = lumen_dom::delete_range(&mut doc, &r);
+                doc.set_selection(Selection { anchor: Some(pos), focus: Some(pos) });
+                dirty.store(true, Ordering::Relaxed);
+                return true;
+            }
+            let Some(anchor) = sel.anchor else { return false; };
+            if anchor.offset == 0 { return false; }
+            let text = match &doc.get(anchor.container).data {
+                NodeData::Text(s) => s.clone(),
+                _ => return false,
+            };
+            // Walk backward one UTF-8 character boundary.
+            let off = anchor.offset as usize;
+            let mut prev = off.saturating_sub(1);
+            while prev > 0 && !text.is_char_boundary(prev) {
+                prev -= 1;
+            }
+            let r = DomRange {
+                start: DomPosition { container: anchor.container, offset: prev as u32 },
+                end: anchor,
+            };
+            let pos = lumen_dom::delete_range(&mut doc, &r);
+            doc.set_selection(Selection { anchor: Some(pos), focus: Some(pos) });
+            dirty.store(true, Ordering::Relaxed);
+            true
+        });
+    }
+    {
+        // Delete one grapheme cluster after the caret (Delete key).
+        // If the selection is non-collapsed, deletes the selection instead.
+        let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
+        reg!("_lumen_contenteditable_delete_forward", move || -> bool {
+            let mut doc = d.lock().unwrap();
+            let sel = doc.get_selection().clone();
+            if let Some(r) = sel.get_range().filter(|r| !r.is_collapsed()) {
+                let pos = lumen_dom::delete_range(&mut doc, &r);
+                doc.set_selection(Selection { anchor: Some(pos), focus: Some(pos) });
+                dirty.store(true, Ordering::Relaxed);
+                return true;
+            }
+            let Some(anchor) = sel.anchor else { return false; };
+            let text = match &doc.get(anchor.container).data {
+                NodeData::Text(s) => s.clone(),
+                _ => return false,
+            };
+            let off = anchor.offset as usize;
+            if off >= text.len() { return false; }
+            // Walk forward one UTF-8 character boundary.
+            let mut next = off + 1;
+            while next < text.len() && !text.is_char_boundary(next) {
+                next += 1;
+            }
+            let r = DomRange {
+                start: anchor,
+                end: DomPosition { container: anchor.container, offset: next as u32 },
+            };
+            let pos = lumen_dom::delete_range(&mut doc, &r);
+            doc.set_selection(Selection { anchor: Some(pos), focus: Some(pos) });
+            dirty.store(true, Ordering::Relaxed);
+            true
+        });
+    }
+    {
+        // Split the block at the caret position (Enter key in contenteditable).
+        // Finds the editing host, then calls insert_paragraph_break.
+        let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
+        reg!("_lumen_contenteditable_insert_paragraph", move || -> bool {
+            let mut doc = d.lock().unwrap();
+            let sel = doc.get_selection().clone();
+            let pos = if let Some(r) = sel.get_range().filter(|r| !r.is_collapsed()) {
+                lumen_dom::delete_range(&mut doc, &r)
+            } else if let Some(p) = sel.anchor {
+                p
+            } else {
+                return false;
+            };
+            let Some(host) = lumen_dom::find_editing_host(&doc, pos.container) else {
+                return false;
+            };
+            let new_pos = lumen_dom::insert_paragraph_break(&mut doc, pos, host);
+            doc.set_selection(Selection { anchor: Some(new_pos), focus: Some(new_pos) });
+            dirty.store(true, Ordering::Relaxed);
+            true
+        });
+    }
     {
         // execCommand: bold/italic/underline/insertText/delete/selectAll/copy/cut/paste
         // Returns true if the command was handled.
@@ -4416,6 +4546,27 @@ function _lumen_make_element(nid) {
             }
         },
     };
+    // ── contentEditable / isContentEditable (HTML LS §6.9.3) ────────────────
+    Object.defineProperty(_obj, 'contentEditable', {
+        get: function() {
+            var v = _lumen_u2n(_lumen_get_attr(nid, 'contenteditable'));
+            if (v === null) return 'inherit';
+            if (v === '' || v.toLowerCase() === 'true') return 'true';
+            if (v.toLowerCase() === 'false') return 'false';
+            return 'inherit';
+        },
+        set: function(v) {
+            var s = String(v).toLowerCase();
+            if (s === 'true') _lumen_set_attr(nid, 'contenteditable', 'true');
+            else if (s === 'false') _lumen_set_attr(nid, 'contenteditable', 'false');
+            else _lumen_remove_attr(nid, 'contenteditable');
+        },
+        enumerable: true, configurable: true,
+    });
+    Object.defineProperty(_obj, 'isContentEditable', {
+        get: function() { return _lumen_is_contenteditable(nid); },
+        enumerable: true, configurable: true,
+    });
     Object.defineProperty(_obj, 'shadowRoot', {
         get: function() {
             var sr_nid = _lumen_u2n(_lumen_get_shadow_root(nid));
@@ -4815,6 +4966,56 @@ var _lumen_selection = (function() {
         toString: function() { return _lumen_get_selection_text(); },
     };
 }());
+
+// ── contenteditable key dispatch (Input Events Level 2 §4.1) ─────────────────
+// Called by the shell when a key is pressed while a contenteditable element has
+// focus. Fires beforeinput → DOM mutation → input following the spec sequence.
+//
+// `inputType`  — Input Events Level 2 inputType string (e.g. insertText)
+// `data`       — inserted text for insertText; null/undefined for deletions
+// `targetNid`  — nid of the contenteditable host element
+//
+// Returns true if the event was not cancelled and the mutation was applied.
+function _lumen_handle_contenteditable_key(inputType, data, targetNid) {
+    var target = (targetNid !== undefined && targetNid !== null)
+        ? _lumen_make_element(targetNid)
+        : null;
+    if (!target) return false;
+
+    // Fire beforeinput (cancelable).
+    var before = new InputEvent('beforeinput', {
+        bubbles: true, cancelable: true,
+        inputType: inputType,
+        data: (data !== undefined && data !== null) ? String(data) : null,
+    });
+    var notCancelled = target.dispatchEvent(before);
+    if (!notCancelled) return false;
+
+    // Apply the DOM mutation.
+    var applied = false;
+    if (inputType === 'insertText') {
+        applied = _lumen_contenteditable_insert_text(String(data || ''));
+    } else if (inputType === 'deleteContentBackward' || inputType === 'deleteWordBackward') {
+        applied = _lumen_contenteditable_delete_backward();
+    } else if (inputType === 'deleteContentForward' || inputType === 'deleteWordForward') {
+        applied = _lumen_contenteditable_delete_forward();
+    } else if (inputType === 'insertParagraph') {
+        applied = _lumen_contenteditable_insert_paragraph();
+    } else if (inputType === 'insertLineBreak') {
+        applied = _lumen_contenteditable_insert_text('\\n');
+    }
+
+    if (!applied) return false;
+
+    // Fire input (not cancelable).
+    var inp = new InputEvent('input', {
+        bubbles: true, cancelable: false,
+        inputType: inputType,
+        data: (data !== undefined && data !== null) ? String(data) : null,
+    });
+    target.dispatchEvent(inp);
+    return true;
+}
 
 // ── Fullscreen API (WHATWG Fullscreen §4) ────────────────────────────────────
 // Current fullscreen element NID (-1 = none).
@@ -17653,6 +17854,220 @@ mod tests {
             _ => panic!("not text"),
         };
         assert_eq!(content, "World");
+    }
+
+    // ── contentEditable / isContentEditable / contenteditable dispatch tests ────
+
+    fn make_contenteditable_doc() -> (Arc<Mutex<Document>>, NodeId, NodeId) {
+        let mut doc = Document::new();
+        let html = doc.create_element(QualName::html("html"));
+        let body = doc.create_element(QualName::html("body"));
+        let div = doc.create_element(QualName::html("div"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(div).data {
+            attrs.push(Attribute {
+                name: QualName::html("contenteditable"),
+                value: String::new(),
+            });
+        }
+        let text = doc.create_text("Hello");
+        doc.append_child(doc.root(), html);
+        doc.append_child(html, body);
+        doc.append_child(body, div);
+        doc.append_child(div, text);
+        let arc = Arc::new(Mutex::new(doc));
+        (arc, div, text)
+    }
+
+    #[test]
+    fn contenteditable_property_true() {
+        let (arc, div, _) = make_contenteditable_doc();
+        let div_idx = div.index();
+        let rt = runtime_with_dom(arc);
+        assert!(bool_eval(
+            &rt,
+            &format!("_lumen_make_element({}).contentEditable === 'true'", div_idx)
+        ));
+    }
+
+    #[test]
+    fn contenteditable_is_content_editable_self() {
+        let (arc, div, _) = make_contenteditable_doc();
+        let div_idx = div.index();
+        let rt = runtime_with_dom(arc);
+        assert!(bool_eval(
+            &rt,
+            &format!("_lumen_make_element({}).isContentEditable === true", div_idx)
+        ));
+    }
+
+    #[test]
+    fn contenteditable_is_content_editable_ancestor() {
+        let (arc, _, text) = make_contenteditable_doc();
+        let text_idx = text.index();
+        let rt = runtime_with_dom(arc);
+        // text node itself: _lumen_is_contenteditable checks ancestors
+        assert!(bool_eval(
+            &rt,
+            &format!("_lumen_is_contenteditable({})", text_idx)
+        ));
+    }
+
+    #[test]
+    fn contenteditable_non_editable_false() {
+        let rt = runtime_with_dom(make_doc());
+        // body has no contenteditable
+        let body_idx: u32 = if let lumen_core::JsValue::Number(n) =
+            rt.eval("_lumen_u2n(_lumen_get_body())").unwrap()
+        {
+            n as u32
+        } else {
+            0
+        };
+        assert!(bool_eval(
+            &rt,
+            &format!("_lumen_make_element({}).isContentEditable === false", body_idx)
+        ));
+    }
+
+    #[test]
+    fn contenteditable_set_property() {
+        let rt = runtime_with_dom(make_doc());
+        // Create a div and set contentEditable
+        rt.eval("var _ce_div = document.createElement('div'); document.body.appendChild(_ce_div); _ce_div.contentEditable = 'true';").unwrap();
+        assert!(bool_eval(&rt, "_ce_div.isContentEditable === true"));
+    }
+
+    #[test]
+    fn contenteditable_insert_text_at_caret() {
+        let (arc, div, text) = make_contenteditable_doc();
+        let text_idx = text.index();
+        let div_idx = div.index();
+        {
+            let mut doc = arc.lock().unwrap();
+            doc.set_selection(lumen_dom::Selection {
+                anchor: Some(lumen_dom::DomPosition { container: text, offset: 5 }),
+                focus:  Some(lumen_dom::DomPosition { container: text, offset: 5 }),
+            });
+        }
+        let rt = runtime_with_dom(arc.clone());
+        let result = rt.eval(&format!(
+            "_lumen_handle_contenteditable_key('insertText',' World',{})",
+            div_idx
+        )).unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+        let doc = arc.lock().unwrap();
+        let content = match &doc.get(NodeId::from_index(text_idx)).data {
+            NodeData::Text(s) => s.clone(),
+            _ => panic!("not a text node"),
+        };
+        assert_eq!(content, "Hello World");
+    }
+
+    #[test]
+    fn contenteditable_delete_backward_one_char() {
+        let (arc, div, text) = make_contenteditable_doc();
+        let text_idx = text.index();
+        let div_idx = div.index();
+        {
+            let mut doc = arc.lock().unwrap();
+            doc.set_selection(lumen_dom::Selection {
+                anchor: Some(lumen_dom::DomPosition { container: text, offset: 5 }),
+                focus:  Some(lumen_dom::DomPosition { container: text, offset: 5 }),
+            });
+        }
+        let rt = runtime_with_dom(arc.clone());
+        rt.eval(&format!(
+            "_lumen_handle_contenteditable_key('deleteContentBackward',null,{})",
+            div_idx
+        )).unwrap();
+        let doc = arc.lock().unwrap();
+        let content = match &doc.get(NodeId::from_index(text_idx)).data {
+            NodeData::Text(s) => s.clone(),
+            _ => panic!("not a text node"),
+        };
+        assert_eq!(content, "Hell");
+    }
+
+    #[test]
+    fn contenteditable_delete_forward_one_char() {
+        let (arc, div, text) = make_contenteditable_doc();
+        let text_idx = text.index();
+        let div_idx = div.index();
+        {
+            let mut doc = arc.lock().unwrap();
+            doc.set_selection(lumen_dom::Selection {
+                anchor: Some(lumen_dom::DomPosition { container: text, offset: 0 }),
+                focus:  Some(lumen_dom::DomPosition { container: text, offset: 0 }),
+            });
+        }
+        let rt = runtime_with_dom(arc.clone());
+        rt.eval(&format!(
+            "_lumen_handle_contenteditable_key('deleteContentForward',null,{})",
+            div_idx
+        )).unwrap();
+        let doc = arc.lock().unwrap();
+        let content = match &doc.get(NodeId::from_index(text_idx)).data {
+            NodeData::Text(s) => s.clone(),
+            _ => panic!("not a text node"),
+        };
+        assert_eq!(content, "ello");
+    }
+
+    #[test]
+    fn contenteditable_beforeinput_cancellable() {
+        let (arc, div, text) = make_contenteditable_doc();
+        let text_idx = text.index();
+        let div_idx = div.index();
+        {
+            let mut doc = arc.lock().unwrap();
+            doc.set_selection(lumen_dom::Selection {
+                anchor: Some(lumen_dom::DomPosition { container: text, offset: 5 }),
+                focus:  Some(lumen_dom::DomPosition { container: text, offset: 5 }),
+            });
+        }
+        let rt = runtime_with_dom(arc.clone());
+        // Attach a beforeinput handler that cancels the event
+        rt.eval(&format!(
+            "_lumen_make_element({}).addEventListener('beforeinput', function(e) {{ e.preventDefault(); }});",
+            div_idx
+        )).unwrap();
+        let result = rt.eval(&format!(
+            "_lumen_handle_contenteditable_key('insertText','X',{})",
+            div_idx
+        )).unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(false), "cancelled beforeinput must return false");
+        // Text must not be mutated
+        let doc = arc.lock().unwrap();
+        let content = match &doc.get(NodeId::from_index(text_idx)).data {
+            NodeData::Text(s) => s.clone(),
+            _ => panic!("not a text node"),
+        };
+        assert_eq!(content, "Hello", "DOM must not change when beforeinput is cancelled");
+    }
+
+    #[test]
+    fn contenteditable_input_event_fires() {
+        let (arc, div, _) = make_contenteditable_doc();
+        let div_idx = div.index();
+        {
+            let mut doc = arc.lock().unwrap();
+            let text_nid = doc.get(div).children[0];
+            doc.set_selection(lumen_dom::Selection {
+                anchor: Some(lumen_dom::DomPosition { container: text_nid, offset: 5 }),
+                focus:  Some(lumen_dom::DomPosition { container: text_nid, offset: 5 }),
+            });
+        }
+        let rt = runtime_with_dom(arc.clone());
+        rt.eval("var _ce_fired = false;").unwrap();
+        rt.eval(&format!(
+            "_lumen_make_element({}).addEventListener('input', function() {{ _ce_fired = true; }});",
+            div_idx
+        )).unwrap();
+        rt.eval(&format!(
+            "_lumen_handle_contenteditable_key('insertText','Z',{})",
+            div_idx
+        )).unwrap();
+        assert!(bool_eval(&rt, "_ce_fired"), "input event must fire after mutation");
     }
 
     // ── window.getComputedStyle() tests ─────────────────────────────────────────

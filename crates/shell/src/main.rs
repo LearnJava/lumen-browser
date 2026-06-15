@@ -9884,6 +9884,76 @@ impl Lumen {
             return;
         }
 
+        // contenteditable key routing — before global keybindings so that
+        // typing inside an editable region is not swallowed by scroll commands.
+        // Only active when the focused node is inside a contenteditable host
+        // and no modifier (Ctrl/Alt/Meta) is held (those go to keybindings).
+        if (self.modifiers.is_empty() || self.modifiers == ModifiersState::SHIFT)
+            && let (Some(nid), Some(src)) = (self.focused_node, self.layout_source.as_ref())
+        {
+            #[cfg(feature = "quickjs")]
+            if let Some(js) = &self.js_ctx {
+                // Check contenteditable by reading the DOM directly (eval_js returns ()).
+                let editing_host = src
+                    .document
+                    .lock()
+                    .ok()
+                    .and_then(|doc| lumen_dom::find_editing_host(&doc, nid));
+                if let Some(host) = editing_host {
+                    let host_nid = host.index();
+                    let handled = match code {
+                        KeyCode::Backspace => {
+                            js.eval_js(&format!(
+                                "_lumen_handle_contenteditable_key('deleteContentBackward',null,{})",
+                                host_nid
+                            ));
+                            true
+                        }
+                        KeyCode::Delete => {
+                            js.eval_js(&format!(
+                                "_lumen_handle_contenteditable_key('deleteContentForward',null,{})",
+                                host_nid
+                            ));
+                            true
+                        }
+                        KeyCode::Enter | KeyCode::NumpadEnter => {
+                            let input_type = if self.modifiers == ModifiersState::SHIFT {
+                                "insertLineBreak"
+                            } else {
+                                "insertParagraph"
+                            };
+                            js.eval_js(&format!(
+                                "_lumen_handle_contenteditable_key('{}',null,{})",
+                                input_type, host_nid
+                            ));
+                            true
+                        }
+                        _ => {
+                            // Printable key — extract text from logical key.
+                            if let Some(text) = key_event.logical_key.to_text()
+                                && !text.is_empty()
+                                && text.chars().all(|c| !c.is_control())
+                            {
+                                let escaped =
+                                    text.replace('\\', "\\\\").replace('\'', "\\'");
+                                js.eval_js(&format!(
+                                    "_lumen_handle_contenteditable_key('insertText','{}',{})",
+                                    escaped, host_nid
+                                ));
+                                self.request_redraw();
+                                return;
+                            }
+                            false
+                        }
+                    };
+                    if handled {
+                        self.request_redraw();
+                        return;
+                    }
+                }
+            }
+        }
+
         let Some(cmd) = keybinding_for(code, self.modifiers) else {
             return;
         };
