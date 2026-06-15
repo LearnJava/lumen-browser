@@ -239,10 +239,11 @@ impl EventSource {
         };
 
         let path = self.url.path_and_query();
+        let ua = crate::http::DEFAULT_USER_AGENT;
         let request = format!(
             "GET {path} HTTP/1.1\r\n\
              Host: {host}\r\n\
-             User-Agent: Lumen/0.0.1\r\n\
+             User-Agent: {ua}\r\n\
              Accept: text/event-stream\r\n\
              Cache-Control: no-store\r\n\
              Connection: keep-alive\r\n\

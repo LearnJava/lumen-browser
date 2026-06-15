@@ -5443,7 +5443,7 @@ var _sw_container = Object.assign({
 }, _sw_container_et);
 
 var navigator = {
-    userAgent: 'Lumen/0.0',
+    userAgent: 'Lumen/0.2.0',
     language: 'en-US',
     onLine: false,
     serviceWorker: _sw_container,

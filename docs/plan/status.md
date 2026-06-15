@@ -16,7 +16,7 @@
 
 ## Статус реализации
 
-**Текущая фаза:** Phase 1 (активная разработка). **Phase 0 закрыта 2026-05-26** — все P1-крейты (html-parser, css-parser, layout) и P2-крейты вышли из прототипного состояния; engine открывает `samples/page.html` с полным block/inline/flex/grid layout, CSS cascade, positioned layout, transitions, transforms. Этот блок обновляется при каждом коммите, реализующем пункт плана. Условные обозначения: ✅ готово · 🟡 в работе · ⬜ запланировано.
+**Текущая фаза:** Phase 2 — v0.5 «Interactive» (активная разработка), версия приложения **v0.2.0**. **Phase 0 закрыта 2026-05-26**, **Phase 1 «Reader» в основном выполнена**. В Phase 2 уже реализованы QuickJS, Canvas 2D, CSS Grid, Shadow DOM, accessibility tree, формы, find-in-page, DevTools/CDP, knowledge layer; часть фич Phase 3 (IndexedDB, Service Workers, WebSockets, WOFF2, печать в PDF) подтянута вперёд. Engine открывает `samples/page.html` с полным block/inline/flex/grid layout, CSS cascade, positioned layout, transitions, transforms. Этот блок обновляется при каждом коммите, реализующем пункт плана. Условные обозначения: ✅ готово · 🟡 в работе · ⬜ запланировано.
 
 ### Инфраструктура
 - ✅ Cargo workspace, 10 крейтов
