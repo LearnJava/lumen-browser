@@ -468,6 +468,158 @@ impl ComplexSelector {
         }
         spec
     }
+
+    /// Serialise this selector back to a CSS selector string.
+    ///
+    /// Best-effort round-trip for DevTools display (§PH3-1 Styles panel).
+    /// Structurally equivalent to the original; whitespace may differ slightly.
+    pub fn to_css_str(&self) -> String {
+        let mut s = compound_to_css_str(&self.head);
+        for (combinator, compound) in &self.tail {
+            match combinator {
+                Combinator::Descendant => s.push(' '),
+                Combinator::Child => s.push_str(" > "),
+                Combinator::NextSibling => s.push_str(" + "),
+                Combinator::LaterSibling => s.push_str(" ~ "),
+            }
+            s.push_str(&compound_to_css_str(compound));
+        }
+        s
+    }
+}
+
+fn compound_to_css_str(c: &CompoundSelector) -> String {
+    c.parts.iter().map(simple_to_css_str).collect()
+}
+
+fn simple_to_css_str(s: &SimpleSelector) -> String {
+    match s {
+        SimpleSelector::Type(name) => name.clone(),
+        SimpleSelector::Class(name) => format!(".{name}"),
+        SimpleSelector::Id(name) => format!("#{name}"),
+        SimpleSelector::Universal => "*".into(),
+        SimpleSelector::Attribute(attr) => attr_to_css_str(attr),
+        SimpleSelector::PseudoClass(pc) => pc_to_css_str(pc),
+        SimpleSelector::PseudoElement(pe) => pe_to_css_str(pe),
+    }
+}
+
+fn attr_to_css_str(attr: &AttrSelector) -> String {
+    match (&attr.op, &attr.value) {
+        (None, _) => format!("[{}]", attr.name),
+        (Some(op), val) => {
+            let op_str = match op {
+                AttrOp::Equals => "=",
+                AttrOp::Includes => "~=",
+                AttrOp::DashMatch => "|=",
+                AttrOp::Prefix => "^=",
+                AttrOp::Suffix => "$=",
+                AttrOp::Substring => "*=",
+            };
+            let v = val.as_deref().unwrap_or("");
+            if attr.case_insensitive {
+                format!("[{}{}\"{}\" i]", attr.name, op_str, v)
+            } else {
+                format!("[{}{}\"{}\"", attr.name, op_str, v)
+            }
+        }
+    }
+}
+
+fn nth_to_css_str(spec: &NthSpec) -> String {
+    if spec.a == 0 {
+        return spec.b.to_string();
+    }
+    if spec.b == 0 {
+        return format!("{}n", spec.a);
+    }
+    if spec.b < 0 {
+        format!("{}n{}", spec.a, spec.b)
+    } else {
+        format!("{}n+{}", spec.a, spec.b)
+    }
+}
+
+fn sels_to_css_str(sels: &[ComplexSelector]) -> String {
+    sels.iter().map(ComplexSelector::to_css_str).collect::<Vec<_>>().join(", ")
+}
+
+fn pc_to_css_str(pc: &PseudoClass) -> String {
+    match pc {
+        PseudoClass::FirstChild => ":first-child".into(),
+        PseudoClass::LastChild => ":last-child".into(),
+        PseudoClass::OnlyChild => ":only-child".into(),
+        PseudoClass::Empty => ":empty".into(),
+        PseudoClass::Root => ":root".into(),
+        PseudoClass::FirstOfType => ":first-of-type".into(),
+        PseudoClass::LastOfType => ":last-of-type".into(),
+        PseudoClass::OnlyOfType => ":only-of-type".into(),
+        PseudoClass::NthChild(spec, _) => format!(":nth-child({})", nth_to_css_str(spec)),
+        PseudoClass::NthLastChild(spec, _) => format!(":nth-last-child({})", nth_to_css_str(spec)),
+        PseudoClass::NthOfType(spec) => format!(":nth-of-type({})", nth_to_css_str(spec)),
+        PseudoClass::NthLastOfType(spec) => format!(":nth-last-of-type({})", nth_to_css_str(spec)),
+        PseudoClass::Not(sels) => format!(":not({})", sels_to_css_str(sels)),
+        PseudoClass::Is(sels) => format!(":is({})", sels_to_css_str(sels)),
+        PseudoClass::Where(sels) => format!(":where({})", sels_to_css_str(sels)),
+        PseudoClass::Has(_) => ":has(…)".into(),
+        PseudoClass::PlaceholderShown => ":placeholder-shown".into(),
+        PseudoClass::Required => ":required".into(),
+        PseudoClass::Optional => ":optional".into(),
+        PseudoClass::ReadOnly => ":read-only".into(),
+        PseudoClass::ReadWrite => ":read-write".into(),
+        PseudoClass::Disabled => ":disabled".into(),
+        PseudoClass::Enabled => ":enabled".into(),
+        PseudoClass::Checked => ":checked".into(),
+        PseudoClass::Indeterminate => ":indeterminate".into(),
+        PseudoClass::Default => ":default".into(),
+        PseudoClass::Lang(tags) => format!(":lang({})", tags.join(", ")),
+        PseudoClass::Link => ":link".into(),
+        PseudoClass::Visited => ":visited".into(),
+        PseudoClass::AnyLink => ":any-link".into(),
+        PseudoClass::InRange => ":in-range".into(),
+        PseudoClass::OutOfRange => ":out-of-range".into(),
+        PseudoClass::Dir(DirArg::Ltr) => ":dir(ltr)".into(),
+        PseudoClass::Dir(DirArg::Rtl) => ":dir(rtl)".into(),
+        PseudoClass::Scope => ":scope".into(),
+        PseudoClass::Target => ":target".into(),
+        PseudoClass::TargetWithin => ":target-within".into(),
+        PseudoClass::Defined => ":defined".into(),
+        PseudoClass::Fullscreen => ":fullscreen".into(),
+        PseudoClass::Modal => ":modal".into(),
+        PseudoClass::PopoverOpen => ":popover-open".into(),
+        PseudoClass::Current => ":current".into(),
+        PseudoClass::Past => ":past".into(),
+        PseudoClass::Future => ":future".into(),
+        PseudoClass::Valid => ":valid".into(),
+        PseudoClass::Invalid => ":invalid".into(),
+        PseudoClass::UserValid => ":user-valid".into(),
+        PseudoClass::UserInvalid => ":user-invalid".into(),
+        PseudoClass::Host(None) => ":host".into(),
+        PseudoClass::Host(Some(sels)) => format!(":host({})", sels_to_css_str(sels)),
+        PseudoClass::Hover => ":hover".into(),
+        PseudoClass::Focus => ":focus".into(),
+        PseudoClass::Active => ":active".into(),
+        PseudoClass::FocusWithin => ":focus-within".into(),
+        PseudoClass::FocusVisible => ":focus-visible".into(),
+        PseudoClass::Unsupported(name) => format!(":{name}"),
+    }
+}
+
+fn pe_to_css_str(pe: &PseudoElementKind) -> String {
+    match pe {
+        PseudoElementKind::Before => "::before".into(),
+        PseudoElementKind::After => "::after".into(),
+        PseudoElementKind::FirstLine => "::first-line".into(),
+        PseudoElementKind::FirstLetter => "::first-letter".into(),
+        PseudoElementKind::Slotted(None) => "::slotted()".into(),
+        PseudoElementKind::Slotted(Some(sels)) => {
+            format!("::slotted({})", sels_to_css_str(sels))
+        }
+        PseudoElementKind::Marker => "::marker".into(),
+        PseudoElementKind::Selection => "::selection".into(),
+        PseudoElementKind::Highlight(name) => format!("::highlight({name})"),
+        PseudoElementKind::Unknown(name) => format!("::{name}"),
+    }
 }
 
 /// Максимум specificity среди списка ComplexSelector-ов. Используется для
@@ -3891,6 +4043,60 @@ fn expand_nesting(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── to_css_str tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn to_css_str_type_selector() {
+        let sel = parse_selector_list("div");
+        assert_eq!(sel[0].to_css_str(), "div");
+    }
+
+    #[test]
+    fn to_css_str_class_and_id() {
+        let sel = parse_selector_list(".foo#bar");
+        assert_eq!(sel[0].to_css_str(), ".foo#bar");
+    }
+
+    #[test]
+    fn to_css_str_descendant_combinator() {
+        let sel = parse_selector_list("div p");
+        assert_eq!(sel[0].to_css_str(), "div p");
+    }
+
+    #[test]
+    fn to_css_str_child_combinator() {
+        let sel = parse_selector_list("ul > li");
+        assert_eq!(sel[0].to_css_str(), "ul > li");
+    }
+
+    #[test]
+    fn to_css_str_pseudo_class() {
+        let sel = parse_selector_list("a:hover");
+        assert_eq!(sel[0].to_css_str(), "a:hover");
+    }
+
+    #[test]
+    fn to_css_str_first_child() {
+        let sel = parse_selector_list("p:first-child");
+        assert_eq!(sel[0].to_css_str(), "p:first-child");
+    }
+
+    #[test]
+    fn to_css_str_nth_child() {
+        let sel = parse_selector_list("li:nth-child(2n+1)");
+        let s = sel[0].to_css_str();
+        assert!(s.contains(":nth-child"), "got: {s}");
+    }
+
+    #[test]
+    fn to_css_str_attribute() {
+        let sel = parse_selector_list("[type=\"text\"]");
+        let s = sel[0].to_css_str();
+        assert!(s.contains("[type") && s.contains("text"), "got: {s}");
+    }
+
+    // ── existing test helpers ──────────────────────────────────────────────────
 
     /// Удобный конструктор для тестов: ComplexSelector из одной compound с
     /// единственным simple-селектором.

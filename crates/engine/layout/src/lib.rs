@@ -87,8 +87,8 @@ pub use selection::{caret_at_point, selection_rects};
 pub use style::{compute_selection_style, compute_style_from_declarations};
 pub use selector_query::{
     computed_style_by_selector, computed_style_json, computed_style_json_by_selector,
-    computed_style_to_map, find_all_by_selector, find_box_by_selector, matches_selector,
-    query_all, ComputedStyleSnapshot,
+    computed_style_to_map, find_all_by_selector, find_box_by_selector, matched_rules_for_node,
+    matches_selector, query_all, ComputedStyleSnapshot, MatchedRule,
 };
 pub use anchor::{
     collect_anchors, register_anchor, resolve_anchor_function, resolve_inset_area,
