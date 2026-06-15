@@ -1,8 +1,17 @@
 # BUG-162
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-06-15
 **Компонент:** encoding
 **Файл:** `crates/engine/encoding/src/detect.rs`
+
+## Фикс
+
+В `detect()` добавлен шаг 4b: если в потоке нет ни одного байта `>= 0x80`
+(чистый ASCII), возвращаем `Encoding::Utf8`, не запуская кириллическую
+эвристику. Корень бага: для ASCII все три таблицы (cp1251/koi8-r/cp866) дают
+score 0.0, а `Iterator::max_by` среди равных возвращает **последний** элемент —
+`Cp866` (ibm866). Регрессионные тесты: `ascii_only_resolves_to_utf8`,
+`bug162_example_com_ascii_not_ibm866`, `empty_input_resolves_to_utf8`.
 
 ## Описание
 

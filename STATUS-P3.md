@@ -117,6 +117,9 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
 
+- **BUG-162** (2026-06-15) — детектор кодировки выдавал ibm866 на чистом ASCII (example.com): добавлен
+  ASCII-shortcut в `detect()` (`encoding/src/detect.rs`) — нет байт ≥0x80 → UTF-8, минуя кириллическую
+  эвристику (где `max_by` среди равных score возвращал последний — Cp866).
 - **BUG-154** (2026-06-15) — `mix_polar` читал hue из неверного индекса для LCH/Oklch (`layout/src/color_mix.rs`).
 - **BUG-122** (2026-06-15) — flaky compositor timing-тесты: idle-tick вынесен в `CompositorThread::spawn_with_tick()`.
 - **BUG-155** (2026-06-15) — тест PerformanceObserver LCP: невалидный NodeId 42 → реальный 6 (баг теста).
