@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(пусто)_
+In progress: BUG-122 flaky compositor timing tests  branch: p3-bug122-compositor-flaky
+Next step: inject idle fallback tick via spawn_with_tick → tests use 1h tick + generous deadline  crates/engine/paint/src/compositor.rs:938
 
 ## Next
 
