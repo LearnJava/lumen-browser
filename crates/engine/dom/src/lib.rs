@@ -1780,6 +1780,37 @@ pub fn find_ancestor_dialog(doc: &Document, mut node: NodeId) -> Option<NodeId> 
     None
 }
 
+/// True when `node` carries `contenteditable=""` or `contenteditable="true"`.
+///
+/// Per HTML LS §3.1.11 the attribute value is ASCII case-insensitive.  A missing
+/// attribute or `contenteditable="false"` returns `false`.
+pub fn node_is_contenteditable(doc: &Document, node: NodeId) -> bool {
+    if let NodeData::Element { attrs, .. } = &doc.get(node).data {
+        for attr in attrs {
+            if attr.name.local.eq_ignore_ascii_case("contenteditable") {
+                return !attr.value.eq_ignore_ascii_case("false");
+            }
+        }
+    }
+    false
+}
+
+/// Walk up the tree from `node` (inclusive) and return the nearest element
+/// with `contenteditable` set to a truthy value — the *editing host*.
+///
+/// Returns `None` when no such ancestor exists.
+pub fn find_editing_host(doc: &Document, mut node: NodeId) -> Option<NodeId> {
+    loop {
+        if node_is_contenteditable(doc, node) {
+            return Some(node);
+        }
+        match doc.get(node).parent {
+            Some(p) => node = p,
+            None => return None,
+        }
+    }
+}
+
 /// Собрать имена и значения submittable-контролов формы из DOM-атрибутов.
 ///
 /// Обходит потомков `form_id` depth-first и возвращает `(name, value)` для
@@ -3953,6 +3984,80 @@ mod tests {
         doc.append_child(doc.root(), div);
         doc.append_child(div, btn);
         assert_eq!(find_ancestor_dialog(&doc, btn), None);
+    }
+
+    // ── node_is_contenteditable / find_editing_host ───────────────────────────
+
+    #[test]
+    fn node_is_contenteditable_true_for_empty_attr() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(div).data {
+            attrs.push(Attribute { name: QualName::html("contenteditable"), value: String::new() });
+        }
+        assert!(node_is_contenteditable(&doc, div));
+    }
+
+    #[test]
+    fn node_is_contenteditable_true_for_value_true() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(div).data {
+            attrs.push(Attribute { name: QualName::html("contenteditable"), value: "true".into() });
+        }
+        assert!(node_is_contenteditable(&doc, div));
+    }
+
+    #[test]
+    fn node_is_contenteditable_false_for_value_false() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(div).data {
+            attrs.push(Attribute { name: QualName::html("contenteditable"), value: "false".into() });
+        }
+        assert!(!node_is_contenteditable(&doc, div));
+    }
+
+    #[test]
+    fn node_is_contenteditable_false_without_attr() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        assert!(!node_is_contenteditable(&doc, div));
+    }
+
+    #[test]
+    fn find_editing_host_self() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(div).data {
+            attrs.push(Attribute { name: QualName::html("contenteditable"), value: String::new() });
+        }
+        assert_eq!(find_editing_host(&doc, div), Some(div));
+    }
+
+    #[test]
+    fn find_editing_host_ancestor() {
+        let mut doc = Document::new();
+        let outer = doc.create_element(QualName::html("div"));
+        let inner = doc.create_element(QualName::html("span"));
+        let text = doc.create_text("hi");
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(outer).data {
+            attrs.push(Attribute { name: QualName::html("contenteditable"), value: String::new() });
+        }
+        doc.append_child(doc.root(), outer);
+        doc.append_child(outer, inner);
+        doc.append_child(inner, text);
+        assert_eq!(find_editing_host(&doc, text), Some(outer));
+    }
+
+    #[test]
+    fn find_editing_host_none_when_no_editable() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        let text = doc.create_text("hi");
+        doc.append_child(doc.root(), div);
+        doc.append_child(div, text);
+        assert_eq!(find_editing_host(&doc, text), None);
     }
 
     #[test]

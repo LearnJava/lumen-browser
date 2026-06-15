@@ -6,7 +6,9 @@
 
 ## In progress
 
-—
+**PH3-7: `contentEditable` / `isContentEditable` + `beforeinput`/`input` events + shell routing**
+Branch: p1-ph3-7-contenteditable
+Next step: add JS properties + Rust bindings + shell key dispatch
 
 ---
 
