@@ -4812,6 +4812,27 @@ fn lay_out(
                     let ch = contained_content_height(size_contained, &s, em, viewport, content_height);
                     ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
                 };
+                // CSS Flexbox L1 §4.1: absolutely-positioned children were excluded
+                // from flex layout above. Position them now against this container's
+                // content box (its padding edge when positioned), using the content
+                // origin as their static position.
+                let flex_abs: Vec<(usize, f32, f32)> = b.children.iter().enumerate()
+                    .filter(|(_, c)| matches!(c.style.position, Position::Absolute | Position::Fixed))
+                    .map(|(i, _)| (i, content_x, content_y))
+                    .collect();
+                if !flex_abs.is_empty() {
+                    let my_pcb = if is_positioned {
+                        Rect::new(
+                            b.rect.x + s.border_left_width,
+                            b.rect.y + s.border_top_width,
+                            (b.rect.width - s.border_left_width - s.border_right_width).max(0.0),
+                            (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0),
+                        )
+                    } else {
+                        pcb
+                    };
+                    lay_out_abs_children(b, &flex_abs, measurer, viewport, my_pcb, hp);
+                }
                 return;
             }
             // Grid containers dispatch to lay_out_grid before block-flow.
@@ -6674,10 +6695,15 @@ fn lay_out_flex(
     let is_wrap_reverse = matches!(s.flex_wrap, FlexWrap::WrapReverse);
 
     // Indices of non-Skip children (actual flex items).
+    // CSS Flexbox L1 §4.1: an absolutely-positioned child of a flex container does
+    // not participate in flex layout — it must not become a flex item nor advance
+    // the main-axis cursor. Such children are positioned afterward against the
+    // container's content box (see the flex dispatch branch in `lay_out`).
     let mut item_idxs: Vec<usize> = children
         .iter()
         .enumerate()
-        .filter(|(_, c)| !matches!(c.kind, BoxKind::Skip))
+        .filter(|(_, c)| !matches!(c.kind, BoxKind::Skip)
+            && !matches!(c.style.position, Position::Absolute | Position::Fixed))
         .map(|(i, _)| i)
         .collect();
     // CSS Flexbox L1 §4 — stable sort by `order` (same-order items keep source order).
@@ -11759,6 +11785,26 @@ mod tests {
         let c = find_by_id_all(&root, &doc, "c").expect("c");
         assert_eq!(a.rect.y, 0.0, "a.y (line1) {}", a.rect.y);
         assert_eq!(c.rect.y, 150.0, "c.y (line2 shifted) {}", c.rect.y);
+    }
+
+    #[test]
+    fn flex_abs_child_does_not_advance_main_axis() {
+        // CSS Flexbox L1 §4.1: an absolutely-positioned child of a flex container is
+        // not a flex item — it must not consume main-axis space. Regression for the
+        // lenta.ru bug where position:fixed/absolute children advanced the flex-column
+        // cursor and pushed real content ~700px below the fold.
+        // Column flex: in-flow #a (h=90) then abs #x (h=380) then in-flow #b (h=250).
+        // #b must sit directly after #a (y=90), not after the abs box (y=470).
+        let html = r#"<div id="flex"><div id="a"></div><div id="x"></div><div id="b"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;flex-direction:column;width:400px} \
+                   #a{height:90px} #x{position:absolute;width:380px;height:380px} #b{height:250px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(1024.0, 720.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let b = find_by_id_all(&root, &doc, "b").expect("b");
+        assert_eq!(a.rect.y, 0.0, "a.y {}", a.rect.y);
+        assert_eq!(b.rect.y, 90.0, "abs sibling must not advance flow; b.y {}", b.rect.y);
     }
 
     #[test]
