@@ -12,7 +12,7 @@
 use crate::box_tree::{BoxKind, InlineFrag, InlineSegment, LayoutBox};
 use crate::style::{
     BorderStyle, BoxSizing, Color, ComputedStyle, CssColor, Cursor, Direction, Display,
-    FontStretch, FontStyle, FontVariant, FontWeight, Length, LengthOrAuto, OutlineColor,
+    FontStretch, FontStyle, FontVariant, FontWeight, Length, LengthOrAuto, OutlineColor, Position,
     OutlineStyle, Overflow, TextAlign, TextOverflow, TextTransform, Visibility, WhiteSpace,
 };
 
@@ -163,6 +163,13 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
         && bg.a > 0
     {
         let _ = write!(out, " bg={}", color_hex(bg));
+    }
+    match s.position {
+        Position::Static => {}
+        Position::Relative => out.push_str(" position=relative"),
+        Position::Absolute => out.push_str(" position=absolute"),
+        Position::Fixed => out.push_str(" position=fixed"),
+        Position::Sticky => out.push_str(" position=sticky"),
     }
     match s.display {
         Display::Block => {}
