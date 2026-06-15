@@ -348,7 +348,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/core/src/web_storage.rs:47` **fn** `remove_item` — Remove `key` and its value.  No-op if absent
 `crates/core/src/web_storage.rs:54` **fn** `clear` — Remove all key-value pairs
 
-## lumen-css-parser  (53 symbols)
+## lumen-css-parser  (54 symbols)
 
 `crates/engine/css-parser/src/parser.rs:38` **enum** `SimpleSelector`
 `crates/engine/css-parser/src/parser.rs:50` **struct** `AttrSelector`
@@ -363,46 +363,47 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/css-parser/src/parser.rs:437` **enum** `Combinator`
 `crates/engine/css-parser/src/parser.rs:449` **struct** `ComplexSelector`
 `crates/engine/css-parser/src/parser.rs:463` **fn** `specificity` — Specificity по CSS Selectors Level 3 §16:
-`crates/engine/css-parser/src/parser.rs:553` **struct** `Specificity`
-`crates/engine/css-parser/src/parser.rs:572` **struct** `Declaration`
-`crates/engine/css-parser/src/parser.rs:581` **struct** `Rule`
-`crates/engine/css-parser/src/parser.rs:592` **struct** `PropertyRule` — CSS Properties and Values L1 §1.1 — регистрация custom property через
-`crates/engine/css-parser/src/parser.rs:600` **struct** `Stylesheet`
-`crates/engine/css-parser/src/parser.rs:675` **struct** `FontPaletteValuesRule` — `@font-palette-values --name { font-family: ...; base-palette: N; override-colors: ... }`
-`crates/engine/css-parser/src/parser.rs:690` **struct** `ContainerRule` — `@container <name>? <condition> { rules }` — CSS Containment L3 §3
-`crates/engine/css-parser/src/parser.rs:703` **struct** `CounterStyleRule` — `@counter-style <name> { ... }` — CSS Counter Styles L3 §2
-`crates/engine/css-parser/src/parser.rs:712` **struct** `PageRule` — `@page <selector>? { decls }` — CSS Paged Media L3 §3
-`crates/engine/css-parser/src/parser.rs:723` **struct** `ScopeRule` — `@scope (<root>) [to (<limit>)] { rules }` — CSS Cascade L6
-`crates/engine/css-parser/src/parser.rs:736` **struct** `StartingStyleRule` — `@starting-style { rules }` — CSS Transitions L2 §3.4. Контейнер
-`crates/engine/css-parser/src/parser.rs:742` **struct** `KeyframesRule` — `@keyframes name { offset { decls } ... }` — CSS Animations L1 §3
-`crates/engine/css-parser/src/parser.rs:751` **struct** `Keyframe`
-`crates/engine/css-parser/src/parser.rs:760` **struct** `SupportsRule` — `@supports <condition> { rules }` блок — CSS Conditional Rules L3 §2
-`crates/engine/css-parser/src/parser.rs:777` **enum** `SupportsCondition` — Условие в `@supports (...)`. Грамматика:
-`crates/engine/css-parser/src/parser.rs:800` **fn** `evaluate` — Вычислить условие: вернуть `true`, если потребитель поддерживает
-`crates/engine/css-parser/src/parser.rs:815` **struct** `LayerRule` — `@layer name { rules }` блок
-`crates/engine/css-parser/src/parser.rs:825` **struct** `ImportRule` — `@import` декларация. Per CSS Cascade L4 §6.5 + Media Queries L4:
-`crates/engine/css-parser/src/parser.rs:839` **struct** `FontFaceRule` — `@font-face { font-family: ...; src: url(...) format(...); ... }`
-`crates/engine/css-parser/src/parser.rs:864` **struct** `FontFaceSource`
-`crates/engine/css-parser/src/parser.rs:873` **enum** `FontFaceSourceKind`
-`crates/engine/css-parser/src/parser.rs:882` **struct** `MediaRule` — Группа CSS-правил, вложенных в `@media`-блок
-`crates/engine/css-parser/src/parser.rs:890` **struct** `MediaQuery` — Media query — OR-список AND-clauses (Media Queries L4 §3). Пустой
-`crates/engine/css-parser/src/parser.rs:904` **struct** `MediaQueryClause` — Одна clause в media query — AND-список feature/media-type условий
-`crates/engine/css-parser/src/parser.rs:916` **enum** `MediaCondition`
-`crates/engine/css-parser/src/parser.rs:929` **enum** `MediaFeature`
-`crates/engine/css-parser/src/parser.rs:962` **enum** `MediaOrientation`
-`crates/engine/css-parser/src/parser.rs:969` **enum** `MediaHover` — Media Queries L4 §5.3/§5.5 — hover-способность указателя
-`crates/engine/css-parser/src/parser.rs:978` **enum** `MediaPointer` — Media Queries L4 §5.4/§5.6 — точность указателя
-`crates/engine/css-parser/src/parser.rs:988` **enum** `ColorScheme`
-`crates/engine/css-parser/src/parser.rs:997` **struct** `MediaContext` — Контекст, против которого матчатся media queries. Заполняется
-`crates/engine/css-parser/src/parser.rs:1038` **fn** `matches` — Пустой query (= `@media all`) — true. Иначе хотя бы одна
-`crates/engine/css-parser/src/parser.rs:1053` **fn** `matches` — Per Media Queries L4 §3.2: пустая `conditions` — clause invalid
-`crates/engine/css-parser/src/parser.rs:1070` **fn** `matches`
-`crates/engine/css-parser/src/parser.rs:1080` **fn** `matches`
-`crates/engine/css-parser/src/parser.rs:1122` **fn** `parse`
-`crates/engine/css-parser/src/parser.rs:1130` **fn** `parse_inline_style` — Парсит содержимое HTML-атрибута `style="..."` — declaration-list без
-`crates/engine/css-parser/src/parser.rs:1137` **fn** `parse_selector_list` — Парсит строку CSS selector list (через запятую) и возвращает разобранные
-`crates/engine/css-parser/src/parser.rs:1295` **fn** `parse_supports_condition` — Парсит `@supports`-условие из строки между `@supports` и `{`
-`crates/engine/css-parser/src/parser.rs:1493` **fn** `parse_media_query` — Распарсить media query из строки между `@media` и `{`. Принимает
+`crates/engine/css-parser/src/parser.rs:476` **fn** `to_css_str` — Serialise this selector back to a CSS selector string
+`crates/engine/css-parser/src/parser.rs:705` **struct** `Specificity`
+`crates/engine/css-parser/src/parser.rs:724` **struct** `Declaration`
+`crates/engine/css-parser/src/parser.rs:733` **struct** `Rule`
+`crates/engine/css-parser/src/parser.rs:744` **struct** `PropertyRule` — CSS Properties and Values L1 §1.1 — регистрация custom property через
+`crates/engine/css-parser/src/parser.rs:752` **struct** `Stylesheet`
+`crates/engine/css-parser/src/parser.rs:827` **struct** `FontPaletteValuesRule` — `@font-palette-values --name { font-family: ...; base-palette: N; override-colors: ... }`
+`crates/engine/css-parser/src/parser.rs:842` **struct** `ContainerRule` — `@container <name>? <condition> { rules }` — CSS Containment L3 §3
+`crates/engine/css-parser/src/parser.rs:855` **struct** `CounterStyleRule` — `@counter-style <name> { ... }` — CSS Counter Styles L3 §2
+`crates/engine/css-parser/src/parser.rs:864` **struct** `PageRule` — `@page <selector>? { decls }` — CSS Paged Media L3 §3
+`crates/engine/css-parser/src/parser.rs:875` **struct** `ScopeRule` — `@scope (<root>) [to (<limit>)] { rules }` — CSS Cascade L6
+`crates/engine/css-parser/src/parser.rs:888` **struct** `StartingStyleRule` — `@starting-style { rules }` — CSS Transitions L2 §3.4. Контейнер
+`crates/engine/css-parser/src/parser.rs:894` **struct** `KeyframesRule` — `@keyframes name { offset { decls } ... }` — CSS Animations L1 §3
+`crates/engine/css-parser/src/parser.rs:903` **struct** `Keyframe`
+`crates/engine/css-parser/src/parser.rs:912` **struct** `SupportsRule` — `@supports <condition> { rules }` блок — CSS Conditional Rules L3 §2
+`crates/engine/css-parser/src/parser.rs:929` **enum** `SupportsCondition` — Условие в `@supports (...)`. Грамматика:
+`crates/engine/css-parser/src/parser.rs:952` **fn** `evaluate` — Вычислить условие: вернуть `true`, если потребитель поддерживает
+`crates/engine/css-parser/src/parser.rs:967` **struct** `LayerRule` — `@layer name { rules }` блок
+`crates/engine/css-parser/src/parser.rs:977` **struct** `ImportRule` — `@import` декларация. Per CSS Cascade L4 §6.5 + Media Queries L4:
+`crates/engine/css-parser/src/parser.rs:991` **struct** `FontFaceRule` — `@font-face { font-family: ...; src: url(...) format(...); ... }`
+`crates/engine/css-parser/src/parser.rs:1016` **struct** `FontFaceSource`
+`crates/engine/css-parser/src/parser.rs:1025` **enum** `FontFaceSourceKind`
+`crates/engine/css-parser/src/parser.rs:1034` **struct** `MediaRule` — Группа CSS-правил, вложенных в `@media`-блок
+`crates/engine/css-parser/src/parser.rs:1042` **struct** `MediaQuery` — Media query — OR-список AND-clauses (Media Queries L4 §3). Пустой
+`crates/engine/css-parser/src/parser.rs:1056` **struct** `MediaQueryClause` — Одна clause в media query — AND-список feature/media-type условий
+`crates/engine/css-parser/src/parser.rs:1068` **enum** `MediaCondition`
+`crates/engine/css-parser/src/parser.rs:1081` **enum** `MediaFeature`
+`crates/engine/css-parser/src/parser.rs:1114` **enum** `MediaOrientation`
+`crates/engine/css-parser/src/parser.rs:1121` **enum** `MediaHover` — Media Queries L4 §5.3/§5.5 — hover-способность указателя
+`crates/engine/css-parser/src/parser.rs:1130` **enum** `MediaPointer` — Media Queries L4 §5.4/§5.6 — точность указателя
+`crates/engine/css-parser/src/parser.rs:1140` **enum** `ColorScheme`
+`crates/engine/css-parser/src/parser.rs:1149` **struct** `MediaContext` — Контекст, против которого матчатся media queries. Заполняется
+`crates/engine/css-parser/src/parser.rs:1190` **fn** `matches` — Пустой query (= `@media all`) — true. Иначе хотя бы одна
+`crates/engine/css-parser/src/parser.rs:1205` **fn** `matches` — Per Media Queries L4 §3.2: пустая `conditions` — clause invalid
+`crates/engine/css-parser/src/parser.rs:1222` **fn** `matches`
+`crates/engine/css-parser/src/parser.rs:1232` **fn** `matches`
+`crates/engine/css-parser/src/parser.rs:1274` **fn** `parse`
+`crates/engine/css-parser/src/parser.rs:1282` **fn** `parse_inline_style` — Парсит содержимое HTML-атрибута `style="..."` — declaration-list без
+`crates/engine/css-parser/src/parser.rs:1289` **fn** `parse_selector_list` — Парсит строку CSS selector list (через запятую) и возвращает разобранные
+`crates/engine/css-parser/src/parser.rs:1447` **fn** `parse_supports_condition` — Парсит `@supports`-условие из строки между `@supports` и `{`
+`crates/engine/css-parser/src/parser.rs:1645` **fn** `parse_media_query` — Распарсить media query из строки между `@media` и `{`. Принимает
 
 ## lumen-devtools  (8 symbols)
 
@@ -1373,7 +1374,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/knowledge/src/store.rs:77` **fn** `read_later` — Direct access to the read-later store for status / touch operations
 `crates/knowledge/src/store.rs:83` **fn** `notes` — Direct access to the notes store for URL-based note listing and
 
-## lumen-layout  (566 symbols)
+## lumen-layout  (568 symbols)
 
 `crates/engine/layout/src/anchor.rs:44` **enum** `AnchorSide` — Which edge or point of an anchor element the `anchor()` function references
 `crates/engine/layout/src/anchor.rs:73` **enum** `InsetAreaKeyword` — Single-axis `inset-area` keyword, as defined in §5.2 of the spec
@@ -1662,6 +1663,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/selector_query.rs:543` **fn** `computed_style_to_map` — Serialises a [`ComputedStyle`] to a CSS property → resolved-value map
 `crates/engine/layout/src/selector_query.rs:868` **fn** `computed_style_json` — Serialises a [`ComputedStyle`] into a deterministic JSON object string
 `crates/engine/layout/src/selector_query.rs:890` **fn** `computed_style_json_by_selector` — Like [`computed_style_by_selector`] but returns the full computed-style JSON
+`crates/engine/layout/src/selector_query.rs:905` **struct** `MatchedRule` — One CSS rule that matched a specific DOM node
+`crates/engine/layout/src/selector_query.rs:925` **fn** `matched_rules_for_node` — Return all CSS rules from `sheet` whose selectors match `node` in `doc`
 `crates/engine/layout/src/snapshot.rs:63` **fn** `serialize_layout_tree` — Корневой entry-point: рекурсивно сериализует всё дерево
 `crates/engine/layout/src/stacking.rs:29` **struct** `StackingContextId` — Идентификатор stacking context-а. Монотонно растёт от 0; 0 = root
 `crates/engine/layout/src/stacking.rs:35` **fn** `raw`
@@ -2675,25 +2678,25 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/devtools/console_panel.rs:177` **fn** `scroll_up` — Scroll up by `n` lines (towards older messages)
 `crates/shell/src/devtools/console_panel.rs:184` **fn** `scroll_down` — Scroll down by `n` lines (towards newer messages)
 `crates/shell/src/devtools/console_panel.rs:196` **fn** `build_console_panel` — Build the viewport-locked console panel overlay
-`crates/shell/src/devtools/inspector.rs:105` **enum** `InspectorTab` — Which tab of the DevTools inspector panel is currently active
-`crates/shell/src/devtools/inspector.rs:117` **struct** `SelectedNode` — A node currently pinned by the inspector, with its computed-style snapshot
-`crates/shell/src/devtools/inspector.rs:137` **struct** `DomInspectorPanel` — DevTools DOM inspector panel state
-`crates/shell/src/devtools/inspector.rs:162` **fn** `new` — Create a hidden inspector with no hover or selection
-`crates/shell/src/devtools/inspector.rs:168` **fn** `toggle` — Toggle inspector activity. Clears hover (but keeps the last selection)
-`crates/shell/src/devtools/inspector.rs:177` **fn** `set_hovered` — Update the node under the cursor. Returns `true` when the value changed
-`crates/shell/src/devtools/inspector.rs:189` **fn** `select` — Pin a node as the current selection
-`crates/shell/src/devtools/inspector.rs:207` **fn** `switch_tab` — Switch the active tab to `tab`
-`crates/shell/src/devtools/inspector.rs:214` **fn** `set_network_entries` — Replace the Network-tab snapshot with `entries` (oldest first). Clamps the
-`crates/shell/src/devtools/inspector.rs:224` **fn** `is_panel_click` — Returns `true` if `x` is inside the right-docked panel, given window CSS width
-`crates/shell/src/devtools/inspector.rs:230` **fn** `click_tab_at` — Handle a click that is inside the panel. Switches tab when the click lands
-`crates/shell/src/devtools/inspector.rs:256` **fn** `scroll_up` — Scroll the active tab's list up
-`crates/shell/src/devtools/inspector.rs:278` **fn** `scroll_down` — Scroll the active tab's list down, clamped so the last page stays visible
-`crates/shell/src/devtools/inspector.rs:302` **fn** `find_box` — Find the [`LayoutBox`] for `node` in document order. Returns `None` when the
-`crates/shell/src/devtools/inspector.rs:321` **fn** `box_model_rects` — Compute the four box-model rectangles for `lb` in document (page) coordinates
-`crates/shell/src/devtools/inspector.rs:376` **fn** `build_box_overlay` — Build the box-model overlay for the hovered box, translated from page
-`crates/shell/src/devtools/inspector.rs:409` **fn** `element_label` — Build a human-readable DOM label for `node`, e.g. `div#main.card`, `#text`,
-`crates/shell/src/devtools/inspector.rs:441` **fn** `computed_style_map` — Extract a curated computed-style map from a [`LayoutBox`] as ordered
-`crates/shell/src/devtools/inspector.rs:538` **fn** `build_inspector_panel` — Build the right-docked inspector side panel
+`crates/shell/src/devtools/inspector.rs:118` **enum** `InspectorTab` — Which tab of the DevTools inspector panel is currently active
+`crates/shell/src/devtools/inspector.rs:133` **struct** `SelectedNode` — A node currently pinned by the inspector, with its computed-style snapshot
+`crates/shell/src/devtools/inspector.rs:160` **struct** `DomInspectorPanel` — DevTools DOM inspector panel state
+`crates/shell/src/devtools/inspector.rs:185` **fn** `new` — Create a hidden inspector with no hover or selection
+`crates/shell/src/devtools/inspector.rs:191` **fn** `toggle` — Toggle inspector activity. Clears hover (but keeps the last selection)
+`crates/shell/src/devtools/inspector.rs:200` **fn** `set_hovered` — Update the node under the cursor. Returns `true` when the value changed
+`crates/shell/src/devtools/inspector.rs:213` **fn** `select` — Pin a node as the current selection
+`crates/shell/src/devtools/inspector.rs:234` **fn** `switch_tab` — Switch the active tab to `tab`
+`crates/shell/src/devtools/inspector.rs:241` **fn** `set_network_entries` — Replace the Network-tab snapshot with `entries` (oldest first). Clamps the
+`crates/shell/src/devtools/inspector.rs:251` **fn** `is_panel_click` — Returns `true` if `x` is inside the right-docked panel, given window CSS width
+`crates/shell/src/devtools/inspector.rs:257` **fn** `click_tab_at` — Handle a click that is inside the panel. Switches tab when the click lands
+`crates/shell/src/devtools/inspector.rs:287` **fn** `scroll_up` — Scroll the active tab's list up
+`crates/shell/src/devtools/inspector.rs:312` **fn** `scroll_down` — Scroll the active tab's list down, clamped so the last page stays visible
+`crates/shell/src/devtools/inspector.rs:341` **fn** `find_box` — Find the [`LayoutBox`] for `node` in document order. Returns `None` when the
+`crates/shell/src/devtools/inspector.rs:360` **fn** `box_model_rects` — Compute the four box-model rectangles for `lb` in document (page) coordinates
+`crates/shell/src/devtools/inspector.rs:415` **fn** `build_box_overlay` — Build the box-model overlay for the hovered box, translated from page
+`crates/shell/src/devtools/inspector.rs:448` **fn** `element_label` — Build a human-readable DOM label for `node`, e.g. `div#main.card`, `#text`,
+`crates/shell/src/devtools/inspector.rs:480` **fn** `computed_style_map` — Extract a curated computed-style map from a [`LayoutBox`] as ordered
+`crates/shell/src/devtools/inspector.rs:590` **fn** `build_inspector_panel` — Build the right-docked inspector side panel
 `crates/shell/src/devtools/network_panel.rs:76` **struct** `NetworkEntry` — A single recorded HTTP request and its lifecycle state
 `crates/shell/src/devtools/network_panel.rs:109` **struct** `NetworkLog` — Shared, append-only log of HTTP requests for the network panel
 `crates/shell/src/devtools/network_panel.rs:116` **fn** `record_started` — Record a newly started request: appends a pending entry
@@ -3918,4 +3921,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3850 symbols in 21 crates*
+*Total: 3853 symbols in 21 crates*
