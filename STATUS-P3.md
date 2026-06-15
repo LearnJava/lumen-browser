@@ -59,10 +59,27 @@ BUG-139 + PA-3, помечен FIXED). BUG-133 (TEST-102 → 0.00%) и BUG-140 (
 
 Много OPEN-багов из графических тестов TEST-58…70 (`grep "OPEN" BUGS.md`).
 Бери по убыванию отклонения, исключая CSS-свойства (домен P4) и Phase 2 фичи.
-Текущий высокий приоритет в домене layout/paint: BUG-110 (object-fit SVG viewBox 8.03%),
-BUG-128 (text-underline geometry 6.78%). NB: следующий по collapse-таблицам — паинт-сайд
-коллапс-границ (отдельная эмиссия общих границ после фонов ячеек) для varied-width случая
-(остаток TEST-80, см. BUG-129 FIXED).
+
+_(BUG-110 закрыт 2026-06-14 — object-fit SVG viewBox FIXED. BUG-128 — text-underline geometry
+расследован 2026-06-14: не paint-баг, вся дельта от font-parity (Inter vs Edge serif); кандидат
+в KNOWN_DEBTORS, а не P3-задача. BUG-129 FIXED — border-collapse collapse, остаток paint-side
+varied-width — отдельная эмиссия общих границ — следующая по таблицам.)_
+
+**Рекомендуемый порядок (прогон 2026-06-15):**
+
+- BUG-156 (TEST-27 direction:rtl регрессия, 0.38%→0.52%) — свежая регрессия после мержей
+  PH3-4/PH3-5 (2026-06-15). Порог 0.5% пересечён. Проверить `--dump-display-list` 27-direction-rtl,
+  выявить виновный коммит через `git bisect`. Ветка: `p3-bug156-rtl-regression`.
+
+- BUG-157 (TEST-40 conic-gradient/repeating-conic-gradient регрессия, 0.48%→0.61%) — свежая
+  регрессия после мержей PH3-4/PH3-5 (2026-06-15). Вероятна связь с OffscreenCanvas. Ветка:
+  `p3-bug157-conic-regression`.
+
+- BUG-134 (INTERACTION TEST-103, filter×transform, 29.11%) — фильтр на трансформированном
+  элементе расходится во всех 6 ячейках, включая контроль c5 (rotate+gradient без фильтра).
+  `python graphic_tests/run.py --bisect 103` для изоляции. Ветка: `p3-bug134-filter-transform`.
+
+Следить за новыми: `grep "OPEN" BUGS.md`.
 
 Следить за новыми: `grep "OPEN" BUGS.md`.
 
