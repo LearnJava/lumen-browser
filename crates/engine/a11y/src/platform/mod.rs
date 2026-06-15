@@ -6,8 +6,9 @@
 //! - Linux: AT-SPI2 over D-Bus — Orca
 //!
 //! Phase 0: stubs that accept [`AXTree`] updates and maintain last-known state.
-//! Phase 1 (per-platform): native bindings without adding new Cargo deps —
-//! see the `// Phase 1:` comments inside each platform module.
+//! Phase 1 (Windows): `NotifyWinEvent` for focus and structural-change events,
+//! `handle_wm_get_object` for MSAA root object — see `windows.rs`.
+//! Phase 1 (Linux/macOS): still stubs; Phase 2 adds zbus/objc bindings.
 
 pub mod linux;
 pub mod macos;
@@ -34,6 +35,24 @@ pub trait PlatformBridge: Send + 'static {
 
     /// Release OS resources; called when the browser window closes.
     fn shutdown(&mut self);
+
+    /// Pass the native window handle to the bridge (Phase 1).
+    ///
+    /// On Windows this is a raw `HWND` cast to `isize`.
+    /// On macOS this would be an `NSView *` cast to `isize`.
+    /// On Linux this would be the Wayland/X11 surface identifier.
+    /// Default implementation is a no-op (Phase 0 behaviour).
+    fn init_hwnd(&mut self, _hwnd: isize) {}
+
+    /// Handle a `WM_GETOBJECT` Win32 message (Windows only, Phase 1).
+    ///
+    /// Returns `Some(lresult)` when the bridge has a registered accessible object
+    /// for the given object ID. The shell returns this value from its WndProc.
+    /// Returns `None` for unrecognised object IDs — the shell falls through to
+    /// `DefWindowProc`.
+    fn handle_wm_get_object(&mut self, _wparam: usize, _lparam: isize) -> Option<isize> {
+        None
+    }
 }
 
 // ── NullBridge ───────────────────────────────────────────────────────────────
@@ -113,6 +132,13 @@ mod tests {
     }
 
     #[test]
+    fn null_bridge_init_hwnd_no_crash() {
+        let mut b = NullBridge;
+        b.init_hwnd(0xDEAD_isize);
+        assert_eq!(b.handle_wm_get_object(0, 0), None);
+    }
+
+    #[test]
     fn win_uia_bridge_stores_last_tree() {
         let mut b = windows::WinUiaBridge::new();
         assert!(b.last_tree().is_none());
@@ -163,5 +189,21 @@ mod tests {
         let mut b = platform_bridge();
         b.update(&dummy_tree());
         b.shutdown();
+    }
+
+    #[test]
+    fn win_uia_bridge_init_hwnd() {
+        let mut b = windows::WinUiaBridge::new();
+        // init_hwnd without a real HWND should not panic (no OS calls when hwnd=0)
+        b.init_hwnd(0);
+        // handle_wm_get_object returns None when hwnd is not registered
+        assert_eq!(b.handle_wm_get_object(0, 0), None);
+    }
+
+    #[test]
+    fn win_uia_bridge_wm_get_object_unknown_id() {
+        let mut b = windows::WinUiaBridge::new();
+        // Object ID 99 is not OBJID_CLIENT (−4) → None
+        assert_eq!(b.handle_wm_get_object(0, 99), None);
     }
 }

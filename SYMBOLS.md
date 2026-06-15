@@ -4,7 +4,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 
 **Usage:** grep for a symbol → get `file:line` → `Read file offset=N limit=30`.
 
-## lumen-a11y  (27 symbols)
+## lumen-a11y  (28 symbols)
 
 `crates/engine/a11y/src/lib.rs:25` **enum** `LiveRegion` — `aria-live` values per WAI-ARIA §6.6
 `crates/engine/a11y/src/lib.rs:34` **enum** `AriaCurrent` — `aria-current` values per WAI-ARIA §5.4.1
@@ -22,13 +22,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/a11y/src/platform/macos.rs:35` **fn** `new` — Create a new, uninitialized NSAccessibility bridge
 `crates/engine/a11y/src/platform/macos.rs:40` **fn** `last_tree` — Return the last-received accessibility tree, if any
 `crates/engine/a11y/src/platform/macos.rs:45` **fn** `focused_node` — Return the currently focused node, if any
-`crates/engine/a11y/src/platform/mod.rs:24` **trait** `PlatformBridge` — Trait for platform-specific accessibility bridges
-`crates/engine/a11y/src/platform/mod.rs:42` **struct** `NullBridge` — No-op bridge for headless runs, tests, and unsupported platforms
-`crates/engine/a11y/src/platform/mod.rs:56` **fn** `platform_bridge` — Create the platform bridge appropriate for the current OS
-`crates/engine/a11y/src/platform/windows.rs:25` **struct** `WinUiaBridge` — Windows UI Automation bridge
-`crates/engine/a11y/src/platform/windows.rs:34` **fn** `new` — Create a new, uninitialized UIA bridge
-`crates/engine/a11y/src/platform/windows.rs:39` **fn** `last_tree` — Return the last-received accessibility tree, if any
-`crates/engine/a11y/src/platform/windows.rs:44` **fn** `focused_node` — Return the currently focused node, if any
+`crates/engine/a11y/src/platform/mod.rs:25` **trait** `PlatformBridge` — Trait for platform-specific accessibility bridges
+`crates/engine/a11y/src/platform/mod.rs:61` **struct** `NullBridge` — No-op bridge for headless runs, tests, and unsupported platforms
+`crates/engine/a11y/src/platform/mod.rs:75` **fn** `platform_bridge` — Create the platform bridge appropriate for the current OS
+`crates/engine/a11y/src/platform/windows.rs:49` **struct** `WinUiaBridge` — Windows UI Automation bridge
+`crates/engine/a11y/src/platform/windows.rs:65` **fn** `new` — Create a new, uninitialised UIA bridge
+`crates/engine/a11y/src/platform/windows.rs:75` **fn** `last_tree` — Return the last-received accessibility tree, if any
+`crates/engine/a11y/src/platform/windows.rs:80` **fn** `focused_node` — Return the currently focused node, if any
+`crates/engine/a11y/src/platform/windows.rs:238` **fn** `ax_role_to_msaa` — Map a Lumen `AXRole` to a Windows MSAA `ROLE_SYSTEM_*` constant
 `crates/engine/a11y/src/roles.rs:14` **enum** `AXRole` — All WAI-ARIA 1.2 roles
 `crates/engine/a11y/src/roles.rs:185` **fn** `as_str` — Canonical lowercase WAI-ARIA role string
 `crates/engine/a11y/src/roles.rs:266` **fn** `parse` — Parse a WAI-ARIA role string (case-insensitive)
@@ -917,10 +918,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/html-parser/src/picture.rs:136` **fn** `pick_img_source` — Выбрать источник для одиночного `<img>` элемента (`srcset` + `sizes` +
 `crates/engine/html-parser/src/preload_scanner.rs:56` **enum** `PreloadHint` — Один speculative-fetch hint, извлечённый preload-сканером
 `crates/engine/html-parser/src/preload_scanner.rs:108` **fn** `scan_preload_hints` — Пробежать по HTML и вернуть все subresource-hint-ы, найденные в
-`crates/engine/html-parser/src/preload_scanner.rs:224` **struct** `PreloadScanner` — Инкрементальный preload-сканер (HTML LS §13.2.6.4.7)
-`crates/engine/html-parser/src/preload_scanner.rs:230` **fn** `new` — Создаёт новый инкрементальный сканер
-`crates/engine/html-parser/src/preload_scanner.rs:239` **fn** `feed_bytes` — Скармливает очередной chunk сырых байт и возвращает все hint-ы,
-`crates/engine/html-parser/src/preload_scanner.rs:247` **fn** `end` — Завершает ввод и возвращает hint-ы из буферизованного хвоста
+`crates/engine/html-parser/src/preload_scanner.rs:227` **struct** `PreloadScanner` — Инкрементальный preload-сканер (HTML LS §13.2.6.4.7)
+`crates/engine/html-parser/src/preload_scanner.rs:233` **fn** `new` — Создаёт новый инкрементальный сканер
+`crates/engine/html-parser/src/preload_scanner.rs:242` **fn** `feed_bytes` — Скармливает очередной chunk сырых байт и возвращает все hint-ы,
+`crates/engine/html-parser/src/preload_scanner.rs:250` **fn** `end` — Завершает ввод и возвращает hint-ы из буферизованного хвоста
 `crates/engine/html-parser/src/push_tokenizer.rs:32` **struct** `PushTokenizer` — Push-режим HTML5 токенизатора. См. module-level docs
 `crates/engine/html-parser/src/push_tokenizer.rs:51` **fn** `new` — Создаёт новый `PushTokenizer` в исходном состоянии
 `crates/engine/html-parser/src/push_tokenizer.rs:66` **fn** `feed` — Скармливает chunk токенизатору и возвращает токены, ставшие
@@ -1157,43 +1158,43 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/lib.rs:392` **fn** `set_import_map` — Set the import map (HTML LS §8.1.6.2) used by the module resolver
 `crates/js/src/lib.rs:402` **fn** `eval_module` — Evaluate `source` as an ES module (HTML LS §8.1.3 `<script type=module>`)
 `crates/js/src/lib.rs:472` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
-`crates/js/src/lib.rs:1230` **fn** `set_cookie_banner_dismiss` — Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls
-`crates/js/src/lib.rs:1239` **fn** `set_deterministic_mode` — Enable deterministic render mode (8F)
-`crates/js/src/lib.rs:1256` **fn** `freeze_fingerprint` — Freeze fingerprint APIs for canvas / audio / font enumeration (8F.3)
-`crates/js/src/lib.rs:1299` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS instances
-`crates/js/src/lib.rs:1324` **fn** `flush_canvas_updates` — Drain dirty Canvas 2D buffers for upload to the renderer
-`crates/js/src/lib.rs:1338` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
-`crates/js/src/lib.rs:1363` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's ports
-`crates/js/src/lib.rs:1382` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
-`crates/js/src/lib.rs:1392` **fn** `take_history_url_updates` — Drain `history.pushState` / `history.replaceState` URL-update notifications
-`crates/js/src/lib.rs:1403` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()` and
-`crates/js/src/lib.rs:1411` **fn** `take_view_transition_events` — Drain all View Transition events queued by `document.startViewTransition`
-`crates/js/src/lib.rs:1419` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
-`crates/js/src/lib.rs:1428` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
-`crates/js/src/lib.rs:1436` **fn** `has_raf_pending` — Non-consuming peek: `true` if `requestAnimationFrame` callbacks are queued
-`crates/js/src/lib.rs:1445` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
-`crates/js/src/lib.rs:1454` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
-`crates/js/src/lib.rs:1462` **fn** `update_viewport_size` — Update the viewport dimensions
-`crates/js/src/lib.rs:1471` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
-`crates/js/src/lib.rs:1483` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
-`crates/js/src/lib.rs:1492` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
-`crates/js/src/lib.rs:1499` **fn** `take_page_scroll_requests` — Drain JS page-level scroll requests from `window.scrollTo/scrollBy/scroll`
-`crates/js/src/lib.rs:1505` **fn** `set_page_scroll_y` — Update the page scroll Y exposed to JS `window.scrollY / pageYOffset`
-`crates/js/src/lib.rs:1514` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
-`crates/js/src/lib.rs:1525` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
-`crates/js/src/lib.rs:1534` **fn** `take_print_requests` — Drain all print requests queued by JS `window.print()` (W-2)
-`crates/js/src/lib.rs:1543` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
-`crates/js/src/lib.rs:1552` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
-`crates/js/src/lib.rs:1562` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
-`crates/js/src/lib.rs:1580` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
-`crates/js/src/lib.rs:1592` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
-`crates/js/src/lib.rs:1605` **fn** `deliver_scroll_progress` — Push viewport scroll progress into all active root-viewport `ScrollTimeline` instances
-`crates/js/src/lib.rs:1623` **fn** `fire_element_scroll` — Fire a non-bubbling `scroll` Event on the DOM element identified by `nid`
-`crates/js/src/lib.rs:1638` **fn** `fire_window_scroll` — Fire a non-bubbling `scroll` Event on the `window` object (page scroll)
-`crates/js/src/lib.rs:1659` **fn** `fire_snap_changing` — Fire a CSS Scroll Snap L2 `snapchanging` event on a scroll container
-`crates/js/src/lib.rs:1669` **fn** `fire_snap_changed` — Fire a CSS Scroll Snap L2 `snapchanged` event on a scroll container
-`crates/js/src/lib.rs:1704` **fn** `deliver_long_animation_frame` — Deliver a Long Animation Frame (LoAF) entry to PerformanceObserver subscribers
-`crates/js/src/lib.rs:1741` **fn** `run_gc_pass` — Tune the QuickJS GC based on the tab's lifecycle tier (10L)
+`crates/js/src/lib.rs:1233` **fn** `set_cookie_banner_dismiss` — Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls
+`crates/js/src/lib.rs:1242` **fn** `set_deterministic_mode` — Enable deterministic render mode (8F)
+`crates/js/src/lib.rs:1259` **fn** `freeze_fingerprint` — Freeze fingerprint APIs for canvas / audio / font enumeration (8F.3)
+`crates/js/src/lib.rs:1302` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS instances
+`crates/js/src/lib.rs:1327` **fn** `flush_canvas_updates` — Drain dirty Canvas 2D buffers for upload to the renderer
+`crates/js/src/lib.rs:1341` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
+`crates/js/src/lib.rs:1366` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's ports
+`crates/js/src/lib.rs:1385` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
+`crates/js/src/lib.rs:1395` **fn** `take_history_url_updates` — Drain `history.pushState` / `history.replaceState` URL-update notifications
+`crates/js/src/lib.rs:1406` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()` and
+`crates/js/src/lib.rs:1414` **fn** `take_view_transition_events` — Drain all View Transition events queued by `document.startViewTransition`
+`crates/js/src/lib.rs:1422` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
+`crates/js/src/lib.rs:1431` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
+`crates/js/src/lib.rs:1439` **fn** `has_raf_pending` — Non-consuming peek: `true` if `requestAnimationFrame` callbacks are queued
+`crates/js/src/lib.rs:1448` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
+`crates/js/src/lib.rs:1457` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
+`crates/js/src/lib.rs:1465` **fn** `update_viewport_size` — Update the viewport dimensions
+`crates/js/src/lib.rs:1474` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
+`crates/js/src/lib.rs:1486` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
+`crates/js/src/lib.rs:1495` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
+`crates/js/src/lib.rs:1502` **fn** `take_page_scroll_requests` — Drain JS page-level scroll requests from `window.scrollTo/scrollBy/scroll`
+`crates/js/src/lib.rs:1508` **fn** `set_page_scroll_y` — Update the page scroll Y exposed to JS `window.scrollY / pageYOffset`
+`crates/js/src/lib.rs:1517` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
+`crates/js/src/lib.rs:1528` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
+`crates/js/src/lib.rs:1537` **fn** `take_print_requests` — Drain all print requests queued by JS `window.print()` (W-2)
+`crates/js/src/lib.rs:1546` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
+`crates/js/src/lib.rs:1555` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
+`crates/js/src/lib.rs:1565` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
+`crates/js/src/lib.rs:1583` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
+`crates/js/src/lib.rs:1595` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
+`crates/js/src/lib.rs:1608` **fn** `deliver_scroll_progress` — Push viewport scroll progress into all active root-viewport `ScrollTimeline` instances
+`crates/js/src/lib.rs:1626` **fn** `fire_element_scroll` — Fire a non-bubbling `scroll` Event on the DOM element identified by `nid`
+`crates/js/src/lib.rs:1641` **fn** `fire_window_scroll` — Fire a non-bubbling `scroll` Event on the `window` object (page scroll)
+`crates/js/src/lib.rs:1662` **fn** `fire_snap_changing` — Fire a CSS Scroll Snap L2 `snapchanging` event on a scroll container
+`crates/js/src/lib.rs:1672` **fn** `fire_snap_changed` — Fire a CSS Scroll Snap L2 `snapchanged` event on a scroll container
+`crates/js/src/lib.rs:1707` **fn** `deliver_long_animation_frame` — Deliver a Long Animation Frame (LoAF) entry to PerformanceObserver subscribers
+`crates/js/src/lib.rs:1744` **fn** `run_gc_pass` — Tune the QuickJS GC based on the tab's lifecycle tier (10L)
 `crates/js/src/local_font_access.rs:19` **fn** `install_local_font_access_api` — Install Local Font Access API shim into the JS context
 `crates/js/src/long_animation_frames.rs:24` **fn** `install_long_animation_frames_bindings` — Install Long Animation Frames API into the QuickJS context
 `crates/js/src/media_capabilities.rs:8` **fn** `install_media_capabilities_bindings` — Install Media Capabilities API bindings into the JS context
@@ -1968,7 +1969,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (276 symbols)
+## lumen-network  (290 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -1976,6 +1977,19 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/auth.rs:632` **fn** `with` — Точное совпадение `(origin, realm)`
 `crates/network/src/auth.rs:640` **fn** `add` — Зарегистрировать creds после конструирования. `&self` (не `&mut`) —
 `crates/network/src/brotli.rs:24` **struct** `BrotliContentDecoder` — `ContentDecoder` для `Content-Encoding: br`. Stateless: один экземпляр
+`crates/network/src/coop.rs:37` **enum** `CrossOriginOpenerPolicy` — Value of the `Cross-Origin-Opener-Policy` header
+`crates/network/src/coop.rs:59` **fn** `parse` — Parse the value of a `Cross-Origin-Opener-Policy` header
+`crates/network/src/coop.rs:70` **fn** `severs_opener` — Whether this policy causes cross-origin documents to lose `window.opener`
+`crates/network/src/coop.rs:76` **fn** `allows_cross_origin_isolation` — Whether this policy is compatible with cross-origin isolation
+`crates/network/src/coop.rs:87` **enum** `CrossOriginEmbedderPolicy` — Value of the `Cross-Origin-Embedder-Policy` header
+`crates/network/src/coop.rs:100` **fn** `parse` — Parse the value of a `Cross-Origin-Embedder-Policy` header
+`crates/network/src/coop.rs:109` **fn** `enables_cross_origin_isolation` — Whether this policy enables cross-origin isolation (together with COOP)
+`crates/network/src/coop.rs:118` **enum** `CrossOriginResourcePolicy` — Value of the `Cross-Origin-Resource-Policy` header
+`crates/network/src/coop.rs:130` **fn** `parse` — Parse the value of a `Cross-Origin-Resource-Policy` header
+`crates/network/src/coop.rs:148` **struct** `CrossOriginIsolationState` — The derived cross-origin isolation state of a browsing context
+`crates/network/src/coop.rs:159` **fn** `from_headers` — Compute isolation state from COOP and COEP headers present on an HTTP response
+`crates/network/src/coop.rs:170` **fn** `is_cross_origin_isolated` — Whether this document is cross-origin isolated
+`crates/network/src/coop.rs:188` **fn** `check_corp_allowed` — Check whether a cross-origin resource fetch is allowed under CORP rules
 `crates/network/src/cors.rs:35` **enum** `CredentialsMode` — Credentials mode по Fetch §3.1 — определяет, прикладывать ли cookies /
 `crates/network/src/cors.rs:50` **fn** `cross_origin_credentials` — Применяются ли credentials для cross-origin запроса в этом режиме?
 `crates/network/src/cors.rs:62` **struct** `CorsRequest` — Cross-origin запрос — описание для решения о preflight и сборки CORS-заголовков
@@ -2140,38 +2154,39 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/http_cache.rs:399` **fn** `new` — Open or create a cache database at `path`
 `crates/network/src/http_cache.rs:423` **fn** `open_default` — Open or create the default cache database at [`lumen_cache_dir`]`/http_cache.db`
 `crates/network/src/http_cache.rs:567` **fn** `lumen_cache_dir` — Returns the Lumen cache directory for the current user
-`crates/network/src/lib.rs:1587` **struct** `HttpProxy` — HTTP proxy configuration (RFC 7230 proxy behavior)
-`crates/network/src/lib.rs:1599` **fn** `new` — Создать новый прокси без аутентификации
-`crates/network/src/lib.rs:1608` **fn** `with_basic_auth` — Создать прокси с базовой аутентификацией (username:password)
-`crates/network/src/lib.rs:1651` **struct** `HttpClient` — HTTP/1.1 + HTTPS клиент
-`crates/network/src/lib.rs:1690` **fn** `new`
-`crates/network/src/lib.rs:1716` **fn** `with_sink` — Подключить EventSink. По умолчанию sink-а нет (события не эмитятся)
-`crates/network/src/lib.rs:1727` **fn** `with_filter` — Подключить RequestFilter. По умолчанию фильтра нет — `fetch` всегда
-`crates/network/src/lib.rs:1739` **fn** `with_interceptor` — Подключить Service Worker перехватчик fetch-запросов. Проверяется
-`crates/network/src/lib.rs:1748` **fn** `with_pool` — Подключить shared `ConnectionPool`. По умолчанию у каждого `HttpClient`
-`crates/network/src/lib.rs:1758` **fn** `with_h2_pool` — Подключить shared `H2Pool` (RFC 9113 §9.1.1). По умолчанию HTTP/2
-`crates/network/src/lib.rs:1767` **fn** `with_dns_resolver` — Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
-`crates/network/src/lib.rs:1784` **fn** `with_hsts` — Подключить HSTS-store (RFC 6797). По умолчанию — нет:
-`crates/network/src/lib.rs:1800` **fn** `with_credentials` — Подключить credential-провайдер для HTTP authentication (RFC 7235 /
-`crates/network/src/lib.rs:1811` **fn** `with_tab` — Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
-`crates/network/src/lib.rs:1831` **fn** `with_mixed_content_policy` — Подключить mixed-content policy (W3C Mixed Content §5). По умолчанию
-`crates/network/src/lib.rs:1855` **fn** `with_content_decoder` — Зарегистрировать `ContentDecoder` для одного encoding. Декодер попадает
-`crates/network/src/lib.rs:1901` **fn** `with_cors_cache` — Запросить только диапазон байт ресурса (RFC 7233). Если сервер
-`crates/network/src/lib.rs:1913` **fn** `with_cookie_jar` — Attach a cookie store. The provider receives `Cookie:` injection
-`crates/network/src/lib.rs:1937` **fn** `with_http_cache` — Подключить HTTP response cache (RFC 7234)
-`crates/network/src/lib.rs:1948` **fn** `with_proxy` — Подключить HTTP прокси (RFC 7230). По умолчанию прокси не подключён — запросы
-`crates/network/src/lib.rs:1961` **fn** `with_socks5_proxy` — Подключить SOCKS5 прокси (RFC 1928) для туннелирования всех TCP-соединений
-`crates/network/src/lib.rs:1972` **fn** `with_fingerprint_profile` — Установить HTTP fingerprinting profile (Standard/Strict/Tor) для Chrome-matching
-`crates/network/src/lib.rs:1980` **fn** `fingerprint_profile` — Получить текущий HTTP fingerprinting profile
-`crates/network/src/lib.rs:1991` **fn** `with_tls_profile` — Override the TLS fingerprint profile independently of the HTTP profile
-`crates/network/src/lib.rs:1997` **fn** `tls_profile` — Получить текущий TLS fingerprinting profile
-`crates/network/src/lib.rs:2031` **fn** `fetch_cors` — CORS-enabled fetch для cross-origin subresource (Fetch §3-§4)
-`crates/network/src/lib.rs:2079` **fn** `fetch_range`
-`crates/network/src/lib.rs:2146` **fn** `fetch_multi_range` — Multi-range запрос (RFC 7233 §4.1). Один request на несколько
-`crates/network/src/lib.rs:2232` **fn** `fetch_subresource` — Загрузить подресурс с проверкой mixed-content по подключённой
-`crates/network/src/lib.rs:2782` **struct** `InMemoryFetchInterceptor` — In-memory реализация `FetchInterceptor` для тестов без SQLite
-`crates/network/src/lib.rs:2788` **fn** `new`
-`crates/network/src/lib.rs:2795` **fn** `insert` — Добавить запись: ответ для (origin, url) берётся из кэша без сети
+`crates/network/src/lib.rs:1592` **struct** `HttpProxy` — HTTP proxy configuration (RFC 7230 proxy behavior)
+`crates/network/src/lib.rs:1604` **fn** `new` — Создать новый прокси без аутентификации
+`crates/network/src/lib.rs:1613` **fn** `with_basic_auth` — Создать прокси с базовой аутентификацией (username:password)
+`crates/network/src/lib.rs:1656` **struct** `HttpClient` — HTTP/1.1 + HTTPS клиент
+`crates/network/src/lib.rs:1695` **fn** `new`
+`crates/network/src/lib.rs:1721` **fn** `with_sink` — Подключить EventSink. По умолчанию sink-а нет (события не эмитятся)
+`crates/network/src/lib.rs:1732` **fn** `with_filter` — Подключить RequestFilter. По умолчанию фильтра нет — `fetch` всегда
+`crates/network/src/lib.rs:1744` **fn** `with_interceptor` — Подключить Service Worker перехватчик fetch-запросов. Проверяется
+`crates/network/src/lib.rs:1753` **fn** `with_pool` — Подключить shared `ConnectionPool`. По умолчанию у каждого `HttpClient`
+`crates/network/src/lib.rs:1763` **fn** `with_h2_pool` — Подключить shared `H2Pool` (RFC 9113 §9.1.1). По умолчанию HTTP/2
+`crates/network/src/lib.rs:1772` **fn** `with_dns_resolver` — Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
+`crates/network/src/lib.rs:1789` **fn** `with_hsts` — Подключить HSTS-store (RFC 6797). По умолчанию — нет:
+`crates/network/src/lib.rs:1805` **fn** `with_credentials` — Подключить credential-провайдер для HTTP authentication (RFC 7235 /
+`crates/network/src/lib.rs:1816` **fn** `with_tab` — Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
+`crates/network/src/lib.rs:1836` **fn** `with_mixed_content_policy` — Подключить mixed-content policy (W3C Mixed Content §5). По умолчанию
+`crates/network/src/lib.rs:1860` **fn** `with_content_decoder` — Зарегистрировать `ContentDecoder` для одного encoding. Декодер попадает
+`crates/network/src/lib.rs:1906` **fn** `with_cors_cache` — Запросить только диапазон байт ресурса (RFC 7233). Если сервер
+`crates/network/src/lib.rs:1918` **fn** `with_cookie_jar` — Attach a cookie store. The provider receives `Cookie:` injection
+`crates/network/src/lib.rs:1942` **fn** `with_http_cache` — Подключить HTTP response cache (RFC 7234)
+`crates/network/src/lib.rs:1953` **fn** `with_proxy` — Подключить HTTP прокси (RFC 7230). По умолчанию прокси не подключён — запросы
+`crates/network/src/lib.rs:1966` **fn** `with_socks5_proxy` — Подключить SOCKS5 прокси (RFC 1928) для туннелирования всех TCP-соединений
+`crates/network/src/lib.rs:1977` **fn** `with_fingerprint_profile` — Установить HTTP fingerprinting profile (Standard/Strict/Tor) для Chrome-matching
+`crates/network/src/lib.rs:1985` **fn** `fingerprint_profile` — Получить текущий HTTP fingerprinting profile
+`crates/network/src/lib.rs:1996` **fn** `with_tls_profile` — Override the TLS fingerprint profile independently of the HTTP profile
+`crates/network/src/lib.rs:2002` **fn** `tls_profile` — Получить текущий TLS fingerprinting profile
+`crates/network/src/lib.rs:2036` **fn** `fetch_cors` — CORS-enabled fetch для cross-origin subresource (Fetch §3-§4)
+`crates/network/src/lib.rs:2084` **fn** `fetch_range`
+`crates/network/src/lib.rs:2151` **fn** `fetch_multi_range` — Multi-range запрос (RFC 7233 §4.1). Один request на несколько
+`crates/network/src/lib.rs:2237` **fn** `fetch_subresource` — Загрузить подресурс с проверкой mixed-content по подключённой
+`crates/network/src/lib.rs:2328` **fn** `fetch_page` — Fetch a top-level page and return the response body together with all
+`crates/network/src/lib.rs:2843` **struct** `InMemoryFetchInterceptor` — In-memory реализация `FetchInterceptor` для тестов без SQLite
+`crates/network/src/lib.rs:2849` **fn** `new`
+`crates/network/src/lib.rs:2856` **fn** `insert` — Добавить запись: ответ для (origin, url) берётся из кэша без сети
 `crates/network/src/mixed_content.rs:33` **enum** `RequestDestination` — Назначение подресурса по Fetch spec §3.2.7 «request destination» —
 `crates/network/src/mixed_content.rs:59` **enum** `MixedContentLevel` — Mixed-content уровень для запроса в secure-контексте
 `crates/network/src/mixed_content.rs:75` **fn** `is_strict_blocked` — Должны ли мы блокировать запрос по строгому режиму. По умолчанию
@@ -3408,7 +3423,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/zoom.rs:31` **fn** `zoom_reset` — Reset zoom to 100%
 `crates/shell/src/zoom.rs:40` **fn** `effective_viewport` — Compute the CSS layout viewport size from the physical window size
 
-## lumen-storage  (484 symbols)
+## lumen-storage  (491 symbols)
 
 `crates/storage/src/a11y_prefs.rs:38` **enum** `CursorSize` — Accessibility cursor magnification level
 `crates/storage/src/a11y_prefs.rs:50` **fn** `as_str` — Serialize to the storage string representation
@@ -3687,20 +3702,27 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/print_prefs.rs:99` **fn** `open` — Open (or create) the SQLite store for print preferences
 `crates/storage/src/print_prefs.rs:120` **fn** `load_snapshot` — Load the current snapshot of all print preferences
 `crates/storage/src/print_prefs.rs:146` **fn** `save_snapshot` — Persist a snapshot of print preferences to the database
-`crates/storage/src/profiles.rs:25` **struct** `Profile` — Один профиль пользователя
-`crates/storage/src/profiles.rs:38` **struct** `ProfileRegistry`
-`crates/storage/src/profiles.rs:49` **fn** `open`
-`crates/storage/src/profiles.rs:55` **fn** `open_in_memory`
-`crates/storage/src/profiles.rs:91` **fn** `create` — Создать новый профиль. Имя должно быть уникальным
-`crates/storage/src/profiles.rs:112` **fn** `get` — Получить профиль по id
-`crates/storage/src/profiles.rs:134` **fn** `get_by_name` — Получить профиль по имени
-`crates/storage/src/profiles.rs:156` **fn** `list_all` — Все профили. Сортировка по created_at ASC (порядок создания)
-`crates/storage/src/profiles.rs:181` **fn** `rename` — Переименовать. Имя уникально — конфликт → Error
-`crates/storage/src/profiles.rs:195` **fn** `set_settings` — Обновить settings_json
-`crates/storage/src/profiles.rs:210` **fn** `delete` — Удалить профиль. Если он был активным — active становится NULL
-`crates/storage/src/profiles.rs:224` **fn** `set_active` — Установить активный профиль. `None` → нет активного
-`crates/storage/src/profiles.rs:249` **fn** `active` — Получить активный профиль
-`crates/storage/src/profiles.rs:273` **fn** `count`
+`crates/storage/src/profile_vault.rs:52` **fn** `generate_storage_key` — Generate a cryptographically random 32-byte storage key
+`crates/storage/src/profile_vault.rs:102` **fn** `seal` — Seal a 32-byte `storage_key` under `password`
+`crates/storage/src/profile_vault.rs:130` **fn** `open` — Open a sealed blob, recovering the 32-byte storage key
+`crates/storage/src/profiles.rs:30` **struct** `Profile` — Один профиль пользователя
+`crates/storage/src/profiles.rs:49` **struct** `ProfileRegistry`
+`crates/storage/src/profiles.rs:60` **fn** `open`
+`crates/storage/src/profiles.rs:66` **fn** `open_in_memory`
+`crates/storage/src/profiles.rs:111` **fn** `create` — Создать новый профиль. Имя должно быть уникальным
+`crates/storage/src/profiles.rs:132` **fn** `get` — Получить профиль по id
+`crates/storage/src/profiles.rs:154` **fn** `get_by_name` — Получить профиль по имени
+`crates/storage/src/profiles.rs:176` **fn** `list_all` — Все профили. Сортировка по created_at ASC (порядок создания)
+`crates/storage/src/profiles.rs:201` **fn** `rename` — Переименовать. Имя уникально — конфликт → Error
+`crates/storage/src/profiles.rs:215` **fn** `set_settings` — Обновить settings_json
+`crates/storage/src/profiles.rs:230` **fn** `delete` — Удалить профиль. Если он был активным — active становится NULL
+`crates/storage/src/profiles.rs:244` **fn** `set_active` — Установить активный профиль. `None` → нет активного
+`crates/storage/src/profiles.rs:269` **fn** `active` — Получить активный профиль
+`crates/storage/src/profiles.rs:298` **fn** `set_password` — Защитить профиль паролем
+`crates/storage/src/profiles.rs:321` **fn** `clear_password` — Снять пароль с профиля
+`crates/storage/src/profiles.rs:340` **fn** `unlock` — Разблокировать профиль и получить 32-байтовый ключ хранилища
+`crates/storage/src/profiles.rs:363` **fn** `is_encrypted` — Проверить, защищён ли профиль паролем
+`crates/storage/src/profiles.rs:382` **fn** `count`
 `crates/storage/src/psl.rs:31` **struct** `PslProvider` — Реализация `PublicSuffixList` поверх crate-а `psl` (compiled-in таблица)
 `crates/storage/src/psl.rs:35` **fn** `new`
 `crates/storage/src/push_subscriptions.rs:20` **struct** `PushSubscription`
@@ -3896,4 +3918,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3828 symbols in 21 crates*
+*Total: 3850 symbols in 21 crates*
