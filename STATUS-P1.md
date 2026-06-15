@@ -6,7 +6,8 @@
 
 ## In progress
 
-—
+PH3-6: `<dialog>` focus management + `<form method="dialog">`  branch: p1-ph3-6-dialog-focus
+Next step: add `_lumen_set_focused_node` binding in dom.rs, then `showModal()` autofocus + `close()` focus-restore + `method="dialog"` in shell
 
 ---
 
