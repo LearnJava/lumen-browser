@@ -6,7 +6,8 @@
 
 ## In progress
 
-—
+PH2-2: Site isolation Phase 1 (COOP/COEP/CORP)  branch: p1-ph2-2-site-isolation
+Next step: commit implementation, then merge
 
 ---
 
