@@ -548,6 +548,7 @@ fn run_window_mode(
         restore_spinner_start_ms: None,
         resize_active: None,
         tab_drag: None,
+        dnd_state: None,
         tab_context_menu: tabs::context_menu::TabContextMenu::default(),
         shell_theme: panels::themes::ShellTheme::default(),
         reader_original_source: None,
@@ -4154,6 +4155,30 @@ fn window_title(page_title: Option<&str>) -> String {
     }
 }
 
+// ── HTML5 Drag and Drop state (PH3-9) ────────────────────────────────────────
+
+/// Minimum cursor displacement in CSS pixels before a press becomes a drag.
+const DND_THRESHOLD: f32 = 4.0;
+
+/// State for an in-progress HTML5 drag-and-drop gesture (HTML LS §9.3.3, §9.10).
+///
+/// Created on `mousedown` when the pressed element is draggable.  Becomes
+/// `active` once the cursor moves ≥ `DND_THRESHOLD` px (`dragstart` fires).
+/// Cleared on `mouseup` after firing `drop` + `dragend`.
+struct DndState {
+    /// DOM node that is being dragged (source of `dragstart`/`drag`/`dragend`).
+    src_nid: lumen_dom::NodeId,
+    /// CSS-pixel coordinates where the mouse button was pressed.
+    press_x: f32,
+    /// CSS-pixel coordinates where the mouse button was pressed.
+    press_y: f32,
+    /// Whether the drag has been activated (threshold crossed, `dragstart` fired).
+    active: bool,
+    /// Drop target currently under the cursor — used to synthesise
+    /// `dragenter` / `dragleave` when the target changes.
+    over_nid: Option<lumen_dom::NodeId>,
+}
+
 // ── Window + Renderer ────────────────────────────────────────────────────────
 
 struct Lumen {
@@ -4819,6 +4844,14 @@ struct Lumen {
     /// [`tabs::strip::DRAG_THRESHOLD`] px.  On release, calls
     /// `tab_strip.move_tab` if the drag was active.
     tab_drag: Option<tabs::strip::TabDragState>,
+    /// In-progress HTML5 drag-and-drop gesture (PH3-9 / HTML LS §9.3.3).
+    ///
+    /// `Some` from `mousedown` on a draggable element until `mouseup`.
+    /// Transitions to `active = true` after the cursor travels ≥
+    /// `DND_THRESHOLD` px, at which point `dragstart` is fired on `src_nid`.
+    /// On `mouseup`: fires `drop` on the current target, `dragend` on `src_nid`,
+    /// then clears this field.
+    dnd_state: Option<DndState>,
     /// Right-click tab context menu (CC-4): Duplicate / Pin / Move to new
     /// window / Close others / Close to the right. Hidden unless `open`.
     tab_context_menu: tabs::context_menu::TabContextMenu,
@@ -6539,6 +6572,93 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         self.request_redraw();
                     }
                 }
+                // HTML5 DnD (PH3-9): activate drag after threshold; fire drag/dragover.
+                #[cfg(feature = "quickjs")]
+                {
+                    struct DndMoveEvents {
+                        src: u32,
+                        dragstart: bool,
+                        drag: bool,
+                        dragleave: Option<u32>,
+                        dragenter: Option<u32>,
+                        dragover: Option<u32>,
+                        x_css: f32,
+                        y_css: f32,
+                    }
+                    // Collect events to fire while mutating state, then release the
+                    // mutable borrow before calling self.js_drag_event() (needs &self).
+                    let ev_opt: Option<DndMoveEvents> = if let Some(dnd) = self.dnd_state.as_mut() {
+                        let dpr = self
+                            .renderer
+                            .as_ref()
+                            .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                            .max(1e-6);
+                        let x_css = (position.x as f32) / dpr;
+                        let y_css = (position.y as f32) / dpr;
+                        let (page_x, page_y) = {
+                            let panel_x = if self.vertical_tabs.visible {
+                                panels::vertical_tabs::PANEL_WIDTH
+                            } else if self.tree_tabs.visible {
+                                panels::tree_tabs::PANEL_WIDTH
+                            } else { 0.0 };
+                            (x_css - panel_x + self.scroll_x,
+                             y_css - tabs::strip::TAB_BAR_HEIGHT + self.scroll_y)
+                        };
+                        let target_nid = self.layout_box.as_ref().and_then(|lb| {
+                            hit_test(Point::new(page_x, page_y), lb)
+                        }).map(|r| r.node);
+
+                        let mut dragstart = false;
+                        if !dnd.active {
+                            let dx = x_css - dnd.press_x;
+                            let dy = y_css - dnd.press_y;
+                            if dx * dx + dy * dy >= DND_THRESHOLD * DND_THRESHOLD {
+                                dnd.active = true;
+                                dragstart = true;
+                            }
+                        }
+                        let drag = dnd.active;
+                        let (dragleave, dragenter) = if dnd.active && dnd.over_nid != target_nid {
+                            (
+                                dnd.over_nid.map(|n| n.index() as u32),
+                                target_nid.map(|n| n.index() as u32),
+                            )
+                        } else {
+                            (None, None)
+                        };
+                        let dragover = if dnd.active {
+                            dnd.over_nid = target_nid;
+                            target_nid.map(|n| n.index() as u32)
+                        } else {
+                            None
+                        };
+                        Some(DndMoveEvents {
+                            src: dnd.src_nid.index() as u32,
+                            dragstart, drag, dragleave, dragenter, dragover,
+                            x_css, y_css,
+                        })
+                    } else {
+                        None
+                    }; // mut borrow of self.dnd_state ends here
+                    if let Some(ev) = ev_opt {
+                        if ev.dragstart {
+                            self.js_drag_event(ev.src, "dragstart", ev.x_css, ev.y_css);
+                        }
+                        if ev.drag {
+                            self.js_drag_event(ev.src, "drag", ev.x_css, ev.y_css);
+                            if let Some(old) = ev.dragleave {
+                                self.js_drag_event(old, "dragleave", ev.x_css, ev.y_css);
+                            }
+                            if let Some(nw) = ev.dragenter {
+                                self.js_drag_event(nw, "dragenter", ev.x_css, ev.y_css);
+                            }
+                            if let Some(ov) = ev.dragover {
+                                self.js_drag_event(ov, "dragover", ev.x_css, ev.y_css);
+                            }
+                        }
+                    }
+                }
+
                 // Активный drag — пересчитать scroll по новой позиции.
                 if let Some(drag) = self.scroll_drag {
                     let dpr = self
@@ -6830,6 +6950,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         let nid = hov.index() as u32;
                         self.js_pointer_event(nid, "pointerdown", x_css, y_css, 0, 1);
                         self.js_mouse_event(nid, "mousedown", x_css, y_css, 0, 1);
+                    }
+
+                    // HTML5 DnD (PH3-9 / HTML LS §9.3.3): start candidate when the
+                    // pressed element is draggable.  Drag does not activate until the
+                    // cursor moves ≥ DND_THRESHOLD px (handled in CursorMoved).
+                    #[cfg(feature = "quickjs")]
+                    if let Some(hov) = self.hovered_nid
+                        && let Some(ls) = self.layout_source.as_ref() {
+                        let doc = ls.document.lock().unwrap();
+                        if lumen_dom::is_element_draggable(&doc, hov) {
+                            self.dnd_state = Some(DndState {
+                                src_nid: hov,
+                                press_x: x_css,
+                                press_y: y_css,
+                                active: false,
+                                over_nid: None,
+                            });
+                        }
                     }
 
                     // B-7: Check if click is on resize grip of any element in layout tree.
@@ -7779,6 +7917,25 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         self.js_pointer_event(nid, "pointerup", xu, yu, 0, 0);
                         self.js_mouse_event(nid, "mouseup", xu, yu, 0, 0);
                     }
+                    // HTML5 DnD (PH3-9): fire drop + dragend on release.
+                    #[cfg(feature = "quickjs")]
+                    if let Some(dnd) = self.dnd_state.take() && dnd.active {
+                        let dpr = self
+                            .renderer
+                            .as_ref()
+                            .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                            .max(1e-6);
+                        let (xu, yu) = self.cursor_position
+                            .map(|p| ((p.x as f32) / dpr, (p.y as f32) / dpr))
+                            .unwrap_or((dnd.press_x, dnd.press_y));
+                        // drop fires on the element under the cursor (if any).
+                        if let Some(ov) = dnd.over_nid {
+                            self.js_drag_event(ov.index() as u32, "drop", xu, yu);
+                        }
+                        // dragend always fires on the source element.
+                        self.js_drag_event(dnd.src_nid.index() as u32, "dragend", xu, yu);
+                    }
+
                     // Tab drag-and-drop (§O-9): resolve the drop and reorder.
                     if let Some(drag) = self.tab_drag.take()
                         && drag.active {
@@ -8992,6 +9149,23 @@ impl Lumen {
                 x_css as i32, y_css as i32,
                 button, buttons,
                 self.mod_flags(),
+            );
+            ctx.eval_js(&script);
+        }
+    }
+
+    /// Dispatch a `DragEvent` of the given `event_type` to DOM node `nid`.
+    ///
+    /// Calls the JS shim `_lumen_dispatch_drag_event` (defined in `lumen-js::dom`)
+    /// with an empty `DataTransfer` (`data_json = "{}"`).  No-op when there is
+    /// no JS context.
+    #[cfg(feature = "quickjs")]
+    fn js_drag_event(&self, nid: u32, event_type: &str, x_css: f32, y_css: f32) {
+        if let Some(ctx) = &self.js_ctx {
+            let script = format!(
+                "_lumen_dispatch_drag_event({}, '{}', {}, {}, '{{}}')",
+                nid, event_type,
+                x_css as i32, y_css as i32,
             );
             ctx.eval_js(&script);
         }

@@ -1811,6 +1811,31 @@ pub fn find_editing_host(doc: &Document, mut node: NodeId) -> Option<NodeId> {
     }
 }
 
+/// Return `true` when `node` is draggable by default HTML5 rules (HTML LS §9.3.3).
+///
+/// An element is draggable when:
+/// - it has an explicit `draggable="true"` attribute, **or**
+/// - it is an `<a>` element with an `href` attribute (user-agent default), **or**
+/// - it is an `<img>` element (user-agent default).
+///
+/// A `draggable="false"` attribute overrides these defaults.
+pub fn is_element_draggable(doc: &Document, node: NodeId) -> bool {
+    let n = doc.get(node);
+    let NodeData::Element { name, attrs } = &n.data else { return false };
+    // Explicit draggable attribute overrides everything.
+    for attr in attrs {
+        if attr.name.local.eq_ignore_ascii_case("draggable") {
+            return !attr.value.eq_ignore_ascii_case("false");
+        }
+    }
+    // User-agent defaults: <a href> and <img> are draggable by default.
+    let tag: &str = name.local.as_ref();
+    if tag.eq_ignore_ascii_case("a") {
+        return attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("href"));
+    }
+    tag.eq_ignore_ascii_case("img")
+}
+
 /// Собрать имена и значения submittable-контролов формы из DOM-атрибутов.
 ///
 /// Обходит потомков `form_id` depth-first и возвращает `(name, value)` для
@@ -6238,5 +6263,66 @@ mod tests {
     #[test]
     fn warn_threshold_less_than_max() {
         const { assert!(WARN_DOM_NODES < MAX_DOM_NODES) };
+    }
+
+    // ── is_element_draggable ──────────────────────────────────────────────────
+
+    /// Create a one-element document and return (doc, element_id).
+    fn make_elem(tag: &str, attrs: &[(&str, &str)]) -> (Document, NodeId) {
+        let mut doc = Document::new();
+        let elem = doc.create_element(QualName::html(tag));
+        for (name, val) in attrs {
+            let node = doc.get_mut(elem);
+            if let NodeData::Element { attrs: a, .. } = &mut node.data {
+                a.push(Attribute {
+                    name: QualName::html(*name),
+                    value: val.to_string(),
+                });
+            }
+        }
+        doc.append_child(doc.root(), elem);
+        (doc, elem)
+    }
+
+    #[test]
+    fn draggable_true_makes_element_draggable() {
+        let (doc, node) = make_elem("div", &[("draggable", "true")]);
+        assert!(is_element_draggable(&doc, node));
+    }
+
+    #[test]
+    fn draggable_false_prevents_drag_on_img() {
+        let (doc, node) = make_elem("img", &[("draggable", "false"), ("src", "x.png")]);
+        assert!(!is_element_draggable(&doc, node));
+    }
+
+    #[test]
+    fn img_is_draggable_by_default() {
+        let (doc, node) = make_elem("img", &[("src", "photo.jpg")]);
+        assert!(is_element_draggable(&doc, node));
+    }
+
+    #[test]
+    fn anchor_with_href_is_draggable() {
+        let (doc, node) = make_elem("a", &[("href", "https://example.com")]);
+        assert!(is_element_draggable(&doc, node));
+    }
+
+    #[test]
+    fn anchor_without_href_is_not_draggable() {
+        let (doc, node) = make_elem("a", &[]);
+        assert!(!is_element_draggable(&doc, node));
+    }
+
+    #[test]
+    fn plain_div_is_not_draggable() {
+        let (doc, node) = make_elem("div", &[]);
+        assert!(!is_element_draggable(&doc, node));
+    }
+
+    #[test]
+    fn draggable_case_insensitive() {
+        let (doc, node) = make_elem("div", &[("DRAGGABLE", "TRUE")]);
+        assert!(is_element_draggable(&doc, node));
     }
 }
