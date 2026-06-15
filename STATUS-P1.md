@@ -6,7 +6,8 @@
 
 ## In progress
 
-—
+PH3-3: getUserMedia Phase 1  branch: p1-ph3-3-getusermedia
+Next step: AudioCaptureProvider trait → crates/core/src/ext.rs:2872
 
 ---
 

@@ -33,6 +33,7 @@ pub mod filesystem_access;
 pub mod geolocation;
 pub mod heap_snapshot;
 pub mod intl_bindings;
+pub mod media_capture;
 pub mod media_devices;
 pub mod media_session;
 pub mod navigator_bindings;
@@ -123,6 +124,7 @@ use std::sync::{
 
 pub use clipboard::set_clipboard_provider;
 pub use credentials::set_credential_provider;
+pub use media_capture::set_audio_capture_provider;
 pub use css_properties_values_api::{install_css_properties_values_api, RegisteredProperty, RegisteredPropertiesMap, get_registered_properties};
 pub use paint_worklet::{install_paint_worklet_api, PaintWorkletDef, PaintWorkletRegistry, get_paint_worklet_registry};
 pub use dom::{FullscreenRequest, HistoryUrlUpdate, NavigateRequest, PrintRequest};
@@ -595,9 +597,15 @@ impl QuickJsRuntime {
                 eprintln!("Paint Worklet API init failed: {}", e);
             }
 
+            // Install native audio capture bridge (__lumen_*_audio_capture natives).
+            // Must run before MediaDevices shim so getUserMedia can find the natives.
+            if let Err(e) = media_capture::install_media_capture_bindings(&ctx) {
+                eprintln!("MediaCapture bindings init failed: {}", e);
+            }
+
             // Install MediaDevices API (W3C Media Capture §4) — after DOM/navigator so that
-            // Promise, DOMException, and navigator are available. Phase 0: all capture
-            // requests reject with NotAllowedError; enumerateDevices returns [].
+            // Promise, DOMException, and navigator are available. Phase 1: getUserMedia
+            // resolves with a live MediaStream when AudioCaptureProvider is installed.
             if let Err(e) = media_devices::install_media_devices_bindings(&ctx) {
                 eprintln!("MediaDevices bindings init failed: {}", e);
             }

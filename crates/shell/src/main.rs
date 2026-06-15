@@ -352,6 +352,13 @@ fn run_window_mode(
         platform::clipboard::PlatformClipboard,
     ));
 
+    // Wire navigator.mediaDevices.getUserMedia({audio}) to the platform audio
+    // capture backend (PH3-3). Process-global; installed before any JS context starts.
+    #[cfg(feature = "quickjs")]
+    lumen_js::set_audio_capture_provider(std::sync::Arc::new(
+        platform::audio_capture::PlatformAudioCapture,
+    ));
+
     // Apply the fingerprint profile's navigator/screen/timezone values (9F.1).
     // Process-global; consumed by lumen_js when each page's JS context spins up.
     #[cfg(feature = "quickjs")]

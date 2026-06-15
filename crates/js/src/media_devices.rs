@@ -1,13 +1,20 @@
 //! MediaDevices API (W3C Media Capture and Streams §4).
 //!
 //! Installs `navigator.mediaDevices` and related interfaces so that pages can
-//! probe device capability and attempt capture without JS errors. Phase 0: all
-//! capture requests reject with `NotAllowedError`; `enumerateDevices` returns
-//! an empty list (no label fingerprinting, ADR-007 Layer 4).
+//! probe device capability and capture audio.
+//!
+//! **Phase 1** (PH3-3): `getUserMedia({audio:true})` resolves with a live
+//! `MediaStream` when `AudioCaptureProvider` is installed via
+//! `lumen_js::set_audio_capture_provider`.  All video requests and audio
+//! requests when no provider is registered still reject with `NotAllowedError`.
+//! `enumerateDevices()` returns real devices from the provider.
+//!
+//! The shim calls the `__lumen_*_audio_capture` natives installed by
+//! `media_capture::install_media_capture_bindings` (must run first).
 //!
 //! Installed interfaces:
-//! - `navigator.mediaDevices` — `MediaDevicesInfo` EventTarget
-//! - `MediaStream` — empty stream class, `window.MediaStream` exported
+//! - `navigator.mediaDevices` — `MediaDevices` EventTarget
+//! - `MediaStream` — stream class, `window.MediaStream` exported
 //! - `MediaStreamTrack` — track class, `window.MediaStreamTrack` exported
 //! - `MediaDeviceInfo` — device descriptor, `window.MediaDeviceInfo` exported
 //! - `InputDeviceInfo` (subclass) — `window.InputDeviceInfo` exported
@@ -191,28 +198,132 @@ const MEDIA_DEVICES_SHIM: &str = r#"(function() {
     },
 
     // W3C Media Capture §4.3.2 — getUserMedia
-    // Phase 0: always rejects with NotAllowedError (no camera/mic access).
+    // Phase 1: audio capture supported when AudioCaptureProvider is installed.
+    // Video capture still rejects (Phase 2+).
     getUserMedia: function(constraints) {
+      var wantAudio = constraints && constraints.audio;
+      var wantVideo = constraints && constraints.video;
+
+      // Video is not yet supported.
+      if (wantVideo) {
+        return Promise.reject(
+          new DOMException(
+            'Video capture is not available in Lumen Phase 1',
+            'NotAllowedError'
+          )
+        );
+      }
+
+      if (wantAudio && typeof __lumen_start_audio_capture === 'function') {
+        // Parse audio constraints.
+        var deviceId = '';
+        var sampleRate = 0;
+        var channelCount = 0;
+        if (typeof wantAudio === 'object' && wantAudio !== null) {
+          deviceId = wantAudio.deviceId || '';
+          sampleRate = wantAudio.sampleRate || 0;
+          channelCount = wantAudio.channelCount || 0;
+        }
+
+        var handleId = __lumen_start_audio_capture(deviceId, sampleRate, channelCount);
+        if (handleId < 0) {
+          return Promise.reject(
+            new DOMException(
+              'Permission denied: audio capture failed or no microphone available',
+              'NotAllowedError'
+            )
+          );
+        }
+
+        // Get device info from the native handle.
+        var info = {};
+        try { info = JSON.parse(__lumen_audio_capture_info(handleId)); } catch(e) {}
+
+        // Build a live audio MediaStreamTrack.
+        var track = new MediaStreamTrack('audio', info.label || 'Microphone');
+        track.readyState = 'live';
+        track.muted = false;
+        track._captureHandleId = handleId;
+        track._captureInfo = info;
+
+        // Override getSettings() to return real capture parameters.
+        track.getSettings = function() {
+          var ci = this._captureInfo || {};
+          return {
+            sampleRate:       ci.sample_rate    || 0,
+            channelCount:     ci.channel_count  || 1,
+            deviceId:         ci.device_id      || '',
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl:  false,
+            latency:          0,
+          };
+        };
+
+        // Override stop() to release the OS device.
+        var _origStop = track.stop.bind(track);
+        track.stop = function() {
+          if (this.readyState === 'ended') return;
+          this.readyState = 'ended';
+          this.muted = true;
+          if (typeof __lumen_stop_audio_capture === 'function' && this._captureHandleId >= 0) {
+            __lumen_stop_audio_capture(this._captureHandleId);
+            this._captureHandleId = -1;
+          }
+        };
+
+        // readPcm(maxSamples) — non-standard Lumen extension for Web Audio wiring.
+        // Returns a Float32Array of interleaved PCM samples captured since the last call.
+        track.readPcm = function(maxSamples) {
+          if (this.readyState === 'ended' || this._captureHandleId < 0) {
+            return new Float32Array(0);
+          }
+          if (typeof __lumen_read_audio_pcm !== 'function') return new Float32Array(0);
+          try {
+            var json = __lumen_read_audio_pcm(this._captureHandleId, maxSamples || 4096);
+            var arr = JSON.parse(json);
+            return new Float32Array(arr);
+          } catch(e) {
+            return new Float32Array(0);
+          }
+        };
+
+        var stream = new MediaStream([track]);
+        return Promise.resolve(stream);
+      }
+
+      // No audio constraints or no capture provider — reject.
       return Promise.reject(
         new DOMException(
-          'Permission denied: mediaDevices.getUserMedia is not available in Lumen Phase 0',
+          'Permission denied: getUserMedia requires audio constraints and a platform audio backend',
           'NotAllowedError'
         )
       );
     },
 
     // W3C Media Capture §4.3.3 — enumerateDevices
-    // Phase 0: returns an empty list (avoids device label fingerprinting, ADR-007).
+    // Phase 1: returns real audio input devices when AudioCaptureProvider is installed.
+    // Labels are populated after a getUserMedia grant (privacy-first, ADR-007 Layer 4).
     enumerateDevices: function() {
+      if (typeof __lumen_enumerate_audio_devices === 'function') {
+        try {
+          var devs = JSON.parse(__lumen_enumerate_audio_devices());
+          if (Array.isArray(devs)) {
+            return Promise.resolve(devs.map(function(d) {
+              return new MediaDeviceInfo(d.device_id, d.group_id, d.kind, d.label);
+            }));
+          }
+        } catch(e) {}
+      }
       return Promise.resolve([]);
     },
 
     // Screen Capture API §4.1 — getDisplayMedia
-    // Phase 0: always rejects with NotAllowedError (no screen capture).
+    // Phase 0 still: screen capture is not yet implemented.
     getDisplayMedia: function(options) {
       return Promise.reject(
         new DOMException(
-          'Permission denied: mediaDevices.getDisplayMedia is not available in Lumen Phase 0',
+          'Screen capture is not available in Lumen Phase 1',
           'NotAllowedError'
         )
       );
