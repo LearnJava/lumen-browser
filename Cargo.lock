@@ -1745,6 +1745,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-bidi-server"
+version = "0.0.1"
+dependencies = [
+ "lumen-core",
+ "lumen-devtools",
+]
+
+[[package]]
 name = "lumen-canvas"
 version = "0.0.1"
 dependencies = [
@@ -1948,6 +1956,7 @@ name = "lumen-shell"
 version = "0.0.1"
 dependencies = [
  "lumen-a11y",
+ "lumen-bidi-server",
  "lumen-core",
  "lumen-css-parser",
  "lumen-devtools",

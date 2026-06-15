@@ -6,7 +6,7 @@
 use std::net::TcpListener;
 use std::thread;
 
-use crate::bidi::transport;
+use crate::transport;
 
 /// Spawn the BiDi server on `127.0.0.1:port`. Non-blocking — runs in a background thread.
 ///

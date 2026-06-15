@@ -105,7 +105,7 @@ struct DownloadItem {
 
 /// A cookie stored in the BiDi session (mirrors `storage.Cookie`, BiDi §13).
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct BidiCookie {
+pub(crate) struct BidiCookie {
     /// Cookie name.
     name: String,
     /// Cookie string value.
@@ -214,7 +214,7 @@ impl BidiState {
     /// Формат совпадает с UUID v4 по длине полей, но детерминирован —
     /// клиенты BiDi трактуют context/session/navigation id как непрозрачные
     /// строки, а детерминизм нужен для unit-тестов.
-    pub(super) fn next_id(&mut self, tag: u16) -> String {
+    pub(crate) fn next_id(&mut self, tag: u16) -> String {
         self.counter += 1;
         let n = self.counter;
         format!("{:08x}-{tag:04x}-4000-8000-{n:012x}", n as u32)

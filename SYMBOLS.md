@@ -41,6 +41,34 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/bench/src/util.rs:9` **fn** `get_rss_bytes` — Returns the current process RSS (resident set size) in bytes
 `crates/bench/src/util.rs:48` **fn** `extract_style_blocks` — Concatenates all `<style>` text blocks from the document
 
+## lumen-bidi-server  (25 symbols)
+
+`crates/bidi-server/src/protocol.rs:150` **struct** `BidiState` — Connection-level BiDi state
+`crates/bidi-server/src/protocol.rs:208` **fn** `new` — Новое пустое состояние соединения
+`crates/bidi-server/src/protocol.rs:247` **fn** `locale`
+`crates/bidi-server/src/protocol.rs:256` **fn** `timezone`
+`crates/bidi-server/src/protocol.rs:263` **fn** `is_offline`
+`crates/bidi-server/src/protocol.rs:270` **fn** `user_agent_for`
+`crates/bidi-server/src/protocol.rs:283` **fn** `viewport_for`
+`crates/bidi-server/src/protocol.rs:295` **fn** `cache_behavior`
+`crates/bidi-server/src/protocol.rs:302` **fn** `intercept_count`
+`crates/bidi-server/src/protocol.rs:311` **fn** `preload_scripts_for_context` — Return preload scripts that apply to `context_id`
+`crates/bidi-server/src/protocol.rs:323` **fn** `begin_download` — Register a new download and emit `browser.downloadWillBegin` if subscribed
+`crates/bidi-server/src/protocol.rs:350` **fn** `update_download` — Update download progress and emit `browser.downloadItemUpdated` if subscribed
+`crates/bidi-server/src/protocol.rs:375` **fn** `complete_download` — Mark download as completed and emit `browser.downloadItemCompleted` if subscribed
+`crates/bidi-server/src/protocol.rs:395` **fn** `abort_download` — Mark download as aborted and emit `browser.downloadItemAborted` if subscribed
+`crates/bidi-server/src/protocol.rs:418` **fn** `record_cookie_change` — Record a cookie change (add/update/remove) and emit `storage.cookie*` events
+`crates/bidi-server/src/protocol.rs:465` **fn** `fire_user_prompt` — Open a user-prompt dialog and emit `browsingContext.userPromptOpened` if subscribed
+`crates/bidi-server/src/protocol.rs:504` **fn** `open_prompt_count` — Number of currently open user prompts (for testing)
+`crates/bidi-server/src/protocol.rs:510` **fn** `cookie_count` — Number of cookies in the session (for testing)
+`crates/bidi-server/src/protocol.rs:516` **fn** `download_count` — Number of active download items
+`crates/bidi-server/src/protocol.rs:522` **fn** `preload_script_count` — Number of registered preload scripts
+`crates/bidi-server/src/protocol.rs:534` **fn** `record_response_body`
+`crates/bidi-server/src/protocol.rs:548` **struct** `DispatchResult` — Результат обработки одной команды
+`crates/bidi-server/src/protocol.rs:563` **fn** `dispatch` — Обработать одно BiDi-сообщение, вернуть фреймы для отправки клиенту
+`crates/bidi-server/src/server.rs:14` **fn** `spawn` — Spawn the BiDi server on `127.0.0.1:port`. Non-blocking — runs in a background thread
+`crates/bidi-server/src/transport.rs:18` **fn** `handle` — Handle one accepted TCP stream: WS upgrade → BiDi command loop
+
 ## lumen-canvas  (97 symbols)
 
 `crates/engine/canvas/src/color.rs:3` **struct** `CanvasColor` — RGBA color used by the Canvas 2D API
@@ -2586,7 +2614,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:479` **fn** `tex_image_2d_rgba` — `gl.texImage2D(…, data)`. Averages pixel data to a 1×1 solid colour for
 `crates/engine/paint/src/webgl.rs:498` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Executes vertex and fragment shaders
 
-## lumen-shell  (837 symbols)
+## lumen-shell  (812 symbols)
 
 `crates/shell/src/address_bar.rs:56` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:70` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -2615,31 +2643,6 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/animation_scheduler.rs:62` **fn** `tick` — Тик планировщика: обходит layout-дерево, для каждой активной анимации
 `crates/shell/src/animation_scheduler.rs:75` **fn** `clear` — Удалить все записи для элементов, которых больше нет в дереве
 `crates/shell/src/backend_factory.rs:39` **fn** `create_backend` — Создаёт windowed рендер-бэкенд для окна `window`
-`crates/shell/src/bidi/protocol.rs:150` **struct** `BidiState` — Connection-level BiDi state
-`crates/shell/src/bidi/protocol.rs:208` **fn** `new` — Новое пустое состояние соединения
-`crates/shell/src/bidi/protocol.rs:247` **fn** `locale`
-`crates/shell/src/bidi/protocol.rs:256` **fn** `timezone`
-`crates/shell/src/bidi/protocol.rs:263` **fn** `is_offline`
-`crates/shell/src/bidi/protocol.rs:270` **fn** `user_agent_for`
-`crates/shell/src/bidi/protocol.rs:283` **fn** `viewport_for`
-`crates/shell/src/bidi/protocol.rs:295` **fn** `cache_behavior`
-`crates/shell/src/bidi/protocol.rs:302` **fn** `intercept_count`
-`crates/shell/src/bidi/protocol.rs:311` **fn** `preload_scripts_for_context` — Return preload scripts that apply to `context_id`
-`crates/shell/src/bidi/protocol.rs:323` **fn** `begin_download` — Register a new download and emit `browser.downloadWillBegin` if subscribed
-`crates/shell/src/bidi/protocol.rs:350` **fn** `update_download` — Update download progress and emit `browser.downloadItemUpdated` if subscribed
-`crates/shell/src/bidi/protocol.rs:375` **fn** `complete_download` — Mark download as completed and emit `browser.downloadItemCompleted` if subscribed
-`crates/shell/src/bidi/protocol.rs:395` **fn** `abort_download` — Mark download as aborted and emit `browser.downloadItemAborted` if subscribed
-`crates/shell/src/bidi/protocol.rs:418` **fn** `record_cookie_change` — Record a cookie change (add/update/remove) and emit `storage.cookie*` events
-`crates/shell/src/bidi/protocol.rs:465` **fn** `fire_user_prompt` — Open a user-prompt dialog and emit `browsingContext.userPromptOpened` if subscribed
-`crates/shell/src/bidi/protocol.rs:504` **fn** `open_prompt_count` — Number of currently open user prompts (for testing)
-`crates/shell/src/bidi/protocol.rs:510` **fn** `cookie_count` — Number of cookies in the session (for testing)
-`crates/shell/src/bidi/protocol.rs:516` **fn** `download_count` — Number of active download items
-`crates/shell/src/bidi/protocol.rs:522` **fn** `preload_script_count` — Number of registered preload scripts
-`crates/shell/src/bidi/protocol.rs:534` **fn** `record_response_body`
-`crates/shell/src/bidi/protocol.rs:548` **struct** `DispatchResult` — Результат обработки одной команды
-`crates/shell/src/bidi/protocol.rs:563` **fn** `dispatch` — Обработать одно BiDi-сообщение, вернуть фреймы для отправки клиенту
-`crates/shell/src/bidi/server.rs:14` **fn** `spawn` — Spawn the BiDi server on `127.0.0.1:port`. Non-blocking — runs in a background thread
-`crates/shell/src/bidi/transport.rs:18` **fn** `handle` — Handle one accepted TCP stream: WS upgrade → BiDi command loop
 `crates/shell/src/click_log.rs:27` **fn** `init` — Вызвать один раз при старте с результатом разбора флага --activity-log
 `crates/shell/src/click_log.rs:43` **fn** `is_enabled`
 `crates/shell/src/click_log.rs:97` **struct** `ClickInfo` — Клик мышью: window-координаты и что под курсором
@@ -3921,4 +3924,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3853 symbols in 21 crates*
+*Total: 3853 symbols in 22 crates*

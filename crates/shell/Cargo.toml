@@ -33,6 +33,8 @@ backend-wgpu = ["lumen-paint/backend-wgpu"]
 lumen-core.workspace = true
 # PH1-4: IPC to the out-of-process network service (NetworkServiceHandle, --network-service).
 lumen-ipc.workspace = true
+# PH3-2: WebDriver BiDi server extracted to standalone crate.
+lumen-bidi-server.workspace = true
 lumen-a11y.workspace = true
 lumen-devtools.workspace = true
 lumen-knowledge.workspace = true
