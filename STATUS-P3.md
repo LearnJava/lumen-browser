@@ -117,6 +117,15 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
 
+- **BUG-164** (2026-06-15) — внешние `<script src>` не скачивались/не исполнялись (сборщик
+  брал только инлайны), из-за чего SPA-бандлы (lenta.ru owlBundle.js и т.д.) молчали.
+  Новый `collect_scripts_ordered` помечает внешние скрипты как `ScriptSource::External`,
+  `resolve_script_sources` дозагружает их тела через subresource-фетчер
+  (`RequestDestination::Script`, зеркало `load_linked_stylesheets`), `run_scripts_with_dom`
+  принимает готовые classic/module списки в порядке документа. `src` побеждает inline,
+  не-JS блоки (importmap/ld+json/json/speculationrules) игнорируются. То же на restore из
+  hibernation. 5 регресс-тестов + функциональная проверка (инъекция `<p>` внешним скриптом
+  попала в display list). Снимает в части загрузки JS первопричину BUG-163.
 - **BUG-159** (2026-06-15) — z-indexed (own-SC) потомок плоского `overflow:auto`/`scroll`
   scroll-контейнера (не являющегося SC-owner) сбегал из scroll-слоя: его `PushScrollLayer`/
   `PopScrollLayer` эмитятся inline в `contents` родительского SC и закрываются до того, как

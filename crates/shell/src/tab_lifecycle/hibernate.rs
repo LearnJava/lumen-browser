@@ -74,6 +74,19 @@ pub(crate) fn restore_js_context(
 ) -> (Arc<Mutex<Document>>, Option<Box<dyn PersistentJs>>) {
     let base = resource_base_from_url(url);
 
+    // BUG-164: re-collect classic + module scripts in document order and
+    // re-fetch external `<script src>` bodies, so a restored tab re-runs the
+    // same scripts a fresh load would (mirrors `parse_and_layout`).
+    let (classic_scripts, module_scripts) = {
+        let mut classic_items = Vec::new();
+        let mut module_items = Vec::new();
+        crate::collect_scripts_ordered(&doc, doc.root(), &mut classic_items, &mut module_items);
+        (
+            crate::resolve_script_sources(&classic_items, &base, &event_sink, cookie_jar.clone()),
+            crate::resolve_script_sources(&module_items, &base, &event_sink, cookie_jar.clone()),
+        )
+    };
+
     // Per-origin persistence + network providers, identical to a fresh load.
     let ls_store = crate::ls_store_for_base(&base, ls_storage);
     let idb = crate::idb_store_for_base(&base, idb_dir);
@@ -109,6 +122,8 @@ pub(crate) fn restore_js_context(
         deterministic,
         false, // cross_origin_isolated: not preserved across hibernation
         &ext_scripts,
+        classic_scripts,
+        module_scripts,
     );
 
     // HTML LS §8.2.3: signal DOMContentLoaded so handlers attached during
