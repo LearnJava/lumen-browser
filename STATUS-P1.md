@@ -6,9 +6,7 @@
 
 ## In progress
 
-**PH2-3: Профили пользователя + шифрование**
-Branch: p1-ph2-3-profile-encryption
-Next step: `crates/storage/src/profile_vault.rs` — AES-256-GCM key wrapping + PBKDF2
+—
 
 ---
 
@@ -54,6 +52,7 @@ Next step: `crates/storage/src/profile_vault.rs` — AES-256-GCM key wrapping + 
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-15 | PH2-3: Профили + шифрование | `profile_vault` — AES-256-GCM key wrapping, PBKDF2-HMAC-SHA256 (100k iter, NIST SP 800-132). Sealed blob 92 байта. `ProfileRegistry`: `set_password`, `clear_password`, `unlock`, `is_encrypted`. 11 unit-тестов. |
 | 2026-06-15 | PH2-2: Site isolation Phase 1 | `lumen-network::coop` — COOP/COEP/CORP парсинг, `CrossOriginIsolationState::from_headers()`, `check_corp_allowed()`; 27 тестов. `HttpClient::fetch_page()` возвращает `(body, headers)`. `window.crossOriginIsolated` динамически через `_LUMEN_CROSS_ORIGIN_ISOLATED`; параметр `cross_origin_isolated: bool` прокинут через весь pipeline (load_bytes → render_bytes → install_dom). |
 | 2026-06-15 | PH1-8: Preload scanner | `PreloadScanner` struct поверх `PushTokenizer`: инкрементальный scan каждого HtmlChunk вместо первых 8 КБ. `collect_hints_from_tokens` — общая логика без дублирования. Shell `start_streaming_load` обновлён: hints + CSS-загрузчики стартуют из каждого chunk-а. 35 тестов (27 batch + 8 streaming). |
 | 2026-06-15 | PH1-7: Compositor thread + Property Trees | `InProcessCompositor` + `ThreadedCompositor` подключены в `session.rs` / `winit_session.rs`. `PropertyTrees::build()` вызывается после layout при каждой навигации и коммитируется в compositor. `scroll_page_by(dx, dy)` — off-main-thread scroll без relayout (обновляет `ScrollNode.offset`, recommit). 15 тестов в `test_compositor.rs`. |
