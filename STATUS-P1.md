@@ -6,7 +6,9 @@
 
 ## In progress
 
-—
+**PH2-3: Профили пользователя + шифрование**
+Branch: p1-ph2-3-profile-encryption
+Next step: `crates/storage/src/profile_vault.rs` — AES-256-GCM key wrapping + PBKDF2
 
 ---
 
