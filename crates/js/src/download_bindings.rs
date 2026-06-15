@@ -103,7 +103,7 @@ mod tests {
     fn runtime() -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let doc = Arc::new(Mutex::new(Document::new()));
-        rt.install_dom(doc, "", None, None, None, None, None, None, None)
+        rt.install_dom(doc, "", None, None, None, None, None, None, None, false)
             .unwrap();
         rt
     }

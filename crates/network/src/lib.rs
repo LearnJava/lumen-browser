@@ -36,6 +36,7 @@ use lumen_core::url::Url;
 
 mod auth;
 mod brotli;
+pub mod coop;
 pub mod csp;
 pub mod permissions_policy;
 mod cors;
@@ -91,6 +92,10 @@ pub use mixed_content::{
     block_reason as mixed_content_block_reason, classify_subresource_request,
 };
 pub use origin::{Origin, OriginError};
+pub use coop::{
+    CrossOriginOpenerPolicy, CrossOriginEmbedderPolicy, CrossOriginResourcePolicy,
+    CrossOriginIsolationState, check_corp_allowed,
+};
 pub use h2::pool::H2Pool;
 pub use pool::ConnectionPool;
 pub use range::{
@@ -2311,6 +2316,62 @@ impl HttpClient {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
         }
         Ok(resp.body)
+    }
+}
+
+impl HttpClient {
+    /// Fetch a top-level page and return the response body together with all
+    /// response headers. Unlike `NetworkTransport::fetch`, this exposes headers
+    /// so the shell can read `Cross-Origin-Opener-Policy` / `Cross-Origin-Embedder-Policy`
+    /// to compute `crossOriginIsolated` for the JS context.
+    #[allow(clippy::type_complexity)]
+    pub fn fetch_page(&self, url: &Url) -> Result<(Vec<u8>, Vec<(String, String)>)> {
+        if let Some(ref interceptor) = self.interceptor {
+            let origin = build_origin(url);
+            if let Some(body) = interceptor.intercept(url, &origin) {
+                return Ok((body, Vec::new()));
+            }
+        }
+        let url_str = url.to_string();
+        let accept_encoding = self.accept_encoding_header();
+        let destination = self.mixed_content.as_ref().map(|_| RequestDestination::Other);
+        if let Some(cache) = &self.http_cache
+            && let Some(snap) = cache.get(&url_str)
+        {
+            if snap.is_fresh {
+                return Ok((snap.body, Vec::new()));
+            }
+            if !snap.conditional_headers.is_empty() {
+                let resp = fetch_with_redirect(
+                    url, 5, &self.pool, self.h2_pool.as_deref(), self.resolver.as_ref(),
+                    self.tls_profile, self.fingerprint_profile, self.sink.as_deref(),
+                    self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
+                    &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
+                    self.mixed_content.as_ref(), destination, None, &snap.conditional_headers,
+                    self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
+                    self.proxy.as_deref(), self.socks5_proxy.as_deref(),
+                )?;
+                if resp.status == 304 {
+                    cache.revalidate(&url_str, &resp.headers);
+                    return Ok((snap.body, Vec::new()));
+                }
+                cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
+                return Ok((resp.body, resp.headers));
+            }
+        }
+        let resp = fetch_with_redirect(
+            url, 5, &self.pool, self.h2_pool.as_deref(), self.resolver.as_ref(),
+            self.tls_profile, self.fingerprint_profile, self.sink.as_deref(),
+            self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
+            &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
+            self.mixed_content.as_ref(), destination, None, "",
+            self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
+            self.proxy.as_deref(), self.socks5_proxy.as_deref(),
+        )?;
+        if let Some(cache) = &self.http_cache {
+            cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
+        }
+        Ok((resp.body, resp.headers))
     }
 }
 

@@ -107,6 +107,7 @@ pub(crate) fn restore_js_context(
         sw,
         cookie_banner_dismiss,
         deterministic,
+        false, // cross_origin_isolated: not preserved across hibernation
         &ext_scripts,
     );
 

@@ -596,6 +596,7 @@ fn do_print_to_pdf(
         false, // deterministic: not needed for PDF rendering
         false, // dark_mode: light mode for PDF output
         None,  // cookie_jar: not available in standalone PDF mode
+        raw.cross_origin_isolated,
     )?;
 
     let ctx = PaginationContext {
@@ -664,6 +665,7 @@ fn do_print_to_pdf_with_opts(
         false,
         false,
         None,
+        raw.cross_origin_isolated,
     )?;
 
     let ctx = PaginationContext {
@@ -835,13 +837,13 @@ fn run_dump(
         }
         DumpKind::Layout => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None, false)?;
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None, false)?;
             let dl = paint_ordered(&parsed.layout);
             print!("{}", lumen_paint::serialize_display_list(&dl));
             Ok(())
@@ -1785,6 +1787,7 @@ impl PageSource {
                 bytes: b"<!DOCTYPE html><html><head></head><body></body></html>".to_vec(),
                 base: ResourceBase::Url("about:blank".to_owned()),
                 content_type: Some("text/html"),
+                cross_origin_isolated: false,
             }),
             PageSource::File(path) => {
                 let bytes = std::fs::read(path)?;
@@ -1792,10 +1795,10 @@ impl PageSource {
                     bytes,
                     base: ResourceBase::File(path.clone()),
                     content_type: None,
+                    cross_origin_isolated: false,
                 })
             }
             PageSource::Url(url) => {
-                use lumen_core::ext::NetworkTransport;
                 use lumen_core::url::Url;
                 use lumen_network::{BrotliContentDecoder, HttpClient};
 
@@ -1810,12 +1813,20 @@ impl PageSource {
                     );
                 }
                 let client = crate::config::global().apply_http(builder);
-                let bytes = client.fetch(&lumen_url)?;
+                let (bytes, resp_headers) = client.fetch_page(&lumen_url)?;
                 eprintln!("Получено {} байт", bytes.len());
+                let coop = resp_headers.iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case("cross-origin-opener-policy"))
+                    .map(|(_, v)| v.as_str());
+                let coep = resp_headers.iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case("cross-origin-embedder-policy"))
+                    .map(|(_, v)| v.as_str());
+                let cross_origin_isolated = lumen_network::CrossOriginIsolationState::from_headers(coop, coep).is_cross_origin_isolated();
                 Ok(RawPage {
                     bytes,
                     base: ResourceBase::Url(url.clone()),
                     content_type: Some("text/html"),
+                    cross_origin_isolated,
                 })
             }
             PageSource::Snapshot { html, base_url } => {
@@ -1824,6 +1835,7 @@ impl PageSource {
                     bytes: html.as_bytes().to_vec(),
                     base: ResourceBase::Url(base_url.clone()),
                     content_type: Some("text/html"),
+                    cross_origin_isolated: false,
                 })
             }
             PageSource::Static { html, url } => {
@@ -1832,6 +1844,7 @@ impl PageSource {
                     bytes: html.as_bytes().to_vec(),
                     base: ResourceBase::Url(url.clone()),
                     content_type: Some("text/html"),
+                    cross_origin_isolated: false,
                 })
             }
         }
@@ -1853,7 +1866,7 @@ impl PageSource {
         }
         let raw = self.load_bytes(sink.clone(), None)?;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, false, false, None)?;
+            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, false, false, None, raw.cross_origin_isolated)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }
@@ -1864,6 +1877,10 @@ struct RawPage {
     bytes: Vec<u8>,
     base: ResourceBase,
     content_type: Option<&'static str>,
+    /// True when the server sent `Cross-Origin-Opener-Policy: same-origin` +
+    /// `Cross-Origin-Embedder-Policy: require-corp` on this document, enabling
+    /// `window.crossOriginIsolated` and unlocking SharedArrayBuffer / high-res timers.
+    cross_origin_isolated: bool,
 }
 
 /// Режим запуска shell. Решается на основе CLI-аргументов в `parse_cli`.
@@ -2754,6 +2771,7 @@ fn parse_and_layout(
     deterministic: bool,
     dark_mode: bool,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cross_origin_isolated: bool,
 ) -> Result<ParsedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
@@ -2809,6 +2827,7 @@ fn parse_and_layout(
         sw_backend,
         cookie_banner_dismiss,
         deterministic,
+        cross_origin_isolated,
         &ext_scripts,
     );
     // HTML LS §8.2.3 — after HTML parse + inline scripts: readyState → "interactive"
@@ -3371,8 +3390,9 @@ fn render_bytes(
     deterministic: bool,
     dark_mode: bool,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    cross_origin_isolated: bool,
 ) -> Result<(LoadedPage, LayoutSource, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -3689,6 +3709,7 @@ fn run_scripts_with_dom(
     sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
     cookie_banner_dismiss: bool,
     deterministic: bool,
+    cross_origin_isolated: bool,
     extra_scripts: &[String],
 ) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Box<dyn PersistentJs>>) {
     let mut scripts: Vec<String> = Vec::new();
@@ -3721,7 +3742,7 @@ fn run_scripts_with_dom(
                 if deterministic {
                     rt.set_deterministic_mode();
                 }
-                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend, None) {
+                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend, None, cross_origin_isolated) {
                     eprintln!("JS DOM init failed: {e}");
                 }
                 if let Some(map) = import_map {
@@ -5563,7 +5584,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 let ls_store = ls_store_for_base(&raw.base, &mut self.ls_storage);
                 let idb_backend = idb_store_for_base(&raw.base, self.idb_dir.as_deref());
                 let sw_backend = sw_store_for_base(&raw.base, &self.sw_backend);
-                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, idb_backend, sw_backend, &self.hyp_provider, self.cookie_banner_dismiss, self.deterministic, self.dark_mode, Some(Arc::clone(&self.cookie_jar))) {
+                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, idb_backend, sw_backend, &self.hyp_provider, self.cookie_banner_dismiss, self.deterministic, self.dark_mode, Some(Arc::clone(&self.cookie_jar)), raw.cross_origin_isolated) {
                     Ok((page, new_layout_source, new_js_ctx)) => {
                         click_log::log_load_ok(&self.source.describe(), page.title.as_deref().unwrap_or(""));
                         self.apply_loaded_page(page, Some(new_layout_source), new_js_ctx);
