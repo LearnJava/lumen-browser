@@ -365,17 +365,21 @@ pub enum DisplayCommand {
         object_position: ObjectPosition,
         image_rendering: ImageRendering,
     },
-    /// Placeholder for an `<img loading="lazy">` that has not yet been decoded.
+    /// Slot for an `<img loading="lazy">`.
     ///
-    /// Rendered as a grey rect (identical to an unregistered `DrawImage`).
+    /// Rendered as a grey rect *until* its image is registered; once the shell
+    /// fetches and registers the image (keyed by `src`), the backend draws it
+    /// in place — identical to a `DrawImage` whose bytes have arrived. This is
+    /// why `object_fit`/`object_position` are carried here too: a lazy image
+    /// must honour the same CSS fitting rules as an eager one once loaded.
     /// `node_id` is the DOM node index — lets the shell correlate this slot with
-    /// the proximity check (`_lumen_request_lazy_image_load`).  `src` is the URL
-    /// to load; once the image is registered the shell triggers a redraw so the
-    /// next pass emits `DrawImage` instead.
+    /// the proximity check (`_lumen_request_lazy_image_load`).
     LazyImageSlot {
         rect: Rect,
         node_id: u32,
         src: String,
+        object_fit: ObjectFit,
+        object_position: ObjectPosition,
     },
     /// CSS Backgrounds L3 §3.10 — `background-image: url(...)`.
     ///
@@ -1315,7 +1319,7 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                 }
                 out.push('\n');
             }
-            DisplayCommand::LazyImageSlot { rect, node_id, src } => {
+            DisplayCommand::LazyImageSlot { rect, node_id, src, .. } => {
                 out.push_str(&format!(
                     "LazyImageSlot ({:.2}, {:.2}, {:.2}, {:.2}) nid={node_id} src={src:?}\n",
                     rect.x, rect.y, rect.width, rect.height,
@@ -2131,6 +2135,8 @@ fn emit_text_frags(
                     rect: img_rect,
                     node_id: 0,
                     src: src.clone(),
+                    object_fit: frag.style.object_fit,
+                    object_position: frag.style.object_position,
                 });
             } else {
                 out.push(DisplayCommand::DrawImage {
@@ -4441,6 +4447,8 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32, sel: Op
                     rect: b.rect,
                     node_id: b.node.index() as u32,
                     src: src.clone(),
+                    object_fit: b.style.object_fit,
+                    object_position: b.style.object_position,
                 });
             } else {
                 out.push(DisplayCommand::DrawImage {
@@ -5239,6 +5247,8 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
                     rect: b.rect,
                     node_id: b.node.index() as u32,
                     src: src.clone(),
+                    object_fit: b.style.object_fit,
+                    object_position: b.style.object_position,
                 });
             } else {
                 // object-fit / object-position читаются на render-стадии вместе
@@ -7511,6 +7521,25 @@ mod tests {
         if let DisplayCommand::LazyImageSlot { node_id, .. } = slots[0] {
             // node_id must be > 0 (document root is 0; img elements get a non-zero id).
             assert!(*node_id > 0, "lazy img node_id must be non-zero, got {node_id}");
+        }
+    }
+
+    #[test]
+    fn lazy_img_slot_carries_object_fit() {
+        // BUG-163: a lazy <img> keeps its loading="lazy" attribute even after the
+        // shell fetches it, so it is painted via LazyImageSlot (not DrawImage).
+        // The slot must therefore carry object_fit/object_position so the backend
+        // can draw the loaded image with the correct CSS fitting, not a raw fill.
+        let dl = build(
+            r#"<img src="cover.jpg" loading="lazy" width="200" height="100" style="object-fit: cover">"#,
+            "",
+        );
+        let slots = lazy_slots(&dl);
+        assert_eq!(slots.len(), 1);
+        if let DisplayCommand::LazyImageSlot { object_fit, .. } = slots[0] {
+            assert_eq!(*object_fit, ObjectFit::Cover, "lazy slot must carry object-fit");
+        } else {
+            panic!("expected LazyImageSlot");
         }
     }
 

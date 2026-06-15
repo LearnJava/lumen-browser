@@ -177,7 +177,7 @@
 | [BUG-160](bugs/BUG-160-FIXED.md) | FIXED 2026-06-15 | font | WOFF2-шрифты не декодируются («unexpected end of font data»), спасает только woff-fallback — затрагивает большинство сайтов |
 | [BUG-161](bugs/BUG-161-FIXED.md) | FIXED 2026-06-15 | network | HTTP/2 HPACK «dynamic table size update exceeds negotiated max» → ya.ru не грузится |
 | [BUG-162](bugs/BUG-162-FIXED.md) | FIXED 2026-06-15 | encoding | детектор кодировки выдаёт ibm866 на чистом ASCII (example.com) вместо UTF-8 |
-| [BUG-163](bugs/BUG-163-OPEN.md) | OPEN | shell/layout | `<link rel=preload as=image>` хинты не дозагружаются и не рендерятся: на lenta.ru 94 preload-картинки игнорируются (в DOM нет `<img>` — контент строит JS) |
+| [BUG-163](bugs/BUG-163-FIXED.md) | FIXED 2026-06-15 | shell/paint | lazy `<img>` на lenta.ru не рисовались: `LazyImageSlot` всегда красил серый placeholder даже после загрузки картинки + above-the-fold lazy-картинки не дозагружались на initial paint (proximity-check был только в relayout) |
 | [BUG-164](bugs/BUG-164-FIXED.md) | FIXED 2026-06-15 | shell/js | внешние `<script src>` не скачиваются и не исполняются (collect_inline_scripts берёт только инлайны) → JS бандлы (lenta.ru owlBundle.js и т.д.) не работают, первопричина BUG-163 |
 | [BUG-165](bugs/BUG-165-FIXED.md) | FIXED 2026-06-15 | layout | flex `align-content` сдвигал строку, не двигая поддерево item-ов: вложенный контент оставался на месте → items вылезали из контейнеров (TEST-65: 16.40%) |
 
