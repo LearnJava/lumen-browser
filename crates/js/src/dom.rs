@@ -2938,6 +2938,9 @@ function _lumen_make_element(nid) {
         get: function() { return _lumen_get_children(nid).map(_lumen_make_element); },
         enumerable: false, configurable: true,
     });
+    // Web Animations API (W3C Web Animations §3.4): per-element animate() / getAnimations()
+    _obj.animate       = function(keyframes, options) { return _wa_el_animate(nid, _obj, keyframes, options); };
+    _obj.getAnimations = function() { return _wa_el_get_animations('' + nid); };
     return _obj;
 }
 
@@ -6237,6 +6240,10 @@ window.PermissionStatus      = PermissionStatus;
 window.isSecureContext       = true;
 // COOP/COEP cross-origin isolation is not yet implemented in Lumen.
 window.crossOriginIsolated   = false;
+window.Animation              = Animation;
+window.KeyframeEffect         = KeyframeEffect;
+window.DocumentTimeline       = DocumentTimeline;
+window.AnimationPlaybackEvent = AnimationPlaybackEvent;
 
 // ── window.open() (HTML LS §8.7.1) ─────────────────────────────────────────
 // Opens a new browsing context (implemented as a new tab in Lumen).
@@ -7493,6 +7500,486 @@ document.addEventListener('keydown', function(evt) {
         _lumen_dispatch(lastNid, closeEvt);
     }
 });
+
+// ── Web Animations API Level 1 (W3C Web Animations §3) ─────────────────────
+// Pure JS implementation; ticks via requestAnimationFrame.
+// P4 wires CSS animation-* properties separately; P2 handles compositor offload.
+
+// ─── DocumentTimeline (§5.1) ─────────────────────────────────────────────────
+function DocumentTimeline(options) {
+    this._originTime = (options && options.originTime != null) ? +options.originTime : 0;
+}
+Object.defineProperty(DocumentTimeline.prototype, 'currentTime', {
+    get: function() { return performance.now() + this._originTime; },
+    enumerable: true, configurable: true,
+});
+
+var _wa_document_timeline = new DocumentTimeline();
+
+// ─── Active animation registry ────────────────────────────────────────────────
+var _wa_animations    = [];   // all live Animation objects
+var _wa_el_anim_map   = {};   // String(nid) -> Array<Animation>
+var _wa_tick_pending  = false;
+
+function _wa_schedule_tick() {
+    if (_wa_tick_pending) return;
+    _wa_tick_pending = true;
+    requestAnimationFrame(_wa_do_tick);
+}
+
+function _wa_do_tick() {
+    _wa_tick_pending = false;
+    var still_running = false;
+    for (var _ti = 0; _ti < _wa_animations.length; _ti++) {
+        var _ta = _wa_animations[_ti];
+        if (_ta._playState === 'running') {
+            _ta._tick();
+            if (_ta._playState === 'running') still_running = true;
+        }
+    }
+    if (still_running) _wa_schedule_tick();
+}
+
+// ─── Easing functions ─────────────────────────────────────────────────────────
+function _wa_cb_solve(x1, y1, x2, y2, t) {
+    var lo = 0, hi = 1, u = t;
+    for (var _ci = 0; _ci < 10; _ci++) {
+        u = (lo + hi) * 0.5;
+        var bx = 3*u*(1-u)*(1-u)*x1 + 3*u*u*(1-u)*x2 + u*u*u;
+        if (bx < t) lo = u; else hi = u;
+    }
+    return 3*u*(1-u)*(1-u)*y1 + 3*u*u*(1-u)*y2 + u*u*u;
+}
+function _wa_mk_cb(x1, y1, x2, y2) {
+    return function(t) {
+        if (t <= 0) return 0;
+        if (t >= 1) return 1;
+        return _wa_cb_solve(x1, y1, x2, y2, t);
+    };
+}
+var _WA_EASINGS = {
+    'linear':      function(t) { return t; },
+    'ease':        _wa_mk_cb(0.25, 0.1, 0.25, 1.0),
+    'ease-in':     _wa_mk_cb(0.42, 0.0, 1.0,  1.0),
+    'ease-out':    _wa_mk_cb(0.0,  0.0, 0.58, 1.0),
+    'ease-in-out': _wa_mk_cb(0.42, 0.0, 0.58, 1.0),
+};
+function _wa_parse_easing(s) {
+    if (!s || s === 'linear') return _WA_EASINGS['linear'];
+    if (_WA_EASINGS[s]) return _WA_EASINGS[s];
+    var cm = /^cubic-bezier\\(\\s*([\\d.]+)\\s*,\\s*([\\d.]+)\\s*,\\s*([\\d.]+)\\s*,\\s*([\\d.]+)\\s*\\)$/.exec(s);
+    if (cm) return _wa_mk_cb(+cm[1], +cm[2], +cm[3], +cm[4]);
+    var sm = /^steps\\(\\s*(\\d+)(?:\\s*,\\s*(start|end))?\\s*\\)$/.exec(s);
+    if (sm) {
+        var _sn = +sm[1], _sj = sm[2] === 'start' ? 1 : 0;
+        return function(t) { return Math.floor(t * _sn + _sj) / _sn; };
+    }
+    return _WA_EASINGS['linear'];
+}
+
+// ─── CSS value interpolation ──────────────────────────────────────────────────
+function _wa_lerp(a, b, t) { return a + (b - a) * t; }
+
+function _wa_parse_color(s) {
+    if (!s) return null;
+    s = s.trim();
+    if (s.charAt(0) === '#') {
+        var h = s.slice(1);
+        if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+        if (h.length === 6) h += 'ff';
+        var nv = parseInt(h, 16);
+        return [(nv>>>24)&255, (nv>>16)&255, (nv>>8)&255, (nv&255)/255];
+    }
+    var cm2 = /^rgba?\\(\\s*([\\d.]+)\\s*,\\s*([\\d.]+)\\s*,\\s*([\\d.]+)(?:\\s*,\\s*([\\d.]+))?\\s*\\)$/.exec(s);
+    if (cm2) return [+cm2[1], +cm2[2], +cm2[3], cm2[4] != null ? +cm2[4] : 1];
+    return null;
+}
+function _wa_fmt_color(c) {
+    return 'rgba(' + (c[0]+0.5|0) + ',' + (c[1]+0.5|0) + ',' + (c[2]+0.5|0) + ',' + c[3].toFixed(4) + ')';
+}
+function _wa_interp_val(a, b, t) {
+    if (a === b) return a;
+    var ca = _wa_parse_color(a), cb = _wa_parse_color(b);
+    if (ca && cb) return _wa_fmt_color([_wa_lerp(ca[0],cb[0],t),_wa_lerp(ca[1],cb[1],t),_wa_lerp(ca[2],cb[2],t),_wa_lerp(ca[3],cb[3],t)]);
+    var ma = /^(-?[\\d.]+)(px|%|em|rem|deg|rad|turn|vh|vw|vmin|vmax|fr|s|ms)?$/.exec(('' + a).trim());
+    var mb = /^(-?[\\d.]+)(px|%|em|rem|deg|rad|turn|vh|vw|vmin|vmax|fr|s|ms)?$/.exec(('' + b).trim());
+    if (ma && mb) return '' + _wa_lerp(+ma[1], +mb[1], t) + (ma[2] || mb[2] || '');
+    if (!isNaN(+a) && !isNaN(+b)) return '' + _wa_lerp(+a, +b, t);
+    return t < 0.5 ? a : b;
+}
+function _wa_interp_transform(a, b, t) {
+    if (!a || a === 'none') a = '';
+    if (!b || b === 'none') b = '';
+    var re = /(\\w[\\w-]*)\\(([^)]*)\\)/g, fa = [], fb = [], m;
+    while ((m = re.exec(a)) !== null) fa.push([m[1], m[2]]);
+    re.lastIndex = 0;
+    while ((m = re.exec(b)) !== null) fb.push([m[1], m[2]]);
+    if (fa.length > 0 && fa.length === fb.length) {
+        var ok = true;
+        for (var _tfi = 0; _tfi < fa.length; _tfi++) { if (fa[_tfi][0] !== fb[_tfi][0]) { ok = false; break; } }
+        if (ok) {
+            return fa.map(function(f, i) {
+                var pa = f[1].split(',').map(function(s) { return s.trim(); });
+                var pb = fb[i][1].split(',').map(function(s) { return s.trim(); });
+                return f[0] + '(' + pa.map(function(v, j) { return _wa_interp_val(v, pb[j] !== undefined ? pb[j] : v, t); }).join(',') + ')';
+            }).join(' ');
+        }
+    }
+    return t < 0.5 ? (a || 'none') : (b || 'none');
+}
+
+// ─── Keyframe normalisation ───────────────────────────────────────────────────
+function _wa_camel_to_kebab(name) {
+    return name.replace(/([A-Z])/g, function(_, c) { return '-' + c.toLowerCase(); });
+}
+var _WA_KF_SKIP = { offset: 1, easing: 1, composite: 1 };
+
+function _wa_normalize_kf(keyframes) {
+    if (!keyframes) return [];
+    var frames;
+    if (Array.isArray(keyframes)) {
+        frames = keyframes.map(function(kf) {
+            var f = { offset: kf.offset != null ? +kf.offset : null, easing: kf.easing || 'linear', props: {} };
+            for (var k in kf) {
+                if (Object.prototype.hasOwnProperty.call(kf, k) && !_WA_KF_SKIP[k]) f.props[_wa_camel_to_kebab(k)] = '' + kf[k];
+            }
+            return f;
+        });
+        var n = frames.length;
+        if (n === 1) {
+            if (frames[0].offset === null) frames[0].offset = 1;
+        } else if (n > 1) {
+            if (frames[0].offset === null) frames[0].offset = 0;
+            if (frames[n-1].offset === null) frames[n-1].offset = 1;
+            var rs = 0;
+            for (var _kfi = 1; _kfi < n; _kfi++) {
+                if (frames[_kfi].offset !== null) {
+                    for (var _kfj = rs + 1; _kfj < _kfi; _kfj++) {
+                        frames[_kfj].offset = frames[rs].offset + (frames[_kfi].offset - frames[rs].offset) * (_kfj - rs) / (_kfi - rs);
+                    }
+                    rs = _kfi;
+                }
+            }
+        }
+    } else {
+        var keys = Object.keys(keyframes).filter(function(k) { return !_WA_KF_SKIP[k]; });
+        if (!keys.length) return [];
+        var len = Array.isArray(keyframes[keys[0]]) ? keyframes[keys[0]].length : 2;
+        frames = [];
+        for (var _ofi = 0; _ofi < len; _ofi++) {
+            var of2 = { offset: null, easing: null, props: {} };
+            if (Array.isArray(keyframes.offset)) of2.offset = +keyframes.offset[_ofi];
+            else of2.offset = len <= 1 ? 0 : _ofi / (len - 1);
+            of2.easing = Array.isArray(keyframes.easing) ? keyframes.easing[_ofi] : (keyframes.easing || 'linear');
+            keys.forEach(function(k) {
+                of2.props[_wa_camel_to_kebab(k)] = '' + (Array.isArray(keyframes[k]) ? keyframes[k][_ofi] : keyframes[k]);
+            });
+            frames.push(of2);
+        }
+    }
+    return frames.map(function(f) {
+        return { offset: f.offset !== null ? f.offset : 0, easing: _wa_parse_easing(f.easing), props: f.props };
+    });
+}
+
+// ─── KeyframeEffect (§4.2) ───────────────────────────────────────────────────
+function KeyframeEffect(target, keyframes, options) {
+    this.target     = target || null;
+    this._rawKF     = keyframes;
+    this._keyframes = _wa_normalize_kf(keyframes);
+    if (typeof options === 'number') {
+        this._timing = { duration: options, delay: 0, endDelay: 0, fill: 'none', iterations: 1, iterationStart: 0, direction: 'normal', easing: 'linear' };
+    } else {
+        var o = options || {};
+        this._timing = {
+            duration:       o.duration       != null ? +o.duration       : 0,
+            delay:          o.delay          != null ? +o.delay          : 0,
+            endDelay:       o.endDelay       != null ? +o.endDelay       : 0,
+            fill:           o.fill           || 'none',
+            iterations:     o.iterations     != null ? o.iterations      : 1,
+            iterationStart: o.iterationStart != null ? +o.iterationStart : 0,
+            direction:      o.direction      || 'normal',
+            easing:         o.easing         || 'linear',
+        };
+    }
+    this._easingFn = _wa_parse_easing(this._timing.easing);
+}
+KeyframeEffect.prototype.getKeyframes = function() { return _wa_normalize_kf(this._rawKF); };
+KeyframeEffect.prototype.getTiming    = function() {
+    var t = this._timing;
+    return { duration: t.duration, delay: t.delay, endDelay: t.endDelay, fill: t.fill, iterations: t.iterations, iterationStart: t.iterationStart, direction: t.direction, easing: t.easing };
+};
+KeyframeEffect.prototype.updateTiming = function(o) {
+    if (!o) return;
+    var t = this._timing;
+    if (o.duration       != null) t.duration       = +o.duration;
+    if (o.delay          != null) t.delay          = +o.delay;
+    if (o.endDelay       != null) t.endDelay       = +o.endDelay;
+    if (o.fill           != null) t.fill           = o.fill;
+    if (o.iterations     != null) t.iterations     = o.iterations;
+    if (o.iterationStart != null) t.iterationStart = +o.iterationStart;
+    if (o.direction      != null) t.direction      = o.direction;
+    if (o.easing         != null) { t.easing = o.easing; this._easingFn = _wa_parse_easing(o.easing); }
+};
+
+// ─── AnimationPlaybackEvent (§4.4.3) ─────────────────────────────────────────
+function AnimationPlaybackEvent(type, init) {
+    Event.call(this, type, { bubbles: false, cancelable: false });
+    this.currentTime  = (init && init.currentTime  != null) ? init.currentTime  : null;
+    this.timelineTime = (init && init.timelineTime != null) ? init.timelineTime : null;
+}
+AnimationPlaybackEvent.prototype = Object.create(Event.prototype);
+AnimationPlaybackEvent.prototype.constructor = AnimationPlaybackEvent;
+
+// ─── Animation (§3.3) ────────────────────────────────────────────────────────
+var _wa_anim_id_seq = 1;
+
+function Animation(effect, timeline) {
+    this.effect        = effect || null;
+    this.timeline      = timeline || _wa_document_timeline;
+    this.id            = '';
+    this._uid          = _wa_anim_id_seq++;
+    this._playState    = 'idle';
+    this._startTime    = null;
+    this._holdTime     = null;
+    this._playbackRate = 1;
+    this._listeners    = {};
+    var self = this;
+    this._readyResolve  = null;
+    this._finishResolve = null;
+    this._finishReject  = null;
+    this.ready    = new Promise(function(res)      { self._readyResolve  = res; });
+    this.finished = new Promise(function(res, rej) { self._finishResolve = res; self._finishReject = rej; });
+    _wa_animations.push(this);
+}
+Object.defineProperty(Animation.prototype, 'playState', {
+    get: function() { return this._playState; }, enumerable: true,
+});
+Object.defineProperty(Animation.prototype, 'currentTime', {
+    get: function() {
+        if (this._holdTime !== null) return this._holdTime;
+        if (this._startTime === null || !this.timeline) return null;
+        return (this.timeline.currentTime - this._startTime) * this._playbackRate;
+    },
+    set: function(t) {
+        if (t == null) { this._holdTime = null; return; }
+        t = +t;
+        if (this._playState !== 'paused' && this.timeline) {
+            this._startTime = this.timeline.currentTime - t / (this._playbackRate || 1);
+        } else {
+            this._holdTime = t;
+        }
+        this._applyAt(t);
+    },
+    enumerable: true,
+});
+Object.defineProperty(Animation.prototype, 'startTime', {
+    get: function() { return this._startTime; },
+    set: function(t) {
+        this._startTime = (t != null) ? +t : null;
+        this._holdTime  = null;
+        if (this._startTime !== null && this._playState !== 'running') this._playState = 'running';
+    },
+    enumerable: true,
+});
+Object.defineProperty(Animation.prototype, 'playbackRate', {
+    get: function() { return this._playbackRate; },
+    set: function(r) {
+        var ct = this.currentTime;
+        this._playbackRate = +r;
+        if (ct != null && this._playState === 'running' && this.timeline && this._playbackRate !== 0) {
+            this._startTime = this.timeline.currentTime - ct / this._playbackRate;
+        }
+    },
+    enumerable: true,
+});
+Animation.prototype._endTime = function() {
+    if (!this.effect) return 0;
+    var t = this.effect._timing;
+    var iters = (t.iterations === Infinity || t.iterations == null) ? Infinity : +t.iterations;
+    return iters === Infinity ? Infinity : t.delay + iters * t.duration + t.endDelay;
+};
+Animation.prototype.play = function() {
+    var end = this._endTime();
+    if (this._playState === 'finished') {
+        this._holdTime = (this._playbackRate >= 0) ? 0 : (isFinite(end) ? end : 0);
+    }
+    if (this._holdTime !== null && this.timeline) {
+        this._startTime = this.timeline.currentTime - this._holdTime / (this._playbackRate || 1);
+        this._holdTime  = null;
+    } else if (this._startTime === null && this.timeline) {
+        this._startTime = this.timeline.currentTime;
+    }
+    this._playState = 'running';
+    var self = this;
+    if (this._readyResolve) { this._readyResolve(self); this._readyResolve = null; }
+    _wa_schedule_tick();
+};
+Animation.prototype.pause = function() {
+    if (this._playState === 'idle') return;
+    var ct = this.currentTime;
+    this._holdTime  = ct != null ? ct : 0;
+    this._startTime = null;
+    this._playState = 'paused';
+};
+Animation.prototype.cancel = function() {
+    var self = this;
+    this._clearStyles();
+    this._playState = 'idle';
+    this._startTime = null;
+    this._holdTime  = null;
+    if (this._finishReject) { this._finishReject(new DOMException('The operation was aborted.', 'AbortError')); this._finishReject = null; }
+    _wa_animations = _wa_animations.filter(function(a) { return a._uid !== self._uid; });
+    this.ready    = new Promise(function(res)      { self._readyResolve  = res; });
+    this.finished = new Promise(function(res, rej) { self._finishResolve = res; self._finishReject = rej; });
+};
+Animation.prototype.finish = function() {
+    var end = this._endTime();
+    if (!isFinite(end)) throw new DOMException('Cannot call finish() on infinite animation', 'InvalidStateError');
+    var ct = this._playbackRate >= 0 ? end : 0;
+    this._holdTime  = ct;
+    this._startTime = null;
+    this._playState = 'finished';
+    this._applyAt(ct);
+    var self = this;
+    if (this._finishResolve) { this._finishResolve(self); this._finishResolve = null; }
+    this.dispatchEvent(new AnimationPlaybackEvent('finish', { currentTime: ct, timelineTime: this.timeline ? this.timeline.currentTime : null }));
+};
+Animation.prototype.reverse = function() {
+    this.playbackRate = -this._playbackRate;
+    this.play();
+};
+Animation.prototype.updatePlaybackRate = function(rate) { this.playbackRate = rate; };
+Animation.prototype._tick = function() {
+    var ct  = this.currentTime;
+    if (ct === null) return;
+    var end = this._endTime();
+    if (this._playbackRate >= 0 && isFinite(end) && ct >= end) {
+        this._holdTime  = end;
+        this._startTime = null;
+        this._playState = 'finished';
+        this._applyAt(end);
+        var self  = this;
+        if (this._finishResolve) { this._finishResolve(self); this._finishResolve = null; }
+        this.dispatchEvent(new AnimationPlaybackEvent('finish', { currentTime: end, timelineTime: this.timeline ? this.timeline.currentTime : null }));
+        return;
+    }
+    if (this._playbackRate < 0 && ct <= 0) {
+        this._holdTime  = 0;
+        this._startTime = null;
+        this._playState = 'finished';
+        this._applyAt(0);
+        var self2 = this;
+        if (this._finishResolve) { this._finishResolve(self2); this._finishResolve = null; }
+        return;
+    }
+    this._applyAt(ct);
+};
+Animation.prototype._applyAt = function(ct) {
+    if (!this.effect || !this.effect.target) return;
+    var kfs = this.effect._keyframes;
+    if (!kfs || !kfs.length) return;
+    var t = this.effect._timing;
+    var localT = ct - t.delay;
+    var iters = (t.iterations === Infinity || t.iterations == null) ? Infinity : +t.iterations;
+    var activeDur = iters === Infinity ? Infinity : iters * t.duration;
+    var progress;
+    if (localT < 0) {
+        if (t.fill === 'backwards' || t.fill === 'both') {
+            progress = (t.direction === 'reverse' || t.direction === 'alternate-reverse') ? 1 : 0;
+        } else { this._clearStyles(); return; }
+    } else if (isFinite(activeDur) && localT >= activeDur) {
+        if (t.fill === 'forwards' || t.fill === 'both') {
+            var li = iters === Infinity ? 0 : (Math.floor(iters) % 2);
+            var rev = (t.direction === 'reverse') || (t.direction === 'alternate' && li === 1) || (t.direction === 'alternate-reverse' && li === 0);
+            progress = rev ? 0 : 1;
+        } else { this._clearStyles(); return; }
+    } else if (t.duration <= 0) {
+        progress = 1;
+    } else {
+        var iN = (localT / t.duration) | 0;
+        var iF = (localT / t.duration) - iN;
+        var isRev = (t.direction === 'reverse') ||
+                    (t.direction === 'alternate'         && iN % 2 === 1) ||
+                    (t.direction === 'alternate-reverse' && iN % 2 === 0);
+        progress = isRev ? 1 - iF : iF;
+    }
+    progress = this.effect._easingFn(progress);
+    this._applyProgress(progress, kfs);
+};
+Animation.prototype._applyProgress = function(progress, kfs) {
+    var el = this.effect.target;
+    if (!el || !el.style) return;
+    var lo = kfs[0], hi = kfs[kfs.length - 1];
+    for (var _ai = 0; _ai < kfs.length - 1; _ai++) {
+        if (progress >= kfs[_ai].offset && progress <= kfs[_ai+1].offset) {
+            lo = kfs[_ai]; hi = kfs[_ai+1]; break;
+        }
+    }
+    var span = hi.offset - lo.offset;
+    var seg  = span > 0 ? (progress - lo.offset) / span : 1;
+    seg = lo.easing(seg);
+    if (!el.__wa_applied__) el.__wa_applied__ = {};
+    for (var _ap in lo.props) {
+        if (!Object.prototype.hasOwnProperty.call(lo.props, _ap)) continue;
+        var from = lo.props[_ap], to = hi.props[_ap] !== undefined ? hi.props[_ap] : from;
+        el.style.setProperty(_ap, _ap === 'transform' ? _wa_interp_transform(from, to, seg) : _wa_interp_val(from, to, seg));
+        el.__wa_applied__[_ap] = true;
+    }
+    for (var _hp in hi.props) {
+        if (!Object.prototype.hasOwnProperty.call(hi.props, _hp) || lo.props[_hp] !== undefined) continue;
+        var from2 = hi.props[_hp];
+        el.style.setProperty(_hp, _hp === 'transform' ? _wa_interp_transform(from2, from2, seg) : _wa_interp_val(from2, from2, seg));
+        el.__wa_applied__[_hp] = true;
+    }
+};
+Animation.prototype._clearStyles = function() {
+    var el = this.effect && this.effect.target;
+    if (!el || !el.__wa_applied__ || !el.style) return;
+    for (var p in el.__wa_applied__) {
+        if (Object.prototype.hasOwnProperty.call(el.__wa_applied__, p)) el.style.removeProperty(p);
+    }
+    delete el.__wa_applied__;
+};
+Animation.prototype.addEventListener = function(type, fn) {
+    if (!this._listeners[type]) this._listeners[type] = [];
+    this._listeners[type].push(fn);
+};
+Animation.prototype.removeEventListener = function(type, fn) {
+    var arr = this._listeners[type];
+    if (!arr) return;
+    for (var _ri = 0; _ri < arr.length; _ri++) { if (arr[_ri] === fn) { arr.splice(_ri, 1); return; } }
+};
+Animation.prototype.dispatchEvent = function(evt) {
+    var arr = this._listeners[evt.type];
+    if (!arr) return;
+    for (var _di = 0; _di < arr.length; _di++) { try { arr[_di].call(this, evt); } catch(e) {} }
+};
+
+// ─── Per-element animate() / getAnimations() helpers ─────────────────────────
+function _wa_el_animate(nid, el, keyframes, options) {
+    var effect = new KeyframeEffect(el, keyframes, options);
+    var anim   = new Animation(effect, _wa_document_timeline);
+    var key = '' + nid;
+    if (!_wa_el_anim_map[key]) _wa_el_anim_map[key] = [];
+    _wa_el_anim_map[key].push(anim);
+    anim.play();
+    return anim;
+}
+function _wa_el_get_animations(nid_str) {
+    var list = _wa_el_anim_map[nid_str];
+    if (!list) return [];
+    var live = list.filter(function(a) { return a._playState === 'running' || a._playState === 'paused'; });
+    _wa_el_anim_map[nid_str] = live;
+    return live.slice();
+}
+function _wa_doc_get_animations() {
+    return _wa_animations.filter(function(a) { return a._playState === 'running' || a._playState === 'paused'; });
+}
+
+// Wire document.timeline and document.getAnimations after document object exists.
+document.timeline      = _wa_document_timeline;
+document.getAnimations = _wa_doc_get_animations;
 
 // ── DOM GC collect (idle shell tick) ─────────────────────────────────────────
 // Called by the shell's GcTick every 30 s with an array of node IDs that
@@ -14589,5 +15076,167 @@ mod tests {
         // Second drain must be empty.
         let second = rt.take_window_open_requests();
         assert_eq!(second.len(), 0);
+    }
+
+    // ── Web Animations API tests ──────────────────────────────────────────────
+
+    #[test]
+    fn wa_document_timeline_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval("typeof document.timeline.currentTime === 'number'").unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn wa_animation_class_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval("typeof window.Animation === 'function'").unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn wa_keyframe_effect_class_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval("typeof window.KeyframeEffect === 'function'").unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn wa_document_timeline_class_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt.eval("typeof window.DocumentTimeline === 'function'").unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn wa_element_animate_returns_animation() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt
+            .eval(
+                "var el = document.getElementById('main'); \
+                 var a = el.animate([{opacity:'0'},{opacity:'1'}], 300); \
+                 a instanceof Animation",
+            )
+            .unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn wa_animate_initial_play_state() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt
+            .eval(
+                "var el = document.getElementById('main'); \
+                 var a = el.animate([{opacity:'0'},{opacity:'1'}], 300); \
+                 a.playState",
+            )
+            .unwrap();
+        assert_eq!(v, lumen_core::JsValue::String("running".into()));
+    }
+
+    #[test]
+    fn wa_animation_pause_changes_state() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt
+            .eval(
+                "var el = document.getElementById('main'); \
+                 var a = el.animate([{opacity:'0'},{opacity:'1'}], 300); \
+                 a.pause(); \
+                 a.playState",
+            )
+            .unwrap();
+        assert_eq!(v, lumen_core::JsValue::String("paused".into()));
+    }
+
+    #[test]
+    fn wa_animation_cancel_state_idle() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt
+            .eval(
+                "var el = document.getElementById('main'); \
+                 var a = el.animate([{opacity:'0'},{opacity:'1'}], 300); \
+                 a.cancel(); \
+                 a.playState",
+            )
+            .unwrap();
+        assert_eq!(v, lumen_core::JsValue::String("idle".into()));
+    }
+
+    #[test]
+    fn wa_element_get_animations_returns_running() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt
+            .eval(
+                "var el = document.getElementById('main'); \
+                 el.animate([{opacity:'0'},{opacity:'1'}], 500); \
+                 el.getAnimations().length",
+            )
+            .unwrap();
+        assert_eq!(v, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn wa_document_get_animations_includes_active() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt
+            .eval(
+                "var el = document.getElementById('main'); \
+                 el.animate([{opacity:'0'},{opacity:'1'}], 500); \
+                 document.getAnimations().length >= 1",
+            )
+            .unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn wa_keyframe_effect_get_timing() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt
+            .eval(
+                "var kf = new KeyframeEffect(null, [{opacity:'0'},{opacity:'1'}], {duration:400, delay:50}); \
+                 kf.getTiming().duration",
+            )
+            .unwrap();
+        assert_eq!(v, lumen_core::JsValue::Number(400.0));
+    }
+
+    #[test]
+    fn wa_animation_finish_resolves_state() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt
+            .eval(
+                "var el = document.getElementById('main'); \
+                 var a = el.animate([{opacity:'0'},{opacity:'1'}], 200); \
+                 a.finish(); \
+                 a.playState",
+            )
+            .unwrap();
+        assert_eq!(v, lumen_core::JsValue::String("finished".into()));
+    }
+
+    #[test]
+    fn wa_animation_playback_rate_default_one() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt
+            .eval(
+                "var el = document.getElementById('main'); \
+                 var a = el.animate([{opacity:'0'},{opacity:'1'}], 200); \
+                 a.playbackRate",
+            )
+            .unwrap();
+        assert_eq!(v, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn wa_animation_ready_is_promise() {
+        let rt = runtime_with_dom(make_doc());
+        let v = rt
+            .eval(
+                "var el = document.getElementById('main'); \
+                 var a = el.animate([{opacity:'0'},{opacity:'1'}], 200); \
+                 typeof a.ready === 'object' && a.ready !== null",
+            )
+            .unwrap();
+        assert_eq!(v, lumen_core::JsValue::Bool(true));
     }
 }
