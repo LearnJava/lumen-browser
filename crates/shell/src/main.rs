@@ -24,7 +24,7 @@ mod address_bar;
 mod animation_scheduler;
 mod click_log;
 mod backend_factory;
-mod bidi;
+use lumen_bidi_server::spawn as bidi_spawn;
 mod config;
 mod deterministic;
 mod devtools;
@@ -279,7 +279,7 @@ fn main() -> ExitCode {
     }
 
     if let Some(port) = bidi_port
-        && let Err(e) = bidi::spawn(port)
+        && let Err(e) = bidi_spawn(port)
     {
         eprintln!("Ошибка запуска BiDi на порту {port}: {e}");
         return ExitCode::FAILURE;

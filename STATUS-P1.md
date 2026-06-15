@@ -6,7 +6,8 @@
 
 ## In progress
 
-—
+PH3-2: `lumen-bidi-server` standalone крейт  branch: p1-ph3-2-bidi-server
+Next step: clippy+tests OK, готово к мержу  crates/bidi-server/src/lib.rs:1
 
 ---
 

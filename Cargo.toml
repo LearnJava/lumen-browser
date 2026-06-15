@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/shell",
     "crates/core",
+    "crates/bidi-server",
     "crates/devtools",
     "crates/driver",
     "crates/mcp",
@@ -34,6 +35,7 @@ rust-version = "1.95"
 [workspace.dependencies]
 lumen-core = { path = "crates/core" }
 lumen-ipc = { path = "crates/ipc" }
+lumen-bidi-server = { path = "crates/bidi-server" }
 lumen-devtools = { path = "crates/devtools" }
 lumen-js = { path = "crates/js" }
 lumen-network = { path = "crates/network" }

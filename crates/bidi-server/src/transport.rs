@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use lumen_devtools::ws::{read_text_frame, upgrade, write_text_frame, WsError};
 
-use crate::bidi::protocol::{dispatch, BidiState};
+use crate::protocol::{dispatch, BidiState};
 
 /// Handle one accepted TCP stream: WS upgrade → BiDi command loop.
 ///
