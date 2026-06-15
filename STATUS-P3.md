@@ -117,6 +117,19 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
 
+- **BUG-158** (2026-06-15) — карточки новостей lenta.ru налезали друг на друга.
+  Корень: `<a class="card-mini _topnews">` — flex-item column-flex контейнера
+  `.topnews__column` со стилем `flex:1` (→ `flex-basis:0`). В column-flex с
+  неопределённой высотой свободного места нет, flex-grow не растит item, и его
+  высота оставалась равной flex-basis = 0. Отсутствовал CSS Flexbox §4.5
+  *automatic minimum size*. Фикс в `lay_out_flex` (`box_tree.rs`, ветка
+  `FlexBasis::Length`/`is_column`): пол высоты = `item.rect.height` из prelim-прохода
+  (content height, уже ограниченный реальным `height`), guard `min_height:auto` +
+  `overflow_y:visible`. Важно — floor НЕ отключается при `height.is_some()`, иначе
+  самозапись `style.height` flex-ом во втором проходе grandparent-row-flex снова
+  схлопывала item в 0. Регресс-тест `flex_column_basis_zero_item_keeps_content_height`
+  (row-flex > column-flex > `flex:1`, двухпроходный путь). Проверено на живом lenta.ru.
+
 - **BUG-164** (2026-06-15) — внешние `<script src>` не скачивались/не исполнялись (сборщик
   брал только инлайны), из-за чего SPA-бандлы (lenta.ru owlBundle.js и т.д.) молчали.
   Новый `collect_scripts_ordered` помечает внешние скрипты как `ScriptSource::External`,

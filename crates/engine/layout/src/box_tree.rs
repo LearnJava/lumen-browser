@@ -6773,7 +6773,33 @@ fn lay_out_flex(
                 }
                 FlexBasis::Length(l) => {
                     let base = l.resolve(iem, Some(cb), viewport).unwrap_or(0.0).max(0.0);
-                    if is_column { base + m_t + m_b } else { base + m_l + m_r }
+                    if is_column {
+                        // CSS Flexbox §4.5: a flex item's automatic minimum size. When
+                        // its main-axis `min-height` is `auto` and the block-axis
+                        // overflow is `visible`, the item cannot shrink below its
+                        // content size suggestion. Without this floor, `flex: 1`
+                        // (which sets `flex-basis: 0`) collapses a content-sized item
+                        // to height 0 in an indefinite-height column container, so
+                        // following siblings paint on top of it (BUG-158, lenta.ru
+                        // news cards). `item.rect.height` from the preliminary pass is
+                        // the floor: it is the content height, already clamped by any
+                        // real explicit `height` (the spec's "specified size suggestion"
+                        // cap). We deliberately do NOT skip this when `style.height` is
+                        // Some, because flex layout itself writes a resolved px height
+                        // back into the item's style (see the `is_column` branch below);
+                        // on a re-layout pass that stale value must not disable the
+                        // floor and re-collapse the item.
+                        let auto_min = if is.min_height.is_none()
+                            && is.overflow_y == Overflow::Visible
+                        {
+                            item.rect.height
+                        } else {
+                            0.0
+                        };
+                        base.max(auto_min) + m_t + m_b
+                    } else {
+                        base + m_l + m_r
+                    }
                 }
             }
         })

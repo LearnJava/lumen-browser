@@ -16705,5 +16705,63 @@ mod tests {
         assert!(!overscroll_should_propagate(Auto, Auto, 0.0, 30.0, false, true));
         assert!(!overscroll_should_propagate(Auto, Auto, 30.0, 30.0, true, false));
     }
+
+    /// BUG-158: a `flex: 1` item (which sets `flex-basis: 0`) in an
+    /// indefinite-height column flex container must not collapse to height 0 —
+    /// CSS Flexbox §4.5 automatic minimum size keeps it at its content height.
+    ///
+    /// The container is itself a flex item of a row-flex grandparent, so the row
+    /// flex lays the column out twice (preliminary + final pass). The first pass
+    /// writes a resolved px `height` back into the item's style; the regression
+    /// is that the second pass saw that stale `height` and re-collapsed the item
+    /// to 0, so sibling cards painted on top of each other (lenta.ru news cards).
+    #[test]
+    fn flex_column_basis_zero_item_keeps_content_height() {
+        let body = lay_measured(
+            "<div class=g>\
+               <div class=col>\
+                 <div class=a>First card single line</div>\
+                 <div class=mid>Middle card has enough text to wrap onto two lines here ok</div>\
+                 <div class=b>Last card single line</div>\
+               </div>\
+             </div>",
+            ".g { display: flex; } \
+             .col { display: flex; flex-direction: column; width: 280px; } \
+             .a, .b { flex: none; } \
+             .mid { flex: 1; }",
+            800.0,
+        );
+
+        let grand = body.children.iter().find(|c| !matches!(c.kind, BoxKind::Skip)).unwrap();
+        let col = grand.children.iter().find(|c| !matches!(c.kind, BoxKind::Skip)).unwrap();
+        // (y, height) of each card, in source order.
+        let cards: Vec<(f32, f32)> = col
+            .children
+            .iter()
+            .filter(|c| !matches!(c.kind, BoxKind::Skip))
+            .map(|c| (c.rect.y, c.rect.height))
+            .collect();
+        assert_eq!(cards.len(), 3, "expected 3 cards, got {}", cards.len());
+
+        // The middle `flex: 1` card must keep a real content height, not collapse.
+        assert!(
+            cards[1].1 > 10.0,
+            "middle flex:1 card collapsed to height {} (BUG-158)",
+            cards[1].1
+        );
+
+        // Cards stack without overlap: each starts at the bottom edge of the
+        // previous one (no two share a y, which is the painted symptom).
+        assert!(
+            (cards[1].0 - (cards[0].0 + cards[0].1)).abs() < 0.5,
+            "card 1 (y={}) does not stack under card 0 (y={}, h={})",
+            cards[1].0, cards[0].0, cards[0].1
+        );
+        assert!(
+            (cards[2].0 - (cards[1].0 + cards[1].1)).abs() < 0.5,
+            "card 2 (y={}) does not stack under card 1 (y={}, h={})",
+            cards[2].0, cards[1].0, cards[1].1
+        );
+    }
 }
 
