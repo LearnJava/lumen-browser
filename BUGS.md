@@ -174,7 +174,7 @@
 | [BUG-157](bugs/BUG-157-FIXED.md) | FIXED 2026-06-15 | paint | ЛОЖНАЯ РЕГРЕССИЯ TEST-40: та же причина — устаревший lumen.exe |
 | [BUG-158](bugs/BUG-158-OPEN.md) | OPEN | layout | карточки новостей lenta.ru налезают друг на друга: контейнеры схлопнуты в height=0, сиблинги рисуются на одном y |
 | [BUG-159](bugs/BUG-159-OPEN.md) | OPEN | paint | position:absolute потомок scroll-контейнера эмитится после PopScrollLayer (вне scroll-слоя) → ведёт себя как fixed, не скроллится |
-| [BUG-160](bugs/BUG-160-OPEN.md) | OPEN | font | WOFF2-шрифты не декодируются («unexpected end of font data»), спасает только woff-fallback — затрагивает большинство сайтов |
+| [BUG-160](bugs/BUG-160-FIXED.md) | FIXED 2026-06-15 | font | WOFF2-шрифты не декодируются («unexpected end of font data»), спасает только woff-fallback — затрагивает большинство сайтов |
 | [BUG-161](bugs/BUG-161-FIXED.md) | FIXED 2026-06-15 | network | HTTP/2 HPACK «dynamic table size update exceeds negotiated max» → ya.ru не грузится |
 | [BUG-162](bugs/BUG-162-FIXED.md) | FIXED 2026-06-15 | encoding | детектор кодировки выдаёт ibm866 на чистом ASCII (example.com) вместо UTF-8 |
 
