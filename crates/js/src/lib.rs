@@ -480,6 +480,8 @@ impl QuickJsRuntime {
         idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
         sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
         cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
+        // True when COOP=same-origin + COEP=require-corp are both present on this document.
+        cross_origin_isolated: bool,
     ) -> JsResult<()> {
         // Update the ESM resolver's base URL so relative imports from inline module
         // scripts resolve correctly against the page origin (HTML LS §8.1.3).
@@ -554,6 +556,7 @@ impl QuickJsRuntime {
                 Arc::clone(&self.pending_history_url_updates),
                 Arc::clone(&self.fullscreen_requests),
                 Arc::clone(&self.print_requests),
+                cross_origin_isolated,
             )
             .map_err(|e| rq_err(&ctx, e))?;
 
