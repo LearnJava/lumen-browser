@@ -222,6 +222,18 @@
     <div class="mq-sw mq-rd"></div>
   </div>
 
+  <!-- ── @supports selector() demo (CSS Conditional L4 §4.2) ── -->
+  <style>
+    @supports selector(:has(*))                  { .sup-has  { background: #2f855a; } }
+    @supports selector(::slotted(*))             { .sup-slot { background: #2f855a; } }
+    @supports selector(:totally-unknown-pseudo)  { .sup-bad  { background: #2b6cb0; } }
+  </style>
+  <div class="mq-row">
+    <div class="mq-sw sup-has"></div>
+    <div class="mq-sw sup-slot"></div>
+    <div class="mq-sw sup-bad"></div>
+  </div>
+
   <!-- ── vertical-align demo ───────────────────────────────────────────────── -->
   <style>
     .va-row { margin-top: 12px; margin-left: 24px; white-space: nowrap; }
