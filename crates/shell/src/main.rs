@@ -485,6 +485,7 @@ fn run_window_mode(
         stream_builder: None,
         stream_last_paint: std::time::Instant::now(),
         stream_sheet: lumen_css_parser::Stylesheet::default(),
+        stream_layout_seeded: false,
         preload_dispatched: std::collections::HashSet::new(),
         ime_composing: None,
         bfcache: BfCache::new(16),
@@ -2970,6 +2971,8 @@ struct PageSnapshot {
     stream_last_paint: std::time::Instant,
     /// CSS accumulated from parallel CSS-loader threads during streaming; applied to intermediate frames.
     stream_sheet: lumen_css_parser::Stylesheet,
+    /// PH1-2b: whether `layout_box` is a valid graft source for the current stream.
+    stream_layout_seeded: bool,
     preload_dispatched: std::collections::HashSet<String>,
     ime_composing: Option<String>,
     bfcache: BfCache,
@@ -4530,6 +4533,11 @@ struct Lumen {
     /// в `paint_partial_dom` вместо пустой таблицы. Сбрасывается на каждый
     /// новый страничный load.
     stream_sheet: lumen_css_parser::Stylesheet,
+    /// PH1-2b: `true` когда `layout_box` содержит дерево, построенное из текущего
+    /// streaming-DOM (валидный источник для инкрементального graft). `false` в
+    /// начале новой навигации — первый промежуточный кадр делает полный layout и
+    /// «засевает» дерево; последующие кадры релейаутят инкрементально.
+    stream_layout_seeded: bool,
     /// URL subresource-хинтов, уже отправленных в sink во время streaming
     /// (`EarlyPreloadHints`). Финальный `dispatch_preload_hints` в `LoadDone`
     /// пропускает URL из этого набора — без дублей в stderr и без повторных
@@ -5857,13 +5865,24 @@ impl Lumen {
             Err(_) => return,
         };
 
-        let layout = lumen_layout::layout_measured(doc, &self.stream_sheet, viewport, &measurer);
+        // PH1-2b: после первого («засевающего») кадра релейаутим инкрементально —
+        // переиспользуем геометрию неизменённого префикса из прошлого кадра,
+        // релейаутим только новые/изменённые поддеревья. Полный layout всего
+        // частичного DOM на каждый 16-мс тик тормозил большие страницы.
+        let null_hp = lumen_core::ext::NullHyphenationProvider;
+        let layout = match (self.stream_layout_seeded, self.layout_box.as_ref()) {
+            (true, Some(prev)) => lumen_layout::layout_streaming_incremental(
+                doc, &self.stream_sheet, viewport, &measurer, &null_hp, false, prev,
+            ),
+            _ => lumen_layout::layout_measured(doc, &self.stream_sheet, viewport, &measurer),
+        };
         let dl = paint_ordered(&layout);
 
         self.content_height = content_height_of(&dl);
         self.content_width = content_width_of(&dl);
         self.display_list = dl;
         self.layout_box = Some(layout);
+        self.stream_layout_seeded = true;
         self.update_snap_containers();
         self.update_scroll_containers();
 
@@ -6181,6 +6200,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // Сбрасываем состояние предыдущего streaming-цикла — новая страница.
         self.preload_dispatched.clear();
         self.stream_sheet = lumen_css_parser::Stylesheet::default();
+        self.stream_layout_seeded = false;
         // Record navigation start for the initial streaming load.
         self.nav_start = Some(std::time::Instant::now());
         self.start_streaming_load();
@@ -13535,6 +13555,7 @@ impl Lumen {
             stream_builder: self.stream_builder.take(),
             stream_last_paint: self.stream_last_paint,
             stream_sheet: std::mem::take(&mut self.stream_sheet),
+            stream_layout_seeded: self.stream_layout_seeded,
             preload_dispatched: std::mem::take(&mut self.preload_dispatched),
             ime_composing: self.ime_composing.take(),
             bfcache: std::mem::replace(&mut self.bfcache, BfCache::new(16)),
@@ -13604,6 +13625,7 @@ impl Lumen {
         self.stream_builder = snap.stream_builder;
         self.stream_last_paint = snap.stream_last_paint;
         self.stream_sheet = snap.stream_sheet;
+        self.stream_layout_seeded = snap.stream_layout_seeded;
         self.preload_dispatched = snap.preload_dispatched;
         self.ime_composing = snap.ime_composing;
         self.bfcache = snap.bfcache;
@@ -13686,6 +13708,7 @@ impl Lumen {
         self.stream_builder = None;
         self.stream_last_paint = std::time::Instant::now();
         self.stream_sheet = lumen_css_parser::Stylesheet::default();
+        self.stream_layout_seeded = false;
         self.preload_dispatched = std::collections::HashSet::new();
         self.ime_composing = None;
         self.bfcache = BfCache::new(16);
