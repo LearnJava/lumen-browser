@@ -2050,7 +2050,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (295 symbols)
+## lumen-network  (296 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -2115,18 +2115,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/ctap2.rs:873` **struct** `WinHidDevice` — A real USB HID device opened via Win32 `CreateFile`
 `crates/network/src/ctap2.rs:933` **fn** `enumerate` — Enumerate USB HID FIDO2 devices via Win32 SetupDi + HidD APIs
 `crates/network/src/ctap2.rs:1108` **struct** `LinuxHidDevice` — A FIDO2 device exposed as a Linux `/dev/hidrawN` character device
-`crates/network/src/ctap2.rs:1201` **fn** `enumerate` — Scan `/dev/hidraw0`..`/dev/hidraw31` and return FIDO2 devices
-`crates/network/src/ctap2.rs:1240` **struct** `CtapRoamingTransport` — [`CredentialProvider`] that uses a connected FIDO2 USB security key
-`crates/network/src/ctap2.rs:1244` **fn** `new` — Create a new roaming transport
-`crates/network/src/ctap2.rs:1336` **struct** `CompositeCredentialProvider` — A [`CredentialProvider`] that delegates to a priority-ordered list
-`crates/network/src/ctap2.rs:1342` **fn** `new` — Create a composite from an ordered list of providers
-`crates/network/src/ctap2.rs:1381` **struct** `MockHidDevice` — A scripted in-memory [`HidDevice`] for unit tests
-`crates/network/src/ctap2.rs:1391` **fn** `new` — Create a blank mock with no queued responses
-`crates/network/src/ctap2.rs:1400` **fn** `push_response` — Push a raw 65-byte HID report to the response queue
-`crates/network/src/ctap2.rs:1405` **fn** `queue_init_response` — Build and queue a CTAPHID_INIT response for the given nonce + CID
-`crates/network/src/ctap2.rs:1422` **fn** `queue_cbor_response` — Build and queue a successful CTAPHID_CBOR response with the given payload
-`crates/network/src/ctap2.rs:1452` **fn** `written_reports` — Return all written reports (as slices) for inspection
-`crates/network/src/ctap2.rs:1483` **fn** `seal` — Reverse the internal response queue so items are served FIFO
+`crates/network/src/ctap2.rs:1203` **fn** `enumerate` — Scan `/dev/hidraw0`..`/dev/hidraw31` and return FIDO2 devices
+`crates/network/src/ctap2.rs:1242` **struct** `CtapRoamingTransport` — [`CredentialProvider`] that uses a connected FIDO2 USB security key
+`crates/network/src/ctap2.rs:1246` **fn** `new` — Create a new roaming transport
+`crates/network/src/ctap2.rs:1338` **struct** `CompositeCredentialProvider` — A [`CredentialProvider`] that delegates to a priority-ordered list
+`crates/network/src/ctap2.rs:1344` **fn** `new` — Create a composite from an ordered list of providers
+`crates/network/src/ctap2.rs:1383` **struct** `MockHidDevice` — A scripted in-memory [`HidDevice`] for unit tests
+`crates/network/src/ctap2.rs:1393` **fn** `new` — Create a blank mock with no queued responses
+`crates/network/src/ctap2.rs:1402` **fn** `push_response` — Push a raw 65-byte HID report to the response queue
+`crates/network/src/ctap2.rs:1407` **fn** `queue_init_response` — Build and queue a CTAPHID_INIT response for the given nonce + CID
+`crates/network/src/ctap2.rs:1424` **fn** `queue_cbor_response` — Build and queue a successful CTAPHID_CBOR response with the given payload
+`crates/network/src/ctap2.rs:1454` **fn** `written_reports` — Return all written reports (as slices) for inspection
+`crates/network/src/ctap2.rs:1485` **fn** `seal` — Reverse the internal response queue so items are served FIFO
 `crates/network/src/dns.rs:22` **struct** `SystemDnsResolver` — DNS-резолвер на основе системного getaddrinfo (через std::net)
 `crates/network/src/doh.rs:46` **fn** `encode_query` — Закодировать стандартный DNS query — header + одна question. RD=1
 `crates/network/src/doh.rs:100` **fn** `decode_answer_ips` — Распакованный DNS-ответ — без CNAME-цепочек, только IP-адреса из
@@ -2238,41 +2238,42 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/lib.rs:95` **fn** `set_global_adblock_enabled` — Enable or disable the process-global ad-block filter
 `crates/network/src/lib.rs:101` **fn** `global_adblock_enabled` — Whether the process-global ad-block filter is currently enabled
 `crates/network/src/lib.rs:110` **fn** `install_global_adblock_filter` — Install (or replace) the process-global ad-block filter
-`crates/network/src/lib.rs:1649` **struct** `HttpProxy` — HTTP proxy configuration (RFC 7230 proxy behavior)
-`crates/network/src/lib.rs:1661` **fn** `new` — Создать новый прокси без аутентификации
-`crates/network/src/lib.rs:1670` **fn** `with_basic_auth` — Создать прокси с базовой аутентификацией (username:password)
-`crates/network/src/lib.rs:1713` **struct** `HttpClient` — HTTP/1.1 + HTTPS клиент
-`crates/network/src/lib.rs:1752` **fn** `new`
-`crates/network/src/lib.rs:1778` **fn** `with_sink` — Подключить EventSink. По умолчанию sink-а нет (события не эмитятся)
-`crates/network/src/lib.rs:1789` **fn** `with_filter` — Подключить RequestFilter. По умолчанию фильтра нет — `fetch` всегда
-`crates/network/src/lib.rs:1801` **fn** `with_interceptor` — Подключить Service Worker перехватчик fetch-запросов. Проверяется
-`crates/network/src/lib.rs:1810` **fn** `with_pool` — Подключить shared `ConnectionPool`. По умолчанию у каждого `HttpClient`
-`crates/network/src/lib.rs:1820` **fn** `with_h2_pool` — Подключить shared `H2Pool` (RFC 9113 §9.1.1). По умолчанию HTTP/2
-`crates/network/src/lib.rs:1829` **fn** `with_dns_resolver` — Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
-`crates/network/src/lib.rs:1846` **fn** `with_hsts` — Подключить HSTS-store (RFC 6797). По умолчанию — нет:
-`crates/network/src/lib.rs:1862` **fn** `with_credentials` — Подключить credential-провайдер для HTTP authentication (RFC 7235 /
-`crates/network/src/lib.rs:1873` **fn** `with_tab` — Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
-`crates/network/src/lib.rs:1893` **fn** `with_mixed_content_policy` — Подключить mixed-content policy (W3C Mixed Content §5). По умолчанию
-`crates/network/src/lib.rs:1917` **fn** `with_content_decoder` — Зарегистрировать `ContentDecoder` для одного encoding. Декодер попадает
-`crates/network/src/lib.rs:1963` **fn** `with_cors_cache` — Запросить только диапазон байт ресурса (RFC 7233). Если сервер
-`crates/network/src/lib.rs:1975` **fn** `with_cookie_jar` — Attach a cookie store. The provider receives `Cookie:` injection
-`crates/network/src/lib.rs:1999` **fn** `with_http_cache` — Подключить HTTP response cache (RFC 7234)
-`crates/network/src/lib.rs:2010` **fn** `with_proxy` — Подключить HTTP прокси (RFC 7230). По умолчанию прокси не подключён — запросы
-`crates/network/src/lib.rs:2023` **fn** `with_socks5_proxy` — Подключить SOCKS5 прокси (RFC 1928) для туннелирования всех TCP-соединений
-`crates/network/src/lib.rs:2034` **fn** `with_fingerprint_profile` — Установить HTTP fingerprinting profile (Standard/Strict/Tor) для Chrome-matching
-`crates/network/src/lib.rs:2042` **fn** `fingerprint_profile` — Получить текущий HTTP fingerprinting profile
-`crates/network/src/lib.rs:2053` **fn** `with_tls_profile` — Override the TLS fingerprint profile independently of the HTTP profile
-`crates/network/src/lib.rs:2059` **fn** `tls_profile` — Получить текущий TLS fingerprinting profile
-`crates/network/src/lib.rs:2093` **fn** `fetch_cors` — CORS-enabled fetch для cross-origin subresource (Fetch §3-§4)
-`crates/network/src/lib.rs:2141` **fn** `fetch_range`
-`crates/network/src/lib.rs:2208` **fn** `fetch_multi_range` — Multi-range запрос (RFC 7233 §4.1). Один request на несколько
-`crates/network/src/lib.rs:2294` **fn** `fetch_subresource` — Загрузить подресурс с проверкой mixed-content по подключённой
-`crates/network/src/lib.rs:2392` **fn** `fetch_conditional` — Perform a **conditional GET** (RFC 7232) and report whether the resource
-`crates/network/src/lib.rs:2447` **enum** `ConditionalFetch` — Outcome of [`HttpClient::fetch_conditional`]
-`crates/network/src/lib.rs:2467` **fn** `fetch_page` — Fetch a top-level page and return the response body together with all
-`crates/network/src/lib.rs:2982` **struct** `InMemoryFetchInterceptor` — In-memory реализация `FetchInterceptor` для тестов без SQLite
-`crates/network/src/lib.rs:2988` **fn** `new`
-`crates/network/src/lib.rs:2995` **fn** `insert` — Добавить запись: ответ для (origin, url) берётся из кэша без сети
+`crates/network/src/lib.rs:2021` **struct** `HttpProxy` — HTTP proxy configuration (RFC 7230 proxy behavior)
+`crates/network/src/lib.rs:2033` **fn** `new` — Создать новый прокси без аутентификации
+`crates/network/src/lib.rs:2042` **fn** `with_basic_auth` — Создать прокси с базовой аутентификацией (username:password)
+`crates/network/src/lib.rs:2085` **struct** `HttpClient` — HTTP/1.1 + HTTPS клиент
+`crates/network/src/lib.rs:2124` **fn** `new`
+`crates/network/src/lib.rs:2150` **fn** `with_sink` — Подключить EventSink. По умолчанию sink-а нет (события не эмитятся)
+`crates/network/src/lib.rs:2161` **fn** `with_filter` — Подключить RequestFilter. По умолчанию фильтра нет — `fetch` всегда
+`crates/network/src/lib.rs:2173` **fn** `with_interceptor` — Подключить Service Worker перехватчик fetch-запросов. Проверяется
+`crates/network/src/lib.rs:2182` **fn** `with_pool` — Подключить shared `ConnectionPool`. По умолчанию у каждого `HttpClient`
+`crates/network/src/lib.rs:2192` **fn** `with_h2_pool` — Подключить shared `H2Pool` (RFC 9113 §9.1.1). По умолчанию HTTP/2
+`crates/network/src/lib.rs:2201` **fn** `with_dns_resolver` — Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
+`crates/network/src/lib.rs:2218` **fn** `with_hsts` — Подключить HSTS-store (RFC 6797). По умолчанию — нет:
+`crates/network/src/lib.rs:2234` **fn** `with_credentials` — Подключить credential-провайдер для HTTP authentication (RFC 7235 /
+`crates/network/src/lib.rs:2245` **fn** `with_tab` — Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
+`crates/network/src/lib.rs:2265` **fn** `with_mixed_content_policy` — Подключить mixed-content policy (W3C Mixed Content §5). По умолчанию
+`crates/network/src/lib.rs:2289` **fn** `with_content_decoder` — Зарегистрировать `ContentDecoder` для одного encoding. Декодер попадает
+`crates/network/src/lib.rs:2335` **fn** `with_cors_cache` — Запросить только диапазон байт ресурса (RFC 7233). Если сервер
+`crates/network/src/lib.rs:2347` **fn** `with_cookie_jar` — Attach a cookie store. The provider receives `Cookie:` injection
+`crates/network/src/lib.rs:2371` **fn** `with_http_cache` — Подключить HTTP response cache (RFC 7234)
+`crates/network/src/lib.rs:2382` **fn** `with_proxy` — Подключить HTTP прокси (RFC 7230). По умолчанию прокси не подключён — запросы
+`crates/network/src/lib.rs:2395` **fn** `with_socks5_proxy` — Подключить SOCKS5 прокси (RFC 1928) для туннелирования всех TCP-соединений
+`crates/network/src/lib.rs:2406` **fn** `with_fingerprint_profile` — Установить HTTP fingerprinting profile (Standard/Strict/Tor) для Chrome-matching
+`crates/network/src/lib.rs:2414` **fn** `fingerprint_profile` — Получить текущий HTTP fingerprinting profile
+`crates/network/src/lib.rs:2425` **fn** `with_tls_profile` — Override the TLS fingerprint profile independently of the HTTP profile
+`crates/network/src/lib.rs:2431` **fn** `tls_profile` — Получить текущий TLS fingerprinting profile
+`crates/network/src/lib.rs:2465` **fn** `fetch_cors` — CORS-enabled fetch для cross-origin subresource (Fetch §3-§4)
+`crates/network/src/lib.rs:2514` **fn** `fetch_range`
+`crates/network/src/lib.rs:2582` **fn** `fetch_multi_range` — Multi-range запрос (RFC 7233 §4.1). Один request на несколько
+`crates/network/src/lib.rs:2669` **fn** `fetch_subresource` — Загрузить подресурс с проверкой mixed-content по подключённой
+`crates/network/src/lib.rs:2769` **fn** `fetch_conditional` — Perform a **conditional GET** (RFC 7232) and report whether the resource
+`crates/network/src/lib.rs:2824` **enum** `ConditionalFetch` — Outcome of [`HttpClient::fetch_conditional`]
+`crates/network/src/lib.rs:2844` **fn** `fetch_page` — Fetch a top-level page and return the response body together with all
+`crates/network/src/lib.rs:2905` **fn** `fetch_page_streaming` — Как [`HttpClient::fetch_page`], но тело финального 2xx-ответа стримится
+`crates/network/src/lib.rs:3434` **struct** `InMemoryFetchInterceptor` — In-memory реализация `FetchInterceptor` для тестов без SQLite
+`crates/network/src/lib.rs:3440` **fn** `new`
+`crates/network/src/lib.rs:3447` **fn** `insert` — Добавить запись: ответ для (origin, url) берётся из кэша без сети
 `crates/network/src/mixed_content.rs:33` **enum** `RequestDestination` — Назначение подресурса по Fetch spec §3.2.7 «request destination» —
 `crates/network/src/mixed_content.rs:59` **enum** `MixedContentLevel` — Mixed-content уровень для запроса в secure-контексте
 `crates/network/src/mixed_content.rs:75` **fn** `is_strict_blocked` — Должны ли мы блокировать запрос по строгому режиму. По умолчанию
@@ -3253,7 +3254,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/platform/file_dialog.rs:14` **struct** `FilePickerEntry`
 `crates/shell/src/platform/file_dialog.rs:34` **fn** `open_file_dialog` — Open the OS file-picker dialog and return selected files
 `crates/shell/src/platform/file_dialog.rs:52` **fn** `entries_to_json_with_tokens` — Build a JSON array that includes opaque `token` values instead of raw paths
-`crates/shell/src/platform/screen_capture.rs:109` **struct** `PlatformScreenCapture` — Platform screen capture provider using Win32 GDI BitBlt
+`crates/shell/src/platform/screen_capture.rs:114` **struct** `PlatformScreenCapture` — Platform screen capture provider using Win32 GDI BitBlt
 `crates/shell/src/platform/wake_lock.rs:25` **struct** `PlatformWakeLock` — Platform-backed wake-lock provider
 `crates/shell/src/platform/wake_lock.rs:32` **fn** `new` — Create a new provider with no lock held initially
 `crates/shell/src/reader_view.rs:18` **struct** `ArticleContent` — Article content extracted from a raw HTML page
@@ -4004,4 +4005,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3933 symbols in 22 crates*
+*Total: 3934 symbols in 22 crates*

@@ -113,6 +113,8 @@ fn open_file_dialog_windows(multiple: bool) -> Vec<FilePickerEntry> {
         .collect()
 }
 
+// BUG-169: used only by platform-cfg'd callers; dead on configs that exclude them.
+#[allow(dead_code)]
 fn entry_from_path(path: &str) -> FilePickerEntry {
     use std::path::Path;
     let p = Path::new(path);
