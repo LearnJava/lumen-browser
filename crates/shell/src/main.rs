@@ -2556,20 +2556,84 @@ fn load_css_for_streaming(resolved: &str) -> Option<String> {
     }
 }
 
+/// Максимум одновременных потоков загрузки подресурсов одного типа.
+/// Подобрано под типичный браузерный лимит соединений на хост (~6) + запас.
+/// Работа I/O-bound (сетевой fetch), потоки в основном спят на сокете, поэтому
+/// небольшой оверсабскрипшн относительно числа ядер допустим и полезен.
+const MAX_PARALLEL_FETCHES: usize = 8;
+
+/// Применить `f` к каждому элементу `items` параллельно, СОХРАНЯЯ порядок
+/// результатов (результат `i` соответствует `items[i]`). Число одновременных
+/// потоков ограничено `MAX_PARALLEL_FETCHES`, чтобы не плодить по потоку на
+/// каждый подресурс — тяжёлые страницы имеют десятки картинок/скриптов.
+///
+/// Главный тормоз тяжёлых страниц — последовательная сетевая загрузка
+/// подресурсов в UI-потоке (диагноз 2026-06-16: ~5.3 с из 7.5 с на lenta.ru).
+/// Параллелизация fetch'а даёт ×5–6 по замерам curl. Декодирование (CPU)
+/// при желании тоже выполняется внутри `f`, разъезжаясь по потокам.
+///
+/// `f` получает `(индекс, &элемент)` и должна быть `Sync` (вызывается из всех
+/// потоков). Паники внутри `f` не глотаются — пробрасываются при join.
+fn parallel_map<T, R, F>(items: &[T], f: F) -> Vec<R>
+where
+    T: Sync,
+    R: Send,
+    F: Fn(usize, &T) -> R + Sync,
+{
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let n = items.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    if n == 1 {
+        // Один элемент — не поднимаем потоки.
+        return vec![f(0, &items[0])];
+    }
+
+    let workers = MAX_PARALLEL_FETCHES.min(n);
+    let next = AtomicUsize::new(0);
+    // По одной ячейке на результат; воркеры пишут строго в свой индекс, гонок нет.
+    let slots: Vec<Mutex<Option<R>>> = (0..n).map(|_| Mutex::new(None)).collect();
+    let f = &f;
+    let slots_ref = &slots;
+    let next_ref = &next;
+
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(move || loop {
+                let i = next_ref.fetch_add(1, Ordering::Relaxed);
+                if i >= n {
+                    break;
+                }
+                let r = f(i, &items[i]);
+                *slots_ref[i].lock().unwrap() = Some(r);
+            });
+        }
+    });
+
+    slots
+        .into_iter()
+        .map(|cell| cell.into_inner().unwrap().expect("worker filled every slot"))
+        .collect()
+}
+
 fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>, cookie_jar: Option<Arc<lumen_storage::CookieJar>>) -> String {
     let mut hrefs = Vec::new();
     collect_link_hrefs(doc, doc.root(), &mut hrefs);
 
-    let mut css = String::new();
-    for href in hrefs {
-        match base.resolve(&href) {
+    // Загружаем все таблицы параллельно (сеть — главный тормоз), затем
+    // конкатенируем строго в порядке объявления, чтобы каскад не нарушился.
+    let parts = parallel_map(&hrefs, |_, href| {
+        match base.resolve(href) {
             ResolvedResource::File(path) => match std::fs::read_to_string(&path) {
                 Ok(content) => {
                     eprintln!("Загружен CSS: {}", path.display());
-                    css.push_str(&content);
-                    css.push('\n');
+                    Some(content)
                 }
-                Err(e) => eprintln!("Пропуск CSS {}: {e}", path.display()),
+                Err(e) => {
+                    eprintln!("Пропуск CSS {}: {e}", path.display());
+                    None
+                }
             },
             ResolvedResource::Url(url) => {
                 use lumen_core::url::Url;
@@ -2577,7 +2641,7 @@ fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn E
 
                 let sub_url = match Url::parse(&url) {
                     Ok(u) => u,
-                    Err(e) => { eprintln!("Пропуск CSS {url}: {e}"); continue; }
+                    Err(e) => { eprintln!("Пропуск CSS {url}: {e}"); return None; }
                 };
 
                 // Cross-origin stylesheets are allowed by the web platform:
@@ -2590,15 +2654,17 @@ fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn E
 
                 let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
                 match client.fetch_subresource(&sub_url, RequestDestination::Style) {
-                    Ok(bytes) => {
-                        let content = String::from_utf8_lossy(&bytes);
-                        css.push_str(&content);
-                        css.push('\n');
-                    }
-                    Err(e) => eprintln!("Пропуск CSS {url}: {e}"),
+                    Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+                    Err(e) => { eprintln!("Пропуск CSS {url}: {e}"); None }
                 }
             }
         }
+    });
+
+    let mut css = String::new();
+    for part in parts.into_iter().flatten() {
+        css.push_str(&part);
+        css.push('\n');
     }
     css
 }
@@ -2657,78 +2723,113 @@ fn fetch_and_decode_images(
 ) -> (Vec<(String, lumen_image::Image)>, Vec<(String, lumen_image::AnimatedGif)>, Vec<(u32, String)>) {
     let requests = lumen_layout::collect_image_requests(doc, viewport);
 
-    let mut out: Vec<(String, lumen_image::Image)> = Vec::new();
-    let mut anim_gifs: Vec<(String, lumen_image::AnimatedGif)> = Vec::new();
-    let mut lazy_pairs: Vec<(u32, String)> = Vec::new();
-    for req in requests {
+    /// Результат параллельной фазы fetch+decode одной картинки. Применение к
+    /// документу (intrinsic size) и сборка выходных векторов — отдельной
+    /// последовательной фазой, чтобы порядок и `&mut doc` остались под контролем.
+    enum ImgOutcome {
+        /// `loading="lazy"` — отложить до приближения к вьюпорту.
+        Lazy,
+        /// Пропуск (ошибка сети/декодирования) — уже залогировано.
+        Skip,
+        /// Статическая картинка (включая 1-кадровый GIF).
+        Static {
+            image: lumen_image::Image,
+            /// Intrinsic-размеры для HTML-атрибутов, если их не задал автор.
+            intrinsic: Option<(u32, u32)>,
+        },
+        /// Многокадровый GIF: первый кадр + полная анимация.
+        Animated {
+            first: lumen_image::Image,
+            gif: lumen_image::AnimatedGif,
+            intrinsic: Option<(u32, u32)>,
+        },
+    }
+
+    // Фаза 1 (параллельно): сеть + декодирование. Не трогаем `doc`.
+    let outcomes = parallel_map(&requests, |_, req| {
         if req.is_lazy {
-            // loading="lazy": defer until near viewport; register for proximity check.
-            lazy_pairs.push((req.node_id.index() as u32, req.url));
-            continue;
+            return ImgOutcome::Lazy;
         }
         let bytes = match fetch_image_bytes(&req.url, base, sink, cookie_jar.clone()) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("Пропуск картинки {}: {e}", req.url);
-                continue;
+                return ImgOutcome::Skip;
             }
         };
+        let wants_intrinsic = !req.has_explicit_width && !req.has_explicit_height;
 
         // Animated GIF detection: decode all frames; store for animation if >1 frame.
         if lumen_image::is_gif(&bytes) {
-            match lumen_image::decode_gif_animated(&bytes) {
+            return match lumen_image::decode_gif_animated(&bytes) {
                 Ok(gif) if gif.frames.len() > 1 => {
                     let first = gif.frames[0].image.clone();
-                    if !req.has_explicit_width && !req.has_explicit_height {
-                        apply_intrinsic_size(doc, req.node_id, first.width, first.height);
-                    }
+                    let intrinsic = wants_intrinsic.then_some((first.width, first.height));
                     eprintln!(
                         "Загружена GIF-анимация: {} ({}×{}, {} кадров)",
                         req.url, gif.width, gif.height, gif.frames.len()
                     );
-                    out.push((req.url.clone(), first));
-                    anim_gifs.push((req.url, gif));
-                    continue;
+                    ImgOutcome::Animated { first, gif, intrinsic }
                 }
                 Ok(gif) => {
                     // Single-frame GIF: treat as static image.
                     if let Some(frame) = gif.frames.into_iter().next() {
-                        let img = frame.image;
-                        if !req.has_explicit_width && !req.has_explicit_height {
-                            apply_intrinsic_size(doc, req.node_id, img.width, img.height);
-                        }
+                        let image = frame.image;
+                        let intrinsic = wants_intrinsic.then_some((image.width, image.height));
                         eprintln!(
                             "Загружена картинка (GIF, 1 кадр): {} ({}×{})",
-                            req.url, img.width, img.height
+                            req.url, image.width, image.height
                         );
-                        out.push((req.url, img));
+                        ImgOutcome::Static { image, intrinsic }
+                    } else {
+                        ImgOutcome::Skip
                     }
-                    continue;
                 }
                 Err(e) => {
                     eprintln!("Не декодируется GIF {}: {e}", req.url);
-                    continue;
+                    ImgOutcome::Skip
                 }
-            }
+            };
         }
 
-        let image = match lumen_image::decode(&bytes) {
-            Ok(i) => i,
+        match lumen_image::decode(&bytes) {
+            Ok(image) => {
+                let intrinsic = wants_intrinsic.then_some((image.width, image.height));
+                eprintln!(
+                    "Загружена картинка: {} ({}×{}, {:?})",
+                    req.url, image.width, image.height, image.format
+                );
+                ImgOutcome::Static { image, intrinsic }
+            }
             Err(e) => {
                 eprintln!("Не декодируется {}: {e}", req.url);
-                continue;
+                ImgOutcome::Skip
             }
-        };
-
-        if !req.has_explicit_width && !req.has_explicit_height {
-            apply_intrinsic_size(doc, req.node_id, image.width, image.height);
         }
+    });
 
-        eprintln!(
-            "Загружена картинка: {} ({}×{}, {:?})",
-            req.url, image.width, image.height, image.format
-        );
-        out.push((req.url, image));
+    // Фаза 2 (последовательно): мутация `doc` + сборка результата в порядке DOM.
+    let mut out: Vec<(String, lumen_image::Image)> = Vec::new();
+    let mut anim_gifs: Vec<(String, lumen_image::AnimatedGif)> = Vec::new();
+    let mut lazy_pairs: Vec<(u32, String)> = Vec::new();
+    for (req, outcome) in requests.into_iter().zip(outcomes) {
+        match outcome {
+            ImgOutcome::Lazy => lazy_pairs.push((req.node_id.index() as u32, req.url)),
+            ImgOutcome::Skip => {}
+            ImgOutcome::Static { image, intrinsic } => {
+                if let Some((w, h)) = intrinsic {
+                    apply_intrinsic_size(doc, req.node_id, w, h);
+                }
+                out.push((req.url, image));
+            }
+            ImgOutcome::Animated { first, gif, intrinsic } => {
+                if let Some((w, h)) = intrinsic {
+                    apply_intrinsic_size(doc, req.node_id, w, h);
+                }
+                out.push((req.url.clone(), first));
+                anim_gifs.push((req.url, gif));
+            }
+        }
     }
     (out, anim_gifs, lazy_pairs)
 }
@@ -3143,29 +3244,29 @@ fn fetch_and_decode_background_images(
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> Vec<(String, lumen_image::Image)> {
     let urls = lumen_layout::collect_background_image_requests(layout);
-    let mut out: Vec<(String, lumen_image::Image)> = Vec::new();
-    for url in urls {
-        let bytes = match fetch_image_bytes(&url, base, sink, cookie_jar.clone()) {
+    // Параллельная загрузка+декодирование, порядок сохраняем (ключи уникальны).
+    let decoded = parallel_map(&urls, |_, url| {
+        let bytes = match fetch_image_bytes(url, base, sink, cookie_jar.clone()) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("Пропуск bg-картинки {url}: {e}");
-                continue;
+                return None;
             }
         };
         let image = match lumen_image::decode(&bytes) {
             Ok(i) => i,
             Err(e) => {
                 eprintln!("Не декодируется bg-картинка {url}: {e}");
-                continue;
+                return None;
             }
         };
         eprintln!(
             "Загружена bg-картинка: {url} ({}×{}, {:?})",
             image.width, image.height, image.format
         );
-        out.push((url, image));
-    }
-    out
+        Some((url.clone(), image))
+    });
+    decoded.into_iter().flatten().collect()
 }
 
 /// Загружает шрифты из @font-face правил таблицы стилей в `FontRegistry`.
@@ -3215,9 +3316,14 @@ fn load_font_faces(
 
     let registry = lumen_font::FontRegistry::new();
 
-    for rule in font_faces {
+    // Сетевая загрузка + декодирование woff2 каждого @font-face — главный тормоз
+    // тяжёлых страниц (диагноз 2026-06-16: 7 шрифтов lenta.ru = 2.4 с
+    // последовательно, ~0.5 с параллельно). Грузим+декодируем все правила
+    // параллельно, затем регистрируем последовательно в порядке объявления
+    // (last-wins для дублей family/weight/style сохраняется).
+    let decoded = parallel_map(font_faces, |_, rule| {
         if rule.family.is_empty() || rule.sources.is_empty() {
-            continue;
+            return None;
         }
 
         let weight = parse_font_weight(rule.weight.as_deref());
@@ -3232,6 +3338,7 @@ fn load_font_faces(
             let bytes = if src.kind == FontFaceSourceKind::Local {
                 // CSS §4.3: match by family name (case-insensitive) against system fonts.
                 // Phase 0: PostScript / full-name matching not yet implemented.
+                // resolve_local_bytes — &self, FontRegistry потокобезопасен (RwLock).
                 match registry.resolve_local_bytes(&src.value, weight, style) {
                     Some(b) => b,
                     None => continue, // not found locally — try next source
@@ -3269,8 +3376,14 @@ fn load_font_faces(
                 src.value,
                 if src.kind == FontFaceSourceKind::Local { "local" } else { "url" },
             );
+            return Some((weight, style, bytes));
+        }
+        None
+    });
+
+    for (rule, res) in font_faces.iter().zip(decoded) {
+        if let Some((weight, style, bytes)) = res {
             registry.register_from_bytes(&rule.family, weight, style, bytes);
-            break;
         }
     }
 
@@ -3817,41 +3930,48 @@ fn resolve_script_sources(
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
 ) -> Vec<String> {
-    let mut out = Vec::with_capacity(items.len());
-    for item in items {
-        match item {
-            ScriptSource::Inline(body) => out.push(body.clone()),
-            ScriptSource::External(src) => match base.resolve(src) {
-                ResolvedResource::File(path) => match std::fs::read_to_string(&path) {
-                    Ok(content) => {
-                        eprintln!("Загружен скрипт: {}", path.display());
-                        out.push(content);
-                    }
-                    Err(e) => eprintln!("Пропуск скрипта {}: {e}", path.display()),
-                },
-                ResolvedResource::Url(url) => {
-                    use lumen_core::url::Url;
-                    use lumen_network::RequestDestination;
-                    let sub_url = match Url::parse(&url) {
-                        Ok(u) => u,
-                        Err(e) => {
-                            eprintln!("Пропуск скрипта {url}: {e}");
-                            continue;
-                        }
-                    };
-                    let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
-                    match client.fetch_subresource(&sub_url, RequestDestination::Script) {
-                        Ok(bytes) => {
-                            eprintln!("Загружен скрипт: {url}");
-                            out.push(String::from_utf8_lossy(&bytes).into_owned());
-                        }
-                        Err(e) => eprintln!("Пропуск скрипта {url}: {e}"),
-                    }
+    // Внешние `<script src>` грузятся параллельно (сеть — главный тормоз), но
+    // результат собирается строго в исходном порядке: классические скрипты
+    // обязаны выполняться в порядке документа (HTML LS §8.1.3.1). Inline-тела
+    // проходят насквозь без сети.
+    let fetched = parallel_map(items, |_, item| match item {
+        ScriptSource::Inline(body) => Some(body.clone()),
+        ScriptSource::External(src) => match base.resolve(src) {
+            ResolvedResource::File(path) => match std::fs::read_to_string(&path) {
+                Ok(content) => {
+                    eprintln!("Загружен скрипт: {}", path.display());
+                    Some(content)
+                }
+                Err(e) => {
+                    eprintln!("Пропуск скрипта {}: {e}", path.display());
+                    None
                 }
             },
-        }
-    }
-    out
+            ResolvedResource::Url(url) => {
+                use lumen_core::url::Url;
+                use lumen_network::RequestDestination;
+                let sub_url = match Url::parse(&url) {
+                    Ok(u) => u,
+                    Err(e) => {
+                        eprintln!("Пропуск скрипта {url}: {e}");
+                        return None;
+                    }
+                };
+                let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
+                match client.fetch_subresource(&sub_url, RequestDestination::Script) {
+                    Ok(bytes) => {
+                        eprintln!("Загружен скрипт: {url}");
+                        Some(String::from_utf8_lossy(&bytes).into_owned())
+                    }
+                    Err(e) => {
+                        eprintln!("Пропуск скрипта {url}: {e}");
+                        None
+                    }
+                }
+            }
+        },
+    });
+    fetched.into_iter().flatten().collect()
 }
 
 /// Collect `<script>` elements from the DOM, separating classic from module scripts.
