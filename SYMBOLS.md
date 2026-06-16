@@ -393,7 +393,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/core/src/web_storage.rs:47` **fn** `remove_item` — Remove `key` and its value.  No-op if absent
 `crates/core/src/web_storage.rs:54` **fn** `clear` — Remove all key-value pairs
 
-## lumen-css-parser  (54 symbols)
+## lumen-css-parser  (56 symbols)
 
 `crates/engine/css-parser/src/parser.rs:38` **enum** `SimpleSelector`
 `crates/engine/css-parser/src/parser.rs:50` **struct** `AttrSelector`
@@ -435,20 +435,22 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/css-parser/src/parser.rs:1056` **struct** `MediaQueryClause` — Одна clause в media query — AND-список feature/media-type условий
 `crates/engine/css-parser/src/parser.rs:1068` **enum** `MediaCondition`
 `crates/engine/css-parser/src/parser.rs:1081` **enum** `MediaFeature`
-`crates/engine/css-parser/src/parser.rs:1114` **enum** `MediaOrientation`
-`crates/engine/css-parser/src/parser.rs:1121` **enum** `MediaHover` — Media Queries L4 §5.3/§5.5 — hover-способность указателя
-`crates/engine/css-parser/src/parser.rs:1130` **enum** `MediaPointer` — Media Queries L4 §5.4/§5.6 — точность указателя
-`crates/engine/css-parser/src/parser.rs:1140` **enum** `ColorScheme`
-`crates/engine/css-parser/src/parser.rs:1149` **struct** `MediaContext` — Контекст, против которого матчатся media queries. Заполняется
-`crates/engine/css-parser/src/parser.rs:1190` **fn** `matches` — Пустой query (= `@media all`) — true. Иначе хотя бы одна
-`crates/engine/css-parser/src/parser.rs:1205` **fn** `matches` — Per Media Queries L4 §3.2: пустая `conditions` — clause invalid
-`crates/engine/css-parser/src/parser.rs:1222` **fn** `matches`
-`crates/engine/css-parser/src/parser.rs:1232` **fn** `matches`
-`crates/engine/css-parser/src/parser.rs:1274` **fn** `parse`
-`crates/engine/css-parser/src/parser.rs:1282` **fn** `parse_inline_style` — Парсит содержимое HTML-атрибута `style="..."` — declaration-list без
-`crates/engine/css-parser/src/parser.rs:1289` **fn** `parse_selector_list` — Парсит строку CSS selector list (через запятую) и возвращает разобранные
-`crates/engine/css-parser/src/parser.rs:1447` **fn** `parse_supports_condition` — Парсит `@supports`-условие из строки между `@supports` и `{`
-`crates/engine/css-parser/src/parser.rs:1645` **fn** `parse_media_query` — Распарсить media query из строки между `@media` и `{`. Принимает
+`crates/engine/css-parser/src/parser.rs:1121` **enum** `MediaOrientation`
+`crates/engine/css-parser/src/parser.rs:1128` **enum** `MediaHover` — Media Queries L4 §5.3/§5.5 — hover-способность указателя
+`crates/engine/css-parser/src/parser.rs:1137` **enum** `MediaPointer` — Media Queries L4 §5.4/§5.6 — точность указателя
+`crates/engine/css-parser/src/parser.rs:1149` **enum** `MediaContrast` — Media Queries L5 §5.5 — `prefers-contrast`: запрошенный пользователем
+`crates/engine/css-parser/src/parser.rs:1163` **enum** `MediaReducedData` — Media Queries L5 §5.6 — `prefers-reduced-data`: запрос на экономию
+`crates/engine/css-parser/src/parser.rs:1171` **enum** `ColorScheme`
+`crates/engine/css-parser/src/parser.rs:1180` **struct** `MediaContext` — Контекст, против которого матчатся media queries. Заполняется
+`crates/engine/css-parser/src/parser.rs:1229` **fn** `matches` — Пустой query (= `@media all`) — true. Иначе хотя бы одна
+`crates/engine/css-parser/src/parser.rs:1244` **fn** `matches` — Per Media Queries L4 §3.2: пустая `conditions` — clause invalid
+`crates/engine/css-parser/src/parser.rs:1261` **fn** `matches`
+`crates/engine/css-parser/src/parser.rs:1271` **fn** `matches`
+`crates/engine/css-parser/src/parser.rs:1315` **fn** `parse`
+`crates/engine/css-parser/src/parser.rs:1323` **fn** `parse_inline_style` — Парсит содержимое HTML-атрибута `style="..."` — declaration-list без
+`crates/engine/css-parser/src/parser.rs:1330` **fn** `parse_selector_list` — Парсит строку CSS selector list (через запятую) и возвращает разобранные
+`crates/engine/css-parser/src/parser.rs:1488` **fn** `parse_supports_condition` — Парсит `@supports`-условие из строки между `@supports` и `{`
+`crates/engine/css-parser/src/parser.rs:1686` **fn** `parse_media_query` — Распарсить media query из строки между `@media` и `{`. Принимает
 
 ## lumen-devtools  (8 symbols)
 
@@ -4008,4 +4010,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3937 symbols in 22 crates*
+*Total: 3939 symbols in 22 crates*
