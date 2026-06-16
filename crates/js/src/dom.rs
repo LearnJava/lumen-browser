@@ -250,6 +250,9 @@ pub fn install_dom_api(
     idb_backend: Option<Arc<dyn IdbBackend>>,
     sw_backend: Option<Arc<dyn SwBackend>>,
     cache_backend: Option<Arc<dyn CacheBackend>>,
+    // Live SW worker threads registry (PH3-20). When `Some`,
+    // `_lumen_sw_activate_script` spawns a QuickJS thread for each activating SW.
+    sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
     scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
     pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
     pending_page_scrolls: Arc<Mutex<Vec<(f32, bool)>>>,
@@ -265,7 +268,7 @@ pub fn install_dom_api(
     // True when COOP=same-origin + COEP=require-corp are both present on this document.
     cross_origin_isolated: bool,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, sse_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, cache_backend, scroll_states, pending_scrolls, pending_page_scrolls, page_scroll_y, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages, pending_history_url_updates, fullscreen_requests, print_requests, pending_focus_requests)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, sse_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, cache_backend, sw_worker_store, scroll_states, pending_scrolls, pending_page_scrolls, page_scroll_y, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages, pending_history_url_updates, fullscreen_requests, print_requests, pending_focus_requests)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -366,6 +369,7 @@ fn install_primitives(
     idb_backend: Option<Arc<dyn IdbBackend>>,
     sw_backend: Option<Arc<dyn SwBackend>>,
     cache_backend: Option<Arc<dyn CacheBackend>>,
+    sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
     scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
     pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
     pending_page_scrolls: Arc<Mutex<Vec<(f32, bool)>>>,
@@ -809,6 +813,25 @@ fn install_primitives(
                 sw_be2.as_ref().and_then(|be| be.load())
             }
         );
+
+        // _lumen_sw_activate_script(origin, scope, script_text) — PH3-20: SW fetch interception.
+        // Called from the _sw_run_lifecycle JS shim when a SW finishes the activate phase.
+        // Spawns a dedicated QuickJS thread for the SW and registers it in sw_worker_store.
+        {
+            let sws = sw_worker_store.clone();
+            let cbe_sw = cache_backend.clone();
+            reg!("_lumen_sw_activate_script", move |origin: String, scope: String, text: String| {
+                if let (Some(store), Some(cache)) = (sws.as_ref(), cbe_sw.as_ref()) {
+                    let handle = crate::sw_worker::spawn_sw_worker(
+                        origin.clone(),
+                        scope.clone(),
+                        text,
+                        Arc::clone(cache),
+                    );
+                    store.lock().unwrap().insert((origin, scope), handle);
+                }
+            });
+        }
 
         // Dispatch helpers: use SQLite backend when provided, fall back to in-memory map.
         let cbe = cache_backend.clone();
@@ -5672,6 +5695,17 @@ function _sw_run_lifecycle(reg) {
                 activateEvt.waitUntil = function() {};
                 sw._setState('activated');
                 _sw_persist();
+                // PH3-20: fetch SW script and hand it to the Rust execution thread.
+                if (typeof fetch !== 'undefined' && typeof _lumen_sw_activate_script === 'function') {
+                    (function(scope, scriptURL) {
+                        fetch(scriptURL)
+                            .then(function(res) { return res.text(); })
+                            .then(function(text) {
+                                _lumen_sw_activate_script(_sw_origin, scope, text);
+                            })
+                            .catch(function() {}); // ignore fetch errors — lifecycle still simulated
+                    })(reg.scope, reg.scriptURL);
+                }
                 // Fire controllerchange
                 var ce = new Event('controllerchange');
                 _sw_container.dispatchEvent(ce);
@@ -11759,7 +11793,7 @@ mod tests {
         let rt = QuickJsRuntime::new().unwrap();
         // Enable extension API (chrome.runtime) for unit tests that verify its behaviour.
         rt.eval("globalThis._LUMEN_EXTENSION_ACTIVE = true").unwrap();
-        rt.install_dom(doc, "", None, None, None, None, None, None, None, false).unwrap();
+        rt.install_dom(doc, "", None, None, None, None, None, None, None, None, false).unwrap();
         rt
     }
 
@@ -13300,7 +13334,7 @@ mod tests {
     fn runtime_with_cache_backend() -> QuickJsRuntime {
         let be: Arc<dyn lumen_core::ext::CacheBackend> = Arc::new(MockCacheBackend::new());
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "https://example.com/", None, None, None, None, None, None, Some(be), false)
+        rt.install_dom(make_doc(), "https://example.com/", None, None, None, None, None, None, Some(be), None, false)
             .unwrap();
         rt
     }
@@ -13745,7 +13779,7 @@ mod tests {
     fn runtime_with_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(FailWsProvider);
-        rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None, false).unwrap();
+        rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None, None, false).unwrap();
         rt
     }
 
@@ -13810,7 +13844,7 @@ mod tests {
     fn runtime_with_mock_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(MockWsProvider);
-        rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None, false).unwrap();
+        rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None, None, false).unwrap();
         rt
     }
 
@@ -13899,7 +13933,7 @@ mod tests {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsSseProvider> =
             Arc::new(MockSseProvider { events });
-        rt.install_dom(doc, "", None, None, Some(provider), None, None, None, None, false)
+        rt.install_dom(doc, "", None, None, Some(provider), None, None, None, None, None, false)
             .unwrap();
         rt
     }
@@ -14245,7 +14279,7 @@ mod tests {
     fn runtime_with_binary_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(MockBinaryWsProvider);
-        rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None, false).unwrap();
+        rt.install_dom(doc, "", None, Some(provider), None, None, None, None, None, None, false).unwrap();
         rt
     }
 
@@ -14302,7 +14336,7 @@ mod tests {
 
     fn runtime_with_url(url: &str) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), url, None, None, None, None, None, None, None, false).unwrap();
+        rt.install_dom(make_doc(), url, None, None, None, None, None, None, None, None, false).unwrap();
         rt
     }
 
@@ -14483,7 +14517,7 @@ mod tests {
 
     fn runtime_with_storage(ls: Option<Arc<Mutex<lumen_core::WebStorage>>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "https://example.com/", None, None, None, ls, None, None, None, false).unwrap();
+        rt.install_dom(make_doc(), "https://example.com/", None, None, None, ls, None, None, None, None, false).unwrap();
         rt
     }
 
@@ -17146,7 +17180,7 @@ mod tests {
 
     fn runtime_with_idb(backend: Arc<dyn IdbBackend>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "https://example.com/", None, None, None, None, Some(backend), None, None, false)
+        rt.install_dom(make_doc(), "https://example.com/", None, None, None, None, Some(backend), None, None, None, false)
             .unwrap();
         rt
     }
@@ -17544,7 +17578,7 @@ mod tests {
     fn runtime_with_fetch(provider: Arc<CaptureFetch>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider;
-        rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, false).unwrap();
+        rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, false).unwrap();
         rt
     }
 
@@ -21811,7 +21845,7 @@ mod tests {
     fn runtime_deterministic(doc: Arc<Mutex<Document>>, url: &str) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         rt.set_deterministic_mode();
-        rt.install_dom(doc, url, None, None, None, None, None, None, None, false).unwrap();
+        rt.install_dom(doc, url, None, None, None, None, None, None, None, None, false).unwrap();
         rt
     }
 
