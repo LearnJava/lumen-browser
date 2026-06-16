@@ -366,6 +366,18 @@ fn run_window_mode(
         platform::audio_player::PlatformAudioPlayer::new(),
     ));
 
+    // Wire HTMLVideoElement GIF playback store (PH3-12).
+    // The same Arc is shared with JS native bindings and the shell's render tick.
+    #[cfg(feature = "quickjs")]
+    let video_gif_store = {
+        let store = std::sync::Arc::new(lumen_js::VideoGifStore::default());
+        lumen_js::set_video_gif_store(store.clone());
+        store
+    };
+    #[cfg(not(feature = "quickjs"))]
+    let video_gif_store: std::sync::Arc<lumen_js::VideoGifStore> =
+        std::sync::Arc::new(lumen_js::VideoGifStore::default());
+
     // Apply the fingerprint profile's navigator/screen/timezone values (9F.1).
     // Process-global; consumed by lumen_js when each page's JS context spins up.
     #[cfg(feature = "quickjs")]
@@ -464,6 +476,9 @@ fn run_window_mode(
         hyp_provider: KnuthLiangHyphenation::new(),
         animated_gifs: HashMap::new(),
         gif_last_frame: HashMap::new(),
+        video_gif_last_frame: HashMap::new(),
+        video_gif_frames: HashMap::new(),
+        video_gif_store,
         image_cache: lumen_image::ImageDecodeCache::new(),
         input_rx,
         input_tx,
@@ -2863,6 +2878,11 @@ struct PageSnapshot {
     nav_start: Option<std::time::Instant>,
     animated_gifs: HashMap<String, lumen_image::AnimatedGif>,
     gif_last_frame: HashMap<String, usize>,
+    /// GIF-backed `<video>` frame keys: `"video:{nid}"` → current frame index.
+    /// Parallel to `animated_gifs` but keyed by node ID, not URL.
+    video_gif_last_frame: HashMap<u32, usize>,
+    /// Decoded animated GIF frames for `<video>` nodes (keyed by nid).
+    video_gif_frames: HashMap<u32, lumen_image::AnimatedGif>,
     image_cache: lumen_image::ImageDecodeCache,
     /// Per-tab user zoom factor. Preserved when the tab goes to background.
     zoom_factor: f32,
@@ -4488,6 +4508,18 @@ struct Lumen {
     /// re-uploads when `frame_index_at(elapsed_ms)` returns the same frame as the
     /// previous tick. Cleared together with `animated_gifs` on navigation.
     gif_last_frame: HashMap<String, usize>,
+    /// Last rendered frame index per GIF-backed `<video>` node (keyed by nid).
+    /// Cleared together with the VideoGifStore entries on navigation.
+    video_gif_last_frame: HashMap<u32, usize>,
+    /// Decoded animated GIF frames for `<video>` nodes (keyed by nid).
+    /// Stored separately from `VideoGifStore` (which has no `lumen_image` dep).
+    video_gif_frames: HashMap<u32, lumen_image::AnimatedGif>,
+    /// Shared GIF-video store — same Arc used by JS native bindings (PH3-12).
+    ///
+    /// The shell owns the Arc; JS bindings hold clones captured at context
+    /// creation time.  The shell's render tick drains `pending_loads`, decodes
+    /// GIFs, and re-registers frames under `"video:{nid}"` image keys.
+    video_gif_store: std::sync::Arc<lumen_js::VideoGifStore>,
     /// CPU-side decoded image cache (ADR-008 §10E.4 scroll-discard).
     ///
     /// Stores one `ImageHandle` per image URL so far-away images can be evicted
@@ -5217,6 +5249,134 @@ impl Lumen {
         }
     }
 
+    /// Advance GIF-backed `<video>` playback: drain pending loads, decode GIFs,
+    /// register current frames, request redraws while any video is playing.
+    ///
+    /// Called once per render tick (Step 2.6) so video frames stay in sync with
+    /// the render rate.  `elapsed_ms` is milliseconds since `self.epoch`.
+    fn tick_video_gifs(&mut self, elapsed_ms: u64) {
+        // Drain pending load requests queued by JS `__lumen_video_load`.
+        let loads: Vec<(u32, String)> = self
+            .video_gif_store
+            .pending_loads
+            .lock()
+            .unwrap()
+            .drain(..)
+            .collect();
+
+        for (nid, src) in loads {
+            // Resolve URL relative to current page source.
+            let base = match &self.source {
+                PageSource::File(p) => ResourceBase::File(p.clone()),
+                PageSource::Url(u) => ResourceBase::Url(u.clone()),
+                PageSource::Snapshot { base_url, .. } => ResourceBase::Url(base_url.clone()),
+                PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => continue,
+            };
+
+            let bytes = match fetch_image_bytes(&src, &base, &self.event_sink, Some(Arc::clone(&self.cookie_jar))) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("video GIF: пропуск {src}: {e}");
+                    continue;
+                }
+            };
+
+            if !lumen_image::is_gif(&bytes) {
+                eprintln!("video GIF: {src} не является GIF");
+                continue;
+            }
+
+            match lumen_image::decode_gif_animated(&bytes) {
+                Ok(gif) => {
+                    let first = gif.frames[0].image.clone();
+                    let key = format!("video:{nid}");
+                    if let Some(r) = self.renderer.as_mut() {
+                        if let Err(e) = r.register_image(key.clone(), &first) {
+                            eprintln!("video GIF: не зарегистрирован {key}: {e}");
+                        }
+                    } else {
+                        self.pending_images.push((key.clone(), first));
+                    }
+                    // Apply intrinsic size so layout uses actual GIF dimensions.
+                    if let Some(src_ref) = self.layout_source.as_ref() {
+                        let mut doc = src_ref.document.lock().unwrap();
+                        let node_id = lumen_dom::NodeId::from_index(nid as usize);
+                        apply_intrinsic_size(&mut doc, node_id, gif.width, gif.height);
+                    }
+                    eprintln!(
+                        "video GIF: загружен nid={nid} ({}×{}, {} кадров)",
+                        gif.width, gif.height, gif.frames.len()
+                    );
+                    // Store frames in shell-side map (lumen_image dep stays in shell).
+                    let cycle_ms: u64 = gif.frames.iter().map(|f| f.delay_ms()).sum();
+                    let loop_count = match gif.loop_count {
+                        lumen_image::GifLoopCount::Infinite | lumen_image::GifLoopCount::Finite(0) => 0u32,
+                        lumen_image::GifLoopCount::Finite(n) => u32::from(n),
+                    };
+                    self.video_gif_store
+                        .playback
+                        .lock()
+                        .unwrap()
+                        .insert(nid, lumen_js::video_gif_store::VideoPlaybackState {
+                            paused: true,
+                            position_ms: 0,
+                            play_epoch_ms: None,
+                            cycle_ms,
+                            loop_count,
+                            width: gif.width,
+                            height: gif.height,
+                        });
+                    self.video_gif_frames.insert(nid, gif);
+                    // Trigger relayout so new intrinsic size takes effect.
+                    self.request_redraw();
+                }
+                Err(e) => eprintln!("video GIF: ошибка декодирования {src}: {e}"),
+            }
+        }
+
+        // Advance frames for playing videos.
+        let playback = self.video_gif_store.playback.lock().unwrap();
+        let mut has_playing = false;
+
+        let updates: Vec<(u32, usize, lumen_image::Image)> = playback
+            .iter()
+            .filter_map(|(nid, state)| {
+                if state.paused {
+                    return None;
+                }
+                has_playing = true;
+                let cycle = state.cycle_ms;
+                if cycle == 0 {
+                    return None;
+                }
+                let cur_ms = state.current_ms(elapsed_ms);
+                let loop_ms = cur_ms % cycle;
+                let gif = self.video_gif_frames.get(nid)?;
+                let idx = gif.frame_index_at(loop_ms);
+                let last = self.video_gif_last_frame.get(nid).copied().unwrap_or(usize::MAX);
+                if last == idx {
+                    return None;
+                }
+                Some((*nid, idx, gif.frames[idx].image.clone()))
+            })
+            .collect();
+        drop(playback);
+
+        for (nid, idx, image) in updates {
+            let key = format!("video:{nid}");
+            if let Some(r) = self.renderer.as_mut()
+                && let Err(e) = r.register_image(key.clone(), &image)
+            {
+                eprintln!("video GIF кадр {key}[{idx}]: {e}");
+            }
+            self.video_gif_last_frame.insert(nid, idx);
+        }
+
+        if has_playing {
+            self.request_redraw();
+        }
+    }
+
     /// Same-page fragment navigation: update `:target` CSS state and scroll to
     /// the target element. `fragment` is the id without the leading `#`; an empty
     /// string scrolls to the top and clears `:target`.
@@ -5661,6 +5821,12 @@ impl Lumen {
         for (url, gif) in page.animated_gifs {
             self.animated_gifs.insert(url, gif);
         }
+
+        // Clear video GIF state from previous page.
+        self.video_gif_store.playback.lock().unwrap().clear();
+        self.video_gif_store.pending_loads.lock().unwrap().clear();
+        self.video_gif_last_frame.clear();
+        self.video_gif_frames.clear();
 
         // Update shields panel domain and clear per-page blocked counts.
         {
@@ -8410,6 +8576,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         self.request_redraw();
                     }
                 }
+
+                // Step 2.6: Video GIF animation — drain pending loads, advance frames.
+                let video_elapsed_ms = self.epoch.elapsed().as_millis() as u64;
+                self.tick_video_gifs(video_elapsed_ms);
 
                 // Step 3: rAF callbacks + microtask checkpoint.
                 self.runtime.run_rendering_step(timestamp_ms);
@@ -13158,6 +13328,8 @@ impl Lumen {
             nav_start: self.nav_start.take(),
             animated_gifs: std::mem::take(&mut self.animated_gifs),
             gif_last_frame: std::mem::take(&mut self.gif_last_frame),
+            video_gif_last_frame: std::mem::take(&mut self.video_gif_last_frame),
+            video_gif_frames: std::mem::take(&mut self.video_gif_frames),
             image_cache: std::mem::replace(
                 &mut self.image_cache,
                 lumen_image::ImageDecodeCache::new(),
@@ -13220,6 +13392,30 @@ impl Lumen {
         self.nav_start = snap.nav_start;
         self.animated_gifs = snap.animated_gifs;
         self.gif_last_frame = snap.gif_last_frame;
+        self.video_gif_last_frame = snap.video_gif_last_frame;
+        self.video_gif_frames = snap.video_gif_frames;
+        // Rebuild playback state from restored frames; JS re-queues loads on restore.
+        self.video_gif_store.pending_loads.lock().unwrap().clear();
+        {
+            let mut pb = self.video_gif_store.playback.lock().unwrap();
+            pb.clear();
+            for (nid, gif) in &self.video_gif_frames {
+                let cycle_ms: u64 = gif.frames.iter().map(|f| f.delay_ms()).sum();
+                let loop_count = match gif.loop_count {
+                    lumen_image::GifLoopCount::Infinite | lumen_image::GifLoopCount::Finite(0) => 0u32,
+                    lumen_image::GifLoopCount::Finite(n) => u32::from(n),
+                };
+                pb.insert(*nid, lumen_js::video_gif_store::VideoPlaybackState {
+                    paused: true,
+                    position_ms: 0,
+                    play_epoch_ms: None,
+                    cycle_ms,
+                    loop_count,
+                    width: gif.width,
+                    height: gif.height,
+                });
+            }
+        }
         self.image_cache = snap.image_cache;
         self.zoom_factor = snap.zoom_factor;
         self.display_url = snap.display_url;
@@ -13282,6 +13478,10 @@ impl Lumen {
         self.nav_start = None;
         self.animated_gifs = HashMap::new();
         self.gif_last_frame = HashMap::new();
+        self.video_gif_store.playback.lock().unwrap().clear();
+        self.video_gif_store.pending_loads.lock().unwrap().clear();
+        self.video_gif_last_frame = HashMap::new();
+        self.video_gif_frames = HashMap::new();
         self.image_cache = lumen_image::ImageDecodeCache::new();
         self.zoom_factor = zoom::ZOOM_DEFAULT;
         self.display_url = None;

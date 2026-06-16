@@ -4507,14 +4507,23 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32, sel: Op
                     radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
                 });
             }
-            // Phase 0: only a `poster` image is painted (registered by shell, or
-            // unregistered → grey placeholder). An empty `<video>` with no poster
-            // and no decoded frame paints nothing — the element box is transparent,
-            // matching Chromium/Edge (which show the page background through it).
-            // The grey image placeholder is reserved for `<img>`, not media.
-            // CSS: object-fit — P4 wires ComputedStyle.object_fit to scale poster/video frame.
-            let _ = src;
-            if !poster.is_empty() {
+            // Phase 1: GIF-backed <video> — frame uploaded by shell under "video:{nid}".
+            // Non-GIF src or no src: fall back to poster image (Phase 0 behaviour).
+            // The shell's tick loop re-registers the current GIF frame under this key
+            // on every render tick, so the DrawImage command always shows the live frame.
+            // CSS: object-fit — P4 wires ComputedStyle.object_fit to scale the frame.
+            let nid = b.node.index();
+            let is_gif_src = src.to_ascii_lowercase().ends_with(".gif") && !src.is_empty();
+            if is_gif_src {
+                out.push(DisplayCommand::DrawImage {
+                    rect: b.rect,
+                    src: format!("video:{nid}"),
+                    alt: String::new(),
+                    object_fit: b.style.object_fit,
+                    object_position: b.style.object_position,
+                    image_rendering: b.style.image_rendering,
+                });
+            } else if !poster.is_empty() {
                 out.push(DisplayCommand::DrawImage {
                     rect: b.rect,
                     src: poster.clone(),
@@ -5305,14 +5314,23 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
                     radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
                 });
             }
-            // Phase 0: only a `poster` image is painted (registered by shell, or
-            // unregistered → grey placeholder). An empty `<video>` with no poster
-            // and no decoded frame paints nothing — the element box is transparent,
-            // matching Chromium/Edge (which show the page background through it).
-            // The grey image placeholder is reserved for `<img>`, not media.
-            // CSS: object-fit — P4 wires ComputedStyle.object_fit to scale poster/video frame.
-            let _ = src;
-            if !poster.is_empty() {
+            // Phase 1: GIF-backed <video> — frame uploaded by shell under "video:{nid}".
+            // Non-GIF src or no src: fall back to poster image (Phase 0 behaviour).
+            // The shell's tick loop re-registers the current GIF frame under this key
+            // on every render tick, so the DrawImage command always shows the live frame.
+            // CSS: object-fit — P4 wires ComputedStyle.object_fit to scale the frame.
+            let nid = b.node.index();
+            let is_gif_src = src.to_ascii_lowercase().ends_with(".gif") && !src.is_empty();
+            if is_gif_src {
+                out.push(DisplayCommand::DrawImage {
+                    rect: b.rect,
+                    src: format!("video:{nid}"),
+                    alt: String::new(),
+                    object_fit: b.style.object_fit,
+                    object_position: b.style.object_position,
+                    image_rendering: b.style.image_rendering,
+                });
+            } else if !poster.is_empty() {
                 out.push(DisplayCommand::DrawImage {
                     rect: b.rect,
                     src: poster.clone(),

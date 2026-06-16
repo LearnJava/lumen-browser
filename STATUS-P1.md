@@ -6,7 +6,8 @@
 
 ## In progress
 
-idle
+PH3-12: HTMLVideoElement Phase 1 — анимированный GIF в `<video>`  branch: p1-ph3-12-video-gif
+Next step: добавить `VideoGifStore` в lumen-js/src/video_gif_store.rs + нативные биндинги __lumen_video_*
 
 ---
 
