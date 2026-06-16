@@ -690,6 +690,7 @@ Full list with phases — [docs/plan/knowledge.md](docs/plan/knowledge.md) §12.
 - **Cargo.lock is committed** (workspace includes a binary).
 - **Line endings:** `.gitattributes` enforces LF. Git warning about CRLF→LF is normal.
 - **Archives in repo root are gitignored** (`/*.zip`, `/*.tar*`). Downloaded files won't accidentally get committed.
+- **Portable user data dir (`<exe_dir>/data/`).** The ad-block external-filter-list subsystem stores its data under `<exe_dir>/data/adblock/` (SQLite `adblock.db` for subscriptions + list metadata; `lists/<slug>.txt` bodies; `custom-rules.txt`) — see `shell/src/adblock.rs::browser_data_dir`. This is a **provisional** convention (user decision 2026-06-16): keep everything in the browser folder, do **not** use OS dirs (`%APPDATA%`/`~/.config`/`~/.cache`) or `lumen_cache_dir()`/`config_path()` for portable data. New subsystems needing portable data should add their own `data/<subsystem>/` subfolder via `browser_data_dir()`.
 - **Parallel sessions in the same working tree = disaster.** Two sessions doing `git checkout` of different branches causes git to stash one session's work. Recovery via `git stash pop` is fragile. **Solution: mandatory `git worktree`s** (see Worktree isolation above). If you find yourself on a foreign branch — check `git stash list` before running `git restore .`.
 
 When you discover a non-obvious implementation detail in a specific subsystem, add it to [`subsystems/<crate>.md`](subsystems/) under the relevant crate section (in English), not here.

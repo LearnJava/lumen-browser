@@ -6,29 +6,12 @@
 
 ## In progress
 
-**BUG-085 — Linear/radial gradient rendering deviation**  
-Branch: p2-bug085-gradient  
-Status: Investigation & fix (TEST-39: 12.05% deviation; repeating gradients not rendering)  
-Next: dump-layout analysis, identify missing gradient tiling logic in femtovg backend
+**Ad-block: внешние фильтр-листы** · branch: `p2-adblock-filter-lists`
+Next step: финализация — merge по чеклисту (clippy/tests done).
 
 ---
 
 ## Next
-
-### Ad-block: внешние фильтр-листы (приоритет)
-
-**Полная спека:** [docs/tasks/p2-adblock-filter-lists.md](docs/tasks/p2-adblock-filter-lists.md)
-Ветка: `p2-adblock-filter-lists` · Размер L · крейты `lumen-storage` + `lumen-network` + `lumen-shell`.
-Заменить вшитый `DefaultFilterList` на подгружаемые EasyList/EasyPrivacy. Хранение — ТОЛЬКО в
-папке браузера (`<exe_dir>/data/adblock/`): подписки + метаданные кэша в SQLite (`AdblockStore`),
-тела листов — файлами `lists/*.txt`, правила пользователя — `custom-rules.txt`. Матчинг
-`should_block` остаётся в RAM (`EasyListFilter`) — в БД не класть. Offline-first старт +
-фоновый условный GET (If-None-Match/If-Modified-Since, ~4 дня). Правка `GLOBAL_ADBLOCK_FILTER`
-(`OnceLock → RwLock`) в `crates/network/src/lib.rs` для hot-swap. Склеивать листы и парсить
-одним проходом (чтобы `@@`-исключения работали глобально). Phase 2: `$option` по типу ресурса.
-Phase 3: UI подписок (handoff P3).
-
----
 
 **Phase 2 и Phase 3 завершены.** Доступные направления:
 
