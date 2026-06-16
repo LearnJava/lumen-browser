@@ -3043,3 +3043,179 @@ mod audio_capture_tests {
         assert!(c.device_id.is_none());
     }
 }
+
+// ── Audio playback (HTMLAudioElement Phase 1) ────────────────────────────────
+
+/// Platform audio playback backend backing `HTMLAudioElement` (PH3-11).
+///
+/// Installed process-globally by the shell via `lumen_js::set_audio_playback_provider`
+/// before any JS context starts.  Each `<audio>` element calls `alloc_handle()` to get
+/// a unique ID; all subsequent operations reference that ID.  The handle is released
+/// via `free_handle()` when the element is garbage-collected.
+///
+/// All methods are called from the JS thread; implementations must be `Send + Sync`
+/// and use internal synchronization (`Arc<Mutex<…>>`) for mutable state.
+///
+/// Shell implementation: `lumen_shell::platform::audio_player::PlatformAudioPlayer`.
+pub trait AudioPlaybackProvider: Send + Sync {
+    /// Allocate a new unique playback handle for one `<audio>` element.
+    fn alloc_handle(&self) -> u64;
+
+    /// Release a handle and stop any active playback (element was GC'd).
+    fn free_handle(&self, handle: u64);
+
+    /// Fetch and decode audio from `url`.
+    ///
+    /// Runs in the background; query `ready_state(handle)` to monitor progress.
+    /// `url` may be `http(s)://`, `data:`, or `blob:lumen/…`.
+    fn load(&self, handle: u64, url: &str);
+
+    /// Start or resume playback.  No-op if already playing.
+    fn play(&self, handle: u64);
+
+    /// Pause playback without resetting position.
+    fn pause(&self, handle: u64);
+
+    /// Stop playback and reset position to 0.
+    fn stop(&self, handle: u64);
+
+    /// Seek to `time_secs` seconds from the start.
+    fn seek(&self, handle: u64, time_secs: f64);
+
+    /// Set volume in the range [0.0, 1.0].
+    fn set_volume(&self, handle: u64, volume: f64);
+
+    /// Set playback rate multiplier (1.0 = normal speed).
+    fn set_playback_rate(&self, handle: u64, rate: f64);
+
+    /// Current playback position in seconds.
+    fn current_time(&self, handle: u64) -> f64;
+
+    /// Duration in seconds.  Returns `f64::NAN` if not yet known.
+    fn duration(&self, handle: u64) -> f64;
+
+    /// Returns `true` when playback is not running (paused or never started).
+    fn is_paused(&self, handle: u64) -> bool;
+
+    /// Returns `true` when playback has reached the end of the media.
+    fn is_ended(&self, handle: u64) -> bool;
+
+    /// W3C `HTMLMediaElement.readyState`:
+    /// `HAVE_NOTHING=0`, `HAVE_METADATA=1`, `HAVE_CURRENT_DATA=2`,
+    /// `HAVE_FUTURE_DATA=3`, `HAVE_ENOUGH_DATA=4`.
+    fn ready_state(&self, handle: u64) -> u32;
+
+    /// Returns `true` if a network or decode error occurred during loading.
+    fn has_error(&self, handle: u64) -> bool;
+
+    /// Returns `""`, `"maybe"`, or `"probably"` for `canPlayType` per W3C §4.8.11.
+    ///
+    /// Default: `"probably"` for widely-supported formats; `"maybe"` for optionally
+    /// supported formats; `""` for everything else.
+    fn can_play_type(&self, mime: &str) -> &'static str {
+        match mime.split(';').next().unwrap_or("").trim() {
+            "audio/mpeg" | "audio/mp3" | "audio/ogg" | "audio/wav"
+            | "audio/wave" | "audio/x-wav" | "audio/flac" | "audio/x-flac" => "probably",
+            "audio/webm" | "audio/aac" | "audio/mp4" => "maybe",
+            _ => "",
+        }
+    }
+}
+
+/// Stub `AudioPlaybackProvider` installed when no real audio backend is available
+/// (headless mode, tests, CI without audio output).
+///
+/// All playback operations are no-ops.  `ready_state` permanently returns `HAVE_NOTHING`.
+pub struct NullAudioPlaybackProvider;
+
+impl AudioPlaybackProvider for NullAudioPlaybackProvider {
+    fn alloc_handle(&self) -> u64 {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+    fn free_handle(&self, _handle: u64) {}
+    fn load(&self, _handle: u64, _url: &str) {}
+    fn play(&self, _handle: u64) {}
+    fn pause(&self, _handle: u64) {}
+    fn stop(&self, _handle: u64) {}
+    fn seek(&self, _handle: u64, _time_secs: f64) {}
+    fn set_volume(&self, _handle: u64, _volume: f64) {}
+    fn set_playback_rate(&self, _handle: u64, _rate: f64) {}
+    fn current_time(&self, _handle: u64) -> f64 { 0.0 }
+    fn duration(&self, _handle: u64) -> f64 { f64::NAN }
+    fn is_paused(&self, _handle: u64) -> bool { true }
+    fn is_ended(&self, _handle: u64) -> bool { false }
+    fn ready_state(&self, _handle: u64) -> u32 { 0 }
+    fn has_error(&self, _handle: u64) -> bool { false }
+}
+
+#[cfg(test)]
+mod audio_playback_tests {
+    use super::*;
+
+    #[test]
+    fn null_provider_alloc_returns_unique_ids() {
+        let p = NullAudioPlaybackProvider;
+        let h1 = p.alloc_handle();
+        let h2 = p.alloc_handle();
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn null_provider_ready_state_is_zero() {
+        let p = NullAudioPlaybackProvider;
+        let h = p.alloc_handle();
+        assert_eq!(p.ready_state(h), 0);
+    }
+
+    #[test]
+    fn null_provider_is_paused_true() {
+        let p = NullAudioPlaybackProvider;
+        let h = p.alloc_handle();
+        assert!(p.is_paused(h));
+    }
+
+    #[test]
+    fn null_provider_duration_is_nan() {
+        let p = NullAudioPlaybackProvider;
+        let h = p.alloc_handle();
+        assert!(p.duration(h).is_nan());
+    }
+
+    #[test]
+    fn default_can_play_type_mp3() {
+        let p = NullAudioPlaybackProvider;
+        assert_eq!(p.can_play_type("audio/mpeg"), "probably");
+    }
+
+    #[test]
+    fn default_can_play_type_ogg() {
+        let p = NullAudioPlaybackProvider;
+        assert_eq!(p.can_play_type("audio/ogg"), "probably");
+    }
+
+    #[test]
+    fn default_can_play_type_wav() {
+        let p = NullAudioPlaybackProvider;
+        assert_eq!(p.can_play_type("audio/wav"), "probably");
+    }
+
+    #[test]
+    fn default_can_play_type_webm_maybe() {
+        let p = NullAudioPlaybackProvider;
+        assert_eq!(p.can_play_type("audio/webm"), "maybe");
+    }
+
+    #[test]
+    fn default_can_play_type_unknown_empty() {
+        let p = NullAudioPlaybackProvider;
+        assert_eq!(p.can_play_type("video/mp4"), "");
+    }
+
+    #[test]
+    fn default_can_play_type_with_codec_param() {
+        let p = NullAudioPlaybackProvider;
+        // MIME with codecs parameter — strip at ';'
+        assert_eq!(p.can_play_type("audio/mpeg; codecs=mp3"), "probably");
+    }
+}
