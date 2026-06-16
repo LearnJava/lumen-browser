@@ -6,8 +6,7 @@
 
 ## In progress
 
-**PH3-18: Pointer Lock Phase 1 — real cursor capture**  branch: p1-ph3-18-pointer-lock
-Next step: pointer_lock.rs — pending_grab flag; dom.rs — _lumen_dispatch_locked_mousemove; main.rs — device_event + about_to_wait
+*idle*
 
 ---
 
@@ -17,7 +16,6 @@ Next step: pointer_lock.rs — pending_grab flag; dom.rs — _lumen_dispatch_loc
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| PH3-18 | **Pointer Lock Phase 1 — real cursor capture** (W3C Pointer Lock L2) | S | `lumen-js`, `lumen-shell` |
 | PH3-1 | ~~**DevTools Elements styled-rules panel**~~ ✅ завершена | M | `lumen-shell` (devtools/) |
 | PH3-3 | ~~**getUserMedia Phase 1**~~ ✅ завершена | L | `lumen-js`, `lumen-shell` |
 | PH3-4 | ~~**Offscreen Canvas Phase 1**~~ ✅ завершена | M | `lumen-js`, `lumen-paint` |
@@ -33,6 +31,7 @@ Next step: pointer_lock.rs — pending_grab flag; dom.rs — _lumen_dispatch_loc
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-16 | PH3-18: Pointer Lock Phase 1 | `pending_grab` флаг в `pointer_lock.rs` + `take_pending_grab()` для shell; `_ptr_lock_el` JS-переменная для `pointerLockElement` getter; `_lumen_dispatch_locked_mousemove()` — mousemove+pointermove с movementX/Y; `device_event()` в shell → `DeviceEvent::MouseMotion` → `_lumen_dispatch_locked_mousemove`; `about_to_wait` drain `CursorGrabMode::Locked`/`None`; Escape освобождает lock; `CursorMoved` при locked подавляется. 10 новых тестов. |
 | 2026-06-16 | PH3-17: Screen Capture API Phase 1 | `ScreenCaptureProvider` трейт + `NullScreenCaptureProvider` в lumen-core::ext; `VideoFrame` struct; `__lumen_screen_capture_{list_sources,start,info,read_frame,stop}` нативные биндинги + `set_screen_capture_provider()` в lumen-js; `getDisplayMedia()` резолвится с живым `MediaStream` + video track + `readVideoFrame()`; `PlatformScreenCapture` (Win32 GDI `BitBlt`/`GetDIBits` + BGRA→RGBA) в shell/src/platform/screen_capture.rs. 14 новых тестов (3 lumen-core + 11 lumen-js). |
 | 2026-06-16 | PH3-16: Idle Detection API Phase 1 | `__lumen_idle_get_idle_ms()` → Win32 `GetLastInputInfo+GetTickCount` на Windows, 0 на Linux/macOS; `IdleDetector.start()` запускает `setInterval(max(30s, threshold/2))`, диспатчит `'change'` при переходе `userState` active↔idle; `#[link(name = "user32")]`. 16 новых тестов. |
 | 2026-06-16 | PH3-15: File System Access API Phase 1 | `showOpenFilePicker/showSaveFilePicker/showDirectoryPicker` → Promise; `FileSystemFileHandle`/`FileSystemDirectoryHandle`/`FileSystemWritableFileStream` JS-классы; `WriteRegistry` (append + flush-on-close); `DirRegistry`; OS диалоги WinForms/zenity/osascript; токен-безопасность через PH3-14 `register_file_token`. 33 новых теста lumen-js. |
