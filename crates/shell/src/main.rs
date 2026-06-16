@@ -373,6 +373,13 @@ fn run_window_mode(
         platform::wake_lock::PlatformWakeLock::new(),
     ));
 
+    // Wire Screen Capture API to the platform backend (PH3-17).
+    // Enables navigator.mediaDevices.getDisplayMedia() to capture the primary monitor.
+    #[cfg(feature = "quickjs")]
+    lumen_js::set_screen_capture_provider(std::sync::Arc::new(
+        platform::screen_capture::PlatformScreenCapture,
+    ));
+
     // Wire HTMLVideoElement GIF playback store (PH3-12).
     // The same Arc is shared with JS native bindings and the shell's render tick.
     #[cfg(feature = "quickjs")]
