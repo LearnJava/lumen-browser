@@ -6,7 +6,8 @@
 
 ## In progress
 
-*idle*
+PH1-2b: инкрементальный (dirty-subtree) streaming layout  branch: p1-ph1-2b-incremental-layout
+Next step: подключить `layout_streaming_incremental` в shell `paint_partial_dom` ([crates/shell/src/main.rs:5846](crates/shell/src/main.rs))
 
 ---
 

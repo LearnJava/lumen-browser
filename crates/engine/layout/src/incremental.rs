@@ -132,6 +132,138 @@ pub fn clear_dirty(b: &mut LayoutBox) {
     }
 }
 
+// ─── Streaming graft (PH1-2b) ──────────────────────────────────────────────────
+
+/// Mark every box in `b`'s subtree as [`DirtyBits::SELF_SIZE`].
+///
+/// Used by streaming incremental layout: a freshly-built box tree has valid
+/// styles but no geometry, so in incremental mode every node must be re-laid-out
+/// *unless* its geometry can be reused from the previous tick. The grafting pass
+/// ([`graft_geometry`]) then clears the bits on subtrees it can reuse. Without
+/// this, a fresh box defaults to [`DirtyBits::CLEAN`] and `lay_out` would skip it
+/// (translating its zero-sized rect) instead of laying it out.
+pub fn mark_subtree_dirty(b: &mut LayoutBox) {
+    b.dirty = DirtyBits::SELF_SIZE;
+    for child in &mut b.children {
+        mark_subtree_dirty(child);
+    }
+}
+
+/// Reuse laid-out geometry from `prev` for unchanged subtrees of the fresh tree
+/// `new`, marking them [`DirtyBits::CLEAN`] (PH1-2b streaming incremental layout).
+///
+/// `new` is a freshly-built box tree (all nodes [`DirtyBits::SELF_SIZE`] after
+/// [`mark_subtree_dirty`]) produced from a DOM that is a superset of the one that
+/// produced `prev` (the previous tick's laid-out tree). For every subtree whose
+/// node id, box kind payload and computed style are identical and whose structure
+/// matches recursively, the entire `prev` subtree (including its laid-out
+/// fragments) is cloned into `new` and marked clean. Such subtrees are then
+/// repositioned in O(1) by `lay_out`'s incremental fast path instead of being
+/// re-laid-out. New or changed subtrees keep their `SELF_SIZE` bit and are laid
+/// out fresh.
+///
+/// Matching is by index: streaming appends nodes at the end, so the unchanged
+/// prefix of each child list matches and the changed/new tail is re-laid-out.
+/// Returns `true` when `new`'s whole subtree was reused clean from `prev`.
+pub fn graft_geometry(new: &mut LayoutBox, prev: &LayoutBox) -> bool {
+    if new.node != prev.node
+        || !kind_layout_eq(&new.kind, &prev.kind)
+        || new.style != prev.style
+    {
+        // Node identity, box kind payload or style differ → cannot reuse this
+        // box. Leave the whole subtree dirty (marked by `mark_subtree_dirty`).
+        return false;
+    }
+
+    let common = new.children.len().min(prev.children.len());
+    let mut all_clean = new.children.len() == prev.children.len();
+    for i in 0..common {
+        let child_clean = graft_geometry(&mut new.children[i], &prev.children[i]);
+        all_clean &= child_clean;
+    }
+
+    if all_clean {
+        // Entire subtree (this node + all descendants) is unchanged: clone the
+        // previous laid-out box wholesale so paint-side fragments (InlineRun
+        // `lines`, etc.) and rects are reused verbatim, then mark clean.
+        *new = prev.clone();
+        new.dirty = DirtyBits::CLEAN;
+        return true;
+    }
+
+    // This node matches but a descendant changed or a child was appended/removed:
+    // it must be re-laid-out (clean children grafted above are translated cheaply,
+    // dirty/new children laid out fresh).
+    new.dirty = DirtyBits::SELF_SIZE | DirtyBits::HAS_DIRTY_DESCENDANT;
+    false
+}
+
+/// Compare the layout-affecting payload of two [`crate::box_tree::BoxKind`]s.
+///
+/// Container kinds (Block, FlowRoot, …) carry no size-affecting payload of their
+/// own — their geometry comes from children + style, so the discriminant alone
+/// decides equality. Content kinds carry data that affects size or paint
+/// (inline text segments, image/iframe URLs, canvas dimensions, …); those are
+/// compared field-by-field. `InlineRun` compares its `segments` (the pre-layout
+/// inline content) so that text accumulating into an open element during
+/// streaming is detected as changed. Differing discriminants are never equal.
+fn kind_layout_eq(a: &crate::box_tree::BoxKind, b: &crate::box_tree::BoxKind) -> bool {
+    use crate::box_tree::BoxKind::{
+        Audio, Block, Canvas, FlowRoot, FormControl, Iframe, Image, InlineBlockRow, InlineRun,
+        InlineSpace, Marker, Skip, TableRow, Video,
+    };
+    match (a, b) {
+        (Block, Block)
+        | (InlineBlockRow, InlineBlockRow)
+        | (TableRow, TableRow)
+        | (InlineSpace, InlineSpace)
+        | (Skip, Skip)
+        | (FlowRoot, FlowRoot) => true,
+        (InlineRun { segments: sa, .. }, InlineRun { segments: sb, .. }) => segments_eq(sa, sb),
+        (
+            Image { src: s1, alt: a1, is_lazy: l1 },
+            Image { src: s2, alt: a2, is_lazy: l2 },
+        ) => s1 == s2 && a1 == a2 && l1 == l2,
+        (Video { src: s1, poster: p1 }, Video { src: s2, poster: p2 }) => s1 == s2 && p1 == p2,
+        (Canvas { width: w1, height: h1 }, Canvas { width: w2, height: h2 }) => {
+            w1 == w2 && h1 == h2
+        }
+        (Audio { src: s1, controls: c1 }, Audio { src: s2, controls: c2 }) => {
+            s1 == s2 && c1 == c2
+        }
+        (Iframe { src: s1, srcdoc: d1 }, Iframe { src: s2, srcdoc: d2 }) => s1 == s2 && d1 == d2,
+        (FormControl { kind: k1 }, FormControl { kind: k2 }) => k1 == k2,
+        (
+            Marker { text: t1, position: p1, list_style_type: ls1, image: i1 },
+            Marker { text: t2, position: p2, list_style_type: ls2, image: i2 },
+        ) => t1 == t2 && p1 == p2 && ls1 == ls2 && i1 == i2,
+        _ => false,
+    }
+}
+
+/// Compare two `InlineRun` segment lists for layout equality.
+///
+/// Compares the size-affecting scalar fields of each [`crate::box_tree::InlineSegment`]
+/// (text, inline-margin spaces, image source/width, forced break, element-box
+/// flag, pseudo role). Per-segment `style` is intentionally not compared: during
+/// streaming the stylesheet is stable for an unchanged text run, so identical
+/// text implies identical style. A different count is always unequal.
+fn segments_eq(a: &[crate::box_tree::InlineSegment], b: &[crate::box_tree::InlineSegment]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b.iter()).all(|(x, y)| {
+        x.text == y.text
+            && x.img_src == y.img_src
+            && x.forced_break == y.forced_break
+            && x.is_element_box == y.is_element_box
+            && x.pseudo_kind == y.pseudo_kind
+            && (x.pre_space - y.pre_space).abs() < f32::EPSILON
+            && (x.post_space - y.post_space).abs() < f32::EPSILON
+            && (x.img_width - y.img_width).abs() < f32::EPSILON
+    })
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -363,6 +495,152 @@ mod tests {
 
         // After incremental, dirty bits must be cleared.
         assert!(root.dirty.is_clean(), "dirty bits must be cleared after lay_out_incremental");
+    }
+
+    // ── streaming graft (PH1-2b) ──────────────────────────────────────────
+
+    struct FixedMeasurer;
+    impl crate::TextMeasurer for FixedMeasurer {
+        fn char_width(&self, _: char, size: f32) -> f32 { size * 0.5 }
+    }
+
+    /// Collect (node, rect) pairs in pre-order for geometry comparison.
+    fn collect_rects(b: &LayoutBox, out: &mut Vec<(NodeId, Rect)>) {
+        out.push((b.node, b.rect));
+        for c in &b.children {
+            collect_rects(c, out);
+        }
+    }
+
+    fn full_layout(html: &str) -> LayoutBox {
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::layout_measured_hyp;
+        use lumen_core::ext::NullHyphenationProvider;
+        let doc = parse_html(html);
+        let sheet = parse_css("");
+        let vp = Size::new(800.0, 600.0);
+        layout_measured_hyp(&doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false)
+    }
+
+    #[test]
+    fn streaming_incremental_matches_full_layout() {
+        // The geometry produced incrementally (reusing the prefix from a smaller
+        // DOM) must match a full layout of the grown DOM exactly.
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::layout_streaming_incremental;
+        use lumen_core::ext::NullHyphenationProvider;
+
+        let prev = full_layout(
+            r#"<div style="height:40px"></div><div style="height:60px"></div>"#,
+        );
+
+        // Grown DOM: same two divs + a third appended at the end.
+        let grown = r#"<div style="height:40px"></div><div style="height:60px"></div><div style="height:30px"></div>"#;
+        let doc = parse_html(grown);
+        let sheet = parse_css("");
+        let vp = Size::new(800.0, 600.0);
+        let incr = layout_streaming_incremental(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev,
+        );
+
+        let full = full_layout(grown);
+
+        let mut a = Vec::new();
+        let mut b = Vec::new();
+        collect_rects(&incr, &mut a);
+        collect_rects(&full, &mut b);
+        assert_eq!(a.len(), b.len(), "box count must match full layout");
+        for ((na, ra), (nb, rb)) in a.iter().zip(b.iter()) {
+            assert_eq!(na, nb, "node order must match");
+            assert!((ra.x - rb.x).abs() < 0.5 && (ra.y - rb.y).abs() < 0.5
+                && (ra.width - rb.width).abs() < 0.5 && (ra.height - rb.height).abs() < 0.5,
+                "rect mismatch for {na:?}: incr {ra:?} vs full {rb:?}");
+        }
+    }
+
+    #[test]
+    fn streaming_incremental_text_reflow_matches_full() {
+        // Appending text to an existing paragraph must reflow that paragraph to
+        // match a full layout (the InlineRun is detected as changed via segments).
+        use lumen_css_parser::parse as parse_css;
+        use lumen_html_parser::parse as parse_html;
+        use crate::box_tree::layout_streaming_incremental;
+        use lumen_core::ext::NullHyphenationProvider;
+
+        let prev = full_layout(r#"<p style="width:100px">hello</p>"#);
+        let grown = r#"<p style="width:100px">hello world this is a longer run of text that wraps</p>"#;
+        let doc = parse_html(grown);
+        let sheet = parse_css("");
+        let vp = Size::new(800.0, 600.0);
+        let incr = layout_streaming_incremental(
+            &doc, &sheet, vp, &FixedMeasurer, &NullHyphenationProvider, false, &prev,
+        );
+        let full = full_layout(grown);
+
+        let mut a = Vec::new();
+        let mut b = Vec::new();
+        collect_rects(&incr, &mut a);
+        collect_rects(&full, &mut b);
+        assert_eq!(a.len(), b.len());
+        for ((_, ra), (_, rb)) in a.iter().zip(b.iter()) {
+            assert!((ra.height - rb.height).abs() < 0.5,
+                "reflowed height must match: incr {} vs full {}", ra.height, rb.height);
+        }
+    }
+
+    #[test]
+    fn graft_identical_tree_is_all_clean() {
+        let prev = leaf(2, Rect::new(0.0, 10.0, 100.0, 50.0));
+        let mut prev_root = block_with_children(1, Rect::new(0.0, 0.0, 800.0, 60.0), vec![prev]);
+
+        // Build a "fresh" copy with no geometry and all-dirty.
+        let mut fresh = block_with_children(1, Rect::ZERO,
+            vec![leaf(2, Rect::ZERO)]);
+        mark_subtree_dirty(&mut fresh);
+
+        let clean = graft_geometry(&mut fresh, &prev_root);
+        assert!(clean, "identical tree must be fully clean");
+        assert!(fresh.dirty.is_clean());
+        assert!(fresh.children[0].dirty.is_clean());
+        // Geometry was cloned from prev.
+        assert!((fresh.children[0].rect.y - 10.0).abs() < f32::EPSILON);
+
+        // Mutating prev_root afterwards must not affect fresh (deep clone).
+        prev_root.children[0].rect.y = 999.0;
+        assert!((fresh.children[0].rect.y - 10.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn graft_appended_child_keeps_prefix_clean_parent_dirty() {
+        let prev_root = block_with_children(1, Rect::new(0.0, 0.0, 800.0, 50.0),
+            vec![leaf(2, Rect::new(0.0, 0.0, 100.0, 50.0))]);
+
+        // Fresh tree: same child 2 + a new child 3 appended.
+        let mut fresh = block_with_children(1, Rect::ZERO,
+            vec![leaf(2, Rect::ZERO), leaf(3, Rect::ZERO)]);
+        mark_subtree_dirty(&mut fresh);
+
+        let clean = graft_geometry(&mut fresh, &prev_root);
+        assert!(!clean, "parent with appended child cannot be fully clean");
+        assert!(fresh.dirty.is_dirty(), "parent must stay dirty");
+        assert!(fresh.children[0].dirty.is_clean(), "unchanged prefix child must be clean");
+        assert!(fresh.children[1].dirty.is_dirty(), "appended child must be dirty");
+    }
+
+    #[test]
+    fn graft_changed_style_marks_dirty() {
+        let mut prev_root = leaf(1, Rect::new(0.0, 0.0, 100.0, 50.0));
+        prev_root.style.font_size = 16.0;
+
+        let mut fresh = leaf(1, Rect::ZERO);
+        fresh.style.font_size = 24.0; // style changed
+        mark_subtree_dirty(&mut fresh);
+
+        let clean = graft_geometry(&mut fresh, &prev_root);
+        assert!(!clean);
+        assert!(fresh.dirty.is_dirty(), "changed style must keep box dirty");
     }
 
     #[test]
