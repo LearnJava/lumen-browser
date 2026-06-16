@@ -12,6 +12,18 @@
 
 ## Next
 
+### Streaming rendering — оставшиеся дыры (приоритет, до PH3)
+
+PH1-2 закрыл только window-first + 60 Hz throttle + параллельную загрузку CSS. Реальная
+потоковая отрисовка «по мере прихода из сети» ещё не работает. Три задачи по убыванию
+заметности для пользователя:
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| PH1-2a | **TCP-level streaming HTTP body** — сейчас `client.fetch_page()` ([shell/src/main.rs:1986](crates/shell/src/main.rs)) блокирующе скачивает всё тело целиком, и только потом фоновый поток режет уже скачанные байты на 8-КБ чанки ([main.rs:5706](crates/shell/src/main.rs)). На медленном соединении пользователь по-прежнему ждёт весь HTML. Нужно: в `lumen-network` отдавать тело как `Receiver<Vec<u8>>`/итератор чанков (chunked transfer + не-chunked по мере чтения сокета), а `start_streaming_load` ([main.rs:5682](crates/shell/src/main.rs)) слать в DOM реальные сетевые чанки вместо нарезки буфера. Затрагивает network + shell. | L | `lumen-network`, `lumen-shell` |
+| PH1-2b | **Инкрементальный (dirty-subtree) layout** — `paint_partial_dom` ([shell/src/main.rs:5764](crates/shell/src/main.rs)) на каждый 16-мс тик делает полный `layout_measured` всего частичного DOM + полный `paint_ordered`. План требует релейаут только поддерева добавленных узлов. Нужно: переиспользовать предыдущий `LayoutBox`, релейаутить лишь dirty-поддерево. На больших страницах текущий полный проход тормозит во время загрузки. Затрагивает layout + shell. | L | `lumen-layout`, `lumen-shell` |
+| PH1-2c | **Прогрессивная подгрузка картинок во время streaming** — `fetch_and_decode_images` зовётся только в финальном `render_bytes` на `LoadDone` ([main.rs:6147](crates/shell/src/main.rs)); в промежуточных кадрах картинок нет, они появляются разом в конце. Нужно: вынести fetch/decode изображений на параллельные потоки во время streaming и дорисовывать по приходу — как уже сделано с CSS (`LoadEvent::CssLoaded`, [main.rs:6112](crates/shell/src/main.rs)). Затрагивает image + shell. | M | `lumen-image`, `lumen-shell` |
+
 ### PH3 — Phase 3: v1.0 «Full Browser»
 
 | # | Задача | Размер | Крейты |
