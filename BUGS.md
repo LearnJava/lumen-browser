@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-172)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-173)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -185,6 +185,7 @@
 | [BUG-169](bugs/BUG-169-FIXED.md) | FIXED 2026-06-16 | network+shell | Linux: pre-existing clippy/test-сбои в `#[cfg(linux/macos)]` platform-коде (не ловились на Windows-dev). network/ctap2: private `descriptor_is_fido` в тестах (E0603), unnecessary `unsafe` (1128), collapsible `if` (1192). shell: unused imports `screen_capture.rs:16`, dead `entry_from_path` `file_dialog.rs:116`. Починены как unblock гейта PH1-2a. | crates/network/src/ctap2.rs:1128 |
 | [BUG-170](bugs/BUG-170-OPEN.md) | OPEN | shell+font | `@font-face` web-шрифты блокируют первый paint: `load_font_faces` качает все woff2 до layout (FOUT не реализован). Надо `font-display: swap` — рисовать фолбэком сразу, подменять web-шрифт в фоне с relayout. `font-display` уже парсится (css-parser:2199), не используется. | crates/shell/src/main.rs:3067 |
 | [BUG-171](bugs/BUG-171-OPEN.md) | OPEN | shell | Окно морозится на всё время загрузки: `parse_and_layout` (fetch+JS+layout) идёт синхронно на UI-потоке в обработчике `LoadDone` (main.rs:6369). Adblock-галочка → синхронный `reload()` → «долго думает». Надо префетч подресурсов вне UI + асинхронный adblock-reload (этап 2 — весь пайплайн вне UI, ADR-006). QuickJS не Send — ключевое ограничение. | crates/shell/src/main.rs:6369 |
+| [BUG-172](bugs/BUG-172-OPEN.md) | OPEN | shell | Картинки качаются дважды на streaming-страницах: PH1-2c `spawn_stream_image_loads` (main.rs:6051) грузит прогрессивно во время streaming, финальный `fetch_and_decode_images` (main.rs:2833) в `parse_and_layout` качает их же заново. Лишний трафик+CPU, не визуальный дефект. Фикс — общий per-load кэш декодированных картинок (пересекается с этапом 1 BUG-171). | crates/shell/src/main.rs:2833 |
 
 ---
 
