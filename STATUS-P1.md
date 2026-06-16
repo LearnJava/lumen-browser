@@ -6,7 +6,8 @@
 
 ## In progress
 
-idle
+PH3-17: Screen Capture API (`getDisplayMedia`) Phase 1  branch: p1-ph3-17-screen-capture
+Next step: ext.rs types → screen_capture.rs bindings → shell platform → getDisplayMedia JS
 
 ---
 

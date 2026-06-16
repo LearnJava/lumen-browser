@@ -3044,6 +3044,147 @@ mod audio_capture_tests {
     }
 }
 
+// ── Screen capture (getDisplayMedia Phase 1) ─────────────────────────────────
+
+/// Describes a capturable screen source (monitor or application window).
+///
+/// Returned by [`ScreenCaptureProvider::enumerate_sources`] and exposed to JS
+/// when the browser presents a source picker for `getDisplayMedia`.
+pub struct ScreenSourceDescriptor {
+    /// Opaque per-source identifier, stable for the OS session lifetime.
+    pub source_id: String,
+    /// Human-readable name (e.g. `"Entire Screen"`, or window title).
+    pub label: String,
+    /// Source type: `"monitor"` or `"window"`.
+    pub kind: &'static str,
+    /// Pixel width of the source at enumeration time.
+    pub width: u32,
+    /// Pixel height of the source at enumeration time.
+    pub height: u32,
+}
+
+/// Constraints forwarded from JS `getDisplayMedia({video: {…}})`.
+///
+/// Phase 1: only `source_id` is honoured; other fields are hints for future phases.
+#[derive(Debug, Clone, Default)]
+pub struct ScreenCaptureConfig {
+    /// Opaque source ID from `enumerate_sources`.  `None` → primary monitor.
+    pub source_id: Option<String>,
+    /// Preferred frame rate in fps.  `None` → no preference.
+    pub frame_rate: Option<f32>,
+    /// Preferred capture width in pixels.  `None` → native resolution.
+    pub width: Option<u32>,
+    /// Preferred capture height in pixels.  `None` → native resolution.
+    pub height: Option<u32>,
+}
+
+/// Errors returned by [`ScreenCaptureProvider::capture`].
+#[derive(Debug)]
+pub enum ScreenCaptureError {
+    /// The user denied screen capture permission or the OS blocked access.
+    NotAllowed,
+    /// No matching capture source was found.
+    NotFound,
+    /// Platform error not covered by the above categories.
+    Other(String),
+}
+
+/// Single captured video frame (raw RGBA pixels, top-to-bottom row-major).
+pub struct VideoFrame {
+    /// Pixel width of this frame.
+    pub width: u32,
+    /// Pixel height of this frame.
+    pub height: u32,
+    /// Raw RGBA pixel data.  Length is always `width * height * 4` bytes.
+    pub data: Vec<u8>,
+}
+
+/// Live screen capture session returned by [`ScreenCaptureProvider::capture`].
+///
+/// Holds an active OS capture session.  Dropping the handle stops capture.
+/// All methods are called exclusively from the JS thread.
+pub trait ScreenCaptureHandle: 'static {
+    /// Actual capture width in pixels.
+    fn width(&self) -> u32;
+    /// Actual capture height in pixels.
+    fn height(&self) -> u32;
+    /// Opaque source ID matching [`ScreenSourceDescriptor::source_id`].
+    fn source_id(&self) -> &str;
+    /// Human-readable source label (e.g. `"Entire Screen"`).
+    fn label(&self) -> &str;
+    /// Capture and return the current frame as raw RGBA pixels.
+    ///
+    /// Returns `None` when the source is unavailable or the handle has been stopped.
+    fn read_frame(&mut self) -> Option<VideoFrame>;
+    /// Stop capture and release OS resources.
+    ///
+    /// After `stop`, `read_frame` must return `None`.
+    fn stop(&mut self);
+}
+
+/// Platform screen capture backend backing `navigator.mediaDevices.getDisplayMedia`.
+///
+/// Installed process-globally by the shell via `lumen_js::set_screen_capture_provider`.
+///
+/// Shell implementation: `lumen_shell::platform::screen_capture::PlatformScreenCapture`
+/// (GDI BitBlt on Windows; `NullScreenCaptureProvider` on Linux/macOS Phase 1).
+pub trait ScreenCaptureProvider: Send + Sync {
+    /// Return available capture sources (monitors and visible windows).
+    fn enumerate_sources(&self) -> Vec<ScreenSourceDescriptor>;
+
+    /// Start capturing from the source in `config.source_id`, or the primary monitor
+    /// when `config.source_id` is `None`.
+    fn capture(
+        &self,
+        config: ScreenCaptureConfig,
+    ) -> std::result::Result<Box<dyn ScreenCaptureHandle>, ScreenCaptureError>;
+}
+
+/// Stub `ScreenCaptureProvider` that returns zero sources and always rejects capture.
+///
+/// Used in headless mode, CI, and non-Windows platforms (Phase 1).
+pub struct NullScreenCaptureProvider;
+
+impl ScreenCaptureProvider for NullScreenCaptureProvider {
+    fn enumerate_sources(&self) -> Vec<ScreenSourceDescriptor> {
+        Vec::new()
+    }
+
+    fn capture(
+        &self,
+        _config: ScreenCaptureConfig,
+    ) -> std::result::Result<Box<dyn ScreenCaptureHandle>, ScreenCaptureError> {
+        Err(ScreenCaptureError::NotAllowed)
+    }
+}
+
+#[cfg(test)]
+mod screen_capture_tests {
+    use super::*;
+
+    #[test]
+    fn null_provider_enumerate_empty() {
+        let p = NullScreenCaptureProvider;
+        assert!(p.enumerate_sources().is_empty());
+    }
+
+    #[test]
+    fn null_provider_capture_rejects_not_allowed() {
+        let p = NullScreenCaptureProvider;
+        let r = p.capture(ScreenCaptureConfig::default());
+        assert!(matches!(r, Err(ScreenCaptureError::NotAllowed)));
+    }
+
+    #[test]
+    fn screen_capture_config_default_fields() {
+        let c = ScreenCaptureConfig::default();
+        assert!(c.source_id.is_none());
+        assert!(c.frame_rate.is_none());
+        assert!(c.width.is_none());
+        assert!(c.height.is_none());
+    }
+}
+
 // ── Audio playback (HTMLAudioElement Phase 1) ────────────────────────────────
 
 /// Platform audio playback backend backing `HTMLAudioElement` (PH3-11).

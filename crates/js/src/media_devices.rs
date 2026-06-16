@@ -319,14 +319,69 @@ const MEDIA_DEVICES_SHIM: &str = r#"(function() {
     },
 
     // Screen Capture API §4.1 — getDisplayMedia
-    // Phase 0 still: screen capture is not yet implemented.
+    // Phase 1 (PH3-17): resolves with a live MediaStream when ScreenCaptureProvider
+    // is installed. Rejects with NotAllowedError when no provider is registered or
+    // the provider denies access.
     getDisplayMedia: function(options) {
-      return Promise.reject(
-        new DOMException(
-          'Screen capture is not available in Lumen Phase 1',
-          'NotAllowedError'
-        )
-      );
+      if (typeof __lumen_screen_capture_start !== 'function') {
+        return Promise.reject(
+          new DOMException('Screen capture is not available', 'NotAllowedError')
+        );
+      }
+      var handleId = __lumen_screen_capture_start('');
+      if (handleId < 0) {
+        return Promise.reject(
+          new DOMException('Screen capture permission denied', 'NotAllowedError')
+        );
+      }
+      var info = {};
+      try { info = JSON.parse(__lumen_screen_capture_info(handleId)); } catch(e) {}
+
+      // Build a live video MediaStreamTrack backed by the OS capture session.
+      var track = new MediaStreamTrack('video', info.label || 'Screen');
+      track.readyState = 'live';
+      track.muted = false;
+      track._screenHandleId = handleId;
+      track._screenInfo = info;
+
+      // Override getSettings() to return real capture dimensions.
+      track.getSettings = function() {
+        var si = this._screenInfo || {};
+        return {
+          width: si.width || 0,
+          height: si.height || 0,
+          frameRate: 0,
+          displaySurface: 'monitor',
+          logicalSurface: true,
+          cursor: 'always',
+        };
+      };
+
+      // Override stop() to release the OS capture session.
+      track.stop = function() {
+        if (this.readyState === 'ended') return;
+        this.readyState = 'ended';
+        this.muted = true;
+        if (typeof __lumen_screen_capture_stop === 'function' &&
+            this._screenHandleId >= 0) {
+          __lumen_screen_capture_stop(this._screenHandleId);
+          this._screenHandleId = -1;
+        }
+      };
+
+      // readVideoFrame() — non-standard Lumen extension for MediaRecorder/canvas capture.
+      // Returns parsed {width, height, data:[u8,…]} or null.
+      track.readVideoFrame = function() {
+        if (this.readyState === 'ended' || this._screenHandleId < 0) return null;
+        if (typeof __lumen_screen_capture_read_frame !== 'function') return null;
+        try {
+          var raw = __lumen_screen_capture_read_frame(this._screenHandleId);
+          return raw ? JSON.parse(raw) : null;
+        } catch(e) { return null; }
+      };
+
+      var stream = new MediaStream([track]);
+      return Promise.resolve(stream);
     },
 
     // EventTarget methods for 'devicechange' event.

@@ -36,6 +36,7 @@ pub mod intl_bindings;
 pub mod media_capture;
 pub mod media_devices;
 pub mod media_session;
+pub mod screen_capture;
 pub mod navigator_bindings;
 pub mod notifications_bindings;
 pub mod offscreen_canvas;
@@ -127,6 +128,7 @@ use std::sync::{
 pub use clipboard::set_clipboard_provider;
 pub use credentials::set_credential_provider;
 pub use media_capture::set_audio_capture_provider;
+pub use screen_capture::set_screen_capture_provider;
 pub use audio_element::set_audio_playback_provider;
 pub use wake_lock::set_wake_lock_provider;
 pub use video_gif_store::{set_video_gif_store, VideoGifStore};
@@ -628,6 +630,12 @@ impl QuickJsRuntime {
             // Must run before MediaDevices shim so getUserMedia can find the natives.
             if let Err(e) = media_capture::install_media_capture_bindings(&ctx) {
                 eprintln!("MediaCapture bindings init failed: {}", e);
+            }
+
+            // Install native screen capture bridge (__lumen_screen_capture_* natives).
+            // Must run before MediaDevices shim so getDisplayMedia can find the natives (PH3-17).
+            if let Err(e) = screen_capture::install_screen_capture_bindings(&ctx) {
+                eprintln!("ScreenCapture bindings init failed: {}", e);
             }
 
             // Install MediaDevices API (W3C Media Capture §4) — after DOM/navigator so that
