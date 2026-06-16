@@ -31,10 +31,12 @@
 //! [`FingerprintProfile::apply_http`] stamps the HTTP/TLS fingerprint onto an
 //! [`HttpClient`].
 
+use lumen_core::ext::{FilterListSource as _, RequestFilter};
 use lumen_core::url::Url;
 use lumen_network::{HttpClient, HttpProfile, Socks5Proxy, TlsProfile};
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 
 /// Process-global fingerprint profile, loaded once at startup.
 ///
@@ -52,6 +54,55 @@ pub fn init_global(profile: FingerprintProfile) -> bool {
 #[must_use]
 pub fn global() -> &'static FingerprintProfile {
     GLOBAL.get_or_init(FingerprintProfile::default)
+}
+
+// ── Ad-block toggle ───────────────────────────────────────────────────────────
+//
+// Runtime, process-global on/off switch for the built-in request filter
+// (`EasyListFilter` over `DefaultFilterList`). Flipped by the tab-bar checkbox
+// (`build_adblock_btn`); read by [`apply_adblock`] when each `HttpClient` is
+// built, so a toggle takes effect on the next page load / reload.
+
+/// Whether the built-in ad/tracker filter is active. Default: enabled.
+static ADBLOCK_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Lazily-built filter shared across all requests. Parsing the bundled EasyList
+/// ruleset once and reusing the `Arc` avoids re-parsing on every fetch.
+static ADBLOCK_FILTER: OnceLock<Arc<dyn RequestFilter>> = OnceLock::new();
+
+/// Return whether ad-blocking is currently enabled.
+#[must_use]
+pub fn adblock_enabled() -> bool {
+    ADBLOCK_ENABLED.load(Ordering::Relaxed)
+}
+
+/// Set ad-blocking on/off. The per-tab checkbox calls this with the active
+/// tab's flag so [`apply_adblock`] reflects the tab whose page is loading.
+pub fn set_adblock_enabled(on: bool) {
+    ADBLOCK_ENABLED.store(on, Ordering::Relaxed);
+}
+
+/// The shared built-in filter (`EasyListFilter` parsed from the bundled
+/// `DefaultFilterList`). Built once on first use.
+fn adblock_filter() -> Arc<dyn RequestFilter> {
+    ADBLOCK_FILTER
+        .get_or_init(|| {
+            let rules = lumen_network::DefaultFilterList.fetch_rules().unwrap_or_default();
+            Arc::new(lumen_network::EasyListFilter::parse(&rules)) as Arc<dyn RequestFilter>
+        })
+        .clone()
+}
+
+/// Wire the built-in request filter onto `client` when ad-blocking is enabled;
+/// otherwise return it unchanged. Called by every `HttpClient` build site in the
+/// shell so the toggle governs both top-level navigations and subresources.
+#[must_use]
+pub fn apply_adblock(client: HttpClient) -> HttpClient {
+    if adblock_enabled() {
+        client.with_filter(adblock_filter())
+    } else {
+        client
+    }
 }
 
 /// User-configurable fingerprint identity (9F.1).

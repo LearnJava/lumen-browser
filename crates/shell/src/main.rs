@@ -1977,7 +1977,7 @@ impl PageSource {
                         None,
                     );
                 }
-                let client = crate::config::global().apply_http(builder);
+                let client = crate::config::apply_adblock(crate::config::global().apply_http(builder));
                 let (bytes, resp_headers) = client.fetch_page(&lumen_url)?;
                 eprintln!("Получено {} байт", bytes.len());
                 let coop = resp_headers.iter()
@@ -2516,7 +2516,7 @@ impl ResourceBase {
                 None,
             );
         }
-        let client = crate::config::global().apply_http(builder);
+        let client = crate::config::apply_adblock(crate::config::global().apply_http(builder));
         if let Some(origin) = self.origin()
             && origin.is_potentially_trustworthy()
         {
@@ -2542,8 +2542,9 @@ fn load_css_for_streaming(resolved: &str) -> Option<String> {
         use lumen_core::url::Url;
         use lumen_network::{BrotliContentDecoder, HttpClient};
         let url = Url::parse(resolved).ok()?;
-        let client = HttpClient::new()
-            .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()));
+        let client = crate::config::apply_adblock(
+            HttpClient::new().with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new())),
+        );
         let bytes = client.fetch(&url).ok()?;
         String::from_utf8(bytes).ok()
     } else {
@@ -7409,6 +7410,25 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             }
                             tabs::strip::TabHit::Close(idx) => {
                                 self.close_tab(idx, event_loop);
+                            }
+                            tabs::strip::TabHit::Adblock(idx) => {
+                                // Per-tab toggle: flip this tab's flag independently.
+                                if let Some(tab) = self.tab_strip.tabs.get_mut(idx) {
+                                    tab.adblock = !tab.adblock;
+                                    let now_on = tab.adblock;
+                                    println!(
+                                        "Ad-block вкладки {idx}: {}",
+                                        if now_on { "включён" } else { "отключён" }
+                                    );
+                                    // If this is the active tab, the filter governing its
+                                    // page fetches must reflect the new flag now — sync the
+                                    // process-global toggle and reload.
+                                    if idx == self.tab_strip.active {
+                                        crate::config::set_adblock_enabled(now_on);
+                                        self.reload();
+                                    }
+                                }
+                                self.request_redraw();
                             }
                             tabs::strip::TabHit::Empty => {}
                         }
@@ -13011,6 +13031,7 @@ impl Lumen {
                 last_activated_ms: 0.0,
                 pinned: false,
                 group_id: None,
+                adblock: true,
             });
             self.lifecycle_mgr.open_tab(id as u64);
 
@@ -13915,6 +13936,11 @@ impl Lumen {
         self.tab_strip.active = idx;
         self.tab_strip.set_tab_state(idx, TabState::Active);
         self.tab_strip.update_last_activated(idx, now_ms);
+        // Sync the process-global ad-block toggle to this tab's per-tab flag so
+        // the filter governing its subresource fetches matches the tab.
+        if let Some(tab) = self.tab_strip.tabs.get(idx) {
+            crate::config::set_adblock_enabled(tab.adblock);
+        }
 
         self.reset_to_blank_tab();
 

@@ -130,6 +130,7 @@ mod tests {
             last_activated_ms: 0.0,
             pinned: false,
             group_id: None,
+            adblock: true,
         }
     }
 

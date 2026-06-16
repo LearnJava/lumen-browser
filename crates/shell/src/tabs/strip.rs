@@ -31,6 +31,25 @@ const DROP_INDICATOR_W: f32 = 3.0;
 /// archive button.
 pub const LAYOUT_BTN_W: f32 = 28.0;
 
+/// Side length of the per-tab ad-block checkbox square in CSS px.
+/// Rendered at the tab's left edge, before the title (away from the × button so
+/// the user does not hit close by mistake).
+const ADBLOCK_CB_SZ: f32 = 12.0;
+
+/// Background colour of the ad-block checkbox when blocking is enabled.
+const ADBLOCK_ON_BG: Color = Color { r: 46, g: 160, b: 80, a: 255 };
+/// Background colour of the ad-block checkbox when blocking is disabled.
+const ADBLOCK_OFF_BG: Color = Color { r: 70, g: 72, b: 80, a: 255 };
+
+/// `[left, right)` x-range of a tab's ad-block checkbox, given the tab's own
+/// left edge. Placed at the left edge (inset by `TAB_PAD`), before the title.
+/// Mirrors the geometry used in [`build_tab_bar`] and [`hit_test`] so painting
+/// and hit-testing stay in sync.
+fn adblock_cb_x_range(tab_left: f32) -> (f32, f32) {
+    let cb_left = tab_left + TAB_PAD;
+    (cb_left, cb_left + ADBLOCK_CB_SZ)
+}
+
 /// Colour of the vertical drop-indicator bar.
 const DROP_INDICATOR_COLOR: Color = Color { r: 255, g: 255, b: 255, a: 180 };
 
@@ -118,6 +137,14 @@ pub struct TabEntry {
     /// tab is ungrouped. Drives the coloured group accent bar and collapse
     /// visibility in [`build_tab_bar`].
     pub group_id: Option<usize>,
+    /// Whether the built-in ad/tracker request filter is active for this tab.
+    ///
+    /// Per-tab and independent: toggled by the checkbox rendered inside the tab
+    /// (left of the close button). Synced into the process-global toggle
+    /// (`crate::config::set_adblock_enabled`) when the tab becomes active or its
+    /// checkbox is flipped, so the filter that governs the tab's page fetches
+    /// reflects this flag. Default `true`.
+    pub adblock: bool,
 }
 
 /// State of the tab strip (tab list + active index).
@@ -147,6 +174,7 @@ impl TabStrip {
                 last_activated_ms: 0.0,
                 pinned: false,
                 group_id: None,
+                adblock: true,
             }],
             active: 0,
             next_id: 1,
@@ -176,6 +204,7 @@ impl TabStrip {
             last_activated_ms: now_ms,
             pinned: false,
             group_id: None,
+            adblock: true,
         });
         self.tabs.len() - 1
     }
@@ -199,6 +228,7 @@ impl TabStrip {
             last_activated_ms: now_ms,
             pinned: false,
             group_id: None,
+            adblock: true,
         });
         self.tabs.len() - 1
     }
@@ -312,6 +342,7 @@ impl TabStrip {
             last_activated_ms: now_ms,
             pinned: false,
             group_id: source.group_id,
+            adblock: source.adblock,
         };
         let dst = src + 1;
         self.tabs.insert(dst, clone);
@@ -527,6 +558,8 @@ pub enum TabHit {
     Tab(usize),
     /// Clicked the close ×  button — `idx` = tab index.
     Close(usize),
+    /// Clicked the per-tab ad-block checkbox — `idx` = tab index.
+    Adblock(usize),
     /// Clicked empty area (right of all tabs).
     Empty,
 }
@@ -628,6 +661,11 @@ pub fn hit_test(strip: &TabStrip, x: f32, y: f32, window_w: f32) -> TabHit {
             let close_left = close_right - CLOSE_SZ;
             if x >= close_left && x < close_right {
                 return TabHit::Close(i);
+            }
+            // Ad-block checkbox sits at the tab's left edge, before the title.
+            let (cb_left, cb_right) = adblock_cb_x_range(left);
+            if x >= cb_left && x < cb_right {
+                return TabHit::Adblock(i);
             }
             return TabHit::Tab(i);
         }
@@ -783,8 +821,32 @@ pub fn build_tab_bar(
             highlight_name: None,
         });
 
-        // Tab title — truncated to fit between left edge and close button.
-        let text_x = left + TAB_PAD;
+        // Per-tab ad-block checkbox — small square at the tab's left edge,
+        // before the title (away from the × so closing isn't hit by mistake).
+        // Green + check mark when blocking is enabled, grey when disabled.
+        let (cb_left, cb_right) = adblock_cb_x_range(left);
+        let cb_y = (TAB_BAR_HEIGHT - ADBLOCK_CB_SZ) * 0.5;
+        out.push(DisplayCommand::FillRect {
+            rect: Rect::new(cb_left, cb_y, ADBLOCK_CB_SZ, ADBLOCK_CB_SZ),
+            color: if tab.adblock { ADBLOCK_ON_BG } else { ADBLOCK_OFF_BG },
+        });
+        if tab.adblock {
+            out.push(DisplayCommand::DrawText {
+                rect: Rect::new(cb_left + 1.0, cb_y - 1.0, ADBLOCK_CB_SZ, ADBLOCK_CB_SZ * 1.3),
+                text: "\u{2713}".to_owned(), // ✓ check mark
+                font_size: 10.0,
+                color: Color { r: 255, g: 255, b: 255, a: 255 },
+                font_family: Vec::new(),
+                font_weight: FontWeight::BOLD,
+                font_style: FontStyle::Normal,
+                font_variation_axes: Vec::new(),
+                tab_size: 0.0,
+                highlight_name: None,
+            });
+        }
+
+        // Tab title — starts after the checkbox, extends toward the × button.
+        let text_x = cb_right + CLOSE_MARGIN;
         let text_w = (close_left - CLOSE_MARGIN - text_x).max(0.0);
         let text_y = (TAB_BAR_HEIGHT - FONT_SZ * 1.3) * 0.5;
         let text_color = if is_active { TAB_TEXT } else { TAB_TEXT_DIM };
@@ -1185,6 +1247,7 @@ mod tests {
             last_activated_ms: 0.0,
             pinned: false,
             group_id: None,
+            adblock: true,
         };
         assert!(build_tab_tooltip(&tab, 100.0, 36.0).is_none());
     }
@@ -1200,6 +1263,7 @@ mod tests {
             last_activated_ms: 0.0,
             pinned: false,
             group_id: None,
+            adblock: true,
         };
         let cmds = build_tab_tooltip(&tab, 100.0, 36.0);
         assert!(cmds.is_some());
@@ -1218,6 +1282,7 @@ mod tests {
             last_activated_ms: 0.0,
             pinned: false,
             group_id: None,
+            adblock: true,
         };
         assert!(build_tab_tooltip(&tab, 100.0, 36.0).is_some());
     }
