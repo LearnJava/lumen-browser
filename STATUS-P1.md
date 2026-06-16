@@ -6,8 +6,7 @@
 
 ## In progress
 
-PH3-16: Idle Detection API Phase 1 — OS idle time via Win32 GetLastInputInfo  branch: p1-ph3-16-idle-detection
-Next step: implement user_idle_ms() + update IDLE_DETECTION_SHIM + register __lumen_idle_get_idle_ms binding  crates/js/src/idle_detection.rs
+idle
 
 ---
 
@@ -32,6 +31,7 @@ Next step: implement user_idle_ms() + update IDLE_DETECTION_SHIM + register __lu
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-16 | PH3-16: Idle Detection API Phase 1 | `__lumen_idle_get_idle_ms()` → Win32 `GetLastInputInfo+GetTickCount` на Windows, 0 на Linux/macOS; `IdleDetector.start()` запускает `setInterval(max(30s, threshold/2))`, диспатчит `'change'` при переходе `userState` active↔idle; `#[link(name = "user32")]`. 16 новых тестов. |
 | 2026-06-16 | PH3-15: File System Access API Phase 1 | `showOpenFilePicker/showSaveFilePicker/showDirectoryPicker` → Promise; `FileSystemFileHandle`/`FileSystemDirectoryHandle`/`FileSystemWritableFileStream` JS-классы; `WriteRegistry` (append + flush-on-close); `DirRegistry`; OS диалоги WinForms/zenity/osascript; токен-безопасность через PH3-14 `register_file_token`. 33 новых теста lumen-js. |
 | 2026-06-16 | PH3-14: File Input API Phase 1 | `register_file_token()` + thread-local `FILE_REGISTRY`; нативные биндинги `__lumen_file_read_text`/`__lumen_file_read_base64`; `File.prototype.text()`/`arrayBuffer()`/`stream()` читают реальные байты через токены; `entries_to_json_with_tokens()` в shell; JS не видит сырых путей файловой системы. 18 новых тестов lumen-js + 4 lumen-shell. |
 | 2026-06-16 | PH3-13: Screen Wake Lock API Phase 1 | `WakeLockProvider` трейт + `NullWakeLockProvider` в lumen-core::ext; `set_wake_lock_provider()` + `__lumen_wake_lock_request`/`__lumen_wake_lock_release` биндинги + обновлённый JS-шим в lumen-js; `PlatformWakeLock` (`SetThreadExecutionState` на Windows, no-op на Linux/macOS) в shell/src/platform/wake_lock.rs. 23 новых теста. |
