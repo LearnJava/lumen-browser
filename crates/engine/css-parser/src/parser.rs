@@ -1106,6 +1106,13 @@ pub enum MediaFeature {
     Pointer(MediaPointer),
     /// `(any-pointer: none | coarse | fine)` — точность любого указателя.
     AnyPointer(MediaPointer),
+    // User-preference media features (Media Queries L5 §5.5/§5.6)
+    /// `(prefers-contrast: no-preference | more | less | custom)` —
+    /// предпочтение пользователя по контрастности интерфейса.
+    PrefersContrast(MediaContrast),
+    /// `(prefers-reduced-data: no-preference | reduce)` —
+    /// предпочтение пользователя по экономии сетевого трафика.
+    PrefersReducedData(MediaReducedData),
 }
 
 impl Eq for MediaFeature {}
@@ -1136,6 +1143,30 @@ pub enum MediaPointer {
     Fine,
 }
 
+/// Media Queries L5 §5.5 — `prefers-contrast`: запрошенный пользователем
+/// уровень контрастности интерфейса.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaContrast {
+    /// Пользователь не выразил предпочтения (значение по умолчанию).
+    NoPreference,
+    /// Пользователь запросил больший контраст.
+    More,
+    /// Пользователь запросил меньший контраст.
+    Less,
+    /// Активирована пользовательская цветовая схема (forced colors и т.п.).
+    Custom,
+}
+
+/// Media Queries L5 §5.6 — `prefers-reduced-data`: запрос на экономию
+/// сетевого трафика.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaReducedData {
+    /// Пользователь не выразил предпочтения (значение по умолчанию).
+    NoPreference,
+    /// Пользователь запросил режим экономии трафика.
+    Reduce,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorScheme {
     Light,
@@ -1164,6 +1195,10 @@ pub struct MediaContext {
     pub pointer: MediaPointer,
     /// Точность любого указателя (`any-pointer` media feature).
     pub any_pointer: MediaPointer,
+    /// Предпочтение контрастности (`prefers-contrast` media feature).
+    pub prefers_contrast: MediaContrast,
+    /// Предпочтение экономии трафика (`prefers-reduced-data` media feature).
+    pub prefers_reduced_data: MediaReducedData,
 }
 
 impl Default for MediaContext {
@@ -1180,6 +1215,10 @@ impl Default for MediaContext {
             any_hover: MediaHover::Hover,
             pointer: MediaPointer::Fine,
             any_pointer: MediaPointer::Fine,
+            // Desktop-дефолты: пользователь не запрашивал особый контраст
+            // или экономию трафика.
+            prefers_contrast: MediaContrast::NoPreference,
+            prefers_reduced_data: MediaReducedData::NoPreference,
         }
     }
 }
@@ -1267,6 +1306,8 @@ impl MediaFeature {
             Self::AnyHover(h) => ctx.any_hover == *h,
             Self::Pointer(p) => ctx.pointer == *p,
             Self::AnyPointer(p) => ctx.any_pointer == *p,
+            Self::PrefersContrast(c) => ctx.prefers_contrast == *c,
+            Self::PrefersReducedData(d) => ctx.prefers_reduced_data == *d,
         }
     }
 }
@@ -1843,6 +1884,18 @@ fn parse_media_feature(s: &str) -> MediaCondition {
                 MediaFeature::AnyPointer(p)
             })
         }
+        "prefers-contrast" => match val.to_ascii_lowercase().as_str() {
+            "no-preference" => MediaCondition::Feature(MediaFeature::PrefersContrast(MediaContrast::NoPreference)),
+            "more" => MediaCondition::Feature(MediaFeature::PrefersContrast(MediaContrast::More)),
+            "less" => MediaCondition::Feature(MediaFeature::PrefersContrast(MediaContrast::Less)),
+            "custom" => MediaCondition::Feature(MediaFeature::PrefersContrast(MediaContrast::Custom)),
+            _ => MediaCondition::Unsupported,
+        },
+        "prefers-reduced-data" => match val.to_ascii_lowercase().as_str() {
+            "no-preference" => MediaCondition::Feature(MediaFeature::PrefersReducedData(MediaReducedData::NoPreference)),
+            "reduce" => MediaCondition::Feature(MediaFeature::PrefersReducedData(MediaReducedData::Reduce)),
+            _ => MediaCondition::Unsupported,
+        },
         _ => MediaCondition::Unsupported,
     }
 }
@@ -6647,6 +6700,70 @@ mod tests {
         // Невалидное значение → Unsupported → clause никогда не матчит.
         let q = parse_media_query("(pointer: medium)");
         assert!(!q.matches(&screen_ctx(1024.0)));
+    }
+
+    // ── MQ L5 §5.5/§5.6: prefers-contrast / prefers-reduced-data ──
+
+    #[test]
+    fn media_query_prefers_contrast_no_preference_default() {
+        // screen_ctx наследует desktop-дефолт (no-preference).
+        let q = parse_media_query("(prefers-contrast: no-preference)");
+        assert!(q.matches(&screen_ctx(1024.0)));
+        let mut more = screen_ctx(1024.0);
+        more.prefers_contrast = MediaContrast::More;
+        assert!(!q.matches(&more));
+    }
+
+    #[test]
+    fn media_query_prefers_contrast_more_and_less() {
+        let more_q = parse_media_query("(prefers-contrast: more)");
+        let less_q = parse_media_query("(prefers-contrast: less)");
+        let mut ctx = screen_ctx(1024.0);
+        ctx.prefers_contrast = MediaContrast::More;
+        assert!(more_q.matches(&ctx));
+        assert!(!less_q.matches(&ctx));
+        ctx.prefers_contrast = MediaContrast::Less;
+        assert!(less_q.matches(&ctx));
+        assert!(!more_q.matches(&ctx));
+    }
+
+    #[test]
+    fn media_query_prefers_contrast_custom() {
+        let q = parse_media_query("(prefers-contrast: custom)");
+        let mut ctx = screen_ctx(1024.0);
+        ctx.prefers_contrast = MediaContrast::Custom;
+        assert!(q.matches(&ctx));
+        assert!(!q.matches(&screen_ctx(1024.0)));
+    }
+
+    #[test]
+    fn media_query_prefers_contrast_case_insensitive_and_invalid() {
+        let q = parse_media_query("(PREFERS-CONTRAST: MORE)");
+        let mut ctx = screen_ctx(1024.0);
+        ctx.prefers_contrast = MediaContrast::More;
+        assert!(q.matches(&ctx));
+        // Невалидное значение → Unsupported → никогда не матчит.
+        let bad = parse_media_query("(prefers-contrast: high)");
+        assert!(!bad.matches(&ctx));
+    }
+
+    #[test]
+    fn media_query_prefers_reduced_data_reduce() {
+        let q = parse_media_query("(prefers-reduced-data: reduce)");
+        let mut ctx = screen_ctx(1024.0);
+        ctx.prefers_reduced_data = MediaReducedData::Reduce;
+        assert!(q.matches(&ctx));
+        assert!(!q.matches(&screen_ctx(1024.0)));
+    }
+
+    #[test]
+    fn media_query_prefers_reduced_data_no_preference_default() {
+        let q = parse_media_query("(prefers-reduced-data: no-preference)");
+        // Desktop-дефолт — no-preference.
+        assert!(q.matches(&screen_ctx(1024.0)));
+        let mut reduce = screen_ctx(1024.0);
+        reduce.prefers_reduced_data = MediaReducedData::Reduce;
+        assert!(!q.matches(&reduce));
     }
 
     // ── Стиль: @media с новыми фичами применяется в каскаде ──

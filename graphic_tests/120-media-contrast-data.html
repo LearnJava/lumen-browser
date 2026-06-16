@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<!-- Media Queries L5 §5.5-5.6 — prefers-contrast / prefers-reduced-data.
+     With no user preference set (the engine default), `(prefers-contrast: no-preference)`
+     and `(prefers-reduced-data: no-preference)` match, while `(prefers-contrast: more)`,
+     `(prefers-contrast: less)`, `(prefers-contrast: custom)` and
+     `(prefers-reduced-data: reduce)` do not. Each swatch starts red and turns green only
+     when its media query matches. On a correct engine the two "match" swatches are green
+     and the four "no-match" swatches stay red. Graphics only, no text. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; padding: 40px; overflow: hidden; box-sizing: border-box; }
+
+  .row { display: flex; gap: 24px; margin-bottom: 24px; }
+  .sw {
+    width: 200px;
+    height: 140px;
+    background: #d64545;        /* default: red = query did NOT match */
+    border: 6px solid #1a202c;
+    box-sizing: border-box;
+  }
+
+  /* Default (no preference) matches → green */
+  @media (prefers-contrast: no-preference)    { .a { background: #2f855a; } }
+  @media (prefers-reduced-data: no-preference) { .b { background: #2f855a; } }
+
+  /* Default does NOT match → swatch stays red; blue if it wrongly matches */
+  @media (prefers-contrast: more)             { .c { background: #2b6cb0; } }
+  @media (prefers-contrast: less)             { .d { background: #2b6cb0; } }
+  @media (prefers-contrast: custom)           { .e { background: #2b6cb0; } }
+  @media (prefers-reduced-data: reduce)       { .f { background: #2b6cb0; } }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="row">
+    <div class="sw a"></div>
+    <div class="sw b"></div>
+    <div class="sw c"></div>
+  </div>
+  <div class="row">
+    <div class="sw d"></div>
+    <div class="sw e"></div>
+    <div class="sw f"></div>
+  </div>
+</div>
+</body>
+</html>
