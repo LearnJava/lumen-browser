@@ -394,7 +394,12 @@ fn all_header_values<'a>(
 /// Если сервер прислал `Connection: close` или произошёл EOF до окончания
 /// тела — выставляет `conn.closed = true`, и caller не должен возвращать
 /// такое соединение в пул.
-fn read_response(conn: &mut Connection) -> Result<Response> {
+/// Прочитать status-line + заголовки до пустой строки. Возвращает
+/// `(status, headers, server_wants_close)`. При EOF до завершения head-секции
+/// выставляет `conn.closed = true` и возвращает `Err`. Вынесено из
+/// `read_response`, чтобы streaming-вариант (`read_response_streamed`) читал
+/// head идентично — единый источник правды по разбору статуса/заголовков.
+fn read_head(conn: &mut Connection) -> Result<ResponseHead> {
     // Status line.
     let mut status_line = String::new();
     let n = conn
@@ -437,6 +442,12 @@ fn read_response(conn: &mut Connection) -> Result<Response> {
                 .any(|t| t.trim().eq_ignore_ascii_case("close"))
         })
         .unwrap_or(false);
+
+    Ok((status, headers, server_wants_close))
+}
+
+fn read_response(conn: &mut Connection) -> Result<Response> {
+    let (status, headers, server_wants_close) = read_head(conn)?;
 
     // Body: chunked > Content-Length > read-to-EOF (последнее — только если
     // сервер обещал закрыть соединение; для keep-alive без Content-Length
@@ -557,6 +568,349 @@ fn read_chunked<R: BufRead>(reader: &mut R) -> Result<Vec<u8>> {
             .map_err(|e| Error::Network(format!("chunked crlf: {e}")))?;
     }
     Ok(body)
+}
+
+// ── Streaming body read (PH1-2a) ─────────────────────────────────────────────
+
+/// Размер порции для streaming-чтения/декодирования тела с сокета.
+const STREAM_BODY_READ: usize = 8 * 1024;
+
+/// Колбэк, в который streaming-путь отдаёт декодированные порции тела по мере
+/// чтения с сокета (PH1-2a). Алиас держит сигнатуры `fetch_*`/`do_request`
+/// читаемыми (без него clippy::type_complexity ругается на `Option<&mut dyn …>`).
+type ChunkSink<'a> = &'a mut dyn FnMut(&[u8]);
+
+/// Разобранная head-секция ответа: `(status, headers, server_wants_close)`.
+type ResponseHead = (u16, Vec<(String, String)>, bool);
+
+/// Тело документа + заголовки финального ответа — возврат `fetch_page` /
+/// `fetch_page_streaming` (алиас держит сигнатуру под порогом type_complexity).
+type PageResponse = (Vec<u8>, Vec<(String, String)>);
+
+/// Framing тела ответа, определённый по заголовкам. Управляет
+/// инкрементальным чтением тела в streaming-пути.
+#[derive(Clone, Copy)]
+enum BodyFraming {
+    /// `Content-Length: N` — ровно N байт.
+    Length(usize),
+    /// `Transfer-Encoding: chunked`.
+    Chunked,
+    /// Ни длины, ни chunked — читаем до EOF (только при `Connection: close`).
+    Eof,
+}
+
+/// Стратегия декодирования тела для прогрессивного preview-sink-а. Тело всегда
+/// читается с сокета как СЫРЫЕ байты и возвращается сырым (финальный
+/// `apply_content_encoding` снимает кодировку авторитетно у caller-а); этот
+/// enum задаёт лишь как получить ДЕКОДИРОВАННЫЕ байты для sink-а.
+#[derive(Clone, Copy, PartialEq)]
+enum StreamDecode {
+    /// `identity` / нет `Content-Encoding` — сырые байты уже декодированы.
+    Identity,
+    Brotli,
+    Gzip,
+    Deflate,
+    /// Несколько кодировок или неизвестная — инкрементальный decode невозможен;
+    /// тело читается буферизованно, sink не вызывается (preview до LoadDone нет).
+    Unsupported,
+}
+
+/// Выбрать streaming-стратегию по заголовку `Content-Encoding`.
+fn detect_stream_decode(headers: &[(String, String)]) -> StreamDecode {
+    let raw = match header_value(headers, "content-encoding") {
+        Some(v) => v,
+        None => return StreamDecode::Identity,
+    };
+    let tokens: Vec<String> = raw
+        .split(',')
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty() && s != "identity")
+        .collect();
+    match tokens.as_slice() {
+        [] => StreamDecode::Identity,
+        [one] => match one.as_str() {
+            "br" => StreamDecode::Brotli,
+            "gzip" | "x-gzip" => StreamDecode::Gzip,
+            "deflate" => StreamDecode::Deflate,
+            _ => StreamDecode::Unsupported,
+        },
+        _ => StreamDecode::Unsupported,
+    }
+}
+
+/// `Read`-адаптер над framed-телом ответа: знает Content-Length / chunked /
+/// read-to-EOF и выдаёт сырые байты тела (без head-секции). Прозрачен для
+/// content-encoding — поверх можно навесить streaming-декодер.
+struct BodyReader<'a, R: BufRead> {
+    reader: &'a mut R,
+    framing: BodyFraming,
+    /// Length: оставшиеся байты тела; Chunked: байты в текущем chunk-е.
+    remaining: usize,
+    /// Конец тела достигнут (last chunk / Content-Length исчерпан / EOF).
+    done: bool,
+}
+
+impl<'a, R: BufRead> BodyReader<'a, R> {
+    fn new(reader: &'a mut R, framing: BodyFraming) -> Self {
+        let remaining = match framing {
+            BodyFraming::Length(n) => n,
+            _ => 0,
+        };
+        Self { reader, framing, remaining, done: false }
+    }
+}
+
+impl<R: BufRead> Read for BodyReader<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.done || buf.is_empty() {
+            return Ok(0);
+        }
+        match self.framing {
+            BodyFraming::Length(_) => {
+                if self.remaining == 0 {
+                    self.done = true;
+                    return Ok(0);
+                }
+                let take = buf.len().min(self.remaining);
+                let n = self.reader.read(&mut buf[..take])?;
+                if n == 0 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "body shorter than Content-Length",
+                    ));
+                }
+                self.remaining -= n;
+                Ok(n)
+            }
+            BodyFraming::Eof => {
+                let n = self.reader.read(buf)?;
+                if n == 0 {
+                    self.done = true;
+                }
+                Ok(n)
+            }
+            BodyFraming::Chunked => {
+                if self.remaining == 0 {
+                    // Следующая chunk-size строка.
+                    let mut size_line = String::new();
+                    self.reader.read_line(&mut size_line)?;
+                    let size_hex = size_line
+                        .trim_end_matches(['\r', '\n'])
+                        .split(';')
+                        .next()
+                        .unwrap_or("")
+                        .trim();
+                    let chunk_size = usize::from_str_radix(size_hex, 16).map_err(|_| {
+                        std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid chunk size")
+                    })?;
+                    if chunk_size == 0 {
+                        // last-chunk: дочитать trailer-секцию до пустой строки.
+                        loop {
+                            let mut line = String::new();
+                            let n = self.reader.read_line(&mut line)?;
+                            if n == 0 || line == "\r\n" || line == "\n" {
+                                break;
+                            }
+                        }
+                        self.done = true;
+                        return Ok(0);
+                    }
+                    self.remaining = chunk_size;
+                }
+                let take = buf.len().min(self.remaining);
+                let n = self.reader.read(&mut buf[..take])?;
+                if n == 0 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "EOF inside chunk",
+                    ));
+                }
+                self.remaining -= n;
+                if self.remaining == 0 {
+                    // CRLF после данных chunk-а.
+                    let mut crlf = [0u8; 2];
+                    self.reader.read_exact(&mut crlf)?;
+                }
+                Ok(n)
+            }
+        }
+    }
+}
+
+/// `Read`-обёртка, копирующая все прочитанные байты в `captured`. Позволяет
+/// поверх streaming-декодера сохранить СЫРОЕ (ещё сжатое) тело для возврата
+/// caller-у — финальный `apply_content_encoding` декодирует его авторитетно.
+struct TeeReader<'a, R: Read> {
+    inner: R,
+    captured: &'a mut Vec<u8>,
+}
+
+impl<R: Read> Read for TeeReader<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.captured.extend_from_slice(&buf[..n]);
+        Ok(n)
+    }
+}
+
+/// Прочитать framed-тело целиком (без content-encoding decode). Эквивалент
+/// body-секции `read_response`, параметризованный уже определённым `framing`.
+fn read_framed_buffered<R: BufRead>(reader: &mut R, framing: BodyFraming) -> Result<Vec<u8>> {
+    match framing {
+        BodyFraming::Chunked => read_chunked(reader),
+        BodyFraming::Length(len) => {
+            let mut buf = vec![0u8; len];
+            reader
+                .read_exact(&mut buf)
+                .map_err(|e| Error::Network(format!("read body: {e}")))?;
+            Ok(buf)
+        }
+        BodyFraming::Eof => {
+            let mut buf = Vec::new();
+            reader
+                .read_to_end(&mut buf)
+                .map_err(|e| Error::Network(format!("read body: {e}")))?;
+            Ok(buf)
+        }
+    }
+}
+
+/// Streaming-вариант [`read_response`]: тело читается с сокета порциями, и
+/// каждая ДЕКОДИРОВАННАЯ порция передаётся в `sink` — это позволяет shell
+/// начать парсинг/раскладку HTML до полного скачивания (PH1-2a).
+///
+/// `sink` вызывается ТОЛЬКО для финального 2xx-ответа. Для 3xx/4xx/5xx тело
+/// читается буферизованно, sink не трогается (caller отбросит тело или пойдёт
+/// за redirect). Возвращаемый `body` — СЫРОЙ (как в `read_response`): caller
+/// снимает content-encoding через `apply_content_encoding`. sink получает уже
+/// декодированные байты. Для сжатого тела decode выполняется дважды (streaming
+/// preview + финальный авторитетный) — осознанный размен на простоту: документ
+/// декодируется один раз за навигацию.
+fn read_response_streamed(conn: &mut Connection, sink: ChunkSink<'_>) -> Result<Response> {
+    let (status, headers, server_wants_close) = read_head(conn)?;
+
+    let is_chunked = header_value(&headers, "transfer-encoding")
+        .map(|v| v.to_ascii_lowercase().contains("chunked"))
+        .unwrap_or(false);
+    let content_length =
+        header_value(&headers, "content-length").and_then(|v| v.trim().parse::<usize>().ok());
+
+    let framing = if is_chunked {
+        Some(BodyFraming::Chunked)
+    } else if let Some(len) = content_length {
+        Some(BodyFraming::Length(len))
+    } else if status == 204 || status == 304 {
+        Some(BodyFraming::Length(0))
+    } else if server_wants_close {
+        Some(BodyFraming::Eof)
+    } else {
+        None
+    };
+
+    let Some(framing) = framing else {
+        // RFC 7230: HTTP/1.1 без Content-Length и без chunked при keep-alive —
+        // протокольная ошибка. Закрываем соединение, чтобы не отравить пул.
+        conn.closed = true;
+        return Err(Error::Network(
+            "response without Content-Length or chunked".to_owned(),
+        ));
+    };
+
+    let stream = (200..=299).contains(&status);
+    let decode = if stream {
+        detect_stream_decode(&headers)
+    } else {
+        StreamDecode::Unsupported
+    };
+
+    let mut raw = Vec::new();
+    let read_err: Option<Error> = if !stream || decode == StreamDecode::Unsupported {
+        // Не-2xx или неинкрементальная кодировка: буферизованное чтение, sink молчит.
+        match read_framed_buffered(&mut conn.reader, framing) {
+            Ok(b) => {
+                raw = b;
+                None
+            }
+            Err(e) => Some(e),
+        }
+    } else if decode == StreamDecode::Identity {
+        let mut body = BodyReader::new(&mut conn.reader, framing);
+        let mut buf = [0u8; STREAM_BODY_READ];
+        let mut err = None;
+        loop {
+            match body.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    raw.extend_from_slice(&buf[..n]);
+                    sink(&buf[..n]);
+                }
+                Err(e) => {
+                    err = Some(Error::Network(format!("read body: {e}")));
+                    break;
+                }
+            }
+        }
+        err
+    } else {
+        // Сжатое тело: tee сохраняет сырые байты, streaming-декодер выдаёт preview.
+        let mut body = BodyReader::new(&mut conn.reader, framing);
+        let mut tee = TeeReader {
+            inner: &mut body,
+            captured: &mut raw,
+        };
+        let mut err = None;
+        {
+            let mut dec: Box<dyn Read + '_> = match decode {
+                StreamDecode::Brotli => {
+                    Box::new(brotli_decompressor::Decompressor::new(&mut tee, STREAM_BODY_READ))
+                }
+                StreamDecode::Gzip => Box::new(flate2::read::MultiGzDecoder::new(&mut tee)),
+                StreamDecode::Deflate => Box::new(flate2::read::ZlibDecoder::new(&mut tee)),
+                StreamDecode::Identity | StreamDecode::Unsupported => unreachable!(),
+            };
+            let mut buf = [0u8; STREAM_BODY_READ];
+            loop {
+                match dec.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => sink(&buf[..n]),
+                    Err(e) => {
+                        err = Some(Error::Network(format!("decode body: {e}")));
+                        break;
+                    }
+                }
+            }
+        }
+        // Дочитать остаток framed-тела (декодер мог остановиться на конце
+        // brotli/gzip-потока раньше Content-Length), чтобы соединение было
+        // полностью прочитано и `raw` содержал всё сырое тело.
+        if err.is_none() {
+            let mut buf = [0u8; STREAM_BODY_READ];
+            loop {
+                match tee.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(_) => {}
+                    Err(e) => {
+                        err = Some(Error::Network(format!("read body: {e}")));
+                        break;
+                    }
+                }
+            }
+        }
+        err
+    };
+
+    if let Some(e) = read_err {
+        conn.closed = true;
+        return Err(e);
+    }
+    if server_wants_close {
+        conn.closed = true;
+    }
+    Ok(Response {
+        status,
+        headers,
+        body: raw,
+    })
 }
 
 /// Применить цепочку Content-Encoding декодеров к body. Парсит header-значение
@@ -798,6 +1152,9 @@ fn fetch_single(
     extra_headers: &str,
     proxy: Option<&HttpProxy>,
     socks5_proxy: Option<&socks5::Socks5Proxy>,
+    // PH1-2a: HTTP/1.1 streaming body sink. Only the direct (non-proxy) HTTP/1.1
+    // path streams; the H2 and proxy-CONNECT paths buffer (sink unused there).
+    mut stream_sink: Option<ChunkSink<'_>>,
 ) -> Result<Response> {
     // SOCKS5 takes precedence over HTTP proxy when both are set.
     // With SOCKS5 the tunnel is established by the proxy itself, so we
@@ -853,6 +1210,7 @@ fn fetch_single(
             accept_encoding,
             extra_headers,
             http_profile,
+            stream_sink.as_mut().map(|f| &mut **f as ChunkSink<'_>),
         ) {
             Ok((resp, conn)) => {
                 if !conn.closed {
@@ -969,6 +1327,7 @@ fn fetch_single(
         accept_encoding,
         extra_headers,
         http_profile,
+        stream_sink.as_mut().map(|f| &mut **f as ChunkSink<'_>),
     )?;
     if !conn.closed {
         pool.release(key, conn);
@@ -1060,6 +1419,9 @@ fn do_request(
     accept_encoding: Option<&str>,
     extra_headers: &str,
     http_profile: HttpProfile,
+    // PH1-2a: when present, the 2xx response body is streamed off the socket and
+    // each decoded chunk is handed to this sink (progressive HTML rendering).
+    stream_sink: Option<ChunkSink<'_>>,
 ) -> Result<(Response, Connection)> {
     conn.write_request(
         method,
@@ -1072,7 +1434,10 @@ fn do_request(
         extra_headers,
         http_profile,
     )?;
-    let resp = read_response(&mut conn)?;
+    let resp = match stream_sink {
+        Some(sink) => read_response_streamed(&mut conn, sink)?,
+        None => read_response(&mut conn)?,
+    };
     Ok((resp, conn))
 }
 
@@ -1240,6 +1605,10 @@ fn fetch_with_redirect(
     top_level_site: Option<&str>,
     proxy: Option<&HttpProxy>,
     socks5_proxy: Option<&socks5::Socks5Proxy>,
+    // PH1-2a: streaming body sink for the final 2xx response (progressive HTML).
+    // Threaded to the actual-request `fetch_single` and along redirect hops;
+    // `None` for every fetch path except top-level navigation streaming.
+    mut stream_sink: Option<ChunkSink<'_>>,
 ) -> Result<Response> {
     if hops_left == 0 {
         return Err(Error::Network("too many redirects".to_owned()));
@@ -1372,6 +1741,7 @@ fn fetch_with_redirect(
                 &preflight_extra,
                 proxy,
                 socks5_proxy,
+                None, // preflight OPTIONS body is never streamed
             ) {
                 Ok(r) => r,
                 Err(e) => return Err(emit_request_failed(sink, tab_id, url, e)),
@@ -1475,6 +1845,7 @@ fn fetch_with_redirect(
             &actual_extra_headers,
             proxy,
             socks5_proxy,
+            stream_sink.as_mut().map(|f| &mut **f as ChunkSink<'_>),
         ) {
             Ok(r) => r,
             Err(e) => return Err(emit_request_failed(sink, tab_id, url, e)),
@@ -1584,6 +1955,7 @@ fn fetch_with_redirect(
                     top_level_site,
                     proxy,
                     socks5_proxy,
+                    stream_sink,
                 );
             }
             401 if authorization.is_none() && credentials.is_some() => {
@@ -2123,6 +2495,7 @@ impl HttpClient {
             self.top_level_site.as_deref(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
+                    None, // PH1-2a: streaming sink — only fetch_page_streaming streams
         )
         .map(|resp| resp.body)
     }
@@ -2161,6 +2534,7 @@ impl HttpClient {
             self.top_level_site.as_deref(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
+                    None, // PH1-2a: streaming sink — only fetch_page_streaming streams
         )?;
         let content_range = if resp.status == 206 {
             header_value(&resp.headers, "content-range").and_then(parse_content_range)
@@ -2233,6 +2607,7 @@ impl HttpClient {
             self.top_level_site.as_deref(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
+                    None, // PH1-2a: streaming sink — only fetch_page_streaming streams
         )?;
         Ok(parse_multi_range_response(resp))
     }
@@ -2322,6 +2697,7 @@ impl HttpClient {
                     self.top_level_site.as_deref(),
                     self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
+                    None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -2357,6 +2733,7 @@ impl HttpClient {
             self.top_level_site.as_deref(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
+                    None, // PH1-2a: streaming sink — only fetch_page_streaming streams
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -2371,7 +2748,7 @@ impl HttpClient {
     /// so the shell can read `Cross-Origin-Opener-Policy` / `Cross-Origin-Embedder-Policy`
     /// to compute `crossOriginIsolated` for the JS context.
     #[allow(clippy::type_complexity)]
-    pub fn fetch_page(&self, url: &Url) -> Result<(Vec<u8>, Vec<(String, String)>)> {
+    pub fn fetch_page(&self, url: &Url) -> Result<PageResponse> {
         if let Some(ref interceptor) = self.interceptor {
             let origin = build_origin(url);
             if let Some(body) = interceptor.intercept(url, &origin) {
@@ -2396,6 +2773,7 @@ impl HttpClient {
                     self.mixed_content.as_ref(), destination, None, &snap.conditional_headers,
                     self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
                     self.proxy.as_deref(), self.socks5_proxy.as_deref(),
+                    None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -2413,6 +2791,77 @@ impl HttpClient {
             self.mixed_content.as_ref(), destination, None, "",
             self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
             self.proxy.as_deref(), self.socks5_proxy.as_deref(),
+            None, // PH1-2a: streaming sink — only fetch_page_streaming streams
+        )?;
+        if let Some(cache) = &self.http_cache {
+            cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
+        }
+        Ok((resp.body, resp.headers))
+    }
+
+    /// Как [`HttpClient::fetch_page`], но тело финального 2xx-ответа стримится
+    /// с сокета: каждая декодированная порция передаётся в `on_chunk` ещё до
+    /// полного скачивания (PH1-2a — прогрессивный рендеринг страницы в shell).
+    ///
+    /// Возвращаемый `(body, headers)` идентичен `fetch_page` — полное
+    /// декодированное тело + заголовки финального ответа. `on_chunk` —
+    /// best-effort preview: для HTTP/2, прокси-CONNECT и кэш-хитов порции
+    /// доставляются одним куском (или после полной загрузки), но итоговое тело
+    /// всегда корректно. caller должен использовать именно возвращаемое тело
+    /// как авторитетное, а `on_chunk` — только для промежуточной отрисовки.
+    pub fn fetch_page_streaming(
+        &self,
+        url: &Url,
+        on_chunk: ChunkSink<'_>,
+    ) -> Result<PageResponse> {
+        if let Some(ref interceptor) = self.interceptor {
+            let origin = build_origin(url);
+            if let Some(body) = interceptor.intercept(url, &origin) {
+                on_chunk(&body);
+                return Ok((body, Vec::new()));
+            }
+        }
+        let url_str = url.to_string();
+        let accept_encoding = self.accept_encoding_header();
+        let destination = self.mixed_content.as_ref().map(|_| RequestDestination::Other);
+        if let Some(cache) = &self.http_cache
+            && let Some(snap) = cache.get(&url_str)
+        {
+            if snap.is_fresh {
+                on_chunk(&snap.body);
+                return Ok((snap.body, Vec::new()));
+            }
+            if !snap.conditional_headers.is_empty() {
+                let resp = fetch_with_redirect(
+                    url, 5, &self.pool, self.h2_pool.as_deref(), self.resolver.as_ref(),
+                    self.tls_profile, self.fingerprint_profile, self.sink.as_deref(),
+                    self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
+                    &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
+                    self.mixed_content.as_ref(), destination, None, &snap.conditional_headers,
+                    self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
+                    self.proxy.as_deref(), self.socks5_proxy.as_deref(),
+                    Some(on_chunk),
+                )?;
+                if resp.status == 304 {
+                    cache.revalidate(&url_str, &resp.headers);
+                    // 304: streamed nothing (revalidate body is empty); deliver
+                    // the cached body as the progressive preview.
+                    on_chunk(&snap.body);
+                    return Ok((snap.body, Vec::new()));
+                }
+                cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
+                return Ok((resp.body, resp.headers));
+            }
+        }
+        let resp = fetch_with_redirect(
+            url, 5, &self.pool, self.h2_pool.as_deref(), self.resolver.as_ref(),
+            self.tls_profile, self.fingerprint_profile, self.sink.as_deref(),
+            self.filter.as_deref(), self.hsts.as_deref(), self.credentials.as_deref(),
+            &self.decoders, accept_encoding.as_deref(), None, None, self.tab_id,
+            self.mixed_content.as_ref(), destination, None, "",
+            self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
+            self.proxy.as_deref(), self.socks5_proxy.as_deref(),
+            Some(on_chunk),
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -2473,6 +2922,7 @@ impl NetworkTransport for HttpClient {
                     self.top_level_site.as_deref(),
                     self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
+                    None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -2508,6 +2958,7 @@ impl NetworkTransport for HttpClient {
             self.top_level_site.as_deref(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
+                    None, // PH1-2a: streaming sink — only fetch_page_streaming streams
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -2583,6 +3034,7 @@ impl JsFetchProvider for HttpClient {
             self.top_level_site.as_deref(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
+                    None, // PH1-2a: streaming sink — only fetch_page_streaming streams
         )?;
         Ok(JsFetchResult {
             status_text: http_status_text(resp.status).to_string(),
@@ -3139,6 +3591,163 @@ mod tests {
         let mut leftover = String::new();
         reader.read_to_string(&mut leftover).unwrap();
         assert_eq!(leftover, "NEXT-RESPONSE-START");
+    }
+
+    // ── PH1-2a: streaming body read ──────────────────────────────────────────
+
+    /// Прочитать `Read` целиком маленькими порциями (4 байта) — провоцирует
+    /// partial-read путь в `BodyReader`.
+    fn read_all_small<R: Read>(r: &mut R) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut buf = [0u8; 4];
+        loop {
+            match r.read(&mut buf).unwrap() {
+                0 => break,
+                n => out.extend_from_slice(&buf[..n]),
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn body_reader_content_length_stops_at_len_and_leaves_rest() {
+        let data = b"helloWORLD";
+        let mut reader = BufReader::new(&data[..]);
+        {
+            let mut br = BodyReader::new(&mut reader, BodyFraming::Length(5));
+            assert_eq!(read_all_small(&mut br), b"hello");
+        }
+        // Хвост на сокете не съеден — следующий запрос на keep-alive увидит его.
+        let mut leftover = String::new();
+        reader.read_to_string(&mut leftover).unwrap();
+        assert_eq!(leftover, "WORLD");
+    }
+
+    #[test]
+    fn body_reader_chunked_decodes_and_consumes_trailer() {
+        let data = b"3\r\nabc\r\n5\r\nhello\r\n0\r\n\r\nLEFTOVER";
+        let mut reader = BufReader::new(&data[..]);
+        {
+            let mut br = BodyReader::new(&mut reader, BodyFraming::Chunked);
+            assert_eq!(read_all_small(&mut br), b"abchello");
+        }
+        let mut leftover = String::new();
+        reader.read_to_string(&mut leftover).unwrap();
+        assert_eq!(leftover, "LEFTOVER");
+    }
+
+    #[test]
+    fn body_reader_eof_reads_to_end() {
+        let data = b"streamed-to-the-end";
+        let mut reader = BufReader::new(&data[..]);
+        let mut br = BodyReader::new(&mut reader, BodyFraming::Eof);
+        assert_eq!(read_all_small(&mut br), data);
+    }
+
+    #[test]
+    fn body_reader_short_content_length_errors() {
+        let data = b"abc"; // обещано 5, пришло 3
+        let mut reader = BufReader::new(&data[..]);
+        let mut br = BodyReader::new(&mut reader, BodyFraming::Length(5));
+        let mut buf = [0u8; 16];
+        // Первый read отдаёт 3 байта, второй упирается в EOF до Content-Length.
+        assert_eq!(br.read(&mut buf).unwrap(), 3);
+        assert!(br.read(&mut buf).is_err());
+    }
+
+    #[test]
+    fn detect_stream_decode_classifies_encodings() {
+        let h = |v: &str| vec![("Content-Encoding".to_owned(), v.to_owned())];
+        assert!(matches!(detect_stream_decode(&[]), StreamDecode::Identity));
+        assert!(matches!(detect_stream_decode(&h("identity")), StreamDecode::Identity));
+        assert!(matches!(detect_stream_decode(&h("br")), StreamDecode::Brotli));
+        assert!(matches!(detect_stream_decode(&h("gzip")), StreamDecode::Gzip));
+        assert!(matches!(detect_stream_decode(&h("deflate")), StreamDecode::Deflate));
+        // Несколько кодировок или незнакомая → неинкрементальный путь.
+        assert!(matches!(detect_stream_decode(&h("br, gzip")), StreamDecode::Unsupported));
+        assert!(matches!(detect_stream_decode(&h("zstd")), StreamDecode::Unsupported));
+    }
+
+    #[test]
+    fn fetch_page_streaming_content_length_streams_and_returns_full_body() {
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nhello world".to_vec()
+        });
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let mut streamed = Vec::new();
+        let (body, _h) = client
+            .fetch_page_streaming(&url, &mut |c| streamed.extend_from_slice(c))
+            .expect("streaming fetch");
+        assert_eq!(streamed, b"hello world", "streamed chunks must reconstruct the body");
+        assert_eq!(body, b"hello world", "returned body must be the full decoded body");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_page_streaming_chunked_streams_decoded_body() {
+        let (port, server) = mock_http_server(1, |_| {
+            let mut r = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec();
+            r.extend_from_slice(b"5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n");
+            r
+        });
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let mut streamed = Vec::new();
+        let (body, _h) = client
+            .fetch_page_streaming(&url, &mut |c| streamed.extend_from_slice(c))
+            .expect("streaming fetch");
+        assert_eq!(streamed, b"hello world");
+        assert_eq!(body, b"hello world");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_page_streaming_brotli_streams_and_returns_decoded() {
+        // brotli("Hello, World!") — эталонный вектор (см. brotli.rs тесты).
+        let payload: [u8; 17] = [
+            0x0f, 0x06, 0x80, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x2c, 0x20, 0x57, 0x6f,
+            0x72, 0x6c, 0x64, 0x21, 0x03,
+        ];
+        let (port, server) = mock_http_server(1, move |_| {
+            let mut r = format!(
+                "HTTP/1.1 200 OK\r\nContent-Encoding: br\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                payload.len()
+            )
+            .into_bytes();
+            r.extend_from_slice(&payload);
+            r
+        });
+        let client = HttpClient::new()
+            .with_content_decoder(std::sync::Arc::new(crate::BrotliContentDecoder::new()));
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let mut streamed = Vec::new();
+        let (body, _h) = client
+            .fetch_page_streaming(&url, &mut |c| streamed.extend_from_slice(c))
+            .expect("streaming fetch");
+        // sink получает декодированные байты; возвращаемое тело тоже декодировано.
+        assert_eq!(streamed, b"Hello, World!");
+        assert_eq!(body, b"Hello, World!");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_page_streaming_follows_redirect_then_streams_final() {
+        let (port, server) = mock_http_server(2, move |i| match i {
+            1 => b"HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            2 => b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ndone".to_vec(),
+            _ => unreachable!(),
+        });
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let mut streamed = Vec::new();
+        let (body, _h) = client
+            .fetch_page_streaming(&url, &mut |c| streamed.extend_from_slice(c))
+            .expect("streaming fetch");
+        // Тело 302-редиректа (пустое) НЕ стримится — только финальный 200.
+        assert_eq!(streamed, b"done");
+        assert_eq!(body, b"done");
+        server.join().unwrap();
     }
 
     #[test]
