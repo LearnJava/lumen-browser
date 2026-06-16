@@ -469,6 +469,22 @@ impl ComplexSelector {
         spec
     }
 
+    /// CSS Conditional L4 §4.2 — распознаёт ли движок этот селектор целиком?
+    ///
+    /// Используется для `@supports selector(<complex-selector>)`: возвращает
+    /// `true`, если каждый compound и каждая простая часть (включая аргументы
+    /// функциональных псевдо-классов `:is()`/`:not()`/`:where()`/`:has()`/
+    /// `:nth-child(... of ...)`/`:host()` и `::slotted()`) распознаётся. Любая
+    /// `PseudoClass::Unsupported` или `PseudoElementKind::Unknown` → `false`.
+    ///
+    /// «Поддержан» означает *распознаётся синтаксически*, а не «матчит хотя бы
+    /// один элемент» — псевдо вроде `:visited`/`:fullscreen`, которые в Phase 0
+    /// всегда дают `false` при матчинге, всё равно считаются поддержанными.
+    pub fn is_supported(&self) -> bool {
+        compound_is_supported(&self.head)
+            && self.tail.iter().all(|(_, c)| compound_is_supported(c))
+    }
+
     /// Serialise this selector back to a CSS selector string.
     ///
     /// Best-effort round-trip for DevTools display (§PH3-1 Styles panel).
@@ -485,6 +501,53 @@ impl ComplexSelector {
             s.push_str(&compound_to_css_str(compound));
         }
         s
+    }
+}
+
+/// True если все простые селекторы compound-а распознаются (см.
+/// [`ComplexSelector::is_supported`]).
+fn compound_is_supported(c: &CompoundSelector) -> bool {
+    c.parts.iter().all(simple_is_supported)
+}
+
+/// True если простой селектор распознаётся движком. Type/Class/Id/Universal/
+/// Attribute поддержаны безусловно; псевдо делегируют в свои проверки.
+fn simple_is_supported(s: &SimpleSelector) -> bool {
+    match s {
+        SimpleSelector::Type(_)
+        | SimpleSelector::Class(_)
+        | SimpleSelector::Id(_)
+        | SimpleSelector::Universal
+        | SimpleSelector::Attribute(_) => true,
+        SimpleSelector::PseudoClass(pc) => pseudo_class_is_supported(pc),
+        SimpleSelector::PseudoElement(pe) => pseudo_element_is_supported(pe),
+    }
+}
+
+/// True если псевдо-класс распознан. `Unsupported(_)` → `false`; функциональные
+/// псевдо рекурсивно проверяют свои аргументы-селекторы.
+fn pseudo_class_is_supported(pc: &PseudoClass) -> bool {
+    match pc {
+        PseudoClass::Unsupported(_) => false,
+        PseudoClass::Not(list) | PseudoClass::Is(list) | PseudoClass::Where(list) => {
+            list.iter().all(ComplexSelector::is_supported)
+        }
+        PseudoClass::NthChild(_, Some(list)) | PseudoClass::NthLastChild(_, Some(list)) => {
+            list.iter().all(ComplexSelector::is_supported)
+        }
+        PseudoClass::Has(rels) => rels.iter().all(|r| r.selector.is_supported()),
+        PseudoClass::Host(Some(list)) => list.iter().all(ComplexSelector::is_supported),
+        _ => true,
+    }
+}
+
+/// True если псевдо-элемент распознан. `Unknown(_)` → `false`; `::slotted()`
+/// рекурсивно проверяет свой аргумент-селектор.
+fn pseudo_element_is_supported(pe: &PseudoElementKind) -> bool {
+    match pe {
+        PseudoElementKind::Unknown(_) => false,
+        PseudoElementKind::Slotted(Some(list)) => list.iter().all(ComplexSelector::is_supported),
+        _ => true,
     }
 }
 
@@ -947,8 +1010,12 @@ impl SupportsCondition {
     /// Вычислить условие: вернуть `true`, если потребитель поддерживает
     /// все объявления в условии. `known_properties` — список property-
     /// имён, которые css-parser/layout распознают (например, `display`,
-    /// `color`, `grid-template-columns`). `Selector(...)` и `Unknown`
-    /// в Phase 0 возвращают false.
+    /// `color`, `grid-template-columns`).
+    ///
+    /// `Selector(<sel>)` (CSS Conditional L4 §4.2 `selector()`) парсится и
+    /// признаётся поддержанным, если каждая его часть распознаётся движком —
+    /// см. [`ComplexSelector::is_supported`]. Пустой/невалидный селектор → `false`.
+    /// `Unknown` (например, `font-tech(...)` / `font-format(...)`) → `false`.
     pub fn evaluate(&self, known_properties: &[&str]) -> bool {
         match self {
             Self::Decl { property, .. } => known_properties
@@ -957,7 +1024,11 @@ impl SupportsCondition {
             Self::Not(c) => !c.evaluate(known_properties),
             Self::And(cs) => cs.iter().all(|c| c.evaluate(known_properties)),
             Self::Or(cs) => cs.iter().any(|c| c.evaluate(known_properties)),
-            Self::Selector(_) | Self::Unknown => false,
+            Self::Selector(sel) => {
+                let list = parse_selector_list(sel);
+                !list.is_empty() && list.iter().all(ComplexSelector::is_supported)
+            }
+            Self::Unknown => false,
         }
     }
 }
@@ -6144,6 +6215,49 @@ mod tests {
     }
 
     #[test]
+    fn at_supports_evaluate_selector_supported() {
+        // Распознаваемые селекторы → true (known_properties не используется).
+        for sel in [
+            "selector(:has(a))",
+            "selector(:is(.a, .b))",
+            "selector(:where(div > p))",
+            "selector(:not(.x))",
+            "selector(a:hover)",
+            "selector(:nth-child(2n+1 of .item))",
+            "selector(::before)",
+            "selector(::slotted(span))",
+            "selector(div.cls#id[attr^=\"v\"] > p + q ~ r)",
+        ] {
+            let cond = parse_supports_condition(sel);
+            assert!(cond.evaluate(&[]), "{sel} should be supported");
+        }
+    }
+
+    #[test]
+    fn at_supports_evaluate_selector_unsupported() {
+        // Нераспознанные псевдо → false, даже если вложены в :is()/:has().
+        for sel in [
+            "selector(:totally-fake)",
+            "selector(::made-up)",
+            "selector(:is(.ok, :totally-fake))",
+            "selector(:has(:totally-fake))",
+            "selector(:not(::made-up))",
+        ] {
+            let cond = parse_supports_condition(sel);
+            assert!(!cond.evaluate(&[]), "{sel} should be unsupported");
+        }
+    }
+
+    #[test]
+    fn complex_selector_is_supported_recurses() {
+        // Прямая проверка ComplexSelector::is_supported на вложенности.
+        let ok = parse_selector_list(":is(.a, :where(.b:has(> .c)))");
+        assert!(ok.iter().all(ComplexSelector::is_supported));
+        let bad = parse_selector_list(":is(.a, :where(:totally-fake))");
+        assert!(!bad.iter().all(ComplexSelector::is_supported));
+    }
+
+    #[test]
     fn at_supports_nested_grouping() {
         // `((display: grid))` — внутренние скобки = nested condition.
         let s = parse("@supports ((display: grid)) { p { color: red; } }");
@@ -6166,10 +6280,14 @@ mod tests {
     }
 
     #[test]
-    fn at_supports_evaluator_selector_returns_false() {
+    fn at_supports_evaluator_selector_recognized() {
+        // selector() оценивается по распознаваемости селектора (CSS Conditional
+        // L4 §4.2); known_properties здесь не участвует. `:has(a)` поддержан.
         let cond = parse_supports_condition("selector(:has(a))");
-        // Phase 0 не оценивает selector() — всегда false.
-        assert!(!cond.evaluate(&["color"]));
+        assert!(cond.evaluate(&["color"]));
+        // Нераспознанный псевдо → false.
+        let bad = parse_supports_condition("selector(:totally-fake)");
+        assert!(!bad.evaluate(&["color"]));
     }
 
     #[test]
