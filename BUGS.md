@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-165)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-167)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -180,6 +180,7 @@
 | [BUG-163](bugs/BUG-163-FIXED.md) | FIXED 2026-06-15 | shell/paint | lazy `<img>` на lenta.ru не рисовались: `LazyImageSlot` всегда красил серый placeholder даже после загрузки картинки + above-the-fold lazy-картинки не дозагружались на initial paint (proximity-check был только в relayout) |
 | [BUG-164](bugs/BUG-164-FIXED.md) | FIXED 2026-06-15 | shell/js | внешние `<script src>` не скачиваются и не исполняются (collect_inline_scripts берёт только инлайны) → JS бандлы (lenta.ru owlBundle.js и т.д.) не работают, первопричина BUG-163 |
 | [BUG-165](bugs/BUG-165-FIXED.md) | FIXED 2026-06-15 | layout | flex `align-content` сдвигал строку, не двигая поддерево item-ов: вложенный контент оставался на месте → items вылезали из контейнеров (TEST-65: 16.40%) |
+| BUG-166 | OPEN | lumen-js | `video_bindings::tests::native_video_load_registers_pending` failing on main — `__lumen_video_load` doesn't queue pending load when no provider installed | crates/js/src/video_bindings.rs |
 
 ---
 
