@@ -56,51 +56,63 @@ fn browser_data_dir() -> Option<std::path::PathBuf> {
 Если `current_exe()` недоступен (редкий случай) — fallback на `./data` от текущего каталога;
 наружу (в OS-папки) НЕ уходить.
 
-**Раскладка `data/adblock/` — без свалки, по назначению:**
+**Раскладка `data/adblock/` — структурное состояние в SQLite, крупный/редактируемый контент в файлах:**
 
 ```
 data/
 └── adblock/
-    ├── subscriptions.json     ← манифест: какие листы подписаны (выбор пользователя)
-    ├── custom-rules.txt       ← собственные правила пользователя (Phase 3)
-    ├── lists/                 ← СКАЧАННЫЕ тела листов (контент)
-    │   ├── easylist.txt
-    │   └── easyprivacy.txt
-    └── meta/                  ← состояние кэша на каждый лист (служебное)
-        ├── easylist.json      ← { url, etag, last_modified, fetched_at_unix, rule_count }
-        └── easyprivacy.json
+    ├── adblock.db          ← SQLite (lumen-storage::AdblockStore): таблицы subscriptions + list_meta
+    ├── custom-rules.txt    ← правила пользователя (Phase 3) — текстовый файл, правится вручную
+    └── lists/              ← СКАЧАННЫЕ тела листов (большие, человекочитаемые)
+        ├── easylist.txt
+        └── easyprivacy.txt
 ```
 
-Принцип разделения: **манифест** (что подписано) ≠ **контент** (`lists/`) ≠ **служебные
-метаданные кэша** (`meta/`) ≠ **правила пользователя** (`custom-rules.txt`). Не сваливать
-всё в один уровень.
+**Что в БД, что в файлах (и почему НЕ всё в БД).** Горячий путь `should_block(url)` вызывается
+на КАЖДЫЙ запрос и работает по in-memory индексу `EasyListFilter` (`HashMap`), а не по диску.
+SQL-запрос на каждый сетевой запрос был бы МЕДЛЕННЕЕ — матчинг остаётся в RAM, списки парсятся
+в память один раз при старте. Поэтому:
 
-Имя файла листа — **человекочитаемый слаг** (не хэш): `easylist`, `easyprivacy`,
-производный от title/host подписки (sanitize: lowercase, `[a-z0-9-]`, коллизии разрешать
-суффиксом `-2`). `lists/<slug>.txt` и `meta/<slug>.json` связаны одним слагом.
+| Данные | Где | Почему |
+|---|---|---|
+| `subscriptions` (url, title, enabled) | **SQLite** | структурно/атомарно/запрашиваемо; надёжнее JSON (нет торн-райта при краше) |
+| `list_meta` (slug, url, etag, last_modified, fetched_at_unix, rule_count, content_hash) | **SQLite** | один SELECT «что просрочено»; hash → пропуск перепарса, если не менялось |
+| тела листов `lists/<slug>.txt` (~2 МБ) | **файлы** | читаются раз при старте → в RAM; 2-МБ BLOB только раздует БД без выигрыша; файл инспектируется глазами |
+| `custom-rules.txt` | **файл** | редактируется пользователем вручную |
+| сам матчинг `should_block` | **RAM** (`EasyListFilter`) | БД тут = регрессия |
 
-`subscriptions.json` — список подписок:
-```json
-{
-  "version": 1,
-  "subscriptions": [
-    { "url": "https://easylist.to/easylist/easylist.txt",     "title": "EasyList",      "enabled": true },
-    { "url": "https://easylist.to/easylist/easyprivacy.txt",  "title": "EasyPrivacy",   "enabled": true }
-  ]
-}
+`<slug>` — человекочитаемый, не хэш: `easylist`, `easyprivacy` (sanitize title/host: lowercase,
+`[a-z0-9-]`, коллизии суффиксом `-2`). `list_meta.slug` ↔ `lists/<slug>.txt` связаны одним слагом.
+
+**Схема SQLite** (в новом `crates/storage/src/adblock.rs`, по образцу `print_prefs.rs`/`bookmarks.rs`):
+```sql
+CREATE TABLE IF NOT EXISTS subscriptions (
+    url      TEXT PRIMARY KEY,
+    title    TEXT NOT NULL,
+    enabled  INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS list_meta (
+    slug          TEXT PRIMARY KEY,
+    url           TEXT NOT NULL,
+    etag          TEXT,
+    last_modified TEXT,
+    fetched_at    INTEGER NOT NULL DEFAULT 0,   -- unix seconds
+    rule_count    INTEGER NOT NULL DEFAULT 0,
+    content_hash  TEXT                          -- skip re-parse when unchanged
+);
 ```
-Сидируется дефолтами при первом запуске (если файла нет). Сериализация — `serde_json` (уже в зависимостях network через другие модули; проверить `Cargo.toml`, при отсутствии — добавить с обоснованием permanent/serde).
+`subscriptions` сидируется дефолтами (EasyList + EasyPrivacy) при пустой таблице на первом запуске.
 
 ### 2. Как обновляются (offline-first + условный GET)
 
-**При старте (быстро, без сети):** прочитать `adblock/subscriptions.json` + все включённые `adblock/lists/<slug>.txt` → склеить текст → `EasyListFilter::parse` → `install_global_adblock_filter`. Если кэша нет — fallback на вшитый `DefaultFilterList`, чтобы блокировка работала сразу.
+**При старте (быстро, без сети):** прочитать включённые подписки из `AdblockStore` + соответствующие `lists/<slug>.txt` с диска → склеить текст → `EasyListFilter::parse` → `install_global_adblock_filter`. Если файлов листов ещё нет — fallback на вшитый `DefaultFilterList`, чтобы блокировка работала сразу. Парсинг — желательно в фоновом потоке (не блокировать первый кадр; до готовности активен `DefaultFilterList`).
 
 **Фоновый рефреш (отдельный поток, после старта):** для каждой включённой подписки, если `now - fetched_at > REFRESH_INTERVAL` (EasyList рекомендует expiry ~4 дня; `const REFRESH_INTERVAL_SECS: u64 = 4*24*3600`):
 1. Условный GET через `HttpClient` (с fingerprint-профилем из `config::global().apply_http(...)`):
-   - `If-None-Match: <etag>` и/или `If-Modified-Since: <last_modified>` из `meta/<slug>.json`.
-2. `304 Not Modified` → обновить `fetched_at` в `meta/<slug>.json`, ничего не перепарсивать.
-3. `200 OK` → перезаписать `lists/<slug>.txt`, обновить `meta/<slug>.json` (новый etag/last_modified/rule_count/fetched_at), пометить «надо переустановить фильтр».
-4. После обхода всех подписок, если хоть одна обновилась — склеить заново → `EasyListFilter::parse` → переустановить фильтр (hot-swap, см. п.3 ниже).
+   - `If-None-Match: <etag>` и/или `If-Modified-Since: <last_modified>` из строки `list_meta`.
+2. `304 Not Modified` → `UPDATE list_meta SET fetched_at=now`, ничего не перепарсивать.
+3. `200 OK` → перезаписать `lists/<slug>.txt`, `UPDATE list_meta` (etag/last_modified/rule_count/content_hash/fetched_at); если `content_hash` не изменился — перепарс не нужен, иначе пометить «переустановить фильтр».
+4. После обхода всех подписок, если хоть одна реально изменилась — склеить заново → `EasyListFilter::parse` → переустановить фильтр (hot-swap, см. п.3 ниже).
 
 Ошибки сети не критичны: остаёмся на кэшированной версии, логируем `eprintln!`.
 
@@ -129,15 +141,22 @@ static GLOBAL_ADBLOCK_FILTER: std::sync::RwLock<Option<Arc<dyn lumen_core::ext::
 ## Фазирование
 
 ### Phase 1 (ядро — эта задача)
-- Новый модуль `crates/network/src/filter/remote.rs`:
-  - `struct FilterListStore { root: PathBuf }` (root = `browser_data_dir()/adblock`) — создаёт `lists/` и `meta/` при необходимости; чтение/запись `subscriptions.json`, `lists/<slug>.txt`, `meta/<slug>.json`.
-  - `impl FilterListSource for FilterListStore` (`fetch_rules()` = склейка включённых кэшированных листов; fallback на `DefaultFilterList` если пусто).
-  - `fn refresh(&self, client: &HttpClient) -> bool` — условный GET всех просроченных подписок, возвращает «что-то обновилось».
-  - `fn default_subscriptions() -> Vec<Subscription>` (EasyList + EasyPrivacy).
-- `lumen-network/lib.rs`: `OnceLock → RwLock` для `GLOBAL_ADBLOCK_FILTER` (hot-swap).
-- `shell/config.rs::init_adblock()`: грузить из `FilterListStore` (offline-first) → установить; вернуть `Arc<FilterListStore>` для рефреша.
-- `shell/main.rs` startup: после `init_adblock()` заспавнить поток, который зовёт `store.refresh(&client)` и при изменениях переустанавливает фильтр (`EasyListFilter::parse` → `install_global_adblock_filter`).
-- Тесты: парс meta, слаг URL, склейка листов, 304-ветка (через `MockTransport` — `crates/network/src/mock.rs`).
+
+Разделение по крейтам (зависимости чистые: network НЕ тянет storage; shell зависит от обоих):
+
+- **`crates/storage/src/adblock.rs`** — новый `AdblockStore` (SQLite, по образцу `print_prefs.rs`):
+  - `open(path)` / `open_in_memory()`; `CREATE TABLE` для `subscriptions` + `list_meta` (схема выше).
+  - методы: `list_subscriptions()`, `set_subscription(url,title,enabled)`, `seed_defaults_if_empty(&[Subscription])`, `get_meta(slug)`, `upsert_meta(ListMeta)`.
+  - реэкспорт `AdblockStore` в `crates/storage/src/lib.rs`.
+- **`crates/network/src/lib.rs`** — `OnceLock → RwLock` для `GLOBAL_ADBLOCK_FILTER` (hot-swap). Это ЕДИНСТВЕННАЯ правка network; движок `EasyListFilter` не трогаем.
+- **`crates/shell/src/adblock.rs`** (новый модуль оркестрации):
+  - `browser_data_dir()` → `<exe_dir>/data`; создать `data/adblock/lists/`.
+  - `default_subscriptions()` (EasyList + EasyPrivacy).
+  - `load_and_install(&AdblockStore)` — прочитать включённые подписки + `lists/<slug>.txt` → склеить → `EasyListFilter::parse` → `install_global_adblock_filter` (offline-first; fallback `DefaultFilterList`, если файлов нет).
+  - `refresh(&AdblockStore, &HttpClient) -> bool` — условный GET просроченных (по `list_meta`), запись `lists/<slug>.txt` + `upsert_meta`, content_hash → пропуск перепарса; вернуть «надо переустановить».
+- **`crates/shell/src/config.rs::init_adblock()`** — открыть `AdblockStore(data/adblock/adblock.db)`, `seed_defaults_if_empty`, `load_and_install` (быстрый старт); вернуть `Arc<AdblockStore>` для рефреша.
+- **`crates/shell/src/main.rs`** startup — `std::thread::spawn` рефреш-поток: `refresh(...)` → при изменениях `EasyListFilter::parse` → `install_global_adblock_filter`. Best-effort, паники изолированы.
+- **Тесты:** storage (`AdblockStore` CRUD + seed на `open_in_memory`), shell (склейка листов, слаг, 304/200-ветки через `MockTransport` — `crates/network/src/mock.rs`).
 
 ### Phase 2 (тип ресурса — `$options`)
 - Расширить `easylist.rs`: не отбрасывать `$script,image,third-party,...`, а хранить и учитывать в `should_block`. Гейт уже прокидывает `RequestDestination` (`crates/network/src/mixed_content.rs`) — сделать вариант `should_block_typed(url, destination)`. Отдельная задача-продолжение.
@@ -151,7 +170,8 @@ static GLOBAL_ADBLOCK_FILTER: std::sync::RwLock<Option<Arc<dyn lumen_core::ext::
 
 - [ ] Прочесть блок «Process-global ad-block filter» в `crates/network/src/lib.rs`
 - [ ] Прочесть `crates/network/src/filter/easylist.rs:67` (`parse`) и `default_list.rs`
-- [ ] Прочесть `mock.rs` (`MockTransport` для тестов); хранение — рядом с бинарём через `std::env::current_exe()` (НЕ `lumen_cache_dir`)
+- [ ] Прочесть `crates/storage/src/print_prefs.rs` (образец стораджа: `open`/`open_in_memory`/`CREATE TABLE`/CRUD) — по нему делать `adblock.rs`
+- [ ] Прочесть `mock.rs` (`MockTransport` для тестов); БД и файлы — рядом с бинарём через `std::env::current_exe()` (НЕ `lumen_cache_dir`)
 - [ ] Прочесть `crates/shell/src/config.rs` (`init_adblock`, `apply_http`) и точку старта в `main.rs` (рядом с `config::init_adblock()`)
 - [ ] `git status` — main чист
 
@@ -160,12 +180,12 @@ static GLOBAL_ADBLOCK_FILTER: std::sync::RwLock<Option<Arc<dyn lumen_core::ext::
 ## Шаги
 
 1. `git worktree add .claude/worktrees/adblock-lists -b p2-adblock-filter-lists` → в первом коммите пометить «In progress» в STATUS-P2.md.
-2. `lib.rs`: `GLOBAL_ADBLOCK_FILTER` `OnceLock → RwLock<Option<...>>`; поправить `install_*`/`global_adblock_filter`.
-3. Новый `filter/remote.rs`: `Subscription`, `FilterListStore` (load/save/slug/meta), `impl FilterListSource`, `refresh(client)`; реэкспорт в `filter/mod.rs` и `lib.rs`.
-4. `config.rs::init_adblock()` → строить `FilterListStore` (offline-first install), вернуть `Arc<FilterListStore>`.
-5. `main.rs` startup → `std::thread::spawn` рефреш-поток (условный GET → переустановка при изменениях). Поток — best-effort, паники изолированы.
-6. Тесты network (slug/meta/склейка/304 через MockTransport) + `cargo clippy -p lumen-network -p lumen-shell --all-targets -- -D warnings`.
-7. Обновить `CLAUDE.md` (ext-traits: упомянуть RemoteFilterList) и `subsystems/network.md`.
+2. `network/src/lib.rs`: `GLOBAL_ADBLOCK_FILTER` `OnceLock → RwLock<Option<...>>`; поправить `install_*`/`global_adblock_filter`.
+3. `storage/src/adblock.rs`: `AdblockStore` (SQLite: `subscriptions` + `list_meta`, CRUD/seed) + реэкспорт в `storage/src/lib.rs`.
+4. `shell/src/adblock.rs`: `browser_data_dir()`, `default_subscriptions()`, `load_and_install(store)`, `refresh(store, client)`.
+5. `shell/config.rs::init_adblock()` → открыть `AdblockStore` в `data/adblock/adblock.db`, seed, `load_and_install`; вернуть `Arc<AdblockStore>`. `main.rs` startup → рефреш-поток.
+6. Тесты storage (`AdblockStore` in-memory) + shell (склейка/304 через MockTransport) + `cargo clippy -p lumen-storage -p lumen-network -p lumen-shell --all-targets -- -D warnings`.
+7. Обновить `CLAUDE.md` и `subsystems/storage.md` (новый `AdblockStore`).
 8. Завершить по чеклисту из CLAUDE.md (merge --no-ff → delete branch → STATUS-P2 → push → worktree remove).
 
 ---
@@ -173,8 +193,8 @@ static GLOBAL_ADBLOCK_FILTER: std::sync::RwLock<Option<Arc<dyn lumen_core::ext::
 ## Критерии готовности
 
 - [ ] Первый запуск без кэша: сидируются дефолтные подписки, блокировка работает (через `DefaultFilterList` fallback, пока листы не скачаны).
-- [ ] После рефреша на диске: `data/adblock/lists/easylist.txt` + `data/adblock/meta/easylist.json` (и easyprivacy); фильтр переустановлен; реальные правила EasyList/EasyPrivacy блокируют (проверить на `\|\|google-analytics.com^` и любом домене из скачанного EasyList).
-- [ ] Структура папок аккуратная: манифест / `lists/` / `meta/` / `custom-rules.txt` разделены, не свалены в один уровень.
+- [ ] После рефреша: `data/adblock/lists/easylist.txt` (и easyprivacy) на диске, строки в `list_meta` (etag/fetched_at/rule_count/content_hash) в `adblock.db`; фильтр переустановлен; реальные правила EasyList/EasyPrivacy блокируют (проверить на `\|\|google-analytics.com^` и любом домене из скачанного EasyList).
+- [ ] Структура аккуратная: структурное состояние (подписки + меты) в `adblock.db`, тела листов в `lists/`, правила пользователя в `custom-rules.txt` — не свалено в один файл/уровень.
 - [ ] Повторный запуск: грузится из кэша мгновенно (offline-first), сеть не блокирует старт.
 - [ ] `304 Not Modified` не перепарсивает; `200` — перезаписывает и hot-swap’ит фильтр без перезапуска.
 - [ ] Тумблер per-tab по-прежнему включает/выключает (направление: галка = блокировка вкл).
@@ -186,5 +206,6 @@ static GLOBAL_ADBLOCK_FILTER: std::sync::RwLock<Option<Arc<dyn lumen_core::ext::
 
 - **Приватность.** Lumen — приватный браузер: скачивание листов с CDN раскрывает факт использования. По умолчанию подписки включены (как в адблокерах), но в Phase 3 дать переключатель «не обновлять автоматически». Запросы идут через обычный `HttpClient` с fingerprint-профилем — не выделяются.
 - **Хранение только в папке браузера, структура аккуратная.** Все данные адблока — под `<exe_dir>/data/adblock/` (см. §1), OS-каталоги (`%APPDATA%`/`~/.config`/`~/.cache`) и хелперы `lumen_cache_dir()`/`config_path()` НЕ использовать (решение пользователя 2026-06-16, провизорно). Внутри — разложить по назначению (`subscriptions.json` / `lists/` / `meta/` / `custom-rules.txt`), не сваливать в один уровень. Корень `data/` рассчитан на будущие подсистемы (каждая — своя подпапка).
-- **Без новых тяжёлых зависимостей.** Условный GET — существующим `HttpClient`; своп — `std::sync::RwLock`; JSON — `serde_json` (если ещё не в network — добавить с обоснованием permanent). `arc_swap` не нужен.
+- **Без новых тяжёлых зависимостей.** Структурное состояние — SQLite через `lumen-storage` (rusqlite уже там, как у всех стораджей); своп фильтра — `std::sync::RwLock`; условный GET — существующим `HttpClient`. Новые `arc_swap`/`serde_json` НЕ нужны.
+- **БД ускоряет не везде.** Матчинг `should_block` остаётся в RAM (`EasyListFilter`); в БД — только подписки и метаданные кэша (структурное/запрашиваемое состояние), тела листов — файлами. Не класть сам матчинг в SQLite (см. таблицу «что в БД, что в файлах» в §1).
 - **Bug-политика.** Найденный по дороге баг — строкой в `BUGS.md` (OPEN, следующий BUG-NNN), не чинить в этой задаче.
