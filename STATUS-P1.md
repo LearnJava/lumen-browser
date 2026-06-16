@@ -6,7 +6,8 @@
 
 ## In progress
 
-*idle*
+PH1-2c: прогрессивная подгрузка картинок во время streaming  branch: p1-ph1-2c-stream-images
+Next step: вынести fetch/decode `<img>` на параллельные потоки в `paint_partial_dom`, дорисовывать по приходу через новый `LoadEvent::ImageDecoded`  crates/shell/src/main.rs:5854
 
 ---
 
