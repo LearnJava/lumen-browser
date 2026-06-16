@@ -5012,7 +5012,13 @@ impl Lumen {
         }
         #[cfg(feature = "quickjs")]
         if let Some(js) = self.js_ctx.as_ref() {
-            let json = platform::file_dialog::entries_to_json(&entries);
+            // Register each path with an opaque token before delivering to JS.
+            // JS never receives raw filesystem paths — only tokens.
+            let tokens: Vec<u64> = entries
+                .iter()
+                .map(|e| lumen_js::file_input::register_file_token(&e.path))
+                .collect();
+            let json = platform::file_dialog::entries_to_json_with_tokens(&entries, &tokens);
             js.eval_js(&format!("_lumen_deliver_file_list({}, {})", id.index(), json));
         }
         #[cfg(not(feature = "quickjs"))]

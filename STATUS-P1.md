@@ -6,7 +6,8 @@
 
 ## In progress
 
-idle
+PH3-14: File Input API Phase 1 — File.text()/arrayBuffer() native reads  branch: p1-ph3-14-sse
+Next step: implement token registry in crates/js/src/file_input.rs + native bindings
 
 ---
 

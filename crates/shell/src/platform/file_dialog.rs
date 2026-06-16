@@ -43,19 +43,21 @@ pub fn open_file_dialog(_accept: &str, multiple: bool) -> Vec<FilePickerEntry> {
     }
 }
 
-/// Build a compact JSON array for `_lumen_deliver_file_list(nid, json)`.
+/// Build a JSON array that includes opaque `token` values instead of raw paths.
 ///
-/// Avoids a serde_json dependency by building the string manually.
-/// All string values are JSON-escaped to handle paths with backslashes / quotes.
+/// Phase 1 format: shell registers each path via `lumen_js::file_input::register_file_token`
+/// before calling this, and passes the resulting tokens here.  JS receives tokens only —
+/// never raw file system paths.
 #[cfg(feature = "quickjs")]
-pub fn entries_to_json(entries: &[FilePickerEntry]) -> String {
+pub fn entries_to_json_with_tokens(entries: &[FilePickerEntry], tokens: &[u64]) -> String {
     let items: Vec<String> = entries
         .iter()
-        .map(|e| {
+        .zip(tokens.iter())
+        .map(|(e, &token)| {
             format!(
-                r#"{{"name":{name},"path":{path},"size":{size},"mime_type":{mime},"last_modified_ms":{ts}}}"#,
+                r#"{{"name":{name},"token":{token},"size":{size},"mime_type":{mime},"last_modified_ms":{ts}}}"#,
                 name = json_str(&e.name),
-                path = json_str(&e.path),
+                token = token,
                 size = e.size,
                 mime = json_str(&e.mime_type),
                 ts = e.last_modified_ms,
@@ -144,40 +146,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn entries_to_json_empty() {
-        assert_eq!(entries_to_json(&[]), "[]");
-    }
-
-    #[test]
-    fn entries_to_json_single() {
-        let e = FilePickerEntry {
-            name: "file.txt".to_string(),
-            path: "C:\\Users\\user\\file.txt".to_string(),
-            size: 1024,
-            mime_type: "text/plain".to_string(),
-            last_modified_ms: 1000,
-        };
-        let json = entries_to_json(&[e]);
-        assert!(json.contains("\"name\":\"file.txt\""));
-        assert!(json.contains("\"size\":1024"));
-        // Backslashes in path must be escaped
-        assert!(json.contains("C:\\\\Users"));
-    }
-
-    #[test]
-    fn entries_to_json_escapes_special_chars() {
-        let e = FilePickerEntry {
-            name: "a\"b".to_string(),
-            path: "/tmp/a\"b".to_string(),
-            size: 0,
-            mime_type: String::new(),
-            last_modified_ms: 0,
-        };
-        let json = entries_to_json(&[e]);
-        assert!(json.contains("\\\""));
-    }
-
-    #[test]
     fn json_str_escapes_backslash() {
         assert_eq!(json_str("a\\b"), "\"a\\\\b\"");
     }
@@ -185,5 +153,52 @@ mod tests {
     #[test]
     fn json_str_escapes_quote() {
         assert_eq!(json_str("a\"b"), "\"a\\\"b\"");
+    }
+
+    #[test]
+    fn entries_to_json_with_tokens_empty() {
+        assert_eq!(entries_to_json_with_tokens(&[], &[]), "[]");
+    }
+
+    #[test]
+    fn entries_to_json_with_tokens_single() {
+        let e = FilePickerEntry {
+            name: "report.pdf".to_string(),
+            path: "C:\\Users\\user\\report.pdf".to_string(),
+            size: 4096,
+            mime_type: "application/pdf".to_string(),
+            last_modified_ms: 9999,
+        };
+        let json = entries_to_json_with_tokens(&[e], &[42]);
+        assert!(json.contains("\"name\":\"report.pdf\""));
+        assert!(json.contains("\"token\":42"));
+        assert!(json.contains("\"size\":4096"));
+        // Path must NOT appear in token-based JSON
+        assert!(!json.contains("path"), "raw path must not be in token JSON");
+    }
+
+    #[test]
+    fn entries_to_json_with_tokens_multiple() {
+        let entries = vec![
+            FilePickerEntry {
+                name: "a.txt".to_string(),
+                path: "/tmp/a.txt".to_string(),
+                size: 10,
+                mime_type: "text/plain".to_string(),
+                last_modified_ms: 0,
+            },
+            FilePickerEntry {
+                name: "b.png".to_string(),
+                path: "/tmp/b.png".to_string(),
+                size: 200,
+                mime_type: "image/png".to_string(),
+                last_modified_ms: 1000,
+            },
+        ];
+        let json = entries_to_json_with_tokens(&entries, &[7, 8]);
+        assert!(json.contains("\"token\":7"));
+        assert!(json.contains("\"token\":8"));
+        assert!(json.contains("\"name\":\"a.txt\""));
+        assert!(json.contains("\"name\":\"b.png\""));
     }
 }
