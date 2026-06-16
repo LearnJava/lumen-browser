@@ -6,8 +6,7 @@
 
 ## In progress
 
-PH3-12: HTMLVideoElement Phase 1 — анимированный GIF в `<video>`  branch: p1-ph3-12-video-gif
-Next step: добавить `VideoGifStore` в lumen-js/src/video_gif_store.rs + нативные биндинги __lumen_video_*
+idle
 
 ---
 
@@ -23,6 +22,7 @@ Next step: добавить `VideoGifStore` в lumen-js/src/video_gif_store.rs +
 | PH3-5 | ~~**Web Workers Phase 1**~~ ✅ завершена | L | `lumen-js` |
 | PH3-9 | ~~**HTML5 Drag and Drop API**~~ ✅ завершена | M | `lumen-dom`, `lumen-js`, `lumen-shell` |
 | PH3-11 | ~~**`<audio>` element Phase 1 — HTMLAudioElement real playback**~~ ✅ завершена | L | `lumen-core`, `lumen-js`, `lumen-shell` |
+| PH3-12 | ~~**`<video>` element Phase 1 — HTMLVideoElement GIF playback**~~ ✅ завершена | M | `lumen-js`, `lumen-paint`, `lumen-shell` |
 
 ---
 
@@ -30,6 +30,7 @@ Next step: добавить `VideoGifStore` в lumen-js/src/video_gif_store.rs +
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-16 | PH3-12: `<video>` element Phase 1 | `VideoGifStore` + `VideoPlaybackState` в lumen-js (без зависимости от lumen_image); 12 нативных биндингов `__lumen_video_*` + JS-шим; `BoxKind::Video` → `DrawImage { src: "video:{nid}" }` в display_list; `tick_video_gifs()` в shell — декодирует GIF, регистрирует кадры, продвигает анимацию. |
 | 2026-06-16 | PH3-11: `<audio>` element Phase 1 | `AudioPlaybackProvider` трейт в lumen-core; 16 нативных биндингов `__lumen_audio_*` + JS-шим (play/pause/seek/timeupdate/ended/loop/canPlayType) в lumen-js; `PlatformAudioPlayer` на rodio 0.19 с per-handle audio thread + mpsc в lumen-shell. 39 новых тестов. |
 | 2026-06-16 | PH3-10: Pointer Events API Level 3 | `pointer_captures` HashMap в lumen-dom; `pointer_capture.rs` Rust-биндинги + `pointer_capture_nid` Arc в lumen-js; `Element.setPointerCapture/releasePointerCapture/hasPointerCapture` + `gotpointercapture`/`lostpointercapture`; L3 свойства (altitudeAngle, getCoalescedEvents); shell routing + implicit release на pointerup. 10 новых тестов, итого 2091 lumen-js. |
 | 2026-06-16 | PH3-9: HTML5 Drag and Drop API | `is_element_draggable()` в lumen-dom (HTML LS §9.3.3); `DndState` + `DND_THRESHOLD` + `js_drag_event()` в shell; полный lifecycle: dragstart→drag/dragover/dragenter/dragleave→drop/dragend. 231 тест lumen-dom, 2081 lumen-js. |
