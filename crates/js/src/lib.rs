@@ -126,6 +126,7 @@ use std::sync::{
 pub use clipboard::set_clipboard_provider;
 pub use credentials::set_credential_provider;
 pub use media_capture::set_audio_capture_provider;
+pub use audio_element::set_audio_playback_provider;
 pub use css_properties_values_api::{install_css_properties_values_api, RegisteredProperty, RegisteredPropertiesMap, get_registered_properties};
 pub use paint_worklet::{install_paint_worklet_api, PaintWorkletDef, PaintWorkletRegistry, get_paint_worklet_registry};
 pub use dom::{FullscreenRequest, HistoryUrlUpdate, NavigateRequest, PrintRequest};

@@ -359,6 +359,13 @@ fn run_window_mode(
         platform::audio_capture::PlatformAudioCapture,
     ));
 
+    // Wire HTMLAudioElement play/pause/seek to the platform audio playback
+    // backend (PH3-11). Process-global; installed before any JS context starts.
+    #[cfg(feature = "quickjs")]
+    lumen_js::set_audio_playback_provider(std::sync::Arc::new(
+        platform::audio_player::PlatformAudioPlayer::new(),
+    ));
+
     // Apply the fingerprint profile's navigator/screen/timezone values (9F.1).
     // Process-global; consumed by lumen_js when each page's JS context spins up.
     #[cfg(feature = "quickjs")]
