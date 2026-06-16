@@ -111,6 +111,16 @@ enum LoadEvent {
     /// CSS загружен параллельным потоком для промежуточных streaming-кадров.
     /// Мёрджится в `Lumen::stream_sheet` и применяется в `paint_partial_dom`.
     CssLoaded(Box<lumen_css_parser::Stylesheet>),
+    /// PH1-2c: картинка `<img>` декодирована параллельным потоком во время
+    /// streaming. Регистрируется в renderer-е по ключу `src` и вызывает redraw —
+    /// картинки появляются по мере прихода, а не разом в финальном `LoadDone`.
+    /// Для анимированного GIF `animated` несёт все кадры (тикаются в
+    /// `RedrawRequested`); `image` — нулевой кадр для немедленной отрисовки.
+    ImageDecoded {
+        src: String,
+        image: Box<lumen_image::Image>,
+        animated: Option<Box<lumen_image::AnimatedGif>>,
+    },
     /// Все байты получены — для финального полного pipeline.
     LoadDone(RawPage),
     /// Ошибка при загрузке страницы.
@@ -487,6 +497,7 @@ fn run_window_mode(
         stream_sheet: lumen_css_parser::Stylesheet::default(),
         stream_layout_seeded: false,
         preload_dispatched: std::collections::HashSet::new(),
+        stream_images_requested: std::collections::HashSet::new(),
         ime_composing: None,
         bfcache: BfCache::new(16),
         nav_back: Vec::new(),
@@ -1949,19 +1960,25 @@ impl PageSource {
         }
     }
 
+    /// Base URL/path used to resolve this page's subresources (images, CSS).
+    /// `None` for sources without a base (`Empty`/`AboutBlank`/`Static`).
+    fn resource_base(&self) -> Option<ResourceBase> {
+        match self {
+            PageSource::File(p) => Some(ResourceBase::File(p.clone())),
+            PageSource::Url(u) => Some(ResourceBase::Url(u.clone())),
+            PageSource::Snapshot { base_url, .. } => Some(ResourceBase::Url(base_url.clone())),
+            PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => None,
+        }
+    }
+
     /// Resolve a relative or absolute `href` against this page's base URL/path.
     /// Returns the resolved string (absolute URL or absolute file path string).
     /// Falls back to the raw `href` when the base is `Empty` or resolution fails.
     fn resolve_href(&self, href: &str) -> String {
-        let base = match self {
-            PageSource::File(p) => ResourceBase::File(p.clone()),
-            PageSource::Url(u) => ResourceBase::Url(u.clone()),
-            PageSource::Snapshot { base_url, .. } => ResourceBase::Url(base_url.clone()),
-            PageSource::Empty | PageSource::AboutBlank | PageSource::Static { .. } => {
-                return href.to_owned();
-            }
-        };
-        base.resolve_str(href)
+        match self.resource_base() {
+            Some(base) => base.resolve_str(href),
+            None => href.to_owned(),
+        }
     }
 
     /// Прочитать байты страницы с диска или из сети, плюс вернуть базу для
@@ -3075,6 +3092,10 @@ struct PageSnapshot {
     /// PH1-2b: whether `layout_box` is a valid graft source for the current stream.
     stream_layout_seeded: bool,
     preload_dispatched: std::collections::HashSet<String>,
+    /// PH1-2c: image `src` keys already dispatched to background decode threads
+    /// during the current streaming load. Dedup across intermediate frames so
+    /// each `<img>` is fetched once. Cleared at the start of every navigation.
+    stream_images_requested: std::collections::HashSet<String>,
     ime_composing: Option<String>,
     bfcache: BfCache,
     nav_back: Vec<NavEntry>,
@@ -4664,6 +4685,11 @@ struct Lumen {
     /// fetch-триггеров при реальном параллельном prefetch. Очищается в начале
     /// каждого нового страничного load.
     preload_dispatched: std::collections::HashSet<String>,
+    /// PH1-2c: ключи `src` картинок, уже отправленных в background-потоки
+    /// декодирования во время текущего streaming-load. Дедуп между
+    /// промежуточными кадрами `paint_partial_dom`, чтобы каждый `<img>`
+    /// загружался один раз. Очищается в начале каждой навигации.
+    stream_images_requested: std::collections::HashSet<String>,
     /// Текущий IME preedit-текст. `Some` — composition-сессия активна,
     /// `None` — нет активного IME ввода.
     ime_composing: Option<String>,
@@ -6006,8 +6032,74 @@ impl Lumen {
         self.update_snap_containers();
         self.update_scroll_containers();
 
+        // PH1-2c: запустить параллельную загрузку картинок, появившихся в этом
+        // частичном DOM, чтобы они дорисовывались по мере прихода (как CSS),
+        // а не разом в финальном `LoadDone`.
+        self.spawn_stream_image_loads(doc, viewport);
+
         if let Some(w) = self.window.as_ref() {
             w.request_redraw();
+        }
+    }
+
+    /// PH1-2c: найти `<img>` в частичном streaming-DOM и запустить параллельные
+    /// потоки fetch+decode для ещё-не-запрошенных картинок. По завершении поток
+    /// шлёт `LoadEvent::ImageDecoded`, и `user_event` регистрирует картинку в
+    /// renderer-е + просит redraw. Дедуп через `stream_images_requested`, так что
+    /// каждый `src` грузится один раз за навигацию; `loading="lazy"` пропускается
+    /// (грузится по близости к viewport уже после `LoadDone`).
+    fn spawn_stream_image_loads(&mut self, doc: &lumen_dom::Document, viewport: Size) {
+        let Some(base) = self.source.resource_base() else { return };
+        let requests = lumen_layout::collect_image_requests(doc, viewport);
+        for req in requests {
+            if req.is_lazy {
+                continue;
+            }
+            if !self.stream_images_requested.insert(req.url.clone()) {
+                continue;
+            }
+            let base = base.clone();
+            let sink = Arc::clone(&self.event_sink);
+            let cookie_jar = Arc::clone(&self.cookie_jar);
+            let proxy = self.load_proxy.clone();
+            std::thread::spawn(move || {
+                let bytes = match fetch_image_bytes(&req.url, &base, &sink, Some(cookie_jar)) {
+                    Ok(b) => b,
+                    Err(_) => return, // streaming best-effort: финальный pipeline залогирует
+                };
+
+                if lumen_image::is_gif(&bytes) {
+                    match lumen_image::decode_gif_animated(&bytes) {
+                        Ok(gif) if gif.frames.len() > 1 => {
+                            let first = gif.frames[0].image.clone();
+                            let _ = proxy.send_event(LoadEvent::ImageDecoded {
+                                src: req.url,
+                                image: Box::new(first),
+                                animated: Some(Box::new(gif)),
+                            });
+                        }
+                        Ok(gif) => {
+                            if let Some(frame) = gif.frames.into_iter().next() {
+                                let _ = proxy.send_event(LoadEvent::ImageDecoded {
+                                    src: req.url,
+                                    image: Box::new(frame.image),
+                                    animated: None,
+                                });
+                            }
+                        }
+                        Err(_) => {}
+                    }
+                    return;
+                }
+
+                if let Ok(image) = lumen_image::decode(&bytes) {
+                    let _ = proxy.send_event(LoadEvent::ImageDecoded {
+                        src: req.url,
+                        image: Box::new(image),
+                        animated: None,
+                    });
+                }
+            });
         }
     }
 
@@ -6319,6 +6411,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // первый кадр (пустой) уже виден, пока идёт fetch/parse.
         // Сбрасываем состояние предыдущего streaming-цикла — новая страница.
         self.preload_dispatched.clear();
+        self.stream_images_requested.clear();
         self.stream_sheet = lumen_css_parser::Stylesheet::default();
         self.stream_layout_seeded = false;
         // Record navigation start for the initial streaming load.
@@ -6365,6 +6458,31 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 s.starting_style_rules.extend(sheet.starting_style_rules);
                 s.container_rules.extend(sheet.container_rules);
                 s.font_palette_values.extend(sheet.font_palette_values);
+            }
+            LoadEvent::ImageDecoded { src, image, animated } => {
+                // PH1-2c: картинка декодирована параллельным потоком во время
+                // streaming. Регистрируем в renderer-е по ключу `src` (тот же,
+                // что эмитит layout в `DrawImage`), кладём в декод-кэш и просим
+                // redraw — следующий кадр заменит placeholder реальной картинкой.
+                let image = *image;
+                if let Some(r) = self.renderer.as_mut() {
+                    if let Err(e) = r.register_image(src.clone(), &image) {
+                        eprintln!("Streaming-картинка: не зарегистрирована {src}: {e}");
+                    }
+                    self.image_cache.insert(lumen_image::ImageKey::new(&src), image);
+                } else {
+                    // Renderer ещё не создан (окно не открыто) — отложим заливку
+                    // в GPU до `resumed`.
+                    self.pending_images.push((src.clone(), image));
+                }
+                if let Some(gif) = animated {
+                    // Многокадровый GIF: тикается в `RedrawRequested`.
+                    self.gif_last_frame.remove(&src);
+                    self.animated_gifs.insert(src, *gif);
+                }
+                if let Some(w) = self.window.as_ref() {
+                    w.request_redraw();
+                }
             }
             LoadEvent::LoadDone(raw) => {
                 eprintln!("Streaming завершён, финальный pipeline");
@@ -13677,6 +13795,7 @@ impl Lumen {
             stream_sheet: std::mem::take(&mut self.stream_sheet),
             stream_layout_seeded: self.stream_layout_seeded,
             preload_dispatched: std::mem::take(&mut self.preload_dispatched),
+            stream_images_requested: std::mem::take(&mut self.stream_images_requested),
             ime_composing: self.ime_composing.take(),
             bfcache: std::mem::replace(&mut self.bfcache, BfCache::new(16)),
             nav_back: std::mem::take(&mut self.nav_back),
@@ -13747,6 +13866,7 @@ impl Lumen {
         self.stream_sheet = snap.stream_sheet;
         self.stream_layout_seeded = snap.stream_layout_seeded;
         self.preload_dispatched = snap.preload_dispatched;
+        self.stream_images_requested = snap.stream_images_requested;
         self.ime_composing = snap.ime_composing;
         self.bfcache = snap.bfcache;
         self.nav_back = snap.nav_back;
@@ -13830,6 +13950,7 @@ impl Lumen {
         self.stream_sheet = lumen_css_parser::Stylesheet::default();
         self.stream_layout_seeded = false;
         self.preload_dispatched = std::collections::HashSet::new();
+        self.stream_images_requested = std::collections::HashSet::new();
         self.ime_composing = None;
         self.bfcache = BfCache::new(16);
         self.nav_back = Vec::new();
@@ -15814,5 +15935,61 @@ mod tests {
         let (port, rest) = extract_tor_mode(&[]);
         assert!(port.is_none());
         assert!(rest.is_empty());
+    }
+
+    // ── PH1-2c: прогрессивная подгрузка картинок во время streaming ─────────
+
+    #[test]
+    fn resource_base_maps_url_and_file_sources() {
+        assert!(matches!(
+            PageSource::Url("https://example.com/".to_owned()).resource_base(),
+            Some(ResourceBase::Url(_))
+        ));
+        assert!(matches!(
+            PageSource::File(PathBuf::from("/tmp/page.html")).resource_base(),
+            Some(ResourceBase::File(_))
+        ));
+        assert!(matches!(
+            PageSource::Snapshot { html: String::new(), base_url: "https://x/".to_owned() }
+                .resource_base(),
+            Some(ResourceBase::Url(_))
+        ));
+    }
+
+    #[test]
+    fn resource_base_none_for_baseless_sources() {
+        // Источники без базы не должны спавнить streaming-загрузку картинок.
+        assert!(PageSource::Empty.resource_base().is_none());
+        assert!(PageSource::AboutBlank.resource_base().is_none());
+        assert!(
+            PageSource::Static { html: String::new(), url: "x".to_owned() }
+                .resource_base()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn stream_image_discovery_dedups_and_skips_lazy() {
+        // Воспроизводит фильтрацию из spawn_stream_image_loads: lazy пропускаем,
+        // повторно встреченный src не запрашиваем дважды между кадрами.
+        let html = r#"
+            <img src="a.png">
+            <img src="b.png" loading="lazy">
+            <img src="a.png">
+        "#;
+        let doc = lumen_html_parser::parse(html);
+        let requests = lumen_layout::collect_image_requests(&doc, Size::new(300.0, 300.0));
+
+        let mut requested: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut dispatched: Vec<String> = Vec::new();
+        for req in requests {
+            if req.is_lazy {
+                continue;
+            }
+            if requested.insert(req.url.clone()) {
+                dispatched.push(req.url);
+            }
+        }
+        assert_eq!(dispatched, vec!["a.png".to_owned()], "lazy пропущен, дубль a.png схлопнут");
     }
 }

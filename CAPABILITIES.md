@@ -154,7 +154,7 @@ Modern ES (ES2020+: classes, async/await, generators, Promise, Proxy, BigInt, mo
 ## Shell, automation & accessibility
 
 ### lumen-shell (`crates/shell`) — the user-facing browser
-**Navigation/Tabs** — ✅ load file/http(s)/local HTML with streaming incremental parse+paint; link-click + fragment nav (`:target`); reload; tab strip + groups (colour-coded) + containers (cookie/storage isolation) + context menu + auto-archive; vertical tabs, tree tabs, workspaces, split view; `about:newtab` speed-dial; omnibox FTS suggestions (`@history`). ⬜ `@notes`/`@read-later` prefixes; history/search in-memory only.
+**Navigation/Tabs** — ✅ load file/http(s)/local HTML with streaming incremental parse+paint + progressive image loading; link-click + fragment nav (`:target`); reload; tab strip + groups (colour-coded) + containers (cookie/storage isolation) + context menu + auto-archive; vertical tabs, tree tabs, workspaces, split view; `about:newtab` speed-dial; omnibox FTS suggestions (`@history`). ⬜ `@notes`/`@read-later` prefixes; history/search in-memory only.
 
 **Reading/Content** — ✅ reader view, find-in-page (Ctrl+F, highlights/next-prev/scroll-to), source view, read-later panel, note viewer.
 
@@ -201,4 +201,4 @@ These curated docs lag behind code; **trust this file + code over them**:
 - `subsystems/js.md` curates ~30 APIs; code wires ~90.
 - `subsystems/network.md` lists cookie jar + SOCKS5/Tor as deferred though both are wired.
 - `subsystems/storage.md` omits Service Worker store + Cache Storage.
-- `docs/plan/phases.md:31` describes streaming as unbuilt though PH1-2 shipped (gaps tracked as PH1-2a/b/c in STATUS-P1).
+- `docs/plan/phases.md:31` describes streaming as unbuilt though PH1-2 shipped (PH1-2a TCP body streaming + PH1-2b incremental layout + PH1-2c progressive image loading all done — see STATUS-P1 "Recent merges").
