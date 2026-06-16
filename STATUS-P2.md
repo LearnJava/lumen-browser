@@ -15,6 +15,19 @@ Next: dump-layout analysis, identify missing gradient tiling logic in femtovg ba
 
 ## Next
 
+### Ad-block: внешние фильтр-листы (приоритет)
+
+**Полная спека:** [docs/tasks/p2-adblock-filter-lists.md](docs/tasks/p2-adblock-filter-lists.md)
+Ветка: `p2-adblock-filter-lists` · Размер L · крейты `lumen-network` (+ `lumen-shell` старт).
+Заменить вшитый `DefaultFilterList` на подгружаемые EasyList/EasyPrivacy с дисковым кэшем
+(`lumen_cache_dir()/filterlists/`), offline-first загрузкой при старте и фоновым условным GET
+(If-None-Match/If-Modified-Since, refresh ~4 дня). Требует правки `GLOBAL_ADBLOCK_FILTER`
+(`OnceLock → RwLock`) в `crates/network/src/lib.rs` для hot-swap. Парсер `EasyListFilter`
+уже готов; склеивать листы и парсить одним проходом (чтобы `@@`-исключения работали глобально).
+Phase 2 (продолжение): `$option`-фильтрация по типу ресурса. Phase 3: UI подписок (handoff P3).
+
+---
+
 **Phase 2 и Phase 3 завершены.** Доступные направления:
 
 ### Опция 1: Bug fixes (P3 вспомога)
