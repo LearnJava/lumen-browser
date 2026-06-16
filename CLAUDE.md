@@ -22,6 +22,7 @@ Version↔phase mapping (from `docs/plan/phases.md`): Phase 1 → v0.1, **Phase 
 
 | File | Contents |
 |---|---|
+| `CAPABILITIES.md` | **Source of truth for "what the browser can do right now"** (per-subsystem, ✅/🟡/⬜, verified against code). Read ONLY this for capability questions — not `docs/plan/*` or `STATUS-PN.md`. Update in the same commit as a feature merge. |
 | `README.md` | User-facing: install, commands, what to expect. |
 | `STATUS-P1.md` | P1 sprint: in-progress task, next items, recent merge. Read at session start if you are P1. |
 | `STATUS-P2.md` | P2 sprint: in-progress task, next items, recent merge. Read at session start if you are P2. |
@@ -232,9 +233,11 @@ cargo run -p lumen-shell -- --dump-layout samples/page.html 2>&1 | grep -A2 "mar
 cargo run -p lumen-shell -- --dump-display-list samples/page.html 2>&1 | grep -A2 "FillRect\|Text"
 ```
 
+**"What can the browser do?" → read `CAPABILITIES.md` only.** It is the single source of truth for shipped capability, verified against code and grouped by subsystem. Do NOT re-read `docs/plan/phases.md`, `lumen-plan.md`, or `STATUS-PN.md` for this — they track *intent* and *task queues* and drift from code. Keep `CAPABILITIES.md` true to code: update it in the same commit as any feature merge.
+
 **docs/plan/ reading rule:**
 - **DO read if you need:** `docs/plan/architecture.md` (§1 Principles, §5 Dependency policy), `docs/plan/knowledge.md` (§12 Unique features), `docs/decisions/ADR-*.md`
-- **DON'T read:** `docs/plan/roadmap.md` (use `STATUS-PN.md` instead) · `docs/plan/history.md` (use `git log` instead) · `docs/plan/status.md` (use `STATUS-PN.md`)
+- **DON'T read:** `docs/plan/roadmap.md` (use `STATUS-PN.md` instead) · `docs/plan/history.md` (use `git log` instead) · `docs/plan/status.md` (use `STATUS-PN.md`) · `docs/plan/phases.md` / `lumen-plan.md` markers (use `CAPABILITIES.md` for what's done)
 
 **Grep instead of reading whole files.** Use targeted grep before opening large files:
 
