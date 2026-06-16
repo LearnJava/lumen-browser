@@ -121,10 +121,55 @@ enum LoadEvent {
         image: Box<lumen_image::Image>,
         animated: Option<Box<lumen_image::AnimatedGif>>,
     },
+    /// PH3-19: web-шрифт из @font-face url() декодирован в фоновом потоке.
+    /// Регистрируется в FontRegistry + MultiFontMeasurer и вызывает relayout —
+    /// текст появляется в fallback-шрифте сразу, подменяется по приходу (FOUT).
+    FontLoaded {
+        family: String,
+        weight: u16,
+        style: lumen_core::FontStyle,
+        unicode_range: Vec<lumen_font::UnicodeRange>,
+        bytes: Vec<u8>,
+    },
     /// Все байты получены — для финального полного pipeline.
     LoadDone(RawPage),
     /// Ошибка при загрузке страницы.
     LoadError(String),
+}
+
+/// PH3-19: дескриптор @font-face url()-источника, ещё не загруженного в память.
+/// Хранится в `ParsedPage` / `LoadedPage`; `apply_loaded_page` спавнит
+/// фоновый поток fetch+decode для каждого, результат — `LoadEvent::FontLoaded`.
+struct PendingWebFont {
+    /// CSS `font-family` дескриптор.
+    family: String,
+    /// Разрешённый font-weight (400 = normal, 700 = bold).
+    weight: u16,
+    /// Разрешённый font-style.
+    style: lumen_core::FontStyle,
+    /// Сырая строка `unicode-range` дескриптора (None → покрывает все кодпоинты).
+    unicode_range_str: Option<String>,
+    /// URL для fetch (@font-face `src: url(...)`).
+    url: String,
+}
+
+/// PH3-19: web-шрифт, уже загруженный и декодированный после `FontLoaded`.
+/// Список хранится в `Lumen::web_fonts` и используется для пересборки
+/// `MultiFontMeasurer` при каждом relayout — иначе resize/scroll-reflow
+/// теряет web-метрики и откатывается к Inter.
+// weight/style хранятся для будущего CSS font-matching (по weight/style дескрипторам @font-face).
+#[allow(dead_code)]
+struct LoadedWebFont {
+    /// CSS `font-family` дескриптор.
+    family: String,
+    /// Разрешённый font-weight.
+    weight: u16,
+    /// Разрешённый font-style.
+    style: lumen_core::FontStyle,
+    /// Диапазоны Unicode из @font-face `unicode-range` дескриптора.
+    unicode_range: Vec<lumen_font::UnicodeRange>,
+    /// Декодированные sfnt-байты (TrueType / OTF после WOFF/WOFF2-распаковки).
+    bytes: Vec<u8>,
 }
 
 /// Размер одного HTML-chunk при разбивке для инкрементального парсинга.
@@ -451,6 +496,8 @@ fn run_window_mode(
         display_list_cache: lumen_paint::DisplayListCache::new(),
         title: None,
         pending_images: Vec::new(),
+        page_font_registry: Arc::new(lumen_font::FontRegistry::new()),
+        web_fonts: Vec::new(),
         source,
         event_sink,
         modifiers: ModifiersState::empty(),
@@ -2242,9 +2289,15 @@ struct LoadedPage {
     lazy_pairs: Vec<(u32, String)>,
     /// Layout-дерево страницы — используется animation scheduler-ом.
     layout_box: lumen_layout::LayoutBox,
-    /// Провайдер шрифтов с @font-face URL-источниками страницы.
+    /// Провайдер шрифтов с @font-face local()-источниками страницы.
     /// Передаётся рендеру через `set_font_provider` при apply_loaded_page.
-    font_registry: Arc<dyn lumen_core::FontProvider>,
+    /// PH3-19: конкретный тип (не трейт-объект), чтобы `apply_loaded_page`
+    /// мог динамически дорегистрировать web-шрифты через `register_from_bytes`.
+    font_registry: Arc<lumen_font::FontRegistry>,
+    /// PH3-19: @font-face url()-источники, ещё не загруженные в момент первого
+    /// layout-а. `apply_loaded_page` спавнит фоновый поток для каждого;
+    /// результат приходит как `LoadEvent::FontLoaded` → relayout с FOUT.
+    pending_web_fonts: Vec<PendingWebFont>,
     /// Навигационный запрос от JS (location.href= и т.п.), выполненный
     /// в процессе загрузки. Обрабатывается в `about_to_wait`.
     js_navigate: Option<JsNavigateRequest>,
@@ -2269,7 +2322,8 @@ impl LoadedPage {
                 svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
                 dirty: lumen_layout::DirtyBits::CLEAN,
             },
-            font_registry: Arc::new(lumen_font::SystemFontIndex::new()),
+            font_registry: Arc::new(lumen_font::FontRegistry::new()),
+            pending_web_fonts: Vec::new(),
             js_navigate: None,
         }
     }
@@ -3036,8 +3090,13 @@ struct ParsedPage {
     preload_hints: Vec<lumen_html_parser::PreloadHint>,
     /// Decoded UTF-8 HTML source — stored for bfcache snapshot.
     html_source: String,
-    /// @font-face URL-шрифты + системные шрифты. Передаётся рендеру.
-    font_registry: Arc<dyn lumen_core::FontProvider>,
+    /// @font-face local()-шрифты + системные шрифты. Передаётся рендеру.
+    /// PH3-19: конкретный `FontRegistry` (не трейт-объект) для дорегистрации
+    /// web-шрифтов после `FontLoaded` без даункаста.
+    font_registry: Arc<lumen_font::FontRegistry>,
+    /// PH3-19: @font-face url()-источники, ещё не загруженные; передаются в
+    /// `LoadedPage` и далее в фоновые потоки через `apply_loaded_page`.
+    pending_web_fonts: Vec<PendingWebFont>,
     /// Навигационный запрос, выставленный JS во время выполнения скриптов.
     js_navigate: Option<JsNavigateRequest>,
     /// Persistent JS context (QuickJS) kept alive after page load so that
@@ -3067,6 +3126,11 @@ struct PageSnapshot {
     display_list: DisplayList,
     title: Option<String>,
     pending_images: Vec<(String, lumen_image::Image)>,
+    /// PH3-19: saved across tab switch so web-fonts persist in background tabs.
+    page_font_registry: Arc<lumen_font::FontRegistry>,
+    /// PH3-19: web fonts decoded from @font-face url() sources, needed to
+    /// rebuild MultiFontMeasurer on relayout when the tab is restored.
+    web_fonts: Vec<LoadedWebFont>,
     source: PageSource,
     runtime: runtime::EventLoop,
     animation_scheduler: animation_scheduler::AnimationScheduler,
@@ -3285,27 +3349,34 @@ fn parse_and_layout(
 
     let sheet = lumen_css_parser::parse(&css);
 
-    // @font-face: загружаем url()-источники до layout.
-    // CSS: @font-face multi-font TextMeasurer — P1 нужно поддержать font-family в layout
-    let font_registry = load_font_faces(&sheet.font_faces, base, sink, cookie_jar.clone());
+    // PH3-19: @font-face загрузка разделена на два прохода.
+    // local()-источники загружаются синхронно (из системного индекса, быстро).
+    // url()-источники — только собираем в pending_web_fonts; фоновый поток
+    // fetch+decode спавнится в apply_loaded_page → первый paint не ждёт сети.
+    let (font_registry, pending_web_fonts) = load_font_faces(&sheet.font_faces, base, sink, cookie_jar.clone());
 
     // Populate document.fonts with FontFace objects from @font-face rules.
-    // Phase 1: store FontFace metadata; status marked as Loaded after successful load.
+    // local() — immediately Loaded; url() — Loading (будет Loaded по FontLoaded).
     {
         let mut d = doc_arc.lock().unwrap();
         for rule in &sheet.font_faces {
             let mut font_face = rule_to_font_face(rule);
-            // Mark as Loaded if we successfully registered it in font_registry.
-            // (The registry loads fonts during load_font_faces; if no errors, it's loaded.)
-            font_face.status = lumen_dom::FontFaceStatus::Loaded;
+            // local() rules already resolved — mark Loaded; url() rules stay Loading.
+            let has_local = rule.sources.iter().any(|s| {
+                s.kind == lumen_css_parser::FontFaceSourceKind::Local
+                    && font_registry.face_bytes_for_family(&rule.family).is_some()
+            });
+            if has_local {
+                font_face.status = lumen_dom::FontFaceStatus::Loaded;
+            }
             d.fonts_mut().add(font_face);
         }
     }
 
     let font = lumen_font::Font::parse(INTER_FONT)
         .map_err(|e| format!("ошибка разбора шрифта: {e}"))?;
-    // Многошрифтовый измеритель: Inter как fallback + @font-face семьи.
-    // CSS: @font-face multi-font TextMeasurer — wired здесь.
+    // Многошрифтовый измеритель: Inter как fallback + уже загруженные local()-семьи.
+    // url()-семьи добавятся позже через FontLoaded + relayout_with_web_fonts.
     let mut measurer = lumen_paint::MultiFontMeasurer::new(&font)
         .map_err(|e| format!("ошибка метрик шрифта: {e}"))?;
     for rule in &sheet.font_faces {
@@ -3319,8 +3390,7 @@ fn parse_and_layout(
             measurer.register_family_with_ranges(&rule.family, bytes, ranges);
         }
     }
-    // Move font_registry into Arc after using it above (face_bytes_for_family).
-    let font_provider: Arc<dyn lumen_core::FontProvider> = Arc::new(font_registry);
+    let font_provider = Arc::new(font_registry);
 
     let layout = {
         let d = doc_arc.lock().unwrap();
@@ -3349,6 +3419,7 @@ fn parse_and_layout(
         preload_hints,
         html_source: source,
         font_registry: font_provider,
+        pending_web_fonts,
         js_navigate: js_nav,
         js_ctx,
     })
@@ -3427,25 +3498,29 @@ fn rule_to_font_face(rule: &lumen_css_parser::FontFaceRule) -> lumen_dom::FontFa
     )
 }
 
+/// PH3-19: загружает @font-face правила, разделяя источники на два прохода:
+/// 1. `local()` — синхронно (системные шрифты уже в памяти), результат в `registry`.
+/// 2. `url()` — возвращается как `Vec<PendingWebFont>` для фоновой загрузки;
+///    первый layout строится на fallback (bundled Inter), web-шрифты приходят позже
+///    через `LoadEvent::FontLoaded` и вызывают relayout (FOUT-swap).
+///
+/// CSS Fonts L4 §4.1: источники в каждом `@font-face` пробуются по порядку;
+/// первый успешный `local()` выигрывает и url()-источники этого правила пропускаются.
 fn load_font_faces(
     font_faces: &[lumen_css_parser::FontFaceRule],
-    base: &ResourceBase,
-    sink: &Arc<dyn EventSink>,
-    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
-) -> lumen_font::FontRegistry {
+    _base: &ResourceBase,
+    _sink: &Arc<dyn EventSink>,
+    _cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+) -> (lumen_font::FontRegistry, Vec<PendingWebFont>) {
     use lumen_css_parser::FontFaceSourceKind;
     use lumen_core::FontStyle;
 
     let registry = lumen_font::FontRegistry::new();
+    let mut pending: Vec<PendingWebFont> = Vec::new();
 
-    // Сетевая загрузка + декодирование woff2 каждого @font-face — главный тормоз
-    // тяжёлых страниц (диагноз 2026-06-16: 7 шрифтов lenta.ru = 2.4 с
-    // последовательно, ~0.5 с параллельно). Грузим+декодируем все правила
-    // параллельно, затем регистрируем последовательно в порядке объявления
-    // (last-wins для дублей family/weight/style сохраняется).
-    let decoded = parallel_map(font_faces, |_, rule| {
+    for rule in font_faces {
         if rule.family.is_empty() || rule.sources.is_empty() {
-            return None;
+            continue;
         }
 
         let weight = parse_font_weight(rule.weight.as_deref());
@@ -3455,61 +3530,39 @@ fn load_font_faces(
             .and_then(FontStyle::parse_keyword)
             .unwrap_or(FontStyle::Normal);
 
+        let mut local_resolved = false;
         for src in &rule.sources {
-            // CSS Fonts L4 §4.1: try each source in order; first successful wins.
-            let bytes = if src.kind == FontFaceSourceKind::Local {
-                // CSS §4.3: match by family name (case-insensitive) against system fonts.
-                // Phase 0: PostScript / full-name matching not yet implemented.
-                // resolve_local_bytes — &self, FontRegistry потокобезопасен (RwLock).
-                match registry.resolve_local_bytes(&src.value, weight, style) {
-                    Some(b) => b,
-                    None => continue, // not found locally — try next source
+            if src.kind == FontFaceSourceKind::Local {
+                // CSS Fonts L4 §4.1 + §4.3: try local() first; case-insensitive
+                // match against system fonts. First hit wins the whole rule.
+                if let Some(bytes) = registry.resolve_local_bytes(&src.value, weight, style) {
+                    eprintln!(
+                        "@font-face загружен: «{}» weight={} src={} (local)",
+                        rule.family, weight, src.value,
+                    );
+                    registry.register_from_bytes(&rule.family, weight, style, bytes);
+                    local_resolved = true;
+                    break;
                 }
-            } else {
-                let raw = match fetch_image_bytes(&src.value, base, sink, cookie_jar.clone()) {
-                    Ok(b) => b,
-                    Err(e) => {
-                        eprintln!("@font-face «{}»: не загружен {}: {e}", rule.family, src.value);
-                        continue;
-                    }
-                };
-
-                let decoded = match lumen_font::maybe_decode_font(&raw) {
-                    Ok(Some(d)) => d,
-                    Ok(None) => raw,
-                    Err(e) => {
-                        eprintln!("@font-face «{}»: не декодирован WOFF: {e}", rule.family);
-                        continue;
-                    }
-                };
-
-                if lumen_font::Font::parse(&decoded).is_err() {
-                    eprintln!("@font-face «{}»: невалидный шрифт {}", rule.family, src.value);
-                    continue;
-                }
-
-                decoded
-            };
-
-            eprintln!(
-                "@font-face загружен: «{}» weight={} src={} ({})",
-                rule.family,
-                weight,
-                src.value,
-                if src.kind == FontFaceSourceKind::Local { "local" } else { "url" },
-            );
-            return Some((weight, style, bytes));
+            }
         }
-        None
-    });
+        if local_resolved {
+            continue;
+        }
 
-    for (rule, res) in font_faces.iter().zip(decoded) {
-        if let Some((weight, style, bytes)) = res {
-            registry.register_from_bytes(&rule.family, weight, style, bytes);
+        // No local() succeeded — queue the first url() source for async fetch.
+        if let Some(url_src) = rule.sources.iter().find(|s| s.kind == FontFaceSourceKind::Url) {
+            pending.push(PendingWebFont {
+                family: rule.family.clone(),
+                weight,
+                style,
+                unicode_range_str: rule.unicode_range.clone(),
+                url: url_src.value.clone(),
+            });
         }
     }
 
-    registry
+    (registry, pending)
 }
 
 /// Парсит `font-weight` дескриптор @font-face: ключевые слова + числа.
@@ -3608,9 +3661,32 @@ fn paint_ordered(layout: &lumen_layout::LayoutBox) -> DisplayList {
 /// Возвращает `(DisplayList, LayoutBox)` — LayoutBox нужен для animation scheduler.
 /// `dark_mode` is forwarded to `layout_measured_hyp` so `@media (prefers-color-scheme: dark)`
 /// rules take effect on relayout (e.g. after OS theme change or window resize).
-fn relayout_page(src: &LayoutSource, viewport: Size, hp: &dyn HyphenationProvider, dark_mode: bool) -> (DisplayList, lumen_layout::LayoutBox) {
+fn relayout_page(
+    src: &LayoutSource,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    web_fonts: &[LoadedWebFont],
+) -> (DisplayList, lumen_layout::LayoutBox) {
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
-    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+    if web_fonts.is_empty() {
+        let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+        let doc = src.document.lock().unwrap();
+        let layout = lumen_layout::layout_measured_hyp(&doc, &src.stylesheet, viewport, &measurer, hp, dark_mode);
+        drop(doc);
+        let dl = paint_ordered(&layout);
+        return (dl, layout);
+    }
+    // PH3-19: build MultiFontMeasurer from accumulated web fonts for FOUT relayout.
+    let mut measurer = lumen_paint::MultiFontMeasurer::new(&font)
+        .expect("MultiFontMeasurer из bundled Inter");
+    for wf in web_fonts {
+        measurer.register_family_with_ranges(
+            &wf.family,
+            wf.bytes.clone(),
+            wf.unicode_range.clone(),
+        );
+    }
     let doc = src.document.lock().unwrap();
     let layout = lumen_layout::layout_measured_hyp(&doc, &src.stylesheet, viewport, &measurer, hp, dark_mode);
     drop(doc);
@@ -3834,6 +3910,7 @@ fn render_bytes(
             lazy_pairs: parsed.lazy_pairs,
             layout_box,
             font_registry: parsed.font_registry,
+            pending_web_fonts: parsed.pending_web_fonts,
             js_navigate: parsed.js_navigate,
         },
         layout_source,
@@ -4507,6 +4584,17 @@ struct Lumen {
     /// напрямую в `reload`. На переходах между страницами очищается через
     /// `Renderer::clear_images` + переустановка.
     pending_images: Vec<(String, lumen_image::Image)>,
+    /// PH3-19: реестр шрифтов текущей страницы (local() + web-шрифты, пришедшие
+    /// через `FontLoaded`). Хранится отдельно от `Arc<dyn FontProvider>` в renderer-е,
+    /// чтобы `user_event(FontLoaded)` мог дорегистрировать шрифт через
+    /// `register_from_bytes` без даункаста, а затем обновить рендерер одной строкой.
+    /// Сбрасывается на каждую навигацию вместе с `web_fonts`.
+    page_font_registry: Arc<lumen_font::FontRegistry>,
+    /// PH3-19: web-шрифты текущей страницы, уже декодированные из @font-face url().
+    /// Используются для пересборки `MultiFontMeasurer` при каждом relayout (resize,
+    /// scroll, JS DOM mutation) — без хранения здесь resize-relayout терял бы
+    /// web-метрики и откатывался к Inter.  Очищается на каждой навигации.
+    web_fonts: Vec<LoadedWebFont>,
     source: PageSource,
     event_sink: Arc<dyn EventSink>,
     modifiers: ModifiersState,
@@ -5313,7 +5401,7 @@ impl Lumen {
         // чужой scroll/relevant.
         lumen_layout::set_cv_scroll(self.scroll_x, self.scroll_y);
         lumen_layout::set_cv_relevant(self.cv_relevant.clone());
-        let (new_dl, lb) = relayout_page(src, viewport, &self.hyp_provider, self.dark_mode);
+        let (new_dl, lb) = relayout_page(src, viewport, &self.hyp_provider, self.dark_mode, &self.web_fonts);
         lumen_layout::clear_interactive_state();
         lumen_layout::set_cv_scroll(0.0, 0.0);
         lumen_layout::set_cv_relevant(std::collections::HashSet::new());
@@ -5913,7 +6001,11 @@ impl Lumen {
             animated_gifs: Vec::new(), // lumen-driver path has no animated GIF support yet
             lazy_pairs: Vec::new(), // Phase 4c: TODO integrate lazy loading
             layout_box: rendered.layout_box,
-            font_registry: rendered.font_registry,
+            // Driver path renders via lumen-driver which uses Arc<dyn FontProvider>;
+            // shell's LoadedPage now requires Arc<FontRegistry> for PH3-19 dynamic
+            // registration. Use an empty registry — driver pages have no async fonts.
+            font_registry: Arc::new(lumen_font::FontRegistry::new()),
+            pending_web_fonts: Vec::new(),
             js_navigate,
         })
     }
@@ -6212,10 +6304,64 @@ impl Lumen {
             self.permission.set_origin(origin);
         }
 
+        // PH3-19: store the page's FontRegistry for dynamic web-font registration
+        // via FontLoaded events. Also clear previous page's web_fonts list so
+        // relayout_with_web_fonts uses only fonts for the current page.
+        self.page_font_registry = page.font_registry.clone();
+        self.web_fonts.clear();
+
+        // PH3-19: spawn one background thread per pending @font-face url() source.
+        // Each thread fetch+decodes the font and sends FontLoaded; the handler
+        // registers it in page_font_registry, rebuilds MultiFontMeasurer, and
+        // triggers a relayout — FOUT (Flash Of Unstyled Text) swap pattern.
+        if !page.pending_web_fonts.is_empty() {
+            let base_opt = self.source.resource_base();
+            for pf in page.pending_web_fonts {
+                if let Some(base) = base_opt.clone() {
+                    let sink = Arc::clone(&self.event_sink);
+                    let cookie_jar = Arc::clone(&self.cookie_jar);
+                    let proxy = self.load_proxy.clone();
+                    std::thread::spawn(move || {
+                        let raw = match fetch_image_bytes(&pf.url, &base, &sink, Some(cookie_jar)) {
+                            Ok(b) => b,
+                            Err(e) => {
+                                eprintln!("@font-face «{}»: не загружен {}: {e}", pf.family, pf.url);
+                                return;
+                            }
+                        };
+                        let bytes = match lumen_font::maybe_decode_font(&raw) {
+                            Ok(Some(d)) => d,
+                            Ok(None) => raw,
+                            Err(e) => {
+                                eprintln!("@font-face «{}»: WOFF-декод провалился: {e}", pf.family);
+                                return;
+                            }
+                        };
+                        if lumen_font::Font::parse(&bytes).is_err() {
+                            eprintln!("@font-face «{}»: невалидный sfnt {}", pf.family, pf.url);
+                            return;
+                        }
+                        eprintln!("@font-face async загружен: «{}» weight={}", pf.family, pf.weight);
+                        let unicode_range = pf.unicode_range_str
+                            .as_deref()
+                            .map(lumen_font::parse_unicode_ranges)
+                            .unwrap_or_default();
+                        let _ = proxy.send_event(LoadEvent::FontLoaded {
+                            family: pf.family,
+                            weight: pf.weight,
+                            style: pf.style,
+                            unicode_range,
+                            bytes,
+                        });
+                    });
+                }
+            }
+        }
+
         // Reset CPU image cache for the new page (10E.4 scroll-discard).
         self.image_cache.clear();
         if let Some(r) = self.renderer.as_mut() {
-            r.set_font_provider(Some(page.font_registry.clone()));
+            r.set_font_provider(Some(Arc::clone(&page.font_registry) as Arc<dyn lumen_core::FontProvider>));
             // Warm the curated system-font fallback chain once, now that a
             // FontProvider (this page's FontRegistry, which wraps the system
             // font index) is available. Loads emoji / CJK / RTL / Indic / Thai
@@ -6480,6 +6626,31 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.gif_last_frame.remove(&src);
                     self.animated_gifs.insert(src, *gif);
                 }
+                if let Some(w) = self.window.as_ref() {
+                    w.request_redraw();
+                }
+            }
+            LoadEvent::FontLoaded { family, weight, style, unicode_range, bytes } => {
+                // PH3-19 FOUT swap: web-шрифт прибыл из фонового потока.
+                // Регистрируем в page_font_registry (FontProvider для renderer-а),
+                // добавляем в web_fonts (для relayout MultiFontMeasurer),
+                // запускаем relayout — следующий кадр использует уже загруженный шрифт.
+                eprintln!("FontLoaded: «{family}» weight={weight}");
+                self.page_font_registry.register_from_bytes(
+                    &family,
+                    weight,
+                    style,
+                    bytes.clone(),
+                );
+                // Update renderer's font provider so GPU glyph atlas picks up the new face.
+                if let Some(r) = self.renderer.as_mut() {
+                    r.set_font_provider(Some(
+                        Arc::clone(&self.page_font_registry) as Arc<dyn lumen_core::FontProvider>,
+                    ));
+                }
+                self.web_fonts.push(LoadedWebFont { family, weight, style, unicode_range, bytes });
+                // Relayout with the now-registered web font (FOUT → FOIT swap).
+                self.relayout();
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
                 }
@@ -12404,7 +12575,7 @@ impl Lumen {
             panels::sidebar_panel::PANEL_WIDTH,
             self.viewport_height_css().max(100.0),
         );
-        let (dl, _lb) = relayout_page(&src, sidebar_vp, &self.hyp_provider, self.dark_mode);
+        let (dl, _lb) = relayout_page(&src, sidebar_vp, &self.hyp_provider, self.dark_mode, &self.web_fonts);
         let content_h = content_height_of(&dl);
         self.sidebar.set_page(dl, doc_title, content_h);
 
@@ -13609,7 +13780,7 @@ impl Lumen {
         // scroll-положения; ratchet новой страницы стартует с нуля.
         lumen_layout::set_cv_scroll(data.scroll_x, data.scroll_y);
         lumen_layout::set_cv_relevant(std::collections::HashSet::new());
-        let (display_list, lb) = relayout_page(&layout_source, viewport, &self.hyp_provider, self.dark_mode);
+        let (display_list, lb) = relayout_page(&layout_source, viewport, &self.hyp_provider, self.dark_mode, &self.web_fonts);
         lumen_layout::set_cv_scroll(0.0, 0.0);
 
         // Install into the active slot.
@@ -13766,6 +13937,11 @@ impl Lumen {
             display_list: std::mem::take(&mut self.display_list),
             title: self.title.take(),
             pending_images: std::mem::take(&mut self.pending_images),
+            page_font_registry: std::mem::replace(
+                &mut self.page_font_registry,
+                Arc::new(lumen_font::FontRegistry::new()),
+            ),
+            web_fonts: std::mem::take(&mut self.web_fonts),
             source: self.source.clone(),
             runtime: std::mem::take(&mut self.runtime),
             animation_scheduler: std::mem::replace(
@@ -13843,6 +14019,8 @@ impl Lumen {
         self.display_list = snap.display_list;
         self.title = snap.title;
         self.pending_images = snap.pending_images;
+        self.page_font_registry = snap.page_font_registry;
+        self.web_fonts = snap.web_fonts;
         self.source = snap.source;
         self.runtime = snap.runtime;
         self.animation_scheduler = snap.animation_scheduler;
