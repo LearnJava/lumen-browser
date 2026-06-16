@@ -6,7 +6,8 @@
 
 ## In progress
 
-idle
+**PH3-18: Pointer Lock Phase 1 — real cursor capture**  branch: p1-ph3-18-pointer-lock
+Next step: pointer_lock.rs — pending_grab flag; dom.rs — _lumen_dispatch_locked_mousemove; main.rs — device_event + about_to_wait
 
 ---
 
@@ -16,6 +17,7 @@ idle
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
+| PH3-18 | **Pointer Lock Phase 1 — real cursor capture** (W3C Pointer Lock L2) | S | `lumen-js`, `lumen-shell` |
 | PH3-1 | ~~**DevTools Elements styled-rules panel**~~ ✅ завершена | M | `lumen-shell` (devtools/) |
 | PH3-3 | ~~**getUserMedia Phase 1**~~ ✅ завершена | L | `lumen-js`, `lumen-shell` |
 | PH3-4 | ~~**Offscreen Canvas Phase 1**~~ ✅ завершена | M | `lumen-js`, `lumen-paint` |

@@ -2,7 +2,7 @@
 //! Provides low-level mouse tracking with relative movement (movementX/Y).
 //! Phase 0: requestPointerLock → Promise, exitPointerLock, pointerLockElement getter,
 //! pointerlockchange/pointerlockerror events, movementX/Y on MouseEvent.
-//! Phase 1: integrate with shell winit to capture actual mouse cursor.
+//! Phase 1: integrate with shell winit — CursorGrabMode::Locked + DeviceEvent::MouseMotion.
 
 use std::cell::RefCell;
 
@@ -12,6 +12,9 @@ struct PointerLockState {
     /// Relative movement in pixels since last mousemove event.
     movement_x: f64,
     movement_y: f64,
+    /// Pending OS cursor grab change consumed by shell in `about_to_wait`.
+    /// Some(true) = grab cursor, Some(false) = release cursor, None = no change.
+    pending_grab: Option<bool>,
 }
 
 thread_local! {
@@ -20,33 +23,32 @@ thread_local! {
             locked_element_nid: None,
             movement_x: 0.0,
             movement_y: 0.0,
+            pending_grab: None,
         })
     };
 }
 
 /// Request pointer lock for element with given node ID.
-/// Phase 0: immediately locks in-memory state.
-/// Phase 1: will call shell to capture cursor via winit `set_cursor_grab`.
+/// Sets pending_grab=true so the shell calls winit set_cursor_grab(Locked).
 pub fn request_pointer_lock(element_nid: u32) {
     POINTER_LOCK_STATE.with(|state| {
         let mut s = state.borrow_mut();
         s.locked_element_nid = Some(element_nid);
-        // Phase 1: call _lumen_ptr_lock_grab(element_nid) here.
+        s.pending_grab = Some(true);
     });
 }
 
 /// Exit pointer lock.
-/// Phase 0: immediately unlocks in-memory state.
-/// Phase 1: will call shell to release cursor via winit `set_cursor_grab(None)`.
+/// Sets pending_grab=false so the shell calls winit set_cursor_grab(None).
 pub fn exit_pointer_lock() {
     POINTER_LOCK_STATE.with(|state| {
         let mut s = state.borrow_mut();
         s.locked_element_nid = None;
-        // Phase 1: call _lumen_ptr_lock_release() here.
+        s.pending_grab = Some(false);
     });
 }
 
-/// Set relative mouse movement delta (called from shell event loop for each mousemove).
+/// Set relative mouse movement delta (called from shell DeviceEvent::MouseMotion).
 /// Only accumulates when pointer is locked.
 pub fn set_movement(dx: f64, dy: f64) {
     POINTER_LOCK_STATE.with(|state| {
@@ -82,7 +84,7 @@ pub fn get_locked_element_nid() -> Option<u32> {
 }
 
 /// Get the current movement delta and reset it to zero.
-/// Called by shell after each frame to apply to the next MouseEvent.
+/// Called by shell after each DeviceEvent::MouseMotion when pointer is locked.
 pub fn take_movement() -> (f64, f64) {
     POINTER_LOCK_STATE.with(|state| {
         let mut s = state.borrow_mut();
@@ -90,6 +92,16 @@ pub fn take_movement() -> (f64, f64) {
         s.movement_x = 0.0;
         s.movement_y = 0.0;
         (dx, dy)
+    })
+}
+
+/// Take pending OS cursor grab request, resetting it to None.
+/// Returns Some(true) to grab cursor, Some(false) to release, None if no change.
+/// Called by shell in `about_to_wait` to apply winit CursorGrabMode changes.
+pub fn take_pending_grab() -> Option<bool> {
+    POINTER_LOCK_STATE.with(|state| {
+        let mut s = state.borrow_mut();
+        s.pending_grab.take()
     })
 }
 
@@ -149,5 +161,27 @@ mod tests {
         let (_, _, dx2, dy2) = get_lock_state();
         assert_eq!(dx2, 0.0);
         assert_eq!(dy2, 0.0);
+    }
+
+    #[test]
+    fn test_pending_grab_on_request() {
+        // Clean state: reset first.
+        exit_pointer_lock();
+        let _ = take_pending_grab();
+        assert_eq!(take_pending_grab(), None);
+
+        request_pointer_lock(5);
+        assert_eq!(take_pending_grab(), Some(true));
+        // Second take returns None.
+        assert_eq!(take_pending_grab(), None);
+    }
+
+    #[test]
+    fn test_pending_grab_on_exit() {
+        request_pointer_lock(5);
+        let _ = take_pending_grab(); // consume the grab request
+        exit_pointer_lock();
+        assert_eq!(take_pending_grab(), Some(false));
+        assert_eq!(take_pending_grab(), None);
     }
 }
