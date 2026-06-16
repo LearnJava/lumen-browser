@@ -366,6 +366,13 @@ fn run_window_mode(
         platform::audio_player::PlatformAudioPlayer::new(),
     ));
 
+    // Wire Screen Wake Lock API to the platform backend (PH3-13).
+    // Prevents the display from sleeping while JS holds an active WakeLockSentinel.
+    #[cfg(feature = "quickjs")]
+    lumen_js::set_wake_lock_provider(std::sync::Arc::new(
+        platform::wake_lock::PlatformWakeLock::new(),
+    ));
+
     // Wire HTMLVideoElement GIF playback store (PH3-12).
     // The same Arc is shared with JS native bindings and the shell's render tick.
     #[cfg(feature = "quickjs")]

@@ -3149,6 +3149,59 @@ impl AudioPlaybackProvider for NullAudioPlaybackProvider {
     fn has_error(&self, _handle: u64) -> bool { false }
 }
 
+// ── Screen Wake Lock (PH3-13) ─────────────────────────────────────────────────
+
+/// Platform provider for Screen Wake Lock API (W3C Screen Wake Lock Level 1).
+///
+/// Implemented by the shell's `PlatformWakeLock`.  A `NullWakeLockProvider`
+/// is installed by default (no-op; used in tests and headless mode).
+pub trait WakeLockProvider: Send + Sync {
+    /// Prevent the display from sleeping.
+    ///
+    /// Returns `true` when the OS accepted the request.  Idempotent — calling
+    /// while a lock is already active is not an error.
+    fn acquire(&self) -> bool;
+
+    /// Allow the display to sleep again.
+    ///
+    /// Idempotent — safe to call even when no lock is held.
+    fn release(&self);
+}
+
+/// Stub provider used in tests and headless mode.
+///
+/// `acquire` always succeeds (returns `true`) without touching OS power APIs.
+pub struct NullWakeLockProvider;
+
+impl WakeLockProvider for NullWakeLockProvider {
+    fn acquire(&self) -> bool { true }
+    fn release(&self) {}
+}
+
+#[cfg(test)]
+mod wake_lock_tests {
+    use super::*;
+
+    #[test]
+    fn null_provider_acquire_returns_true() {
+        let p = NullWakeLockProvider;
+        assert!(p.acquire());
+    }
+
+    #[test]
+    fn null_provider_release_is_no_op() {
+        let p = NullWakeLockProvider;
+        p.release(); // must not panic
+    }
+
+    #[test]
+    fn null_provider_idempotent_acquire() {
+        let p = NullWakeLockProvider;
+        assert!(p.acquire());
+        assert!(p.acquire()); // second call is also fine
+    }
+}
+
 #[cfg(test)]
 mod audio_playback_tests {
     use super::*;

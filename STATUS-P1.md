@@ -6,7 +6,9 @@
 
 ## In progress
 
-idle
+**PH3-13: Screen Wake Lock API Phase 1**  
+Branch: p1-ph3-13-wake-lock  
+Next step: clippy + tests → commit → merge
 
 ---
 
@@ -23,6 +25,7 @@ idle
 | PH3-9 | ~~**HTML5 Drag and Drop API**~~ ✅ завершена | M | `lumen-dom`, `lumen-js`, `lumen-shell` |
 | PH3-11 | ~~**`<audio>` element Phase 1 — HTMLAudioElement real playback**~~ ✅ завершена | L | `lumen-core`, `lumen-js`, `lumen-shell` |
 | PH3-12 | ~~**`<video>` element Phase 1 — HTMLVideoElement GIF playback**~~ ✅ завершена | M | `lumen-js`, `lumen-paint`, `lumen-shell` |
+| PH3-13 | 🟡 **Screen Wake Lock API Phase 1** — в работе | M | `lumen-core`, `lumen-js`, `lumen-shell` |
 
 ---
 
