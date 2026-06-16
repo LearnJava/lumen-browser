@@ -6,7 +6,7 @@
 
 ## In progress
 
-— (idle, ожидание следующей задачи)
+idle
 
 ---
 
@@ -28,6 +28,7 @@
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-16 | PH3-10: Pointer Events API Level 3 | `pointer_captures` HashMap в lumen-dom; `pointer_capture.rs` Rust-биндинги + `pointer_capture_nid` Arc в lumen-js; `Element.setPointerCapture/releasePointerCapture/hasPointerCapture` + `gotpointercapture`/`lostpointercapture`; L3 свойства (altitudeAngle, getCoalescedEvents); shell routing + implicit release на pointerup. 10 новых тестов, итого 2091 lumen-js. |
 | 2026-06-16 | PH3-9: HTML5 Drag and Drop API | `is_element_draggable()` в lumen-dom (HTML LS §9.3.3); `DndState` + `DND_THRESHOLD` + `js_drag_event()` в shell; полный lifecycle: dragstart→drag/dragover/dragenter/dragleave→drop/dragend. 231 тест lumen-dom, 2081 lumen-js. |
 | 2026-06-16 | PH3-8: Web Animations API Level 1 (JS runtime) | `DocumentTimeline`, `KeyframeEffect`, `Animation` (play/pause/cancel/finish/reverse), `AnimationPlaybackEvent`; `element.animate()` + `element.getAnimations()`; `document.timeline` + `document.getAnimations()`; интерполяция (числа/цвета/transform), easing (linear/ease/cubic-bezier/steps), fill/direction/iterations. 21 тест. |
 | 2026-06-16 | PH3-7: `contentEditable` + Input Events Level 2 + Selection routing | `node_is_contenteditable()`, `find_editing_host()` в lumen-dom; 5 Rust-биндингов + JS-свойства (`contentEditable`, `isContentEditable`) + `_lumen_handle_contenteditable_key()` в lumen-js; маршрутизация клавиш в shell через DOM (не eval_js). 17 новых тестов. |
