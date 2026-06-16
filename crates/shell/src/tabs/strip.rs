@@ -140,10 +140,10 @@ pub struct TabEntry {
     /// Whether the built-in ad/tracker request filter is active for this tab.
     ///
     /// Per-tab and independent: toggled by the checkbox rendered inside the tab
-    /// (left of the close button). Synced into the process-global toggle
-    /// (`crate::config::set_adblock_enabled`) when the tab becomes active or its
-    /// checkbox is flipped, so the filter that governs the tab's page fetches
-    /// reflects this flag. Default `true`.
+    /// (at its left edge). Synced into the process-global toggle
+    /// (`lumen_network::set_global_adblock_enabled`) when the tab becomes active
+    /// or its checkbox is flipped, so the filter that governs the tab's page
+    /// fetches reflects this flag. Default `true`.
     pub adblock: bool,
 }
 

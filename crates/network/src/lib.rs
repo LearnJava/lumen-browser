@@ -69,6 +69,47 @@ pub use socks5::Socks5Proxy;
 pub use webauthn::VirtualAuthenticator;
 pub use brotli::BrotliContentDecoder;
 pub use filter::{DefaultFilterList, EasyListFilter, HostsFilter, CompositeFilter};
+
+// ── Process-global ad-block filter ────────────────────────────────────────────
+//
+// A single toggle + filter consulted by EVERY request (see the filter gate in
+// `fetch_single`) when the per-client `with_filter` is unset. This makes the
+// ad-block setting apply uniformly across all fetch paths — the shell's inline
+// pipeline AND the driver's `WinitSession` — instead of having to wire each
+// `HttpClient` construction site individually. The shell flips
+// [`set_global_adblock_enabled`] from the active tab's per-tab checkbox.
+
+/// Whether the process-global ad-block filter is active. Default: off.
+static GLOBAL_ADBLOCK_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// The installed global filter (e.g. `EasyListFilter` over `DefaultFilterList`).
+static GLOBAL_ADBLOCK_FILTER: std::sync::OnceLock<Arc<dyn lumen_core::ext::RequestFilter>> =
+    std::sync::OnceLock::new();
+
+/// Enable or disable the process-global ad-block filter.
+pub fn set_global_adblock_enabled(on: bool) {
+    GLOBAL_ADBLOCK_ENABLED.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the process-global ad-block filter is currently enabled.
+#[must_use]
+pub fn global_adblock_enabled() -> bool {
+    GLOBAL_ADBLOCK_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Install the process-global ad-block filter. Idempotent: the first call wins.
+pub fn install_global_adblock_filter(filter: Arc<dyn lumen_core::ext::RequestFilter>) {
+    let _ = GLOBAL_ADBLOCK_FILTER.set(filter);
+}
+
+/// The active global filter, or `None` when disabled or not yet installed.
+fn global_adblock_filter() -> Option<Arc<dyn lumen_core::ext::RequestFilter>> {
+    if global_adblock_enabled() {
+        GLOBAL_ADBLOCK_FILTER.get().cloned()
+    } else {
+        None
+    }
+}
 pub use http_cache::{HttpCache, HttpCacheBackend, DiskHttpCache, lumen_cache_dir};
 pub use http::{HttpProfile, H2Settings, H2StreamPriority, ClientHintsProfile, HeaderOrder};
 pub use mock::MockTransport;
@@ -1255,7 +1296,12 @@ fn fetch_with_redirect(
     // в сеть и НЕ генерит Started/Completed. Каждый redirect-hop проверяется
     // независимо, поэтому переход с нейтрального адреса на трекер тоже
     // ловится.
-    if let Some(f) = filter
+    // Effective filter: the per-client `with_filter`, else the process-global
+    // ad-block filter (so all fetch paths honour the shell's toggle uniformly).
+    let global_ad = global_adblock_filter();
+    let effective_filter: Option<&dyn lumen_core::ext::RequestFilter> =
+        filter.or(global_ad.as_deref());
+    if let Some(f) = effective_filter
         && let Some(reason) = f.should_block(url)
     {
         if let Some(s) = sink {
