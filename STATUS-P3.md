@@ -117,6 +117,17 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
 
+- **BUG-166** (2026-06-16) — `video_bindings::tests::native_video_load_registers_pending`
+  падал при параллельном прогоне `lumen-js` (в изоляции — PASS). Корень: два теста
+  (`native_video_load_registers_pending` и `native_video_ready_false_before_decode`)
+  гонялись за процесс-глобальный синглтон `video_gif_store`
+  (`STORE: OnceLock<RwLock<Option<Arc>>>`). Биндинг `__lumen_video_load` захватывает
+  `get_video_gif_store()` в момент `install`; если второй тест перезаписывал глобал
+  между `set_video_gif_store` и `install`/`load` первого — load уходил в чужой store,
+  а проверка `store.pending_loads` видела пустоту. Фикс — test-only
+  `static STORE_GUARD: Mutex<()>`, оба теста берут lock на всё тело, сериализуя доступ
+  к глобалу. Прогон 3× зелёный, clippy чист.
+
 - **BUG-163** (2026-06-15) — картинки на lenta.ru показывались серыми боксами. Все
   116 `<img>` там `loading="lazy"`. Две причины: (1) `LazyImageSlot` всегда красил
   серый placeholder даже после загрузки картинки (атрибут `loading=lazy` не
