@@ -54,20 +54,43 @@ pub fn global() -> &'static FingerprintProfile {
     GLOBAL.get_or_init(FingerprintProfile::default)
 }
 
-/// Install the built-in ad/tracker filter as the process-global
-/// (`lumen_network::install_global_adblock_filter`) and enable it.
+/// Initialise the ad-block subsystem and install the process-global filter.
 ///
-/// Call once at startup. The filter (`EasyListFilter` over the bundled
-/// `DefaultFilterList`) is then consulted by every `HttpClient` request on every
-/// fetch path; the per-tab checkbox flips it via
+/// Opens the persistent `AdblockStore` (`<exe_dir>/data/adblock/adblock.db`),
+/// seeds the default subscriptions (EasyList + EasyPrivacy) on first run, then
+/// loads any cached list bodies from disk, merges + parses them, and installs
+/// the result via `lumen_network::install_global_adblock_filter`. On a cold
+/// first run (no bodies downloaded yet) it falls back to the binary-embedded
+/// `DefaultFilterList` so blocking works immediately.
+///
+/// The returned [`AdblockStore`] handle is passed to the background refresh
+/// thread (see `main.rs`) which performs conditional GETs and hot-swaps the
+/// filter when a list changes. The filter is consulted by every `HttpClient`
+/// request on every fetch path; the per-tab checkbox flips it via
 /// `lumen_network::set_global_adblock_enabled`. Enabled here to match the
 /// default `TabEntry::adblock = true` of the initial tab.
-pub fn init_adblock() {
-    use lumen_core::ext::FilterListSource as _;
-    let rules = lumen_network::DefaultFilterList.fetch_rules().unwrap_or_default();
-    let filter = std::sync::Arc::new(lumen_network::EasyListFilter::parse(&rules));
-    lumen_network::install_global_adblock_filter(filter);
+#[must_use]
+pub fn init_adblock() -> std::sync::Arc<lumen_storage::adblock::AdblockStore> {
+    use lumen_storage::adblock::AdblockStore;
+
+    crate::adblock::ensure_dirs();
+    let store = match AdblockStore::open(crate::adblock::db_path()) {
+        Ok(s) => std::sync::Arc::new(s),
+        Err(e) => {
+            // Persistent store unavailable — fall back to in-memory + bundled list.
+            eprintln!("adblock: cannot open store ({e}); using in-memory defaults");
+            std::sync::Arc::new(
+                AdblockStore::open_in_memory().expect("in-memory sqlite always opens"),
+            )
+        }
+    };
+    if let Err(e) = store.seed_defaults_if_empty(&crate::adblock::default_subscriptions()) {
+        eprintln!("adblock: seeding defaults failed: {e}");
+    }
+    let count = crate::adblock::load_and_install(&store);
+    eprintln!("adblock: filter installed ({count} rules)");
     lumen_network::set_global_adblock_enabled(true);
+    store
 }
 
 /// User-configurable fingerprint identity (9F.1).

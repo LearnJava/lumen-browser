@@ -20,6 +20,7 @@
 //! Внешние CSS: `<link rel="stylesheet" href="...">` загружается с диска или
 //! по сети — в зависимости от того, каким способом загружена страница.
 
+mod adblock;
 mod address_bar;
 mod animation_scheduler;
 mod click_log;
@@ -400,7 +401,26 @@ fn run_window_mode(
     // Install + enable the process-global ad-block filter (consulted by every
     // HttpClient on all fetch paths). Matches the initial tab's default (on);
     // the per-tab checkbox flips it via lumen_network::set_global_adblock_enabled.
-    config::init_adblock();
+    // Returns the persistent store; offline-first (cached lists / bundled fallback).
+    let adblock_store = config::init_adblock();
+
+    // Background refresh of external filter lists (EasyList/EasyPrivacy):
+    // conditional GET of any list past its ~4-day expiry, then hot-swap the
+    // reparsed filter. Best-effort — network errors keep the cached version;
+    // panics are isolated to this thread and never crash the browser.
+    {
+        let store = std::sync::Arc::clone(&adblock_store);
+        let http = config::global().apply_http(lumen_network::HttpClient::new());
+        std::thread::Builder::new()
+            .name("adblock-refresh".to_owned())
+            .spawn(move || {
+                if adblock::refresh(&store, &http) {
+                    let count = adblock::load_and_install(&store);
+                    eprintln!("adblock: lists updated, filter hot-swapped ({count} rules)");
+                }
+            })
+            .ok();
+    }
 
     // Streaming pipeline: окно создаётся немедленно, загрузка стартует
     // после `resumed` в background-потоке. До прихода данных рисуем пустую страницу.
