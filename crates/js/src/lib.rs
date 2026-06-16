@@ -1242,9 +1242,9 @@ impl QuickJsRuntime {
             }
 
             // WICG Idle Detection API — window.IdleDetector.
-            // Phase 0: requestPermission() → 'granted'; start() resolves with fixed
-            // {userState:'active', screenState:'unlocked'}; 'change' event never fires.
-            // Phase 1: wire _lumen_idle_query_* native hooks to OS idle-time APIs.
+            // Phase 1: __lumen_idle_get_idle_ms() → Win32 GetLastInputInfo on Windows;
+            // returns 0 on other platforms. IdleDetector.start() polls via setInterval
+            // and fires 'change' when userState transitions active ↔ idle.
             if let Err(e) = idle_detection::install_idle_detection_bindings(&ctx) {
                 eprintln!("Idle Detection API init failed: {}", e);
             }

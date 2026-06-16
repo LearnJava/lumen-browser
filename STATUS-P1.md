@@ -6,7 +6,8 @@
 
 ## In progress
 
-idle
+PH3-16: Idle Detection API Phase 1 — OS idle time via Win32 GetLastInputInfo  branch: p1-ph3-16-idle-detection
+Next step: implement user_idle_ms() + update IDLE_DETECTION_SHIM + register __lumen_idle_get_idle_ms binding  crates/js/src/idle_detection.rs
 
 ---
 
