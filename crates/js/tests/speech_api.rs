@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 fn make_rt() -> QuickJsRuntime {
     let rt = QuickJsRuntime::new().unwrap();
     let doc = Arc::new(Mutex::new(Document::new()));
-    rt.install_dom(doc, "about:blank", None, None, None, None, None, None, None, false)
+    rt.install_dom(doc, "about:blank", None, None, None, None, None, None, None, None, false)
         .unwrap();
     rt
 }

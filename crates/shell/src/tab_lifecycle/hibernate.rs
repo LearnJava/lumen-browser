@@ -118,6 +118,8 @@ pub(crate) fn restore_js_context(
         ls_store,
         idb,
         sw,
+        None, // sw_worker_store: SW re-registers on script re-run after restore
+        None, // cache_backend: in-memory Cache API after restore
         cookie_banner_dismiss,
         deterministic,
         false, // cross_origin_isolated: not preserved across hibernation

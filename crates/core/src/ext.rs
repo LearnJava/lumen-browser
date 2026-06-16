@@ -3413,3 +3413,45 @@ mod audio_playback_tests {
         assert_eq!(p.can_play_type("audio/mpeg; codecs=mp3"), "probably");
     }
 }
+
+// ============================================================================
+// Service Worker execution thread types (PH3-20: SW fetch interception).
+// ============================================================================
+
+/// Message sent from the main thread to a Service Worker execution thread.
+///
+/// The network layer creates one of these per intercepted request and sends it
+/// to the SW thread via `SwWorkerHandle::tx`. The SW thread dispatches a
+/// `FetchEvent`, waits for `respondWith()` to resolve, and sends the body back
+/// through `response_tx`.
+pub struct SwFetchRequest {
+    /// Absolute URL of the intercepted request.
+    pub url: String,
+    /// HTTP method (GET, POST, etc.).
+    pub method: String,
+    /// Channel for the SW thread to send its response body back.
+    /// `None` means the SW did not call `respondWith()` or the response had no body.
+    pub response_tx: std::sync::mpsc::SyncSender<Option<Vec<u8>>>,
+}
+
+/// Opaque handle to a running Service Worker execution thread.
+///
+/// Created by `lumen-js::sw_worker::spawn_sw_worker` when a SW activates.
+/// Held by `ServiceWorkerInterceptor` (in `lumen-storage`) to route fetch
+/// requests to the correct SW thread.
+pub struct SwWorkerHandle {
+    /// Channel to send fetch requests to the SW thread.
+    /// `mpsc::Sender` is `Clone` — store a clone when dispatch and lock are separate.
+    pub tx: std::sync::mpsc::Sender<SwFetchRequest>,
+    /// Thread join handle — kept alive so the thread doesn't detach.
+    pub _thread: std::thread::JoinHandle<()>,
+}
+
+/// Map from `(origin, scope)` to live SW worker handles.
+///
+/// Written by `lumen-js` (`_lumen_sw_activate_script` binding) when a SW
+/// activates. Read by `ServiceWorkerInterceptor` to route fetch requests to
+/// the correct SW. Created in `lumen-shell`; shared via `Arc`.
+pub type SwWorkerStore = std::sync::Arc<
+    std::sync::Mutex<std::collections::HashMap<(String, String), SwWorkerHandle>>,
+>;

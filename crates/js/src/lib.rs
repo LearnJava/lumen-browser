@@ -115,6 +115,7 @@ pub mod idle_detection;
 pub mod topics_api;
 pub mod attribution_reporting;
 pub mod pointer_capture;
+pub mod sw_worker;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
@@ -311,6 +312,13 @@ pub struct QuickJsRuntime {
     /// Cleared by `_lumen_release_capture_state()` or implicitly on `pointerup`/`pointercancel`.
     /// Shell reads via `pointer_capture_nid()` to route pointer events to the captured element.
     pointer_capture_nid: Arc<Mutex<Option<u32>>>,
+    /// Live SW execution threads keyed by `(origin, scope)`.
+    ///
+    /// Set by the shell via `with_sw_worker_store` before pages load. When provided,
+    /// `_lumen_sw_activate_script` spawns a QuickJS thread for each activating SW and
+    /// registers it here. `ServiceWorkerInterceptor` reads the same store to route
+    /// network requests to the correct SW thread.
+    sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
 }
 
 struct Inner {
@@ -372,7 +380,19 @@ impl QuickJsRuntime {
             module_import_map,
             module_types,
             pointer_capture_nid: Arc::new(Mutex::new(None)),
+            sw_worker_store: None,
         })
+    }
+
+    /// Attach a `SwWorkerStore` so that `_lumen_sw_activate_script` can spawn and
+    /// register SW execution threads when pages activate a Service Worker.
+    ///
+    /// Must be called before `install_dom` to take effect. The same `Arc` should
+    /// be passed to `ServiceWorkerInterceptor::with_sw_workers` so both sides share
+    /// the same worker registry.
+    pub fn with_sw_worker_store(mut self, store: lumen_core::ext::SwWorkerStore) -> Self {
+        self.sw_worker_store = Some(store);
+        self
     }
 
     /// Phase 0 import-attributes preprocessing (TC39 Stage 3): strip
@@ -510,6 +530,10 @@ impl QuickJsRuntime {
         idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
         sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
         cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
+        // PH3-20: live SW worker thread registry. When `Some`, takes precedence
+        // over a store set earlier via `with_sw_worker_store`; when `None`, the
+        // builder-set field (if any) is used instead.
+        sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
         // True when COOP=same-origin + COEP=require-corp are both present on this document.
         cross_origin_isolated: bool,
     ) -> JsResult<()> {
@@ -575,6 +599,7 @@ impl QuickJsRuntime {
                 idb_backend,
                 sw_backend,
                 cache_backend,
+                sw_worker_store.or_else(|| self.sw_worker_store.clone()),
                 Arc::clone(&self.scroll_states),
                 Arc::clone(&self.pending_scrolls),
                 Arc::clone(&self.pending_page_scrolls),
