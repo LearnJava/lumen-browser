@@ -6,7 +6,8 @@
 
 ## In progress
 
-*idle*
+PH3-19: `font-display: swap` — неблокирующая загрузка web-шрифтов  branch: p1-ph3-19-font-display
+Next step: split load_font_faces into local-sync + url-async, add FontLoaded event  crates/shell/src/main.rs:3430
 
 ---
 
