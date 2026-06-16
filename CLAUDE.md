@@ -252,22 +252,7 @@ grep "BUG-042" BUGS.md
 grep "LayoutBox" SYMBOLS.md
 ```
 
-**SYMBOLS.md — symbol index.** `SYMBOLS.md` is an auto-generated index of every `pub fn/struct/enum/trait/type` with `file:line` and first `///` doc line. Use it instead of reading source files to locate a symbol:
-
-```bash
-# Find where LayoutBox is defined:
-grep "LayoutBox" SYMBOLS.md
-
-# See all public items in lumen-paint:
-grep -A 300 "^## lumen-paint" SYMBOLS.md | grep -m 300 "^\`"
-
-# Find all public traits in the codebase:
-grep "**trait**" SYMBOLS.md
-```
-
-Then read only the target lines: `Read file offset=<line> limit=30`. This replaces reading an entire file just to find a function signature.
-
-Regenerate after adding/moving/renaming any public symbol: `python scripts/gen_symbols.py`. Add the updated `SYMBOLS.md` to the same commit as the code change.
+**SYMBOLS.md — symbol index.** Auto-generated index of every `pub fn/struct/enum/trait/type` with `file:line`. `grep "SymbolName" SYMBOLS.md` → `Read file offset=<line> limit=30`. Regenerate on every public API change: `python scripts/gen_symbols.py` (add to same commit).
 
 **Session start protocol.** At the beginning of each session:
 1. Read `STATUS-PN.md` (your developer number) — current "In progress" task
@@ -394,37 +379,13 @@ Current coverage — `graphic_tests/COVERAGE.md`.
 3. **Ignore text for now.** Glyph antialiasing will always diverge from Edge — not tracked until a dedicated task. Text-box geometry, padding/margin around text, line-height — that's layout, check as normal.
 4. **Never rewrite test pages to work around engine limitations.** Test pages are the ground truth — they represent correct CSS as Edge renders it. If a test fails, fix the engine, not the test. Simplifying HTML to make a test pass is a false positive: the engine didn't improve, the bar was lowered. The only valid reason to edit a test page is a bug in the test itself (wrong expected output).
 4a. **Never change test thresholds. The diff threshold is 0.5% for every test** — in `graphic_tests/run.py` and `crates/driver/tests/snapshot_vs_edge.rs`. Raising a threshold to make a test pass is forbidden (user rule, 2026-06-11): it masks real defects. Precedent: BUG-093 was "closed" by calibrating TEST-51 to 2.0% — the actual cause was BUG-123, a scroll-clip defect eating the container's border. If a test exceeds 0.5%, file a BUG-NNN and fix the engine.
-4b. **Known-debtors ratchet (user-approved 2026-06-11, implemented 2026-06-11).** The only sanctioned way to handle a page that cannot reach 0.5% because the required feature is deferred to a later phase: add an entry to `KNOWN_DEBTORS` dict in `graphic_tests/run.py` — `test_id → ("BUG-NNN", baseline_pct)`. The page is still rendered and diffed every run; its percentage is always printed (yellow ⚠). Ratchet semantics (±2% tolerance for gdigrab noise): actual > baseline+2 → FAIL (regression); |actual − baseline| ≤ 2 → DEBTOR (ok, pipeline continues); actual < baseline−2 → FAIL with "lower baseline to X" (ratchet — only moves down); actual ≤ 0.5% → FAIL with "remove entry". Exit from list happens **only by measurement**. Each entry requires an OPEN BUG-NNN. Thresholds still never change (rule 4a). Full plan for future Rust gate: `docs/plans/cpu-vs-edge-gate.md`.
+4b. **Known-debtors ratchet.** For pages that can't reach 0.5% because a feature is deferred: add `test_id → ("BUG-NNN", baseline_pct)` to `KNOWN_DEBTORS` in `run.py`. Ratchet (±2% gdigrab noise): regression if actual > baseline+2; ratchet down if actual < baseline-2; remove entry if ≤ 0.5%. Each entry requires an OPEN BUG-NNN. Full semantics in `run.py` comments and `docs/plans/cpu-vs-edge-gate.md`.
 5. **Single tracker — `BUGS.md` in the repo root.** One line per bug, compact format:
    ```
    BUG-018 | OPEN  | inline padding wrong on nested divs | layout/src/flow.rs:312
    BUG-003 | FIXED 2026-05-10 | composite glyphs missing | font/src/parser.rs:201
    ```
    New bug: append with next number (current tail: BUG-022). Fixed: change `OPEN` → `FIXED <date>`, do not delete. WONTFIX: stays in file as-is.
-
-### 8A.6 migration — COMPLETE (2026-05-31)
-
-The Python/gdigrab/Edge pipeline (`graphic_tests/run.py`) remains a **nightly CI job** (edge-comparison gate). The primary test gate is now:
-
-```bash
-cargo test -p lumen-driver --features cpu-render   # CPU snapshot gate — all 57 pages
-cargo test -p lumen-driver                          # structural assertions — 50 tests
-```
-
-**Completed subsystems of `cpu_raster` (all display-list primitives):**
-FillRect / FillRoundedRect / DrawBorder / DrawOutline / DrawLinearGradient / DrawRadialGradient /
-DrawConicGradient (libm-free `atan2` approx for cross-OS bit-identity) / DrawSvgPath / DrawImage
-(grey placeholder) / DrawText (bundled Inter via `lumen_font::Rasterizer`) / PushClipRect + PopClip /
-PushScrollLayer + PopScrollLayer / PushOpacity + PopOpacity / PushTransform + PopTransform (bilinear
-resample of page-space layer through affine) / PushBlendMode + PopBlendMode (all 16 CSS modes) /
-PushFilter + PopFilter (Gaussian blur + 7 colour filters) / PushBackdropFilter + PopBackdropFilter /
-PushMaskLinearGradient + PushMaskRadialGradient + PushMaskConicGradient + PushMaskImage + PopMask.
-
-`PAGES` in `snapshot_cpu.rs` covers the unit pages plus the interaction series (100–109) and
-`1000000-final`. Regenerate references:
-`SAVE_CPU_SNAPSHOTS=1 cargo test -p lumen-driver --features cpu-render`.
-
-Next: 8A.7 (shell as first BrowserSession client, Phase 4) — not scheduled.
 
 ---
 
@@ -434,15 +395,7 @@ Dependency graph and crate scope — in [lumen-plan.md](lumen-plan.md). Directio
 
 ### Extension traits (`lumen-core::ext`)
 
-**Defined:** `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `RequestFilter`, `EncodingDetector`, `EventSink`, `DnsResolver`, `HstsEnforcement`, `HttpCredentialProvider`, `FontProvider`, `JsRuntime` (`NullJsRuntime` stub), `JsFetchProvider`, `ClipboardProvider` (`navigator.clipboard`; process-global, installed via `lumen_js::set_clipboard_provider`; shell impl `PlatformClipboard` in `shell/src/platform/clipboard.rs` — Win32 / wl-copy+xclip / pbcopy), `CredentialProvider` (WebAuthn / passkeys backing `navigator.credentials`; process-global via `lumen_js::set_credential_provider`; impl `lumen_network::VirtualAuthenticator` — software ES256 passkey store), `JsWebSocketProvider` / `JsWebSocketSession` / `JsWsEvent`, `BrowserSession` (ADR-006, `core/src/ext.rs:1514`), `IdbBackend` (`lumen-storage::indexed_db`), `SwBackend` (`core/src/ext.rs:1530`; per-origin SW registration JSON snapshot persistence; impl `lumen_storage::SwStore`), `MemoryPressureSource` + `MemoryPressureLevel` (ADR-008 §10H, `core/src/ext.rs` + `core/src/memory_pressure.rs`; Win32/Linux/macOS platform impls; `NullMemoryPressureSource` for tests), `EvictableCache` + `CacheRegistry` (ADR-008 §10D.3, `core/src/ext.rs`; implemented by `GlyphAtlas`, `ImageDecodeCache`, `LayerCache`; P3 shell wires `CacheRegistry::broadcast_pressure()` to `MemoryPressureSource` poll loop), `AudioCaptureProvider` (PH3-3; `getUserMedia({audio})`; process-global via `lumen_js::set_audio_capture_provider`; shell impl `PlatformAudioCapture` in `shell/src/platform/audio_capture.rs` — cpal/WASAPI/ALSA), `AudioPlaybackProvider` (PH3-11; `HTMLAudioElement` play/pause/seek; process-global via `lumen_js::set_audio_playback_provider`; `NullAudioPlaybackProvider` stub; shell impl `PlatformAudioPlayer` in `shell/src/platform/audio_player.rs` — rodio + per-handle audio thread), `ScreenCaptureProvider` + `ScreenCaptureHandle` + `VideoFrame` (PH3-17; `getDisplayMedia`; process-global via `lumen_js::set_screen_capture_provider`; `NullScreenCaptureProvider` stub; shell impl `PlatformScreenCapture` in `shell/src/platform/screen_capture.rs` — Win32 GDI BitBlt on Windows, no-op on Linux/macOS Phase 1).
-
-**Sprint 0 stubs:** `UnicodeProvider`, `IdnaProvider`, `PublicSuffixList`, `ContentDecoder` (`UnsupportedContentDecoder`), `FontFormat`, `SpellChecker`, `HyphenationProvider`.
-
-**Defined (Phase 2):** `KnowledgeStore` (`core/src/ext.rs`, impl `lumen-knowledge::DefaultKnowledgeStore` — §12.1–12.4; shell @notes omnibox wiring).
-
-**Defined (GG-1):** `AiBackend` (`core/src/ext.rs`; `query(prompt) -> String`; `NullAiBackend` stub; shell AI sidebar panel at `Ctrl+Shift+A`, `panels/ai_panel.rs`).
-
-**Planned:** `WindowingBackend`, `RenderBackend`, `TlsBackend`.
+Full list with implementations — [`subsystems/core.md`](subsystems/core.md). Planned: `WindowingBackend`, `RenderBackend`, `TlsBackend`.
 
 ---
 
@@ -575,16 +528,9 @@ git worktree remove .claude/worktrees/<task-name>
 
 Two sessions doing `git checkout` in the same directory causes git to stash one session's work — recovery via `git stash pop` is fragile.
 
-#### Forbidden in shared working tree
+#### Safety rules in worktrees
 
-- `git checkout <foreign-branch>` with uncommitted changes. Commit (`git commit -am "wip"`) or stash first.
-- If accidentally on a foreign branch: do **not** run `git restore .` — check `git stash list` first, restore with `git stash pop`, then switch back.
-
-#### Defensive WIP commits
-
-Before any long pause (debug, test run, large multi-file edit) — `git commit -am "wip: <description>"` on your branch. Protects against process crashes and accidental stash collisions.
-
-Before merge, squash wip commits with `git rebase -i HEAD~N` — only while the branch hasn't been pulled by another session.
+Never `git checkout <foreign-branch>` with uncommitted changes — commit (`git commit -am "wip: ..."`) first. If accidentally on a wrong branch: check `git stash list` before `git restore .`, then `git stash pop` and switch back. Before any long pause — commit a wip: protects against crashes. Squash wip commits with `git rebase -i HEAD~N` before merge (only while branch hasn't been pulled).
 
 #### Never leave a worktree on `main` with uncommitted/staged changes
 
