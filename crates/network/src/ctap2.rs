@@ -1124,8 +1124,9 @@ mod linux_hid {
                 use std::os::unix::io::AsRawFd;
                 self.file.lock().unwrap().as_raw_fd()
             };
-            // SAFETY: pollfd is a repr(C) struct matching the kernel ABI; fd is valid.
-            let ready = unsafe {
+            // BUG-169: `libc_poll` is itself a safe wrapper (its body holds the
+            // SAFETY-justified `unsafe`), so no outer `unsafe` block is needed.
+            let ready = {
                 let mut pfd = PollFd { fd, events: 0x0001 /* POLLIN */, revents: 0 };
                 libc_poll(&mut pfd, 1, timeout_ms)
             };
@@ -1162,7 +1163,9 @@ mod linux_hid {
     }
 
     /// Parse a HID report descriptor and check for FIDO2 Usage Page (0xF1D0) + Usage (0x01).
-    fn descriptor_is_fido(desc: &[u8]) -> bool {
+    // BUG-169: pub(crate) so the in-crate `#[cfg(linux)]` tests can call it
+    // (was private → Linux `cargo test -p lumen-network` failed to build).
+    pub(crate) fn descriptor_is_fido(desc: &[u8]) -> bool {
         let mut i = 0;
         let mut usage_page: u16 = 0;
         while i < desc.len() {
@@ -1188,9 +1191,8 @@ mod linux_hid {
             };
             match tag {
                 0x01 => usage_page = val as u16,
-                0x02 if usage_page == FIDO_USAGE_PAGE => {
-                    if val as u16 == FIDO_USAGE { return true; }
-                }
+                // BUG-169: inner `if` folded into the match guard (clippy::collapsible_if).
+                0x02 if usage_page == FIDO_USAGE_PAGE && val as u16 == FIDO_USAGE => return true,
                 _ => {}
             }
         }

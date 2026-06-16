@@ -20,6 +20,7 @@
 //! Внешние CSS: `<link rel="stylesheet" href="...">` загружается с диска или
 //! по сети — в зависимости от того, каким способом загружена страница.
 
+mod adblock;
 mod address_bar;
 mod animation_scheduler;
 mod click_log;
@@ -400,7 +401,26 @@ fn run_window_mode(
     // Install + enable the process-global ad-block filter (consulted by every
     // HttpClient on all fetch paths). Matches the initial tab's default (on);
     // the per-tab checkbox flips it via lumen_network::set_global_adblock_enabled.
-    config::init_adblock();
+    // Returns the persistent store; offline-first (cached lists / bundled fallback).
+    let adblock_store = config::init_adblock();
+
+    // Background refresh of external filter lists (EasyList/EasyPrivacy):
+    // conditional GET of any list past its ~4-day expiry, then hot-swap the
+    // reparsed filter. Best-effort — network errors keep the cached version;
+    // panics are isolated to this thread and never crash the browser.
+    {
+        let store = std::sync::Arc::clone(&adblock_store);
+        let http = config::global().apply_http(lumen_network::HttpClient::new());
+        std::thread::Builder::new()
+            .name("adblock-refresh".to_owned())
+            .spawn(move || {
+                if adblock::refresh(&store, &http) {
+                    let count = adblock::load_and_install(&store);
+                    eprintln!("adblock: lists updated, filter hot-swapped ({count} rules)");
+                }
+            })
+            .ok();
+    }
 
     // Streaming pipeline: окно создаётся немедленно, загрузка стартует
     // после `resumed` в background-потоке. До прихода данных рисуем пустую страницу.
@@ -465,6 +485,7 @@ fn run_window_mode(
         stream_builder: None,
         stream_last_paint: std::time::Instant::now(),
         stream_sheet: lumen_css_parser::Stylesheet::default(),
+        stream_layout_seeded: false,
         preload_dispatched: std::collections::HashSet::new(),
         ime_composing: None,
         bfcache: BfCache::new(16),
@@ -2020,6 +2041,53 @@ impl PageSource {
         }
     }
 
+    /// Как `load_bytes`, но для сетевых (URL) источников тело финального
+    /// 2xx-ответа стримится: каждая декодированная порция передаётся в
+    /// `on_chunk` ещё до полного скачивания (PH1-2a). Для несетевых источников
+    /// (File/Snapshot/Static) делегирует в `load_bytes` без вызовов `on_chunk`
+    /// — caller сам нарежет уже-загруженное тело. Возвращаемый `RawPage.bytes`
+    /// — полное декодированное тело (как у `load_bytes`).
+    fn load_bytes_streaming(
+        &self,
+        sink: Arc<dyn EventSink>,
+        cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+        on_chunk: &mut dyn FnMut(&[u8]),
+    ) -> Result<RawPage, Box<dyn Error>> {
+        let PageSource::Url(url) = self else {
+            return self.load_bytes(sink, cookie_jar);
+        };
+        use lumen_core::url::Url;
+        use lumen_network::{BrotliContentDecoder, HttpClient};
+
+        let lumen_url = Url::parse(url)?;
+        let mut builder = HttpClient::new()
+            .with_sink(sink)
+            .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()));
+        if let Some(jar) = cookie_jar {
+            builder = builder.with_cookie_jar(
+                Arc::new(lumen_storage::CookieJarProvider::new(jar)),
+                None,
+            );
+        }
+        let client = crate::config::global().apply_http(builder);
+        let (bytes, resp_headers) = client.fetch_page_streaming(&lumen_url, on_chunk)?;
+        eprintln!("Получено {} байт (streaming)", bytes.len());
+        let coop = resp_headers.iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("cross-origin-opener-policy"))
+            .map(|(_, v)| v.as_str());
+        let coep = resp_headers.iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("cross-origin-embedder-policy"))
+            .map(|(_, v)| v.as_str());
+        let cross_origin_isolated = lumen_network::CrossOriginIsolationState::from_headers(coop, coep)
+            .is_cross_origin_isolated();
+        Ok(RawPage {
+            bytes,
+            base: ResourceBase::Url(url.clone()),
+            content_type: Some("text/html"),
+            cross_origin_isolated,
+        })
+    }
+
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load(
         &self,
@@ -2556,6 +2624,37 @@ fn load_css_for_streaming(resolved: &str) -> Option<String> {
     }
 }
 
+/// Прогнать порцию HTML через preload-сканер, эмитнуть `EarlyPreloadHints` и
+/// параллельно загрузить найденные стили (PH1-2 / PH1-8). Общая логика для обоих
+/// путей `start_streaming_load`: сетевого streaming-а (URL) и нарезки
+/// уже-загруженного буфера (File/Snapshot/Static). Hint-ы шлются ДО передачи
+/// chunk-а DOM-парсеру, чтобы fetch подресурсов стартовал раньше.
+fn feed_preload_and_emit(
+    scanner: &mut lumen_html_parser::PreloadScanner,
+    chunk: &[u8],
+    base: &ResourceBase,
+    proxy: &EventLoopProxy<LoadEvent>,
+) {
+    let early = scanner.feed_bytes(chunk);
+    if early.is_empty() {
+        return;
+    }
+    let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(early.clone(), base.clone()));
+    // PH1-2: параллельная загрузка CSS для промежуточных кадров.
+    for hint in &early {
+        if let lumen_html_parser::PreloadHint::Stylesheet { url } = hint {
+            let css_url = base.resolve_str(url);
+            let proxy2 = proxy.clone();
+            std::thread::spawn(move || {
+                if let Some(text) = load_css_for_streaming(&css_url) {
+                    let sheet = lumen_css_parser::parse(&text);
+                    let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::new(sheet)));
+                }
+            });
+        }
+    }
+}
+
 /// Максимум одновременных потоков загрузки подресурсов одного типа.
 /// Подобрано под типичный браузерный лимит соединений на хост (~6) + запас.
 /// Работа I/O-bound (сетевой fetch), потоки в основном спят на сокете, поэтому
@@ -2973,6 +3072,8 @@ struct PageSnapshot {
     stream_last_paint: std::time::Instant,
     /// CSS accumulated from parallel CSS-loader threads during streaming; applied to intermediate frames.
     stream_sheet: lumen_css_parser::Stylesheet,
+    /// PH1-2b: whether `layout_box` is a valid graft source for the current stream.
+    stream_layout_seeded: bool,
     preload_dispatched: std::collections::HashSet<String>,
     ime_composing: Option<String>,
     bfcache: BfCache,
@@ -4552,6 +4653,11 @@ struct Lumen {
     /// в `paint_partial_dom` вместо пустой таблицы. Сбрасывается на каждый
     /// новый страничный load.
     stream_sheet: lumen_css_parser::Stylesheet,
+    /// PH1-2b: `true` когда `layout_box` содержит дерево, построенное из текущего
+    /// streaming-DOM (валидный источник для инкрементального graft). `false` в
+    /// начале новой навигации — первый промежуточный кадр делает полный layout и
+    /// «засевает» дерево; последующие кадры релейаутят инкрементально.
+    stream_layout_seeded: bool,
     /// URL subresource-хинтов, уже отправленных в sink во время streaming
     /// (`EarlyPreloadHints`). Финальный `dispatch_preload_hints` в `LoadDone`
     /// пропускает URL из этого набора — без дублей в stderr и без повторных
@@ -5809,51 +5915,49 @@ impl Lumen {
         let cookie_jar = Arc::clone(&self.cookie_jar);
 
         std::thread::spawn(move || {
-            let raw = match source.load_bytes(Arc::clone(&sink), Some(cookie_jar)) {
-                Ok(r) => r,
-                Err(e) => {
-                    let _ = proxy.send_event(LoadEvent::LoadError(e.to_string()));
-                    return;
-                }
-            };
-
             // PH1-8: инкрементальный preload-сканер — обрабатывает каждый chunk.
             // Hint-ы отправляются ДО соответствующего HtmlChunk, чтобы fetch
             // начался параллельно с DOM-парсингом (spec §13.2.6.4.7).
             let mut preload_scanner = lumen_html_parser::PreloadScanner::new();
 
-            let mut pos = 0;
-            while pos < raw.bytes.len() {
-                let end = (pos + STREAM_CHUNK_BYTES).min(raw.bytes.len());
-                let chunk = raw.bytes[pos..end].to_vec();
-
-                // Сканируем chunk на hint-ы перед отправкой DOM-парсеру.
-                let early = preload_scanner.feed_bytes(&chunk);
-                if !early.is_empty() {
-                    let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(
-                        early.clone(),
-                        raw.base.clone(),
-                    ));
-                    // PH1-2: параллельная загрузка CSS для промежуточных кадров.
-                    for hint in &early {
-                        if let lumen_html_parser::PreloadHint::Stylesheet { url } = hint {
-                            let css_url = raw.base.resolve_str(url);
-                            let proxy2 = proxy.clone();
-                            std::thread::spawn(move || {
-                                if let Some(text) = load_css_for_streaming(&css_url) {
-                                    let sheet = lumen_css_parser::parse(&text);
-                                    let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::new(sheet)));
-                                }
-                            });
-                        }
+            // PH1-2a: для URL-источников тело стримится прямо с сокета —
+            // порции прилетают в `on_chunk` по мере чтения, не дожидаясь полной
+            // загрузки. Для File/Snapshot/Static тело уже в памяти, поэтому его
+            // достаточно нарезать на STREAM_CHUNK_BYTES (прежнее поведение).
+            let raw = if let PageSource::Url(url) = &source {
+                let base = ResourceBase::Url(url.clone());
+                let chunk_proxy = proxy.clone();
+                let mut on_chunk = |chunk: &[u8]| {
+                    feed_preload_and_emit(&mut preload_scanner, chunk, &base, &chunk_proxy);
+                    let _ = chunk_proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec()));
+                };
+                match source.load_bytes_streaming(Arc::clone(&sink), Some(cookie_jar), &mut on_chunk) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let _ = proxy.send_event(LoadEvent::LoadError(e.to_string()));
+                        return;
                     }
                 }
-
-                if proxy.send_event(LoadEvent::HtmlChunk(chunk)).is_err() {
-                    return; // event loop завершён
+            } else {
+                let raw = match source.load_bytes(Arc::clone(&sink), Some(cookie_jar)) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let _ = proxy.send_event(LoadEvent::LoadError(e.to_string()));
+                        return;
+                    }
+                };
+                let mut pos = 0;
+                while pos < raw.bytes.len() {
+                    let end = (pos + STREAM_CHUNK_BYTES).min(raw.bytes.len());
+                    let chunk = &raw.bytes[pos..end];
+                    feed_preload_and_emit(&mut preload_scanner, chunk, &raw.base, &proxy);
+                    if proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec())).is_err() {
+                        return; // event loop завершён
+                    }
+                    pos = end;
                 }
-                pos = end;
-            }
+                raw
+            };
 
             // Финальные hint-ы из буферизованного хвоста сканера.
             let tail = preload_scanner.end();
@@ -5881,13 +5985,24 @@ impl Lumen {
             Err(_) => return,
         };
 
-        let layout = lumen_layout::layout_measured(doc, &self.stream_sheet, viewport, &measurer);
+        // PH1-2b: после первого («засевающего») кадра релейаутим инкрементально —
+        // переиспользуем геометрию неизменённого префикса из прошлого кадра,
+        // релейаутим только новые/изменённые поддеревья. Полный layout всего
+        // частичного DOM на каждый 16-мс тик тормозил большие страницы.
+        let null_hp = lumen_core::ext::NullHyphenationProvider;
+        let layout = match (self.stream_layout_seeded, self.layout_box.as_ref()) {
+            (true, Some(prev)) => lumen_layout::layout_streaming_incremental(
+                doc, &self.stream_sheet, viewport, &measurer, &null_hp, false, prev,
+            ),
+            _ => lumen_layout::layout_measured(doc, &self.stream_sheet, viewport, &measurer),
+        };
         let dl = paint_ordered(&layout);
 
         self.content_height = content_height_of(&dl);
         self.content_width = content_width_of(&dl);
         self.display_list = dl;
         self.layout_box = Some(layout);
+        self.stream_layout_seeded = true;
         self.update_snap_containers();
         self.update_scroll_containers();
 
@@ -6205,6 +6320,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // Сбрасываем состояние предыдущего streaming-цикла — новая страница.
         self.preload_dispatched.clear();
         self.stream_sheet = lumen_css_parser::Stylesheet::default();
+        self.stream_layout_seeded = false;
         // Record navigation start for the initial streaming load.
         self.nav_start = Some(std::time::Instant::now());
         self.start_streaming_load();
@@ -13559,6 +13675,7 @@ impl Lumen {
             stream_builder: self.stream_builder.take(),
             stream_last_paint: self.stream_last_paint,
             stream_sheet: std::mem::take(&mut self.stream_sheet),
+            stream_layout_seeded: self.stream_layout_seeded,
             preload_dispatched: std::mem::take(&mut self.preload_dispatched),
             ime_composing: self.ime_composing.take(),
             bfcache: std::mem::replace(&mut self.bfcache, BfCache::new(16)),
@@ -13628,6 +13745,7 @@ impl Lumen {
         self.stream_builder = snap.stream_builder;
         self.stream_last_paint = snap.stream_last_paint;
         self.stream_sheet = snap.stream_sheet;
+        self.stream_layout_seeded = snap.stream_layout_seeded;
         self.preload_dispatched = snap.preload_dispatched;
         self.ime_composing = snap.ime_composing;
         self.bfcache = snap.bfcache;
@@ -13710,6 +13828,7 @@ impl Lumen {
         self.stream_builder = None;
         self.stream_last_paint = std::time::Instant::now();
         self.stream_sheet = lumen_css_parser::Stylesheet::default();
+        self.stream_layout_seeded = false;
         self.preload_dispatched = std::collections::HashSet::new();
         self.ime_composing = None;
         self.bfcache = BfCache::new(16);

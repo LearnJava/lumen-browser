@@ -13,6 +13,11 @@
 //! video) on DWM-era Windows.  DXGI Desktop Duplication API is more reliable and
 //! is scheduled for Phase 2.
 
+// BUG-169: imports consumed only by the Windows GDI impl below; on
+// Linux/macOS the stub re-exports NullScreenCaptureProvider, so they read as
+// unused there. `allow` is no-op on Windows and silences the cross-platform
+// false positive without risking the Windows build via cfg-gating.
+#[allow(unused_imports)]
 use lumen_core::ext::{
     ScreenCaptureConfig, ScreenCaptureError, ScreenCaptureHandle,
     ScreenCaptureProvider, ScreenSourceDescriptor, VideoFrame,

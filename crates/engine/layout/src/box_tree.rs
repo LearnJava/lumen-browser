@@ -2269,6 +2269,53 @@ pub fn lay_out_incremental(
     crate::incremental::clear_dirty(root);
 }
 
+/// Streaming incremental layout (PH1-2b).
+///
+/// Builds a fresh box tree from `doc` + `sheet` — which, during a streaming load,
+/// grows by nodes appended at the end each tick — then reuses laid-out geometry
+/// from `prev` (the previous tick's result) for every subtree whose node id, box
+/// kind payload and computed style are unchanged. Only new or changed subtrees
+/// are re-laid-out; unchanged prefix siblings are repositioned in O(1) by the
+/// `lay_out` incremental fast path (a zero-delta translate when content is merely
+/// appended below them).
+///
+/// `prev` must be a tree produced by an earlier `layout_streaming_incremental`
+/// or `layout_measured*` call on an ancestor DOM of `doc` (same, stable node ids
+/// — the incremental tree builder only appends new ids). When the stylesheet
+/// changed since `prev` was built, the per-box style comparison naturally marks
+/// the affected boxes dirty and re-lays them out.
+///
+/// Post-layout passes (container queries, anchor positioning, first-line split)
+/// are NOT re-run here — same Phase 0 limitation as [`lay_out_incremental`]. The
+/// final `LoadDone` pipeline applies them via a full `layout_measured_hyp`.
+#[allow(clippy::too_many_arguments)]
+pub fn layout_streaming_incremental(
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    measurer: &dyn TextMeasurer,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    prev: &LayoutBox,
+) -> LayoutBox {
+    crate::style::invalidate_rule_idx_cache();
+    crate::content_visibility::reset_cv_skipped();
+    let root_style = ComputedStyle::root();
+    let flat = build_flat_tree(doc);
+    let counters = precompute_counters(doc, sheet, viewport, &flat, dark_mode);
+    let registry = build_counter_style_registry(sheet);
+    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode);
+    propagate_canvas_background(doc, &mut root);
+    apply_font_size_adjust(&mut root, measurer);
+    // Every freshly-built box needs layout; graft clears the bit on reusable
+    // subtrees so the incremental pass only re-lays-out new/changed content.
+    crate::incremental::mark_subtree_dirty(&mut root);
+    crate::incremental::graft_geometry(&mut root, prev);
+    let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
+    lay_out_incremental(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp);
+    root
+}
+
 /// CSS Fonts L5 §4 — used `font-size` after applying `font-size-adjust`.
 ///
 /// The aspect value of the rendered font is `x_height_px(size) / size`. To make

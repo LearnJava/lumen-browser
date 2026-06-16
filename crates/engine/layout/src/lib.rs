@@ -72,7 +72,7 @@ pub use animation::{
 pub use box_tree::{
     apply_container_styles, build_iframe_document,
     collect_background_image_requests, collect_image_requests, is_open_details, layout, layout_measured,
-    layout_measured_hyp, lay_out_incremental, BoxKind, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox,
+    layout_measured_hyp, layout_streaming_incremental, lay_out_incremental, BoxKind, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox,
     PseudoKind, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, ViewBox,
 };
 pub use incremental::{DirtyBits, mark_dirty, mark_dirty_set, clear_dirty, translate_subtree};

@@ -6,29 +6,11 @@
 
 ## In progress
 
-**BUG-085 — Linear/radial gradient rendering deviation**  
-Branch: p2-bug085-gradient  
-Status: Investigation & fix (TEST-39: 12.05% deviation; repeating gradients not rendering)  
-Next: dump-layout analysis, identify missing gradient tiling logic in femtovg backend
+_(none)_
 
 ---
 
 ## Next
-
-### Ad-block: внешние фильтр-листы (приоритет)
-
-**Полная спека:** [docs/tasks/p2-adblock-filter-lists.md](docs/tasks/p2-adblock-filter-lists.md)
-Ветка: `p2-adblock-filter-lists` · Размер L · крейты `lumen-storage` + `lumen-network` + `lumen-shell`.
-Заменить вшитый `DefaultFilterList` на подгружаемые EasyList/EasyPrivacy. Хранение — ТОЛЬКО в
-папке браузера (`<exe_dir>/data/adblock/`): подписки + метаданные кэша в SQLite (`AdblockStore`),
-тела листов — файлами `lists/*.txt`, правила пользователя — `custom-rules.txt`. Матчинг
-`should_block` остаётся в RAM (`EasyListFilter`) — в БД не класть. Offline-first старт +
-фоновый условный GET (If-None-Match/If-Modified-Since, ~4 дня). Правка `GLOBAL_ADBLOCK_FILTER`
-(`OnceLock → RwLock`) в `crates/network/src/lib.rs` для hot-swap. Склеивать листы и парсить
-одним проходом (чтобы `@@`-исключения работали глобально). Phase 2: `$option` по типу ресурса.
-Phase 3: UI подписок (handoff P3).
-
----
 
 **Phase 2 и Phase 3 завершены.** Доступные направления:
 
@@ -52,6 +34,14 @@ Phase 3: UI подписок (handoff P3).
 ---
 
 ## Current / Recently Merged
+
+**Ad-block: внешние фильтр-листы (EasyList/EasyPrivacy)** ✅ 2026-06-16 (merged p2-adblock-filter-lists)
+- Заменён вшитый `DefaultFilterList` на подгружаемые внешние листы с дисковым кэшем и фоновым обновлением.
+- `lumen-storage::AdblockStore` (SQLite): таблицы `subscriptions` + `list_meta` (etag/last_modified/fetched_at/rule_count/content_hash). 7 unit-тестов.
+- `lumen-network`: `GLOBAL_ADBLOCK_FILTER` `OnceLock → RwLock` (hot-swap); `HttpClient::fetch_conditional` + `ConditionalFetch` (304/200, If-None-Match/If-Modified-Since).
+- `lumen-shell::adblock`: `browser_data_dir()` → `<exe_dir>/data/adblock/` (portable, без OS-каталогов); `load_and_install` (offline-first, склейка листов в один парс → `@@`-исключения глобальны; fallback bundled); `refresh` (условный GET >~4 дня, content_hash FNV-1a → пропуск перепарса); фоновый поток в `main.rs` с hot-swap. 8 unit-тестов.
+- Phase 2 (`$option` по типу ресурса) и Phase 3 (UI подписок, handoff P3) — отдельные задачи.
+- BUG-169 (pre-existing): clippy на Linux падает в `ctap2.rs` (модуль linux_hid) — не относится к задаче.
 
 **BUG-084 — border-radius antialiasing deviation investigation** ✅ (2026-06-12, Phase 4+ rasterizer)
 - TEST-36 (CSS Backgrounds L3): 1.5% diff, classified as rasterizer-quality (not implementation-gap)
