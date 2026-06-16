@@ -83,8 +83,13 @@ pub use filter::{DefaultFilterList, EasyListFilter, HostsFilter, CompositeFilter
 static GLOBAL_ADBLOCK_ENABLED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 /// The installed global filter (e.g. `EasyListFilter` over `DefaultFilterList`).
-static GLOBAL_ADBLOCK_FILTER: std::sync::OnceLock<Arc<dyn lumen_core::ext::RequestFilter>> =
-    std::sync::OnceLock::new();
+///
+/// A swappable container (not `OnceLock`) so the filter can be **hot-swapped**
+/// at runtime — e.g. after a background refresh of external filter lists
+/// (EasyList/EasyPrivacy) reparses the merged ruleset. Read on every request
+/// (cheap shared lock), written rarely on install/refresh.
+static GLOBAL_ADBLOCK_FILTER: std::sync::RwLock<Option<Arc<dyn lumen_core::ext::RequestFilter>>> =
+    std::sync::RwLock::new(None);
 
 /// Enable or disable the process-global ad-block filter.
 pub fn set_global_adblock_enabled(on: bool) {
@@ -97,15 +102,21 @@ pub fn global_adblock_enabled() -> bool {
     GLOBAL_ADBLOCK_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Install the process-global ad-block filter. Idempotent: the first call wins.
+/// Install (or replace) the process-global ad-block filter.
+///
+/// Each call **replaces** the previous filter — used both for the initial
+/// install at startup and for hot-swapping a freshly reparsed ruleset after a
+/// background filter-list refresh, without restarting the browser.
 pub fn install_global_adblock_filter(filter: Arc<dyn lumen_core::ext::RequestFilter>) {
-    let _ = GLOBAL_ADBLOCK_FILTER.set(filter);
+    if let Ok(mut guard) = GLOBAL_ADBLOCK_FILTER.write() {
+        *guard = Some(filter);
+    }
 }
 
 /// The active global filter, or `None` when disabled or not yet installed.
 fn global_adblock_filter() -> Option<Arc<dyn lumen_core::ext::RequestFilter>> {
     if global_adblock_enabled() {
-        GLOBAL_ADBLOCK_FILTER.get().cloned()
+        GLOBAL_ADBLOCK_FILTER.read().ok().and_then(|g| g.clone())
     } else {
         None
     }
@@ -2363,6 +2374,88 @@ impl HttpClient {
         }
         Ok(resp.body)
     }
+
+    /// Perform a **conditional GET** (RFC 7232) and report whether the resource
+    /// changed. Used by the ad-block subsystem to refresh external filter lists
+    /// (EasyList/EasyPrivacy) without re-downloading unchanged bodies.
+    ///
+    /// `etag` / `last_modified` are the cached validators from the previous
+    /// fetch (`None` to skip that header). They are sent as `If-None-Match` /
+    /// `If-Modified-Since`. A `304 Not Modified` response maps to
+    /// [`ConditionalFetch::NotModified`]; a `200 OK` to
+    /// [`ConditionalFetch::Modified`] carrying the new body and the response's
+    /// fresh `ETag` / `Last-Modified` validators. Other 2xx are also treated as
+    /// `Modified`. 4xx/5xx return `Err(Error::Network("HTTP <code>"))`.
+    ///
+    /// The request carries the client's fingerprint profile, proxy and DNS
+    /// settings — it is indistinguishable from a normal subresource fetch.
+    pub fn fetch_conditional(
+        &self,
+        url: &Url,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+    ) -> Result<ConditionalFetch> {
+        let mut extra = String::new();
+        if let Some(tag) = etag.filter(|s| !s.is_empty()) {
+            extra.push_str(&format!("If-None-Match: {tag}\r\n"));
+        }
+        if let Some(lm) = last_modified.filter(|s| !s.is_empty()) {
+            extra.push_str(&format!("If-Modified-Since: {lm}\r\n"));
+        }
+        let accept_encoding = self.accept_encoding_header();
+        let resp = fetch_with_redirect(
+            url,
+            5,
+            &self.pool,
+            self.h2_pool.as_deref(),
+            self.resolver.as_ref(),
+            self.tls_profile,
+            self.fingerprint_profile,
+            self.sink.as_deref(),
+            self.filter.as_deref(),
+            self.hsts.as_deref(),
+            self.credentials.as_deref(),
+            &self.decoders,
+            accept_encoding.as_deref(),
+            None,
+            None,
+            self.tab_id,
+            self.mixed_content.as_ref(),
+            Some(RequestDestination::Other),
+            None,
+            &extra,
+            self.cookie_jar.as_deref(),
+            self.top_level_site.as_deref(),
+            self.proxy.as_deref(),
+            self.socks5_proxy.as_deref(),
+        )?;
+        if resp.status == 304 {
+            return Ok(ConditionalFetch::NotModified);
+        }
+        let new_etag = header_value(&resp.headers, "etag").map(str::to_owned);
+        let new_last_modified = header_value(&resp.headers, "last-modified").map(str::to_owned);
+        Ok(ConditionalFetch::Modified {
+            body: resp.body,
+            etag: new_etag,
+            last_modified: new_last_modified,
+        })
+    }
+}
+
+/// Outcome of [`HttpClient::fetch_conditional`].
+#[derive(Debug)]
+pub enum ConditionalFetch {
+    /// Server returned `304 Not Modified` — the cached copy is still current.
+    NotModified,
+    /// Server returned a fresh body (`200 OK`), with its current validators.
+    Modified {
+        /// The downloaded response body.
+        body: Vec<u8>,
+        /// `ETag` response header, if present (store for the next conditional GET).
+        etag: Option<String>,
+        /// `Last-Modified` response header, if present.
+        last_modified: Option<String>,
+    },
 }
 
 impl HttpClient {
