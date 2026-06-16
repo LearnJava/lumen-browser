@@ -3247,6 +3247,40 @@ function _lumen_dispatch_mouse_event(start_nid, type, clientX, clientY, button, 
     return _lumen_dispatch_rich(start_nid, ev);
 }
 
+// Called from shell when pointer is locked and DeviceEvent::MouseMotion fires.
+// Dispatches mousemove + pointermove with movementX/Y reflecting raw OS delta.
+// (W3C Pointer Lock L2 §6.3 — clientX/Y reflect last position; movement deltas are raw.)
+function _lumen_dispatch_locked_mousemove(nid, clientX, clientY, dx, dy, mod) {
+    var mev = new MouseEvent('mousemove', {
+        bubbles: true, cancelable: true, isTrusted: true,
+        clientX: clientX, clientY: clientY,
+        screenX: clientX, screenY: clientY,
+        pageX:   clientX, pageY:   clientY,
+        movementX: dx, movementY: dy,
+        button: 0, buttons: 0,
+        ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
+        altKey:   !!(mod & 4), metaKey:  !!(mod & 8)
+    });
+    _lumen_dispatch_rich(nid, mev);
+    var pev = new PointerEvent('pointermove', {
+        bubbles: true, cancelable: true, isTrusted: true,
+        clientX: clientX, clientY: clientY,
+        screenX: clientX, screenY: clientY,
+        pageX:   clientX, pageY:   clientY,
+        movementX: dx, movementY: dy,
+        button: 0, buttons: 0,
+        ctrlKey:  !!(mod & 1), shiftKey: !!(mod & 2),
+        altKey:   !!(mod & 4), metaKey:  !!(mod & 8),
+        pointerId: 1, pointerType: 'mouse', isPrimary: true,
+        pressure: 0.0, width: 1, height: 1,
+        altitudeAngle: Math.PI / 2, azimuthAngle: 0,
+        tangentialPressure: 0, tiltX: 0, tiltY: 0, twist: 0
+    });
+    pev.getCoalescedEvents = function() { return [pev]; };
+    pev.getPredictedEvents  = function() { return []; };
+    _lumen_dispatch_rich(nid, pev);
+}
+
 // Called from shell for pointer events (W3C Pointer Events Level 2).
 // Mirrors _lumen_dispatch_mouse_event but creates a PointerEvent (extends MouseEvent).
 // Non-bubbling types (pointerenter / pointerleave) set bubbles:false per spec.
@@ -4038,7 +4072,8 @@ function _lumen_make_element(nid) {
         requestPointerLock: function() {
             var self = _obj;
             return new Promise(function(resolve, reject) {
-                // Phase 0: synchronously lock pointer (Phase 1: integrate with shell winit).
+                // Phase 1: set JS-side mirror of locked element for pointerLockElement getter.
+                _ptr_lock_el = self;
                 if (typeof _lumen_ptr_lock_request === 'function') {
                     _lumen_ptr_lock_request(nid);
                 }
@@ -5058,6 +5093,11 @@ function _lumen_handle_contenteditable_key(inputType, data, targetNid) {
     return true;
 }
 
+// ── Pointer Lock state (W3C Pointer Lock L2 §6) ──────────────────────────────
+// Current locked element — null when unlocked.  Mirrored in Rust pointer_lock
+// thread-local for cross-thread movement accumulation.
+var _ptr_lock_el = null;
+
 // ── Fullscreen API (WHATWG Fullscreen §4) ────────────────────────────────────
 // Current fullscreen element NID (-1 = none).
 var _fs_nid = -1;
@@ -5183,12 +5223,14 @@ var document = {
     },
     onfullscreenchange: null,
     onfullscreenerror:  null,
-    // Pointer Lock API (W3C Pointer Lock L2 §2-4) — Phase 0: local state only
+    // Pointer Lock API (W3C Pointer Lock L2 §2-4) — Phase 1: JS mirror via _ptr_lock_el
     get pointerLockElement() {
-        return typeof _lumen_ptr_lock_element !== 'function' ? null : _lumen_ptr_lock_element();
+        return _ptr_lock_el;
     },
     exitPointerLock: function() {
+        _ptr_lock_el = null;
         if (typeof _lumen_exit_ptr_lock === 'function') { _lumen_exit_ptr_lock(); }
+        document.dispatchEvent(new Event('pointerlockchange'));
     },
     onpointerlockchange: null,
     onpointerlockerror: null,
@@ -8140,9 +8182,10 @@ var window = {
     localStorage: localStorage,
     sessionStorage: sessionStorage,
     _lumen_dispatch_composition: _lumen_dispatch_composition,
-    _lumen_dispatch_mouse_event:   _lumen_dispatch_mouse_event,
-    _lumen_dispatch_pointer_event: _lumen_dispatch_pointer_event,
-    _lumen_dispatch_capture_event: _lumen_dispatch_capture_event,
+    _lumen_dispatch_mouse_event:        _lumen_dispatch_mouse_event,
+    _lumen_dispatch_locked_mousemove:   _lumen_dispatch_locked_mousemove,
+    _lumen_dispatch_pointer_event:      _lumen_dispatch_pointer_event,
+    _lumen_dispatch_capture_event:      _lumen_dispatch_capture_event,
     _lumen_dispatch_key_event:     _lumen_dispatch_key_event,
     _lumen_dispatch_rich:          _lumen_dispatch_rich,
     _lumen_set_ime_target: _lumen_set_ime_target,
@@ -24210,6 +24253,93 @@ mod tests {
              parent.addEventListener('gotpointercapture', function(e) { bubbled = true; }); \
              _lumen_dispatch_capture_event(child.__nid__, 'gotpointercapture'); \
              fired && !bubbled"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── Pointer Lock API tests (W3C Pointer Lock L2 §2-4 + Phase 1) ──────────
+
+    #[test]
+    fn pointer_lock_request_sets_lock_state() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); document.body.appendChild(el); \
+             el.requestPointerLock(); \
+             document.pointerLockElement === el"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn pointer_lock_request_dispatches_pointerlockchange() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); document.body.appendChild(el); \
+             var fired = false; \
+             document.addEventListener('pointerlockchange', function() { fired = true; }); \
+             el.requestPointerLock(); \
+             fired"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn pointer_lock_exit_clears_lock_element() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); document.body.appendChild(el); \
+             el.requestPointerLock(); \
+             document.exitPointerLock(); \
+             document.pointerLockElement === null"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn document_on_pointerlockchange_handler() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "typeof document.onpointerlockchange === 'object' && \
+             typeof document.exitPointerLock === 'function'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn locked_mousemove_delivers_movement_deltas() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); document.body.appendChild(el); \
+             var mx = 0, my = 0; \
+             el.addEventListener('mousemove', function(e) { mx = e.movementX; my = e.movementY; }); \
+             _lumen_dispatch_locked_mousemove(el.__nid__, 100, 200, 15, -8, 0); \
+             mx === 15 && my === -8"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn locked_mousemove_delivers_pointermove() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); document.body.appendChild(el); \
+             var fired = false; \
+             el.addEventListener('pointermove', function(e) { fired = e.movementX === 7; }); \
+             _lumen_dispatch_locked_mousemove(el.__nid__, 0, 0, 7, 3, 0); \
+             fired"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn locked_mousemove_client_coords_preserved() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var el = document.createElement('div'); document.body.appendChild(el); \
+             var cx = -1, cy = -1; \
+             el.addEventListener('mousemove', function(e) { cx = e.clientX; cy = e.clientY; }); \
+             _lumen_dispatch_locked_mousemove(el.__nid__, 42, 99, 5, 5, 0); \
+             cx === 42 && cy === 99"
         ).unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }

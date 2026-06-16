@@ -176,10 +176,10 @@ impl EventSink for StdoutEventSink {
 /// SIL OFL 1.1, см. assets/fonts/OFL.txt.
 const INTER_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 use winit::dpi::{LogicalPosition, LogicalSize};
-use winit::event::{ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
+use winit::event::{DeviceEvent, DeviceId, ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
-use winit::window::{CursorIcon, Window, WindowId};
+use winit::window::{CursorGrabMode, CursorIcon, Window, WindowId};
 
 fn main() -> ExitCode {
     // Load the fingerprint profile (9F.1) once, before any network or JS setup.
@@ -6408,6 +6408,25 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
         }
 
+        // Pointer Lock API (W3C Pointer Lock L2 §4): apply pending OS cursor grab.
+        // JS calls requestPointerLock() / exitPointerLock() → queues a grab change
+        // → shell applies it here via winit.  Locked falls back to Confined on
+        // platforms (e.g. Wayland) that don't support true cursor lock.
+        #[cfg(feature = "quickjs")]
+        if let (Some(grab), Some(window)) = (
+            lumen_js::pointer_lock::take_pending_grab(),
+            self.window.as_ref(),
+        ) {
+            if grab {
+                let _ = window.set_cursor_grab(CursorGrabMode::Locked)
+                    .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined));
+                window.set_cursor_visible(false);
+            } else {
+                let _ = window.set_cursor_grab(CursorGrabMode::None);
+                window.set_cursor_visible(true);
+            }
+        }
+
         // CC-7: Video Picture-in-Picture — open/close the real OS floating window.
         // Drained from the process-global queue fed by `_lumen_pip_enter` /
         // `_lumen_pip_exit` (see `lumen_js::pip_bindings`).
@@ -6621,6 +6640,49 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.reload();
                 }
             }
+        }
+    }
+
+    /// Handle raw device events — used for Pointer Lock raw mouse delta.
+    ///
+    /// W3C Pointer Lock L2 §6.3: when locked, `DeviceEvent::MouseMotion` delivers
+    /// relative mouse movement without OS acceleration or clipping.  Shell dispatches
+    /// `mousemove`/`pointermove` with `movementX`/`movementY` to the locked element.
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: DeviceId,
+        event: DeviceEvent,
+    ) {
+        #[cfg(feature = "quickjs")]
+        if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event
+            && lumen_js::pointer_lock::is_pointer_locked()
+            && let (Some(ctx), Some(nid)) = (
+                &self.js_ctx,
+                lumen_js::pointer_lock::get_locked_element_nid(),
+            )
+        {
+            let (cx, cy) = self
+                .cursor_position
+                .map(|p| {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                        .max(1e-6);
+                    ((p.x as f32) / dpr, (p.y as f32) / dpr)
+                })
+                .unwrap_or((0.0, 0.0));
+            let script = format!(
+                "_lumen_dispatch_locked_mousemove({},{},{},{},{},{})",
+                nid,
+                cx as i32,
+                cy as i32,
+                dx as i32,
+                dy as i32,
+                self.mod_flags(),
+            );
+            ctx.eval_js(&script);
         }
     }
 
@@ -6905,6 +6967,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         win_h,
                     );
                     self.request_redraw();
+                }
+                // Pointer Lock: skip normal hover/mousemove dispatch while locked.
+                // Raw movement deltas arrive via device_event → _lumen_dispatch_locked_mousemove.
+                #[cfg(feature = "quickjs")]
+                if lumen_js::pointer_lock::is_pointer_locked() {
+                    return;
                 }
                 // CSS :hover tracking — find the element under the cursor and
                 // trigger relayout when it changes so :hover rules re-evaluate.
@@ -10254,6 +10322,28 @@ impl Lumen {
                     return;
                 }
             }
+        }
+
+        // Pointer Lock API (W3C Pointer Lock L2 §6.7): Escape releases pointer lock.
+        // Must be processed before fullscreen so a locked pointer in fullscreen exits
+        // lock first, letting a second Escape then exit fullscreen.
+        #[cfg(feature = "quickjs")]
+        if lumen_js::pointer_lock::is_pointer_locked()
+            && code == KeyCode::Escape
+            && self.modifiers.is_empty()
+            && !key_event.repeat
+        {
+            lumen_js::pointer_lock::exit_pointer_lock();
+            // Apply OS cursor release immediately (don't wait for about_to_wait).
+            if let Some(window) = self.window.as_ref() {
+                let _ = window.set_cursor_grab(CursorGrabMode::None);
+                window.set_cursor_visible(true);
+            }
+            // Dispatch pointerlockchange so document.pointerLockElement clears in JS.
+            if let Some(js) = &self.js_ctx {
+                js.eval_js("document.dispatchEvent(new Event('pointerlockchange'))");
+            }
+            return;
         }
 
         // Fullscreen API (WHATWG Fullscreen §4.6): Escape always exits fullscreen first.
