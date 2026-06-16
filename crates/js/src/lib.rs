@@ -128,6 +128,7 @@ pub use clipboard::set_clipboard_provider;
 pub use credentials::set_credential_provider;
 pub use media_capture::set_audio_capture_provider;
 pub use audio_element::set_audio_playback_provider;
+pub use wake_lock::set_wake_lock_provider;
 pub use video_gif_store::{set_video_gif_store, VideoGifStore};
 pub use css_properties_values_api::{install_css_properties_values_api, RegisteredProperty, RegisteredPropertiesMap, get_registered_properties};
 pub use paint_worklet::{install_paint_worklet_api, PaintWorkletDef, PaintWorkletRegistry, get_paint_worklet_registry};

@@ -5,3 +5,4 @@ pub mod audio_player;
 pub mod clipboard;
 pub mod dark_mode;
 pub mod file_dialog;
+pub mod wake_lock;
