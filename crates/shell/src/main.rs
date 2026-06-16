@@ -559,6 +559,10 @@ fn run_window_mode(
         ls_storage: HashMap::new(),
         idb_dir: lumen_idb_dir(),
         sw_backend: Arc::new(std::sync::Mutex::new(lumen_storage::store::InMemoryStorage::new())),
+        sw_worker_store: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        cache_store: Arc::new(
+            lumen_storage::CacheStorage::open_in_memory().expect("cache_store init"),
+        ),
         cookie_jar: Arc::new(
             lumen_storage::CookieJar::open_in_memory().expect("cookie_jar init"),
         ),
@@ -675,6 +679,23 @@ fn run_window_mode(
         cert_info: None,
         cert_panel: panels::cert_panel::CertPanel::new(),
     };
+    // PH3-20: install the session-global Service Worker fetch interceptor.
+    // It shares the same `sw_worker_store` + `cache_store` the page runtime uses,
+    // so an activated SW serves cache-first responses to subresource/`fetch()`
+    // requests. The SQLite `ServiceWorkers` store is an empty in-memory instance:
+    // the shell keeps SW registrations in-memory, and the interceptor routes via
+    // `sw_worker_store` (scope-prefix match) independently of it.
+    {
+        let interceptor = lumen_storage::ServiceWorkerInterceptor::new(
+            Arc::new(
+                lumen_storage::ServiceWorkers::open_in_memory().expect("sw registry init"),
+            ),
+            Arc::clone(&app.cache_store),
+        )
+        .with_sw_workers(Arc::clone(&app.sw_worker_store));
+        let _ = SW_FETCH_INTERCEPTOR
+            .set(Arc::new(interceptor) as Arc<dyn lumen_core::ext::FetchInterceptor>);
+    }
     // Restore the previous session only when launched without an explicit page
     // (no file/url argument and no --import-session), so we never clobber an
     // argv-requested page. Sets the active tab's source before `run_app`, so the
@@ -747,6 +768,8 @@ fn do_print_to_pdf(
         false, // dark_mode: light mode for PDF output
         None,  // cookie_jar: not available in standalone PDF mode
         raw.cross_origin_isolated,
+        None,  // sw_worker_store: not needed in headless PDF mode
+        None,  // cache_backend: not needed in headless PDF mode
     )?;
 
     let ctx = PaginationContext {
@@ -816,6 +839,8 @@ fn do_print_to_pdf_with_opts(
         false,
         None,
         raw.cross_origin_isolated,
+        None, // sw_worker_store: not needed in headless print mode
+        None, // cache_backend: not needed in headless print mode
     )?;
 
     let ctx = PaginationContext {
@@ -988,13 +1013,13 @@ fn run_dump(
         }
         DumpKind::Layout => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None, false)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None, false, None, None)?;
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None, false)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None, false, None, None)?;
             let dl = paint_ordered(&parsed.layout);
             print!("{}", lumen_paint::serialize_display_list(&dl));
             Ok(())
@@ -2168,7 +2193,7 @@ impl PageSource {
         }
         let raw = self.load_bytes(sink.clone(), None)?;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, false, false, None, raw.cross_origin_isolated)?;
+            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, false, false, None, raw.cross_origin_isolated, None, None)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }
@@ -2660,7 +2685,14 @@ impl ResourceBase {
                 None,
             );
         }
-        let client = crate::config::global().apply_http(builder);
+        let mut client = crate::config::global().apply_http(builder);
+        // PH3-20: attach the session Service Worker fetch interceptor so that
+        // subresource + page `fetch()`/XHR requests are served cache-first by an
+        // active SW execution thread before hitting the network. Set once in
+        // `run_window_mode`; absent in headless/PDF/dump modes (loop stays open).
+        if let Some(interceptor) = sw_fetch_interceptor() {
+            client = client.with_interceptor(interceptor);
+        }
         if let Some(origin) = self.origin()
             && origin.is_potentially_trustworthy()
         {
@@ -2668,6 +2700,20 @@ impl ResourceBase {
         }
         client
     }
+}
+
+/// Session-global Service Worker fetch interceptor (PH3-20).
+///
+/// Set once in `run_window_mode` after the `Lumen` state (which owns the shared
+/// `sw_worker_store` + `cache_store`) is built. `http_client_for_subresource`
+/// reads it to attach SW interception to every subresource/`fetch()` client.
+/// `None` in headless modes — the interception loop simply stays open there.
+static SW_FETCH_INTERCEPTOR: std::sync::OnceLock<Arc<dyn lumen_core::ext::FetchInterceptor>> =
+    std::sync::OnceLock::new();
+
+/// Read the session-global SW fetch interceptor, if one was installed.
+fn sw_fetch_interceptor() -> Option<Arc<dyn lumen_core::ext::FetchInterceptor>> {
+    SW_FETCH_INTERCEPTOR.get().cloned()
 }
 
 enum ResolvedResource {
@@ -3227,6 +3273,10 @@ fn parse_and_layout(
     dark_mode: bool,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     cross_origin_isolated: bool,
+    // PH3-20: live SW worker threads. `None` in headless/PDF/snapshot modes.
+    sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
+    // PH3-20: shared Cache API backend (page + SW worker). `None` in headless modes.
+    cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
 ) -> Result<ParsedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
@@ -3292,6 +3342,8 @@ fn parse_and_layout(
         ls_store,
         idb_backend,
         sw_backend,
+        sw_worker_store,
+        cache_backend,
         cookie_banner_dismiss,
         deterministic,
         cross_origin_isolated,
@@ -3884,8 +3936,10 @@ fn render_bytes(
     dark_mode: bool,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     cross_origin_isolated: bool,
+    sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
+    cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
 ) -> Result<(LoadedPage, LayoutSource, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -4351,6 +4405,11 @@ fn run_scripts_with_dom(
     ls_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
     idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
+    sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
+    // PH3-20: shared Cache API backend. Passed to `install_dom` so the page's
+    // `caches` API and any activating SW execution thread read/write the same
+    // store (the SW serves cache-first responses the page previously cached).
+    cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
     cookie_banner_dismiss: bool,
     deterministic: bool,
     cross_origin_isolated: bool,
@@ -4382,12 +4441,15 @@ fn run_scripts_with_dom(
     {
         use lumen_core::ext::JsRuntime as _;
         match lumen_js::QuickJsRuntime::new() {
-            Ok(rt) => {
+            Ok(mut rt) => {
                 rt.set_cookie_banner_dismiss(cookie_banner_dismiss);
                 if deterministic {
                     rt.set_deterministic_mode();
                 }
-                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend, None, cross_origin_isolated) {
+                if let Some(store) = sw_worker_store {
+                    rt = rt.with_sw_worker_store(store);
+                }
+                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, sse_provider, ls_store, idb_backend, sw_backend, cache_backend, None, cross_origin_isolated) {
                     eprintln!("JS DOM init failed: {e}");
                 }
                 if let Some(map) = import_map {
@@ -4822,6 +4884,16 @@ struct Lumen {
     /// `SwStore` is built over this for each page load so SW registrations survive
     /// page navigations within the session (same pattern as `idb_backend`).
     sw_backend: Arc<std::sync::Mutex<dyn lumen_core::ext::StorageBackend>>,
+    /// Live SW execution thread registry (PH3-20: SW fetch interception).
+    ///
+    /// Shared between `QuickJsRuntime` (populates via `_lumen_sw_activate_script`)
+    /// and `ServiceWorkerInterceptor` (reads when routing network fetch requests).
+    sw_worker_store: lumen_core::ext::SwWorkerStore,
+    /// Session-scoped Cache API store (PH3-20). Shared between the page's `caches`
+    /// API and activating SW execution threads: the SW serves cache-first
+    /// responses from entries the page previously cached into this store. Also the
+    /// fallback cache consulted by `ServiceWorkerInterceptor`. In-memory SQLite.
+    cache_store: Arc<lumen_storage::CacheStorage>,
     /// Session-scoped cookie jar. Shared across all `HttpClient` instances so
     /// `Set-Cookie` headers received on one hop (including 3xx redirects) are
     /// sent back on subsequent requests to the same domain. In-memory in Phase 0;
@@ -6669,7 +6741,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 let ls_store = ls_store_for_base(&raw.base, &mut self.ls_storage);
                 let idb_backend = idb_store_for_base(&raw.base, self.idb_dir.as_deref());
                 let sw_backend = sw_store_for_base(&raw.base, &self.sw_backend);
-                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, idb_backend, sw_backend, &self.hyp_provider, self.cookie_banner_dismiss, self.deterministic, self.dark_mode, Some(Arc::clone(&self.cookie_jar)), raw.cross_origin_isolated) {
+                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, idb_backend, sw_backend, &self.hyp_provider, self.cookie_banner_dismiss, self.deterministic, self.dark_mode, Some(Arc::clone(&self.cookie_jar)), raw.cross_origin_isolated, Some(Arc::clone(&self.sw_worker_store)), Some(Arc::clone(&self.cache_store) as Arc<dyn lumen_core::ext::CacheBackend>)) {
                     Ok((page, new_layout_source, new_js_ctx)) => {
                         click_log::log_load_ok(&self.source.describe(), page.title.as_deref().unwrap_or(""));
                         self.apply_loaded_page(page, Some(new_layout_source), new_js_ctx);
