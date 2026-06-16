@@ -6,8 +6,7 @@
 
 ## In progress
 
-**Ad-block: внешние фильтр-листы** · branch: `p2-adblock-filter-lists`
-Next step: финализация — merge по чеклисту (clippy/tests done).
+_(none)_
 
 ---
 
@@ -35,6 +34,14 @@ Next step: финализация — merge по чеклисту (clippy/tests 
 ---
 
 ## Current / Recently Merged
+
+**Ad-block: внешние фильтр-листы (EasyList/EasyPrivacy)** ✅ 2026-06-16 (merged p2-adblock-filter-lists)
+- Заменён вшитый `DefaultFilterList` на подгружаемые внешние листы с дисковым кэшем и фоновым обновлением.
+- `lumen-storage::AdblockStore` (SQLite): таблицы `subscriptions` + `list_meta` (etag/last_modified/fetched_at/rule_count/content_hash). 7 unit-тестов.
+- `lumen-network`: `GLOBAL_ADBLOCK_FILTER` `OnceLock → RwLock` (hot-swap); `HttpClient::fetch_conditional` + `ConditionalFetch` (304/200, If-None-Match/If-Modified-Since).
+- `lumen-shell::adblock`: `browser_data_dir()` → `<exe_dir>/data/adblock/` (portable, без OS-каталогов); `load_and_install` (offline-first, склейка листов в один парс → `@@`-исключения глобальны; fallback bundled); `refresh` (условный GET >~4 дня, content_hash FNV-1a → пропуск перепарса); фоновый поток в `main.rs` с hot-swap. 8 unit-тестов.
+- Phase 2 (`$option` по типу ресурса) и Phase 3 (UI подписок, handoff P3) — отдельные задачи.
+- BUG-169 (pre-existing): clippy на Linux падает в `ctap2.rs` (модуль linux_hid) — не относится к задаче.
 
 **BUG-084 — border-radius antialiasing deviation investigation** ✅ (2026-06-12, Phase 4+ rasterizer)
 - TEST-36 (CSS Backgrounds L3): 1.5% diff, classified as rasterizer-quality (not implementation-gap)
