@@ -182,6 +182,7 @@
 | [BUG-165](bugs/BUG-165-FIXED.md) | FIXED 2026-06-15 | layout | flex `align-content` сдвигал строку, не двигая поддерево item-ов: вложенный контент оставался на месте → items вылезали из контейнеров (TEST-65: 16.40%) |
 | BUG-166 | OPEN | lumen-js | `video_bindings::tests::native_video_load_registers_pending` failing on main — `__lumen_video_load` doesn't queue pending load when no provider installed | crates/js/src/video_bindings.rs |
 | [BUG-167](bugs/BUG-167-OPEN.md) | OPEN | shell | вход в Fullscreen API не пересчитывает вьюпорт: окно растягивается на весь десктоп, но страница остаётся в исходном вьюпорте (~1024×720), контент не растягивается; resize от `set_fullscreen` не доводится до relayout (main.rs:6400) |
+| [BUG-168](bugs/BUG-168-OPEN.md) | OPEN | network | Linux: `cargo test -p lumen-network` не собирается — `linux_hid::descriptor_is_fido` приватна, но её зовут `#[cfg(linux)]`-тесты (ctap2.rs:1165 / :1839 / :1850). Временный `pub(crate)`-unblock в ветке p1-tcp-streaming-body |
 
 ---
 
