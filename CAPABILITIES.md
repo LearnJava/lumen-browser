@@ -89,6 +89,7 @@ Snapshot: **Phase 2 «Interactive», app v0.2.0**. ~21 crates.
 ### lumen-font (`crates/engine/font`)
 - ✅ Table parsers (head/maxp/cmap fmt4+12 incl. SMP/emoji/hhea/hmtx/loca/glyf/name/OS2/post); rasterizer (simple + composite glyphs, 4×4 supersampling).
 - ✅ Variable fonts runtime (fvar/avar/HVAR/VVAR/MVAR/gvar, IUP + deltas); font matching/fallback (`SystemFontIndex` scans OS fonts, weight/style matcher, per-char cascade); WOFF2 (Brotli) + WOFF1 (zlib) decode.
+- ✅ **`font-display: swap` (PH3-19)**: `@font-face url()` sources fetched asynchronously off the critical paint path (FOUT). First paint uses Inter fallback; background thread fetch+decode → `FontLoaded` event → relayout with `MultiFontMeasurer` to swap in the web font. `local()` sources still loaded synchronously (no network round-trip needed).
 - ⬜ **No shaping (GSUB/GPOS)** — no ligatures, kerning, Arabic/Indic. No CFF outlines (`.otf` PostScript won't render), no hinting, no color glyphs (COLR/CPAL/sbix), no bitmap strikes. Fallback covers only already-loaded faces.
 
 ### lumen-image (`crates/engine/image`)
