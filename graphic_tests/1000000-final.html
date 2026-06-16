@@ -212,6 +212,16 @@
     <div class="mq-sw mq-ap"></div>
   </div>
 
+  <!-- ── prefers-contrast / prefers-reduced-data demo (Media Queries L5 §5.5-5.6) ── -->
+  <style>
+    @media (prefers-contrast: no-preference)     { .mq-pc { background: #2f855a; } }
+    @media (prefers-reduced-data: no-preference) { .mq-rd { background: #2f855a; } }
+  </style>
+  <div class="mq-row">
+    <div class="mq-sw mq-pc"></div>
+    <div class="mq-sw mq-rd"></div>
+  </div>
+
   <!-- ── vertical-align demo ───────────────────────────────────────────────── -->
   <style>
     .va-row { margin-top: 12px; margin-left: 24px; white-space: nowrap; }
