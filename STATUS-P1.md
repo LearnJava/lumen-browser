@@ -6,7 +6,9 @@
 
 ## In progress
 
-idle
+**PH3-15: File System Access API Phase 1**  
+Branch: p1-ph3-15-broadcast-channel  
+Next step: рефактор `filesystem_access.rs` — токен-безопасность + JS-шим FileSystemFileHandle
 
 ---
 
@@ -16,6 +18,7 @@ idle
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
+| PH3-15 | **File System Access API Phase 1** — токен-безопасный `showOpenFilePicker`, JS-шим `FileSystemFileHandle`/`FileSystemWritableFileStream`, write support | M | `lumen-js` |
 | PH3-1 | ~~**DevTools Elements styled-rules panel**~~ ✅ завершена | M | `lumen-shell` (devtools/) |
 | PH3-3 | ~~**getUserMedia Phase 1**~~ ✅ завершена | L | `lumen-js`, `lumen-shell` |
 | PH3-4 | ~~**Offscreen Canvas Phase 1**~~ ✅ завершена | M | `lumen-js`, `lumen-paint` |

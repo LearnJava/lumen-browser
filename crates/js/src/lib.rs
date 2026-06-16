@@ -1209,6 +1209,12 @@ impl QuickJsRuntime {
                 eprintln!("File API init failed: {}", e);
             }
 
+            // W3C File System Access API — showOpenFilePicker/showSaveFilePicker/showDirectoryPicker.
+            // Must come after file_input (depends on __lumen_file_read_text/base64 bindings).
+            if let Err(e) = filesystem_access::install_filesystem_access(&ctx) {
+                eprintln!("File System Access API init failed: {}", e);
+            }
+
             // W3C Multi-Screen Window Placement Level 1 — screen.isExtended,
             // navigator.getScreenDetails() → Promise<ScreenDetails>, ScreenDetailed class.
             // Phase 0: single-screen stub (isExtended=false, one ScreenDetailed mirroring screen).
