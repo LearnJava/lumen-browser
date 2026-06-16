@@ -39,15 +39,15 @@ FilterListSource (текст правил) → EasyListFilter::parse (индек
 (`%APPDATA%`, `~/.config`, `~/.cache`) НЕ использовать.** Провизорно — «пока так, дальше
 посмотрим». НЕ звать `lumen_cache_dir()` / `config_path()` для адблок-данных.
 
-Директория — рядом с исполняемым файлом: `<папка_бинаря>/data/filterlists/`, где
-`<папка_бинаря>` = каталог `std::env::current_exe()`. Одинаково на всех ОС:
-- Windows: `<…>\lumen.exe` → `<…>\data\filterlists\`
-- Linux/macOS: `<…>/lumen` → `<…>/data/filterlists/`
-- В dev запуск идёт из `target/release/` (внутри репозитория) — нарушения boundary нет.
+Корень всех пользовательских данных — рядом с бинарём: `<папка_бинаря>/data/`, где
+`<папка_бинаря>` = каталог `std::env::current_exe()`. **Структура аккуратная и понятная
+человеку: один корень `data/`, внутри по подсистемам; адблок — в `data/adblock/`.**
+В dev запуск идёт из `target/release/` (внутри репозитория) — нарушения boundary нет.
 
 Хелпер (в `filter/remote.rs`), без OS-папок:
 ```rust
-/// Каталог данных рядом с бинарём (portable): <exe_dir>/data.
+/// Корень данных браузера (portable): <exe_dir>/data. Подсистемы кладут свои
+/// данные в именованные подпапки (adblock/, в будущем cache/, profiles/ …).
 fn browser_data_dir() -> Option<std::path::PathBuf> {
     let exe = std::env::current_exe().ok()?;
     Some(exe.parent()?.join("data"))
@@ -56,17 +56,28 @@ fn browser_data_dir() -> Option<std::path::PathBuf> {
 Если `current_exe()` недоступен (редкий случай) — fallback на `./data` от текущего каталога;
 наружу (в OS-папки) НЕ уходить.
 
-Раскладка файлов:
+**Раскладка `data/adblock/` — без свалки, по назначению:**
 
 ```
-filterlists/
-  subscriptions.json     ← манифест подписок (см. ниже)
-  <slug>.txt             ← сырой текст листа (EasyList-формат, как скачан)
-  <slug>.meta.json       ← метаданные кэша: url, etag, last_modified, fetched_at_unix, rule_count
-  custom.txt             ← пользовательские правила (Phase 3; пока пустой/опционально)
+data/
+└── adblock/
+    ├── subscriptions.json     ← манифест: какие листы подписаны (выбор пользователя)
+    ├── custom-rules.txt       ← собственные правила пользователя (Phase 3)
+    ├── lists/                 ← СКАЧАННЫЕ тела листов (контент)
+    │   ├── easylist.txt
+    │   └── easyprivacy.txt
+    └── meta/                  ← состояние кэша на каждый лист (служебное)
+        ├── easylist.json      ← { url, etag, last_modified, fetched_at_unix, rule_count }
+        └── easyprivacy.json
 ```
 
-`<slug>` — стабильный слаг URL листа (sanitized host+hash, например `easylist-easylist-to` или `sha1(url)[..16]`). Без коллизий между подписками.
+Принцип разделения: **манифест** (что подписано) ≠ **контент** (`lists/`) ≠ **служебные
+метаданные кэша** (`meta/`) ≠ **правила пользователя** (`custom-rules.txt`). Не сваливать
+всё в один уровень.
+
+Имя файла листа — **человекочитаемый слаг** (не хэш): `easylist`, `easyprivacy`,
+производный от title/host подписки (sanitize: lowercase, `[a-z0-9-]`, коллизии разрешать
+суффиксом `-2`). `lists/<slug>.txt` и `meta/<slug>.json` связаны одним слагом.
 
 `subscriptions.json` — список подписок:
 ```json
@@ -82,13 +93,13 @@ filterlists/
 
 ### 2. Как обновляются (offline-first + условный GET)
 
-**При старте (быстро, без сети):** прочитать `subscriptions.json` + все включённые `<slug>.txt` из кэша → склеить текст → `EasyListFilter::parse` → `install_global_adblock_filter`. Если кэша нет — fallback на вшитый `DefaultFilterList`, чтобы блокировка работала сразу.
+**При старте (быстро, без сети):** прочитать `adblock/subscriptions.json` + все включённые `adblock/lists/<slug>.txt` → склеить текст → `EasyListFilter::parse` → `install_global_adblock_filter`. Если кэша нет — fallback на вшитый `DefaultFilterList`, чтобы блокировка работала сразу.
 
 **Фоновый рефреш (отдельный поток, после старта):** для каждой включённой подписки, если `now - fetched_at > REFRESH_INTERVAL` (EasyList рекомендует expiry ~4 дня; `const REFRESH_INTERVAL_SECS: u64 = 4*24*3600`):
 1. Условный GET через `HttpClient` (с fingerprint-профилем из `config::global().apply_http(...)`):
-   - `If-None-Match: <etag>` и/или `If-Modified-Since: <last_modified>` из `<slug>.meta.json`.
-2. `304 Not Modified` → обновить `fetched_at` в meta, ничего не перепарсивать.
-3. `200 OK` → перезаписать `<slug>.txt`, обновить meta (новый etag/last_modified/rule_count/fetched_at), пометить «надо переустановить фильтр».
+   - `If-None-Match: <etag>` и/или `If-Modified-Since: <last_modified>` из `meta/<slug>.json`.
+2. `304 Not Modified` → обновить `fetched_at` в `meta/<slug>.json`, ничего не перепарсивать.
+3. `200 OK` → перезаписать `lists/<slug>.txt`, обновить `meta/<slug>.json` (новый etag/last_modified/rule_count/fetched_at), пометить «надо переустановить фильтр».
 4. После обхода всех подписок, если хоть одна обновилась — склеить заново → `EasyListFilter::parse` → переустановить фильтр (hot-swap, см. п.3 ниже).
 
 Ошибки сети не критичны: остаёмся на кэшированной версии, логируем `eprintln!`.
@@ -119,7 +130,7 @@ static GLOBAL_ADBLOCK_FILTER: std::sync::RwLock<Option<Arc<dyn lumen_core::ext::
 
 ### Phase 1 (ядро — эта задача)
 - Новый модуль `crates/network/src/filter/remote.rs`:
-  - `struct FilterListStore { dir: PathBuf }` — чтение/запись кэша + `subscriptions.json` + meta.
+  - `struct FilterListStore { root: PathBuf }` (root = `browser_data_dir()/adblock`) — создаёт `lists/` и `meta/` при необходимости; чтение/запись `subscriptions.json`, `lists/<slug>.txt`, `meta/<slug>.json`.
   - `impl FilterListSource for FilterListStore` (`fetch_rules()` = склейка включённых кэшированных листов; fallback на `DefaultFilterList` если пусто).
   - `fn refresh(&self, client: &HttpClient) -> bool` — условный GET всех просроченных подписок, возвращает «что-то обновилось».
   - `fn default_subscriptions() -> Vec<Subscription>` (EasyList + EasyPrivacy).
@@ -132,7 +143,7 @@ static GLOBAL_ADBLOCK_FILTER: std::sync::RwLock<Option<Arc<dyn lumen_core::ext::
 - Расширить `easylist.rs`: не отбрасывать `$script,image,third-party,...`, а хранить и учитывать в `should_block`. Гейт уже прокидывает `RequestDestination` (`crates/network/src/mixed_content.rs`) — сделать вариант `should_block_typed(url, destination)`. Отдельная задача-продолжение.
 
 ### Phase 3 (UI подписок — handoff P3)
-- Панель управления подписками: добавить/удалить лист, «обновить сейчас», показ last-updated/rule_count, редактор `custom.txt`. Шелл-интеграция — домен P3 (описать интеграционные точки в commit body, P3 подхватит).
+- Панель управления подписками: добавить/удалить лист, «обновить сейчас», показ last-updated/rule_count, редактор `custom-rules.txt`. Шелл-интеграция — домен P3 (описать интеграционные точки в commit body, P3 подхватит).
 
 ---
 
@@ -162,7 +173,8 @@ static GLOBAL_ADBLOCK_FILTER: std::sync::RwLock<Option<Arc<dyn lumen_core::ext::
 ## Критерии готовности
 
 - [ ] Первый запуск без кэша: сидируются дефолтные подписки, блокировка работает (через `DefaultFilterList` fallback, пока листы не скачаны).
-- [ ] После рефреша: `filterlists/easylist*.txt` + meta на диске; фильтр переустановлен; реальные правила EasyList/EasyPrivacy блокируют (проверить на `\|\|google-analytics.com^` и любом домене из скачанного EasyList).
+- [ ] После рефреша на диске: `data/adblock/lists/easylist.txt` + `data/adblock/meta/easylist.json` (и easyprivacy); фильтр переустановлен; реальные правила EasyList/EasyPrivacy блокируют (проверить на `\|\|google-analytics.com^` и любом домене из скачанного EasyList).
+- [ ] Структура папок аккуратная: манифест / `lists/` / `meta/` / `custom-rules.txt` разделены, не свалены в один уровень.
 - [ ] Повторный запуск: грузится из кэша мгновенно (offline-first), сеть не блокирует старт.
 - [ ] `304 Not Modified` не перепарсивает; `200` — перезаписывает и hot-swap’ит фильтр без перезапуска.
 - [ ] Тумблер per-tab по-прежнему включает/выключает (направление: галка = блокировка вкл).
@@ -173,6 +185,6 @@ static GLOBAL_ADBLOCK_FILTER: std::sync::RwLock<Option<Arc<dyn lumen_core::ext::
 ## Замечания
 
 - **Приватность.** Lumen — приватный браузер: скачивание листов с CDN раскрывает факт использования. По умолчанию подписки включены (как в адблокерах), но в Phase 3 дать переключатель «не обновлять автоматически». Запросы идут через обычный `HttpClient` с fingerprint-профилем — не выделяются.
-- **Хранение только в папке браузера.** Все данные адблока — под `<exe_dir>/data/` (см. §1). OS-каталоги (`%APPDATA%`/`~/.config`/`~/.cache`) и хелперы `lumen_cache_dir()`/`config_path()` для этой задачи НЕ использовать (решение пользователя 2026-06-16, провизорно). Подписки и листы — обе под `data/filterlists/` (раздельную config-папку не вводим).
+- **Хранение только в папке браузера, структура аккуратная.** Все данные адблока — под `<exe_dir>/data/adblock/` (см. §1), OS-каталоги (`%APPDATA%`/`~/.config`/`~/.cache`) и хелперы `lumen_cache_dir()`/`config_path()` НЕ использовать (решение пользователя 2026-06-16, провизорно). Внутри — разложить по назначению (`subscriptions.json` / `lists/` / `meta/` / `custom-rules.txt`), не сваливать в один уровень. Корень `data/` рассчитан на будущие подсистемы (каждая — своя подпапка).
 - **Без новых тяжёлых зависимостей.** Условный GET — существующим `HttpClient`; своп — `std::sync::RwLock`; JSON — `serde_json` (если ещё не в network — добавить с обоснованием permanent). `arc_swap` не нужен.
 - **Bug-политика.** Найденный по дороге баг — строкой в `BUGS.md` (OPEN, следующий BUG-NNN), не чинить в этой задаче.
