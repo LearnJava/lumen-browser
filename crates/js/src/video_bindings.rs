@@ -518,6 +518,14 @@ const VIDEO_SHIM: &str = r#"(function() {
 mod tests {
     use super::*;
     use rquickjs::{Context, Runtime};
+    use std::sync::Mutex;
+
+    /// Serializes tests that install and read the process-global
+    /// [`crate::video_gif_store`] singleton.  Without this guard, parallel
+    /// tests race: one test's `set_video_gif_store` overwrites the global
+    /// between another test's own `set` and the `install`/`load` that captures
+    /// it, so the load lands in the wrong store (BUG-166).
+    static STORE_GUARD: Mutex<()> = Mutex::new(());
 
     fn make_ctx() -> (Runtime, Context) {
         let rt = Runtime::new().unwrap();
@@ -677,6 +685,7 @@ el.canPlayType('video/mp4') === ''
     fn native_video_load_registers_pending() {
         use crate::video_gif_store::set_video_gif_store;
         use std::sync::Arc;
+        let _guard = STORE_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let store = Arc::new(crate::video_gif_store::VideoGifStore::default());
         set_video_gif_store(store.clone());
 
@@ -696,6 +705,7 @@ el.canPlayType('video/mp4') === ''
     fn native_video_ready_false_before_decode() {
         use crate::video_gif_store::set_video_gif_store;
         use std::sync::Arc;
+        let _guard = STORE_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let store = Arc::new(crate::video_gif_store::VideoGifStore::default());
         set_video_gif_store(store.clone());
 
