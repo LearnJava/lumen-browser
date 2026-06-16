@@ -6,9 +6,7 @@
 
 ## In progress
 
-**PH3-15: File System Access API Phase 1**  
-Branch: p1-ph3-15-broadcast-channel  
-Next step: рефактор `filesystem_access.rs` — токен-безопасность + JS-шим FileSystemFileHandle
+idle
 
 ---
 
@@ -18,7 +16,6 @@ Next step: рефактор `filesystem_access.rs` — токен-безопас
 
 | # | Задача | Размер | Крейты |
 |---|--------|--------|--------|
-| PH3-15 | **File System Access API Phase 1** — токен-безопасный `showOpenFilePicker`, JS-шим `FileSystemFileHandle`/`FileSystemWritableFileStream`, write support | M | `lumen-js` |
 | PH3-1 | ~~**DevTools Elements styled-rules panel**~~ ✅ завершена | M | `lumen-shell` (devtools/) |
 | PH3-3 | ~~**getUserMedia Phase 1**~~ ✅ завершена | L | `lumen-js`, `lumen-shell` |
 | PH3-4 | ~~**Offscreen Canvas Phase 1**~~ ✅ завершена | M | `lumen-js`, `lumen-paint` |
@@ -34,6 +31,7 @@ Next step: рефактор `filesystem_access.rs` — токен-безопас
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-16 | PH3-15: File System Access API Phase 1 | `showOpenFilePicker/showSaveFilePicker/showDirectoryPicker` → Promise; `FileSystemFileHandle`/`FileSystemDirectoryHandle`/`FileSystemWritableFileStream` JS-классы; `WriteRegistry` (append + flush-on-close); `DirRegistry`; OS диалоги WinForms/zenity/osascript; токен-безопасность через PH3-14 `register_file_token`. 33 новых теста lumen-js. |
 | 2026-06-16 | PH3-14: File Input API Phase 1 | `register_file_token()` + thread-local `FILE_REGISTRY`; нативные биндинги `__lumen_file_read_text`/`__lumen_file_read_base64`; `File.prototype.text()`/`arrayBuffer()`/`stream()` читают реальные байты через токены; `entries_to_json_with_tokens()` в shell; JS не видит сырых путей файловой системы. 18 новых тестов lumen-js + 4 lumen-shell. |
 | 2026-06-16 | PH3-13: Screen Wake Lock API Phase 1 | `WakeLockProvider` трейт + `NullWakeLockProvider` в lumen-core::ext; `set_wake_lock_provider()` + `__lumen_wake_lock_request`/`__lumen_wake_lock_release` биндинги + обновлённый JS-шим в lumen-js; `PlatformWakeLock` (`SetThreadExecutionState` на Windows, no-op на Linux/macOS) в shell/src/platform/wake_lock.rs. 23 новых теста. |
 | 2026-06-16 | PH3-12: `<video>` element Phase 1 | `VideoGifStore` + `VideoPlaybackState` в lumen-js (без зависимости от lumen_image); 12 нативных биндингов `__lumen_video_*` + JS-шим; `BoxKind::Video` → `DrawImage { src: "video:{nid}" }` в display_list; `tick_video_gifs()` в shell — декодирует GIF, регистрирует кадры, продвигает анимацию. |
