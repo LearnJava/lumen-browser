@@ -1099,7 +1099,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/ipc/src/lib.rs:180` **fn** `connect` — Connect to the network service listening on `127.0.0.1:port`
 `crates/ipc/src/lib.rs:190` **fn** `request` — Send a request and block until the matching response arrives
 
-## lumen-js  (287 symbols)
+## lumen-js  (288 symbols)
 
 `crates/js/src/async_context.rs:32` **fn** `install_async_context` — Install the `AsyncContext` global (Variable + Snapshot) into the context
 `crates/js/src/attribution_reporting.rs:23` **fn** `install_attribution_reporting_api` — Install Attribution Reporting API bindings into the JS context
@@ -1305,13 +1305,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/pip_bindings.rs:56` **fn** `take_pip_requests` — Drain and return all pending PiP requests
 `crates/js/src/pip_bindings.rs:67` **fn** `install_pip_bindings` — Install the `_lumen_pip_enter(nid)` / `_lumen_pip_exit(nid)` native bindings
 `crates/js/src/pointer_capture.rs:23` **fn** `install_pointer_capture_bindings` — Install `_lumen_set_capture_state` and `_lumen_release_capture_state` into the
-`crates/js/src/pointer_lock.rs:30` **fn** `request_pointer_lock` — Request pointer lock for element with given node ID
-`crates/js/src/pointer_lock.rs:41` **fn** `exit_pointer_lock` — Exit pointer lock
-`crates/js/src/pointer_lock.rs:51` **fn** `set_movement` — Set relative mouse movement delta (called from shell event loop for each mousemove)
-`crates/js/src/pointer_lock.rs:62` **fn** `get_lock_state` — Get current pointer lock state: (is_locked, locked_element_nid, movement_x, movement_y)
-`crates/js/src/pointer_lock.rs:75` **fn** `is_pointer_locked` — Check if pointer is locked
-`crates/js/src/pointer_lock.rs:80` **fn** `get_locked_element_nid` — Get the DOM node ID of the locked element, or None
-`crates/js/src/pointer_lock.rs:86` **fn** `take_movement` — Get the current movement delta and reset it to zero
+`crates/js/src/pointer_lock.rs:33` **fn** `request_pointer_lock` — Request pointer lock for element with given node ID
+`crates/js/src/pointer_lock.rs:43` **fn** `exit_pointer_lock` — Exit pointer lock
+`crates/js/src/pointer_lock.rs:53` **fn** `set_movement` — Set relative mouse movement delta (called from shell DeviceEvent::MouseMotion)
+`crates/js/src/pointer_lock.rs:64` **fn** `get_lock_state` — Get current pointer lock state: (is_locked, locked_element_nid, movement_x, movement_y)
+`crates/js/src/pointer_lock.rs:77` **fn** `is_pointer_locked` — Check if pointer is locked
+`crates/js/src/pointer_lock.rs:82` **fn** `get_locked_element_nid` — Get the DOM node ID of the locked element, or None
+`crates/js/src/pointer_lock.rs:88` **fn** `take_movement` — Get the current movement delta and reset it to zero
+`crates/js/src/pointer_lock.rs:101` **fn** `take_pending_grab` — Take pending OS cursor grab request, resetting it to None
 `crates/js/src/presentation_api.rs:19` **fn** `install_presentation_api` — Install the Presentation API bindings into the JS context
 `crates/js/src/push_api.rs:18` **fn** `init_push_api` — Install the Push API stub into the JS context
 `crates/js/src/reporting_api.rs:13` **fn** `install_reporting_api_bindings` — Install Reporting API bindings into the JS context
@@ -2049,7 +2050,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (290 symbols)
+## lumen-network  (294 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -2114,18 +2115,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/ctap2.rs:873` **struct** `WinHidDevice` — A real USB HID device opened via Win32 `CreateFile`
 `crates/network/src/ctap2.rs:933` **fn** `enumerate` — Enumerate USB HID FIDO2 devices via Win32 SetupDi + HidD APIs
 `crates/network/src/ctap2.rs:1108` **struct** `LinuxHidDevice` — A FIDO2 device exposed as a Linux `/dev/hidrawN` character device
-`crates/network/src/ctap2.rs:1201` **fn** `enumerate` — Scan `/dev/hidraw0`..`/dev/hidraw31` and return FIDO2 devices
-`crates/network/src/ctap2.rs:1240` **struct** `CtapRoamingTransport` — [`CredentialProvider`] that uses a connected FIDO2 USB security key
-`crates/network/src/ctap2.rs:1244` **fn** `new` — Create a new roaming transport
-`crates/network/src/ctap2.rs:1336` **struct** `CompositeCredentialProvider` — A [`CredentialProvider`] that delegates to a priority-ordered list
-`crates/network/src/ctap2.rs:1342` **fn** `new` — Create a composite from an ordered list of providers
-`crates/network/src/ctap2.rs:1381` **struct** `MockHidDevice` — A scripted in-memory [`HidDevice`] for unit tests
-`crates/network/src/ctap2.rs:1391` **fn** `new` — Create a blank mock with no queued responses
-`crates/network/src/ctap2.rs:1400` **fn** `push_response` — Push a raw 65-byte HID report to the response queue
-`crates/network/src/ctap2.rs:1405` **fn** `queue_init_response` — Build and queue a CTAPHID_INIT response for the given nonce + CID
-`crates/network/src/ctap2.rs:1422` **fn** `queue_cbor_response` — Build and queue a successful CTAPHID_CBOR response with the given payload
-`crates/network/src/ctap2.rs:1452` **fn** `written_reports` — Return all written reports (as slices) for inspection
-`crates/network/src/ctap2.rs:1483` **fn** `seal` — Reverse the internal response queue so items are served FIFO
+`crates/network/src/ctap2.rs:1203` **fn** `enumerate` — Scan `/dev/hidraw0`..`/dev/hidraw31` and return FIDO2 devices
+`crates/network/src/ctap2.rs:1242` **struct** `CtapRoamingTransport` — [`CredentialProvider`] that uses a connected FIDO2 USB security key
+`crates/network/src/ctap2.rs:1246` **fn** `new` — Create a new roaming transport
+`crates/network/src/ctap2.rs:1338` **struct** `CompositeCredentialProvider` — A [`CredentialProvider`] that delegates to a priority-ordered list
+`crates/network/src/ctap2.rs:1344` **fn** `new` — Create a composite from an ordered list of providers
+`crates/network/src/ctap2.rs:1383` **struct** `MockHidDevice` — A scripted in-memory [`HidDevice`] for unit tests
+`crates/network/src/ctap2.rs:1393` **fn** `new` — Create a blank mock with no queued responses
+`crates/network/src/ctap2.rs:1402` **fn** `push_response` — Push a raw 65-byte HID report to the response queue
+`crates/network/src/ctap2.rs:1407` **fn** `queue_init_response` — Build and queue a CTAPHID_INIT response for the given nonce + CID
+`crates/network/src/ctap2.rs:1424` **fn** `queue_cbor_response` — Build and queue a successful CTAPHID_CBOR response with the given payload
+`crates/network/src/ctap2.rs:1454` **fn** `written_reports` — Return all written reports (as slices) for inspection
+`crates/network/src/ctap2.rs:1485` **fn** `seal` — Reverse the internal response queue so items are served FIFO
 `crates/network/src/dns.rs:22` **struct** `SystemDnsResolver` — DNS-резолвер на основе системного getaddrinfo (через std::net)
 `crates/network/src/doh.rs:46` **fn** `encode_query` — Закодировать стандартный DNS query — header + одна question. RD=1
 `crates/network/src/doh.rs:100` **fn** `decode_answer_ips` — Распакованный DNS-ответ — без CNAME-цепочек, только IP-адреса из
@@ -2234,39 +2235,43 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/http_cache.rs:399` **fn** `new` — Open or create a cache database at `path`
 `crates/network/src/http_cache.rs:423` **fn** `open_default` — Open or create the default cache database at [`lumen_cache_dir`]`/http_cache.db`
 `crates/network/src/http_cache.rs:567` **fn** `lumen_cache_dir` — Returns the Lumen cache directory for the current user
-`crates/network/src/lib.rs:1592` **struct** `HttpProxy` — HTTP proxy configuration (RFC 7230 proxy behavior)
-`crates/network/src/lib.rs:1604` **fn** `new` — Создать новый прокси без аутентификации
-`crates/network/src/lib.rs:1613` **fn** `with_basic_auth` — Создать прокси с базовой аутентификацией (username:password)
-`crates/network/src/lib.rs:1656` **struct** `HttpClient` — HTTP/1.1 + HTTPS клиент
-`crates/network/src/lib.rs:1695` **fn** `new`
-`crates/network/src/lib.rs:1721` **fn** `with_sink` — Подключить EventSink. По умолчанию sink-а нет (события не эмитятся)
-`crates/network/src/lib.rs:1732` **fn** `with_filter` — Подключить RequestFilter. По умолчанию фильтра нет — `fetch` всегда
-`crates/network/src/lib.rs:1744` **fn** `with_interceptor` — Подключить Service Worker перехватчик fetch-запросов. Проверяется
-`crates/network/src/lib.rs:1753` **fn** `with_pool` — Подключить shared `ConnectionPool`. По умолчанию у каждого `HttpClient`
-`crates/network/src/lib.rs:1763` **fn** `with_h2_pool` — Подключить shared `H2Pool` (RFC 9113 §9.1.1). По умолчанию HTTP/2
-`crates/network/src/lib.rs:1772` **fn** `with_dns_resolver` — Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
-`crates/network/src/lib.rs:1789` **fn** `with_hsts` — Подключить HSTS-store (RFC 6797). По умолчанию — нет:
-`crates/network/src/lib.rs:1805` **fn** `with_credentials` — Подключить credential-провайдер для HTTP authentication (RFC 7235 /
-`crates/network/src/lib.rs:1816` **fn** `with_tab` — Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
-`crates/network/src/lib.rs:1836` **fn** `with_mixed_content_policy` — Подключить mixed-content policy (W3C Mixed Content §5). По умолчанию
-`crates/network/src/lib.rs:1860` **fn** `with_content_decoder` — Зарегистрировать `ContentDecoder` для одного encoding. Декодер попадает
-`crates/network/src/lib.rs:1906` **fn** `with_cors_cache` — Запросить только диапазон байт ресурса (RFC 7233). Если сервер
-`crates/network/src/lib.rs:1918` **fn** `with_cookie_jar` — Attach a cookie store. The provider receives `Cookie:` injection
-`crates/network/src/lib.rs:1942` **fn** `with_http_cache` — Подключить HTTP response cache (RFC 7234)
-`crates/network/src/lib.rs:1953` **fn** `with_proxy` — Подключить HTTP прокси (RFC 7230). По умолчанию прокси не подключён — запросы
-`crates/network/src/lib.rs:1966` **fn** `with_socks5_proxy` — Подключить SOCKS5 прокси (RFC 1928) для туннелирования всех TCP-соединений
-`crates/network/src/lib.rs:1977` **fn** `with_fingerprint_profile` — Установить HTTP fingerprinting profile (Standard/Strict/Tor) для Chrome-matching
-`crates/network/src/lib.rs:1985` **fn** `fingerprint_profile` — Получить текущий HTTP fingerprinting profile
-`crates/network/src/lib.rs:1996` **fn** `with_tls_profile` — Override the TLS fingerprint profile independently of the HTTP profile
-`crates/network/src/lib.rs:2002` **fn** `tls_profile` — Получить текущий TLS fingerprinting profile
-`crates/network/src/lib.rs:2036` **fn** `fetch_cors` — CORS-enabled fetch для cross-origin subresource (Fetch §3-§4)
-`crates/network/src/lib.rs:2084` **fn** `fetch_range`
-`crates/network/src/lib.rs:2151` **fn** `fetch_multi_range` — Multi-range запрос (RFC 7233 §4.1). Один request на несколько
-`crates/network/src/lib.rs:2237` **fn** `fetch_subresource` — Загрузить подресурс с проверкой mixed-content по подключённой
-`crates/network/src/lib.rs:2328` **fn** `fetch_page` — Fetch a top-level page and return the response body together with all
-`crates/network/src/lib.rs:2843` **struct** `InMemoryFetchInterceptor` — In-memory реализация `FetchInterceptor` для тестов без SQLite
-`crates/network/src/lib.rs:2849` **fn** `new`
-`crates/network/src/lib.rs:2856` **fn** `insert` — Добавить запись: ответ для (origin, url) берётся из кэша без сети
+`crates/network/src/lib.rs:90` **fn** `set_global_adblock_enabled` — Enable or disable the process-global ad-block filter
+`crates/network/src/lib.rs:96` **fn** `global_adblock_enabled` — Whether the process-global ad-block filter is currently enabled
+`crates/network/src/lib.rs:101` **fn** `install_global_adblock_filter` — Install the process-global ad-block filter. Idempotent: the first call wins
+`crates/network/src/lib.rs:2010` **struct** `HttpProxy` — HTTP proxy configuration (RFC 7230 proxy behavior)
+`crates/network/src/lib.rs:2022` **fn** `new` — Создать новый прокси без аутентификации
+`crates/network/src/lib.rs:2031` **fn** `with_basic_auth` — Создать прокси с базовой аутентификацией (username:password)
+`crates/network/src/lib.rs:2074` **struct** `HttpClient` — HTTP/1.1 + HTTPS клиент
+`crates/network/src/lib.rs:2113` **fn** `new`
+`crates/network/src/lib.rs:2139` **fn** `with_sink` — Подключить EventSink. По умолчанию sink-а нет (события не эмитятся)
+`crates/network/src/lib.rs:2150` **fn** `with_filter` — Подключить RequestFilter. По умолчанию фильтра нет — `fetch` всегда
+`crates/network/src/lib.rs:2162` **fn** `with_interceptor` — Подключить Service Worker перехватчик fetch-запросов. Проверяется
+`crates/network/src/lib.rs:2171` **fn** `with_pool` — Подключить shared `ConnectionPool`. По умолчанию у каждого `HttpClient`
+`crates/network/src/lib.rs:2181` **fn** `with_h2_pool` — Подключить shared `H2Pool` (RFC 9113 §9.1.1). По умолчанию HTTP/2
+`crates/network/src/lib.rs:2190` **fn** `with_dns_resolver` — Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
+`crates/network/src/lib.rs:2207` **fn** `with_hsts` — Подключить HSTS-store (RFC 6797). По умолчанию — нет:
+`crates/network/src/lib.rs:2223` **fn** `with_credentials` — Подключить credential-провайдер для HTTP authentication (RFC 7235 /
+`crates/network/src/lib.rs:2234` **fn** `with_tab` — Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
+`crates/network/src/lib.rs:2254` **fn** `with_mixed_content_policy` — Подключить mixed-content policy (W3C Mixed Content §5). По умолчанию
+`crates/network/src/lib.rs:2278` **fn** `with_content_decoder` — Зарегистрировать `ContentDecoder` для одного encoding. Декодер попадает
+`crates/network/src/lib.rs:2324` **fn** `with_cors_cache` — Запросить только диапазон байт ресурса (RFC 7233). Если сервер
+`crates/network/src/lib.rs:2336` **fn** `with_cookie_jar` — Attach a cookie store. The provider receives `Cookie:` injection
+`crates/network/src/lib.rs:2360` **fn** `with_http_cache` — Подключить HTTP response cache (RFC 7234)
+`crates/network/src/lib.rs:2371` **fn** `with_proxy` — Подключить HTTP прокси (RFC 7230). По умолчанию прокси не подключён — запросы
+`crates/network/src/lib.rs:2384` **fn** `with_socks5_proxy` — Подключить SOCKS5 прокси (RFC 1928) для туннелирования всех TCP-соединений
+`crates/network/src/lib.rs:2395` **fn** `with_fingerprint_profile` — Установить HTTP fingerprinting profile (Standard/Strict/Tor) для Chrome-matching
+`crates/network/src/lib.rs:2403` **fn** `fingerprint_profile` — Получить текущий HTTP fingerprinting profile
+`crates/network/src/lib.rs:2414` **fn** `with_tls_profile` — Override the TLS fingerprint profile independently of the HTTP profile
+`crates/network/src/lib.rs:2420` **fn** `tls_profile` — Получить текущий TLS fingerprinting profile
+`crates/network/src/lib.rs:2454` **fn** `fetch_cors` — CORS-enabled fetch для cross-origin subresource (Fetch §3-§4)
+`crates/network/src/lib.rs:2503` **fn** `fetch_range`
+`crates/network/src/lib.rs:2571` **fn** `fetch_multi_range` — Multi-range запрос (RFC 7233 §4.1). Один request на несколько
+`crates/network/src/lib.rs:2658` **fn** `fetch_subresource` — Загрузить подресурс с проверкой mixed-content по подключённой
+`crates/network/src/lib.rs:2751` **fn** `fetch_page` — Fetch a top-level page and return the response body together with all
+`crates/network/src/lib.rs:2812` **fn** `fetch_page_streaming` — Как [`HttpClient::fetch_page`], но тело финального 2xx-ответа стримится
+`crates/network/src/lib.rs:3341` **struct** `InMemoryFetchInterceptor` — In-memory реализация `FetchInterceptor` для тестов без SQLite
+`crates/network/src/lib.rs:3347` **fn** `new`
+`crates/network/src/lib.rs:3354` **fn** `insert` — Добавить запись: ответ для (origin, url) берётся из кэша без сети
 `crates/network/src/mixed_content.rs:33` **enum** `RequestDestination` — Назначение подресурса по Fetch spec §3.2.7 «request destination» —
 `crates/network/src/mixed_content.rs:59` **enum** `MixedContentLevel` — Mixed-content уровень для запроса в secure-контексте
 `crates/network/src/mixed_content.rs:75` **fn** `is_strict_blocked` — Должны ли мы блокировать запрос по строгому режиму. По умолчанию
@@ -2663,7 +2668,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:479` **fn** `tex_image_2d_rgba` — `gl.texImage2D(…, data)`. Averages pixel data to a 1×1 solid colour for
 `crates/engine/paint/src/webgl.rs:498` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Executes vertex and fragment shaders
 
-## lumen-shell  (818 symbols)
+## lumen-shell  (819 symbols)
 
 `crates/shell/src/address_bar.rs:56` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:70` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -2707,15 +2712,16 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/click_log.rs:194` **fn** `log_page_ready` — Страница полностью применена (apply_loaded_page завершён)
 `crates/shell/src/config.rs:47` **fn** `init_global` — Install the process-global fingerprint profile. Idempotent: the first call
 `crates/shell/src/config.rs:53` **fn** `global` — Return the process-global fingerprint profile, or the default if unset
-`crates/shell/src/config.rs:63` **struct** `FingerprintProfile` — User-configurable fingerprint identity (9F.1)
-`crates/shell/src/config.rs:132` **fn** `effective_tls_profile` — Resolve the effective TLS profile: explicit override, else derived from
-`crates/shell/src/config.rs:144` **fn** `navigator_profile` — Build the JS-side [`lumen_js::NavigatorProfile`] from this config
-`crates/shell/src/config.rs:168` **fn** `install_navigator` — Install the navigator/screen/timezone values into the process-global JS
-`crates/shell/src/config.rs:174` **fn** `apply_http` — Stamp the HTTP and TLS fingerprint onto an [`HttpClient`] builder
-`crates/shell/src/config.rs:220` **fn** `effective_socks5_proxy` — Resolve the effective SOCKS5 proxy: explicit override first, then
-`crates/shell/src/config.rs:237` **fn** `config_path` — Resolve the platform-specific path to `fingerprint.toml`
-`crates/shell/src/config.rs:255` **fn** `load` — Load and parse the fingerprint profile from the default config path
-`crates/shell/src/config.rs:267` **fn** `parse` — Parse a flat `key = value` TOML subset into a [`FingerprintProfile`]
+`crates/shell/src/config.rs:65` **fn** `init_adblock` — Install the built-in ad/tracker filter as the process-global
+`crates/shell/src/config.rs:79` **struct** `FingerprintProfile` — User-configurable fingerprint identity (9F.1)
+`crates/shell/src/config.rs:148` **fn** `effective_tls_profile` — Resolve the effective TLS profile: explicit override, else derived from
+`crates/shell/src/config.rs:160` **fn** `navigator_profile` — Build the JS-side [`lumen_js::NavigatorProfile`] from this config
+`crates/shell/src/config.rs:184` **fn** `install_navigator` — Install the navigator/screen/timezone values into the process-global JS
+`crates/shell/src/config.rs:190` **fn** `apply_http` — Stamp the HTTP and TLS fingerprint onto an [`HttpClient`] builder
+`crates/shell/src/config.rs:236` **fn** `effective_socks5_proxy` — Resolve the effective SOCKS5 proxy: explicit override first, then
+`crates/shell/src/config.rs:253` **fn** `config_path` — Resolve the platform-specific path to `fingerprint.toml`
+`crates/shell/src/config.rs:271` **fn** `load` — Load and parse the fingerprint profile from the default config path
+`crates/shell/src/config.rs:283` **fn** `parse` — Parse a flat `key = value` TOML subset into a [`FingerprintProfile`]
 `crates/shell/src/deterministic.rs:15` **struct** `DetConfig` — Parsed deterministic-mode configuration from CLI args
 `crates/shell/src/deterministic.rs:27` **fn** `extract_deterministic` — Extract all deterministic-mode flags from CLI args
 `crates/shell/src/devtools/console_panel.rs:49` **enum** `ConsoleLevel` — Severity level of a console message
@@ -3238,7 +3244,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/platform/file_dialog.rs:14` **struct** `FilePickerEntry`
 `crates/shell/src/platform/file_dialog.rs:34` **fn** `open_file_dialog` — Open the OS file-picker dialog and return selected files
 `crates/shell/src/platform/file_dialog.rs:52` **fn** `entries_to_json_with_tokens` — Build a JSON array that includes opaque `token` values instead of raw paths
-`crates/shell/src/platform/screen_capture.rs:109` **struct** `PlatformScreenCapture` — Platform screen capture provider using Win32 GDI BitBlt
+`crates/shell/src/platform/screen_capture.rs:114` **struct** `PlatformScreenCapture` — Platform screen capture provider using Win32 GDI BitBlt
 `crates/shell/src/platform/wake_lock.rs:25` **struct** `PlatformWakeLock` — Platform-backed wake-lock provider
 `crates/shell/src/platform/wake_lock.rs:32` **fn** `new` — Create a new provider with no lock held initially
 `crates/shell/src/reader_view.rs:18` **struct** `ArticleContent` — Article content extracted from a raw HTML page
@@ -3435,45 +3441,45 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tabs/groups.rs:81` **fn** `from_index` — Inverse of [`index`](GroupColor::index). Out-of-range indices clamp to
 `crates/shell/src/tabs/groups.rs:99` **struct** `TabGroup` — A named, colour-coded group of tabs
 `crates/shell/src/tabs/groups.rs:114` **fn** `new` — Create an expanded group with the given id, label and colour
-`crates/shell/src/tabs/strip.rs:81` **struct** `TabEntry` — Metadata for one browser tab
-`crates/shell/src/tabs/strip.rs:124` **struct** `TabStrip` — State of the tab strip (tab list + active index)
-`crates/shell/src/tabs/strip.rs:139` **fn** `new` — Create the initial tab strip with one blank tab
-`crates/shell/src/tabs/strip.rs:159` **fn** `len` — Number of open tabs
-`crates/shell/src/tabs/strip.rs:167` **fn** `push_blank` — Append a new blank tab and return its index
-`crates/shell/src/tabs/strip.rs:190` **fn** `push_with_opener` — Append a new blank child tab opened by the tab with `opener_id`
-`crates/shell/src/tabs/strip.rs:210` **fn** `update_last_activated` — Record `now_ms` as the activation timestamp for the tab at `idx`
-`crates/shell/src/tabs/strip.rs:222` **fn** `set_tab_container` — Assign `container` to the tab at `idx`. Out-of-bounds index is a no-op
-`crates/shell/src/tabs/strip.rs:230` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
-`crates/shell/src/tabs/strip.rs:242` **fn** `set_active_title` — Update the title of the active tab
-`crates/shell/src/tabs/strip.rs:252` **fn** `set_tab_state` — Update the lifecycle state of the tab at `idx`
-`crates/shell/src/tabs/strip.rs:262` **fn** `move_tab` — Reorder: move the tab currently at `src` so that it ends up at `dst`
-`crates/shell/src/tabs/strip.rs:281` **fn** `toggle_pin` — Toggle the pinned flag of the tab at `idx`. Returns the new state
-`crates/shell/src/tabs/strip.rs:291` **fn** `is_pinned` — `true` if the tab at `idx` is pinned. Out-of-bounds → `false`
-`crates/shell/src/tabs/strip.rs:302` **fn** `duplicate` — Insert a duplicate of the tab at `src` immediately to its right
-`crates/shell/src/tabs/strip.rs:329` **fn** `close_others` — Remove every tab except `keep_idx` and any pinned tabs
-`crates/shell/src/tabs/strip.rs:354` **fn** `close_right` — Remove all non-pinned tabs positioned to the right of `idx`
-`crates/shell/src/tabs/strip.rs:380` **fn** `create_group` — Create a new expanded [`TabGroup`] with `label` and `color`
-`crates/shell/src/tabs/strip.rs:389` **fn** `group` — Borrow the group with the given id, if it exists
-`crates/shell/src/tabs/strip.rs:395` **fn** `group_of` — The group id of the tab at `idx`, or `None` when ungrouped / out of bounds
-`crates/shell/src/tabs/strip.rs:403` **fn** `assign_to_group` — Assign the tab at `idx` to the group `group_id`
-`crates/shell/src/tabs/strip.rs:417` **fn** `ungroup` — Remove the tab at `idx` from its group (no-op if already ungrouped or
-`crates/shell/src/tabs/strip.rs:425` **fn** `toggle_collapse` — Toggle the collapsed flag of the group `id`. Returns the new collapsed
-`crates/shell/src/tabs/strip.rs:436` **fn** `is_collapsed` — `true` if the group `id` exists and is collapsed
-`crates/shell/src/tabs/strip.rs:442` **fn** `group_color` — The colour of the group `id`, or `None` for an unknown group
-`crates/shell/src/tabs/strip.rs:448` **fn** `group_members` — Strip indices of every tab in the group `id`, in left-to-right order
-`crates/shell/src/tabs/strip.rs:459` **fn** `remove_group` — Remove the group `id` and ungroup all of its member tabs. No-op if the
-`crates/shell/src/tabs/strip.rs:475` **fn** `visible_indices` — Strip indices of the tabs that should be drawn, in order
-`crates/shell/src/tabs/strip.rs:499` **struct** `TabDragState` — State for an in-progress tab drag-and-drop
-`crates/shell/src/tabs/strip.rs:513` **fn** `drop_target` — Compute the tab index where the dragged tab would be dropped if the
-`crates/shell/src/tabs/strip.rs:525` **enum** `TabHit` — Result of clicking inside the tab bar area
-`crates/shell/src/tabs/strip.rs:536` **enum** `TabLayout` — Tab layout mode: horizontal strip or vertical sidebar
-`crates/shell/src/tabs/strip.rs:546` **fn** `from_str` — Parse from a stored settings string (`"horizontal"` or `"vertical"`)
-`crates/shell/src/tabs/strip.rs:551` **fn** `as_str` — Serialize to a settings string
-`crates/shell/src/tabs/strip.rs:564` **fn** `hit_test_layout_btn` — Returns `true` if `(x, y)` falls inside the layout-mode toggle button
-`crates/shell/src/tabs/strip.rs:573` **fn** `build_layout_toggle_btn` — Build a display list for the vertical-tab layout toggle button
-`crates/shell/src/tabs/strip.rs:615` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
-`crates/shell/src/tabs/strip.rs:652` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
-`crates/shell/src/tabs/strip.rs:825` **fn** `build_tab_tooltip` — Build a small tooltip overlay for a tab with a non-Active tier badge
+`crates/shell/src/tabs/strip.rs:100` **struct** `TabEntry` — Metadata for one browser tab
+`crates/shell/src/tabs/strip.rs:151` **struct** `TabStrip` — State of the tab strip (tab list + active index)
+`crates/shell/src/tabs/strip.rs:166` **fn** `new` — Create the initial tab strip with one blank tab
+`crates/shell/src/tabs/strip.rs:187` **fn** `len` — Number of open tabs
+`crates/shell/src/tabs/strip.rs:195` **fn** `push_blank` — Append a new blank tab and return its index
+`crates/shell/src/tabs/strip.rs:219` **fn** `push_with_opener` — Append a new blank child tab opened by the tab with `opener_id`
+`crates/shell/src/tabs/strip.rs:240` **fn** `update_last_activated` — Record `now_ms` as the activation timestamp for the tab at `idx`
+`crates/shell/src/tabs/strip.rs:252` **fn** `set_tab_container` — Assign `container` to the tab at `idx`. Out-of-bounds index is a no-op
+`crates/shell/src/tabs/strip.rs:260` **fn** `remove` — Remove the tab at `idx`. Returns the new active index (clamped to valid
+`crates/shell/src/tabs/strip.rs:272` **fn** `set_active_title` — Update the title of the active tab
+`crates/shell/src/tabs/strip.rs:282` **fn** `set_tab_state` — Update the lifecycle state of the tab at `idx`
+`crates/shell/src/tabs/strip.rs:292` **fn** `move_tab` — Reorder: move the tab currently at `src` so that it ends up at `dst`
+`crates/shell/src/tabs/strip.rs:311` **fn** `toggle_pin` — Toggle the pinned flag of the tab at `idx`. Returns the new state
+`crates/shell/src/tabs/strip.rs:321` **fn** `is_pinned` — `true` if the tab at `idx` is pinned. Out-of-bounds → `false`
+`crates/shell/src/tabs/strip.rs:332` **fn** `duplicate` — Insert a duplicate of the tab at `src` immediately to its right
+`crates/shell/src/tabs/strip.rs:360` **fn** `close_others` — Remove every tab except `keep_idx` and any pinned tabs
+`crates/shell/src/tabs/strip.rs:385` **fn** `close_right` — Remove all non-pinned tabs positioned to the right of `idx`
+`crates/shell/src/tabs/strip.rs:411` **fn** `create_group` — Create a new expanded [`TabGroup`] with `label` and `color`
+`crates/shell/src/tabs/strip.rs:420` **fn** `group` — Borrow the group with the given id, if it exists
+`crates/shell/src/tabs/strip.rs:426` **fn** `group_of` — The group id of the tab at `idx`, or `None` when ungrouped / out of bounds
+`crates/shell/src/tabs/strip.rs:434` **fn** `assign_to_group` — Assign the tab at `idx` to the group `group_id`
+`crates/shell/src/tabs/strip.rs:448` **fn** `ungroup` — Remove the tab at `idx` from its group (no-op if already ungrouped or
+`crates/shell/src/tabs/strip.rs:456` **fn** `toggle_collapse` — Toggle the collapsed flag of the group `id`. Returns the new collapsed
+`crates/shell/src/tabs/strip.rs:467` **fn** `is_collapsed` — `true` if the group `id` exists and is collapsed
+`crates/shell/src/tabs/strip.rs:473` **fn** `group_color` — The colour of the group `id`, or `None` for an unknown group
+`crates/shell/src/tabs/strip.rs:479` **fn** `group_members` — Strip indices of every tab in the group `id`, in left-to-right order
+`crates/shell/src/tabs/strip.rs:490` **fn** `remove_group` — Remove the group `id` and ungroup all of its member tabs. No-op if the
+`crates/shell/src/tabs/strip.rs:506` **fn** `visible_indices` — Strip indices of the tabs that should be drawn, in order
+`crates/shell/src/tabs/strip.rs:530` **struct** `TabDragState` — State for an in-progress tab drag-and-drop
+`crates/shell/src/tabs/strip.rs:544` **fn** `drop_target` — Compute the tab index where the dragged tab would be dropped if the
+`crates/shell/src/tabs/strip.rs:556` **enum** `TabHit` — Result of clicking inside the tab bar area
+`crates/shell/src/tabs/strip.rs:569` **enum** `TabLayout` — Tab layout mode: horizontal strip or vertical sidebar
+`crates/shell/src/tabs/strip.rs:579` **fn** `from_str` — Parse from a stored settings string (`"horizontal"` or `"vertical"`)
+`crates/shell/src/tabs/strip.rs:584` **fn** `as_str` — Serialize to a settings string
+`crates/shell/src/tabs/strip.rs:597` **fn** `hit_test_layout_btn` — Returns `true` if `(x, y)` falls inside the layout-mode toggle button
+`crates/shell/src/tabs/strip.rs:606` **fn** `build_layout_toggle_btn` — Build a display list for the vertical-tab layout toggle button
+`crates/shell/src/tabs/strip.rs:648` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
+`crates/shell/src/tabs/strip.rs:690` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
+`crates/shell/src/tabs/strip.rs:887` **fn** `build_tab_tooltip` — Build a small tooltip overlay for a tab with a non-Active tier badge
 `crates/shell/src/tabs/tree.rs:22` **fn** `depth_of` — Compute the tree depth of the tab with `id` in the given slice
 `crates/shell/src/tabs/tree.rs:38` **fn** `children_of` — Return the IDs of direct children of `parent_id` in strip order
 `crates/shell/src/tabs/tree.rs:48` **fn** `subtree_ids` — Collect the IDs of all tabs in the subtree rooted at `root_id` (inclusive)
@@ -3979,4 +3985,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3908 symbols in 22 crates*
+*Total: 3914 symbols in 22 crates*
