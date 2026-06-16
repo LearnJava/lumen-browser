@@ -35,9 +35,26 @@ FilterListSource (текст правил) → EasyListFilter::parse (индек
 
 ### 1. Где и как хранятся списки
 
-Директория: `lumen_cache_dir()/filterlists/` (хелпер `lumen_network::lumen_cache_dir()` — `crates/network/src/http_cache.rs:567`):
-- Windows: `%APPDATA%\lumen\cache\filterlists\`
-- Unix: `$XDG_CACHE_HOME/lumen/cache/filterlists/` (или `~/.cache/lumen/cache/filterlists/`)
+**Решение (пользователь, 2026-06-16): всё хранить ТОЛЬКО в папке браузера, OS-каталоги
+(`%APPDATA%`, `~/.config`, `~/.cache`) НЕ использовать.** Провизорно — «пока так, дальше
+посмотрим». НЕ звать `lumen_cache_dir()` / `config_path()` для адблок-данных.
+
+Директория — рядом с исполняемым файлом: `<папка_бинаря>/data/filterlists/`, где
+`<папка_бинаря>` = каталог `std::env::current_exe()`. Одинаково на всех ОС:
+- Windows: `<…>\lumen.exe` → `<…>\data\filterlists\`
+- Linux/macOS: `<…>/lumen` → `<…>/data/filterlists/`
+- В dev запуск идёт из `target/release/` (внутри репозитория) — нарушения boundary нет.
+
+Хелпер (в `filter/remote.rs`), без OS-папок:
+```rust
+/// Каталог данных рядом с бинарём (portable): <exe_dir>/data.
+fn browser_data_dir() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    Some(exe.parent()?.join("data"))
+}
+```
+Если `current_exe()` недоступен (редкий случай) — fallback на `./data` от текущего каталога;
+наружу (в OS-папки) НЕ уходить.
 
 Раскладка файлов:
 
@@ -123,7 +140,7 @@ static GLOBAL_ADBLOCK_FILTER: std::sync::RwLock<Option<Arc<dyn lumen_core::ext::
 
 - [ ] Прочесть блок «Process-global ad-block filter» в `crates/network/src/lib.rs`
 - [ ] Прочесть `crates/network/src/filter/easylist.rs:67` (`parse`) и `default_list.rs`
-- [ ] Прочесть `crates/network/src/http_cache.rs:567` (`lumen_cache_dir`) и `mock.rs` (`MockTransport` для тестов)
+- [ ] Прочесть `mock.rs` (`MockTransport` для тестов); хранение — рядом с бинарём через `std::env::current_exe()` (НЕ `lumen_cache_dir`)
 - [ ] Прочесть `crates/shell/src/config.rs` (`init_adblock`, `apply_http`) и точку старта в `main.rs` (рядом с `config::init_adblock()`)
 - [ ] `git status` — main чист
 
@@ -156,5 +173,6 @@ static GLOBAL_ADBLOCK_FILTER: std::sync::RwLock<Option<Arc<dyn lumen_core::ext::
 ## Замечания
 
 - **Приватность.** Lumen — приватный браузер: скачивание листов с CDN раскрывает факт использования. По умолчанию подписки включены (как в адблокерах), но в Phase 3 дать переключатель «не обновлять автоматически». Запросы идут через обычный `HttpClient` с fingerprint-профилем — не выделяются.
+- **Хранение только в папке браузера.** Все данные адблока — под `<exe_dir>/data/` (см. §1). OS-каталоги (`%APPDATA%`/`~/.config`/`~/.cache`) и хелперы `lumen_cache_dir()`/`config_path()` для этой задачи НЕ использовать (решение пользователя 2026-06-16, провизорно). Подписки и листы — обе под `data/filterlists/` (раздельную config-папку не вводим).
 - **Без новых тяжёлых зависимостей.** Условный GET — существующим `HttpClient`; своп — `std::sync::RwLock`; JSON — `serde_json` (если ещё не в network — добавить с обоснованием permanent). `arc_swap` не нужен.
 - **Bug-политика.** Найденный по дороге баг — строкой в `BUGS.md` (OPEN, следующий BUG-NNN), не чинить в этой задаче.
