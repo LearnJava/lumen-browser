@@ -117,6 +117,20 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
 
+- **BUG-177** (2026-06-17) — table-cell `height` как минимум (TEST-115 13.45% → 0.00% PASS).
+  `height` на `display:table-cell` трактовался как фиксированная высота border-box, а не
+  минимальная (CSS 2.1 §17.5.3). Ячейка `td{height:64px;border:4px;box-sizing:border-box}`
+  (content-box 56px) с содержимым выше (52×32 блок + `margin:16px` = 64px content) зажималась
+  в 64px → content переполнял ячейку в border-spacing-зазор, pitch строки занижался, ошибка
+  накапливалась вниз по таблице (нижние ряды уезжали вверх на px). Замер колонки x=95: Edge
+  navy-блоки y=69/229/365/525, Lumen до фикса 69/213/341/485. Фикс в общей ветке вычисления
+  высоты блока (`box_tree.rs:5471`): при `s.display == Display::TableCell` used-height =
+  `max(specified, content_box)`. Высота строки уже = max ячеек, поэтому подросшая ячейка
+  поднимает pitch автоматически. Тесты `table_cell_height_is_minimum_grows_to_fit_content`,
+  `table_cell_height_honoured_when_taller_than_content`. Без регрессий (layout 2904, paint
+  741+21; полный прогон: единственная дельта 115 FAIL→PASS). TEST-64/69 остаются FAIL по
+  другой причине.
+
 - **BUG-144** (2026-06-17) — backdrop-filter row-flip (TEST-30 16.42% → DEBTOR 10.48%).
   Карточки `backdrop-filter` (row 4) рисовались в неверном ряду: элемент `y=439,h=102`
   в вьюпорте 718px появлялся на `y≈177` (`718−(439+102)` — чистый вертикальный флип).
