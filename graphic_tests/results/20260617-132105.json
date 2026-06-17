@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-06-17T17:43:23",
+  "timestamp": "2026-06-17T13:21:05",
   "git": {
-    "commit": "fd98fcdc",
+    "commit": "7a573d47",
     "branch": "main",
-    "subject": "Merge p3-bug178-float-shrink: BUG-178 float shrink-to-fit СЃСѓРјРјРёСЂСѓРµС‚ С„Р»РѕР°С‚С‹ (TEST-51 9.91%в†’1.09%)"
+    "subject": "С‚РµСЃС‚С‹: РїСЂРѕРіРѕРЅ 2026-06-17 (BUG-174 TEST-119 56.35%в†’0.81%)"
   },
   "crop_offset": [
     8,
@@ -12,10 +12,10 @@
   "halted_at": null,
   "summary": {
     "total": 122,
-    "passed": 62,
-    "failed": 51,
+    "passed": 61,
+    "failed": 55,
     "errors": 0,
-    "debtors": 9,
+    "debtors": 6,
     "skipped": 0
   },
   "tests": [
@@ -390,18 +390,13 @@
       "label": "CSS filter: grayscale/sepia/brightness/invert/contrast/saturate/opacity/blur/hue-rotate",
       "html": "30-css-filter.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 10.4751,
+      "status": "FAIL",
+      "diff_pct": 16.4156,
       "diff_region": {
         "top": 31,
         "left": 31,
         "bottom": 540,
         "right": 998
-      },
-      "debtor": {
-        "bug": "BUG-144",
-        "baseline": 10.5,
-        "verdict": "OK"
       }
     },
     {
@@ -426,7 +421,7 @@
       "html": "32-list-markers.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 3.7499,
+      "diff_pct": 3.7438,
       "diff_region": {
         "top": 33,
         "left": 60,
@@ -485,18 +480,13 @@
       "label": "border-radius: uniform/pill/circle/asymmetric SDF rendering",
       "html": "36-border-radius.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.1085,
+      "status": "FAIL",
+      "diff_pct": 1.5039,
       "diff_region": {
         "top": 25,
         "left": 24,
         "bottom": 595,
         "right": 774
-      },
-      "debtor": {
-        "bug": "BUG-176",
-        "baseline": 1.11,
-        "verdict": "OK"
       }
     },
     {
@@ -636,12 +626,12 @@
       "html": "47-svg-basic.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 3.7113,
+      "diff_pct": 3.9813,
       "diff_region": {
         "top": 25,
         "left": 29,
         "bottom": 646,
-        "right": 988
+        "right": 987
       }
     },
     {
@@ -695,18 +685,13 @@
       "label": "Scrollbar rendering — overflow:scroll/auto vertical/horizontal/both DrawScrollbar track+thumb",
       "html": "51-scrollbar-rendering.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.0886,
+      "status": "FAIL",
+      "diff_pct": 9.9084,
       "diff_region": {
         "top": 22,
         "left": 21,
-        "bottom": 315,
+        "bottom": 455,
         "right": 648
-      },
-      "debtor": {
-        "bug": "BUG-124",
-        "baseline": 1.09,
-        "verdict": "OK"
       }
     },
     {
@@ -866,12 +851,12 @@
       "html": "61-view-transitions.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 10.9939,
+      "diff_pct": 10.6468,
       "diff_region": {
         "top": 33,
         "left": 40,
-        "bottom": 275,
-        "right": 983
+        "bottom": 274,
+        "right": 982
       },
       "debtor": {
         "bug": "BUG-103",
@@ -886,11 +871,11 @@
       "html": "62-scroll-snap.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 63.4778,
+      "diff_pct": 63.1034,
       "diff_region": {
         "top": 0,
         "left": 0,
-        "bottom": 711,
+        "bottom": 710,
         "right": 1023
       }
     },
@@ -1131,12 +1116,12 @@
       "html": "78-scroll-driven-animations.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 12.8516,
+      "diff_pct": 12.3682,
       "diff_region": {
         "top": 29,
-        "left": 24,
+        "left": 25,
         "bottom": 565,
-        "right": 905
+        "right": 904
       }
     },
     {
@@ -1206,11 +1191,11 @@
       "html": "83-scroll-behavior.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 14.0187,
+      "diff_pct": 13.2312,
       "diff_region": {
         "top": 33,
         "left": 50,
-        "bottom": 584,
+        "bottom": 583,
         "right": 973
       }
     },
@@ -1255,11 +1240,11 @@
       "html": "101-radius-overflow.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 3.8997,
+      "diff_pct": 4.0449,
       "diff_region": {
         "top": 25,
         "left": 25,
-        "bottom": 675,
+        "bottom": 674,
         "right": 1004
       },
       "deps": [
@@ -1315,12 +1300,12 @@
       "html": "104-mask-gradient-radius.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 52.0116,
+      "diff_pct": 51.9689,
       "diff_region": {
         "top": 25,
         "left": 24,
         "bottom": 675,
-        "right": 1005
+        "right": 1004
       },
       "deps": [
         "26",
@@ -1377,12 +1362,12 @@
       "html": "107-shadow-radius-overflow.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1427,
+      "diff_pct": 0.2688,
       "diff_region": {
         "top": 65,
         "left": 65,
         "bottom": 602,
-        "right": 930
+        "right": 929
       },
       "deps": [
         "15",
@@ -1510,10 +1495,10 @@
       "html": "90-avif-image.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 2.755,
+      "diff_pct": 2.1927,
       "diff_region": {
-        "top": 20,
-        "left": 20,
+        "top": 21,
+        "left": 21,
         "bottom": 719,
         "right": 1023
       }
@@ -1709,9 +1694,14 @@
       "label": "CSS Tables L2 §17.6.1.1: empty-cells — в separate-модели hide прячет border+фон у пустых <td></td>; верхняя таблица (hide) показывает шахматку только из заполненных ячеек, нижняя (show) рисует рамки+фон всех ячеек",
       "html": "115-empty-cells.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 13.4462,
+      "diff_region": {
+        "top": 109,
+        "left": 41,
+        "bottom": 584,
+        "right": 464
+      }
     },
     {
       "id": "116",

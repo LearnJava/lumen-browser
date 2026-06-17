@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-06-17T17:43:23",
+  "timestamp": "2026-06-17T16:38:58",
   "git": {
-    "commit": "fd98fcdc",
+    "commit": "10bdb192",
     "branch": "main",
-    "subject": "Merge p3-bug178-float-shrink: BUG-178 float shrink-to-fit СЃСѓРјРјРёСЂСѓРµС‚ С„Р»РѕР°С‚С‹ (TEST-51 9.91%в†’1.09%)"
+    "subject": "Merge p3-bug177-table-cell-height: BUG-177 table-cell height РєР°Рє РјРёРЅРёРјСѓРј (TEST-115 13.45%в†’0%)"
   },
   "crop_offset": [
     8,
@@ -12,10 +12,10 @@
   "halted_at": null,
   "summary": {
     "total": 122,
-    "passed": 62,
-    "failed": 51,
+    "passed": 61,
+    "failed": 53,
     "errors": 0,
-    "debtors": 9,
+    "debtors": 8,
     "skipped": 0
   },
   "tests": [
@@ -26,8 +26,13 @@
       "html": "00-calibration.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "diff_pct": 0.0104,
+      "diff_region": {
+        "top": 102,
+        "left": 201,
+        "bottom": 117,
+        "right": 210
+      }
     },
     {
       "id": "01",
@@ -540,13 +545,13 @@
       "label": "conic-gradient / repeating-conic-gradient (CSS Images L4 §3.7)",
       "html": "40-conic-gradients.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.4753,
+      "status": "FAIL",
+      "diff_pct": 100.0,
       "diff_region": {
-        "top": 21,
-        "left": 106,
-        "bottom": 504,
-        "right": 788
+        "top": 0,
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       }
     },
     {
@@ -695,18 +700,13 @@
       "label": "Scrollbar rendering — overflow:scroll/auto vertical/horizontal/both DrawScrollbar track+thumb",
       "html": "51-scrollbar-rendering.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.0886,
+      "status": "FAIL",
+      "diff_pct": 9.9084,
       "diff_region": {
         "top": 22,
         "left": 21,
-        "bottom": 315,
+        "bottom": 455,
         "right": 648
-      },
-      "debtor": {
-        "bug": "BUG-124",
-        "baseline": 1.09,
-        "verdict": "OK"
       }
     },
     {
@@ -1131,7 +1131,7 @@
       "html": "78-scroll-driven-animations.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 12.8516,
+      "diff_pct": 12.8145,
       "diff_region": {
         "top": 29,
         "left": 24,

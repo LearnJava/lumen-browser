@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-06-17T17:43:23",
+  "timestamp": "2026-06-15T22:09:44",
   "git": {
-    "commit": "fd98fcdc",
+    "commit": "cc0f8f8d",
     "branch": "main",
-    "subject": "Merge p3-bug178-float-shrink: BUG-178 float shrink-to-fit СЃСѓРјРјРёСЂСѓРµС‚ С„Р»РѕР°С‚С‹ (TEST-51 9.91%в†’1.09%)"
+    "subject": "Merge p3-bug-158: fix BUG-158 вЂ” flex:1 item РІ column-flex СЃС…Р»РѕРїС‹РІР°Р»СЃСЏ РІ height=0"
   },
   "crop_offset": [
     8,
@@ -11,11 +11,11 @@
   ],
   "halted_at": null,
   "summary": {
-    "total": 122,
-    "passed": 62,
-    "failed": 51,
+    "total": 120,
+    "passed": 59,
+    "failed": 57,
     "errors": 0,
-    "debtors": 9,
+    "debtors": 4,
     "skipped": 0
   },
   "tests": [
@@ -390,18 +390,13 @@
       "label": "CSS filter: grayscale/sepia/brightness/invert/contrast/saturate/opacity/blur/hue-rotate",
       "html": "30-css-filter.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 10.4751,
+      "status": "FAIL",
+      "diff_pct": 16.4156,
       "diff_region": {
         "top": 31,
         "left": 31,
         "bottom": 540,
         "right": 998
-      },
-      "debtor": {
-        "bug": "BUG-144",
-        "baseline": 10.5,
-        "verdict": "OK"
       }
     },
     {
@@ -426,7 +421,7 @@
       "html": "32-list-markers.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 3.7499,
+      "diff_pct": 3.7438,
       "diff_region": {
         "top": 33,
         "left": 60,
@@ -485,18 +480,13 @@
       "label": "border-radius: uniform/pill/circle/asymmetric SDF rendering",
       "html": "36-border-radius.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.1085,
+      "status": "FAIL",
+      "diff_pct": 1.5039,
       "diff_region": {
         "top": 25,
         "left": 24,
         "bottom": 595,
         "right": 774
-      },
-      "debtor": {
-        "bug": "BUG-176",
-        "baseline": 1.11,
-        "verdict": "OK"
       }
     },
     {
@@ -636,12 +626,12 @@
       "html": "47-svg-basic.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 3.7113,
+      "diff_pct": 3.7084,
       "diff_region": {
         "top": 25,
         "left": 29,
         "bottom": 646,
-        "right": 988
+        "right": 987
       }
     },
     {
@@ -695,18 +685,13 @@
       "label": "Scrollbar rendering — overflow:scroll/auto vertical/horizontal/both DrawScrollbar track+thumb",
       "html": "51-scrollbar-rendering.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.0886,
+      "status": "FAIL",
+      "diff_pct": 9.9084,
       "diff_region": {
         "top": 22,
         "left": 21,
-        "bottom": 315,
+        "bottom": 455,
         "right": 648
-      },
-      "debtor": {
-        "bug": "BUG-124",
-        "baseline": 1.09,
-        "verdict": "OK"
       }
     },
     {
@@ -745,18 +730,13 @@
       "label": "SVG <path> stroke tessellation — open/closed stroke, fill+stroke, miter join, butt cap, widths 2-14px",
       "html": "54-svg-path-stroke.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 2.3029,
+      "status": "FAIL",
+      "diff_pct": 5.5802,
       "diff_region": {
-        "top": 22,
-        "left": 18,
+        "top": 24,
+        "left": 19,
         "bottom": 684,
         "right": 976
-      },
-      "debtor": {
-        "bug": "BUG-173",
-        "baseline": 2.5,
-        "verdict": "OK"
       }
     },
     {
@@ -845,18 +825,13 @@
       "label": "SVG stroke advanced: stroke-linecap (butt/round/square), stroke-linejoin (miter/bevel/round), stroke-miterlimit, stroke-dasharray, stroke-dashoffset, fill-rule (nonzero/evenodd)",
       "html": "60-svg-stroke-advanced.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.406,
+      "status": "FAIL",
+      "diff_pct": 8.3535,
       "diff_region": {
-        "top": 19,
+        "top": 20,
         "left": 27,
         "bottom": 650,
-        "right": 990
-      },
-      "debtor": {
-        "bug": "BUG-173",
-        "baseline": 1.5,
-        "verdict": "OK"
+        "right": 989
       }
     },
     {
@@ -865,18 +840,18 @@
       "label": "View Transitions API: document.startViewTransition(cb) — JS API, ViewTransition object, Begin/End events, 300 ms cross-fade",
       "html": "61-view-transitions.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 10.9939,
+      "status": "DEBTOR",
+      "diff_pct": 99.5272,
       "diff_region": {
-        "top": 33,
-        "left": 40,
-        "bottom": 275,
-        "right": 983
+        "top": 1,
+        "left": 1,
+        "bottom": 718,
+        "right": 1022
       },
       "debtor": {
         "bug": "BUG-103",
         "baseline": 99.53,
-        "verdict": "RATCHET"
+        "verdict": "OK"
       }
     },
     {
@@ -886,11 +861,11 @@
       "html": "62-scroll-snap.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 63.4778,
+      "diff_pct": 63.1034,
       "diff_region": {
         "top": 0,
         "left": 0,
-        "bottom": 711,
+        "bottom": 710,
         "right": 1023
       }
     },
@@ -936,7 +911,7 @@
       "html": "65-flex-align-content.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 1.3348,
+      "diff_pct": 16.3962,
       "diff_region": {
         "top": 10,
         "left": 1,
@@ -951,11 +926,11 @@
       "html": "66-selection-pseudo.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 1.071,
+      "diff_pct": 5.2441,
       "diff_region": {
         "top": 43,
         "left": 41,
-        "bottom": 351,
+        "bottom": 411,
         "right": 315
       }
     },
@@ -1040,13 +1015,13 @@
       "label": "CSS Scoping L1 §6.1-6.2 :host / ::slotted: shadow host gets blue background via :host; :host(.special) colours second host amber; :host(.missing) does not match third host; ::slotted children get coloured boxes",
       "html": "72-host-slotted.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0008,
+      "status": "FAIL",
+      "diff_pct": 11.2419,
       "diff_region": {
-        "top": 42,
+        "top": 31,
         "left": 31,
-        "bottom": 296,
-        "right": 34
+        "bottom": 444,
+        "right": 334
       }
     },
     {
@@ -1131,12 +1106,12 @@
       "html": "78-scroll-driven-animations.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 12.8516,
+      "diff_pct": 12.3682,
       "diff_region": {
         "top": 29,
-        "left": 24,
+        "left": 25,
         "bottom": 565,
-        "right": 905
+        "right": 904
       }
     },
     {
@@ -1191,7 +1166,7 @@
       "html": "82-svg-use.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 5.0019,
+      "diff_pct": 4.9929,
       "diff_region": {
         "top": 21,
         "left": 20,
@@ -1206,11 +1181,11 @@
       "html": "83-scroll-behavior.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 14.0187,
+      "diff_pct": 13.2312,
       "diff_region": {
         "top": 33,
         "left": 50,
-        "bottom": 584,
+        "bottom": 583,
         "right": 973
       }
     },
@@ -1255,11 +1230,11 @@
       "html": "101-radius-overflow.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 3.8997,
+      "diff_pct": 4.0449,
       "diff_region": {
         "top": 25,
         "left": 25,
-        "bottom": 675,
+        "bottom": 674,
         "right": 1004
       },
       "deps": [
@@ -1315,12 +1290,12 @@
       "html": "104-mask-gradient-radius.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 52.0116,
+      "diff_pct": 51.9689,
       "diff_region": {
         "top": 25,
         "left": 24,
         "bottom": 675,
-        "right": 1005
+        "right": 1004
       },
       "deps": [
         "26",
@@ -1377,12 +1352,12 @@
       "html": "107-shadow-radius-overflow.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1427,
+      "diff_pct": 0.2688,
       "diff_region": {
         "top": 65,
         "left": 65,
         "bottom": 602,
-        "right": 930
+        "right": 929
       },
       "deps": [
         "15",
@@ -1510,10 +1485,10 @@
       "html": "90-avif-image.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 2.755,
+      "diff_pct": 1.829,
       "diff_region": {
-        "top": 20,
-        "left": 20,
+        "top": 21,
+        "left": 21,
         "bottom": 719,
         "right": 1023
       }
@@ -1709,9 +1684,14 @@
       "label": "CSS Tables L2 §17.6.1.1: empty-cells — в separate-модели hide прячет border+фон у пустых <td></td>; верхняя таблица (hide) показывает шахматку только из заполненных ячеек, нижняя (show) рисует рамки+фон всех ячеек",
       "html": "115-empty-cells.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 13.4462,
+      "diff_region": {
+        "top": 109,
+        "left": 41,
+        "bottom": 584,
+        "right": 464
+      }
     },
     {
       "id": "116",
@@ -1759,44 +1739,14 @@
       "label": "CSS Fill & Stroke L3 §6 / SVG2 §13.7: paint-order — thick-stroked <path> с centred stroke; верхний ряд normal (полная ширина обводки поверх заливки), нижний paint-order:stroke (заливка поверх обводки → видимая обводка вдвое тоньше, заливка крупнее)",
       "html": "119-paint-order.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 0.8078,
-      "diff_region": {
-        "top": 45,
-        "left": 43,
-        "bottom": 668,
-        "right": 954
-      },
-      "debtor": {
-        "bug": "BUG-173",
-        "baseline": 0.81,
-        "verdict": "OK"
-      }
-    },
-    {
-      "id": "120",
-      "stem": "120-media-contrast-data",
-      "label": "Media Queries L5 §5.5-5.6: prefers-contrast/prefers-reduced-data — без пользовательских предпочтений matched-свотчи (no-preference) зелёные, no-match (more/less/custom/reduce) остаются красными",
-      "html": "120-media-contrast-data.html",
-      "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 3.2639,
+      "diff_pct": 56.1793,
       "diff_region": {
-        "top": 47,
-        "left": 271,
-        "bottom": 174,
-        "right": 458
+        "top": 38,
+        "left": 35,
+        "bottom": 664,
+        "right": 948
       }
-    },
-    {
-      "id": "121",
-      "stem": "121-supports-selector",
-      "label": "CSS Conditional L4 §4.2: @supports selector() — распознаваемые селекторы (:has/:is/::slotted) применяют блок (зелёные a/b/c), неизвестные псевдо не применяют (красные d/e), not selector(<unknown>) истинно (зелёный f)",
-      "html": "121-supports-selector.html",
-      "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
     }
   ]
 }

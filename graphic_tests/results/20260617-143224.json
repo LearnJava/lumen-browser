@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-06-17T17:43:23",
+  "timestamp": "2026-06-17T14:32:24",
   "git": {
-    "commit": "fd98fcdc",
+    "commit": "9601a8b6",
     "branch": "main",
-    "subject": "Merge p3-bug178-float-shrink: BUG-178 float shrink-to-fit СЃСѓРјРјРёСЂСѓРµС‚ С„Р»РѕР°С‚С‹ (TEST-51 9.91%в†’1.09%)"
+    "subject": "Merge p3-bug175-rounded-border: BUG-175 СЃРєСЂСѓРіР»С‘РЅРЅС‹Рµ СЂР°РјРєРё (TEST-36 1.50%в†’DEBTOR 1.11%)"
   },
   "crop_offset": [
     8,
@@ -12,10 +12,10 @@
   "halted_at": null,
   "summary": {
     "total": 122,
-    "passed": 62,
-    "failed": 51,
+    "passed": 61,
+    "failed": 54,
     "errors": 0,
-    "debtors": 9,
+    "debtors": 7,
     "skipped": 0
   },
   "tests": [
@@ -390,18 +390,13 @@
       "label": "CSS filter: grayscale/sepia/brightness/invert/contrast/saturate/opacity/blur/hue-rotate",
       "html": "30-css-filter.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 10.4751,
+      "status": "FAIL",
+      "diff_pct": 16.4156,
       "diff_region": {
         "top": 31,
         "left": 31,
         "bottom": 540,
         "right": 998
-      },
-      "debtor": {
-        "bug": "BUG-144",
-        "baseline": 10.5,
-        "verdict": "OK"
       }
     },
     {
@@ -695,18 +690,13 @@
       "label": "Scrollbar rendering — overflow:scroll/auto vertical/horizontal/both DrawScrollbar track+thumb",
       "html": "51-scrollbar-rendering.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.0886,
+      "status": "FAIL",
+      "diff_pct": 9.9084,
       "diff_region": {
         "top": 22,
         "left": 21,
-        "bottom": 315,
+        "bottom": 455,
         "right": 648
-      },
-      "debtor": {
-        "bug": "BUG-124",
-        "baseline": 1.09,
-        "verdict": "OK"
       }
     },
     {
@@ -1131,7 +1121,7 @@
       "html": "78-scroll-driven-animations.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 12.8516,
+      "diff_pct": 12.8799,
       "diff_region": {
         "top": 29,
         "left": 24,
@@ -1709,9 +1699,14 @@
       "label": "CSS Tables L2 §17.6.1.1: empty-cells — в separate-модели hide прячет border+фон у пустых <td></td>; верхняя таблица (hide) показывает шахматку только из заполненных ячеек, нижняя (show) рисует рамки+фон всех ячеек",
       "html": "115-empty-cells.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 13.4462,
+      "diff_region": {
+        "top": 109,
+        "left": 41,
+        "bottom": 584,
+        "right": 464
+      }
     },
     {
       "id": "116",
