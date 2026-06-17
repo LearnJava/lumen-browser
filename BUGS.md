@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-180)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-218)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -193,6 +193,44 @@
 | [BUG-177](bugs/BUG-177-FIXED.md) | FIXED 2026-06-17 | layout | `height` на table-cell трактовался как фиксированный, а не минимальный (CSS 2.1 §17.5.3): ячейка с `height:64px` + content выше (52×32 блок + margin 16px → 64px content > 56px content-box) зажималась в 64px, content переполнял её в border-spacing-зазор, pitch строки был короче на величину переполнения и ошибка накапливалась вниз по таблице. Теперь used-height = max(specified, content). TEST-115 13.45% → 0.00%. | crates/engine/layout/src/box_tree.rs:5471 |
 | [BUG-178](bugs/BUG-178-FIXED.md) | FIXED 2026-06-17 | layout | shrink-to-fit auto-width контейнера с несколькими `float`-детьми считал ширину как max ребёнка, а не сумму (CSS 2.1 §9.5.1 — флоаты стоят бок о бок). Float-обёртка с двумя `float:left` детьми по 200px сжималась до 200px → второй флоат переносился под первый вместо ряда. `preferred_inline_block_width` + `max_content_outer_width`: суммируем margin-box ширины float-детей, max берём только среди in-flow. TEST-51 9.91% → 1.09% (остаток = BUG-124, дробные Y-координаты). | crates/engine/layout/src/box_tree.rs:3750 |
 | [BUG-179](bugs/BUG-179-FIXED.md) | FIXED 2026-06-17 | layout | flex-item с `flex-basis:auto` и без явной `width` использовал ширину из предварительного прохода (`item.rect.width` = ширина контейнера, т.к. блоки растягиваются). Элемент с `min-width:200px` в контейнере 600px получал base=600px → total_hyp=700px > 600px → ошибочный shrink → элемент 514px вместо 200px (второй столбец TEST-46 уезжал ~160px вправо). Фикс: `flex_auto_base_main_width` вычисляет max-content-width и ограничивает `min-width`/`max-width` (CSS Flexbox §9.2/§9.7). | crates/engine/layout/src/box_tree.rs:3932 |
+| [BUG-180](bugs/BUG-180-OPEN.md) | OPEN | paint/image | `<img>` rendering deviation — TEST-18: 21.21% |
+| [BUG-181](bugs/BUG-181-OPEN.md) | OPEN | layout/paint | `object-fit` basic deviation — TEST-19: 9.05% |
+| [BUG-182](bugs/BUG-182-OPEN.md) | OPEN | layout/paint | `vertical-align` inline y-offset deviation — TEST-24: 0.98% |
+| [BUG-183](bugs/BUG-183-OPEN.md) | OPEN | paint | `mask-image` gradient mask not implemented — TEST-26: 17.74% |
+| [BUG-184](bugs/BUG-184-OPEN.md) | OPEN | paint | `clip-path` deviation — TEST-31: 0.59% |
+| [BUG-185](bugs/BUG-185-OPEN.md) | OPEN | layout/paint | list `::marker` geometry deviation — TEST-32: 3.75% |
+| [BUG-186](bugs/BUG-186-OPEN.md) | OPEN | layout | `multi-column` layout not implemented — TEST-33: 14.89% |
+| [BUG-187](bugs/BUG-187-OPEN.md) | OPEN | paint | form controls static rendering deviation — TEST-34: 4.78% |
+| [BUG-188](bugs/BUG-188-OPEN.md) | OPEN | layout/paint | individual `translate`/`rotate`/`scale` transforms deviation — TEST-46: 4.63% |
+| [BUG-189](bugs/BUG-189-OPEN.md) | OPEN | paint | SVG basic shapes deviation — TEST-47: 3.71% |
+| [BUG-190](bugs/BUG-190-OPEN.md) | OPEN | paint | `background-blend-mode` deviation — TEST-49: 2.39% |
+| [BUG-191](bugs/BUG-191-OPEN.md) | OPEN | paint | `text-shadow` blur PushFilter deviation — TEST-52: 5.83% |
+| [BUG-192](bugs/BUG-192-OPEN.md) | OPEN | paint | `<video>` placeholder deviation — TEST-55: 0.89% |
+| [BUG-193](bugs/BUG-193-OPEN.md) | OPEN | layout/paint | CSS Table `border-spacing`/`col_span`/`row_span` deviation — TEST-64: 13.89% |
+| [BUG-194](bugs/BUG-194-OPEN.md) | OPEN | layout | Flexbox `align-content` multi-line deviation — TEST-65: 1.33% |
+| [BUG-195](bugs/BUG-195-OPEN.md) | OPEN | paint | `::selection` color override deviation — TEST-66: 1.07% |
+| [BUG-196](bugs/BUG-196-OPEN.md) | OPEN | css-parser/layout | `attr()` typed substitution deviation — TEST-67: 16.41% |
+| [BUG-197](bugs/BUG-197-OPEN.md) | OPEN | layout | CSS Table `border-spacing` asymmetric deviation — TEST-69: 3.61% |
+| [BUG-198](bugs/BUG-198-OPEN.md) | OPEN | layout/paint | `object-fit`/`object-position` SVG deviation — TEST-70: 7.82% |
+| [BUG-199](bugs/BUG-199-OPEN.md) | OPEN | layout | `@starting-style` static rendering deviation — TEST-71: 7.03% |
+| [BUG-200](bugs/BUG-200-OPEN.md) | OPEN | layout/paint | CSS Table `border-collapse` deviation — TEST-80: 9.89% |
+| [BUG-201](bugs/BUG-201-OPEN.md) | OPEN | paint | SVG `<use>` cloning deviation — TEST-82: 5.00% |
+| [BUG-202](bugs/BUG-202-OPEN.md) | OPEN | paint | `scroll-behavior` visual regression (G-3 ✅ но FAIL) — TEST-83: 14.02% |
+| [BUG-203](bugs/BUG-203-OPEN.md) | OPEN | paint | `text-decoration-skip-ink` underline gaps deviation — TEST-84: 5.88% |
+| [BUG-204](bugs/BUG-204-OPEN.md) | OPEN | layout | `anchor-name` basic stub deviation — TEST-85: 1.98% |
+| [BUG-205](bugs/BUG-205-OPEN.md) | OPEN | layout | `position-anchor` fallback stub deviation — TEST-86: 2.12% |
+| [BUG-206](bugs/BUG-206-OPEN.md) | OPEN | layout | `inset-area: none` stub deviation — TEST-87: 1.98% |
+| [BUG-207](bugs/BUG-207-OPEN.md) | OPEN | layout | `anchor-name` nested stub deviation — TEST-88: 1.98% |
+| [BUG-208](bugs/BUG-208-OPEN.md) | OPEN | layout | multiple `anchor-name` stub deviation — TEST-89: 1.98% |
+| [BUG-209](bugs/BUG-209-OPEN.md) | OPEN | image | AVIF decoder not implemented — TEST-90: 2.75% |
+| [BUG-210](bugs/BUG-210-OPEN.md) | OPEN | css-parser/paint | CSS system color keywords not resolved — TEST-92: 15.59% |
+| [BUG-211](bugs/BUG-211-OPEN.md) | OPEN | layout | `field-sizing: content` not implemented — TEST-93: 4.11% |
+| [BUG-212](bugs/BUG-212-OPEN.md) | OPEN | font/layout | `font-size-adjust` not implemented — TEST-95: 3.39% |
+| [BUG-213](bugs/BUG-213-OPEN.md) | OPEN | css-parser/layout | `counter-set` order deviation — TEST-97: 2.78% |
+| [BUG-214](bugs/BUG-214-OPEN.md) | OPEN | paint | `accent-color` tint not implemented — TEST-110: 2.47% |
+| [BUG-215](bugs/BUG-215-OPEN.md) | OPEN | layout | `shape-outside: path()` not implemented — TEST-113: 1.41% |
+| [BUG-216](bugs/BUG-216-OPEN.md) | OPEN | css-parser/layout | CSS `quotes` + `open-quote`/`close-quote` deviation — TEST-117: 2.28% |
+| [BUG-217](bugs/BUG-217-OPEN.md) | OPEN | css-parser | `prefers-contrast`/`prefers-reduced-data` media queries not matched — TEST-120: 3.26% |
 
 ---
 
