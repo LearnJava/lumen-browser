@@ -2166,6 +2166,55 @@ pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
     }
 }
 
+/// CSS Scoping L1 — collect each shadow tree's author stylesheet, keyed by its
+/// shadow-host `NodeId`, from the `<style>` elements inside every shadow root.
+///
+/// These sheets are installed via [`crate::style::set_shadow_sheets`] at the start
+/// of every layout pass so the cascade can apply `:host`/`:host()`/`::slotted()`
+/// rules in their proper scope. The page's document `<style>` is collected
+/// separately by the shell (`extract_style_blocks`), which does NOT descend into
+/// shadow roots — so the two collections never overlap.
+fn build_shadow_sheets(doc: &Document) -> std::collections::HashMap<NodeId, Stylesheet> {
+    let mut map = std::collections::HashMap::new();
+    if doc.is_empty() {
+        return map;
+    }
+    for i in 0..doc.len() {
+        let host = NodeId::from_index(i);
+        if !doc.is_shadow_host(host) {
+            continue;
+        }
+        let Some(sr) = doc.shadow_root_of(host) else { continue };
+        let mut css = String::new();
+        collect_shadow_style_css(doc, sr, &mut css);
+        if !css.trim().is_empty() {
+            map.insert(host, lumen_css_parser::parse(&css));
+        }
+    }
+    map
+}
+
+/// Concatenate the text of all `<style>` elements within a shadow subtree.
+/// Walks DOM children only; nested shadow roots are not DOM children, so a nested
+/// host's own `<style>` stays in its own scope (collected by the outer loop).
+fn collect_shadow_style_css(doc: &Document, id: NodeId, out: &mut String) {
+    let node = doc.get(id);
+    if let NodeData::Element { name, .. } = &node.data
+        && name.local == "style"
+    {
+        for &child in &node.children {
+            if let NodeData::Text(s) = &doc.get(child).data {
+                out.push_str(s);
+                out.push('\n');
+            }
+        }
+        return;
+    }
+    for &child in &node.children {
+        collect_shadow_style_css(doc, child, out);
+    }
+}
+
 /// Lay out a document without a text measurer. For tests and headless dump modes.
 /// Invalidates the rule-index cache before the cascade so stale hits are impossible.
 pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
@@ -2174,6 +2223,7 @@ pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     crate::content_visibility::reset_cv_skipped();
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
+    crate::style::set_shadow_sheets(build_shadow_sheets(doc));
     let counters = precompute_counters(doc, sheet, viewport, &flat, false);
     let registry = build_counter_style_registry(sheet);
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, false);
@@ -2219,6 +2269,7 @@ pub fn layout_measured_hyp(
     crate::content_visibility::reset_cv_skipped();
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
+    crate::style::set_shadow_sheets(build_shadow_sheets(doc));
     let counters = precompute_counters(doc, sheet, viewport, &flat, dark_mode);
     let registry = build_counter_style_registry(sheet);
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode);
@@ -2302,6 +2353,7 @@ pub fn layout_streaming_incremental(
     crate::content_visibility::reset_cv_skipped();
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
+    crate::style::set_shadow_sheets(build_shadow_sheets(doc));
     let counters = precompute_counters(doc, sheet, viewport, &flat, dark_mode);
     let registry = build_counter_style_registry(sheet);
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters, &registry, dark_mode);

@@ -1062,8 +1062,19 @@ impl IncrementalTreeBuilder {
             // us away from InTemplate) or handle the head-level tag.
             self.insertion_mode = InsertionMode::InHead;
             self.dispatch(token);
-            // If InHead didn't transition us, we must stay in InTemplate.
-            if self.insertion_mode == InsertionMode::InHead {
+            // A rawtext head element (<style>/<script>/<title>) switched us to Text
+            // mode and captured `original_insertion_mode = InHead` (the mode we set
+            // above). Correct it to InTemplate so the element's end tag returns us to
+            // template-content mode — otherwise tokens after it (e.g. a `<slot>` in a
+            // declarative shadow `<template>`) are processed in InHead and never land
+            // in the template fragment / shadow root (BUG-142).
+            if self.insertion_mode == InsertionMode::Text
+                && self.original_insertion_mode == Some(InsertionMode::InHead)
+            {
+                self.original_insertion_mode = Some(InsertionMode::InTemplate);
+            } else if self.insertion_mode == InsertionMode::InHead {
+                // Non-rawtext head tag (<meta>/<link>/<base>): InHead didn't
+                // transition us, so restore InTemplate.
                 self.insertion_mode = InsertionMode::InTemplate;
             }
             return;
@@ -3777,6 +3788,32 @@ mod tests {
             .collect();
         assert!(sr_children.contains(&"h1".to_owned()), "h1 in shadow root");
         assert!(sr_children.contains(&"p".to_owned()), "p in shadow root");
+    }
+
+    #[test]
+    fn declarative_shadow_dom_slot_after_style_preserved() {
+        // BUG-142: a `<style>` (rawtext) before a `<slot>` inside a declarative
+        // shadow template must not leave the parser in InHead mode — otherwise the
+        // `<slot>` is misplaced outside the shadow root and slotted content never
+        // renders. Both `<style>` and `<slot>` must end up in the shadow root.
+        use lumen_dom::NodeData;
+        let doc = parse(
+            r#"<div><template shadowrootmode="open"><style>:host{color:red}</style><slot></slot></template></div>"#,
+        );
+        let body = doc.body().expect("body");
+        let host = doc.get(body).children.first().copied().expect("host");
+        let sr = doc.shadow_root_of(host).expect("shadow root");
+        let sr_children: Vec<_> = doc.get(sr).children.iter()
+            .filter_map(|&n| {
+                if let NodeData::Element { name, .. } = &doc.get(n).data {
+                    Some(name.local.as_str().to_owned())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(sr_children.contains(&"style".to_owned()), "style in shadow root: {sr_children:?}");
+        assert!(sr_children.contains(&"slot".to_owned()), "slot must follow style into shadow root: {sr_children:?}");
     }
 
     #[test]
