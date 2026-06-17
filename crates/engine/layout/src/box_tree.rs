@@ -5453,13 +5453,17 @@ fn lay_out(
                     }
 
                     // CSS 2.1 §8.3.1: collapse adjacent sibling block margins.
-                    // Only Block/FlowRoot participate; other kinds break the chain.
+                    // Block/FlowRoot/Table participate; other kinds break the chain. A `Table`
+                    // box is block-level and its (wrapper) margins collapse with adjacent
+                    // sibling margins like a normal block, even though it establishes a BFC for
+                    // its own contents (so `collapsed_top_margin`/`collapsed_bottom_margin`
+                    // return its own margin without folding into its rows — see those fns).
                     // `own_mt` is the child's own resolved top margin (what lay_out re-adds
                     // internally); `collapsed_mt` additionally folds the child's own first-child
                     // chain (§8.3.1). The base formula offsets start_y by (collapsed_mt − own_mt)
                     // so that lay_out's internal "+own_mt" lands the child at its collapsed flow
                     // position child_y + max(prev_block_mb, collapsed_mt).
-                    let is_block = matches!(&child.kind, BoxKind::Block | BoxKind::FlowRoot);
+                    let is_block = matches!(&child.kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Table);
                     let is_first_inflow = !seen_inflow_child;
                     let own_mt = child.style.margin_top
                         .resolve_or_zero(child.style.font_size, eff_w, viewport);

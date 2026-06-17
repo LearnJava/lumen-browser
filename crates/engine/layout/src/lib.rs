@@ -14911,6 +14911,33 @@ mod tests {
         assert!((c.rect.y - 55.0).abs() < 0.1, "c.y={}", c.rect.y);
     }
 
+    /// BUG-193: a `display: table` wrapper box is block-level, so its margins
+    /// collapse with adjacent sibling margins (CSS 2.1 §8.3.1) — even though the
+    /// table establishes a BFC for its own rows/cells. The gap between the table
+    /// and the following block must be `max(30, 10) = 30`, not the summed `40`.
+    #[test]
+    fn table_bottom_margin_collapses_with_next_sibling() {
+        let root = lay(
+            "<table class='t'><tr><td>x</td></tr></table><div class='b'>y</div>",
+            ".t { margin-bottom: 30px; } .b { height: 10px; margin-top: 10px; }",
+        );
+        let table = root
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, BoxKind::Table))
+            .expect("table box");
+        let b = root
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, BoxKind::Block))
+            .expect("following block");
+        let gap = b.rect.y - (table.rect.y + table.rect.height);
+        assert!(
+            (gap - 30.0).abs() < 0.1,
+            "table↔block gap={gap} (expected collapsed 30, not summed 40)",
+        );
+    }
+
     // ── CSS Intrinsic Sizing L3 — min-content / max-content / fit-content ────
 
     /// `width: fit-content` на block-элементе с явной шириной потомка: бокс
