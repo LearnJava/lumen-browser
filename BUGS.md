@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-174)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-175)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -187,6 +187,7 @@
 | [BUG-171](bugs/BUG-171-OPEN.md) | OPEN | shell | Окно морозится на всё время загрузки: `parse_and_layout` (fetch+JS+layout) идёт синхронно на UI-потоке в обработчике `LoadDone` (main.rs:6369). Adblock-галочка → синхронный `reload()` → «долго думает». Надо префетч подресурсов вне UI + асинхронный adblock-reload (этап 2 — весь пайплайн вне UI, ADR-006). QuickJS не Send — ключевое ограничение. | crates/shell/src/main.rs:6369 |
 | [BUG-172](bugs/BUG-172-OPEN.md) | OPEN | shell | Картинки качаются дважды на streaming-страницах: PH1-2c `spawn_stream_image_loads` (main.rs:6051) грузит прогрессивно во время streaming, финальный `fetch_and_decode_images` (main.rs:2833) в `parse_and_layout` качает их же заново. Лишний трафик+CPU, не визуальный дефект. Фикс — общий per-load кэш декодированных картинок (пересекается с этапом 1 BUG-171). | crates/shell/src/main.rs:2833 |
 | [BUG-173](bugs/BUG-173-OPEN.md) | OPEN | paint | Остаток SVG `<path>` vs Edge после BUG-102: triangle-soup AA-швы (DrawSvgPath), stroke-edge AA, self-intersecting fill (ear_clip, незалитая bowtie), dash-on-curve. TEST-54 2.30% / TEST-60 1.41% — в KNOWN_DEBTORS | crates/engine/paint/src/svg_path.rs |
+| [BUG-174](bugs/BUG-174-FIXED.md) | FIXED 2026-06-17 | layout | In-flow (inline-block) SVG `<path>` рисовался в raw user-координатах `d` без смещения на origin своего SVG-вьюпорта — все пути из разных SVG-ячеек схлопывались в верхний левый угол страницы (видны только те, что попали в свой clip). TEST-119 56.35% → 0.81%. | crates/engine/layout/src/box_tree.rs:1198 |
 
 ---
 
