@@ -3922,6 +3922,56 @@ fn min_content_outer_width(
     (content_w + pl + pr + s.border_left_width + s.border_right_width).max(0.0)
 }
 
+/// CSS Flexbox L1 §9.2/§9.7 — flex base size (main-axis, **border-box**) of a
+/// row-direction flex item whose `flex-basis` is `auto`/`content` and which has
+/// no explicit `width`. This is the item's max-content width clamped by its own
+/// `min-width` / `max-width`. Margins are excluded (the caller adds them).
+/// `cb` is the flex container's inner main size, used to resolve percentage
+/// min/max-width. Replaces the old approximation that fell back to the
+/// preliminary-pass stretched `item.rect.width` for text-only items (BUG-179).
+fn flex_auto_base_main_width(
+    item: &LayoutBox,
+    cb: f32,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+) -> f32 {
+    let s = &item.style;
+    let em = s.font_size;
+    let pl = s.padding_left.resolve_or_zero(em, cb, viewport);
+    let pr = s.padding_right.resolve_or_zero(em, cb, viewport);
+    // content-box → border-box conversion for a resolved min/max length.
+    let outer_horiz = |v: f32| match s.box_sizing {
+        BoxSizing::ContentBox => v + pl + pr + s.border_left_width + s.border_right_width,
+        BoxSizing::BorderBox => v,
+    };
+    let mut base = max_content_outer_width(item, measurer, viewport);
+    if let Some(max_len) = &s.max_width {
+        let max_bb = if max_len.is_intrinsic() {
+            Some(max_content_outer_width(item, measurer, viewport))
+        } else {
+            max_len
+                .resolve(em, Some(cb), viewport)
+                .map(|v| outer_horiz(v).max(0.0))
+        };
+        if let Some(m) = max_bb {
+            base = base.min(m);
+        }
+    }
+    if let Some(min_len) = &s.min_width {
+        let min_bb = if min_len.is_intrinsic() {
+            Some(min_content_outer_width(item, measurer, viewport))
+        } else {
+            min_len
+                .resolve(em, Some(cb), viewport)
+                .map(|v| outer_horiz(v.max(0.0)))
+        };
+        if let Some(m) = min_bb {
+            base = base.max(m);
+        }
+    }
+    base.max(0.0)
+}
+
 /// Рекурсивно смещает rect.y всего поддерева на dy (для vertical-align).
 fn shift_y_box(b: &mut LayoutBox, dy: f32) {
     b.rect.y += dy;
@@ -7010,18 +7060,17 @@ fn lay_out_flex(
                     if is_column {
                         item.rect.height + m_t + m_b
                     } else {
-                        // CSS Flexbox §9.2: for auto flex-basis with no explicit width,
-                        // use the max-content main size. Approximate by finding the
-                        // widest child that has an explicit CSS width, rather than
-                        // using the container-stretched width from the preliminary pass.
+                        // CSS Flexbox §9.2/§9.7: for `auto`/`content` flex-basis with no
+                        // explicit width, the flex base size is the item's max-content
+                        // width, clamped by its own min-width / max-width. Using the
+                        // preliminary-pass `item.rect.width` was wrong: a block item
+                        // stretches to the full container width there, so a label that
+                        // sets only `min-width` and holds short text reported the whole
+                        // container width as its base size and was then shrunk down to an
+                        // equal share of the row instead of staying at its min-width
+                        // (BUG-179, TEST-46 — second column drifted ~160px right).
                         let w = if is.width.is_none() {
-                            let max_child_w = item
-                                .children
-                                .iter()
-                                .filter(|c| !matches!(c.kind, BoxKind::Skip) && c.style.width.is_some())
-                                .map(|c| c.rect.width)
-                                .fold(0.0_f32, f32::max);
-                            if max_child_w > 0.0 { max_child_w } else { item.rect.width }
+                            flex_auto_base_main_width(item, cb, measurer, viewport)
                         } else {
                             item.rect.width
                         };
@@ -12256,6 +12305,31 @@ mod tests {
             "single-line flex height must equal the tallest item (120), not 120+gap; got {}",
             flex.rect.height
         );
+    }
+
+    #[test]
+    fn flex_auto_basis_item_with_min_width_uses_min_not_container_width() {
+        // BUG-179: a row flex item with no explicit `width` and `min-width` set was
+        // reporting the full container width as its flex base size. In the preliminary
+        // layout pass a block-level item stretches to fill the container, so
+        // item.rect.width == container_width. The old code fell back to that value when
+        // no child had an explicit width, inflating the total_hyp beyond the container
+        // and triggering erroneous shrink. After the fix, flex_auto_base_main_width
+        // computes max-content (= 0 for an empty div) and clamps by min-width → 200px.
+        //
+        // 600px container, A (no width, min-width:200px), B (width:100px).
+        // total_hyp = 200+100 = 300 < 600 → no shrink → A stays at 200px, B at 100px.
+        // Old behaviour: A.base = 600px, total_hyp = 700px → shrink, A ≈ 514px.
+        let html = r#"<div id="flex"><div id="a"></div><div id="b"></div></div>"#;
+        let css = "body{margin:0} #flex{display:flex;width:600px} #a{min-width:200px} #b{width:100px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let b = find_by_id_all(&root, &doc, "b").expect("b");
+        assert_eq!(a.rect.width, 200.0, "A must stay at min-width (200), not shrink from inflated base; a.w={}", a.rect.width);
+        assert_eq!(b.rect.width, 100.0, "B explicit width stays; b.w={}", b.rect.width);
+        assert_eq!(b.rect.x, 200.0, "B starts after A; b.x={}", b.rect.x);
     }
 
     /// Returns the first `InlineRun` box in `b`'s subtree (depth-first).

@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-178)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-180)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -192,6 +192,7 @@
 | [BUG-176](bugs/BUG-176-OPEN.md) | OPEN | paint | TEST-36 остаток 1.11% после BUG-175: edge-AA вдоль скруглённых границ (sub-pixel snapping vs Edge) + кубическая kappa-аппроксимация эллиптических углов (row 6, `border-radius: H/V`) отличается от точной дуги Edge. В KNOWN_DEBTORS. | crates/engine/paint/src/backends/femtovg_backend.rs:870 |
 | [BUG-177](bugs/BUG-177-FIXED.md) | FIXED 2026-06-17 | layout | `height` на table-cell трактовался как фиксированный, а не минимальный (CSS 2.1 §17.5.3): ячейка с `height:64px` + content выше (52×32 блок + margin 16px → 64px content > 56px content-box) зажималась в 64px, content переполнял её в border-spacing-зазор, pitch строки был короче на величину переполнения и ошибка накапливалась вниз по таблице. Теперь used-height = max(specified, content). TEST-115 13.45% → 0.00%. | crates/engine/layout/src/box_tree.rs:5471 |
 | [BUG-178](bugs/BUG-178-FIXED.md) | FIXED 2026-06-17 | layout | shrink-to-fit auto-width контейнера с несколькими `float`-детьми считал ширину как max ребёнка, а не сумму (CSS 2.1 §9.5.1 — флоаты стоят бок о бок). Float-обёртка с двумя `float:left` детьми по 200px сжималась до 200px → второй флоат переносился под первый вместо ряда. `preferred_inline_block_width` + `max_content_outer_width`: суммируем margin-box ширины float-детей, max берём только среди in-flow. TEST-51 9.91% → 1.09% (остаток = BUG-124, дробные Y-координаты). | crates/engine/layout/src/box_tree.rs:3750 |
+| [BUG-179](bugs/BUG-179-FIXED.md) | FIXED 2026-06-17 | layout | flex-item с `flex-basis:auto` и без явной `width` использовал ширину из предварительного прохода (`item.rect.width` = ширина контейнера, т.к. блоки растягиваются). Элемент с `min-width:200px` в контейнере 600px получал base=600px → total_hyp=700px > 600px → ошибочный shrink → элемент 514px вместо 200px (второй столбец TEST-46 уезжал ~160px вправо). Фикс: `flex_auto_base_main_width` вычисляет max-content-width и ограничивает `min-width`/`max-width` (CSS Flexbox §9.2/§9.7). | crates/engine/layout/src/box_tree.rs:3932 |
 
 ---
 
