@@ -159,7 +159,7 @@
 | [BUG-141](bugs/BUG-141-FIXED.md) | FIXED 2026-06-13 | layout | TEST-71 17.83%: flex align-items:center в non-wrap контейнере игнорировал cross size |
 | [BUG-142](bugs/BUG-142-FIXED.md) | FIXED 2026-06-17 | paint/shadow-dom | :host / ::slotted rendering diverges — TEST-72: 11.24% → 0.00% |
 | [BUG-143](bugs/BUG-143-OPEN.md) | OPEN | layout | masonry-auto-flow placement diverges — TEST-75: 16.97% |
-| [BUG-144](bugs/BUG-144-OPEN.md) | OPEN | paint | CSS filter visual rendering rows 1-3 — TEST-30: 18.81% residual |
+| [BUG-144](bugs/BUG-144-OPEN.md) | OPEN | paint | CSS filter/backdrop-filter — TEST-30: row-flip фикс 16.42%→10.48% (backdrop-filter `elem_id` FBO нуждался в FLIP_Y, карточки рисовались в `viewport_h−bounds.bottom`). Остаток DEBTOR: filter pixel-parity (rows 1-3) + backdrop захватывается тёмным внутри opacity-слоя (row 4) + gradient hard-stop (row 2, BUG-085) |
 | [BUG-145](bugs/BUG-145-FIXED.md) | FIXED 2026-06-12 | paint | РЕГРЕССИЯ: offscreen filter layer сайзился по bounds → viewport stretch |
 | [BUG-146](bugs/BUG-146-FIXED.md) | FIXED 2026-06-12 | paint | TEST-15 box-shadow регрессия 1.06%→6.58%: blur-FBO без FLIP_Y |
 | [BUG-147](bugs/BUG-147-FIXED.md) | FIXED 2026-06-12 | shell | clippy -D warnings fails: redundant use, dead code, unnecessary cast |
