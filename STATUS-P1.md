@@ -11,6 +11,42 @@
 
 ## Next
 
+### TAB-series — Multi-tab support + screenshot IPC (приоритет)
+
+Цель: один процесс Lumen держит несколько вкладок с изолированным состоянием; `run.py` открывает браузер один раз и получает скриншоты через IPC без gdigrab.
+
+**Уже готово (не писать заново):**
+- `crates/shell/src/tab_lifecycle/` — `TabLifecycleManager` + 5-уровневая модель памяти (T0 Active → T4 Closed) — не подключён к shell
+- `session_persist::ExportedTab` — сериализация состояния вкладки на диск — не вызывается
+- `BrowserSession` trait в `lumen-driver` — headless-харнес, можно расширить под screenshot
+- `lumen-ipc` крейт — length-prefixed bincode по TCP — нужно добавить tab-команды
+
+| # | Задача | Размер | Крейты |
+|---|--------|--------|--------|
+| TAB-1 | **PageState extraction** — выделить из `Lumen` struct per-tab поля в `TabState`: `document, layout_box, scroll_x/y, animation_scheduler, transition_scheduler, scroll_containers, web_fonts, zoom_factor, title, source, stream_images_requested`. `Lumen` хранит `tabs: Vec<TabState>` + `active_tab: usize`. | M | `lumen-shell` |
+| TAB-2 | **Tab switching** — swap `active_tab` по `Ctrl+T` (новая), `Ctrl+W` (закрыть), `Ctrl+Tab` / `Ctrl+Shift+Tab` (переключить). Перерисовка только при смене активной вкладки. | S | `lumen-shell` |
+| TAB-3 | **Tab bar UI** — полоса вкладок вверху окна: заголовок (title), крестик, кнопка `+`. Подсветка активной. Drag — не нужен в Phase 1. | M | `lumen-shell` |
+| TAB-4 | **IPC tab routing** — добавить `tab_id: TabId` к IPC-сообщениям; команды `CreateTab`, `CloseTab`, `NavigateTab(tab_id, url)`. Маршрутизация в shell по `tab_id`. | S | `lumen-ipc`, `lumen-shell` |
+| TAB-5 | **Screenshot IPC** — `IpcRequest::Screenshot(tab_id)` → shell рендерит вкладку offscreen (CPU path) → возвращает `Vec<u8>` PNG. Без окна, без gdigrab. | S | `lumen-ipc`, `lumen-shell` |
+| TAB-6 | **Подключить TabLifecycleManager** — вызывать `tick_idle()` раз в секунду. Неактивные вкладки переходят T0→T1→T2 по таймаутам. Освобождает RAM при большом числе вкладок. | S | `lumen-shell` |
+| TAB-7 | **run.py IPC-режим** — запустить один `lumen.exe --ipc-server`, отправить `NavigateTab + Screenshot` на каждый тест, получить PNG, сравнить с Edge. Убрать ffmpeg/gdigrab из основного пути. | XS | `graphic_tests/run.py` |
+
+**Порядок:** TAB-1 → TAB-2 → TAB-4 → TAB-5 → TAB-7 (минимальный путь для run.py).
+TAB-3 и TAB-6 — параллельно после TAB-1.
+
+---
+
+### Правило: фиксировать реализованное
+
+После каждой задачи **в том же коммите** обновлять:
+1. `STATUS-P1.md` — переместить из `Next` в `Recent merges` с кратким описанием
+2. `CAPABILITIES.md` — изменить ⬜/🟡 → ✅ для реализованных возможностей
+3. `subsystems/<crate>.md` — добавить bullet в раздел **Done**
+
+Это предотвращает повторную реализацию уже готового другими сессиями.
+
+---
+
 ### Streaming rendering — оставшиеся дыры (приоритет, до PH3)
 
 PH1-2 закрыл только window-first + 60 Hz throttle + параллельную загрузку CSS. Реальная
