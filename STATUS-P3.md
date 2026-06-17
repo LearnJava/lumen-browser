@@ -117,6 +117,21 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
 
+- **BUG-178** (2026-06-17) — float-обёртка shrink-to-fit (TEST-51 9.91% → 1.09%).
+  Auto-width контейнер с несколькими `float`-детьми считал ширину как `max`
+  ребёнка, а не сумму (CSS 2.1 §9.5.1 — флоаты одного направления стоят бок о
+  бок на одной линии). Float-обёртка `<div style="float:left">` (без явной width)
+  с двумя `float:left` детьми по 200px сжималась до 200px → второй флоат сбрасывался
+  на новую строку (правило 8) вместо ряда: в TEST-51 третий бокс верхнего ряда уезжал
+  под второй. Фикс в `preferred_inline_block_width` + `max_content_outer_width`
+  (`box_tree.rs:3750`/`3822`): для блок-контейнера суммируем margin-box ширины
+  float-детей (`float_sum`), `max` берём только среди in-flow (`inflow_max`), итог =
+  `max(inflow_max, float_sum)`. Замер обёртки: до `(225,52.2,200,280)` → после
+  `(225,52.2,424,140)`, дети при `y=72.2` рядом (x=225/449). Тест
+  `shrink_to_fit_float_wrapper_sums_inner_floats_side_by_side`. Остаток 1.09% =
+  BUG-124 (дробные Y-координаты), TEST-51 → KNOWN_DEBTORS. Без регрессий (layout 2907,
+  paint 741+21; полный прогон — единственная дельта 40 FAIL→PASS, прежний transient).
+
 - **BUG-177** (2026-06-17) — table-cell `height` как минимум (TEST-115 13.45% → 0.00% PASS).
   `height` на `display:table-cell` трактовался как фиксированная высота border-box, а не
   минимальная (CSS 2.1 §17.5.3). Ячейка `td{height:64px;border:4px;box-sizing:border-box}`
