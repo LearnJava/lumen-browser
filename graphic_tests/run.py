@@ -206,6 +206,7 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '61': ('BUG-103', 99.53),   # View Transitions API — Phase 2
     '63': ('BUG-105', 48.44),   # CSS Masonry layout — Phase 2
     '75': ('BUG-143', 16.97),   # masonry-auto-flow — Phase 2
+    '119': ('BUG-173', 0.81),   # paint-order: остаток = stroke triangle-soup AA-швы (geometry фикснут BUG-174)
 }
 _DEBTOR_TOL = 2.0  # % допуск run-to-run вариации gdigrab
 

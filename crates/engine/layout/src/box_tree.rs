@@ -1196,6 +1196,19 @@ fn lay_out_svg_element_position(b: &mut LayoutBox, ox: f32, oy: f32, sx: f32, sy
         bbox.height *= sy;
         // Then apply composed transform.
         b.rect = apply_transform_to_bbox(&bbox, &composed);
+        // BUG-174: `<path>` has a ZERO bbox here (its document-space bounds are
+        // computed at paint time from the `d` data). `apply_transform_to_bbox`
+        // collapses a zero-size bbox to `Rect::ZERO`, discarding the SVG viewport
+        // origin (ox, oy). The painter shifts the raw `d` coordinates by
+        // `b.rect.x/y`, so without an origin every in-flow SVG path renders at the
+        // page-space raw coords instead of inside its own SVG box. Mirror the
+        // SvgText branch: anchor the path box at the document-space mapping of the
+        // viewport origin. (Absolute-positioned SVGs already get this via the
+        // post-layout `shift_tree`; in-flow inline-block SVGs did not.)
+        if matches!(shape, SvgShapeKind::Path { .. }) {
+            let (px, py) = composed.transform_point(ox, oy);
+            b.rect = Rect::new(px, py, 0.0, 0.0);
+        }
     } else if let BoxKind::SvgText { x, y, dx, dy, .. } = b.kind {
         // SVG text element: position at specified coordinates with offsets.
         // x, y are in user units; dx, dy are additional offsets.
@@ -13421,6 +13434,40 @@ mod tests {
         let rect = find_shape(&root).expect("rect shape");
         assert!((rect.rect.width - 160.0).abs() < 1e-3, "fill rect width expected 160, got {}", rect.rect.width);
         assert!((rect.rect.height - 120.0).abs() < 1e-3, "fill rect height expected 120 (stretched), got {}", rect.rect.height);
+    }
+
+    #[test]
+    fn inflow_svg_path_box_anchored_at_viewport_origin() {
+        // BUG-174: an in-flow (inline-block) SVG `<path>` must anchor its layout box at
+        // the SVG viewport's document origin, not at (0, 0). The path bbox is computed
+        // at paint time, so `lay_out_svg_element_position` leaves it ZERO-sized; without
+        // anchoring, the painter shifts the raw `d` coordinates by (0, 0) and every path
+        // collapses to the top-left page corner regardless of which SVG cell it lives in.
+        // Two inline-block SVGs side by side: the second must sit to the right of the first.
+        let html = r#"<div>
+            <span style="display:inline-block"><svg width="100" height="100"><path d="M 10 10 L 90 90"/></svg></span>
+            <span style="display:inline-block"><svg width="100" height="100"><path d="M 10 10 L 90 90"/></svg></span>
+        </div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 400.0));
+        fn collect_paths<'a>(b: &'a super::LayoutBox, out: &mut Vec<&'a super::LayoutBox>) {
+            if matches!(&b.kind, super::BoxKind::SvgShape { shape: super::SvgShapeKind::Path { .. }, .. }) {
+                out.push(b);
+            }
+            for c in &b.children { collect_paths(c, out); }
+        }
+        let mut paths = Vec::new();
+        collect_paths(&root, &mut paths);
+        assert_eq!(paths.len(), 2, "expected two path boxes, got {}", paths.len());
+        // First path anchored near the page origin; the second SVG sits one inline-block
+        // to the right (>= 100px advance), so its path box origin must be clearly greater.
+        assert!(
+            paths[1].rect.x > paths[0].rect.x + 50.0,
+            "second inline-block SVG path must anchor to the right of the first: \
+             path0.x={}, path1.x={}",
+            paths[0].rect.x, paths[1].rect.x,
+        );
     }
 
     #[test]

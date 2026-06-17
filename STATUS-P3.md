@@ -117,6 +117,17 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
 
+- **BUG-174** (2026-06-17) — in-flow SVG `<path>` (TEST-119 paint-order 56.35% → 0.81%).
+  `<path>` у `display:inline-block` SVG рисовался в raw user-координатах `d` без смещения
+  на origin своего вьюпорта → все пути разных ячеек схлопывались в верхний левый угол
+  (видна только первая, чей clip накрывал raw-координаты). Причина: `svg_shape_bbox(Path)`
+  = `Rect::ZERO`, а `apply_transform_to_bbox` обнуляет origin для нулевого bbox →
+  художник сдвигает вершины на `(0,0)`. У `position:absolute` SVG работало случайно через
+  пост-`shift_tree`. Фикс симметричен ветке `SvgText`: для Path якорим `b.rect` в
+  `composed.transform_point(ox, oy)` (`box_tree.rs:1198`). Тест
+  `inflow_svg_path_box_anchored_at_viewport_origin`. Остаток 0.81% = BUG-173 (40px stroke
+  AA-швы), TEST-119 → KNOWN_DEBTORS. Без регрессий TEST-47/54/60/82.
+
 - **BUG-108** (2026-06-17) — TEST-66 5.24%→1.08%. Реальная причина была НЕ `::selection`
   (правила в тесте информационные, выделение не триггерится — видимый контент это свотчи), а
   отсутствие **parent↔last-child bottom margin collapse** (CSS 2.1 §8.3.1): bottom-маргин
