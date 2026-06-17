@@ -109,3 +109,14 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Профиль для разработки: в 2–3 раза быстрее сборки чем release при той же
+# корректности кода. Используй для graphic_tests и итеративной отладки:
+#   cargo build -p lumen-shell --profile dev-release
+# Или через run.py:  python graphic_tests/run.py --build-profile dev-release
+[profile.dev-release]
+inherits = "release"
+lto = false
+codegen-units = 8
+strip = false
+debug = false

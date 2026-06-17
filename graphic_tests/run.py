@@ -6,7 +6,8 @@
     python graphic_tests/run.py --continue-on-fail  # все тесты, собрать все результаты
     python graphic_tests/run.py --only 03           # один тест по id
     python graphic_tests/run.py --recheck           # перезапустить только FAIL из latest.json
-    python graphic_tests/run.py --build             # cargo build --release перед запуском
+    python graphic_tests/run.py --build             # пересобрать lumen.exe перед запуском
+    LUMEN_PROFILE=dev-release python graphic_tests/run.py --build  # быстрая сборка (2–3× быстрее)
     python graphic_tests/run.py --no-cache          # принудительная пересъёмка Edge-скриншотов
     python graphic_tests/run.py --bisect 100        # юнит-зависимости interaction-теста + сам тест
 
@@ -47,7 +48,8 @@ if hasattr(sys.stdout, 'reconfigure'):
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 FFMPEG = os.path.join(REPO, 'utils', 'ffmpeg.exe')
 EDGE = r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
-LUMEN = os.path.join(REPO, 'target', 'release', 'lumen.exe')
+LUMEN_PROFILE = os.environ.get('LUMEN_PROFILE', 'release')
+LUMEN = os.path.join(REPO, 'target', LUMEN_PROFILE, 'lumen.exe')
 SHOTS = os.path.join(REPO, 'graphic_tests', 'screenshots')
 RESULTS_DIR = os.path.join(REPO, 'graphic_tests', 'results')
 TESTS_DIR = os.path.join(REPO, 'graphic_tests')
@@ -569,12 +571,13 @@ def _load_crop_offset() -> tuple[int, int] | None:
 # --- Pipeline ---
 
 def _build_lumen() -> bool:
-    """Собирает lumen-shell --release. Возвращает True при успехе."""
-    print('Сборка lumen-shell --release...')
+    """Собирает lumen-shell с нужным профилем. Возвращает True при успехе."""
+    profile = LUMEN_PROFILE
+    print(f'Сборка lumen-shell --profile {profile}...')
     env = os.environ.copy()
     env['PATH'] = r'C:\Users\konstantin\.cargo\bin' + os.pathsep + env.get('PATH', '')
-    res = subprocess.run(['cargo', 'build', '-p', 'lumen-shell', '--release'],
-                         cwd=REPO, env=env)
+    cmd = ['cargo', 'build', '-p', 'lumen-shell', '--profile', profile]
+    res = subprocess.run(cmd, cwd=REPO, env=env)
     if res.returncode != 0:
         print('Сборка Lumen упала.')
         return False
@@ -921,7 +924,7 @@ def main() -> int:
     parser.add_argument('--recheck', action='store_true',
                         help='Перезапустить только тесты, упавшие в последнем прогоне (latest.json)')
     parser.add_argument('--build', action='store_true',
-                        help='Пересобрать lumen-shell --release перед запуском')
+                        help='Пересобрать lumen-shell перед запуском (профиль задаётся LUMEN_PROFILE=dev-release)')
     parser.add_argument('--no-cache', action='store_true',
                         help='Принудительная пересъёмка Edge-скриншотов (игнорировать кэш)')
     parser.add_argument('--bisect', metavar='ID',
