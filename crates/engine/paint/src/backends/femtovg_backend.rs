@@ -295,6 +295,10 @@ pub struct FemtovgBackend {
     /// it once with the group alpha (CSS Color L3 §3.2: opacity is atomic —
     /// overlapping children must not double-blend against the backdrop).
     opacity_layer_stack: Vec<OpacityLayerEntry>,
+    /// Offscreen gradient-mask layer stack (BUG-183). Each entry holds the
+    /// offscreen ImageId the masked subtree renders into; `PopMask` multiplies
+    /// the layer's alpha by the gradient and composites it (CSS Masking L1 §4).
+    mask_layer_stack: Vec<MaskLayerEntry>,
     /// Offscreen backdrop-filter layer stack (PA-4). Each entry holds the filtered
     /// backdrop image and element content image for compositing on PopBackdropFilter.
     backdrop_filter_layer_stack: Vec<BackdropFilterLayerEntry>,
@@ -369,6 +373,42 @@ struct OpacityLayerEntry {
     /// Group opacity in `[0, 1]`, applied once at composite time.
     alpha: f32,
     /// Render target active before PushOpacity — restored on PopOpacity.
+    prev_render_target: femtovg::RenderTarget,
+}
+
+// ─── Gradient mask support (BUG-183) ─────────────────────────────────────────
+
+/// Gradient that drives a `mask-image` alpha mask (CSS Masking L1 §4).
+///
+/// The masked element's subtree renders into an offscreen FBO; on `PopMask`
+/// the gradient is painted over the FBO with `CompositeOperation::DestinationIn`
+/// so the FBO's alpha is multiplied by the gradient's alpha. Stops carry CSS
+/// colours: `mask-mode: alpha` (the default and only mode reaching paint, since
+/// `mask-mode` is not yet parsed — P4) uses the stop alpha directly.
+enum MaskGradient {
+    /// `linear-gradient(...)` mask. `angle_deg` is CSS (0° = to top).
+    Linear { angle_deg: f32, stops: Vec<GradientStop> },
+    /// `radial-gradient(...)` mask. Centre as a fraction of the box.
+    Radial { center_x_pct: f32, center_y_pct: f32, stops: Vec<GradientStop> },
+    /// `conic-gradient(...)` mask.
+    Conic { center_x_pct: f32, center_y_pct: f32, from_angle_deg: f32, stops: Vec<GradientStop>, repeating: bool },
+}
+
+/// Entry pushed onto `FemtovgBackend::mask_layer_stack` by `PushMask*Gradient`.
+///
+/// The masked subtree renders into the offscreen `image_id`; `PopMask`
+/// multiplies that layer's alpha by `gradient` (evaluated over `rect`) and
+/// composites the result onto `prev_render_target`.
+struct MaskLayerEntry {
+    /// Offscreen image the masked content renders into. `None` means the FBO
+    /// could not be allocated — fallback `save()` + scissor was used and
+    /// `PopMask` must `restore()` instead of compositing.
+    image_id: Option<femtovg::ImageId>,
+    /// Gradient driving the mask alpha. `None` for the scissor fallback.
+    gradient: Option<MaskGradient>,
+    /// Border-box of the masked element in CSS px (mask painting area).
+    rect: lumen_core::geom::Rect,
+    /// Render target active before the matching `PushMask*` — restored on `PopMask`.
     prev_render_target: femtovg::RenderTarget,
 }
 
@@ -792,6 +832,7 @@ impl FemtovgBackend {
             filter_layer_stack: Vec::new(),
             filter_layer_pending_delete: Vec::new(),
             opacity_layer_stack: Vec::new(),
+            mask_layer_stack: Vec::new(),
             blend_layer_stack: Vec::new(),
             blend_layer_pending_delete: Vec::new(),
             backdrop_filter_layer_stack: Vec::new(),
@@ -1277,6 +1318,119 @@ impl FemtovgBackend {
         self.canvas.restore();
         // Delete after flush — pending GPU commands still reference the id.
         self.filter_layer_pending_delete.push(src_id);
+    }
+
+    /// CSS Masking L1 §4 (BUG-183) — opens an offscreen layer for a gradient
+    /// `mask-image`. The masked subtree renders into a transparent full-RT FBO;
+    /// the matching `PopMask` multiplies that FBO's alpha by the gradient.
+    ///
+    /// On FBO-allocation failure falls back to a rect scissor (mask no-op).
+    fn push_mask_gradient_layer(&mut self, rect: lumen_core::geom::Rect, gradient: MaskGradient) {
+        let prev_rt = self.current_rt();
+        match self.canvas.create_image_empty(
+            self.width as usize,
+            self.height as usize,
+            femtovg::PixelFormat::Rgba8,
+            offscreen_layer_image_flags(),
+        ) {
+            Ok(img_id) => {
+                self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                self.canvas.clear_rect(
+                    0, 0, self.width, self.height,
+                    femtovg::Color::rgba(0, 0, 0, 0),
+                );
+                self.mask_layer_stack.push(MaskLayerEntry {
+                    image_id: Some(img_id),
+                    gradient: Some(gradient),
+                    rect,
+                    prev_render_target: prev_rt,
+                });
+            }
+            Err(_) => {
+                // Fallback: rect scissor (gradient mask becomes a hard rect clip).
+                self.canvas.save();
+                self.canvas.scissor(rect.x, rect.y, rect.width, rect.height);
+                self.mask_layer_stack.push(MaskLayerEntry {
+                    image_id: None,
+                    gradient: None,
+                    rect,
+                    prev_render_target: prev_rt,
+                });
+            }
+        }
+        self.layer_stack_depth += 1;
+    }
+
+    /// CSS Masking L1 §4 (BUG-183) — applies the gradient mask to the offscreen
+    /// layer and composites it onto the previous render target.
+    ///
+    /// The layer holds the masked subtree. Painting the gradient over `rect`
+    /// with `CompositeOperation::DestinationIn` multiplies the layer's existing
+    /// alpha by the gradient's alpha (`mask-mode: alpha`, the default), then the
+    /// masked layer is composited down exactly like an opacity group.
+    fn composite_mask_layer(&mut self, entry: MaskLayerEntry) {
+        let MaskLayerEntry { image_id, gradient, rect, prev_render_target } = entry;
+        let Some(img_id) = image_id else { return };
+        // RT is currently the FBO: multiply its alpha by the gradient.
+        if let Some(g) = gradient {
+            self.canvas.save();
+            self.canvas.global_composite_operation(femtovg::CompositeOperation::DestinationIn);
+            self.fill_mask_gradient(&g, rect);
+            self.canvas.restore();
+        }
+        // Composite the masked layer (alpha already folded in) onto prev_rt.
+        self.composite_opacity_layer(img_id, 1.0, prev_render_target);
+    }
+
+    /// Paints `gradient` over `rect` using the current canvas transform. Used by
+    /// `composite_mask_layer` under a `DestinationIn` composite so the gradient's
+    /// alpha becomes the mask value. Mirrors the `DrawLinearGradient` /
+    /// `DrawRadialGradient` / `DrawConicGradient` paint construction.
+    fn fill_mask_gradient(&mut self, gradient: &MaskGradient, rect: lumen_core::geom::Rect) {
+        if rect.width <= 0.0 || rect.height <= 0.0 {
+            return;
+        }
+        match gradient {
+            MaskGradient::Linear { angle_deg, stops } => {
+                if stops.is_empty() {
+                    return;
+                }
+                let ([sx, sy], [ex, ey]) = linear_gradient_endpoints(
+                    rect.x, rect.y, rect.width, rect.height, *angle_deg,
+                );
+                let resolved = resolve_stops(stops, rect.width);
+                if resolved.len() < 2 {
+                    return;
+                }
+                let paint = femtovg::Paint::linear_gradient_stops(sx, sy, ex, ey, resolved);
+                let mut path = femtovg::Path::new();
+                path.rect(rect.x, rect.y, rect.width, rect.height);
+                self.canvas.fill_path(&path, &paint);
+            }
+            MaskGradient::Radial { center_x_pct, center_y_pct, stops } => {
+                if stops.is_empty() {
+                    return;
+                }
+                let cx = rect.x + center_x_pct * rect.width;
+                let cy = rect.y + center_y_pct * rect.height;
+                let dx = center_x_pct.max(1.0 - center_x_pct) * rect.width;
+                let dy = center_y_pct.max(1.0 - center_y_pct) * rect.height;
+                let outer_r = dx.hypot(dy).max(1.0);
+                let resolved = resolve_stops(stops, outer_r);
+                if resolved.len() < 2 {
+                    return;
+                }
+                let paint = femtovg::Paint::radial_gradient_stops(cx, cy, 0.0, outer_r, resolved);
+                let mut path = femtovg::Path::new();
+                path.rect(rect.x, rect.y, rect.width, rect.height);
+                self.canvas.fill_path(&path, &paint);
+            }
+            MaskGradient::Conic { center_x_pct, center_y_pct, from_angle_deg, stops, repeating } => {
+                self.draw_conic_gradient(
+                    &rect, *center_x_pct, *center_y_pct, *from_angle_deg, stops, *repeating,
+                );
+            }
+        }
     }
 
     /// Composites a blend-mode layer (PA-3) onto the previous render target.
@@ -2364,20 +2518,60 @@ impl FemtovgBackend {
             }
 
             // ── Masks ────────────────────────────────────────────────────────
-            // femtovg поддерживает только path clipping.
-            // Аппроксимируем gradient/image mask через scissor по rect.
-            DisplayCommand::PushMaskImage { rect, .. }
-            | DisplayCommand::PushMaskLinearGradient { rect, .. }
-            | DisplayCommand::PushMaskRadialGradient { rect, .. }
-            | DisplayCommand::PushMaskConicGradient { rect, .. } => {
+            // CSS Masking L1 §4 (BUG-183). Gradient masks render the masked
+            // subtree into an offscreen FBO; `PopMask` multiplies the FBO alpha
+            // by the gradient (`CompositeOperation::DestinationIn`) and
+            // composites the result down. `mask-image: url(...)` has no decoded
+            // source on this path, so it stays a scissor no-op (alpha = 1).
+            DisplayCommand::PushMaskImage { rect, .. } => {
+                // No registered mask texture → approximate as a rect scissor.
                 self.canvas.save();
                 self.canvas.scissor(rect.x, rect.y, rect.width, rect.height);
+                self.mask_layer_stack.push(MaskLayerEntry {
+                    image_id: None,
+                    gradient: None,
+                    rect: *rect,
+                    prev_render_target: self.current_rt(),
+                });
                 self.layer_stack_depth += 1;
+            }
+            DisplayCommand::PushMaskLinearGradient { rect, angle_deg, stops, .. } => {
+                let g = MaskGradient::Linear { angle_deg: *angle_deg, stops: stops.clone() };
+                self.push_mask_gradient_layer(*rect, g);
+            }
+            DisplayCommand::PushMaskRadialGradient {
+                rect, center_x_pct, center_y_pct, stops, ..
+            } => {
+                let g = MaskGradient::Radial {
+                    center_x_pct: *center_x_pct,
+                    center_y_pct: *center_y_pct,
+                    stops: stops.clone(),
+                };
+                self.push_mask_gradient_layer(*rect, g);
+            }
+            DisplayCommand::PushMaskConicGradient {
+                rect, center_x_pct, center_y_pct, from_angle_deg, stops, repeating,
+            } => {
+                let g = MaskGradient::Conic {
+                    center_x_pct: *center_x_pct,
+                    center_y_pct: *center_y_pct,
+                    from_angle_deg: *from_angle_deg,
+                    stops: stops.clone(),
+                    repeating: *repeating,
+                };
+                self.push_mask_gradient_layer(*rect, g);
             }
             DisplayCommand::PopMask => {
                 if self.layer_stack_depth > 0 {
-                    self.canvas.restore();
                     self.layer_stack_depth -= 1;
+                }
+                if let Some(entry) = self.mask_layer_stack.pop() {
+                    if entry.image_id.is_some() {
+                        self.composite_mask_layer(entry);
+                    } else {
+                        // Scissor fallback (PushMaskImage or FBO-alloc failure).
+                        self.canvas.restore();
+                    }
                 }
             }
             DisplayCommand::PushMaskLayer { rect, .. } => {
@@ -2978,6 +3172,29 @@ mod tests {
         let resolved = resolve_stops(&stops, 100.0);
         assert_eq!(resolved.len(), 3);
         assert!((resolved[1].0 - 0.5).abs() < 1e-5);
+    }
+
+    /// BUG-183 — a gradient `mask-image` is applied by painting the gradient
+    /// over the masked layer with `CompositeOperation::DestinationIn`, which
+    /// multiplies the layer's alpha by the gradient's *alpha* (`mask-mode: alpha`,
+    /// the default). The mask therefore depends on the resolved stops carrying a
+    /// decreasing alpha for a `black → transparent` gradient. If this regressed,
+    /// `composite_mask_layer` would either not fade (alpha stuck at 1) or clip
+    /// hard. Guards the pure kernel the GPU path relies on (the offscreen FBO +
+    /// DestinationIn composite itself needs a GL context and is exercised by the
+    /// TEST-26 graphic gate).
+    #[test]
+    fn mask_gradient_alpha_decreases_black_to_transparent() {
+        let stops = vec![
+            GradientStop { color: Color::BLACK, position: None },
+            GradientStop { color: Color::TRANSPARENT, position: None },
+        ];
+        let resolved = resolve_stops(&stops, 200.0);
+        assert_eq!(resolved.len(), 2);
+        // Opaque end → mask = 1 (content fully shown).
+        assert!((resolved[0].1.a - 1.0).abs() < 1e-5, "opaque stop must keep alpha 1");
+        // Transparent end → mask = 0 (content fully hidden).
+        assert!(resolved[1].1.a.abs() < 1e-5, "transparent stop must have alpha 0");
     }
 
     #[test]

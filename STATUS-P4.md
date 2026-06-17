@@ -72,6 +72,23 @@ _(пусто)_ — graphic test 114 верифицирован 2026-06-14 (см.
 
 **P1/P2 have implemented the algorithm. P4 wires CSS property to it.**
 
+### `mask-mode: luminance` (BUG-218, paint ready, P3 fixed BUG-183 2026-06-17)
+- **Status:** Gradient mask rendering done (BUG-183). femtovg `composite_mask_layer`
+  и cpu_raster `MaskSpec` применяют alpha-маску через `DestinationIn`. Свойство
+  `mask-mode` есть в `SUPPORTED_PROPERTIES` (css-parser), но без поля в `ComputedStyle`
+  и без ветки в `apply_declaration` → всегда трактуется как `alpha`. TEST-26 в
+  KNOWN_DEBTORS (5.02%, единственная ячейка `mask-mode:luminance`).
+- **P4 task:**
+  1. Добавить `mask_mode: MaskMode` (`Alpha | Luminance`, default `Alpha`, non-inherited)
+     в `ComputedStyle` + ветку `"mask-mode"` в `apply_declaration` (`style.rs`).
+  2. Протянуть `MaskMode` в `PushMaskLinearGradient`/`Radial`/`Conic` (добавить поле
+     `mode`) из `emit_push_mask` (`paint/src/display_list.rs:3388`).
+  3. paint: при `Luminance` строить alpha стопов как `luma(rgb)·a`
+     (`0.2126·R+0.7152·G+0.0722·B`) перед `DestinationIn` — в femtovg
+     `composite_mask_layer` (`fill_mask_gradient`) и cpu_raster `MaskSpec`.
+  4. Убрать TEST-26 из `KNOWN_DEBTORS` после фикса.
+- **Детали:** `bugs/BUG-218-OPEN.md`.
+
 ### ✅ CSS Color 4 system colors — **ВЫПОЛНЕНО** (p4-system-colors, 2026-06-13)
 `SystemColor` Copy enum (23 variants); `CssColor::System(SystemColor)` variant; `parse_css_color_legacy` детектирует системные ключевые слова; color-scheme pre-pass в `compute_style()` + `resolve_system_colors_in_style()` post-pass для CssColor-полей; `dark_mode: bool` param в `apply_declaration()` для `color: Color` поля; 7 unit-тестов + graphic test 92.
 

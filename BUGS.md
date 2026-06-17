@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-218)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-219)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -150,7 +150,7 @@
 | [BUG-132](bugs/BUG-132-FIXED.md) | FIXED 2026-06-12 | paint | INTERACTION TEST-101 (border-radius×overflow) 4.04%: PushClipRoundedRect добавлена |
 | [BUG-133](bugs/BUG-133-FIXED.md) | FIXED 2026-06-12 | paint | INTERACTION TEST-102 (opacity×z-index) 17.04%: per-draw alpha вместо offscreen |
 | [BUG-134](bugs/BUG-134-FIXED.md) | FIXED 2026-06-15 | paint | INTERACTION TEST-103 (filter×transform): ложная регрессия — устаревший бинарь |
-| [BUG-135](bugs/BUG-135-OPEN.md) | OPEN | paint | INTERACTION TEST-104 (mask×gradient×radius) 51.97% |
+| [BUG-135](bugs/BUG-135-FIXED.md) | FIXED 2026-06-17 | paint | INTERACTION TEST-104 (mask×gradient×radius) 51.97% → 0.44% PASS (фикс BUG-183) |
 | [BUG-136](bugs/BUG-136-FIXED.md) | FIXED 2026-06-13 | layout | INTERACTION TEST-105 (float/clear×margin) 4.84%: три дефекта float-раскладки |
 | [BUG-137](bugs/BUG-137-FIXED.md) | FIXED 2026-06-12 | paint | INTERACTION TEST-106 (transform×z-index) 4.02%→PASS 0.02% |
 | [BUG-138](bugs/BUG-138-FIXED.md) | FIXED 2026-06-13 | paint | INTERACTION TEST-107 (shadow×radius×overflow): box-shadow на скруглённом боксе — квадратный FillRect |
@@ -196,7 +196,7 @@
 | [BUG-180](bugs/BUG-180-OPEN.md) | OPEN | paint/image | `<img>` rendering deviation — TEST-18: 21.21% |
 | [BUG-181](bugs/BUG-181-OPEN.md) | OPEN | layout/paint | `object-fit` basic deviation — TEST-19: 9.05% |
 | [BUG-182](bugs/BUG-182-OPEN.md) | OPEN | layout/paint | `vertical-align` inline y-offset deviation — TEST-24: 0.98% |
-| [BUG-183](bugs/BUG-183-OPEN.md) | OPEN | paint | `mask-image` gradient mask not implemented — TEST-26: 17.74% |
+| [BUG-183](bugs/BUG-183-FIXED.md) | FIXED 2026-06-17 | paint | `mask-image` gradient mask not implemented — TEST-26: 17.74% → 5.02% (остаток BUG-218 mask-mode:luminance) |
 | [BUG-184](bugs/BUG-184-OPEN.md) | OPEN | paint | `clip-path` deviation — TEST-31: 0.59% |
 | [BUG-185](bugs/BUG-185-OPEN.md) | OPEN | layout/paint | list `::marker` geometry deviation — TEST-32: 3.75% |
 | [BUG-186](bugs/BUG-186-OPEN.md) | OPEN | layout | `multi-column` layout not implemented — TEST-33: 14.89% |
@@ -231,6 +231,7 @@
 | [BUG-215](bugs/BUG-215-OPEN.md) | OPEN | layout | `shape-outside: path()` not implemented — TEST-113: 1.41% |
 | [BUG-216](bugs/BUG-216-OPEN.md) | OPEN | css-parser/layout | CSS `quotes` + `open-quote`/`close-quote` deviation — TEST-117: 2.28% |
 | [BUG-217](bugs/BUG-217-OPEN.md) | OPEN | css-parser | `prefers-contrast`/`prefers-reduced-data` media queries not matched — TEST-120: 3.26% |
+| [BUG-218](bugs/BUG-218-OPEN.md) | OPEN | css-parser/paint | `mask-mode: luminance` not parsed/applied — TEST-26 luma-cell остаток 5.02% (P4) |
 
 ---
 
