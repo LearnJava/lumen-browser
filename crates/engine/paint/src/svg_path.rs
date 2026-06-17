@@ -953,6 +953,15 @@ pub fn tessellate_stroke_ex(contours: &[Vec<[f32; 2]>], params: &StrokeParams) -
 }
 
 /// Tessellate one polyline with advanced join/cap support.
+///
+/// Each segment is emitted as its **own** rectangle, offset by that segment's
+/// own normal at *both* endpoints. The previous implementation shared one
+/// left/right offset per vertex and forced both adjacent segments onto the
+/// *outgoing* segment's normal, which dragged the incoming segment's end-edge
+/// off-axis and produced spurious triangular spikes at every corner (BUG-102).
+/// With independent per-segment rectangles the inner sides simply overlap
+/// (invisible for an opaque fill) and only the outer wedge at each interior
+/// vertex needs filling — done per `linejoin` by [`emit_join`].
 fn stroke_contour_ex(pts: &[[f32; 2]], params: &StrokeParams, out: &mut Vec<[f32; 2]>) {
     let n = pts.len();
     if n < 2 {
@@ -969,101 +978,126 @@ fn stroke_contour_ex(pts: &[[f32; 2]], params: &StrokeParams, out: &mut Vec<[f32
     }
     let n_segs = if closed { m } else { m - 1 };
 
-    // Per-segment unit normals (left of travel, Y-down coords).
-    let seg_normals: Vec<[f32; 2]> = (0..n_segs)
-        .map(|i| {
-            let a = wpts[i];
-            let b = wpts[(i + 1) % m];
-            let dx = b[0] - a[0];
-            let dy = b[1] - a[1];
-            let len = (dx * dx + dy * dy).sqrt().max(1e-6);
-            [dy / len, -dx / len]
-        })
-        .collect();
-
-    // Segment direction vectors (unit).
-    let seg_dirs: Vec<[f32; 2]> = (0..n_segs)
-        .map(|i| {
-            let a = wpts[i];
-            let b = wpts[(i + 1) % m];
-            let dx = b[0] - a[0];
-            let dy = b[1] - a[1];
-            let len = (dx * dx + dy * dy).sqrt().max(1e-6);
-            [dx / len, dy / len]
-        })
-        .collect();
-
-    // Build per-vertex left/right offsets considering linejoin.
-    // For endpoints of open paths, the offset equals the segment normal × half_w.
-    let mut left_pts: Vec<[f32; 2]> = Vec::with_capacity(m);
-    let mut right_pts: Vec<[f32; 2]> = Vec::with_capacity(m);
-    // join_tris: extra triangles added at joints (round/bevel).
-    let mut join_tris: Vec<(usize, Vec<[f32; 2]>)> = Vec::new();
-
-    for i in 0..m {
-        let p = wpts[i];
-        let has_prev = closed || i > 0;
-        let has_next = closed || i < m - 1;
-
-        if !has_prev || !has_next {
-            // Open endpoint: use adjacent normal.
-            let n = if !has_prev { seg_normals[0] } else { seg_normals[n_segs - 1] };
-            left_pts.push([p[0] + n[0] * half_w, p[1] + n[1] * half_w]);
-            right_pts.push([p[0] - n[0] * half_w, p[1] - n[1] * half_w]);
-        } else {
-            let n_in = seg_normals[(i + n_segs - 1) % n_segs];
-            let n_out = seg_normals[i % n_segs];
-            match params.linejoin {
-                StrokeLinejoin::Miter => {
-                    let ofs = miter_offset_ex(i, m, &seg_normals, half_w, params.miterlimit, closed);
-                    left_pts.push([p[0] + ofs[0], p[1] + ofs[1]]);
-                    right_pts.push([p[0] - ofs[0], p[1] - ofs[1]]);
-                }
-                StrokeLinejoin::Bevel => {
-                    // Use outgoing normal for the main quad; add bevel triangle separately.
-                    left_pts.push([p[0] + n_out[0] * half_w, p[1] + n_out[1] * half_w]);
-                    right_pts.push([p[0] - n_out[0] * half_w, p[1] - n_out[1] * half_w]);
-                    // Bevel fill triangle: connects incoming and outgoing sides.
-                    let li = [p[0] + n_in[0] * half_w, p[1] + n_in[1] * half_w];
-                    let ri = [p[0] - n_in[0] * half_w, p[1] - n_in[1] * half_w];
-                    let lo = [p[0] + n_out[0] * half_w, p[1] + n_out[1] * half_w];
-                    let ro = [p[0] - n_out[0] * half_w, p[1] - n_out[1] * half_w];
-                    // Which side is the "outside" of the turn?
-                    let cross = n_in[0] * n_out[1] - n_in[1] * n_out[0];
-                    let extra = if cross > 0.0 {
-                        vec![p, li, lo] // left side bevel
-                    } else {
-                        vec![p, ri, ro] // right side bevel
-                    };
-                    join_tris.push((i, extra));
-                }
-                StrokeLinejoin::Round => {
-                    // Use outgoing normal for main quad; add round fan separately.
-                    left_pts.push([p[0] + n_out[0] * half_w, p[1] + n_out[1] * half_w]);
-                    right_pts.push([p[0] - n_out[0] * half_w, p[1] - n_out[1] * half_w]);
-                    let extra = round_join_tris(p, n_in, n_out, half_w);
-                    join_tris.push((i, extra));
-                }
-            }
-        }
-    }
-
-    // Emit main segment quads.
+    // Per-segment unit normals (left of travel, Y-down coords) and directions.
+    // Range loops are intentional: the segment wraps via `(i + 1) % m` for
+    // closed contours, which an iterator over `wpts` cannot express.
+    let mut seg_normals: Vec<[f32; 2]> = Vec::with_capacity(n_segs);
+    let mut seg_dirs: Vec<[f32; 2]> = Vec::with_capacity(n_segs);
+    #[allow(clippy::needless_range_loop)]
     for i in 0..n_segs {
-        let j = (i + 1) % m;
-        let (l0, r0) = (left_pts[i], right_pts[i]);
-        let (l1, r1) = (left_pts[j], right_pts[j]);
-        out.push(l0); out.push(r0); out.push(l1);
-        out.push(l1); out.push(r0); out.push(r1);
+        let a = wpts[i];
+        let b = wpts[(i + 1) % m];
+        let dx = b[0] - a[0];
+        let dy = b[1] - a[1];
+        let len = (dx * dx + dy * dy).sqrt().max(1e-6);
+        seg_dirs.push([dx / len, dy / len]);
+        seg_normals.push([dy / len, -dx / len]);
     }
 
-    // Emit join triangles.
-    for (_, tris) in &join_tris {
-        for t in tris.chunks(3) {
-            if t.len() == 3 {
-                out.push(t[0]); out.push(t[1]); out.push(t[2]);
-            }
+    // Per-vertex join data. Both sides of an interior vertex share ONE corner
+    // point so the joint stays watertight and smooth:
+    //   * inner (concave) side  → folded miter point (`inner_pt`);
+    //   * outer (convex) side   → for a miter join within `miterlimit`, the
+    //     shared outer miter point (`outer_pt`); for bevel / round / over-limit
+    //     joins the plain per-segment offset, with the wedge filled below.
+    // Sharing the miter point (rather than emitting independent per-segment
+    // rectangles + a separate miter tip) is essential on *flattened curves*:
+    // `linejoin` semantics apply at real path corners, but the polyline also
+    // contains many gentle curve-interpolation vertices. A per-vertex miter tip
+    // there pokes a hair out of every vertex; the shared miter point traces the
+    // smooth offset curve instead.
+    let interior = |i: usize| -> bool { closed || (i > 0 && i < m - 1) };
+    let mut s_vec = vec![0.0f32; m];
+    let mut inner_pt = vec![[0.0f32, 0.0]; m];
+    let mut outer_pt = vec![[0.0f32, 0.0]; m];
+    // `true` → outer side uses the shared miter point and needs no wedge fill.
+    let mut use_miter = vec![false; m];
+    #[allow(clippy::needless_range_loop)]
+    for i in 0..m {
+        if !interior(i) {
+            continue;
         }
+        let p = wpts[i];
+        let n_in = seg_normals[(i + n_segs - 1) % n_segs];
+        let n_out = seg_normals[i % n_segs];
+        let d_in = seg_dirs[(i + n_segs - 1) % n_segs];
+        let d_out = seg_dirs[i % n_segs];
+        let turn = d_in[0] * d_out[1] - d_in[1] * d_out[0];
+        let s = if turn >= 0.0 { 1.0 } else { -1.0 };
+        s_vec[i] = s;
+        let dot = n_in[0] * n_out[0] + n_in[1] * n_out[1];
+        if 1.0 + dot < 1e-3 {
+            // Near 180° reversal: miter blows up. Plain offsets + (bevel) fill.
+            inner_pt[i] = [p[0] - s * n_out[0] * half_w, p[1] - s * n_out[1] * half_w];
+            outer_pt[i] = [p[0] + s * n_out[0] * half_w, p[1] + s * n_out[1] * half_w];
+        } else {
+            // Miter point offset = (n_in+n_out)·half_w/(1+cosφ).
+            let off = half_w / (1.0 + dot);
+            let mvx = (n_in[0] + n_out[0]) * off;
+            let mvy = (n_in[1] + n_out[1]) * off;
+            inner_pt[i] = [p[0] - s * mvx, p[1] - s * mvy];
+            outer_pt[i] = [p[0] + s * mvx, p[1] + s * mvy];
+            // SVG §13.4 miter ratio = miterLength/strokeWidth = sqrt(2/(1+cosφ)).
+            let ratio = (2.0 / (1.0 + dot)).sqrt();
+            use_miter[i] = matches!(params.linejoin, StrokeLinejoin::Miter)
+                && ratio <= params.miterlimit;
+        }
+    }
+
+    // Corner of a segment edge at vertex `v` on the `plus` (+normal) side.
+    let corner = |v: usize, nrm: [f32; 2], plus: bool| -> [f32; 2] {
+        let p = wpts[v];
+        let sgn = if plus { 1.0 } else { -1.0 };
+        if !interior(v) {
+            return [p[0] + sgn * nrm[0] * half_w, p[1] + sgn * nrm[1] * half_w];
+        }
+        if (s_vec[v] > 0.0) == plus {
+            // Outer side.
+            if use_miter[v] {
+                outer_pt[v]
+            } else {
+                [p[0] + sgn * nrm[0] * half_w, p[1] + sgn * nrm[1] * half_w]
+            }
+        } else {
+            // Inner side: shared folded point.
+            inner_pt[v]
+        }
+    };
+
+    // Emit one quad per segment; concave corners (and outer miter corners) are
+    // shared between adjacent segments via the per-vertex points above.
+    #[allow(clippy::needless_range_loop)]
+    for k in 0..n_segs {
+        let a = k;
+        let b = (k + 1) % m;
+        let nrm = seg_normals[k];
+        let pa_plus = corner(a, nrm, true);
+        let pa_minus = corner(a, nrm, false);
+        let pb_plus = corner(b, nrm, true);
+        let pb_minus = corner(b, nrm, false);
+        out.push(pa_plus); out.push(pa_minus); out.push(pb_plus);
+        out.push(pb_plus); out.push(pa_minus); out.push(pb_minus);
+    }
+
+    // Fill the convex (outer) wedge only where the miter point is NOT shared:
+    // bevel / round joins, and miters past the limit (which fall back to bevel).
+    // Closed paths also join at vertex 0 (the shared start/end point).
+    let join_start = if closed { 0 } else { 1 };
+    let join_end = if closed { m } else { m - 1 };
+    #[allow(clippy::needless_range_loop)]
+    for i in join_start..join_end {
+        if use_miter[i] {
+            continue;
+        }
+        let p = wpts[i];
+        let in_seg = (i + n_segs - 1) % n_segs;
+        let out_seg = i % n_segs;
+        emit_join(
+            p,
+            seg_dirs[in_seg], seg_dirs[out_seg],
+            seg_normals[in_seg], seg_normals[out_seg],
+            half_w, params, out,
+        );
     }
 
     // Emit linecap triangles for open sub-paths.
@@ -1078,6 +1112,52 @@ fn stroke_contour_ex(pts: &[[f32; 2]], params: &StrokeParams, out: &mut Vec<[f32
         let n_last = seg_normals[n_segs - 1];
         let p_last = wpts[m - 1];
         emit_cap(p_last, n_last, dir_last, half_w, params.linecap, out);
+    }
+}
+
+/// Fill the convex (outer) wedge of one interior join at vertex `p` between an
+/// incoming segment (`d_in`/`n_in`) and an outgoing segment (`d_out`/`n_out`).
+///
+/// Only called for joins whose outer corner is NOT shared as a miter point
+/// (`Bevel`, `Round`, and over-limit `Miter` — the latter falls back to bevel).
+/// The two per-segment quads already meet at the shared inner point and butt
+/// against `p` on the outer side, leaving a wedge between their outer offset
+/// points that this fills: `Bevel` with one triangle, `Round` with an arc fan.
+#[allow(clippy::too_many_arguments)]
+fn emit_join(
+    p: [f32; 2],
+    d_in: [f32; 2],
+    d_out: [f32; 2],
+    n_in: [f32; 2],
+    n_out: [f32; 2],
+    half_w: f32,
+    params: &StrokeParams,
+    out: &mut Vec<[f32; 2]>,
+) {
+    // Collinear (no turn) → no gap to fill.
+    let turn = d_in[0] * d_out[1] - d_in[1] * d_out[0];
+    if turn.abs() < 1e-6 {
+        return;
+    }
+    // Outer side: +normal when turning one way, -normal the other.
+    let s = if turn >= 0.0 { 1.0 } else { -1.0 };
+    let outer_in = [p[0] + s * n_in[0] * half_w, p[1] + s * n_in[1] * half_w];
+    let outer_out = [p[0] + s * n_out[0] * half_w, p[1] + s * n_out[1] * half_w];
+
+    if matches!(params.linejoin, StrokeLinejoin::Round) {
+        let on_in = [s * n_in[0], s * n_in[1]];
+        let on_out = [s * n_out[0], s * n_out[1]];
+        const SEGS: usize = 8;
+        for k in 0..SEGS {
+            let t0 = k as f32 / SEGS as f32;
+            let t1 = (k + 1) as f32 / SEGS as f32;
+            let pt0 = slerp_normal(on_in, on_out, t0, half_w, p);
+            let pt1 = slerp_normal(on_in, on_out, t1, half_w, p);
+            out.push(p); out.push(pt0); out.push(pt1);
+        }
+    } else {
+        // Bevel, or a Miter that exceeded the limit → single bevel triangle.
+        out.push(p); out.push(outer_in); out.push(outer_out);
     }
 }
 
@@ -1121,31 +1201,6 @@ fn rotate_normal(normal: [f32; 2], dir: [f32; 2], angle: f32, half_w: f32, cente
     [center[0] + nx * half_w, center[1] + ny * half_w]
 }
 
-/// Generate round join triangles (arc from n_in to n_out side).
-fn round_join_tris(p: [f32; 2], n_in: [f32; 2], n_out: [f32; 2], half_w: f32) -> Vec<[f32; 2]> {
-    let cross = n_in[0] * n_out[1] - n_in[1] * n_out[0];
-    // Angle between n_in and n_out (clamped to avoid NaN).
-    let dot = (n_in[0] * n_out[0] + n_in[1] * n_out[1]).clamp(-1.0, 1.0);
-    let angle = dot.acos();
-    if angle < 1e-4 {
-        return Vec::new();
-    }
-    const SEGS: usize = 8;
-    let mut tris = Vec::with_capacity(SEGS * 3);
-    // Choose which side to arc (outside of the turn).
-    let (start_n, sign) = if cross > 0.0 { (n_in, 1.0f32) } else { ([-n_in[0], -n_in[1]], -1.0f32) };
-    let target_n = if cross > 0.0 { n_out } else { [-n_out[0], -n_out[1]] };
-    for k in 0..SEGS {
-        let t0 = k as f32 / SEGS as f32;
-        let t1 = (k + 1) as f32 / SEGS as f32;
-        let pt0 = slerp_normal(start_n, target_n, t0, half_w, p);
-        let pt1 = slerp_normal(start_n, target_n, t1, half_w, p);
-        let _ = sign; // used for direction selection above
-        tris.push(p); tris.push(pt0); tris.push(pt1);
-    }
-    tris
-}
-
 /// Spherical linear interpolation between two unit normals, scaled to half_w, offset by center.
 fn slerp_normal(n0: [f32; 2], n1: [f32; 2], t: f32, half_w: f32, center: [f32; 2]) -> [f32; 2] {
     let dot = (n0[0] * n1[0] + n0[1] * n1[1]).clamp(-1.0, 1.0);
@@ -1163,39 +1218,6 @@ fn slerp_normal(n0: [f32; 2], n1: [f32; 2], t: f32, half_w: f32, center: [f32; 2
     let nx = w0 * n0[0] + w1 * n1[0];
     let ny = w0 * n0[1] + w1 * n1[1];
     [center[0] + nx * half_w, center[1] + ny * half_w]
-}
-
-/// Miter-join offset at vertex `i` with configurable miterlimit.
-fn miter_offset_ex(i: usize, m: usize, seg_normals: &[[f32; 2]], half_w: f32, miterlimit: f32, closed: bool) -> [f32; 2] {
-    let n_segs = seg_normals.len();
-    let has_prev = closed || i > 0;
-    let has_next = closed || i < m - 1;
-    if !has_prev {
-        let n = seg_normals[0];
-        return [n[0] * half_w, n[1] * half_w];
-    }
-    if !has_next {
-        let n = seg_normals[n_segs - 1];
-        return [n[0] * half_w, n[1] * half_w];
-    }
-    let n_in = seg_normals[(i + n_segs - 1) % n_segs];
-    let n_out = seg_normals[i % n_segs];
-    let sx = n_in[0] + n_out[0];
-    let sy = n_in[1] + n_out[1];
-    let denom = sx * n_out[0] + sy * n_out[1];
-    if denom.abs() < 0.05 {
-        return [n_out[0] * half_w, n_out[1] * half_w];
-    }
-    let scale = half_w / denom;
-    let mx = sx * scale;
-    let my = sy * scale;
-    // Miter length = 2 * half_w / sin(theta/2). Limit applied as ratio.
-    let miter_len_sq = mx * mx + my * my;
-    let limit = miterlimit * half_w;
-    if miter_len_sq > limit * limit {
-        return [n_out[0] * half_w, n_out[1] * half_w]; // fall back to bevel
-    }
-    [mx, my]
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -1549,7 +1571,10 @@ mod tests {
 
     #[test]
     fn stroke_ex_bevel_join_has_extra_triangle() {
-        // Bevel join at a right-angle corner should add one triangle.
+        // Two-segment open path → 2 quads = 12 verts. A miter join (within the
+        // limit) shares the outer miter point between the two quads, so it adds
+        // NO extra geometry. A bevel join cannot share the point, so it fills the
+        // outer wedge with exactly one extra triangle (+3 verts).
         let contour = vec![vec![[0.0f32, 0.0], [50.0, 0.0], [50.0, 50.0]]];
         let miter = tessellate_stroke_ex(&contour, &StrokeParams {
             half_width: 5.0, linejoin: StrokeLinejoin::Miter, ..StrokeParams::default()
@@ -1557,7 +1582,8 @@ mod tests {
         let bevel = tessellate_stroke_ex(&contour, &StrokeParams {
             half_width: 5.0, linejoin: StrokeLinejoin::Bevel, ..StrokeParams::default()
         });
-        assert!(bevel.len() >= miter.len(), "bevel join adds bevel triangle");
+        assert_eq!(miter.len(), 12, "miter join shares the corner point, no extra tris");
+        assert_eq!(bevel.len(), 12 + 3, "bevel join = 2 quads + 1 bevel triangle");
     }
 
     #[test]
