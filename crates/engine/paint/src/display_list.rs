@@ -2440,6 +2440,17 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
     }
     let s = &b.style;
 
+    // CSS Masking L1 §4 (BUG-183): mask-image wraps the fully composited element
+    // (background + border + content + children), so it must be the OUTERMOST
+    // layer. Pushed first into `pre` and `post` here — after `post.reverse()` its
+    // PopMask becomes the last command, balancing the PushMask. `walk` emits the
+    // same pair inline via `emit_push_mask`; the SC bucket path lost it before
+    // (mask-image makes the box a stacking context → painted via `fill_buckets`/
+    // `emit_box_self`, which never opened the mask group).
+    if emit_push_mask(&mut pre, b) {
+        post.push(DisplayCommand::PopMask);
+    }
+
     // CSS Overflow L3 §3.2: overflow clip to padding-box edge; unconstrained
     // axis uses a BIG sentinel so the GPU scissor doesn't cut off content in
     // that direction. CSS Containment L3 §3.5: contain:paint clips both axes.
@@ -8537,6 +8548,29 @@ mod tests {
         let stacking_tree = lumen_layout::StackingTree::build(&tree);
         let order = lumen_layout::PaintOrder::from_tree(&stacking_tree);
         build_display_list_ordered(&tree, &stacking_tree, &order)
+    }
+
+    /// BUG-183: a gradient `mask-image` makes the box a stacking context, so it
+    /// is painted through `build_display_list_ordered` (the bucket path), not
+    /// `walk`. Before the fix `box_layer_ops` did not open the mask group, so the
+    /// gradient mask silently became a no-op. The ordered output must wrap the
+    /// box's background between `PushMaskLinearGradient` and `PopMask`.
+    #[test]
+    fn ordered_mask_image_gradient_wraps_box_as_stacking_context() {
+        let dl = build_ordered(
+            "<div class='m'></div>",
+            ".m { width: 100px; height: 100px; background: #f00; \
+             mask-image: linear-gradient(to bottom, black, transparent); }",
+        );
+        let push = dl.iter().position(|c| {
+            matches!(c, DisplayCommand::PushMaskLinearGradient { .. })
+        });
+        let fill = dl.iter().position(|c| matches!(c, DisplayCommand::FillRect { .. }));
+        let pop = dl.iter().position(|c| matches!(c, DisplayCommand::PopMask));
+        let push = push.expect("ordered path must emit PushMaskLinearGradient");
+        let pop = pop.expect("ordered path must emit PopMask");
+        let fill = fill.expect("masked box must still fill its background");
+        assert!(push < fill && fill < pop, "mask must wrap the box background: push={push} fill={fill} pop={pop}");
     }
 
     #[test]

@@ -83,7 +83,7 @@ Snapshot: **Phase 2 «Interactive», app v0.2.0**. ~21 crates.
 - ✅ CSS filters (GPU color-matrix + Gaussian blur), backdrop-filter (LRU cache), clip-path (bbox approximation).
 - ✅ 3D transforms (perspective, preserve-3d depth sort) in wgpu renderer; multi-size + variation-aware glyph atlas, per-char codepoint fallback cascade.
 - ✅ Compositor scaffolding (two-buffer commit, threaded compositor, 60fps vsync); print (`render_print_pages` → images); CPU rasterizer (`cpu_raster.rs`, feature `cpu-render`, cross-OS bit-identical, snapshot gate); software WebGL 1.0 (flat fill, no GLSL).
-- 🟡 femtovg gradient/image masks are **scissor bbox clip**, not true per-pixel alpha mask.
+- 🟡 femtovg `mask-image` gradient masks are **true per-pixel alpha masks** (offscreen FBO + `DestinationIn`, linear/radial/conic; BUG-183). `mask-mode: luminance` not yet wired (BUG-218, P4); `url()` image masks still scissor bbox (no decoded source).
 - ⬜ GPU shadow pipeline, Groove/Ridge/Inset/Outset borders, exact polygon clip-path, elliptical border-radius (rx≠ry), Vello backend (no-op stub).
 
 ### lumen-font (`crates/engine/font`)
