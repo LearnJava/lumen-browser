@@ -117,6 +117,19 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
 
+- **BUG-108** (2026-06-17) — TEST-66 5.24%→1.08%. Реальная причина была НЕ `::selection`
+  (правила в тесте информационные, выделение не триггерится — видимый контент это свотчи), а
+  отсутствие **parent↔last-child bottom margin collapse** (CSS 2.1 §8.3.1): bottom-маргин
+  последнего ребёнка оставался внутри `content_height` родителя вместо того чтобы убегать
+  наружу. `.section` была 113.6px вместо 83.6px + свой margin → свотчи дрейфовали вниз
+  +30px/секция. Фикс симметричен top-коллапсу: `last_collapsible_child` +
+  `collapsed_bottom_margin` + `b_collapses_bottom` (`box_tree.rs`); из `content_height`
+  вычитается escaped bottom-маргин последнего ребёнка, `child_mb` стал `collapsed_bottom_margin`
+  (collapse-through). Корень элемента не коллапсит (`in_block_flow == false`). Остаток 1.08% —
+  текст (font-parity, rule 3) + border-radius AA. Тесты:
+  `parent_last_child_bottom_margin_collapses`, `bottom_margin_not_collapsed_through_padding`;
+  обновлён snapshot `paragraph_with_styles` (body 49→44px). Прогон 09:53 без регрессий.
+
 - **BUG-142** (2026-06-17) — `:host`/`::slotted` (TEST-72: 11.24% → 0.00%). Две причины.
   (1) Каскад без скоупинга: shadow-tree `<style>` вообще не собирались, а document-scope
   `:host`/`::slotted` матчились на любой хост → все 3 хоста красились #3366cc, slotted-цвета

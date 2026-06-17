@@ -4407,6 +4407,71 @@ fn collapsed_top_margin(b: &LayoutBox, cb: f32, viewport: Size) -> f32 {
     }
 }
 
+/// Returns the last in-flow `Block` child whose bottom margin collapses with the
+/// owning box's bottom margin (CSS 2.1 §8.3.1). Mirror of `first_collapsible_child`
+/// for the bottom edge: out-of-flow children (floats, absolutely positioned),
+/// `::marker`s and zero-height `Skip` boxes are transparent and skipped. If the
+/// last remaining in-flow child is not a plain `Block` (e.g. an inline run or a
+/// replaced element) the collapsing chain is broken and `None` is returned. A
+/// child with clearance also breaks the chain.
+fn last_collapsible_child(b: &LayoutBox) -> Option<&LayoutBox> {
+    for child in b.children.iter().rev() {
+        if matches!(child.kind, BoxKind::Marker { .. } | BoxKind::Skip) {
+            continue;
+        }
+        if child.style.float_side != FloatSide::None
+            || matches!(child.style.position, Position::Absolute | Position::Fixed)
+        {
+            continue;
+        }
+        if child.style.clear != ClearSide::None {
+            return None;
+        }
+        return matches!(child.kind, BoxKind::Block).then_some(child);
+    }
+    None
+}
+
+/// CSS 2.1 §8.3.1 — the *collapsed* bottom margin of a block-level box (px).
+///
+/// The bottom margin of an in-flow block collapses with the bottom margin of its
+/// last in-flow block-level child when nothing separates them: the box has an
+/// `auto` height, no bottom border, no bottom padding, establishes no BFC, and the
+/// last in-flow child is itself a plain block with no clearance. The collapse
+/// recurses down the chain of last children. `cb` is the containing-block width
+/// used to resolve percentage margins. Only the common non-negative case is folded
+/// (parity with `collapsed_top_margin`); negative margins fall through as the box's
+/// own margin.
+fn collapsed_bottom_margin(b: &LayoutBox, cb: f32, viewport: Size) -> f32 {
+    let em = b.style.font_size;
+    let own = b.style.margin_bottom.resolve_or_zero(em, cb, viewport);
+    if !matches!(b.kind, BoxKind::Block) || establishes_bfc(b) {
+        return own;
+    }
+    // A definite height blocks the last child's bottom margin from reaching the
+    // box's bottom edge, so the through-collapse does not happen.
+    if b.style.height.is_some() {
+        return own;
+    }
+    let pb = b.style.padding_bottom.resolve_or_zero(em, cb, viewport);
+    if pb != 0.0 || b.style.border_bottom_width != 0.0 {
+        return own;
+    }
+    match last_collapsible_child(b) {
+        Some(child) => {
+            // Child's containing-block width = this box's content width.
+            let child_cb = (cb
+                - b.style.padding_left.resolve_or_zero(em, cb, viewport)
+                - b.style.padding_right.resolve_or_zero(em, cb, viewport)
+                - b.style.border_left_width
+                - b.style.border_right_width)
+                .max(0.0);
+            own.max(collapsed_bottom_margin(child, child_cb, viewport))
+        }
+        None => own,
+    }
+}
+
 /// CSS Box Sizing L4 §5 — content block-size contribution under size containment.
 /// When `size_contained` is true the box ignores its children for auto sizing and
 /// uses the resolved `contain-intrinsic-height` (content-box px, clamped ≥ 0), or
@@ -5011,6 +5076,19 @@ fn lay_out(
                     && !establishes_bfc(b)
                     && padding_top == 0.0
                     && s.border_top_width == 0.0;
+                // CSS 2.1 §8.3.1: symmetric to `b_collapses_top` — this block's
+                // bottom margin collapses with the bottom margin of its last in-flow
+                // block child when nothing separates them: auto height, no bottom
+                // padding, no bottom border, no BFC, and the box is a normal in-flow
+                // block. In that case the last child's bottom margin escapes out of
+                // this box (folded into its own bottom margin by the parent loop via
+                // `collapsed_bottom_margin`) instead of inflating the content height.
+                let b_collapses_bottom = in_block_flow
+                    && matches!(b.kind, BoxKind::Block)
+                    && !establishes_bfc(b)
+                    && padding_bottom == 0.0
+                    && s.border_bottom_width == 0.0
+                    && s.height.is_none();
                 // Tracks whether the first in-flow child has been positioned yet.
                 let mut seen_inflow_child = false;
                 // CSS Lists L3 §2.4: pending indent from an inside ::marker (em units).
@@ -5341,16 +5419,38 @@ fn lay_out(
                         continue;
                     }
                     seen_inflow_child = true;
-                    let child_mb = child.style.margin_bottom.resolve_or_zero(
-                        child.style.font_size, content_width, viewport);
+                    // CSS 2.1 §8.3.1: the child's effective bottom margin is its own
+                    // bottom margin folded with any bottom margin escaping from its
+                    // last-child chain (collapse-through), mirroring `collapsed_mt` on
+                    // the top edge. For non-block kinds this is just the own margin.
+                    let child_mb = collapsed_bottom_margin(child, content_width, viewport);
                     child_y = child.rect.y + child.rect.height + child_mb;
                     prev_block_mb = if is_block { child_mb.max(0.0) } else { 0.0 };
                 }
+                // CSS 2.1 §8.3.1: parent↔last-child bottom margin collapse. When this
+                // box collapses its bottom margin (auto height, no bottom padding/border,
+                // no BFC) and the last in-flow child is a collapsible block, that child's
+                // (collapsed) bottom margin escapes out of this box rather than enlarging
+                // its content height — it becomes part of this box's own bottom margin
+                // (reported to the parent loop via `collapsed_bottom_margin`). Only fold
+                // it out when no float extends past the last child's flow bottom.
+                let escaped_bottom = if b_collapses_bottom {
+                    last_collapsible_child(b)
+                        .map(|c| collapsed_bottom_margin(c, content_width, viewport))
+                        .unwrap_or(0.0)
+                } else {
+                    0.0
+                };
                 // CSS 2.1 §9.5: the container height must also enclose all floats.
                 let float_bottom = fc.left.iter().chain(fc.right.iter())
                     .map(|(bot, _)| *bot)
                     .fold(child_y, f32::max);
-                (float_bottom - content_y).max(0.0)
+                let base = (float_bottom - content_y).max(0.0);
+                if escaped_bottom > 0.0 && (float_bottom - child_y).abs() < 0.01 {
+                    (base - escaped_bottom).max(0.0)
+                } else {
+                    base
+                }
             };
             // Явная высота (CSS height: Npx) перекрывает auto-высоту по содержимому.
             // box-sizing работает симметрично width: content-box прибавляет
