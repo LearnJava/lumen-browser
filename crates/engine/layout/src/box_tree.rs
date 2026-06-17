@@ -3729,6 +3729,25 @@ fn preferred_inline_block_width(
         };
         return Some(outer.max(0.0));
     }
+    // InlineRun — чисто-текстовый анонимный run: preferred = max-content ширина
+    // текста (все сегменты на одной строке, без переноса). Без этой ветки
+    // text-only inline-block (`<span style="display:inline-block">текст</span>`)
+    // получал content_w = 0 (текст лежит в `segments`, а не в `children`) → None
+    // → shrink-to-fit не применялся → бокс растягивался на всю доступную ширину
+    // вместо обтягивания текста (BUG-202).
+    if let BoxKind::InlineRun { segments, .. } = &b.kind {
+        let text_w = measurer.map_or(0.0, |m| {
+            segments
+                .iter()
+                .map(|seg| {
+                    let ls = seg.style.letter_spacing;
+                    let ts = seg.style.tab_size * m.char_width(' ', seg.style.font_size);
+                    measure_text_w(&seg.text, seg.style.font_size, ls, ts, m)
+                })
+                .sum()
+        });
+        return if text_w > 0.0 { Some(text_w) } else { None };
+    }
     // InlineBlockRow — горизонтальный поток: суммируем ширины детей + их margins.
     // InlineSpace — collapsed whitespace gap; его ширина = char_width(' ').
     // Остальные боксы (Block, Image и т.д.) — вертикальный поток: берём max.
@@ -11957,6 +11976,46 @@ mod tests {
         let c = find_size_contained(&root).expect("size-contained box present");
         assert!((c.rect.width - 200.0).abs() < 0.5, "width should be 200px, got {}", c.rect.width);
         assert!((c.rect.height - 100.0).abs() < 0.5, "height should be 100px, got {}", c.rect.height);
+    }
+
+    fn find_inline_block(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+        if b.style.display == crate::style::Display::InlineBlock {
+            return Some(b);
+        }
+        b.children.iter().find_map(find_inline_block)
+    }
+
+    #[test]
+    fn text_only_inline_block_shrinks_to_fit() {
+        // BUG-202: a text-only inline-block (no explicit width) must shrink to fit
+        // its text, not stretch to the whole line. `preferred_inline_block_width`
+        // previously measured only child *boxes* and ignored `InlineRun` segment
+        // text, returning None → no shrink-to-fit → the box filled the container.
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 {
+                8.0
+            }
+        }
+        let html = r#"<div class="wrap"><span class="pill">abcd</span></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".wrap { width: 500px; } .pill { display: inline-block; padding: 0 10px; }",
+        );
+        let root = super::layout_measured(&doc, &sheet, Size::new(500.0, 300.0), &Fixed8);
+        let pill = find_inline_block(&root).expect("inline-block box present");
+        // "abcd" = 4 × 8px = 32px text + 10+10 padding = 52px border-box width —
+        // NOT the ~500px container width.
+        assert!(
+            pill.rect.width < 100.0,
+            "inline-block must shrink to fit text, got {}",
+            pill.rect.width
+        );
+        assert!(
+            (pill.rect.width - 52.0).abs() < 1.0,
+            "expected ~52px (32 text + 20 padding), got {}",
+            pill.rect.width
+        );
     }
 
     #[test]
