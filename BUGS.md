@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-220)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-221)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -215,7 +215,7 @@
 | [BUG-199](bugs/BUG-199-OPEN.md) | OPEN | layout | `@starting-style` static rendering deviation — TEST-71: 7.03% |
 | [BUG-200](bugs/BUG-200-OPEN.md) | OPEN | layout/paint | CSS Table `border-collapse` deviation — TEST-80: 9.89% |
 | [BUG-201](bugs/BUG-201-OPEN.md) | OPEN | paint | SVG `<use>` cloning deviation — TEST-82: 5.00% |
-| [BUG-202](bugs/BUG-202-OPEN.md) | OPEN | paint | `scroll-behavior` visual regression (G-3 ✅ но FAIL) — TEST-83: 14.02% |
+| [BUG-202](bugs/BUG-202-FIXED.md) | FIXED 2026-06-17 | layout | TEST-83 14.02%→7.88%: реальная причина не scroll-behavior, а text-only inline-block без shrink-to-fit. `preferred_inline_block_width` мерил только дочерние боксы и игнорировал текст `InlineRun` (он в `segments`, не в `children`) → None → бокс растягивался на всю строку. Добавлена ветка измерения текста сегментов (box_tree.rs:3732). Pills `.pill` теперь обтягивают текст и текут в ряд. Остаток 7.88% = font-parity (BUG-128) → KNOWN_DEBTORS |
 | [BUG-203](bugs/BUG-203-OPEN.md) | OPEN | paint | `text-decoration-skip-ink` underline gaps deviation — TEST-84: 5.88% |
 | [BUG-204](bugs/BUG-204-OPEN.md) | OPEN | layout | `anchor-name` basic stub deviation — TEST-85: 1.98% |
 | [BUG-205](bugs/BUG-205-OPEN.md) | OPEN | layout | `position-anchor` fallback stub deviation — TEST-86: 2.12% |
@@ -233,6 +233,7 @@
 | [BUG-217](bugs/BUG-217-OPEN.md) | OPEN | css-parser | `prefers-contrast`/`prefers-reduced-data` media queries not matched — TEST-120: 3.26% |
 | [BUG-218](bugs/BUG-218-OPEN.md) | OPEN | css-parser/paint | `mask-mode: luminance` not parsed/applied — TEST-26 luma-cell остаток 5.02% (P4) |
 | [BUG-219](bugs/BUG-219-OPEN.md) | OPEN | image/paint | image downscale resampling pixel-parity vs Edge — TEST-18 остаток 2.11% (тонкий AA по всем фото после фикса BUG-180) → KNOWN_DEBTORS |
+| [BUG-220](bugs/BUG-220-OPEN.md) | OPEN | paint | scroll-контейнер в ordered (stacking-context) пути теряет scrollbar: `box_layer_ops` эмитит `PushScrollLayer`/`PopScrollLayer`, но не `DrawScrollbar` (есть только в legacy `walk`) — display_list.rs:2481. Замечен при разборе BUG-202 |
 
 ---
 
