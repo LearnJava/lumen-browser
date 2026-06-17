@@ -6,7 +6,7 @@
 
 ## In progress
 
-_(пусто)_
+_(пусто — BUG-179 завершён, worktree удалён)_
 
 ## Next
 
@@ -116,6 +116,13 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
+
+- **BUG-179** (2026-06-17) — flex auto-basis использует prelim-ширину контейнера (TEST-46 второй столбец ~160px вправо).
+  Flex-item с `flex-basis:auto` и без явной `width` брал base из предварительного прохода
+  (`item.rect.width` = ширина контейнера). Элемент с `min-width:200px` в 600px контейнере
+  получал base=600px → shrink → 514px вместо 200px. Фикс: `flex_auto_base_main_width`
+  (CSS Flexbox §9.2/§9.7) = max-content ограниченный `min-width`/`max-width`.
+  Тест `flex_auto_basis_item_with_min_width_uses_min_not_container_width`. box_tree.rs:3932.
 
 - **BUG-178** (2026-06-17) — float-обёртка shrink-to-fit (TEST-51 9.91% → 1.09%).
   Auto-width контейнер с несколькими `float`-детьми считал ширину как `max`
