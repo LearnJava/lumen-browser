@@ -6,7 +6,7 @@
 
 ## In progress
 
-_(пусто — BUG-179 завершён, worktree удалён)_
+_(пусто — BUG-180 завершён, worktree удалён)_
 
 ## Next
 
