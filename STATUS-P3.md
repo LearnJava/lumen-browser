@@ -136,8 +136,9 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 
 1. **Run graphic tests** to identify visual regressions:
    ```bash
-   python graphic_tests/run.py --continue-on-fail
+   LUMEN_PROFILE=dev-release python graphic_tests/run.py --continue-on-fail
    ```
+   Для пересборки перед прогоном — добавить `--build`. **Никогда не использовать `cargo build --release`** — только `dev-release` профиль (2–3× быстрее, см. `reference_fast_build`).
 
 2. **Check BUGS.md** for open issues:
    ```bash
