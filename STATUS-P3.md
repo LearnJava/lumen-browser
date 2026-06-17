@@ -117,6 +117,20 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
 
+- **BUG-144** (2026-06-17) — backdrop-filter row-flip (TEST-30 16.42% → DEBTOR 10.48%).
+  Карточки `backdrop-filter` (row 4) рисовались в неверном ряду: элемент `y=439,h=102`
+  в вьюпорте 718px появлялся на `y≈177` (`718−(439+102)` — чистый вертикальный флип).
+  `elem_id` — GPU-FBO с содержимым элемента, сэмплируемый как `Paint::image` в
+  `composite_backdrop_filter_layer`, создавался с одним `PREMULTIPLIED` без `FLIP_Y` →
+  bottom-up строки FBO сэмплировались вверх ногами (как opacity/filter offscreen-слои
+  до BUG-133/BUG-146). Фикс: `elem_id` через `offscreen_layer_image_flags()`
+  (`femtovg_backend.rs:2313`). `filtered_backdrop_id` остаётся без флага (CPU-upload,
+  top-down). `backdrop-filter` в Lumen всегда внутри offscreen-слоя → `prev_rt` всегда
+  FBO, флип нужен всегда. Тест `offscreen_layer_flags_flip_y_and_premultiplied` (doc
+  расширен). TEST-30 → KNOWN_DEBTORS (BUG-144, 10.5). Остаток: filter pixel-parity
+  rows 1-3 + backdrop захват тёмным внутри opacity-слоя row 4 + gradient hard-stop
+  row 2 (BUG-085). Без регрессий (cargo test -p lumen-paint 741+21 зелёные).
+
 - **BUG-175** (2026-06-17) — скруглённые рамки (TEST-36 border-radius 1.50% → 1.11%).
   `border-radius` + `border`: фон рисовался скруглённым (`FillRoundedRect`), но рамка
   (`DrawBorder`) — 4 axis-aligned прямоугольниками сторон, игнорируя `radii` → квадратные
