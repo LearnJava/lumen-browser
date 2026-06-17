@@ -117,6 +117,18 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
 
+- **BUG-142** (2026-06-17) — `:host`/`::slotted` (TEST-72: 11.24% → 0.00%). Две причины.
+  (1) Каскад без скоупинга: shadow-tree `<style>` вообще не собирались, а document-scope
+  `:host`/`::slotted` матчились на любой хост → все 3 хоста красились #3366cc, slotted-цвета
+  не применялись. Фикс — `build_shadow_sheets` (per-host лист из shadow root) + thread-local
+  `SHADOW_SHEETS`/`SHADOW_HOST_SCOPE`; `:host` матчится только в скоупе своего хоста,
+  document-scope `:host`/`::slotted` стали no-op (CSS Scoping L1 §6.1-6.2). (2) Парсер терял
+  `<slot>` после `<style>` в declarative shadow `<template>`: rawtext оставлял insertion mode
+  `InHead` → `<slot>` не попадал в shadow root → slotted-дети не раскладывались. Фикс в
+  `mode_in_template` (`tree_builder.rs`): `original_insertion_mode` `InHead`→`InTemplate`.
+  Тесты: `shadow_dom_selectors::*` (8, +`*_in_document_scope_is_noop`),
+  `declarative_shadow_dom_slot_after_style_preserved`.
+
 - **BUG-102** (2026-06-17) — SVG advanced stroke (TEST-60: 11.51%). Две причины.
   (1) Главная: `stroke-width`/`stroke-dasharray`/`stroke-dashoffset` (unitless SVG
   user units) молча терялись на standards-mode страницах (`<!DOCTYPE html>`) —

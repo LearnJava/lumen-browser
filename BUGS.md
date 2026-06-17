@@ -157,7 +157,7 @@
 | [BUG-139](bugs/BUG-139-FIXED.md) | FIXED 2026-06-12 | paint | INTERACTION TEST-108 (вложенные transform) 4.62%: PopTransform эмитировался до дочерних SC |
 | [BUG-140](bugs/BUG-140-FIXED.md) | FIXED 2026-06-13 | paint | INTERACTION TEST-109 (clip-path×transform×radius) 14.10%→4.80% |
 | [BUG-141](bugs/BUG-141-FIXED.md) | FIXED 2026-06-13 | layout | TEST-71 17.83%: flex align-items:center в non-wrap контейнере игнорировал cross size |
-| [BUG-142](bugs/BUG-142-OPEN.md) | OPEN | paint/shadow-dom | :host / ::slotted rendering diverges — TEST-72: 11.24% |
+| [BUG-142](bugs/BUG-142-FIXED.md) | FIXED 2026-06-17 | paint/shadow-dom | :host / ::slotted rendering diverges — TEST-72: 11.24% → 0.00% |
 | [BUG-143](bugs/BUG-143-OPEN.md) | OPEN | layout | masonry-auto-flow placement diverges — TEST-75: 16.97% |
 | [BUG-144](bugs/BUG-144-OPEN.md) | OPEN | paint | CSS filter visual rendering rows 1-3 — TEST-30: 18.81% residual |
 | [BUG-145](bugs/BUG-145-FIXED.md) | FIXED 2026-06-12 | paint | РЕГРЕССИЯ: offscreen filter layer сайзился по bounds → viewport stretch |
