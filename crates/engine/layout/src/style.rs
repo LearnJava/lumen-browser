@@ -17899,52 +17899,58 @@ pub fn system_color(name_lc: &str, dark: bool) -> Option<Color> {
         // Input/textarea/select backgrounds.
         ("field", false) => rgb(255, 255, 255),
         ("field", true) => rgb(30, 30, 30),
-        // Push-button surfaces.
-        ("buttonface", false) => rgb(239, 239, 239),
+        // Push-button surfaces. Light values match Chromium/Edge non-forced-colors
+        // light theme (verified against TEST-92 Edge capture).
+        ("buttonface", false) => rgb(240, 240, 240),
         ("buttonface", true) => rgb(58, 58, 60),
         ("buttontext", false) => rgb(0, 0, 0),
         ("buttontext", true) => rgb(255, 255, 255),
-        ("buttonborder", false) | ("threedface", false) => rgb(118, 118, 118),
+        // ButtonBorder in Edge's light theme is pure black, not mid-gray.
+        ("buttonborder", false) | ("threedface", false) => rgb(0, 0, 0),
         ("buttonborder", true) | ("threedface", true) => rgb(97, 97, 97),
-        // Hyperlinks.
-        ("linktext", false) => rgb(0, 0, 238),
+        // Hyperlinks. Edge resolves LinkText/VisitedText/ActiveText to the same
+        // #0066cc in light theme (visited/active are anti-fingerprinting clamped).
+        ("linktext", false) => rgb(0, 102, 204),
         ("linktext", true) => rgb(158, 158, 255),
-        ("visitedtext", false) => rgb(85, 26, 139),
+        ("visitedtext", false) => rgb(0, 102, 204),
         ("visitedtext", true) => rgb(209, 134, 255),
-        ("activetext", false) => rgb(255, 0, 0),
+        ("activetext", false) => rgb(0, 102, 204),
         ("activetext", true) => rgb(255, 158, 158),
-        // Selection highlight.
-        ("highlight", false) => rgb(181, 215, 255),
+        // Selection highlight. Edge light Highlight = #0078d7 (classic accent),
+        // with white HighlightText on top.
+        ("highlight", false) => rgb(0, 120, 215),
         ("highlight", true) => rgb(38, 79, 120),
-        ("highlighttext", false) => rgb(0, 0, 0),
+        ("highlighttext", false) => rgb(255, 255, 255),
         ("highlighttext", true) => rgb(255, 255, 255),
-        ("selecteditem", false) => rgb(181, 215, 255),
+        ("selecteditem", false) => rgb(0, 120, 215),
         ("selecteditem", true) => rgb(38, 79, 120),
-        ("selecteditemtext", false) => rgb(0, 0, 0),
+        ("selecteditemtext", false) => rgb(255, 255, 255),
         ("selecteditemtext", true) => rgb(255, 255, 255),
-        // Disabled / placeholder text.
-        ("graytext", false) | ("greytext", false) => rgb(128, 128, 128),
+        // Disabled / placeholder text. Edge light GrayText = #6d6d6d.
+        ("graytext", false) | ("greytext", false) => rgb(109, 109, 109),
         ("graytext", true) | ("greytext", true) => rgb(124, 124, 124),
         // <mark> highlight (CSS Color 4 §6.2 `Mark`/`MarkText`).
         ("mark", false) => rgb(255, 255, 0),
         ("mark", true) => rgb(255, 255, 0),
         ("marktext", false) | ("marktext", true) => rgb(0, 0, 0),
         // Accent colour for form controls (CSS Color 4 — `AccentColor`).
-        ("accentcolor", false) => rgb(0, 95, 204),
+        // Edge light AccentColor = #0075ff.
+        ("accentcolor", false) => rgb(0, 117, 255),
         ("accentcolor", true) => rgb(76, 156, 255),
         ("accentcolortext", false) | ("accentcolortext", true) => rgb(255, 255, 255),
-        // Legacy 3D effects (CSS Color 4 §11).
-        ("threedhighlight", false) => rgb(239, 239, 239),
+        // Deprecated CSS2 3D effects (CSS Color 4 §6.3): all map to ButtonBorder.
+        // Edge renders ThreeDHighlight/ThreeDShadow as #000000 in light theme.
+        ("threedhighlight", false) => rgb(0, 0, 0),
         ("threedhighlight", true) => rgb(97, 97, 97),
-        ("threedshadow", false) => rgb(112, 112, 112),
-        ("threedshadow", true) => rgb(58, 58, 60),
-        ("threedlightshadow", false) => rgb(220, 220, 220),
-        ("threedlightshadow", true) => rgb(124, 124, 124),
-        ("threeddarkshadow", false) => rgb(49, 49, 49),
-        ("threeddarkshadow", true) => rgb(30, 30, 30),
-        // Scrollbar (CSS Color 4 §11, deprecated).
-        ("scrollbar", false) => rgb(192, 192, 192),
-        ("scrollbar", true) => rgb(64, 64, 64),
+        ("threedshadow", false) => rgb(0, 0, 0),
+        ("threedshadow", true) => rgb(97, 97, 97),
+        ("threedlightshadow", false) => rgb(0, 0, 0),
+        ("threedlightshadow", true) => rgb(97, 97, 97),
+        ("threeddarkshadow", false) => rgb(0, 0, 0),
+        ("threeddarkshadow", true) => rgb(97, 97, 97),
+        // Deprecated Scrollbar (CSS Color 4 §6.3) maps to Canvas.
+        ("scrollbar", false) => rgb(255, 255, 255),
+        ("scrollbar", true) => rgb(30, 30, 30),
         ("scrollbartrack", false) => rgb(255, 255, 255),
         ("scrollbartrack", true) => rgb(30, 30, 30),
         ("scrollbarthumb", false) => rgb(192, 192, 192),
@@ -25069,6 +25075,26 @@ mod tests {
         let light = system_color("scrollbartrack", false).unwrap();
         let dark = system_color("scrollbartrack", true).unwrap();
         assert_ne!(light, dark, "ScrollbarTrack must differ between light and dark");
+    }
+
+    #[test]
+    fn system_color_light_values_match_edge() {
+        // BUG-210: TEST-92 light-theme system colors must match Edge's
+        // non-forced-colors capture (sampled from the reference screenshot).
+        let c = |r, g, b| Color { r, g, b, a: 255 };
+        assert_eq!(system_color("buttonface", false), Some(c(240, 240, 240)));
+        assert_eq!(system_color("buttonborder", false), Some(c(0, 0, 0)));
+        assert_eq!(system_color("highlight", false), Some(c(0, 120, 215)));
+        assert_eq!(system_color("highlighttext", false), Some(c(255, 255, 255)));
+        assert_eq!(system_color("linktext", false), Some(c(0, 102, 204)));
+        assert_eq!(system_color("visitedtext", false), Some(c(0, 102, 204)));
+        assert_eq!(system_color("activetext", false), Some(c(0, 102, 204)));
+        assert_eq!(system_color("graytext", false), Some(c(109, 109, 109)));
+        assert_eq!(system_color("accentcolor", false), Some(c(0, 117, 255)));
+        // Deprecated keywords (CSS Color 4 §6.3): ThreeD* → ButtonBorder, Scrollbar → Canvas.
+        assert_eq!(system_color("threedhighlight", false), Some(c(0, 0, 0)));
+        assert_eq!(system_color("threedshadow", false), Some(c(0, 0, 0)));
+        assert_eq!(system_color("scrollbar", false), Some(c(255, 255, 255)));
     }
 
     // ── CSS Color 4 §6.2 — cascade integration tests ──

@@ -223,7 +223,7 @@
 | [BUG-207](bugs/BUG-207-OPEN.md) | OPEN | layout | `anchor-name` nested stub deviation — TEST-88: 1.98% |
 | [BUG-208](bugs/BUG-208-OPEN.md) | OPEN | layout | multiple `anchor-name` stub deviation — TEST-89: 1.98% |
 | [BUG-209](bugs/BUG-209-OPEN.md) | OPEN | image | AVIF decoder not implemented — TEST-90: 2.75% |
-| [BUG-210](bugs/BUG-210-OPEN.md) | OPEN | css-parser/paint | CSS system color keywords not resolved — TEST-92: 15.59% |
+| [BUG-210](bugs/BUG-210-FIXED.md) | FIXED 2026-06-18 | layout | CSS system color keywords resolved to wrong values — `system_color()` light-scheme значения приведены к Edge (Highlight #0078d7, LinkText/VisitedText/ActiveText #0066cc, ButtonBorder #000, GrayText #6d6d6d, AccentColor #0075ff, HighlightText white) + deprecated keywords (ThreeD*/Scrollbar) → standard per CSS Color 4 §6.3. TEST-92 15.59% → 0.90% (остаток = BUG-124, gdigrab суб-пиксель на границах). crates/engine/layout/src/style.rs:17903 |
 | [BUG-211](bugs/BUG-211-OPEN.md) | OPEN | layout | `field-sizing: content` not implemented — TEST-93: 4.11% |
 | [BUG-212](bugs/BUG-212-OPEN.md) | OPEN | font/layout | `font-size-adjust` not implemented — TEST-95: 3.39% |
 | [BUG-213](bugs/BUG-213-OPEN.md) | OPEN | css-parser/layout | `counter-set` order deviation — TEST-97: 2.78% |
