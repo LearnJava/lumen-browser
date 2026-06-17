@@ -391,7 +391,7 @@ Current coverage — `graphic_tests/COVERAGE.md`.
 
 ## Architecture
 
-Dependency graph and crate scope — in [lumen-plan.md](lumen-plan.md). Direction: `lumen-core` → dom/font/parsers → layout → paint → shell. No cycles.
+Dependency graph and crate scope — in [`docs/plan/architecture.md`](docs/plan/architecture.md) §3. Direction: `lumen-core` → dom/font/parsers → layout → paint → shell. No cycles.
 
 ### Extension traits (`lumen-core::ext`)
 
@@ -591,26 +591,35 @@ git worktree remove .claude/worktrees/<task-name>
 
 ---
 
-## Keep implementation status current
+## Doc sync rules — update matrix
 
-Update `lumen-plan.md`, the relevant `subsystems/<crate>.md`, and `CLAUDE.md` **in the same commit** as the implementation — not separately.
+Update docs **in the same commit** as the code change. Never update docs separately.
+Do not re-read a whole file to make a small update — use `grep -n` to find the line, then targeted `Read offset=N limit=10` + `Edit`.
 
-### `lumen-plan.md`
+### Per change type
 
-Header has the **"Implementation Status"** block; §16 has per-task markers. Legend: ✅ done · 🟡 in progress / partial · ⬜ planned.
+| Change type | Files to update | What exactly to do |
+|---|---|---|
+| New feature / capability | `CAPABILITIES.md` | `grep -n "<subsystem>\|<keyword>" CAPABILITIES.md` → change ⬜/🟡 → ✅ on that line |
+| New feature / capability | `subsystems/<crate>.md` | append bullet to **Done** section (file is small — read whole) |
+| New feature / capability | `STATUS-PN.md` (your role) | move task from "In progress" to "Recent merges" |
+| Bug fixed | `BUGS.md` | `grep -n "BUG-NNN" BUGS.md` → change `OPEN` → `FIXED <date>` |
+| CSS property (P4) | `CSS-SPECS.md` | `grep -n "<property-name>" CSS-SPECS.md` → change ⬜ → ✅ |
+| CSS property (P4) | `CAPABILITIES.md` | same as "New feature" above |
+| New dependency | `docs/plan/tech-stack.md` | append row to the relevant table (permanent or provisional) |
+| Architectural decision | `docs/decisions/ADR-NNN.md` | new file from TEMPLATE.md; update `docs/decisions/README.md` index |
+| Known gotcha found/fixed | `CLAUDE.md` → "Known gotchas" | append/remove the bullet |
+| New public API (`pub fn/struct`) | `SYMBOLS.md` | regenerate: `python scripts/gen_symbols.py` |
 
-After implementation: change ⬜ → ✅ (or 🟡 → ✅). If split — use 🟡 with a note.
+### What NOT to update
 
-### Related files
+- `lumen-plan.md` — 24-line TOC only, no status content
+- `docs/plan/status.md`, `docs/plan/history.md` — deprecated stubs
+- `docs/plan/roadmap.md` — historical reference, not a task tracker
 
-On significant milestones update:
+### No doc update needed for
 
-- **[subsystems/\<crate\>.md](subsystems/)** — extend the crate section (added to "Done" / removed from "Deferred" / test count).
-- **`lumen-plan.md` → Roadmap** — remove completed items.
-- **[docs/decisions/](docs/decisions/)** — new architectural decision (new dep exception, API approach choice). Use TEMPLATE.md, update README.md index.
-- **CLAUDE.md → "Known gotchas"** — if a gotcha is resolved or a new one is found.
-
-No manual doc update needed for: typos, formatting, minor refactors without API changes, tests not changing crate capability, code comments, merge history.
+Typos, formatting, minor refactors without API changes, tests that don't change crate capability, code comments, merge commits.
 
 ---
 
@@ -648,9 +657,10 @@ When you discover a non-obvious implementation detail in a specific subsystem, a
 
 ## When in doubt
 
-- **Architecture / scope** — `lumen-plan.md`.
+- **Architecture / scope** — `docs/plan/architecture.md` (§1 Principles, §3 Architecture).
+- **Dependency policy** — `docs/plan/tech-stack.md` (§5).
 - **How to build / run** — `README.md`.
-- **Current code state** — `git log --oneline` or status block in the plan.
-- **Why a decision was made** — code comments or commit messages.
+- **Current code state** — `git log --oneline`.
+- **Why a decision was made** — `docs/decisions/ADR-*.md` or `DECISIONS.md` (historical).
 
 If the question isn't answered by these sources — ask the user, don't assume.
