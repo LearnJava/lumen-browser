@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-175)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-177)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -188,6 +188,8 @@
 | [BUG-172](bugs/BUG-172-OPEN.md) | OPEN | shell | Картинки качаются дважды на streaming-страницах: PH1-2c `spawn_stream_image_loads` (main.rs:6051) грузит прогрессивно во время streaming, финальный `fetch_and_decode_images` (main.rs:2833) в `parse_and_layout` качает их же заново. Лишний трафик+CPU, не визуальный дефект. Фикс — общий per-load кэш декодированных картинок (пересекается с этапом 1 BUG-171). | crates/shell/src/main.rs:2833 |
 | [BUG-173](bugs/BUG-173-OPEN.md) | OPEN | paint | Остаток SVG `<path>` vs Edge после BUG-102: triangle-soup AA-швы (DrawSvgPath), stroke-edge AA, self-intersecting fill (ear_clip, незалитая bowtie), dash-on-curve. TEST-54 2.30% / TEST-60 1.41% — в KNOWN_DEBTORS | crates/engine/paint/src/svg_path.rs |
 | [BUG-174](bugs/BUG-174-FIXED.md) | FIXED 2026-06-17 | layout | In-flow (inline-block) SVG `<path>` рисовался в raw user-координатах `d` без смещения на origin своего SVG-вьюпорта — все пути из разных SVG-ячеек схлопывались в верхний левый угол страницы (видны только те, что попали в свой clip). TEST-119 56.35% → 0.81%. | crates/engine/layout/src/box_tree.rs:1198 |
+| [BUG-175](bugs/BUG-175-FIXED.md) | FIXED 2026-06-17 | paint | `border-radius` + `border`: рамка рисовалась 4 axis-aligned прямоугольниками без учёта радиуса → квадратные углы вокруг скруглённого фона (видно на пилюлях/кругах/эллипсах с бордером в TEST-36). Теперь однородная solid-рамка рисуется even-odd кольцом между внешним и внутренним скруглёнными rect. TEST-36 1.50% → 1.11%. | crates/engine/paint/src/backends/femtovg_backend.rs:1682 |
+| [BUG-176](bugs/BUG-176-OPEN.md) | OPEN | paint | TEST-36 остаток 1.11% после BUG-175: edge-AA вдоль скруглённых границ (sub-pixel snapping vs Edge) + кубическая kappa-аппроксимация эллиптических углов (row 6, `border-radius: H/V`) отличается от точной дуги Edge. В KNOWN_DEBTORS. | crates/engine/paint/src/backends/femtovg_backend.rs:870 |
 
 ---
 

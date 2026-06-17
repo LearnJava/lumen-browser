@@ -68,6 +68,52 @@ fn lumen_to_fvg(c: Color) -> femtovg::Color {
     femtovg::Color::rgba(c.r, c.g, c.b, c.a)
 }
 
+/// Appends a closed rounded-rectangle contour to `path` using cubic-Bézier
+/// quarter-ellipse corners (kappa ≈ 0.5523). `radii` carries per-corner (x, y)
+/// radii and is assumed already clamped to the box. Shared by the border ring
+/// (BUG-175) so both outer and inner contours use identical corner geometry.
+fn append_rounded_rect_outline(
+    path: &mut femtovg::Path,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    radii: &CornerRadii,
+) {
+    const K: f32 = 0.5523;
+    let (tl_x, tl_y) = (radii.tl, radii.tl_y);
+    let (tr_x, tr_y) = (radii.tr, radii.tr_y);
+    let (br_x, br_y) = (radii.br, radii.br_y);
+    let (bl_x, bl_y) = (radii.bl, radii.bl_y);
+
+    path.move_to(x + tl_x, y);
+    path.line_to(x + w - tr_x, y);
+    path.bezier_to(
+        x + w - tr_x + K * tr_x, y,
+        x + w,                   y + tr_y - K * tr_y,
+        x + w,                   y + tr_y,
+    );
+    path.line_to(x + w, y + h - br_y);
+    path.bezier_to(
+        x + w,                   y + h - br_y + K * br_y,
+        x + w - br_x + K * br_x, y + h,
+        x + w - br_x,            y + h,
+    );
+    path.line_to(x + bl_x, y + h);
+    path.bezier_to(
+        x + bl_x - K * bl_x, y + h,
+        x,                   y + h - bl_y + K * bl_y,
+        x,                   y + h - bl_y,
+    );
+    path.line_to(x, y + tl_y);
+    path.bezier_to(
+        x,                   y + tl_y - K * tl_y,
+        x + tl_x - K * tl_x, y,
+        x + tl_x,            y,
+    );
+    path.close();
+}
+
 // ─── Gradient helpers ─────────────────────────────────────────────────────────
 
 /// Разрешает `GradientStop.position` в [0,1], равномерно распределяя `None` позиции.
@@ -937,6 +983,46 @@ impl FemtovgBackend {
         self.canvas.fill_path(&path, &paint);
     }
 
+    /// Draws a uniform-coloured solid border whose corners follow `border-radius`
+    /// (BUG-175). The border is the even-odd ring between the outer rounded-rect
+    /// (border box, outer radii) and the inner rounded-rect (padding box, inner
+    /// radii = outer − side width per CSS Backgrounds L3 §5.5). `widths` is the
+    /// per-side width `[top, right, bottom, left]`; when the border is thicker
+    /// than the box (no inner area) the whole rounded box is filled.
+    fn draw_rounded_border_ring(
+        &mut self,
+        rect: Rect,
+        widths: [f32; 4],
+        color: Color,
+        radii: CornerRadii,
+    ) {
+        let (x, y, w, h) = (rect.x, rect.y, rect.width, rect.height);
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        let [top, right, bottom, left] = widths;
+
+        // Outer contour: same clamp the background fill uses, so the border's
+        // outer edge coincides with the rounded background edge.
+        let outer = radii.clamped_to_box(w, h);
+
+        let mut path = femtovg::Path::new();
+        append_rounded_rect_outline(&mut path, x, y, w, h, &outer);
+
+        // Inner contour (padding box). Skip the hole when the border swallows the
+        // whole box — then the ring degenerates to a solid rounded rect.
+        let iw = w - left - right;
+        let ih = h - top - bottom;
+        if iw > 0.0 && ih > 0.0 {
+            let inner = radii.inner_for_border(widths).clamped_to_box(iw, ih);
+            append_rounded_rect_outline(&mut path, x + left, y + top, iw, ih, &inner);
+        }
+
+        let paint = femtovg::Paint::color(lumen_to_fvg(color))
+            .with_fill_rule(femtovg::FillRule::EvenOdd);
+        self.canvas.fill_path(&path, &paint);
+    }
+
     /// Loads font bytes for a given path and registers them in `canvas`, returning
     /// the `FontId`. Returns `None` if bytes cannot be read or `add_font_mem` fails.
     /// Results are cached in `loaded_fonts` to avoid re-loading the same file.
@@ -1679,34 +1765,49 @@ impl FemtovgBackend {
                     rect.x, rect.y, rect.width, rect.height, *radii, *color,
                 );
             }
-            DisplayCommand::DrawBorder { rect, widths, colors, styles, .. } => {
-                // Side rect order: [top, right, bottom, left]. Each side is rendered
-                // according to its `BorderStyle` (Solid → full quad, Dashed/Dotted →
-                // segment pattern, Double → two thin lines). Geometry mirrors the wgpu
-                // `emit_border_side` so both backends match Edge's pattern (BUG-080).
-                if widths[0] > 0.0 {
-                    self.draw_border_side(
-                        Rect::new(rect.x, rect.y, rect.width, widths[0]),
-                        true, widths[0], colors[0], styles[0],
-                    );
-                }
-                if widths[1] > 0.0 {
-                    self.draw_border_side(
-                        Rect::new(rect.x + rect.width - widths[1], rect.y, widths[1], rect.height),
-                        false, widths[1], colors[1], styles[1],
-                    );
-                }
-                if widths[2] > 0.0 {
-                    self.draw_border_side(
-                        Rect::new(rect.x, rect.y + rect.height - widths[2], rect.width, widths[2]),
-                        true, widths[2], colors[2], styles[2],
-                    );
-                }
-                if widths[3] > 0.0 {
-                    self.draw_border_side(
-                        Rect::new(rect.x, rect.y, widths[3], rect.height),
-                        false, widths[3], colors[3], styles[3],
-                    );
+            DisplayCommand::DrawBorder { rect, widths, colors, styles, radii } => {
+                // BUG-175: rounded border. When the box has border-radius and every
+                // side is a uniform-coloured solid border, paint the border as an
+                // even-odd ring between the outer and inner rounded rects so corners
+                // follow the radius instead of forming square frames. Non-uniform
+                // colours / dashed-dotted-double styles fall back to axis-aligned
+                // side quads (square corners) below.
+                let uniform_solid = widths.iter().all(|&w| w > 0.0)
+                    && styles.iter().all(|s| matches!(s, BorderStyle::Solid))
+                    && colors[1] == colors[0]
+                    && colors[2] == colors[0]
+                    && colors[3] == colors[0];
+                if !radii.all_zero() && uniform_solid {
+                    self.draw_rounded_border_ring(*rect, *widths, colors[0], *radii);
+                } else {
+                    // Side rect order: [top, right, bottom, left]. Each side is rendered
+                    // according to its `BorderStyle` (Solid → full quad, Dashed/Dotted →
+                    // segment pattern, Double → two thin lines). Geometry mirrors the wgpu
+                    // `emit_border_side` so both backends match Edge's pattern (BUG-080).
+                    if widths[0] > 0.0 {
+                        self.draw_border_side(
+                            Rect::new(rect.x, rect.y, rect.width, widths[0]),
+                            true, widths[0], colors[0], styles[0],
+                        );
+                    }
+                    if widths[1] > 0.0 {
+                        self.draw_border_side(
+                            Rect::new(rect.x + rect.width - widths[1], rect.y, widths[1], rect.height),
+                            false, widths[1], colors[1], styles[1],
+                        );
+                    }
+                    if widths[2] > 0.0 {
+                        self.draw_border_side(
+                            Rect::new(rect.x, rect.y + rect.height - widths[2], rect.width, widths[2]),
+                            true, widths[2], colors[2], styles[2],
+                        );
+                    }
+                    if widths[3] > 0.0 {
+                        self.draw_border_side(
+                            Rect::new(rect.x, rect.y, widths[3], rect.height),
+                            false, widths[3], colors[3], styles[3],
+                        );
+                    }
                 }
             }
             DisplayCommand::DrawText { rect, text, font_size, color, font_family, font_weight, font_style, .. } => {
