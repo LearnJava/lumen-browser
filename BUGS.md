@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-219)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-220)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -193,7 +193,7 @@
 | [BUG-177](bugs/BUG-177-FIXED.md) | FIXED 2026-06-17 | layout | `height` на table-cell трактовался как фиксированный, а не минимальный (CSS 2.1 §17.5.3): ячейка с `height:64px` + content выше (52×32 блок + margin 16px → 64px content > 56px content-box) зажималась в 64px, content переполнял её в border-spacing-зазор, pitch строки был короче на величину переполнения и ошибка накапливалась вниз по таблице. Теперь used-height = max(specified, content). TEST-115 13.45% → 0.00%. | crates/engine/layout/src/box_tree.rs:5471 |
 | [BUG-178](bugs/BUG-178-FIXED.md) | FIXED 2026-06-17 | layout | shrink-to-fit auto-width контейнера с несколькими `float`-детьми считал ширину как max ребёнка, а не сумму (CSS 2.1 §9.5.1 — флоаты стоят бок о бок). Float-обёртка с двумя `float:left` детьми по 200px сжималась до 200px → второй флоат переносился под первый вместо ряда. `preferred_inline_block_width` + `max_content_outer_width`: суммируем margin-box ширины float-детей, max берём только среди in-flow. TEST-51 9.91% → 1.09% (остаток = BUG-124, дробные Y-координаты). | crates/engine/layout/src/box_tree.rs:3750 |
 | [BUG-179](bugs/BUG-179-FIXED.md) | FIXED 2026-06-17 | layout | flex-item с `flex-basis:auto` и без явной `width` использовал ширину из предварительного прохода (`item.rect.width` = ширина контейнера, т.к. блоки растягиваются). Элемент с `min-width:200px` в контейнере 600px получал base=600px → total_hyp=700px > 600px → ошибочный shrink → элемент 514px вместо 200px (второй столбец TEST-46 уезжал ~160px вправо). Фикс: `flex_auto_base_main_width` вычисляет max-content-width и ограничивает `min-width`/`max-width` (CSS Flexbox §9.2/§9.7). | crates/engine/layout/src/box_tree.rs:3932 |
-| [BUG-180](bugs/BUG-180-OPEN.md) | OPEN | paint/image | `<img>` rendering deviation — TEST-18: 21.21% |
+| [BUG-180](bugs/BUG-180-FIXED.md) | FIXED 2026-06-17 | layout | TEST-18 21.21%→2.11%: блок-обёртка `<img>` не учитывала descent line-box baseline-выровненной inline-картинки («image bottom gap», CSS 2.1 §10.8) — каждый ряд картинок уезжал вверх на ~descent px, ошибка копилась вниз. `child_y += descent_px` после baseline replaced-ребёнка (box_tree.rs:5527). Остаток 2.11% = image-resampling AA (BUG-219) → KNOWN_DEBTORS |
 | [BUG-181](bugs/BUG-181-OPEN.md) | OPEN | layout/paint | `object-fit` basic deviation — TEST-19: 9.05% |
 | [BUG-182](bugs/BUG-182-OPEN.md) | OPEN | layout/paint | `vertical-align` inline y-offset deviation — TEST-24: 0.98% |
 | [BUG-183](bugs/BUG-183-FIXED.md) | FIXED 2026-06-17 | paint | `mask-image` gradient mask not implemented — TEST-26: 17.74% → 5.02% (остаток BUG-218 mask-mode:luminance) |
@@ -232,6 +232,7 @@
 | [BUG-216](bugs/BUG-216-OPEN.md) | OPEN | css-parser/layout | CSS `quotes` + `open-quote`/`close-quote` deviation — TEST-117: 2.28% |
 | [BUG-217](bugs/BUG-217-OPEN.md) | OPEN | css-parser | `prefers-contrast`/`prefers-reduced-data` media queries not matched — TEST-120: 3.26% |
 | [BUG-218](bugs/BUG-218-OPEN.md) | OPEN | css-parser/paint | `mask-mode: luminance` not parsed/applied — TEST-26 luma-cell остаток 5.02% (P4) |
+| [BUG-219](bugs/BUG-219-OPEN.md) | OPEN | image/paint | image downscale resampling pixel-parity vs Edge — TEST-18 остаток 2.11% (тонкий AA по всем фото после фикса BUG-180) → KNOWN_DEBTORS |
 
 ---
 

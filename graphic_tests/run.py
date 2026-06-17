@@ -212,6 +212,7 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '51': ('BUG-124', 1.09),    # scrollbar rendering: float-wrapper shrink-to-fit фикснут BUG-178 (9.91% → 1.09%); остаток = дробные layout Y-координаты vs пиксельное округление Edge
     '64': ('BUG-128', 8.99),    # table: margin-collapse таблица↔блок фикснут BUG-193 (13.89% → 8.99%); остаток = font-parity (текст в ~21 ячейках + заголовки, Inter vs Edge) + ~3px накопленный line-height сдвиг
     '26': ('BUG-218', 5.02),    # mask-image: gradient-маски (linear/radial/alpha) фикснуты BUG-183 (17.74% → 5.02%); остаток = единственная ячейка mask-mode:luminance (нужен CSS mask-mode, P4)
+    '18': ('BUG-219', 2.11),    # <img>: «image bottom gap» (baseline descent) фикснут BUG-180 (21.21% → 2.11%); остаток = image-resampling AA (area-avg ≠ Edge downscale kernel)
 }
 _DEBTOR_TOL = 2.0  # % допуск run-to-run вариации gdigrab
 

@@ -5523,6 +5523,30 @@ fn lay_out(
                     // the top edge. For non-block kinds this is just the own margin.
                     let child_mb = collapsed_bottom_margin(child, content_width, viewport);
                     child_y = child.rect.y + child.rect.height + child_mb;
+                    // CSS 2.1 §10.8 — inline-image line-box descent (the classic
+                    // "image bottom gap"). A bare <img> (and other replaced media)
+                    // is inline-level and sits on its line's baseline by default, so
+                    // the line box — and therefore the containing block's content
+                    // height — extends below the image by the strut's descent. Lumen
+                    // lays a lone <img> as a block-flow child (Phase 0 simplification,
+                    // see `is_inline_content` / `default_display` mapping img→Block),
+                    // which would otherwise drop this sub-baseline space and make every
+                    // image-wrapping block ~descent px too short. In an image grid that
+                    // shortfall accumulates as an upward row drift versus a browser
+                    // (BUG-180, TEST-18). Add the strut descent of *this block's* font
+                    // after a baseline-aligned replaced child. Restricted to the default
+                    // `vertical-align: baseline`; top/middle/bottom anchor the replaced
+                    // box against the line box differently and get no sub-baseline gap.
+                    let child_is_replaced_media = matches!(
+                        child.kind,
+                        BoxKind::Image { .. } | BoxKind::Video { .. }
+                            | BoxKind::Canvas { .. } | BoxKind::Iframe { .. }
+                    );
+                    if child_is_replaced_media
+                        && matches!(child.style.vertical_align, VerticalAlign::Baseline)
+                    {
+                        child_y += measurer.map_or(0.0, |m| m.descent_px(b.style.font_size));
+                    }
                     prev_block_mb = if is_block { child_mb.max(0.0) } else { 0.0 };
                 }
                 // CSS 2.1 §8.3.1: parent↔last-child bottom margin collapse. When this
