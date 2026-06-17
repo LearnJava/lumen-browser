@@ -753,6 +753,16 @@ def announce_fallback(developer: str, reason: str, model: str) -> None:
 
 def task_prompt(developer: str) -> str:
     """Стандартный промпт для старта задачи с чистым диалогом."""
+    if developer == "P3":
+        return (
+            "Ты разработчик P3 (только баг-фиксы). "
+            "Прочитай STATUS-P3.md. "
+            "Если есть 'In progress' — продолжи ЭТОТ ОДИН баг. "
+            "Если нет — возьми ПЕРВЫЙ баг из 'Next' (только один, не больше). "
+            "Когда баг исправлен — вызови /lumen-task-finish. "
+            "ВАЖНО: после /lumen-task-finish немедленно заверши сессию. "
+            "Не бери следующий баг. Один баг = одна сессия."
+        )
     return (
         f"Ты разработчик {developer}. "
         f"Прочитай STATUS-{developer}.md. "
@@ -762,12 +772,19 @@ def task_prompt(developer: str) -> str:
     )
 
 
-# Промпт для возобновления сессии, прерванной ошибкой (rate limit / 403 / сбой CLI).
-RESUME_AFTER_ERROR_PROMPT = (
-    "Сессия была прервана ошибкой (rate limit / auth error / сбой CLI). "
-    "Выполни git status, сверься с историей диалога выше и продолжи текущую "
-    "задачу с места остановки. Когда задача завершена — вызови /lumen-task-finish."
-)
+def resume_after_error_prompt(developer: str) -> str:
+    """Промпт для возобновления сессии, прерванной ошибкой (rate limit / 403 / сбой CLI)."""
+    base = (
+        "Сессия была прервана ошибкой (rate limit / auth error / сбой CLI). "
+        "Выполни git status, сверься с историей диалога выше и продолжи текущую "
+        "задачу с места остановки. Когда задача завершена — вызови /lumen-task-finish."
+    )
+    if developer == "P3":
+        return base + (
+            " ВАЖНО: после /lumen-task-finish немедленно заверши сессию. "
+            "Не бери следующий баг. Один баг = одна сессия."
+        )
+    return base
 
 
 def run_task_loop(
@@ -842,7 +859,7 @@ def run_task_loop(
             saved_id = state.get("session_id") if state else None
             if saved_id:
                 resume_id = saved_id
-                prompt = RESUME_AFTER_ERROR_PROMPT
+                prompt = resume_after_error_prompt(developer)
 
             if rate_limited:
                 generic_failures = 0
@@ -900,12 +917,17 @@ def run_task_loop(
             task_count = task_number
             set_jobstatus(developer, "возобновление", f"задача #{task_count}")
 
+            one_bug_note = (
+                " ВАЖНО: после /lumen-task-finish немедленно заверши сессию. "
+                "Не бери следующий баг. Один баг = одна сессия."
+                if developer == "P3" else ""
+            )
             resume_prompt = (
                 f"Сессия разработчика {developer} была прервана (crash/закрытие терминала/отключение питания). "
                 f"Выполни: git status, затем прочитай STATUS-{developer}.md. "
                 f"На основе истории диалога выше и текущего состояния git определи, "
                 f"что уже сделано, и продолжи задачу с места остановки. "
-                f"Когда задача завершена — вызови /lumen-task-finish."
+                f"Когда задача завершена — вызови /lumen-task-finish.{one_bug_note}"
             )
             if not attempt_task(task_count, resume_prompt, session_id):
                 set_jobstatus(developer, "остановлен", "ошибка запуска claude")
