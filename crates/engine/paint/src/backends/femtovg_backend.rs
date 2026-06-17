@@ -2310,11 +2310,20 @@ impl FemtovgBackend {
                 if let Some(filt_id) = filtered_backdrop_id {
                     // Restore prev_rt after apply_backdrop_filters may have switched.
                     self.switch_render_target(prev_rt);
+                    // `elem_id` is a GPU FBO: element content is rendered into it
+                    // and later sampled via `Paint::image` in
+                    // `composite_backdrop_filter_layer`. Like the opacity/filter
+                    // offscreen layers it therefore needs FLIP_Y — without it the
+                    // FBO's bottom-up rows sample upside-down, mirroring the
+                    // element content vertically (BUG-144: backdrop-filter cards
+                    // landed in the wrong row, `viewport_h - bounds.bottom`).
+                    // `filtered_backdrop_id` is a CPU pixel upload (top-down) and
+                    // correctly stays flag-free per `offscreen_layer_image_flags`.
                     match self.canvas.create_image_empty(
                         self.width as usize,
                         self.height as usize,
                         femtovg::PixelFormat::Rgba8,
-                        femtovg::ImageFlags::PREMULTIPLIED,
+                        offscreen_layer_image_flags(),
                     ) {
                         Ok(elem_id) => {
                             self.switch_render_target(femtovg::RenderTarget::Image(elem_id));
@@ -2686,13 +2695,16 @@ mod tests {
     use super::*;
     use lumen_layout::Length;
 
-    /// BUG-133 / BUG-146: offscreen layers composited directly from their FBO
-    /// on the GPU (opacity groups, filter layers, blur destinations — no
+    /// BUG-133 / BUG-146 / BUG-144: offscreen layers composited directly from
+    /// their FBO on the GPU (opacity groups, filter layers, blur destinations,
+    /// **and the backdrop-filter element-content layer** — no
     /// screenshot→re-upload round-trip) MUST carry FLIP_Y — without it the
     /// content renders upside-down (TEST-102 17% → 65% for opacity groups;
-    /// TEST-15 1.06% → 6.58% for blurred box-shadows). PREMULTIPLIED matches
-    /// femtovg's render-target pixel format; dropping it double-multiplies
-    /// alpha.
+    /// TEST-15 1.06% → 6.58% for blurred box-shadows; TEST-30 backdrop-filter
+    /// cards landed in `viewport_h - bounds.bottom` instead of their own row).
+    /// PREMULTIPLIED matches femtovg's render-target pixel format; dropping it
+    /// double-multiplies alpha. `filtered_backdrop_id` is the exception: it is a
+    /// CPU pixel upload (top-down), so it stays flag-free.
     #[test]
     fn offscreen_layer_flags_flip_y_and_premultiplied() {
         let flags = offscreen_layer_image_flags();
