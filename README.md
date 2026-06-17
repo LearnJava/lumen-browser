@@ -20,7 +20,7 @@
 
 **Phase 2 — v0.5 «Interactive» (в работе), версия приложения v0.2.0.** Phase 0 (прототип) закрыта, Phase 1 «Reader» в основном выполнена. Сейчас в активной разработке интерактивный слой: QuickJS, Canvas 2D, CSS Grid, Shadow DOM, accessibility tree, формы, find-in-page, DevTools/CDP, knowledge layer; часть фич Phase 3 (IndexedDB, Service Workers, WebSockets, WOFF2, печать в PDF) уже подтянута вперёд.
 
-> Актуальный детальный статус реализации — в [docs/plan/status.md](docs/plan/status.md) и `STATUS-PN.md`. Список ниже — ранние вехи прототипа (Phase 0); полный набор возможностей давно шире.
+> Актуальный статус реализации — в [`CAPABILITIES.md`](CAPABILITIES.md). Список ниже — ранние вехи прототипа (Phase 0); полный набор возможностей давно шире.
 
 Базовые вехи движка:
 
@@ -192,7 +192,7 @@ cargo build --release
 
 ## Известные ограничения
 
-Движок Phase 2 многое уже умеет (полный список и текущие пробелы — в [docs/plan/status.md](docs/plan/status.md), [BUGS.md](BUGS.md) и `CSS-SPECS.md`). Крупные нереализованные блоки:
+Движок Phase 2 многое уже умеет (полный список и текущие пробелы — в [`CAPABILITIES.md`](CAPABILITIES.md), [`BUGS.md`](BUGS.md) и `CSS-SPECS.md`). Крупные нереализованные блоки:
 
 - HTML parser — без полного набора HTML5 insertion modes; lenient к ошибкам.
 - JS-движок — QuickJS (rquickjs), не V8; переход на `rusty_v8` запланирован на Phase 3.

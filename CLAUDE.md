@@ -18,7 +18,7 @@ Current phase: **Phase 2 — v0.5 «Interactive» (in progress)**, app version *
 
 Single source of truth for the version is `[workspace.package] version` in `Cargo.toml`. All machine-readable version strings (User-Agent, Sec-CH-UA, CDP `Browser.getVersion`, window title, startup banner) derive from `CARGO_PKG_VERSION` — do **not** hardcode a version number in code. The one manual-bump site is the `navigator.userAgent` literal in `crates/js/src/dom.rs` (JS shim string).
 
-Version↔phase mapping (from `docs/plan/phases.md`): Phase 1 → v0.1, **Phase 2 → v0.5** (target on phase completion), Phase 3 → v1.0. Mid-phase the version climbs toward the target (currently **0.2.0** inside active Phase 2). When Phase 2 goals are met, bump to 0.5.0; reaching Phase 3 → 1.0.0. Keep the phase label in sync across `README.md`, `docs/plan/status.md`, `docs/plan/phases.md`, this file, and the shell startup banner.
+Version↔phase mapping (from `docs/plan/phases.md`): Phase 1 → v0.1, **Phase 2 → v0.5** (target on phase completion), Phase 3 → v1.0. Mid-phase the version climbs toward the target (currently **0.2.0** inside active Phase 2). When Phase 2 goals are met, bump to 0.5.0; reaching Phase 3 → 1.0.0. Keep the phase label in sync across `README.md`, `docs/plan/phases.md`, this file, and the shell startup banner.
 
 | File | Contents |
 |---|---|
@@ -237,7 +237,7 @@ cargo run -p lumen-shell -- --dump-display-list samples/page.html 2>&1 | grep -A
 
 **docs/plan/ reading rule:**
 - **DO read if you need:** `docs/plan/architecture.md` (§1 Principles, §5 Dependency policy), `docs/plan/knowledge.md` (§12 Unique features), `docs/decisions/ADR-*.md`
-- **DON'T read:** `docs/plan/roadmap.md` (use `STATUS-PN.md` instead) · `docs/plan/history.md` (use `git log` instead) · `docs/plan/status.md` (use `STATUS-PN.md`) · `docs/plan/phases.md` / `lumen-plan.md` markers (use `CAPABILITIES.md` for what's done)
+- **DON'T read:** `docs/plan/roadmap.md` (use `STATUS-PN.md` instead) · `docs/plan/history.md` (use `git log` instead) · `docs/plan/phases.md` / `lumen-plan.md` markers (use `CAPABILITIES.md` for what's done)
 
 **Grep instead of reading whole files.** Use targeted grep before opening large files:
 
@@ -614,7 +614,7 @@ Do not re-read a whole file to make a small update — use `grep -n` to find the
 ### What NOT to update
 
 - `lumen-plan.md` — 24-line TOC only, no status content
-- `docs/plan/status.md`, `docs/plan/history.md` — deprecated stubs
+- `docs/plan/history.md` — deprecated stub (use `git log`)
 - `docs/plan/roadmap.md` — historical reference, not a task tracker
 
 ### No doc update needed for
