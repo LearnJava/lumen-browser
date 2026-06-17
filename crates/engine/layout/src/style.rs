@@ -12961,7 +12961,7 @@ fn apply_declaration(
             }
         }
         "stroke-width" => {
-            if let Some(w) = resolve_box_length(val, em_basis, viewport, is_quirks) {
+            if let Some(w) = resolve_svg_length(val, em_basis, viewport, is_quirks) {
                 style.svg_stroke_width = w.max(0.0);
             }
         }
@@ -13008,7 +13008,7 @@ fn apply_declaration(
                 let dashes: Vec<f32> = v
                     .split(|c: char| c == ',' || c.is_ascii_whitespace())
                     .filter(|s| !s.is_empty())
-                    .filter_map(|s| resolve_box_length(s, em_basis, viewport, is_quirks))
+                    .filter_map(|s| resolve_svg_length(s, em_basis, viewport, is_quirks))
                     .filter(|&v| v >= 0.0)
                     .collect();
                 if !dashes.is_empty() {
@@ -13017,7 +13017,7 @@ fn apply_declaration(
             }
         }
         "stroke-dashoffset" => {
-            if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) {
+            if let Some(v) = resolve_svg_length(val, em_basis, viewport, is_quirks) {
                 style.svg_stroke_dashoffset = v;
             }
         }
@@ -17182,6 +17182,24 @@ fn resolve_box_length(val: &str, em_basis: f32, viewport: Size, is_quirks: bool)
         Length::Percent(_) => None,
         other => other.resolve(em_basis, None, viewport),
     }
+}
+
+/// Resolves an SVG geometric length (`stroke-width`, `stroke-dasharray` items,
+/// `stroke-dashoffset`) to px. SVG presentation properties accept a bare
+/// **unitless** number as a user-unit length (≡ px) regardless of the document's
+/// HTML quirks/standards mode (SVG 2 §7.10: SVG geometry `<length>` is extended
+/// with `<number>`). `parse_length_q`/`resolve_box_length` reject unitless
+/// non-zero numbers in standards mode, which silently dropped `stroke-width="20"`
+/// on standards-mode pages (BUG-102) — every `<path>` painted at the inherited
+/// default width of 1px. Fall back to parsing the bare number as px.
+/// `%` stays unsupported (Lumen does not yet resolve it against the viewport
+/// diagonal), matching prior behaviour.
+fn resolve_svg_length(val: &str, em_basis: f32, viewport: Size, is_quirks: bool) -> Option<f32> {
+    let t = val.trim();
+    if let Some(v) = resolve_box_length(t, em_basis, viewport, is_quirks) {
+        return Some(v);
+    }
+    t.parse::<f32>().ok()
 }
 
 /// Парсит значение border-radius. Абсолютные единицы (px, em, rem, vw, vh и т.д.)
@@ -27431,6 +27449,34 @@ mod tests {
             style.svg_stroke,
         );
         assert_eq!(style.svg_stroke_width, 8.0, "stroke-width attribute must apply");
+    }
+
+    #[test]
+    fn svg_stroke_geometry_unitless_in_standards_mode() {
+        // BUG-102: SVG stroke geometry attributes use unitless **user units**
+        // (SVG 2 §7.10). `parse_length_q` rejects unitless non-zero numbers in
+        // standards mode, so on a `<!DOCTYPE html>` page `stroke-width="20"`,
+        // `stroke-dasharray="20 8"` and `stroke-dashoffset="14"` were silently
+        // dropped — every <path> painted at the inherited default width of 1px.
+        let doc = lumen_html_parser::parse(
+            "<!DOCTYPE html><svg width='240' height='120'>\
+             <path d='M 30 40 H 210' fill='none' stroke='#58a6ff' \
+             stroke-width='20' stroke-dasharray='20 8' stroke-dashoffset='14'/></svg>",
+        );
+        assert_eq!(doc.mode(), DocumentMode::NoQuirks, "doctype must select standards mode");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        fn find_path(doc: &Document, id: NodeId) -> Option<NodeId> {
+            if doc.get(id).element_name().is_some_and(|n| n.local.as_str() == "path") {
+                return Some(id);
+            }
+            doc.get(id).children.iter().find_map(|&c| find_path(doc, c))
+        }
+        let path = find_path(&doc, doc.root()).expect("path element present");
+        let style = compute_style(&doc, path, &sheet, &root, Size::new(1024.0, 720.0), false);
+        assert_eq!(style.svg_stroke_width, 20.0, "unitless stroke-width must apply in standards mode");
+        assert_eq!(style.svg_stroke_dasharray, vec![20.0, 8.0], "unitless dasharray must apply");
+        assert_eq!(style.svg_stroke_dashoffset, 14.0, "unitless dashoffset must apply");
     }
 
     #[test]

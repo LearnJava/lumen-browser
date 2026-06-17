@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-173)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-174)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -117,7 +117,7 @@
 | [BUG-099](bugs/BUG-099-OPEN.md) | OPEN | js/paint | `<canvas>` 2D context not implemented — TEST-57: 28.66%; Phase 2 |
 | [BUG-100](bugs/BUG-100-OPEN.md) | OPEN | layout | ::first-letter drop-cap / ::first-line not implemented — TEST-58: 6.04% |
 | [BUG-101](bugs/BUG-101-OPEN.md) | OPEN | css-parser/paint | image-set() DPR selection / cross-fade() not implemented — TEST-59: 27.63% |
-| [BUG-102](bugs/BUG-102-OPEN.md) | OPEN | paint | SVG stroke-linecap/linejoin/dasharray not rendered — TEST-60: 11.51% |
+| [BUG-102](bugs/BUG-102-FIXED.md) | FIXED 2026-06-17 | paint | SVG stroke-width/dasharray молча терялись в standards-mode (unitless user units) + join-шипы; TEST-60 11.51%→1.41%, TEST-54 5.58%→2.30% |
 | [BUG-103](bugs/BUG-103-OPEN.md) | OPEN | js | View Transitions API not implemented — TEST-61: 99.53%; Phase 2 |
 | [BUG-104](bugs/BUG-104-OPEN.md) | OPEN | layout | CSS Scroll Snap not implemented — TEST-62: 63.70%; Phase 1 |
 | [BUG-105](bugs/BUG-105-OPEN.md) | OPEN | layout | CSS Masonry layout not implemented — TEST-63: 26.13%; Phase 2 |
@@ -186,6 +186,7 @@
 | [BUG-170](bugs/BUG-170-OPEN.md) | FIXED 2026-06-16 | shell+font | `@font-face` web-шрифты блокируют первый paint: `load_font_faces` качает все woff2 до layout (FOUT не реализован). Надо `font-display: swap` — рисовать фолбэком сразу, подменять web-шрифт в фоне с relayout. `font-display` уже парсится (css-parser:2199), не используется. | crates/shell/src/main.rs:3067 |
 | [BUG-171](bugs/BUG-171-OPEN.md) | OPEN | shell | Окно морозится на всё время загрузки: `parse_and_layout` (fetch+JS+layout) идёт синхронно на UI-потоке в обработчике `LoadDone` (main.rs:6369). Adblock-галочка → синхронный `reload()` → «долго думает». Надо префетч подресурсов вне UI + асинхронный adblock-reload (этап 2 — весь пайплайн вне UI, ADR-006). QuickJS не Send — ключевое ограничение. | crates/shell/src/main.rs:6369 |
 | [BUG-172](bugs/BUG-172-OPEN.md) | OPEN | shell | Картинки качаются дважды на streaming-страницах: PH1-2c `spawn_stream_image_loads` (main.rs:6051) грузит прогрессивно во время streaming, финальный `fetch_and_decode_images` (main.rs:2833) в `parse_and_layout` качает их же заново. Лишний трафик+CPU, не визуальный дефект. Фикс — общий per-load кэш декодированных картинок (пересекается с этапом 1 BUG-171). | crates/shell/src/main.rs:2833 |
+| [BUG-173](bugs/BUG-173-OPEN.md) | OPEN | paint | Остаток SVG `<path>` vs Edge после BUG-102: triangle-soup AA-швы (DrawSvgPath), stroke-edge AA, self-intersecting fill (ear_clip, незалитая bowtie), dash-on-curve. TEST-54 2.30% / TEST-60 1.41% — в KNOWN_DEBTORS | crates/engine/paint/src/svg_path.rs |
 
 ---
 
@@ -205,7 +206,7 @@
 | `clip-path: circle/ellipse/polygon` — точная форма | Phase 1 | TEST-31: 8.85% (bbox работает) |
 | SVG rendering | Phase 1 | TEST-47: FIXED 2026-06-09 → BUG-089 |
 | SVG `<path>` stroke | Phase 1 | TEST-54: FIXED 2026-06-09 → BUG-096 |
-| SVG stroke advanced | Phase 1 | TEST-60: 11.51% → BUG-102 |
+| SVG stroke advanced | Phase 1 | TEST-60: FIXED 2026-06-17 → BUG-102 (остаток → BUG-173, KNOWN_DEBTORS) |
 | `<canvas>` 2D context | Phase 2 | TEST-57: 28.66% → BUG-099 |
 | View Transitions API | Phase 2 | TEST-61: 99.53% → BUG-103 |
 | CSS Scroll Snap | Phase 1 | TEST-62: 63.70% → BUG-104 |

@@ -117,6 +117,22 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
 
+- **BUG-102** (2026-06-17) — SVG advanced stroke (TEST-60: 11.51%). Две причины.
+  (1) Главная: `stroke-width`/`stroke-dasharray`/`stroke-dashoffset` (unitless SVG
+  user units) молча терялись на standards-mode страницах (`<!DOCTYPE html>`) —
+  `apply_declaration` резолвил их через `resolve_box_length`→`parse_length_q`,
+  который отвергает unitless-числа вне quirks. Штрихи рисовались дефолтной
+  inherited-шириной 1px, dash не применялся. Юнит-тест проходил т.к. его HTML без
+  doctype = quirks. Фикс — `resolve_svg_length` (unitless→px независимо от quirks).
+  (2) Переписан `stroke_contour_ex` (`svg_path.rs`): quad на сегмент с общими
+  per-vertex точками (folded inner-miter + общая miter-точка на выпуклой стороне в
+  пределах limit; bevel/round/over-limit — внешний клин через `emit_join`). Гладко
+  на flattened-кривых, чисто в острых углах. TEST-60 11.51%→1.41%, TEST-54
+  5.58%→2.30%. Остаток (triangle-soup AA-швы, stroke-edge AA, self-intersecting
+  fill ear_clip, dash-on-curve) → **BUG-173**, оба теста в `KNOWN_DEBTORS`.
+  Тесты: `svg_stroke_geometry_unitless_in_standards_mode`,
+  `stroke_ex_bevel_join_has_extra_triangle`.
+
 - **BUG-166** (2026-06-16) — `video_bindings::tests::native_video_load_registers_pending`
   падал при параллельном прогоне `lumen-js` (в изоляции — PASS). Корень: два теста
   (`native_video_load_registers_pending` и `native_video_ready_false_before_decode`)

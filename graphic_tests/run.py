@@ -200,7 +200,9 @@ TESTS: list[tuple[str, str, float, str]] = [
 # Добавлять ТОЛЬКО Phase 2+ фичи с OPEN BUG-NNN и diff-изображением,
 # подтверждающим что расхождение локализовано в области нереализованной фичи.
 KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
+    '54': ('BUG-173', 2.5),     # SVG <path> fill+stroke остаток (AA-швы, self-intersecting fill)
     '57': ('BUG-099', 4.14),    # <canvas> getContext("2d") — Phase 2
+    '60': ('BUG-173', 1.5),     # SVG stroke advanced остаток (triangle-soup AA-швы, dash-on-curve)
     '61': ('BUG-103', 99.53),   # View Transitions API — Phase 2
     '63': ('BUG-105', 48.44),   # CSS Masonry layout — Phase 2
     '75': ('BUG-143', 16.97),   # masonry-auto-flow — Phase 2
