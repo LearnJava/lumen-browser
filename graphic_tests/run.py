@@ -216,6 +216,7 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '26': ('BUG-218', 5.02),    # mask-image: gradient-маски (linear/radial/alpha) фикснуты BUG-183 (17.74% → 5.02%); остаток = единственная ячейка mask-mode:luminance (нужен CSS mask-mode, P4)
     '18': ('BUG-219', 2.11),    # <img>: «image bottom gap» (baseline descent) фикснут BUG-180 (21.21% → 2.11%); остаток = image-resampling AA (area-avg ≠ Edge downscale kernel)
     '83': ('BUG-128', 7.88),    # scroll-behavior: text-only inline-block shrink-to-fit фикснут BUG-202 (14.02% → 7.88%); остаток = font-parity (Inter vs Edge) во всём тексте страницы + faint overlay scrollbar
+    '92': ('BUG-124', 0.90),    # system colors: значения system_color() приведены к Edge BUG-210 (15.59% → 0.90%); layout/цвета идеальны (dump-layout: 164px border-box, gap 4, hex точны), остаток = gdigrab суб-пиксельный сдвиг (~+3px на 1000px) на границах ячеек vs пиксельное округление Edge
 }
 _DEBTOR_TOL = 2.0  # % допуск run-to-run вариации gdigrab
 
