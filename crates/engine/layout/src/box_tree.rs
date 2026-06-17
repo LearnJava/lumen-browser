@@ -5470,7 +5470,7 @@ fn lay_out(
             // padding+border, border-box оставляет h как итоговую высоту.
             b.rect.height = if let Some(h_len) = &s.height {
                 if let Some(h) = h_len.resolve(em, available_height, viewport) {
-                    match s.box_sizing {
+                    let specified = match s.box_sizing {
                         BoxSizing::ContentBox => h
                             + padding_top + padding_bottom
                             + s.border_top_width + s.border_bottom_width,
@@ -5478,6 +5478,20 @@ fn lay_out(
                             padding_top + padding_bottom
                                 + s.border_top_width + s.border_bottom_width,
                         ),
+                    };
+                    // CSS 2.1 §17.5.3: the `height` of a table cell is a minimum — the cell
+                    // grows to fit content taller than the specified height (unlike a regular
+                    // block, where overflow just spills). Without this the cell clamps to the
+                    // specified border-box height and content overflows into the inter-row
+                    // border-spacing gap, so row pitch is short by the overflow amount and the
+                    // error accumulates down the table (BUG-177).
+                    if s.display == Display::TableCell {
+                        let content_box = content_height
+                            + padding_top + padding_bottom
+                            + s.border_top_width + s.border_bottom_width;
+                        specified.max(content_box)
+                    } else {
+                        specified
                     }
                 } else {
                     content_height + padding_top + padding_bottom
@@ -13288,6 +13302,54 @@ mod tests {
         // Vertical gap between rows should be 20px.
         let v_gap = rows[1].rect.y - (rows[0].rect.y + rows[0].rect.height);
         assert!((v_gap - 20.0).abs() < 1.0, "expected v_gap=20, got {v_gap}");
+    }
+
+    #[test]
+    fn table_cell_height_is_minimum_grows_to_fit_content() {
+        // CSS 2.1 §17.5.3: `height` on a table cell is a minimum. A cell with
+        // height:64px border-box (content box 56px after 4px borders) whose content
+        // needs 64px (32px block + 16px top/bottom margins) must grow its border-box
+        // to 72px, not clamp to 64px. Otherwise content overflows into the
+        // border-spacing gap and row pitch is short by the overflow (BUG-177).
+        let t = layout_table(
+            "table { border-spacing: 8px; } \
+             td { width: 96px; height: 64px; border: 4px solid #000; box-sizing: border-box; } \
+             .blk { width: 52px; height: 32px; margin: 16px auto; }",
+            "<table>\
+               <tr><td><div class=\"blk\"></div></td></tr>\
+               <tr><td><div class=\"blk\"></div></td></tr>\
+             </table>",
+            800.0, 600.0,
+        );
+        let rows = collect_rows(&t);
+        assert!(rows.len() >= 2, "expected >= 2 rows, got {}", rows.len());
+        // Each cell grows to the content border-box height: 64 (content) + 8 (borders) = 72.
+        let cell0 = rows[0].children.iter()
+            .find(|c| !matches!(c.kind, super::BoxKind::Skip))
+            .expect("cell in row 0");
+        assert!((cell0.rect.height - 72.0).abs() < 0.5,
+            "cell grows to fit content (72px), got {}", cell0.rect.height);
+        // Row pitch = cell height (72) + vertical border-spacing (8) = 80.
+        let pitch = rows[1].rect.y - rows[0].rect.y;
+        assert!((pitch - 80.0).abs() < 0.5, "row pitch = 80, got {pitch}");
+    }
+
+    #[test]
+    fn table_cell_height_honoured_when_taller_than_content() {
+        // The minimum must not shrink a cell below its specified height: a tall
+        // height:120px cell with tiny content keeps 120px.
+        let t = layout_table(
+            "td { width: 80px; height: 120px; box-sizing: border-box; } \
+             .blk { width: 20px; height: 20px; }",
+            "<table><tr><td><div class=\"blk\"></div></td></tr></table>",
+            800.0, 600.0,
+        );
+        let row = find_first_row(&t).expect("row not found");
+        let cell = row.children.iter()
+            .find(|c| !matches!(c.kind, super::BoxKind::Skip))
+            .expect("cell");
+        assert!((cell.rect.height - 120.0).abs() < 0.5,
+            "specified 120px height honoured, got {}", cell.rect.height);
     }
 
     // ─── border-collapse: collapse (CSS 2.1 §17.6.2) — BUG-129 ─────────────────
