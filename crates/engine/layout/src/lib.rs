@@ -7749,6 +7749,48 @@ mod tests {
     }
 
     #[test]
+    fn block_with_inline_image_includes_baseline_descent_gap() {
+        // BUG-180: a bare <img> is an inline-level replaced element, baseline-aligned
+        // by default, so its line box — and therefore the height of the block that
+        // wraps it — extends below the image by the strut descent (the classic
+        // "image bottom gap"). Lumen lays a lone <img> as a block-flow child, so this
+        // sub-baseline space must be added explicitly; without it an image grid drifts
+        // ~descent px upward per row versus a browser (TEST-18: 22.1% → 2.1%).
+        let doc = lumen_html_parser::parse(
+            r#"<div id="frame"><img src="a.png" width="200" height="150"></div>"#,
+        );
+        let sheet = lumen_css_parser::parse("#frame { padding: 3px; }");
+        let root = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
+        let frame = find_by_tag(&root, "div", &doc).expect("frame div");
+        // Fixed8.descent_px(16) = 16 * 0.2 = 3.2 (default strut descent).
+        // content = img 150 + descent 3.2; border-box = + padding 6 = 159.2.
+        let expected = 150.0 + 16.0 * 0.2 + 6.0;
+        assert!(
+            (frame.rect.height - expected).abs() < 0.01,
+            "frame height {} should include the image-bottom descent gap (expected {expected})",
+            frame.rect.height,
+        );
+    }
+
+    #[test]
+    fn block_with_top_aligned_image_has_no_descent_gap() {
+        // Contrast to the baseline case: vertical-align:top anchors the replaced box
+        // to the line-box top, so there is no sub-baseline gap — the frame is exactly
+        // img + padding.
+        let doc = lumen_html_parser::parse(
+            r#"<div id="frame"><img src="a.png" width="200" height="150"></div>"#,
+        );
+        let sheet = lumen_css_parser::parse("#frame { padding: 3px; } img { vertical-align: top; }");
+        let root = body_layout_box(layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8));
+        let frame = find_by_tag(&root, "div", &doc).expect("frame div");
+        assert!(
+            (frame.rect.height - (150.0 + 6.0)).abs() < 0.01,
+            "top-aligned image must not add the baseline descent gap, got {}",
+            frame.rect.height,
+        );
+    }
+
+    #[test]
     fn img_without_src_and_srcset_produces_empty_url() {
         // Битая разметка — picker возвращает None, мы падаем в legacy
         // fallback и сохраняем пустой src (как и было до интеграции).
