@@ -209,6 +209,7 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '119': ('BUG-173', 0.81),   # paint-order: остаток = stroke triangle-soup AA-швы (geometry фикснут BUG-174)
     '36': ('BUG-176', 1.11),    # border-radius: остаток = edge-AA + elliptical-corner kappa (квадратные рамки фикснуты BUG-175)
     '30': ('BUG-144', 10.5),    # CSS filter/backdrop-filter: row-flip фикснут BUG-144; остаток = filter pixel-parity (rows 1-3) + backdrop захват тёмным внутри opacity-слоя (row 4) + gradient hard-stop (row 2, BUG-085)
+    '51': ('BUG-124', 1.09),    # scrollbar rendering: float-wrapper shrink-to-fit фикснут BUG-178 (9.91% → 1.09%); остаток = дробные layout Y-координаты vs пиксельное округление Edge
 }
 _DEBTOR_TOL = 2.0  # % допуск run-to-run вариации gdigrab
 

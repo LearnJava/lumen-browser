@@ -3748,10 +3748,26 @@ fn preferred_inline_block_width(
         }).sum();
         sum
     } else {
-        b.children
-            .iter()
-            .filter_map(|c| preferred_inline_block_width(c, measurer, viewport))
-            .fold(0.0_f32, f32::max)
+        // Vertical (block) flow: in-flow children stack, so the container is as
+        // wide as its widest child. Floated children, however, are placed side
+        // by side on the same line (CSS 2.1 §9.5.1) — their margin-box widths
+        // sum. The shrink-to-fit width is the larger of the two contributions.
+        let mut inflow_max = 0.0_f32;
+        let mut float_sum = 0.0_f32;
+        for c in &b.children {
+            let Some(cw) = preferred_inline_block_width(c, measurer, viewport) else {
+                continue;
+            };
+            if c.style.float_side != FloatSide::None {
+                let cem = c.style.font_size;
+                let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
+                let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
+                float_sum += cw + ml.max(0.0) + mr.max(0.0);
+            } else {
+                inflow_max = inflow_max.max(cw);
+            }
+        }
+        inflow_max.max(float_sum)
     };
     if content_w > 0.0 {
         Some(
@@ -3820,9 +3836,24 @@ fn max_content_outer_width(
             }).sum()
         }
         _ => {
-            b.children.iter()
-                .map(|c| max_content_outer_width(c, measurer, viewport))
-                .fold(0.0_f32, f32::max)
+            // Block container: in-flow children stack vertically → take the
+            // widest. Floated children are laid side by side on one line
+            // (CSS 2.1 §9.5.1), so their margin-box widths sum. The max-content
+            // width is the larger of the in-flow maximum and the float run sum.
+            let mut inflow_max = 0.0_f32;
+            let mut float_sum = 0.0_f32;
+            for c in &b.children {
+                let cw = max_content_outer_width(c, measurer, viewport);
+                if c.style.float_side != FloatSide::None {
+                    let cem = c.style.font_size;
+                    let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
+                    let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
+                    float_sum += cw + ml.max(0.0) + mr.max(0.0);
+                } else {
+                    inflow_max = inflow_max.max(cw);
+                }
+            }
+            inflow_max.max(float_sum)
         }
     };
     (content_w + pl + pr + s.border_left_width + s.border_right_width).max(0.0)
@@ -11426,6 +11457,46 @@ mod tests {
         // First two floats occupy line 1 (top ~8); the third wraps below them.
         assert!(third.y > 100.0, "third float should wrap to a new line (y>100), got {}", third.y);
         assert!((third.x - 8.0).abs() < 1.0, "wrapped float should reset to left (x=8), got {}", third.x);
+    }
+
+    #[test]
+    fn shrink_to_fit_float_wrapper_sums_inner_floats_side_by_side() {
+        // BUG-178: an auto-width float wrapper containing two float:left children
+        // must shrink-to-fit to the SUM of their margin-box widths (they sit side
+        // by side, CSS 2.1 §9.5.1), not the max. The old code took the max → the
+        // wrapper was only as wide as one child, so the second float wrapped to a
+        // new line. Container is wide enough that both floats fit on one line.
+        let root = super::layout(
+            &lumen_html_parser::parse(
+                "<div class=cell>\
+                   <div class=wrap>\
+                     <div class=a></div>\
+                     <div class=b></div>\
+                   </div>\
+                 </div>",
+            ),
+            &lumen_css_parser::parse(
+                ".cell{width:600px;height:300px;overflow:hidden}\
+                 .wrap{float:left}\
+                 .a{float:left;width:120px;height:80px;margin-right:20px;background:#1133cc}\
+                 .b{float:left;width:120px;height:80px;background:#22bb44}",
+            ),
+            lumen_core::geom::Size::new(1024.0, 720.0),
+        );
+        let a = find_one_bg(&root, 0x1133cc);
+        let b = find_one_bg(&root, 0x22bb44);
+        // Both floats share the same line: b starts after a (x = a.x + 120 + 20),
+        // and does NOT drop below it.
+        assert!(
+            (b.y - a.y).abs() < 1.0,
+            "second inner float must stay on the same line (b.y {} vs a.y {})",
+            b.y, a.y
+        );
+        assert!(
+            (b.x - (a.x + 140.0)).abs() < 1.0,
+            "second inner float must sit to the right of the first (b.x {}, expected {})",
+            b.x, a.x + 140.0
+        );
     }
 
     // ── CSS Shapes L1 — shape-outside circle() ────────────────────────────────
