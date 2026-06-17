@@ -202,6 +202,43 @@ impl CornerRadii {
     pub fn from_style(s: &ComputedStyle) -> Self {
         Self::from_style_and_box(s, 0.0, 0.0)
     }
+
+    /// Clamps every radius so no corner exceeds half the box in either axis
+    /// (CSS Backgrounds L3 §5.5 corner-overlap rule). `w`/`h` are the box
+    /// dimensions the radii apply to. Mirrors the per-axis clamp used by the
+    /// rounded-rect fill so the border outer edge aligns with the background fill.
+    #[must_use]
+    pub fn clamped_to_box(&self, w: f32, h: f32) -> Self {
+        let cap = (w / 2.0).min(h / 2.0).max(0.0);
+        let c = |r: f32| r.min(cap).max(0.0);
+        Self {
+            tl: c(self.tl),   tl_y: c(self.tl_y),
+            tr: c(self.tr),   tr_y: c(self.tr_y),
+            br: c(self.br),   br_y: c(self.br_y),
+            bl: c(self.bl),   bl_y: c(self.bl_y),
+        }
+    }
+
+    /// Computes the inner-edge corner radii for a border of per-side widths
+    /// `[top, right, bottom, left]` (CSS px). Each inner radius is the outer
+    /// radius minus the adjacent border width, floored at 0 — the standard CSS
+    /// border inner-radius rule (CSS Backgrounds L3 §5.5). A corner's horizontal
+    /// radius is reduced by the adjacent vertical border (left/right), its
+    /// vertical radius by the adjacent horizontal border (top/bottom).
+    #[must_use]
+    pub fn inner_for_border(&self, widths: [f32; 4]) -> Self {
+        let [top, right, bottom, left] = widths;
+        Self {
+            tl:   (self.tl   - left).max(0.0),
+            tl_y: (self.tl_y - top).max(0.0),
+            tr:   (self.tr   - right).max(0.0),
+            tr_y: (self.tr_y - top).max(0.0),
+            br:   (self.br   - right).max(0.0),
+            br_y: (self.br_y - bottom).max(0.0),
+            bl:   (self.bl   - left).max(0.0),
+            bl_y: (self.bl_y - bottom).max(0.0),
+        }
+    }
 }
 
 /// BUG-140: `clip-path` basic-shape, разрешённая эмиттером в page-координаты
@@ -6382,6 +6419,47 @@ fn emit_table_cell(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
 mod tests {
     use super::*;
     use lumen_core::geom::Size;
+
+    /// BUG-175: inner border radius = outer − adjacent side width, floored at 0.
+    /// Horizontal radii drop by the left/right border, vertical by top/bottom.
+    #[test]
+    fn inner_for_border_subtracts_side_widths() {
+        let outer = CornerRadii {
+            tl: 20.0, tl_y: 20.0, tr: 20.0, tr_y: 20.0,
+            br: 20.0, br_y: 20.0, bl: 20.0, bl_y: 20.0,
+        };
+        // widths: [top, right, bottom, left]
+        let inner = outer.inner_for_border([4.0, 8.0, 6.0, 2.0]);
+        assert!((inner.tl - 18.0).abs() < 1e-4, "tl_x -= left(2)");
+        assert!((inner.tl_y - 16.0).abs() < 1e-4, "tl_y -= top(4)");
+        assert!((inner.tr - 12.0).abs() < 1e-4, "tr_x -= right(8)");
+        assert!((inner.tr_y - 16.0).abs() < 1e-4, "tr_y -= top(4)");
+        assert!((inner.br - 12.0).abs() < 1e-4, "br_x -= right(8)");
+        assert!((inner.br_y - 14.0).abs() < 1e-4, "br_y -= bottom(6)");
+        assert!((inner.bl - 18.0).abs() < 1e-4, "bl_x -= left(2)");
+        assert!((inner.bl_y - 14.0).abs() < 1e-4, "bl_y -= bottom(6)");
+    }
+
+    /// Border thicker than the outer radius floors the inner radius at 0 (square
+    /// inner corner), never negative.
+    #[test]
+    fn inner_for_border_floors_at_zero() {
+        let outer = CornerRadii { tl: 4.0, tl_y: 4.0, ..Default::default() };
+        let inner = outer.inner_for_border([10.0, 10.0, 10.0, 10.0]);
+        assert_eq!(inner.tl, 0.0);
+        assert_eq!(inner.tl_y, 0.0);
+    }
+
+    /// Corner-overlap clamp caps every radius at half the smaller box dimension.
+    #[test]
+    fn clamped_to_box_caps_at_half() {
+        let r = CornerRadii { tl: 999.0, tl_y: 999.0, tr: 999.0, tr_y: 999.0,
+            br: 999.0, br_y: 999.0, bl: 999.0, bl_y: 999.0 };
+        let c = r.clamped_to_box(140.0, 44.0);
+        // min(140/2, 44/2) = 22
+        assert!((c.tl - 22.0).abs() < 1e-4);
+        assert!((c.br_y - 22.0).abs() < 1e-4);
+    }
 
     fn build(html: &str, css: &str) -> DisplayList {
         let doc = lumen_html_parser::parse(html);

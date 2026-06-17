@@ -117,6 +117,22 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
 
+- **BUG-175** (2026-06-17) — скруглённые рамки (TEST-36 border-radius 1.50% → 1.11%).
+  `border-radius` + `border`: фон рисовался скруглённым (`FillRoundedRect`), но рамка
+  (`DrawBorder`) — 4 axis-aligned прямоугольниками сторон, игнорируя `radii` → квадратные
+  углы рамки вокруг скруглённого фона (видно на пилюлях/кругах/эллипсах с бордером).
+  Оба пиксельных бэкенда (femtovg live + cpu_raster снапшоты) игнорировали поле
+  `radii: CornerRadii` у команды. Фикс: при `border-radius` + однородной (один цвет)
+  `solid` рамке граница рисуется **even-odd кольцом** между внешним скруглённым rect
+  (border-box) и внутренним (padding-box, внутренние радиусы = внешний − ширина стороны,
+  CSS Backgrounds L3 §5.5). Геометрия — `CornerRadii::clamped_to_box`/`inner_for_border`
+  (`display_list.rs`) + общий outline-строитель `append_rounded_rect_outline` (femtovg) /
+  `push_rounded_rect_outline` (cpu_raster). Неоднородные цвета / dashed-dotted-double →
+  fallback на квадратные стороны. Тесты: `draw_border_rounded_corner_is_not_square`
+  (пиксельный, cpu-render) + `inner_for_border_*` / `clamped_to_box_caps_at_half`.
+  Остаток 1.11% (edge-AA + эллиптические углы kappa) = BUG-176, TEST-36 → KNOWN_DEBTORS.
+  Без регрессий (53/64/80 без изменений, 101 4.04% → 3.90%).
+
 - **BUG-174** (2026-06-17) — in-flow SVG `<path>` (TEST-119 paint-order 56.35% → 0.81%).
   `<path>` у `display:inline-block` SVG рисовался в raw user-координатах `d` без смещения
   на origin своего вьюпорта → все пути разных ячеек схлопывались в верхний левый угол

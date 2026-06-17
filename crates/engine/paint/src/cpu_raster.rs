@@ -1214,9 +1214,22 @@ fn rasterize_draw_border(
     widths: &[f32; 4],
     colors: &[Color; 4],
     styles: &[BorderStyle; 4],
-    _radii: &CornerRadii,
+    radii: &CornerRadii,
     clip: Option<&tiny_skia::Mask>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // BUG-175: rounded border. A box with border-radius whose sides are all
+    // uniform-coloured solid borders is painted as an even-odd ring between the
+    // outer and inner rounded rects, so corners follow the radius. Mismatched
+    // colours / dashed-dotted-double styles fall back to axis-aligned side quads.
+    let uniform_solid = widths.iter().all(|&w| w > 0.0)
+        && styles.iter().all(|s| matches!(s, BorderStyle::Solid))
+        && colors[1] == colors[0]
+        && colors[2] == colors[0]
+        && colors[3] == colors[0];
+    if !radii.all_zero() && uniform_solid {
+        return rasterize_rounded_border_ring(pixmap, rect, *widths, colors[0], radii, clip);
+    }
+
     // Border edges are axis-aligned quads. `anti_alias: false` is both visually
     // correct (GPU renderer draws without per-edge AA) and required to avoid
     // tiny-skia's hairline_aa::fill_dot8 debug_assert for sub-pixel rects (BUG-052).
@@ -1228,6 +1241,81 @@ fn rasterize_draw_border(
     draw_border_side_v(pixmap, rect.x + rect.width - right_w, rect.y, *right_w, rect.height, *right_c, *right_s, clip)?;
     draw_border_side_h(pixmap, rect.x, rect.y + rect.height - bottom_w, rect.width, *bottom_w, *bottom_c, *bottom_s, clip)?;
     draw_border_side_v(pixmap, rect.x, rect.y, *left_w, rect.height, *left_c, *left_s, clip)?;
+    Ok(())
+}
+
+/// Appends a closed rounded-rectangle contour to `pb` using cubic-Bézier
+/// quarter-ellipse corners (kappa ≈ 0.5523). `r` holds per-corner (x, y) radii,
+/// assumed already clamped to the box. Shared by both contours of the border
+/// ring (BUG-175).
+fn push_rounded_rect_outline(
+    pb: &mut tiny_skia::PathBuilder,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    r: &CornerRadii,
+) {
+    const K: f32 = 0.5523;
+    let x1 = x + w;
+    let y1 = y + h;
+    pb.move_to(x + r.tl, y);
+    pb.line_to(x1 - r.tr, y);
+    pb.cubic_to(x1 - r.tr + K * r.tr, y, x1, y + r.tr_y - K * r.tr_y, x1, y + r.tr_y);
+    pb.line_to(x1, y1 - r.br_y);
+    pb.cubic_to(x1, y1 - r.br_y + K * r.br_y, x1 - r.br + K * r.br, y1, x1 - r.br, y1);
+    pb.line_to(x + r.bl, y1);
+    pb.cubic_to(x + r.bl - K * r.bl, y1, x, y1 - r.bl_y + K * r.bl_y, x, y1 - r.bl_y);
+    pb.line_to(x, y + r.tl_y);
+    pb.cubic_to(x, y + r.tl_y - K * r.tl_y, x + r.tl - K * r.tl, y, x + r.tl, y);
+    pb.close();
+}
+
+/// Paints a uniform-coloured solid rounded border as the even-odd ring between
+/// the outer rounded-rect (border box, outer radii) and the inner rounded-rect
+/// (padding box, inner radii = outer − side width, CSS Backgrounds L3 §5.5).
+/// `widths` is `[top, right, bottom, left]`; when the border swallows the whole
+/// box the ring degenerates to a solid rounded rect.
+fn rasterize_rounded_border_ring(
+    pixmap: &mut tiny_skia::Pixmap,
+    rect: &Rect,
+    widths: [f32; 4],
+    color: Color,
+    radii: &CornerRadii,
+    clip: Option<&tiny_skia::Mask>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (x, y, w, h) = (rect.x, rect.y, rect.width, rect.height);
+    if w <= 0.0 || h <= 0.0 {
+        return Ok(());
+    }
+    let [top, right, bottom, left] = widths;
+
+    let outer = radii.clamped_to_box(w, h);
+    let mut pb = tiny_skia::PathBuilder::new();
+    push_rounded_rect_outline(&mut pb, x, y, w, h, &outer);
+
+    let iw = w - left - right;
+    let ih = h - top - bottom;
+    if iw > 0.0 && ih > 0.0 {
+        let inner = radii.inner_for_border(widths).clamped_to_box(iw, ih);
+        push_rounded_rect_outline(&mut pb, x + left, y + top, iw, ih, &inner);
+    }
+
+    if let Some(path) = pb.finish() {
+        let paint = tiny_skia::Paint {
+            shader: tiny_skia::Shader::SolidColor(color_to_skia(color)),
+            anti_alias: true,
+            force_hq_pipeline: false,
+            blend_mode: tiny_skia::BlendMode::SourceOver,
+        };
+        pixmap.fill_path(
+            &path,
+            &paint,
+            tiny_skia::FillRule::EvenOdd,
+            tiny_skia::Transform::identity(),
+            clip,
+        );
+    }
     Ok(())
 }
 
@@ -2708,6 +2796,41 @@ mod tests {
             .flat_map(|x| (0..100u32).map(move |y| (x, y)))
             .any(|(x, y)| px(&img, x, y).0 < 200);
         assert!(!colored, "BorderStyle::None must render nothing");
+    }
+
+    /// BUG-175: a uniform solid border with border-radius must follow the radius
+    /// instead of forming a square frame. The extreme box corner is outside the
+    /// rounded outline (stays white), the middle of each edge carries the border
+    /// colour, and the interior (padding box) stays empty (the ring has a hole).
+    #[test]
+    fn draw_border_rounded_corner_is_not_square() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        // 60×60 box at (10,10), 6px uniform solid border, radius 20px, no bg.
+        let r = 20.0;
+        let cmds = vec![DisplayCommand::DrawBorder {
+            rect: rect(10.0, 10.0, 60.0, 60.0),
+            widths: [6.0, 6.0, 6.0, 6.0],
+            colors: [red; 4],
+            styles: [lumen_layout::BorderStyle::Solid; 4],
+            radii: CornerRadii { tl: r, tl_y: r, tr: r, tr_y: r, br: r, br_y: r, bl: r, bl_y: r },
+        }];
+        let img = rasterize_cpu(100, 100, &cmds, 0.0, 0.0).expect("rasterize");
+
+        // Extreme top-left box corner: rounded outline curves away → white.
+        // Pre-fix (square border) this pixel was solid red.
+        let (cr, cg, cb, _) = px(&img, 12, 12);
+        assert!(cr > 200 && cg > 200 && cb > 200,
+            "rounded corner must be empty, got ({cr},{cg},{cb})");
+        // Middle of the top edge sits inside the border band → red.
+        let (tr_, tg, tb, _) = px(&img, 40, 12);
+        assert!(tr_ > 200 && tg < 60 && tb < 60,
+            "top edge must be border colour, got ({tr_},{tg},{tb})");
+        // Middle of the left edge → red.
+        let (lr, lg, lb, _) = px(&img, 12, 40);
+        assert!(lr > 200 && lg < 60 && lb < 60,
+            "left edge must be border colour, got ({lr},{lg},{lb})");
+        // Interior (padding box centre): ring has a hole → white.
+        assert_eq!(px(&img, 40, 40), (255, 255, 255, 255), "interior stays white");
     }
 
     /// `mask-image: url(...)` has no decoded source on the deterministic CPU path,
