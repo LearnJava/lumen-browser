@@ -4,7 +4,6 @@
 
 | Раздел | Содержимое | Тип |
 |---|---|---|
-| [Статус и прогресс](docs/plan/status.md) | ⚠️ упразднён — см. CAPABILITIES.md + STATUS-PN.md | — |
 | [Roadmap](docs/plan/roadmap.md) | Приоритизация задач, Sprint 0–N, треки P1/P2/P3 | 📦 справочник — текущее в STATUS-PN.md |
 | [История реализации](docs/plan/history.md) | ⚠️ упразднён — см. git log | — |
 | [Архитектура](docs/plan/architecture.md) | §0 Терминология · §1 Принципы · §2 Scope · §3 Архитектура · §4 Структура репо | 📖 справочник |
