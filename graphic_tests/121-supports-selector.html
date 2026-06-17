@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<!-- CSS Conditional L4 §4.2 — @supports selector(<complex-selector>).
+     A selector() test is true when the engine recognises the selector. Each swatch
+     starts red and turns green only when its @supports block applies. Supported
+     selectors (:has, :is, ::slotted) → green; unknown pseudos → block does not apply,
+     swatch stays red; `not selector(<unknown>)` → green (negation of an unsupported
+     test). On a correct engine: a/b/c/f green, d/e red. Edge renders this identically
+     (it also supports :has/:is/::slotted and rejects the made-up pseudos). Graphics
+     only, no text. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; padding: 40px; overflow: hidden; box-sizing: border-box; }
+
+  .row { display: flex; gap: 24px; margin-bottom: 24px; }
+  .sw {
+    width: 200px;
+    height: 140px;
+    background: #d64545;        /* default: red = @supports block did NOT apply */
+    border: 6px solid #1a202c;
+    box-sizing: border-box;
+  }
+
+  /* Supported selectors → block applies → green */
+  @supports selector(:has(*))       { .a { background: #2f855a; } }
+  @supports selector(:is(.x, .y))   { .b { background: #2f855a; } }
+  @supports selector(::slotted(*))  { .c { background: #2f855a; } }
+
+  /* Unknown pseudos → selector() false → block does not apply → swatch stays red */
+  @supports selector(:totally-unknown-pseudo) { .d { background: #2b6cb0; } }
+  @supports selector(::made-up-element)        { .e { background: #2b6cb0; } }
+
+  /* Negation of an unsupported test → true → green */
+  @supports not selector(:totally-unknown-pseudo) { .f { background: #2f855a; } }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="row">
+    <div class="sw a"></div>
+    <div class="sw b"></div>
+    <div class="sw c"></div>
+  </div>
+  <div class="row">
+    <div class="sw d"></div>
+    <div class="sw e"></div>
+    <div class="sw f"></div>
+  </div>
+</div>
+</body>
+</html>
