@@ -2891,6 +2891,13 @@ fn collect_inline_segments(
 /// `is_before = true` → prepend; `false` → append.
 /// Inline pseudo-elements are merged into the adjacent InlineRun when possible.
 /// Block pseudo-elements are inserted as separate Block boxes.
+///
+/// `blockify = true` forces every pseudo-element into its own block-level box,
+/// regardless of its computed `display`. Used for flex/grid containers: CSS
+/// Flexbox §4 / Grid §6 blockify all in-flow children (including generated
+/// `::before`/`::after`) into individual items, so they must not be merged into
+/// an adjacent InlineRun.
+#[allow(clippy::too_many_arguments)]
 fn inject_pseudo(
     parent_id: NodeId,
     children: &mut Vec<LayoutBox>,
@@ -2899,6 +2906,7 @@ fn inject_pseudo(
     doc: &Document,
     counters: &CounterMap,
     registry: &CounterStyleRegistry,
+    blockify: bool,
 ) {
     let Some(ps) = ps else { return };
     let slot = if is_before { QuoteSlot::Before } else { QuoteSlot::After };
@@ -2906,7 +2914,9 @@ fn inject_pseudo(
         Display::Inline
         | Display::InlineFlex
         | Display::InlineGrid
-        | Display::InlineBlock => {
+        | Display::InlineBlock
+            if !blockify =>
+        {
             let segs = content_to_inline_segments(&ps, doc, parent_id, slot, counters, registry);
             if segs.is_empty() {
                 return;
@@ -3498,6 +3508,23 @@ fn build_box(
                     children.push(child_box);
                 }
             }
+            // CSS Flexbox §4 / Grid §6 — ::before / ::after on a flex or grid
+            // container generate blockified flex/grid items (first and last,
+            // respectively). Tables have their own anonymous-box rules, so they
+            // are excluded here.
+            if matches!(
+                style.display,
+                Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
+            ) {
+                let before_ps = compute_pseudo_element_style(
+                    doc, id, "before", sheet, &style, viewport, dark_mode,
+                );
+                let after_ps = compute_pseudo_element_style(
+                    doc, id, "after", sheet, &style, viewport, dark_mode,
+                );
+                inject_pseudo(id, &mut children, before_ps, true, doc, counters, registry, true);
+                inject_pseudo(id, &mut children, after_ps, false, doc, counters, registry, true);
+            }
         } else {
         let mut i = 0;
         while i < dom_children.len() {
@@ -3647,8 +3674,8 @@ fn build_box(
                 compute_pseudo_element_style(doc, id, "before", sheet, &style, viewport, dark_mode);
             let after_ps =
                 compute_pseudo_element_style(doc, id, "after", sheet, &style, viewport, dark_mode);
-            inject_pseudo(id, &mut children, before_ps, true, doc, counters, registry);
-            inject_pseudo(id, &mut children, after_ps, false, doc, counters, registry);
+            inject_pseudo(id, &mut children, before_ps, true, doc, counters, registry, false);
+            inject_pseudo(id, &mut children, after_ps, false, doc, counters, registry, false);
             // CSS Lists L3 §2.1 — inject ::marker for list items.
             // ::marker comes before ::before in document order.
             if style.display == Display::ListItem {
@@ -11426,6 +11453,60 @@ mod tests {
             !text.contains('\u{201C}') && !text.contains('\u{201D}'),
             "quotes:none must emit no marks: {text:?}",
         );
+    }
+
+    // ── BUG-196: ::before / ::after on a flex container generate flex items ──
+
+    /// Recursively counts boxes whose background equals `rgba`.
+    fn count_bg(b: &super::LayoutBox, rgba: [u8; 4], out: &mut usize) {
+        if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+            && [bg.r, bg.g, bg.b, bg.a] == rgba
+        {
+            *out += 1;
+        }
+        for c in &b.children {
+            count_bg(c, rgba, out);
+        }
+    }
+
+    #[test]
+    fn flex_container_before_pseudo_generates_item() {
+        // CSS Flexbox §4 — `content: attr()` on `.swatch::before` (display:flex)
+        // must generate a blockified flex item carrying the attr text and its own
+        // background, placed before the in-flow child. Regression for BUG-196:
+        // pseudo-elements were dropped entirely for flex/grid containers.
+        let root = super::layout(
+            &lumen_html_parser::parse(
+                "<div class=swatch data-label=Hello><div class=bar></div></div>",
+            ),
+            &lumen_css_parser::parse(
+                ".swatch{display:flex} \
+                 .swatch::before{content:attr(data-label);display:flex;background:#2c3e50} \
+                 .bar{background:#3498db}",
+            ),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        // The generated ::before box must exist with its dark background.
+        let mut dark = 0;
+        count_bg(&root, [0x2c, 0x3e, 0x50, 0xff], &mut dark);
+        assert_eq!(dark, 1, "::before flex item with background must be generated");
+        // Its attr() content must be resolved into a text segment.
+        let mut text = String::new();
+        collect_seg_text(&root, &mut text);
+        assert!(text.contains("Hello"), "attr() content missing: {text:?}");
+    }
+
+    #[test]
+    fn flex_container_without_before_has_no_extra_item() {
+        // No ::before rule → no phantom flex item injected.
+        let root = super::layout(
+            &lumen_html_parser::parse("<div class=row><div class=a></div></div>"),
+            &lumen_css_parser::parse(".row{display:flex} .a{background:#3498db}"),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut blue = 0;
+        count_bg(&root, [0x34, 0x98, 0xdb, 0xff], &mut blue);
+        assert_eq!(blue, 1, "only the single in-flow child must exist");
     }
 
     #[test]
