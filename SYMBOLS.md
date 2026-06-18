@@ -790,7 +790,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/encoding/src/unicode_provider.rs:31` **fn** `new` — Создаёт провайдер с auto-режимом (LSTM/dictionary для CJK/Thai/etc)
 `crates/engine/encoding/src/unicode_provider.rs:40` **fn** `new_latin` — Облегчённая версия — только Latin + UAX #14 rules, без LSTM
 
-## lumen-font  (177 symbols)
+## lumen-font  (210 symbols)
 
 `crates/engine/font/src/avar.rs:32` **struct** `AxisValueMap` — Одна пара (fromCoord → toCoord) в segment map оси. Координаты в
 `crates/engine/font/src/avar.rs:44` **struct** `SegmentMap` — Segment map для одной оси: список пар, отсортированных по `from`
@@ -875,6 +875,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/font/src/glyf.rs:286` **struct** `Glyf` — Удобный view над байтами `glyf` для разбора глифа по offset/length из loca
 `crates/engine/font/src/glyf.rs:291` **fn** `new`
 `crates/engine/font/src/glyf.rs:295` **fn** `glyph_at`
+`crates/engine/font/src/gpos.rs:32` **struct** `Gpos` — Parsed `GPOS` table plus the lookup indices activated by the enabled
+`crates/engine/font/src/gpos.rs:40` **fn** `parse` — Parse the `GPOS` table bytes and pre-select the lookups for the
+`crates/engine/font/src/gpos.rs:47` **fn** `has_lookups` — Whether any positioning lookups are active
+`crates/engine/font/src/gpos.rs:53` **fn** `apply` — Apply all enabled positioning lookups to `glyphs` in order. Advances
+`crates/engine/font/src/gsub.rs:43` **struct** `Gsub` — Parsed `GSUB` table plus the lookup indices activated by the enabled
+`crates/engine/font/src/gsub.rs:52` **fn** `parse` — Parse the `GSUB` table bytes and pre-select the lookups for the
+`crates/engine/font/src/gsub.rs:59` **fn** `has_lookups` — Whether any substitution lookups are active
+`crates/engine/font/src/gsub.rs:64` **fn** `apply` — Apply all enabled substitution lookups to `glyphs` in order
 `crates/engine/font/src/gvar.rs:47` **enum** `PointNumbers` — Какие точки glyph-а трогает variation: либо явный список индексов,
 `crates/engine/font/src/gvar.rs:59` **struct** `TupleVariation` — Описание одной tuple-variation для glyph-а
 `crates/engine/font/src/gvar.rs:79` **struct** `GlyphVariationData` — Полный набор tuple-variations для одного glyph-а
@@ -929,6 +937,26 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/font/src/os2.rs:123` **fn** `is_bold` — Bold flag из `fsSelection`. Не источник истины для веса —
 `crates/engine/font/src/os2.rs:129` **fn** `stretch_percent` — Возвращает stretch в процентах (от 50 до 200)
 `crates/engine/font/src/os2.rs:144` **fn** `parse`
+`crates/engine/font/src/otlayout.rs:39` **struct** `LayoutHeader` — Parsed header of a `GSUB`/`GPOS` table: byte offsets (relative to the
+`crates/engine/font/src/otlayout.rs:52` **fn** `parse` — Parse the 10-byte (v1.0) / 14-byte (v1.1) header at the start of a
+`crates/engine/font/src/otlayout.rs:73` **struct** `Lookup` — A single lookup: its type, flags and the absolute byte offsets (within
+`crates/engine/font/src/otlayout.rs:86` **struct** `LayoutTable` — Borrowed view over a `GSUB`/`GPOS` table providing lookup access and the
+`crates/engine/font/src/otlayout.rs:95` **fn** `parse` — Parse the table header; returns `None` for malformed/empty data
+`crates/engine/font/src/otlayout.rs:103` **fn** `lookup_count` — Total number of lookups in the LookupList
+`crates/engine/font/src/otlayout.rs:110` **fn** `lookup` — Resolve a lookup by its LookupList index: returns its type, flags and
+`crates/engine/font/src/otlayout.rs:142` **fn** `enabled_lookups` — Collect the LookupList indices activated by any of the `wanted`
+`crates/engine/font/src/otlayout.rs:247` **enum** `Coverage` — A Coverage table: maps a glyph id to a *coverage index* (its ordinal
+`crates/engine/font/src/otlayout.rs:258` **struct** `CoverageRange` — One range record of a format-2 Coverage table
+`crates/engine/font/src/otlayout.rs:269` **fn** `parse` — Parse a Coverage table located at absolute `offset` within `data`
+`crates/engine/font/src/otlayout.rs:298` **fn** `index_of` — Return the coverage index of `glyph`, or `None` if not covered
+`crates/engine/font/src/otlayout.rs:327` **enum** `ClassDef` — A Class Definition table: maps a glyph id to a class number (0 for any
+`crates/engine/font/src/otlayout.rs:342` **struct** `ClassRange` — One range record of a format-2 ClassDef table
+`crates/engine/font/src/otlayout.rs:354` **fn** `parse` — Parse a ClassDef table at absolute `offset`. A NULL (`0`) offset has
+`crates/engine/font/src/otlayout.rs:387` **fn** `class_of` — Return the class of `glyph` (0 when not explicitly assigned)
+`crates/engine/font/src/otlayout.rs:430` **struct** `ValueRecord` — A GPOS ValueRecord: positional adjustments in font design units. Fields
+`crates/engine/font/src/otlayout.rs:442` **fn** `value_record_size` — Number of bytes a ValueRecord with `format` occupies (2 per set bit)
+`crates/engine/font/src/otlayout.rs:449` **fn** `read_value_record` — Read a ValueRecord of the given `format` at absolute `offset`, returning
+`crates/engine/font/src/otlayout.rs:486` **fn** `resolve_extension` — Resolve an Extension subtable (GSUB Lookup Type 7 / GPOS Lookup Type 9):
 `crates/engine/font/src/post.rs:18` **struct** `Post`
 `crates/engine/font/src/post.rs:47` **fn** `parse`
 `crates/engine/font/src/post.rs:71` **fn** `is_italic` — `true` если italic_angle != 0 (шрифт имеет slant). Удобный
@@ -937,6 +965,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/font/src/rasterizer.rs:41` **fn** `new`
 `crates/engine/font/src/rasterizer.rs:49` **fn** `scale`
 `crates/engine/font/src/rasterizer.rs:55` **fn** `rasterize` — Растеризует simple-glyph. Возвращает `None` для composite-глифов
+`crates/engine/font/src/shape.rs:24` **struct** `ShapedGlyph` — One positioned glyph produced by shaping. All metrics are in font design
+`crates/engine/font/src/shape.rs:47` **struct** `Shaper` — Shaping engine bound to one font's `GSUB`/`GPOS` tables
+`crates/engine/font/src/shape.rs:55` **fn** `new` — Build a shaper from a parsed font, reading its `GSUB`/`GPOS` tables
+`crates/engine/font/src/shape.rs:64` **fn** `is_active` — Whether shaping will change anything versus base advances — i.e. the
+`crates/engine/font/src/shape.rs:74` **fn** `shape` — Shape a run of glyph ids into positioned glyphs
 `crates/engine/font/src/system_fonts.rs:31` **struct** `SystemFontIndex` — Простой ленивый индекс системных шрифтов
 `crates/engine/font/src/system_fonts.rs:44` **fn** `new` — Индекс, который при первом lookup просканирует стандартные пути
 `crates/engine/font/src/system_fonts.rs:53` **fn** `with_dirs` — Индекс с явно заданным списком директорий — для тестов и
@@ -4022,4 +4055,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3951 symbols in 22 crates*
+*Total: 3984 symbols in 22 crates*

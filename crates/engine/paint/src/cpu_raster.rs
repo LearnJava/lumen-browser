@@ -1810,6 +1810,10 @@ struct CpuFace<'a> {
     descent: f32,
     cmap: lumen_font::Cmap<'a>,
     hmtx: lumen_font::Hmtx<'a>,
+    /// GSUB/GPOS shaper for the bundled face: applies ligatures + kerning so
+    /// the CPU snapshot matches a real shaping engine. Borrows the `'static`
+    /// `GSUB`/`GPOS` table bytes, not the [`CpuFace`] itself.
+    shaper: lumen_font::Shaper<'a>,
 }
 
 /// Parse the bundled Inter face once per `DrawText` run.
@@ -1819,6 +1823,7 @@ fn load_bundled_face() -> Option<CpuFace<'static>> {
     let hhea = font.hhea().ok()?;
     let cmap = font.cmap().ok()?;
     let hmtx = font.hmtx().ok()?;
+    let shaper = lumen_font::Shaper::new(&font);
     Some(CpuFace {
         font,
         units_per_em: head.units_per_em,
@@ -1826,6 +1831,7 @@ fn load_bundled_face() -> Option<CpuFace<'static>> {
         descent: f32::from(hhea.descent),
         cmap,
         hmtx,
+        shaper,
     })
 }
 
@@ -1871,24 +1877,54 @@ fn rasterize_text(
     let mut mask = tiny_skia::Mask::new(width, height).ok_or("Failed to create glyph mask")?;
     let mut any_coverage = false;
 
+    // Tab handling (CSS Text L3 §10.1): a tab advances by `tab_size` pixels
+    // and draws nothing. Shaping operates per tab-delimited segment so a tab
+    // never participates in a ligature or kern pair. When `tab_size <= 0` the
+    // whole string is shaped as one run and tabs fall through as glyphs,
+    // matching the previous behaviour.
     let mut cursor_x = rect.x;
-    for ch in text.chars() {
-        // CSS Text L3 §10.1 — tab advances by tab_size pixels, draws nothing.
-        if ch == '\t' && tab_size > 0.0 {
+    let mut first_segment = true;
+    let segments: Vec<&str> = if tab_size > 0.0 {
+        text.split('\t').collect()
+    } else {
+        vec![text]
+    };
+    for segment in segments {
+        if !first_segment {
             cursor_x += tab_size;
+        }
+        first_segment = false;
+        if segment.is_empty() {
             continue;
         }
         // No fallback faces on the CPU path: a missing codepoint resolves to
         // glyph 0 (.notdef), matching the GPU renderer's `(primary, 0)` result.
-        let glyph_id = face.cmap.glyph_index(ch as u32).unwrap_or(0);
-        if let Ok(Some(glyph)) = face.font.glyph_resolved(glyph_id)
-            && let Some(bitmap) = rasterizer.rasterize(&glyph)
-            && blit_glyph_coverage(&mut mask, &bitmap, cursor_x, baseline_y, clip, width, height)
-        {
-            any_coverage = true;
+        let glyph_ids: Vec<u16> = segment
+            .chars()
+            .map(|ch| face.cmap.glyph_index(ch as u32).unwrap_or(0))
+            .collect();
+        // Shape: GSUB ligatures then GPOS kerning. With no layout tables this
+        // returns base advances — identical to the old per-character path.
+        let shaped = face.shaper.shape(&glyph_ids, &face.hmtx);
+        for sg in &shaped {
+            let pen_x = cursor_x + sg.x_offset as f32 * advance_scale;
+            let glyph_baseline = baseline_y - sg.y_offset as f32 * advance_scale;
+            if let Ok(Some(glyph)) = face.font.glyph_resolved(sg.glyph_id)
+                && let Some(bitmap) = rasterizer.rasterize(&glyph)
+                && blit_glyph_coverage(
+                    &mut mask,
+                    &bitmap,
+                    pen_x,
+                    glyph_baseline,
+                    clip,
+                    width,
+                    height,
+                )
+            {
+                any_coverage = true;
+            }
+            cursor_x += sg.x_advance as f32 * advance_scale;
         }
-        let advance = face.hmtx.advance_width(glyph_id).unwrap_or(0);
-        cursor_x += f32::from(advance) * advance_scale;
     }
 
     if !any_coverage {
