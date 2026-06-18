@@ -10,12 +10,22 @@
     LUMEN_PROFILE=dev-release python graphic_tests/run.py --build  # быстрая сборка (2–3× быстрее)
     python graphic_tests/run.py --no-cache          # принудительная пересъёмка Edge-скриншотов
     python graphic_tests/run.py --bisect 100        # юнит-зависимости interaction-теста + сам тест
+    python graphic_tests/run.py --ipc               # захват Lumen по IPC (CPU-снимок), без gdigrab (TAB-7)
 
 Workflow:
   1. Снимаем Edge headless + Lumen (gdigrab) для каждого теста по порядку.
   2. TEST-00 calibration: ищем магента-маркеры → определяем crop offset.
   3. Каждый следующий тест: кропаем Lumen по offset из калибровки, считаем diff с Edge.
   4. Первый тест с diff% > threshold останавливает пайплайн (если не --continue-on-fail).
+
+Режим --ipc (TAB-7): вместо окна Lumen + gdigrab контроллер один раз поднимает
+`lumen.exe --ipc-server` (TCP-сервер таб-команд), держит одну вкладку и шлёт на каждый
+тест NavigateTab + Screenshot — обратно приходит детерминированный CPU-снимок (PNG),
+который уже от (0,0), поэтому магента-калибровка/crop offset не нужны. Протокол —
+length-prefixed bincode (см. секцию «IPC client» ниже и crates/ipc/src/lib.rs).
+Edge-эталон, ffmpeg-crop и diff-метрика — те же. NB: CPU-бэкенд снимка пока не на
+паритете с femtovg по border-radius/gradients/images (BUG-221), поэтому --ipc
+опционален, а gdigrab остаётся дефолтным захватом.
 
 Результаты:
   graphic_tests/results/YYYYMMDD-HHMMSS.json — полные результаты прогона
@@ -33,9 +43,11 @@ import datetime
 import io
 import json
 import os
+import socket
 import struct
 import subprocess
 import sys
+import threading
 import time
 import zlib
 
@@ -378,6 +390,215 @@ def read_png(path: str) -> tuple[int, int, int, bytes]:
         prev = out
     return width, height, bpp, bytes(pixels)
 
+# --- IPC client (TAB-7): lumen.exe --ipc-server bincode protocol ---
+#
+# Заменяет gdigrab-захват детерминированным CPU-снимком по IPC. Шелл,
+# запущенный с `--ipc-server`, печатает `LUMEN_IPC_PORT=<port>` в stdout и
+# становится TCP-сервером таб-команд. Кадр кодируется тем же CPU-пайплайном,
+# что `--screenshot` — окно/wgpu/ffmpeg-grab не нужны, результат воспроизводим.
+#
+# Протокол (см. crates/ipc/src/lib.rs): каждое сообщение —
+#   [u32 LE body_len][body], body — bincode payload:
+#     enum variant tag = u32 LE; длины String/Vec = u64 LE; u32-поля = 4 байта LE.
+#
+# Индексы вариантов в объявлении enum (важно — соответствуют lumen_ipc):
+#   IpcRequest:  0 Fetch · 1 Ping · 2 Shutdown · 3 CreateTab · 4 CloseTab ·
+#                5 NavigateTab · 6 Screenshot
+#   IpcResponse: 0 FetchOk · 1 FetchErr · 2 Pong · 3 Shutdown · 4 TabCreated ·
+#                5 TabClosed · 6 Navigated · 7 Screenshot · 8 TabError
+
+_REQ_SHUTDOWN     = 2
+_REQ_CREATE_TAB   = 3
+_REQ_CLOSE_TAB    = 4
+_REQ_NAVIGATE_TAB = 5
+_REQ_SCREENSHOT   = 6
+
+_RESP_SHUTDOWN    = 3
+_RESP_TAB_CREATED = 4
+_RESP_TAB_CLOSED  = 5
+_RESP_NAVIGATED   = 6
+_RESP_SCREENSHOT  = 7
+_RESP_TAB_ERROR   = 8
+
+
+class IpcError(Exception):
+    """Сбой IPC-обмена с lumen --ipc-server (протокол, соединение или TabError)."""
+
+
+def _u32(v: int) -> bytes:
+    return struct.pack('<I', v)
+
+
+def _bstr(s: str) -> bytes:
+    """bincode String/Vec<u8>: u64 LE длина + UTF-8 байты."""
+    b = s.encode('utf-8')
+    return struct.pack('<Q', len(b)) + b
+
+
+class _Cursor:
+    """Курсор для декодирования bincode-тела ответа."""
+
+    def __init__(self, data: bytes) -> None:
+        self.d = data
+        self.p = 0
+
+    def _take(self, n: int) -> bytes:
+        b = self.d[self.p:self.p + n]
+        if len(b) != n:
+            raise IpcError('truncated IPC message body')
+        self.p += n
+        return b
+
+    def u32(self) -> int:
+        return struct.unpack('<I', self._take(4))[0]
+
+    def vec(self) -> bytes:
+        n = struct.unpack('<Q', self._take(8))[0]
+        return self._take(n)
+
+    def string(self) -> str:
+        return self.vec().decode('utf-8', 'replace')
+
+
+class LumenIpcClient:
+    """Клиент к `lumen.exe --ipc-server` (TAB-7).
+
+    Спавнит сервер, читает порт из stdout-строки `LUMEN_IPC_PORT=<port>`,
+    подключается по TCP loopback и шлёт length-prefixed bincode таб-команды.
+    Один фоновый поток дренирует остаток stdout, чтобы рендер-логи шелла не
+    забили пайп и не заблокировали процесс (как в crates/shell/tests/ipc_server.rs).
+    """
+
+    def __init__(self, lumen_path: str, cwd: str) -> None:
+        self.proc = subprocess.Popen(
+            [lumen_path, '--ipc-server'], cwd=cwd,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+        )
+        port: int | None = None
+        assert self.proc.stdout is not None
+        for _ in range(400):
+            line = self.proc.stdout.readline()
+            if not line:
+                break
+            line = line.strip()
+            if line.startswith('LUMEN_IPC_PORT='):
+                try:
+                    port = int(line.split('=', 1)[1])
+                except ValueError:
+                    port = None
+                break
+        if port is None:
+            self.proc.kill()
+            raise IpcError('lumen --ipc-server не напечатал LUMEN_IPC_PORT')
+        # Дренируем остаток stdout, иначе рендер-логи переполнят пайп → блок шелла.
+        threading.Thread(target=self._drain_stdout, daemon=True).start()
+        self.sock = socket.create_connection(('127.0.0.1', port), timeout=30)
+        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+    def _drain_stdout(self) -> None:
+        out = self.proc.stdout
+        if out is None:
+            return
+        try:
+            for _ in out:
+                pass
+        except Exception:
+            pass
+
+    def _send(self, payload: bytes) -> None:
+        self.sock.sendall(_u32(len(payload)) + payload)
+
+    def _read_exact(self, n: int) -> bytes:
+        buf = bytearray()
+        while len(buf) < n:
+            chunk = self.sock.recv(n - len(buf))
+            if not chunk:
+                raise IpcError('IPC соединение закрыто сервером')
+            buf += chunk
+        return bytes(buf)
+
+    def _recv(self) -> _Cursor:
+        body_len = struct.unpack('<I', self._read_exact(4))[0]
+        return _Cursor(self._read_exact(body_len))
+
+    def create_tab(self) -> int:
+        """CreateTab → id новой headless-вкладки."""
+        self._send(_u32(_REQ_CREATE_TAB))
+        c = self._recv()
+        tag = c.u32()
+        if tag != _RESP_TAB_CREATED:
+            raise IpcError(f'ожидался TabCreated, получен вариант {tag}')
+        return c.u32()
+
+    def navigate(self, tab_id: int, url: str) -> None:
+        """NavigateTab(url) — load + parse + layout вкладки."""
+        self._send(_u32(_REQ_NAVIGATE_TAB) + _u32(tab_id) + _bstr(url))
+        c = self._recv()
+        tag = c.u32()
+        if tag == _RESP_NAVIGATED:
+            return
+        if tag == _RESP_TAB_ERROR:
+            c.u32()
+            raise IpcError(f'NavigateTab: {c.string()}')
+        raise IpcError(f'ожидался Navigated, получен вариант {tag}')
+
+    def screenshot(self, tab_id: int) -> bytes:
+        """Screenshot → PNG-байты CPU-рендера вкладки."""
+        self._send(_u32(_REQ_SCREENSHOT) + _u32(tab_id))
+        c = self._recv()
+        tag = c.u32()
+        if tag == _RESP_SCREENSHOT:
+            c.u32()
+            return c.vec()
+        if tag == _RESP_TAB_ERROR:
+            c.u32()
+            raise IpcError(f'Screenshot: {c.string()}')
+        raise IpcError(f'ожидался Screenshot, получен вариант {tag}')
+
+    def close_tab(self, tab_id: int) -> None:
+        """CloseTab — best-effort, ошибки игнорируются."""
+        try:
+            self._send(_u32(_REQ_CLOSE_TAB) + _u32(tab_id))
+            self._recv()
+        except (IpcError, OSError):
+            pass
+
+    def shutdown(self) -> None:
+        """Shutdown сервера + закрытие сокета + ожидание выхода процесса."""
+        try:
+            self._send(_u32(_REQ_SHUTDOWN))
+            self._recv()
+        except (IpcError, OSError):
+            pass
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+        try:
+            self.proc.wait(timeout=5)
+        except Exception:
+            self.proc.kill()
+
+
+# Активный IPC-клиент и вкладка (заполняются в main при --ipc; иначе None).
+_IPC_CLIENT: LumenIpcClient | None = None
+_IPC_TAB: int = 0
+
+
+def ipc_capture_lumen(test_path: str, out_png: str) -> None:
+    """IPC-режим (TAB-7): навигация активной вкладки на тест + Screenshot → PNG-файл.
+
+    Заменяет gdigrab-захват: CPU-снимок детерминирован и начинается с (0,0),
+    поэтому магента-калибровка/crop offset не нужны.
+    """
+    assert _IPC_CLIENT is not None
+    abs_path = os.path.abspath(test_path)
+    _IPC_CLIENT.navigate(_IPC_TAB, abs_path)
+    png = _IPC_CLIENT.screenshot(_IPC_TAB)
+    with open(out_png, 'wb') as f:
+        f.write(png)
+
+
 # --- Window management ---
 
 def _bring_pid_to_front(pid: int) -> None:
@@ -620,24 +841,37 @@ def run_one(tid: str, html: str, threshold: float, label: str,
         return False, crop_offset, -1.0, None
 
     rel_html = os.path.relpath(test_path, REPO).replace('\\', '/')
-    capture_lumen(rel_html, lumen_raw)
-    if not os.path.exists(lumen_raw):
-        print(f'TEST-{tid}: FAIL (gdigrab screenshot missing)')
-        return False, crop_offset, -1.0, None
+    if _IPC_CLIENT is not None:
+        # IPC-режим (TAB-7): детерминированный CPU-снимок по TCP, без gdigrab.
+        try:
+            ipc_capture_lumen(test_path, lumen_raw)
+        except (IpcError, OSError) as e:
+            print(f'TEST-{tid}: ERROR (IPC: {e})', flush=True)
+            return False, crop_offset, -1.0, None
+        if not os.path.exists(lumen_raw):
+            print(f'TEST-{tid}: FAIL (IPC screenshot missing)')
+            return False, crop_offset, -1.0, None
+        # CPU-снимок уже от (0,0): магента-калибровка/crop offset не нужны.
+        crop_offset = (0, 0)
+    else:
+        capture_lumen(rel_html, lumen_raw)
+        if not os.path.exists(lumen_raw):
+            print(f'TEST-{tid}: FAIL (gdigrab screenshot missing)')
+            return False, crop_offset, -1.0, None
 
-    if tid == '00':
-        origin = find_marker_origin(lumen_raw)
-        if origin is None:
-            print(f'TEST-{tid}: FAIL (magenta marker not found)')
+        if tid == '00':
+            origin = find_marker_origin(lumen_raw)
+            if origin is None:
+                print(f'TEST-{tid}: FAIL (magenta marker not found)')
+                return False, None, -1.0, None
+            crop_offset = origin
+            _save_crop_offset(crop_offset)
+
+        if crop_offset is None:
+            crop_offset = _load_crop_offset()
+        if crop_offset is None:
+            print(f'TEST-{tid}: FAIL (no crop offset — run TEST-00 first)')
             return False, None, -1.0, None
-        crop_offset = origin
-        _save_crop_offset(crop_offset)
-
-    if crop_offset is None:
-        crop_offset = _load_crop_offset()
-    if crop_offset is None:
-        print(f'TEST-{tid}: FAIL (no crop offset — run TEST-00 first)')
-        return False, None, -1.0, None
 
     ffmpeg_crop(lumen_raw, lumen_crop, crop_offset[0], crop_offset[1])
     if os.path.exists(lumen_raw):
@@ -930,6 +1164,9 @@ def main() -> int:
                         help='Пересобрать lumen-shell перед запуском (профиль задаётся LUMEN_PROFILE=dev-release)')
     parser.add_argument('--no-cache', action='store_true',
                         help='Принудительная пересъёмка Edge-скриншотов (игнорировать кэш)')
+    parser.add_argument('--ipc', action='store_true',
+                        help='Захват Lumen через `--ipc-server` (детерминированный CPU-снимок по TCP) '
+                             'вместо gdigrab — без окна/ffmpeg-grab/магента-калибровки (TAB-7)')
     parser.add_argument('--bisect', metavar='ID',
                         help='Прогнать юнит-зависимости interaction-теста (DEPS), затем сам тест; '
                              'вердикт: сломано свойство или взаимодействие')
@@ -937,6 +1174,21 @@ def main() -> int:
 
     os.makedirs(SHOTS, exist_ok=True)
     ensure_lumen(force_build=args.build)
+
+    # IPC-режим (TAB-7): один раз поднимаем lumen --ipc-server, держим одну
+    # вкладку, навигируем её на каждый тест. Завершение — через atexit.
+    if args.ipc:
+        global _IPC_CLIENT, _IPC_TAB
+        print('IPC-режим: запуск lumen --ipc-server...')
+        try:
+            _IPC_CLIENT = LumenIpcClient(LUMEN, REPO)
+            _IPC_TAB = _IPC_CLIENT.create_tab()
+        except (IpcError, OSError) as e:
+            print(f'Не удалось запустить IPC-сервер: {e}')
+            return 2
+        import atexit
+        atexit.register(_IPC_CLIENT.shutdown)
+        print(f'IPC-сервер готов (вкладка {_IPC_TAB}); gdigrab/магента-калибровка отключены.')
 
     crop_offset: tuple[int, int] | None = None
     results: list[dict] = []
