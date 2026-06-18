@@ -14416,9 +14416,11 @@ mod tests {
     #[test]
     fn multicol_column_count_divides_width() {
         // column-count: 3 + column-gap: 10px → each column = (300 - 20) / 3 = 93.33px.
+        // Three equal 30px boxes (total 90px) balance into 3 columns of 30px each,
+        // so each box maps cleanly to one column fragment.
         let root = lay_measured(
             "<div id='c'><div></div><div></div><div></div></div>",
-            "#c { width: 300px; column-count: 3; column-gap: 10px; }",
+            "#c { width: 300px; column-count: 3; column-gap: 10px; } #c div { height: 30px; }",
             800.0,
         );
         let container = first_element_child(&root);
@@ -14466,9 +14468,10 @@ mod tests {
             800.0,
         );
         let container = first_element_child(&root);
-        // Find the span-all child by height (10px).
+        // Find the span-all child by its full container width (300px) — column
+        // fragments of #a/#b are col_w wide, only the spanner spans the full width.
         let span_child = container.children.iter()
-            .find(|c| (c.rect.height - 10.0).abs() < 1.0)
+            .find(|c| (c.rect.width - 300.0).abs() < 1.0)
             .expect("span-all child not found");
         // Span-all element must cover the full container width (300px).
         assert!(
@@ -14498,28 +14501,33 @@ mod tests {
             800.0,
         );
         let container = first_element_child(&root);
+        // Spanner is the only full-width (300px) child; #b becomes column fragments.
         let span_child = container.children.iter()
-            .find(|c| (c.rect.height - 15.0).abs() < 1.0)
+            .find(|c| (c.rect.width - 300.0).abs() < 1.0)
             .expect("span-all child not found");
-        let after_child = container.children.iter()
-            .find(|c| (c.rect.height - 20.0).abs() < 1.0)
-            .expect("child after span not found");
-        // Child after span must be below the span-all element.
-        assert!(
-            after_child.rect.y >= span_child.rect.y + span_child.rect.height,
-            "after_child.y={} must be >= span bottom={}",
-            after_child.rect.y,
-            span_child.rect.y + span_child.rect.height
-        );
+        let span_bottom = span_child.rect.y + span_child.rect.height;
+        // Every column fragment of #b (the non-span children) must be below the spanner.
+        let after_children: Vec<&LayoutBox> = container.children.iter()
+            .filter(|c| (c.rect.width - 300.0).abs() >= 1.0 && c.rect.height > 0.0)
+            .collect();
+        assert!(!after_children.is_empty(), "expected #b column fragments below span");
+        for after_child in after_children {
+            assert!(
+                after_child.rect.y >= span_bottom,
+                "after_child.y={} must be >= span bottom={}",
+                after_child.rect.y,
+                span_bottom
+            );
+        }
     }
 
     #[test]
     fn multicol_column_fill_auto_sequential() {
         // column-fill: auto — each column is filled up to the container height before
         // spilling to the next column, rather than distributing content evenly.
-        // With height:40px and 3 children of 15px each, the per_col_cap=2 guard ensures
-        // col0 holds 2 children (30px, fits in 40px) and col1 holds the third.
-        // The x-position of the third child must equal col1_x = content_x + col_w.
+        // 3 children of 15px each (total 45px) in a 40px-tall container: col0 fills to
+        // 40px (the first two boxes + the top 10px of the third), and the third box's
+        // remaining 5px spills into col1 (CSS Multicol §3.4 fragmentation).
         let root = lay_measured(
             "<div id='c'><div id='a'></div><div id='b'></div><div id='d'></div></div>",
             "#c { width: 300px; column-count: 2; column-gap: 0px; height: 40px; column-fill: auto; } \
@@ -14527,21 +14535,58 @@ mod tests {
             800.0,
         );
         let container = first_element_child(&root);
-        assert_eq!(container.children.len(), 3, "expected 3 column children");
-        let ch0 = &container.children[0];
-        let ch1 = &container.children[1];
-        let ch2 = &container.children[2];
-        // col_w = 300 / 2 = 150. col1 starts at content_x + 150.
-        // With per_col_cap=2: ch0 and ch1 go to col0, ch2 overflows to col1.
+        let frags: Vec<&LayoutBox> = container.children.iter()
+            .filter(|c| c.rect.height > 0.0)
+            .collect();
+        // col_w = 300 / 2 = 150. col0 at content_x, col1 at content_x + 150.
+        let col0_x = frags.iter().map(|c| c.rect.x).fold(f32::INFINITY, f32::min);
+        // col0 must be filled all the way to the container height before col1 is used.
+        let col0_bottom = frags.iter()
+            .filter(|c| (c.rect.x - col0_x).abs() < 1.0)
+            .map(|c| c.rect.y + c.rect.height)
+            .fold(0.0f32, f32::max);
         assert!(
-            (ch0.rect.x - ch1.rect.x).abs() < 1.0,
-            "ch0 and ch1 should share col0 (x0={}, x1={})",
-            ch0.rect.x, ch1.rect.x
+            (col0_bottom - 40.0).abs() < 1.0,
+            "col0 must fill to container height 40 before spilling (col0_bottom={col0_bottom})"
         );
+        // The spillover fragment must exist in col1 (x = content_x + 150).
         assert!(
-            ch2.rect.x > ch0.rect.x + 1.0,
-            "ch2 should be in col1 (x2={} vs x0={})",
-            ch2.rect.x, ch0.rect.x
+            frags.iter().any(|c| c.rect.x > col0_x + 100.0),
+            "expected a spillover fragment in col1 (col0_x={col0_x})"
+        );
+    }
+
+    #[test]
+    fn multicol_balance_fragments_boxes_across_columns() {
+        // Regression (BUG-186, TEST-33 case 5): two 36px background boxes in a
+        // 3-column balance container fragment into three 24px column slices
+        // (total 72 / 3 = 24), matching Edge — not one atomic box per column with
+        // an empty third column. The container height collapses to 24px.
+        let root = lay_measured(
+            "<div id='c'><div></div><div></div></div>",
+            "#c { width: 660px; column-count: 3; column-gap: 12px; } #c div { height: 36px; }",
+            800.0,
+        );
+        let container = first_element_child(&root);
+        // col_w = (660 - 24) / 3 = 212.
+        let frags: Vec<&LayoutBox> = container.children.iter()
+            .filter(|c| c.rect.height > 0.0)
+            .collect();
+        // Every fragment is at most one column tall (24px), never a whole 36px box.
+        for f in &frags {
+            assert!(f.rect.height <= 24.0 + 0.5, "fragment too tall: {}", f.rect.height);
+            assert!((f.rect.width - 212.0).abs() < 0.5, "fragment width={}", f.rect.width);
+        }
+        // All three columns receive content (distinct x positions).
+        let mut xs: Vec<f32> = frags.iter().map(|f| f.rect.x).collect();
+        xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        xs.dedup_by(|a, b| (*a - *b).abs() < 1.0);
+        assert_eq!(xs.len(), 3, "all 3 columns should hold a fragment, got xs={xs:?}");
+        // Container content height = balanced column height = 24px.
+        assert!(
+            (container.rect.height - 24.0).abs() < 1.0,
+            "container height={} should be 24px",
+            container.rect.height
         );
     }
 
