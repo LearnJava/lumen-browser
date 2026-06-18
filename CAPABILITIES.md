@@ -169,7 +169,7 @@ Modern ES (ES2020+: classes, async/await, generators, Promise, Proxy, BigInt, mo
 
 **Lifecycle/Performance** — ✅ tab tiers (T1 active / T2 background-old / T3 hibernated, badges), restore spinner + sleep hints, cross-restart session persist, `content-visibility: auto` ratchet, persistent QuickJS (timers/observers/navigation under `--features quickjs`), memory-pressure poll + GC tick, download manager, OS notifications, system-font fallback chain.
 
-**Automation surfaces** — ✅ `--devtools-port` (CDP), `--bidi-port` (in-shell BiDi stub), headless `--dump-source`/`--dump-layout`/`--dump-display-list`. ⬜ headless PNG pixel-dump from shell (use driver CPU snapshot).
+**Automation surfaces** — ✅ `--devtools-port` (CDP), `--bidi-port` (in-shell BiDi stub), headless `--dump-source`/`--dump-layout`/`--dump-display-list`, **`--screenshot <out.png> <url>`** (full-page deterministic CPU snapshot via `cpu-render`, no window/Edge/ffmpeg), `--print-to-pdf`.
 
 ### lumen-driver (`crates/driver`) — headless engine interface
 - ✅ `BrowserSession` trait: 6 resources (screenshot/a11y_tree/layout/computed_style/network_log/console_log) + 6 tools (navigate/click/type/scroll/wait/eval/query); `InProcessSession` full headless pipeline; simple selector engine (tag/#id/.class); deterministic CPU snapshot (`screenshot_cpu_rgba/png`, cross-OS-identical, 57-page gate).
