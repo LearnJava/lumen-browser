@@ -28,8 +28,20 @@ pub fn install_webcodecs_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
                 this.name = 'OperationError';
             }
         }
+        // Referenced by encode()/decode() when the codec is not configured.
+        // Defined here so a not-configured call throws a real InvalidStateError
+        // (per spec) rather than a ReferenceError.
+        class InvalidStateError extends DOMException {
+            constructor(message = '') {
+                super(message, 'InvalidStateError');
+                this.name = 'InvalidStateError';
+            }
+        }
         globalThis.NotSupportedError = NotSupportedError;
         globalThis.OperationError = OperationError;
+        if (typeof globalThis.InvalidStateError === 'undefined') {
+            globalThis.InvalidStateError = InvalidStateError;
+        }
     "#;
     ctx.eval::<(), _>(error_shim)?;
 
@@ -42,7 +54,17 @@ pub fn install_webcodecs_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
                 this._state = 'unconfigured';
             }
             configure(config) {
-                throw new NotSupportedError('VideoEncoder: no codec support in Phase 0');
+                // Phase 0 has no codec backend. Per the WebCodecs spec, an
+                // unsupported configuration is reported asynchronously through
+                // the error callback — NOT a synchronous throw (which crashes
+                // SPAs that don't wrap configure() in try/catch).
+                this._state = 'configured';
+                var err = this._error;
+                if (typeof err === 'function') {
+                    Promise.resolve().then(function() {
+                        err(new NotSupportedError('VideoEncoder: codec not supported'));
+                    });
+                }
             }
             encode(frame, options) {
                 if (this._state === 'unconfigured') {
@@ -70,7 +92,14 @@ pub fn install_webcodecs_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
                 this._state = 'unconfigured';
             }
             configure(config) {
-                throw new NotSupportedError('VideoDecoder: no codec support in Phase 0');
+                // See VideoEncoder.configure — report unsupported async, no throw.
+                this._state = 'configured';
+                var err = this._error;
+                if (typeof err === 'function') {
+                    Promise.resolve().then(function() {
+                        err(new NotSupportedError('VideoDecoder: codec not supported'));
+                    });
+                }
             }
             decode(chunk) {
                 if (this._state === 'unconfigured') {
@@ -98,7 +127,14 @@ pub fn install_webcodecs_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
                 this._state = 'unconfigured';
             }
             configure(config) {
-                throw new NotSupportedError('AudioEncoder: no codec support in Phase 0');
+                // See VideoEncoder.configure — report unsupported async, no throw.
+                this._state = 'configured';
+                var err = this._error;
+                if (typeof err === 'function') {
+                    Promise.resolve().then(function() {
+                        err(new NotSupportedError('AudioEncoder: codec not supported'));
+                    });
+                }
             }
             encode(data) {
                 if (this._state === 'unconfigured') {
@@ -126,7 +162,14 @@ pub fn install_webcodecs_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
                 this._state = 'unconfigured';
             }
             configure(config) {
-                throw new NotSupportedError('AudioDecoder: no codec support in Phase 0');
+                // See VideoEncoder.configure — report unsupported async, no throw.
+                this._state = 'configured';
+                var err = this._error;
+                if (typeof err === 'function') {
+                    Promise.resolve().then(function() {
+                        err(new NotSupportedError('AudioDecoder: codec not supported'));
+                    });
+                }
             }
             decode(chunk) {
                 if (this._state === 'unconfigured') {
@@ -311,16 +354,39 @@ mod tests {
     }
 
     #[test]
-    fn video_encoder_configure_throws() {
+    fn video_encoder_configure_does_not_throw() {
+        // Graceful degradation (U-4 stage 2): configure() must NOT throw
+        // synchronously — unsupported codecs are reported via the async error
+        // callback so SPAs don't white-screen. Feature detection still works
+        // through isConfigSupported() → false.
         let runtime = Runtime::new().unwrap();
         let ctx = Context::full(&runtime).unwrap();
         ctx.with(|ctx| {
             super::install_webcodecs_bindings(&ctx).unwrap();
-            let result: Result<(), _> = ctx.eval(r#"
-                const enc = new VideoEncoder(null, null);
+            let state: String = ctx
+                .eval(
+                    r#"
+                const enc = new VideoEncoder(function(){}, function(){});
                 enc.configure({codec: 'vp9'});
-            "#);
-            assert!(result.is_err());
+                enc._state
+            "#,
+                )
+                .unwrap();
+            assert_eq!(state, "configured");
+        });
+    }
+
+    #[test]
+    fn is_config_supported_resolves_false() {
+        let runtime = Runtime::new().unwrap();
+        let ctx = Context::full(&runtime).unwrap();
+        ctx.with(|ctx| {
+            super::install_webcodecs_bindings(&ctx).unwrap();
+            // The promise should resolve (not reject); feature detection path.
+            let is_promise: bool = ctx
+                .eval("VideoEncoder.isConfigSupported({codec:'vp9'}) instanceof Promise")
+                .unwrap();
+            assert!(is_promise);
         });
     }
 }
