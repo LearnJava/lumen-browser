@@ -199,7 +199,7 @@
 | [BUG-183](bugs/BUG-183-FIXED.md) | FIXED 2026-06-17 | paint | `mask-image` gradient mask not implemented — TEST-26: 17.74% → 5.02% (остаток BUG-218 mask-mode:luminance) |
 | [BUG-184](bugs/BUG-184-OPEN.md) | OPEN | paint | `clip-path` deviation — TEST-31: 0.59% |
 | [BUG-185](bugs/BUG-185-OPEN.md) | OPEN | layout/paint | list `::marker` geometry deviation — TEST-32: 3.75% |
-| [BUG-186](bugs/BUG-186-OPEN.md) | OPEN | layout | `multi-column` layout not implemented — TEST-33: 14.89% |
+| [BUG-186](bugs/BUG-186-FIXED.md) | FIXED 2026-06-18 | layout | `multi-column` column fragmentation — TEST-33: 14.89% → 0.12% PASS |
 | [BUG-187](bugs/BUG-187-OPEN.md) | OPEN | paint | form controls static rendering deviation — TEST-34: 4.78% |
 | [BUG-188](bugs/BUG-188-OPEN.md) | OPEN | layout/paint | individual `translate`/`rotate`/`scale` transforms deviation — TEST-46: 4.63% |
 | [BUG-189](bugs/BUG-189-OPEN.md) | OPEN | paint | SVG basic shapes deviation — TEST-47: 3.71% |

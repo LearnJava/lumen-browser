@@ -6756,9 +6756,25 @@ fn compute_table_col_widths(
 /// `container_h` is the resolved content-box height of the multi-column container, used
 /// by `column-fill: auto` to fill columns sequentially up to that height instead of
 /// balancing content equally across all columns.
+/// CSS Multi-column L1 §3.4 — true column fragmentation breaks block content
+/// across columns. Lumen approximates this by geometrically slicing a box into
+/// per-column pieces (see `lay_out_multicol_children`). That is only visually
+/// faithful for a "simple" box: a leaf block whose paint is a flat fill
+/// (background-color) — no children or text that a slice would duplicate, no
+/// border whose cut edge would show. Anything else keeps the atomic
+/// one-box-per-column placement.
+fn box_is_column_sliceable(b: &LayoutBox) -> bool {
+    matches!(b.kind, BoxKind::Block)
+        && b.children.is_empty()
+        && b.style.border_top_width == 0.0
+        && b.style.border_bottom_width == 0.0
+        && b.style.border_left_width == 0.0
+        && b.style.border_right_width == 0.0
+}
+
 #[allow(clippy::too_many_arguments)]
 fn lay_out_multicol_children(
-    children: &mut [LayoutBox],
+    children: &mut Vec<LayoutBox>,
     content_x: f32,
     content_y: f32,
     content_width: f32,
@@ -6802,8 +6818,12 @@ fn lay_out_multicol_children(
     // When no container height is known, auto behaves like balance.
     let balance = s.column_fill_balance || container_h.is_none();
 
+    // Move children out so the slice path can replace whole boxes with multiple
+    // per-column fragment clones (the box count changes), then rebuild `children`.
+    let mut work = std::mem::take(children);
+
     // Collect flow (non-abs, non-skip) child indices.
-    let flow_idxs: Vec<usize> = children
+    let flow_idxs: Vec<usize> = work
         .iter()
         .enumerate()
         .filter(|(_, c)| !matches!(c.style.position, Position::Absolute | Position::Fixed))
@@ -6812,6 +6832,7 @@ fn lay_out_multicol_children(
         .collect();
 
     if flow_idxs.is_empty() {
+        *children = work;
         return 0.0;
     }
 
@@ -6820,7 +6841,7 @@ fn lay_out_multicol_children(
     let mut segments: Vec<(Vec<usize>, Option<usize>)> = Vec::new();
     let mut seg: Vec<usize> = Vec::new();
     for &i in &flow_idxs {
-        if children[i].style.column_span_all {
+        if work[i].style.column_span_all {
             segments.push((std::mem::take(&mut seg), Some(i)));
         } else {
             seg.push(i);
@@ -6829,17 +6850,22 @@ fn lay_out_multicol_children(
     segments.push((seg, None));
 
     let mut cur_y = content_y;
+    // Boxes placed into the rebuilt child list. Fragment clones (slice path) and
+    // positioned originals (atomic / span path) are pushed here in turn; any box
+    // not consumed (absolute / Skip placeholders) is appended unchanged at the end.
+    let mut out: Vec<LayoutBox> = Vec::with_capacity(work.len());
+    let mut consumed = vec![false; work.len()];
 
     for (seg_idxs, span_idx) in &segments {
         if !seg_idxs.is_empty() {
             // First pass at (0, 0) to measure intrinsic heights.
             for &i in seg_idxs {
-                lay_out(&mut children[i], 0.0, 0.0, col_w, None, measurer, viewport, pcb, hp, false);
+                lay_out(&mut work[i], 0.0, 0.0, col_w, None, measurer, viewport, pcb, hp, false);
             }
 
             // Outer height of each segment child = margin_top + rect.height + margin_bottom.
             let outer_hs: Vec<f32> = seg_idxs.iter().map(|&i| {
-                let c = &children[i];
+                let c = &work[i];
                 let mt = c.style.margin_top.resolve_or_zero(c.style.font_size, col_w, viewport);
                 let mb = c.style.margin_bottom.resolve_or_zero(c.style.font_size, col_w, viewport);
                 mt + c.rect.height + mb
@@ -6847,60 +6873,124 @@ fn lay_out_multicol_children(
 
             let total_h: f32 = outer_hs.iter().sum();
 
-            // column-fill: auto → fill each column to container_h; balance → equal split.
-            let target_h = if balance {
-                (total_h / n_cols as f32).ceil().max(1.0)
-            } else {
-                container_h.unwrap_or_else(|| (total_h / n_cols as f32).ceil()).max(1.0)
-            };
-            // Count-based per-column cap prevents starvation when content heights are
-            // equal — but only in balance mode. column-fill:auto fills purely by height
-            // (a column may hold many short items), so the count cap must not apply there.
-            let per_col_cap = seg_idxs.len().div_ceil(n_cols as usize);
+            // CSS Multicol §3.4: when every box can be safely sliced, fragment the
+            // segment's content across all columns by height (this is what browsers
+            // do — a tall empty block spills from one column into the next). The
+            // balanced column height is total/n_cols; column-fill:auto fills each
+            // column to the container height instead.
+            let all_sliceable =
+                n_cols > 1 && seg_idxs.iter().all(|&i| box_is_column_sliceable(&work[i]));
 
-            // Greedy column assignment (height + count guard).
-            let mut col_assignment = vec![0usize; seg_idxs.len()];
-            let mut col_fill = vec![0.0f32; n_cols as usize];
-            let mut col_count = vec![0usize; n_cols as usize];
-            let mut cur_col = 0usize;
-            for (j, &oh) in outer_hs.iter().enumerate() {
-                let height_overflow = col_fill[cur_col] + oh > target_h && oh > 0.0;
-                let count_overflow = balance && col_count[cur_col] >= per_col_cap;
-                // Never advance past an empty column: a column must hold at least one item
-                // before overflowing to the next, otherwise an item taller than target_h
-                // would skip column 0 and leave it blank (CSS Multicol §3.4 — every column
-                // box is filled in order, starting from the first).
-                let col_nonempty = col_count[cur_col] > 0;
-                if cur_col + 1 < n_cols as usize && col_nonempty && (height_overflow || count_overflow) {
-                    cur_col += 1;
+            if all_sliceable {
+                let col_h = if balance {
+                    (total_h / n_cols as f32).ceil().max(1.0)
+                } else {
+                    container_h.unwrap_or_else(|| (total_h / n_cols as f32).ceil()).max(1.0)
+                };
+
+                // Virtual single-column stack: each box's border-box occupies
+                // [virtual_top, virtual_top + height), with margins as gaps.
+                let mut stack: Vec<(usize, f32, f32)> = Vec::with_capacity(seg_idxs.len());
+                let mut v = 0.0f32;
+                for (&i, &oh) in seg_idxs.iter().zip(outer_hs.iter()) {
+                    let mt = work[i].style.margin_top
+                        .resolve_or_zero(work[i].style.font_size, col_w, viewport);
+                    stack.push((i, v + mt, work[i].rect.height));
+                    v += oh;
                 }
-                col_assignment[j] = cur_col;
-                col_fill[cur_col] += oh;
-                col_count[cur_col] += 1;
-            }
 
-            // Second pass: final positioning.
-            let mut col_y = vec![cur_y; n_cols as usize];
-            for (j, &i) in seg_idxs.iter().enumerate() {
-                let col = col_assignment[j];
-                let col_x = content_x + col as f32 * (col_w + col_gap);
-                lay_out(&mut children[i], col_x, col_y[col], col_w, None, measurer, viewport, pcb, hp, false);
-                let mb = children[i].style.margin_bottom
-                    .resolve_or_zero(children[i].style.font_size, col_w, viewport);
-                col_y[col] = children[i].rect.y + children[i].rect.height + mb;
-            }
+                // Emit one clipped fragment per (column, box) overlap.
+                let mut seg_extent = 0.0f32;
+                for c in 0..n_cols as usize {
+                    let col_lo = c as f32 * col_h;
+                    let col_hi = col_lo + col_h;
+                    let col_x = content_x + c as f32 * (col_w + col_gap);
+                    for &(i, bt, bh) in &stack {
+                        let bb = bt + bh;
+                        let ov_lo = bt.max(col_lo);
+                        let ov_hi = bb.min(col_hi);
+                        if ov_hi > ov_lo {
+                            let mut frag = work[i].clone();
+                            frag.rect.x = col_x;
+                            frag.rect.y = cur_y + (ov_lo - col_lo);
+                            frag.rect.width = col_w;
+                            frag.rect.height = ov_hi - ov_lo;
+                            seg_extent = seg_extent.max(ov_hi - col_lo);
+                            out.push(frag);
+                        }
+                    }
+                }
+                for &i in seg_idxs {
+                    consumed[i] = true;
+                }
+                cur_y += seg_extent.max(0.0);
+            } else {
+                // Atomic fallback: place each whole box into a column (greedy by height).
+                let target_h = if balance {
+                    (total_h / n_cols as f32).ceil().max(1.0)
+                } else {
+                    container_h.unwrap_or_else(|| (total_h / n_cols as f32).ceil()).max(1.0)
+                };
+                // Count-based per-column cap prevents starvation when content heights are
+                // equal — but only in balance mode. column-fill:auto fills purely by height
+                // (a column may hold many short items), so the count cap must not apply there.
+                let per_col_cap = seg_idxs.len().div_ceil(n_cols as usize);
 
-            cur_y = col_y.into_iter().fold(cur_y, f32::max);
+                let mut col_assignment = vec![0usize; seg_idxs.len()];
+                let mut col_fill = vec![0.0f32; n_cols as usize];
+                let mut col_count = vec![0usize; n_cols as usize];
+                let mut cur_col = 0usize;
+                for (j, &oh) in outer_hs.iter().enumerate() {
+                    let height_overflow = col_fill[cur_col] + oh > target_h && oh > 0.0;
+                    let count_overflow = balance && col_count[cur_col] >= per_col_cap;
+                    // Never advance past an empty column: a column must hold at least one item
+                    // before overflowing to the next, otherwise an item taller than target_h
+                    // would skip column 0 and leave it blank (CSS Multicol §3.4 — every column
+                    // box is filled in order, starting from the first).
+                    let col_nonempty = col_count[cur_col] > 0;
+                    if cur_col + 1 < n_cols as usize && col_nonempty && (height_overflow || count_overflow) {
+                        cur_col += 1;
+                    }
+                    col_assignment[j] = cur_col;
+                    col_fill[cur_col] += oh;
+                    col_count[cur_col] += 1;
+                }
+
+                // Final positioning.
+                let mut col_y = vec![cur_y; n_cols as usize];
+                for (j, &i) in seg_idxs.iter().enumerate() {
+                    let col = col_assignment[j];
+                    let col_x = content_x + col as f32 * (col_w + col_gap);
+                    lay_out(&mut work[i], col_x, col_y[col], col_w, None, measurer, viewport, pcb, hp, false);
+                    let mb = work[i].style.margin_bottom
+                        .resolve_or_zero(work[i].style.font_size, col_w, viewport);
+                    col_y[col] = work[i].rect.y + work[i].rect.height + mb;
+                    out.push(work[i].clone());
+                    consumed[i] = true;
+                }
+
+                cur_y = col_y.into_iter().fold(cur_y, f32::max);
+            }
         }
 
         // column-span: all — element spans the full column container width.
         if let Some(span_i) = *span_idx {
-            lay_out(&mut children[span_i], content_x, cur_y, content_width, None, measurer, viewport, pcb, hp, false);
-            let mb = children[span_i].style.margin_bottom
-                .resolve_or_zero(children[span_i].style.font_size, content_width, viewport);
-            cur_y = children[span_i].rect.y + children[span_i].rect.height + mb;
+            lay_out(&mut work[span_i], content_x, cur_y, content_width, None, measurer, viewport, pcb, hp, false);
+            let mb = work[span_i].style.margin_bottom
+                .resolve_or_zero(work[span_i].style.font_size, content_width, viewport);
+            cur_y = work[span_i].rect.y + work[span_i].rect.height + mb;
+            out.push(work[span_i].clone());
+            consumed[span_i] = true;
         }
     }
+
+    // Preserve any non-flow boxes (absolute/fixed, Skip placeholders) unchanged.
+    for (i, b) in work.into_iter().enumerate() {
+        if !consumed[i] {
+            out.push(b);
+        }
+    }
+    *children = out;
 
     cur_y - content_y
 }
