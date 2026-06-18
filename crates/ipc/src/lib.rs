@@ -9,6 +9,15 @@
 //! ```
 //!
 //! Phase 1: single synchronous connection, one in-flight request at a time.
+//!
+//! Two roles share this framing layer:
+//! - **Network service** (PH1-4): the network process is the TCP server, the
+//!   shell is the client; messages are `Fetch`/`Ping`/`Shutdown`.
+//! - **Tab control channel** (TAB-4/TAB-5): the shell, started with
+//!   `--ipc-server`, is the TCP server; an external controller (e.g.
+//!   `graphic_tests/run.py`) is the client and drives tabs via `CreateTab` /
+//!   `NavigateTab` / `Screenshot` / `CloseTab`. This lets the controller open
+//!   the browser once and pull PNGs over IPC instead of gdigrab/ffmpeg.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -19,7 +28,18 @@ use lumen_core::error::{Error, Result};
 
 // ── Message types ────────────────────────────────────────────────────────────
 
-/// A request sent from the shell to the network service.
+/// Identifier for a tab in the shell's `--ipc-server` control channel (TAB-4).
+///
+/// Assigned by the shell when it replies to `CreateTab`; the controller echoes
+/// it back on every subsequent per-tab command. Monotonic, never reused within
+/// a server lifetime.
+pub type TabId = u32;
+
+/// A request sent over an IPC channel.
+///
+/// `Fetch`/`Ping`/`Shutdown` are used by the network-service channel; the
+/// `*Tab`/`Screenshot` variants are used by the shell's `--ipc-server` tab
+/// control channel (TAB-4).
 #[derive(Debug, Serialize, Deserialize)]
 pub enum IpcRequest {
     /// Fetch a URL and return the response body.
@@ -28,9 +48,31 @@ pub enum IpcRequest {
     Ping,
     /// Orderly shutdown — service exits after sending `IpcResponse::Shutdown`.
     Shutdown,
+    /// TAB-4: allocate a new headless tab. Reply: `TabCreated { tab_id }`.
+    CreateTab,
+    /// TAB-4: close the tab `tab_id`. Reply: `TabClosed { tab_id }` (or
+    /// `TabError` if the id is unknown).
+    CloseTab {
+        /// Tab to close.
+        tab_id: TabId,
+    },
+    /// TAB-4: navigate `tab_id` to `url` (load + parse + layout). Reply:
+    /// `Navigated { tab_id }` once the page is ready to be screenshotted.
+    NavigateTab {
+        /// Tab to navigate.
+        tab_id: TabId,
+        /// Absolute URL or local file path to load.
+        url: String,
+    },
+    /// TAB-5: render `tab_id` offscreen (CPU path) and return a PNG. Reply:
+    /// `Screenshot { tab_id, png }`.
+    Screenshot {
+        /// Tab to render.
+        tab_id: TabId,
+    },
 }
 
-/// A response from the network service back to the shell.
+/// A response sent back over an IPC channel.
 #[derive(Debug, Serialize, Deserialize)]
 pub enum IpcResponse {
     /// Successful fetch — body bytes of the HTTP response.
@@ -41,6 +83,35 @@ pub enum IpcResponse {
     Pong,
     /// Acknowledgement of `IpcRequest::Shutdown` before the service exits.
     Shutdown,
+    /// TAB-4: reply to `CreateTab` — the freshly allocated tab id.
+    TabCreated {
+        /// Id of the new tab.
+        tab_id: TabId,
+    },
+    /// TAB-4: reply to `CloseTab`.
+    TabClosed {
+        /// Id of the closed tab.
+        tab_id: TabId,
+    },
+    /// TAB-4: reply to `NavigateTab` once the page has been loaded + laid out.
+    Navigated {
+        /// Id of the navigated tab.
+        tab_id: TabId,
+    },
+    /// TAB-5: reply to `Screenshot` — PNG-encoded RGBA8 render of the tab.
+    Screenshot {
+        /// Id of the rendered tab.
+        tab_id: TabId,
+        /// PNG bytes (RGBA8).
+        png: Vec<u8>,
+    },
+    /// TAB-4: a per-tab command failed (unknown id, load/render error, …).
+    TabError {
+        /// Tab the failing command referenced.
+        tab_id: TabId,
+        /// Human-readable failure reason.
+        message: String,
+    },
 }
 
 /// Parameters for a fetch request (Phase 1: GET-only, no custom headers/body).
@@ -338,6 +409,74 @@ mod tests {
         } else {
             panic!("expected FetchOk");
         }
+
+        server_thread.join().unwrap();
+    }
+
+    /// TAB-4: drive a full create → navigate → screenshot → close sequence
+    /// through the framing layer with the shell acting as TCP server.
+    #[test]
+    fn test_tab_control_round_trip() {
+        let (server, port) = IpcServer::bind().unwrap();
+        let png_bytes = vec![0x89, b'P', b'N', b'G', 1, 2, 3, 4];
+        let expected_png = png_bytes.clone();
+
+        let server_thread = std::thread::spawn(move || {
+            let mut ch = server.accept().unwrap();
+            // CreateTab → TabCreated { 7 }
+            assert!(matches!(ch.recv::<IpcRequest>().unwrap(), IpcRequest::CreateTab));
+            ch.send(&IpcResponse::TabCreated { tab_id: 7 }).unwrap();
+            // NavigateTab → Navigated
+            match ch.recv::<IpcRequest>().unwrap() {
+                IpcRequest::NavigateTab { tab_id, url } => {
+                    assert_eq!(tab_id, 7);
+                    assert_eq!(url, "https://example.com/");
+                    ch.send(&IpcResponse::Navigated { tab_id }).unwrap();
+                }
+                other => panic!("expected NavigateTab, got {other:?}"),
+            }
+            // Screenshot → Screenshot { png }
+            match ch.recv::<IpcRequest>().unwrap() {
+                IpcRequest::Screenshot { tab_id } => {
+                    assert_eq!(tab_id, 7);
+                    ch.send(&IpcResponse::Screenshot { tab_id, png: png_bytes })
+                        .unwrap();
+                }
+                other => panic!("expected Screenshot, got {other:?}"),
+            }
+            // CloseTab → TabClosed
+            match ch.recv::<IpcRequest>().unwrap() {
+                IpcRequest::CloseTab { tab_id } => {
+                    assert_eq!(tab_id, 7);
+                    ch.send(&IpcResponse::TabClosed { tab_id }).unwrap();
+                }
+                other => panic!("expected CloseTab, got {other:?}"),
+            }
+        });
+
+        let mut client = IpcClient::connect(port).unwrap();
+        let tab_id = match client.request(&IpcRequest::CreateTab).unwrap() {
+            IpcResponse::TabCreated { tab_id } => tab_id,
+            other => panic!("expected TabCreated, got {other:?}"),
+        };
+        assert_eq!(tab_id, 7);
+        assert!(matches!(
+            client
+                .request(&IpcRequest::NavigateTab {
+                    tab_id,
+                    url: "https://example.com/".into(),
+                })
+                .unwrap(),
+            IpcResponse::Navigated { tab_id: 7 }
+        ));
+        match client.request(&IpcRequest::Screenshot { tab_id }).unwrap() {
+            IpcResponse::Screenshot { tab_id: 7, png } => assert_eq!(png, expected_png),
+            other => panic!("expected Screenshot, got {other:?}"),
+        }
+        assert!(matches!(
+            client.request(&IpcRequest::CloseTab { tab_id }).unwrap(),
+            IpcResponse::TabClosed { tab_id: 7 }
+        ));
 
         server_thread.join().unwrap();
     }

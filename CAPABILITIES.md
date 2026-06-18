@@ -136,7 +136,8 @@ Modern ES (ES2020+: classes, async/await, generators, Promise, Proxy, BigInt, mo
 
 ### lumen-ipc (`crates/ipc`)
 - ✅ Length-prefixed bincode over TCP loopback; `IpcChannel/Server/Client` blocking RPC; messages `Fetch/Ping/Shutdown`; powers out-of-process network service (`--network-service`).
-- ⬜ Fetch is GET-only (no full method/headers/body yet).
+- ✅ Tab control channel (TAB-4/5): `CreateTab/NavigateTab/Screenshot/CloseTab` + `TabId`; shell `--ipc-server` is the TCP server, an external controller drives headless tabs and pulls deterministic CPU-rendered PNGs over IPC (no window/gdigrab/ffmpeg).
+- ⬜ Fetch is GET-only (no full method/headers/body yet). Tab control is single-client sequential (no multiplexing).
 
 ### lumen-storage (`crates/storage`)
 - ✅ SQLite everywhere (rusqlite bundled, WAL, prepared-cached); origin-partitioned KV `(origin, top_level_site, key)`.
@@ -169,7 +170,7 @@ Modern ES (ES2020+: classes, async/await, generators, Promise, Proxy, BigInt, mo
 
 **Lifecycle/Performance** — ✅ tab tiers (T1 active / T2 background-old / T3 hibernated, badges), restore spinner + sleep hints, cross-restart session persist, `content-visibility: auto` ratchet, persistent QuickJS (timers/observers/navigation under `--features quickjs`), memory-pressure poll + GC tick, download manager, OS notifications, system-font fallback chain.
 
-**Automation surfaces** — ✅ `--devtools-port` (CDP), `--bidi-port` (in-shell BiDi stub), headless `--dump-source`/`--dump-layout`/`--dump-display-list`, **`--screenshot <out.png> <url>`** (full-page deterministic CPU snapshot via `cpu-render`, no window/Edge/ffmpeg), `--print-to-pdf`.
+**Automation surfaces** — ✅ `--devtools-port` (CDP), `--bidi-port` (in-shell BiDi stub), headless `--dump-source`/`--dump-layout`/`--dump-display-list`, **`--screenshot <out.png> <url>`** (full-page deterministic CPU snapshot via `cpu-render`, no window/Edge/ffmpeg), **`--ipc-server`** (headless tab-control IPC: `CreateTab`/`NavigateTab`/`Screenshot`/`CloseTab` over TCP loopback, PNGs without gdigrab — TAB-4/5), `--print-to-pdf`.
 
 ### lumen-driver (`crates/driver`) — headless engine interface
 - ✅ `BrowserSession` trait: 6 resources (screenshot/a11y_tree/layout/computed_style/network_log/console_log) + 6 tools (navigate/click/type/scroll/wait/eval/query); `InProcessSession` full headless pipeline; simple selector engine (tag/#id/.class); deterministic CPU snapshot (`screenshot_cpu_rgba/png`, cross-OS-identical, 57-page gate).
