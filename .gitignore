@@ -39,3 +39,7 @@ __pycache__/
 /graphic_tests/debug/
 # results/*.json коммитятся (история прогонов в git); HTML-отчёты — нет (ссылаются на gitignored PNG).
 /graphic_tests/results/*.html
+
+# Личная временная папка ассистента (скриншоты --screenshot, черновые артефакты).
+# Всё рабочее держим в папке проекта, не в системном temp.
+/.tmp/
