@@ -24,11 +24,11 @@
 | **U-1** | **Неблокирующая загрузка страницы** — самый болезненный дефект: окно мёрзнет на всё время навигации. `parse_and_layout` (fetch подресурсов + JS + layout) идёт синхронно на UI-потоке. Этап 1: префетч подресурсов параллельно вне UI; этап 2 (ADR-006): весь пайплайн вне UI. Ключевое ограничение — QuickJS не `Send`. Перекрывается с BUG-171/BUG-172. | P1 | XL | `lumen-shell` `main.rs:6369`, `main.rs:2833`; `lumen-network` |
 | **U-2** | **Шейпинг текста (GSUB/GPOS) + CFF-контуры** — без этого текст на реальных сайтах визуально «не тот» (нет кернинга/лигатур), а `.otf`-шрифты вообще не рисуются. Этап 1: GPOS-кернинг + GSUB-лигатуры для латиницы/кириллицы; этап 2: CFF/CFF2 outlines. | P1 | XL | `lumen-font` (`parser.rs`, `rasterizer.rs`) |
 | **U-3** | **Настоящая многовкладочность** — TAB-серия ниже (per-tab `TabState`, переключение, UI). Сейчас интерактивная модель — один документ. | P1 | см. TAB | `lumen-shell` |
-| **U-4** | **WASM-исполнение + закрыть бросающие JS-заглушки** — современные SPA белеют, наткнувшись на `reject` (WebGPU/WebCodecs) или невыполнимый WASM (сейчас только проверка magic-байтов). Этап 1: интерпретатор WASM MVP; этап 2: аудит стабов, которые должны degrade-gracefully, а не throw. | P2 | XL | `lumen-js` (`wasm.rs`, web_codecs/webgpu шимы) |
+| **U-4** | **WASM-исполнение + закрыть бросающие JS-заглушки** — современные SPA белеют, наткнувшись на `reject` (WebGPU/WebCodecs) или невыполнимый WASM (сейчас только проверка magic-байтов). Этап 1: интерпретатор WASM MVP; этап 2: аудит стабов, которые должны degrade-gracefully, а не throw. | P1 | XL | `lumen-js` (`wasm.rs`, web_codecs/webgpu шимы) |
 | **U-5** | **Fullscreen пересчитывает вьюпорт** — BUG-167: вход в Fullscreen растягивает окно, но страница остаётся ~1024×720. | P3 | S | `lumen-shell` `main.rs:6400` |
 | **U-6** | **Рендер-паритет high-deviation** — добить заметные отклонения: repeating-gradient (BUG-085), filter/backdrop (BUG-144), anchor-positioning (BUG-126 53%), scroll-snap (BUG-104 64%). | P3/P4 | — | см. `BUGS.md` |
 
-**Порядок для P1:** U-0 ✅ → **U-1** (разморозить окно — даёт мгновенный субъективный эффект) → U-3 (TAB-серия) → U-2 (шрифты). U-4 — параллельно у P2.
+**Порядок для P1:** U-0 ✅ → **U-1** (разморозить окно — даёт мгновенный субъективный эффект) → U-3 (TAB-серия) → U-2 (шрифты) → U-4 (WASM, ранее у P2).
 
 **Как мерить прогресс:** после каждого этапа снимай `--screenshot` 5–10 живых сайтов (github, новостной, блог, SPA) + `python graphic_tests/run.py --build --continue-on-fail` для CSS-паритета.
 
@@ -56,6 +56,33 @@
 
 **Порядок:** TAB-1 → TAB-2 → TAB-4 → TAB-5 → TAB-7 (минимальный путь для run.py).
 TAB-3 и TAB-6 — параллельно после TAB-1.
+
+---
+
+### Унаследовано от P2 (P2 → резерв, 2026-06-18)
+
+P2 выведен в резерв; все его незакрытые задачи теперь у P1. Приоритет ниже
+USABILITY-вертикали и TAB-серии — брать после них или когда они заблокированы.
+
+**Незакрытые task-файлы (готовые брифы в `docs/tasks/`):**
+
+| # | Задача | Размер | Крейты | Бриф |
+|---|--------|--------|--------|------|
+| P2→1 | **Tab tier tooltip при hover (10K.2)** — tooltip «вкладка спит — клик восстановит» на бейдже tier. | S | `lumen-shell` | `docs/tasks/p2-tab-tier-tooltip.md` |
+| P2→2 | **Loading spinner при restore гибернированной вкладки >200ms (10K.3)** — overlay-кольцо на время восстановления из SQLite. | S | `lumen-shell` | `docs/tasks/p2-tab-restore-spinner.md` |
+| P2→3 | **FemtovgBackend — PushFilter blur** — реальный box-blur (сейчас только save/restore, размытия нет). | M | `lumen-paint` | `docs/tasks/p2-femtovg-filter-blur.md` |
+| P2→4 | **FemtovgBackend — истинные эллиптические border-radius** — сейчас `max(rx,ry)` рисует круг вместо эллипса. | S | `lumen-paint` | `docs/tasks/p2-femtovg-elliptical-radius.md` |
+
+**Направления без брифа (бывшие «Опции» P2):**
+
+- **Ad-block Phase 2/3** — `$option` по типу ресурса (Phase 2) + UI подписок (Phase 3, handoff P3). База — `p2-adblock-filter-lists` (влита 2026-06-16). Крейты: `lumen-network`, `lumen-shell`.
+- **Canvas Phase extensions** — Canvas 2D text-completeness (BUG-099 continuation), advanced patterns/shadows refinement. Крейты: `lumen-canvas`, `lumen-js`.
+- **Color management Phase 1+** — Lab/CMYK color spaces (H-2 Phase 1+), device-specific tone curves, advanced ICC. Крейты: `lumen-image`, `lumen-paint`.
+- **DevTools network-panel: `Event::RequestFailed`** (бывшая задача #30, ранее handoff P3→P2) — отрисовка проваленных запросов в `devtools/network_panel.rs`. Крейт: `lumen-shell`.
+
+> Баги высокого отклонения (BUG-085 gradient, BUG-088 transforms, BUG-090 line-clamp),
+> которые в STATUS-P2 числились как «P3-вспомога», остаются у **P3** — это их домен
+> по CLAUDE.md «Bug ownership: P3 only», в P1 не переносятся.
 
 ---
 
