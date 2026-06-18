@@ -1087,23 +1087,24 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/image/src/webp/mod.rs:52` **fn** `decode_webp` — Декодирует WebP-файл в RGBA8 (4 байта на пиксель, row-major)
 `crates/engine/image/src/webp/mod.rs:88` **struct** `WebpImageDecoder` — Реализация [`lumen_core::ext::ImageDecoder`] для WebP
 
-## lumen-ipc  (15 symbols)
+## lumen-ipc  (16 symbols)
 
-`crates/ipc/src/lib.rs:24` **enum** `IpcRequest` — A request sent from the shell to the network service
-`crates/ipc/src/lib.rs:35` **enum** `IpcResponse` — A response from the network service back to the shell
-`crates/ipc/src/lib.rs:48` **struct** `FetchRequest` — Parameters for a fetch request (Phase 1: GET-only, no custom headers/body)
-`crates/ipc/src/lib.rs:64` **struct** `FetchOk` — Successful HTTP response payload returned by the network service
-`crates/ipc/src/lib.rs:77` **struct** `FetchErr` — Error returned when a fetch fails
-`crates/ipc/src/lib.rs:90` **struct** `IpcChannel` — Bidirectional framing layer over any `Read + Write` stream
-`crates/ipc/src/lib.rs:96` **fn** `new` — Wrap an existing stream
-`crates/ipc/src/lib.rs:101` **fn** `send` — Serialize `msg` via bincode and write it with a 4-byte LE length prefix
-`crates/ipc/src/lib.rs:119` **fn** `recv` — Read one length-prefixed message and deserialize it
-`crates/ipc/src/lib.rs:136` **struct** `IpcServer` — TCP server that the network service uses to accept connections from the shell
-`crates/ipc/src/lib.rs:144` **fn** `bind` — Bind on an OS-assigned loopback port. Returns `(server, bound_port)`
-`crates/ipc/src/lib.rs:155` **fn** `accept` — Block until the shell connects and return the framing channel
-`crates/ipc/src/lib.rs:174` **struct** `IpcClient` — Client used by the shell to communicate with the network service
-`crates/ipc/src/lib.rs:180` **fn** `connect` — Connect to the network service listening on `127.0.0.1:port`
-`crates/ipc/src/lib.rs:190` **fn** `request` — Send a request and block until the matching response arrives
+`crates/ipc/src/lib.rs:36` **type** `TabId` — Identifier for a tab in the shell's `--ipc-server` control channel (TAB-4)
+`crates/ipc/src/lib.rs:44` **enum** `IpcRequest` — A request sent over an IPC channel
+`crates/ipc/src/lib.rs:77` **enum** `IpcResponse` — A response sent back over an IPC channel
+`crates/ipc/src/lib.rs:119` **struct** `FetchRequest` — Parameters for a fetch request (Phase 1: GET-only, no custom headers/body)
+`crates/ipc/src/lib.rs:135` **struct** `FetchOk` — Successful HTTP response payload returned by the network service
+`crates/ipc/src/lib.rs:148` **struct** `FetchErr` — Error returned when a fetch fails
+`crates/ipc/src/lib.rs:161` **struct** `IpcChannel` — Bidirectional framing layer over any `Read + Write` stream
+`crates/ipc/src/lib.rs:167` **fn** `new` — Wrap an existing stream
+`crates/ipc/src/lib.rs:172` **fn** `send` — Serialize `msg` via bincode and write it with a 4-byte LE length prefix
+`crates/ipc/src/lib.rs:190` **fn** `recv` — Read one length-prefixed message and deserialize it
+`crates/ipc/src/lib.rs:207` **struct** `IpcServer` — TCP server that the network service uses to accept connections from the shell
+`crates/ipc/src/lib.rs:215` **fn** `bind` — Bind on an OS-assigned loopback port. Returns `(server, bound_port)`
+`crates/ipc/src/lib.rs:226` **fn** `accept` — Block until the shell connects and return the framing channel
+`crates/ipc/src/lib.rs:245` **struct** `IpcClient` — Client used by the shell to communicate with the network service
+`crates/ipc/src/lib.rs:251` **fn** `connect` — Connect to the network service listening on `127.0.0.1:port`
+`crates/ipc/src/lib.rs:261` **fn** `request` — Send a request and block until the matching response arrives
 
 ## lumen-js  (290 symbols)
 
@@ -1537,11 +1538,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/box_tree.rs:2319` **fn** `lay_out_incremental` — Incremental re-layout pass: skips clean subtrees, re-lays out only dirty ones
 `crates/engine/layout/src/box_tree.rs:2356` **fn** `layout_streaming_incremental` — Streaming incremental layout (PH1-2b)
 `crates/engine/layout/src/box_tree.rs:2437` **fn** `build_iframe_document` — Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5)
-`crates/engine/layout/src/box_tree.rs:7981` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
-`crates/engine/layout/src/box_tree.rs:8164` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
-`crates/engine/layout/src/box_tree.rs:8183` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
-`crates/engine/layout/src/box_tree.rs:8213` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
-`crates/engine/layout/src/box_tree.rs:9123` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
+`crates/engine/layout/src/box_tree.rs:8239` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
+`crates/engine/layout/src/box_tree.rs:8422` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
+`crates/engine/layout/src/box_tree.rs:8441` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
+`crates/engine/layout/src/box_tree.rs:8471` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
+`crates/engine/layout/src/box_tree.rs:9381` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
 `crates/engine/layout/src/color_mix.rs:38` **enum** `MixColorSpace` — CSS Color L5 §10.2 — interpolation color space for `color-mix()`
 `crates/engine/layout/src/color_mix.rs:63` **fn** `from_css` — Parse a CSS `color-mix()` interpolation space identifier (case-insensitive)
 `crates/engine/layout/src/color_mix.rs:80` **fn** `is_polar` — Returns `true` if this space has a hue (polar) axis
@@ -2411,7 +2412,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/backends/cpu_backend.rs:44` **fn** `new` — Создаёт headless CPU-бэкенд с заданным размером поверхности
 `crates/engine/paint/src/backends/cpu_backend.rs:49` **fn** `last_image` — Возвращает Image из последнего рендера, если он был выполнен
 `crates/engine/paint/src/backends/femtovg_backend.rs:230` **struct** `FemtovgBackend` — femtovg/OpenGL рендер-бэкенд (Phase 2, ADR-010)
-`crates/engine/paint/src/backends/femtovg_backend.rs:702` **fn** `new` — Создаёт оконный femtovg-бэкенд из winit-окна
+`crates/engine/paint/src/backends/femtovg_backend.rs:742` **fn** `new` — Создаёт оконный femtovg-бэкенд из winit-окна
 `crates/engine/paint/src/backends/vello_backend.rs:43` **struct** `VelloBackend` — Phase 3 рендер-бэкенд на базе Vello (ADR-010, RB-7 заглушка)
 `crates/engine/paint/src/backends/vello_backend.rs:57` **fn** `new` — Создаёт заглушку `VelloBackend` с начальным размером поверхности
 `crates/engine/paint/src/backends/wgpu_backend.rs:51` **struct** `WgpuBackend` — wgpu-бэкенд: тонкая обёртка над [`Renderer`], реализующая [`RenderBackend`]
@@ -2488,10 +2489,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/display_list.rs:1822` **fn** `build_print_display_list` — Builds a print display list from paginated layout
 `crates/engine/paint/src/display_list.rs:1884` **fn** `split_at_page_breaks` — Splits a print display list at `PageBreak` markers
 `crates/engine/paint/src/display_list.rs:1911` **fn** `strip_background_graphics` — Removes background-graphics paint commands from each print page when the
-`crates/engine/paint/src/display_list.rs:2947` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
-`crates/engine/paint/src/display_list.rs:3076` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
-`crates/engine/paint/src/display_list.rs:3800` **fn** `point_on_resize_grip` — Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента
-`crates/engine/paint/src/display_list.rs:13010` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
+`crates/engine/paint/src/display_list.rs:2958` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
+`crates/engine/paint/src/display_list.rs:3087` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
+`crates/engine/paint/src/display_list.rs:3811` **fn** `point_on_resize_grip` — Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента
+`crates/engine/paint/src/display_list.rs:13044` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
 `crates/engine/paint/src/display_list_cache.rs:21` **struct** `CachedDisplayLayer` — Cached display list for a stacking context or page subtree
 `crates/engine/paint/src/display_list_cache.rs:45` **struct** `DisplayListCache` — LRU cache that maps `NodeId` (u32) to a pre-built `Vec<DisplayCommand>`
 `crates/engine/paint/src/display_list_cache.rs:59` **fn** `new` — Create a cache with the default 32 MB budget
@@ -4021,4 +4022,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3950 symbols in 22 crates*
+*Total: 3951 symbols in 22 crates*

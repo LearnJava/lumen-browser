@@ -283,6 +283,7 @@ fn main() -> ExitCode {
     let (screenshot_output, rest_args) = extract_screenshot(&rest_args);
     let (mcp_mode, rest_args) = extract_mcp_mode(&rest_args);
     let (use_network_service, rest_args) = extract_network_service(&rest_args);
+    let (ipc_server, rest_args) = extract_ipc_server(&rest_args);
     let (proxy, rest_args) = match extract_proxy(&rest_args) {
         Ok(r) => r,
         Err(err) => {
@@ -326,6 +327,8 @@ fn main() -> ExitCode {
     } else if let Some(output) = screenshot_output {
         let source = PageSource::from_arg(rest_args.first().map(|s| s.as_str()));
         CliMode::Screenshot { source, output }
+    } else if let Some(port) = ipc_server {
+        CliMode::IpcServer { port }
     } else if let Some(mcp) = mcp_mode {
         CliMode::Mcp(mcp)
     } else {
@@ -400,6 +403,7 @@ fn main() -> ExitCode {
         CliMode::PrintToPdf { source, output } => run_print_to_pdf(&source, &output, event_sink),
         CliMode::Screenshot { source, output } => run_screenshot(&source, &output, event_sink),
         CliMode::Mcp(mcp) => run_mcp_mode(mcp),
+        CliMode::IpcServer { port } => run_ipc_server(port, event_sink),
     }
 }
 
@@ -801,6 +805,25 @@ fn do_screenshot(
     output: &std::path::Path,
     event_sink: Arc<dyn EventSink>,
 ) -> Result<(u32, u32), Box<dyn Error>> {
+    let (png, width, height) = render_source_to_png(source, event_sink)?;
+    std::fs::write(output, &png)?;
+    Ok((width, height))
+}
+
+/// Headless CPU render of `source` to in-memory PNG bytes.
+///
+/// Core of both `--screenshot` (writes the bytes to a file) and the
+/// `--ipc-server` `Screenshot` command (TAB-5, returns the bytes over IPC).
+/// Runs the same full pipeline as `do_screenshot` — `load_bytes` →
+/// `parse_and_layout` (external CSS + images, no interactive JS, deterministic)
+/// → `paint_ordered` → `Renderer::render_to_image_cpu`.
+///
+/// Returns `(png_bytes, width, height)`. Width is [`SCREENSHOT_VP_W`]; height is
+/// the layout-root height clamped to `[SCREENSHOT_MIN_H, SCREENSHOT_MAX_H]`.
+fn render_source_to_png(
+    source: &PageSource,
+    event_sink: Arc<dyn EventSink>,
+) -> Result<(Vec<u8>, u32, u32), Box<dyn Error>> {
     use lumen_paint::Renderer;
 
     let raw = source.load_bytes(event_sink.clone(), None)?;
@@ -837,8 +860,125 @@ fn do_screenshot(
     let dl = paint_ordered(&parsed.layout);
     let image = Renderer::render_to_image_cpu(width, height, &dl, &[], 0.0, 0.0)?;
     let png = lumen_image::encode_png_rgba8(&image)?;
-    std::fs::write(output, &png)?;
-    Ok((width, height))
+    Ok((png, width, height))
+}
+
+/// Запустить headless IPC-сервер таб-команд (TAB-5).
+///
+/// Слушает TCP loopback (`lumen_ipc`), печатает выбранный порт в stdout строкой
+/// `LUMEN_IPC_PORT=<port>` (контроллер её парсит), затем обслуживает команды:
+/// `CreateTab` / `NavigateTab` / `Screenshot` / `CloseTab` / `Shutdown`.
+///
+/// «Вкладка» здесь — headless-контекст рендера: хранит лишь свой [`PageSource`],
+/// а фактический load → layout → CPU-растеризация выполняется лениво на
+/// `Screenshot` через тот же путь, что и `--screenshot` ([`render_source_to_png`]).
+/// Окно/wgpu/winit не создаются — снимок пиксельно воспроизводим и работает в CI.
+/// Состояние вкладок переживает переподключения клиента; сервер выходит по
+/// `Shutdown`.
+fn run_ipc_server(port: Option<u16>, event_sink: Arc<dyn EventSink>) -> ExitCode {
+    use lumen_ipc::{IpcRequest, IpcResponse, IpcServer, TabId};
+    use std::collections::HashMap;
+    use std::io::Write as _;
+
+    // `IpcServer::bind` всегда слушает 127.0.0.1:0 (OS назначает порт). Явный
+    // `--ipc-port` пока носит информационный характер — контроллер всё равно
+    // читает фактический порт из stdout-строки `LUMEN_IPC_PORT=`.
+    let (server, bound_port) = match IpcServer::bind() {
+        Ok(sp) => sp,
+        Err(e) => {
+            eprintln!("lumen --ipc-server: не удалось открыть порт: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Some(requested) = port
+        && requested != bound_port
+    {
+        eprintln!(
+            "lumen --ipc-server: явный порт {requested} игнорируется (bind назначает \
+             порт автоматически); использую {bound_port}"
+        );
+    }
+
+    // Контроллер парсит эту строку из stdout, чтобы узнать порт подключения.
+    println!("LUMEN_IPC_PORT={bound_port}");
+    let _ = std::io::stdout().flush();
+    eprintln!("lumen: IPC-сервер таб-команд запущен на 127.0.0.1:{bound_port} (TAB-5)");
+
+    let mut tabs: HashMap<TabId, PageSource> = HashMap::new();
+    let mut next_id: TabId = 1;
+
+    // Внешний цикл: принимаем подключения (контроллер может переподключаться).
+    loop {
+        let mut channel = match server.accept() {
+            Ok(ch) => ch,
+            Err(e) => {
+                eprintln!("lumen --ipc-server: ошибка accept: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+
+        // Внутренний цикл: обслуживаем запросы текущего подключения до разрыва
+        // (`recv` вернёт Err при отключении клиента — ждём следующее подключение).
+        while let Ok(req) = channel.recv::<IpcRequest>() {
+            let resp = match req {
+                IpcRequest::Ping => IpcResponse::Pong,
+                IpcRequest::Shutdown => {
+                    let _ = channel.send(&IpcResponse::Shutdown);
+                    eprintln!("lumen --ipc-server: получен Shutdown, выходим");
+                    return ExitCode::SUCCESS;
+                }
+                IpcRequest::Fetch(fr) => IpcResponse::FetchErr(lumen_ipc::FetchErr {
+                    id: fr.id,
+                    error: "ipc-server: Fetch не поддерживается в режиме таб-команд".to_owned(),
+                }),
+                IpcRequest::CreateTab => {
+                    let tab_id = next_id;
+                    next_id = next_id.wrapping_add(1);
+                    tabs.insert(tab_id, PageSource::Empty);
+                    IpcResponse::TabCreated { tab_id }
+                }
+                IpcRequest::CloseTab { tab_id } => {
+                    if tabs.remove(&tab_id).is_some() {
+                        IpcResponse::TabClosed { tab_id }
+                    } else {
+                        IpcResponse::TabError {
+                            tab_id,
+                            message: format!("нет вкладки с id {tab_id}"),
+                        }
+                    }
+                }
+                IpcRequest::NavigateTab { tab_id, url } => {
+                    if let Some(slot) = tabs.get_mut(&tab_id) {
+                        *slot = PageSource::from_arg(Some(&url));
+                        IpcResponse::Navigated { tab_id }
+                    } else {
+                        IpcResponse::TabError {
+                            tab_id,
+                            message: format!("нет вкладки с id {tab_id}"),
+                        }
+                    }
+                }
+                IpcRequest::Screenshot { tab_id } => match tabs.get(&tab_id) {
+                    Some(source) => match render_source_to_png(source, event_sink.clone()) {
+                        Ok((png, _w, _h)) => IpcResponse::Screenshot { tab_id, png },
+                        Err(e) => IpcResponse::TabError {
+                            tab_id,
+                            message: format!("ошибка рендера: {e}"),
+                        },
+                    },
+                    None => IpcResponse::TabError {
+                        tab_id,
+                        message: format!("нет вкладки с id {tab_id}"),
+                    },
+                },
+            };
+
+            if channel.send(&resp).is_err() {
+                // Не смогли ответить — соединение мертво, ждём переподключения.
+                break;
+            }
+        }
+    }
 }
 
 fn do_print_to_pdf(
@@ -1143,6 +1283,7 @@ fn print_usage() {
     eprintln!("  --mcp [url]                                     — MCP-сервер (stdio) для AI-агентов");
     eprintln!("  --mcp-port <N> [url]                            — MCP-сервер (TCP) на порту N");
     eprintln!("  [--network-service]                             — вынести HTTP/TLS/DNS в отдельный процесс (PH1-4)");
+    eprintln!("  --ipc-server                                    — headless IPC-сервер таб-команд: PNG-снимки через TCP (TAB-5)");
 }
 
 /// Извлечь `--print-to-pdf <output.pdf>` из аргументов.
@@ -1351,6 +1492,36 @@ fn extract_network_service(args: &[String]) -> (bool, Vec<String>) {
         }
     }
     (found, rest)
+}
+
+/// Извлечь `--ipc-server` (+ опционально `--ipc-port N`) из аргументов (TAB-5).
+///
+/// `--ipc-server` запускает шелл headless-сервером таб-команд (см.
+/// [`run_ipc_server`]): внешний контроллер (`graphic_tests/run.py`) открывает
+/// браузер один раз и тянет PNG-снимки через IPC вместо gdigrab/ffmpeg.
+///
+/// Возвращает `(Some(port), rest)` если флаг присутствует, где `port` — явный
+/// порт из `--ipc-port N` или `None` (OS назначит порт, шелл напечатает его в
+/// stdout строкой `LUMEN_IPC_PORT=<port>`).
+fn extract_ipc_server(args: &[String]) -> (Option<Option<u16>>, Vec<String>) {
+    let mut enabled = false;
+    let mut port: Option<u16> = None;
+    let mut rest = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--ipc-server" => enabled = true,
+            "--ipc-port" => {
+                if let Some(n) = args.get(i + 1).and_then(|s| s.parse::<u16>().ok()) {
+                    port = Some(n);
+                    i += 1; // skip the value
+                }
+            }
+            other => rest.push(other.to_owned()),
+        }
+        i += 1;
+    }
+    (if enabled { Some(port) } else { None }, rest)
 }
 
 /// Извлечь `--activity-log` (или `--click-log`) из аргументов.
@@ -2352,6 +2523,9 @@ enum CliMode {
     Screenshot { source: PageSource, output: std::path::PathBuf },
     /// Headless: MCP-сервер для AI-агентов (Claude, Browser Use…).
     Mcp(McpMode),
+    /// Headless: IPC-сервер таб-команд (TAB-5). Контроллер драйвит вкладки и
+    /// получает PNG-снимки через TCP. `Some(port)` — явный порт, `None` — OS.
+    IpcServer { port: Option<u16> },
 }
 
 /// Параметры MCP-режима.

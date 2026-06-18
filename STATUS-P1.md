@@ -23,12 +23,12 @@
 | **U-0** | ~~**`--screenshot <out.png> <url>` headless CPU-снимок**~~ ✅ завершена (2026-06-18) — инструмент наблюдения: честная картинка любого сайта без окна/Edge/ffmpeg. См. «Recent merges». | P1 | S | `lumen-shell` |
 | **U-1** | **Неблокирующая загрузка страницы** — ~~этап 1~~ ✅ (2026-06-18): навигация (клик, адресная строка, back/forward, JS `location.href=`, reload) больше не мёрзнет — `reload()` идёт через тот же async streaming-пайплайн, что и первичная загрузка (`start_streaming_load`), окно рисует промежуточные кадры, тяжёлый `render_bytes` исполняется один раз в `LoadDone`. Добавлены load-generation guard (отброс устаревших событий гонки навигаций) и `pending_restore_scroll` (восстановление scroll для back/forward при асинхронном reload). **Остался этап 2 (ADR-006): весь финальный пайплайн (включая QuickJS) вне UI-потока — заблокирован тем, что QuickJS не `Send`.** Перекрывается с BUG-171/BUG-172. | P1 | XL (этап 1 ✅) | `lumen-shell` `main.rs` (`reload`/`start_streaming_load`/`apply_loaded_page`); `lumen-network` |
 | **U-2** | **Шейпинг текста (GSUB/GPOS) + CFF-контуры** — без этого текст на реальных сайтах визуально «не тот» (нет кернинга/лигатур), а `.otf`-шрифты вообще не рисуются. Этап 1: GPOS-кернинг + GSUB-лигатуры для латиницы/кириллицы; этап 2: CFF/CFF2 outlines. | P1 | XL | `lumen-font` (`parser.rs`, `rasterizer.rs`) |
-| **U-3** | **Настоящая многовкладочность** — TAB-серия ниже (per-tab `TabState`, переключение, UI). Сейчас интерактивная модель — один документ. | P1 | см. TAB | `lumen-shell` |
+| **U-3** | **Настоящая многовкладочность** — TAB-серия ниже. **Бо́льшая часть уже в коде** (ревизия 2026-06-18): TAB-1/2/3/6 реализованы (`PageSnapshot`+`bg_tabs`, `switch_tab`/`open_new_tab`/`close_tab`, tab-bar UI, hibernation, Ctrl+T/W/Tab). TAB-4 ✅ / TAB-5 ✅ (IPC, 2026-06-18). Остался TAB-7 (run.py IPC-режим). | P1 | см. TAB | `lumen-shell` |
 | **U-4** | **WASM-исполнение + закрыть бросающие JS-заглушки** — современные SPA белеют, наткнувшись на `reject` (WebGPU/WebCodecs) или невыполнимый WASM (сейчас только проверка magic-байтов). Этап 1: интерпретатор WASM MVP; этап 2: аудит стабов, которые должны degrade-gracefully, а не throw. | P1 | XL | `lumen-js` (`wasm.rs`, web_codecs/webgpu шимы) |
 | **U-5** | **Fullscreen пересчитывает вьюпорт** — BUG-167: вход в Fullscreen растягивает окно, но страница остаётся ~1024×720. | P3 | S | `lumen-shell` `main.rs:6400` |
 | **U-6** | **Рендер-паритет high-deviation** — добить заметные отклонения: repeating-gradient (BUG-085), filter/backdrop (BUG-144), anchor-positioning (BUG-126 53%), scroll-snap (BUG-104 64%). | P3/P4 | — | см. `BUGS.md` |
 
-**Порядок для P1:** U-0 ✅ → U-1 этап 1 ✅ (разморозили окно при навигации) → **U-3 (TAB-серия)** → U-2 (шрифты) → U-4 (WASM, ранее у P2). U-1 этап 2 (пайплайн вне UI) — после разблокировки QuickJS `!Send`.
+**Порядок для P1:** U-0 ✅ → U-1 этап 1 ✅ → U-3 (TAB-серия) почти ✅ (TAB-1..6 уже в коде, TAB-4/5 IPC ✅ 2026-06-18; остался **TAB-7** run.py) → **U-2 (шрифты)** → U-4 (WASM, ранее у P2). U-1 этап 2 (пайплайн вне UI) — после разблокировки QuickJS `!Send`.
 
 **Как мерить прогресс:** после каждого этапа снимай `--screenshot` 5–10 живых сайтов (github, новостной, блог, SPA) + `python graphic_tests/run.py --build --continue-on-fail` для CSS-паритета.
 
@@ -38,24 +38,27 @@
 
 Цель: один процесс Lumen держит несколько вкладок с изолированным состоянием; `run.py` открывает браузер один раз и получает скриншоты через IPC без gdigrab.
 
-**Уже готово (не писать заново):**
-- `crates/shell/src/tab_lifecycle/` — `TabLifecycleManager` + 5-уровневая модель памяти (T0 Active → T4 Closed) — не подключён к shell
-- `session_persist::ExportedTab` — сериализация состояния вкладки на диск — не вызывается
-- `BrowserSession` trait в `lumen-driver` — headless-харнес, можно расширить под screenshot
-- `lumen-ipc` крейт — length-prefixed bincode по TCP — нужно добавить tab-команды
+**Статус (ревизия 2026-06-18):** интерактивная многовкладочность в окне **уже реализована**
+(вопреки прежнему описанию). В `Lumen` per-tab состояние вынесено в `PageSnapshot`
+(`main.rs:3303`), фоновые вкладки в `bg_tabs: HashMap<usize, PageSnapshot>`; есть
+`switch_tab`/`open_new_tab`/`close_tab`/`save_page_snapshot`/`restore_page_snapshot`,
+tab-bar UI (`tabs::strip`), пятиуровневая lifecycle-модель (`tab_lifecycle/`, T0→T4,
+hibernation в SQLite), биндинги Ctrl+T/Ctrl+W/Ctrl+Tab. Поэтому **TAB-1/2/3/6 закрыты кодом**
+(модель — swap `PageSnapshot`, а не `Vec<TabState>`, но цель «per-tab изоляция» достигнута).
 
-| # | Задача | Размер | Крейты |
-|---|--------|--------|--------|
-| TAB-1 | **PageState extraction** — выделить из `Lumen` struct per-tab поля в `TabState`: `document, layout_box, scroll_x/y, animation_scheduler, transition_scheduler, scroll_containers, web_fonts, zoom_factor, title, source, stream_images_requested`. `Lumen` хранит `tabs: Vec<TabState>` + `active_tab: usize`. | M | `lumen-shell` |
-| TAB-2 | **Tab switching** — swap `active_tab` по `Ctrl+T` (новая), `Ctrl+W` (закрыть), `Ctrl+Tab` / `Ctrl+Shift+Tab` (переключить). Перерисовка только при смене активной вкладки. | S | `lumen-shell` |
-| TAB-3 | **Tab bar UI** — полоса вкладок вверху окна: заголовок (title), крестик, кнопка `+`. Подсветка активной. Drag — не нужен в Phase 1. | M | `lumen-shell` |
-| TAB-4 | **IPC tab routing** — добавить `tab_id: TabId` к IPC-сообщениям; команды `CreateTab`, `CloseTab`, `NavigateTab(tab_id, url)`. Маршрутизация в shell по `tab_id`. | S | `lumen-ipc`, `lumen-shell` |
-| TAB-5 | **Screenshot IPC** — `IpcRequest::Screenshot(tab_id)` → shell рендерит вкладку offscreen (CPU path) → возвращает `Vec<u8>` PNG. Без окна, без gdigrab. | S | `lumen-ipc`, `lumen-shell` |
-| TAB-6 | **Подключить TabLifecycleManager** — вызывать `tick_idle()` раз в секунду. Неактивные вкладки переходят T0→T1→T2 по таймаутам. Освобождает RAM при большом числе вкладок. | S | `lumen-shell` |
-| TAB-7 | **run.py IPC-режим** — запустить один `lumen.exe --ipc-server`, отправить `NavigateTab + Screenshot` на каждый тест, получить PNG, сравнить с Edge. Убрать ffmpeg/gdigrab из основного пути. | XS | `graphic_tests/run.py` |
+| # | Задача | Размер | Крейты | Статус |
+|---|--------|--------|--------|--------|
+| TAB-1 | **PageState extraction** — per-tab состояние. | M | `lumen-shell` | ✅ готово (`PageSnapshot`+`bg_tabs`) |
+| TAB-2 | **Tab switching** — Ctrl+T/W/Tab, swap активной вкладки. | S | `lumen-shell` | ✅ готово (`switch_tab`) |
+| TAB-3 | **Tab bar UI** — полоса вкладок, заголовок, крестик, `+`. | M | `lumen-shell` | ✅ готово (`tabs::strip`) |
+| TAB-4 | **IPC tab routing** — `TabId` + `CreateTab`/`CloseTab`/`NavigateTab`. | S | `lumen-ipc`, `lumen-shell` | ✅ 2026-06-18 |
+| TAB-5 | **Screenshot IPC** — `Screenshot(tab_id)` → PNG offscreen (CPU). | S | `lumen-ipc`, `lumen-shell` | ✅ 2026-06-18 |
+| TAB-6 | **Подключить TabLifecycleManager** — idle T0→T2 по таймаутам. | S | `lumen-shell` | ✅ готово (`tab_lifecycle/`) |
+| TAB-7 | **run.py IPC-режим** — `lumen.exe --ipc-server`, `NavigateTab + Screenshot` на тест, PNG vs Edge, убрать gdigrab. **Требует Python-реализацию bincode** для `lumen_ipc::{IpcRequest,IpcResponse}` (variant-tag u32 LE + u64 LE длины строк/Vec). | XS | `graphic_tests/run.py` | ⬜ следующая |
 
-**Порядок:** TAB-1 → TAB-2 → TAB-4 → TAB-5 → TAB-7 (минимальный путь для run.py).
-TAB-3 и TAB-6 — параллельно после TAB-1.
+**Следующий шаг:** TAB-7 — Python-клиент к `--ipc-server` (хэндшейк: запустить
+`lumen.exe --ipc-server`, прочитать `LUMEN_IPC_PORT=<port>` из stdout, подключиться по TCP,
+слать length-prefixed bincode). Затем — U-2 (шрифты) по основному порядку P1.
 
 ---
 
@@ -128,6 +131,7 @@ PH1-2 закрыл только window-first + 60 Hz throttle + параллел
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-18 | TAB-4 + TAB-5: IPC tab control + Screenshot | `lumen-ipc` расширен таб-командами (`TabId` + `IpcRequest::{CreateTab,CloseTab,NavigateTab,Screenshot}` / `IpcResponse::{TabCreated,TabClosed,Navigated,Screenshot,TabError}`). Новый headless-режим шелла `--ipc-server` (`CliMode::IpcServer`, `run_ipc_server`): шелл становится TCP-сервером таб-команд, печатает `LUMEN_IPC_PORT=<port>` в stdout, держит `HashMap<TabId, PageSource>`. «Вкладка» — headless-контекст рендера; `Screenshot` лениво гоняет тот же CPU-пайплайн, что `--screenshot` (рефактор `do_screenshot` → переиспользуемый `render_source_to_png`), без winit/wgpu — детерминированный PNG для CI/run.py. Состояние вкладок переживает переподключения; сервер выходит по `Shutdown`. Тесты: round-trip в `lumen-ipc` (5/5) + интеграционный `crates/shell/tests/ipc_server.rs` (спавнит реальный бинарь, гоняет create→navigate(file)→screenshot→close→shutdown, проверяет PNG-magic). Это TAB-4/TAB-5 минимального пути; TAB-7 (run.py-клиент с bincode на Python) — следующая. Ревизия показала: TAB-1/2/3/6 уже были в коде (`PageSnapshot`/`bg_tabs`/`switch_tab`/tab-bar/lifecycle), STATUS подправлен. |
 | 2026-06-18 | U-1 (этап 1): неблокирующая навигация | `reload()` больше не гоняет весь fetch+parse+JS+layout синхронно на UI-потоке. Когда окно есть (любая навигация после первого кадра — клик по ссылке, адресная строка, back/forward, JS `location.href=`, reload палитры/tab-bar), сбрасываем streaming-состояние и делегируем в `start_streaming_load()` — тот же async-путь, что и первичная загрузка в `resumed()`: HTML стримится в фоновом потоке, окно рисует промежуточные кадры, тяжёлый финальный `render_bytes` исполняется один раз на UI-потоке в `LoadEvent::LoadDone` (`apply_loaded_page`). Синхронный fallback (прежний GpuSession/`source.load`) сохранён для пути без окна (headless/тесты). **Load-generation guard:** `Lumen.load_generation` инкрементится на каждую навигацию и метит все streaming-события (`EarlyPreloadHints`/`HtmlChunk`/`CssLoaded`/`LoadDone`/`LoadError`); `user_event` отбрасывает события устаревшего поколения — медленная вытесненная загрузка не подмешает DOM/CSS прошлой страницы и не нарисует её поверх новой (гонка, ставшая достижимой из-за того, что UI больше не блокируется). **Scroll-restore:** back/forward (и bfcache) стэшат offset в `Lumen.pending_restore_scroll` перед `reload()`, а `apply_loaded_page` применяет его после сброса scroll в 0 — прежний код ставил `scroll_x/y` сразу после (тогда синхронного) `reload()`, что при асинхронном `LoadDone` затёрлось бы. Остался этап 2 (ADR-006: финальный пайплайн, включая QuickJS, вне UI-потока — блокер: QuickJS не `Send`). Проверка: `cargo check`/clippy clean, 1333 теста шелла, graphic TEST-00/01/03/06/20 PASS, headless `--screenshot example.com` рендерит. |
 | 2026-06-18 | U-0: `--screenshot <out.png> <url>` headless CPU-снимок | Новый CLI-режим шелла: `lumen --screenshot out.png <path-or-url>` гоняет полный headless-пайплайн (`source.load_bytes` → `parse_and_layout` с внешним CSS/картинками → `paint_ordered`) и растеризует display-list детерминированным CPU-бэкендом (`Renderer::render_to_image_cpu`, feature `cpu-render`, tiny-skia) → PNG. Без wgpu/winit/окна, без Edge и ffmpeg, пиксельно воспроизводимо на любой ОС. Высота снимка = высота layout-корня (`parsed.layout.rect.height`), зажата в `[720, 32768]` (полная страница, не только первый экран), ширина 1024. `extract_screenshot()` зеркалит `extract_print_to_pdf` (порядок `--screenshot <out> <url>`); новый `CliMode::Screenshot` + `run_screenshot`/`do_screenshot`. Шелл теперь включает `lumen-paint/cpu-render` в дефолте. Попутно: `#[allow(clippy::too_many_arguments)]` на `draw_border_side_h/v` в `cpu_raster.rs` (8 геом-параметров, открылись для строгого clippy при включении cpu-render). 4 unit-теста `extract_screenshot`. Инструмент наблюдаемости для USABILITY-вертикали (см. Next). |
 | 2026-06-16 | PH3-20: Service Worker Fetch Interception Phase 1 | Активный SW исполняется в выделенном QuickJS-потоке (`lumen-js::sw_worker::spawn_sw_worker`): `ServiceWorkerGlobalScope` + `caches`/`Headers`/`Response` шим, реальные base64 `atob`/`btoa`, `install`/`activate`/`fetch` события. На фазе активации `_sw_run_lifecycle` фетчит скрипт SW и зовёт `_lumen_sw_activate_script(origin, scope, text)` → спавн потока, регистрация в `SwWorkerStore` (`(origin,scope)→SwWorkerHandle`). `ServiceWorkerInterceptor` (lumen-storage) маршрутизирует fetch через `sw_worker_store` со scope-prefix matching (longest-match), независимо от SQLite-регистраций (shell хранит их in-memory); диспатчит `FetchEvent`, ждёт `respondWith()` (5 c таймаут), отдаёт тело сети. Shell: общий in-memory `cache_store: Arc<CacheStorage>` передаётся в `install_dom` (страница + SW-поток делят кэш) и в глобальный `SW_FETCH_INTERCEPTOR`, подключаемый в `http_client_for_subresource`. Новые типы в `lumen-core::ext`: `SwFetchRequest`/`SwWorkerHandle`/`SwWorkerStore`. Ограничение Phase 1: внутри SW `fetch` — только cache-first (без сети), поэтому `cache.addAll()` прекэш из сети не работает; SW отдаёт лишь то, что закэшировала страница. 9 тестов sw_interceptor (5 SQLite + 4 worker-routing), 5 тестов sw_worker. Гочи: `rt.execute_pending_job()` нельзя вызывать внутри `ctx.with(...)` (реентрантность рантайма → паника rquickjs) — `flush_jobs` всегда вне `ctx.with`. |
