@@ -155,7 +155,7 @@ Modern ES (ES2020+: classes, async/await, generators, Promise, Proxy, BigInt, mo
 ## Shell, automation & accessibility
 
 ### lumen-shell (`crates/shell`) — the user-facing browser
-**Navigation/Tabs** — ✅ load file/http(s)/local HTML with streaming incremental parse+paint + progressive image loading; link-click + fragment nav (`:target`); reload; tab strip + groups (colour-coded) + containers (cookie/storage isolation) + context menu + auto-archive; vertical tabs, tree tabs, workspaces, split view; `about:newtab` speed-dial; omnibox FTS suggestions (`@history`). ⬜ `@notes`/`@read-later` prefixes; history/search in-memory only.
+**Navigation/Tabs** — ✅ load file/http(s)/local HTML with streaming incremental parse+paint + progressive image loading; **non-blocking navigation** (U-1 stage 1: every navigation — link click, address bar, back/forward, JS `location.href=`, reload — runs through the same off-UI-thread streaming pipeline as the initial load, so the window stays responsive and paints progressive frames instead of freezing for the whole fetch); link-click + fragment nav (`:target`); reload; tab strip + groups (colour-coded) + containers (cookie/storage isolation) + context menu + auto-archive; vertical tabs, tree tabs, workspaces, split view; `about:newtab` speed-dial; omnibox FTS suggestions (`@history`). ⬜ `@notes`/`@read-later` prefixes; history/search in-memory only.
 
 **Reading/Content** — ✅ reader view, find-in-page (Ctrl+F, highlights/next-prev/scroll-to), source view, read-later panel, note viewer.
 

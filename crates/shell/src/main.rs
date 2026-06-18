@@ -104,14 +104,20 @@ enum LoadEvent {
     /// чтобы sink мог начать загружать CSS/шрифты ещё в процессе парсинга.
     /// Дедупликация с финальными хинтами из `LoadDone` — через
     /// `preload_dispatched` в `Lumen`.
-    EarlyPreloadHints(Vec<lumen_html_parser::PreloadHint>, ResourceBase),
+    /// Последнее поле — generation навигации (U-1): идентификатор load-цикла,
+    /// присвоенный в `reload`/`resumed`. `user_event` отбрасывает событие, если
+    /// его generation не совпадает с `Lumen::load_generation` — защита от
+    /// устаревших событий гонки навигаций (быстрый back/forward или клик по двум
+    /// ссылкам подряд), которые иначе подмешали бы DOM/CSS прошлой страницы.
+    EarlyPreloadHints(Vec<lumen_html_parser::PreloadHint>, ResourceBase, u64),
     /// Очередной chunk сырых байт HTML. UTF-8 границы не выравниваются —
     /// `IncrementalTreeBuilder::feed_bytes` буферизует незавершённые
-    /// code-point-ы внутри.
-    HtmlChunk(Vec<u8>),
+    /// code-point-ы внутри. Последнее поле — generation навигации (U-1).
+    HtmlChunk(Vec<u8>, u64),
     /// CSS загружен параллельным потоком для промежуточных streaming-кадров.
     /// Мёрджится в `Lumen::stream_sheet` и применяется в `paint_partial_dom`.
-    CssLoaded(Box<lumen_css_parser::Stylesheet>),
+    /// Последнее поле — generation навигации (U-1).
+    CssLoaded(Box<lumen_css_parser::Stylesheet>, u64),
     /// PH1-2c: картинка `<img>` декодирована параллельным потоком во время
     /// streaming. Регистрируется в renderer-е по ключу `src` и вызывает redraw —
     /// картинки появляются по мере прихода, а не разом в финальном `LoadDone`.
@@ -133,9 +139,10 @@ enum LoadEvent {
         bytes: Vec<u8>,
     },
     /// Все байты получены — для финального полного pipeline.
-    LoadDone(RawPage),
-    /// Ошибка при загрузке страницы.
-    LoadError(String),
+    /// Последнее поле — generation навигации (U-1).
+    LoadDone(RawPage, u64),
+    /// Ошибка при загрузке страницы. Последнее поле — generation навигации (U-1).
+    LoadError(String, u64),
 }
 
 /// PH3-19: дескриптор @font-face url()-источника, ещё не загруженного в память.
@@ -551,6 +558,8 @@ fn run_window_mode(
         stream_layout_seeded: false,
         preload_dispatched: std::collections::HashSet::new(),
         stream_images_requested: std::collections::HashSet::new(),
+        pending_restore_scroll: None,
+        load_generation: 0,
         ime_composing: None,
         bfcache: BfCache::new(16),
         nav_back: Vec::new(),
@@ -2873,12 +2882,13 @@ fn feed_preload_and_emit(
     chunk: &[u8],
     base: &ResourceBase,
     proxy: &EventLoopProxy<LoadEvent>,
+    generation: u64,
 ) {
     let early = scanner.feed_bytes(chunk);
     if early.is_empty() {
         return;
     }
-    let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(early.clone(), base.clone()));
+    let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(early.clone(), base.clone(), generation));
     // PH1-2: параллельная загрузка CSS для промежуточных кадров.
     for hint in &early {
         if let lumen_html_parser::PreloadHint::Stylesheet { url } = hint {
@@ -2887,7 +2897,7 @@ fn feed_preload_and_emit(
             std::thread::spawn(move || {
                 if let Some(text) = load_css_for_streaming(&css_url) {
                     let sheet = lumen_css_parser::parse(&text);
-                    let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::new(sheet)));
+                    let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::new(sheet), generation));
                 }
             });
         }
@@ -4962,6 +4972,20 @@ struct Lumen {
     /// промежуточными кадрами `paint_partial_dom`, чтобы каждый `<img>`
     /// загружался один раз. Очищается в начале каждой навигации.
     stream_images_requested: std::collections::HashSet<String>,
+    /// U-1: scroll offset to restore once the in-flight navigation completes.
+    /// Set by back/forward navigation before kicking off an async (streaming)
+    /// reload; consumed in `apply_loaded_page` (and the sync fallback in
+    /// `reload`) after the page resets scroll to the top. `None` for ordinary
+    /// navigations (they stay at 0,0). Needed because navigation is no longer
+    /// synchronous — the old code set `scroll_x/y` right after `reload()`
+    /// returned, but the scroll reset now happens later, at `LoadEvent::LoadDone`.
+    pending_restore_scroll: Option<(f32, f32)>,
+    /// U-1: monotonic navigation generation. Bumped on every async navigation
+    /// (`reload` when a window exists) and on the initial streaming load. Each
+    /// streaming `LoadEvent` carries the generation it was spawned under;
+    /// `user_event` drops events whose generation is stale (a superseded
+    /// navigation), so a slow earlier load can't paint over a newer page.
+    load_generation: u64,
     /// Текущий IME preedit-текст. `Some` — composition-сессия активна,
     /// `None` — нет активного IME ввода.
     ime_composing: Option<String>,
@@ -6001,6 +6025,30 @@ impl Lumen {
         click_log::log_load_start(&self.source.describe());
         println!("Reload: {}", self.source.describe());
 
+        // U-1: неблокирующая навигация. Когда окно уже создано (любая навигация
+        // после первого кадра — клик по ссылке, адресная строка, back/forward,
+        // JS location.href=), грузим через тот же асинхронный streaming-пайплайн,
+        // что и первичная загрузка в `resumed`: тело фетчится в фоновом потоке,
+        // окно продолжает рисовать промежуточные кадры, а тяжёлый финальный
+        // pipeline (`render_bytes`) исполняется один раз на UI-потоке в
+        // `LoadEvent::LoadDone`. Раньше `reload()` делал весь fetch+parse+JS+layout
+        // синхронно прямо здесь — окно мёрзло на всё время навигации.
+        if self.window.is_some() {
+            // Сбрасываем состояние прошлого streaming-цикла — это новая страница
+            // (зеркалит блок в `resumed`). `stream_builder = None` обязателен,
+            // иначе chunk-и допишутся в DOM предыдущей страницы.
+            self.preload_dispatched.clear();
+            self.stream_images_requested.clear();
+            self.stream_sheet = lumen_css_parser::Stylesheet::default();
+            self.stream_layout_seeded = false;
+            self.stream_builder = None;
+            self.load_generation = self.load_generation.wrapping_add(1);
+            self.start_streaming_load(self.load_generation);
+            return;
+        }
+
+        // Fallback (окна ещё нет — редкий путь, напр. headless/тесты): прежняя
+        // синхронная загрузка.
         // Phase 4c: попробовать загрузить через GpuSession (WinitSession)
         // для File и Url; fallback к старому пути для Snapshot
         let load_result = if let Some(page) = self.reload_via_gpu_session() {
@@ -6081,9 +6129,11 @@ impl Lumen {
                 // нужно открыть find заново после reload, что естественно.
                 self.find.close();
                 self.address_bar.close();
-                // Новая страница — показываем сверху-слева.
-                self.scroll_y = 0.0;
-                self.scroll_x = 0.0;
+                // Новая страница — показываем сверху-слева (либо восстанавливаем
+                // offset из back/forward, как в `apply_loaded_page`).
+                let (rx, ry) = self.pending_restore_scroll.take().unwrap_or((0.0, 0.0));
+                self.scroll_x = rx;
+                self.scroll_y = ry;
                 // Любой активный drag прерывается (content_height другой,
                 // thumb-геометрия пересчитана с нуля).
                 self.scroll_drag = None;
@@ -6217,7 +6267,10 @@ impl Lumen {
     /// 3. По завершении — `LoadDone(raw)` для финального pipeline.
     ///
     /// При ошибке — `LoadError`.
-    fn start_streaming_load(&self) {
+    ///
+    /// `generation` (U-1) метит каждое испускаемое событие; `user_event`
+    /// отбрасывает события устаревшего поколения, если навигацию успели сменить.
+    fn start_streaming_load(&self, generation: u64) {
         if matches!(self.source, PageSource::Empty | PageSource::AboutBlank) {
             return;
         }
@@ -6240,13 +6293,13 @@ impl Lumen {
                 let base = ResourceBase::Url(url.clone());
                 let chunk_proxy = proxy.clone();
                 let mut on_chunk = |chunk: &[u8]| {
-                    feed_preload_and_emit(&mut preload_scanner, chunk, &base, &chunk_proxy);
-                    let _ = chunk_proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec()));
+                    feed_preload_and_emit(&mut preload_scanner, chunk, &base, &chunk_proxy, generation);
+                    let _ = chunk_proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec(), generation));
                 };
                 match source.load_bytes_streaming(Arc::clone(&sink), Some(cookie_jar), &mut on_chunk) {
                     Ok(r) => r,
                     Err(e) => {
-                        let _ = proxy.send_event(LoadEvent::LoadError(e.to_string()));
+                        let _ = proxy.send_event(LoadEvent::LoadError(e.to_string(), generation));
                         return;
                     }
                 }
@@ -6254,7 +6307,7 @@ impl Lumen {
                 let raw = match source.load_bytes(Arc::clone(&sink), Some(cookie_jar)) {
                     Ok(r) => r,
                     Err(e) => {
-                        let _ = proxy.send_event(LoadEvent::LoadError(e.to_string()));
+                        let _ = proxy.send_event(LoadEvent::LoadError(e.to_string(), generation));
                         return;
                     }
                 };
@@ -6262,8 +6315,8 @@ impl Lumen {
                 while pos < raw.bytes.len() {
                     let end = (pos + STREAM_CHUNK_BYTES).min(raw.bytes.len());
                     let chunk = &raw.bytes[pos..end];
-                    feed_preload_and_emit(&mut preload_scanner, chunk, &raw.base, &proxy);
-                    if proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec())).is_err() {
+                    feed_preload_and_emit(&mut preload_scanner, chunk, &raw.base, &proxy, generation);
+                    if proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec(), generation)).is_err() {
                         return; // event loop завершён
                     }
                     pos = end;
@@ -6274,10 +6327,10 @@ impl Lumen {
             // Финальные hint-ы из буферизованного хвоста сканера.
             let tail = preload_scanner.end();
             if !tail.is_empty() {
-                let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(tail, raw.base.clone()));
+                let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(tail, raw.base.clone(), generation));
             }
 
-            let _ = proxy.send_event(LoadEvent::LoadDone(raw));
+            let _ = proxy.send_event(LoadEvent::LoadDone(raw, generation));
         });
     }
 
@@ -6422,8 +6475,13 @@ impl Lumen {
         self.anim_frame = None;
         self.find.close();
         self.address_bar.close();
-        self.scroll_y = 0.0;
-        self.scroll_x = 0.0;
+        // U-1: новая страница встаёт сверху-слева; но back/forward (и bfcache)
+        // просят восстановить прежний scroll-offset через `pending_restore_scroll`,
+        // т.к. навигация теперь асинхронна и сброс происходит здесь, в LoadDone,
+        // а не сразу после `reload()`. Координаты докламплятся при первом redraw.
+        let (restore_x, restore_y) = self.pending_restore_scroll.take().unwrap_or((0.0, 0.0));
+        self.scroll_x = restore_x;
+        self.scroll_y = restore_y;
         self.scroll_drag = None;
         self.scroll_anim = None;
         self.momentum_anim = None;
@@ -6756,18 +6814,21 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         self.stream_layout_seeded = false;
         // Record navigation start for the initial streaming load.
         self.nav_start = Some(std::time::Instant::now());
-        self.start_streaming_load();
+        self.load_generation = self.load_generation.wrapping_add(1);
+        self.start_streaming_load(self.load_generation);
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: LoadEvent) {
         match event {
-            LoadEvent::EarlyPreloadHints(hints, base) => {
+            LoadEvent::EarlyPreloadHints(hints, base, generation) => {
+                if generation != self.load_generation { return; }
                 // Ранние хинты из первого chunk — отправить в sink немедленно.
                 // `preload_dispatched` запоминает URL, чтобы финальный scan
                 // в LoadDone их не дублировал.
                 dispatch_preload_hints(&hints, &base, &self.event_sink, &mut self.preload_dispatched);
             }
-            LoadEvent::HtmlChunk(chunk) => {
+            LoadEvent::HtmlChunk(chunk, generation) => {
+                if generation != self.load_generation { return; }
                 let builder = self.stream_builder
                     .get_or_insert_with(lumen_html_parser::IncrementalTreeBuilder::new);
                 builder.feed_bytes(&chunk);
@@ -6778,7 +6839,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.stream_last_paint = std::time::Instant::now();
                 }
             }
-            LoadEvent::CssLoaded(boxed) => {
+            LoadEvent::CssLoaded(boxed, generation) => {
+                if generation != self.load_generation { return; }
                 // PH1-2: CSS загружен параллельным потоком — мёрджим в stream_sheet.
                 // Применится в следующем paint_partial_dom (16 мс throttle).
                 let sheet = *boxed;
@@ -6849,7 +6911,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     w.request_redraw();
                 }
             }
-            LoadEvent::LoadDone(raw) => {
+            LoadEvent::LoadDone(raw, generation) => {
+                // U-1: drop a superseded navigation's final pipeline — otherwise a
+                // slow earlier load would render its page over the newer one.
+                if generation != self.load_generation { return; }
                 eprintln!("Streaming завершён, финальный pipeline");
                 self.stream_builder = None;
                 self.stream_sheet = lumen_css_parser::Stylesheet::default();
@@ -6886,7 +6951,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                 }
             }
-            LoadEvent::LoadError(msg) => {
+            LoadEvent::LoadError(msg, generation) => {
+                if generation != self.load_generation { return; }
                 self.nav_start = None;
                 click_log::log_load_err(&self.source.describe(), &msg);
                 eprintln!("Ошибка загрузки {}: {msg}", self.source.describe());
@@ -11725,11 +11791,13 @@ impl Lumen {
             self.source = prev.source;
             None
         };
-        self.reload();
         // Restore scroll position from bfcache (or from nav entry if no bfcache hit).
+        // U-1: reload() is now asynchronous (the page resets scroll at LoadDone),
+        // so stash the offset for `apply_loaded_page` to apply instead of setting
+        // it here — a direct assignment would be clobbered when LoadDone arrives.
         let (sx, sy) = restored_scroll.unwrap_or((prev.scroll_x, prev.scroll_y));
-        self.scroll_x = sx;
-        self.scroll_y = sy;
+        self.pending_restore_scroll = Some((sx, sy));
+        self.reload();
         if let Some(w) = self.window.as_ref() { w.request_redraw(); }
     }
 
@@ -11790,10 +11858,11 @@ impl Lumen {
             self.source = next.source;
             None
         };
-        self.reload();
+        // U-1: stash scroll offset for `apply_loaded_page` (async reload — see
+        // navigate_back for rationale).
         let (sx, sy) = restored_scroll.unwrap_or((next.scroll_x, next.scroll_y));
-        self.scroll_x = sx;
-        self.scroll_y = sy;
+        self.pending_restore_scroll = Some((sx, sy));
+        self.reload();
         if let Some(w) = self.window.as_ref() { w.request_redraw(); }
     }
 
