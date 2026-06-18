@@ -1,7 +1,7 @@
 # Задача: Loading spinner при restore гибернированной вкладки > 200ms (10K.3)
 
-**Developer:** P2  
-**Ветка:** `p2-tab-restore-spinner`  
+**Developer:** P1 (переназначено с P2 → резерв, 2026-06-18)  
+**Ветка:** `p1-tab-restore-spinner`  
 **Размер:** S (~60 строк + 3 теста)  
 **Крейты:** `lumen-shell`
 

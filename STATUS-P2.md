@@ -1,35 +1,23 @@
-# STATUS-P2 — Feature Development
+# STATUS-P2 — Резерв (без активных задач)
 
-**Developer:** Программист 2 (Feature development — any subsystem from roadmap)
+**Developer:** Программист 2 — **роль-резерв**. Не получает задач по умолчанию.
+
+> **2026-06-18: P2 выведен из активной ротации.** Все незакрытые задачи переданы
+> программисту 1 (см. `STATUS-P1.md` → раздел «Унаследовано от P2»). Новые задачи
+> на P2 не назначаются — роль остаётся как запасной вариант на случай возврата
+> к параллельной работе. Историю мержей ниже не трогать (это правдивая летопись).
 
 ---
 
 ## In progress
 
-_(none)_
+_(none — роль-резерв)_
 
 ---
 
 ## Next
 
-**Phase 2 и Phase 3 завершены.** Доступные направления:
-
-### Опция 1: Bug fixes (P3 вспомога)
-
-Открытые баги с высоким отклонением (TEST-39, TEST-46, TEST-48):
-- **BUG-085** (Linear/radial gradient 12%) — paint domain, gradient rendering
-- **BUG-088** (CSS Transforms individual properties 9.5%) — requires P4 cascade wiring
-- **BUG-090** (-webkit-line-clamp 23.8%) — layout domain
-
-### Опция 2: Canvas Phase extensions (Phase 2 continuation)
-
-- Canvas 2D Text rendering completeness (BUG-099 continuation)
-- Advanced canvas patterns / shadows refinement
-
-### Опция 3: Color management Phase 1 extension
-
-- Lab/CMYK color space support (H-2 Phase 1+)
-- Device-specific tone curves + advanced ICC features
+_(none — задач нет; все направления переданы P1)_
 
 ---
 

@@ -1,7 +1,7 @@
 # Задача: FemtovgBackend — истинные эллиптические border-radius
 
-**Developer:** P2  
-**Ветка:** `p2-femtovg-elliptical-radius`  
+**Developer:** P1 (переназначено с P2 → резерв, 2026-06-18)  
+**Ветка:** `p1-femtovg-elliptical-radius`  
 **Размер:** S (~50 строк замены + 2 теста)  
 **Крейты:** `lumen-paint`
 

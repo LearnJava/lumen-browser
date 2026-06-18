@@ -1,7 +1,7 @@
 # Задача: Tab tier tooltip при hover (10K.2)
 
-**Developer:** P2  
-**Ветка:** `p2-tab-tier-tooltip`  
+**Developer:** P1 (переназначено с P2 → резерв, 2026-06-18)  
+**Ветка:** `p1-tab-tier-tooltip`  
 **Размер:** S (~70 строк + 3 теста)  
 **Крейты:** `lumen-shell`
 

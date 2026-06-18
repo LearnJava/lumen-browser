@@ -34,7 +34,7 @@ _(BUG-120 закрыт 2026-06-10 — невидимые Cc стрипаются
   sizing (farthest-corner), hard stops AA, femtovg `fill_gradient` kernel. После P2 PA-1 (gradient_math.rs).
 _(BUG-093 закрыт 2026-06-10 — порог TEST-51 откалиброван 0.5→2.0%, см. Recent.)_
 
-- BUG-082/094/098/076 — НЕ брать точечно: закрываются фичами femtovg у P2 (PA-2..PA-4 в STATUS-P2.md).
+- BUG-082/094/098/076 — НЕ брать точечно: закрываются фичами femtovg (PA-2..PA-4, влиты — см. STATUS-P2.md «Current / Recently Merged»; дальнейшая работа по femtovg теперь у P1).
 
 ### 0.5. Interaction-слой graphic_tests (новое, 2026-06-11)
 
@@ -120,7 +120,7 @@ _(BUG-196 закрыт 2026-06-18 — `::before`/`attr()` на flex-контей
 
 _(нет — handoff-задачи перераспределены на P1/P2)_
 
-> Перенесено 2026-06-02: `Event::RequestFailed` → network-panel **→ P2** (задача #30, владеет `devtools/network_panel.rs`). P3 фокусируется только на баг-фиксах и регрессиях (см. CLAUDE.md «Bug ownership: P3 only»).
+> Перенесено 2026-06-02: `Event::RequestFailed` → network-panel **→ P1** (задача #30, `devtools/network_panel.rs`; переназначена с P2 на P1 18.06 — P2 выведен в резерв, см. `STATUS-P1.md` → «Унаследовано от P2»). P3 фокусируется только на баг-фиксах и регрессиях (см. CLAUDE.md «Bug ownership: P3 only»).
 
 ### Постоянно
 
