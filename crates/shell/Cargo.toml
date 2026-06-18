@@ -46,7 +46,8 @@ lumen-css-parser.workspace = true
 lumen-dom.workspace = true
 lumen-layout.workspace = true
 # Phase 2: backend features are activated via [features] default above (ADR-010 RB-9).
-lumen-paint = { workspace = true }
+# cpu-render: deterministic tiny-skia rasterizer used by the headless `--screenshot` CLI.
+lumen-paint = { workspace = true, features = ["cpu-render"] }
 lumen-font.workspace = true
 lumen-encoding.workspace = true
 lumen-image = { workspace = true, features = ["avif"] }

@@ -8,6 +8,7 @@
 //! - `lumen --dump-layout <path-or-url>` — печать layout-дерева в stdout.
 //! - `lumen --dump-display-list <path-or-url>` — печать display list в stdout.
 //! - `lumen --print-to-pdf <out.pdf> <path-or-url>` — сохранить страницу как PDF (A4).
+//! - `lumen --screenshot <out.png> <path-or-url>` — детерминированный CPU-снимок страницы в PNG.
 //! - `lumen --devtools-port <N>` — запустить DevTools WebSocket сервер на порту N.
 //! - `lumen --bidi-port <N>` — запустить WebDriver BiDi WebSocket сервер на порту N.
 //! - `lumen --mcp [url]` — MCP-сервер (stdio) для AI-агентов (Claude, Browser Use…).
@@ -272,6 +273,7 @@ fn main() -> ExitCode {
     let (det_cfg, rest_args) = deterministic::extract_deterministic(&rest_args);
     let det_mode = det_cfg.enabled;
     let (pdf_output, rest_args) = extract_print_to_pdf(&rest_args);
+    let (screenshot_output, rest_args) = extract_screenshot(&rest_args);
     let (mcp_mode, rest_args) = extract_mcp_mode(&rest_args);
     let (use_network_service, rest_args) = extract_network_service(&rest_args);
     let (proxy, rest_args) = match extract_proxy(&rest_args) {
@@ -314,6 +316,9 @@ fn main() -> ExitCode {
     let cli = if let Some(output) = pdf_output {
         let source = PageSource::from_arg(rest_args.first().map(|s| s.as_str()));
         CliMode::PrintToPdf { source, output }
+    } else if let Some(output) = screenshot_output {
+        let source = PageSource::from_arg(rest_args.first().map(|s| s.as_str()));
+        CliMode::Screenshot { source, output }
     } else if let Some(mcp) = mcp_mode {
         CliMode::Mcp(mcp)
     } else {
@@ -386,6 +391,7 @@ fn main() -> ExitCode {
         CliMode::Dump { source, kind } => run_dump_mode(&source, kind, event_sink),
         CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, det_mode),
         CliMode::PrintToPdf { source, output } => run_print_to_pdf(&source, &output, event_sink),
+        CliMode::Screenshot { source, output } => run_screenshot(&source, &output, event_sink),
         CliMode::Mcp(mcp) => run_mcp_mode(mcp),
     }
 }
@@ -742,6 +748,90 @@ fn run_print_to_pdf(
 const PDF_PAGE_W: u32 = 794;
 const PDF_PAGE_H: u32 = 1123;
 
+/// Ширина viewport для headless `--screenshot` (как в dump-режимах).
+const SCREENSHOT_VP_W: f32 = 1024.0;
+/// Минимальная высота снимка (один экран) для коротких страниц.
+const SCREENSHOT_MIN_H: f32 = 720.0;
+/// Верхний предел высоты снимка — защита от гигантских аллокаций на очень
+/// длинных страницах (1024 × 32768 × 4 ≈ 134 МБ — потолок).
+const SCREENSHOT_MAX_H: f32 = 32768.0;
+
+/// Запустить `--screenshot`: load → layout → CPU-растеризация → PNG → файл.
+fn run_screenshot(
+    source: &PageSource,
+    output: &std::path::Path,
+    event_sink: Arc<dyn EventSink>,
+) -> ExitCode {
+    match do_screenshot(source, output, event_sink) {
+        Ok((w, h)) => {
+            eprintln!("Снимок сохранён: {} ({w}×{h})", output.display());
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("Ошибка --screenshot {}: {err}", source.describe());
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Headless CPU-снимок страницы целиком (включая контент ниже первого экрана).
+///
+/// Использует тот же полный pipeline, что `--dump-layout`/`--print-to-pdf`
+/// (`parse_and_layout` → внешний CSS, картинки, `paint_ordered`), затем
+/// растеризует display-list детерминированным CPU-бэкендом
+/// (`Renderer::render_to_image_cpu`, feature `cpu-render`) и кодирует PNG.
+/// В отличие от GPU-пути окна — не нужен wgpu/winit, результат пиксельно
+/// воспроизводим и работает на любой ОС/в CI.
+///
+/// Высота снимка = высота layout-корня, зажатая в
+/// `[SCREENSHOT_MIN_H, SCREENSHOT_MAX_H]`, ширина — `SCREENSHOT_VP_W`.
+///
+/// Возвращает `(width, height)` сохранённого PNG.
+fn do_screenshot(
+    source: &PageSource,
+    output: &std::path::Path,
+    event_sink: Arc<dyn EventSink>,
+) -> Result<(u32, u32), Box<dyn Error>> {
+    use lumen_paint::Renderer;
+
+    let raw = source.load_bytes(event_sink.clone(), None)?;
+    let vp = Size::new(SCREENSHOT_VP_W, SCREENSHOT_MIN_H);
+    let parsed = parse_and_layout(
+        &raw.bytes,
+        raw.content_type,
+        &raw.base,
+        &event_sink,
+        vp,
+        &mut std::collections::HashSet::new(),
+        None,
+        None,
+        None,
+        &NullHyphenationProvider,
+        false, // headless: no interactive JS
+        true,  // deterministic: reproducible pixels across runs/OS
+        false, // dark_mode: light
+        None,  // cookie_jar
+        raw.cross_origin_isolated,
+        None,  // sw_worker_store
+        None,  // cache_backend
+    )?;
+
+    // Полная высота страницы (контент может быть длиннее экрана), с потолком.
+    let content_h = parsed
+        .layout
+        .rect
+        .height
+        .clamp(SCREENSHOT_MIN_H, SCREENSHOT_MAX_H);
+    let width = SCREENSHOT_VP_W as u32;
+    let height = content_h.ceil() as u32;
+
+    let dl = paint_ordered(&parsed.layout);
+    let image = Renderer::render_to_image_cpu(width, height, &dl, &[], 0.0, 0.0)?;
+    let png = lumen_image::encode_png_rgba8(&image)?;
+    std::fs::write(output, &png)?;
+    Ok((width, height))
+}
+
 fn do_print_to_pdf(
     source: &PageSource,
     output: &std::path::Path,
@@ -1035,6 +1125,7 @@ fn print_usage() {
     eprintln!("  lumen --dump-layout <path-or-url>               — layout-дерево в stdout");
     eprintln!("  lumen --dump-display-list <path-or-url>         — display list в stdout");
     eprintln!("  lumen --print-to-pdf <out.pdf> <path-or-url>   — сохранить страницу как PDF");
+    eprintln!("  lumen --screenshot <out.png> <path-or-url>     — CPU-снимок страницы в PNG (без окна)");
     eprintln!("  [--devtools-port <N>]                           — DevTools WS сервер (любой режим)");
     eprintln!("  [--bidi-port <N>]                               — WebDriver BiDi WS сервер (любой режим)");
     eprintln!("  [--proxy <url>]                                 — HTTP прокси (http://host:port или user:pass@host:port)");
@@ -1055,6 +1146,35 @@ fn extract_print_to_pdf(args: &[String]) -> (Option<std::path::PathBuf>, Vec<Str
 
     while i < args.len() {
         if args[i] == "--print-to-pdf" && output.is_none() {
+            i += 1;
+            if let Some(path) = args.get(i) {
+                output = Some(std::path::PathBuf::from(path));
+            }
+        } else {
+            rest.push(args[i].clone());
+        }
+        i += 1;
+    }
+
+    if output.is_some() {
+        (output, rest)
+    } else {
+        (None, args.to_vec())
+    }
+}
+
+/// Извлечь `--screenshot <output.png>` из аргументов.
+///
+/// Возвращает `(Some(output_path), остальные_аргументы)` или `(None, все_аргументы)`.
+/// Порядок аргументов зеркалит `--print-to-pdf`: путь вывода идёт сразу за флагом,
+/// источник страницы — позиционный остаток (`--screenshot out.png <url>`).
+fn extract_screenshot(args: &[String]) -> (Option<std::path::PathBuf>, Vec<String>) {
+    let mut i = 0;
+    let mut output: Option<std::path::PathBuf> = None;
+    let mut rest = Vec::new();
+
+    while i < args.len() {
+        if args[i] == "--screenshot" && output.is_none() {
             i += 1;
             if let Some(path) = args.get(i) {
                 output = Some(std::path::PathBuf::from(path));
@@ -2219,6 +2339,8 @@ enum CliMode {
     Dump { source: PageSource, kind: DumpKind },
     /// Headless: страница рендерится постранично и сохраняется как PDF.
     PrintToPdf { source: PageSource, output: std::path::PathBuf },
+    /// Headless: страница рендерится CPU-растеризатором и сохраняется как PNG.
+    Screenshot { source: PageSource, output: std::path::PathBuf },
     /// Headless: MCP-сервер для AI-агентов (Claude, Browser Use…).
     Mcp(McpMode),
 }
@@ -15586,6 +15708,39 @@ mod tests {
         let (output, rest) = extract_print_to_pdf(&args(&["--print-to-pdf", "a.pdf", "b.html"]));
         assert!(output.is_some());
         assert_eq!(rest, args(&["b.html"]));
+    }
+
+    // ── extract_screenshot ───────────────────────────────────────────────────
+
+    #[test]
+    fn extract_screenshot_basic() {
+        let (output, rest) = extract_screenshot(&args(&["--screenshot", "out.png", "page.html"]));
+        assert_eq!(output.as_deref(), Some(std::path::Path::new("out.png")));
+        assert_eq!(rest, args(&["page.html"]));
+    }
+
+    #[test]
+    fn extract_screenshot_no_flag() {
+        let (output, rest) = extract_screenshot(&args(&["page.html"]));
+        assert!(output.is_none());
+        assert_eq!(rest, args(&["page.html"]));
+    }
+
+    #[test]
+    fn extract_screenshot_with_url_source() {
+        let (output, rest) =
+            extract_screenshot(&args(&["--screenshot", "shot.png", "https://example.com"]));
+        assert_eq!(output.as_deref(), Some(std::path::Path::new("shot.png")));
+        assert_eq!(rest, args(&["https://example.com"]));
+    }
+
+    #[test]
+    fn extract_screenshot_only_first_flag_consumed() {
+        // A second --screenshot stays in the rest args (only the first is taken).
+        let (output, rest) =
+            extract_screenshot(&args(&["--screenshot", "a.png", "--screenshot", "b.png"]));
+        assert_eq!(output.as_deref(), Some(std::path::Path::new("a.png")));
+        assert_eq!(rest, args(&["--screenshot", "b.png"]));
     }
 
     #[test]

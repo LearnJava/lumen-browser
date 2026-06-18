@@ -1321,6 +1321,9 @@ fn rasterize_rounded_border_ring(
 
 /// Draw one horizontal border side using segments from `dash_math` for
 /// Dashed/Dotted, or a single fill_rect for Solid/Double.
+// Geometry + style + clip naturally take 8 positional params; bundling them
+// into a struct would not improve clarity for this internal raster helper.
+#[allow(clippy::too_many_arguments)]
 fn draw_border_side_h(
     pixmap: &mut tiny_skia::Pixmap,
     x0: f32,
@@ -1362,6 +1365,9 @@ fn draw_border_side_h(
 
 /// Draw one vertical border side using segments from `dash_math` for
 /// Dashed/Dotted, or a single fill_rect for Solid/Double.
+// Geometry + style + clip naturally take 8 positional params; bundling them
+// into a struct would not improve clarity for this internal raster helper.
+#[allow(clippy::too_many_arguments)]
 fn draw_border_side_v(
     pixmap: &mut tiny_skia::Pixmap,
     x: f32,

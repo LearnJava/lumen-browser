@@ -11,6 +11,29 @@
 
 ## Next
 
+### USABILITY-вертикаль — «зашёл на сайт и комфортно пользуешься» (ТОП-приоритет)
+
+Контекст (анализ 2026-06-18): список фич в `CAPABILITIES.md` широкий (~90 Web-API,
+сеть/layout работают на живых сайтах — github.com/HN грузятся через `--dump-layout`),
+но **вертикаль повседневного использования разорвана**. Эти задачи закрывают разрыв; они
+важнее экзотики из PH3. Owner проставлен — часть передаётся P2/P3/P4 (см. их STATUS).
+
+| # | Задача | Owner | Размер | Крейты / точки в коде |
+|---|--------|-------|--------|----------------------|
+| **U-0** | ~~**`--screenshot <out.png> <url>` headless CPU-снимок**~~ ✅ завершена (2026-06-18) — инструмент наблюдения: честная картинка любого сайта без окна/Edge/ffmpeg. См. «Recent merges». | P1 | S | `lumen-shell` |
+| **U-1** | **Неблокирующая загрузка страницы** — самый болезненный дефект: окно мёрзнет на всё время навигации. `parse_and_layout` (fetch подресурсов + JS + layout) идёт синхронно на UI-потоке. Этап 1: префетч подресурсов параллельно вне UI; этап 2 (ADR-006): весь пайплайн вне UI. Ключевое ограничение — QuickJS не `Send`. Перекрывается с BUG-171/BUG-172. | P1 | XL | `lumen-shell` `main.rs:6369`, `main.rs:2833`; `lumen-network` |
+| **U-2** | **Шейпинг текста (GSUB/GPOS) + CFF-контуры** — без этого текст на реальных сайтах визуально «не тот» (нет кернинга/лигатур), а `.otf`-шрифты вообще не рисуются. Этап 1: GPOS-кернинг + GSUB-лигатуры для латиницы/кириллицы; этап 2: CFF/CFF2 outlines. | P1 | XL | `lumen-font` (`parser.rs`, `rasterizer.rs`) |
+| **U-3** | **Настоящая многовкладочность** — TAB-серия ниже (per-tab `TabState`, переключение, UI). Сейчас интерактивная модель — один документ. | P1 | см. TAB | `lumen-shell` |
+| **U-4** | **WASM-исполнение + закрыть бросающие JS-заглушки** — современные SPA белеют, наткнувшись на `reject` (WebGPU/WebCodecs) или невыполнимый WASM (сейчас только проверка magic-байтов). Этап 1: интерпретатор WASM MVP; этап 2: аудит стабов, которые должны degrade-gracefully, а не throw. | P2 | XL | `lumen-js` (`wasm.rs`, web_codecs/webgpu шимы) |
+| **U-5** | **Fullscreen пересчитывает вьюпорт** — BUG-167: вход в Fullscreen растягивает окно, но страница остаётся ~1024×720. | P3 | S | `lumen-shell` `main.rs:6400` |
+| **U-6** | **Рендер-паритет high-deviation** — добить заметные отклонения: repeating-gradient (BUG-085), filter/backdrop (BUG-144), anchor-positioning (BUG-126 53%), scroll-snap (BUG-104 64%). | P3/P4 | — | см. `BUGS.md` |
+
+**Порядок для P1:** U-0 ✅ → **U-1** (разморозить окно — даёт мгновенный субъективный эффект) → U-3 (TAB-серия) → U-2 (шрифты). U-4 — параллельно у P2.
+
+**Как мерить прогресс:** после каждого этапа снимай `--screenshot` 5–10 живых сайтов (github, новостной, блог, SPA) + `python graphic_tests/run.py --build --continue-on-fail` для CSS-паритета.
+
+---
+
 ### TAB-series — Multi-tab support + screenshot IPC (приоритет)
 
 Цель: один процесс Lumen держит несколько вкладок с изолированным состоянием; `run.py` открывает браузер один раз и получает скриншоты через IPC без gdigrab.
@@ -78,6 +101,7 @@ PH1-2 закрыл только window-first + 60 Hz throttle + параллел
 
 | Дата | Задача | Описание |
 |------|--------|---------|
+| 2026-06-18 | U-0: `--screenshot <out.png> <url>` headless CPU-снимок | Новый CLI-режим шелла: `lumen --screenshot out.png <path-or-url>` гоняет полный headless-пайплайн (`source.load_bytes` → `parse_and_layout` с внешним CSS/картинками → `paint_ordered`) и растеризует display-list детерминированным CPU-бэкендом (`Renderer::render_to_image_cpu`, feature `cpu-render`, tiny-skia) → PNG. Без wgpu/winit/окна, без Edge и ffmpeg, пиксельно воспроизводимо на любой ОС. Высота снимка = высота layout-корня (`parsed.layout.rect.height`), зажата в `[720, 32768]` (полная страница, не только первый экран), ширина 1024. `extract_screenshot()` зеркалит `extract_print_to_pdf` (порядок `--screenshot <out> <url>`); новый `CliMode::Screenshot` + `run_screenshot`/`do_screenshot`. Шелл теперь включает `lumen-paint/cpu-render` в дефолте. Попутно: `#[allow(clippy::too_many_arguments)]` на `draw_border_side_h/v` в `cpu_raster.rs` (8 геом-параметров, открылись для строгого clippy при включении cpu-render). 4 unit-теста `extract_screenshot`. Инструмент наблюдаемости для USABILITY-вертикали (см. Next). |
 | 2026-06-16 | PH3-20: Service Worker Fetch Interception Phase 1 | Активный SW исполняется в выделенном QuickJS-потоке (`lumen-js::sw_worker::spawn_sw_worker`): `ServiceWorkerGlobalScope` + `caches`/`Headers`/`Response` шим, реальные base64 `atob`/`btoa`, `install`/`activate`/`fetch` события. На фазе активации `_sw_run_lifecycle` фетчит скрипт SW и зовёт `_lumen_sw_activate_script(origin, scope, text)` → спавн потока, регистрация в `SwWorkerStore` (`(origin,scope)→SwWorkerHandle`). `ServiceWorkerInterceptor` (lumen-storage) маршрутизирует fetch через `sw_worker_store` со scope-prefix matching (longest-match), независимо от SQLite-регистраций (shell хранит их in-memory); диспатчит `FetchEvent`, ждёт `respondWith()` (5 c таймаут), отдаёт тело сети. Shell: общий in-memory `cache_store: Arc<CacheStorage>` передаётся в `install_dom` (страница + SW-поток делят кэш) и в глобальный `SW_FETCH_INTERCEPTOR`, подключаемый в `http_client_for_subresource`. Новые типы в `lumen-core::ext`: `SwFetchRequest`/`SwWorkerHandle`/`SwWorkerStore`. Ограничение Phase 1: внутри SW `fetch` — только cache-first (без сети), поэтому `cache.addAll()` прекэш из сети не работает; SW отдаёт лишь то, что закэшировала страница. 9 тестов sw_interceptor (5 SQLite + 4 worker-routing), 5 тестов sw_worker. Гочи: `rt.execute_pending_job()` нельзя вызывать внутри `ctx.with(...)` (реентрантность рантайма → паника rquickjs) — `flush_jobs` всегда вне `ctx.with`. |
 | 2026-06-16 | PH3-19: font-display: swap — неблокирующая загрузка web-шрифтов | `load_font_faces` разделена на local()-sync + url()-async. `ParsedPage`/`LoadedPage` несут `pending_web_fonts: Vec<PendingWebFont>`; `apply_loaded_page` спавнит по фоновому потоку на каждый: fetch → WOFF-декод → sfnt-валидация → `LoadEvent::FontLoaded`. Обработчик на UI-потоке: `page_font_registry.register_from_bytes`, push в `web_fonts`, `relayout_page(..., &self.web_fonts)` строит `MultiFontMeasurer` из накопленных шрифтов (FOUT swap), `request_redraw`. BUG-170 закрыт. |
 | 2026-06-16 | PH1-2c: прогрессивная подгрузка картинок во время streaming | `paint_partial_dom` после layout зовёт `spawn_stream_image_loads(doc, viewport)` — `collect_image_requests` по частичному DOM, для каждого не-lazy и ещё-не-запрошенного `src` спавнится поток `fetch_image_bytes`+`decode`/`decode_gif_animated`. По завершении поток шлёт `LoadEvent::ImageDecoded { src, image, animated }`; `user_event` регистрирует картинку в renderer-е (или `pending_images` до создания окна), кладёт в `image_cache`, анимированный GIF — в `animated_gifs` (тик в `RedrawRequested`), и просит redraw — картинки появляются по мере прихода, как CSS, а не разом в финальном `LoadDone`. Дедуп через новое поле `stream_images_requested: HashSet<String>` (сбрасывается на каждую навигацию; сохраняется/восстанавливается в `PageSnapshot`). `PageSource::resource_base()` — общий хелпер базы подресурсов. 3 новых shell-теста (итого 1326). |
