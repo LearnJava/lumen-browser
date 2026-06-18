@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-222)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-223)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -235,6 +235,7 @@
 | [BUG-219](bugs/BUG-219-OPEN.md) | OPEN | image/paint | image downscale resampling pixel-parity vs Edge — TEST-18 остаток 2.11% (тонкий AA по всем фото после фикса BUG-180) → KNOWN_DEBTORS |
 | [BUG-220](bugs/BUG-220-OPEN.md) | OPEN | paint | scroll-контейнер в ordered (stacking-context) пути теряет scrollbar: `box_layer_ops` эмитит `PushScrollLayer`/`PopScrollLayer`, но не `DrawScrollbar` (есть только в legacy `walk`) — display_list.rs:2481. Замечен при разборе BUG-202 |
 | [BUG-221](bugs/BUG-221-OPEN.md) | OPEN | paint | CPU-бэкенд снимка (`render_to_image_cpu`, cpu_raster.rs) не на паритете с femtovg: border-radius (TEST-36 квадрат вместо скругления), gradients (TEST-39), images (TEST-18) не рендерятся как в окне. Блокирует полную замену gdigrab на `run.py --ipc` (TAB-7); геометрия/цвет/текст совпадают пиксельно |
+| [BUG-222](bugs/BUG-222-OPEN.md) | OPEN | js/shell | WASM-реестр (`wasm::REGISTRY`) не очищается при разрушении JS-контекста: «утёкший» `Persistent` функции-импорта роняет QuickJS на `list_empty(&rt->gc_obj_list)` при teardown. `wasm::clear_registry()` добавлен, но в шелле не вызывается (handoff P3). Замечен при U-4 i64/BigInt |
 
 ---
 

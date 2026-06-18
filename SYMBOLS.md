@@ -1145,7 +1145,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/ipc/src/lib.rs:251` **fn** `connect` — Connect to the network service listening on `127.0.0.1:port`
 `crates/ipc/src/lib.rs:261` **fn** `request` — Send a request and block until the matching response arrives
 
-## lumen-js  (339 symbols)
+## lumen-js  (341 symbols)
 
 `crates/js/src/async_context.rs:32` **fn** `install_async_context` — Install the `AsyncContext` global (Variable + Snapshot) into the context
 `crates/js/src/attribution_reporting.rs:23` **fn** `install_attribution_reporting_api` — Install Attribution Reporting API bindings into the JS context
@@ -1422,19 +1422,21 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/wasm/interp.rs:203` **fn** `mem_pages` — Current memory size in pages
 `crates/js/src/wasm/interp.rs:209` **fn** `mem_grow` — Grow memory by `delta` pages; return the previous page count, or -1 on
 `crates/js/src/wasm/interp.rs:225` **fn** `invoke` — Invoke any function by index (imported → host, defined → interpret)
-`crates/js/src/wasm/mod.rs:59` **fn** `validate` — `true` if `bytes` decode as a valid module this engine can run
-`crates/js/src/wasm/mod.rs:64` **fn** `compile` — Decode and store a module; returns its registry id
-`crates/js/src/wasm/mod.rs:82` **fn** `module_exports_json` — JSON descriptor of a module's exports (consumed by the JS shim to build the
-`crates/js/src/wasm/mod.rs:104` **fn** `module_imports_json` — JSON descriptor of a module's imports (consumed by the JS shim to resolve
-`crates/js/src/wasm/mod.rs:130` **fn** `instantiate` — Instantiate a compiled module
-`crates/js/src/wasm/mod.rs:220` **fn** `call_f64` — Call an exported function by its function index
-`crates/js/src/wasm/mod.rs:265` **fn** `mem_size` — Current memory size of an instance, in 64 KiB pages
-`crates/js/src/wasm/mod.rs:276` **fn** `mem_grow` — Grow an instance's memory by `delta` pages; previous size or -1 on failure
-`crates/js/src/wasm/mod.rs:287` **fn** `mem_read` — Copy `len` bytes of an instance's linear memory starting at `offset`
-`crates/js/src/wasm/mod.rs:305` **fn** `mem_write` — Write `bytes` into an instance's linear memory at `offset`. Returns `false`
-`crates/js/src/wasm/mod.rs:322` **fn** `global_get` — Read an exported global's current value as `f64`
-`crates/js/src/wasm/mod.rs:335` **fn** `global_set` — Set a mutable exported global's value (coerced to its type). Returns `false`
-`crates/js/src/wasm/mod.rs:379` **fn** `func_param_count` — Number of parameters for an exported function index (used by the shim to
+`crates/js/src/wasm/mod.rs:61` **fn** `validate` — `true` if `bytes` decode as a valid module this engine can run
+`crates/js/src/wasm/mod.rs:66` **fn** `compile` — Decode and store a module; returns its registry id
+`crates/js/src/wasm/mod.rs:89` **fn** `clear_registry` — Drop all compiled modules and live instances on this thread, releasing the
+`crates/js/src/wasm/mod.rs:99` **fn** `module_exports_json` — JSON descriptor of a module's exports (consumed by the JS shim to build the
+`crates/js/src/wasm/mod.rs:121` **fn** `module_imports_json` — JSON descriptor of a module's imports (consumed by the JS shim to resolve
+`crates/js/src/wasm/mod.rs:147` **fn** `instantiate` — Instantiate a compiled module
+`crates/js/src/wasm/mod.rs:238` **fn** `func_signature` — Parameter and result value types of an exported function (by its function
+`crates/js/src/wasm/mod.rs:254` **fn** `call_typed` — Call an exported function with already-typed arguments, returning typed
+`crates/js/src/wasm/mod.rs:285` **fn** `mem_size` — Current memory size of an instance, in 64 KiB pages
+`crates/js/src/wasm/mod.rs:296` **fn** `mem_grow` — Grow an instance's memory by `delta` pages; previous size or -1 on failure
+`crates/js/src/wasm/mod.rs:307` **fn** `mem_read` — Copy `len` bytes of an instance's linear memory starting at `offset`
+`crates/js/src/wasm/mod.rs:325` **fn** `mem_write` — Write `bytes` into an instance's linear memory at `offset`. Returns `false`
+`crates/js/src/wasm/mod.rs:344` **fn** `global_value` — Read an exported global's current value (typed). Returns `None` if the
+`crates/js/src/wasm/mod.rs:356` **fn** `global_set_value` — Set a mutable exported global from a typed value (coerced to its declared
+`crates/js/src/wasm/mod.rs:467` **fn** `func_param_count` — Number of parameters for an exported function index (used by the shim to
 `crates/js/src/wasm/parser.rs:16` **type** `DecodeResult` — Result of decoding, with a human-readable error for `CompileError`
 `crates/js/src/wasm/parser.rs:20` **enum** `BlockType` — Block signature for `block`/`loop`/`if`
 `crates/js/src/wasm/parser.rs:33` **enum** `Instr` — A decoded instruction. Numeric/comparison/conversion ops with no immediate
@@ -1465,7 +1467,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/web_codecs.rs:16` **fn** `install_webcodecs_bindings` — Install WebCodecs API JS shim
 `crates/js/src/web_locks.rs:14` **fn** `install_web_locks_bindings` — Install the Web Locks API bindings into the JS context
 `crates/js/src/web_midi.rs:16` **fn** `install_web_midi_api` — Install Web MIDI API bindings into the JS context
-`crates/js/src/webassembly.rs:125` **fn** `install_webassembly_bindings` — Install WebAssembly API bindings into the JS context
+`crates/js/src/webassembly.rs:167` **fn** `install_webassembly_bindings` — Install WebAssembly API bindings into the JS context
 `crates/js/src/webgl_bindings.rs:25` **fn** `install_webgl_bindings` — Install WebGL fingerprint shim into the JS context
 `crates/js/src/webgl_canvas.rs:57` **fn** `install_webgl_canvas` — Install functional WebGL bindings into the JS context
 `crates/js/src/webgpu.rs:28` **fn** `install_webgpu_bindings` — Install the WebGPU API bindings into the JS context
@@ -4110,4 +4112,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4039 symbols in 22 crates*
+*Total: 4041 symbols in 22 crates*
