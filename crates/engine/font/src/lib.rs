@@ -6,9 +6,11 @@
 //! Cyrillic без hinting, kerning и ligatures.
 //!
 //! TTF/OTF — формат с большим количеством обязательных и опциональных
-//! таблиц; реализуем по мере необходимости. Не поддерживается (отложено):
-//! hinting (TT instructions), GPOS/GSUB (advanced shaping), CFF outlines
-//! (для PostScript-OpenType), variable fonts, color glyphs (COLR/CPAL,
+//! таблиц; реализуем по мере необходимости. Шейпинг (U-2 этап 1): GSUB
+//! лигатуры (`liga`/`clig`) + GPOS кернинг (`kern`) для Latin/Cyrillic —
+//! см. [`shape::Shaper`]. Не поддерживается (отложено): hinting (TT
+//! instructions), CFF outlines (для PostScript-OpenType, U-2 этап 2),
+//! сложные скрипты / mark-позиционирование, color glyphs (COLR/CPAL,
 //! sbix), bitmap strikes (EBDT/EBLC).
 
 pub mod avar;
@@ -20,8 +22,12 @@ pub mod delta_set_index_map;
 pub mod face;
 pub mod fvar;
 pub mod glyf;
+pub mod gpos;
+pub mod gsub;
 pub mod gvar;
 pub mod head;
+pub mod otlayout;
+pub mod shape;
 pub mod hvar;
 pub mod item_variation;
 pub mod hhea;
@@ -48,8 +54,11 @@ pub use fvar::{Fvar, NamedInstance, VariationAxis};
 pub use glyf::{
     Anchor, BoundingBox, CompositeComponent, Contour, Glyf, Glyph, Outline, OutlinePoint,
 };
+pub use gpos::Gpos;
+pub use gsub::Gsub;
 pub use gvar::{GlyphVariationData, Gvar, PointNumbers, TupleVariation};
 pub use head::{Head, IndexToLocFormat};
+pub use shape::{ShapedGlyph, Shaper};
 pub use hvar::Hvar;
 pub use item_variation::{
     ItemVariationData, ItemVariationStore, RegionAxisCoordinates, VariationRegion,
