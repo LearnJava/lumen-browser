@@ -6,11 +6,15 @@
 //! Phase 0 stubs. `Memory`/`Table`/`Global`/`Tag`/`Exception` standalone classes
 //! are unchanged (used when constructed directly by JS).
 //!
-//! MVP boundaries (documented): numeric values cross the JS↔WASM boundary as
-//! `f64` (so `i64` beyond 2^53 loses precision); exported `Memory.buffer` is a
-//! *snapshot copy* of Rust-owned linear memory (the live-aliasing
-//! `new Int32Array(memory.buffer)` emscripten pattern is not coherent); host
-//! imports cannot read/write the instance's memory mid-call.
+//! Numeric values cross the JS↔WASM boundary by type: `i64` rides as a JS
+//! `BigInt` (full 64-bit precision, per the W3C WebAssembly JS Interface),
+//! the others as `Number` — for exported function arguments/results, host
+//! import arguments/results, and exported globals.
+//!
+//! MVP boundaries (documented): exported `Memory.buffer` is a *snapshot copy*
+//! of Rust-owned linear memory (the live-aliasing `new Int32Array(memory.buffer)`
+//! emscripten pattern is not coherent); host imports cannot read/write the
+//! instance's memory mid-call.
 
 use rquickjs::{Ctx, Exception, Function, Persistent, TypedArray};
 
@@ -43,6 +47,58 @@ fn wasm_instantiate_native<'js>(
         .map_err(|e| Exception::throw_message(&ctx, &e))
 }
 
+/// Native backing for `__lumen_wasm_call`.
+///
+/// Each JS argument is coerced to its declared WASM parameter type and each
+/// result is mapped back to JS: an `i64` rides the boundary as a `BigInt`
+/// (W3C WebAssembly JS Interface), so 64-bit integers keep full precision
+/// instead of being squeezed through an `f64`. Free function so the single
+/// `'js` ties `ctx` to the incoming/returned `Value` handles.
+fn wasm_call_native<'js>(
+    ctx: Ctx<'js>,
+    inst_id: u32,
+    func_idx: u32,
+    args: Vec<rquickjs::Value<'js>>,
+) -> rquickjs::Result<Vec<rquickjs::Value<'js>>> {
+    let (params, _results) = wasm::func_signature(inst_id, func_idx).unwrap_or_default();
+    let typed_args: Vec<wasm::value::Value> = args
+        .iter()
+        .enumerate()
+        .map(|(i, a)| {
+            let ty = params.get(i).copied().unwrap_or(wasm::value::ValType::F64);
+            wasm::js_value_to_wasm(a, ty)
+        })
+        .collect();
+    let results = wasm::call_typed(&ctx, inst_id, func_idx, &typed_args)
+        .map_err(|e| Exception::throw_message(&ctx, &e))?;
+    Ok(results.into_iter().map(|v| wasm::wasm_value_to_js(&ctx, v)).collect())
+}
+
+/// Native backing for `__lumen_wasm_global_get` — returns the global's value as
+/// a `BigInt` (i64) or `Number` (other types). Free function so `'js` ties
+/// `ctx` to the returned handle.
+fn wasm_global_get_native<'js>(
+    ctx: Ctx<'js>,
+    inst_id: u32,
+    idx: u32,
+) -> rquickjs::Value<'js> {
+    match wasm::global_value(inst_id, idx) {
+        Some(v) => wasm::wasm_value_to_js(&ctx, v),
+        None => rquickjs::Value::new_float(ctx, 0.0),
+    }
+}
+
+/// Native backing for `__lumen_wasm_global_set` — accepts a `BigInt` (i64) or
+/// `Number`, coerced to the global's declared type (read from its current
+/// value).
+fn wasm_global_set_native(inst_id: u32, idx: u32, v: rquickjs::Value) -> bool {
+    let Some(cur) = wasm::global_value(inst_id, idx) else {
+        return false;
+    };
+    let wv = wasm::js_value_to_wasm(&v, cur.val_type());
+    wasm::global_set_value(inst_id, idx, wv)
+}
+
 /// Register the `__lumen_wasm_*` native bindings used by the JS shim.
 fn install_native_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
     let g = ctx.globals();
@@ -71,16 +127,7 @@ fn install_native_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
         Function::new(ctx.clone(), wasm_instantiate_native)?,
     )?;
 
-    g.set(
-        "__lumen_wasm_call",
-        Function::new(
-            ctx.clone(),
-            |ctx: Ctx, inst_id: u32, func_idx: u32, args: Vec<f64>| -> rquickjs::Result<Vec<f64>> {
-                wasm::call_f64(&ctx, inst_id, func_idx, args)
-                    .map_err(|e| Exception::throw_message(&ctx, &e))
-            },
-        )?,
-    )?;
+    g.set("__lumen_wasm_call", Function::new(ctx.clone(), wasm_call_native)?)?;
 
     g.set(
         "__lumen_wasm_mem_size",
@@ -107,15 +154,10 @@ fn install_native_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
             },
         )?,
     )?;
-    g.set(
-        "__lumen_wasm_global_get",
-        Function::new(ctx.clone(), |inst_id: u32, idx: u32| -> f64 { wasm::global_get(inst_id, idx) })?,
-    )?;
+    g.set("__lumen_wasm_global_get", Function::new(ctx.clone(), wasm_global_get_native)?)?;
     g.set(
         "__lumen_wasm_global_set",
-        Function::new(ctx.clone(), |inst_id: u32, idx: u32, v: f64| -> bool {
-            wasm::global_set(inst_id, idx, v)
-        })?,
+        Function::new(ctx.clone(), wasm_global_set_native)?,
     )?;
 
     Ok(())
@@ -283,8 +325,11 @@ const WEBASSEMBLY_SHIM: &str = r#"
 
   function makeExportFn(instId, funcIdx) {
     return function() {
+      // Pass arguments through untouched: the native side coerces each to its
+      // declared WASM type. `+arg` would throw on a BigInt and lose precision
+      // on a large i64, so we must not eagerly numify here.
       var args = new Array(arguments.length);
-      for (var i = 0; i < arguments.length; i++) args[i] = +arguments[i];
+      for (var i = 0; i < arguments.length; i++) args[i] = arguments[i];
       var res;
       try { res = __lumen_wasm_call(instId, funcIdx, args); }
       catch (e) { throw new RuntimeError(errMsg(e)); }
@@ -317,7 +362,9 @@ const WEBASSEMBLY_SHIM: &str = r#"
     g._instId = instId;
     Object.defineProperty(g, 'value', {
       get: function() { return __lumen_wasm_global_get(instId, gidx); },
-      set: function(v) { __lumen_wasm_global_set(instId, gidx, +v); },
+      // Pass `v` through untouched so an i64 global accepts a BigInt without
+      // `+v` throwing / truncating.
+      set: function(v) { __lumen_wasm_global_set(instId, gidx, v); },
       configurable: true
     });
     g.valueOf = function() { return __lumen_wasm_global_get(instId, gidx); };
@@ -454,6 +501,9 @@ mod tests {
         ctx.with(|ctx| {
             install_webassembly_bindings(&ctx).unwrap();
             f(&ctx);
+            // Release any `Persistent` import handles before the Runtime drops,
+            // or QuickJS asserts on a non-empty GC object list (BUG-222).
+            wasm::clear_registry();
         });
     }
 
@@ -531,6 +581,89 @@ mod tests {
                 )
                 .unwrap();
             assert!(ok);
+        });
+    }
+
+    /// `(module (func (export "add") (param i64 i64) (result i64)
+    ///   local.get 0 local.get 1 i64.add))` — hand-assembled.
+    const ADD64_WASM: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00, // header
+        0x01, 0x07, 0x01, 0x60, 0x02, 0x7E, 0x7E, 0x01, 0x7E, // type (i64,i64)->i64
+        0x03, 0x02, 0x01, 0x00, // one func of type 0
+        0x07, 0x07, 0x01, 0x03, 0x61, 0x64, 0x64, 0x00, 0x00, // export "add" func 0
+        0x0A, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x7C, 0x0B, // code: local0 local1 i64.add
+    ];
+
+    #[test]
+    fn webassembly_i64_export_uses_bigint_full_precision() {
+        with_wasm(|ctx| {
+            ctx.globals().set("__add64_bytes", ADD64_WASM.to_vec()).unwrap();
+            // 2^53 + 1 is the first integer an f64 cannot represent. A correct
+            // BigInt boundary keeps it exact; the old f64 path would round it.
+            let ok: bool = ctx
+                .eval(
+                    "var m = new WebAssembly.Module(new Uint8Array(__add64_bytes));\
+                     var inst = new WebAssembly.Instance(m);\
+                     var r = inst.exports.add(9007199254740993n, 2n);\
+                     (typeof r === 'bigint') && (r === 9007199254740995n)",
+                )
+                .unwrap();
+            assert!(ok, "i64 export must round-trip as exact BigInt");
+        });
+    }
+
+    /// `(module (global (export "g") (mut i64) (i64.const 0)))`.
+    const GLOBAL64_WASM: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00, // header
+        0x06, 0x06, 0x01, 0x7E, 0x01, 0x42, 0x00, 0x0B, // global: mut i64 = 0
+        0x07, 0x05, 0x01, 0x01, 0x67, 0x03, 0x00, // export "g" global 0
+    ];
+
+    #[test]
+    fn webassembly_i64_global_roundtrips_as_bigint() {
+        with_wasm(|ctx| {
+            ctx.globals().set("__g64_bytes", GLOBAL64_WASM.to_vec()).unwrap();
+            let ok: bool = ctx
+                .eval(
+                    "var m = new WebAssembly.Module(new Uint8Array(__g64_bytes));\
+                     var inst = new WebAssembly.Instance(m);\
+                     inst.exports.g.value = 9007199254740993n;\
+                     var v = inst.exports.g.value;\
+                     (typeof v === 'bigint') && (v === 9007199254740993n)",
+                )
+                .unwrap();
+            assert!(ok, "i64 global get/set must preserve exact BigInt");
+        });
+    }
+
+    /// `(module (import "env" "h" (func (param i64) (result i64)))
+    ///   (func (export "f") (param i64) (result i64) local.get 0 call 0))`.
+    const IMPORT64_WASM: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00, // header
+        0x01, 0x06, 0x01, 0x60, 0x01, 0x7E, 0x01, 0x7E, // type (i64)->i64
+        0x02, 0x09, 0x01, 0x03, 0x65, 0x6E, 0x76, 0x01, 0x68, 0x00, 0x00, // import env.h func type0
+        0x03, 0x02, 0x01, 0x00, // defined func 1, type 0
+        0x07, 0x05, 0x01, 0x01, 0x66, 0x00, 0x01, // export "f" func 1
+        0x0A, 0x08, 0x01, 0x06, 0x00, 0x20, 0x00, 0x10, 0x00, 0x0B, // code: local0 call0
+    ];
+
+    #[test]
+    fn webassembly_i64_import_arg_and_result_use_bigint() {
+        with_wasm(|ctx| {
+            ctx.globals().set("__imp64_bytes", IMPORT64_WASM.to_vec()).unwrap();
+            // The host import sees the i64 argument as a BigInt and returns a
+            // BigInt; both legs must keep full 64-bit precision.
+            let ok: bool = ctx
+                .eval(
+                    "var m = new WebAssembly.Module(new Uint8Array(__imp64_bytes));\
+                     var seen;\
+                     var inst = new WebAssembly.Instance(m, {env:{h:function(x){ seen = x; return x + 1n; }}});\
+                     var r = inst.exports.f(9007199254740993n);\
+                     (typeof seen === 'bigint') && (seen === 9007199254740993n) &&\
+                     (typeof r === 'bigint') && (r === 9007199254740994n)",
+                )
+                .unwrap();
+            assert!(ok, "i64 import arg + result must round-trip as exact BigInt");
         });
     }
 }

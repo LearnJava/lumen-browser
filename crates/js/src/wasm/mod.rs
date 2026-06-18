@@ -16,9 +16,11 @@
 //!   `HEAP32 = new Int32Array(memory.buffer)` pattern is therefore *not*
 //!   coherent in this MVP (documented limitation).
 //! * Imported functions are JS callables stored as [`Persistent`] and invoked
-//!   from the interpreter through [`interp::HostImports`]. Numeric arguments
-//!   cross the boundary as `f64` (so `i64` values beyond 2^53 lose precision —
-//!   another documented MVP limitation).
+//!   from the interpreter through [`interp::HostImports`]. Numeric arguments and
+//!   results cross the boundary by type: `i64` rides as a JS `BigInt` (full
+//!   64-bit precision, per the W3C WebAssembly JS Interface), the rest as
+//!   `Number`. The same typed marshalling applies to exported functions and
+//!   globals (see [`wasm_value_to_js`] / [`js_value_to_wasm`]).
 
 pub mod interp;
 pub mod parser;
@@ -75,6 +77,21 @@ pub fn compile(bytes: &[u8]) -> Result<u32, String> {
 /// Look up a compiled module by id.
 fn with_module<T>(id: u32, f: impl FnOnce(&Rc<Module>) -> T) -> Option<T> {
     REGISTRY.with(|r| r.borrow().modules.get(&id).map(f))
+}
+
+/// Drop all compiled modules and live instances on this thread, releasing the
+/// [`Persistent`] JS handles held for function imports.
+///
+/// Must be called before the owning JS [`rquickjs::Runtime`] is dropped:
+/// otherwise the leaked `Persistent`s keep GC objects alive and QuickJS aborts
+/// with a `list_empty(&rt->gc_obj_list)` assertion on teardown (BUG-222 tracks
+/// wiring this into shell context teardown).
+pub fn clear_registry() {
+    REGISTRY.with(|r| {
+        let mut r = r.borrow_mut();
+        r.modules.clear();
+        r.instances.clear();
+    });
 }
 
 /// JSON descriptor of a module's exports (consumed by the JS shim to build the
@@ -190,8 +207,10 @@ impl<'a, 'js> HostImports for JsHost<'a, 'js> {
             .map_err(|e| Trap(format!("import restore failed: {e}")))?;
         let mut call_args = Args::new(self.ctx.clone(), args.len());
         for v in args {
+            // Each argument carries its own WASM type, so an `i64` crosses the
+            // boundary as a JS `BigInt` (not a lossy `f64`).
             call_args
-                .push_arg(value_to_f64(*v))
+                .push_arg(wasm_value_to_js(self.ctx, *v))
                 .map_err(|e| Trap(format!("arg marshal failed: {e}")))?;
         }
         let ret: rquickjs::Value = call_args
@@ -203,26 +222,41 @@ impl<'a, 'js> HostImports for JsHost<'a, 'js> {
             .func_type(import_index as u32)
             .map(|t| t.results.clone())
             .unwrap_or_default();
-        if rtypes.is_empty() {
-            Ok(Vec::new())
-        } else {
-            let n = ret.as_number().or_else(|| ret.as_int().map(f64::from)).unwrap_or(0.0);
-            Ok(vec![f64_to_value(rtypes[0], n)])
+        match rtypes.first() {
+            None => Ok(Vec::new()),
+            // An `i64` result is read back exactly from a returned `BigInt`.
+            Some(ValType::I64) => Ok(vec![Value::I64(js_value_to_i64(&ret))]),
+            Some(ty) => Ok(vec![f64_to_value(*ty, js_value_to_f64(&ret))]),
         }
     }
 }
 
-/// Call an exported function by its function index.
+/// Parameter and result value types of an exported function (by its function
+/// index) of a live instance. Returns `None` if the instance or function index
+/// is unknown. Used by the JS bridge to marshal each argument to its declared
+/// type (so `i64` survives the boundary as a `BigInt`).
+pub fn func_signature(instance_id: u32, func_idx: u32) -> Option<(Vec<ValType>, Vec<ValType>)> {
+    REGISTRY.with(|r| {
+        let r = r.borrow();
+        let e = r.instances.get(&instance_id)?;
+        let ft = e.instance.module.func_type(func_idx)?;
+        Some((ft.params.clone(), ft.results.clone()))
+    })
+}
+
+/// Call an exported function with already-typed arguments, returning typed
+/// results.
 ///
-/// `args` are positional `f64`s coerced to the function's parameter types; the
-/// returned `f64`s are the coerced result values. Errors are runtime traps,
+/// The caller (the JS bridge) coerces each JS argument to its declared
+/// parameter type before invoking, so `i64` values keep full 64-bit precision
+/// instead of being squeezed through an `f64`. Errors are runtime traps,
 /// surfaced as `RuntimeError`.
-pub fn call_f64(
+pub fn call_typed(
     ctx: &Ctx,
     instance_id: u32,
     func_idx: u32,
-    args: Vec<f64>,
-) -> Result<Vec<f64>, String> {
+    args: &[Value],
+) -> Result<Vec<Value>, String> {
     // Take the entry out so re-entrant calls into a *different* instance work;
     // re-entry into the same instance returns an error rather than panicking.
     let mut entry = REGISTRY
@@ -230,24 +264,13 @@ pub fn call_f64(
         .ok_or("unknown or busy instance")?;
 
     let module = entry.instance.module.clone();
-    let ftype = module.func_type(func_idx).cloned();
-    let typed_args: Vec<Value> = match &ftype {
-        Some(ft) => ft
-            .params
-            .iter()
-            .enumerate()
-            .map(|(i, ty)| f64_to_value(*ty, args.get(i).copied().unwrap_or(0.0)))
-            .collect(),
-        None => args.iter().map(|&v| Value::I32(v as i32)).collect(),
-    };
-
     let result = {
         let mut host = JsHost {
             ctx,
             funcs: &entry.host_funcs,
             module: module.clone(),
         };
-        entry.instance.invoke(func_idx, &typed_args, &mut host, 0)
+        entry.instance.invoke(func_idx, args, &mut host, 0)
     };
 
     // Reinsert before propagating any error.
@@ -255,10 +278,7 @@ pub fn call_f64(
         r.borrow_mut().instances.insert(instance_id, entry);
     });
 
-    match result {
-        Ok(vals) => Ok(vals.iter().map(|v| value_to_f64(*v)).collect()),
-        Err(t) => Err(t.0),
-    }
+    result.map_err(|t| t.0)
 }
 
 /// Current memory size of an instance, in 64 KiB pages.
@@ -318,21 +338,22 @@ pub fn mem_write(instance_id: u32, offset: u32, bytes: &[u8]) -> bool {
     })
 }
 
-/// Read an exported global's current value as `f64`.
-pub fn global_get(instance_id: u32, index: u32) -> f64 {
+/// Read an exported global's current value (typed). Returns `None` if the
+/// instance or global index is unknown. The JS bridge maps an `i64` global to a
+/// `BigInt` and the others to `Number`.
+pub fn global_value(instance_id: u32, index: u32) -> Option<Value> {
     REGISTRY.with(|r| {
         r.borrow()
             .instances
             .get(&instance_id)
             .and_then(|e| e.instance.globals.get(index as usize).copied())
-            .map(value_to_f64)
-            .unwrap_or(0.0)
     })
 }
 
-/// Set a mutable exported global's value (coerced to its type). Returns `false`
-/// if the index is invalid or the global is immutable.
-pub fn global_set(instance_id: u32, index: u32, v: f64) -> bool {
+/// Set a mutable exported global from a typed value (coerced to its declared
+/// type, preserving `i64` precision). Returns `false` if the index is invalid
+/// or the global is immutable.
+pub fn global_set_value(instance_id: u32, index: u32, v: Value) -> bool {
     REGISTRY.with(|r| {
         let mut r = r.borrow_mut();
         let Some(e) = r.instances.get_mut(&instance_id) else {
@@ -344,7 +365,7 @@ pub fn global_set(instance_id: u32, index: u32, v: f64) -> bool {
             return false;
         }
         let ty = e.instance.globals[idx].val_type();
-        e.instance.globals[idx] = f64_to_value(ty, v);
+        e.instance.globals[idx] = coerce_value(ty, v);
         true
     })
 }
@@ -372,6 +393,73 @@ fn f64_to_value(ty: ValType, v: f64) -> Value {
         ValType::FuncRef => Value::FuncRef(if v < 0.0 { None } else { Some(v as u32) }),
         ValType::ExternRef => Value::ExternRef(if v < 0.0 { None } else { Some(v as u32) }),
     }
+}
+
+/// Coerce a typed value to type `ty`, preserving `i64` exactly (the `f64` path
+/// would round-trip a 64-bit integer through a 53-bit mantissa).
+fn coerce_value(ty: ValType, v: Value) -> Value {
+    match (ty, v) {
+        (ValType::I64, Value::I64(x)) => Value::I64(x),
+        (ValType::I64, other) => Value::I64(value_to_f64(other) as i64),
+        _ => f64_to_value(ty, value_to_f64(v)),
+    }
+}
+
+// ── JS ↔ WASM value bridge (shared by the export-call and global paths) ──────
+
+/// Convert a runtime WASM value to the JS value carried across the boundary.
+/// `i64` becomes a JS `BigInt` (W3C WebAssembly JS Interface §i64-to-BigInt);
+/// all other types become `Number`.
+pub(crate) fn wasm_value_to_js<'js>(ctx: &Ctx<'js>, v: Value) -> rquickjs::Value<'js> {
+    match v {
+        Value::I32(x) => rquickjs::Value::new_int(ctx.clone(), x),
+        Value::I64(x) => rquickjs::Value::new_big_int(ctx.clone(), x),
+        Value::F32(x) => rquickjs::Value::new_float(ctx.clone(), x as f64),
+        Value::F64(x) => rquickjs::Value::new_float(ctx.clone(), x),
+        Value::FuncRef(r) | Value::ExternRef(r) => {
+            rquickjs::Value::new_float(ctx.clone(), r.map(f64::from).unwrap_or(-1.0))
+        }
+    }
+}
+
+/// Coerce an incoming JS value to a typed WASM value for `ty`. An `i64`
+/// parameter accepts a `BigInt` (read exactly) and tolerates a plain `Number`;
+/// other types read the JS value as `f64`.
+pub(crate) fn js_value_to_wasm(v: &rquickjs::Value, ty: ValType) -> Value {
+    match ty {
+        ValType::I64 => Value::I64(js_value_to_i64(v)),
+        _ => f64_to_value(ty, js_value_to_f64(v)),
+    }
+}
+
+/// Read a JS value as `i64`, accepting a `BigInt` exactly and falling back to
+/// numeric truncation for a plain `Number`.
+pub(crate) fn js_value_to_i64(v: &rquickjs::Value) -> i64 {
+    if v.is_big_int()
+        && let Some(b) = v.clone().into_big_int()
+        && let Ok(x) = b.to_i64()
+    {
+        return x;
+    }
+    js_value_to_f64(v) as i64
+}
+
+/// Read a JS value as `f64`, tolerating a `BigInt` (down-converted, may lose
+/// precision — the caller only takes this path for non-`i64` types).
+pub(crate) fn js_value_to_f64(v: &rquickjs::Value) -> f64 {
+    if let Some(n) = v.as_number() {
+        return n;
+    }
+    if let Some(i) = v.as_int() {
+        return f64::from(i);
+    }
+    if v.is_big_int()
+        && let Some(b) = v.clone().into_big_int()
+        && let Ok(x) = b.to_i64()
+    {
+        return x as f64;
+    }
+    0.0
 }
 
 /// Number of parameters for an exported function index (used by the shim to
