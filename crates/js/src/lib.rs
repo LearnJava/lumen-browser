@@ -88,6 +88,7 @@ pub mod form_validation;
 pub mod element_internals;
 pub mod presentation_api;
 pub mod webassembly;
+pub mod wasm;
 pub mod generic_sensor;
 pub mod video_pip;
 pub mod web_midi;

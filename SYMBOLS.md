@@ -1145,7 +1145,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/ipc/src/lib.rs:251` **fn** `connect` — Connect to the network service listening on `127.0.0.1:port`
 `crates/ipc/src/lib.rs:261` **fn** `request` — Send a request and block until the matching response arrives
 
-## lumen-js  (290 symbols)
+## lumen-js  (339 symbols)
 
 `crates/js/src/async_context.rs:32` **fn** `install_async_context` — Install the `AsyncContext` global (Variable + Snapshot) into the context
 `crates/js/src/attribution_reporting.rs:23` **fn** `install_attribution_reporting_api` — Install Attribution Reporting API bindings into the JS context
@@ -1254,56 +1254,56 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/inert.rs:22` **fn** `install_inert_api` — Install `HTMLElement.prototype.inert` getter/setter into the JS context
 `crates/js/src/intl_bindings.rs:42` **fn** `install_intl_bindings` — Install the `Intl` shim into the JS context
 `crates/js/src/launch_handler.rs:14` **fn** `install_launch_handler_api` — Install Launch Handler API bindings into the JS context
-`crates/js/src/lib.rs:148` **fn** `deterministic_seed_from_url` — Compute a deterministic u64 seed from a URL for deterministic render mode (8F)
-`crates/js/src/lib.rs:162` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
-`crates/js/src/lib.rs:337` **fn** `new`
-`crates/js/src/lib.rs:393` **fn** `with_sw_worker_store` — Attach a `SwWorkerStore` so that `_lumen_sw_activate_script` can spawn and
-`crates/js/src/lib.rs:426` **fn** `register_module_source` — Register an ES module by specifier so it can be `import`-ed by other modules
-`crates/js/src/lib.rs:442` **fn** `set_import_map` — Set the import map (HTML LS §8.1.6.2) used by the module resolver
-`crates/js/src/lib.rs:452` **fn** `eval_module` — Evaluate `source` as an ES module (HTML LS §8.1.3 `<script type=module>`)
-`crates/js/src/lib.rs:522` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
-`crates/js/src/lib.rs:1319` **fn** `set_cookie_banner_dismiss` — Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls
-`crates/js/src/lib.rs:1328` **fn** `set_deterministic_mode` — Enable deterministic render mode (8F)
-`crates/js/src/lib.rs:1345` **fn** `freeze_fingerprint` — Freeze fingerprint APIs for canvas / audio / font enumeration (8F.3)
-`crates/js/src/lib.rs:1388` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS instances
-`crates/js/src/lib.rs:1413` **fn** `flush_canvas_updates` — Drain dirty Canvas 2D buffers for upload to the renderer
-`crates/js/src/lib.rs:1427` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
-`crates/js/src/lib.rs:1452` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's ports
-`crates/js/src/lib.rs:1471` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
-`crates/js/src/lib.rs:1481` **fn** `take_history_url_updates` — Drain `history.pushState` / `history.replaceState` URL-update notifications
-`crates/js/src/lib.rs:1492` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()` and
-`crates/js/src/lib.rs:1500` **fn** `take_view_transition_events` — Drain all View Transition events queued by `document.startViewTransition`
-`crates/js/src/lib.rs:1508` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
-`crates/js/src/lib.rs:1517` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
-`crates/js/src/lib.rs:1525` **fn** `has_raf_pending` — Non-consuming peek: `true` if `requestAnimationFrame` callbacks are queued
-`crates/js/src/lib.rs:1534` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
-`crates/js/src/lib.rs:1543` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
-`crates/js/src/lib.rs:1551` **fn** `update_viewport_size` — Update the viewport dimensions
-`crates/js/src/lib.rs:1560` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
-`crates/js/src/lib.rs:1572` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
-`crates/js/src/lib.rs:1581` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
-`crates/js/src/lib.rs:1588` **fn** `take_page_scroll_requests` — Drain JS page-level scroll requests from `window.scrollTo/scrollBy/scroll`
-`crates/js/src/lib.rs:1594` **fn** `set_page_scroll_y` — Update the page scroll Y exposed to JS `window.scrollY / pageYOffset`
-`crates/js/src/lib.rs:1603` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
-`crates/js/src/lib.rs:1614` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
-`crates/js/src/lib.rs:1623` **fn** `take_print_requests` — Drain all print requests queued by JS `window.print()` (W-2)
-`crates/js/src/lib.rs:1632` **fn** `pointer_capture_nid` — Returns the DOM node nid that currently holds pointer capture (pointer_id=1)
-`crates/js/src/lib.rs:1640` **fn** `take_pointer_capture` — Release the active pointer capture, returning the former capture target nid
-`crates/js/src/lib.rs:1649` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
-`crates/js/src/lib.rs:1658` **fn** `take_focus_requests` — Drain JS dialog focus requests queued by `_lumen_request_focus` / `_lumen_request_blur`
-`crates/js/src/lib.rs:1667` **fn** `fire_dialog_close` — Close a `<dialog>` as the result of a `<form method="dialog">` submission
-`crates/js/src/lib.rs:1684` **fn** `notify_focus_changed` — Notify the JS runtime that the shell moved keyboard focus to a new node
-`crates/js/src/lib.rs:1700` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
-`crates/js/src/lib.rs:1710` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
-`crates/js/src/lib.rs:1728` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
-`crates/js/src/lib.rs:1740` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
-`crates/js/src/lib.rs:1753` **fn** `deliver_scroll_progress` — Push viewport scroll progress into all active root-viewport `ScrollTimeline` instances
-`crates/js/src/lib.rs:1771` **fn** `fire_element_scroll` — Fire a non-bubbling `scroll` Event on the DOM element identified by `nid`
-`crates/js/src/lib.rs:1786` **fn** `fire_window_scroll` — Fire a non-bubbling `scroll` Event on the `window` object (page scroll)
-`crates/js/src/lib.rs:1807` **fn** `fire_snap_changing` — Fire a CSS Scroll Snap L2 `snapchanging` event on a scroll container
-`crates/js/src/lib.rs:1817` **fn** `fire_snap_changed` — Fire a CSS Scroll Snap L2 `snapchanged` event on a scroll container
-`crates/js/src/lib.rs:1852` **fn** `deliver_long_animation_frame` — Deliver a Long Animation Frame (LoAF) entry to PerformanceObserver subscribers
-`crates/js/src/lib.rs:1889` **fn** `run_gc_pass` — Tune the QuickJS GC based on the tab's lifecycle tier (10L)
+`crates/js/src/lib.rs:149` **fn** `deterministic_seed_from_url` — Compute a deterministic u64 seed from a URL for deterministic render mode (8F)
+`crates/js/src/lib.rs:163` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
+`crates/js/src/lib.rs:338` **fn** `new`
+`crates/js/src/lib.rs:394` **fn** `with_sw_worker_store` — Attach a `SwWorkerStore` so that `_lumen_sw_activate_script` can spawn and
+`crates/js/src/lib.rs:427` **fn** `register_module_source` — Register an ES module by specifier so it can be `import`-ed by other modules
+`crates/js/src/lib.rs:443` **fn** `set_import_map` — Set the import map (HTML LS §8.1.6.2) used by the module resolver
+`crates/js/src/lib.rs:453` **fn** `eval_module` — Evaluate `source` as an ES module (HTML LS §8.1.3 `<script type=module>`)
+`crates/js/src/lib.rs:523` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
+`crates/js/src/lib.rs:1320` **fn** `set_cookie_banner_dismiss` — Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls
+`crates/js/src/lib.rs:1329` **fn** `set_deterministic_mode` — Enable deterministic render mode (8F)
+`crates/js/src/lib.rs:1346` **fn** `freeze_fingerprint` — Freeze fingerprint APIs for canvas / audio / font enumeration (8F.3)
+`crates/js/src/lib.rs:1389` **fn** `pump_workers` — Deliver messages posted by worker threads to their `Worker` JS instances
+`crates/js/src/lib.rs:1414` **fn** `flush_canvas_updates` — Drain dirty Canvas 2D buffers for upload to the renderer
+`crates/js/src/lib.rs:1428` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
+`crates/js/src/lib.rs:1453` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's ports
+`crates/js/src/lib.rs:1472` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
+`crates/js/src/lib.rs:1482` **fn** `take_history_url_updates` — Drain `history.pushState` / `history.replaceState` URL-update notifications
+`crates/js/src/lib.rs:1493` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()` and
+`crates/js/src/lib.rs:1501` **fn** `take_view_transition_events` — Drain all View Transition events queued by `document.startViewTransition`
+`crates/js/src/lib.rs:1509` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
+`crates/js/src/lib.rs:1518` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
+`crates/js/src/lib.rs:1526` **fn** `has_raf_pending` — Non-consuming peek: `true` if `requestAnimationFrame` callbacks are queued
+`crates/js/src/lib.rs:1535` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
+`crates/js/src/lib.rs:1544` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
+`crates/js/src/lib.rs:1552` **fn** `update_viewport_size` — Update the viewport dimensions
+`crates/js/src/lib.rs:1561` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
+`crates/js/src/lib.rs:1573` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
+`crates/js/src/lib.rs:1582` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
+`crates/js/src/lib.rs:1589` **fn** `take_page_scroll_requests` — Drain JS page-level scroll requests from `window.scrollTo/scrollBy/scroll`
+`crates/js/src/lib.rs:1595` **fn** `set_page_scroll_y` — Update the page scroll Y exposed to JS `window.scrollY / pageYOffset`
+`crates/js/src/lib.rs:1604` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
+`crates/js/src/lib.rs:1615` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
+`crates/js/src/lib.rs:1624` **fn** `take_print_requests` — Drain all print requests queued by JS `window.print()` (W-2)
+`crates/js/src/lib.rs:1633` **fn** `pointer_capture_nid` — Returns the DOM node nid that currently holds pointer capture (pointer_id=1)
+`crates/js/src/lib.rs:1641` **fn** `take_pointer_capture` — Release the active pointer capture, returning the former capture target nid
+`crates/js/src/lib.rs:1650` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
+`crates/js/src/lib.rs:1659` **fn** `take_focus_requests` — Drain JS dialog focus requests queued by `_lumen_request_focus` / `_lumen_request_blur`
+`crates/js/src/lib.rs:1668` **fn** `fire_dialog_close` — Close a `<dialog>` as the result of a `<form method="dialog">` submission
+`crates/js/src/lib.rs:1685` **fn** `notify_focus_changed` — Notify the JS runtime that the shell moved keyboard focus to a new node
+`crates/js/src/lib.rs:1701` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
+`crates/js/src/lib.rs:1711` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
+`crates/js/src/lib.rs:1729` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
+`crates/js/src/lib.rs:1741` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
+`crates/js/src/lib.rs:1754` **fn** `deliver_scroll_progress` — Push viewport scroll progress into all active root-viewport `ScrollTimeline` instances
+`crates/js/src/lib.rs:1772` **fn** `fire_element_scroll` — Fire a non-bubbling `scroll` Event on the DOM element identified by `nid`
+`crates/js/src/lib.rs:1787` **fn** `fire_window_scroll` — Fire a non-bubbling `scroll` Event on the `window` object (page scroll)
+`crates/js/src/lib.rs:1808` **fn** `fire_snap_changing` — Fire a CSS Scroll Snap L2 `snapchanging` event on a scroll container
+`crates/js/src/lib.rs:1818` **fn** `fire_snap_changed` — Fire a CSS Scroll Snap L2 `snapchanged` event on a scroll container
+`crates/js/src/lib.rs:1853` **fn** `deliver_long_animation_frame` — Deliver a Long Animation Frame (LoAF) entry to PerformanceObserver subscribers
+`crates/js/src/lib.rs:1890` **fn** `run_gc_pass` — Tune the QuickJS GC based on the tab's lifecycle tier (10L)
 `crates/js/src/local_font_access.rs:19` **fn** `install_local_font_access_api` — Install Local Font Access API shim into the JS context
 `crates/js/src/long_animation_frames.rs:24` **fn** `install_long_animation_frames_bindings` — Install Long Animation Frames API into the QuickJS context
 `crates/js/src/media_capabilities.rs:8` **fn** `install_media_capabilities_bindings` — Install Media Capabilities API bindings into the JS context
@@ -1412,11 +1412,60 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/virtual_keyboard.rs:15` **fn** `install_virtual_keyboard_bindings` — Install Virtual Keyboard API bindings into the JS context
 `crates/js/src/wake_lock.rs:43` **fn** `set_wake_lock_provider` — Install the platform wake-lock backend
 `crates/js/src/wake_lock.rs:84` **fn** `install_wake_lock_bindings` — Install the Screen Wake Lock API bindings into the JS context
+`crates/js/src/wasm/interp.rs:21` **struct** `Trap` — A runtime trap (maps to `WebAssembly.RuntimeError` on the JS side)
+`crates/js/src/wasm/interp.rs:32` **trait** `HostImports` — Host import callback surface. The interpreter calls this when WASM invokes
+`crates/js/src/wasm/interp.rs:39` **struct** `NullHost` — A no-op host that traps on any imported call. Used when a module declares no
+`crates/js/src/wasm/interp.rs:50` **struct** `Instance` — An instantiated module: linear memory, globals, table, and a reference back
+`crates/js/src/wasm/interp.rs:86` **fn** `new` — Instantiate a decoded module
+`crates/js/src/wasm/interp.rs:184` **fn** `run_start` — Run the module's `start` function, if any
+`crates/js/src/wasm/interp.rs:192` **fn** `export_func_index` — Resolve an exported function's index by name
+`crates/js/src/wasm/interp.rs:203` **fn** `mem_pages` — Current memory size in pages
+`crates/js/src/wasm/interp.rs:209` **fn** `mem_grow` — Grow memory by `delta` pages; return the previous page count, or -1 on
+`crates/js/src/wasm/interp.rs:225` **fn** `invoke` — Invoke any function by index (imported → host, defined → interpret)
+`crates/js/src/wasm/mod.rs:59` **fn** `validate` — `true` if `bytes` decode as a valid module this engine can run
+`crates/js/src/wasm/mod.rs:64` **fn** `compile` — Decode and store a module; returns its registry id
+`crates/js/src/wasm/mod.rs:82` **fn** `module_exports_json` — JSON descriptor of a module's exports (consumed by the JS shim to build the
+`crates/js/src/wasm/mod.rs:104` **fn** `module_imports_json` — JSON descriptor of a module's imports (consumed by the JS shim to resolve
+`crates/js/src/wasm/mod.rs:130` **fn** `instantiate` — Instantiate a compiled module
+`crates/js/src/wasm/mod.rs:220` **fn** `call_f64` — Call an exported function by its function index
+`crates/js/src/wasm/mod.rs:265` **fn** `mem_size` — Current memory size of an instance, in 64 KiB pages
+`crates/js/src/wasm/mod.rs:276` **fn** `mem_grow` — Grow an instance's memory by `delta` pages; previous size or -1 on failure
+`crates/js/src/wasm/mod.rs:287` **fn** `mem_read` — Copy `len` bytes of an instance's linear memory starting at `offset`
+`crates/js/src/wasm/mod.rs:305` **fn** `mem_write` — Write `bytes` into an instance's linear memory at `offset`. Returns `false`
+`crates/js/src/wasm/mod.rs:322` **fn** `global_get` — Read an exported global's current value as `f64`
+`crates/js/src/wasm/mod.rs:335` **fn** `global_set` — Set a mutable exported global's value (coerced to its type). Returns `false`
+`crates/js/src/wasm/mod.rs:379` **fn** `func_param_count` — Number of parameters for an exported function index (used by the shim to
+`crates/js/src/wasm/parser.rs:16` **type** `DecodeResult` — Result of decoding, with a human-readable error for `CompileError`
+`crates/js/src/wasm/parser.rs:20` **enum** `BlockType` — Block signature for `block`/`loop`/`if`
+`crates/js/src/wasm/parser.rs:33` **enum** `Instr` — A decoded instruction. Numeric/comparison/conversion ops with no immediate
+`crates/js/src/wasm/parser.rs:84` **enum** `ImportKind` — What an import binds to
+`crates/js/src/wasm/parser.rs:97` **struct** `Import` — A single import entry
+`crates/js/src/wasm/parser.rs:108` **enum** `ExportKind` — The export kind tag
+`crates/js/src/wasm/parser.rs:117` **struct** `Export` — A single export entry
+`crates/js/src/wasm/parser.rs:128` **struct** `GlobalDef` — A defined global: its type, mutability, and initialiser expression
+`crates/js/src/wasm/parser.rs:139` **struct** `FuncBody` — A decoded function body: extra locals plus its instruction stream
+`crates/js/src/wasm/parser.rs:149` **struct** `DataSegment` — An active data segment: target memory offset expression + raw bytes
+`crates/js/src/wasm/parser.rs:160` **struct** `ElemSegment` — An active element segment for a table: offset expression + function indices
+`crates/js/src/wasm/parser.rs:171` **struct** `Module` — A fully decoded module ready for instantiation
+`crates/js/src/wasm/parser.rs:206` **fn** `func_type` — Look up the function type for any function index (imported or defined)
+`crates/js/src/wasm/parser.rs:341` **fn** `check_header` — Validate the WASM magic + version header without a full decode (used by
+`crates/js/src/wasm/parser.rs:346` **fn** `parse_module` — Decode a full module image
+`crates/js/src/wasm/value.rs:11` **enum** `ValType` — A WebAssembly value type
+`crates/js/src/wasm/value.rs:29` **fn** `from_byte` — Decode a value type from its binary tag byte. Returns `None` for an
+`crates/js/src/wasm/value.rs:42` **fn** `default_value` — The zero/default runtime value for this type (used to initialise locals)
+`crates/js/src/wasm/value.rs:59` **enum** `Value` — A runtime WebAssembly value
+`crates/js/src/wasm/value.rs:78` **fn** `as_i32` — Interpret this value as `i32`, trapping representation is the caller's
+`crates/js/src/wasm/value.rs:86` **fn** `as_i64` — Interpret this value as `i64`
+`crates/js/src/wasm/value.rs:94` **fn** `as_f32` — Interpret this value as `f32`
+`crates/js/src/wasm/value.rs:102` **fn** `as_f64` — Interpret this value as `f64`
+`crates/js/src/wasm/value.rs:110` **fn** `val_type` — The value type of this runtime value
+`crates/js/src/wasm/value.rs:124` **struct** `FuncType` — A function signature: parameter types followed by result types
+`crates/js/src/wasm/value.rs:136` **struct** `Limits` — Min/max limits shared by memories and tables (in pages for memory, in
 `crates/js/src/web_audio.rs:18` **fn** `install_web_audio_api` — Install the Web Audio API into the JS context
 `crates/js/src/web_codecs.rs:16` **fn** `install_webcodecs_bindings` — Install WebCodecs API JS shim
 `crates/js/src/web_locks.rs:14` **fn** `install_web_locks_bindings` — Install the Web Locks API bindings into the JS context
 `crates/js/src/web_midi.rs:16` **fn** `install_web_midi_api` — Install Web MIDI API bindings into the JS context
-`crates/js/src/webassembly.rs:9` **fn** `install_webassembly_bindings` — Install WebAssembly API bindings into the JS context
+`crates/js/src/webassembly.rs:125` **fn** `install_webassembly_bindings` — Install WebAssembly API bindings into the JS context
 `crates/js/src/webgl_bindings.rs:25` **fn** `install_webgl_bindings` — Install WebGL fingerprint shim into the JS context
 `crates/js/src/webgl_canvas.rs:57` **fn** `install_webgl_canvas` — Install functional WebGL bindings into the JS context
 `crates/js/src/webgpu.rs:28` **fn** `install_webgpu_bindings` — Install the WebGPU API bindings into the JS context
@@ -4061,4 +4110,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3990 symbols in 22 crates*
+*Total: 4039 symbols in 22 crates*

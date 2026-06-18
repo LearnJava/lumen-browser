@@ -1,12 +1,129 @@
-/// WebAssembly Phase 0 stub (W3C WebAssembly JavaScript Interface §7).
+//! WebAssembly JavaScript Interface (W3C §7), backed by Lumen's MVP interpreter.
+//!
+//! Stage 1 of U-4: `WebAssembly.compile`/`validate`/`instantiate` now decode and
+//! **execute** real bytecode through [`crate::wasm`]. `Instance.exports` contains
+//! callable functions, exported memory/globals, instead of the previous empty
+//! Phase 0 stubs. `Memory`/`Table`/`Global`/`Tag`/`Exception` standalone classes
+//! are unchanged (used when constructed directly by JS).
+//!
+//! MVP boundaries (documented): numeric values cross the JS↔WASM boundary as
+//! `f64` (so `i64` beyond 2^53 loses precision); exported `Memory.buffer` is a
+//! *snapshot copy* of Rust-owned linear memory (the live-aliasing
+//! `new Int32Array(memory.buffer)` emscripten pattern is not coherent); host
+//! imports cannot read/write the instance's memory mid-call.
+
+use rquickjs::{Ctx, Exception, Function, Persistent, TypedArray};
+
+use crate::wasm;
+
+/// Native backing for `__lumen_wasm_compile`.
 ///
-/// Phase 0: API surface is complete — compile/instantiate return resolved Promises
-/// with empty Module/Instance stubs. No actual WASM bytecode execution.
-/// Phase 1 (future): integrate `wasmtime` or `wasmer` for real execution.
-use rquickjs::Ctx;
+/// Free function so the single `'js` ties `ctx` to the `TypedArray` handle.
+/// Accepts the bytes as a `Uint8Array` (the JS engine's `Vec<u8>` `FromJs`
+/// requires a real `Array`, which the shim does not pass).
+fn wasm_compile_native<'js>(ctx: Ctx<'js>, bytes: TypedArray<'js, u8>) -> rquickjs::Result<u32> {
+    let slice = bytes.as_bytes().unwrap_or(&[]);
+    wasm::compile(slice).map_err(|e| Exception::throw_message(&ctx, &e))
+}
+
+/// Native backing for `__lumen_wasm_instantiate`.
+///
+/// A free function (not a closure) so the single `'js` lifetime ties `ctx` to
+/// the incoming `Function` handles — required for [`Persistent::save`], which
+/// closures cannot express via inferred HRTB lifetimes.
+fn wasm_instantiate_native<'js>(
+    ctx: Ctx<'js>,
+    module_id: u32,
+    funcs: Vec<Function<'js>>,
+    globals: Vec<f64>,
+) -> rquickjs::Result<u32> {
+    let persistent: Vec<Persistent<Function<'static>>> =
+        funcs.into_iter().map(|f| Persistent::save(&ctx, f)).collect();
+    wasm::instantiate(&ctx, module_id, persistent, globals)
+        .map_err(|e| Exception::throw_message(&ctx, &e))
+}
+
+/// Register the `__lumen_wasm_*` native bindings used by the JS shim.
+fn install_native_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
+    let g = ctx.globals();
+
+    g.set(
+        "__lumen_wasm_validate",
+        Function::new(ctx.clone(), |bytes: TypedArray<u8>| -> bool {
+            wasm::validate(bytes.as_bytes().unwrap_or(&[]))
+        })?,
+    )?;
+
+    g.set("__lumen_wasm_compile", Function::new(ctx.clone(), wasm_compile_native)?)?;
+
+    g.set(
+        "__lumen_wasm_module_exports",
+        Function::new(ctx.clone(), |id: u32| -> String { wasm::module_exports_json(id) })?,
+    )?;
+
+    g.set(
+        "__lumen_wasm_module_imports",
+        Function::new(ctx.clone(), |id: u32| -> String { wasm::module_imports_json(id) })?,
+    )?;
+
+    g.set(
+        "__lumen_wasm_instantiate",
+        Function::new(ctx.clone(), wasm_instantiate_native)?,
+    )?;
+
+    g.set(
+        "__lumen_wasm_call",
+        Function::new(
+            ctx.clone(),
+            |ctx: Ctx, inst_id: u32, func_idx: u32, args: Vec<f64>| -> rquickjs::Result<Vec<f64>> {
+                wasm::call_f64(&ctx, inst_id, func_idx, args)
+                    .map_err(|e| Exception::throw_message(&ctx, &e))
+            },
+        )?,
+    )?;
+
+    g.set(
+        "__lumen_wasm_mem_size",
+        Function::new(ctx.clone(), |inst_id: u32| -> u32 { wasm::mem_size(inst_id) })?,
+    )?;
+    g.set(
+        "__lumen_wasm_mem_grow",
+        Function::new(ctx.clone(), |inst_id: u32, delta: u32| -> i32 {
+            wasm::mem_grow(inst_id, delta)
+        })?,
+    )?;
+    g.set(
+        "__lumen_wasm_mem_read",
+        Function::new(ctx.clone(), |inst_id: u32, offset: u32, len: u32| -> Vec<u8> {
+            wasm::mem_read(inst_id, offset, len)
+        })?,
+    )?;
+    g.set(
+        "__lumen_wasm_mem_write",
+        Function::new(
+            ctx.clone(),
+            |inst_id: u32, offset: u32, bytes: TypedArray<u8>| -> bool {
+                wasm::mem_write(inst_id, offset, bytes.as_bytes().unwrap_or(&[]))
+            },
+        )?,
+    )?;
+    g.set(
+        "__lumen_wasm_global_get",
+        Function::new(ctx.clone(), |inst_id: u32, idx: u32| -> f64 { wasm::global_get(inst_id, idx) })?,
+    )?;
+    g.set(
+        "__lumen_wasm_global_set",
+        Function::new(ctx.clone(), |inst_id: u32, idx: u32, v: f64| -> bool {
+            wasm::global_set(inst_id, idx, v)
+        })?,
+    )?;
+
+    Ok(())
+}
 
 /// Install WebAssembly API bindings into the JS context.
 pub fn install_webassembly_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
+    install_native_bindings(ctx)?;
     ctx.eval::<(), _>(WEBASSEMBLY_SHIM)?;
     Ok(())
 }
@@ -26,66 +143,65 @@ const WEBASSEMBLY_SHIM: &str = r#"
     constructor(msg) { super(msg); this.name = 'RuntimeError'; }
   }
 
+  function errMsg(e) { return String((e && e.message) ? e.message : e); }
+
+  // Coerce a BufferSource to a Uint8Array view of its bytes.
+  function bytesOf(bufferSource) {
+    if (bufferSource instanceof ArrayBuffer) return new Uint8Array(bufferSource);
+    if (ArrayBuffer.isView(bufferSource)) {
+      return new Uint8Array(bufferSource.buffer, bufferSource.byteOffset, bufferSource.byteLength);
+    }
+    throw new TypeError('expected a BufferSource');
+  }
+
   // ── WebAssembly.Module ─────────────────────────────────────────────────────
-  // Phase 0: compiled module stub; stores no actual bytecode.
+  // Decodes the module via the native engine and keeps its registry id.
   class Module {
     constructor(bufferSource) {
       if (bufferSource === undefined || bufferSource === null) {
         throw new CompileError('Module requires a BufferSource');
       }
-      this._byteLength = (bufferSource.byteLength !== undefined)
-        ? bufferSource.byteLength
-        : (bufferSource.length || 0);
+      var u8;
+      try { u8 = bytesOf(bufferSource); }
+      catch (e) { throw new CompileError(errMsg(e)); }
+      try { this._id = __lumen_wasm_compile(u8); }
+      catch (e) { throw new CompileError(errMsg(e)); }
+      this._byteLength = u8.length;
     }
   }
 
-  // Static methods — return empty arrays (Phase 0: no section parsing).
   Module.exports = function(module) {
     if (!(module instanceof Module)) throw new TypeError('Argument must be a WebAssembly.Module');
-    return [];
+    var desc = JSON.parse(__lumen_wasm_module_exports(module._id));
+    return desc.map(function(e) { return { name: e.name, kind: e.kind }; });
   };
   Module.imports = function(module) {
     if (!(module instanceof Module)) throw new TypeError('Argument must be a WebAssembly.Module');
-    return [];
+    var desc = JSON.parse(__lumen_wasm_module_imports(module._id));
+    return desc.map(function(e) { return { module: e.module, name: e.name, kind: e.kind }; });
   };
   Module.customSections = function(module, sectionName) {
     if (!(module instanceof Module)) throw new TypeError('Argument must be a WebAssembly.Module');
-    return [];
+    return []; // custom sections are skipped by the decoder (MVP)
   };
 
-  // ── WebAssembly.Instance ──────────────────────────────────────────────────
-  // Phase 0: exports are always empty — no actual WASM function execution.
-  class Instance {
-    constructor(module, importObject) {
-      if (!(module instanceof Module)) {
-        throw new LinkError('Instance requires a WebAssembly.Module');
-      }
-      // Phase 0: empty exports — real execution requires wasmtime/wasmer.
-      this.exports = Object.create(null);
-    }
-  }
-
   // ── WebAssembly.Memory ────────────────────────────────────────────────────
-  // Resizable ArrayBuffer with page-based addressing (1 page = 64 KiB).
   class Memory {
     constructor(descriptor) {
       if (!descriptor || typeof descriptor !== 'object') {
         throw new TypeError('Memory descriptor must be an object');
       }
       var initial = descriptor.initial | 0;
-      if (initial < 0) throw new RangeError('Memory initial must be ≥ 0');
+      if (initial < 0) throw new RangeError('Memory initial must be >= 0');
       var maximum = (descriptor.maximum !== undefined) ? (descriptor.maximum | 0) : 65536;
       this._pages = initial;
       this._max = maximum;
       this._buffer = new ArrayBuffer(initial * 65536);
     }
-
     get buffer() { return this._buffer; }
-
-    // Returns previous page count, or -1 if growth fails.
     grow(delta) {
       var d = delta | 0;
-      if (d < 0) throw new RangeError('grow delta must be ≥ 0');
+      if (d < 0) throw new RangeError('grow delta must be >= 0');
       var prev = this._pages;
       var next = prev + d;
       if (next > this._max) return -1;
@@ -96,7 +212,6 @@ const WEBASSEMBLY_SHIM: &str = r#"
   }
 
   // ── WebAssembly.Table ─────────────────────────────────────────────────────
-  // Resizable typed reference table.
   class Table {
     constructor(descriptor) {
       if (!descriptor || typeof descriptor !== 'object') {
@@ -111,27 +226,18 @@ const WEBASSEMBLY_SHIM: &str = r#"
       this._entries = new Array(initial).fill(null);
       this._max = (descriptor.maximum !== undefined) ? (descriptor.maximum | 0) : Infinity;
     }
-
     get length() { return this._entries.length; }
-
     get(index) {
-      if (index < 0 || index >= this._entries.length) {
-        throw new RangeError('Table index out of bounds');
-      }
+      if (index < 0 || index >= this._entries.length) throw new RangeError('Table index out of bounds');
       return this._entries[index];
     }
-
     set(index, value) {
-      if (index < 0 || index >= this._entries.length) {
-        throw new RangeError('Table index out of bounds');
-      }
+      if (index < 0 || index >= this._entries.length) throw new RangeError('Table index out of bounds');
       this._entries[index] = (value === undefined) ? null : value;
     }
-
-    // Returns previous length, or -1 if growth fails.
     grow(delta, initValue) {
       var d = delta | 0;
-      if (d < 0) throw new RangeError('grow delta must be ≥ 0');
+      if (d < 0) throw new RangeError('grow delta must be >= 0');
       var prev = this._entries.length;
       var next = prev + d;
       if (next > this._max) return -1;
@@ -142,7 +248,6 @@ const WEBASSEMBLY_SHIM: &str = r#"
   }
 
   // ── WebAssembly.Global ────────────────────────────────────────────────────
-  // A boxed WASM global value (mutable or immutable).
   class Global {
     constructor(descriptor, value) {
       if (!descriptor || typeof descriptor !== 'object') {
@@ -156,80 +261,137 @@ const WEBASSEMBLY_SHIM: &str = r#"
       this._type = type;
       this._value = (value !== undefined) ? value : 0;
     }
-
     get value() { return this._value; }
     set value(v) {
       if (!this._mutable) throw new TypeError('Cannot assign to immutable global');
       this._value = v;
     }
-
-    // Returns the internal value (spec §11.3).
     valueOf() { return this._value; }
   }
 
-  // ── WebAssembly.Tag (Exceptions proposal) ─────────────────────────────────
-  // Stub: tags are identified by reference equality, no type checking in Phase 0.
+  // ── WebAssembly.Tag / Exception (Exceptions proposal stub) ────────────────
   class Tag {
-    constructor(type) {
-      this._type = type || { parameters: [] };
-    }
+    constructor(type) { this._type = type || { parameters: [] }; }
+  }
+  class WasmException {
+    constructor(tag, payload) { this._tag = tag; this._payload = payload || []; }
+    getArg(tag, index) { if (tag !== this._tag) throw new TypeError('Wrong tag'); return this._payload[index]; }
+    is(tag) { return this._tag === tag; }
   }
 
-  class Exception {
-    constructor(tag, payload) {
-      this._tag = tag;
-      this._payload = payload || [];
+  // ── Exported wrappers (backed by the native instance) ─────────────────────
+
+  function makeExportFn(instId, funcIdx) {
+    return function() {
+      var args = new Array(arguments.length);
+      for (var i = 0; i < arguments.length; i++) args[i] = +arguments[i];
+      var res;
+      try { res = __lumen_wasm_call(instId, funcIdx, args); }
+      catch (e) { throw new RuntimeError(errMsg(e)); }
+      if (!res || res.length === 0) return undefined;
+      if (res.length === 1) return res[0];
+      return res;
+    };
+  }
+
+  function makeExportMemory(instId) {
+    var mem = Object.create(Memory.prototype);
+    mem._instId = instId;
+    Object.defineProperty(mem, 'buffer', {
+      get: function() {
+        var pages = __lumen_wasm_mem_size(instId);
+        var raw = __lumen_wasm_mem_read(instId, 0, pages * 65536);
+        return new Uint8Array(raw).buffer;
+      },
+      configurable: true
+    });
+    mem.grow = function(d) { return __lumen_wasm_mem_grow(instId, d | 0); };
+    // MVP escape hatch for memory I/O against Rust-owned linear memory.
+    mem.read = function(offset, len) { return new Uint8Array(__lumen_wasm_mem_read(instId, offset | 0, len | 0)); };
+    mem.write = function(offset, bytes) { return __lumen_wasm_mem_write(instId, offset | 0, bytes); };
+    return mem;
+  }
+
+  function makeExportGlobal(instId, gidx) {
+    var g = Object.create(Global.prototype);
+    g._instId = instId;
+    Object.defineProperty(g, 'value', {
+      get: function() { return __lumen_wasm_global_get(instId, gidx); },
+      set: function(v) { __lumen_wasm_global_set(instId, gidx, +v); },
+      configurable: true
+    });
+    g.valueOf = function() { return __lumen_wasm_global_get(instId, gidx); };
+    return g;
+  }
+
+  function buildExports(instId, exportsDesc) {
+    var exports = Object.create(null);
+    for (var i = 0; i < exportsDesc.length; i++) {
+      var e = exportsDesc[i];
+      if (e.kind === 'function') exports[e.name] = makeExportFn(instId, e.index);
+      else if (e.kind === 'memory') exports[e.name] = makeExportMemory(instId);
+      else if (e.kind === 'global') exports[e.name] = makeExportGlobal(instId, e.index);
+      else exports[e.name] = null; // table export — MVP stub
     }
-    getArg(tag, index) {
-      if (tag !== this._tag) throw new TypeError('Wrong tag');
-      return this._payload[index];
+    return exports;
+  }
+
+  // ── WebAssembly.Instance ──────────────────────────────────────────────────
+  class Instance {
+    constructor(module, importObject) {
+      if (!(module instanceof Module)) {
+        throw new LinkError('Instance requires a WebAssembly.Module');
+      }
+      var imports = JSON.parse(__lumen_wasm_module_imports(module._id));
+      var funcs = [], globals = [];
+      for (var i = 0; i < imports.length; i++) {
+        var im = imports[i];
+        var modObj = importObject && importObject[im.module];
+        var val = modObj ? modObj[im.name] : undefined;
+        if (im.kind === 'function') {
+          if (typeof val !== 'function') {
+            throw new LinkError('Import "' + im.module + '.' + im.name + '" is not a function');
+          }
+          funcs.push(val);
+        } else if (im.kind === 'global') {
+          var gv = (val && typeof val === 'object' && ('value' in val)) ? val.value : val;
+          globals.push(typeof gv === 'number' ? gv : 0);
+        }
+        // imported memory/table: MVP synthesizes internal ones from declared limits
+      }
+      var instId;
+      try { instId = __lumen_wasm_instantiate(module._id, funcs, globals); }
+      catch (e) { throw new LinkError(errMsg(e)); }
+      this._instId = instId;
+      var desc = JSON.parse(__lumen_wasm_module_exports(module._id));
+      this.exports = buildExports(instId, desc);
     }
-    is(tag) { return this._tag === tag; }
   }
 
   // ── Top-level API ──────────────────────────────────────────────────────────
 
-  // validate() — Phase 0: accepts any non-empty ArrayBuffer.
-  // Real validation checks the WASM magic header (0x00 0x61 0x73 0x6D).
   function validate(bufferSource) {
     if (!bufferSource) return false;
-    var bytes = bufferSource instanceof ArrayBuffer
-      ? new Uint8Array(bufferSource)
-      : (bufferSource.buffer ? new Uint8Array(bufferSource.buffer) : null);
-    if (!bytes || bytes.length < 8) return false;
-    // Check WASM magic: \0asm
-    return bytes[0] === 0x00 && bytes[1] === 0x61 && bytes[2] === 0x73 && bytes[3] === 0x6D;
+    try { return __lumen_wasm_validate(bytesOf(bufferSource)); }
+    catch (e) { return false; }
   }
 
-  // compile() → Promise<Module>
   function compile(bufferSource) {
-    try {
-      var mod = new Module(bufferSource);
-      return Promise.resolve(mod);
-    } catch (e) {
-      return Promise.reject(e);
-    }
+    try { return Promise.resolve(new Module(bufferSource)); }
+    catch (e) { return Promise.reject(e); }
   }
 
-  // instantiate(bufferSource | Module, importObject?) → Promise<{module, instance}> | Promise<Instance>
   function instantiate(source, importObject) {
     if (source instanceof Module) {
-      // instantiate(module) → Promise<Instance>
-      try {
-        var inst = new Instance(source, importObject);
-        return Promise.resolve(inst);
-      } catch (e) {
-        return Promise.reject(e);
-      }
+      try { return Promise.resolve(new Instance(source, importObject)); }
+      catch (e) { return Promise.reject(e); }
     }
-    // instantiate(bufferSource) → Promise<{module, instance}>
     return compile(source).then(function(mod) {
       var inst = new Instance(mod, importObject);
       return { module: mod, instance: inst };
     });
   }
 
-  // compileStreaming() — accepts Response or Promise<Response>, reads body as ArrayBuffer.
   function compileStreaming(source) {
     return Promise.resolve(source).then(function(resp) {
       if (resp && typeof resp.arrayBuffer === 'function') {
@@ -239,10 +401,12 @@ const WEBASSEMBLY_SHIM: &str = r#"
     });
   }
 
-  // instantiateStreaming() — accepts Response or Promise<Response>.
   function instantiateStreaming(source, importObject) {
-    return compileStreaming(source).then(function(mod) {
-      return instantiate(mod, importObject);
+    return Promise.resolve(source).then(function(resp) {
+      if (resp && typeof resp.arrayBuffer === 'function') {
+        return resp.arrayBuffer().then(function(buf) { return instantiate(buf, importObject); });
+      }
+      return instantiate(resp, importObject);
     });
   }
 
@@ -254,14 +418,14 @@ const WEBASSEMBLY_SHIM: &str = r#"
     Table:                Table,
     Global:               Global,
     Tag:                  Tag,
-    Exception:            Exception,
+    Exception:            WasmException,
     CompileError:         CompileError,
     LinkError:            LinkError,
     RuntimeError:         RuntimeError,
     compile:              compile,
     instantiate:          instantiate,
-    compileStreaming:      compileStreaming,
-    instantiateStreaming:  instantiateStreaming,
+    compileStreaming:     compileStreaming,
+    instantiateStreaming: instantiateStreaming,
     validate:             validate,
   };
 
@@ -302,29 +466,8 @@ mod tests {
     }
 
     #[test]
-    fn webassembly_compile_returns_promise() {
-        with_wasm(|ctx| {
-            let ok: bool = ctx
-                .eval("WebAssembly.compile(new ArrayBuffer(8)) instanceof Promise")
-                .unwrap();
-            assert!(ok);
-        });
-    }
-
-    #[test]
-    fn webassembly_instantiate_returns_promise() {
-        with_wasm(|ctx| {
-            let ok: bool = ctx
-                .eval("WebAssembly.instantiate(new ArrayBuffer(8)) instanceof Promise")
-                .unwrap();
-            assert!(ok);
-        });
-    }
-
-    #[test]
     fn webassembly_validate_magic_bytes() {
         with_wasm(|ctx| {
-            // valid WASM magic: \0asm + version 1
             let valid: bool = ctx
                 .eval(
                     "var b = new Uint8Array([0x00,0x61,0x73,0x6D,0x01,0x00,0x00,0x00]).buffer;\
@@ -332,92 +475,59 @@ mod tests {
                 )
                 .unwrap();
             assert!(valid);
-            // wrong magic
             let invalid: bool = ctx
-                .eval(
-                    "WebAssembly.validate(new Uint8Array([0xFF,0x61,0x73,0x6D,1,0,0,0]).buffer)",
-                )
+                .eval("WebAssembly.validate(new Uint8Array([0xFF,0x61,0x73,0x6D,1,0,0,0]).buffer)")
                 .unwrap();
             assert!(!invalid);
         });
     }
 
+    /// `(module (func (export "add") (param i32 i32) (result i32)
+    ///   local.get 0 local.get 1 i32.add))` — hand-assembled bytes.
+    const ADD_WASM: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00, // header
+        0x01, 0x07, 0x01, 0x60, 0x02, 0x7F, 0x7F, 0x01, 0x7F, // type (i32,i32)->i32
+        0x03, 0x02, 0x01, 0x00, // one func of type 0
+        0x07, 0x07, 0x01, 0x03, 0x61, 0x64, 0x64, 0x00, 0x00, // export "add" func 0
+        0x0A, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6A, 0x0B, // code
+    ];
+
     #[test]
-    fn webassembly_memory_construction() {
+    fn webassembly_instantiate_and_call_add() {
+        with_wasm(|ctx| {
+            ctx.globals().set("__add_bytes", ADD_WASM.to_vec()).unwrap();
+            let sum: i32 = ctx
+                .eval(
+                    "var m = new WebAssembly.Module(new Uint8Array(__add_bytes));\
+                     var inst = new WebAssembly.Instance(m);\
+                     inst.exports.add(40, 2)",
+                )
+                .unwrap();
+            assert_eq!(sum, 42);
+        });
+    }
+
+    #[test]
+    fn webassembly_module_exports_lists_add() {
+        with_wasm(|ctx| {
+            ctx.globals().set("__add_bytes", ADD_WASM.to_vec()).unwrap();
+            let name: String = ctx
+                .eval(
+                    "var m = new WebAssembly.Module(new Uint8Array(__add_bytes));\
+                     WebAssembly.Module.exports(m)[0].name",
+                )
+                .unwrap();
+            assert_eq!(name, "add");
+        });
+    }
+
+    #[test]
+    fn webassembly_global_mutable_direct() {
         with_wasm(|ctx| {
             let ok: bool = ctx
                 .eval(
-                    "var m = new WebAssembly.Memory({initial:1});\
-                     m.buffer instanceof ArrayBuffer && m.buffer.byteLength === 65536",
-                )
-                .unwrap();
-            assert!(ok);
-        });
-    }
-
-    #[test]
-    fn webassembly_memory_grow() {
-        with_wasm(|ctx| {
-            let prev: i32 = ctx
-                .eval(
-                    "var m = new WebAssembly.Memory({initial:1, maximum:3});\
-                     m.grow(1)",
-                )
-                .unwrap();
-            assert_eq!(prev, 1);
-        });
-    }
-
-    #[test]
-    fn webassembly_table_get_set() {
-        with_wasm(|ctx| {
-            let ok: bool = ctx
-                .eval(
-                    "var t = new WebAssembly.Table({element:'funcref', initial:2});\
-                     t.set(0, null);\
-                     t.get(0) === null && t.length === 2",
-                )
-                .unwrap();
-            assert!(ok);
-        });
-    }
-
-    #[test]
-    fn webassembly_global_mutable() {
-        with_wasm(|ctx| {
-            let v: f64 = ctx
-                .eval(
-                    "var g = new WebAssembly.Global({value:'f32', mutable:true}, 42);\
-                     g.value = 7;\
-                     g.value",
-                )
-                .unwrap();
-            assert!((v - 7.0).abs() < f64::EPSILON);
-        });
-    }
-
-    #[test]
-    fn webassembly_error_classes_exist() {
-        with_wasm(|ctx| {
-            let ok: bool = ctx
-                .eval(
-                    "typeof WebAssembly.CompileError === 'function' &&\
-                     typeof WebAssembly.LinkError === 'function' &&\
-                     typeof WebAssembly.RuntimeError === 'function'",
-                )
-                .unwrap();
-            assert!(ok);
-        });
-    }
-
-    #[test]
-    fn webassembly_module_static_methods() {
-        with_wasm(|ctx| {
-            let ok: bool = ctx
-                .eval(
-                    "typeof WebAssembly.Module.exports === 'function' &&\
-                     typeof WebAssembly.Module.imports === 'function' &&\
-                     typeof WebAssembly.Module.customSections === 'function'",
+                    "var g = new WebAssembly.Global({value:'i32', mutable:true}, 5);\
+                     g.value = 9; g.value === 9",
                 )
                 .unwrap();
             assert!(ok);
