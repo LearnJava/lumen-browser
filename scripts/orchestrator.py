@@ -414,10 +414,9 @@ def format_event(event: dict) -> list[str]:
     if ev_type == "result":
         result_text = event.get("result", "")
         if result_text:
-            preview = result_text[:500].replace("\n", " ")
-            if len(result_text) > 500:
-                preview += "..."
-            lines.append(f"  Результат: {preview}")
+            lines.append("  Результат:")
+            for part in result_text.splitlines():
+                lines.append(f"    {part}")
         return lines
 
     # Сообщение ассистента — содержит content[] с text и tool_use
@@ -430,10 +429,8 @@ def format_event(event: dict) -> list[str]:
             elif btype == "text":
                 text = block.get("text", "")
                 if text:
-                    preview = text[:500].replace("\n", " ")
-                    if len(text) > 500:
-                        preview += "..."
-                    lines.append(f"  {preview}")
+                    for part in text.splitlines():
+                        lines.append(f"  {part}")
         return lines
 
     return lines
