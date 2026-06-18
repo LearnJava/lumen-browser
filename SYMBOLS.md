@@ -790,7 +790,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/encoding/src/unicode_provider.rs:31` **fn** `new` — Создаёт провайдер с auto-режимом (LSTM/dictionary для CJK/Thai/etc)
 `crates/engine/encoding/src/unicode_provider.rs:40` **fn** `new_latin` — Облегчённая версия — только Latin + UAX #14 rules, без LSTM
 
-## lumen-font  (210 symbols)
+## lumen-font  (216 symbols)
 
 `crates/engine/font/src/avar.rs:32` **struct** `AxisValueMap` — Одна пара (fromCoord → toCoord) в segment map оси. Координаты в
 `crates/engine/font/src/avar.rs:44` **struct** `SegmentMap` — Segment map для одной оси: список пар, отсортированных по `from`
@@ -811,6 +811,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/font/src/binary.rs:62` **fn** `read_i16`
 `crates/engine/font/src/binary.rs:67` **fn** `read_i32`
 `crates/engine/font/src/binary.rs:73` **fn** `read_tag` — 4-байтовый ASCII-тег (например, `b"head"`, `b"glyf"`)
+`crates/engine/font/src/cff.rs:298` **struct** `Cff` — Parsed `CFF ` table ready to produce glyph outlines
+`crates/engine/font/src/cff.rs:306` **fn** `num_glyphs` — Number of glyphs (CharStrings INDEX count)
+`crates/engine/font/src/cff.rs:311` **fn** `parse` — Parse a `CFF ` table from its raw bytes
+`crates/engine/font/src/cff.rs:390` **fn** `glyph` — Glyph outline for `glyph_id`, or `None` if the glyph is empty (e.g
 `crates/engine/font/src/cmap.rs:21` **struct** `Cmap`
 `crates/engine/font/src/cmap.rs:31` **fn** `parse`
 `crates/engine/font/src/cmap.rs:94` **fn** `glyph_index` — Возвращает glyph index для codepoint, либо `None` если не отображён
@@ -835,19 +839,21 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/font/src/face.rs:155` **fn** `hmtx`
 `crates/engine/font/src/face.rs:162` **fn** `loca`
 `crates/engine/font/src/face.rs:169` **fn** `glyf`
-`crates/engine/font/src/face.rs:174` **fn** `name`
-`crates/engine/font/src/face.rs:179` **fn** `os2`
-`crates/engine/font/src/face.rs:191` **fn** `post` — `post` — PostScript Information Table. Содержит italic angle и
-`crates/engine/font/src/face.rs:201` **fn** `fvar` — `fvar` (Font Variations) — описание variation axes (wght / wdth / slnt /
-`crates/engine/font/src/face.rs:212` **fn** `avar` — `avar` (Axis Variations) — piecewise-linear перенормализация осей из
-`crates/engine/font/src/face.rs:226` **fn** `gvar` — `gvar` (Glyph Variations) — per-glyph variation deltas для outline
-`crates/engine/font/src/face.rs:238` **fn** `hvar` — `HVAR` (Horizontal Metrics Variations) — variation deltas для
-`crates/engine/font/src/face.rs:252` **fn** `advance_width_varied` — Advance width for `glyph_id` with HVAR variation deltas applied
-`crates/engine/font/src/face.rs:276` **fn** `vvar` — `VVAR` (Vertical Metrics Variations) — зеркало `HVAR` для
-`crates/engine/font/src/face.rs:293` **fn** `mvar` — `MVAR` (Metrics Variations) — variation deltas для глобальных
-`crates/engine/font/src/face.rs:302` **fn** `glyph` — Удобная обёртка: glyph_id → outline. `None`, если глиф пустой
-`crates/engine/font/src/face.rs:321` **fn** `glyph_resolved` — Возвращает глиф с рекурсивно развёрнутыми composite-компонентами:
-`crates/engine/font/src/face.rs:350` **fn** `glyph_resolved_with_coords` — Variable-fonts вариант [`Font::glyph_resolved`]: применяет gvar deltas
+`crates/engine/font/src/face.rs:179` **fn** `cff` — `CFF ` — Compact Font Format (PostScript Type 2 outlines). Present in
+`crates/engine/font/src/face.rs:186` **fn** `has_cff` — `true` if the font stores outlines in a `CFF ` table (PostScript) rather
+`crates/engine/font/src/face.rs:190` **fn** `name`
+`crates/engine/font/src/face.rs:195` **fn** `os2`
+`crates/engine/font/src/face.rs:207` **fn** `post` — `post` — PostScript Information Table. Содержит italic angle и
+`crates/engine/font/src/face.rs:217` **fn** `fvar` — `fvar` (Font Variations) — описание variation axes (wght / wdth / slnt /
+`crates/engine/font/src/face.rs:228` **fn** `avar` — `avar` (Axis Variations) — piecewise-linear перенормализация осей из
+`crates/engine/font/src/face.rs:242` **fn** `gvar` — `gvar` (Glyph Variations) — per-glyph variation deltas для outline
+`crates/engine/font/src/face.rs:254` **fn** `hvar` — `HVAR` (Horizontal Metrics Variations) — variation deltas для
+`crates/engine/font/src/face.rs:268` **fn** `advance_width_varied` — Advance width for `glyph_id` with HVAR variation deltas applied
+`crates/engine/font/src/face.rs:292` **fn** `vvar` — `VVAR` (Vertical Metrics Variations) — зеркало `HVAR` для
+`crates/engine/font/src/face.rs:309` **fn** `mvar` — `MVAR` (Metrics Variations) — variation deltas для глобальных
+`crates/engine/font/src/face.rs:318` **fn** `glyph` — Удобная обёртка: glyph_id → outline. `None`, если глиф пустой
+`crates/engine/font/src/face.rs:337` **fn** `glyph_resolved` — Возвращает глиф с рекурсивно развёрнутыми composite-компонентами:
+`crates/engine/font/src/face.rs:369` **fn** `glyph_resolved_with_coords` — Variable-fonts вариант [`Font::glyph_resolved`]: применяет gvar deltas
 `crates/engine/font/src/font_registry.rs:19` **struct** `FontRegistry` — Провайдер шрифтов с поддержкой @font-face: системные шрифты + URL-буферы
 `crates/engine/font/src/font_registry.rs:28` **fn** `new`
 `crates/engine/font/src/font_registry.rs:38` **fn** `with_dirs` — Registry backed by a custom-dir `SystemFontIndex` — for tests and
@@ -4055,4 +4061,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 3984 symbols in 22 crates*
+*Total: 3990 symbols in 22 crates*
