@@ -171,6 +171,22 @@ impl<'a> Font<'a> {
         Ok(crate::glyf::Glyf::new(data))
     }
 
+    /// `CFF ` — Compact Font Format (PostScript Type 2 outlines). Present in
+    /// OpenType fonts with `'OTTO'` sfnt version instead of `glyf`/`loca`.
+    /// Returns `Err(TableNotFound)` for TrueType-outline fonts. Outlines are
+    /// produced as pre-flattened `Outline::Simple` glyphs, so callers use the
+    /// same [`Font::glyph_resolved`] path regardless of outline format.
+    pub fn cff(&self) -> Result<crate::cff::Cff<'a>, FontError> {
+        let data = self.table(b"CFF ").ok_or(FontError::TableNotFound(*b"CFF "))?;
+        crate::cff::Cff::parse(data)
+    }
+
+    /// `true` if the font stores outlines in a `CFF ` table (PostScript) rather
+    /// than `glyf` (TrueType).
+    pub fn has_cff(&self) -> bool {
+        self.table(b"CFF ").is_some()
+    }
+
     pub fn name(&self) -> Result<crate::name::Name, FontError> {
         let data = self.table(b"name").ok_or(FontError::TableNotFound(*b"name"))?;
         crate::name::Name::parse(data)
@@ -322,6 +338,9 @@ impl<'a> Font<'a> {
         &self,
         glyph_id: u16,
     ) -> Result<Option<crate::glyf::Glyph>, FontError> {
+        if self.has_cff() {
+            return self.cff()?.glyph(glyph_id);
+        }
         self.glyph_resolved_inner(glyph_id, &[], None, 0)
     }
 
@@ -352,6 +371,11 @@ impl<'a> Font<'a> {
         glyph_id: u16,
         coords: &[f32],
     ) -> Result<Option<crate::glyf::Glyph>, FontError> {
+        // CFF (v1) has no variation deltas — `coords` is ignored and the static
+        // outline is returned. CFF2 (variable PostScript outlines) is deferred.
+        if self.has_cff() {
+            return self.cff()?.glyph(glyph_id);
+        }
         // Caching gvar один раз перед спуском — у composite будет много
         // обращений к `parse_glyph(child_id)`, и каждое требует `Gvar`.
         let gvar = if coords.is_empty() {

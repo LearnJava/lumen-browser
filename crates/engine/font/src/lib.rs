@@ -8,13 +8,15 @@
 //! TTF/OTF — формат с большим количеством обязательных и опциональных
 //! таблиц; реализуем по мере необходимости. Шейпинг (U-2 этап 1): GSUB
 //! лигатуры (`liga`/`clig`) + GPOS кернинг (`kern`) для Latin/Cyrillic —
-//! см. [`shape::Shaper`]. Не поддерживается (отложено): hinting (TT
-//! instructions), CFF outlines (для PostScript-OpenType, U-2 этап 2),
-//! сложные скрипты / mark-позиционирование, color glyphs (COLR/CPAL,
-//! sbix), bitmap strikes (EBDT/EBLC).
+//! см. [`shape::Shaper`]. CFF outlines (PostScript-OpenType `.otf`, U-2 этап 2)
+//! поддержаны — см. [`cff::Cff`] (Type 2 charstrings, CID-keyed CFF).
+//! Не поддерживается (отложено): hinting (TT instructions), CFF2 (variable
+//! PostScript outlines), сложные скрипты / mark-позиционирование, color glyphs
+//! (COLR/CPAL, sbix), bitmap strikes (EBDT/EBLC).
 
 pub mod avar;
 pub mod binary;
+pub mod cff;
 pub mod unicode_range;
 pub mod woff2;
 pub mod cmap;
@@ -47,6 +49,7 @@ pub mod vvar;
 
 pub use avar::{Avar, AxisValueMap, SegmentMap};
 pub use binary::BinaryReader;
+pub use cff::Cff;
 pub use cmap::Cmap;
 pub use delta_set_index_map::{DeltaSetIndex, DeltaSetIndexMap};
 pub use face::{Font, FontError, OffsetTable, TableRecord};
