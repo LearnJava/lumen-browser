@@ -405,14 +405,26 @@ def format_tool_use(block: dict) -> str:
         return f"  Инструмент: {tool}"
 
 
-def format_event(event: dict) -> list[str]:
-    """Превратить JSON-событие stream-json в читаемые строки."""
+def format_event(event: dict, last_text: list[str] | None = None) -> list[str]:
+    """Превратить JSON-событие stream-json в читаемые строки.
+
+    `last_text` — однозначный мутируемый контейнер `[str]` для дедупа: в нём
+    хранится текст последнего напечатанного assistant-сообщения. Финальное
+    событие `result` дословно повторяет это сообщение (оно уже выведено в
+    реальном времени как `assistant`-событие), поэтому при совпадении его
+    текст не печатается повторно — остаётся только маркер завершения.
+    """
     lines = []
     ev_type = event.get("type", "")
 
     # Финальный результат
     if ev_type == "result":
         result_text = event.get("result", "")
+        # Дедуп: result дублирует последнее assistant-сообщение — печатаем
+        # только маркер, сам текст уже был в логе.
+        if last_text is not None and result_text.strip() == last_text[0].strip():
+            lines.append("  ✓ Сессия завершена")
+            return lines
         if result_text:
             lines.append("  Результат:")
             for part in result_text.splitlines():
@@ -422,6 +434,7 @@ def format_event(event: dict) -> list[str]:
     # Сообщение ассистента — содержит content[] с text и tool_use
     if ev_type == "assistant":
         msg = event.get("message", {})
+        msg_texts = []
         for block in msg.get("content", []):
             btype = block.get("type", "")
             if btype == "tool_use":
@@ -429,8 +442,12 @@ def format_event(event: dict) -> list[str]:
             elif btype == "text":
                 text = block.get("text", "")
                 if text:
+                    msg_texts.append(text)
                     for part in text.splitlines():
                         lines.append(f"  {part}")
+        # Запомнить текст этого сообщения для последующего дедупа result
+        if last_text is not None and msg_texts:
+            last_text[0] = "\n".join(msg_texts)
         return lines
 
     return lines
@@ -597,6 +614,8 @@ def run_claude(
     # Накапливаем PID потомков пока claude жив — после выхода они могут стать сиротами
     _seen: set = set()
     _stop_tracker = threading.Event()
+    # Текст последнего assistant-сообщения — для дедупа финального result-события
+    _last_text: list[str] = [""]
 
     def _tracker() -> None:
         while not _stop_tracker.wait(timeout=2.0):
@@ -669,7 +688,7 @@ def run_claude(
                                 reset_time = m.group(1)
                             break
 
-            for display_line in format_event(event):
+            for display_line in format_event(event, _last_text):
                 log(developer, display_line)
 
         # Проверить stderr тоже — rate limit / auth error может быть там
