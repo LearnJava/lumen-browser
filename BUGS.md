@@ -209,7 +209,7 @@
 | [BUG-193](bugs/BUG-193-FIXED.md) | FIXED 2026-06-17 | layout | TEST-64 13.89%→8.99%: `display:table`-обёртка не схлопывала margin с соседним блоком (CSS 2.1 §8.3.1) — bottom-margin таблицы + top-margin `<h3>` складывались (38.72px вместо 20px), нижняя таблица уезжала на ~19px. `is_block` теперь включает `Table` (box_tree.rs:5462). Остаток 8.99% = font-parity (BUG-128) → KNOWN_DEBTORS |
 | [BUG-194](bugs/BUG-194-OPEN.md) | OPEN | layout | Flexbox `align-content` multi-line deviation — TEST-65: 1.33% |
 | [BUG-195](bugs/BUG-195-OPEN.md) | OPEN | paint | `::selection` color override deviation — TEST-66: 1.07% |
-| [BUG-196](bugs/BUG-196-OPEN.md) | OPEN | css-parser/layout | `attr()` typed substitution deviation — TEST-67: 16.41% |
+| [BUG-196](bugs/BUG-196-FIXED.md) | FIXED 2026-06-18 | css-parser/layout | `::before`/`::after` с `content:attr()` не генерировались на flex/grid-контейнерах — TEST-67: 16.41% → 1.36% (KNOWN_DEBTORS, остаток font-parity) |
 | [BUG-197](bugs/BUG-197-OPEN.md) | OPEN | layout | CSS Table `border-spacing` asymmetric deviation — TEST-69: 3.61% |
 | [BUG-198](bugs/BUG-198-OPEN.md) | OPEN | layout/paint | `object-fit`/`object-position` SVG deviation — TEST-70: 7.82% |
 | [BUG-199](bugs/BUG-199-OPEN.md) | OPEN | layout | `@starting-style` static rendering deviation — TEST-71: 7.03% |
