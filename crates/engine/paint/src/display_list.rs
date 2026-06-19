@@ -3386,8 +3386,39 @@ fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox, dpr: f32)
 /// CSS Masking L1 §4 — эмитит PushMask* перед элементом + его детьми.
 /// Возвращает `true` если команда была эмитирована (нужен парный PopMask).
 /// `rect` = border-box элемента (mask painting area).
+/// CSS Masking L1 §6.4 `mask-mode: luminance` — rewrites each gradient stop so
+/// its alpha channel encodes `luminance(rgb)·alpha`. The mask backends
+/// (`composite_mask_layer` in femtovg, `render_mask` in cpu_raster) read only
+/// the rendered gradient's **alpha** under a `DestinationIn` composite, so
+/// baking luminance into the alpha here makes a dark mask pixel hide the element
+/// even when it is fully opaque — without threading the mode into the backends.
+/// For `mask-mode: alpha` (default) the stops are returned unchanged.
+///
+/// Luminance is exact across a linear gradient: `luma` is a linear combination
+/// of R, G, B, so `luma(lerp(c0, c1, t)) == lerp(luma(c0), luma(c1), t)`.
+fn mask_stops_for_mode(stops: &[GradientStop], mode: lumen_layout::MaskMode) -> Vec<GradientStop> {
+    match mode {
+        lumen_layout::MaskMode::Alpha => stops.to_vec(),
+        lumen_layout::MaskMode::Luminance => stops
+            .iter()
+            .map(|s| {
+                let c = s.color;
+                let luma = 0.2126 * f32::from(c.r)
+                    + 0.7152 * f32::from(c.g)
+                    + 0.0722 * f32::from(c.b);
+                let a = (luma / 255.0 * f32::from(c.a)).round().clamp(0.0, 255.0) as u8;
+                GradientStop {
+                    color: Color { a, ..c },
+                    position: s.position.clone(),
+                }
+            })
+            .collect(),
+    }
+}
+
 fn emit_push_mask(out: &mut Vec<DisplayCommand>, b: &LayoutBox) -> bool {
     let rect = b.rect;
+    let mode = b.style.mask_mode;
     match &b.style.mask_image {
         BackgroundImage::Url(src) if !src.is_empty() => {
             out.push(DisplayCommand::PushMaskImage {
@@ -3404,7 +3435,7 @@ fn emit_push_mask(out: &mut Vec<DisplayCommand>, b: &LayoutBox) -> bool {
             out.push(DisplayCommand::PushMaskLinearGradient {
                 rect,
                 angle_deg: *angle_deg,
-                stops: stops.clone(),
+                stops: mask_stops_for_mode(stops, mode),
                 repeating: *repeating,
             });
             true
@@ -3416,7 +3447,7 @@ fn emit_push_mask(out: &mut Vec<DisplayCommand>, b: &LayoutBox) -> bool {
                 rect,
                 center_x_pct: *center_x_pct,
                 center_y_pct: *center_y_pct,
-                stops: stops.clone(),
+                stops: mask_stops_for_mode(stops, mode),
                 repeating: *repeating,
             });
             true
@@ -3429,7 +3460,7 @@ fn emit_push_mask(out: &mut Vec<DisplayCommand>, b: &LayoutBox) -> bool {
                 center_x_pct: *center_x_pct,
                 center_y_pct: *center_y_pct,
                 from_angle_deg: *from_angle_deg,
-                stops: stops.clone(),
+                stops: mask_stops_for_mode(stops, mode),
                 repeating: *repeating,
             });
             true
@@ -11256,6 +11287,84 @@ mod tests {
         let pop_pos  = s.find("PopMaskLayer").expect("no PopMaskLayer");
         assert!(push_pos < fill_pos, "PushMaskLayer before FillRect");
         assert!(fill_pos < pop_pos,  "FillRect before PopMaskLayer");
+    }
+
+    #[test]
+    fn mask_mode_luminance_end_to_end_bakes_stops() {
+        let css = ".m { width:200px; height:200px; background:#e63946; \
+             mask-image: linear-gradient(to right, black, white); mask-mode: luminance; }";
+        let html = "<div class=\"m\"></div>";
+        // Plain builder.
+        let dl = build(html, css);
+        assert_baked_luma_stops(&dl, "build_display_list");
+
+        // Stacking-context-ordered builder (used by the CPU snapshot path) —
+        // mask-image makes the box a stacking context, so it goes through the
+        // bucket path, not `walk`.
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let st = StackingTree::build(&tree);
+        let order = PaintOrder::from_tree(&st);
+        let dl_ordered = build_display_list_ordered(&tree, &st, &order);
+        assert_baked_luma_stops(&dl_ordered, "build_display_list_ordered");
+    }
+
+    fn assert_baked_luma_stops(dl: &DisplayList, label: &str) {
+        let stops = dl.iter().find_map(|c| match c {
+            DisplayCommand::PushMaskLinearGradient { stops, .. } => Some(stops.clone()),
+            _ => None,
+        });
+        let stops = stops.unwrap_or_else(|| panic!("{label}: no PushMaskLinearGradient"));
+        assert_eq!(stops.first().map(|s| s.color.a), Some(0), "{label}: black → alpha 0");
+        assert_eq!(stops.last().map(|s| s.color.a), Some(255), "{label}: white → alpha 255");
+    }
+
+    #[test]
+    fn mask_stops_alpha_mode_unchanged() {
+        let stops = vec![
+            GradientStop { color: Color { r: 0, g: 0, b: 0, a: 255 }, position: None },
+            GradientStop { color: Color { r: 255, g: 255, b: 255, a: 255 }, position: None },
+        ];
+        let out = mask_stops_for_mode(&stops, lumen_layout::MaskMode::Alpha);
+        assert_eq!(out, stops, "alpha mode leaves stops untouched");
+    }
+
+    #[test]
+    fn mask_stops_luminance_bakes_alpha() {
+        // Black opaque → luma 0 → alpha 0; white opaque → luma 1 → alpha 255.
+        let stops = vec![
+            GradientStop { color: Color { r: 0, g: 0, b: 0, a: 255 }, position: None },
+            GradientStop { color: Color { r: 255, g: 255, b: 255, a: 255 }, position: None },
+        ];
+        let out = mask_stops_for_mode(&stops, lumen_layout::MaskMode::Luminance);
+        assert_eq!(out[0].color.a, 0, "black stop becomes fully transparent");
+        assert_eq!(out[1].color.a, 255, "white stop stays fully opaque");
+        // RGB is preserved (only the alpha channel encodes the mask value).
+        assert_eq!(out[0].color.r, 0);
+        assert_eq!(out[1].color.r, 255);
+    }
+
+    #[test]
+    fn mask_stops_luminance_multiplies_source_alpha() {
+        // White at 50% alpha → luma 1 · 0.5 ≈ alpha 128.
+        let stops = vec![GradientStop {
+            color: Color { r: 255, g: 255, b: 255, a: 128 },
+            position: None,
+        }];
+        let out = mask_stops_for_mode(&stops, lumen_layout::MaskMode::Luminance);
+        assert_eq!(out[0].color.a, 128, "luminance 1.0 keeps source alpha");
+    }
+
+    #[test]
+    fn mask_stops_luminance_green_weight() {
+        // Pure green opaque → luma 0.7152 → alpha ≈ 182.
+        let stops = vec![GradientStop {
+            color: Color { r: 0, g: 255, b: 0, a: 255 },
+            position: None,
+        }];
+        let out = mask_stops_for_mode(&stops, lumen_layout::MaskMode::Luminance);
+        assert_eq!(out[0].color.a, 182, "0.7152·255 rounds to 182");
     }
 
     // ─── PushScrollLayer / PopScrollLayer tests ──────────────────────────────
