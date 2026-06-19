@@ -100,7 +100,7 @@
 | [BUG-082](bugs/BUG-082-FIXED.md) | FIXED 2026-06-11 | paint | css-filter 33% deviation — TEST-30: 33.07% |
 | [BUG-083](bugs/BUG-083-FIXED.md) | FIXED 2026-06-11 | layout/paint | list-markers residual 3.4% deviation |
 | [BUG-084](bugs/BUG-084-FIXED.md) | FIXED 2026-06-12 | paint | border-radius residual 1.5% deviation — TEST-36: 1.50% |
-| [BUG-085](bugs/BUG-085-OPEN.md) | OPEN | paint | linear/radial gradient 12% deviation — TEST-39: 12.05% |
+| [BUG-085](bugs/BUG-085-OPEN.md) | OPEN | paint | linear/radial gradient — TEST-39: 12.05%→1.62% (femtovg_stops: repeating-градиенты повторяются + hard-stop хвост дозаполняется до 1.0). Остаток DEBTOR: 256-тексельная квантизация градиент-текстуры femtovg на repeating-границах + radial AA vs Edge |
 | [BUG-086](bugs/BUG-086-FIXED.md) | FIXED 2026-06-09 | paint | conic-gradient: triangle-fan не обрезался по box + игнорировал repeating |
 | [BUG-087](bugs/BUG-087-FIXED.md) | FIXED 2026-06-09 | paint | gradient layers ignored background-size/position/repeat — TEST-45: 17.29% |
 | [BUG-088](bugs/BUG-088-FIXED.md) | FIXED 2026-06-12 | css-parser/layout | individual CSS transform properties (translate/rotate/scale) — TEST-46: 4.63% |
@@ -159,7 +159,7 @@
 | [BUG-141](bugs/BUG-141-FIXED.md) | FIXED 2026-06-13 | layout | TEST-71 17.83%: flex align-items:center в non-wrap контейнере игнорировал cross size |
 | [BUG-142](bugs/BUG-142-FIXED.md) | FIXED 2026-06-17 | paint/shadow-dom | :host / ::slotted rendering diverges — TEST-72: 11.24% → 0.00% |
 | [BUG-143](bugs/BUG-143-OPEN.md) | OPEN | layout | masonry-auto-flow placement diverges — TEST-75: 16.97% |
-| [BUG-144](bugs/BUG-144-OPEN.md) | OPEN | paint | CSS filter/backdrop-filter — TEST-30: row-flip фикс 16.42%→10.48% (backdrop-filter `elem_id` FBO нуждался в FLIP_Y, карточки рисовались в `viewport_h−bounds.bottom`). Остаток DEBTOR: filter pixel-parity (rows 1-3) + backdrop захватывается тёмным внутри opacity-слоя (row 4) + gradient hard-stop (row 2, BUG-085) |
+| [BUG-144](bugs/BUG-144-OPEN.md) | OPEN | paint | CSS filter/backdrop-filter — TEST-30: row-flip фикс 16.42%→10.48% (backdrop-filter `elem_id` FBO нуждался в FLIP_Y); gradient hard-stop row 2 фикснут BUG-085 (10.48%→7.56%). Остаток DEBTOR: filter pixel-parity (rows 1-3) + backdrop захватывается тёмным внутри opacity-слоя (row 4) |
 | [BUG-145](bugs/BUG-145-FIXED.md) | FIXED 2026-06-12 | paint | РЕГРЕССИЯ: offscreen filter layer сайзился по bounds → viewport stretch |
 | [BUG-146](bugs/BUG-146-FIXED.md) | FIXED 2026-06-12 | paint | TEST-15 box-shadow регрессия 1.06%→6.58%: blur-FBO без FLIP_Y |
 | [BUG-147](bugs/BUG-147-FIXED.md) | FIXED 2026-06-12 | shell | clippy -D warnings fails: redundant use, dead code, unnecessary cast |
