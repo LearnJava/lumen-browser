@@ -46,7 +46,7 @@ Snapshot: **Phase 2 «Interactive», app v0.2.0**. ~21 crates.
 - Parses selectors + **untyped string declarations**; typed values + cascade live in `lumen-layout/style.rs` (~139 properties wired end-to-end — see CSS-SPECS.md).
 - ✅ Selectors L3 full set + L4: attribute operators (`= ~= |= ^= $= *=`, case flag), structural pseudo, form/UI-state pseudo (DOM-attr-based), `:nth-*(of …)`, `:not/:is/:where`, `:has` (in layout).
 - ✅ `:lang/:dir/:link/:visited(always false)/:scope/:target`; interactive pseudo (`:hover/:focus`) parsed as always-false (runtime state applied in layout).
-- ✅ `!important` extraction; at-rules parsed+stored: `@media` (cascade-integrated), `@font-face`, `@import`, `@property`, `@layer`, `@supports` (typed `evaluate()`), `@keyframes`, `@scope`, `@container`.
+- ✅ `!important` extraction; at-rules parsed+stored: `@media` (cascade-integrated), `@font-face`, `@import`, `@property`, `@layer`, `@supports` (typed `evaluate()` — incl. `selector()`, `font-tech()`/`font-format()` matched against lumen-font capabilities), `@keyframes`, `@scope`, `@container`.
 - ⬜ Namespace prefixes; cascade wiring for `@layer`/`@scope`/`@container`.
 - ~292 tests.
 
