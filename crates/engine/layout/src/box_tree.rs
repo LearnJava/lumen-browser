@@ -5094,9 +5094,29 @@ fn lay_out(
                 } else {
                     None
                 };
+                // CSS Flexbox §9.7: for a column flex container with a definite
+                // main (block) size, free space is distributed to flex-grow items.
+                // Compute that definite content-box height here so `lay_out_flex`
+                // can grow children instead of collapsing them to flex-basis
+                // (BUG-104 — `.right-col` children with `flex:1` were height 0).
+                let flex_explicit_main = if matches!(
+                    s.flex_direction,
+                    FlexDirection::Column | FlexDirection::ColumnReverse
+                ) {
+                    s.height.as_ref()
+                        .and_then(|h| h.resolve(em, available_height, viewport))
+                        .map(|h| match s.box_sizing {
+                            BoxSizing::ContentBox => h,
+                            BoxSizing::BorderBox => (h - padding_top - padding_bottom
+                                - s.border_top_width - s.border_bottom_width)
+                                .max(0.0),
+                        })
+                } else {
+                    None
+                };
                 let content_height = lay_out_flex(
                     &mut b.children, &s, content_x, content_y, content_width,
-                    flex_explicit_cross, measurer, viewport, children_pcb, hp,
+                    flex_explicit_cross, flex_explicit_main, measurer, viewport, children_pcb, hp,
                 );
                 b.rect.height = if let Some(h_len) = &s.height
                     && let Some(h) = h_len.resolve(em, available_height, viewport)
@@ -7146,6 +7166,10 @@ fn lay_out_abs_children(
 /// `explicit_cross` — явная высота контейнера (content box) для row flex;
 /// используется в align-content для вычисления свободного пространства по cross axis.
 ///
+/// `explicit_main` — определённый main-размер (content box) для column flex
+/// (явная `height` или растяжение родителем). `None` = main размер неопределён,
+/// тогда контейнер сжимается по содержимому и flex-grow не действует.
+///
 /// Возвращает `content_height` (вертикальный размер контентной зоны контейнера).
 #[allow(clippy::too_many_arguments)]
 fn lay_out_flex(
@@ -7155,6 +7179,7 @@ fn lay_out_flex(
     content_y: f32,
     content_width: f32,
     explicit_cross: Option<f32>,
+    explicit_main: Option<f32>,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     pcb: Rect,
@@ -7187,8 +7212,13 @@ fn lay_out_flex(
         return 0.0;
     }
 
-    // Container main size (for row: width; for column: 0 = auto, computed from items).
-    let container_main = if is_column { 0.0 } else { content_width };
+    // Container main size. For row it is always the definite content width. For
+    // column it is the definite content height when known (explicit `height` or a
+    // parent-imposed stretch — `explicit_main`), otherwise indefinite (auto):
+    // the container then sizes to its items and flex-grow has no free space to
+    // distribute (CSS Flexbox §9.7).
+    let main_definite = if is_column { explicit_main } else { Some(content_width) };
+    let container_main = main_definite.unwrap_or(0.0);
 
     // CSS Box Alignment §8: gap is fixed space between items, subtracted before flex-grow/shrink.
     let em = s.font_size;
@@ -7327,7 +7357,11 @@ fn lay_out_flex(
         // Free space after gaps.
         let line_gap_total = if n > 1 { item_gap * (n - 1) as f32 } else { 0.0 };
         let total_hyp: f32 = hyp_mains.iter().sum();
-        let free_space = if is_column { 0.0 } else { container_main - total_hyp - line_gap_total };
+        let free_space = if main_definite.is_some() {
+            container_main - total_hyp - line_gap_total
+        } else {
+            0.0
+        };
 
         if free_space > 0.0 {
             let total_grow: f32 = line_keys.iter().map(|&k| children[item_idxs[k]].style.flex_grow).sum();
@@ -7353,7 +7387,11 @@ fn lay_out_flex(
 
         // Justify-content within the line.
         let resolved_main: f32 = hyp_mains.iter().sum();
-        let remaining = if is_column { 0.0 } else { (container_main - resolved_main - line_gap_total).max(0.0) };
+        let remaining = if main_definite.is_some() {
+            (container_main - resolved_main - line_gap_total).max(0.0)
+        } else {
+            0.0
+        };
         let (jc_start, jc_gap) = match s.justify_content {
             AlignValue::End => (remaining, 0.0),
             AlignValue::Center => (remaining / 2.0, 0.0),
@@ -7466,10 +7504,34 @@ fn lay_out_flex(
                         } else {
                             item.rect.height
                         };
+                        // BUG-104: a stretched item with no explicit height gains a
+                        // definite block size it lacked during its own layout. If the
+                        // item is itself a column flex container, its `flex-grow`
+                        // children were collapsed to flex-basis against an indefinite
+                        // main size — they must be re-laid-out against the stretched
+                        // height so they fill it.
+                        let relayout_column_flex = is.height.is_none()
+                            && stretch_h > 0.0
+                            && matches!(is.display, Display::Flex | Display::InlineFlex)
+                            && matches!(
+                                is.flex_direction,
+                                FlexDirection::Column | FlexDirection::ColumnReverse
+                            );
                         if item.rect.height < stretch_h {
                             item.rect.height = stretch_h;
                         }
                         item.rect.y = content_y + cross_cursor + m_t;
+                        if relayout_column_flex {
+                            // Force border-box + explicit height so the definite main
+                            // size is honoured regardless of the item's own box-sizing,
+                            // then re-lay-out in place (origin/width already resolved).
+                            let rx = item.rect.x;
+                            let ry = item.rect.y;
+                            let rw = item.rect.width;
+                            item.style.box_sizing = BoxSizing::BorderBox;
+                            item.style.height = Some(Length::Px(stretch_h));
+                            lay_out(item, rx, ry, rw, Some(stretch_h), measurer, viewport, pcb, hp, false);
+                        }
                     }
                     _ => {
                         item.rect.y = content_y + cross_cursor + m_t;
@@ -12557,6 +12619,50 @@ mod tests {
         let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
         let item = find_by_id_all(&root, &doc, "item").expect("item");
         assert_eq!(item.rect.height, 40.0, "height:50% flex item should be 40px, got {}", item.rect.height);
+    }
+
+    #[test]
+    fn flex_column_explicit_height_grows_items() {
+        // BUG-104: a column flex container with a definite main (block) size must
+        // distribute free space to `flex:1` children. Container height 300px, two
+        // `flex:1` items → each grows to 150px. Previously column main size was
+        // hardcoded to 0, so flex-grow had no free space and items collapsed.
+        let html = r#"<div id="col"><div id="a"></div><div id="b"></div></div>"#;
+        let css = "body{margin:0} \
+                   #col{display:flex;flex-direction:column;height:300px;width:100px} \
+                   #a{flex:1} #b{flex:1}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let b = find_by_id_all(&root, &doc, "b").expect("b");
+        assert_eq!(a.rect.height, 150.0, "first flex:1 column item should grow to 150, got {}", a.rect.height);
+        assert_eq!(b.rect.height, 150.0, "second flex:1 column item should grow to 150, got {}", b.rect.height);
+        assert_eq!(b.rect.y, 150.0, "second item starts after first; b.y={}", b.rect.y);
+    }
+
+    #[test]
+    fn flex_stretched_column_child_grows_its_items() {
+        // BUG-104 (TEST-62): a column flex container with NO explicit height that is
+        // stretched by a row parent (align-items:stretch) gains a definite main size.
+        // Its `flex:1` children must then grow to fill it. This is the `.right-col`
+        // scenario from TEST-62 — the right column collapsed to ~0 height before.
+        // Row 400px tall, #col stretched to 400, its two flex:1 items → 200 each.
+        let html = r#"<div id="row"><div id="col"><div id="a"></div><div id="b"></div></div></div>"#;
+        let css = "body{margin:0} \
+                   #row{display:flex;height:400px;width:500px} \
+                   #col{display:flex;flex-direction:column;flex:1} \
+                   #a{flex:1} #b{flex:1}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let col = find_by_id_all(&root, &doc, "col").expect("col");
+        assert_eq!(col.rect.height, 400.0, "stretched column container should be 400 tall, got {}", col.rect.height);
+        let a = find_by_id_all(&root, &doc, "a").expect("a");
+        let b = find_by_id_all(&root, &doc, "b").expect("b");
+        assert_eq!(a.rect.height, 200.0, "first item in stretched column should grow to 200, got {}", a.rect.height);
+        assert_eq!(b.rect.height, 200.0, "second item in stretched column should grow to 200, got {}", b.rect.height);
+        assert_eq!(b.rect.y, 200.0, "second item starts after first; b.y={}", b.rect.y);
     }
 
     #[test]
