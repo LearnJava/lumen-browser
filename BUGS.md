@@ -119,7 +119,7 @@
 | [BUG-101](bugs/BUG-101-OPEN.md) | OPEN | css-parser/paint | image-set() DPR selection / cross-fade() not implemented — TEST-59: 27.63% |
 | [BUG-102](bugs/BUG-102-FIXED.md) | FIXED 2026-06-17 | paint | SVG stroke-width/dasharray молча терялись в standards-mode (unitless user units) + join-шипы; TEST-60 11.51%→1.41%, TEST-54 5.58%→2.30% |
 | [BUG-103](bugs/BUG-103-OPEN.md) | OPEN | js | View Transitions API not implemented — TEST-61: 99.53%; Phase 2 |
-| [BUG-104](bugs/BUG-104-OPEN.md) | OPEN | layout | CSS Scroll Snap not implemented — TEST-62: 63.70%; Phase 1 |
+| [BUG-104](bugs/BUG-104-FIXED.md) | FIXED 2026-06-19 | layout | TEST-62 63.70%→2.32%: реальная причина — column flex-grow не распределял free space. `lay_out_flex` хардкодил `container_main=0`/`free_space=0` для column → `.right-col` дети `flex:1` схлопывались в h≈0. Фикс: `explicit_main` для column (явная height или растяжение родителем re-layout). Геометрия пиксель-точна (diff: все заливки идентичны). Остаток 2.32% = font-parity (BUG-128) метки секций + border-radius edge-AA (BUG-176) → KNOWN_DEBTORS. box_tree.rs:5097/7191 |
 | [BUG-105](bugs/BUG-105-OPEN.md) | OPEN | layout | CSS Masonry layout not implemented — TEST-63: 26.13%; Phase 2 |
 | [BUG-106](bugs/BUG-106-FIXED.md) | FIXED 2026-06-09 | layout | TEST-64 table: missing UA heading defaults → h3 без размера и margin |
 | [BUG-107](bugs/BUG-107-FIXED.md) | FIXED 2026-06-09 | layout | flex align-content: normal/stretch не распределял свободное пространство |
@@ -259,5 +259,5 @@
 | SVG stroke advanced | Phase 1 | TEST-60: FIXED 2026-06-17 → BUG-102 (остаток → BUG-173, KNOWN_DEBTORS) |
 | `<canvas>` 2D context | Phase 2 | TEST-57: 28.66% → BUG-099 |
 | View Transitions API | Phase 2 | TEST-61: 99.53% → BUG-103 |
-| CSS Scroll Snap | Phase 1 | TEST-62: 63.70% → BUG-104 |
+| CSS Scroll Snap | Phase 1 | TEST-62: FIXED 2026-06-19 → BUG-104 (column flex-grow; остаток 2.32% → BUG-128, KNOWN_DEBTORS) |
 | CSS Masonry | Phase 2 | TEST-63: 26.13% → BUG-105 |
