@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-In progress: `scripting` media feature (Media Queries L5 §6.2)  branch: p4-media-scripting
-Next step: реализация завершена (parser + tests + graphic test 125) — осталось смержить через /lumen-task-finish
+_(none)_ — p4-media-scripting (Media Queries L5 §6.2) влит 2026-06-19
 
 ## Workflow
 
