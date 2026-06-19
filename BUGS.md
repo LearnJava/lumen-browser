@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-223)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-224)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -236,6 +236,7 @@
 | [BUG-220](bugs/BUG-220-OPEN.md) | OPEN | paint | scroll-контейнер в ordered (stacking-context) пути теряет scrollbar: `box_layer_ops` эмитит `PushScrollLayer`/`PopScrollLayer`, но не `DrawScrollbar` (есть только в legacy `walk`) — display_list.rs:2481. Замечен при разборе BUG-202 |
 | [BUG-221](bugs/BUG-221-OPEN.md) | OPEN | paint | CPU-бэкенд снимка (`render_to_image_cpu`, cpu_raster.rs) не на паритете с femtovg: border-radius (TEST-36 квадрат вместо скругления), gradients (TEST-39), images (TEST-18) не рендерятся как в окне. Блокирует полную замену gdigrab на `run.py --ipc` (TAB-7); геометрия/цвет/текст совпадают пиксельно |
 | [BUG-222](bugs/BUG-222-FIXED.md) | FIXED 2026-06-19 | js/shell | WASM-реестр (`wasm::REGISTRY`) не очищается при разрушении JS-контекста: «утёкший» `Persistent` функции-импорта роняет QuickJS на `list_empty(&rt->gc_obj_list)` при teardown. Закрыт B-1/ADR-014: `js_thread_main` зовёт `wasm::clear_registry()` в teardown JS-потока до дропа `Runtime`. |
+| [BUG-223](bugs/BUG-223-OPEN.md) | OPEN | network/ipc | `lumen-network-service` не компилируется (E0004): `match` в `network_service.rs:51` не покрывает таб-варианты `IpcRequest::{CreateTab,CloseTab,NavigateTab,Screenshot}`, добавленные в TAB-4/5. `--workspace` сборка красная (per-crate проходит). Не связано с B-1. |
 
 ---
 
