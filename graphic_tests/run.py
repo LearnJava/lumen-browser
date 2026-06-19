@@ -234,6 +234,7 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '92': ('BUG-124', 0.90),    # system colors: значения system_color() приведены к Edge BUG-210 (15.59% → 0.90%); layout/цвета идеальны (dump-layout: 164px border-box, gap 4, hex точны), остаток = gdigrab суб-пиксельный сдвиг (~+3px на 1000px) на границах ячеек vs пиксельное округление Edge
     '67': ('BUG-128', 1.36),    # attr(): ::before на flex-контейнере не генерировался — фикснут BUG-196 (16.41% → 1.36%); тёмные label-боксы и бары совпадают с Edge пиксель-в-пиксель, остаток = font-parity (white monospace label text, Inter vs Edge) + sub-pixel edge-AA по border-radius клипу
     '62': ('BUG-128', 2.32),    # scroll-snap: column flex-grow не распределял free space — фикснут BUG-104 (63.70% → 2.32%); все цветные заливки контейнеров совпадают с Edge пиксель-в-пиксель (diff), остаток = font-parity (метки секций A/1/NW/Stop, Inter vs Edge) + border-radius edge-AA (BUG-176)
+    '80': ('BUG-128', 9.91),    # border-collapse: collapse varied-width-border erasure фикснут BUG-200 (тонкая ячейка затирала толстую общую границу — границы ряда 3 теперь совпадают с Edge пиксель-в-пиксель); остаток = font-parity вертикальный дрейф (line-height «normal» Inter ≈1.2 vs Edge ≈1.06 → ячейки на ~2px выше, накапливается вниз по 4 таблицам)
 }
 _DEBTOR_TOL = 2.0  # % допуск run-to-run вариации gdigrab
 
