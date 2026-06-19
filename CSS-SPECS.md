@@ -90,7 +90,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Text Decoration L4 | [css-text-decor-4](https://www.w3.org/TR/css-text-decor-4/) | 🟡 | text-emphasis rendering; text-underline-offset ✅ 2026-06-10 | **#32** |
 | CSS Scrollbars L1 | [css-scrollbars-1](https://www.w3.org/TR/css-scrollbars-1/) | 🟡 | scrollbar-width/color rendering | **#33** |
 | CSS Basic UI L3/L4 | [css3-ui](https://www.w3.org/TR/css3-ui/) | 🟡 | resize drag-UI; appearance form widgets; field-sizing ✅ 2026-06-13 | **#34** |
-| Media Queries L4/L5 | [mediaqueries-4](https://www.w3.org/TR/mediaqueries-4/) | 🟡 | prefers-reduced-motion ✅; hover/any-hover/pointer/any-pointer ✅ 2026-06-14 (p4-media-hover-pointer: desktop defaults hover/fine); prefers-contrast/prefers-reduced-data ✅ 2026-06-16 (p4-media-contrast-data) | **#35** |
+| Media Queries L4/L5 | [mediaqueries-4](https://www.w3.org/TR/mediaqueries-4/) | 🟡 | prefers-reduced-motion ✅; hover/any-hover/pointer/any-pointer ✅ 2026-06-14 (p4-media-hover-pointer: desktop defaults hover/fine); prefers-contrast/prefers-reduced-data ✅ 2026-06-16 (p4-media-contrast-data); prefers-reduced-transparency ✅ 2026-06-19 (p4-prefers-reduced-transparency) | **#35** |
 | CSS Conditional L4 | [css-conditional-4](https://www.w3.org/TR/css-conditional-4/) | ✅ | @supports `selector()` ✅ 2026-06-17 (p4-supports-selector: `ComplexSelector::is_supported` recurses through `:is()`/`:not()`/`:where()`/`:has()`/`:nth-child(… of …)`/`:host()`/`::slotted()`, false on any `Unsupported`/`Unknown`); `font-tech()`/`font-format()` ✅ 2026-06-19 (p4-supports-font-tech: `SupportsCondition::FontTech`/`FontFormat` evaluated against lumen-font capabilities — features-opentype/variations + truetype/opentype/woff/woff2 supported, colour glyphs/palettes/AAT/Graphite/collection/EOT/SVG rejected) | **#36** |
 | CSS Color Adjust L1 | [css-color-adjust-1](https://www.w3.org/TR/css-color-adjust-1/) | 🟡 | color-scheme UA switching | **#37** |
 | CSS Box Sizing L4 | [css-sizing-4](https://www.w3.org/TR/css-sizing-4/) | ✅ | contain-intrinsic-size ✅ 2026-06-14 (p4-contain-intrinsic-size: longhands + logical aliases + shorthand; size-containment wiring for block/flex/grid height + inline-block width); interpolate-size ✅ | **#38** |
@@ -405,6 +405,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `prefers-reduced-motion` | ✅ | parsed + matched; OS integration deferred (always `no-preference` until shell wires OS pref) |
 | `hover`, `pointer` | ✅ | Media Queries L4 §5.3-5.6; `hover`/`any-hover` (none/hover) + `pointer`/`any-pointer` (none/coarse/fine); desktop defaults hover/fine in `MediaContext`; 8 tests + graphic 118 (P4 2026-06-14) |
 | `prefers-contrast` / `prefers-reduced-data` | ✅ | Media Queries L5 §5.5-5.6; `prefers-contrast` (no-preference/more/less/custom) + `prefers-reduced-data` (no-preference/reduce); desktop defaults no-preference in `MediaContext`; OS/UA integration deferred; 6 tests + graphic 120 (P4 2026-06-16) |
+| `prefers-reduced-transparency` | ✅ | Media Queries L5 §5.7; no-preference/reduce; desktop default no-preference in `MediaContext`; OS/UA integration deferred; 3 tests + graphic 124 (P4 2026-06-19) |
 
 ---
 

@@ -222,6 +222,16 @@
     <div class="mq-sw mq-rd"></div>
   </div>
 
+  <!-- ── prefers-reduced-transparency demo (Media Queries L5 §5.7) ── -->
+  <style>
+    @media (prefers-reduced-transparency: no-preference) { .mq-rt { background: #2f855a; } }
+    @media (prefers-reduced-transparency: reduce)        { .mq-rt-bad { background: #2b6cb0; } }
+  </style>
+  <div class="mq-row">
+    <div class="mq-sw mq-rt"></div>
+    <div class="mq-sw mq-rt-bad"></div>
+  </div>
+
   <!-- ── @supports selector() demo (CSS Conditional L4 §4.2) ── -->
   <style>
     @supports selector(:has(*))                  { .sup-has  { background: #2f855a; } }
