@@ -116,16 +116,86 @@ fn append_rounded_rect_outline(
 
 // ─── Gradient helpers ─────────────────────────────────────────────────────────
 
-/// Разрешает `GradientStop.position` в [0,1], равномерно распределяя `None` позиции.
+/// Разрешает `GradientStop.position` в [0,1] для **non-repeating** градиента.
 ///
-/// Thin wrapper над общим [`crate::gradient_math::resolve_stop_positions`]
-/// (единый алгоритм для всех бэкендов, PA-1): позиции дополнительно зажимаются
-/// в [0,1] — femtovg-библиотечные градиенты не принимают значения вне диапазона.
+/// Thin wrapper над [`femtovg_stops`] с `repeating = false`. Используется
+/// mask-градиентами (`fill_mask_gradient`), которые повторение не поддерживают.
 fn resolve_stops(stops: &[GradientStop], width: f32) -> Vec<(f32, femtovg::Color)> {
-    crate::gradient_math::resolve_stop_positions(stops, width)
-        .into_iter()
-        .map(|(pos, c)| (pos.clamp(0.0, 1.0), lumen_to_fvg(c)))
-        .collect()
+    femtovg_stops(stops, width, false)
+}
+
+/// Длина CSS-линии линейного градиента в боксе `w×h` под углом `angle_deg`
+/// (CSS Images L3 §3.2) — расстояние между начальной и конечной точками, на
+/// которое отображаются позиции стопов. Совпадает с `2·half_len` из
+/// [`linear_gradient_endpoints`], поэтому px-стопы делятся на правильную длину
+/// даже для непрямых углов (45° и т.п.), а не на `rect.width`.
+fn linear_gradient_line_len(w: f32, h: f32, angle_deg: f32) -> f32 {
+    let theta = angle_deg.to_radians();
+    (w * theta.sin().abs() + h * theta.cos().abs()).max(1.0)
+}
+
+/// Преобразует CSS-стопы в список `(pos∈[0,1], femtovg::Color)`, готовый для
+/// `Paint::linear_gradient_stops` / `radial_gradient_stops`.
+///
+/// femtovg синтезирует 256-тексельную текстуру градиента и clamp-сэмплит её
+/// (`gradient_store.rs`): заполняет от 0 до первого стопа и между соседними
+/// стопами, но **область за последним стопом оставляет прозрачной** и
+/// игнорирует позиции вне [0,1]. Чтобы совпасть с CSS:
+///   * **non-repeating:** последний цвет продлевается до 1.0 — иначе hard-stop
+///     вида `… green 50%` без завершающего стопа рисует только первую половину,
+///     а вторая остаётся прозрачной (BUG-085 / BUG-144 row 2);
+///   * **repeating:** паттерн (период = `last − first`) замощается по всей линии
+///     [0,1] — иначе `repeating-linear/-radial-gradient` рисует один clamp-период
+///     вместо повторения (BUG-085, TEST-39 `.rep-linear`/`.rep-radial`).
+fn femtovg_stops(
+    stops: &[GradientStop], line_len: f32, repeating: bool,
+) -> Vec<(f32, femtovg::Color)> {
+    let resolved = crate::gradient_math::resolve_stop_positions(stops, line_len);
+    if resolved.is_empty() {
+        return vec![];
+    }
+    if !repeating {
+        let mut out: Vec<(f32, femtovg::Color)> = resolved
+            .iter()
+            .map(|&(pos, c)| (pos.clamp(0.0, 1.0), lumen_to_fvg(c)))
+            .collect();
+        // Продлить последний цвет до конца линии (femtovg сам не дозаполняет хвост).
+        if let Some(&(last_pos, last_col)) = out.last()
+            && last_pos < 1.0
+        {
+            out.push((1.0, last_col));
+        }
+        return out;
+    }
+    // repeating: период между первым и последним стопом, замощаем [0,1].
+    let first = resolved[0].0;
+    let last = resolved[resolved.len() - 1].0;
+    let period = last - first;
+    if period <= 1e-6 {
+        // Вырожденный период — сплошной последний цвет.
+        let c = lumen_to_fvg(resolved[resolved.len() - 1].1);
+        return vec![(0.0, c), (1.0, c)];
+    }
+    // k подбирается так, чтобы первая плитка начиналась ≤ 0 (покрыть «голову»
+    // до первого стопа), и продолжаем, пока начало плитки ≤ 1.0 (femtovg
+    // дозаполнит/обрежет хвост по 1.0). Позиции остаются монотонными: последний
+    // стоп плитки k совпадает с первым плитки k+1 → корректная граница повтора.
+    let mut out: Vec<(f32, femtovg::Color)> = Vec::new();
+    let mut k = ((0.0 - first) / period).floor() as i32;
+    const MAX_TILES: i32 = 512; // защита от зацикливания на микроскопическом периоде
+    let mut tiles = 0;
+    loop {
+        let shift = (k as f32) * period;
+        if first + shift > 1.0 || tiles >= MAX_TILES {
+            break;
+        }
+        for &(pos, c) in &resolved {
+            out.push((pos + shift, lumen_to_fvg(c)));
+        }
+        k += 1;
+        tiles += 1;
+    }
+    out
 }
 
 /// Вычисляет начало и конец линейного градиента для femtovg из CSS angle_deg.
@@ -2088,14 +2158,15 @@ impl FemtovgBackend {
             }
 
             // ── Gradients ───────────────────────────────────────────────────
-            DisplayCommand::DrawLinearGradient { rect, angle_deg, stops, .. } => {
+            DisplayCommand::DrawLinearGradient { rect, angle_deg, stops, repeating } => {
                 if rect.width <= 0.0 || rect.height <= 0.0 || stops.is_empty() {
                     return;
                 }
                 let ([sx, sy], [ex, ey]) = linear_gradient_endpoints(
                     rect.x, rect.y, rect.width, rect.height, *angle_deg,
                 );
-                let resolved = resolve_stops(stops, rect.width);
+                let line_len = linear_gradient_line_len(rect.width, rect.height, *angle_deg);
+                let resolved = femtovg_stops(stops, line_len, *repeating);
                 if resolved.len() < 2 {
                     return;
                 }
@@ -2108,7 +2179,7 @@ impl FemtovgBackend {
                 self.canvas.fill_path(&path, &paint);
             }
 
-            DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, stops, .. } => {
+            DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating } => {
                 if rect.width <= 0.0 || rect.height <= 0.0 || stops.is_empty() {
                     return;
                 }
@@ -2117,7 +2188,7 @@ impl FemtovgBackend {
                 let dx = center_x_pct.max(1.0 - center_x_pct) * rect.width;
                 let dy = center_y_pct.max(1.0 - center_y_pct) * rect.height;
                 let outer_r = dx.hypot(dy).max(1.0);
-                let resolved = resolve_stops(stops, outer_r);
+                let resolved = femtovg_stops(stops, outer_r, *repeating);
                 if resolved.len() < 2 {
                     return;
                 }
@@ -3172,6 +3243,66 @@ mod tests {
         let resolved = resolve_stops(&stops, 100.0);
         assert_eq!(resolved.len(), 3);
         assert!((resolved[1].0 - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn femtovg_stops_extends_hard_stop_last_color_to_end() {
+        // linear-gradient(red 50%, green 50%): без завершающего стопа femtovg
+        // оставил бы вторую половину прозрачной (BUG-085 / BUG-144 row 2).
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let green = Color { r: 0, g: 255, b: 0, a: 255 };
+        let stops = vec![
+            GradientStop { color: red, position: Some(Length::Percent(50.0)) },
+            GradientStop { color: green, position: Some(Length::Percent(50.0)) },
+        ];
+        let r = femtovg_stops(&stops, 100.0, false);
+        let last = *r.last().unwrap();
+        assert!((last.0 - 1.0).abs() < 1e-5, "последний стоп должен достигать 1.0, got {}", last.0);
+        assert!(last.1.g > 0.9 && last.1.r < 0.1, "хвост должен быть зелёным");
+    }
+
+    #[test]
+    fn femtovg_stops_no_tail_fill_when_last_at_full() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let stops = vec![
+            GradientStop { color: red, position: None },
+            GradientStop { color: blue, position: None },
+        ];
+        // Стопы 0/1 не требуют дозаполнения хвоста.
+        assert_eq!(femtovg_stops(&stops, 100.0, false).len(), 2);
+    }
+
+    #[test]
+    fn femtovg_stops_repeating_tiles_across_line() {
+        // repeating-linear-gradient(#333 0px, #333 10px, #666 10px, #666 20px)
+        // на линии 200px → период 20/200 = 0.1; покрыть [0,1] плитками.
+        let c1 = Color { r: 0x33, g: 0x33, b: 0x33, a: 255 };
+        let c2 = Color { r: 0x66, g: 0x66, b: 0x66, a: 255 };
+        let stops = vec![
+            GradientStop { color: c1, position: Some(Length::Px(0.0)) },
+            GradientStop { color: c1, position: Some(Length::Px(10.0)) },
+            GradientStop { color: c2, position: Some(Length::Px(10.0)) },
+            GradientStop { color: c2, position: Some(Length::Px(20.0)) },
+        ];
+        let r = femtovg_stops(&stops, 200.0, true);
+        assert!(r.windows(2).all(|w| w[1].0 >= w[0].0 - 1e-6), "позиции должны быть неубывающими");
+        assert!((r[0].0).abs() < 1e-5, "первый стоп в 0, got {}", r[0].0);
+        assert!(r.last().unwrap().0 >= 1.0, "последний стоп должен достигать/превышать 1.0");
+        assert!(r.len() >= 20, "ожидается множество замощённых стопов, got {}", r.len());
+    }
+
+    #[test]
+    fn femtovg_stops_repeating_degenerate_period_is_solid() {
+        // Нулевой период (оба стопа в одной позиции) → сплошной цвет, без зацикливания.
+        let c = Color { r: 10, g: 20, b: 30, a: 255 };
+        let stops = vec![
+            GradientStop { color: c, position: Some(Length::Percent(50.0)) },
+            GradientStop { color: c, position: Some(Length::Percent(50.0)) },
+        ];
+        let r = femtovg_stops(&stops, 100.0, true);
+        assert_eq!(r.len(), 2);
+        assert!((r[0].0).abs() < 1e-5 && (r[1].0 - 1.0).abs() < 1e-5);
     }
 
     /// BUG-183 — a gradient `mask-image` is applied by painting the gradient

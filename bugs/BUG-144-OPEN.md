@@ -25,14 +25,16 @@ FLIP_Y`). `filtered_backdrop_id` остаётся без флага — это C
 Тест: `offscreen_layer_flags_flip_y_and_premultiplied` (расширен doc).
 TEST-30 → KNOWN_DEBTORS (`BUG-144`, 10.5).
 
-## Остаток (DEBTOR, 10.48%)
+## Gradient hard-stop (row 2) — исправлено 2026-06-19 (BUG-085, 10.48% → 7.56%)
+
+`linear-gradient(to right, #e53e3e 50%, #38a169 50%)` рисовал только красную
+половину — femtovg не дозаполнял хвост за последним стопом. Фикс в
+`femtovg_stops` (см. BUG-085): последний цвет продлевается до 1.0.
+
+## Остаток (DEBTOR, 7.56%)
 
 1. **Filter pixel-parity (rows 1-3):** grayscale/sepia/brightness/invert/
    contrast/saturate/hue-rotate/blur не совпадают с Edge пиксель-в-пиксель.
 2. **Backdrop захватывается тёмным (row 4):** карточки с `backdrop-filter`
    показывают тёмный фон вместо отфильтрованного градиента — `screenshot()`
-   внутри opacity-FBO не отдаёт содержимое слоя (отдельный дефект PA-4,
-   домен P2).
-3. **Gradient hard-stop (row 2):** `linear-gradient(to right, #e53e3e 50%,
-   #38a169 50%)` рисует только красную половину, зелёная пропадает — домен
-   BUG-085 (градиенты, ветка P2).
+   внутри opacity-FBO не отдаёт содержимое слоя (отдельный дефект PA-4).

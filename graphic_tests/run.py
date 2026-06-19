@@ -226,7 +226,8 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '75': ('BUG-143', 16.97),   # masonry-auto-flow — Phase 2
     '119': ('BUG-173', 0.81),   # paint-order: остаток = stroke triangle-soup AA-швы (geometry фикснут BUG-174)
     '36': ('BUG-176', 1.11),    # border-radius: остаток = edge-AA + elliptical-corner kappa (квадратные рамки фикснуты BUG-175)
-    '30': ('BUG-144', 10.5),    # CSS filter/backdrop-filter: row-flip фикснут BUG-144; остаток = filter pixel-parity (rows 1-3) + backdrop захват тёмным внутри opacity-слоя (row 4) + gradient hard-stop (row 2, BUG-085)
+    '30': ('BUG-144', 7.56),    # CSS filter/backdrop-filter: row-flip (BUG-144) + gradient hard-stop row 2 (BUG-085 tail-fill, 10.5%→7.56%); остаток = filter pixel-parity (rows 1-3) + backdrop захват тёмным внутри opacity-слоя (row 4)
+    '39': ('BUG-085', 1.62),    # gradients: repeating-linear/-radial теперь повторяются + hard-stop хвост дозаполняется (femtovg_stops, 12.05%→1.62%); row 1 linear совпадает пиксель-в-пиксель; остаток = 256-тексельная квантизация градиент-текстуры femtovg на repeating-границах (rows 2-3) + radial-интерполяция/AA vs Edge + gdigrab-шум
     '51': ('BUG-124', 1.09),    # scrollbar rendering: float-wrapper shrink-to-fit фикснут BUG-178 (9.91% → 1.09%); остаток = дробные layout Y-координаты vs пиксельное округление Edge
     '64': ('BUG-128', 8.99),    # table: margin-collapse таблица↔блок фикснут BUG-193 (13.89% → 8.99%); остаток = font-parity (текст в ~21 ячейках + заголовки, Inter vs Edge) + ~3px накопленный line-height сдвиг
     '18': ('BUG-219', 2.11),    # <img>: «image bottom gap» (baseline descent) фикснут BUG-180 (21.21% → 2.11%); остаток = image-resampling AA (area-avg ≠ Edge downscale kernel)
