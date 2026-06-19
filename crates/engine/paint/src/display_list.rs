@@ -2301,7 +2301,14 @@ fn emit_inline_run(
     sel: Option<&SelectionHighlight>,
     out: &mut Vec<DisplayCommand>,
 ) {
-    let line_h = b.style.font_size * b.style.line_height;
+    // CSS Rhythmic Sizing L1 §2 — line-height-step rounds each line box up to a
+    // multiple of the step so paint stacks lines at the same rhythm layout used.
+    let raw_line_h = b.style.font_size * b.style.line_height;
+    let line_h = if b.style.line_height_step > 0.0 {
+        (raw_line_h / b.style.line_height_step).ceil() * b.style.line_height_step
+    } else {
+        raw_line_h
+    };
     let wants_ellipsis = matches!(b.style.text_overflow, TextOverflow::Ellipsis)
         && overflow_clips(b.style.overflow_x);
 

@@ -5027,7 +5027,8 @@ fn lay_out(
                 }
             };
             align_lines(lines, content_width, s.text_align, s.text_align_last, s.direction);
-            let line_h = s.font_size * s.line_height;
+            // CSS Rhythmic Sizing L1 §2 — round each line box up to a multiple of line-height-step.
+            let line_h = step_line_height(s.font_size * s.line_height, s.line_height_step);
             apply_inline_vertical_align(lines, line_h);
             // CSS Overflow L4 §3.2: -webkit-line-clamp / line-clamp — multi-line truncation.
             // Takes priority over text-overflow:ellipsis (both cannot apply simultaneously).
@@ -5057,12 +5058,14 @@ fn lay_out(
         let line_count = lines.len().max(1);
         // CSS Pseudo-elements L4 §3.1: the first formatted line uses the ::first-line
         // style's own font metrics for its line box height (BB-1).
+        // CSS Rhythmic Sizing L1 §2 — line-height-step rounds every line box (incl. ::first-line).
+        let step = s.line_height_step;
         b.rect.height = match first_line_style.as_deref() {
             Some(fls) if !lines.is_empty() => {
-                fls.font_size * fls.line_height
-                    + (line_count - 1) as f32 * (s.font_size * s.line_height)
+                step_line_height(fls.font_size * fls.line_height, step)
+                    + (line_count - 1) as f32 * step_line_height(s.font_size * s.line_height, step)
             }
-            _ => line_count as f32 * (s.font_size * s.line_height),
+            _ => line_count as f32 * step_line_height(s.font_size * s.line_height, step),
         };
         return;
     }
@@ -9135,6 +9138,18 @@ fn align_lines(
                 }
             }
         }
+    }
+}
+
+/// CSS Rhythmic Sizing L1 §2 — `line-height-step`. Округляет высоту line-box `raw`
+/// вверх до ближайшего кратного `step` (в px). При `step <= 0` (свойство выключено)
+/// возвращает `raw` без изменений. Дополнительный зазор распределяется как half-leading
+/// штатным `apply_inline_vertical_align`, которому передаётся уже округлённая высота.
+fn step_line_height(raw: f32, step: f32) -> f32 {
+    if step > 0.0 {
+        (raw / step).ceil() * step
+    } else {
+        raw
     }
 }
 
@@ -14202,6 +14217,22 @@ mod tests {
         assert_eq!(super::font_size_adjust_used(&s, &m), 40.0);
         s.font_size_adjust = FontSizeAdjust::Auto;
         assert_eq!(super::font_size_adjust_used(&s, &m), 40.0);
+    }
+
+    #[test]
+    fn step_line_height_rounds_up_to_multiple() {
+        // CSS Rhythmic Sizing L1 §2 — raw 19.2 with step 24 → 24; 30 with step 24 → 48.
+        assert!((super::step_line_height(19.2, 24.0) - 24.0).abs() < f32::EPSILON);
+        assert!((super::step_line_height(30.0, 24.0) - 48.0).abs() < f32::EPSILON);
+        // Exact multiple stays put.
+        assert!((super::step_line_height(48.0, 24.0) - 48.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn step_line_height_disabled_passthrough() {
+        // step <= 0 disables the property — raw height unchanged.
+        assert!((super::step_line_height(19.2, 0.0) - 19.2).abs() < f32::EPSILON);
+        assert!((super::step_line_height(19.2, -5.0) - 19.2).abs() < f32::EPSILON);
     }
 
     #[test]

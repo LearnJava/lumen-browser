@@ -200,6 +200,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "letter-spacing",
     "line-break",
     "line-height",
+    "line-height-step",
     "list-style",
     "list-style-image",
     "list-style-position",
