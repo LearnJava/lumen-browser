@@ -21,7 +21,7 @@ pub use parser::{
     Combinator, CompoundSelector, ComplexSelector, ContainerRule, CounterStyleRule, Declaration,
     DirArg, FontFaceRule, FontFaceSource, FontFaceSourceKind, FontPaletteValuesRule, ImportRule, Keyframe, KeyframesRule,
     LayerRule, MediaCondition, MediaContext, MediaContrast, MediaFeature, MediaHover, MediaOrientation, MediaPointer, MediaQuery,
-    MediaReducedData, MediaReducedTransparency,
+    MediaReducedData, MediaReducedTransparency, MediaScripting,
     MediaQueryClause, MediaRule, NthSpec, PageRule, PropertyRule, PseudoClass, PseudoElementKind, RelativeSelector,
     Rule, ScopeRule,
     SimpleSelector, Specificity, StartingStyleRule, Stylesheet, SupportsCondition, SupportsRule,
