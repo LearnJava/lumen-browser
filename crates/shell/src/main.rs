@@ -688,6 +688,7 @@ fn run_window_mode(
         display_url: None,
         current_history_state_json: String::from("null"),
         fullscreen_nid: None,
+        fullscreen_resize_pending: None,
         view_transition: None,
         archive: tabs::archive::TabArchive::new(),
         restore_spinner_start_ms: None,
@@ -4095,6 +4096,39 @@ fn paint_ordered(layout: &lumen_layout::LayoutBox) -> DisplayList {
     build_display_list_ordered(layout, &tree, &order)
 }
 
+/// Outcome of a single fullscreen-resize poll tick (BUG-167).
+///
+/// Pure decision extracted from [`Lumen::poll_fullscreen_resize`] so the
+/// async-resize reconciliation can be unit-tested without a real window.
+#[derive(Debug, PartialEq, Eq)]
+enum FullscreenPoll {
+    /// The OS applied a new size: resize the renderer to `(w, h)` physical px
+    /// and relayout. Clears the pending state.
+    Apply(u32, u32),
+    /// The size has not been applied yet: keep waiting with `(prev_w, prev_h,
+    /// attempts_left)` (one attempt spent this tick).
+    Wait(u32, u32, u8),
+    /// Give up — the attempt budget is exhausted. Clears the pending state.
+    Done,
+}
+
+/// Decide what to do on one fullscreen-resize poll tick (BUG-167).
+///
+/// `prev` is the window's physical inner size captured before `set_fullscreen`;
+/// `cur` is the size read this tick; `attempts` is the remaining poll budget.
+/// A zero-sized `cur` (minimized / not yet mapped) counts as "not applied yet".
+fn decide_fullscreen_poll(prev: (u32, u32), cur: (u32, u32), attempts: u8) -> FullscreenPoll {
+    let (prev_w, prev_h) = prev;
+    let (cur_w, cur_h) = cur;
+    if cur_w != 0 && cur_h != 0 && (cur_w != prev_w || cur_h != prev_h) {
+        return FullscreenPoll::Apply(cur_w, cur_h);
+    }
+    match attempts.checked_sub(1) {
+        Some(0) | None => FullscreenPoll::Done,
+        Some(left) => FullscreenPoll::Wait(prev_w, prev_h, left),
+    }
+}
+
 /// Повторный layout+paint по сохранённому `LayoutSource` с новым viewport.
 /// Возвращает `(DisplayList, LayoutBox)` — LayoutBox нужен для animation scheduler.
 /// `dark_mode` is forwarded to `layout_measured_hyp` so `@media (prefers-color-scheme: dark)`
@@ -5714,6 +5748,18 @@ struct Lumen {
     /// `document.exitFullscreen()` or `Escape` exits fullscreen.  Used to deliver
     /// `_lumen_notify_fullscreen_exit()` when the OS exits fullscreen externally.
     fullscreen_nid: Option<u32>,
+    /// Pending viewport reconciliation after an OS fullscreen toggle (BUG-167).
+    ///
+    /// `Some((prev_w, prev_h, attempts_left))` is armed right after
+    /// `window.set_fullscreen(..)` is called: `prev_w`/`prev_h` are the window's
+    /// **physical** inner size *before* the OS applied the new mode. The OS
+    /// resizes the window asynchronously, so `about_to_wait` polls each loop
+    /// iteration until `inner_size()` differs from `(prev_w, prev_h)`, then runs
+    /// the same resize + relayout path as `WindowEvent::Resized` so the page
+    /// viewport (`vw`/`vh`, `innerWidth`/`innerHeight`) follows the fullscreen
+    /// area. `attempts_left` bounds the poll so a no-op toggle can't spin the
+    /// loop; it is cleared once the size changes or the budget runs out.
+    fullscreen_resize_pending: Option<(u32, u32, u8)>,
     /// Active CSS View Transition (CSS View Transitions L1 §4).
     ///
     /// Set when `document.startViewTransition(callback)` fires `_lumen_vt_end`.
@@ -5856,6 +5902,59 @@ impl Lumen {
         }
         #[cfg(not(feature = "quickjs"))]
         let _ = entries;
+    }
+
+    /// Arm a viewport reconciliation after an OS fullscreen toggle (BUG-167).
+    ///
+    /// `prev` is the window's **physical** inner size captured right *before*
+    /// `set_fullscreen` was called. The OS applies the new size asynchronously,
+    /// so `poll_fullscreen_resize` (run from `about_to_wait`) waits until the
+    /// real `inner_size()` differs from `prev`, then drives the resize +
+    /// relayout path. The `240` attempt budget (~4 s at 60 fps) prevents a
+    /// no-op toggle from spinning the event loop forever.
+    fn arm_fullscreen_resize(&mut self, prev: winit::dpi::PhysicalSize<u32>) {
+        self.fullscreen_resize_pending = Some((prev.width, prev.height, 240));
+        // Wake the loop so `about_to_wait` polls even with ControlFlow::Wait.
+        self.request_redraw();
+    }
+
+    /// Poll for the OS-applied fullscreen size and, once it differs from the
+    /// pre-toggle size, run the same resize + relayout path as
+    /// `WindowEvent::Resized` so the page viewport (`vw`/`vh`,
+    /// `innerWidth`/`innerHeight`) follows the fullscreen area (BUG-167).
+    ///
+    /// No-op unless a toggle is pending. Called once per `about_to_wait`.
+    fn poll_fullscreen_resize(&mut self) {
+        let Some((prev_w, prev_h, attempts)) = self.fullscreen_resize_pending else {
+            return;
+        };
+        // Read the current physical size; the immutable borrow of `self.window`
+        // ends before the &mut calls below.
+        let cur = match self.window.as_ref() {
+            Some(w) => w.inner_size(),
+            None => {
+                self.fullscreen_resize_pending = None;
+                return;
+            }
+        };
+        match decide_fullscreen_poll((prev_w, prev_h), (cur.width, cur.height), attempts) {
+            FullscreenPoll::Apply(w, h) => {
+                // OS applied the new size: drive the normal resize + relayout path.
+                self.fullscreen_resize_pending = None;
+                if let Some(r) = self.renderer.as_mut() {
+                    r.resize(w, h);
+                }
+                self.relayout();
+                self.runtime
+                    .deliver_observer_records(runtime::ObserverKind::Resize);
+                self.request_redraw();
+            }
+            FullscreenPoll::Wait(w, h, left) => {
+                self.fullscreen_resize_pending = Some((w, h, left));
+                self.request_redraw();
+            }
+            FullscreenPoll::Done => self.fullscreen_resize_pending = None,
+        }
     }
 
     /// Повторный layout+paint при изменении размера viewport.
@@ -7467,19 +7566,29 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         #[cfg(feature = "quickjs")]
         if let Some(js) = &self.js_ctx {
             for (enter, nid) in js.take_fullscreen_requests() {
-                if enter {
-                    self.fullscreen_nid = Some(nid);
-                    if let Some(w) = self.window.as_ref() {
-                        w.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
-                    }
+                self.fullscreen_nid = if enter { Some(nid) } else { None };
+                let target = if enter {
+                    Some(winit::window::Fullscreen::Borderless(None))
                 } else {
-                    self.fullscreen_nid = None;
-                    if let Some(w) = self.window.as_ref() {
-                        w.set_fullscreen(None);
-                    }
+                    None
+                };
+                // Apply the OS mode and capture the pre-toggle physical size; the
+                // borrow of `self.window` ends with the `map`, so the &mut call
+                // to `arm_fullscreen_resize` below does not conflict.
+                let prev = self.window.as_ref().map(|w| {
+                    w.set_fullscreen(target);
+                    w.inner_size()
+                });
+                if let Some(prev) = prev {
+                    self.arm_fullscreen_resize(prev);
                 }
             }
         }
+
+        // BUG-167: once the OS has applied a fullscreen toggle, reconcile the
+        // page viewport to the new window size (resize + relayout). No-op unless
+        // a toggle is pending.
+        self.poll_fullscreen_resize();
 
         // Pointer Lock API (W3C Pointer Lock L2 §4): apply pending OS cursor grab.
         // JS calls requestPointerLock() / exitPointerLock() → queues a grab change
@@ -11447,8 +11556,12 @@ impl Lumen {
             && !key_event.repeat
         {
             self.fullscreen_nid = None;
-            if let Some(w) = self.window.as_ref() {
+            let prev = self.window.as_ref().map(|w| {
                 w.set_fullscreen(None);
+                w.inner_size()
+            });
+            if let Some(prev) = prev {
+                self.arm_fullscreen_resize(prev);
             }
             // Notify JS so fullscreenchange fires and document.fullscreenElement clears.
             #[cfg(feature = "quickjs")]
@@ -15348,6 +15461,66 @@ fn escape_js_string_char(ch: char) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Fullscreen viewport reconciliation (BUG-167) ────────────────────────
+
+    #[test]
+    fn fullscreen_poll_applies_when_size_changed() {
+        // OS resized the window to the fullscreen area → apply resize + relayout.
+        assert_eq!(
+            decide_fullscreen_poll((1024, 756), (1920, 1080), 240),
+            FullscreenPoll::Apply(1920, 1080)
+        );
+    }
+
+    #[test]
+    fn fullscreen_poll_waits_while_size_unchanged() {
+        // OS has not applied the new size yet → keep polling, one attempt spent.
+        assert_eq!(
+            decide_fullscreen_poll((1024, 756), (1024, 756), 240),
+            FullscreenPoll::Wait(1024, 756, 239)
+        );
+    }
+
+    #[test]
+    fn fullscreen_poll_waits_on_zero_size() {
+        // Minimized / not-yet-mapped window reports 0×0 → treat as not applied.
+        assert_eq!(
+            decide_fullscreen_poll((1024, 756), (0, 0), 5),
+            FullscreenPoll::Wait(1024, 756, 4)
+        );
+    }
+
+    #[test]
+    fn fullscreen_poll_gives_up_when_budget_exhausted() {
+        // Last attempt with no size change → stop polling, do not spin the loop.
+        assert_eq!(
+            decide_fullscreen_poll((1024, 756), (1024, 756), 1),
+            FullscreenPoll::Done
+        );
+        assert_eq!(
+            decide_fullscreen_poll((1024, 756), (1024, 756), 0),
+            FullscreenPoll::Done
+        );
+    }
+
+    #[test]
+    fn fullscreen_poll_applies_even_on_last_attempt() {
+        // A real size change is honoured regardless of the remaining budget.
+        assert_eq!(
+            decide_fullscreen_poll((1024, 756), (1920, 1080), 1),
+            FullscreenPoll::Apply(1920, 1080)
+        );
+    }
+
+    #[test]
+    fn fullscreen_poll_applies_on_exit_shrink() {
+        // Exiting fullscreen shrinks back to a windowed size — also a change.
+        assert_eq!(
+            decide_fullscreen_poll((1920, 1080), (1024, 756), 240),
+            FullscreenPoll::Apply(1024, 756)
+        );
+    }
 
     // ── content-visibility: auto — shell state (BB-4) ───────────────────────
 
