@@ -35,6 +35,7 @@ mod find;
 mod forms;
 mod gc_tick;
 mod hints;
+mod image_cache;
 mod memory_poll;
 mod newtab;
 mod input;
@@ -827,6 +828,11 @@ fn render_source_to_png(
 ) -> Result<(Vec<u8>, u32, u32), Box<dyn Error>> {
     use lumen_paint::Renderer;
 
+    // BUG-172: each headless render is its own "navigation" — clear the previous
+    // render's decoded images (bounds memory in the long-lived `--ipc-server`) and
+    // guarantee no stale cross-page reuse. No streaming path here, so this pass
+    // just decodes each image once.
+    crate::image_cache::IMAGE_CACHE.reset_new();
     let raw = source.load_bytes(event_sink.clone(), None)?;
     let vp = Size::new(SCREENSHOT_VP_W, SCREENSHOT_MIN_H);
     let parsed = parse_and_layout(
@@ -3306,64 +3312,29 @@ fn fetch_and_decode_images(
     }
 
     // Фаза 1 (параллельно): сеть + декодирование. Не трогаем `doc`.
+    // BUG-172: декод идёт через `IMAGE_CACHE` — картинки, уже загруженные
+    // прогрессивным streaming-проходом (`spawn_stream_image_loads`), берутся из
+    // кэша без повторного fetch+decode; их `wants_intrinsic`/`is_lazy` решаются
+    // здесь, а пиксели только клонируются.
     let outcomes = parallel_map(&requests, |_, req| {
         if req.is_lazy {
             return ImgOutcome::Lazy;
         }
-        let bytes = match fetch_image_bytes(&req.url, base, sink, cookie_jar.clone()) {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("Пропуск картинки {}: {e}", req.url);
-                return ImgOutcome::Skip;
-            }
-        };
         let wants_intrinsic = !req.has_explicit_width && !req.has_explicit_height;
-
-        // Animated GIF detection: decode all frames; store for animation if >1 frame.
-        if lumen_image::is_gif(&bytes) {
-            return match lumen_image::decode_gif_animated(&bytes) {
-                Ok(gif) if gif.frames.len() > 1 => {
-                    let first = gif.frames[0].image.clone();
-                    let intrinsic = wants_intrinsic.then_some((first.width, first.height));
-                    eprintln!(
-                        "Загружена GIF-анимация: {} ({}×{}, {} кадров)",
-                        req.url, gif.width, gif.height, gif.frames.len()
-                    );
-                    ImgOutcome::Animated { first, gif, intrinsic }
-                }
-                Ok(gif) => {
-                    // Single-frame GIF: treat as static image.
-                    if let Some(frame) = gif.frames.into_iter().next() {
-                        let image = frame.image;
-                        let intrinsic = wants_intrinsic.then_some((image.width, image.height));
-                        eprintln!(
-                            "Загружена картинка (GIF, 1 кадр): {} ({}×{})",
-                            req.url, image.width, image.height
-                        );
-                        ImgOutcome::Static { image, intrinsic }
-                    } else {
-                        ImgOutcome::Skip
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Не декодируется GIF {}: {e}", req.url);
-                    ImgOutcome::Skip
-                }
-            };
-        }
-
-        match lumen_image::decode(&bytes) {
-            Ok(image) => {
+        let decoded = image_cache::IMAGE_CACHE.get_or_decode_current(&req.url, || {
+            decode_image(&req.url, base, sink, cookie_jar.clone())
+        });
+        match decoded {
+            None => ImgOutcome::Skip,
+            Some(image_cache::DecodedImage::Static(img)) => {
+                let image = (*img).clone();
                 let intrinsic = wants_intrinsic.then_some((image.width, image.height));
-                eprintln!(
-                    "Загружена картинка: {} ({}×{}, {:?})",
-                    req.url, image.width, image.height, image.format
-                );
                 ImgOutcome::Static { image, intrinsic }
             }
-            Err(e) => {
-                eprintln!("Не декодируется {}: {e}", req.url);
-                ImgOutcome::Skip
+            Some(image_cache::DecodedImage::Animated { first, gif }) => {
+                let first = (*first).clone();
+                let intrinsic = wants_intrinsic.then_some((first.width, first.height));
+                ImgOutcome::Animated { first, gif: (*gif).clone(), intrinsic }
             }
         }
     });
@@ -3432,6 +3403,77 @@ fn fetch_image_bytes(
             let lumen_url = Url::parse(&url)?;
             let client = base.http_client_for_subresource(sink.clone(), cookie_jar);
             Ok(client.fetch_subresource(&lumen_url, RequestDestination::Image)?)
+        }
+    }
+}
+
+/// Fetch + decode one `<img src>` into a [`DecodedImage`], or `None` on a
+/// fetch/decode failure (already logged).
+///
+/// BUG-172: single source of truth for the decode logic shared by the streaming
+/// progressive loader ([`Lumen::spawn_stream_image_loads`]) and the final pipeline
+/// ([`fetch_and_decode_images`]). Both call this through
+/// [`image_cache::IMAGE_CACHE`], so each `src` is fetched and decoded exactly once
+/// per navigation; the second path clones the cached pixels instead of repeating
+/// the network round-trip and the decoder.
+fn decode_image(
+    raw_src: &str,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+) -> Option<image_cache::DecodedImage> {
+    use image_cache::DecodedImage;
+    let bytes = match fetch_image_bytes(raw_src, base, sink, cookie_jar) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("Пропуск картинки {raw_src}: {e}");
+            return None;
+        }
+    };
+
+    // Animated GIF detection: decode all frames; keep the animation if >1 frame.
+    if lumen_image::is_gif(&bytes) {
+        return match lumen_image::decode_gif_animated(&bytes) {
+            Ok(gif) if gif.frames.len() > 1 => {
+                let first = gif.frames[0].image.clone();
+                eprintln!(
+                    "Загружена GIF-анимация: {} ({}×{}, {} кадров)",
+                    raw_src, gif.width, gif.height, gif.frames.len()
+                );
+                Some(DecodedImage::Animated {
+                    first: Arc::new(first),
+                    gif: Arc::new(gif),
+                })
+            }
+            Ok(gif) => {
+                // Single-frame GIF: treat as static image.
+                gif.frames.into_iter().next().map(|frame| {
+                    let image = frame.image;
+                    eprintln!(
+                        "Загружена картинка (GIF, 1 кадр): {} ({}×{})",
+                        raw_src, image.width, image.height
+                    );
+                    DecodedImage::Static(Arc::new(image))
+                })
+            }
+            Err(e) => {
+                eprintln!("Не декодируется GIF {raw_src}: {e}");
+                None
+            }
+        };
+    }
+
+    match lumen_image::decode(&bytes) {
+        Ok(image) => {
+            eprintln!(
+                "Загружена картинка: {} ({}×{}, {:?})",
+                raw_src, image.width, image.height, image.format
+            );
+            Some(DecodedImage::Static(Arc::new(image)))
+        }
+        Err(e) => {
+            eprintln!("Не декодируется {raw_src}: {e}");
+            None
         }
     }
 }
@@ -6499,6 +6541,10 @@ impl Lumen {
         // the UI thread before the streaming thread is spawned, so producer warm-ups
         // and the UI-thread consumer all observe `generation`.
         crate::prefetch::PREFETCH_CACHE.reset(generation);
+        // BUG-172: scope the decoded-image cache to this navigation too, so the
+        // streaming progressive loader and the final pipeline share one decode per
+        // image and a superseded navigation's images are dropped.
+        crate::image_cache::IMAGE_CACHE.reset(generation);
         let source = self.source.clone();
         let sink = Arc::clone(&self.event_sink);
         let proxy = self.load_proxy.clone();
@@ -6636,6 +6682,10 @@ impl Lumen {
     fn spawn_stream_image_loads(&mut self, doc: &lumen_dom::Document, viewport: Size) {
         let Some(base) = self.source.resource_base() else { return };
         let requests = lumen_layout::collect_image_requests(doc, viewport);
+        // BUG-172: stamp the decode with this navigation's generation so the cache
+        // entry is shared with the final pipeline pass (same generation) and a
+        // stale producer from a superseded navigation bypasses the cache.
+        let generation = self.load_generation;
         for req in requests {
             if req.is_lazy {
                 continue;
@@ -6648,41 +6698,28 @@ impl Lumen {
             let cookie_jar = Arc::clone(&self.cookie_jar);
             let proxy = self.load_proxy.clone();
             std::thread::spawn(move || {
-                let bytes = match fetch_image_bytes(&req.url, &base, &sink, Some(cookie_jar)) {
-                    Ok(b) => b,
-                    Err(_) => return, // streaming best-effort: финальный pipeline залогирует
-                };
-
-                if lumen_image::is_gif(&bytes) {
-                    match lumen_image::decode_gif_animated(&bytes) {
-                        Ok(gif) if gif.frames.len() > 1 => {
-                            let first = gif.frames[0].image.clone();
-                            let _ = proxy.send_event(LoadEvent::ImageDecoded {
-                                src: req.url,
-                                image: Box::new(first),
-                                animated: Some(Box::new(gif)),
-                            });
-                        }
-                        Ok(gif) => {
-                            if let Some(frame) = gif.frames.into_iter().next() {
-                                let _ = proxy.send_event(LoadEvent::ImageDecoded {
-                                    src: req.url,
-                                    image: Box::new(frame.image),
-                                    animated: None,
-                                });
-                            }
-                        }
-                        Err(_) => {}
+                // Fill the shared cache so the final `fetch_and_decode_images` pass
+                // reuses these pixels instead of re-fetching+re-decoding (BUG-172).
+                let decoded = image_cache::IMAGE_CACHE.get_or_decode(generation, &req.url, || {
+                    decode_image(&req.url, &base, &sink, Some(cookie_jar))
+                });
+                match decoded {
+                    // streaming best-effort: финальный pipeline залогирует/применит.
+                    None => {}
+                    Some(image_cache::DecodedImage::Static(img)) => {
+                        let _ = proxy.send_event(LoadEvent::ImageDecoded {
+                            src: req.url,
+                            image: Box::new((*img).clone()),
+                            animated: None,
+                        });
                     }
-                    return;
-                }
-
-                if let Ok(image) = lumen_image::decode(&bytes) {
-                    let _ = proxy.send_event(LoadEvent::ImageDecoded {
-                        src: req.url,
-                        image: Box::new(image),
-                        animated: None,
-                    });
+                    Some(image_cache::DecodedImage::Animated { first, gif }) => {
+                        let _ = proxy.send_event(LoadEvent::ImageDecoded {
+                            src: req.url,
+                            image: Box::new((*first).clone()),
+                            animated: Some(Box::new((*gif).clone())),
+                        });
+                    }
                 }
             });
         }

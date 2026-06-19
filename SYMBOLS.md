@@ -2776,7 +2776,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:479` **fn** `tex_image_2d_rgba` — `gl.texImage2D(…, data)`. Averages pixel data to a 1×1 solid colour for
 `crates/engine/paint/src/webgl.rs:498` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Executes vertex and fragment shaders
 
-## lumen-shell  (832 symbols)
+## lumen-shell  (839 symbols)
 
 `crates/shell/src/adblock.rs:44` **fn** `browser_data_dir` — Root of all browser user data (portable): `<exe_dir>/data`
 `crates/shell/src/adblock.rs:52` **fn** `adblock_dir` — `<data>/adblock` — root of the ad-block subsystem's files
@@ -3000,6 +3000,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/hints.rs:99` **fn** `typed` — Characters typed so far — used to dim non-matching badges
 `crates/shell/src/hints.rs:107` **fn** `items` — Compute viewport-space hint items for the current scroll offsets
 `crates/shell/src/hints.rs:172` **fn** `build_hints_overlay` — Build the viewport-locked overlay display list for all active hint badges
+`crates/shell/src/image_cache.rs:44` **enum** `DecodedImage` — Decoded image payload shared between the streaming progressive loader and the
+`crates/shell/src/image_cache.rs:86` **struct** `DecodedImageCache` — Shared, generation-scoped decoded-image cache for page `<img>` resources
+`crates/shell/src/image_cache.rs:100` **fn** `reset` — Drop all cached entries and adopt navigation `generation`
+`crates/shell/src/image_cache.rs:112` **fn** `reset_new` — Drop all cached entries and bump to a fresh generation
+`crates/shell/src/image_cache.rs:119` **fn** `current_generation` — The navigation generation the cache is currently scoped to
+`crates/shell/src/image_cache.rs:130` **fn** `get_or_decode` — Decode `src` through the cache for navigation `generation`
+`crates/shell/src/image_cache.rs:173` **fn** `get_or_decode_current` — Convenience for the UI-thread consumer ([`fetch_and_decode_images`]): decode
 `crates/shell/src/input/gesture.rs:36` **enum** `GestureDir` — Six-way gesture direction code
 `crates/shell/src/input/gesture.rs:55` **enum** `GestureAction` — Shell action emitted when a completed gesture matches a binding
 `crates/shell/src/input/gesture.rs:81` **struct** `GestureMap` — Configurable mapping from [`GestureDir`] to [`GestureAction`]
@@ -4117,4 +4124,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4046 symbols in 22 crates*
+*Total: 4053 symbols in 22 crates*

@@ -57,8 +57,8 @@
 {
  "generated": "2026-06-19",
  "counts": {
-  "open": 58,
-  "fixed": 162,
+  "open": 57,
+  "fixed": 163,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -1610,15 +1610,15 @@
   },
   "BUG-171": {
    "status": "open",
-   "title": "Окно морозится на всё время загрузки: `parse_and_layout` (fetch+JS+layout) идёт синхронно на UI-потоке в обработчике `LoadDone` (main.rs:6369). Adblock-галочка…",
+   "title": "**Этап 1 ✅ 2026-06-19** (префетч-кэш `prefetch::PREFETCH_CACHE`): внешние скрипты + linked CSS теперь прогреваются в фоне preload-сканером во время streaming и…",
    "component": "shell",
    "date": null
   },
   "BUG-172": {
-   "status": "open",
-   "title": "Картинки качаются дважды на streaming-страницах: PH1-2c `spawn_stream_image_loads` (main.rs:6051) грузит прогрессивно во время streaming, финальный `fetch_and_d…",
+   "status": "fixed",
+   "title": "Картинки качались дважды на streaming-страницах: PH1-2c `spawn_stream_image_loads` грузил прогрессивно, финальный `fetch_and_decode_images` качал их же заново.…",
    "component": "shell",
-   "date": null
+   "date": "2026-06-19"
   },
   "BUG-173": {
    "status": "open",
