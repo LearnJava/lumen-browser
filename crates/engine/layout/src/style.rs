@@ -2714,6 +2714,9 @@ pub struct ComputedStyle {
     pub mask_repeat: BackgroundRepeat,
     /// CSS Masking L1 §4 — `mask-size`.
     pub mask_size: BackgroundSize,
+    /// CSS Masking L1 §6.4 — `mask-mode: alpha | luminance | match-source`.
+    /// Non-inherited. `match-source` resolves to `Alpha` for `<image>` sources.
+    pub mask_mode: MaskMode,
     /// CSS Scrollbars 1 — `scrollbar-width: auto | thin | none`.
     pub scrollbar_width: ScrollbarWidth,
     /// CSS Scrollbars 1 — `scrollbar-color: auto | <color> <color>`
@@ -4926,6 +4929,20 @@ pub struct GradientStop {
     pub position: Option<Length>,
 }
 
+/// CSS Masking L1 §6.4 — `mask-mode`. Selects which channel of the mask image
+/// is used as the per-pixel mask value when compositing the masked element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MaskMode {
+    /// Use the alpha channel of the mask image directly. Initial behaviour for
+    /// `<image>` mask sources (`match-source` resolves here for gradients/URLs).
+    #[default]
+    Alpha,
+    /// Use luminance (`0.2126·R + 0.7152·G + 0.0722·B`, sRGB) multiplied by the
+    /// source alpha as the mask value. A dark mask pixel hides the element even
+    /// when fully opaque.
+    Luminance,
+}
+
 impl ComputedStyle {
     /// CSS 2.1 §17.6.1 / Basic UI L4 §5.2 — **used** value `outline-width`
     /// равно 0, если `outline-style` равен `none` (это spec, не аппроксимация).
@@ -5147,6 +5164,7 @@ impl ComputedStyle {
             mask_image: BackgroundImage::None,
             mask_repeat: BackgroundRepeat::Repeat,
             mask_size: BackgroundSize::Auto,
+            mask_mode: MaskMode::Alpha,
             scrollbar_width: ScrollbarWidth::Auto,
             scrollbar_color: None,
             scrollbar_gutter: ScrollbarGutter::Auto,
@@ -5464,6 +5482,7 @@ pub fn compute_style(
         mask_image: BackgroundImage::None,
         mask_repeat: BackgroundRepeat::Repeat,
         mask_size: BackgroundSize::Auto,
+        mask_mode: MaskMode::Alpha,
         // CSS Scrollbars — scrollbar-width/-color inherited;
         // scrollbar-gutter не наследуется.
         scrollbar_width: inherited.scrollbar_width,
@@ -12905,6 +12924,18 @@ fn apply_declaration(
         "mask-repeat" => {
             if let Some(v) = BackgroundRepeat::parse(val) {
                 style.mask_repeat = v;
+            }
+        }
+        "mask-mode" => {
+            // CSS Masking L1 §6.4. `match-source` resolves to `Alpha` for the
+            // `<image>` sources we support (gradients / raster URLs).
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("luminance") {
+                style.mask_mode = MaskMode::Luminance;
+            } else if trimmed.eq_ignore_ascii_case("alpha")
+                || trimmed.eq_ignore_ascii_case("match-source")
+            {
+                style.mask_mode = MaskMode::Alpha;
             }
         }
         "mask-size" => {

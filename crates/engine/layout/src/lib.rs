@@ -124,7 +124,7 @@ pub use style::{
     ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, EmptyCells, FilterFn, FloatSide, FontOpticalSizing, FontStretch,
     FontStyle,
     FontVariant, FontVariationSetting, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,
-    MasonryAutoFlow,
+    MaskMode, MasonryAutoFlow,
     Isolation, IterationCount, Length,
     LengthOrAuto, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, OverflowWrap, OverscrollBehavior, ParsedGradient, Resize,
@@ -9877,6 +9877,54 @@ mod tests {
     fn mask_size_cover() {
         let root = lay("<p>x</p>", "p { mask-size: cover; }");
         assert_eq!(first_p_style(&root).mask_size, BackgroundSize::Cover);
+    }
+
+    #[test]
+    fn mask_mode_default_is_alpha() {
+        let root = lay("<p>x</p>", "p { mask-image: linear-gradient(black, white); }");
+        assert_eq!(first_p_style(&root).mask_mode, MaskMode::Alpha);
+    }
+
+    #[test]
+    fn mask_mode_luminance() {
+        let root = lay("<p>x</p>", "p { mask-mode: luminance; }");
+        assert_eq!(first_p_style(&root).mask_mode, MaskMode::Luminance);
+    }
+
+    #[test]
+    fn mask_mode_alpha_keyword() {
+        let root = lay("<p>x</p>", "p { mask-mode: luminance; mask-mode: alpha; }");
+        assert_eq!(first_p_style(&root).mask_mode, MaskMode::Alpha);
+    }
+
+    #[test]
+    fn mask_mode_match_source_resolves_to_alpha() {
+        let root = lay("<p>x</p>", "p { mask-mode: luminance; mask-mode: match-source; }");
+        assert_eq!(first_p_style(&root).mask_mode, MaskMode::Alpha);
+    }
+
+    #[test]
+    fn mask_mode_invalid_keeps_previous() {
+        let root = lay("<p>x</p>", "p { mask-mode: luminance; mask-mode: bogus; }");
+        assert_eq!(first_p_style(&root).mask_mode, MaskMode::Luminance);
+    }
+
+    #[test]
+    fn mask_mode_not_inherited() {
+        // `first_p_style` returns the outer div block; drill into its child <p>.
+        let root = lay("<div><p>x</p></div>", "div { mask-mode: luminance; }");
+        let div = &root
+            .children
+            .iter()
+            .find(|c| matches!(&c.kind, BoxKind::Block))
+            .expect("div block");
+        assert_eq!(div.style.mask_mode, MaskMode::Luminance, "div carries the rule");
+        let p = div
+            .children
+            .iter()
+            .find(|c| matches!(&c.kind, BoxKind::Block))
+            .expect("p block");
+        assert_eq!(p.style.mask_mode, MaskMode::Alpha, "child does not inherit");
     }
 
     #[test]

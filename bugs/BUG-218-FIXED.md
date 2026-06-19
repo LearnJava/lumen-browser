@@ -1,8 +1,22 @@
 # BUG-218
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-06-19 (p4-mask-mode)
 **Компонент:** css-parser / paint (домен P4 — CSS property)
 **Тест:** TEST-26 (остаток 5.02% после BUG-183)
+
+## Фикс
+
+1. `MaskMode` enum (`Alpha | Luminance`) + `ComputedStyle.mask_mode`
+   (non-inherited, initial `Alpha`); ветка `"mask-mode"` в `apply_declaration`
+   (`alpha | luminance | match-source`, `match-source` → `Alpha`).
+2. `emit_push_mask` (paint/display_list.rs) при `mask-mode: luminance` запекает
+   `luminance(rgb)·alpha` в alpha каждого стопа градиентной маски через
+   `mask_stops_for_mode()` — оба бэкенда (femtovg `composite_mask_layer` и
+   cpu_raster `render_mask`), читающие alpha стопов под `DestinationIn`,
+   получают luminance-маску без проброса режима в сами бэкенды. `luma` линейна
+   по RGB, поэтому запекание в стопах точно для градиента.
+3. CPU-эталон `26-mask-image.png` перегенерирован; TEST-26 убран из
+   `KNOWN_DEBTORS` (единственная расходящаяся ячейка — luminance — исправлена).
 
 ## Описание
 
