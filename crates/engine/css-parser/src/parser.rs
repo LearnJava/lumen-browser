@@ -1219,6 +1219,10 @@ pub enum MediaFeature {
     /// `(prefers-reduced-data: no-preference | reduce)` —
     /// предпочтение пользователя по экономии сетевого трафика.
     PrefersReducedData(MediaReducedData),
+    /// `(prefers-reduced-transparency: no-preference | reduce)` —
+    /// предпочтение пользователя по уменьшению полупрозрачности UI
+    /// (Media Queries L5 §5.7).
+    PrefersReducedTransparency(MediaReducedTransparency),
 }
 
 impl Eq for MediaFeature {}
@@ -1273,6 +1277,16 @@ pub enum MediaReducedData {
     Reduce,
 }
 
+/// Media Queries L5 §5.7 — `prefers-reduced-transparency`: запрос на
+/// уменьшение полупрозрачных/blur-эффектов в интерфейсе.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaReducedTransparency {
+    /// Пользователь не выразил предпочтения (значение по умолчанию).
+    NoPreference,
+    /// Пользователь запросил уменьшение полупрозрачности.
+    Reduce,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorScheme {
     Light,
@@ -1305,6 +1319,9 @@ pub struct MediaContext {
     pub prefers_contrast: MediaContrast,
     /// Предпочтение экономии трафика (`prefers-reduced-data` media feature).
     pub prefers_reduced_data: MediaReducedData,
+    /// Предпочтение уменьшения полупрозрачности
+    /// (`prefers-reduced-transparency` media feature).
+    pub prefers_reduced_transparency: MediaReducedTransparency,
 }
 
 impl Default for MediaContext {
@@ -1325,6 +1342,7 @@ impl Default for MediaContext {
             // или экономию трафика.
             prefers_contrast: MediaContrast::NoPreference,
             prefers_reduced_data: MediaReducedData::NoPreference,
+            prefers_reduced_transparency: MediaReducedTransparency::NoPreference,
         }
     }
 }
@@ -1414,6 +1432,7 @@ impl MediaFeature {
             Self::AnyPointer(p) => ctx.any_pointer == *p,
             Self::PrefersContrast(c) => ctx.prefers_contrast == *c,
             Self::PrefersReducedData(d) => ctx.prefers_reduced_data == *d,
+            Self::PrefersReducedTransparency(t) => ctx.prefers_reduced_transparency == *t,
         }
     }
 }
@@ -2041,6 +2060,11 @@ fn parse_media_feature(s: &str) -> MediaCondition {
         "prefers-reduced-data" => match val.to_ascii_lowercase().as_str() {
             "no-preference" => MediaCondition::Feature(MediaFeature::PrefersReducedData(MediaReducedData::NoPreference)),
             "reduce" => MediaCondition::Feature(MediaFeature::PrefersReducedData(MediaReducedData::Reduce)),
+            _ => MediaCondition::Unsupported,
+        },
+        "prefers-reduced-transparency" => match val.to_ascii_lowercase().as_str() {
+            "no-preference" => MediaCondition::Feature(MediaFeature::PrefersReducedTransparency(MediaReducedTransparency::NoPreference)),
+            "reduce" => MediaCondition::Feature(MediaFeature::PrefersReducedTransparency(MediaReducedTransparency::Reduce)),
             _ => MediaCondition::Unsupported,
         },
         _ => MediaCondition::Unsupported,
@@ -7032,6 +7056,39 @@ mod tests {
         let mut reduce = screen_ctx(1024.0);
         reduce.prefers_reduced_data = MediaReducedData::Reduce;
         assert!(!q.matches(&reduce));
+    }
+
+    // ── MQ L5 §5.7: prefers-reduced-transparency ──
+
+    #[test]
+    fn media_query_prefers_reduced_transparency_reduce() {
+        let q = parse_media_query("(prefers-reduced-transparency: reduce)");
+        let mut ctx = screen_ctx(1024.0);
+        ctx.prefers_reduced_transparency = MediaReducedTransparency::Reduce;
+        assert!(q.matches(&ctx));
+        // Desktop-дефолт — no-preference → не матчит reduce.
+        assert!(!q.matches(&screen_ctx(1024.0)));
+    }
+
+    #[test]
+    fn media_query_prefers_reduced_transparency_no_preference_default() {
+        let q = parse_media_query("(prefers-reduced-transparency: no-preference)");
+        // Desktop-дефолт — no-preference.
+        assert!(q.matches(&screen_ctx(1024.0)));
+        let mut reduce = screen_ctx(1024.0);
+        reduce.prefers_reduced_transparency = MediaReducedTransparency::Reduce;
+        assert!(!q.matches(&reduce));
+    }
+
+    #[test]
+    fn media_query_prefers_reduced_transparency_case_insensitive_and_invalid() {
+        let q = parse_media_query("(PREFERS-REDUCED-TRANSPARENCY: REDUCE)");
+        let mut ctx = screen_ctx(1024.0);
+        ctx.prefers_reduced_transparency = MediaReducedTransparency::Reduce;
+        assert!(q.matches(&ctx));
+        // Невалидное значение → Unsupported → никогда не матчит.
+        let bad = parse_media_query("(prefers-reduced-transparency: low)");
+        assert!(!bad.matches(&ctx));
     }
 
     // ── Стиль: @media с новыми фичами применяется в каскаде ──

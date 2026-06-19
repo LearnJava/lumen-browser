@@ -200,6 +200,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('121', '121-supports-selector.html', 0.5, 'CSS Conditional L4 §4.2: @supports selector() — распознаваемые селекторы (:has/:is/::slotted) применяют блок (зелёные a/b/c), неизвестные псевдо не применяют (красные d/e), not selector(<unknown>) истинно (зелёный f)'),
     ('122', '122-line-height-step.html', 0.5, 'CSS Rhythmic Sizing L1 §2: line-height-step — высота каждого line-box округляется вверх до кратного шагу; цветные inline-фоны заливают округлённый line-box, поэтому полосы у stepped-колонки (48px) вдвое выше natural-колонки (24px), одиночная строка округлена до 60px, child наследует шаг 40px'),
     ('123', '123-supports-font-tech-format.html', 0.5, 'CSS Conditional L4 §4 / Fonts L4 §4.3: @supports font-tech()/font-format() — реализованные технологии (variations/features-opentype) и декодируемые форматы (woff2/truetype) применяют блок (зелёные a/b/c/d); features-graphite и embedded-opentype не поддержаны ни Lumen, ни Edge (красные e/f); not font-tech(features-graphite) истинно (зелёный g)'),
+    ('124', '124-prefers-reduced-transparency.html', 0.5, 'Media Queries L5 §5.7: prefers-reduced-transparency — без пользовательских предпочтений no-preference matched (зелёный a), reduce не матчит (красный b), невалидное low → Unsupported (красный c); Edge тоже по умолчанию no-preference'),
 ]
 
 # --- Известные должники (Phase 2+ фичи, baseline-храповик) ---
