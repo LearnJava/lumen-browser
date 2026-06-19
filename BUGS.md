@@ -213,7 +213,7 @@
 | [BUG-197](bugs/BUG-197-OPEN.md) | OPEN | layout | CSS Table `border-spacing` asymmetric deviation — TEST-69: 3.61% |
 | [BUG-198](bugs/BUG-198-OPEN.md) | OPEN | layout/paint | `object-fit`/`object-position` SVG deviation — TEST-70: 7.82% |
 | [BUG-199](bugs/BUG-199-OPEN.md) | OPEN | layout | `@starting-style` static rendering deviation — TEST-71: 7.03% |
-| [BUG-200](bugs/BUG-200-OPEN.md) | OPEN | layout/paint | CSS Table `border-collapse` deviation — TEST-80: 9.89% |
+| [BUG-200](bugs/BUG-200-FIXED.md) | FIXED 2026-06-19 | paint | TEST-80 collapse varied-width borders: thin cell's bg erased thick neighbour's shared border (ordered path emits cell bg+border interleaved in DOM order). Fix: redraw cell borders after all cell backgrounds in collapse mode (`display_list.rs` fill_buckets). Residual 9.91% = font-parity vertical drift (BUG-128) → KNOWN_DEBTORS |
 | [BUG-201](bugs/BUG-201-OPEN.md) | OPEN | paint | SVG `<use>` cloning deviation — TEST-82: 5.00% |
 | [BUG-202](bugs/BUG-202-FIXED.md) | FIXED 2026-06-17 | layout | TEST-83 14.02%→7.88%: реальная причина не scroll-behavior, а text-only inline-block без shrink-to-fit. `preferred_inline_block_width` мерил только дочерние боксы и игнорировал текст `InlineRun` (он в `segments`, не в `children`) → None → бокс растягивался на всю строку. Добавлена ветка измерения текста сегментов (box_tree.rs:3732). Pills `.pill` теперь обтягивают текст и текут в ряд. Остаток 7.88% = font-parity (BUG-128) → KNOWN_DEBTORS |
 | [BUG-203](bugs/BUG-203-OPEN.md) | OPEN | paint | `text-decoration-skip-ink` underline gaps deviation — TEST-84: 5.88% |

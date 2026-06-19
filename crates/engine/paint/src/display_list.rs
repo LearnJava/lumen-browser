@@ -2649,6 +2649,16 @@ fn fill_buckets(
                 fill_buckets(child, current_sc, next_sc_id, buckets, false, anim, dpr, &[]);
             }
         }
+        // BUG-200: redraw collapsed cell borders on top of all cell backgrounds —
+        // see the non-SC branch below for the full rationale.
+        if collapse_border_repass_applies(b) {
+            let mut cells: Vec<&LayoutBox> = Vec::new();
+            collect_table_cells(b, &mut cells);
+            let bucket = &mut buckets[current_sc.0 as usize];
+            for cell in &cells {
+                emit_table_cell_border(cell, &mut bucket.post);
+            }
+        }
     } else {
         // Non-SC box: inline Push/Pop в contents текущего SC. Это нужно для
         // `overflow:hidden` на обычном in-flow box-е (opacity/blend
@@ -2712,9 +2722,34 @@ fn fill_buckets(
         }
 
         let bucket = &mut buckets[current_sc.0 as usize];
+        // BUG-200: under `border-collapse: collapse` adjacent cells overlap by the
+        // shared grid-line width (layout pulls them together). Cells are emitted in
+        // DOM order, each filling its background then drawing its border. When a later
+        // cell has a thinner border than its earlier neighbour (e.g. a 1px `thin` cell
+        // after a 3px `thick` one), the later cell's background overpaints the part of
+        // the neighbour's collapsed border in the overlap region, leaving only the
+        // thinner cell's 1px line instead of the spec's max width (CSS 2.1 §17.6.2).
+        // Redraw every cell border once more, on top of all cell backgrounds, so the
+        // shared edges composite to the wider border. Borders sit inside the cells'
+        // padding, away from content, so the repass is visually a no-op except on the
+        // shared grid lines.
+        if collapse_border_repass_applies(b) {
+            let mut cells: Vec<&LayoutBox> = Vec::new();
+            collect_table_cells(b, &mut cells);
+            for cell in &cells {
+                emit_table_cell_border(cell, &mut bucket.contents);
+            }
+        }
         bucket.contents.extend(ops.overflow_post);
         bucket.contents.extend(ops.post);
     }
+}
+
+/// True when the box is a table using the collapsing-borders model and therefore
+/// needs the BUG-200 cell-border repass (cells overlap on shared grid lines).
+fn collapse_border_repass_applies(b: &LayoutBox) -> bool {
+    matches!(b.kind, BoxKind::Table)
+        && matches!(b.style.border_collapse, BorderCollapse::Collapse)
 }
 
 /// Парный `Pop` для переустановленного push-клипа (BUG-131 clip inheritance).
@@ -6364,7 +6399,31 @@ fn emit_table_box(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
         });
     }
 
-    // Обрабатываем строки и ячейки
+    // BUG-200: under `border-collapse: collapse` adjacent cells overlap by the shared
+    // grid-line width (layout pulls them together). If each cell emits its own
+    // background+border interleaved in DOM order, a later cell's background erases the
+    // earlier neighbour's collapsed border on the shared edge — when the later cell's
+    // own border is thinner (e.g. a 1px `thin` cell after a 3px `thick` one), the shared
+    // edge collapses to 1px instead of the spec's max width (CSS 2.1 §17.6.2). Emit the
+    // whole table in three passes (all backgrounds, then all borders, then all contents)
+    // so no cell's fill can overwrite another cell's collapsed border; meeting borders of
+    // the same colour then composite to the wider one.
+    if matches!(b.style.border_collapse, BorderCollapse::Collapse) {
+        let mut cells: Vec<&LayoutBox> = Vec::new();
+        collect_table_cells(b, &mut cells);
+        for cell in &cells {
+            emit_table_cell_background(cell, out, dpr);
+        }
+        for cell in &cells {
+            emit_table_cell_border(cell, out);
+        }
+        for cell in &cells {
+            emit_table_cell_content(cell, out, dpr);
+        }
+        return;
+    }
+
+    // Обрабатываем строки и ячейки (separate model)
     for row_group in &b.children {
         match &row_group.kind {
             BoxKind::TableRowGroup => {
@@ -6376,6 +6435,24 @@ fn emit_table_box(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
             _ => {
                 walk(row_group, out, dpr, None);
             }
+        }
+    }
+}
+
+/// Collect every table cell box (`display: table-cell`) under a table, flattening
+/// row groups and rows into DOM order. Used by the collapse-mode three-pass emitter.
+fn collect_table_cells<'a>(b: &'a LayoutBox, out: &mut Vec<&'a LayoutBox>) {
+    for child in &b.children {
+        match &child.kind {
+            BoxKind::TableRowGroup => collect_table_cells(child, out),
+            BoxKind::TableRow => {
+                for cell in &child.children {
+                    if !matches!(cell.kind, BoxKind::Skip) {
+                        out.push(cell);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -6410,55 +6487,65 @@ fn emit_table_row(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
 /// рисует только top+left границы, чтобы избежать двойного рисования
 /// по общим рёбрам (Phase 0 упрощение; полный алгоритм §17.6.2 — Phase 2).
 fn emit_table_cell(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
-    // CSS Tables L2 §17.6.1.1 — `empty-cells: hide`: a cell with no in-flow
-    // content draws neither background nor borders (separated-borders model only).
-    // Content children are still walked (an empty cell has none, but this keeps
-    // the contract identical to the normal block path).
-    let hidden_empty = is_hidden_empty_cell(b);
+    emit_table_cell_background(b, out, dpr);
+    emit_table_cell_border(b, out);
+    emit_table_cell_content(b, out, dpr);
+}
 
-    // Эмитим фон ячейки
-    if !hidden_empty
-        && let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+/// Emit a table cell's background colour + background image.
+///
+/// CSS Tables L2 §17.6.1.1 — `empty-cells: hide`: a cell with no in-flow content
+/// draws neither background nor borders (separated-borders model only).
+fn emit_table_cell_background(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
+    if is_hidden_empty_cell(b) {
+        return;
+    }
+    if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
         && bg.a > 0
     {
         out.push(DisplayCommand::FillRect { rect: b.rect, color: bg });
     }
-    if !hidden_empty {
-        emit_background_image(out, b, dpr);
-    }
+    emit_background_image(out, b, dpr);
+}
 
+/// Emit a table cell's borders. In collapse mode neighbouring cells overlap by the
+/// shared grid-line width; backgrounds are emitted in a separate earlier pass so this
+/// border survives a thinner neighbour's fill (BUG-200).
+fn emit_table_cell_border(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
+    if is_hidden_empty_cell(b) {
+        return;
+    }
     let s = &b.style;
-    // In separate mode: draw all 4 borders. In collapse mode: draw all 4 borders too
-    // (spacing is already zeroed by layout; border overlap on shared edges is Phase 0 behaviour;
-    // full §17.6.2 conflict resolution is deferred to Phase 2).
-    let has_border = !hidden_empty
-        && (s.border_top_style.is_visible()
+    let has_border = s.border_top_style.is_visible()
         || s.border_right_style.is_visible()
         || s.border_bottom_style.is_visible()
-        || s.border_left_style.is_visible());
-    if has_border {
-        let cur = s.color;
-        out.push(DisplayCommand::DrawBorder {
-            rect: b.rect,
-            widths: [
-                s.border_top_width, s.border_right_width,
-                s.border_bottom_width, s.border_left_width,
-            ],
-            colors: [
-                s.border_top_color.resolve(cur),
-                s.border_right_color.resolve(cur),
-                s.border_bottom_color.resolve(cur),
-                s.border_left_color.resolve(cur),
-            ],
-            styles: [
-                s.border_top_style, s.border_right_style,
-                s.border_bottom_style, s.border_left_style,
-            ],
-            radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
-        });
+        || s.border_left_style.is_visible();
+    if !has_border {
+        return;
     }
+    let cur = s.color;
+    out.push(DisplayCommand::DrawBorder {
+        rect: b.rect,
+        widths: [
+            s.border_top_width, s.border_right_width,
+            s.border_bottom_width, s.border_left_width,
+        ],
+        colors: [
+            s.border_top_color.resolve(cur),
+            s.border_right_color.resolve(cur),
+            s.border_bottom_color.resolve(cur),
+            s.border_left_color.resolve(cur),
+        ],
+        styles: [
+            s.border_top_style, s.border_right_style,
+            s.border_bottom_style, s.border_left_style,
+        ],
+        radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
+    });
+}
 
-    // Обрабатываем контент ячейки (текст, вложенные блоки и т.д.)
+/// Emit a table cell's content (text, nested blocks, …).
+fn emit_table_cell_content(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32) {
     for child in &b.children {
         walk(child, out, dpr, None);
     }
@@ -8609,6 +8696,36 @@ mod tests {
         let pop = pop.expect("ordered path must emit PopMask");
         let fill = fill.expect("masked box must still fill its background");
         assert!(push < fill && fill < pop, "mask must wrap the box background: push={push} fill={fill} pop={pop}");
+    }
+
+    /// BUG-200: under `border-collapse: collapse` a thick cell border must survive a
+    /// thinner neighbour's background. Cells overlap on the shared grid line; emitted in
+    /// DOM order a later thin cell's background overpaints the earlier thick border. The
+    /// ordered path must redraw cell borders after all cell backgrounds, so a 3px border
+    /// appears in the command stream *after* the last cell-background fill.
+    #[test]
+    fn ordered_collapse_thick_border_redrawn_after_cell_backgrounds() {
+        let dl = build_ordered(
+            "<table><tr><td class='a'>x</td><td class='b'>y</td></tr></table>",
+            "table { border-collapse: collapse; } \
+             td { width: 40px; height: 20px; } \
+             td.a { border: 3px solid #f85149; background: #112233; } \
+             td.b { border: 1px solid #f85149; background: #445566; }",
+        );
+        let last_fill = dl
+            .iter()
+            .rposition(|c| matches!(c, DisplayCommand::FillRect { .. }))
+            .expect("cells must fill backgrounds");
+        let last_thick = dl
+            .iter()
+            .rposition(|c| matches!(c, DisplayCommand::DrawBorder { widths, .. }
+                if widths.iter().any(|&w| (w - 3.0).abs() < 0.01)))
+            .expect("thick cell border must be emitted");
+        assert!(
+            last_thick > last_fill,
+            "thick collapsed border (idx {last_thick}) must be redrawn after the last \
+             cell background (idx {last_fill}), else the thin neighbour erases it",
+        );
     }
 
     #[test]
