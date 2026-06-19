@@ -8439,6 +8439,76 @@ mod tests {
         assert!(approx_rect(placed, 0.0, 0.0, 100.0, 100.0));
     }
 
+    // ── BUG-181 (TEST-19): геометрия `object-fit` на реальных размерах
+    // картинок теста (perceptron 852×725, agi 1024×1024) в боксе 180×120 @
+    // (26,26). Расследование показало: все 5 режимов + object-position
+    // позиционируют картинку пиксель-в-пиксель с Edge (средние RGB совпадают,
+    // лучший сдвиг 0,0, letterbox корректен). Остаток ~9% TEST-19 =
+    // image-resampling AA на высокочастотном контенте (диаграмма + rusty-
+    // текстура agi) — BUG-219, TEST-19 → KNOWN_DEBTORS. Тесты фиксируют
+    // геометрию, чтобы regression в placement не спрятался за resampling-шумом.
+
+    /// Бокс `.box` теста 19: первая ячейка border-box (26,26)+180×120.
+    fn test19_box() -> Rect {
+        Rect::new(26.0, 26.0, 180.0, 120.0)
+    }
+
+    #[test]
+    fn bug181_perceptron_contain_letterboxes_horizontally() {
+        // 852×725 в 180×120 при contain: scale=min(180/852,120/725)=0.16552 →
+        // placed 141.02×120, центрируется по x (бары .box-градиента слева/справа).
+        let placed =
+            fit_image_rect(test19_box(), (852, 725), ObjectFit::Contain, ObjectPosition::default());
+        let s = (180.0_f32 / 852.0).min(120.0 / 725.0);
+        let cw = 852.0 * s;
+        assert!(approx_rect(placed, 26.0 + (180.0 - cw) / 2.0, 26.0, cw, 120.0));
+    }
+
+    #[test]
+    fn bug181_perceptron_cover_overflows_vertically() {
+        // cover: scale=max(180/852,120/725)=0.21127 → placed 180×153.17,
+        // обрезается по высоте (центр), верх/низ уходят за бокс.
+        let placed =
+            fit_image_rect(test19_box(), (852, 725), ObjectFit::Cover, ObjectPosition::default());
+        let s = (180.0_f32 / 852.0).max(120.0 / 725.0);
+        let ch = 725.0 * s;
+        assert!(approx_rect(placed, 26.0, 26.0 + (120.0 - ch) / 2.0, 180.0, ch));
+    }
+
+    #[test]
+    fn bug181_perceptron_none_center_crops_full_resolution() {
+        // none: картинка в натуральную величину 852×725, центрируется в боксе
+        // → видна только центральная вырезка (UV-clip в fit_image_quad).
+        let placed =
+            fit_image_rect(test19_box(), (852, 725), ObjectFit::None, ObjectPosition::default());
+        assert!(approx_rect(placed, 26.0 - (852.0 - 180.0) / 2.0, 26.0 - (725.0 - 120.0) / 2.0, 852.0, 725.0));
+    }
+
+    #[test]
+    fn bug181_agi_cover_square_image_position_bottom_right() {
+        // 1024×1024 cover в 180×120: scale=max(180,120)/1024=0.17578 →
+        // placed 180×180 (квадрат). object-position: right bottom → по y
+        // прижата к низу (off_y = 120-180 = -60), по x свободного места нет.
+        let pos = ObjectPosition {
+            x: PositionComponent::Percent(1.0),
+            y: PositionComponent::Percent(1.0),
+        };
+        let placed = fit_image_rect(test19_box(), (1024, 1024), ObjectFit::Cover, pos);
+        assert!(approx_rect(placed, 26.0, 26.0 - 60.0, 180.0, 180.0));
+    }
+
+    #[test]
+    fn bug181_agi_cover_position_25_75() {
+        // 1024×1024 cover, object-position: 25% 75% → off_y = (120-180)*0.75
+        // = -45 (по x свободного места нет, off_x=0).
+        let pos = ObjectPosition {
+            x: PositionComponent::Percent(0.25),
+            y: PositionComponent::Percent(0.75),
+        };
+        let placed = fit_image_rect(test19_box(), (1024, 1024), ObjectFit::Cover, pos);
+        assert!(approx_rect(placed, 26.0, 26.0 + (120.0 - 180.0) * 0.75, 180.0, 180.0));
+    }
+
     #[test]
     fn quad_contain_returns_full_uvs() {
         // contain не выходит за box → uv = [0,0]..[1,1].
