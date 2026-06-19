@@ -1,0 +1,2358 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lumen roadmap · два дерева (задачи ↔ баги)</title>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--border:#30363d;--fg:#c9d1d9;--muted:#8b949e;
+    --done:#3fb950;--active:#58a6ff;--blocker:#f85149;--wait:#d29922;--ready:#2dd4bf;
+    --queued:#a371f7;--planned:#6e7681;--opt:#484f58;
+    --bopen:#f0883e;--binprogress:#58a6ff;--bfixed:#3fb950;--bwontfix:#6e7681;}
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--fg);
+    font:13.5px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  header{padding:18px 24px 8px;position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--border);z-index:5}
+  h1{margin:0 0 3px;font-size:18px;font-weight:600}
+  .sub{color:var(--muted);font-size:12px;margin-bottom:8px}
+  .nav{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+  .nav a{background:var(--panel);border:1px solid var(--border);color:var(--fg);text-decoration:none;padding:5px 11px;border-radius:7px;font-size:12px}
+  .nav a:hover{border-color:var(--active)} .nav a.cur{background:#1f6feb;border-color:#1f6feb;color:#fff;font-weight:600}
+  .ctrls{display:flex;gap:14px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--muted)}
+  .ctrls label{display:inline-flex;align-items:center;gap:5px;cursor:pointer}
+  .ctrls input[type=text],.ctrls select{background:var(--panel);border:1px solid var(--border);color:var(--fg);border-radius:6px;padding:4px 7px;font-size:12px}
+  .legend{display:flex;flex-wrap:wrap;gap:12px;margin:6px 0 2px;font-size:11.5px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:5px}
+  .dot{width:10px;height:10px;border-radius:50%;display:inline-block;flex:0 0 auto}
+  .dot.dash{background:transparent!important;border:2px dashed var(--opt)}
+  main{padding:10px 18px 50px}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:900px){.cols{grid-template-columns:1fr}}
+  .col{min-width:0}
+  .colh{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin:0 0 6px;padding-left:4px}
+  details{margin:0} summary{list-style:none;cursor:pointer} summary::-webkit-details-marker{display:none}
+  .tw{display:inline-block;width:12px;color:var(--muted);transition:transform .1s} details[open]>summary .tw{transform:rotate(90deg)}
+  .row{display:flex;align-items:center;gap:8px;padding:3px 4px;border-radius:6px}
+  .row:hover{background:#161b22}
+  .row.hl{background:#1f6feb33;outline:1px solid #1f6feb}
+  .grp{margin-left:14px;border-left:1px solid #21262d;padding-left:8px}
+  .phase>summary .row{font-size:14.5px;font-weight:600;padding:5px 4px}
+  .id{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--muted)}
+  .badge{font-size:10px;font-weight:700}
+  .smeta{font-size:10.5px;color:var(--muted)}
+  .count{font-size:11px;color:var(--muted)}
+  .blink{font-size:10.5px;color:var(--blocker);font-family:ui-monospace,monospace}
+  .bug .ttl{color:#adbac7}
+  .linkable{cursor:pointer}
+  footer{padding:0 24px 30px;color:var(--muted);font-size:12px}
+  code{background:#161b22;border:1px solid var(--border);border-radius:5px;padding:1px 5px;font-size:11.5px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Lumen — roadmap всего проекта</h1>
+  <div class="sub">Слева фазы→задачи, справа баги. Наведи на задачу или баг — подсветится связанная пара (баг ⟸ задача, которую блокирует). Генерируется из <code>docs/roadmap.json</code> + <code>BUGS.md</code> (<code>scripts/gen_roadmap.py</code>).</div>
+  <nav class="nav">
+    <a class="cur" href="roadmap-B-twotrees.html">HTML-список</a>
+    <a href="roadmap-svg-cleaves.html">SVG · дерево (баги-листья)</a>
+  </nav>
+  <div class="ctrls">
+    <input type="text" id="q" placeholder="поиск по id/тексту…" size="22">
+    <label><input type="checkbox" id="hideFixed" checked> скрыть FIXED-баги</label>
+    <label><input type="checkbox" id="hideDone"> скрыть готовые задачи</label>
+    <label>фаза:&nbsp;<select id="phase"></select></label>
+    <span id="stat"></span>
+  </div>
+  <div class="legend" id="legend"></div>
+</header>
+<main><div class="cols">
+  <div class="col"><div class="colh">Задачи / фичи</div><div id="ltree"></div></div>
+  <div class="col"><div class="colh">Баги</div><div id="rtree"></div></div>
+</div></main>
+<footer>Обновление: правь <code>docs/roadmap.json</code> или <code>BUGS.md</code>, затем <code>python scripts/gen_roadmap.py</code>.</footer>
+
+<script id="roadmap-data" type="application/json">
+{
+ "generated": "2026-06-19",
+ "counts": {
+  "open": 58,
+  "fixed": 162,
+  "inprogress": 0,
+  "wontfix": 0
+ },
+ "total_bugs": 220,
+ "phases": [
+  {
+   "id": "P0",
+   "title": "Фаза 0 — Прототип",
+   "status": "done",
+   "date": "2026-05-26",
+   "tasks": [
+    {
+     "id": "P0-ws",
+     "title": "Workspace + базовые крейты",
+     "status": "done"
+    },
+    {
+     "id": "P0-dom",
+     "title": "DOM (арена NodeId, без Rc<RefCell>)",
+     "status": "done"
+    },
+    {
+     "id": "P0-layout",
+     "title": "Block-flow layout + word-wrapping",
+     "status": "done"
+    },
+    {
+     "id": "P0-paint",
+     "title": "Paint: FillRect через wgpu",
+     "status": "done"
+    },
+    {
+     "id": "P0-driver",
+     "title": "Automation foundation: lumen-driver + off-screen рендер + tiny-skia",
+     "status": "done"
+    },
+    {
+     "id": "P0-tabinv",
+     "title": "Tab lifecycle инварианты (DOM arena / JS suspend / pure layout)",
+     "status": "done"
+    }
+   ]
+  },
+  {
+   "id": "P1",
+   "title": "Фаза 1 — v0.1 «Reader»",
+   "status": "done",
+   "date": "2026-06",
+   "tasks": [
+    {
+     "id": "P1-font",
+     "title": "Font fallback / matcher (системный загрузчик)",
+     "status": "done"
+    },
+    {
+     "id": "P1-hidpi",
+     "title": "HiDPI / DPR-awareness",
+     "status": "done"
+    },
+    {
+     "id": "P1-scroll",
+     "title": "Scroll + базовый input в shell",
+     "status": "done"
+    },
+    {
+     "id": "P1-stream",
+     "title": "Progressive / streaming rendering pipeline",
+     "status": "done",
+     "tasks": [
+      {
+       "id": "PH1-2",
+       "title": "PH1-2: window-first + 60Hz throttle + параллельный CSS",
+       "status": "done"
+      },
+      {
+       "id": "PH1-2a",
+       "title": "PH1-2a: TCP-level streaming HTTP body",
+       "status": "done"
+      },
+      {
+       "id": "PH1-2b",
+       "title": "PH1-2b: инкрементальный (dirty-subtree) layout",
+       "status": "done"
+      },
+      {
+       "id": "PH1-2c",
+       "title": "PH1-2c: прогрессивная подгрузка картинок",
+       "status": "done"
+      }
+     ]
+    },
+    {
+     "id": "P1-url",
+     "title": "Url как структурированный тип",
+     "status": "done"
+    },
+    {
+     "id": "P1-net",
+     "title": "Network: EventSink + RequestFilter hook + bench baseline",
+     "status": "done"
+    },
+    {
+     "id": "P1-css21",
+     "title": "CSS 2.1 + flexbox",
+     "status": "done"
+    },
+    {
+     "id": "P1-img",
+     "title": "Картинки (decode/paint)",
+     "status": "done"
+    },
+    {
+     "id": "P1-tabs",
+     "title": "Вкладки, история, закладки",
+     "status": "done"
+    },
+    {
+     "id": "PH1-4",
+     "title": "PH1-4: Network service в отдельном процессе (lumen-ipc)",
+     "status": "done"
+    },
+    {
+     "id": "P1-storage",
+     "title": "Storage service + базовый adblock + DoH",
+     "status": "done"
+    },
+    {
+     "id": "PH1-5",
+     "title": "PH1-5: пакеты Linux/macOS/Windows (CI/CD)",
+     "status": "done"
+    },
+    {
+     "id": "PH1-6",
+     "title": "PH1-6: Stacking contexts + CSS Painting Order",
+     "status": "done"
+    },
+    {
+     "id": "PH1-7",
+     "title": "PH1-7: Compositor thread + Property Trees",
+     "status": "done"
+    },
+    {
+     "id": "PH1-8",
+     "title": "PH1-8: Preload scanner",
+     "status": "done"
+    },
+    {
+     "id": "PH1-9",
+     "title": "PH1-9: lumen-mcp-server (Automation Phase 1)",
+     "status": "done"
+    },
+    {
+     "id": "P1-tablife1",
+     "title": "Tab lifecycle Phase 1 (TabState T0–T4, memory pressure, image LRU, T1 paused)",
+     "status": "done"
+    }
+   ]
+  },
+  {
+   "id": "P2",
+   "title": "Фаза 2 — v0.5 «Interactive» (текущая)",
+   "status": "active",
+   "date": "app v0.2.0 → v0.5",
+   "tasks": [
+    {
+     "id": "P2-usability",
+     "title": "USABILITY-вертикаль — «зашёл на сайт и комфортно пользуешься»",
+     "status": "active",
+     "note": "ТОП-приоритет, режим одного программиста (всё на P1)",
+     "tasks": [
+      {
+       "id": "U-0",
+       "title": "U-0: --screenshot headless CPU-снимок",
+       "status": "done"
+      },
+      {
+       "id": "U-1.1",
+       "title": "U-1 этап 1: неблокирующая навигация",
+       "status": "done"
+      },
+      {
+       "id": "U-2",
+       "title": "U-2: шейпинг текста GSUB/GPOS + CFF-контуры",
+       "status": "done"
+      },
+      {
+       "id": "U-3",
+       "title": "U-3: многовкладочность TAB-1…7 + IPC",
+       "status": "done"
+      },
+      {
+       "id": "U-4",
+       "title": "U-4: WASM MVP-интерпретатор + graceful WebCodecs + i64↔BigInt",
+       "status": "done"
+      },
+      {
+       "id": "B-1",
+       "title": "B-1: QuickJS вне UI-потока (разблокировка)",
+       "status": "blocker",
+       "size": "XL",
+       "bugs": [
+        "BUG-222"
+       ]
+      },
+      {
+       "id": "U-1.2",
+       "title": "U-1 этап 2: весь пайплайн вне UI-потока",
+       "status": "wait",
+       "size": "L",
+       "bugs": [
+        "BUG-171",
+        "BUG-172"
+       ]
+      },
+      {
+       "id": "U-5",
+       "title": "U-5: Fullscreen пересчитывает вьюпорт",
+       "status": "ready",
+       "size": "S",
+       "bugs": [
+        "BUG-167"
+       ]
+      },
+      {
+       "id": "U-6",
+       "title": "U-6: рендер-паритет high-deviation",
+       "status": "ready",
+       "bugs": [
+        "BUG-104",
+        "BUG-126",
+        "BUG-144",
+        "BUG-085"
+       ]
+      },
+      {
+       "id": "OBS",
+       "title": "Наблюдаемость: CPU-снимок = окно (полная замена gdigrab)",
+       "status": "ready",
+       "size": "M",
+       "bugs": [
+        "BUG-221"
+       ]
+      },
+      {
+       "id": "U-4opt",
+       "title": "U-4 опции: WASM SIMD/threads, live-aliasing, WebGPU backend",
+       "status": "opt"
+      }
+     ]
+    },
+    {
+     "id": "P2-js",
+     "title": "QuickJS интеграция + Tier 1 Web APIs",
+     "status": "done"
+    },
+    {
+     "id": "P2-forms",
+     "title": "Формы, базовая интерактивность (Forms runtime)",
+     "status": "done"
+    },
+    {
+     "id": "P2-h2",
+     "title": "HTTP/2",
+     "status": "done"
+    },
+    {
+     "id": "P2-gpu",
+     "title": "GPU compositor (wgpu)",
+     "status": "done"
+    },
+    {
+     "id": "P2-grid",
+     "title": "CSS Grid",
+     "status": "done"
+    },
+    {
+     "id": "PH2-2",
+     "title": "PH2-2: Site isolation Phase 1 (COOP/COEP/CORP)",
+     "status": "done"
+    },
+    {
+     "id": "PH2-3",
+     "title": "PH2-3: Профили + шифрование (AES-256-GCM vault)",
+     "status": "done"
+    },
+    {
+     "id": "P2-fp",
+     "title": "Anti-fingerprinting",
+     "status": "done"
+    },
+    {
+     "id": "P2-knowledge",
+     "title": "Knowledge layer ядро (FTS, аннотации, read-later, focus mode)",
+     "status": "active"
+    },
+    {
+     "id": "P2-viewport",
+     "title": "<meta viewport> parsing + page zoom",
+     "status": "done"
+    },
+    {
+     "id": "P2-ui",
+     "title": "Кастомизация UI (drag&drop панелей, темы)",
+     "status": "planned"
+    },
+    {
+     "id": "P2-shadow",
+     "title": "Shadow DOM + custom elements + <template>/<slot>",
+     "status": "done"
+    },
+    {
+     "id": "PH2-7",
+     "title": "PH2-7: Accessibility tree + platform bridges Phase 1",
+     "status": "done"
+    },
+    {
+     "id": "P2-picture",
+     "title": "<picture>/srcset/sizes + loading=lazy",
+     "status": "done"
+    },
+    {
+     "id": "P2-ime",
+     "title": "IME composition events",
+     "status": "done"
+    },
+    {
+     "id": "P2-find",
+     "title": "Find in page (Ctrl+F)",
+     "status": "done"
+    },
+    {
+     "id": "P2-devtools",
+     "title": "DevTools / Inspector через CDP (DOM + computed + network)",
+     "status": "done"
+    },
+    {
+     "id": "P2-blend",
+     "title": "mix-blend-mode / backdrop-filter / isolation",
+     "status": "done",
+     "bugs": [
+      "BUG-144"
+     ]
+    },
+    {
+     "id": "PH3-2",
+     "title": "lumen-bidi-server (WebDriver BiDi, Automation Phase 2)",
+     "status": "done"
+    },
+    {
+     "id": "P2-tablife2",
+     "title": "Tab lifecycle Phase 2 (T2 heap snapshot, T3 hibernation, GPU/glyph LRU, UI affordance)",
+     "status": "done"
+    },
+    {
+     "id": "P2-canvas",
+     "title": "Canvas 2D (Phases 1–5, Path2D)",
+     "status": "done",
+     "bugs": [
+      "BUG-099"
+     ]
+    },
+    {
+     "id": "P2-viewtrans",
+     "title": "View Transitions API",
+     "status": "planned",
+     "bugs": [
+      "BUG-103"
+     ]
+    },
+    {
+     "id": "P2-masonry",
+     "title": "CSS Masonry layout",
+     "status": "planned",
+     "bugs": [
+      "BUG-105",
+      "BUG-143"
+     ]
+    },
+    {
+     "id": "P2-scrolldriven",
+     "title": "CSS Scroll-Driven Animations L1",
+     "status": "planned",
+     "bugs": [
+      "BUG-127"
+     ]
+    },
+    {
+     "id": "P2-motionpath",
+     "title": "CSS Motion Path L1 (offset-path)",
+     "status": "planned",
+     "bugs": [
+      "BUG-125"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "P3",
+   "title": "Фаза 3 — v1.0 «Full Browser»",
+   "status": "planned",
+   "date": "36–48 мес",
+   "tasks": [
+    {
+     "id": "P3-v8",
+     "title": "Переход на V8 (rusty_v8) + Tier 2 Web APIs",
+     "status": "planned"
+    },
+    {
+     "id": "P3-idb",
+     "title": "IndexedDB",
+     "status": "planned"
+    },
+    {
+     "id": "P3-h3",
+     "title": "HTTP/3",
+     "status": "planned"
+    },
+    {
+     "id": "PH3-20",
+     "title": "Service Workers (PH3-20 fetch interception Phase 1)",
+     "status": "done"
+    },
+    {
+     "id": "P3-woff2",
+     "title": "WebFonts WOFF2",
+     "status": "done"
+    },
+    {
+     "id": "P3-ext",
+     "title": "Расширения (минимальный формат)",
+     "status": "planned"
+    },
+    {
+     "id": "P3-wpt",
+     "title": "WPT pass rate ≥ 60%",
+     "status": "planned"
+    },
+    {
+     "id": "P3-ai",
+     "title": "Опциональный AI-модуль (lumen-ai, семантический поиск/RAG)",
+     "status": "planned"
+    },
+    {
+     "id": "P3-ws",
+     "title": "WebSockets + SSE + Fetch API + AbortController",
+     "status": "planned"
+    },
+    {
+     "id": "P3-auth",
+     "title": "HTTP auth (Basic + Digest)",
+     "status": "done"
+    },
+    {
+     "id": "P3-safebrowse",
+     "title": "Safe Browsing equivalent",
+     "status": "done"
+    },
+    {
+     "id": "P3-bfcache",
+     "title": "Back/forward cache (bfcache)",
+     "status": "planned"
+    },
+    {
+     "id": "P3-navapi",
+     "title": "Navigation API + History API runtime",
+     "status": "planned"
+    },
+    {
+     "id": "PH3-8",
+     "title": "Web Animations API runtime (PH3-8)",
+     "status": "done"
+    },
+    {
+     "id": "PH3-7",
+     "title": "contentEditable + Input Events L2 + Selection/Range (PH3-7)",
+     "status": "done"
+    },
+    {
+     "id": "P3-spell",
+     "title": "Spell check (Hunspell, русский словарь)",
+     "status": "planned"
+    },
+    {
+     "id": "P3-varfonts",
+     "title": "Variable fonts axes runtime (font-variation-settings)",
+     "status": "planned",
+     "bugs": [
+      "BUG-109"
+     ]
+    },
+    {
+     "id": "P3-color",
+     "title": "Color management + Display P3 / Rec2020 / ICC",
+     "status": "active"
+    },
+    {
+     "id": "P3-print",
+     "title": "Print pipeline runtime (pagination + PDF)",
+     "status": "done"
+    },
+    {
+     "id": "P3-media",
+     "title": "Медиа Phase 1: getUserMedia / <audio> / <video> / Screen Capture / Pointer Lock / Idle / Wake Lock / File System Access",
+     "status": "done"
+    },
+    {
+     "id": "P3-dnd",
+     "title": "HTML5 Drag and Drop API (PH3-9)",
+     "status": "done"
+    }
+   ]
+  },
+  {
+   "id": "P4",
+   "title": "Фаза 4 — После 1.0",
+   "status": "planned",
+   "date": "—",
+   "tasks": [
+    {
+     "id": "P4-webgl",
+     "title": "Подмножество WebGL (базовый CPU-контекст готов)",
+     "status": "active"
+    },
+    {
+     "id": "P4-mobile",
+     "title": "Mobile (Android NDK)",
+     "status": "planned"
+    },
+    {
+     "id": "P4-sync",
+     "title": "Sync через E2E (self-host / P2P)",
+     "status": "planned"
+    },
+    {
+     "id": "P4-kgraph",
+     "title": "Граф знаний (визуализация коллекции)",
+     "status": "planned"
+    },
+    {
+     "id": "P4-l10n",
+     "title": "Локализация UI",
+     "status": "planned"
+    }
+   ]
+  }
+ ],
+ "bugs": {
+  "BUG-001": {
+   "status": "fixed",
+   "title": "display:none on inline elements not working",
+   "component": "layout",
+   "date": "2026-05-15"
+  },
+  "BUG-002": {
+   "status": "fixed",
+   "title": "inline padding/border/margin stacks vertically instead of flowing",
+   "component": "layout/paint",
+   "date": "2026-05-20"
+  },
+  "BUG-003": {
+   "status": "fixed",
+   "title": "style=\"\" attribute not processed by cascade",
+   "component": "layout",
+   "date": "2026-05-15"
+  },
+  "BUG-004": {
+   "status": "fixed",
+   "title": "height on inline elements (display:inline-block applies; display:inline ignores per CSS 2.1 §10.6.1)",
+   "component": "layout",
+   "date": "2026-05-24"
+  },
+  "BUG-005": {
+   "status": "fixed",
+   "title": "`<img>` inside `<span>` not rendered",
+   "component": "layout+paint",
+   "date": "2026-05-21"
+  },
+  "BUG-006": {
+   "status": "fixed",
+   "title": "table layout not implemented (td/th render as blocks)",
+   "component": "layout",
+   "date": "2026-05-21"
+  },
+  "BUG-007": {
+   "status": "fixed",
+   "title": "`<sub>`/`<sup>`/`<small>` missing UA styles",
+   "component": "layout",
+   "date": "2026-05-20"
+  },
+  "BUG-008": {
+   "status": "fixed",
+   "title": "`<del>`/`<ins>`/`<u>`/`<s>` text-decoration missing UA styles",
+   "component": "layout",
+   "date": "2026-05-20"
+  },
+  "BUG-009": {
+   "status": "fixed",
+   "title": "`<a>` missing UA styles (no blue color, no underline)",
+   "component": "layout",
+   "date": "2026-05-20"
+  },
+  "BUG-010": {
+   "status": "fixed",
+   "title": "`<hr>` renders nothing",
+   "component": "layout",
+   "date": "2026-05-20"
+  },
+  "BUG-011": {
+   "status": "fixed",
+   "title": "list markers (bullet, numbers) not rendered",
+   "component": "layout/paint",
+   "date": "2026-05-22"
+  },
+  "BUG-012": {
+   "status": "fixed",
+   "title": "`<del>`/`<ins>` break inline flow (each on new line)",
+   "component": "layout",
+   "date": "2026-05-20"
+  },
+  "BUG-013": {
+   "status": "fixed",
+   "title": "adjacent `<span style=\"...\">` stack vertically without separator",
+   "component": "layout",
+   "date": "2026-05-22"
+  },
+  "BUG-014": {
+   "status": "fixed",
+   "title": "JPEG not decoded (PNG only)",
+   "component": "image",
+   "date": "2026-05-21"
+  },
+  "BUG-015": {
+   "status": "fixed",
+   "title": "broken `<img>` src shows no alt text",
+   "component": "paint",
+   "date": "2026-05-25"
+  },
+  "BUG-016": {
+   "status": "fixed",
+   "title": "border-style: dashed/double now work; dotted still square (→ BUG-029)",
+   "component": "css-parser/paint",
+   "date": "2026-05-20"
+  },
+  "BUG-017": {
+   "status": "fixed",
+   "title": "text-decoration-style ignored (all render as solid)",
+   "component": "layout/paint",
+   "date": "2026-05-22"
+  },
+  "BUG-018": {
+   "status": "fixed",
+   "title": "text-decoration-color ignored (always inherits text color)",
+   "component": "layout",
+   "date": "2026-05-22"
+  },
+  "BUG-019": {
+   "status": "fixed",
+   "title": "outline not rendered at all",
+   "component": "css-parser/paint",
+   "date": "2026-05-20"
+  },
+  "BUG-020": {
+   "status": "fixed",
+   "title": "overflow axis coercion: visible+hidden combo не клипало ось; CSS Overflow L3 §2.1 visible→auto в compute_style; TEST-14: 1.70%→0.03% PASS",
+   "component": "layout",
+   "date": "2026-05-26"
+  },
+  "BUG-021": {
+   "status": "fixed",
+   "title": "HTML bgcolor attribute ignored",
+   "component": "html-parser",
+   "date": "2026-05-22"
+  },
+  "BUG-022": {
+   "status": "fixed",
+   "title": "Quirks-mode hashless hex colors not parsed",
+   "component": "css-parser",
+   "date": "2026-05-22"
+  },
+  "BUG-023": {
+   "status": "fixed",
+   "title": "opacity deviation — P1: strut fix 2026-05-26; P5 paint: premultiplied alpha double-mult at edge-AA pixels in composite shader → TEST-13 0.24%",
+   "component": "layout+paint",
+   "date": "2026-05-26"
+  },
+  "BUG-024": {
+   "status": "fixed",
+   "title": "box-sizing: content-box — border not added to outer size; height% resolved against width",
+   "component": "layout",
+   "date": "2026-05-21"
+  },
+  "BUG-025": {
+   "status": "fixed",
+   "title": "max-height does not clamp block height; InlineSpace not included in shrink-to-fit width",
+   "component": "layout",
+   "date": "2026-05-22"
+  },
+  "BUG-026": {
+   "status": "fixed",
+   "title": "`<img>` CSS/HTML width+height ignored — renders at natural size (remaining TEST-18 ~10%: BUG-032)",
+   "component": "layout/paint",
+   "date": "2026-05-22"
+  },
+  "BUG-027": {
+   "status": "fixed",
+   "title": "block element ignores explicit width — body stretches to viewport",
+   "component": "layout",
+   "date": "2026-05-20"
+  },
+  "BUG-028": {
+   "status": "fixed",
+   "title": "relayout-on-resize + maximized window triggers BUG-027",
+   "component": "shell",
+   "date": "2026-05-26"
+  },
+  "BUG-029": {
+   "status": "fixed",
+   "title": "border-style: dotted renders square dots instead of circles",
+   "component": "paint",
+   "date": "2026-05-21"
+  },
+  "BUG-030": {
+   "status": "fixed",
+   "title": "IFC: no whitespace gap between inline-block siblings (CSS §4.1.2)",
+   "component": "layout",
+   "date": "2026-05-20"
+  },
+  "BUG-031": {
+   "status": "fixed",
+   "title": "IFC: missing strut descent causes rows to be ~4px too short",
+   "component": "layout",
+   "date": "2026-05-20"
+  },
+  "BUG-032": {
+   "status": "fixed",
+   "title": "object-fit image quality ~16%: area averaging заменяет bilinear при downscale",
+   "component": "paint/image",
+   "date": "2026-05-22"
+  },
+  "BUG-033": {
+   "status": "fixed",
+   "title": "box-shadow: нет Gaussian blur — рендерится solid прямоугольник вместо размытой тени",
+   "component": "paint",
+   "date": "2026-05-22"
+  },
+  "BUG-034": {
+   "status": "fixed",
+   "title": "transform-origin 50% 50% default not resolved against box size — pivot at (0,0) instead of center",
+   "component": "layout",
+   "date": "2026-05-22"
+  },
+  "BUG-035": {
+   "status": "fixed",
+   "title": "::before/::after pseudo-elements не генерируются в box_tree (реализация частичная)",
+   "component": "layout",
+   "date": "2026-05-22"
+  },
+  "BUG-036": {
+   "status": "fixed",
+   "title": "border-radius: % значения (50%, etc.) не резолвятся → radius=0; только px работает",
+   "component": "layout",
+   "date": "2026-05-26"
+  },
+  "BUG-037": {
+   "status": "fixed",
+   "title": "CSS filter effects не применяются визуально (grayscale/sepia/blur/etc.) — shared filter_uniform перезаписывался; fix: per-pass буфер через mapped_at_creation",
+   "component": "paint",
+   "date": "2026-05-26"
+  },
+  "BUG-038": {
+   "status": "fixed",
+   "title": "list-style-position: inside — маркер занимал отдельную строку; li высотой 2× от нормы; fix: не продвигать child_y, сдвигать InlineRun вправо на marker_w",
+   "component": "layout",
+   "date": "2026-05-26"
+  },
+  "BUG-039": {
+   "status": "fixed",
+   "title": "dashed/dotted border mismatch vs Chrome/Edge: dash ratio 3:1→Skia algo, corner squares→circle quads for dotted, 1px linear SDF AA",
+   "component": "paint",
+   "date": "2026-05-26"
+  },
+  "BUG-040": {
+   "status": "fixed",
+   "title": "table layout unit tests assume direct `<tr>` children of `<table>`; html-full-tree-builder now injects implicit `<tbody>` breaking them",
+   "component": "layout",
+   "date": "2026-05-27"
+  },
+  "BUG-041": {
+   "status": "fixed",
+   "title": "style::tests::line_clamp_integer_value / _standard_property / _not_inherited fail: CSS rule `div { -webkit-line-clamp: 3 }` produces None — test accesses doc.ro…",
+   "component": "css-parser",
+   "date": "2026-05-27"
+  },
+  "BUG-042": {
+   "status": "fixed",
+   "title": "QuickJsRuntime missing JsRuntime::resume() impl — all lumen-js tests fail to compile",
+   "component": "js",
+   "date": "2026-05-29"
+  },
+  "BUG-043": {
+   "status": "fixed",
+   "title": "lumen-paint test suite красный (19 падений): устаревшие golden + overflow coercion + half-leading",
+   "component": "paint",
+   "date": "2026-05-29"
+  },
+  "BUG-044": {
+   "status": "fixed",
+   "title": "lumen-shell не компилируется: non-exhaustive match по DisplayCommand — новые варианты PushMaskLayer/PopMaskLayer/DrawSvgPath/BoxModelOverlay",
+   "component": "shell",
+   "date": "2026-05-29"
+  },
+  "BUG-045": {
+   "status": "fixed",
+   "title": "backdrop-filter не создавал stacking context",
+   "component": "layout",
+   "date": "2026-05-29"
+  },
+  "BUG-046": {
+   "status": "fixed",
+   "title": "3 устаревших теста lumen-layout --lib: webp теперь декодируется → picture-тесты обновлены",
+   "component": "layout",
+   "date": "2026-05-30"
+  },
+  "BUG-047": {
+   "status": "fixed",
+   "title": "НЕ баг (мисдиагноз): line-clamp реально усекает контент — тест переписан на ground-truth",
+   "component": "layout",
+   "date": "2026-05-30"
+  },
+  "BUG-048": {
+   "status": "fixed",
+   "title": "lumen-shell не компилируется: non-exhaustive match — новый вариант DrawScrollbar",
+   "component": "shell",
+   "date": "2026-05-30"
+  },
+  "BUG-049": {
+   "status": "fixed",
+   "title": "lumen-shell не компилируется: non-exhaustive match — новый вариант PageBreak",
+   "component": "shell",
+   "date": "2026-05-30"
+  },
+  "BUG-050": {
+   "status": "fixed",
+   "title": "doctest mock.rs:16 не компилировался — `use NetworkTransport` не импортирован",
+   "component": "network",
+   "date": "2026-05-31"
+  },
+  "BUG-051": {
+   "status": "fixed",
+   "title": "abs-pos с top+bottom+height:auto (inset:0) схлопывался в height 0",
+   "component": "layout",
+   "date": "2026-05-31"
+  },
+  "BUG-052": {
+   "status": "fixed",
+   "title": "DrawBorder anti_alias:true → паника в debug-профиле для sub-pixel рамок",
+   "component": "paint/cpu_raster",
+   "date": "2026-05-31"
+  },
+  "BUG-053": {
+   "status": "fixed",
+   "title": "`cargo build -p lumen-shell --features quickjs` не компилировался: trait PersistentJs потерял декларации",
+   "component": "shell",
+   "date": "2026-06-02"
+  },
+  "BUG-054": {
+   "status": "fixed",
+   "title": "stale_pooled_connection_triggers_retry падает на Windows (WSAECONNRESET)",
+   "component": "network",
+   "date": "2026-06-04"
+  },
+  "BUG-055": {
+   "status": "fixed",
+   "title": "tests::collect_picture_unsupported_type_falls_back: AVIF теперь поддерживается",
+   "component": "layout",
+   "date": "2026-06-04"
+  },
+  "BUG-056": {
+   "status": "fixed",
+   "title": "font_registry used after move in parse_and_layout: clippy E0382",
+   "component": "shell",
+   "date": "2026-06-03"
+  },
+  "BUG-057": {
+   "status": "fixed",
+   "title": "wgpu Vulkan crash on first render — fix: DX12 backend по умолчанию на Windows",
+   "component": "paint",
+   "date": "2026-06-03"
+  },
+  "BUG-058": {
+   "status": "fixed",
+   "title": "display:contents не сглажен перед lay_out: паника при открытии cnn.com",
+   "component": "layout",
+   "date": "2026-06-04"
+  },
+  "BUG-059": {
+   "status": "fixed",
+   "title": "WOFF2-декодер отклоняет шрифты с контурами из 0 точек",
+   "component": "font",
+   "date": "2026-06-04"
+  },
+  "BUG-060": {
+   "status": "fixed",
+   "title": "WOFF2-декодер обрывается с «unexpected end of font data» — routing потоков",
+   "component": "font",
+   "date": "2026-06-04"
+  },
+  "BUG-061": {
+   "status": "fixed",
+   "title": "test_32_list_markers падал: ожидания не обновлены после добавления секций",
+   "component": "driver",
+   "date": "2026-06-04"
+  },
+  "BUG-062": {
+   "status": "fixed",
+   "title": "clippy «very complex type» в doh.rs → type alias DnsCacheMap",
+   "component": "network",
+   "date": "2026-06-04"
+  },
+  "BUG-063": {
+   "status": "fixed",
+   "title": "clippy: manual_clamp, dead_code, collapsible_if в mathml.rs",
+   "component": "layout",
+   "date": "2026-06-04"
+  },
+  "BUG-064": {
+   "status": "fixed",
+   "title": "test_33_multi_column падал: ожидания не обновлены после изменения высот",
+   "component": "driver",
+   "date": "2026-06-08"
+  },
+  "BUG-065": {
+   "status": "fixed",
+   "title": "Клик по `<a href>` не срабатывал: hit-test не вычитал TAB_BAR_HEIGHT",
+   "component": "shell",
+   "date": "2026-06-04"
+  },
+  "BUG-066": {
+   "status": "fixed",
+   "title": "render_tile() без cfg(cpu-render) вызывает cpu_raster → clippy падает",
+   "component": "paint",
+   "date": "2026-06-07"
+  },
+  "BUG-067": {
+   "status": "fixed",
+   "title": "EventTarget не определён глобально → `class X extends EventTarget` бросает ReferenceError",
+   "component": "js",
+   "date": "2026-06-08"
+  },
+  "BUG-068": {
+   "status": "fixed",
+   "title": "clippy: collapsible_if в reader_view.rs",
+   "component": "shell",
+   "date": "2026-06-08"
+  },
+  "BUG-069": {
+   "status": "fixed",
+   "title": "collect_picture_unsupported_type_falls_back: stub-форматы jxl/heic/heif убраны из supported_mime_types",
+   "component": "image",
+   "date": "2026-06-08"
+  },
+  "BUG-070": {
+   "status": "fixed",
+   "title": "Дубликат BUG-067 (тот же корень: EventTarget)",
+   "component": "js",
+   "date": "2026-06-08"
+  },
+  "BUG-071": {
+   "status": "fixed",
+   "title": "MockSession не реализует set_clock/set_rng_seed/freeze_fingerprint",
+   "component": "mcp",
+   "date": "2026-06-08"
+  },
+  "BUG-072": {
+   "status": "fixed",
+   "title": "Form Constraint Validation API: ReferenceError «HTMLInputElement is not defined»",
+   "component": "js",
+   "date": "2026-06-08"
+  },
+  "BUG-073": {
+   "status": "fixed",
+   "title": "chrome_runtime_absent ломается: window.chrome.runtime ставился безусловно",
+   "component": "js",
+   "date": "2026-06-08"
+  },
+  "BUG-074": {
+   "status": "fixed",
+   "title": "height:100% на flex-item не резолвится → TEST-67 bar рендерится h=0",
+   "component": "layout",
+   "date": "2026-06-08"
+  },
+  "BUG-075": {
+   "status": "fixed",
+   "title": "display:table без явной ширины растягивается до контейнера вместо shrink-to-fit",
+   "component": "layout",
+   "date": "2026-06-08"
+  },
+  "BUG-076": {
+   "status": "fixed",
+   "title": "box-shadow blur spread ~1% deviation — TEST-15: 1.06%",
+   "component": "paint",
+   "date": "2026-06-11"
+  },
+  "BUG-077": {
+   "status": "fixed",
+   "title": "femtovg-бэкенд алиасинг при downscale — area avg ресемплинг",
+   "component": "image/paint",
+   "date": "2026-06-09"
+  },
+  "BUG-078": {
+   "status": "fixed",
+   "title": "object-fit contain/cover image quality ~13% deviation — TEST-19: 12.68%",
+   "component": "layout/paint",
+   "date": "2026-06-11"
+  },
+  "BUG-079": {
+   "status": "fixed",
+   "title": "quirks-bgcolor: hashless-hex quirk применялся к шортхенду `background:`",
+   "component": "layout",
+   "date": "2026-06-14"
+  },
+  "BUG-080": {
+   "status": "fixed",
+   "title": "border-style: residual dotted/dashed 3% deviation — TEST-21: 3.02%",
+   "component": "paint",
+   "date": "2026-06-11"
+  },
+  "BUG-081": {
+   "status": "fixed",
+   "title": "vertical-align: sub-pixel 0.99% deviation",
+   "component": "layout",
+   "date": "2026-06-11"
+  },
+  "BUG-082": {
+   "status": "fixed",
+   "title": "css-filter 33% deviation — TEST-30: 33.07%",
+   "component": "paint",
+   "date": "2026-06-11"
+  },
+  "BUG-083": {
+   "status": "fixed",
+   "title": "list-markers residual 3.4% deviation",
+   "component": "layout/paint",
+   "date": "2026-06-11"
+  },
+  "BUG-084": {
+   "status": "fixed",
+   "title": "border-radius residual 1.5% deviation — TEST-36: 1.50%",
+   "component": "paint",
+   "date": "2026-06-12"
+  },
+  "BUG-085": {
+   "status": "open",
+   "title": "linear/radial gradient 12% deviation — TEST-39: 12.05%",
+   "component": "paint",
+   "date": null
+  },
+  "BUG-086": {
+   "status": "fixed",
+   "title": "conic-gradient: triangle-fan не обрезался по box + игнорировал repeating",
+   "component": "paint",
+   "date": "2026-06-09"
+  },
+  "BUG-087": {
+   "status": "fixed",
+   "title": "gradient layers ignored background-size/position/repeat — TEST-45: 17.29%",
+   "component": "paint",
+   "date": "2026-06-09"
+  },
+  "BUG-088": {
+   "status": "fixed",
+   "title": "individual CSS transform properties (translate/rotate/scale) — TEST-46: 4.63%",
+   "component": "css-parser/layout",
+   "date": "2026-06-12"
+  },
+  "BUG-089": {
+   "status": "fixed",
+   "title": "SVG basic shapes not rendered (rect/circle/ellipse/line) — TEST-47: 21.71%",
+   "component": "paint",
+   "date": "2026-06-09"
+  },
+  "BUG-090": {
+   "status": "fixed",
+   "title": "-webkit-line-clamp multi-line truncation — TEST-48: PASS 0.26%",
+   "component": "layout",
+   "date": "2026-06-12"
+  },
+  "BUG-091": {
+   "status": "fixed",
+   "title": "background-blend-mode: bottom layer wrapped in PushBlendMode — TEST-49: 30.62%",
+   "component": "paint",
+   "date": "2026-06-08"
+  },
+  "BUG-092": {
+   "status": "fixed",
+   "title": "CSS variables var() in cascade — TEST-50: PASS 0.0001%",
+   "component": "css-parser/layout",
+   "date": "2026-06-12"
+  },
+  "BUG-093": {
+   "status": "fixed",
+   "title": "scrollbar rendering TEST-51: threshold calibration замаскировала реальный дефект BUG-123",
+   "component": "paint",
+   "date": "2026-06-11"
+  },
+  "BUG-094": {
+   "status": "fixed",
+   "title": "text-shadow with blur ~7% deviation — TEST-52: 6.82%",
+   "component": "paint",
+   "date": "2026-06-11"
+  },
+  "BUG-095": {
+   "status": "fixed",
+   "title": "background-origin/background-clip positioning ~32% deviation — TEST-53: 31.78%",
+   "component": "layout/paint",
+   "date": "2026-06-09"
+  },
+  "BUG-096": {
+   "status": "fixed",
+   "title": "SVG `<path>` stroke tessellation not rendered — TEST-54: 9.50%",
+   "component": "paint/layout",
+   "date": "2026-06-09"
+  },
+  "BUG-097": {
+   "status": "fixed",
+   "title": "`<video>` placeholder: posterless video painted grey instead of transparent",
+   "component": "layout/paint",
+   "date": "2026-06-09"
+  },
+  "BUG-098": {
+   "status": "fixed",
+   "title": "mix-blend-mode: ~14% deviation — PA-3: offscreen CPU mix_blend_rgba",
+   "component": "paint",
+   "date": "2026-06-11"
+  },
+  "BUG-099": {
+   "status": "open",
+   "title": "`<canvas>` 2D context not implemented — TEST-57: 28.66%; Phase 2",
+   "component": "js/paint",
+   "date": null
+  },
+  "BUG-100": {
+   "status": "open",
+   "title": "::first-letter drop-cap / ::first-line not implemented — TEST-58: 6.04%",
+   "component": "layout",
+   "date": null
+  },
+  "BUG-101": {
+   "status": "open",
+   "title": "image-set() DPR selection / cross-fade() not implemented — TEST-59: 27.63%",
+   "component": "css-parser/paint",
+   "date": null
+  },
+  "BUG-102": {
+   "status": "fixed",
+   "title": "SVG stroke-width/dasharray молча терялись в standards-mode (unitless user units) + join-шипы; TEST-60 11.51%→1.41%, TEST-54 5.58%→2.30%",
+   "component": "paint",
+   "date": "2026-06-17"
+  },
+  "BUG-103": {
+   "status": "open",
+   "title": "View Transitions API not implemented — TEST-61: 99.53%; Phase 2",
+   "component": "js",
+   "date": null
+  },
+  "BUG-104": {
+   "status": "open",
+   "title": "CSS Scroll Snap not implemented — TEST-62: 63.70%; Phase 1",
+   "component": "layout",
+   "date": null
+  },
+  "BUG-105": {
+   "status": "open",
+   "title": "CSS Masonry layout not implemented — TEST-63: 26.13%; Phase 2",
+   "component": "layout",
+   "date": null
+  },
+  "BUG-106": {
+   "status": "fixed",
+   "title": "TEST-64 table: missing UA heading defaults → h3 без размера и margin",
+   "component": "layout",
+   "date": "2026-06-09"
+  },
+  "BUG-107": {
+   "status": "fixed",
+   "title": "flex align-content: normal/stretch не распределял свободное пространство",
+   "component": "layout",
+   "date": "2026-06-09"
+  },
+  "BUG-108": {
+   "status": "fixed",
+   "title": "TEST-66 5.24%→1.08%: реальная причина — parent↔last-child bottom margin не коллапсил (CSS 2.1 §8.3.1), свотчи уезжали вниз +30px/секция. Остаток 1.08% — текст (…",
+   "component": "layout",
+   "date": "2026-06-17"
+  },
+  "BUG-109": {
+   "status": "open",
+   "title": "font-variation-settings: wght/wdth/slnt не передаются растеризатору — TEST-68: 3.21%",
+   "component": "css-parser/font",
+   "date": null
+  },
+  "BUG-110": {
+   "status": "fixed",
+   "title": "object-fit: SVG viewBox scaling ~8% deviation — TEST-70: 8.03%",
+   "component": "layout/paint",
+   "date": "2026-06-14"
+  },
+  "BUG-111": {
+   "status": "fixed",
+   "title": "lumen-paint/shell не компилировались после мержа A-2 CSS Custom Highlight API",
+   "component": "paint/shell",
+   "date": "2026-06-08"
+  },
+  "BUG-112": {
+   "status": "fixed",
+   "title": "test_32_list_markers регрессия: P4 добавил 2 @counter-style списка",
+   "component": "driver",
+   "date": "2026-06-08"
+  },
+  "BUG-113": {
+   "status": "fixed",
+   "title": "TEST-53 row-2 drift ~24px: trailing cross_gap утекал в single-line flex",
+   "component": "layout",
+   "date": "2026-06-09"
+  },
+  "BUG-114": {
+   "status": "open",
+   "title": "`font` shorthand drops font-size/line-height — TEST-53 residual ~4px",
+   "component": "css-parser",
+   "date": null
+  },
+  "BUG-115": {
+   "status": "open",
+   "title": "percent `background-size` not supported — TEST-45 residual",
+   "component": "css-parser",
+   "date": null
+  },
+  "BUG-116": {
+   "status": "fixed",
+   "title": "auto table column widths: content-based sizing (CSS 2.1 §17.5.2)",
+   "component": "layout",
+   "date": "2026-06-09"
+  },
+  "BUG-117": {
+   "status": "fixed",
+   "title": "multi-column greedy assignment two bugs — TEST-33 16.14%",
+   "component": "layout",
+   "date": "2026-06-09"
+  },
+  "BUG-118": {
+   "status": "fixed",
+   "title": "snapshot_cpu reference PNGs outdated for 12 pages",
+   "component": "test/snapshot",
+   "date": "2026-06-09"
+  },
+  "BUG-119": {
+   "status": "fixed",
+   "title": "raw U+0001 byte в `<head>` 17 тест-страниц → content shifted 20px",
+   "component": "test/html",
+   "date": "2026-06-10"
+  },
+  "BUG-120": {
+   "status": "fixed",
+   "title": "C0 control chars render as 1-line text box instead of invisible",
+   "component": "layout/text",
+   "date": "2026-06-10"
+  },
+  "BUG-121": {
+   "status": "fixed",
+   "title": "snapshot_vs_edge gate red: wgpu vs femtovg бэкенды дают разный результат",
+   "component": "test/driver",
+   "date": "2026-06-10"
+  },
+  "BUG-122": {
+   "status": "fixed",
+   "title": "flaky compositor tests: wall-clock deadline зависел от планировщика ОС",
+   "component": "test/paint",
+   "date": "2026-06-15"
+  },
+  "BUG-123": {
+   "status": "fixed",
+   "title": "scroll container's own bg+border clipped by its own overflow scissor",
+   "component": "paint",
+   "date": "2026-06-11"
+  },
+  "BUG-124": {
+   "status": "open",
+   "title": "TEST-51 residual 1.09%: fractional layout Y coords vs Edge pixel snapping",
+   "component": "layout/paint",
+   "date": null
+  },
+  "BUG-125": {
+   "status": "open",
+   "title": "CSS Motion Path L1 (offset-path/offset-distance/offset-rotate) — TEST-76: 3.18%",
+   "component": "layout/paint",
+   "date": null
+  },
+  "BUG-126": {
+   "status": "open",
+   "title": "CSS Anchor Positioning L1 (anchor-name/position-anchor) — TEST-77: 53.45%",
+   "component": "layout",
+   "date": null
+  },
+  "BUG-127": {
+   "status": "open",
+   "title": "CSS Scroll-Driven Animations L1 (scroll-timeline/view-timeline) — TEST-78: 12.02%",
+   "component": "layout/js",
+   "date": null
+  },
+  "BUG-128": {
+   "status": "open",
+   "title": "text-underline TEST-79: 6.78% — font-parity issue (serif vs sans), кандидат в KNOWN_DEBTORS",
+   "component": "font",
+   "date": null
+  },
+  "BUG-129": {
+   "status": "fixed",
+   "title": "CSS Tables border-collapse: collapse — TEST-80 16.81%",
+   "component": "layout",
+   "date": "2026-06-14"
+  },
+  "BUG-130": {
+   "status": "fixed",
+   "title": "view-transition-name: TEST-81 32.47% — ложная причина, реальная = BUG-141",
+   "component": "paint",
+   "date": "2026-06-13"
+  },
+  "BUG-131": {
+   "status": "fixed",
+   "title": "INTERACTION TEST-100 (transform×overflow) 9.57%: overflow-клип закрывался до дочернего SC",
+   "component": "paint",
+   "date": "2026-06-13"
+  },
+  "BUG-132": {
+   "status": "fixed",
+   "title": "INTERACTION TEST-101 (border-radius×overflow) 4.04%: PushClipRoundedRect добавлена",
+   "component": "paint",
+   "date": "2026-06-12"
+  },
+  "BUG-133": {
+   "status": "fixed",
+   "title": "INTERACTION TEST-102 (opacity×z-index) 17.04%: per-draw alpha вместо offscreen",
+   "component": "paint",
+   "date": "2026-06-12"
+  },
+  "BUG-134": {
+   "status": "fixed",
+   "title": "INTERACTION TEST-103 (filter×transform): ложная регрессия — устаревший бинарь",
+   "component": "paint",
+   "date": "2026-06-15"
+  },
+  "BUG-135": {
+   "status": "fixed",
+   "title": "INTERACTION TEST-104 (mask×gradient×radius) 51.97% → 0.44% PASS (фикс BUG-183)",
+   "component": "paint",
+   "date": "2026-06-17"
+  },
+  "BUG-136": {
+   "status": "fixed",
+   "title": "INTERACTION TEST-105 (float/clear×margin) 4.84%: три дефекта float-раскладки",
+   "component": "layout",
+   "date": "2026-06-13"
+  },
+  "BUG-137": {
+   "status": "fixed",
+   "title": "INTERACTION TEST-106 (transform×z-index) 4.02%→PASS 0.02%",
+   "component": "paint",
+   "date": "2026-06-12"
+  },
+  "BUG-138": {
+   "status": "fixed",
+   "title": "INTERACTION TEST-107 (shadow×radius×overflow): box-shadow на скруглённом боксе — квадратный FillRect",
+   "component": "paint",
+   "date": "2026-06-13"
+  },
+  "BUG-139": {
+   "status": "fixed",
+   "title": "INTERACTION TEST-108 (вложенные transform) 4.62%: PopTransform эмитировался до дочерних SC",
+   "component": "paint",
+   "date": "2026-06-12"
+  },
+  "BUG-140": {
+   "status": "fixed",
+   "title": "INTERACTION TEST-109 (clip-path×transform×radius) 14.10%→4.80%",
+   "component": "paint",
+   "date": "2026-06-13"
+  },
+  "BUG-141": {
+   "status": "fixed",
+   "title": "TEST-71 17.83%: flex align-items:center в non-wrap контейнере игнорировал cross size",
+   "component": "layout",
+   "date": "2026-06-13"
+  },
+  "BUG-142": {
+   "status": "fixed",
+   "title": ":host / ::slotted rendering diverges — TEST-72: 11.24% → 0.00%",
+   "component": "paint/shadow-dom",
+   "date": "2026-06-17"
+  },
+  "BUG-143": {
+   "status": "open",
+   "title": "masonry-auto-flow placement diverges — TEST-75: 16.97%",
+   "component": "layout",
+   "date": null
+  },
+  "BUG-144": {
+   "status": "open",
+   "title": "CSS filter/backdrop-filter — TEST-30: row-flip фикс 16.42%→10.48% (backdrop-filter `elem_id` FBO нуждался в FLIP_Y, карточки рисовались в `viewport_h−bounds.bot…",
+   "component": "paint",
+   "date": null
+  },
+  "BUG-145": {
+   "status": "fixed",
+   "title": "РЕГРЕССИЯ: offscreen filter layer сайзился по bounds → viewport stretch",
+   "component": "paint",
+   "date": "2026-06-12"
+  },
+  "BUG-146": {
+   "status": "fixed",
+   "title": "TEST-15 box-shadow регрессия 1.06%→6.58%: blur-FBO без FLIP_Y",
+   "component": "paint",
+   "date": "2026-06-12"
+  },
+  "BUG-147": {
+   "status": "fixed",
+   "title": "clippy -D warnings fails: redundant use, dead code, unnecessary cast",
+   "component": "shell",
+   "date": "2026-06-12"
+  },
+  "BUG-148": {
+   "status": "fixed",
+   "title": "test hit_page_range_field fails: W-2b добавил строку Scale, row сдвинулся",
+   "component": "shell",
+   "date": "2026-06-12"
+  },
+  "BUG-149": {
+   "status": "fixed",
+   "title": "snapshot_cpu красный: эталоны устарели после PA-5 dashed/dotted бордеров",
+   "component": "test/snapshot",
+   "date": "2026-06-13"
+  },
+  "BUG-151": {
+   "status": "fixed",
+   "title": "Parent-first-child margin collapse не применяется (CSS 2.1 §8.3.1)",
+   "component": "layout",
+   "date": "2026-06-13"
+  },
+  "BUG-152": {
+   "status": "fixed",
+   "title": "anon_style клонирует float_side/clear/position родителя → анонимный бокс флоатится",
+   "component": "layout",
+   "date": "2026-06-13"
+  },
+  "BUG-153": {
+   "status": "fixed",
+   "title": "CPU-эталоны протухли: регрессия от BUG-151 + 1024-byte сдвиг",
+   "component": "test",
+   "date": "2026-06-14"
+  },
+  "BUG-154": {
+   "status": "fixed",
+   "title": "mix_polar путает индекс hue для LCH/Oklch (hue на индексе 2, не 0)",
+   "component": "layout",
+   "date": "2026-06-15"
+  },
+  "BUG-155": {
+   "status": "fixed",
+   "title": "perf_observer_lcp_entry: index out of bounds — element_nid=42 за пределами тест-дока",
+   "component": "js",
+   "date": "2026-06-15"
+  },
+  "BUG-156": {
+   "status": "fixed",
+   "title": "ЛОЖНАЯ РЕГРЕССИЯ TEST-27: устаревший lumen.exe в прогоне 06-15",
+   "component": "paint/layout",
+   "date": "2026-06-15"
+  },
+  "BUG-157": {
+   "status": "fixed",
+   "title": "ЛОЖНАЯ РЕГРЕССИЯ TEST-40: та же причина — устаревший lumen.exe",
+   "component": "paint",
+   "date": "2026-06-15"
+  },
+  "BUG-158": {
+   "status": "fixed",
+   "title": "карточки новостей lenta.ru налезают друг на друга: `flex:1` (flex-basis:0) item в column-flex схлопывался в height=0 — нет automatic minimum size (§4.5)",
+   "component": "layout",
+   "date": "2026-06-15"
+  },
+  "BUG-159": {
+   "status": "fixed",
+   "title": "z-indexed потомок плоского overflow:auto scroll-контейнера сбегал из scroll-слоя (рисовался после PopScrollLayer) → fill_buckets переустанавливает scroll-слой д…",
+   "component": "paint",
+   "date": "2026-06-15"
+  },
+  "BUG-160": {
+   "status": "fixed",
+   "title": "WOFF2-шрифты не декодируются («unexpected end of font data»), спасает только woff-fallback — затрагивает большинство сайтов",
+   "component": "font",
+   "date": "2026-06-15"
+  },
+  "BUG-161": {
+   "status": "fixed",
+   "title": "HTTP/2 HPACK «dynamic table size update exceeds negotiated max» → ya.ru не грузится",
+   "component": "network",
+   "date": "2026-06-15"
+  },
+  "BUG-162": {
+   "status": "fixed",
+   "title": "детектор кодировки выдаёт ibm866 на чистом ASCII (example.com) вместо UTF-8",
+   "component": "encoding",
+   "date": "2026-06-15"
+  },
+  "BUG-163": {
+   "status": "fixed",
+   "title": "lazy `<img>` на lenta.ru не рисовались: `LazyImageSlot` всегда красил серый placeholder даже после загрузки картинки + above-the-fold lazy-картинки не дозагружа…",
+   "component": "shell/paint",
+   "date": "2026-06-15"
+  },
+  "BUG-164": {
+   "status": "fixed",
+   "title": "внешние `<script src>` не скачиваются и не исполняются (collect_inline_scripts берёт только инлайны) → JS бандлы (lenta.ru owlBundle.js и т.д.) не работают, пер…",
+   "component": "shell/js",
+   "date": "2026-06-15"
+  },
+  "BUG-165": {
+   "status": "fixed",
+   "title": "flex `align-content` сдвигал строку, не двигая поддерево item-ов: вложенный контент оставался на месте → items вылезали из контейнеров (TEST-65: 16.40%)",
+   "component": "layout",
+   "date": "2026-06-15"
+  },
+  "BUG-167": {
+   "status": "open",
+   "title": "вход в Fullscreen API не пересчитывает вьюпорт: окно растягивается на весь десктоп, но страница остаётся в исходном вьюпорте (~1024×720), контент не растягивает…",
+   "component": "shell",
+   "date": null
+  },
+  "BUG-169": {
+   "status": "fixed",
+   "title": "Linux: pre-existing clippy/test-сбои в `#[cfg(linux/macos)]` platform-коде (не ловились на Windows-dev). network/ctap2: private `descriptor_is_fido` в тестах (E…",
+   "component": "network+shell",
+   "date": "2026-06-16"
+  },
+  "BUG-170": {
+   "status": "fixed",
+   "title": "`@font-face` web-шрифты блокируют первый paint: `load_font_faces` качает все woff2 до layout (FOUT не реализован). Надо `font-display: swap` — рисовать фолбэком…",
+   "component": "shell+font",
+   "date": "2026-06-16"
+  },
+  "BUG-171": {
+   "status": "open",
+   "title": "Окно морозится на всё время загрузки: `parse_and_layout` (fetch+JS+layout) идёт синхронно на UI-потоке в обработчике `LoadDone` (main.rs:6369). Adblock-галочка…",
+   "component": "shell",
+   "date": null
+  },
+  "BUG-172": {
+   "status": "open",
+   "title": "Картинки качаются дважды на streaming-страницах: PH1-2c `spawn_stream_image_loads` (main.rs:6051) грузит прогрессивно во время streaming, финальный `fetch_and_d…",
+   "component": "shell",
+   "date": null
+  },
+  "BUG-173": {
+   "status": "open",
+   "title": "Остаток SVG `<path>` vs Edge после BUG-102: triangle-soup AA-швы (DrawSvgPath), stroke-edge AA, self-intersecting fill (ear_clip, незалитая bowtie), dash-on-cur…",
+   "component": "paint",
+   "date": null
+  },
+  "BUG-174": {
+   "status": "fixed",
+   "title": "In-flow (inline-block) SVG `<path>` рисовался в raw user-координатах `d` без смещения на origin своего SVG-вьюпорта — все пути из разных SVG-ячеек схлопывались…",
+   "component": "layout",
+   "date": "2026-06-17"
+  },
+  "BUG-175": {
+   "status": "fixed",
+   "title": "`border-radius` + `border`: рамка рисовалась 4 axis-aligned прямоугольниками без учёта радиуса → квадратные углы вокруг скруглённого фона (видно на пилюлях/круг…",
+   "component": "paint",
+   "date": "2026-06-17"
+  },
+  "BUG-176": {
+   "status": "open",
+   "title": "TEST-36 остаток 1.11% после BUG-175: edge-AA вдоль скруглённых границ (sub-pixel snapping vs Edge) + кубическая kappa-аппроксимация эллиптических углов (row 6,…",
+   "component": "paint",
+   "date": null
+  },
+  "BUG-177": {
+   "status": "fixed",
+   "title": "`height` на table-cell трактовался как фиксированный, а не минимальный (CSS 2.1 §17.5.3): ячейка с `height:64px` + content выше (52×32 блок + margin 16px → 64px…",
+   "component": "layout",
+   "date": "2026-06-17"
+  },
+  "BUG-178": {
+   "status": "fixed",
+   "title": "shrink-to-fit auto-width контейнера с несколькими `float`-детьми считал ширину как max ребёнка, а не сумму (CSS 2.1 §9.5.1 — флоаты стоят бок о бок). Float-обёр…",
+   "component": "layout",
+   "date": "2026-06-17"
+  },
+  "BUG-179": {
+   "status": "fixed",
+   "title": "flex-item с `flex-basis:auto` и без явной `width` использовал ширину из предварительного прохода (`item.rect.width` = ширина контейнера, т.к. блоки растягиваютс…",
+   "component": "layout",
+   "date": "2026-06-17"
+  },
+  "BUG-180": {
+   "status": "fixed",
+   "title": "TEST-18 21.21%→2.11%: блок-обёртка `<img>` не учитывала descent line-box baseline-выровненной inline-картинки («image bottom gap», CSS 2.1 §10.8) — каждый ряд к…",
+   "component": "layout",
+   "date": "2026-06-17"
+  },
+  "BUG-181": {
+   "status": "open",
+   "title": "`object-fit` basic deviation — TEST-19: 9.05%",
+   "component": "layout/paint",
+   "date": null
+  },
+  "BUG-182": {
+   "status": "open",
+   "title": "`vertical-align` inline y-offset deviation — TEST-24: 0.98%",
+   "component": "layout/paint",
+   "date": null
+  },
+  "BUG-183": {
+   "status": "fixed",
+   "title": "`mask-image` gradient mask not implemented — TEST-26: 17.74% → 5.02% (остаток BUG-218 mask-mode:luminance)",
+   "component": "paint",
+   "date": "2026-06-17"
+  },
+  "BUG-184": {
+   "status": "open",
+   "title": "`clip-path` deviation — TEST-31: 0.59%",
+   "component": "paint",
+   "date": null
+  },
+  "BUG-185": {
+   "status": "open",
+   "title": "list `::marker` geometry deviation — TEST-32: 3.75%",
+   "component": "layout/paint",
+   "date": null
+  },
+  "BUG-186": {
+   "status": "fixed",
+   "title": "`multi-column` column fragmentation — TEST-33: 14.89% → 0.12% PASS",
+   "component": "layout",
+   "date": "2026-06-18"
+  },
+  "BUG-187": {
+   "status": "open",
+   "title": "form controls static rendering deviation — TEST-34: 4.78%",
+   "component": "paint",
+   "date": null
+  },
+  "BUG-188": {
+   "status": "open",
+   "title": "individual `translate`/`rotate`/`scale` transforms deviation — TEST-46: 4.63%",
+   "component": "layout/paint",
+   "date": null
+  },
+  "BUG-189": {
+   "status": "open",
+   "title": "SVG basic shapes deviation — TEST-47: 3.71%",
+   "component": "paint",
+   "date": null
+  },
+  "BUG-190": {
+   "status": "open",
+   "title": "`background-blend-mode` deviation — TEST-49: 2.39%",
+   "component": "paint",
+   "date": null
+  },
+  "BUG-191": {
+   "status": "open",
+   "title": "`text-shadow` blur PushFilter deviation — TEST-52: 5.83%",
+   "component": "paint",
+   "date": null
+  },
+  "BUG-192": {
+   "status": "open",
+   "title": "`<video>` placeholder deviation — TEST-55: 0.89%",
+   "component": "paint",
+   "date": null
+  },
+  "BUG-193": {
+   "status": "fixed",
+   "title": "TEST-64 13.89%→8.99%: `display:table`-обёртка не схлопывала margin с соседним блоком (CSS 2.1 §8.3.1) — bottom-margin таблицы + top-margin `<h3>` складывались (…",
+   "component": "layout",
+   "date": "2026-06-17"
+  },
+  "BUG-194": {
+   "status": "open",
+   "title": "Flexbox `align-content` multi-line deviation — TEST-65: 1.33%",
+   "component": "layout",
+   "date": null
+  },
+  "BUG-195": {
+   "status": "open",
+   "title": "`::selection` color override deviation — TEST-66: 1.07%",
+   "component": "paint",
+   "date": null
+  },
+  "BUG-196": {
+   "status": "fixed",
+   "title": "`::before`/`::after` с `content:attr()` не генерировались на flex/grid-контейнерах — TEST-67: 16.41% → 1.36% (KNOWN_DEBTORS, остаток font-parity)",
+   "component": "css-parser/layout",
+   "date": "2026-06-18"
+  },
+  "BUG-197": {
+   "status": "open",
+   "title": "CSS Table `border-spacing` asymmetric deviation — TEST-69: 3.61%",
+   "component": "layout",
+   "date": null
+  },
+  "BUG-198": {
+   "status": "open",
+   "title": "`object-fit`/`object-position` SVG deviation — TEST-70: 7.82%",
+   "component": "layout/paint",
+   "date": null
+  },
+  "BUG-199": {
+   "status": "open",
+   "title": "`@starting-style` static rendering deviation — TEST-71: 7.03%",
+   "component": "layout",
+   "date": null
+  },
+  "BUG-200": {
+   "status": "open",
+   "title": "CSS Table `border-collapse` deviation — TEST-80: 9.89%",
+   "component": "layout/paint",
+   "date": null
+  },
+  "BUG-201": {
+   "status": "open",
+   "title": "SVG `<use>` cloning deviation — TEST-82: 5.00%",
+   "component": "paint",
+   "date": null
+  },
+  "BUG-202": {
+   "status": "fixed",
+   "title": "TEST-83 14.02%→7.88%: реальная причина не scroll-behavior, а text-only inline-block без shrink-to-fit. `preferred_inline_block_width` мерил только дочерние бокс…",
+   "component": "layout",
+   "date": "2026-06-17"
+  },
+  "BUG-203": {
+   "status": "open",
+   "title": "`text-decoration-skip-ink` underline gaps deviation — TEST-84: 5.88%",
+   "component": "paint",
+   "date": null
+  },
+  "BUG-204": {
+   "status": "open",
+   "title": "`anchor-name` basic stub deviation — TEST-85: 1.98%",
+   "component": "layout",
+   "date": null
+  },
+  "BUG-205": {
+   "status": "open",
+   "title": "`position-anchor` fallback stub deviation — TEST-86: 2.12%",
+   "component": "layout",
+   "date": null
+  },
+  "BUG-206": {
+   "status": "open",
+   "title": "`inset-area: none` stub deviation — TEST-87: 1.98%",
+   "component": "layout",
+   "date": null
+  },
+  "BUG-207": {
+   "status": "open",
+   "title": "`anchor-name` nested stub deviation — TEST-88: 1.98%",
+   "component": "layout",
+   "date": null
+  },
+  "BUG-208": {
+   "status": "open",
+   "title": "multiple `anchor-name` stub deviation — TEST-89: 1.98%",
+   "component": "layout",
+   "date": null
+  },
+  "BUG-209": {
+   "status": "open",
+   "title": "AVIF decoder not implemented — TEST-90: 2.75%",
+   "component": "image",
+   "date": null
+  },
+  "BUG-210": {
+   "status": "fixed",
+   "title": "CSS system color keywords resolved to wrong values — `system_color()` light-scheme значения приведены к Edge (Highlight #0078d7, LinkText/VisitedText/ActiveText…",
+   "component": "layout",
+   "date": "2026-06-18"
+  },
+  "BUG-211": {
+   "status": "open",
+   "title": "`field-sizing: content` not implemented — TEST-93: 4.11%",
+   "component": "layout",
+   "date": null
+  },
+  "BUG-212": {
+   "status": "open",
+   "title": "`font-size-adjust` not implemented — TEST-95: 3.39%",
+   "component": "font/layout",
+   "date": null
+  },
+  "BUG-213": {
+   "status": "open",
+   "title": "`counter-set` order deviation — TEST-97: 2.78%",
+   "component": "css-parser/layout",
+   "date": null
+  },
+  "BUG-214": {
+   "status": "open",
+   "title": "`accent-color` tint not implemented — TEST-110: 2.47%",
+   "component": "paint",
+   "date": null
+  },
+  "BUG-215": {
+   "status": "open",
+   "title": "`shape-outside: path()` not implemented — TEST-113: 1.41%",
+   "component": "layout",
+   "date": null
+  },
+  "BUG-216": {
+   "status": "open",
+   "title": "CSS `quotes` + `open-quote`/`close-quote` deviation — TEST-117: 2.28%",
+   "component": "css-parser/layout",
+   "date": null
+  },
+  "BUG-217": {
+   "status": "open",
+   "title": "`prefers-contrast`/`prefers-reduced-data` media queries not matched — TEST-120: 3.26%",
+   "component": "css-parser",
+   "date": null
+  },
+  "BUG-218": {
+   "status": "open",
+   "title": "`mask-mode: luminance` not parsed/applied — TEST-26 luma-cell остаток 5.02% (P4)",
+   "component": "css-parser/paint",
+   "date": null
+  },
+  "BUG-219": {
+   "status": "open",
+   "title": "image downscale resampling pixel-parity vs Edge — TEST-18 остаток 2.11% (тонкий AA по всем фото после фикса BUG-180) → KNOWN_DEBTORS",
+   "component": "image/paint",
+   "date": null
+  },
+  "BUG-220": {
+   "status": "open",
+   "title": "scroll-контейнер в ordered (stacking-context) пути теряет scrollbar: `box_layer_ops` эмитит `PushScrollLayer`/`PopScrollLayer`, но не `DrawScrollbar` (есть толь…",
+   "component": "paint",
+   "date": null
+  },
+  "BUG-221": {
+   "status": "open",
+   "title": "CPU-бэкенд снимка (`render_to_image_cpu`, cpu_raster.rs) не на паритете с femtovg: border-radius (TEST-36 квадрат вместо скругления), gradients (TEST-39), image…",
+   "component": "paint",
+   "date": null
+  },
+  "BUG-222": {
+   "status": "fixed",
+   "title": "WASM-реестр (`wasm::REGISTRY`) не очищается при разрушении JS-контекста: «утёкший» `Persistent` функции-импорта роняет QuickJS на `list_empty(&rt->gc_obj_list)`…",
+   "component": "js/shell",
+   "date": "2026-06-19"
+  },
+  "BUG-223": {
+   "status": "open",
+   "title": "`lumen-network-service` не компилируется (E0004): `match` в `network_service.rs:51` не покрывает таб-варианты `IpcRequest::{CreateTab,CloseTab,NavigateTab,Scree…",
+   "component": "network/ipc",
+   "date": null
+  }
+ },
+ "unlinked": {
+  "css-parser": [
+   "BUG-022",
+   "BUG-041",
+   "BUG-114",
+   "BUG-115",
+   "BUG-217"
+  ],
+  "css-parser/layout": [
+   "BUG-088",
+   "BUG-092",
+   "BUG-196",
+   "BUG-213",
+   "BUG-216"
+  ],
+  "css-parser/paint": [
+   "BUG-016",
+   "BUG-019",
+   "BUG-101",
+   "BUG-218"
+  ],
+  "driver": [
+   "BUG-061",
+   "BUG-064",
+   "BUG-112"
+  ],
+  "encoding": [
+   "BUG-162"
+  ],
+  "font": [
+   "BUG-059",
+   "BUG-060",
+   "BUG-128",
+   "BUG-160"
+  ],
+  "font/layout": [
+   "BUG-212"
+  ],
+  "html-parser": [
+   "BUG-021"
+  ],
+  "image": [
+   "BUG-014",
+   "BUG-069",
+   "BUG-209"
+  ],
+  "image/paint": [
+   "BUG-077",
+   "BUG-219"
+  ],
+  "js": [
+   "BUG-042",
+   "BUG-067",
+   "BUG-070",
+   "BUG-072",
+   "BUG-073",
+   "BUG-155"
+  ],
+  "layout": [
+   "BUG-001",
+   "BUG-003",
+   "BUG-004",
+   "BUG-006",
+   "BUG-007",
+   "BUG-008",
+   "BUG-009",
+   "BUG-010",
+   "BUG-012",
+   "BUG-013",
+   "BUG-018",
+   "BUG-020",
+   "BUG-024",
+   "BUG-025",
+   "BUG-027",
+   "BUG-030",
+   "BUG-031",
+   "BUG-034",
+   "BUG-035",
+   "BUG-036",
+   "BUG-038",
+   "BUG-040",
+   "BUG-045",
+   "BUG-046",
+   "BUG-047",
+   "BUG-051",
+   "BUG-055",
+   "BUG-058",
+   "BUG-063",
+   "BUG-074",
+   "BUG-075",
+   "BUG-079",
+   "BUG-081",
+   "BUG-090",
+   "BUG-100",
+   "BUG-106",
+   "BUG-107",
+   "BUG-108",
+   "BUG-113",
+   "BUG-116",
+   "BUG-117",
+   "BUG-129",
+   "BUG-136",
+   "BUG-141",
+   "BUG-151",
+   "BUG-152",
+   "BUG-154",
+   "BUG-158",
+   "BUG-165",
+   "BUG-174",
+   "BUG-177",
+   "BUG-178",
+   "BUG-179",
+   "BUG-180",
+   "BUG-186",
+   "BUG-193",
+   "BUG-194",
+   "BUG-197",
+   "BUG-199",
+   "BUG-202",
+   "BUG-204",
+   "BUG-205",
+   "BUG-206",
+   "BUG-207",
+   "BUG-208",
+   "BUG-210",
+   "BUG-211",
+   "BUG-215"
+  ],
+  "layout+paint": [
+   "BUG-005",
+   "BUG-023"
+  ],
+  "layout/paint": [
+   "BUG-002",
+   "BUG-011",
+   "BUG-017",
+   "BUG-026",
+   "BUG-078",
+   "BUG-083",
+   "BUG-095",
+   "BUG-097",
+   "BUG-110",
+   "BUG-124",
+   "BUG-181",
+   "BUG-182",
+   "BUG-185",
+   "BUG-188",
+   "BUG-198",
+   "BUG-200"
+  ],
+  "layout/text": [
+   "BUG-120"
+  ],
+  "mcp": [
+   "BUG-071"
+  ],
+  "network": [
+   "BUG-050",
+   "BUG-054",
+   "BUG-062",
+   "BUG-161"
+  ],
+  "network+shell": [
+   "BUG-169"
+  ],
+  "network/ipc": [
+   "BUG-223"
+  ],
+  "paint": [
+   "BUG-015",
+   "BUG-029",
+   "BUG-033",
+   "BUG-037",
+   "BUG-039",
+   "BUG-043",
+   "BUG-057",
+   "BUG-066",
+   "BUG-076",
+   "BUG-080",
+   "BUG-082",
+   "BUG-084",
+   "BUG-086",
+   "BUG-087",
+   "BUG-089",
+   "BUG-091",
+   "BUG-093",
+   "BUG-094",
+   "BUG-098",
+   "BUG-102",
+   "BUG-123",
+   "BUG-130",
+   "BUG-131",
+   "BUG-132",
+   "BUG-133",
+   "BUG-134",
+   "BUG-135",
+   "BUG-137",
+   "BUG-138",
+   "BUG-139",
+   "BUG-140",
+   "BUG-145",
+   "BUG-146",
+   "BUG-157",
+   "BUG-159",
+   "BUG-173",
+   "BUG-175",
+   "BUG-176",
+   "BUG-183",
+   "BUG-184",
+   "BUG-187",
+   "BUG-189",
+   "BUG-190",
+   "BUG-191",
+   "BUG-192",
+   "BUG-195",
+   "BUG-201",
+   "BUG-203",
+   "BUG-214",
+   "BUG-220"
+  ],
+  "paint/cpu_raster": [
+   "BUG-052"
+  ],
+  "paint/image": [
+   "BUG-032"
+  ],
+  "paint/layout": [
+   "BUG-096",
+   "BUG-156"
+  ],
+  "paint/shadow-dom": [
+   "BUG-142"
+  ],
+  "paint/shell": [
+   "BUG-111"
+  ],
+  "shell": [
+   "BUG-028",
+   "BUG-044",
+   "BUG-048",
+   "BUG-049",
+   "BUG-053",
+   "BUG-056",
+   "BUG-065",
+   "BUG-068",
+   "BUG-147",
+   "BUG-148"
+  ],
+  "shell+font": [
+   "BUG-170"
+  ],
+  "shell/js": [
+   "BUG-164"
+  ],
+  "shell/paint": [
+   "BUG-163"
+  ],
+  "test": [
+   "BUG-153"
+  ],
+  "test/driver": [
+   "BUG-121"
+  ],
+  "test/html": [
+   "BUG-119"
+  ],
+  "test/paint": [
+   "BUG-122"
+  ],
+  "test/snapshot": [
+   "BUG-118",
+   "BUG-149"
+  ]
+ }
+}
+</script>
+<script>
+const TC={done:'--done',active:'--active',blocker:'--blocker',wait:'--wait',ready:'--ready',queued:'--queued',planned:'--planned',opt:'--opt'};
+const BC={open:'--bopen',inprogress:'--binprogress',fixed:'--bfixed',wontfix:'--bwontfix'};
+const TLBL={done:'готово',active:'в работе',blocker:'блокер',wait:'ждёт блокера',ready:'готово к старту',queued:'в очереди',planned:'план',opt:'опц.'};
+const BLBL={open:'OPEN',inprogress:'IN PROGRESS',fixed:'FIXED',wontfix:'WONTFIX'};
+const cv=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const DATA=JSON.parse(document.getElementById('roadmap-data').textContent);
+
+function h(tag,attrs,...kids){const e=document.createElement(tag);
+  for(const k in (attrs||{})){if(k==='class')e.className=attrs[k];else if(k==='html')e.innerHTML=attrs[k];else e.setAttribute(k,attrs[k]);}
+  kids.flat().forEach(c=>{if(c==null)return;e.append(c.nodeType?c:document.createTextNode(c));});return e;}
+function dot(varname,dash){const d=h('span',{class:'dot'+(dash?' dash':'')});if(!dash)d.style.background=cv(varname);return d;}
+
+// карта баг→задача (что баг блокирует) + список задач в порядке фаз
+const BUG2TASK={};const TASKSEQ=[];
+(function walk(){function rec(t,phase){TASKSEQ.push({t,phase});(t.bugs||[]).forEach(b=>BUG2TASK[b]={id:t.id,title:t.title});(t.tasks||[]).forEach(s=>rec(s,phase));}
+  DATA.phases.forEach(ph=>(ph.tasks||[]).forEach(t=>rec(t,ph.id)));})();
+
+let q='',hideFixed=true,hideDone=false,phaseSel='P2';
+const matchTxt=s=>!q||(s||'').toLowerCase().includes(q);
+
+// ── левое дерево: фазы→задачи (без багов-листьев) ──
+function taskNodeL(t){
+  if(hideDone&&t.status==='done')return null;
+  const subs=(t.tasks||[]).map(taskNodeL).filter(Boolean);
+  const selfM=matchTxt(t.id)||matchTxt(t.title);
+  const descM=subs.some(s=>s.matched);
+  if(q&&!selfM&&!descM)return null;
+  const opn=(t.bugs||[]).filter(id=>DATA.bugs[id]&&DATA.bugs[id].status==='open').length;
+  const row=h('div',{class:'row linkable','data-task':t.id},
+    dot(TC[t.status],t.status==='opt'),
+    h('span',{class:'id'},t.id),
+    h('span',{class:'ttl'},t.title),
+    t.size?h('span',{class:'smeta'},t.size):null,
+    h('span',{class:'smeta'},TLBL[t.status]),
+    opn?h('span',{class:'count'},'◆'+opn+' open'):null);
+  if(subs.length){
+    const open=q?true:(t.status!=='done');
+    return {matched:selfM||descM,node:h('details',open?{open:''}:{},h('summary',{},h('span',{class:'tw'},'▸'),row),h('div',{class:'grp'},...subs.map(s=>s.node)))};
+  }
+  return {matched:selfM||descM,node:row};
+}
+function phaseNodeL(ph){
+  if(phaseSel!=='all'&&ph.id!==phaseSel)return null;
+  const tasks=(ph.tasks||[]).map(taskNodeL).filter(Boolean);
+  if(q&&!tasks.length)return null;
+  const row=h('div',{class:'row'},dot(TC[ph.status]),h('span',{class:'id'},ph.id),h('span',{class:'ttl'},ph.title),h('span',{class:'smeta'},TLBL[ph.status]),h('span',{class:'count'},(ph.tasks||[]).length+' задач'));
+  const open=q?true:(ph.status==='active');
+  return h('details',{class:'phase',...(open?{open:''}:{})},h('summary',{},h('span',{class:'tw'},'▸'),row),h('div',{class:'grp'},...tasks.map(t=>t.node)));
+}
+
+// ── правое дерево: баги ──
+function bugRow(id){const b=DATA.bugs[id];if(!b)return null;
+  if(hideFixed&&(b.status==='fixed'||b.status==='wontfix'))return null;
+  const link=BUG2TASK[id];
+  const selfM=matchTxt(id)||matchTxt(b.title)||(link&&matchTxt(link.id));
+  const attrs={class:'row bug'+(link?' linkable':'')};if(link)attrs['data-blocks']=link.id;
+  return {matched:selfM,node:h('div',attrs,
+    dot(BC[b.status]),
+    h('span',{class:'id'},id),
+    h('span',{class:'ttl'},b.title),
+    h('span',{class:'smeta'},BLBL[b.status]+(b.date?' '+b.date:'')+' · '+b.component),
+    link?h('span',{class:'blink'},'⟸ '+link.id):null)};
+}
+function blockingSection(){
+  // баги, привязанные к задачам — сгруппированы по задаче (в порядке фаз)
+  const groups=[];
+  TASKSEQ.forEach(({t,phase})=>{
+    if(phaseSel!=='all'&&phase!==phaseSel)return;
+    if(!t.bugs||!t.bugs.length)return;
+    const rows=t.bugs.map(bugRow).filter(Boolean);
+    if(!rows.length)return;
+    const matched=rows.some(r=>r.matched);
+    if(q&&!matched&&!matchTxt(t.id)&&!matchTxt(t.title))return;
+    groups.push(h('details',q?{open:''}:{open:''},
+      h('summary',{},h('span',{class:'tw'},'▸'),
+        h('div',{class:'row linkable','data-task':t.id},dot(TC[t.status],t.status==='opt'),h('span',{class:'id'},t.id),h('span',{class:'ttl'},'блокируют: '+t.title),h('span',{class:'count'},rows.length))),
+      h('div',{class:'grp'},...rows.map(r=>r.node))));
+  });
+  if(!groups.length)return null;
+  return h('details',{class:'phase',open:''},h('summary',{},h('span',{class:'tw'},'▸'),
+    h('div',{class:'row'},dot('--blocker'),h('span',{class:'ttl'},'Баги, привязанные к задачам'),h('span',{class:'count'},groups.length+' задач'))),
+    h('div',{class:'grp'},...groups));
+}
+function otherSection(){
+  const groups=[];
+  Object.keys(DATA.unlinked||{}).forEach(comp=>{
+    const rows=DATA.unlinked[comp].map(bugRow).filter(Boolean);
+    if(!rows.length)return;
+    const matched=rows.some(r=>r.matched)||matchTxt(comp);
+    if(q&&!matched)return;
+    const opn=DATA.unlinked[comp].filter(id=>DATA.bugs[id]&&DATA.bugs[id].status==='open').length;
+    groups.push(h('details',q?{open:''}:{},
+      h('summary',{},h('span',{class:'tw'},'▸'),h('div',{class:'row'},dot('--planned'),h('span',{class:'ttl'},comp),h('span',{class:'count'},rows.length+' · ◆'+opn+' open'))),
+      h('div',{class:'grp'},...rows.map(r=>r.node))));
+  });
+  if(!groups.length)return null;
+  return h('details',{class:'phase'},h('summary',{},h('span',{class:'tw'},'▸'),
+    h('div',{class:'row'},dot('--bopen'),h('span',{class:'ttl'},'Прочие баги (по компоненту) — без привязки'),h('span',{class:'count'},Object.values(DATA.unlinked).reduce((a,v)=>a+v.length,0)))),
+    h('div',{class:'grp'},...groups));
+}
+
+function render(){
+  const L=document.getElementById('ltree'),Rt=document.getElementById('rtree');
+  L.innerHTML='';Rt.innerHTML='';
+  DATA.phases.forEach(ph=>{const n=phaseNodeL(ph);if(n)L.append(n);});
+  const bs=blockingSection();if(bs)Rt.append(bs);
+  if(phaseSel==='all'){const os=otherSection();if(os)Rt.append(os);}
+}
+
+// подсветка связи по наведению
+let cur=null;
+function hl(key,on){document.querySelectorAll(`[data-task="${key}"] , [data-blocks="${key}"]`).forEach(e=>{
+  const r=e.classList.contains('row')?e:e.querySelector('.row');if(r)r.classList.toggle('hl',on);});}
+document.body.addEventListener('mouseover',e=>{const el=e.target.closest('[data-task],[data-blocks]');
+  const key=el&&(el.getAttribute('data-task')||el.getAttribute('data-blocks'));
+  if(key===cur)return;if(cur)hl(cur,false);cur=key;if(cur)hl(cur,true);});
+
+function buildLegend(){const Lg=document.getElementById('legend');
+  ['done','active','blocker','wait','ready','queued','planned','opt'].forEach(s=>Lg.append(h('span',{},dot(TC[s],s==='opt'),TLBL[s])));
+  Lg.append(h('span',{},h('b',{},'баги:')));
+  ['open','inprogress','fixed','wontfix'].forEach(s=>Lg.append(h('span',{},dot(BC[s]),BLBL[s])));
+  Lg.append(h('span',{},h('span',{class:'blink'},'⟸ задача'),' = что баг блокирует'));}
+function buildPhaseSel(){const sel=document.getElementById('phase');sel.append(h('option',{value:'all'},'все'));
+  DATA.phases.forEach(p=>sel.append(h('option',{value:p.id},p.id+' — '+p.title.replace(/^Фаза \d+ — /,''))));sel.value='P2';}
+document.getElementById('stat').textContent=`сгенерировано ${DATA.generated} · багов ${DATA.total_bugs} (open ${DATA.counts.open}, fixed ${DATA.counts.fixed})`;
+buildLegend();buildPhaseSel();
+document.getElementById('q').addEventListener('input',e=>{q=e.target.value.trim().toLowerCase();render();});
+document.getElementById('hideFixed').addEventListener('change',e=>{hideFixed=e.target.checked;render();});
+document.getElementById('hideDone').addEventListener('change',e=>{hideDone=e.target.checked;render();});
+document.getElementById('phase').addEventListener('change',e=>{phaseSel=e.target.value;render();});
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,123 @@
+{
+  "_comment": "КУРИРУЕМЫЙ ИСТОЧНИК ПРАВДЫ для roadmap-деревьев (docs/roadmap-*.html). Структура фаз/задач + ручные связи баг→задача (поле bugs). Статусы и заголовки багов подтягиваются ИЗ BUGS.md автоматически генератором scripts/gen_roadmap.py — здесь только id. Новые баги без ручной привязки попадают в группу 'Прочие баги (по компоненту)'. После правки запусти: python scripts/gen_roadmap.py",
+  "task_status_legend": ["done", "active", "blocker", "wait", "ready", "queued", "planned", "opt"],
+  "phases": [
+    {
+      "id": "P0", "title": "Фаза 0 — Прототип", "status": "done", "date": "2026-05-26",
+      "tasks": [
+        {"id": "P0-ws", "title": "Workspace + базовые крейты", "status": "done"},
+        {"id": "P0-dom", "title": "DOM (арена NodeId, без Rc<RefCell>)", "status": "done"},
+        {"id": "P0-layout", "title": "Block-flow layout + word-wrapping", "status": "done"},
+        {"id": "P0-paint", "title": "Paint: FillRect через wgpu", "status": "done"},
+        {"id": "P0-driver", "title": "Automation foundation: lumen-driver + off-screen рендер + tiny-skia", "status": "done"},
+        {"id": "P0-tabinv", "title": "Tab lifecycle инварианты (DOM arena / JS suspend / pure layout)", "status": "done"}
+      ]
+    },
+    {
+      "id": "P1", "title": "Фаза 1 — v0.1 «Reader»", "status": "done", "date": "2026-06",
+      "tasks": [
+        {"id": "P1-font", "title": "Font fallback / matcher (системный загрузчик)", "status": "done"},
+        {"id": "P1-hidpi", "title": "HiDPI / DPR-awareness", "status": "done"},
+        {"id": "P1-scroll", "title": "Scroll + базовый input в shell", "status": "done"},
+        {"id": "P1-stream", "title": "Progressive / streaming rendering pipeline", "status": "done", "tasks": [
+          {"id": "PH1-2", "title": "PH1-2: window-first + 60Hz throttle + параллельный CSS", "status": "done"},
+          {"id": "PH1-2a", "title": "PH1-2a: TCP-level streaming HTTP body", "status": "done"},
+          {"id": "PH1-2b", "title": "PH1-2b: инкрементальный (dirty-subtree) layout", "status": "done"},
+          {"id": "PH1-2c", "title": "PH1-2c: прогрессивная подгрузка картинок", "status": "done"}
+        ]},
+        {"id": "P1-url", "title": "Url как структурированный тип", "status": "done"},
+        {"id": "P1-net", "title": "Network: EventSink + RequestFilter hook + bench baseline", "status": "done"},
+        {"id": "P1-css21", "title": "CSS 2.1 + flexbox", "status": "done"},
+        {"id": "P1-img", "title": "Картинки (decode/paint)", "status": "done"},
+        {"id": "P1-tabs", "title": "Вкладки, история, закладки", "status": "done"},
+        {"id": "PH1-4", "title": "PH1-4: Network service в отдельном процессе (lumen-ipc)", "status": "done"},
+        {"id": "P1-storage", "title": "Storage service + базовый adblock + DoH", "status": "done"},
+        {"id": "PH1-5", "title": "PH1-5: пакеты Linux/macOS/Windows (CI/CD)", "status": "done"},
+        {"id": "PH1-6", "title": "PH1-6: Stacking contexts + CSS Painting Order", "status": "done"},
+        {"id": "PH1-7", "title": "PH1-7: Compositor thread + Property Trees", "status": "done"},
+        {"id": "PH1-8", "title": "PH1-8: Preload scanner", "status": "done"},
+        {"id": "PH1-9", "title": "PH1-9: lumen-mcp-server (Automation Phase 1)", "status": "done"},
+        {"id": "P1-tablife1", "title": "Tab lifecycle Phase 1 (TabState T0–T4, memory pressure, image LRU, T1 paused)", "status": "done"}
+      ]
+    },
+    {
+      "id": "P2", "title": "Фаза 2 — v0.5 «Interactive» (текущая)", "status": "active", "date": "app v0.2.0 → v0.5",
+      "tasks": [
+        {"id": "P2-usability", "title": "USABILITY-вертикаль — «зашёл на сайт и комфортно пользуешься»", "status": "active", "note": "ТОП-приоритет, режим одного программиста (всё на P1)", "tasks": [
+          {"id": "U-0", "title": "U-0: --screenshot headless CPU-снимок", "status": "done"},
+          {"id": "U-1.1", "title": "U-1 этап 1: неблокирующая навигация", "status": "done"},
+          {"id": "U-2", "title": "U-2: шейпинг текста GSUB/GPOS + CFF-контуры", "status": "done"},
+          {"id": "U-3", "title": "U-3: многовкладочность TAB-1…7 + IPC", "status": "done"},
+          {"id": "U-4", "title": "U-4: WASM MVP-интерпретатор + graceful WebCodecs + i64↔BigInt", "status": "done"},
+          {"id": "B-1", "title": "B-1: QuickJS вне UI-потока (разблокировка)", "status": "blocker", "size": "XL", "bugs": ["BUG-222"]},
+          {"id": "U-1.2", "title": "U-1 этап 2: весь пайплайн вне UI-потока", "status": "wait", "size": "L", "bugs": ["BUG-171", "BUG-172"]},
+          {"id": "U-5", "title": "U-5: Fullscreen пересчитывает вьюпорт", "status": "ready", "size": "S", "bugs": ["BUG-167"]},
+          {"id": "U-6", "title": "U-6: рендер-паритет high-deviation", "status": "ready", "bugs": ["BUG-104", "BUG-126", "BUG-144", "BUG-085"]},
+          {"id": "OBS", "title": "Наблюдаемость: CPU-снимок = окно (полная замена gdigrab)", "status": "ready", "size": "M", "bugs": ["BUG-221"]},
+          {"id": "U-4opt", "title": "U-4 опции: WASM SIMD/threads, live-aliasing, WebGPU backend", "status": "opt"}
+        ]},
+        {"id": "P2-js", "title": "QuickJS интеграция + Tier 1 Web APIs", "status": "done"},
+        {"id": "P2-forms", "title": "Формы, базовая интерактивность (Forms runtime)", "status": "done"},
+        {"id": "P2-h2", "title": "HTTP/2", "status": "done"},
+        {"id": "P2-gpu", "title": "GPU compositor (wgpu)", "status": "done"},
+        {"id": "P2-grid", "title": "CSS Grid", "status": "done"},
+        {"id": "PH2-2", "title": "PH2-2: Site isolation Phase 1 (COOP/COEP/CORP)", "status": "done"},
+        {"id": "PH2-3", "title": "PH2-3: Профили + шифрование (AES-256-GCM vault)", "status": "done"},
+        {"id": "P2-fp", "title": "Anti-fingerprinting", "status": "done"},
+        {"id": "P2-knowledge", "title": "Knowledge layer ядро (FTS, аннотации, read-later, focus mode)", "status": "active"},
+        {"id": "P2-viewport", "title": "<meta viewport> parsing + page zoom", "status": "done"},
+        {"id": "P2-ui", "title": "Кастомизация UI (drag&drop панелей, темы)", "status": "planned"},
+        {"id": "P2-shadow", "title": "Shadow DOM + custom elements + <template>/<slot>", "status": "done"},
+        {"id": "PH2-7", "title": "PH2-7: Accessibility tree + platform bridges Phase 1", "status": "done"},
+        {"id": "P2-picture", "title": "<picture>/srcset/sizes + loading=lazy", "status": "done"},
+        {"id": "P2-ime", "title": "IME composition events", "status": "done"},
+        {"id": "P2-find", "title": "Find in page (Ctrl+F)", "status": "done"},
+        {"id": "P2-devtools", "title": "DevTools / Inspector через CDP (DOM + computed + network)", "status": "done"},
+        {"id": "P2-blend", "title": "mix-blend-mode / backdrop-filter / isolation", "status": "done", "bugs": ["BUG-144"]},
+        {"id": "PH3-2", "title": "lumen-bidi-server (WebDriver BiDi, Automation Phase 2)", "status": "done"},
+        {"id": "P2-tablife2", "title": "Tab lifecycle Phase 2 (T2 heap snapshot, T3 hibernation, GPU/glyph LRU, UI affordance)", "status": "done"},
+        {"id": "P2-canvas", "title": "Canvas 2D (Phases 1–5, Path2D)", "status": "done", "bugs": ["BUG-099"]},
+        {"id": "P2-viewtrans", "title": "View Transitions API", "status": "planned", "bugs": ["BUG-103"]},
+        {"id": "P2-masonry", "title": "CSS Masonry layout", "status": "planned", "bugs": ["BUG-105", "BUG-143"]},
+        {"id": "P2-scrolldriven", "title": "CSS Scroll-Driven Animations L1", "status": "planned", "bugs": ["BUG-127"]},
+        {"id": "P2-motionpath", "title": "CSS Motion Path L1 (offset-path)", "status": "planned", "bugs": ["BUG-125"]}
+      ]
+    },
+    {
+      "id": "P3", "title": "Фаза 3 — v1.0 «Full Browser»", "status": "planned", "date": "36–48 мес",
+      "tasks": [
+        {"id": "P3-v8", "title": "Переход на V8 (rusty_v8) + Tier 2 Web APIs", "status": "planned"},
+        {"id": "P3-idb", "title": "IndexedDB", "status": "planned"},
+        {"id": "P3-h3", "title": "HTTP/3", "status": "planned"},
+        {"id": "PH3-20", "title": "Service Workers (PH3-20 fetch interception Phase 1)", "status": "done"},
+        {"id": "P3-woff2", "title": "WebFonts WOFF2", "status": "done"},
+        {"id": "P3-ext", "title": "Расширения (минимальный формат)", "status": "planned"},
+        {"id": "P3-wpt", "title": "WPT pass rate ≥ 60%", "status": "planned"},
+        {"id": "P3-ai", "title": "Опциональный AI-модуль (lumen-ai, семантический поиск/RAG)", "status": "planned"},
+        {"id": "P3-ws", "title": "WebSockets + SSE + Fetch API + AbortController", "status": "planned"},
+        {"id": "P3-auth", "title": "HTTP auth (Basic + Digest)", "status": "done"},
+        {"id": "P3-safebrowse", "title": "Safe Browsing equivalent", "status": "done"},
+        {"id": "P3-bfcache", "title": "Back/forward cache (bfcache)", "status": "planned"},
+        {"id": "P3-navapi", "title": "Navigation API + History API runtime", "status": "planned"},
+        {"id": "PH3-8", "title": "Web Animations API runtime (PH3-8)", "status": "done"},
+        {"id": "PH3-7", "title": "contentEditable + Input Events L2 + Selection/Range (PH3-7)", "status": "done"},
+        {"id": "P3-spell", "title": "Spell check (Hunspell, русский словарь)", "status": "planned"},
+        {"id": "P3-varfonts", "title": "Variable fonts axes runtime (font-variation-settings)", "status": "planned", "bugs": ["BUG-109"]},
+        {"id": "P3-color", "title": "Color management + Display P3 / Rec2020 / ICC", "status": "active"},
+        {"id": "P3-print", "title": "Print pipeline runtime (pagination + PDF)", "status": "done"},
+        {"id": "P3-media", "title": "Медиа Phase 1: getUserMedia / <audio> / <video> / Screen Capture / Pointer Lock / Idle / Wake Lock / File System Access", "status": "done"},
+        {"id": "P3-dnd", "title": "HTML5 Drag and Drop API (PH3-9)", "status": "done"}
+      ]
+    },
+    {
+      "id": "P4", "title": "Фаза 4 — После 1.0", "status": "planned", "date": "—",
+      "tasks": [
+        {"id": "P4-webgl", "title": "Подмножество WebGL (базовый CPU-контекст готов)", "status": "active"},
+        {"id": "P4-mobile", "title": "Mobile (Android NDK)", "status": "planned"},
+        {"id": "P4-sync", "title": "Sync через E2E (self-host / P2P)", "status": "planned"},
+        {"id": "P4-kgraph", "title": "Граф знаний (визуализация коллекции)", "status": "planned"},
+        {"id": "P4-l10n", "title": "Локализация UI", "status": "planned"}
+      ]
+    }
+  ]
+}
