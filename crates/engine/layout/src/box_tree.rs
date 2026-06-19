@@ -7101,8 +7101,38 @@ fn lay_out_abs_children(
 
         let child = &mut parent.children[idx];
 
+        // CSS Anchor Positioning L1 §4 — apply `anchor-size()` overrides for width/height.
+        // Done before resolving `inset-area` so the element's used size (used to
+        // align it within its position-area band) reflects the anchor-size result.
+        let mut w_fixed = cs.width.is_some();
+        let mut h_fixed = cs.height.is_some();
+        if let Some(w) = cs.anchor_size_w.as_ref().and_then(|f| {
+            crate::anchor::resolve_anchor_size(&anchors, f, cs.position_anchor.as_deref())
+        }) {
+            child.rect.width = w;
+            w_fixed = true;
+        }
+        if let Some(h) = cs.anchor_size_h.as_ref().and_then(|f| {
+            crate::anchor::resolve_anchor_size(&anchors, f, cs.position_anchor.as_deref())
+        }) {
+            child.rect.height = h;
+            h_fixed = true;
+        }
+
         // CSS Anchor Positioning L1 §5 — resolve `position-area` / `inset-area`.
+        // A definite-size axis keeps its size and is aligned toward the anchor;
+        // an `auto` axis stretches to fill its position-area band.
         // CSS: position-anchor, inset-area, position-area
+        let elem_w = if w_fixed {
+            crate::anchor::AxisSize::Fixed(child.rect.width)
+        } else {
+            crate::anchor::AxisSize::Auto
+        };
+        let elem_h = if h_fixed {
+            crate::anchor::AxisSize::Fixed(child.rect.height)
+        } else {
+            crate::anchor::AxisSize::Auto
+        };
         let anchored_pos = cs.position_anchor.as_deref().and_then(|anchor_name| {
             crate::anchor::resolve_inset_area(
                 &anchors,
@@ -7110,23 +7140,13 @@ fn lay_out_abs_children(
                 cs.inset_area_row,
                 cs.inset_area_col,
                 cb,
+                elem_w,
+                elem_h,
             )
         });
 
-        // CSS Anchor Positioning L1 §4 — apply `anchor-size()` overrides for width/height.
-        if let Some(w) = cs.anchor_size_w.as_ref().and_then(|f| {
-            crate::anchor::resolve_anchor_size(&anchors, f, cs.position_anchor.as_deref())
-        }) {
-            child.rect.width = w;
-        }
-        if let Some(h) = cs.anchor_size_h.as_ref().and_then(|f| {
-            crate::anchor::resolve_anchor_size(&anchors, f, cs.position_anchor.as_deref())
-        }) {
-            child.rect.height = h;
-        }
-
         let (new_x, new_y) = if let Some(ref pos) = anchored_pos {
-            // Anchor-positioned: override width/height from inset-area if provided.
+            // Anchor-positioned: override width/height only for auto (stretched) axes.
             if let Some(w) = pos.width {
                 child.rect.width = w;
             }
@@ -9588,10 +9608,22 @@ fn apply_anchor_positions_rec(
             } else {
                 pcb
             };
+            // A definite-size axis keeps its size and aligns toward the anchor;
+            // an `auto` axis stretches to fill its position-area band.
+            let elem_w = if lb.style.width.is_some() {
+                crate::anchor::AxisSize::Fixed(lb.rect.width)
+            } else {
+                crate::anchor::AxisSize::Auto
+            };
+            let elem_h = if lb.style.height.is_some() {
+                crate::anchor::AxisSize::Fixed(lb.rect.height)
+            } else {
+                crate::anchor::AxisSize::Auto
+            };
             // Use scope-aware lookup so anchors behind anchor-scope barriers are
             // invisible to positioned elements outside their subtree.
             if let Some(pos) = crate::anchor::resolve_inset_area_scoped(
-                registry, anchor_name, row, col, cb, ancestors,
+                registry, anchor_name, row, col, cb, elem_w, elem_h, ancestors,
             ) {
                 let new_x = cb.x + pos.left;
                 let new_y = cb.y + pos.top;

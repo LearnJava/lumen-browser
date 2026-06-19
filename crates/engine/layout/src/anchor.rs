@@ -347,6 +347,25 @@ pub fn resolve_anchor_size(
     Some(value)
 }
 
+// ─── AxisSize ────────────────────────────────────────────────────────────────
+
+// CSS: inset-area, position-area
+/// The positioned element's used size on one axis, as seen by the position-area
+/// placement algorithm.
+///
+/// Determines whether the element stretches to fill its grid band or keeps a
+/// definite size and is aligned toward the anchor inside the band.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AxisSize {
+    /// `width`/`height` is `auto` — the element stretches to fill its band
+    /// (the band's full extent becomes the used size on this axis).
+    Auto,
+    /// `width`/`height` is definite — the element keeps this size (CSS px) and
+    /// is aligned within its band toward the anchor (CSS Anchor Positioning L1
+    /// §5.1 default position-area self-alignment).
+    Fixed(f32),
+}
+
 // ─── resolve_inset_area ──────────────────────────────────────────────────────
 
 /// Resolved inset-area position for an anchored element.
@@ -379,6 +398,10 @@ pub struct AnchoredPosition {
 /// relative to the default anchor element.  Translates the grid-cell selection
 /// to a concrete `(top, left, width, height)` tuple.
 ///
+/// `elem_w` / `elem_h` describe the positioned element's used size on each axis:
+/// [`AxisSize::Auto`] stretches the element to fill its band; [`AxisSize::Fixed`]
+/// keeps the size and aligns the element toward the anchor inside the band.
+///
 /// Returns `None` when the anchor isn't in the registry or both keywords are `None`.
 // CSS: inset-area, position-anchor
 pub fn resolve_inset_area(
@@ -387,12 +410,14 @@ pub fn resolve_inset_area(
     row: InsetAreaKeyword,
     col: InsetAreaKeyword,
     containing_rect: Rect,
+    elem_w: AxisSize,
+    elem_h: AxisSize,
 ) -> Option<AnchoredPosition> {
     if row == InsetAreaKeyword::None && col == InsetAreaKeyword::None {
         return None;
     }
     let entry = registry.get(anchor_name)?;
-    resolve_inset_area_from_entry(entry, row, col, containing_rect)
+    resolve_inset_area_from_entry(entry, row, col, containing_rect, elem_w, elem_h)
 }
 
 /// Scope-aware variant of [`resolve_inset_area`].
@@ -400,19 +425,22 @@ pub fn resolve_inset_area(
 /// `ancestor_ids` — NodeIds of all ancestors of the positioned element.
 /// Anchors outside the positioned element's scope are not resolved.
 // CSS: inset-area, position-anchor, anchor-scope
+#[allow(clippy::too_many_arguments)]
 pub fn resolve_inset_area_scoped(
     registry: &AnchorRegistry,
     anchor_name: &str,
     row: InsetAreaKeyword,
     col: InsetAreaKeyword,
     containing_rect: Rect,
+    elem_w: AxisSize,
+    elem_h: AxisSize,
     ancestor_ids: &[NodeId],
 ) -> Option<AnchoredPosition> {
     if row == InsetAreaKeyword::None && col == InsetAreaKeyword::None {
         return None;
     }
     let entry = registry.get_scoped(anchor_name, ancestor_ids)?;
-    resolve_inset_area_from_entry(entry, row, col, containing_rect)
+    resolve_inset_area_from_entry(entry, row, col, containing_rect, elem_w, elem_h)
 }
 
 fn resolve_inset_area_from_entry(
@@ -420,21 +448,25 @@ fn resolve_inset_area_from_entry(
     row: InsetAreaKeyword,
     col: InsetAreaKeyword,
     containing_rect: Rect,
+    elem_w: AxisSize,
+    elem_h: AxisSize,
 ) -> Option<AnchoredPosition> {
     let anchor = entry.rect;
-    let (top, height) = resolve_axis_band(
+    let (top, height) = place_axis(
         row,
         anchor.y,
         anchor.y + anchor.height,
         containing_rect.y,
         containing_rect.y + containing_rect.height,
+        elem_h,
     );
-    let (left, width) = resolve_axis_band(
+    let (left, width) = place_axis(
         col,
         anchor.x,
         anchor.x + anchor.width,
         containing_rect.x,
         containing_rect.x + containing_rect.width,
+        elem_w,
     );
     Some(AnchoredPosition {
         top: top - containing_rect.y,
@@ -444,41 +476,71 @@ fn resolve_inset_area_from_entry(
     })
 }
 
-/// Map one axis's `InsetAreaKeyword` to `(start_px, optional_size)`.
+/// Compute the `[start, end]` band (CSS px, doc space) that an `inset-area`
+/// keyword selects on one axis.
 ///
-/// - `kw`           — the inset-area keyword for this axis.
-/// - `anchor_start` — anchor's leading edge (CSS px, doc space).
-/// - `anchor_end`   — anchor's trailing edge (CSS px, doc space).
-/// - `cb_start`     — containing block's leading edge (CSS px, doc space).
-/// - `cb_end`       — containing block's trailing edge (CSS px, doc space).
-///
-/// Returns `(element_start, element_size)`.  `element_size` is `None` when the
-/// keyword does not constrain the element's size on this axis.
-fn resolve_axis_band(
+/// The anchor's two edges split the containing block into three tiles:
+/// start `[cb_start, anchor_start]`, center `[anchor_start, anchor_end]`, and
+/// end `[anchor_end, cb_end]`.  Span keywords cover two or three contiguous tiles.
+fn band_region(
     kw: InsetAreaKeyword,
     anchor_start: f32,
     anchor_end: f32,
     cb_start: f32,
     cb_end: f32,
-) -> (f32, Option<f32>) {
+) -> (f32, f32) {
     match kw {
-        InsetAreaKeyword::None => (cb_start, None),
-        InsetAreaKeyword::Start | InsetAreaKeyword::SelfStart => {
-            (cb_start, Some((anchor_start - cb_start).max(0.0)))
-        }
-        InsetAreaKeyword::Center => {
-            (anchor_start, Some((anchor_end - anchor_start).max(0.0)))
-        }
-        InsetAreaKeyword::End | InsetAreaKeyword::SelfEnd => {
-            (anchor_end, Some((cb_end - anchor_end).max(0.0)))
-        }
-        InsetAreaKeyword::SpanStart => {
-            (cb_start, Some((anchor_end - cb_start).max(0.0)))
-        }
-        InsetAreaKeyword::SpanEnd => {
-            (anchor_start, Some((cb_end - anchor_start).max(0.0)))
-        }
-        InsetAreaKeyword::SpanAll => (cb_start, Some((cb_end - cb_start).max(0.0))),
+        // No constraint on this axis → the whole containing block.
+        InsetAreaKeyword::None => (cb_start, cb_end),
+        InsetAreaKeyword::Start | InsetAreaKeyword::SelfStart => (cb_start, anchor_start),
+        InsetAreaKeyword::Center => (anchor_start, anchor_end),
+        InsetAreaKeyword::End | InsetAreaKeyword::SelfEnd => (anchor_end, cb_end),
+        InsetAreaKeyword::SpanStart => (cb_start, anchor_end),
+        InsetAreaKeyword::SpanEnd => (anchor_start, cb_end),
+        InsetAreaKeyword::SpanAll => (cb_start, cb_end),
+    }
+}
+
+/// Place the element on one axis within its `inset-area` band.
+///
+/// Returns `(element_start, optional_size)`:
+/// - [`AxisSize::Auto`] → element fills the band; size is `Some(band_extent)`.
+/// - [`AxisSize::Fixed`] → element keeps its size (returned `None`, caller keeps
+///   the element's current size) and is aligned toward the anchor per the CSS
+///   Anchor Positioning L1 §5.1 default position-area self-alignment.
+fn place_axis(
+    kw: InsetAreaKeyword,
+    anchor_start: f32,
+    anchor_end: f32,
+    cb_start: f32,
+    cb_end: f32,
+    size: AxisSize,
+) -> (f32, Option<f32>) {
+    let (region_start, region_end) = band_region(kw, anchor_start, anchor_end, cb_start, cb_end);
+    match size {
+        AxisSize::Auto => (region_start, Some((region_end - region_start).max(0.0))),
+        AxisSize::Fixed(s) => (align_in_band(kw, region_start, region_end, s), None),
+    }
+}
+
+/// Align a definite-size element inside its band, biased toward the anchor.
+///
+/// Default position-area self-alignment (CSS Anchor Positioning L1 §5.1):
+/// a `start`-side region hugs the anchor at the band's far (end) edge, an
+/// `end`-side region hugs it at the near (start) edge, and `center`/span
+/// regions centre the element within the band.
+fn align_in_band(kw: InsetAreaKeyword, region_start: f32, region_end: f32, size: f32) -> f32 {
+    match kw {
+        // Region above/left of the anchor: align to its inner (end) edge.
+        InsetAreaKeyword::Start | InsetAreaKeyword::SelfStart => region_end - size,
+        // Region below/right of the anchor: align to its inner (start) edge.
+        InsetAreaKeyword::End | InsetAreaKeyword::SelfEnd => region_start,
+        // Center / span / none: centre within the band.
+        InsetAreaKeyword::Center
+        | InsetAreaKeyword::SpanStart
+        | InsetAreaKeyword::SpanEnd
+        | InsetAreaKeyword::SpanAll
+        | InsetAreaKeyword::None => region_start + (region_end - region_start - size) * 0.5,
     }
 }
 
@@ -884,6 +946,7 @@ mod tests {
         let (reg, cb) = setup_inset_area();
         let pos = resolve_inset_area(
             &reg, "--anchor", InsetAreaKeyword::Start, InsetAreaKeyword::Start, cb,
+            AxisSize::Auto, AxisSize::Auto,
         ).unwrap();
         assert_eq!(pos.top, 0.0);
         assert_eq!(pos.height, Some(200.0));
@@ -896,6 +959,7 @@ mod tests {
         let (reg, cb) = setup_inset_area();
         let pos = resolve_inset_area(
             &reg, "--anchor", InsetAreaKeyword::Center, InsetAreaKeyword::Center, cb,
+            AxisSize::Auto, AxisSize::Auto,
         ).unwrap();
         assert_eq!(pos.top, 200.0);
         assert_eq!(pos.height, Some(50.0));
@@ -908,6 +972,7 @@ mod tests {
         let (reg, cb) = setup_inset_area();
         let pos = resolve_inset_area(
             &reg, "--anchor", InsetAreaKeyword::End, InsetAreaKeyword::End, cb,
+            AxisSize::Auto, AxisSize::Auto,
         ).unwrap();
         assert_eq!(pos.top, 250.0);
         assert_eq!(pos.height, Some(350.0));
@@ -920,6 +985,7 @@ mod tests {
         let (reg, cb) = setup_inset_area();
         let pos = resolve_inset_area(
             &reg, "--anchor", InsetAreaKeyword::SpanAll, InsetAreaKeyword::SpanAll, cb,
+            AxisSize::Auto, AxisSize::Auto,
         ).unwrap();
         assert_eq!(pos.top, 0.0);
         assert_eq!(pos.height, Some(600.0));
@@ -932,6 +998,7 @@ mod tests {
         let (reg, cb) = setup_inset_area();
         let pos = resolve_inset_area(
             &reg, "--anchor", InsetAreaKeyword::Center, InsetAreaKeyword::SpanStart, cb,
+            AxisSize::Auto, AxisSize::Auto,
         ).unwrap();
         assert_eq!(pos.left, 0.0);
         assert_eq!(pos.width, Some(400.0));
@@ -942,6 +1009,7 @@ mod tests {
         let (reg, cb) = setup_inset_area();
         let pos = resolve_inset_area(
             &reg, "--anchor", InsetAreaKeyword::SpanEnd, InsetAreaKeyword::Center, cb,
+            AxisSize::Auto, AxisSize::Auto,
         ).unwrap();
         assert_eq!(pos.top, 200.0);
         assert_eq!(pos.height, Some(400.0));
@@ -952,6 +1020,7 @@ mod tests {
         let (reg, cb) = setup_inset_area();
         assert!(resolve_inset_area(
             &reg, "--anchor", InsetAreaKeyword::None, InsetAreaKeyword::None, cb,
+            AxisSize::Auto, AxisSize::Auto,
         ).is_none());
     }
 
@@ -961,6 +1030,82 @@ mod tests {
         let cb = rect(0.0, 0.0, 800.0, 600.0);
         assert!(resolve_inset_area(
             &reg, "--ghost", InsetAreaKeyword::Center, InsetAreaKeyword::End, cb,
+            AxisSize::Auto, AxisSize::Auto,
         ).is_none());
+    }
+
+    // ── resolve_inset_area with definite size (BUG-126) ──────────────────────
+    // A fixed-size element must keep its size and hug the anchor inside its band,
+    // not stretch to fill the band like an `auto`-size element does.
+
+    /// Mirrors TEST-77 row 1: anchor at (410,105) size 80×80, 60×60 anchored boxes.
+    fn setup_corner() -> (AnchorRegistry, Rect) {
+        let reg = make_registry("--c", rect(410.0, 105.0, 80.0, 80.0));
+        let cb = rect(0.0, 0.0, 900.0, 290.0);
+        (reg, cb)
+    }
+
+    #[test]
+    fn fixed_start_start_hugs_top_left_corner() {
+        let (reg, cb) = setup_corner();
+        let pos = resolve_inset_area(
+            &reg, "--c", InsetAreaKeyword::Start, InsetAreaKeyword::Start, cb,
+            AxisSize::Fixed(60.0), AxisSize::Fixed(60.0),
+        ).unwrap();
+        // Bottom-right corner of the box touches the anchor's top-left corner.
+        assert_eq!(pos.top, 45.0); // 105 - 60
+        assert_eq!(pos.left, 350.0); // 410 - 60
+        assert_eq!(pos.width, None); // keeps its own size
+        assert_eq!(pos.height, None);
+    }
+
+    #[test]
+    fn fixed_start_center_centers_over_anchor() {
+        let (reg, cb) = setup_corner();
+        let pos = resolve_inset_area(
+            &reg, "--c", InsetAreaKeyword::Start, InsetAreaKeyword::Center, cb,
+            AxisSize::Fixed(60.0), AxisSize::Fixed(60.0),
+        ).unwrap();
+        assert_eq!(pos.top, 45.0); // above anchor
+        assert_eq!(pos.left, 420.0); // 410 + (80 - 60)/2 — centered over anchor width
+    }
+
+    #[test]
+    fn fixed_end_end_hugs_bottom_right_corner() {
+        let (reg, cb) = setup_corner();
+        let pos = resolve_inset_area(
+            &reg, "--c", InsetAreaKeyword::End, InsetAreaKeyword::End, cb,
+            AxisSize::Fixed(60.0), AxisSize::Fixed(60.0),
+        ).unwrap();
+        assert_eq!(pos.top, 185.0); // anchor bottom edge
+        assert_eq!(pos.left, 490.0); // anchor right edge
+    }
+
+    #[test]
+    fn fixed_center_start_hugs_left_centered_vertically() {
+        let (reg, cb) = setup_corner();
+        let pos = resolve_inset_area(
+            &reg, "--c", InsetAreaKeyword::Center, InsetAreaKeyword::Start, cb,
+            AxisSize::Fixed(60.0), AxisSize::Fixed(60.0),
+        ).unwrap();
+        assert_eq!(pos.left, 350.0); // anchor left edge - 60
+        assert_eq!(pos.top, 115.0); // 105 + (80 - 60)/2 — centered over anchor height
+    }
+
+    #[test]
+    fn auto_width_fixed_height_stretches_only_width() {
+        // Mirrors TEST-77 row 2 .span-start: center span-start, height:40 width:auto.
+        let reg = make_registry("--a2", rect(420.0, 95.0, 60.0, 60.0));
+        let cb = rect(0.0, 0.0, 900.0, 250.0);
+        let pos = resolve_inset_area(
+            &reg, "--a2", InsetAreaKeyword::Center, InsetAreaKeyword::SpanStart, cb,
+            AxisSize::Auto, AxisSize::Fixed(40.0),
+        ).unwrap();
+        // Column span-start = [cb_left, anchor_right] → fills width.
+        assert_eq!(pos.left, 0.0);
+        assert_eq!(pos.width, Some(480.0)); // 420 + 60
+        // Row center, fixed height → centered within anchor band, no stretch.
+        assert_eq!(pos.top, 105.0); // 95 + (60 - 40)/2
+        assert_eq!(pos.height, None);
     }
 }

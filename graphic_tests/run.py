@@ -234,6 +234,7 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '92': ('BUG-124', 0.90),    # system colors: значения system_color() приведены к Edge BUG-210 (15.59% → 0.90%); layout/цвета идеальны (dump-layout: 164px border-box, gap 4, hex точны), остаток = gdigrab суб-пиксельный сдвиг (~+3px на 1000px) на границах ячеек vs пиксельное округление Edge
     '67': ('BUG-128', 1.36),    # attr(): ::before на flex-контейнере не генерировался — фикснут BUG-196 (16.41% → 1.36%); тёмные label-боксы и бары совпадают с Edge пиксель-в-пиксель, остаток = font-parity (white monospace label text, Inter vs Edge) + sub-pixel edge-AA по border-radius клипу
     '62': ('BUG-128', 2.32),    # scroll-snap: column flex-grow не распределял free space — фикснут BUG-104 (63.70% → 2.32%); все цветные заливки контейнеров совпадают с Edge пиксель-в-пиксель (diff), остаток = font-parity (метки секций A/1/NW/Stop, Inter vs Edge) + border-radius edge-AA (BUG-176)
+    '77': ('BUG-126', 12.94),   # anchor-positioning: corner/edge placement фикснут BUG-126 (53.45% → 12.94%); 3×3 сетка container 1 совпадает с Edge(position-area) пиксель-в-пиксель (diff). Остаток = (1) тест использует устаревшее имя `inset-area`, которое текущий Edge игнорирует (Edge поддерживает только `position-area`); (2) span-ряд container 2 — Lumen по спеку растягивает auto-width элементы на position-area band, Edge не отрисовывает span-* вовсе. Lumen спек-корректнее Edge; расхождение в reference-браузере, не дефект движка
 }
 _DEBTOR_TOL = 2.0  # % допуск run-to-run вариации gdigrab
 

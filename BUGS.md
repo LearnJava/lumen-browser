@@ -141,7 +141,7 @@
 | [BUG-123](bugs/BUG-123-FIXED.md) | FIXED 2026-06-11 | paint | scroll container's own bg+border clipped by its own overflow scissor |
 | [BUG-124](bugs/BUG-124-OPEN.md) | OPEN | layout/paint | TEST-51 residual 1.09%: fractional layout Y coords vs Edge pixel snapping |
 | [BUG-125](bugs/BUG-125-OPEN.md) | OPEN | layout/paint | CSS Motion Path L1 (offset-path/offset-distance/offset-rotate) — TEST-76: 3.18% |
-| [BUG-126](bugs/BUG-126-OPEN.md) | OPEN | layout | CSS Anchor Positioning L1 (anchor-name/position-anchor) — TEST-77: 53.45% |
+| [BUG-126](bugs/BUG-126-OPEN.md) | OPEN (DEBTOR) | layout | CSS Anchor Positioning L1 — placement фикснут (53.45% → 12.94%): position-area definite-size элементы прижимаются к якорю вместо растягивания на band (anchor.rs place_axis/align_in_band). 3×3 сетка совпадает с Edge(position-area) пиксель-в-пиксель. Остаток-должник: тест использует устаревшее `inset-area` (Edge игнорирует, поддерживает только `position-area`) + span-ряд (Lumen спек-корректнее Edge). KNOWN_DEBTORS 12.94% |
 | [BUG-127](bugs/BUG-127-OPEN.md) | OPEN | layout/js | CSS Scroll-Driven Animations L1 (scroll-timeline/view-timeline) — TEST-78: 12.02% |
 | [BUG-128](bugs/BUG-128-OPEN.md) | OPEN | font | text-underline TEST-79: 6.78% — font-parity issue (serif vs sans), кандидат в KNOWN_DEBTORS |
 | [BUG-129](bugs/BUG-129-FIXED.md) | FIXED 2026-06-14 | layout | CSS Tables border-collapse: collapse — TEST-80 16.81% |
