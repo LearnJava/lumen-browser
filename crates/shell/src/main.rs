@@ -44,6 +44,7 @@ mod notification;
 mod omnibox;
 mod panels;
 mod platform;
+mod prefetch;
 mod reader_view;
 mod source_view;
 pub mod surface;
@@ -3028,24 +3029,6 @@ enum ResolvedResource {
 
 // ── Загрузка внешних CSS ─────────────────────────────────────────────────────
 
-/// Загрузить текст CSS по уже разрешённому абсолютному URL или пути файла.
-/// Используется параллельными CSS-потоками в PH1-2 streaming pipeline.
-/// Ошибки не критичны — промежуточный кадр рисуется без CSS-файла.
-fn load_css_for_streaming(resolved: &str) -> Option<String> {
-    if resolved.starts_with("http://") || resolved.starts_with("https://") {
-        use lumen_core::ext::NetworkTransport;
-        use lumen_core::url::Url;
-        use lumen_network::{BrotliContentDecoder, HttpClient};
-        let url = Url::parse(resolved).ok()?;
-        let client =
-            HttpClient::new().with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()));
-        let bytes = client.fetch(&url).ok()?;
-        String::from_utf8(bytes).ok()
-    } else {
-        std::fs::read_to_string(resolved).ok()
-    }
-}
-
 /// Прогнать порцию HTML через preload-сканер, эмитнуть `EarlyPreloadHints` и
 /// параллельно загрузить найденные стили (PH1-2 / PH1-8). Общая логика для обоих
 /// путей `start_streaming_load`: сетевого streaming-а (URL) и нарезки
@@ -3057,23 +3040,70 @@ fn feed_preload_and_emit(
     base: &ResourceBase,
     proxy: &EventLoopProxy<LoadEvent>,
     generation: u64,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<&Arc<lumen_storage::CookieJar>>,
 ) {
+    use lumen_network::RequestDestination;
+
     let early = scanner.feed_bytes(chunk);
     if early.is_empty() {
         return;
     }
     let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(early.clone(), base.clone(), generation));
-    // PH1-2: параллельная загрузка CSS для промежуточных кадров.
+    // PH1-2 + BUG-171: speculatively fetch subresources off the UI thread while the
+    // HTML is still streaming. Linked stylesheets AND external classic scripts are
+    // warmed into the process-global prefetch cache using the SAME subresource
+    // client `parse_and_layout` uses, so the final UI-thread pass reads identical
+    // bytes instantly instead of blocking on the socket (cascade + script order
+    // untouched — a cache miss simply re-fetches there). Stylesheets additionally
+    // parse here to feed progressive intermediate frames (the previous PH1-2 path).
     for hint in &early {
-        if let lumen_html_parser::PreloadHint::Stylesheet { url } = hint {
-            let css_url = base.resolve_str(url);
-            let proxy2 = proxy.clone();
-            std::thread::spawn(move || {
-                if let Some(text) = load_css_for_streaming(&css_url) {
+        let (raw_url, dest, is_css) = match hint {
+            lumen_html_parser::PreloadHint::Stylesheet { url } => {
+                (url, RequestDestination::Style, true)
+            }
+            lumen_html_parser::PreloadHint::Script { url } => {
+                (url, RequestDestination::Script, false)
+            }
+            _ => continue,
+        };
+        match base.resolve(raw_url) {
+            // Local files: read is instant — no cache benefit. Only CSS needs a
+            // CssLoaded event for the progressive frame; scripts are read in
+            // `parse_and_layout`.
+            ResolvedResource::File(path) => {
+                if is_css
+                    && let Ok(text) = std::fs::read_to_string(&path)
+                {
                     let sheet = lumen_css_parser::parse(&text);
-                    let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::new(sheet), generation));
+                    let _ = proxy.send_event(LoadEvent::CssLoaded(Box::new(sheet), generation));
                 }
-            });
+            }
+            ResolvedResource::Url(resolved) => {
+                let proxy2 = proxy.clone();
+                let base = base.clone();
+                let sink = Arc::clone(sink);
+                let cookie_jar = cookie_jar.cloned();
+                std::thread::spawn(move || {
+                    use lumen_core::url::Url;
+                    let Ok(parsed) = Url::parse(&resolved) else {
+                        return;
+                    };
+                    let bytes = crate::prefetch::PREFETCH_CACHE.fetch(generation, &resolved, || {
+                        let client = base.http_client_for_subresource(sink, cookie_jar);
+                        client
+                            .fetch_subresource(&parsed, dest)
+                            .map_err(|e| e.to_string())
+                    });
+                    if is_css
+                        && let Ok(bytes) = bytes
+                    {
+                        let sheet =
+                            lumen_css_parser::parse(&String::from_utf8_lossy(&bytes[..]));
+                        let _ = proxy2.send_event(LoadEvent::CssLoaded(Box::new(sheet), generation));
+                    }
+                });
+            }
         }
     }
 }
@@ -3174,9 +3204,17 @@ fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn E
                 // browser. Real sites host CSS on CDN subdomains (icdn.*,
                 // static.*); blocking them left pages unstyled.
 
-                let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
-                match client.fetch_subresource(&sub_url, RequestDestination::Style) {
-                    Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+                // BUG-171: read through the prefetch cache — the streaming thread
+                // warms linked stylesheets with this same client, so the cascade
+                // concatenation here reuses identical bytes without a second fetch.
+                let bytes = crate::prefetch::PREFETCH_CACHE.fetch_current(&url, || {
+                    let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
+                    client
+                        .fetch_subresource(&sub_url, RequestDestination::Style)
+                        .map_err(|e| e.to_string())
+                });
+                match bytes {
+                    Ok(bytes) => Some(String::from_utf8_lossy(&bytes[..]).into_owned()),
                     Err(e) => { eprintln!("Пропуск CSS {url}: {e}"); None }
                 }
             }
@@ -4516,11 +4554,20 @@ fn resolve_script_sources(
                         return None;
                     }
                 };
-                let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
-                match client.fetch_subresource(&sub_url, RequestDestination::Script) {
+                // BUG-171: read through the prefetch cache so a script already
+                // warmed by the streaming thread returns instantly instead of
+                // blocking the UI thread on the socket. On a miss this fetches the
+                // exact same bytes via the same client (script order preserved).
+                let bytes = crate::prefetch::PREFETCH_CACHE.fetch_current(&url, || {
+                    let client = base.http_client_for_subresource(sink.clone(), cookie_jar.clone());
+                    client
+                        .fetch_subresource(&sub_url, RequestDestination::Script)
+                        .map_err(|e| e.to_string())
+                });
+                match bytes {
                     Ok(bytes) => {
                         eprintln!("Загружен скрипт: {url}");
-                        Some(String::from_utf8_lossy(&bytes).into_owned())
+                        Some(String::from_utf8_lossy(&bytes[..]).into_owned())
                     }
                     Err(e) => {
                         eprintln!("Пропуск скрипта {url}: {e}");
@@ -6448,6 +6495,10 @@ impl Lumen {
         if matches!(self.source, PageSource::Empty | PageSource::AboutBlank) {
             return;
         }
+        // BUG-171: scope the subresource prefetch cache to this navigation. Runs on
+        // the UI thread before the streaming thread is spawned, so producer warm-ups
+        // and the UI-thread consumer all observe `generation`.
+        crate::prefetch::PREFETCH_CACHE.reset(generation);
         let source = self.source.clone();
         let sink = Arc::clone(&self.event_sink);
         let proxy = self.load_proxy.clone();
@@ -6466,8 +6517,20 @@ impl Lumen {
             let raw = if let PageSource::Url(url) = &source {
                 let base = ResourceBase::Url(url.clone());
                 let chunk_proxy = proxy.clone();
+                // Separate clones for prefetch warm-up: `cookie_jar`/`sink` below are
+                // moved into the streaming call, so the per-chunk closure keeps its own.
+                let cj_prefetch = Some(Arc::clone(&cookie_jar));
+                let sink_prefetch = Arc::clone(&sink);
                 let mut on_chunk = |chunk: &[u8]| {
-                    feed_preload_and_emit(&mut preload_scanner, chunk, &base, &chunk_proxy, generation);
+                    feed_preload_and_emit(
+                        &mut preload_scanner,
+                        chunk,
+                        &base,
+                        &chunk_proxy,
+                        generation,
+                        &sink_prefetch,
+                        cj_prefetch.as_ref(),
+                    );
                     let _ = chunk_proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec(), generation));
                 };
                 match source.load_bytes_streaming(Arc::clone(&sink), Some(cookie_jar), &mut on_chunk) {
@@ -6478,6 +6541,7 @@ impl Lumen {
                     }
                 }
             } else {
+                let cj_prefetch = Some(Arc::clone(&cookie_jar));
                 let raw = match source.load_bytes(Arc::clone(&sink), Some(cookie_jar)) {
                     Ok(r) => r,
                     Err(e) => {
@@ -6489,7 +6553,15 @@ impl Lumen {
                 while pos < raw.bytes.len() {
                     let end = (pos + STREAM_CHUNK_BYTES).min(raw.bytes.len());
                     let chunk = &raw.bytes[pos..end];
-                    feed_preload_and_emit(&mut preload_scanner, chunk, &raw.base, &proxy, generation);
+                    feed_preload_and_emit(
+                        &mut preload_scanner,
+                        chunk,
+                        &raw.base,
+                        &proxy,
+                        generation,
+                        &sink,
+                        cj_prefetch.as_ref(),
+                    );
                     if proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec(), generation)).is_err() {
                         return; // event loop завершён
                     }
@@ -16515,29 +16587,6 @@ mod tests {
     // Prevents accidental reversion to the old 150 ms value.
     const _: () = assert!(STREAM_PAINT_INTERVAL_MS <= 16);
     const _: () = assert!(STREAM_PAINT_INTERVAL_MS >= 14);
-
-    #[test]
-    fn load_css_for_streaming_reads_file() {
-        let tmp = std::env::temp_dir().join("lumen_ph1_2_test.css");
-        std::fs::write(&tmp, "body { color: red; }").unwrap();
-        let path = tmp.to_string_lossy().into_owned();
-        let result = load_css_for_streaming(&path);
-        let _ = std::fs::remove_file(&tmp);
-        assert_eq!(result.as_deref(), Some("body { color: red; }"));
-    }
-
-    #[test]
-    fn load_css_for_streaming_missing_file_returns_none() {
-        let result = load_css_for_streaming("/nonexistent/path/style.css");
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn load_css_for_streaming_http_bad_url_returns_none() {
-        // Malformed URL — should return None without panicking.
-        let result = load_css_for_streaming("http://");
-        assert!(result.is_none());
-    }
 
     // ── extract_tor_mode ─────────────────────────────────────────────────────
 

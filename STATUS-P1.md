@@ -6,6 +6,8 @@
 
 ## In progress
 
+**BUG-171 (этап 1) — префетч-кэш подресурсов вне UI-потока**  branch: `p1-bug171-prefetch`
+Next step: merge — этап 1 готов. Этап 2 (JS+layout вне UI, ADR-006/BrowserSession) остаётся отдельной XL-задачей, теперь разблокирован B-1.
 
 ---
 
