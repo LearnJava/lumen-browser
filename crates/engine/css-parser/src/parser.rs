@@ -1223,6 +1223,9 @@ pub enum MediaFeature {
     /// предпочтение пользователя по уменьшению полупрозрачности UI
     /// (Media Queries L5 §5.7).
     PrefersReducedTransparency(MediaReducedTransparency),
+    /// `(scripting: none | initial-only | enabled)` — доступность скриптов
+    /// при рендеринге документа (Media Queries L5 §6.2).
+    Scripting(MediaScripting),
 }
 
 impl Eq for MediaFeature {}
@@ -1287,6 +1290,19 @@ pub enum MediaReducedTransparency {
     Reduce,
 }
 
+/// Media Queries L5 §6.2 — `scripting`: доступность JavaScript в текущем
+/// окружении рендеринга.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaScripting {
+    /// Скрипты полностью недоступны (например, отключены пользователем).
+    None,
+    /// Скрипты исполняются только при первичной загрузке, но не далее
+    /// (например, статический снимок страницы для печати).
+    InitialOnly,
+    /// Скрипты доступны и исполняются на протяжении всей жизни документа.
+    Enabled,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorScheme {
     Light,
@@ -1322,6 +1338,9 @@ pub struct MediaContext {
     /// Предпочтение уменьшения полупрозрачности
     /// (`prefers-reduced-transparency` media feature).
     pub prefers_reduced_transparency: MediaReducedTransparency,
+    /// Доступность скриптов (`scripting` media feature). У Lumen есть
+    /// встроенный JS-движок (QuickJS), поэтому desktop-дефолт — `Enabled`.
+    pub scripting: MediaScripting,
 }
 
 impl Default for MediaContext {
@@ -1343,6 +1362,8 @@ impl Default for MediaContext {
             prefers_contrast: MediaContrast::NoPreference,
             prefers_reduced_data: MediaReducedData::NoPreference,
             prefers_reduced_transparency: MediaReducedTransparency::NoPreference,
+            // Lumen исполняет JS (QuickJS) → скрипты включены, как в Edge.
+            scripting: MediaScripting::Enabled,
         }
     }
 }
@@ -1433,6 +1454,7 @@ impl MediaFeature {
             Self::PrefersContrast(c) => ctx.prefers_contrast == *c,
             Self::PrefersReducedData(d) => ctx.prefers_reduced_data == *d,
             Self::PrefersReducedTransparency(t) => ctx.prefers_reduced_transparency == *t,
+            Self::Scripting(s) => ctx.scripting == *s,
         }
     }
 }
@@ -2065,6 +2087,12 @@ fn parse_media_feature(s: &str) -> MediaCondition {
         "prefers-reduced-transparency" => match val.to_ascii_lowercase().as_str() {
             "no-preference" => MediaCondition::Feature(MediaFeature::PrefersReducedTransparency(MediaReducedTransparency::NoPreference)),
             "reduce" => MediaCondition::Feature(MediaFeature::PrefersReducedTransparency(MediaReducedTransparency::Reduce)),
+            _ => MediaCondition::Unsupported,
+        },
+        "scripting" => match val.to_ascii_lowercase().as_str() {
+            "none" => MediaCondition::Feature(MediaFeature::Scripting(MediaScripting::None)),
+            "initial-only" => MediaCondition::Feature(MediaFeature::Scripting(MediaScripting::InitialOnly)),
+            "enabled" => MediaCondition::Feature(MediaFeature::Scripting(MediaScripting::Enabled)),
             _ => MediaCondition::Unsupported,
         },
         _ => MediaCondition::Unsupported,
@@ -7089,6 +7117,47 @@ mod tests {
         // Невалидное значение → Unsupported → никогда не матчит.
         let bad = parse_media_query("(prefers-reduced-transparency: low)");
         assert!(!bad.matches(&ctx));
+    }
+
+    // ── MQ L5 §6.2: scripting ──
+
+    #[test]
+    fn media_query_scripting_enabled_default() {
+        // Desktop-дефолт Lumen — scripting: enabled (есть QuickJS).
+        let q = parse_media_query("(scripting: enabled)");
+        assert!(q.matches(&screen_ctx(1024.0)));
+        let mut none = screen_ctx(1024.0);
+        none.scripting = MediaScripting::None;
+        assert!(!q.matches(&none));
+    }
+
+    #[test]
+    fn media_query_scripting_none() {
+        let q = parse_media_query("(scripting: none)");
+        // Дефолт enabled → не матчит none.
+        assert!(!q.matches(&screen_ctx(1024.0)));
+        let mut none = screen_ctx(1024.0);
+        none.scripting = MediaScripting::None;
+        assert!(q.matches(&none));
+    }
+
+    #[test]
+    fn media_query_scripting_initial_only() {
+        let q = parse_media_query("(scripting: initial-only)");
+        assert!(!q.matches(&screen_ctx(1024.0)));
+        let mut io = screen_ctx(1024.0);
+        io.scripting = MediaScripting::InitialOnly;
+        assert!(q.matches(&io));
+    }
+
+    #[test]
+    fn media_query_scripting_case_insensitive_and_invalid() {
+        // Регистр ключа/значения не важен.
+        let q = parse_media_query("(SCRIPTING: ENABLED)");
+        assert!(q.matches(&screen_ctx(1024.0)));
+        // Невалидное значение → Unsupported → никогда не матчит.
+        let bad = parse_media_query("(scripting: sometimes)");
+        assert!(!bad.matches(&screen_ctx(1024.0)));
     }
 
     // ── Стиль: @media с новыми фичами применяется в каскаде ──

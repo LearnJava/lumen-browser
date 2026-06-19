@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<!-- Media Queries L5 §6.2 — scripting.
+     Lumen ships an embedded JS engine (QuickJS), so the engine default is
+     `scripting: enabled` — same as Edge running these pages with scripting on.
+     Each swatch starts red and turns green only when its media query matches.
+     On a correct engine the "enabled" swatch is green; "none", "initial-only"
+     and the invalid value stay red (blue would mean they wrongly matched).
+     Edge agrees (scripting enabled), so the rendering matches. Graphics only. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; padding: 40px; overflow: hidden; box-sizing: border-box; }
+
+  .row { display: flex; gap: 24px; margin-bottom: 24px; }
+  .sw {
+    width: 200px;
+    height: 140px;
+    background: #d64545;        /* default: red = query did NOT match */
+    border: 6px solid #1a202c;
+    box-sizing: border-box;
+  }
+
+  /* Default (scripting enabled) matches → green */
+  @media (scripting: enabled)      { .a { background: #2f855a; } }
+
+  /* Default does NOT match → swatch stays red; blue if it wrongly matches */
+  @media (scripting: none)         { .b { background: #2b6cb0; } }
+  @media (scripting: initial-only) { .c { background: #2b6cb0; } }
+
+  /* Invalid value → Unsupported → never matches → stays red */
+  @media (scripting: sometimes)    { .d { background: #2b6cb0; } }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="row">
+    <div class="sw a"></div>
+    <div class="sw b"></div>
+    <div class="sw c"></div>
+    <div class="sw d"></div>
+  </div>
+</div>
+</body>
+</html>

@@ -232,6 +232,16 @@
     <div class="mq-sw mq-rt-bad"></div>
   </div>
 
+  <!-- ── scripting demo (Media Queries L5 §6.2) ── -->
+  <style>
+    @media (scripting: enabled)      { .mq-scr { background: #2f855a; } }
+    @media (scripting: none)         { .mq-scr-bad { background: #2b6cb0; } }
+  </style>
+  <div class="mq-row">
+    <div class="mq-sw mq-scr"></div>
+    <div class="mq-sw mq-scr-bad"></div>
+  </div>
+
   <!-- ── @supports selector() demo (CSS Conditional L4 §4.2) ── -->
   <style>
     @supports selector(:has(*))                  { .sup-has  { background: #2f855a; } }
