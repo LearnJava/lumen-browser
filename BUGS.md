@@ -231,7 +231,7 @@
 | [BUG-215](bugs/BUG-215-OPEN.md) | OPEN | layout | `shape-outside: path()` not implemented — TEST-113: 1.41% |
 | [BUG-216](bugs/BUG-216-OPEN.md) | OPEN | css-parser/layout | CSS `quotes` + `open-quote`/`close-quote` deviation — TEST-117: 2.28% |
 | [BUG-217](bugs/BUG-217-OPEN.md) | OPEN | css-parser | `prefers-contrast`/`prefers-reduced-data` media queries not matched — TEST-120: 3.26% |
-| [BUG-218](bugs/BUG-218-OPEN.md) | OPEN | css-parser/paint | `mask-mode: luminance` not parsed/applied — TEST-26 luma-cell остаток 5.02% (P4) |
+| [BUG-218](bugs/BUG-218-FIXED.md) | FIXED 2026-06-19 | css-parser/paint | `mask-mode: luminance` not parsed/applied — TEST-26 luma-cell остаток 5.02% (P4); `emit_push_mask` bakes `luminance(rgb)·alpha` в stop alpha |
 | [BUG-219](bugs/BUG-219-OPEN.md) | OPEN | image/paint | image downscale resampling pixel-parity vs Edge — TEST-18 остаток 2.11% (тонкий AA по всем фото после фикса BUG-180) → KNOWN_DEBTORS |
 | [BUG-220](bugs/BUG-220-OPEN.md) | OPEN | paint | scroll-контейнер в ordered (stacking-context) пути теряет scrollbar: `box_layer_ops` эмитит `PushScrollLayer`/`PopScrollLayer`, но не `DrawScrollbar` (есть только в legacy `walk`) — display_list.rs:2481. Замечен при разборе BUG-202 |
 | [BUG-221](bugs/BUG-221-OPEN.md) | OPEN | paint | CPU-бэкенд снимка (`render_to_image_cpu`, cpu_raster.rs) не на паритете с femtovg: border-radius (TEST-36 квадрат вместо скругления), gradients (TEST-39), images (TEST-18) не рендерятся как в окне. Блокирует полную замену gdigrab на `run.py --ipc` (TAB-7); геометрия/цвет/текст совпадают пиксельно |

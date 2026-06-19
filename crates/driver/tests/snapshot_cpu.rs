@@ -61,9 +61,10 @@ use std::path::{Path, PathBuf};
 /// is filtered in place, CSS Filter Effects L1 §6.2).
 /// `26-mask-image` exercises gradient `mask-image` (`PushMaskLinearGradient` /
 /// `PushMaskRadialGradient` → `PopMask` — the element layer's alpha is multiplied
-/// by the gradient's alpha, CSS Masking L1 §4; mask-mode is not wired for gradient
-/// masks, mirroring the GPU path, so the `mask-mode: luminance` cell shows the full
-/// box — a CSS feature gap owned by P4, not a CPU-path divergence).
+/// by the gradient's alpha, CSS Masking L1 §4). `mask-mode: luminance` (BUG-218)
+/// is wired for gradient masks: `emit_push_mask` bakes `luminance(rgb)·alpha` into
+/// each stop's alpha, so the `mask-mode: luminance` cell's left (black, luma 0)
+/// half is hidden and the right (white, luma 1) half is shown.
 /// `18-images` is included because all its `<img>` boxes carry empty `alt`
 /// and explicit `width`/`height`, so the grey placeholder fully reproduces the
 /// (text-free) GPU headless output. `55-text-rendering` exercises the `DrawText`

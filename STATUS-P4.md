@@ -5,7 +5,7 @@
 ---
 
 ## In progress
-_(none)_ — p4-paint-order влит 2026-06-14
+_(none)_ — p4-mask-mode (BUG-218 `mask-mode: luminance`) влит 2026-06-19
 
 ## Workflow
 
@@ -72,22 +72,8 @@ _(пусто)_ — graphic test 114 верифицирован 2026-06-14 (см.
 
 **P1/P2 have implemented the algorithm. P4 wires CSS property to it.**
 
-### `mask-mode: luminance` (BUG-218, paint ready, P3 fixed BUG-183 2026-06-17)
-- **Status:** Gradient mask rendering done (BUG-183). femtovg `composite_mask_layer`
-  и cpu_raster `MaskSpec` применяют alpha-маску через `DestinationIn`. Свойство
-  `mask-mode` есть в `SUPPORTED_PROPERTIES` (css-parser), но без поля в `ComputedStyle`
-  и без ветки в `apply_declaration` → всегда трактуется как `alpha`. TEST-26 в
-  KNOWN_DEBTORS (5.02%, единственная ячейка `mask-mode:luminance`).
-- **P4 task:**
-  1. Добавить `mask_mode: MaskMode` (`Alpha | Luminance`, default `Alpha`, non-inherited)
-     в `ComputedStyle` + ветку `"mask-mode"` в `apply_declaration` (`style.rs`).
-  2. Протянуть `MaskMode` в `PushMaskLinearGradient`/`Radial`/`Conic` (добавить поле
-     `mode`) из `emit_push_mask` (`paint/src/display_list.rs:3388`).
-  3. paint: при `Luminance` строить alpha стопов как `luma(rgb)·a`
-     (`0.2126·R+0.7152·G+0.0722·B`) перед `DestinationIn` — в femtovg
-     `composite_mask_layer` (`fill_mask_gradient`) и cpu_raster `MaskSpec`.
-  4. Убрать TEST-26 из `KNOWN_DEBTORS` после фикса.
-- **Детали:** `bugs/BUG-218-OPEN.md`.
+### ✅ `mask-mode: luminance` — **ВЫПОЛНЕНО** (p4-mask-mode, 2026-06-19, BUG-218)
+`MaskMode` enum (`Alpha | Luminance`) + `ComputedStyle.mask_mode` (non-inherited, initial `Alpha`); ветка `"mask-mode"` в `apply_declaration` (`alpha | luminance | match-source`, `match-source`→`Alpha`). `emit_push_mask` (display_list.rs) при `Luminance` запекает `luminance(rgb)·alpha` в alpha каждого стопа через `mask_stops_for_mode()` — оба бэкенда (femtovg `composite_mask_layer`, cpu_raster `render_mask`), читающие alpha стопов под `DestinationIn`, получают luminance без проброса режима в бэкенды (`luma` линейна по RGB → запекание точно для градиента). 6 unit-тестов style.rs + 5 paint-тестов display_list.rs (вкл. e2e на plain+ordered builder) + CPU-эталоны 26/1000000-final перегенерированы + TEST-26 убран из KNOWN_DEBTORS.
 
 ### ✅ CSS Color 4 system colors — **ВЫПОЛНЕНО** (p4-system-colors, 2026-06-13)
 `SystemColor` Copy enum (23 variants); `CssColor::System(SystemColor)` variant; `parse_css_color_legacy` детектирует системные ключевые слова; color-scheme pre-pass в `compute_style()` + `resolve_system_colors_in_style()` post-pass для CssColor-полей; `dark_mode: bool` param в `apply_declaration()` для `color: Color` поля; 7 unit-тестов + graphic test 92.
@@ -301,6 +287,7 @@ ComputedStyle.anchor_name/position_anchor/inset_area_row/col; parse_inset_area_k
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-06-19 | `mask-mode: luminance` | CSS Masking L1 §6.4 (BUG-218); `MaskMode` enum (`Alpha`/`Luminance`) + `ComputedStyle.mask_mode` (non-inherited, initial `Alpha`); parse `alpha\|luminance\|match-source` (match-source→Alpha) в `apply_declaration`. `emit_push_mask` (display_list.rs) при `Luminance` запекает `luminance(rgb)·alpha` (BT.709) в alpha каждого градиентного стопа через `mask_stops_for_mode()` — оба бэкенда (femtovg `composite_mask_layer`, cpu_raster `render_mask`) читают alpha стопов под `DestinationIn`, поэтому luminance применяется без проброса режима в сами бэкенды (`luma` линейна по RGB → `luma(lerp)==lerp(luma)`, точно для градиента). 6 unit-тестов style.rs (parse/default/match-source/invalid/not-inherited) + 5 paint-тестов display_list.rs (e2e на plain+ordered builder + per-channel веса) + CPU-эталоны 26/1000000-final перегенерированы + TEST-26 убран из KNOWN_DEBTORS |
 | 2026-06-17 | `@supports selector()` evaluation | CSS Conditional L4 §4.2; раньше `SupportsCondition::Selector(_)` всегда давал `false` (Phase 0 stub) — теперь оценивается через `ComplexSelector::is_supported()` в css-parser: селектор парсится `parse_selector_list()`, поддержан если каждая простая часть распознана (recurse в аргументы `:is()`/`:not()`/`:where()`/`:has()`/`:nth-child(… of …)`/`:host()`/`::slotted()`); любая `PseudoClass::Unsupported` или `PseudoElementKind::Unknown` → `false`; пустой/невалидный селектор → `false`. «Поддержан» = распознаётся синтаксически (`:visited`/`:fullscreen`, всегда-false-при-матчинге, считаются supported). Парсер уже маппит известные псевдо в типизированные варианты, поэтому правило «нет Unsupported/Unknown» корректно. `evaluate()` без новых параметров — оба call-site (layout style.rs, js/dom.rs `CSS.supports`) получают поведение автоматически. `font-tech()`/`font-format()` остаются `Unknown` → `false`. 3 новых unit-теста + обновлён 1 устаревший (`at_supports_evaluator_selector_*`) + graphic test 121 (проверен `--dump-display-list`: a/b/c зелёные, d/e красные, f зелёный) + демо в 1000000-final |
 | 2026-06-16 | `prefers-contrast` / `prefers-reduced-data` media features | Media Queries L5 §5.5-5.6; `MediaContrast` enum (NoPreference/More/Less/Custom) + `MediaReducedData` enum (NoPreference/Reduce) в css-parser; `MediaFeature::PrefersContrast/PrefersReducedData` + `MediaContext.prefers_contrast/prefers_reduced_data` поля (desktop-дефолт `NoPreference` в `Default`); `parse_media_feature()` разбирает `prefers-contrast: no-preference\|more\|less\|custom` и `prefers-reduced-data: no-preference\|reduce` (невалидное → Unsupported); `MediaFeature::matches()` сравнивает с ctx. Re-export из lib.rs; `media_context_from_viewport` (layout) и `matchMedia` (js/dom.rs) берут дефолты через `..Default::default()`. OS/UA-интеграция деферирована shell-у (всегда matched no-preference, как prefers-reduced-motion). 6 unit-тестов parser.rs + graphic test 120 (проверен через `--dump-display-list`: 2 matched-свотча зелёные, 4 no-match красные) + демо в 1000000-final |
 | 2026-06-14 | `list-style-image` | CSS Lists L3 §2.3; `ComputedStyle.list_style_image: Option<String>` уже парсился (url()) и наследовался — добавлено сквозное проведение до маркера и рендер. `BoxKind::Marker` получил поле `image: Option<String>` (заполняется из `style.list_style_image` в `inject_marker`); `inject_marker` теперь генерирует маркер даже при `list-style-type: none`, если задан image (image имеет приоритет над type, §2.3). Paint `emit_list_marker()` (display_list.rs): при наличии image эмитит `DrawImage` (object-fit: contain в marker-box) вместо bullet/counter и `return`. `collect_background_image_requests()` (box_tree.rs) собирает URL маркера наравне с background-image — шелл уже фетчит и регистрирует эти URL (`fetch_and_decode_background_images`). 2 end-to-end теста layout (`list_style_image_marker_carries_url` — поле+сбор URL; `list_style_image_marker_shown_with_type_none`) + обновлён `test_32` (35 li / 33 маркера) + demo в `32-list-markers.html` (data-URI PNG) + 1000000-final + COVERAGE + CPU-эталон 32 перегенерирован |

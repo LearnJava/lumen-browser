@@ -225,7 +225,6 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '30': ('BUG-144', 10.5),    # CSS filter/backdrop-filter: row-flip фикснут BUG-144; остаток = filter pixel-parity (rows 1-3) + backdrop захват тёмным внутри opacity-слоя (row 4) + gradient hard-stop (row 2, BUG-085)
     '51': ('BUG-124', 1.09),    # scrollbar rendering: float-wrapper shrink-to-fit фикснут BUG-178 (9.91% → 1.09%); остаток = дробные layout Y-координаты vs пиксельное округление Edge
     '64': ('BUG-128', 8.99),    # table: margin-collapse таблица↔блок фикснут BUG-193 (13.89% → 8.99%); остаток = font-parity (текст в ~21 ячейках + заголовки, Inter vs Edge) + ~3px накопленный line-height сдвиг
-    '26': ('BUG-218', 5.02),    # mask-image: gradient-маски (linear/radial/alpha) фикснуты BUG-183 (17.74% → 5.02%); остаток = единственная ячейка mask-mode:luminance (нужен CSS mask-mode, P4)
     '18': ('BUG-219', 2.11),    # <img>: «image bottom gap» (baseline descent) фикснут BUG-180 (21.21% → 2.11%); остаток = image-resampling AA (area-avg ≠ Edge downscale kernel)
     '83': ('BUG-128', 7.88),    # scroll-behavior: text-only inline-block shrink-to-fit фикснут BUG-202 (14.02% → 7.88%); остаток = font-parity (Inter vs Edge) во всём тексте страницы + faint overlay scrollbar
     '92': ('BUG-124', 0.90),    # system colors: значения system_color() приведены к Edge BUG-210 (15.59% → 0.90%); layout/цвета идеальны (dump-layout: 164px border-box, gap 4, hex точны), остаток = gdigrab суб-пиксельный сдвиг (~+3px на 1000px) на границах ячеек vs пиксельное округление Edge

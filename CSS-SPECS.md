@@ -424,7 +424,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `mask` (shorthand) | 🟡 | |
 | `mask-image` | 🟡 | GPU mask composite pipeline ✅ (PushMask/PopMask + PushMaskLayer/PopMaskLayer); alpha compositing ✅; luminance mode ✅ 2026-05-29 |
 | `mask-repeat` / `mask-size` / `mask-position` | 🟡 | parsed |
-| `mask-origin` / `mask-clip` / `mask-composite` / `mask-mode` | 🟡 | PushMaskLayer supports Alpha + Luminance modes ✅; mask-composite multi-layer ⬜ |
+| `mask-mode` | ✅ | `alpha` / `luminance` / `match-source` (CSS Masking L1 §6.4); gradient masks bake `luminance(rgb)·alpha` into stop alpha (BUG-218, 2026-06-19) |
+| `mask-origin` / `mask-clip` / `mask-composite` | 🟡 | PushMaskLayer supports Alpha + Luminance modes ✅; mask-composite multi-layer ⬜ |
 
 ### [T2] Compositing
 
