@@ -25,12 +25,81 @@
 | **U-2** | **Шейпинг текста (GSUB/GPOS) + CFF-контуры.** ~~Этап 1: GPOS-кернинг + GSUB-лигатуры~~ ✅ 2026-06-18. ~~Этап 2: CFF-контуры~~ ✅ 2026-06-18 (`lumen-font::cff` — Type 2 charstrings, CID-keyed CFF, проводка через `Font::glyph_resolved` → CPU/wgpu/Canvas рисуют `.otf`-текст). См. «Recent merges». Опционально позже: CFF2 (variable PostScript), проводка шейпинга в femtovg live-окно и per-char measurement. | P1 | XL ✅ | `lumen-font` (`cff.rs`) |
 | **U-3** | **Настоящая многовкладочность** — TAB-серия ниже. **Бо́льшая часть уже в коде** (ревизия 2026-06-18): TAB-1/2/3/6 реализованы (`PageSnapshot`+`bg_tabs`, `switch_tab`/`open_new_tab`/`close_tab`, tab-bar UI, hibernation, Ctrl+T/W/Tab). TAB-4 ✅ / TAB-5 ✅ (IPC, 2026-06-18). TAB-7 ✅ (run.py `--ipc`, 2026-06-18). | P1 | см. TAB | `lumen-shell` |
 | **U-4** | ~~**WASM-исполнение + закрыть бросающие JS-заглушки**~~ ✅ 2026-06-18. Этап 1: pure-Rust интерпретатор WASM MVP (`lumen-js::wasm`) — `compile`/`validate`/`instantiate` исполняют реальный байткод, экспортируемые функции вызываемы, память/глобалы/таблицы/`call_indirect`/JS-импорты. Этап 2: WebCodecs `configure()` больше не бросает синхронно (white-screen) — async error-callback. См. «Recent merges». Опц. позже: SIMD/threads, live-aliasing памяти, ~~i64 BigInt-маршалинг~~ ✅ 2026-06-18, реальный WebGPU backend. | P1 | XL ✅ | `lumen-js` (`wasm/`, web_codecs) |
-| **U-5** | **Fullscreen пересчитывает вьюпорт** — BUG-167: вход в Fullscreen растягивает окно, но страница остаётся ~1024×720. | P3 | S | `lumen-shell` `main.rs:6400` |
-| **U-6** | **Рендер-паритет high-deviation** — добить заметные отклонения: repeating-gradient (BUG-085), filter/backdrop (BUG-144), anchor-positioning (BUG-126 53%), scroll-snap (BUG-104 64%). | P3/P4 | — | см. `BUGS.md` |
+| **U-5** | **Fullscreen пересчитывает вьюпорт** — BUG-167: вход в Fullscreen растягивает окно, но страница остаётся ~1024×720. | P1 | S | `lumen-shell` `main.rs:6400` |
+| **U-6** | **Рендер-паритет high-deviation** — добить заметные отклонения: repeating-gradient (BUG-085), filter/backdrop (BUG-144), anchor-positioning (BUG-126 53%), scroll-snap (BUG-104 64%). | P1 | — | см. `BUGS.md` |
 
 **Порядок для P1:** U-0 ✅ → U-1 этап 1 ✅ → U-3 (TAB-серия) ✅ → U-2 этап 1 (GSUB/GPOS шейпинг) ✅ → U-2 этап 2 (CFF-контуры) ✅ → U-4 (WASM MVP + graceful stubs) ✅ 2026-06-18 → U-4 опция i64/BigInt-маршалинг ✅ 2026-06-18 → **далее: оставшиеся U-4 опции (SIMD/threads, live-aliasing памяти, реальный WebGPU backend). Унаследованные от P2 задачи — все четыре уже в коде (ревизия 2026-06-18), см. ниже.** U-1 этап 2 (пайплайн вне UI) — после разблокировки QuickJS `!Send`.
 
 **Как мерить прогресс:** после каждого этапа снимай `--screenshot` 5–10 живых сайтов (github, новостной, блог, SPA) + `python graphic_tests/run.py --build --continue-on-fail` для CSS-паритета.
+
+---
+
+### USABILITY — полный план закрытия (режим одного программиста, всё на P1)
+
+С 2026-06-19 переходим на путь одного программиста: блокеры, баги (бывшие домены P3/P4)
+и опции — **все на P1**. Это исчерпывающий список, чтобы закрыть потребность
+«зашёл на сайт и комфортно пользуешься». Брать строго сверху вниз по слоям; внутри слоя —
+по убыванию заметности. Каждая задача — отдельная ветка/worktree (`p1-<topic>` / `p1-bug-NNN`).
+
+**Слой 0 — Фундамент (разблокировка U-1 этап 2):**
+
+| # | Задача | Размер | Точка | Зависит |
+|---|--------|--------|-------|---------|
+| **B-1** | **Вынести QuickJS с UI-потока** — выделенный JS-поток владеет `Runtime`/`Context`, shell общается через команды/ответы (channel), DOM-мутации возвращаются обратно. Снимает ограничение «QuickJS не `Send`» (ADR-006, BUG-171). | XL | `lumen-js`, `lumen-shell` | — |
+| **BUG-222** | Очистка WASM-реестра при teardown JS-контекста — `wasm::clear_registry()` написан, но не вызывается в шелле; утёкший `Persistent` импорта роняет QuickJS на `list_empty(&rt->gc_obj_list)`. Лечь в B-1 (жизненный цикл рантайма). | S | `lumen-js`, `lumen-shell` | B-1 |
+
+**Слой 1 — U-1 этап 2 (неблокирующий пайплайн, зависит от B-1):**
+
+| # | Задача | Размер | Точка | Зависит |
+|---|--------|--------|-------|---------|
+| **BUG-171** | Весь финальный пайплайн (fetch+JS+layout) вне UI-потока; префетч подресурсов + асинхронный adblock-reload. Сейчас синхронно в `LoadDone`. | L | `main.rs:6369` | B-1 |
+| **BUG-172** | Дедуп двойной загрузки картинок (streaming `spawn_stream_image_loads` + финальный `fetch_and_decode_images`) — общий per-load кэш декодированных картинок. | S | `main.rs:2833` | пересекается с BUG-171 |
+
+**Слой 2 — U-5 (Fullscreen, независимо):**
+
+| # | Задача | Размер | Точка |
+|---|--------|--------|-------|
+| **BUG-167** | Вход в Fullscreen растягивает окно, но страница остаётся ~1024×720 — resize от `set_fullscreen` не доводится до relayout. | S | `main.rs:6400` |
+
+**Слой 3 — U-6 (рендер-паритет high-deviation, независимо, по убыванию отклонения):**
+
+| # | Задача | Откл. | Крейт |
+|---|--------|-------|-------|
+| **BUG-104** | CSS Scroll Snap не реализован (TEST-62: 63.7%) | критич. | `layout` |
+| **BUG-126** | CSS Anchor Positioning L1 `anchor-name`/`position-anchor` (TEST-77: 53.5%) | критич. | `layout` |
+| **BUG-144** | filter/backdrop-filter pixel-parity + backdrop внутри opacity-слоя (TEST-30: 10.5%) | средн. | `paint` |
+| **BUG-085** | linear/radial gradient hard-stop (TEST-39: 12%) | средн. | `paint` |
+
+**Слой 4 — Наблюдаемость (честное зеркало окна для «как мерить прогресс»):**
+
+| # | Задача | Размер | Крейт |
+|---|--------|--------|-------|
+| **BUG-221** | Паритет CPU-бэкенда снимка (`render_to_image_cpu`) с femtovg: border-radius (TEST-36), gradients (TEST-39), images (TEST-18). Разблокирует полную замену gdigrab на `run.py --ipc` (TAB-7). | M | `paint` (`cpu_raster.rs`) |
+
+**Слой 5 — U-4 опции (необязательны для «комфорта», брать последними):**
+
+| # | Задача | Размер |
+|---|--------|--------|
+| U-4a | WASM SIMD (`0xFD`) + threads | L |
+| U-4b | Live-aliasing памяти WASM (emscripten `HEAP32`, сейчас снимок) | M |
+| U-4c | Реальный WebGPU backend | XL |
+
+**Критический путь и параллелизм:**
+
+```
+B-1 (XL) ──┬─► BUG-222 (S)
+           └─► BUG-171 (L) ──► BUG-172 (S)        ← U-1 этап 2 закрыт
+параллельно (без B-1):
+  BUG-167 (S)                                      ← U-5
+  BUG-104 → BUG-126 → BUG-144 → BUG-085            ← U-6
+  BUG-221 (M)                                      ← наблюдаемость
+потом (опционально): U-4a / U-4b / U-4c
+```
+
+**Минимум «потребность закрыта»:** слои 0–3. Слой 4 — для измерения, слой 5 — необязателен.
+Эти баги остаются записаны в `BUGS.md` как OPEN (трекер не дублируем) — здесь только порядок
+и владелец. Общий backlog P3 (BUG-181…217 и пр.) и CSS-очередь P4 в этот план НЕ входят —
+это отдельные перечни; при полном переходе на одного программиста их мигрировать отдельно.
 
 ---
 
