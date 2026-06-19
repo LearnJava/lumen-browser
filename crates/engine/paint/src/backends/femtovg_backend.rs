@@ -759,7 +759,6 @@ fn fsin(mut rad: f32) -> f32 {
 /// Apply a separable box blur to RGBA pixel data in-place.
 /// `sigma` controls the kernel radius (radius = round(sigma * 1.5)).
 /// This is a 3-pass approximation of Gaussian blur (3× box blur ≈ Gaussian).
-#[allow(dead_code)]
 fn box_blur_rgba(pixels: &mut [u8], width: usize, height: usize, sigma: f32) {
     let r = ((sigma * 1.5).round() as usize).max(1);
     let stride = width * 4;
@@ -1595,83 +1594,43 @@ impl FemtovgBackend {
         filters: &[lumen_layout::FilterFn],
     ) -> Option<femtovg::ImageId> {
         // Screenshot the current RT (flush must have been called already).
+        // `screenshot()` reverses GL's bottom-up rows, so `rgba` is the raw
+        // backdrop in top-down order. The entire filter chain runs on these CPU
+        // bytes: backdrop regions are small and rare, so a CPU pass is far
+        // simpler than the GPU round-trip it replaces. The old path uploaded the
+        // screenshot to a texture and screenshot()-ed *that* FBO — both
+        // `create_image` uploads and `filter_image` destinations read back empty,
+        // so colour-matrix and blur+colour backdrop cards sampled black and
+        // rendered dark navy (BUG-144 row 4: grayscale/brightness/invert/combo).
         let screenshot = self.canvas.screenshot().ok()?;
         let iw = screenshot.width();
         let ih = screenshot.height();
-        let pixels: Vec<rgb::RGBA8> = screenshot.buf().iter()
-            .map(|p| rgb::RGBA8 { r: p.r, g: p.g, b: p.b, a: p.a })
+        let mut rgba: Vec<u8> = screenshot.buf().iter()
+            .flat_map(|p| [p.r, p.g, p.b, p.a])
             .collect();
-        let img_src = imgref::ImgRef::new(&pixels, iw, ih);
-        let raw_id = self.canvas.create_image(img_src, femtovg::ImageFlags::PREMULTIPLIED).ok()?;
-        let mut current_id = raw_id;
 
-        // GPU Gaussian blur: filter_image needs the destination set as current RT before flush.
+        // Apply the filter chain left-to-right (CSS Filter Effects §2.2). Blur is
+        // a 3-pass box approximation of the Gaussian; colour-matrix functions
+        // share `apply_filter_rgba` with the PushFilter path. `opacity()` is a
+        // no-op on the backdrop snapshot (it scales the *element's* alpha, not
+        // the captured backdrop).
         for f in filters {
-            if let lumen_layout::FilterFn::Blur(sigma) = f
-                && *sigma > 0.0 {
-                    // Deliberately NO FLIP_Y here (unlike BUG-146 in the
-                    // PushFilter path): the source is a CPU screenshot upload,
-                    // already top-down, and `filter_image` preserves memory
-                    // orientation — adding the flag would mirror the backdrop.
-                    let Ok(blur_dst) = self.canvas.create_image_empty(
-                        self.width as usize,
-                        self.height as usize,
-                        femtovg::PixelFormat::Rgba8,
-                        femtovg::ImageFlags::PREMULTIPLIED,
-                    ) else {
-                        continue;
-                    };
-                    self.canvas.filter_image(
-                        blur_dst,
-                        femtovg::ImageFilter::GaussianBlur { sigma: *sigma },
-                        current_id,
-                    );
-                    self.switch_render_target(femtovg::RenderTarget::Image(blur_dst));
-                    self.canvas.flush();
-                    self.filter_layer_pending_delete.push(current_id);
-                    current_id = blur_dst;
+            match f {
+                lumen_layout::FilterFn::Blur(sigma) if *sigma > 0.0 => {
+                    box_blur_rgba(&mut rgba, iw, ih, *sigma);
                 }
-        }
-
-        // CPU colour-matrix filters (unpremultiply → apply → re-premultiply).
-        let has_color = filters.iter().any(|f| {
-            !matches!(f, lumen_layout::FilterFn::Blur(_) | lumen_layout::FilterFn::Opacity(_))
-        });
-        if has_color {
-            // Ensure current_id is the active RT so screenshot reads from it.
-            let needs_rt_switch = !filters.iter().any(|f| {
-                matches!(f, lumen_layout::FilterFn::Blur(s) if *s > 0.0)
-            });
-            if needs_rt_switch {
-                self.switch_render_target(femtovg::RenderTarget::Image(current_id));
-                self.canvas.flush();
-            }
-            if let Ok(img) = self.canvas.screenshot() {
-                let iw2 = img.width();
-                let ih2 = img.height();
-                let mut rgba: Vec<u8> = img.buf().iter()
-                    .flat_map(|p| [p.r, p.g, p.b, p.a])
-                    .collect();
-                for f in filters {
-                    if !matches!(
-                        f,
-                        lumen_layout::FilterFn::Blur(_) | lumen_layout::FilterFn::Opacity(_)
-                    ) {
-                        apply_filter_rgba(&mut rgba, f);
-                    }
-                }
-                let cm_pixels: Vec<rgb::RGBA8> = rgba.chunks_exact(4)
-                    .map(|c| rgb::RGBA8 { r: c[0], g: c[1], b: c[2], a: c[3] })
-                    .collect();
-                let cm_ref = imgref::ImgRef::new(&cm_pixels, iw2, ih2);
-                if let Ok(cm_dst) = self.canvas.create_image(cm_ref, femtovg::ImageFlags::PREMULTIPLIED) {
-                    self.filter_layer_pending_delete.push(current_id);
-                    current_id = cm_dst;
-                }
+                lumen_layout::FilterFn::Blur(_) | lumen_layout::FilterFn::Opacity(_) => {}
+                _ => apply_filter_rgba(&mut rgba, f),
             }
         }
 
-        Some(current_id)
+        // Upload the filtered backdrop once. Top-down CPU pixels → no FLIP_Y,
+        // matching `composite_backdrop_filter_layer`'s sampling.
+        let pixels: Vec<rgb::RGBA8> = rgba.chunks_exact(4)
+            .map(|c| rgb::RGBA8 { r: c[0], g: c[1], b: c[2], a: c[3] })
+            .collect();
+        let img_ref = imgref::ImgRef::new(&pixels, iw, ih);
+        self.canvas.create_image(img_ref, femtovg::ImageFlags::PREMULTIPLIED).ok()
     }
 
     /// Composites a backdrop-filter layer (PA-4) onto the previous render target.
