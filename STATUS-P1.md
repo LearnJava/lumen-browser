@@ -6,6 +6,11 @@
 
 ## In progress
 
+**B-1: вынести QuickJS с UI-потока**  branch: `p1-js-thread`
+Выделенный JS-поток владеет `Runtime`/`Context` (оба `!Send`); shell общается
+через командный канал (`JsCommand::Run(Box<dyn FnOnce(&Inner)+Send>)` + `Shutdown`),
+блокирующе ждёт ответ. Снимает фиктивные `unsafe impl Send/Sync` (ADR-006, BUG-171).
+Next step: clippy lumen-js → проверить сборку шелла → ADR + STATUS → merge.
 
 ---
 

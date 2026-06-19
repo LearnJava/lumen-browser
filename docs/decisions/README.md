@@ -25,3 +25,4 @@ For new decisions use [TEMPLATE.md](TEMPLATE.md). Numbering is sequential; do no
 | [ADR-011](ADR-011-crypto-deps.md) | Provisional crypto deps — hmac + aes-gcm (SubtleCrypto API) | Accepted | 2026-06-03 |
 | [ADR-012](ADR-012-storage-partitioning.md) | Storage partitioning — multiple SQLite DBs by lifecycle/write-frequency; KV (redb) only for measured blob caches | Accepted | 2026-06-16 |
 | [ADR-013](ADR-013-wasm-plugin-sandbox.md) | WASM Plugin Sandbox — inbound-only capability model, three trust tiers, OS data blocked at Plugin API layer | Accepted | 2026-06-18 |
+| [ADR-014](ADR-014-js-runtime-thread.md) | QuickJS runtime on a dedicated thread — handle + command channel, genuine Send/Sync, unblocks off-UI-thread pipeline (BUG-171) and WASM teardown (BUG-222) | Accepted | 2026-06-19 |
