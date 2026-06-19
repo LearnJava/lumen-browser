@@ -2777,7 +2777,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:479` **fn** `tex_image_2d_rgba` — `gl.texImage2D(…, data)`. Averages pixel data to a 1×1 solid colour for
 `crates/engine/paint/src/webgl.rs:498` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Executes vertex and fragment shaders
 
-## lumen-shell  (827 symbols)
+## lumen-shell  (832 symbols)
 
 `crates/shell/src/adblock.rs:44` **fn** `browser_data_dir` — Root of all browser user data (portable): `<exe_dir>/data`
 `crates/shell/src/adblock.rs:52` **fn** `adblock_dir` — `<data>/adblock` — root of the ad-block subsystem's files
@@ -3364,6 +3364,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/platform/screen_capture.rs:114` **struct** `PlatformScreenCapture` — Platform screen capture provider using Win32 GDI BitBlt
 `crates/shell/src/platform/wake_lock.rs:25` **struct** `PlatformWakeLock` — Platform-backed wake-lock provider
 `crates/shell/src/platform/wake_lock.rs:32` **fn** `new` — Create a new provider with no lock held initially
+`crates/shell/src/prefetch.rs:57` **struct** `PrefetchCache` — Shared, generation-scoped byte cache for page subresources. See module docs
+`crates/shell/src/prefetch.rs:71` **fn** `reset` — Drop all cached entries and adopt navigation `generation`
+`crates/shell/src/prefetch.rs:78` **fn** `current_generation` — The navigation generation the cache is currently scoped to
+`crates/shell/src/prefetch.rs:93` **fn** `fetch` — Fetch `url` through the cache for navigation `generation`
+`crates/shell/src/prefetch.rs:138` **fn** `fetch_current` — Convenience for the UI-thread consumer (`parse_and_layout`): fetch using the
 `crates/shell/src/reader_view.rs:18` **struct** `ArticleContent` — Article content extracted from a raw HTML page
 `crates/shell/src/reader_view.rs:37` **fn** `extract_article` — Parse `html` and extract the main article content
 `crates/shell/src/reader_view.rs:52` **fn** `build_reader_html` — Wrap an [`ArticleContent`] in the reader template and return a
@@ -4113,4 +4118,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4042 symbols in 22 crates*
+*Total: 4047 symbols in 22 crates*
