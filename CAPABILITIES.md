@@ -62,7 +62,7 @@ Snapshot: **Phase 2 «Interactive», app v0.2.0**. ~21 crates.
 ## Engine — layout & rendering
 
 ### lumen-layout (`crates/engine/layout`)
-- ✅ Block + inline flow (line wrap, margin collapsing, `margin: 0 auto`).
+- ✅ Block + inline flow (line wrap, margin collapsing, `margin: 0 auto`, `line-height-step` vertical rhythm).
 - ✅ Flexbox (full: direction, grow/shrink/basis, justify/align, gap, wrap). ⬜ column-direction wrapping.
 - ✅ CSS Grid (px/fr/auto/repeat/minmax, explicit+auto placement, dense, subgrid). ⬜ grid-template-areas, named lines.
 - ✅ Table layout (colspan/rowspan, column widths) — live path `box_tree.rs` (note: `table.rs` is dead code).

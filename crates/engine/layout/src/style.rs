@@ -2255,6 +2255,12 @@ pub struct ComputedStyle {
     pub background_color: Option<CssColor>,
     pub font_size: f32,
     pub line_height: f32,
+    /// CSS Rhythmic Sizing L1 §2 — `line-height-step` step unit in px.
+    /// When `> 0`, each line box's used height is rounded up to the closest
+    /// multiple of this value and the extra space is distributed as half-leading.
+    /// `0.0` (initial) disables stepping. Resolved to absolute px at parse time
+    /// (em/rem relative to the element's own font-size). Inherited.
+    pub line_height_step: f32,
     pub font_style: FontStyle,
     pub font_weight: FontWeight,
     /// CSS Fonts L4 §6 — font-variant (Phase 0: normal | small-caps). Inherited.
@@ -4987,6 +4993,7 @@ impl ComputedStyle {
             background_color: None,
             font_size: 16.0,
             line_height: 1.2,
+            line_height_step: 0.0,
             font_style: FontStyle::Normal,
             font_weight: FontWeight::NORMAL,
             font_variant: FontVariant::Normal,
@@ -5281,6 +5288,7 @@ pub fn compute_style(
         direction: inherited.direction,
         font_size: inherited.font_size,
         line_height: inherited.line_height,
+        line_height_step: inherited.line_height_step,
         font_style: inherited.font_style,
         font_weight: inherited.font_weight,
         font_variant: inherited.font_variant,
@@ -6393,6 +6401,7 @@ pub fn compute_pseudo_element_style(
     style.direction = parent.direction;
     style.font_size = parent.font_size;
     style.line_height = parent.line_height;
+    style.line_height_step = parent.line_height_step;
     style.font_style = parent.font_style;
     style.font_weight = parent.font_weight;
     style.font_variant = parent.font_variant;
@@ -13201,6 +13210,30 @@ fn apply_declaration(
                 }
             }
         }
+        "line-height-step" => {
+            // CSS Rhythmic Sizing L1 §2 — `<length>` step unit (`none`/`normal`/`0`
+            // disable). Resolved to absolute px now; em/rem use the element's own
+            // font-size. Percentages are invalid per spec → ignored. Negative → ignored.
+            if matches!(val, "none" | "normal" | "0") {
+                style.line_height_step = 0.0;
+            } else if let Some(len) = parse_length(val) {
+                let px = match &len {
+                    Length::Px(v) => Some(*v),
+                    Length::Em(v) => Some(v * style.font_size),
+                    Length::Rem(v) => Some(v * ROOT_FONT_SIZE),
+                    Length::Percent(_)
+                    | Length::MinContent
+                    | Length::MaxContent
+                    | Length::FitContent(_) => None,
+                    _ => len.resolve(em_basis, None, viewport),
+                };
+                if let Some(px) = px
+                    && px >= 0.0
+                {
+                    style.line_height_step = px;
+                }
+            }
+        }
         "margin" => {
             if let Some((t, r, b, l)) = parse_margin_shorthand(val, is_quirks) {
                 style.margin_top = t;
@@ -14358,6 +14391,10 @@ fn apply_css_wide_keyword(
         }
         "line-height" => {
             style.line_height = if inh { inherited.line_height } else { init.line_height };
+        }
+        "line-height-step" => {
+            style.line_height_step =
+                if inh { inherited.line_height_step } else { init.line_height_step };
         }
         "font-style" => {
             style.font_style = if inh { inherited.font_style } else { init.font_style };
@@ -26119,6 +26156,73 @@ mod tests {
         let span_style =
             compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(span_style.interpolate_size, InterpolateSizeMode::AllowKeywords);
+    }
+
+    // --- line-height-step (CSS Rhythmic Sizing L1 §2) ---
+
+    #[test]
+    fn line_height_step_px() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { line-height-step: 18px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert!((style.line_height_step - 18.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn line_height_step_em_resolves_to_font_size() {
+        // 1.5em at font-size 20px → 30px.
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { font-size: 20px; line-height-step: 1.5em; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert!((style.line_height_step - 30.0).abs() < 0.01, "got {}", style.line_height_step);
+    }
+
+    #[test]
+    fn line_height_step_initial_zero() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.line_height_step, 0.0);
+    }
+
+    #[test]
+    fn line_height_step_none_disables() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { line-height-step: none; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.line_height_step, 0.0);
+    }
+
+    #[test]
+    fn line_height_step_negative_ignored() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { line-height-step: -4px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.line_height_step, 0.0);
+    }
+
+    #[test]
+    fn line_height_step_inherited() {
+        // CSS Rhythmic Sizing L1 §2 — line-height-step IS inherited.
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { line-height-step: 12px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span = doc.get(div).children[0];
+        let span_style =
+            compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert!((span_style.line_height_step - 12.0).abs() < f32::EPSILON);
     }
 
     // --- container-type ---

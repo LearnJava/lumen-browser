@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<!-- Test: line-height-step (CSS Rhythmic Sizing L1 §2) -->
+<!-- Each line box height is rounded UP to the nearest multiple of the step.
+     The inline <span> backgrounds fill the stepped line box, so the colored
+     bands reveal the vertical rhythm without relying on glyph antialiasing. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f { background: #14141f; width: 1022px; height: 718px; margin: 1px; padding: 30px 40px; overflow: hidden; box-sizing: border-box; }
+
+  .cols { display: flex; gap: 40px; }
+  .col { width: 280px; }
+  .label { color: #ffd86b; font-size: 16px; margin-bottom: 8px; }
+
+  /* Reference: no step — natural line-height (font 20 × 1.2 = 24px lines). */
+  .natural { font-size: 20px; line-height: 1.2; color: #14141f; }
+  .natural span { background: #7ec8e3; }
+
+  /* Stepped: line boxes rounded up to a 48px rhythm. Same content, taller bands. */
+  .stepped { font-size: 20px; line-height: 1.2; line-height-step: 48px; color: #14141f; }
+  .stepped span { background: #a8e6cf; }
+
+  /* Large step on a single line: one 60px band proves rounding a short line up. */
+  .single { font-size: 18px; line-height: 1.2; line-height-step: 60px; color: #14141f; margin-top: 16px; }
+  .single span { background: #f9c846; }
+
+  /* Inheritance: child without its own step inherits the parent's 40px rhythm. */
+  .parent { line-height-step: 40px; margin-top: 16px; }
+  .child { font-size: 18px; line-height: 1.2; color: #14141f; }
+  .child span { background: #ffb3ba; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="cols">
+    <div class="col">
+      <div class="label">no step (24px lines)</div>
+      <div class="natural"><span>One two three four five six seven eight nine ten eleven twelve.</span></div>
+    </div>
+    <div class="col">
+      <div class="label">line-height-step: 48px</div>
+      <div class="stepped"><span>One two three four five six seven eight nine ten eleven twelve.</span></div>
+    </div>
+  </div>
+  <div class="single"><span>Short line rounded up to a 60px step.</span></div>
+  <div class="parent">
+    <div class="child"><span>Child inherits the parent 40px step rhythm here.</span></div>
+  </div>
+</div>
+</body>
+</html>

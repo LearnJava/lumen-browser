@@ -563,7 +563,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `line-height` | 🟡 | parsed; leading in line box ⬜ |
-| `line-height-step` | ⬜ | CSS Rhythmic Sizing |
+| `line-height-step` | ✅ | CSS Rhythmic Sizing L1 §2 (p4-line-height-step 2026-06-19): inherited `line_height_step` px field; line boxes rounded up to nearest multiple in box_tree + paint; тест 122 |
 
 ### [T3] Scrollbars
 

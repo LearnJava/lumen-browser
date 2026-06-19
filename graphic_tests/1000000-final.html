@@ -234,6 +234,20 @@
     <div class="mq-sw sup-bad"></div>
   </div>
 
+  <!-- ── line-height-step demo (CSS Rhythmic Sizing L1 §2) ── -->
+  <style>
+    .lhs-row { margin-top: 12px; margin-left: 24px; display: flex; gap: 24px; }
+    .lhs-col { width: 150px; }
+    .lhs-nat  { font-size: 14px; line-height: 1.2; color: #14141f; }
+    .lhs-nat span { background: #7ec8e3; }
+    .lhs-step { font-size: 14px; line-height: 1.2; line-height-step: 36px; color: #14141f; }
+    .lhs-step span { background: #a8e6cf; }
+  </style>
+  <div class="lhs-row">
+    <div class="lhs-col lhs-nat"><span>rhythm off one two three four five six seven</span></div>
+    <div class="lhs-col lhs-step"><span>rhythm 36px one two three four five six seven</span></div>
+  </div>
+
   <!-- ── vertical-align demo ───────────────────────────────────────────────── -->
   <style>
     .va-row { margin-top: 12px; margin-left: 24px; white-space: nowrap; }

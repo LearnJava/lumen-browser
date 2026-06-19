@@ -198,6 +198,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('119', '119-paint-order.html', 0.5, 'CSS Fill & Stroke L3 §6 / SVG2 §13.7: paint-order — thick-stroked <path> с centred stroke; верхний ряд normal (полная ширина обводки поверх заливки), нижний paint-order:stroke (заливка поверх обводки → видимая обводка вдвое тоньше, заливка крупнее)'),
     ('120', '120-media-contrast-data.html', 0.5, 'Media Queries L5 §5.5-5.6: prefers-contrast/prefers-reduced-data — без пользовательских предпочтений matched-свотчи (no-preference) зелёные, no-match (more/less/custom/reduce) остаются красными'),
     ('121', '121-supports-selector.html', 0.5, 'CSS Conditional L4 §4.2: @supports selector() — распознаваемые селекторы (:has/:is/::slotted) применяют блок (зелёные a/b/c), неизвестные псевдо не применяют (красные d/e), not selector(<unknown>) истинно (зелёный f)'),
+    ('122', '122-line-height-step.html', 0.5, 'CSS Rhythmic Sizing L1 §2: line-height-step — высота каждого line-box округляется вверх до кратного шагу; цветные inline-фоны заливают округлённый line-box, поэтому полосы у stepped-колонки (48px) вдвое выше natural-колонки (24px), одиночная строка округлена до 60px, child наследует шаг 40px'),
 ]
 
 # --- Известные должники (Phase 2+ фичи, baseline-храповик) ---
