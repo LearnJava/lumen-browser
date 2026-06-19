@@ -1,8 +1,40 @@
 # BUG-172
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-06-19
 **Компонент:** shell (streaming / page pipeline)
 **Приоритет:** низкий (лишняя сетевая работа, не визуальный дефект)
+
+## Решение (вариант A — общий кэш декодированных картинок)
+
+Новый модуль `crates/shell/src/image_cache.rs` — process-global `DecodedImageCache`
+(`IMAGE_CACHE`), по образцу `prefetch::PrefetchCache`: generation-scoped, in-flight
+дедуп через `Condvar`, кэширует и успех, и неудачу (`Option<DecodedImage>`), стейл-
+поколение байпасит кэш. Значение — `DecodedImage::{Static, Animated}` за `Arc`, так
+что cache-hit клонирует указатель, а не пиксели (полную копию делает только
+потребитель, когда нужен owned `Image`).
+
+Единая fetch+decode-логика вынесена в свободную функцию `decode_image()` (бывшая
+inline-логика обоих путей — теперь один источник истины с прежним логированием).
+Оба пути зовут её через кэш:
+
+- `spawn_stream_image_loads` (прогрессивный streaming) — `get_or_decode(generation, …)`
+  с поколением навигации (`self.load_generation`), затем шлёт `LoadEvent::ImageDecoded`.
+- `fetch_and_decode_images` (финальный pipeline) — `get_or_decode_current(…)` в
+  `parallel_map`; cache-hit пропускает сеть+декод, считает `wants_intrinsic`/`is_lazy`
+  и клонирует пиксели.
+
+Сброс кэша: `IMAGE_CACHE.reset(generation)` на старте навигации (рядом с
+`PREFETCH_CACHE.reset`, `start_streaming_load`) и `reset_new()` per-render в
+headless `render_source_to_png` (`--screenshot` / `--ipc-server` Screenshot) —
+ограничивает память в долгоживущем IPC-сервере и исключает кросс-страничное
+переиспользование.
+
+Итог: каждая не-lazy `<img>` качается и декодируется один раз за навигацию;
+повторный проход переиспользует уже загруженное. 6 unit-тестов модуля +
+1341 тест шелла зелёные, clippy чисто. Lazy-картинки (по скроллу) и
+`background-image` — отдельные пути, в дубль не входили, не тронуты.
+
+---
 
 ## Корень
 
