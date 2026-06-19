@@ -4,7 +4,7 @@
 //! pointerlockchange/pointerlockerror events, movementX/Y on MouseEvent.
 //! Phase 1: integrate with shell winit — CursorGrabMode::Locked + DeviceEvent::MouseMotion.
 
-use std::cell::RefCell;
+use std::sync::Mutex;
 
 struct PointerLockState {
     /// DOM node ID of the locked element (None if unlock).
@@ -17,100 +17,111 @@ struct PointerLockState {
     pending_grab: Option<bool>,
 }
 
-thread_local! {
-    static POINTER_LOCK_STATE: RefCell<PointerLockState> = const {
-        RefCell::new(PointerLockState {
-            locked_element_nid: None,
-            movement_x: 0.0,
-            movement_y: 0.0,
-            pending_grab: None,
-        })
-    };
+// Pointer lock is a browser-wide singleton (only one element may hold the lock),
+// and it is coordinated across threads: JS bindings (`requestPointerLock` /
+// `exitPointerLock`) run on the dedicated JS thread, while the shell sets
+// movement and reads the lock/grab state from the UI thread (`DeviceEvent`,
+// `about_to_wait`). A process-global `Mutex` therefore gives correct shared
+// access from any thread — a `thread_local` would split this state in two once
+// the JS runtime moved off the UI thread (B-1).
+static POINTER_LOCK_STATE: Mutex<PointerLockState> = Mutex::new(PointerLockState {
+    locked_element_nid: None,
+    movement_x: 0.0,
+    movement_y: 0.0,
+    pending_grab: None,
+});
+
+/// Lock the global state, recovering the inner value if a previous holder
+/// panicked (the data has no broken invariant to protect).
+fn state() -> std::sync::MutexGuard<'static, PointerLockState> {
+    POINTER_LOCK_STATE.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Request pointer lock for element with given node ID.
 /// Sets pending_grab=true so the shell calls winit set_cursor_grab(Locked).
 pub fn request_pointer_lock(element_nid: u32) {
-    POINTER_LOCK_STATE.with(|state| {
-        let mut s = state.borrow_mut();
-        s.locked_element_nid = Some(element_nid);
-        s.pending_grab = Some(true);
-    });
+    let mut s = state();
+    s.locked_element_nid = Some(element_nid);
+    s.pending_grab = Some(true);
 }
 
 /// Exit pointer lock.
 /// Sets pending_grab=false so the shell calls winit set_cursor_grab(None).
 pub fn exit_pointer_lock() {
-    POINTER_LOCK_STATE.with(|state| {
-        let mut s = state.borrow_mut();
-        s.locked_element_nid = None;
-        s.pending_grab = Some(false);
-    });
+    let mut s = state();
+    s.locked_element_nid = None;
+    s.pending_grab = Some(false);
 }
 
 /// Set relative mouse movement delta (called from shell DeviceEvent::MouseMotion).
 /// Only accumulates when pointer is locked.
 pub fn set_movement(dx: f64, dy: f64) {
-    POINTER_LOCK_STATE.with(|state| {
-        let mut s = state.borrow_mut();
-        if s.locked_element_nid.is_some() {
-            s.movement_x = dx;
-            s.movement_y = dy;
-        }
-    });
+    let mut s = state();
+    if s.locked_element_nid.is_some() {
+        s.movement_x = dx;
+        s.movement_y = dy;
+    }
 }
 
 /// Get current pointer lock state: (is_locked, locked_element_nid, movement_x, movement_y).
 pub fn get_lock_state() -> (bool, Option<u32>, f64, f64) {
-    POINTER_LOCK_STATE.with(|state| {
-        let s = state.borrow();
-        (
-            s.locked_element_nid.is_some(),
-            s.locked_element_nid,
-            s.movement_x,
-            s.movement_y,
-        )
-    })
+    let s = state();
+    (
+        s.locked_element_nid.is_some(),
+        s.locked_element_nid,
+        s.movement_x,
+        s.movement_y,
+    )
 }
 
 /// Check if pointer is locked.
 pub fn is_pointer_locked() -> bool {
-    POINTER_LOCK_STATE.with(|state| state.borrow().locked_element_nid.is_some())
+    state().locked_element_nid.is_some()
 }
 
 /// Get the DOM node ID of the locked element, or None.
 pub fn get_locked_element_nid() -> Option<u32> {
-    POINTER_LOCK_STATE.with(|state| state.borrow().locked_element_nid)
+    state().locked_element_nid
 }
 
 /// Get the current movement delta and reset it to zero.
 /// Called by shell after each DeviceEvent::MouseMotion when pointer is locked.
 pub fn take_movement() -> (f64, f64) {
-    POINTER_LOCK_STATE.with(|state| {
-        let mut s = state.borrow_mut();
-        let (dx, dy) = (s.movement_x, s.movement_y);
-        s.movement_x = 0.0;
-        s.movement_y = 0.0;
-        (dx, dy)
-    })
+    let mut s = state();
+    let (dx, dy) = (s.movement_x, s.movement_y);
+    s.movement_x = 0.0;
+    s.movement_y = 0.0;
+    (dx, dy)
 }
 
 /// Take pending OS cursor grab request, resetting it to None.
 /// Returns Some(true) to grab cursor, Some(false) to release, None if no change.
 /// Called by shell in `about_to_wait` to apply winit CursorGrabMode changes.
 pub fn take_pending_grab() -> Option<bool> {
-    POINTER_LOCK_STATE.with(|state| {
-        let mut s = state.borrow_mut();
-        s.pending_grab.take()
-    })
+    state().pending_grab.take()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // POINTER_LOCK_STATE is now a process-global singleton, so these tests share
+    // it. Serialise them with a guard and reset to a known state at the start of
+    // each so parallel `cargo test` execution stays deterministic.
+    static TEST_GUARD: Mutex<()> = Mutex::new(());
+
+    fn reset() {
+        let mut s = state();
+        s.locked_element_nid = None;
+        s.movement_x = 0.0;
+        s.movement_y = 0.0;
+        s.pending_grab = None;
+    }
+
     #[test]
     fn test_initial_state() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        reset();
         let (locked, nid, dx, dy) = get_lock_state();
         assert!(!locked);
         assert_eq!(nid, None);
@@ -120,6 +131,8 @@ mod tests {
 
     #[test]
     fn test_request_pointer_lock() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        reset();
         request_pointer_lock(42);
         assert!(is_pointer_locked());
         assert_eq!(get_locked_element_nid(), Some(42));
@@ -127,6 +140,8 @@ mod tests {
 
     #[test]
     fn test_exit_pointer_lock() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        reset();
         request_pointer_lock(42);
         assert!(is_pointer_locked());
         exit_pointer_lock();
@@ -136,7 +151,8 @@ mod tests {
 
     #[test]
     fn test_movement_only_when_locked() {
-        exit_pointer_lock();
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        reset();
         set_movement(10.0, 20.0);
         let (_, _, dx, dy) = get_lock_state();
         assert_eq!(dx, 0.0);
@@ -151,6 +167,8 @@ mod tests {
 
     #[test]
     fn test_take_movement() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        reset();
         request_pointer_lock(1);
         set_movement(5.5, -3.2);
         let (dx, dy) = take_movement();
@@ -165,9 +183,8 @@ mod tests {
 
     #[test]
     fn test_pending_grab_on_request() {
-        // Clean state: reset first.
-        exit_pointer_lock();
-        let _ = take_pending_grab();
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        reset();
         assert_eq!(take_pending_grab(), None);
 
         request_pointer_lock(5);
@@ -178,6 +195,8 @@ mod tests {
 
     #[test]
     fn test_pending_grab_on_exit() {
+        let _g = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        reset();
         request_pointer_lock(5);
         let _ = take_pending_grab(); // consume the grab request
         exit_pointer_lock();

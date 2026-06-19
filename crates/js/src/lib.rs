@@ -125,7 +125,9 @@ use std::collections::HashMap;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
+    mpsc::{SyncSender, sync_channel},
 };
+use std::thread::JoinHandle;
 
 pub use clipboard::set_clipboard_provider;
 pub use credentials::set_credential_provider;
@@ -161,7 +163,17 @@ pub fn deterministic_seed_from_url(url: &str) -> u64 {
 /// QuickJS is single-threaded; `Mutex` provides the exclusive access needed
 /// to satisfy `JsRuntime: Send + Sync`.
 pub struct QuickJsRuntime {
-    inner: Mutex<Inner>,
+    /// Command channel to the dedicated JS thread that owns the QuickJS
+    /// `Runtime`/`Context` (both are `!Send`). Every QuickJS access is funnelled
+    /// through here via [`QuickJsRuntime::run`]; the thread executes each job
+    /// against the live `Inner` and the caller blocks for the reply. A bounded
+    /// `SyncSender` (vs `Sender`) keeps the handle `Sync`, which `JsRuntime`
+    /// requires. See [`js_thread_main`].
+    cmd_tx: SyncSender<JsCommand>,
+    /// Join handle for the JS thread. Taken and joined in `Drop` after sending
+    /// [`JsCommand::Shutdown`], so the QuickJS runtime is torn down on its own
+    /// thread (never moved across threads).
+    js_thread: Option<JoinHandle<()>>,
     /// Navigation request written by JS via `location.href=`, `location.assign()` etc.
     /// Captured inside `install_dom_api`; read by `take_navigate_request`.
     nav_out: Arc<Mutex<Option<NavigateRequest>>>,
@@ -322,17 +334,72 @@ pub struct QuickJsRuntime {
     sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
 }
 
+/// The QuickJS runtime + context, owned exclusively by the JS thread.
+///
+/// Both fields are `!Send`; they are created in [`js_thread_main`] and never
+/// leave it. The shell reaches them only by sending [`JsCommand::Run`] jobs.
 struct Inner {
-    // Runtime must outlive its Context; keeping both under one lock avoids
-    // any ordering issues on drop.
+    // Runtime must outlive its Context; keeping both together avoids any
+    // ordering issues on drop.
     _rt: Runtime,
     ctx: Context,
 }
 
-// SAFETY: QuickJS context is accessed only under the Mutex — never from
-// multiple threads concurrently. Runtime wraps its own Mutex internally.
-unsafe impl Send for QuickJsRuntime {}
-unsafe impl Sync for QuickJsRuntime {}
+/// A unit of work executed on the JS thread against the live [`Inner`].
+///
+/// Produced by [`QuickJsRuntime::run`], which blocks until the job completes,
+/// so although boxed as `'static` it may safely borrow from the caller's stack
+/// for the duration of the call.
+type JsJob = Box<dyn FnOnce(&Inner) + Send + 'static>;
+
+/// Messages the shell sends to the dedicated JS thread.
+enum JsCommand {
+    /// Run a job against the runtime; the job replies through its own channel.
+    Run(JsJob),
+    /// Stop the thread loop and drop the runtime (sent from `Drop`).
+    Shutdown,
+}
+
+/// Bound for the JS command queue. Jobs are normally consumed immediately (the
+/// thread loops on `recv`), so this only caps a transient burst of concurrent
+/// `run` callers before back-pressure blocks the sender.
+const JS_CMD_QUEUE_BOUND: usize = 64;
+
+/// Entry point of the dedicated JS thread: build the QuickJS runtime here (it is
+/// `!Send`), report init success/failure, then service [`JsCommand`]s until the
+/// channel closes or [`JsCommand::Shutdown`] arrives.
+fn js_thread_main(
+    resolver: esm::LumenResolver,
+    loader: esm::LumenLoader,
+    cmd_rx: std::sync::mpsc::Receiver<JsCommand>,
+    init_tx: std::sync::mpsc::Sender<Result<(), JsError>>,
+) {
+    let inner = match (|| -> Result<Inner, JsError> {
+        let rt = Runtime::new().map_err(|e| JsError::Runtime(e.to_string()))?;
+        rt.set_loader(resolver, loader);
+        let ctx = Context::full(&rt).map_err(|e| JsError::Runtime(e.to_string()))?;
+        Ok(Inner { _rt: rt, ctx })
+    })() {
+        Ok(inner) => inner,
+        Err(e) => {
+            let _ = init_tx.send(Err(e));
+            return;
+        }
+    };
+    let _ = init_tx.send(Ok(()));
+    while let Ok(cmd) = cmd_rx.recv() {
+        match cmd {
+            JsCommand::Run(job) => job(&inner),
+            JsCommand::Shutdown => break,
+        }
+    }
+    // Free WASM import `Persistent`s on this thread while the Runtime is still
+    // alive — otherwise QuickJS aborts on `list_empty(&rt->gc_obj_list)` when
+    // `inner` drops (BUG-222). The registry is thread-local to this JS thread,
+    // so this must run here, not from the shell's UI thread.
+    wasm::clear_registry();
+    // `inner` (Runtime + Context) drops here, on its owning thread.
+}
 
 impl QuickJsRuntime {
     pub fn new() -> Result<Self, JsError> {
@@ -343,11 +410,27 @@ impl QuickJsRuntime {
         let module_types = import_attributes::new_type_registry();
         let loader =
             esm::LumenLoader::with_types(Arc::clone(&module_registry), Arc::clone(&module_types));
-        let rt = Runtime::new().map_err(|e| JsError::Runtime(e.to_string()))?;
-        rt.set_loader(resolver, loader);
-        let ctx = Context::full(&rt).map_err(|e| JsError::Runtime(e.to_string()))?;
+
+        // QuickJS `Runtime`/`Context` are `!Send`; create and own them on a
+        // dedicated thread and drive them via `JsCommand`s. `resolver`/`loader`
+        // hold only `Arc<Mutex<…>>`, so they are `Send` and may cross to the
+        // thread, which calls `rt.set_loader` there.
+        let (cmd_tx, cmd_rx) = sync_channel::<JsCommand>(JS_CMD_QUEUE_BOUND);
+        let (init_tx, init_rx) = std::sync::mpsc::channel::<Result<(), JsError>>();
+        let js_thread = std::thread::Builder::new()
+            .name("lumen-js".to_string())
+            .spawn(move || js_thread_main(resolver, loader, cmd_rx, init_tx))
+            .map_err(|e| JsError::Runtime(format!("spawn JS thread: {e}")))?;
+        // Block until the runtime finishes (or fails) initialising on the thread.
+        match init_rx.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(e),
+            Err(_) => return Err(JsError::Runtime("JS thread died during init".into())),
+        }
+
         Ok(Self {
-            inner: Mutex::new(Inner { _rt: rt, ctx }),
+            cmd_tx,
+            js_thread: Some(js_thread),
             nav_out: Arc::new(Mutex::new(None)),
             timer_wakeup: Arc::new(Mutex::new(None)),
             dom_dirty: Arc::new(AtomicBool::new(false)),
@@ -383,6 +466,40 @@ impl QuickJsRuntime {
             pointer_capture_nid: Arc::new(Mutex::new(None)),
             sw_worker_store: None,
         })
+    }
+
+    /// Run `f` on the dedicated JS thread against the live runtime, blocking the
+    /// caller until it returns. This is the single choke point through which all
+    /// QuickJS access flows now that the runtime lives off the UI thread.
+    ///
+    /// `f` may borrow from the caller (e.g. `&self` channel fields, `&str`
+    /// arguments) — see the safety note below.
+    fn run<R, F>(&self, f: F) -> R
+    where
+        F: FnOnce(&Inner) -> R + Send,
+        R: Send,
+    {
+        let (tx, rx) = std::sync::mpsc::channel::<R>();
+        let job: Box<dyn FnOnce(&Inner) + Send + '_> = Box::new(move |inner| {
+            let _ = tx.send(f(inner));
+        });
+        // SAFETY: `job` may borrow from this stack frame (`&self` fields and any
+        // `&str`/slice arguments captured by `f`). We block on `rx.recv()` below
+        // until the JS thread has run `job` to completion and sent its result, so
+        // every borrow stays live for the closure's entire execution. Erasing the
+        // lifetime to `'static` is therefore sound: the boxed closure never
+        // outlives this call. The two `Box<dyn …>` types have identical layout
+        // (fat pointer), so the transmute only rewrites the lifetime.
+        let job: Box<dyn FnOnce(&Inner) + Send + 'static> = unsafe {
+            std::mem::transmute::<
+                Box<dyn FnOnce(&Inner) + Send + '_>,
+                Box<dyn FnOnce(&Inner) + Send + 'static>,
+            >(job)
+        };
+        if self.cmd_tx.send(JsCommand::Run(job)).is_err() {
+            panic!("lumen-js thread terminated unexpectedly");
+        }
+        rx.recv().expect("lumen-js thread dropped without replying")
     }
 
     /// Attach a `SwWorkerStore` so that `_lumen_sw_activate_script` can spawn and
@@ -451,12 +568,13 @@ impl QuickJsRuntime {
     /// Assigns a virtual `lumen://inline-N` specifier for relative-import resolution.
     /// Drains pending microtasks after evaluation so Promise continuations run.
     pub fn eval_module(&self, source: &str) -> JsResult<()> {
-        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         // Pre-process TC39 decorator syntax (Phase 0 transformer) so the
         // registry and the evaluated module agree on the source.
-        let source = guard.ctx.with(|ctx: Ctx<'_>| {
-            decorators::maybe_transform_decorators(&ctx, source)
-                .unwrap_or_else(|| source.to_owned())
+        let source = self.run(|inner| {
+            inner.ctx.with(|ctx: Ctx<'_>| {
+                decorators::maybe_transform_decorators(&ctx, source)
+                    .unwrap_or_else(|| source.to_owned())
+            })
         });
         // Strip import-attribute clauses (TC39 Stage 3) and record declared
         // module types; inline scripts resolve specifiers against the page URL.
@@ -475,12 +593,14 @@ impl QuickJsRuntime {
         // Transform import.meta → preamble var using the page URL for .url.
         let meta_url = if page_url.is_empty() { specifier.as_str() } else { page_url.as_str() };
         let source = import_meta::transform_import_meta(&source, meta_url).unwrap_or(source);
-        guard.ctx.with(|ctx: Ctx<'_>| -> JsResult<()> {
-            rquickjs::Module::evaluate(ctx.clone(), specifier.as_str(), source.as_bytes())
-                .map_err(|e| JsError::Runtime(format!("module eval: {e}")))?;
-            // Drain Promise continuations from dynamic import() / top-level await.
-            loop { if !ctx.execute_pending_job() { break; } }
-            Ok(())
+        self.run(|inner| {
+            inner.ctx.with(|ctx: Ctx<'_>| -> JsResult<()> {
+                rquickjs::Module::evaluate(ctx.clone(), specifier.as_str(), source.as_bytes())
+                    .map_err(|e| JsError::Runtime(format!("module eval: {e}")))?;
+                // Drain Promise continuations from dynamic import() / top-level await.
+                loop { if !ctx.execute_pending_job() { break; } }
+                Ok(())
+            })
         })
     }
 
@@ -549,8 +669,7 @@ impl QuickJsRuntime {
         } else {
             None
         };
-        let guard = self.inner.lock().unwrap();
-        guard.ctx.with(|ctx| {
+        self.run(|inner| inner.ctx.with(|ctx| {
             // Install functional WebGL bindings backed by the software
             // rasterizer (task #28, §7F). Preserves the ADR-007 Layer 4
             // fingerprint normalization of the old `webgl_bindings` shim.
@@ -1309,7 +1428,7 @@ impl QuickJsRuntime {
             }
 
             Ok(())
-        })
+        }))
     }
 
     /// Enable or disable cookie-banner auto-dismiss for subsequent `install_dom` calls.
@@ -1372,9 +1491,10 @@ impl QuickJsRuntime {
   }
 })();
 "#;
-        let guard = self.inner.lock().unwrap();
-        guard.ctx.with(|ctx| {
-            ctx.eval::<(), _>(FREEZE_SHIM).ok();
+        self.run(|inner| {
+            inner.ctx.with(|ctx| {
+                ctx.eval::<(), _>(FREEZE_SHIM).ok();
+            });
         });
     }
 
@@ -1396,9 +1516,10 @@ impl QuickJsRuntime {
             "if(typeof _lumen_deliver_worker_messages==='function')\
              _lumen_deliver_worker_messages({json})"
         );
-        let guard = self.inner.lock().unwrap();
-        guard.ctx.with(|ctx| {
-            ctx.eval::<(), _>(script.as_str()).ok();
+        self.run(|inner| {
+            inner.ctx.with(|ctx| {
+                ctx.eval::<(), _>(script.as_str()).ok();
+            });
         });
     }
 
@@ -1412,8 +1533,7 @@ impl QuickJsRuntime {
     /// the same thread that executes the JS context. Shell must call this on
     /// every event-loop tick (alongside `pump_workers()`).
     pub fn flush_canvas_updates(&self) -> Vec<(u32, u32, u32, Vec<u8>)> {
-        let guard = self.inner.lock().unwrap();
-        guard.ctx.with(|_ctx| canvas2d::flush_dirty())
+        self.run(|inner| inner.ctx.with(|_ctx| canvas2d::flush_dirty()))
     }
 
     /// Deliver messages posted to this page's `BroadcastChannel` instances.
@@ -1435,9 +1555,10 @@ impl QuickJsRuntime {
             "if(typeof _lumen_deliver_broadcast_messages==='function')\
              _lumen_deliver_broadcast_messages({json})"
         );
-        let guard = self.inner.lock().unwrap();
-        guard.ctx.with(|ctx| {
-            ctx.eval::<(), _>(script.as_str()).ok();
+        self.run(|inner| {
+            inner.ctx.with(|ctx| {
+                ctx.eval::<(), _>(script.as_str()).ok();
+            });
         });
     }
 
@@ -1460,9 +1581,10 @@ impl QuickJsRuntime {
             "if(typeof _lumen_deliver_shared_worker_messages==='function')\
              _lumen_deliver_shared_worker_messages({json})"
         );
-        let guard = self.inner.lock().unwrap();
-        guard.ctx.with(|ctx| {
-            ctx.eval::<(), _>(script.as_str()).ok();
+        self.run(|inner| {
+            inner.ctx.with(|ctx| {
+                ctx.eval::<(), _>(script.as_str()).ok();
+            });
         });
     }
 
@@ -1666,14 +1788,15 @@ impl QuickJsRuntime {
     /// `returnValue` is set.  `dialog_nid` is the dialog node's index; `return_value`
     /// is the submit button's `value` attribute (may be empty).
     pub fn fire_dialog_close(&self, dialog_nid: u32, return_value: &str) {
-        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        guard.ctx.with(|ctx| {
-            let rv = return_value.replace('\\', r"\\").replace('"', r#"\""#);
-            let script = format!(
-                "(function(){{var d=_lumen_make_element({dialog_nid});\
-                 if(d&&typeof d.close==='function')d.close(\"{rv}\");}})();"
-            );
-            ctx.eval::<(), _>(script.as_str()).ok();
+        self.run(|inner| {
+            inner.ctx.with(|ctx| {
+                let rv = return_value.replace('\\', r"\\").replace('"', r#"\""#);
+                let script = format!(
+                    "(function(){{var d=_lumen_make_element({dialog_nid});\
+                     if(d&&typeof d.close==='function')d.close(\"{rv}\");}})();"
+                );
+                ctx.eval::<(), _>(script.as_str()).ok();
+            });
         });
     }
 
@@ -1684,12 +1807,13 @@ impl QuickJsRuntime {
     /// was cleared (e.g. click on non-focusable area).
     pub fn notify_focus_changed(&self, nid: Option<u32>) {
         let n = nid.map(|n| n as i64).unwrap_or(-1_i64);
-        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        guard.ctx.with(|ctx| {
-            let script = format!(
-                "if(typeof _lumen_last_focused_nid!=='undefined')_lumen_last_focused_nid={n};"
-            );
-            ctx.eval::<(), _>(script.as_str()).ok();
+        self.run(|inner| {
+            inner.ctx.with(|ctx| {
+                let script = format!(
+                    "if(typeof _lumen_last_focused_nid!=='undefined')_lumen_last_focused_nid={n};"
+                );
+                ctx.eval::<(), _>(script.as_str()).ok();
+            });
         });
     }
 
@@ -1714,9 +1838,10 @@ impl QuickJsRuntime {
         } else {
             "_lumen_apply_visibility(false)"
         };
-        let guard = self.inner.lock().unwrap();
-        guard.ctx.with(|ctx| {
-            ctx.eval::<(), _>(script).ok();
+        self.run(|inner| {
+            inner.ctx.with(|ctx| {
+                ctx.eval::<(), _>(script).ok();
+            });
         });
     }
 
@@ -1727,9 +1852,10 @@ impl QuickJsRuntime {
     /// for the most spec-accurate timing.  Safe to call multiple times —
     /// the JS side is idempotent (state only moves forward).
     pub fn notify_dom_content_loaded(&self) {
-        let guard = self.inner.lock().unwrap();
-        guard.ctx.with(|ctx| {
-            ctx.eval::<(), _>("_lumen_apply_ready_state('interactive')").ok();
+        self.run(|inner| {
+            inner.ctx.with(|ctx| {
+                ctx.eval::<(), _>("_lumen_apply_ready_state('interactive')").ok();
+            });
         });
     }
 
@@ -1739,9 +1865,10 @@ impl QuickJsRuntime {
     /// Call after all subresources (images, fonts, scripts) are loaded.
     /// Safe to call multiple times — idempotent on the JS side.
     pub fn notify_window_loaded(&self) {
-        let guard = self.inner.lock().unwrap();
-        guard.ctx.with(|ctx| {
-            ctx.eval::<(), _>("_lumen_apply_ready_state('complete')").ok();
+        self.run(|inner| {
+            inner.ctx.with(|ctx| {
+                ctx.eval::<(), _>("_lumen_apply_ready_state('complete')").ok();
+            });
         });
     }
 
@@ -1752,14 +1879,15 @@ impl QuickJsRuntime {
     ///
     /// No-op when `install_dom` has not been called yet or no `ScrollTimeline` is registered.
     pub fn deliver_scroll_progress(&self, progress_y: f32, progress_x: f32) {
-        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        guard.ctx.with(|ctx| {
-            let script = format!(
-                "if(typeof _lumen_deliver_scroll_progress==='function')\
-                 _lumen_deliver_scroll_progress({},{});",
-                progress_y, progress_x
-            );
-            ctx.eval::<(), _>(script.as_str()).ok();
+        self.run(|inner| {
+            inner.ctx.with(|ctx| {
+                let script = format!(
+                    "if(typeof _lumen_deliver_scroll_progress==='function')\
+                     _lumen_deliver_scroll_progress({},{});",
+                    progress_y, progress_x
+                );
+                ctx.eval::<(), _>(script.as_str()).ok();
+            });
         });
     }
 
@@ -1770,13 +1898,14 @@ impl QuickJsRuntime {
     /// Per WHATWG HTML §8.1.6.2 the event is non-bubbling and non-cancelable.
     /// No-op when the runtime has not been initialised yet.
     pub fn fire_element_scroll(&self, nid: u32) {
-        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        guard.ctx.with(|ctx| {
-            let script = format!(
-                "if(typeof _lumen_fire_scroll_on_element==='function')\
-                 _lumen_fire_scroll_on_element({nid});"
-            );
-            ctx.eval::<(), _>(script.as_str()).ok();
+        self.run(|inner| {
+            inner.ctx.with(|ctx| {
+                let script = format!(
+                    "if(typeof _lumen_fire_scroll_on_element==='function')\
+                     _lumen_fire_scroll_on_element({nid});"
+                );
+                ctx.eval::<(), _>(script.as_str()).ok();
+            });
         });
     }
 
@@ -1785,12 +1914,13 @@ impl QuickJsRuntime {
     /// Called by the shell whenever the page-level scroll position changes.
     /// No-op when the runtime has not been initialised yet.
     pub fn fire_window_scroll(&self) {
-        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        guard.ctx.with(|ctx| {
-            ctx.eval::<(), _>(
-                "if(typeof _lumen_fire_window_scroll_event==='function')\
-                 _lumen_fire_window_scroll_event();"
-            ).ok();
+        self.run(|inner| {
+            inner.ctx.with(|ctx| {
+                ctx.eval::<(), _>(
+                    "if(typeof _lumen_fire_window_scroll_event==='function')\
+                     _lumen_fire_window_scroll_event();"
+                ).ok();
+            });
         });
     }
 
@@ -1824,21 +1954,22 @@ impl QuickJsRuntime {
     /// the target function and the resolver so the call is a no-op when the DOM
     /// bindings are absent.
     fn fire_snap_event(&self, func: &str, nid: u32, block: Option<u32>, inline: Option<u32>) {
-        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        guard.ctx.with(|ctx| {
-            let blk = match block {
-                Some(b) => format!("_lumen_make_element({b})"),
-                None => "null".to_string(),
-            };
-            let inl = match inline {
-                Some(i) => format!("_lumen_make_element({i})"),
-                None => "null".to_string(),
-            };
-            let script = format!(
-                "if(typeof {func}==='function'&&typeof _lumen_make_element==='function')\
-                 {func}({nid},{blk},{inl});"
-            );
-            ctx.eval::<(), _>(script.as_str()).ok();
+        self.run(|inner| {
+            inner.ctx.with(|ctx| {
+                let blk = match block {
+                    Some(b) => format!("_lumen_make_element({b})"),
+                    None => "null".to_string(),
+                };
+                let inl = match inline {
+                    Some(i) => format!("_lumen_make_element({i})"),
+                    None => "null".to_string(),
+                };
+                let script = format!(
+                    "if(typeof {func}==='function'&&typeof _lumen_make_element==='function')\
+                     {func}({nid},{blk},{inl});"
+                );
+                ctx.eval::<(), _>(script.as_str()).ok();
+            });
         });
     }
 
@@ -1859,23 +1990,24 @@ impl QuickJsRuntime {
         first_ui_event_ts: f64,
         scripts_json: Option<&str>,
     ) {
-        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        guard.ctx.with(|ctx| {
-            let blocking = (duration_ms - 50.0_f64).max(0.0);
-            let scripts_arg = match scripts_json {
-                Some(s) => {
-                    // Escape single quotes inside the JSON string for safe JS embedding.
-                    let escaped = s.replace('\\', "\\\\").replace('\'', "\\'");
-                    format!("'{escaped}'")
-                }
-                None => "null".to_string(),
-            };
-            let script = format!(
-                "if(typeof _lumen_deliver_long_animation_frame==='function')\
-                 _lumen_deliver_long_animation_frame\
-                 ({start_ms},{duration_ms},{render_start},{style_layout_start},{first_ui_event_ts},{blocking},{scripts_arg});"
-            );
-            ctx.eval::<(), _>(script.as_str()).ok();
+        self.run(|inner| {
+            inner.ctx.with(|ctx| {
+                let blocking = (duration_ms - 50.0_f64).max(0.0);
+                let scripts_arg = match scripts_json {
+                    Some(s) => {
+                        // Escape single quotes inside the JSON string for safe JS embedding.
+                        let escaped = s.replace('\\', "\\\\").replace('\'', "\\'");
+                        format!("'{escaped}'")
+                    }
+                    None => "null".to_string(),
+                };
+                let script = format!(
+                    "if(typeof _lumen_deliver_long_animation_frame==='function')\
+                     _lumen_deliver_long_animation_frame\
+                     ({start_ms},{duration_ms},{render_start},{style_layout_start},{first_ui_event_ts},{blocking},{scripts_arg});"
+                );
+                ctx.eval::<(), _>(script.as_str()).ok();
+            });
         });
     }
 
@@ -1888,18 +2020,31 @@ impl QuickJsRuntime {
     ///   64 KiB so subsequent allocations trigger GC much sooner, keeping
     ///   the retained heap small during long background stays.
     pub fn run_gc_pass(&self, level: gc_policy::GcLevel) {
-        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        match level {
-            gc_policy::GcLevel::Soft => {
-                guard._rt.set_gc_threshold(gc_policy::GC_THRESHOLD_ACTIVE);
+        self.run(|inner| {
+            match level {
+                gc_policy::GcLevel::Soft => {
+                    inner._rt.set_gc_threshold(gc_policy::GC_THRESHOLD_ACTIVE);
+                }
+                gc_policy::GcLevel::Moderate => {
+                    inner._rt.run_gc();
+                }
+                gc_policy::GcLevel::Aggressive => {
+                    inner._rt.run_gc();
+                    inner._rt.set_gc_threshold(gc_policy::GC_THRESHOLD_IDLE);
+                }
             }
-            gc_policy::GcLevel::Moderate => {
-                guard._rt.run_gc();
-            }
-            gc_policy::GcLevel::Aggressive => {
-                guard._rt.run_gc();
-                guard._rt.set_gc_threshold(gc_policy::GC_THRESHOLD_IDLE);
-            }
+        });
+    }
+}
+
+impl Drop for QuickJsRuntime {
+    fn drop(&mut self) {
+        // Ask the JS thread to stop, then join so the QuickJS runtime is dropped
+        // on its own thread. Ignore send errors: if the thread already exited the
+        // channel is closed and there is nothing left to tear down.
+        let _ = self.cmd_tx.send(JsCommand::Shutdown);
+        if let Some(handle) = self.js_thread.take() {
+            let _ = handle.join();
         }
     }
 }
@@ -1912,15 +2057,14 @@ impl Default for QuickJsRuntime {
 
 impl JsRuntime for QuickJsRuntime {
     fn eval(&self, script: &str) -> JsResult<JsValue> {
-        let guard = self.inner.lock().unwrap();
-        guard.ctx.with(|ctx| {
+        self.run(|inner| inner.ctx.with(|ctx| {
             // Pre-process TC39 decorator syntax (Phase 0 transformer); QuickJS
             // itself rejects `@dec` with a SyntaxError.
             let transformed = decorators::maybe_transform_decorators(&ctx, script);
             let code = transformed.as_deref().unwrap_or(script);
             let val: Value = ctx.eval(code).map_err(|e| rq_err(&ctx, e))?;
             from_rq(&ctx, val)
-        })
+        }))
     }
 
     fn eval_module(&self, source: &str) -> JsResult<()> {
@@ -1932,24 +2076,21 @@ impl JsRuntime for QuickJsRuntime {
     }
 
     fn set_global(&self, name: &str, value: JsValue) -> JsResult<()> {
-        let guard = self.inner.lock().unwrap();
-        guard.ctx.with(|ctx| {
+        self.run(|inner| inner.ctx.with(|ctx| {
             let rq = to_rq(&ctx, value)?;
             ctx.globals().set(name, rq).map_err(|e| rq_err(&ctx, e))
-        })
+        }))
     }
 
     fn get_global(&self, name: &str) -> JsResult<JsValue> {
-        let guard = self.inner.lock().unwrap();
-        guard.ctx.with(|ctx| {
+        self.run(|inner| inner.ctx.with(|ctx| {
             let val: Value = ctx.globals().get(name).map_err(|e| rq_err(&ctx, e))?;
             from_rq(&ctx, val)
-        })
+        }))
     }
 
     fn call_function(&self, name: &str, args: &[JsValue]) -> JsResult<JsValue> {
-        let guard = self.inner.lock().unwrap();
-        guard.ctx.with(|ctx| {
+        self.run(|inner| inner.ctx.with(|ctx| {
             // Verify the function exists before building the call.
             let _: Function = ctx.globals().get(name).map_err(|e| rq_err(&ctx, e))?;
 
@@ -1973,7 +2114,7 @@ impl JsRuntime for QuickJsRuntime {
             ctx.eval::<Value, _>("delete __lum_args__").ok();
 
             from_rq(&ctx, result)
-        })
+        }))
     }
 
     fn engine_name(&self) -> &'static str {

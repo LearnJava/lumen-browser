@@ -11907,12 +11907,14 @@ mod tests {
         rt.update_layout_rects([(nid, [0.0, 0.0, 4.0, 4.0])].into_iter().collect());
         rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
         // Drain dirty list so next flush only sees scale_resize changes.
-        let _ = crate::canvas2d::flush_dirty();
+        // Must go through the runtime so the drain runs on the JS thread where
+        // the canvas thread-local registry lives (B-1: runtime off the UI thread).
+        let _ = rt.flush_canvas_updates();
         // Change CSS dims to 8×8 — triggers scale_resize + marks dirty.
         rt.update_layout_rects([(nid, [0.0, 0.0, 8.0, 8.0])].into_iter().collect());
         rt.eval("_lumen_deliver_canvas_css_resize()").unwrap();
         // Canvas backing buffer should now be 8×8.
-        let dirty = crate::canvas2d::flush_dirty();
+        let dirty = rt.flush_canvas_updates();
         let resized = dirty.iter().any(|(id, w, h, _)| *id == nid && *w == 8 && *h == 8);
         assert!(resized, "canvas should have been scaled to 8×8");
     }

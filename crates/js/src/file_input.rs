@@ -26,10 +26,10 @@
 //! 1. `open_file_picker` calls `register_file_token(path)` for each selected file.
 //! 2. Tokens are included in the JSON passed to `_lumen_deliver_file_list(nid, json)`.
 //! 3. JSON shape: `[{name, token, size, mime_type, last_modified_ms}, ...]`
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{LazyLock, Mutex};
 
 use rquickjs::{Ctx, Function, Object};
 
@@ -37,9 +37,16 @@ use rquickjs::{Ctx, Function, Object};
 
 static NEXT_TOKEN: AtomicU64 = AtomicU64::new(1);
 
-thread_local! {
-    static FILE_REGISTRY: RefCell<HashMap<u64, PathBuf>> =
-        RefCell::new(HashMap::new());
+// The token registry is written by the shell (UI thread, `register_file_token`)
+// and read by the JS file-read bindings (which run on the dedicated JS thread
+// after B-1). A process-global `Mutex` shares it correctly across both threads;
+// a `thread_local` would split it once the runtime moved off the UI thread.
+// Tokens are globally unique (`NEXT_TOKEN`), so a shared map is sound.
+static FILE_REGISTRY: LazyLock<Mutex<HashMap<u64, PathBuf>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn registry() -> std::sync::MutexGuard<'static, HashMap<u64, PathBuf>> {
+    FILE_REGISTRY.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Register a file path and return an opaque token for JS access.
@@ -49,19 +56,17 @@ thread_local! {
 /// specific file, not to arbitrary paths.
 pub fn register_file_token(path: &str) -> u64 {
     let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
-    FILE_REGISTRY.with(|r| {
-        r.borrow_mut().insert(token, PathBuf::from(path));
-    });
+    registry().insert(token, PathBuf::from(path));
     token
 }
 
 /// Revoke all tokens — should be called when a browsing context is torn down.
 pub fn clear_file_registry() {
-    FILE_REGISTRY.with(|r| r.borrow_mut().clear());
+    registry().clear();
 }
 
 fn read_file_bytes_for_token(token: u64) -> Option<Vec<u8>> {
-    let path = FILE_REGISTRY.with(|r| r.borrow().get(&token).cloned())?;
+    let path = registry().get(&token).cloned()?;
     std::fs::read(&path).ok()
 }
 
