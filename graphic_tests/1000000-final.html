@@ -234,6 +234,18 @@
     <div class="mq-sw sup-bad"></div>
   </div>
 
+  <!-- ── @supports font-tech() / font-format() demo (CSS Conditional L4 §4) ── -->
+  <style>
+    @supports font-tech(variations)         { .sft-var { background: #2f855a; } }
+    @supports font-format(woff2)            { .sft-w2  { background: #2f855a; } }
+    @supports font-tech(features-graphite)  { .sft-bad { background: #2b6cb0; } }
+  </style>
+  <div class="mq-row">
+    <div class="mq-sw sft-var"></div>
+    <div class="mq-sw sft-w2"></div>
+    <div class="mq-sw sft-bad"></div>
+  </div>
+
   <!-- ── line-height-step demo (CSS Rhythmic Sizing L1 §2) ── -->
   <style>
     .lhs-row { margin-top: 12px; margin-left: 24px; display: flex; gap: 24px; }

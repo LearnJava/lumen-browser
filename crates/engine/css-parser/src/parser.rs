@@ -985,9 +985,11 @@ pub struct SupportsRule {
 /// `<test>       = "(" <property>: <value> ")" | "(" <condition> ")"`.
 ///
 /// Phase 0: парсер также распознаёт `selector(<simple>)` (CSS Conditional
-/// L4) и сохраняет селектор как сырую строку — реальный матчинг отложен.
-/// Неизвестные функциональные тесты (`font-tech(...)`, `font-format(...)`)
-/// → `Unknown`, evaluator возвращает false.
+/// L4) и сохраняет селектор как сырую строку.
+/// Функциональные тесты `font-tech(<font-tech>)` и
+/// `font-format(<font-format>)` (CSS Conditional L4 §4 / CSS Fonts L4 §4.3)
+/// тоже типизированы — evaluator сверяет аргумент со списком технологий и
+/// форматов шрифтов, поддержанных движком `lumen-font`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SupportsCondition {
     /// `(prop: value)` — declaration test. Текущий supports-evaluator
@@ -1002,9 +1004,34 @@ pub enum SupportsCondition {
     Or(Vec<SupportsCondition>),
     /// `selector(<sel>)` — CSS Conditional L4. Phase 0 не оценивает.
     Selector(String),
+    /// `font-tech(<font-tech>)` — CSS Conditional L4 §4 / CSS Fonts L4 §4.3.
+    /// Хранит lowercase-ключевое слово технологии шрифта (например,
+    /// `variations`, `color-colrv1`, `features-opentype`). Evaluator
+    /// возвращает `true`, если технология реализована в `lumen-font`.
+    FontTech(String),
+    /// `font-format(<font-format>)` — CSS Conditional L4 §4 / CSS Fonts L4 §4.3.
+    /// Хранит lowercase-ключевое слово формата шрифта (например, `woff2`,
+    /// `opentype`, `truetype`). Кавычки legacy-строкового синтаксиса
+    /// (`font-format("woff2")`) снимаются при разборе. Evaluator возвращает
+    /// `true`, если формат декодируется движком `lumen-font`.
+    FontFormat(String),
     /// Невалидный или нераспознанный тест — evaluator возвращает false.
     Unknown,
 }
+
+/// Технологии шрифтов (`<font-tech>`, CSS Fonts L4 §4.3), которые
+/// `lumen-font` реально реализует: OpenType-фичи (GSUB/GPOS) и вариативные
+/// шрифты (fvar/gvar/avar/HVAR/MVAR). Цветные глифы (COLR/CPAL, sbix, CBDT,
+/// SVG-in-OpenType), палитры, AAT/Graphite-фичи и инкрементальная загрузка
+/// пока не поддержаны — см. `crates/engine/font/src/lib.rs` (заголовок).
+const SUPPORTED_FONT_TECH: &[&str] = &["features-opentype", "variations"];
+
+/// Форматы шрифтов (`<font-format>`, CSS Fonts L4 §4.3), которые
+/// `lumen-font` умеет декодировать: TrueType (glyf), OpenType (CFF/glyf +
+/// OT layout), WOFF1 (`decode_woff1`) и WOFF2 (`decode_woff2`). Контейнеры
+/// `collection` (.ttc), `embedded-opentype` (EOT) и `svg`-шрифты не
+/// поддержаны — см. `crates/engine/font/src/woff2.rs` и `lib.rs`.
+const SUPPORTED_FONT_FORMAT: &[&str] = &["opentype", "truetype", "woff", "woff2"];
 
 impl SupportsCondition {
     /// Вычислить условие: вернуть `true`, если потребитель поддерживает
@@ -1015,7 +1042,9 @@ impl SupportsCondition {
     /// `Selector(<sel>)` (CSS Conditional L4 §4.2 `selector()`) парсится и
     /// признаётся поддержанным, если каждая его часть распознаётся движком —
     /// см. [`ComplexSelector::is_supported`]. Пустой/невалидный селектор → `false`.
-    /// `Unknown` (например, `font-tech(...)` / `font-format(...)`) → `false`.
+    /// `FontTech`/`FontFormat` сверяются со списками технологий и форматов,
+    /// которые реально реализует `lumen-font` ([`SUPPORTED_FONT_TECH`] /
+    /// [`SUPPORTED_FONT_FORMAT`]). `Unknown` → `false`.
     pub fn evaluate(&self, known_properties: &[&str]) -> bool {
         match self {
             Self::Decl { property, .. } => known_properties
@@ -1028,6 +1057,12 @@ impl SupportsCondition {
                 let list = parse_selector_list(sel);
                 !list.is_empty() && list.iter().all(ComplexSelector::is_supported)
             }
+            Self::FontTech(tech) => SUPPORTED_FONT_TECH
+                .iter()
+                .any(|t| t.eq_ignore_ascii_case(tech)),
+            Self::FontFormat(fmt) => SUPPORTED_FONT_FORMAT
+                .iter()
+                .any(|f| f.eq_ignore_ascii_case(fmt)),
             Self::Unknown => false,
         }
     }
@@ -1666,8 +1701,49 @@ fn parse_supports_term(b: &[u8], p: &mut usize) -> SupportsCondition {
     parse_supports_atom(b, p)
 }
 
+/// Если ввод в позиции `*p` начинается с функции `name` (case-insensitive),
+/// продвинуть `*p` за закрывающую `)` и вернуть содержимое скобок как строку.
+/// Иначе оставить `*p` без изменений и вернуть `None`. Учитывает вложенные
+/// скобки в аргументе (хотя для `font-tech`/`font-format` они не нужны).
+fn match_func_arg(b: &[u8], p: &mut usize, name: &[u8]) -> Option<String> {
+    let n = name.len();
+    if *p + n > b.len() || !b[*p..*p + n].eq_ignore_ascii_case(name) {
+        return None;
+    }
+    let start = *p + n;
+    let mut q = start;
+    let mut depth: i32 = 1;
+    while q < b.len() && depth > 0 {
+        match b[q] {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            _ => {}
+        }
+        if depth == 0 {
+            break;
+        }
+        q += 1;
+    }
+    let arg = std::str::from_utf8(&b[start..q]).unwrap_or("").to_string();
+    if q < b.len() && b[q] == b')' {
+        q += 1;
+    }
+    *p = q;
+    Some(arg)
+}
+
 fn parse_supports_atom(b: &[u8], p: &mut usize) -> SupportsCondition {
     skip_ws(b, p);
+    // `font-tech( <font-tech> )` / `font-format( <font-format> )`
+    // (CSS Conditional L4 §4 / CSS Fonts L4 §4.3). Один ident-аргумент;
+    // у `font-format` допустим legacy-строковый синтаксис (кавычки снимаем).
+    if let Some(arg) = match_func_arg(b, p, b"font-tech(") {
+        return SupportsCondition::FontTech(arg.trim().to_ascii_lowercase());
+    }
+    if let Some(arg) = match_func_arg(b, p, b"font-format(") {
+        let unquoted = arg.trim().trim_matches(['"', '\'']).trim();
+        return SupportsCondition::FontFormat(unquoted.to_ascii_lowercase());
+    }
     // `selector( ... )`
     let saved = *p;
     if *p + 9 <= b.len() && b[*p..*p + 9].eq_ignore_ascii_case(b"selector(") {
@@ -6255,6 +6331,80 @@ mod tests {
         assert!(ok.iter().all(ComplexSelector::is_supported));
         let bad = parse_selector_list(":is(.a, :where(:totally-fake))");
         assert!(!bad.iter().all(ComplexSelector::is_supported));
+    }
+
+    #[test]
+    fn at_supports_font_tech_parse() {
+        // `font-tech(<font-tech>)` типизируется в FontTech, аргумент lowercase.
+        let s = parse("@supports font-tech(VARIATIONS) { p { color: red; } }");
+        match &s.supports_rules[0].condition {
+            SupportsCondition::FontTech(t) => assert_eq!(t, "variations"),
+            other => panic!("expected FontTech, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn at_supports_font_format_parse_keyword_and_string() {
+        // Keyword-форма.
+        match &parse("@supports font-format(woff2) { p { x: y; } }").supports_rules[0].condition {
+            SupportsCondition::FontFormat(f) => assert_eq!(f, "woff2"),
+            other => panic!("expected FontFormat, got {other:?}"),
+        }
+        // Legacy-строковая форма — кавычки снимаются.
+        match &parse("@supports font-format(\"opentype\") { p { x: y; } }").supports_rules[0].condition {
+            SupportsCondition::FontFormat(f) => assert_eq!(f, "opentype"),
+            other => panic!("expected FontFormat, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn at_supports_evaluate_font_tech() {
+        // Реализованные технологии → true.
+        assert!(parse_supports_condition("font-tech(variations)").evaluate(&[]));
+        assert!(parse_supports_condition("font-tech(features-opentype)").evaluate(&[]));
+        // Нереализованные (цветные глифы, палитры, AAT, incremental) → false.
+        for t in [
+            "font-tech(color-colrv1)",
+            "font-tech(color-svg)",
+            "font-tech(palettes)",
+            "font-tech(features-aat)",
+            "font-tech(incremental)",
+            "font-tech(totally-fake)",
+        ] {
+            assert!(!parse_supports_condition(t).evaluate(&[]), "{t} must be unsupported");
+        }
+    }
+
+    #[test]
+    fn at_supports_evaluate_font_format() {
+        // Декодируемые форматы → true.
+        for f in [
+            "font-format(truetype)",
+            "font-format(opentype)",
+            "font-format(woff)",
+            "font-format(woff2)",
+            "font-format(\"woff2\")",
+        ] {
+            assert!(parse_supports_condition(f).evaluate(&[]), "{f} must be supported");
+        }
+        // Неподдержанные контейнеры/форматы → false.
+        for f in [
+            "font-format(collection)",
+            "font-format(embedded-opentype)",
+            "font-format(svg)",
+            "font-format(totally-fake)",
+        ] {
+            assert!(!parse_supports_condition(f).evaluate(&[]), "{f} must be unsupported");
+        }
+    }
+
+    #[test]
+    fn at_supports_font_tech_format_in_combinators() {
+        // Комбинируются с and/or/not как обычные условия.
+        assert!(parse_supports_condition("font-format(woff2) and font-tech(variations)").evaluate(&[]));
+        assert!(!parse_supports_condition("font-format(woff2) and font-tech(palettes)").evaluate(&[]));
+        assert!(parse_supports_condition("font-format(svg) or font-format(woff2)").evaluate(&[]));
+        assert!(parse_supports_condition("not font-tech(color-colrv1)").evaluate(&[]));
     }
 
     #[test]
