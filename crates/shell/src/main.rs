@@ -145,6 +145,32 @@ enum LoadEvent {
     LoadDone(RawPage, u64),
     /// Ошибка при загрузке страницы. Последнее поле — generation навигации (U-1).
     LoadError(String, u64),
+    /// BUG-171 этап 2: финальный pipeline (parse → JS → fetch подресурсов →
+    /// layout) выполнен на фоновом потоке; готовый результат применяется на
+    /// UI-потоке (`apply_loaded_page`) без блокировки event loop. Последнее
+    /// поле — generation навигации (U-1).
+    RenderDone(Box<RenderOutcome>, u64),
+}
+
+/// Готовый результат финального pipeline: display-list-страница, источник для
+/// relayout и живой JS-хэндл (если включён QuickJS). Тип-алиас, чтобы вынести
+/// сложную тройку из сигнатур (`render_bytes`, `RenderOutcome`).
+type RenderedPage = (LoadedPage, LayoutSource, Option<Box<dyn PersistentJs>>);
+
+/// BUG-171 этап 2: результат финального off-UI-thread рендера (`render_bytes`),
+/// пересылаемый назад на UI-поток через `LoadEvent::RenderDone`.
+///
+/// Все поля `Send`: `LoadedPage`/`LayoutSource` — обычные данные; `js_ctx` —
+/// хэндл QuickJS (`Send + Sync` по ADR-014, создан на рендер-потоке);
+/// `preload_dispatched` временно забран из `Lumen` на время рендера (он его
+/// дедуплицирует) и возвращается для восстановления.
+struct RenderOutcome {
+    /// Готовая страница + источник layout + живой JS-хэндл; либо текст ошибки
+    /// (`Box<dyn Error>` не `Send`, поэтому конвертируется в `String`).
+    result: Result<RenderedPage, String>,
+    /// Набор уже разосланных preload-хинтов, забранный из
+    /// `Lumen::preload_dispatched` на время рендера.
+    preload_dispatched: std::collections::HashSet<String>,
 }
 
 /// PH3-19: дескриптор @font-face url()-источника, ещё не загруженного в память.
@@ -596,7 +622,7 @@ fn run_window_mode(
         notes_store: lumen_knowledge::Notes::open_in_memory().expect("notes_store init"),
         search_history: SearchHistory::open_in_memory().expect("search_history init"),
         next_history_id: 1,
-        hyp_provider: KnuthLiangHyphenation::new(),
+        hyp_provider: Arc::new(KnuthLiangHyphenation::new()),
         animated_gifs: HashMap::new(),
         gif_last_frame: HashMap::new(),
         video_gif_last_frame: HashMap::new(),
@@ -1697,7 +1723,10 @@ enum JsNavigateRequest {
 /// renders. The JS DOM closures hold a reference to the same
 /// `Arc<Mutex<Document>>` as `LayoutSource::document`, so event-driven DOM
 /// mutations are visible to the next relayout without a full page reload.
-pub(crate) trait PersistentJs {
+// BUG-171 этап 2: `Send` нужен, чтобы готовый JS-хэндл (`QuickJsRuntime` —
+// `Send + Sync` по ADR-014/B-1), созданный финальным pipeline на фоновом потоке,
+// пересылался обратно на UI-поток внутри `LoadEvent::RenderDone`.
+pub(crate) trait PersistentJs: Send {
     /// Evaluate a JS script (event handler dispatch, rAF tick, etc.).
     fn eval_js(&self, script: &str);
     /// Consume any navigation request placed by JS during the last `eval_js`.
@@ -4358,7 +4387,7 @@ fn render_bytes(
     cross_origin_isolated: bool,
     sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
     cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
-) -> Result<(LoadedPage, LayoutSource, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
+) -> Result<RenderedPage, Box<dyn Error>> {
     let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
@@ -5373,7 +5402,9 @@ struct Lumen {
     next_history_id: i64,
     /// Knuth–Liang hyphenation provider — реализует CSS `hyphens: auto`.
     /// Lazy-loads per-locale dictionaries on first use; cached for subsequent layouts.
-    hyp_provider: KnuthLiangHyphenation,
+    /// `Arc`, чтобы финальный pipeline (BUG-171 этап 2) мог разделить провайдер с
+    /// фоновым рендер-потоком без потери прогретого кэша словарей.
+    hyp_provider: Arc<KnuthLiangHyphenation>,
     /// Multi-frame GIF animations keyed by the same src URL used in `DrawImage`.
     /// Populated at image-load time; cleared on page navigation.
     /// Single-frame GIFs are not stored here — handled as regular static images.
@@ -5981,7 +6012,7 @@ impl Lumen {
         // чужой scroll/relevant.
         lumen_layout::set_cv_scroll(self.scroll_x, self.scroll_y);
         lumen_layout::set_cv_relevant(self.cv_relevant.clone());
-        let (new_dl, lb) = relayout_page(src, viewport, &self.hyp_provider, self.dark_mode, &self.web_fonts);
+        let (new_dl, lb) = relayout_page(src, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts);
         lumen_layout::clear_interactive_state();
         lumen_layout::set_cv_scroll(0.0, 0.0);
         lumen_layout::set_cv_relevant(std::collections::HashSet::new());
@@ -6438,7 +6469,7 @@ impl Lumen {
                 Arc::new(lumen_storage::SwStore::new(Arc::clone(&self.sw_backend), o))
                     as Arc<dyn lumen_core::ext::SwBackend>
             });
-            self.source.load(self.event_sink.clone(), viewport, ls_store, idb_backend, sw_backend, &self.hyp_provider, self.cookie_banner_dismiss)
+            self.source.load(self.event_sink.clone(), viewport, ls_store, idb_backend, sw_backend, &*self.hyp_provider, self.cookie_banner_dismiss)
         };
 
         match load_result {
@@ -7297,7 +7328,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // U-1: drop a superseded navigation's final pipeline — otherwise a
                 // slow earlier load would render its page over the newer one.
                 if generation != self.load_generation { return; }
-                eprintln!("Streaming завершён, финальный pipeline");
+                eprintln!("Streaming завершён, финальный pipeline (off-thread)");
                 self.stream_builder = None;
                 self.stream_sheet = lumen_css_parser::Stylesheet::default();
                 let viewport = self.renderer.as_ref().map_or_else(
@@ -7307,10 +7338,67 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         Size::new(s.width, s.height)
                     },
                 );
+                // Storage-хэндлы требуют `&mut self` (ls_storage) — берём их на
+                // UI-потоке, дальше это `Arc`-и (Send), уезжающие в рендер-поток.
                 let ls_store = ls_store_for_base(&raw.base, &mut self.ls_storage);
                 let idb_backend = idb_store_for_base(&raw.base, self.idb_dir.as_deref());
                 let sw_backend = sw_store_for_base(&raw.base, &self.sw_backend);
-                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, idb_backend, sw_backend, &self.hyp_provider, self.cookie_banner_dismiss, self.deterministic, self.dark_mode, Some(Arc::clone(&self.cookie_jar)), raw.cross_origin_isolated, Some(Arc::clone(&self.sw_worker_store)), Some(Arc::clone(&self.cache_store) as Arc<dyn lumen_core::ext::CacheBackend>)) {
+                // BUG-171 этап 2: тяжёлый финальный pipeline (fetch скриптов →
+                // QuickJS → fetch+декод картинок/CSS/шрифтов → layout) уезжает с
+                // UI-потока на фоновый. Пока он крутится, event loop остаётся
+                // живым (перерисовка последнего streaming-кадра, ввод). QuickJS-
+                // рантайм теперь хэндл (ADR-014/B-1): создаётся на рендер-потоке и
+                // безопасно (`Send`) пересылается на UI внутри `RenderDone`.
+                // `preload_dispatched` забираем (рендер его дедуплицирует) и
+                // возвращаем в `RenderDone`; на это время self-копия пуста, что
+                // безопасно — следующая навигация пересоздаёт набор в streaming.
+                let sink = self.event_sink.clone();
+                let hp = Arc::clone(&self.hyp_provider);
+                let cookie_jar = Some(Arc::clone(&self.cookie_jar));
+                let sw_worker_store = Some(Arc::clone(&self.sw_worker_store));
+                let cache_backend =
+                    Some(Arc::clone(&self.cache_store) as Arc<dyn lumen_core::ext::CacheBackend>);
+                let cookie_banner_dismiss = self.cookie_banner_dismiss;
+                let deterministic = self.deterministic;
+                let dark_mode = self.dark_mode;
+                let proxy = self.load_proxy.clone();
+                let mut preload_dispatched = std::mem::take(&mut self.preload_dispatched);
+                std::thread::spawn(move || {
+                    let result = render_bytes(
+                        &raw.bytes,
+                        raw.content_type,
+                        &raw.base,
+                        sink,
+                        viewport,
+                        &mut preload_dispatched,
+                        ls_store,
+                        idb_backend,
+                        sw_backend,
+                        &*hp,
+                        cookie_banner_dismiss,
+                        deterministic,
+                        dark_mode,
+                        cookie_jar,
+                        raw.cross_origin_isolated,
+                        sw_worker_store,
+                        cache_backend,
+                    )
+                    .map_err(|e| e.to_string());
+                    // Если event loop уже закрыт — Box (вместе с JS-хэндлом)
+                    // дропнется здесь, корректно завершив JS-поток.
+                    let _ = proxy.send_event(LoadEvent::RenderDone(
+                        Box::new(RenderOutcome { result, preload_dispatched }),
+                        generation,
+                    ));
+                });
+            }
+            LoadEvent::RenderDone(outcome, generation) => {
+                // BUG-171 этап 2: устаревшую навигацию отбрасываем — её страница и
+                // JS-хэндл дропаются вместе с `outcome` (JS-поток завершается).
+                if generation != self.load_generation { return; }
+                let RenderOutcome { result, preload_dispatched } = *outcome;
+                self.preload_dispatched = preload_dispatched;
+                match result {
                     Ok((page, new_layout_source, new_js_ctx)) => {
                         click_log::log_load_ok(&self.source.describe(), page.title.as_deref().unwrap_or(""));
                         self.apply_loaded_page(page, Some(new_layout_source), new_js_ctx);
@@ -7328,7 +7416,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                     Err(e) => {
                         self.nav_start = None;
-                        click_log::log_load_err(&self.source.describe(), &e.to_string());
+                        click_log::log_load_err(&self.source.describe(), &e);
                         eprintln!("Ошибка финального render {}: {e}", self.source.describe());
                     }
                 }
@@ -13234,7 +13322,7 @@ impl Lumen {
             panels::sidebar_panel::PANEL_WIDTH,
             self.viewport_height_css().max(100.0),
         );
-        let (dl, _lb) = relayout_page(&src, sidebar_vp, &self.hyp_provider, self.dark_mode, &self.web_fonts);
+        let (dl, _lb) = relayout_page(&src, sidebar_vp, &*self.hyp_provider, self.dark_mode, &self.web_fonts);
         let content_h = content_height_of(&dl);
         self.sidebar.set_page(dl, doc_title, content_h);
 
@@ -14439,7 +14527,7 @@ impl Lumen {
         // scroll-положения; ratchet новой страницы стартует с нуля.
         lumen_layout::set_cv_scroll(data.scroll_x, data.scroll_y);
         lumen_layout::set_cv_relevant(std::collections::HashSet::new());
-        let (display_list, lb) = relayout_page(&layout_source, viewport, &self.hyp_provider, self.dark_mode, &self.web_fonts);
+        let (display_list, lb) = relayout_page(&layout_source, viewport, &*self.hyp_provider, self.dark_mode, &self.web_fonts);
         lumen_layout::set_cv_scroll(0.0, 0.0);
 
         // Install into the active slot.
@@ -15461,6 +15549,29 @@ fn escape_js_string_char(ch: char) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── BUG-171 этап 2: off-UI-thread финальный pipeline ────────────────────
+    //
+    // Финальный render (`render_bytes`) уезжает на фоновый поток, а готовый
+    // результат пересылается назад через `LoadEvent::RenderDone`. Это работает
+    // только если весь груз — `Send`: `RenderOutcome` (включая JS-хэндл за
+    // `Box<dyn PersistentJs>`), сам `LoadEvent` и proxy. Регрессионная защита:
+    // если кто-то добавит `!Send`-поле в `LoadedPage`/`LayoutSource` или снимет
+    // `Send` с `PersistentJs`, эти ассерты перестанут компилироваться.
+
+    fn _assert_send<T: Send>() {}
+
+    #[test]
+    fn render_pipeline_payload_is_send() {
+        // Груз, пересекающий границу рендер-поток → UI-поток.
+        _assert_send::<RenderOutcome>();
+        _assert_send::<LoadEvent>();
+        _assert_send::<Box<dyn PersistentJs>>();
+        _assert_send::<EventLoopProxy<LoadEvent>>();
+        // Аргументы, уезжающие в рендер-поток.
+        _assert_send::<Arc<KnuthLiangHyphenation>>();
+        _assert_send::<RawPage>();
+    }
 
     // ── Fullscreen viewport reconciliation (BUG-167) ────────────────────────
 
