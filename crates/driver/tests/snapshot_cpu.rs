@@ -206,6 +206,11 @@ const PAGES: &[&str] = &[
     // over stroke, hiding its inner half). A GUI-independent gate for the
     // fill/stroke emission order in emit_svg_shape.
     "119-paint-order",
+    // SVG 2 §11.6 / §11.10.2 — text-anchor as a CSS property (+ presentation
+    // attribute + CSS-overrides-attribute). The visible effect is glyph position,
+    // which diverges from Edge (rule #3), so this deterministic CPU snapshot — not
+    // run.py's Edge pipeline — is the regression gate for the text-anchor wiring.
+    "127-svg-text-anchor",
     // Kitchen-sink final page: ~80 objects combining every implemented property.
     // Manual-only in the Edge pipeline (no run.py entry); here it serves as a
     // broad regression baseline for the CPU path.

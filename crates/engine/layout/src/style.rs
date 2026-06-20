@@ -2918,6 +2918,15 @@ pub struct ComputedStyle {
     /// Order fill/stroke/markers are painted; initial `normal` = fill, stroke,
     /// markers (fill drawn first, markers on top).
     pub paint_order: SvgPaintOrder,
+    /// SVG 2 §11.6 / CSS — `text-anchor`. Inherited. `None` = not set by CSS
+    /// (the SVG presentation attribute, then the `start` initial, applies at box
+    /// build time). `Some(_)` = an author CSS rule won the cascade and overrides
+    /// any presentation attribute (presentation attributes have specificity 0).
+    pub text_anchor: Option<crate::box_tree::SvgTextAnchor>,
+    /// SVG 2 §11.10.2 / CSS — `dominant-baseline`. Inherited. `None` = not set by
+    /// CSS (the presentation attribute, then the `auto` initial, applies at box
+    /// build time). `Some(_)` = author CSS rule overrides the attribute.
+    pub dominant_baseline: Option<crate::box_tree::SvgDominantBaseline>,
     // CSS Logical Properties L1 §2 — temporary storage for logical properties.
     // These are resolved to physical properties in resolve_logical_properties().
     /// CSS Logical Properties L1 — `inline-size`. `None` = auto.
@@ -5236,6 +5245,8 @@ impl ComputedStyle {
             svg_stroke_dasharray: Vec::new(),
             svg_stroke_dashoffset: 0.0,
             paint_order: SvgPaintOrder::default(),
+            text_anchor: None,
+            dominant_baseline: None,
             // CSS Logical Properties L1 — initial values.
             inline_size: None,
             block_size: None,
@@ -5574,6 +5585,8 @@ pub fn compute_style(
         svg_stroke_dasharray: inherited.svg_stroke_dasharray.clone(),
         svg_stroke_dashoffset: inherited.svg_stroke_dashoffset,
         paint_order: inherited.paint_order,
+        text_anchor: inherited.text_anchor,
+        dominant_baseline: inherited.dominant_baseline,
         // CSS Logical Properties L1 — not inherited. Initial values.
         inline_size: None,
         block_size: None,
@@ -8558,6 +8571,8 @@ fn apply_svg_presentational_hints(
         "stroke-miterlimit",
         "stroke-dasharray",
         "stroke-dashoffset",
+        "text-anchor",
+        "dominant-baseline",
         "color",
         "opacity",
     ];
@@ -13225,6 +13240,33 @@ fn apply_declaration(
                 style.paint_order = o;
             }
         }
+        "text-anchor" => {
+            // SVG 2 §11.6 — horizontal anchoring of SVG <text>. As a CSS property
+            // it overrides the `text-anchor` presentation attribute. Unknown values
+            // are ignored (leave the cascaded value untouched).
+            use crate::box_tree::SvgTextAnchor;
+            match val.trim().to_ascii_lowercase().as_str() {
+                "start" => style.text_anchor = Some(SvgTextAnchor::Start),
+                "middle" => style.text_anchor = Some(SvgTextAnchor::Middle),
+                "end" => style.text_anchor = Some(SvgTextAnchor::End),
+                _ => {}
+            }
+        }
+        "dominant-baseline" => {
+            // SVG 2 §11.10.2 — vertical baseline alignment of SVG <text>. As a CSS
+            // property it overrides the `dominant-baseline` presentation attribute.
+            use crate::box_tree::SvgDominantBaseline;
+            match val.trim().to_ascii_lowercase().as_str() {
+                "auto" => style.dominant_baseline = Some(SvgDominantBaseline::Auto),
+                "baseline" => style.dominant_baseline = Some(SvgDominantBaseline::Baseline),
+                "hanging" => style.dominant_baseline = Some(SvgDominantBaseline::Hanging),
+                "middle" => style.dominant_baseline = Some(SvgDominantBaseline::Middle),
+                "central" => style.dominant_baseline = Some(SvgDominantBaseline::Central),
+                "text-before-edge" => style.dominant_baseline = Some(SvgDominantBaseline::TextBeforeEdge),
+                "text-after-edge" => style.dominant_baseline = Some(SvgDominantBaseline::TextAfterEdge),
+                _ => {}
+            }
+        }
         "line-height" => {
             // `1.5` (unitless) — коэффициент. `1.5em` — то же самое.
             // `150%` — то же самое. `24px` / `5vh` — конкретная высота,
@@ -14878,6 +14920,13 @@ fn apply_css_wide_keyword(
         // CSS Fill & Stroke L3 §6 — paint-order is inherited: unset/revert → inherited.
         "paint-order" => {
             style.paint_order = if inh { inherited.paint_order } else { init.paint_order };
+        }
+        // SVG text-anchor / dominant-baseline are inherited: unset/revert → inherited.
+        "text-anchor" => {
+            style.text_anchor = if inh { inherited.text_anchor } else { init.text_anchor };
+        }
+        "dominant-baseline" => {
+            style.dominant_baseline = if inh { inherited.dominant_baseline } else { init.dominant_baseline };
         }
         "overflow" => {
             let (x, y) = if inh_only_inherit {
@@ -23306,6 +23355,88 @@ mod tests {
         let vp = Size::new(800.0, 600.0);
         apply_declaration(&mut s, &decl, 16.0, vp, FontWeight::NORMAL, &parent, false, false);
         assert_eq!(s.paint_order, parent.paint_order);
+    }
+
+    // === text-anchor / dominant-baseline as CSS properties (SVG 2 §11.6 / §11.10.2) ===
+
+    #[test]
+    fn text_anchor_default_is_none() {
+        // Initial: unset by CSS → None (the `start` initial / presentation attribute
+        // applies at box build time).
+        assert_eq!(ComputedStyle::root().text_anchor, None);
+        assert_eq!(ComputedStyle::root().dominant_baseline, None);
+    }
+
+    #[test]
+    fn text_anchor_parses_all_keywords() {
+        use crate::box_tree::SvgTextAnchor;
+        assert_eq!(ts_prop("text-anchor", "start").text_anchor, Some(SvgTextAnchor::Start));
+        assert_eq!(ts_prop("text-anchor", "middle").text_anchor, Some(SvgTextAnchor::Middle));
+        assert_eq!(ts_prop("text-anchor", "end").text_anchor, Some(SvgTextAnchor::End));
+        // Case-insensitive.
+        assert_eq!(ts_prop("text-anchor", "MIDDLE").text_anchor, Some(SvgTextAnchor::Middle));
+    }
+
+    #[test]
+    fn dominant_baseline_parses_all_keywords() {
+        use crate::box_tree::SvgDominantBaseline;
+        assert_eq!(ts_prop("dominant-baseline", "auto").dominant_baseline, Some(SvgDominantBaseline::Auto));
+        assert_eq!(ts_prop("dominant-baseline", "central").dominant_baseline, Some(SvgDominantBaseline::Central));
+        assert_eq!(
+            ts_prop("dominant-baseline", "text-before-edge").dominant_baseline,
+            Some(SvgDominantBaseline::TextBeforeEdge)
+        );
+        assert_eq!(
+            ts_prop("dominant-baseline", "hanging").dominant_baseline,
+            Some(SvgDominantBaseline::Hanging)
+        );
+    }
+
+    #[test]
+    fn text_anchor_invalid_keeps_current() {
+        // Unknown value → leave the cascaded value untouched (here: None).
+        assert_eq!(ts_prop("text-anchor", "bogus").text_anchor, None);
+        assert_eq!(ts_prop("dominant-baseline", "sideways").dominant_baseline, None);
+    }
+
+    #[test]
+    fn text_anchor_inherited_via_unset() {
+        // Both are inherited: `unset` resolves to the inherited value (SVG container
+        // text-anchor propagates to descendant <text>).
+        use crate::box_tree::{SvgDominantBaseline, SvgTextAnchor};
+        let mut parent = ComputedStyle::root();
+        parent.text_anchor = Some(SvgTextAnchor::End);
+        parent.dominant_baseline = Some(SvgDominantBaseline::Middle);
+        let vp = Size::new(800.0, 600.0);
+        let mut s = ComputedStyle::root();
+        apply_declaration(
+            &mut s,
+            &Declaration { property: "text-anchor".into(), value: "unset".into(), important: false },
+            16.0, vp, FontWeight::NORMAL, &parent, false, false,
+        );
+        apply_declaration(
+            &mut s,
+            &Declaration { property: "dominant-baseline".into(), value: "unset".into(), important: false },
+            16.0, vp, FontWeight::NORMAL, &parent, false, false,
+        );
+        assert_eq!(s.text_anchor, Some(SvgTextAnchor::End));
+        assert_eq!(s.dominant_baseline, Some(SvgDominantBaseline::Middle));
+    }
+
+    #[test]
+    fn text_anchor_initial_resets_to_none() {
+        // `initial` → None (CSS unset, defers to attribute/`start` initial).
+        use crate::box_tree::SvgTextAnchor;
+        let mut parent = ComputedStyle::root();
+        parent.text_anchor = Some(SvgTextAnchor::End);
+        let vp = Size::new(800.0, 600.0);
+        let mut s = ComputedStyle::root();
+        apply_declaration(
+            &mut s,
+            &Declaration { property: "text-anchor".into(), value: "initial".into(), important: false },
+            16.0, vp, FontWeight::NORMAL, &parent, false, false,
+        );
+        assert_eq!(s.text_anchor, None);
     }
 
     // === quotes parsing (CSS Generated Content L3 §3.2) ===

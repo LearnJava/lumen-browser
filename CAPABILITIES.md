@@ -67,7 +67,7 @@ Snapshot: **Phase 2 «Interactive», app v0.2.0**. ~21 crates.
 - ✅ CSS Grid (px/fr/auto/repeat/minmax, explicit+auto placement, dense, subgrid). ⬜ grid-template-areas, named lines.
 - ✅ Table layout (colspan/rowspan, column widths) — live path `box_tree.rs` (note: `table.rs` is dead code).
 - ✅ Positioned: relative, absolute/fixed (out-of-flow + containing-block threading); `position: sticky` partial (offsets computed, scroll wiring shell-side).
-- ✅ SVG layout pass (viewBox, rect/circle/ellipse/line/path, `<use>` with cycle detection); vertical writing modes (`vertical-rl/lr`).
+- ✅ SVG layout pass (viewBox, rect/circle/ellipse/line/path, `<use>` with cycle detection); `<text>` with `text-anchor`/`dominant-baseline` (presentation attribute **and** CSS property — CSS overrides the attribute and inherits from `<g>`); vertical writing modes (`vertical-rl/lr`).
 - ✅ Replaced: `<img>` (picture/srcset picker), `<iframe>` placeholder.
 - ✅ Cascade: specificity + `!important`, RTL selector matching, all CSS3 structural + L4 form/UI pseudo, `:has()`, `::before/::after` (string content), `::first-line/::first-letter` (drop-cap float).
 - ✅ Values: `calc/min/max/clamp` + math fns, `var()`, `@property` registration, viewport units, intrinsic sizing (`min/max/fit-content`).
