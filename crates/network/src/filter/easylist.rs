@@ -15,14 +15,20 @@
 //! - `/regex/`                    — regex pattern match against the full URL string
 //! - `!` / `#`                    — comment lines, ignored
 //! - `##` / `#@#` / `#?#` / `#$#`— cosmetic rules, ignored
-//! - `$option,...`                — options stripped; per-type filtering is Phase 2
+//! - `$option,...`                — resource-type + party options (Phase 2):
+//!   `$script,image,stylesheet,font,xmlhttprequest,subdocument,media,other`
+//!   (and `~`-negated forms) restrict a rule to matching request types;
+//!   `$third-party` / `$~third-party` (`first-party`) restrict by party.
+//!   `domain=` and other modifiers (`important`, `match-case`, `csp=`,
+//!   `redirect=`, …) are parsed-and-ignored — the rule keeps its type/party
+//!   scope, never narrows on an unmodelled modifier (no over-allow).
 
 use std::collections::{HashMap, HashSet};
 
 use regex::Regex;
 
 use lumen_core::url::Url;
-use lumen_core::ext::RequestFilter;
+use lumen_core::ext::{RequestContext, RequestFilter, ResourceType};
 
 // ── Internal rule types ────────────────────────────────────────────────────
 
@@ -41,17 +47,168 @@ enum MatchKind {
     Regex(Regex),
 }
 
+/// Resource-type bitmask: one bit per [`ResourceType`]. A rule's
+/// [`RuleOptions::types`] is `Some(mask)` of the types it applies to.
+mod rmask {
+    pub const SCRIPT: u16 = 1 << 0;
+    pub const IMAGE: u16 = 1 << 1;
+    pub const STYLESHEET: u16 = 1 << 2;
+    pub const FONT: u16 = 1 << 3;
+    pub const XHR: u16 = 1 << 4;
+    pub const SUBDOC: u16 = 1 << 5;
+    pub const MEDIA: u16 = 1 << 6;
+    pub const OTHER: u16 = 1 << 7;
+    /// Every modelled type.
+    pub const ALL: u16 = SCRIPT | IMAGE | STYLESHEET | FONT | XHR | SUBDOC | MEDIA | OTHER;
+}
+
+/// Single-bit mask for a concrete request resource type.
+fn resource_type_bit(rt: ResourceType) -> u16 {
+    match rt {
+        ResourceType::Script => rmask::SCRIPT,
+        ResourceType::Image => rmask::IMAGE,
+        ResourceType::Stylesheet => rmask::STYLESHEET,
+        ResourceType::Font => rmask::FONT,
+        ResourceType::XmlHttpRequest => rmask::XHR,
+        ResourceType::Subdocument => rmask::SUBDOC,
+        ResourceType::Media => rmask::MEDIA,
+        ResourceType::Other => rmask::OTHER,
+    }
+}
+
+/// Maps a single EasyList type-option keyword to its mask bit, or `None` if the
+/// keyword is not a modelled resource type (party/`domain=`/other modifiers).
+fn type_option_bit(key: &str) -> Option<u16> {
+    Some(match key {
+        "script" => rmask::SCRIPT,
+        "image" => rmask::IMAGE,
+        "stylesheet" | "css" => rmask::STYLESHEET,
+        "font" => rmask::FONT,
+        "xmlhttprequest" | "xhr" => rmask::XHR,
+        "subdocument" | "frame" => rmask::SUBDOC,
+        "media" => rmask::MEDIA,
+        "other" | "object" | "object-subrequest" => rmask::OTHER,
+        _ => return None,
+    })
+}
+
+/// Parsed `$`-options constraining when a [`FilterEntry`] applies.
+///
+/// Both fields default to "applies always": `types == None` matches every
+/// resource type, `third_party == None` matches first- and third-party alike.
+#[derive(Debug, Clone, Copy)]
+struct RuleOptions {
+    /// Allowed resource-type mask, or `None` for "any type".
+    types: Option<u16>,
+    /// `Some(true)` — only third-party requests, `Some(false)` — only
+    /// first-party, `None` — either.
+    third_party: Option<bool>,
+}
+
+impl RuleOptions {
+    /// Options that match every request (no `$`-restrictions).
+    fn all() -> Self {
+        Self { types: None, third_party: None }
+    }
+
+    /// Returns `true` if `ctx` satisfies the type and party restrictions.
+    ///
+    /// Unknown context fields ([`RequestContext::unknown`]) satisfy any
+    /// restriction (conservative block) — matching the pre-Phase-2 behaviour
+    /// where options were stripped entirely.
+    fn matches(&self, ctx: &RequestContext) -> bool {
+        if let (Some(mask), Some(rt)) = (self.types, ctx.resource_type)
+            && resource_type_bit(rt) & mask == 0
+        {
+            return false;
+        }
+        if let (Some(want), Some(tp)) = (self.third_party, ctx.third_party)
+            && want != tp
+        {
+            return false;
+        }
+        true
+    }
+}
+
+/// Parse the option string after `$` into a [`RuleOptions`].
+///
+/// Positive type options form an allow-list (`$script,image` → only those);
+/// if only negated types are present, the rule applies to all *except* them
+/// (`$~image` → everything but images). `third-party`/`first-party` (and the
+/// `3p`/`1p` aliases) set the party restriction. `domain=` and any unmodelled
+/// modifier are ignored — never narrowing the rule (avoids silently allowing
+/// requests a Phase-1 build would have blocked).
+fn parse_options(opts: &str) -> RuleOptions {
+    if opts.is_empty() {
+        return RuleOptions::all();
+    }
+    let mut include: u16 = 0;
+    let mut exclude: u16 = 0;
+    let mut has_pos = false;
+    let mut has_neg = false;
+    let mut third_party: Option<bool> = None;
+
+    for raw in opts.split(',') {
+        let opt = raw.trim();
+        if opt.is_empty() {
+            continue;
+        }
+        let (neg, name) = match opt.strip_prefix('~') {
+            Some(rest) => (true, rest),
+            None => (false, opt),
+        };
+        // `key=value` modifiers (domain=…, csp=…, redirect=…): only the key
+        // matters for classification, and none are modelled types/party.
+        let key = name.split('=').next().unwrap_or(name);
+
+        if let Some(bit) = type_option_bit(key) {
+            if neg {
+                exclude |= bit;
+                has_neg = true;
+            } else {
+                include |= bit;
+                has_pos = true;
+            }
+        } else if key == "third-party" || key == "3p" {
+            // `~third-party` ⇒ first-party only.
+            third_party = Some(!neg);
+        } else if key == "first-party" || key == "1p" {
+            // `first-party` ⇒ not third-party; `~first-party` ⇒ third-party.
+            third_party = Some(neg);
+        }
+        // Unmodelled modifier (important, match-case, popup, …): ignored.
+    }
+
+    let types = if has_pos {
+        Some(include)
+    } else if has_neg {
+        Some(rmask::ALL & !exclude)
+    } else {
+        None
+    };
+    RuleOptions { types, third_party }
+}
+
 /// A single parsed filter rule.
 #[derive(Debug, Clone)]
 struct FilterEntry {
     kind: MatchKind,
+    /// Type/party restrictions parsed from the rule's `$`-options.
+    options: RuleOptions,
     /// Human-readable label for the `reason` field in `RequestBlocked` events.
     reason: String,
 }
 
 impl FilterEntry {
-    /// Returns `true` if this entry matches `url`.
-    fn matches(&self, url: &Url) -> bool {
+    /// Returns `true` if this entry matches `url` under request `ctx` (both the
+    /// URL pattern and the `$`-option restrictions must hold).
+    fn matches(&self, url: &Url, ctx: &RequestContext) -> bool {
+        self.url_matches(url) && self.options.matches(ctx)
+    }
+
+    /// Returns `true` if the URL pattern alone matches (ignores `$`-options).
+    fn url_matches(&self, url: &Url) -> bool {
         match &self.kind {
             MatchKind::DomainAndSubdomains => true, // looked up by host — already matching
             MatchKind::PathPrefix(prefix) => url.path().starts_with(prefix.as_str()),
@@ -129,8 +286,9 @@ impl EasyListFilter {
             (false, line)
         };
 
-        // Strip options after `$` (except `$` inside a URL — detect by `||` anchor).
-        let pattern = strip_options(pattern);
+        // Split options after `$` (except `$` inside a URL — detect by `||` anchor).
+        let (pattern, opt_str) = split_options(pattern);
+        let options = parse_options(opt_str);
 
         // Regex rule: `/pattern/` — matches full URL against the regex.
         if let Some(inner) = pattern.strip_prefix('/').and_then(|s| s.strip_suffix('/')) {
@@ -138,20 +296,21 @@ impl EasyListFilter {
                 && let Ok(re) = Regex::new(inner)
                 && !is_exception  // Regex exceptions skipped in Phase 1 (rare in real lists)
             {
-                self.global_block.push(FilterEntry { kind: MatchKind::Regex(re), reason: "easylist".into() });
+                self.global_block.push(FilterEntry { kind: MatchKind::Regex(re), options, reason: "easylist".into() });
                 self.rule_count += 1;
             }
             return;
         }
 
         if let Some(rest) = pattern.strip_prefix("||") {
-            self.parse_domain_rule(rest, is_exception);
+            self.parse_domain_rule(rest, is_exception, options);
         } else if pattern.starts_with('|') {
             // Exact prefix rule: `|https://...`
             let url_str = pattern.trim_start_matches('|').trim_end_matches('|').to_string();
             if !url_str.is_empty() {
                 let entry = FilterEntry {
                     kind: MatchKind::ExactPrefix(url_str),
+                    options,
                     reason: "easylist".into(),
                 };
                 if is_exception {
@@ -171,6 +330,7 @@ impl EasyListFilter {
             if sub.len() >= 4 {
                 let entry = FilterEntry {
                     kind: MatchKind::Substring(sub),
+                    options,
                     reason: "easylist".into(),
                 };
                 if is_exception {
@@ -191,8 +351,8 @@ impl EasyListFilter {
     /// Examples of `rest`:
     /// - `tracker.com^`            → domain + subdomains block
     /// - `tracker.com/ads/`        → domain + path prefix block
-    /// - `tracker.com^$third-party`→ same (options already stripped)
-    fn parse_domain_rule(&mut self, rest: &str, is_exception: bool) {
+    /// - `tracker.com^$third-party`→ same, with `options.third_party = Some(true)`
+    fn parse_domain_rule(&mut self, rest: &str, is_exception: bool, options: RuleOptions) {
         // Split on the first `/` or `^`.
         let (host_part, path_part) = if let Some(slash) = rest.find('/') {
             (&rest[..slash], Some(&rest[slash..]))
@@ -211,7 +371,7 @@ impl EasyListFilter {
             Some(path) => MatchKind::PathPrefix(path.trim_end_matches('^').to_string()),
             None => MatchKind::DomainAndSubdomains,
         };
-        let entry = FilterEntry { kind, reason: "easylist".into() };
+        let entry = FilterEntry { kind, options, reason: "easylist".into() };
 
         if is_exception {
             self.allow.entry(host).or_default().push(entry);
@@ -222,26 +382,26 @@ impl EasyListFilter {
     }
 
     /// Check if `url` matches any block rule (before exception check).
-    fn is_blocked_raw(&self, url: &Url) -> Option<&str> {
+    fn is_blocked_raw(&self, url: &Url, ctx: &RequestContext) -> Option<&str> {
         // Walk host hierarchy.
         let host = url.host().to_lowercase();
-        if let Some(reason) = self.check_host_rules(&host, url) {
+        if let Some(reason) = self.check_host_rules(&host, url, ctx) {
             return Some(reason);
         }
         // Global (substring / exact-prefix) rules.
         for entry in &self.global_block {
-            if entry.matches(url) {
+            if entry.matches(url, ctx) {
                 return Some(&entry.reason);
             }
         }
         None
     }
 
-    fn check_host_rules<'a>(&'a self, host: &str, url: &Url) -> Option<&'a str> {
+    fn check_host_rules<'a>(&'a self, host: &str, url: &Url, ctx: &RequestContext) -> Option<&'a str> {
         // Exact host match.
         if let Some(entries) = self.block.get(host) {
             for e in entries {
-                if e.matches(url) {
+                if e.matches(url, ctx) {
                     return Some(&e.reason);
                 }
             }
@@ -254,7 +414,7 @@ impl EasyListFilter {
                 && let Some(entries) = self.block.get(rest)
             {
                 for e in entries {
-                    if e.matches(url) {
+                    if e.matches(url, ctx) {
                         return Some(&e.reason);
                     }
                 }
@@ -264,12 +424,12 @@ impl EasyListFilter {
     }
 
     /// Check if `url` is covered by an exception rule.
-    fn is_allowed(&self, url: &Url) -> bool {
+    fn is_allowed(&self, url: &Url, ctx: &RequestContext) -> bool {
         let host = url.host().to_lowercase();
         // Host-indexed exceptions.
         if let Some(entries) = self.allow.get(&host) {
             for e in entries {
-                if e.matches(url) {
+                if e.matches(url, ctx) {
                     return true;
                 }
             }
@@ -280,7 +440,7 @@ impl EasyListFilter {
             rest = &rest[dot + 1..];
             if let Some(entries) = self.allow.get(rest) {
                 for e in entries {
-                    if e.matches(url) {
+                    if e.matches(url, ctx) {
                         return true;
                     }
                 }
@@ -299,8 +459,12 @@ impl EasyListFilter {
 
 impl RequestFilter for EasyListFilter {
     fn should_block(&self, url: &Url) -> Option<String> {
-        if let Some(reason) = self.is_blocked_raw(url)
-            && !self.is_allowed(url)
+        self.should_block_ctx(url, &RequestContext::unknown())
+    }
+
+    fn should_block_ctx(&self, url: &Url, ctx: &RequestContext) -> Option<String> {
+        if let Some(reason) = self.is_blocked_raw(url, ctx)
+            && !self.is_allowed(url, ctx)
         {
             return Some(reason.to_string());
         }
@@ -310,27 +474,25 @@ impl RequestFilter for EasyListFilter {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-/// Strip Adblock Plus option string after `$`, guarding against bare `$` in URLs.
+/// Split an Adblock Plus pattern into `(url_pattern, option_string)` at the
+/// options-introducing `$`, guarding against a bare `$` inside a URL.
 ///
 /// A `$` is treated as an option separator only when it comes after a non-URL
-/// character (i.e., not inside `http://` or `||host...`).  For simplicity we
-/// skip options for rules that do not start with `||` — those are handled
-/// before this function is called.
-fn strip_options(pattern: &str) -> &str {
-    // Only strip if the `$` is outside the domain/path portion.
+/// character (i.e., not inside `http://` or `||host...`). When no option `$`
+/// is found, the option string is empty.
+fn split_options(pattern: &str) -> (&str, &str) {
     // Strategy: find the last `$`; if it's not followed by `/` or `://` it's options.
     if let Some(pos) = pattern.rfind('$') {
         let after = &pattern[pos + 1..];
-        // If after the `$` we see typical option keywords, strip them.
         if !after.is_empty()
             && !after.starts_with('/')
             && !after.starts_with("//")
             && after.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '~' || c == ',' || c == '!')
         {
-            return &pattern[..pos];
+            return (&pattern[..pos], after);
         }
     }
-    pattern
+    (pattern, "")
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -426,18 +588,116 @@ mod tests {
         assert!(f.should_block(&url("https://tracker.com/")).is_some());
     }
 
-    // ── Option stripping ──────────────────────────────────────────────────
+    // ── Resource-type & party options (Phase 2) ───────────────────────────
 
-    #[test]
-    fn option_third_party_stripped() {
-        let f = filter("||adserver.net^$third-party");
-        assert!(f.should_block(&url("https://adserver.net/ad.js")).is_some());
+    /// Context with a known resource type and unknown party.
+    fn ctx_type(rt: ResourceType) -> RequestContext {
+        RequestContext { resource_type: Some(rt), third_party: None }
     }
 
     #[test]
-    fn option_script_stripped() {
-        let f = filter("||adserver.net^$script,third-party");
-        assert!(f.should_block(&url("https://adserver.net/track.js")).is_some());
+    fn unknown_context_blocks_typed_rule_like_phase1() {
+        // No context (should_block) must still block — conservative, no regression.
+        let f = filter("||adserver.net^$third-party");
+        assert!(f.should_block(&url("https://adserver.net/ad.js")).is_some());
+        let f2 = filter("||adserver.net^$script,third-party");
+        assert!(f2.should_block(&url("https://adserver.net/track.js")).is_some());
+    }
+
+    #[test]
+    fn script_option_blocks_only_scripts() {
+        let f = filter("||adserver.net^$script");
+        // Script request → blocked.
+        assert!(f.should_block_ctx(&url("https://adserver.net/track.js"),
+            &ctx_type(ResourceType::Script)).is_some());
+        // Image request → allowed (rule restricted to scripts).
+        assert!(f.should_block_ctx(&url("https://adserver.net/pixel.png"),
+            &ctx_type(ResourceType::Image)).is_none());
+    }
+
+    #[test]
+    fn multiple_type_options_form_allowlist() {
+        let f = filter("||cdn.net^$image,media");
+        assert!(f.should_block_ctx(&url("https://cdn.net/a.png"),
+            &ctx_type(ResourceType::Image)).is_some());
+        assert!(f.should_block_ctx(&url("https://cdn.net/v.mp4"),
+            &ctx_type(ResourceType::Media)).is_some());
+        assert!(f.should_block_ctx(&url("https://cdn.net/a.js"),
+            &ctx_type(ResourceType::Script)).is_none());
+    }
+
+    #[test]
+    fn negated_type_option_blocks_all_except() {
+        let f = filter("||cdn.net^$~image");
+        // Everything except image is blocked.
+        assert!(f.should_block_ctx(&url("https://cdn.net/a.js"),
+            &ctx_type(ResourceType::Script)).is_some());
+        // Image is exempt.
+        assert!(f.should_block_ctx(&url("https://cdn.net/a.png"),
+            &ctx_type(ResourceType::Image)).is_none());
+    }
+
+    #[test]
+    fn third_party_option_respects_party() {
+        let f = filter("||widget.net^$third-party");
+        let third = RequestContext { resource_type: None, third_party: Some(true) };
+        let first = RequestContext { resource_type: None, third_party: Some(false) };
+        assert!(f.should_block_ctx(&url("https://widget.net/x"), &third).is_some());
+        assert!(f.should_block_ctx(&url("https://widget.net/x"), &first).is_none());
+    }
+
+    #[test]
+    fn first_party_option_respects_party() {
+        let f = filter("||widget.net^$~third-party");
+        let third = RequestContext { resource_type: None, third_party: Some(true) };
+        let first = RequestContext { resource_type: None, third_party: Some(false) };
+        assert!(f.should_block_ctx(&url("https://widget.net/x"), &first).is_some());
+        assert!(f.should_block_ctx(&url("https://widget.net/x"), &third).is_none());
+    }
+
+    #[test]
+    fn domain_option_ignored_not_narrowing() {
+        // domain= is parsed-and-ignored; rule still applies (no over-allow).
+        let f = filter("||ads.net^$script,domain=foo.com");
+        assert!(f.should_block_ctx(&url("https://ads.net/a.js"),
+            &ctx_type(ResourceType::Script)).is_some());
+        // But the type restriction is honoured.
+        assert!(f.should_block_ctx(&url("https://ads.net/a.png"),
+            &ctx_type(ResourceType::Image)).is_none());
+    }
+
+    #[test]
+    fn unmodelled_option_does_not_narrow() {
+        // `$ping` is not modelled → rule applies to all types (no over-allow).
+        let f = filter("||ads.net^$ping");
+        assert!(f.should_block_ctx(&url("https://ads.net/beacon"),
+            &ctx_type(ResourceType::XmlHttpRequest)).is_some());
+    }
+
+    #[test]
+    fn typed_exception_only_whitelists_matching_type() {
+        // Block all, but whitelist images only on this host.
+        let f = filter("||cdn.net^\n@@||cdn.net^$image");
+        assert!(f.should_block_ctx(&url("https://cdn.net/a.png"),
+            &ctx_type(ResourceType::Image)).is_none());
+        assert!(f.should_block_ctx(&url("https://cdn.net/a.js"),
+            &ctx_type(ResourceType::Script)).is_some());
+    }
+
+    #[test]
+    fn parse_options_keyword_aliases() {
+        assert_eq!(parse_options("css").types, Some(rmask::STYLESHEET));
+        assert_eq!(parse_options("xhr").types, Some(rmask::XHR));
+        assert_eq!(parse_options("frame").types, Some(rmask::SUBDOC));
+        assert!(parse_options("3p").third_party == Some(true));
+        assert!(parse_options("1p").third_party == Some(false));
+    }
+
+    #[test]
+    fn split_options_guards_dollar_in_url() {
+        // A `$` mid-URL (followed by a digit) is not an option separator.
+        assert_eq!(split_options("|https://x.com/p$1"), ("|https://x.com/p$1", ""));
+        assert_eq!(split_options("||ads.net^$script"), ("||ads.net^", "script"));
     }
 
     // ── Multi-rule list ───────────────────────────────────────────────────

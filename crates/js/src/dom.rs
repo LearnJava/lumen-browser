@@ -3767,6 +3767,18 @@ Path2D.prototype.addPath = function(path, transform) {
 };
 
 // ── Canvas 2D context factory (HTML LS §4.12.4) ─────────────────────────────────
+// Builds a CanvasGradient (HTML LS §4.12.4.2) wrapping a native gradient id.
+// `addColorStop` forwards to the native store; the object is recognised by the
+// fillStyle/strokeStyle setters via its `__gid__` field.
+function _lumen_make_canvas_gradient(gid) {
+    return {
+        __gid__: gid,
+        addColorStop: function(offset, color) {
+            _lumen_canvas2d_gradient_add_color_stop(gid, +offset, String(color));
+        },
+    };
+}
+
 // Builds a CanvasRenderingContext2D backed by the native _lumen_canvas2d_* bindings
 // (lumen_canvas::Context2D), keyed by the canvas element's node index `nid`.
 // Drawing methods forward to the native rasterizer; the shell uploads the pixel
@@ -3783,9 +3795,25 @@ function _lumen_make_canvas2d_ctx(canvasEl, nid) {
     var ctx = {
         canvas: canvasEl,
         get fillStyle() { return _fillStyle; },
-        set fillStyle(v) { _fillStyle = String(v); _lumen_canvas2d_set_fill_style(nid, _fillStyle); },
+        set fillStyle(v) {
+            if (v && typeof v === 'object' && v.__gid__ !== undefined) {
+                _fillStyle = v; _lumen_canvas2d_set_fill_style_gradient(nid, v.__gid__);
+            } else if (v && typeof v === 'object' && v.__patid__ !== undefined) {
+                _fillStyle = v; _lumen_canvas2d_set_fill_style_pattern(nid, v.__patid__);
+            } else {
+                _fillStyle = String(v); _lumen_canvas2d_set_fill_style(nid, _fillStyle);
+            }
+        },
         get strokeStyle() { return _strokeStyle; },
-        set strokeStyle(v) { _strokeStyle = String(v); _lumen_canvas2d_set_stroke_style(nid, _strokeStyle); },
+        set strokeStyle(v) {
+            if (v && typeof v === 'object' && v.__gid__ !== undefined) {
+                _strokeStyle = v; _lumen_canvas2d_set_stroke_style_gradient(nid, v.__gid__);
+            } else if (v && typeof v === 'object' && v.__patid__ !== undefined) {
+                _strokeStyle = v; _lumen_canvas2d_set_stroke_style_pattern(nid, v.__patid__);
+            } else {
+                _strokeStyle = String(v); _lumen_canvas2d_set_stroke_style(nid, _strokeStyle);
+            }
+        },
         get lineWidth() { return _lineWidth; },
         set lineWidth(v) { var n = Number(v); if (isFinite(n) && n > 0) { _lineWidth = n; _lumen_canvas2d_set_line_width(nid, n); } },
         get globalAlpha() { return _globalAlpha; },
@@ -3866,8 +3894,38 @@ function _lumen_make_canvas2d_ctx(canvasEl, nid) {
                 _lumen_canvas2d_clip(nid);
             }
         },
-        putImageData: function() {},
-        drawImage: function() {},
+        putImageData: function(imageData, dx, dy) {
+            if (!imageData || !imageData.data) { return; }
+            var d = imageData.data, n = d.length;
+            var H = '0123456789abcdef', hex = '';
+            for (var i = 0; i < n; i++) { var b = d[i] & 255; hex += H[b >> 4] + H[b & 15]; }
+            _lumen_canvas2d_put_image_data(nid, hex, imageData.width | 0, imageData.height | 0, dx | 0, dy | 0);
+        },
+        // drawImage forms: (img,dx,dy) | (img,dx,dy,dw,dh) | (img,sx,sy,sw,sh,dx,dy,dw,dh).
+        // Source must be a <canvas>/OffscreenCanvas with a backing native bitmap
+        // (carries __nid__). The 9-arg form crops the source sub-rectangle
+        // (sx,sy,sw,sh) before scaling it into the destination rect.
+        drawImage: function(image, a, b, c, d, e, f, g, h) {
+            if (!image || image.__nid__ === undefined) { return; }
+            var src = image.__nid__;
+            var iw = +image.width || 0, ih = +image.height || 0;
+            if (arguments.length >= 9) {
+                var sx = +a, sy = +b, sw = +c, sh = +d;
+                var dx9 = +e, dy9 = +f, dw9 = +g, dh9 = +h;
+                if (!(sw > 0) || !(sh > 0) || !(dw9 > 0) || !(dh9 > 0)) { return; }
+                _lumen_canvas2d_draw_image_crop(
+                    nid, src, sx + ',' + sy + ',' + sw + ',' + sh + ',' + dx9 + ',' + dy9 + ',' + dw9 + ',' + dh9);
+                return;
+            }
+            var dx, dy, dw, dh;
+            if (arguments.length >= 5) {
+                dx = +a; dy = +b; dw = +c; dh = +d;
+            } else {
+                dx = +a; dy = +b; dw = iw; dh = ih;
+            }
+            if (!(dw > 0) || !(dh > 0)) { return; }
+            _lumen_canvas2d_draw_image(nid, src, dx, dy, dw, dh);
+        },
         fillText: function(t, x, y) {
             _lumen_canvas2d_fill_text(nid, String(t == null ? '' : t), +x, +y);
         },
@@ -3888,25 +3946,63 @@ function _lumen_make_canvas2d_ctx(canvasEl, nid) {
             return false;
         },
         isPointInStroke: function() { return false; },
-        createLinearGradient: function() { return { addColorStop: function() {} }; },
-        createRadialGradient: function() { return { addColorStop: function() {} }; },
-        createConicGradient: function() { return { addColorStop: function() {} }; },
-        createPattern: function() { return null; },
+        createLinearGradient: function(x0, y0, x1, y1) {
+            return _lumen_make_canvas_gradient(
+                _lumen_canvas2d_create_linear_gradient(nid, +x0, +y0, +x1, +y1));
+        },
+        createRadialGradient: function(x0, y0, r0, x1, y1, r1) {
+            return _lumen_make_canvas_gradient(
+                _lumen_canvas2d_create_radial_gradient(nid, +x0, +y0, +r0, +x1, +y1, +r1));
+        },
+        createConicGradient: function(angle, cx, cy) {
+            return _lumen_make_canvas_gradient(
+                _lumen_canvas2d_create_conic_gradient(nid, +angle, +cx, +cy));
+        },
+        createPattern: function(image, repetition) {
+            if (!image || image.__nid__ === undefined) { return null; }
+            var rep = (repetition == null || repetition === '') ? 'repeat' : String(repetition);
+            var pid = _lumen_canvas2d_create_pattern(image.__nid__, rep);
+            if (!pid) { return null; }
+            return { __patid__: pid };
+        },
         createImageData: function(w, h) { return { width: w|0, height: h|0, data: new Uint8ClampedArray((w|0) * (h|0) * 4) }; },
     };
     // Stub appearance properties accepted but not yet wired.
-    var _stubProps = ['shadowColor','shadowBlur','shadowOffsetX','shadowOffsetY',
-        'direction','lineDashOffset','imageSmoothingEnabled','filter'];
+    var _stubProps = ['direction','lineDashOffset','imageSmoothingEnabled','filter'];
     for (var _pi = 0; _pi < _stubProps.length; _pi++) {
         (function(name) {
             var _val = (name === 'imageSmoothingEnabled') ? true
-                : (name === 'shadowColor') ? 'rgba(0, 0, 0, 0)'
                 : (name === 'filter') ? 'none' : 0;
             Object.defineProperty(ctx, name, {
                 get: function() { return _val; }, set: function(v) { _val = v; }, configurable: true,
             });
         })(_stubProps[_pi]);
     }
+    // Wired shadow properties (Phase 3 native: shadowColor/Blur/OffsetX/OffsetY).
+    var _shadowColor = 'rgba(0, 0, 0, 0)';
+    Object.defineProperty(ctx, 'shadowColor', {
+        get: function() { return _shadowColor; },
+        set: function(v) { _shadowColor = String(v); _lumen_canvas2d_set_shadow_color(nid, _shadowColor); },
+        configurable: true,
+    });
+    var _shadowBlur = 0;
+    Object.defineProperty(ctx, 'shadowBlur', {
+        get: function() { return _shadowBlur; },
+        set: function(v) { var n = Number(v); if (isFinite(n) && n >= 0) { _shadowBlur = n; _lumen_canvas2d_set_shadow_blur(nid, n); } },
+        configurable: true,
+    });
+    var _shadowOffsetX = 0;
+    Object.defineProperty(ctx, 'shadowOffsetX', {
+        get: function() { return _shadowOffsetX; },
+        set: function(v) { var n = Number(v); if (isFinite(n)) { _shadowOffsetX = n; _lumen_canvas2d_set_shadow_offset_x(nid, n); } },
+        configurable: true,
+    });
+    var _shadowOffsetY = 0;
+    Object.defineProperty(ctx, 'shadowOffsetY', {
+        get: function() { return _shadowOffsetY; },
+        set: function(v) { var n = Number(v); if (isFinite(n)) { _shadowOffsetY = n; _lumen_canvas2d_set_shadow_offset_y(nid, n); } },
+        configurable: true,
+    });
     // Wired text properties (Phase 4): font, textAlign, textBaseline.
     var _font = '10px sans-serif';
     Object.defineProperty(ctx, 'font', {
@@ -11858,6 +11954,188 @@ mod tests {
         let (_nid, w, h, rgba) = &updates[0];
         assert_eq!((*w, *h), (4, 4));
         assert_eq!(rgba[1], 255, "green channel painted");
+    }
+
+    #[test]
+    fn canvas_gradient_object_has_gid_and_add_color_stop() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
+                 var g = ctx.createLinearGradient(0, 0, 1, 1);\
+                 typeof g === 'object' && g.__gid__ !== undefined \
+                   && typeof g.addColorStop === 'function'",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn canvas_radial_and_conic_gradient_constructors_distinct() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
+                 var r = ctx.createRadialGradient(0, 0, 0, 0, 0, 5);\
+                 var k = ctx.createConicGradient(0, 5, 5);\
+                 r.__gid__ !== undefined && k.__gid__ !== undefined && r.__gid__ !== k.__gid__",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn canvas_gradient_fillstyle_paints_pixels() {
+        // A gradient with two identical green stops fills solid green regardless
+        // of interpolation — robustly exercises the fillStyle gradient dispatch.
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var c = document.createElement('canvas');\
+             c.setAttribute('width', '4'); c.setAttribute('height', '4');\
+             var ctx = c.getContext('2d');\
+             var g = ctx.createLinearGradient(0, 0, 4, 0);\
+             g.addColorStop(0, '#00ff00'); g.addColorStop(1, '#00ff00');\
+             ctx.fillStyle = g;\
+             ctx.fillRect(0, 0, 4, 4);",
+        )
+        .unwrap();
+        let updates = rt.flush_canvas_updates();
+        assert_eq!(updates.len(), 1, "gradient fill marks the canvas dirty");
+        assert_eq!(updates[0].3[1], 255, "solid-green gradient painted");
+    }
+
+    #[test]
+    fn canvas_shadow_properties_are_wired() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
+                 ctx.shadowColor = '#ff0000'; ctx.shadowBlur = 4;\
+                 ctx.shadowOffsetX = 2; ctx.shadowOffsetY = 3;\
+                 ctx.shadowColor === '#ff0000' && ctx.shadowBlur === 4 \
+                   && ctx.shadowOffsetX === 2 && ctx.shadowOffsetY === 3",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn canvas_create_pattern_returns_pattern_id() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "var src = document.createElement('canvas');\
+                 src.setAttribute('width', '4'); src.setAttribute('height', '4');\
+                 var sctx = src.getContext('2d'); sctx.fillStyle = '#0000ff'; sctx.fillRect(0, 0, 4, 4);\
+                 var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
+                 var p = ctx.createPattern(src, 'repeat');\
+                 p !== null && p.__patid__ !== undefined",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn canvas_create_pattern_null_for_invalid_source() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "var c = document.createElement('canvas'); var ctx = c.getContext('2d');\
+                 ctx.createPattern(null, 'repeat') === null \
+                   && ctx.createPattern({}, 'repeat') === null",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn canvas_draw_image_blits_canvas_source() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var src = document.createElement('canvas');\
+             src.setAttribute('width', '4'); src.setAttribute('height', '4');\
+             var sctx = src.getContext('2d'); sctx.fillStyle = '#ff0000'; sctx.fillRect(0, 0, 4, 4);\
+             var c = document.createElement('canvas');\
+             c.setAttribute('width', '4'); c.setAttribute('height', '4');\
+             var ctx = c.getContext('2d');\
+             ctx.drawImage(src, 0, 0);",
+        )
+        .unwrap();
+        let updates = rt.flush_canvas_updates();
+        let any_red = updates
+            .iter()
+            .any(|(_n, _w, _h, rgba)| rgba[0] == 255 && rgba[2] == 0);
+        assert!(any_red, "drawImage blits the red source onto the destination");
+    }
+
+    #[test]
+    fn canvas_draw_image_9arg_crops_source_subrect() {
+        // Source 2×2: left column red, right column blue. The 9-arg form crops the
+        // right (blue) column and stretches it over the whole destination — the
+        // result must contain blue and no red, proving source-crop is honoured.
+        let rt = runtime_with_dom(make_doc());
+        let dest_nid = match rt
+            .eval(
+                "var src = document.createElement('canvas');\
+                 src.setAttribute('width', '2'); src.setAttribute('height', '2');\
+                 var sctx = src.getContext('2d');\
+                 sctx.fillStyle = '#ff0000'; sctx.fillRect(0, 0, 1, 2);\
+                 sctx.fillStyle = '#0000ff'; sctx.fillRect(1, 0, 1, 2);\
+                 var c = document.createElement('canvas');\
+                 c.setAttribute('width', '2'); c.setAttribute('height', '2');\
+                 var ctx = c.getContext('2d');\
+                 ctx.drawImage(src, 1, 0, 1, 2, 0, 0, 2, 2);\
+                 c.__nid__;",
+            )
+            .unwrap()
+        {
+            lumen_core::JsValue::Number(n) => n as u32,
+            other => panic!("expected dest nid number, got {other:?}"),
+        };
+        let updates = rt.flush_canvas_updates();
+        // Inspect the destination canvas pixel buffer (identified by its node id —
+        // the source canvas also contains red, so it must not be sampled here).
+        let dest = updates
+            .iter()
+            .find(|(n, _, _, _)| *n == dest_nid)
+            .expect("destination canvas update");
+        let rgba = &dest.3;
+        let mut any_blue = false;
+        let mut any_red = false;
+        for px in rgba.chunks_exact(4) {
+            if px[3] == 0 {
+                continue;
+            }
+            if px[2] == 255 && px[0] == 0 {
+                any_blue = true;
+            }
+            if px[0] == 255 && px[2] == 0 {
+                any_red = true;
+            }
+        }
+        assert!(any_blue, "cropped blue column must be drawn");
+        assert!(!any_red, "red column must be excluded by the source crop");
+    }
+
+    #[test]
+    fn canvas_put_image_data_paints_pixels() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var c = document.createElement('canvas');\
+             c.setAttribute('width', '2'); c.setAttribute('height', '2');\
+             var ctx = c.getContext('2d');\
+             var img = ctx.createImageData(2, 2);\
+             for (var i = 0; i < img.data.length; i += 4) {\
+                 img.data[i] = 0; img.data[i + 1] = 255; img.data[i + 2] = 0; img.data[i + 3] = 255;\
+             }\
+             ctx.putImageData(img, 0, 0);",
+        )
+        .unwrap();
+        let updates = rt.flush_canvas_updates();
+        assert!(
+            updates.iter().any(|(_n, _w, _h, rgba)| rgba[1] == 255),
+            "putImageData paints the supplied green pixels"
+        );
     }
 
     #[test]

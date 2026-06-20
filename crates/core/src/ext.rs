@@ -115,6 +115,73 @@ pub trait FilterListSource: Send + Sync {
 /// ничего не знает о формате правил.
 pub trait RequestFilter: Send + Sync {
     fn should_block(&self, url: &Url) -> Option<String>;
+
+    /// Решение «блокировать ли запрос» с учётом контекста запроса
+    /// (тип ресурса + first/third-party). Нужно для EasyList-опций уровня
+    /// `$script`, `$image`, `$third-party` и т. п., которые ограничивают
+    /// правило подмножеством запросов.
+    ///
+    /// Дефолтная реализация игнорирует контекст и делегирует в
+    /// [`should_block`](RequestFilter::should_block) — фильтры без поддержки
+    /// типов (hosts-листы, safe-browsing) работают как раньше. EasyList
+    /// переопределяет метод, чтобы применять type/party-ограничения.
+    ///
+    /// Контекст с неизвестными полями ([`RequestContext::unknown`]) должен
+    /// вести себя как `should_block`: type/party-ограниченные правила
+    /// срабатывают консервативно (блокируют), как при полном игнорировании
+    /// опций до Phase 2.
+    fn should_block_ctx(&self, url: &Url, _ctx: &RequestContext) -> Option<String> {
+        self.should_block(url)
+    }
+}
+
+/// Тип ресурса исходящего запроса для EasyList type-опций (`$script`,
+/// `$image`, …). Маппится из `RequestDestination` сетевого слоя; держится в
+/// `lumen-core`, потому что trait [`RequestFilter`] живёт здесь, а `network`
+/// зависит от `core` (не наоборот).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ResourceType {
+    /// `<script>`, worker/importScripts — EasyList `$script`.
+    Script,
+    /// `<img>`, `<picture>`, favicon, SVG image — `$image`.
+    Image,
+    /// `<link rel=stylesheet>`, `@import` — `$stylesheet`.
+    Stylesheet,
+    /// `@font-face` — `$font`.
+    Font,
+    /// `XMLHttpRequest`, `fetch()`, EventSource, beacon — `$xmlhttprequest`.
+    XmlHttpRequest,
+    /// `<iframe>`/`<frame>`/`<object>`/`<embed>` — `$subdocument`.
+    Subdocument,
+    /// `<audio>`/`<video>`/`<track>` — `$media`.
+    Media,
+    /// `<link rel=prefetch/preload>` и прочее, не попавшее в категории выше —
+    /// `$other`.
+    Other,
+}
+
+/// Контекст исходящего запроса, передаваемый в
+/// [`RequestFilter::should_block_ctx`].
+///
+/// Поля `Option`: `None` означает «неизвестно», и type/party-ограниченные
+/// правила тогда срабатывают консервативно (блокируют) — так сохраняется
+/// до-Phase-2 поведение для путей, которые не знают тип ресурса.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RequestContext {
+    /// Тип ресурса запроса; `None` — неизвестен.
+    pub resource_type: Option<ResourceType>,
+    /// `Some(true)` — third-party (хост запроса вне registrable-домена
+    /// документа), `Some(false)` — first-party, `None` — неизвестно.
+    pub third_party: Option<bool>,
+}
+
+impl RequestContext {
+    /// Контекст без информации: оба поля `None`. Заставляет
+    /// `should_block_ctx` вести себя как `should_block` (консервативный блок
+    /// для type/party-правил).
+    pub fn unknown() -> Self {
+        Self::default()
+    }
 }
 
 /// DNS-резолвер: hostname → список IP-адресов (с портом, готовых к connect).
