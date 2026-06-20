@@ -1,8 +1,32 @@
 # BUG-221
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-06-20
 **Компонент:** paint (`crates/engine/paint/src/cpu_raster.rs`, `Renderer::render_to_image_cpu`)
 **Тест:** TEST-18 (images), TEST-36 (border-radius), TEST-39 (gradients) и др. — только в `--ipc`/`--screenshot` CPU-пути
+
+## Исправление (2026-06-20)
+
+Все три примитива доведены до паритета с femtovg/gdigrab по `run.py --ipc`:
+
+- **border-radius** (TEST-36 **60.60% → 0.47%**): `rasterize_fill_rounded_rect`
+  не клампил радиусы к боксу — пилюли `border-radius: 999px` уводили кубические
+  control-точки далеко за прямоугольник и заливали гигантский диагональный клин
+  поверх страницы. Теперь радиусы клампятся (`CornerRadii::clamped_to_box`) и путь
+  строится общим kappa-Безье-контуром `push_rounded_rect_outline`.
+- **gradients** (TEST-39 **10.68% → 1.40%**): `rasterize_radial_gradient` рисовал
+  анизотропный эллипс (`rx`/`ry`), а femtovg-окно — изотропный **круг** радиусом
+  `hypot(dx, dy)` (farthest-corner). CPU-путь переписан на круг. Попутно gradient-mask
+  тест TEST-26 5.02% → 0.00%.
+- **images** (TEST-18 **52.22% → 2.15%**): `DrawImage`/`LazyImageSlot` рисовали
+  серый placeholder. Теперь декодированные пиксели прокидываются в `rasterize_cpu`
+  (`render_source_to_png` передаёт `parsed.images`), рисуются с учётом
+  `object-fit`/`object-position` через общий `display_list::fit_image_rect`, и —
+  как в femtovg — пред-уменьшаются area-averaged фильтром
+  (`lumen_image::resize_area_avg`) до placement-размера (bilinear-сэмплинг
+  полноразмерного фото иначе шумел против Edge).
+
+Регрессия: 4 unit-теста в `cpu_raster.rs`; 801 тест `lumen-paint` зелёный. Затронут
+только CPU-снимок (`cpu_raster.rs` + плумбинг) — femtovg-окно и gdigrab-гейт не изменены.
 
 ## Описание
 
