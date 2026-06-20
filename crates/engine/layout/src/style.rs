@@ -5693,6 +5693,9 @@ pub fn compute_style(
     apply_ua_form_controls(doc, node, &mut style, widget_dark);
     // UA stylesheet: <dialog> without `open` → display:none. HTML5 §15.3.9.
     apply_ua_dialog_display(doc, node, &mut style);
+    // UA stylesheet: <td>/<th> → padding: 1px (HTML Rendering §15.3.8); the
+    // ancestor <table cellpadding=N> overrides it. Author `padding` wins.
+    apply_ua_table_cell_padding(doc, node, &mut style);
 
     // CSS Quirks Mode — Quirks-only UA-rule для `<table>`: сбрасывает
     // font / color / text-align / white-space к initial-values, чтобы
@@ -9281,6 +9284,43 @@ fn apply_ua_dialog_display(doc: &Document, node: NodeId, style: &mut ComputedSty
     if name.local.as_str() == "dialog" && doc.get(node).get_attr("open").is_none() {
         style.display = Display::None;
     }
+}
+
+/// UA stylesheet (HTML Rendering §15.3.8): `td, th { padding: 1px }`.
+///
+/// Table cells get a default 1px padding on all four sides. The legacy
+/// `cellpadding` attribute on the nearest ancestor `<table>` overrides this for
+/// every cell (HTML §14.3.9.1): a non-negative numeric value sets the padding,
+/// so `cellpadding="0"` (ubiquitous in legacy layout tables) restores zero.
+/// Applied during the pre-cascade UA phase so author `padding` declarations win.
+fn apply_ua_table_cell_padding(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let node_ref = doc.get(node);
+    let NodeData::Element { name, .. } = &node_ref.data else { return; };
+    if !matches!(name.local.as_str(), "td" | "th") {
+        return;
+    }
+    // Default 1px; an ancestor <table cellpadding=N> overrides it.
+    let mut pad = 1.0_f32;
+    let mut cur = node_ref.parent;
+    while let Some(p) = cur {
+        let p_ref = doc.get(p);
+        if let NodeData::Element { name: pname, .. } = &p_ref.data
+            && pname.local.as_str() == "table"
+        {
+            if let Some(v) = p_ref.get_attr("cellpadding")
+                && let Ok(n) = v.trim().parse::<f32>()
+                && n >= 0.0
+            {
+                pad = n;
+            }
+            break;
+        }
+        cur = p_ref.parent;
+    }
+    style.padding_top = Length::Px(pad);
+    style.padding_right = Length::Px(pad);
+    style.padding_bottom = Length::Px(pad);
+    style.padding_left = Length::Px(pad);
 }
 
 /// Парсит `font-family: a, "b c", d` в Vec<String>. Запятые разделяют
@@ -24616,6 +24656,50 @@ mod tests {
         // cascade_at starts from body; table at [0], implicit tbody at [0,0].
         let s = cascade_at("<!DOCTYPE html><table><tr><td height=\"50\">", "", &[0, 0, 0, 0]);
         assert_eq!(s.height, Some(Length::Px(50.0)));
+    }
+
+    #[test]
+    fn td_default_padding_is_one_px() {
+        // UA stylesheet (HTML Rendering §15.3.8): td/th get padding: 1px.
+        // HTML5 parser inserts implicit tbody: body→table→tbody→tr→td = path [0,0,0,0].
+        let s = cascade_at("<table><tr><td>", "", &[0, 0, 0, 0]);
+        assert_eq!(s.padding_top, Length::Px(1.0));
+        assert_eq!(s.padding_right, Length::Px(1.0));
+        assert_eq!(s.padding_bottom, Length::Px(1.0));
+        assert_eq!(s.padding_left, Length::Px(1.0));
+    }
+
+    #[test]
+    fn th_default_padding_is_one_px() {
+        let s = cascade_at("<table><tr><th>", "", &[0, 0, 0, 0]);
+        assert_eq!(s.padding_left, Length::Px(1.0));
+        assert_eq!(s.padding_bottom, Length::Px(1.0));
+    }
+
+    #[test]
+    fn td_author_padding_overrides_ua_default() {
+        // Author `padding` wins over the 1px UA default.
+        let s = cascade_at("<table><tr><td>", "td { padding: 10px; }", &[0, 0, 0, 0]);
+        assert_eq!(s.padding_top, Length::Px(10.0));
+        assert_eq!(s.padding_left, Length::Px(10.0));
+    }
+
+    #[test]
+    fn td_cellpadding_zero_attr_overrides_ua_default() {
+        // <table cellpadding="0"> restores zero padding (legacy layout tables).
+        let s = cascade_at("<table cellpadding=\"0\"><tr><td>", "", &[0, 0, 0, 0]);
+        assert_eq!(s.padding_top, Length::Px(0.0));
+        assert_eq!(s.padding_left, Length::Px(0.0));
+    }
+
+    #[test]
+    fn td_cellpadding_numeric_attr_sets_padding() {
+        // <table cellpadding="5"> sets 5px padding on every cell.
+        let s = cascade_at("<table cellpadding=\"5\"><tr><td>", "", &[0, 0, 0, 0]);
+        assert_eq!(s.padding_top, Length::Px(5.0));
+        assert_eq!(s.padding_right, Length::Px(5.0));
+        assert_eq!(s.padding_bottom, Length::Px(5.0));
+        assert_eq!(s.padding_left, Length::Px(5.0));
     }
 
     #[test]

@@ -14153,15 +14153,16 @@ mod tests {
         );
         let rows = collect_rows(&t);
         assert!(rows.len() >= 2, "expected >= 2 rows, got {}", rows.len());
-        // Each cell grows to the content border-box height: 64 (content) + 8 (borders) = 72.
+        // Each cell grows to the content border-box height: 64 (content) + 2 (UA 1px
+        // cell padding) + 8 (borders) = 74.
         let cell0 = rows[0].children.iter()
             .find(|c| !matches!(c.kind, super::BoxKind::Skip))
             .expect("cell in row 0");
-        assert!((cell0.rect.height - 72.0).abs() < 0.5,
-            "cell grows to fit content (72px), got {}", cell0.rect.height);
-        // Row pitch = cell height (72) + vertical border-spacing (8) = 80.
+        assert!((cell0.rect.height - 74.0).abs() < 0.5,
+            "cell grows to fit content (74px), got {}", cell0.rect.height);
+        // Row pitch = cell height (74) + vertical border-spacing (8) = 82.
         let pitch = rows[1].rect.y - rows[0].rect.y;
-        assert!((pitch - 80.0).abs() < 0.5, "row pitch = 80, got {pitch}");
+        assert!((pitch - 82.0).abs() < 0.5, "row pitch = 82, got {pitch}");
     }
 
     #[test]
@@ -14198,8 +14199,8 @@ mod tests {
             .filter(|c| !matches!(c.kind, super::BoxKind::Skip))
             .collect();
         assert_eq!(cells.len(), 3, "expected 3 cells");
-        // border-box width = 96 + 2*2 = 100.
-        assert!((cells[0].rect.width - 100.0).abs() < 0.5, "cell border-box = 100, got {}", cells[0].rect.width);
+        // border-box width = 96 (content) + 2*1 (UA 1px cell padding) + 2*2 (border) = 102.
+        assert!((cells[0].rect.width - 102.0).abs() < 0.5, "cell border-box = 102, got {}", cells[0].rect.width);
         let overlap0 = (cells[0].rect.x + cells[0].rect.width) - cells[1].rect.x;
         let overlap1 = (cells[1].rect.x + cells[1].rect.width) - cells[2].rect.x;
         assert!((overlap0 - 2.0).abs() < 0.5, "cells overlap by collapsed 2px border, got {overlap0}");
@@ -14221,8 +14222,9 @@ mod tests {
             .collect();
         assert!((cells[0].rect.x - t.rect.x).abs() < 0.5,
             "first cell left coincides with table border: table.x={}, cell.x={}", t.rect.x, cells[0].rect.x);
-        // 3 cells of 100px overlapping by 2px at 2 internal grid lines → 300 - 2*2 = 296.
-        assert!((t.rect.width - 296.0).abs() < 0.5, "collapsed table width = 296, got {}", t.rect.width);
+        // 3 cells of 102px (96 + 2*1 UA padding + 2*2 border) overlapping by 2px at 2 internal
+        // grid lines → 306 - 2*2 = 302.
+        assert!((t.rect.width - 302.0).abs() < 0.5, "collapsed table width = 302, got {}", t.rect.width);
     }
 
     #[test]
