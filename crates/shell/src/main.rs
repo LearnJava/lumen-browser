@@ -1785,6 +1785,12 @@ pub(crate) trait PersistentJs: Send {
     /// `deliver_lazy_images()` after each relayout.
     #[allow(dead_code)]
     fn register_lazy_images(&self, pairs: &[(u32, &str)]);
+    /// Push decoded `<img>` bitmaps (nid, w, h, rgba8) into the JS canvas drawImage store.
+    ///
+    /// Call after `fetch_and_decode_images` so `drawImage(imgElement, …)` works.
+    /// Default no-op covers non-QuickJS builds and `NullPersistentJs`.
+    #[allow(dead_code)]
+    fn register_img_bitmaps(&self, _bitmaps: Vec<(u32, u32, u32, Vec<u8>)>) {}
     /// Check registered lazy images against the current viewport and enqueue load
     /// requests for those within the lazy-load margin (1 viewport ahead of the fold).
     ///
@@ -2128,6 +2134,9 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn deliver_lazy_images(&self) {
         self.eval_js("_lumen_deliver_lazy_images();");
+    }
+    fn register_img_bitmaps(&self, bitmaps: Vec<(u32, u32, u32, Vec<u8>)>) {
+        self.rt.register_img_bitmaps(bitmaps);
     }
     fn take_lazy_image_requests(&self) -> Vec<(u32, String)> {
         self.rt.take_lazy_image_requests()
@@ -3806,6 +3815,30 @@ fn parse_and_layout(
         let mut d = doc_arc.lock().unwrap();
         fetch_and_decode_images(&mut d, base, sink, viewport, cookie_jar.clone())
     };
+
+    // Register decoded <img> bitmaps with the JS runtime so Canvas 2D
+    // drawImage(imgElement, …) can read the pixels. Collect nid→url from DOM
+    // (same traversal fetch_and_decode_images used), join with decoded images by
+    // URL, and push RGBA8 buffers into img_bitmap_store on the JS thread.
+    #[cfg(feature = "quickjs")]
+    if let Some(js) = &js_ctx {
+        let img_reqs = {
+            let d = doc_arc.lock().unwrap();
+            lumen_layout::collect_image_requests(&d, viewport)
+        };
+        let url_to_img: std::collections::HashMap<&str, &lumen_image::Image> =
+            images.iter().map(|(url, img)| (url.as_str(), img)).collect();
+        let bitmaps: Vec<(u32, u32, u32, Vec<u8>)> = img_reqs
+            .iter()
+            .filter_map(|req| {
+                let img = url_to_img.get(req.url.as_str())?;
+                Some((req.node_id.index() as u32, img.width, img.height, img.to_rgba8()))
+            })
+            .collect();
+        if !bitmaps.is_empty() {
+            js.register_img_bitmaps(bitmaps);
+        }
+    }
 
     // Встроенные <style> + внешние <link rel=stylesheet>.
     let css = {
