@@ -84,7 +84,7 @@ _(BUG-196 закрыт 2026-06-18 — `::before`/`attr()` на flex-контей
 **Средний diff (5–10%):**
 _(BUG-199 закрыт 2026-06-20 как KNOWN_DEBTOR — Edge ловит entry-transition в полёте, Lumen рендерит спек-корректное settled-состояние, см. Recent.)_
 _(BUG-203 закрыт 2026-06-20 — skip-ink gap-геометрия фикснута (8.20% → 6.02%); остаток font-parity → KNOWN_DEBTORS BUG-128, см. Recent.)_
-- BUG-191 (TEST-52, 5.83%) — `text-shadow` blur
+_(BUG-191 закрыт 2026-06-20 — `text-shadow` blur корректен (sigma=radius/2, full-RT GaussianBlur, glow/20px проверены пиксельно); остаток 5.83%→4.25% = font-parity → KNOWN_DEBTORS BUG-128, см. Recent.)_
 - BUG-201 (TEST-82, 5.00%) — SVG `<use>`
 
 **Низкий diff (<5%):**
@@ -156,6 +156,21 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
+
+- **BUG-191** (2026-06-20) — `text-shadow` blur (TEST-52 5.83% → 4.25% DEBTOR, KNOWN_DEBTORS
+  BUG-128). Расследование: blur-пайплайн корректен, дефекта движка нет. sigma = blur-radius/2
+  (CSS Text Decoration L3 §6, как box-shadow/canvas `shadowBlur`); `emit_text_shadows`
+  (`display_list.rs`) заворачивает `DrawText` тени в `PushFilter{Blur(blur/2)}`/`PopFilter`.
+  Offscreen-слой full-RT в обоих бэкендах (femtovg GPU `GaussianBlur`, cpu_raster три-box) →
+  `bounds` игнорируются, halo ~3σ НЕ клипуется к строчному боксу. Multi-shadow в обратном
+  порядке, каждая blur-тень со своим Push/Pop. Пиксельно по cropped-ячейкам: row 1
+  (blur 0/4/10/20px) прогрессия мягкости halo совпадает с Edge; glow-only `0 0 18px` (row 2
+  cell 4) — extent/интенсивность синего ореола совпадают (чистейший тест blur'а). В diff
+  доминируют два несовмещённых начертания глифов «A»/«B» (Edge serif 80px vs Inter sans),
+  сами тени near-black = совпадают. Остаток 4.25% целиком font-parity (rule 3). Без правок
+  production-кода; регресс-тест `text_shadow_blur_sigma_is_half_radius_for_test52_progression`
+  закрепляет sigma=radius/2 для радиусов теста. TEST-52 → KNOWN_DEBTORS (BUG-128, baseline 4.25%).
+  Без регрессий (paint 762 lib-тестов зелёные).
 
 - **BUG-203** (2026-06-20) — `text-decoration-skip-ink` gap-геометрия (TEST-84 8.20% → 6.02%
   → KNOWN_DEBTORS BUG-128). `emit_decoration_line_skip_ink` (`display_list.rs`) клирил gap
