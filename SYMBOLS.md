@@ -1147,7 +1147,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/ipc/src/lib.rs:251` **fn** `connect` — Connect to the network service listening on `127.0.0.1:port`
 `crates/ipc/src/lib.rs:261` **fn** `request` — Send a request and block until the matching response arrives
 
-## lumen-js  (345 symbols)
+## lumen-js  (346 symbols)
 
 `crates/js/src/async_context.rs:32` **fn** `install_async_context` — Install the `AsyncContext` global (Variable + Snapshot) into the context
 `crates/js/src/attribution_reporting.rs:23` **fn** `install_attribution_reporting_api` — Install Attribution Reporting API bindings into the JS context
@@ -1392,7 +1392,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/surface_api.rs:29` **fn** `install_surface_api_protection` — Install Layer 1 surface API protection into the JS context
 `crates/js/src/svg.rs:8` **fn** `install_svg_bindings` — Install SVG DOM API bindings into the JS context
 `crates/js/src/sw_worker.rs:24` **fn** `spawn_sw_worker` — Spawn a Service Worker execution thread
-`crates/js/src/tc39_proposals.rs:28` **fn** `install_tc39_proposals` — Install all TC39 Stage 4 proposal shims into the given QuickJS context
+`crates/js/src/tc39_proposals.rs:31` **fn** `install_tc39_proposals` — Install all TC39 Stage 4 proposal shims into the given QuickJS context
 `crates/js/src/temporal_api.rs:36` **fn** `install_temporal_api` — Install the Temporal API shim into the given QuickJS context
 `crates/js/src/topics_api.rs:24` **fn** `install_topics_api` — Install Topics API bindings into the JS context
 `crates/js/src/trusted_types.rs:18` **fn** `install_trusted_types_bindings` — Installs `window.trustedTypes`, the three trusted value classes and
@@ -1424,39 +1424,40 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/wasm/interp.rs:203` **fn** `mem_pages` — Current memory size in pages
 `crates/js/src/wasm/interp.rs:209` **fn** `mem_grow` — Grow memory by `delta` pages; return the previous page count, or -1 on
 `crates/js/src/wasm/interp.rs:225` **fn** `invoke` — Invoke any function by index (imported → host, defined → interpret)
-`crates/js/src/wasm/mod.rs:63` **fn** `validate` — `true` if `bytes` decode as a valid module this engine can run
-`crates/js/src/wasm/mod.rs:68` **fn** `compile` — Decode and store a module; returns its registry id
-`crates/js/src/wasm/mod.rs:91` **fn** `clear_registry` — Drop all compiled modules and live instances on this thread, releasing the
-`crates/js/src/wasm/mod.rs:101` **fn** `module_exports_json` — JSON descriptor of a module's exports (consumed by the JS shim to build the
-`crates/js/src/wasm/mod.rs:123` **fn** `module_imports_json` — JSON descriptor of a module's imports (consumed by the JS shim to resolve
-`crates/js/src/wasm/mod.rs:149` **fn** `instantiate` — Instantiate a compiled module
-`crates/js/src/wasm/mod.rs:240` **fn** `func_signature` — Parameter and result value types of an exported function (by its function
-`crates/js/src/wasm/mod.rs:256` **fn** `call_typed` — Call an exported function with already-typed arguments, returning typed
-`crates/js/src/wasm/mod.rs:287` **fn** `mem_size` — Current memory size of an instance, in 64 KiB pages
-`crates/js/src/wasm/mod.rs:298` **fn** `mem_grow` — Grow an instance's memory by `delta` pages; previous size or -1 on failure
-`crates/js/src/wasm/mod.rs:309` **fn** `mem_read` — Copy `len` bytes of an instance's linear memory starting at `offset`
-`crates/js/src/wasm/mod.rs:327` **fn** `mem_write` — Write `bytes` into an instance's linear memory at `offset`. Returns `false`
-`crates/js/src/wasm/mod.rs:346` **fn** `global_value` — Read an exported global's current value (typed). Returns `None` if the
-`crates/js/src/wasm/mod.rs:358` **fn** `global_set_value` — Set a mutable exported global from a typed value (coerced to its declared
-`crates/js/src/wasm/mod.rs:476` **fn** `func_param_count` — Number of parameters for an exported function index (used by the shim to
+`crates/js/src/wasm/mod.rs:70` **fn** `validate` — `true` if `bytes` decode as a valid module this engine can run
+`crates/js/src/wasm/mod.rs:75` **fn** `compile` — Decode and store a module; returns its registry id
+`crates/js/src/wasm/mod.rs:98` **fn** `clear_registry` — Drop all compiled modules and live instances on this thread, releasing the
+`crates/js/src/wasm/mod.rs:108` **fn** `module_exports_json` — JSON descriptor of a module's exports (consumed by the JS shim to build the
+`crates/js/src/wasm/mod.rs:130` **fn** `module_imports_json` — JSON descriptor of a module's imports (consumed by the JS shim to resolve
+`crates/js/src/wasm/mod.rs:156` **fn** `instantiate` — Instantiate a compiled module
+`crates/js/src/wasm/mod.rs:247` **fn** `func_signature` — Parameter and result value types of an exported function (by its function
+`crates/js/src/wasm/mod.rs:263` **fn** `call_typed` — Call an exported function with already-typed arguments, returning typed
+`crates/js/src/wasm/mod.rs:294` **fn** `mem_size` — Current memory size of an instance, in 64 KiB pages
+`crates/js/src/wasm/mod.rs:305` **fn** `mem_grow` — Grow an instance's memory by `delta` pages; previous size or -1 on failure
+`crates/js/src/wasm/mod.rs:316` **fn** `mem_read` — Copy `len` bytes of an instance's linear memory starting at `offset`
+`crates/js/src/wasm/mod.rs:334` **fn** `mem_write` — Write `bytes` into an instance's linear memory at `offset`. Returns `false`
+`crates/js/src/wasm/mod.rs:354` **fn** `mem_read_all` — Full linear-memory snapshot of an instance (every page). Returns an empty
+`crates/js/src/wasm/mod.rs:367` **fn** `global_value` — Read an exported global's current value (typed). Returns `None` if the
+`crates/js/src/wasm/mod.rs:379` **fn** `global_set_value` — Set a mutable exported global from a typed value (coerced to its declared
+`crates/js/src/wasm/mod.rs:497` **fn** `func_param_count` — Number of parameters for an exported function index (used by the shim to
 `crates/js/src/wasm/parser.rs:17` **type** `DecodeResult` — Result of decoding, with a human-readable error for `CompileError`
 `crates/js/src/wasm/parser.rs:21` **enum** `BlockType` — Block signature for `block`/`loop`/`if`
 `crates/js/src/wasm/parser.rs:34` **enum** `Instr` — A decoded instruction. Numeric/comparison/conversion ops with no immediate
-`crates/js/src/wasm/parser.rs:104` **enum** `ImportKind` — What an import binds to
-`crates/js/src/wasm/parser.rs:117` **struct** `Import` — A single import entry
-`crates/js/src/wasm/parser.rs:128` **enum** `ExportKind` — The export kind tag
-`crates/js/src/wasm/parser.rs:137` **struct** `Export` — A single export entry
-`crates/js/src/wasm/parser.rs:148` **struct** `GlobalDef` — A defined global: its type, mutability, and initialiser expression
-`crates/js/src/wasm/parser.rs:159` **struct** `FuncBody` — A decoded function body: extra locals plus its instruction stream
-`crates/js/src/wasm/parser.rs:169` **struct** `DataSegment` — An active data segment: target memory offset expression + raw bytes
-`crates/js/src/wasm/parser.rs:180` **struct** `ElemSegment` — An active element segment for a table: offset expression + function indices
-`crates/js/src/wasm/parser.rs:191` **struct** `Module` — A fully decoded module ready for instantiation
-`crates/js/src/wasm/parser.rs:226` **fn** `func_type` — Look up the function type for any function index (imported or defined)
-`crates/js/src/wasm/parser.rs:361` **fn** `check_header` — Validate the WASM magic + version header without a full decode (used by
-`crates/js/src/wasm/parser.rs:366` **fn** `parse_module` — Decode a full module image
-`crates/js/src/wasm/simd.rs:105` **fn** `shuffle` — `i8x16.shuffle`: pick 16 lanes from the concatenation of `a` (lanes 0..15)
-`crates/js/src/wasm/simd.rs:121` **fn** `lane_op` — `*.extract_lane*` / `*.replace_lane` (`0xFD` sub-opcodes 21..=34)
-`crates/js/src/wasm/simd.rs:168` **fn** `exec_simd` — Execute a SIMD op with no immediate beyond the sub-opcode (the `Instr::Simd`
+`crates/js/src/wasm/parser.rs:113` **enum** `ImportKind` — What an import binds to
+`crates/js/src/wasm/parser.rs:126` **struct** `Import` — A single import entry
+`crates/js/src/wasm/parser.rs:137` **enum** `ExportKind` — The export kind tag
+`crates/js/src/wasm/parser.rs:146` **struct** `Export` — A single export entry
+`crates/js/src/wasm/parser.rs:157` **struct** `GlobalDef` — A defined global: its type, mutability, and initialiser expression
+`crates/js/src/wasm/parser.rs:168` **struct** `FuncBody` — A decoded function body: extra locals plus its instruction stream
+`crates/js/src/wasm/parser.rs:178` **struct** `DataSegment` — An active data segment: target memory offset expression + raw bytes
+`crates/js/src/wasm/parser.rs:189` **struct** `ElemSegment` — An active element segment for a table: offset expression + function indices
+`crates/js/src/wasm/parser.rs:200` **struct** `Module` — A fully decoded module ready for instantiation
+`crates/js/src/wasm/parser.rs:235` **fn** `func_type` — Look up the function type for any function index (imported or defined)
+`crates/js/src/wasm/parser.rs:370` **fn** `check_header` — Validate the WASM magic + version header without a full decode (used by
+`crates/js/src/wasm/parser.rs:375` **fn** `parse_module` — Decode a full module image
+`crates/js/src/wasm/simd.rs:107` **fn** `shuffle` — `i8x16.shuffle`: pick 16 lanes from the concatenation of `a` (lanes 0..15)
+`crates/js/src/wasm/simd.rs:123` **fn** `lane_op` — `*.extract_lane*` / `*.replace_lane` (`0xFD` sub-opcodes 21..=34)
+`crates/js/src/wasm/simd.rs:170` **fn** `exec_simd` — Execute a SIMD op with no immediate beyond the sub-opcode (the `Instr::Simd`
 `crates/js/src/wasm/value.rs:11` **enum** `ValType` — A WebAssembly value type
 `crates/js/src/wasm/value.rs:32` **fn** `from_byte` — Decode a value type from its binary tag byte. Returns `None` for an
 `crates/js/src/wasm/value.rs:46` **fn** `default_value` — The zero/default runtime value for this type (used to initialise locals)
@@ -1473,7 +1474,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/web_codecs.rs:16` **fn** `install_webcodecs_bindings` — Install WebCodecs API JS shim
 `crates/js/src/web_locks.rs:14` **fn** `install_web_locks_bindings` — Install the Web Locks API bindings into the JS context
 `crates/js/src/web_midi.rs:16` **fn** `install_web_midi_api` — Install Web MIDI API bindings into the JS context
-`crates/js/src/webassembly.rs:167` **fn** `install_webassembly_bindings` — Install WebAssembly API bindings into the JS context
+`crates/js/src/webassembly.rs:186` **fn** `install_webassembly_bindings` — Install WebAssembly API bindings into the JS context
 `crates/js/src/webgl_bindings.rs:25` **fn** `install_webgl_bindings` — Install WebGL fingerprint shim into the JS context
 `crates/js/src/webgl_canvas.rs:57` **fn** `install_webgl_canvas` — Install functional WebGL bindings into the JS context
 `crates/js/src/webgpu.rs:28` **fn** `install_webgpu_bindings` — Install the WebGPU API bindings into the JS context
@@ -4132,4 +4133,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4061 symbols in 22 crates*
+*Total: 4062 symbols in 22 crates*

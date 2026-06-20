@@ -11,12 +11,17 @@
 //! the others as `Number` — for exported function arguments/results, host
 //! import arguments/results, and exported globals.
 //!
-//! MVP boundaries (documented): exported `Memory.buffer` is a *snapshot copy*
-//! of Rust-owned linear memory (the live-aliasing `new Int32Array(memory.buffer)`
-//! emscripten pattern is not coherent); host imports cannot read/write the
-//! instance's memory mid-call.
+//! Live memory aliasing (U-4b): exported `Memory.buffer` is a single, stable JS
+//! `ArrayBuffer` synchronized with Rust-owned linear memory at WASM call
+//! boundaries — JS writes (`HEAP32[i] = x`) are copied into Rust before each
+//! exported call, and WASM writes are copied back into the *same* buffer after,
+//! so `HEAP32 = new Int32Array(memory.buffer)` stays coherent and a captured
+//! view keeps reflecting later writes. This is exact for the single-agent model
+//! (ADR-014). Remaining boundary (documented): a host import cannot observe
+//! writes made earlier in the same in-flight call; an *imported* `Memory` is not
+//! aliased to the instance's internal memory (only the exported-memory path is).
 
-use rquickjs::{Ctx, Exception, Function, Persistent, TypedArray};
+use rquickjs::{ArrayBuffer, Ctx, Exception, Function, Persistent, TypedArray};
 
 use crate::wasm;
 
@@ -72,6 +77,16 @@ fn wasm_call_native<'js>(
     let results = wasm::call_typed(&ctx, inst_id, func_idx, &typed_args)
         .map_err(|e| Exception::throw_message(&ctx, &e))?;
     Ok(results.into_iter().map(|v| wasm::wasm_value_to_js(&ctx, v)).collect())
+}
+
+/// Native backing for `__lumen_wasm_mem_buffer` — returns the instance's full
+/// linear memory as a fresh JS `ArrayBuffer` (a single bulk copy). The shim
+/// uses this to build the stable exported `Memory.buffer` and to refresh it
+/// after each call. Free function so the single `'js` ties `ctx` to the
+/// returned buffer handle.
+fn wasm_mem_buffer_native<'js>(ctx: Ctx<'js>, inst_id: u32) -> rquickjs::Result<ArrayBuffer<'js>> {
+    let bytes = wasm::mem_read_all(inst_id);
+    ArrayBuffer::new_copy(ctx, &bytes)
 }
 
 /// Native backing for `__lumen_wasm_global_get` — returns the global's value as
@@ -153,6 +168,10 @@ fn install_native_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
                 wasm::mem_write(inst_id, offset, bytes.as_bytes().unwrap_or(&[]))
             },
         )?,
+    )?;
+    g.set(
+        "__lumen_wasm_mem_buffer",
+        Function::new(ctx.clone(), wasm_mem_buffer_native)?,
     )?;
     g.set("__lumen_wasm_global_get", Function::new(ctx.clone(), wasm_global_get_native)?)?;
     g.set(
@@ -323,16 +342,24 @@ const WEBASSEMBLY_SHIM: &str = r#"
 
   // ── Exported wrappers (backed by the native instance) ─────────────────────
 
-  function makeExportFn(instId, funcIdx) {
+  // `memRef.mem` (if set) is the instance's exported memory; its buffer is
+  // synchronized with Rust-owned linear memory around every exported call so the
+  // `new Int32Array(memory.buffer)` (emscripten HEAP) pattern stays coherent.
+  function makeExportFn(instId, funcIdx, memRef) {
     return function() {
       // Pass arguments through untouched: the native side coerces each to its
       // declared WASM type. `+arg` would throw on a BigInt and lose precision
       // on a large i64, so we must not eagerly numify here.
       var args = new Array(arguments.length);
       for (var i = 0; i < arguments.length; i++) args[i] = arguments[i];
+      var mem = memRef && memRef.mem;
+      // Push JS-side buffer writes into Rust before the call sees memory.
+      if (mem) mem._syncIn();
       var res;
       try { res = __lumen_wasm_call(instId, funcIdx, args); }
-      catch (e) { throw new RuntimeError(errMsg(e)); }
+      catch (e) { if (mem) mem._syncOut(); throw new RuntimeError(errMsg(e)); }
+      // Reflect WASM's writes back into the same buffer the HEAP views alias.
+      if (mem) mem._syncOut();
       if (!res || res.length === 0) return undefined;
       if (res.length === 1) return res[0];
       return res;
@@ -342,16 +369,43 @@ const WEBASSEMBLY_SHIM: &str = r#"
   function makeExportMemory(instId) {
     var mem = Object.create(Memory.prototype);
     mem._instId = instId;
+    // Stable canonical buffer: built once and reused so a captured view such as
+    // `HEAP32 = new Int32Array(memory.buffer)` remains valid across calls. It is
+    // refreshed in place by `_syncOut`, and only replaced (detached) on growth.
+    mem._buf = __lumen_wasm_mem_buffer(instId);
+    mem._pages = __lumen_wasm_mem_size(instId);
+
+    // JS buffer -> Rust linear memory (run before each exported call).
+    mem._syncIn = function() {
+      __lumen_wasm_mem_write(instId, 0, new Uint8Array(mem._buf));
+    };
+    // Rust linear memory -> JS buffer in place (run after each exported call).
+    // If WASM grew memory mid-call, allocate a fresh, larger buffer (matching
+    // the spec's detach-on-grow — callers re-acquire their HEAP views).
+    mem._syncOut = function() {
+      var pages = __lumen_wasm_mem_size(instId);
+      if (pages !== mem._pages) {
+        mem._pages = pages;
+        mem._buf = __lumen_wasm_mem_buffer(instId);
+        return;
+      }
+      new Uint8Array(mem._buf).set(new Uint8Array(__lumen_wasm_mem_buffer(instId)));
+    };
+
     Object.defineProperty(mem, 'buffer', {
-      get: function() {
-        var pages = __lumen_wasm_mem_size(instId);
-        var raw = __lumen_wasm_mem_read(instId, 0, pages * 65536);
-        return new Uint8Array(raw).buffer;
-      },
+      get: function() { return mem._buf; },
       configurable: true
     });
-    mem.grow = function(d) { return __lumen_wasm_mem_grow(instId, d | 0); };
-    // MVP escape hatch for memory I/O against Rust-owned linear memory.
+    mem.grow = function(d) {
+      var prev = __lumen_wasm_mem_grow(instId, d | 0);
+      if (prev >= 0) {
+        mem._pages = __lumen_wasm_mem_size(instId);
+        mem._buf = __lumen_wasm_mem_buffer(instId); // fresh, larger (detach)
+      }
+      return prev;
+    };
+    // MVP escape hatch for direct memory I/O against Rust-owned linear memory.
+    // These bypass the call-boundary sync, so prefer `buffer`/HEAP views.
     mem.read = function(offset, len) { return new Uint8Array(__lumen_wasm_mem_read(instId, offset | 0, len | 0)); };
     mem.write = function(offset, bytes) { return __lumen_wasm_mem_write(instId, offset | 0, bytes); };
     return mem;
@@ -373,12 +427,22 @@ const WEBASSEMBLY_SHIM: &str = r#"
 
   function buildExports(instId, exportsDesc) {
     var exports = Object.create(null);
+    // Build the exported memory first so function wrappers can reference it for
+    // call-boundary synchronization (MVP exposes at most one memory).
+    var memRef = { mem: null };
     for (var i = 0; i < exportsDesc.length; i++) {
-      var e = exportsDesc[i];
-      if (e.kind === 'function') exports[e.name] = makeExportFn(instId, e.index);
-      else if (e.kind === 'memory') exports[e.name] = makeExportMemory(instId);
+      var em = exportsDesc[i];
+      if (em.kind === 'memory') {
+        var m = makeExportMemory(instId);
+        exports[em.name] = m;
+        memRef.mem = m;
+      }
+    }
+    for (var j = 0; j < exportsDesc.length; j++) {
+      var e = exportsDesc[j];
+      if (e.kind === 'function') exports[e.name] = makeExportFn(instId, e.index, memRef);
       else if (e.kind === 'global') exports[e.name] = makeExportGlobal(instId, e.index);
-      else exports[e.name] = null; // table export — MVP stub
+      else if (e.kind !== 'memory') exports[e.name] = null; // table export — MVP stub
     }
     return exports;
   }
@@ -664,6 +728,120 @@ mod tests {
                 )
                 .unwrap();
             assert!(ok, "i64 import arg + result must round-trip as exact BigInt");
+        });
+    }
+
+    /// `(module (memory (export "memory") 1)
+    ///   (func (export "store") (param i32 i32) local.get 0 local.get 1 i32.store)
+    ///   (func (export "load") (param i32) (result i32) local.get 0 i32.load))`
+    /// — hand-assembled. `store(off,val)` writes a 32-bit word; `load(off)`
+    /// reads one. Lets a test observe coherence between WASM memory and the JS
+    /// `memory.buffer` HEAP view in both directions.
+    const MEM_WASM: &[u8] = &[
+        0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00, // header
+        // type: (i32,i32)->() , (i32)->(i32)
+        0x01, 0x0B, 0x02, 0x60, 0x02, 0x7F, 0x7F, 0x00, 0x60, 0x01, 0x7F, 0x01, 0x7F,
+        0x03, 0x03, 0x02, 0x00, 0x01, // funcs: type 0, type 1
+        0x05, 0x03, 0x01, 0x00, 0x01, // memory: min 1 page
+        // exports: "memory" mem0, "store" func0, "load" func1
+        0x07, 0x19, 0x03, 0x06, 0x6D, 0x65, 0x6D, 0x6F, 0x72, 0x79, 0x02, 0x00, 0x05, 0x73,
+        0x74, 0x6F, 0x72, 0x65, 0x00, 0x00, 0x04, 0x6C, 0x6F, 0x61, 0x64, 0x00, 0x01,
+        // code: store = local0 local1 i32.store ; load = local0 i32.load
+        0x0A, 0x13, 0x02, 0x09, 0x00, 0x20, 0x00, 0x20, 0x01, 0x36, 0x02, 0x00, 0x0B, 0x07,
+        0x00, 0x20, 0x00, 0x28, 0x02, 0x00, 0x0B,
+    ];
+
+    #[test]
+    fn wasm_writes_visible_through_stable_buffer_view() {
+        with_wasm(|ctx| {
+            ctx.globals().set("__mem_bytes", MEM_WASM.to_vec()).unwrap();
+            // Capture an Int32Array view BEFORE the call; a coherent live buffer
+            // must show the WASM write through that same (stable) view.
+            let ok: bool = ctx
+                .eval(
+                    "var m = new WebAssembly.Module(new Uint8Array(__mem_bytes));\
+                     var inst = new WebAssembly.Instance(m);\
+                     var view = new Int32Array(inst.exports.memory.buffer);\
+                     inst.exports.store(0, 1234);\
+                     view[0] === 1234",
+                )
+                .unwrap();
+            assert!(ok, "WASM memory write must reach a pre-captured HEAP view");
+        });
+    }
+
+    #[test]
+    fn js_buffer_writes_visible_to_wasm() {
+        with_wasm(|ctx| {
+            ctx.globals().set("__mem_bytes", MEM_WASM.to_vec()).unwrap();
+            // A JS write through the HEAP view must be synced into Rust memory
+            // before the next exported call reads it.
+            let val: i32 = ctx
+                .eval(
+                    "var m = new WebAssembly.Module(new Uint8Array(__mem_bytes));\
+                     var inst = new WebAssembly.Instance(m);\
+                     var view = new Int32Array(inst.exports.memory.buffer);\
+                     view[4] = 5678;\
+                     inst.exports.load(16)",
+                )
+                .unwrap();
+            assert_eq!(val, 5678, "JS HEAP write must be visible to a later WASM load");
+        });
+    }
+
+    #[test]
+    fn buffer_identity_is_stable_across_calls() {
+        with_wasm(|ctx| {
+            ctx.globals().set("__mem_bytes", MEM_WASM.to_vec()).unwrap();
+            let same: bool = ctx
+                .eval(
+                    "var m = new WebAssembly.Module(new Uint8Array(__mem_bytes));\
+                     var inst = new WebAssembly.Instance(m);\
+                     var b1 = inst.exports.memory.buffer;\
+                     inst.exports.store(8, 99);\
+                     var b2 = inst.exports.memory.buffer;\
+                     b1 === b2",
+                )
+                .unwrap();
+            assert!(same, "buffer identity must persist across a non-growing call");
+        });
+    }
+
+    #[test]
+    fn js_grow_resizes_buffer() {
+        with_wasm(|ctx| {
+            ctx.globals().set("__mem_bytes", MEM_WASM.to_vec()).unwrap();
+            let ok: bool = ctx
+                .eval(
+                    "var m = new WebAssembly.Module(new Uint8Array(__mem_bytes));\
+                     var inst = new WebAssembly.Instance(m);\
+                     var prev = inst.exports.memory.grow(1);\
+                     (prev === 1) && (inst.exports.memory.buffer.byteLength === 2 * 65536)",
+                )
+                .unwrap();
+            assert!(ok, "JS Memory.grow must enlarge the exported buffer");
+        });
+    }
+
+    #[test]
+    fn round_trip_through_heap_and_back() {
+        with_wasm(|ctx| {
+            ctx.globals().set("__mem_bytes", MEM_WASM.to_vec()).unwrap();
+            // WASM stores, JS reads it via the view, mutates a neighbouring word,
+            // and WASM reads that back — full bidirectional coherence in one go.
+            let ok: bool = ctx
+                .eval(
+                    "var m = new WebAssembly.Module(new Uint8Array(__mem_bytes));\
+                     var inst = new WebAssembly.Instance(m);\
+                     var view = new Int32Array(inst.exports.memory.buffer);\
+                     inst.exports.store(0, 11);\
+                     var a = view[0];\
+                     view[1] = 22;\
+                     var b = inst.exports.load(4);\
+                     (a === 11) && (b === 22)",
+                )
+                .unwrap();
+            assert!(ok, "memory must stay coherent across mixed WASM/JS access");
         });
     }
 }
