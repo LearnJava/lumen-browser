@@ -5959,8 +5959,10 @@ struct SkipInkParams<'a> {
 ///
 /// Algorithm: divide the fragment into equal-width character cells based on
 /// `width / char_count` (Phase 0 approximation — no per-glyph metrics at
-/// paint time). For each cell that needs a gap, extend a gap margin of
-/// `thickness + 1` px on each side, then draw the remaining segments.
+/// paint time). For each cell that needs a gap, clear only the central ink
+/// region (≈ 56% of the advance, centred in the cell) rather than the whole
+/// cell, so the line stays visible between adjacent skipped glyphs. The
+/// remaining segments between merged gaps are then drawn.
 fn emit_decoration_line_skip_ink(out: &mut DisplayList, p: SkipInkParams<'_>) {
     let SkipInkParams { x, y, width, thickness, color, style, text, skip_all } = p;
     let chars: Vec<char> = text.chars().collect();
@@ -5971,16 +5973,22 @@ fn emit_decoration_line_skip_ink(out: &mut DisplayList, p: SkipInkParams<'_>) {
     }
 
     let char_w = width / n as f32;
-    // Gap margin: enough to visibly clear the glyph ink on both sides.
-    let margin = (thickness + 1.0).min(char_w * 0.4);
+    // Each skipped glyph clears only the central ink region of its advance
+    // cell, not the whole cell: the gap is centred in the cell and spans
+    // ≈ 56% of the advance plus a small thickness-scaled clearance, capped
+    // at 90% of the cell. This leaves a visible line segment between
+    // adjacent glyphs even for runs of consecutive descenders (e.g. "gjpqy"),
+    // matching Edge's skip-ink. The previous full-cell + margin gap merged
+    // such runs into one giant gap, erasing the line entirely.
+    let half_gap = (char_w * 0.28 + thickness * 0.5).min(char_w * 0.45);
 
     // Build merged gap intervals.
     let mut gaps: Vec<(f32, f32)> = Vec::new();
     for (i, &ch) in chars.iter().enumerate() {
         if skip_all || char_has_ink_descender(ch) {
-            let cell_x = x + i as f32 * char_w;
-            let gap_start = (cell_x - margin).max(x);
-            let gap_end = (cell_x + char_w + margin).min(x + width);
+            let center = x + (i as f32 + 0.5) * char_w;
+            let gap_start = (center - half_gap).max(x);
+            let gap_end = (center + half_gap).min(x + width);
             if let Some(last) = gaps.last_mut()
                 && gap_start <= last.1
             {
@@ -13685,6 +13693,46 @@ mod highlight_tests {
             if let DisplayCommand::FillRect { rect, .. } = c { Some(rect.width) } else { None }
         }).sum();
         assert!(total < 60.0, "expected gaps to reduce total painted width, got {total}");
+    }
+
+    #[test]
+    fn skip_ink_consecutive_descenders_keep_line_visible() {
+        // BUG-203: a run of consecutive descenders ("gjpqy") must keep the
+        // underline visible as segments between glyphs. The old full-cell + margin
+        // gap merged the whole run into one giant gap, erasing the line entirely.
+        let mut out = Vec::new();
+        emit_decoration_line_skip_ink(&mut out, SkipInkParams {
+            x: 0.0, y: 10.0, width: 100.0, thickness: 3.0, color: Color::BLACK,
+            style: TextDecorationStyle::Solid, text: "gjpqy", skip_all: false,
+        });
+        let segments: Vec<f32> = out.iter().filter_map(|c| {
+            if let DisplayCommand::FillRect { rect, .. } = c { Some(rect.width) } else { None }
+        }).collect();
+        // Line must NOT be erased: at least one segment survives between glyphs.
+        assert!(!segments.is_empty(), "underline erased for consecutive descenders");
+        // Multiple inter-glyph segments expected, not one merged gap.
+        assert!(segments.len() >= 2,
+            "expected ≥2 inter-glyph segments, got {}", segments.len());
+        let painted: f32 = segments.iter().sum();
+        // Gaps cover only the central ink of each cell, so a substantial part of
+        // the 100px line survives (the old code erased it to 0px).
+        assert!(painted > 20.0,
+            "expected a substantial part of the 100px line to remain, got {painted}");
+    }
+
+    #[test]
+    fn skip_ink_all_does_not_erase_line() {
+        // BUG-203: skip-ink: all must still draw line segments between glyphs,
+        // not erase the line. Regression for the all-cells-merged-into-one-gap bug.
+        let mut out = Vec::new();
+        emit_decoration_line_skip_ink(&mut out, SkipInkParams {
+            x: 0.0, y: 10.0, width: 240.0, thickness: 2.0, color: Color::BLACK,
+            style: TextDecorationStyle::Solid, text: "Typography", skip_all: true,
+        });
+        let count = out.iter()
+            .filter(|c| matches!(c, DisplayCommand::FillRect { .. }))
+            .count();
+        assert!(count >= 2, "skip-ink: all erased the line, got {count} segments");
     }
 
     #[test]

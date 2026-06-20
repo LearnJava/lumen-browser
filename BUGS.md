@@ -216,7 +216,7 @@
 | [BUG-200](bugs/BUG-200-FIXED.md) | FIXED 2026-06-19 | paint | TEST-80 collapse varied-width borders: thin cell's bg erased thick neighbour's shared border (ordered path emits cell bg+border interleaved in DOM order). Fix: redraw cell borders after all cell backgrounds in collapse mode (`display_list.rs` fill_buckets). Residual 9.91% = font-parity vertical drift (BUG-128) → KNOWN_DEBTORS |
 | [BUG-201](bugs/BUG-201-OPEN.md) | OPEN | paint | SVG `<use>` cloning deviation — TEST-82: 5.00% |
 | [BUG-202](bugs/BUG-202-FIXED.md) | FIXED 2026-06-17 | layout | TEST-83 14.02%→7.88%: реальная причина не scroll-behavior, а text-only inline-block без shrink-to-fit. `preferred_inline_block_width` мерил только дочерние боксы и игнорировал текст `InlineRun` (он в `segments`, не в `children`) → None → бокс растягивался на всю строку. Добавлена ветка измерения текста сегментов (box_tree.rs:3732). Pills `.pill` теперь обтягивают текст и текут в ряд. Остаток 7.88% = font-parity (BUG-128) → KNOWN_DEBTORS |
-| [BUG-203](bugs/BUG-203-OPEN.md) | OPEN | paint | `text-decoration-skip-ink` underline gaps deviation — TEST-84: 5.88% |
+| [BUG-203](bugs/BUG-203-FIXED.md) | FIXED 2026-06-20 | paint | `text-decoration-skip-ink` gap geometry — TEST-84: 8.20% → 6.02% (DEBTOR BUG-128, font-parity) |
 | [BUG-204](bugs/BUG-204-OPEN.md) | OPEN | layout | `anchor-name` basic stub deviation — TEST-85: 1.98% |
 | [BUG-205](bugs/BUG-205-OPEN.md) | OPEN | layout | `position-anchor` fallback stub deviation — TEST-86: 2.12% |
 | [BUG-206](bugs/BUG-206-OPEN.md) | OPEN | layout | `inset-area: none` stub deviation — TEST-87: 1.98% |
