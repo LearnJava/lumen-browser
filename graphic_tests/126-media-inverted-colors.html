@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<!-- Media Queries L5 §5.8 — inverted-colors.
+     With no colour inversion active (the engine default), `(inverted-colors: none)`
+     matches while `(inverted-colors: inverted)` does not. Each swatch starts red and
+     turns green only when its media query matches. On a correct engine the "none"
+     swatch is green and the "inverted" swatch stays red (blue would mean it wrongly
+     matched). Edge defaults to inverted-colors: none too, so the rendering agrees.
+     Graphics only, no text. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; padding: 40px; overflow: hidden; box-sizing: border-box; }
+
+  .row { display: flex; gap: 24px; margin-bottom: 24px; }
+  .sw {
+    width: 200px;
+    height: 140px;
+    background: #d64545;        /* default: red = query did NOT match */
+    border: 6px solid #1a202c;
+    box-sizing: border-box;
+  }
+
+  /* Default (no inversion) matches → green */
+  @media (inverted-colors: none)     { .a { background: #2f855a; } }
+
+  /* Default does NOT match → swatch stays red; blue if it wrongly matches */
+  @media (inverted-colors: inverted) { .b { background: #2b6cb0; } }
+
+  /* Invalid value → Unsupported → never matches → stays red */
+  @media (inverted-colors: maybe)    { .c { background: #2b6cb0; } }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="row">
+    <div class="sw a"></div>
+    <div class="sw b"></div>
+    <div class="sw c"></div>
+  </div>
+</div>
+</body>
+</html>

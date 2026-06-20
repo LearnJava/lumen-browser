@@ -242,6 +242,16 @@
     <div class="mq-sw mq-scr-bad"></div>
   </div>
 
+  <!-- ── inverted-colors demo (Media Queries L5 §5.8) ── -->
+  <style>
+    @media (inverted-colors: none)     { .mq-inv { background: #2f855a; } }
+    @media (inverted-colors: inverted) { .mq-inv-bad { background: #2b6cb0; } }
+  </style>
+  <div class="mq-row">
+    <div class="mq-sw mq-inv"></div>
+    <div class="mq-sw mq-inv-bad"></div>
+  </div>
+
   <!-- ── @supports selector() demo (CSS Conditional L4 §4.2) ── -->
   <style>
     @supports selector(:has(*))                  { .sup-has  { background: #2f855a; } }
