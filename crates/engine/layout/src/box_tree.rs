@@ -843,29 +843,6 @@ fn collect_textarea_content(doc: &Document, node_id: NodeId) -> String {
     text
 }
 
-/// Parses SVG `text-anchor` attribute.
-/// Returns the corresponding `SvgTextAnchor` enum value, defaulting to `Start` if attribute is absent or invalid.
-fn parse_text_anchor(attr: Option<&str>) -> SvgTextAnchor {
-    match attr {
-        Some("middle") => SvgTextAnchor::Middle,
-        Some("end") => SvgTextAnchor::End,
-        _ => SvgTextAnchor::Start, // default
-    }
-}
-
-/// Parses SVG `dominant-baseline` attribute.
-/// Returns the corresponding `SvgDominantBaseline` enum value, defaulting to `Auto` if attribute is absent or invalid.
-fn parse_dominant_baseline(attr: Option<&str>) -> SvgDominantBaseline {
-    match attr {
-        Some("baseline") => SvgDominantBaseline::Baseline,
-        Some("hanging") => SvgDominantBaseline::Hanging,
-        Some("middle") => SvgDominantBaseline::Middle,
-        Some("central") => SvgDominantBaseline::Central,
-        Some("text-before-edge") => SvgDominantBaseline::TextBeforeEdge,
-        Some("text-after-edge") => SvgDominantBaseline::TextAfterEdge,
-        _ => SvgDominantBaseline::Auto, // default
-    }
-}
 
 /// Maps an SVG `viewBox` into the SVG viewport using the `preserveAspectRatio`
 /// attribute (SVG 1.1 §7.8). Inline `<svg>` ignores CSS `object-fit`/`object-position`
@@ -1066,8 +1043,13 @@ fn process_svg_node(
         "text" | "tspan" | "textPath" => {
             // SVG text element: collect text content from this element and descendants.
             let text = collect_text_content(doc, child_id);
-            let text_anchor = parse_text_anchor(doc.get(child_id).get_attr("text-anchor"));
-            let dominant_baseline = parse_dominant_baseline(doc.get(child_id).get_attr("dominant-baseline"));
+            // SVG 2 §11.6 / §11.10.2 — `text-anchor` / `dominant-baseline` come from
+            // the cascade (`apply_svg_presentational_hints` folds the presentation
+            // attributes in as lowest-priority declarations, so author CSS overrides
+            // them and they inherit from container elements). `None` = the `start` /
+            // `auto` initial value.
+            let text_anchor = style.text_anchor.unwrap_or_default();
+            let dominant_baseline = style.dominant_baseline.unwrap_or_default();
             out.push(LayoutBox {
                 node: child_id, rect: Rect::ZERO, style,
                 kind: BoxKind::SvgText {
@@ -13372,6 +13354,76 @@ mod tests {
                 panic!("Found box is not SvgText");
             }
         }
+    }
+
+    /// Finds the first `SvgText` box in a layout tree (test helper).
+    fn first_svg_text(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+        for child in &b.children {
+            if matches!(child.kind, super::BoxKind::SvgText { .. }) {
+                return Some(child);
+            }
+            if let Some(found) = first_svg_text(child) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn svg_text_anchor_from_css_property() {
+        // text-anchor set purely via a CSS rule (no presentation attribute).
+        let html = "<svg><text class=\"t\">Center</text></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(".t { text-anchor: middle; }");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let tb = first_svg_text(&root).expect("svg text box");
+        let super::BoxKind::SvgText { text_anchor, .. } = &tb.kind else {
+            panic!("not SvgText");
+        };
+        assert_eq!(*text_anchor, super::SvgTextAnchor::Middle);
+    }
+
+    #[test]
+    fn svg_text_anchor_css_overrides_attribute() {
+        // SVG 2 §6.4: presentation attribute has specificity 0 — a CSS rule wins.
+        let html = "<svg><text class=\"t\" text-anchor=\"start\">X</text></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(".t { text-anchor: end; }");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let tb = first_svg_text(&root).expect("svg text box");
+        let super::BoxKind::SvgText { text_anchor, .. } = &tb.kind else {
+            panic!("not SvgText");
+        };
+        assert_eq!(*text_anchor, super::SvgTextAnchor::End);
+    }
+
+    #[test]
+    fn svg_text_anchor_inherits_from_container_attribute() {
+        // text-anchor is inherited: a `<g text-anchor>` propagates to descendant <text>.
+        let html = "<svg><g text-anchor=\"end\"><text>X</text></g></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let tb = first_svg_text(&root).expect("svg text box");
+        let super::BoxKind::SvgText { text_anchor, .. } = &tb.kind else {
+            panic!("not SvgText");
+        };
+        assert_eq!(*text_anchor, super::SvgTextAnchor::End);
+    }
+
+    #[test]
+    fn svg_text_anchor_defaults_to_start() {
+        // No attribute, no CSS → `start` initial.
+        let html = "<svg><text>X</text></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let tb = first_svg_text(&root).expect("svg text box");
+        let super::BoxKind::SvgText { text_anchor, dominant_baseline, .. } = &tb.kind else {
+            panic!("not SvgText");
+        };
+        assert_eq!(*text_anchor, super::SvgTextAnchor::Start);
+        assert_eq!(*dominant_baseline, super::SvgDominantBaseline::Auto);
     }
 
     #[test]

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<!-- SVG 2 §11.6 / §11.10.2 — text-anchor (and dominant-baseline) as CSS properties.
+     text-anchor controls how an SVG <text> is positioned horizontally relative to
+     its `x` coordinate: `start` runs to the right of x, `middle` is centred on x,
+     `end` runs to the left of x. Each row draws a magenta vertical reference line
+     at the anchor x; the text shifts relative to that line per its anchor value.
+     Rows 1-3 set the value via the presentation attribute; rows 4-5 set it via a
+     CSS rule (row 5 also proves CSS overrides a conflicting presentation attribute).
+     NOTE: glyph rasterisation diverges from Edge (rule #3), so the authoritative
+     gate is the deterministic CPU snapshot (snapshot_cpu.rs) + --dump-display-list,
+     not the Edge pixel pipeline. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; overflow: hidden; padding: 20px; box-sizing: border-box; }
+  svg { display: block; }
+  /* CSS-set text-anchor (no presentation attribute on these <text> elements). */
+  .css-mid { text-anchor: middle; }
+  /* CSS overrides the conflicting text-anchor="start" presentation attribute. */
+  .css-end { text-anchor: end; }
+</style>
+</head>
+<body>
+  <div class="__f">
+    <svg width="960" height="640">
+      <!-- Anchor reference line at x=480. -->
+      <rect x="478" y="20" width="4" height="600" fill="#ff00ff"/>
+
+      <!-- Row 1: attribute start — text runs right of the line. -->
+      <text x="480" y="90" font-size="48" fill="#101010" text-anchor="start">START</text>
+      <!-- Row 2: attribute middle — text centred on the line. -->
+      <text x="480" y="200" font-size="48" fill="#0e8f8f" text-anchor="middle">MIDDLE</text>
+      <!-- Row 3: attribute end — text runs left of the line. -->
+      <text x="480" y="310" font-size="48" fill="#c81e3a" text-anchor="end">END</text>
+
+      <!-- Row 4: CSS property middle (no attribute). -->
+      <text x="480" y="430" font-size="48" fill="#1a5ac0" class="css-mid">CSS-MID</text>
+      <!-- Row 5: CSS end overrides attribute start. -->
+      <text x="480" y="560" font-size="48" fill="#7a3cc8" text-anchor="start" class="css-end">CSS-END</text>
+    </svg>
+  </div>
+</body>
+</html>
