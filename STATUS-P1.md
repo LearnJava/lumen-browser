@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет активной задачи)_
+In progress: BUG-187 — form controls static rendering (TEST-34 4.78%)  branch: p1-bug187-forms
+Next step: запустить `run.py --only 34`, увидеть diff vs Edge; чинить примитивы виджетов (radio dot — круг вместо квадрата, checkbox — галочка)  crates/engine/paint/src/display_list.rs:4045 (`emit_form_control_indicator`)
 
 ---
 
