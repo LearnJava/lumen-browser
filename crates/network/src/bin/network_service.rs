@@ -84,6 +84,23 @@ fn main() {
                 let _ = conn.send(&IpcResponse::Shutdown);
                 break;
             }
+            // TAB-4/5 tab-control variants belong to the shell's `--ipc-server`
+            // channel, not the network service — reject them so the match stays
+            // exhaustive and any future tab command surfaces as a clear error.
+            IpcRequest::CreateTab => {
+                let _ = conn.send(&IpcResponse::TabError {
+                    tab_id: 0,
+                    message: "lumen-network-service does not manage tabs".to_string(),
+                });
+            }
+            IpcRequest::CloseTab { tab_id }
+            | IpcRequest::NavigateTab { tab_id, .. }
+            | IpcRequest::Screenshot { tab_id } => {
+                let _ = conn.send(&IpcResponse::TabError {
+                    tab_id,
+                    message: "lumen-network-service does not manage tabs".to_string(),
+                });
+            }
         }
     }
 }
