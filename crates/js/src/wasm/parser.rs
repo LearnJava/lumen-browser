@@ -6,10 +6,10 @@
 //! (`Block`/`Loop`/`If` carry the index of their matching `End`/`Else`) so the
 //! interpreter never re-scans bytecode at run time.
 //!
-//! Fixed-width SIMD (`0xFD` prefix) is decoded into dedicated [`Instr`] variants.
-//! Anything the decoder does not understand (unknown opcodes, relaxed-SIMD,
-//! malformed sections) yields `Err` so `WebAssembly.compile`/`validate` reject
-//! cleanly rather than producing a half-decoded module.
+//! Fixed-width SIMD and relaxed-SIMD (`0xFD` prefix) are decoded into dedicated
+//! [`Instr`] variants. Anything the decoder does not understand (unknown
+//! opcodes, malformed sections) yields `Err` so `WebAssembly.compile`/`validate`
+//! reject cleanly rather than producing a half-decoded module.
 
 use super::value::{FuncType, Limits, ValType};
 
