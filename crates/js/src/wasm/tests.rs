@@ -328,3 +328,221 @@ fn bridge_compile_and_introspect() {
     assert!(exports.contains("\"add\""));
     assert!(exports.contains("\"function\""));
 }
+
+// ── SIMD (v128 / 0xFD) ──────────────────────────────────────────────────────
+
+/// `v128.const` with four little-endian i32 lanes.
+fn v128_i32(lanes: [i32; 4]) -> Vec<u8> {
+    let mut v = vec![0xFD, 0x0C];
+    for l in lanes {
+        v.extend_from_slice(&l.to_le_bytes());
+    }
+    v
+}
+
+/// `v128.const` with four little-endian f32 lanes.
+fn v128_f32(lanes: [f32; 4]) -> Vec<u8> {
+    let mut v = vec![0xFD, 0x0C];
+    for l in lanes {
+        v.extend_from_slice(&l.to_le_bytes());
+    }
+    v
+}
+
+/// `v128.const` from raw bytes.
+fn v128_bytes(bytes: [u8; 16]) -> Vec<u8> {
+    let mut v = vec![0xFD, 0x0C];
+    v.extend_from_slice(&bytes);
+    v
+}
+
+/// `0xFD` prefix + LEB-encoded sub-opcode (for sub-opcodes ≥ 128).
+fn fd(sub: u64) -> Vec<u8> {
+    let mut v = vec![0xFD];
+    leb_u(&mut v, sub);
+    v
+}
+
+/// Build a no-param module exporting `f` with the given result types and body
+/// instruction bytes (the trailing `end` is appended automatically). A 1-page
+/// memory is always present so load/store tests work.
+fn simd_module(results: &[u8], code: Vec<u8>) -> Vec<u8> {
+    let mut ty = vec![0x01, 0x60, 0x00];
+    leb_u(&mut ty, results.len() as u64);
+    ty.extend_from_slice(results);
+    let ty = section(1, ty);
+    let func = section(3, vec![0x01, 0x00]);
+    let mem = section(5, vec![0x01, 0x00, 0x01]);
+    let export = section(7, vec![0x01, 0x01, b'f', 0x00, 0x00]);
+    let mut body = vec![0x00];
+    body.extend(code);
+    body.push(0x0B);
+    module(vec![ty, func, mem, export, code_section(vec![body])])
+}
+
+/// Run a v128-returning body and return the 16 result bytes.
+fn run_v128(code: Vec<u8>) -> [u8; 16] {
+    run(&simd_module(&[0x7B], code), "f", &[]).unwrap()[0].as_v128()
+}
+
+/// Extract four i32 lanes from raw v128 bytes.
+fn lanes_i32(v: [u8; 16]) -> [i32; 4] {
+    let mut out = [0i32; 4];
+    for (i, o) in out.iter_mut().enumerate() {
+        *o = i32::from_le_bytes(v[i * 4..i * 4 + 4].try_into().unwrap());
+    }
+    out
+}
+
+#[test]
+fn simd_module_decodes_without_error() {
+    // The decoder used to reject any 0xFD opcode; now it parses.
+    let mut body = v128_i32([1, 2, 3, 4]);
+    body.push(0x1A); // drop the const, leaving an empty result
+    assert!(parse_module(&simd_module(&[], body)).is_ok());
+}
+
+#[test]
+fn simd_i32x4_add() {
+    let mut code = v128_i32([1, 2, 3, 4]);
+    code.extend(v128_i32([10, 20, 30, 40]));
+    code.extend(fd(174)); // i32x4.add
+    assert_eq!(lanes_i32(run_v128(code)), [11, 22, 33, 44]);
+}
+
+#[test]
+fn simd_i32x4_mul_wraps() {
+    let mut code = v128_i32([i32::MAX, 2, -3, 0]);
+    code.extend(v128_i32([2, 2, 2, 7]));
+    code.extend(fd(181)); // i32x4.mul
+    assert_eq!(lanes_i32(run_v128(code)), [-2, 4, -6, 0]);
+}
+
+#[test]
+fn simd_i8x16_splat() {
+    // i32.const 60 ; i8x16.splat  (60 < 64, single-byte signed LEB)
+    let mut code = vec![0x41, 60]; // i32.const 60
+    code.extend(fd(15)); // i8x16.splat
+    assert_eq!(run_v128(code), [60u8; 16]);
+}
+
+#[test]
+fn simd_i32x4_extract_lane() {
+    let mut code = v128_i32([5, 6, 7, 8]);
+    code.extend(fd(27)); // i32x4.extract_lane
+    code.push(0x02); // lane 2
+    let r = run(&simd_module(&[0x7F], code), "f", &[]).unwrap();
+    assert_eq!(r[0].as_i32(), 7);
+}
+
+#[test]
+fn simd_i32x4_replace_lane() {
+    let mut code = v128_i32([5, 6, 7, 8]);
+    code.push(0x41);
+    code.push(30); // i32.const 30  (30 < 64, single-byte signed LEB)
+    code.extend(fd(28)); // i32x4.replace_lane
+    code.push(0x01); // lane 1
+    assert_eq!(lanes_i32(run_v128(code)), [5, 30, 7, 8]);
+}
+
+#[test]
+fn simd_f32x4_add() {
+    let mut code = v128_f32([1.5, 2.5, 3.5, 4.5]);
+    code.extend(v128_f32([0.5, 0.5, 0.5, 0.5]));
+    code.extend(fd(228)); // f32x4.add
+    let v = run_v128(code);
+    let lanes: Vec<f32> = (0..4)
+        .map(|i| f32::from_le_bytes(v[i * 4..i * 4 + 4].try_into().unwrap()))
+        .collect();
+    assert_eq!(lanes, vec![2.0, 3.0, 4.0, 5.0]);
+}
+
+#[test]
+fn simd_i32x4_eq_mask() {
+    let mut code = v128_i32([1, 2, 3, 4]);
+    code.extend(v128_i32([1, 9, 3, 9]));
+    code.extend(fd(55)); // i32x4.eq
+    assert_eq!(lanes_i32(run_v128(code)), [-1, 0, -1, 0]); // all-ones = -1
+}
+
+#[test]
+fn simd_v128_store_then_load() {
+    // i32.const 0 ; v128.const ... ; v128.store off 0 ; i32.const 0 ; v128.load off 0
+    let mut code = vec![0x41, 0x00]; // i32.const 0
+    code.extend(v128_i32([7, 8, 9, 10]));
+    code.extend(fd(11)); // v128.store
+    code.push(0x00); // align
+    code.push(0x00); // offset
+    code.extend([0x41, 0x00]); // i32.const 0
+    code.extend(fd(0)); // v128.load
+    code.push(0x00); // align
+    code.push(0x00); // offset
+    assert_eq!(lanes_i32(run_v128(code)), [7, 8, 9, 10]);
+}
+
+#[test]
+fn simd_shuffle() {
+    let mut code = v128_bytes([0x11; 16]);
+    code.extend(v128_bytes([0x22; 16]));
+    code.extend(fd(13)); // i8x16.shuffle
+    // lanes 0..7 from a (0x11), lanes 16..23 from b (0x22)
+    code.extend([0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23]);
+    let mut expected = [0x11u8; 16];
+    for e in expected.iter_mut().skip(8) {
+        *e = 0x22;
+    }
+    assert_eq!(run_v128(code), expected);
+}
+
+#[test]
+fn simd_bitselect() {
+    let mut code = v128_bytes([0xFF; 16]); // v1
+    code.extend(v128_bytes([0x00; 16])); // v2
+    code.extend(v128_bytes([0xF0; 16])); // control
+    code.extend(fd(82)); // bitselect
+    assert_eq!(run_v128(code), [0xF0; 16]); // (0xFF & 0xF0) | (0x00 & 0x0F)
+}
+
+#[test]
+fn simd_extend_low_i16x8_s() {
+    // first four i16 lanes = -1, 1000, -2, 32767
+    let mut bytes = [0u8; 16];
+    bytes[0..2].copy_from_slice(&(-1i16).to_le_bytes());
+    bytes[2..4].copy_from_slice(&1000i16.to_le_bytes());
+    bytes[4..6].copy_from_slice(&(-2i16).to_le_bytes());
+    bytes[6..8].copy_from_slice(&32767i16.to_le_bytes());
+    let mut code = v128_bytes(bytes);
+    code.extend(fd(165)); // i32x4.extend_low_i16x8_s
+    assert_eq!(lanes_i32(run_v128(code)), [-1, 1000, -2, 32767]);
+}
+
+#[test]
+fn simd_dot_i16x8_s() {
+    // a = [1,2,3,4,5,6,7,8] i16, b = [1,1,1,1,1,1,1,1]
+    let mut a = [0u8; 16];
+    let mut b = [0u8; 16];
+    for i in 0..8 {
+        a[i * 2..i * 2 + 2].copy_from_slice(&((i as i16) + 1).to_le_bytes());
+        b[i * 2..i * 2 + 2].copy_from_slice(&1i16.to_le_bytes());
+    }
+    let mut code = v128_bytes(a);
+    code.extend(v128_bytes(b));
+    code.extend(fd(186)); // i32x4.dot_i16x8_s
+    // pairwise: (1+2),(3+4),(5+6),(7+8)
+    assert_eq!(lanes_i32(run_v128(code)), [3, 7, 11, 15]);
+}
+
+#[test]
+fn simd_i8x16_add_sat_s() {
+    let mut code = v128_bytes([100u8; 16]); // 100 as i8
+    code.extend(v128_bytes([100u8; 16]));
+    code.extend(fd(111)); // i8x16.add_sat_s -> saturates to 127
+    assert_eq!(run_v128(code), [127u8; 16]);
+}
+
+#[test]
+fn simd_i32x4_trunc_sat_f32x4_s() {
+    let mut code = v128_f32([3.9, -2.1, 1e30, f32::NAN]);
+    code.extend(fd(248)); // i32x4.trunc_sat_f32x4_s
+    assert_eq!(lanes_i32(run_v128(code)), [3, -2, i32::MAX, 0]);
+}

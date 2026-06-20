@@ -21,7 +21,7 @@ const MAX_CALL_DEPTH: usize = 1024;
 pub struct Trap(pub String);
 
 impl Trap {
-    fn new(msg: impl Into<String>) -> Trap {
+    pub(crate) fn new(msg: impl Into<String>) -> Trap {
         Trap(msg.into())
     }
 }
@@ -491,6 +491,31 @@ impl Instance {
                     stack.push(Value::I32(is_null as i32));
                 }
                 Instr::RefFunc(idx) => stack.push(Value::FuncRef(Some(*idx))),
+                Instr::V128Const(bytes) => stack.push(Value::V128(*bytes)),
+                Instr::V128Load { sub, offset } => {
+                    let base = pop!().as_i32() as u32 as usize;
+                    let v = self.simd_load(*sub, base + *offset as usize)?;
+                    stack.push(v);
+                }
+                Instr::V128Store { offset } => {
+                    let v = pop!().as_v128();
+                    let base = pop!().as_i32() as u32 as usize;
+                    self.write_bytes(base + *offset as usize, &v)?;
+                }
+                Instr::V128LoadLane { sub, offset, lane } => {
+                    let vec = pop!().as_v128();
+                    let base = pop!().as_i32() as u32 as usize;
+                    let v = self.simd_load_lane(*sub, base + *offset as usize, *lane, vec)?;
+                    stack.push(v);
+                }
+                Instr::V128StoreLane { sub, offset, lane } => {
+                    let vec = pop!().as_v128();
+                    let base = pop!().as_i32() as u32 as usize;
+                    self.simd_store_lane(*sub, base + *offset as usize, *lane, vec)?;
+                }
+                Instr::Shuffle(lanes) => super::simd::shuffle(lanes, &mut stack)?,
+                Instr::SimdLane { sub, lane } => super::simd::lane_op(*sub, *lane, &mut stack)?,
+                Instr::Simd(sub) => super::simd::exec_simd(*sub, &mut stack)?,
             }
             pc = next;
         }
@@ -588,6 +613,109 @@ impl Instance {
         }
         Ok(())
     }
+
+    // ── SIMD memory access ───────────────────────────────────────────────────
+
+    /// Execute a SIMD load (`0xFD` sub-opcodes 0..=10, 92, 93), returning the
+    /// resulting `v128`. Covers plain load, the widening `loadNxM_s/u` ops, the
+    /// `loadN_splat` broadcasts, and the `loadN_zero` zero-extend loads.
+    fn simd_load(&self, sub: u32, addr: usize) -> Result<Value, Trap> {
+        let mut r = [0u8; 16];
+        match sub {
+            0 => r.copy_from_slice(self.read_bytes(addr, 16)?),
+            // loadNxM_s/u: widen M source lanes into double-width lanes.
+            1..=6 => {
+                let src = self.read_bytes(addr, 8)?.to_vec();
+                let (src_sz, signed) = match sub {
+                    1 => (1, true),
+                    2 => (1, false),
+                    3 => (2, true),
+                    4 => (2, false),
+                    5 => (4, true),
+                    _ => (4, false),
+                };
+                let dst_sz = src_sz * 2;
+                let n = 8 / src_sz;
+                for i in 0..n {
+                    let off = i * src_sz;
+                    let v: i64 = match (src_sz, signed) {
+                        (1, true) => src[off] as i8 as i64,
+                        (1, false) => src[off] as i64,
+                        (2, true) => {
+                            i16::from_le_bytes([src[off], src[off + 1]]) as i64
+                        }
+                        (2, false) => {
+                            u16::from_le_bytes([src[off], src[off + 1]]) as i64
+                        }
+                        (4, true) => i32::from_le_bytes(
+                            src[off..off + 4].try_into().unwrap(),
+                        ) as i64,
+                        _ => u32::from_le_bytes(
+                            src[off..off + 4].try_into().unwrap(),
+                        ) as i64,
+                    };
+                    let dst = i * dst_sz;
+                    match dst_sz {
+                        2 => r[dst..dst + 2].copy_from_slice(&(v as i16).to_le_bytes()),
+                        4 => r[dst..dst + 4].copy_from_slice(&(v as i32).to_le_bytes()),
+                        _ => r[dst..dst + 8].copy_from_slice(&v.to_le_bytes()),
+                    }
+                }
+            }
+            // loadN_splat: broadcast an N-byte scalar across all lanes.
+            7..=10 => {
+                let sz = 1usize << (sub - 7); // 1,2,4,8
+                let src = self.read_bytes(addr, sz)?.to_vec();
+                let mut off = 0;
+                while off < 16 {
+                    r[off..off + sz].copy_from_slice(&src);
+                    off += sz;
+                }
+            }
+            // load32_zero / load64_zero: low lane from memory, rest zero.
+            92 => r[0..4].copy_from_slice(self.read_bytes(addr, 4)?),
+            93 => r[0..8].copy_from_slice(self.read_bytes(addr, 8)?),
+            _ => return Err(Trap::new("bad SIMD load opcode")),
+        }
+        Ok(Value::V128(r))
+    }
+
+    /// Execute a SIMD load-into-lane (`0xFD` 84..=87): read N bytes from memory
+    /// into the given lane of `vec`, leaving the other lanes untouched.
+    fn simd_load_lane(
+        &self,
+        sub: u32,
+        addr: usize,
+        lane: u8,
+        mut vec: [u8; 16],
+    ) -> Result<Value, Trap> {
+        let sz = 1usize << (sub - 84); // 84→1, 85→2, 86→4, 87→8
+        let off = lane as usize * sz;
+        if off + sz > 16 {
+            return Err(Trap::new("SIMD lane index out of range"));
+        }
+        let src = self.read_bytes(addr, sz)?.to_vec();
+        vec[off..off + sz].copy_from_slice(&src);
+        Ok(Value::V128(vec))
+    }
+
+    /// Execute a SIMD store-from-lane (`0xFD` 88..=91): write the given lane of
+    /// `vec` (N bytes) to memory.
+    fn simd_store_lane(
+        &mut self,
+        sub: u32,
+        addr: usize,
+        lane: u8,
+        vec: [u8; 16],
+    ) -> Result<(), Trap> {
+        let sz = 1usize << (sub - 88); // 88→1, 89→2, 90→4, 91→8
+        let off = lane as usize * sz;
+        if off + sz > 16 {
+            return Err(Trap::new("SIMD lane index out of range"));
+        }
+        let bytes = vec[off..off + sz].to_vec();
+        self.write_bytes(addr, &bytes)
+    }
 }
 
 /// Number of result values for a block type.
@@ -664,6 +792,7 @@ fn eval_const_expr(expr: &[Instr], globals: &[Value]) -> Result<Value, String> {
         Instr::I64Const(v) => Ok(Value::I64(*v)),
         Instr::F32Const(v) => Ok(Value::F32(*v)),
         Instr::F64Const(v) => Ok(Value::F64(*v)),
+        Instr::V128Const(bytes) => Ok(Value::V128(*bytes)),
         Instr::GlobalGet(i) => globals
             .get(*i as usize)
             .copied()
