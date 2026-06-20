@@ -1226,6 +1226,10 @@ pub enum MediaFeature {
     /// `(scripting: none | initial-only | enabled)` — доступность скриптов
     /// при рендеринге документа (Media Queries L5 §6.2).
     Scripting(MediaScripting),
+    /// `(inverted-colors: none | inverted)` — инвертирует ли ОС/UA выводимые
+    /// цвета (например, режим «инверсия цветов» доступности) (Media Queries
+    /// L5 §5.8).
+    InvertedColors(MediaInvertedColors),
 }
 
 impl Eq for MediaFeature {}
@@ -1303,6 +1307,16 @@ pub enum MediaScripting {
     Enabled,
 }
 
+/// Media Queries L5 §5.8 — `inverted-colors`: инвертирует ли пользовательское
+/// окружение (ОС/UA) выводимые цвета.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaInvertedColors {
+    /// Цвета выводятся как есть (значение по умолчанию).
+    None,
+    /// Цвета инвертируются окружением.
+    Inverted,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorScheme {
     Light,
@@ -1341,6 +1355,8 @@ pub struct MediaContext {
     /// Доступность скриптов (`scripting` media feature). У Lumen есть
     /// встроенный JS-движок (QuickJS), поэтому desktop-дефолт — `Enabled`.
     pub scripting: MediaScripting,
+    /// Инверсия цветов окружением (`inverted-colors` media feature).
+    pub inverted_colors: MediaInvertedColors,
 }
 
 impl Default for MediaContext {
@@ -1364,6 +1380,8 @@ impl Default for MediaContext {
             prefers_reduced_transparency: MediaReducedTransparency::NoPreference,
             // Lumen исполняет JS (QuickJS) → скрипты включены, как в Edge.
             scripting: MediaScripting::Enabled,
+            // Desktop-дефолт: ОС не инвертирует цвета.
+            inverted_colors: MediaInvertedColors::None,
         }
     }
 }
@@ -1455,6 +1473,7 @@ impl MediaFeature {
             Self::PrefersReducedData(d) => ctx.prefers_reduced_data == *d,
             Self::PrefersReducedTransparency(t) => ctx.prefers_reduced_transparency == *t,
             Self::Scripting(s) => ctx.scripting == *s,
+            Self::InvertedColors(i) => ctx.inverted_colors == *i,
         }
     }
 }
@@ -2093,6 +2112,11 @@ fn parse_media_feature(s: &str) -> MediaCondition {
             "none" => MediaCondition::Feature(MediaFeature::Scripting(MediaScripting::None)),
             "initial-only" => MediaCondition::Feature(MediaFeature::Scripting(MediaScripting::InitialOnly)),
             "enabled" => MediaCondition::Feature(MediaFeature::Scripting(MediaScripting::Enabled)),
+            _ => MediaCondition::Unsupported,
+        },
+        "inverted-colors" => match val.to_ascii_lowercase().as_str() {
+            "none" => MediaCondition::Feature(MediaFeature::InvertedColors(MediaInvertedColors::None)),
+            "inverted" => MediaCondition::Feature(MediaFeature::InvertedColors(MediaInvertedColors::Inverted)),
             _ => MediaCondition::Unsupported,
         },
         _ => MediaCondition::Unsupported,
@@ -7158,6 +7182,39 @@ mod tests {
         // Невалидное значение → Unsupported → никогда не матчит.
         let bad = parse_media_query("(scripting: sometimes)");
         assert!(!bad.matches(&screen_ctx(1024.0)));
+    }
+
+    // ── MQ L5 §5.8: inverted-colors ──
+
+    #[test]
+    fn media_query_inverted_colors_inverted() {
+        let q = parse_media_query("(inverted-colors: inverted)");
+        let mut ctx = screen_ctx(1024.0);
+        ctx.inverted_colors = MediaInvertedColors::Inverted;
+        assert!(q.matches(&ctx));
+        // Desktop-дефолт — none → не матчит inverted.
+        assert!(!q.matches(&screen_ctx(1024.0)));
+    }
+
+    #[test]
+    fn media_query_inverted_colors_none_default() {
+        let q = parse_media_query("(inverted-colors: none)");
+        // Desktop-дефолт — none.
+        assert!(q.matches(&screen_ctx(1024.0)));
+        let mut inv = screen_ctx(1024.0);
+        inv.inverted_colors = MediaInvertedColors::Inverted;
+        assert!(!q.matches(&inv));
+    }
+
+    #[test]
+    fn media_query_inverted_colors_case_insensitive_and_invalid() {
+        let q = parse_media_query("(INVERTED-COLORS: INVERTED)");
+        let mut ctx = screen_ctx(1024.0);
+        ctx.inverted_colors = MediaInvertedColors::Inverted;
+        assert!(q.matches(&ctx));
+        // Невалидное значение → Unsupported → никогда не матчит.
+        let bad = parse_media_query("(inverted-colors: maybe)");
+        assert!(!bad.matches(&ctx));
     }
 
     // ── Стиль: @media с новыми фичами применяется в каскаде ──
