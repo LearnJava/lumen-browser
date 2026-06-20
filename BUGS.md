@@ -204,7 +204,7 @@
 | [BUG-188](bugs/BUG-188-OPEN.md) | OPEN | layout/paint | individual `translate`/`rotate`/`scale` transforms deviation — TEST-46: 4.63% |
 | [BUG-189](bugs/BUG-189-OPEN.md) | OPEN | paint | SVG basic shapes deviation — TEST-47: 3.71% |
 | [BUG-190](bugs/BUG-190-OPEN.md) | OPEN | paint | `background-blend-mode` deviation — TEST-49: 2.39% |
-| [BUG-191](bugs/BUG-191-OPEN.md) | OPEN | paint | `text-shadow` blur PushFilter deviation — TEST-52: 5.83% |
+| [BUG-191](bugs/BUG-191-FIXED.md) | FIXED 2026-06-20 | paint | TEST-52 5.83%→4.25% DEBTOR: blur-пайплайн корректен — sigma=radius/2, GPU GaussianBlur на full-RT слое (halo не клипуется), multi-shadow и цветные glow совпадают с Edge по extent/intensity (glow-only и 20px кейсы проверены пиксельно). Остаток = font-parity (Edge serif vs Inter sans, rule 3) → KNOWN_DEBTORS BUG-128. Регресс-тест `text_shadow_blur_sigma_is_half_radius_for_test52_progression` |
 | [BUG-192](bugs/BUG-192-OPEN.md) | OPEN | paint | `<video>` placeholder deviation — TEST-55: 0.89% |
 | [BUG-193](bugs/BUG-193-FIXED.md) | FIXED 2026-06-17 | layout | TEST-64 13.89%→8.99%: `display:table`-обёртка не схлопывала margin с соседним блоком (CSS 2.1 §8.3.1) — bottom-margin таблицы + top-margin `<h3>` складывались (38.72px вместо 20px), нижняя таблица уезжала на ~19px. `is_block` теперь включает `Table` (box_tree.rs:5462). Остаток 8.99% = font-parity (BUG-128) → KNOWN_DEBTORS |
 | [BUG-194](bugs/BUG-194-OPEN.md) | OPEN | layout | Flexbox `align-content` multi-line deviation — TEST-65: 1.33% |

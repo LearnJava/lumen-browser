@@ -9730,6 +9730,39 @@ mod tests {
         assert_eq!(push_count, 2, "два PushFilter для двух shadow с blur, got {dl:?}");
     }
 
+    #[test]
+    fn text_shadow_blur_sigma_is_half_radius_for_test52_progression() {
+        // BUG-191: TEST-52 row 1 — одна и та же тень с blur-radius 0/4/10/20px.
+        // Закрепляет соглашение sigma = blur-radius / 2 (CSS Text Decoration L3 §6,
+        // как у box-shadow и canvas shadowBlur — стандартное отклонение Gaussian'а
+        // равно половине blur-radius). Расследование BUG-191 показало, что blur
+        // рендерится корректно (extent/intensity совпадают с Edge в glow-only и
+        // 20px-кейсах); остаток diff TEST-52 = font-parity (Edge serif vs Inter sans),
+        // KNOWN_DEBTORS BUG-128, а не дефект blur-пайплайна.
+        for (radius, expect_sigma) in [(4.0_f32, 2.0_f32), (10.0, 5.0), (20.0, 10.0)] {
+            let css = format!("p {{ text-shadow: 6px 6px {radius}px red; }}");
+            let dl = build("<p>A</p>", &css);
+            let sigma = dl.iter().find_map(|c| match c {
+                DisplayCommand::PushFilter { filters, .. } => filters.iter().find_map(|f| {
+                    if let FilterFn::Blur(s) = f { Some(*s) } else { None }
+                }),
+                _ => None,
+            });
+            assert!(
+                matches!(sigma, Some(s) if (s - expect_sigma).abs() < 0.01),
+                "blur {radius}px → sigma {expect_sigma}, got {sigma:?}"
+            );
+        }
+        // blur 0 → нет PushFilter{Blur} (резкая тень рисуется напрямую).
+        let dl0 = build("<p>A</p>", "p { text-shadow: 6px 6px 0px red; }");
+        assert!(
+            !dl0.iter().any(|c| matches!(c,
+                DisplayCommand::PushFilter { filters, .. }
+                    if filters.iter().any(|f| matches!(f, FilterFn::Blur(_))))),
+            "blur 0px не должен заворачиваться в PushFilter, got {dl0:?}"
+        );
+    }
+
     // ───────── box-shadow rendering ─────────
 
     fn fills_with_color(dl: &DisplayList) -> Vec<(Rect, [u8; 4])> {
