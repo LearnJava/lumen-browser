@@ -8176,6 +8176,23 @@ fn default_display(doc: &Document, node: NodeId) -> Display {
         "td" | "th" => Display::TableCell,
         // CSS 2.1 — list-item UA default.
         "li" => Display::ListItem,
+        // HTML rendering §15.3.1 / §15.5 — form controls are `inline-block`
+        // by default, so they flow horizontally with surrounding inline content
+        // (text labels, sibling controls) instead of each taking its own line.
+        // Author `display:` overrides win through the normal cascade.
+        "input" | "button" | "select" | "selectlist" | "textarea" | "meter" | "progress" => {
+            Display::InlineBlock
+        }
+        // HTML rendering §15.5.3 — `<option>` is not rendered in the document
+        // flow of a closed `<select>`; the selected label is read straight from
+        // the DOM (`collect_select_label`) and painted by the select widget.
+        // `display:none` suppresses the painted option text (which otherwise
+        // leaks below/over the control) while still generating a (non-painted)
+        // box, so `:disabled`/`:checked` selector matching on options keeps
+        // working. `<optgroup>` stays in flow (it has no rendered text of its
+        // own — only an attribute label — and must recurse so descendant option
+        // styles are still computed).
+        "option" => Display::None,
         _ => Display::Block,
     }
 }
@@ -27366,6 +27383,56 @@ mod tests {
         let style = compute_style(&doc, dlg, &sheet, &root, Size::new(800.0, 600.0), false);
         // Author CSS overrides the UA display:none.
         assert_ne!(style.display, Display::None);
+    }
+
+    /// HTML rendering §15.5 — form controls default to `display: inline-block`
+    /// so they flow horizontally with surrounding inline content.
+    #[test]
+    fn form_controls_default_to_inline_block() {
+        let doc = lumen_html_parser::parse(
+            "<input><button>x</button><select></select><textarea></textarea><meter></meter><progress></progress>",
+        );
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let body = doc.get(doc.body().unwrap());
+        for &child in &body.children {
+            let style = compute_style(&doc, child, &sheet, &root, Size::new(800.0, 600.0), false);
+            assert_eq!(
+                style.display,
+                Display::InlineBlock,
+                "form control should default to inline-block"
+            );
+        }
+    }
+
+    /// Author `display:` overrides the UA inline-block default for form controls.
+    #[test]
+    fn form_control_author_display_overrides_inline_block() {
+        let doc = lumen_html_parser::parse("<input>");
+        let sheet = lumen_css_parser::parse("input { display: block; }");
+        let root = ComputedStyle::root();
+        let inp = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, inp, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.display, Display::Block);
+    }
+
+    /// HTML rendering §15.5.3 — `<option>` does not paint flow text in a closed
+    /// `<select>` (its UA display is `none`). `<optgroup>` stays in flow so the
+    /// styles of descendant options are still computed for selector matching.
+    #[test]
+    fn option_defaults_to_display_none_optgroup_stays_in_flow() {
+        let doc = lumen_html_parser::parse(
+            "<select><optgroup label=g><option>A</option></optgroup></select>",
+        );
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let sel = doc.get(doc.body().unwrap()).children[0];
+        let optgroup = doc.get(sel).children[0];
+        let og_style = compute_style(&doc, optgroup, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_ne!(og_style.display, Display::None, "optgroup should stay in flow");
+        let option = doc.get(optgroup).children[0];
+        let opt_style = compute_style(&doc, option, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(opt_style.display, Display::None, "option should be display:none");
     }
 
     /// `@media (prefers-color-scheme: dark)` must match when `dark_mode=true`
