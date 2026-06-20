@@ -20370,6 +20370,32 @@ mod tests {
     }
 
     #[test]
+    fn starting_style_does_not_leak_into_static_cascade() {
+        // BUG-199 / TEST-71 — CSS Transitions L2 §3.4. `@starting-style` provides
+        // the *before-change* style for entry transitions only; it must NOT affect
+        // the static (settled) computed style of an element already present at load.
+        // Here `.box-a` has opacity:1 normally and opacity:0/scale(0.5) inside
+        // @starting-style. The settled cascade must keep opacity==1 and an empty
+        // transform list — otherwise the box would render shrunk/invisible.
+        let s = cascade_at(
+            "<div class=\"box-a\"></div>",
+            "@starting-style { .box-a { opacity: 0; transform: scale(0.5); } } \
+             .box-a { opacity: 1; transition: opacity 0.4s, transform 0.4s; }",
+            &[0],
+        );
+        assert!(
+            (s.opacity - 1.0).abs() < 1e-6,
+            "@starting-style opacity:0 leaked into static cascade, got {}",
+            s.opacity
+        );
+        assert!(
+            s.transform.is_empty(),
+            "@starting-style transform:scale(0.5) leaked into static cascade: {:?}",
+            s.transform
+        );
+    }
+
+    #[test]
     fn at_property_initial_value_used_when_no_declaration() {
         // var(--c) без декларации, но --c зарегистрирована с initial-value.
         let s = cascade_at(
