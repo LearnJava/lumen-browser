@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-In progress: inverted-colors (Media Queries L5 §5.8)  branch: p4-media-inverted-colors
-Next step: clippy + tests → merge --no-ff
+_(none)_ — p4-media-inverted-colors (Media Queries L5 §5.8) влит 2026-06-20
 
 ## Workflow
 
