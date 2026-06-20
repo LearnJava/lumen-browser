@@ -9175,6 +9175,52 @@ mod tests {
         assert_eq!(p_box.style.scale, None, "scale must not be inherited");
     }
 
+    /// BUG-188 / TEST-46 regression: individual transform properties compose with
+    /// the `transform` property in the spec order (translate → rotate → scale →
+    /// transform), all wrapped by the shared `transform-origin` pivot
+    /// (CSS Transforms L2 §3). For the TEST-46 `t-individual-plus-transform` box
+    /// (`translate: 15px 0; scale: 0.9; transform: rotate(15deg)`) this means:
+    /// the box centre — which is also the default `50% 50%` pivot — must map to
+    /// `centre + (15, 0)` (scale/rotate keep the pivot fixed, only the leading
+    /// translate moves it), and the linear part must be `scale(0.9)·rotate(15deg)`.
+    /// Locks the composition so a future refactor can't silently reorder it; the
+    /// remaining TEST-46 pixel diff is font-parity (BUG-128), not transform math.
+    #[test]
+    fn individual_plus_transform_composes_translate_then_scale_then_rotate() {
+        let root = lay(
+            "<div>x</div>",
+            "div { width: 80px; height: 80px; translate: 15px 0px; scale: 0.9; \
+                   transform: rotate(15deg); }",
+        );
+        let div = root
+            .children
+            .iter()
+            .find(|c| matches!(&c.kind, BoxKind::Block))
+            .expect("div box");
+        let m = forward_box_transform(div).expect("transformed box has a matrix");
+
+        // Box centre = default transform-origin pivot.
+        let cx = div.rect.x + div.rect.width / 2.0;
+        let cy = div.rect.y + div.rect.height / 2.0;
+        let (mx, my) = m.transform_point_2d(cx, cy);
+        // Centre moves by exactly the individual `translate` (scale+rotate pivot
+        // about the centre, so they leave it fixed). Wrong order/pivot would shift it.
+        assert!(
+            (mx - (cx + 15.0)).abs() < 0.05 && (my - cy).abs() < 0.05,
+            "centre must map to centre+(15,0); got ({mx}, {my}) vs ({}, {cy})",
+            cx + 15.0
+        );
+
+        // Linear part = scale(0.9) · rotate(15deg). cos15≈0.96593, sin15≈0.25882.
+        let (lx, ly) = m.transform_point_2d(cx + 1.0, cy);
+        let a = lx - mx; // d(x')/dx
+        let b = ly - my; // d(y')/dx
+        assert!(
+            (a - 0.9 * 0.96593).abs() < 1e-3 && (b - 0.9 * 0.25882).abs() < 1e-3,
+            "linear column must be scale(0.9)·rotate(15deg); got a={a}, b={b}"
+        );
+    }
+
     #[test]
     fn filter_blur() {
         let root = lay("<p>x</p>", "p { filter: blur(5px); }");

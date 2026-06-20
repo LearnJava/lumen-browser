@@ -325,7 +325,9 @@ pub enum FormControlKind {
     /// checked state (from presence of `checked` attribute in DOM). Paint uses
     /// this to draw checkbox/radio indicators without re-querying the DOM.
     /// `value_text` is the `value` attribute content, used by `field-sizing: content`.
-    Input { input_type: lumen_dom::InputType, checked: bool, value_text: String },
+    /// `placeholder` is the `placeholder` attribute content, painted in grey by
+    /// text-like inputs when `value_text` is empty (HTML rendering §15.5.5).
+    Input { input_type: lumen_dom::InputType, checked: bool, value_text: String, placeholder: String },
     Button,
     /// `<select>` — `selected_text` is the label of the currently selected
     /// `<option>` (first option if none is explicitly selected). Paint uses this
@@ -3480,7 +3482,10 @@ fn build_box(
                                 let value_text = node.get_attr("value")
                                     .unwrap_or("")
                                     .to_owned();
-                                FormControlKind::Input { input_type, checked, value_text }
+                                let placeholder = node.get_attr("placeholder")
+                                    .unwrap_or("")
+                                    .to_owned();
+                                FormControlKind::Input { input_type, checked, value_text, placeholder }
                             }
                         }
                     }
