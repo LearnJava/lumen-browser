@@ -1035,15 +1035,15 @@ impl FemtovgBackend {
         // Kappa constant for cubic Bézier approximation of a quarter-circle/ellipse.
         const K: f32 = 0.5523;
 
-        // Clamp radii so they don't exceed half the box dimensions (CSS Backgrounds §5.5).
-        let tl_x = radii.tl.min(w / 2.0).min(h / 2.0).max(0.0);
-        let tl_y = radii.tl_y.min(w / 2.0).min(h / 2.0).max(0.0);
-        let tr_x = radii.tr.min(w / 2.0).min(h / 2.0).max(0.0);
-        let tr_y = radii.tr_y.min(w / 2.0).min(h / 2.0).max(0.0);
-        let br_x = radii.br.min(w / 2.0).min(h / 2.0).max(0.0);
-        let br_y = radii.br_y.min(w / 2.0).min(h / 2.0).max(0.0);
-        let bl_x = radii.bl.min(w / 2.0).min(h / 2.0).max(0.0);
-        let bl_y = radii.bl_y.min(w / 2.0).min(h / 2.0).max(0.0);
+        // Clamp radii via CSS Backgrounds §5.5 (single scale factor over all
+        // corners), preserving elliptical corners (rx ≠ ry). The previous
+        // per-radius `min(w/2, h/2)` cap collapsed a wide SVG `<ellipse>` into a
+        // circle → stadium shape instead of an ellipse (BUG-198).
+        let clamped = radii.clamped_to_box(w, h);
+        let (tl_x, tl_y) = (clamped.tl, clamped.tl_y);
+        let (tr_x, tr_y) = (clamped.tr, clamped.tr_y);
+        let (br_x, br_y) = (clamped.br, clamped.br_y);
+        let (bl_x, bl_y) = (clamped.bl, clamped.bl_y);
 
         // Fast path: all corners circular — delegate to femtovg built-in.
         if (tl_x - tl_y).abs() < 0.5 && (tr_x - tr_y).abs() < 0.5

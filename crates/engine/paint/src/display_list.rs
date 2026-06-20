@@ -203,19 +203,34 @@ impl CornerRadii {
         Self::from_style_and_box(s, 0.0, 0.0)
     }
 
-    /// Clamps every radius so no corner exceeds half the box in either axis
-    /// (CSS Backgrounds L3 §5.5 corner-overlap rule). `w`/`h` are the box
-    /// dimensions the radii apply to. Mirrors the per-axis clamp used by the
-    /// rounded-rect fill so the border outer edge aligns with the background fill.
+    /// Clamps every radius via the CSS Backgrounds L3 §5.5 corner-overlap rule.
+    /// `w`/`h` are the box dimensions the radii apply to. A single scale factor
+    /// `f ≤ 1` is chosen so the sum of the two radii along every edge fits that
+    /// edge's length, then **all** radii are multiplied by `f`. Computed from the
+    /// specified radii per-axis (x-radii against `w`, y-radii against `h`), so a
+    /// wide-but-short elliptical corner (`rx ≠ ry`, e.g. an SVG `<ellipse>` mapped
+    /// to a 240×90 box) keeps its aspect. The earlier naive `min(w/2, h/2)` cap
+    /// collapsed such corners into circles (BUG-198), turning ellipses into
+    /// stadiums in the femtovg/border paths. For uniform radii the result is
+    /// unchanged from that cap.
     #[must_use]
     pub fn clamped_to_box(&self, w: f32, h: f32) -> Self {
-        let cap = (w / 2.0).min(h / 2.0).max(0.0);
-        let c = |r: f32| r.min(cap).max(0.0);
+        if w <= 0.0 || h <= 0.0 {
+            return Self::default();
+        }
+        // Per-edge ratio: edge length / sum of the two radii along it (capped at 1).
+        let ratio = |len: f32, sum: f32| if sum > len { len / sum } else { 1.0 };
+        let f = ratio(w, self.tl + self.tr)        // top edge (x-radii)
+            .min(ratio(h, self.tr_y + self.br_y))  // right edge (y-radii)
+            .min(ratio(w, self.br + self.bl))      // bottom edge (x-radii)
+            .min(ratio(h, self.bl_y + self.tl_y))  // left edge (y-radii)
+            .clamp(0.0, 1.0);
+        let s = |r: f32| (r * f).max(0.0);
         Self {
-            tl: c(self.tl),   tl_y: c(self.tl_y),
-            tr: c(self.tr),   tr_y: c(self.tr_y),
-            br: c(self.br),   br_y: c(self.br_y),
-            bl: c(self.bl),   bl_y: c(self.bl_y),
+            tl: s(self.tl),   tl_y: s(self.tl_y),
+            tr: s(self.tr),   tr_y: s(self.tr_y),
+            br: s(self.br),   br_y: s(self.br_y),
+            bl: s(self.bl),   bl_y: s(self.bl_y),
         }
     }
 
@@ -6592,9 +6607,26 @@ mod tests {
         let r = CornerRadii { tl: 999.0, tl_y: 999.0, tr: 999.0, tr_y: 999.0,
             br: 999.0, br_y: 999.0, bl: 999.0, bl_y: 999.0 };
         let c = r.clamped_to_box(140.0, 44.0);
-        // min(140/2, 44/2) = 22
+        // Uniform radii: §5.5 single factor reduces them to min(140/2, 44/2) = 22.
         assert!((c.tl - 22.0).abs() < 1e-4);
         assert!((c.br_y - 22.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn clamped_to_box_preserves_wide_ellipse() {
+        // BUG-198: an SVG <ellipse> mapped into a 240×90 box produces full-extent
+        // elliptical corners (rx = 120, ry = 45). §5.5 leaves these untouched
+        // (each edge's two radii sum exactly to the edge length), so the corner
+        // stays a true ellipse — not a circle/stadium (old `min(w/2,h/2)` cap → 45).
+        let r = CornerRadii {
+            tl: 120.0, tl_y: 45.0, tr: 120.0, tr_y: 45.0,
+            br: 120.0, br_y: 45.0, bl: 120.0, bl_y: 45.0,
+        };
+        let c = r.clamped_to_box(240.0, 90.0);
+        assert!((c.tl - 120.0).abs() < 1e-4, "x-radius collapsed: {}", c.tl);
+        assert!((c.tl_y - 45.0).abs() < 1e-4, "y-radius wrong: {}", c.tl_y);
+        assert!((c.br - 120.0).abs() < 1e-4);
+        assert!((c.br_y - 45.0).abs() < 1e-4);
     }
 
     fn build(html: &str, css: &str) -> DisplayList {
