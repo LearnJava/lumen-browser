@@ -6,7 +6,12 @@
 
 ## In progress
 
-_(нет активной задачи)_
+**Canvas 2D paint-источники — проводка JS-шима к нативу**  branch: `p1-canvas-paint-sources`
+Next step: в `crates/js/src/dom.rs::_lumen_make_canvas2d_ctx` (≈3771) заменить фейк-заглушки
+`createLinearGradient`/`createRadialGradient`/`createConicGradient`/`createPattern`/`drawImage`
++ wired `fillStyle`/`strokeStyle` для gradient/pattern-объектов + shadow* props. Натив уже готов
+в `crates/js/src/canvas2d.rs` (`_lumen_canvas2d_create_*_gradient`, `_gradient_add_color_stop`,
+`_set_fill_style_gradient/_pattern`, `_set_shadow_*`, `_draw_image`, `_put_image_data`).
 
 ---
 
