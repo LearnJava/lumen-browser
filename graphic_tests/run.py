@@ -202,6 +202,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('123', '123-supports-font-tech-format.html', 0.5, 'CSS Conditional L4 §4 / Fonts L4 §4.3: @supports font-tech()/font-format() — реализованные технологии (variations/features-opentype) и декодируемые форматы (woff2/truetype) применяют блок (зелёные a/b/c/d); features-graphite и embedded-opentype не поддержаны ни Lumen, ни Edge (красные e/f); not font-tech(features-graphite) истинно (зелёный g)'),
     ('124', '124-prefers-reduced-transparency.html', 0.5, 'Media Queries L5 §5.7: prefers-reduced-transparency — без пользовательских предпочтений no-preference matched (зелёный a), reduce не матчит (красный b), невалидное low → Unsupported (красный c); Edge тоже по умолчанию no-preference'),
     ('125', '125-media-scripting.html', 0.5, 'Media Queries L5 §6.2: scripting — Lumen с QuickJS по умолчанию scripting:enabled matched (зелёный a), none/initial-only не матчат (красные b/c), невалидное sometimes → Unsupported (красный d); Edge тоже scripting enabled'),
+    ('126', '126-media-inverted-colors.html', 0.5, 'Media Queries L5 §5.8: inverted-colors — без инверсии цветов none matched (зелёный a), inverted не матчит (красный b), невалидное maybe → Unsupported (красный c); Edge тоже по умолчанию inverted-colors:none'),
 ]
 
 # --- Известные должники (Phase 2+ фичи, baseline-храповик) ---
@@ -227,6 +228,7 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '119': ('BUG-173', 0.81),   # paint-order: остаток = stroke triangle-soup AA-швы (geometry фикснут BUG-174)
     '36': ('BUG-176', 1.11),    # border-radius: остаток = edge-AA + elliptical-corner kappa (квадратные рамки фикснуты BUG-175)
     '30': ('BUG-144', 4.36),    # CSS filter/backdrop-filter: row-flip (BUG-144) + gradient hard-stop row 2 (BUG-085) + backdrop colour-matrix/combo больше не тёмные (CPU backdrop-пайплайн, 7.56%→4.36%); остаток = box-blur≈Gaussian + edge-bleed на двух blur-картах (row 4 cards 1,5) + filter AA
+    '34': ('BUG-187', 3.02),    # form controls: inline-block flow (контролы шли блоками-в-столбик → теперь в строку как Edge), radio-точка стала кругом, <option> не утекает текстом, color-swatch показывает value (4.78% → 3.02%); остаток = статический текст value у text-инпутов не рисуется + font-parity лейблов кнопок/опции (Inter vs Edge) + вертикальное центрирование текста контролов
     '39': ('BUG-085', 1.62),    # gradients: repeating-linear/-radial теперь повторяются + hard-stop хвост дозаполняется (femtovg_stops, 12.05%→1.62%); row 1 linear совпадает пиксель-в-пиксель; остаток = 256-тексельная квантизация градиент-текстуры femtovg на repeating-границах (rows 2-3) + radial-интерполяция/AA vs Edge + gdigrab-шум
     '51': ('BUG-124', 1.09),    # scrollbar rendering: float-wrapper shrink-to-fit фикснут BUG-178 (9.91% → 1.09%); остаток = дробные layout Y-координаты vs пиксельное округление Edge
     '64': ('BUG-128', 8.99),    # table: margin-collapse таблица↔блок фикснут BUG-193 (13.89% → 8.99%); остаток = font-parity (текст в ~21 ячейках + заголовки, Inter vs Edge) + ~3px накопленный line-height сдвиг
