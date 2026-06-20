@@ -13,9 +13,16 @@
 //! ## Bridge model
 //! * Modules and instances live in a thread-local [`REGISTRY`] keyed by id.
 //! * Linear memory is authoritative in Rust; JS reads/writes it via copy
-//!   helpers (`__lumen_wasm_mem_read`/`write`). The live-aliasing emscripten
-//!   `HEAP32 = new Int32Array(memory.buffer)` pattern is therefore *not*
-//!   coherent in this MVP (documented limitation).
+//!   helpers (`__lumen_wasm_mem_read`/`write`/`mem_read_all`). The exported
+//!   `Memory.buffer` is a single, stable JS `ArrayBuffer` synchronized with
+//!   Rust-owned memory at WASM call boundaries (JS → Rust before each export
+//!   call, Rust → JS in place after), so the emscripten
+//!   `HEAP32 = new Int32Array(memory.buffer)` pattern is **coherent** (U-4b):
+//!   writes in either engine become visible to the other across calls, and a
+//!   captured `HEAP*` view stays valid because the buffer identity is reused.
+//!   The sync is exact for the single-agent model (ADR-014) — WASM and JS never
+//!   run concurrently — though a host import still cannot observe writes made
+//!   earlier in the same in-flight call.
 //! * Imported functions are JS callables stored as [`Persistent`] and invoked
 //!   from the interpreter through [`interp::HostImports`]. Numeric arguments and
 //!   results cross the boundary by type: `i64` rides as a JS `BigInt` (full
@@ -337,6 +344,20 @@ pub fn mem_write(instance_id: u32, offset: u32, bytes: &[u8]) -> bool {
         }
         e.instance.memory[start..end].copy_from_slice(bytes);
         true
+    })
+}
+
+/// Full linear-memory snapshot of an instance (every page). Returns an empty
+/// vector for an unknown instance. Used by the JS bridge to (re)build the stable
+/// exported `Memory.buffer` and to sync Rust → JS after each call — a single
+/// bulk copy instead of element-wise `mem_read` round-trips.
+pub fn mem_read_all(instance_id: u32) -> Vec<u8> {
+    REGISTRY.with(|r| {
+        r.borrow()
+            .instances
+            .get(&instance_id)
+            .map(|e| e.instance.memory.clone())
+            .unwrap_or_default()
     })
 }
 
