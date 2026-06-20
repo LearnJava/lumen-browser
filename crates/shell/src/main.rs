@@ -892,7 +892,7 @@ fn render_source_to_png(
     let height = content_h.ceil() as u32;
 
     let dl = paint_ordered(&parsed.layout);
-    let image = Renderer::render_to_image_cpu(width, height, &dl, &[], 0.0, 0.0)?;
+    let image = Renderer::render_to_image_cpu(width, height, &dl, &parsed.images, 0.0, 0.0)?;
     let png = lumen_image::encode_png_rgba8(&image)?;
     Ok((png, width, height))
 }

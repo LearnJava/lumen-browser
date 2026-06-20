@@ -71,7 +71,7 @@ impl RenderBackend for CpuBackend {
         commands.extend_from_slice(overlay);
 
         let image =
-            crate::cpu_raster::rasterize_cpu(self.width, self.height, &commands, scroll_x, scroll_y)
+            crate::cpu_raster::rasterize_cpu(self.width, self.height, &commands, &[], scroll_x, scroll_y)
                 .map_err(|e| RenderError::Other(e.to_string()))?;
 
         self.last_pixels = Some(image.to_rgba8());

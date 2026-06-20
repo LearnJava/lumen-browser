@@ -4,7 +4,7 @@
 //! across Windows/macOS/Linux.
 
 use lumen_image::Image;
-use lumen_layout::{BorderStyle, Color, FilterFn, GradientStop};
+use lumen_layout::{BorderStyle, Color, FilterFn, GradientStop, ObjectFit, ObjectPosition};
 use crate::dash_math::{dashed_border_offsets, dotted_border_offsets};
 use crate::gradient_math::{atan2_det, resolve_stop_positions, sample_gradient_color};
 use crate::matrix_util::mat4_to_2d_affine;
@@ -125,10 +125,17 @@ pub(crate) fn rasterize_cpu(
     width: u32,
     height: u32,
     commands: &[DisplayCommand],
+    images: &[(String, Image)],
     _scroll_x: f32,
     _scroll_y: f32,
 ) -> Result<Image, Box<dyn std::error::Error>> {
     use tiny_skia::Pixmap;
+
+    // Decoded `<img>` pixels keyed by `src`, supplied by the shell's headless
+    // render pass (`render_source_to_png`). Lets `DrawImage`/`LazyImageSlot`
+    // paint the real picture instead of a grey placeholder (BUG-221, TEST-18).
+    let image_map: std::collections::HashMap<&str, &Image> =
+        images.iter().map(|(s, img)| (s.as_str(), img)).collect();
 
     let mut base = Pixmap::new(width, height)
         .ok_or("Failed to create pixmap")?;
@@ -285,10 +292,25 @@ pub(crate) fn rasterize_cpu(
                 clip_rect = clip_intersection(&clip_stack);
                 clip_mask = build_clip_mask(width, height, clip_rect);
             }
-            DisplayCommand::DrawImage { rect, .. }
-            | DisplayCommand::LazyImageSlot { rect, .. } => {
+            DisplayCommand::DrawImage { rect, src, object_fit, object_position, .. } => {
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
-                rasterize_image_placeholder(layers.last_mut().expect("base layer"), rect, c)?;
+                let layer = layers.last_mut().expect("base layer");
+                match image_map.get(src.as_str()) {
+                    Some(img) => {
+                        rasterize_image(layer, rect, img, *object_fit, *object_position, c)?;
+                    }
+                    None => rasterize_image_placeholder(layer, rect, c)?,
+                }
+            }
+            DisplayCommand::LazyImageSlot { rect, src, object_fit, object_position, .. } => {
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
+                let layer = layers.last_mut().expect("base layer");
+                match image_map.get(src.as_str()) {
+                    Some(img) => {
+                        rasterize_image(layer, rect, img, *object_fit, *object_position, c)?;
+                    }
+                    None => rasterize_image_placeholder(layer, rect, c)?,
+                }
             }
             // CSS Backgrounds L3 §3.3 — background-image url(). The CPU path has
             // no image decoder, so this is a no-op — mirrors the GPU renderer
@@ -1122,6 +1144,11 @@ fn rasterize_fill_rounded_rect(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use tiny_skia::Paint;
 
+    let (x, y, w, h) = (rect.x, rect.y, rect.width, rect.height);
+    if w <= 0.0 || h <= 0.0 {
+        return Ok(());
+    }
+
     let paint = Paint {
         shader: tiny_skia::Shader::SolidColor(color_to_skia(*color)),
         anti_alias: true,
@@ -1129,71 +1156,15 @@ fn rasterize_fill_rounded_rect(
         blend_mode: tiny_skia::BlendMode::SourceOver,
     };
 
+    // Radii must be clamped to the box (CSS Backgrounds L3 §5.5): a pill button
+    // with `border-radius: 999px` on a 140×44 box otherwise sends the cubic
+    // control points far outside the rect, exploding the fill into a giant
+    // diagonal wedge (BUG-221, TEST-36). `clamped_to_box` caps each axis at half
+    // the corresponding side; the shared kappa-Bézier outline (also used by the
+    // rounded border ring) then yields the same corner geometry as the GPU path.
+    let clamped = radii.clamped_to_box(w, h);
     let mut pb = tiny_skia::PathBuilder::new();
-
-    // Build rounded rect path: start from top-left, go clockwise.
-    let x0 = rect.x;
-    let y0 = rect.y;
-    let x1 = rect.x + rect.width;
-    let y1 = rect.y + rect.height;
-
-    let tl_x = radii.tl;
-    let tl_y = radii.tl_y;
-    let tr_x = radii.tr;
-    let tr_y = radii.tr_y;
-    let br_x = radii.br;
-    let br_y = radii.br_y;
-    let bl_x = radii.bl;
-    let bl_y = radii.bl_y;
-
-    // Top-left corner.
-    pb.move_to(x0 + tl_x, y0);
-    // Top edge.
-    pb.line_to(x1 - tr_x, y0);
-    // Top-right corner (use Bézier curve for rounded corner).
-    pb.cubic_to(
-        x1 - tr_x * 0.55,
-        y0,
-        x1,
-        y0 + tr_y * 0.55,
-        x1,
-        y0 + tr_y,
-    );
-    // Right edge.
-    pb.line_to(x1, y1 - br_y);
-    // Bottom-right corner.
-    pb.cubic_to(
-        x1,
-        y1 - br_y * 0.55,
-        x1 - br_x * 0.55,
-        y1,
-        x1 - br_x,
-        y1,
-    );
-    // Bottom edge.
-    pb.line_to(x0 + bl_x, y1);
-    // Bottom-left corner.
-    pb.cubic_to(
-        x0 + bl_x * 0.55,
-        y1,
-        x0,
-        y1 - bl_y * 0.55,
-        x0,
-        y1 - bl_y,
-    );
-    // Left edge.
-    pb.line_to(x0, y0 + tl_y);
-    // Top-left corner (close).
-    pb.cubic_to(
-        x0,
-        y0 + tl_y * 0.55,
-        x0 + tl_x * 0.55,
-        y0,
-        x0 + tl_x,
-        y0,
-    );
-
-    pb.close();
+    push_rounded_rect_outline(&mut pb, x, y, w, h, &clamped);
 
     if let Some(path) = pb.finish() {
         pixmap.fill_path(
@@ -1569,10 +1540,12 @@ fn rasterize_linear_gradient(
 
 /// CSS Images L3 §3.3 — `radial-gradient(...)` via tiny-skia `RadialGradient`.
 ///
-/// Reproduces the GPU renderer's "farthest-corner" anisotropic ellipse: the
-/// semi-axes are `rx = max(cx, 1-cx)`, `ry = max(cy, 1-cy)` in box-relative
-/// units. tiny-skia radials are isotropic, so the ellipse is produced by
-/// rendering a unit-ish circle and stretching it with a post-scale transform.
+/// Mirrors the femtovg backend (`DrawRadialGradient`): a **circle** whose radius
+/// is the farthest-corner distance `hypot(dx, dy)` with `dx = max(cx,1-cx)·w`,
+/// `dy = max(cy,1-cy)·h`. The window backend draws the gradient as an isotropic
+/// circle (not an anisotropic ellipse), and the CPU snapshot must match it byte
+/// for byte (BUG-221, TEST-39): the previous ellipse stretched the rings
+/// horizontally, diverging from both femtovg and Edge.
 fn rasterize_radial_gradient(
     pixmap: &mut tiny_skia::Pixmap,
     rect: &Rect,
@@ -1584,32 +1557,30 @@ fn rasterize_radial_gradient(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use tiny_skia::{Paint, Point, RadialGradient, SpreadMode, Transform};
 
-    let rx_px = center_x_pct.max(1.0 - center_x_pct).max(1e-3) * rect.width;
-    let ry_px = center_y_pct.max(1.0 - center_y_pct).max(1e-3) * rect.height;
-    let line_len = rx_px.max(ry_px).max(1.0);
-    let resolved = resolve_stop_positions(stops, line_len);
+    let dx = center_x_pct.max(1.0 - center_x_pct) * rect.width;
+    let dy = center_y_pct.max(1.0 - center_y_pct) * rect.height;
+    let outer_r = dx.hypot(dy).max(1.0);
+    let resolved = resolve_stop_positions(stops, outer_r);
     let Some((skia_stops, lo, hi)) = skia_gradient_stops(&resolved, repeating) else {
         return Ok(());
     };
 
-    // Render the gradient in a normalized space where the ellipse is a unit
-    // circle of radius `radius`, then scale x by rx and y by ry around the
-    // centre to recover the ellipse. For repeating, shrink the radius to the
-    // [lo,hi] sub-segment so SpreadMode::Repeat tiles outward.
+    // Circle centred at the gradient origin. For non-repeating gradients the
+    // resolved stops already fill `[0,1]` so `hi-lo == 1` and the radius is the
+    // full farthest-corner distance; for repeating ones the radius is shortened
+    // to the `[lo,hi]` period so `SpreadMode::Repeat` tiles the rings outward.
     let cx = rect.x + center_x_pct * rect.width;
     let cy = rect.y + center_y_pct * rect.height;
-    let radius = (hi - lo).max(1e-3);
-    let center_norm = Point::from_xy(0.0, 0.0);
+    let radius = (outer_r * (hi - lo)).max(1e-3);
+    let center = Point::from_xy(cx, cy);
     let mode = if repeating { SpreadMode::Repeat } else { SpreadMode::Pad };
     let shader = RadialGradient::new(
-        center_norm,
-        center_norm,
+        center,
+        center,
         radius,
         skia_stops,
         mode,
-        // Map normalized circle space to pixel ellipse: translate to centre,
-        // scale by (rx, ry). `lo` offset for repeating handled via radius span.
-        Transform::from_row(rx_px, 0.0, 0.0, ry_px, cx, cy),
+        Transform::identity(),
     )
     .ok_or("degenerate radial gradient")?;
 
@@ -1794,6 +1765,101 @@ fn rasterize_image_placeholder(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let placeholder = Color { r: 217, g: 217, b: 217, a: 255 };
     rasterize_fill_rect(pixmap, rect, &placeholder, clip)
+}
+
+/// Draw a decoded `<img>` into its content box, honouring `object-fit` /
+/// `object-position` (CSS Images L3 §5.5). Mirrors the femtovg backend's
+/// `draw_image_in_rect` (BUG-221, TEST-18): the placement rect comes from the
+/// shared [`crate::display_list::fit_image_rect`] (identical geometry to the GPU
+/// path), the texture is mapped onto it with a bilinear pattern, and the draw is
+/// clipped to the intersection of the placement rect and the content box — so
+/// `object-fit: cover` overflow is trimmed, exactly like the GPU scissor.
+fn rasterize_image(
+    pixmap: &mut tiny_skia::Pixmap,
+    rect: &Rect,
+    img: &Image,
+    fit: ObjectFit,
+    position: ObjectPosition,
+    clip: Option<&tiny_skia::Mask>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tiny_skia::{FilterQuality, Pattern, SpreadMode, Transform};
+
+    if rect.width <= 0.0 || rect.height <= 0.0 || img.width == 0 || img.height == 0 {
+        return Ok(());
+    }
+
+    let placed = crate::display_list::fit_image_rect(*rect, (img.width, img.height), fit, position);
+    if placed.width <= 0.0 || placed.height <= 0.0 {
+        return Ok(());
+    }
+
+    // Area-averaged downscale to the placement size before sampling — mirrors the
+    // femtovg backend (`resolve_image_for_rect` + `downscale_target`, BUG-077):
+    // bilinear sampling of a full-res photo into a much smaller box undersamples
+    // and produces high-frequency noise that diverges from Edge's high-quality
+    // resampler (BUG-221, TEST-18). Pre-shrinking with `resize_area_avg` (a box
+    // filter) yields the same averaged texels the GPU path uploads, so the final
+    // pattern draw is a near-1:1 blit. Upscale / exact size keeps the original.
+    let tw = placed.width.round().max(1.0) as u32;
+    let th = placed.height.round().max(1.0) as u32;
+    let downscaled;
+    let texture: &Image = if tw < img.width || th < img.height {
+        downscaled = lumen_image::resize_area_avg(img, tw, th);
+        &downscaled
+    } else {
+        img
+    };
+    let src = image_to_pixmap(texture).ok_or("failed to build image pixmap")?;
+
+    // Visible region = placement ∩ content box. `object-fit: cover` makes the
+    // placement larger than the box (clipped here); `contain` makes it smaller
+    // (only the placement area is painted — no edge smear from `SpreadMode::Pad`).
+    let vx0 = placed.x.max(rect.x);
+    let vy0 = placed.y.max(rect.y);
+    let vx1 = (placed.x + placed.width).min(rect.x + rect.width);
+    let vy1 = (placed.y + placed.height).min(rect.y + rect.height);
+    if vx1 <= vx0 || vy1 <= vy0 {
+        return Ok(());
+    }
+
+    // Map (downscaled) source texels (0..w, 0..h) onto the placement rect.
+    let sx = placed.width / texture.width as f32;
+    let sy = placed.height / texture.height as f32;
+    let ts = Transform::from_row(sx, 0.0, 0.0, sy, placed.x, placed.y);
+    let shader = Pattern::new(src.as_ref(), SpreadMode::Pad, FilterQuality::Bilinear, 1.0, ts);
+    let paint = tiny_skia::Paint {
+        shader,
+        anti_alias: true,
+        force_hq_pipeline: false,
+        blend_mode: tiny_skia::BlendMode::SourceOver,
+    };
+    let vis = tiny_skia::Rect::from_xywh(vx0, vy0, vx1 - vx0, vy1 - vy0)
+        .ok_or("invalid visible image rect")?;
+    pixmap.fill_rect(vis, &paint, Transform::identity(), clip);
+    Ok(())
+}
+
+/// Convert a decoded [`Image`] (straight RGBA8) into a premultiplied tiny-skia
+/// [`tiny_skia::Pixmap`] for use as a pattern shader source.
+fn image_to_pixmap(img: &Image) -> Option<tiny_skia::Pixmap> {
+    let rgba = img.to_rgba8();
+    let mut pm = tiny_skia::Pixmap::new(img.width, img.height)?;
+    for (dst, chunk) in pm.pixels_mut().iter_mut().zip(rgba.chunks_exact(4)) {
+        let a = chunk[3];
+        *dst = tiny_skia::PremultipliedColorU8::from_rgba(
+            premultiply_channel(chunk[0], a),
+            premultiply_channel(chunk[1], a),
+            premultiply_channel(chunk[2], a),
+            a,
+        )?;
+    }
+    Some(pm)
+}
+
+/// Premultiply one 8-bit colour channel by an 8-bit alpha (rounded).
+#[inline]
+fn premultiply_channel(c: u8, a: u8) -> u8 {
+    ((u16::from(c) * u16::from(a) + 127) / 255) as u8
 }
 
 #[inline]
@@ -2022,7 +2088,7 @@ mod tests {
             vertices: vec![[10.0, 10.0], [50.0, 10.0], [30.0, 50.0]],
             color: red,
         }];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
 
         // Centroid ≈ (30, 23): solidly inside the triangle.
         assert_eq!(px(&img, 30, 23), (255, 0, 0, 255), "interior should be red");
@@ -2044,7 +2110,7 @@ mod tests {
             object_position: ObjectPosition::default(),
             image_rendering: ImageRendering::Auto,
         }];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
 
         // Interior of the box is the grey placeholder.
         assert_eq!(px(&img, 30, 25), (217, 217, 217, 255), "placeholder grey");
@@ -2059,7 +2125,7 @@ mod tests {
             vertices: vec![],
             color: Color { r: 0, g: 0, b: 0, a: 255 },
         }];
-        let img = rasterize_cpu(8, 8, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(8, 8, &cmds, &[], 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 4, 4), (255, 255, 255, 255), "background untouched");
     }
 
@@ -2081,7 +2147,7 @@ mod tests {
             ],
             repeating: false,
         }];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
 
         // Top-centre column ≈ start of the sweep → essentially red.
         let (tr, _tg, tb, ta) = px(&img, 32, 2);
@@ -2106,7 +2172,7 @@ mod tests {
             stops: vec![],
             repeating: false,
         }];
-        let img = rasterize_cpu(8, 8, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(8, 8, &cmds, &[], 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 4, 4), (255, 255, 255, 255), "background untouched");
     }
 
@@ -2124,7 +2190,7 @@ mod tests {
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: blue },
             DisplayCommand::PopClip,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
 
         // Inside the clip [10,30) — filled blue.
         assert_eq!(px(&img, 20, 20), (0, 0, 255, 255), "inside clip is blue");
@@ -2144,7 +2210,7 @@ mod tests {
             DisplayCommand::PopClip,
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: green },
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
 
         // A point that was outside the first (clipped) fill is painted by the
         // second, unclipped fill → green, proving the clip was popped.
@@ -2163,7 +2229,7 @@ mod tests {
             DisplayCommand::PopClip,
             DisplayCommand::PopClip,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
 
         // Intersection [30,50) — blue.
         assert_eq!(px(&img, 40, 40), (0, 0, 255, 255), "intersection is blue");
@@ -2186,7 +2252,7 @@ mod tests {
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: blue },
             DisplayCommand::PopClip,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
 
         // Центр круга — синий.
         assert_eq!(px(&img, 32, 32), (0, 0, 255, 255), "centre inside circle");
@@ -2213,7 +2279,7 @@ mod tests {
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: red },
             DisplayCommand::PopClip,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
 
         // Центроид (32, 41) — внутри треугольника.
         assert_eq!(px(&img, 32, 41), (255, 0, 0, 255), "triangle interior red");
@@ -2243,7 +2309,7 @@ mod tests {
                 DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: red },
                 DisplayCommand::PopClip,
             ];
-            rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize")
+            rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize")
         };
 
         let nz = make(false);
@@ -2275,7 +2341,7 @@ mod tests {
             DisplayCommand::PopClip,
             DisplayCommand::PopTransform,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
 
         // Круг задан вокруг (16,32); transform сдвигает результат на +20 по X
         // → синий центр в (36,32), а исходная позиция (16,32) — белая.
@@ -2302,7 +2368,7 @@ mod tests {
             tab_size: 0.0,
             highlight_name: None,
         }];
-        let img = rasterize_cpu(128, 48, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(128, 48, &cmds, &[], 0.0, 0.0).expect("rasterize");
 
         // At least one pixel in the run box must carry blue ink (not white bg).
         let mut inked = false;
@@ -2333,7 +2399,7 @@ mod tests {
             tab_size: 0.0,
             highlight_name: None,
         }];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 10, 10), (255, 255, 255, 255), "empty text left bg white");
     }
 
@@ -2359,7 +2425,7 @@ mod tests {
             },
             DisplayCommand::PopClip,
         ];
-        let img = rasterize_cpu(320, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(320, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         // Left half (outside clip) must remain white.
         for x in (5..180).step_by(10) {
             assert_eq!(
@@ -2380,7 +2446,7 @@ mod tests {
             DisplayCommand::FillRect { rect: rect(10.0, 10.0, 40.0, 40.0), color: blue },
             DisplayCommand::PopOpacity,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
 
         let (r, g, b, a) = px(&img, 30, 30);
         assert!(
@@ -2401,7 +2467,7 @@ mod tests {
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: blue },
             DisplayCommand::PopOpacity,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 32, 32), (255, 255, 255, 255), "fully transparent group");
     }
 
@@ -2418,7 +2484,7 @@ mod tests {
             DisplayCommand::FillRect { rect: rect(20.0, 0.0, 20.0, 20.0), color: green },
             DisplayCommand::PopOpacity,
         ];
-        let img = rasterize_cpu(64, 32, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 32, &cmds, &[], 0.0, 0.0).expect("rasterize");
 
         // Red box ≈ (255,127,127).
         let (rr, rg, rb, _) = px(&img, 10, 10);
@@ -2446,7 +2512,7 @@ mod tests {
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 20.0, 20.0), color: blue },
             DisplayCommand::PopTransform,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         // Translated destination (20+5, 10+5) is solid blue.
         assert_eq!(px(&img, 25, 15), (0, 0, 255, 255), "fill moved by (20,10)");
         // The untranslated origin is now empty → background white.
@@ -2463,7 +2529,7 @@ mod tests {
             DisplayCommand::FillRect { rect: rect(10.0, 10.0, 20.0, 20.0), color: blue },
             DisplayCommand::PopTransform,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 20, 20), (0, 0, 255, 255), "identity transform unchanged");
     }
 
@@ -2478,7 +2544,7 @@ mod tests {
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 10.0, 10.0), color: blue },
             DisplayCommand::PopTransform,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         // Source (6,6) — interior of the 10×10 fill — maps to dest (12,12).
         assert_eq!(px(&img, 12, 12), (0, 0, 255, 255), "scaled fill covers (12,12)");
     }
@@ -2497,7 +2563,7 @@ mod tests {
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 32.0, 32.0), color: magenta },
             DisplayCommand::PopBlendMode,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         // Overlap: multiply(yellow, magenta) = (255,0,0).
         assert_eq!(px(&img, 10, 10), (255, 0, 0, 255), "multiply yields red over overlap");
         // Outside the source rect: untouched yellow backdrop.
@@ -2514,7 +2580,7 @@ mod tests {
             DisplayCommand::FillRect { rect: rect(10.0, 10.0, 20.0, 20.0), color: blue },
             DisplayCommand::PopBlendMode,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 20, 20), (0, 0, 255, 255), "normal blend = source-over");
         assert_eq!(px(&img, 50, 50), (255, 255, 255, 255), "exterior stays white");
     }
@@ -2529,7 +2595,7 @@ mod tests {
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 32.0, 32.0), color: red },
             DisplayCommand::PopBlendMode,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         // |red − white| = (0,255,255) cyan.
         assert_eq!(px(&img, 10, 10), (0, 255, 255, 255), "difference of red over white = cyan");
     }
@@ -2546,7 +2612,7 @@ mod tests {
             DisplayCommand::FillRect { rect: rect(20.0, 20.0, 24.0, 24.0), color: black },
             DisplayCommand::PopFilter,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         // Just outside the original right edge (x=44): unblurred would be pure
         // white; blur leaks darkness here.
         let (r, _, _, _) = px(&img, 46, 32);
@@ -2565,7 +2631,7 @@ mod tests {
             DisplayCommand::FillRect { rect: rect(10.0, 10.0, 20.0, 20.0), color: blue },
             DisplayCommand::PopFilter,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 20, 20), (0, 0, 255, 255), "blur(0) leaves the fill intact");
         assert_eq!(px(&img, 50, 50), (255, 255, 255, 255), "exterior stays white");
     }
@@ -2580,7 +2646,7 @@ mod tests {
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 32.0, 32.0), color: red },
             DisplayCommand::PopFilter,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         let (r, g, b, a) = px(&img, 10, 10);
         assert_eq!(a, 255);
         assert_eq!(r, g, "grayscale equalises channels");
@@ -2597,7 +2663,7 @@ mod tests {
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 32.0, 32.0), color: black },
             DisplayCommand::PopFilter,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 10, 10), (255, 255, 255, 255), "invert(black) = white");
     }
 
@@ -2615,7 +2681,7 @@ mod tests {
             },
             DisplayCommand::PopBackdropFilter,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         let (r, g, b, a) = px(&img, 10, 10);
         assert_eq!(a, 255);
         assert_eq!(r, g, "inside bounds: grayscale equalises channels");
@@ -2638,7 +2704,7 @@ mod tests {
             },
             DisplayCommand::PopBackdropFilter,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 10, 10), (255, 255, 255, 255), "inside bounds: invert(black) = white");
         assert_eq!(px(&img, 50, 50), (0, 0, 0, 255), "outside bounds backdrop stays black");
     }
@@ -2657,7 +2723,7 @@ mod tests {
             },
             DisplayCommand::PopBackdropFilter,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         // At the edge the blur mixes black and white toward grey.
         let (r, _, _, _) = px(&img, 32, 32);
         assert!((40..=215).contains(&r), "edge column blurred toward grey (r={r})");
@@ -2691,7 +2757,7 @@ mod tests {
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 40.0, 40.0), color: blue },
             DisplayCommand::PopMask,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         // Top: mask alpha ≈ 1 → solid blue.
         let (tr, tg, tb, ta) = px(&img, 20, 1);
         assert!(tr < 20 && tg < 20 && tb > 250 && ta == 255, "top stays blue, got ({tr},{tg},{tb},{ta})");
@@ -2722,7 +2788,7 @@ mod tests {
             DisplayCommand::FillRect { rect: rect(0.0, 0.0, 40.0, 40.0), color: green },
             DisplayCommand::PopMask,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         // Centre: mask opaque → green shows.
         let (cr, cg, cb, ca) = px(&img, 20, 20);
         assert!(cr < 10 && cg > 180 && cb < 10 && ca == 255, "centre shows green, got ({cr},{cg},{cb},{ca})");
@@ -2749,7 +2815,7 @@ mod tests {
             radii: CornerRadii::default(),
         }];
         // Pre-fix this would panic via debug_assert! in tiny-skia hairline_aa::fill_dot8.
-        let img = rasterize_cpu(128, 128, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(128, 128, &cmds, &[], 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 64, 64), (255, 255, 255, 255), "interior stays white");
     }
 
@@ -2771,7 +2837,7 @@ mod tests {
             ],
             radii: CornerRadii::default(),
         }];
-        let img = rasterize_cpu(200, 100, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(200, 100, &cmds, &[], 0.0, 0.0).expect("rasterize");
         // Interior must be white.
         assert_eq!(px(&img, 60, 40), (255, 255, 255, 255), "interior white");
         // The top edge (y=11) should have at least one red pixel and one white pixel
@@ -2805,7 +2871,7 @@ mod tests {
             ],
             radii: CornerRadii::default(),
         }];
-        let img = rasterize_cpu(200, 100, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(200, 100, &cmds, &[], 0.0, 0.0).expect("rasterize");
         // Interior must be white.
         assert_eq!(px(&img, 60, 40), (255, 255, 255, 255), "interior white");
         // Left edge (x=11) should have at least one blue and one white pixel.
@@ -2832,7 +2898,7 @@ mod tests {
             styles: [lumen_layout::BorderStyle::None; 4],
             radii: CornerRadii::default(),
         }];
-        let img = rasterize_cpu(200, 100, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(200, 100, &cmds, &[], 0.0, 0.0).expect("rasterize");
         // All pixels should remain white.
         let colored = (0..200u32)
             .flat_map(|x| (0..100u32).map(move |y| (x, y)))
@@ -2856,7 +2922,7 @@ mod tests {
             styles: [lumen_layout::BorderStyle::Solid; 4],
             radii: CornerRadii { tl: r, tl_y: r, tr: r, tr_y: r, br: r, br_y: r, bl: r, bl_y: r },
         }];
-        let img = rasterize_cpu(100, 100, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(100, 100, &cmds, &[], 0.0, 0.0).expect("rasterize");
 
         // Extreme top-left box corner: rounded outline curves away → white.
         // Pre-fix (square border) this pixel was solid red.
@@ -2893,8 +2959,103 @@ mod tests {
             DisplayCommand::FillRect { rect: rect(10.0, 10.0, 20.0, 20.0), color: blue },
             DisplayCommand::PopMask,
         ];
-        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 20, 20), (0, 0, 255, 255), "no mask source → element unchanged");
         assert_eq!(px(&img, 50, 50), (255, 255, 255, 255), "exterior stays white");
+    }
+
+    /// BUG-221: `FillRoundedRect` with a pill radius (`border-radius: 999px`)
+    /// must clamp to half the box — pre-fix the un-clamped cubic control points
+    /// shot far outside the rect and filled a giant diagonal wedge over the page.
+    #[test]
+    fn fill_rounded_rect_pill_radius_clamped_to_box() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![DisplayCommand::FillRoundedRect {
+            rect: rect(20.0, 20.0, 100.0, 40.0),
+            color: blue,
+            radii: CornerRadii {
+                tl: 999.0, tl_y: 999.0, tr: 999.0, tr_y: 999.0,
+                br: 999.0, br_y: 999.0, bl: 999.0, bl_y: 999.0,
+            },
+        }];
+        let img = rasterize_cpu(200, 100, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        // Pill centre is filled.
+        assert_eq!(px(&img, 70, 40), (0, 0, 255, 255), "pill centre is blue");
+        // Far outside the box must stay white — the pre-fix explosion painted here.
+        assert_eq!(px(&img, 175, 90), (255, 255, 255, 255), "no fill outside the box");
+        // Box corner is rounded away by the pill (radius = half height = 20).
+        assert_eq!(px(&img, 21, 21), (255, 255, 255, 255), "pill corner is white");
+    }
+
+    /// BUG-221: `DrawImage` paints the decoded picture (here a solid-red 2×2),
+    /// not the grey `(217,217,217)` placeholder, when its `src` is supplied in
+    /// the image map.
+    #[test]
+    fn draw_image_paints_decoded_pixels() {
+        let red_2x2 = Image {
+            width: 2,
+            height: 2,
+            format: lumen_image::PixelFormat::Rgba8,
+            data: [255u8, 0, 0, 255].repeat(4),
+            icc_profile: None,
+        };
+        let images = vec![("red.png".to_string(), red_2x2)];
+        let cmds = vec![DisplayCommand::DrawImage {
+            rect: rect(10.0, 10.0, 40.0, 40.0),
+            src: "red.png".to_string(),
+            alt: String::new(),
+            object_fit: ObjectFit::Fill,
+            object_position: ObjectPosition::default(),
+            image_rendering: lumen_layout::ImageRendering::Auto,
+        }];
+        let img = rasterize_cpu(64, 64, &cmds, &images, 0.0, 0.0).expect("rasterize");
+        let (r, g, b, a) = px(&img, 30, 30);
+        assert!(r > 230 && g < 25 && b < 25 && a == 255, "image centre is red, got ({r},{g},{b},{a})");
+    }
+
+    /// BUG-221: a missing `src` still falls back to the grey placeholder.
+    #[test]
+    fn draw_image_missing_src_is_placeholder() {
+        let cmds = vec![DisplayCommand::DrawImage {
+            rect: rect(10.0, 10.0, 40.0, 40.0),
+            src: "absent.png".to_string(),
+            alt: String::new(),
+            object_fit: ObjectFit::Fill,
+            object_position: ObjectPosition::default(),
+            image_rendering: lumen_layout::ImageRendering::Auto,
+        }];
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 30, 30), (217, 217, 217, 255), "missing image → grey placeholder");
+    }
+
+    /// BUG-221: the radial gradient is an isotropic **circle** (mirrors femtovg),
+    /// not the previous anisotropic ellipse. On a wide box a point the same pixel
+    /// distance right of centre and below centre must therefore land on the same
+    /// gradient stop → near-identical colour.
+    #[test]
+    fn radial_gradient_is_circular_not_elliptical() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![DisplayCommand::DrawRadialGradient {
+            rect: rect(0.0, 0.0, 120.0, 40.0),
+            center_x_pct: 0.5,
+            center_y_pct: 0.5,
+            stops: vec![
+                GradientStop { color: red, position: None },
+                GradientStop { color: blue, position: None },
+            ],
+            repeating: false,
+        }];
+        let img = rasterize_cpu(120, 40, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        // Centre (60,20) is the first stop (red).
+        let (cr, _, cb, _) = px(&img, 60, 20);
+        assert!(cr > 200 && cb < 60, "centre is red, got ({cr},_,{cb},_)");
+        // 15px right vs 15px below centre — equal radius on a circle → equal colour.
+        let (hr, _, hb, _) = px(&img, 75, 20);
+        let (vr, _, vb, _) = px(&img, 60, 35);
+        assert!(
+            hr.abs_diff(vr) < 16 && hb.abs_diff(vb) < 16,
+            "isotropic: horizontal ({hr},{hb}) ≈ vertical ({vr},{vb})"
+        );
     }
 }

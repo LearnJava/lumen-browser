@@ -82,7 +82,7 @@ Snapshot: **Phase 2 «Interactive», app v0.2.0**. ~21 crates.
 - ✅ box-shadow (outset+inset), text-shadow, text-decoration (underline/overline/line-through, wavy/dotted/dashed/double, thickness), border-radius SDF.
 - ✅ CSS filters (GPU color-matrix + Gaussian blur), backdrop-filter (LRU cache), clip-path (bbox approximation).
 - ✅ 3D transforms (perspective, preserve-3d depth sort) in wgpu renderer; multi-size + variation-aware glyph atlas, per-char codepoint fallback cascade.
-- ✅ Compositor scaffolding (two-buffer commit, threaded compositor, 60fps vsync); print (`render_print_pages` → images); CPU rasterizer (`cpu_raster.rs`, feature `cpu-render`, cross-OS bit-identical, snapshot gate); software WebGL 1.0 (flat fill, no GLSL).
+- ✅ Compositor scaffolding (two-buffer commit, threaded compositor, 60fps vsync); print (`render_print_pages` → images); CPU rasterizer (`cpu_raster.rs`, feature `cpu-render`, cross-OS bit-identical, snapshot gate; **femtovg-parity for `<img>` decode+`object-fit`+area-averaged downscale, circular radial gradients, and clamped `border-radius` fills — BUG-221**); software WebGL 1.0 (flat fill, no GLSL).
 - 🟡 femtovg `mask-image` gradient masks are **true per-pixel alpha masks** (offscreen FBO + `DestinationIn`, linear/radial/conic; BUG-183). `mask-mode: luminance` ✅ wired (BUG-218): `emit_push_mask` bakes `luminance(rgb)·alpha` into each gradient stop's alpha, so both femtovg and CPU paths honour it. `url()` image masks still scissor bbox (no decoded source).
 - ⬜ GPU shadow pipeline, Groove/Ridge/Inset/Outset borders, exact polygon clip-path, elliptical border-radius (rx≠ry), Vello backend (no-op stub).
 

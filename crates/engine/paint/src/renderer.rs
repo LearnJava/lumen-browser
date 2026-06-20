@@ -6570,11 +6570,11 @@ impl Renderer {
         width: u32,
         height: u32,
         commands: &[crate::DisplayCommand],
-        _unused_layers: &[crate::BasicLayer],
+        images: &[(String, lumen_image::Image)],
         scroll_x: f32,
         scroll_y: f32,
     ) -> Result<lumen_image::Image, Box<dyn std::error::Error>> {
-        crate::cpu_raster::rasterize_cpu(width, height, commands, scroll_x, scroll_y)
+        crate::cpu_raster::rasterize_cpu(width, height, commands, images, scroll_x, scroll_y)
     }
 
     /// Render a single `tile_size × tile_size` tile at tile coordinates
@@ -6617,7 +6617,7 @@ impl Renderer {
         let offset_x = scroll_x + tile_x as f32 * ts;
         let offset_y = scroll_y + tile_y as f32 * ts;
 
-        crate::cpu_raster::rasterize_cpu(tile_size, tile_size, &all, offset_x, offset_y)
+        crate::cpu_raster::rasterize_cpu(tile_size, tile_size, &all, &[], offset_x, offset_y)
     }
 
     // Note: render_to_image for GPU path has different signature:
