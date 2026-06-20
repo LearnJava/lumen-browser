@@ -1589,6 +1589,26 @@ fn build_preflight_extra_headers(cors_req: &cors::CorsRequest) -> String {
 
 // ── Редиректы ────────────────────────────────────────────────────────────────
 
+/// Map a network [`RequestDestination`] to the ad-block [`ResourceType`] used
+/// by EasyList `$`-type options. `Document` (iframe/object/embed) maps to
+/// `Subdocument`; `Connect` (fetch/XHR/beacon) to `XmlHttpRequest`; `Prefetch`
+/// and `Worker` fall through to `Other` (no dedicated EasyList type modelled).
+fn destination_to_resource_type(dest: RequestDestination) -> lumen_core::ext::ResourceType {
+    use lumen_core::ext::ResourceType as Rt;
+    match dest {
+        RequestDestination::Script => Rt::Script,
+        RequestDestination::Style => Rt::Stylesheet,
+        RequestDestination::Document => Rt::Subdocument,
+        RequestDestination::Font => Rt::Font,
+        RequestDestination::Connect => Rt::XmlHttpRequest,
+        RequestDestination::Image => Rt::Image,
+        RequestDestination::Media => Rt::Media,
+        RequestDestination::Prefetch | RequestDestination::Worker | RequestDestination::Other => {
+            Rt::Other
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn fetch_with_redirect(
     url: &Url,
@@ -1681,8 +1701,16 @@ fn fetch_with_redirect(
     let global_ad = global_adblock_filter();
     let effective_filter: Option<&dyn lumen_core::ext::RequestFilter> =
         filter.or(global_ad.as_deref());
+    // Build the request context for EasyList type/party options ($script,
+    // $third-party, …). Resource type comes from the request destination;
+    // third-party is host-vs-top_level_site (same suffix-test as the cookie
+    // SameSite/TCP path above). `None` fields leave the rule unrestricted.
+    let filter_ctx = lumen_core::ext::RequestContext {
+        resource_type: destination.map(destination_to_resource_type),
+        third_party: top_level_site.map(|tls| !host_ascii.ends_with(tls) && host_ascii != tls),
+    };
     if let Some(f) = effective_filter
-        && let Some(reason) = f.should_block(url)
+        && let Some(reason) = f.should_block_ctx(url, &filter_ctx)
     {
         if let Some(s) = sink {
             s.emit(&Event::RequestBlocked {

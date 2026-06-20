@@ -169,7 +169,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/canvas/src/rasterize.rs:73` **fn** `build_clip_mask` — Build a boolean clip mask by rasterizing `path` with even-odd rule
 `crates/engine/canvas/src/rasterize.rs:107` **fn** `collect_lines` — Extract `(x0, y0, x1, y1)` line tuples from `path`, tessellating Bézier curves
 
-## lumen-core  (224 symbols)
+## lumen-core  (227 symbols)
 
 `crates/core/src/capability.rs:7` **enum** `Capability`
 `crates/core/src/capability.rs:27` **struct** `CapabilityToken`
@@ -201,115 +201,118 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/core/src/ext.rs:89` **trait** `SearchProvider` — Поисковая система для omnibox
 `crates/core/src/ext.rs:100` **trait** `FilterListSource` — Источник списка фильтров рекламы / трекеров
 `crates/core/src/ext.rs:116` **trait** `RequestFilter` — Решение «блокировать ли исходящий запрос». Реализация смотрит URL и
-`crates/core/src/ext.rs:140` **trait** `DnsResolver` — DNS-резолвер: hostname → список IP-адресов (с портом, готовых к connect)
-`crates/core/src/ext.rs:165` **trait** `HstsEnforcement` — HSTS-политика: должны ли HTTP-запросы к данному host принудительно
-`crates/core/src/ext.rs:189` **enum** `HttpAuthScheme` — HTTP authentication scheme, разрешённый `HttpClient` для re-request
-`crates/core/src/ext.rs:200` **fn** `as_str`
-`crates/core/src/ext.rs:221` **struct** `HttpAuthChallenge` — Запрос учётных данных от credential-провайдера. Передаётся в
-`crates/core/src/ext.rs:234` **struct** `HttpCredentials` — Учётные данные для HTTP auth: username + plaintext password
-`crates/core/src/ext.rs:257` **trait** `HttpCredentialProvider` — Поставщик учётных данных HTTP-auth
-`crates/core/src/ext.rs:266` **trait** `CookieProvider` — HTTP cookie storage provider. Bridges lumen-network (fetch pipeline) to
-`crates/core/src/ext.rs:305` **trait** `EncodingDetector` — Определение кодировки HTML-документа. Для кириллицы критично уметь
-`crates/core/src/ext.rs:315` **enum** `FontStyle` — Начертание face-а: `font-style` из CSS Fonts L4. Phase 0 — три
-`crates/core/src/ext.rs:324` **fn** `parse_keyword` — Парсит CSS-ключевое слово `normal | italic | oblique` (case-insensitive)
-`crates/core/src/ext.rs:346` **struct** `FaceRecord` — Метаданные одного face-а в индексе шрифтов
-`crates/core/src/ext.rs:386` **trait** `FontProvider` — Источник системных шрифтов. Реализация — в `lumen-font::system_fonts`
-`crates/core/src/ext.rs:440` **fn** `match_face` — CSS Fonts L4 §5.2 алгоритм матчинга — извлечён из trait-а в свободную
-`crates/core/src/ext.rs:479` **fn** `match_face_no_stretch` — Legacy функция match_face для backward compatibility (без stretch)
-`crates/core/src/ext.rs:779` **trait** `JsRuntime` — JavaScript runtime — исполнение JS-кода (HTML inline scripts, `eval`,
-`crates/core/src/ext.rs:845` **struct** `SuspendedHeap` — Serialized JS heap snapshot for T2→T3 hibernation (ADR-008, Invariant 2)
-`crates/core/src/ext.rs:852` **fn** `new` — Create a new suspended heap from compressed bytes
-`crates/core/src/ext.rs:857` **fn** `len` — Get the size in bytes of the compressed snapshot
-`crates/core/src/ext.rs:862` **fn** `is_empty` — Check if the snapshot is empty
-`crates/core/src/ext.rs:869` **enum** `JsValue` — Простые JSON-совместимые типы для передачи через trait-границу
-`crates/core/src/ext.rs:882` **fn** `object` — Хелпер: построить object из key-value пар
-`crates/core/src/ext.rs:892` **enum** `JsError` — Ошибка исполнения JavaScript: либо syntax error (parse), либо runtime
-`crates/core/src/ext.rs:913` **type** `JsResult`
-`crates/core/src/ext.rs:918` **struct** `NullJsRuntime` — Null implementation — всегда возвращает `JsError::NotImplemented`
-`crates/core/src/ext.rs:968` **trait** `UnicodeProvider` — Unicode-таблицы: line break (UAX #14), grapheme/word segmentation
-`crates/core/src/ext.rs:993` **struct** `NullUnicodeProvider` — Null-реализация `UnicodeProvider` — все методы возвращают пустые векторы
-`crates/core/src/ext.rs:1021` **trait** `IdnaProvider` — IDN (Internationalized Domain Names) полный UTS #46. Свой Punycode-encoder
-`crates/core/src/ext.rs:1031` **struct** `NullIdnaProvider` — Null-реализация `IdnaProvider` — все методы возвращают `None`. Потребитель
-`crates/core/src/ext.rs:1056` **trait** `PublicSuffixList` — Public Suffix List — отделение публичных суффиксов от регистрируемых
-`crates/core/src/ext.rs:1077` **struct** `NullPublicSuffixList` — Null-реализация `PublicSuffixList` — все запросы возвращают `None`/`false`
-`crates/core/src/ext.rs:1103` **trait** `ContentDecoder` — HTTP `Content-Encoding` декодер. Один экземпляр trait-а = один кодек
-`crates/core/src/ext.rs:1118` **struct** `UnsupportedContentDecoder` — Stub-реализация `ContentDecoder` для encoding-а, на который нет
-`crates/core/src/ext.rs:1149` **trait** `FontFormat` — Декодер альтернативных файловых форматов шрифта (WOFF2, WOFF) в raw
-`crates/core/src/ext.rs:1167` **struct** `NullFontFormat` — Null-реализация `FontFormat` — `can_decode` всегда `false`,
-`crates/core/src/ext.rs:1192` **trait** `ImageDecoder` — Plug-in декодер растровых изображений для форматов, не встроенных в
-`crates/core/src/ext.rs:1219` **trait** `SpellChecker` — Spell checker — проверка орфографии для form field / contenteditable
-`crates/core/src/ext.rs:1233` **struct** `NullSpellChecker` — Null-реализация `SpellChecker` — `check` всегда возвращает `true`, чтобы
-`crates/core/src/ext.rs:1250` **trait** `HyphenationProvider` — Hyphenation — поиск позиций мягких переносов для CSS `hyphens: auto`
-`crates/core/src/ext.rs:1261` **struct** `NullHyphenationProvider` — Null-реализация `HyphenationProvider` — никаких переносов не предлагается
-`crates/core/src/ext.rs:1278` **enum** `WsMessage` — Сообщение, полученное от WebSocket-сервера (RFC 6455 §5.6)
-`crates/core/src/ext.rs:1294` **trait** `WebSocketSession` — Открытое WebSocket-соединение. Объект владеет TCP/TLS-стримом
-`crates/core/src/ext.rs:1310` **trait** `WebSocketProvider` — Фабрика WebSocket-соединений. Реализуется `lumen-network::HttpClient`
-`crates/core/src/ext.rs:1328` **struct** `SseEvent` — Полностью разобранное SSE-событие (HTML Living Standard §9.2.6)
-`crates/core/src/ext.rs:1344` **trait** `SseSession` — Открытое SSE-соединение (EventSource). Блокирующий интерфейс
-`crates/core/src/ext.rs:1361` **trait** `SseProvider` — Фабрика SSE-соединений. Реализуется `lumen-network::HttpClient`
-`crates/core/src/ext.rs:1377` **enum** `JsSseEvent` — A single queued event from an SSE connection, ready for delivery to JS
-`crates/core/src/ext.rs:1403` **trait** `JsSseSession` — A live SSE connection from the JS runtime's perspective
-`crates/core/src/ext.rs:1414` **trait** `JsSseProvider` — Factory that opens SSE connections for the JS runtime
-`crates/core/src/ext.rs:1440` **trait** `FetchInterceptor` — Перехватчик fetch-запросов уровня Service Worker
-`crates/core/src/ext.rs:1452` **struct** `JsFetchResult` — Full HTTP response for a synchronous JS `fetch()` call
-`crates/core/src/ext.rs:1471` **trait** `JsFetchProvider` — Synchronous HTTP fetch bridge for the JS runtime
-`crates/core/src/ext.rs:1506` **trait** `ClipboardProvider` — Synchronous access to the host platform clipboard for the JS runtime
-`crates/core/src/ext.rs:1527` **enum** `WebAuthnError` — Failure reason from a [`CredentialProvider`] operation
-`crates/core/src/ext.rs:1545` **fn** `dom_exception_name` — The `DOMException` name `lumen-js` should reject the promise with
-`crates/core/src/ext.rs:1561` **struct** `WebAuthnCreateRequest` — A WebAuthn credential-creation (registration) request
-`crates/core/src/ext.rs:1591` **struct** `WebAuthnCreateResponse` — The result of a successful [`CredentialProvider::create`]
-`crates/core/src/ext.rs:1614` **struct** `WebAuthnGetRequest` — A WebAuthn assertion (authentication) request
-`crates/core/src/ext.rs:1631` **struct** `WebAuthnGetResponse` — The result of a successful [`CredentialProvider::get`]
-`crates/core/src/ext.rs:1661` **trait** `CredentialProvider` — Provider of WebAuthn / passkey credentials, backing `navigator.credentials`
-`crates/core/src/ext.rs:1681` **enum** `JsWsEvent` — A single queued event from a WebSocket connection, ready for delivery to JS
-`crates/core/src/ext.rs:1711` **trait** `JsWebSocketSession` — A live WebSocket connection from the JS runtime's perspective
-`crates/core/src/ext.rs:1726` **trait** `JsWebSocketProvider` — Factory that opens WebSocket connections for the JS runtime
-`crates/core/src/ext.rs:1753` **trait** `IdbBackend` — Persistence boundary for the IndexedDB JS shim
-`crates/core/src/ext.rs:1776` **trait** `SwBackend` — Per-origin Service Worker registration persistence
-`crates/core/src/ext.rs:1798` **trait** `CacheBackend` — Per-origin Cache API persistence (W3C Service Worker spec §cache-objects)
-`crates/core/src/ext.rs:1831` **enum** `ClockMode` — Clock mode for deterministic testing (BrowserSession::set_clock, 8F.1)
-`crates/core/src/ext.rs:1855` **trait** `BrowserSession` — Browser automation session — unified interface for in-process tests, MCP agents,
-`crates/core/src/ext.rs:1990` **struct** `NullBrowserSession` — Null implementation of `BrowserSession` — all methods return `NotImplemented`
-`crates/core/src/ext.rs:2099` **enum** `MemoryPressureLevel` — OS memory pressure level (ADR-008, task 10H)
-`crates/core/src/ext.rs:2119` **trait** `MemoryPressureSource` — Source of OS memory pressure signals (ADR-008, task 10H)
-`crates/core/src/ext.rs:2126` **struct** `NullMemoryPressureSource` — Null implementation — always reports `Low`. For tests and platforms without
-`crates/core/src/ext.rs:2148` **trait** `EvictableCache` — Common interface for all cross-tab shared memory caches (ADR-008, task 10D.3)
-`crates/core/src/ext.rs:2182` **struct** `CacheRegistry` — Registry of all cross-tab shared memory caches (ADR-008, task 10D.3)
-`crates/core/src/ext.rs:2188` **fn** `new` — Create an empty registry
-`crates/core/src/ext.rs:2193` **fn** `register` — Register a cache. Caches are notified in registration order
-`crates/core/src/ext.rs:2198` **fn** `broadcast_pressure` — Broadcast a memory pressure event to all registered caches
-`crates/core/src/ext.rs:2205` **fn** `total_used_bytes` — Total memory currently used across all registered caches, in bytes
-`crates/core/src/ext.rs:2213` **fn** `total_budget_bytes` — Total memory budget across all caches with a finite budget, in bytes
-`crates/core/src/ext.rs:2222` **fn** `clear_all` — Evict all entries in every registered cache
-`crates/core/src/ext.rs:2229` **fn** `len` — Number of registered caches
-`crates/core/src/ext.rs:2234` **fn** `is_empty` — `true` if no caches are registered
-`crates/core/src/ext.rs:2617` **struct** `KnowledgeHistoryHit` — Result of a full-text history search. Mirrors `lumen_knowledge::SearchHit`
-`crates/core/src/ext.rs:2633` **struct** `KnowledgeNoteHit` — Result of a full-text notes search
-`crates/core/src/ext.rs:2650` **struct** `KnowledgeReadLaterHit` — Result of a full-text read-later search
-`crates/core/src/ext.rs:2665` **struct** `KnowledgeTabHit` — Result of a live open-tabs search
-`crates/core/src/ext.rs:2686` **trait** `KnowledgeStore` — Unified knowledge-store interface covering the §12 feature set:
-`crates/core/src/ext.rs:2851` **trait** `AiBackend` — Synchronous AI inference backend for the sidebar AI assistant (§12.8)
-`crates/core/src/ext.rs:2863` **struct** `NullAiBackend` — Null AI backend — always returns an informational stub
-`crates/core/src/ext.rs:2899` **struct** `AudioDeviceDescriptor` — Describes a single audio input or output device available on the host platform
-`crates/core/src/ext.rs:2921` **struct** `AudioCaptureConfig` — Constraints forwarded from JS `getUserMedia({audio: {…}})`
-`crates/core/src/ext.rs:2938` **enum** `AudioCaptureError` — Errors returned by [`AudioCaptureProvider::capture`]
-`crates/core/src/ext.rs:2954` **trait** `AudioCaptureHandle` — Live audio capture stream returned by [`AudioCaptureProvider::capture`]
-`crates/core/src/ext.rs:2982` **trait** `AudioCaptureProvider` — Platform audio capture backend backing `navigator.mediaDevices.getUserMedia({audio})`
-`crates/core/src/ext.rs:3002` **struct** `NullAudioCaptureProvider` — Stub `AudioCaptureProvider` that returns zero devices and always rejects capture
-`crates/core/src/ext.rs:3053` **struct** `ScreenSourceDescriptor` — Describes a capturable screen source (monitor or application window)
-`crates/core/src/ext.rs:3070` **struct** `ScreenCaptureConfig` — Constraints forwarded from JS `getDisplayMedia({video: {…}})`
-`crates/core/src/ext.rs:3083` **enum** `ScreenCaptureError` — Errors returned by [`ScreenCaptureProvider::capture`]
-`crates/core/src/ext.rs:3093` **struct** `VideoFrame` — Single captured video frame (raw RGBA pixels, top-to-bottom row-major)
-`crates/core/src/ext.rs:3106` **trait** `ScreenCaptureHandle` — Live screen capture session returned by [`ScreenCaptureProvider::capture`]
-`crates/core/src/ext.rs:3131` **trait** `ScreenCaptureProvider` — Platform screen capture backend backing `navigator.mediaDevices.getDisplayMedia`
-`crates/core/src/ext.rs:3146` **struct** `NullScreenCaptureProvider` — Stub `ScreenCaptureProvider` that returns zero sources and always rejects capture
-`crates/core/src/ext.rs:3201` **trait** `AudioPlaybackProvider` — Platform audio playback backend backing `HTMLAudioElement` (PH3-11)
-`crates/core/src/ext.rs:3270` **struct** `NullAudioPlaybackProvider` — Stub `AudioPlaybackProvider` installed when no real audio backend is available
-`crates/core/src/ext.rs:3299` **trait** `WakeLockProvider` — Platform provider for Screen Wake Lock API (W3C Screen Wake Lock Level 1)
-`crates/core/src/ext.rs:3315` **struct** `NullWakeLockProvider` — Stub provider used in tests and headless mode
-`crates/core/src/ext.rs:3427` **struct** `SwFetchRequest` — Message sent from the main thread to a Service Worker execution thread
-`crates/core/src/ext.rs:3442` **struct** `SwWorkerHandle` — Opaque handle to a running Service Worker execution thread
-`crates/core/src/ext.rs:3455` **type** `SwWorkerStore` — Map from `(origin, scope)` to live SW worker handles
+`crates/core/src/ext.rs:143` **enum** `ResourceType` — Тип ресурса исходящего запроса для EasyList type-опций (`$script`,
+`crates/core/src/ext.rs:170` **struct** `RequestContext` — Контекст исходящего запроса, передаваемый в
+`crates/core/src/ext.rs:182` **fn** `unknown` — Контекст без информации: оба поля `None`. Заставляет
+`crates/core/src/ext.rs:207` **trait** `DnsResolver` — DNS-резолвер: hostname → список IP-адресов (с портом, готовых к connect)
+`crates/core/src/ext.rs:232` **trait** `HstsEnforcement` — HSTS-политика: должны ли HTTP-запросы к данному host принудительно
+`crates/core/src/ext.rs:256` **enum** `HttpAuthScheme` — HTTP authentication scheme, разрешённый `HttpClient` для re-request
+`crates/core/src/ext.rs:267` **fn** `as_str`
+`crates/core/src/ext.rs:288` **struct** `HttpAuthChallenge` — Запрос учётных данных от credential-провайдера. Передаётся в
+`crates/core/src/ext.rs:301` **struct** `HttpCredentials` — Учётные данные для HTTP auth: username + plaintext password
+`crates/core/src/ext.rs:324` **trait** `HttpCredentialProvider` — Поставщик учётных данных HTTP-auth
+`crates/core/src/ext.rs:333` **trait** `CookieProvider` — HTTP cookie storage provider. Bridges lumen-network (fetch pipeline) to
+`crates/core/src/ext.rs:372` **trait** `EncodingDetector` — Определение кодировки HTML-документа. Для кириллицы критично уметь
+`crates/core/src/ext.rs:382` **enum** `FontStyle` — Начертание face-а: `font-style` из CSS Fonts L4. Phase 0 — три
+`crates/core/src/ext.rs:391` **fn** `parse_keyword` — Парсит CSS-ключевое слово `normal | italic | oblique` (case-insensitive)
+`crates/core/src/ext.rs:413` **struct** `FaceRecord` — Метаданные одного face-а в индексе шрифтов
+`crates/core/src/ext.rs:453` **trait** `FontProvider` — Источник системных шрифтов. Реализация — в `lumen-font::system_fonts`
+`crates/core/src/ext.rs:507` **fn** `match_face` — CSS Fonts L4 §5.2 алгоритм матчинга — извлечён из trait-а в свободную
+`crates/core/src/ext.rs:546` **fn** `match_face_no_stretch` — Legacy функция match_face для backward compatibility (без stretch)
+`crates/core/src/ext.rs:846` **trait** `JsRuntime` — JavaScript runtime — исполнение JS-кода (HTML inline scripts, `eval`,
+`crates/core/src/ext.rs:912` **struct** `SuspendedHeap` — Serialized JS heap snapshot for T2→T3 hibernation (ADR-008, Invariant 2)
+`crates/core/src/ext.rs:919` **fn** `new` — Create a new suspended heap from compressed bytes
+`crates/core/src/ext.rs:924` **fn** `len` — Get the size in bytes of the compressed snapshot
+`crates/core/src/ext.rs:929` **fn** `is_empty` — Check if the snapshot is empty
+`crates/core/src/ext.rs:936` **enum** `JsValue` — Простые JSON-совместимые типы для передачи через trait-границу
+`crates/core/src/ext.rs:949` **fn** `object` — Хелпер: построить object из key-value пар
+`crates/core/src/ext.rs:959` **enum** `JsError` — Ошибка исполнения JavaScript: либо syntax error (parse), либо runtime
+`crates/core/src/ext.rs:980` **type** `JsResult`
+`crates/core/src/ext.rs:985` **struct** `NullJsRuntime` — Null implementation — всегда возвращает `JsError::NotImplemented`
+`crates/core/src/ext.rs:1035` **trait** `UnicodeProvider` — Unicode-таблицы: line break (UAX #14), grapheme/word segmentation
+`crates/core/src/ext.rs:1060` **struct** `NullUnicodeProvider` — Null-реализация `UnicodeProvider` — все методы возвращают пустые векторы
+`crates/core/src/ext.rs:1088` **trait** `IdnaProvider` — IDN (Internationalized Domain Names) полный UTS #46. Свой Punycode-encoder
+`crates/core/src/ext.rs:1098` **struct** `NullIdnaProvider` — Null-реализация `IdnaProvider` — все методы возвращают `None`. Потребитель
+`crates/core/src/ext.rs:1123` **trait** `PublicSuffixList` — Public Suffix List — отделение публичных суффиксов от регистрируемых
+`crates/core/src/ext.rs:1144` **struct** `NullPublicSuffixList` — Null-реализация `PublicSuffixList` — все запросы возвращают `None`/`false`
+`crates/core/src/ext.rs:1170` **trait** `ContentDecoder` — HTTP `Content-Encoding` декодер. Один экземпляр trait-а = один кодек
+`crates/core/src/ext.rs:1185` **struct** `UnsupportedContentDecoder` — Stub-реализация `ContentDecoder` для encoding-а, на который нет
+`crates/core/src/ext.rs:1216` **trait** `FontFormat` — Декодер альтернативных файловых форматов шрифта (WOFF2, WOFF) в raw
+`crates/core/src/ext.rs:1234` **struct** `NullFontFormat` — Null-реализация `FontFormat` — `can_decode` всегда `false`,
+`crates/core/src/ext.rs:1259` **trait** `ImageDecoder` — Plug-in декодер растровых изображений для форматов, не встроенных в
+`crates/core/src/ext.rs:1286` **trait** `SpellChecker` — Spell checker — проверка орфографии для form field / contenteditable
+`crates/core/src/ext.rs:1300` **struct** `NullSpellChecker` — Null-реализация `SpellChecker` — `check` всегда возвращает `true`, чтобы
+`crates/core/src/ext.rs:1317` **trait** `HyphenationProvider` — Hyphenation — поиск позиций мягких переносов для CSS `hyphens: auto`
+`crates/core/src/ext.rs:1328` **struct** `NullHyphenationProvider` — Null-реализация `HyphenationProvider` — никаких переносов не предлагается
+`crates/core/src/ext.rs:1345` **enum** `WsMessage` — Сообщение, полученное от WebSocket-сервера (RFC 6455 §5.6)
+`crates/core/src/ext.rs:1361` **trait** `WebSocketSession` — Открытое WebSocket-соединение. Объект владеет TCP/TLS-стримом
+`crates/core/src/ext.rs:1377` **trait** `WebSocketProvider` — Фабрика WebSocket-соединений. Реализуется `lumen-network::HttpClient`
+`crates/core/src/ext.rs:1395` **struct** `SseEvent` — Полностью разобранное SSE-событие (HTML Living Standard §9.2.6)
+`crates/core/src/ext.rs:1411` **trait** `SseSession` — Открытое SSE-соединение (EventSource). Блокирующий интерфейс
+`crates/core/src/ext.rs:1428` **trait** `SseProvider` — Фабрика SSE-соединений. Реализуется `lumen-network::HttpClient`
+`crates/core/src/ext.rs:1444` **enum** `JsSseEvent` — A single queued event from an SSE connection, ready for delivery to JS
+`crates/core/src/ext.rs:1470` **trait** `JsSseSession` — A live SSE connection from the JS runtime's perspective
+`crates/core/src/ext.rs:1481` **trait** `JsSseProvider` — Factory that opens SSE connections for the JS runtime
+`crates/core/src/ext.rs:1507` **trait** `FetchInterceptor` — Перехватчик fetch-запросов уровня Service Worker
+`crates/core/src/ext.rs:1519` **struct** `JsFetchResult` — Full HTTP response for a synchronous JS `fetch()` call
+`crates/core/src/ext.rs:1538` **trait** `JsFetchProvider` — Synchronous HTTP fetch bridge for the JS runtime
+`crates/core/src/ext.rs:1573` **trait** `ClipboardProvider` — Synchronous access to the host platform clipboard for the JS runtime
+`crates/core/src/ext.rs:1594` **enum** `WebAuthnError` — Failure reason from a [`CredentialProvider`] operation
+`crates/core/src/ext.rs:1612` **fn** `dom_exception_name` — The `DOMException` name `lumen-js` should reject the promise with
+`crates/core/src/ext.rs:1628` **struct** `WebAuthnCreateRequest` — A WebAuthn credential-creation (registration) request
+`crates/core/src/ext.rs:1658` **struct** `WebAuthnCreateResponse` — The result of a successful [`CredentialProvider::create`]
+`crates/core/src/ext.rs:1681` **struct** `WebAuthnGetRequest` — A WebAuthn assertion (authentication) request
+`crates/core/src/ext.rs:1698` **struct** `WebAuthnGetResponse` — The result of a successful [`CredentialProvider::get`]
+`crates/core/src/ext.rs:1728` **trait** `CredentialProvider` — Provider of WebAuthn / passkey credentials, backing `navigator.credentials`
+`crates/core/src/ext.rs:1748` **enum** `JsWsEvent` — A single queued event from a WebSocket connection, ready for delivery to JS
+`crates/core/src/ext.rs:1778` **trait** `JsWebSocketSession` — A live WebSocket connection from the JS runtime's perspective
+`crates/core/src/ext.rs:1793` **trait** `JsWebSocketProvider` — Factory that opens WebSocket connections for the JS runtime
+`crates/core/src/ext.rs:1820` **trait** `IdbBackend` — Persistence boundary for the IndexedDB JS shim
+`crates/core/src/ext.rs:1843` **trait** `SwBackend` — Per-origin Service Worker registration persistence
+`crates/core/src/ext.rs:1865` **trait** `CacheBackend` — Per-origin Cache API persistence (W3C Service Worker spec §cache-objects)
+`crates/core/src/ext.rs:1898` **enum** `ClockMode` — Clock mode for deterministic testing (BrowserSession::set_clock, 8F.1)
+`crates/core/src/ext.rs:1922` **trait** `BrowserSession` — Browser automation session — unified interface for in-process tests, MCP agents,
+`crates/core/src/ext.rs:2057` **struct** `NullBrowserSession` — Null implementation of `BrowserSession` — all methods return `NotImplemented`
+`crates/core/src/ext.rs:2166` **enum** `MemoryPressureLevel` — OS memory pressure level (ADR-008, task 10H)
+`crates/core/src/ext.rs:2186` **trait** `MemoryPressureSource` — Source of OS memory pressure signals (ADR-008, task 10H)
+`crates/core/src/ext.rs:2193` **struct** `NullMemoryPressureSource` — Null implementation — always reports `Low`. For tests and platforms without
+`crates/core/src/ext.rs:2215` **trait** `EvictableCache` — Common interface for all cross-tab shared memory caches (ADR-008, task 10D.3)
+`crates/core/src/ext.rs:2249` **struct** `CacheRegistry` — Registry of all cross-tab shared memory caches (ADR-008, task 10D.3)
+`crates/core/src/ext.rs:2255` **fn** `new` — Create an empty registry
+`crates/core/src/ext.rs:2260` **fn** `register` — Register a cache. Caches are notified in registration order
+`crates/core/src/ext.rs:2265` **fn** `broadcast_pressure` — Broadcast a memory pressure event to all registered caches
+`crates/core/src/ext.rs:2272` **fn** `total_used_bytes` — Total memory currently used across all registered caches, in bytes
+`crates/core/src/ext.rs:2280` **fn** `total_budget_bytes` — Total memory budget across all caches with a finite budget, in bytes
+`crates/core/src/ext.rs:2289` **fn** `clear_all` — Evict all entries in every registered cache
+`crates/core/src/ext.rs:2296` **fn** `len` — Number of registered caches
+`crates/core/src/ext.rs:2301` **fn** `is_empty` — `true` if no caches are registered
+`crates/core/src/ext.rs:2684` **struct** `KnowledgeHistoryHit` — Result of a full-text history search. Mirrors `lumen_knowledge::SearchHit`
+`crates/core/src/ext.rs:2700` **struct** `KnowledgeNoteHit` — Result of a full-text notes search
+`crates/core/src/ext.rs:2717` **struct** `KnowledgeReadLaterHit` — Result of a full-text read-later search
+`crates/core/src/ext.rs:2732` **struct** `KnowledgeTabHit` — Result of a live open-tabs search
+`crates/core/src/ext.rs:2753` **trait** `KnowledgeStore` — Unified knowledge-store interface covering the §12 feature set:
+`crates/core/src/ext.rs:2918` **trait** `AiBackend` — Synchronous AI inference backend for the sidebar AI assistant (§12.8)
+`crates/core/src/ext.rs:2930` **struct** `NullAiBackend` — Null AI backend — always returns an informational stub
+`crates/core/src/ext.rs:2966` **struct** `AudioDeviceDescriptor` — Describes a single audio input or output device available on the host platform
+`crates/core/src/ext.rs:2988` **struct** `AudioCaptureConfig` — Constraints forwarded from JS `getUserMedia({audio: {…}})`
+`crates/core/src/ext.rs:3005` **enum** `AudioCaptureError` — Errors returned by [`AudioCaptureProvider::capture`]
+`crates/core/src/ext.rs:3021` **trait** `AudioCaptureHandle` — Live audio capture stream returned by [`AudioCaptureProvider::capture`]
+`crates/core/src/ext.rs:3049` **trait** `AudioCaptureProvider` — Platform audio capture backend backing `navigator.mediaDevices.getUserMedia({audio})`
+`crates/core/src/ext.rs:3069` **struct** `NullAudioCaptureProvider` — Stub `AudioCaptureProvider` that returns zero devices and always rejects capture
+`crates/core/src/ext.rs:3120` **struct** `ScreenSourceDescriptor` — Describes a capturable screen source (monitor or application window)
+`crates/core/src/ext.rs:3137` **struct** `ScreenCaptureConfig` — Constraints forwarded from JS `getDisplayMedia({video: {…}})`
+`crates/core/src/ext.rs:3150` **enum** `ScreenCaptureError` — Errors returned by [`ScreenCaptureProvider::capture`]
+`crates/core/src/ext.rs:3160` **struct** `VideoFrame` — Single captured video frame (raw RGBA pixels, top-to-bottom row-major)
+`crates/core/src/ext.rs:3173` **trait** `ScreenCaptureHandle` — Live screen capture session returned by [`ScreenCaptureProvider::capture`]
+`crates/core/src/ext.rs:3198` **trait** `ScreenCaptureProvider` — Platform screen capture backend backing `navigator.mediaDevices.getDisplayMedia`
+`crates/core/src/ext.rs:3213` **struct** `NullScreenCaptureProvider` — Stub `ScreenCaptureProvider` that returns zero sources and always rejects capture
+`crates/core/src/ext.rs:3268` **trait** `AudioPlaybackProvider` — Platform audio playback backend backing `HTMLAudioElement` (PH3-11)
+`crates/core/src/ext.rs:3337` **struct** `NullAudioPlaybackProvider` — Stub `AudioPlaybackProvider` installed when no real audio backend is available
+`crates/core/src/ext.rs:3366` **trait** `WakeLockProvider` — Platform provider for Screen Wake Lock API (W3C Screen Wake Lock Level 1)
+`crates/core/src/ext.rs:3382` **struct** `NullWakeLockProvider` — Stub provider used in tests and headless mode
+`crates/core/src/ext.rs:3494` **struct** `SwFetchRequest` — Message sent from the main thread to a Service Worker execution thread
+`crates/core/src/ext.rs:3509` **struct** `SwWorkerHandle` — Opaque handle to a running Service Worker execution thread
+`crates/core/src/ext.rs:3522` **type** `SwWorkerStore` — Map from `(origin, scope)` to live SW worker handles
 `crates/core/src/form.rs:15` **struct** `FormEntry` — Запись формы — пара (name, value) с опциональным filename (для multipart)
 `crates/core/src/form.rs:21` **enum** `FormValue`
 `crates/core/src/form.rs:33` **fn** `text`
@@ -396,7 +399,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/core/src/web_storage.rs:47` **fn** `remove_item` — Remove `key` and its value.  No-op if absent
 `crates/core/src/web_storage.rs:54` **fn** `clear` — Remove all key-value pairs
 
-## lumen-css-parser  (59 symbols)
+## lumen-css-parser  (60 symbols)
 
 `crates/engine/css-parser/src/parser.rs:38` **enum** `SimpleSelector`
 `crates/engine/css-parser/src/parser.rs:50` **struct** `AttrSelector`
@@ -439,24 +442,25 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/css-parser/src/parser.rs:1162` **struct** `MediaQueryClause` — Одна clause в media query — AND-список feature/media-type условий
 `crates/engine/css-parser/src/parser.rs:1174` **enum** `MediaCondition`
 `crates/engine/css-parser/src/parser.rs:1187` **enum** `MediaFeature`
-`crates/engine/css-parser/src/parser.rs:1234` **enum** `MediaOrientation`
-`crates/engine/css-parser/src/parser.rs:1241` **enum** `MediaHover` — Media Queries L4 §5.3/§5.5 — hover-способность указателя
-`crates/engine/css-parser/src/parser.rs:1250` **enum** `MediaPointer` — Media Queries L4 §5.4/§5.6 — точность указателя
-`crates/engine/css-parser/src/parser.rs:1262` **enum** `MediaContrast` — Media Queries L5 §5.5 — `prefers-contrast`: запрошенный пользователем
-`crates/engine/css-parser/src/parser.rs:1276` **enum** `MediaReducedData` — Media Queries L5 §5.6 — `prefers-reduced-data`: запрос на экономию
-`crates/engine/css-parser/src/parser.rs:1286` **enum** `MediaReducedTransparency` — Media Queries L5 §5.7 — `prefers-reduced-transparency`: запрос на
-`crates/engine/css-parser/src/parser.rs:1296` **enum** `MediaScripting` — Media Queries L5 §6.2 — `scripting`: доступность JavaScript в текущем
-`crates/engine/css-parser/src/parser.rs:1307` **enum** `ColorScheme`
-`crates/engine/css-parser/src/parser.rs:1316` **struct** `MediaContext` — Контекст, против которого матчатся media queries. Заполняется
-`crates/engine/css-parser/src/parser.rs:1374` **fn** `matches` — Пустой query (= `@media all`) — true. Иначе хотя бы одна
-`crates/engine/css-parser/src/parser.rs:1389` **fn** `matches` — Per Media Queries L4 §3.2: пустая `conditions` — clause invalid
-`crates/engine/css-parser/src/parser.rs:1406` **fn** `matches`
-`crates/engine/css-parser/src/parser.rs:1416` **fn** `matches`
-`crates/engine/css-parser/src/parser.rs:1462` **fn** `parse`
-`crates/engine/css-parser/src/parser.rs:1470` **fn** `parse_inline_style` — Парсит содержимое HTML-атрибута `style="..."` — declaration-list без
-`crates/engine/css-parser/src/parser.rs:1477` **fn** `parse_selector_list` — Парсит строку CSS selector list (через запятую) и возвращает разобранные
-`crates/engine/css-parser/src/parser.rs:1635` **fn** `parse_supports_condition` — Парсит `@supports`-условие из строки между `@supports` и `{`
-`crates/engine/css-parser/src/parser.rs:1874` **fn** `parse_media_query` — Распарсить media query из строки между `@media` и `{`. Принимает
+`crates/engine/css-parser/src/parser.rs:1238` **enum** `MediaOrientation`
+`crates/engine/css-parser/src/parser.rs:1245` **enum** `MediaHover` — Media Queries L4 §5.3/§5.5 — hover-способность указателя
+`crates/engine/css-parser/src/parser.rs:1254` **enum** `MediaPointer` — Media Queries L4 §5.4/§5.6 — точность указателя
+`crates/engine/css-parser/src/parser.rs:1266` **enum** `MediaContrast` — Media Queries L5 §5.5 — `prefers-contrast`: запрошенный пользователем
+`crates/engine/css-parser/src/parser.rs:1280` **enum** `MediaReducedData` — Media Queries L5 §5.6 — `prefers-reduced-data`: запрос на экономию
+`crates/engine/css-parser/src/parser.rs:1290` **enum** `MediaReducedTransparency` — Media Queries L5 §5.7 — `prefers-reduced-transparency`: запрос на
+`crates/engine/css-parser/src/parser.rs:1300` **enum** `MediaScripting` — Media Queries L5 §6.2 — `scripting`: доступность JavaScript в текущем
+`crates/engine/css-parser/src/parser.rs:1313` **enum** `MediaInvertedColors` — Media Queries L5 §5.8 — `inverted-colors`: инвертирует ли пользовательское
+`crates/engine/css-parser/src/parser.rs:1321` **enum** `ColorScheme`
+`crates/engine/css-parser/src/parser.rs:1330` **struct** `MediaContext` — Контекст, против которого матчатся media queries. Заполняется
+`crates/engine/css-parser/src/parser.rs:1392` **fn** `matches` — Пустой query (= `@media all`) — true. Иначе хотя бы одна
+`crates/engine/css-parser/src/parser.rs:1407` **fn** `matches` — Per Media Queries L4 §3.2: пустая `conditions` — clause invalid
+`crates/engine/css-parser/src/parser.rs:1424` **fn** `matches`
+`crates/engine/css-parser/src/parser.rs:1434` **fn** `matches`
+`crates/engine/css-parser/src/parser.rs:1481` **fn** `parse`
+`crates/engine/css-parser/src/parser.rs:1489` **fn** `parse_inline_style` — Парсит содержимое HTML-атрибута `style="..."` — declaration-list без
+`crates/engine/css-parser/src/parser.rs:1496` **fn** `parse_selector_list` — Парсит строку CSS selector list (через запятую) и возвращает разобранные
+`crates/engine/css-parser/src/parser.rs:1654` **fn** `parse_supports_condition` — Парсит `@supports`-условие из строки между `@supports` и `{`
+`crates/engine/css-parser/src/parser.rs:1893` **fn** `parse_media_query` — Распарсить media query из строки между `@media` и `{`. Принимает
 
 ## lumen-devtools  (8 symbols)
 
@@ -1636,11 +1640,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/box_tree.rs:2334` **fn** `lay_out_incremental` — Incremental re-layout pass: skips clean subtrees, re-lays out only dirty ones
 `crates/engine/layout/src/box_tree.rs:2371` **fn** `layout_streaming_incremental` — Streaming incremental layout (PH1-2b)
 `crates/engine/layout/src/box_tree.rs:2452` **fn** `build_iframe_document` — Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5)
-`crates/engine/layout/src/box_tree.rs:8339` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
-`crates/engine/layout/src/box_tree.rs:8522` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
-`crates/engine/layout/src/box_tree.rs:8541` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
-`crates/engine/layout/src/box_tree.rs:8571` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
-`crates/engine/layout/src/box_tree.rs:9493` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
+`crates/engine/layout/src/box_tree.rs:8345` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
+`crates/engine/layout/src/box_tree.rs:8528` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
+`crates/engine/layout/src/box_tree.rs:8547` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
+`crates/engine/layout/src/box_tree.rs:8577` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
+`crates/engine/layout/src/box_tree.rs:9499` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
 `crates/engine/layout/src/color_mix.rs:38` **enum** `MixColorSpace` — CSS Color L5 §10.2 — interpolation color space for `color-mix()`
 `crates/engine/layout/src/color_mix.rs:63` **fn** `from_css` — Parse a CSS `color-mix()` interpolation space identifier (case-insensitive)
 `crates/engine/layout/src/color_mix.rs:80` **fn** `is_polar` — Returns `true` if this space has a hue (polar) axis
@@ -2091,35 +2095,35 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/style.rs:6378` **fn** `compute_pseudo_element_style` — Вычисляет стиль для псевдоэлемента `::before` или `::after` элемента `node`
 `crates/engine/layout/src/style.rs:6587` **fn** `compute_selection_style` — Computes the `::selection` override style for a DOM element
 `crates/engine/layout/src/style.rs:6645` **fn** `validate_against_syntax` — CSS Properties and Values L1 §2 — упрощённая валидация значения
-`crates/engine/layout/src/style.rs:9090` **fn** `ua_form_element_colors` — UA stylesheet для HTML form controls (HTML5 §15.5 «Rendering»)
-`crates/engine/layout/src/style.rs:9259` **fn** `parse_font_family` — Парсит `font-family: a, "b c", d` в Vec<String>. Запятые разделяют
-`crates/engine/layout/src/style.rs:9322` **fn** `parse_font_variation_settings` — Парсит CSS `font-variation-settings` (CSS Fonts L4 §7)
-`crates/engine/layout/src/style.rs:9414` **fn** `set_cq_context` — Sets the nearest-container size for `cq*` unit resolution during the container re-layout pass
-`crates/engine/layout/src/style.rs:9419` **fn** `clear_cq_context` — Clears the `cq*` context after the container re-layout pass completes
-`crates/engine/layout/src/style.rs:9443` **fn** `set_interactive_state` — Sets the interactive hover/focus/active state for the next layout pass
-`crates/engine/layout/src/style.rs:9454` **fn** `clear_interactive_state` — Clears hover/focus/active state after layout
-`crates/engine/layout/src/style.rs:9499` **enum** `LengthOrAuto` — CSS `<length> | auto` — для margin и offset-свойств, где `auto` имеет
-`crates/engine/layout/src/style.rs:9507` **fn** `is_auto`
-`crates/engine/layout/src/style.rs:9514` **fn** `to_px_opt` — Returns the raw pixel value for `Length::Px` variants; `Auto` and all
-`crates/engine/layout/src/style.rs:9524` **fn** `resolve` — Резолвит в пиксели. `Auto` → `None`; нерезолвируемый `%` → `None`
-`crates/engine/layout/src/style.rs:9532` **fn** `resolve_or_zero` — Резолвит в пиксели; для `Auto` и нерезолвируемых значений → 0.0
-`crates/engine/layout/src/style.rs:9543` **enum** `Length` — Типизированная длина CSS до резолва в пиксели
-`crates/engine/layout/src/style.rs:9608` **enum** `CalcNode` — CSS Values L4 §10 — AST `calc()`-выражения. Хранится как двоичное дерево
-`crates/engine/layout/src/style.rs:9637` **enum** `MathFn` — CSS Values L4 §10.7-10.9 — научные math-функции. Имена case-insensitive
-`crates/engine/layout/src/style.rs:9666` **enum** `RoundStrategy` — CSS Values L4 §10.5.1 — стратегия округления для `round()`
-`crates/engine/layout/src/style.rs:9690` **fn** `resolve` — Резолвит выражение в `f32`-пиксели по тем же правилам, что
-`crates/engine/layout/src/style.rs:9888` **fn** `resolve` — Возвращает длину в пикселях. `em_basis` — fs, относительно которого
-`crates/engine/layout/src/style.rs:9928` **fn** `is_intrinsic` — Returns `true` if this is an intrinsic sizing keyword (min-content,
-`crates/engine/layout/src/style.rs:9934` **fn** `resolve_or_zero` — Резолвит с `cb_width` как percent_basis; возвращает 0.0 при неудаче
-`crates/engine/layout/src/style.rs:9940` **fn** `px` — Извлекает пиксельное значение для уже-разрешённых `Px`-значений
-`crates/engine/layout/src/style.rs:10095` **fn** `parse_length`
-`crates/engine/layout/src/style.rs:13618` **fn** `resolve_logical_property` — Resolve CSS Logical Properties based on writing-mode
-`crates/engine/layout/src/style.rs:15634` **fn** `parse_transform_list` — Парсит `<transform-list>` — последовательность `func(args)` через
-`crates/engine/layout/src/style.rs:16714` **fn** `parse_grid_template_areas` — CSS Grid L1 §7.3 — parse `grid-template-areas` value
-`crates/engine/layout/src/style.rs:16794` **fn** `parse_background_gradient` — CSS Images L3/L4 §3.3/§3.7 — parses color stops from a CSS gradient string
-`crates/engine/layout/src/style.rs:17146` **fn** `parse_gradient_stops` — The leading direction / angle / shape argument (e.g. `to right`,
-`crates/engine/layout/src/style.rs:17796` **fn** `parse_color`
-`crates/engine/layout/src/style.rs:17959` **fn** `system_color` — CSS Color Module Level 4 §6.2 — резолв системных цветовых ключевых слов
+`crates/engine/layout/src/style.rs:9107` **fn** `ua_form_element_colors` — UA stylesheet для HTML form controls (HTML5 §15.5 «Rendering»)
+`crates/engine/layout/src/style.rs:9276` **fn** `parse_font_family` — Парсит `font-family: a, "b c", d` в Vec<String>. Запятые разделяют
+`crates/engine/layout/src/style.rs:9339` **fn** `parse_font_variation_settings` — Парсит CSS `font-variation-settings` (CSS Fonts L4 §7)
+`crates/engine/layout/src/style.rs:9431` **fn** `set_cq_context` — Sets the nearest-container size for `cq*` unit resolution during the container re-layout pass
+`crates/engine/layout/src/style.rs:9436` **fn** `clear_cq_context` — Clears the `cq*` context after the container re-layout pass completes
+`crates/engine/layout/src/style.rs:9460` **fn** `set_interactive_state` — Sets the interactive hover/focus/active state for the next layout pass
+`crates/engine/layout/src/style.rs:9471` **fn** `clear_interactive_state` — Clears hover/focus/active state after layout
+`crates/engine/layout/src/style.rs:9516` **enum** `LengthOrAuto` — CSS `<length> | auto` — для margin и offset-свойств, где `auto` имеет
+`crates/engine/layout/src/style.rs:9524` **fn** `is_auto`
+`crates/engine/layout/src/style.rs:9531` **fn** `to_px_opt` — Returns the raw pixel value for `Length::Px` variants; `Auto` and all
+`crates/engine/layout/src/style.rs:9541` **fn** `resolve` — Резолвит в пиксели. `Auto` → `None`; нерезолвируемый `%` → `None`
+`crates/engine/layout/src/style.rs:9549` **fn** `resolve_or_zero` — Резолвит в пиксели; для `Auto` и нерезолвируемых значений → 0.0
+`crates/engine/layout/src/style.rs:9560` **enum** `Length` — Типизированная длина CSS до резолва в пиксели
+`crates/engine/layout/src/style.rs:9625` **enum** `CalcNode` — CSS Values L4 §10 — AST `calc()`-выражения. Хранится как двоичное дерево
+`crates/engine/layout/src/style.rs:9654` **enum** `MathFn` — CSS Values L4 §10.7-10.9 — научные math-функции. Имена case-insensitive
+`crates/engine/layout/src/style.rs:9683` **enum** `RoundStrategy` — CSS Values L4 §10.5.1 — стратегия округления для `round()`
+`crates/engine/layout/src/style.rs:9707` **fn** `resolve` — Резолвит выражение в `f32`-пиксели по тем же правилам, что
+`crates/engine/layout/src/style.rs:9905` **fn** `resolve` — Возвращает длину в пикселях. `em_basis` — fs, относительно которого
+`crates/engine/layout/src/style.rs:9945` **fn** `is_intrinsic` — Returns `true` if this is an intrinsic sizing keyword (min-content,
+`crates/engine/layout/src/style.rs:9951` **fn** `resolve_or_zero` — Резолвит с `cb_width` как percent_basis; возвращает 0.0 при неудаче
+`crates/engine/layout/src/style.rs:9957` **fn** `px` — Извлекает пиксельное значение для уже-разрешённых `Px`-значений
+`crates/engine/layout/src/style.rs:10112` **fn** `parse_length`
+`crates/engine/layout/src/style.rs:13635` **fn** `resolve_logical_property` — Resolve CSS Logical Properties based on writing-mode
+`crates/engine/layout/src/style.rs:15651` **fn** `parse_transform_list` — Парсит `<transform-list>` — последовательность `func(args)` через
+`crates/engine/layout/src/style.rs:16731` **fn** `parse_grid_template_areas` — CSS Grid L1 §7.3 — parse `grid-template-areas` value
+`crates/engine/layout/src/style.rs:16811` **fn** `parse_background_gradient` — CSS Images L3/L4 §3.3/§3.7 — parses color stops from a CSS gradient string
+`crates/engine/layout/src/style.rs:17163` **fn** `parse_gradient_stops` — The leading direction / angle / shape argument (e.g. `to right`,
+`crates/engine/layout/src/style.rs:17813` **fn** `parse_color`
+`crates/engine/layout/src/style.rs:17976` **fn** `system_color` — CSS Color Module Level 4 §6.2 — резолв системных цветовых ключевых слов
 `crates/engine/layout/src/subgrid.rs:24` **struct** `SubgridContext` — Resolved track sizes and cumulative offsets for one grid axis (columns or rows)
 `crates/engine/layout/src/subgrid.rs:35` **fn** `from_parent_tracks` — Build from a slice of parent track sizes and the gap value used between them
 `crates/engine/layout/src/subgrid.rs:46` **fn** `total_size` — Total span width/height occupied by all inherited tracks (including inter-track gaps)
@@ -2257,9 +2261,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/dot.rs:167` **fn** `google` — Google Public DNS `8.8.8.8:853` с SNI `dns.google`
 `crates/network/src/dot.rs:175` **fn** `quad9` — Quad9 `9.9.9.9:853` с SNI `dns.quad9.net`
 `crates/network/src/filter/default_list.rs:25` **struct** `DefaultFilterList` — Bundled EasyList-format ruleset shipped inside the Lumen binary
-`crates/network/src/filter/easylist.rs:79` **struct** `EasyListFilter` — EasyList-format `RequestFilter` implementation
-`crates/network/src/filter/easylist.rs:97` **fn** `parse` — Parse an EasyList-format text and return a filter
-`crates/network/src/filter/easylist.rs:106` **fn** `rule_count` — Number of block rules loaded
+`crates/network/src/filter/easylist.rs:236` **struct** `EasyListFilter` — EasyList-format `RequestFilter` implementation
+`crates/network/src/filter/easylist.rs:254` **fn** `parse` — Parse an EasyList-format text and return a filter
+`crates/network/src/filter/easylist.rs:263` **fn** `rule_count` — Number of block rules loaded
 `crates/network/src/filter/hosts.rs:28` **struct** `HostsFilter` — Hosts-file `RequestFilter`
 `crates/network/src/filter/hosts.rs:34` **fn** `parse` — Parse a hosts-file text and return a filter
 `crates/network/src/filter/hosts.rs:73` **fn** `len` — Number of blocked hostnames
@@ -2351,42 +2355,42 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/lib.rs:95` **fn** `set_global_adblock_enabled` — Enable or disable the process-global ad-block filter
 `crates/network/src/lib.rs:101` **fn** `global_adblock_enabled` — Whether the process-global ad-block filter is currently enabled
 `crates/network/src/lib.rs:110` **fn** `install_global_adblock_filter` — Install (or replace) the process-global ad-block filter
-`crates/network/src/lib.rs:2021` **struct** `HttpProxy` — HTTP proxy configuration (RFC 7230 proxy behavior)
-`crates/network/src/lib.rs:2033` **fn** `new` — Создать новый прокси без аутентификации
-`crates/network/src/lib.rs:2042` **fn** `with_basic_auth` — Создать прокси с базовой аутентификацией (username:password)
-`crates/network/src/lib.rs:2085` **struct** `HttpClient` — HTTP/1.1 + HTTPS клиент
-`crates/network/src/lib.rs:2124` **fn** `new`
-`crates/network/src/lib.rs:2150` **fn** `with_sink` — Подключить EventSink. По умолчанию sink-а нет (события не эмитятся)
-`crates/network/src/lib.rs:2161` **fn** `with_filter` — Подключить RequestFilter. По умолчанию фильтра нет — `fetch` всегда
-`crates/network/src/lib.rs:2173` **fn** `with_interceptor` — Подключить Service Worker перехватчик fetch-запросов. Проверяется
-`crates/network/src/lib.rs:2182` **fn** `with_pool` — Подключить shared `ConnectionPool`. По умолчанию у каждого `HttpClient`
-`crates/network/src/lib.rs:2192` **fn** `with_h2_pool` — Подключить shared `H2Pool` (RFC 9113 §9.1.1). По умолчанию HTTP/2
-`crates/network/src/lib.rs:2201` **fn** `with_dns_resolver` — Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
-`crates/network/src/lib.rs:2218` **fn** `with_hsts` — Подключить HSTS-store (RFC 6797). По умолчанию — нет:
-`crates/network/src/lib.rs:2234` **fn** `with_credentials` — Подключить credential-провайдер для HTTP authentication (RFC 7235 /
-`crates/network/src/lib.rs:2245` **fn** `with_tab` — Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
-`crates/network/src/lib.rs:2265` **fn** `with_mixed_content_policy` — Подключить mixed-content policy (W3C Mixed Content §5). По умолчанию
-`crates/network/src/lib.rs:2289` **fn** `with_content_decoder` — Зарегистрировать `ContentDecoder` для одного encoding. Декодер попадает
-`crates/network/src/lib.rs:2335` **fn** `with_cors_cache` — Запросить только диапазон байт ресурса (RFC 7233). Если сервер
-`crates/network/src/lib.rs:2347` **fn** `with_cookie_jar` — Attach a cookie store. The provider receives `Cookie:` injection
-`crates/network/src/lib.rs:2371` **fn** `with_http_cache` — Подключить HTTP response cache (RFC 7234)
-`crates/network/src/lib.rs:2382` **fn** `with_proxy` — Подключить HTTP прокси (RFC 7230). По умолчанию прокси не подключён — запросы
-`crates/network/src/lib.rs:2395` **fn** `with_socks5_proxy` — Подключить SOCKS5 прокси (RFC 1928) для туннелирования всех TCP-соединений
-`crates/network/src/lib.rs:2406` **fn** `with_fingerprint_profile` — Установить HTTP fingerprinting profile (Standard/Strict/Tor) для Chrome-matching
-`crates/network/src/lib.rs:2414` **fn** `fingerprint_profile` — Получить текущий HTTP fingerprinting profile
-`crates/network/src/lib.rs:2425` **fn** `with_tls_profile` — Override the TLS fingerprint profile independently of the HTTP profile
-`crates/network/src/lib.rs:2431` **fn** `tls_profile` — Получить текущий TLS fingerprinting profile
-`crates/network/src/lib.rs:2465` **fn** `fetch_cors` — CORS-enabled fetch для cross-origin subresource (Fetch §3-§4)
-`crates/network/src/lib.rs:2514` **fn** `fetch_range`
-`crates/network/src/lib.rs:2582` **fn** `fetch_multi_range` — Multi-range запрос (RFC 7233 §4.1). Один request на несколько
-`crates/network/src/lib.rs:2669` **fn** `fetch_subresource` — Загрузить подресурс с проверкой mixed-content по подключённой
-`crates/network/src/lib.rs:2769` **fn** `fetch_conditional` — Perform a **conditional GET** (RFC 7232) and report whether the resource
-`crates/network/src/lib.rs:2825` **enum** `ConditionalFetch` — Outcome of [`HttpClient::fetch_conditional`]
-`crates/network/src/lib.rs:2845` **fn** `fetch_page` — Fetch a top-level page and return the response body together with all
-`crates/network/src/lib.rs:2906` **fn** `fetch_page_streaming` — Как [`HttpClient::fetch_page`], но тело финального 2xx-ответа стримится
-`crates/network/src/lib.rs:3435` **struct** `InMemoryFetchInterceptor` — In-memory реализация `FetchInterceptor` для тестов без SQLite
-`crates/network/src/lib.rs:3441` **fn** `new`
-`crates/network/src/lib.rs:3448` **fn** `insert` — Добавить запись: ответ для (origin, url) берётся из кэша без сети
+`crates/network/src/lib.rs:2049` **struct** `HttpProxy` — HTTP proxy configuration (RFC 7230 proxy behavior)
+`crates/network/src/lib.rs:2061` **fn** `new` — Создать новый прокси без аутентификации
+`crates/network/src/lib.rs:2070` **fn** `with_basic_auth` — Создать прокси с базовой аутентификацией (username:password)
+`crates/network/src/lib.rs:2113` **struct** `HttpClient` — HTTP/1.1 + HTTPS клиент
+`crates/network/src/lib.rs:2152` **fn** `new`
+`crates/network/src/lib.rs:2178` **fn** `with_sink` — Подключить EventSink. По умолчанию sink-а нет (события не эмитятся)
+`crates/network/src/lib.rs:2189` **fn** `with_filter` — Подключить RequestFilter. По умолчанию фильтра нет — `fetch` всегда
+`crates/network/src/lib.rs:2201` **fn** `with_interceptor` — Подключить Service Worker перехватчик fetch-запросов. Проверяется
+`crates/network/src/lib.rs:2210` **fn** `with_pool` — Подключить shared `ConnectionPool`. По умолчанию у каждого `HttpClient`
+`crates/network/src/lib.rs:2220` **fn** `with_h2_pool` — Подключить shared `H2Pool` (RFC 9113 §9.1.1). По умолчанию HTTP/2
+`crates/network/src/lib.rs:2229` **fn** `with_dns_resolver` — Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
+`crates/network/src/lib.rs:2246` **fn** `with_hsts` — Подключить HSTS-store (RFC 6797). По умолчанию — нет:
+`crates/network/src/lib.rs:2262` **fn** `with_credentials` — Подключить credential-провайдер для HTTP authentication (RFC 7235 /
+`crates/network/src/lib.rs:2273` **fn** `with_tab` — Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
+`crates/network/src/lib.rs:2293` **fn** `with_mixed_content_policy` — Подключить mixed-content policy (W3C Mixed Content §5). По умолчанию
+`crates/network/src/lib.rs:2317` **fn** `with_content_decoder` — Зарегистрировать `ContentDecoder` для одного encoding. Декодер попадает
+`crates/network/src/lib.rs:2363` **fn** `with_cors_cache` — Запросить только диапазон байт ресурса (RFC 7233). Если сервер
+`crates/network/src/lib.rs:2375` **fn** `with_cookie_jar` — Attach a cookie store. The provider receives `Cookie:` injection
+`crates/network/src/lib.rs:2399` **fn** `with_http_cache` — Подключить HTTP response cache (RFC 7234)
+`crates/network/src/lib.rs:2410` **fn** `with_proxy` — Подключить HTTP прокси (RFC 7230). По умолчанию прокси не подключён — запросы
+`crates/network/src/lib.rs:2423` **fn** `with_socks5_proxy` — Подключить SOCKS5 прокси (RFC 1928) для туннелирования всех TCP-соединений
+`crates/network/src/lib.rs:2434` **fn** `with_fingerprint_profile` — Установить HTTP fingerprinting profile (Standard/Strict/Tor) для Chrome-matching
+`crates/network/src/lib.rs:2442` **fn** `fingerprint_profile` — Получить текущий HTTP fingerprinting profile
+`crates/network/src/lib.rs:2453` **fn** `with_tls_profile` — Override the TLS fingerprint profile independently of the HTTP profile
+`crates/network/src/lib.rs:2459` **fn** `tls_profile` — Получить текущий TLS fingerprinting profile
+`crates/network/src/lib.rs:2493` **fn** `fetch_cors` — CORS-enabled fetch для cross-origin subresource (Fetch §3-§4)
+`crates/network/src/lib.rs:2542` **fn** `fetch_range`
+`crates/network/src/lib.rs:2610` **fn** `fetch_multi_range` — Multi-range запрос (RFC 7233 §4.1). Один request на несколько
+`crates/network/src/lib.rs:2697` **fn** `fetch_subresource` — Загрузить подресурс с проверкой mixed-content по подключённой
+`crates/network/src/lib.rs:2797` **fn** `fetch_conditional` — Perform a **conditional GET** (RFC 7232) and report whether the resource
+`crates/network/src/lib.rs:2853` **enum** `ConditionalFetch` — Outcome of [`HttpClient::fetch_conditional`]
+`crates/network/src/lib.rs:2873` **fn** `fetch_page` — Fetch a top-level page and return the response body together with all
+`crates/network/src/lib.rs:2934` **fn** `fetch_page_streaming` — Как [`HttpClient::fetch_page`], но тело финального 2xx-ответа стримится
+`crates/network/src/lib.rs:3463` **struct** `InMemoryFetchInterceptor` — In-memory реализация `FetchInterceptor` для тестов без SQLite
+`crates/network/src/lib.rs:3469` **fn** `new`
+`crates/network/src/lib.rs:3476` **fn** `insert` — Добавить запись: ответ для (origin, url) берётся из кэша без сети
 `crates/network/src/mixed_content.rs:33` **enum** `RequestDestination` — Назначение подресурса по Fetch spec §3.2.7 «request destination» —
 `crates/network/src/mixed_content.rs:59` **enum** `MixedContentLevel` — Mixed-content уровень для запроса в secure-контексте
 `crates/network/src/mixed_content.rs:75` **fn** `is_strict_blocked` — Должны ли мы блокировать запрос по строгому режиму. По умолчанию
@@ -2591,7 +2595,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/display_list.rs:3015` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
 `crates/engine/paint/src/display_list.rs:3144` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
 `crates/engine/paint/src/display_list.rs:3899` **fn** `point_on_resize_grip` — Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента
-`crates/engine/paint/src/display_list.rs:13379` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
+`crates/engine/paint/src/display_list.rs:13674` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
 `crates/engine/paint/src/display_list_cache.rs:21` **struct** `CachedDisplayLayer` — Cached display list for a stacking context or page subtree
 `crates/engine/paint/src/display_list_cache.rs:45` **struct** `DisplayListCache` — LRU cache that maps `NodeId` (u32) to a pre-built `Vec<DisplayCommand>`
 `crates/engine/paint/src/display_list_cache.rs:59` **fn** `new` — Create a cache with the default 32 MB budget
@@ -4133,4 +4137,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4062 symbols in 22 crates*
+*Total: 4066 symbols in 22 crates*
