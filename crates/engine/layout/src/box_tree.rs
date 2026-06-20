@@ -831,38 +831,44 @@ fn parse_dominant_baseline(attr: Option<&str>) -> SvgDominantBaseline {
     }
 }
 
-/// Computes viewBox-to-CSS-px transform using CSS Images L3 §5.5 `object-fit` /
-/// `object-position` semantics. Returns `(scale_x, scale_y, offset_x, offset_y)` where
-/// offsets are relative to the SVG box's top-left corner (viewBox min_x/min_y included).
-///
-/// `object-position` controls placement of the (possibly smaller or overflowing) scaled
-/// content inside the box via free-space fractions.
-fn compute_object_fit_transform(
+/// Maps an SVG `viewBox` into the SVG viewport using the `preserveAspectRatio`
+/// attribute (SVG 1.1 §7.8). Inline `<svg>` ignores CSS `object-fit`/`object-position`
+/// (those govern replaced content only); browsers fit the viewBox per this attribute.
+/// Returns `(scale_x, scale_y, origin_dx, origin_dy)` where `origin_d*` is the
+/// document-space offset of the viewBox origin from the viewport's top-left corner —
+/// same shape as [`compute_object_fit_transform`] so the caller is unchanged. BUG-198.
+fn compute_preserve_aspect_ratio_transform(
     view_box: &ViewBox,
     box_w: f32,
     box_h: f32,
-    fit: crate::style::ObjectFit,
-    position: &crate::style::ObjectPosition,
+    par: &PreserveAspectRatio,
 ) -> (f32, f32, f32, f32) {
-    use crate::style::ObjectFit;
     let vb_w = view_box.width.max(0.001);
     let vb_h = view_box.height.max(0.001);
     let raw_sx = box_w / vb_w;
     let raw_sy = box_h / vb_h;
 
-    let (sx, sy) = match fit {
-        ObjectFit::Fill      => (raw_sx, raw_sy),
-        ObjectFit::Contain   => { let s = raw_sx.min(raw_sy); (s, s) }
-        ObjectFit::Cover     => { let s = raw_sx.max(raw_sy); (s, s) }
-        ObjectFit::None      => (1.0, 1.0),
-        ObjectFit::ScaleDown => { let s = raw_sx.min(raw_sy).min(1.0); (s, s) }
+    // `meet` → uniform scale fitting inside (contain); `slice` → uniform scale
+    // covering (cover). Lumen has no `preserveAspectRatio="none"` variant, so
+    // non-uniform fill never occurs here.
+    let (sx, sy) = match par.meet_or_slice {
+        SvgMeetOrSlice::Meet  => { let s = raw_sx.min(raw_sy); (s, s) }
+        SvgMeetOrSlice::Slice => { let s = raw_sx.max(raw_sy); (s, s) }
     };
 
-    // Free space = room remaining after placing scaled content (may be negative for Cover/None).
+    // Align the scaled viewBox within the free space (may be negative for `slice`).
     let free_x = box_w - vb_w * sx;
     let free_y = box_h - vb_h * sy;
-    let ox = position.x.resolve(free_x);
-    let oy = position.y.resolve(free_y);
+    let ox = match par.align_x {
+        SvgAlignX::Min => 0.0,
+        SvgAlignX::Mid => free_x * 0.5,
+        SvgAlignX::Max => free_x,
+    };
+    let oy = match par.align_y {
+        SvgAlignY::Min => 0.0,
+        SvgAlignY::Mid => free_y * 0.5,
+        SvgAlignY::Max => free_y,
+    };
 
     (sx, sy, ox - view_box.min_x * sx, oy - view_box.min_y * sy)
 }
@@ -1127,10 +1133,15 @@ fn lay_out_svg_root(b: &mut LayoutBox, start_x: f32, start_y: f32, avail_w: f32,
     b.rect.x = start_x + margin_left;
     b.rect.y = start_y + margin_top;
 
-    let view_box = if let BoxKind::SvgRoot { view_box, .. } = &b.kind {
-        view_box.clone()
+    let (view_box, preserve_aspect_ratio) = if let BoxKind::SvgRoot { view_box, preserve_aspect_ratio, .. } = &b.kind {
+        (view_box.clone(), preserve_aspect_ratio.clone())
     } else {
-        None
+        // SVG default per §7.8: xMidYMid meet (centered, uniform fit-inside).
+        (None, PreserveAspectRatio {
+            align_x: SvgAlignX::Mid,
+            align_y: SvgAlignY::Mid,
+            meet_or_slice: SvgMeetOrSlice::Meet,
+        })
     };
 
     // SVG intrinsic size: CSS width/height wins, then viewBox dimensions, then SVG defaults.
@@ -1147,15 +1158,19 @@ fn lay_out_svg_root(b: &mut LayoutBox, start_x: f32, start_y: f32, avail_w: f32,
     b.rect.width  = svg_w;
     b.rect.height = svg_h;
 
-    // viewBox → CSS-px transform via CSS Images L3 §5.5 `object-fit` / `object-position`.
-    // For inline SVG painted as a replaced element, browsers map the viewBox into the
-    // viewport according to object-fit, overriding the SVG `preserveAspectRatio` attribute
-    // (Edge ground truth, TEST-70). The initial value `fill` therefore stretches the viewBox
-    // non-uniformly to fill the box; `contain`/`cover`/`none`/`scale-down` follow §5.5. BUG-110.
+    // viewBox → CSS-px transform via the SVG `preserveAspectRatio` attribute
+    // (SVG 1.1 §7.8). An inline `<svg>` is NOT a CSS replaced element, so CSS
+    // `object-fit`/`object-position` do NOT apply to it — Chrome/Edge fit the
+    // viewBox purely by `preserveAspectRatio` (verified pixel-for-pixel against
+    // the Edge TEST-70 reference: every box renders as `meet`/contain, the named
+    // `object-fit` classes have no effect). The earlier BUG-110 wiring routed the
+    // viewBox through object-fit, stretching/cropping the viewBox in ways Edge
+    // never does (BUG-198). object-fit still applies to `<img>`-embedded SVG via
+    // the DrawImage path.
     let (scale_x, scale_y, origin_x, origin_y) = match &view_box {
         Some(vb) if vb.width > 0.0 && vb.height > 0.0 => {
             let (sx, sy, ox_delta, oy_delta) =
-                compute_object_fit_transform(vb, svg_w, svg_h, b.style.object_fit, &b.style.object_position);
+                compute_preserve_aspect_ratio_transform(vb, svg_w, svg_h, &preserve_aspect_ratio);
             (sx, sy, b.rect.x + ox_delta, b.rect.y + oy_delta)
         }
         _ => (1.0, 1.0, b.rect.x, b.rect.y),
@@ -13986,63 +14001,59 @@ mod tests {
         assert!(gap.abs() < 0.5, "separate mode: no overlap, gap should be 0, got {gap}");
     }
 
-    // ─── object-fit / object-position ────────────────────────────────────────
+    // ─── SVG preserveAspectRatio viewBox mapping (BUG-198) ────────────────────
+
+    fn par(ax: super::SvgAlignX, ay: super::SvgAlignY, ms: super::SvgMeetOrSlice) -> super::PreserveAspectRatio {
+        super::PreserveAspectRatio { align_x: ax, align_y: ay, meet_or_slice: ms }
+    }
 
     #[test]
-    fn object_fit_contain_scales_uniformly() {
-        // viewBox="0 0 200 100", box 200×200 → contain → s = min(1.0, 2.0) = 1.0; height fits.
+    fn preserve_aspect_ratio_meet_letterboxes_uniformly() {
+        // meet → contain. viewBox="0 0 200 100" into 200×200 → s = min(1.0, 2.0) = 1.0;
+        // xMidYMid centers the 200×100 content vertically: free_y = 100 → oy = 50.
         let vb = super::ViewBox { min_x: 0.0, min_y: 0.0, width: 200.0, height: 100.0 };
-        let pos = crate::style::ObjectPosition::default(); // 50% 50%
-        let (sx, sy, ox, oy) = super::compute_object_fit_transform(
-            &vb, 200.0, 200.0, crate::style::ObjectFit::Contain, &pos,
+        let (sx, sy, _ox, oy) = super::compute_preserve_aspect_ratio_transform(
+            &vb, 200.0, 200.0, &par(super::SvgAlignX::Mid, super::SvgAlignY::Mid, super::SvgMeetOrSlice::Meet),
         );
-        assert!((sx - sy).abs() < 1e-4, "contain must use uniform scale, got sx={sx} sy={sy}");
-        // free_y = 200 - 100*1.0 = 100; object-position 50% → oy = 50.
-        assert!((oy - 50.0).abs() < 1e-4, "contain 50% vertical offset: expected 50, got {oy}");
-        let _ = ox;
+        assert!((sx - sy).abs() < 1e-4, "meet must use uniform scale, got sx={sx} sy={sy}");
+        assert!((sx - 1.0).abs() < 1e-4, "meet s expected 1.0, got {sx}");
+        assert!((oy - 50.0).abs() < 1e-4, "xMidYMid vertical offset: expected 50, got {oy}");
     }
 
     #[test]
-    fn object_fit_cover_overflows() {
-        // viewBox="0 0 100 200", box 200×200 → cover → s = max(2.0, 1.0) = 2.0; width overflows.
+    fn preserve_aspect_ratio_slice_covers() {
+        // slice → cover. viewBox="0 0 100 200" into 200×200 → s = max(2.0, 1.0) = 2.0;
+        // scaled width = 200 → no horizontal free space.
         let vb = super::ViewBox { min_x: 0.0, min_y: 0.0, width: 100.0, height: 200.0 };
-        let pos = crate::style::ObjectPosition::default(); // 50% 50%
-        let (sx, sy, ox, _oy) = super::compute_object_fit_transform(
-            &vb, 200.0, 200.0, crate::style::ObjectFit::Cover, &pos,
+        let (sx, sy, ox, _oy) = super::compute_preserve_aspect_ratio_transform(
+            &vb, 200.0, 200.0, &par(super::SvgAlignX::Mid, super::SvgAlignY::Mid, super::SvgMeetOrSlice::Slice),
         );
-        assert!((sx - 2.0).abs() < 1e-4, "cover sx expected 2.0, got {sx}");
-        assert!((sy - 2.0).abs() < 1e-4, "cover sy expected 2.0, got {sy}");
-        // scaled_vb_width = 100*2 = 200 → free_x = 0; offset = 0.
-        assert!(ox.abs() < 1e-4, "cover: no horizontal free space, ox should be 0, got {ox}");
+        assert!((sx - 2.0).abs() < 1e-4, "slice sx expected 2.0, got {sx}");
+        assert!((sy - 2.0).abs() < 1e-4, "slice sy expected 2.0, got {sy}");
+        assert!(ox.abs() < 1e-4, "slice: no horizontal free space, ox should be 0, got {ox}");
     }
 
     #[test]
-    fn object_fit_fill_stretches_non_uniformly() {
-        // BUG-110: object-fit: fill on an SVG viewBox must stretch the viewBox to fill the
-        // box (non-uniform scale), overriding the SVG `preserveAspectRatio` attribute — not
-        // letterbox like contain. viewBox="0 0 200 80" into 160×120 box → sx=0.8, sy=1.5.
-        let vb = super::ViewBox { min_x: 0.0, min_y: 0.0, width: 200.0, height: 80.0 };
-        let pos = crate::style::ObjectPosition::default(); // 50% 50%
-        let (sx, sy, ox, oy) = super::compute_object_fit_transform(
-            &vb, 160.0, 120.0, crate::style::ObjectFit::Fill, &pos,
+    fn preserve_aspect_ratio_xminymin_top_left() {
+        // xMinYMin → top-left alignment, no offset from the box edge.
+        let vb = super::ViewBox { min_x: 0.0, min_y: 0.0, width: 200.0, height: 100.0 };
+        let (_sx, _sy, ox, oy) = super::compute_preserve_aspect_ratio_transform(
+            &vb, 200.0, 200.0, &par(super::SvgAlignX::Min, super::SvgAlignY::Min, super::SvgMeetOrSlice::Meet),
         );
-        assert!((sx - 0.8).abs() < 1e-4, "fill sx expected 0.8, got {sx}");
-        assert!((sy - 1.5).abs() < 1e-4, "fill sy expected 1.5, got {sy}");
-        assert!((sx - sy).abs() > 0.1, "fill must NOT use uniform scale (would be contain)");
-        // Stretched content exactly fills the box → no free space, no offset.
-        assert!(ox.abs() < 1e-4, "fill ox should be 0, got {ox}");
-        assert!(oy.abs() < 1e-4, "fill oy should be 0, got {oy}");
+        assert!(ox.abs() < 1e-4, "xMin offset should be 0, got {ox}");
+        assert!(oy.abs() < 1e-4, "YMin offset should be 0, got {oy}");
     }
 
     #[test]
-    fn svg_root_fill_viewbox_stretches_to_box() {
-        // BUG-110 end-to-end: an inline SVG with object-fit: fill and a wide viewBox should
-        // produce a background <rect> stretched to the full SVG box (160×120), not letterboxed.
+    fn svg_root_inline_svg_ignores_object_fit_uses_preserve_aspect_ratio() {
+        // BUG-198: object-fit on an inline <svg> has NO effect — the viewBox is mapped by
+        // preserveAspectRatio (default xMidYMid meet). A wide viewBox in a tall box must be
+        // letterboxed (contain), NOT stretched, even with `object-fit:fill` set.
+        // viewBox="0 0 200 80" into 160×120 → meet scale = min(0.8, 1.5) = 0.8 → rect 160×64.
         let html = r#"<svg viewBox="0 0 200 80" style="width:160px;height:120px;object-fit:fill;"><rect x="0" y="0" width="200" height="80"/></svg>"#;
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse("");
         let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
-        // Walk the tree to the first SVG shape box (root → html → body → svg → rect).
         fn find_shape(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
             if matches!(b.kind, super::BoxKind::SvgShape { .. }) {
                 return Some(b);
@@ -14050,8 +14061,8 @@ mod tests {
             b.children.iter().find_map(find_shape)
         }
         let rect = find_shape(&root).expect("rect shape");
-        assert!((rect.rect.width - 160.0).abs() < 1e-3, "fill rect width expected 160, got {}", rect.rect.width);
-        assert!((rect.rect.height - 120.0).abs() < 1e-3, "fill rect height expected 120 (stretched), got {}", rect.rect.height);
+        assert!((rect.rect.width - 160.0).abs() < 1e-3, "meet rect width expected 160, got {}", rect.rect.width);
+        assert!((rect.rect.height - 64.0).abs() < 1e-3, "meet rect height expected 64 (letterboxed), got {}", rect.rect.height);
     }
 
     #[test]
@@ -14089,58 +14100,15 @@ mod tests {
     }
 
     #[test]
-    fn object_fit_none_no_scaling() {
-        // viewBox="0 0 50 50", box 200×200 → none → sx=sy=1.0; free = 150×150; 50% → 75.
-        let vb = super::ViewBox { min_x: 0.0, min_y: 0.0, width: 50.0, height: 50.0 };
-        let pos = crate::style::ObjectPosition::default(); // 50% 50%
-        let (sx, sy, ox, oy) = super::compute_object_fit_transform(
-            &vb, 200.0, 200.0, crate::style::ObjectFit::None, &pos,
+    fn preserve_aspect_ratio_meet_scales_up_small_viewbox() {
+        // A viewBox smaller than the box scales UP under meet (no clamp at 1.0, unlike the
+        // old object-fit:none/scale-down). viewBox="0 0 80 60" into 160×120 → s = min(2.0, 2.0) = 2.0.
+        let vb = super::ViewBox { min_x: 0.0, min_y: 0.0, width: 80.0, height: 60.0 };
+        let (sx, sy, _ox, _oy) = super::compute_preserve_aspect_ratio_transform(
+            &vb, 160.0, 120.0, &par(super::SvgAlignX::Mid, super::SvgAlignY::Mid, super::SvgMeetOrSlice::Meet),
         );
-        assert!((sx - 1.0).abs() < 1e-4, "none sx=1.0, got {sx}");
-        assert!((sy - 1.0).abs() < 1e-4, "none sy=1.0, got {sy}");
-        assert!((ox - 75.0).abs() < 1e-4, "none 50% x offset = 75, got {ox}");
-        assert!((oy - 75.0).abs() < 1e-4, "none 50% y offset = 75, got {oy}");
-    }
-
-    #[test]
-    fn object_fit_scale_down_clamps_to_one() {
-        // viewBox="0 0 50 50", box 200×200 → scale-down: min(4.0, 1.0) = 1.0 (same as none).
-        let vb = super::ViewBox { min_x: 0.0, min_y: 0.0, width: 50.0, height: 50.0 };
-        let pos = crate::style::ObjectPosition::default();
-        let (sx, sy, _, _) = super::compute_object_fit_transform(
-            &vb, 200.0, 200.0, crate::style::ObjectFit::ScaleDown, &pos,
-        );
-        assert!((sx - 1.0).abs() < 1e-4, "scale-down clamps at 1 when smaller, got {sx}");
-        assert!((sy - 1.0).abs() < 1e-4, "scale-down clamps at 1 when smaller, got {sy}");
-    }
-
-    #[test]
-    fn object_position_top_left_zero_offset() {
-        // object-position: 0% 0% → top-left; no offset from the box edge.
-        let vb = super::ViewBox { min_x: 0.0, min_y: 0.0, width: 100.0, height: 100.0 };
-        let pos = crate::style::ObjectPosition {
-            x: crate::style::PositionComponent::Percent(0.0),
-            y: crate::style::PositionComponent::Percent(0.0),
-        };
-        let (_, _, ox, oy) = super::compute_object_fit_transform(
-            &vb, 200.0, 200.0, crate::style::ObjectFit::Contain, &pos,
-        );
-        // sx = min(2.0, 2.0) = 2.0; scaled_vb = 200×200; free = 0×0; ox = oy = 0.
-        assert!(ox.abs() < 1e-4, "top-left ox=0, got {ox}");
-        assert!(oy.abs() < 1e-4, "top-left oy=0, got {oy}");
-    }
-
-    #[test]
-    fn object_fit_scale_down_larger_than_box() {
-        // viewBox="0 0 300 300", box 200×200 → scale-down: min(contain 0.666, 1.0) = 0.666.
-        let vb = super::ViewBox { min_x: 0.0, min_y: 0.0, width: 300.0, height: 300.0 };
-        let pos = crate::style::ObjectPosition::default();
-        let (sx, sy, _, _) = super::compute_object_fit_transform(
-            &vb, 200.0, 200.0, crate::style::ObjectFit::ScaleDown, &pos,
-        );
-        let expected = (200.0_f32 / 300.0).min(1.0);
-        assert!((sx - expected).abs() < 1e-4, "scale-down with large content: sx={sx}, expected={expected}");
-        assert!((sx - sy).abs() < 1e-4, "scale-down must be uniform");
+        assert!((sx - 2.0).abs() < 1e-4, "meet scales small viewBox up to 2.0, got {sx}");
+        assert!((sx - sy).abs() < 1e-4, "meet must be uniform");
     }
 
     // ── masonry-auto-flow integration tests ──────────────────────────────────
