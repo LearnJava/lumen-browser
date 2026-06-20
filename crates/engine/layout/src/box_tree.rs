@@ -571,6 +571,40 @@ fn parse_view_box(doc: &Document, id: NodeId) -> Option<ViewBox> {
     Some(ViewBox { min_x: vals[0], min_y: vals[1], width: vals[2], height: vals[3] })
 }
 
+/// Parses an SVG `points="x1,y1 x2,y2 ..."` list (commas and/or whitespace as
+/// separators, SVG 1.1 §9.7) into a flat coordinate list, then groups it into
+/// `(x, y)` pairs. A trailing lone coordinate is dropped.
+fn parse_svg_points(s: &str) -> Vec<(f32, f32)> {
+    let nums: Vec<f32> = s
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|p| !p.is_empty())
+        .filter_map(|p| p.parse::<f32>().ok())
+        .collect();
+    nums.chunks_exact(2).map(|c| (c[0], c[1])).collect()
+}
+
+/// Builds an SVG path `d` string from a `points` list. `<polygon>` closes the
+/// contour with `Z`; `<polyline>` leaves it open. Returns `None` when fewer than
+/// two points are present (nothing renderable). Reusing the `<path>` pipeline
+/// keeps polygon/polyline fill, stroke and joins consistent with `<path>`.
+fn points_to_path_d(points: &[(f32, f32)], close: bool) -> Option<String> {
+    if points.len() < 2 {
+        return None;
+    }
+    let mut d = String::with_capacity(points.len() * 12);
+    for (i, (x, y)) in points.iter().enumerate() {
+        if i == 0 {
+            d.push_str(&format!("M {x} {y}"));
+        } else {
+            d.push_str(&format!(" L {x} {y}"));
+        }
+    }
+    if close {
+        d.push_str(" Z");
+    }
+    Some(d)
+}
+
 /// Parses the SVG `preserveAspectRatio` attribute.
 /// Format: `[defer] <align> [meet|slice]`
 /// Default is `xMidYMid meet` (center, uniform scale, fit inside).
@@ -1112,6 +1146,34 @@ fn process_svg_node(
                     scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
                 });
             }
+
+            // The HTML5 parser does not honour `<use/>` self-closing (it is not a
+            // void element), so sibling SVG elements written after a `<use>` are
+            // mis-nested as its DOM children. Scan them into `out` as siblings —
+            // mirror the rect/circle workaround. A `<use>`'s rendered content comes
+            // from its target, never from its DOM children, so this is unambiguous.
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+        }
+        "polygon" | "polyline" => {
+            // SVG 1.1 §9.6/§9.7: render via the `<path>` pipeline. A polygon
+            // auto-closes its contour (`Z`); a polyline stays open.
+            let close = name.local.eq_ignore_ascii_case("polygon");
+            let points = parse_svg_points(doc.get(child_id).get_attr("points").unwrap_or(""));
+            if let Some(d) = points_to_path_d(&points, close) {
+                out.push(LayoutBox {
+                    node: child_id, rect: Rect::ZERO, style,
+                    kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone() },
+                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+                });
+            }
+            // Mis-nested siblings (HTML5 parser wraps them inside the self-closed shape).
+            collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
+        }
+        "defs" | "symbol" => {
+            // `<defs>` (SVG 2 §5.5) and `<symbol>` (§5.7) are never rendered
+            // directly when encountered as a direct child — their content is
+            // painted only when instantiated through `<use>`. (The `<use>` arm
+            // collects a symbol's children explicitly, so referencing still works.)
         }
         _ => {
             // Unknown SVG element: skip self, but scan children for shapes.
@@ -1202,15 +1264,20 @@ fn lay_out_svg_element_position(b: &mut LayoutBox, ox: f32, oy: f32, sx: f32, sy
     composed.compose(&element_transform);
 
     if let BoxKind::SvgShape { ref shape, .. } = b.kind {
-        // Compute shape bbox in user coordinates, then apply viewBox scaling.
+        // Compute the shape bbox in user coordinates, apply element/group
+        // transforms in user space, THEN map user→document via the viewport
+        // (ox, oy, sx, sy). Order matters: a `scale`/`rotate` element transform
+        // must operate in the SVG local coordinate system, NOT scale the
+        // document-space viewport origin. Baking ox/oy in first (the old order)
+        // made `scale(0.75)` on a `<use>` in a low SVG drift the clone upward by
+        // 0.75·origin_y (BUG-201 row 3: scaled tiles jumped from y≈347 to y≈260).
         let mut bbox = svg_shape_bbox(shape, 0.0, 0.0, 1.0, 1.0); // User coords
-        // Apply viewBox scaling and origin offset first.
+        bbox = apply_transform_to_bbox(&bbox, &composed);
         bbox.x = ox + bbox.x * sx;
         bbox.y = oy + bbox.y * sy;
         bbox.width *= sx;
         bbox.height *= sy;
-        // Then apply composed transform.
-        b.rect = apply_transform_to_bbox(&bbox, &composed);
+        b.rect = bbox;
         // BUG-174: `<path>` has a ZERO bbox here (its document-space bounds are
         // computed at paint time from the `d` data). `apply_transform_to_bbox`
         // collapses a zero-size bbox to `Rect::ZERO`, discarding the SVG viewport
@@ -13050,6 +13117,135 @@ mod tests {
             b.children.iter().any(has_any_shape)
         }
         assert!(has_any_shape(&root), "<symbol> target via <use> should produce shape in layout");
+    }
+
+    #[test]
+    fn parse_svg_points_handles_commas_and_spaces() {
+        // SVG `points` accepts commas and/or whitespace between numbers.
+        assert_eq!(super::parse_svg_points("20,5 25,17 38,17"), vec![(20.0, 5.0), (25.0, 17.0), (38.0, 17.0)]);
+        assert_eq!(super::parse_svg_points("0 0 10 10"), vec![(0.0, 0.0), (10.0, 10.0)]);
+        // A trailing lone coordinate is dropped (no half-pair).
+        assert_eq!(super::parse_svg_points("1 2 3"), vec![(1.0, 2.0)]);
+    }
+
+    #[test]
+    fn points_to_path_d_closes_polygon_but_not_polyline() {
+        let pts = vec![(0.0, 0.0), (10.0, 0.0), (5.0, 8.0)];
+        assert_eq!(super::points_to_path_d(&pts, true).unwrap(), "M 0 0 L 10 0 L 5 8 Z");
+        assert_eq!(super::points_to_path_d(&pts, false).unwrap(), "M 0 0 L 10 0 L 5 8");
+        // Fewer than two points → nothing to render.
+        assert!(super::points_to_path_d(&[(1.0, 1.0)], true).is_none());
+    }
+
+    #[test]
+    fn svg_polygon_renders_as_path_shape() {
+        // BUG-201: <polygon> had no case and rendered nothing. It must now appear
+        // as a Path-kind SVG shape (closed contour).
+        let html = "<svg><polygon points=\"20,5 25,17 38,17 27,25 20,30\" style=\"fill:#f39c12;\"/></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn has_path(b: &super::LayoutBox) -> bool {
+            if matches!(&b.kind, super::BoxKind::SvgShape { shape: super::SvgShapeKind::Path { .. }, .. }) { return true; }
+            b.children.iter().any(has_path)
+        }
+        assert!(has_path(&root), "<polygon> should produce a Path-kind SVG shape");
+    }
+
+    #[test]
+    fn svg_polygon_inside_symbol_renders_via_use() {
+        // BUG-201 row 2b: <symbol> containing a <polygon>, instantiated by <use>.
+        // The symbol must not render directly, but <use> must clone its polygon.
+        let html = "<svg width=\"200\" height=\"120\">\
+                    <symbol id=\"star\"><polygon points=\"20,5 25,17 38,17 27,25 20,30\" style=\"fill:#f39c12;\"/></symbol>\
+                    <use href=\"#star\" x=\"10\" y=\"10\"/></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn count_paths(b: &super::LayoutBox) -> usize {
+            let self_count = usize::from(matches!(&b.kind, super::BoxKind::SvgShape { shape: super::SvgShapeKind::Path { .. }, .. }));
+            self_count + b.children.iter().map(count_paths).sum::<usize>()
+        }
+        // Exactly one path: the <use> clone. The <symbol> itself must NOT render.
+        assert_eq!(count_paths(&root), 1, "polygon should render once (via <use>), not directly from <symbol>");
+    }
+
+    #[test]
+    fn svg_use_multiple_siblings_all_clone() {
+        // BUG-201: the HTML5 parser does not honour `<use/>` self-closing, so
+        // sibling `<use>` elements nest as DOM children. Both must still clone.
+        let html = "<svg width=\"300\" height=\"120\">\
+                    <defs><rect id=\"r1\" x=\"0\" y=\"0\" width=\"50\" height=\"35\"/></defs>\
+                    <use href=\"#r1\" x=\"20\" y=\"20\"/>\
+                    <use href=\"#r1\" x=\"100\" y=\"60\"/></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn collect_rects(b: &super::LayoutBox, acc: &mut Vec<super::Rect>) {
+            if matches!(&b.kind, super::BoxKind::SvgShape { shape: super::SvgShapeKind::Rect { .. }, .. }) {
+                acc.push(b.rect);
+            }
+            b.children.iter().for_each(|c| collect_rects(c, acc));
+        }
+        let mut rects = Vec::new();
+        collect_rects(&root, &mut rects);
+        // Two clones at distinct positions; original in <defs> stays hidden.
+        assert_eq!(rects.len(), 2, "both <use> siblings should clone; got {rects:?}");
+        assert!(rects.iter().any(|r| (r.x - 20.0).abs() < 0.1 && (r.y - 20.0).abs() < 0.1), "clone @ (20,20) missing: {rects:?}");
+        assert!(rects.iter().any(|r| (r.x - 100.0).abs() < 0.1 && (r.y - 60.0).abs() < 0.1), "clone @ (100,60) missing: {rects:?}");
+    }
+
+    #[test]
+    fn svg_use_scale_transform_does_not_scale_viewport_origin() {
+        // BUG-201 row 3: an element `transform="scale(k)"` must operate in SVG
+        // user space, NOT scale the document-space viewport origin. The svg sits
+        // below the page origin so the bug (scaling oy) is observable.
+        let html = "<div style=\"height:300px\"></div>\
+                    <svg width=\"460\" height=\"130\">\
+                    <defs><rect id=\"tile\" x=\"0\" y=\"0\" width=\"40\" height=\"40\"/></defs>\
+                    <use href=\"#tile\" x=\"270\" y=\"20\" transform=\"scale(0.75)\"/></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 800.0));
+
+        fn find_svg_root(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::SvgRoot { .. }) { return Some(b); }
+            b.children.iter().find_map(find_svg_root)
+        }
+        fn first_rect(b: &super::LayoutBox) -> Option<super::Rect> {
+            if matches!(&b.kind, super::BoxKind::SvgShape { shape: super::SvgShapeKind::Rect { .. }, .. }) {
+                return Some(b.rect);
+            }
+            b.children.iter().find_map(first_rect)
+        }
+        let svg = find_svg_root(&root).expect("SvgRoot");
+        let rect = first_rect(&root).expect("scaled tile rect");
+        // scale(0.75) ∘ translate(270,20) applied to (0,0) = (202.5, 15) in the
+        // SVG local frame, then offset by the viewport doc-origin (svg.rect.x/y).
+        let expected_x = svg.rect.x + 202.5;
+        let expected_y = svg.rect.y + 15.0;
+        assert!((rect.x - expected_x).abs() < 0.2, "scaled tile x: got {}, expected {}", rect.x, expected_x);
+        assert!((rect.y - expected_y).abs() < 0.2, "scaled tile y (origin must not be scaled): got {}, expected {}", rect.y, expected_y);
+        assert!((rect.width - 30.0).abs() < 0.2 && (rect.height - 30.0).abs() < 0.2, "scaled tile size 30×30: got {}×{}", rect.width, rect.height);
+    }
+
+    #[test]
+    fn svg_defs_children_do_not_render_directly() {
+        // BUG-201: <defs> content is invisible until referenced. A <rect> inside
+        // <defs> with no <use> must produce no shape.
+        let html = "<svg><defs><rect id=\"r1\" x=\"0\" y=\"0\" width=\"50\" height=\"35\"/></defs></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn has_any_shape(b: &super::LayoutBox) -> bool {
+            if matches!(b.kind, super::BoxKind::SvgShape { .. }) { return true; }
+            b.children.iter().any(has_any_shape)
+        }
+        assert!(!has_any_shape(&root), "<defs> children must not render directly");
     }
 
     #[test]
