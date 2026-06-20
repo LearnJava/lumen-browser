@@ -1,8 +1,18 @@
 # BUG-223 — `lumen-network-service` не компилируется: non-exhaustive match по `IpcRequest`
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-06-20
 **Компонент:** network / ipc
 **Обнаружен:** 2026-06-19 (при `cargo clippy --workspace` в ходе B-1)
+
+## Исправление (2026-06-20)
+
+В `network_service.rs` добавлены явные ветки для таб-вариантов `IpcRequest`:
+`CreateTab` и `CloseTab`/`NavigateTab`/`Screenshot` (через `tab_id`-биндинг)
+отвечают `IpcResponse::TabError` — сетевой процесс вкладками не управляет.
+Match оставлен **исчерпывающим** (без `_ =>`), чтобы будущие варианты снова
+вызывали ошибку компиляции, а не молчаливое игнорирование. `cargo clippy
+--workspace --all-targets -- -D warnings` снова зелёный. Закрыто попутно при
+BUG-221 (обнаружено финальным workspace-гейтом).
 
 ## Симптом
 
