@@ -546,3 +546,295 @@ fn simd_i32x4_trunc_sat_f32x4_s() {
     code.extend(fd(248)); // i32x4.trunc_sat_f32x4_s
     assert_eq!(lanes_i32(run_v128(code)), [3, -2, i32::MAX, 0]);
 }
+
+// ── Threads / atomics (`0xFE` prefix), single-threaded semantics ────────────
+
+/// Signed-LEB encode `v` into `out` (for `i32.const` / `i64.const` immediates).
+fn leb_i(out: &mut Vec<u8>, mut v: i64) {
+    loop {
+        let b = (v & 0x7f) as u8;
+        v >>= 7;
+        let sign_set = b & 0x40 != 0;
+        if (v == 0 && !sign_set) || (v == -1 && sign_set) {
+            out.push(b);
+            break;
+        }
+        out.push(b | 0x80);
+    }
+}
+
+/// `i32.const v` bytes.
+fn i32c(v: i32) -> Vec<u8> {
+    let mut out = vec![0x41];
+    leb_i(&mut out, v as i64);
+    out
+}
+
+/// `i64.const v` bytes.
+fn i64c(v: i64) -> Vec<u8> {
+    let mut out = vec![0x42];
+    leb_i(&mut out, v);
+    out
+}
+
+/// `0xFE`-prefixed atomic op with a memarg (align hint 0 + offset 0).
+fn fe_mem(sub: u64) -> Vec<u8> {
+    let mut v = vec![0xFE];
+    leb_u(&mut v, sub);
+    v.push(0x00); // align hint
+    v.push(0x00); // static offset
+    v
+}
+
+/// Build a module with one **shared** memory (min 1, max 1 — flags `0x03`) and a
+/// single exported `f` of the given signature whose body is `code` (the trailing
+/// `end` is appended automatically).
+fn atomic_module(params: &[u8], results: &[u8], code: Vec<u8>) -> Vec<u8> {
+    let mut ty = vec![0x01, 0x60];
+    leb_u(&mut ty, params.len() as u64);
+    ty.extend_from_slice(params);
+    leb_u(&mut ty, results.len() as u64);
+    ty.extend_from_slice(results);
+    let type_sec = section(1, ty);
+    let func = section(3, vec![0x01, 0x00]);
+    // flags 0x03 = has-max + shared; min 1, max 1 page.
+    let mem = section(5, vec![0x01, 0x03, 0x01, 0x01]);
+    let export = section(7, vec![0x01, 0x01, b'f', 0x00, 0x00]);
+    let mut body = vec![0x00]; // no local decls
+    body.extend(code);
+    body.push(0x0B); // end
+    module(vec![type_sec, func, mem, export, code_section(vec![body])])
+}
+
+/// Run an atomic-module body returning a single `i32`.
+fn run_atomic_i32(code: Vec<u8>) -> i32 {
+    let m = atomic_module(&[], &[0x7F], code);
+    run(&m, "f", &[]).unwrap()[0].as_i32()
+}
+
+/// Run an atomic-module body returning a single `i64`.
+fn run_atomic_i64(code: Vec<u8>) -> i64 {
+    let m = atomic_module(&[], &[0x7E], code);
+    run(&m, "f", &[]).unwrap()[0].as_i64()
+}
+
+#[test]
+fn atomic_module_decodes_and_validates() {
+    // i32.const 0 ; i32.atomic.load — a shared-memory atomic module must decode.
+    let mut code = i32c(0);
+    code.extend(fe_mem(0x10));
+    let m = atomic_module(&[], &[0x7F], code);
+    assert!(parse_module(&m).is_ok(), "atomic module should validate");
+}
+
+#[test]
+fn atomic_store_then_load_roundtrip() {
+    // i32.atomic.store(0, 0xDEADBEEF) ; i32.atomic.load(0)
+    let mut code = i32c(0);
+    code.extend(i32c(0xDEAD_BEEFu32 as i32));
+    code.extend(fe_mem(0x17)); // i32.atomic.store
+    code.extend(i32c(0));
+    code.extend(fe_mem(0x10)); // i32.atomic.load
+    assert_eq!(run_atomic_i32(code), 0xDEAD_BEEFu32 as i32);
+}
+
+#[test]
+fn atomic_rmw_add_returns_old() {
+    // store 100 ; rmw.add(0, 23) -> old value left on stack
+    let mut code = i32c(0);
+    code.extend(i32c(100));
+    code.extend(fe_mem(0x17)); // store
+    code.extend(i32c(0));
+    code.extend(i32c(23));
+    code.extend(fe_mem(0x1E)); // i32.atomic.rmw.add -> pushes old (100)
+    assert_eq!(run_atomic_i32(code), 100);
+}
+
+#[test]
+fn atomic_rmw_add_writes_sum() {
+    // store 100 ; rmw.add(0, 23) ; drop ; load -> 123
+    let mut code = i32c(0);
+    code.extend(i32c(100));
+    code.extend(fe_mem(0x17));
+    code.extend(i32c(0));
+    code.extend(i32c(23));
+    code.extend(fe_mem(0x1E));
+    code.push(0x1A); // drop old
+    code.extend(i32c(0));
+    code.extend(fe_mem(0x10)); // load
+    assert_eq!(run_atomic_i32(code), 123);
+}
+
+#[test]
+fn atomic_rmw_sub_and_xor() {
+    // store 0b1100 ; rmw.xor(0, 0b1010) -> old 0b1100 ; mem becomes 0b0110
+    let mut code = i32c(0);
+    code.extend(i32c(0b1100));
+    code.extend(fe_mem(0x17));
+    code.extend(i32c(0));
+    code.extend(i32c(0b1010));
+    code.extend(fe_mem(0x3A)); // i32.atomic.rmw.xor
+    code.push(0x1A);
+    code.extend(i32c(0));
+    code.extend(fe_mem(0x10));
+    assert_eq!(run_atomic_i32(code), 0b0110);
+}
+
+#[test]
+fn atomic_rmw_xchg_swaps() {
+    // store 7 ; rmw.xchg(0, 99) -> old 7
+    let mut code = i32c(0);
+    code.extend(i32c(7));
+    code.extend(fe_mem(0x17));
+    code.extend(i32c(0));
+    code.extend(i32c(99));
+    code.extend(fe_mem(0x41)); // i32.atomic.rmw.xchg
+    assert_eq!(run_atomic_i32(code), 7);
+}
+
+#[test]
+fn atomic_rmw8_add_u_is_byte_wide() {
+    // store i32 0xF0 ; rmw8.add_u(0, 0x20) -> old byte 0xF0 (240); mem byte 0x10
+    let mut code = i32c(0);
+    code.extend(i32c(0xF0));
+    code.extend(fe_mem(0x17)); // full i32 store -> byte0 = 0xF0
+    code.extend(i32c(0));
+    code.extend(i32c(0x20));
+    code.extend(fe_mem(0x20)); // i32.atomic.rmw8.add_u -> old 240
+    assert_eq!(run_atomic_i32(code), 240);
+}
+
+#[test]
+fn atomic_rmw8_add_u_wraps_byte_in_memory() {
+    // After the byte rmw, the stored byte wraps: (0xF0 + 0x20) & 0xFF = 0x10.
+    let mut code = i32c(0);
+    code.extend(i32c(0xF0));
+    code.extend(fe_mem(0x17));
+    code.extend(i32c(0));
+    code.extend(i32c(0x20));
+    code.extend(fe_mem(0x20));
+    code.push(0x1A); // drop old
+    code.extend(i32c(0));
+    code.extend(fe_mem(0x12)); // i32.atomic.load8_u -> 0x10
+    assert_eq!(run_atomic_i32(code), 0x10);
+}
+
+#[test]
+fn atomic_cmpxchg_success_replaces() {
+    // store 5 ; cmpxchg(0, expected 5, replacement 9) -> old 5
+    let mut code = i32c(0);
+    code.extend(i32c(5));
+    code.extend(fe_mem(0x17));
+    code.extend(i32c(0));
+    code.extend(i32c(5)); // expected
+    code.extend(i32c(9)); // replacement
+    code.extend(fe_mem(0x48)); // i32.atomic.rmw.cmpxchg -> old 5
+    assert_eq!(run_atomic_i32(code), 5);
+}
+
+#[test]
+fn atomic_cmpxchg_success_writes_replacement() {
+    let mut code = i32c(0);
+    code.extend(i32c(5));
+    code.extend(fe_mem(0x17));
+    code.extend(i32c(0));
+    code.extend(i32c(5));
+    code.extend(i32c(9));
+    code.extend(fe_mem(0x48));
+    code.push(0x1A); // drop old
+    code.extend(i32c(0));
+    code.extend(fe_mem(0x10)); // load -> 9
+    assert_eq!(run_atomic_i32(code), 9);
+}
+
+#[test]
+fn atomic_cmpxchg_mismatch_keeps_memory() {
+    // store 5 ; cmpxchg(0, expected 7, replacement 9) -> old 5, mem stays 5
+    let mut code = i32c(0);
+    code.extend(i32c(5));
+    code.extend(fe_mem(0x17));
+    code.extend(i32c(0));
+    code.extend(i32c(7)); // wrong expected
+    code.extend(i32c(9));
+    code.extend(fe_mem(0x48));
+    code.push(0x1A); // drop old
+    code.extend(i32c(0));
+    code.extend(fe_mem(0x10)); // load -> still 5
+    assert_eq!(run_atomic_i32(code), 5);
+}
+
+#[test]
+fn atomic_i64_rmw_add() {
+    // i64.atomic.store(0, 1_000_000_000_000) ; i64.atomic.rmw.add(0, 1) -> old
+    let mut code = i32c(0);
+    code.extend(i64c(1_000_000_000_000));
+    code.extend(fe_mem(0x18)); // i64.atomic.store
+    code.extend(i32c(0));
+    code.extend(i64c(1));
+    code.extend(fe_mem(0x1F)); // i64.atomic.rmw.add -> old (i64)
+    assert_eq!(run_atomic_i64(code), 1_000_000_000_000);
+}
+
+#[test]
+fn atomic_notify_returns_zero() {
+    // memory.atomic.notify(addr 0, count 1) -> 0 woken (single agent)
+    let mut code = i32c(0);
+    code.extend(i32c(1));
+    code.extend(fe_mem(0x00));
+    assert_eq!(run_atomic_i32(code), 0);
+}
+
+#[test]
+fn atomic_wait32_not_equal_returns_one() {
+    // store 5 ; wait32(0, expected 7, timeout -1) -> 1 ("not-equal")
+    let mut code = i32c(0);
+    code.extend(i32c(5));
+    code.extend(fe_mem(0x17));
+    code.extend(i32c(0));
+    code.extend(i32c(7));
+    code.extend(i64c(-1));
+    code.extend(fe_mem(0x01)); // memory.atomic.wait32
+    assert_eq!(run_atomic_i32(code), 1);
+}
+
+#[test]
+fn atomic_wait32_equal_returns_timed_out() {
+    // store 5 ; wait32(0, expected 5, timeout 0) -> 2 ("timed-out", never blocks)
+    let mut code = i32c(0);
+    code.extend(i32c(5));
+    code.extend(fe_mem(0x17));
+    code.extend(i32c(0));
+    code.extend(i32c(5));
+    code.extend(i64c(0));
+    code.extend(fe_mem(0x01));
+    assert_eq!(run_atomic_i32(code), 2);
+}
+
+#[test]
+fn atomic_fence_is_nop() {
+    // atomic.fence ; i32.const 42
+    let mut code = vec![0xFE, 0x03, 0x00]; // atomic.fence (reserved byte)
+    code.extend(i32c(42));
+    assert_eq!(run_atomic_i32(code), 42);
+}
+
+#[test]
+fn atomic_unaligned_access_traps() {
+    // i32.atomic.load at address 1 (not 4-aligned) must trap.
+    let mut code = i32c(1);
+    code.extend(fe_mem(0x10));
+    let m = atomic_module(&[], &[0x7F], code);
+    let err = run(&m, "f", &[]).unwrap_err();
+    assert!(err.contains("unaligned"), "expected unaligned trap, got: {err}");
+}
+
+#[test]
+fn atomic_relaxed_simd_still_rejected() {
+    // Sanity: 0xFE with an unknown sub-opcode (0x7F) is rejected at decode,
+    // so threads support did not accidentally widen acceptance.
+    let mut code = vec![0xFE];
+    leb_u(&mut code, 0x7F);
+    code.extend([0x00, 0x00]);
+    let m = atomic_module(&[], &[], code);
+    assert!(parse_module(&m).is_err());
+}

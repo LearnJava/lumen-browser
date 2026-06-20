@@ -516,6 +516,9 @@ impl Instance {
                 Instr::Shuffle(lanes) => super::simd::shuffle(lanes, &mut stack)?,
                 Instr::SimdLane { sub, lane } => super::simd::lane_op(*sub, *lane, &mut stack)?,
                 Instr::Simd(sub) => super::simd::exec_simd(*sub, &mut stack)?,
+                Instr::Atomic { sub, offset } => self.exec_atomic(*sub, *offset, &mut stack)?,
+                // Single agent → no cross-thread reordering to fence against.
+                Instr::AtomicFence => {}
             }
             pc = next;
         }
@@ -612,6 +615,174 @@ impl Instance {
             _ => return Err(Trap::new("bad store opcode")),
         }
         Ok(())
+    }
+
+    // ── Threads / atomics (`0xFE` prefix) ─────────────────────────────────────
+
+    /// Execute an atomic memory op (`0xFE` sub-opcodes 0x00..=0x02, 0x10..=0x4E)
+    /// under single-threaded semantics.
+    ///
+    /// With a single agent every read-modify-write is trivially atomic, so the
+    /// loads/stores/rmw/cmpxchg ops reduce to their plain non-atomic
+    /// equivalents (returning the previous value where required). `notify` wakes
+    /// nobody (always 0); `wait32`/`wait64` cannot block (there is no other
+    /// thread to wake them), so they return `1` ("not-equal") if the cell no
+    /// longer holds the expected value, else `2` ("timed-out") immediately.
+    /// All accesses trap on a misaligned address, per the spec.
+    fn exec_atomic(
+        &mut self,
+        sub: u32,
+        offset: u32,
+        stack: &mut Vec<Value>,
+    ) -> Result<(), Trap> {
+        macro_rules! pop {
+            () => {
+                stack.pop().ok_or_else(|| Trap::new("operand stack underflow"))?
+            };
+        }
+        // notify / wait carry their operands above the address; handle first.
+        match sub {
+            // memory.atomic.notify [addr, count] -> woken (always 0).
+            0x00 => {
+                let _count = pop!().as_i32();
+                let addr = pop!().as_i32() as u32 as usize + offset as usize;
+                check_atomic_align(addr, 4)?;
+                self.read_bytes(addr, 4)?; // bounds check
+                stack.push(Value::I32(0));
+                return Ok(());
+            }
+            // memory.atomic.wait32 [addr, expected:i32, timeout:i64] -> result.
+            0x01 => {
+                let _timeout = pop!().as_i64();
+                let expected = pop!().as_i32();
+                let addr = pop!().as_i32() as u32 as usize + offset as usize;
+                check_atomic_align(addr, 4)?;
+                let cur = self.atomic_read_u64(addr, 4)? as u32 as i32;
+                stack.push(Value::I32(if cur != expected { 1 } else { 2 }));
+                return Ok(());
+            }
+            // memory.atomic.wait64 [addr, expected:i64, timeout:i64] -> result.
+            0x02 => {
+                let _timeout = pop!().as_i64();
+                let expected = pop!().as_i64();
+                let addr = pop!().as_i32() as u32 as usize + offset as usize;
+                check_atomic_align(addr, 8)?;
+                let cur = self.atomic_read_u64(addr, 8)? as i64;
+                stack.push(Value::I32(if cur != expected { 1 } else { 2 }));
+                return Ok(());
+            }
+            _ => {}
+        }
+
+        // Loads (0x10..=0x16): identical to the plain unsigned/widening loads.
+        if (0x10..=0x16).contains(&sub) {
+            let plain = match sub {
+                0x10 => 0x28, // i32.atomic.load
+                0x11 => 0x29, // i64.atomic.load
+                0x12 => 0x2D, // i32.atomic.load8_u
+                0x13 => 0x2F, // i32.atomic.load16_u
+                0x14 => 0x31, // i64.atomic.load8_u
+                0x15 => 0x33, // i64.atomic.load16_u
+                _ => 0x35,    // i64.atomic.load32_u
+            };
+            let width = atomic_width(sub);
+            let addr = pop!().as_i32() as u32 as usize + offset as usize;
+            check_atomic_align(addr, width)?;
+            let v = self.load(plain, addr)?;
+            stack.push(v);
+            return Ok(());
+        }
+
+        // Stores (0x17..=0x1D): identical to the plain truncating stores.
+        if (0x17..=0x1D).contains(&sub) {
+            let plain = match sub {
+                0x17 => 0x36, // i32.atomic.store
+                0x18 => 0x37, // i64.atomic.store
+                0x19 => 0x3A, // i32.atomic.store8
+                0x1A => 0x3B, // i32.atomic.store16
+                0x1B => 0x3C, // i64.atomic.store8
+                0x1C => 0x3D, // i64.atomic.store16
+                _ => 0x3E,    // i64.atomic.store32
+            };
+            let width = atomic_width(sub);
+            let v = pop!();
+            let addr = pop!().as_i32() as u32 as usize + offset as usize;
+            check_atomic_align(addr, width)?;
+            self.store(plain, addr, v)?;
+            return Ok(());
+        }
+
+        // Binary read-modify-write (0x1E..=0x47): add/sub/and/or/xor/xchg, each
+        // a 7-wide group (i32, i64, i32_8u, i32_16u, i64_8u, i64_16u, i64_32u).
+        if (0x1E..=0x47).contains(&sub) {
+            let group = (sub - 0x1E) / 7;
+            let (width, is64) = atomic_rmw_layout((sub - 0x1E) % 7);
+            let operand = if is64 {
+                pop!().as_i64() as u64
+            } else {
+                pop!().as_i32() as u32 as u64
+            };
+            let addr = pop!().as_i32() as u32 as usize + offset as usize;
+            check_atomic_align(addr, width)?;
+            let old = self.atomic_read_u64(addr, width)?;
+            let new = match group {
+                0 => old.wrapping_add(operand), // add
+                1 => old.wrapping_sub(operand), // sub
+                2 => old & operand,             // and
+                3 => old | operand,             // or
+                4 => old ^ operand,             // xor
+                _ => operand,                   // xchg
+            };
+            self.atomic_write_u64(addr, width, new)?;
+            stack.push(atomic_old_value(old, is64));
+            return Ok(());
+        }
+
+        // Compare-exchange (0x48..=0x4E): [addr, expected, replacement] -> old.
+        if (0x48..=0x4E).contains(&sub) {
+            let (width, is64) = atomic_rmw_layout(sub - 0x48);
+            let (replacement, expected) = if is64 {
+                let r = pop!().as_i64() as u64;
+                let e = pop!().as_i64() as u64;
+                (r, e)
+            } else {
+                let r = pop!().as_i32() as u32 as u64;
+                let e = pop!().as_i32() as u32 as u64;
+                (r, e)
+            };
+            let addr = pop!().as_i32() as u32 as usize + offset as usize;
+            check_atomic_align(addr, width)?;
+            let old = self.atomic_read_u64(addr, width)?;
+            let mask = if width == 8 {
+                u64::MAX
+            } else {
+                (1u64 << (width * 8)) - 1
+            };
+            if old == (expected & mask) {
+                self.atomic_write_u64(addr, width, replacement)?;
+            }
+            stack.push(atomic_old_value(old, is64));
+            return Ok(());
+        }
+
+        Err(Trap::new("bad atomic opcode"))
+    }
+
+    /// Read `width` bytes (1/2/4/8) at `addr` as a little-endian unsigned
+    /// integer, zero-extended into a `u64`. Bounds-checked.
+    fn atomic_read_u64(&self, addr: usize, width: usize) -> Result<u64, Trap> {
+        let b = self.read_bytes(addr, width)?;
+        let mut v = 0u64;
+        for (i, &byte) in b.iter().enumerate() {
+            v |= (byte as u64) << (8 * i);
+        }
+        Ok(v)
+    }
+
+    /// Write the low `width` bytes (1/2/4/8) of `v` little-endian at `addr`.
+    /// Bounds-checked.
+    fn atomic_write_u64(&mut self, addr: usize, width: usize, v: u64) -> Result<(), Trap> {
+        self.write_bytes(addr, &v.to_le_bytes()[..width])
     }
 
     // ── SIMD memory access ───────────────────────────────────────────────────
@@ -778,6 +949,50 @@ fn do_branch(d: u32, stack: &mut Vec<Value>, labels: &mut Vec<Label>) -> Result<
         labels.truncate(idx);
     }
     Ok(label.target)
+}
+
+/// Trap unless `addr` is naturally aligned to the access width. WebAssembly
+/// atomic accesses require the effective address to be a multiple of the access
+/// size, even though the alignment *hint* in the memarg is ignored elsewhere.
+fn check_atomic_align(addr: usize, width: usize) -> Result<(), Trap> {
+    if !addr.is_multiple_of(width) {
+        return Err(Trap::new("unaligned atomic access"));
+    }
+    Ok(())
+}
+
+/// Access width in bytes for an atomic load/store sub-opcode (`0x10..=0x1D`).
+fn atomic_width(sub: u32) -> usize {
+    match sub {
+        0x10 | 0x16 | 0x17 | 0x1D => 4, // i32.load/store, i64.load32_u/store32
+        0x11 | 0x18 => 8,               // i64.load/store
+        0x12 | 0x14 | 0x19 | 0x1B => 1, // *.load8_u / *.store8
+        _ => 2,                         // *.load16_u / *.store16
+    }
+}
+
+/// Width (bytes) and result-is-`i64` flag for the `idx`-th entry (0..=6) of an
+/// rmw/cmpxchg group: i32, i64, i32_8u, i32_16u, i64_8u, i64_16u, i64_32u.
+fn atomic_rmw_layout(idx: u32) -> (usize, bool) {
+    match idx {
+        0 => (4, false),
+        1 => (8, true),
+        2 => (1, false),
+        3 => (2, false),
+        4 => (1, true),
+        5 => (2, true),
+        _ => (4, true),
+    }
+}
+
+/// Wrap the (already zero-extended) previous value of an rmw/cmpxchg op into the
+/// op's result type — `i64` for the 64-bit shapes, `i32` otherwise.
+fn atomic_old_value(old: u64, is64: bool) -> Value {
+    if is64 {
+        Value::I64(old as i64)
+    } else {
+        Value::I32(old as u32 as i32)
+    }
 }
 
 /// Evaluate a constant initialiser expression (globals, segment offsets).
