@@ -1156,7 +1156,10 @@ impl Context2D {
     /// `drawImage(src_pixels, src_w, src_h, dx, dy, dw, dh)` — blit source image onto canvas.
     ///
     /// The source is scaled from `src_w × src_h` to `dw × dh` device pixels at offset `(dx, dy)`.
-    /// The current CTM is applied to the destination rectangle.
+    /// The current CTM is applied to the destination rectangle. Equivalent to
+    /// [`draw_image_cropped`] with a full-source crop rectangle.
+    ///
+    /// [`draw_image_cropped`]: Context2D::draw_image_cropped
     #[allow(clippy::too_many_arguments)]
     pub fn draw_image(
         &mut self,
@@ -1168,7 +1171,38 @@ impl Context2D {
         dw: f32,
         dh: f32,
     ) {
-        if src_w == 0 || src_h == 0 || dw <= 0.0 || dh <= 0.0 { return; }
+        self.draw_image_cropped(
+            src_pixels, src_w, src_h, 0.0, 0.0, src_w as f32, src_h as f32, dx, dy, dw, dh,
+        );
+    }
+
+    /// `drawImage(src, sx, sy, sw, sh, dx, dy, dw, dh)` — the 9-argument form with
+    /// source crop (HTML LS §4.12.5.1.16).
+    ///
+    /// Only the source sub-rectangle starting at `(sx, sy)` with extent `sw × sh`
+    /// (all in source pixels) is sampled, scaled into the destination rectangle
+    /// `(dx, dy, dw, dh)` (in canvas px, transformed by the current CTM). The crop
+    /// origin is honoured even when it lies partially outside the bitmap; per-pixel
+    /// source coordinates are clamped to the bitmap bounds (no wrap, no tiling).
+    /// A non-positive source or destination extent draws nothing.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_image_cropped(
+        &mut self,
+        src_pixels: &[u8],
+        src_w: u32,
+        src_h: u32,
+        sx: f32,
+        sy: f32,
+        sw: f32,
+        sh: f32,
+        dx: f32,
+        dy: f32,
+        dw: f32,
+        dh: f32,
+    ) {
+        if src_w == 0 || src_h == 0 || dw <= 0.0 || dh <= 0.0 || sw <= 0.0 || sh <= 0.0 {
+            return;
+        }
         let alpha = self.global_alpha;
         let p0 = self.apply_ctm(dx, dy);
         let p1 = self.apply_ctm(dx + dw, dy + dh);
@@ -1190,9 +1224,12 @@ impl Context2D {
                 if !self.pixel_allowed(dx_px as u32, dy_px as u32) { continue; }
                 let u = (dx_px as f32 - x0) / dest_w;
                 let v = (dy_px as f32 - y0) / dest_h;
-                let sx = (u * src_w as f32).clamp(0.0, (src_w - 1) as f32) as u32;
-                let sy = (v * src_h as f32).clamp(0.0, (src_h - 1) as f32) as u32;
-                let si = ((sy * src_w + sx) * 4) as usize;
+                // Map the destination sample into the source crop rectangle (source px).
+                let src_fx = sx + u * sw;
+                let src_fy = sy + v * sh;
+                let sxi = src_fx.floor().clamp(0.0, (src_w - 1) as f32) as u32;
+                let syi = src_fy.floor().clamp(0.0, (src_h - 1) as f32) as u32;
+                let si = ((syi * src_w + sxi) * 4) as usize;
                 if si + 3 >= src_pixels.len() { continue; }
                 let src_color = CanvasColor::rgba(
                     src_pixels[si],
@@ -1822,5 +1859,65 @@ mod tests {
         assert_eq!(ctx.color_space(), ColorSpace::Srgb);
         ctx.set_color_space(ColorSpace::DisplayP3);
         assert_eq!(ctx.color_space(), ColorSpace::DisplayP3);
+    }
+
+    // ── drawImage / draw_image_cropped ───────────────────────────────────────
+
+    /// 2×2 source bitmap with one distinct opaque colour per quadrant:
+    /// (0,0)=red (1,0)=green (0,1)=blue (1,1)=white.
+    fn quad_source() -> Vec<u8> {
+        vec![
+            255, 0, 0, 255, /* (0,0) red */ 0, 255, 0, 255, /* (1,0) green */
+            0, 0, 255, 255, /* (0,1) blue */ 255, 255, 255, 255, /* (1,1) white */
+        ]
+    }
+
+    /// Read the RGBA tuple at `(x, y)` from a context's backing pixels.
+    fn px_at(ctx: &Context2D, x: u32, y: u32) -> (u8, u8, u8, u8) {
+        let i = ((y * ctx.width() + x) * 4) as usize;
+        let p = ctx.pixels();
+        (p[i], p[i + 1], p[i + 2], p[i + 3])
+    }
+
+    #[test]
+    fn draw_image_full_source_blits_1to1() {
+        let src = quad_source();
+        let mut ctx = Context2D::new(2, 2);
+        ctx.draw_image(&src, 2, 2, 0.0, 0.0, 2.0, 2.0);
+        assert_eq!(px_at(&ctx, 0, 0), (255, 0, 0, 255), "top-left red");
+        assert_eq!(px_at(&ctx, 1, 0), (0, 255, 0, 255), "top-right green");
+        assert_eq!(px_at(&ctx, 0, 1), (0, 0, 255, 255), "bottom-left blue");
+        assert_eq!(px_at(&ctx, 1, 1), (255, 255, 255, 255), "bottom-right white");
+    }
+
+    #[test]
+    fn draw_image_cropped_samples_only_crop_rect() {
+        // Crop the bottom-right (white) quadrant and stretch it over the whole 2×2 dest.
+        let src = quad_source();
+        let mut ctx = Context2D::new(2, 2);
+        ctx.draw_image_cropped(&src, 2, 2, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 2.0, 2.0);
+        for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            assert_eq!(px_at(&ctx, x, y), (255, 255, 255, 255), "all white from crop");
+        }
+    }
+
+    #[test]
+    fn draw_image_cropped_top_left_quadrant() {
+        // Crop the top-left (red) quadrant — none of the other colours must leak in.
+        let src = quad_source();
+        let mut ctx = Context2D::new(2, 2);
+        ctx.draw_image_cropped(&src, 2, 2, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 2.0, 2.0);
+        for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            assert_eq!(px_at(&ctx, x, y), (255, 0, 0, 255), "all red from crop");
+        }
+    }
+
+    #[test]
+    fn draw_image_cropped_zero_extent_draws_nothing() {
+        let src = quad_source();
+        let mut ctx = Context2D::new(2, 2);
+        // Empty source crop: nothing should be written (dest stays transparent).
+        ctx.draw_image_cropped(&src, 2, 2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 2.0);
+        assert_eq!(px_at(&ctx, 0, 0), (0, 0, 0, 0), "untouched transparent");
     }
 }

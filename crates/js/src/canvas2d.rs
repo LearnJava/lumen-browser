@@ -790,6 +790,41 @@ pub fn install_canvas2d_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
         ),
     )?;
 
+    // _lumen_canvas2d_draw_image_crop(dst_nid, src_nid, "sx,sy,sw,sh,dx,dy,dw,dh")
+    // 9-argument drawImage form: blits a source sub-rectangle scaled into the
+    // destination rect. The 8 coordinates are passed as a CSV string to stay
+    // within rquickjs's 7-closure-parameter limit (same trick as path2d_add_path).
+    g.set(
+        "_lumen_canvas2d_draw_image_crop",
+        rquickjs::Function::new(
+            ctx.clone(),
+            |dst_nid: u32, src_nid: u32, coords_csv: String| {
+                let r: Vec<f32> = coords_csv
+                    .split(',')
+                    .filter_map(|s| s.parse().ok())
+                    .collect();
+                if r.len() != 8 {
+                    return;
+                }
+                let (pixels, sw, sh) = CANVASES.with(|c| {
+                    let map = c.try_borrow().ok()?;
+                    let src = map.get(&src_nid)?;
+                    Some((src.pixels().to_vec(), src.width(), src.height()))
+                }).unwrap_or_default();
+                if sw > 0 && sh > 0 {
+                    with_canvas(dst_nid, |c| {
+                        c.draw_image_cropped(
+                            &pixels, sw, sh,
+                            r[0], r[1], r[2], r[3],
+                            r[4], r[5], r[6], r[7],
+                        );
+                    });
+                    mark_dirty(dst_nid);
+                }
+            },
+        ),
+    )?;
+
     // ── Phase 3: ImageData ────────────────────────────────────────────────────
 
     // _lumen_canvas2d_put_image_data(nid, hex_data, sw, sh, dx, dy)
