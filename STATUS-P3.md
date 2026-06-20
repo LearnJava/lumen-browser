@@ -83,7 +83,7 @@ _(BUG-196 закрыт 2026-06-18 — `::before`/`attr()` на flex-контей
 
 **Средний diff (5–10%):**
 _(BUG-199 закрыт 2026-06-20 как KNOWN_DEBTOR — Edge ловит entry-transition в полёте, Lumen рендерит спек-корректное settled-состояние, см. Recent.)_
-- BUG-203 (TEST-84, 5.88%) — `text-decoration-skip-ink`
+_(BUG-203 закрыт 2026-06-20 — skip-ink gap-геометрия фикснута (8.20% → 6.02%); остаток font-parity → KNOWN_DEBTORS BUG-128, см. Recent.)_
 - BUG-191 (TEST-52, 5.83%) — `text-shadow` blur
 - BUG-201 (TEST-82, 5.00%) — SVG `<use>`
 
@@ -156,6 +156,18 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
+
+- **BUG-203** (2026-06-20) — `text-decoration-skip-ink` gap-геометрия (TEST-84 8.20% → 6.02%
+  → KNOWN_DEBTORS BUG-128). `emit_decoration_line_skip_ink` (`display_list.rs`) клирил gap
+  на **всю ширину ячейки глифа** + margin `thickness+1` с обеих сторон → для рядов
+  последовательных descender'ов («gjpqy») соседние gap'ы сливались в один огромный, **стирая
+  линию целиком**: skip-ink:all не рисовал НИЧЕГО, auto оставлял лишь огрызки. Фикс: gap клирит
+  только центральную ink-зону ячейки (центр advance, полуширина `char_w*0.28 + thickness*0.5`,
+  кап `char_w*0.45` ≈56%) → между скип-глифами остаётся видимый сегмент, как в Edge.
+  Скриншот: все 4 ряда подчёркиваний (auto/none/all/thick) совпадают с эталоном, ряд «all»
+  снова рисует штрихи под каждым глифом. Тесты `skip_ink_consecutive_descenders_keep_line_visible`,
+  `skip_ink_all_does_not_erase_line`. Остаток 6.02% = font-parity (Edge serif vs Inter sans,
+  48px-текст по всей странице, rule 3) → KNOWN_DEBTORS (BUG-128). Без регрессий (paint 761+21).
 
 - **BUG-199** (2026-06-20) — `@starting-style` (TEST-71 7.03% → KNOWN_DEBTORS). Дефекта движка
   нет: display-list геометрия/цвета settled-состояния идеальны (обе коробки 200×200, opacity 1,
