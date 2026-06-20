@@ -2,8 +2,9 @@
 //!
 //! A pure-Rust interpreter for the WASM 1.0 core instruction set (plus a few
 //! common post-MVP ops: saturating truncation, `memory.copy`/`fill`, sign
-//! extension, reference-null). No external WASM runtime dependency — consistent
-//! with Lumen's "lightweight custom engine" principle.
+//! extension, reference-null) and the complete **fixed-width SIMD** proposal
+//! (`v128`, the `0xFD` prefix — see [`simd`]). No external WASM runtime
+//! dependency — consistent with Lumen's "lightweight custom engine" principle.
 //!
 //! The [`webassembly`](crate::webassembly) JS shim drives this engine through
 //! native `__lumen_wasm_*` bindings, so `WebAssembly.instantiate(...).exports`
@@ -24,6 +25,7 @@
 
 pub mod interp;
 pub mod parser;
+pub mod simd;
 pub mod value;
 
 use std::cell::RefCell;
@@ -380,6 +382,9 @@ fn value_to_f64(v: Value) -> f64 {
         Value::F32(x) => x as f64,
         Value::F64(x) => x,
         Value::FuncRef(r) | Value::ExternRef(r) => r.map(f64::from).unwrap_or(-1.0),
+        // v128 has no numeric JS representation (the spec rejects it at the
+        // boundary); collapse to 0.0 — never reached by a spec-valid call.
+        Value::V128(_) => 0.0,
     }
 }
 
@@ -390,6 +395,8 @@ fn f64_to_value(ty: ValType, v: f64) -> Value {
         ValType::I64 => Value::I64(v as i64),
         ValType::F32 => Value::F32(v as f32),
         ValType::F64 => Value::F64(v),
+        // v128 cannot be constructed from a JS number; yield a zero vector.
+        ValType::V128 => Value::V128([0; 16]),
         ValType::FuncRef => Value::FuncRef(if v < 0.0 { None } else { Some(v as u32) }),
         ValType::ExternRef => Value::ExternRef(if v < 0.0 { None } else { Some(v as u32) }),
     }
@@ -419,6 +426,8 @@ pub(crate) fn wasm_value_to_js<'js>(ctx: &Ctx<'js>, v: Value) -> rquickjs::Value
         Value::FuncRef(r) | Value::ExternRef(r) => {
             rquickjs::Value::new_float(ctx.clone(), r.map(f64::from).unwrap_or(-1.0))
         }
+        // v128 has no JS Number/BigInt mapping; surface 0 rather than throw.
+        Value::V128(_) => rquickjs::Value::new_float(ctx.clone(), 0.0),
     }
 }
 

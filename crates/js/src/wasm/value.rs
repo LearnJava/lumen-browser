@@ -21,6 +21,9 @@ pub enum ValType {
     FuncRef,
     /// Opaque host reference (`externref`).
     ExternRef,
+    /// 128-bit packed SIMD vector (`v128`). Lane interpretation is per-op; the
+    /// runtime value ([`Value::V128`]) carries the raw little-endian 16 bytes.
+    V128,
 }
 
 impl ValType {
@@ -32,6 +35,7 @@ impl ValType {
             0x7E => ValType::I64,
             0x7D => ValType::F32,
             0x7C => ValType::F64,
+            0x7B => ValType::V128,
             0x70 => ValType::FuncRef,
             0x6F => ValType::ExternRef,
             _ => return None,
@@ -45,6 +49,7 @@ impl ValType {
             ValType::I64 => Value::I64(0),
             ValType::F32 => Value::F32(0.0),
             ValType::F64 => Value::F64(0.0),
+            ValType::V128 => Value::V128([0; 16]),
             ValType::FuncRef => Value::FuncRef(None),
             ValType::ExternRef => Value::ExternRef(None),
         }
@@ -69,6 +74,9 @@ pub enum Value {
     FuncRef(Option<u32>),
     /// Host reference: an opaque slot id into the JS-side extern table, or null.
     ExternRef(Option<u32>),
+    /// 128-bit SIMD vector, stored as raw little-endian bytes. Lane access is
+    /// done in the interpreter via `from_le_bytes`/`to_le_bytes` on slices.
+    V128([u8; 16]),
 }
 
 impl Value {
@@ -106,6 +114,16 @@ impl Value {
         }
     }
 
+    /// Interpret this value as the raw 16 bytes of a `v128`. Returns all-zero
+    /// for non-`v128` values (callers only take this path when the validated
+    /// type guarantees `v128`).
+    pub fn as_v128(self) -> [u8; 16] {
+        match self {
+            Value::V128(b) => b,
+            _ => [0; 16],
+        }
+    }
+
     /// The value type of this runtime value.
     pub fn val_type(self) -> ValType {
         match self {
@@ -113,6 +131,7 @@ impl Value {
             Value::I64(_) => ValType::I64,
             Value::F32(_) => ValType::F32,
             Value::F64(_) => ValType::F64,
+            Value::V128(_) => ValType::V128,
             Value::FuncRef(_) => ValType::FuncRef,
             Value::ExternRef(_) => ValType::ExternRef,
         }

@@ -6,7 +6,8 @@
 //! (`Block`/`Loop`/`If` carry the index of their matching `End`/`Else`) so the
 //! interpreter never re-scans bytecode at run time.
 //!
-//! Anything the decoder does not understand (SIMD `0xFD`, unknown opcodes,
+//! Fixed-width SIMD (`0xFD` prefix) is decoded into dedicated [`Instr`] variants.
+//! Anything the decoder does not understand (unknown opcodes, relaxed-SIMD,
 //! malformed sections) yields `Err` so `WebAssembly.compile`/`validate` reject
 //! cleanly rather than producing a half-decoded module.
 
@@ -77,6 +78,25 @@ pub enum Instr {
     RefNull(ValType),
     RefFunc(u32),
     RefIsNull,
+    // ── SIMD (`0xFD` prefix) ────────────────────────────────────────────────
+    /// `v128.const` — the 16 immediate bytes (little-endian).
+    V128Const([u8; 16]),
+    /// SIMD memory load: `sub` is the `0xFD` sub-opcode (0..=10, 92, 93),
+    /// `offset` the static address offset (alignment hint is ignored).
+    V128Load { sub: u32, offset: u32 },
+    /// `v128.store` (`0xFD 11`).
+    V128Store { offset: u32 },
+    /// SIMD load-into-lane (`0xFD` 84..=87): `lane` is the destination lane.
+    V128LoadLane { sub: u32, offset: u32, lane: u8 },
+    /// SIMD store-from-lane (`0xFD` 88..=91): `lane` is the source lane.
+    V128StoreLane { sub: u32, offset: u32, lane: u8 },
+    /// `i8x16.shuffle` (`0xFD 13`) — 16 immediate lane indices (0..=31).
+    Shuffle([u8; 16]),
+    /// `*.extract_lane*` / `*.replace_lane` (`0xFD` 21..=34): `sub` selects the
+    /// shape and direction, `lane` the lane index.
+    SimdLane { sub: u32, lane: u8 },
+    /// Any other SIMD op with no immediate beyond the sub-opcode.
+    Simd(u32),
 }
 
 /// What an import binds to.
@@ -642,6 +662,7 @@ fn decode_block_type(r: &mut Reader) -> DecodeResult<BlockType> {
         -2 => BlockType::Val(ValType::I64),
         -3 => BlockType::Val(ValType::F32),
         -4 => BlockType::Val(ValType::F64),
+        -5 => BlockType::Val(ValType::V128), // 0x7B
         -16 => BlockType::Val(ValType::FuncRef),
         -17 => BlockType::Val(ValType::ExternRef),
         n if n >= 0 => BlockType::Func(n as u32),
@@ -811,7 +832,55 @@ fn decode_expr(r: &mut Reader) -> DecodeResult<Vec<Instr>> {
                     _ => return Err(format!("unsupported 0xFC sub-opcode {sub}")),
                 }
             }
-            0xFD => return Err("SIMD (0xFD) not supported".into()),
+            0xFD => {
+                let sub = r.u32()?;
+                match sub {
+                    // memarg-only loads + load*_zero
+                    0..=10 | 92 | 93 => {
+                        let _align = r.u32()?;
+                        let offset = r.u32()?;
+                        out.push(Instr::V128Load { sub, offset });
+                    }
+                    // v128.store
+                    11 => {
+                        let _align = r.u32()?;
+                        let offset = r.u32()?;
+                        out.push(Instr::V128Store { offset });
+                    }
+                    // v128.const — 16 immediate bytes
+                    12 => {
+                        let b = r.bytes(16)?;
+                        let mut bytes = [0u8; 16];
+                        bytes.copy_from_slice(b);
+                        out.push(Instr::V128Const(bytes));
+                    }
+                    // i8x16.shuffle — 16 immediate lane indices
+                    13 => {
+                        let b = r.bytes(16)?;
+                        let mut lanes = [0u8; 16];
+                        lanes.copy_from_slice(b);
+                        out.push(Instr::Shuffle(lanes));
+                    }
+                    // extract_lane / replace_lane — single lane index byte
+                    21..=34 => {
+                        let lane = r.byte()?;
+                        out.push(Instr::SimdLane { sub, lane });
+                    }
+                    // load_lane / store_lane — memarg + lane index byte
+                    84..=91 => {
+                        let _align = r.u32()?;
+                        let offset = r.u32()?;
+                        let lane = r.byte()?;
+                        if sub <= 87 {
+                            out.push(Instr::V128LoadLane { sub, offset, lane });
+                        } else {
+                            out.push(Instr::V128StoreLane { sub, offset, lane });
+                        }
+                    }
+                    // everything else: pure stack op identified by sub-opcode
+                    _ => out.push(Instr::Simd(sub)),
+                }
+            }
             _ => return Err(format!("unknown opcode 0x{op:02X}")),
         }
     }

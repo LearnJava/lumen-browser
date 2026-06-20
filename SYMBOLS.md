@@ -1147,7 +1147,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/ipc/src/lib.rs:251` **fn** `connect` — Connect to the network service listening on `127.0.0.1:port`
 `crates/ipc/src/lib.rs:261` **fn** `request` — Send a request and block until the matching response arrives
 
-## lumen-js  (341 symbols)
+## lumen-js  (345 symbols)
 
 `crates/js/src/async_context.rs:32` **fn** `install_async_context` — Install the `AsyncContext` global (Variable + Snapshot) into the context
 `crates/js/src/attribution_reporting.rs:23` **fn** `install_attribution_reporting_api` — Install Attribution Reporting API bindings into the JS context
@@ -1424,47 +1424,51 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/wasm/interp.rs:203` **fn** `mem_pages` — Current memory size in pages
 `crates/js/src/wasm/interp.rs:209` **fn** `mem_grow` — Grow memory by `delta` pages; return the previous page count, or -1 on
 `crates/js/src/wasm/interp.rs:225` **fn** `invoke` — Invoke any function by index (imported → host, defined → interpret)
-`crates/js/src/wasm/mod.rs:61` **fn** `validate` — `true` if `bytes` decode as a valid module this engine can run
-`crates/js/src/wasm/mod.rs:66` **fn** `compile` — Decode and store a module; returns its registry id
-`crates/js/src/wasm/mod.rs:89` **fn** `clear_registry` — Drop all compiled modules and live instances on this thread, releasing the
-`crates/js/src/wasm/mod.rs:99` **fn** `module_exports_json` — JSON descriptor of a module's exports (consumed by the JS shim to build the
-`crates/js/src/wasm/mod.rs:121` **fn** `module_imports_json` — JSON descriptor of a module's imports (consumed by the JS shim to resolve
-`crates/js/src/wasm/mod.rs:147` **fn** `instantiate` — Instantiate a compiled module
-`crates/js/src/wasm/mod.rs:238` **fn** `func_signature` — Parameter and result value types of an exported function (by its function
-`crates/js/src/wasm/mod.rs:254` **fn** `call_typed` — Call an exported function with already-typed arguments, returning typed
-`crates/js/src/wasm/mod.rs:285` **fn** `mem_size` — Current memory size of an instance, in 64 KiB pages
-`crates/js/src/wasm/mod.rs:296` **fn** `mem_grow` — Grow an instance's memory by `delta` pages; previous size or -1 on failure
-`crates/js/src/wasm/mod.rs:307` **fn** `mem_read` — Copy `len` bytes of an instance's linear memory starting at `offset`
-`crates/js/src/wasm/mod.rs:325` **fn** `mem_write` — Write `bytes` into an instance's linear memory at `offset`. Returns `false`
-`crates/js/src/wasm/mod.rs:344` **fn** `global_value` — Read an exported global's current value (typed). Returns `None` if the
-`crates/js/src/wasm/mod.rs:356` **fn** `global_set_value` — Set a mutable exported global from a typed value (coerced to its declared
-`crates/js/src/wasm/mod.rs:467` **fn** `func_param_count` — Number of parameters for an exported function index (used by the shim to
-`crates/js/src/wasm/parser.rs:16` **type** `DecodeResult` — Result of decoding, with a human-readable error for `CompileError`
-`crates/js/src/wasm/parser.rs:20` **enum** `BlockType` — Block signature for `block`/`loop`/`if`
-`crates/js/src/wasm/parser.rs:33` **enum** `Instr` — A decoded instruction. Numeric/comparison/conversion ops with no immediate
-`crates/js/src/wasm/parser.rs:84` **enum** `ImportKind` — What an import binds to
-`crates/js/src/wasm/parser.rs:97` **struct** `Import` — A single import entry
-`crates/js/src/wasm/parser.rs:108` **enum** `ExportKind` — The export kind tag
-`crates/js/src/wasm/parser.rs:117` **struct** `Export` — A single export entry
-`crates/js/src/wasm/parser.rs:128` **struct** `GlobalDef` — A defined global: its type, mutability, and initialiser expression
-`crates/js/src/wasm/parser.rs:139` **struct** `FuncBody` — A decoded function body: extra locals plus its instruction stream
-`crates/js/src/wasm/parser.rs:149` **struct** `DataSegment` — An active data segment: target memory offset expression + raw bytes
-`crates/js/src/wasm/parser.rs:160` **struct** `ElemSegment` — An active element segment for a table: offset expression + function indices
-`crates/js/src/wasm/parser.rs:171` **struct** `Module` — A fully decoded module ready for instantiation
-`crates/js/src/wasm/parser.rs:206` **fn** `func_type` — Look up the function type for any function index (imported or defined)
-`crates/js/src/wasm/parser.rs:341` **fn** `check_header` — Validate the WASM magic + version header without a full decode (used by
-`crates/js/src/wasm/parser.rs:346` **fn** `parse_module` — Decode a full module image
+`crates/js/src/wasm/mod.rs:63` **fn** `validate` — `true` if `bytes` decode as a valid module this engine can run
+`crates/js/src/wasm/mod.rs:68` **fn** `compile` — Decode and store a module; returns its registry id
+`crates/js/src/wasm/mod.rs:91` **fn** `clear_registry` — Drop all compiled modules and live instances on this thread, releasing the
+`crates/js/src/wasm/mod.rs:101` **fn** `module_exports_json` — JSON descriptor of a module's exports (consumed by the JS shim to build the
+`crates/js/src/wasm/mod.rs:123` **fn** `module_imports_json` — JSON descriptor of a module's imports (consumed by the JS shim to resolve
+`crates/js/src/wasm/mod.rs:149` **fn** `instantiate` — Instantiate a compiled module
+`crates/js/src/wasm/mod.rs:240` **fn** `func_signature` — Parameter and result value types of an exported function (by its function
+`crates/js/src/wasm/mod.rs:256` **fn** `call_typed` — Call an exported function with already-typed arguments, returning typed
+`crates/js/src/wasm/mod.rs:287` **fn** `mem_size` — Current memory size of an instance, in 64 KiB pages
+`crates/js/src/wasm/mod.rs:298` **fn** `mem_grow` — Grow an instance's memory by `delta` pages; previous size or -1 on failure
+`crates/js/src/wasm/mod.rs:309` **fn** `mem_read` — Copy `len` bytes of an instance's linear memory starting at `offset`
+`crates/js/src/wasm/mod.rs:327` **fn** `mem_write` — Write `bytes` into an instance's linear memory at `offset`. Returns `false`
+`crates/js/src/wasm/mod.rs:346` **fn** `global_value` — Read an exported global's current value (typed). Returns `None` if the
+`crates/js/src/wasm/mod.rs:358` **fn** `global_set_value` — Set a mutable exported global from a typed value (coerced to its declared
+`crates/js/src/wasm/mod.rs:476` **fn** `func_param_count` — Number of parameters for an exported function index (used by the shim to
+`crates/js/src/wasm/parser.rs:17` **type** `DecodeResult` — Result of decoding, with a human-readable error for `CompileError`
+`crates/js/src/wasm/parser.rs:21` **enum** `BlockType` — Block signature for `block`/`loop`/`if`
+`crates/js/src/wasm/parser.rs:34` **enum** `Instr` — A decoded instruction. Numeric/comparison/conversion ops with no immediate
+`crates/js/src/wasm/parser.rs:104` **enum** `ImportKind` — What an import binds to
+`crates/js/src/wasm/parser.rs:117` **struct** `Import` — A single import entry
+`crates/js/src/wasm/parser.rs:128` **enum** `ExportKind` — The export kind tag
+`crates/js/src/wasm/parser.rs:137` **struct** `Export` — A single export entry
+`crates/js/src/wasm/parser.rs:148` **struct** `GlobalDef` — A defined global: its type, mutability, and initialiser expression
+`crates/js/src/wasm/parser.rs:159` **struct** `FuncBody` — A decoded function body: extra locals plus its instruction stream
+`crates/js/src/wasm/parser.rs:169` **struct** `DataSegment` — An active data segment: target memory offset expression + raw bytes
+`crates/js/src/wasm/parser.rs:180` **struct** `ElemSegment` — An active element segment for a table: offset expression + function indices
+`crates/js/src/wasm/parser.rs:191` **struct** `Module` — A fully decoded module ready for instantiation
+`crates/js/src/wasm/parser.rs:226` **fn** `func_type` — Look up the function type for any function index (imported or defined)
+`crates/js/src/wasm/parser.rs:361` **fn** `check_header` — Validate the WASM magic + version header without a full decode (used by
+`crates/js/src/wasm/parser.rs:366` **fn** `parse_module` — Decode a full module image
+`crates/js/src/wasm/simd.rs:105` **fn** `shuffle` — `i8x16.shuffle`: pick 16 lanes from the concatenation of `a` (lanes 0..15)
+`crates/js/src/wasm/simd.rs:121` **fn** `lane_op` — `*.extract_lane*` / `*.replace_lane` (`0xFD` sub-opcodes 21..=34)
+`crates/js/src/wasm/simd.rs:168` **fn** `exec_simd` — Execute a SIMD op with no immediate beyond the sub-opcode (the `Instr::Simd`
 `crates/js/src/wasm/value.rs:11` **enum** `ValType` — A WebAssembly value type
-`crates/js/src/wasm/value.rs:29` **fn** `from_byte` — Decode a value type from its binary tag byte. Returns `None` for an
-`crates/js/src/wasm/value.rs:42` **fn** `default_value` — The zero/default runtime value for this type (used to initialise locals)
-`crates/js/src/wasm/value.rs:59` **enum** `Value` — A runtime WebAssembly value
-`crates/js/src/wasm/value.rs:78` **fn** `as_i32` — Interpret this value as `i32`, trapping representation is the caller's
-`crates/js/src/wasm/value.rs:86` **fn** `as_i64` — Interpret this value as `i64`
-`crates/js/src/wasm/value.rs:94` **fn** `as_f32` — Interpret this value as `f32`
-`crates/js/src/wasm/value.rs:102` **fn** `as_f64` — Interpret this value as `f64`
-`crates/js/src/wasm/value.rs:110` **fn** `val_type` — The value type of this runtime value
-`crates/js/src/wasm/value.rs:124` **struct** `FuncType` — A function signature: parameter types followed by result types
-`crates/js/src/wasm/value.rs:136` **struct** `Limits` — Min/max limits shared by memories and tables (in pages for memory, in
+`crates/js/src/wasm/value.rs:32` **fn** `from_byte` — Decode a value type from its binary tag byte. Returns `None` for an
+`crates/js/src/wasm/value.rs:46` **fn** `default_value` — The zero/default runtime value for this type (used to initialise locals)
+`crates/js/src/wasm/value.rs:64` **enum** `Value` — A runtime WebAssembly value
+`crates/js/src/wasm/value.rs:86` **fn** `as_i32` — Interpret this value as `i32`, trapping representation is the caller's
+`crates/js/src/wasm/value.rs:94` **fn** `as_i64` — Interpret this value as `i64`
+`crates/js/src/wasm/value.rs:102` **fn** `as_f32` — Interpret this value as `f32`
+`crates/js/src/wasm/value.rs:110` **fn** `as_f64` — Interpret this value as `f64`
+`crates/js/src/wasm/value.rs:120` **fn** `as_v128` — Interpret this value as the raw 16 bytes of a `v128`. Returns all-zero
+`crates/js/src/wasm/value.rs:128` **fn** `val_type` — The value type of this runtime value
+`crates/js/src/wasm/value.rs:143` **struct** `FuncType` — A function signature: parameter types followed by result types
+`crates/js/src/wasm/value.rs:155` **struct** `Limits` — Min/max limits shared by memories and tables (in pages for memory, in
 `crates/js/src/web_audio.rs:18` **fn** `install_web_audio_api` — Install the Web Audio API into the JS context
 `crates/js/src/web_codecs.rs:16` **fn** `install_webcodecs_bindings` — Install WebCodecs API JS shim
 `crates/js/src/web_locks.rs:14` **fn** `install_web_locks_bindings` — Install the Web Locks API bindings into the JS context
@@ -1617,25 +1621,25 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/box_tree.rs:408` **fn** `collect_selectlist_label` — Collect the selected `<option>` label from a `<selectlist>` element
 `crates/engine/layout/src/box_tree.rs:446` **fn** `is_selectlist` — Returns `true` when `node` is a `<selectlist>` element (Customizable Select)
 `crates/engine/layout/src/box_tree.rs:538` **fn** `is_open_details` — Returns `true` when `id` is a `<details>` element with the `open` attribute set
-`crates/engine/layout/src/box_tree.rs:1300` **struct** `ImageRequest` — Запрос на предзагрузку изображения: URL после picking-а по
-`crates/engine/layout/src/box_tree.rs:1315` **fn** `collect_image_requests` — Обходит DOM и возвращает запросы на загрузку для всех `<img>`-элементов
-`crates/engine/layout/src/box_tree.rs:1335` **fn** `collect_background_image_requests` — Обходит готовое layout-дерево и возвращает уникальные URL-ы из
-`crates/engine/layout/src/box_tree.rs:1443` **struct** `LayoutBox`
-`crates/engine/layout/src/box_tree.rs:1474` **struct** `InlineSegment` — Отрезок inline-контента с собственным стилем (до layout)
-`crates/engine/layout/src/box_tree.rs:1514` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
-`crates/engine/layout/src/box_tree.rs:1532` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
-`crates/engine/layout/src/box_tree.rs:1566` **enum** `BoxKind`
-`crates/engine/layout/src/box_tree.rs:2233` **fn** `layout` — Lay out a document without a text measurer. For tests and headless dump modes
-`crates/engine/layout/src/box_tree.rs:2258` **fn** `layout_measured` — Layout without a text measurer. For tests and headless modes; uses `layout_measured_hyp` with `dark_mode=false`
-`crates/engine/layout/src/box_tree.rs:2271` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
-`crates/engine/layout/src/box_tree.rs:2319` **fn** `lay_out_incremental` — Incremental re-layout pass: skips clean subtrees, re-lays out only dirty ones
-`crates/engine/layout/src/box_tree.rs:2356` **fn** `layout_streaming_incremental` — Streaming incremental layout (PH1-2b)
-`crates/engine/layout/src/box_tree.rs:2437` **fn** `build_iframe_document` — Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5)
-`crates/engine/layout/src/box_tree.rs:8324` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
-`crates/engine/layout/src/box_tree.rs:8507` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
-`crates/engine/layout/src/box_tree.rs:8526` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
-`crates/engine/layout/src/box_tree.rs:8556` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
-`crates/engine/layout/src/box_tree.rs:9478` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
+`crates/engine/layout/src/box_tree.rs:1315` **struct** `ImageRequest` — Запрос на предзагрузку изображения: URL после picking-а по
+`crates/engine/layout/src/box_tree.rs:1330` **fn** `collect_image_requests` — Обходит DOM и возвращает запросы на загрузку для всех `<img>`-элементов
+`crates/engine/layout/src/box_tree.rs:1350` **fn** `collect_background_image_requests` — Обходит готовое layout-дерево и возвращает уникальные URL-ы из
+`crates/engine/layout/src/box_tree.rs:1458` **struct** `LayoutBox`
+`crates/engine/layout/src/box_tree.rs:1489` **struct** `InlineSegment` — Отрезок inline-контента с собственным стилем (до layout)
+`crates/engine/layout/src/box_tree.rs:1529` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
+`crates/engine/layout/src/box_tree.rs:1547` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
+`crates/engine/layout/src/box_tree.rs:1581` **enum** `BoxKind`
+`crates/engine/layout/src/box_tree.rs:2248` **fn** `layout` — Lay out a document without a text measurer. For tests and headless dump modes
+`crates/engine/layout/src/box_tree.rs:2273` **fn** `layout_measured` — Layout without a text measurer. For tests and headless modes; uses `layout_measured_hyp` with `dark_mode=false`
+`crates/engine/layout/src/box_tree.rs:2286` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
+`crates/engine/layout/src/box_tree.rs:2334` **fn** `lay_out_incremental` — Incremental re-layout pass: skips clean subtrees, re-lays out only dirty ones
+`crates/engine/layout/src/box_tree.rs:2371` **fn** `layout_streaming_incremental` — Streaming incremental layout (PH1-2b)
+`crates/engine/layout/src/box_tree.rs:2452` **fn** `build_iframe_document` — Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5)
+`crates/engine/layout/src/box_tree.rs:8339` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
+`crates/engine/layout/src/box_tree.rs:8522` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
+`crates/engine/layout/src/box_tree.rs:8541` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
+`crates/engine/layout/src/box_tree.rs:8571` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
+`crates/engine/layout/src/box_tree.rs:9493` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
 `crates/engine/layout/src/color_mix.rs:38` **enum** `MixColorSpace` — CSS Color L5 §10.2 — interpolation color space for `color-mix()`
 `crates/engine/layout/src/color_mix.rs:63` **fn** `from_css` — Parse a CSS `color-mix()` interpolation space identifier (case-insensitive)
 `crates/engine/layout/src/color_mix.rs:80` **fn** `is_polar` — Returns `true` if this space has a hue (polar) axis
@@ -2557,36 +2561,36 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/display_list.rs:170` **fn** `all_zero` — Returns `true` if all eight radii are zero (no rounding needed)
 `crates/engine/paint/src/display_list.rs:186` **fn** `from_style_and_box` — Builds `CornerRadii` from a `ComputedStyle` and the element's border-box dimensions
 `crates/engine/paint/src/display_list.rs:202` **fn** `from_style` — Builds `CornerRadii` from a `ComputedStyle`. `border-radius: N%` values are
-`crates/engine/paint/src/display_list.rs:211` **fn** `clamped_to_box` — Clamps every radius so no corner exceeds half the box in either axis
-`crates/engine/paint/src/display_list.rs:229` **fn** `inner_for_border` — Computes the inner-edge corner radii for a border of per-side widths
-`crates/engine/paint/src/display_list.rs:249` **enum** `ResolvedClipShape` — BUG-140: `clip-path` basic-shape, разрешённая эмиттером в page-координаты
-`crates/engine/paint/src/display_list.rs:285` **fn** `bounding_rect` — Axis-aligned bounding box формы (page px, до transform). Используется
-`crates/engine/paint/src/display_list.rs:314` **enum** `DisplayCommand`
-`crates/engine/paint/src/display_list.rs:819` **type** `DisplayList`
-`crates/engine/paint/src/display_list.rs:848` **fn** `fit_image_rect` — CSS Images L3 §5.5 — `object-fit` placement: где располагается
-`crates/engine/paint/src/display_list.rs:903` **fn** `fit_image_quad` — Финальный GPU-quad для `<img>`: пересечение «полного» placement-rect
-`crates/engine/paint/src/display_list.rs:976` **fn** `cull_display_list` — Returns `true` if the display list contains any `backdrop-filter` element
-`crates/engine/paint/src/display_list.rs:1007` **fn** `contains_backdrop_filter` — Cheap pre-check the renderer uses to decide whether computing a frame
-`crates/engine/paint/src/display_list.rs:1043` **fn** `hash_display_list` — Computes a content hash over a frame's display list plus the viewport state
-`crates/engine/paint/src/display_list.rs:1071` **struct** `DiffResult` — Результат сравнения двух display-list-ов
-`crates/engine/paint/src/display_list.rs:1083` **fn** `identical` — Создаёт DiffResult для идентичных display list-ов
-`crates/engine/paint/src/display_list.rs:1097` **fn** `changed` — Создаёт DiffResult для изменённых display list-ов с заданным bounding rect
-`crates/engine/paint/src/display_list.rs:1113` **fn** `diff_display_lists` — Сравнивает два display list-а по Debug hash каждой команды
-`crates/engine/paint/src/display_list.rs:1231` **fn** `serialize_display_list`
-`crates/engine/paint/src/display_list.rs:1627` **fn** `build_display_list`
-`crates/engine/paint/src/display_list.rs:1643` **fn** `build_display_list_with_selection` — Like [`build_display_list`] but applies `::selection` CSS highlight styles
-`crates/engine/paint/src/display_list.rs:1661` **fn** `build_display_list_with_anim` — Like `build_display_list` but applies compositor animation overrides per node
-`crates/engine/paint/src/display_list.rs:1697` **fn** `build_display_list_ordered` — Билдер display list-а, **уважающий painting order** (CSS 2.1 Appendix E)
-`crates/engine/paint/src/display_list.rs:1708` **fn** `build_display_list_ordered_dpr` — Like [`build_display_list_ordered`] but resolves `image-set()` background
-`crates/engine/paint/src/display_list.rs:1757` **fn** `build_display_list_ordered_with_anim` — Like [`build_display_list_ordered`] but applies compositor animation overrides per node
-`crates/engine/paint/src/display_list.rs:1768` **fn** `build_display_list_ordered_with_anim_dpr` — Like [`build_display_list_ordered_with_anim`] but resolves `image-set()`
-`crates/engine/paint/src/display_list.rs:1822` **fn** `build_print_display_list` — Builds a print display list from paginated layout
-`crates/engine/paint/src/display_list.rs:1884` **fn** `split_at_page_breaks` — Splits a print display list at `PageBreak` markers
-`crates/engine/paint/src/display_list.rs:1911` **fn** `strip_background_graphics` — Removes background-graphics paint commands from each print page when the
-`crates/engine/paint/src/display_list.rs:3000` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
-`crates/engine/paint/src/display_list.rs:3129` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
-`crates/engine/paint/src/display_list.rs:3884` **fn** `point_on_resize_grip` — Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента
-`crates/engine/paint/src/display_list.rs:13347` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
+`crates/engine/paint/src/display_list.rs:217` **fn** `clamped_to_box` — Clamps every radius via the CSS Backgrounds L3 §5.5 corner-overlap rule
+`crates/engine/paint/src/display_list.rs:244` **fn** `inner_for_border` — Computes the inner-edge corner radii for a border of per-side widths
+`crates/engine/paint/src/display_list.rs:264` **enum** `ResolvedClipShape` — BUG-140: `clip-path` basic-shape, разрешённая эмиттером в page-координаты
+`crates/engine/paint/src/display_list.rs:300` **fn** `bounding_rect` — Axis-aligned bounding box формы (page px, до transform). Используется
+`crates/engine/paint/src/display_list.rs:329` **enum** `DisplayCommand`
+`crates/engine/paint/src/display_list.rs:834` **type** `DisplayList`
+`crates/engine/paint/src/display_list.rs:863` **fn** `fit_image_rect` — CSS Images L3 §5.5 — `object-fit` placement: где располагается
+`crates/engine/paint/src/display_list.rs:918` **fn** `fit_image_quad` — Финальный GPU-quad для `<img>`: пересечение «полного» placement-rect
+`crates/engine/paint/src/display_list.rs:991` **fn** `cull_display_list` — Returns `true` if the display list contains any `backdrop-filter` element
+`crates/engine/paint/src/display_list.rs:1022` **fn** `contains_backdrop_filter` — Cheap pre-check the renderer uses to decide whether computing a frame
+`crates/engine/paint/src/display_list.rs:1058` **fn** `hash_display_list` — Computes a content hash over a frame's display list plus the viewport state
+`crates/engine/paint/src/display_list.rs:1086` **struct** `DiffResult` — Результат сравнения двух display-list-ов
+`crates/engine/paint/src/display_list.rs:1098` **fn** `identical` — Создаёт DiffResult для идентичных display list-ов
+`crates/engine/paint/src/display_list.rs:1112` **fn** `changed` — Создаёт DiffResult для изменённых display list-ов с заданным bounding rect
+`crates/engine/paint/src/display_list.rs:1128` **fn** `diff_display_lists` — Сравнивает два display list-а по Debug hash каждой команды
+`crates/engine/paint/src/display_list.rs:1246` **fn** `serialize_display_list`
+`crates/engine/paint/src/display_list.rs:1642` **fn** `build_display_list`
+`crates/engine/paint/src/display_list.rs:1658` **fn** `build_display_list_with_selection` — Like [`build_display_list`] but applies `::selection` CSS highlight styles
+`crates/engine/paint/src/display_list.rs:1676` **fn** `build_display_list_with_anim` — Like `build_display_list` but applies compositor animation overrides per node
+`crates/engine/paint/src/display_list.rs:1712` **fn** `build_display_list_ordered` — Билдер display list-а, **уважающий painting order** (CSS 2.1 Appendix E)
+`crates/engine/paint/src/display_list.rs:1723` **fn** `build_display_list_ordered_dpr` — Like [`build_display_list_ordered`] but resolves `image-set()` background
+`crates/engine/paint/src/display_list.rs:1772` **fn** `build_display_list_ordered_with_anim` — Like [`build_display_list_ordered`] but applies compositor animation overrides per node
+`crates/engine/paint/src/display_list.rs:1783` **fn** `build_display_list_ordered_with_anim_dpr` — Like [`build_display_list_ordered_with_anim`] but resolves `image-set()`
+`crates/engine/paint/src/display_list.rs:1837` **fn** `build_print_display_list` — Builds a print display list from paginated layout
+`crates/engine/paint/src/display_list.rs:1899` **fn** `split_at_page_breaks` — Splits a print display list at `PageBreak` markers
+`crates/engine/paint/src/display_list.rs:1926` **fn** `strip_background_graphics` — Removes background-graphics paint commands from each print page when the
+`crates/engine/paint/src/display_list.rs:3015` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
+`crates/engine/paint/src/display_list.rs:3144` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
+`crates/engine/paint/src/display_list.rs:3899` **fn** `point_on_resize_grip` — Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента
+`crates/engine/paint/src/display_list.rs:13379` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
 `crates/engine/paint/src/display_list_cache.rs:21` **struct** `CachedDisplayLayer` — Cached display list for a stacking context or page subtree
 `crates/engine/paint/src/display_list_cache.rs:45` **struct** `DisplayListCache` — LRU cache that maps `NodeId` (u32) to a pre-built `Vec<DisplayCommand>`
 `crates/engine/paint/src/display_list_cache.rs:59` **fn** `new` — Create a cache with the default 32 MB budget
@@ -4128,4 +4132,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4057 symbols in 22 crates*
+*Total: 4061 symbols in 22 crates*
