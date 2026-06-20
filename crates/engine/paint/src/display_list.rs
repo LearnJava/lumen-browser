@@ -4058,22 +4058,57 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
     // green/yellow/red coloring from HTML §4.10.14, not the accent color.
     let accent = b.style.accent_color.unwrap_or(ACCENT_DEFAULT);
     match kind {
-        FormControlKind::Input { input_type, checked, .. } => {
+        FormControlKind::Input { input_type, checked, value_text } => {
+            // HTML §4.10.5.1.15 — a color input renders its value as a swatch
+            // filling the content area, independent of any author `background`
+            // (the native color widget ignores author bg). Default value is
+            // `#000000`. Drawn before the `checked` gate since color is not
+            // a checkable type.
+            if *input_type == InputType::Color {
+                let swatch = lumen_layout::style::parse_color(value_text)
+                    .unwrap_or(Color { r: 0, g: 0, b: 0, a: 255 });
+                let bl = b.style.border_left_width;
+                let bt = b.style.border_top_width;
+                let br = b.style.border_right_width;
+                let bb = b.style.border_bottom_width;
+                let pad = 2.0;
+                out.push(DisplayCommand::FillRect {
+                    rect: Rect::new(
+                        b.rect.x + bl + pad,
+                        b.rect.y + bt + pad,
+                        (b.rect.width  - bl - br - pad * 2.0).max(1.0),
+                        (b.rect.height - bt - bb - pad * 2.0).max(1.0),
+                    ),
+                    color: swatch,
+                });
+                return;
+            }
             if !checked { return; }
             let inset = match input_type {
                 InputType::Checkbox => (b.rect.width * 0.2).clamp(2.0, 4.0),
                 InputType::Radio    => (b.rect.width * 0.27).clamp(2.0, 4.0),
                 _ => return,
             };
-            out.push(DisplayCommand::FillRect {
-                rect: Rect::new(
-                    b.rect.x + inset,
-                    b.rect.y + inset,
-                    (b.rect.width  - inset * 2.0).max(1.0),
-                    (b.rect.height - inset * 2.0).max(1.0),
-                ),
-                color: accent,
-            });
+            let dot = Rect::new(
+                b.rect.x + inset,
+                b.rect.y + inset,
+                (b.rect.width  - inset * 2.0).max(1.0),
+                (b.rect.height - inset * 2.0).max(1.0),
+            );
+            match input_type {
+                // A radio's checked indicator is a round dot, not a square —
+                // emit a fully-rounded rect (radius = half the smaller side)
+                // so it renders as a filled circle matching the native widget.
+                InputType::Radio => {
+                    let r = dot.width.min(dot.height) / 2.0;
+                    out.push(DisplayCommand::FillRoundedRect {
+                        rect: dot,
+                        radii: crate::CornerRadii { tl: r, tr: r, br: r, bl: r, ..Default::default() },
+                        color: accent,
+                    });
+                }
+                _ => out.push(DisplayCommand::FillRect { rect: dot, color: accent }),
+            }
         }
         FormControlKind::Select { selected_text } => {
             emit_select_indicator(b, selected_text, out);
@@ -6761,17 +6796,62 @@ mod tests {
         );
     }
 
-    /// Radio dot also honours `accent-color`.
+    /// Radio dot also honours `accent-color`. The dot is a circle, so it is
+    /// emitted as a `FillRoundedRect` (rounded_fills), not a square FillRect.
     #[test]
     fn radio_accent_color_tints_dot() {
         let dl = build(
             "<input type=radio checked>",
             "input { accent-color: rgb(200, 0, 100); }",
         );
-        let f = fills(&dl);
+        let f = rounded_fills(&dl);
         assert!(
             f.iter().any(|c| c.r == 200 && c.g == 0 && c.b == 100),
             "radio dot should use accent-color, got {f:?}"
+        );
+    }
+
+    /// A checked radio's dot renders as a circle: a `FillRoundedRect` whose
+    /// corner radius is half the smaller side (fully rounded). A checked
+    /// checkbox, by contrast, stays a square `FillRect`.
+    #[test]
+    fn radio_indicator_is_circle_checkbox_is_square() {
+        let radio = build("<input type=radio checked>", "");
+        let circle = radio.iter().any(|c| matches!(
+            c,
+            DisplayCommand::FillRoundedRect { rect, radii, .. }
+                if (radii.tl - rect.width.min(rect.height) / 2.0).abs() < 0.5 && radii.tl > 0.0
+        ));
+        assert!(circle, "radio dot should be a fully-rounded rect (circle), got {radio:?}");
+
+        let checkbox = build("<input type=checkbox checked>", "");
+        let square = fills(&checkbox).iter().any(|c| c.r == 21 && c.g == 90 && c.b == 192);
+        assert!(square, "checkbox indicator should remain a square FillRect, got {checkbox:?}");
+    }
+
+    /// HTML §4.10.5.1.15 — a color input paints its value as a swatch,
+    /// independent of any author `background`. An explicit value is honoured.
+    #[test]
+    fn color_input_paints_value_swatch() {
+        let dl = build(
+            r##"<input type=color value="#ff0000">"##,
+            "input { background: #00ff00; }",
+        );
+        let f = fills(&dl);
+        assert!(
+            f.iter().any(|c| c.r == 255 && c.g == 0 && c.b == 0),
+            "color input should paint its value (#ff0000) as swatch, got {f:?}"
+        );
+    }
+
+    /// A color input with no `value` defaults to a black swatch.
+    #[test]
+    fn color_input_default_swatch_is_black() {
+        let dl = build("<input type=color>", "");
+        let f = fills(&dl);
+        assert!(
+            f.iter().any(|c| c.r == 0 && c.g == 0 && c.b == 0),
+            "default color input swatch should be black, got {f:?}"
         );
     }
 

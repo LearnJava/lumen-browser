@@ -1369,17 +1369,33 @@ mod tests {
     }
 
     fn first_element_child(b: &LayoutBox) -> &LayoutBox {
-        b.children
-            .iter()
-            .find(|c| matches!(
-                c.kind,
+        fn is_element(k: &BoxKind) -> bool {
+            matches!(
+                k,
                 BoxKind::Block
                     | BoxKind::FormControl { .. }
                     | BoxKind::TableRow
                     | BoxKind::Table
                     | BoxKind::TableRowGroup
-            ))
-            .expect("expected at least one element child")
+            )
+        }
+        // Form controls and other inline-block elements are wrapped in an
+        // anonymous InlineBlockRow (and text in an InlineRun); descend through
+        // those anonymous containers to find the first real element box.
+        fn rec(b: &LayoutBox) -> Option<&LayoutBox> {
+            for c in &b.children {
+                if is_element(&c.kind) {
+                    return Some(c);
+                }
+                if matches!(c.kind, BoxKind::InlineBlockRow | BoxKind::InlineRun { .. }) {
+                    if let Some(found) = rec(c) {
+                        return Some(found);
+                    }
+                }
+            }
+            None
+        }
+        rec(b).expect("expected at least one element child")
     }
 
     /// DFS search: first box in tree (including `b` itself) matching the predicate.
