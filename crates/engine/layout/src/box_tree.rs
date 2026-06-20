@@ -2568,7 +2568,14 @@ fn is_inline_content(
 }
 
 /// Является ли DOM-узел `display: inline-block` элементом.
-/// Возвращает false для изображений (`<img>` — replaced element).
+///
+/// Возвращает false для изображений (`<img>` — replaced element, Phase-0
+/// block-only). Form controls (`<input>`/`<select>`/`<button>`/…) — наоборот,
+/// участвуют как inline-block, когда их computed `display` == InlineBlock
+/// (UA-дефолт из `default_display`): их replaced/виджет-бокс (`BoxKind::
+/// FormControl`) собирается в `InlineBlockRow` и течёт горизонтально рядом с
+/// текстом и соседними контролами. Author `display:block` поверх → обычный
+/// block-бокс (эта функция вернёт false).
 fn is_inline_block(
     doc: &Document,
     sheet: &Stylesheet,
@@ -2581,7 +2588,6 @@ fn is_inline_block(
         &doc.get(id).data,
         NodeData::Element { .. }
         if !is_image_element(doc, id)
-            && !is_form_control_element(doc, id)
             && compute_style(doc, id, sheet, inherited, viewport, dark_mode).display
                 == Display::InlineBlock
     )
