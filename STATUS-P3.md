@@ -89,7 +89,7 @@ _(BUG-201 закрыт 2026-06-20 — SVG `<use>`: polygon/polyline рендер
 
 **Низкий diff (<5%):**
 _(BUG-187 закрыт 2026-06-20 — form controls: placeholder серым у пустых полей + checkbox белая галочка + radio белая точка-в-центре; 4.78% → 3.02% → KNOWN_DEBTORS BUG-128, см. Recent.)_
-- BUG-188 (TEST-46, 4.63%) — individual transforms
+_(BUG-188 закрыт 2026-06-21 — individual transforms спек-корректны (все юнит-боксы пиксель-в-пиксель с Edge); остаток font-parity monospace-меток; 4.63% → 1.96% → KNOWN_DEBTORS BUG-128, см. Recent.)_
 - BUG-211 (TEST-93, 4.11%) — `field-sizing: content`
 - BUG-185 (TEST-32, 3.75%) — list `::marker`
 - BUG-189 (TEST-47, 3.71%) — SVG basic shapes
@@ -156,6 +156,25 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
+
+- **BUG-188** (2026-06-21) — individual transforms (TEST-46 4.63% → 1.96% DEBTOR,
+  KNOWN_DEBTORS BUG-128). Прежние «4.63%» — устаревший бинарь (`run.py` без `--build`);
+  свежая сборка = 1.96%. Пиксельный замер центроидов/bbox всех боксов: t-translate,
+  t-rotate, t-scale-uniform, t-scale-xy, t-translate-only-x и комбинированный t-all-three
+  (translate+rotate+scale) совпадают с Edge **пиксель-в-пиксель**. Единственное
+  расхождение — teal-бокс `t-individual-plus-transform` (`translate:15px 0; scale:0.9;
+  transform:rotate(15deg)`): форма/масштаб/поворот корректны (площадь 5064 vs 5076,
+  bbox 85×85 vs 86×87, y-центроид совпадает), сдвинута только X на 18.5px. Причина —
+  бокс стоит в flex-ряду после monospace-метки `translate+rotate+scale combined`;
+  Lumen рисует `font-family:monospace` через Inter-fallback, ширина метки ≠ Edge →
+  flex кладёт следующий бокс на другой X (downstream font-parity, не дефект трансформа).
+  Композиция individual+`transform` спек-корректна (`forward_box_transform`,
+  `property_trees.rs:664`: translate→rotate→scale→transform вокруг общего
+  transform-origin-pivot). Правок production-кода не было; регресс-тест
+  `individual_plus_transform_composes_translate_then_scale_then_rotate` (lib.rs)
+  фиксирует спек-инвариант (центр→центр+translate, linear=scale·rotate). Остаток 1.96%
+  целиком font-parity (8 monospace-меток) → TEST-46 KNOWN_DEBTORS (BUG-128).
+  Без регрессий (layout 2946 lib-тестов).
 
 - **BUG-187** (2026-06-20) — form controls static rendering (TEST-34 4.78% → 3.02%
   DEBTOR, KNOWN_DEBTORS BUG-128). Закрыты оба оставшихся form-control-специфичных
