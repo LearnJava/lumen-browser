@@ -4042,6 +4042,87 @@ const ACCENT_DEFAULT: Color = Color { r: 21, g: 90, b: 192, a: 255 };
 /// Render checkbox checkmark or radio dot for checked form controls.
 /// P2 note: this renders a simple filled rectangle as indicator; a full
 /// vector checkmark / circle belongs to the renderer GPU primitive set.
+/// HTML rendering §15.5 — default UA label for a button-type `<input>` that has
+/// no `value` attribute. `submit`/`reset` have UA labels; a bare `button` has
+/// none and renders empty.
+fn default_button_label(input_type: &InputType) -> String {
+    match input_type {
+        InputType::Submit => "Submit".to_owned(),
+        InputType::Reset => "Reset".to_owned(),
+        _ => String::new(),
+    }
+}
+
+/// HTML rendering §15.5.5 — paint the static `value` text of a form control
+/// inside its content box.
+///
+/// `center` horizontally centers the text (button-like controls); otherwise the
+/// text is left-aligned with a small inset (text fields). Password fields
+/// (`input_type == Password`) mask each character with U+2022 BULLET. The text
+/// is vertically centered within the content box and clipped to it so long
+/// values do not overflow the border. The content box is the border box minus
+/// the border widths; a fixed 2px inset approximates the native control padding.
+fn emit_input_value_text(
+    b: &LayoutBox,
+    value: &str,
+    input_type: &InputType,
+    center: bool,
+    out: &mut Vec<DisplayCommand>,
+) {
+    if value.is_empty() {
+        return;
+    }
+    let s = &b.style;
+    // Password masking: obscure each character (grapheme-approximate by char).
+    let text = if *input_type == InputType::Password {
+        "\u{2022}".repeat(value.chars().count())
+    } else {
+        value.to_owned()
+    };
+
+    let bl = s.border_left_width;
+    let bt = s.border_top_width;
+    let br = s.border_right_width;
+    let bb = s.border_bottom_width;
+    let inset = 2.0_f32;
+    let content_x = b.rect.x + bl + inset;
+    let content_y = b.rect.y + bt;
+    let content_w = (b.rect.width - bl - br - inset * 2.0).max(1.0);
+    let content_h = (b.rect.height - bt - bb).max(1.0);
+    let font_size = s.font_size;
+
+    // Horizontal placement. `draw_text` has no alignment, so a centered label
+    // is positioned with the same per-glyph advance approximation used for SVG
+    // text anchoring (a real TextMeasurer is not available in this crate).
+    let text_x = if center {
+        let approx_w = font_size * 0.5 * text.chars().count() as f32;
+        content_x + ((content_w - approx_w) / 2.0).max(0.0)
+    } else {
+        content_x
+    };
+    // Vertical centering: `draw_text` places the glyph top at `y`, so offset by
+    // half the leftover vertical space inside the content box.
+    let text_y = content_y + ((content_h - font_size) / 2.0).max(0.0);
+
+    // Clip to the content box so overflowing text stays inside the border.
+    out.push(DisplayCommand::PushClipRect {
+        rect: Rect::new(content_x, content_y, content_w, content_h),
+    });
+    out.push(DisplayCommand::DrawText {
+        rect: Rect::new(text_x, text_y, content_w, font_size),
+        text,
+        font_size,
+        color: s.color,
+        font_family: s.font_family.clone(),
+        font_weight: s.font_weight,
+        font_style: s.font_style,
+        font_variation_axes: vec![],
+        tab_size: 0.0,
+        highlight_name: None,
+    });
+    out.push(DisplayCommand::PopClip);
+}
+
 fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut Vec<DisplayCommand>) {
     // CSS Basic UI L4 §4.2 — `appearance: none` (and the legacy `-webkit-`/
     // `-moz-` aliases, normalised to `Appearance::None` at parse time) removes
@@ -4082,6 +4163,31 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
                     color: swatch,
                 });
                 return;
+            }
+            // HTML rendering §15.5.5 — text-like inputs paint their `value` as
+            // static content (left-aligned, vertically centered, clipped to the
+            // content box); button-like inputs (submit/reset/button) paint the
+            // `value` as a centered label. Checkable types (checkbox/radio) fall
+            // through to the dot/tick indicator below; `range`/`color`/`file`/
+            // `hidden`/`image` never render a text value here.
+            match input_type {
+                InputType::Text | InputType::Email | InputType::Password
+                | InputType::Tel | InputType::Url | InputType::Number
+                | InputType::Search | InputType::Date | InputType::DateTimeLocal
+                | InputType::Time | InputType::Month | InputType::Week => {
+                    emit_input_value_text(b, value_text, input_type, false, out);
+                    return;
+                }
+                InputType::Submit | InputType::Reset | InputType::Button => {
+                    let label = if value_text.is_empty() {
+                        default_button_label(input_type)
+                    } else {
+                        value_text.clone()
+                    };
+                    emit_input_value_text(b, &label, input_type, true, out);
+                    return;
+                }
+                _ => {}
             }
             if !checked { return; }
             let inset = match input_type {
@@ -6861,6 +6967,74 @@ mod tests {
             f.iter().any(|c| c.r == 0 && c.g == 0 && c.b == 0),
             "default color input swatch should be black, got {f:?}"
         );
+    }
+
+    /// BUG-187 — a text input paints its `value` as static content so the field
+    /// is not blank (matching Edge). The exact string is drawn as DrawText.
+    #[test]
+    fn text_input_paints_value() {
+        let dl = build(r#"<input type=text value="hello">"#, "");
+        assert!(
+            texts(&dl).contains(&"hello"),
+            "text input should paint its value, got {:?}",
+            texts(&dl)
+        );
+    }
+
+    /// An empty-value text input paints no value text (blank field).
+    #[test]
+    fn empty_text_input_paints_no_value() {
+        let dl = build(r#"<input type=text value="">"#, "");
+        assert!(
+            texts(&dl).is_empty(),
+            "empty text input should paint no value, got {:?}",
+            texts(&dl)
+        );
+    }
+
+    /// A password input masks every character with U+2022 BULLET rather than
+    /// revealing the value.
+    #[test]
+    fn password_input_masks_value() {
+        let dl = build(r#"<input type=password value="secret">"#, "");
+        let t = texts(&dl);
+        assert!(
+            t.contains(&"\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}"),
+            "password should be masked with 6 bullets, got {t:?}"
+        );
+        assert!(
+            !t.iter().any(|s| s.contains("secret")),
+            "password plaintext must not be painted, got {t:?}"
+        );
+    }
+
+    /// `<input type=submit>` with no `value` renders the UA default label.
+    #[test]
+    fn submit_input_default_label() {
+        let dl = build("<input type=submit>", "");
+        assert!(
+            texts(&dl).contains(&"Submit"),
+            "submit input should render default 'Submit' label, got {:?}",
+            texts(&dl)
+        );
+    }
+
+    /// An explicit `value` on a submit input overrides the default label.
+    #[test]
+    fn submit_input_value_label() {
+        let dl = build(r#"<input type=submit value="Go">"#, "");
+        let t = texts(&dl);
+        assert!(t.contains(&"Go"), "submit should use its value as label, got {t:?}");
+        assert!(!t.contains(&"Submit"), "default label must not appear, got {t:?}");
+    }
+
+    /// Number/email/search inputs paint their value text just like plain text.
+    #[test]
+    fn number_search_inputs_paint_value() {
+        let num = build(r#"<input type=number value="42">"#, "");
+        assert!(texts(&num).contains(&"42"), "number input should paint value");
+        let search = build(r#"<input type=search value="query">"#, "");
+        assert!(texts(&search).contains(&"query"), "search input should paint value");
     }
 
     /// `<progress>` fill bar uses `accent-color` (a rounded-rect fill).

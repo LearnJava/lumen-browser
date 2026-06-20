@@ -30,19 +30,30 @@ form controls: input/checkbox/radio/button/textarea/select static rendering.
 - **color-swatch.** `<input type=color>` теперь рисует свой value-цвет
   (дефолт `#000000`), игнорируя author `background`, как нативный виджет.
 
+## Прогресс (2026-06-20, этап 2)
+
+- **value-текст text-инпутов рисуется.** `emit_input_value_text`
+  (`display_list.rs`) рисует статический `value` у `text`/`email`/`password`/
+  `tel`/`url`/`number`/`search`/`date`/`time`/… как `DrawText`, вертикально
+  центрированный в content-box и клиппленный по нему (`PushClipRect`/`PopClip`).
+  Password маскируется U+2022 BULLET. Button-инпуты (`submit`/`reset`/`button`)
+  рисуют `value` как горизонтально центрированный лейбл (дефолтные UA-лейблы
+  «Submit»/«Reset» при отсутствии `value`). Поля больше не выглядят пустыми —
+  совпадают с Edge (user@example.com / •••••• / 42 / query / Submit / disabled
+  input). Вертикальное центрирование инпутов/кнопок-инпутов закрыто тем же кодом.
+  TEST-34 (ipc): 2.95% (в пределах ±2% noise-band → baseline 3.02% сохранён).
+
 ## Остаток (DEBTOR, KNOWN_DEBTORS 3.02%)
 
-- Статический текст value у text-инпутов (`text`/`email`/`password`/`number`/
-  `search`/`submit`) **не рисуется** — поля выглядят пустыми, Edge показывает
-  значения. Отдельная фича (рендер value + маскирование password + клиппинг +
-  вертикальное центрирование).
+- **Placeholder-текст** пустых полей (`placeholder="text input"`) не рисуется —
+  Edge показывает серый плейсхолдер. Отдельная фича.
+- **checkbox-галочка / radio-тик** — Edge рисует белую галочку в синем чекбоксе
+  и синий кружок-с-кольцом у radio; Lumen — сплошной синий квадрат/круг.
 - Font-parity лейблов кнопок/опции (Inter vs Edge UI font — категория BUG-128).
-- Вертикальное центрирование текста внутри кнопок/инпутов (Edge центрирует,
-  Lumen прижимает к верху).
+- Вертикальное центрирование текста-ребёнка внутри `<button>` (flow-контент,
+  отдельно от инпут-лейблов).
 
 ## Как чинить (остаток)
 
-1. Рендер value-текста для text-инпутов в `display_list.rs`
-   (`FormControlKind::Input { value_text }`), с маскированием password и
-   клиппингом по content-box.
-2. Вертикальное центрирование контента кнопок/инпутов.
+1. Рендер placeholder-текста (атрибут `placeholder`) серым, когда value пуст.
+2. Белая галочка checkbox + кольцо radio в `emit_form_control_indicator`.

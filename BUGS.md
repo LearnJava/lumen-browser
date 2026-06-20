@@ -200,7 +200,7 @@
 | [BUG-184](bugs/BUG-184-OPEN.md) | OPEN | paint | `clip-path` deviation — TEST-31: 0.59% |
 | [BUG-185](bugs/BUG-185-OPEN.md) | OPEN | layout/paint | list `::marker` geometry deviation — TEST-32: 3.75% |
 | [BUG-186](bugs/BUG-186-FIXED.md) | FIXED 2026-06-18 | layout | `multi-column` column fragmentation — TEST-33: 14.89% → 0.12% PASS |
-| [BUG-187](bugs/BUG-187-OPEN.md) | OPEN (DEBTOR) | layout/paint | form controls static rendering — TEST-34: 4.78% → 3.02%: inline-block-поток контролов (шли блоками-в-столбик), radio-точка стала кругом, `<option>` не утекает текстом, color-swatch показывает value. Остаток DEBTOR: статический value-текст text-инпутов не рисуется + font-parity лейблов + вертикальное центрирование |
+| [BUG-187](bugs/BUG-187-OPEN.md) | OPEN (DEBTOR) | layout/paint | form controls static rendering — TEST-34: 4.78% → 3.02% → (этап 2) value-текст text-инпутов рисуется (email/password-маска/number/search + submit-лейбл, вертикальное центрирование, клиппинг по content-box), ipc 2.95%. Остаток DEBTOR: placeholder пустых полей + checkbox-галочка/radio-тик + font-parity лейблов |
 | [BUG-188](bugs/BUG-188-OPEN.md) | OPEN | layout/paint | individual `translate`/`rotate`/`scale` transforms deviation — TEST-46: 4.63% |
 | [BUG-189](bugs/BUG-189-OPEN.md) | OPEN | paint | SVG basic shapes deviation — TEST-47: 3.71% |
 | [BUG-190](bugs/BUG-190-OPEN.md) | OPEN | paint | `background-blend-mode` deviation — TEST-49: 2.39% |
