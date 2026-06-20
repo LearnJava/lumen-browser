@@ -16,6 +16,9 @@
 //! * **`RegExp.escape`** — static escape utility — ECMAScript 2025
 //! * **`Error.isError`** — cross-realm error test — ECMAScript 2026 (Stage 4)
 //! * **`Atomics.pause`** — spinlock power hint (no-op shim) — ECMAScript 2025
+//! * **`Atomics.waitAsync`** — non-blocking wait usable on the single JS agent —
+//!   ECMAScript 2024 (QuickJS ships `SharedArrayBuffer` + synchronous `Atomics`
+//!   but not `waitAsync`)
 //!
 //! Each shim checks for native support first (no-op when the engine already has it).
 
@@ -566,6 +569,123 @@ const TC39_PROPOSALS_SHIM: &str = r#"(function(global) {
       },
       writable: true, configurable: true
     });
+  }
+
+  // ── 11. Atomics.waitAsync (ES2024) ──────────────────────────────────────────
+  // https://tc39.es/proposal-atomics-wait-async/
+  // Non-blocking counterpart of Atomics.wait. QuickJS ships SharedArrayBuffer +
+  // synchronous Atomics, but the synchronous Atomics.wait throws
+  // ("cannot block in this thread") because Lumen runs all JS on a single
+  // non-blocking agent (one JS thread, ADR-014) — exactly like a browser's main
+  // thread. waitAsync stays meaningful: a later Atomics.notify or a timeout,
+  // both dispatched on this same agent's event loop, settles the returned
+  // promise. With a single agent every still-parked waiter can only ever be
+  // woken by this agent itself, so we maintain a FIFO waiter list here and wrap
+  // Atomics.notify to resolve matching async waiters.
+  if (typeof Atomics !== 'undefined' && typeof SharedArrayBuffer !== 'undefined' &&
+      typeof Atomics.waitAsync !== 'function') {
+    (function() {
+      // Parked async waiters, in arrival order. Each records the underlying
+      // SharedArrayBuffer data block + byte offset it is watching (so two views
+      // aliasing the same location match per spec), plus its promise resolver
+      // and optional timeout id.
+      var waiters = [];
+      var hasTimers = (typeof setTimeout === 'function' && typeof clearTimeout === 'function');
+
+      function isI32(ta) { return (typeof Int32Array === 'function') && (ta instanceof Int32Array); }
+      function isI64(ta) { return (typeof BigInt64Array === 'function') && (ta instanceof BigInt64Array); }
+
+      // ValidateIntegerTypedArray(waitable=true) + shared-buffer + ValidateAtomicAccess.
+      function validate(ta, index) {
+        var big = isI64(ta);
+        if (!isI32(ta) && !big) {
+          throw new TypeError('Atomics.waitAsync: typedArray must be Int32Array or BigInt64Array');
+        }
+        if (!(ta.buffer instanceof SharedArrayBuffer)) {
+          throw new TypeError('Atomics.waitAsync: typedArray must be backed by a SharedArrayBuffer');
+        }
+        var i = Math.trunc(Number(index));
+        if (!(i >= 0) || i >= ta.length) {
+          throw new RangeError('Atomics.waitAsync: access index out of bounds');
+        }
+        return { big: big, idx: i, byteIndex: ta.byteOffset + i * (big ? 8 : 4) };
+      }
+
+      Object.defineProperty(Atomics, 'waitAsync', {
+        value: function waitAsync(typedArray, index, value, timeout) {
+          var info = validate(typedArray, index);
+          // Coerce the expected value to the element type (ToBigInt / ToInt32).
+          var expected = info.big ? BigInt(value) : (value | 0);
+          // Coerce timeout: undefined -> +Infinity; NaN -> +Infinity; clamp >= 0.
+          var t = (timeout === undefined) ? Infinity : Number(timeout);
+          if (t !== t) t = Infinity;
+          if (t < 0) t = 0;
+
+          var current = Atomics.load(typedArray, info.idx);
+          if (current !== expected) {
+            return { async: false, value: 'not-equal' };
+          }
+          if (t === 0) {
+            return { async: false, value: 'timed-out' };
+          }
+
+          // Park an async waiter; it settles on a matching notify or on timeout.
+          var rec = {
+            buffer: typedArray.buffer,
+            byteIndex: info.byteIndex,
+            settled: false,
+            resolve: null,
+            timer: null
+          };
+          var promise = new Promise(function(resolve) { rec.resolve = resolve; });
+          if (t !== Infinity && hasTimers) {
+            rec.timer = setTimeout(function() {
+              if (rec.settled) return;
+              rec.settled = true;
+              var k = waiters.indexOf(rec);
+              if (k !== -1) waiters.splice(k, 1);
+              rec.resolve('timed-out');
+            }, t);
+          }
+          waiters.push(rec);
+          return { async: true, value: promise };
+        },
+        writable: true, configurable: true
+      });
+
+      // Wrap Atomics.notify so it also wakes this agent's async waiters. The
+      // native notify wakes blocking agents (none on a single agent) and
+      // validates its arguments; we add the async-waiter resolution on top and
+      // fold the count of resolved async waiters into the returned total, per
+      // spec (RemoveWaiter applies to async waiters too).
+      var nativeNotify = Atomics.notify;
+      Object.defineProperty(Atomics, 'notify', {
+        value: function notify(typedArray, index, count) {
+          var woken = nativeNotify.apply(Atomics, arguments);
+          if (waiters.length === 0) return woken;
+          var buffer = typedArray.buffer;
+          var byteIndex = typedArray.byteOffset +
+            Math.trunc(Number(index)) * (isI64(typedArray) ? 8 : 4);
+          var n = (count === undefined) ? Infinity : Math.trunc(Number(count));
+          if (!(n >= 0)) n = 0; // NaN or negative wakes none
+          var awoken = 0;
+          for (var k = 0; k < waiters.length && awoken < n; ) {
+            var w = waiters[k];
+            if (!w.settled && w.buffer === buffer && w.byteIndex === byteIndex) {
+              w.settled = true;
+              if (w.timer !== null && hasTimers) clearTimeout(w.timer);
+              waiters.splice(k, 1);
+              w.resolve('ok');
+              awoken++;
+            } else {
+              k++;
+            }
+          }
+          return woken + awoken;
+        },
+        writable: true, configurable: true
+      });
+    })();
   }
 
 })(typeof globalThis !== 'undefined' ? globalThis : this);
@@ -1289,6 +1409,187 @@ mod tests {
                 )
                 .unwrap();
             assert!(ok, "Atomics.pause() must return undefined");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    // ── Atomics.waitAsync ───────────────────────────────────────────────────────
+
+    #[test]
+    fn atomics_wait_async_is_function() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            let ok: bool = ctx
+                .eval("typeof Atomics.waitAsync === 'function'")
+                .unwrap();
+            assert!(ok, "Atomics.waitAsync must be installed");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    #[test]
+    fn atomics_wait_async_not_equal_is_synchronous() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            // Cell holds 0, we wait for 999 -> immediate, synchronous not-equal.
+            let r: String = ctx
+                .eval(
+                    r#"
+            var a = new Int32Array(new SharedArrayBuffer(8));
+            var res = Atomics.waitAsync(a, 0, 999);
+            res.async + ':' + res.value
+          "#,
+                )
+                .unwrap();
+            assert_eq!(r, "false:not-equal");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    #[test]
+    fn atomics_wait_async_zero_timeout_is_timed_out() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            // Value matches (0) but timeout 0 -> synchronous timed-out.
+            let r: String = ctx
+                .eval(
+                    r#"
+            var a = new Int32Array(new SharedArrayBuffer(8));
+            var res = Atomics.waitAsync(a, 0, 0, 0);
+            res.async + ':' + res.value
+          "#,
+                )
+                .unwrap();
+            assert_eq!(r, "false:timed-out");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    #[test]
+    fn atomics_wait_async_notify_resolves_ok() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            // Matching value + infinite timeout -> async promise; notify wakes it.
+            let async_and_count: String = ctx
+                .eval(
+                    r#"
+            globalThis.__r = 'pending';
+            var a = new Int32Array(new SharedArrayBuffer(8));
+            var res = Atomics.waitAsync(a, 0, 0);
+            res.value.then(function(v) { globalThis.__r = v; });
+            var woken = Atomics.notify(a, 0);
+            res.async + ':' + woken
+          "#,
+                )
+                .unwrap();
+            assert_eq!(async_and_count, "true:1", "async waiter must be woken by notify");
+            // Drain the microtask queue so the .then reaction runs.
+            while ctx.execute_pending_job() {}
+            let settled: String = ctx.eval("globalThis.__r").unwrap();
+            assert_eq!(settled, "ok");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    #[test]
+    fn atomics_wait_async_notify_on_other_index_does_not_wake() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            let woken: i32 = ctx
+                .eval(
+                    r#"
+            var a = new Int32Array(new SharedArrayBuffer(8));
+            Atomics.waitAsync(a, 0, 0);  // parks watching index 0
+            Atomics.notify(a, 1);        // notifies a different index
+          "#,
+                )
+                .unwrap();
+            assert_eq!(woken, 0, "notify on a different index wakes no async waiter");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    #[test]
+    fn atomics_wait_async_rejects_non_shared_buffer() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            let name: String = ctx
+                .eval(
+                    r#"
+            try {
+              var a = new Int32Array(new ArrayBuffer(8));
+              Atomics.waitAsync(a, 0, 0);
+              'no-throw';
+            } catch (e) { e.name; }
+          "#,
+                )
+                .unwrap();
+            assert_eq!(name, "TypeError");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    #[test]
+    fn atomics_wait_async_rejects_non_integer_array() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            let name: String = ctx
+                .eval(
+                    r#"
+            try {
+              var a = new Float64Array(new SharedArrayBuffer(16));
+              Atomics.waitAsync(a, 0, 0);
+              'no-throw';
+            } catch (e) { e.name; }
+          "#,
+                )
+                .unwrap();
+            assert_eq!(name, "TypeError");
+        });
+        drop(ctx);
+        drop(rt);
+    }
+
+    #[test]
+    fn atomics_wait_async_bigint64_roundtrip() {
+        let (rt, ctx) = setup();
+        ctx.with(|ctx| {
+            // not-equal on BigInt64Array (cell 0n, expecting 7n).
+            let neq: String = ctx
+                .eval(
+                    r#"
+            var a = new BigInt64Array(new SharedArrayBuffer(16));
+            var res = Atomics.waitAsync(a, 0, 7n);
+            res.async + ':' + res.value
+          "#,
+                )
+                .unwrap();
+            assert_eq!(neq, "false:not-equal");
+
+            // matching 0n -> async; notify resolves to ok.
+            let async_flag: bool = ctx
+                .eval(
+                    r#"
+            globalThis.__rb = 'pending';
+            var b = new BigInt64Array(new SharedArrayBuffer(16));
+            var r2 = Atomics.waitAsync(b, 1, 0n);
+            r2.value.then(function(v){ globalThis.__rb = v; });
+            Atomics.notify(b, 1);
+            r2.async
+          "#,
+                )
+                .unwrap();
+            assert!(async_flag);
+            while ctx.execute_pending_job() {}
+            let settled: String = ctx.eval("globalThis.__rb").unwrap();
+            assert_eq!(settled, "ok");
         });
         drop(ctx);
         drop(rt);
