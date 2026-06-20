@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-06-19",
+ "generated": "2026-06-20",
  "counts": {
-  "open": 52,
-  "fixed": 168,
+  "open": 48,
+  "fixed": 173,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 220,
+ "total_bugs": 221,
  "phases": [
   {
    "id": "P0",
@@ -1112,7 +1112,7 @@
   },
   "BUG-085": {
    "status": "open",
-   "title": "linear/radial gradient 12% deviation — TEST-39: 12.05%",
+   "title": "linear/radial gradient — TEST-39: 12.05%→1.62% (femtovg_stops: repeating-градиенты повторяются + hard-stop хвост дозаполняется до 1.0). Остаток DEBTOR: 256-текс…",
    "component": "paint",
    "date": null
   },
@@ -1358,7 +1358,7 @@
   },
   "BUG-126": {
    "status": "open",
-   "title": "CSS Anchor Positioning L1 (anchor-name/position-anchor) — TEST-77: 53.45%",
+   "title": "CSS Anchor Positioning L1 — placement фикснут (53.45% → 12.94%): position-area definite-size элементы прижимаются к якорю вместо растягивания на band (anchor.rs…",
    "component": "layout",
    "date": null
   },
@@ -1466,7 +1466,7 @@
   },
   "BUG-144": {
    "status": "open",
-   "title": "CSS filter/backdrop-filter — TEST-30: row-flip фикс 16.42%→10.48% (backdrop-filter `elem_id` FBO нуждался в FLIP_Y, карточки рисовались в `viewport_h−bounds.bot…",
+   "title": "CSS filter/backdrop-filter — TEST-30: row-flip 16.42%→10.48% (FLIP_Y) + gradient hard-stop row 2 (BUG-085) 10.48%→7.56% + backdrop colour-matrix/combo больше не…",
    "component": "paint",
    "date": null
   },
@@ -1669,10 +1669,10 @@
    "date": "2026-06-17"
   },
   "BUG-181": {
-   "status": "open",
-   "title": "`object-fit` basic deviation — TEST-19: 9.05%",
+   "status": "fixed",
+   "title": "`object-fit` basic — расследовано: геометрия всех 5 режимов (fill/contain/cover/none/scale-down) + object-position верна (средние RGB ячеек совпадают с Edge ±0.…",
    "component": "layout/paint",
-   "date": null
+   "date": "2026-06-20"
   },
   "BUG-182": {
    "status": "open",
@@ -1771,10 +1771,10 @@
    "date": null
   },
   "BUG-198": {
-   "status": "open",
-   "title": "`object-fit`/`object-position` SVG deviation — TEST-70: 7.82%",
+   "status": "fixed",
+   "title": "inline `<svg>` ошибочно применял CSS `object-fit`/`object-position` к viewBox — Edge их игнорирует и фитит viewBox через `preserveAspectRatio` (SVG §7.8). Замен…",
    "component": "layout/paint",
-   "date": null
+   "date": "2026-06-20"
   },
   "BUG-199": {
    "status": "open",
@@ -1909,10 +1909,10 @@
    "date": null
   },
   "BUG-221": {
-   "status": "open",
-   "title": "CPU-бэкенд снимка (`render_to_image_cpu`, cpu_raster.rs) не на паритете с femtovg: border-radius (TEST-36 квадрат вместо скругления), gradients (TEST-39), image…",
+   "status": "fixed",
+   "title": "CPU-бэкенд снимка (`render_to_image_cpu`, cpu_raster.rs) доведён до паритета с femtovg: border-radius (TEST-36 60.60%→0.47% — клампинг радиусов FillRoundedRect)…",
    "component": "paint",
-   "date": null
+   "date": "2026-06-20"
   },
   "BUG-222": {
    "status": "fixed",
@@ -1921,10 +1921,16 @@
    "date": "2026-06-19"
   },
   "BUG-223": {
-   "status": "open",
-   "title": "`lumen-network-service` не компилируется (E0004): `match` в `network_service.rs:51` не покрывает таб-варианты `IpcRequest::{CreateTab,CloseTab,NavigateTab,Scree…",
+   "status": "fixed",
+   "title": "`lumen-network-service` не компилируется (E0004): `match` в `network_service.rs:51` не покрывал таб-варианты `IpcRequest::{CreateTab,CloseTab,NavigateTab,Screen…",
    "component": "network/ipc",
-   "date": null
+   "date": "2026-06-20"
+  },
+  "BUG-224": {
+   "status": "fixed",
+   "title": "НЕ регрессия движка: `test_33_multi_column` хранил устаревший ground-truth (660x88, atomic-раскладка до BUG-186). После BUG-186 (фрагментация колонок, TEST-33 1…",
+   "component": "layout",
+   "date": "2026-06-20"
   }
  },
  "unlinked": {
@@ -2053,7 +2059,8 @@
    "BUG-208",
    "BUG-210",
    "BUG-211",
-   "BUG-215"
+   "BUG-215",
+   "BUG-224"
   ],
   "layout+paint": [
    "BUG-005",

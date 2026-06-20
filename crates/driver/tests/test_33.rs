@@ -9,7 +9,12 @@
 //!   mc[1]: 690×52   column-count:3, gap:30  — 3 .col children
 //!   mc[2]: 740×52   column-count:4, gap:20  — 4 .col children
 //!   mc[3]: 480×52   column-count:2, gap:60  — 2 .col children
-//!   mc[4]: 660×88   column-count:3, gap:12, column-span:all — auto height from content
+//!   mc[4]: 660×64   column-count:3, gap:12, column-span:all — auto height from content.
+//!     Two 36px col-sm blocks balance-fragment across 3 columns to 24px each (72/3),
+//!     then the 8px span (+4px margins = 16px), then two more col-sm fragmenting to
+//!     24px: 24+16+24 = 64. Verified against Edge (getBoundingClientRect → 64) and
+//!     TEST-33 pixel parity (≈0.1%). The earlier 88px figure predated BUG-186 column
+//!     fragmentation (atomic one-box-per-column placement, which Edge does not do).
 //!   mc[5]: 660×80   column-count:3, gap:12, column-fill:auto — explicit height
 //!   mc[6]: 900×52   column-count:5, gap:16  — 5 .col children
 //!
@@ -44,7 +49,7 @@ fn test_33_multi_column() {
         (690.0, 52.0),
         (740.0, 52.0),
         (480.0, 52.0),
-        (660.0, 88.0), // column-span:all, auto height
+        (660.0, 64.0), // column-span:all, auto height (Edge-verified; BUG-186 fragmentation)
         (660.0, 80.0), // column-fill:auto, explicit height
         (900.0, 52.0),
     ];
