@@ -3901,30 +3901,39 @@ function _lumen_make_canvas2d_ctx(canvasEl, nid) {
             for (var i = 0; i < n; i++) { var b = d[i] & 255; hex += H[b >> 4] + H[b & 15]; }
             _lumen_canvas2d_put_image_data(nid, hex, imageData.width | 0, imageData.height | 0, dx | 0, dy | 0);
         },
-        // drawImage forms: (img,dx,dy) | (img,dx,dy,dw,dh) | (img,sx,sy,sw,sh,dx,dy,dw,dh).
-        // Source must be a <canvas>/OffscreenCanvas with a backing native bitmap
-        // (carries __nid__). The 9-arg form crops the source sub-rectangle
-        // (sx,sy,sw,sh) before scaling it into the destination rect.
+        // drawImage forms: (src,dx,dy) | (src,dx,dy,dw,dh) | (src,sx,sy,sw,sh,dx,dy,dw,dh).
+        // Source may be a <canvas>/OffscreenCanvas (canvas bitmap store, via __nid__)
+        // or a decoded <img> element (img_bitmap_store, via __nid__ + tag=img).
         drawImage: function(image, a, b, c, d, e, f, g, h) {
             if (!image || image.__nid__ === undefined) { return; }
             var src = image.__nid__;
+            var isImg = (_lumen_get_tag_name(src) === 'IMG');
             var iw = +image.width || 0, ih = +image.height || 0;
             if (arguments.length >= 9) {
                 var sx = +a, sy = +b, sw = +c, sh = +d;
                 var dx9 = +e, dy9 = +f, dw9 = +g, dh9 = +h;
                 if (!(sw > 0) || !(sh > 0) || !(dw9 > 0) || !(dh9 > 0)) { return; }
-                _lumen_canvas2d_draw_image_crop(
-                    nid, src, sx + ',' + sy + ',' + sw + ',' + sh + ',' + dx9 + ',' + dy9 + ',' + dw9 + ',' + dh9);
+                var coords = sx + ',' + sy + ',' + sw + ',' + sh + ',' + dx9 + ',' + dy9 + ',' + dw9 + ',' + dh9;
+                if (isImg) { _lumen_canvas2d_draw_image_crop_from_img(nid, src, coords); }
+                else { _lumen_canvas2d_draw_image_crop(nid, src, coords); }
                 return;
             }
             var dx, dy, dw, dh;
             if (arguments.length >= 5) {
                 dx = +a; dy = +b; dw = +c; dh = +d;
+                if (!(dw > 0) || !(dh > 0)) { return; }
+                if (isImg) { _lumen_canvas2d_draw_image_from_img(nid, src, dx, dy, dw, dh); }
+                else { _lumen_canvas2d_draw_image(nid, src, dx, dy, dw, dh); }
             } else {
-                dx = +a; dy = +b; dw = iw; dh = ih;
+                dx = +a; dy = +b;
+                if (isImg) {
+                    // 3-arg form: pass dw/dh=0 so the native uses the image's natural size.
+                    _lumen_canvas2d_draw_image_from_img(nid, src, dx, dy, 0, 0);
+                } else {
+                    if (!(iw > 0) || !(ih > 0)) { return; }
+                    _lumen_canvas2d_draw_image(nid, src, dx, dy, iw, ih);
+                }
             }
-            if (!(dw > 0) || !(dh > 0)) { return; }
-            _lumen_canvas2d_draw_image(nid, src, dx, dy, dw, dh);
         },
         fillText: function(t, x, y) {
             _lumen_canvas2d_fill_text(nid, String(t == null ? '' : t), +x, +y);
@@ -12115,6 +12124,161 @@ mod tests {
         }
         assert!(any_blue, "cropped blue column must be drawn");
         assert!(!any_red, "red column must be excluded by the source crop");
+    }
+
+    #[test]
+    fn canvas_draw_image_from_img_element_3arg() {
+        // 3-arg drawImage(img, dx, dy): the img element's registered RGBA8 bitmap is
+        // blitted at natural size onto the destination canvas.
+        let rt = runtime_with_dom(make_doc());
+        // Register a 2×2 fully-red bitmap for the img element (nid is arbitrary but
+        // must match the DOM node created below).
+        let img_nid: u32 = match rt
+            .eval(
+                "var img = document.createElement('img');\
+                 img.setAttribute('src', 'test.png');\
+                 img.setAttribute('width', '2');\
+                 img.setAttribute('height', '2');\
+                 document.body.appendChild(img);\
+                 img.__nid__;",
+            )
+            .unwrap()
+        {
+            lumen_core::JsValue::Number(n) => n as u32,
+            other => panic!("expected img nid, got {other:?}"),
+        };
+        // Inject decoded bitmap: 2×2 solid red RGBA8.
+        let rgba8 = vec![255u8, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255];
+        rt.register_img_bitmaps(vec![(img_nid, 2, 2, rgba8)]);
+
+        let dest_nid = match rt
+            .eval(
+                "var c = document.createElement('canvas');\
+                 c.setAttribute('width', '4'); c.setAttribute('height', '4');\
+                 var ctx = c.getContext('2d');\
+                 ctx.drawImage(img, 0, 0);\
+                 c.__nid__;",
+            )
+            .unwrap()
+        {
+            lumen_core::JsValue::Number(n) => n as u32,
+            other => panic!("expected dest nid, got {other:?}"),
+        };
+        let updates = rt.flush_canvas_updates();
+        let dest = updates.iter().find(|(n, _, _, _)| *n == dest_nid)
+            .expect("destination canvas must have an update");
+        // Top-left 2×2 region should be red; natural size is used (dw/dh=0 → native picks 2×2).
+        let rgba = &dest.3;
+        let any_red = rgba.chunks_exact(4).any(|px| px[0] == 255 && px[2] == 0 && px[3] == 255);
+        assert!(any_red, "drawImage(img, dx, dy) must blit the registered red bitmap");
+    }
+
+    #[test]
+    fn canvas_draw_image_from_img_element_5arg() {
+        // 5-arg drawImage(img, dx, dy, dw, dh): blits and scales the bitmap.
+        let rt = runtime_with_dom(make_doc());
+        let img_nid: u32 = match rt
+            .eval(
+                "var img = document.createElement('img');\
+                 img.setAttribute('src', 'blue.png');\
+                 document.body.appendChild(img);\
+                 img.__nid__;",
+            )
+            .unwrap()
+        {
+            lumen_core::JsValue::Number(n) => n as u32,
+            other => panic!("expected img nid, got {other:?}"),
+        };
+        // 1×1 solid blue.
+        let rgba8 = vec![0u8, 0, 255, 255];
+        rt.register_img_bitmaps(vec![(img_nid, 1, 1, rgba8)]);
+
+        let dest_nid = match rt
+            .eval(
+                "var c = document.createElement('canvas');\
+                 c.setAttribute('width', '4'); c.setAttribute('height', '4');\
+                 var ctx = c.getContext('2d');\
+                 ctx.drawImage(img, 0, 0, 4, 4);\
+                 c.__nid__;",
+            )
+            .unwrap()
+        {
+            lumen_core::JsValue::Number(n) => n as u32,
+            other => panic!("expected dest nid, got {other:?}"),
+        };
+        let updates = rt.flush_canvas_updates();
+        let dest = updates.iter().find(|(n, _, _, _)| *n == dest_nid)
+            .expect("destination canvas must have an update");
+        let any_blue = dest.3.chunks_exact(4).any(|px| px[2] == 255 && px[0] == 0 && px[3] == 255);
+        assert!(any_blue, "drawImage(img, dx, dy, dw, dh) must blit the registered blue bitmap");
+    }
+
+    #[test]
+    fn canvas_draw_image_from_img_element_9arg_crop() {
+        // 9-arg drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh): crops source sub-rect.
+        // Source: 2×1 bitmap — left pixel red, right pixel green.
+        // Crop right (green) half only: sx=1, sy=0, sw=1, sh=1.
+        let rt = runtime_with_dom(make_doc());
+        let img_nid: u32 = match rt
+            .eval(
+                "var img = document.createElement('img');\
+                 img.setAttribute('src', 'rg.png');\
+                 document.body.appendChild(img);\
+                 img.__nid__;",
+            )
+            .unwrap()
+        {
+            lumen_core::JsValue::Number(n) => n as u32,
+            other => panic!("expected img nid, got {other:?}"),
+        };
+        // 2×1 RGBA8: [R, G, B, A] × 2 pixels.
+        let rgba8 = vec![255u8, 0, 0, 255, 0, 255, 0, 255]; // red | green
+        rt.register_img_bitmaps(vec![(img_nid, 2, 1, rgba8)]);
+
+        let dest_nid = match rt
+            .eval(
+                "var c = document.createElement('canvas');\
+                 c.setAttribute('width', '2'); c.setAttribute('height', '2');\
+                 var ctx = c.getContext('2d');\
+                 ctx.drawImage(img, 1, 0, 1, 1, 0, 0, 2, 2);\
+                 c.__nid__;",
+            )
+            .unwrap()
+        {
+            lumen_core::JsValue::Number(n) => n as u32,
+            other => panic!("expected dest nid, got {other:?}"),
+        };
+        let updates = rt.flush_canvas_updates();
+        let dest = updates.iter().find(|(n, _, _, _)| *n == dest_nid)
+            .expect("destination canvas must have an update");
+        let rgba = &dest.3;
+        let any_green = rgba.chunks_exact(4).any(|px| px[1] == 255 && px[0] == 0 && px[3] == 255);
+        let any_red   = rgba.chunks_exact(4).any(|px| px[0] == 255 && px[2] == 0 && px[3] == 255);
+        assert!(any_green, "9-arg drawImage from <img> must blit the green crop");
+        assert!(!any_red, "red pixels from left half must be excluded by the crop");
+    }
+
+    #[test]
+    fn canvas_draw_image_from_img_unregistered_is_noop() {
+        // drawImage with an <img> that has no registered bitmap must be a silent no-op.
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var img = document.createElement('img');\
+             img.setAttribute('src', 'missing.png');\
+             document.body.appendChild(img);\
+             var c = document.createElement('canvas');\
+             c.setAttribute('width', '2'); c.setAttribute('height', '2');\
+             var ctx = c.getContext('2d');\
+             ctx.drawImage(img, 0, 0);",
+        )
+        .unwrap();
+        // No bitmap registered → canvas remains transparent, no dirty update needed.
+        let updates = rt.flush_canvas_updates();
+        // The canvas was never dirtied so either has no entry or all-transparent pixels.
+        let all_transparent = updates.iter().all(|(_, _, _, rgba)| {
+            rgba.chunks_exact(4).all(|px| px[3] == 0)
+        });
+        assert!(all_transparent, "drawImage with unregistered <img> must be a no-op");
     }
 
     #[test]
