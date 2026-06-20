@@ -6,7 +6,7 @@
 
 ## In progress
 
-_(пусто — BUG-180 завершён, worktree удалён)_
+_(пусто — BUG-201 завершён, worktree удалён)_
 
 ## Next
 
@@ -85,7 +85,7 @@ _(BUG-196 закрыт 2026-06-18 — `::before`/`attr()` на flex-контей
 _(BUG-199 закрыт 2026-06-20 как KNOWN_DEBTOR — Edge ловит entry-transition в полёте, Lumen рендерит спек-корректное settled-состояние, см. Recent.)_
 _(BUG-203 закрыт 2026-06-20 — skip-ink gap-геометрия фикснута (8.20% → 6.02%); остаток font-parity → KNOWN_DEBTORS BUG-128, см. Recent.)_
 _(BUG-191 закрыт 2026-06-20 — `text-shadow` blur корректен (sigma=radius/2, full-RT GaussianBlur, glow/20px проверены пиксельно); остаток 5.83%→4.25% = font-parity → KNOWN_DEBTORS BUG-128, см. Recent.)_
-- BUG-201 (TEST-82, 5.00%) — SVG `<use>`
+_(BUG-201 закрыт 2026-06-20 — SVG `<use>`: polygon/polyline рендер + mis-nested `<use>` siblings (HTML5 не самозакрывает `<use/>`) + transform-origin в user-space; 5.00% → 2.38% → KNOWN_DEBTORS BUG-128, см. Recent.)_
 
 **Низкий diff (<5%):**
 - BUG-187 (TEST-34, 4.78%) — form controls
@@ -156,6 +156,25 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
+
+- **BUG-201** (2026-06-20) — SVG `<use>` (TEST-82 5.00% → 2.38% DEBTOR, KNOWN_DEBTORS BUG-128).
+  Три независимых дефекта в `box_tree.rs`. (1) `<polygon>`/`<polyline>` не имели ветки рендера
+  (попадали в `_ =>`), поэтому звезда-`<symbol>` (ряд 2b, состоит из polygon) не рисовалась вовсе —
+  добавлена ветка: `parse_svg_points` + `points_to_path_d` строят path-`d` (polygon закрывает `Z`,
+  polyline нет), рендер через существующий `<path>`-пайплайн. (2) HTML5-парсер не самозакрывает
+  `<use/>` (не void-элемент) → соседние `<use>` вкладывались как DOM-дети; ветка `<use>`
+  рекурсировала только в *target*, не в собственные mis-nested DOM-дети → рендерился ЛИШЬ первый
+  клон каждого target (ряд 1: 1 из 2, ряд 3: 1 из 10). Фикс: `<use>`/`<polygon>`/`<polyline>`
+  сканируют mis-nested siblings в `out` (как `rect`/`circle`); `<defs>`/`<symbol>` при прямом
+  обходе больше не рендерятся. (3) element-transform применялся к doc-координатам: origin вьюпорта
+  `(ox,oy)` запекался в bbox ПЕРЕД composed-трансформом → `scale(0.75)` масштабировал origin,
+  масштабированные клоны ряда 3 уезжали с y≈347 на y≈260. Фикс: transform в user-space, потом
+  маппинг user→doc `(ox+x·sx, oy+y·sy)` (translate-эквивалентно, scale/rotate-корректно). Все
+  клоны/группы/symbol/polygon/nested-chain + x/y + scale совпадают с Edge по позиции/размеру/заливке
+  (diff: только AA-периметры rule 2 + текст меток rule 3). Остаток 2.38% = font-parity → KNOWN_DEBTORS
+  (BUG-128). 7 регресс-тестов (svg_use_multiple_siblings_all_clone,
+  svg_use_scale_transform_does_not_scale_viewport_origin, svg_polygon_*, svg_defs_*, parse_svg_points,
+  points_to_path_d). Без регрессий (layout 2945 lib-тестов, 33 svg_layout-теста зелёные).
 
 - **BUG-191** (2026-06-20) — `text-shadow` blur (TEST-52 5.83% → 4.25% DEBTOR, KNOWN_DEBTORS
   BUG-128). Расследование: blur-пайплайн корректен, дефекта движка нет. sigma = blur-radius/2
