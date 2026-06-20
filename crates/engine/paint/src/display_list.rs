@@ -4123,6 +4123,80 @@ fn emit_input_value_text(
     out.push(DisplayCommand::PopClip);
 }
 
+/// Paint an empty text input's `placeholder` attribute as a grey hint
+/// (HTML rendering §15.5.5). Left-aligned, vertically centered and clipped to
+/// the content box, mirroring `emit_input_value_text` but with a fixed grey
+/// colour (`#757575`, the UA default) and no password masking.
+fn emit_input_placeholder_text(b: &LayoutBox, placeholder: &str, out: &mut Vec<DisplayCommand>) {
+    if placeholder.is_empty() {
+        return;
+    }
+    let s = &b.style;
+    let bl = s.border_left_width;
+    let bt = s.border_top_width;
+    let br = s.border_right_width;
+    let bb = s.border_bottom_width;
+    let inset = 2.0_f32;
+    let content_x = b.rect.x + bl + inset;
+    let content_y = b.rect.y + bt;
+    let content_w = (b.rect.width - bl - br - inset * 2.0).max(1.0);
+    let content_h = (b.rect.height - bt - bb).max(1.0);
+    let font_size = s.font_size;
+    let text_y = content_y + ((content_h - font_size) / 2.0).max(0.0);
+
+    out.push(DisplayCommand::PushClipRect {
+        rect: Rect::new(content_x, content_y, content_w, content_h),
+    });
+    out.push(DisplayCommand::DrawText {
+        rect: Rect::new(content_x, text_y, content_w, font_size),
+        text: placeholder.to_owned(),
+        font_size,
+        color: Color { r: 0x75, g: 0x75, b: 0x75, a: 255 },
+        font_family: s.font_family.clone(),
+        font_weight: s.font_weight,
+        font_style: s.font_style,
+        font_variation_axes: vec![],
+        tab_size: 0.0,
+        highlight_name: None,
+    });
+    out.push(DisplayCommand::PopClip);
+}
+
+/// Build the white checkmark glyph for a checked checkbox as a triangle soup
+/// (for [`DisplayCommand::DrawSvgPath`]). The tick is a two-segment thick
+/// polyline (short stroke down to a vertex, long stroke up to the top-right),
+/// positioned and scaled inside `fill` (the accent-filled control box).
+fn checkmark_triangles(fill: Rect) -> Vec<[f32; 2]> {
+    let sz = fill.width.min(fill.height);
+    // Normalised tick anchor points (origin top-left, y downwards).
+    let pt = |nx: f32, ny: f32| [fill.x + nx * fill.width, fill.y + ny * fill.height];
+    let p0 = pt(0.22, 0.52);
+    let p1 = pt(0.42, 0.72);
+    let p2 = pt(0.78, 0.30);
+    let half = (sz * 0.09).max(1.0);
+
+    let mut v = Vec::with_capacity(12);
+    push_thick_segment(&mut v, p0, p1, half);
+    push_thick_segment(&mut v, p1, p2, half);
+    v
+}
+
+/// Append the two triangles of a thick line segment from `a` to `b` with
+/// half-width `half` to `out` (6 vertices). Used to draw the checkmark strokes.
+fn push_thick_segment(out: &mut Vec<[f32; 2]>, a: [f32; 2], b: [f32; 2], half: f32) {
+    let dx = b[0] - a[0];
+    let dy = b[1] - a[1];
+    let len = (dx * dx + dy * dy).sqrt().max(f32::EPSILON);
+    // Perpendicular unit vector scaled by half-width.
+    let nx = -dy / len * half;
+    let ny = dx / len * half;
+    let a1 = [a[0] + nx, a[1] + ny];
+    let a2 = [a[0] - nx, a[1] - ny];
+    let b1 = [b[0] + nx, b[1] + ny];
+    let b2 = [b[0] - nx, b[1] - ny];
+    out.extend_from_slice(&[a1, a2, b1, a2, b2, b1]);
+}
+
 fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut Vec<DisplayCommand>) {
     // CSS Basic UI L4 §4.2 — `appearance: none` (and the legacy `-webkit-`/
     // `-moz-` aliases, normalised to `Appearance::None` at parse time) removes
@@ -4139,7 +4213,7 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
     // green/yellow/red coloring from HTML §4.10.14, not the accent color.
     let accent = b.style.accent_color.unwrap_or(ACCENT_DEFAULT);
     match kind {
-        FormControlKind::Input { input_type, checked, value_text } => {
+        FormControlKind::Input { input_type, checked, value_text, placeholder } => {
             // HTML §4.10.5.1.15 — a color input renders its value as a swatch
             // filling the content area, independent of any author `background`
             // (the native color widget ignores author bg). Default value is
@@ -4175,7 +4249,15 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
                 | InputType::Tel | InputType::Url | InputType::Number
                 | InputType::Search | InputType::Date | InputType::DateTimeLocal
                 | InputType::Time | InputType::Month | InputType::Week => {
-                    emit_input_value_text(b, value_text, input_type, false, out);
+                    if value_text.is_empty() && !placeholder.is_empty() {
+                        // HTML rendering §15.5.5 — an empty text input paints its
+                        // `placeholder` as a grey hint (never masked, even for
+                        // password). Drawn left-aligned, vertically centered and
+                        // clipped to the content box, like the value text.
+                        emit_input_placeholder_text(b, placeholder, out);
+                    } else {
+                        emit_input_value_text(b, value_text, input_type, false, out);
+                    }
                     return;
                 }
                 InputType::Submit | InputType::Reset | InputType::Button => {
@@ -4190,30 +4272,55 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
                 _ => {}
             }
             if !checked { return; }
-            let inset = match input_type {
-                InputType::Checkbox => (b.rect.width * 0.2).clamp(2.0, 4.0),
-                InputType::Radio    => (b.rect.width * 0.27).clamp(2.0, 4.0),
-                _ => return,
-            };
-            let dot = Rect::new(
-                b.rect.x + inset,
-                b.rect.y + inset,
-                (b.rect.width  - inset * 2.0).max(1.0),
-                (b.rect.height - inset * 2.0).max(1.0),
+            if *input_type != InputType::Checkbox && *input_type != InputType::Radio {
+                return;
+            }
+            // Native checked checkbox/radio (Chromium/Edge default appearance):
+            // the whole control fills with accent colour — overriding any author
+            // `background` — and a white glyph is drawn on top: a tick for the
+            // checkbox, a centre dot for the radio.
+            let bl = b.style.border_left_width;
+            let bt = b.style.border_top_width;
+            let br = b.style.border_right_width;
+            let bb = b.style.border_bottom_width;
+            let fill = Rect::new(
+                b.rect.x + bl,
+                b.rect.y + bt,
+                (b.rect.width  - bl - br).max(1.0),
+                (b.rect.height - bt - bb).max(1.0),
             );
+            let white = Color { r: 255, g: 255, b: 255, a: 255 };
             match input_type {
-                // A radio's checked indicator is a round dot, not a square —
-                // emit a fully-rounded rect (radius = half the smaller side)
-                // so it renders as a filled circle matching the native widget.
                 InputType::Radio => {
-                    let r = dot.width.min(dot.height) / 2.0;
+                    // Solid accent disc filling the control, then a small white
+                    // centre dot (radius ≈ 0.22 of the box) — the native look.
+                    let r = fill.width.min(fill.height) / 2.0;
                     out.push(DisplayCommand::FillRoundedRect {
-                        rect: dot,
+                        rect: fill,
                         radii: crate::CornerRadii { tl: r, tr: r, br: r, bl: r, ..Default::default() },
                         color: accent,
                     });
+                    let dot_d = (fill.width.min(fill.height) * 0.44).max(2.0);
+                    let dot = Rect::new(
+                        fill.x + (fill.width  - dot_d) / 2.0,
+                        fill.y + (fill.height - dot_d) / 2.0,
+                        dot_d,
+                        dot_d,
+                    );
+                    let dr = dot_d / 2.0;
+                    out.push(DisplayCommand::FillRoundedRect {
+                        rect: dot,
+                        radii: crate::CornerRadii { tl: dr, tr: dr, br: dr, bl: dr, ..Default::default() },
+                        color: white,
+                    });
                 }
-                _ => out.push(DisplayCommand::FillRect { rect: dot, color: accent }),
+                _ => {
+                    out.push(DisplayCommand::FillRect { rect: fill, color: accent });
+                    out.push(DisplayCommand::DrawSvgPath {
+                        vertices: checkmark_triangles(fill),
+                        color: white,
+                    });
+                }
             }
         }
         FormControlKind::Select { selected_text } => {
@@ -7035,6 +7142,69 @@ mod tests {
         assert!(texts(&num).contains(&"42"), "number input should paint value");
         let search = build(r#"<input type=search value="query">"#, "");
         assert!(texts(&search).contains(&"query"), "search input should paint value");
+    }
+
+    /// BUG-187 — an empty text input paints its `placeholder` attribute as a
+    /// grey hint (`#757575`), so the field is not blank (matching Edge).
+    #[test]
+    fn empty_text_input_paints_placeholder() {
+        let dl = build(r#"<input type=text value="" placeholder="text input">"#, "");
+        let hint = dl.iter().find_map(|c| match c {
+            DisplayCommand::DrawText { text, color, .. } if text == "text input" => Some(color),
+            _ => None,
+        });
+        let color = hint.expect("placeholder text should be painted");
+        assert_eq!(
+            (color.r, color.g, color.b),
+            (0x75, 0x75, 0x75),
+            "placeholder should be grey, got {color:?}"
+        );
+    }
+
+    /// BUG-187 — a placeholder is only shown while the value is empty; a filled
+    /// input paints its value and never the placeholder.
+    #[test]
+    fn filled_input_paints_value_not_placeholder() {
+        let dl = build(r#"<input type=text value="typed" placeholder="hint">"#, "");
+        let t = texts(&dl);
+        assert!(t.contains(&"typed"), "filled input paints its value, got {t:?}");
+        assert!(!t.contains(&"hint"), "placeholder must be hidden when value set, got {t:?}");
+    }
+
+    /// BUG-187 — a checked checkbox draws a white tick (a `DrawSvgPath`
+    /// triangle soup) on top of the accent-filled box, matching the native widget.
+    #[test]
+    fn checked_checkbox_paints_white_tick() {
+        let dl = build("<input type=checkbox checked>", "");
+        let tick = dl.iter().any(|c| matches!(
+            c,
+            DisplayCommand::DrawSvgPath { vertices, color }
+                if !vertices.is_empty() && color.r == 255 && color.g == 255 && color.b == 255
+        ));
+        assert!(tick, "checked checkbox should draw a white tick, got {dl:?}");
+    }
+
+    /// An unchecked checkbox draws neither the accent fill nor the tick.
+    #[test]
+    fn unchecked_checkbox_paints_no_tick() {
+        let dl = build("<input type=checkbox>", "");
+        let tick = dl.iter().any(|c| matches!(c, DisplayCommand::DrawSvgPath { .. }));
+        assert!(!tick, "unchecked checkbox must not draw a tick, got {dl:?}");
+        assert!(
+            !fills(&dl).iter().any(|c| c.r == 21 && c.g == 90 && c.b == 192),
+            "unchecked checkbox must not paint the accent fill"
+        );
+    }
+
+    /// BUG-187 — a checked radio draws a white centre dot (a fully-rounded
+    /// `FillRoundedRect`) on top of the accent-filled disc.
+    #[test]
+    fn checked_radio_paints_white_center_dot() {
+        let dl = build("<input type=radio checked>", "");
+        let white_dot = rounded_fills(&dl)
+            .iter()
+            .any(|c| c.r == 255 && c.g == 255 && c.b == 255);
+        assert!(white_dot, "checked radio should draw a white centre dot, got {dl:?}");
     }
 
     /// `<progress>` fill bar uses `accent-color` (a rounded-rect fill).

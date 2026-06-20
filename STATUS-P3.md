@@ -88,7 +88,7 @@ _(BUG-191 закрыт 2026-06-20 — `text-shadow` blur корректен (sig
 _(BUG-201 закрыт 2026-06-20 — SVG `<use>`: polygon/polyline рендер + mis-nested `<use>` siblings (HTML5 не самозакрывает `<use/>`) + transform-origin в user-space; 5.00% → 2.38% → KNOWN_DEBTORS BUG-128, см. Recent.)_
 
 **Низкий diff (<5%):**
-- BUG-187 (TEST-34, 4.78%) — form controls
+_(BUG-187 закрыт 2026-06-20 — form controls: placeholder серым у пустых полей + checkbox белая галочка + radio белая точка-в-центре; 4.78% → 3.02% → KNOWN_DEBTORS BUG-128, см. Recent.)_
 - BUG-188 (TEST-46, 4.63%) — individual transforms
 - BUG-211 (TEST-93, 4.11%) — `field-sizing: content`
 - BUG-185 (TEST-32, 3.75%) — list `::marker`
@@ -156,6 +156,25 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
+
+- **BUG-187** (2026-06-20) — form controls static rendering (TEST-34 4.78% → 3.02%
+  DEBTOR, KNOWN_DEBTORS BUG-128). Закрыты оба оставшихся form-control-специфичных
+  пункта DEBTOR'а. (1) **Placeholder.** `FormControlKind::Input` получил поле
+  `placeholder` (атрибут `placeholder`, `box_tree.rs`); text-подобные инпуты при
+  пустом `value` рисуют его серым `#757575` через `emit_input_placeholder_text`
+  (`display_list.rs`, зеркало `emit_input_value_text` без password-маски), верт.
+  центрирован + клип по content-box (HTML rendering §15.5.5). (2) **checkbox-галочка
+  / radio-точка.** Checked checkbox/radio заливают весь control accent-цветом
+  (перекрывая author `background`, как нативный виджет), поверх — белый глиф: checkbox
+  — галочка триангуляцией (`checkmark_triangles`/`push_thick_segment` → `DrawSvgPath`,
+  двухсегментная толстая ✓); radio — белая точка-в-центре (`FillRoundedRect` r=полстороны,
+  d≈0.44 бокса). Совпадает с Edge (синий чекбокс+белая галочка, синий radio+белая точка).
+  Визуальная сверка: placeholder/галочка/точка как в Edge; остаток 3.28% (в noise-band
+  baseline 3.02%) = чисто font-parity лейблов/значений (Inter vs Edge UI-шрифт) +
+  line-height сдвиг → класс BUG-128, TEST-34 KNOWN_DEBTORS переведён на BUG-128.
+  5 регресс-тестов (empty_text_input_paints_placeholder, filled_input_paints_value_not_placeholder,
+  checked_checkbox_paints_white_tick, unchecked_checkbox_paints_no_tick,
+  checked_radio_paints_white_center_dot). Без регрессий (paint 776+21, layout 2945).
 
 - **BUG-201** (2026-06-20) — SVG `<use>` (TEST-82 5.00% → 2.38% DEBTOR, KNOWN_DEBTORS BUG-128).
   Три независимых дефекта в `box_tree.rs`. (1) `<polygon>`/`<polyline>` не имели ветки рендера

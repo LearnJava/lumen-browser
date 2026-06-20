@@ -1,6 +1,6 @@
 # BUG-187
 
-**Статус:** OPEN (DEBTOR)
+**Статус:** FIXED 2026-06-20 (DEBTOR → KNOWN_DEBTORS BUG-128)
 **Компонент:** layout/paint
 **Тест:** TEST-34 (diff 4.78% → 3.02%)
 
@@ -57,3 +57,31 @@ form controls: input/checkbox/radio/button/textarea/select static rendering.
 
 1. Рендер placeholder-текста (атрибут `placeholder`) серым, когда value пуст.
 2. Белая галочка checkbox + кольцо radio в `emit_form_control_indicator`.
+
+## Фикс (2026-06-20, финал)
+
+Закрыты оба оставшихся form-control-специфичных пункта.
+
+- **Placeholder.** `FormControlKind::Input` получил поле `placeholder` (из атрибута
+  `placeholder`, `box_tree.rs`). В `emit_form_control_indicator` (`display_list.rs`)
+  text-подобные инпуты при пустом `value` и непустом `placeholder` рисуют его новой
+  `emit_input_value_text`-зеркальной функцией `emit_input_placeholder_text` серым
+  `#757575`, без password-маскировки, вертикально центрированным и клиппленным по
+  content-box (HTML rendering §15.5.5).
+- **Checkbox-галочка / radio-точка.** Checked checkbox/radio теперь заливают весь
+  control accent-цветом (перекрывая author `background`, как нативный виджет), а
+  поверх рисуется белый глиф: для checkbox — галочка триангуляцией
+  (`checkmark_triangles` + `push_thick_segment` → `DrawSvgPath`, двухсегментная
+  толстая полилиния ✓); для radio — белая точка-в-центре (`FillRoundedRect`
+  радиусом в полстороны, диаметр ≈0.44 бокса). Это совпадает с эталоном Edge
+  (синий чекбокс с белой галочкой, синий radio с белой точкой).
+
+Визуальная сверка (`run.py --only 34`): placeholder/галочка/точка совпадают с Edge;
+остаток 3.28% (в пределах noise-band baseline 3.02%) — это чисто font-parity лейблов
+кнопок/значений инпутов (Inter vs Edge UI-шрифт) + вертикальный line-height сдвиг,
+класс **BUG-128**. KNOWN_DEBTORS-запись TEST-34 перенаправлена на BUG-128.
+
+Регресс-тесты (`display_list.rs`): `empty_text_input_paints_placeholder`,
+`filled_input_paints_value_not_placeholder`, `checked_checkbox_paints_white_tick`,
+`unchecked_checkbox_paints_no_tick`, `checked_radio_paints_white_center_dot`.
+Без регрессий (paint 776 lib + 21, layout 2945 lib).

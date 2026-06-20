@@ -200,7 +200,7 @@
 | [BUG-184](bugs/BUG-184-OPEN.md) | OPEN | paint | `clip-path` deviation — TEST-31: 0.59% |
 | [BUG-185](bugs/BUG-185-OPEN.md) | OPEN | layout/paint | list `::marker` geometry deviation — TEST-32: 3.75% |
 | [BUG-186](bugs/BUG-186-FIXED.md) | FIXED 2026-06-18 | layout | `multi-column` column fragmentation — TEST-33: 14.89% → 0.12% PASS |
-| [BUG-187](bugs/BUG-187-OPEN.md) | OPEN (DEBTOR) | layout/paint | form controls static rendering — TEST-34: 4.78% → 3.02% → (этап 2) value-текст text-инпутов рисуется (email/password-маска/number/search + submit-лейбл, вертикальное центрирование, клиппинг по content-box), ipc 2.95%. Остаток DEBTOR: placeholder пустых полей + checkbox-галочка/radio-тик + font-parity лейблов |
+| [BUG-187](bugs/BUG-187-FIXED.md) | FIXED 2026-06-20 | layout/paint | form controls static rendering — TEST-34: 4.78% → 3.02% (DEBTOR, KNOWN_DEBTORS BUG-128). Закрыты все form-control-специфичные дефекты: inline-block-поток, radio-круг, `<option>` display:none, color-swatch, value-текст инпутов, submit-лейбл, placeholder серым у пустых полей, checkbox белая галочка (DrawSvgPath) + radio белая точка-в-центре. Остаток = чисто font-parity лейблов/value (Inter vs Edge UI-шрифт) + line-height сдвиг → класс BUG-128 |
 | [BUG-188](bugs/BUG-188-OPEN.md) | OPEN | layout/paint | individual `translate`/`rotate`/`scale` transforms deviation — TEST-46: 4.63% |
 | [BUG-189](bugs/BUG-189-OPEN.md) | OPEN | paint | SVG basic shapes deviation — TEST-47: 3.71% |
 | [BUG-190](bugs/BUG-190-OPEN.md) | OPEN | paint | `background-blend-mode` deviation — TEST-49: 2.39% |
