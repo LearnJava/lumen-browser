@@ -97,6 +97,15 @@ pub enum Instr {
     SimdLane { sub: u32, lane: u8 },
     /// Any other SIMD op with no immediate beyond the sub-opcode.
     Simd(u32),
+    // ── Threads / atomics (`0xFE` prefix) ───────────────────────────────────
+    /// Atomic memory op (`0xFE` sub-opcodes 0x00..=0x02, 0x10..=0x4E): `sub`
+    /// selects notify/wait/load/store/rmw/cmpxchg, `offset` the static address
+    /// offset (alignment hint is ignored). Executed with single-threaded,
+    /// non-blocking semantics (there is only one agent, so every operation is
+    /// trivially atomic and `wait`/`notify` never actually block).
+    Atomic { sub: u32, offset: u32 },
+    /// `atomic.fence` (`0xFE 0x03`) — a no-op under single-threaded semantics.
+    AtomicFence,
 }
 
 /// What an import binds to.
@@ -879,6 +888,24 @@ fn decode_expr(r: &mut Reader) -> DecodeResult<Vec<Instr>> {
                     }
                     // everything else: pure stack op identified by sub-opcode
                     _ => out.push(Instr::Simd(sub)),
+                }
+            }
+            0xFE => {
+                let sub = r.u32()?;
+                match sub {
+                    // atomic.fence — single reserved byte, no memarg.
+                    0x03 => {
+                        let _reserved = r.byte()?;
+                        out.push(Instr::AtomicFence);
+                    }
+                    // notify / wait32 / wait64 / loads / stores / rmw / cmpxchg —
+                    // all carry a memarg (alignment hint + static offset).
+                    0x00..=0x02 | 0x10..=0x4E => {
+                        let _align = r.u32()?;
+                        let offset = r.u32()?;
+                        out.push(Instr::Atomic { sub, offset });
+                    }
+                    _ => return Err(format!("unsupported 0xFE sub-opcode {sub}")),
                 }
             }
             _ => return Err(format!("unknown opcode 0x{op:02X}")),
