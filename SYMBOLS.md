@@ -69,7 +69,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/bidi-server/src/server.rs:14` **fn** `spawn` — Spawn the BiDi server on `127.0.0.1:port`. Non-blocking — runs in a background thread
 `crates/bidi-server/src/transport.rs:18` **fn** `handle` — Handle one accepted TCP stream: WS upgrade → BiDi command loop
 
-## lumen-canvas  (97 symbols)
+## lumen-canvas  (98 symbols)
 
 `crates/engine/canvas/src/color.rs:3` **struct** `CanvasColor` — RGBA color used by the Canvas 2D API
 `crates/engine/canvas/src/color.rs:11` **fn** `rgba`
@@ -144,10 +144,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/canvas/src/lib.rs:1114` **fn** `stroke_with_path2d` — `stroke(path2d)` — stroke a `Path2D` object using the current `strokeStyle`
 `crates/engine/canvas/src/lib.rs:1130` **fn** `clip_with_path2d` — `clip(path2d)` — intersect the clipping region with a `Path2D` object (even-odd rule)
 `crates/engine/canvas/src/lib.rs:1145` **fn** `is_point_in_path2d` — `isPointInPath(path2d, x, y)` — test whether `(x, y)` lies inside a `Path2D`
-`crates/engine/canvas/src/lib.rs:1161` **fn** `draw_image` — `drawImage(src_pixels, src_w, src_h, dx, dy, dw, dh)` — blit source image onto canvas
-`crates/engine/canvas/src/lib.rs:1211` **fn** `put_image_data` — `putImageData(data, sw, sh, dx, dy)` — write RGBA8 pixel data directly to canvas
-`crates/engine/canvas/src/lib.rs:1234` **fn** `create_image_data` — `createImageData(sw, sh)` — return a zero-filled RGBA8 buffer of `sw × sh` pixels
-`crates/engine/canvas/src/lib.rs:1244` **fn** `fill_text_glyphs` — Draw pre-rasterized glyph bitmaps at text position
+`crates/engine/canvas/src/lib.rs:1164` **fn** `draw_image` — `drawImage(src_pixels, src_w, src_h, dx, dy, dw, dh)` — blit source image onto canvas
+`crates/engine/canvas/src/lib.rs:1189` **fn** `draw_image_cropped` — `drawImage(src, sx, sy, sw, sh, dx, dy, dw, dh)` — the 9-argument form with
+`crates/engine/canvas/src/lib.rs:1248` **fn** `put_image_data` — `putImageData(data, sw, sh, dx, dy)` — write RGBA8 pixel data directly to canvas
+`crates/engine/canvas/src/lib.rs:1271` **fn** `create_image_data` — `createImageData(sw, sh)` — return a zero-filled RGBA8 buffer of `sw × sh` pixels
+`crates/engine/canvas/src/lib.rs:1281` **fn** `fill_text_glyphs` — Draw pre-rasterized glyph bitmaps at text position
 `crates/engine/canvas/src/path.rs:3` **enum** `PathSegment` — A single segment in a 2D path (HTML Canvas 2D §4.12.4)
 `crates/engine/canvas/src/path.rs:16` **type** `PathCommand` — Alias kept for API symmetry with the HTML spec (`PathCommand` = verb)
 `crates/engine/canvas/src/path2d.rs:14` **struct** `Path2dData` — A reusable 2D path object independent of any rendering context
@@ -4137,4 +4138,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4066 symbols in 22 crates*
+*Total: 4067 symbols in 22 crates*

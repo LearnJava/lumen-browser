@@ -3903,16 +3903,22 @@ function _lumen_make_canvas2d_ctx(canvasEl, nid) {
         },
         // drawImage forms: (img,dx,dy) | (img,dx,dy,dw,dh) | (img,sx,sy,sw,sh,dx,dy,dw,dh).
         // Source must be a <canvas>/OffscreenCanvas with a backing native bitmap
-        // (carries __nid__). The native blitter has no source-crop, so the 9-arg
-        // form draws the full source scaled into the destination rect.
+        // (carries __nid__). The 9-arg form crops the source sub-rectangle
+        // (sx,sy,sw,sh) before scaling it into the destination rect.
         drawImage: function(image, a, b, c, d, e, f, g, h) {
             if (!image || image.__nid__ === undefined) { return; }
             var src = image.__nid__;
             var iw = +image.width || 0, ih = +image.height || 0;
-            var dx, dy, dw, dh;
             if (arguments.length >= 9) {
-                dx = +e; dy = +f; dw = +g; dh = +h;
-            } else if (arguments.length >= 5) {
+                var sx = +a, sy = +b, sw = +c, sh = +d;
+                var dx9 = +e, dy9 = +f, dw9 = +g, dh9 = +h;
+                if (!(sw > 0) || !(sh > 0) || !(dw9 > 0) || !(dh9 > 0)) { return; }
+                _lumen_canvas2d_draw_image_crop(
+                    nid, src, sx + ',' + sy + ',' + sw + ',' + sh + ',' + dx9 + ',' + dy9 + ',' + dw9 + ',' + dh9);
+                return;
+            }
+            var dx, dy, dw, dh;
+            if (arguments.length >= 5) {
                 dx = +a; dy = +b; dw = +c; dh = +d;
             } else {
                 dx = +a; dy = +b; dw = iw; dh = ih;
@@ -12060,6 +12066,55 @@ mod tests {
             .iter()
             .any(|(_n, _w, _h, rgba)| rgba[0] == 255 && rgba[2] == 0);
         assert!(any_red, "drawImage blits the red source onto the destination");
+    }
+
+    #[test]
+    fn canvas_draw_image_9arg_crops_source_subrect() {
+        // Source 2×2: left column red, right column blue. The 9-arg form crops the
+        // right (blue) column and stretches it over the whole destination — the
+        // result must contain blue and no red, proving source-crop is honoured.
+        let rt = runtime_with_dom(make_doc());
+        let dest_nid = match rt
+            .eval(
+                "var src = document.createElement('canvas');\
+                 src.setAttribute('width', '2'); src.setAttribute('height', '2');\
+                 var sctx = src.getContext('2d');\
+                 sctx.fillStyle = '#ff0000'; sctx.fillRect(0, 0, 1, 2);\
+                 sctx.fillStyle = '#0000ff'; sctx.fillRect(1, 0, 1, 2);\
+                 var c = document.createElement('canvas');\
+                 c.setAttribute('width', '2'); c.setAttribute('height', '2');\
+                 var ctx = c.getContext('2d');\
+                 ctx.drawImage(src, 1, 0, 1, 2, 0, 0, 2, 2);\
+                 c.__nid__;",
+            )
+            .unwrap()
+        {
+            lumen_core::JsValue::Number(n) => n as u32,
+            other => panic!("expected dest nid number, got {other:?}"),
+        };
+        let updates = rt.flush_canvas_updates();
+        // Inspect the destination canvas pixel buffer (identified by its node id —
+        // the source canvas also contains red, so it must not be sampled here).
+        let dest = updates
+            .iter()
+            .find(|(n, _, _, _)| *n == dest_nid)
+            .expect("destination canvas update");
+        let rgba = &dest.3;
+        let mut any_blue = false;
+        let mut any_red = false;
+        for px in rgba.chunks_exact(4) {
+            if px[3] == 0 {
+                continue;
+            }
+            if px[2] == 255 && px[0] == 0 {
+                any_blue = true;
+            }
+            if px[0] == 255 && px[2] == 0 {
+                any_red = true;
+            }
+        }
+        assert!(any_blue, "cropped blue column must be drawn");
+        assert!(!any_red, "red column must be excluded by the source crop");
     }
 
     #[test]
