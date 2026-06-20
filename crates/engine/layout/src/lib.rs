@@ -1387,10 +1387,10 @@ mod tests {
                 if is_element(&c.kind) {
                     return Some(c);
                 }
-                if matches!(c.kind, BoxKind::InlineBlockRow | BoxKind::InlineRun { .. }) {
-                    if let Some(found) = rec(c) {
-                        return Some(found);
-                    }
+                if matches!(c.kind, BoxKind::InlineBlockRow | BoxKind::InlineRun { .. })
+                    && let Some(found) = rec(c)
+                {
+                    return Some(found);
                 }
             }
             None
