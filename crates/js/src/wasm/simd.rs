@@ -8,8 +8,10 @@
 //! linear memory.
 //!
 //! Coverage is the complete WebAssembly fixed-width SIMD opcode set (the `0xFD`
-//! prefix, sub-opcodes 0..=255). Relaxed-SIMD (sub-opcodes ≥256) is rejected at
-//! decode time.
+//! prefix, sub-opcodes 0..=255) plus relaxed-SIMD (sub-opcodes `0x100..=0x113`).
+//! Relaxed-SIMD ops permit implementation-defined results in edge cases (NaN,
+//! out-of-range swizzle indices, fused vs split multiply-add); we always pick
+//! the strict/deterministic behaviour, which is a conforming choice.
 
 use super::interp::Trap;
 use super::value::Value;
@@ -506,9 +508,106 @@ pub fn exec_simd(sub: u32, stack: &mut Vec<Value>) -> Result<(), Trap> {
         246 => bin!(f64, 8, 2, |a: f64, b: f64| if b < a { b } else { a }),
         247 => bin!(f64, 8, 2, |a: f64, b: f64| if a < b { b } else { a }),
 
+        // ── relaxed-SIMD (0x100..=0x113) ──────────────────────────────────────
+        0x100..=0x113 => return exec_simd_relaxed(sub, stack),
+
         // ── conversions (94, 95, 248..=255) + any unknown sub ─────────────────
         _ => return exec_simd_convert(sub, stack),
     }
+    Ok(())
+}
+
+/// Relaxed-SIMD ops (`0xFD` sub-opcodes `0x100..=0x113`). The spec permits
+/// implementation-defined results in their edge cases; we always compute the
+/// strict/deterministic variant, which is a conforming choice. Where a relaxed
+/// op has an exact strict counterpart we delegate to [`exec_simd`] /
+/// [`exec_simd_convert`] to avoid duplicating lane logic.
+fn exec_simd_relaxed(sub: u32, stack: &mut Vec<Value>) -> Result<(), Trap> {
+    // Fused multiply-add over `$n` float lanes of width `$sz`. Operands on the
+    // stack are `a`, `b`, `c` (c on top); `neg` negates the product (nmadd).
+    macro_rules! fma {
+        ($ty:ty, $sz:expr, $n:expr, $neg:expr) => {{
+            let c = pop_v(stack)?;
+            let b = pop_v(stack)?;
+            let a = pop_v(stack)?;
+            let mut r = [0u8; 16];
+            for i in 0..$n {
+                let av = <$ty>::from_le_bytes(a[i * $sz..i * $sz + $sz].try_into().unwrap());
+                let bv = <$ty>::from_le_bytes(b[i * $sz..i * $sz + $sz].try_into().unwrap());
+                let cv = <$ty>::from_le_bytes(c[i * $sz..i * $sz + $sz].try_into().unwrap());
+                let prod: $ty = if $neg { -(av * bv) } else { av * bv };
+                let rv: $ty = prod + cv;
+                r[i * $sz..i * $sz + $sz].copy_from_slice(&rv.to_le_bytes());
+            }
+            stack.push(Value::V128(r));
+        }};
+    }
+    match sub {
+        0x100 => return exec_simd(14, stack),          // i8x16.relaxed_swizzle ≡ swizzle
+        0x101 => return exec_simd_convert(248, stack), // i32x4.relaxed_trunc_f32x4_s
+        0x102 => return exec_simd_convert(249, stack), // i32x4.relaxed_trunc_f32x4_u
+        0x103 => return exec_simd_convert(252, stack), // i32x4.relaxed_trunc_f64x2_s_zero
+        0x104 => return exec_simd_convert(253, stack), // i32x4.relaxed_trunc_f64x2_u_zero
+        0x105 => fma!(f32, 4, 4, false),               // f32x4.relaxed_madd
+        0x106 => fma!(f32, 4, 4, true),                // f32x4.relaxed_nmadd
+        0x107 => fma!(f64, 8, 2, false),               // f64x2.relaxed_madd
+        0x108 => fma!(f64, 8, 2, true),                // f64x2.relaxed_nmadd
+        // relaxed_laneselect(a, b, m) ≡ bitselect(a, b, m): (a & m) | (b & !m).
+        // Identical bytewise for every lane width, so reuse bitselect (sub 82).
+        0x109..=0x10C => return exec_simd(82, stack),
+        0x10D => return exec_simd(232, stack), // f32x4.relaxed_min ≡ f32x4.min
+        0x10E => return exec_simd(233, stack), // f32x4.relaxed_max ≡ f32x4.max
+        0x10F => return exec_simd(244, stack), // f64x2.relaxed_min ≡ f64x2.min
+        0x110 => return exec_simd(245, stack), // f64x2.relaxed_max ≡ f64x2.max
+        0x111 => return exec_simd(130, stack), // i16x8.relaxed_q15mulr_s ≡ q15mulr_sat_s
+        0x112 => relaxed_dot_i16x8(stack)?,     // i16x8.relaxed_dot_i8x16_i7x16_s
+        0x113 => relaxed_dot_i32x4_add(stack)?, // i32x4.relaxed_dot_i8x16_i7x16_add_s
+        _ => return Err(Trap::new("unsupported relaxed-SIMD sub-opcode")),
+    }
+    Ok(())
+}
+
+/// `i16x8.relaxed_dot_i8x16_i7x16_s`: multiply signed 8-bit lane pairs, sum each
+/// adjacent pair into an i16 lane with signed saturation. The second operand is
+/// nominally i7-ranged; reading it as a signed i8 is a conforming relaxed choice.
+fn relaxed_dot_i16x8(stack: &mut Vec<Value>) -> Result<(), Trap> {
+    let b = pop_v(stack)?;
+    let a = pop_v(stack)?;
+    let mut r = [0u8; 16];
+    for i in 0..8 {
+        let a0 = a[2 * i] as i8 as i32;
+        let a1 = a[2 * i + 1] as i8 as i32;
+        let b0 = b[2 * i] as i8 as i32;
+        let b1 = b[2 * i + 1] as i8 as i32;
+        let v = (a0 * b0 + a1 * b1).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        r[i * 2..i * 2 + 2].copy_from_slice(&v.to_le_bytes());
+    }
+    stack.push(Value::V128(r));
+    Ok(())
+}
+
+/// `i32x4.relaxed_dot_i8x16_i7x16_add_s`: the i16x8 dot above, then widen and
+/// pairwise-accumulate into the i32x4 operand `c`. Operands: `a`, `b`, `c`.
+fn relaxed_dot_i32x4_add(stack: &mut Vec<Value>) -> Result<(), Trap> {
+    let c = pop_v(stack)?;
+    let b = pop_v(stack)?;
+    let a = pop_v(stack)?;
+    // Intermediate i16x8 dot (signed-saturating), same as relaxed_dot_i16x8.
+    let mut tmp = [0i32; 8];
+    for (i, slot) in tmp.iter_mut().enumerate() {
+        let a0 = a[2 * i] as i8 as i32;
+        let a1 = a[2 * i + 1] as i8 as i32;
+        let b0 = b[2 * i] as i8 as i32;
+        let b1 = b[2 * i + 1] as i8 as i32;
+        *slot = (a0 * b0 + a1 * b1).clamp(i16::MIN as i32, i16::MAX as i32);
+    }
+    let mut r = [0u8; 16];
+    for j in 0..4 {
+        let cv = i32::from_le_bytes(c[j * 4..j * 4 + 4].try_into().unwrap());
+        let v = cv.wrapping_add(tmp[2 * j]).wrapping_add(tmp[2 * j + 1]);
+        r[j * 4..j * 4 + 4].copy_from_slice(&v.to_le_bytes());
+    }
+    stack.push(Value::V128(r));
     Ok(())
 }
 

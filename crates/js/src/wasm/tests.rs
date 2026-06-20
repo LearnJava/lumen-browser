@@ -547,6 +547,157 @@ fn simd_i32x4_trunc_sat_f32x4_s() {
     assert_eq!(lanes_i32(run_v128(code)), [3, -2, i32::MAX, 0]);
 }
 
+// ── Relaxed-SIMD (`0xFD` sub-opcodes 0x100..=0x113) ─────────────────────────
+
+/// Extract four f32 lanes from raw v128 bytes.
+fn lanes_f32(v: [u8; 16]) -> [f32; 4] {
+    let mut out = [0f32; 4];
+    for (i, o) in out.iter_mut().enumerate() {
+        *o = f32::from_le_bytes(v[i * 4..i * 4 + 4].try_into().unwrap());
+    }
+    out
+}
+
+#[test]
+fn relaxed_simd_module_decodes() {
+    // Relaxed-SIMD used to trap at run time; the decoder always accepted it, but
+    // ensure that stays true (validate/compile must accept a relaxed module).
+    let mut code = v128_f32([1.0, 2.0, 3.0, 4.0]);
+    code.extend(v128_f32([10.0, 10.0, 10.0, 10.0]));
+    code.extend(v128_f32([1.0, 1.0, 1.0, 1.0]));
+    code.extend(fd(0x105)); // f32x4.relaxed_madd
+    assert!(parse_module(&simd_module(&[0x7B], code)).is_ok());
+}
+
+#[test]
+fn relaxed_madd_f32x4() {
+    let mut code = v128_f32([1.0, 2.0, 3.0, 4.0]);
+    code.extend(v128_f32([10.0, 10.0, 10.0, 10.0]));
+    code.extend(v128_f32([1.0, 1.0, 1.0, 1.0]));
+    code.extend(fd(0x105)); // a*b + c
+    assert_eq!(lanes_f32(run_v128(code)), [11.0, 21.0, 31.0, 41.0]);
+}
+
+#[test]
+fn relaxed_nmadd_f32x4() {
+    let mut code = v128_f32([1.0, 2.0, 3.0, 4.0]);
+    code.extend(v128_f32([10.0, 10.0, 10.0, 10.0]));
+    code.extend(v128_f32([1.0, 1.0, 1.0, 1.0]));
+    code.extend(fd(0x106)); // -(a*b) + c
+    assert_eq!(lanes_f32(run_v128(code)), [-9.0, -19.0, -29.0, -39.0]);
+}
+
+#[test]
+fn relaxed_madd_f64x2() {
+    let mut a = [0u8; 16];
+    let mut b = [0u8; 16];
+    let mut c = [0u8; 16];
+    a[0..8].copy_from_slice(&2.0f64.to_le_bytes());
+    a[8..16].copy_from_slice(&3.0f64.to_le_bytes());
+    b[0..8].copy_from_slice(&5.0f64.to_le_bytes());
+    b[8..16].copy_from_slice(&5.0f64.to_le_bytes());
+    c[0..8].copy_from_slice(&1.0f64.to_le_bytes());
+    c[8..16].copy_from_slice(&1.0f64.to_le_bytes());
+    let mut code = v128_bytes(a);
+    code.extend(v128_bytes(b));
+    code.extend(v128_bytes(c));
+    code.extend(fd(0x107)); // f64x2.relaxed_madd
+    let v = run_v128(code);
+    assert_eq!(f64::from_le_bytes(v[0..8].try_into().unwrap()), 11.0);
+    assert_eq!(f64::from_le_bytes(v[8..16].try_into().unwrap()), 16.0);
+}
+
+#[test]
+fn relaxed_laneselect_i8x16() {
+    let mut code = v128_bytes([0xFF; 16]); // a
+    code.extend(v128_bytes([0x00; 16])); // b
+    code.extend(v128_bytes([0xF0; 16])); // mask
+    code.extend(fd(0x109)); // (a & m) | (b & !m)
+    assert_eq!(run_v128(code), [0xF0; 16]);
+}
+
+#[test]
+fn relaxed_min_f32x4() {
+    let mut code = v128_f32([1.0, 5.0, 3.0, 8.0]);
+    code.extend(v128_f32([4.0, 2.0, 6.0, 1.0]));
+    code.extend(fd(0x10D)); // f32x4.relaxed_min
+    assert_eq!(lanes_f32(run_v128(code)), [1.0, 2.0, 3.0, 1.0]);
+}
+
+#[test]
+fn relaxed_max_f32x4() {
+    let mut code = v128_f32([1.0, 5.0, 3.0, 8.0]);
+    code.extend(v128_f32([4.0, 2.0, 6.0, 1.0]));
+    code.extend(fd(0x10E)); // f32x4.relaxed_max
+    assert_eq!(lanes_f32(run_v128(code)), [4.0, 5.0, 6.0, 8.0]);
+}
+
+#[test]
+fn relaxed_trunc_f32x4_s() {
+    let mut code = v128_f32([3.9, -2.1, 1e30, f32::NAN]);
+    code.extend(fd(0x101)); // i32x4.relaxed_trunc_f32x4_s ≡ trunc_sat
+    assert_eq!(lanes_i32(run_v128(code)), [3, -2, i32::MAX, 0]);
+}
+
+#[test]
+fn relaxed_swizzle_picks_lanes() {
+    let mut a = [0u8; 16];
+    for (i, byte) in a.iter_mut().enumerate() {
+        *byte = i as u8; // a = [0,1,...,15]
+    }
+    let mut code = v128_bytes(a);
+    code.extend(v128_bytes([15u8; 16])); // every index → lane 15
+    code.extend(fd(0x100)); // i8x16.relaxed_swizzle
+    assert_eq!(run_v128(code), [15u8; 16]);
+}
+
+#[test]
+fn relaxed_q15mulr_s() {
+    let half = 0x4000i16; // 0.5 in Q15
+    let mut code = v128_bytes(splat_i16(half));
+    code.extend(v128_bytes(splat_i16(half)));
+    code.extend(fd(0x111)); // i16x8.relaxed_q15mulr_s ≈ 0.25 → 0x2000
+    assert_eq!(run_v128(code), splat_i16(0x2000));
+}
+
+#[test]
+fn relaxed_dot_i8x16_i7x16_s() {
+    let mut a = [0u8; 16];
+    for (i, byte) in a.iter_mut().enumerate() {
+        *byte = (i as i8 + 1) as u8; // a = [1..16] as i8
+    }
+    let mut code = v128_bytes(a);
+    code.extend(v128_bytes([1u8; 16])); // b = [1;16]
+    code.extend(fd(0x112)); // i16x8 pairwise products of i8 lanes
+    let v = run_v128(code);
+    let expected = [3i16, 7, 11, 15, 19, 23, 27, 31];
+    for (i, &e) in expected.iter().enumerate() {
+        assert_eq!(i16::from_le_bytes(v[i * 2..i * 2 + 2].try_into().unwrap()), e);
+    }
+}
+
+#[test]
+fn relaxed_dot_i8x16_i7x16_add_s() {
+    let mut a = [0u8; 16];
+    for (i, byte) in a.iter_mut().enumerate() {
+        *byte = (i as i8 + 1) as u8; // a = [1..16] as i8
+    }
+    let mut code = v128_bytes(a);
+    code.extend(v128_bytes([1u8; 16])); // b = [1;16]
+    code.extend(v128_i32([100, 200, 300, 400])); // c accumulator
+    code.extend(fd(0x113)); // i32x4: c[j] + dot[2j] + dot[2j+1]
+    assert_eq!(lanes_i32(run_v128(code)), [110, 226, 342, 458]);
+}
+
+/// Build a 16-byte v128 with the same i16 value in all eight lanes.
+fn splat_i16(x: i16) -> [u8; 16] {
+    let mut v = [0u8; 16];
+    for i in 0..8 {
+        v[i * 2..i * 2 + 2].copy_from_slice(&x.to_le_bytes());
+    }
+    v
+}
+
 // ── Threads / atomics (`0xFE` prefix), single-threaded semantics ────────────
 
 /// Signed-LEB encode `v` into `out` (for `i32.const` / `i64.const` immediates).
