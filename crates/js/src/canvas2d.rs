@@ -21,6 +21,8 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
+use crate::img_bitmap_store;
+
 use lumen_canvas::{
     CanvasColor, CanvasGradient, CanvasPattern, Path2dData, PaintSource, RepeatMode,
     CompositeOperation, LineCap, LineJoin, Context2D,
@@ -821,6 +823,57 @@ pub fn install_canvas2d_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
                     });
                     mark_dirty(dst_nid);
                 }
+            },
+        ),
+    )?;
+
+    // ── <img> source for drawImage ────────────────────────────────────────────
+
+    // _lumen_canvas2d_draw_image_from_img(dst_nid, img_nid, dx, dy, dw, dh)
+    // Blits a decoded <img> element's RGBA8 pixels onto this canvas.
+    // dw=0 or dh=0 means "use the image's natural dimension for that axis".
+    g.set(
+        "_lumen_canvas2d_draw_image_from_img",
+        rquickjs::Function::new(
+            ctx.clone(),
+            |dst_nid: u32, img_nid: u32, dx: f64, dy: f64, dw: f64, dh: f64| {
+                img_bitmap_store::with_img_bitmap(img_nid, |iw, ih, pixels| {
+                    let w = if dw > 0.0 { dw as f32 } else { iw as f32 };
+                    let h = if dh > 0.0 { dh as f32 } else { ih as f32 };
+                    with_canvas(dst_nid, |c| {
+                        c.draw_image(pixels, iw, ih, dx as f32, dy as f32, w, h);
+                    });
+                    mark_dirty(dst_nid);
+                });
+            },
+        ),
+    )?;
+
+    // _lumen_canvas2d_draw_image_crop_from_img(dst_nid, img_nid, "sx,sy,sw,sh,dx,dy,dw,dh")
+    // 9-argument drawImage form with an <img> source. 8 coordinates as CSV
+    // (same trick as canvas path2d_add_path to stay within rquickjs 7-arg limit).
+    g.set(
+        "_lumen_canvas2d_draw_image_crop_from_img",
+        rquickjs::Function::new(
+            ctx.clone(),
+            |dst_nid: u32, img_nid: u32, coords_csv: String| {
+                let r: Vec<f32> = coords_csv
+                    .split(',')
+                    .filter_map(|s| s.parse().ok())
+                    .collect();
+                if r.len() != 8 {
+                    return;
+                }
+                img_bitmap_store::with_img_bitmap(img_nid, |iw, ih, pixels| {
+                    with_canvas(dst_nid, |c| {
+                        c.draw_image_cropped(
+                            pixels, iw, ih,
+                            r[0], r[1], r[2], r[3],
+                            r[4], r[5], r[6], r[7],
+                        );
+                    });
+                    mark_dirty(dst_nid);
+                });
             },
         ),
     )?;

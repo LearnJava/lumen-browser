@@ -101,7 +101,7 @@ Snapshot: **Phase 2 «Interactive», app v0.2.0**. ~21 crates.
 
 ### lumen-canvas (`crates/engine/canvas`)
 - ✅ Canvas 2D CPU rasterizer: rect ops, full path building (arc/arcTo/bezier/quadratic/ellipse), fill/stroke (even-odd), state stack + full CTM, `globalAlpha`, 16 composite/blend ops, line caps/joins.
-- ✅ Gradients (linear/radial/conic), patterns (4 repeats), shadows (offset-only), `clip()` (boolean mask), image data (drawImage/putImageData/get/createImageData), text via `lumen_font::Rasterizer`, Path2D (SVG path strings).
+- ✅ Gradients (linear/radial/conic), patterns (4 repeats), shadows (offset-only), `clip()` (boolean mask), image data (drawImage/putImageData/get/createImageData), text via `lumen_font::Rasterizer`, Path2D (SVG path strings). `drawImage` source may be `<canvas>` or `<img>` element (all 3/5/9-arg forms).
 - ⬜ Gaussian shadowBlur; gradient sampling is device-space (not spec user-space); canvas fingerprint noise.
 
 ---

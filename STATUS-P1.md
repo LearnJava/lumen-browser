@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет активной задачи)_
+Canvas 2D drawImage `<img>` source  branch: p1-canvas-img-drawimage
+Next step: commit + merge  `crates/js/src/canvas2d.rs` + `img_bitmap_store.rs` + `dom.rs` + `shell/src/main.rs`
 
 ---
 

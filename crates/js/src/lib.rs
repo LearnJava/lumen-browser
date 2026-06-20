@@ -46,6 +46,7 @@ pub mod shape_detection;
 pub mod shared_worker;
 pub mod speech;
 pub mod surface_api;
+pub mod img_bitmap_store;
 pub mod video_bindings;
 pub mod video_gif_store;
 pub mod view_transitions;
@@ -1869,6 +1870,21 @@ impl QuickJsRuntime {
             inner.ctx.with(|ctx| {
                 ctx.eval::<(), _>("_lumen_apply_ready_state('complete')").ok();
             });
+        });
+    }
+
+    /// Register decoded RGBA8 bitmaps for `<img>` elements, keyed by node id.
+    ///
+    /// Call after `fetch_and_decode_images` so that Canvas 2D `drawImage` with an
+    /// `<img>` source can read the decoded pixels from [`img_bitmap_store`].
+    /// Each entry is `(nid, natural_width, natural_height, rgba8_vec)`.
+    /// Clears any previous store contents first (navigation-scoped).
+    pub fn register_img_bitmaps(&self, bitmaps: Vec<(u32, u32, u32, Vec<u8>)>) {
+        self.run(|_inner| {
+            img_bitmap_store::clear_img_bitmaps();
+            for (nid, w, h, rgba8) in bitmaps {
+                img_bitmap_store::set_img_bitmap(nid, w, h, rgba8);
+            }
         });
     }
 
