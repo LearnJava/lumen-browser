@@ -1486,7 +1486,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/webassembly.rs:186` **fn** `install_webassembly_bindings` — Install WebAssembly API bindings into the JS context
 `crates/js/src/webgl_bindings.rs:25` **fn** `install_webgl_bindings` — Install WebGL fingerprint shim into the JS context
 `crates/js/src/webgl_canvas.rs:57` **fn** `install_webgl_canvas` — Install functional WebGL bindings into the JS context
-`crates/js/src/webgpu.rs:40` **fn** `install_webgpu_bindings` — Install the WebGPU API bindings into the JS context
+`crates/js/src/webgpu.rs:46` **fn** `install_webgpu_bindings` — Install the WebGPU API bindings into the JS context
 `crates/js/src/webhid.rs:5` **fn** `install_webhid_bindings`
 `crates/js/src/webrtc_stub.rs:27` **fn** `install_webrtc_bindings` — Install the WebRTC mDNS-only stub into the JS context
 `crates/js/src/webtransport.rs:5` **fn** `install_webtransport_bindings`
@@ -2471,7 +2471,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/webauthn.rs:69` **fn** `new` — Create an empty authenticator with no registered credentials
 `crates/network/src/webauthn.rs:74` **fn** `credential_count` — Number of credentials currently registered (test / introspection helper)
 
-## lumen-paint  (330 symbols)
+## lumen-paint  (337 symbols)
 
 `crates/engine/paint/src/atlas.rs:35` **struct** `AtlasKey` — Композитный ключ glyph-кэша. См. module-level docs
 `crates/engine/paint/src/atlas.rs:43` **fn** `new`
@@ -2793,16 +2793,23 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgl.rs:473` **fn** `bind_texture` — `gl.bindTexture(target, texture_id)`. Records binding for the active unit
 `crates/engine/paint/src/webgl.rs:479` **fn** `tex_image_2d_rgba` — `gl.texImage2D(…, data)`. Averages pixel data to a 1×1 solid colour for
 `crates/engine/paint/src/webgl.rs:498` **fn** `draw_arrays` — `gl.drawArrays(mode, first, count)`. Executes vertex and fragment shaders
-`crates/engine/paint/src/webgpu_compute.rs:43` **struct** `AdapterInfo` — Информация о GPU-адаптере для отдачи в JS (`GPUAdapter.info`)
-`crates/engine/paint/src/webgpu_compute.rs:130` **fn** `is_available` — Доступен ли реальный GPU-бэкенд (есть адаптер и устройство)
-`crates/engine/paint/src/webgpu_compute.rs:135` **fn** `adapter_info` — Информация о реальном GPU-адаптере или `None`, если GPU недоступен
-`crates/engine/paint/src/webgpu_compute.rs:147` **fn** `validate_wgsl` — Валидирует исходник WGSL на настоящем GPU-устройстве (трансляция + типовая проверка)
-`crates/engine/paint/src/webgpu_compute.rs:233` **fn** `buffer_create` — Создаёт настоящий `wgpu::Buffer` и регистрирует его
-`crates/engine/paint/src/webgpu_compute.rs:252` **fn** `buffer_write` — Записывает байты в буфер по смещению через `queue.write_buffer`
-`crates/engine/paint/src/webgpu_compute.rs:274` **fn** `buffer_read` — Читает байты из буфера (буфер должен иметь usage `MAP_READ`)
-`crates/engine/paint/src/webgpu_compute.rs:295` **fn** `buffer_destroy` — Удаляет буфер из реестра (освобождает GPU-память при дропе)
-`crates/engine/paint/src/webgpu_compute.rs:306` **enum** `GpuOp` — Одна записанная операция command-encoder для исполнения на `queue.submit`
-`crates/engine/paint/src/webgpu_compute.rs:327` **fn** `submit` — Исполняет набор операций в одном `CommandEncoder` и сабмитит на очередь
+`crates/engine/paint/src/webgpu_compute.rs:53` **struct** `AdapterInfo` — Информация о GPU-адаптере для отдачи в JS (`GPUAdapter.info`)
+`crates/engine/paint/src/webgpu_compute.rs:140` **fn** `is_available` — Доступен ли реальный GPU-бэкенд (есть адаптер и устройство)
+`crates/engine/paint/src/webgpu_compute.rs:145` **fn** `adapter_info` — Информация о реальном GPU-адаптере или `None`, если GPU недоступен
+`crates/engine/paint/src/webgpu_compute.rs:157` **fn** `validate_wgsl` — Валидирует исходник WGSL на настоящем GPU-устройстве (трансляция + типовая проверка)
+`crates/engine/paint/src/webgpu_compute.rs:261` **fn** `buffer_create` — Создаёт настоящий `wgpu::Buffer` и регистрирует его
+`crates/engine/paint/src/webgpu_compute.rs:280` **fn** `buffer_write` — Записывает байты в буфер по смещению через `queue.write_buffer`
+`crates/engine/paint/src/webgpu_compute.rs:302` **fn** `buffer_read` — Читает байты из буфера (буфер должен иметь usage `MAP_READ`)
+`crates/engine/paint/src/webgpu_compute.rs:323` **fn** `buffer_destroy` — Удаляет буфер из реестра (освобождает GPU-память при дропе)
+`crates/engine/paint/src/webgpu_compute.rs:369` **fn** `shader_create` — Создаёт `wgpu::ShaderModule` из WGSL и регистрирует его
+`crates/engine/paint/src/webgpu_compute.rs:387` **fn** `compute_pipeline_create` — Создаёт compute-пайплайн с авто-layout (`layout: 'auto'`) из ранее созданного шейдера
+`crates/engine/paint/src/webgpu_compute.rs:419` **fn** `pipeline_bind_group_layout` — Возвращает хэндл bind-group-layout, выведенного пайплайном для группы `group`
+`crates/engine/paint/src/webgpu_compute.rs:436` **struct** `BufferBindEntry` — Одна entry bind-group: буфер-ресурс, привязанный к WGSL binding-индексу
+`crates/engine/paint/src/webgpu_compute.rs:452` **fn** `bind_group_create` — Создаёт bind-group, связывающий буферы по binding-индексам, по заданному layout
+`crates/engine/paint/src/webgpu_compute.rs:486` **fn** `compute_pipeline_destroy` — Удаляет compute-пайплайн из реестра
+`crates/engine/paint/src/webgpu_compute.rs:494` **enum** `ComputeCmd` — Одна команда внутри записанного compute-pass
+`crates/engine/paint/src/webgpu_compute.rs:517` **enum** `GpuOp` — Одна записанная операция command-encoder для исполнения на `queue.submit`
+`crates/engine/paint/src/webgpu_compute.rs:543` **fn** `submit` — Исполняет набор операций в одном `CommandEncoder` и сабмитит на очередь
 
 ## lumen-shell  (839 symbols)
 
@@ -4152,4 +4159,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4081 symbols in 22 crates*
+*Total: 4088 symbols in 22 crates*
