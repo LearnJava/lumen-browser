@@ -91,7 +91,8 @@ _(BUG-201 закрыт 2026-06-20 — SVG `<use>`: polygon/polyline рендер
 _(BUG-187 закрыт 2026-06-20 — form controls: placeholder серым у пустых полей + checkbox белая галочка + radio белая точка-в-центре; 4.78% → 3.02% → KNOWN_DEBTORS BUG-128, см. Recent.)_
 _(BUG-188 закрыт 2026-06-21 — individual transforms спек-корректны (все юнит-боксы пиксель-в-пиксель с Edge); остаток font-parity monospace-меток; 4.63% → 1.96% → KNOWN_DEBTORS BUG-128, см. Recent.)_
 _(BUG-211 закрыт 2026-06-21 — `field-sizing: content`: layout уже работал, контент-боксы были невидимы — `appearance:none` стрипал авторский border/background ПОСЛЕ каскада; стрип перенесён ПЕРЕД каскадом; 4.11% → 3.54% → KNOWN_DEBTORS BUG-225 (value-текст inputs при appearance:none), см. Recent.)_
-- BUG-189 (TEST-47, 3.71%) — SVG basic shapes
+_(BUG-189 закрыт 2026-06-21 — диагональный `<line>` рисовался как FillRect по всему bbox; теперь штрихуется толстым сегментом (3.71% → 2.27%); остаток = SVG-штрих не центрирован → BUG-226, см. Recent.)_
+- BUG-226 (TEST-47, 2.27% DEBTOR) — SVG stroke не центрирован на кромке (border-box вместо центрирования ½/½, SVG 2 §13.7); затрагивает rect/circle/ellipse во всех SVG-тестах — РИСК регрессий 54/60/82/119, прогнать все SVG свежей сборкой
 - BUG-197 (TEST-69, 3.61%) — `border-spacing` asymmetric
 - BUG-217 (TEST-120, 3.26%) — `prefers-contrast`/`prefers-reduced-data`
 - BUG-212 (TEST-95, 3.39%) — `font-size-adjust`
@@ -155,6 +156,23 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
+
+- **BUG-189** (2026-06-21) — SVG basic shapes (TEST-47 3.71% → 2.27% DEBTOR,
+  KNOWN_DEBTORS BUG-226). Доминирующий дефект — диагональный `<line>`
+  (`stroke:#f39c12 stroke-width:6`) рисовался как `FillRect { rect: b.rect }`,
+  заливая весь bbox сегмента сплошным оранжевым прямоугольником вместо тонкой
+  диагонали (≈45% в верхней ячейке). `emit_svg_shape` (`display_list.rs`), арм
+  `SvgShapeKind::Line`, теперь штрихует толстый сегмент через `push_thick_segment`
+  → `DrawSvgPath` (как checkmark/path-stroke); `b.rect` уже в doc-space (учитывает
+  viewBox-scale), знаки user-координат концов (`x1<=x2`/`y1<=y2`) выбирают диагональ
+  bbox. Линия не заливается — только stroke (SVG `<line>` без fill). Регресс-тест
+  `svg_diagonal_line_strokes_segment_not_filled_bbox` (один stroke DrawSvgPath, 6
+  вершин, нет FillRect в stroke-цвете; walk + ordered). Только TEST-47 использует
+  `<line>` → регрессий нет (paint 778 lib-тестов). Остаток 2.27% = SVG-штрих не
+  центрирован на кромке (Lumen рисует stroke внутри бокса border-box-моделью, Edge
+  центрирует ½/½; orange-core 79×59 vs Edge 89×69 = ±stroke-width/2) → заведён
+  **BUG-226** (затрагивает rect/circle/ellipse, риск регрессий SVG-тестов) +
+  stroke/rounded-corner AA (класс BUG-176). TEST-47 → KNOWN_DEBTORS (BUG-226).
 
 - **BUG-185** (2026-06-21) — list `::marker` геометрия (TEST-32 3.75% → KNOWN_DEBTORS
   BUG-128). Две независимые геометрии: (1) `::marker { content: "→ " }` на
