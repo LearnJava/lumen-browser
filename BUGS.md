@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-230)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-231)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -142,7 +142,7 @@
 | [BUG-124](bugs/BUG-124-OPEN.md) | OPEN | layout/paint | TEST-51 residual 1.09%: fractional layout Y coords vs Edge pixel snapping |
 | [BUG-125](bugs/BUG-125-FIXED.md) | FIXED 2026-06-22 | layout/paint | CSS Motion Path L1 — боксы садились top-left-на-путь вместо anchor-на-путь (off by пол-бокса). Добавлен `T(-anchor)` в `forward_box_transform` + `walk` (offset-anchor `auto`→transform-origin=центр), поворот вокруг anchor. TEST-76 3.18%→0.54% (боксы пиксель-в-пиксель; остаток = диагональный градиент-трек `calc()`-стопы → BUG-230, KNOWN_DEBTOR) |
 | [BUG-126](bugs/BUG-126-OPEN.md) | OPEN (DEBTOR) | layout | CSS Anchor Positioning L1 — placement фикснут (53.45% → 12.94%): position-area definite-size элементы прижимаются к якорю вместо растягивания на band (anchor.rs place_axis/align_in_band). 3×3 сетка совпадает с Edge(position-area) пиксель-в-пиксель. Остаток-должник: тест использует устаревшее `inset-area` (Edge игнорирует, поддерживает только `position-area`) + span-ряд (Lumen спек-корректнее Edge). KNOWN_DEBTORS 12.94% |
-| [BUG-127](bugs/BUG-127-OPEN.md) | OPEN | layout/js | CSS Scroll-Driven Animations L1 (scroll-timeline/view-timeline) — TEST-78: 12.02% |
+| [BUG-127](bugs/BUG-127-OPEN.md) | OPEN | shell/layout | CSS Scroll-Driven Animations L1 — feature wired (F2-2 2026-06-22): `animation-timeline: scroll()/view()/<named>` теперь драйвит прогресс анимации от позиции скролла/вьюпорта, а не от часов (`shell/animation_scheduler.rs`). TEST-78 12.02%→10.07%: scroll()/named боксы садятся в from-state как у Edge, view()-бокс едет по view-прогрессу. Остаток (KNOWN_DEBTOR) = font-parity текста (класс BUG-128) + цвет view-бокса не композится (BUG-231) |
 | [BUG-128](bugs/BUG-128-OPEN.md) | OPEN | font | text-underline TEST-79: 6.78% — font-parity issue (serif vs sans), кандидат в KNOWN_DEBTORS |
 | [BUG-129](bugs/BUG-129-FIXED.md) | FIXED 2026-06-14 | layout | CSS Tables border-collapse: collapse — TEST-80 16.81% |
 | [BUG-130](bugs/BUG-130-FIXED.md) | FIXED 2026-06-13 | paint | view-transition-name: TEST-81 32.47% — ложная причина, реальная = BUG-141 |
@@ -244,6 +244,7 @@
 | BUG-228 | OPEN | layout/paint | `test_32_list_markers` (driver/tests/test_32.rs:62) красный на чистом main (`4d4ae912`): ожидается 33 marker-бокса (35 li − 2 в `list-style-type:none`), фактически 27 — пропадают 6 маркеров (`@counter-style` bracket/hashnum и/или `list-style-image:url()` списки, добавленные `dd9ac74a`/P4). Геометрия `li` (26.4px, шаг 28.4px) корректна. Не связано с ICC. Предсуществующий регресс генерации маркеров для custom counter-style / image-маркеров. Замечено P1 при завершении ICC-2 (прогон совпадает на main и на ветке). BT-1 (2026-06-21): тест перемещён в `driver/tests/cases/test_32.rs` и помечен `#[ignore = "BUG-228…"]`, чтобы консолидированный suite был зелёным; **при фиксе убрать `#[ignore]`** |
 | [BUG-229](bugs/BUG-229-FIXED.md) | FIXED 2026-06-21 | image | PNG `iCCP` распаковывался сырым `DeflateDecoder` вместо `ZlibDecoder` — zlib-обёртка профиля (RFC 1950) ломала инфляцию → профиль тихо терялся → ни один PNG с ICC не управлялся по цвету (P3/AdobeRGB/Rec2020 пересыщены). `png/mod.rs:40`. Найден при ICC-6. Регресс-тест `icc_color_management.rs` |
 | [BUG-230](bugs/BUG-230-OPEN.md) | OPEN | layout/paint | `calc()` в позиции color-stop линейного градиента схлопывает градиент (`blue calc(50% + 10px)` → сплошной синий; diagonal-stripe `calc(50% ± 2px)` → прозрачный). `%`-стопы работают, `parse_length_q` парсит `calc()` в `Length::Calc` — дефект ниже: позиции-`Calc` не резолвятся против длины линии градиента (`style.rs` densification). Замечен при BUG-125 (TEST-76 диагональный трек), остаток 0.54% → KNOWN_DEBTOR |
+| [BUG-231](bugs/BUG-231-OPEN.md) | OPEN | paint/shell | Анимированные `background-color`/`color` не применяются в живом окне без relayout: compositor-offload (`to_compositor_frame`→`CompositorOverride`) несёт только opacity/transform, цветовые override оседают в `anim_frame` без отрисовки. Видно на TEST-78: view-timeline subject едет по прогрессу (transform), но фон держит базовый teal вместо проинтерполированного оранжевого. Фикс — добавить `background_color` в `CompositorOverride` + патчить background-`FillRect` в `emit_box_self`/`walk_with_anim`. Найдено при F2-2/BUG-127 |
 
 ---
 
