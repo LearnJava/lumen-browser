@@ -32,8 +32,15 @@
 //! `beginComputePass` → `setPipeline`/`setBindGroup`/`dispatchWorkgroups` → `end` execute
 //! the WGSL shader on the GPU when `queue.submit` flushes the encoder. Each native call
 //! degrades gracefully to the Phase 0 path when no adapter is present (compute becomes a
-//! no-op, since WGSL cannot run on the CPU). Render pipelines + `draw` and canvas present
-//! remain Phase 0 stubs (next sub-step).
+//! no-op, since WGSL cannot run on the CPU).
+//!
+//! **Stage 3 (sub-step 1 — render to texture):** `createTexture` is backed by a real
+//! `wgpu::Texture` (offscreen render target); `createRenderPipeline` (`layout: 'auto'`) builds
+//! a real `wgpu::RenderPipeline` from the vertex + fragment modules, target format and vertex
+//! buffer layouts; `beginRenderPass` → `setPipeline`/`setVertexBuffer`/`setBindGroup`/`draw` →
+//! `end` plus `copyTextureToBuffer` execute on the GPU at `queue.submit` and the rendered
+//! pixels are read back through a real `MAP_READ` buffer. Canvas present (showing the texture
+//! on the page `<canvas>`) remains a Phase 0 stub (next sub-step).
 
 use rquickjs::Ctx;
 
@@ -208,6 +215,112 @@ fn install_webgpu_natives(ctx: &Ctx) -> rquickjs::Result<()> {
         }),
     )?;
 
+    // ── Render pipeline + texture bridge (Stage 3, sub-step 1) ───────────────
+    // Real wgpu textures (offscreen render targets) and render pipelines, each addressed by
+    // an opaque numeric handle. Returns 0 when no GPU is available → the shim keeps the
+    // Phase 0 stub path. Canvas present (showing the texture on the page) is the next sub-step.
+
+    // _lumen_webgpu_texture_create(width, height, format, usage) → handle (0 = failed/no GPU).
+    g.set(
+        "_lumen_webgpu_texture_create",
+        rquickjs::Function::new(
+            ctx.clone(),
+            |width: f64, height: f64, format: String, usage: u32| -> f64 {
+                webgpu_compute::texture_create(width as u32, height as u32, &format, usage)
+                    .unwrap_or(0) as f64
+            },
+        ),
+    )?;
+
+    // _lumen_webgpu_texture_destroy(handle).
+    g.set(
+        "_lumen_webgpu_texture_destroy",
+        rquickjs::Function::new(ctx.clone(), |id: f64| {
+            webgpu_compute::texture_destroy(id as u64);
+        }),
+    )?;
+
+    // _lumen_webgpu_render_pipeline_create(configJson) → handle (0 = failed/no GPU).
+    // configJson: { vs, vsEntry, fs, fsEntry, format, topology,
+    //               buffers: [{ arrayStride, instance, attributes: [{format, offset, shaderLocation}] }] }
+    g.set(
+        "_lumen_webgpu_render_pipeline_create",
+        rquickjs::Function::new(ctx.clone(), |config: String| -> f64 {
+            let Ok(cfg) = serde_json::from_str::<serde_json::Value>(&config) else {
+                return 0.0;
+            };
+            let u = |k: &str| cfg.get(k).and_then(serde_json::Value::as_u64);
+            let s = |k: &str| cfg.get(k).and_then(serde_json::Value::as_str).unwrap_or("");
+            let (Some(vs), Some(fs)) = (u("vs"), u("fs")) else {
+                return 0.0;
+            };
+            // Decode the vertex buffer layouts.
+            let mut buffers = Vec::new();
+            if let Some(bufs) = cfg.get("buffers").and_then(serde_json::Value::as_array) {
+                for b in bufs {
+                    let mut attributes = Vec::new();
+                    if let Some(attrs) = b.get("attributes").and_then(serde_json::Value::as_array) {
+                        for a in attrs {
+                            let Some(fmt) = a.get("format").and_then(serde_json::Value::as_str)
+                            else {
+                                return 0.0;
+                            };
+                            attributes.push(webgpu_compute::VertexAttr {
+                                format: fmt.to_string(),
+                                offset: a
+                                    .get("offset")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .unwrap_or(0),
+                                shader_location: a
+                                    .get("shaderLocation")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .unwrap_or(0) as u32,
+                            });
+                        }
+                    }
+                    buffers.push(webgpu_compute::VertexBufferLayout {
+                        array_stride: b
+                            .get("arrayStride")
+                            .and_then(serde_json::Value::as_u64)
+                            .unwrap_or(0),
+                        instance_step: b
+                            .get("instance")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false),
+                        attributes,
+                    });
+                }
+            }
+            webgpu_compute::render_pipeline_create(
+                vs,
+                s("vsEntry"),
+                fs,
+                s("fsEntry"),
+                s("format"),
+                s("topology"),
+                &buffers,
+            )
+            .unwrap_or(0) as f64
+        }),
+    )?;
+
+    // _lumen_webgpu_render_pipeline_bind_group_layout(pipelineHandle, group) → layout handle.
+    g.set(
+        "_lumen_webgpu_render_pipeline_bind_group_layout",
+        rquickjs::Function::new(ctx.clone(), |pipeline: f64, group: u32| -> f64 {
+            webgpu_compute::render_pipeline_bind_group_layout(pipeline as u64, group).unwrap_or(0)
+                as f64
+        }),
+    )?;
+
+    // _lumen_webgpu_render_pipeline_destroy(handle).
+    g.set(
+        "_lumen_webgpu_render_pipeline_destroy",
+        rquickjs::Function::new(ctx.clone(), |id: f64| {
+            webgpu_compute::render_pipeline_destroy(id as u64);
+        }),
+    )?;
+
     // _lumen_webgpu_submit(opsJson) → true on success. opsJson is a JSON array of
     // command-encoder ops recorded on the JS side: copyBufferToBuffer + computePass.
     g.set(
@@ -278,6 +391,102 @@ fn install_webgpu_natives(ctx: &Ctx) -> rquickjs::Result<()> {
                             }
                         }
                         decoded.push(webgpu_compute::GpuOp::ComputePass { commands });
+                    }
+                    "renderPass" => {
+                        let f = |k: &str| op.get(k).and_then(serde_json::Value::as_u64);
+                        let Some(color_texture) = f("colorTexture") else {
+                            return false;
+                        };
+                        // clear: null → LoadOp::Load; [r,g,b,a] → LoadOp::Clear.
+                        let clear = op.get("clear").and_then(|c| c.as_array()).map(|arr| {
+                            let g = |i: usize| arr.get(i).and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+                            [g(0), g(1), g(2), g(3)]
+                        });
+                        let Some(cmds) = op.get("cmds").and_then(|v| v.as_array()) else {
+                            return false;
+                        };
+                        let mut commands = Vec::with_capacity(cmds.len());
+                        for c in cmds {
+                            let ck = c.get("c").and_then(|v| v.as_str()).unwrap_or("");
+                            let cu = |k: &str| c.get(k).and_then(serde_json::Value::as_u64);
+                            let ci = |k: &str| c.get(k).and_then(serde_json::Value::as_i64);
+                            match ck {
+                                "setPipeline" => {
+                                    let Some(p) = cu("pipeline") else { return false };
+                                    commands.push(webgpu_compute::RenderCmd::SetPipeline(p));
+                                }
+                                "setBindGroup" => {
+                                    let (Some(index), Some(bind_group)) =
+                                        (cu("index"), cu("bindGroup"))
+                                    else {
+                                        return false;
+                                    };
+                                    commands.push(webgpu_compute::RenderCmd::SetBindGroup {
+                                        index: index as u32,
+                                        bind_group,
+                                    });
+                                }
+                                "setVertexBuffer" => {
+                                    let Some(buffer) = cu("buffer") else { return false };
+                                    commands.push(webgpu_compute::RenderCmd::SetVertexBuffer {
+                                        slot: cu("slot").unwrap_or(0) as u32,
+                                        buffer,
+                                        offset: cu("offset").unwrap_or(0),
+                                        size: cu("size").unwrap_or(0),
+                                    });
+                                }
+                                "setIndexBuffer" => {
+                                    let Some(buffer) = cu("buffer") else { return false };
+                                    commands.push(webgpu_compute::RenderCmd::SetIndexBuffer {
+                                        buffer,
+                                        format_u16: c
+                                            .get("u16")
+                                            .and_then(serde_json::Value::as_bool)
+                                            .unwrap_or(false),
+                                        offset: cu("offset").unwrap_or(0),
+                                        size: cu("size").unwrap_or(0),
+                                    });
+                                }
+                                "draw" => {
+                                    commands.push(webgpu_compute::RenderCmd::Draw {
+                                        vertex_count: cu("vertexCount").unwrap_or(0) as u32,
+                                        instance_count: cu("instanceCount").unwrap_or(1) as u32,
+                                        first_vertex: cu("firstVertex").unwrap_or(0) as u32,
+                                        first_instance: cu("firstInstance").unwrap_or(0) as u32,
+                                    });
+                                }
+                                "drawIndexed" => {
+                                    commands.push(webgpu_compute::RenderCmd::DrawIndexed {
+                                        index_count: cu("indexCount").unwrap_or(0) as u32,
+                                        instance_count: cu("instanceCount").unwrap_or(1) as u32,
+                                        first_index: cu("firstIndex").unwrap_or(0) as u32,
+                                        base_vertex: ci("baseVertex").unwrap_or(0) as i32,
+                                        first_instance: cu("firstInstance").unwrap_or(0) as u32,
+                                    });
+                                }
+                                _ => return false,
+                            }
+                        }
+                        decoded.push(webgpu_compute::GpuOp::RenderPass {
+                            color_texture,
+                            clear,
+                            commands,
+                        });
+                    }
+                    "copyTexToBuf" => {
+                        let f = |k: &str| op.get(k).and_then(serde_json::Value::as_u64);
+                        let (Some(texture), Some(buffer)) = (f("texture"), f("buffer")) else {
+                            return false;
+                        };
+                        decoded.push(webgpu_compute::GpuOp::CopyTextureToBuffer {
+                            texture,
+                            buffer,
+                            buffer_offset: f("bufferOffset").unwrap_or(0),
+                            bytes_per_row: f("bytesPerRow").unwrap_or(0) as u32,
+                            rows_per_image: f("rowsPerImage").unwrap_or(1) as u32,
+                            width: f("width").unwrap_or(1) as u32,
+                            height: f("height").unwrap_or(1) as u32,
+                        });
                     }
                     _ => return false,
                 }
@@ -482,6 +691,8 @@ const WEBGPU_SHIM: &str = r#"(function() {
 
   function GPUTextureView(label) {
     this.label = label || '';
+    // Stage 3: handle of the backing wgpu::Texture (0 = Phase 0 stub). Set by createView.
+    this._textureId = 0;
   }
   globalThis.GPUTextureView = GPUTextureView;
 
@@ -497,11 +708,25 @@ const WEBGPU_SHIM: &str = r#"(function() {
     this.dimension   = (desc && desc.dimension)   || '2d';
     this.format      = (desc && desc.format)      || 'rgba8unorm';
     this.usage       = (desc && desc.usage)       || 0;
+    // Stage 3: back the texture with a real wgpu::Texture (offscreen render target) when the
+    // bridge is present and the format is supported. _id = 0 keeps the Phase 0 stub path.
+    this._id = 0;
+    if (this.width > 0 && this.height > 0 && typeof _lumen_webgpu_texture_create === 'function') {
+      try { this._id = _lumen_webgpu_texture_create(this.width, this.height, this.format, this.usage) || 0; }
+      catch (_e) { this._id = 0; }
+    }
   }
   GPUTexture.prototype.createView = function(desc) {
-    return new GPUTextureView((desc && desc.label) || this.label + '-view');
+    var v = new GPUTextureView((desc && desc.label) || this.label + '-view');
+    v._textureId = this._id;
+    return v;
   };
-  GPUTexture.prototype.destroy = function() {};
+  GPUTexture.prototype.destroy = function() {
+    if (this._id && typeof _lumen_webgpu_texture_destroy === 'function') {
+      try { _lumen_webgpu_texture_destroy(this._id); } catch (_e) {}
+      this._id = 0;
+    }
+  };
   globalThis.GPUTexture = GPUTexture;
 
   // ── GPUSampler ───────────────────────────────────────────────────────────
@@ -561,9 +786,52 @@ const WEBGPU_SHIM: &str = r#"(function() {
 
   function GPURenderPipeline(desc) {
     this.label = (desc && desc.label) || '';
+    // Stage 3: create a real wgpu::RenderPipeline (auto layout) from the vertex + fragment
+    // shader modules, target format and vertex buffer layouts. _id = 0 keeps the stub path.
+    this._id = 0;
+    if (desc && typeof _lumen_webgpu_render_pipeline_create === 'function') {
+      try {
+        var v = desc.vertex || {};
+        var f = desc.fragment || {};
+        var vmod = v.module, fmod = f.module;
+        var targets = f.targets || [];
+        var fmt = (targets[0] && targets[0].format) || '';
+        var prim = desc.primitive || {};
+        var buffers = [];
+        var vbufs = v.buffers || [];
+        for (var i = 0; i < vbufs.length; i++) {
+          var vb = vbufs[i] || {};
+          var attrs = [];
+          var vatts = vb.attributes || [];
+          for (var j = 0; j < vatts.length; j++) {
+            var a = vatts[j] || {};
+            attrs.push({ format: a.format, offset: a.offset || 0, shaderLocation: a.shaderLocation | 0 });
+          }
+          buffers.push({
+            arrayStride: vb.arrayStride || 0,
+            instance: vb.stepMode === 'instance',
+            attributes: attrs
+          });
+        }
+        if (vmod && vmod._id && fmod && fmod._id && fmt) {
+          var cfg = {
+            vs: vmod._id, vsEntry: v.entryPoint || '',
+            fs: fmod._id, fsEntry: f.entryPoint || '',
+            format: fmt, topology: prim.topology || 'triangle-list',
+            buffers: buffers
+          };
+          this._id = _lumen_webgpu_render_pipeline_create(JSON.stringify(cfg)) || 0;
+        }
+      } catch (_e) { this._id = 0; }
+    }
   }
   GPURenderPipeline.prototype.getBindGroupLayout = function(idx) {
-    return new GPUBindGroupLayout({});
+    var layoutId = 0;
+    if (this._id && typeof _lumen_webgpu_render_pipeline_bind_group_layout === 'function') {
+      try { layoutId = _lumen_webgpu_render_pipeline_bind_group_layout(this._id, idx) || 0; }
+      catch (_e) { layoutId = 0; }
+    }
+    return new GPUBindGroupLayout({ _id: layoutId });
   };
   globalThis.GPURenderPipeline = GPURenderPipeline;
 
@@ -593,20 +861,81 @@ const WEBGPU_SHIM: &str = r#"(function() {
 
   // ── GPURenderPassEncoder ─────────────────────────────────────────────────
 
-  function GPURenderPassEncoder() {}
-  GPURenderPassEncoder.prototype.setPipeline       = function(pipeline) {};
-  GPURenderPassEncoder.prototype.setVertexBuffer   = function(slot, buf, offset, size) {};
-  GPURenderPassEncoder.prototype.setIndexBuffer    = function(buf, fmt, offset, size) {};
-  GPURenderPassEncoder.prototype.setBindGroup      = function(idx, bg, dynOffsets) {};
-  GPURenderPassEncoder.prototype.draw              = function(vtxCount, instCount, firstVtx, firstInst) {};
-  GPURenderPassEncoder.prototype.drawIndexed       = function(idxCount, instCount, firstIdx, baseVtx, firstInst) {};
+  // Records setPipeline / setVertexBuffer / setBindGroup / draw into a command list; on end()
+  // the whole pass (its target texture + clear/load op + commands) is appended to the parent
+  // encoder, flushed to the real GPU on queue.submit. Without a GPU the recorded ids are 0 and
+  // the native submit no-ops (falls back to the in-memory path).
+  function GPURenderPassEncoder(encoder, desc) {
+    this._enc  = encoder;
+    this._cmds = [];
+    // Resolve the single color attachment's target texture id and load op from the descriptor.
+    this._colorTexture = 0;
+    this._clear = null;  // null → loadOp 'load'; [r,g,b,a] → loadOp 'clear'
+    var atts = (desc && desc.colorAttachments) || [];
+    var a0 = atts[0];
+    if (a0) {
+      var view = a0.view;
+      this._colorTexture = (view && view._textureId) || 0;
+      // loadOp defaults to 'clear' unless explicitly 'load'. clearValue defaults to opaque black.
+      if (a0.loadOp !== 'load') {
+        var cv = a0.clearValue;
+        if (cv === undefined) {
+          this._clear = [0, 0, 0, 1];
+        } else if (Array.isArray(cv)) {
+          this._clear = [cv[0] || 0, cv[1] || 0, cv[2] || 0, (cv[3] === undefined ? 1 : cv[3])];
+        } else {
+          this._clear = [cv.r || 0, cv.g || 0, cv.b || 0, (cv.a === undefined ? 1 : cv.a)];
+        }
+      }
+    }
+  }
+  GPURenderPassEncoder.prototype.setPipeline = function(pipeline) {
+    this._cmds.push({ c: 'setPipeline', pipeline: pipeline ? (pipeline._id || 0) : 0 });
+  };
+  GPURenderPassEncoder.prototype.setVertexBuffer = function(slot, buf, offset, size) {
+    this._cmds.push({
+      c: 'setVertexBuffer', slot: slot | 0, buffer: buf ? (buf._id || 0) : 0,
+      offset: offset || 0, size: size || 0
+    });
+  };
+  GPURenderPassEncoder.prototype.setIndexBuffer = function(buf, fmt, offset, size) {
+    this._cmds.push({
+      c: 'setIndexBuffer', buffer: buf ? (buf._id || 0) : 0,
+      u16: fmt === 'uint16', offset: offset || 0, size: size || 0
+    });
+  };
+  GPURenderPassEncoder.prototype.setBindGroup = function(idx, bg, dynOffsets) {
+    this._cmds.push({ c: 'setBindGroup', index: idx | 0, bindGroup: bg ? (bg._id || 0) : 0 });
+  };
+  GPURenderPassEncoder.prototype.draw = function(vtxCount, instCount, firstVtx, firstInst) {
+    this._cmds.push({
+      c: 'draw', vertexCount: vtxCount | 0,
+      instanceCount: (instCount === undefined) ? 1 : (instCount | 0),
+      firstVertex: firstVtx || 0, firstInstance: firstInst || 0
+    });
+  };
+  GPURenderPassEncoder.prototype.drawIndexed = function(idxCount, instCount, firstIdx, baseVtx, firstInst) {
+    this._cmds.push({
+      c: 'drawIndexed', indexCount: idxCount | 0,
+      instanceCount: (instCount === undefined) ? 1 : (instCount | 0),
+      firstIndex: firstIdx || 0, baseVertex: baseVtx || 0, firstInstance: firstInst || 0
+    });
+  };
   GPURenderPassEncoder.prototype.setViewport       = function(x, y, w, h, minD, maxD) {};
   GPURenderPassEncoder.prototype.setScissorRect    = function(x, y, w, h) {};
   GPURenderPassEncoder.prototype.setBlendConstant  = function(color) {};
   GPURenderPassEncoder.prototype.setStencilReference = function(ref) {};
+  GPURenderPassEncoder.prototype.end = function() {
+    if (this._enc) {
+      this._enc._ops.push({
+        op: 'renderPass', colorTexture: this._colorTexture,
+        clear: this._clear, cmds: this._cmds
+      });
+    }
+    this._cmds = [];
+  };
   // Both end() (current spec) and endPass() (older spec) supported.
-  GPURenderPassEncoder.prototype.end              = function() {};
-  GPURenderPassEncoder.prototype.endPass          = function() {};
+  GPURenderPassEncoder.prototype.endPass = GPURenderPassEncoder.prototype.end;
   globalThis.GPURenderPassEncoder = GPURenderPassEncoder;
 
   // ── GPUComputePassEncoder ────────────────────────────────────────────────
@@ -654,7 +983,7 @@ const WEBGPU_SHIM: &str = r#"(function() {
     this._ops  = [];  // recorded operations, flushed to the GPU on queue.submit
   }
   GPUCommandEncoder.prototype.beginRenderPass = function(desc) {
-    return new GPURenderPassEncoder();
+    return new GPURenderPassEncoder(this, desc);
   };
   GPUCommandEncoder.prototype.beginComputePass = function(desc) {
     return new GPUComputePassEncoder(this);
@@ -678,7 +1007,25 @@ const WEBGPU_SHIM: &str = r#"(function() {
       _srcBuf: src, _dstBuf: dst
     });
   };
-  GPUCommandEncoder.prototype.copyTextureToBuffer = function(src, dst, extent) {};
+  // Records a texture→buffer readback (Stage 3). src: { texture }, dst: { buffer, offset,
+  // bytesPerRow, rowsPerImage }, extent: { width, height } (or [w, h]). bytesPerRow must be a
+  // multiple of 256 (wgpu) — the caller sizes the destination buffer with padded rows.
+  GPUCommandEncoder.prototype.copyTextureToBuffer = function(src, dst, extent) {
+    var srcTex = src && src.texture;
+    var dstBuf = dst && dst.buffer;
+    var w = (extent && (extent.width  !== undefined ? extent.width  : extent[0])) || 1;
+    var h = (extent && (extent.height !== undefined ? extent.height : extent[1])) || 1;
+    this._ops.push({
+      op: 'copyTexToBuf',
+      texture: srcTex ? (srcTex._id || 0) : 0,
+      buffer:  dstBuf ? (dstBuf._id || 0) : 0,
+      bufferOffset: (dst && dst.offset) || 0,
+      bytesPerRow:  (dst && dst.bytesPerRow) || 0,
+      rowsPerImage: (dst && dst.rowsPerImage) || h,
+      width: w, height: h,
+      _dstBuf: dstBuf
+    });
+  };
   GPUCommandEncoder.prototype.copyBufferToTexture = function(src, dst, extent) {};
   GPUCommandEncoder.prototype.copyTextureToTexture = function(src, dst, extent) {};
   GPUCommandEncoder.prototype.clearBuffer = function(buf, offset, size) {};
@@ -719,12 +1066,29 @@ const WEBGPU_SHIM: &str = r#"(function() {
             if (o.cmds[ci].c === 'setPipeline' && o.cmds[ci].pipeline) hasPipeline = true;
           }
           if (!hasPipeline) { allReal = false; break; }
+        } else if (o.op === 'renderPass') {
+          // Need a real target texture and a real pipeline to run on the GPU.
+          var hasRp = false;
+          for (var ri = 0; ri < o.cmds.length; ri++) {
+            if (o.cmds[ri].c === 'setPipeline' && o.cmds[ri].pipeline) hasRp = true;
+          }
+          if (!o.colorTexture || !hasRp) { allReal = false; break; }
+        } else if (o.op === 'copyTexToBuf') {
+          if (!o.texture || !o.buffer) { allReal = false; break; }
         } else { allReal = false; break; }
       }
     }
     if (allReal) {
       var payload = allOps.map(function(o) {
         if (o.op === 'computePass') return { op: 'computePass', cmds: o.cmds };
+        if (o.op === 'renderPass') {
+          return { op: 'renderPass', colorTexture: o.colorTexture, clear: o.clear, cmds: o.cmds };
+        }
+        if (o.op === 'copyTexToBuf') {
+          return { op: 'copyTexToBuf', texture: o.texture, buffer: o.buffer,
+                   bufferOffset: o.bufferOffset, bytesPerRow: o.bytesPerRow,
+                   rowsPerImage: o.rowsPerImage, width: o.width, height: o.height };
+        }
         return { op: o.op, src: o.src, srcOffset: o.srcOffset,
                  dst: o.dst, dstOffset: o.dstOffset, size: o.size };
       });
@@ -1448,6 +1812,165 @@ mod tests {
                 .eval("new GPUAdapterInfo().description.indexOf('Phase 0 stub') === -1")
                 .unwrap();
             assert!(real_info, "real adapter description must not be the stub");
+        });
+    }
+
+    #[test]
+    fn render_pipeline_api_shape() {
+        // Without the `webgpu` feature / a GPU the render API still exists and is callable
+        // (no-op). Exercises createTexture → createRenderPipeline → getBindGroupLayout →
+        // beginRenderPass → setPipeline/setVertexBuffer/draw → end → copyTextureToBuffer → submit.
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install(&ctx);
+            let ok: bool = ctx
+                .eval(
+                    r#"
+                    var d = new GPUDevice({});
+                    var mod = d.createShaderModule({ code:
+                      '@vertex fn vs(@location(0) p: vec2<f32>) -> @builtin(position) vec4<f32> { return vec4<f32>(p, 0.0, 1.0); }' +
+                      '@fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(0.0, 1.0, 0.0, 1.0); }' });
+                    var pipe = d.createRenderPipeline({
+                      layout: 'auto',
+                      vertex: { module: mod, entryPoint: 'vs',
+                        buffers: [{ arrayStride: 8, attributes: [{ format: 'float32x2', offset: 0, shaderLocation: 0 }] }] },
+                      fragment: { module: mod, entryPoint: 'fs', targets: [{ format: 'rgba8unorm' }] },
+                      primitive: { topology: 'triangle-list' }
+                    });
+                    var bgl = pipe.getBindGroupLayout(0);
+                    var tex = d.createTexture({ size: { width: 4, height: 4 }, format: 'rgba8unorm',
+                      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
+                    var vbuf = d.createBuffer({ size: 24, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+                    var enc = d.createCommandEncoder({});
+                    var pass = enc.beginRenderPass({ colorAttachments: [{ view: tex.createView(),
+                      loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }] });
+                    pass.setPipeline(pipe);
+                    pass.setVertexBuffer(0, vbuf);
+                    pass.draw(3);
+                    pass.end();
+                    d.queue.submit([enc.finish()]);
+                    pipe instanceof GPURenderPipeline
+                      && bgl instanceof GPUBindGroupLayout
+                      && tex instanceof GPUTexture
+                      && typeof pass.draw === 'function'
+                    "#,
+                )
+                .unwrap();
+            assert!(ok, "render pipeline API must be callable end-to-end");
+        });
+    }
+
+    #[test]
+    fn render_pass_records_op_on_encoder() {
+        // The render pass must record a single renderPass op (target texture id + clear +
+        // command list) onto the parent encoder so queue.submit can flush it.
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install(&ctx);
+            let ok: bool = ctx
+                .eval(
+                    r#"
+                    var d = new GPUDevice({});
+                    var enc = d.createCommandEncoder({});
+                    var view = { _textureId: 42 };
+                    var pass = enc.beginRenderPass({ colorAttachments: [{ view: view,
+                      loadOp: 'clear', clearValue: { r: 1, g: 0, b: 0, a: 1 } }] });
+                    pass.setPipeline({ _id: 7 });
+                    pass.setVertexBuffer(0, { _id: 5 });
+                    pass.draw(3, 1, 0, 0);
+                    pass.end();
+                    var op = enc._ops[0];
+                    op.op === 'renderPass'
+                      && op.colorTexture === 42
+                      && op.clear[0] === 1 && op.clear[3] === 1
+                      && op.cmds.length === 3
+                      && op.cmds[0].c === 'setPipeline' && op.cmds[0].pipeline === 7
+                      && op.cmds[1].c === 'setVertexBuffer' && op.cmds[1].buffer === 5
+                      && op.cmds[2].c === 'draw' && op.cmds[2].vertexCount === 3
+                    "#,
+                )
+                .unwrap();
+            assert!(ok, "render pass must record its command list onto the encoder");
+        });
+    }
+
+    #[test]
+    fn render_pass_load_op_load_has_no_clear() {
+        // loadOp: 'load' must record clear === null (no clear color).
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install(&ctx);
+            let ok: bool = ctx
+                .eval(
+                    r#"
+                    var d = new GPUDevice({});
+                    var enc = d.createCommandEncoder({});
+                    var pass = enc.beginRenderPass({ colorAttachments: [{ view: { _textureId: 1 },
+                      loadOp: 'load' }] });
+                    pass.end();
+                    enc._ops[0].clear === null
+                    "#,
+                )
+                .unwrap();
+            assert!(ok, "loadOp 'load' must record a null clear");
+        });
+    }
+
+    // Real-GPU path: end-to-end render. Only meaningful with the `webgpu` feature AND an
+    // available adapter; skips on headless CI without a GPU.
+    #[cfg(feature = "webgpu")]
+    #[test]
+    fn real_backend_renders_triangle() {
+        if !lumen_paint::webgpu_compute::is_available() {
+            eprintln!("skip: no GPU adapter available");
+            return;
+        }
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install(&ctx);
+            // Full-screen triangle filled green, rendered to a 4×4 texture, then read back
+            // through a real MAP_READ buffer via copyTextureToBuffer. bytesPerRow padded to 256.
+            let green: bool = ctx
+                .eval(
+                    r#"
+                    var d = new GPUDevice({});
+                    var mod = d.createShaderModule({ code:
+                      '@vertex fn vs(@location(0) p: vec2<f32>) -> @builtin(position) vec4<f32> { return vec4<f32>(p, 0.0, 1.0); }' +
+                      '@fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(0.0, 1.0, 0.0, 1.0); }' });
+                    var pipe = d.createRenderPipeline({
+                      layout: 'auto',
+                      vertex: { module: mod, entryPoint: 'vs',
+                        buffers: [{ arrayStride: 8, attributes: [{ format: 'float32x2', offset: 0, shaderLocation: 0 }] }] },
+                      fragment: { module: mod, entryPoint: 'fs', targets: [{ format: 'rgba8unorm' }] },
+                      primitive: { topology: 'triangle-list' }
+                    });
+                    var verts = new Float32Array([-1, -1, 3, -1, -1, 3]);
+                    var vbuf = d.createBuffer({ size: verts.byteLength,
+                      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+                    d.queue.writeBuffer(vbuf, 0, verts);
+                    var tex = d.createTexture({ size: { width: 4, height: 4 }, format: 'rgba8unorm',
+                      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
+                    var readback = d.createBuffer({ size: 256 * 4,
+                      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+                    var enc = d.createCommandEncoder({});
+                    var pass = enc.beginRenderPass({ colorAttachments: [{ view: tex.createView(),
+                      loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }] });
+                    pass.setPipeline(pipe);
+                    pass.setVertexBuffer(0, vbuf);
+                    pass.draw(3);
+                    pass.end();
+                    enc.copyTextureToBuffer({ texture: tex },
+                      { buffer: readback, bytesPerRow: 256, rowsPerImage: 4 },
+                      { width: 4, height: 4 });
+                    d.queue.submit([enc.finish()]);
+                    // Center pixel (row 2, col 2): offset 2*256 + 2*4.
+                    readback.mapAsync(GPUMapMode.READ);
+                    var px = new Uint8Array(readback.getMappedRange(2 * 256 + 2 * 4, 4));
+                    px[0] === 0 && px[1] === 255 && px[2] === 0 && px[3] === 255
+                    "#,
+                )
+                .unwrap();
+            assert!(green, "real GPU render must fill the triangle green");
         });
     }
 }

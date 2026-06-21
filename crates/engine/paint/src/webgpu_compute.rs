@@ -34,8 +34,19 @@
 //!   `setPipeline`/`setBindGroup`/`dispatchWorkgroups`) в реальном `wgpu::ComputePass` —
 //!   WGSL-шейдер действительно считает на GPU, результат читается через [`buffer_read`].
 //!
-//! **Что ещё stub (Stage 2+):** render-пайплайны и present в canvas. Эти операции
-//! по-прежнему обслуживает in-memory JS-шим.
+//! **Что реально в Stage 3 (под-этап 1, render-в-текстуру):**
+//! - [`texture_create`]/[`texture_destroy`] — настоящие `wgpu::Texture` (offscreen
+//!   render-таргеты), адресуемые по хэндлу.
+//! - [`render_pipeline_create`] — настоящий `wgpu::RenderPipeline` с авто-layout из vertex- и
+//!   fragment-модулей, формата таргета и раскладки вершинных буферов.
+//! - [`render_pipeline_bind_group_layout`] — `getBindGroupLayout(idx)` для render-пайплайна.
+//! - [`submit`] исполняет `renderPass` ([`GpuOp::RenderPass`]:
+//!   `setPipeline`/`setVertexBuffer`/`setBindGroup`/`draw`) в реальном `wgpu::RenderPass`, а
+//!   [`GpuOp::CopyTextureToBuffer`] копирует отрисованные пиксели в буфер для readback —
+//!   шейдер действительно рисует на GPU, результат читается через [`buffer_read`].
+//!
+//! **Что ещё stub (Stage 3+):** present в canvas (показ отрисованной текстуры на странице
+//! `<canvas>`). Эта операция по-прежнему обслуживается in-memory JS-шимом.
 //!
 //! **Доступность.** GPU-устройство создаётся лениво один раз (`OnceLock`). Если адаптер
 //! недоступен (headless CI без GPU, нет драйвера), [`adapter_info`] и [`validate_wgsl`]
@@ -361,6 +372,37 @@ fn bind_groups() -> &'static Mutex<HashMap<u64, wgpu::BindGroup>> {
     BIND_GROUPS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+// ── Реестры render-объектов (Stage 3, под-этап 1) ────────────────────────────
+//
+// GPU-текстуры (offscreen render-таргеты) и render-пайплайны живут здесь; JS-шим держит
+// непрозрачные `u64`-хэндлы. Это даёт реальный render-pass в offscreen-текстуру с
+// последующим readback через `copyTextureToBuffer`, не утаскивая wgpu-типы в `lumen-js`.
+
+/// Запись реестра текстур: живая GPU-текстура (render-таргет / источник копий).
+struct TextureEntry {
+    /// Настоящая GPU-текстура.
+    texture: wgpu::Texture,
+}
+
+/// Реестр GPU-текстур.
+static TEXTURES: OnceLock<Mutex<HashMap<u64, TextureEntry>>> = OnceLock::new();
+/// Реестр render-пайплайнов.
+static RENDER_PIPELINES: OnceLock<Mutex<HashMap<u64, wgpu::RenderPipeline>>> = OnceLock::new();
+
+// Хэндлы render-объектов берутся из общего [`NEXT_COMPUTE_ID`]: render-пайплайны кладут
+// выведенные bind-group-layout'ы в тот же [`bind_group_layouts`]-реестр, что и compute, так
+// что счётчик обязан быть единым — иначе layout от render и от compute могли бы получить
+// одинаковый ключ и затереть друг друга.
+
+/// Доступ к реестру текстур.
+fn textures() -> &'static Mutex<HashMap<u64, TextureEntry>> {
+    TEXTURES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+/// Доступ к реестру render-пайплайнов.
+fn render_pipelines() -> &'static Mutex<HashMap<u64, wgpu::RenderPipeline>> {
+    RENDER_PIPELINES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 /// Создаёт `wgpu::ShaderModule` из WGSL и регистрирует его.
 ///
 /// Возвращает непрозрачный хэндл или `None`, если GPU недоступен. Ошибки компиляции WGSL
@@ -489,6 +531,269 @@ pub fn compute_pipeline_destroy(id: u64) {
     }
 }
 
+// ── Render-пайплайны и текстуры (Stage 3, под-этап 1) ────────────────────────
+
+/// Переводит строковый `GPUTextureFormat` (W3C) в [`wgpu::TextureFormat`].
+///
+/// Поддержано подмножество цветовых форматов render-таргета (4 байта/тексель), которого
+/// достаточно для canvas-present и offscreen-рендера. Неизвестный формат → `None`.
+fn texture_format(name: &str) -> Option<wgpu::TextureFormat> {
+    Some(match name {
+        "rgba8unorm" => wgpu::TextureFormat::Rgba8Unorm,
+        "rgba8unorm-srgb" => wgpu::TextureFormat::Rgba8UnormSrgb,
+        "bgra8unorm" => wgpu::TextureFormat::Bgra8Unorm,
+        "bgra8unorm-srgb" => wgpu::TextureFormat::Bgra8UnormSrgb,
+        "rgba16float" => wgpu::TextureFormat::Rgba16Float,
+        _ => return None,
+    })
+}
+
+/// Переводит биты `GPUTextureUsage` (W3C) в [`wgpu::TextureUsages`].
+fn texture_usages(bits: u32) -> wgpu::TextureUsages {
+    let mut u = wgpu::TextureUsages::empty();
+    if bits & 0x01 != 0 {
+        u |= wgpu::TextureUsages::COPY_SRC;
+    }
+    if bits & 0x02 != 0 {
+        u |= wgpu::TextureUsages::COPY_DST;
+    }
+    if bits & 0x04 != 0 {
+        u |= wgpu::TextureUsages::TEXTURE_BINDING;
+    }
+    if bits & 0x08 != 0 {
+        u |= wgpu::TextureUsages::STORAGE_BINDING;
+    }
+    if bits & 0x10 != 0 {
+        u |= wgpu::TextureUsages::RENDER_ATTACHMENT;
+    }
+    u
+}
+
+/// Переводит строковый `GPUVertexFormat` в [`wgpu::VertexFormat`]; неизвестный → `None`.
+fn vertex_format(name: &str) -> Option<wgpu::VertexFormat> {
+    use wgpu::VertexFormat as F;
+    Some(match name {
+        "uint8x2" => F::Uint8x2,
+        "uint8x4" => F::Uint8x4,
+        "sint8x2" => F::Sint8x2,
+        "sint8x4" => F::Sint8x4,
+        "unorm8x2" => F::Unorm8x2,
+        "unorm8x4" => F::Unorm8x4,
+        "snorm8x2" => F::Snorm8x2,
+        "snorm8x4" => F::Snorm8x4,
+        "uint16x2" => F::Uint16x2,
+        "uint16x4" => F::Uint16x4,
+        "unorm16x2" => F::Unorm16x2,
+        "unorm16x4" => F::Unorm16x4,
+        "float16x2" => F::Float16x2,
+        "float16x4" => F::Float16x4,
+        "float32" => F::Float32,
+        "float32x2" => F::Float32x2,
+        "float32x3" => F::Float32x3,
+        "float32x4" => F::Float32x4,
+        "uint32" => F::Uint32,
+        "uint32x2" => F::Uint32x2,
+        "uint32x3" => F::Uint32x3,
+        "uint32x4" => F::Uint32x4,
+        "sint32" => F::Sint32,
+        "sint32x2" => F::Sint32x2,
+        "sint32x3" => F::Sint32x3,
+        "sint32x4" => F::Sint32x4,
+        _ => return None,
+    })
+}
+
+/// Переводит строковый `GPUPrimitiveTopology` в [`wgpu::PrimitiveTopology`]
+/// (по умолчанию `triangle-list`, как в спецификации).
+fn primitive_topology(name: &str) -> wgpu::PrimitiveTopology {
+    use wgpu::PrimitiveTopology as T;
+    match name {
+        "point-list" => T::PointList,
+        "line-list" => T::LineList,
+        "line-strip" => T::LineStrip,
+        "triangle-strip" => T::TriangleStrip,
+        _ => T::TriangleList,
+    }
+}
+
+/// Одна вершинная атрибута (`GPUVertexAttribute`): формат, смещение, `@location`.
+#[derive(Debug, Clone)]
+pub struct VertexAttr {
+    /// Строковый `GPUVertexFormat` (например `"float32x3"`).
+    pub format: String,
+    /// Смещение атрибуты внутри вершины (байты).
+    pub offset: u64,
+    /// `@location(N)` атрибуты в WGSL.
+    pub shader_location: u32,
+}
+
+/// Один вершинный буфер пайплайна (`GPUVertexBufferLayout`): шаг, режим, атрибуты.
+#[derive(Debug, Clone)]
+pub struct VertexBufferLayout {
+    /// Шаг между вершинами в байтах (`arrayStride`).
+    pub array_stride: u64,
+    /// `true` — `step_mode: 'instance'`, иначе `'vertex'`.
+    pub instance_step: bool,
+    /// Атрибуты этого буфера.
+    pub attributes: Vec<VertexAttr>,
+}
+
+/// Создаёт offscreen-текстуру (render-таргет) и регистрирует её.
+///
+/// Возвращает непрозрачный хэндл, либо `None`, если формат неизвестен или GPU недоступен.
+/// К запрошенным `usage`-битам всегда добавляются `RENDER_ATTACHMENT` (цель render-pass) и
+/// `COPY_SRC` (readback через `copyTextureToBuffer`), чтобы текстура годилась под наш сценарий.
+pub fn texture_create(width: u32, height: u32, format: &str, usage_bits: u32) -> Option<u64> {
+    let ctx = context()?;
+    let fmt = texture_format(format)?;
+    let w = width.max(1);
+    let h = height.max(1);
+    let usage = texture_usages(usage_bits)
+        | wgpu::TextureUsages::RENDER_ATTACHMENT
+        | wgpu::TextureUsages::COPY_SRC;
+    let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("lumen-webgpu-texture"),
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: fmt,
+        usage,
+        view_formats: &[],
+    });
+    let id = NEXT_COMPUTE_ID.fetch_add(1, Ordering::Relaxed);
+    textures().lock().ok()?.insert(id, TextureEntry { texture });
+    Some(id)
+}
+
+/// Удаляет текстуру из реестра (освобождает GPU-память при дропе).
+pub fn texture_destroy(id: u64) {
+    if let Ok(mut g) = textures().lock() {
+        g.remove(&id);
+    }
+}
+
+/// Создаёт render-пайплайн с авто-layout (`layout: 'auto'`).
+///
+/// `vertex_shader`/`fragment_shader` — хэндлы ранее созданных шейдер-модулей (могут совпадать,
+/// если vertex и fragment в одном WGSL). `*_entry` — имена точек входа (пустая строка = выбрать
+/// единственную). `target_format` — формат единственного цветового таргета. `topology` —
+/// `GPUPrimitiveTopology`. `buffers` — раскладка вершинных буферов.
+///
+/// Возвращает хэндл пайплайна, либо `None`, если шейдер/формат неизвестен, GPU недоступен или
+/// wgpu отверг пайплайн на валидации (несовместимый layout, нет точки входа и т.п.).
+pub fn render_pipeline_create(
+    vertex_shader: u64,
+    vertex_entry: &str,
+    fragment_shader: u64,
+    fragment_entry: &str,
+    target_format: &str,
+    topology: &str,
+    buffers: &[VertexBufferLayout],
+) -> Option<u64> {
+    let ctx = context()?;
+    let fmt = texture_format(target_format)?;
+
+    // Build owned wgpu vertex attribute arrays first; the VertexBufferLayout slice below
+    // borrows them, so they must outlive create_render_pipeline.
+    let mut attr_storage: Vec<Vec<wgpu::VertexAttribute>> = Vec::with_capacity(buffers.len());
+    for b in buffers {
+        let mut attrs = Vec::with_capacity(b.attributes.len());
+        for a in &b.attributes {
+            attrs.push(wgpu::VertexAttribute {
+                format: vertex_format(&a.format)?,
+                offset: a.offset,
+                shader_location: a.shader_location,
+            });
+        }
+        attr_storage.push(attrs);
+    }
+    let vbuf_layouts: Vec<wgpu::VertexBufferLayout> = buffers
+        .iter()
+        .zip(&attr_storage)
+        .map(|(b, attrs)| wgpu::VertexBufferLayout {
+            array_stride: b.array_stride,
+            step_mode: if b.instance_step {
+                wgpu::VertexStepMode::Instance
+            } else {
+                wgpu::VertexStepMode::Vertex
+            },
+            attributes: attrs.as_slice(),
+        })
+        .collect();
+
+    let pipeline = {
+        let shaders = shaders().lock().ok()?;
+        let vs = shaders.get(&vertex_shader)?;
+        let fs = shaders.get(&fragment_shader)?;
+        let vs_ep = (!vertex_entry.is_empty()).then_some(vertex_entry);
+        let fs_ep = (!fragment_entry.is_empty()).then_some(fragment_entry);
+        guarded_create(&ctx.device, || {
+            ctx.device
+                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("lumen-webgpu-render-pipeline"),
+                    layout: None,
+                    vertex: wgpu::VertexState {
+                        module: vs,
+                        entry_point: vs_ep,
+                        buffers: &vbuf_layouts,
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: fs,
+                        entry_point: fs_ep,
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: fmt,
+                            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        topology: primitive_topology(topology),
+                        ..Default::default()
+                    },
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                    multiview: None,
+                    cache: None,
+                })
+        })?
+    };
+    let id = NEXT_COMPUTE_ID.fetch_add(1, Ordering::Relaxed);
+    render_pipelines().lock().ok()?.insert(id, pipeline);
+    Some(id)
+}
+
+/// Возвращает хэндл bind-group-layout, выведенного render-пайплайном для группы `group`
+/// (`GPURenderPipeline.getBindGroupLayout(group)`).
+///
+/// Хэндл регистрируется в общем реестре bind-group-layout'ов (тот же, что у compute), поэтому
+/// [`bind_group_create`] работает с ним без изменений. `None`, если пайплайн неизвестен или
+/// GPU недоступен.
+pub fn render_pipeline_bind_group_layout(pipeline_id: u64, group: u32) -> Option<u64> {
+    let ctx = context()?;
+    let layout = {
+        let pipes = render_pipelines().lock().ok()?;
+        let pipe = pipes.get(&pipeline_id)?;
+        guarded_create(&ctx.device, || pipe.get_bind_group_layout(group))?
+    };
+    let id = NEXT_COMPUTE_ID.fetch_add(1, Ordering::Relaxed);
+    bind_group_layouts().lock().ok()?.insert(id, layout);
+    Some(id)
+}
+
+/// Удаляет render-пайплайн из реестра.
+pub fn render_pipeline_destroy(id: u64) {
+    if let Ok(mut g) = render_pipelines().lock() {
+        g.remove(&id);
+    }
+}
+
 /// Одна команда внутри записанного compute-pass.
 #[derive(Debug, Clone, Copy)]
 pub enum ComputeCmd {
@@ -509,6 +814,66 @@ pub enum ComputeCmd {
         y: u32,
         /// Рабочих групп по Z.
         z: u32,
+    },
+}
+
+/// Одна команда внутри записанного render-pass.
+#[derive(Debug, Clone)]
+pub enum RenderCmd {
+    /// `pass.setPipeline(pipeline)` — хэндл render-пайплайна.
+    SetPipeline(u64),
+    /// `pass.setBindGroup(index, bindGroup)`.
+    SetBindGroup {
+        /// Индекс группы.
+        index: u32,
+        /// Хэндл bind-group.
+        bind_group: u64,
+    },
+    /// `pass.setVertexBuffer(slot, buffer, offset, size)`.
+    SetVertexBuffer {
+        /// Слот вершинного буфера.
+        slot: u32,
+        /// Хэндл буфера.
+        buffer: u64,
+        /// Смещение в буфере (байты).
+        offset: u64,
+        /// Размер привязки (байты); 0 = до конца буфера.
+        size: u64,
+    },
+    /// `pass.setIndexBuffer(buffer, format, offset, size)`.
+    SetIndexBuffer {
+        /// Хэндл буфера индексов.
+        buffer: u64,
+        /// `true` — формат `uint16`, иначе `uint32`.
+        format_u16: bool,
+        /// Смещение (байты).
+        offset: u64,
+        /// Размер привязки (байты); 0 = до конца буфера.
+        size: u64,
+    },
+    /// `pass.draw(vertex_count, instance_count, first_vertex, first_instance)`.
+    Draw {
+        /// Число вершин.
+        vertex_count: u32,
+        /// Число инстансов.
+        instance_count: u32,
+        /// Первая вершина.
+        first_vertex: u32,
+        /// Первый инстанс.
+        first_instance: u32,
+    },
+    /// `pass.drawIndexed(index_count, instance_count, first_index, base_vertex, first_instance)`.
+    DrawIndexed {
+        /// Число индексов.
+        index_count: u32,
+        /// Число инстансов.
+        instance_count: u32,
+        /// Первый индекс.
+        first_index: u32,
+        /// Базовая вершина (добавляется к каждому индексу).
+        base_vertex: i32,
+        /// Первый инстанс.
+        first_instance: u32,
     },
 }
 
@@ -533,6 +898,35 @@ pub enum GpuOp {
         /// Команды pass в порядке записи.
         commands: Vec<ComputeCmd>,
     },
+    /// `beginRenderPass()` … `end()` — render-pass в одну offscreen-текстуру-таргет.
+    RenderPass {
+        /// Хэндл текстуры-цвета (единственного color attachment). Рисуем в её default-view.
+        color_texture: u64,
+        /// `Some([r,g,b,a])` — `loadOp: 'clear'` этим цветом; `None` — `loadOp: 'load'`.
+        clear: Option<[f64; 4]>,
+        /// Команды pass в порядке записи.
+        commands: Vec<RenderCmd>,
+    },
+    /// `copyTextureToBuffer(texture, buffer, layout, extent)` — readback пикселей текстуры.
+    ///
+    /// `bytes_per_row` обязан быть кратен 256 (требование wgpu); вызывающая сторона
+    /// (JS-демо) выделяет буфер с выровненными строками, как в реальном WebGPU.
+    CopyTextureToBuffer {
+        /// Хэндл текстуры-источника.
+        texture: u64,
+        /// Хэндл буфера-приёмника (нужен usage `COPY_DST`; для чтения — `MAP_READ`).
+        buffer: u64,
+        /// Смещение в буфере (байты).
+        buffer_offset: u64,
+        /// Байт на строку приёмника (кратно 256).
+        bytes_per_row: u32,
+        /// Строк на изображение (обычно `height`).
+        rows_per_image: u32,
+        /// Ширина копируемой области (тексели).
+        width: u32,
+        /// Высота копируемой области (тексели).
+        height: u32,
+    },
 }
 
 /// Исполняет набор операций в одном `CommandEncoder` и сабмитит на очередь.
@@ -554,6 +948,16 @@ pub fn submit(ops: &[GpuOp]) -> bool {
         Err(_) => return false,
     };
     let bgs = match bind_groups().lock() {
+        Ok(g) => g,
+        Err(_) => return false,
+    };
+    // Render passes reference render pipelines and textures (target views, readback sources);
+    // lock those for the whole submit so the borrowed references stay alive across commands.
+    let rpipes = match render_pipelines().lock() {
+        Ok(g) => g,
+        Err(_) => return false,
+    };
+    let texs = match textures().lock() {
         Ok(g) => g,
         Err(_) => return false,
     };
@@ -616,6 +1020,169 @@ pub fn submit(ops: &[GpuOp]) -> bool {
                 if !ok {
                     return false;
                 }
+            }
+            GpuOp::RenderPass {
+                color_texture,
+                clear,
+                commands,
+            } => {
+                let Some(target) = texs.get(color_texture) else {
+                    return false;
+                };
+                let view = target
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
+                let load = match clear {
+                    Some([r, g, b, a]) => wgpu::LoadOp::Clear(wgpu::Color {
+                        r: *r,
+                        g: *g,
+                        b: *b,
+                        a: *a,
+                    }),
+                    None => wgpu::LoadOp::Load,
+                };
+                let mut ok = true;
+                {
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("lumen-webgpu-render-pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+                    for cmd in commands {
+                        match cmd {
+                            RenderCmd::SetPipeline(pid) => match rpipes.get(pid) {
+                                Some(p) => pass.set_pipeline(p),
+                                None => {
+                                    ok = false;
+                                    break;
+                                }
+                            },
+                            RenderCmd::SetBindGroup { index, bind_group } => {
+                                match bgs.get(bind_group) {
+                                    Some(b) => pass.set_bind_group(*index, b, &[]),
+                                    None => {
+                                        ok = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            RenderCmd::SetVertexBuffer {
+                                slot,
+                                buffer,
+                                offset,
+                                size,
+                            } => match guard.get(buffer) {
+                                Some(b) => {
+                                    let slice = if *size == 0 {
+                                        b.buffer.slice(*offset..)
+                                    } else {
+                                        b.buffer.slice(*offset..*offset + *size)
+                                    };
+                                    pass.set_vertex_buffer(*slot, slice);
+                                }
+                                None => {
+                                    ok = false;
+                                    break;
+                                }
+                            },
+                            RenderCmd::SetIndexBuffer {
+                                buffer,
+                                format_u16,
+                                offset,
+                                size,
+                            } => match guard.get(buffer) {
+                                Some(b) => {
+                                    let slice = if *size == 0 {
+                                        b.buffer.slice(*offset..)
+                                    } else {
+                                        b.buffer.slice(*offset..*offset + *size)
+                                    };
+                                    let fmt = if *format_u16 {
+                                        wgpu::IndexFormat::Uint16
+                                    } else {
+                                        wgpu::IndexFormat::Uint32
+                                    };
+                                    pass.set_index_buffer(slice, fmt);
+                                }
+                                None => {
+                                    ok = false;
+                                    break;
+                                }
+                            },
+                            RenderCmd::Draw {
+                                vertex_count,
+                                instance_count,
+                                first_vertex,
+                                first_instance,
+                            } => {
+                                pass.draw(
+                                    *first_vertex..*first_vertex + *vertex_count,
+                                    *first_instance..*first_instance + *instance_count,
+                                );
+                            }
+                            RenderCmd::DrawIndexed {
+                                index_count,
+                                instance_count,
+                                first_index,
+                                base_vertex,
+                                first_instance,
+                            } => {
+                                pass.draw_indexed(
+                                    *first_index..*first_index + *index_count,
+                                    *base_vertex,
+                                    *first_instance..*first_instance + *instance_count,
+                                );
+                            }
+                        }
+                    }
+                }
+                if !ok {
+                    return false;
+                }
+            }
+            GpuOp::CopyTextureToBuffer {
+                texture,
+                buffer,
+                buffer_offset,
+                bytes_per_row,
+                rows_per_image,
+                width,
+                height,
+            } => {
+                let (Some(tex), Some(buf)) = (texs.get(texture), guard.get(buffer)) else {
+                    return false;
+                };
+                encoder.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &tex.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &buf.buffer,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: *buffer_offset,
+                            bytes_per_row: Some(*bytes_per_row),
+                            rows_per_image: Some(*rows_per_image),
+                        },
+                    },
+                    wgpu::Extent3d {
+                        width: *width,
+                        height: *height,
+                        depth_or_array_layers: 1,
+                    },
+                );
             }
         }
     }
@@ -898,5 +1465,181 @@ mod tests {
             commands: vec![ComputeCmd::SetPipeline(999_999), ComputeCmd::Dispatch { x: 1, y: 1, z: 1 }],
         };
         assert!(!submit(&[pass]), "unknown pipeline handle must fail submit");
+    }
+
+    // ── Render-пайплайны (Stage 3, под-этап 1) ───────────────────────────────
+
+    #[test]
+    fn texture_format_known_strings() {
+        assert!(texture_format("rgba8unorm").is_some());
+        assert!(texture_format("bgra8unorm").is_some());
+        assert!(texture_format("rgba8unorm-srgb").is_some());
+        assert!(texture_format("nonsense").is_none());
+    }
+
+    #[test]
+    fn vertex_format_known_strings() {
+        assert_eq!(vertex_format("float32x2"), Some(wgpu::VertexFormat::Float32x2));
+        assert_eq!(vertex_format("uint32x4"), Some(wgpu::VertexFormat::Uint32x4));
+        assert_eq!(vertex_format("bogus"), None);
+    }
+
+    #[test]
+    fn render_pipeline_rejects_unknown_format() {
+        if !is_available() {
+            eprintln!("skip: no GPU adapter available");
+            return;
+        }
+        let shader = shader_create(
+            "@vertex fn vs() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0); }\
+             @fragment fn fs() -> @location(0) vec4<f32> { return vec4<f32>(1.0); }",
+        )
+        .expect("shader");
+        // Неизвестный target-формат — пайплайн не создаётся.
+        assert!(
+            render_pipeline_create(shader, "vs", shader, "fs", "nonsense", "triangle-list", &[])
+                .is_none(),
+            "unknown target format must reject the pipeline"
+        );
+    }
+
+    // 256-байтовое выравнивание строки для copyTextureToBuffer (требование wgpu).
+    const COPY_ROW_ALIGN: u32 = 256;
+
+    #[test]
+    fn render_pass_clears_texture_to_color() {
+        if !is_available() {
+            eprintln!("skip: no GPU adapter available");
+            return;
+        }
+        // 2×2 rgba8unorm текстура, очищаем красным, читаем первый тексель.
+        let tex = texture_create(2, 2, "rgba8unorm", 0).expect("texture");
+        // bytes_per_row выравниваем до 256; буфер вмещает 2 строки.
+        let readback = buffer_create((COPY_ROW_ALIGN * 2) as u64, 0x0001 | 0x0008, false)
+            .expect("readback"); // MAP_READ | COPY_DST
+
+        let pass = GpuOp::RenderPass {
+            color_texture: tex,
+            clear: Some([1.0, 0.0, 0.0, 1.0]),
+            commands: vec![],
+        };
+        let copy = GpuOp::CopyTextureToBuffer {
+            texture: tex,
+            buffer: readback,
+            buffer_offset: 0,
+            bytes_per_row: COPY_ROW_ALIGN,
+            rows_per_image: 2,
+            width: 2,
+            height: 2,
+        };
+        assert!(submit(&[pass, copy]), "render+readback submit must succeed");
+
+        let out = buffer_read(readback, 0, 4).expect("read back");
+        assert_eq!(out, vec![255, 0, 0, 255], "cleared pixel must be opaque red");
+
+        texture_destroy(tex);
+        buffer_destroy(readback);
+    }
+
+    #[test]
+    fn render_pipeline_draws_triangle() {
+        if !is_available() {
+            eprintln!("skip: no GPU adapter available");
+            return;
+        }
+        // Полноэкранный треугольник, закрашенный зелёным; читаем центральный тексель 4×4.
+        let src = r#"
+            @vertex fn vs(@location(0) pos: vec2<f32>) -> @builtin(position) vec4<f32> {
+                return vec4<f32>(pos, 0.0, 1.0);
+            }
+            @fragment fn fs() -> @location(0) vec4<f32> {
+                return vec4<f32>(0.0, 1.0, 0.0, 1.0);
+            }
+        "#;
+        let shader = shader_create(src).expect("shader");
+        let pipeline = render_pipeline_create(
+            shader,
+            "vs",
+            shader,
+            "fs",
+            "rgba8unorm",
+            "triangle-list",
+            &[VertexBufferLayout {
+                array_stride: 8,
+                instance_step: false,
+                attributes: vec![VertexAttr {
+                    format: "float32x2".to_string(),
+                    offset: 0,
+                    shader_location: 0,
+                }],
+            }],
+        )
+        .expect("render pipeline");
+
+        // Треугольник перекрывает весь NDC-квадрат [-1,1]².
+        let verts: [f32; 6] = [-1.0, -1.0, 3.0, -1.0, -1.0, 3.0];
+        let mut vbytes = Vec::with_capacity(verts.len() * 4);
+        for v in verts {
+            vbytes.extend_from_slice(&v.to_le_bytes());
+        }
+        let vbuf = buffer_create(vbytes.len() as u64, 0x0020 | 0x0008, false).expect("vbuf"); // VERTEX | COPY_DST
+        assert!(buffer_write(vbuf, 0, &vbytes));
+
+        let tex = texture_create(4, 4, "rgba8unorm", 0).expect("texture");
+        let readback = buffer_create((COPY_ROW_ALIGN * 4) as u64, 0x0001 | 0x0008, false)
+            .expect("readback");
+
+        let pass = GpuOp::RenderPass {
+            color_texture: tex,
+            clear: Some([0.0, 0.0, 0.0, 1.0]),
+            commands: vec![
+                RenderCmd::SetPipeline(pipeline),
+                RenderCmd::SetVertexBuffer {
+                    slot: 0,
+                    buffer: vbuf,
+                    offset: 0,
+                    size: 0,
+                },
+                RenderCmd::Draw {
+                    vertex_count: 3,
+                    instance_count: 1,
+                    first_vertex: 0,
+                    first_instance: 0,
+                },
+            ],
+        };
+        let copy = GpuOp::CopyTextureToBuffer {
+            texture: tex,
+            buffer: readback,
+            buffer_offset: 0,
+            bytes_per_row: COPY_ROW_ALIGN,
+            rows_per_image: 4,
+            width: 4,
+            height: 4,
+        };
+        assert!(submit(&[pass, copy]), "draw + readback submit must succeed");
+
+        // Центральный тексель (row 2, col 2) → offset 2*256 + 2*4.
+        let center = buffer_read(readback, (2 * COPY_ROW_ALIGN + 2 * 4) as u64, 4).expect("read");
+        assert_eq!(center, vec![0, 255, 0, 255], "triangle pixel must be opaque green");
+
+        render_pipeline_destroy(pipeline);
+        texture_destroy(tex);
+        buffer_destroy(vbuf);
+        buffer_destroy(readback);
+    }
+
+    #[test]
+    fn render_submit_unknown_texture_fails() {
+        if !is_available() {
+            eprintln!("skip: no GPU adapter available");
+            return;
+        }
+        let pass = GpuOp::RenderPass {
+            color_texture: 999_999,
+            clear: Some([0.0, 0.0, 0.0, 1.0]),
+            commands: vec![],
+        };
+        assert!(!submit(&[pass]), "unknown target texture must fail submit");
     }
 }
