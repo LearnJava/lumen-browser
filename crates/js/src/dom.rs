@@ -3610,6 +3610,8 @@ var _validity_msg = {};
 var _input_values = {};
 // nid → cached CanvasRenderingContext2D object (persists across _lumen_make_element).
 var _canvas2d_ctxs = {};
+// nid → cached GPUCanvasContext object (getContext('webgpu'), persists across _lumen_make_element).
+var _canvas_webgpu_ctxs = {};
 
 // ValidityState — readonly snapshot of one form control's validity.
 function ValidityState(flags) {
@@ -4436,6 +4438,20 @@ function _lumen_make_element(nid) {
                 var c2d = _lumen_make_canvas2d_ctx(this, nid);
                 _canvas2d_ctxs[nid] = c2d;
                 return c2d;
+            }
+            // 'webgpu' returns a GPUCanvasContext bound to this canvas. configure() allocates a
+            // render-target texture; rendered frames present into the canvas:{nid} 2D buffer the
+            // shell composites. Returns null without the WebGPU shim (Phase 0 builds).
+            if (t === 'webgpu') {
+                if (_canvas_webgpu_ctxs[nid]) return _canvas_webgpu_ctxs[nid];
+                if ((_lumen_get_tag_name(nid) || '').toLowerCase() !== 'canvas') return null;
+                if (typeof _lumen_canvas_is_transferred === 'function' && _lumen_canvas_is_transferred(nid)) return null;
+                if (typeof GPUCanvasContext !== 'function') return null;
+                var wd = _lumen_canvas_dims(nid);
+                _lumen_canvas2d_create(nid, wd[0], wd[1]);
+                var gctx = new GPUCanvasContext(this);
+                _canvas_webgpu_ctxs[nid] = gctx;
+                return gctx;
             }
             return null;
         },
