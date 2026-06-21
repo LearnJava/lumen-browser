@@ -13,6 +13,7 @@ pub mod ext;
 pub mod form;
 pub mod geom;
 pub mod hash;
+pub mod icc;
 pub mod idn;
 pub mod json;
 pub mod memory_pressure;
@@ -25,6 +26,7 @@ pub mod web_storage;
 
 pub use capability::{Capability, CapabilityToken};
 pub use color::{ColorSpace, detect_color_space_from_icc};
+pub use icc::{DataColorSpace, IccProfile, ProfileClass, ToneCurve, XyzNumber};
 pub use crash::{format_crash_dump, write_crash_dump, CrashRecorder};
 pub use error::{Error, Result};
 pub use event::{Event, FetchPriority, RequestStage, SubresourceKind, TabId};

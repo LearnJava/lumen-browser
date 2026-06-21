@@ -97,7 +97,8 @@ Snapshot: **Phase 2 «Interactive», app v0.2.0**. ~21 crates.
 ### lumen-image (`crates/engine/image`)
 - ✅ PNG, JPEG (baseline + progressive), WebP (VP8 + VP8L), **GIF** (static + animated), **AVIF** (behind `avif` feature).
 - ✅ `resize_bilinear`, `ImageDecoder` trait, `ImageDecodeCache` (LRU 256 MB, `ImageHandle`/`ImageKey`).
-- ⬜ JXL and HEIC are sniff-only Err stubs; ICC color pipeline not wired.
+- ⬜ JXL and HEIC are sniff-only Err stubs.
+- 🟡 ICC colour management: real read-only ICC parser (`lumen_core::icc::IccProfile` — header, tag table, `rXYZ/gXYZ/bXYZ`, `rTRC/gTRC/bTRC`, `wtpt`, raw `A2B0/B2A0`); RGB profiles classified by colorant primaries (sRGB/Display-P3/Rec.2020) instead of string sniffing. ⬜ Curve evaluation, Lab PCS, matrix-shaper / CMYK-LUT transforms, and decode-stage wiring (ICC-2…ICC-5).
 
 ### lumen-canvas (`crates/engine/canvas`)
 - ✅ Canvas 2D CPU rasterizer: rect ops, full path building (arc/arcTo/bezier/quadratic/ellipse), fill/stroke (even-odd), state stack + full CTM, `globalAlpha`, 16 composite/blend ops, line caps/joins.
