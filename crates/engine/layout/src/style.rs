@@ -2259,6 +2259,15 @@ pub struct ComputedStyle {
     pub background_color: Option<CssColor>,
     pub font_size: f32,
     pub line_height: f32,
+    /// CSS2 §10.8.1 / CSS Fonts L5 §4 — whether `line-height` was specified as a
+    /// relative value (`normal` or a unitless `<number>`) that scales with the
+    /// used font-size, vs. an absolute `<length>`/`<percentage>` whose computed
+    /// line box is frozen. `line_height` is always stored as a ratio (×font-size);
+    /// this flag records which kind it was so `font-size-adjust` (which mutates the
+    /// used font-size post-cascade) can keep an absolute line box constant instead
+    /// of re-scaling it. Initial: `true` (`normal` is relative). Inherited with
+    /// `line_height`.
+    pub line_height_is_relative: bool,
     /// CSS Rhythmic Sizing L1 §2 — `line-height-step` step unit in px.
     /// When `> 0`, each line box's used height is rounded up to the closest
     /// multiple of this value and the extra space is distributed as half-leading.
@@ -5006,6 +5015,7 @@ impl ComputedStyle {
             background_color: None,
             font_size: 16.0,
             line_height: 1.2,
+            line_height_is_relative: true,
             line_height_step: 0.0,
             font_style: FontStyle::Normal,
             font_weight: FontWeight::NORMAL,
@@ -5303,6 +5313,7 @@ pub fn compute_style(
         direction: inherited.direction,
         font_size: inherited.font_size,
         line_height: inherited.line_height,
+        line_height_is_relative: inherited.line_height_is_relative,
         line_height_step: inherited.line_height_step,
         font_style: inherited.font_style,
         font_weight: inherited.font_weight,
@@ -6435,6 +6446,7 @@ pub fn compute_pseudo_element_style(
     style.direction = parent.direction;
     style.font_size = parent.font_size;
     style.line_height = parent.line_height;
+    style.line_height_is_relative = parent.line_height_is_relative;
     style.line_height_step = parent.line_height_step;
     style.font_style = parent.font_style;
     style.font_weight = parent.font_weight;
@@ -13294,8 +13306,17 @@ fn apply_declaration(
             // `150%` — то же самое. `24px` / `5vh` — конкретная высота,
             // переводим в коэффициент / font_size.
             if let Ok(v) = val.parse::<f32>() {
+                // Unitless `<number>` — relative: the line box scales with the
+                // used font-size (incl. any `font-size-adjust` rescale).
                 style.line_height = v;
+                style.line_height_is_relative = true;
             } else if let Some(len) = parse_length(val) {
+                // Every unit-bearing value computes to an absolute length
+                // (CSS2 §10.8.1: `<length>`/`<percentage>`/`em`/`rem` line-height
+                // resolves at computed-value time), so the line box must be frozen
+                // and must NOT rescale when `font-size-adjust` changes the used
+                // font-size. Stored as a ratio purely for the layout hot path.
+                style.line_height_is_relative = false;
                 match &len {
                     Length::Px(v) => style.line_height = v / style.font_size,
                     Length::Em(v) => style.line_height = *v,
@@ -14512,6 +14533,11 @@ fn apply_css_wide_keyword(
         }
         "line-height" => {
             style.line_height = if inh { inherited.line_height } else { init.line_height };
+            style.line_height_is_relative = if inh {
+                inherited.line_height_is_relative
+            } else {
+                init.line_height_is_relative
+            };
         }
         "line-height-step" => {
             style.line_height_step =
@@ -26710,6 +26736,28 @@ mod tests {
         let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.font_size_adjust, FontSizeAdjust::Auto);
+    }
+
+    // ── line-height relative/absolute classification (BUG-212) ─────────────────
+
+    #[test]
+    fn line_height_px_is_absolute_number_is_relative() {
+        let doc = lumen_html_parser::parse("<div id=a></div><div id=b></div>");
+        let root = ComputedStyle::root();
+        let vp = Size::new(800.0, 600.0);
+        // `<length>` → absolute (frozen under font-size-adjust).
+        let sheet_px = lumen_css_parser::parse("div { line-height: 100px; }");
+        let a = doc.find_by_id("a").unwrap();
+        let s_px = compute_style(&doc, a, &sheet_px, &root, vp, false);
+        assert!(!s_px.line_height_is_relative, "px line-height must be absolute");
+        // unitless `<number>` → relative (scales with font-size).
+        let sheet_num = lumen_css_parser::parse("div { line-height: 1.5; }");
+        let s_num = compute_style(&doc, a, &sheet_num, &root, vp, false);
+        assert!(s_num.line_height_is_relative, "number line-height must be relative");
+        // `normal` (default) → relative.
+        let sheet_none = lumen_css_parser::parse("");
+        let s_def = compute_style(&doc, a, &sheet_none, &root, vp, false);
+        assert!(s_def.line_height_is_relative, "default/normal line-height must be relative");
     }
 
     // ── writing-mode ──────────────────────────────────────────────────────────
