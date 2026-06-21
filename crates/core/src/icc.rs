@@ -863,6 +863,81 @@ impl RgbTransform {
     }
 }
 
+/// Process-wide cache of compiled ICC transforms, keyed by the raw profile bytes.
+///
+/// ICC-5: building a transform parses the profile and compiles its tone curves /
+/// `A2B0` LUT — work that must not repeat per paint, nor per image sharing the
+/// same embedded profile (e.g. a gallery of Display-P3 photos). Decoders and
+/// paint backends look transforms up here so a given profile is parsed and
+/// compiled at most once for the lifetime of the process.
+///
+/// Both successful builds and failures (`None`) are cached: a profile that has no
+/// buildable RGB matrix-shaper / CMYK LUT must not be re-parsed on every miss.
+/// The cache is keyed on the full profile bytes (`Vec<u8>`), so there is no hash
+/// collision risk; distinct profiles per page number in the low single digits and
+/// each is only a few kilobytes.
+struct TransformCache {
+    /// Compiled RGB matrix-shaper transforms by profile bytes.
+    rgb: std::collections::HashMap<Vec<u8>, Option<std::sync::Arc<RgbTransform>>>,
+    /// Compiled CMYK `A2B0` LUT transforms by profile bytes.
+    cmyk: std::collections::HashMap<Vec<u8>, Option<std::sync::Arc<CmykTransform>>>,
+}
+
+/// Lazily-initialised global transform cache. Guarded by a `Mutex`; a poisoned
+/// lock is recovered (`into_inner`) rather than panicking, per the no-panic policy.
+static TRANSFORM_CACHE: std::sync::LazyLock<std::sync::Mutex<TransformCache>> =
+    std::sync::LazyLock::new(|| {
+        std::sync::Mutex::new(TransformCache {
+            rgb: std::collections::HashMap::new(),
+            cmyk: std::collections::HashMap::new(),
+        })
+    });
+
+/// Returns the compiled RGB matrix-shaper transform for `profile_bytes`, building
+/// and caching it on first use (ICC-5).
+///
+/// Returns `None` — also cached — when `profile_bytes` is not a parseable RGB
+/// matrix-shaper profile (LUT-only / non-RGB / malformed); callers fall back to
+/// gamut tone-mapping or treat the pixels as sRGB. The returned `Arc` shares one
+/// compiled transform across every image carrying the same profile.
+#[must_use]
+pub fn cached_rgb_transform(profile_bytes: &[u8]) -> Option<std::sync::Arc<RgbTransform>> {
+    let mut cache = match TRANSFORM_CACHE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(hit) = cache.rgb.get(profile_bytes) {
+        return hit.clone();
+    }
+    let built = IccProfile::parse(profile_bytes)
+        .and_then(|p| p.build_rgb_transform())
+        .map(std::sync::Arc::new);
+    cache.rgb.insert(profile_bytes.to_vec(), built.clone());
+    built
+}
+
+/// Returns the compiled CMYK `A2B0` transform for `profile_bytes`, building and
+/// caching it on first use (ICC-5).
+///
+/// Returns `None` — also cached — when `profile_bytes` carries no buildable
+/// CMYK `A2B0` LUT; callers fall back to naïve CMYK→RGB. The returned `Arc`
+/// shares one compiled transform across every image with the same profile.
+#[must_use]
+pub fn cached_cmyk_transform(profile_bytes: &[u8]) -> Option<std::sync::Arc<CmykTransform>> {
+    let mut cache = match TRANSFORM_CACHE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(hit) = cache.cmyk.get(profile_bytes) {
+        return hit.clone();
+    }
+    let built = IccProfile::parse(profile_bytes)
+        .and_then(|p| p.build_cmyk_transform())
+        .map(std::sync::Arc::new);
+    cache.cmyk.insert(profile_bytes.to_vec(), built.clone());
+    built
+}
+
 /// XYZ(D65) → linear sRGB matrix (sRGB primaries, IEC 61966-2-1).
 #[rustfmt::skip]
 const XYZ_D65_TO_SRGB: [[f64; 3]; 3] = [
@@ -1451,5 +1526,45 @@ mod tests {
         clut[0] = 1.0;
         let out = clut_interp(&clut, &[2, 2, 2, 2], 1, &[0.5, 0.5, 0.5, 0.5]);
         assert!((out[0] - 1.0 / 16.0).abs() < 1e-12, "centre weight {}", out[0]);
+    }
+
+    // ── ICC-5: transform cache ─────────────────────────────────────────────
+
+    #[test]
+    fn cached_rgb_transform_returns_shared_arc() {
+        // Display-P3-ish primaries — a buildable RGB matrix-shaper profile.
+        let profile = build_rgb_profile(
+            (0.5151, 0.2412, -0.0010),
+            (0.2919, 0.6922, 0.0419),
+            (0.1571, 0.0666, 0.7841),
+        );
+        let a = cached_rgb_transform(&profile).expect("transform should build");
+        let b = cached_rgb_transform(&profile).expect("transform should build");
+        // Second call hits the cache: same allocation, no rebuild.
+        assert!(std::sync::Arc::ptr_eq(&a, &b), "repeat lookup must share the cached Arc");
+    }
+
+    #[test]
+    fn cached_rgb_transform_matches_direct_build() {
+        let profile = build_rgb_profile(
+            (0.4361, 0.2225, 0.0139),
+            (0.3851, 0.7169, 0.0971),
+            (0.1431, 0.0606, 0.7141),
+        );
+        let direct = IccProfile::parse(&profile).unwrap().build_rgb_transform().unwrap();
+        let cached = cached_rgb_transform(&profile).unwrap();
+        // Same maths through both paths.
+        let (dr, dg, db) = direct.apply(0.3, 0.6, 0.9);
+        let (cr, cg, cb) = cached.apply(0.3, 0.6, 0.9);
+        assert!((dr - cr).abs() < 1e-12 && (dg - cg).abs() < 1e-12 && (db - cb).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cached_rgb_transform_caches_misses() {
+        // A non-ICC byte blob never builds; the cache must tolerate and store the
+        // miss (return None twice without panicking).
+        let junk = vec![0xABu8; 200];
+        assert!(cached_rgb_transform(&junk).is_none());
+        assert!(cached_rgb_transform(&junk).is_none());
     }
 }

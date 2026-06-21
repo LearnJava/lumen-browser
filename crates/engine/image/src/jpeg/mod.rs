@@ -148,8 +148,9 @@ fn try_decode_cmyk_icc(
     height: usize,
 ) -> Option<Image> {
     let icc = parse_jpeg_icc_profile(bytes)?;
-    let profile = lumen_core::icc::IccProfile::parse(&icc.data)?;
-    let transform = profile.build_cmyk_transform()?;
+    // ICC-5: build/compile the CMYK A2B0 transform via the process-wide cache so
+    // repeated CMYK JPEGs sharing a profile parse it only once.
+    let transform = lumen_core::icc::cached_cmyk_transform(&icc.data)?;
 
     // Decode raw 4-channel samples (input == output ⇒ zune copies them verbatim).
     let options = DecoderOptions::default().jpeg_set_out_colorspace(input_cs);
