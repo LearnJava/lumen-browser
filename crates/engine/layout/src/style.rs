@@ -2927,6 +2927,9 @@ pub struct ComputedStyle {
     /// CSS (the presentation attribute, then the `auto` initial, applies at box
     /// build time). `Some(_)` = author CSS rule overrides the attribute.
     pub dominant_baseline: Option<crate::box_tree::SvgDominantBaseline>,
+    /// SVG 1.1 §10.9.2 / CSS Inline L3 §5.2 — `baseline-shift`. NOT inherited.
+    /// Initial `baseline` (no shift). Positive lengths/percentages raise the text.
+    pub baseline_shift: crate::box_tree::SvgBaselineShift,
     // CSS Logical Properties L1 §2 — temporary storage for logical properties.
     // These are resolved to physical properties in resolve_logical_properties().
     /// CSS Logical Properties L1 — `inline-size`. `None` = auto.
@@ -5247,6 +5250,7 @@ impl ComputedStyle {
             paint_order: SvgPaintOrder::default(),
             text_anchor: None,
             dominant_baseline: None,
+            baseline_shift: crate::box_tree::SvgBaselineShift::Baseline,
             // CSS Logical Properties L1 — initial values.
             inline_size: None,
             block_size: None,
@@ -5587,6 +5591,8 @@ pub fn compute_style(
         paint_order: inherited.paint_order,
         text_anchor: inherited.text_anchor,
         dominant_baseline: inherited.dominant_baseline,
+        // SVG baseline-shift is NOT inherited — reset to initial each element.
+        baseline_shift: crate::box_tree::SvgBaselineShift::Baseline,
         // CSS Logical Properties L1 — not inherited. Initial values.
         inline_size: None,
         block_size: None,
@@ -8573,6 +8579,7 @@ fn apply_svg_presentational_hints(
         "stroke-dashoffset",
         "text-anchor",
         "dominant-baseline",
+        "baseline-shift",
         "color",
         "opacity",
     ];
@@ -13267,6 +13274,28 @@ fn apply_declaration(
                 _ => {}
             }
         }
+        "baseline-shift" => {
+            // SVG 1.1 §10.9.2 / CSS Inline L3 §5.2 — vertical baseline shift of SVG
+            // <text>/<tspan>. `baseline | sub | super | <length> | <percentage>`.
+            // Percentage is relative to the current font-size; unknown values are
+            // ignored (leave the cascaded value untouched).
+            use crate::box_tree::SvgBaselineShift;
+            let v = val.trim();
+            match v.to_ascii_lowercase().as_str() {
+                "baseline" => style.baseline_shift = SvgBaselineShift::Baseline,
+                "sub" => style.baseline_shift = SvgBaselineShift::Sub,
+                "super" => style.baseline_shift = SvgBaselineShift::Super,
+                other => {
+                    if let Some(pct) = other.strip_suffix('%') {
+                        if let Ok(n) = pct.trim().parse::<f32>() {
+                            style.baseline_shift = SvgBaselineShift::Percentage(n / 100.0);
+                        }
+                    } else if let Some(px) = resolve_svg_length(v, em_basis, viewport, is_quirks) {
+                        style.baseline_shift = SvgBaselineShift::Length(px);
+                    }
+                }
+            }
+        }
         "line-height" => {
             // `1.5` (unitless) — коэффициент. `1.5em` — то же самое.
             // `150%` — то же самое. `24px` / `5vh` — конкретная высота,
@@ -14927,6 +14956,10 @@ fn apply_css_wide_keyword(
         }
         "dominant-baseline" => {
             style.dominant_baseline = if inh { inherited.dominant_baseline } else { init.dominant_baseline };
+        }
+        // SVG baseline-shift is NOT inherited: inherit → parent, else → initial.
+        "baseline-shift" => {
+            style.baseline_shift = if inh_only_inherit { inherited.baseline_shift } else { init.baseline_shift };
         }
         "overflow" => {
             let (x, y) = if inh_only_inherit {
@@ -23437,6 +23470,65 @@ mod tests {
             16.0, vp, FontWeight::NORMAL, &parent, false, false,
         );
         assert_eq!(s.text_anchor, None);
+    }
+
+    // === baseline-shift parsing (SVG 1.1 §10.9.2 / CSS Inline L3 §5.2) ===
+
+    #[test]
+    fn baseline_shift_default_is_baseline() {
+        use crate::box_tree::SvgBaselineShift;
+        assert_eq!(ComputedStyle::root().baseline_shift, SvgBaselineShift::Baseline);
+    }
+
+    #[test]
+    fn baseline_shift_keywords() {
+        use crate::box_tree::SvgBaselineShift;
+        assert_eq!(ts_prop("baseline-shift", "baseline").baseline_shift, SvgBaselineShift::Baseline);
+        assert_eq!(ts_prop("baseline-shift", "sub").baseline_shift, SvgBaselineShift::Sub);
+        assert_eq!(ts_prop("baseline-shift", "super").baseline_shift, SvgBaselineShift::Super);
+        // Case-insensitive.
+        assert_eq!(ts_prop("baseline-shift", "SUPER").baseline_shift, SvgBaselineShift::Super);
+    }
+
+    #[test]
+    fn baseline_shift_length_and_percentage() {
+        use crate::box_tree::SvgBaselineShift;
+        assert_eq!(ts_prop("baseline-shift", "4px").baseline_shift, SvgBaselineShift::Length(4.0));
+        // 0.5em with em_basis 16px → 8px.
+        assert_eq!(ts_prop("baseline-shift", "0.5em").baseline_shift, SvgBaselineShift::Length(8.0));
+        assert_eq!(ts_prop("baseline-shift", "50%").baseline_shift, SvgBaselineShift::Percentage(0.5));
+    }
+
+    #[test]
+    fn baseline_shift_invalid_keeps_current() {
+        use crate::box_tree::SvgBaselineShift;
+        // Unknown value → leave the cascaded value untouched (here: Baseline).
+        assert_eq!(ts_prop("baseline-shift", "bogus").baseline_shift, SvgBaselineShift::Baseline);
+    }
+
+    #[test]
+    fn baseline_shift_not_inherited() {
+        // baseline-shift is NOT inherited: `unset` resolves to the initial value,
+        // not the parent's value.
+        use crate::box_tree::SvgBaselineShift;
+        let mut parent = ComputedStyle::root();
+        parent.baseline_shift = SvgBaselineShift::Super;
+        let vp = Size::new(800.0, 600.0);
+        let mut s = ComputedStyle::root();
+        apply_declaration(
+            &mut s,
+            &Declaration { property: "baseline-shift".into(), value: "unset".into(), important: false },
+            16.0, vp, FontWeight::NORMAL, &parent, false, false,
+        );
+        assert_eq!(s.baseline_shift, SvgBaselineShift::Baseline);
+        // `inherit` explicitly pulls the parent value.
+        let mut s2 = ComputedStyle::root();
+        apply_declaration(
+            &mut s2,
+            &Declaration { property: "baseline-shift".into(), value: "inherit".into(), important: false },
+            16.0, vp, FontWeight::NORMAL, &parent, false, false,
+        );
+        assert_eq!(s2.baseline_shift, SvgBaselineShift::Super);
     }
 
     // === quotes parsing (CSS Generated Content L3 §3.2) ===

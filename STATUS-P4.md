@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_ — p4-svg-text-anchor (`text-anchor`/`dominant-baseline` как CSS-свойства) влит 2026-06-21
+`baseline-shift` — SVG 1.1 §10.9.2 / CSS Inline L3 §5.2 — branch: `p4-baseline-shift`
+Next step: merge → task finish
 
 ## Workflow
 

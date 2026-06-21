@@ -258,6 +258,26 @@ pub enum SvgDominantBaseline {
     TextAfterEdge,
 }
 
+/// SVG 1.1 §10.9.2 / CSS Inline Layout L3 §5.2 — `baseline-shift`. Vertical shift
+/// of the text baseline relative to the dominant baseline of the parent.
+/// NOT inherited; initial `baseline` (no shift). Positive lengths/percentages
+/// *raise* the text (shift up, toward smaller `y`); `sub` lowers and `super`
+/// raises by an approximate sub/superscript offset.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum SvgBaselineShift {
+    /// `baseline` (initial) — no shift.
+    #[default]
+    Baseline,
+    /// `sub` — lower the baseline to the subscript position.
+    Sub,
+    /// `super` — raise the baseline to the superscript position.
+    Super,
+    /// `<length>` in user units. Positive raises the text (shifts up).
+    Length(f32),
+    /// `<percentage>` as a fraction of the current font-size. Positive raises.
+    Percentage(f32),
+}
+
 /// SVG transformation data from the `transform` presentation attribute.
 /// Stores parsed transform functions in order of application.
 #[derive(Debug, Clone, Default)]
@@ -1050,6 +1070,9 @@ fn process_svg_node(
             // `auto` initial value.
             let text_anchor = style.text_anchor.unwrap_or_default();
             let dominant_baseline = style.dominant_baseline.unwrap_or_default();
+            // SVG 1.1 §10.9.2 — `baseline-shift` is non-inherited; the presentation
+            // attribute is folded into the cascade by `apply_svg_presentational_hints`.
+            let baseline_shift = style.baseline_shift;
             out.push(LayoutBox {
                 node: child_id, rect: Rect::ZERO, style,
                 kind: BoxKind::SvgText {
@@ -1060,6 +1083,7 @@ fn process_svg_node(
                     dy: svg_attr_f32(doc, child_id, "dy"),
                     text_anchor,
                     dominant_baseline,
+                    baseline_shift,
                     svg_transform: svg_transform.clone(),
                 },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
@@ -1806,6 +1830,8 @@ pub enum BoxKind {
         text_anchor: SvgTextAnchor,
         /// Dominant baseline alignment: auto/baseline/hanging/middle/etc. Defaults to "auto" per SVG spec.
         dominant_baseline: SvgDominantBaseline,
+        /// Baseline shift (sub/super/length/percentage). Defaults to `baseline` (no shift) per SVG spec.
+        baseline_shift: SvgBaselineShift,
         /// Parsed SVG `transform` presentation attribute.
         svg_transform: SvgTransform,
     },
@@ -13424,6 +13450,63 @@ mod tests {
         };
         assert_eq!(*text_anchor, super::SvgTextAnchor::Start);
         assert_eq!(*dominant_baseline, super::SvgDominantBaseline::Auto);
+    }
+
+    #[test]
+    fn svg_baseline_shift_from_attribute() {
+        // <text baseline-shift="super"> presentation attribute folds into the cascade.
+        let html = "<svg><text baseline-shift=\"super\">x</text></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let tb = first_svg_text(&root).expect("svg text box");
+        let super::BoxKind::SvgText { baseline_shift, .. } = &tb.kind else {
+            panic!("not SvgText");
+        };
+        assert_eq!(*baseline_shift, super::SvgBaselineShift::Super);
+    }
+
+    #[test]
+    fn svg_baseline_shift_css_overrides_attribute() {
+        // SVG 2 §6.4: presentation attribute has specificity 0 — a CSS rule wins.
+        let html = "<svg><text class=\"t\" baseline-shift=\"sub\">x</text></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(".t { baseline-shift: 3px; }");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let tb = first_svg_text(&root).expect("svg text box");
+        let super::BoxKind::SvgText { baseline_shift, .. } = &tb.kind else {
+            panic!("not SvgText");
+        };
+        assert_eq!(*baseline_shift, super::SvgBaselineShift::Length(3.0));
+    }
+
+    #[test]
+    fn svg_baseline_shift_not_inherited() {
+        // baseline-shift is NOT inherited: a `<g baseline-shift>` does NOT propagate
+        // to a descendant <text> that sets nothing — the text keeps the `baseline` initial.
+        let html = "<svg><g baseline-shift=\"super\"><text>x</text></g></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let tb = first_svg_text(&root).expect("svg text box");
+        let super::BoxKind::SvgText { baseline_shift, .. } = &tb.kind else {
+            panic!("not SvgText");
+        };
+        assert_eq!(*baseline_shift, super::SvgBaselineShift::Baseline);
+    }
+
+    #[test]
+    fn svg_baseline_shift_defaults_to_baseline() {
+        // No attribute, no CSS → `baseline` initial (no shift).
+        let html = "<svg><text>x</text></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+        let tb = first_svg_text(&root).expect("svg text box");
+        let super::BoxKind::SvgText { baseline_shift, .. } = &tb.kind else {
+            panic!("not SvgText");
+        };
+        assert_eq!(*baseline_shift, super::SvgBaselineShift::Baseline);
     }
 
     #[test]

@@ -86,7 +86,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Containment L2/L3 | [css-contain-2](https://www.w3.org/TR/css-contain-2/) | 🟡 | content-visibility skip-content; cq* units | **#28** |
 | CSS Counter Styles L3 | [css-counter-styles-3](https://www.w3.org/TR/css-counter-styles-3/) | 🟡 | counter-reset/increment resolution ✅ 2026-05-25; @counter-style ⬜ | **#29** |
 | CSS Box Alignment L3 | [css3-align](https://www.w3.org/TR/css3-align/) | 🟡 | justify-items/justify-self for grid | **#30** |
-| CSS Inline L3 | [css-inline-3](https://www.w3.org/TR/css-inline-3/) | 🟡 | line-height leading; baseline grid | **#31** |
+| CSS Inline L3 | [css-inline-3](https://www.w3.org/TR/css-inline-3/) | 🟡 | line-height leading; baseline grid; `baseline-shift` ✅ 2026-06-21 (p4-baseline-shift: SVG 1.1 §10.9.2 / CSS Inline L3 §5.2 — non-inherited `SvgBaselineShift` enum Baseline/Sub/Super/Length/Percentage; presentational attribute + CSS property; CSS overrides attr; wired through `emit_svg_text` as vertical y-shift; `sub` lowers by 0.2×font-size, `super` raises by 0.4×font-size, positive length raises) | **#31** |
 | CSS Text Decoration L4 | [css-text-decor-4](https://www.w3.org/TR/css-text-decor-4/) | 🟡 | text-emphasis rendering; text-underline-offset ✅ 2026-06-10 | **#32** |
 | CSS Scrollbars L1 | [css-scrollbars-1](https://www.w3.org/TR/css-scrollbars-1/) | 🟡 | scrollbar-width/color rendering | **#33** |
 | CSS Basic UI L3/L4 | [css3-ui](https://www.w3.org/TR/css3-ui/) | 🟡 | resize drag-UI; appearance form widgets; field-sizing ✅ 2026-06-13 | **#34** |

@@ -21,7 +21,7 @@ use lumen_layout::{
     Appearance,
     BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, EmptyCells, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight, ShapeValue,
-    FillRule, FormControlKind, StrokeLinecap, StrokeLinejoin, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline,
+    FillRule, FormControlKind, StrokeLinecap, StrokeLinejoin, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, SvgBaselineShift,
     GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
     InlineFrag, LayoutBox, MarginBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, Page, PaintOrder, PaintPhase, Position, PositionComponent, Resize,
@@ -5052,8 +5052,8 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32, sel: Op
         BoxKind::SvgShape { shape, .. } => {
             emit_svg_shape(b, shape, out);
         }
-        BoxKind::SvgText { text, text_anchor, dominant_baseline, .. } => {
-            emit_svg_text(b, text, *text_anchor, *dominant_baseline, out);
+        BoxKind::SvgText { text, text_anchor, dominant_baseline, baseline_shift, .. } => {
+            emit_svg_text(b, text, *text_anchor, *dominant_baseline, *baseline_shift, out);
         }
     }
     emit_resize_grip(b, out);
@@ -5868,11 +5868,11 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
             // Default SVG presentation: fill=black (SVG spec §11.2), no stroke.
             emit_svg_shape(b, shape, out);
         }
-        BoxKind::SvgText { text, text_anchor, dominant_baseline, .. } => {
+        BoxKind::SvgText { text, text_anchor, dominant_baseline, baseline_shift, .. } => {
             // SVG text element: emit DrawText command with proper positioning.
             // CSS: fill, stroke, font-family, font-size — P4 wires ComputedStyle fields.
-            // // CSS: text-anchor, dominant-baseline
-            emit_svg_text(b, text, *text_anchor, *dominant_baseline, out);
+            // // CSS: text-anchor, dominant-baseline, baseline-shift
+            emit_svg_text(b, text, *text_anchor, *dominant_baseline, *baseline_shift, out);
         }
     }
     if is_sticky {
@@ -6025,12 +6025,13 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
 /// Emits paint commands for SVG text elements (`<text>`, `<tspan>`, `<textPath>`).
 /// Draws text at the specified position with proper horizontal and vertical alignment.
 /// Reads `svg_fill` / `svg_stroke` / `font-family` / `font-size` from `ComputedStyle`.
-/// // CSS: text-anchor, dominant-baseline
+/// // CSS: text-anchor, dominant-baseline, baseline-shift
 fn emit_svg_text(
     b: &LayoutBox,
     text: &str,
     text_anchor: SvgTextAnchor,
     dominant_baseline: SvgDominantBaseline,
+    baseline_shift: SvgBaselineShift,
     out: &mut DisplayList,
 ) {
     if text.is_empty() {
@@ -6065,10 +6066,22 @@ fn emit_svg_text(
         SvgDominantBaseline::TextAfterEdge => -font_size * 0.8,
     };
 
+    // Apply baseline-shift: an additional vertical offset on top of dominant-baseline.
+    // Positive values *raise* the text (smaller y); `sub` lowers, `super` raises.
+    // sub/super offsets are approximate fractions of the em (no OS/2 sub/superscript
+    // metrics in the paint stage). SVG screen-y grows downward, so a raise is negative.
+    let shift_offset_y = match baseline_shift {
+        SvgBaselineShift::Baseline => 0.0,
+        SvgBaselineShift::Sub => font_size * 0.2,
+        SvgBaselineShift::Super => -font_size * 0.4,
+        SvgBaselineShift::Length(px) => -px,
+        SvgBaselineShift::Percentage(frac) => -frac * font_size,
+    };
+
     if let Some(fc) = fill_color {
         let mut rect = b.rect;
         rect.x += anchor_offset_x;
-        rect.y += baseline_offset_y;
+        rect.y += baseline_offset_y + shift_offset_y;
         rect.width = approx_text_width;
         rect.height = font_size;
         out.push(DisplayCommand::DrawText {
@@ -13316,6 +13329,29 @@ mod tests {
         });
         let (ya, ym) = (y_auto.expect("auto DrawText"), y_middle.expect("middle DrawText"));
         assert!(ym < ya, "dominant-baseline=middle should shift y up vs auto: middle={ym}, auto={ya}");
+    }
+
+    #[test]
+    fn svg_text_baseline_shift_super_raises_y() {
+        // baseline-shift: super raises the text (smaller y) vs baseline; sub lowers it.
+        let text_y = |bs: &str| -> f32 {
+            let css = format!("text {{ baseline-shift: {bs}; }}");
+            build(r#"<svg width="200" height="100"><text x="50" y="50">T</text></svg>"#, &css)
+                .iter()
+                .find_map(|c| match c {
+                    DisplayCommand::DrawText { rect, .. } => Some(rect.y),
+                    _ => None,
+                })
+                .expect("DrawText")
+        };
+        let y_baseline = text_y("baseline");
+        let y_super = text_y("super");
+        let y_sub = text_y("sub");
+        let y_len = text_y("10px");
+        assert!(y_super < y_baseline, "super should raise (smaller y): super={y_super}, baseline={y_baseline}");
+        assert!(y_sub > y_baseline, "sub should lower (larger y): sub={y_sub}, baseline={y_baseline}");
+        // Positive length raises by exactly that many px.
+        assert!((y_len - (y_baseline - 10.0)).abs() < 0.01, "10px should raise by 10: len={y_len}, baseline={y_baseline}");
     }
 
     // ── FilterMode conversion tests (B-6) ──────────────────────────────────
