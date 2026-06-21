@@ -18,9 +18,16 @@
 //! - `GPUQueue`: `submit`, `writeBuffer`, `writeTexture`.
 //! - `GPUCanvasContext`: `configure`, `getCurrentTexture`, `unconfigure`.
 //!
-//! **Phase 0**: no GPU — all operations in-memory only.  All `create*` calls
-//! return opaque stub objects; `submit`/`draw`/`dispatch` are no-ops.
-//! Phase 1 (future): wire to `wgpu` backend.
+//! **Phase 0 (default build, no `webgpu` feature):** no GPU — all operations in-memory
+//! only.  All `create*` calls return opaque stub objects; `submit`/`draw`/`dispatch`
+//! are no-ops.
+//!
+//! **Stage 2 (feature `webgpu`, sub-step 1 — buffers):** `GPUBuffer` is backed by a real
+//! `wgpu::Buffer` (`lumen_paint::webgpu_compute`). `queue.writeBuffer`,
+//! `commandEncoder.copyBufferToBuffer` + `queue.submit`, and `mapAsync`/`getMappedRange`
+//! round-trip through real GPU memory. Each native call degrades gracefully to the Phase 0
+//! in-memory path when no adapter is present. Compute/render pipelines + `dispatch`/`draw`
+//! and canvas present remain Phase 0 stubs (next sub-step).
 
 use rquickjs::Ctx;
 
@@ -37,8 +44,27 @@ pub fn install_webgpu_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
     Ok(())
 }
 
+/// Native backing for `_lumen_webgpu_buffer_read`: maps the GPU buffer range and returns
+/// its bytes as a `Uint8Array`, or JS `null` when the read fails / no GPU is present.
+///
+/// A free function (not a closure) so the single `'js` lifetime ties `ctx` to the
+/// returned [`rquickjs::Value`] — inferred closure HRTB lifetimes cannot express this.
+#[cfg(feature = "webgpu")]
+fn webgpu_buffer_read_native<'js>(
+    ctx: Ctx<'js>,
+    id: f64,
+    offset: f64,
+    size: f64,
+) -> rquickjs::Result<rquickjs::Value<'js>> {
+    match lumen_paint::webgpu_compute::buffer_read(id as u64, offset as u64, size as u64) {
+        Some(bytes) => Ok(rquickjs::TypedArray::new(ctx, bytes)?.into_value()),
+        None => Ok(rquickjs::Value::new_null(ctx)),
+    }
+}
+
 /// Registers the native WebGPU bridge functions backed by a real wgpu device
 /// (`lumen_paint::webgpu_compute`). Stage 1: adapter info + WGSL validation.
+/// Stage 2 (sub-step 1): GPUBuffer create/write/read/destroy + copy submit.
 #[cfg(feature = "webgpu")]
 fn install_webgpu_natives(ctx: &Ctx) -> rquickjs::Result<()> {
     use lumen_paint::webgpu_compute;
@@ -68,6 +94,82 @@ fn install_webgpu_natives(ctx: &Ctx) -> rquickjs::Result<()> {
         "_lumen_webgpu_validate_shader",
         rquickjs::Function::new(ctx.clone(), |code: String| -> String {
             webgpu_compute::validate_wgsl(&code).unwrap_or_default()
+        }),
+    )?;
+
+    // ── GPUBuffer bridge (Stage 2, sub-step 1) ───────────────────────────────
+    // These back the JS GPUBuffer with a real wgpu::Buffer addressed by an opaque
+    // numeric handle. Each returns a sentinel (0 / false / null) when no GPU is
+    // available, so the shim transparently falls back to the Phase 0 in-memory path.
+
+    // _lumen_webgpu_buffer_create(size, usage, mappedAtCreation) → handle (0 = failed/no GPU).
+    g.set(
+        "_lumen_webgpu_buffer_create",
+        rquickjs::Function::new(ctx.clone(), |size: f64, usage: u32, mapped: bool| -> f64 {
+            webgpu_compute::buffer_create(size as u64, usage, mapped).unwrap_or(0) as f64
+        }),
+    )?;
+
+    // _lumen_webgpu_buffer_write(handle, offset, bytes) → true on success.
+    g.set(
+        "_lumen_webgpu_buffer_write",
+        rquickjs::Function::new(
+            ctx.clone(),
+            |id: f64, offset: f64, data: rquickjs::TypedArray<'_, u8>| -> bool {
+                match data.as_bytes() {
+                    Some(bytes) => webgpu_compute::buffer_write(id as u64, offset as u64, bytes),
+                    None => false,
+                }
+            },
+        ),
+    )?;
+
+    // _lumen_webgpu_buffer_read(handle, offset, size) → Uint8Array of bytes, or null.
+    // Free function (not a closure) so a single `'js` ties `ctx` to the returned Value.
+    g.set(
+        "_lumen_webgpu_buffer_read",
+        rquickjs::Function::new(ctx.clone(), webgpu_buffer_read_native)?,
+    )?;
+
+    // _lumen_webgpu_buffer_destroy(handle).
+    g.set(
+        "_lumen_webgpu_buffer_destroy",
+        rquickjs::Function::new(ctx.clone(), |id: f64| {
+            webgpu_compute::buffer_destroy(id as u64);
+        }),
+    )?;
+
+    // _lumen_webgpu_submit(opsJson) → true on success. opsJson is a JSON array of
+    // command-encoder ops recorded on the JS side; currently only copyBufferToBuffer.
+    g.set(
+        "_lumen_webgpu_submit",
+        rquickjs::Function::new(ctx.clone(), |ops_json: String| -> bool {
+            let Ok(ops) = serde_json::from_str::<Vec<serde_json::Value>>(&ops_json) else {
+                return false;
+            };
+            let mut decoded = Vec::with_capacity(ops.len());
+            for op in &ops {
+                let kind = op.get("op").and_then(|v| v.as_str()).unwrap_or("");
+                match kind {
+                    "copyB2B" => {
+                        let f = |k: &str| op.get(k).and_then(serde_json::Value::as_u64);
+                        let (Some(src), Some(src_offset), Some(dst), Some(dst_offset), Some(size)) =
+                            (f("src"), f("srcOffset"), f("dst"), f("dstOffset"), f("size"))
+                        else {
+                            return false;
+                        };
+                        decoded.push(webgpu_compute::GpuOp::CopyBufferToBuffer {
+                            src,
+                            src_offset,
+                            dst,
+                            dst_offset,
+                            size,
+                        });
+                    }
+                    _ => return false,
+                }
+            }
+            webgpu_compute::submit(&decoded)
         }),
     )?;
 
@@ -182,20 +284,79 @@ const WEBGPU_SHIM: &str = r#"(function() {
     this.size   = (desc && desc.size)  || 0;
     this.usage  = (desc && desc.usage) || 0;
     this._mapped = false;
-    this._data   = new ArrayBuffer(this.size);
+    this._mappedRange  = null;  // ArrayBuffer backing the currently mapped region
+    this._mappedOffset = 0;
+    this._mapWrite     = false;
+    // Stage 2: back the buffer with a real wgpu::Buffer when the GPU bridge is present.
+    // mappedAtCreation is emulated in-memory (passing false to native), so the real
+    // buffer stays unmapped and writable through queue.writeBuffer / copy submit.
+    this._id = 0;
+    if (this.size > 0 && typeof _lumen_webgpu_buffer_create === 'function') {
+      try { this._id = _lumen_webgpu_buffer_create(this.size, this.usage, false) || 0; }
+      catch (_e) { this._id = 0; }
+    }
+    // In-memory store: Phase 0 fallback and the backing for mapped write ranges.
+    this._data = new ArrayBuffer(this.size);
+    if (desc && desc.mappedAtCreation) {
+      this._mapped = true;
+      this._mapWrite = true;
+      this._mappedRange = this._data;
+      this._mappedOffset = 0;
+    }
   }
-  // Phase 0: mapAsync resolves immediately; getMappedRange returns a zero buffer.
+  // mapAsync: real path pulls current GPU contents for the range (MAP_READ buffers);
+  // otherwise falls back to the in-memory slice. Resolves immediately (single-threaded).
   GPUBuffer.prototype.mapAsync = function(mode, offset, size) {
-    this._mapped = true;
-    return Promise.resolve();
-  };
-  GPUBuffer.prototype.getMappedRange = function(offset, size) {
     var off = offset || 0;
     var sz  = (size !== undefined) ? size : this.size - off;
-    return this._data.slice(off, off + sz);
+    this._mapped = true;
+    this._mappedOffset = off;
+    this._mapWrite = !!(mode & 0x2 /* GPUMapMode.WRITE */);
+    if (this._id && typeof _lumen_webgpu_buffer_read === 'function') {
+      try {
+        var bytes = _lumen_webgpu_buffer_read(this._id, off, sz);
+        if (bytes) {
+          var ab = new ArrayBuffer(sz);
+          new Uint8Array(ab).set(bytes);
+          this._mappedRange = ab;
+          return Promise.resolve();
+        }
+      } catch (_e) { /* fall through to in-memory */ }
+    }
+    this._mappedRange = this._data.slice(off, off + sz);
+    return Promise.resolve();
   };
-  GPUBuffer.prototype.unmap   = function() { this._mapped = false; };
-  GPUBuffer.prototype.destroy = function() { this._data = new ArrayBuffer(0); };
+  // getMappedRange returns the live mapped ArrayBuffer (writes land here and are flushed
+  // to the GPU on unmap for MAP_WRITE buffers). Sub-ranges return a copy.
+  GPUBuffer.prototype.getMappedRange = function(offset, size) {
+    var off = offset || 0;
+    if (this._mappedRange) {
+      var rel = off - this._mappedOffset;
+      if (rel === 0 && size === undefined) return this._mappedRange;
+      var sz = (size !== undefined) ? size : this._mappedRange.byteLength - rel;
+      return this._mappedRange.slice(rel, rel + sz);
+    }
+    var sz2 = (size !== undefined) ? size : this.size - off;
+    return this._data.slice(off, off + sz2);
+  };
+  // unmap: flush a write-mapped range back to the real GPU buffer (best effort).
+  GPUBuffer.prototype.unmap = function() {
+    if (this._mapped && this._mapWrite && this._id && this._mappedRange &&
+        typeof _lumen_webgpu_buffer_write === 'function') {
+      try { _lumen_webgpu_buffer_write(this._id, this._mappedOffset, new Uint8Array(this._mappedRange)); }
+      catch (_e) { /* keep in-memory copy */ }
+    }
+    this._mapped = false;
+    this._mappedRange = null;
+    this._mapWrite = false;
+  };
+  GPUBuffer.prototype.destroy = function() {
+    if (this._id && typeof _lumen_webgpu_buffer_destroy === 'function') {
+      try { _lumen_webgpu_buffer_destroy(this._id); } catch (_e) {}
+      this._id = 0;
+    }
+    this._data = new ArrayBuffer(0);
+  };
   globalThis.GPUBuffer = GPUBuffer;
 
   // ── GPUTextureView ───────────────────────────────────────────────────────
@@ -311,6 +472,7 @@ const WEBGPU_SHIM: &str = r#"(function() {
 
   function GPUCommandEncoder(desc) {
     this.label = (desc && desc.label) || '';
+    this._ops  = [];  // recorded operations, flushed to the GPU on queue.submit
   }
   GPUCommandEncoder.prototype.beginRenderPass = function(desc) {
     return new GPURenderPassEncoder();
@@ -318,13 +480,34 @@ const WEBGPU_SHIM: &str = r#"(function() {
   GPUCommandEncoder.prototype.beginComputePass = function(desc) {
     return new GPUComputePassEncoder();
   };
-  GPUCommandEncoder.prototype.copyBufferToBuffer = function(src, srcOff, dst, dstOff, size) {};
+  // Records a buffer→buffer copy. Supports both the legacy 5-arg signature
+  // (source, sourceOffset, destination, destinationOffset, size) and the newer
+  // 3-arg form (source, destination, size?).
+  GPUCommandEncoder.prototype.copyBufferToBuffer = function(a, b, c, d, e) {
+    var src, srcOff, dst, dstOff, size;
+    if (b instanceof GPUBuffer) {
+      src = a; srcOff = 0; dst = b; dstOff = 0;
+      size = (c !== undefined) ? c : a.size;
+    } else {
+      src = a; srcOff = b || 0; dst = c; dstOff = d || 0;
+      size = (e !== undefined) ? e : (src.size - srcOff);
+    }
+    this._ops.push({
+      op: 'copyB2B',
+      src: src ? src._id : 0, srcOffset: srcOff,
+      dst: dst ? dst._id : 0, dstOffset: dstOff, size: size,
+      _srcBuf: src, _dstBuf: dst
+    });
+  };
   GPUCommandEncoder.prototype.copyTextureToBuffer = function(src, dst, extent) {};
   GPUCommandEncoder.prototype.copyBufferToTexture = function(src, dst, extent) {};
   GPUCommandEncoder.prototype.copyTextureToTexture = function(src, dst, extent) {};
   GPUCommandEncoder.prototype.clearBuffer = function(buf, offset, size) {};
   GPUCommandEncoder.prototype.finish = function(desc) {
-    return new GPUCommandBuffer((desc && desc.label) || this.label);
+    var cmd = new GPUCommandBuffer((desc && desc.label) || this.label);
+    cmd._ops = this._ops;
+    this._ops = [];
+    return cmd;
   };
   globalThis.GPUCommandEncoder = GPUCommandEncoder;
 
@@ -333,9 +516,60 @@ const WEBGPU_SHIM: &str = r#"(function() {
   function GPUQueue() {
     this.label = '';
   }
-  // Phase 0: submit is a no-op; command buffers carry no GPU work.
-  GPUQueue.prototype.submit         = function(cmds) {};
-  GPUQueue.prototype.writeBuffer    = function(buf, bufOffset, data, dataOffset, size) {};
+  // submit flushes recorded command-encoder ops to the real GPU in one batch.
+  // Falls back to an in-memory copy emulation when no GPU buffer handles are present.
+  GPUQueue.prototype.submit = function(cmds) {
+    if (!cmds) return;
+    var allOps = [];
+    for (var i = 0; i < cmds.length; i++) {
+      var ops = cmds[i] && cmds[i]._ops;
+      if (ops) for (var j = 0; j < ops.length; j++) allOps.push(ops[j]);
+    }
+    if (allOps.length === 0) return;
+    var allReal = (typeof _lumen_webgpu_submit === 'function');
+    if (allReal) {
+      for (var k = 0; k < allOps.length; k++) {
+        if (!allOps[k].src || !allOps[k].dst) { allReal = false; break; }
+      }
+    }
+    if (allReal) {
+      var payload = allOps.map(function(o) {
+        return { op: o.op, src: o.src, srcOffset: o.srcOffset,
+                 dst: o.dst, dstOffset: o.dstOffset, size: o.size };
+      });
+      try { if (_lumen_webgpu_submit(JSON.stringify(payload))) return; }
+      catch (_e) { /* fall through to in-memory emulation */ }
+    }
+    for (var m = 0; m < allOps.length; m++) {
+      var op = allOps[m];
+      if (op.op === 'copyB2B' && op._srcBuf && op._dstBuf) {
+        var srcU8 = new Uint8Array(op._srcBuf._data, op.srcOffset, op.size);
+        new Uint8Array(op._dstBuf._data).set(srcU8, op.dstOffset);
+      }
+    }
+  };
+  // writeBuffer uploads bytes to a buffer. Routes to the real GPU when the buffer has a
+  // handle; otherwise writes into the in-memory store. dataOffset/size are treated as
+  // byte offsets (correct for ArrayBuffer / Uint8Array sources).
+  GPUQueue.prototype.writeBuffer = function(buffer, bufferOffset, data, dataOffset, size) {
+    var u8;
+    if (data instanceof ArrayBuffer) {
+      u8 = new Uint8Array(data);
+    } else if (data && data.buffer instanceof ArrayBuffer) {
+      u8 = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    } else {
+      return;
+    }
+    var dOff = dataOffset || 0;
+    var bytes = (size !== undefined) ? u8.subarray(dOff, dOff + size) : u8.subarray(dOff);
+    if (buffer && buffer._id && typeof _lumen_webgpu_buffer_write === 'function') {
+      try { if (_lumen_webgpu_buffer_write(buffer._id, bufferOffset || 0, bytes)) return; }
+      catch (_e) { /* fall through to in-memory */ }
+    }
+    if (buffer && buffer._data) {
+      new Uint8Array(buffer._data).set(bytes, bufferOffset || 0);
+    }
+  };
   GPUQueue.prototype.writeTexture   = function(dest, data, layout, size) {};
   GPUQueue.prototype.copyExternalImageToTexture = function(src, dst, size) {};
   GPUQueue.prototype.onSubmittedWorkDone = function() { return Promise.resolve(); };
@@ -627,6 +861,84 @@ mod tests {
                 )
                 .unwrap();
             assert!(ok);
+        });
+    }
+
+    #[test]
+    fn buffer_write_copy_map_round_trip() {
+        // Exercises writeBuffer → copyBufferToBuffer → mapAsync → getMappedRange. Without
+        // the `webgpu` feature this runs the Phase 0 in-memory emulation; with the feature
+        // and a real adapter it round-trips through actual GPU memory. The buffer usages
+        // (COPY_SRC|COPY_DST on src, COPY_DST|MAP_READ on dst) are valid for both paths.
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install(&ctx);
+            let ok: bool = ctx
+                .eval(
+                    r#"
+                    var d   = new GPUDevice({});
+                    var src = d.createBuffer({ size: 8, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+                    var dst = d.createBuffer({ size: 8, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+                    d.queue.writeBuffer(src, 0, new Uint8Array([10,20,30,40,50,60,70,80]));
+                    var enc = d.createCommandEncoder({});
+                    enc.copyBufferToBuffer(src, 0, dst, 0, 8);
+                    d.queue.submit([enc.finish()]);
+                    dst.mapAsync(GPUMapMode.READ);
+                    var v = new Uint8Array(dst.getMappedRange());
+                    v[0] === 10 && v[3] === 40 && v[7] === 80
+                    "#,
+                )
+                .unwrap();
+            assert!(ok, "in-memory buffer copy round-trip must preserve bytes");
+        });
+    }
+
+    #[test]
+    fn buffer_mapped_at_creation_write_then_read() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install(&ctx);
+            let ok: bool = ctx
+                .eval(
+                    r#"
+                    var d = new GPUDevice({});
+                    var b = d.createBuffer({ size: 4, usage: GPUBufferUsage.VERTEX, mappedAtCreation: true });
+                    var w = new Uint8Array(b.getMappedRange());
+                    w[0] = 7; w[3] = 9;
+                    b.unmap();
+                    b.mapAsync(GPUMapMode.READ);
+                    var r = new Uint8Array(b.getMappedRange());
+                    r[0] === 7 && r[3] === 9
+                    "#,
+                )
+                .unwrap();
+            assert!(ok, "mappedAtCreation writes must persist to the buffer store");
+        });
+    }
+
+    #[test]
+    fn buffer_copy_three_arg_form() {
+        // Newer copyBufferToBuffer(source, destination, size?) overload.
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install(&ctx);
+            let ok: bool = ctx
+                .eval(
+                    r#"
+                    var d   = new GPUDevice({});
+                    var src = d.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+                    var dst = d.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+                    d.queue.writeBuffer(src, 0, new Uint8Array([1,2,3,4]));
+                    var enc = d.createCommandEncoder({});
+                    enc.copyBufferToBuffer(src, dst, 4);
+                    d.queue.submit([enc.finish()]);
+                    dst.mapAsync(GPUMapMode.READ);
+                    var v = new Uint8Array(dst.getMappedRange());
+                    v[0] === 1 && v[3] === 4
+                    "#,
+                )
+                .unwrap();
+            assert!(ok, "3-arg copyBufferToBuffer must copy bytes");
         });
     }
 
