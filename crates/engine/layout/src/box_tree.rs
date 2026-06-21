@@ -5339,11 +5339,28 @@ fn lay_out(
                     }
                     // CSS Lists L3 §2.4 — position ::marker outside or inside principal block.
                     if matches!(&child.kind, BoxKind::Marker { .. }) {
-                        let (position, em, lh) = if let BoxKind::Marker { position, .. } = &child.kind {
-                            (*position, child.style.font_size, child.style.line_height)
-                        } else { unreachable!() };
+                        let (position, em, lh, marker_text) =
+                            if let BoxKind::Marker { position, text, .. } = &child.kind {
+                                (*position, child.style.font_size, child.style.line_height, text.clone())
+                            } else { unreachable!() };
                         let line_h = em * lh;
-                        let marker_w = em * 1.5; // CSS: list-style-type determines exact width
+                        // CSS Lists L3 §2.4 — the outside marker occupies the area to the
+                        // left of the principal box. The default box is `em * 1.5`; a text
+                        // marker (counter glyph or `::marker { content }`) wider than that —
+                        // e.g. a custom `@counter-style` with a long prefix/suffix like
+                        // "#1: " — must grow the box leftward so its string right-aligns at
+                        // the content edge instead of overflowing into the first word
+                        // ("#1:One" instead of "#1: One" — BUG-185).
+                        let default_w = em * 1.5;
+                        let text_w = if marker_text.is_empty() {
+                            0.0
+                        } else {
+                            measurer.map_or(0.0, |m| {
+                                let ts = child.style.tab_size * m.char_width(' ', em);
+                                measure_text_w(&marker_text, em, child.style.letter_spacing, ts, m)
+                            })
+                        };
+                        let marker_w = default_w.max(text_w); // CSS: list-style-type determines exact width
                         match position {
                             ListStylePosition::Outside => {
                                 // Out of flow: does not advance child_y.
@@ -11709,6 +11726,40 @@ mod tests {
             markers[0].style.color.r > 200,
             "marker should inherit red color from ul, got r={}", markers[0].style.color.r,
         );
+    }
+
+    #[test]
+    fn wide_marker_box_grows_and_right_aligns_at_content_edge() {
+        // BUG-185: a marker string wider than the default `em*1.5` box (e.g. a long
+        // `@counter-style` prefix/suffix like "#1: ") must grow the marker box leftward
+        // so its right edge meets the content edge — otherwise the string overflows
+        // into the first content word ("#1:Item" instead of "#1: Item").
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        fn find_run(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { return Some(b); }
+            for c in &b.children { if let Some(f) = find_run(c) { return Some(f); } }
+            None
+        }
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<ul><li>Item</li></ul>"),
+            &lumen_css_parser::parse("li::marker { content: \"#1: \"; }"),
+            lumen_core::geom::Size::new(800.0, 600.0),
+            &Fixed8,
+        );
+        let mut markers = Vec::new();
+        find_markers(&root, &mut markers);
+        let m = markers.first().expect("expected a marker");
+        // "#1: " = 4 chars × 8px (Fixed8) = 32px > default 24px → box widened.
+        assert!(m.rect.width >= 31.0,
+            "wide marker box must grow to fit the text, got width={}", m.rect.width);
+        // Right edge of the marker aligns with the content (InlineRun) left edge.
+        let run = find_run(&root).expect("content InlineRun");
+        let marker_right = m.rect.x + m.rect.width;
+        assert!((marker_right - run.rect.x).abs() <= 1.0,
+            "marker right edge {marker_right} must meet content edge {}", run.rect.x);
     }
 
     #[test]
