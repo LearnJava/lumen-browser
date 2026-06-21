@@ -90,7 +90,7 @@ _(BUG-201 закрыт 2026-06-20 — SVG `<use>`: polygon/polyline рендер
 **Низкий diff (<5%):**
 _(BUG-187 закрыт 2026-06-20 — form controls: placeholder серым у пустых полей + checkbox белая галочка + radio белая точка-в-центре; 4.78% → 3.02% → KNOWN_DEBTORS BUG-128, см. Recent.)_
 _(BUG-188 закрыт 2026-06-21 — individual transforms спек-корректны (все юнит-боксы пиксель-в-пиксель с Edge); остаток font-parity monospace-меток; 4.63% → 1.96% → KNOWN_DEBTORS BUG-128, см. Recent.)_
-- BUG-211 (TEST-93, 4.11%) — `field-sizing: content`
+_(BUG-211 закрыт 2026-06-21 — `field-sizing: content`: layout уже работал, контент-боксы были невидимы — `appearance:none` стрипал авторский border/background ПОСЛЕ каскада; стрип перенесён ПЕРЕД каскадом; 4.11% → 3.54% → KNOWN_DEBTORS BUG-225 (value-текст inputs при appearance:none), см. Recent.)_
 - BUG-185 (TEST-32, 3.75%) — list `::marker`
 - BUG-189 (TEST-47, 3.71%) — SVG basic shapes
 - BUG-197 (TEST-69, 3.61%) — `border-spacing` asymmetric
@@ -156,6 +156,25 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
+
+- **BUG-211** (2026-06-21) — `field-sizing: content` (TEST-93 4.11% → 3.54% DEBTOR,
+  KNOWN_DEBTORS BUG-225). Заголовок «not implemented» был неточен: field-sizing
+  layout уже работал (`field_sizing.rs` + проводка, `--dump-layout` давал
+  корректные контент-ширины 24.78/85.99/229.12px). Реальный дефект — все контролы
+  рисовались невидимыми: авторский `background:#b3d9ff` + `border:2px solid #003366`
+  терялись. `apply_ua_appearance` (`appearance:none`, CSS Basic UI L4 §5) вызывался
+  ПОСЛЕ авторского каскада и безусловно обнулял border-width/padding/background
+  (цвет/стиль рамки автор задавал — они выживали, отсюда `DrawBorder w=[0,0,0,0]`
+  без `FillRect`). Фикс (`style.rs`): стрип UA-appearance перенесён ПЕРЕД главным
+  циклом каскада — `compute_style` пред-сканирует каскад-побеждающее `appearance`
+  (matched отсортирован, inline учтён) и при `none` зовёт переименованную
+  `strip_ua_appearance_box_styling` до применения авторских деклараций; теперь
+  авторские border/bg/padding ложатся поверх и побеждают (author > UA). Тест
+  `appearance_none_preserves_author_border_and_background`. Остаток 3.54% =
+  value-текст inputs не рисуется при `appearance:none` (заведён **BUG-225** —
+  `emit_form_control_indicator` рано выходит, подавляя в т.ч. value/placeholder) +
+  font-parity textarea/labels (Inter vs Edge monospace, класс BUG-128). TEST-93 →
+  KNOWN_DEBTORS (BUG-225, 3.54%). Без регрессий (layout 2962 lib-тестов).
 
 - **BUG-188** (2026-06-21) — individual transforms (TEST-46 4.63% → 1.96% DEBTOR,
   KNOWN_DEBTORS BUG-128). Прежние «4.63%» — устаревший бинарь (`run.py` без `--build`);

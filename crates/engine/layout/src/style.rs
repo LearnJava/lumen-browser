@@ -6146,6 +6146,24 @@ pub fn compute_style(
         doc, node, &mut style, em_basis, viewport, parent_weight, inherited, is_quirks,
     );
 
+    // CSS Basic UI L4 §5 — pre-scan the cascade-winning `appearance` value
+    // (matched is cascade-sorted; later = higher priority, inline included) so
+    // that `appearance: none` strips UA-default border/background/padding
+    // *before* the author cascade. Stripping after the cascade clobbered
+    // author-specified border/background/padding (BUG-211).
+    let mut appearance_none = false;
+    for (_, _, _, _, _, _, decl) in &matched {
+        match decl.property.as_str() {
+            "appearance" | "-webkit-appearance" | "-moz-appearance" => {
+                appearance_none = decl.value.trim().eq_ignore_ascii_case("none");
+            }
+            _ => {}
+        }
+    }
+    if appearance_none {
+        strip_ua_appearance_box_styling(doc, node, &mut style);
+    }
+
     for (_, _, _, _, _, _, decl) in &matched {
         // CSS Cascade L5 §6.4.6: a `revert-layer` declaration that survived the
         // pre-pass was overridden by a higher layer for the same property, so it
@@ -6177,10 +6195,6 @@ pub fn compute_style(
 
     // CSS Logical Properties L1 — resolve logical properties to physical.
     resolve_logical_properties(&mut style);
-
-    // CSS Basic UI L4 §5 — appearance: none removes UA styling from form controls.
-    // Applied after CSS declarations so author `appearance: none` takes effect.
-    apply_ua_appearance(doc, node, &mut style);
 
     // CSS Basic UI L4 §4.4 — field-sizing: content post-pass.
     // apply_ua_form_controls ran before the cascade and may have set explicit UA
@@ -9249,14 +9263,18 @@ fn apply_ua_form_controls_field_sizing_clear(doc: &Document, node: NodeId, style
     }
 }
 
-/// CSS Basic UI L4 §5 — when `appearance: none`, removes UA styling
-/// (border, padding, background) from form controls.
+/// CSS Basic UI L4 §5 — strips UA-default styling (border, padding, background)
+/// from a form control under `appearance: none`.
+///
+/// Called *before* the author cascade (gated on the pre-scanned cascade-winning
+/// `appearance` value, see `compute_style`) so author-specified
+/// border/background/padding declarations apply on top of the cleared UA
+/// defaults. Running this *after* the cascade (the pre-BUG-211 behaviour)
+/// clobbered author values, leaving content-sized fields with width-0 borders
+/// and a transparent background.
+///
 /// Applies to: <input>, <button>, <select>, <textarea>, <progress>, <meter>.
-fn apply_ua_appearance(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
-    if style.appearance != Appearance::None {
-        return;
-    }
-
+fn strip_ua_appearance_box_styling(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
     let NodeData::Element { name, .. } = &doc.get(node).data else { return; };
     match name.local.as_str() {
         "input" | "button" | "select" | "textarea" | "progress" | "meter" => {
@@ -26006,6 +26024,34 @@ mod tests {
         let style = compute_style(&doc, select, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.border_top_width, 0.0);
         assert_eq!(style.padding_top, Length::Px(0.0));
+    }
+
+    #[test]
+    fn appearance_none_preserves_author_border_and_background() {
+        // BUG-211: with `appearance: none`, UA-default border/background must be
+        // stripped *before* the author cascade so author-specified values win.
+        // Previously the strip ran after the cascade and clobbered them, leaving
+        // content-sized fields with width-0 borders and a transparent background.
+        let doc = lumen_html_parser::parse("<input value=\"ab\" />");
+        let sheet = lumen_css_parser::parse(
+            "input { appearance: none; border: 2px solid #003366; background: #b3d9ff; }",
+        );
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.appearance, Appearance::None);
+        // Author border width survives (was clobbered to 0.0 before the fix).
+        assert_eq!(style.border_top_width, 2.0);
+        assert_eq!(style.border_right_width, 2.0);
+        assert_eq!(style.border_bottom_width, 2.0);
+        assert_eq!(style.border_left_width, 2.0);
+        // Author background survives (was clobbered to transparent before the fix).
+        match style.background_color {
+            Some(CssColor::Rgba(Color { r, g, b, a })) => {
+                assert_eq!((r, g, b, a), (0xb3, 0xd9, 0xff, 0xff));
+            }
+            other => panic!("expected author rgba background, got {other:?}"),
+        }
     }
 
     #[test]
