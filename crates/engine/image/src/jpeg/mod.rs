@@ -102,6 +102,15 @@ pub fn decode_jpeg(bytes: &[u8]) -> Result<Image, JpegError> {
         .dimensions()
         .ok_or_else(|| JpegError("no dimensions after decode_headers".into()))?;
 
+    // CMYK / YCCK with an embedded CMYK ICC profile: colour-manage through the
+    // profile's A2B0 LUT (ICC-4) instead of zune's naïve CMYK→RGB. Falls through
+    // to the RGB path when the profile is absent or unusable.
+    if matches!(input_cs, ColorSpace::CMYK | ColorSpace::YCCK)
+        && let Some(img) = try_decode_cmyk_icc(bytes, input_cs, width, height)
+    {
+        return Ok(img);
+    }
+
     // Grayscale JPEGs: force Luma output so we keep 1 byte/pixel.
     // zune-jpeg's default output is RGB (even for Y-only JPEGs).
     let is_gray = matches!(input_cs, ColorSpace::Luma | ColorSpace::LumaA);
@@ -119,6 +128,117 @@ pub fn decode_jpeg(bytes: &[u8]) -> Result<Image, JpegError> {
     let icc_profile = parse_jpeg_icc_profile(bytes);
 
     Ok(Image { width: width as u32, height: height as u32, format, data: pixels, icc_profile })
+}
+
+/// Colour-manages a CMYK/YCCK JPEG through its embedded CMYK ICC profile (ICC-4).
+///
+/// Returns `Some(Image)` of gamma-encoded sRGB `Rgb8` pixels when the JPEG
+/// carries a CMYK ICC profile whose `A2B0` table can be compiled into a
+/// [`CmykTransform`]; otherwise `None`, leaving the caller to fall back to
+/// zune's built-in CMYK→RGB conversion.
+///
+/// The four device channels are reconstructed from zune's raw 4-channel output:
+/// YCCK is converted to stored CMY via JFIF YCbCr→RGB first. Adobe-marked files
+/// (and all YCCK) store inverted samples, so ink coverage is `1 − sample`; the
+/// resulting image carries no ICC profile because it is already sRGB.
+fn try_decode_cmyk_icc(
+    bytes: &[u8],
+    input_cs: ColorSpace,
+    width: usize,
+    height: usize,
+) -> Option<Image> {
+    let icc = parse_jpeg_icc_profile(bytes)?;
+    let profile = lumen_core::icc::IccProfile::parse(&icc.data)?;
+    let transform = profile.build_cmyk_transform()?;
+
+    // Decode raw 4-channel samples (input == output ⇒ zune copies them verbatim).
+    let options = DecoderOptions::default().jpeg_set_out_colorspace(input_cs);
+    let mut decoder = JpegDecoder::new_with_options(ZCursor::new(bytes), options);
+    let raw = decoder.decode().ok()?;
+    let pixel_count = width.checked_mul(height)?;
+    if raw.len() < pixel_count * 4 {
+        return None;
+    }
+
+    let is_ycck = matches!(input_cs, ColorSpace::YCCK);
+    // Adobe APP14 (or any YCCK) means the stored CMYK samples are inverted.
+    let inverted = is_ycck || jpeg_has_adobe_marker(bytes);
+    let dev = |s: u8| -> f64 {
+        let n = f64::from(s) / 255.0;
+        if inverted { 1.0 - n } else { n }
+    };
+
+    let mut out = Vec::with_capacity(pixel_count * 3);
+    for px in raw.chunks_exact(4).take(pixel_count) {
+        let (cs, ms, ys, ks) = if is_ycck {
+            // YCCK: YCbCr→RGB gives the inverted CMY samples Adobe stores.
+            let (r, g, b) = ycbcr_to_rgb(px[0], px[1], px[2]);
+            (255 - r, 255 - g, 255 - b, px[3])
+        } else {
+            (px[0], px[1], px[2], px[3])
+        };
+        let (r, g, b) = transform.apply(dev(cs), dev(ms), dev(ys), dev(ks));
+        out.push((r * 255.0).round().clamp(0.0, 255.0) as u8);
+        out.push((g * 255.0).round().clamp(0.0, 255.0) as u8);
+        out.push((b * 255.0).round().clamp(0.0, 255.0) as u8);
+    }
+
+    Some(Image {
+        width: width as u32,
+        height: height as u32,
+        format: PixelFormat::Rgb8,
+        data: out,
+        icc_profile: None,
+    })
+}
+
+/// Scans for an `APP14` "Adobe" marker, which signals that a CMYK/YCCK JPEG
+/// stores its samples inverted (`255 − value` = ink coverage).
+fn jpeg_has_adobe_marker(bytes: &[u8]) -> bool {
+    if bytes.len() < 2 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
+        return false;
+    }
+    let mut pos = 2;
+    while pos + 4 <= bytes.len() {
+        if bytes[pos] != 0xFF {
+            break;
+        }
+        let marker = bytes[pos + 1];
+        if marker == 0xD8 {
+            pos += 2;
+            continue;
+        }
+        // Start of scan / end of image — no more headers worth parsing.
+        if marker == 0xDA || marker == 0xD9 {
+            break;
+        }
+        let seg_len = u16::from_be_bytes([bytes[pos + 2], bytes[pos + 3]]) as usize;
+        if seg_len < 2 || pos + 2 + seg_len > bytes.len() {
+            break;
+        }
+        let data = &bytes[pos + 4..pos + 2 + seg_len];
+        if marker == 0xEE && data.starts_with(b"Adobe") {
+            return true;
+        }
+        pos += 2 + seg_len;
+    }
+    false
+}
+
+/// JFIF YCbCr → RGB for one pixel (BT.601 full-range), each output clamped to
+/// `[0, 255]`. Used to recover stored CMY samples from YCCK.
+fn ycbcr_to_rgb(y: u8, cb: u8, cr: u8) -> (u8, u8, u8) {
+    let y = f64::from(y);
+    let cb = f64::from(cb) - 128.0;
+    let cr = f64::from(cr) - 128.0;
+    let r = y + 1.402 * cr;
+    let g = y - 0.344_136 * cb - 0.714_136 * cr;
+    let b = y + 1.772 * cb;
+    (
+        r.round().clamp(0.0, 255.0) as u8,
+        g.round().clamp(0.0, 255.0) as u8,
+        b.round().clamp(0.0, 255.0) as u8,
+    )
 }
 
 /// Ошибка декодирования JPEG (обёртка над zune-jpeg).
@@ -254,5 +374,39 @@ mod tests {
     fn non_jpeg_bytes_returns_none() {
         let data = vec![0x89u8, 0x50, 0x4E, 0x47]; // PNG signature
         assert!(parse_jpeg_icc_profile(&data).is_none());
+    }
+
+    #[test]
+    fn detects_adobe_app14_marker() {
+        // SOI + APP14 "Adobe" + EOI.
+        let mut jpeg = vec![0xFFu8, 0xD8];
+        let payload = b"Adobe\0\x64\x00\x00\x00\x00"; // "Adobe" + version/flags/transform
+        let length_field = (2 + payload.len()) as u16;
+        jpeg.push(0xFF);
+        jpeg.push(0xEE); // APP14
+        jpeg.extend_from_slice(&length_field.to_be_bytes());
+        jpeg.extend_from_slice(payload);
+        jpeg.extend_from_slice(&[0xFF, 0xD9]);
+        assert!(jpeg_has_adobe_marker(&jpeg));
+    }
+
+    #[test]
+    fn no_adobe_marker_when_absent() {
+        let jpeg = vec![0xFFu8, 0xD8, 0xFF, 0xD9];
+        assert!(!jpeg_has_adobe_marker(&jpeg));
+    }
+
+    #[test]
+    fn ycbcr_to_rgb_neutral_grey() {
+        // Cb = Cr = 128 (neutral) → R = G = B = Y.
+        let (r, g, b) = ycbcr_to_rgb(100, 128, 128);
+        assert_eq!((r, g, b), (100, 100, 100));
+    }
+
+    #[test]
+    fn ycbcr_to_rgb_primaries_clamp() {
+        // White and black endpoints stay in range.
+        assert_eq!(ycbcr_to_rgb(255, 128, 128), (255, 255, 255));
+        assert_eq!(ycbcr_to_rgb(0, 128, 128), (0, 0, 0));
     }
 }

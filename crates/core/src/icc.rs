@@ -410,6 +410,424 @@ impl IccProfile {
             matrix,
         })
     }
+
+    /// Compiles a CMYK→sRGB colour transform from the profile's `A2B0` tag.
+    ///
+    /// This is the ICC-4 colour-management path for four-channel device profiles
+    /// (the typical print/CMYK output profiles). It parses the device→PCS lookup
+    /// table — `lut8Type` (`mft1`), `lut16Type` (`mft2`) or `lutAToBType`
+    /// (`mAB `) — into normalised curves + multi-dimensional CLUT, and pairs it
+    /// with the profile's PCS so [`CmykTransform::apply`] can drive CMYK ink
+    /// coverage through the CLUT to the PCS (XYZ or Lab, D50) and on to sRGB.
+    ///
+    /// Returns `None` unless the profile is a CMYK device profile with a usable
+    /// 4-input/3-output `A2B0` table and an XYZ/Lab PCS — callers then fall back
+    /// to the decoder's naïve CMYK→RGB conversion.
+    pub fn build_cmyk_transform(&self) -> Option<CmykTransform> {
+        if self.data_color_space != DataColorSpace::Cmyk {
+            return None;
+        }
+        if !matches!(self.pcs, DataColorSpace::Xyz | DataColorSpace::Lab) {
+            return None;
+        }
+        let lut = parse_a2b(self.a2b0.as_deref()?)?;
+        if lut.in_channels != 4 || lut.out_channels != 3 {
+            return None;
+        }
+        Some(CmykTransform {
+            lut,
+            pcs: self.pcs,
+            // Legacy (v2) lut16/lut8 tags encode Lab with the 0xFF00 = 100 scale;
+            // v4 tags (and all `mAB `) use the 0xFFFF scale.
+            legacy_lab: self.version.0 < 4,
+        })
+    }
+}
+
+/// A compiled CMYK→sRGB transform built from a profile's `A2B0` tag.
+///
+/// Built by [`IccProfile::build_cmyk_transform`]. Holds the parsed device→PCS
+/// lookup ([`A2bLut`]) plus the PCS encoding needed to interpret its output;
+/// [`CmykTransform::apply`] maps one CMYK ink tuple to gamma-encoded sRGB.
+#[derive(Debug, Clone)]
+pub struct CmykTransform {
+    /// Parsed device→PCS lookup (curves + CLUT + optional matrix).
+    lut: A2bLut,
+    /// Profile connection space the CLUT output is encoded in (`Xyz` or `Lab`).
+    pcs: DataColorSpace,
+    /// Whether to decode Lab with the legacy v2 (0xFF00 = L*100) scaling.
+    legacy_lab: bool,
+}
+
+impl CmykTransform {
+    /// Transforms one CMYK ink tuple (each channel in `[0, 1]`, `0` = no ink,
+    /// `1` = full ink) to a gamma-encoded sRGB triple, each clamped to `[0, 1]`.
+    pub fn apply(&self, c: f64, m: f64, y: f64, k: f64) -> (f64, f64, f64) {
+        let pcs = self.lut.eval(&[c, m, y, k]);
+        let xyz_d50 = decode_pcs(self.pcs, pcs, self.legacy_lab);
+        let xyz_d65 = xyz_d50.d50_to_d65();
+        let m = &XYZ_D65_TO_SRGB;
+        let lr = m[0][0] * xyz_d65.x + m[0][1] * xyz_d65.y + m[0][2] * xyz_d65.z;
+        let lg = m[1][0] * xyz_d65.x + m[1][1] * xyz_d65.y + m[1][2] * xyz_d65.z;
+        let lb = m[2][0] * xyz_d65.x + m[2][1] * xyz_d65.y + m[2][2] * xyz_d65.z;
+        (srgb_encode(lr), srgb_encode(lg), srgb_encode(lb))
+    }
+}
+
+/// A parsed device→PCS lookup transform (`A2B0`), normalised into a uniform
+/// pipeline regardless of the on-disk tag type.
+///
+/// Evaluation order (`A2B` direction): input/`A` curves → CLUT →
+/// output/`M` curves → optional matrix → optional `B` curves → PCS. The
+/// `lut8`/`lut16` types populate the input curves, CLUT and output curves and
+/// leave the matrix and `B` curves empty; `lutAToBType` (`mAB `) uses all five
+/// stages.
+#[derive(Debug, Clone)]
+struct A2bLut {
+    /// Number of device input channels (4 for CMYK).
+    in_channels: usize,
+    /// Number of PCS output channels (3 for XYZ/Lab).
+    out_channels: usize,
+    /// Per-input-channel "A" curves (device-encoded → CLUT input). Empty ⇒ identity.
+    a_curves: Vec<ToneCurve>,
+    /// Grid-point count per input dimension (may differ per channel in `mAB `).
+    grids: Vec<usize>,
+    /// CLUT samples, normalised `[0, 1]`, row-major with input channel 0 most
+    /// significant: `len == out_channels * Π grids`.
+    clut: Vec<f64>,
+    /// Per-output-channel "M" curves (`lut*` output tables / `mAB ` M curves).
+    /// Empty ⇒ identity.
+    m_curves: Vec<ToneCurve>,
+    /// Optional `mAB ` 3×3 matrix + 3-element offset (`e0..e8`, then `e9..e11`).
+    matrix: Option<[f64; 12]>,
+    /// Per-output-channel "B" curves (`mAB ` only). Empty ⇒ identity.
+    b_curves: Vec<ToneCurve>,
+}
+
+impl A2bLut {
+    /// Evaluates the device→PCS pipeline for one input tuple, returning the
+    /// `out_channels` PCS-encoded values (each normalised `[0, 1]`).
+    fn eval(&self, device: &[f64]) -> Vec<f64> {
+        let mut inp = device.to_vec();
+        apply_curves(&self.a_curves, &mut inp);
+        let mut v = clut_interp(&self.clut, &self.grids, self.out_channels, &inp);
+        apply_curves(&self.m_curves, &mut v);
+        if let Some(mat) = &self.matrix {
+            v = apply_mab_matrix(mat, &v);
+        }
+        apply_curves(&self.b_curves, &mut v);
+        v
+    }
+}
+
+/// Applies a set of 1-D curves to `vals` in place when the counts match;
+/// a mismatched/empty curve set is treated as the identity.
+fn apply_curves(curves: &[ToneCurve], vals: &mut [f64]) {
+    if curves.len() == vals.len() {
+        for (curve, v) in curves.iter().zip(vals.iter_mut()) {
+            *v = curve.eval(*v);
+        }
+    }
+}
+
+/// Applies a `mAB ` 3×3 matrix plus offset to a 3-vector, clamping to `[0, 1]`.
+fn apply_mab_matrix(m: &[f64; 12], v: &[f64]) -> Vec<f64> {
+    let (a, b, c) = (v[0], v.get(1).copied().unwrap_or(0.0), v.get(2).copied().unwrap_or(0.0));
+    vec![
+        (m[0] * a + m[1] * b + m[2] * c + m[9]).clamp(0.0, 1.0),
+        (m[3] * a + m[4] * b + m[5] * c + m[10]).clamp(0.0, 1.0),
+        (m[6] * a + m[7] * b + m[8] * c + m[11]).clamp(0.0, 1.0),
+    ]
+}
+
+/// Multilinear interpolation of an `n`-dimensional CLUT.
+///
+/// `grids[d]` is the grid-point count along input dimension `d`; CLUT samples
+/// are row-major with dimension 0 most significant and `out_ch` interleaved
+/// outputs per node. Each input is clamped to `[0, 1]`; the result is the
+/// `out_ch` interpolated outputs.
+fn clut_interp(clut: &[f64], grids: &[usize], out_ch: usize, input: &[f64]) -> Vec<f64> {
+    let dim = grids.len();
+    let mut base = vec![0usize; dim];
+    let mut frac = vec![0.0f64; dim];
+    for d in 0..dim {
+        let g = grids[d];
+        let pos = input.get(d).copied().unwrap_or(0.0).clamp(0.0, 1.0) * (g - 1) as f64;
+        let mut i = pos.floor() as usize;
+        if i >= g - 1 {
+            i = g - 2; // keep i+1 a valid node; g >= 2 guaranteed at parse time
+        }
+        base[d] = i;
+        frac[d] = pos - i as f64;
+    }
+    let mut out = vec![0.0f64; out_ch];
+    for corner in 0..(1usize << dim) {
+        let mut weight = 1.0;
+        let mut index = 0usize;
+        for d in 0..dim {
+            let bit = (corner >> d) & 1;
+            weight *= if bit == 1 { frac[d] } else { 1.0 - frac[d] };
+            index = index * grids[d] + base[d] + bit;
+        }
+        if weight == 0.0 {
+            continue;
+        }
+        let off = index * out_ch;
+        for (o, slot) in out.iter_mut().enumerate() {
+            if let Some(s) = clut.get(off + o) {
+                *slot += weight * s;
+            }
+        }
+    }
+    out
+}
+
+/// Decodes three PCS-encoded `[0, 1]` values into a D50 CIE XYZ tristimulus.
+///
+/// For an XYZ PCS the legacy `u1Fixed15` scaling applies (`1.0` ↦ `0x8000`);
+/// for a Lab PCS the values map to L*∈[0,100] and a*/b*∈[−128,127] (`legacy`
+/// selects the v2 `0xFF00`-anchored scaling).
+fn decode_pcs(pcs: DataColorSpace, n: Vec<f64>, legacy: bool) -> crate::pcs::Xyz {
+    let n0 = n.first().copied().unwrap_or(0.0);
+    let n1 = n.get(1).copied().unwrap_or(0.0);
+    let n2 = n.get(2).copied().unwrap_or(0.0);
+    match pcs {
+        DataColorSpace::Lab => {
+            let s = if legacy { 65535.0 / 65280.0 } else { 1.0 };
+            let l = (n0 * s) * 100.0;
+            let a = (n1 * s) * 255.0 - 128.0;
+            let b = (n2 * s) * 255.0 - 128.0;
+            crate::pcs::Lab::new(l, a, b).to_xyz(crate::pcs::Xyz::D50)
+        }
+        _ => {
+            // PCS XYZ: normalised u16 v/65535 maps to X = v/32768.
+            const SCALE: f64 = 65535.0 / 32768.0;
+            crate::pcs::Xyz::new(n0 * SCALE, n1 * SCALE, n2 * SCALE)
+        }
+    }
+}
+
+/// Parses an `A2B0` tag (`mft1` / `mft2` / `mAB `) into a normalised [`A2bLut`].
+fn parse_a2b(tag: &[u8]) -> Option<A2bLut> {
+    match read_be_u32(tag, 0) {
+        0x6D667431 => parse_mft(tag, false), // 'mft1' (lut8Type)
+        0x6D667432 => parse_mft(tag, true),  // 'mft2' (lut16Type)
+        0x6D414220 => parse_mab(tag),        // 'mAB ' (lutAToBType)
+        _ => None,
+    }
+}
+
+/// Parses a `lut8Type`/`lut16Type` (`mft1`/`mft2`) tag body.
+///
+/// Layout: 8-bit channel counts + grid size, a 3×3 matrix (ignored for
+/// 4-channel device input), then input tables, the CLUT and output tables.
+/// `is16` selects 16-bit (`mft2`) vs 8-bit (`mft1`) sample width and the
+/// 2-byte table-length prefix that only `mft2` carries.
+fn parse_mft(tag: &[u8], is16: bool) -> Option<A2bLut> {
+    if tag.len() < 48 {
+        return None;
+    }
+    let in_ch = tag[8] as usize;
+    let out_ch = tag[9] as usize;
+    let grid = tag[10] as usize;
+    if in_ch == 0 || out_ch == 0 || grid < 2 || in_ch > 16 {
+        return None;
+    }
+    // Bytes 12..48 hold a 3×3 s15Fixed16 matrix used only for 3-channel device
+    // input (e.g. RGB→XYZ); for CMYK it is the identity and we skip it.
+    let mut pos;
+    let (n_in, n_out) = if is16 {
+        let n = read_be_u16(tag, 48)? as usize;
+        let m = read_be_u16(tag, 50)? as usize;
+        pos = 52;
+        (n, m)
+    } else {
+        pos = 48;
+        (256, 256)
+    };
+    if n_in < 2 || n_out < 2 {
+        return None;
+    }
+
+    let mut a_curves = Vec::with_capacity(in_ch);
+    for _ in 0..in_ch {
+        let mut t = Vec::with_capacity(n_in);
+        for _ in 0..n_in {
+            t.push(read_lut_sample(tag, &mut pos, is16)?);
+        }
+        a_curves.push(ToneCurve::Table(t));
+    }
+
+    let nodes = grid.checked_pow(in_ch as u32)?;
+    let clut_count = nodes.checked_mul(out_ch)?;
+    let mut clut = Vec::with_capacity(clut_count);
+    for _ in 0..clut_count {
+        let v = read_lut_sample(tag, &mut pos, is16)?;
+        clut.push(f64::from(v) / 65535.0);
+    }
+
+    let mut m_curves = Vec::with_capacity(out_ch);
+    for _ in 0..out_ch {
+        let mut t = Vec::with_capacity(n_out);
+        for _ in 0..n_out {
+            t.push(read_lut_sample(tag, &mut pos, is16)?);
+        }
+        m_curves.push(ToneCurve::Table(t));
+    }
+
+    Some(A2bLut {
+        in_channels: in_ch,
+        out_channels: out_ch,
+        a_curves,
+        grids: vec![grid; in_ch],
+        clut,
+        m_curves,
+        matrix: None,
+        b_curves: Vec::new(),
+    })
+}
+
+/// Reads one CLUT/table sample, advancing `pos`. `mft1` samples are 8-bit and
+/// promoted to the 16-bit range (`v * 257`); `mft2` samples are big-endian u16.
+fn read_lut_sample(tag: &[u8], pos: &mut usize, is16: bool) -> Option<u16> {
+    if is16 {
+        let v = read_be_u16(tag, *pos)?;
+        *pos += 2;
+        Some(v)
+    } else {
+        let v = *tag.get(*pos)?;
+        *pos += 1;
+        Some(u16::from(v) * 257)
+    }
+}
+
+/// Parses a `lutAToBType` (`mAB `) tag body in the `A2B` (device→PCS) direction.
+///
+/// The header carries offsets to the optional `A` curves, CLUT, `M` curves and
+/// matrix, plus the mandatory `B` curves; each element is parsed where present.
+fn parse_mab(tag: &[u8]) -> Option<A2bLut> {
+    if tag.len() < 32 {
+        return None;
+    }
+    let in_ch = tag[8] as usize;
+    let out_ch = tag[9] as usize;
+    if in_ch == 0 || out_ch != 3 || in_ch > 16 {
+        return None;
+    }
+    let off_b = read_be_u32(tag, 12) as usize;
+    let off_matrix = read_be_u32(tag, 16) as usize;
+    let off_m = read_be_u32(tag, 20) as usize;
+    let off_clut = read_be_u32(tag, 24) as usize;
+    let off_a = read_be_u32(tag, 28) as usize;
+
+    // B curves are mandatory; a CLUT is required to reduce N device channels → 3.
+    let b_curves = parse_curve_set(tag, off_b, out_ch)?;
+    let (grids, clut) = parse_mab_clut(tag, off_clut, in_ch, out_ch)?;
+    let a_curves = if off_a != 0 { parse_curve_set(tag, off_a, in_ch)? } else { Vec::new() };
+    let m_curves = if off_m != 0 { parse_curve_set(tag, off_m, out_ch)? } else { Vec::new() };
+    let matrix = if off_matrix != 0 { parse_mab_matrix(tag, off_matrix) } else { None };
+
+    Some(A2bLut {
+        in_channels: in_ch,
+        out_channels: out_ch,
+        a_curves,
+        grids,
+        clut,
+        m_curves,
+        matrix,
+        b_curves,
+    })
+}
+
+/// Parses `count` consecutive `curveType`/`parametricCurveType` elements
+/// starting at `off`, each padded to a 4-byte boundary (`mAB ` curve set).
+fn parse_curve_set(tag: &[u8], off: usize, count: usize) -> Option<Vec<ToneCurve>> {
+    let mut pos = off;
+    let mut curves = Vec::with_capacity(count);
+    for _ in 0..count {
+        if pos + 12 > tag.len() {
+            return None;
+        }
+        let sig = read_be_u32(tag, pos);
+        let body_len = match sig {
+            0x63757276 => {
+                // 'curv': 4 sig + 4 reserved + 4 count + count·u16.
+                let n = read_be_u32(tag, pos + 8) as usize;
+                12usize.checked_add(n.checked_mul(2)?)?
+            }
+            0x70617261 => {
+                // 'para': 4 sig + 4 reserved + 2 function + 2 reserved + params.
+                let func = read_be_u16(tag, pos + 8)?;
+                let pc = match func {
+                    0 => 1,
+                    1 => 3,
+                    2 => 4,
+                    3 => 5,
+                    4 => 7,
+                    _ => return None,
+                };
+                12usize.checked_add(pc * 4)?
+            }
+            _ => return None,
+        };
+        if pos.checked_add(body_len)? > tag.len() {
+            return None;
+        }
+        curves.push(parse_curve(&tag[pos..pos + body_len])?);
+        // Advance to the next 4-byte-aligned element.
+        pos = pos.checked_add((body_len + 3) & !3)?;
+    }
+    Some(curves)
+}
+
+/// Parses a `mAB ` 3×3 + offset matrix (12 `s15Fixed16` numbers) at `off`.
+fn parse_mab_matrix(tag: &[u8], off: usize) -> Option<[f64; 12]> {
+    if off.checked_add(48)? > tag.len() {
+        return None;
+    }
+    let mut m = [0.0; 12];
+    for (i, slot) in m.iter_mut().enumerate() {
+        *slot = read_s15fixed16(tag, off + i * 4);
+    }
+    Some(m)
+}
+
+/// Parses the embedded CLUT of a `lutAToBType` (`mAB `) tag at `off`.
+///
+/// The first 16 bytes give per-dimension grid-point counts (one byte each),
+/// byte 16 the sample precision (1 = u8, 2 = u16); samples follow at byte 20.
+fn parse_mab_clut(
+    tag: &[u8],
+    off: usize,
+    in_ch: usize,
+    out_ch: usize,
+) -> Option<(Vec<usize>, Vec<f64>)> {
+    if off == 0 || off.checked_add(20)? > tag.len() {
+        return None;
+    }
+    let mut grids = Vec::with_capacity(in_ch);
+    let mut nodes = 1usize;
+    for i in 0..in_ch {
+        let g = *tag.get(off + i)? as usize;
+        if g < 2 {
+            return None;
+        }
+        grids.push(g);
+        nodes = nodes.checked_mul(g)?;
+    }
+    let is16 = match tag.get(off + 16)? {
+        1 => false,
+        2 => true,
+        _ => return None,
+    };
+    let count = nodes.checked_mul(out_ch)?;
+    let mut clut = Vec::with_capacity(count);
+    let mut pos = off + 20;
+    for _ in 0..count {
+        let v = read_lut_sample(tag, &mut pos, is16)?;
+        clut.push(f64::from(v) / 65535.0);
+    }
+    Some((grids, clut))
 }
 
 /// A compiled RGB matrix-shaper transform: gamma-encoded device RGB → gamma-encoded
@@ -883,5 +1301,155 @@ mod tests {
         data[16..20].copy_from_slice(&0x434D594Bu32.to_be_bytes()); // 'CMYK'
         let p = IccProfile::parse(&data).expect("parse");
         assert!(p.build_rgb_transform().is_none());
+    }
+
+    // ── CMYK A2B (ICC-4) ──────────────────────────────────────────────────
+
+    fn push_be_u16(v: &mut Vec<u8>, x: u16) {
+        v.extend_from_slice(&x.to_be_bytes());
+    }
+    fn push_be_u32_t(v: &mut Vec<u8>, x: u32) {
+        v.extend_from_slice(&x.to_be_bytes());
+    }
+
+    /// Builds a `lut16Type` (`mft2`) A2B0 body: 4→3, grid 2, identity in/out
+    /// curves. The 16 CLUT corners are filled by `corner_xyz(idx)` returning the
+    /// node's PCS-XYZ values normalised to `[0, 1]` (u1Fixed15 encoding).
+    fn build_mft2_a2b(corner_xyz: impl Fn(usize) -> [f64; 3]) -> Vec<u8> {
+        let mut t = Vec::new();
+        push_be_u32_t(&mut t, 0x6D667432); // 'mft2'
+        push_be_u32_t(&mut t, 0); // reserved
+        t.push(4); // input channels
+        t.push(3); // output channels
+        t.push(2); // grid points
+        t.push(0); // padding
+        // 3×3 identity matrix (ignored for 4-channel input).
+        for row in 0..3 {
+            for col in 0..3 {
+                let v = if row == col { 1.0 } else { 0.0 };
+                t.extend_from_slice(&(((v * 65536.0) as i32).to_be_bytes()));
+            }
+        }
+        push_be_u16(&mut t, 2); // input table entries
+        push_be_u16(&mut t, 2); // output table entries
+        // Input tables: 4 channels × [0, 65535] identity ramp.
+        for _ in 0..4 {
+            push_be_u16(&mut t, 0);
+            push_be_u16(&mut t, 65535);
+        }
+        // CLUT: 16 nodes × 3 outputs.
+        for idx in 0..16 {
+            for v in corner_xyz(idx) {
+                push_be_u16(&mut t, (v.clamp(0.0, 1.0) * 65535.0).round() as u16);
+            }
+        }
+        // Output tables: 3 channels × [0, 65535] identity ramp.
+        for _ in 0..3 {
+            push_be_u16(&mut t, 0);
+            push_be_u16(&mut t, 65535);
+        }
+        t
+    }
+
+    /// Wraps an A2B0 body in a minimal CMYK profile (`'CMYK'` data space, XYZ PCS).
+    fn build_cmyk_profile(a2b: &[u8], version_major: u8) -> Vec<u8> {
+        let mut header = vec![0u8; 128];
+        header[8] = version_major;
+        header[12..16].copy_from_slice(&0x70727472u32.to_be_bytes()); // 'prtr'
+        header[16..20].copy_from_slice(&0x434D594Bu32.to_be_bytes()); // 'CMYK'
+        header[20..24].copy_from_slice(&0x58595A20u32.to_be_bytes()); // 'XYZ '
+        header[36..40].copy_from_slice(&0x61637370u32.to_be_bytes()); // 'acsp'
+
+        let tags: [(u32, &[u8]); 1] = [(0x41324230, a2b)]; // 'A2B0'
+        let tag_count = tags.len();
+        let data_start = 132 + tag_count * 12;
+        let mut directory = Vec::new();
+        let mut blob = Vec::new();
+        let mut cursor = data_start;
+        for (sig, body) in tags.iter() {
+            push_be_u32_t(&mut directory, *sig);
+            push_be_u32_t(&mut directory, cursor as u32);
+            push_be_u32_t(&mut directory, body.len() as u32);
+            blob.extend_from_slice(body);
+            cursor += body.len();
+        }
+        let mut out = header;
+        out.extend_from_slice(&(tag_count as u32).to_be_bytes());
+        out.extend_from_slice(&directory);
+        out.extend_from_slice(&blob);
+        out
+    }
+
+    /// PCS-XYZ white (D50) normalised to the u1Fixed15 `[0, 1]` LUT encoding.
+    fn white_xyz_norm() -> [f64; 3] {
+        // X = norm * 65535/32768, so norm = X * 32768/65535.
+        let s = 32768.0 / 65535.0;
+        [0.9642 * s, 1.0 * s, 0.8252 * s]
+    }
+
+    #[test]
+    fn cmyk_transform_white_and_black() {
+        // Corner 0 (no ink) → white; every other corner → black.
+        let a2b = build_mft2_a2b(|idx| if idx == 0 { white_xyz_norm() } else { [0.0; 3] });
+        let data = build_cmyk_profile(&a2b, 2);
+        let p = IccProfile::parse(&data).expect("parse");
+        assert_eq!(p.data_color_space, DataColorSpace::Cmyk);
+        let t = p.build_cmyk_transform().expect("cmyk transform");
+
+        // No ink → near-white sRGB.
+        let (r, g, b) = t.apply(0.0, 0.0, 0.0, 0.0);
+        assert!(r > 0.97 && g > 0.97 && b > 0.97, "white was ({r}, {g}, {b})");
+        // Full ink on all channels → black.
+        let (r, g, b) = t.apply(1.0, 1.0, 1.0, 1.0);
+        assert!(r < 0.03 && g < 0.03 && b < 0.03, "black was ({r}, {g}, {b})");
+    }
+
+    #[test]
+    fn cmyk_transform_interpolates() {
+        // Corner 0 → white, the rest black: a half-step into the C axis must land
+        // roughly midway in luminance between white and black.
+        let a2b = build_mft2_a2b(|idx| if idx == 0 { white_xyz_norm() } else { [0.0; 3] });
+        let data = build_cmyk_profile(&a2b, 2);
+        let p = IccProfile::parse(&data).expect("parse");
+        let t = p.build_cmyk_transform().expect("cmyk transform");
+        let (r0, _, _) = t.apply(0.0, 0.0, 0.0, 0.0);
+        let (rh, _, _) = t.apply(0.5, 0.0, 0.0, 0.0);
+        let (r1, _, _) = t.apply(1.0, 0.0, 0.0, 0.0);
+        // Monotonic: more cyan ink → darker.
+        assert!(r0 > rh && rh > r1, "expected r0 {r0} > rh {rh} > r1 {r1}");
+    }
+
+    #[test]
+    fn build_cmyk_transform_rejects_rgb() {
+        let data = build_rgb_profile(
+            (0.4361, 0.2225, 0.0139),
+            (0.3851, 0.7169, 0.0971),
+            (0.1431, 0.0606, 0.7141),
+        );
+        let p = IccProfile::parse(&data).expect("parse");
+        assert!(p.build_cmyk_transform().is_none());
+    }
+
+    #[test]
+    fn build_cmyk_transform_rejects_missing_a2b() {
+        // CMYK data space but no A2B0 tag → no transform.
+        let mut header = vec![0u8; 128];
+        header[16..20].copy_from_slice(&0x434D594Bu32.to_be_bytes()); // 'CMYK'
+        header[20..24].copy_from_slice(&0x58595A20u32.to_be_bytes()); // 'XYZ '
+        header[36..40].copy_from_slice(&0x61637370u32.to_be_bytes()); // 'acsp'
+        let mut data = header;
+        data.extend_from_slice(&0u32.to_be_bytes()); // zero tags
+        let p = IccProfile::parse(&data).expect("parse");
+        assert!(p.build_cmyk_transform().is_none());
+    }
+
+    #[test]
+    fn clut_interp_multilinear_centre() {
+        // 2-grid, 1 output, 4 dims: corner 0 = 1.0, others 0.0. The centre of the
+        // cube weights corner 0 by (1/2)^4 = 1/16.
+        let mut clut = vec![0.0; 16];
+        clut[0] = 1.0;
+        let out = clut_interp(&clut, &[2, 2, 2, 2], 1, &[0.5, 0.5, 0.5, 0.5]);
+        assert!((out[0] - 1.0 / 16.0).abs() < 1e-12, "centre weight {}", out[0]);
     }
 }
