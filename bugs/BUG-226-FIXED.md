@@ -1,8 +1,27 @@
 # BUG-226
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-06-21 (DEBTOR — остаток 1.20% переатрибутирован на BUG-176)
 **Компонент:** paint
-**Тест:** TEST-47 (DEBTOR 2.27%, baseline в KNOWN_DEBTORS)
+**Тест:** TEST-47 (2.27% → 1.20%, KNOWN_DEBTORS BUG-176)
+
+## Фикс
+
+`emit_svg_shape` (`crates/engine/paint/src/display_list.rs`), армы `Rect` и
+`Circle/Ellipse`: штрих центрируется на кромке геометрии. `b.rect` надувается на
+`stroke_w/2` по всем сторонам (`stroke_rect`), внешние радиусы = `r + stroke_w/2`
+(для скруглённых; square-углы без радиуса остаются square). `DrawBorder` рисует
+внутрь от `stroke_rect` на полную ширину `w`, поэтому внутренняя кромка ложится на
+`r − stroke_w/2`, а центрлайн штриха — точно на исходную кромку `b.rect`. Fill
+остаётся на исходном `b.rect`. Even-odd-кольцо (BUG-175) само строит внутренний
+радиус для скруглённых случаев.
+
+Регресс-тест `svg_rect_stroke_is_centred_on_edge` (display_list.rs): stroke
+`DrawBorder.rect` = fill `FillRect.rect`, надутый на w/2 по всем сторонам, ширина
+сохранена. Прогон gdigrab dev-release: TEST-47 2.27% → 1.20%, TEST-70 1.63%
+(без изменений), TEST-82 2.38% → 2.31% — регрессий нет. TEST-54/60/119 используют
+только `<path>` (другая ветка, не затронуты).
+
+## Описание (исходное)
 
 ## Описание
 
