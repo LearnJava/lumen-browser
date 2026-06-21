@@ -75,12 +75,12 @@
 {
  "generated": "2026-06-22",
  "counts": {
-  "open": 39,
+  "open": 40,
   "fixed": 187,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 226,
+ "total_bugs": 227,
  "phases": [
   {
    "id": "P0",
@@ -458,7 +458,7 @@
     {
      "id": "P2-scrolldriven",
      "title": "CSS Scroll-Driven Animations L1",
-     "status": "planned",
+     "status": "done",
      "bugs": [
       "BUG-127"
      ]
@@ -1508,10 +1508,10 @@
   },
   "BUG-127": {
    "status": "open",
-   "title": "CSS Scroll-Driven Animations L1 (scroll-timeline/view-timeline) — TEST-78: 12.02%",
-   "component": "layout/js",
+   "title": "CSS Scroll-Driven Animations L1 — feature wired (F2-2 2026-06-22): `animation-timeline: scroll()/view()/<named>` теперь драйвит прогресс анимации от позиции скр…",
+   "component": "shell/layout",
    "date": null,
-   "debtor": false
+   "debtor": true
   },
   "BUG-128": {
    "status": "open",
@@ -2205,6 +2205,13 @@
    "component": "layout/paint",
    "date": null,
    "debtor": true
+  },
+  "BUG-231": {
+   "status": "open",
+   "title": "Анимированные `background-color`/`color` не применяются в живом окне без relayout: compositor-offload (`to_compositor_frame`→`CompositorOverride`) несёт только…",
+   "component": "paint/shell",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -2445,7 +2452,8 @@
    "BUG-142"
   ],
   "paint/shell": [
-   "BUG-111"
+   "BUG-111",
+   "BUG-231"
   ],
   "shell": [
    "BUG-028",

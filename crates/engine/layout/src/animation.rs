@@ -170,6 +170,15 @@ pub fn parse_keyframe_style(declarations: &[Declaration]) -> KeyframeStyle {
             "background-color" => {
                 ks.background_color = crate::style::parse_color(decl.value.as_str());
             }
+            // `background: <color>` shorthand — animate the colour component only.
+            // Keyframes commonly write `background: #rgb` instead of the longhand;
+            // extract the colour when the value is a plain `<color>` (gradients /
+            // images yield `None` and are ignored — they don't interpolate here).
+            "background" => {
+                if let Some(c) = crate::style::parse_color(decl.value.as_str()) {
+                    ks.background_color = Some(c);
+                }
+            }
             _ => {}
         }
     }
@@ -1353,6 +1362,31 @@ impl TransitionScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn decl(prop: &str, value: &str) -> Declaration {
+        Declaration { property: prop.to_string(), value: value.to_string(), important: false }
+    }
+
+    // `background: <color>` shorthand in @keyframes is extracted as background_color.
+    #[test]
+    fn parse_keyframe_background_shorthand_color() {
+        let ks = parse_keyframe_style(&[decl("background", "#e65100")]);
+        assert_eq!(ks.background_color, Some(Color { r: 0xe6, g: 0x51, b: 0x00, a: 255 }));
+    }
+
+    // `background-color` longhand still works (no regression).
+    #[test]
+    fn parse_keyframe_background_color_longhand() {
+        let ks = parse_keyframe_style(&[decl("background-color", "#ff8f00")]);
+        assert_eq!(ks.background_color, Some(Color { r: 0xff, g: 0x8f, b: 0x00, a: 255 }));
+    }
+
+    // Non-colour `background` (gradient) yields no background_color override.
+    #[test]
+    fn parse_keyframe_background_gradient_ignored() {
+        let ks = parse_keyframe_style(&[decl("background", "linear-gradient(#000, #fff)")]);
+        assert_eq!(ks.background_color, None);
+    }
 
     #[test]
     fn noop_returns_from_at_zero() {

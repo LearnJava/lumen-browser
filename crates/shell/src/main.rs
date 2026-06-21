@@ -9925,10 +9925,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Both schedulers are ticked once per frame and merged into a single
                 // AnimationFrame. Transition values override @keyframes when both apply.
                 if let (Some(lb), Some(src)) = (&self.layout_box, &self.layout_source) {
+                    let vp = lumen_layout::Viewport {
+                        width: self.viewport_width_css(),
+                        height: self.viewport_height_css(),
+                    };
                     let mut frame = self.animation_scheduler.tick(
                         timestamp_ms,
                         lb,
                         &src.stylesheet,
+                        self.scroll_x,
+                        self.scroll_y,
+                        vp,
                     );
                     let now_s = (timestamp_ms / 1000.0) as f32;
                     let trans_frame = self.transition_scheduler.tick(now_s);
