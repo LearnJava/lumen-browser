@@ -91,7 +91,6 @@ _(BUG-201 закрыт 2026-06-20 — SVG `<use>`: polygon/polyline рендер
 _(BUG-187 закрыт 2026-06-20 — form controls: placeholder серым у пустых полей + checkbox белая галочка + radio белая точка-в-центре; 4.78% → 3.02% → KNOWN_DEBTORS BUG-128, см. Recent.)_
 _(BUG-188 закрыт 2026-06-21 — individual transforms спек-корректны (все юнит-боксы пиксель-в-пиксель с Edge); остаток font-parity monospace-меток; 4.63% → 1.96% → KNOWN_DEBTORS BUG-128, см. Recent.)_
 _(BUG-211 закрыт 2026-06-21 — `field-sizing: content`: layout уже работал, контент-боксы были невидимы — `appearance:none` стрипал авторский border/background ПОСЛЕ каскада; стрип перенесён ПЕРЕД каскадом; 4.11% → 3.54% → KNOWN_DEBTORS BUG-225 (value-текст inputs при appearance:none), см. Recent.)_
-- BUG-185 (TEST-32, 3.75%) — list `::marker`
 - BUG-189 (TEST-47, 3.71%) — SVG basic shapes
 - BUG-197 (TEST-69, 3.61%) — `border-spacing` asymmetric
 - BUG-217 (TEST-120, 3.26%) — `prefers-contrast`/`prefers-reduced-data`
@@ -156,6 +155,23 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
+
+- **BUG-185** (2026-06-21) — list `::marker` геометрия (TEST-32 3.75% → KNOWN_DEBTORS
+  BUG-128). Две независимые геометрии: (1) `::marker { content: "→ " }` на
+  `list-style-type:disc` рисовал диск вместо строки — painter (`display_list.rs`,
+  `emit_list_marker`) матчил по `list_style_type` первым и игнорировал непустой `text`;
+  армы `Disc`/`Circle`/`Square` получили guard `if text.is_empty()`, теперь непустой text
+  (counter-глиф или content-override) всегда побеждает bullet-форму. (2) Широкий маркер
+  (длинный `@counter-style` prefix/suffix «#1: » шире `em*1.5` бокса) переполнялся в
+  первое слово контента («#1:One») — `lay_out` (`box_tree.rs`) теперь меряет ширину
+  строки маркера (`measure_text_w`), `marker_w = (em*1.5).max(text_w)`, бокс растёт влево
+  → строка right-align'ится у контент-края («#1: One» как Edge). Узкие маркеры
+  («1.»/«a.»/«i.») не затронуты. Скриншот: зелёные стрелки + numeric-prefix совпадают с
+  Edge по геометрии. Остаток 3.75% = font-parity (Edge serif vs Inter sans по всей
+  странице, rule 3) + list-style-image data-URI рисует disc (отдельная CSS-проводка).
+  2 регресс-теста (`marker_content_override_renders_text_not_bullet`,
+  `wide_marker_box_grows_and_right_aligns_at_content_edge`). Без регрессий (paint 777+21,
+  layout 2963). TEST-32 → KNOWN_DEBTORS (BUG-128).
 
 - **BUG-211** (2026-06-21) — `field-sizing: content` (TEST-93 4.11% → 3.54% DEBTOR,
   KNOWN_DEBTORS BUG-225). Заголовок «not implemented» был неточен: field-sizing
