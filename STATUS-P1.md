@@ -20,9 +20,9 @@ _(нет активных задач)_
 > U-4c **завершён полностью** (Stage 1 ✅ / Stage 2 ✅ / Stage 3 ✅ 2026-06-21 — adapter info +
 > WGSL-валидация, буферы, compute-dispatch, render-пайплайны + render-в-текстуру + readback +
 > **present в страничный `<canvas>`** — всё на живом GPU). Остаётся только Color management через
-> ICC (полноценный CMM, Lab PCS + CMYK-профили). За XL браться только после согласования объёма
-> с пользователем — не реализовывать «остаток» вслепую, сперва grep-проверка готовности
-> (см. дрейф доков).
+> ICC (полноценный CMM, Lab PCS + CMYK-профили). **Объём согласован с пользователем 2026-06-21:
+> RGB + CMYK, разбит на 6 сессий ICC-1…ICC-6 — см. «Слой 6 — ICC Color Management» ниже.**
+> Сперва grep-проверка готовности (см. дрейф доков).
 
 ### USABILITY-вертикаль — «зашёл на сайт и комфортно пользуешься» (ТОП-приоритет)
 
@@ -96,6 +96,30 @@ _(нет активных задач)_
 | U-4a | ~~WASM SIMD (`0xFD`)~~ ✅ 2026-06-20 + ~~threads/atomics (`0xFE`)~~ ✅ 2026-06-20 (весь набор atomic load/store/rmw/cmpxchg/wait/notify/fence в однопоточной семантике) + ~~relaxed-SIMD (`0xFD` sub `0x100..=0x113`)~~ ✅ 2026-06-20 (madd/nmadd/laneselect/min/max/trunc/swizzle/q15mulr/dot — детерминированная strict-семантика) + ~~JS-уровневые `SharedArrayBuffer`/`Atomics`~~ ✅ 2026-06-20 (нативны в QuickJS; добавлен шим `Atomics.waitAsync` ES2024 для одно-агентной модели, см. «Recent merges»). **U-4a закрыта полностью.** | L ✅ |
 | U-4b | ~~Live-aliasing памяти WASM (emscripten `HEAP32`, сейчас снимок)~~ ✅ 2026-06-20 — экспортируемый `Memory.buffer` теперь **стабильный** JS `ArrayBuffer`, синхронизируемый с Rust-памятью на границах WASM-вызовов (JS→Rust до вызова, Rust→JS на месте после). Паттерн `HEAP32 = new Int32Array(memory.buffer)` когерентен в обе стороны, захваченный view живёт между вызовами; рост детачит/заменяет буфер. См. «Recent merges». | M ✅ |
 | U-4c | Реальный WebGPU backend — ~~Stage 1: GPU-девайс + adapter info + WGSL-валидация~~ ✅ 2026-06-21 (`lumen_paint::webgpu_compute`, фича `lumen-js/webgpu`; `navigator.gpu` отдаёт реальные vendor/device/description и реальную компиляционную диагностику WGSL вместо Phase 0 stub). ~~Stage 2 под-этап 1: реальные `GPUBuffer` create/write/map-readback + `copyBufferToBuffer` submit через GPU-память~~ ✅ 2026-06-21 (реестр буферов в `webgpu_compute`, 5 нативов, шим `GPUBuffer` с graceful fallback). ~~Stage 2 под-этап 2: compute-пайплайны + bind-groups + `dispatchWorkgroups`~~ ✅ 2026-06-21 (реальный WGSL-compute исполняется на GPU; `shader_create`/`compute_pipeline_create`/`pipeline_bind_group_layout`/`bind_group_create` + `GpuOp::ComputePass`; проверено end-to-end удваивающим шейдером на живом GPU). ~~Stage 3 под-этап 1: render-пайплайны + offscreen `GPUTexture` render-таргеты + `beginRenderPass`/`draw` + `copyTextureToBuffer` readback~~ ✅ 2026-06-21 (реальный render на GPU; `texture_create`/`render_pipeline_create`/`render_pipeline_bind_group_layout` + `GpuOp::RenderPass`/`CopyTextureToBuffer` + `RenderCmd`; проверено end-to-end clear-цветом и полноэкранным треугольником, пиксели читаются обратно). ~~Stage 3 под-этап 2: present в canvas~~ ✅ 2026-06-21 (`canvas.getContext('webgpu')` → `GPUCanvasContext`; `configure`/`getCurrentTexture` дают реальный render-таргет; после render-`submit` кадр читается `texture_read_rgba` (readback+BGRA→RGBA) и пишется в CPU-буфер `<canvas>` → шелл показывает как `canvas:{nid}`). **U-4c WebGPU backend завершён.** См. «Recent merges». | XL ✅ |
+
+**Слой 6 — ICC Color Management (XL, разбит на 6 сессий; согласован с пользователем 2026-06-21):**
+
+Единственный незакрытый пункт очереди P1. Полноценный CMM: настоящий парсер ICC,
+Lab PCS, matrix-shaper для RGB-профилей и LUT-путь для CMYK. Сейчас
+`lumen_core::ColorSpace` (`crates/core/src/color.rs:4`) знает только Srgb/DisplayP3/Rec2020,
+`detect_color_space_from_icc` (:28) — строковый сниффер, `'Lab '` помечен out-of-scope (:48),
+CMYK-JPEG декодируется zune-jpeg в RGB в обход встроенного профиля. Объём: **RGB + CMYK
+(все 6 подзадач)**. Каждая — отдельная ветка `p1-icc-N`/worktree, влезает в один контекст.
+
+| # | Подзадача | Размер | Файлы / точки | «Готово» |
+|---|-----------|--------|---------------|----------|
+| **ICC-1** | Настоящий парсер ICC (read-only): заголовок (class, PCS, data colour space, версия), tag-table, теги `rXYZ/gXYZ/bXYZ`, `rTRC/gTRC/bTRC`, `wtpt`, `A2B0/B2A0`. Заменить строковый `detect_color_space_from_icc`. | M | новый `crates/core/src/icc.rs`; переписать `color.rs:28` | `IccProfile` с распарсенными тегами; unit-тесты на реальных профилях (sRGB, Display-P3); enum определяется без сниффинга строк |
+| **ICC-2** | PCS-инфраструктура: типы `Xyz`/`Lab`, конверсии `XYZ↔Lab`, Bradford-адаптация белой точки (D50 PCS ↔ D65). Добавить `ColorSpace::Lab`. | M | `crates/core/src/color.rs`, `icc.rs` | round-trip XYZ→Lab→XYZ в пределах ε; адаптация D50→D65 проверена на эталонах |
+| **ICC-3** | Matrix/TRC RGB-трансформ (matrix-shaper): TRC-кривые (параметрические + табличные) + колорант-матрица → PCS → sRGB. P3/Rec2020/произвольные RGB-ICC становятся цветокорректными. | L | `icc.rs` (`build_rgb_transform`), интеграция в `lumen-image` | картинка с встроенным P3-профилем визуально = Edge; тест на градиенте |
+| **ICC-4** | CMYK через ICC (LUT-путь): вычисление `mft1/mft2/mAB`-LUT, тетраэдральная/трилинейная интерполяция A2B; CMYK-профиль → PCS → sRGB вместо наивного zune-RGB. | L | `icc.rs` (`eval_a2b`), CMYK-decode hook в `lumen-image` | CMYK-JPEG c CMYK-ICC рендерится через профиль; сравнение с Edge |
+| **ICC-5** | Проводка в pipeline + кэш: трансформ на этапе декода (`lumen-image`), кэш трансформов по хэшу профиля, graceful fallback на sRGB. | M | `lumen-image` decode, `lumen-paint` при нужде | каждая картинка трансформируется один раз; нет регрессии по бенчу декода |
+| **ICC-6** | Тесты + наблюдаемость + доки: graphic_test-страница (P3 + CMYK картинки), `CAPABILITIES.md`/`subsystems/*.md`, `ColorSpace::Lab` в `name()`. | S | `graphic_tests/`, `CAPABILITIES.md` | тест ≤0.5% (или KNOWN_DEBTOR с BUG-NNN), доки обновлены |
+
+**Зависимости внутри слоя 6:** ICC-1 → (ICC-2, ICC-3); ICC-2 → ICC-4; ICC-3 ∥ ICC-4; обе → ICC-5 → ICC-6.
+**Минимум полезного:** ICC-1+2+3 (корректный RGB для P3/Rec2020 фото). CMYK (ICC-4) — отдельным заходом, дороже всего.
+**Порядок:** брать строго ICC-1 → ICC-2 → ICC-3 → ICC-4 → ICC-5 → ICC-6.
+
+---
 
 **Критический путь и параллелизм:**
 
