@@ -39,8 +39,13 @@
 //! a real `wgpu::RenderPipeline` from the vertex + fragment modules, target format and vertex
 //! buffer layouts; `beginRenderPass` → `setPipeline`/`setVertexBuffer`/`setBindGroup`/`draw` →
 //! `end` plus `copyTextureToBuffer` execute on the GPU at `queue.submit` and the rendered
-//! pixels are read back through a real `MAP_READ` buffer. Canvas present (showing the texture
-//! on the page `<canvas>`) remains a Phase 0 stub (next sub-step).
+//! pixels are read back through a real `MAP_READ` buffer.
+//!
+//! **Stage 3 (sub-step 2 — canvas present):** `canvas.getContext('webgpu')` returns a
+//! `GPUCanvasContext` whose `configure` allocates a real render-target texture and whose
+//! `getCurrentTexture` returns it. After a `queue.submit` containing a render pass into that
+//! texture, the frame is read back (`texture_read_rgba`) and pushed into the page `<canvas>`'s
+//! 2D buffer (`canvas:{nid}`), so the GPU-rendered image actually appears on the page.
 
 use rquickjs::Ctx;
 
@@ -492,6 +497,20 @@ fn install_webgpu_natives(ctx: &Ctx) -> rquickjs::Result<()> {
                 }
             }
             webgpu_compute::submit(&decoded)
+        }),
+    )?;
+
+    // _lumen_webgpu_canvas_present(nid, textureHandle) → true on success. Reads the rendered
+    // texture back to dense RGBA8 and pushes it into the page <canvas> `nid`'s 2D buffer, which
+    // the shell uploads as `canvas:{nid}` — the GPU-rendered frame becomes visible on the page.
+    g.set(
+        "_lumen_webgpu_canvas_present",
+        rquickjs::Function::new(ctx.clone(), |nid: u32, texture: f64| -> bool {
+            let Some((w, h, rgba)) = webgpu_compute::texture_read_rgba(texture as u64) else {
+                return false;
+            };
+            crate::canvas2d::present_rgba(nid, w, h, &rgba);
+            true
         }),
     )?;
 
@@ -1079,9 +1098,13 @@ const WEBGPU_SHIM: &str = r#"(function() {
       }
     }
     if (allReal) {
+      // Texture ids rendered into this submit — used to present only the canvas contexts that
+      // were actually drawn (not every configured context on every unrelated submit).
+      var renderedTextures = {};
       var payload = allOps.map(function(o) {
         if (o.op === 'computePass') return { op: 'computePass', cmds: o.cmds };
         if (o.op === 'renderPass') {
+          if (o.colorTexture) renderedTextures[o.colorTexture] = true;
           return { op: 'renderPass', colorTexture: o.colorTexture, clear: o.clear, cmds: o.cmds };
         }
         if (o.op === 'copyTexToBuf') {
@@ -1092,7 +1115,18 @@ const WEBGPU_SHIM: &str = r#"(function() {
         return { op: o.op, src: o.src, srcOffset: o.srcOffset,
                  dst: o.dst, dstOffset: o.dstOffset, size: o.size };
       });
-      try { if (_lumen_webgpu_submit(JSON.stringify(payload))) return; }
+      try {
+        if (_lumen_webgpu_submit(JSON.stringify(payload))) {
+          // Present every configured canvas whose current texture was a render target here.
+          for (var p = 0; p < _gpuCanvasContexts.length; p++) {
+            var cc = _gpuCanvasContexts[p];
+            if (cc._texture && cc._texture._id && renderedTextures[cc._texture._id]) {
+              _presentCanvasContext(cc);
+            }
+          }
+          return;
+        }
+      }
       catch (_e) { /* fall through to in-memory emulation */ }
     }
     // In-memory fallback (no GPU): emulate buffer copies; compute passes are no-ops
@@ -1189,12 +1223,30 @@ const WEBGPU_SHIM: &str = r#"(function() {
 
   // ── GPUCanvasContext ─────────────────────────────────────────────────────
 
+  // Configured canvas contexts whose current texture should be presented to the page
+  // <canvas> after a render-pass submit (Stage 3 sub-step 2). queue.submit scans this list.
+  var _gpuCanvasContexts = [];
+
+  // Read back the context's current texture and push it into the page <canvas> nid's 2D
+  // buffer, so the shell composites the GPU-rendered frame as canvas:{nid}. No-op without a
+  // real texture handle or the native bridge (Phase 0 stub canvases stay blank, as before).
+  function _presentCanvasContext(cc) {
+    if (!cc || !cc._texture || !cc._texture._id) return;
+    var nid = cc._canvas && cc._canvas.__nid__;
+    if (nid === undefined || nid === null) return;
+    if (typeof _lumen_webgpu_canvas_present === 'function') {
+      try { _lumen_webgpu_canvas_present(nid, cc._texture._id); } catch (_e) {}
+    }
+  }
+
   function GPUCanvasContext(canvas) {
     this._canvas  = canvas;
     this._config  = null;
     this._texture = null;
   }
-  // Configure the swap-chain format. Phase 0: stores config, no real surface.
+  // Configure the swap-chain: allocate a real render-target texture sized to the canvas and
+  // register the context so its frames present to the page after submit. The GPUTexture
+  // constructor backs it with a real wgpu::Texture when the GPU bridge is available.
   GPUCanvasContext.prototype.configure = function(config) {
     this._config = config || {};
     var w = (this._canvas && this._canvas.width)  || 1;
@@ -1204,8 +1256,11 @@ const WEBGPU_SHIM: &str = r#"(function() {
       format: (config && config.format) || 'bgra8unorm',
       usage: (config && config.usage)   || 0x10 /* RENDER_ATTACHMENT */
     });
+    if (_gpuCanvasContexts.indexOf(this) === -1) _gpuCanvasContexts.push(this);
   };
-  // Returns the current swap-chain texture. Phase 0: same stub texture each frame.
+  // Returns the current swap-chain texture. Lumen reuses one render-target texture per
+  // configured context (presented after each render submit) rather than rotating a real
+  // swap chain — sufficient for the offscreen present path.
   GPUCanvasContext.prototype.getCurrentTexture = function() {
     if (!this._texture) {
       var w = (this._canvas && this._canvas.width)  || 1;
@@ -1215,6 +1270,11 @@ const WEBGPU_SHIM: &str = r#"(function() {
     return this._texture;
   };
   GPUCanvasContext.prototype.unconfigure = function() {
+    var i = _gpuCanvasContexts.indexOf(this);
+    if (i !== -1) _gpuCanvasContexts.splice(i, 1);
+    if (this._texture && typeof this._texture.destroy === 'function') {
+      try { this._texture.destroy(); } catch (_e) {}
+    }
     this._config  = null;
     this._texture = null;
   };
@@ -1557,6 +1617,51 @@ mod tests {
                 )
                 .unwrap();
             assert!(ok);
+        });
+    }
+
+    #[test]
+    fn gpu_canvas_context_unconfigure_drops_texture() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install(&ctx);
+            // configure → getCurrentTexture allocates; unconfigure clears it so the next
+            // getCurrentTexture lazily re-creates a fresh one (present registry stays consistent).
+            let ok: bool = ctx
+                .eval(
+                    r#"
+                    var canvas = { width: 64, height: 64, __nid__: 5 };
+                    var c = new GPUCanvasContext(canvas);
+                    c.configure({ format: 'rgba8unorm', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+                    var t1 = c.getCurrentTexture();
+                    c.unconfigure();
+                    var cleared = (c._texture === null);
+                    var t2 = c.getCurrentTexture();
+                    cleared && t2 instanceof GPUTexture && t2.width === 64
+                    "#,
+                )
+                .unwrap();
+            assert!(ok);
+        });
+    }
+
+    #[test]
+    fn gpu_canvas_present_native_unknown_texture_is_false() {
+        // Present native rejects an unknown texture handle (no GPU readback) without panicking.
+        // Registered only with the `webgpu` feature; without it the JS bridge is simply absent.
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install(&ctx);
+            let has_native: bool = ctx
+                .eval("typeof _lumen_webgpu_canvas_present === 'function'")
+                .unwrap();
+            if !has_native {
+                return;
+            }
+            let result: bool = ctx
+                .eval("_lumen_webgpu_canvas_present(123, 999999)")
+                .unwrap();
+            assert!(!result, "unknown texture handle must present nothing");
         });
     }
 

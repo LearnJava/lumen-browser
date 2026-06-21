@@ -45,8 +45,11 @@
 //!   [`GpuOp::CopyTextureToBuffer`] копирует отрисованные пиксели в буфер для readback —
 //!   шейдер действительно рисует на GPU, результат читается через [`buffer_read`].
 //!
-//! **Что ещё stub (Stage 3+):** present в canvas (показ отрисованной текстуры на странице
-//! `<canvas>`). Эта операция по-прежнему обслуживается in-memory JS-шимом.
+//! **Что реально в Stage 3 (под-этап 2, present в canvas):**
+//! - [`texture_read_rgba`] — readback отрисованной текстуры в плотный RGBA8 (снятие
+//!   256-байтного выравнивания строк + BGRA→RGBA). JS-шим пишет эти пиксели в CPU-буфер
+//!   страничного `<canvas>` (`lumen_canvas::Context2D`), и шелл показывает их как
+//!   `canvas:{nid}` — отрисованная на GPU текстура реально появляется на странице.
 //!
 //! **Доступность.** GPU-устройство создаётся лениво один раз (`OnceLock`). Если адаптер
 //! недоступен (headless CI без GPU, нет драйвера), [`adapter_info`] и [`validate_wgsl`]
@@ -675,6 +678,101 @@ pub fn texture_destroy(id: u64) {
     if let Ok(mut g) = textures().lock() {
         g.remove(&id);
     }
+}
+
+/// Читает отрисованную текстуру обратно в плотный RGBA8 для present в страничный `<canvas>`.
+///
+/// Stage 3 (под-этап 2, present): копирует текстуру в временный `MAP_READ`-буфер
+/// (`copyTextureToBuffer`), мапит его, снимает 256-байтное выравнивание строк и приводит
+/// порядок каналов к RGBA8 (top-left origin) — формат CPU-буфера `lumen_canvas::Context2D`.
+///
+/// Возвращает `(width, height, rgba)` или `None`, если текстура неизвестна, GPU недоступен,
+/// либо формат не 8-битный 4-канальный (`rgba8unorm[-srgb]` / `bgra8unorm[-srgb]`). sRGB- и
+/// linear-варианты дают одинаковые байты (sRGB-кодированные 0..255), которые страница и так
+/// интерпретирует как sRGB, поэтому гамма-преобразование не нужно — только swap B↔R для BGRA.
+pub fn texture_read_rgba(texture_id: u64) -> Option<(u32, u32, Vec<u8>)> {
+    let ctx = context()?;
+    let texs = textures().lock().ok()?;
+    let entry = texs.get(&texture_id)?;
+    let tex = &entry.texture;
+    let w = tex.width();
+    let h = tex.height();
+    // Канальный порядок исходного формата: true = BGRA (нужен swap), false = RGBA.
+    let bgra = match tex.format() {
+        wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => false,
+        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb => true,
+        _ => return None,
+    };
+
+    // wgpu требует bytes_per_row кратным 256 — выделяем буфер с выровненными строками.
+    let unpadded = w * 4;
+    let padded = unpadded.div_ceil(256) * 256;
+    let buf_size = u64::from(padded) * u64::from(h);
+    let readback = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("lumen-webgpu-present-readback"),
+        size: buf_size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("lumen-webgpu-present-copy"),
+        });
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded),
+                rows_per_image: Some(h),
+            },
+        },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+    );
+    ctx.queue.submit(std::iter::once(encoder.finish()));
+
+    let slice = readback.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    ctx.device.poll(wgpu::PollType::Wait).ok()?;
+    rx.recv().ok()?.ok()?;
+
+    let mapped = slice.get_mapped_range();
+    let row_len = unpadded as usize;
+    let mut out = vec![0u8; row_len * h as usize];
+    for row in 0..h as usize {
+        let src = row * padded as usize;
+        let dst = row * row_len;
+        let line = &mapped[src..src + row_len];
+        if bgra {
+            for px in 0..w as usize {
+                let s = px * 4;
+                out[dst + s] = line[s + 2];
+                out[dst + s + 1] = line[s + 1];
+                out[dst + s + 2] = line[s];
+                out[dst + s + 3] = line[s + 3];
+            }
+        } else {
+            out[dst..dst + row_len].copy_from_slice(line);
+        }
+    }
+    drop(mapped);
+    readback.unmap();
+    Some((w, h, out))
 }
 
 /// Создаёт render-пайплайн с авто-layout (`layout: 'auto'`).
@@ -1641,5 +1739,39 @@ mod tests {
             commands: vec![],
         };
         assert!(!submit(&[pass]), "unknown target texture must fail submit");
+    }
+
+    #[test]
+    fn texture_read_rgba_unknown_handle_is_none() {
+        assert!(
+            texture_read_rgba(999_999).is_none(),
+            "unknown texture handle yields no pixels"
+        );
+    }
+
+    #[test]
+    fn texture_read_rgba_present_path_returns_cleared_frame() {
+        if !is_available() {
+            eprintln!("skip: no GPU adapter available");
+            return;
+        }
+        // bgra8unorm 3×2 texture cleared to blue — exercises the present readback's row
+        // unpadding (3px = 12B/row, padded to 256) and the BGRA→RGBA channel swap.
+        let tex = texture_create(3, 2, "bgra8unorm", 0).expect("texture");
+        let pass = GpuOp::RenderPass {
+            color_texture: tex,
+            clear: Some([0.0, 0.0, 1.0, 1.0]),
+            commands: vec![],
+        };
+        assert!(submit(&[pass]), "clear submit must succeed");
+
+        let (w, h, rgba) = texture_read_rgba(tex).expect("readback");
+        assert_eq!((w, h), (3, 2));
+        assert_eq!(rgba.len(), 3 * 2 * 4, "dense RGBA8, no row padding");
+        // Every pixel must be opaque blue in RGBA order despite the BGRA source format.
+        for px in rgba.chunks_exact(4) {
+            assert_eq!(px, [0, 0, 255, 255], "BGRA blue → RGBA blue after swap");
+        }
+        texture_destroy(tex);
     }
 }
