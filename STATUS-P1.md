@@ -12,6 +12,15 @@ _(нет активных задач)_
 
 ## Next
 
+> **Состояние очереди (ревизия 2026-06-21):** вся приоритетная очередь P1 из *ограниченных*
+> задач закрыта. USABILITY-вертикаль (U-0…U-6) и слои 0–4 «полного плана» — готовы
+> (BUG-167 FIXED; BUG-104/126/144/085 — основные дефекты закрыты, остатки в KNOWN_DEBTORS).
+> «Направления без брифа» проверены по коду и в основном уже реализованы (Canvas `<img>`
+> drawImage, DevTools RequestFailed, CMYK-JPEG). **Реально неготовое = только XL/опциональное:**
+> U-4c (реальный WebGPU backend `navigator.gpu`) и Color management через ICC (полноценный CMM,
+> Lab PCS + CMYK-профили). За XL браться только после согласования объёма с пользователем —
+> не реализовывать «остаток» вслепую, сперва grep-проверка готовности (см. дрейф доков).
+
 ### USABILITY-вертикаль — «зашёл на сайт и комфортно пользуешься» (ТОП-приоритет)
 
 Контекст (анализ 2026-06-18): список фич в `CAPABILITIES.md` широкий (~90 Web-API,
@@ -151,9 +160,9 @@ USABILITY-вертикали и TAB-серии — брать после них 
 **Направления без брифа (бывшие «Опции» P2):**
 
 - **Ad-block Phase 2/3** — ~~`$option` по типу ресурса (Phase 2)~~ ✅ 2026-06-20: EasyList `$`-опции (resource-type `$script`/`$image`/`$stylesheet`/`$font`/`$xmlhttprequest`/`$subdocument`/`$media`/`$other` + `~`-негация, `$third-party`/`$first-party`) парсятся и применяются через `RequestFilter::should_block_ctx(url, &RequestContext)`; `domain=` parsed-but-ignored. См. «Recent merges». Остаётся **UI подписок (Phase 3, handoff P3)**. Крейты: `lumen-network`, `lumen-shell`.
-- **Canvas Phase extensions** — ~~paint-источники в JS-шиме~~ ✅ 2026-06-20: `<canvas>` 2D `createLinearGradient`/`createRadialGradient`/`createConicGradient`+`addColorStop`, `createPattern`, `fillStyle`/`strokeStyle` для gradient/pattern-объектов, `shadowColor`/`shadowBlur`/`shadowOffsetX`/`shadowOffsetY`, `drawImage` (canvas-источник), `putImageData` — проведены к существующему нативу (`canvas2d.rs`), раньше JS-шим возвращал фейк-заглушки. ~~source-crop 9-арг формы~~ ✅ 2026-06-20 (`Context2D::draw_image_cropped` + `_lumen_canvas2d_draw_image_crop`, 8 координат CSV-строкой; форма `(img,sx,sy,sw,sh,dx,dy,dw,dh)` режет под-прямоугольник источника). См. «Recent merges». Остаётся: `<img>`-источник в `drawImage` (нет натив-биндинга чтения декодированного `<img>` bitmap в canvas-слой) + Canvas 2D text-completeness (BUG-099). Крейты: `lumen-canvas`, `lumen-js`.
-- **Color management Phase 1+** — Lab/CMYK color spaces (H-2 Phase 1+), device-specific tone curves, advanced ICC. Крейты: `lumen-image`, `lumen-paint`.
-- **DevTools network-panel: `Event::RequestFailed`** (бывшая задача #30, ранее handoff P3→P2) — отрисовка проваленных запросов в `devtools/network_panel.rs`. Крейт: `lumen-shell`.
+- **Canvas Phase extensions** — ~~paint-источники в JS-шиме~~ ✅ 2026-06-20: `<canvas>` 2D `createLinearGradient`/`createRadialGradient`/`createConicGradient`+`addColorStop`, `createPattern`, `fillStyle`/`strokeStyle` для gradient/pattern-объектов, `shadowColor`/`shadowBlur`/`shadowOffsetX`/`shadowOffsetY`, `drawImage` (canvas-источник), `putImageData` — проведены к существующему нативу (`canvas2d.rs`), раньше JS-шим возвращал фейк-заглушки. ~~source-crop 9-арг формы~~ ✅ 2026-06-20 (`Context2D::draw_image_cropped` + `_lumen_canvas2d_draw_image_crop`, 8 координат CSV-строкой; форма `(img,sx,sy,sw,sh,dx,dy,dw,dh)` режет под-прямоугольник источника). ~~`<img>`-источник в `drawImage`~~ ✅ 2026-06-21 (ревизия: уже в коде) — `_lumen_canvas2d_draw_image_from_img` / `_lumen_canvas2d_draw_image_crop_from_img` (`canvas2d.rs:836`) читают декодированный bitmap из `img_bitmap_store`; shell наполняет его через `register_img_bitmaps` (`main.rs:3824`), JS-шим `drawImage` различает canvas/img-источник по `__nid__`+tag (`dom.rs:3907`). Остаётся: Canvas 2D text-completeness (BUG-099, домен P3). Крейты: `lumen-canvas`, `lumen-js`.
+- **Color management Phase 1+** — Lab/CMYK color spaces (H-2 Phase 1+), device-specific tone curves, advanced ICC. Крейты: `lumen-image`, `lumen-paint`. **Ревизия 2026-06-21:** CMYK/YCCK-JPEG уже декодируются корректно самим zune-jpeg 0.5.15 (`blinn_8x8`, Adobe-инверсия учтена → RGB8). Остаётся именно **ICC-управление цветом** (Lab PCS + CMYK ICC-профили): `lumen_core::ColorSpace` (`crates/core/src/color.rs:4`) знает только Srgb/DisplayP3/Rec2020, сигнатура `'Lab '` явно out-of-scope (:48). Это полноценный CMM = **XL**, не «M».
+- ~~**DevTools network-panel: `Event::RequestFailed`**~~ ✅ 2026-06-21 (ревизия: уже в коде) — `network_panel.rs:288` (`Event::RequestFailed` → `record_failed`), отрисовка проваленных запросов + тесты (`network_panel.rs:908`). Крейт: `lumen-shell`.
 
 > Баги высокого отклонения (BUG-085 gradient, BUG-088 transforms, BUG-090 line-clamp),
 > которые в STATUS-P2 числились как «P3-вспомога», остаются у **P3** — это их домен
