@@ -2886,30 +2886,15 @@ fn bg_tile_geometry(
 
 /// Конвертирует `lumen_image::Image` в вектор `RGBA8` пикселей для femtovg.
 fn image_to_rgba8_vec(img: &Image) -> Vec<rgb::RGBA8> {
-    use lumen_image::PixelFormat;
     use rgb::RGBA;
-    match img.format {
-        PixelFormat::Rgba8 => img
-            .data
-            .chunks_exact(4)
-            .map(|px| RGBA { r: px[0], g: px[1], b: px[2], a: px[3] })
-            .collect(),
-        PixelFormat::Rgb8 => img
-            .data
-            .chunks_exact(3)
-            .map(|px| RGBA { r: px[0], g: px[1], b: px[2], a: 255 })
-            .collect(),
-        PixelFormat::Gray8 => img
-            .data
-            .iter()
-            .map(|&v| RGBA { r: v, g: v, b: v, a: 255 })
-            .collect(),
-        PixelFormat::GrayAlpha8 => img
-            .data
-            .chunks_exact(2)
-            .map(|px| RGBA { r: px[0], g: px[0], b: px[0], a: px[1] })
-            .collect(),
-    }
+    // `to_rgba8` applies ICC colour management (ICC-3 matrix-shaper for RGB
+    // profiles, gamut tone-mapping otherwise), so wide-gamut photos render
+    // colour-correct in the live femtovg window. For images without a profile
+    // it is a plain format conversion (no-op tone mapping).
+    img.to_rgba8()
+        .chunks_exact(4)
+        .map(|px| RGBA { r: px[0], g: px[1], b: px[2], a: px[3] })
+        .collect()
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
