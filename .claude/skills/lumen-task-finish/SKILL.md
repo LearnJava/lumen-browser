@@ -8,7 +8,6 @@ when_to_use: >
   Фразы-триггеры: "заверши задачу", "смерджи ветку", "влей ветку", "merge task",
   "задача готова", "ready to merge", "закончил задачу". Также когда все тесты
   проходят и реализация завершена.
-disable-model-invocation: true
 model: claude-sonnet-4-6
 allowed-tools: Bash(git *) Bash(cargo *) Bash(export PATH*) Read Edit
 ---
@@ -18,6 +17,11 @@ allowed-tools: Bash(git *) Bash(cargo *) Bash(export PATH*) Read Edit
 $ARGUMENTS — имя ветки/задачи (например `font-fallback`).
 Если не передан — определи из текущей ветки: `git branch --show-current`
 
+> **Этот скилл — финальный гейт качества (workspace clippy + test).**
+> НЕ запускай per-crate `cargo clippy -p … / cargo test -p …` вручную прямо
+> перед его вызовом — это двойная оплата за те же крейты. В процессе работы
+> достаточно `cargo check`; полную проверку делает скилл один раз ниже.
+
 ## Шаг 1 — Финальный clippy
 
 ```bash
@@ -25,22 +29,38 @@ export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+> sccache + rust-lld уже включены глобально в `.cargo/config.toml` — отдельно
+> прокидывать не нужно. Профиль `dev` (по умолчанию) быстрее компилируется,
+> чем `dev-release`, для корректностного гейта — НЕ навешивай `--profile dev-release`
+> на clippy/test (он оправдан только в `graphic_tests/run.py`, где важен рантайм рендера).
+
 !`export PATH="/c/Users/konstantin/.cargo/bin:$PATH" && cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tail -5`
 
 Если есть warnings — исправь их **до** продолжения. Не делай `#[allow(...)]`
 без явной причины.
 
-## Шаг 2 — Полные тесты
+## Шаг 2 — Тесты затронутых крейтов (scoped)
+
+Шаг 1 (`clippy --workspace --all-targets`) уже **скомпилировал весь workspace** и
+поймал кросс-крейтовую поломку сборки. Поэтому здесь гоняем тесты только
+затронутых крейтов + их транзитивных обратных зависимостей, а не весь workspace:
+на 22 крейта `test --workspace` — это ~110 отдельных линковок тест-бинарей (~30 мин;
+замеры в памяти `project_build_test_perf_findings`).
 
 ```bash
 export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
-cargo test --workspace
+bash scripts/scoped-test.sh          # база = main; иная база: bash scripts/scoped-test.sh <ref>
 ```
 
-Текущий счётчик тестов:
-!`export PATH="/c/Users/konstantin/.cargo/bin:$PATH" && cargo test --workspace --quiet 2>/dev/null | grep "test result" | head -20`
+Скрипт сам берёт затронутые пакеты из `git diff` (коммиты ветки + рабочее дерево)
+и считает замыкание обратных зависимостей. Правки только в доках/конфигах → тестов нет.
 
 Если тесты падают — исправь. Не коммить красные тесты.
+
+> Полный `cargo test --workspace` не нужен принудительно: если правка трогает
+> корневой крейт (`lumen-core` и т.п.), замыкание само раскроется почти на весь
+> workspace. `lumen-driver` (64 тест-бинаря) втягивается почти всегда — его
+> консолидация вынесена отдельной задачей в `STATUS-P1.md`.
 
 ## Шаг 3 — Обнови lumen-plan.md
 
