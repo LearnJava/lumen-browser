@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>TEST-128: ICC colour management (Display P3 PNG)</title>
+  <style>
+    body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+    .__f {
+      background: #ffffff;
+      width: 1022px; height: 718px;
+      margin: 1px; padding: 40px;
+      overflow: hidden;
+      box-sizing: border-box;
+    }
+    /* Native size (900x280), fits the 942px content box — no overflow, so Edge
+       and Lumen place it at the same integer offset (no centering ambiguity). */
+    img { display: block; width: 900px; height: 280px; }
+  </style>
+</head>
+<body>
+  <div class="__f">
+    <!-- Display P3 RGB PNG: swatches encoded so a correct P3->sRGB
+         matrix-shaper transform recovers known in-gamut sRGB colours.
+         Edge and Lumen, both colour-managing, recover identical pixels.
+
+         NOTE: the CMYK-ICC counterpart (samples/images/icc_cmyk.jpg) is NOT
+         shown here: Edge does not honour an *embedded CMYK* ICC profile (it
+         applies its built-in SWOP assumption), so it cannot serve as a pixel
+         reference for that path. Lumen's CMYK A2B0 colour management is instead
+         verified deterministically by the Rust integration test
+         crates/engine/image/tests/icc_color_management.rs. -->
+    <img src="../samples/images/icc_p3.png" alt="">
+  </div>
+</body>
+</html>

@@ -285,6 +285,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 ### Форматы изображений и мультимедиа
 
 - **AVIF (AV1 Image File Format)** — ✅ реализован (ISO/IEC 23008-12 Phase 0): lumen-image::avif модуль + AvifImageDecoder trait; is_avif() проверяет ISOBMFF ftyp-бокс major brand (avif/avis); decode_avif() использует libavif через `image` крейт feature `avif` (требует cmake+nasm); поддерживает статичные AVIF, анимированные распознаются но первый кадр; ICC-профили не извлекаются (Phase 1); 14 unit-тестов в avif/mod.rs; зарегистрирован в image-decoder dispatch + supported_mime_types(); тест 90
+- **ICC colour management** — ✅ реализован (ICC.1:2010, ICC-1…ICC-6): настоящий ICC-парсер (`lumen_core::icc`), CIE XYZ/Lab PCS + Bradford (`lumen_core::pcs`, `ColorSpace::Lab`); matrix-shaper RGB→sRGB трансформ для любого RGB-профиля (P3/Rec2020/AdobeRGB/ProPhoto) + CMYK→sRGB A2B0-LUT трансформ для CMYK/YCCK-JPEG; колор-менеджмент на этапе декода (`color_manage_in_place`) с процесс-глобальным кэшем по байтам профиля; PNG `iCCP` инфлейтится как zlib (BUG-229). Тест 128 (Display-P3 PNG, пиксель-в-пиксель с Edge) + Rust-интеграционный `crates/engine/image/tests/icc_color_management.rs` (P3 + CMYK). CMYK-ICC не в графтесте: Edge игнорирует встроенный CMYK-профиль (свой SWOP)
 
 ### Формы (form controls)
 

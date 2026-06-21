@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-226)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-229)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -242,6 +242,7 @@
 | [BUG-225](bugs/BUG-225-OPEN.md) | OPEN | paint | `appearance: none` подавляет value/placeholder-текст у text-input'ов: `emit_form_control_indicator` (display_list.rs:4207) делает ранний `return` при `Appearance::None`, чтобы скрыть нативные примитивы (галочка/точка/слайдер/стрелка), но заодно убивает текст значения text-подобных инпутов. Должен скрываться только нативный примитив. Замечен при разборе BUG-211 (TEST-93 остаток 3.54%) |
 | [BUG-227](bugs/BUG-227-FIXED.md) | FIXED 2026-06-21 | paint | `color_management::tests::detects_p3_from_description` и `detects_rec2020_from_description` красные на main (paint/color_management.rs:62/84): `detect_color_space_from_icc` больше не детектит P3/Rec2020 по text-описанию профиля после рефактора ICC в lumen-core (коммиты X-1 `68927090` + H-2 Phase 3 `23014125`). Не связано с BUG-226 (paint/display_list). Домен ICC (P1). Замечено P3 при merge p3-bug-226. **FIX (ICC-2):** ре-базлайн тестов под новое поведение — сниффинг по строке намеренно убран, профиль без реальных примариев → Srgb (`description_text_is_not_sniffed_*`); тот же дубликат закрыт в lumen-image |
 | BUG-228 | OPEN | layout/paint | `test_32_list_markers` (driver/tests/test_32.rs:62) красный на чистом main (`4d4ae912`): ожидается 33 marker-бокса (35 li − 2 в `list-style-type:none`), фактически 27 — пропадают 6 маркеров (`@counter-style` bracket/hashnum и/или `list-style-image:url()` списки, добавленные `dd9ac74a`/P4). Геометрия `li` (26.4px, шаг 28.4px) корректна. Не связано с ICC. Предсуществующий регресс генерации маркеров для custom counter-style / image-маркеров. Замечено P1 при завершении ICC-2 (прогон совпадает на main и на ветке) |
+| [BUG-229](bugs/BUG-229-FIXED.md) | FIXED 2026-06-21 | image | PNG `iCCP` распаковывался сырым `DeflateDecoder` вместо `ZlibDecoder` — zlib-обёртка профиля (RFC 1950) ломала инфляцию → профиль тихо терялся → ни один PNG с ICC не управлялся по цвету (P3/AdobeRGB/Rec2020 пересыщены). `png/mod.rs:40`. Найден при ICC-6. Регресс-тест `icc_color_management.rs` |
 
 ---
 

@@ -55,6 +55,7 @@ mod tests {
         assert_eq!(ColorSpace::Srgb.name(), "srgb");
         assert_eq!(ColorSpace::DisplayP3.name(), "display-p3");
         assert_eq!(ColorSpace::Rec2020.name(), "rec2020");
+        assert_eq!(ColorSpace::Lab.name(), "lab");
     }
 
     #[test]
@@ -62,6 +63,7 @@ mod tests {
         assert_eq!(ColorSpace::Srgb.to_string(), "srgb");
         assert_eq!(ColorSpace::DisplayP3.to_string(), "display-p3");
         assert_eq!(ColorSpace::Rec2020.to_string(), "rec2020");
+        assert_eq!(ColorSpace::Lab.to_string(), "lab");
     }
 
     #[test]
