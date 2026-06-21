@@ -5963,11 +5963,28 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
                 });
             }
         }
-        SvgShapeKind::Line { .. } => {
-            // SVG <line> has no fill; rendered as a stroke-width rect. paint-order
-            // is irrelevant (single component), so emit directly.
-            let color = stroke_color.or(fill_color).unwrap_or(Color::BLACK);
-            out.push(DisplayCommand::FillRect { rect: b.rect, color });
+        SvgShapeKind::Line { x1, y1, x2, y2 } => {
+            // SVG <line> (§9.5): a stroked segment between (x1,y1) and (x2,y2). It
+            // has no fill — only the stroke paints. The old code filled `b.rect`,
+            // which for a diagonal line is the whole (large) bounding box, painting
+            // a solid rectangle instead of a thin diagonal (BUG-189). `b.rect` is
+            // the doc-space bbox of the segment (already viewBox-scaled); the signs
+            // of the user-space endpoints tell us which diagonal of that box the
+            // segment runs along. The painter has no SVG transform here, so a
+            // rotated line is approximated by its bbox diagonal — the same
+            // axis-aligned assumption rect/ellipse strokes already make.
+            if let Some(sc) = stroke_color
+                && stroke_w > 0.0
+            {
+                let ax = if x1 <= x2 { b.rect.x } else { b.rect.x + b.rect.width };
+                let ay = if y1 <= y2 { b.rect.y } else { b.rect.y + b.rect.height };
+                let bx = if x1 <= x2 { b.rect.x + b.rect.width } else { b.rect.x };
+                let by = if y1 <= y2 { b.rect.y + b.rect.height } else { b.rect.y };
+                let mut v: Vec<[f32; 2]> = Vec::with_capacity(6);
+                push_thick_segment(&mut v, [ax, ay], [bx, by], stroke_w * 0.5);
+                // paint-order is irrelevant (single component), so emit directly.
+                out.push(DisplayCommand::DrawSvgPath { vertices: v, color: sc });
+            }
         }
         SvgShapeKind::Path { d } => {
             let need_fill   = fill_color.is_some();
@@ -13211,6 +13228,32 @@ mod tests {
             svg_paths.iter().all(|c| c.r == 233 && c.g == 69 && c.b == 96),
             "path must paint in stroke colour #e94560, not a default black fill; got {svg_paths:?}",
         );
+    }
+
+    #[test]
+    fn svg_diagonal_line_strokes_segment_not_filled_bbox() {
+        // BUG-189: a diagonal SVG <line> used to render as `FillRect { rect: b.rect }`
+        // — filling the entire (large) bounding box of the segment with the stroke
+        // colour, producing a solid orange rectangle instead of a thin diagonal.
+        // The line must now emit a `DrawSvgPath` (a thick segment) in the stroke
+        // colour, and NO `FillRect` in that colour.
+        let stroke = "#f39c12"; // (243, 156, 18)
+        let html = "<svg width='160' height='100'>\
+            <line x1='10' y1='10' x2='150' y2='90' stroke='#f39c12' stroke-width='6' fill='none'/>\
+        </svg>";
+        for dl in [build(html, ""), build_ordered(html, "")] {
+            let stroke_paths: Vec<&Vec<[f32; 2]>> = dl.iter().filter_map(|c| match c {
+                DisplayCommand::DrawSvgPath { vertices, color }
+                    if color.r == 243 && color.g == 156 && color.b == 18 => Some(vertices),
+                _ => None,
+            }).collect();
+            assert_eq!(stroke_paths.len(), 1, "line must emit one stroke DrawSvgPath ({stroke}), got {dl:?}");
+            assert_eq!(stroke_paths[0].len(), 6, "a single butt-cap segment = two triangles (6 verts)");
+            // The old bug: a FillRect in the stroke colour spanning the bbox.
+            let solid_fill = dl.iter().any(|c| matches!(c,
+                DisplayCommand::FillRect { color, .. } if color.r == 243 && color.g == 156 && color.b == 18));
+            assert!(!solid_fill, "line must NOT paint a solid {stroke} FillRect (BUG-189), got {dl:?}");
+        }
     }
 
     #[test]
