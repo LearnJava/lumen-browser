@@ -5936,12 +5936,30 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
             }
             if let Some(sc) = stroke_color && stroke_w > 0.0 {
                 let w = stroke_w;
+                // SVG 2 §13.7: the stroke is centred on the geometry edge — half its
+                // width outside, half inside. `DrawBorder` paints inward from `rect`,
+                // so inflate the box by w/2 on every side (outer edge moves out by w/2)
+                // and grow the outer radii by w/2; the even-odd ring (BUG-175) puts the
+                // inner edge at r − w/2, leaving the centre-line on the original edge.
+                // Square corners (no radius) stay square. Fill keeps the original rect.
+                let half = w * 0.5;
+                let stroke_rect = Rect::new(
+                    b.rect.x - half,
+                    b.rect.y - half,
+                    b.rect.width + w,
+                    b.rect.height + w,
+                );
+                let (orx, ory) = if has_radius { (r + half, r_y + half) } else { (0.0, 0.0) };
+                let stroke_radii = CornerRadii {
+                    tl: orx, tl_y: ory, tr: orx, tr_y: ory,
+                    br: orx, br_y: ory, bl: orx, bl_y: ory,
+                };
                 stroke_cmds.push(DisplayCommand::DrawBorder {
-                    rect: b.rect,
+                    rect: stroke_rect,
                     widths: [w, w, w, w],
                     colors: [sc, sc, sc, sc],
                     styles: [BorderStyle::Solid; 4],
-                    radii,
+                    radii: stroke_radii,
                 });
             }
         }
@@ -5954,12 +5972,29 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
             }
             if let Some(sc) = stroke_color && stroke_w > 0.0 {
                 let w = stroke_w;
+                // SVG 2 §13.7: stroke centred on the geometry edge (see Rect arm).
+                // Inflate the bbox by w/2 so the outer edge of the inward-painted
+                // border lands w/2 outside the geometry; the outer radii grow to
+                // match (= half the inflated box → still a full ellipse).
+                let half = w * 0.5;
+                let stroke_rect = Rect::new(
+                    b.rect.x - half,
+                    b.rect.y - half,
+                    b.rect.width + w,
+                    b.rect.height + w,
+                );
+                let orx = rx_px + half;
+                let ory = ry_px + half;
+                let stroke_radii = CornerRadii {
+                    tl: orx, tl_y: ory, tr: orx, tr_y: ory,
+                    br: orx, br_y: ory, bl: orx, bl_y: ory,
+                };
                 stroke_cmds.push(DisplayCommand::DrawBorder {
-                    rect: b.rect,
+                    rect: stroke_rect,
                     widths: [w, w, w, w],
                     colors: [sc, sc, sc, sc],
                     styles: [BorderStyle::Solid; 4],
-                    radii,
+                    radii: stroke_radii,
                 });
             }
         }
@@ -13253,6 +13288,44 @@ mod tests {
             let solid_fill = dl.iter().any(|c| matches!(c,
                 DisplayCommand::FillRect { color, .. } if color.r == 243 && color.g == 156 && color.b == 18));
             assert!(!solid_fill, "line must NOT paint a solid {stroke} FillRect (BUG-189), got {dl:?}");
+        }
+    }
+
+    #[test]
+    fn svg_rect_stroke_is_centred_on_edge() {
+        // BUG-226: an SVG stroke is centred on the geometry edge (SVG 2 §13.7) —
+        // half its width outside the box, half inside. Previously the stroke was
+        // painted entirely inside (`DrawBorder { rect: b.rect }`, border-box model),
+        // shrinking the visible orange-core by stroke-width/2 per side (79×59 vs
+        // Edge 89×69 at stroke-width 10). The stroke's DrawBorder rect must now be
+        // the fill rect inflated by stroke-width/2 on every side, with the fill left
+        // on the original geometry.
+        let html = "<svg width='200' height='160'>\
+            <rect x='20' y='20' width='100' height='80' fill='#3498db' stroke='#e74c3c' stroke-width='10'/>\
+        </svg>";
+        for dl in [build(html, ""), build_ordered(html, "")] {
+            // fill (#3498db = 52,152,219) FillRect on the original geometry.
+            let fill = dl.iter().find_map(|c| match c {
+                DisplayCommand::FillRect { rect, color }
+                    if color.r == 52 && color.g == 152 && color.b == 219 => Some(*rect),
+                _ => None,
+            }).expect("fill FillRect present");
+            // stroke (#e74c3c = 231,76,60) DrawBorder, inflated by w/2 per side.
+            let (srect, widths) = dl.iter().find_map(|c| match c {
+                DisplayCommand::DrawBorder { rect, widths, colors, .. }
+                    if colors[0].r == 231 && colors[0].g == 76 && colors[0].b == 60 => Some((*rect, *widths)),
+                _ => None,
+            }).expect("stroke DrawBorder present");
+            assert_eq!(widths[0], 10.0, "stroke width preserved");
+            let half = 5.0_f32; // stroke-width / 2
+            assert!((srect.x - (fill.x - half)).abs() < 0.01,
+                "stroke rect moves out by w/2: x {} want {}", srect.x, fill.x - half);
+            assert!((srect.y - (fill.y - half)).abs() < 0.01,
+                "stroke rect moves out by w/2: y {} want {}", srect.y, fill.y - half);
+            assert!((srect.width - (fill.width + 10.0)).abs() < 0.01,
+                "stroke rect width grows by w: {} want {}", srect.width, fill.width + 10.0);
+            assert!((srect.height - (fill.height + 10.0)).abs() < 0.01,
+                "stroke rect height grows by w: {} want {}", srect.height, fill.height + 10.0);
         }
     }
 
