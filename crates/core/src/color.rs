@@ -22,54 +22,17 @@ impl ColorSpace {
     }
 }
 
-/// Парсит ICC профиль и определяет его основное цветовое пространство.
+/// Определяет основное цветовое пространство ICC-профиля.
 ///
-/// Возвращает `ColorSpace::Srgb` если обнаружение не удаётся или профиль поврежден.
+/// Парсит профиль настоящим ICC-парсером ([`crate::icc::IccProfile`]) и
+/// классифицирует RGB-профили по реальным колорант-примариям (`rXYZ`/`gXYZ`/
+/// `bXYZ`), а не по сниффингу строки описания. Возвращает `ColorSpace::Srgb`,
+/// если профиль не разбирается или это не RGB-профиль.
 pub fn detect_color_space_from_icc(icc_data: &[u8]) -> ColorSpace {
-    if icc_data.len() < 128 {
-        return ColorSpace::Srgb;
+    match crate::icc::IccProfile::parse(icc_data) {
+        Some(profile) => profile.color_space(),
+        None => ColorSpace::Srgb,
     }
-
-    // ICC profile header: 128 bytes minimum
-    // Byte offset 16-19: Color space signature (e.g., 'RGB ' or 'Lab ')
-    let color_space_sig = read_be_u32(icc_data, 16);
-
-    match color_space_sig {
-        // 'RGB ' — RGB profile
-        0x52474220 => {
-            if contains_p3_tag(icc_data) {
-                ColorSpace::DisplayP3
-            } else if contains_rec2020_tag(icc_data) {
-                ColorSpace::Rec2020
-            } else {
-                ColorSpace::Srgb
-            }
-        }
-        // 'Lab ' and others — out-of-scope for Phase 0
-        _ => ColorSpace::Srgb,
-    }
-}
-
-fn read_be_u32(data: &[u8], offset: usize) -> u32 {
-    if offset + 4 > data.len() {
-        return 0;
-    }
-    u32::from_be_bytes([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]])
-}
-
-fn contains_p3_tag(icc_data: &[u8]) -> bool {
-    if icc_data.len() < 132 {
-        return false;
-    }
-    let profile_desc = String::from_utf8_lossy(icc_data);
-    profile_desc.to_lowercase().contains("display p3")
-        || profile_desc.to_lowercase().contains("dci-p3")
-}
-
-fn contains_rec2020_tag(icc_data: &[u8]) -> bool {
-    let profile_desc = String::from_utf8_lossy(icc_data);
-    profile_desc.to_lowercase().contains("rec2020")
-        || profile_desc.to_lowercase().contains("rec. 2020")
 }
 
 impl core::fmt::Display for ColorSpace {
@@ -105,53 +68,20 @@ mod tests {
 
     #[test]
     fn detects_invalid_profile() {
+        // Too short / not an ICC profile → graceful sRGB fallback.
         let short_data = vec![0u8; 100];
         assert_eq!(detect_color_space_from_icc(&short_data), ColorSpace::Srgb);
     }
 
     #[test]
-    fn detects_srgb_profile() {
-        let mut profile = vec![0u8; 128];
-        profile[16] = 0x52;
-        profile[17] = 0x47;
-        profile[18] = 0x42;
-        profile[19] = 0x20;
+    fn garbage_with_rgb_sig_but_no_acsp_falls_back() {
+        // A buffer carrying the 'RGB ' colour-space signature but lacking the
+        // mandatory 'acsp' marker is not a valid profile — must not be sniffed.
+        let mut profile = vec![0u8; 200];
+        profile[16..20].copy_from_slice(&[0x52, 0x47, 0x42, 0x20]); // 'RGB '
         assert_eq!(detect_color_space_from_icc(&profile), ColorSpace::Srgb);
     }
 
-    #[test]
-    fn detects_p3_from_description() {
-        let mut profile = vec![0u8; 200];
-        profile[16] = 0x52;
-        profile[17] = 0x47;
-        profile[18] = 0x42;
-        profile[19] = 0x20;
-        let p3_text = b"Display P3";
-        if profile.len() > 150 {
-            for (i, &b) in p3_text.iter().enumerate() {
-                if 150 + i < profile.len() {
-                    profile[150 + i] = b;
-                }
-            }
-        }
-        assert_eq!(detect_color_space_from_icc(&profile), ColorSpace::DisplayP3);
-    }
-
-    #[test]
-    fn detects_rec2020_from_description() {
-        let mut profile = vec![0u8; 200];
-        profile[16] = 0x52;
-        profile[17] = 0x47;
-        profile[18] = 0x42;
-        profile[19] = 0x20;
-        let rec_text = b"Rec2020";
-        if profile.len() > 150 {
-            for (i, &b) in rec_text.iter().enumerate() {
-                if 150 + i < profile.len() {
-                    profile[150 + i] = b;
-                }
-            }
-        }
-        assert_eq!(detect_color_space_from_icc(&profile), ColorSpace::Rec2020);
-    }
+    // Note: classification of well-formed sRGB/Display-P3/Rec.2020 profiles by
+    // their colorant primaries is covered by the parser tests in `crate::icc`.
 }
