@@ -95,7 +95,7 @@ _(BUG-189 закрыт 2026-06-21 — диагональный `<line>` рисо
 _(BUG-226 закрыт 2026-06-21 — SVG stroke на rect/circle/ellipse центрирован на кромке (½/½, SVG 2 §13.7); TEST-47 2.27% → 1.20%, регрессий 54/60/82/119 нет, см. Recent.)_
 - BUG-197 (TEST-69, 3.61%) — `border-spacing` asymmetric
 - BUG-217 (TEST-120, 3.26%) — `prefers-contrast`/`prefers-reduced-data`
-- BUG-212 (TEST-95, 3.39%) — `font-size-adjust`
+_(BUG-212 закрыт 2026-06-21 — font-size-adjust масштабирование было корректно; реальный дефект — absolute `line-height:100px` (ratio-encoded) схлопывался при пост-каскадной смене used-font-size; 3.39% → 2.86% → KNOWN_DEBTORS BUG-128, см. Recent.)_
 - BUG-213 (TEST-97, 2.78%) — `counter-set`
 - BUG-209 (TEST-90, 2.75%) — AVIF decoder
 - BUG-216 (TEST-117, 2.28%) — CSS `quotes`
@@ -156,6 +156,25 @@ _(нет — handoff-задачи перераспределены на P1/P2)_
 
 Полная история — `git log --oneline` (ветки фиксов P3 с префиксом `p3-bug-<id>`)
 и файлы `bugs/BUG-NNN-FIXED.md`. Ниже — только последние, как быстрый контекст:
+
+- **BUG-212** (2026-06-21) — `font-size-adjust` (TEST-95 3.39% → 2.86% → KNOWN_DEBTORS
+  BUG-128). Масштабирование used-размера было корректно: `font_size_adjust_used` читает
+  реальный Inter `sxHeight` из OS/2, used = size·z/aspect даёт одинаковый x-height = size·z
+  во всех строках (пиксельно совпадает с Edge). Реальный дефект — вертикальное
+  позиционирование: `line-height:100px` хранится как коэффициент (`100/60`), а
+  `apply_font_size_adjust` меняет used-`font_size` пост-каскадно (60→21.98 для row 0.20) →
+  line-box пересчитывался `1.667×21.98 = 36.6px` вместо фикс-100px → текст уезжал вверх
+  (baseline-сдвиг до 32px, шаг строк 111/98/99/104 vs ровный 112 у Edge). Фикс: новый флаг
+  `ComputedStyle.line_height_is_relative` (`true` для `normal`/unitless `<number>`,
+  `false` для absolute `<length>`/`<percentage>`/`em`/`rem`, CSS2 §10.8.1); ставится в
+  `apply_declaration` арме `line-height`, наследуется. `apply_font_size_adjust_to_style`
+  при absolute line-height корректирует ratio обратно (`*= old/new`), сохраняя line-box в
+  px; relative — масштабируется как раньше. После: все 5 line-box = 100px, baseline-сдвиг
+  32px → 0.5px, CPU-diff 3.27% → 2.86%. Остаток = font-parity (Inter sans vs Edge sans,
+  rule 3) → KNOWN_DEBTORS (BUG-128, baseline 3.0). 3 регресс-теста
+  (`font_size_adjust_keeps_absolute_line_height_fixed`,
+  `font_size_adjust_scales_relative_number_line_height`,
+  `line_height_px_is_absolute_number_is_relative`). Без регрессий (layout 2966 lib-тестов).
 
 - **BUG-226** (2026-06-21) — SVG stroke центрирован на кромке (TEST-47 2.27% → 1.20%
   DEBTOR, KNOWN_DEBTORS BUG-176). Остаточный после BUG-189 дефект TEST-47: штрих

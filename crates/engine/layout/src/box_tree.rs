@@ -2470,6 +2470,27 @@ fn font_size_adjust_used(style: &ComputedStyle, m: &dyn TextMeasurer) -> f32 {
     }
 }
 
+/// Apply `font-size-adjust` to a single style in place (CSS Fonts L5 §4).
+///
+/// Mutates `font_size` to the x-height-normalised used size. Because an absolute
+/// `line-height` (`<length>`/`<percentage>`/`em`/`rem`) computes to a fixed line
+/// box that must NOT rescale with the used font-size, the ratio-encoded
+/// `line_height` is corrected inversely so the absolute line box stays constant
+/// (CSS2 §10.8.1). Relative line-heights (`normal`/`<number>`) keep their ratio
+/// and scale with the new size, as the spec requires.
+fn apply_font_size_adjust_to_style(style: &mut ComputedStyle, m: &dyn TextMeasurer) {
+    use crate::style::FontSizeAdjust;
+    if matches!(style.font_size_adjust, FontSizeAdjust::None) {
+        return;
+    }
+    let old_size = style.font_size;
+    let new_size = font_size_adjust_used(style, m);
+    style.font_size = new_size;
+    if !style.line_height_is_relative && new_size > 0.0 {
+        style.line_height = style.line_height * old_size / new_size;
+    }
+}
+
 /// CSS Fonts L5 §4 — post-build pass rewriting `font_size` wherever
 /// `font-size-adjust` is a number, using the measurer's real x-height.
 ///
@@ -2478,15 +2499,10 @@ fn font_size_adjust_used(style: &ComputedStyle, m: &dyn TextMeasurer) -> f32 {
 /// `frag.style.font_size`) pick up the scaled size from a single source. Inline
 /// text segments carry their own cloned style, so they are adjusted too.
 fn apply_font_size_adjust(b: &mut LayoutBox, m: &dyn TextMeasurer) {
-    use crate::style::FontSizeAdjust;
-    if !matches!(b.style.font_size_adjust, FontSizeAdjust::None) {
-        b.style.font_size = font_size_adjust_used(&b.style, m);
-    }
+    apply_font_size_adjust_to_style(&mut b.style, m);
     if let BoxKind::InlineRun { segments, .. } = &mut b.kind {
         for seg in segments.iter_mut() {
-            if !matches!(seg.style.font_size_adjust, FontSizeAdjust::None) {
-                seg.style.font_size = font_size_adjust_used(&seg.style, m);
-            }
+            apply_font_size_adjust_to_style(&mut seg.style, m);
         }
     }
     for child in &mut b.children {
@@ -14716,6 +14732,77 @@ mod tests {
         } else {
             panic!("expected InlineRun");
         }
+    }
+
+    /// BUG-212: an absolute `line-height` (`<length>`/`<percentage>`) must keep its
+    /// computed line box constant when `font-size-adjust` rescales the used
+    /// font-size. `line_height` is ratio-encoded (×font-size), so the ratio is
+    /// corrected inversely. Here `line-height: 100px` over font-size 60 with a tall
+    /// font (aspect 0.8) gives used size 60·0.5/0.8 = 37.5; the line box must remain
+    /// 100px, not collapse to 37.5·(100/60) = 62.5.
+    #[test]
+    fn font_size_adjust_keeps_absolute_line_height_fixed() {
+        use crate::style::{ComputedStyle, FontSizeAdjust};
+        let m = AspectMeasurer(0.8);
+        let mut s = ComputedStyle::root();
+        s.font_size = 60.0;
+        s.line_height = 100.0 / 60.0; // `line-height: 100px` → ratio
+        s.line_height_is_relative = false; // absolute length
+        s.font_size_adjust = FontSizeAdjust::Value(0.5);
+        let mut b = super::LayoutBox {
+            node: lumen_dom::NodeId::from_index(0),
+            rect: super::Rect::new(0.0, 0.0, 0.0, 0.0),
+            style: s,
+            kind: super::BoxKind::Block,
+            children: vec![],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            dirty: Default::default(),
+        };
+        super::apply_font_size_adjust(&mut b, &m);
+        assert!((b.style.font_size - 37.5).abs() < 0.01, "used size {}", b.style.font_size);
+        let line_box = b.style.font_size * b.style.line_height;
+        assert!(
+            (line_box - 100.0).abs() < 0.01,
+            "absolute line-height must stay 100px, got {line_box}"
+        );
+    }
+
+    /// BUG-212 counterpart: a relative `line-height` (unitless `<number>`) MUST
+    /// scale with the adjusted used font-size — the ratio is left untouched.
+    /// `line-height: 1.5` over used size 37.5 → line box 56.25.
+    #[test]
+    fn font_size_adjust_scales_relative_number_line_height() {
+        use crate::style::{ComputedStyle, FontSizeAdjust};
+        let m = AspectMeasurer(0.8);
+        let mut s = ComputedStyle::root();
+        s.font_size = 60.0;
+        s.line_height = 1.5; // unitless number → relative
+        s.line_height_is_relative = true;
+        s.font_size_adjust = FontSizeAdjust::Value(0.5);
+        let mut b = super::LayoutBox {
+            node: lumen_dom::NodeId::from_index(0),
+            rect: super::Rect::new(0.0, 0.0, 0.0, 0.0),
+            style: s,
+            kind: super::BoxKind::Block,
+            children: vec![],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            dirty: Default::default(),
+        };
+        super::apply_font_size_adjust(&mut b, &m);
+        assert!((b.style.line_height - 1.5).abs() < 0.001, "ratio must be unchanged");
+        let line_box = b.style.font_size * b.style.line_height;
+        assert!(
+            (line_box - 56.25).abs() < 0.01,
+            "relative line-height must scale to 56.25, got {line_box}"
+        );
     }
 
     // --- is_open_details ---
