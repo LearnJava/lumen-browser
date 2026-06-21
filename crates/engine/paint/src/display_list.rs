@@ -4561,8 +4561,14 @@ fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     let em = s.font_size;
     let cx = b.rect.x + b.rect.width * 0.5;
     let cy = b.rect.y + b.rect.height * 0.5;
+    // CSS Lists L3 §2.1 / Pseudo-elements L4 §14.2 — a non-empty `text` means the
+    // marker carries a string: either a counter glyph (decimal/roman/alpha) or an
+    // explicit `::marker { content: … }` override. In both cases the string wins over
+    // the bullet glyph, so the disc/circle/square shapes only draw when `text` is empty
+    // (otherwise a `list-style-type: disc` list with `::marker { content: "→ " }` would
+    // paint the disc instead of the arrow — BUG-185).
     match list_style_type {
-        ListStyleType::Disc => {
+        ListStyleType::Disc if text.is_empty() => {
             // Filled circle ~0.4em in diameter, centered in marker rect.
             let d = em * 0.40;
             let r = d * 0.5;
@@ -4570,7 +4576,7 @@ fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             let radii = CornerRadii { tl: r, tl_y: r, tr: r, tr_y: r, br: r, br_y: r, bl: r, bl_y: r };
             out.push(DisplayCommand::FillRoundedRect { rect, color, radii });
         }
-        ListStyleType::Circle => {
+        ListStyleType::Circle if text.is_empty() => {
             // Hollow circle ~0.4em in diameter, border ~0.08em thick.
             let d = em * 0.40;
             let r = d * 0.5;
@@ -4585,14 +4591,15 @@ fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                 radii,
             });
         }
-        ListStyleType::Square => {
+        ListStyleType::Square if text.is_empty() => {
             // Filled square ~0.35em side, centered in marker rect.
             let d = em * 0.35;
             let rect = Rect::new(cx - d * 0.5, cy - d * 0.5, d, d);
             out.push(DisplayCommand::FillRect { rect, color });
         }
         _ => {
-            // Counter types: decimal, roman, alpha, greek — render as text.
+            // Counter types (decimal, roman, alpha, greek) and `::marker { content }`
+            // overrides — render the string.
             if !text.is_empty() {
                 out.push(DisplayCommand::DrawText {
                     rect: b.rect,
@@ -11808,6 +11815,27 @@ mod tests {
             _ => None,
         }).collect();
         assert_eq!(alpha_texts.len(), 2, "lower-alpha markers: expected 'a. ' and 'b. '");
+    }
+
+    /// BUG-185: `::marker { content: "→ " }` on a `list-style-type: disc` list must
+    /// paint the override string, not the disc bullet glyph. The marker carries both
+    /// `list_style_type: Disc` and the content text; the text wins.
+    #[test]
+    fn marker_content_override_renders_text_not_bullet() {
+        let dl = build(
+            r#"<ul class="cm" style="list-style-type:disc;padding-left:32px"><li>Arrow A</li></ul>"#,
+            r#".cm li::marker { content: "→ "; color: #68d391; }"#,
+        );
+        // The disc bullet must be suppressed: no FillRoundedRect from the marker.
+        let discs = dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. }))
+            .count();
+        assert_eq!(discs, 0,
+            "content override must suppress the disc bullet, got {discs} FillRoundedRect");
+        // The arrow string is painted instead.
+        let arrows = dl.iter().any(|c| matches!(c,
+            DisplayCommand::DrawText { text, .. } if text.contains('\u{2192}')));
+        assert!(arrows, "content override must paint the arrow text");
     }
 
     // ── CSS Compositing L1 §8.3 — background-blend-mode ──
