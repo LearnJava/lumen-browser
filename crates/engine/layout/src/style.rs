@@ -781,7 +781,9 @@ impl ColorFloat {
     /// Out-of-gamut значения клипируются в [0, 255].
     pub fn to_srgb_color(self) -> Color {
         let (lr, lg, lb) = match self.space {
-            ColorSpace::Srgb => {
+            // Lab is a PCS encoding, not an RGB `ColorFloat` channel space, so it
+            // never reaches this RGB→sRGB path; decode as sRGB to stay panic-free.
+            ColorSpace::Srgb | ColorSpace::Lab => {
                 let lr = srgb_gamma_decode(self.r);
                 let lg = srgb_gamma_decode(self.g);
                 let lb = srgb_gamma_decode(self.b);
@@ -811,7 +813,9 @@ impl ColorFloat {
     /// Линейные sRGB-каналы [0..1] для прямой передачи в GPU без квантизации.
     pub fn to_linear_srgb(self) -> [f32; 4] {
         let (lr, lg, lb) = match self.space {
-            ColorSpace::Srgb => {
+            // Lab is a PCS encoding, not an RGB `ColorFloat` channel space, so it
+            // never reaches this RGB→sRGB path; decode as sRGB to stay panic-free.
+            ColorSpace::Srgb | ColorSpace::Lab => {
                 let lr = srgb_gamma_decode(self.r);
                 let lg = srgb_gamma_decode(self.g);
                 let lb = srgb_gamma_decode(self.b);
