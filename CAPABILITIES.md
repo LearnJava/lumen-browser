@@ -98,7 +98,7 @@ Snapshot: **Phase 2 «Interactive», app v0.2.0**. ~21 crates.
 - ✅ PNG, JPEG (baseline + progressive), WebP (VP8 + VP8L), **GIF** (static + animated), **AVIF** (behind `avif` feature).
 - ✅ `resize_bilinear`, `ImageDecoder` trait, `ImageDecodeCache` (LRU 256 MB, `ImageHandle`/`ImageKey`).
 - ⬜ JXL and HEIC are sniff-only Err stubs.
-- 🟡 ICC colour management: real read-only ICC parser (`lumen_core::icc::IccProfile` — header, tag table, `rXYZ/gXYZ/bXYZ`, `rTRC/gTRC/bTRC`, `wtpt`, raw `A2B0/B2A0`); RGB profiles classified by colorant primaries (sRGB/Display-P3/Rec.2020) instead of string sniffing. ⬜ Curve evaluation, Lab PCS, matrix-shaper / CMYK-LUT transforms, and decode-stage wiring (ICC-2…ICC-5).
+- 🟡 ICC colour management: real read-only ICC parser (`lumen_core::icc::IccProfile` — header, tag table, `rXYZ/gXYZ/bXYZ`, `rTRC/gTRC/bTRC`, `wtpt`, raw `A2B0/B2A0`); RGB profiles classified by colorant primaries (sRGB/Display-P3/Rec.2020); CIE XYZ/Lab PCS + Bradford adaptation (`lumen_core::pcs`); **matrix-shaper RGB→sRGB transform** (`IccProfile::build_rgb_transform` — real per-channel TRC evaluation + colorant matrix → D65 → sRGB), applied at `Image::to_rgba8`/`correct_rgba_pixels` so any RGB ICC profile (P3, Rec.2020, Adobe RGB, ProPhoto, …) renders colour-correct in the femtovg window, CPU snapshot and PDF export. ⬜ CMYK-LUT transform (`A2B0`) and decode-stage transform cache (ICC-4…ICC-5).
 
 ### lumen-canvas (`crates/engine/canvas`)
 - ✅ Canvas 2D CPU rasterizer: rect ops, full path building (arc/arcTo/bezier/quadratic/ellipse), fill/stroke (even-odd), state stack + full CTM, `globalAlpha`, 16 composite/blend ops, line caps/joins.

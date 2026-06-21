@@ -131,6 +131,80 @@ pub enum ToneCurve {
     },
 }
 
+impl ToneCurve {
+    /// Evaluates the tone-reproduction curve at a device-encoded input `x`
+    /// (clamped to `[0, 1]`), returning the linearised value in `[0, 1]`.
+    ///
+    /// ICC TRC curves map a device-encoded channel value to a linear one; this
+    /// is the decode direction the RGB matrix-shaper applies before the colorant
+    /// matrix. Never panics: out-of-range inputs are clamped and malformed
+    /// parameter vectors fall back to the identity.
+    pub fn eval(&self, x: f64) -> f64 {
+        let x = x.clamp(0.0, 1.0);
+        match self {
+            ToneCurve::Identity => x,
+            ToneCurve::Gamma(g) => x.powf(*g),
+            ToneCurve::Table(table) => eval_table(table, x),
+            ToneCurve::Parametric { function, params } => eval_parametric(*function, params, x),
+        }
+    }
+}
+
+/// Evaluates a sampled 1-D LUT (`curveType` with N≥2 entries) at `x ∈ [0, 1]`
+/// with linear interpolation, normalising the `u16` outputs to `[0, 1]`.
+fn eval_table(table: &[u16], x: f64) -> f64 {
+    let n = table.len();
+    match n {
+        0 => x,
+        1 => f64::from(table[0]) / 65535.0,
+        _ => {
+            let pos = x * (n - 1) as f64;
+            let i = pos.floor() as usize;
+            if i >= n - 1 {
+                return f64::from(table[n - 1]) / 65535.0;
+            }
+            let frac = pos - i as f64;
+            let lo = f64::from(table[i]);
+            let hi = f64::from(table[i + 1]);
+            (lo + (hi - lo) * frac) / 65535.0
+        }
+    }
+}
+
+/// Evaluates an ICC `parametricCurveType` (function types 0–4) at `x ∈ [0, 1]`.
+///
+/// Formulas per ICC.1:2010 §10.16; an under-sized `params` slice (which the
+/// parser should never produce) falls back to the identity rather than panicking.
+fn eval_parametric(function: u16, params: &[f64], x: f64) -> f64 {
+    let g = params.first().copied().unwrap_or(1.0);
+    let p = |i: usize| params.get(i).copied().unwrap_or(0.0);
+    match function {
+        // Y = X^g
+        0 => x.powf(g),
+        // Y = (aX + b)^g  for X ≥ −b/a ; else 0
+        1 => {
+            let (a, b) = (p(1), p(2));
+            if a != 0.0 && x >= -b / a { (a * x + b).powf(g) } else { 0.0 }
+        }
+        // Y = (aX + b)^g + c  for X ≥ −b/a ; else c
+        2 => {
+            let (a, b, c) = (p(1), p(2), p(3));
+            if a != 0.0 && x >= -b / a { (a * x + b).powf(g) + c } else { c }
+        }
+        // Y = (aX + b)^g  for X ≥ d ; else cX
+        3 => {
+            let (a, b, c, d) = (p(1), p(2), p(3), p(4));
+            if x >= d { (a * x + b).powf(g) } else { c * x }
+        }
+        // Y = (aX + b)^g + e  for X ≥ d ; else cX + f
+        4 => {
+            let (a, b, c, d, e, f) = (p(1), p(2), p(3), p(4), p(5), p(6));
+            if x >= d { (a * x + b).powf(g) + e } else { c * x + f }
+        }
+        _ => x,
+    }
+}
+
 /// A parsed ICC profile (read-only, owned).
 ///
 /// Produced by [`IccProfile::parse`]. Fields that were absent in the source
@@ -294,6 +368,111 @@ impl IccProfile {
             ColorSpace::Rec2020
         }
     }
+
+    /// Compiles a matrix-shaper transform from device RGB to gamma-encoded sRGB.
+    ///
+    /// This is the ICC-3 colour-management path: it uses the profile's *actual*
+    /// per-channel tone curves (`rTRC`/`gTRC`/`bTRC`) and colorant primaries
+    /// (`rXYZ`/`gXYZ`/`bXYZ`) — not a fixed gamut guess — so any RGB matrix-shaper
+    /// profile (sRGB, Display-P3, Rec.2020, Adobe RGB, ProPhoto, …) renders
+    /// colour-correct on an sRGB display.
+    ///
+    /// Returns `None` for non-RGB profiles or RGB profiles missing colorants
+    /// (e.g. LUT-only profiles, which the CMYK/LUT path in ICC-4 handles). A
+    /// missing TRC defaults to the identity (linear) curve.
+    pub fn build_rgb_transform(&self) -> Option<RgbTransform> {
+        if self.data_color_space != DataColorSpace::Rgb {
+            return None;
+        }
+        let (r, g, b) = (self.red_xyz?, self.green_xyz?, self.blue_xyz?);
+
+        // Colorants are stored in the D50 PCS; re-reference them to D65 (the
+        // adapting white of sRGB) with Bradford adaptation before mapping to
+        // sRGB primaries.
+        let r = crate::pcs::Xyz::from(r).d50_to_d65();
+        let g = crate::pcs::Xyz::from(g).d50_to_d65();
+        let b = crate::pcs::Xyz::from(b).d50_to_d65();
+
+        // Colorant matrix (columns = colorant tristimuli): device-linear RGB →
+        // XYZ(D65). Composing with XYZ(D65)→linear-sRGB gives one combined
+        // device-linear-RGB → linear-sRGB matrix.
+        let colorant = [
+            [r.x, g.x, b.x],
+            [r.y, g.y, b.y],
+            [r.z, g.z, b.z],
+        ];
+        let matrix = matmul3(&XYZ_D65_TO_SRGB, &colorant);
+
+        Some(RgbTransform {
+            red_trc: self.red_trc.clone().unwrap_or(ToneCurve::Identity),
+            green_trc: self.green_trc.clone().unwrap_or(ToneCurve::Identity),
+            blue_trc: self.blue_trc.clone().unwrap_or(ToneCurve::Identity),
+            matrix,
+        })
+    }
+}
+
+/// A compiled RGB matrix-shaper transform: gamma-encoded device RGB → gamma-encoded
+/// sRGB, both with each channel in `[0, 1]`.
+///
+/// Built by [`IccProfile::build_rgb_transform`]. Holds the three decode tone
+/// curves plus the combined device-linear-RGB → linear-sRGB 3×3 matrix; the
+/// sRGB output transfer function is applied analytically in [`RgbTransform::apply`].
+#[derive(Debug, Clone)]
+pub struct RgbTransform {
+    /// Red-channel tone curve (device-encoded → linear).
+    red_trc: ToneCurve,
+    /// Green-channel tone curve (device-encoded → linear).
+    green_trc: ToneCurve,
+    /// Blue-channel tone curve (device-encoded → linear).
+    blue_trc: ToneCurve,
+    /// Combined linear matrix: device-linear RGB → linear sRGB (D65-referenced).
+    matrix: [[f64; 3]; 3],
+}
+
+impl RgbTransform {
+    /// Transforms one gamma-encoded device RGB triple (each in `[0, 1]`) to a
+    /// gamma-encoded sRGB triple, each clamped to `[0, 1]`.
+    pub fn apply(&self, r: f64, g: f64, b: f64) -> (f64, f64, f64) {
+        let lr = self.red_trc.eval(r);
+        let lg = self.green_trc.eval(g);
+        let lb = self.blue_trc.eval(b);
+        let m = &self.matrix;
+        let sr = m[0][0] * lr + m[0][1] * lg + m[0][2] * lb;
+        let sg = m[1][0] * lr + m[1][1] * lg + m[1][2] * lb;
+        let sb = m[2][0] * lr + m[2][1] * lg + m[2][2] * lb;
+        (srgb_encode(sr), srgb_encode(sg), srgb_encode(sb))
+    }
+}
+
+/// XYZ(D65) → linear sRGB matrix (sRGB primaries, IEC 61966-2-1).
+#[rustfmt::skip]
+const XYZ_D65_TO_SRGB: [[f64; 3]; 3] = [
+    [ 3.240_454_2, -1.537_138_5, -0.498_531_4],
+    [-0.969_266_0,  1.876_010_8,  0.041_556_0],
+    [ 0.055_643_4, -0.204_025_9,  1.057_225_2],
+];
+
+/// sRGB output transfer function: linear → gamma-encoded (IEC 61966-2-1).
+/// Negative / out-of-gamut inputs are clamped to `[0, 1]`.
+fn srgb_encode(c: f64) -> f64 {
+    let c = c.clamp(0.0, 1.0);
+    if c <= 0.003_130_8 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+/// 3×3 matrix product `a * b`.
+fn matmul3(a: &[[f64; 3]; 3], b: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let mut out = [[0.0; 3]; 3];
+    for (i, out_row) in out.iter_mut().enumerate() {
+        for (j, cell) in out_row.iter_mut().enumerate() {
+            *cell = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
+        }
+    }
+    out
 }
 
 /// Converts a PCS XYZ tristimulus to CIE xy chromaticity, or `None` if the
@@ -609,5 +788,100 @@ mod tests {
         let p = IccProfile::parse(&data).expect("parse");
         assert_eq!(p.data_color_space, DataColorSpace::Cmyk);
         assert_eq!(p.color_space(), crate::ColorSpace::Srgb);
+    }
+
+    #[test]
+    fn tone_curve_identity_and_gamma() {
+        assert!((ToneCurve::Identity.eval(0.5) - 0.5).abs() < 1e-12);
+        // Gamma 2.0: 0.5 → 0.25.
+        assert!((ToneCurve::Gamma(2.0).eval(0.5) - 0.25).abs() < 1e-9);
+        // Endpoints are preserved by any gamma.
+        assert!((ToneCurve::Gamma(2.2).eval(0.0)).abs() < 1e-12);
+        assert!((ToneCurve::Gamma(2.2).eval(1.0) - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn tone_curve_table_interpolates() {
+        // A 3-entry ramp 0 → 32768 → 65535 ≈ identity-ish, linearly interpolated.
+        let c = ToneCurve::Table(vec![0, 32768, 65535]);
+        assert!((c.eval(0.0)).abs() < 1e-9);
+        assert!((c.eval(1.0) - 1.0).abs() < 1e-9);
+        // Midpoint hits the middle sample exactly.
+        assert!((c.eval(0.5) - 32768.0 / 65535.0).abs() < 1e-9);
+        // Quarter point interpolates between sample 0 and sample 1.
+        assert!((c.eval(0.25) - 0.5 * 32768.0 / 65535.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn tone_curve_parametric_type3_srgb() {
+        // Standard sRGB EOTF as ICC parametric type 3:
+        // g=2.4, a=1/1.055, b=0.055/1.055, c=1/12.92, d=0.04045.
+        let c = ToneCurve::Parametric {
+            function: 3,
+            params: vec![2.4, 1.0 / 1.055, 0.055 / 1.055, 1.0 / 12.92, 0.040_45],
+        };
+        // Below the breakpoint: linear segment cX.
+        assert!((c.eval(0.02) - 0.02 / 12.92).abs() < 1e-9);
+        // Above: should match the analytic sRGB decode.
+        let want = ((0.5 + 0.055) / 1.055f64).powf(2.4);
+        assert!((c.eval(0.5) - want).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rgb_transform_srgb_round_trips() {
+        // An sRGB profile (sRGB primaries + gamma TRC) must map device RGB back
+        // to ~itself: the transform is an identity colour change.
+        let data = build_rgb_profile(
+            (0.4361, 0.2225, 0.0139),
+            (0.3851, 0.7169, 0.0971),
+            (0.1431, 0.0606, 0.7141),
+        );
+        let p = IccProfile::parse(&data).expect("parse");
+        let t = p.build_rgb_transform().expect("transform");
+        for &v in &[0.0, 0.25, 0.5, 0.75, 1.0] {
+            let (r, g, b) = t.apply(v, v, v);
+            // Neutral in → neutral out, within a couple of 8-bit LSBs.
+            assert!((r - v).abs() < 0.02, "r {r} vs {v}");
+            assert!((g - v).abs() < 0.02, "g {g} vs {v}");
+            assert!((b - v).abs() < 0.02, "b {b} vs {v}");
+        }
+        // White and black map exactly to white and black.
+        let (r, _, _) = t.apply(1.0, 1.0, 1.0);
+        assert!((r - 1.0).abs() < 0.01);
+        let (r0, g0, b0) = t.apply(0.0, 0.0, 0.0);
+        assert!(r0.abs() < 0.01 && g0.abs() < 0.01 && b0.abs() < 0.01);
+    }
+
+    #[test]
+    fn rgb_transform_p3_pure_red_shrinks() {
+        // Display-P3 has a wider red primary; a fully-saturated P3 red, shown
+        // through sRGB, must come back in-gamut (channels ≤ 1) and stay reddish
+        // (sRGB cannot reproduce it, so it clamps to the sRGB red boundary).
+        let data = build_rgb_profile(
+            (0.5151, 0.2412, -0.0011),
+            (0.2920, 0.6922, 0.0419),
+            (0.1571, 0.0666, 0.7841),
+        );
+        let p = IccProfile::parse(&data).expect("parse");
+        let t = p.build_rgb_transform().expect("transform");
+        let (r, g, b) = t.apply(1.0, 0.0, 0.0);
+        assert!((0.0..=1.0).contains(&r) && (0.0..=1.0).contains(&g) && (0.0..=1.0).contains(&b));
+        // Red dominates the result.
+        assert!(r > g && r > b, "expected red-dominant, got ({r}, {g}, {b})");
+        // White still maps to white.
+        let (wr, wg, wb) = t.apply(1.0, 1.0, 1.0);
+        assert!((wr - 1.0).abs() < 0.01 && (wg - 1.0).abs() < 0.01 && (wb - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn build_rgb_transform_rejects_non_rgb() {
+        let mut data = build_rgb_profile(
+            (0.4361, 0.2225, 0.0139),
+            (0.3851, 0.7169, 0.0971),
+            (0.1431, 0.0606, 0.7141),
+        );
+        data[16..20].copy_from_slice(&0x434D594Bu32.to_be_bytes()); // 'CMYK'
+        let p = IccProfile::parse(&data).expect("parse");
+        assert!(p.build_rgb_transform().is_none());
     }
 }
