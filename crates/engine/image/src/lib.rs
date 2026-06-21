@@ -390,6 +390,9 @@ pub fn apply_tone_mapping(color_space: lumen_core::ColorSpace, pixel_data: &mut 
         lumen_core::ColorSpace::Rec2020 => {
             apply_rec2020_to_srgb(pixel_data);
         }
+        lumen_core::ColorSpace::Lab => {
+            // Lab is a PCS encoding, not a display pixel space — no tone mapping.
+        }
     }
 }
 

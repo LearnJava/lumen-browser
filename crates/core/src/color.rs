@@ -9,6 +9,10 @@ pub enum ColorSpace {
     DisplayP3,
     /// Rec.2020 (HDR пространство для высокодинамичного контента; ITU-R BT.2020).
     Rec2020,
+    /// CIE L*a*b* — перцептивное пространство, используемое как ICC PCS (D50).
+    /// Не пространство пикселей дисплея: применяется в цепочке управления
+    /// цветом ([`crate::pcs`]), не для прямого вывода canvas/изображений.
+    Lab,
 }
 
 impl ColorSpace {
@@ -18,6 +22,7 @@ impl ColorSpace {
             ColorSpace::Srgb => "srgb",
             ColorSpace::DisplayP3 => "display-p3",
             ColorSpace::Rec2020 => "rec2020",
+            ColorSpace::Lab => "lab",
         }
     }
 }

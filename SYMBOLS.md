@@ -170,13 +170,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/canvas/src/rasterize.rs:73` **fn** `build_clip_mask` — Build a boolean clip mask by rasterizing `path` with even-odd rule
 `crates/engine/canvas/src/rasterize.rs:107` **fn** `collect_lines` — Extract `(x0, y0, x1, y1)` line tuples from `path`, tessellating Bézier curves
 
-## lumen-core  (235 symbols)
+## lumen-core  (244 symbols)
 
 `crates/core/src/capability.rs:7` **enum** `Capability`
 `crates/core/src/capability.rs:27` **struct** `CapabilityToken`
 `crates/core/src/color.rs:4` **enum** `ColorSpace` — Цветовое пространство изображения и canvas
-`crates/core/src/color.rs:16` **fn** `name` — Возвращает название пространства как строку (для CSS canvas.colorSpace)
-`crates/core/src/color.rs:31` **fn** `detect_color_space_from_icc` — Определяет основное цветовое пространство ICC-профиля
+`crates/core/src/color.rs:20` **fn** `name` — Возвращает название пространства как строку (для CSS canvas.colorSpace)
+`crates/core/src/color.rs:36` **fn** `detect_color_space_from_icc` — Определяет основное цветовое пространство ICC-профиля
 `crates/core/src/crash.rs:65` **struct** `CrashRecorder` — Рекордер событий с кольцевым буфером и дампом при панике
 `crates/core/src/crash.rs:79` **fn** `new` — Рекордер с ёмкостью буфера по умолчанию ([`DEFAULT_CAPACITY`]) и без
 `crates/core/src/crash.rs:86` **fn** `with_capacity` — Рекордер с заданной ёмкостью буфера и без downstream-sink-а
@@ -366,6 +366,15 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/core/src/memory_pressure.rs:193` **fn** `host_statistics64` — Fills `host_info_out` with `HOST_VM_INFO64_COUNT` × `u32` words of
 `crates/core/src/memory_pressure.rs:202` **fn** `vm_used_total` — Polls VM statistics and returns `(used_pages, total_pages)`, or `None` on error
 `crates/core/src/module.rs:9` **trait** `Module`
+`crates/core/src/pcs.rs:23` **struct** `Xyz` — A CIE 1931 XYZ tristimulus value
+`crates/core/src/pcs.rs:38` **struct** `Lab` — A CIE 1976 L*a*b* value
+`crates/core/src/pcs.rs:56` **fn** `new` — Constructs an `Xyz` from raw components
+`crates/core/src/pcs.rs:64` **fn** `to_lab` — Converts this XYZ to CIE L*a*b* about the given reference white
+`crates/core/src/pcs.rs:83` **fn** `adapt` — Bradford chromatic adaptation of this tristimulus from `src_white` to
+`crates/core/src/pcs.rs:89` **fn** `d50_to_d65` — Adapts a tristimulus referenced to D50 (the ICC PCS) into D65
+`crates/core/src/pcs.rs:94` **fn** `d65_to_d50` — Adapts a tristimulus referenced to D65 into D50 (the ICC PCS)
+`crates/core/src/pcs.rs:101` **fn** `new` — Constructs a `Lab` from raw components
+`crates/core/src/pcs.rs:108` **fn** `to_xyz` — Converts this L*a*b* back to CIE XYZ about the given reference white
 `crates/core/src/punycode.rs:49` **fn** `encode` — Кодирует Unicode-строку в Punycode согласно RFC 3492
 `crates/core/src/sandbox.rs:22` **struct** `SandboxFlags` — Битовое поле sandbox-ограничений. Конкретный бит == «**запрет** этой
 `crates/core/src/sandbox.rs:67` **fn** `empty` — Пустой набор — sandbox не активен (без ограничений)
@@ -1130,10 +1139,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/image/src/lib.rs:344` **fn** `to_rgba8` — Возвращает пиксели в формате RGBA8 (4 байта на пиксель)
 `crates/engine/image/src/lib.rs:372` **fn** `to_rgba8_tone_mapped` — Alias for `to_rgba8()`. Tone-mapping is now applied automatically
 `crates/engine/image/src/lib.rs:382` **fn** `apply_tone_mapping` — Apply tone mapping for a detected color space
-`crates/engine/image/src/lib.rs:439` **fn** `resize_bilinear` — Масштабирует `src` до `(dst_w × dst_h)` билинейной интерполяцией
-`crates/engine/image/src/lib.rs:491` **fn** `resize_area_avg` — Масштабирует `src` до `(dst_w × dst_h)` усреднением по площади (box filter)
-`crates/engine/image/src/lib.rs:550` **enum** `PixelFormat` — Формат пикселя декодированного изображения. Все варианты — 8 бит на канал
-`crates/engine/image/src/lib.rs:574` **enum** `DecodeError` — Ошибки декодирования PNG
+`crates/engine/image/src/lib.rs:442` **fn** `resize_bilinear` — Масштабирует `src` до `(dst_w × dst_h)` билинейной интерполяцией
+`crates/engine/image/src/lib.rs:494` **fn** `resize_area_avg` — Масштабирует `src` до `(dst_w × dst_h)` усреднением по площади (box filter)
+`crates/engine/image/src/lib.rs:553` **enum** `PixelFormat` — Формат пикселя декодированного изображения. Все варианты — 8 бит на канал
+`crates/engine/image/src/lib.rs:577` **enum** `DecodeError` — Ошибки декодирования PNG
 `crates/engine/image/src/png/mod.rs:54` **fn** `decode_png`
 `crates/engine/image/src/png/mod.rs:96` **fn** `encode_png_rgba8` — Кодирует RGBA8 изображение в PNG формат
 `crates/engine/image/src/webp/mod.rs:24` **struct** `WebpError` — Ошибка декодирования WebP
@@ -2609,7 +2618,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/display_list.rs:3015` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
 `crates/engine/paint/src/display_list.rs:3144` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
 `crates/engine/paint/src/display_list.rs:3899` **fn** `point_on_resize_grip` — Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента
-`crates/engine/paint/src/display_list.rs:13875` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
+`crates/engine/paint/src/display_list.rs:13918` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
 `crates/engine/paint/src/display_list_cache.rs:21` **struct** `CachedDisplayLayer` — Cached display list for a stacking context or page subtree
 `crates/engine/paint/src/display_list_cache.rs:45` **struct** `DisplayListCache` — LRU cache that maps `NodeId` (u32) to a pre-built `Vec<DisplayCommand>`
 `crates/engine/paint/src/display_list_cache.rs:59` **fn** `new` — Create a cache with the default 32 MB budget
@@ -4177,4 +4186,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4106 symbols in 22 crates*
+*Total: 4115 symbols in 22 crates*
