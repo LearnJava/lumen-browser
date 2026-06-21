@@ -390,6 +390,9 @@ pub fn apply_tone_mapping(color_space: lumen_core::ColorSpace, pixel_data: &mut 
         lumen_core::ColorSpace::Rec2020 => {
             apply_rec2020_to_srgb(pixel_data);
         }
+        lumen_core::ColorSpace::Lab => {
+            // Lab is a PCS encoding, not a display pixel space — no tone mapping.
+        }
     }
 }
 
@@ -1058,9 +1061,14 @@ mod tests {
         );
     }
 
+    // BUG-227 (lumen-image copy): the profile description string is NOT a
+    // colour-space signal. The ICC refactor (slice ICC-1) made
+    // `detect_color_space_from_icc` classify RGB profiles by their colorant
+    // primaries, not by sniffing the description text. A buffer that merely
+    // embeds "Display P3" as text — with no `'acsp'` marker and no real
+    // `rXYZ/gXYZ/bXYZ` tags — is not a valid profile and must fall back to sRGB.
     #[test]
-    fn detect_color_space_with_display_p3_icc() {
-        // Create a Display P3 ICC profile (with "Display P3" text marker)
+    fn detect_color_space_description_text_is_not_sniffed() {
         let mut profile_data = vec![0u8; 200];
         profile_data[16] = 0x52;
         profile_data[17] = 0x47;
@@ -1069,9 +1077,7 @@ mod tests {
 
         let p3_text = b"Display P3";
         for (i, &b) in p3_text.iter().enumerate() {
-            if 150 + i < profile_data.len() {
-                profile_data[150 + i] = b;
-            }
+            profile_data[150 + i] = b;
         }
 
         let img = Image {
@@ -1083,8 +1089,8 @@ mod tests {
         };
         assert_eq!(
             img.detect_color_space(),
-            lumen_core::ColorSpace::DisplayP3,
-            "Display P3 profile should be detected correctly"
+            lumen_core::ColorSpace::Srgb,
+            "a text-only marker without real colorant primaries must not be sniffed"
         );
     }
 
