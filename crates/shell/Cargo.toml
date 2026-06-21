@@ -19,7 +19,7 @@ default = ["backend-femtovg", "backend-wgpu", "quickjs"]
 
 # Enable QuickJS JavaScript engine (rquickjs). Without this feature the shell
 # falls back to NullJsRuntime which silently ignores all inline scripts.
-quickjs = ["dep:lumen-js"]
+quickjs = ["dep:lumen-js", "lumen-js/webgpu"]
 
 # femtovg rendering backend — Phase 2 default (ADR-010 RB-9).
 backend-femtovg = ["lumen-paint/backend-femtovg"]
