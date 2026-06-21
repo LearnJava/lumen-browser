@@ -121,7 +121,7 @@ pub trait BrowserSession {
 
 ### 7. Tests
 
-**File:** `crates/driver/tests/isolation.rs` (new)
+**File:** `crates/driver/tests/cases/isolation.rs` (BT-1: consolidated into the single `tests/all.rs` binary)
 
 - `test_cookies_isolated`: two sessions, same URL, different cookies.
 - `test_storage_isolated`: origin-keyed isolation for localStorage.

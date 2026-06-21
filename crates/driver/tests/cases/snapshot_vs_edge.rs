@@ -190,7 +190,7 @@ fn snapshot_vs_edge() {
     // Single wgpu device reused across all pages — DX12 cannot create 70+ devices per process.
     const W: u32 = 1024;
     const H: u32 = 720;
-    let font = include_bytes!("../../../assets/fonts/Inter-Regular.ttf").to_vec();
+    let font = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf").to_vec();
     let mut renderer = lumen_paint::Renderer::new_headless(font, W, H)
         .expect("headless renderer init");
 
