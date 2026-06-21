@@ -50,3 +50,10 @@ cargo test -p lumen-paint --lib color_management
 (`crates/engine/paint/src/color_management.rs`): они теперь проверяют, что текст
 описания **не** является сигналом цветового пространства. Возврат строкового
 сниффинга отвергнут как регресс к багу, который ICC-1 устранил.
+
+Дополнительно: тот же класс провала был и в `lumen-image`
+(`crates/engine/image/src/lib.rs::detect_color_space_with_display_p3_icc`) —
+`Image::detect_color_space` делегирует в `lumen_core::detect_color_space_from_icc`,
+так что text-only фейк-профиль тоже падал. P3 при заведении бага заметил только
+копии в paint. Тест ре-базлайнен в `detect_color_space_description_text_is_not_sniffed`
+(→ Srgb). Обе копии закрыты.
