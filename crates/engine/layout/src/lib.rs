@@ -9221,6 +9221,38 @@ mod tests {
         );
     }
 
+    /// BUG-125 / TEST-76 regression: CSS Motion Path L1 places the box's
+    /// `offset-anchor` (default `auto` = `transform-origin` = centre) ONTO the
+    /// path point — not the box's top-left corner. The path coordinate origin is
+    /// the box's normal position, so the centre of a box on
+    /// `offset-path: path("M 0 0 L 960 0")` at `offset-distance: 480px` must map
+    /// to `rect_topleft + (480, 0)`. Without the `T(-anchor)` term the box sat
+    /// half-a-box down-and-right of Edge (the original 3.18% TEST-76 diff).
+    #[test]
+    fn motion_path_centres_anchor_on_path_point() {
+        let root = lay(
+            "<div>x</div>",
+            r#"div { width: 40px; height: 40px; offset-path: path("M 0 0 L 960 0"); offset-distance: 480px; offset-rotate: 0deg; }"#,
+        );
+        let div = root
+            .children
+            .iter()
+            .find(|c| matches!(&c.kind, BoxKind::Block))
+            .expect("div box");
+        let m = forward_box_transform(div).expect("motion-path box has a matrix");
+
+        // Box centre (= default anchor) must land on the path point, which is
+        // `rect_topleft + (480, 0)` — NOT `rect_topleft + centre + (480, 0)`.
+        let cx = div.rect.x + div.rect.width / 2.0;
+        let cy = div.rect.y + div.rect.height / 2.0;
+        let (mx, my) = m.transform_point_2d(cx, cy);
+        let (ex, ey) = (div.rect.x + 480.0, div.rect.y);
+        assert!(
+            (mx - ex).abs() < 0.05 && (my - ey).abs() < 0.05,
+            "anchor must map to path point ({ex}, {ey}); got ({mx}, {my})"
+        );
+    }
+
     #[test]
     fn filter_blur() {
         let root = lay("<p>x</p>", "p { filter: blur(5px); }");

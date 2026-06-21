@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-229)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-230)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -140,7 +140,7 @@
 | [BUG-122](bugs/BUG-122-FIXED.md) | FIXED 2026-06-15 | test/paint | flaky compositor tests: wall-clock deadline зависел от планировщика ОС |
 | [BUG-123](bugs/BUG-123-FIXED.md) | FIXED 2026-06-11 | paint | scroll container's own bg+border clipped by its own overflow scissor |
 | [BUG-124](bugs/BUG-124-OPEN.md) | OPEN | layout/paint | TEST-51 residual 1.09%: fractional layout Y coords vs Edge pixel snapping |
-| [BUG-125](bugs/BUG-125-OPEN.md) | OPEN | layout/paint | CSS Motion Path L1 (offset-path/offset-distance/offset-rotate) — TEST-76: 3.18% |
+| [BUG-125](bugs/BUG-125-FIXED.md) | FIXED 2026-06-22 | layout/paint | CSS Motion Path L1 — боксы садились top-left-на-путь вместо anchor-на-путь (off by пол-бокса). Добавлен `T(-anchor)` в `forward_box_transform` + `walk` (offset-anchor `auto`→transform-origin=центр), поворот вокруг anchor. TEST-76 3.18%→0.54% (боксы пиксель-в-пиксель; остаток = диагональный градиент-трек `calc()`-стопы → BUG-230, KNOWN_DEBTOR) |
 | [BUG-126](bugs/BUG-126-OPEN.md) | OPEN (DEBTOR) | layout | CSS Anchor Positioning L1 — placement фикснут (53.45% → 12.94%): position-area definite-size элементы прижимаются к якорю вместо растягивания на band (anchor.rs place_axis/align_in_band). 3×3 сетка совпадает с Edge(position-area) пиксель-в-пиксель. Остаток-должник: тест использует устаревшее `inset-area` (Edge игнорирует, поддерживает только `position-area`) + span-ряд (Lumen спек-корректнее Edge). KNOWN_DEBTORS 12.94% |
 | [BUG-127](bugs/BUG-127-OPEN.md) | OPEN | layout/js | CSS Scroll-Driven Animations L1 (scroll-timeline/view-timeline) — TEST-78: 12.02% |
 | [BUG-128](bugs/BUG-128-OPEN.md) | OPEN | font | text-underline TEST-79: 6.78% — font-parity issue (serif vs sans), кандидат в KNOWN_DEBTORS |
@@ -243,6 +243,7 @@
 | [BUG-227](bugs/BUG-227-FIXED.md) | FIXED 2026-06-21 | paint | `color_management::tests::detects_p3_from_description` и `detects_rec2020_from_description` красные на main (paint/color_management.rs:62/84): `detect_color_space_from_icc` больше не детектит P3/Rec2020 по text-описанию профиля после рефактора ICC в lumen-core (коммиты X-1 `68927090` + H-2 Phase 3 `23014125`). Не связано с BUG-226 (paint/display_list). Домен ICC (P1). Замечено P3 при merge p3-bug-226. **FIX (ICC-2):** ре-базлайн тестов под новое поведение — сниффинг по строке намеренно убран, профиль без реальных примариев → Srgb (`description_text_is_not_sniffed_*`); тот же дубликат закрыт в lumen-image |
 | BUG-228 | OPEN | layout/paint | `test_32_list_markers` (driver/tests/test_32.rs:62) красный на чистом main (`4d4ae912`): ожидается 33 marker-бокса (35 li − 2 в `list-style-type:none`), фактически 27 — пропадают 6 маркеров (`@counter-style` bracket/hashnum и/или `list-style-image:url()` списки, добавленные `dd9ac74a`/P4). Геометрия `li` (26.4px, шаг 28.4px) корректна. Не связано с ICC. Предсуществующий регресс генерации маркеров для custom counter-style / image-маркеров. Замечено P1 при завершении ICC-2 (прогон совпадает на main и на ветке). BT-1 (2026-06-21): тест перемещён в `driver/tests/cases/test_32.rs` и помечен `#[ignore = "BUG-228…"]`, чтобы консолидированный suite был зелёным; **при фиксе убрать `#[ignore]`** |
 | [BUG-229](bugs/BUG-229-FIXED.md) | FIXED 2026-06-21 | image | PNG `iCCP` распаковывался сырым `DeflateDecoder` вместо `ZlibDecoder` — zlib-обёртка профиля (RFC 1950) ломала инфляцию → профиль тихо терялся → ни один PNG с ICC не управлялся по цвету (P3/AdobeRGB/Rec2020 пересыщены). `png/mod.rs:40`. Найден при ICC-6. Регресс-тест `icc_color_management.rs` |
+| [BUG-230](bugs/BUG-230-OPEN.md) | OPEN | layout/paint | `calc()` в позиции color-stop линейного градиента схлопывает градиент (`blue calc(50% + 10px)` → сплошной синий; diagonal-stripe `calc(50% ± 2px)` → прозрачный). `%`-стопы работают, `parse_length_q` парсит `calc()` в `Length::Calc` — дефект ниже: позиции-`Calc` не резолвятся против длины линии градиента (`style.rs` densification). Замечен при BUG-125 (TEST-76 диагональный трек), остаток 0.54% → KNOWN_DEBTOR |
 
 ---
 
