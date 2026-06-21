@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-06-21",
+ "generated": "2026-06-22",
  "counts": {
   "open": 39,
-  "fixed": 186,
+  "fixed": 187,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 225,
+ "total_bugs": 226,
  "phases": [
   {
    "id": "P0",
@@ -466,7 +466,7 @@
     {
      "id": "P2-motionpath",
      "title": "CSS Motion Path L1 (offset-path)",
-     "status": "planned",
+     "status": "done",
      "bugs": [
       "BUG-125"
      ]
@@ -1493,11 +1493,11 @@
    "debtor": false
   },
   "BUG-125": {
-   "status": "open",
-   "title": "CSS Motion Path L1 (offset-path/offset-distance/offset-rotate) — TEST-76: 3.18%",
+   "status": "fixed",
+   "title": "CSS Motion Path L1 — боксы садились top-left-на-путь вместо anchor-на-путь (off by пол-бокса). Добавлен `T(-anchor)` в `forward_box_transform` + `walk` (offset-…",
    "component": "layout/paint",
-   "date": null,
-   "debtor": false
+   "date": "2026-06-22",
+   "debtor": true
   },
   "BUG-126": {
    "status": "open",
@@ -2198,6 +2198,13 @@
    "component": "image",
    "date": "2026-06-21",
    "debtor": false
+  },
+  "BUG-230": {
+   "status": "open",
+   "title": "`calc()` в позиции color-stop линейного градиента схлопывает градиент (`blue calc(50% + 10px)` → сплошной синий; diagonal-stripe `calc(50% ± 2px)` → прозрачный)…",
+   "component": "layout/paint",
+   "date": null,
+   "debtor": true
   }
  },
  "unlinked": {
@@ -2349,7 +2356,8 @@
    "BUG-185",
    "BUG-187",
    "BUG-188",
-   "BUG-198"
+   "BUG-198",
+   "BUG-230"
   ],
   "layout/text": [
    "BUG-120"
