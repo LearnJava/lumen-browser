@@ -25,8 +25,52 @@
 use rquickjs::Ctx;
 
 /// Install the WebGPU API bindings into the JS context.
+///
+/// With the `webgpu` feature the real native bridge (`_lumen_webgpu_*`) is registered
+/// **before** the shim is evaluated, so the shim's `typeof _lumen_webgpu_... === 'function'`
+/// probes see it and route adapter-info / WGSL-validation to the real GPU device.
+/// Without the feature only the in-memory JS shim (Phase 0) is installed.
 pub fn install_webgpu_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
+    #[cfg(feature = "webgpu")]
+    install_webgpu_natives(ctx)?;
     ctx.eval::<(), _>(WEBGPU_SHIM)?;
+    Ok(())
+}
+
+/// Registers the native WebGPU bridge functions backed by a real wgpu device
+/// (`lumen_paint::webgpu_compute`). Stage 1: adapter info + WGSL validation.
+#[cfg(feature = "webgpu")]
+fn install_webgpu_natives(ctx: &Ctx) -> rquickjs::Result<()> {
+    use lumen_paint::webgpu_compute;
+    let g = ctx.globals();
+
+    // _lumen_webgpu_adapter_info() → JSON `{vendor,architecture,device,description}` for
+    // a real GPU adapter, or "" when no GPU is available (shim then keeps the stub info).
+    g.set(
+        "_lumen_webgpu_adapter_info",
+        rquickjs::Function::new(ctx.clone(), || -> String {
+            match webgpu_compute::adapter_info() {
+                Some(i) => serde_json::json!({
+                    "vendor": i.vendor,
+                    "architecture": i.architecture,
+                    "device": i.device,
+                    "description": i.description,
+                })
+                .to_string(),
+                None => String::new(),
+            }
+        }),
+    )?;
+
+    // _lumen_webgpu_validate_shader(code) → "" if the WGSL is valid (or no GPU), else the
+    // real compilation error text for GPUShaderModule.getCompilationInfo().
+    g.set(
+        "_lumen_webgpu_validate_shader",
+        rquickjs::Function::new(ctx.clone(), |code: String| -> String {
+            webgpu_compute::validate_wgsl(&code).unwrap_or_default()
+        }),
+    )?;
+
     Ok(())
 }
 
@@ -85,10 +129,24 @@ const WEBGPU_SHIM: &str = r#"(function() {
   // ── GPUAdapterInfo ───────────────────────────────────────────────────────
 
   function GPUAdapterInfo() {
+    // Phase 0 defaults — overridden below by the real GPU adapter when available.
     this.vendor      = 'lumen';
     this.architecture = '';
     this.device      = 'stub';
     this.description = 'Lumen WebGPU Phase 0 stub';
+    // Real backend (feature `webgpu`): pull vendor/device/description from the GPU.
+    if (typeof _lumen_webgpu_adapter_info === 'function') {
+      try {
+        var _j = _lumen_webgpu_adapter_info();
+        if (_j) {
+          var _o = JSON.parse(_j);
+          this.vendor       = _o.vendor;
+          this.architecture = _o.architecture;
+          this.device       = _o.device;
+          this.description  = _o.description;
+        }
+      } catch (_e) { /* keep stub info */ }
+    }
   }
   globalThis.GPUAdapterInfo = GPUAdapterInfo;
 
@@ -96,9 +154,24 @@ const WEBGPU_SHIM: &str = r#"(function() {
 
   function GPUShaderModule(desc) {
     this.label = (desc && desc.label) || '';
+    this._code = (desc && desc.code) || '';
+    // Real backend (feature `webgpu`): validate WGSL on the GPU device at create time;
+    // compilation diagnostics are surfaced through getCompilationInfo() like a browser.
+    this._messages = [];
+    if (this._code && typeof _lumen_webgpu_validate_shader === 'function') {
+      try {
+        var _err = _lumen_webgpu_validate_shader(this._code);
+        if (_err) {
+          this._messages = [{
+            type: 'error', message: _err,
+            lineNum: 0, linePos: 0, offset: 0, length: 0
+          }];
+        }
+      } catch (_e) { /* validation unavailable — leave messages empty */ }
+    }
   }
   GPUShaderModule.prototype.getCompilationInfo = function() {
-    return Promise.resolve({ messages: [] });
+    return Promise.resolve({ messages: this._messages });
   };
   globalThis.GPUShaderModule = GPUShaderModule;
 
@@ -656,6 +729,84 @@ mod tests {
                 .eval("new GPUAdapter().requestAdapterInfo() instanceof Promise")
                 .unwrap();
             assert!(ok);
+        });
+    }
+
+    #[test]
+    fn adapter_info_has_real_backend_fields() {
+        // Shape contract for the real backend: GPUAdapterInfo always exposes the four
+        // W3C fields. Without the `webgpu` feature these keep the Phase 0 stub values.
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install(&ctx);
+            let ok: bool = ctx
+                .eval(
+                    r#"
+                    var i = new GPUAdapterInfo();
+                    typeof i.vendor === 'string'
+                      && typeof i.architecture === 'string'
+                      && typeof i.device === 'string'
+                      && typeof i.description === 'string'
+                    "#,
+                )
+                .unwrap();
+            assert!(ok);
+        });
+    }
+
+    #[test]
+    fn shader_module_compilation_info_shape() {
+        // getCompilationInfo() resolves to an object with a `messages` array. With a real
+        // GPU device + the `webgpu` feature it carries WGSL diagnostics; otherwise empty.
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install(&ctx);
+            let ok: bool = ctx
+                .eval(
+                    r#"
+                    var d = new GPUDevice({});
+                    var m = d.createShaderModule({ code: '@compute @workgroup_size(1) fn main() {}' });
+                    var info = null;
+                    m.getCompilationInfo().then(function(r){ info = r; });
+                    // microtask not drained synchronously here; assert the module stored code
+                    // and exposes the API shape.
+                    typeof m.getCompilationInfo === 'function' && m._code.length > 0
+                    "#,
+                )
+                .unwrap();
+            assert!(ok);
+        });
+    }
+
+    // Real-GPU path: only meaningful with the `webgpu` feature AND an available adapter.
+    // Skips gracefully on headless CI without a GPU.
+    #[cfg(feature = "webgpu")]
+    #[test]
+    fn real_backend_validates_bad_wgsl() {
+        if !lumen_paint::webgpu_compute::is_available() {
+            eprintln!("skip: no GPU adapter available");
+            return;
+        }
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install(&ctx);
+            // Bad WGSL → native validator returns a non-empty error → stored as a message.
+            let has_error: bool = ctx
+                .eval(
+                    r#"
+                    var d = new GPUDevice({});
+                    var m = d.createShaderModule({ code: 'this is not valid wgsl @@@' });
+                    m._messages.length > 0 && m._messages[0].type === 'error'
+                    "#,
+                )
+                .unwrap();
+            assert!(has_error, "real backend must flag invalid WGSL");
+
+            // Real adapter info must replace the Phase 0 stub description.
+            let real_info: bool = ctx
+                .eval("new GPUAdapterInfo().description.indexOf('Phase 0 stub') === -1")
+                .unwrap();
+            assert!(real_info, "real adapter description must not be the stub");
         });
     }
 }

@@ -38,6 +38,8 @@ pub mod svg_path;
 #[cfg(feature = "backend-wgpu")]
 pub mod texture_pool;
 pub mod tile_grid;
+#[cfg(feature = "backend-wgpu")]
+pub mod webgpu_compute;
 pub mod webgl;
 
 #[cfg(feature = "cpu-render")]
