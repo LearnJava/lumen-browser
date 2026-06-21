@@ -8,8 +8,15 @@
 Что делает:
   1. Читает roadmap.json (структура) и BUGS.md (актуальные баги).
   2. Сшивает: каждой задаче с полем "bugs" подмешивает живой статус из BUGS.md.
-  3. Баги без ручной привязки → группа "Прочие баги (по компоненту)".
-  4. Вшивает итоговый JSON в <script id="roadmap-data"> обоих HTML-файлов.
+  3. ВЫВОДИТ статус задачи автоматически (см. derive_status): из живых багов и подзадач.
+     Ручной "status" в roadmap.json — лишь запасной вариант для фич без багов и без подзадач.
+  4. Баги без ручной привязки → группа "Прочие баги (по компоненту)".
+  5. Вшивает итоговый JSON в <script id="roadmap-data"> обоих HTML-файлов.
+
+Почему авто-вывод: раньше статус задачи копировался из roadmap.json дословно, поэтому
+после закрытия бага в BUGS.md задача оставалась "blocker"/"ready" (дрейф: зелёный баг под
+красной задачей). Теперь статус задачи производный — править руками нужно только статусы
+чисто-фичевых задач без багов/подзадач (planned-фичи).
 
 Запуск (из корня репозитория):
   python scripts/gen_roadmap.py
@@ -72,6 +79,10 @@ def parse_bugs():
             "title": desc,
             "component": component,
             "date": fixed_date,
+            # «должник» (KNOWN_DEBTORS): остаток-отклонение запаркован, задача считается
+            # закрытой, хотя баг формально OPEN. Метку ставим, если "DEBTOR" встречается
+            # где угодно в строке (в статусе «OPEN (DEBTOR)» или в тексте «Остаток DEBTOR»).
+            "debtor": "DEBTOR" in line.upper(),
         }
     return bugs
 
@@ -83,6 +94,59 @@ def collect_linked(tasks, acc):
         collect_linked(t.get("tasks", []), acc)
 
 
+# Статусы, означающие «работа идёт / начата» — по любому из них родитель = active.
+ACTIVE_ISH = {"active", "inprogress", "blocker", "wait"}
+
+
+def bug_signal(bug_ids, bugs):
+    """Сводный сигнал от связанных багов: 'done' | 'active' | 'open' | None.
+
+    'done'   — все баги закрыты (FIXED) или запаркованы как должники (DEBTOR);
+    'active' — есть баг IN PROGRESS;
+    'open'   — остались реально открытые баги (нет завершающего сигнала);
+    None     — у задачи нет привязанных багов (или они отсутствуют в BUGS.md).
+    """
+    live = [bugs[b] for b in bug_ids if b in bugs]
+    if not live:
+        return None
+    if all(i["status"] == "fixed" or i.get("debtor") for i in live):
+        return "done"
+    if any(i["status"] == "inprogress" for i in live):
+        return "active"
+    return "open"
+
+
+def derive_status(node, bugs, warnings, infer_active=True):
+    """Вычисляет эффективный статус задачи/фазы и вшивает его обратно в node["status"].
+
+    Приоритет: подзадачи + связанные баги. Если завершающих/активных сигналов нет —
+    возвращается курируемый (ручной) статус из roadmap.json (для planned-фич без багов).
+
+    infer_active=False (для фаз): не повышаем planned→active по частичному прогрессу,
+    только авто-помечаем фазу 'done', когда ВСЕ её задачи готовы — веховую семантику не трогаем.
+    """
+    manual = node.get("status", "planned")
+    child_eff = [derive_status(c, bugs, warnings, infer_active=True) for c in node.get("tasks", [])]
+    bsig = bug_signal(node.get("bugs", []), bugs)
+
+    evidence = child_eff + ([bsig] if bsig is not None else [])
+
+    if not evidence:
+        eff = manual
+    elif all(e == "done" for e in evidence):
+        eff = "done"
+    elif infer_active and any(e == "done" or e in ACTIVE_ISH for e in evidence):
+        eff = "active"
+    else:
+        eff = manual  # только open/planned/ready/opt без завершения → сохраняем ручной нюанс
+
+    if manual == "done" and bsig == "open":
+        warnings.append(f"{node.get('id', '?')} помечен 'done', но под ним есть открытые баги")
+
+    node["status"] = eff
+    return eff
+
+
 def main():
     if not ROADMAP_JSON.exists():
         sys.exit(f"нет {ROADMAP_JSON}")
@@ -91,6 +155,13 @@ def main():
 
     roadmap = json.loads(ROADMAP_JSON.read_text(encoding="utf-8"))
     bugs = parse_bugs()
+
+    # авто-вывод статусов задач/фаз из живых багов + подзадач (правит roadmap["phases"] на месте)
+    status_warnings = []
+    for ph in roadmap["phases"]:
+        derive_status(ph, bugs, status_warnings, infer_active=False)
+    for w in status_warnings:
+        print(f"ВНИМАНИЕ: {w}")
 
     # связанные баги
     linked = set()

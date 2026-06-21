@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-06-20",
+ "generated": "2026-06-21",
  "counts": {
-  "open": 48,
-  "fixed": 173,
+  "open": 39,
+  "fixed": 186,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 221,
+ "total_bugs": 225,
  "phases": [
   {
    "id": "P0",
@@ -275,7 +275,7 @@
       {
        "id": "B-1",
        "title": "B-1: QuickJS вне UI-потока (разблокировка)",
-       "status": "blocker",
+       "status": "done",
        "size": "XL",
        "bugs": [
         "BUG-222"
@@ -284,7 +284,7 @@
       {
        "id": "U-1.2",
        "title": "U-1 этап 2: весь пайплайн вне UI-потока",
-       "status": "wait",
+       "status": "done",
        "size": "L",
        "bugs": [
         "BUG-171",
@@ -294,7 +294,7 @@
       {
        "id": "U-5",
        "title": "U-5: Fullscreen пересчитывает вьюпорт",
-       "status": "ready",
+       "status": "done",
        "size": "S",
        "bugs": [
         "BUG-167"
@@ -303,7 +303,7 @@
       {
        "id": "U-6",
        "title": "U-6: рендер-паритет high-deviation",
-       "status": "ready",
+       "status": "done",
        "bugs": [
         "BUG-104",
         "BUG-126",
@@ -314,7 +314,7 @@
       {
        "id": "OBS",
        "title": "Наблюдаемость: CPU-снимок = окно (полная замена gdigrab)",
-       "status": "ready",
+       "status": "done",
        "size": "M",
        "bugs": [
         "BUG-221"
@@ -628,1327 +628,1576 @@
    "status": "fixed",
    "title": "display:none on inline elements not working",
    "component": "layout",
-   "date": "2026-05-15"
+   "date": "2026-05-15",
+   "debtor": false
   },
   "BUG-002": {
    "status": "fixed",
    "title": "inline padding/border/margin stacks vertically instead of flowing",
    "component": "layout/paint",
-   "date": "2026-05-20"
+   "date": "2026-05-20",
+   "debtor": false
   },
   "BUG-003": {
    "status": "fixed",
    "title": "style=\"\" attribute not processed by cascade",
    "component": "layout",
-   "date": "2026-05-15"
+   "date": "2026-05-15",
+   "debtor": false
   },
   "BUG-004": {
    "status": "fixed",
    "title": "height on inline elements (display:inline-block applies; display:inline ignores per CSS 2.1 §10.6.1)",
    "component": "layout",
-   "date": "2026-05-24"
+   "date": "2026-05-24",
+   "debtor": false
   },
   "BUG-005": {
    "status": "fixed",
    "title": "`<img>` inside `<span>` not rendered",
    "component": "layout+paint",
-   "date": "2026-05-21"
+   "date": "2026-05-21",
+   "debtor": false
   },
   "BUG-006": {
    "status": "fixed",
    "title": "table layout not implemented (td/th render as blocks)",
    "component": "layout",
-   "date": "2026-05-21"
+   "date": "2026-05-21",
+   "debtor": false
   },
   "BUG-007": {
    "status": "fixed",
    "title": "`<sub>`/`<sup>`/`<small>` missing UA styles",
    "component": "layout",
-   "date": "2026-05-20"
+   "date": "2026-05-20",
+   "debtor": false
   },
   "BUG-008": {
    "status": "fixed",
    "title": "`<del>`/`<ins>`/`<u>`/`<s>` text-decoration missing UA styles",
    "component": "layout",
-   "date": "2026-05-20"
+   "date": "2026-05-20",
+   "debtor": false
   },
   "BUG-009": {
    "status": "fixed",
    "title": "`<a>` missing UA styles (no blue color, no underline)",
    "component": "layout",
-   "date": "2026-05-20"
+   "date": "2026-05-20",
+   "debtor": false
   },
   "BUG-010": {
    "status": "fixed",
    "title": "`<hr>` renders nothing",
    "component": "layout",
-   "date": "2026-05-20"
+   "date": "2026-05-20",
+   "debtor": false
   },
   "BUG-011": {
    "status": "fixed",
    "title": "list markers (bullet, numbers) not rendered",
    "component": "layout/paint",
-   "date": "2026-05-22"
+   "date": "2026-05-22",
+   "debtor": false
   },
   "BUG-012": {
    "status": "fixed",
    "title": "`<del>`/`<ins>` break inline flow (each on new line)",
    "component": "layout",
-   "date": "2026-05-20"
+   "date": "2026-05-20",
+   "debtor": false
   },
   "BUG-013": {
    "status": "fixed",
    "title": "adjacent `<span style=\"...\">` stack vertically without separator",
    "component": "layout",
-   "date": "2026-05-22"
+   "date": "2026-05-22",
+   "debtor": false
   },
   "BUG-014": {
    "status": "fixed",
    "title": "JPEG not decoded (PNG only)",
    "component": "image",
-   "date": "2026-05-21"
+   "date": "2026-05-21",
+   "debtor": false
   },
   "BUG-015": {
    "status": "fixed",
    "title": "broken `<img>` src shows no alt text",
    "component": "paint",
-   "date": "2026-05-25"
+   "date": "2026-05-25",
+   "debtor": false
   },
   "BUG-016": {
    "status": "fixed",
    "title": "border-style: dashed/double now work; dotted still square (→ BUG-029)",
    "component": "css-parser/paint",
-   "date": "2026-05-20"
+   "date": "2026-05-20",
+   "debtor": false
   },
   "BUG-017": {
    "status": "fixed",
    "title": "text-decoration-style ignored (all render as solid)",
    "component": "layout/paint",
-   "date": "2026-05-22"
+   "date": "2026-05-22",
+   "debtor": false
   },
   "BUG-018": {
    "status": "fixed",
    "title": "text-decoration-color ignored (always inherits text color)",
    "component": "layout",
-   "date": "2026-05-22"
+   "date": "2026-05-22",
+   "debtor": false
   },
   "BUG-019": {
    "status": "fixed",
    "title": "outline not rendered at all",
    "component": "css-parser/paint",
-   "date": "2026-05-20"
+   "date": "2026-05-20",
+   "debtor": false
   },
   "BUG-020": {
    "status": "fixed",
    "title": "overflow axis coercion: visible+hidden combo не клипало ось; CSS Overflow L3 §2.1 visible→auto в compute_style; TEST-14: 1.70%→0.03% PASS",
    "component": "layout",
-   "date": "2026-05-26"
+   "date": "2026-05-26",
+   "debtor": false
   },
   "BUG-021": {
    "status": "fixed",
    "title": "HTML bgcolor attribute ignored",
    "component": "html-parser",
-   "date": "2026-05-22"
+   "date": "2026-05-22",
+   "debtor": false
   },
   "BUG-022": {
    "status": "fixed",
    "title": "Quirks-mode hashless hex colors not parsed",
    "component": "css-parser",
-   "date": "2026-05-22"
+   "date": "2026-05-22",
+   "debtor": false
   },
   "BUG-023": {
    "status": "fixed",
    "title": "opacity deviation — P1: strut fix 2026-05-26; P5 paint: premultiplied alpha double-mult at edge-AA pixels in composite shader → TEST-13 0.24%",
    "component": "layout+paint",
-   "date": "2026-05-26"
+   "date": "2026-05-26",
+   "debtor": false
   },
   "BUG-024": {
    "status": "fixed",
    "title": "box-sizing: content-box — border not added to outer size; height% resolved against width",
    "component": "layout",
-   "date": "2026-05-21"
+   "date": "2026-05-21",
+   "debtor": false
   },
   "BUG-025": {
    "status": "fixed",
    "title": "max-height does not clamp block height; InlineSpace not included in shrink-to-fit width",
    "component": "layout",
-   "date": "2026-05-22"
+   "date": "2026-05-22",
+   "debtor": false
   },
   "BUG-026": {
    "status": "fixed",
    "title": "`<img>` CSS/HTML width+height ignored — renders at natural size (remaining TEST-18 ~10%: BUG-032)",
    "component": "layout/paint",
-   "date": "2026-05-22"
+   "date": "2026-05-22",
+   "debtor": false
   },
   "BUG-027": {
    "status": "fixed",
    "title": "block element ignores explicit width — body stretches to viewport",
    "component": "layout",
-   "date": "2026-05-20"
+   "date": "2026-05-20",
+   "debtor": false
   },
   "BUG-028": {
    "status": "fixed",
    "title": "relayout-on-resize + maximized window triggers BUG-027",
    "component": "shell",
-   "date": "2026-05-26"
+   "date": "2026-05-26",
+   "debtor": false
   },
   "BUG-029": {
    "status": "fixed",
    "title": "border-style: dotted renders square dots instead of circles",
    "component": "paint",
-   "date": "2026-05-21"
+   "date": "2026-05-21",
+   "debtor": false
   },
   "BUG-030": {
    "status": "fixed",
    "title": "IFC: no whitespace gap between inline-block siblings (CSS §4.1.2)",
    "component": "layout",
-   "date": "2026-05-20"
+   "date": "2026-05-20",
+   "debtor": false
   },
   "BUG-031": {
    "status": "fixed",
    "title": "IFC: missing strut descent causes rows to be ~4px too short",
    "component": "layout",
-   "date": "2026-05-20"
+   "date": "2026-05-20",
+   "debtor": false
   },
   "BUG-032": {
    "status": "fixed",
    "title": "object-fit image quality ~16%: area averaging заменяет bilinear при downscale",
    "component": "paint/image",
-   "date": "2026-05-22"
+   "date": "2026-05-22",
+   "debtor": false
   },
   "BUG-033": {
    "status": "fixed",
    "title": "box-shadow: нет Gaussian blur — рендерится solid прямоугольник вместо размытой тени",
    "component": "paint",
-   "date": "2026-05-22"
+   "date": "2026-05-22",
+   "debtor": false
   },
   "BUG-034": {
    "status": "fixed",
    "title": "transform-origin 50% 50% default not resolved against box size — pivot at (0,0) instead of center",
    "component": "layout",
-   "date": "2026-05-22"
+   "date": "2026-05-22",
+   "debtor": false
   },
   "BUG-035": {
    "status": "fixed",
    "title": "::before/::after pseudo-elements не генерируются в box_tree (реализация частичная)",
    "component": "layout",
-   "date": "2026-05-22"
+   "date": "2026-05-22",
+   "debtor": false
   },
   "BUG-036": {
    "status": "fixed",
    "title": "border-radius: % значения (50%, etc.) не резолвятся → radius=0; только px работает",
    "component": "layout",
-   "date": "2026-05-26"
+   "date": "2026-05-26",
+   "debtor": false
   },
   "BUG-037": {
    "status": "fixed",
    "title": "CSS filter effects не применяются визуально (grayscale/sepia/blur/etc.) — shared filter_uniform перезаписывался; fix: per-pass буфер через mapped_at_creation",
    "component": "paint",
-   "date": "2026-05-26"
+   "date": "2026-05-26",
+   "debtor": false
   },
   "BUG-038": {
    "status": "fixed",
    "title": "list-style-position: inside — маркер занимал отдельную строку; li высотой 2× от нормы; fix: не продвигать child_y, сдвигать InlineRun вправо на marker_w",
    "component": "layout",
-   "date": "2026-05-26"
+   "date": "2026-05-26",
+   "debtor": false
   },
   "BUG-039": {
    "status": "fixed",
    "title": "dashed/dotted border mismatch vs Chrome/Edge: dash ratio 3:1→Skia algo, corner squares→circle quads for dotted, 1px linear SDF AA",
    "component": "paint",
-   "date": "2026-05-26"
+   "date": "2026-05-26",
+   "debtor": false
   },
   "BUG-040": {
    "status": "fixed",
    "title": "table layout unit tests assume direct `<tr>` children of `<table>`; html-full-tree-builder now injects implicit `<tbody>` breaking them",
    "component": "layout",
-   "date": "2026-05-27"
+   "date": "2026-05-27",
+   "debtor": false
   },
   "BUG-041": {
    "status": "fixed",
    "title": "style::tests::line_clamp_integer_value / _standard_property / _not_inherited fail: CSS rule `div { -webkit-line-clamp: 3 }` produces None — test accesses doc.ro…",
    "component": "css-parser",
-   "date": "2026-05-27"
+   "date": "2026-05-27",
+   "debtor": false
   },
   "BUG-042": {
    "status": "fixed",
    "title": "QuickJsRuntime missing JsRuntime::resume() impl — all lumen-js tests fail to compile",
    "component": "js",
-   "date": "2026-05-29"
+   "date": "2026-05-29",
+   "debtor": false
   },
   "BUG-043": {
    "status": "fixed",
    "title": "lumen-paint test suite красный (19 падений): устаревшие golden + overflow coercion + half-leading",
    "component": "paint",
-   "date": "2026-05-29"
+   "date": "2026-05-29",
+   "debtor": false
   },
   "BUG-044": {
    "status": "fixed",
    "title": "lumen-shell не компилируется: non-exhaustive match по DisplayCommand — новые варианты PushMaskLayer/PopMaskLayer/DrawSvgPath/BoxModelOverlay",
    "component": "shell",
-   "date": "2026-05-29"
+   "date": "2026-05-29",
+   "debtor": false
   },
   "BUG-045": {
    "status": "fixed",
    "title": "backdrop-filter не создавал stacking context",
    "component": "layout",
-   "date": "2026-05-29"
+   "date": "2026-05-29",
+   "debtor": false
   },
   "BUG-046": {
    "status": "fixed",
    "title": "3 устаревших теста lumen-layout --lib: webp теперь декодируется → picture-тесты обновлены",
    "component": "layout",
-   "date": "2026-05-30"
+   "date": "2026-05-30",
+   "debtor": false
   },
   "BUG-047": {
    "status": "fixed",
    "title": "НЕ баг (мисдиагноз): line-clamp реально усекает контент — тест переписан на ground-truth",
    "component": "layout",
-   "date": "2026-05-30"
+   "date": "2026-05-30",
+   "debtor": false
   },
   "BUG-048": {
    "status": "fixed",
    "title": "lumen-shell не компилируется: non-exhaustive match — новый вариант DrawScrollbar",
    "component": "shell",
-   "date": "2026-05-30"
+   "date": "2026-05-30",
+   "debtor": false
   },
   "BUG-049": {
    "status": "fixed",
    "title": "lumen-shell не компилируется: non-exhaustive match — новый вариант PageBreak",
    "component": "shell",
-   "date": "2026-05-30"
+   "date": "2026-05-30",
+   "debtor": false
   },
   "BUG-050": {
    "status": "fixed",
    "title": "doctest mock.rs:16 не компилировался — `use NetworkTransport` не импортирован",
    "component": "network",
-   "date": "2026-05-31"
+   "date": "2026-05-31",
+   "debtor": false
   },
   "BUG-051": {
    "status": "fixed",
    "title": "abs-pos с top+bottom+height:auto (inset:0) схлопывался в height 0",
    "component": "layout",
-   "date": "2026-05-31"
+   "date": "2026-05-31",
+   "debtor": false
   },
   "BUG-052": {
    "status": "fixed",
    "title": "DrawBorder anti_alias:true → паника в debug-профиле для sub-pixel рамок",
    "component": "paint/cpu_raster",
-   "date": "2026-05-31"
+   "date": "2026-05-31",
+   "debtor": false
   },
   "BUG-053": {
    "status": "fixed",
    "title": "`cargo build -p lumen-shell --features quickjs` не компилировался: trait PersistentJs потерял декларации",
    "component": "shell",
-   "date": "2026-06-02"
+   "date": "2026-06-02",
+   "debtor": false
   },
   "BUG-054": {
    "status": "fixed",
    "title": "stale_pooled_connection_triggers_retry падает на Windows (WSAECONNRESET)",
    "component": "network",
-   "date": "2026-06-04"
+   "date": "2026-06-04",
+   "debtor": false
   },
   "BUG-055": {
    "status": "fixed",
    "title": "tests::collect_picture_unsupported_type_falls_back: AVIF теперь поддерживается",
    "component": "layout",
-   "date": "2026-06-04"
+   "date": "2026-06-04",
+   "debtor": false
   },
   "BUG-056": {
    "status": "fixed",
    "title": "font_registry used after move in parse_and_layout: clippy E0382",
    "component": "shell",
-   "date": "2026-06-03"
+   "date": "2026-06-03",
+   "debtor": false
   },
   "BUG-057": {
    "status": "fixed",
    "title": "wgpu Vulkan crash on first render — fix: DX12 backend по умолчанию на Windows",
    "component": "paint",
-   "date": "2026-06-03"
+   "date": "2026-06-03",
+   "debtor": false
   },
   "BUG-058": {
    "status": "fixed",
    "title": "display:contents не сглажен перед lay_out: паника при открытии cnn.com",
    "component": "layout",
-   "date": "2026-06-04"
+   "date": "2026-06-04",
+   "debtor": false
   },
   "BUG-059": {
    "status": "fixed",
    "title": "WOFF2-декодер отклоняет шрифты с контурами из 0 точек",
    "component": "font",
-   "date": "2026-06-04"
+   "date": "2026-06-04",
+   "debtor": false
   },
   "BUG-060": {
    "status": "fixed",
    "title": "WOFF2-декодер обрывается с «unexpected end of font data» — routing потоков",
    "component": "font",
-   "date": "2026-06-04"
+   "date": "2026-06-04",
+   "debtor": false
   },
   "BUG-061": {
    "status": "fixed",
    "title": "test_32_list_markers падал: ожидания не обновлены после добавления секций",
    "component": "driver",
-   "date": "2026-06-04"
+   "date": "2026-06-04",
+   "debtor": false
   },
   "BUG-062": {
    "status": "fixed",
    "title": "clippy «very complex type» в doh.rs → type alias DnsCacheMap",
    "component": "network",
-   "date": "2026-06-04"
+   "date": "2026-06-04",
+   "debtor": false
   },
   "BUG-063": {
    "status": "fixed",
    "title": "clippy: manual_clamp, dead_code, collapsible_if в mathml.rs",
    "component": "layout",
-   "date": "2026-06-04"
+   "date": "2026-06-04",
+   "debtor": false
   },
   "BUG-064": {
    "status": "fixed",
    "title": "test_33_multi_column падал: ожидания не обновлены после изменения высот",
    "component": "driver",
-   "date": "2026-06-08"
+   "date": "2026-06-08",
+   "debtor": false
   },
   "BUG-065": {
    "status": "fixed",
    "title": "Клик по `<a href>` не срабатывал: hit-test не вычитал TAB_BAR_HEIGHT",
    "component": "shell",
-   "date": "2026-06-04"
+   "date": "2026-06-04",
+   "debtor": false
   },
   "BUG-066": {
    "status": "fixed",
    "title": "render_tile() без cfg(cpu-render) вызывает cpu_raster → clippy падает",
    "component": "paint",
-   "date": "2026-06-07"
+   "date": "2026-06-07",
+   "debtor": false
   },
   "BUG-067": {
    "status": "fixed",
    "title": "EventTarget не определён глобально → `class X extends EventTarget` бросает ReferenceError",
    "component": "js",
-   "date": "2026-06-08"
+   "date": "2026-06-08",
+   "debtor": false
   },
   "BUG-068": {
    "status": "fixed",
    "title": "clippy: collapsible_if в reader_view.rs",
    "component": "shell",
-   "date": "2026-06-08"
+   "date": "2026-06-08",
+   "debtor": false
   },
   "BUG-069": {
    "status": "fixed",
    "title": "collect_picture_unsupported_type_falls_back: stub-форматы jxl/heic/heif убраны из supported_mime_types",
    "component": "image",
-   "date": "2026-06-08"
+   "date": "2026-06-08",
+   "debtor": false
   },
   "BUG-070": {
    "status": "fixed",
    "title": "Дубликат BUG-067 (тот же корень: EventTarget)",
    "component": "js",
-   "date": "2026-06-08"
+   "date": "2026-06-08",
+   "debtor": false
   },
   "BUG-071": {
    "status": "fixed",
    "title": "MockSession не реализует set_clock/set_rng_seed/freeze_fingerprint",
    "component": "mcp",
-   "date": "2026-06-08"
+   "date": "2026-06-08",
+   "debtor": false
   },
   "BUG-072": {
    "status": "fixed",
    "title": "Form Constraint Validation API: ReferenceError «HTMLInputElement is not defined»",
    "component": "js",
-   "date": "2026-06-08"
+   "date": "2026-06-08",
+   "debtor": false
   },
   "BUG-073": {
    "status": "fixed",
    "title": "chrome_runtime_absent ломается: window.chrome.runtime ставился безусловно",
    "component": "js",
-   "date": "2026-06-08"
+   "date": "2026-06-08",
+   "debtor": false
   },
   "BUG-074": {
    "status": "fixed",
    "title": "height:100% на flex-item не резолвится → TEST-67 bar рендерится h=0",
    "component": "layout",
-   "date": "2026-06-08"
+   "date": "2026-06-08",
+   "debtor": false
   },
   "BUG-075": {
    "status": "fixed",
    "title": "display:table без явной ширины растягивается до контейнера вместо shrink-to-fit",
    "component": "layout",
-   "date": "2026-06-08"
+   "date": "2026-06-08",
+   "debtor": false
   },
   "BUG-076": {
    "status": "fixed",
    "title": "box-shadow blur spread ~1% deviation — TEST-15: 1.06%",
    "component": "paint",
-   "date": "2026-06-11"
+   "date": "2026-06-11",
+   "debtor": false
   },
   "BUG-077": {
    "status": "fixed",
    "title": "femtovg-бэкенд алиасинг при downscale — area avg ресемплинг",
    "component": "image/paint",
-   "date": "2026-06-09"
+   "date": "2026-06-09",
+   "debtor": false
   },
   "BUG-078": {
    "status": "fixed",
    "title": "object-fit contain/cover image quality ~13% deviation — TEST-19: 12.68%",
    "component": "layout/paint",
-   "date": "2026-06-11"
+   "date": "2026-06-11",
+   "debtor": false
   },
   "BUG-079": {
    "status": "fixed",
    "title": "quirks-bgcolor: hashless-hex quirk применялся к шортхенду `background:`",
    "component": "layout",
-   "date": "2026-06-14"
+   "date": "2026-06-14",
+   "debtor": false
   },
   "BUG-080": {
    "status": "fixed",
    "title": "border-style: residual dotted/dashed 3% deviation — TEST-21: 3.02%",
    "component": "paint",
-   "date": "2026-06-11"
+   "date": "2026-06-11",
+   "debtor": false
   },
   "BUG-081": {
    "status": "fixed",
    "title": "vertical-align: sub-pixel 0.99% deviation",
    "component": "layout",
-   "date": "2026-06-11"
+   "date": "2026-06-11",
+   "debtor": false
   },
   "BUG-082": {
    "status": "fixed",
    "title": "css-filter 33% deviation — TEST-30: 33.07%",
    "component": "paint",
-   "date": "2026-06-11"
+   "date": "2026-06-11",
+   "debtor": false
   },
   "BUG-083": {
    "status": "fixed",
    "title": "list-markers residual 3.4% deviation",
    "component": "layout/paint",
-   "date": "2026-06-11"
+   "date": "2026-06-11",
+   "debtor": false
   },
   "BUG-084": {
    "status": "fixed",
    "title": "border-radius residual 1.5% deviation — TEST-36: 1.50%",
    "component": "paint",
-   "date": "2026-06-12"
+   "date": "2026-06-12",
+   "debtor": false
   },
   "BUG-085": {
    "status": "open",
    "title": "linear/radial gradient — TEST-39: 12.05%→1.62% (femtovg_stops: repeating-градиенты повторяются + hard-stop хвост дозаполняется до 1.0). Остаток DEBTOR: 256-текс…",
    "component": "paint",
-   "date": null
+   "date": null,
+   "debtor": true
   },
   "BUG-086": {
    "status": "fixed",
    "title": "conic-gradient: triangle-fan не обрезался по box + игнорировал repeating",
    "component": "paint",
-   "date": "2026-06-09"
+   "date": "2026-06-09",
+   "debtor": false
   },
   "BUG-087": {
    "status": "fixed",
    "title": "gradient layers ignored background-size/position/repeat — TEST-45: 17.29%",
    "component": "paint",
-   "date": "2026-06-09"
+   "date": "2026-06-09",
+   "debtor": false
   },
   "BUG-088": {
    "status": "fixed",
    "title": "individual CSS transform properties (translate/rotate/scale) — TEST-46: 4.63%",
    "component": "css-parser/layout",
-   "date": "2026-06-12"
+   "date": "2026-06-12",
+   "debtor": false
   },
   "BUG-089": {
    "status": "fixed",
    "title": "SVG basic shapes not rendered (rect/circle/ellipse/line) — TEST-47: 21.71%",
    "component": "paint",
-   "date": "2026-06-09"
+   "date": "2026-06-09",
+   "debtor": false
   },
   "BUG-090": {
    "status": "fixed",
    "title": "-webkit-line-clamp multi-line truncation — TEST-48: PASS 0.26%",
    "component": "layout",
-   "date": "2026-06-12"
+   "date": "2026-06-12",
+   "debtor": false
   },
   "BUG-091": {
    "status": "fixed",
    "title": "background-blend-mode: bottom layer wrapped in PushBlendMode — TEST-49: 30.62%",
    "component": "paint",
-   "date": "2026-06-08"
+   "date": "2026-06-08",
+   "debtor": false
   },
   "BUG-092": {
    "status": "fixed",
    "title": "CSS variables var() in cascade — TEST-50: PASS 0.0001%",
    "component": "css-parser/layout",
-   "date": "2026-06-12"
+   "date": "2026-06-12",
+   "debtor": false
   },
   "BUG-093": {
    "status": "fixed",
    "title": "scrollbar rendering TEST-51: threshold calibration замаскировала реальный дефект BUG-123",
    "component": "paint",
-   "date": "2026-06-11"
+   "date": "2026-06-11",
+   "debtor": false
   },
   "BUG-094": {
    "status": "fixed",
    "title": "text-shadow with blur ~7% deviation — TEST-52: 6.82%",
    "component": "paint",
-   "date": "2026-06-11"
+   "date": "2026-06-11",
+   "debtor": false
   },
   "BUG-095": {
    "status": "fixed",
    "title": "background-origin/background-clip positioning ~32% deviation — TEST-53: 31.78%",
    "component": "layout/paint",
-   "date": "2026-06-09"
+   "date": "2026-06-09",
+   "debtor": false
   },
   "BUG-096": {
    "status": "fixed",
    "title": "SVG `<path>` stroke tessellation not rendered — TEST-54: 9.50%",
    "component": "paint/layout",
-   "date": "2026-06-09"
+   "date": "2026-06-09",
+   "debtor": false
   },
   "BUG-097": {
    "status": "fixed",
    "title": "`<video>` placeholder: posterless video painted grey instead of transparent",
    "component": "layout/paint",
-   "date": "2026-06-09"
+   "date": "2026-06-09",
+   "debtor": false
   },
   "BUG-098": {
    "status": "fixed",
    "title": "mix-blend-mode: ~14% deviation — PA-3: offscreen CPU mix_blend_rgba",
    "component": "paint",
-   "date": "2026-06-11"
+   "date": "2026-06-11",
+   "debtor": false
   },
   "BUG-099": {
    "status": "open",
    "title": "`<canvas>` 2D context not implemented — TEST-57: 28.66%; Phase 2",
    "component": "js/paint",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-100": {
    "status": "open",
    "title": "::first-letter drop-cap / ::first-line not implemented — TEST-58: 6.04%",
    "component": "layout",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-101": {
    "status": "open",
    "title": "image-set() DPR selection / cross-fade() not implemented — TEST-59: 27.63%",
    "component": "css-parser/paint",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-102": {
    "status": "fixed",
    "title": "SVG stroke-width/dasharray молча терялись в standards-mode (unitless user units) + join-шипы; TEST-60 11.51%→1.41%, TEST-54 5.58%→2.30%",
    "component": "paint",
-   "date": "2026-06-17"
+   "date": "2026-06-17",
+   "debtor": false
   },
   "BUG-103": {
    "status": "open",
    "title": "View Transitions API not implemented — TEST-61: 99.53%; Phase 2",
    "component": "js",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-104": {
    "status": "fixed",
    "title": "TEST-62 63.70%→2.32%: реальная причина — column flex-grow не распределял free space. `lay_out_flex` хардкодил `container_main=0`/`free_space=0` для column → `.r…",
    "component": "layout",
-   "date": "2026-06-19"
+   "date": "2026-06-19",
+   "debtor": true
   },
   "BUG-105": {
    "status": "open",
    "title": "CSS Masonry layout not implemented — TEST-63: 26.13%; Phase 2",
    "component": "layout",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-106": {
    "status": "fixed",
    "title": "TEST-64 table: missing UA heading defaults → h3 без размера и margin",
    "component": "layout",
-   "date": "2026-06-09"
+   "date": "2026-06-09",
+   "debtor": false
   },
   "BUG-107": {
    "status": "fixed",
    "title": "flex align-content: normal/stretch не распределял свободное пространство",
    "component": "layout",
-   "date": "2026-06-09"
+   "date": "2026-06-09",
+   "debtor": false
   },
   "BUG-108": {
    "status": "fixed",
    "title": "TEST-66 5.24%→1.08%: реальная причина — parent↔last-child bottom margin не коллапсил (CSS 2.1 §8.3.1), свотчи уезжали вниз +30px/секция. Остаток 1.08% — текст (…",
    "component": "layout",
-   "date": "2026-06-17"
+   "date": "2026-06-17",
+   "debtor": false
   },
   "BUG-109": {
    "status": "open",
    "title": "font-variation-settings: wght/wdth/slnt не передаются растеризатору — TEST-68: 3.21%",
    "component": "css-parser/font",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-110": {
    "status": "fixed",
    "title": "object-fit: SVG viewBox scaling ~8% deviation — TEST-70: 8.03%",
    "component": "layout/paint",
-   "date": "2026-06-14"
+   "date": "2026-06-14",
+   "debtor": false
   },
   "BUG-111": {
    "status": "fixed",
    "title": "lumen-paint/shell не компилировались после мержа A-2 CSS Custom Highlight API",
    "component": "paint/shell",
-   "date": "2026-06-08"
+   "date": "2026-06-08",
+   "debtor": false
   },
   "BUG-112": {
    "status": "fixed",
    "title": "test_32_list_markers регрессия: P4 добавил 2 @counter-style списка",
    "component": "driver",
-   "date": "2026-06-08"
+   "date": "2026-06-08",
+   "debtor": false
   },
   "BUG-113": {
    "status": "fixed",
    "title": "TEST-53 row-2 drift ~24px: trailing cross_gap утекал в single-line flex",
    "component": "layout",
-   "date": "2026-06-09"
+   "date": "2026-06-09",
+   "debtor": false
   },
   "BUG-114": {
    "status": "open",
    "title": "`font` shorthand drops font-size/line-height — TEST-53 residual ~4px",
    "component": "css-parser",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-115": {
    "status": "open",
    "title": "percent `background-size` not supported — TEST-45 residual",
    "component": "css-parser",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-116": {
    "status": "fixed",
    "title": "auto table column widths: content-based sizing (CSS 2.1 §17.5.2)",
    "component": "layout",
-   "date": "2026-06-09"
+   "date": "2026-06-09",
+   "debtor": false
   },
   "BUG-117": {
    "status": "fixed",
    "title": "multi-column greedy assignment two bugs — TEST-33 16.14%",
    "component": "layout",
-   "date": "2026-06-09"
+   "date": "2026-06-09",
+   "debtor": false
   },
   "BUG-118": {
    "status": "fixed",
    "title": "snapshot_cpu reference PNGs outdated for 12 pages",
    "component": "test/snapshot",
-   "date": "2026-06-09"
+   "date": "2026-06-09",
+   "debtor": false
   },
   "BUG-119": {
    "status": "fixed",
    "title": "raw U+0001 byte в `<head>` 17 тест-страниц → content shifted 20px",
    "component": "test/html",
-   "date": "2026-06-10"
+   "date": "2026-06-10",
+   "debtor": false
   },
   "BUG-120": {
    "status": "fixed",
    "title": "C0 control chars render as 1-line text box instead of invisible",
    "component": "layout/text",
-   "date": "2026-06-10"
+   "date": "2026-06-10",
+   "debtor": false
   },
   "BUG-121": {
    "status": "fixed",
    "title": "snapshot_vs_edge gate red: wgpu vs femtovg бэкенды дают разный результат",
    "component": "test/driver",
-   "date": "2026-06-10"
+   "date": "2026-06-10",
+   "debtor": false
   },
   "BUG-122": {
    "status": "fixed",
    "title": "flaky compositor tests: wall-clock deadline зависел от планировщика ОС",
    "component": "test/paint",
-   "date": "2026-06-15"
+   "date": "2026-06-15",
+   "debtor": false
   },
   "BUG-123": {
    "status": "fixed",
    "title": "scroll container's own bg+border clipped by its own overflow scissor",
    "component": "paint",
-   "date": "2026-06-11"
+   "date": "2026-06-11",
+   "debtor": false
   },
   "BUG-124": {
    "status": "open",
    "title": "TEST-51 residual 1.09%: fractional layout Y coords vs Edge pixel snapping",
    "component": "layout/paint",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-125": {
    "status": "open",
    "title": "CSS Motion Path L1 (offset-path/offset-distance/offset-rotate) — TEST-76: 3.18%",
    "component": "layout/paint",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-126": {
    "status": "open",
    "title": "CSS Anchor Positioning L1 — placement фикснут (53.45% → 12.94%): position-area definite-size элементы прижимаются к якорю вместо растягивания на band (anchor.rs…",
    "component": "layout",
-   "date": null
+   "date": null,
+   "debtor": true
   },
   "BUG-127": {
    "status": "open",
    "title": "CSS Scroll-Driven Animations L1 (scroll-timeline/view-timeline) — TEST-78: 12.02%",
    "component": "layout/js",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-128": {
    "status": "open",
    "title": "text-underline TEST-79: 6.78% — font-parity issue (serif vs sans), кандидат в KNOWN_DEBTORS",
    "component": "font",
-   "date": null
+   "date": null,
+   "debtor": true
   },
   "BUG-129": {
    "status": "fixed",
    "title": "CSS Tables border-collapse: collapse — TEST-80 16.81%",
    "component": "layout",
-   "date": "2026-06-14"
+   "date": "2026-06-14",
+   "debtor": false
   },
   "BUG-130": {
    "status": "fixed",
    "title": "view-transition-name: TEST-81 32.47% — ложная причина, реальная = BUG-141",
    "component": "paint",
-   "date": "2026-06-13"
+   "date": "2026-06-13",
+   "debtor": false
   },
   "BUG-131": {
    "status": "fixed",
    "title": "INTERACTION TEST-100 (transform×overflow) 9.57%: overflow-клип закрывался до дочернего SC",
    "component": "paint",
-   "date": "2026-06-13"
+   "date": "2026-06-13",
+   "debtor": false
   },
   "BUG-132": {
    "status": "fixed",
    "title": "INTERACTION TEST-101 (border-radius×overflow) 4.04%: PushClipRoundedRect добавлена",
    "component": "paint",
-   "date": "2026-06-12"
+   "date": "2026-06-12",
+   "debtor": false
   },
   "BUG-133": {
    "status": "fixed",
    "title": "INTERACTION TEST-102 (opacity×z-index) 17.04%: per-draw alpha вместо offscreen",
    "component": "paint",
-   "date": "2026-06-12"
+   "date": "2026-06-12",
+   "debtor": false
   },
   "BUG-134": {
    "status": "fixed",
    "title": "INTERACTION TEST-103 (filter×transform): ложная регрессия — устаревший бинарь",
    "component": "paint",
-   "date": "2026-06-15"
+   "date": "2026-06-15",
+   "debtor": false
   },
   "BUG-135": {
    "status": "fixed",
    "title": "INTERACTION TEST-104 (mask×gradient×radius) 51.97% → 0.44% PASS (фикс BUG-183)",
    "component": "paint",
-   "date": "2026-06-17"
+   "date": "2026-06-17",
+   "debtor": false
   },
   "BUG-136": {
    "status": "fixed",
    "title": "INTERACTION TEST-105 (float/clear×margin) 4.84%: три дефекта float-раскладки",
    "component": "layout",
-   "date": "2026-06-13"
+   "date": "2026-06-13",
+   "debtor": false
   },
   "BUG-137": {
    "status": "fixed",
    "title": "INTERACTION TEST-106 (transform×z-index) 4.02%→PASS 0.02%",
    "component": "paint",
-   "date": "2026-06-12"
+   "date": "2026-06-12",
+   "debtor": false
   },
   "BUG-138": {
    "status": "fixed",
    "title": "INTERACTION TEST-107 (shadow×radius×overflow): box-shadow на скруглённом боксе — квадратный FillRect",
    "component": "paint",
-   "date": "2026-06-13"
+   "date": "2026-06-13",
+   "debtor": false
   },
   "BUG-139": {
    "status": "fixed",
    "title": "INTERACTION TEST-108 (вложенные transform) 4.62%: PopTransform эмитировался до дочерних SC",
    "component": "paint",
-   "date": "2026-06-12"
+   "date": "2026-06-12",
+   "debtor": false
   },
   "BUG-140": {
    "status": "fixed",
    "title": "INTERACTION TEST-109 (clip-path×transform×radius) 14.10%→4.80%",
    "component": "paint",
-   "date": "2026-06-13"
+   "date": "2026-06-13",
+   "debtor": false
   },
   "BUG-141": {
    "status": "fixed",
    "title": "TEST-71 17.83%: flex align-items:center в non-wrap контейнере игнорировал cross size",
    "component": "layout",
-   "date": "2026-06-13"
+   "date": "2026-06-13",
+   "debtor": false
   },
   "BUG-142": {
    "status": "fixed",
    "title": ":host / ::slotted rendering diverges — TEST-72: 11.24% → 0.00%",
    "component": "paint/shadow-dom",
-   "date": "2026-06-17"
+   "date": "2026-06-17",
+   "debtor": false
   },
   "BUG-143": {
    "status": "open",
    "title": "masonry-auto-flow placement diverges — TEST-75: 16.97%",
    "component": "layout",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-144": {
    "status": "open",
    "title": "CSS filter/backdrop-filter — TEST-30: row-flip 16.42%→10.48% (FLIP_Y) + gradient hard-stop row 2 (BUG-085) 10.48%→7.56% + backdrop colour-matrix/combo больше не…",
    "component": "paint",
-   "date": null
+   "date": null,
+   "debtor": true
   },
   "BUG-145": {
    "status": "fixed",
    "title": "РЕГРЕССИЯ: offscreen filter layer сайзился по bounds → viewport stretch",
    "component": "paint",
-   "date": "2026-06-12"
+   "date": "2026-06-12",
+   "debtor": false
   },
   "BUG-146": {
    "status": "fixed",
    "title": "TEST-15 box-shadow регрессия 1.06%→6.58%: blur-FBO без FLIP_Y",
    "component": "paint",
-   "date": "2026-06-12"
+   "date": "2026-06-12",
+   "debtor": false
   },
   "BUG-147": {
    "status": "fixed",
    "title": "clippy -D warnings fails: redundant use, dead code, unnecessary cast",
    "component": "shell",
-   "date": "2026-06-12"
+   "date": "2026-06-12",
+   "debtor": false
   },
   "BUG-148": {
    "status": "fixed",
    "title": "test hit_page_range_field fails: W-2b добавил строку Scale, row сдвинулся",
    "component": "shell",
-   "date": "2026-06-12"
+   "date": "2026-06-12",
+   "debtor": false
   },
   "BUG-149": {
    "status": "fixed",
    "title": "snapshot_cpu красный: эталоны устарели после PA-5 dashed/dotted бордеров",
    "component": "test/snapshot",
-   "date": "2026-06-13"
+   "date": "2026-06-13",
+   "debtor": false
   },
   "BUG-151": {
    "status": "fixed",
    "title": "Parent-first-child margin collapse не применяется (CSS 2.1 §8.3.1)",
    "component": "layout",
-   "date": "2026-06-13"
+   "date": "2026-06-13",
+   "debtor": false
   },
   "BUG-152": {
    "status": "fixed",
    "title": "anon_style клонирует float_side/clear/position родителя → анонимный бокс флоатится",
    "component": "layout",
-   "date": "2026-06-13"
+   "date": "2026-06-13",
+   "debtor": false
   },
   "BUG-153": {
    "status": "fixed",
    "title": "CPU-эталоны протухли: регрессия от BUG-151 + 1024-byte сдвиг",
    "component": "test",
-   "date": "2026-06-14"
+   "date": "2026-06-14",
+   "debtor": false
   },
   "BUG-154": {
    "status": "fixed",
    "title": "mix_polar путает индекс hue для LCH/Oklch (hue на индексе 2, не 0)",
    "component": "layout",
-   "date": "2026-06-15"
+   "date": "2026-06-15",
+   "debtor": false
   },
   "BUG-155": {
    "status": "fixed",
    "title": "perf_observer_lcp_entry: index out of bounds — element_nid=42 за пределами тест-дока",
    "component": "js",
-   "date": "2026-06-15"
+   "date": "2026-06-15",
+   "debtor": false
   },
   "BUG-156": {
    "status": "fixed",
    "title": "ЛОЖНАЯ РЕГРЕССИЯ TEST-27: устаревший lumen.exe в прогоне 06-15",
    "component": "paint/layout",
-   "date": "2026-06-15"
+   "date": "2026-06-15",
+   "debtor": false
   },
   "BUG-157": {
    "status": "fixed",
    "title": "ЛОЖНАЯ РЕГРЕССИЯ TEST-40: та же причина — устаревший lumen.exe",
    "component": "paint",
-   "date": "2026-06-15"
+   "date": "2026-06-15",
+   "debtor": false
   },
   "BUG-158": {
    "status": "fixed",
    "title": "карточки новостей lenta.ru налезают друг на друга: `flex:1` (flex-basis:0) item в column-flex схлопывался в height=0 — нет automatic minimum size (§4.5)",
    "component": "layout",
-   "date": "2026-06-15"
+   "date": "2026-06-15",
+   "debtor": false
   },
   "BUG-159": {
    "status": "fixed",
    "title": "z-indexed потомок плоского overflow:auto scroll-контейнера сбегал из scroll-слоя (рисовался после PopScrollLayer) → fill_buckets переустанавливает scroll-слой д…",
    "component": "paint",
-   "date": "2026-06-15"
+   "date": "2026-06-15",
+   "debtor": false
   },
   "BUG-160": {
    "status": "fixed",
    "title": "WOFF2-шрифты не декодируются («unexpected end of font data»), спасает только woff-fallback — затрагивает большинство сайтов",
    "component": "font",
-   "date": "2026-06-15"
+   "date": "2026-06-15",
+   "debtor": false
   },
   "BUG-161": {
    "status": "fixed",
    "title": "HTTP/2 HPACK «dynamic table size update exceeds negotiated max» → ya.ru не грузится",
    "component": "network",
-   "date": "2026-06-15"
+   "date": "2026-06-15",
+   "debtor": false
   },
   "BUG-162": {
    "status": "fixed",
    "title": "детектор кодировки выдаёт ibm866 на чистом ASCII (example.com) вместо UTF-8",
    "component": "encoding",
-   "date": "2026-06-15"
+   "date": "2026-06-15",
+   "debtor": false
   },
   "BUG-163": {
    "status": "fixed",
    "title": "lazy `<img>` на lenta.ru не рисовались: `LazyImageSlot` всегда красил серый placeholder даже после загрузки картинки + above-the-fold lazy-картинки не дозагружа…",
    "component": "shell/paint",
-   "date": "2026-06-15"
+   "date": "2026-06-15",
+   "debtor": false
   },
   "BUG-164": {
    "status": "fixed",
    "title": "внешние `<script src>` не скачиваются и не исполняются (collect_inline_scripts берёт только инлайны) → JS бандлы (lenta.ru owlBundle.js и т.д.) не работают, пер…",
    "component": "shell/js",
-   "date": "2026-06-15"
+   "date": "2026-06-15",
+   "debtor": false
   },
   "BUG-165": {
    "status": "fixed",
    "title": "flex `align-content` сдвигал строку, не двигая поддерево item-ов: вложенный контент оставался на месте → items вылезали из контейнеров (TEST-65: 16.40%)",
    "component": "layout",
-   "date": "2026-06-15"
+   "date": "2026-06-15",
+   "debtor": false
   },
   "BUG-167": {
    "status": "fixed",
    "title": "вход/выход Fullscreen API не пересчитывал вьюпорт: окно растягивалось на весь десктоп, но страница оставалась в исходном вьюпорте (~1024×720). Корень: `set_full…",
    "component": "shell",
-   "date": "2026-06-19"
+   "date": "2026-06-19",
+   "debtor": false
   },
   "BUG-169": {
    "status": "fixed",
    "title": "Linux: pre-existing clippy/test-сбои в `#[cfg(linux/macos)]` platform-коде (не ловились на Windows-dev). network/ctap2: private `descriptor_is_fido` в тестах (E…",
    "component": "network+shell",
-   "date": "2026-06-16"
+   "date": "2026-06-16",
+   "debtor": false
   },
   "BUG-170": {
    "status": "fixed",
    "title": "`@font-face` web-шрифты блокируют первый paint: `load_font_faces` качает все woff2 до layout (FOUT не реализован). Надо `font-display: swap` — рисовать фолбэком…",
    "component": "shell+font",
-   "date": "2026-06-16"
+   "date": "2026-06-16",
+   "debtor": false
   },
   "BUG-171": {
    "status": "fixed",
    "title": "**Этап 1 ✅** (префетч-кэш `prefetch::PREFETCH_CACHE`): внешние скрипты + linked CSS прогреваются в фоне во время streaming, сеть снята с UI-потока. **Этап 2 ✅**…",
    "component": "shell",
-   "date": "2026-06-19"
+   "date": "2026-06-19",
+   "debtor": false
   },
   "BUG-172": {
    "status": "fixed",
    "title": "Картинки качались дважды на streaming-страницах: PH1-2c `spawn_stream_image_loads` грузил прогрессивно, финальный `fetch_and_decode_images` качал их же заново.…",
    "component": "shell",
-   "date": "2026-06-19"
+   "date": "2026-06-19",
+   "debtor": false
   },
   "BUG-173": {
    "status": "open",
    "title": "Остаток SVG `<path>` vs Edge после BUG-102: triangle-soup AA-швы (DrawSvgPath), stroke-edge AA, self-intersecting fill (ear_clip, незалитая bowtie), dash-on-cur…",
    "component": "paint",
-   "date": null
+   "date": null,
+   "debtor": true
   },
   "BUG-174": {
    "status": "fixed",
    "title": "In-flow (inline-block) SVG `<path>` рисовался в raw user-координатах `d` без смещения на origin своего SVG-вьюпорта — все пути из разных SVG-ячеек схлопывались…",
    "component": "layout",
-   "date": "2026-06-17"
+   "date": "2026-06-17",
+   "debtor": false
   },
   "BUG-175": {
    "status": "fixed",
    "title": "`border-radius` + `border`: рамка рисовалась 4 axis-aligned прямоугольниками без учёта радиуса → квадратные углы вокруг скруглённого фона (видно на пилюлях/круг…",
    "component": "paint",
-   "date": "2026-06-17"
+   "date": "2026-06-17",
+   "debtor": false
   },
   "BUG-176": {
    "status": "open",
    "title": "TEST-36 остаток 1.11% после BUG-175: edge-AA вдоль скруглённых границ (sub-pixel snapping vs Edge) + кубическая kappa-аппроксимация эллиптических углов (row 6,…",
    "component": "paint",
-   "date": null
+   "date": null,
+   "debtor": true
   },
   "BUG-177": {
    "status": "fixed",
    "title": "`height` на table-cell трактовался как фиксированный, а не минимальный (CSS 2.1 §17.5.3): ячейка с `height:64px` + content выше (52×32 блок + margin 16px → 64px…",
    "component": "layout",
-   "date": "2026-06-17"
+   "date": "2026-06-17",
+   "debtor": false
   },
   "BUG-178": {
    "status": "fixed",
    "title": "shrink-to-fit auto-width контейнера с несколькими `float`-детьми считал ширину как max ребёнка, а не сумму (CSS 2.1 §9.5.1 — флоаты стоят бок о бок). Float-обёр…",
    "component": "layout",
-   "date": "2026-06-17"
+   "date": "2026-06-17",
+   "debtor": false
   },
   "BUG-179": {
    "status": "fixed",
    "title": "flex-item с `flex-basis:auto` и без явной `width` использовал ширину из предварительного прохода (`item.rect.width` = ширина контейнера, т.к. блоки растягиваютс…",
    "component": "layout",
-   "date": "2026-06-17"
+   "date": "2026-06-17",
+   "debtor": false
   },
   "BUG-180": {
    "status": "fixed",
    "title": "TEST-18 21.21%→2.11%: блок-обёртка `<img>` не учитывала descent line-box baseline-выровненной inline-картинки («image bottom gap», CSS 2.1 §10.8) — каждый ряд к…",
    "component": "layout",
-   "date": "2026-06-17"
+   "date": "2026-06-17",
+   "debtor": true
   },
   "BUG-181": {
    "status": "fixed",
    "title": "`object-fit` basic — расследовано: геометрия всех 5 режимов (fill/contain/cover/none/scale-down) + object-position верна (средние RGB ячеек совпадают с Edge ±0.…",
    "component": "layout/paint",
-   "date": "2026-06-20"
+   "date": "2026-06-20",
+   "debtor": true
   },
   "BUG-182": {
    "status": "open",
    "title": "`vertical-align` inline y-offset deviation — TEST-24: 0.98%",
    "component": "layout/paint",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-183": {
    "status": "fixed",
    "title": "`mask-image` gradient mask not implemented — TEST-26: 17.74% → 5.02% (остаток BUG-218 mask-mode:luminance)",
    "component": "paint",
-   "date": "2026-06-17"
+   "date": "2026-06-17",
+   "debtor": false
   },
   "BUG-184": {
    "status": "open",
    "title": "`clip-path` deviation — TEST-31: 0.59%",
    "component": "paint",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-185": {
-   "status": "open",
-   "title": "list `::marker` geometry deviation — TEST-32: 3.75%",
+   "status": "fixed",
+   "title": "list `::marker` geometry — TEST-32 3.75% (KNOWN_DEBTORS BUG-128). Две геометрии: (1) `::marker { content: \"→ \" }` на `list-style-type:disc` рисовал диск вместо…",
    "component": "layout/paint",
-   "date": null
+   "date": "2026-06-21",
+   "debtor": true
   },
   "BUG-186": {
    "status": "fixed",
    "title": "`multi-column` column fragmentation — TEST-33: 14.89% → 0.12% PASS",
    "component": "layout",
-   "date": "2026-06-18"
+   "date": "2026-06-18",
+   "debtor": false
   },
   "BUG-187": {
-   "status": "open",
-   "title": "form controls static rendering deviation — TEST-34: 4.78%",
-   "component": "paint",
-   "date": null
+   "status": "fixed",
+   "title": "form controls static rendering — TEST-34: 4.78% → 3.02% (DEBTOR, KNOWN_DEBTORS BUG-128). Закрыты все form-control-специфичные дефекты: inline-block-поток, radio…",
+   "component": "layout/paint",
+   "date": "2026-06-20",
+   "debtor": true
   },
   "BUG-188": {
-   "status": "open",
-   "title": "individual `translate`/`rotate`/`scale` transforms deviation — TEST-46: 4.63%",
+   "status": "fixed",
+   "title": "individual `translate`/`rotate`/`scale` transforms — TEST-46: 4.63%→1.96% (KNOWN_DEBTORS BUG-128). Транспозиция спек-корректна: все юнит-боксы (translate/rotate…",
    "component": "layout/paint",
-   "date": null
+   "date": "2026-06-21",
+   "debtor": true
   },
   "BUG-189": {
-   "status": "open",
-   "title": "SVG basic shapes deviation — TEST-47: 3.71%",
+   "status": "fixed",
+   "title": "SVG basic shapes — TEST-47: 3.71% → 2.27% (KNOWN_DEBTORS BUG-226). Диагональный `<line>` рисовался как `FillRect` по всему bbox (сплошной оранжевый прямоугольни…",
    "component": "paint",
-   "date": null
+   "date": "2026-06-21",
+   "debtor": true
   },
   "BUG-190": {
    "status": "open",
    "title": "`background-blend-mode` deviation — TEST-49: 2.39%",
    "component": "paint",
-   "date": null
+   "date": null,
+   "debtor": false
+  },
+  "BUG-226": {
+   "status": "fixed",
+   "title": "SVG stroke на rect/circle/ellipse центрирован на кромке (½ наружу + ½ внутрь, SVG 2 §13.7) — TEST-47: 2.27% → 1.20% (KNOWN_DEBTORS BUG-176). Раньше stroke рисов…",
+   "component": "paint",
+   "date": "2026-06-21",
+   "debtor": true
   },
   "BUG-191": {
-   "status": "open",
-   "title": "`text-shadow` blur PushFilter deviation — TEST-52: 5.83%",
+   "status": "fixed",
+   "title": "TEST-52 5.83%→4.25% DEBTOR: blur-пайплайн корректен — sigma=radius/2, GPU GaussianBlur на full-RT слое (halo не клипуется), multi-shadow и цветные glow совпадаю…",
    "component": "paint",
-   "date": null
+   "date": "2026-06-20",
+   "debtor": true
   },
   "BUG-192": {
    "status": "open",
    "title": "`<video>` placeholder deviation — TEST-55: 0.89%",
    "component": "paint",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-193": {
    "status": "fixed",
    "title": "TEST-64 13.89%→8.99%: `display:table`-обёртка не схлопывала margin с соседним блоком (CSS 2.1 §8.3.1) — bottom-margin таблицы + top-margin `<h3>` складывались (…",
    "component": "layout",
-   "date": "2026-06-17"
+   "date": "2026-06-17",
+   "debtor": true
   },
   "BUG-194": {
    "status": "open",
    "title": "Flexbox `align-content` multi-line deviation — TEST-65: 1.33%",
    "component": "layout",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-195": {
    "status": "open",
    "title": "`::selection` color override deviation — TEST-66: 1.07%",
    "component": "paint",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-196": {
    "status": "fixed",
    "title": "`::before`/`::after` с `content:attr()` не генерировались на flex/grid-контейнерах — TEST-67: 16.41% → 1.36% (KNOWN_DEBTORS, остаток font-parity)",
    "component": "css-parser/layout",
-   "date": "2026-06-18"
+   "date": "2026-06-18",
+   "debtor": true
   },
   "BUG-197": {
-   "status": "open",
-   "title": "CSS Table `border-spacing` asymmetric deviation — TEST-69: 3.61%",
+   "status": "fixed",
+   "title": "TEST-69 3.61%→0.00%: причина не border-spacing (геометрия корректна), а отсутствие UA-дефолта `td,th { padding:1px }` (HTML Rendering §15.3.8). `apply_ua_table_…",
    "component": "layout",
-   "date": null
+   "date": "2026-06-21",
+   "debtor": false
   },
   "BUG-198": {
    "status": "fixed",
    "title": "inline `<svg>` ошибочно применял CSS `object-fit`/`object-position` к viewBox — Edge их игнорирует и фитит viewBox через `preserveAspectRatio` (SVG §7.8). Замен…",
    "component": "layout/paint",
-   "date": "2026-06-20"
+   "date": "2026-06-20",
+   "debtor": true
   },
   "BUG-199": {
    "status": "open",
-   "title": "`@starting-style` static rendering deviation — TEST-71: 7.03%",
+   "title": "`@starting-style` — Lumen рендерит спек-корректное settled-состояние (обе коробки 200×200, opacity 1 после 0.4s entry-перехода); display-list геометрия/цвета ид…",
    "component": "layout",
-   "date": null
+   "date": null,
+   "debtor": true
   },
   "BUG-200": {
    "status": "fixed",
    "title": "TEST-80 collapse varied-width borders: thin cell's bg erased thick neighbour's shared border (ordered path emits cell bg+border interleaved in DOM order). Fix:…",
    "component": "paint",
-   "date": "2026-06-19"
+   "date": "2026-06-19",
+   "debtor": true
   },
   "BUG-201": {
-   "status": "open",
-   "title": "SVG `<use>` cloning deviation — TEST-82: 5.00%",
-   "component": "paint",
-   "date": null
+   "status": "fixed",
+   "title": "SVG `<use>` TEST-82 5.00%→2.38% DEBTOR: три дефекта — (1) `<polygon>`/`<polyline>` без ветки рендера (symbol-звёзды не рисовались); (2) HTML5 не самозакрывает `…",
+   "component": "layout",
+   "date": "2026-06-20",
+   "debtor": true
   },
   "BUG-202": {
    "status": "fixed",
    "title": "TEST-83 14.02%→7.88%: реальная причина не scroll-behavior, а text-only inline-block без shrink-to-fit. `preferred_inline_block_width` мерил только дочерние бокс…",
    "component": "layout",
-   "date": "2026-06-17"
+   "date": "2026-06-17",
+   "debtor": true
   },
   "BUG-203": {
-   "status": "open",
-   "title": "`text-decoration-skip-ink` underline gaps deviation — TEST-84: 5.88%",
+   "status": "fixed",
+   "title": "`text-decoration-skip-ink` gap geometry — TEST-84: 8.20% → 6.02% (DEBTOR BUG-128, font-parity)",
    "component": "paint",
-   "date": null
+   "date": "2026-06-20",
+   "debtor": true
   },
   "BUG-204": {
    "status": "open",
    "title": "`anchor-name` basic stub deviation — TEST-85: 1.98%",
    "component": "layout",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-205": {
    "status": "open",
    "title": "`position-anchor` fallback stub deviation — TEST-86: 2.12%",
    "component": "layout",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-206": {
    "status": "open",
    "title": "`inset-area: none` stub deviation — TEST-87: 1.98%",
    "component": "layout",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-207": {
    "status": "open",
    "title": "`anchor-name` nested stub deviation — TEST-88: 1.98%",
    "component": "layout",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-208": {
    "status": "open",
    "title": "multiple `anchor-name` stub deviation — TEST-89: 1.98%",
    "component": "layout",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-209": {
    "status": "open",
    "title": "AVIF decoder not implemented — TEST-90: 2.75%",
    "component": "image",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-210": {
    "status": "fixed",
    "title": "CSS system color keywords resolved to wrong values — `system_color()` light-scheme значения приведены к Edge (Highlight #0078d7, LinkText/VisitedText/ActiveText…",
    "component": "layout",
-   "date": "2026-06-18"
+   "date": "2026-06-18",
+   "debtor": false
   },
   "BUG-211": {
-   "status": "open",
-   "title": "`field-sizing: content` not implemented — TEST-93: 4.11%",
+   "status": "fixed",
+   "title": "`field-sizing: content` — layout уже работал; контент-боксы были невидимы, т.к. `appearance: none` стрипал авторский border/background ПОСЛЕ каскада (`apply_ua_…",
    "component": "layout",
-   "date": null
+   "date": "2026-06-21",
+   "debtor": true
   },
   "BUG-212": {
-   "status": "open",
-   "title": "`font-size-adjust` not implemented — TEST-95: 3.39%",
-   "component": "font/layout",
-   "date": null
+   "status": "fixed",
+   "title": "TEST-95 3.39%→2.86%: font-size-adjust масштабирование было корректно; реальный дефект — absolute `line-height:100px` (ratio-encoded) схлопывался при пост-каскад…",
+   "component": "layout",
+   "date": "2026-06-21",
+   "debtor": true
   },
   "BUG-213": {
    "status": "open",
    "title": "`counter-set` order deviation — TEST-97: 2.78%",
    "component": "css-parser/layout",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-214": {
    "status": "open",
    "title": "`accent-color` tint not implemented — TEST-110: 2.47%",
    "component": "paint",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-215": {
    "status": "open",
    "title": "`shape-outside: path()` not implemented — TEST-113: 1.41%",
    "component": "layout",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-216": {
    "status": "open",
    "title": "CSS `quotes` + `open-quote`/`close-quote` deviation — TEST-117: 2.28%",
    "component": "css-parser/layout",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-217": {
    "status": "open",
    "title": "`prefers-contrast`/`prefers-reduced-data` media queries not matched — TEST-120: 3.26%",
    "component": "css-parser",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-218": {
    "status": "fixed",
    "title": "`mask-mode: luminance` not parsed/applied — TEST-26 luma-cell остаток 5.02% (P4); `emit_push_mask` bakes `luminance(rgb)·alpha` в stop alpha",
    "component": "css-parser/paint",
-   "date": "2026-06-19"
+   "date": "2026-06-19",
+   "debtor": false
   },
   "BUG-219": {
    "status": "open",
    "title": "image downscale resampling pixel-parity vs Edge — TEST-18 остаток 2.11% (тонкий AA по всем фото после фикса BUG-180) → KNOWN_DEBTORS",
    "component": "image/paint",
-   "date": null
+   "date": null,
+   "debtor": true
   },
   "BUG-220": {
    "status": "open",
    "title": "scroll-контейнер в ordered (stacking-context) пути теряет scrollbar: `box_layer_ops` эмитит `PushScrollLayer`/`PopScrollLayer`, но не `DrawScrollbar` (есть толь…",
    "component": "paint",
-   "date": null
+   "date": null,
+   "debtor": false
   },
   "BUG-221": {
    "status": "fixed",
    "title": "CPU-бэкенд снимка (`render_to_image_cpu`, cpu_raster.rs) доведён до паритета с femtovg: border-radius (TEST-36 60.60%→0.47% — клампинг радиусов FillRoundedRect)…",
    "component": "paint",
-   "date": "2026-06-20"
+   "date": "2026-06-20",
+   "debtor": false
   },
   "BUG-222": {
    "status": "fixed",
    "title": "WASM-реестр (`wasm::REGISTRY`) не очищается при разрушении JS-контекста: «утёкший» `Persistent` функции-импорта роняет QuickJS на `list_empty(&rt->gc_obj_list)`…",
    "component": "js/shell",
-   "date": "2026-06-19"
+   "date": "2026-06-19",
+   "debtor": false
   },
   "BUG-223": {
    "status": "fixed",
    "title": "`lumen-network-service` не компилируется (E0004): `match` в `network_service.rs:51` не покрывал таб-варианты `IpcRequest::{CreateTab,CloseTab,NavigateTab,Screen…",
    "component": "network/ipc",
-   "date": "2026-06-20"
+   "date": "2026-06-20",
+   "debtor": false
   },
   "BUG-224": {
    "status": "fixed",
    "title": "НЕ регрессия движка: `test_33_multi_column` хранил устаревший ground-truth (660x88, atomic-раскладка до BUG-186). После BUG-186 (фрагментация колонок, TEST-33 1…",
    "component": "layout",
-   "date": "2026-06-20"
+   "date": "2026-06-20",
+   "debtor": false
+  },
+  "BUG-225": {
+   "status": "open",
+   "title": "`appearance: none` подавляет value/placeholder-текст у text-input'ов: `emit_form_control_indicator` (display_list.rs:4207) делает ранний `return` при `Appearanc…",
+   "component": "paint",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-227": {
+   "status": "fixed",
+   "title": "`color_management::tests::detects_p3_from_description` и `detects_rec2020_from_description` красные на main (paint/color_management.rs:62/84): `detect_color_spa…",
+   "component": "paint",
+   "date": "2026-06-21",
+   "debtor": false
+  },
+  "BUG-229": {
+   "status": "fixed",
+   "title": "PNG `iCCP` распаковывался сырым `DeflateDecoder` вместо `ZlibDecoder` — zlib-обёртка профиля (RFC 1950) ломала инфляцию → профиль тихо терялся → ни один PNG с I…",
+   "component": "image",
+   "date": "2026-06-21",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -1986,16 +2235,14 @@
    "BUG-128",
    "BUG-160"
   ],
-  "font/layout": [
-   "BUG-212"
-  ],
   "html-parser": [
    "BUG-021"
   ],
   "image": [
    "BUG-014",
    "BUG-069",
-   "BUG-209"
+   "BUG-209",
+   "BUG-229"
   ],
   "image/paint": [
    "BUG-077",
@@ -2069,6 +2316,7 @@
    "BUG-194",
    "BUG-197",
    "BUG-199",
+   "BUG-201",
    "BUG-202",
    "BUG-204",
    "BUG-205",
@@ -2077,6 +2325,7 @@
    "BUG-208",
    "BUG-210",
    "BUG-211",
+   "BUG-212",
    "BUG-215",
    "BUG-224"
   ],
@@ -2098,6 +2347,7 @@
    "BUG-181",
    "BUG-182",
    "BUG-185",
+   "BUG-187",
    "BUG-188",
    "BUG-198"
   ],
@@ -2160,17 +2410,18 @@
    "BUG-176",
    "BUG-183",
    "BUG-184",
-   "BUG-187",
    "BUG-189",
    "BUG-190",
    "BUG-191",
    "BUG-192",
    "BUG-195",
    "BUG-200",
-   "BUG-201",
    "BUG-203",
    "BUG-214",
-   "BUG-220"
+   "BUG-220",
+   "BUG-225",
+   "BUG-226",
+   "BUG-227"
   ],
   "paint/cpu_raster": [
    "BUG-052"
