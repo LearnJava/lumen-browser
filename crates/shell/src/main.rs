@@ -12539,6 +12539,17 @@ impl Lumen {
             return;
         }
 
+        // `switch-tab:<id>` — switch to an open tab by its stable id (§12.4,
+        // `@tabs` omnibox prefix). Resolve id → current index (tabs reorder).
+        if let Some(id_str) = value.trim().strip_prefix("switch-tab:") {
+            if let Ok(id) = id_str.parse::<usize>()
+                && let Some(idx) = self.tab_strip.tabs.iter().position(|t| t.id == id)
+            {
+                self.switch_tab(idx);
+            }
+            return;
+        }
+
         // `about:settings` — open the browser settings overlay (task D-7).
         if value.trim() == "about:settings" {
             let snap = self.settings_store.snapshot();
@@ -12674,6 +12685,49 @@ impl Lumen {
                             snippet: hit.snippet,
                             viewer_url,
                         });
+                    }
+                }
+            }
+            OmniboxPrefix::ReadLater => {
+                // @read-later <query> — FTS5-поиск по сохранённым страницам §12.3
+                // (до 7 результатов). Выбор подсказки → навигация на URL.
+                if !query.is_empty() && let Ok(hits) = self.read_later_store.search(query, 7) {
+                    for hit in hits {
+                        suggestions.push(OmniboxSuggestion::ReadLater {
+                            url: hit.entry.url,
+                            title: hit.entry.title,
+                            snippet: hit.snippet,
+                        });
+                    }
+                }
+            }
+            OmniboxPrefix::Tabs => {
+                // @tabs <query> — подстрочный поиск по открытым вкладкам §12.4
+                // (заголовок + URL), case-insensitive. Пустой запрос → все
+                // вкладки. Выбор подсказки → переключение по стабильному id.
+                let needle = query.to_lowercase();
+                let active = self.tab_strip.active;
+                for (idx, tab) in self.tab_strip.tabs.iter().enumerate() {
+                    let url = if idx == active {
+                        self.source.url_str().unwrap_or("").to_owned()
+                    } else {
+                        self.bg_tabs
+                            .get(&tab.id)
+                            .and_then(|s| s.source.url_str().map(str::to_owned))
+                            .unwrap_or_default()
+                    };
+                    if needle.is_empty()
+                        || tab.title.to_lowercase().contains(&needle)
+                        || url.to_lowercase().contains(&needle)
+                    {
+                        suggestions.push(OmniboxSuggestion::Tab {
+                            title: tab.title.clone(),
+                            url,
+                            switch_value: format!("switch-tab:{}", tab.id),
+                        });
+                    }
+                    if suggestions.len() >= 8 {
+                        break;
                     }
                 }
             }

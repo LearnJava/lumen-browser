@@ -11,8 +11,9 @@
 //! перемещают выделение; Enter коммитит выделенную строку или raw input.
 //!
 //! `@history <query>` — FTS-поиск по истории; `@notes <query>` — поиск по
-//! пользовательским заметкам (§12.2); без префикса — prefix-match по
-//! search_history + FTS по умолчанию.
+//! пользовательским заметкам (§12.2); `@read-later <query>` — поиск по списку
+//! «прочитать позже» (§12.3); `@tabs <query>` — поиск по открытым вкладкам
+//! (§12.4); без префикса — prefix-match по search_history + FTS по умолчанию.
 
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{DisplayCommand, DisplayList};
@@ -58,6 +59,13 @@ pub enum OmniboxPrefix {
     History,
     /// `@notes <query>` — поиск по пользовательским заметкам (§12.2).
     Notes,
+    /// `@read-later <query>` — поиск по сохранённым «прочитать позже» (§12.3).
+    ///
+    /// Поиск во время ввода; commit без выделения подсказки сохраняет ввод
+    /// как URL (см. `omnibox::resolve` → `SaveReadLater`).
+    ReadLater,
+    /// `@tabs <query>` — поиск по открытым вкладкам (§12.4, заголовок + URL).
+    Tabs,
     /// Обычный ввод: URL или поисковый запрос.
     Plain,
 }
@@ -66,6 +74,8 @@ pub enum OmniboxPrefix {
 ///
 /// `@history foo bar` → `(History, "foo bar")`.
 /// `@notes foo bar` → `(Notes, "foo bar")`.
+/// `@read-later foo` → `(ReadLater, "foo")`.
+/// `@tabs foo` → `(Tabs, "foo")`.
 /// Всё остальное → `(Plain, trimmed_input)`.
 pub fn parse_omnibox_prefix(input: &str) -> (OmniboxPrefix, &str) {
     let s = input.trim_start();
@@ -73,6 +83,10 @@ pub fn parse_omnibox_prefix(input: &str) -> (OmniboxPrefix, &str) {
         (OmniboxPrefix::History, rest.trim_start())
     } else if let Some(rest) = s.strip_prefix("@notes") {
         (OmniboxPrefix::Notes, rest.trim_start())
+    } else if let Some(rest) = s.strip_prefix("@read-later") {
+        (OmniboxPrefix::ReadLater, rest.trim_start())
+    } else if let Some(rest) = s.strip_prefix("@tabs") {
+        (OmniboxPrefix::Tabs, rest.trim_start())
     } else {
         (OmniboxPrefix::Plain, s)
     }
@@ -116,17 +130,45 @@ pub enum OmniboxSuggestion {
         /// Частота использования — отображается как подсказка.
         frequency: i64,
     },
+    /// Результат FTS5-поиска по списку «прочитать позже» (§12.3, `@read-later`).
+    ///
+    /// При выборе `commit_value()` возвращает `url` → обычная навигация на
+    /// сохранённую страницу.
+    ReadLater {
+        /// URL сохранённой страницы — committed value (навигация).
+        url: String,
+        /// Заголовок страницы (может быть пустым → показываем URL).
+        title: String,
+        /// BM25 сниппет вокруг совпадения.
+        snippet: String,
+    },
+    /// Открытая вкладка, совпавшая с `@tabs <query>` (§12.4).
+    ///
+    /// При выборе `commit_value()` возвращает `switch_value`
+    /// (`switch-tab:<id>`), перехватываемый в `handle_omnibox_commit` для
+    /// переключения на вкладку по её стабильному id.
+    Tab {
+        /// Заголовок вкладки (может быть пустым → показываем URL).
+        title: String,
+        /// URL открытой во вкладке страницы (для sub_label).
+        url: String,
+        /// `switch-tab:<id>` — committed value, переключает на вкладку.
+        switch_value: String,
+    },
 }
 
 impl OmniboxSuggestion {
     /// Строка, которая будет зафиксирована при выборе этой подсказки.
     /// HistoryFts → URL навигации. Note → `note-viewer:<id>` (перехват в shell).
-    /// SearchQuery → текст запроса.
+    /// SearchQuery → текст запроса. ReadLater → URL навигации.
+    /// Tab → `switch-tab:<id>` (перехват в shell).
     pub fn commit_value(&self) -> &str {
         match self {
             OmniboxSuggestion::HistoryFts { url, .. } => url,
             OmniboxSuggestion::Note { viewer_url, .. } => viewer_url,
             OmniboxSuggestion::SearchQuery { query, .. } => query,
+            OmniboxSuggestion::ReadLater { url, .. } => url,
+            OmniboxSuggestion::Tab { switch_value, .. } => switch_value,
         }
     }
 
@@ -138,6 +180,10 @@ impl OmniboxSuggestion {
             }
             OmniboxSuggestion::Note { selection, .. } => selection,
             OmniboxSuggestion::SearchQuery { query, .. } => query,
+            OmniboxSuggestion::ReadLater { title, url, .. }
+            | OmniboxSuggestion::Tab { title, url, .. } => {
+                if title.is_empty() { url } else { title }
+            }
         }
     }
 
@@ -145,6 +191,8 @@ impl OmniboxSuggestion {
     /// HistoryFts: сниппет если непуст, иначе URL.
     /// Note: сниппет вокруг совпадения (или URL если сниппет пуст).
     /// SearchQuery: пустая строка (вся информация в label).
+    /// ReadLater: сниппет если непуст, иначе URL.
+    /// Tab: URL открытой страницы.
     pub fn sub_label(&self) -> &str {
         match self {
             OmniboxSuggestion::HistoryFts { snippet, url, .. } => {
@@ -154,6 +202,10 @@ impl OmniboxSuggestion {
                 if !snippet.is_empty() { snippet } else { url }
             }
             OmniboxSuggestion::SearchQuery { .. } => "",
+            OmniboxSuggestion::ReadLater { snippet, url, .. } => {
+                if !snippet.is_empty() { snippet } else { url }
+            }
+            OmniboxSuggestion::Tab { url, .. } => url,
         }
     }
 
@@ -167,6 +219,8 @@ impl OmniboxSuggestion {
                 format!("×{frequency}")
             }
             OmniboxSuggestion::SearchQuery { .. } => "запрос".to_string(),
+            OmniboxSuggestion::ReadLater { .. } => "позже".to_string(),
+            OmniboxSuggestion::Tab { .. } => "вкладка".to_string(),
         }
     }
 
@@ -175,6 +229,8 @@ impl OmniboxSuggestion {
             OmniboxSuggestion::HistoryFts { .. } => BAR_BORDER,
             OmniboxSuggestion::Note { .. } => Color { r: 180, g: 120, b: 60, a: 255 },
             OmniboxSuggestion::SearchQuery { .. } => ITEM_TAG,
+            OmniboxSuggestion::ReadLater { .. } => Color { r: 120, g: 90, b: 180, a: 255 },
+            OmniboxSuggestion::Tab { .. } => Color { r: 60, g: 150, b: 170, a: 255 },
         }
     }
 }
@@ -779,6 +835,73 @@ mod tests {
     fn parse_prefix_notes_no_match_for_plain() {
         let (prefix, _) = parse_omnibox_prefix("notes something");
         assert_eq!(prefix, OmniboxPrefix::Plain);
+    }
+
+    // ── @read-later prefix ──────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_prefix_read_later() {
+        let (prefix, q) = parse_omnibox_prefix("@read-later rust book");
+        assert_eq!(prefix, OmniboxPrefix::ReadLater);
+        assert_eq!(q, "rust book");
+    }
+
+    #[test]
+    fn parse_prefix_read_later_empty_query() {
+        let (prefix, q) = parse_omnibox_prefix("@read-later ");
+        assert_eq!(prefix, OmniboxPrefix::ReadLater);
+        assert_eq!(q, "");
+    }
+
+    #[test]
+    fn read_later_suggestion_commit_value_is_url() {
+        let s = OmniboxSuggestion::ReadLater {
+            url: "https://example.com/article".into(),
+            title: "Article".into(),
+            snippet: "an **article** snippet".into(),
+        };
+        assert_eq!(s.commit_value(), "https://example.com/article");
+        assert_eq!(s.label(), "Article");
+        assert_eq!(s.sub_label(), "an **article** snippet");
+    }
+
+    #[test]
+    fn read_later_suggestion_label_falls_back_to_url() {
+        let s = OmniboxSuggestion::ReadLater {
+            url: "https://example.com/x".into(),
+            title: String::new(),
+            snippet: String::new(),
+        };
+        assert_eq!(s.label(), "https://example.com/x");
+        assert_eq!(s.sub_label(), "https://example.com/x");
+    }
+
+    // ── @tabs prefix ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_prefix_tabs() {
+        let (prefix, q) = parse_omnibox_prefix("@tabs github");
+        assert_eq!(prefix, OmniboxPrefix::Tabs);
+        assert_eq!(q, "github");
+    }
+
+    #[test]
+    fn parse_prefix_tabs_empty_query() {
+        let (prefix, q) = parse_omnibox_prefix("@tabs");
+        assert_eq!(prefix, OmniboxPrefix::Tabs);
+        assert_eq!(q, "");
+    }
+
+    #[test]
+    fn tab_suggestion_commit_value_is_switch_sentinel() {
+        let s = OmniboxSuggestion::Tab {
+            title: "GitHub".into(),
+            url: "https://github.com/".into(),
+            switch_value: "switch-tab:42".into(),
+        };
+        assert_eq!(s.commit_value(), "switch-tab:42");
+        assert_eq!(s.label(), "GitHub");
+        assert_eq!(s.sub_label(), "https://github.com/");
     }
 
     fn make_note_suggestion(note_id: i64) -> OmniboxSuggestion {
