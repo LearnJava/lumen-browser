@@ -4202,8 +4202,11 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
     // `-moz-` aliases, normalised to `Appearance::None` at parse time) removes
     // the native "primitive appearance" of a form control: the checkbox tick,
     // radio dot, range slider, progress bar, meter bar and select arrow. The box
-    // (border/padding/background) is already stripped in `apply_ua_appearance`;
-    // here we suppress the painted indicator so authors can fully restyle it.
+    // (border/padding/background) is already stripped in
+    // `strip_ua_appearance_box_styling` (before the author cascade); here we
+    // suppress the painted indicator so authors can fully restyle it.
+    // BUG-225: this gate also suppresses text-input value/placeholder text — too
+    // broad; only the native primitives should be suppressed.
     if b.style.appearance == Appearance::None {
         return;
     }

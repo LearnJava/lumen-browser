@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-225)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-226)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -224,7 +224,7 @@
 | [BUG-208](bugs/BUG-208-OPEN.md) | OPEN | layout | multiple `anchor-name` stub deviation — TEST-89: 1.98% |
 | [BUG-209](bugs/BUG-209-OPEN.md) | OPEN | image | AVIF decoder not implemented — TEST-90: 2.75% |
 | [BUG-210](bugs/BUG-210-FIXED.md) | FIXED 2026-06-18 | layout | CSS system color keywords resolved to wrong values — `system_color()` light-scheme значения приведены к Edge (Highlight #0078d7, LinkText/VisitedText/ActiveText #0066cc, ButtonBorder #000, GrayText #6d6d6d, AccentColor #0075ff, HighlightText white) + deprecated keywords (ThreeD*/Scrollbar) → standard per CSS Color 4 §6.3. TEST-92 15.59% → 0.90% (остаток = BUG-124, gdigrab суб-пиксель на границах). crates/engine/layout/src/style.rs:17903 |
-| [BUG-211](bugs/BUG-211-OPEN.md) | OPEN | layout | `field-sizing: content` not implemented — TEST-93: 4.11% |
+| [BUG-211](bugs/BUG-211-FIXED.md) | FIXED 2026-06-21 | layout | `field-sizing: content` — layout уже работал; контент-боксы были невидимы, т.к. `appearance: none` стрипал авторский border/background ПОСЛЕ каскада (`apply_ua_appearance` клобберил `border:2px`/`background`). Фикс: стрип UA-appearance перенесён ПЕРЕД авторским каскадом (pre-scan winning `appearance`), авторские значения теперь побеждают. TEST-93 4.11%→3.54% → KNOWN_DEBTORS (BUG-225) |
 | [BUG-212](bugs/BUG-212-OPEN.md) | OPEN | font/layout | `font-size-adjust` not implemented — TEST-95: 3.39% |
 | [BUG-213](bugs/BUG-213-OPEN.md) | OPEN | css-parser/layout | `counter-set` order deviation — TEST-97: 2.78% |
 | [BUG-214](bugs/BUG-214-OPEN.md) | OPEN | paint | `accent-color` tint not implemented — TEST-110: 2.47% |
@@ -238,6 +238,7 @@
 | [BUG-222](bugs/BUG-222-FIXED.md) | FIXED 2026-06-19 | js/shell | WASM-реестр (`wasm::REGISTRY`) не очищается при разрушении JS-контекста: «утёкший» `Persistent` функции-импорта роняет QuickJS на `list_empty(&rt->gc_obj_list)` при teardown. Закрыт B-1/ADR-014: `js_thread_main` зовёт `wasm::clear_registry()` в teardown JS-потока до дропа `Runtime`. |
 | [BUG-223](bugs/BUG-223-FIXED.md) | FIXED 2026-06-20 | network/ipc | `lumen-network-service` не компилируется (E0004): `match` в `network_service.rs:51` не покрывал таб-варианты `IpcRequest::{CreateTab,CloseTab,NavigateTab,Screenshot}` (TAB-4/5). Добавлены явные arm-ы → `IpcResponse::TabError` (сетевой процесс таб-ами не управляет), match исчерпывающий. `--workspace --all-targets` снова зелёный. |
 | [BUG-224](bugs/BUG-224-FIXED.md) | FIXED 2026-06-20 | layout | НЕ регрессия движка: `test_33_multi_column` хранил устаревший ground-truth (660x88, atomic-раскладка до BUG-186). После BUG-186 (фрагментация колонок, TEST-33 14.89%→0.12%) Edge-корректная высота mc[4] = 660x64 (две 36px col-sm фрагментируются на 24px по 3 колонкам + span 16px). Подтверждено Edge `getBoundingClientRect → 64` и пиксельным паритетом TEST-33 ≈0.1%. p3-bug198 (diff чисто SVG) к multicol не прикасался. Юнит-тест ре-базлайнен 88→64. |
+| [BUG-225](bugs/BUG-225-OPEN.md) | OPEN | paint | `appearance: none` подавляет value/placeholder-текст у text-input'ов: `emit_form_control_indicator` (display_list.rs:4207) делает ранний `return` при `Appearance::None`, чтобы скрыть нативные примитивы (галочка/точка/слайдер/стрелка), но заодно убивает текст значения text-подобных инпутов. Должен скрываться только нативный примитив. Замечен при разборе BUG-211 (TEST-93 остаток 3.54%) |
 
 ---
 
