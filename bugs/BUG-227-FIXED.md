@@ -1,6 +1,6 @@
 # BUG-227
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-06-21
 **Компонент:** paint (ICC — домен P1)
 **Тесты:** `color_management::tests::detects_p3_from_description`,
 `color_management::tests::detects_rec2020_from_description`
@@ -36,3 +36,17 @@ cargo test -p lumen-paint --lib color_management
 парсинга tags сканировать `desc`-тег на «Display P3»/«Rec2020»), либо ре-базлайнить
 тесты под новое поведение ICC-парсера, если детект по описанию намеренно убран.
 Решение за владельцем ICC (P1).
+
+## Резолюция (2026-06-21, ICC-2)
+
+Выбран ре-базлайн тестов. Сниффинг color space по подстроке описания убран
+**намеренно** в ICC-1: настоящий ICC-парсер (`lumen_core::icc::IccProfile`)
+классифицирует RGB-профили по колорант-примариям (`rXYZ/gXYZ/bXYZ` → xy-хроматичность),
+а не по тексту. Синтетический буфер с подстрокой «Display P3»/«Rec2020», без
+`'acsp'`-сигнатуры и без реальных тегов — невалидный профиль, корректный результат
+для него — `ColorSpace::Srgb` (graceful fallback), не сниффинг.
+
+Тесты `detects_*_from_description` переписаны в `description_text_is_not_sniffed_*`
+(`crates/engine/paint/src/color_management.rs`): они теперь проверяют, что текст
+описания **не** является сигналом цветового пространства. Возврат строкового
+сниффинга отвергнут как регресс к багу, который ICC-1 устранил.
