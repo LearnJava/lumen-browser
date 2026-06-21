@@ -25,9 +25,15 @@
 //! **Stage 2 (feature `webgpu`, sub-step 1 — buffers):** `GPUBuffer` is backed by a real
 //! `wgpu::Buffer` (`lumen_paint::webgpu_compute`). `queue.writeBuffer`,
 //! `commandEncoder.copyBufferToBuffer` + `queue.submit`, and `mapAsync`/`getMappedRange`
-//! round-trip through real GPU memory. Each native call degrades gracefully to the Phase 0
-//! in-memory path when no adapter is present. Compute/render pipelines + `dispatch`/`draw`
-//! and canvas present remain Phase 0 stubs (next sub-step).
+//! round-trip through real GPU memory.
+//!
+//! **Stage 2 (sub-step 2 — compute):** `createShaderModule`, `createComputePipeline`
+//! (`layout: 'auto'`), `pipeline.getBindGroupLayout`, `createBindGroup`, and a real
+//! `beginComputePass` → `setPipeline`/`setBindGroup`/`dispatchWorkgroups` → `end` execute
+//! the WGSL shader on the GPU when `queue.submit` flushes the encoder. Each native call
+//! degrades gracefully to the Phase 0 path when no adapter is present (compute becomes a
+//! no-op, since WGSL cannot run on the CPU). Render pipelines + `draw` and canvas present
+//! remain Phase 0 stubs (next sub-step).
 
 use rquickjs::Ctx;
 
@@ -139,8 +145,71 @@ fn install_webgpu_natives(ctx: &Ctx) -> rquickjs::Result<()> {
         }),
     )?;
 
+    // ── Compute pipeline bridge (Stage 2, sub-step 2) ────────────────────────
+    // Real wgpu shader modules / compute pipelines / bind-group layouts / bind groups,
+    // each addressed by an opaque numeric handle. Each returns 0 when no GPU is available,
+    // so the shim transparently falls back to the Phase 0 no-op compute path.
+
+    // _lumen_webgpu_shader_create(code) → handle (0 = failed/no GPU).
+    g.set(
+        "_lumen_webgpu_shader_create",
+        rquickjs::Function::new(ctx.clone(), |code: String| -> f64 {
+            webgpu_compute::shader_create(&code).unwrap_or(0) as f64
+        }),
+    )?;
+
+    // _lumen_webgpu_compute_pipeline_create(shaderHandle, entryPoint) → handle (0 = failed).
+    g.set(
+        "_lumen_webgpu_compute_pipeline_create",
+        rquickjs::Function::new(ctx.clone(), |shader: f64, entry: String| -> f64 {
+            webgpu_compute::compute_pipeline_create(shader as u64, &entry).unwrap_or(0) as f64
+        }),
+    )?;
+
+    // _lumen_webgpu_pipeline_bind_group_layout(pipelineHandle, group) → layout handle.
+    g.set(
+        "_lumen_webgpu_pipeline_bind_group_layout",
+        rquickjs::Function::new(ctx.clone(), |pipeline: f64, group: u32| -> f64 {
+            webgpu_compute::pipeline_bind_group_layout(pipeline as u64, group).unwrap_or(0) as f64
+        }),
+    )?;
+
+    // _lumen_webgpu_bind_group_create(layoutHandle, entriesJson) → bind-group handle.
+    // entriesJson: [{binding, buffer, offset, size}] (size 0 = whole buffer). JSON is parsed
+    // here (lumen-js owns serde_json); lumen-paint receives already-decoded entries.
+    g.set(
+        "_lumen_webgpu_bind_group_create",
+        rquickjs::Function::new(ctx.clone(), |layout: f64, entries: String| -> f64 {
+            let Ok(parsed) = serde_json::from_str::<Vec<serde_json::Value>>(&entries) else {
+                return 0.0;
+            };
+            let mut decoded = Vec::with_capacity(parsed.len());
+            for e in &parsed {
+                let u = |k: &str| e.get(k).and_then(serde_json::Value::as_u64);
+                let (Some(binding), Some(buffer)) = (u("binding"), u("buffer")) else {
+                    return 0.0;
+                };
+                decoded.push(webgpu_compute::BufferBindEntry {
+                    binding: binding as u32,
+                    buffer,
+                    offset: u("offset").unwrap_or(0),
+                    size: u("size").unwrap_or(0),
+                });
+            }
+            webgpu_compute::bind_group_create(layout as u64, &decoded).unwrap_or(0) as f64
+        }),
+    )?;
+
+    // _lumen_webgpu_compute_pipeline_destroy(handle).
+    g.set(
+        "_lumen_webgpu_compute_pipeline_destroy",
+        rquickjs::Function::new(ctx.clone(), |id: f64| {
+            webgpu_compute::compute_pipeline_destroy(id as u64);
+        }),
+    )?;
+
     // _lumen_webgpu_submit(opsJson) → true on success. opsJson is a JSON array of
-    // command-encoder ops recorded on the JS side; currently only copyBufferToBuffer.
+    // command-encoder ops recorded on the JS side: copyBufferToBuffer + computePass.
     g.set(
         "_lumen_webgpu_submit",
         rquickjs::Function::new(ctx.clone(), |ops_json: String| -> bool {
@@ -165,6 +234,50 @@ fn install_webgpu_natives(ctx: &Ctx) -> rquickjs::Result<()> {
                             dst_offset,
                             size,
                         });
+                    }
+                    "computePass" => {
+                        let Some(cmds) = op.get("cmds").and_then(|v| v.as_array()) else {
+                            return false;
+                        };
+                        let mut commands = Vec::with_capacity(cmds.len());
+                        for c in cmds {
+                            let ck = c.get("c").and_then(|v| v.as_str()).unwrap_or("");
+                            match ck {
+                                "setPipeline" => {
+                                    let Some(p) =
+                                        c.get("pipeline").and_then(serde_json::Value::as_u64)
+                                    else {
+                                        return false;
+                                    };
+                                    commands.push(webgpu_compute::ComputeCmd::SetPipeline(p));
+                                }
+                                "setBindGroup" => {
+                                    let (Some(index), Some(bind_group)) = (
+                                        c.get("index").and_then(serde_json::Value::as_u64),
+                                        c.get("bindGroup").and_then(serde_json::Value::as_u64),
+                                    ) else {
+                                        return false;
+                                    };
+                                    commands.push(webgpu_compute::ComputeCmd::SetBindGroup {
+                                        index: index as u32,
+                                        bind_group,
+                                    });
+                                }
+                                "dispatch" => {
+                                    let g = |k: &str| {
+                                        c.get(k).and_then(serde_json::Value::as_u64).unwrap_or(1)
+                                            as u32
+                                    };
+                                    commands.push(webgpu_compute::ComputeCmd::Dispatch {
+                                        x: g("x"),
+                                        y: g("y"),
+                                        z: g("z"),
+                                    });
+                                }
+                                _ => return false,
+                            }
+                        }
+                        decoded.push(webgpu_compute::GpuOp::ComputePass { commands });
                     }
                     _ => return false,
                 }
@@ -270,6 +383,12 @@ const WEBGPU_SHIM: &str = r#"(function() {
           }];
         }
       } catch (_e) { /* validation unavailable — leave messages empty */ }
+    }
+    // Stage 2 (compute): register a real wgpu::ShaderModule for pipeline creation.
+    this._id = 0;
+    if (this._code && typeof _lumen_webgpu_shader_create === 'function') {
+      try { this._id = _lumen_webgpu_shader_create(this._code) || 0; }
+      catch (_e) { this._id = 0; }
     }
   }
   GPUShaderModule.prototype.getCompilationInfo = function() {
@@ -396,6 +515,9 @@ const WEBGPU_SHIM: &str = r#"(function() {
 
   function GPUBindGroupLayout(desc) {
     this.label = (desc && desc.label) || '';
+    // Stage 2 (compute): handle of the real wgpu::BindGroupLayout (0 = Phase 0 stub).
+    // Populated by GPUComputePipeline.getBindGroupLayout via the native bridge.
+    this._id = (desc && desc._id) || 0;
   }
   globalThis.GPUBindGroupLayout = GPUBindGroupLayout;
 
@@ -410,6 +532,28 @@ const WEBGPU_SHIM: &str = r#"(function() {
 
   function GPUBindGroup(desc) {
     this.label = (desc && desc.label) || '';
+    // Stage 2 (compute): create a real wgpu::BindGroup binding buffers to the layout's
+    // binding indices. Falls back to a stub (_id = 0) without a real layout / GPU.
+    this._id = 0;
+    var layout  = desc && desc.layout;
+    var entries = (desc && desc.entries) || [];
+    if (layout && layout._id && typeof _lumen_webgpu_bind_group_create === 'function') {
+      try {
+        var payload = [];
+        for (var i = 0; i < entries.length; i++) {
+          var e   = entries[i] || {};
+          var res = e.resource || {};
+          var buf = res.buffer;
+          payload.push({
+            binding: e.binding | 0,
+            buffer:  buf ? (buf._id || 0) : 0,
+            offset:  res.offset || 0,
+            size:    res.size   || 0
+          });
+        }
+        this._id = _lumen_webgpu_bind_group_create(layout._id, JSON.stringify(payload)) || 0;
+      } catch (_e) { this._id = 0; }
+    }
   }
   globalThis.GPUBindGroup = GPUBindGroup;
 
@@ -427,9 +571,23 @@ const WEBGPU_SHIM: &str = r#"(function() {
 
   function GPUComputePipeline(desc) {
     this.label = (desc && desc.label) || '';
+    // Stage 2 (compute): create a real wgpu::ComputePipeline from the shader module +
+    // entry point (auto layout). _id = 0 keeps the Phase 0 no-op path.
+    this._id = 0;
+    var comp = desc && desc.compute;
+    var mod  = comp && comp.module;
+    if (mod && mod._id && typeof _lumen_webgpu_compute_pipeline_create === 'function') {
+      try { this._id = _lumen_webgpu_compute_pipeline_create(mod._id, comp.entryPoint || '') || 0; }
+      catch (_e) { this._id = 0; }
+    }
   }
   GPUComputePipeline.prototype.getBindGroupLayout = function(idx) {
-    return new GPUBindGroupLayout({});
+    var layoutId = 0;
+    if (this._id && typeof _lumen_webgpu_pipeline_bind_group_layout === 'function') {
+      try { layoutId = _lumen_webgpu_pipeline_bind_group_layout(this._id, idx) || 0; }
+      catch (_e) { layoutId = 0; }
+    }
+    return new GPUBindGroupLayout({ _id: layoutId });
   };
   globalThis.GPUComputePipeline = GPUComputePipeline;
 
@@ -453,12 +611,33 @@ const WEBGPU_SHIM: &str = r#"(function() {
 
   // ── GPUComputePassEncoder ────────────────────────────────────────────────
 
-  function GPUComputePassEncoder() {}
-  GPUComputePassEncoder.prototype.setPipeline         = function(pipeline) {};
-  GPUComputePassEncoder.prototype.setBindGroup        = function(idx, bg, dynOffsets) {};
-  GPUComputePassEncoder.prototype.dispatchWorkgroups  = function(x, y, z) {};
-  GPUComputePassEncoder.prototype.end                 = function() {};
-  GPUComputePassEncoder.prototype.endPass             = function() {};
+  // Records setPipeline / setBindGroup / dispatchWorkgroups into a command list; on end()
+  // the whole pass is appended to the parent command encoder, flushed to the real GPU on
+  // queue.submit. Without a GPU the recorded ids are 0 and the native submit no-ops.
+  function GPUComputePassEncoder(encoder) {
+    this._enc  = encoder;
+    this._cmds = [];
+  }
+  GPUComputePassEncoder.prototype.setPipeline = function(pipeline) {
+    this._cmds.push({ c: 'setPipeline', pipeline: pipeline ? (pipeline._id || 0) : 0 });
+  };
+  GPUComputePassEncoder.prototype.setBindGroup = function(idx, bg, dynOffsets) {
+    this._cmds.push({ c: 'setBindGroup', index: idx | 0, bindGroup: bg ? (bg._id || 0) : 0 });
+  };
+  GPUComputePassEncoder.prototype.dispatchWorkgroups = function(x, y, z) {
+    this._cmds.push({
+      c: 'dispatch',
+      x: (x === undefined) ? 1 : (x | 0),
+      y: (y === undefined) ? 1 : (y | 0),
+      z: (z === undefined) ? 1 : (z | 0)
+    });
+  };
+  GPUComputePassEncoder.prototype.dispatchWorkgroupsIndirect = function(buf, offset) {};
+  GPUComputePassEncoder.prototype.end = function() {
+    if (this._enc) this._enc._ops.push({ op: 'computePass', cmds: this._cmds });
+    this._cmds = [];
+  };
+  GPUComputePassEncoder.prototype.endPass = GPUComputePassEncoder.prototype.end;
   globalThis.GPUComputePassEncoder = GPUComputePassEncoder;
 
   // ── GPUCommandBuffer ─────────────────────────────────────────────────────
@@ -478,7 +657,7 @@ const WEBGPU_SHIM: &str = r#"(function() {
     return new GPURenderPassEncoder();
   };
   GPUCommandEncoder.prototype.beginComputePass = function(desc) {
-    return new GPUComputePassEncoder();
+    return new GPUComputePassEncoder(this);
   };
   // Records a buffer→buffer copy. Supports both the legacy 5-arg signature
   // (source, sourceOffset, destination, destinationOffset, size) and the newer
@@ -526,20 +705,34 @@ const WEBGPU_SHIM: &str = r#"(function() {
       if (ops) for (var j = 0; j < ops.length; j++) allOps.push(ops[j]);
     }
     if (allOps.length === 0) return;
+    // Try the real GPU path only if every op is real-capable: copies need both buffer
+    // handles, compute passes need a non-zero pipeline handle. Otherwise fall back.
     var allReal = (typeof _lumen_webgpu_submit === 'function');
     if (allReal) {
       for (var k = 0; k < allOps.length; k++) {
-        if (!allOps[k].src || !allOps[k].dst) { allReal = false; break; }
+        var o = allOps[k];
+        if (o.op === 'copyB2B') {
+          if (!o.src || !o.dst) { allReal = false; break; }
+        } else if (o.op === 'computePass') {
+          var hasPipeline = false;
+          for (var ci = 0; ci < o.cmds.length; ci++) {
+            if (o.cmds[ci].c === 'setPipeline' && o.cmds[ci].pipeline) hasPipeline = true;
+          }
+          if (!hasPipeline) { allReal = false; break; }
+        } else { allReal = false; break; }
       }
     }
     if (allReal) {
       var payload = allOps.map(function(o) {
+        if (o.op === 'computePass') return { op: 'computePass', cmds: o.cmds };
         return { op: o.op, src: o.src, srcOffset: o.srcOffset,
                  dst: o.dst, dstOffset: o.dstOffset, size: o.size };
       });
       try { if (_lumen_webgpu_submit(JSON.stringify(payload))) return; }
       catch (_e) { /* fall through to in-memory emulation */ }
     }
+    // In-memory fallback (no GPU): emulate buffer copies; compute passes are no-ops
+    // because WGSL cannot run on the CPU.
     for (var m = 0; m < allOps.length; m++) {
       var op = allOps[m];
       if (op.op === 'copyB2B' && op._srcBuf && op._dstBuf) {
@@ -1087,6 +1280,142 @@ mod tests {
                 )
                 .unwrap();
             assert!(ok);
+        });
+    }
+
+    #[test]
+    fn compute_pipeline_api_shape() {
+        // Without the `webgpu` feature / a GPU the compute API still exists and is callable
+        // (no-op). Exercises createComputePipeline → getBindGroupLayout → createBindGroup →
+        // beginComputePass → setPipeline/setBindGroup/dispatchWorkgroups → end → submit.
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install(&ctx);
+            let ok: bool = ctx
+                .eval(
+                    r#"
+                    var d = new GPUDevice({});
+                    var mod = d.createShaderModule({ code:
+                      '@group(0) @binding(0) var<storage, read_write> v: array<u32>;' +
+                      '@compute @workgroup_size(1) fn main() { v[0] = 1u; }' });
+                    var pipe = d.createComputePipeline({ layout: 'auto', compute: { module: mod, entryPoint: 'main' } });
+                    var bgl  = pipe.getBindGroupLayout(0);
+                    var buf  = d.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE });
+                    var bg   = d.createBindGroup({ layout: bgl, entries: [{ binding: 0, resource: { buffer: buf } }] });
+                    var enc  = d.createCommandEncoder({});
+                    var pass = enc.beginComputePass();
+                    pass.setPipeline(pipe);
+                    pass.setBindGroup(0, bg);
+                    pass.dispatchWorkgroups(4);
+                    pass.end();
+                    d.queue.submit([enc.finish()]);
+                    pipe instanceof GPUComputePipeline
+                      && bgl instanceof GPUBindGroupLayout
+                      && bg instanceof GPUBindGroup
+                      && typeof pass.dispatchWorkgroups === 'function'
+                    "#,
+                )
+                .unwrap();
+            assert!(ok, "compute pipeline API must be callable end-to-end");
+        });
+    }
+
+    #[test]
+    fn compute_pass_records_op_on_encoder() {
+        // The compute pass must record a single computePass op (with its command list)
+        // onto the parent encoder so queue.submit can flush it.
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install(&ctx);
+            let ok: bool = ctx
+                .eval(
+                    r#"
+                    var d = new GPUDevice({});
+                    var enc = d.createCommandEncoder({});
+                    var pass = enc.beginComputePass();
+                    pass.setPipeline({ _id: 7 });
+                    pass.setBindGroup(0, { _id: 9 });
+                    pass.dispatchWorkgroups(2, 3, 4);
+                    pass.end();
+                    var op = enc._ops[0];
+                    op.op === 'computePass'
+                      && op.cmds.length === 3
+                      && op.cmds[0].c === 'setPipeline' && op.cmds[0].pipeline === 7
+                      && op.cmds[1].c === 'setBindGroup' && op.cmds[1].index === 0 && op.cmds[1].bindGroup === 9
+                      && op.cmds[2].c === 'dispatch' && op.cmds[2].x === 2 && op.cmds[2].y === 3 && op.cmds[2].z === 4
+                    "#,
+                )
+                .unwrap();
+            assert!(ok, "compute pass must record its command list onto the encoder");
+        });
+    }
+
+    #[test]
+    fn dispatch_workgroups_defaults_y_z_to_one() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install(&ctx);
+            let ok: bool = ctx
+                .eval(
+                    r#"
+                    var d = new GPUDevice({});
+                    var enc = d.createCommandEncoder({});
+                    var pass = enc.beginComputePass();
+                    pass.dispatchWorkgroups(8);
+                    pass.end();
+                    var c = enc._ops[0].cmds[0];
+                    c.x === 8 && c.y === 1 && c.z === 1
+                    "#,
+                )
+                .unwrap();
+            assert!(ok, "omitted dispatch y/z must default to 1");
+        });
+    }
+
+    // Real-GPU path: end-to-end compute. Only meaningful with the `webgpu` feature AND an
+    // available adapter; skips on headless CI without a GPU.
+    #[cfg(feature = "webgpu")]
+    #[test]
+    fn real_backend_runs_compute_shader() {
+        if !lumen_paint::webgpu_compute::is_available() {
+            eprintln!("skip: no GPU adapter available");
+            return;
+        }
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install(&ctx);
+            // Doubling shader: storage buffer values are multiplied by 2 on the GPU, then
+            // copied to a MAP_READ buffer and read back through the JS GPUBuffer API.
+            let doubled: bool = ctx
+                .eval(
+                    r#"
+                    var d = new GPUDevice({});
+                    var mod = d.createShaderModule({ code:
+                      '@group(0) @binding(0) var<storage, read_write> data: array<u32>;' +
+                      '@compute @workgroup_size(1) fn main(@builtin(global_invocation_id) id: vec3<u32>) {' +
+                      '  data[id.x] = data[id.x] * 2u; }' });
+                    var pipe = d.createComputePipeline({ layout: 'auto', compute: { module: mod, entryPoint: 'main' } });
+                    var storage = d.createBuffer({ size: 16,
+                      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+                    var readback = d.createBuffer({ size: 16, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+                    d.queue.writeBuffer(storage, 0, new Uint32Array([1, 2, 3, 4]));
+                    var bg = d.createBindGroup({ layout: pipe.getBindGroupLayout(0),
+                      entries: [{ binding: 0, resource: { buffer: storage } }] });
+                    var enc = d.createCommandEncoder({});
+                    var pass = enc.beginComputePass();
+                    pass.setPipeline(pipe);
+                    pass.setBindGroup(0, bg);
+                    pass.dispatchWorkgroups(4);
+                    pass.end();
+                    enc.copyBufferToBuffer(storage, 0, readback, 0, 16);
+                    d.queue.submit([enc.finish()]);
+                    readback.mapAsync(GPUMapMode.READ);
+                    var v = new Uint32Array(readback.getMappedRange());
+                    v[0] === 2 && v[1] === 4 && v[2] === 6 && v[3] === 8
+                    "#,
+                )
+                .unwrap();
+            assert!(doubled, "real GPU compute shader must double the buffer");
         });
     }
 

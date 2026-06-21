@@ -17,15 +17,25 @@
 //! **Что реально в Stage 2 (под-этап 1, буферы):**
 //! - [`buffer_create`]/[`buffer_write`]/[`buffer_read`]/[`buffer_destroy`] — настоящие
 //!   `wgpu::Buffer` в GPU-памяти, адресуемые по числовому хэндлу из JS-шима.
-//! - [`submit`] — исполняет записанные command-encoder операции (пока только
-//!   `copyBufferToBuffer`) в одном `wgpu::CommandEncoder` + `queue.submit`, как реальный
-//!   браузер батчит работу на `GPUQueue.submit`.
+//! - [`submit`] — исполняет записанные command-encoder операции в одном
+//!   `wgpu::CommandEncoder` + `queue.submit`, как реальный браузер батчит работу на
+//!   `GPUQueue.submit`.
 //! - Полный round-trip: write → copy(STORAGE/COPY_SRC → MAP_READ) → map → read возвращает
 //!   данные, реально прошедшие через GPU-память, а не JS-`ArrayBuffer`.
 //!
-//! **Что ещё stub (Stage 2+):** compute-пайплайны и `dispatchWorkgroups`,
-//! render-пайплайны и present в canvas. Эти операции по-прежнему обслуживает in-memory
-//! JS-шим; буферный реестр заложен как фундамент для следующего под-этапа (compute).
+//! **Что реально в Stage 2 (под-этап 2, compute):**
+//! - [`shader_create`] — настоящий `wgpu::ShaderModule` из WGSL.
+//! - [`compute_pipeline_create`] — настоящий `wgpu::ComputePipeline` с авто-layout
+//!   (`layout: 'auto'`) и точкой входа `@compute`-функции.
+//! - [`pipeline_bind_group_layout`] — `getBindGroupLayout(idx)`: реальный
+//!   `wgpu::BindGroupLayout`, выведенный пайплайном из WGSL.
+//! - [`bind_group_create`] — `wgpu::BindGroup`, связывающий буферы по binding-индексам.
+//! - [`submit`] исполняет `computePass` ([`GpuOp::ComputePass`]:
+//!   `setPipeline`/`setBindGroup`/`dispatchWorkgroups`) в реальном `wgpu::ComputePass` —
+//!   WGSL-шейдер действительно считает на GPU, результат читается через [`buffer_read`].
+//!
+//! **Что ещё stub (Stage 2+):** render-пайплайны и present в canvas. Эти операции
+//! по-прежнему обслуживает in-memory JS-шим.
 //!
 //! **Доступность.** GPU-устройство создаётся лениво один раз (`OnceLock`). Если адаптер
 //! недоступен (headless CI без GPU, нет драйвера), [`adapter_info`] и [`validate_wgsl`]
@@ -149,8 +159,7 @@ pub fn validate_wgsl(source: &str) -> Option<String> {
     // wgpu error scopes form a single per-device stack: concurrent validations would
     // interleave push/create/pop and catch each other's errors. Serialize so each
     // push → create_shader_module → pop is atomic relative to other validations.
-    static VALIDATE_LOCK: Mutex<()> = Mutex::new(());
-    let _guard = VALIDATE_LOCK.lock().ok()?;
+    let _guard = GPU_LOCK.lock().ok()?;
     ctx.device
         .push_error_scope(wgpu::ErrorFilter::Validation);
     let _module = ctx
@@ -161,6 +170,25 @@ pub fn validate_wgsl(source: &str) -> Option<String> {
         });
     let err = block_on(ctx.device.pop_error_scope());
     err.map(|e| e.to_string())
+}
+
+/// Serializes all device operations that rely on a wgpu validation error scope
+/// (`validate_wgsl`, pipeline / bind-group creation). The error scope is a single
+/// per-device stack, so concurrent push/create/pop would catch each other's errors.
+static GPU_LOCK: Mutex<()> = Mutex::new(());
+
+/// Creates a GPU object under a validation error scope and rejects it if wgpu reports a
+/// validation error (wgpu still returns a poisoned object on error — using it later would
+/// trip the silent uncaptured-error handler or panic). Returns `None` on any error.
+fn guarded_create<T>(device: &wgpu::Device, f: impl FnOnce() -> T) -> Option<T> {
+    let _guard = GPU_LOCK.lock().ok()?;
+    device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let value = f();
+    if block_on(device.pop_error_scope()).is_some() {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 // ── Реестр GPU-буферов (Stage 2, под-этап 1) ────────────────────────────────
@@ -298,11 +326,194 @@ pub fn buffer_destroy(id: u64) {
     }
 }
 
-/// Одна записанная операция command-encoder для исполнения на `queue.submit`.
+// ── Реестры compute-объектов (Stage 2, под-этап 2) ──────────────────────────
+//
+// Шейдер-модули, compute-пайплайны, bind-group-layout'ы и bind-group'ы живут здесь,
+// JS-шим держит непрозрачные `u64`-хэндлы. Это даёт реальный compute-pass, не утаскивая
+// wgpu-типы в `lumen-js`.
+
+/// Реестр WGSL-шейдер-модулей.
+static SHADERS: OnceLock<Mutex<HashMap<u64, wgpu::ShaderModule>>> = OnceLock::new();
+/// Реестр compute-пайплайнов.
+static COMPUTE_PIPELINES: OnceLock<Mutex<HashMap<u64, wgpu::ComputePipeline>>> = OnceLock::new();
+/// Реестр bind-group-layout'ов (выведенных пайплайном или созданных явно).
+static BIND_GROUP_LAYOUTS: OnceLock<Mutex<HashMap<u64, wgpu::BindGroupLayout>>> = OnceLock::new();
+/// Реестр bind-group'ов.
+static BIND_GROUPS: OnceLock<Mutex<HashMap<u64, wgpu::BindGroup>>> = OnceLock::new();
+
+/// Монотонный счётчик хэндлов compute-объектов (общий для всех реестров; 0 невалиден).
+static NEXT_COMPUTE_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Доступ к реестру шейдер-модулей.
+fn shaders() -> &'static Mutex<HashMap<u64, wgpu::ShaderModule>> {
+    SHADERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+/// Доступ к реестру compute-пайплайнов.
+fn compute_pipelines() -> &'static Mutex<HashMap<u64, wgpu::ComputePipeline>> {
+    COMPUTE_PIPELINES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+/// Доступ к реестру bind-group-layout'ов.
+fn bind_group_layouts() -> &'static Mutex<HashMap<u64, wgpu::BindGroupLayout>> {
+    BIND_GROUP_LAYOUTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+/// Доступ к реестру bind-group'ов.
+fn bind_groups() -> &'static Mutex<HashMap<u64, wgpu::BindGroup>> {
+    BIND_GROUPS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Создаёт `wgpu::ShaderModule` из WGSL и регистрирует его.
 ///
-/// Пока поддерживается только копирование буфер→буфер; следующий под-этап добавит
-/// compute-pass (`dispatchWorkgroups`).
+/// Возвращает непрозрачный хэндл или `None`, если GPU недоступен. Ошибки компиляции WGSL
+/// отдельно сообщаются через [`validate_wgsl`] (JS-шим зовёт её для `getCompilationInfo()`);
+/// если код невалиден, последующее создание пайплайна провалится в [`compute_pipeline_create`].
+pub fn shader_create(code: &str) -> Option<u64> {
+    let ctx = context()?;
+    let module = ctx
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("lumen-webgpu-shader"),
+            source: wgpu::ShaderSource::Wgsl(code.into()),
+        });
+    let id = NEXT_COMPUTE_ID.fetch_add(1, Ordering::Relaxed);
+    shaders().lock().ok()?.insert(id, module);
+    Some(id)
+}
+
+/// Создаёт compute-пайплайн с авто-layout (`layout: 'auto'`) из ранее созданного шейдера.
+///
+/// `entry_point` — имя `@compute`-функции; пустая строка означает «выбрать единственную».
+/// Возвращает хэндл пайплайна, либо `None`, если шейдер неизвестен, GPU недоступен или
+/// wgpu отверг пайплайн на валидации (несовместимый layout, нет такой точки входа и т.п.).
+pub fn compute_pipeline_create(shader_id: u64, entry_point: &str) -> Option<u64> {
+    let ctx = context()?;
+    let pipeline = {
+        let shaders = shaders().lock().ok()?;
+        let module = shaders.get(&shader_id)?;
+        let ep = if entry_point.is_empty() {
+            None
+        } else {
+            Some(entry_point)
+        };
+        guarded_create(&ctx.device, || {
+            ctx.device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("lumen-webgpu-compute-pipeline"),
+                    layout: None,
+                    module,
+                    entry_point: ep,
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    cache: None,
+                })
+        })?
+    };
+    let id = NEXT_COMPUTE_ID.fetch_add(1, Ordering::Relaxed);
+    compute_pipelines().lock().ok()?.insert(id, pipeline);
+    Some(id)
+}
+
+/// Возвращает хэндл bind-group-layout, выведенного пайплайном для группы `group`
+/// (`GPUComputePipeline.getBindGroupLayout(group)`).
+///
+/// `None`, если пайплайн неизвестен или GPU недоступен. Индекс группы должен существовать
+/// в WGSL пайплайна (иначе wgpu вернёт layout-ошибку при создании bind-group).
+pub fn pipeline_bind_group_layout(pipeline_id: u64, group: u32) -> Option<u64> {
+    let ctx = context()?;
+    let layout = {
+        let pipes = compute_pipelines().lock().ok()?;
+        let pipe = pipes.get(&pipeline_id)?;
+        guarded_create(&ctx.device, || pipe.get_bind_group_layout(group))?
+    };
+    let id = NEXT_COMPUTE_ID.fetch_add(1, Ordering::Relaxed);
+    bind_group_layouts().lock().ok()?.insert(id, layout);
+    Some(id)
+}
+
+/// Одна entry bind-group: буфер-ресурс, привязанный к WGSL binding-индексу.
+///
+/// JSON парсится на стороне `lumen-js` (там уже есть `serde_json`); `lumen-paint` не тянет
+/// JSON-зависимость и принимает уже разобранные значения.
 #[derive(Debug, Clone, Copy)]
+pub struct BufferBindEntry {
+    /// Индекс `@binding(N)` в WGSL.
+    pub binding: u32,
+    /// Хэндл буфера-ресурса.
+    pub buffer: u64,
+    /// Смещение в буфере (байты).
+    pub offset: u64,
+    /// Размер привязываемого диапазона (байты); 0 = весь буфер от `offset`.
+    pub size: u64,
+}
+
+/// Создаёт bind-group, связывающий буферы по binding-индексам, по заданному layout.
+///
+/// Возвращает хэндл bind-group, либо `None`, если layout/буфер неизвестен, GPU недоступен
+/// или wgpu отверг привязку (тип/размер не совпадают с layout). `size == 0` означает «весь
+/// буфер от `offset`».
+pub fn bind_group_create(layout_id: u64, entries: &[BufferBindEntry]) -> Option<u64> {
+    let ctx = context()?;
+    let bind_group = {
+        let layouts = bind_group_layouts().lock().ok()?;
+        let layout = layouts.get(&layout_id)?;
+        let bufs = buffers().lock().ok()?;
+        // Build BindGroupEntry list referencing real buffers; bail if any handle is unknown.
+        let mut wgpu_entries = Vec::with_capacity(entries.len());
+        for e in entries {
+            let buf = bufs.get(&e.buffer)?;
+            wgpu_entries.push(wgpu::BindGroupEntry {
+                binding: e.binding,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &buf.buffer,
+                    offset: e.offset,
+                    size: std::num::NonZeroU64::new(e.size),
+                }),
+            });
+        }
+        guarded_create(&ctx.device, || {
+            ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("lumen-webgpu-bind-group"),
+                layout,
+                entries: &wgpu_entries,
+            })
+        })?
+    };
+
+    let id = NEXT_COMPUTE_ID.fetch_add(1, Ordering::Relaxed);
+    bind_groups().lock().ok()?.insert(id, bind_group);
+    Some(id)
+}
+
+/// Удаляет compute-пайплайн из реестра.
+pub fn compute_pipeline_destroy(id: u64) {
+    if let Ok(mut g) = compute_pipelines().lock() {
+        g.remove(&id);
+    }
+}
+
+/// Одна команда внутри записанного compute-pass.
+#[derive(Debug, Clone, Copy)]
+pub enum ComputeCmd {
+    /// `pass.setPipeline(pipeline)` — хэндл compute-пайплайна.
+    SetPipeline(u64),
+    /// `pass.setBindGroup(index, bindGroup)`.
+    SetBindGroup {
+        /// Индекс группы.
+        index: u32,
+        /// Хэндл bind-group.
+        bind_group: u64,
+    },
+    /// `pass.dispatchWorkgroups(x, y, z)` — число рабочих групп по осям.
+    Dispatch {
+        /// Рабочих групп по X.
+        x: u32,
+        /// Рабочих групп по Y.
+        y: u32,
+        /// Рабочих групп по Z.
+        z: u32,
+    },
+}
+
+/// Одна записанная операция command-encoder для исполнения на `queue.submit`.
+#[derive(Debug, Clone)]
 pub enum GpuOp {
     /// `copyBufferToBuffer(src, src_offset, dst, dst_offset, size)`.
     CopyBufferToBuffer {
@@ -316,6 +527,11 @@ pub enum GpuOp {
         dst_offset: u64,
         /// Сколько байт копировать.
         size: u64,
+    },
+    /// `beginComputePass()` … `end()` — последовательность команд compute-pass.
+    ComputePass {
+        /// Команды pass в порядке записи.
+        commands: Vec<ComputeCmd>,
     },
 }
 
@@ -331,13 +547,23 @@ pub fn submit(ops: &[GpuOp]) -> bool {
         Ok(g) => g,
         Err(_) => return false,
     };
+    // Compute passes reference pipelines and bind groups; lock those registries for the
+    // whole submit so the borrowed references stay alive across the recorded commands.
+    let pipes = match compute_pipelines().lock() {
+        Ok(g) => g,
+        Err(_) => return false,
+    };
+    let bgs = match bind_groups().lock() {
+        Ok(g) => g,
+        Err(_) => return false,
+    };
     let mut encoder = ctx
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("lumen-webgpu-submit"),
         });
     for op in ops {
-        match *op {
+        match op {
             GpuOp::CopyBufferToBuffer {
                 src,
                 src_offset,
@@ -345,13 +571,51 @@ pub fn submit(ops: &[GpuOp]) -> bool {
                 dst_offset,
                 size,
             } => {
-                let (Some(s), Some(d)) = (guard.get(&src), guard.get(&dst)) else {
+                let (Some(s), Some(d)) = (guard.get(src), guard.get(dst)) else {
                     return false;
                 };
                 if src_offset + size > s.buffer.size() || dst_offset + size > d.buffer.size() {
                     return false;
                 }
-                encoder.copy_buffer_to_buffer(&s.buffer, src_offset, &d.buffer, dst_offset, size);
+                encoder.copy_buffer_to_buffer(&s.buffer, *src_offset, &d.buffer, *dst_offset, *size);
+            }
+            GpuOp::ComputePass { commands } => {
+                // Record into a scoped compute pass; on an unknown handle abort the whole
+                // submit (nothing is queued — the encoder is dropped without finish()).
+                let mut ok = true;
+                {
+                    let mut pass =
+                        encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("lumen-webgpu-compute-pass"),
+                            timestamp_writes: None,
+                        });
+                    for cmd in commands {
+                        match cmd {
+                            ComputeCmd::SetPipeline(pid) => match pipes.get(pid) {
+                                Some(p) => pass.set_pipeline(p),
+                                None => {
+                                    ok = false;
+                                    break;
+                                }
+                            },
+                            ComputeCmd::SetBindGroup { index, bind_group } => {
+                                match bgs.get(bind_group) {
+                                    Some(b) => pass.set_bind_group(*index, b, &[]),
+                                    None => {
+                                        ok = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            ComputeCmd::Dispatch { x, y, z } => {
+                                pass.dispatch_workgroups(*x, *y, *z);
+                            }
+                        }
+                    }
+                }
+                if !ok {
+                    return false;
+                }
             }
         }
     }
@@ -534,5 +798,105 @@ mod tests {
         assert!(!buffer_write(999_999, 0, &[0]));
         assert!(buffer_read(999_999, 0, 4).is_none());
         buffer_destroy(999_999);
+    }
+
+    #[test]
+    fn compute_pipeline_doubles_buffer() {
+        if !is_available() {
+            eprintln!("skip: no GPU adapter available");
+            return;
+        }
+        // Канонический compute-пример: шейдер удваивает каждый u32 в storage-буфере.
+        let src = r#"
+            @group(0) @binding(0) var<storage, read_write> data: array<u32>;
+            @compute @workgroup_size(1)
+            fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+                data[id.x] = data[id.x] * 2u;
+            }
+        "#;
+        let shader = shader_create(src).expect("shader");
+        let pipeline = compute_pipeline_create(shader, "main").expect("pipeline");
+        let layout = pipeline_bind_group_layout(pipeline, 0).expect("layout");
+
+        // STORAGE для шейдера, COPY_SRC чтобы скопировать результат в MAP_READ-буфер.
+        let storage =
+            buffer_create(16, 0x0080 | 0x0004 | 0x0008, false).expect("storage buffer");
+        let readback = buffer_create(16, 0x0001 | 0x0008, false).expect("readback buffer");
+        let input: [u8; 16] = [
+            1, 0, 0, 0, // 1
+            2, 0, 0, 0, // 2
+            3, 0, 0, 0, // 3
+            4, 0, 0, 0, // 4
+        ];
+        assert!(buffer_write(storage, 0, &input));
+
+        let bind_group = bind_group_create(
+            layout,
+            &[BufferBindEntry {
+                binding: 0,
+                buffer: storage,
+                offset: 0,
+                size: 0,
+            }],
+        )
+        .expect("bind group");
+
+        // Один compute-pass: 4 рабочих группы по одному инвокейшену → 4 элемента.
+        let pass = GpuOp::ComputePass {
+            commands: vec![
+                ComputeCmd::SetPipeline(pipeline),
+                ComputeCmd::SetBindGroup {
+                    index: 0,
+                    bind_group,
+                },
+                ComputeCmd::Dispatch { x: 4, y: 1, z: 1 },
+            ],
+        };
+        let copy = GpuOp::CopyBufferToBuffer {
+            src: storage,
+            src_offset: 0,
+            dst: readback,
+            dst_offset: 0,
+            size: 16,
+        };
+        assert!(submit(&[pass, copy]), "compute + copy submit must succeed");
+
+        let out = buffer_read(readback, 0, 16).expect("read back");
+        // Каждый u32 удвоен шейдером на GPU.
+        assert_eq!(&out[0..4], &[2, 0, 0, 0], "1*2 = 2");
+        assert_eq!(&out[4..8], &[4, 0, 0, 0], "2*2 = 4");
+        assert_eq!(&out[8..12], &[6, 0, 0, 0], "3*2 = 6");
+        assert_eq!(&out[12..16], &[8, 0, 0, 0], "4*2 = 8");
+
+        compute_pipeline_destroy(pipeline);
+        buffer_destroy(storage);
+        buffer_destroy(readback);
+    }
+
+    #[test]
+    fn compute_pipeline_rejects_bad_shader() {
+        if !is_available() {
+            eprintln!("skip: no GPU adapter available");
+            return;
+        }
+        // Шейдер без @compute-точки входа: создание модуля проходит, пайплайн — нет.
+        let shader = shader_create("fn not_an_entry() {}").expect("module handle");
+        assert!(
+            compute_pipeline_create(shader, "main").is_none(),
+            "pipeline with a missing entry point must be rejected"
+        );
+    }
+
+    #[test]
+    fn compute_submit_unknown_pipeline_fails() {
+        if !is_available() {
+            eprintln!("skip: no GPU adapter available");
+            return;
+        }
+        // Compute-pass со ссылкой на несуществующий пайплайн не сабмитится.
+        let pass = GpuOp::ComputePass {
+            commands: vec![ComputeCmd::SetPipeline(999_999), ComputeCmd::Dispatch { x: 1, y: 1, z: 1 }],
+        };
+        assert!(!submit(&[pass]), "unknown pipeline handle must fail submit");
     }
 }
