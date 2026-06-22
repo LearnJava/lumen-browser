@@ -61,6 +61,47 @@ impl Dock {
             Dock::Right => window_w - cursor_x,
         }
     }
+
+    /// The opposite window edge (used by cross-dock "move to other side").
+    #[must_use]
+    pub fn opposite(self) -> Dock {
+        match self {
+            Dock::Left => Dock::Right,
+            Dock::Right => Dock::Left,
+        }
+    }
+
+    /// Lowercase token used in the persisted layout file (`left` / `right`).
+    #[must_use]
+    pub fn as_token(self) -> &'static str {
+        match self {
+            Dock::Left => "left",
+            Dock::Right => "right",
+        }
+    }
+
+    /// Parse a persisted token; `None` for anything but `left` / `right`.
+    #[must_use]
+    pub fn from_token(s: &str) -> Option<Dock> {
+        match s {
+            "left" => Some(Dock::Left),
+            "right" => Some(Dock::Right),
+            _ => None,
+        }
+    }
+}
+
+/// Compiled default dock side for a panel id.
+///
+/// The tab sidebars hug the left edge; the AI assistant and web sidebar hug the
+/// right. Unknown ids default to the left edge. A fresh profile (no persisted
+/// override) therefore reproduces the historical fixed-side layout exactly.
+#[must_use]
+pub fn default_dock(id: &str) -> Dock {
+    match id {
+        ID_AI | ID_SIDEBAR => Dock::Right,
+        _ => Dock::Left,
+    }
 }
 
 /// Half-width (CSS px) of the invisible resize hit-zone straddling a panel's
@@ -88,6 +129,9 @@ pub const MAX_WIDTH: f32 = 600.0;
 pub struct PanelLayout {
     /// panel id → user-chosen width (CSS px). Absent ⇒ compiled default.
     widths: BTreeMap<String, f32>,
+    /// panel id → user-chosen dock side (cross-dock override). Absent ⇒
+    /// [`default_dock`] for that id.
+    sides: BTreeMap<String, Dock>,
 }
 
 impl PanelLayout {
@@ -115,8 +159,14 @@ impl PanelLayout {
     }
 
     /// Parse the flat `key = value` text format. Malformed lines are skipped.
+    ///
+    /// Keys are namespaced by suffix: `<id>.dock` carries a side token, plain
+    /// `<id>` carries a width. Backward-compatible — files written before
+    /// cross-dock (widths only) parse unchanged, and an unknown suffix is
+    /// ignored rather than treated as a width.
     fn parse(text: &str) -> Self {
         let mut widths = BTreeMap::new();
+        let mut sides = BTreeMap::new();
         for line in text.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -126,19 +176,27 @@ impl PanelLayout {
                 continue;
             };
             let key = key.trim();
+            let val = val.trim();
             if key.is_empty() {
                 continue;
             }
-            if let Ok(w) = val.trim().parse::<f32>()
+            if let Some(id) = key.strip_suffix(".dock") {
+                if !id.is_empty()
+                    && let Some(d) = Dock::from_token(val)
+                {
+                    sides.insert(id.to_string(), d);
+                }
+            } else if let Ok(w) = val.parse::<f32>()
                 && w.is_finite()
             {
                 widths.insert(key.to_string(), w.clamp(MIN_WIDTH, MAX_WIDTH));
             }
         }
-        Self { widths }
+        Self { widths, sides }
     }
 
-    /// Serialise the layout to the flat text format (deterministic key order).
+    /// Serialise the layout to the flat text format (deterministic key order:
+    /// all widths, then all dock-side overrides).
     fn serialize(&self) -> String {
         let mut out = String::from("# Lumen panel layout\n");
         for (id, w) in &self.widths {
@@ -150,6 +208,12 @@ impl PanelLayout {
             } else {
                 out.push_str(&format!("{w}"));
             }
+            out.push('\n');
+        }
+        for (id, d) in &self.sides {
+            out.push_str(id);
+            out.push_str(".dock = ");
+            out.push_str(d.as_token());
             out.push('\n');
         }
         out
@@ -177,6 +241,25 @@ impl PanelLayout {
             Some(prev) if (prev - w).abs() < f32::EPSILON => false,
             _ => {
                 self.widths.insert(id.to_string(), w);
+                true
+            }
+        }
+    }
+
+    /// Effective dock side for panel `id`: the user's cross-dock override, or
+    /// `default` (typically [`default_dock`]) when never moved.
+    #[must_use]
+    pub fn dock_for(&self, id: &str, default: Dock) -> Dock {
+        self.sides.get(id).copied().unwrap_or(default)
+    }
+
+    /// Record a dock side for panel `id`. Returns `true` if the stored value
+    /// changed, so the caller can decide whether a relayout/save is due.
+    pub fn set_dock(&mut self, id: &str, dock: Dock) -> bool {
+        match self.sides.get(id) {
+            Some(prev) if *prev == dock => false,
+            _ => {
+                self.sides.insert(id.to_string(), dock);
                 true
             }
         }
@@ -277,5 +360,70 @@ empty =
         layout.set_width("sidebar", 300.0);
         let text = layout.serialize();
         assert!(text.contains("sidebar = 300\n"), "got: {text}");
+    }
+
+    // ── Cross-dock side persistence ───────────────────────────────────────────
+
+    #[test]
+    fn default_dock_matches_compiled_sides() {
+        assert_eq!(default_dock(ID_VERTICAL_TABS), Dock::Left);
+        assert_eq!(default_dock(ID_TREE_TABS), Dock::Left);
+        assert_eq!(default_dock(ID_AI), Dock::Right);
+        assert_eq!(default_dock(ID_SIDEBAR), Dock::Right);
+        assert_eq!(default_dock("unknown"), Dock::Left);
+    }
+
+    #[test]
+    fn dock_for_falls_back_to_default() {
+        let layout = PanelLayout::default();
+        assert_eq!(layout.dock_for(ID_VERTICAL_TABS, Dock::Left), Dock::Left);
+        assert_eq!(layout.dock_for(ID_AI, Dock::Right), Dock::Right);
+    }
+
+    #[test]
+    fn set_dock_overrides_and_reports_change() {
+        let mut layout = PanelLayout::default();
+        assert!(layout.set_dock(ID_VERTICAL_TABS, Dock::Right));
+        assert_eq!(layout.dock_for(ID_VERTICAL_TABS, Dock::Left), Dock::Right);
+        assert!(!layout.set_dock(ID_VERTICAL_TABS, Dock::Right)); // unchanged
+        assert!(layout.set_dock(ID_VERTICAL_TABS, Dock::Left)); // changed back
+    }
+
+    #[test]
+    fn dock_opposite_and_tokens() {
+        assert_eq!(Dock::Left.opposite(), Dock::Right);
+        assert_eq!(Dock::Right.opposite(), Dock::Left);
+        assert_eq!(Dock::Left.as_token(), "left");
+        assert_eq!(Dock::from_token("right"), Some(Dock::Right));
+        assert_eq!(Dock::from_token("middle"), None);
+    }
+
+    #[test]
+    fn side_survives_serialize_parse_roundtrip() {
+        let mut layout = PanelLayout::default();
+        layout.set_width(ID_AI, 280.0);
+        layout.set_dock(ID_VERTICAL_TABS, Dock::Right);
+        layout.set_dock(ID_AI, Dock::Left);
+        let text = layout.serialize();
+        let back = PanelLayout::parse(&text);
+        assert_eq!(back.dock_for(ID_VERTICAL_TABS, Dock::Left), Dock::Right);
+        assert_eq!(back.dock_for(ID_AI, Dock::Right), Dock::Left);
+        assert_eq!(back.width_for(ID_AI, 200.0), 280.0); // widths still intact
+    }
+
+    #[test]
+    fn parse_ignores_bad_dock_token_and_width_keys_unaffected() {
+        let text = "\
+# comment
+vertical-tabs = 240
+vertical-tabs.dock = right
+ai.dock = sideways
+.dock = left
+";
+        let layout = PanelLayout::parse(text);
+        assert_eq!(layout.width_for("vertical-tabs", 200.0), 240.0);
+        assert_eq!(layout.dock_for("vertical-tabs", Dock::Left), Dock::Right);
+        // bad token → default; empty id → ignored
+        assert_eq!(layout.dock_for("ai", Dock::Right), Dock::Right);
     }
 }
