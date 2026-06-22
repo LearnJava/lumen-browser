@@ -6,7 +6,9 @@
 
 ## In progress
 
-_(нет активных задач)_
+**F2-6 (остаток): cross-dock AI/web сайдбаров**  branch: `p1-ui-docking`
+Next step: base_x-параметризация `build_panel`/`hit_test` AI- и веб-панели (`window_w`→`origin_x`),
+проводка эффективной стороны в paint/hit `main.rs`, обобщение flip-команды на AI/web.
 
 ---
 
