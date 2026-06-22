@@ -2570,9 +2570,10 @@ pub struct ComputedStyle {
     /// `None` (False), `Some(true)` = `all` (элемент растягивается через
     /// все колонки). Не наследуется. Phase 0: parse+store.
     pub column_span_all: bool,
-    /// CSS Multi-column L1 §6.2 — `column-fill: auto | balance`. `false`
-    /// = auto (default — заполняет последовательно), `true` = balance.
-    /// Не наследуется.
+    /// CSS Multi-column L1 §6.2 — `column-fill: balance | auto`. `true`
+    /// = balance (spec default — распределяет содержимое поровну между
+    /// колонками), `false` = auto (заполняет колонки последовательно до
+    /// высоты контейнера). Не наследуется.
     pub column_fill_balance: bool,
     /// CSS Fragmentation L3 §3.1 — `break-before`. Phase 0 — enum со
     /// значениями auto/avoid/always/page/column/region. Не наследуется.
@@ -5125,7 +5126,7 @@ impl ComputedStyle {
             border_spacing_h: 0.0,
             border_spacing_v: 0.0,
             column_span_all: false,
-            column_fill_balance: false,
+            column_fill_balance: true,
             break_before: BreakValue::Auto,
             break_after: BreakValue::Auto,
             break_inside: BreakValue::Auto,
@@ -5433,7 +5434,7 @@ pub fn compute_style(
         gap_rule_style: BorderStyle::None,
         gap_rule_color: CssColor::CurrentColor,
         column_span_all: false,
-        column_fill_balance: false,
+        column_fill_balance: true,
         break_before: BreakValue::Auto,
         break_after: BreakValue::Auto,
         break_inside: BreakValue::Auto,

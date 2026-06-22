@@ -21,7 +21,7 @@ use crate::style::{
     set_cq_context, AlignValue,
     BackgroundImage, BorderCollapse, BoxSizing, ClearSide, ContainFlags, ContainerContext, ContainerType, Content,
     ContentItem, ComputedStyle, Direction, Display, FlexBasis, FlexDirection, FlexWrap, FloatSide,
-    GridAutoFlow, GridLine, GridTrackSize, Hyphens, Length, LengthOrAuto, ListStylePosition, MasonryAutoFlow,
+    GridAutoFlow, GridLine, GridTrackSize, Hyphens, Length, LengthOrAuto, ListStylePosition,
     ListStyleType, Overflow, OverflowWrap, Position, ScrollbarGutter, ScrollbarWidth,
     TextAlign, TextAlignLast, TextOverflow,
     TextWrapMode, TextWrapStyle,
@@ -6930,6 +6930,55 @@ fn box_is_column_sliceable(b: &LayoutBox) -> bool {
         && b.style.border_right_width == 0.0
 }
 
+/// CSS Multicol §7.1 — balanced column height for atomic (unsliceable) boxes.
+///
+/// Returns the smallest column height `H` such that greedily packing `outer_hs`
+/// (each box's margin-box height, in source order, opening a new column whenever
+/// the running height would exceed `H`) fits within `n_cols` columns. This is the
+/// target browsers minimise when `column-fill: balance` and items cannot be split
+/// across columns — e.g. 9 cards of varying height fill 3 columns as 3/3/3 rather
+/// than packing the first column to the container height.
+fn balanced_column_height(outer_hs: &[f32], n_cols: usize) -> f32 {
+    let total: f32 = outer_hs.iter().sum();
+    if n_cols <= 1 || outer_hs.is_empty() {
+        return total.max(1.0);
+    }
+    let max_item = outer_hs.iter().cloned().fold(0.0_f32, f32::max);
+    // Any feasible height is at least the tallest single item and at least the
+    // perfectly even split; the sum is always feasible (one column holds all).
+    let mut lo = max_item.max(total / n_cols as f32);
+    let mut hi = total.max(lo);
+    let fits = |h: f32| -> bool {
+        let mut cols = 1usize;
+        let mut cur = 0.0f32;
+        for &x in outer_hs {
+            if cur > 0.0 && cur + x > h {
+                cols += 1;
+                if cols > n_cols {
+                    return false;
+                }
+                cur = x;
+            } else {
+                cur += x;
+            }
+        }
+        true
+    };
+    // Binary search for the minimal feasible height (~0.25 px precision).
+    for _ in 0..40 {
+        if hi - lo <= 0.25 {
+            break;
+        }
+        let mid = (lo + hi) * 0.5;
+        if fits(mid) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    hi.ceil().max(1.0)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn lay_out_multicol_children(
     children: &mut Vec<LayoutBox>,
@@ -7084,34 +7133,31 @@ fn lay_out_multicol_children(
                 cur_y += seg_extent.max(0.0);
             } else {
                 // Atomic fallback: place each whole box into a column (greedy by height).
+                // In balance mode the target is the optimal balanced column height
+                // (smallest H that packs all boxes into n_cols columns) — matches how
+                // browsers distribute unsliceable items (e.g. 9 cards → 3×3, not 5/4/0).
+                // column-fill:auto fills each column to the container height instead.
                 let target_h = if balance {
-                    (total_h / n_cols as f32).ceil().max(1.0)
+                    balanced_column_height(&outer_hs, n_cols as usize)
                 } else {
                     container_h.unwrap_or_else(|| (total_h / n_cols as f32).ceil()).max(1.0)
                 };
-                // Count-based per-column cap prevents starvation when content heights are
-                // equal — but only in balance mode. column-fill:auto fills purely by height
-                // (a column may hold many short items), so the count cap must not apply there.
-                let per_col_cap = seg_idxs.len().div_ceil(n_cols as usize);
 
                 let mut col_assignment = vec![0usize; seg_idxs.len()];
                 let mut col_fill = vec![0.0f32; n_cols as usize];
-                let mut col_count = vec![0usize; n_cols as usize];
                 let mut cur_col = 0usize;
                 for (j, &oh) in outer_hs.iter().enumerate() {
                     let height_overflow = col_fill[cur_col] + oh > target_h && oh > 0.0;
-                    let count_overflow = balance && col_count[cur_col] >= per_col_cap;
                     // Never advance past an empty column: a column must hold at least one item
                     // before overflowing to the next, otherwise an item taller than target_h
                     // would skip column 0 and leave it blank (CSS Multicol §3.4 — every column
                     // box is filled in order, starting from the first).
-                    let col_nonempty = col_count[cur_col] > 0;
-                    if cur_col + 1 < n_cols as usize && col_nonempty && (height_overflow || count_overflow) {
+                    let col_nonempty = col_fill[cur_col] > 0.0;
+                    if cur_col + 1 < n_cols as usize && col_nonempty && height_overflow {
                         cur_col += 1;
                     }
                     col_assignment[j] = cur_col;
                     col_fill[cur_col] += oh;
-                    col_count[cur_col] += 1;
                 }
 
                 // Final positioning.
@@ -7554,13 +7600,20 @@ fn lay_out_flex(
 
             if is_column {
                 let inner_main = (outer_main - m_t - m_b).max(0.0);
+                // `inner_main` is the item's resolved *border-box* main size (it is
+                // derived from the preliminary border-box height and the flex
+                // grow/shrink result). Force border-box before re-layout so the value
+                // is used verbatim instead of having border+padding added on top of it
+                // for a content-box item (which double-counts the border). Mirrors the
+                // cross-axis stretch path below.
+                children[i].style.box_sizing = BoxSizing::BorderBox;
                 children[i].style.height = Some(Length::Px(inner_main));
                 lay_out(
                     &mut children[i],
                     content_x + m_l,
                     content_y + main_cursor + m_t,
                     content_width - m_l - m_r,
-                    None,
+                    Some(inner_main),
                     measurer,
                     viewport,
                     pcb,
@@ -7811,12 +7864,16 @@ fn lay_out_grid(
     let inherited_rows: Option<SubgridContext> = SUBGRID_ROW_CTX.with(|c| c.borrow_mut().take());
 
     // Indices of actual items (non-Skip).
-    let item_idxs: Vec<usize> = children
+    let mut item_idxs: Vec<usize> = children
         .iter()
         .enumerate()
         .filter(|(_, c)| !matches!(c.kind, BoxKind::Skip))
         .map(|(i, _)| i)
         .collect();
+    // CSS Grid §6: grid items are placed in "modified document order" — source order
+    // reordered by the `order` property. A stable sort preserves source order among
+    // items with equal `order`, so auto-placement honours `order` like Edge does.
+    item_idxs.sort_by_key(|&i| children[i].style.order);
 
     if item_idxs.is_empty() {
         return 0.0;
@@ -7850,78 +7907,15 @@ fn lay_out_grid(
         &s.grid_template_columns
     };
 
-    // CSS Grid L3 §14: masonry layout — early dispatch before normal grid placement.
-    // `masonry` as grid_template_rows → column-masonry (most common, Pinterest-style).
-    // `masonry` as grid_template_columns → row-masonry (transposed).
+    // CSS Masonry Layout (CSS Grid L3 §14) is not shipped by any stable browser —
+    // Edge/Chrome treat `masonry` as an invalid track value and drop it, so the axis
+    // falls back to `none` (a regular auto-sized grid). We match that ground truth:
+    // strip the `masonry` sentinel from the effective track list on whichever axis
+    // carries it, then fall through to the normal grid placement algorithm below.
     let col_is_masonry = eff_col_template.first() == Some(&GridTrackSize::Masonry);
     let row_is_masonry = s.grid_template_rows.first() == Some(&GridTrackSize::Masonry);
-
-    if col_is_masonry || row_is_masonry {
-        // CSS Masonry Layout §9 — masonry-auto-flow controls placement order.
-        let sorted_idxs: Vec<usize> = {
-            let mut idxs = item_idxs.clone();
-            match s.masonry_auto_flow {
-                MasonryAutoFlow::DefiniteFirst => {
-                    // Items with an explicit grid-axis position first, then auto items.
-                    let is_definite = |i: usize| -> bool {
-                        if row_is_masonry {
-                            !matches!(children[i].style.grid_column_start, GridLine::Auto)
-                        } else {
-                            !matches!(children[i].style.grid_row_start, GridLine::Auto)
-                        }
-                    };
-                    idxs.sort_by_key(|&i| if is_definite(i) { 0usize } else { 1 });
-                }
-                MasonryAutoFlow::Next => { /* source order — no-op */ }
-                MasonryAutoFlow::Ordered => {
-                    idxs.sort_by_key(|&i| children[i].style.order);
-                }
-            }
-            idxs
-        };
-
-        let (track_count, track_gap) = if row_is_masonry {
-            // Grid axis = columns (defined by grid_template_columns), masonry axis = rows.
-            (eff_col_template.len().max(1), col_gap)
-        } else {
-            // Grid axis = rows (defined by grid_template_rows), masonry axis = columns.
-            (s.grid_template_rows.len().max(1), row_gap)
-        };
-        let total_track_gap = track_gap * track_count.saturating_sub(1) as f32;
-        let track_size = ((content_width - total_track_gap) / track_count as f32).max(0.0);
-        let item_gap = if row_is_masonry { row_gap } else { col_gap };
-
-        // Step 1: lay out all items at track_size to establish their intrinsic height.
-        for &i in &sorted_idxs {
-            lay_out(&mut children[i], content_x, content_y, track_size, None, measurer, viewport, pcb, hp, false);
-        }
-
-        // Step 2: greedy waterfall placement — each item placed in the track with minimum height.
-        let mut track_heights = vec![0.0_f32; track_count];
-        for &i in &sorted_idxs {
-            let min_track = track_heights
-                .iter()
-                .enumerate()
-                .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|(idx, _)| idx)
-                .unwrap_or(0);
-
-            if row_is_masonry {
-                children[i].rect.x = content_x + min_track as f32 * (track_size + track_gap);
-                children[i].rect.y = content_y + track_heights[min_track];
-            } else {
-                // Row-masonry: column positions waterfall, row positions from explicit tracks.
-                children[i].rect.x = content_x + track_heights[min_track];
-                children[i].rect.y = content_y + min_track as f32 * (track_size + track_gap);
-            }
-            children[i].rect.width = track_size;
-            track_heights[min_track] += children[i].rect.height + item_gap;
-        }
-
-        // Total height = max track accumulation (subtract trailing gap).
-        let total_h = track_heights.iter().cloned().fold(0.0_f32, f32::max);
-        return (total_h - item_gap).max(0.0);
-    }
+    let eff_col_template: &[GridTrackSize] = if col_is_masonry { &[] } else { eff_col_template };
+    let eff_row_template: &[GridTrackSize] = if row_is_masonry { &[] } else { &s.grid_template_rows };
 
     // Determine explicit track counts.
     // Subgrid sentinel `[Subgrid]` is a single-element vec meaning "inherit all parent tracks";
@@ -8078,7 +8072,7 @@ fn lay_out_grid(
             }
         } else {
             // Column flow: fill top-to-bottom, wrap to next column.
-            let n_explicit_rows = s.grid_template_rows.len().max(1) as u32;
+            let n_explicit_rows = eff_row_template.len().max(1) as u32;
             let fixed_rs = if rs != 0 { rs } else { 0 };
             let fixed_re = if rs != 0 { re } else { 0 };
 
@@ -8205,7 +8199,7 @@ fn lay_out_grid(
     } else {
         (0..n_rows)
             .map(|r| {
-                match grid_track(r, &s.grid_template_rows, &s.grid_auto_rows) {
+                match grid_track(r, eff_row_template, &s.grid_auto_rows) {
                     GridTrackSize::Length(l) => l.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0),
                     GridTrackSize::Minmax(min, _) => min.resolve_fixed(em, content_width, viewport).unwrap_or(0.0),
                     GridTrackSize::Subgrid => 0.0,
@@ -8270,7 +8264,7 @@ fn lay_out_grid(
         if r0 < row_heights.len()
             && inherited_rows.is_none()
             && matches!(
-                grid_track(r0 as u32, &s.grid_template_rows, &s.grid_auto_rows),
+                grid_track(r0 as u32, eff_row_template, &s.grid_auto_rows),
                 GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent | GridTrackSize::Fr(_)
             )
         {
@@ -8289,12 +8283,12 @@ fn lay_out_grid(
         let container_h = s.height.as_ref().and_then(|h| h.resolve(em, Some(content_width), viewport));
         let free_row = container_h.map(|h| (h - fixed_row_total).max(0.0)).unwrap_or(0.0);
         let total_row_fr: f32 = (0..n_rows)
-            .map(|r| grid_track(r, &s.grid_template_rows, &s.grid_auto_rows).fr().unwrap_or(0.0))
+            .map(|r| grid_track(r, eff_row_template, &s.grid_auto_rows).fr().unwrap_or(0.0))
             .sum();
         if total_row_fr > 0.0 && free_row > 0.0 {
             let fr_h = free_row / total_row_fr;
             for r in 0..n_rows {
-                if let Some(f) = grid_track(r, &s.grid_template_rows, &s.grid_auto_rows).fr() {
+                if let Some(f) = grid_track(r, eff_row_template, &s.grid_auto_rows).fr() {
                     row_heights[r as usize] = (f * fr_h).max(row_heights[r as usize]);
                 }
             }
@@ -8385,7 +8379,10 @@ fn lay_out_grid(
                 item.rect.y = cell_y + (cell_h - item_outer_h) / 2.0 + m_t;
             }
             AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal => {
-                if item.rect.height < cell_h - m_t - m_b {
+                // CSS Grid §11.2: `stretch` only grows items whose used block size is
+                // `auto`; an explicit `height` is preserved (the item is top-aligned in
+                // the cell, leaving free space below — like Edge).
+                if is.height.is_none() && item.rect.height < cell_h - m_t - m_b {
                     item.rect.height = (cell_h - m_t - m_b).max(item.rect.height);
                 }
                 item.rect.y = cell_y + m_t;
@@ -14439,7 +14436,10 @@ mod tests {
         assert!((sx - sy).abs() < 1e-4, "meet must be uniform");
     }
 
-    // ── masonry-auto-flow integration tests ──────────────────────────────────
+    // ── grid `masonry` fallback integration tests ────────────────────────────
+    // CSS masonry is not shipped by stable browsers (Edge ignores `grid-template-*:
+    // masonry`). We match that: the axis falls back to `none` → a regular auto-sized
+    // grid that still honours the `order` property. These tests lock that behaviour.
 
     fn masonry_grid_children(css: &str, vp: f32) -> Vec<super::LayoutBox> {
         let html = r#"<div id="grid"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
@@ -14457,16 +14457,15 @@ mod tests {
     }
 
     #[test]
-    fn masonry_auto_flow_ordered_respects_css_order() {
-        // 3-column masonry, items have explicit `order` overriding source order.
-        // c has order:-1 → placed first in track 0.
-        // a has order:0, b has order:0 → placed in source order after c.
+    fn grid_masonry_fallback_respects_order() {
+        // `grid-template-rows: masonry` is ignored (Edge fallback) → regular 3-column
+        // grid. The `order` property still reorders items: c (order:-1) is placed
+        // first, so it lands in column 1 (leftmost).
         let css = r#"
             #grid {
                 display: grid;
                 grid-template-columns: 1fr 1fr 1fr;
                 grid-template-rows: masonry;
-                masonry-auto-flow: ordered;
                 width: 300px;
                 gap: 0px;
             }
@@ -14475,27 +14474,23 @@ mod tests {
             #c { height: 40px; order: -1; }
         "#;
         let children = masonry_grid_children(css, 300.0);
-        // With ordered: item c (order=-1) → placed first into track 0.
-        // After that, a (order=0) → track 1 (min height), b (order=0) → track 2 (min height).
-        // → track0 contains c at y=0, track1 contains a, track2 contains b.
         let c_box = children.iter().find(|b| b.rect.height == 40.0);
-        assert!(c_box.is_some(), "item c (height=40) not found in masonry children");
+        assert!(c_box.is_some(), "item c (height=40) not found in grid children");
         if let Some(c) = c_box {
-            // c has order=-1, placed first → lands in track 0 (leftmost x=0).
-            assert!(c.rect.x < 110.0, "c with order=-1 should be in track 0, got x={}", c.rect.x);
+            // c has order=-1, placed first → column 1 (leftmost x≈0).
+            assert!(c.rect.x < 110.0, "c with order=-1 should be in column 1, got x={}", c.rect.x);
         }
     }
 
     #[test]
-    fn masonry_auto_flow_next_source_order() {
-        // With masonry-auto-flow: next, items appear in DOM source order.
-        // item a (height=100) → track 0; item b (height=60) → track 1; item c (height=40) → track 2.
+    fn grid_masonry_fallback_source_order() {
+        // `grid-template-rows: masonry` ignored → regular 3-column grid, items in
+        // source order: a → column 1, b → column 2, c → column 3.
         let css = r#"
             #grid {
                 display: grid;
                 grid-template-columns: 1fr 1fr 1fr;
                 grid-template-rows: masonry;
-                masonry-auto-flow: next;
                 width: 300px;
                 gap: 0px;
             }
@@ -14509,8 +14504,8 @@ mod tests {
         assert!(a_box.is_some(), "item a (height=100) not found");
         assert!(b_box.is_some(), "item b (height=60) not found");
         if let (Some(a), Some(b)) = (a_box, b_box) {
-            // a first → track 0 (x near 0), b second → track 1 (x near 100).
-            assert!(a.rect.x < b.rect.x, "a should be in track 0 (x<b.x), got a.x={} b.x={}", a.rect.x, b.rect.x);
+            // a first → column 1 (x≈0), b second → column 2 (x≈100).
+            assert!(a.rect.x < b.rect.x, "a should be in column 1 (x<b.x), got a.x={} b.x={}", a.rect.x, b.rect.x);
         }
     }
 

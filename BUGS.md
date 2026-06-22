@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-231)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-232)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -120,7 +120,7 @@
 | [BUG-102](bugs/BUG-102-FIXED.md) | FIXED 2026-06-17 | paint | SVG stroke-width/dasharray молча терялись в standards-mode (unitless user units) + join-шипы; TEST-60 11.51%→1.41%, TEST-54 5.58%→2.30% |
 | [BUG-103](bugs/BUG-103-OPEN.md) | OPEN | js | View Transitions API not implemented — TEST-61: 99.53%; Phase 2 |
 | [BUG-104](bugs/BUG-104-FIXED.md) | FIXED 2026-06-19 | layout | TEST-62 63.70%→2.32%: реальная причина — column flex-grow не распределял free space. `lay_out_flex` хардкодил `container_main=0`/`free_space=0` для column → `.right-col` дети `flex:1` схлопывались в h≈0. Фикс: `explicit_main` для column (явная height или растяжение родителем re-layout). Геометрия пиксель-точна (diff: все заливки идентичны). Остаток 2.32% = font-parity (BUG-128) метки секций + border-radius edge-AA (BUG-176) → KNOWN_DEBTORS. box_tree.rs:5097/7191 |
-| [BUG-105](bugs/BUG-105-OPEN.md) | OPEN | layout | CSS Masonry layout not implemented — TEST-63: 26.13%; Phase 2 |
+| [BUG-105](bugs/BUG-105-FIXED.md) | FIXED 2026-06-22 | layout | TEST-63 48%→2.02%: `display:masonry` невалиден в Edge → fallback на `column-count:3` multicol. Реальная причина — multicol balance заполнял первую колонку до высоты контейнера (5/4/0) вместо равномерного разбиения. Фикс: `balanced_column_height` (бин-поиск минимальной высоты колонки) → 9 карт = 3×3 как Edge. Геометрия пиксель-точна; остаток = border-radius edge-AA (BUG-176) + текст. box_tree.rs:6933 |
 | [BUG-106](bugs/BUG-106-FIXED.md) | FIXED 2026-06-09 | layout | TEST-64 table: missing UA heading defaults → h3 без размера и margin |
 | [BUG-107](bugs/BUG-107-FIXED.md) | FIXED 2026-06-09 | layout | flex align-content: normal/stretch не распределял свободное пространство |
 | [BUG-108](bugs/BUG-108-FIXED.md) | FIXED 2026-06-17 | layout | TEST-66 5.24%→1.08%: реальная причина — parent↔last-child bottom margin не коллапсил (CSS 2.1 §8.3.1), свотчи уезжали вниз +30px/секция. Остаток 1.08% — текст (font-parity, rule 3) + border-radius AA |
@@ -158,7 +158,7 @@
 | [BUG-140](bugs/BUG-140-FIXED.md) | FIXED 2026-06-13 | paint | INTERACTION TEST-109 (clip-path×transform×radius) 14.10%→4.80% |
 | [BUG-141](bugs/BUG-141-FIXED.md) | FIXED 2026-06-13 | layout | TEST-71 17.83%: flex align-items:center в non-wrap контейнере игнорировал cross size |
 | [BUG-142](bugs/BUG-142-FIXED.md) | FIXED 2026-06-17 | paint/shadow-dom | :host / ::slotted rendering diverges — TEST-72: 11.24% → 0.00% |
-| [BUG-143](bugs/BUG-143-OPEN.md) | OPEN | layout | masonry-auto-flow placement diverges — TEST-75: 16.97% |
+| [BUG-143](bugs/BUG-143-FIXED.md) | FIXED 2026-06-22 | layout | TEST-75 16.97%→0.25%: `grid-template-rows:masonry` невалиден в Edge → fallback на обычный grid. Три фикса: (1) grid placement теперь сортирует items по `order` (CSS Grid §6); (2) grid `align:stretch` больше не растягивает items с явной `height` (CSS Grid §11.2); (3) flex column больше не двойного-считал border (BUG-232) — `.label`-полосы садятся в правильную высоту. Геометрия = Edge пиксель-в-пиксель. box_tree.rs:7853 |
 | [BUG-144](bugs/BUG-144-OPEN.md) | OPEN | paint | CSS filter/backdrop-filter — TEST-30: row-flip 16.42%→10.48% (FLIP_Y) + gradient hard-stop row 2 (BUG-085) 10.48%→7.56% + backdrop colour-matrix/combo больше не тёмные (CPU backdrop-пайплайн `apply_backdrop_filters`: blur через `box_blur_rgba`, без мёртвого filter_image-readback) 7.56%→4.36%. Остаток DEBTOR: box-blur≈Gaussian + edge-bleed на двух blur-картах (row 4 cards 1,5) + filter AA |
 | [BUG-145](bugs/BUG-145-FIXED.md) | FIXED 2026-06-12 | paint | РЕГРЕССИЯ: offscreen filter layer сайзился по bounds → viewport stretch |
 | [BUG-146](bugs/BUG-146-FIXED.md) | FIXED 2026-06-12 | paint | TEST-15 box-shadow регрессия 1.06%→6.58%: blur-FBO без FLIP_Y |
@@ -245,6 +245,7 @@
 | [BUG-229](bugs/BUG-229-FIXED.md) | FIXED 2026-06-21 | image | PNG `iCCP` распаковывался сырым `DeflateDecoder` вместо `ZlibDecoder` — zlib-обёртка профиля (RFC 1950) ломала инфляцию → профиль тихо терялся → ни один PNG с ICC не управлялся по цвету (P3/AdobeRGB/Rec2020 пересыщены). `png/mod.rs:40`. Найден при ICC-6. Регресс-тест `icc_color_management.rs` |
 | [BUG-230](bugs/BUG-230-OPEN.md) | OPEN | layout/paint | `calc()` в позиции color-stop линейного градиента схлопывает градиент (`blue calc(50% + 10px)` → сплошной синий; diagonal-stripe `calc(50% ± 2px)` → прозрачный). `%`-стопы работают, `parse_length_q` парсит `calc()` в `Length::Calc` — дефект ниже: позиции-`Calc` не резолвятся против длины линии градиента (`style.rs` densification). Замечен при BUG-125 (TEST-76 диагональный трек), остаток 0.54% → KNOWN_DEBTOR |
 | [BUG-231](bugs/BUG-231-OPEN.md) | OPEN | paint/shell | Анимированные `background-color`/`color` не применяются в живом окне без relayout: compositor-offload (`to_compositor_frame`→`CompositorOverride`) несёт только opacity/transform, цветовые override оседают в `anim_frame` без отрисовки. Видно на TEST-78: view-timeline subject едет по прогрессу (transform), но фон держит базовый teal вместо проинтерполированного оранжевого. Фикс — добавить `background_color` в `CompositorOverride` + патчить background-`FillRect` в `emit_box_self`/`walk_with_anim`. Найдено при F2-2/BUG-127 |
+| [BUG-232](bugs/BUG-232-FIXED.md) | FIXED 2026-06-22 | layout | Column flex двойного-считал border у item с явной `height`: `lay_out_flex` присваивал `style.height = inner_main` (border-box значение) на content-box item без принудительного `box-sizing:border-box`, поэтому border добавлялся повторно (height:28 + border:2 → 36 вместо 32). Фикс: форсировать border-box перед re-layout (зеркало cross-axis stretch-пути). Найдено при F2-3 (сдвигало `.label`-полосы в TEST-75). box_tree.rs:7601 |
 
 ---
 

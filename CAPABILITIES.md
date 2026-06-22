@@ -64,7 +64,8 @@ Snapshot: **Phase 2 «Interactive», app v0.2.0**. ~21 crates.
 ### lumen-layout (`crates/engine/layout`)
 - ✅ Block + inline flow (line wrap, margin collapsing, `margin: 0 auto`, `line-height-step` vertical rhythm).
 - ✅ Flexbox (full: direction, grow/shrink/basis, justify/align, gap, wrap). ⬜ column-direction wrapping.
-- ✅ CSS Grid (px/fr/auto/repeat/minmax, explicit+auto placement, dense, subgrid). ⬜ grid-template-areas, named lines.
+- ✅ CSS Grid (px/fr/auto/repeat/minmax, explicit+auto placement, dense, subgrid, `order`). ⬜ grid-template-areas, named lines. `grid-template-*: masonry` / `display: masonry` fall back to a regular grid / multicol (matches Edge, which ships no CSS masonry).
+- ✅ Multi-column (`column-count`/`column-width`/`column-gap`/`column-rule`/`column-span`, `column-fill: balance|auto` — balanced atomic-box distribution via binary-searched column height).
 - ✅ Table layout (colspan/rowspan, column widths) — live path `box_tree.rs` (note: `table.rs` is dead code).
 - ✅ Positioned: relative, absolute/fixed (out-of-flow + containing-block threading); `position: sticky` partial (offsets computed, scroll wiring shell-side).
 - ✅ SVG layout pass (viewBox, rect/circle/ellipse/line/path, `<use>` with cycle detection); `<text>` with `text-anchor`/`dominant-baseline` (presentation attribute **and** CSS property — CSS overrides the attribute and inherits from `<g>`); vertical writing modes (`vertical-rl/lr`).
