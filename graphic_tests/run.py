@@ -223,7 +223,7 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '54': ('BUG-173', 2.5),     # SVG <path> fill+stroke остаток (AA-швы, self-intersecting fill)
     '57': ('BUG-099', 4.14),    # <canvas> getContext("2d") — Phase 2
     '60': ('BUG-173', 1.5),     # SVG stroke advanced остаток (triangle-soup AA-швы, dash-on-curve)
-    '61': ('BUG-103', 99.53),   # View Transitions API — Phase 2
+    '61': ('BUG-103', 99.53),   # View Transitions L1 РЕНДЕРИТСЯ (F2-4 ревизия 2026-06-22): startViewTransition + root cross-fade работают (проверено CPU/--ipc). Baseline 99.53 — это пустой gdigrab-кадр (blank-capture: белый кадр, регион во весь экран); gdigrab для этой страницы flaky, мерить надо --ipc. Реальный детерминированный diff = 10.71%: доминирует тайминг захвата Edge (async update-callback по спеку — Edge headless снимает кадр ДО callback → старая DOM card1 active; Lumen рендерит устоявшееся card2 active, спек-корректно; тот же класс, что TEST-71/BUG-199 и TEST-77/BUG-126) + font-parity текста (rule 3). Baseline оставлен 99.53 (blank-safe); опц. полный L1 (named groups + ::view-transition pseudo) = XL, не валидируется этим тестом
     '63': ('BUG-176', 2.02),    # display:masonry→multicol fallback fixed (BUG-105, 48%→2.02%): 9 карт = 3×3 balanced как Edge, геометрия пиксель-точна. Остаток = border-radius:4px edge-AA (BUG-176) + текст заголовка/меток (rule 3). Baseline CPU-diff (ffmpeg-free)
     # '75' убран: BUG-143 FIXED (16.97%→0.25%) — grid-masonry fallback + order + stretch + flex border (BUG-232); геометрия = Edge
     '119': ('BUG-173', 0.81),   # paint-order: остаток = stroke triangle-soup AA-швы (geometry фикснут BUG-174)
