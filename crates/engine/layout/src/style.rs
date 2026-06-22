@@ -2737,6 +2737,17 @@ pub struct ComputedStyle {
     /// CSS Masking L1 §6.4 — `mask-mode: alpha | luminance | match-source`.
     /// Non-inherited. `match-source` resolves to `Alpha` for `<image>` sources.
     pub mask_mode: MaskMode,
+    /// CSS Masking L1 §4.4 — `mask-position`. Default `50% 50%`. Non-inherited.
+    pub mask_position: ObjectPosition,
+    /// CSS Masking L1 §4.5 — `mask-origin: border-box | padding-box | content-box`.
+    /// Default `BorderBox`. Non-inherited.
+    pub mask_origin: BackgroundOrigin,
+    /// CSS Masking L1 §4.6 — `mask-clip`. Same keywords as background-clip.
+    /// Default `BorderBox`. Non-inherited.
+    pub mask_clip: BackgroundClip,
+    /// CSS Masking L1 §4.7 — `mask-composite: add | subtract | intersect | exclude`.
+    /// Non-inherited. Default `Add`.
+    pub mask_composite: MaskComposite,
     /// CSS Scrollbars 1 — `scrollbar-width: auto | thin | none`.
     pub scrollbar_width: ScrollbarWidth,
     /// CSS Scrollbars 1 — `scrollbar-color: auto | <color> <color>`
@@ -4972,6 +4983,29 @@ pub enum MaskMode {
     Luminance,
 }
 
+/// CSS Masking L1 §4.7 — `mask-composite`. Controls how multiple mask layers
+/// are composited together. Single value for now; multi-layer cycling deferred.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MaskComposite {
+    #[default]
+    Add,
+    Subtract,
+    Intersect,
+    Exclude,
+}
+
+impl MaskComposite {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "add" => Some(Self::Add),
+            "subtract" => Some(Self::Subtract),
+            "intersect" => Some(Self::Intersect),
+            "exclude" => Some(Self::Exclude),
+            _ => None,
+        }
+    }
+}
+
 impl ComputedStyle {
     /// CSS 2.1 §17.6.1 / Basic UI L4 §5.2 — **used** value `outline-width`
     /// равно 0, если `outline-style` равен `none` (это spec, не аппроксимация).
@@ -5192,11 +5226,15 @@ impl ComputedStyle {
             scroll_timeline_axis: ScrollAxis::Block,
             view_timeline_name: None,
             view_timeline_axis: ScrollAxis::Block,
-            mask_image: BackgroundImage::None,
-            mask_repeat: BackgroundRepeat::Repeat,
-            mask_size: BackgroundSize::Auto,
-            mask_mode: MaskMode::Alpha,
-            scrollbar_width: ScrollbarWidth::Auto,
+mask_image: BackgroundImage::None,
+             mask_repeat: BackgroundRepeat::Repeat,
+             mask_size: BackgroundSize::Auto,
+             mask_mode: MaskMode::Alpha,
+             mask_position: ObjectPosition::default(),
+             mask_origin: BackgroundOrigin::BorderBox,
+             mask_clip: BackgroundClip::BorderBox,
+             mask_composite: MaskComposite::Add,
+             scrollbar_width: ScrollbarWidth::Auto,
             scrollbar_color: None,
             scrollbar_gutter: ScrollbarGutter::Auto,
             content: Content::Normal,
@@ -5513,12 +5551,16 @@ pub fn compute_style(
         scroll_timeline_axis: ScrollAxis::Block,
         view_timeline_name: None,
         view_timeline_axis: ScrollAxis::Block,
-        // CSS Masking — не наследуется.
-        mask_image: BackgroundImage::None,
-        mask_repeat: BackgroundRepeat::Repeat,
-        mask_size: BackgroundSize::Auto,
-        mask_mode: MaskMode::Alpha,
-        // CSS Scrollbars — scrollbar-width/-color inherited;
+// CSS Masking — не наследуется.
+         mask_image: BackgroundImage::None,
+         mask_repeat: BackgroundRepeat::Repeat,
+         mask_size: BackgroundSize::Auto,
+         mask_mode: MaskMode::Alpha,
+         mask_position: ObjectPosition::default(),
+         mask_origin: BackgroundOrigin::BorderBox,
+         mask_clip: BackgroundClip::BorderBox,
+         mask_composite: MaskComposite::Add,
+         // CSS Scrollbars — scrollbar-width/-color inherited;
         // scrollbar-gutter не наследуется.
         scrollbar_width: inherited.scrollbar_width,
         scrollbar_color: inherited.scrollbar_color,
@@ -11447,6 +11489,44 @@ fn apply_declaration(
                 style.max_height = Some(len);
             }
         }
+        // CSS Logical Properties L1 — min/max inline-size / block-size.
+        // Phase 0: horizontal-tb writing mode maps these to physical properties.
+        "min-inline-size" => {
+            if val.trim() == "auto" {
+                style.min_width = None;
+            } else if let Some(len) = parse_sizing_length(val, is_quirks)
+                && !matches!(&len, Length::Px(v) if *v < 0.0)
+            {
+                style.min_width = Some(len);
+            }
+        }
+        "max-inline-size" => {
+            if val.trim() == "none" {
+                style.max_width = None;
+            } else if let Some(len) = parse_sizing_length(val, is_quirks)
+                && !matches!(&len, Length::Px(v) if *v < 0.0)
+            {
+                style.max_width = Some(len);
+            }
+        }
+        "min-block-size" => {
+            if val.trim() == "auto" {
+                style.min_height = None;
+            } else if let Some(len) = parse_sizing_length(val, is_quirks)
+                && !matches!(&len, Length::Px(v) if *v < 0.0)
+            {
+                style.min_height = Some(len);
+            }
+        }
+        "max-block-size" => {
+            if val.trim() == "none" {
+                style.max_height = None;
+            } else if let Some(len) = parse_sizing_length(val, is_quirks)
+                && !matches!(&len, Length::Px(v) if *v < 0.0)
+            {
+                style.max_height = Some(len);
+            }
+        }
         "font-size" => {
             // Обрабатывается в pre-pass; в этой ветке пропускаем.
         }
@@ -11893,6 +11973,26 @@ fn apply_declaration(
         "column-gap" => {
             if let Some(len) = parse_length_q(val, is_quirks) {
                 style.column_gap = if matches!(&len, Length::Px(v) if *v < 0.0) {
+                    Length::Px(0.0)
+                } else {
+                    len
+                };
+            }
+        }
+        "grid-column-gap" => {
+            // CSS Grid L1 §7.3: legacy alias for column-gap (deprecated).
+            if let Some(len) = parse_length_q(val, is_quirks) {
+                style.column_gap = if matches!(&len, Length::Px(v) if *v < 0.0) {
+                    Length::Px(0.0)
+                } else {
+                    len
+                };
+            }
+        }
+        "grid-row-gap" => {
+            // CSS Grid L1 §7.3: legacy alias for row-gap (deprecated).
+            if let Some(len) = parse_length_q(val, is_quirks) {
+                style.row_gap = if matches!(&len, Length::Px(v) if *v < 0.0) {
                     Length::Px(0.0)
                 } else {
                     len
@@ -13052,6 +13152,31 @@ fn apply_declaration(
                 || trimmed.eq_ignore_ascii_case("match-source")
             {
                 style.mask_mode = MaskMode::Alpha;
+            }
+        }
+        "mask-position" => {
+            // CSS Masking L1 §4.4 — `<position>` same as background-position.
+            if let Some(pos) = ObjectPosition::parse(val.trim(), em_basis, viewport) {
+                style.mask_position = pos;
+            }
+        }
+        "mask-origin" => {
+            // CSS Masking L1 §4.5 — `border-box | padding-box | content-box`.
+            if let Some(o) = BackgroundOrigin::parse(val.trim()) {
+                style.mask_origin = o;
+            }
+        }
+        "mask-clip" => {
+            // CSS Masking L1 §4.6 — same keywords as background-clip.
+            if let Some(c) = BackgroundClip::parse(val.trim()) {
+                style.mask_clip = c;
+            }
+        }
+        "mask-composite" => {
+            // CSS Masking L1 §4.7 — `add | subtract | intersect | exclude`.
+            // Phase 0: store single value; multi-layer cycling deferred.
+            if let Some(c) = MaskComposite::parse(val.trim()) {
+                style.mask_composite = c;
             }
         }
         "mask-size" => {
