@@ -2848,7 +2848,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgpu_compute.rs:980` **enum** `GpuOp` — Одна записанная операция command-encoder для исполнения на `queue.submit`
 `crates/engine/paint/src/webgpu_compute.rs:1035` **fn** `submit` — Исполняет набор операций в одном `CommandEncoder` и сабмитит на очередь
 
-## lumen-shell  (848 symbols)
+## lumen-shell  (854 symbols)
 
 `crates/shell/src/adblock.rs:44` **fn** `browser_data_dir` — Root of all browser user data (portable): `<exe_dir>/data`
 `crates/shell/src/adblock.rs:52` **fn** `adblock_dir` — `<data>/adblock` — root of the ad-block subsystem's files
@@ -3146,11 +3146,17 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/omnibox/mod.rs:39` **fn** `resolve` — Resolve `input` against the alias table and built-in `@` actions
 `crates/shell/src/panel_layout.rs:46` **enum** `Dock` — Which window edge a docked sidebar hugs
 `crates/shell/src/panel_layout.rs:58` **fn** `width_from_cursor` — Resolve the dragged cursor x-position into a panel width for this dock,
-`crates/shell/src/panel_layout.rs:88` **struct** `PanelLayout` — Runtime, persisted widths of the docked panels, keyed by panel id
-`crates/shell/src/panel_layout.rs:110` **fn** `load` — Load the persisted layout, or an empty (all-default) layout if the file
-`crates/shell/src/panel_layout.rs:161` **fn** `width_for` — Width to use for the panel `id`, falling back to `default` when the user
-`crates/shell/src/panel_layout.rs:171` **fn** `set_width` — Record a new width for panel `id` (clamped). Returns `true` if the stored
-`crates/shell/src/panel_layout.rs:189` **fn** `save` — Persist the layout to disk (best-effort)
+`crates/shell/src/panel_layout.rs:67` **fn** `opposite` — The opposite window edge (used by cross-dock "move to other side")
+`crates/shell/src/panel_layout.rs:76` **fn** `as_token` — Lowercase token used in the persisted layout file (`left` / `right`)
+`crates/shell/src/panel_layout.rs:85` **fn** `from_token` — Parse a persisted token; `None` for anything but `left` / `right`
+`crates/shell/src/panel_layout.rs:100` **fn** `default_dock` — Compiled default dock side for a panel id
+`crates/shell/src/panel_layout.rs:129` **struct** `PanelLayout` — Runtime, persisted widths of the docked panels, keyed by panel id
+`crates/shell/src/panel_layout.rs:154` **fn** `load` — Load the persisted layout, or an empty (all-default) layout if the file
+`crates/shell/src/panel_layout.rs:225` **fn** `width_for` — Width to use for the panel `id`, falling back to `default` when the user
+`crates/shell/src/panel_layout.rs:235` **fn** `set_width` — Record a new width for panel `id` (clamped). Returns `true` if the stored
+`crates/shell/src/panel_layout.rs:252` **fn** `dock_for` — Effective dock side for panel `id`: the user's cross-dock override, or
+`crates/shell/src/panel_layout.rs:258` **fn** `set_dock` — Record a dock side for panel `id`. Returns `true` if the stored value
+`crates/shell/src/panel_layout.rs:272` **fn** `save` — Persist the layout to disk (best-effort)
 `crates/shell/src/panels/a11y_panel.rs:66` **struct** `A11yPanel` — Accessibility settings panel state
 `crates/shell/src/panels/a11y_panel.rs:75` **fn** `new` — Create a new hidden panel with default preferences
 `crates/shell/src/panels/a11y_panel.rs:87` **fn** `toggle` — Toggle panel visibility
@@ -4205,4 +4211,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4134 symbols in 22 crates*
+*Total: 4140 symbols in 22 crates*
