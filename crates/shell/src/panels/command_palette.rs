@@ -35,6 +35,8 @@ use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
+use crate::panels::themes::Palette;
+
 // ── Visual constants ─────────────────────────────────────────────────────────
 
 /// Width of the palette box in CSS px.
@@ -55,18 +57,13 @@ const TOP_MARGIN: f32 = 90.0;
 /// Inner horizontal padding.
 const PAD: f32 = 12.0;
 
+/// Semi-transparent black scrim that dims the page behind the modal.
 const SCRIM: Color = Color { r: 0, g: 0, b: 0, a: 120 };
-const PANEL_BG: Color = Color { r: 24, g: 24, b: 30, a: 252 };
-const PANEL_BORDER: Color = Color { r: 70, g: 70, b: 86, a: 255 };
-const INPUT_BG: Color = Color { r: 16, g: 16, b: 21, a: 255 };
-const ROW_SEL_BG: Color = Color { r: 48, g: 58, b: 88, a: 255 };
-const SEPARATOR: Color = Color { r: 38, g: 38, b: 46, a: 255 };
-const TEXT_BRIGHT: Color = Color { r: 228, g: 228, b: 236, a: 255 };
-const TEXT_DIM: Color = Color { r: 140, g: 140, b: 152, a: 255 };
-const TEXT_URL: Color = Color { r: 112, g: 152, b: 222, a: 255 };
-const TEXT_HINT: Color = Color { r: 120, g: 124, b: 138, a: 255 };
+/// Category icon colour for built-in commands (blue-tinted).
 const ICON_CMD: Color = Color { r: 150, g: 180, b: 255, a: 255 };
+/// Category icon colour for bookmark items (amber).
 const ICON_BOOKMARK: Color = Color { r: 240, g: 196, b: 92, a: 255 };
+/// Category icon colour for history items (green-tinted).
 const ICON_HISTORY: Color = Color { r: 140, g: 200, b: 150, a: 255 };
 
 const FONT_SZ: f32 = 13.0;
@@ -474,7 +471,10 @@ pub fn hit_test(palette: &CommandPalette, x: f32, y: f32, viewport_w: f32) -> Pa
 
 /// Build the display list for the modal palette over a `viewport_w`×`viewport_h`
 /// window (viewport-locked, not scrolled with the page).
-pub fn build_panel(palette: &CommandPalette, viewport_w: f32, viewport_h: f32) -> DisplayList {
+///
+/// `pal` supplies theme-aware surface colours; semantic colours (scrim, icon
+/// category tints) remain as module-level consts and are not palette-driven.
+pub fn build_panel(palette: &CommandPalette, viewport_w: f32, viewport_h: f32, pal: &Palette) -> DisplayList {
     let mut out = DisplayList::with_capacity(32);
     let radii = uniform_radii(RADIUS);
 
@@ -492,18 +492,18 @@ pub fn build_panel(palette: &CommandPalette, viewport_w: f32, viewport_h: f32) -
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(ax, ay, PANEL_WIDTH, h),
         radii,
-        color: PANEL_BORDER,
+        color: pal.overlay_border,
     });
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(ax + 1.0, ay + 1.0, PANEL_WIDTH - 2.0, h - 2.0),
         radii,
-        color: PANEL_BG,
+        color: pal.overlay_bg,
     });
 
     // Input row.
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(ax + 1.0, ay + 1.0, PANEL_WIDTH - 2.0, INPUT_H - 1.0),
-        color: INPUT_BG,
+        color: pal.input_bg,
     });
     out.push(text(
         ax + PAD,
@@ -511,13 +511,13 @@ pub fn build_panel(palette: &CommandPalette, viewport_w: f32, viewport_h: f32) -
         18.0,
         "›",
         FONT_SZ + 3.0,
-        TEXT_DIM,
+        pal.text_dim,
         FontWeight::BOLD,
     ));
     let (q_text, q_col) = if palette.query.is_empty() {
-        ("Type a command, bookmark or history…".to_owned(), TEXT_DIM)
+        ("Type a command, bookmark or history…".to_owned(), pal.text_dim)
     } else {
-        (palette.query.clone(), TEXT_BRIGHT)
+        (palette.query.clone(), pal.text)
     };
     out.push(text(
         ax + PAD + 20.0,
@@ -543,7 +543,7 @@ pub fn build_panel(palette: &CommandPalette, viewport_w: f32, viewport_h: f32) -
             PANEL_WIDTH - 2.0 * PAD,
             "No results",
             FONT_SZ,
-            TEXT_DIM,
+            pal.text_dim,
             FontWeight::NORMAL,
         ));
     }
@@ -557,7 +557,7 @@ pub fn build_panel(palette: &CommandPalette, viewport_w: f32, viewport_h: f32) -
         if abs_row == palette.selected {
             out.push(DisplayCommand::FillRect {
                 rect: Rect::new(ax + 1.0, ry, PANEL_WIDTH - 2.0, ROW_H),
-                color: ROW_SEL_BG,
+                color: pal.item_selected_bg,
             });
         }
 
@@ -586,14 +586,14 @@ pub fn build_panel(palette: &CommandPalette, viewport_w: f32, viewport_h: f32) -
             title_w,
             &truncate(&item.title, 52),
             FONT_SZ,
-            TEXT_BRIGHT,
+            pal.text,
             FontWeight::NORMAL,
         ));
 
         // Trailing hint: shortcut for commands, host for nav items.
         let (hint, hint_col) = match item.kind {
-            PaletteKind::Command(a) => (a.shortcut().to_owned(), TEXT_HINT),
-            PaletteKind::Bookmark | PaletteKind::History => (host_of(&item.url), TEXT_URL),
+            PaletteKind::Command(a) => (a.shortcut().to_owned(), pal.text_dim),
+            PaletteKind::Bookmark | PaletteKind::History => (host_of(&item.url), pal.accent),
         };
         if !hint.is_empty() {
             out.push(text(
@@ -610,7 +610,7 @@ pub fn build_panel(palette: &CommandPalette, viewport_w: f32, viewport_h: f32) -
         // Row separator.
         out.push(DisplayCommand::FillRect {
             rect: Rect::new(ax + 1.0, ry + ROW_H - 1.0, PANEL_WIDTH - 2.0, 1.0),
-            color: SEPARATOR,
+            color: pal.divider,
         });
     }
 
@@ -861,7 +861,7 @@ mod tests {
         let mut p = CommandPalette::new();
         with_items(&mut p);
         p.visible = true;
-        let dl = build_panel(&p, 1024.0, 720.0);
+        let dl = build_panel(&p, 1024.0, 720.0, &Palette::DARK);
         let push = dl.iter().filter(|c| matches!(c, DisplayCommand::PushClipRect { .. })).count();
         let pop = dl.iter().filter(|c| matches!(c, DisplayCommand::PopClip)).count();
         assert_eq!(push, pop);
@@ -873,7 +873,7 @@ mod tests {
         let mut p = CommandPalette::new();
         with_items(&mut p);
         p.visible = true;
-        let dl = build_panel(&p, 1024.0, 720.0);
+        let dl = build_panel(&p, 1024.0, 720.0, &Palette::DARK);
         // Scrim is the first command, full viewport.
         assert!(matches!(
             dl.first(),
@@ -892,7 +892,7 @@ mod tests {
         with_items(&mut p);
         p.visible = true;
         p.append("zzzqqq___");
-        let dl = build_panel(&p, 1024.0, 720.0);
+        let dl = build_panel(&p, 1024.0, 720.0, &Palette::DARK);
         let has_placeholder = dl
             .iter()
             .any(|c| matches!(c, DisplayCommand::DrawText { text, .. } if text == "No results"));

@@ -39,6 +39,8 @@ use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
+use crate::panels::themes::Palette;
+
 // ── Visual constants ─────────────────────────────────────────────────────────
 
 /// Total panel width in CSS px.
@@ -68,20 +70,10 @@ const PAD: f32 = 8.0;
 /// Width of the trailing "×" delete zone on a bookmark row.
 const DELETE_W: f32 = 22.0;
 
-const PANEL_BG: Color = Color { r: 22, g: 22, b: 28, a: 252 };
-const PANEL_BORDER: Color = Color { r: 60, g: 60, b: 72, a: 255 };
-const HEADER_BG: Color = Color { r: 30, g: 30, b: 38, a: 255 };
-const SEARCH_BG: Color = Color { r: 14, g: 14, b: 18, a: 255 };
-const SEARCH_BG_ACTIVE: Color = Color { r: 18, g: 24, b: 36, a: 255 };
-const FOLDER_COL_BG: Color = Color { r: 26, g: 26, b: 33, a: 255 };
-const FOLDER_SEL_BG: Color = Color { r: 48, g: 56, b: 78, a: 255 };
-const ROW_HOVER_BG: Color = Color { r: 34, g: 34, b: 42, a: 255 };
-const SEPARATOR: Color = Color { r: 40, g: 40, b: 48, a: 255 };
-const TEXT_BRIGHT: Color = Color { r: 224, g: 224, b: 232, a: 255 };
-const TEXT_DIM: Color = Color { r: 138, g: 138, b: 150, a: 255 };
+/// Semantic color: URL link text — kept hard-coded (not a surface chrome token).
 const TEXT_URL: Color = Color { r: 110, g: 150, b: 220, a: 255 };
+/// Semantic color: delete "×" foreground — kept hard-coded (status/danger).
 const DELETE_FG: Color = Color { r: 190, g: 90, b: 90, a: 255 };
-const ACCENT: Color = Color { r: 120, g: 160, b: 255, a: 255 };
 
 const FONT_SZ: f32 = 12.0;
 const FONT_SZ_SM: f32 = 10.5;
@@ -306,7 +298,8 @@ pub fn hit_test(panel: &BookmarkPanel, x: f32, y: f32, ax: f32, ay: f32) -> Opti
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
 /// Build the display list for the panel anchored at `(ax, ay)` (top-left).
-pub fn build_panel(panel: &BookmarkPanel, ax: f32, ay: f32) -> DisplayList {
+/// `pal` provides the active theme's surface colors.
+pub fn build_panel(panel: &BookmarkPanel, ax: f32, ay: f32, pal: &Palette) -> DisplayList {
     let mut out = DisplayList::with_capacity(32 + panel.entries.len() * 4);
     let radii = uniform_radii(RADIUS);
 
@@ -314,18 +307,18 @@ pub fn build_panel(panel: &BookmarkPanel, ax: f32, ay: f32) -> DisplayList {
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(ax, ay, PANEL_WIDTH, PANEL_HEIGHT),
         radii,
-        color: PANEL_BORDER,
+        color: pal.overlay_border,
     });
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(ax + 1.0, ay + 1.0, PANEL_WIDTH - 2.0, PANEL_HEIGHT - 2.0),
         radii,
-        color: PANEL_BG,
+        color: pal.overlay_bg,
     });
 
     // Header.
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(ax + 1.0, ay + 1.0, PANEL_WIDTH - 2.0, HEADER_H - 1.0),
-        color: HEADER_BG,
+        color: pal.header_bg,
     });
     out.push(text(
         ax + PAD,
@@ -333,7 +326,7 @@ pub fn build_panel(panel: &BookmarkPanel, ax: f32, ay: f32) -> DisplayList {
         PANEL_WIDTH - HEADER_H - PAD,
         "Bookmarks",
         FONT_SZ,
-        TEXT_BRIGHT,
+        pal.text,
         FontWeight::BOLD,
     ));
     out.push(text(
@@ -342,22 +335,21 @@ pub fn build_panel(panel: &BookmarkPanel, ax: f32, ay: f32) -> DisplayList {
         HEADER_H,
         "×",
         FONT_SZ + 1.0,
-        TEXT_DIM,
+        pal.text_dim,
         FontWeight::NORMAL,
     ));
 
     // Search box.
     let search_top = ay + HEADER_H + PAD;
-    let search_bg = if panel.search_active { SEARCH_BG_ACTIVE } else { SEARCH_BG };
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(ax + PAD, search_top, PANEL_WIDTH - 2.0 * PAD, SEARCH_H),
         radii: uniform_radii(4.0),
-        color: search_bg,
+        color: pal.input_bg,
     });
     let (search_text, search_col) = if panel.search.is_empty() {
-        ("Search bookmarks…".to_owned(), TEXT_DIM)
+        ("Search bookmarks…".to_owned(), pal.text_dim)
     } else {
-        (panel.search.clone(), TEXT_BRIGHT)
+        (panel.search.clone(), pal.text)
     };
     out.push(text(
         ax + PAD + 8.0,
@@ -377,7 +369,7 @@ pub fn build_panel(panel: &BookmarkPanel, ax: f32, ay: f32) -> DisplayList {
     // Folder column background.
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(folder_col_x + 1.0, body_top, FOLDER_COL_W - 1.0, body_h),
-        color: FOLDER_COL_BG,
+        color: pal.row_alt_bg,
     });
 
     // Folder rows: "All", then each folder.
@@ -386,10 +378,10 @@ pub fn build_panel(panel: &BookmarkPanel, ax: f32, ay: f32) -> DisplayList {
         if selected {
             out.push(DisplayCommand::FillRect {
                 rect: Rect::new(folder_col_x + 1.0, ry, FOLDER_COL_W - 1.0, FOLDER_ROW_H),
-                color: FOLDER_SEL_BG,
+                color: pal.item_selected_bg,
             });
         }
-        let col = if selected { ACCENT } else { TEXT_DIM };
+        let col = if selected { pal.accent } else { pal.text_dim };
         out.push(text(
             folder_col_x + PAD,
             ry + (FOLDER_ROW_H - FONT_SZ_SM * 1.3) * 0.5,
@@ -425,7 +417,7 @@ pub fn build_panel(panel: &BookmarkPanel, ax: f32, ay: f32) -> DisplayList {
             list_w - 20.0,
             "No bookmarks",
             FONT_SZ,
-            TEXT_DIM,
+            pal.text_dim,
             FontWeight::NORMAL,
         ));
     }
@@ -439,7 +431,7 @@ pub fn build_panel(panel: &BookmarkPanel, ax: f32, ay: f32) -> DisplayList {
         if dragged {
             out.push(DisplayCommand::FillRect {
                 rect: Rect::new(list_x, ry, list_w, BM_ROW_H),
-                color: ROW_HOVER_BG,
+                color: pal.item_bg,
             });
         }
         // Title line.
@@ -450,7 +442,7 @@ pub fn build_panel(panel: &BookmarkPanel, ax: f32, ay: f32) -> DisplayList {
             list_w - DELETE_W - 8.0,
             &truncate(title, 48),
             FONT_SZ,
-            TEXT_BRIGHT,
+            pal.text,
             FontWeight::NORMAL,
         ));
         // URL line.
@@ -476,7 +468,7 @@ pub fn build_panel(panel: &BookmarkPanel, ax: f32, ay: f32) -> DisplayList {
         // Row separator.
         out.push(DisplayCommand::FillRect {
             rect: Rect::new(list_x, ry + BM_ROW_H - 1.0, list_w, 1.0),
-            color: SEPARATOR,
+            color: pal.divider,
         });
     }
 
@@ -713,7 +705,7 @@ mod tests {
     #[test]
     fn build_panel_emits_commands() {
         let p = sample();
-        let dl = build_panel(&p, AX, AY);
+        let dl = build_panel(&p, AX, AY, &Palette::DARK);
         assert!(!dl.is_empty());
         // Clip is balanced.
         let pushes = dl.iter().filter(|c| matches!(c, DisplayCommand::PushClipRect { .. })).count();
@@ -724,7 +716,7 @@ mod tests {
     #[test]
     fn build_panel_draws_titles_and_folders() {
         let p = sample();
-        let dl = build_panel(&p, AX, AY);
+        let dl = build_panel(&p, AX, AY, &Palette::DARK);
         let has = |needle: &str| {
             dl.iter().any(|c| matches!(c, DisplayCommand::DrawText { text, .. } if text == needle))
         };
@@ -738,7 +730,7 @@ mod tests {
         let mut p = BookmarkPanel::new();
         p.visible = true;
         p.set_data(vec![]);
-        let dl = build_panel(&p, AX, AY);
+        let dl = build_panel(&p, AX, AY, &Palette::DARK);
         let has_placeholder = dl
             .iter()
             .any(|c| matches!(c, DisplayCommand::DrawText { text, .. } if text == "No bookmarks"));

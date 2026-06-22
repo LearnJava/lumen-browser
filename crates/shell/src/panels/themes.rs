@@ -179,6 +179,11 @@ pub struct Palette {
     pub tab_hibernate_bg: Color,
     /// Background of a floating overlay panel (address bar, find bar).
     pub overlay_bg: Color,
+    /// Background of a panel's title / header bar — one step distinct from
+    /// [`overlay_bg`](Self::overlay_bg) so the header reads as a separate band.
+    pub header_bg: Color,
+    /// Background of alternate (zebra-striped) list rows inside panels.
+    pub row_alt_bg: Color,
     /// Border line around floating overlay dropdowns.
     pub overlay_border: Color,
     /// Background of a recessed text input field inside chrome.
@@ -208,6 +213,8 @@ impl Palette {
         tab_sleep_bg:     Color { r:  26, g:  27, b:  30, a: 255 },
         tab_hibernate_bg: Color { r:  21, g:  21, b:  24, a: 255 },
         overlay_bg:       Color { r:  32, g:  33, b:  36, a: 240 },
+        header_bg:        Color { r:  30, g:  31, b:  38, a: 255 },
+        row_alt_bg:       Color { r:  27, g:  28, b:  34, a: 255 },
         overlay_border:   Color { r:  55, g:  55, b:  70, a: 255 },
         input_bg:         Color { r:  18, g:  18, b:  22, a: 255 },
         item_bg:          Color { r:  26, g:  27, b:  30, a: 245 },
@@ -226,6 +233,8 @@ impl Palette {
         tab_sleep_bg:     Color { r: 224, g: 225, b: 229, a: 255 },
         tab_hibernate_bg: Color { r: 214, g: 215, b: 220, a: 255 },
         overlay_bg:       Color { r: 248, g: 249, b: 251, a: 245 },
+        header_bg:        Color { r: 236, g: 237, b: 241, a: 255 },
+        row_alt_bg:       Color { r: 240, g: 241, b: 245, a: 255 },
         overlay_border:   Color { r: 198, g: 200, b: 208, a: 255 },
         input_bg:         Color { r: 255, g: 255, b: 255, a: 255 },
         item_bg:          Color { r: 244, g: 245, b: 248, a: 248 },
@@ -369,5 +378,17 @@ mod tests {
         let light = ShellTheme { base: ThemeBase::Light, accent: AccentPreset::Blue }.palette(true);
         assert!(light.tab_bar_bg.r > dark.tab_bar_bg.r);
         assert!(light.text.r < dark.text.r);
+    }
+
+    #[test]
+    fn panel_role_tokens_track_brightness() {
+        // header_bg / row_alt_bg must follow the theme: light in the light
+        // palette, dark in the dark palette (guards against swapped constants).
+        // Resolved through the runtime `palette()` path so the comparison isn't
+        // a const assertion.
+        let dark = ShellTheme { base: ThemeBase::Dark, accent: AccentPreset::Blue }.palette(false);
+        let light = ShellTheme { base: ThemeBase::Light, accent: AccentPreset::Blue }.palette(true);
+        assert!(light.header_bg.r > dark.header_bg.r);
+        assert!(light.row_alt_bg.r > dark.row_alt_bg.r);
     }
 }

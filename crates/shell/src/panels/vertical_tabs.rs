@@ -11,6 +11,7 @@ use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
+use crate::panels::themes::Palette;
 use crate::tab_lifecycle::state::TabState;
 use crate::tabs::strip::TabStrip;
 
@@ -22,16 +23,13 @@ pub const PANEL_WIDTH: f32 = 200.0;
 /// Height of each tab row in CSS px.
 pub const ROW_H: f32 = 36.0;
 
-const PANEL_BG: Color = Color { r: 18, g: 18, b: 22, a: 255 };
-const ROW_INACTIVE_BG: Color = Color { r: 24, g: 24, b: 29, a: 255 };
-const ROW_ACTIVE_BG: Color = Color { r: 32, g: 32, b: 40, a: 255 };
-const ACCENT: Color = Color { r: 100, g: 160, b: 255, a: 255 };
-const TEXT_ACTIVE: Color = Color { r: 218, g: 218, b: 228, a: 255 };
-const TEXT_DIM: Color = Color { r: 140, g: 140, b: 148, a: 255 };
+/// Semantic red for the close button — not a theme surface, kept as const.
 const CLOSE_FG: Color = Color { r: 180, g: 80, b: 80, a: 255 };
-const DIVIDER: Color = Color { r: 35, g: 36, b: 42, a: 255 };
+/// Favicon placeholder background — container/category color, not a theme surface.
 const ICON_BG: Color = Color { r: 60, g: 60, b: 70, a: 255 };
+/// Amber lifecycle badge for BackgroundOld tabs — semantic status color.
 const BADGE_OLD: Color = Color { r: 255, g: 168, b: 0, a: 210 };
+/// Grey lifecycle badge for Hibernated tabs — semantic status color.
 const BADGE_HIB: Color = Color { r: 110, g: 110, b: 120, a: 210 };
 
 const FONT_SZ: f32 = 12.0;
@@ -139,11 +137,14 @@ pub fn hit_test(
 /// `scroll_y` shifts rendered rows upward: rows whose bottom edge is above
 /// `tab_bar_height` (after scrolling) are skipped; rows whose top edge is at
 /// or below `window_h` are not emitted.
+/// `pal` provides theme-aware surface colors for the strip background, rows,
+/// dividers, text, and accent bar.
 pub fn build_tab_bar_vertical(
     strip: &TabStrip,
     tab_bar_height: f32,
     window_h: f32,
     scroll_y: f32,
+    pal: &Palette,
 ) -> DisplayList {
     let panel_h = (window_h - tab_bar_height).max(0.0);
     let mut out = DisplayList::with_capacity(4 + strip.tabs.len() * 8);
@@ -151,13 +152,13 @@ pub fn build_tab_bar_vertical(
     // Panel background.
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(0.0, tab_bar_height, PANEL_WIDTH, panel_h),
-        color: PANEL_BG,
+        color: pal.tab_bar_bg,
     });
 
     // Right border divider (1 px, full panel height).
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(PANEL_WIDTH - 1.0, tab_bar_height, 1.0, panel_h),
-        color: DIVIDER,
+        color: pal.divider,
     });
 
     for (i, tab) in strip.tabs.iter().enumerate() {
@@ -171,7 +172,7 @@ pub fn build_tab_bar_vertical(
             break;
         }
         let is_active = i == strip.active;
-        let row_bg = if is_active { ROW_ACTIVE_BG } else { ROW_INACTIVE_BG };
+        let row_bg = if is_active { pal.tab_active_bg } else { pal.tab_inactive_bg };
 
         // Row background (excludes right border pixel).
         out.push(DisplayCommand::FillRect {
@@ -183,14 +184,14 @@ pub fn build_tab_bar_vertical(
         if is_active {
             out.push(DisplayCommand::FillRect {
                 rect: Rect::new(0.0, row_top, 2.0, ROW_H),
-                color: ACCENT,
+                color: pal.accent,
             });
         }
 
         // Row bottom divider.
         out.push(DisplayCommand::FillRect {
             rect: Rect::new(0.0, row_top + ROW_H - 1.0, PANEL_WIDTH - 1.0, 1.0),
-            color: DIVIDER,
+            color: pal.divider,
         });
 
         // Favicon placeholder square.
@@ -208,6 +209,8 @@ pub fn build_tab_bar_vertical(
         });
 
         // Lifecycle badge — small circle at top-right of the favicon.
+        // BackgroundOld → amber (BADGE_OLD), Hibernated → grey (BADGE_HIB).
+        // These are semantic status colors; not mapped to palette.
         let badge_color = match tab.tab_state {
             TabState::BackgroundOld => Some(BADGE_OLD),
             TabState::Hibernated => Some(BADGE_HIB),
@@ -249,7 +252,7 @@ pub fn build_tab_bar_vertical(
         let text_right = close_left - 4.0;
         let text_w = (text_right - TEXT_LEFT).max(0.0);
         let text_top = row_top + (ROW_H - FONT_SZ * 1.3) * 0.5;
-        let text_color = if is_active { TEXT_ACTIVE } else { TEXT_DIM };
+        let text_color = if is_active { pal.text } else { pal.text_dim };
         out.push(DisplayCommand::DrawText {
             rect: Rect::new(TEXT_LEFT, text_top, text_w, FONT_SZ * 1.3),
             text: tab.title.clone(),
@@ -361,14 +364,14 @@ mod tests {
     #[test]
     fn build_panel_emits_commands() {
         let s = TabStrip::new();
-        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0);
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK);
         assert!(!dl.is_empty());
     }
 
     #[test]
     fn build_panel_has_title_text() {
         let s = TabStrip::new();
-        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0);
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK);
         let has_title = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("вкладка"))
         });
@@ -378,7 +381,7 @@ mod tests {
     #[test]
     fn build_panel_no_badge_for_active() {
         let s = TabStrip::new(); // single Active tab
-        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0);
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK);
         // Active tab has no badge (only FillRect background + accent bar, no badge radii for lifecycle)
         // Panel uses FillRoundedRect for favicon + possibly badge. Badge colors are BADGE_OLD/BADGE_HIB.
         let has_lifecycle_badge = dl.iter().any(|c| match c {
@@ -396,7 +399,7 @@ mod tests {
         let mut s = TabStrip::new();
         s.push_blank(0.0);
         s.set_tab_state(0, TabState::BackgroundOld);
-        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0);
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK);
         let has_amber = dl.iter().any(|c| match c {
             DisplayCommand::FillRoundedRect { color, .. } => {
                 color.r == BADGE_OLD.r && color.g == BADGE_OLD.g
@@ -411,7 +414,7 @@ mod tests {
         let mut s = TabStrip::new();
         s.push_blank(0.0);
         s.set_tab_state(0, TabState::Hibernated);
-        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0);
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK);
         let has_grey = dl.iter().any(|c| match c {
             DisplayCommand::FillRoundedRect { color, .. } => {
                 color.r == BADGE_HIB.r && color.g == BADGE_HIB.g
@@ -430,7 +433,7 @@ mod tests {
         }
         // window_h only fits a few rows.
         let small_h = TAB_H + 3.0 * ROW_H;
-        let dl = build_tab_bar_vertical(&s, TAB_H, small_h, 0.0);
+        let dl = build_tab_bar_vertical(&s, TAB_H, small_h, 0.0, &Palette::DARK);
         // Count DrawText commands with tab titles — must be <= 3 (rows that fit).
         let title_count = dl.iter().filter(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("вкладка"))
@@ -447,7 +450,7 @@ mod tests {
         // which is above the panel top — it should be skipped.  The second
         // row is now the first visible one.
         let s = strip2(); // 2 tabs
-        let dl_scrolled = build_tab_bar_vertical(&s, TAB_H, WIN_H, ROW_H);
+        let dl_scrolled = build_tab_bar_vertical(&s, TAB_H, WIN_H, ROW_H, &Palette::DARK);
         // Only the second tab title should appear.
         let titles: Vec<_> = dl_scrolled.iter().filter_map(|c| match c {
             DisplayCommand::DrawText { text, .. } if text.contains("вкладка") => Some(text.clone()),

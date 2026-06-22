@@ -23,6 +23,7 @@
 //! The panel is opened via `note-viewer:<note_id>` URL scheme processed in
 //! `handle_omnibox_commit`.
 
+use crate::panels::themes::Palette;
 use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{DisplayCommand, DisplayList};
@@ -42,20 +43,8 @@ const SEL_MIN_H: f32 = 60.0;
 /// Height of the comment row (only shown when non-empty).
 const COMMENT_ROW_H: f32 = 48.0;
 
-const BG: Color = Color { r: 24, g: 25, b: 30, a: 250 };
-const HEADER_BG: Color = Color { r: 34, g: 36, b: 46, a: 255 };
-const URL_BG: Color = Color { r: 18, g: 20, b: 26, a: 255 };
-const SEL_BG: Color = Color { r: 28, g: 30, b: 38, a: 255 };
-const COMMENT_BG: Color = Color { r: 22, g: 24, b: 32, a: 255 };
-const BORDER: Color = Color { r: 55, g: 58, b: 76, a: 255 };
-const ACCENT: Color = Color { r: 60, g: 120, b: 220, a: 255 };
-const TEXT_HEADER: Color = Color { r: 210, g: 212, b: 228, a: 255 };
+// Semantic color: hyperlink / URL text. Not a surface token — carries link meaning.
 const TEXT_URL: Color = Color { r: 90, g: 150, b: 230, a: 255 };
-const TEXT_SEL: Color = Color { r: 220, g: 222, b: 234, a: 255 };
-const TEXT_COMMENT: Color = Color { r: 160, g: 168, b: 185, a: 255 };
-const TEXT_LABEL: Color = Color { r: 100, g: 108, b: 126, a: 255 };
-const CLOSE_BG: Color = Color { r: 52, g: 56, b: 74, a: 200 };
-const CLOSE_FG: Color = Color { r: 148, g: 154, b: 172, a: 255 };
 
 const FONT_HEADER: f32 = 13.0;
 const FONT_URL: f32 = 11.0;
@@ -161,7 +150,7 @@ impl Default for NoteViewerPanel {
 /// Build the display list for the note viewer overlay.
 ///
 /// Returns an empty list if `panel.visible` is false.
-pub fn build_note_viewer(panel: &NoteViewerPanel, window_size: (u32, u32)) -> DisplayList {
+pub fn build_note_viewer(panel: &NoteViewerPanel, window_size: (u32, u32), pal: &Palette) -> DisplayList {
     if !panel.visible {
         return DisplayList::new();
     }
@@ -173,34 +162,34 @@ pub fn build_note_viewer(panel: &NoteViewerPanel, window_size: (u32, u32)) -> Di
 
     let mut out = DisplayList::with_capacity(24);
 
-    // Dim backdrop.
+    // Dim backdrop — semi-transparent black modal scrim (semantic, not a surface token).
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(0.0, 0.0, ww, wh),
         color: Color { r: 0, g: 0, b: 0, a: 140 },
     });
 
-    // Outer border.
+    // Outer border ring uses accent color.
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(x - 1.0, y - 1.0, OVERLAY_W + 2.0, h + 2.0),
-        color: ACCENT,
+        color: pal.accent,
     });
     // Main background.
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(x, y, OVERLAY_W, h),
-        color: BG,
+        color: pal.overlay_bg,
     });
 
     // ── Header ────────────────────────────────────────────────────────────────
 
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(x, y, OVERLAY_W, HEADER_H),
-        color: HEADER_BG,
+        color: pal.header_bg,
     });
     out.push(DisplayCommand::DrawText {
         rect: Rect::new(x + PAD, y + (HEADER_H - FONT_HEADER * 1.3) * 0.5, OVERLAY_W - 60.0, FONT_HEADER * 1.3),
         text: "Заметка".to_string(),
         font_size: FONT_HEADER,
-        color: TEXT_HEADER,
+        color: pal.text,
         font_family: Vec::new(),
         font_weight: FontWeight::BOLD,
         font_style: FontStyle::Normal,
@@ -214,13 +203,13 @@ pub fn build_note_viewer(panel: &NoteViewerPanel, window_size: (u32, u32)) -> Di
     let close_y = y + (HEADER_H - 18.0) * 0.5;
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(close_x, close_y, 18.0, 18.0),
-        color: CLOSE_BG,
+        color: pal.item_bg,
     });
     out.push(DisplayCommand::DrawText {
         rect: Rect::new(close_x, close_y, 18.0, 18.0),
         text: "×".to_string(),
         font_size: 14.0,
-        color: CLOSE_FG,
+        color: pal.text_dim,
         font_family: Vec::new(),
         font_weight: FontWeight::NORMAL,
         font_style: FontStyle::Normal,
@@ -234,7 +223,7 @@ pub fn build_note_viewer(panel: &NoteViewerPanel, window_size: (u32, u32)) -> Di
     let url_y = y + HEADER_H;
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(x, url_y, OVERLAY_W, URL_ROW_H),
-        color: URL_BG,
+        color: pal.input_bg,
     });
     out.push(DisplayCommand::DrawText {
         rect: Rect::new(x + PAD, url_y + (URL_ROW_H - FONT_URL * 1.3) * 0.5, OVERLAY_W - PAD * 2.0, FONT_URL * 1.3),
@@ -254,27 +243,27 @@ pub fn build_note_viewer(panel: &NoteViewerPanel, window_size: (u32, u32)) -> Di
     let sel_y = url_y + URL_ROW_H;
     let sel_h = SEL_MIN_H + PAD * 2.0;
 
-    // Separator.
+    // Internal separator line between URL row and selection area.
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(x, sel_y, OVERLAY_W, 1.0),
-        color: BORDER,
+        color: pal.divider,
     });
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(x, sel_y + 1.0, OVERLAY_W, sel_h - 1.0),
-        color: SEL_BG,
+        color: pal.row_alt_bg,
     });
 
     // Left accent bar.
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(x + PAD, sel_y + PAD, 3.0, sel_h - PAD * 2.0),
-        color: ACCENT,
+        color: pal.accent,
     });
 
     out.push(DisplayCommand::DrawText {
         rect: Rect::new(x + PAD + 10.0, sel_y + PAD, OVERLAY_W - PAD * 2.0 - 10.0, sel_h - PAD * 2.0),
         text: panel.selection.clone(),
         font_size: FONT_SEL,
-        color: TEXT_SEL,
+        color: pal.text,
         font_family: Vec::new(),
         font_weight: FontWeight::NORMAL,
         font_style: FontStyle::Italic,
@@ -287,19 +276,20 @@ pub fn build_note_viewer(panel: &NoteViewerPanel, window_size: (u32, u32)) -> Di
 
     if !panel.comment.is_empty() {
         let cmt_y = sel_y + sel_h;
+        // Internal separator line between selection area and comment area.
         out.push(DisplayCommand::FillRect {
             rect: Rect::new(x, cmt_y, OVERLAY_W, 1.0),
-            color: BORDER,
+            color: pal.divider,
         });
         out.push(DisplayCommand::FillRect {
             rect: Rect::new(x, cmt_y + 1.0, OVERLAY_W, COMMENT_ROW_H - 1.0),
-            color: COMMENT_BG,
+            color: pal.item_bg,
         });
         out.push(DisplayCommand::DrawText {
             rect: Rect::new(x + PAD, cmt_y + 4.0, 60.0, FONT_LABEL * 1.3),
             text: "Комментарий:".to_string(),
             font_size: FONT_LABEL,
-            color: TEXT_LABEL,
+            color: pal.text_dim,
             font_family: Vec::new(),
             font_weight: FontWeight::NORMAL,
             font_style: FontStyle::Normal,
@@ -311,7 +301,7 @@ pub fn build_note_viewer(panel: &NoteViewerPanel, window_size: (u32, u32)) -> Di
             rect: Rect::new(x + PAD, cmt_y + 4.0 + FONT_LABEL * 1.5, OVERLAY_W - PAD * 2.0, FONT_COMMENT * 1.3),
             text: panel.comment.clone(),
             font_size: FONT_COMMENT,
-            color: TEXT_COMMENT,
+            color: pal.text_dim,
             font_family: Vec::new(),
             font_weight: FontWeight::NORMAL,
             font_style: FontStyle::Normal,
@@ -406,14 +396,14 @@ mod tests {
     #[test]
     fn build_overlay_empty_when_hidden() {
         let p = NoteViewerPanel::new();
-        let dl = build_note_viewer(&p, (1024, 720));
+        let dl = build_note_viewer(&p, (1024, 720), &Palette::DARK);
         assert!(dl.is_empty());
     }
 
     #[test]
     fn build_overlay_has_header_and_selection_text() {
         let p = make_panel();
-        let dl = build_note_viewer(&p, (1024, 720));
+        let dl = build_note_viewer(&p, (1024, 720), &Palette::DARK);
         let texts: Vec<&str> = dl.iter().filter_map(|c| {
             if let DisplayCommand::DrawText { text, .. } = c { Some(text.as_str()) } else { None }
         }).collect();

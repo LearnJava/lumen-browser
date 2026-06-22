@@ -30,6 +30,8 @@ use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
+use crate::panels::themes::Palette;
+
 // ── Visual constants ──────────────────────────────────────────────────────────
 
 /// Width of the sidebar panel in CSS px.
@@ -41,14 +43,9 @@ const CLOSE_SIZE: f32 = 18.0;
 /// Right margin for the close button inside the header.
 const CLOSE_RIGHT: f32 = 7.0;
 
-const BG: Color = Color { r: 26, g: 28, b: 36, a: 255 };
-const HEADER_BG: Color = Color { r: 36, g: 39, b: 50, a: 255 };
-const BORDER: Color = Color { r: 55, g: 58, b: 74, a: 255 };
-const TEXT_MAIN: Color = Color { r: 215, g: 215, b: 226, a: 255 };
-const TEXT_DIM: Color = Color { r: 120, g: 124, b: 142, a: 255 };
-const CLOSE_BG: Color = Color { r: 60, g: 63, b: 80, a: 200 };
+/// Close button foreground "×" — kept as const: not a surface role, purely
+/// a neutral icon tint that works on both light and dark close-button bg.
 const CLOSE_FG: Color = Color { r: 160, g: 160, b: 172, a: 255 };
-const PLACEHOLDER_BG: Color = Color { r: 31, g: 34, b: 44, a: 255 };
 
 const FONT_SZ: f32 = 11.0;
 
@@ -196,11 +193,14 @@ pub fn hit_test(
 /// Renders from `x = (window_w − PANEL_WIDTH)` to `x = window_w` and from
 /// `y = tab_bar_h` to `y = window_h`.  Scroll offset is baked into a
 /// `PushTransform` over the content area.
+///
+/// `pal` supplies the theme tokens for all chrome surface colors.
 pub fn build_panel(
     panel: &SidebarPanel,
     window_w: f32,
     tab_bar_h: f32,
     window_h: f32,
+    pal: &Palette,
 ) -> DisplayList {
     if !panel.visible {
         return DisplayList::new();
@@ -216,24 +216,24 @@ pub fn build_panel(
     // ── Panel background ──────────────────────────────────────────────────────
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(px, tab_bar_h, PANEL_WIDTH, panel_h),
-        color: BG,
+        color: pal.overlay_bg,
     });
 
     // Left border (1 px divider between main page and sidebar).
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(px, tab_bar_h, 1.0, panel_h),
-        color: BORDER,
+        color: pal.overlay_border,
     });
 
     // ── Header bar ────────────────────────────────────────────────────────────
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(px + 1.0, tab_bar_h, PANEL_WIDTH - 1.0, HEADER_H),
-        color: HEADER_BG,
+        color: pal.header_bg,
     });
     // Header bottom border.
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(px + 1.0, tab_bar_h + HEADER_H - 1.0, PANEL_WIDTH - 1.0, 1.0),
-        color: BORDER,
+        color: pal.divider,
     });
 
     // Title text (truncated to avoid overlapping the close button).
@@ -248,7 +248,7 @@ pub fn build_panel(
         rect: Rect::new(px + 10.0, tab_bar_h + 9.0, PANEL_WIDTH - CLOSE_SIZE - CLOSE_RIGHT * 2.0 - 14.0, FONT_SZ * 1.4),
         text: title_text,
         font_size: FONT_SZ,
-        color: TEXT_MAIN,
+        color: pal.text,
         font_family: Vec::new(),
         font_weight: FontWeight::NORMAL,
         font_style: FontStyle::Normal,
@@ -263,7 +263,7 @@ pub fn build_panel(
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(close_x, close_y, CLOSE_SIZE, CLOSE_SIZE),
         radii: CornerRadii { tl: 3.0, tl_y: 3.0, tr: 3.0, tr_y: 3.0, br: 3.0, br_y: 3.0, bl: 3.0, bl_y: 3.0 },
-        color: CLOSE_BG,
+        color: pal.item_bg,
     });
     // Close button "×" glyph.
     out.push(DisplayCommand::DrawText {
@@ -296,14 +296,14 @@ pub fn build_panel(
         // Placeholder: show URL and "Loading…" hint until the DL is ready.
         out.push(DisplayCommand::FillRect {
             rect: Rect::new(px + 1.0, content_y, PANEL_WIDTH - 1.0, content_h),
-            color: PLACEHOLDER_BG,
+            color: pal.tab_bar_bg,
         });
         let url_str = panel.url.as_deref().unwrap_or("No page");
         out.push(DisplayCommand::DrawText {
             rect: Rect::new(px + 10.0, content_y + 18.0, PANEL_WIDTH - 20.0, FONT_SZ * 1.4),
             text: truncate_label(url_str, 34),
             font_size: FONT_SZ,
-            color: TEXT_DIM,
+            color: pal.text_dim,
             font_family: Vec::new(),
             font_weight: FontWeight::NORMAL,
             font_style: FontStyle::Normal,
@@ -315,7 +315,7 @@ pub fn build_panel(
             rect: Rect::new(px + 10.0, content_y + 38.0, PANEL_WIDTH - 20.0, FONT_SZ * 1.4),
             text: "Loading…".to_owned(),
             font_size: FONT_SZ,
-            color: TEXT_DIM,
+            color: pal.text_dim,
             font_family: Vec::new(),
             font_weight: FontWeight::NORMAL,
             font_style: FontStyle::Normal,
@@ -481,14 +481,14 @@ mod tests {
     #[test]
     fn build_panel_hidden_is_empty() {
         let p = hidden();
-        let dl = build_panel(&p, WIN_W, TAB_H, WIN_H);
+        let dl = build_panel(&p, WIN_W, TAB_H, WIN_H, &Palette::DARK);
         assert!(dl.is_empty());
     }
 
     #[test]
     fn build_panel_visible_no_page_has_placeholder() {
         let p = visible_no_page();
-        let dl = build_panel(&p, WIN_W, TAB_H, WIN_H);
+        let dl = build_panel(&p, WIN_W, TAB_H, WIN_H, &Palette::DARK);
         assert!(!dl.is_empty());
         let has_loading = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("Loading"))
@@ -499,7 +499,7 @@ mod tests {
     #[test]
     fn build_panel_with_page_no_loading_text() {
         let p = visible_with_page();
-        let dl = build_panel(&p, WIN_W, TAB_H, WIN_H);
+        let dl = build_panel(&p, WIN_W, TAB_H, WIN_H, &Palette::DARK);
         let has_loading = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("Loading"))
         });
@@ -509,7 +509,7 @@ mod tests {
     #[test]
     fn build_panel_has_close_x_text() {
         let p = visible_no_page();
-        let dl = build_panel(&p, WIN_W, TAB_H, WIN_H);
+        let dl = build_panel(&p, WIN_W, TAB_H, WIN_H, &Palette::DARK);
         let has_close = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "×")
         });
@@ -519,7 +519,7 @@ mod tests {
     #[test]
     fn build_panel_has_clip_and_pop() {
         let p = visible_no_page();
-        let dl = build_panel(&p, WIN_W, TAB_H, WIN_H);
+        let dl = build_panel(&p, WIN_W, TAB_H, WIN_H, &Palette::DARK);
         let clips = dl.iter().filter(|c| matches!(c, DisplayCommand::PushClipRect { .. })).count();
         let pops = dl.iter().filter(|c| matches!(c, DisplayCommand::PopClip)).count();
         assert_eq!(clips, 1);

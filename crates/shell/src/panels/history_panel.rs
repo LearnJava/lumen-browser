@@ -26,6 +26,7 @@ use std::cmp::Reverse;
 use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
+use crate::panels::themes::Palette;
 
 // ── Geometry ─────────────────────────────────────────────────────────────────
 
@@ -63,30 +64,18 @@ const TITLE_MAX_CHARS: usize = 52;
 const URL_MAX_CHARS: usize = 60;
 
 // ── Colours ──────────────────────────────────────────────────────────────────
+//
+// Semantic status colours — kept as hard-coded consts because they carry
+// meaning (danger / destructive action) and must not change with the theme.
 
-const PANEL_BG: Color = Color { r: 20, g: 20, b: 27, a: 252 };
-const PANEL_BORDER: Color = Color { r: 55, g: 55, b: 68, a: 255 };
-const HEADER_BG: Color = Color { r: 28, g: 28, b: 36, a: 255 };
-const HEADER_TEXT: Color = Color { r: 200, g: 200, b: 216, a: 255 };
+/// Close-button × glyph: dim red, signals a dismissible chrome action.
 const CLOSE_TEXT: Color = Color { r: 180, g: 90, b: 90, a: 255 };
-const SEARCH_BG: Color = Color { r: 14, g: 14, b: 20, a: 255 };
-const SEARCH_TEXT: Color = Color { r: 160, g: 160, b: 176, a: 255 };
-const SEARCH_ACTIVE_BG: Color = Color { r: 18, g: 24, b: 38, a: 255 };
-const SEARCH_ACTIVE_TEXT: Color = Color { r: 220, g: 220, b: 235, a: 255 };
-const GROUP_BG: Color = Color { r: 26, g: 26, b: 34, a: 255 };
-const GROUP_TEXT: Color = Color { r: 120, g: 120, b: 140, a: 255 };
-const ROW_EVEN: Color = Color { r: 22, g: 22, b: 30, a: 255 };
-const ROW_ODD: Color = Color { r: 26, g: 26, b: 34, a: 255 };
-const ROW_HOVER_BG: Color = Color { r: 36, g: 36, b: 48, a: 255 };
-const TITLE_TEXT: Color = Color { r: 220, g: 220, b: 232, a: 255 };
-const URL_TEXT: Color = Color { r: 100, g: 140, b: 210, a: 255 };
-const TIME_TEXT: Color = Color { r: 100, g: 100, b: 116, a: 255 };
+/// Per-row delete × glyph: red danger indicator.
 const DELETE_TEXT: Color = Color { r: 170, g: 80, b: 80, a: 255 };
-const SEPARATOR: Color = Color { r: 36, g: 36, b: 48, a: 255 };
-const FOOTER_BG: Color = Color { r: 22, g: 22, b: 30, a: 255 };
+/// "Очистить всё" button fill: destructive-action red.
 const CLEAR_BTN_BG: Color = Color { r: 140, g: 50, b: 50, a: 200 };
+/// Text on the destructive-action button.
 const CLEAR_BTN_TEXT: Color = Color { r: 240, g: 200, b: 200, a: 255 };
-const EMPTY_TEXT: Color = Color { r: 100, g: 100, b: 115, a: 255 };
 
 // ── Data types ────────────────────────────────────────────────────────────────
 
@@ -294,7 +283,8 @@ pub fn hit_test(panel: &HistoryPanel, mx: f32, my: f32, px: f32, py: f32) -> His
 /// Build the panel display list.
 ///
 /// `(win_w, toolbar_h)` — full window width and toolbar height in CSS px.
-pub fn build_panel(panel: &HistoryPanel, win_w: f32, toolbar_h: f32) -> DisplayList {
+/// `pal` — active chrome palette; drives all surface colours.
+pub fn build_panel(panel: &HistoryPanel, win_w: f32, toolbar_h: f32, pal: &Palette) -> DisplayList {
     let mut dl: DisplayList = Vec::new();
     if !panel.visible {
         return dl;
@@ -308,12 +298,12 @@ pub fn build_panel(panel: &HistoryPanel, win_w: f32, toolbar_h: f32) -> DisplayL
     dl.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px, py, PANEL_W, PANEL_H),
         radii: uniform_radii(7.0),
-        color: PANEL_BORDER,
+        color: pal.overlay_border,
     });
     dl.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px + 1.0, py + 1.0, PANEL_W - 2.0, PANEL_H - 2.0),
         radii: uniform_radii(6.0),
-        color: PANEL_BG,
+        color: pal.overlay_bg,
     });
 
     // ── Header ───────────────────────────────────────────────────────────────
@@ -329,7 +319,7 @@ pub fn build_panel(panel: &HistoryPanel, win_w: f32, toolbar_h: f32) -> DisplayL
             br: 0.0,
             br_y: 0.0,
         },
-        color: HEADER_BG,
+        color: pal.header_bg,
     });
     let count = panel.rows.iter().filter(|r| matches!(r, HistoryRow::Entry(_))).count();
     let header_label = if count == 0 {
@@ -344,7 +334,7 @@ pub fn build_panel(panel: &HistoryPanel, win_w: f32, toolbar_h: f32) -> DisplayL
         200.0,
         13.0,
         FontWeight::BOLD,
-        HEADER_TEXT,
+        pal.text,
     ));
     dl.push(make_text(
         "×".to_owned(),
@@ -357,7 +347,7 @@ pub fn build_panel(panel: &HistoryPanel, win_w: f32, toolbar_h: f32) -> DisplayL
     ));
     dl.push(DisplayCommand::FillRect {
         rect: Rect::new(px, py + HEADER_H - 1.0, PANEL_W, 1.0),
-        color: SEPARATOR,
+        color: pal.divider,
     });
 
     // ── Search box ───────────────────────────────────────────────────────────
@@ -365,15 +355,11 @@ pub fn build_panel(panel: &HistoryPanel, win_w: f32, toolbar_h: f32) -> DisplayL
     let sy = py + HEADER_H + 5.0;
     let sw = PANEL_W - 2.0 * PAD;
     let sh = SEARCH_H - 10.0;
-    let (sbg, stxt) = if panel.search_active {
-        (SEARCH_ACTIVE_BG, SEARCH_ACTIVE_TEXT)
-    } else {
-        (SEARCH_BG, SEARCH_TEXT)
-    };
+    let stxt = if panel.search_active { pal.text } else { pal.text_dim };
     dl.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(sx, sy, sw, sh),
         radii: uniform_radii(4.0),
-        color: sbg,
+        color: pal.input_bg,
     });
     let search_display = if panel.query.is_empty() {
         if panel.search_active { String::new() } else { "Search history…".to_owned() }
@@ -395,7 +381,7 @@ pub fn build_panel(panel: &HistoryPanel, win_w: f32, toolbar_h: f32) -> DisplayL
             PANEL_W - 2.0 * PAD,
             12.0,
             FontWeight::NORMAL,
-            EMPTY_TEXT,
+            pal.text_dim,
         ));
     } else {
         let scroll = panel.scroll_y;
@@ -410,7 +396,7 @@ pub fn build_panel(panel: &HistoryPanel, win_w: f32, toolbar_h: f32) -> DisplayL
                     HistoryRow::Group(label) => {
                         dl.push(DisplayCommand::FillRect {
                             rect: Rect::new(px, ry, PANEL_W, GROUP_H),
-                            color: GROUP_BG,
+                            color: pal.header_bg,
                         });
                         dl.push(make_text(
                             label.clone(),
@@ -419,13 +405,17 @@ pub fn build_panel(panel: &HistoryPanel, win_w: f32, toolbar_h: f32) -> DisplayL
                             PANEL_W - 2.0 * PAD,
                             10.5,
                             FontWeight::BOLD,
-                            GROUP_TEXT,
+                            pal.text_dim,
                         ));
                     }
                     HistoryRow::Entry(item) => {
-                        let row_bg = if entry_idx.is_multiple_of(2) { ROW_EVEN } else { ROW_ODD };
+                        let row_bg = if entry_idx.is_multiple_of(2) {
+                            pal.item_bg
+                        } else {
+                            pal.row_alt_bg
+                        };
                         let row_bg = if panel.hover_row == Some(entry_idx) {
-                            ROW_HOVER_BG
+                            pal.item_selected_bg
                         } else {
                             row_bg
                         };
@@ -448,7 +438,7 @@ pub fn build_panel(panel: &HistoryPanel, win_w: f32, toolbar_h: f32) -> DisplayL
                             title_w,
                             12.0,
                             FontWeight::NORMAL,
-                            TITLE_TEXT,
+                            pal.text,
                         ));
 
                         // URL.
@@ -461,7 +451,7 @@ pub fn build_panel(panel: &HistoryPanel, win_w: f32, toolbar_h: f32) -> DisplayL
                             url_w,
                             10.5,
                             FontWeight::NORMAL,
-                            URL_TEXT,
+                            pal.accent,
                         ));
 
                         // Time (HH:MM).
@@ -473,7 +463,7 @@ pub fn build_panel(panel: &HistoryPanel, win_w: f32, toolbar_h: f32) -> DisplayL
                             36.0,
                             10.0,
                             FontWeight::NORMAL,
-                            TIME_TEXT,
+                            pal.text_dim,
                         ));
 
                         // Delete button.
@@ -490,7 +480,7 @@ pub fn build_panel(panel: &HistoryPanel, win_w: f32, toolbar_h: f32) -> DisplayL
                         // Row separator.
                         dl.push(DisplayCommand::FillRect {
                             rect: Rect::new(px + PAD, ry + ROW_H - 1.0, PANEL_W - 2.0 * PAD, 1.0),
-                            color: SEPARATOR,
+                            color: pal.divider,
                         });
                         entry_idx += 1;
                     }
@@ -504,10 +494,10 @@ pub fn build_panel(panel: &HistoryPanel, win_w: f32, toolbar_h: f32) -> DisplayL
 
     // ── Footer ────────────────────────────────────────────────────────────────
     let fy = py + PANEL_H - FOOTER_H;
-    dl.push(DisplayCommand::FillRect { rect: Rect::new(px, fy, PANEL_W, FOOTER_H), color: FOOTER_BG });
+    dl.push(DisplayCommand::FillRect { rect: Rect::new(px, fy, PANEL_W, FOOTER_H), color: pal.overlay_bg });
     dl.push(DisplayCommand::FillRect {
         rect: Rect::new(px, fy, PANEL_W, 1.0),
-        color: SEPARATOR,
+        color: pal.divider,
     });
 
     // "Очистить всё" button.
@@ -744,7 +734,7 @@ mod tests {
     #[test]
     fn build_panel_empty_no_crash() {
         let panel = HistoryPanel::new();
-        let dl = build_panel(&panel, 1280.0, 40.0);
+        let dl = build_panel(&panel, 1280.0, 40.0, &Palette::DARK);
         assert!(dl.is_empty()); // panel is not visible
     }
 
@@ -752,7 +742,7 @@ mod tests {
     fn build_panel_visible_has_commands() {
         let mut panel = HistoryPanel::new();
         panel.toggle();
-        let dl = build_panel(&panel, 1280.0, 40.0);
+        let dl = build_panel(&panel, 1280.0, 40.0, &Palette::DARK);
         assert!(!dl.is_empty());
     }
 

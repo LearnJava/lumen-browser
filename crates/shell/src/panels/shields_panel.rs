@@ -21,6 +21,8 @@ use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
+use crate::panels::themes::Palette;
+
 // ── Visual constants ─────────────────────────────────────────────────────────
 
 /// Width of the floating shields panel in CSS px.
@@ -32,14 +34,16 @@ const PANEL_TOP_OFFSET: f32 = 4.0;
 /// Right margin from the window edge (CSS px).
 const PANEL_RIGHT_MARGIN: f32 = 8.0;
 
-const BG: Color = Color { r: 20, g: 20, b: 28, a: 245 };
-const BORDER: Color = Color { r: 50, g: 50, b: 65, a: 255 };
-const TEXT_MAIN: Color = Color { r: 220, g: 220, b: 228, a: 255 };
-const TEXT_DIM: Color = Color { r: 130, g: 130, b: 145, a: 255 };
+// Semantic indicator colours — meaning-bearing, theme-invariant.
+/// Shield icon / status text colour when shields are enabled.
 const SHIELD_ON: Color = Color { r: 60, g: 200, b: 120, a: 255 };
+/// Shield icon / status text colour when shields are disabled.
 const SHIELD_OFF: Color = Color { r: 180, g: 80, b: 80, a: 255 };
+/// Toggle-strip background when the action is "Disable for this site" (destructive).
 const TOGGLE_BG_ON: Color = Color { r: 30, g: 90, b: 55, a: 255 };
+/// Toggle-strip background when the action is "Enable for this site" (constructive).
 const TOGGLE_BG_OFF: Color = Color { r: 90, g: 35, b: 35, a: 255 };
+/// Close-button foreground — soft-red muted action indicator.
 const CLOSE_FG: Color = Color { r: 140, g: 80, b: 80, a: 255 };
 
 const FONT_SZ: f32 = 11.0;
@@ -245,8 +249,9 @@ pub fn hit_test(
 /// Build the display list for the shields floating panel.
 ///
 /// The panel is anchored at the top-right of the window, offset by
-/// `tab_bar_h` from the top.
-pub fn build_panel(panel: &ShieldsPanel, window_w: f32, tab_bar_h: f32) -> DisplayList {
+/// `tab_bar_h` from the top.  Surface colours are drawn from `pal`; semantic
+/// indicator colours (shield green/red, toggle tracks) remain hard-coded.
+pub fn build_panel(panel: &ShieldsPanel, window_w: f32, tab_bar_h: f32, pal: &Palette) -> DisplayList {
     let (px, py) = panel_origin(window_w, tab_bar_h);
     let mut out = DisplayList::with_capacity(20);
     let radii = uniform_radii(PANEL_RADIUS);
@@ -255,12 +260,12 @@ pub fn build_panel(panel: &ShieldsPanel, window_w: f32, tab_bar_h: f32) -> Displ
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px, py, PANEL_W, PANEL_H),
         radii,
-        color: BORDER,
+        color: pal.overlay_border,
     });
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px + 1.0, py + 1.0, PANEL_W - 2.0, PANEL_H - 2.0),
         radii: uniform_radii(PANEL_RADIUS - 1.0),
-        color: BG,
+        color: pal.overlay_bg,
     });
 
     // Close "×" button (top-right).
@@ -317,7 +322,7 @@ pub fn build_panel(panel: &ShieldsPanel, window_w: f32, tab_bar_h: f32) -> Displ
         rect: Rect::new(px + 10.0, py + 26.0, PANEL_W - 20.0, FONT_SZ_SM * 1.3),
         text: domain_text,
         font_size: FONT_SZ_SM,
-        color: TEXT_DIM,
+        color: pal.text_dim,
         font_family: Vec::new(),
         font_weight: FontWeight::NORMAL,
         font_style: FontStyle::Normal,
@@ -336,7 +341,7 @@ pub fn build_panel(panel: &ShieldsPanel, window_w: f32, tab_bar_h: f32) -> Displ
         rect: Rect::new(px + 10.0, py + 40.0, PANEL_W - 20.0, FONT_SZ_SM * 1.3),
         text: count_text,
         font_size: FONT_SZ_SM,
-        color: TEXT_MAIN,
+        color: pal.text,
         font_family: Vec::new(),
         font_weight: FontWeight::NORMAL,
         font_style: FontStyle::Normal,
@@ -611,14 +616,14 @@ mod tests {
     #[test]
     fn build_panel_emits_commands() {
         let p = make_panel_visible(true, Some("example.com"));
-        let dl = build_panel(&p, WIN_W, TAB_H);
+        let dl = build_panel(&p, WIN_W, TAB_H, &Palette::DARK);
         assert!(!dl.is_empty());
     }
 
     #[test]
     fn build_panel_shields_on_label() {
         let p = make_panel_visible(true, Some("example.com"));
-        let dl = build_panel(&p, WIN_W, TAB_H);
+        let dl = build_panel(&p, WIN_W, TAB_H, &Palette::DARK);
         let has_on = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("ON"))
         });
@@ -628,7 +633,7 @@ mod tests {
     #[test]
     fn build_panel_shields_off_label() {
         let p = make_panel_visible(false, Some("example.com"));
-        let dl = build_panel(&p, WIN_W, TAB_H);
+        let dl = build_panel(&p, WIN_W, TAB_H, &Palette::DARK);
         let has_off = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("OFF"))
         });
@@ -638,7 +643,7 @@ mod tests {
     #[test]
     fn build_panel_shows_domain() {
         let p = make_panel_visible(true, Some("example.com"));
-        let dl = build_panel(&p, WIN_W, TAB_H);
+        let dl = build_panel(&p, WIN_W, TAB_H, &Palette::DARK);
         let has_domain = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("example.com"))
         });
