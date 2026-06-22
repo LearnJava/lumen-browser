@@ -2848,7 +2848,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgpu_compute.rs:980` **enum** `GpuOp` — Одна записанная операция command-encoder для исполнения на `queue.submit`
 `crates/engine/paint/src/webgpu_compute.rs:1035` **fn** `submit` — Исполняет набор операций в одном `CommandEncoder` и сабмитит на очередь
 
-## lumen-shell  (841 symbols)
+## lumen-shell  (848 symbols)
 
 `crates/shell/src/adblock.rs:44` **fn** `browser_data_dir` — Root of all browser user data (portable): `<exe_dir>/data`
 `crates/shell/src/adblock.rs:52` **fn** `adblock_dir` — `<data>/adblock` — root of the ad-block subsystem's files
@@ -3144,6 +3144,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/notification.rs:18` **fn** `show_os_notification` — Show a desktop notification asynchronously
 `crates/shell/src/omnibox/mod.rs:20` **enum** `AliasAction` — Action produced by resolving a raw omnibox input against the alias table
 `crates/shell/src/omnibox/mod.rs:39` **fn** `resolve` — Resolve `input` against the alias table and built-in `@` actions
+`crates/shell/src/panel_layout.rs:46` **enum** `Dock` — Which window edge a docked sidebar hugs
+`crates/shell/src/panel_layout.rs:58` **fn** `width_from_cursor` — Resolve the dragged cursor x-position into a panel width for this dock,
+`crates/shell/src/panel_layout.rs:88` **struct** `PanelLayout` — Runtime, persisted widths of the docked panels, keyed by panel id
+`crates/shell/src/panel_layout.rs:110` **fn** `load` — Load the persisted layout, or an empty (all-default) layout if the file
+`crates/shell/src/panel_layout.rs:161` **fn** `width_for` — Width to use for the panel `id`, falling back to `default` when the user
+`crates/shell/src/panel_layout.rs:171` **fn** `set_width` — Record a new width for panel `id` (clamped). Returns `true` if the stored
+`crates/shell/src/panel_layout.rs:189` **fn** `save` — Persist the layout to disk (best-effort)
 `crates/shell/src/panels/a11y_panel.rs:66` **struct** `A11yPanel` — Accessibility settings panel state
 `crates/shell/src/panels/a11y_panel.rs:75` **fn** `new` — Create a new hidden panel with default preferences
 `crates/shell/src/panels/a11y_panel.rs:87` **fn** `toggle` — Toggle panel visibility
@@ -3159,7 +3166,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/ai_panel.rs:95` **fn** `backspace` — Remove the last character from the input field (backspace)
 `crates/shell/src/panels/ai_panel.rs:110` **enum** `AiHit` — Result of a click inside the AI panel
 `crates/shell/src/panels/ai_panel.rs:124` **fn** `hit_test` — Hit-test `(x, y)` in CSS px against the AI panel
-`crates/shell/src/panels/ai_panel.rs:166` **fn** `build_panel` — Build the display list for the AI sidebar panel
+`crates/shell/src/panels/ai_panel.rs:167` **fn** `build_panel` — Build the display list for the AI sidebar panel
 `crates/shell/src/panels/bookmark_panel.rs:87` **struct** `BmEntry` — Lightweight bookmark entry used for panel rendering (loaded from the
 `crates/shell/src/panels/bookmark_panel.rs:101` **struct** `BookmarkPanel` — Bookmark manager panel state
 `crates/shell/src/panels/bookmark_panel.rs:123` **fn** `new` — Create a new (hidden) panel with an empty bookmark list
@@ -3384,7 +3391,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/sidebar_panel.rs:130` **fn** `max_scroll` — Maximum valid `scroll_y` (0 if content fits in viewport)
 `crates/shell/src/panels/sidebar_panel.rs:146` **enum** `SidebarHit` — Result of a click inside the sidebar panel
 `crates/shell/src/panels/sidebar_panel.rs:159` **fn** `hit_test` — Hit-test `(x, y)` in CSS px against the sidebar panel
-`crates/shell/src/panels/sidebar_panel.rs:198` **fn** `build_panel` — Build the display list for the right-docked sidebar panel
+`crates/shell/src/panels/sidebar_panel.rs:199` **fn** `build_panel` — Build the display list for the right-docked sidebar panel
 `crates/shell/src/panels/sleep_hint.rs:26` **fn** `build_sleep_hint` — Build the sleep-restore hint overlay if restore has taken longer than THRESHOLD_MS
 `crates/shell/src/panels/split_view.rs:22` **enum** `SplitFocus` — Which pane receives keyboard and scroll input
 `crates/shell/src/panels/split_view.rs:36` **struct** `SplitPane` — Frozen rendering state for the right pane in a split view
@@ -3415,14 +3422,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/tree_tabs.rs:105` **fn** `toggle_collapsed` — Toggle the collapsed state of the subtree rooted at `tab_id`
 `crates/shell/src/panels/tree_tabs.rs:124` **enum** `TreeTabHit` — Result of a click inside the tree tabs panel
 `crates/shell/src/panels/tree_tabs.rs:139` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tree tabs panel
-`crates/shell/src/panels/tree_tabs.rs:181` **fn** `build_panel` — Build the display list for the tree-style tabs panel
+`crates/shell/src/panels/tree_tabs.rs:182` **fn** `build_panel` — Build the display list for the tree-style tabs panel
 `crates/shell/src/panels/vertical_tabs.rs:52` **struct** `VerticalTabsPanel` — Vertical tabs panel: list of open tabs rendered as a left-docked sidebar
 `crates/shell/src/panels/vertical_tabs.rs:64` **fn** `new` — Create a new (hidden) panel
 `crates/shell/src/panels/vertical_tabs.rs:69` **fn** `toggle` — Flip visibility. Caller must trigger relayout + redraw
 `crates/shell/src/panels/vertical_tabs.rs:77` **fn** `scroll_by` — Scroll the panel by `delta` CSS px (positive = down)
 `crates/shell/src/panels/vertical_tabs.rs:93` **enum** `VTabHit` — Result of a click inside the vertical tab panel area
 `crates/shell/src/panels/vertical_tabs.rs:108` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the vertical tabs panel
-`crates/shell/src/panels/vertical_tabs.rs:142` **fn** `build_tab_bar_vertical` — Build the display list for the vertical tabs panel with scroll support
+`crates/shell/src/panels/vertical_tabs.rs:143` **fn** `build_tab_bar_vertical` — Build the display list for the vertical tabs panel with scroll support
 `crates/shell/src/panels/workspace_panel.rs:65` **struct** `WsEntry` — Lightweight workspace entry used for panel rendering (loaded from storage on
 `crates/shell/src/panels/workspace_panel.rs:78` **struct** `WorkspacePanel` — Workspace switcher panel state
 `crates/shell/src/panels/workspace_panel.rs:90` **fn** `new` — Create a new (hidden) panel with an empty workspace list
@@ -4198,4 +4205,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4127 symbols in 22 crates*
+*Total: 4134 symbols in 22 crates*
