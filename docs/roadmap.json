@@ -41,7 +41,7 @@
       ]
     },
     {
-      "id": "P2", "title": "Фаза 2 — v0.5 «Interactive» (текущая)", "status": "active", "date": "app v0.2.0 → v0.5",
+      "id": "P2", "title": "Фаза 2 — v0.5 «Interactive» (завершена)", "status": "done", "date": "app v0.5.0",
       "tasks": [
         {"id": "P2-usability", "title": "USABILITY-вертикаль — «зашёл на сайт и комфортно пользуешься»", "status": "active", "note": "ТОП-приоритет, режим одного программиста (всё на P1)", "tasks": [
           {"id": "U-0", "title": "U-0: --screenshot headless CPU-снимок", "status": "done"},

@@ -16,7 +16,7 @@ capability, and drift from code (see CLAUDE.md). For per-CSS-property detail see
 **same commit** as the `STATUS-PN.md` "Recent" update. This is the only file that must stay
 true to code; keep it honest about ⬜ gaps too.
 
-Snapshot: **Phase 2 «Interactive», app v0.2.0**. ~21 crates.
+Snapshot: **Phase 2 «Interactive» (complete), app v0.5.0**. ~21 crates.
 
 ---
 
@@ -166,7 +166,7 @@ Modern ES (ES2020+: classes, async/await, generators, Promise, Proxy, BigInt, mo
 
 **Reading/Content** — ✅ reader view, find-in-page (Ctrl+F, highlights/next-prev/scroll-to), source view, read-later panel, note viewer.
 
-**UI panels** — ✅ command palette, settings, bookmarks, history, AI sidebar (Ctrl+Shift+A, `AiBackend` trait, `NullAiBackend` default), Picture-in-Picture (+ OS window), certificate viewer, permission popover, a11y/focus/sidebar panels, light/dark/system themes + accents (a central `Palette` drives the tab strip, address bar, **and all ~22 secondary panels** — each follows the light/dark setting via a threaded `&Palette` of role-named tokens; only panel drag&drop docking is pending — F2-6 stage 2).
+**UI panels** — ✅ command palette, settings, bookmarks, history, AI sidebar (Ctrl+Shift+A, `AiBackend` trait, `NullAiBackend` default), Picture-in-Picture (+ OS window), certificate viewer, permission popover, a11y/focus/sidebar panels, light/dark/system themes + accents (a central `Palette` drives the tab strip, address bar, **and all ~22 secondary panels** — each follows the light/dark setting via a threaded `&Palette` of role-named tokens). Docked sidebars (vertical tabs, tree tabs, AI, web sidebar) are **drag-resizable** — drag a panel's inner edge to change its width; the web sidebar **reflows its page content to the new width** on release; the layout persists across restarts in `<exe_dir>/data/ui/panel_layout.txt` (`panel_layout::PanelLayout`). 🟡 Cross-dock (moving a sidebar left↔right via `Ctrl+Alt+B`, persisted) works for **all four** docked sidebars — vertical tabs, tree tabs, AI, and web sidebar; the only F2-6 remainder is the infrastructure-only `SurfaceManager` (ADR-009) migration of the live shell (no new user-facing capability).
 
 **Input** — ✅ Vimium-style click hints, vim mode, gestures, human-like + native input injection, HTML5 drag-and-drop, forms runtime (validation + picker overlays), per-tab zoom, smooth scroll + scrollbar (drag + track-click) + momentum. ⬜ no horizontal scroll; no relayout-on-resize (viewport hardcoded 1024×720).
 

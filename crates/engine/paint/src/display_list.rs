@@ -4217,11 +4217,11 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
     // (border/padding/background) is already stripped in
     // `strip_ua_appearance_box_styling` (before the author cascade); here we
     // suppress the painted indicator so authors can fully restyle it.
-    // BUG-225: this gate also suppresses text-input value/placeholder text — too
-    // broad; only the native primitives should be suppressed.
-    if b.style.appearance == Appearance::None {
-        return;
-    }
+    // BUG-225: the suppression is scoped to the native primitives only (color
+    // swatch, checkbox tick, radio dot, range slider, progress/meter bar, select
+    // arrow). Text-input `value`/`placeholder` and button labels are author
+    // content, not a UA primitive, so they keep rendering under `appearance:none`.
+    let suppress_primitive = b.style.appearance == Appearance::None;
     // CSS UI L4 §6.1 — accent-color tints the "accent" of checkbox, radio,
     // range and progress controls. `auto` (None) keeps the UA default blue.
     // <meter> is intentionally excluded: its bar keeps the semantic
@@ -4235,22 +4235,27 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
             // `#000000`. Drawn before the `checked` gate since color is not
             // a checkable type.
             if *input_type == InputType::Color {
-                let swatch = lumen_layout::style::parse_color(value_text)
-                    .unwrap_or(Color { r: 0, g: 0, b: 0, a: 255 });
-                let bl = b.style.border_left_width;
-                let bt = b.style.border_top_width;
-                let br = b.style.border_right_width;
-                let bb = b.style.border_bottom_width;
-                let pad = 2.0;
-                out.push(DisplayCommand::FillRect {
-                    rect: Rect::new(
-                        b.rect.x + bl + pad,
-                        b.rect.y + bt + pad,
-                        (b.rect.width  - bl - br - pad * 2.0).max(1.0),
-                        (b.rect.height - bt - bb - pad * 2.0).max(1.0),
-                    ),
-                    color: swatch,
-                });
+                // The swatch is the native primitive — suppressed under
+                // `appearance:none` (the control has no text value to fall back
+                // to, so nothing else is painted here).
+                if !suppress_primitive {
+                    let swatch = lumen_layout::style::parse_color(value_text)
+                        .unwrap_or(Color { r: 0, g: 0, b: 0, a: 255 });
+                    let bl = b.style.border_left_width;
+                    let bt = b.style.border_top_width;
+                    let br = b.style.border_right_width;
+                    let bb = b.style.border_bottom_width;
+                    let pad = 2.0;
+                    out.push(DisplayCommand::FillRect {
+                        rect: Rect::new(
+                            b.rect.x + bl + pad,
+                            b.rect.y + bt + pad,
+                            (b.rect.width  - bl - br - pad * 2.0).max(1.0),
+                            (b.rect.height - bt - bb - pad * 2.0).max(1.0),
+                        ),
+                        color: swatch,
+                    });
+                }
                 return;
             }
             // HTML rendering §15.5.5 — text-like inputs paint their `value` as
@@ -4286,6 +4291,9 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
                 }
                 _ => {}
             }
+            // The checked checkbox tick / radio dot is a native primitive —
+            // suppressed under `appearance:none`.
+            if suppress_primitive { return; }
             if !checked { return; }
             if *input_type != InputType::Checkbox && *input_type != InputType::Radio {
                 return;
@@ -4339,17 +4347,26 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
             }
         }
         FormControlKind::Select { selected_text } => {
-            emit_select_indicator(b, selected_text, out);
+            // The select arrow is the native primitive; the selected option text
+            // is author-visible content and keeps rendering. `emit_select_indicator`
+            // draws both, so pass the suppression flag down rather than gating here.
+            emit_select_indicator(b, selected_text, suppress_primitive, out);
         }
         FormControlKind::Button | FormControlKind::Textarea { .. } => {}
         FormControlKind::Range { value, min, max } => {
-            emit_range_slider(b, *value, *min, *max, accent, out);
+            if !suppress_primitive {
+                emit_range_slider(b, *value, *min, *max, accent, out);
+            }
         }
         FormControlKind::Progress { value, max } => {
-            emit_progress_bar(b, *value, *max, accent, out);
+            if !suppress_primitive {
+                emit_progress_bar(b, *value, *max, accent, out);
+            }
         }
         FormControlKind::Meter { value, min, max, low, high, optimum } => {
-            emit_meter_bar(b, *value, *min, *max, *low, *high, *optimum, out);
+            if !suppress_primitive {
+                emit_meter_bar(b, *value, *min, *max, *low, *high, *optimum, out);
+            }
         }
     }
 }
@@ -4493,14 +4510,20 @@ pub(crate) fn meter_gauge_color(value: f32, _min: f32, _max: f32, low: f32, high
 }
 
 /// Draw the selected option label and a dropdown arrow (▼) inside a `<select>` box.
-fn emit_select_indicator(b: &LayoutBox, selected_text: &str, out: &mut Vec<DisplayCommand>) {
+///
+/// `suppress_primitive` (set by `appearance: none`, BUG-225) drops the native
+/// separator line and dropdown arrow; the selected option label is author-visible
+/// content and is always painted.
+fn emit_select_indicator(b: &LayoutBox, selected_text: &str, suppress_primitive: bool, out: &mut Vec<DisplayCommand>) {
     let s = &b.style;
     let fg = s.color;
     let font_size = s.font_size.clamp(10.0, 14.0);
     let pad = 4.0;
-    // Arrow column width (enough for "▼" glyph).
+    // Arrow column width (enough for "▼" glyph). When the native arrow is
+    // suppressed the label reclaims that column.
     let arrow_w = font_size + pad * 2.0;
-    let text_w = (b.rect.width - arrow_w - pad * 2.0).max(1.0);
+    let reserved = if suppress_primitive { 0.0 } else { arrow_w };
+    let text_w = (b.rect.width - reserved - pad * 2.0).max(1.0);
 
     // Selected label — clipped to available width.
     if !selected_text.is_empty() {
@@ -4518,29 +4541,32 @@ fn emit_select_indicator(b: &LayoutBox, selected_text: &str, out: &mut Vec<Displ
         });
     }
 
-    // Separator line before the arrow.
-    let sep_x = b.rect.x + b.rect.width - arrow_w;
-    out.push(DisplayCommand::DrawBorder {
-        rect: Rect::new(sep_x, b.rect.y, 1.0, b.rect.height),
-        widths: [0.0, 0.0, 0.0, 1.0],
-        colors: [fg; 4],
-        styles: [lumen_layout::BorderStyle::Solid; 4],
-        radii: crate::CornerRadii::default(),
-    });
+    // Native separator line + dropdown arrow — suppressed under `appearance:none`.
+    if !suppress_primitive {
+        // Separator line before the arrow.
+        let sep_x = b.rect.x + b.rect.width - arrow_w;
+        out.push(DisplayCommand::DrawBorder {
+            rect: Rect::new(sep_x, b.rect.y, 1.0, b.rect.height),
+            widths: [0.0, 0.0, 0.0, 1.0],
+            colors: [fg; 4],
+            styles: [lumen_layout::BorderStyle::Solid; 4],
+            radii: crate::CornerRadii::default(),
+        });
 
-    // Dropdown arrow "▼".
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(sep_x + pad, b.rect.y + pad, arrow_w - pad, b.rect.height - pad * 2.0),
-        text: "\u{25BC}".to_owned(),
-        font_size: font_size * 0.75,
-        color: fg,
-        font_family: s.font_family.clone(),
-        font_weight: s.font_weight,
-        font_style: s.font_style,
-        font_variation_axes: vec![],
-        tab_size: 0.0,
-        highlight_name: None,
-    });
+        // Dropdown arrow "▼".
+        out.push(DisplayCommand::DrawText {
+            rect: Rect::new(sep_x + pad, b.rect.y + pad, arrow_w - pad, b.rect.height - pad * 2.0),
+            text: "\u{25BC}".to_owned(),
+            font_size: font_size * 0.75,
+            color: fg,
+            font_family: s.font_family.clone(),
+            font_weight: s.font_weight,
+            font_style: s.font_style,
+            font_variation_axes: vec![],
+            tab_size: 0.0,
+            highlight_name: None,
+        });
+    }
 }
 
 /// CSS Lists L3 §2.1 — renders the `::marker` pseudo-element.
@@ -7369,6 +7395,70 @@ mod tests {
             rounded_fills(&dl).is_empty(),
             "appearance:none must suppress the range slider, got {:?}",
             rounded_fills(&dl)
+        );
+    }
+
+    /// BUG-225 — `appearance: none` must NOT suppress a text input's `value`
+    /// text: the value is author content, not a UA primitive. Only the native
+    /// primitives (tick/dot/slider/bar/arrow/swatch) are removed.
+    #[test]
+    fn appearance_none_keeps_text_input_value() {
+        let dl = build(
+            r#"<input type=text value="typed">"#,
+            "input { appearance: none; }",
+        );
+        assert!(
+            texts(&dl).contains(&"typed"),
+            "appearance:none text input must still paint its value, got {:?}",
+            texts(&dl)
+        );
+    }
+
+    /// BUG-225 — `appearance: none` must keep the placeholder hint of an empty
+    /// text input (placeholder is author content, not a UA primitive).
+    #[test]
+    fn appearance_none_keeps_text_input_placeholder() {
+        let dl = build(
+            r#"<input type=text value="" placeholder="hint here">"#,
+            "input { appearance: none; }",
+        );
+        assert!(
+            texts(&dl).contains(&"hint here"),
+            "appearance:none empty input must still paint its placeholder, got {:?}",
+            texts(&dl)
+        );
+    }
+
+    /// BUG-225 — `appearance: none` must keep a button's label.
+    #[test]
+    fn appearance_none_keeps_button_label() {
+        let dl = build(
+            r#"<input type=submit value="Send">"#,
+            "input { appearance: none; }",
+        );
+        assert!(
+            texts(&dl).contains(&"Send"),
+            "appearance:none button must still paint its label, got {:?}",
+            texts(&dl)
+        );
+    }
+
+    /// BUG-225 — `appearance: none` keeps the `<select>` selected option label
+    /// but drops the native dropdown arrow (▼).
+    #[test]
+    fn appearance_none_keeps_select_label_drops_arrow() {
+        let dl = build(
+            "<select><option selected>Chosen</option></select>",
+            "select { appearance: none; }",
+        );
+        let t = texts(&dl);
+        assert!(
+            t.contains(&"Chosen"),
+            "appearance:none select must still paint the selected label, got {t:?}"
+        );
+        assert!(
+            !t.iter().any(|s| s.contains('\u{25BC}')),
+            "appearance:none select must drop the native dropdown arrow, got {t:?}"
         );
     }
 
