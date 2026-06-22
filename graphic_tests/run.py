@@ -224,8 +224,8 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '57': ('BUG-099', 4.14),    # <canvas> getContext("2d") — Phase 2
     '60': ('BUG-173', 1.5),     # SVG stroke advanced остаток (triangle-soup AA-швы, dash-on-curve)
     '61': ('BUG-103', 99.53),   # View Transitions API — Phase 2
-    '63': ('BUG-105', 48.44),   # CSS Masonry layout — Phase 2
-    '75': ('BUG-143', 16.97),   # masonry-auto-flow — Phase 2
+    '63': ('BUG-176', 2.02),    # display:masonry→multicol fallback fixed (BUG-105, 48%→2.02%): 9 карт = 3×3 balanced как Edge, геометрия пиксель-точна. Остаток = border-radius:4px edge-AA (BUG-176) + текст заголовка/меток (rule 3). Baseline CPU-diff (ffmpeg-free)
+    # '75' убран: BUG-143 FIXED (16.97%→0.25%) — grid-masonry fallback + order + stretch + flex border (BUG-232); геометрия = Edge
     '119': ('BUG-173', 0.81),   # paint-order: остаток = stroke triangle-soup AA-швы (geometry фикснут BUG-174)
     '36': ('BUG-176', 1.11),    # border-radius: остаток = edge-AA + elliptical-corner kappa (квадратные рамки фикснуты BUG-175)
     '30': ('BUG-144', 4.36),    # CSS filter/backdrop-filter: row-flip (BUG-144) + gradient hard-stop row 2 (BUG-085) + backdrop colour-matrix/combo больше не тёмные (CPU backdrop-пайплайн, 7.56%→4.36%); остаток = box-blur≈Gaussian + edge-bleed на двух blur-картах (row 4 cards 1,5) + filter AA
