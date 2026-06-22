@@ -10169,6 +10169,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let mut bar = address_bar::build_bar_overlay(
                         &self.address_bar,
                         address_bar::BarOverlay { window_size: win_size },
+                        &self.shell_theme.palette(self.dark_mode),
                     );
                     bar.append(&mut overlay_buf);
                     overlay_buf = bar;
@@ -10517,7 +10518,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let mut tab_cmds = tabs::strip::build_tab_bar(
                         &self.tab_strip,
                         tab_area_w,
-                        self.shell_theme.accent_color(),
+                        &self.shell_theme.palette(self.dark_mode),
                         self.tab_drag.as_ref(),
                     );
                     overlay_buf.append(&mut tab_cmds);

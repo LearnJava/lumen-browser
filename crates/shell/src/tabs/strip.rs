@@ -11,6 +11,7 @@ use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
+use crate::panels::themes::Palette;
 use crate::tab_lifecycle::state::TabState;
 use crate::tabs::containers::ContainerKind;
 use crate::tabs::groups::{GroupColor, TabGroup};
@@ -53,13 +54,11 @@ fn adblock_cb_x_range(tab_left: f32) -> (f32, f32) {
 /// Colour of the vertical drop-indicator bar.
 const DROP_INDICATOR_COLOR: Color = Color { r: 255, g: 255, b: 255, a: 180 };
 
+/// Fallback tab-strip background for the layout-toggle button (always dark).
+/// The themed strip background comes from [`Palette::tab_bar_bg`]; this constant
+/// remains only for [`build_layout_toggle_btn`], which is not yet theme-aware.
 const BAR_BG: Color = Color { r: 22, g: 22, b: 26, a: 255 };
-const TAB_INACTIVE_BG: Color = Color { r: 32, g: 33, b: 36, a: 255 };
-const TAB_ACTIVE_BG: Color = Color { r: 18, g: 18, b: 22, a: 255 };
-const TAB_TEXT: Color = Color { r: 218, g: 218, b: 228, a: 255 };
-const TAB_TEXT_DIM: Color = Color { r: 140, g: 140, b: 148, a: 255 };
 const CLOSE_FG: Color = Color { r: 180, g: 80, b: 80, a: 255 };
-const DIVIDER: Color = Color { r: 45, g: 46, b: 52, a: 255 };
 
 /// Badge colour for BackgroundOld tier — amber "z" sleep icon.
 /// Indicator colour for a pinned tab (CC-4) — cyan dot at the tab's left edge.
@@ -67,10 +66,6 @@ const PIN_COLOR: Color = Color { r: 90, g: 200, b: 220, a: 255 };
 const BADGE_OLD_COLOR: Color = Color { r: 255, g: 168, b: 0, a: 210 };
 /// Badge colour for Hibernated tier — grey "Z" sleep icon.
 const BADGE_HIBERNATE_COLOR: Color = Color { r: 110, g: 110, b: 120, a: 210 };
-/// Dimmed background for BackgroundOld (T2) tabs — signals reduced activity.
-const TAB_T2_BG: Color = Color { r: 26, g: 27, b: 30, a: 255 };
-/// Dimmed background for Hibernated (T3) tabs — signals deep sleep.
-const TAB_T3_BG: Color = Color { r: 21, g: 21, b: 24, a: 255 };
 
 const FONT_SZ: f32 = 12.0;
 /// Minimum tab button width in CSS px.
@@ -690,7 +685,7 @@ pub fn hit_test(strip: &TabStrip, x: f32, y: f32, window_w: f32) -> TabHit {
 pub fn build_tab_bar(
     strip: &TabStrip,
     window_w: f32,
-    accent: Color,
+    pal: &Palette,
     drag: Option<&TabDragState>,
 ) -> DisplayList {
     // Lay out over the *visible* tabs: members of a collapsed group (except the
@@ -702,7 +697,7 @@ pub fn build_tab_bar(
     // Background strip.
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(0.0, 0.0, window_w, TAB_BAR_HEIGHT),
-        color: BAR_BG,
+        color: pal.tab_bar_bg,
     });
 
     for (slot, &i) in visible.iter().enumerate() {
@@ -712,12 +707,12 @@ pub fn build_tab_bar(
 
         // Tab background: T2/T3 use darker backgrounds as fade-opacity signal.
         let bg = if is_active {
-            TAB_ACTIVE_BG
+            pal.tab_active_bg
         } else {
             match tab.tab_state {
-                TabState::BackgroundOld => TAB_T2_BG,
-                TabState::Hibernated => TAB_T3_BG,
-                _ => TAB_INACTIVE_BG,
+                TabState::BackgroundOld => pal.tab_sleep_bg,
+                TabState::Hibernated => pal.tab_hibernate_bg,
+                _ => pal.tab_inactive_bg,
             }
         };
         out.push(DisplayCommand::FillRect {
@@ -750,7 +745,7 @@ pub fn build_tab_bar(
         if is_active {
             out.push(DisplayCommand::FillRect {
                 rect: Rect::new(left, TAB_BAR_HEIGHT - 2.0, right - left, 2.0),
-                color: accent,
+                color: pal.accent,
             });
         }
 
@@ -775,7 +770,7 @@ pub fn build_tab_bar(
         if i + 1 < n {
             out.push(DisplayCommand::FillRect {
                 rect: Rect::new(right - 1.0, 4.0, 1.0, TAB_BAR_HEIGHT - 8.0),
-                color: DIVIDER,
+                color: pal.divider,
             });
         }
 
@@ -849,7 +844,7 @@ pub fn build_tab_bar(
         let text_x = cb_right + CLOSE_MARGIN;
         let text_w = (close_left - CLOSE_MARGIN - text_x).max(0.0);
         let text_y = (TAB_BAR_HEIGHT - FONT_SZ * 1.3) * 0.5;
-        let text_color = if is_active { TAB_TEXT } else { TAB_TEXT_DIM };
+        let text_color = if is_active { pal.text } else { pal.text_dim };
         out.push(DisplayCommand::DrawText {
             rect: Rect::new(text_x, text_y, text_w, FONT_SZ * 1.3),
             text: tab.title.clone(),
@@ -1025,7 +1020,7 @@ mod tests {
     #[test]
     fn build_tab_bar_emits_commands() {
         let s = TabStrip::new();
-        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
+        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None);
         assert!(!dl.is_empty());
         let has_title = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("вкладка"))
@@ -1036,7 +1031,7 @@ mod tests {
     #[test]
     fn build_tab_bar_no_badge_for_active() {
         let s = TabStrip::new(); // single Active tab
-        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
+        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None);
         // Active tab must not emit a sleep-icon badge (no "Z"/"z" glyph).
         let has_sleep_badge = dl.iter().any(|c| match c {
             DisplayCommand::DrawText { text, .. } => text == "Z" || text == "z",
@@ -1050,7 +1045,7 @@ mod tests {
         let mut s = TabStrip::new();
         s.push_blank(0.0);
         s.set_tab_state(0, TabState::BackgroundOld);
-        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
+        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None);
         // Amber "z" glyph badge for BackgroundOld tier.
         let has_z = dl.iter().any(|c| match c {
             DisplayCommand::DrawText { text, color, .. } => {
@@ -1066,7 +1061,7 @@ mod tests {
         let mut s = TabStrip::new();
         s.push_blank(0.0);
         s.set_tab_state(0, TabState::Hibernated);
-        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
+        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None);
         // Grey "Z" glyph badge for Hibernated tier.
         let has_z = dl.iter().any(|c| match c {
             DisplayCommand::DrawText { text, color, .. } => {
@@ -1083,10 +1078,10 @@ mod tests {
         s.push_blank(0.0); // index 0 — active
         s.push_blank(0.0); // index 1 — inactive BackgroundOld
         s.set_tab_state(1, TabState::BackgroundOld);
-        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
-        // T2 background must be TAB_T2_BG, not TAB_INACTIVE_BG.
+        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None);
+        // T2 background must use the palette's sleep tone, not the inactive one.
         let has_t2_bg = dl.iter().any(|c| match c {
-            DisplayCommand::FillRect { color, .. } => *color == TAB_T2_BG,
+            DisplayCommand::FillRect { color, .. } => *color == Palette::DARK.tab_sleep_bg,
             _ => false,
         });
         assert!(has_t2_bg, "BackgroundOld inactive tab must use dimmed T2 background");
@@ -1098,10 +1093,10 @@ mod tests {
         s.push_blank(0.0); // index 0 — active
         s.push_blank(0.0); // index 1 — inactive Hibernated
         s.set_tab_state(1, TabState::Hibernated);
-        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
-        // T3 background must be TAB_T3_BG.
+        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None);
+        // T3 background must use the palette's hibernate tone.
         let has_t3_bg = dl.iter().any(|c| match c {
-            DisplayCommand::FillRect { color, .. } => *color == TAB_T3_BG,
+            DisplayCommand::FillRect { color, .. } => *color == Palette::DARK.tab_hibernate_bg,
             _ => false,
         });
         assert!(has_t3_bg, "Hibernated inactive tab must use dimmed T3 background");
@@ -1165,7 +1160,7 @@ mod tests {
     fn build_tab_bar_renders_strip_for_work() {
         let mut s = TabStrip::new();
         s.set_tab_container(0, ContainerKind::Work);
-        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
+        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None);
         let expected = ContainerKind::Work.border_color().expect("Work has colour");
         assert_eq!(count_container_strips(&dl, expected), 1);
     }
@@ -1174,7 +1169,7 @@ mod tests {
     fn build_tab_bar_renders_strip_for_personal() {
         let mut s = TabStrip::new();
         s.set_tab_container(0, ContainerKind::Personal);
-        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
+        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None);
         let expected = ContainerKind::Personal.border_color().expect("Personal has colour");
         assert_eq!(count_container_strips(&dl, expected), 1);
     }
@@ -1183,7 +1178,7 @@ mod tests {
     fn build_tab_bar_renders_strip_for_finance() {
         let mut s = TabStrip::new();
         s.set_tab_container(0, ContainerKind::Finance);
-        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
+        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None);
         let expected = ContainerKind::Finance.border_color().expect("Finance has colour");
         assert_eq!(count_container_strips(&dl, expected), 1);
     }
@@ -1192,7 +1187,7 @@ mod tests {
     fn build_tab_bar_renders_strip_for_shopping() {
         let mut s = TabStrip::new();
         s.set_tab_container(0, ContainerKind::Shopping);
-        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
+        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None);
         let expected = ContainerKind::Shopping.border_color().expect("Shopping has colour");
         assert_eq!(count_container_strips(&dl, expected), 1);
     }
@@ -1201,7 +1196,7 @@ mod tests {
     fn build_tab_bar_renders_strip_for_custom_rgb() {
         let mut s = TabStrip::new();
         s.set_tab_container(0, ContainerKind::Custom(200, 50, 100));
-        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
+        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None);
         let expected = Color { r: 200, g: 50, b: 100, a: 255 };
         assert_eq!(count_container_strips(&dl, expected), 1);
     }
@@ -1209,7 +1204,7 @@ mod tests {
     #[test]
     fn build_tab_bar_no_strip_for_none_container() {
         let s = TabStrip::new(); // single tab, ContainerKind::None
-        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
+        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None);
         // No FillRect of CONTAINER_STRIP_HEIGHT may exist when container is None.
         let strips = dl
             .iter()
@@ -1230,7 +1225,7 @@ mod tests {
         s.push_blank(0.0);
         s.push_blank(0.0);
         s.set_tab_container(1, ContainerKind::Work);
-        let dl = build_tab_bar(&s, 1024.0, Color { r: 100, g: 128, b: 255, a: 255 }, None);
+        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None);
         let work_color = ContainerKind::Work.border_color().expect("Work has colour");
         // Exactly one Work-coloured strip (tab 1); tabs 0 and 2 have None.
         assert_eq!(count_container_strips(&dl, work_color), 1);
@@ -1505,8 +1500,7 @@ mod tests {
         let mut s = TabStrip::new();
         s.push_blank(0.0);
         let drag = TabDragState { src_idx: 0, press_x: 0.0, ghost_x: 100.0, active: true };
-        let accent = Color { r: 100, g: 128, b: 255, a: 255 };
-        let dl = build_tab_bar(&s, 1024.0, accent, Some(&drag));
+        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, Some(&drag));
         // Drop indicator must produce a FillRect
         let has_indicator = dl.iter().any(|c| match c {
             DisplayCommand::FillRect { color, .. } => *color == DROP_INDICATOR_COLOR,
@@ -1519,8 +1513,7 @@ mod tests {
     fn build_tab_bar_no_indicator_when_drag_not_active() {
         let s = TabStrip::new();
         let drag = TabDragState { src_idx: 0, press_x: 0.0, ghost_x: 100.0, active: false };
-        let accent = Color { r: 100, g: 128, b: 255, a: 255 };
-        let dl = build_tab_bar(&s, 1024.0, accent, Some(&drag));
+        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, Some(&drag));
         let has_indicator = dl.iter().any(|c| match c {
             DisplayCommand::FillRect { color, .. } => *color == DROP_INDICATOR_COLOR,
             _ => false,
@@ -1532,7 +1525,8 @@ mod tests {
     fn build_tab_bar_accent_color_used_for_active_tab() {
         let s = TabStrip::new(); // one active tab
         let custom_accent = Color { r: 230, g: 59, b: 111, a: 255 }; // rose
-        let dl = build_tab_bar(&s, 1024.0, custom_accent, None);
+        let pal = Palette { accent: custom_accent, ..Palette::DARK };
+        let dl = build_tab_bar(&s, 1024.0, &pal, None);
         let has_accent = dl.iter().any(|c| match c {
             DisplayCommand::FillRect { color, .. } => *color == custom_accent,
             _ => false,
@@ -1664,7 +1658,7 @@ mod tests {
         let mut s = strip_with_n(2);
         let g = s.create_group("G", GroupColor::Green);
         s.assign_to_group(0, g);
-        let dl = build_tab_bar(&s, 1024.0, Color { r: 1, g: 2, b: 3, a: 255 }, None);
+        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None);
         let green = GroupColor::Green.color();
         let has_group_bar = dl.iter().any(|c| match c {
             DisplayCommand::FillRect { rect, color } => {
@@ -1680,7 +1674,7 @@ mod tests {
     #[test]
     fn build_tab_bar_no_group_bar_for_ungrouped() {
         let s = strip_with_n(2);
-        let dl = build_tab_bar(&s, 1024.0, Color { r: 1, g: 2, b: 3, a: 255 }, None);
+        let dl = build_tab_bar(&s, 1024.0, &Palette::DARK, None);
         let bars = dl
             .iter()
             .filter(|c| match c {
