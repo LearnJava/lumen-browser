@@ -759,41 +759,116 @@ fn fsin(mut rad: f32) -> f32 {
 /// Apply a separable box blur to RGBA pixel data in-place.
 /// `sigma` controls the kernel radius (radius = round(sigma * 1.5)).
 /// This is a 3-pass approximation of Gaussian blur (3× box blur ≈ Gaussian).
-fn box_blur_rgba(pixels: &mut [u8], width: usize, height: usize, sigma: f32) {
-    let r = ((sigma * 1.5).round() as usize).max(1);
-    let stride = width * 4;
-    // Horizontal pass.
-    let mut tmp = pixels.to_vec();
-    for y in 0..height {
-        for x in 0..width {
+/// Computes the three box-blur radii whose successive application approximates
+/// a Gaussian of standard deviation `sigma` (Kovesi, *Fast Almost-Gaussian
+/// Filtering*; n = 3 boxes). Three boxes are visually indistinguishable from a
+/// true Gaussian and far closer than a single box, which is what Edge/Chrome
+/// rasterize for `filter: blur()` / `backdrop-filter: blur()`. Each returned
+/// value is the half-width `r` of a `(2r+1)`-wide averaging window.
+fn gaussian_box_radii(sigma: f32) -> [usize; 3] {
+    const N: f32 = 3.0;
+    // Ideal (real) box width matching the Gaussian variance across N boxes.
+    let w_ideal = (12.0 * sigma * sigma / N + 1.0).sqrt();
+    let mut wl = w_ideal.floor() as i32;
+    if wl % 2 == 0 {
+        wl -= 1; // box widths must be odd to stay symmetric around a pixel.
+    }
+    let wu = wl + 2;
+    // How many of the N boxes use the lower width `wl` (the rest use `wu`).
+    let m_ideal = (12.0 * sigma * sigma
+        - N * (wl * wl) as f32
+        - 4.0 * N * wl as f32
+        - 3.0 * N)
+        / (-4.0 * wl as f32 - 4.0);
+    let m = m_ideal.round() as i32;
+    let mut radii = [1usize; 3];
+    for (i, slot) in radii.iter_mut().enumerate() {
+        let w = if (i as i32) < m { wl } else { wu };
+        *slot = (((w - 1) / 2).max(1)) as usize;
+    }
+    radii
+}
+
+/// One box-blur pass (separable: horizontal then vertical) of half-width `r`,
+/// restricted to `region` (`[rx0, rx1) × [ry0, ry1)` in pixel coords). Sampling
+/// is clamped to the region so the window never reaches outside it. `scratch`
+/// is reused across passes to avoid per-pass allocation.
+fn box_blur_pass_region(
+    pixels: &mut [u8],
+    scratch: &mut [u8],
+    stride: usize,
+    region: (usize, usize, usize, usize),
+    r: usize,
+) {
+    let (rx0, ry0, rx1, ry1) = region;
+    // Horizontal pass: pixels → scratch.
+    for y in ry0..ry1 {
+        for x in rx0..rx1 {
             let mut sum = [0u32; 4];
             let mut count = 0u32;
-            let x0 = x.saturating_sub(r);
-            let x1 = (x + r + 1).min(width);
+            let x0 = x.saturating_sub(r).max(rx0);
+            let x1 = (x + r + 1).min(rx1);
             for sx in x0..x1 {
                 let off = y * stride + sx * 4;
                 for c in 0..4 { sum[c] += pixels[off + c] as u32; }
                 count += 1;
             }
             let off = y * stride + x * 4;
-            for c in 0..4 { tmp[off + c] = (sum[c] / count) as u8; }
+            for c in 0..4 { scratch[off + c] = (sum[c] / count) as u8; }
         }
     }
-    // Vertical pass.
-    for y in 0..height {
-        for x in 0..width {
+    // Vertical pass: scratch → pixels.
+    for y in ry0..ry1 {
+        for x in rx0..rx1 {
             let mut sum = [0u32; 4];
             let mut count = 0u32;
-            let y0 = y.saturating_sub(r);
-            let y1 = (y + r + 1).min(height);
+            let y0 = y.saturating_sub(r).max(ry0);
+            let y1 = (y + r + 1).min(ry1);
             for sy in y0..y1 {
                 let off = sy * stride + x * 4;
-                for c in 0..4 { sum[c] += tmp[off + c] as u32; }
+                for c in 0..4 { sum[c] += scratch[off + c] as u32; }
                 count += 1;
             }
             let off = y * stride + x * 4;
             for c in 0..4 { pixels[off + c] = (sum[c] / count) as u8; }
         }
+    }
+}
+
+/// Three-iteration box blur approximating a Gaussian of deviation `sigma`,
+/// restricted to `region` (pixel coords, half-open `[x0, x1) × [y0, y1)`).
+///
+/// Three successive box passes (radii from [`gaussian_box_radii`]) match a true
+/// Gaussian closely — a single box pass (the previous implementation, despite
+/// its "3-pass" comment) reads boxy versus Edge's Gaussian `blur()` and was the
+/// dominant residual on BUG-144's blur cards.
+///
+/// Sampling is clamped to the region: blur near a region edge averages only
+/// pixels inside the region, which duplicates the region's own edge content
+/// instead of bleeding in whatever lies outside it. This is required for
+/// `backdrop-filter`, whose input is the backdrop image cropped to the
+/// element's border box (CSS Filter Effects §backdrop-filter) — blurring the
+/// whole canvas and then cropping pulls the dark page background above a card
+/// into the card's top edge (BUG-144 edge-bleed). Pixels outside the region
+/// are left untouched.
+fn box_blur_rgba_region(
+    pixels: &mut [u8],
+    width: usize,
+    height: usize,
+    sigma: f32,
+    region: (usize, usize, usize, usize),
+) {
+    let (rx0, ry0, mut rx1, mut ry1) = region;
+    rx1 = rx1.min(width);
+    ry1 = ry1.min(height);
+    if rx0 >= rx1 || ry0 >= ry1 {
+        return;
+    }
+    let stride = width * 4;
+    let clamped = (rx0, ry0, rx1, ry1);
+    let mut scratch = pixels.to_vec();
+    for r in gaussian_box_radii(sigma) {
+        box_blur_pass_region(pixels, &mut scratch, stride, clamped, r);
     }
 }
 
@@ -1592,6 +1667,7 @@ impl FemtovgBackend {
     fn apply_backdrop_filters(
         &mut self,
         filters: &[lumen_layout::FilterFn],
+        bounds: &Rect,
     ) -> Option<femtovg::ImageId> {
         // Screenshot the current RT (flush must have been called already).
         // `screenshot()` reverses GL's bottom-up rows, so `rgba` is the raw
@@ -1609,6 +1685,19 @@ impl FemtovgBackend {
             .flat_map(|p| [p.r, p.g, p.b, p.a])
             .collect();
 
+        // Backdrop-filter input is the backdrop image cropped to the element's
+        // border box (CSS Filter Effects §backdrop-filter), so blur must clamp
+        // its sampling window to that box — otherwise the box blur near a card's
+        // top edge averages in the dark page background painted above it
+        // (BUG-144 edge-bleed). Convert CSS-px `bounds` to the screenshot's
+        // device-pixel coordinates and clamp to the snapshot extent.
+        let scale = self.scale as f32;
+        let bx0 = (bounds.x * scale).floor().max(0.0) as usize;
+        let by0 = (bounds.y * scale).floor().max(0.0) as usize;
+        let bx1 = ((bounds.x + bounds.width) * scale).ceil().max(0.0) as usize;
+        let by1 = ((bounds.y + bounds.height) * scale).ceil().max(0.0) as usize;
+        let region = (bx0.min(iw), by0.min(ih), bx1.min(iw), by1.min(ih));
+
         // Apply the filter chain left-to-right (CSS Filter Effects §2.2). Blur is
         // a 3-pass box approximation of the Gaussian; colour-matrix functions
         // share `apply_filter_rgba` with the PushFilter path. `opacity()` is a
@@ -1617,7 +1706,7 @@ impl FemtovgBackend {
         for f in filters {
             match f {
                 lumen_layout::FilterFn::Blur(sigma) if *sigma > 0.0 => {
-                    box_blur_rgba(&mut rgba, iw, ih, *sigma);
+                    box_blur_rgba_region(&mut rgba, iw, ih, *sigma, region);
                 }
                 lumen_layout::FilterFn::Blur(_) | lumen_layout::FilterFn::Opacity(_) => {}
                 _ => apply_filter_rgba(&mut rgba, f),
@@ -2489,7 +2578,7 @@ impl FemtovgBackend {
                 // Flush so backdrop has all content rendered.
                 self.canvas.flush();
                 // Apply filters to a screenshot of the current RT.
-                let filtered_backdrop_id = self.apply_backdrop_filters(filters);
+                let filtered_backdrop_id = self.apply_backdrop_filters(filters, bounds);
 
                 if let Some(filt_id) = filtered_backdrop_id {
                     // Restore prev_rt after apply_backdrop_filters may have switched.
@@ -3372,7 +3461,7 @@ mod tests {
     fn box_blur_rgba_single_pixel_unchanged() {
         // Single pixel: no neighbors, should remain unchanged.
         let mut px = vec![255u8, 0, 0, 255]; // red pixel
-        box_blur_rgba(&mut px, 1, 1, 2.0);
+        box_blur_rgba_region(&mut px, 1, 1, 2.0, (0, 0, 1, 1));
         assert_eq!(&px, &[255, 0, 0, 255]); // single pixel — unchanged
     }
 
@@ -3384,10 +3473,70 @@ mod tests {
             0,   0, 0, 255,   // black
             255, 0, 0, 255,   // red
         ];
-        box_blur_rgba(&mut px, 3, 1, 1.0);
+        box_blur_rgba_region(&mut px, 3, 1, 1.0, (0, 0, 3, 1));
         // Middle pixel (index 1) should now be average of all three: 255+0+255/3 = 170
         let mid_r = px[4]; // offset 1*4 + 0
         assert!(mid_r > 100, "middle pixel should be brightened by blur: got {mid_r}");
+    }
+
+    #[test]
+    fn gaussian_box_radii_three_positive_passes() {
+        // Three boxes, each a valid (≥1) half-width; their combined variance
+        // should be in the neighbourhood of the requested Gaussian variance.
+        for &sigma in &[1.0f32, 2.0, 4.0, 8.0] {
+            let radii = gaussian_box_radii(sigma);
+            assert!(radii.iter().all(|&r| r >= 1), "sigma {sigma}: radii {radii:?}");
+            // Variance of a (2r+1)-box is ((2r+1)²-1)/12; three boxes add up.
+            let var: f32 = radii.iter().map(|&r| {
+                let w = (2 * r + 1) as f32;
+                (w * w - 1.0) / 12.0
+            }).sum();
+            let target = sigma * sigma;
+            // Discrete radii can't hit the target exactly, but should be close.
+            assert!((var - target).abs() <= target * 0.6 + 1.0,
+                "sigma {sigma}: variance {var} far from target {target} (radii {radii:?})");
+        }
+    }
+
+    #[test]
+    fn box_blur_rgba_region_leaves_outside_pixels_untouched() {
+        // 4×1 strip: white, white, white, black. Blur only the first 3 (the
+        // "card"); the 4th pixel (outside the region) must stay pure black —
+        // proving the region path never writes outside its rectangle.
+        let mut px = vec![
+            255u8, 255, 255, 255,
+            255,   255, 255, 255,
+            255,   255, 255, 255,
+            0,     0,   0,   255,
+        ];
+        box_blur_rgba_region(&mut px, 4, 1, 2.0, (0, 0, 3, 1));
+        assert_eq!(&px[12..16], &[0, 0, 0, 255], "outside-region pixel must be untouched");
+    }
+
+    #[test]
+    fn box_blur_rgba_region_clamps_sampling_no_edge_bleed() {
+        // 4×1 strip: black background, then 3 white "card" pixels.
+        // Blurring the card region [1,4) must NOT pull the black pixel at x=0
+        // into the card's left edge: the whole card stays pure white because
+        // sampling is clamped to [1,4) (edge pixels duplicate within the card).
+        let mut px = vec![
+            0u8,   0,   0,   255, // black background (outside region)
+            255,   255, 255, 255, // card start
+            255,   255, 255, 255,
+            255,   255, 255, 255,
+        ];
+        box_blur_rgba_region(&mut px, 4, 1, 2.0, (1, 0, 4, 1));
+        assert_eq!(&px[4..8], &[255, 255, 255, 255], "card left edge must not bleed black background");
+        // Sanity: the unclamped full-width blur *would* darken the card's left
+        // edge — confirm the difference is real, not a no-op test.
+        let mut full = vec![
+            0u8,   0,   0,   255,
+            255,   255, 255, 255,
+            255,   255, 255, 255,
+            255,   255, 255, 255,
+        ];
+        box_blur_rgba_region(&mut full, 4, 1, 2.0, (0, 0, 4, 1));
+        assert!(full[4] < 255, "unclamped blur should bleed black into card edge (got {})", full[4]);
     }
 
     // ── apply_filter_rgba tests ──────────────────────────────────────────────
