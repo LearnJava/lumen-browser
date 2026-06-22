@@ -451,7 +451,7 @@ mod tests {
     fn build_panel_emits_commands() {
         let s = TabStrip::new();
         let p = TreeTabsPanel::new();
-        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK);
+        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
         assert!(!dl.is_empty());
     }
 
@@ -459,7 +459,7 @@ mod tests {
     fn build_panel_has_title_text() {
         let s = TabStrip::new();
         let p = TreeTabsPanel::new();
-        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK);
+        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
         let has_title = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("вкладка"))
         });
@@ -470,7 +470,7 @@ mod tests {
     fn build_panel_shows_arrow_for_parent() {
         let s = strip_with_child();
         let p = TreeTabsPanel::new();
-        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK);
+        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
         let has_arrow = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "▼" || text == "▶")
         });
@@ -481,7 +481,7 @@ mod tests {
     fn build_panel_no_arrow_for_leaf() {
         let s = TabStrip::new();
         let p = TreeTabsPanel::new();
-        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK);
+        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
         let has_arrow = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "▼" || text == "▶")
         });
@@ -493,7 +493,7 @@ mod tests {
         let s = strip_with_child();
         let mut p = TreeTabsPanel::new();
         p.toggle_collapsed(0);
-        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK);
+        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
         let has_right_arrow = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "▶")
         });
@@ -505,7 +505,7 @@ mod tests {
         let s = strip_with_child();
         let mut p = TreeTabsPanel::new();
         p.toggle_collapsed(0);
-        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK);
+        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
         // Only 1 tab visible; title count = 1.
         let title_count = dl.iter().filter(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("вкладка"))
@@ -519,7 +519,7 @@ mod tests {
         // We verify by checking that we get 3 title rows.
         let s = strip_with_grandchild();
         let p = TreeTabsPanel::new();
-        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK);
+        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
         let title_count = dl.iter().filter(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("вкладка"))
         }).count();
@@ -532,7 +532,7 @@ mod tests {
         s.push_blank(0.0);
         s.set_tab_state(0, TabState::BackgroundOld);
         let p = TreeTabsPanel::new();
-        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK);
+        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
         let has_amber = dl.iter().any(|c| match c {
             DisplayCommand::FillRoundedRect { color, .. } => {
                 color.r == BADGE_OLD.r && color.g == BADGE_OLD.g

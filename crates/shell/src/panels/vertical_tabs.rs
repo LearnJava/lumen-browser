@@ -367,14 +367,14 @@ mod tests {
     #[test]
     fn build_panel_emits_commands() {
         let s = TabStrip::new();
-        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK);
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK, PANEL_WIDTH);
         assert!(!dl.is_empty());
     }
 
     #[test]
     fn build_panel_has_title_text() {
         let s = TabStrip::new();
-        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK);
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK, PANEL_WIDTH);
         let has_title = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("вкладка"))
         });
@@ -384,7 +384,7 @@ mod tests {
     #[test]
     fn build_panel_no_badge_for_active() {
         let s = TabStrip::new(); // single Active tab
-        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK);
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK, PANEL_WIDTH);
         // Active tab has no badge (only FillRect background + accent bar, no badge radii for lifecycle)
         // Panel uses FillRoundedRect for favicon + possibly badge. Badge colors are BADGE_OLD/BADGE_HIB.
         let has_lifecycle_badge = dl.iter().any(|c| match c {
@@ -402,7 +402,7 @@ mod tests {
         let mut s = TabStrip::new();
         s.push_blank(0.0);
         s.set_tab_state(0, TabState::BackgroundOld);
-        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK);
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK, PANEL_WIDTH);
         let has_amber = dl.iter().any(|c| match c {
             DisplayCommand::FillRoundedRect { color, .. } => {
                 color.r == BADGE_OLD.r && color.g == BADGE_OLD.g
@@ -417,7 +417,7 @@ mod tests {
         let mut s = TabStrip::new();
         s.push_blank(0.0);
         s.set_tab_state(0, TabState::Hibernated);
-        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK);
+        let dl = build_tab_bar_vertical(&s, TAB_H, WIN_H, 0.0, &Palette::DARK, PANEL_WIDTH);
         let has_grey = dl.iter().any(|c| match c {
             DisplayCommand::FillRoundedRect { color, .. } => {
                 color.r == BADGE_HIB.r && color.g == BADGE_HIB.g
@@ -436,7 +436,7 @@ mod tests {
         }
         // window_h only fits a few rows.
         let small_h = TAB_H + 3.0 * ROW_H;
-        let dl = build_tab_bar_vertical(&s, TAB_H, small_h, 0.0, &Palette::DARK);
+        let dl = build_tab_bar_vertical(&s, TAB_H, small_h, 0.0, &Palette::DARK, PANEL_WIDTH);
         // Count DrawText commands with tab titles — must be <= 3 (rows that fit).
         let title_count = dl.iter().filter(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("вкладка"))
@@ -453,7 +453,7 @@ mod tests {
         // which is above the panel top — it should be skipped.  The second
         // row is now the first visible one.
         let s = strip2(); // 2 tabs
-        let dl_scrolled = build_tab_bar_vertical(&s, TAB_H, WIN_H, ROW_H, &Palette::DARK);
+        let dl_scrolled = build_tab_bar_vertical(&s, TAB_H, WIN_H, ROW_H, &Palette::DARK, PANEL_WIDTH);
         // Only the second tab title should appear.
         let titles: Vec<_> = dl_scrolled.iter().filter_map(|c| match c {
             DisplayCommand::DrawText { text, .. } if text.contains("вкладка") => Some(text.clone()),

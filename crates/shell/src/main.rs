@@ -8111,6 +8111,21 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_position = Some(position);
+                // F2-6: while resizing a docked panel, the drag owns the cursor —
+                // update its width and relayout, skip page/inspector hover work.
+                if self.panel_resize.is_some() {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                        .max(1e-6);
+                    let x_css = (position.x as f32) / dpr;
+                    if self.drag_panel_resize(x_css) {
+                        self.request_redraw();
+                    }
+                    self.update_cursor_icon();
+                    return;
+                }
                 self.update_cursor_icon();
                 // DevTools inspector: highlight the box under the cursor.
                 if self.dom_inspector.visible {
@@ -8501,6 +8516,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .max(1e-6);
                     let x_css = (cursor.x as f32) / dpr;
                     let y_css = (cursor.y as f32) / dpr;
+                    // F2-6: a press on a docked panel's inner edge begins a
+                    // resize drag; the click never reaches the page / panels.
+                    if let Some(edge) = self.resize_edge_at(x_css, y_css) {
+                        self.panel_resize = Some(edge);
+                        return;
+                    }
                     // CC-4: while the tab context menu is open it captures the
                     // click — picking a row runs the action, anywhere else just
                     // dismisses it. The click never reaches the page / panels.
@@ -9540,6 +9561,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 } else {
                     // Released — завершаем drag (если был) и сбрасываем resize.
                     self.resize_active = None;
+                    // F2-6: end a docked-panel resize drag and persist the layout.
+                    if self.panel_resize.take().is_some() {
+                        self.panel_layout.save();
+                        self.update_cursor_icon();
+                        return;
+                    }
                     // CSS :active — clear on release.
                     if self.active_nid.is_some() {
                         self.active_nid = None;
@@ -13481,6 +13508,46 @@ impl Lumen {
         )
     }
 
+    /// If the cursor at `(x_css, y_css)` is within [`panel_layout::RESIZE_GRAB`]
+    /// of a visible docked sidebar's inner edge (and below the tab bar), return
+    /// the `(dock side, panel id)` a press there would start resizing.
+    ///
+    /// Left docks have their handle at `x = width`; right docks at
+    /// `x = viewport_width − width`.
+    fn resize_edge_at(&self, x_css: f32, y_css: f32) -> Option<(panel_layout::Dock, &'static str)> {
+        if y_css < tabs::strip::TAB_BAR_HEIGHT {
+            return None;
+        }
+        let grab = panel_layout::RESIZE_GRAB;
+        if let Some((id, w)) = self.left_dock()
+            && (x_css - w).abs() <= grab
+        {
+            return Some((panel_layout::Dock::Left, id));
+        }
+        if let Some((id, w)) = self.right_dock()
+            && (x_css - (self.viewport_width_css() - w)).abs() <= grab
+        {
+            return Some((panel_layout::Dock::Right, id));
+        }
+        None
+    }
+
+    /// Apply an in-flight docked-panel resize drag: turn the cursor x into a new
+    /// width for the dragged dock, store it (clamped) in [`Self::panel_layout`],
+    /// and relayout the page. Returns `true` if the width changed.
+    fn drag_panel_resize(&mut self, x_css: f32) -> bool {
+        let Some((dock, id)) = self.panel_resize else {
+            return false;
+        };
+        let new_w = dock.width_from_cursor(x_css, self.viewport_width_css());
+        if self.panel_layout.set_width(id, new_w) {
+            self.relayout();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Open the sidebar with `url` and populate it with a freshly-laid-out page.
     ///
     /// Parses `html_bytes` as HTML, lays it out at [`PANEL_WIDTH`]-wide viewport,
@@ -14329,7 +14396,11 @@ impl Lumen {
         );
         let scrollbar_icon = cursor_icon_for_hover(hover, self.scroll_drag.is_some());
 
-        let desired = if scrollbar_icon != CursorIcon::Default {
+        // F2-6: a docked-panel resize drag (or hovering an edge) shows the
+        // horizontal-resize cursor, ahead of scrollbar/page hover.
+        let desired = if self.panel_resize.is_some() || self.resize_edge_at(x_css, y_css).is_some() {
+            CursorIcon::EwResize
+        } else if scrollbar_icon != CursorIcon::Default {
             scrollbar_icon
         } else if let Some(lb) = &self.layout_box {
             // Hit-test layout tree in page coordinates (viewport + scroll offset).

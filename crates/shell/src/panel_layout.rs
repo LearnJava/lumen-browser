@@ -129,10 +129,10 @@ impl PanelLayout {
             if key.is_empty() {
                 continue;
             }
-            if let Ok(w) = val.trim().parse::<f32>() {
-                if w.is_finite() {
-                    widths.insert(key.to_string(), w.clamp(MIN_WIDTH, MAX_WIDTH));
-                }
+            if let Ok(w) = val.trim().parse::<f32>()
+                && w.is_finite()
+            {
+                widths.insert(key.to_string(), w.clamp(MIN_WIDTH, MAX_WIDTH));
             }
         }
         Self { widths }
