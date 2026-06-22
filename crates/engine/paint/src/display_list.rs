@@ -3474,15 +3474,27 @@ fn mask_stops_for_mode(stops: &[GradientStop], mode: lumen_layout::MaskMode) -> 
 }
 
 fn emit_push_mask(out: &mut Vec<DisplayCommand>, b: &LayoutBox) -> bool {
-    let rect = b.rect;
+    // CSS Masking L1 §4.5 — `mask-origin` sets the mask **positioning area**
+    // (border/padding/content box). Reuses the background-origin geometry; for
+    // the default `border-box` this equals `b.rect`, so existing behaviour is
+    // unchanged.
+    let rect = background_origin_rect(b, b.style.mask_origin);
     let mode = b.style.mask_mode;
+    // CSS: mask-clip — the painting/clip area still defaults to the positioning
+    // area here. Full wiring needs a separate clip rect threaded through the
+    // PushMask* / PopMask pair plus a backend scissor.
+    // CSS: mask-composite — needs the multi-layer mask infrastructure (mask-image
+    // as a layer list) before add/subtract/intersect/exclude can be applied.
     match &b.style.mask_image {
         BackgroundImage::Url(src) if !src.is_empty() => {
             out.push(DisplayCommand::PushMaskImage {
                 rect,
                 src: src.clone(),
                 size: b.style.mask_size,
-                position: ObjectPosition::background_initial(),
+                // CSS Masking L1 §4.4 — `mask-position` (same syntax as
+                // background-position). Applies to image masks; gradient masks
+                // derive their geometry from `rect` above.
+                position: b.style.mask_position,
                 repeat: b.style.mask_repeat,
                 image_rendering: b.style.image_rendering,
             });
@@ -8851,6 +8863,67 @@ mod tests {
             assert!((rect.width - 116.0).abs() < 0.1, "rect.width={}", rect.width);
             assert!((origin_rect.width - 100.0).abs() < 0.1, "origin_rect.width={}", origin_rect.width);
         }
+    }
+
+    // ── Тесты mask-origin / mask-position (CSS Masking L1 §4.4–§4.5) ────────────
+
+    fn push_mask_gradient_rect(dl: &DisplayList) -> lumen_core::geom::Rect {
+        dl.iter()
+            .find_map(|c| match c {
+                DisplayCommand::PushMaskLinearGradient { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .expect("gradient mask must emit PushMaskLinearGradient")
+    }
+
+    #[test]
+    fn mask_origin_default_border_box_uses_full_box() {
+        // mask-origin initial value is `border-box` (CSS Masking L1 §4.5), unlike
+        // background-origin (`padding-box`). content-box 100×60 + padding 10 +
+        // border 5 → border-box 130×90; the gradient mask covers the full box.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; \
+             mask-image: linear-gradient(to bottom, black, transparent); \
+             border: 5px solid red; padding: 10px; }",
+        );
+        let rect = push_mask_gradient_rect(&dl);
+        assert!((rect.width - 130.0).abs() < 0.1, "rect.width={}", rect.width);
+        assert!((rect.height - 90.0).abs() < 0.1, "rect.height={}", rect.height);
+    }
+
+    #[test]
+    fn mask_origin_content_box_shrinks_push_mask_rect() {
+        // mask-origin: content-box positions the mask over the content box only.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; \
+             mask-image: linear-gradient(to bottom, black, transparent); \
+             border: 5px solid red; padding: 10px; mask-origin: content-box; }",
+        );
+        let rect = push_mask_gradient_rect(&dl);
+        assert!((rect.width - 100.0).abs() < 0.1, "rect.width={}", rect.width);
+        assert!((rect.height - 60.0).abs() < 0.1, "rect.height={}", rect.height);
+    }
+
+    #[test]
+    fn mask_position_threaded_into_push_mask_image() {
+        // mask-position must reach the PushMaskImage command (no longer hardcoded
+        // to background_initial). 25% 75% → Percent(0.25)/Percent(0.75).
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; \
+             mask-image: url(m.png); mask-position: 25% 75%; }",
+        );
+        let pos = dl
+            .iter()
+            .find_map(|c| match c {
+                DisplayCommand::PushMaskImage { position, .. } => Some(*position),
+                _ => None,
+            })
+            .expect("url mask must emit PushMaskImage");
+        assert_eq!(pos.x, PositionComponent::Percent(0.25), "mask-position x");
+        assert_eq!(pos.y, PositionComponent::Percent(0.75), "mask-position y");
     }
 
     #[test]
