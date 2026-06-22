@@ -16,7 +16,7 @@ capability, and drift from code (see CLAUDE.md). For per-CSS-property detail see
 **same commit** as the `STATUS-PN.md` "Recent" update. This is the only file that must stay
 true to code; keep it honest about ⬜ gaps too.
 
-Snapshot: **Phase 2 «Interactive», app v0.2.0**. ~21 crates.
+Snapshot: **Phase 2 «Interactive» (complete), app v0.5.0**. ~21 crates.
 
 ---
 

@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-06-22",
+ "generated": "2026-06-23",
  "counts": {
-  "open": 38,
-  "fixed": 190,
+  "open": 39,
+  "fixed": 191,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 228,
+ "total_bugs": 230,
  "phases": [
   {
    "id": "P0",
@@ -219,9 +219,9 @@
   },
   {
    "id": "P2",
-   "title": "Фаза 2 — v0.5 «Interactive» (текущая)",
-   "status": "active",
-   "date": "app v0.2.0 → v0.5",
+   "title": "Фаза 2 — v0.5 «Interactive» (завершена)",
+   "status": "done",
+   "date": "app v0.5.0",
    "tasks": [
     {
      "id": "P2-usability",
@@ -1322,8 +1322,8 @@
   },
   "BUG-103": {
    "status": "open",
-   "title": "View Transitions API not implemented — TEST-61: 99.53%; Phase 2",
-   "component": "js",
+   "title": "View Transitions L1 рендерится (F2-4 ревизия 2026-06-22): startViewTransition + root cross-fade работают. «99.53%» был blank-gdigrab артефактом; реальный --ipc…",
+   "component": "js/shell",
    "date": null,
    "debtor": false
   },
@@ -2201,6 +2201,20 @@
    "component": "layout",
    "date": "2026-06-22",
    "debtor": false
+  },
+  "BUG-233": {
+   "status": "fixed",
+   "title": "Глобал `self` не был определён → webpack-бандлы падали `ReferenceError: self is not defined` (lenta.ru, ×4 + каскад). В конце `WEB_API_SHIM` добавлен блок алиас…",
+   "component": "js (shell)",
+   "date": "2026-06-22",
+   "debtor": false
+  },
+  "BUG-234": {
+   "status": "open",
+   "title": "HTTP-кэш не подключён к загрузке подресурсов: `HttpCache`/`DiskHttpCache` есть в lumen-network, но `with_http_cache` зовётся только в тестах; `http_client_for_s…",
+   "component": "shell/network",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -2258,6 +2272,9 @@
    "BUG-072",
    "BUG-073",
    "BUG-155"
+  ],
+  "js (shell)": [
+   "BUG-233"
   ],
   "layout": [
    "BUG-001",
@@ -2462,6 +2479,9 @@
   ],
   "shell/js": [
    "BUG-164"
+  ],
+  "shell/network": [
+   "BUG-234"
   ],
   "shell/paint": [
    "BUG-163"
