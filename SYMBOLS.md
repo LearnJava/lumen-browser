@@ -3172,7 +3172,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/ai_panel.rs:95` **fn** `backspace` — Remove the last character from the input field (backspace)
 `crates/shell/src/panels/ai_panel.rs:110` **enum** `AiHit` — Result of a click inside the AI panel
 `crates/shell/src/panels/ai_panel.rs:124` **fn** `hit_test` — Hit-test `(x, y)` in CSS px against the AI panel
-`crates/shell/src/panels/ai_panel.rs:167` **fn** `build_panel` — Build the display list for the AI sidebar panel
+`crates/shell/src/panels/ai_panel.rs:169` **fn** `build_panel` — Build the display list for the AI sidebar panel
 `crates/shell/src/panels/bookmark_panel.rs:87` **struct** `BmEntry` — Lightweight bookmark entry used for panel rendering (loaded from the
 `crates/shell/src/panels/bookmark_panel.rs:101` **struct** `BookmarkPanel` — Bookmark manager panel state
 `crates/shell/src/panels/bookmark_panel.rs:123` **fn** `new` — Create a new (hidden) panel with an empty bookmark list
@@ -3398,7 +3398,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/sidebar_panel.rs:141` **fn** `max_scroll` — Maximum valid `scroll_y` (0 if content fits in viewport)
 `crates/shell/src/panels/sidebar_panel.rs:157` **enum** `SidebarHit` — Result of a click inside the sidebar panel
 `crates/shell/src/panels/sidebar_panel.rs:170` **fn** `hit_test` — Hit-test `(x, y)` in CSS px against the sidebar panel
-`crates/shell/src/panels/sidebar_panel.rs:210` **fn** `build_panel` — Build the display list for the right-docked sidebar panel
+`crates/shell/src/panels/sidebar_panel.rs:212` **fn** `build_panel` — Build the display list for the docked sidebar panel
 `crates/shell/src/panels/sleep_hint.rs:26` **fn** `build_sleep_hint` — Build the sleep-restore hint overlay if restore has taken longer than THRESHOLD_MS
 `crates/shell/src/panels/split_view.rs:22` **enum** `SplitFocus` — Which pane receives keyboard and scroll input
 `crates/shell/src/panels/split_view.rs:36` **struct** `SplitPane` — Frozen rendering state for the right pane in a split view
