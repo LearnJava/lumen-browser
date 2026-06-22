@@ -125,6 +125,17 @@ impl SidebarPanel {
         self.scroll_y = 0.0;
     }
 
+    /// Replace the page display list after a width reflow (F2-6 drag-resize).
+    ///
+    /// Unlike [`set_page`], the title is kept and `scroll_y` is preserved
+    /// (clamped to the new content height) so a resize does not jump the user
+    /// back to the top of the page.
+    pub fn update_page(&mut self, dl: DisplayList, content_height: f32) {
+        self.page_dl = Some(dl);
+        self.content_height = content_height;
+        self.scroll_y = self.scroll_y.clamp(0.0, self.content_height.max(0.0));
+    }
+
     /// Maximum valid `scroll_y` (0 if content fits in viewport).
     #[allow(dead_code)]
     pub fn max_scroll(&self, viewport_h: f32) -> f32 {
@@ -407,6 +418,27 @@ mod tests {
         p.open("https://other.com".into());
         assert!(p.page_dl.is_none(), "new URL should clear old DL");
         assert_eq!(p.url.as_deref(), Some("https://other.com"));
+    }
+
+    // ── update_page (F2-6 reflow on drag-resize) ──────────────────────────────
+
+    #[test]
+    fn update_page_keeps_title_and_scroll() {
+        let mut p = visible_with_page();
+        p.scroll_y = 120.0;
+        p.update_page(vec![], 900.0);
+        assert_eq!(p.title, "Example", "reflow must keep the page title");
+        assert_eq!(p.content_height, 900.0);
+        assert_eq!(p.scroll_y, 120.0, "scroll preserved when still in range");
+    }
+
+    #[test]
+    fn update_page_clamps_scroll_to_shrunk_content() {
+        let mut p = visible_with_page();
+        p.scroll_y = 700.0;
+        // Reflow to a much shorter page (e.g. a wider sidebar fits more per line).
+        p.update_page(vec![], 300.0);
+        assert_eq!(p.scroll_y, 300.0, "scroll clamped to new content height");
     }
 
     #[test]

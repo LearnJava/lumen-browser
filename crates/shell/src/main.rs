@@ -664,6 +664,7 @@ fn run_window_mode(
         shields: panels::shields_panel::ShieldsPanel::new(blocked_log),
         permission: panels::permission_panel::PermissionPanel::new(),
         sidebar: panels::sidebar_panel::SidebarPanel::new(),
+        sidebar_source: None,
         ai_panel: panels::ai_panel::AiPanel::new(),
         panel_layout: panel_layout::PanelLayout::load(),
         panel_resize: None,
@@ -5588,6 +5589,12 @@ struct Lumen {
     /// When visible, `page_content_width_css()` subtracts
     /// [`panels::sidebar_panel::PANEL_WIDTH`] and `relayout()` fires.
     sidebar: panels::sidebar_panel::SidebarPanel,
+    /// Re-layoutable source of the web sidebar page (parsed DOM + stylesheet).
+    ///
+    /// Kept so a drag-resize of the sidebar can reflow its content to the new
+    /// width instead of stretching a frozen display list. `None` until a page
+    /// is opened via [`Self::open_sidebar_page`].
+    sidebar_source: Option<LayoutSource>,
     /// AI assistant sidebar panel (§12.8, GG-1).
     ///
     /// Right-docked 200 CSS px panel with a prompt input field and response area.
@@ -9593,8 +9600,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // Released — завершаем drag (если был) и сбрасываем resize.
                     self.resize_active = None;
                     // F2-6: end a docked-panel resize drag and persist the layout.
-                    if self.panel_resize.take().is_some() {
+                    if let Some((_, id)) = self.panel_resize.take() {
                         self.panel_layout.save();
+                        // Reflow the web sidebar page to its new width: its content
+                        // is a frozen display list, so unlike the AI panel (drawn
+                        // procedurally) it does not reflow during the drag itself.
+                        if id == panel_layout::ID_SIDEBAR {
+                            self.relayout_sidebar();
+                        }
                         self.update_cursor_icon();
                         return;
                     }
@@ -13717,10 +13730,33 @@ impl Lumen {
         let (dl, _lb) = relayout_page(&src, sidebar_vp, &*self.hyp_provider, self.dark_mode, &self.web_fonts);
         let content_h = content_height_of(&dl);
         self.sidebar.set_page(dl, doc_title, content_h);
+        // Retain the parsed source so a later drag-resize can reflow the page to
+        // the new width (F2-6) instead of stretching the frozen display list.
+        self.sidebar_source = Some(src);
 
         if !was_visible {
             self.relayout();
         }
+        self.request_redraw();
+    }
+
+    /// Reflow the web sidebar page to the current sidebar width.
+    ///
+    /// Re-runs layout over the retained [`Self::sidebar_source`] at the panel's
+    /// active `panel_layout` width, replacing the frozen display list while
+    /// preserving the title and clamping the scroll offset. No-op when the
+    /// sidebar has no open page. Called on a sidebar resize drag release (F2-6).
+    fn relayout_sidebar(&mut self) {
+        let Some(src) = self.sidebar_source.as_ref() else {
+            return;
+        };
+        let width = self
+            .panel_layout
+            .width_for(panel_layout::ID_SIDEBAR, panels::sidebar_panel::PANEL_WIDTH);
+        let vp = Size::new(width, self.viewport_height_css().max(100.0));
+        let (dl, _lb) = relayout_page(src, vp, &*self.hyp_provider, self.dark_mode, &self.web_fonts);
+        let content_h = content_height_of(&dl);
+        self.sidebar.update_page(dl, content_h);
         self.request_redraw();
     }
 

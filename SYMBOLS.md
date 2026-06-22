@@ -2848,7 +2848,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgpu_compute.rs:980` **enum** `GpuOp` — Одна записанная операция command-encoder для исполнения на `queue.submit`
 `crates/engine/paint/src/webgpu_compute.rs:1035` **fn** `submit` — Исполняет набор операций в одном `CommandEncoder` и сабмитит на очередь
 
-## lumen-shell  (854 symbols)
+## lumen-shell  (855 symbols)
 
 `crates/shell/src/adblock.rs:44` **fn** `browser_data_dir` — Root of all browser user data (portable): `<exe_dir>/data`
 `crates/shell/src/adblock.rs:52` **fn** `adblock_dir` — `<data>/adblock` — root of the ad-block subsystem's files
@@ -3394,10 +3394,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/sidebar_panel.rs:101` **fn** `open` — Open the sidebar with `url`.  Clears content if the URL changed
 `crates/shell/src/panels/sidebar_panel.rs:114` **fn** `close` — Close the sidebar (hide; URL and content are preserved for re-open)
 `crates/shell/src/panels/sidebar_panel.rs:121` **fn** `set_page` — Store a freshly-rendered display list for the sidebar page
-`crates/shell/src/panels/sidebar_panel.rs:130` **fn** `max_scroll` — Maximum valid `scroll_y` (0 if content fits in viewport)
-`crates/shell/src/panels/sidebar_panel.rs:146` **enum** `SidebarHit` — Result of a click inside the sidebar panel
-`crates/shell/src/panels/sidebar_panel.rs:159` **fn** `hit_test` — Hit-test `(x, y)` in CSS px against the sidebar panel
-`crates/shell/src/panels/sidebar_panel.rs:199` **fn** `build_panel` — Build the display list for the right-docked sidebar panel
+`crates/shell/src/panels/sidebar_panel.rs:133` **fn** `update_page` — Replace the page display list after a width reflow (F2-6 drag-resize)
+`crates/shell/src/panels/sidebar_panel.rs:141` **fn** `max_scroll` — Maximum valid `scroll_y` (0 if content fits in viewport)
+`crates/shell/src/panels/sidebar_panel.rs:157` **enum** `SidebarHit` — Result of a click inside the sidebar panel
+`crates/shell/src/panels/sidebar_panel.rs:170` **fn** `hit_test` — Hit-test `(x, y)` in CSS px against the sidebar panel
+`crates/shell/src/panels/sidebar_panel.rs:210` **fn** `build_panel` — Build the display list for the right-docked sidebar panel
 `crates/shell/src/panels/sleep_hint.rs:26` **fn** `build_sleep_hint` — Build the sleep-restore hint overlay if restore has taken longer than THRESHOLD_MS
 `crates/shell/src/panels/split_view.rs:22` **enum** `SplitFocus` — Which pane receives keyboard and scroll input
 `crates/shell/src/panels/split_view.rs:36` **struct** `SplitPane` — Frozen rendering state for the right pane in a split view
@@ -4211,4 +4212,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4140 symbols in 22 crates*
+*Total: 4141 symbols in 22 crates*
