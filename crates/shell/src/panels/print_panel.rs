@@ -17,6 +17,8 @@ use lumen_core::geom::Rect;
 use lumen_layout::{BorderStyle, Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
+use crate::panels::themes::Palette;
+
 // ── Geometry ─────────────────────────────────────────────────────────────────
 
 /// Panel width in CSS px.
@@ -47,28 +49,6 @@ const BTN_H: f32 = 32.0;
 const BTN_W: f32 = 100.0;
 /// Text field height.
 const FIELD_H: f32 = 26.0;
-
-// ── Colours ───────────────────────────────────────────────────────────────────
-
-const PANEL_BG: Color = Color { r: 18, g: 18, b: 26, a: 254 };
-const PANEL_BORDER: Color = Color { r: 52, g: 52, b: 66, a: 255 };
-const HEADER_BG: Color = Color { r: 26, g: 26, b: 36, a: 255 };
-const HEADER_TEXT: Color = Color { r: 210, g: 210, b: 225, a: 255 };
-const CLOSE_COL: Color = Color { r: 180, g: 80, b: 80, a: 255 };
-const LABEL_COL: Color = Color { r: 190, g: 190, b: 210, a: 255 };
-const PILL_BG: Color = Color { r: 36, g: 36, b: 52, a: 230 };
-const PILL_ACTIVE: Color = Color { r: 58, g: 90, b: 160, a: 230 };
-const PILL_TEXT: Color = Color { r: 190, g: 190, b: 210, a: 255 };
-const ROW_EVEN: Color = Color { r: 22, g: 22, b: 32, a: 255 };
-const ROW_ODD: Color = Color { r: 26, g: 26, b: 36, a: 255 };
-const SEPARATOR: Color = Color { r: 36, g: 36, b: 50, a: 255 };
-const FIELD_BG: Color = Color { r: 30, g: 30, b: 44, a: 255 };
-const FIELD_BORDER: Color = Color { r: 60, g: 60, b: 80, a: 255 };
-const FIELD_FOCUS: Color = Color { r: 70, g: 100, b: 180, a: 255 };
-const FIELD_TEXT: Color = Color { r: 220, g: 220, b: 240, a: 255 };
-const BTN_PRINT: Color = Color { r: 55, g: 90, b: 160, a: 255 };
-const BTN_CANCEL: Color = Color { r: 40, g: 40, b: 58, a: 255 };
-const BTN_TEXT: Color = Color { r: 220, g: 220, b: 240, a: 255 };
 
 // ── Domain types ──────────────────────────────────────────────────────────────
 
@@ -422,7 +402,8 @@ pub fn hit_test(panel: &PrintPanel, x: f32, y: f32, win_w: f32, win_h: f32) -> P
 ///
 /// Returns an empty `DisplayList` when `panel.visible` is `false`.
 /// `px`/`py` are the top-left coordinates of the panel in CSS px.
-pub fn build_panel(panel: &PrintPanel, px: f32, py: f32) -> DisplayList {
+/// `pal` supplies the active theme palette for all surface colours.
+pub fn build_panel(panel: &PrintPanel, px: f32, py: f32, pal: &Palette) -> DisplayList {
     if !panel.visible {
         return Vec::new();
     }
@@ -430,13 +411,13 @@ pub fn build_panel(panel: &PrintPanel, px: f32, py: f32) -> DisplayList {
     // Panel background + border.
     let mut out: DisplayList = vec![DisplayCommand::FillRoundedRect {
         rect: Rect::new(px, py, PANEL_W, PANEL_H),
-        color: PANEL_BG,
+        color: pal.overlay_bg,
         radii: uniform_radii(6.0),
     }];
     out.push(DisplayCommand::DrawBorder {
         rect: Rect::new(px, py, PANEL_W, PANEL_H),
         widths: [1.0; 4],
-        colors: [PANEL_BORDER; 4],
+        colors: [pal.overlay_border; 4],
         styles: [BorderStyle::Solid; 4],
         radii: uniform_radii(6.0),
     });
@@ -444,7 +425,7 @@ pub fn build_panel(panel: &PrintPanel, px: f32, py: f32) -> DisplayList {
     // Header.
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px, py, PANEL_W, HEADER_H),
-        color: HEADER_BG,
+        color: pal.header_bg,
         radii: CornerRadii {
             tl: 6.0, tl_y: 6.0, tr: 6.0, tr_y: 6.0,
             br: 0.0, br_y: 0.0, bl: 0.0, bl_y: 0.0,
@@ -457,7 +438,7 @@ pub fn build_panel(panel: &PrintPanel, px: f32, py: f32) -> DisplayList {
         PANEL_W - PAD_H * 2.0,
         HEADER_FONT,
         FontWeight::BOLD,
-        HEADER_TEXT,
+        pal.text,
     ));
     out.push(make_text(
         "×".to_owned(),
@@ -466,73 +447,73 @@ pub fn build_panel(panel: &PrintPanel, px: f32, py: f32) -> DisplayList {
         CLOSE_W,
         HEADER_FONT + 3.0,
         FontWeight::NORMAL,
-        CLOSE_COL,
+        pal.text_dim,
     ));
 
     // Content rows.
-    emit_paper_row(&mut out, panel, px, py);
-    emit_orientation_row(&mut out, panel, px, py);
-    emit_margins_row(&mut out, panel, px, py);
-    emit_scale_row(&mut out, panel, px, py);
-    emit_page_range_row(&mut out, panel, px, py);
-    emit_color_row(&mut out, panel, px, py);
-    emit_output_path_row(&mut out, panel, px, py);
-    emit_backgrounds_row(&mut out, panel, px, py);
+    emit_paper_row(&mut out, panel, px, py, pal);
+    emit_orientation_row(&mut out, panel, px, py, pal);
+    emit_margins_row(&mut out, panel, px, py, pal);
+    emit_scale_row(&mut out, panel, px, py, pal);
+    emit_page_range_row(&mut out, panel, px, py, pal);
+    emit_color_row(&mut out, panel, px, py, pal);
+    emit_output_path_row(&mut out, panel, px, py, pal);
+    emit_backgrounds_row(&mut out, panel, px, py, pal);
 
     // Separator before buttons.
     let sep_y = row_y(8);
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(px + PAD_H, py + sep_y, PANEL_W - PAD_H * 2.0, 1.0),
-        color: SEPARATOR,
+        color: pal.divider,
     });
 
     // Buttons: Print / Cancel.
-    emit_buttons(&mut out, px, py);
+    emit_buttons(&mut out, px, py, pal);
 
     out
 }
 
 // ── Row emitters ──────────────────────────────────────────────────────────────
 
-fn emit_paper_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32) {
+fn emit_paper_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32, pal: &Palette) {
     let ry = py + row_y(0);
-    emit_row_bg(out, px, ry, 0);
-    emit_label(out, "Бумага", px, ry);
+    emit_row_bg(out, px, ry, 0, pal);
+    emit_label(out, "Бумага", px, ry, pal);
     const PAPERS: [(PaperSize, &str); 3] = [
         (PaperSize::A4, "A4"),
         (PaperSize::Letter, "Letter"),
         (PaperSize::Legal, "Legal"),
     ];
-    emit_pills_3(out, &PAPERS, panel.paper, px, ry, |a, b| a == b);
+    emit_pills_3(out, &PAPERS, panel.paper, px, ry, |a, b| a == b, pal);
 }
 
-fn emit_orientation_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32) {
+fn emit_orientation_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32, pal: &Palette) {
     let ry = py + row_y(1);
-    emit_row_bg(out, px, ry, 1);
-    emit_label(out, "Ориентация", px, ry);
+    emit_row_bg(out, px, ry, 1, pal);
+    emit_label(out, "Ориентация", px, ry, pal);
     const ORIENTS: [(Orientation, &str); 2] = [
         (Orientation::Portrait, "Портрет"),
         (Orientation::Landscape, "Альбом"),
     ];
-    emit_pills_2(out, &ORIENTS, panel.orientation, px, ry, |a, b| a == b);
+    emit_pills_2(out, &ORIENTS, panel.orientation, px, ry, |a, b| a == b, pal);
 }
 
-fn emit_margins_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32) {
+fn emit_margins_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32, pal: &Palette) {
     let ry = py + row_y(2);
-    emit_row_bg(out, px, ry, 0);
-    emit_label(out, "Поля", px, ry);
+    emit_row_bg(out, px, ry, 0, pal);
+    emit_label(out, "Поля", px, ry, pal);
     const MARGINS: [(MarginPreset, &str); 3] = [
         (MarginPreset::Normal, "Обычные"),
         (MarginPreset::Narrow, "Узкие"),
         (MarginPreset::Wide, "Широкие"),
     ];
-    emit_pills_3(out, &MARGINS, panel.margins, px, ry, |a, b| a == b);
+    emit_pills_3(out, &MARGINS, panel.margins, px, ry, |a, b| a == b, pal);
 }
 
-fn emit_scale_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32) {
+fn emit_scale_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32, pal: &Palette) {
     let ry = py + row_y(3);
-    emit_row_bg(out, px, ry, 1);
-    emit_label(out, "Масштаб", px, ry);
+    emit_row_bg(out, px, ry, 1, pal);
+    emit_label(out, "Масштаб", px, ry, pal);
     let field_x = px + PAD_H + LABEL_W;
     let field_y = ry + (ROW_H - FIELD_H) / 2.0;
     let btn_w = 36.0;
@@ -541,7 +522,7 @@ fn emit_scale_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32) {
     // − button
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(field_x, field_y, btn_w, FIELD_H),
-        color: FIELD_BG,
+        color: pal.input_bg,
         radii: uniform_radii(3.0),
     });
     out.push(make_text(
@@ -551,14 +532,14 @@ fn emit_scale_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32) {
         btn_w - 4.0,
         FONT_SIZE + 2.0,
         FontWeight::NORMAL,
-        FIELD_TEXT,
+        pal.text,
     ));
 
     // + button
     let plus_x = field_x + btn_w + btn_gap;
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(plus_x, field_y, btn_w, FIELD_H),
-        color: FIELD_BG,
+        color: pal.input_bg,
         radii: uniform_radii(3.0),
     });
     out.push(make_text(
@@ -568,7 +549,7 @@ fn emit_scale_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32) {
         btn_w - 4.0,
         FONT_SIZE + 2.0,
         FontWeight::NORMAL,
-        FIELD_TEXT,
+        pal.text,
     ));
 
     // Scale value display
@@ -581,52 +562,52 @@ fn emit_scale_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32) {
         display_w,
         FONT_SIZE,
         FontWeight::NORMAL,
-        FIELD_TEXT,
+        pal.text,
     ));
 }
 
-fn emit_page_range_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32) {
+fn emit_page_range_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32, pal: &Palette) {
     let ry = py + row_y(4);
-    emit_row_bg(out, px, ry, 0);
-    emit_label(out, "Страницы", px, ry);
+    emit_row_bg(out, px, ry, 0, pal);
+    emit_label(out, "Страницы", px, ry, pal);
     let field_x = px + PAD_H + LABEL_W;
     let field_w = PANEL_W - PAD_H * 2.0 - LABEL_W;
     let field_y = ry + (ROW_H - FIELD_H) / 2.0;
     let focused = panel.editing_field == Some(PrintField::PageRange);
-    emit_text_field(out, &panel.page_range, field_x, field_y, field_w, focused);
+    emit_text_field(out, &panel.page_range, field_x, field_y, field_w, focused, pal);
 }
 
-fn emit_color_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32) {
+fn emit_color_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32, pal: &Palette) {
     let ry = py + row_y(5);
-    emit_row_bg(out, px, ry, 1);
-    emit_label(out, "Цвет", px, ry);
+    emit_row_bg(out, px, ry, 1, pal);
+    emit_label(out, "Цвет", px, ry, pal);
     const MODES: [(ColorMode, &str); 2] = [
         (ColorMode::Color, "Цветной"),
         (ColorMode::Grayscale, "Серый"),
     ];
-    emit_pills_2(out, &MODES, panel.color_mode, px, ry, |a, b| a == b);
+    emit_pills_2(out, &MODES, panel.color_mode, px, ry, |a, b| a == b, pal);
 }
 
-fn emit_output_path_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32) {
+fn emit_output_path_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32, pal: &Palette) {
     let ry = py + row_y(6);
-    emit_row_bg(out, px, ry, 0);
-    emit_label(out, "Файл", px, ry);
+    emit_row_bg(out, px, ry, 0, pal);
+    emit_label(out, "Файл", px, ry, pal);
     let field_x = px + PAD_H + LABEL_W;
     let field_w = PANEL_W - PAD_H * 2.0 - LABEL_W;
     let field_y = ry + (ROW_H - FIELD_H) / 2.0;
     let focused = panel.editing_field == Some(PrintField::OutputPath);
-    emit_text_field(out, &panel.output_path, field_x, field_y, field_w, focused);
+    emit_text_field(out, &panel.output_path, field_x, field_y, field_w, focused, pal);
 }
 
-fn emit_backgrounds_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32) {
+fn emit_backgrounds_row(out: &mut DisplayList, panel: &PrintPanel, px: f32, py: f32, pal: &Palette) {
     let ry = py + row_y(7);
-    emit_row_bg(out, px, ry, 1);
-    emit_label(out, "Фон", px, ry);
+    emit_row_bg(out, px, ry, 1, pal);
+    emit_label(out, "Фон", px, ry, pal);
     const VALUES: [(bool, &str); 2] = [(true, "Вкл"), (false, "Выкл")];
-    emit_pills_2(out, &VALUES, panel.print_backgrounds, px, ry, |a, b| a == b);
+    emit_pills_2(out, &VALUES, panel.print_backgrounds, px, ry, |a, b| a == b, pal);
 }
 
-fn emit_buttons(out: &mut DisplayList, px: f32, py: f32) {
+fn emit_buttons(out: &mut DisplayList, px: f32, py: f32, pal: &Palette) {
     let btn_y = py + PANEL_H - BTN_H - PAD_V * 2.0;
     let cancel_x = px + PANEL_W - PAD_H - BTN_W;
     let print_x = cancel_x - BTN_W - 8.0;
@@ -634,7 +615,7 @@ fn emit_buttons(out: &mut DisplayList, px: f32, py: f32) {
     // Cancel button.
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(cancel_x, btn_y, BTN_W, BTN_H),
-        color: BTN_CANCEL,
+        color: pal.item_bg,
         radii: uniform_radii(4.0),
     });
     out.push(make_text(
@@ -644,13 +625,13 @@ fn emit_buttons(out: &mut DisplayList, px: f32, py: f32) {
         BTN_W - 8.0,
         FONT_SIZE,
         FontWeight::NORMAL,
-        BTN_TEXT,
+        pal.text,
     ));
 
     // Print button.
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(print_x, btn_y, BTN_W, BTN_H),
-        color: BTN_PRINT,
+        color: pal.accent,
         radii: uniform_radii(4.0),
     });
     out.push(make_text(
@@ -660,7 +641,7 @@ fn emit_buttons(out: &mut DisplayList, px: f32, py: f32) {
         BTN_W - 8.0,
         FONT_SIZE,
         FontWeight::BOLD,
-        BTN_TEXT,
+        pal.text,
     ));
 }
 
@@ -673,6 +654,7 @@ fn emit_pills_3<T: Copy>(
     px: f32,
     row_y_abs: f32,
     eq: impl Fn(T, T) -> bool,
+    pal: &Palette,
 ) {
     let avail_w = PANEL_W - PAD_H * 2.0 - LABEL_W;
     let pill_w = avail_w / 3.0;
@@ -681,7 +663,7 @@ fn emit_pills_3<T: Copy>(
     for (i, (val, label)) in items.iter().enumerate() {
         let bx = pills_x + i as f32 * pill_w;
         let active = eq(*val, current);
-        emit_pill(out, bx, pill_y, pill_w - 3.0, label, active);
+        emit_pill(out, bx, pill_y, pill_w - 3.0, label, active, pal);
     }
 }
 
@@ -692,6 +674,7 @@ fn emit_pills_2<T: Copy>(
     px: f32,
     row_y_abs: f32,
     eq: impl Fn(T, T) -> bool,
+    pal: &Palette,
 ) {
     let avail_w = PANEL_W - PAD_H * 2.0 - LABEL_W;
     let pill_w = avail_w / 2.0;
@@ -700,12 +683,12 @@ fn emit_pills_2<T: Copy>(
     for (i, (val, label)) in items.iter().enumerate() {
         let bx = pills_x + i as f32 * pill_w;
         let active = eq(*val, current);
-        emit_pill(out, bx, pill_y, pill_w - 3.0, label, active);
+        emit_pill(out, bx, pill_y, pill_w - 3.0, label, active, pal);
     }
 }
 
-fn emit_pill(out: &mut DisplayList, x: f32, y: f32, w: f32, label: &str, active: bool) {
-    let bg = if active { PILL_ACTIVE } else { PILL_BG };
+fn emit_pill(out: &mut DisplayList, x: f32, y: f32, w: f32, label: &str, active: bool, pal: &Palette) {
+    let bg = if active { pal.item_selected_bg } else { pal.item_bg };
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(x, y, w, PILL_H),
         color: bg,
@@ -718,15 +701,15 @@ fn emit_pill(out: &mut DisplayList, x: f32, y: f32, w: f32, label: &str, active:
         w - 8.0,
         FONT_SIZE,
         if active { FontWeight::BOLD } else { FontWeight::NORMAL },
-        PILL_TEXT,
+        pal.text,
     ));
 }
 
-fn emit_text_field(out: &mut DisplayList, value: &str, x: f32, y: f32, w: f32, focused: bool) {
-    let border_col = if focused { FIELD_FOCUS } else { FIELD_BORDER };
+fn emit_text_field(out: &mut DisplayList, value: &str, x: f32, y: f32, w: f32, focused: bool, pal: &Palette) {
+    let border_col = if focused { pal.accent } else { pal.overlay_border };
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(x, y, w, FIELD_H),
-        color: FIELD_BG,
+        color: pal.input_bg,
         radii: uniform_radii(3.0),
     });
     out.push(DisplayCommand::DrawBorder {
@@ -743,11 +726,11 @@ fn emit_text_field(out: &mut DisplayList, value: &str, x: f32, y: f32, w: f32, f
         w - 12.0,
         FONT_SIZE,
         FontWeight::NORMAL,
-        FIELD_TEXT,
+        pal.text,
     ));
 }
 
-fn emit_label(out: &mut DisplayList, text: &str, px: f32, row_y_abs: f32) {
+fn emit_label(out: &mut DisplayList, text: &str, px: f32, row_y_abs: f32, pal: &Palette) {
     out.push(make_text(
         text.to_owned(),
         px + PAD_H,
@@ -755,12 +738,12 @@ fn emit_label(out: &mut DisplayList, text: &str, px: f32, row_y_abs: f32) {
         LABEL_W,
         FONT_SIZE,
         FontWeight::NORMAL,
-        LABEL_COL,
+        pal.text_dim,
     ));
 }
 
-fn emit_row_bg(out: &mut DisplayList, px: f32, row_y_abs: f32, parity: u8) {
-    let color = if parity == 0 { ROW_EVEN } else { ROW_ODD };
+fn emit_row_bg(out: &mut DisplayList, px: f32, row_y_abs: f32, parity: u8, pal: &Palette) {
+    let color = if parity == 0 { pal.overlay_bg } else { pal.row_alt_bg };
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(px, row_y_abs, PANEL_W, ROW_H),
         color,
@@ -908,7 +891,7 @@ mod tests {
     fn build_visible_has_background_row_label() {
         let mut p = make_panel();
         p.visible = true;
-        let dl = build_panel(&p, 0.0, 0.0);
+        let dl = build_panel(&p, 0.0, 0.0, &Palette::DARK);
         let has_label = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "Фон")
         });
@@ -1037,14 +1020,14 @@ mod tests {
     #[test]
     fn build_hidden_returns_empty() {
         let p = make_panel();
-        assert!(build_panel(&p, 0.0, 0.0).is_empty());
+        assert!(build_panel(&p, 0.0, 0.0, &Palette::DARK).is_empty());
     }
 
     #[test]
     fn build_visible_has_header_title() {
         let mut p = make_panel();
         p.visible = true;
-        let dl = build_panel(&p, 0.0, 0.0);
+        let dl = build_panel(&p, 0.0, 0.0, &Palette::DARK);
         let has_title = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "Печать")
         });
@@ -1055,7 +1038,7 @@ mod tests {
     fn build_visible_has_row_labels() {
         let mut p = make_panel();
         p.visible = true;
-        let dl = build_panel(&p, 0.0, 0.0);
+        let dl = build_panel(&p, 0.0, 0.0, &Palette::DARK);
         let texts: Vec<&str> = dl.iter().filter_map(|c| {
             if let DisplayCommand::DrawText { text, .. } = c { Some(text.as_str()) } else { None }
         }).collect();
@@ -1073,7 +1056,7 @@ mod tests {
         let mut p = make_panel();
         p.visible = true;
         p.scale = 150;
-        let dl = build_panel(&p, 0.0, 0.0);
+        let dl = build_panel(&p, 0.0, 0.0, &Palette::DARK);
         let texts: Vec<&str> = dl.iter().filter_map(|c| {
             if let DisplayCommand::DrawText { text, .. } = c { Some(text.as_str()) } else { None }
         }).collect();

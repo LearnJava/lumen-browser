@@ -3144,126 +3144,126 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/notification.rs:18` **fn** `show_os_notification` — Show a desktop notification asynchronously
 `crates/shell/src/omnibox/mod.rs:20` **enum** `AliasAction` — Action produced by resolving a raw omnibox input against the alias table
 `crates/shell/src/omnibox/mod.rs:39` **fn** `resolve` — Resolve `input` against the alias table and built-in `@` actions
-`crates/shell/src/panels/a11y_panel.rs:70` **struct** `A11yPanel` — Accessibility settings panel state
-`crates/shell/src/panels/a11y_panel.rs:79` **fn** `new` — Create a new hidden panel with default preferences
-`crates/shell/src/panels/a11y_panel.rs:91` **fn** `toggle` — Toggle panel visibility
-`crates/shell/src/panels/a11y_panel.rs:96` **fn** `load_draft` — Load current preferences into the draft so edits start from persisted values
-`crates/shell/src/panels/a11y_panel.rs:111` **enum** `A11yHit` — Result of a click on (or near) the accessibility panel
-`crates/shell/src/panels/a11y_panel.rs:137` **fn** `hit_test` — Classify a click at `(x, y)` CSS px
-`crates/shell/src/panels/a11y_panel.rs:226` **fn** `build_a11y_panel` — Build the centred accessibility settings panel overlay
-`crates/shell/src/panels/ai_panel.rs:64` **struct** `AiPanel` — AI assistant sidebar panel state (§12.8)
-`crates/shell/src/panels/ai_panel.rs:77` **fn** `new` — Create a new hidden AI panel with empty input and response
-`crates/shell/src/panels/ai_panel.rs:87` **fn** `toggle` — Toggle panel visibility
-`crates/shell/src/panels/ai_panel.rs:92` **fn** `close` — Close the panel (hide; input and response are preserved)
-`crates/shell/src/panels/ai_panel.rs:97` **fn** `push_char` — Append a character to the input field
-`crates/shell/src/panels/ai_panel.rs:102` **fn** `backspace` — Remove the last character from the input field (backspace)
-`crates/shell/src/panels/ai_panel.rs:117` **enum** `AiHit` — Result of a click inside the AI panel
-`crates/shell/src/panels/ai_panel.rs:131` **fn** `hit_test` — Hit-test `(x, y)` in CSS px against the AI panel
-`crates/shell/src/panels/ai_panel.rs:171` **fn** `build_panel` — Build the display list for the AI sidebar panel
-`crates/shell/src/panels/bookmark_panel.rs:95` **struct** `BmEntry` — Lightweight bookmark entry used for panel rendering (loaded from the
-`crates/shell/src/panels/bookmark_panel.rs:109` **struct** `BookmarkPanel` — Bookmark manager panel state
-`crates/shell/src/panels/bookmark_panel.rs:131` **fn** `new` — Create a new (hidden) panel with an empty bookmark list
-`crates/shell/src/panels/bookmark_panel.rs:145` **fn** `toggle` — Flip visibility.  Resets transient state (search focus, drag) when hiding
-`crates/shell/src/panels/bookmark_panel.rs:154` **fn** `set_data` — Replace the cached bookmark list and recompute the folder set
-`crates/shell/src/panels/bookmark_panel.rs:174` **fn** `visible_entries` — Bookmarks visible under the current folder filter and search query, in
-`crates/shell/src/panels/bookmark_panel.rs:191` **fn** `append_search` — Append typed text to the search query (called while `search_active`)
-`crates/shell/src/panels/bookmark_panel.rs:197` **fn** `backspace_search` — Delete the last character of the search query
-`crates/shell/src/panels/bookmark_panel.rs:203` **fn** `begin_drag` — Begin dragging the bookmark with the given id
-`crates/shell/src/panels/bookmark_panel.rs:208` **fn** `take_drag` — Take (and clear) the dragged bookmark id, if a drag is in progress
-`crates/shell/src/panels/bookmark_panel.rs:215` **fn** `scroll_by` — Scroll the bookmark list by `dy` CSS px, clamped to `[0, max]` where
-`crates/shell/src/panels/bookmark_panel.rs:235` **enum** `BookmarkHit` — Result of a click inside the bookmark panel
-`crates/shell/src/panels/bookmark_panel.rs:252` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the panel anchored with its
-`crates/shell/src/panels/bookmark_panel.rs:309` **fn** `build_panel` — Build the display list for the panel anchored at `(ax, ay)` (top-left)
-`crates/shell/src/panels/cert_panel.rs:58` **struct** `PanelCertData` — Certificate data shown in the panel
-`crates/shell/src/panels/cert_panel.rs:81` **fn** `has_data` — Returns `true` if there is meaningful data to display
-`crates/shell/src/panels/cert_panel.rs:90` **struct** `CertPanel` — Certificate viewer panel state
-`crates/shell/src/panels/cert_panel.rs:101` **fn** `new` — Create a new, hidden panel
-`crates/shell/src/panels/cert_panel.rs:108` **fn** `open` — Open the panel with the given certificate data
-`crates/shell/src/panels/cert_panel.rs:115` **fn** `close` — Close the panel
-`crates/shell/src/panels/cert_panel.rs:120` **fn** `toggle` — Toggle visibility.  On open: resets scroll to top
-`crates/shell/src/panels/cert_panel.rs:129` **fn** `scroll_by` — Scroll the content by `delta` CSS px (positive = down)
-`crates/shell/src/panels/cert_panel.rs:137` **fn** `hit_test` — Hit-test a pointer position relative to panel origin
-`crates/shell/src/panels/cert_panel.rs:150` **enum** `CertHit` — Result of a pointer hit test on the cert panel
-`crates/shell/src/panels/cert_panel.rs:242` **fn** `build_panel` — Append display commands for the cert panel to `buf`
-`crates/shell/src/panels/command_palette.rs:83` **enum** `PaletteAction` — A built-in browser action invokable from the palette
-`crates/shell/src/panels/command_palette.rs:114` **fn** `label` — Human-readable label shown in the result row
-`crates/shell/src/panels/command_palette.rs:133` **fn** `shortcut` — Keyboard-shortcut hint rendered right-aligned in the row (`""` if none)
-`crates/shell/src/panels/command_palette.rs:153` **fn** `all` — The full curated command list, in display order (shown first when the
-`crates/shell/src/panels/command_palette.rs:177` **enum** `PaletteKind` — What kind of target a palette item represents (drives the row icon and the
-`crates/shell/src/panels/command_palette.rs:188` **struct** `PaletteItem` — A single searchable entry in the palette
-`crates/shell/src/panels/command_palette.rs:199` **fn** `command` — Build a command item
-`crates/shell/src/panels/command_palette.rs:208` **fn** `bookmark` — Build a bookmark item (falls back to the URL when the title is empty)
-`crates/shell/src/panels/command_palette.rs:214` **fn** `history` — Build a history item (falls back to the URL when the title is empty)
-`crates/shell/src/panels/command_palette.rs:233` **struct** `CommandPalette` — Command palette modal state
-`crates/shell/src/panels/command_palette.rs:250` **fn** `new` — Create a hidden palette with the curated command list pre-loaded
-`crates/shell/src/panels/command_palette.rs:256` **fn** `open` — Open the palette, resetting the query and selection
-`crates/shell/src/panels/command_palette.rs:264` **fn** `close` — Close the palette
-`crates/shell/src/panels/command_palette.rs:269` **fn** `toggle` — Toggle visibility; opening resets transient state
-`crates/shell/src/panels/command_palette.rs:280` **fn** `set_items` — Replace the item list (commands + bookmarks + history) and clamp the
-`crates/shell/src/panels/command_palette.rs:286` **fn** `append` — Append typed text to the query and reset the selection to the top
-`crates/shell/src/panels/command_palette.rs:293` **fn** `backspace` — Delete the last character of the query
-`crates/shell/src/panels/command_palette.rs:304` **fn** `filtered` — Indices into `items` matching the current query, best match first
-`crates/shell/src/panels/command_palette.rs:321` **fn** `select_next` — Move the selection down by one (clamped to the last result)
-`crates/shell/src/panels/command_palette.rs:331` **fn** `select_prev` — Move the selection up by one (clamped to the first result)
-`crates/shell/src/panels/command_palette.rs:339` **fn** `selected_item` — The currently highlighted item index into `items`, if any result exists
-`crates/shell/src/panels/command_palette.rs:380` **fn** `fuzzy_score` — Score `haystack` against `needle` as a case-insensitive subsequence match
-`crates/shell/src/panels/command_palette.rs:430` **enum** `PaletteHit` — Result of a click inside the modal palette
-`crates/shell/src/panels/command_palette.rs:454` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the modal palette in a
+`crates/shell/src/panels/a11y_panel.rs:66` **struct** `A11yPanel` — Accessibility settings panel state
+`crates/shell/src/panels/a11y_panel.rs:75` **fn** `new` — Create a new hidden panel with default preferences
+`crates/shell/src/panels/a11y_panel.rs:87` **fn** `toggle` — Toggle panel visibility
+`crates/shell/src/panels/a11y_panel.rs:92` **fn** `load_draft` — Load current preferences into the draft so edits start from persisted values
+`crates/shell/src/panels/a11y_panel.rs:107` **enum** `A11yHit` — Result of a click on (or near) the accessibility panel
+`crates/shell/src/panels/a11y_panel.rs:133` **fn** `hit_test` — Classify a click at `(x, y)` CSS px
+`crates/shell/src/panels/a11y_panel.rs:223` **fn** `build_a11y_panel` — Build the centred accessibility settings panel overlay
+`crates/shell/src/panels/ai_panel.rs:57` **struct** `AiPanel` — AI assistant sidebar panel state (§12.8)
+`crates/shell/src/panels/ai_panel.rs:70` **fn** `new` — Create a new hidden AI panel with empty input and response
+`crates/shell/src/panels/ai_panel.rs:80` **fn** `toggle` — Toggle panel visibility
+`crates/shell/src/panels/ai_panel.rs:85` **fn** `close` — Close the panel (hide; input and response are preserved)
+`crates/shell/src/panels/ai_panel.rs:90` **fn** `push_char` — Append a character to the input field
+`crates/shell/src/panels/ai_panel.rs:95` **fn** `backspace` — Remove the last character from the input field (backspace)
+`crates/shell/src/panels/ai_panel.rs:110` **enum** `AiHit` — Result of a click inside the AI panel
+`crates/shell/src/panels/ai_panel.rs:124` **fn** `hit_test` — Hit-test `(x, y)` in CSS px against the AI panel
+`crates/shell/src/panels/ai_panel.rs:166` **fn** `build_panel` — Build the display list for the AI sidebar panel
+`crates/shell/src/panels/bookmark_panel.rs:87` **struct** `BmEntry` — Lightweight bookmark entry used for panel rendering (loaded from the
+`crates/shell/src/panels/bookmark_panel.rs:101` **struct** `BookmarkPanel` — Bookmark manager panel state
+`crates/shell/src/panels/bookmark_panel.rs:123` **fn** `new` — Create a new (hidden) panel with an empty bookmark list
+`crates/shell/src/panels/bookmark_panel.rs:137` **fn** `toggle` — Flip visibility.  Resets transient state (search focus, drag) when hiding
+`crates/shell/src/panels/bookmark_panel.rs:146` **fn** `set_data` — Replace the cached bookmark list and recompute the folder set
+`crates/shell/src/panels/bookmark_panel.rs:166` **fn** `visible_entries` — Bookmarks visible under the current folder filter and search query, in
+`crates/shell/src/panels/bookmark_panel.rs:183` **fn** `append_search` — Append typed text to the search query (called while `search_active`)
+`crates/shell/src/panels/bookmark_panel.rs:189` **fn** `backspace_search` — Delete the last character of the search query
+`crates/shell/src/panels/bookmark_panel.rs:195` **fn** `begin_drag` — Begin dragging the bookmark with the given id
+`crates/shell/src/panels/bookmark_panel.rs:200` **fn** `take_drag` — Take (and clear) the dragged bookmark id, if a drag is in progress
+`crates/shell/src/panels/bookmark_panel.rs:207` **fn** `scroll_by` — Scroll the bookmark list by `dy` CSS px, clamped to `[0, max]` where
+`crates/shell/src/panels/bookmark_panel.rs:227` **enum** `BookmarkHit` — Result of a click inside the bookmark panel
+`crates/shell/src/panels/bookmark_panel.rs:244` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the panel anchored with its
+`crates/shell/src/panels/bookmark_panel.rs:302` **fn** `build_panel` — Build the display list for the panel anchored at `(ax, ay)` (top-left)
+`crates/shell/src/panels/cert_panel.rs:55` **struct** `PanelCertData` — Certificate data shown in the panel
+`crates/shell/src/panels/cert_panel.rs:78` **fn** `has_data` — Returns `true` if there is meaningful data to display
+`crates/shell/src/panels/cert_panel.rs:87` **struct** `CertPanel` — Certificate viewer panel state
+`crates/shell/src/panels/cert_panel.rs:98` **fn** `new` — Create a new, hidden panel
+`crates/shell/src/panels/cert_panel.rs:105` **fn** `open` — Open the panel with the given certificate data
+`crates/shell/src/panels/cert_panel.rs:112` **fn** `close` — Close the panel
+`crates/shell/src/panels/cert_panel.rs:117` **fn** `toggle` — Toggle visibility.  On open: resets scroll to top
+`crates/shell/src/panels/cert_panel.rs:126` **fn** `scroll_by` — Scroll the content by `delta` CSS px (positive = down)
+`crates/shell/src/panels/cert_panel.rs:134` **fn** `hit_test` — Hit-test a pointer position relative to panel origin
+`crates/shell/src/panels/cert_panel.rs:147` **enum** `CertHit` — Result of a pointer hit test on the cert panel
+`crates/shell/src/panels/cert_panel.rs:240` **fn** `build_panel` — Append display commands for the cert panel to `buf`
+`crates/shell/src/panels/command_palette.rs:80` **enum** `PaletteAction` — A built-in browser action invokable from the palette
+`crates/shell/src/panels/command_palette.rs:111` **fn** `label` — Human-readable label shown in the result row
+`crates/shell/src/panels/command_palette.rs:130` **fn** `shortcut` — Keyboard-shortcut hint rendered right-aligned in the row (`""` if none)
+`crates/shell/src/panels/command_palette.rs:150` **fn** `all` — The full curated command list, in display order (shown first when the
+`crates/shell/src/panels/command_palette.rs:174` **enum** `PaletteKind` — What kind of target a palette item represents (drives the row icon and the
+`crates/shell/src/panels/command_palette.rs:185` **struct** `PaletteItem` — A single searchable entry in the palette
+`crates/shell/src/panels/command_palette.rs:196` **fn** `command` — Build a command item
+`crates/shell/src/panels/command_palette.rs:205` **fn** `bookmark` — Build a bookmark item (falls back to the URL when the title is empty)
+`crates/shell/src/panels/command_palette.rs:211` **fn** `history` — Build a history item (falls back to the URL when the title is empty)
+`crates/shell/src/panels/command_palette.rs:230` **struct** `CommandPalette` — Command palette modal state
+`crates/shell/src/panels/command_palette.rs:247` **fn** `new` — Create a hidden palette with the curated command list pre-loaded
+`crates/shell/src/panels/command_palette.rs:253` **fn** `open` — Open the palette, resetting the query and selection
+`crates/shell/src/panels/command_palette.rs:261` **fn** `close` — Close the palette
+`crates/shell/src/panels/command_palette.rs:266` **fn** `toggle` — Toggle visibility; opening resets transient state
+`crates/shell/src/panels/command_palette.rs:277` **fn** `set_items` — Replace the item list (commands + bookmarks + history) and clamp the
+`crates/shell/src/panels/command_palette.rs:283` **fn** `append` — Append typed text to the query and reset the selection to the top
+`crates/shell/src/panels/command_palette.rs:290` **fn** `backspace` — Delete the last character of the query
+`crates/shell/src/panels/command_palette.rs:301` **fn** `filtered` — Indices into `items` matching the current query, best match first
+`crates/shell/src/panels/command_palette.rs:318` **fn** `select_next` — Move the selection down by one (clamped to the last result)
+`crates/shell/src/panels/command_palette.rs:328` **fn** `select_prev` — Move the selection up by one (clamped to the first result)
+`crates/shell/src/panels/command_palette.rs:336` **fn** `selected_item` — The currently highlighted item index into `items`, if any result exists
+`crates/shell/src/panels/command_palette.rs:377` **fn** `fuzzy_score` — Score `haystack` against `needle` as a case-insensitive subsequence match
+`crates/shell/src/panels/command_palette.rs:427` **enum** `PaletteHit` — Result of a click inside the modal palette
+`crates/shell/src/panels/command_palette.rs:451` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the modal palette in a
 `crates/shell/src/panels/command_palette.rs:477` **fn** `build_panel` — Build the display list for the modal palette over a `viewport_w`×`viewport_h`
-`crates/shell/src/panels/focus_panel.rs:72` **struct** `PomodoroTimer` — Wall-clock-driven countdown timer
-`crates/shell/src/panels/focus_panel.rs:88` **fn** `new` — Create a running timer of `duration_min` minutes with zero elapsed time
-`crates/shell/src/panels/focus_panel.rs:100` **fn** `tick` — Advance the timer to wall-clock `now_ms`.  Adds the delta since the last
-`crates/shell/src/panels/focus_panel.rs:111` **fn** `remaining_ms` — Remaining time in milliseconds, clamped to `>= 0`
-`crates/shell/src/panels/focus_panel.rs:116` **fn** `progress` — Elapsed fraction in `[0, 1]`.  Returns `1.0` for a zero-length duration
-`crates/shell/src/panels/focus_panel.rs:124` **fn** `is_finished` — `true` once the full duration has elapsed
-`crates/shell/src/panels/focus_panel.rs:129` **fn** `pause` — Pause counting.  Clears the tick baseline so the paused span is excluded
-`crates/shell/src/panels/focus_panel.rs:136` **fn** `resume` — Resume counting.  Clears the tick baseline so the gap before the next
-`crates/shell/src/panels/focus_panel.rs:142` **fn** `toggle_pause` — Flip between paused and running
-`crates/shell/src/panels/focus_panel.rs:151` **fn** `label` — Remaining time formatted as `MM:SS` (rounded up to whole seconds)
-`crates/shell/src/panels/focus_panel.rs:162` **struct** `FocusModePanel` — Focus-mode panel state: the active flag plus the embedded [`PomodoroTimer`]
-`crates/shell/src/panels/focus_panel.rs:171` **fn** `new` — Create an inactive panel with a default-length (paused-at-zero) timer
-`crates/shell/src/panels/focus_panel.rs:179` **fn** `enter` — Enter focus mode with a fresh `duration_min`-minute timer
-`crates/shell/src/panels/focus_panel.rs:185` **fn** `exit` — Leave focus mode (the timer state is kept but no longer ticked)
-`crates/shell/src/panels/focus_panel.rs:190` **fn** `toggle` — Toggle focus mode: enter with `duration_min` when off, else exit
-`crates/shell/src/panels/focus_panel.rs:199` **fn** `tick` — Advance the embedded timer to `now_ms` when active (no-op otherwise)
-`crates/shell/src/panels/focus_panel.rs:216` **enum** `FocusHit` — Result of a click inside the focus widget card
-`crates/shell/src/panels/focus_panel.rs:232` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the focus widget card
-`crates/shell/src/panels/focus_panel.rs:254` **fn** `build_panel` — Build the display list for the focus widget overlay
-`crates/shell/src/panels/history_panel.rs:95` **struct** `HistoryItem` — Lightweight history entry for panel rendering
-`crates/shell/src/panels/history_panel.rs:110` **enum** `HistoryRow` — One display row in the scrollable body — either a date-group header or an entry
-`crates/shell/src/panels/history_panel.rs:119` **struct** `HistoryPanel` — History panel state
-`crates/shell/src/panels/history_panel.rs:149` **fn** `new` — Create a new, hidden panel
-`crates/shell/src/panels/history_panel.rs:154` **fn** `toggle` — Toggle visibility and reset scroll/search when opening
-`crates/shell/src/panels/history_panel.rs:163` **fn** `set_items` — Replace the displayed rows (call after data refresh or search)
-`crates/shell/src/panels/history_panel.rs:168` **fn** `append_search` — Append a character to the search query
-`crates/shell/src/panels/history_panel.rs:173` **fn** `backspace_search` — Delete the last character from the search query
-`crates/shell/src/panels/history_panel.rs:178` **fn** `scroll_by` — Scroll by `dy` CSS px (positive = down)
-`crates/shell/src/panels/history_panel.rs:184` **fn** `max_scroll` — Maximum scroll offset for the current row set
-`crates/shell/src/panels/history_panel.rs:225` **enum** `HistoryHit` — Result of a click inside the history panel
-`crates/shell/src/panels/history_panel.rs:245` **fn** `hit_test` — Classify a click at `(mx, my)` in window-space CSS px
-`crates/shell/src/panels/history_panel.rs:297` **fn** `build_panel` — Build the panel display list
-`crates/shell/src/panels/note_viewer.rs:70` **enum** `NoteHit` — Which region of the overlay was hit by a mouse click
-`crates/shell/src/panels/note_viewer.rs:81` **struct** `NoteViewerPanel` — Floating overlay for displaying a single user annotation
-`crates/shell/src/panels/note_viewer.rs:96` **fn** `new` — Create a hidden panel with empty state
-`crates/shell/src/panels/note_viewer.rs:107` **fn** `open` — Show the panel populated with the given note data
-`crates/shell/src/panels/note_viewer.rs:116` **fn** `close` — Hide the panel (data is preserved for re-open)
-`crates/shell/src/panels/note_viewer.rs:121` **fn** `panel_height` — Total height of the overlay given the current content
-`crates/shell/src/panels/note_viewer.rs:129` **fn** `hit_test` — Hit-test a click at `(px, py)` in viewport coordinates
-`crates/shell/src/panels/note_viewer.rs:164` **fn** `build_note_viewer` — Build the display list for the note viewer overlay
-`crates/shell/src/panels/permission_panel.rs:58` **enum** `PermissionKind` — A single browser permission kind tracked by the panel
-`crates/shell/src/panels/permission_panel.rs:79` **fn** `label` — Short display name for the permission row label
-`crates/shell/src/panels/permission_panel.rs:89` **fn** `icon` — Emoji icon shown to the left of the label
-`crates/shell/src/panels/permission_panel.rs:101` **enum** `PermissionState` — Grant state for a single permission on a single origin
-`crates/shell/src/panels/permission_panel.rs:114` **fn** `label` — Label shown on the toggle button
-`crates/shell/src/panels/permission_panel.rs:123` **fn** `cycle` — Cycle to the next state: Ask → Allow → Deny → Ask
-`crates/shell/src/panels/permission_panel.rs:135` **struct** `PermissionPanel` — Per-site permission popover state (7C.2)
-`crates/shell/src/panels/permission_panel.rs:150` **fn** `new` — Create a new hidden panel with no stored permissions
-`crates/shell/src/panels/permission_panel.rs:159` **fn** `toggle` — Flip panel visibility
-`crates/shell/src/panels/permission_panel.rs:164` **fn** `set_origin` — Update the current origin on navigation (does not clear stored grants)
-`crates/shell/src/panels/permission_panel.rs:171` **fn** `state_for` — Return the stored state for `kind` at the current origin
-`crates/shell/src/panels/permission_panel.rs:184` **fn** `cycle_permission` — Cycle the state for `kind` at the current origin to the next value
-`crates/shell/src/panels/permission_panel.rs:207` **enum** `PermissionHit` — Result of a click inside the permission panel
-`crates/shell/src/panels/permission_panel.rs:220` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the permission panel
+`crates/shell/src/panels/focus_panel.rs:74` **struct** `PomodoroTimer` — Wall-clock-driven countdown timer
+`crates/shell/src/panels/focus_panel.rs:90` **fn** `new` — Create a running timer of `duration_min` minutes with zero elapsed time
+`crates/shell/src/panels/focus_panel.rs:102` **fn** `tick` — Advance the timer to wall-clock `now_ms`.  Adds the delta since the last
+`crates/shell/src/panels/focus_panel.rs:113` **fn** `remaining_ms` — Remaining time in milliseconds, clamped to `>= 0`
+`crates/shell/src/panels/focus_panel.rs:118` **fn** `progress` — Elapsed fraction in `[0, 1]`.  Returns `1.0` for a zero-length duration
+`crates/shell/src/panels/focus_panel.rs:126` **fn** `is_finished` — `true` once the full duration has elapsed
+`crates/shell/src/panels/focus_panel.rs:131` **fn** `pause` — Pause counting.  Clears the tick baseline so the paused span is excluded
+`crates/shell/src/panels/focus_panel.rs:138` **fn** `resume` — Resume counting.  Clears the tick baseline so the gap before the next
+`crates/shell/src/panels/focus_panel.rs:144` **fn** `toggle_pause` — Flip between paused and running
+`crates/shell/src/panels/focus_panel.rs:153` **fn** `label` — Remaining time formatted as `MM:SS` (rounded up to whole seconds)
+`crates/shell/src/panels/focus_panel.rs:164` **struct** `FocusModePanel` — Focus-mode panel state: the active flag plus the embedded [`PomodoroTimer`]
+`crates/shell/src/panels/focus_panel.rs:173` **fn** `new` — Create an inactive panel with a default-length (paused-at-zero) timer
+`crates/shell/src/panels/focus_panel.rs:181` **fn** `enter` — Enter focus mode with a fresh `duration_min`-minute timer
+`crates/shell/src/panels/focus_panel.rs:187` **fn** `exit` — Leave focus mode (the timer state is kept but no longer ticked)
+`crates/shell/src/panels/focus_panel.rs:192` **fn** `toggle` — Toggle focus mode: enter with `duration_min` when off, else exit
+`crates/shell/src/panels/focus_panel.rs:201` **fn** `tick` — Advance the embedded timer to `now_ms` when active (no-op otherwise)
+`crates/shell/src/panels/focus_panel.rs:218` **enum** `FocusHit` — Result of a click inside the focus widget card
+`crates/shell/src/panels/focus_panel.rs:234` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the focus widget card
+`crates/shell/src/panels/focus_panel.rs:257` **fn** `build_panel` — Build the display list for the focus widget overlay
+`crates/shell/src/panels/history_panel.rs:84` **struct** `HistoryItem` — Lightweight history entry for panel rendering
+`crates/shell/src/panels/history_panel.rs:99` **enum** `HistoryRow` — One display row in the scrollable body — either a date-group header or an entry
+`crates/shell/src/panels/history_panel.rs:108` **struct** `HistoryPanel` — History panel state
+`crates/shell/src/panels/history_panel.rs:138` **fn** `new` — Create a new, hidden panel
+`crates/shell/src/panels/history_panel.rs:143` **fn** `toggle` — Toggle visibility and reset scroll/search when opening
+`crates/shell/src/panels/history_panel.rs:152` **fn** `set_items` — Replace the displayed rows (call after data refresh or search)
+`crates/shell/src/panels/history_panel.rs:157` **fn** `append_search` — Append a character to the search query
+`crates/shell/src/panels/history_panel.rs:162` **fn** `backspace_search` — Delete the last character from the search query
+`crates/shell/src/panels/history_panel.rs:167` **fn** `scroll_by` — Scroll by `dy` CSS px (positive = down)
+`crates/shell/src/panels/history_panel.rs:173` **fn** `max_scroll` — Maximum scroll offset for the current row set
+`crates/shell/src/panels/history_panel.rs:214` **enum** `HistoryHit` — Result of a click inside the history panel
+`crates/shell/src/panels/history_panel.rs:234` **fn** `hit_test` — Classify a click at `(mx, my)` in window-space CSS px
+`crates/shell/src/panels/history_panel.rs:287` **fn** `build_panel` — Build the panel display list
+`crates/shell/src/panels/note_viewer.rs:59` **enum** `NoteHit` — Which region of the overlay was hit by a mouse click
+`crates/shell/src/panels/note_viewer.rs:70` **struct** `NoteViewerPanel` — Floating overlay for displaying a single user annotation
+`crates/shell/src/panels/note_viewer.rs:85` **fn** `new` — Create a hidden panel with empty state
+`crates/shell/src/panels/note_viewer.rs:96` **fn** `open` — Show the panel populated with the given note data
+`crates/shell/src/panels/note_viewer.rs:105` **fn** `close` — Hide the panel (data is preserved for re-open)
+`crates/shell/src/panels/note_viewer.rs:110` **fn** `panel_height` — Total height of the overlay given the current content
+`crates/shell/src/panels/note_viewer.rs:118` **fn** `hit_test` — Hit-test a click at `(px, py)` in viewport coordinates
+`crates/shell/src/panels/note_viewer.rs:153` **fn** `build_note_viewer` — Build the display list for the note viewer overlay
+`crates/shell/src/panels/permission_panel.rs:56` **enum** `PermissionKind` — A single browser permission kind tracked by the panel
+`crates/shell/src/panels/permission_panel.rs:77` **fn** `label` — Short display name for the permission row label
+`crates/shell/src/panels/permission_panel.rs:87` **fn** `icon` — Emoji icon shown to the left of the label
+`crates/shell/src/panels/permission_panel.rs:99` **enum** `PermissionState` — Grant state for a single permission on a single origin
+`crates/shell/src/panels/permission_panel.rs:112` **fn** `label` — Label shown on the toggle button
+`crates/shell/src/panels/permission_panel.rs:121` **fn** `cycle` — Cycle to the next state: Ask → Allow → Deny → Ask
+`crates/shell/src/panels/permission_panel.rs:133` **struct** `PermissionPanel` — Per-site permission popover state (7C.2)
+`crates/shell/src/panels/permission_panel.rs:148` **fn** `new` — Create a new hidden panel with no stored permissions
+`crates/shell/src/panels/permission_panel.rs:157` **fn** `toggle` — Flip panel visibility
+`crates/shell/src/panels/permission_panel.rs:162` **fn** `set_origin` — Update the current origin on navigation (does not clear stored grants)
+`crates/shell/src/panels/permission_panel.rs:169` **fn** `state_for` — Return the stored state for `kind` at the current origin
+`crates/shell/src/panels/permission_panel.rs:182` **fn** `cycle_permission` — Cycle the state for `kind` at the current origin to the next value
+`crates/shell/src/panels/permission_panel.rs:205` **enum** `PermissionHit` — Result of a click inside the permission panel
+`crates/shell/src/panels/permission_panel.rs:218` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the permission panel
 `crates/shell/src/panels/permission_panel.rs:262` **fn** `build_panel` — Build the display list for the permission floating panel
 `crates/shell/src/panels/pip_os_window.rs:53` **struct** `PipOsConfig` — Geometry for the floating PiP window, in logical (CSS) pixels
 `crates/shell/src/panels/pip_os_window.rs:87` **fn** `pip_window_attributes` — Build the winit attributes for the floating PiP window
@@ -3275,128 +3275,128 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/pip_os_window.rs:201` **fn** `is_active` — `true` while an OS PiP window should be shown
 `crates/shell/src/panels/pip_os_window.rs:206` **fn** `on_enter` — Handle `_lumen_pip_enter(nid)`: open or re-target the floating window
 `crates/shell/src/panels/pip_os_window.rs:215` **fn** `on_exit` — Handle `_lumen_pip_exit(_)` or an OS close button: tear the window down
-`crates/shell/src/panels/pip_window.rs:60` **struct** `PipWindow` — Picture-in-picture window state
-`crates/shell/src/panels/pip_window.rs:83` **fn** `new` — Create an inactive PiP window positioned at the origin (re-anchored to the
-`crates/shell/src/panels/pip_window.rs:97` **fn** `open` — Open the PiP card for a `<video>` source, anchored to the bottom-right of
-`crates/shell/src/panels/pip_window.rs:115` **fn** `close` — Close the card (state is retained but no longer drawn)
-`crates/shell/src/panels/pip_window.rs:121` **fn** `toggle_play` — Flip the play / pause flag
-`crates/shell/src/panels/pip_window.rs:126` **fn** `default_pos` — Default bottom-right anchored top-left corner for a `win_w`×`win_h` window
-`crates/shell/src/panels/pip_window.rs:135` **fn** `clamp_to_window` — Clamp the card so it stays fully inside a `win_w`×`win_h` window, leaving
-`crates/shell/src/panels/pip_window.rs:143` **fn** `begin_drag` — Begin dragging the card: record the pointer offset from the card origin
-`crates/shell/src/panels/pip_window.rs:148` **fn** `dragging` — `true` while a title-bar drag is in progress
-`crates/shell/src/panels/pip_window.rs:154` **fn** `drag_to` — Update the card position from the pointer during a drag, clamped to the
-`crates/shell/src/panels/pip_window.rs:162` **fn** `end_drag` — End an in-progress drag
-`crates/shell/src/panels/pip_window.rs:177` **enum** `PipHit` — Result of a click inside the PiP card
-`crates/shell/src/panels/pip_window.rs:193` **fn** `hit_test` — Hit-test a click at window CSS-px `(x, y)` against the PiP card
-`crates/shell/src/panels/pip_window.rs:225` **fn** `build_panel` — Build the display list for the PiP overlay.  Empty when inactive
-`crates/shell/src/panels/print_panel.rs:77` **enum** `PaperSize` — Paper size for the print job
-`crates/shell/src/panels/print_panel.rs:88` **enum** `Orientation` — Page orientation for the print job
-`crates/shell/src/panels/print_panel.rs:97` **enum** `MarginPreset` — Margin preset for the print job
-`crates/shell/src/panels/print_panel.rs:108` **enum** `ColorMode` — Output colour mode for the print job
-`crates/shell/src/panels/print_panel.rs:117` **enum** `PrintField` — Which editable text field currently has keyboard focus in the print panel
-`crates/shell/src/panels/print_panel.rs:131` **struct** `PrintPanel` — Print dialog panel state
-`crates/shell/src/panels/print_panel.rs:158` **fn** `new` — Create a new hidden panel with default print settings
-`crates/shell/src/panels/print_panel.rs:174` **fn** `toggle` — Toggle panel visibility; clears the active editing field on hide
-`crates/shell/src/panels/print_panel.rs:182` **fn** `close` — Hide the panel and clear the editing field
-`crates/shell/src/panels/print_panel.rs:188` **fn** `push_char` — Append a character to the currently focused text field
-`crates/shell/src/panels/print_panel.rs:197` **fn** `pop_char` — Delete the last character from the currently focused text field
-`crates/shell/src/panels/print_panel.rs:208` **fn** `margin_px` — Resolve margin values (top/bottom, left/right) in CSS px at 96 DPI
-`crates/shell/src/panels/print_panel.rs:227` **enum** `PrintHit` — Result of a click on (or near) the print panel
-`crates/shell/src/panels/print_panel.rs:272` **fn** `hit_test` — Classify a click at `(x, y)` CSS px
-`crates/shell/src/panels/print_panel.rs:425` **fn** `build_panel` — Build the centred print dialog overlay
-`crates/shell/src/panels/privacy_panel.rs:79` **fn** `list_body_height` — Height in CSS px of the scrollable request-list area, given the full window
-`crates/shell/src/panels/privacy_panel.rs:88` **struct** `PrivacyPanel` — Privacy network panel (V5). Holds a snapshot of the shared [`NetworkLog`] and
-`crates/shell/src/panels/privacy_panel.rs:104` **fn** `new` — Create a new hidden panel backed by the given shared `log`
-`crates/shell/src/panels/privacy_panel.rs:114` **fn** `toggle` — Toggle panel visibility
-`crates/shell/src/panels/privacy_panel.rs:120` **fn** `refresh` — Pull the latest entries from the shared [`NetworkLog`] into the snapshot
-`crates/shell/src/panels/privacy_panel.rs:129` **fn** `clear_log` — Clear the shared log (call on every top-level navigation). The network
-`crates/shell/src/panels/privacy_panel.rs:139` **fn** `len` — Number of entries in the current snapshot
-`crates/shell/src/panels/privacy_panel.rs:145` **fn** `is_empty` — `true` when the current snapshot has no entries
-`crates/shell/src/panels/privacy_panel.rs:150` **fn** `blocked_count` — Number of blocked requests in the current snapshot
-`crates/shell/src/panels/privacy_panel.rs:156` **fn** `allowed_count` — Number of allowed (not blocked) requests in the current snapshot —
-`crates/shell/src/panels/privacy_panel.rs:167` **fn** `scroll_down` — Scroll towards older requests by `n` rows
-`crates/shell/src/panels/privacy_panel.rs:172` **fn** `scroll_up` — Scroll towards newer requests by `n` rows
-`crates/shell/src/panels/privacy_panel.rs:181` **enum** `PrivacyHit` — Result of a click on (or near) the privacy panel
-`crates/shell/src/panels/privacy_panel.rs:192` **fn** `hit_test` — Classify a click at `(x, y)` CSS px. `tab_bar_h` is the tab strip height;
-`crates/shell/src/panels/privacy_panel.rs:222` **fn** `build_privacy_panel` — Build the right-docked privacy panel overlay
-`crates/shell/src/panels/read_later_panel.rs:60` **struct** `ReadLaterPanel` — Read-later panel state
-`crates/shell/src/panels/read_later_panel.rs:70` **fn** `new`
-`crates/shell/src/panels/read_later_panel.rs:75` **fn** `toggle` — Toggle visibility; resets scroll when opening
-`crates/shell/src/panels/read_later_panel.rs:83` **fn** `refresh` — Replace the cached entry list (call after save/delete or on open)
-`crates/shell/src/panels/read_later_panel.rs:87` **fn** `scroll_up`
-`crates/shell/src/panels/read_later_panel.rs:91` **fn** `scroll_down`
-`crates/shell/src/panels/read_later_panel.rs:96` **fn** `max_scroll` — Maximum scroll offset for the current entry count
-`crates/shell/src/panels/read_later_panel.rs:107` **enum** `ReadLaterHit` — Result of a click inside or near the panel
-`crates/shell/src/panels/read_later_panel.rs:123` **fn** `hit_test` — Classify a click at `(mx, my)` (window-space CSS px)
-`crates/shell/src/panels/read_later_panel.rs:160` **fn** `build_panel` — Build the panel display list
-`crates/shell/src/panels/read_later_panel.rs:356` **fn** `extract_title_from_html` — Extract the page title from raw HTML bytes
+`crates/shell/src/panels/pip_window.rs:65` **struct** `PipWindow` — Picture-in-picture window state
+`crates/shell/src/panels/pip_window.rs:88` **fn** `new` — Create an inactive PiP window positioned at the origin (re-anchored to the
+`crates/shell/src/panels/pip_window.rs:102` **fn** `open` — Open the PiP card for a `<video>` source, anchored to the bottom-right of
+`crates/shell/src/panels/pip_window.rs:120` **fn** `close` — Close the card (state is retained but no longer drawn)
+`crates/shell/src/panels/pip_window.rs:126` **fn** `toggle_play` — Flip the play / pause flag
+`crates/shell/src/panels/pip_window.rs:131` **fn** `default_pos` — Default bottom-right anchored top-left corner for a `win_w`×`win_h` window
+`crates/shell/src/panels/pip_window.rs:140` **fn** `clamp_to_window` — Clamp the card so it stays fully inside a `win_w`×`win_h` window, leaving
+`crates/shell/src/panels/pip_window.rs:148` **fn** `begin_drag` — Begin dragging the card: record the pointer offset from the card origin
+`crates/shell/src/panels/pip_window.rs:153` **fn** `dragging` — `true` while a title-bar drag is in progress
+`crates/shell/src/panels/pip_window.rs:159` **fn** `drag_to` — Update the card position from the pointer during a drag, clamped to the
+`crates/shell/src/panels/pip_window.rs:167` **fn** `end_drag` — End an in-progress drag
+`crates/shell/src/panels/pip_window.rs:182` **enum** `PipHit` — Result of a click inside the PiP card
+`crates/shell/src/panels/pip_window.rs:198` **fn** `hit_test` — Hit-test a click at window CSS-px `(x, y)` against the PiP card
+`crates/shell/src/panels/pip_window.rs:235` **fn** `build_panel` — Build the display list for the PiP overlay.  Empty when inactive
+`crates/shell/src/panels/print_panel.rs:57` **enum** `PaperSize` — Paper size for the print job
+`crates/shell/src/panels/print_panel.rs:68` **enum** `Orientation` — Page orientation for the print job
+`crates/shell/src/panels/print_panel.rs:77` **enum** `MarginPreset` — Margin preset for the print job
+`crates/shell/src/panels/print_panel.rs:88` **enum** `ColorMode` — Output colour mode for the print job
+`crates/shell/src/panels/print_panel.rs:97` **enum** `PrintField` — Which editable text field currently has keyboard focus in the print panel
+`crates/shell/src/panels/print_panel.rs:111` **struct** `PrintPanel` — Print dialog panel state
+`crates/shell/src/panels/print_panel.rs:138` **fn** `new` — Create a new hidden panel with default print settings
+`crates/shell/src/panels/print_panel.rs:154` **fn** `toggle` — Toggle panel visibility; clears the active editing field on hide
+`crates/shell/src/panels/print_panel.rs:162` **fn** `close` — Hide the panel and clear the editing field
+`crates/shell/src/panels/print_panel.rs:168` **fn** `push_char` — Append a character to the currently focused text field
+`crates/shell/src/panels/print_panel.rs:177` **fn** `pop_char` — Delete the last character from the currently focused text field
+`crates/shell/src/panels/print_panel.rs:188` **fn** `margin_px` — Resolve margin values (top/bottom, left/right) in CSS px at 96 DPI
+`crates/shell/src/panels/print_panel.rs:207` **enum** `PrintHit` — Result of a click on (or near) the print panel
+`crates/shell/src/panels/print_panel.rs:252` **fn** `hit_test` — Classify a click at `(x, y)` CSS px
+`crates/shell/src/panels/print_panel.rs:406` **fn** `build_panel` — Build the centred print dialog overlay
+`crates/shell/src/panels/privacy_panel.rs:71` **fn** `list_body_height` — Height in CSS px of the scrollable request-list area, given the full window
+`crates/shell/src/panels/privacy_panel.rs:80` **struct** `PrivacyPanel` — Privacy network panel (V5). Holds a snapshot of the shared [`NetworkLog`] and
+`crates/shell/src/panels/privacy_panel.rs:96` **fn** `new` — Create a new hidden panel backed by the given shared `log`
+`crates/shell/src/panels/privacy_panel.rs:106` **fn** `toggle` — Toggle panel visibility
+`crates/shell/src/panels/privacy_panel.rs:112` **fn** `refresh` — Pull the latest entries from the shared [`NetworkLog`] into the snapshot
+`crates/shell/src/panels/privacy_panel.rs:121` **fn** `clear_log` — Clear the shared log (call on every top-level navigation). The network
+`crates/shell/src/panels/privacy_panel.rs:131` **fn** `len` — Number of entries in the current snapshot
+`crates/shell/src/panels/privacy_panel.rs:137` **fn** `is_empty` — `true` when the current snapshot has no entries
+`crates/shell/src/panels/privacy_panel.rs:142` **fn** `blocked_count` — Number of blocked requests in the current snapshot
+`crates/shell/src/panels/privacy_panel.rs:148` **fn** `allowed_count` — Number of allowed (not blocked) requests in the current snapshot —
+`crates/shell/src/panels/privacy_panel.rs:159` **fn** `scroll_down` — Scroll towards older requests by `n` rows
+`crates/shell/src/panels/privacy_panel.rs:164` **fn** `scroll_up` — Scroll towards newer requests by `n` rows
+`crates/shell/src/panels/privacy_panel.rs:173` **enum** `PrivacyHit` — Result of a click on (or near) the privacy panel
+`crates/shell/src/panels/privacy_panel.rs:184` **fn** `hit_test` — Classify a click at `(x, y)` CSS px. `tab_bar_h` is the tab strip height;
+`crates/shell/src/panels/privacy_panel.rs:215` **fn** `build_privacy_panel` — Build the right-docked privacy panel overlay
+`crates/shell/src/panels/read_later_panel.rs:51` **struct** `ReadLaterPanel` — Read-later panel state
+`crates/shell/src/panels/read_later_panel.rs:61` **fn** `new`
+`crates/shell/src/panels/read_later_panel.rs:66` **fn** `toggle` — Toggle visibility; resets scroll when opening
+`crates/shell/src/panels/read_later_panel.rs:74` **fn** `refresh` — Replace the cached entry list (call after save/delete or on open)
+`crates/shell/src/panels/read_later_panel.rs:78` **fn** `scroll_up`
+`crates/shell/src/panels/read_later_panel.rs:82` **fn** `scroll_down`
+`crates/shell/src/panels/read_later_panel.rs:87` **fn** `max_scroll` — Maximum scroll offset for the current entry count
+`crates/shell/src/panels/read_later_panel.rs:98` **enum** `ReadLaterHit` — Result of a click inside or near the panel
+`crates/shell/src/panels/read_later_panel.rs:114` **fn** `hit_test` — Classify a click at `(mx, my)` (window-space CSS px)
+`crates/shell/src/panels/read_later_panel.rs:152` **fn** `build_panel` — Build the panel display list
+`crates/shell/src/panels/read_later_panel.rs:349` **fn** `extract_title_from_html` — Extract the page title from raw HTML bytes
 `crates/shell/src/panels/restore_spinner.rs:24` **fn** `build_spinner` — Build spinner overlay if restore has taken longer than THRESHOLD_MS
-`crates/shell/src/panels/settings_panel.rs:80` **enum** `SettingsSection` — The four top-level settings sections
-`crates/shell/src/panels/settings_panel.rs:102` **fn** `label` — Display label for the tab
-`crates/shell/src/panels/settings_panel.rs:116` **enum** `SettingInput` — Which text input currently has keyboard focus
-`crates/shell/src/panels/settings_panel.rs:125` **struct** `SettingsPanel` — Settings panel UI state
-`crates/shell/src/panels/settings_panel.rs:140` **fn** `new` — Create a new, hidden panel
-`crates/shell/src/panels/settings_panel.rs:151` **fn** `open` — Open the panel, loading a fresh snapshot as the working draft
-`crates/shell/src/panels/settings_panel.rs:160` **fn** `toggle` — Toggle visibility. When opening, loads `snap` as the draft
-`crates/shell/src/panels/settings_panel.rs:169` **fn** `apply_draft` — Clone the current draft for persistence
-`crates/shell/src/panels/settings_panel.rs:174` **fn** `append_char` — Append a printable character to the focused text field
-`crates/shell/src/panels/settings_panel.rs:183` **fn** `backspace` — Remove the last character from the focused text field
-`crates/shell/src/panels/settings_panel.rs:193` **fn** `scroll_by` — Scroll the content area by `dy` CSS px (positive = down)
-`crates/shell/src/panels/settings_panel.rs:208` **enum** `SettingsHit` — Result of classifying a click inside the settings panel
-`crates/shell/src/panels/settings_panel.rs:239` **fn** `hit_test` — Classify a click at `(mx, my)` in window CSS px. `(px, py)` is the panel
-`crates/shell/src/panels/settings_panel.rs:372` **fn** `build_panel` — Append display commands for the settings panel to `list`
-`crates/shell/src/panels/shields_panel.rs:58` **struct** `BlockedLog` — Shared accumulator for blocked-request counts, indexed by hostname
-`crates/shell/src/panels/shields_panel.rs:69` **fn** `record` — Increment the count for the hostname extracted from `url`
-`crates/shell/src/panels/shields_panel.rs:77` **fn** `clear` — Clear all counts (call on every top-level navigation)
-`crates/shell/src/panels/shields_panel.rs:83` **fn** `count_for` — Blocked count for a specific hostname (0 if unseen)
-`crates/shell/src/panels/shields_panel.rs:96` **struct** `ShieldCountSink` — [`EventSink`] wrapper that forwards every event to an inner sink AND
-`crates/shell/src/panels/shields_panel.rs:119` **struct** `ShieldsPanel` — Shields floating panel state (7C.4)
-`crates/shell/src/panels/shields_panel.rs:143` **fn** `new` — Create a new hidden panel backed by the given shared `log`
-`crates/shell/src/panels/shields_panel.rs:155` **fn** `toggle` — Flip panel visibility
-`crates/shell/src/panels/shields_panel.rs:160` **fn** `set_domain` — Update `current_domain` and refresh blocked counts
-`crates/shell/src/panels/shields_panel.rs:167` **fn** `refresh` — Pull the latest counts from the shared [`BlockedLog`] into the panel
-`crates/shell/src/panels/shields_panel.rs:179` **fn** `clear_log` — Clear the shared blocked log (call on top-level navigation)
-`crates/shell/src/panels/shields_panel.rs:188` **fn** `blocked_domain_count` — Blocked-request count for the current domain (from last `refresh`)
-`crates/shell/src/panels/shields_panel.rs:193` **fn** `blocked_total_count` — Total blocked-request count for the current page (from last `refresh`)
-`crates/shell/src/panels/shields_panel.rs:202` **enum** `ShieldsHit` — Result of a click inside the shields panel
-`crates/shell/src/panels/shields_panel.rs:215` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the shields panel
-`crates/shell/src/panels/shields_panel.rs:249` **fn** `build_panel` — Build the display list for the shields floating panel
-`crates/shell/src/panels/shortcuts_panel.rs:51` **struct** `ShortcutRow` — One entry in the shortcuts list: human label + current binding
-`crates/shell/src/panels/shortcuts_panel.rs:64` **fn** `binding_label` — Formatted binding string shown in the key badge (e.g. `"Ctrl+R"`)
-`crates/shell/src/panels/shortcuts_panel.rs:80` **fn** `default_rows` — Compile-time default bindings for all displayed commands
-`crates/shell/src/panels/shortcuts_panel.rs:129` **enum** `ShortcutsHit` — Hit result from `hit_test`
-`crates/shell/src/panels/shortcuts_panel.rs:140` **struct** `ShortcutsPanel` — Keyboard shortcuts panel UI state
-`crates/shell/src/panels/shortcuts_panel.rs:156` **fn** `new` — Create a new, hidden panel using compile-time default bindings
-`crates/shell/src/panels/shortcuts_panel.rs:168` **fn** `open` — Show the panel
-`crates/shell/src/panels/shortcuts_panel.rs:174` **fn** `toggle` — Toggle visibility
-`crates/shell/src/panels/shortcuts_panel.rs:179` **fn** `close` — Hide the panel and cancel any pending rebind
-`crates/shell/src/panels/shortcuts_panel.rs:185` **fn** `scroll_by` — Scroll the content area by `delta` px (clamped to valid range)
-`crates/shell/src/panels/shortcuts_panel.rs:194` **fn** `accept_rebind` — Called when a rebind keypress arrives
-`crates/shell/src/panels/shortcuts_panel.rs:210` **fn** `cancel_rebind` — Cancel the current rebind without changing the binding
-`crates/shell/src/panels/shortcuts_panel.rs:215` **fn** `hit_test` — Hit-test a click at `(cx, cy)` in panel-local coordinates
-`crates/shell/src/panels/shortcuts_panel.rs:232` **fn** `build_panel` — Render the panel into `dl`, anchored at `(ox, oy)` in screen space
-`crates/shell/src/panels/sidebar_panel.rs:62` **struct** `SidebarPanel` — Right-docked sidebar web panel state (7D.3)
-`crates/shell/src/panels/sidebar_panel.rs:81` **fn** `new` — Create a new hidden sidebar panel with no page loaded
-`crates/shell/src/panels/sidebar_panel.rs:94` **fn** `toggle` — Toggle panel visibility.  No-op when no URL has been set
-`crates/shell/src/panels/sidebar_panel.rs:104` **fn** `open` — Open the sidebar with `url`.  Clears content if the URL changed
-`crates/shell/src/panels/sidebar_panel.rs:117` **fn** `close` — Close the sidebar (hide; URL and content are preserved for re-open)
-`crates/shell/src/panels/sidebar_panel.rs:124` **fn** `set_page` — Store a freshly-rendered display list for the sidebar page
-`crates/shell/src/panels/sidebar_panel.rs:133` **fn** `max_scroll` — Maximum valid `scroll_y` (0 if content fits in viewport)
-`crates/shell/src/panels/sidebar_panel.rs:149` **enum** `SidebarHit` — Result of a click inside the sidebar panel
-`crates/shell/src/panels/sidebar_panel.rs:162` **fn** `hit_test` — Hit-test `(x, y)` in CSS px against the sidebar panel
-`crates/shell/src/panels/sidebar_panel.rs:199` **fn** `build_panel` — Build the display list for the right-docked sidebar panel
+`crates/shell/src/panels/settings_panel.rs:63` **enum** `SettingsSection` — The four top-level settings sections
+`crates/shell/src/panels/settings_panel.rs:85` **fn** `label` — Display label for the tab
+`crates/shell/src/panels/settings_panel.rs:99` **enum** `SettingInput` — Which text input currently has keyboard focus
+`crates/shell/src/panels/settings_panel.rs:108` **struct** `SettingsPanel` — Settings panel UI state
+`crates/shell/src/panels/settings_panel.rs:123` **fn** `new` — Create a new, hidden panel
+`crates/shell/src/panels/settings_panel.rs:134` **fn** `open` — Open the panel, loading a fresh snapshot as the working draft
+`crates/shell/src/panels/settings_panel.rs:143` **fn** `toggle` — Toggle visibility. When opening, loads `snap` as the draft
+`crates/shell/src/panels/settings_panel.rs:152` **fn** `apply_draft` — Clone the current draft for persistence
+`crates/shell/src/panels/settings_panel.rs:157` **fn** `append_char` — Append a printable character to the focused text field
+`crates/shell/src/panels/settings_panel.rs:166` **fn** `backspace` — Remove the last character from the focused text field
+`crates/shell/src/panels/settings_panel.rs:176` **fn** `scroll_by` — Scroll the content area by `dy` CSS px (positive = down)
+`crates/shell/src/panels/settings_panel.rs:191` **enum** `SettingsHit` — Result of classifying a click inside the settings panel
+`crates/shell/src/panels/settings_panel.rs:222` **fn** `hit_test` — Classify a click at `(mx, my)` in window CSS px. `(px, py)` is the panel
+`crates/shell/src/panels/settings_panel.rs:356` **fn** `build_panel` — Append display commands for the settings panel to `list`
+`crates/shell/src/panels/shields_panel.rs:62` **struct** `BlockedLog` — Shared accumulator for blocked-request counts, indexed by hostname
+`crates/shell/src/panels/shields_panel.rs:73` **fn** `record` — Increment the count for the hostname extracted from `url`
+`crates/shell/src/panels/shields_panel.rs:81` **fn** `clear` — Clear all counts (call on every top-level navigation)
+`crates/shell/src/panels/shields_panel.rs:87` **fn** `count_for` — Blocked count for a specific hostname (0 if unseen)
+`crates/shell/src/panels/shields_panel.rs:100` **struct** `ShieldCountSink` — [`EventSink`] wrapper that forwards every event to an inner sink AND
+`crates/shell/src/panels/shields_panel.rs:123` **struct** `ShieldsPanel` — Shields floating panel state (7C.4)
+`crates/shell/src/panels/shields_panel.rs:147` **fn** `new` — Create a new hidden panel backed by the given shared `log`
+`crates/shell/src/panels/shields_panel.rs:159` **fn** `toggle` — Flip panel visibility
+`crates/shell/src/panels/shields_panel.rs:164` **fn** `set_domain` — Update `current_domain` and refresh blocked counts
+`crates/shell/src/panels/shields_panel.rs:171` **fn** `refresh` — Pull the latest counts from the shared [`BlockedLog`] into the panel
+`crates/shell/src/panels/shields_panel.rs:183` **fn** `clear_log` — Clear the shared blocked log (call on top-level navigation)
+`crates/shell/src/panels/shields_panel.rs:192` **fn** `blocked_domain_count` — Blocked-request count for the current domain (from last `refresh`)
+`crates/shell/src/panels/shields_panel.rs:197` **fn** `blocked_total_count` — Total blocked-request count for the current page (from last `refresh`)
+`crates/shell/src/panels/shields_panel.rs:206` **enum** `ShieldsHit` — Result of a click inside the shields panel
+`crates/shell/src/panels/shields_panel.rs:219` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the shields panel
+`crates/shell/src/panels/shields_panel.rs:254` **fn** `build_panel` — Build the display list for the shields floating panel
+`crates/shell/src/panels/shortcuts_panel.rs:47` **struct** `ShortcutRow` — One entry in the shortcuts list: human label + current binding
+`crates/shell/src/panels/shortcuts_panel.rs:60` **fn** `binding_label` — Formatted binding string shown in the key badge (e.g. `"Ctrl+R"`)
+`crates/shell/src/panels/shortcuts_panel.rs:76` **fn** `default_rows` — Compile-time default bindings for all displayed commands
+`crates/shell/src/panels/shortcuts_panel.rs:125` **enum** `ShortcutsHit` — Hit result from `hit_test`
+`crates/shell/src/panels/shortcuts_panel.rs:136` **struct** `ShortcutsPanel` — Keyboard shortcuts panel UI state
+`crates/shell/src/panels/shortcuts_panel.rs:152` **fn** `new` — Create a new, hidden panel using compile-time default bindings
+`crates/shell/src/panels/shortcuts_panel.rs:164` **fn** `open` — Show the panel
+`crates/shell/src/panels/shortcuts_panel.rs:170` **fn** `toggle` — Toggle visibility
+`crates/shell/src/panels/shortcuts_panel.rs:175` **fn** `close` — Hide the panel and cancel any pending rebind
+`crates/shell/src/panels/shortcuts_panel.rs:181` **fn** `scroll_by` — Scroll the content area by `delta` px (clamped to valid range)
+`crates/shell/src/panels/shortcuts_panel.rs:190` **fn** `accept_rebind` — Called when a rebind keypress arrives
+`crates/shell/src/panels/shortcuts_panel.rs:206` **fn** `cancel_rebind` — Cancel the current rebind without changing the binding
+`crates/shell/src/panels/shortcuts_panel.rs:211` **fn** `hit_test` — Hit-test a click at `(cx, cy)` in panel-local coordinates
+`crates/shell/src/panels/shortcuts_panel.rs:231` **fn** `build_panel` — Render the panel into `dl`, anchored at `(ox, oy)` in screen space
+`crates/shell/src/panels/sidebar_panel.rs:59` **struct** `SidebarPanel` — Right-docked sidebar web panel state (7D.3)
+`crates/shell/src/panels/sidebar_panel.rs:78` **fn** `new` — Create a new hidden sidebar panel with no page loaded
+`crates/shell/src/panels/sidebar_panel.rs:91` **fn** `toggle` — Toggle panel visibility.  No-op when no URL has been set
+`crates/shell/src/panels/sidebar_panel.rs:101` **fn** `open` — Open the sidebar with `url`.  Clears content if the URL changed
+`crates/shell/src/panels/sidebar_panel.rs:114` **fn** `close` — Close the sidebar (hide; URL and content are preserved for re-open)
+`crates/shell/src/panels/sidebar_panel.rs:121` **fn** `set_page` — Store a freshly-rendered display list for the sidebar page
+`crates/shell/src/panels/sidebar_panel.rs:130` **fn** `max_scroll` — Maximum valid `scroll_y` (0 if content fits in viewport)
+`crates/shell/src/panels/sidebar_panel.rs:146` **enum** `SidebarHit` — Result of a click inside the sidebar panel
+`crates/shell/src/panels/sidebar_panel.rs:159` **fn** `hit_test` — Hit-test `(x, y)` in CSS px against the sidebar panel
+`crates/shell/src/panels/sidebar_panel.rs:198` **fn** `build_panel` — Build the display list for the right-docked sidebar panel
 `crates/shell/src/panels/sleep_hint.rs:26` **fn** `build_sleep_hint` — Build the sleep-restore hint overlay if restore has taken longer than THRESHOLD_MS
-`crates/shell/src/panels/split_view.rs:20` **enum** `SplitFocus` — Which pane receives keyboard and scroll input
-`crates/shell/src/panels/split_view.rs:34` **struct** `SplitPane` — Frozen rendering state for the right pane in a split view
-`crates/shell/src/panels/split_view.rs:54` **struct** `SplitView` — Active split-view state: two side-by-side `ContentViewport` slots
-`crates/shell/src/panels/split_view.rs:63` **fn** `new` — Open split view: right pane shows the given tab's last rendered state
-`crates/shell/src/panels/split_view.rs:96` **fn** `build_combined_dl` — Build a combined display list for split-view rendering
-`crates/shell/src/panels/split_view.rs:151` **fn** `cursor_in_right` — Return `true` if `window_x` (CSS px) falls inside the right pane
-`crates/shell/src/panels/split_view.rs:157` **fn** `right_content_x` — Map a window-space x coord to right-pane content x (accounts for scroll)
-`crates/shell/src/panels/split_view.rs:163` **fn** `right_content_y` — Map a window-space y coord to right-pane content y (accounts for scroll)
-`crates/shell/src/panels/split_view.rs:168` **fn** `toggle_focus` — Toggle keyboard/scroll focus between left and right pane
-`crates/shell/src/panels/split_view.rs:176` **fn** `focus_at` — Transfer focus to whichever pane contains `window_x`
-`crates/shell/src/panels/split_view.rs:186` **fn** `scroll_focused_by` — Scroll the focused pane by `dy` CSS px (clamped to content bounds)
+`crates/shell/src/panels/split_view.rs:22` **enum** `SplitFocus` — Which pane receives keyboard and scroll input
+`crates/shell/src/panels/split_view.rs:36` **struct** `SplitPane` — Frozen rendering state for the right pane in a split view
+`crates/shell/src/panels/split_view.rs:56` **struct** `SplitView` — Active split-view state: two side-by-side `ContentViewport` slots
+`crates/shell/src/panels/split_view.rs:65` **fn** `new` — Open split view: right pane shows the given tab's last rendered state
+`crates/shell/src/panels/split_view.rs:99` **fn** `build_combined_dl` — Build a combined display list for split-view rendering
+`crates/shell/src/panels/split_view.rs:155` **fn** `cursor_in_right` — Return `true` if `window_x` (CSS px) falls inside the right pane
+`crates/shell/src/panels/split_view.rs:161` **fn** `right_content_x` — Map a window-space x coord to right-pane content x (accounts for scroll)
+`crates/shell/src/panels/split_view.rs:167` **fn** `right_content_y` — Map a window-space y coord to right-pane content y (accounts for scroll)
+`crates/shell/src/panels/split_view.rs:172` **fn** `toggle_focus` — Toggle keyboard/scroll focus between left and right pane
+`crates/shell/src/panels/split_view.rs:180` **fn** `focus_at` — Transfer focus to whichever pane contains `window_x`
+`crates/shell/src/panels/split_view.rs:190` **fn** `scroll_focused_by` — Scroll the focused pane by `dy` CSS px (clamped to content bounds)
 `crates/shell/src/panels/themes.rs:12` **enum** `AccentPreset` — Preset accent colours available in the Appearance settings section
 `crates/shell/src/panels/themes.rs:40` **fn** `color` — RGB colour for this preset
 `crates/shell/src/panels/themes.rs:52` **fn** `key` — Short lowercase key, used in settings serialisation
@@ -3409,30 +3409,30 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/themes.rs:133` **fn** `to_settings_str` — Serialise to the compact settings string
 `crates/shell/src/panels/themes.rs:152` **fn** `palette` — Resolve the concrete chrome [`Palette`] for this theme
 `crates/shell/src/panels/themes.rs:169` **struct** `Palette` — Resolved chrome colour tokens for the shell UI (tab strip, address bar,
-`crates/shell/src/panels/tree_tabs.rs:83` **struct** `TreeTabsPanel` — Tree-style tabs panel state
-`crates/shell/src/panels/tree_tabs.rs:92` **fn** `new` — Create a new hidden panel with no collapsed subtrees
-`crates/shell/src/panels/tree_tabs.rs:97` **fn** `toggle` — Flip visibility. Caller must trigger relayout + redraw
-`crates/shell/src/panels/tree_tabs.rs:106` **fn** `toggle_collapsed` — Toggle the collapsed state of the subtree rooted at `tab_id`
-`crates/shell/src/panels/tree_tabs.rs:125` **enum** `TreeTabHit` — Result of a click inside the tree tabs panel
-`crates/shell/src/panels/tree_tabs.rs:140` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tree tabs panel
-`crates/shell/src/panels/tree_tabs.rs:179` **fn** `build_panel` — Build the display list for the tree-style tabs panel
-`crates/shell/src/panels/vertical_tabs.rs:54` **struct** `VerticalTabsPanel` — Vertical tabs panel: list of open tabs rendered as a left-docked sidebar
-`crates/shell/src/panels/vertical_tabs.rs:66` **fn** `new` — Create a new (hidden) panel
-`crates/shell/src/panels/vertical_tabs.rs:71` **fn** `toggle` — Flip visibility. Caller must trigger relayout + redraw
-`crates/shell/src/panels/vertical_tabs.rs:79` **fn** `scroll_by` — Scroll the panel by `delta` CSS px (positive = down)
-`crates/shell/src/panels/vertical_tabs.rs:95` **enum** `VTabHit` — Result of a click inside the vertical tab panel area
-`crates/shell/src/panels/vertical_tabs.rs:110` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the vertical tabs panel
+`crates/shell/src/panels/tree_tabs.rs:82` **struct** `TreeTabsPanel` — Tree-style tabs panel state
+`crates/shell/src/panels/tree_tabs.rs:91` **fn** `new` — Create a new hidden panel with no collapsed subtrees
+`crates/shell/src/panels/tree_tabs.rs:96` **fn** `toggle` — Flip visibility. Caller must trigger relayout + redraw
+`crates/shell/src/panels/tree_tabs.rs:105` **fn** `toggle_collapsed` — Toggle the collapsed state of the subtree rooted at `tab_id`
+`crates/shell/src/panels/tree_tabs.rs:124` **enum** `TreeTabHit` — Result of a click inside the tree tabs panel
+`crates/shell/src/panels/tree_tabs.rs:139` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tree tabs panel
+`crates/shell/src/panels/tree_tabs.rs:181` **fn** `build_panel` — Build the display list for the tree-style tabs panel
+`crates/shell/src/panels/vertical_tabs.rs:52` **struct** `VerticalTabsPanel` — Vertical tabs panel: list of open tabs rendered as a left-docked sidebar
+`crates/shell/src/panels/vertical_tabs.rs:64` **fn** `new` — Create a new (hidden) panel
+`crates/shell/src/panels/vertical_tabs.rs:69` **fn** `toggle` — Flip visibility. Caller must trigger relayout + redraw
+`crates/shell/src/panels/vertical_tabs.rs:77` **fn** `scroll_by` — Scroll the panel by `delta` CSS px (positive = down)
+`crates/shell/src/panels/vertical_tabs.rs:93` **enum** `VTabHit` — Result of a click inside the vertical tab panel area
+`crates/shell/src/panels/vertical_tabs.rs:108` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the vertical tabs panel
 `crates/shell/src/panels/vertical_tabs.rs:142` **fn** `build_tab_bar_vertical` — Build the display list for the vertical tabs panel with scroll support
-`crates/shell/src/panels/workspace_panel.rs:67` **struct** `WsEntry` — Lightweight workspace entry used for panel rendering (loaded from storage on
-`crates/shell/src/panels/workspace_panel.rs:80` **struct** `WorkspacePanel` — Workspace switcher panel state
-`crates/shell/src/panels/workspace_panel.rs:92` **fn** `new` — Create a new (hidden) panel with an empty workspace list
-`crates/shell/src/panels/workspace_panel.rs:102` **fn** `toggle` — Flip visibility.  Caller must trigger redraw (and relayout if changing
-`crates/shell/src/panels/workspace_panel.rs:107` **fn** `set_workspaces` — Replace the cached workspace list (call after any storage mutation)
-`crates/shell/src/panels/workspace_panel.rs:112` **fn** `set_active` — Mark `id` as the active workspace
-`crates/shell/src/panels/workspace_panel.rs:127` **enum** `WorkspaceHit` — Result of a click inside the workspace switcher bar
-`crates/shell/src/panels/workspace_panel.rs:142` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the workspace switcher bar
-`crates/shell/src/panels/workspace_panel.rs:198` **fn** `build_panel` — Build the display list for the workspace switcher bar
-`crates/shell/src/panels/workspace_panel.rs:324` **fn** `parse_ws_color` — Convert a stored CSS colour string (`#RRGGBB`, `#RGB`, or named colour
+`crates/shell/src/panels/workspace_panel.rs:65` **struct** `WsEntry` — Lightweight workspace entry used for panel rendering (loaded from storage on
+`crates/shell/src/panels/workspace_panel.rs:78` **struct** `WorkspacePanel` — Workspace switcher panel state
+`crates/shell/src/panels/workspace_panel.rs:90` **fn** `new` — Create a new (hidden) panel with an empty workspace list
+`crates/shell/src/panels/workspace_panel.rs:100` **fn** `toggle` — Flip visibility.  Caller must trigger redraw (and relayout if changing
+`crates/shell/src/panels/workspace_panel.rs:105` **fn** `set_workspaces` — Replace the cached workspace list (call after any storage mutation)
+`crates/shell/src/panels/workspace_panel.rs:110` **fn** `set_active` — Mark `id` as the active workspace
+`crates/shell/src/panels/workspace_panel.rs:125` **enum** `WorkspaceHit` — Result of a click inside the workspace switcher bar
+`crates/shell/src/panels/workspace_panel.rs:140` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the workspace switcher bar
+`crates/shell/src/panels/workspace_panel.rs:199` **fn** `build_panel` — Build the display list for the workspace switcher bar
+`crates/shell/src/panels/workspace_panel.rs:326` **fn** `parse_ws_color` — Convert a stored CSS colour string (`#RRGGBB`, `#RGB`, or named colour
 `crates/shell/src/platform/audio_capture.rs:40` **struct** `PlatformAudioCapture` — Platform audio capture provider (WASAPI / ALSA via `cpal`)
 `crates/shell/src/platform/audio_player.rs:98` **struct** `PlatformAudioPlayer` — Shell-side implementation of `AudioPlaybackProvider` using `rodio`
 `crates/shell/src/platform/audio_player.rs:105` **fn** `new` — Create a new player (no OS resources allocated until the first handle)

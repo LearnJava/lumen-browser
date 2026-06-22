@@ -7,6 +7,7 @@
 //! State lives on `Lumen`; this module only holds the open/scroll state and
 //! provides [`hit_test`] + [`build_panel`].
 
+use crate::panels::themes::Palette;
 use lumen_core::geom::Rect;
 use lumen_knowledge::{ReadLaterEntry, ReadStatus};
 use lumen_layout::{Color, FontStyle, FontWeight};
@@ -37,21 +38,11 @@ const CHAR_W: f32 = 7.0;
 
 // ── Colours ──────────────────────────────────────────────────────────────────
 
-const PANEL_BG: Color = Color { r: 20, g: 20, b: 27, a: 252 };
-const PANEL_BORDER: Color = Color { r: 55, g: 55, b: 68, a: 255 };
-const HEADER_BG: Color = Color { r: 28, g: 28, b: 36, a: 255 };
-const HEADER_TEXT: Color = Color { r: 200, g: 200, b: 216, a: 255 };
+// Semantic status colours — kept hard-coded, not theme tokens.
 const CLOSE_TEXT: Color = Color { r: 180, g: 90, b: 90, a: 255 };
-const ROW_EVEN: Color = Color { r: 24, g: 24, b: 31, a: 255 };
-const ROW_ODD: Color = Color { r: 28, g: 28, b: 36, a: 255 };
-const SEPARATOR: Color = Color { r: 38, g: 38, b: 48, a: 255 };
-const TITLE_TEXT: Color = Color { r: 220, g: 220, b: 230, a: 255 };
-const META_TEXT: Color = Color { r: 120, g: 120, b: 134, a: 255 };
-const DELETE_TEXT: Color = Color { r: 170, g: 80, b: 80, a: 255 };
 const BADGE_UNREAD: Color = Color { r: 55, g: 115, b: 210, a: 220 };
 const BADGE_READ: Color = Color { r: 55, g: 150, b: 75, a: 200 };
 const BADGE_TEXT: Color = Color { r: 240, g: 240, b: 250, a: 255 };
-const EMPTY_TEXT: Color = Color { r: 100, g: 100, b: 115, a: 255 };
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -157,10 +148,12 @@ pub fn hit_test(
 /// Build the panel display list.
 ///
 /// `(win_w, tab_bar_h)` — window width and tab bar height in CSS px.
+/// `pal` — active theme palette; used for all surface chrome colours.
 pub fn build_panel(
     panel: &ReadLaterPanel,
     win_w: f32,
     tab_bar_h: f32,
+    pal: &Palette,
 ) -> DisplayList {
     let mut dl: DisplayList = Vec::new();
     if !panel.visible {
@@ -175,19 +168,19 @@ pub fn build_panel(
     dl.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px, py, PANEL_W, PANEL_H),
         radii: border_radii,
-        color: PANEL_BORDER,
+        color: pal.overlay_border,
     });
     dl.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px + 1.0, py + 1.0, PANEL_W - 2.0, PANEL_H - 2.0),
         radii: uniform_radii(5.0),
-        color: PANEL_BG,
+        color: pal.overlay_bg,
     });
 
     // ── Header ───────────────────────────────────────────────────────────────
     dl.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px, py, PANEL_W, HEADER_H),
         radii: CornerRadii { tl: 5.0, tl_y: 5.0, tr: 5.0, tr_y: 5.0, bl: 0.0, bl_y: 0.0, br: 0.0, br_y: 0.0 },
-        color: HEADER_BG,
+        color: pal.header_bg,
     });
     let count = panel.entries.len();
     let header_label = if count == 0 {
@@ -195,13 +188,13 @@ pub fn build_panel(
     } else {
         format!("Read Later ({count})")
     };
-    dl.push(make_text(header_label, px + PAD, py + 9.0, 200.0, 13.0, FontWeight::BOLD, HEADER_TEXT));
+    dl.push(make_text(header_label, px + PAD, py + 9.0, 200.0, 13.0, FontWeight::BOLD, pal.text));
     // Close button.
     dl.push(make_text("×".to_owned(), px + PANEL_W - 22.0, py + 8.0, 20.0, 15.0, FontWeight::BOLD, CLOSE_TEXT));
     // Separator.
     dl.push(DisplayCommand::FillRect {
         rect: Rect::new(px, py + HEADER_H - 1.0, PANEL_W, 1.0),
-        color: SEPARATOR,
+        color: pal.divider,
     });
 
     // ── Body (clipped, scrolled) ─────────────────────────────────────────────
@@ -219,7 +212,7 @@ pub fn build_panel(
             PANEL_W - 2.0 * PAD,
             12.0,
             FontWeight::NORMAL,
-            EMPTY_TEXT,
+            pal.text_dim,
         ));
     } else {
         let scroll = panel.scroll_offset;
@@ -234,7 +227,7 @@ pub fn build_panel(
             }
 
             // Row background (alternating).
-            let row_bg = if i % 2 == 0 { ROW_EVEN } else { ROW_ODD };
+            let row_bg = if i % 2 == 0 { pal.overlay_bg } else { pal.row_alt_bg };
             dl.push(DisplayCommand::FillRect {
                 rect: Rect::new(px, row_y, PANEL_W, ROW_H),
                 color: row_bg,
@@ -242,13 +235,13 @@ pub fn build_panel(
 
             // Title.
             let title = truncate_str(&entry.title, max_title_chars);
-            dl.push(make_text(title, px + PAD, row_y + 9.0, title_area_w, 12.0, FontWeight::NORMAL, TITLE_TEXT));
+            dl.push(make_text(title, px + PAD, row_y + 9.0, title_area_w, 12.0, FontWeight::NORMAL, pal.text));
 
             // Meta: host + date.
             let host = extract_host(&entry.url);
             let date = format_unix_date(entry.saved_at);
             let meta = format!("{host}  ·  {date}");
-            dl.push(make_text(meta, px + PAD, row_y + 28.0, title_area_w, 11.0, FontWeight::NORMAL, META_TEXT));
+            dl.push(make_text(meta, px + PAD, row_y + 28.0, title_area_w, 11.0, FontWeight::NORMAL, pal.text_dim));
 
             // Status badge.
             let (badge_color, badge_text) = match entry.status {
@@ -265,12 +258,12 @@ pub fn build_panel(
             dl.push(make_text(badge_text.to_owned(), badge_x + 4.0, row_y + 12.0, 40.0, 9.0, FontWeight::BOLD, BADGE_TEXT));
 
             // Delete "×" button.
-            dl.push(make_text("×".to_owned(), px + PANEL_W - DELETE_W + 2.0, row_y + 18.0, 20.0, 14.0, FontWeight::BOLD, DELETE_TEXT));
+            dl.push(make_text("×".to_owned(), px + PANEL_W - DELETE_W + 2.0, row_y + 18.0, 20.0, 14.0, FontWeight::BOLD, pal.text_dim));
 
             // Row separator.
             dl.push(DisplayCommand::FillRect {
                 rect: Rect::new(px, row_y + ROW_H - 1.0, PANEL_W, 1.0),
-                color: SEPARATOR,
+                color: pal.divider,
             });
         }
     }

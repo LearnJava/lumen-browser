@@ -20,6 +20,8 @@ use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 use lumen_storage::BrowserSettingsSnapshot;
 
+use crate::panels::themes::Palette;
+
 // ── Geometry ─────────────────────────────────────────────────────────────────
 
 /// Panel width in CSS px (exported for anchor calculation in main.rs).
@@ -45,33 +47,14 @@ const CLOSE_W: f32 = 30.0;
 /// Each of 4 equal-width tabs.
 const TAB_W: f32 = PANEL_W / 4.0;
 
-// ── Colours ──────────────────────────────────────────────────────────────────
+// ── Semantic colours (status indicators — kept hard-coded across all themes) ──
 
-const PANEL_BORDER_COL: Color = Color { r: 52, g: 52, b: 66, a: 255 };
-const PANEL_BG: Color = Color { r: 18, g: 18, b: 26, a: 254 };
-const HEADER_BG: Color = Color { r: 26, g: 26, b: 36, a: 255 };
-const HEADER_TEXT: Color = Color { r: 210, g: 210, b: 225, a: 255 };
+/// Red × close button — danger/destructive semantic, intentionally never
+/// follows the palette so the close affordance stays universally recognisable.
 const CLOSE_COL: Color = Color { r: 180, g: 80, b: 80, a: 255 };
-const TAB_BG: Color = Color { r: 22, g: 22, b: 32, a: 255 };
-const TAB_ACTIVE_BG: Color = Color { r: 32, g: 40, b: 58, a: 255 };
-const TAB_TEXT: Color = Color { r: 140, g: 140, b: 160, a: 255 };
-const TAB_ACTIVE_TEXT: Color = Color { r: 220, g: 220, b: 235, a: 255 };
-const TAB_ACCENT: Color = Color { r: 82, g: 128, b: 220, a: 255 };
-const ROW_EVEN: Color = Color { r: 22, g: 22, b: 32, a: 255 };
-const ROW_ODD: Color = Color { r: 26, g: 26, b: 36, a: 255 };
-const LABEL_COL: Color = Color { r: 200, g: 200, b: 218, a: 255 };
-const VALUE_COL: Color = Color { r: 150, g: 150, b: 170, a: 255 };
-const INPUT_BG: Color = Color { r: 14, g: 14, b: 22, a: 255 };
-const INPUT_ACTIVE_BG: Color = Color { r: 18, g: 24, b: 38, a: 255 };
-const INPUT_TEXT: Color = Color { r: 190, g: 190, b: 208, a: 255 };
+
+/// Green toggle track for the ON state — semantic "enabled" status indicator.
 const TOGGLE_ON: Color = Color { r: 60, g: 140, b: 80, a: 230 };
-const TOGGLE_OFF: Color = Color { r: 70, g: 70, b: 90, a: 230 };
-const TOGGLE_TEXT: Color = Color { r: 240, g: 240, b: 248, a: 255 };
-const OPTION_BG: Color = Color { r: 36, g: 36, b: 52, a: 230 };
-const OPTION_ACTIVE: Color = Color { r: 58, g: 90, b: 160, a: 230 };
-const OPTION_TEXT: Color = Color { r: 190, g: 190, b: 210, a: 255 };
-const SEPARATOR: Color = Color { r: 36, g: 36, b: 50, a: 255 };
-const SECTION_HDR: Color = Color { r: 100, g: 120, b: 160, a: 255 };
 
 // ── Section ───────────────────────────────────────────────────────────────────
 
@@ -369,18 +352,19 @@ fn ht_downloads(ly: f32) -> SettingsHit {
 /// Append display commands for the settings panel to `list`.
 ///
 /// `(px, py)` is the panel's top-left corner in window CSS px.
-pub fn build_panel(panel: &SettingsPanel, list: &mut DisplayList, px: f32, py: f32) {
+/// `pal` provides the active chrome colour tokens for light/dark theming.
+pub fn build_panel(panel: &SettingsPanel, list: &mut DisplayList, px: f32, py: f32, pal: &Palette) {
     // Outer border ring.
     list.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px, py, PANEL_W, PANEL_H),
         radii: radii(7.0),
-        color: PANEL_BORDER_COL,
+        color: pal.overlay_border,
     });
     // Inner background.
     list.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px + 1.0, py + 1.0, PANEL_W - 2.0, PANEL_H - 2.0),
         radii: radii(6.0),
-        color: PANEL_BG,
+        color: pal.overlay_bg,
     });
 
     // ── Header ───────────────────────────────────────────────────────────────
@@ -388,22 +372,22 @@ pub fn build_panel(panel: &SettingsPanel, list: &mut DisplayList, px: f32, py: f
         rect: Rect::new(px, py, PANEL_W, HEADER_H),
         radii: CornerRadii { tl: 6.0, tl_y: 6.0, tr: 6.0, tr_y: 6.0,
                              bl: 0.0, bl_y: 0.0, br: 0.0, br_y: 0.0 },
-        color: HEADER_BG,
+        color: pal.header_bg,
     });
     list.push(txt("Настройки", px + PAD_H, py + 12.0, PANEL_W - PAD_H * 2.0 - CLOSE_W,
-        13.0, FontWeight::BOLD, HEADER_TEXT));
+        13.0, FontWeight::BOLD, pal.text));
     list.push(txt("×", px + PANEL_W - CLOSE_W + 6.0, py + 10.0, 20.0,
         15.0, FontWeight::BOLD, CLOSE_COL));
     list.push(DisplayCommand::FillRect {
         rect: Rect::new(px, py + HEADER_H - 1.0, PANEL_W, 1.0),
-        color: SEPARATOR,
+        color: pal.divider,
     });
 
     // ── Tab bar ──────────────────────────────────────────────────────────────
     let tab_y = py + HEADER_H;
     list.push(DisplayCommand::FillRect {
         rect: Rect::new(px, tab_y, PANEL_W, TAB_BAR_H),
-        color: TAB_BG,
+        color: pal.item_bg,
     });
     for (i, &sec) in SettingsSection::ALL.iter().enumerate() {
         let tx = px + i as f32 * TAB_W;
@@ -411,12 +395,12 @@ pub fn build_panel(panel: &SettingsPanel, list: &mut DisplayList, px: f32, py: f
         if is_active {
             list.push(DisplayCommand::FillRect {
                 rect: Rect::new(tx, tab_y, TAB_W, TAB_BAR_H),
-                color: TAB_ACTIVE_BG,
+                color: pal.item_selected_bg,
             });
             // Active underline accent.
             list.push(DisplayCommand::FillRect {
                 rect: Rect::new(tx + 4.0, tab_y + TAB_BAR_H - 2.0, TAB_W - 8.0, 2.0),
-                color: TAB_ACCENT,
+                color: pal.accent,
             });
         }
         list.push(txt(
@@ -426,12 +410,12 @@ pub fn build_panel(panel: &SettingsPanel, list: &mut DisplayList, px: f32, py: f
             TAB_W - 12.0,
             12.0,
             if is_active { FontWeight::BOLD } else { FontWeight::NORMAL },
-            if is_active { TAB_ACTIVE_TEXT } else { TAB_TEXT },
+            if is_active { pal.text } else { pal.text_dim },
         ));
     }
     list.push(DisplayCommand::FillRect {
         rect: Rect::new(px, tab_y + TAB_BAR_H - 1.0, PANEL_W, 1.0),
-        color: SEPARATOR,
+        color: pal.divider,
     });
 
     // ── Content area ─────────────────────────────────────────────────────────
@@ -441,35 +425,37 @@ pub fn build_panel(panel: &SettingsPanel, list: &mut DisplayList, px: f32, py: f
     });
     let off = panel.scroll_y;
     match panel.section {
-        SettingsSection::General => render_general(panel, list, px, cy - off),
-        SettingsSection::Privacy => render_privacy(panel, list, px, cy - off),
-        SettingsSection::Appearance => render_appearance(panel, list, px, cy - off),
-        SettingsSection::Downloads => render_downloads(panel, list, px, cy - off),
+        SettingsSection::General => render_general(panel, list, px, cy - off, pal),
+        SettingsSection::Privacy => render_privacy(panel, list, px, cy - off, pal),
+        SettingsSection::Appearance => render_appearance(panel, list, px, cy - off, pal),
+        SettingsSection::Downloads => render_downloads(panel, list, px, cy - off, pal),
     }
     list.push(DisplayCommand::PopClip);
 }
 
 // ── Per-section renderers ────────────────────────────────────────────────────
 
-fn row_bg(i: usize) -> Color { if i.is_multiple_of(2) { ROW_EVEN } else { ROW_ODD } }
+fn row_bg(i: usize, pal: &Palette) -> Color {
+    if i.is_multiple_of(2) { pal.item_bg } else { pal.row_alt_bg }
+}
 
-fn push_row(list: &mut DisplayList, x: f32, y: f32, i: usize) {
+fn push_row(list: &mut DisplayList, x: f32, y: f32, i: usize, pal: &Palette) {
     list.push(DisplayCommand::FillRect {
         rect: Rect::new(x, y, PANEL_W, ROW_H),
-        color: row_bg(i),
+        color: row_bg(i, pal),
     });
     list.push(DisplayCommand::FillRect {
         rect: Rect::new(x, y + ROW_H - 1.0, PANEL_W, 1.0),
-        color: SEPARATOR,
+        color: pal.divider,
     });
 }
 
-fn push_label(list: &mut DisplayList, x: f32, y: f32, label: &str) {
+fn push_label(list: &mut DisplayList, x: f32, y: f32, label: &str, pal: &Palette) {
     list.push(txt(label.to_owned(), x + PAD_H, y + PAD_V, PANEL_W / 2.0 - PAD_H,
-        13.0, FontWeight::NORMAL, LABEL_COL));
+        13.0, FontWeight::NORMAL, pal.text));
 }
 
-fn push_input(list: &mut DisplayList, x: f32, y: f32, value: &str, focused: bool) {
+fn push_input(list: &mut DisplayList, x: f32, y: f32, value: &str, focused: bool, pal: &Palette) {
     let ix = x + PAD_H;
     let iw = PANEL_W - PAD_H * 2.0;
     let iy = y + PAD_V;
@@ -477,7 +463,7 @@ fn push_input(list: &mut DisplayList, x: f32, y: f32, value: &str, focused: bool
     list.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(ix, iy, iw, ih),
         radii: radii(3.0),
-        color: if focused { INPUT_ACTIVE_BG } else { INPUT_BG },
+        color: if focused { pal.item_selected_bg } else { pal.input_bg },
     });
     let display = if value.len() > 72 {
         format!("…{}", &value[value.len() - 70..])
@@ -485,10 +471,10 @@ fn push_input(list: &mut DisplayList, x: f32, y: f32, value: &str, focused: bool
         value.to_owned()
     };
     list.push(txt(display, ix + 6.0, iy + 3.0, iw - 12.0, 12.0,
-        FontWeight::NORMAL, INPUT_TEXT));
+        FontWeight::NORMAL, pal.text));
 }
 
-fn push_toggle(list: &mut DisplayList, x: f32, y: f32, on: bool) {
+fn push_toggle(list: &mut DisplayList, x: f32, y: f32, on: bool, pal: &Palette) {
     let tw = 60.0;
     let th = ROW_H - PAD_V * 2.0;
     let tx = x + PANEL_W - PAD_H - tw;
@@ -496,11 +482,12 @@ fn push_toggle(list: &mut DisplayList, x: f32, y: f32, on: bool) {
     list.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(tx, ty, tw, th),
         radii: radii(3.0),
-        color: if on { TOGGLE_ON } else { TOGGLE_OFF },
+        // ON stays semantic green; OFF uses item_bg surface token.
+        color: if on { TOGGLE_ON } else { pal.item_bg },
     });
     list.push(txt(
         if on { "Вкл" } else { "Выкл" }.to_owned(),
-        tx + 4.0, ty + 4.0, tw - 8.0, 11.0, FontWeight::BOLD, TOGGLE_TEXT,
+        tx + 4.0, ty + 4.0, tw - 8.0, 11.0, FontWeight::BOLD, pal.text,
     ));
 }
 
@@ -510,6 +497,7 @@ fn push_options(
     y: f32,
     options: &[(&str, &str)],
     current: &str,
+    pal: &Palette,
 ) {
     let right_start = x + PANEL_W / 2.0;
     let opt_w = (PANEL_W / 2.0 - PAD_H) / options.len() as f32;
@@ -521,74 +509,76 @@ fn push_options(
         list.push(DisplayCommand::FillRoundedRect {
             rect: Rect::new(ox + 2.0, oy, opt_w - 4.0, oh),
             radii: radii(3.0),
-            color: if is_on { OPTION_ACTIVE } else { OPTION_BG },
+            color: if is_on { pal.item_selected_bg } else { pal.item_bg },
         });
         list.push(txt(lbl.to_owned(), ox + 4.0, oy + 3.0, opt_w - 8.0, 11.0,
-            if is_on { FontWeight::BOLD } else { FontWeight::NORMAL }, OPTION_TEXT));
+            if is_on { FontWeight::BOLD } else { FontWeight::NORMAL }, pal.text));
     }
 }
 
-fn push_section_header(list: &mut DisplayList, x: f32, y: f32, title: &str) {
+fn push_section_header(list: &mut DisplayList, x: f32, y: f32, title: &str, pal: &Palette) {
     list.push(txt(title.to_owned(), x + PAD_H, y + 8.0, PANEL_W - PAD_H * 2.0, 10.0,
-        FontWeight::BOLD, SECTION_HDR));
+        FontWeight::BOLD, pal.text_dim));
 }
 
-fn render_general(panel: &SettingsPanel, list: &mut DisplayList, x: f32, y: f32) {
-    push_section_header(list, x, y, "ОБЩИЕ");
+fn render_general(panel: &SettingsPanel, list: &mut DisplayList, x: f32, y: f32, pal: &Palette) {
+    push_section_header(list, x, y, "ОБЩИЕ", pal);
     let by = y + 26.0;
 
     // Row 0: homepage label.
-    push_row(list, x, by, 0);
-    push_label(list, x, by, "Домашняя страница");
+    push_row(list, x, by, 0, pal);
+    push_label(list, x, by, "Домашняя страница", pal);
 
     // Row 1: homepage text input.
-    push_row(list, x, by + ROW_H, 1);
+    push_row(list, x, by + ROW_H, 1, pal);
     push_input(
         list, x, by + ROW_H, &panel.draft.homepage,
         panel.focused_input == Some(SettingInput::Homepage),
+        pal,
     );
 
     // Row 2: search engine.
-    push_row(list, x, by + ROW_H * 2.0, 2);
-    push_label(list, x, by + ROW_H * 2.0, "Поисковик по умолчанию");
+    push_row(list, x, by + ROW_H * 2.0, 2, pal);
+    push_label(list, x, by + ROW_H * 2.0, "Поисковик по умолчанию", pal);
     list.push(txt(
         format!("ID: {}", panel.draft.search_engine_id),
         x + PANEL_W / 2.0, by + ROW_H * 2.0 + PAD_V,
-        PANEL_W / 2.0 - PAD_H, 12.0, FontWeight::NORMAL, VALUE_COL,
+        PANEL_W / 2.0 - PAD_H, 12.0, FontWeight::NORMAL, pal.text_dim,
     ));
 }
 
-fn render_privacy(panel: &SettingsPanel, list: &mut DisplayList, x: f32, y: f32) {
-    push_section_header(list, x, y, "КОНФИДЕНЦИАЛЬНОСТЬ");
+fn render_privacy(panel: &SettingsPanel, list: &mut DisplayList, x: f32, y: f32, pal: &Palette) {
+    push_section_header(list, x, y, "КОНФИДЕНЦИАЛЬНОСТЬ", pal);
     let by = y + 26.0;
 
     // Row 0: shields toggle.
-    push_row(list, x, by, 0);
-    push_label(list, x, by, "Блокировка трекеров");
-    push_toggle(list, x, by, panel.draft.shields_enabled);
+    push_row(list, x, by, 0, pal);
+    push_label(list, x, by, "Блокировка трекеров", pal);
+    push_toggle(list, x, by, panel.draft.shields_enabled, pal);
 
     // Row 1: fingerprint mode options.
-    push_row(list, x, by + ROW_H, 1);
-    push_label(list, x, by + ROW_H, "Защита отпечатка");
+    push_row(list, x, by + ROW_H, 1, pal);
+    push_label(list, x, by + ROW_H, "Защита отпечатка", pal);
     push_options(
         list, x, by + ROW_H,
         &[("standard", "Стандарт"), ("strict", "Строгий"), ("off", "Откл")],
         &panel.draft.fingerprint_mode,
+        pal,
     );
 
     // Row 2: DoH toggle.
-    push_row(list, x, by + ROW_H * 2.0, 2);
-    push_label(list, x, by + ROW_H * 2.0, "DNS-over-HTTPS");
-    push_toggle(list, x, by + ROW_H * 2.0, panel.draft.doh_enabled);
+    push_row(list, x, by + ROW_H * 2.0, 2, pal);
+    push_label(list, x, by + ROW_H * 2.0, "DNS-over-HTTPS", pal);
+    push_toggle(list, x, by + ROW_H * 2.0, panel.draft.doh_enabled, pal);
 }
 
-fn render_appearance(panel: &SettingsPanel, list: &mut DisplayList, x: f32, y: f32) {
-    push_section_header(list, x, y, "ВИД");
+fn render_appearance(panel: &SettingsPanel, list: &mut DisplayList, x: f32, y: f32, pal: &Palette) {
+    push_section_header(list, x, y, "ВИД", pal);
     let by = y + 26.0;
 
     // Row 0: font size with − / value / + buttons.
-    push_row(list, x, by, 0);
-    push_label(list, x, by, "Размер шрифта");
+    push_row(list, x, by, 0, pal);
+    push_label(list, x, by, "Размер шрифта", pal);
     {
         let btn_w = 30.0;
         let val_w = 44.0;
@@ -598,37 +588,38 @@ fn render_appearance(panel: &SettingsPanel, list: &mut DisplayList, x: f32, y: f
         // + button.
         list.push(DisplayCommand::FillRoundedRect {
             rect: Rect::new(right - btn_w, by2, btn_w, bh),
-            radii: radii(3.0), color: OPTION_BG,
+            radii: radii(3.0), color: pal.item_bg,
         });
         list.push(txt("+".to_owned(), right - btn_w + 8.0, by2 + 3.0, btn_w - 8.0, 13.0,
-            FontWeight::BOLD, TOGGLE_TEXT));
+            FontWeight::BOLD, pal.text));
         // Value.
         list.push(txt(format!("{:.0}px", panel.draft.font_size),
             right - btn_w - val_w, by2 + 3.0, val_w, 12.0,
-            FontWeight::NORMAL, VALUE_COL));
+            FontWeight::NORMAL, pal.text_dim));
         // − button.
         list.push(DisplayCommand::FillRoundedRect {
             rect: Rect::new(right - btn_w - val_w - btn_w, by2, btn_w, bh),
-            radii: radii(3.0), color: OPTION_BG,
+            radii: radii(3.0), color: pal.item_bg,
         });
         list.push(txt("−".to_owned(), right - btn_w - val_w - btn_w + 8.0, by2 + 3.0,
-            btn_w - 8.0, 13.0, FontWeight::BOLD, TOGGLE_TEXT));
+            btn_w - 8.0, 13.0, FontWeight::BOLD, pal.text));
     }
 
     // Row 1: base theme options.
-    push_row(list, x, by + ROW_H, 1);
-    push_label(list, x, by + ROW_H, "Тема");
+    push_row(list, x, by + ROW_H, 1, pal);
+    push_label(list, x, by + ROW_H, "Тема", pal);
     // Parse current base from draft.theme (before the '+' if present).
     let current_base = panel.draft.theme.split('+').next().unwrap_or("system");
     push_options(
         list, x, by + ROW_H,
         &[("dark", "Тёмная"), ("light", "Светлая"), ("system", "Система")],
         current_base,
+        pal,
     );
 
     // Row 2: accent colour swatches.
-    push_row(list, x, by + ROW_H * 2.0, 2);
-    push_label(list, x, by + ROW_H * 2.0, "Акцент");
+    push_row(list, x, by + ROW_H * 2.0, 2, pal);
+    push_label(list, x, by + ROW_H * 2.0, "Акцент", pal);
     {
         use crate::panels::themes::AccentPreset;
         let current_accent = panel.draft.theme.split('+').nth(1).unwrap_or("blue");
@@ -656,26 +647,27 @@ fn render_appearance(panel: &SettingsPanel, list: &mut DisplayList, x: f32, y: f
     }
 }
 
-fn render_downloads(panel: &SettingsPanel, list: &mut DisplayList, x: f32, y: f32) {
-    push_section_header(list, x, y, "ЗАГРУЗКИ");
+fn render_downloads(panel: &SettingsPanel, list: &mut DisplayList, x: f32, y: f32, pal: &Palette) {
+    push_section_header(list, x, y, "ЗАГРУЗКИ", pal);
     let by = y + 26.0;
 
     // Row 0: label.
-    push_row(list, x, by, 0);
-    push_label(list, x, by, "Папка загрузок");
+    push_row(list, x, by, 0, pal);
+    push_label(list, x, by, "Папка загрузок", pal);
 
     // Row 1: path input.
-    push_row(list, x, by + ROW_H, 1);
+    push_row(list, x, by + ROW_H, 1, pal);
     push_input(
         list, x, by + ROW_H, &panel.draft.download_path,
         panel.focused_input == Some(SettingInput::DownloadPath),
+        pal,
     );
 
     // Hint below the input.
     list.push(txt(
         "Оставьте пустым — браузер использует стандартную папку ОС.".to_owned(),
         x + PAD_H, by + ROW_H * 2.0 + 8.0, PANEL_W - PAD_H * 2.0, 10.0,
-        FontWeight::NORMAL, SECTION_HDR,
+        FontWeight::NORMAL, pal.text_dim,
     ));
 }
 
@@ -787,7 +779,7 @@ mod tests {
     fn build_panel_produces_commands() {
         let p = panel_at_origin();
         let mut dl: DisplayList = Vec::new();
-        build_panel(&p, &mut dl, 10.0, 10.0);
+        build_panel(&p, &mut dl, 10.0, 10.0, &Palette::DARK);
         assert!(!dl.is_empty());
     }
 

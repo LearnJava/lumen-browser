@@ -19,6 +19,8 @@ use lumen_layout::{BorderStyle, Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 use lumen_storage::{A11yPrefsSnapshot, CursorSize};
 
+use crate::panels::themes::Palette;
+
 // ── Geometry ─────────────────────────────────────────────────────────────────
 
 /// Panel width in CSS px (exported for hit-test callers in main.rs).
@@ -42,23 +44,17 @@ const FONT_SIZE: f32 = 12.0;
 /// Font size for the header title.
 const HEADER_FONT: f32 = 13.0;
 
-// ── Colours ───────────────────────────────────────────────────────────────��──
+// ── Colours ───────────────────────────────────────────────────────────────────
+//
+// Surface colours are supplied via `Palette` tokens; only semantic indicator
+// colours that carry meaning independent of the theme are kept as constants.
 
-const PANEL_BG: Color = Color { r: 18, g: 18, b: 26, a: 254 };
-const PANEL_BORDER: Color = Color { r: 52, g: 52, b: 66, a: 255 };
-const HEADER_BG: Color = Color { r: 26, g: 26, b: 36, a: 255 };
-const HEADER_TEXT: Color = Color { r: 210, g: 210, b: 225, a: 255 };
-const CLOSE_COL: Color = Color { r: 180, g: 80, b: 80, a: 255 };
-const LABEL_COL: Color = Color { r: 190, g: 190, b: 210, a: 255 };
-const PILL_BG: Color = Color { r: 36, g: 36, b: 52, a: 230 };
-const PILL_ACTIVE: Color = Color { r: 58, g: 90, b: 160, a: 230 };
-const PILL_TEXT: Color = Color { r: 190, g: 190, b: 210, a: 255 };
+/// Semantic: toggle switch background when the option is **enabled**.
 const TOGGLE_ON: Color = Color { r: 60, g: 140, b: 80, a: 230 };
+/// Semantic: toggle switch background when the option is **disabled**.
 const TOGGLE_OFF: Color = Color { r: 70, g: 70, b: 90, a: 230 };
+/// Semantic: toggle thumb/knob colour (always white).
 const TOGGLE_TEXT: Color = Color { r: 240, g: 240, b: 248, a: 255 };
-const ROW_EVEN: Color = Color { r: 22, g: 22, b: 32, a: 255 };
-const ROW_ODD: Color = Color { r: 26, g: 26, b: 36, a: 255 };
-const SEPARATOR: Color = Color { r: 36, g: 36, b: 50, a: 255 };
 
 // ── Panel state ───────────────────────────────────────────────────────────────
 
@@ -223,7 +219,8 @@ const FONT_MULTIPLIERS: [f32; 5] = [0.8, 1.0, 1.25, 1.5, 2.0];
 ///
 /// Returns an empty `DisplayList` when `panel.visible` is `false`.
 /// `(win_w, win_h)` are the window dimensions in CSS px.
-pub fn build_a11y_panel(panel: &A11yPanel, (win_w, win_h): (u32, u32)) -> DisplayList {
+/// `pal` supplies all surface colour tokens so the panel follows the active theme.
+pub fn build_a11y_panel(panel: &A11yPanel, (win_w, win_h): (u32, u32), pal: &Palette) -> DisplayList {
     if !panel.visible {
         return Vec::new();
     }
@@ -240,13 +237,13 @@ pub fn build_a11y_panel(panel: &A11yPanel, (win_w, win_h): (u32, u32)) -> Displa
     // Panel background + border.
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px, py, PANEL_W, PANEL_H),
-        color: PANEL_BG,
+        color: pal.overlay_bg,
         radii: uniform_radii(6.0),
     });
     out.push(DisplayCommand::DrawBorder {
         rect: Rect::new(px, py, PANEL_W, PANEL_H),
         widths: [1.0; 4],
-        colors: [PANEL_BORDER; 4],
+        colors: [pal.overlay_border; 4],
         styles: [BorderStyle::Solid; 4],
         radii: uniform_radii(6.0),
     });
@@ -254,7 +251,7 @@ pub fn build_a11y_panel(panel: &A11yPanel, (win_w, win_h): (u32, u32)) -> Displa
     // Header.
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px, py, PANEL_W, HEADER_H),
-        color: HEADER_BG,
+        color: pal.header_bg,
         radii: CornerRadii { tl: 6.0, tl_y: 6.0, tr: 6.0, tr_y: 6.0, br: 0.0, br_y: 0.0, bl: 0.0, bl_y: 0.0 },
     });
     out.push(make_text(
@@ -264,7 +261,7 @@ pub fn build_a11y_panel(panel: &A11yPanel, (win_w, win_h): (u32, u32)) -> Displa
         PANEL_W - PAD_H * 2.0,
         HEADER_FONT,
         FontWeight::BOLD,
-        HEADER_TEXT,
+        pal.text,
     ));
     // Close button.
     out.push(make_text(
@@ -274,7 +271,7 @@ pub fn build_a11y_panel(panel: &A11yPanel, (win_w, win_h): (u32, u32)) -> Displa
         CLOSE_W,
         HEADER_FONT + 3.0,
         FontWeight::NORMAL,
-        CLOSE_COL,
+        pal.text_dim,
     ));
 
     // Content rows.
@@ -282,7 +279,7 @@ pub fn build_a11y_panel(panel: &A11yPanel, (win_w, win_h): (u32, u32)) -> Displa
 
     // Row 0: Font size multiplier.
     let row0_y = content_y + PAD_V;
-    emit_row_bg(&mut out, px, row0_y, 0);
+    emit_row_bg(&mut out, px, row0_y, 0, pal);
     out.push(make_text(
         "Font size".to_string(),
         px + PAD_H,
@@ -290,18 +287,19 @@ pub fn build_a11y_panel(panel: &A11yPanel, (win_w, win_h): (u32, u32)) -> Displa
         68.0,
         FONT_SIZE,
         FontWeight::NORMAL,
-        LABEL_COL,
+        pal.text_dim,
     ));
     emit_font_multiplier_pills(
         &mut out,
         px,
         row0_y,
         panel.draft.font_size_multiplier as f32,
+        pal,
     );
 
     // Row 1: Reduced motion.
     let row1_y = row0_y + ROW_H;
-    emit_row_bg(&mut out, px, row1_y, 1);
+    emit_row_bg(&mut out, px, row1_y, 1, pal);
     out.push(make_text(
         "Reduced motion".to_string(),
         px + PAD_H,
@@ -309,13 +307,13 @@ pub fn build_a11y_panel(panel: &A11yPanel, (win_w, win_h): (u32, u32)) -> Displa
         160.0,
         FONT_SIZE,
         FontWeight::NORMAL,
-        LABEL_COL,
+        pal.text_dim,
     ));
     emit_toggle(&mut out, px + PANEL_W - PAD_H - 52.0, row1_y + (ROW_H - 20.0) / 2.0, panel.draft.reduced_motion);
 
     // Row 2: Forced colors.
     let row2_y = row1_y + ROW_H;
-    emit_row_bg(&mut out, px, row2_y, 0);
+    emit_row_bg(&mut out, px, row2_y, 0, pal);
     out.push(make_text(
         "Forced colors".to_string(),
         px + PAD_H,
@@ -323,13 +321,13 @@ pub fn build_a11y_panel(panel: &A11yPanel, (win_w, win_h): (u32, u32)) -> Displa
         160.0,
         FONT_SIZE,
         FontWeight::NORMAL,
-        LABEL_COL,
+        pal.text_dim,
     ));
     emit_toggle(&mut out, px + PANEL_W - PAD_H - 52.0, row2_y + (ROW_H - 20.0) / 2.0, panel.draft.forced_colors);
 
     // Row 3: Cursor size.
     let row3_y = row2_y + ROW_H;
-    emit_row_bg(&mut out, px, row3_y, 1);
+    emit_row_bg(&mut out, px, row3_y, 1, pal);
     out.push(make_text(
         "Cursor".to_string(),
         px + PAD_H,
@@ -337,15 +335,15 @@ pub fn build_a11y_panel(panel: &A11yPanel, (win_w, win_h): (u32, u32)) -> Displa
         68.0,
         FONT_SIZE,
         FontWeight::NORMAL,
-        LABEL_COL,
+        pal.text_dim,
     ));
-    emit_cursor_size_pills(&mut out, px, row3_y, panel.draft.cursor_size);
+    emit_cursor_size_pills(&mut out, px, row3_y, panel.draft.cursor_size, pal);
 
     // Bottom separator.
     let sep_y = row3_y + ROW_H;
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(px + PAD_H, sep_y + 4.0, PANEL_W - PAD_H * 2.0, 1.0),
-        color: SEPARATOR,
+        color: pal.divider,
     });
 
     out
@@ -353,15 +351,16 @@ pub fn build_a11y_panel(panel: &A11yPanel, (win_w, win_h): (u32, u32)) -> Displa
 
 // ── Row helpers ───────────────────────────────────────────────────────────────
 
-fn emit_row_bg(out: &mut DisplayList, px: f32, row_y: f32, parity: u8) {
-    let color = if parity == 0 { ROW_EVEN } else { ROW_ODD };
+fn emit_row_bg(out: &mut DisplayList, px: f32, row_y: f32, parity: u8, pal: &Palette) {
+    // parity == 0: base panel surface; parity == 1: alternate (zebra) row.
+    let color = if parity == 0 { pal.overlay_bg } else { pal.row_alt_bg };
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(px, row_y, PANEL_W, ROW_H),
         color,
     });
 }
 
-fn emit_font_multiplier_pills(out: &mut DisplayList, px: f32, row_y: f32, current: f32) {
+fn emit_font_multiplier_pills(out: &mut DisplayList, px: f32, row_y: f32, current: f32, pal: &Palette) {
     let pills_x = px + PAD_H + 70.0;
     let available = PANEL_W - PAD_H * 2.0 - 70.0;
     let pill_w = available / 5.0;
@@ -370,7 +369,7 @@ fn emit_font_multiplier_pills(out: &mut DisplayList, px: f32, row_y: f32, curren
     for (i, &val) in FONT_MULTIPLIERS.iter().enumerate() {
         let bx = pills_x + i as f32 * pill_w;
         let active = (current - val).abs() < 0.01;
-        let bg = if active { PILL_ACTIVE } else { PILL_BG };
+        let bg = if active { pal.item_selected_bg } else { pal.item_bg };
         out.push(DisplayCommand::FillRoundedRect {
             rect: Rect::new(bx, pill_y, pill_w - 3.0, PILL_H),
             color: bg,
@@ -384,12 +383,12 @@ fn emit_font_multiplier_pills(out: &mut DisplayList, px: f32, row_y: f32, curren
             pill_w - 4.0,
             FONT_SIZE - 1.0,
             if active { FontWeight::BOLD } else { FontWeight::NORMAL },
-            PILL_TEXT,
+            pal.text_dim,
         ));
     }
 }
 
-fn emit_cursor_size_pills(out: &mut DisplayList, px: f32, row_y: f32, current: CursorSize) {
+fn emit_cursor_size_pills(out: &mut DisplayList, px: f32, row_y: f32, current: CursorSize, pal: &Palette) {
     let pills_x = px + PAD_H + 70.0;
     let available = PANEL_W - PAD_H * 2.0 - 70.0;
     let pill_w = available / 3.0;
@@ -403,7 +402,7 @@ fn emit_cursor_size_pills(out: &mut DisplayList, px: f32, row_y: f32, current: C
     for (i, (size, label)) in SIZES.iter().enumerate() {
         let bx = pills_x + i as f32 * pill_w;
         let active = current == *size;
-        let bg = if active { PILL_ACTIVE } else { PILL_BG };
+        let bg = if active { pal.item_selected_bg } else { pal.item_bg };
         out.push(DisplayCommand::FillRoundedRect {
             rect: Rect::new(bx, pill_y, pill_w - 3.0, PILL_H),
             color: bg,
@@ -416,7 +415,7 @@ fn emit_cursor_size_pills(out: &mut DisplayList, px: f32, row_y: f32, current: C
             pill_w - 4.0,
             FONT_SIZE - 1.0,
             if active { FontWeight::BOLD } else { FontWeight::NORMAL },
-            PILL_TEXT,
+            pal.text_dim,
         ));
     }
 }
@@ -608,14 +607,14 @@ mod tests {
     #[test]
     fn build_hidden_returns_empty() {
         let p = make_panel();
-        assert!(build_a11y_panel(&p, (800, 600)).is_empty());
+        assert!(build_a11y_panel(&p, (800, 600), &Palette::DARK).is_empty());
     }
 
     #[test]
     fn build_visible_has_header_text() {
         let mut p = make_panel();
         p.visible = true;
-        let dl = build_a11y_panel(&p, (800, 600));
+        let dl = build_a11y_panel(&p, (800, 600), &Palette::DARK);
         let has_title = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "Accessibility")
         });
@@ -626,7 +625,7 @@ mod tests {
     fn build_visible_has_label_texts() {
         let mut p = make_panel();
         p.visible = true;
-        let dl = build_a11y_panel(&p, (800, 600));
+        let dl = build_a11y_panel(&p, (800, 600), &Palette::DARK);
         let labels: Vec<&str> = dl.iter().filter_map(|c| {
             if let DisplayCommand::DrawText { text, .. } = c { Some(text.as_str()) } else { None }
         }).collect();

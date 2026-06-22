@@ -19,6 +19,8 @@ use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
+use crate::panels::themes::Palette;
+
 // ── Visual constants ─────────────────────────────────────────────────────────
 
 /// Height of the workspace switcher bar in CSS px.
@@ -48,13 +50,9 @@ const ADD_BTN_W: f32 = 30.0;
 /// Right margin from panel edge to the "+" button.
 const ADD_BTN_RIGHT: f32 = 8.0;
 
-const BAR_BG: Color = Color { r: 14, g: 14, b: 18, a: 255 };
-const BAR_TOP_BORDER: Color = Color { r: 38, g: 38, b: 46, a: 255 };
-const CHIP_INACTIVE_BG: Color = Color { r: 28, g: 28, b: 34, a: 255 };
-const CHIP_ACTIVE_BG: Color = Color { r: 44, g: 44, b: 56, a: 255 };
-const TEXT_ACTIVE: Color = Color { r: 218, g: 218, b: 228, a: 255 };
-const TEXT_DIM: Color = Color { r: 140, g: 140, b: 148, a: 255 };
+/// Semantic: delete/close action indicator — red, carries destructive-action meaning.
 const DELETE_FG: Color = Color { r: 180, g: 80, b: 80, a: 255 };
+/// Semantic: create/add action indicator — green, carries constructive-action meaning.
 const ADD_FG: Color = Color { r: 120, g: 180, b: 120, a: 255 };
 const CHIP_RADIUS: f32 = 5.0;
 const FONT_SZ: f32 = 11.0;
@@ -195,20 +193,23 @@ pub fn hit_test(
 ///
 /// The bar occupies `y = window_h - SWITCHER_HEIGHT .. window_h`, full window
 /// width.  It is rendered as an overlay on top of the page content.
-pub fn build_panel(panel: &WorkspacePanel, window_w: f32, window_h: f32) -> DisplayList {
+///
+/// `pal` provides the active chrome colour palette so the bar follows the
+/// current light/dark theme.
+pub fn build_panel(panel: &WorkspacePanel, window_w: f32, window_h: f32, pal: &Palette) -> DisplayList {
     let bar_top = window_h - SWITCHER_HEIGHT;
     let mut out = DisplayList::with_capacity(8 + panel.workspaces.len() * 6);
 
     // Bar background.
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(0.0, bar_top, window_w, SWITCHER_HEIGHT),
-        color: BAR_BG,
+        color: pal.overlay_bg,
     });
 
-    // 1px top border.
+    // 1px top border/divider.
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(0.0, bar_top, window_w, 1.0),
-        color: BAR_TOP_BORDER,
+        color: pal.divider,
     });
 
     let chip_top = bar_top + (SWITCHER_HEIGHT - CHIP_H) * 0.5;
@@ -232,7 +233,7 @@ pub fn build_panel(panel: &WorkspacePanel, window_w: f32, window_h: f32) -> Disp
         }
 
         let is_active = panel.active_id == Some(entry.id);
-        let bg = if is_active { CHIP_ACTIVE_BG } else { CHIP_INACTIVE_BG };
+        let bg = if is_active { pal.item_selected_bg } else { pal.item_bg };
 
         // Chip background.
         out.push(DisplayCommand::FillRoundedRect {
@@ -241,7 +242,8 @@ pub fn build_panel(panel: &WorkspacePanel, window_w: f32, window_h: f32) -> Disp
             color: bg,
         });
 
-        // Active accent: 2px bottom bar with workspace colour.
+        // Active accent: 2px bottom bar with workspace colour (semantic — uses
+        // the per-workspace identity colour, not a palette token).
         if is_active {
             let accent = entry.accent;
             out.push(DisplayCommand::FillRoundedRect {
@@ -256,7 +258,7 @@ pub fn build_panel(panel: &WorkspacePanel, window_w: f32, window_h: f32) -> Disp
             });
         }
 
-        // Delete "×" label (right side).
+        // Delete "×" label (right side).  DELETE_FG is a semantic red — kept.
         let del_left = chip_right - DELETE_W;
         let del_text_top = chip_top + (CHIP_H - FONT_SZ * 1.2) * 0.5;
         out.push(DisplayCommand::DrawText {
@@ -275,7 +277,7 @@ pub fn build_panel(panel: &WorkspacePanel, window_w: f32, window_h: f32) -> Disp
         // Workspace name (truncated to leave room for "×").
         let name_w = (del_left - cursor_x - CHIP_TEXT_PAD - 2.0).max(0.0);
         let name_top = chip_top + (CHIP_H - FONT_SZ * 1.3) * 0.5;
-        let text_color = if is_active { TEXT_ACTIVE } else { TEXT_DIM };
+        let text_color = if is_active { pal.text } else { pal.text_dim };
         out.push(DisplayCommand::DrawText {
             rect: Rect::new(cursor_x + CHIP_TEXT_PAD, name_top, name_w, FONT_SZ * 1.3),
             text: entry.name.clone(),
@@ -292,11 +294,11 @@ pub fn build_panel(panel: &WorkspacePanel, window_w: f32, window_h: f32) -> Disp
         cursor_x = chip_right + CHIP_GAP;
     }
 
-    // "+" add button (right-aligned).
+    // "+" add button (right-aligned).  ADD_FG is a semantic green — kept.
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(add_left, chip_top, ADD_BTN_W, CHIP_H),
         radii,
-        color: CHIP_INACTIVE_BG,
+        color: pal.item_bg,
     });
     let add_text_top = chip_top + (CHIP_H - FONT_SZ * 1.2) * 0.5;
     let add_text_x = add_left + (ADD_BTN_W - FONT_SZ) * 0.5;
@@ -471,14 +473,14 @@ mod tests {
     #[test]
     fn build_panel_emits_commands() {
         let p = make_panel(&["Work"], Some(1));
-        let dl = build_panel(&p, WIN_W, WIN_H);
+        let dl = build_panel(&p, WIN_W, WIN_H, &Palette::DARK);
         assert!(!dl.is_empty(), "panel must emit at least a background rect");
     }
 
     #[test]
     fn build_panel_draws_chip_names() {
         let p = make_panel(&["Alpha", "Beta"], Some(1));
-        let dl = build_panel(&p, WIN_W, WIN_H);
+        let dl = build_panel(&p, WIN_W, WIN_H, &Palette::DARK);
         let has_alpha = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "Alpha")
         });
@@ -491,7 +493,7 @@ mod tests {
     #[test]
     fn build_panel_draws_add_button() {
         let p = make_panel(&[], None);
-        let dl = build_panel(&p, WIN_W, WIN_H);
+        let dl = build_panel(&p, WIN_W, WIN_H, &Palette::DARK);
         let has_plus = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "+")
         });
@@ -501,7 +503,7 @@ mod tests {
     #[test]
     fn build_panel_no_chips_for_empty_list() {
         let p = make_panel(&[], None);
-        let dl = build_panel(&p, WIN_W, WIN_H);
+        let dl = build_panel(&p, WIN_W, WIN_H, &Palette::DARK);
         let name_texts: Vec<_> = dl
             .iter()
             .filter(|c| matches!(c, DisplayCommand::DrawText { text, .. } if text != "+" && text != "×"))

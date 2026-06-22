@@ -22,6 +22,7 @@
 //!
 //! Keyboard toggle: `Ctrl+Shift+A` → `KeyCommand::ToggleAiPanel`.
 
+use crate::panels::themes::Palette;
 use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
@@ -39,17 +40,9 @@ const CLOSE_SIZE: f32 = 18.0;
 /// Right margin for the close button.
 const CLOSE_RIGHT: f32 = 7.0;
 
-const BG: Color = Color { r: 20, g: 22, b: 30, a: 255 };
-const HEADER_BG: Color = Color { r: 30, g: 33, b: 44, a: 255 };
-const INPUT_BG: Color = Color { r: 28, g: 31, b: 41, a: 255 };
-const INPUT_BORDER: Color = Color { r: 70, g: 90, b: 130, a: 255 };
-const BORDER: Color = Color { r: 48, g: 52, b: 68, a: 255 };
-const TEXT_MAIN: Color = Color { r: 210, g: 212, b: 224, a: 255 };
-const TEXT_DIM: Color = Color { r: 110, g: 116, b: 136, a: 255 };
-const TEXT_RESPONSE: Color = Color { r: 190, g: 195, b: 210, a: 255 };
+/// Semi-transparent scrim behind the close button glyph.  Not theme-mapped
+/// because it is a translucent overlay, not a surface fill.
 const CLOSE_BG: Color = Color { r: 55, g: 58, b: 76, a: 200 };
-const CLOSE_FG: Color = Color { r: 150, g: 154, b: 168, a: 255 };
-const CURSOR_COLOR: Color = Color { r: 80, g: 140, b: 220, a: 255 };
 
 const FONT_SZ: f32 = 11.0;
 const INPUT_FONT_SZ: f32 = 11.5;
@@ -168,7 +161,15 @@ pub fn hit_test(
 ///
 /// Renders from `x = (window_w − PANEL_WIDTH)` to `x = window_w` and from
 /// `y = tab_bar_h` to `y = window_h`.
-pub fn build_panel(panel: &AiPanel, window_w: f32, tab_bar_h: f32, window_h: f32) -> DisplayList {
+///
+/// `pal` supplies the theme palette; pass `&Palette::DARK` or `&Palette::LIGHT`.
+pub fn build_panel(
+    panel: &AiPanel,
+    window_w: f32,
+    tab_bar_h: f32,
+    window_h: f32,
+    pal: &Palette,
+) -> DisplayList {
     if !panel.visible {
         return DisplayList::new();
     }
@@ -184,28 +185,28 @@ pub fn build_panel(panel: &AiPanel, window_w: f32, tab_bar_h: f32, window_h: f32
     // Panel background.
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(px, tab_bar_h, PANEL_WIDTH, panel_h),
-        color: BG,
+        color: pal.overlay_bg,
     });
     // Left border divider.
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(px, tab_bar_h, 1.0, panel_h),
-        color: BORDER,
+        color: pal.overlay_border,
     });
 
     // ── Header ────────────────────────────────────────────────────────────────
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(px + 1.0, tab_bar_h, PANEL_WIDTH - 1.0, HEADER_H),
-        color: HEADER_BG,
+        color: pal.header_bg,
     });
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(px + 1.0, tab_bar_h + HEADER_H - 1.0, PANEL_WIDTH - 1.0, 1.0),
-        color: BORDER,
+        color: pal.divider,
     });
     out.push(DisplayCommand::DrawText {
         rect: Rect::new(px + 10.0, tab_bar_h + 9.0, PANEL_WIDTH - CLOSE_SIZE - CLOSE_RIGHT * 2.0 - 14.0, FONT_SZ * 1.4),
         text: "AI Assistant".to_owned(),
         font_size: FONT_SZ,
-        color: TEXT_MAIN,
+        color: pal.text,
         font_family: Vec::new(),
         font_weight: FontWeight::BOLD,
         font_style: FontStyle::Normal,
@@ -224,7 +225,7 @@ pub fn build_panel(panel: &AiPanel, window_w: f32, tab_bar_h: f32, window_h: f32
         rect: Rect::new(close_x + 3.0, close_y + 1.0, CLOSE_SIZE - 6.0, CLOSE_SIZE - 2.0),
         text: "×".to_owned(),
         font_size: 13.0,
-        color: CLOSE_FG,
+        color: pal.text_dim,
         font_family: Vec::new(),
         font_weight: FontWeight::NORMAL,
         font_style: FontStyle::Normal,
@@ -242,7 +243,7 @@ pub fn build_panel(panel: &AiPanel, window_w: f32, tab_bar_h: f32, window_h: f32
             rect: Rect::new(px + 10.0, response_y + 16.0, PANEL_WIDTH - 20.0, FONT_SZ * 1.4),
             text: "Ask anything…".to_owned(),
             font_size: FONT_SZ,
-            color: TEXT_DIM,
+            color: pal.text_dim,
             font_family: Vec::new(),
             font_weight: FontWeight::NORMAL,
             font_style: FontStyle::Italic,
@@ -259,7 +260,7 @@ pub fn build_panel(panel: &AiPanel, window_w: f32, tab_bar_h: f32, window_h: f32
                     rect: Rect::new(px + 10.0, line_y, PANEL_WIDTH - 20.0, line_h),
                     text: line.to_owned(),
                     font_size: FONT_SZ,
-                    color: TEXT_RESPONSE,
+                    color: pal.text,
                     font_family: Vec::new(),
                     font_weight: FontWeight::NORMAL,
                     font_style: FontStyle::Normal,
@@ -276,25 +277,25 @@ pub fn build_panel(panel: &AiPanel, window_w: f32, tab_bar_h: f32, window_h: f32
     // Divider above input.
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(px + 1.0, input_y - 1.0, PANEL_WIDTH - 1.0, 1.0),
-        color: BORDER,
+        color: pal.divider,
     });
 
     // ── Input row ─────────────────────────────────────────────────────────────
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(px + 1.0, input_y, PANEL_WIDTH - 1.0, INPUT_H),
-        color: INPUT_BG,
+        color: pal.input_bg,
     });
     // Input border highlight (top edge).
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(px + 8.0, input_y + 6.0, PANEL_WIDTH - 16.0, 1.0),
-        color: INPUT_BORDER,
+        color: pal.overlay_border,
     });
     // Prompt caret prefix "›".
     out.push(DisplayCommand::DrawText {
         rect: Rect::new(px + 8.0, input_y + 10.0, 12.0, INPUT_FONT_SZ * 1.4),
         text: "›".to_owned(),
         font_size: INPUT_FONT_SZ,
-        color: CURSOR_COLOR,
+        color: pal.accent,
         font_family: Vec::new(),
         font_weight: FontWeight::BOLD,
         font_style: FontStyle::Normal,
@@ -307,7 +308,7 @@ pub fn build_panel(panel: &AiPanel, window_w: f32, tab_bar_h: f32, window_h: f32
     } else {
         truncate_label(&panel.input, 22)
     };
-    let input_color = if panel.input.is_empty() { TEXT_DIM } else { TEXT_MAIN };
+    let input_color = if panel.input.is_empty() { pal.text_dim } else { pal.text };
     out.push(DisplayCommand::DrawText {
         rect: Rect::new(px + 22.0, input_y + 10.0, PANEL_WIDTH - 30.0, INPUT_FONT_SZ * 1.4),
         text: input_display,
@@ -473,13 +474,13 @@ mod tests {
     #[test]
     fn build_panel_hidden_is_empty() {
         let p = hidden();
-        assert!(build_panel(&p, WIN_W, TAB_H, WIN_H).is_empty());
+        assert!(build_panel(&p, WIN_W, TAB_H, WIN_H, &Palette::DARK).is_empty());
     }
 
     #[test]
     fn build_panel_visible_has_header_text() {
         let p = visible();
-        let dl = build_panel(&p, WIN_W, TAB_H, WIN_H);
+        let dl = build_panel(&p, WIN_W, TAB_H, WIN_H, &Palette::DARK);
         let has_title = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "AI Assistant")
         });

@@ -19,6 +19,8 @@ use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight, ImageRendering, ObjectFit, ObjectPosition};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
+use crate::panels::themes::Palette;
+
 // ── Visual constants ─────────────────────────────────────────────────────────
 
 /// Width of the PiP card in CSS px.
@@ -42,12 +44,15 @@ const PLAY_R: f32 = 24.0;
 /// Corner radius of the card in CSS px.
 const CARD_RADIUS: f32 = 10.0;
 
-const CARD_BORDER: Color = Color { r: 12, g: 12, b: 16, a: 255 };
+/// Dark background for the video frame / letterbox — stays dark in both themes.
 const VIDEO_BG: Color = Color { r: 24, g: 24, b: 30, a: 255 };
+/// Semi-transparent control-bar overlay over the video — stays dark in both themes.
 const HEADER_BG: Color = Color { r: 10, g: 10, b: 14, a: 180 };
-const TITLE_FG: Color = Color { r: 232, g: 232, b: 240, a: 255 };
+/// Muted-red close-button glyph — semantic colour, theme-invariant.
 const CLOSE_FG: Color = Color { r: 220, g: 150, b: 150, a: 255 };
+/// Semi-transparent black scrim behind the play/pause button over video.
 const BTN_BG: Color = Color { r: 0, g: 0, b: 0, a: 110 };
+/// Play/pause glyph colour — rendered over video, stays light in both themes.
 const BTN_FG: Color = Color { r: 240, g: 240, b: 244, a: 235 };
 
 // ── Panel state ───────────────────────────────────────────────────────────────
@@ -222,7 +227,12 @@ pub fn hit_test(pip: &PipWindow, x: f32, y: f32) -> Option<PipHit> {
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
 /// Build the display list for the PiP overlay.  Empty when inactive.
-pub fn build_panel(pip: &PipWindow) -> DisplayList {
+///
+/// `pal` provides chrome surface colours (border, title text) so the card
+/// respects the active light/dark theme.  Video-area colours (letterbox
+/// background, control-bar scrim, play/pause glyph) are theme-invariant and
+/// remain dark in all themes.
+pub fn build_panel(pip: &PipWindow, pal: &Palette) -> DisplayList {
     let mut out = DisplayList::with_capacity(10);
     if !pip.active {
         return out;
@@ -240,7 +250,7 @@ pub fn build_panel(pip: &PipWindow) -> DisplayList {
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(cx0 - 1.0, cy0 - 1.0, CARD_W + 2.0, CARD_H + 2.0),
         radii,
-        color: CARD_BORDER,
+        color: pal.overlay_border,
     });
 
     // Video frame background (grey placeholder).
@@ -278,7 +288,7 @@ pub fn build_panel(pip: &PipWindow) -> DisplayList {
         rect: Rect::new(cx0 + 10.0, cy0 + 6.0, CARD_W - CLOSE_W - 14.0, 16.0),
         text: title,
         font_size: 12.0,
-        color: TITLE_FG,
+        color: pal.text,
         font_family: Vec::new(),
         font_weight: FontWeight::NORMAL,
         font_style: FontStyle::Normal,
@@ -513,19 +523,19 @@ mod tests {
     #[test]
     fn build_inactive_is_empty() {
         let p = PipWindow::new();
-        assert!(build_panel(&p).is_empty());
+        assert!(build_panel(&p, &Palette::DARK).is_empty());
     }
 
     #[test]
     fn build_active_emits_commands() {
         let p = opened();
-        assert!(!build_panel(&p).is_empty());
+        assert!(!build_panel(&p, &Palette::DARK).is_empty());
     }
 
     #[test]
     fn build_draws_poster_image() {
         let p = opened();
-        let dl = build_panel(&p);
+        let dl = build_panel(&p, &Palette::DARK);
         let has_poster = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawImage { src, .. } if src == "poster.jpg")
         });
@@ -536,7 +546,7 @@ mod tests {
     fn build_without_poster_has_no_image() {
         let mut p = PipWindow::new();
         p.open("video.mp4", "", "Tab", WIN_W, WIN_H);
-        let dl = build_panel(&p);
+        let dl = build_panel(&p, &Palette::DARK);
         let has_image = dl
             .iter()
             .any(|c| matches!(c, DisplayCommand::DrawImage { .. }));
@@ -546,7 +556,7 @@ mod tests {
     #[test]
     fn build_playing_draws_pause_bars() {
         let p = opened(); // playing
-        let dl = build_panel(&p);
+        let dl = build_panel(&p, &Palette::DARK);
         // Two FillRect pause bars in addition to header bar = at least 3 FillRect.
         let fills = dl
             .iter()
@@ -559,7 +569,7 @@ mod tests {
     fn build_paused_draws_play_triangle() {
         let mut p = opened();
         p.toggle_play(); // now paused
-        let dl = build_panel(&p);
+        let dl = build_panel(&p, &Palette::DARK);
         let has_triangle = dl
             .iter()
             .any(|c| matches!(c, DisplayCommand::DrawSvgPath { .. }));
@@ -569,7 +579,7 @@ mod tests {
     #[test]
     fn build_draws_title() {
         let p = opened();
-        let dl = build_panel(&p);
+        let dl = build_panel(&p, &Palette::DARK);
         let has_title = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "My Tab")
         });
@@ -580,7 +590,7 @@ mod tests {
     fn build_empty_title_uses_fallback() {
         let mut p = PipWindow::new();
         p.open("v.mp4", "", "", WIN_W, WIN_H);
-        let dl = build_panel(&p);
+        let dl = build_panel(&p, &Palette::DARK);
         let has_fallback = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "Picture-in-Picture")
         });

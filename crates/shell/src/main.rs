@@ -10056,6 +10056,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // перед своими DrawText (когда find открыт). Прокручивается.
                 // Overlay-полоса: find-bar + scrollbar — viewport-locked.
                 // Без find — page = self.display_list, overlay = только scrollbar.
+                // Resolved chrome palette for the active theme — passed to every
+                // themed overlay panel so they follow the light/dark setting.
+                let pal = self.shell_theme.palette(self.dark_mode);
+
                 let (page_buf, mut overlay_buf): (Option<lumen_paint::DisplayList>, lumen_paint::DisplayList) =
                     if self.find.is_open() {
                         let win_size = self.window.as_ref().map_or((1024, 720), |w| {
@@ -10169,7 +10173,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let mut bar = address_bar::build_bar_overlay(
                         &self.address_bar,
                         address_bar::BarOverlay { window_size: win_size },
-                        &self.shell_theme.palette(self.dark_mode),
+                        &pal,
                     );
                     bar.append(&mut overlay_buf);
                     overlay_buf = bar;
@@ -10282,6 +10286,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         &self.privacy,
                         priv_win_size,
                         tabs::strip::TAB_BAR_HEIGHT,
+                        &pal,
                     );
                     overlay_buf.append(&mut priv_cmds);
                 }
@@ -10324,6 +10329,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         tabs::strip::TAB_BAR_HEIGHT,
                         win_h,
                         self.vertical_tabs.scroll_y,
+                        &pal,
                     );
                     overlay_buf.append(&mut vt_cmds);
                 }
@@ -10338,6 +10344,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         &self.tree_tabs,
                         tabs::strip::TAB_BAR_HEIGHT,
                         win_h,
+                        &pal,
                     );
                     overlay_buf.append(&mut tt_cmds);
                 }
@@ -10352,6 +10359,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         &self.shields,
                         win_w,
                         tab_h,
+                        &pal,
                     );
                     overlay_buf.append(&mut sh_cmds);
                 }
@@ -10362,6 +10370,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let mut perm_cmds = panels::permission_panel::build_panel(
                         &self.permission,
                         tab_h,
+                        &pal,
                     );
                     overlay_buf.append(&mut perm_cmds);
                 }
@@ -10372,7 +10381,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         let s = w.inner_size();
                         (s.width, s.height)
                     });
-                    let mut nv_cmds = panels::note_viewer::build_note_viewer(&self.note_viewer, win_size);
+                    let mut nv_cmds = panels::note_viewer::build_note_viewer(&self.note_viewer, win_size, &pal);
                     overlay_buf.append(&mut nv_cmds);
                 }
 
@@ -10386,6 +10395,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         win_w,
                         tab_h,
                         win_h,
+                        &pal,
                     );
                     overlay_buf.append(&mut ai_cmds);
                 }
@@ -10400,6 +10410,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         win_w,
                         tab_h,
                         win_h,
+                        &pal,
                     );
                     overlay_buf.append(&mut sb_cmds);
                 }
@@ -10416,6 +10427,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         &self.workspace_panel,
                         win_w,
                         win_h,
+                        &pal,
                     );
                     overlay_buf.append(&mut ws_cmds);
                 }
@@ -10426,7 +10438,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 if self.bookmark_panel.visible {
                     let (ax, ay) = self.bookmark_anchor();
                     let mut bm_cmds =
-                        panels::bookmark_panel::build_panel(&self.bookmark_panel, ax, ay);
+                        panels::bookmark_panel::build_panel(&self.bookmark_panel, ax, ay, &pal);
                     overlay_buf.append(&mut bm_cmds);
                 }
 
@@ -10436,7 +10448,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let win_h = self.viewport_height_css();
                     let win_size = (win_w as u32, win_h as u32);
                     let mut a11y_cmds =
-                        panels::a11y_panel::build_a11y_panel(&self.a11y_panel, win_size);
+                        panels::a11y_panel::build_a11y_panel(&self.a11y_panel, win_size, &pal);
                     overlay_buf.append(&mut a11y_cmds);
                 }
 
@@ -10452,7 +10464,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         color: lumen_layout::Color { r: 0, g: 0, b: 0, a: 110 },
                     });
                     let mut pp_cmds =
-                        panels::print_panel::build_panel(&self.print_panel, pp_x, pp_y);
+                        panels::print_panel::build_panel(&self.print_panel, pp_x, pp_y, &pal);
                     overlay_buf.append(&mut pp_cmds);
                 }
 
@@ -10462,7 +10474,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let win_h = self.viewport_height_css();
                     let sp_x = (win_w - panels::settings_panel::PANEL_W) * 0.5;
                     let sp_y = (win_h - panels::settings_panel::PANEL_H) * 0.5;
-                    panels::settings_panel::build_panel(&self.settings_panel, &mut overlay_buf, sp_x, sp_y);
+                    panels::settings_panel::build_panel(&self.settings_panel, &mut overlay_buf, sp_x, sp_y, &pal);
                 }
 
                 // Keyboard shortcuts panel (§D-4): centred floating overlay.
@@ -10471,7 +10483,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let win_h = self.viewport_height_css();
                     let kp_x = (win_w - panels::shortcuts_panel::PANEL_W) * 0.5;
                     let kp_y = (win_h - panels::shortcuts_panel::PANEL_H) * 0.5;
-                    self.shortcuts_panel.build_panel(&mut overlay_buf, kp_x, kp_y);
+                    self.shortcuts_panel.build_panel(&mut overlay_buf, kp_x, kp_y, &pal);
                 }
 
                 // Certificate viewer panel (§D-1): centred floating overlay.
@@ -10480,7 +10492,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let win_h = self.viewport_height_css();
                     let cp_x = (win_w - panels::cert_panel::PANEL_W) * 0.5;
                     let cp_y = (win_h - panels::cert_panel::PANEL_H) * 0.5;
-                    panels::cert_panel::build_panel(&self.cert_panel, &mut overlay_buf, cp_x, cp_y);
+                    panels::cert_panel::build_panel(&self.cert_panel, &mut overlay_buf, cp_x, cp_y, &pal);
                 }
 
                 // History panel (task D-5): centred floating overlay.
@@ -10488,7 +10500,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let win_w = self.viewport_width_css();
                     let tab_h = tabs::strip::TAB_BAR_HEIGHT;
                     let mut hist_cmds =
-                        panels::history_panel::build_panel(&self.history_panel, win_w, tab_h);
+                        panels::history_panel::build_panel(&self.history_panel, win_w, tab_h, &pal);
                     overlay_buf.append(&mut hist_cmds);
                 }
 
@@ -10500,6 +10512,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         &self.read_later_panel,
                         win_w,
                         tab_h,
+                        &pal,
                     );
                     overlay_buf.append(&mut rl_cmds);
                 }
@@ -10518,7 +10531,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let mut tab_cmds = tabs::strip::build_tab_bar(
                         &self.tab_strip,
                         tab_area_w,
-                        &self.shell_theme.palette(self.dark_mode),
+                        &pal,
                         self.tab_drag.as_ref(),
                     );
                     overlay_buf.append(&mut tab_cmds);
@@ -10582,6 +10595,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         &self.command_palette,
                         win_w,
                         win_h,
+                        &pal,
                     );
                     overlay_buf.append(&mut cp_cmds);
                 }
@@ -10592,14 +10606,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 if self.focus.active {
                     let win_w = self.viewport_width_css();
                     let mut focus_cmds =
-                        panels::focus_panel::build_panel(&self.focus, win_w);
+                        panels::focus_panel::build_panel(&self.focus, win_w, &pal);
                     overlay_buf.append(&mut focus_cmds);
                 }
 
                 // Picture-in-picture window (task #21) — drawn last so it floats
                 // above all other chrome.
                 if self.pip.active {
-                    let mut pip_cmds = panels::pip_window::build_panel(&self.pip);
+                    let mut pip_cmds = panels::pip_window::build_panel(&self.pip, &pal);
                     overlay_buf.append(&mut pip_cmds);
                 }
 
@@ -10649,6 +10663,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             split_x,
                             tab_h,
                             vp_full_h,
+                            &pal,
                         ))
                     } else {
                         None
