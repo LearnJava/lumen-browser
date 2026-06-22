@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(нет активных задач)_
+In progress: F2-6 (этап 2, ч.2) — ресайз/докинг панелей + персист раскладки  branch: p1-ui-panel-layout
+Next step: drag-to-resize обоих доков (CursorMoved/MouseInput) → set_width + relayout + save; runtime-ширины уже проведены в 4 панели и `page_content_width_css` (`crates/shell/src/panel_layout.rs`, `main.rs` left_dock/right_dock)
 
 ---
 

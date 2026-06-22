@@ -112,8 +112,9 @@ pub fn hit_test(
     tab_bar_height: f32,
     window_h: f32,
     scroll_y: f32,
+    width: f32,
 ) -> Option<VTabHit> {
-    if x >= PANEL_WIDTH || y < tab_bar_height || y >= window_h {
+    if x >= width || y < tab_bar_height || y >= window_h {
         return None;
     }
     let row_y = (y - tab_bar_height) + scroll_y;
@@ -121,7 +122,7 @@ pub fn hit_test(
     if idx >= strip.tabs.len() {
         return Some(VTabHit::Empty);
     }
-    let close_left = PANEL_WIDTH - CLOSE_RIGHT_MARGIN - CLOSE_W;
+    let close_left = width - CLOSE_RIGHT_MARGIN - CLOSE_W;
     if x >= close_left {
         Some(VTabHit::Close(idx))
     } else {
@@ -145,19 +146,21 @@ pub fn build_tab_bar_vertical(
     window_h: f32,
     scroll_y: f32,
     pal: &Palette,
+    width: f32,
 ) -> DisplayList {
+    let pw = width;
     let panel_h = (window_h - tab_bar_height).max(0.0);
     let mut out = DisplayList::with_capacity(4 + strip.tabs.len() * 8);
 
     // Panel background.
     out.push(DisplayCommand::FillRect {
-        rect: Rect::new(0.0, tab_bar_height, PANEL_WIDTH, panel_h),
+        rect: Rect::new(0.0, tab_bar_height, pw, panel_h),
         color: pal.tab_bar_bg,
     });
 
     // Right border divider (1 px, full panel height).
     out.push(DisplayCommand::FillRect {
-        rect: Rect::new(PANEL_WIDTH - 1.0, tab_bar_height, 1.0, panel_h),
+        rect: Rect::new(pw - 1.0, tab_bar_height, 1.0, panel_h),
         color: pal.divider,
     });
 
@@ -176,7 +179,7 @@ pub fn build_tab_bar_vertical(
 
         // Row background (excludes right border pixel).
         out.push(DisplayCommand::FillRect {
-            rect: Rect::new(0.0, row_top, PANEL_WIDTH - 1.0, ROW_H),
+            rect: Rect::new(0.0, row_top, pw - 1.0, ROW_H),
             color: row_bg,
         });
 
@@ -190,7 +193,7 @@ pub fn build_tab_bar_vertical(
 
         // Row bottom divider.
         out.push(DisplayCommand::FillRect {
-            rect: Rect::new(0.0, row_top + ROW_H - 1.0, PANEL_WIDTH - 1.0, 1.0),
+            rect: Rect::new(0.0, row_top + ROW_H - 1.0, pw - 1.0, 1.0),
             color: pal.divider,
         });
 
@@ -233,7 +236,7 @@ pub fn build_tab_bar_vertical(
         }
 
         // Close button ×.
-        let close_left = PANEL_WIDTH - CLOSE_RIGHT_MARGIN - CLOSE_W;
+        let close_left = pw - CLOSE_RIGHT_MARGIN - CLOSE_W;
         let close_top = row_top + (ROW_H - FONT_SZ * 1.2) * 0.5;
         out.push(DisplayCommand::DrawText {
             rect: Rect::new(close_left, close_top, CLOSE_W, FONT_SZ * 1.2),
@@ -316,21 +319,21 @@ mod tests {
     fn hit_outside_panel_returns_none() {
         let s = TabStrip::new();
         // x = PANEL_WIDTH is outside
-        assert_eq!(hit_test(&s, PANEL_WIDTH, 50.0, TAB_H, WIN_H, 0.0), None);
+        assert_eq!(hit_test(&s, PANEL_WIDTH, 50.0, TAB_H, WIN_H, 0.0, PANEL_WIDTH), None);
     }
 
     #[test]
     fn hit_inside_tab_bar_returns_none() {
         let s = TabStrip::new();
         // y < TAB_H is the horizontal tab bar area
-        assert_eq!(hit_test(&s, 10.0, TAB_H - 1.0, TAB_H, WIN_H, 0.0), None);
+        assert_eq!(hit_test(&s, 10.0, TAB_H - 1.0, TAB_H, WIN_H, 0.0, PANEL_WIDTH), None);
     }
 
     #[test]
     fn hit_first_row_body() {
         let s = TabStrip::new();
         // First row: y = TAB_H..TAB_H+ROW_H; click in the middle of the row body
-        let hit = hit_test(&s, 50.0, TAB_H + ROW_H * 0.5, TAB_H, WIN_H, 0.0);
+        let hit = hit_test(&s, 50.0, TAB_H + ROW_H * 0.5, TAB_H, WIN_H, 0.0, PANEL_WIDTH);
         assert_eq!(hit, Some(VTabHit::Tab(0)));
     }
 
@@ -339,7 +342,7 @@ mod tests {
         let s = TabStrip::new();
         // Close button starts at PANEL_WIDTH - CLOSE_RIGHT_MARGIN - CLOSE_W
         let close_x = PANEL_WIDTH - CLOSE_RIGHT_MARGIN - CLOSE_W + 2.0;
-        let hit = hit_test(&s, close_x, TAB_H + ROW_H * 0.5, TAB_H, WIN_H, 0.0);
+        let hit = hit_test(&s, close_x, TAB_H + ROW_H * 0.5, TAB_H, WIN_H, 0.0, PANEL_WIDTH);
         assert_eq!(hit, Some(VTabHit::Close(0)));
     }
 
@@ -347,7 +350,7 @@ mod tests {
     fn hit_second_row() {
         let s = strip2();
         let row2_y = TAB_H + ROW_H + ROW_H * 0.5;
-        let hit = hit_test(&s, 50.0, row2_y, TAB_H, WIN_H, 0.0);
+        let hit = hit_test(&s, 50.0, row2_y, TAB_H, WIN_H, 0.0, PANEL_WIDTH);
         assert_eq!(hit, Some(VTabHit::Tab(1)));
     }
 
@@ -355,7 +358,7 @@ mod tests {
     fn hit_below_all_rows_returns_empty() {
         let s = TabStrip::new(); // 1 tab → rows end at TAB_H + ROW_H
         let below_y = TAB_H + ROW_H + 1.0;
-        let hit = hit_test(&s, 50.0, below_y, TAB_H, WIN_H, 0.0);
+        let hit = hit_test(&s, 50.0, below_y, TAB_H, WIN_H, 0.0, PANEL_WIDTH);
         assert_eq!(hit, Some(VTabHit::Empty));
     }
 
@@ -477,7 +480,7 @@ mod tests {
         let s = strip2(); // 2 tabs
         // Click at y = TAB_H + ROW_H / 2 (middle of visual first row).
         // scroll_y = ROW_H → row_y = ROW_H / 2 + ROW_H = 1.5 * ROW_H → idx = 1.
-        let hit = hit_test(&s, 50.0, TAB_H + ROW_H * 0.5, TAB_H, WIN_H, ROW_H);
+        let hit = hit_test(&s, 50.0, TAB_H + ROW_H * 0.5, TAB_H, WIN_H, ROW_H, PANEL_WIDTH);
         assert_eq!(hit, Some(VTabHit::Tab(1)), "scroll offset must shift row index");
     }
 }

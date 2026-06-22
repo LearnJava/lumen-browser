@@ -143,8 +143,9 @@ pub fn hit_test(
     y: f32,
     tab_bar_height: f32,
     window_h: f32,
+    width: f32,
 ) -> Option<TreeTabHit> {
-    if x >= PANEL_WIDTH || y < tab_bar_height || y >= window_h {
+    if x >= width || y < tab_bar_height || y >= window_h {
         return None;
     }
     let rows = visible_order(&strip.tabs, &panel.collapsed);
@@ -157,7 +158,7 @@ pub fn hit_test(
     let indent = row.depth as f32 * INDENT;
     let arrow_left = ARROW_LEFT_BASE + indent;
     let arrow_right = arrow_left + ARROW_W;
-    let close_left = PANEL_WIDTH - CLOSE_RIGHT_MARGIN - CLOSE_W;
+    let close_left = width - CLOSE_RIGHT_MARGIN - CLOSE_W;
 
     if x >= close_left {
         Some(TreeTabHit::Close(row.strip_idx))
@@ -184,20 +185,22 @@ pub fn build_panel(
     tab_bar_height: f32,
     window_h: f32,
     pal: &Palette,
+    width: f32,
 ) -> DisplayList {
+    let pw = width;
     let panel_h = (window_h - tab_bar_height).max(0.0);
     let rows = visible_order(&strip.tabs, &panel.collapsed);
     let mut out = DisplayList::with_capacity(4 + rows.len() * 9);
 
     // Panel background.
     out.push(DisplayCommand::FillRect {
-        rect: Rect::new(0.0, tab_bar_height, PANEL_WIDTH, panel_h),
+        rect: Rect::new(0.0, tab_bar_height, pw, panel_h),
         color: pal.overlay_bg,
     });
 
     // Right border divider.
     out.push(DisplayCommand::FillRect {
-        rect: Rect::new(PANEL_WIDTH - 1.0, tab_bar_height, 1.0, panel_h),
+        rect: Rect::new(pw - 1.0, tab_bar_height, 1.0, panel_h),
         color: pal.overlay_border,
     });
 
@@ -213,7 +216,7 @@ pub fn build_panel(
 
         // Row background.
         out.push(DisplayCommand::FillRect {
-            rect: Rect::new(0.0, row_top, PANEL_WIDTH - 1.0, ROW_H),
+            rect: Rect::new(0.0, row_top, pw - 1.0, ROW_H),
             color: row_bg,
         });
 
@@ -227,7 +230,7 @@ pub fn build_panel(
 
         // Row bottom divider.
         out.push(DisplayCommand::FillRect {
-            rect: Rect::new(0.0, row_top + ROW_H - 1.0, PANEL_WIDTH - 1.0, 1.0),
+            rect: Rect::new(0.0, row_top + ROW_H - 1.0, pw - 1.0, 1.0),
             color: pal.divider,
         });
 
@@ -289,7 +292,7 @@ pub fn build_panel(
         }
 
         // Close button ×.
-        let close_left = PANEL_WIDTH - CLOSE_RIGHT_MARGIN - CLOSE_W;
+        let close_left = pw - CLOSE_RIGHT_MARGIN - CLOSE_W;
         let close_top = row_top + (ROW_H - FONT_SZ * 1.2) * 0.5;
         out.push(DisplayCommand::DrawText {
             rect: Rect::new(close_left, close_top, CLOSE_W, FONT_SZ * 1.2),
@@ -384,21 +387,21 @@ mod tests {
     fn hit_outside_returns_none() {
         let s = TabStrip::new();
         let p = TreeTabsPanel::new();
-        assert_eq!(hit_test(&s, &p, PANEL_WIDTH + 1.0, 50.0, TAB_H, WIN_H), None);
+        assert_eq!(hit_test(&s, &p, PANEL_WIDTH + 1.0, 50.0, TAB_H, WIN_H, PANEL_WIDTH), None);
     }
 
     #[test]
     fn hit_above_tab_bar_returns_none() {
         let s = TabStrip::new();
         let p = TreeTabsPanel::new();
-        assert_eq!(hit_test(&s, &p, 10.0, TAB_H - 1.0, TAB_H, WIN_H), None);
+        assert_eq!(hit_test(&s, &p, 10.0, TAB_H - 1.0, TAB_H, WIN_H, PANEL_WIDTH), None);
     }
 
     #[test]
     fn hit_row_body_returns_tab() {
         let s = TabStrip::new();
         let p = TreeTabsPanel::new();
-        let hit = hit_test(&s, &p, 80.0, TAB_H + ROW_H * 0.5, TAB_H, WIN_H);
+        let hit = hit_test(&s, &p, 80.0, TAB_H + ROW_H * 0.5, TAB_H, WIN_H, PANEL_WIDTH);
         assert_eq!(hit, Some(TreeTabHit::Tab(0)));
     }
 
@@ -407,7 +410,7 @@ mod tests {
         let s = TabStrip::new();
         let p = TreeTabsPanel::new();
         let cx = PANEL_WIDTH - CLOSE_RIGHT_MARGIN - CLOSE_W + 2.0;
-        let hit = hit_test(&s, &p, cx, TAB_H + ROW_H * 0.5, TAB_H, WIN_H);
+        let hit = hit_test(&s, &p, cx, TAB_H + ROW_H * 0.5, TAB_H, WIN_H, PANEL_WIDTH);
         assert_eq!(hit, Some(TreeTabHit::Close(0)));
     }
 
@@ -417,7 +420,7 @@ mod tests {
         let p = TreeTabsPanel::new();
         // Arrow at depth=0: x in [ARROW_LEFT_BASE, ARROW_LEFT_BASE + ARROW_W)
         let ax = ARROW_LEFT_BASE + ARROW_W * 0.5;
-        let hit = hit_test(&s, &p, ax, TAB_H + ROW_H * 0.5, TAB_H, WIN_H);
+        let hit = hit_test(&s, &p, ax, TAB_H + ROW_H * 0.5, TAB_H, WIN_H, PANEL_WIDTH);
         assert_eq!(hit, Some(TreeTabHit::Arrow(0))); // id of root tab = 0
     }
 
@@ -426,7 +429,7 @@ mod tests {
         let s = TabStrip::new(); // single tab, no children
         let p = TreeTabsPanel::new();
         let ax = ARROW_LEFT_BASE + ARROW_W * 0.5;
-        let hit = hit_test(&s, &p, ax, TAB_H + ROW_H * 0.5, TAB_H, WIN_H);
+        let hit = hit_test(&s, &p, ax, TAB_H + ROW_H * 0.5, TAB_H, WIN_H, PANEL_WIDTH);
         // No arrow on leaf — should return Tab, not Arrow
         assert_eq!(hit, Some(TreeTabHit::Tab(0)));
     }
@@ -438,7 +441,7 @@ mod tests {
         p.toggle_collapsed(0); // collapse root → child row disappears
         // Row 0 = root (visible), row 1 = should not exist
         let below_y = TAB_H + ROW_H + ROW_H * 0.5;
-        let hit = hit_test(&s, &p, 50.0, below_y, TAB_H, WIN_H);
+        let hit = hit_test(&s, &p, 50.0, below_y, TAB_H, WIN_H, PANEL_WIDTH);
         assert_eq!(hit, Some(TreeTabHit::Empty));
     }
 
