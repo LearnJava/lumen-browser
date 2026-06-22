@@ -3,7 +3,7 @@
 Живой список известных багов движка. История прогонов — в `graphic_tests/results/*.json` (коммитируются).
 
 **Как добавить баг:**
-1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-232)
+1. Создай файл `bugs/BUG-NNN-OPEN.md` (следующий номер по счёту, сейчас BUG-234)
 2. Добавь строку в таблицу ниже со ссылкой на файл
 
 **При изменении статуса:** переименуй файл (`BUG-NNN-OPEN.md` → `BUG-NNN-FIXED.md`) и обнови ссылку в таблице.
@@ -246,6 +246,8 @@
 | [BUG-230](bugs/BUG-230-OPEN.md) | OPEN | layout/paint | `calc()` в позиции color-stop линейного градиента схлопывает градиент (`blue calc(50% + 10px)` → сплошной синий; diagonal-stripe `calc(50% ± 2px)` → прозрачный). `%`-стопы работают, `parse_length_q` парсит `calc()` в `Length::Calc` — дефект ниже: позиции-`Calc` не резолвятся против длины линии градиента (`style.rs` densification). Замечен при BUG-125 (TEST-76 диагональный трек), остаток 0.54% → KNOWN_DEBTOR |
 | [BUG-231](bugs/BUG-231-OPEN.md) | OPEN | paint/shell | Анимированные `background-color`/`color` не применяются в живом окне без relayout: compositor-offload (`to_compositor_frame`→`CompositorOverride`) несёт только opacity/transform, цветовые override оседают в `anim_frame` без отрисовки. Видно на TEST-78: view-timeline subject едет по прогрессу (transform), но фон держит базовый teal вместо проинтерполированного оранжевого. Фикс — добавить `background_color` в `CompositorOverride` + патчить background-`FillRect` в `emit_box_self`/`walk_with_anim`. Найдено при F2-2/BUG-127 |
 | [BUG-232](bugs/BUG-232-FIXED.md) | FIXED 2026-06-22 | layout | Column flex двойного-считал border у item с явной `height`: `lay_out_flex` присваивал `style.height = inner_main` (border-box значение) на content-box item без принудительного `box-sizing:border-box`, поэтому border добавлялся повторно (height:28 + border:2 → 36 вместо 32). Фикс: форсировать border-box перед re-layout (зеркало cross-axis stretch-пути). Найдено при F2-3 (сдвигало `.label`-полосы в TEST-75). box_tree.rs:7601 |
+| [BUG-233](bugs/BUG-233-FIXED.md) | FIXED 2026-06-22 | js (shell) | Глобал `self` не был определён → webpack-бандлы падали `ReferenceError: self is not defined` (lenta.ru, ×4 + каскад). В конце `WEB_API_SHIM` добавлен блок алиасинга `self`/`window`/`globalThis` на один объект (+ `window.window/top/parent/frames/length`), как в браузере (WindowOrWorkerGlobalScope). Свойства на `self` теперь видны через `window` (один объект-ссылка). +2 регресс-теста. crates/js/src/dom.rs (конец shim) |
+| [BUG-234](bugs/BUG-234-OPEN.md) | OPEN | shell/network | HTTP-кэш не подключён к загрузке подресурсов: `HttpCache`/`DiskHttpCache` есть в lumen-network, но `with_http_cache` зовётся только в тестах; `http_client_for_subresource` (main.rs:3024) / `apply_http` (config.rs:213) собирают клиент без кэша → каждая навигация (и повторный заход) заново качает все подресурсы. Замер lenta.ru: Edge cold ~9с / warm ~2с (кэш ×4.5), Lumen всегда ~3.9с. Фикс: общий `DiskHttpCache` в `<exe_dir>/Data/cache/` + `.with_http_cache` в apply_http. Размер S–M. Найдено 2026-06-22 |
 
 ---
 
