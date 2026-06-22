@@ -11866,6 +11866,26 @@ function _lumen_fire_window_scroll_event() {
     if (typeof window !== 'undefined') { window.dispatchEvent(ev); }
     if (typeof document !== 'undefined') { document.dispatchEvent(ev); }
 }
+
+// ── WindowOrWorkerGlobalScope: self / globalThis / window aliasing (HTML LS) ──
+// In a real browser self === window === globalThis (same object). Webpack
+// runtimes and countless libraries reference `self` as the global object
+// (e.g. `(self.webpackChunk = self.webpackChunk || []).push(...)`,
+// `typeof self !== 'undefined' ? self : this`). The shim builds `window` as a
+// plain object literal, so without this block bare `self` is a ReferenceError
+// and the first webpack chunk on any bundled site bails (BUG-233). Properties
+// stored on `self` must also be visible through `window` — guaranteed here
+// because `self` and `window` are the SAME object reference.
+var self = window;
+globalThis.self      = window;   // bare `self` resolves to the window object
+globalThis.window    = window;   // bare `window` is the same object
+window.self          = window;
+window.window        = window;   // window.window === window (HTML LS)
+window.globalThis    = globalThis;
+window.frames        = window;   // no real framesets; self-reference like browsers
+window.top           = window;   // top-level browsing context is itself
+window.parent        = window;   // no parent frame
+window.length        = 0;        // number of child browsing contexts (frames)
 ";
 
 // ─── tests ────────────────────────────────────────────────────────────────────
@@ -11922,6 +11942,42 @@ mod tests {
     fn console_log_does_not_crash() {
         let rt = runtime_with_dom(make_doc());
         rt.eval("console.log('hello from test')").unwrap();
+    }
+
+    // BUG-233: `self` must be defined as a global aliasing `window`
+    // (WindowOrWorkerGlobalScope). Webpack runtimes reference bare `self`;
+    // without this they throw `ReferenceError: self is not defined`.
+    #[test]
+    fn self_window_globalthis_are_the_same_object() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "typeof self !== 'undefined' \
+                 && self === window \
+                 && window.self === window \
+                 && window.window === window \
+                 && globalThis.self === window \
+                 && window.top === window \
+                 && window.parent === window \
+                 && window.frames === window",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-233: a property stored on `self` must be visible through `window`
+    // and vice-versa, because webpack stores its chunk registry on `self`
+    // and later reads it back. They are the same object reference.
+    #[test]
+    fn self_and_window_share_property_storage() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "(self.webpackChunk = self.webpackChunk || []).push([1]); \
+                 Array.isArray(window.webpackChunk) && window.webpackChunk.length === 1",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
     }
 
     #[test]
