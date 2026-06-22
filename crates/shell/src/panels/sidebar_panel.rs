@@ -171,7 +171,7 @@ pub fn hit_test(
     panel: &SidebarPanel,
     x: f32,
     y: f32,
-    window_w: f32,
+    origin_x: f32,
     tab_bar_h: f32,
     window_h: f32,
     width: f32,
@@ -179,8 +179,8 @@ pub fn hit_test(
     if !panel.visible {
         return None;
     }
-    let px = window_w - width;
-    if x < px || x >= window_w || y < tab_bar_h || y >= window_h {
+    let px = origin_x;
+    if x < px || x >= px + width || y < tab_bar_h || y >= window_h {
         return None;
     }
     let rel_y = y - tab_bar_h;
@@ -200,16 +200,18 @@ pub fn hit_test(
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
-/// Build the display list for the right-docked sidebar panel.
+/// Build the display list for the docked sidebar panel.
 ///
-/// Renders from `x = (window_w − PANEL_WIDTH)` to `x = window_w` and from
+/// Renders from `x = origin_x` to `x = origin_x + width` and from
 /// `y = tab_bar_h` to `y = window_h`.  Scroll offset is baked into a
-/// `PushTransform` over the content area.
+/// `PushTransform` over the content area. `origin_x` is the panel's left edge
+/// in CSS px — the shell derives it from the panel's docked side (left edge → 0,
+/// right edge → `window_w − width`), so the panel itself is dock-agnostic.
 ///
 /// `pal` supplies the theme tokens for all chrome surface colors.
 pub fn build_panel(
     panel: &SidebarPanel,
-    window_w: f32,
+    origin_x: f32,
     tab_bar_h: f32,
     window_h: f32,
     pal: &Palette,
@@ -220,7 +222,7 @@ pub fn build_panel(
     }
 
     let pw = width;
-    let px = window_w - pw;
+    let px = origin_x;
     let panel_h = window_h - tab_bar_h;
     let content_y = tab_bar_h + HEADER_H;
     let content_h = (panel_h - HEADER_H).max(0.0);
@@ -365,6 +367,8 @@ mod tests {
     const WIN_W: f32 = 1024.0;
     const WIN_H: f32 = 720.0;
     const TAB_H: f32 = 36.0;
+    /// Left origin of the panel at its default right dock.
+    const PX: f32 = WIN_W - PANEL_WIDTH;
 
     fn hidden() -> SidebarPanel {
         SidebarPanel::new()
@@ -471,26 +475,26 @@ mod tests {
     #[test]
     fn hit_test_hidden_returns_none() {
         let p = hidden();
-        assert!(hit_test(&p, WIN_W - 10.0, 100.0, WIN_W, TAB_H, WIN_H, PANEL_WIDTH).is_none());
+        assert!(hit_test(&p, WIN_W - 10.0, 100.0, PX, TAB_H, WIN_H, PANEL_WIDTH).is_none());
     }
 
     #[test]
     fn hit_test_outside_panel_returns_none() {
         let p = visible_no_page();
         // Click in main page area
-        assert!(hit_test(&p, WIN_W - PANEL_WIDTH - 1.0, 100.0, WIN_W, TAB_H, WIN_H, PANEL_WIDTH).is_none());
+        assert!(hit_test(&p, WIN_W - PANEL_WIDTH - 1.0, 100.0, PX, TAB_H, WIN_H, PANEL_WIDTH).is_none());
     }
 
     #[test]
     fn hit_test_in_tab_bar_area_returns_none() {
         let p = visible_no_page();
-        assert!(hit_test(&p, WIN_W - 10.0, TAB_H - 1.0, WIN_W, TAB_H, WIN_H, PANEL_WIDTH).is_none());
+        assert!(hit_test(&p, WIN_W - 10.0, TAB_H - 1.0, PX, TAB_H, WIN_H, PANEL_WIDTH).is_none());
     }
 
     #[test]
     fn hit_test_header_no_close() {
         let p = visible_no_page();
-        let hit = hit_test(&p, WIN_W - PANEL_WIDTH + 50.0, TAB_H + 5.0, WIN_W, TAB_H, WIN_H, PANEL_WIDTH);
+        let hit = hit_test(&p, WIN_W - PANEL_WIDTH + 50.0, TAB_H + 5.0, PX, TAB_H, WIN_H, PANEL_WIDTH);
         assert_eq!(hit, Some(SidebarHit::Header));
     }
 
@@ -499,7 +503,7 @@ mod tests {
         let p = visible_no_page();
         let close_x = WIN_W - CLOSE_RIGHT - CLOSE_SIZE + 2.0;
         let close_y = TAB_H + (HEADER_H - CLOSE_SIZE) / 2.0 + 2.0;
-        let hit = hit_test(&p, close_x, close_y, WIN_W, TAB_H, WIN_H, PANEL_WIDTH);
+        let hit = hit_test(&p, close_x, close_y, PX, TAB_H, WIN_H, PANEL_WIDTH);
         assert_eq!(hit, Some(SidebarHit::Close));
     }
 
@@ -507,8 +511,40 @@ mod tests {
     fn hit_test_content_area() {
         let p = visible_no_page();
         let content_y = TAB_H + HEADER_H + 10.0;
-        let hit = hit_test(&p, WIN_W - PANEL_WIDTH + 10.0, content_y, WIN_W, TAB_H, WIN_H, PANEL_WIDTH);
+        let hit = hit_test(&p, WIN_W - PANEL_WIDTH + 10.0, content_y, PX, TAB_H, WIN_H, PANEL_WIDTH);
         assert_eq!(hit, Some(SidebarHit::Content));
+    }
+
+    // ── cross-dock (origin_x at the left edge) ──────────────────────────────────
+
+    #[test]
+    fn hit_test_left_dock_inside_and_outside() {
+        let p = visible_no_page();
+        // origin_x = 0 → panel hugs the left edge, spanning [0, PANEL_WIDTH).
+        assert!(hit_test(&p, 10.0, TAB_H + HEADER_H + 10.0, 0.0, TAB_H, WIN_H, PANEL_WIDTH).is_some());
+        assert!(hit_test(&p, PANEL_WIDTH + 1.0, TAB_H + HEADER_H + 10.0, 0.0, TAB_H, WIN_H, PANEL_WIDTH).is_none());
+    }
+
+    #[test]
+    fn hit_test_left_dock_close_button() {
+        let p = visible_no_page();
+        let close_x = PANEL_WIDTH - CLOSE_RIGHT - CLOSE_SIZE + 2.0;
+        let close_y = TAB_H + (HEADER_H - CLOSE_SIZE) / 2.0 + 2.0;
+        assert_eq!(
+            hit_test(&p, close_x, close_y, 0.0, TAB_H, WIN_H, PANEL_WIDTH),
+            Some(SidebarHit::Close)
+        );
+    }
+
+    #[test]
+    fn build_panel_left_dock_starts_at_origin() {
+        let p = visible_no_page();
+        let dl = build_panel(&p, 0.0, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
+        let bg = dl.iter().find_map(|c| match c {
+            DisplayCommand::FillRect { rect, .. } if rect.width == PANEL_WIDTH => Some(*rect),
+            _ => None,
+        });
+        assert_eq!(bg.map(|r| r.x), Some(0.0));
     }
 
     // ── build_panel ───────────────────────────────────────────────────────────
@@ -516,14 +552,14 @@ mod tests {
     #[test]
     fn build_panel_hidden_is_empty() {
         let p = hidden();
-        let dl = build_panel(&p, WIN_W, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
+        let dl = build_panel(&p, PX, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
         assert!(dl.is_empty());
     }
 
     #[test]
     fn build_panel_visible_no_page_has_placeholder() {
         let p = visible_no_page();
-        let dl = build_panel(&p, WIN_W, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
+        let dl = build_panel(&p, PX, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
         assert!(!dl.is_empty());
         let has_loading = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("Loading"))
@@ -534,7 +570,7 @@ mod tests {
     #[test]
     fn build_panel_with_page_no_loading_text() {
         let p = visible_with_page();
-        let dl = build_panel(&p, WIN_W, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
+        let dl = build_panel(&p, PX, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
         let has_loading = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("Loading"))
         });
@@ -544,7 +580,7 @@ mod tests {
     #[test]
     fn build_panel_has_close_x_text() {
         let p = visible_no_page();
-        let dl = build_panel(&p, WIN_W, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
+        let dl = build_panel(&p, PX, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
         let has_close = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "×")
         });
@@ -554,7 +590,7 @@ mod tests {
     #[test]
     fn build_panel_has_clip_and_pop() {
         let p = visible_no_page();
-        let dl = build_panel(&p, WIN_W, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
+        let dl = build_panel(&p, PX, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
         let clips = dl.iter().filter(|c| matches!(c, DisplayCommand::PushClipRect { .. })).count();
         let pops = dl.iter().filter(|c| matches!(c, DisplayCommand::PopClip)).count();
         assert_eq!(clips, 1);
