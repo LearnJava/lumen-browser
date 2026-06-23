@@ -1081,6 +1081,45 @@ mod tests {
         assert_eq!(ctx.stacks["c"], vec![1, 99]);
     }
 
+    #[test]
+    fn counter_set_test97_sibling_rows() {
+        // BUG-213 / TEST-97: regression for the full counter-set row sequence.
+        // body { counter-reset: c 0 } scopes a single counter `c`; five sibling
+        // rows mutate it in document order. Each row's snapshot (value after its
+        // own reset → increment → set, before children) is what `::before
+        // { content: counter(c) }` renders. Expected: 5, 6, 0, 1, 42 — matching
+        // Edge pixel-for-pixel (CSS Lists L3 §4: set wins over a same-element
+        // increment; counter-set on a never-reset-this-element counter sets the
+        // existing scope).
+        let mut ctx = CounterCtx::default();
+        // body: counter-reset: c 0
+        let body_reset = [("c".to_string(), 0)];
+        ctx.apply_reset(&body_reset);
+
+        let top = |ctx: &CounterCtx| *ctx.stacks["c"].last().unwrap();
+
+        // .r1 { counter-set: c 5 } → 5
+        ctx.apply_set(&[("c".into(), 5)]);
+        assert_eq!(top(&ctx), 5, "r1: set 5 on reset-0 counter");
+
+        // .r2 { counter-increment: c } → 6
+        ctx.apply_increment(&[("c".into(), 1)]);
+        assert_eq!(top(&ctx), 6, "r2: increment from 5");
+
+        // .r3 { counter-increment: c; counter-set: c 0 } → 0 (set wins)
+        ctx.apply_increment(&[("c".into(), 1)]);
+        ctx.apply_set(&[("c".into(), 0)]);
+        assert_eq!(top(&ctx), 0, "r3: increment to 7 then set 0, set wins");
+
+        // .r4 { counter-increment: c } → 1
+        ctx.apply_increment(&[("c".into(), 1)]);
+        assert_eq!(top(&ctx), 1, "r4: increment from 0");
+
+        // .r5 { counter-set: c 42 } → 42
+        ctx.apply_set(&[("c".into(), 42)]);
+        assert_eq!(top(&ctx), 42, "r5: set 42");
+    }
+
     // ── Custom counter style tests ────────────────────────────────────────────
 
     fn s(v: &str) -> String { v.to_string() }
