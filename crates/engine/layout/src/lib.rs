@@ -119,7 +119,7 @@ pub use style::{
     AlignValue, AnimationDirection, Appearance, ContainerContext,
     AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat,
-    BackgroundSize, BorderCollapse, BorderStyle,
+    BackgroundSize, BgSizeAxis, BorderCollapse, BorderStyle,
     BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ColorFloat,
     ClearSide, ContainFlags, ComputedStyle, Content,
     ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, EmptyCells, FilterFn, FloatSide, FontOpticalSizing, FontStretch,
@@ -11321,8 +11321,8 @@ mod tests {
         let root = lay("<p>x</p>", "p { background-size: 200px; }");
         match first_p_style(&root).background_layers[0].size {
             BackgroundSize::Length(w, h) => {
-                assert!((w - 200.0).abs() < 0.01);
-                assert_eq!(h, None);
+                assert_eq!(w, BgSizeAxis::Px(200.0));
+                assert_eq!(h, BgSizeAxis::Auto);
             }
             _ => panic!("expected Length"),
         }
@@ -11333,11 +11333,50 @@ mod tests {
         let root = lay("<p>x</p>", "p { background-size: 200px 100px; }");
         match first_p_style(&root).background_layers[0].size {
             BackgroundSize::Length(w, h) => {
-                assert!((w - 200.0).abs() < 0.01);
-                assert_eq!(h, Some(100.0));
+                assert_eq!(w, BgSizeAxis::Px(200.0));
+                assert_eq!(h, BgSizeAxis::Px(100.0));
             }
             _ => panic!("expected Length"),
         }
+    }
+
+    #[test]
+    fn background_size_percent_pair() {
+        // BUG-115: percent background-size must be preserved as Percent fractions.
+        let root = lay("<p>x</p>", "p { background-size: 40% 60%; }");
+        match first_p_style(&root).background_layers[0].size {
+            BackgroundSize::Length(w, h) => {
+                assert_eq!(w, BgSizeAxis::Percent(0.4));
+                assert_eq!(h, BgSizeAxis::Percent(0.6));
+            }
+            _ => panic!("expected Length"),
+        }
+    }
+
+    #[test]
+    fn background_size_mixed_px_percent() {
+        // BUG-115: `20px 100%` — one fixed axis, one percent axis.
+        let root = lay("<p>x</p>", "p { background-size: 20px 100%; }");
+        match first_p_style(&root).background_layers[0].size {
+            BackgroundSize::Length(w, h) => {
+                assert_eq!(w, BgSizeAxis::Px(20.0));
+                assert_eq!(h, BgSizeAxis::Percent(1.0));
+            }
+            _ => panic!("expected Length"),
+        }
+    }
+
+    #[test]
+    fn background_shorthand_percent_size() {
+        // BUG-115: `background: <grad> left center / 40% 60% no-repeat` — the
+        // percent size in the shorthand must reach the layer as Percent axes.
+        let css = "p { background: linear-gradient(to right, #e74c3c, #c0392b) left center / 40% 60% no-repeat, #2c3e50; }";
+        let root = lay("<p>x</p>", css);
+        let layers = &first_p_style(&root).background_layers;
+        assert_eq!(
+            layers[0].size,
+            BackgroundSize::Length(BgSizeAxis::Percent(0.4), BgSizeAxis::Percent(0.6))
+        );
     }
 
     #[test]

@@ -3195,6 +3195,7 @@ fn image_to_rgba8_vec(img: &Image) -> Vec<rgb::RGBA8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumen_layout::BgSizeAxis;
     use lumen_layout::PositionComponent;
     use lumen_layout::Length;
 
@@ -3297,7 +3298,7 @@ mod tests {
             y: PositionComponent::Percent(0.0),
         };
         let (tw, th, x0, y0, rx, ry) = bg_tile_geometry(
-            BackgroundSize::Length(80.0, Some(60.0)),
+            BackgroundSize::Length(BgSizeAxis::Px(80.0), BgSizeAxis::Px(60.0)),
             &pos,
             BackgroundRepeat::NoRepeat,
             100.0,
@@ -3321,7 +3322,7 @@ mod tests {
             y: PositionComponent::Percent(1.0),
         };
         let (tw, th, x0, y0, ..) = bg_tile_geometry(
-            BackgroundSize::Length(80.0, Some(60.0)),
+            BackgroundSize::Length(BgSizeAxis::Px(80.0), BgSizeAxis::Px(60.0)),
             &pos,
             BackgroundRepeat::NoRepeat,
             100.0,
@@ -3335,6 +3336,45 @@ mod tests {
         // x0 = 30 + (180 - 80) = 130; y0 = 30 + (120 - 60) = 90.
         assert!((x0 - 130.0).abs() < 1e-3);
         assert!((y0 - 90.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn bg_tile_geometry_percent_resolves_against_oarea() {
+        // BUG-115: `background-size: 40% 60%` → tile = 40%×60% of the positioning area.
+        let pos = ObjectPosition::default();
+        let (tw, th, ..) = bg_tile_geometry(
+            BackgroundSize::Length(BgSizeAxis::Percent(0.4), BgSizeAxis::Percent(0.6)),
+            &pos,
+            BackgroundRepeat::NoRepeat,
+            100.0,
+            100.0,
+            180.0,
+            120.0,
+            0.0,
+            0.0,
+        );
+        // 0.4 * 180 = 72; 0.6 * 120 = 72.
+        assert!((tw - 72.0).abs() < 1e-3);
+        assert!((th - 72.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn bg_tile_geometry_mixed_px_percent() {
+        // BUG-115: `background-size: 20px 100%` → fixed width, full-height tile.
+        let pos = ObjectPosition::default();
+        let (tw, th, ..) = bg_tile_geometry(
+            BackgroundSize::Length(BgSizeAxis::Px(20.0), BgSizeAxis::Percent(1.0)),
+            &pos,
+            BackgroundRepeat::RepeatX,
+            100.0,
+            100.0,
+            180.0,
+            120.0,
+            0.0,
+            0.0,
+        );
+        assert!((tw - 20.0).abs() < 1e-3);
+        assert!((th - 120.0).abs() < 1e-3);
     }
 
     #[test]
@@ -3364,7 +3404,7 @@ mod tests {
             y: PositionComponent::Percent(0.0),
         };
         let (tw, th, x0, y0, rx, ry) = bg_tile_geometry(
-            BackgroundSize::Length(40.0, Some(40.0)),
+            BackgroundSize::Length(BgSizeAxis::Px(40.0), BgSizeAxis::Px(40.0)),
             &pos,
             BackgroundRepeat::Repeat,
             100.0,
