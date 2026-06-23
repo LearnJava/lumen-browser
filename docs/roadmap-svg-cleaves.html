@@ -57,12 +57,12 @@
 {
  "generated": "2026-06-23",
  "counts": {
-  "open": 37,
-  "fixed": 196,
+  "open": 39,
+  "fixed": 197,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 233,
+ "total_bugs": 236,
  "phases": [
   {
    "id": "P0",
@@ -225,7 +225,7 @@
     {
      "id": "P2-usability",
      "title": "USABILITY-вертикаль — «зашёл на сайт и комфортно пользуешься»",
-     "status": "active",
+     "status": "done",
      "note": "ТОП-приоритет, режим одного программиста (всё на P1)",
      "tasks": [
       {
@@ -304,7 +304,8 @@
       {
        "id": "U-4opt",
        "title": "U-4 опции: WASM SIMD/threads, live-aliasing, WebGPU backend",
-       "status": "opt"
+       "status": "done",
+       "note": "U-4a SIMD/threads/atomics + U-4b live-aliasing + U-4c WebGPU backend все ✅ 2026-06-20…21"
       }
      ]
     },
@@ -351,7 +352,8 @@
     {
      "id": "P2-knowledge",
      "title": "Knowledge layer ядро (FTS, аннотации, read-later, focus mode)",
-     "status": "active"
+     "status": "done",
+     "note": "F2-5 ✅ 2026-06-22"
     },
     {
      "id": "P2-viewport",
@@ -423,6 +425,7 @@
      "id": "P2-viewtrans",
      "title": "View Transitions API",
      "status": "done",
+     "note": "F2-4 ✅ 2026-06-22 (root cross-fade); полный L1 — опц. остаток",
      "bugs": [
       "BUG-103"
      ]
@@ -431,6 +434,7 @@
      "id": "P2-masonry",
      "title": "CSS Masonry layout",
      "status": "done",
+     "note": "F2-3 ✅ 2026-06-22 (паритет с Edge-fallback; Edge не поддерживает masonry)",
      "bugs": [
       "BUG-105",
       "BUG-143"
@@ -448,6 +452,7 @@
      "id": "P2-motionpath",
      "title": "CSS Motion Path L1 (offset-path)",
      "status": "done",
+     "note": "BUG-125 FIXED 2026-06-22",
      "bugs": [
       "BUG-125"
      ]
@@ -1196,7 +1201,7 @@
   },
   "BUG-085": {
    "status": "open",
-   "title": "linear/radial gradient — TEST-39: 12.05%→1.62% (femtovg_stops: repeating-градиенты повторяются + hard-stop хвост дозаполняется до 1.0). Остаток DEBTOR: 256-текс…",
+   "title": "linear/radial gradient — TEST-39: 12.05%→1.62%→**1.18%**. D2-1 (2026-06-23): repeating linear/radial + все radial теперь рисуются per-pixel в device-разрешении…",
    "component": "paint",
    "date": null,
    "debtor": true
@@ -2209,6 +2214,13 @@
    "date": "2026-06-22",
    "debtor": false
   },
+  "BUG-238": {
+   "status": "open",
+   "title": "Подсистемы хранят данные в OS-каталогах (`%APPDATA%\\lumen\\…` / `~/.config/lumen/…`) вместо портативного `<exe_dir>/data/` — нарушение политики портативного хран…",
+   "component": "shell/storage",
+   "date": null,
+   "debtor": false
+  },
   "BUG-235": {
    "status": "fixed",
    "title": "`bg_tile_geometry` (общий хелпер из p1-cpu-bg-image) под wgpu-only сборкой (`lumen-driver` дефолт) была dead-code → `clippy -D warnings` падал, блокируя workspa…",
@@ -2235,6 +2247,20 @@
    "title": "Регрессия от BUG-125: `offset-path: ray()` сдвигал боксы на пол-бокса. Унифицированная motion-матрица `T(rect+path)·R·m·T(-(rect+anchor))` корректна для `path()…",
    "component": "layout",
    "date": "2026-06-23",
+   "debtor": false
+  },
+  "BUG-239": {
+   "status": "fixed",
+   "title": "`radial-gradient(ellipse …)` рисовался кругом: парсер отбрасывал форму/размер, `DrawRadialGradient` нёс только центр, все бэкенды рисовали изотропный круг. Найд…",
+   "component": "layout/paint",
+   "date": "2026-06-23",
+   "debtor": false
+  },
+  "BUG-240": {
+   "status": "open",
+   "title": "TEST-45 (multiple-backgrounds) стабильно FAIL 4.73% — пред-существует (тот же 4.7304% в коммит-прогоне 20260623-062656, до правок D2-1). Не вызвано BUG-239 (ell…",
+   "component": "paint/test-harness",
+   "date": null,
    "debtor": false
   }
  },
@@ -2394,7 +2420,8 @@
    "BUG-187",
    "BUG-188",
    "BUG-198",
-   "BUG-230"
+   "BUG-230",
+   "BUG-239"
   ],
   "layout/text": [
    "BUG-120"
@@ -2488,6 +2515,9 @@
    "BUG-111",
    "BUG-231"
   ],
+  "paint/test-harness": [
+   "BUG-240"
+  ],
   "shell": [
    "BUG-028",
    "BUG-044",
@@ -2511,6 +2541,9 @@
   ],
   "shell/paint": [
    "BUG-163"
+  ],
+  "shell/storage": [
+   "BUG-238"
   ],
   "test": [
    "BUG-153"
