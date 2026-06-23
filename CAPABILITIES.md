@@ -138,7 +138,8 @@ Modern ES (ES2020+: classes, async/await, generators, Promise, Proxy, BigInt, mo
 - ✅ HTTP auth (Basic + Digest MD5/SHA-256, 401 retry), Range requests, HSTS (+ preload), SOCKS5 proxy (proxy-side DNS, Tor-ready).
 - ✅ DNS: system + DoH (RFC 8484) + DoT (RFC 7858); `RequestFilter` hook (EasyList/hosts ad-block; **Phase 2 `$`-options** — resource-type `$script`/`$image`/`$stylesheet`/`$font`/`$xmlhttprequest`/`$subdocument`/`$media`/`$other` + `~`-negation, plus `$third-party`/`$first-party`, matched against a per-request `RequestContext`; `domain=` parsed-but-ignored); fingerprint/TLS profiles (Chrome/Firefox/Safari/Edge/Tor/Lumen/Strict — header order, H2 SETTINGS, Client Hints).
 - ✅ WebSockets (+ permessage-deflate), EventSource, Fetch bridge, software WebAuthn `VirtualAuthenticator` + CTAP2-over-HID (no USB enumeration).
-- ⬜ Cache-Control revalidation, mTLS/client certs, `qop=auth-int`, CORS POST/PUT bodies, H2 send-side flow control.
+- ✅ **Cross-navigation HTTP cache wired into the shell (RFC 7234):** one shared `DiskHttpCache` (`<exe_dir>/data/cache/http_cache.db`, survives restart) attached to every client via `apply_http`; subresources/`fetch()` are served fresh-hit or revalidated with conditional GET (304) on repeat visits instead of re-downloaded. Private/Tor sessions use an in-memory cache (nothing on disk).
+- ⬜ mTLS/client certs, `qop=auth-int`, CORS POST/PUT bodies, H2 send-side flow control.
 
 ### lumen-ipc (`crates/ipc`)
 - ✅ Length-prefixed bincode over TCP loopback; `IpcChannel/Server/Client` blocking RPC; messages `Fetch/Ping/Shutdown`; powers out-of-process network service (`--network-service`).

@@ -32,9 +32,11 @@
 //! [`HttpClient`].
 
 use lumen_core::url::Url;
-use lumen_network::{HttpClient, HttpProfile, Socks5Proxy, TlsProfile};
+use lumen_network::{
+    DiskHttpCache, HttpCache, HttpCacheBackend, HttpClient, HttpProfile, Socks5Proxy, TlsProfile,
+};
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 /// Process-global fingerprint profile, loaded once at startup.
 ///
@@ -52,6 +54,52 @@ pub fn init_global(profile: FingerprintProfile) -> bool {
 #[must_use]
 pub fn global() -> &'static FingerprintProfile {
     GLOBAL.get_or_init(FingerprintProfile::default)
+}
+
+/// Process-global cross-navigation HTTP cache (RFC 7234), shared by every
+/// [`HttpClient`] built through [`FingerprintProfile::apply_http`].
+///
+/// Initialised lazily on first use:
+/// - normal session → [`DiskHttpCache`] at `<exe_dir>/data/cache/http_cache.db`
+///   (browser-folder storage policy; survives restarts, gives warm-cache speedups
+///   on repeat visits);
+/// - `no_persistent_state` / Tor → in-memory [`HttpCache`] only, discarded at exit
+///   (no cached responses written to disk).
+///
+/// `None` means caching is disabled (disk DB could not be opened); requests then
+/// behave as before — always fetched from the network.
+static HTTP_CACHE: OnceLock<Option<Arc<dyn HttpCacheBackend>>> = OnceLock::new();
+
+/// Lazily build (once) and return the shared HTTP cache for this session.
+///
+/// `private` selects an in-memory cache (nothing written to disk) instead of the
+/// persistent on-disk SQLite cache. The choice is made on the first call and
+/// frozen for the process lifetime (the privacy mode is fixed at startup).
+fn shared_http_cache(private: bool) -> Option<Arc<dyn HttpCacheBackend>> {
+    HTTP_CACHE.get_or_init(|| build_http_cache(private)).clone()
+}
+
+/// Construct the HTTP cache backend for the requested privacy mode (no global
+/// state). Split out from [`shared_http_cache`] so it can be unit-tested without
+/// freezing the process-global `OnceLock`.
+fn build_http_cache(private: bool) -> Option<Arc<dyn HttpCacheBackend>> {
+    if private {
+        // Private / Tor session: cache in RAM only, never touch disk.
+        return Some(Arc::new(HttpCache::new()) as Arc<dyn HttpCacheBackend>);
+    }
+    let path = crate::adblock::browser_data_dir()
+        .join("cache")
+        .join("http_cache.db");
+    match DiskHttpCache::new(&path) {
+        Ok(cache) => Some(Arc::new(cache) as Arc<dyn HttpCacheBackend>),
+        Err(e) => {
+            eprintln!(
+                "http-cache: cannot open {} ({e}); HTTP caching disabled",
+                path.display()
+            );
+            None
+        }
+    }
 }
 
 /// Initialise the ad-block subsystem and install the process-global filter.
@@ -246,6 +294,16 @@ impl FingerprintProfile {
         // at 127.0.0.1:9050 (the standard Tor socks5 port).
         if let Some(s5) = self.effective_socks5_proxy() {
             client = client.with_socks5_proxy(std::sync::Arc::new(s5));
+        }
+
+        // Wire the shared cross-navigation HTTP cache (RFC 7234). One cache is
+        // shared by every client via `Arc`, so subresources fetched on one
+        // navigation are served from cache (or revalidated with 304) on the next
+        // — including repeat visits to the same site. Tor / private sessions get
+        // an in-memory cache that never persists to disk.
+        let private = self.no_persistent_state || self.http_profile == HttpProfile::TorBrowser;
+        if let Some(cache) = shared_http_cache(private) {
+            client = client.with_http_cache(cache);
         }
 
         client
@@ -528,6 +586,25 @@ mod tests {
     #[test]
     fn empty_config_is_default() {
         assert_eq!(parse(""), FingerprintProfile::default());
+    }
+
+    #[test]
+    fn private_http_cache_is_in_memory_and_present() {
+        // Private/Tor mode must yield a cache (so repeat fetches still hit it)
+        // but it is the in-memory variant — nothing reaches disk.
+        let cache = build_http_cache(true);
+        assert!(cache.is_some(), "private session should still cache in RAM");
+    }
+
+    #[test]
+    fn http_cache_is_shared_via_arc() {
+        // Two clones of the same backend must point at one cache so a response
+        // stored by one HttpClient is visible to every other.
+        let cache = build_http_cache(true).expect("in-memory cache builds");
+        let alias = Arc::clone(&cache);
+        assert_eq!(Arc::strong_count(&cache), 2);
+        drop(alias);
+        assert_eq!(Arc::strong_count(&cache), 1);
     }
 
     #[test]
