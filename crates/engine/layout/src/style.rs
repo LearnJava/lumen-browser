@@ -16719,34 +16719,147 @@ fn parse_bg_image_value(s: &str) -> Option<BackgroundImage> {
     None
 }
 
-/// CSS Images L4 §4 — parse `cross-fade(<image-a>, <image-b>, <percentage>)`.
+/// Parse a `cross-fade()` / `-webkit-cross-fade()` function into the two-image
+/// blend `(image-a, image-b, t)` where `t ∈ 0.0..=1.0` is the fraction occupied
+/// by `image-b` (`0.0` = only `image-a`, `1.0` = only `image-b`).
 ///
-/// Supports both `cross-fade(…)` and `-webkit-cross-fade(…)` syntax.
-/// Returns `None` if `s` does not start with the function prefix or has an
-/// unexpected argument count.
+/// Two grammars are accepted, selected by the vendor prefix:
+///
+/// * **`-webkit-cross-fade(<from>, <to>, <percentage>)`** — the legacy
+///   three-argument form. `<percentage>` is the blend progress from `<from>`
+///   (`0%`) to `<to>` (`100%`). Kept for content that targets the prefixed
+///   syntax.
+/// * **`cross-fade( [<percentage>? && <image>]# )`** — the standard
+///   CSS Images L4 §4 form. Only the common two-image case is supported; each
+///   argument is an `<image>` with an optional opacity `<percentage>` in either
+///   order. A bare percentage with no image is invalid.
+///
+/// The legacy three-argument `cross-fade(<from>, <to>, <percentage>)` **without**
+/// the `-webkit-` prefix is rejected (returns `None`) — the trailing bare
+/// `<percentage>` is not a valid `<image>`. This matches reference browsers
+/// (Edge/Chromium drop the declaration), so the caller renders nothing.
+///
+/// Returns `None` when `s` is not a cross-fade function or violates the grammar
+/// for its prefix; the declaration is then dropped by the caller.
 fn parse_cross_fade(s: &str) -> Option<(BackgroundImage, BackgroundImage, f32)> {
     let s = s.trim();
-    let lower = s.to_ascii_lowercase();
-    let inner = if lower.starts_with("cross-fade(") && s.ends_with(')') {
-        &s["cross-fade(".len()..s.len() - 1]
-    } else if lower.starts_with("-webkit-cross-fade(") && s.ends_with(')') {
-        &s["-webkit-cross-fade(".len()..s.len() - 1]
-    } else {
+    if !s.ends_with(')') {
         return None;
-    };
+    }
+    let lower = s.to_ascii_lowercase();
+    if lower.starts_with("-webkit-cross-fade(") {
+        let inner = &s["-webkit-cross-fade(".len()..s.len() - 1];
+        return parse_webkit_cross_fade(inner);
+    }
+    if lower.starts_with("cross-fade(") {
+        let inner = &s["cross-fade(".len()..s.len() - 1];
+        return parse_l4_cross_fade(inner);
+    }
+    None
+}
+
+/// Legacy `-webkit-cross-fade(<from>, <to>, <percentage>)` — exactly three
+/// arguments; `<percentage>` is the blend progress toward `<to>`.
+fn parse_webkit_cross_fade(inner: &str) -> Option<(BackgroundImage, BackgroundImage, f32)> {
     let parts = split_top_level_commas(inner);
     if parts.len() != 3 {
         return None;
     }
     let a = parse_bg_image_value(parts[0].trim())?;
     let b = parse_bg_image_value(parts[1].trim())?;
-    let t_str = parts[2].trim();
-    let t = if let Some(pct) = t_str.strip_suffix('%') {
-        pct.trim().parse::<f32>().ok()? / 100.0
-    } else {
-        t_str.parse::<f32>().ok()?
-    };
+    let t = parse_cf_percentage(parts[2].trim())?;
     Some((a, b, t.clamp(0.0, 1.0)))
+}
+
+/// Standard L4 `cross-fade( [<percentage>? && <image>]# )` — two-image form.
+///
+/// Each argument carries an optional opacity percentage. The returned `t` is the
+/// fraction of `image-b`: an image's opacity is its declared percentage, and an
+/// image without one takes the remaining weight.
+fn parse_l4_cross_fade(inner: &str) -> Option<(BackgroundImage, BackgroundImage, f32)> {
+    let parts = split_top_level_commas(inner);
+    if parts.len() != 2 {
+        return None;
+    }
+    let (img_a, pct_a) = parse_cf_image(parts[0].trim())?;
+    let (img_b, pct_b) = parse_cf_image(parts[1].trim())?;
+    let t = match (pct_a, pct_b) {
+        (None, None) => 0.5,
+        (Some(pa), None) => 1.0 - pa,
+        (None, Some(pb)) => pb,
+        (Some(pa), Some(pb)) => {
+            let sum = pa + pb;
+            if sum > 0.0 { pb / sum } else { 0.5 }
+        }
+    };
+    Some((img_a, img_b, t.clamp(0.0, 1.0)))
+}
+
+/// Parse one L4 `<cf-image>` = `<percentage>? && <image>` (tokens in any order).
+///
+/// Returns the image plus its optional opacity fraction (`0.0..=1.0`). `None`
+/// when there is no `<image>` (e.g. a bare percentage) or the tokens don't form
+/// a valid image-plus-optional-percentage pair.
+fn parse_cf_image(part: &str) -> Option<(BackgroundImage, Option<f32>)> {
+    let tokens = split_top_level_ws(part);
+    match tokens.as_slice() {
+        [tok] => {
+            // A lone token must be an image; a bare percentage is invalid.
+            Some((parse_bg_image_value(tok)?, None))
+        }
+        [a, b] => {
+            // `<percentage> <image>` or `<image> <percentage>`.
+            if let Some(p) = parse_cf_percentage(a) {
+                Some((parse_bg_image_value(b)?, Some(p.clamp(0.0, 1.0))))
+            } else if let Some(p) = parse_cf_percentage(b) {
+                Some((parse_bg_image_value(a)?, Some(p.clamp(0.0, 1.0))))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Parse a cross-fade percentage/number argument into a `0.0..=1.0` fraction.
+/// `50%` → `0.5`, `0.5` → `0.5`. `None` if the token is not a number.
+fn parse_cf_percentage(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(pct) = s.strip_suffix('%') {
+        Some(pct.trim().parse::<f32>().ok()? / 100.0)
+    } else {
+        s.parse::<f32>().ok()
+    }
+}
+
+/// Split `s` on top-level ASCII whitespace, keeping parenthesised groups
+/// (e.g. `url(a b)`, `linear-gradient(…)`) intact. Empty tokens are dropped.
+fn split_top_level_ws(s: &str) -> Vec<&str> {
+    let bytes = s.as_bytes();
+    let mut tokens = Vec::new();
+    let mut start = 0;
+    let mut depth = 0usize;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            b' ' | b'\t' | b'\n' | b'\r' if depth == 0 => {
+                let tok = s[start..i].trim();
+                if !tok.is_empty() {
+                    tokens.push(tok);
+                }
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let tok = s[start..].trim();
+    if !tok.is_empty() {
+        tokens.push(tok);
+    }
+    tokens
 }
 
 /// CSS Backgrounds L3 §3 — разбить строку одного слоя на токены.
@@ -22375,11 +22488,12 @@ mod tests {
     }
 
     #[test]
-    fn cross_fade_two_urls_parsed() {
-        // CSS Images L4 §4: cross-fade(<image-a>, <image-b>, <pct>) → CrossFade variant.
+    fn cross_fade_l4_two_images_with_percentage() {
+        // CSS Images L4 §4: cross-fade( <image> <pct>?, <image> ) → CrossFade.
+        // `url(a) 30%` ⇒ a at 30% opacity, b at 70% ⇒ t (fraction of b) = 0.70.
         let s = cascade_at(
             "<div></div>",
-            r#"div { background-image: cross-fade(url("a.png"), url("b.png"), 30%); }"#,
+            r#"div { background-image: cross-fade(url("a.png") 30%, url("b.png")); }"#,
             &[0],
         );
         assert_eq!(s.background_layers.len(), 1);
@@ -22387,15 +22501,34 @@ mod tests {
             BackgroundImage::CrossFade { a, b, t } => {
                 assert_eq!(a.as_ref(), &BackgroundImage::Url("a.png".into()));
                 assert_eq!(b.as_ref(), &BackgroundImage::Url("b.png".into()));
-                assert!((t - 0.30).abs() < 0.001, "t should be 0.30, got {t}");
+                assert!((t - 0.70).abs() < 0.001, "t should be 0.70, got {t}");
             }
             other => panic!("expected CrossFade, got {other:?}"),
         }
     }
 
     #[test]
+    fn cross_fade_unprefixed_legacy_three_arg_rejected() {
+        // The legacy three-argument webkit form WITHOUT the -webkit- prefix is
+        // invalid per CSS Images L4 (trailing bare `<percentage>` is not an
+        // `<image>`). Edge/Chromium drop the declaration; Lumen must too —
+        // BUG-101 / TEST-59. The cell stays empty (BackgroundImage::None).
+        let s = cascade_at(
+            "<div></div>",
+            r#"div { background-image: cross-fade(url("a.png"), url("b.png"), 30%); }"#,
+            &[0],
+        );
+        assert_eq!(s.background_layers.len(), 1);
+        assert!(
+            matches!(&s.background_layers[0].image, BackgroundImage::None),
+            "unprefixed legacy 3-arg cross-fade() must be invalid → None, got {:?}",
+            s.background_layers[0].image
+        );
+    }
+
+    #[test]
     fn webkit_cross_fade_parsed() {
-        // -webkit-cross-fade() vendor prefix.
+        // -webkit-cross-fade(<from>, <to>, <pct>) vendor-prefixed legacy form.
         let s = cascade_at(
             "<div></div>",
             r#"div { background-image: -webkit-cross-fade(url("x.png"), url("y.png"), 50%); }"#,
@@ -22410,14 +22543,16 @@ mod tests {
 
     #[test]
     fn cross_fade_t_clamped_to_unit_interval() {
-        // t > 1.0 should be clamped to 1.0.
+        // An out-of-range opacity percentage is clamped into 0.0..=1.0.
         let s = cascade_at(
             "<div></div>",
-            r#"div { background-image: cross-fade(url("a.png"), url("b.png"), 150%); }"#,
+            r#"div { background-image: -webkit-cross-fade(url("a.png"), url("b.png"), 150%); }"#,
             &[0],
         );
         if let BackgroundImage::CrossFade { t, .. } = &s.background_layers[0].image {
             assert!(*t <= 1.0, "t should be clamped to ≤ 1.0, got {t}");
+        } else {
+            panic!("expected CrossFade");
         }
     }
 

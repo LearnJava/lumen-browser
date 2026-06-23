@@ -27,3 +27,25 @@ femtovg-бэкендом. Попутно закрыт CPU-бэкенд (`cpu_ras
 
 Остаток — кандидат в KNOWN_DEBTORS после правки парсера cross-fade. Row-1 image-set/url ячейки
 и `-webkit-cross-fade()` совпадают с Edge.
+
+## Ревизия 2026-06-23 (P1, фикс грамматики cross-fade → KNOWN_DEBTOR)
+
+Грамматика `cross-fade()` приведена к CSS Images L4 §4 в `crates/engine/layout/src/style.rs`
+(`parse_cross_fade` разделён на префикс-зависимые ветки):
+
+* **`-webkit-cross-fade(<from>, <to>, <percentage>)`** — устаревшая 3-аргументная форма,
+  принимается только с `-webkit-` префиксом (`parse_webkit_cross_fade`).
+* **`cross-fade( [<percentage>? && <image>]# )`** — стандартная L4-форма, 2-image
+  (`parse_l4_cross_fade` + `parse_cf_image`): каждый аргумент = изображение с
+  необязательным процентом непрозрачности; голый `<percentage>` без изображения невалиден.
+* **Unprefixed 3-арг `cross-fade(url, url, 30%)`** теперь отвергается (`None`) — висячий
+  bare `<percentage>` не является `<image>`. Совпадает с Edge/Chromium: декларация
+  отбрасывается, ячейка остаётся пустой.
+
+Проверка: TEST-59 24.18% → 17.15% (gdigrab). Центр ячеек cf-30/cf-70 = фон `#1a202c`
+в обоих движках (CPU-снимок); `-webkit-cross-fade()`-ячейка по-прежнему рисуется.
+4 unit-теста в `style.rs` (включая `cross_fade_unprefixed_legacy_three_arg_rejected`).
+
+Остаток 17.15% = ресэмплинг фото-картинок (image-set/url ячейки row1 + webkit cross-fade
+row2, класс BUG-219) + font-parity monospace-меток (rule 3). **KNOWN_DEBTOR** (`run.py`
+`KNOWN_DEBTORS['59'] = ('BUG-101', 17.15)`). Парсер-дефект cross-fade закрыт.
