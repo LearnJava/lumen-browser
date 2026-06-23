@@ -76,17 +76,16 @@
  "generated": "2026-06-23",
  "counts": {
   "open": 37,
-  "fixed": 193,
+  "fixed": 196,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 230,
+ "total_bugs": 233,
  "phases": [
   {
    "id": "P0",
    "title": "Фаза 0 — Прототип",
    "status": "done",
-   "date": "2026-05-26",
    "tasks": [
     {
      "id": "P0-ws",
@@ -118,13 +117,13 @@
      "title": "Tab lifecycle инварианты (DOM arena / JS suspend / pure layout)",
      "status": "done"
     }
-   ]
+   ],
+   "date": "2026-05-26"
   },
   {
    "id": "P1",
    "title": "Фаза 1 — v0.1 «Reader»",
    "status": "done",
-   "date": "2026-06",
    "tasks": [
     {
      "id": "P1-font",
@@ -233,13 +232,13 @@
      "title": "Tab lifecycle Phase 1 (TabState T0–T4, memory pressure, image LRU, T1 paused)",
      "status": "done"
     }
-   ]
+   ],
+   "date": "2026-06"
   },
   {
    "id": "P2",
    "title": "Фаза 2 — v0.5 «Interactive» (завершена)",
    "status": "done",
-   "date": "app v0.5.0",
    "tasks": [
     {
      "id": "P2-usability",
@@ -441,7 +440,7 @@
     {
      "id": "P2-viewtrans",
      "title": "View Transitions API",
-     "status": "planned",
+     "status": "done",
      "bugs": [
       "BUG-103"
      ]
@@ -471,13 +470,13 @@
       "BUG-125"
      ]
     }
-   ]
+   ],
+   "date": "app v0.5.0"
   },
   {
    "id": "P3",
    "title": "Фаза 3 — v1.0 «Full Browser»",
    "status": "planned",
-   "date": "36–48 мес",
    "tasks": [
     {
      "id": "P3-v8",
@@ -587,13 +586,13 @@
      "title": "HTML5 Drag and Drop API (PH3-9)",
      "status": "done"
     }
-   ]
+   ],
+   "date": "36–48 мес"
   },
   {
    "id": "P4",
    "title": "Фаза 4 — После 1.0",
    "status": "planned",
-   "date": "—",
    "tasks": [
     {
      "id": "P4-webgl",
@@ -620,7 +619,8 @@
      "title": "Локализация UI",
      "status": "planned"
     }
-   ]
+   ],
+   "date": "—"
   }
  ],
  "bugs": {
@@ -1312,24 +1312,24 @@
   },
   "BUG-099": {
    "status": "open",
-   "title": "`<canvas>` 2D context not implemented — TEST-57: 28.66%; Phase 2",
+   "title": "`<canvas>` 2D context реализован; TEST-57 ратчет 4.14→2.96% (прогон 2026-06-23). Остаток = font-parity + canvas-AA → KNOWN_DEBTOR",
    "component": "js/paint",
    "date": null,
-   "debtor": false
+   "debtor": true
   },
   "BUG-100": {
    "status": "open",
-   "title": "::first-letter drop-cap / ::first-line not implemented — TEST-58: 6.04%",
+   "title": "::first-letter / ::first-line РЕАЛИЗОВАНЫ (дрейф трекера, ревизия 2026-06-23): drop-cap флоатится (`extract_first_letter_float` + 7 тестов), first-line зелёная/…",
    "component": "layout",
    "date": null,
-   "debtor": false
+   "debtor": true
   },
   "BUG-101": {
    "status": "open",
-   "title": "image-set() DPR selection / cross-fade() not implemented — TEST-59: 27.63%",
-   "component": "css-parser/paint",
+   "title": "image-set()/cross-fade() РЕАЛИЗОВАНЫ. Грамматика cross-fade() приведена к CSS Images L4 §4 (`parse_cross_fade` в layout/src/style.rs, 2026-06-23): unprefixed `c…",
+   "component": "layout/paint",
    "date": null,
-   "debtor": false
+   "debtor": true
   },
   "BUG-102": {
    "status": "fixed",
@@ -1340,10 +1340,10 @@
   },
   "BUG-103": {
    "status": "open",
-   "title": "View Transitions L1 рендерится (F2-4 ревизия 2026-06-22): startViewTransition + root cross-fade работают. «99.53%» был blank-gdigrab артефактом; реальный --ipc…",
+   "title": "View Transitions L1 рендерится (F2-4 ревизия 2026-06-22): startViewTransition + root cross-fade работают. «99.53%» был blank-gdigrab артефактом; KNOWN_DEBTOR ра…",
    "component": "js/shell",
    "date": null,
-   "debtor": false
+   "debtor": true
   },
   "BUG-104": {
    "status": "fixed",
@@ -1515,7 +1515,7 @@
   },
   "BUG-128": {
    "status": "open",
-   "title": "text-underline TEST-79: 6.78% — font-parity issue (serif vs sans), кандидат в KNOWN_DEBTORS",
+   "title": "font-parity (serif vs sans, Inter vs Edge) — общий должник многих тестов. TEST-79 6.76% внесён в KNOWN_DEBTORS (прогон 2026-06-23)",
    "component": "font",
    "date": null,
    "debtor": true
@@ -1927,10 +1927,10 @@
    "debtor": true
   },
   "BUG-190": {
-   "status": "open",
-   "title": "`background-blend-mode` deviation — TEST-49: 2.39%",
+   "status": "fixed",
+   "title": "`background-blend-mode` TEST-49 2.39%→0.14% (CPU). Корень не blend-математика (она канонна), а интерполяция градиентных стопов в straight вместо premultiplied (…",
    "component": "paint",
-   "date": null,
+   "date": "2026-06-23",
    "debtor": false
   },
   "BUG-226": {
@@ -2103,17 +2103,17 @@
   },
   "BUG-214": {
    "status": "open",
-   "title": "`accent-color` tint not implemented — TEST-110: 2.47%",
+   "title": "`accent-color` РЕАЛИЗОВАН (дрейф трекера, ревизия 2026-06-23): `emit_form_control_accents` тинтит checkbox/radio/range/progress + юнит-тесты. Diff-картинка: цве…",
    "component": "paint",
    "date": null,
-   "debtor": false
+   "debtor": true
   },
   "BUG-215": {
    "status": "open",
-   "title": "`shape-outside: path()` not implemented — TEST-113: 1.41%",
+   "title": "`shape-outside: path()` РЕАЛИЗОВАН (дрейф трекера, ревизия 2026-06-23): `parse_shape_path_px` флэттит path()→полигон, текст обтекает (`float_context_path_left_f…",
    "component": "layout",
    "date": null,
-   "debtor": false
+   "debtor": true
   },
   "BUG-216": {
    "status": "open",
@@ -2124,10 +2124,10 @@
   },
   "BUG-217": {
    "status": "open",
-   "title": "`prefers-contrast`/`prefers-reduced-data` media queries not matched — TEST-120: 3.26%",
+   "title": "`prefers-contrast`/`prefers-reduced-data` РЕАЛИЗОВАНЫ и спек-корректны (ревизия 2026-06-23): парсинг+матчинг в parser.rs (MediaFeature::PrefersContrast/PrefersR…",
    "component": "css-parser",
    "date": null,
-   "debtor": false
+   "debtor": true
   },
   "BUG-218": {
    "status": "fixed",
@@ -2227,10 +2227,31 @@
    "date": "2026-06-22",
    "debtor": false
   },
+  "BUG-235": {
+   "status": "fixed",
+   "title": "`bg_tile_geometry` (общий хелпер из p1-cpu-bg-image) под wgpu-only сборкой (`lumen-driver` дефолт) была dead-code → `clippy -D warnings` падал, блокируя workspa…",
+   "component": "paint (build)",
+   "date": "2026-06-23",
+   "debtor": false
+  },
   "BUG-234": {
    "status": "fixed",
    "title": "HTTP-кэш подключён к загрузке подресурсов. Новый process-global `HTTP_CACHE` (config.rs) шарит один `DiskHttpCache` (`<exe_dir>/data/cache/http_cache.db`, переж…",
    "component": "shell/network",
+   "date": "2026-06-23",
+   "debtor": false
+  },
+  "BUG-237": {
+   "status": "open",
+   "title": "`line-height-step` (CSS Rhythmic Sizing L1 §2): Lumen спек-корректно округляет line-box вверх до кратного шагу (48/60/40px фоны), **Edge не поддерживает свойств…",
+   "component": "layout",
+   "date": null,
+   "debtor": true
+  },
+  "BUG-236": {
+   "status": "fixed",
+   "title": "Регрессия от BUG-125: `offset-path: ray()` сдвигал боксы на пол-бокса. Унифицированная motion-матрица `T(rect+path)·R·m·T(-(rect+anchor))` корректна для `path()…",
+   "component": "layout",
    "date": "2026-06-23",
    "debtor": false
   }
@@ -2253,7 +2274,6 @@
   "css-parser/paint": [
    "BUG-016",
    "BUG-019",
-   "BUG-101",
    "BUG-218"
   ],
   "driver": [
@@ -2366,7 +2386,9 @@
    "BUG-212",
    "BUG-215",
    "BUG-224",
-   "BUG-232"
+   "BUG-232",
+   "BUG-236",
+   "BUG-237"
   ],
   "layout+paint": [
    "BUG-005",
@@ -2381,6 +2403,7 @@
    "BUG-083",
    "BUG-095",
    "BUG-097",
+   "BUG-101",
    "BUG-110",
    "BUG-124",
    "BUG-181",
@@ -2462,6 +2485,9 @@
    "BUG-225",
    "BUG-226",
    "BUG-227"
+  ],
+  "paint (build)": [
+   "BUG-235"
   ],
   "paint/cpu_raster": [
    "BUG-052"
