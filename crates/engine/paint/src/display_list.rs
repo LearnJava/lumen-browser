@@ -486,6 +486,12 @@ pub enum DisplayCommand {
         rect: Rect,
         center_x_pct: f32,
         center_y_pct: f32,
+        /// Horizontal radius of the ending shape in CSS px (`radius_x == radius_y`
+        /// for a `circle`). Resolved from the CSS shape/size keywords against the
+        /// box by [`lumen_layout::radial_gradient_radii`] (CSS Images L3 §3.5).
+        radius_x: f32,
+        /// Vertical radius of the ending shape in CSS px.
+        radius_y: f32,
         stops: Vec<GradientStop>,
         repeating: bool,
     },
@@ -1465,9 +1471,11 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     rect.x, rect.y, rect.width, rect.height, stops.len(),
                 ));
             }
-            DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating } => {
+            DisplayCommand::DrawRadialGradient {
+                rect, center_x_pct, center_y_pct, radius_x, radius_y, stops, repeating,
+            } => {
                 out.push_str(&format!(
-                    "DrawRadialGradient ({:.2}, {:.2}, {:.2}, {:.2}) center=({center_x_pct:.2},{center_y_pct:.2}) stops={} repeating={repeating}\n",
+                    "DrawRadialGradient ({:.2}, {:.2}, {:.2}, {:.2}) center=({center_x_pct:.2},{center_y_pct:.2}) radii=({radius_x:.2},{radius_y:.2}) stops={} repeating={repeating}\n",
                     rect.x, rect.y, rect.width, rect.height, stops.len(),
                 ));
             }
@@ -3411,16 +3419,26 @@ fn emit_background_layer(
                 out.push(DisplayCommand::PopClip);
             }
         }
-        BackgroundImage::Gradient(ParsedGradient::Radial { center_x_pct, center_y_pct, stops, repeating }) => {
+        BackgroundImage::Gradient(ParsedGradient::Radial {
+            center_x_pct, center_y_pct, shape, size, stops, repeating,
+        }) => {
             let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip);
             if needs_clip && !rects.is_empty() {
                 out.push(DisplayCommand::PushClipRect { rect: clip });
             }
             for r in &rects {
+                // Resolve the CSS ending-shape/size to concrete px radii against
+                // this paint rect (CSS Images L3 §3.5.1) — circle keeps rx == ry,
+                // ellipse gets independent radii (BUG-238).
+                let (radius_x, radius_y) = lumen_layout::radial_gradient_radii(
+                    *shape, *size, *center_x_pct, *center_y_pct, r.width, r.height,
+                );
                 out.push(DisplayCommand::DrawRadialGradient {
                     rect: *r,
                     center_x_pct: *center_x_pct,
                     center_y_pct: *center_y_pct,
+                    radius_x,
+                    radius_y,
                     stops: stops.clone(),
                     repeating: *repeating,
                 });
@@ -3585,7 +3603,7 @@ fn emit_push_mask(out: &mut Vec<DisplayCommand>, b: &LayoutBox) -> bool {
             true
         }
         BackgroundImage::Gradient(ParsedGradient::Radial {
-            center_x_pct, center_y_pct, stops, repeating
+            center_x_pct, center_y_pct, stops, repeating, ..
         }) => {
             out.push(DisplayCommand::PushMaskRadialGradient {
                 rect,
@@ -12717,7 +12735,7 @@ mod tests {
             DisplayCommand::FillRect { rect: r, color: Color { r: 1, g: 2, b: 3, a: 255 } },
             DisplayCommand::FillRoundedRect { rect: r, color: Color { r: 1, g: 2, b: 3, a: 255 }, radii: CornerRadii::default() },
             DisplayCommand::DrawLinearGradient { rect: r, angle_deg: 0.0, stops: vec![], repeating: false },
-            DisplayCommand::DrawRadialGradient { rect: r, center_x_pct: 0.5, center_y_pct: 0.5, stops: vec![], repeating: false },
+            DisplayCommand::DrawRadialGradient { rect: r, center_x_pct: 0.5, center_y_pct: 0.5, radius_x: 2.5, radius_y: 2.5, stops: vec![], repeating: false },
             DisplayCommand::DrawConicGradient { rect: r, center_x_pct: 0.5, center_y_pct: 0.5, from_angle_deg: 0.0, stops: vec![], repeating: false },
             DisplayCommand::DrawBackgroundImage {
                 rect: r, origin_rect: r, src: "bg.png".to_owned(),
