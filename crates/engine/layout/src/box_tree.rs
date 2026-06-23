@@ -2902,7 +2902,23 @@ fn collect_inline_segments(
                 source_char_offset: 0,
             });
         }
-        NodeData::Text(_) => {}
+        NodeData::Text(_) => {
+            // CSS Text L3 §4.1.1 — a collapsing whitespace-only text node between
+            // inline-level boxes collapses to a single space. We don't emit a
+            // segment for it (it would split to zero words); instead we record the
+            // collapsible space on the preceding segment by giving its text a
+            // trailing space, so `wrap_inline_run` inserts exactly one inter-word
+            // gap at that boundary. Without this, adjacent segments would be joined
+            // tightly even when source whitespace separated them. Leading
+            // whitespace (no preceding segment) collapses away entirely.
+            if let Some(last) = out.last_mut()
+                && !last.forced_break
+                && !last.style.white_space.preserves_whitespace()
+                && !last.text.ends_with(|c: char| c.is_whitespace())
+            {
+                last.text.push(' ');
+            }
+        }
         NodeData::Element { .. } => {
             let s = compute_style(doc, id, sheet, inherited, viewport, dark_mode);
             if s.display == Display::None {
@@ -3690,6 +3706,19 @@ fn build_box(
                         _ => {}
                     }
                     if is_inline_content(doc, sheet, cid, &style, viewport, dark_mode) {
+                        // CSS §4.1.1 — collapsed whitespace between inline-level
+                        // siblings becomes a single inter-word gap. Record it as a
+                        // trailing space on the previous segment so wrap_inline_run
+                        // inserts exactly one space at the boundary; without it,
+                        // `<span>a</span> <span>b</span>` would join tightly.
+                        if had_ws
+                            && let Some(last) = pending.last_mut()
+                            && !last.forced_break
+                            && !last.style.white_space.preserves_whitespace()
+                            && !last.text.ends_with(|c: char| c.is_whitespace())
+                        {
+                            last.text.push(' ');
+                        }
                         collect_inline_segments(doc, sheet, cid, &style, viewport, &mut pending, flat, counters, registry, &mut need_first_letter, dark_mode);
                         had_ws = false;
                         i += 1;
@@ -8971,20 +9000,32 @@ fn wrap_inline_run(
     let mut current_line: Vec<InlineFrag> = Vec::new();
     // CSS Text L3 §7.1: text-indent только на первой строке.
     let mut current_x = text_indent;
+    // CSS Text L3 §4.1.1 — whether the previous segment ended with collapsible
+    // whitespace, so the first word of the next segment gets one inter-word gap.
+    // A segment boundary with no whitespace on either side joins tightly (e.g.
+    // `<q>` `::before` open-quote glued to the quoted text, `<a>link</a>!`).
+    let mut prev_trailing_ws = false;
 
     for seg in segments {
         // Forced line break from \n in white-space: pre/pre-wrap text.
         if seg.forced_break {
             result.push(std::mem::take(&mut current_line));
             current_x = 0.0;
+            prev_trailing_ws = false;
             continue;
         }
+
+        // Does this segment's source text carry collapsible whitespace at its
+        // edges? Used to decide the boundary gap with the previous segment.
+        let seg_lead_ws = seg.text.starts_with(|c: char| c.is_whitespace());
+        let seg_trail_ws = seg.text.ends_with(|c: char| c.is_whitespace());
 
         // Pre-mode: whitespace preserved, no word wrapping, tabs are tab_size wide.
         if white_space.preserves_whitespace() {
             if seg.text.is_empty() {
                 continue;
             }
+            prev_trailing_ws = false;
             let style = &seg.style;
             let em = style.font_size;
             let ls = style.letter_spacing;
@@ -9016,12 +9057,14 @@ fn wrap_inline_run(
         // Image segments are fixed-width, non-breakable inline replaced elements.
         if let Some(img_src) = &seg.img_src {
             let img_w = seg.img_width;
-            let gap = if current_line.is_empty() { 0.0 } else { space_w };
+            // A space precedes the image only when collapsible whitespace did.
+            let img_space = if prev_trailing_ws { space_w } else { 0.0 };
+            let gap = if current_line.is_empty() { 0.0 } else { img_space };
             if !current_line.is_empty() && current_x + gap + seg.pre_space + img_w > max_width {
                 result.push(std::mem::take(&mut current_line));
                 current_x = 0.0;
             }
-            let line_gap = if current_line.is_empty() { 0.0 } else { space_w };
+            let line_gap = if current_line.is_empty() { 0.0 } else { img_space };
             current_x += line_gap + seg.pre_space;
             let em = seg.style.font_size;
             let pad_l = seg.style.padding_left.resolve_or_zero(em, max_width, viewport);
@@ -9042,12 +9085,19 @@ fn wrap_inline_run(
                 source_char_offset: seg.source_char_offset,
             });
             current_x += img_w + seg.post_space;
+            // Trailing whitespace after the image (a collapsed ws-only node) is
+            // recorded as a trailing space on its alt text by collect_inline_segments.
+            prev_trailing_ws = seg_trail_ws;
             continue;
         }
 
         // Collect words; split_whitespace preserves U+00AD within tokens.
         let raw_words: Vec<&str> = seg.text.split_whitespace().collect();
         if raw_words.is_empty() {
+            // Whitespace-only segment (rare in collapsing mode): propagate the gap.
+            if seg_lead_ws || seg_trail_ws {
+                prev_trailing_ws = true;
+            }
             continue;
         }
         let style = &seg.style;
@@ -9086,7 +9136,16 @@ fn wrap_inline_run(
             let post = if is_seg_last { seg.post_space } else { 0.0 };
 
             let word_w = measure_text_w_varied(&display_word, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
-            let gap = if current_line.is_empty() { 0.0 } else { inter_word };
+            // CSS Text L3 §4.1.1 — inter-word gap before this word. Words within a
+            // segment are always separated (they were split on real whitespace);
+            // the first word of a segment is separated from the previous fragment
+            // only when collapsible whitespace bordered the segment boundary.
+            let word_inter = if is_seg_first && !(prev_trailing_ws || seg_lead_ws) {
+                0.0
+            } else {
+                inter_word
+            };
+            let gap = if current_line.is_empty() { 0.0 } else { word_inter };
 
             // Wrap: слово не влезает (но первое слово строки добавляем всегда).
             let needs_wrap = !current_line.is_empty()
@@ -9153,7 +9212,7 @@ fn wrap_inline_run(
                 // CSS Text L3 §5.1: word-break: break-all — char-break at the
                 // current line position before wrapping.
                 if word_break == WordBreak::BreakAll {
-                    let gap_w = if current_line.is_empty() { 0.0 } else { inter_word };
+                    let gap_w = if current_line.is_empty() { 0.0 } else { word_inter };
                     current_x += gap_w + pre;
                     let mut rest = display_word.as_str();
                     let mut first_chunk = true;
@@ -9204,7 +9263,7 @@ fn wrap_inline_run(
                 || matches!(overflow_wrap, OverflowWrap::BreakWord | OverflowWrap::Anywhere))
                 && word_w > max_width;
             if ow_char_break {
-                let line_gap_ow = if current_line.is_empty() { 0.0 } else { inter_word };
+                let line_gap_ow = if current_line.is_empty() { 0.0 } else { word_inter };
                 current_x += line_gap_ow + pre;
                 let mut rest = display_word.as_str();
                 let mut first_chunk = true;
@@ -9243,7 +9302,7 @@ fn wrap_inline_run(
                 continue;
             }
 
-            let line_gap = if current_line.is_empty() { 0.0 } else { inter_word };
+            let line_gap = if current_line.is_empty() { 0.0 } else { word_inter };
             current_x += line_gap + pre;
             let frag_x = current_x;
 
@@ -9253,9 +9312,13 @@ fn wrap_inline_run(
             let merged = if no_box {
                 if let Some(last) = current_line.last_mut() {
                     if last.style.text_rendering_eq(style) && last.padding_right == 0.0 {
-                        last.text.push(' ');
+                        // No separating space when the boundary joined tightly
+                        // (word_inter == 0): the glyphs abut, e.g. `“`+`auto`.
+                        if word_inter > 0.0 {
+                            last.text.push(' ');
+                        }
                         last.text.push_str(&display_word);
-                        last.width += inter_word + word_w;
+                        last.width += word_inter + word_w;
                         current_x += word_w;
                         true
                     } else {
@@ -9289,6 +9352,8 @@ fn wrap_inline_run(
 
             current_x += post;
         }
+        // The next segment joins with a gap only if this one ended in whitespace.
+        prev_trailing_ws = seg_trail_ws;
     }
 
     if !current_line.is_empty() {
@@ -9416,6 +9481,10 @@ fn apply_inline_vertical_align(lines: &mut [Vec<InlineFrag>], line_h: f32) {
 /// через layout_measured().
 fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
     let mut frags: Vec<InlineFrag> = Vec::new();
+    // CSS Text L3 §4.1.1 — same boundary rule as wrap_inline_run: two segments
+    // join with a single space only when collapsible whitespace bordered them;
+    // otherwise they abut (e.g. `<q>` open-quote glued to the quoted text).
+    let mut prev_trailing_ws = false;
     for seg in segments {
         // Image segment: emit with pre-computed width, don't merge with text.
         if let Some(img_src) = &seg.img_src {
@@ -9434,15 +9503,24 @@ fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
             });
+            prev_trailing_ws = seg.text.ends_with(|c: char| c.is_whitespace());
             continue;
         }
+        let seg_lead_ws = seg.text.starts_with(|c: char| c.is_whitespace());
+        let seg_trail_ws = seg.text.ends_with(|c: char| c.is_whitespace());
         let text: String = seg.text.split_whitespace().collect::<Vec<_>>().join(" ");
         if text.is_empty() {
+            if seg_lead_ws || seg_trail_ws {
+                prev_trailing_ws = true;
+            }
             continue;
         }
+        let boundary_space = prev_trailing_ws || seg_lead_ws;
         let merged = if let Some(last) = frags.last_mut() {
             if last.style.text_rendering_eq(&seg.style) && last.img_src.is_none() {
-                last.text.push(' ');
+                if boundary_space {
+                    last.text.push(' ');
+                }
                 last.text.push_str(&text);
                 true
             } else {
@@ -9468,6 +9546,7 @@ fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
                 source_char_offset: seg.source_char_offset,
             });
         }
+        prev_trailing_ws = seg_trail_ws;
     }
     if frags.is_empty() { vec![] } else { vec![frags] }
 }
@@ -11703,6 +11782,70 @@ mod tests {
             !text.contains('\u{201C}') && !text.contains('\u{201D}'),
             "quotes:none must emit no marks: {text:?}",
         );
+    }
+
+    /// Concatenates the post-`wrap_inline_run` fragment text of every InlineRun
+    /// in document order. Unlike `collect_seg_text` (pre-wrap segments), this
+    /// reflects how adjacent inline boxes were joined — tightly or with a single
+    /// collapsed space (CSS Text L3 §4.1.1).
+    fn collect_frag_text(b: &super::LayoutBox, out: &mut String) {
+        if let super::BoxKind::InlineRun { lines, .. } = &b.kind {
+            for line in lines {
+                for f in line {
+                    out.push_str(&f.text);
+                }
+            }
+        }
+        for c in &b.children {
+            collect_frag_text(c, out);
+        }
+    }
+
+    #[test]
+    fn bug216_open_close_quote_abut_quoted_text() {
+        // BUG-216: open-quote / close-quote glue to the quoted text with no
+        // inter-word space (the ::before/::after content and the text share the
+        // <q> inline box; no source whitespace separates them).
+        let root = super::layout(
+            &lumen_html_parser::parse("<p><q>auto quotes</q></p>"),
+            &lumen_css_parser::parse(
+                "q::before{content:open-quote} q::after{content:close-quote}",
+            ),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut text = String::new();
+        collect_frag_text(&root, &mut text);
+        assert_eq!(
+            text, "\u{201C}auto quotes\u{201D}",
+            "quotes must abut the quoted text: {text:?}",
+        );
+    }
+
+    #[test]
+    fn bug216_adjacent_inline_boxes_join_tight() {
+        // BUG-216: no source whitespace between inline boxes → no spurious space.
+        let root = super::layout(
+            &lumen_html_parser::parse("<p><span>foo</span><span>bar</span></p>"),
+            &lumen_css_parser::parse(""),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut text = String::new();
+        collect_frag_text(&root, &mut text);
+        assert_eq!(text, "foobar", "adjacent inline boxes must not gain a space: {text:?}");
+    }
+
+    #[test]
+    fn bug216_inter_box_whitespace_collapses_to_one_space() {
+        // The regression guard's complement: a whitespace-only text node between
+        // inline boxes must still collapse to exactly one space (CSS Text L3 §4.1.1).
+        let root = super::layout(
+            &lumen_html_parser::parse("<p><span>foo</span> <span>bar</span></p>"),
+            &lumen_css_parser::parse(""),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut text = String::new();
+        collect_frag_text(&root, &mut text);
+        assert_eq!(text, "foo bar", "collapsed inter-box whitespace must remain one space: {text:?}");
     }
 
     // ── BUG-196: ::before / ::after on a flex container generate flex items ──
