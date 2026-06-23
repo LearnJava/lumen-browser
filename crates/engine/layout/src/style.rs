@@ -3796,11 +3796,16 @@ pub enum ParsedGradient {
         /// True when the original function was `repeating-linear-gradient`.
         repeating: bool,
     },
-    /// `radial-gradient(...)` — elliptical gradient centred at `(cx, cy)`.
+    /// `radial-gradient(...)` — radial gradient centred at `(cx, cy)`.
     Radial {
         /// Centre as fraction of box width/height ([0, 1] = [left/top, right/bottom]).
         center_x_pct: f32,
         center_y_pct: f32,
+        /// Ending shape — `circle` or `ellipse` (CSS Images L3 §3.5). The radii
+        /// are resolved against the box at paint time via [`radial_gradient_radii`].
+        shape: RadialShape,
+        /// Sizing keyword for the ending shape (default `farthest-corner`).
+        size: RadialSize,
         stops: Vec<GradientStop>,
         /// True when the original function was `repeating-radial-gradient`.
         repeating: bool,
@@ -3822,6 +3827,73 @@ pub enum ParsedGradient {
     },
     /// Fallback for any future gradient variant not yet rendered.
     Unknown(String),
+}
+
+/// CSS Images L3 §3.5 — ending-shape of a `radial-gradient`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RadialShape {
+    /// `circle` — isotropic, a single radius along every direction.
+    Circle,
+    /// `ellipse` (also the default when no shape keyword is given) — independent
+    /// horizontal and vertical radii.
+    Ellipse,
+}
+
+/// CSS Images L3 §3.5 — sizing keyword controlling the radii of a
+/// `radial-gradient`'s ending shape. Explicit `<length>` radii are not yet
+/// modelled; they fall back to [`RadialSize::FarthestCorner`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RadialSize {
+    /// Ending shape meets the side(s) nearest the centre.
+    ClosestSide,
+    /// Ending shape passes through the corner nearest the centre.
+    ClosestCorner,
+    /// Ending shape meets the side(s) farthest from the centre.
+    FarthestSide,
+    /// Ending shape passes through the corner farthest from the centre (default).
+    FarthestCorner,
+}
+
+/// CSS Images L3 §3.5.1 — resolves a `radial-gradient` ending shape to concrete
+/// `(radius_x, radius_y)` in CSS px for a box `w×h` with centre at
+/// `(cx_pct·w, cy_pct·h)`. For [`RadialShape::Circle`] both radii are equal.
+/// Corner sizes use the aspect ratio of the matching side size and scale the
+/// ellipse to pass through the chosen corner (CSS Images L3 §3.5.1, last list
+/// item). Radii are clamped to ≥ 1 px to avoid a degenerate gradient.
+#[must_use]
+pub fn radial_gradient_radii(
+    shape: RadialShape, size: RadialSize, cx_pct: f32, cy_pct: f32, w: f32, h: f32,
+) -> (f32, f32) {
+    let cx = cx_pct * w;
+    let cy = cy_pct * h;
+    let near_x = cx.abs().min((w - cx).abs());
+    let far_x = cx.abs().max((w - cx).abs());
+    let near_y = cy.abs().min((h - cy).abs());
+    let far_y = cy.abs().max((h - cy).abs());
+    // Ellipse with aspect ratio `sx:sy` scaled to pass through corner (cdx, cdy).
+    let through_corner = |sx: f32, sy: f32, cdx: f32, cdy: f32| -> (f32, f32) {
+        let a = (sx / sy.max(1e-6)).max(1e-6); // rx / ry
+        let ry = ((cdx / a).powi(2) + cdy * cdy).sqrt().max(1.0);
+        ((a * ry).max(1.0), ry)
+    };
+    match shape {
+        RadialShape::Circle => {
+            let r = match size {
+                RadialSize::ClosestSide => near_x.min(near_y),
+                RadialSize::FarthestSide => far_x.max(far_y),
+                RadialSize::ClosestCorner => near_x.hypot(near_y),
+                RadialSize::FarthestCorner => far_x.hypot(far_y),
+            }
+            .max(1.0);
+            (r, r)
+        }
+        RadialShape::Ellipse => match size {
+            RadialSize::ClosestSide => (near_x.max(1.0), near_y.max(1.0)),
+            RadialSize::FarthestSide => (far_x.max(1.0), far_y.max(1.0)),
+            RadialSize::ClosestCorner => through_corner(near_x, near_y, near_x, near_y),
+            RadialSize::FarthestCorner => through_corner(far_x, far_y, far_x, far_y),
+        },
+    }
 }
 
 /// CSS Backgrounds L3 §3.1 / CSS Images L4 §4 — `background-image` value.
@@ -17231,10 +17303,18 @@ pub fn parse_background_gradient(s: &str) -> ParsedGradient {
         let stops = interp(parse_gradient_stops(s));
         ParsedGradient::Linear { angle_deg, stops, repeating: repeating_linear }
     } else if is_radial {
-        // Radial: look for `at <x> <y>` in the first segment.
+        // Radial: look for `[<shape> || <size>]? [at <x> <y>]?` in the first segment.
         let (cx, cy) = parse_radial_gradient_center(&clean_first);
+        let (shape, size) = parse_radial_gradient_shape_size(&clean_first);
         let stops = interp(parse_gradient_stops(s));
-        ParsedGradient::Radial { center_x_pct: cx, center_y_pct: cy, stops, repeating: repeating_radial }
+        ParsedGradient::Radial {
+            center_x_pct: cx,
+            center_y_pct: cy,
+            shape,
+            size,
+            stops,
+            repeating: repeating_radial,
+        }
     } else {
         // Conic: `[from <angle>]? [at <x> <y>]?` in the first segment.
         let (from_angle_deg, cx, cy) = parse_conic_gradient_params(&clean_first);
@@ -17448,6 +17528,41 @@ fn parse_radial_gradient_center(first_seg: &str) -> (f32, f32) {
     }
     // Default centre = 50% 50%.
     (0.5, 0.5)
+}
+
+/// CSS Images L3 §3.5 — parse the ending-shape and size keywords from the first
+/// segment of a `radial-gradient` (the part before any `at <position>`).
+///
+/// Recognises the `circle`/`ellipse` shape keyword and the four extent keywords
+/// (`closest-side`, `closest-corner`, `farthest-side`, `farthest-corner`).
+/// Defaults per spec: shape = `ellipse`, size = `farthest-corner`. A lone
+/// `circle` keyword with no size still defaults to farthest-corner. Explicit
+/// `<length>` radii are not modelled yet and leave the size at its default.
+fn parse_radial_gradient_shape_size(first_seg: &str) -> (RadialShape, RadialSize) {
+    // Only the prelude before `at` carries shape/size.
+    let s = first_seg.trim().to_ascii_lowercase();
+    let prelude = match s.find(" at ") {
+        Some(i) => &s[..i],
+        None if s.starts_with("at ") => "",
+        None => s.as_str(),
+    };
+    let mut shape: Option<RadialShape> = None;
+    let mut size: Option<RadialSize> = None;
+    for tok in prelude.split_whitespace() {
+        match tok {
+            "circle" => shape = Some(RadialShape::Circle),
+            "ellipse" => shape = Some(RadialShape::Ellipse),
+            "closest-side" => size = Some(RadialSize::ClosestSide),
+            "closest-corner" => size = Some(RadialSize::ClosestCorner),
+            "farthest-side" => size = Some(RadialSize::FarthestSide),
+            "farthest-corner" => size = Some(RadialSize::FarthestCorner),
+            _ => {}
+        }
+    }
+    (
+        shape.unwrap_or(RadialShape::Ellipse),
+        size.unwrap_or(RadialSize::FarthestCorner),
+    )
 }
 
 /// Parse `[from <angle>]? [at <x> <y>]?` from the first segment of a
@@ -28698,6 +28813,61 @@ mod tests {
         } else {
             panic!("expected linear");
         }
+    }
+
+    // ── radial-gradient shape / size (CSS Images L3 §3.5, BUG-239) ─────────────
+
+    #[test]
+    fn radial_shape_size_parses_circle_and_ellipse() {
+        let circle = parse_background_gradient("radial-gradient(circle, red, blue)");
+        let ParsedGradient::Radial { shape, size, .. } = circle else { panic!("radial") };
+        assert_eq!(shape, RadialShape::Circle);
+        assert_eq!(size, RadialSize::FarthestCorner, "default size");
+
+        let ellipse = parse_background_gradient("radial-gradient(ellipse at center, red, blue)");
+        let ParsedGradient::Radial { shape, .. } = ellipse else { panic!("radial") };
+        assert_eq!(shape, RadialShape::Ellipse);
+
+        // No shape keyword → ellipse default (CSS Images L3 §3.5).
+        let bare = parse_background_gradient("radial-gradient(red, blue)");
+        let ParsedGradient::Radial { shape, .. } = bare else { panic!("radial") };
+        assert_eq!(shape, RadialShape::Ellipse);
+
+        let cs = parse_background_gradient("radial-gradient(circle closest-side, red, blue)");
+        let ParsedGradient::Radial { shape, size, .. } = cs else { panic!("radial") };
+        assert_eq!((shape, size), (RadialShape::Circle, RadialSize::ClosestSide));
+    }
+
+    #[test]
+    fn radial_radii_circle_is_farthest_corner_distance() {
+        // Centred circle in 240×120 → farthest corner at (120, 60): r = hypot.
+        let (rx, ry) = radial_gradient_radii(
+            RadialShape::Circle, RadialSize::FarthestCorner, 0.5, 0.5, 240.0, 120.0,
+        );
+        let expected = 120.0_f32.hypot(60.0);
+        assert!((rx - expected).abs() < 0.5 && (rx - ry).abs() < 1e-3, "circle isotropic: {rx},{ry}");
+    }
+
+    #[test]
+    fn radial_radii_ellipse_farthest_corner_matches_spec() {
+        // ellipse at center in 240×120: farthest-side aspect = 120/60 = 2; the
+        // ellipse passes through the corner (120,60) → ry = √(60²+60²) ≈ 84.85,
+        // rx = 2·ry ≈ 169.7 (CSS Images L3 §3.5.1).
+        let (rx, ry) = radial_gradient_radii(
+            RadialShape::Ellipse, RadialSize::FarthestCorner, 0.5, 0.5, 240.0, 120.0,
+        );
+        assert!((ry - 84.85).abs() < 0.5, "ry ≈ 84.85, got {ry}");
+        assert!((rx - 169.7).abs() < 1.0, "rx ≈ 169.7, got {rx}");
+    }
+
+    #[test]
+    fn radial_radii_ellipse_closest_side() {
+        // Off-centre ellipse, closest-side: rx = nearest h-edge, ry = nearest v-edge.
+        let (rx, ry) = radial_gradient_radii(
+            RadialShape::Ellipse, RadialSize::ClosestSide, 0.25, 0.25, 200.0, 100.0,
+        );
+        assert!((rx - 50.0).abs() < 0.5, "rx = min(50,150)=50, got {rx}");
+        assert!((ry - 25.0).abs() < 0.5, "ry = min(25,75)=25, got {ry}");
     }
 
     // ── color() predefined color spaces (CSS Color L4 §10) ─────────────────────

@@ -202,6 +202,75 @@ fn femtovg_stops(
     out
 }
 
+/// Samples a `[0,1]`-tiled femtovg stop list (the output of [`femtovg_stops`]) at
+/// position `t`, clamping `t` to `[0,1]` and linearly interpolating between the
+/// two bracketing stops in straight (non-premultiplied) sRGBA.
+///
+/// This reproduces *exactly* what femtovg's native gradient does internally —
+/// clamp-sample a `[0,1]` texture — except per-pixel instead of through a
+/// 256-texel LUT. Used by the CPU gradient fill (BUG-085) so the only difference
+/// from the native path is the eliminated quantization, never the colour ramp.
+fn sample_fvg_stops(resolved: &[(f32, femtovg::Color)], t: f32) -> femtovg::Color {
+    let n = resolved.len();
+    if n == 0 {
+        return femtovg::Color::rgbaf(0.0, 0.0, 0.0, 0.0);
+    }
+    if n == 1 {
+        return resolved[0].1;
+    }
+    let tc = t.clamp(0.0, 1.0);
+    if tc <= resolved[0].0 {
+        return resolved[0].1;
+    }
+    let last = n - 1;
+    if tc >= resolved[last].0 {
+        return resolved[last].1;
+    }
+    for i in 0..last {
+        let (ap, ac) = resolved[i];
+        let (bp, bc) = resolved[i + 1];
+        if tc >= ap && tc <= bp {
+            let s = bp - ap;
+            let f = if s > 1e-6 { (tc - ap) / s } else { 0.0 };
+            return femtovg::Color::rgbaf(
+                ac.r + (bc.r - ac.r) * f,
+                ac.g + (bc.g - ac.g) * f,
+                ac.b + (bc.b - ac.b) * f,
+                ac.a + (bc.a - ac.a) * f,
+            );
+        }
+    }
+    resolved[last].1
+}
+
+/// Converts a straight-alpha femtovg `Color` (channels in `[0,1]`) to `rgb::RGBA8`
+/// for upload as a CPU-rendered gradient texture (BUG-085).
+#[inline]
+fn fvg_to_rgba8(c: femtovg::Color) -> rgb::RGBA8 {
+    let q = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
+    rgb::RGBA8 { r: q(c.r), g: q(c.g), b: q(c.b), a: q(c.a) }
+}
+
+/// Fills an `iw×ih` RGBA8 texture by sampling `color_at` once per texel over a
+/// normalized box coordinate space (BUG-085). `color_at(cx, cy)` is evaluated at
+/// texel centres with `cx, cy ∈ [0,1]` (fraction across the box). Sampling at
+/// device resolution (rather than femtovg's 256-texel LUT) is what removes the
+/// quantization; the texel-centre sample mirrors what a GPU shader would do.
+fn fill_gradient_texture(
+    iw: usize, ih: usize, color_at: impl Fn(f32, f32) -> femtovg::Color,
+) -> Vec<rgb::RGBA8> {
+    let mut pixels = vec![rgb::RGBA8 { r: 0, g: 0, b: 0, a: 0 }; iw * ih];
+    for iy in 0..ih {
+        let cy = (iy as f32 + 0.5) / ih as f32;
+        let row = iy * iw;
+        for ix in 0..iw {
+            let cx = (ix as f32 + 0.5) / iw as f32;
+            pixels[row + ix] = fvg_to_rgba8(color_at(cx, cy));
+        }
+    }
+    pixels
+}
+
 /// Вычисляет начало и конец линейного градиента для femtovg из CSS angle_deg.
 ///
 /// CSS: 0° = «to top», 90° = «to right». femtovg использует абсолютные координаты.
@@ -385,6 +454,12 @@ pub struct FemtovgBackend {
     /// Currently active render target image. `None` means Screen.
     /// Updated by [`Self::switch_render_target`] whenever the RT changes.
     active_rt_image: Option<femtovg::ImageId>,
+    /// Per-pixel gradient images (BUG-085) queued for deletion after the next
+    /// `canvas.flush()`. Repeating linear and all radial gradients are rendered
+    /// CPU-side into a device-resolution texture to bypass femtovg's 256-texel
+    /// gradient LUT (which quantizes repeating-stop boundaries); the texture is
+    /// blitted with `fill_path`, whose draw command holds the ImageId until flush.
+    gradient_pending_delete: Vec<femtovg::ImageId>,
 }
 
 // SAFETY: FemtovgBackend используется только из одного потока одновременно
@@ -987,6 +1062,7 @@ impl FemtovgBackend {
             backdrop_filter_pending_delete: Vec::new(),
             clip_stack: Vec::new(),
             active_rt_image: None,
+            gradient_pending_delete: Vec::new(),
         })
     }
 
@@ -1950,6 +2026,85 @@ impl FemtovgBackend {
         Some(id)
     }
 
+    /// Device-pixel resolution of a CPU gradient texture for `rect` (BUG-085),
+    /// clamped to keep per-frame cost bounded for huge background gradients.
+    /// Returns `(iw, ih)`, both ≥ 1.
+    fn gradient_tex_size(&self, rect: &Rect) -> (usize, usize) {
+        /// Hard cap per axis. A 2048² texture (~16 MB) is far beyond any visible
+        /// gradient ramp; above it the femtovg bilinear upscale is imperceptible
+        /// while the CPU fill + GPU upload cost would balloon.
+        const MAX_DIM: usize = 2048;
+        let iw = ((rect.width as f64 * self.scale).round() as usize).clamp(1, MAX_DIM);
+        let ih = ((rect.height as f64 * self.scale).round() as usize).clamp(1, MAX_DIM);
+        (iw, ih)
+    }
+
+    /// Blits a CPU-rendered gradient texture `pixels` (size `iw×ih`) over `rect`,
+    /// queuing the texture for deletion after the frame's flush. Shared tail of
+    /// [`Self::draw_linear_gradient_cpu`] / [`Self::draw_radial_gradient_cpu`].
+    fn blit_gradient_texture(&mut self, rect: &Rect, pixels: &[rgb::RGBA8], iw: usize, ih: usize) {
+        let img = imgref::ImgRef::new(pixels, iw, ih);
+        let Ok(id) = self
+            .canvas
+            .create_image(femtovg::ImageSource::Rgba(img), femtovg::ImageFlags::empty())
+        else {
+            return;
+        };
+        let paint = femtovg::Paint::image(id, rect.x, rect.y, rect.width, rect.height, 0.0, 1.0);
+        let mut path = femtovg::Path::new();
+        path.rect(rect.x, rect.y, rect.width, rect.height);
+        self.canvas.fill_path(&path, &paint);
+        // The fill_path draw command holds `id` by copy; delete only after flush.
+        self.gradient_pending_delete.push(id);
+    }
+
+    /// Renders a linear gradient per-pixel into a device-resolution texture and
+    /// blits it, bypassing femtovg's 256-texel gradient LUT (BUG-085). Used for
+    /// repeating linear gradients, whose many tiled periods compress into the LUT
+    /// and band at the period boundaries; per-pixel sampling matches Edge's
+    /// analytic fill. `t` is the projection of each pixel onto the CSS gradient
+    /// line, identical to femtovg's own parametrization. Each device texel is
+    /// supersampled (`GRAD_SS²` sub-samples) so hard-stop boundaries — e.g. the
+    /// 45° stripes of `repeating-linear-gradient`. Per-pixel device-resolution
+    /// sampling removes the LUT quantization; smooth non-repeating linear ramps
+    /// stay on the cheaper femtovg-native path.
+    fn draw_linear_gradient_cpu(
+        &mut self, rect: &Rect, angle_deg: f32, resolved: &[(f32, femtovg::Color)],
+    ) {
+        let (iw, ih) = self.gradient_tex_size(rect);
+        // Endpoints in rect-local CSS coordinates (origin at the box's top-left).
+        let ([sx, sy], [ex, ey]) =
+            linear_gradient_endpoints(0.0, 0.0, rect.width, rect.height, angle_deg);
+        let (dx, dy) = (ex - sx, ey - sy);
+        let len2 = (dx * dx + dy * dy).max(1e-6);
+        let pixels = fill_gradient_texture(iw, ih, |cx, cy| {
+            let t = ((cx * rect.width - sx) * dx + (cy * rect.height - sy) * dy) / len2;
+            sample_fvg_stops(resolved, t)
+        });
+        self.blit_gradient_texture(rect, &pixels, iw, ih);
+    }
+
+    /// Renders a radial gradient per-pixel into a device-resolution texture and
+    /// blits it, bypassing femtovg's 256-texel gradient LUT (BUG-085) **and** its
+    /// circle-only `radial_gradient_stops` (which renders an `ellipse` gradient
+    /// as a circle — BUG-239). `t` is the elliptical distance from the centre,
+    /// `sqrt((dx/rx)² + (dy/ry)²)`, so a stop at fraction 1.0 lands on the ellipse
+    /// `(rx, ry)`; for a circle `rx == ry`. Centre and radii are rect-local CSS px.
+    fn draw_radial_gradient_cpu(
+        &mut self, rect: &Rect, cx_local: f32, cy_local: f32, rx: f32, ry: f32,
+        resolved: &[(f32, femtovg::Color)],
+    ) {
+        let (iw, ih) = self.gradient_tex_size(rect);
+        let inv_rx = 1.0 / rx.max(1e-6);
+        let inv_ry = 1.0 / ry.max(1e-6);
+        let pixels = fill_gradient_texture(iw, ih, |cx, cy| {
+            let nx = (cx * rect.width - cx_local) * inv_rx;
+            let ny = (cy * rect.height - cy_local) * inv_ry;
+            sample_fvg_stops(resolved, nx.hypot(ny))
+        });
+        self.blit_gradient_texture(rect, &pixels, iw, ih);
+    }
+
     /// Рисует conic gradient как веер треугольников, обрезанный по box rect.
     ///
     /// femtovg не поддерживает conic gradient нативно. Аппроксимируем через
@@ -2222,6 +2377,15 @@ impl FemtovgBackend {
                 if resolved.len() < 2 {
                     return;
                 }
+                // BUG-085: repeating linear gradients tile many periods into
+                // femtovg's 256-texel LUT and band at the boundaries — render
+                // per-pixel instead. Smooth non-repeating linear ramps are
+                // already pixel-accurate through the LUT and stay on the native
+                // (cheaper, no per-frame texture) path.
+                if *repeating {
+                    self.draw_linear_gradient_cpu(rect, *angle_deg, &resolved);
+                    return;
+                }
                 let paint = femtovg::Paint::linear_gradient_stops(
                     sx, sy, ex, ey,
                     resolved,
@@ -2231,26 +2395,32 @@ impl FemtovgBackend {
                 self.canvas.fill_path(&path, &paint);
             }
 
-            DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating } => {
+            DisplayCommand::DrawRadialGradient {
+                rect, center_x_pct, center_y_pct, radius_x, radius_y, stops, repeating,
+            } => {
                 if rect.width <= 0.0 || rect.height <= 0.0 || stops.is_empty() {
                     return;
                 }
-                let cx = rect.x + center_x_pct * rect.width;
-                let cy = rect.y + center_y_pct * rect.height;
-                let dx = center_x_pct.max(1.0 - center_x_pct) * rect.width;
-                let dy = center_y_pct.max(1.0 - center_y_pct) * rect.height;
-                let outer_r = dx.hypot(dy).max(1.0);
-                let resolved = femtovg_stops(stops, outer_r, *repeating);
+                // Px stops resolve against the gradient ray length; the larger
+                // radius is a reasonable scalar for the (rare) px-positioned stop.
+                let line_len = radius_x.max(*radius_y).max(1.0);
+                let resolved = femtovg_stops(stops, line_len, *repeating);
                 if resolved.len() < 2 {
                     return;
                 }
-                let paint = femtovg::Paint::radial_gradient_stops(
-                    cx, cy, 0.0, outer_r,
-                    resolved,
+                // BUG-085: render radial gradients per-pixel to bypass femtovg's
+                // 256-texel LUT (quantizes repeating rings + smooth interpolation)
+                // and its circle-only paint (BUG-239: an `ellipse` gradient must
+                // use independent rx/ry). Centre is rect-local (origin at the box
+                // top-left) to match draw_radial_gradient_cpu.
+                self.draw_radial_gradient_cpu(
+                    rect,
+                    center_x_pct * rect.width,
+                    center_y_pct * rect.height,
+                    *radius_x,
+                    *radius_y,
+                    &resolved,
                 );
-                let mut path = femtovg::Path::new();
-                path.rect(rect.x, rect.y, rect.width, rect.height);
-                self.canvas.fill_path(&path, &paint);
             }
 
             DisplayCommand::DrawConicGradient {
@@ -2792,6 +2962,11 @@ impl RenderBackend for FemtovgBackend {
         for id in backdrop_del {
             self.canvas.delete_image(id);
         }
+        // BUG-085: per-pixel gradient textures (repeating linear + radial).
+        let gradient_del: Vec<_> = self.gradient_pending_delete.drain(..).collect();
+        for id in gradient_del {
+            self.canvas.delete_image(id);
+        }
 
         self.gl_surface
             .swap_buffers(&self.gl_context)
@@ -3274,6 +3449,52 @@ mod tests {
         let r = femtovg_stops(&stops, 100.0, true);
         assert_eq!(r.len(), 2);
         assert!((r[0].0).abs() < 1e-5 && (r[1].0 - 1.0).abs() < 1e-5);
+    }
+
+    // ── BUG-085: per-pixel CPU gradient sampler (bypasses 256-texel LUT) ──────
+
+    #[test]
+    fn sample_fvg_stops_clamps_outside_range() {
+        // Mirrors femtovg's LUT: positions outside [0,1] take the boundary colour.
+        let red = femtovg::Color::rgbaf(1.0, 0.0, 0.0, 1.0);
+        let blue = femtovg::Color::rgbaf(0.0, 0.0, 1.0, 1.0);
+        let resolved = [(0.2_f32, red), (0.8_f32, blue)];
+        let lo = sample_fvg_stops(&resolved, -1.0);
+        let hi = sample_fvg_stops(&resolved, 2.0);
+        assert!((lo.r - 1.0).abs() < 1e-6 && lo.b.abs() < 1e-6, "below-range = first stop");
+        assert!(hi.r.abs() < 1e-6 && (hi.b - 1.0).abs() < 1e-6, "above-range = last stop");
+    }
+
+    #[test]
+    fn sample_fvg_stops_interpolates_midpoint() {
+        let red = femtovg::Color::rgbaf(1.0, 0.0, 0.0, 1.0);
+        let blue = femtovg::Color::rgbaf(0.0, 0.0, 1.0, 1.0);
+        let resolved = [(0.0_f32, red), (1.0_f32, blue)];
+        let mid = sample_fvg_stops(&resolved, 0.5);
+        assert!((mid.r - 0.5).abs() < 1e-6, "R halfway, got {}", mid.r);
+        assert!((mid.b - 0.5).abs() < 1e-6, "B halfway, got {}", mid.b);
+    }
+
+    #[test]
+    fn sample_fvg_stops_hard_stop_is_sharp() {
+        // Coincident positions (hard stop): the colour flips sharply across 0.5
+        // with no visible ramp on either side.
+        let a = femtovg::Color::rgbaf(0.2, 0.2, 0.2, 1.0);
+        let b = femtovg::Color::rgbaf(0.4, 0.4, 0.4, 1.0);
+        let resolved = [(0.0_f32, a), (0.5_f32, a), (0.5_f32, b), (1.0_f32, b)];
+        let just_below = sample_fvg_stops(&resolved, 0.49);
+        let just_above = sample_fvg_stops(&resolved, 0.51);
+        assert!((just_below.r - 0.2).abs() < 1e-3, "below hard stop = a");
+        assert!((just_above.r - 0.4).abs() < 1e-3, "above hard stop = b");
+    }
+
+    #[test]
+    fn fvg_to_rgba8_quantizes_channels() {
+        let c = femtovg::Color::rgbaf(1.0, 0.5, 0.0, 1.0);
+        let q = fvg_to_rgba8(c);
+        assert_eq!((q.r, q.b, q.a), (255, 0, 255));
+        // 0.5 * 255 = 127.5 → rounds to 128.
+        assert_eq!(q.g, 128);
     }
 
     /// BUG-183 — a gradient `mask-image` is applied by painting the gradient

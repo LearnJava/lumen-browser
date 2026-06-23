@@ -214,11 +214,13 @@ pub(crate) fn rasterize_cpu(
                     layers.last_mut().expect("base layer"), rect, *angle_deg, stops, *repeating, c,
                 )?;
             }
-            DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating } => {
+            DisplayCommand::DrawRadialGradient {
+                rect, center_x_pct, center_y_pct, radius_x, radius_y, stops, repeating,
+            } => {
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
                 rasterize_radial_gradient(
                     layers.last_mut().expect("base layer"), rect, *center_x_pct, *center_y_pct,
-                    stops, *repeating, c,
+                    *radius_x, *radius_y, stops, *repeating, c,
                 )?;
             }
             DisplayCommand::DrawConicGradient {
@@ -654,8 +656,13 @@ fn render_mask(spec: &MaskSpec, width: u32, height: u32) -> Option<tiny_skia::Pi
             rasterize_linear_gradient(&mut mask, rect, *angle_deg, stops, *repeating, None).ok()?;
         }
         MaskSpec::Radial { rect, center_x_pct, center_y_pct, stops, repeating } => {
+            // Mask radial gradients stay circular (farthest-corner) — the mask
+            // command carries no ending-shape, matching the femtovg mask path.
+            let dx = center_x_pct.max(1.0 - center_x_pct) * rect.width;
+            let dy = center_y_pct.max(1.0 - center_y_pct) * rect.height;
+            let r = dx.hypot(dy).max(1.0);
             rasterize_radial_gradient(
-                &mut mask, rect, *center_x_pct, *center_y_pct, stops, *repeating, None,
+                &mut mask, rect, *center_x_pct, *center_y_pct, r, r, stops, *repeating, None,
             ).ok()?;
         }
         MaskSpec::Conic { rect, center_x_pct, center_y_pct, from_angle_deg, stops, repeating } => {
@@ -1572,49 +1579,59 @@ fn rasterize_linear_gradient(
     Ok(())
 }
 
-/// CSS Images L3 §3.3 — `radial-gradient(...)` via tiny-skia `RadialGradient`.
+/// CSS Images L3 §3.3/§3.5 — `radial-gradient(...)` via tiny-skia `RadialGradient`.
 ///
-/// Mirrors the femtovg backend (`DrawRadialGradient`): a **circle** whose radius
-/// is the farthest-corner distance `hypot(dx, dy)` with `dx = max(cx,1-cx)·w`,
-/// `dy = max(cy,1-cy)·h`. The window backend draws the gradient as an isotropic
-/// circle (not an anisotropic ellipse), and the CPU snapshot must match it byte
-/// for byte (BUG-221, TEST-39): the previous ellipse stretched the rings
-/// horizontally, diverging from both femtovg and Edge.
+/// The ending-shape radii `(radius_x, radius_y)` are resolved upstream
+/// ([`lumen_layout::radial_gradient_radii`]). A **circle** (`radius_x ==
+/// radius_y`) is drawn isotropically, matching the femtovg backend byte for byte
+/// (BUG-221, TEST-39). An **ellipse** is drawn as a unit circle of radius
+/// `radius_x` plus a vertical scale `radius_y/radius_x` about the centre, so the
+/// rings stretch to the elliptical ending shape Edge produces (BUG-239).
+#[allow(clippy::too_many_arguments)]
 fn rasterize_radial_gradient(
     pixmap: &mut tiny_skia::Pixmap,
     rect: &Rect,
     center_x_pct: f32,
     center_y_pct: f32,
+    radius_x: f32,
+    radius_y: f32,
     stops: &[GradientStop],
     repeating: bool,
     clip: Option<&tiny_skia::Mask>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use tiny_skia::{Paint, Point, RadialGradient, SpreadMode, Transform};
 
-    let dx = center_x_pct.max(1.0 - center_x_pct) * rect.width;
-    let dy = center_y_pct.max(1.0 - center_y_pct) * rect.height;
-    let outer_r = dx.hypot(dy).max(1.0);
-    let resolved = resolve_stop_positions(stops, outer_r);
+    let rx = radius_x.max(1.0);
+    let ry = radius_y.max(1.0);
+    // Px stops resolve against the gradient ray; use the larger radius (matches
+    // the femtovg backend's `line_len`).
+    let resolved = resolve_stop_positions(stops, rx.max(ry));
     let Some((skia_stops, lo, hi)) = skia_gradient_stops(&resolved, repeating) else {
         return Ok(());
     };
 
-    // Circle centred at the gradient origin. For non-repeating gradients the
-    // resolved stops already fill `[0,1]` so `hi-lo == 1` and the radius is the
-    // full farthest-corner distance; for repeating ones the radius is shortened
-    // to the `[lo,hi]` period so `SpreadMode::Repeat` tiles the rings outward.
+    // Unit circle of radius `rx` centred at the gradient origin. For
+    // non-repeating gradients the resolved stops already fill `[0,1]` so
+    // `hi-lo == 1` and the radius is the full horizontal radius; for repeating
+    // ones it is shortened to the `[lo,hi]` period so `SpreadMode::Repeat` tiles
+    // the rings outward. A vertical scale turns the circle into the ellipse.
     let cx = rect.x + center_x_pct * rect.width;
     let cy = rect.y + center_y_pct * rect.height;
-    let radius = (outer_r * (hi - lo)).max(1e-3);
+    let radius = (rx * (hi - lo)).max(1e-3);
     let center = Point::from_xy(cx, cy);
     let mode = if repeating { SpreadMode::Repeat } else { SpreadMode::Pad };
+    // Scale y about the centre by ry/rx (identity for a circle → byte-identical).
+    let sy = (ry / rx).max(1e-6);
+    let local = Transform::from_translate(cx, cy)
+        .pre_scale(1.0, sy)
+        .pre_translate(-cx, -cy);
     let shader = RadialGradient::new(
         center,
         center,
         radius,
         skia_stops,
         mode,
-        Transform::identity(),
+        local,
     )
     .ok_or("degenerate radial gradient")?;
 
@@ -3176,6 +3193,9 @@ mod tests {
             rect: rect(0.0, 0.0, 120.0, 40.0),
             center_x_pct: 0.5,
             center_y_pct: 0.5,
+            // Equal radii → a circle (isotropic), the `circle` keyword case.
+            radius_x: 63.25,
+            radius_y: 63.25,
             stops: vec![
                 GradientStop { color: red, position: None },
                 GradientStop { color: blue, position: None },

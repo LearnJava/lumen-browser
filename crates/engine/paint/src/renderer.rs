@@ -4773,7 +4773,7 @@ impl Renderer {
                     draw_ops.push(DrawOp::Gradient { v_start, v_count, grad_batch_idx });
                 }
                 // CSS Images L3 §3.5 — GPU radial gradient pipeline.
-                DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating } => {
+                DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating, .. } => {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
