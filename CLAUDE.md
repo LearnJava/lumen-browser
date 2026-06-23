@@ -156,24 +156,32 @@ Full role definition: `STATUS-P5.md`.
 Three artifacts, strict roles — do not duplicate descriptions across them:
 
 ```
-ROADMAP.md (one line per task, status ≠ done)   ← master task list (grep "| <id> " ROADMAP.md)
+ROADMAP.md (one line per task, status ≠ done)   ← master task list for P1/P2 (grep "| <id> " ROADMAP.md)
+   │   P3's source list is BUGS.md (OPEN rows); P4's is CSS-SPECS.md (⬜/🟡 rows) + `// CSS:` handoffs.
    │
-   ├─ STATUS-PN.md: bare pointer lines `ROADMAP.md:NN`, one per open task, priority top→bottom.
+   ├─ STATUS-PN.md: bare pointer lines `<source>:NN`, one per open task, priority top→bottom.
+   │     <source> = the role's master list — ROADMAP.md (P1/P2) · BUGS.md (P3) · CSS-SPECS.md (P4);
+   │     a code `file:line` (e.g. crates/.../ruby.rs:76) is allowed when the task is anchored in a
+   │     `// CSS:` / `// BUG-NNN` handoff rather than a list row.
    │     NOTHING else — no headers, tables, descriptions, completed tasks, In progress/Recent.
-   │     (history lives in git log; readiness in ROADMAP status / CAPABILITIES.md)
+   │     (history lives in git log; readiness in ROADMAP status / CAPABILITIES.md / BUGS.md)
    │
    └─ docs/tasks/<id>.md   ← detailed brief, ONLY for an unimplemented task
 ```
 
 - **A task file exists only while the task is unimplemented.** A done task is just a `done` line
   in `ROADMAP.md` — no STATUS line, no task file.
-- **`STATUS-PN.md` holds only `ROADMAP.md:NN` lines.** The `<id>`/task-file link is recovered from
-  that ROADMAP row. Stable anchor is the row `<id>`; the `:NN` line number is fragile.
-- **Reindex on ROADMAP insertion (mandatory).** When you insert `K` new rows into `ROADMAP.md` at
-  line `L`, every pointer `ROADMAP.md:NN` (in all `STATUS-PN.md`) with `NN ≥ L` must be bumped by
-  `+K`. After any ROADMAP edit that shifts rows, verify each STATUS pointer still lands on its
-  intended row (`sed -n 'NNp' ROADMAP.md`). Prefer appending new rows at the end of a phase block
-  to minimise shift. Append-only edits below all pointers need no reindex.
+- **`STATUS-PN.md` holds only `<source>:NN` pointer lines** — `<source>` ∈ {ROADMAP.md, BUGS.md,
+  CSS-SPECS.md} or a code `file:line`. The `<id>`/task-file link is recovered from that row. Stable
+  anchor is the row key (`<id>` in ROADMAP, `BUG-NNN` in BUGS.md, property name in CSS-SPECS.md);
+  the `:NN` line number is fragile. BUGS.md is append-only (fixed bugs flip OPEN→FIXED in place,
+  never deleted), so a `BUGS.md:NN` pointer stays valid until rows are inserted above it.
+- **Reindex on source insertion (mandatory).** When you insert `K` new rows into a source file
+  (`ROADMAP.md` / `BUGS.md` / `CSS-SPECS.md`) at line `L`, every pointer into that same file (in all
+  `STATUS-PN.md`) with `NN ≥ L` must be bumped by `+K`. After any edit that shifts rows, verify each
+  STATUS pointer still lands on its intended row (`sed -n 'NNp' <source>`). Prefer appending new rows
+  at the end (ROADMAP: end of phase block; BUGS.md: end of file) to minimise shift. Append-only edits
+  below all pointers need no reindex.
 - **On completion:** delete the STATUS-PN.md line → delete (or `## Status: MERGED`) the task file →
   set `ROADMAP.md` status to `done` (run `python scripts/gen_roadmap.py`) → mark
   `CAPABILITIES.md`/`CSS-SPECS.md`/`BUGS.md`. (Full list — §«Task completion checklist».)
