@@ -48,7 +48,7 @@ use lumen_layout::Color;
 
 use lumen_layout::{
     BackgroundRepeat, BackgroundSize, BorderStyle, FontStyle, GradientStop, ObjectFit,
-    ObjectPosition, PositionComponent,
+    ObjectPosition,
 };
 
 use lumen_core::geom::Rect;
@@ -56,7 +56,7 @@ use lumen_core::geom::Rect;
 use crate::backend::{RenderBackend, RenderError};
 use crate::blend_modes::mix_blend_rgba;
 use crate::dash_math::{dashed_border_offsets, dotted_border_offsets};
-use crate::display_list::{BlendMode, CornerRadii, DisplayCommand, ResolvedClipShape, fit_image_rect};
+use crate::display_list::{BlendMode, CornerRadii, DisplayCommand, ResolvedClipShape, bg_tile_geometry, fit_image_rect};
 use crate::gradient_math::{conic_sample_t, sample_gradient_color};
 use crate::matrix_util::mat4_to_2d_affine;
 
@@ -2906,73 +2906,6 @@ fn image_placement(
     }
 }
 
-/// Считает геометрию плиток фоновой картинки из `background-size` /
-/// `background-position` / `background-repeat` (CSS Backgrounds L3 §3.3–3.5).
-///
-/// Чистая функция (без GL) — зеркалит tiling-математику wgpu `Renderer`, чтобы
-/// femtovg-бэкенд (default) давал тот же результат. `img_w`/`img_h` — размер
-/// исходной картинки; `oarea_*` — positioning area (`background-origin`).
-///
-/// Возвращает `(tile_w, tile_h, tile_x_start, tile_y_start, repeat_x,
-/// repeat_y)`: размер одной плитки, координату левого-верхнего угла первой
-/// плитки и флаги повтора по осям.
-#[allow(clippy::too_many_arguments)]
-fn bg_tile_geometry(
-    size: BackgroundSize,
-    position: &ObjectPosition,
-    repeat: BackgroundRepeat,
-    img_w: f32,
-    img_h: f32,
-    oarea_w: f32,
-    oarea_h: f32,
-    oarea_x: f32,
-    oarea_y: f32,
-) -> (f32, f32, f32, f32, bool, bool) {
-    let (tile_w, tile_h) = match size {
-        BackgroundSize::Auto => (img_w, img_h),
-        BackgroundSize::Cover => {
-            let s = (oarea_w / img_w).max(oarea_h / img_h);
-            (img_w * s, img_h * s)
-        }
-        BackgroundSize::Contain => {
-            let s = (oarea_w / img_w).min(oarea_h / img_h);
-            (img_w * s, img_h * s)
-        }
-        BackgroundSize::Length(w, h) => {
-            let tw = w.max(1.0);
-            let th = h.unwrap_or_else(|| img_h * (tw / img_w)).max(1.0);
-            (tw, th)
-        }
-    };
-
-    let off_x = match position.x {
-        PositionComponent::Px(px) => px,
-        PositionComponent::Percent(p) => (oarea_w - tile_w) * p,
-    };
-    let off_y = match position.y {
-        PositionComponent::Px(py) => py,
-        PositionComponent::Percent(p) => (oarea_h - tile_h) * p,
-    };
-    let tile_x0 = oarea_x + off_x;
-    let tile_y0 = oarea_y + off_y;
-
-    let (tile_x_start, repeat_x, repeat_y) = match repeat {
-        BackgroundRepeat::NoRepeat => (tile_x0, false, false),
-        BackgroundRepeat::RepeatX => (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, false),
-        BackgroundRepeat::RepeatY => (tile_x0, false, true),
-        BackgroundRepeat::Repeat | BackgroundRepeat::Round | BackgroundRepeat::Space => {
-            (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, true)
-        }
-    };
-    let tile_y_start = if repeat_y {
-        tile_y0 - (off_y / tile_h).ceil() * tile_h
-    } else {
-        tile_y0
-    };
-
-    (tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y)
-}
-
 /// Конвертирует `lumen_image::Image` в вектор `RGBA8` пикселей для femtovg.
 fn image_to_rgba8_vec(img: &Image) -> Vec<rgb::RGBA8> {
     use rgb::RGBA;
@@ -2991,6 +2924,7 @@ fn image_to_rgba8_vec(img: &Image) -> Vec<rgb::RGBA8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumen_layout::PositionComponent;
     use lumen_layout::Length;
 
     /// BUG-133 / BUG-146 / BUG-144: offscreen layers composited directly from

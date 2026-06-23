@@ -903,6 +903,76 @@ fn fit_with_ratio(iw: f32, ih: f32, bw: f32, bh: f32, cover: bool) -> (f32, f32)
     (iw * s, ih * s)
 }
 
+/// Tile geometry for a background image from `background-size` /
+/// `background-position` / `background-repeat` (CSS Backgrounds L3 §3.3–3.5).
+///
+/// Pure (GL-free) so both the femtovg backend and the deterministic CPU
+/// rasterizer derive identical placement. `img_w`/`img_h` — intrinsic image
+/// size; `oarea_*` — the `background-origin` positioning area (x/y/width/height).
+///
+/// Returns `(tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y)`:
+/// one tile's size, the top-left corner of the first tile, and the per-axis
+/// repeat flags. The caller tiles from `(tile_x_start, tile_y_start)` across the
+/// painting area, stepping by `(tile_w, tile_h)` while the corresponding repeat
+/// flag is set, clipping to the painting rect.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub(crate) fn bg_tile_geometry(
+    size: BackgroundSize,
+    position: &ObjectPosition,
+    repeat: BackgroundRepeat,
+    img_w: f32,
+    img_h: f32,
+    oarea_w: f32,
+    oarea_h: f32,
+    oarea_x: f32,
+    oarea_y: f32,
+) -> (f32, f32, f32, f32, bool, bool) {
+    let (tile_w, tile_h) = match size {
+        BackgroundSize::Auto => (img_w, img_h),
+        BackgroundSize::Cover => {
+            let s = (oarea_w / img_w).max(oarea_h / img_h);
+            (img_w * s, img_h * s)
+        }
+        BackgroundSize::Contain => {
+            let s = (oarea_w / img_w).min(oarea_h / img_h);
+            (img_w * s, img_h * s)
+        }
+        BackgroundSize::Length(w, h) => {
+            let tw = w.max(1.0);
+            let th = h.unwrap_or_else(|| img_h * (tw / img_w)).max(1.0);
+            (tw, th)
+        }
+    };
+
+    let off_x = match position.x {
+        PositionComponent::Px(px) => px,
+        PositionComponent::Percent(p) => (oarea_w - tile_w) * p,
+    };
+    let off_y = match position.y {
+        PositionComponent::Px(py) => py,
+        PositionComponent::Percent(p) => (oarea_h - tile_h) * p,
+    };
+    let tile_x0 = oarea_x + off_x;
+    let tile_y0 = oarea_y + off_y;
+
+    let (tile_x_start, repeat_x, repeat_y) = match repeat {
+        BackgroundRepeat::NoRepeat => (tile_x0, false, false),
+        BackgroundRepeat::RepeatX => (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, false),
+        BackgroundRepeat::RepeatY => (tile_x0, false, true),
+        BackgroundRepeat::Repeat | BackgroundRepeat::Round | BackgroundRepeat::Space => {
+            (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, true)
+        }
+    };
+    let tile_y_start = if repeat_y {
+        tile_y0 - (off_y / tile_h).ceil() * tile_h
+    } else {
+        tile_y0
+    };
+
+    (tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y)
+}
+
 /// Финальный GPU-quad для `<img>`: пересечение «полного» placement-rect
 /// (см. [`fit_image_rect`]) с `box_rect` плюс соответствующие UV-bounds
 /// исходной текстуры. Спецификация CSS Images L3 §5.5 требует «clipped to
