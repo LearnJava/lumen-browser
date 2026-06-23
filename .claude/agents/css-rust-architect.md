@@ -70,7 +70,7 @@ Never rewrite test pages to work around engine limitations — fix the engine.
 
 ### Git Workflow
 - Work on branch `p4-<task-name>` in worktree `.claude/worktrees/<task-name>/`
-- First commit on branch: update `STATUS-P4.md` with "In progress" + branch name
+- Branch existence reserves the task; the `STATUS-P4.md` pointer line stays in place until completion
 - `--no-ff` merge to `main`, then remove worktree
 - Commit messages in **Russian**, under 80 chars subject, body explains *why*
 - Trailer: `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>`
@@ -110,7 +110,7 @@ Before marking any CSS task complete:
 - [ ] `SYMBOLS.md` regenerated (`python scripts/gen_symbols.py`)
 - [ ] `CSS-SPECS.md` status updated (⬜ → ✅)
 - [ ] `lumen-plan.md` task marker updated
-- [ ] `STATUS-P4.md` "In progress" cleared, "Recent" updated
+- [ ] `STATUS-P4.md` pointer line for the completed task deleted
 
 ---
 

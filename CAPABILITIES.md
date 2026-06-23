@@ -13,7 +13,7 @@ capability, and drift from code (see CLAUDE.md). For per-CSS-property detail see
 [CSS-SPECS.md](CSS-SPECS.md); for per-crate design prose see [subsystems/](subsystems/).
 
 **Maintenance rule:** when a feature merges to `main`, add/adjust one line here in the
-**same commit** as the `STATUS-PN.md` "Recent" update. This is the only file that must stay
+**same commit** as deleting the completed task's `STATUS-PN.md` pointer line. This is the only file that must stay
 true to code; keep it honest about ⬜ gaps too.
 
 Snapshot: **Phase 2 «Interactive» (complete), app v0.5.0**. ~21 crates.
@@ -210,4 +210,4 @@ These curated docs lag behind code; **trust this file + code over them**:
 - `subsystems/js.md` curates ~30 APIs; code wires ~90.
 - `subsystems/network.md` lists cookie jar + SOCKS5/Tor as deferred though both are wired.
 - `subsystems/storage.md` omits Service Worker store + Cache Storage.
-- `docs/plan/phases.md:31` describes streaming as unbuilt though PH1-2 shipped (PH1-2a TCP body streaming + PH1-2b incremental layout + PH1-2c progressive image loading all done — see STATUS-P1 "Recent merges").
+- `docs/plan/phases.md:31` describes streaming as unbuilt though PH1-2 shipped (PH1-2a TCP body streaming + PH1-2b incremental layout + PH1-2c progressive image loading all done — see `git log`).

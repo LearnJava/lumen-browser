@@ -115,7 +115,7 @@ git worktree remove .claude/worktrees/<kebab-name>
 ## Критерии готовности
 - [ ] `cargo clippy` чист
 - [ ] Тесты проходят
-- [ ] В STATUS-PN.md задача перенесена в "Recent"
+- [ ] Из STATUS-PN.md удалён указатель завершённой задачи (история = git log)
 ```
 
 ---
