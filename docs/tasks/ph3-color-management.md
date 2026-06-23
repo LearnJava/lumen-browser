@@ -99,7 +99,7 @@ Add an OS query for the active display's color profile / gamut, behind a `lumen-
 
 CSS color **parsing** is P4's domain and is **largely already implemented** in `crates/engine/layout/src/style.rs` (`ColorFloat`, `CssColor::Wide`, `predefined_to_srgb_linear`, `color_mix.rs`). P2 must **not** edit color *parsing*.
 
-The handoff for P4 (file under `STATUS-P4.md` → "Needs wiring" with `// CSS:` markers, do **not** implement here):
+The handoff for P4 (add a `crates/...:line` pointer in `STATUS-P4.md` with `// CSS:` markers, do **not** implement here):
 
 - Today `predefined_to_srgb_linear()` (`style.rs:867`) and `ColorFloat::to_*` (`:782`/`:814`) bake the sRGB collapse into the parse/used-value step. For wide-gamut output, the *value* must survive in a wide space down to paint. P2 provides the wide-carry types and `to_display(target)`; **P4 wires** `color()` / `lab()` / `lch()` / `oklab()` / `oklch()` / `color-mix()` to emit the preserved wide value instead of an eager sRGB `Color`, keeping the sRGB collapse only as the fallback when the target is sRGB.
 - Mark the connection points with `// CSS: wide-gamut color() output (Ph3 color management)` at the `ColorFloat` construction sites.
@@ -124,7 +124,7 @@ The handoff for P4 (file under `STATUS-P4.md` → "Needs wiring" with `// CSS:` 
 
 1. **Display-profile detection trait (foundational).** Add `DisplayColorProfile` to `lumen-core::ext`; implement OS query in `shell`/`driver` (Windows WCS/DXGI/EDID); default `Srgb`. Plumb the result to paint as the target `ColorSpace`. Unit-test the default path.
 2. **Target-parametrised ICC transforms.** Generalise `build_rgb_transform` / encode in `crates/core/src/icc.rs` to an arbitrary target gamut using `pcs::Xyz` + per-target XYZ→linear matrices; keep the sRGB path identical. Add `to_display(target)` to `ColorFloat`. Tests: P3-in → P3-out is identity-ish; any-in → sRGB-out matches current output exactly (no regression).
-3. **Carry wide-gamut values through the display list** (with the existing sRGB collapse kept as the `target == Srgb` fallback). Add `// CSS:` markers + a `STATUS-P4.md` "Needs wiring" entry for the parser side (P4 wires).
+3. **Carry wide-gamut values through the display list** (with the existing sRGB collapse kept as the `target == Srgb` fallback). Add `// CSS:` markers + a `crates/...:line` pointer in `STATUS-P4.md` for the parser side (P4 wires).
 4. **Wide-gamut output surface (wgpu).** At `renderer.rs:1609`, request `Rgb10a2Unorm`/`Rgba16Float` + wide-gamut surface color space when supported; gate behind the detected display profile; fall back to today's 8-bit sRGB selection.
 5. **Color-managed compositing.** Composite/blend in a consistent space relative to the destination gamut; convert sRGB content into the target encoding (not vice-versa) on a wide-gamut display.
 6. **Image path.** Target-aware `apply_icc_rgb_transform` / `apply_tone_mapping` in `crates/engine/image/src/lib.rs` so a P3/Rec2020 photo stays wide when the display is wide.
@@ -150,6 +150,6 @@ The handoff for P4 (file under `STATUS-P4.md` → "Needs wiring" with `// CSS:` 
 - The wgpu surface requests a wide-gamut format + color space when the display supports it, with an 8-bit sRGB fallback.
 - A Display-P3 CSS color and a P3-profiled image reach a P3 display at real chromaticity; on an sRGB display the output is unchanged.
 - femtovg's 8-bit limitation is documented or wide-gamut is gated behind the wgpu backend.
-- P4 handoff for CSS Color 4 wide-value carry is filed in `STATUS-P4.md` ("Needs wiring") with `// CSS:` markers; **no color parsing was edited by P2**.
+- P4 handoff for CSS Color 4 wide-value carry is filed in `STATUS-P4.md` (a `crates/...:line` pointer) with `// CSS:` markers; **no color parsing was edited by P2**.
 - `cargo clippy -p lumen-core -p lumen-image -p lumen-paint --all-targets -- -D warnings` clean; crate tests pass; full graphic pipeline shows no sRGB regression.
 - `CAPABILITIES.md`, the relevant `subsystems/*.md`, and `docs/plan/phases.md:132` updated in the merge commit.

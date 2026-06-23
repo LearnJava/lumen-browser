@@ -56,7 +56,7 @@ Exception: Claude memory (`~/.claude/projects/.../memory/`) lives outside the re
 
 Five parallel developers (5 Claude Code sessions, each in its own `git worktree`). Each owns a distinct domain:
 
-**If the user says "you are developer N" at session start — read `STATUS-PN.md` and take the first item from "Next". If "In progress" is set — continue that task. If all your tasks are taken — ask the user which task to take next.**
+**If the user says "you are developer N" at session start — read `STATUS-PN.md` and take the first pointer line. If a `p<N>-…` branch already exists for you (`git branch`), continue that task instead. If all your tasks are taken — ask the user which task to take next.**
 
 Crates: `shell` | `core` | `dom` `html-parser` `css-parser` `layout` `paint` `font` `encoding` `image` | `ipc` `network` `storage` `knowledge` `bench`
 
@@ -72,7 +72,7 @@ Crates: `shell` | `core` | `dom` `html-parser` `css-parser` `layout` `paint` `fo
 
 **P1 and P2 work on features from the roadmap in parallel.** Coordination:
 - **Before starting:** Check `STATUS-P1.md` and `STATUS-P2.md` to avoid duplicate task pickup
-- **When reserving a task:** Update your `STATUS-PN.md` first (add "In progress" with branch name)
+- **When reserving a task:** create your `p<N>-…` branch first — the branch's existence is the reservation signal (the STATUS pointer line stays in place)
 - **Cross-domain work** (layout + paint): Use separate branches, coordinate via commit messages
 - **Crate conflicts:** Check git branches before touching a crate. If conflict, one session delays start
 
@@ -123,7 +123,7 @@ P2 writes:  fn apply_filter_pass(cmd: FilterCommand)  // CSS: filter, backdrop-f
 P4 writes:  ComputedStyle.filter field + apply_declaration("filter") + emits FilterCommand
 ```
 
-**P4 workflow:** When P1/P2 add a `// CSS: <property>` comment, P4 picks it up from `STATUS-P4.md` "Needs wiring" section. P4 implements end-to-end, then moves to "Recent". Async workflow — no pre-coordination required.
+**P4 workflow:** When P1/P2 add a `// CSS: <property>` comment, P4 picks it up as a `crates/...:line` pointer line in `STATUS-P4.md`. P4 implements end-to-end, then deletes that pointer line. Async workflow — no pre-coordination required.
 
 ### Code health: P5 only
 
@@ -135,8 +135,8 @@ P5's mandate is **audit + cheap safe cleanup + filing tasks** — never solo ref
 - **What P5 fixes directly (no separate task):** delete `--merged` branches, prune orphaned worktrees, regenerate `SYMBOLS.md`, trivial clippy fixes (unused import, stray `&`) **in its own crate only**.
 - **What P5 does NOT fix — it files instead:**
   - visual/logic bug → `OPEN` line in `BUGS.md` (next BUG-NNN)
-  - duplication / needed refactor → "Next" item in `STATUS-P1.md`/`STATUS-P2.md` with `file:line`
-  - dangling `// CSS:` handoff → "Needs wiring" item in `STATUS-P4.md`
+  - duplication / needed refactor → `ROADMAP.md` row + a pointer line (`ROADMAP.md:NN` or code `file:line`) in `STATUS-P1.md`/`STATUS-P2.md`
+  - dangling `// CSS:` handoff → `crates/...:line` pointer line in `STATUS-P4.md`
 - **Workspace-clippy exception.** P5 is the only role allowed `cargo clippy --workspace` (see Cargo output rules) — the full sweep is its whole point; it catches cross-crate breakage that per-crate checks hide after multi-session merges.
 - **Branch prefix:** `p5-health-<date>` or `p5-<topic>`. Worktree mandatory, same as P1–P4.
 
@@ -149,7 +149,7 @@ Full role definition: `STATUS-P5.md`.
 - **`lumen-shell` is P3's.** Only P3 integrates into the shell. P1/P2 describe integration points in commit body; P3 picks them up as separate tasks.
 - **Interface-first.** Cross-team tasks start with the owner publishing **types/traits** (with `todo!()` stubs) in a dedicated commit. Consumers implement against the stub; the real impl is a drop-in replacement.
 - **Add extension points yourself.** Don't block on "P3 hasn't added the trait yet" — add it yourself, P3 reviews post-factum.
-- **P1/P2/P3 → P4 handoff.** When a new algorithm needs a CSS property, add `// CSS: <property>` comment at the call site and note it in `STATUS-P4.md` under "Needs wiring". Do not wait for P4 — ship the algorithm, P4 wires CSS independently.
+- **P1/P2/P3 → P4 handoff.** When a new algorithm needs a CSS property, add `// CSS: <property>` comment at the call site and add a `crates/...:line` pointer line for it in `STATUS-P4.md`. Do not wait for P4 — ship the algorithm, P4 wires CSS independently.
 
 ### Task tracking schema (invariant)
 
@@ -189,13 +189,10 @@ ROADMAP.md (one line per task, status ≠ done)   ← master task list for P1/P2
 
 ### Reserving a task
 
-Create a feature branch (`git checkout -b <name>`) → in the **first commit on that branch** move the
-task's pointer line in `STATUS-PN.md` from "Next" to "In progress":
-
-```
-In progress: <id> — <short name>   branch: p<N>-<id>
-Next step: <what to do first>   docs/tasks/<id>.md
-```
+Create the feature branch and worktree (`p<N>-<id>`). **The branch's existence is the reservation
+signal** — a parallel session sees it via `git branch` and skips that task. The `STATUS-PN.md` pointer
+line stays put (it is deleted only on completion); there is no "In progress"/"Next" section to move it
+between. Keep the working details at hand in `docs/tasks/<id>.md`.
 
 ---
 
@@ -294,7 +291,7 @@ grep "LayoutBox" SYMBOLS.md
 **SYMBOLS.md — symbol index.** Auto-generated index of every `pub fn/struct/enum/trait/type` with `file:line`. `grep "SymbolName" SYMBOLS.md` → `Read file offset=<line> limit=30`. Regenerate on every public API change: `python scripts/gen_symbols.py` (add to same commit).
 
 **Session start protocol.** At the beginning of each session:
-1. Read `STATUS-PN.md` (your developer number) — current "In progress" task
+1. Read `STATUS-PN.md` (your developer number) — pointer lines to your open tasks; `git branch` shows any `p<N>-…` task already in progress
 2. Run `git branch` — verify you're on main
 3. If you need architecture context: read `docs/plan/architecture.md` (§1 Principles) and `docs/plan/tech-stack.md` (§5 Dependency policy)
 4. If you need architectural decisions: read `docs/decisions/README.md` index
@@ -535,11 +532,10 @@ Branch names: short kebab-case. **Developer sessions (P1–P4) must prefix the b
 Multiple Claude Code sessions may work simultaneously. Full workflow for task lifecycle:
 
 **Step 1: Task startup (BEFORE coding)**
-1. Read `STATUS-PN.md` + `git branch` — check what's in progress
-2. If "In progress" is already set — that task is taken, pick from "Next" instead
+1. Read `STATUS-PN.md` + `git branch` — check which tasks already have a `p<N>-…` branch
+2. If a `p<N>-…` branch already exists for the task — it's taken, pick the next pointer line instead
 3. Create a feature branch and worktree: `git worktree add .claude/worktrees/<task-name> -b p<N>-task-name`
-4. In the **first commit**, update `STATUS-PN.md`: set "In progress: <task>" + branch name + next step
-5. Push the branch: `git push origin p<N>-task-name`
+4. Push the branch: `git push origin p<N>-task-name` — its existence reserves the task (the STATUS pointer line stays in place)
 
 **Step 2: During work** — see "Worktree isolation" section below
 
@@ -600,8 +596,7 @@ git merge --no-ff p<N>-task-name -m "Merge p<N>-task-name: описание"
 git branch -d p<N>-task-name
 
 # 4. Update STATUS-PN.md on main
-# — remove line from "In progress"
-# — move task to "Recent"
+# — delete the completed task's pointer line (history lives in git log)
 git add STATUS-PN.md
 git commit -m "P<N>: отметить task-name как завершённую"
 
@@ -641,7 +636,7 @@ Do not re-read a whole file to make a small update — use `grep -n` to find the
 |---|---|---|
 | New feature / capability | `CAPABILITIES.md` | `grep -n "<subsystem>\|<keyword>" CAPABILITIES.md` → change ⬜/🟡 → ✅ on that line |
 | New feature / capability | `subsystems/<crate>.md` | append bullet to **Done** section (file is small — read whole) |
-| New feature / capability | `STATUS-PN.md` (your role) | move task from "In progress" to "Recent merges" |
+| New feature / capability | `STATUS-PN.md` (your role) | delete the completed task's pointer line |
 | Bug fixed | `BUGS.md` | `grep -n "BUG-NNN" BUGS.md` → change `OPEN` → `FIXED <date>` |
 | CSS property (P4) | `CSS-SPECS.md` | `grep -n "<property-name>" CSS-SPECS.md` → change ⬜ → ✅ |
 | CSS property (P4) | `CAPABILITIES.md` | same as "New feature" above |

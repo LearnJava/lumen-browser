@@ -177,8 +177,8 @@ Apply the same precedence for `wght`/`wdth`/`slnt`.
 - **P4 owns `font-variation-settings` parsing + cascade + ComputedStyle
   fields.** Already done (see Current state). If the registered-axis mapping
   (`font-weight`/`font-stretch`/`font-style`→axes) needs new ComputedStyle
-  plumbing or a new cascade step, that is **P4 work** — file it under
-  "Needs wiring" in `STATUS-P4.md` with a `// CSS: font-weight→wght axis`
+  plumbing or a new cascade step, that is **P4 work** — file it as a
+  `crates/...:line` pointer in `STATUS-P4.md` with a `// CSS: font-weight→wght axis`
   comment at the call site rather than editing `apply_declaration()` here.
 - **P2 owns** the `lumen-font` runtime and the `lumen-paint` femtovg backend
   integration. Do not modify `ComputedStyle`/`apply_declaration()` in

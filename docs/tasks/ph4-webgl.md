@@ -297,5 +297,5 @@ before committing).
       [phases.md:142](../plan/phases.md) line** (GLSL *does* execute — describe the
       remaining subset); update §7F in
       [docs/plan/web-apis-shell.md](../plan/web-apis-shell.md); regenerate
-      `SYMBOLS.md` for new public APIs; move the task to "Recent" in
+      `SYMBOLS.md` for new public APIs; delete the task's pointer line in
       [STATUS-P2.md](../../STATUS-P2.md).

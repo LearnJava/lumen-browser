@@ -72,7 +72,7 @@ P1 marks the handoff at the shell call site with a comment:
 // P4 to add PseudoElementKind variants + functional parsing so author
 // animation-duration / animation-timing-function can target group pseudos.
 ```
-and files a "Needs wiring" item in `STATUS-P4.md`. Until P4 lands the selectors, P1 hardcodes/derives the per-group duration from the existing 300 ms default (already the behaviour) and reads author timing once the pseudo cascade exists. P1 does **not** add the pseudo-element variants itself (per CLAUDE.md CSS ownership).
+and adds a `crates/...:line` pointer in `STATUS-P4.md`. Until P4 lands the selectors, P1 hardcodes/derives the per-group duration from the existing 300 ms default (already the behaviour) and reads author timing once the pseudo cascade exists. P1 does **not** add the pseudo-element variants itself (per CLAUDE.md CSS ownership).
 
 ## Steps
 
@@ -107,7 +107,7 @@ Phase 5 — Robustness [S]
 - [ ] Shell captures **per-element** old + new snapshots for every `view-transition-name`, paired by name (matched / only-old / only-new handled).
 - [ ] Matched named elements **morph** (rect lerp old→new, cross-faded snapshots); un-named remainder still uses the root whole-frame cross-fade.
 - [ ] Group easing uses real timing-function evaluation (shared with `animation_scheduler`), not a linear/hardcoded curve.
-- [ ] `// CSS:` handoff comment placed at the shell call site and a "Needs wiring" item filed in `STATUS-P4.md` for the `::view-transition*` selectors.
+- [ ] `// CSS:` handoff comment placed at the shell call site and a `crates/...:line` pointer added in `STATUS-P4.md` for the `::view-transition*` selectors.
 - [ ] (If P4 selectors land in time) per-group `animation-duration` / `animation-timing-function` from the pseudo cascade override the 300 ms default.
 - [ ] Layout + paint unit tests added/extended; clippy clean and tests pass for `lumen-shell`, `lumen-paint`, `lumen-layout`.
 - [ ] Manual `--ipc` visual check confirms a named element morphs across the callback.
