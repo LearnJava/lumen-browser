@@ -10266,9 +10266,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf = bar;
                 }
 
-                // Compositor offload: если есть активные анимации с opacity/transform —
-                // пересобираем display list из layout_box с overrides, минуя relayout.
-                // color/background-color остаются в anim_frame на будущее (требуют relayout).
+                // Compositor offload: если есть активные анимации с opacity/transform/
+                // color/background-color — пересобираем display list из layout_box с
+                // overrides, минуя relayout (BUG-231 распространил offload на цвета).
                 let anim_dl: Option<lumen_paint::DisplayList> =
                     if let (Some(frame), Some(lb)) = (&self.anim_frame, &self.layout_box) {
                         let comp = frame.to_compositor_frame();

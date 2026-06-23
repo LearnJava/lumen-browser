@@ -2718,7 +2718,7 @@ fn fill_buckets(
             bucket.pre.push(clip.clone());
         }
         bucket.pre.extend(ops.pre);
-        emit_box_self(b, &mut bucket.root_bg, dpr, None);
+        emit_box_self(b, &mut bucket.root_bg, dpr, None, ov);
         // Overflow-клип — после собственных bg/border (они не клиппятся
         // своим overflow, BUG-123), но до contents с детьми.
         bucket.root_bg.extend(ops.overflow_pre);
@@ -2763,7 +2763,7 @@ fn fill_buckets(
         // триггерят SC сами, до сюда не дойдут с не-пустым pre).
         let bucket = &mut buckets[current_sc.0 as usize];
         bucket.contents.extend(ops.pre);
-        emit_box_self(b, &mut bucket.contents, dpr, None);
+        emit_box_self(b, &mut bucket.contents, dpr, None, ov);
         // Overflow-клип после собственных bg/border (BUG-123).
         bucket.contents.extend(ops.overflow_pre.iter().cloned());
 
@@ -4794,12 +4794,22 @@ fn box_generates_content(c: &LayoutBox) -> bool {
 
 /// Эмитит DisplayCommand-ы для одного box-а БЕЗ рекурсии в детей. Аналог
 /// тела `walk` для одного box-а.
-fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32, sel: Option<&SelectionHighlight>) {
+fn emit_box_self(
+    b: &LayoutBox,
+    out: &mut Vec<DisplayCommand>,
+    dpr: f32,
+    sel: Option<&SelectionHighlight>,
+    ov: Option<&CompositorOverride>,
+) {
     // opacity:0 → whole-subtree invisible (см. is_opacity_subtree_painted).
     // emit_box_self не идёт в children, но self-content тоже skip-аем.
     if !is_opacity_subtree_painted(b) {
         return;
     }
+    // BUG-231: remember where this box's own commands start so an animated
+    // background-color / color compositor override can be patched into them
+    // afterwards (see `apply_color_override`) without relayout.
+    let cmd_start = out.len();
     match &b.kind {
         BoxKind::Skip => {}
         BoxKind::Block | BoxKind::FlowRoot | BoxKind::TableRow
@@ -5197,7 +5207,56 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32, sel: Op
             emit_svg_text(b, text, *text_anchor, *dominant_baseline, out);
         }
     }
+    // BUG-231: apply animated background-color / color compositor override to the
+    // commands this box just emitted (range `cmd_start..`), before the resize grip.
+    if let Some(ov) = ov
+        && (ov.background_color.is_some() || ov.color.is_some())
+    {
+        apply_color_override(b, ov, &mut out[cmd_start..]);
+    }
     emit_resize_grip(b, out);
+}
+
+/// BUG-231: patch a box's own background fill and currentColor-derived border /
+/// outline colours with the compositor override `ov`, in place, without relayout.
+///
+/// The background fill is identified by its exact clip rect: drop-shadow fills use
+/// a different (offset/spread-expanded) rect, so they are left untouched. Borders
+/// and outline are re-resolved from the box style against the overridden
+/// currentColor. Only fills already present are patched — a transition starting
+/// from a transparent background still needs relayout to inject a fill.
+fn apply_color_override(b: &LayoutBox, ov: &CompositorOverride, cmds: &mut [DisplayCommand]) {
+    if let Some(bg) = ov.background_color {
+        let clip = background_clip_rect(b, background_color_clip(b));
+        for c in cmds.iter_mut() {
+            match c {
+                DisplayCommand::FillRect { rect, color } if *rect == clip => *color = bg,
+                DisplayCommand::FillRoundedRect { rect, color, .. } if *rect == clip => *color = bg,
+                _ => {}
+            }
+        }
+    }
+    if let Some(cur) = ov.color {
+        let s = &b.style;
+        let outline_uses_current = matches!(
+            s.outline_color,
+            OutlineColor::Auto | OutlineColor::CurrentColor
+        );
+        for c in cmds.iter_mut() {
+            match c {
+                DisplayCommand::DrawBorder { colors, .. } => {
+                    *colors = [
+                        s.border_top_color.resolve(cur),
+                        s.border_right_color.resolve(cur),
+                        s.border_bottom_color.resolve(cur),
+                        s.border_left_color.resolve(cur),
+                    ];
+                }
+                DisplayCommand::DrawOutline { color, .. } if outline_uses_current => *color = cur,
+                _ => {}
+            }
+        }
+    }
 }
 
 /// CSS Transforms L2 §6.1 — does this box establish a **3D rendering context**
@@ -6652,7 +6711,13 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
             let self_visible = is_paint_visible(b) && !is_hidden_empty_cell(b);
             if self_visible {
                 emit_box_shadows(b, out);
-                if let Some(CssColor::Rgba(bg)) = b.style.background_color
+                // BUG-231: animated background-color override wins over the base value.
+                let base_bg = match b.style.background_color {
+                    Some(CssColor::Rgba(c)) => Some(c),
+                    _ => None,
+                };
+                let eff_bg = ov.and_then(|o| o.background_color).or(base_bg);
+                if let Some(bg) = eff_bg
                     && bg.a > 0
                 {
                     let clip = background_clip_rect(b, background_color_clip(b));
@@ -6667,7 +6732,8 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
                     || s.border_bottom_style.is_visible()
                     || s.border_left_style.is_visible();
                 if has_border {
-                    let cur = s.color;
+                    // BUG-231: animated color override resolves currentColor.
+                    let cur = ov.and_then(|o| o.color).unwrap_or(s.color);
                     out.push(DisplayCommand::DrawBorder {
                         rect: b.rect,
                         widths: [
@@ -11546,7 +11612,7 @@ mod tests {
         // Override opacity=0.5 for the body node (root).
         let node = tree.node;
         let mut overrides = HashMap::new();
-        overrides.insert(node, CompositorOverride { opacity: Some(0.5), transform: None });
+        overrides.insert(node, CompositorOverride { opacity: Some(0.5), ..Default::default() });
         let frame = CompositorAnimFrame { overrides, has_active: true };
         let anim_dl = build_display_list_with_anim(&tree, Some(&frame));
 
@@ -11571,7 +11637,7 @@ mod tests {
         let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
         let node = tree.node;
         let mut overrides = HashMap::new();
-        overrides.insert(node, CompositorOverride { opacity: Some(0.7), transform: None });
+        overrides.insert(node, CompositorOverride { opacity: Some(0.7), ..Default::default() });
         let frame = CompositorAnimFrame { overrides, has_active: true };
         let dl = build_display_list_with_anim(&tree, Some(&frame));
 
@@ -11581,6 +11647,63 @@ mod tests {
         let pop_tx = dl.iter().filter(|c| matches!(c, DisplayCommand::PopTransform)).count();
         assert_eq!(push_op, pop_op, "PushOpacity/PopOpacity must balance");
         assert_eq!(push_tx, pop_tx, "PushTransform/PopTransform must balance");
+    }
+
+    /// Recursively find the node of the first box whose resolved background colour
+    /// equals `want` — used to target a compositor override at the right box.
+    fn find_bg_node(b: &lumen_layout::LayoutBox, want: Color) -> Option<NodeId> {
+        if b.style.background_color.and_then(|c| c.to_color_opt()) == Some(want) {
+            return Some(b.node);
+        }
+        b.children.iter().find_map(|c| find_bg_node(c, want))
+    }
+
+    /// BUG-231: an animated background-color compositor override must replace the
+    /// box's background FillRect colour in the ordered (live) paint path without
+    /// relayout — the green base fill becomes the overridden orange.
+    #[test]
+    fn anim_background_color_override_patches_fill_ordered() {
+        let html = r#"<div style="background:#008000;width:100px;height:50px"></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let green = Color { r: 0, g: 0x80, b: 0, a: 255 };
+        let orange = Color { r: 0xff, g: 0x8f, b: 0, a: 255 };
+        let node = find_bg_node(&tree, green).expect("box with green background");
+
+        let stacking_tree = lumen_layout::StackingTree::build(&tree);
+        let order = lumen_layout::PaintOrder::from_tree(&stacking_tree);
+
+        // Base ordered DL paints the green background.
+        let base = build_display_list_ordered(&tree, &stacking_tree, &order);
+        assert!(
+            base.iter().any(|c| matches!(c,
+                DisplayCommand::FillRect { color, .. } | DisplayCommand::FillRoundedRect { color, .. }
+                if *color == green)),
+            "base DL должен заливать зелёным фоном"
+        );
+
+        // Override background-color → orange.
+        let mut overrides = HashMap::new();
+        overrides.insert(node, CompositorOverride {
+            background_color: Some(orange),
+            ..Default::default()
+        });
+        let frame = CompositorAnimFrame { overrides, has_active: true };
+        let anim = build_display_list_ordered_with_anim(&tree, &stacking_tree, &order, Some(&frame));
+
+        assert!(
+            anim.iter().any(|c| matches!(c,
+                DisplayCommand::FillRect { color, .. } | DisplayCommand::FillRoundedRect { color, .. }
+                if *color == orange)),
+            "override должен перекрасить фон в оранжевый"
+        );
+        assert!(
+            !anim.iter().any(|c| matches!(c,
+                DisplayCommand::FillRect { color, .. } | DisplayCommand::FillRoundedRect { color, .. }
+                if *color == green)),
+            "после override зелёного фона быть не должно"
+        );
     }
 
     // ── text-emphasis rendering ───────────────────────────────────────────────
