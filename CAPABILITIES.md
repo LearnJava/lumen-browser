@@ -79,7 +79,7 @@ Snapshot: **Phase 2 «Interactive» (complete), app v0.5.0**. ~21 crates.
 
 ### lumen-paint (`crates/engine/paint`)
 - ✅ **Live default render path is `FemtovgBackend`** (OpenGL ES via glutin), with wgpu auto-fallback; `LUMEN_BACKEND` overrides. **Paint bugs from graphic_tests are fixed in `femtovg_backend.rs`, not `renderer.rs`.**
-- ✅ DisplayCommand primitives (all in enum + handled by femtovg): FillRect, FillRoundedRect (SDF), DrawBorder (solid/dashed/dotted/double), DrawText, DrawOutline, DrawImage (object-fit/position), Linear/Radial/Conic gradients (incl. repeating), SvgPath, clip, opacity, blend modes, transforms, filters, backdrop-filter, scroll layers, masks, layer snapshots, page breaks.
+- ✅ DisplayCommand primitives (all in enum + handled by femtovg): FillRect, FillRoundedRect (SDF), DrawBorder (solid/dashed/dotted/double), DrawText, DrawOutline, DrawImage (object-fit/position), Linear/Radial/Conic gradients (incl. repeating; premultiplied stop interpolation for fades to `transparent`, CSS Images L4 §3.1 — BUG-190), SvgPath, clip, opacity, blend modes, transforms, filters, backdrop-filter, scroll layers, masks, layer snapshots, page breaks.
 - ✅ Stacking contexts + paint order (CSS 2.1 Appendix E), stacking-aware hit testing (transform inversion).
 - ✅ CSS Motion Path L1 (`offset-path: path()`/`ray()`, `offset-distance`, `offset-rotate` auto/reverse/fixed, `offset-anchor`) — box's anchor placed on the path point, rotated around it (`forward_box_transform` + property-tree `walk`). TEST-76 boxes pixel-identical to Edge.
 - ✅ box-shadow (outset+inset), text-shadow, text-decoration (underline/overline/line-through, wavy/dotted/dashed/double, thickness), border-radius SDF.

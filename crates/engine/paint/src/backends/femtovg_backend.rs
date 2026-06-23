@@ -154,6 +154,10 @@ fn femtovg_stops(
     if resolved.is_empty() {
         return vec![];
     }
+    // CSS Images L4 §3.1 — interpolate fades to/through transparency in
+    // premultiplied space (BUG-190); femtovg's 256-texel texture samples these
+    // dense stops straight, reproducing the premultiplied curve.
+    let resolved = crate::gradient_math::premultiplied_subdivide_stops(&resolved);
     if !repeating {
         let mut out: Vec<(f32, femtovg::Color)> = resolved
             .iter()
@@ -3288,11 +3292,18 @@ mod tests {
             GradientStop { color: Color::TRANSPARENT, position: None },
         ];
         let resolved = resolve_stops(&stops, 200.0);
-        assert_eq!(resolved.len(), 2);
+        // The black→transparent segment is subdivided for premultiplied
+        // interpolation (BUG-190), so the count grows beyond 2; the endpoints
+        // (the mask's defining values) must still be alpha 1 → 0, monotonically.
+        assert!(resolved.len() >= 2);
         // Opaque end → mask = 1 (content fully shown).
-        assert!((resolved[0].1.a - 1.0).abs() < 1e-5, "opaque stop must keep alpha 1");
+        assert!((resolved.first().unwrap().1.a - 1.0).abs() < 1e-5, "opaque stop must keep alpha 1");
         // Transparent end → mask = 0 (content fully hidden).
-        assert!(resolved[1].1.a.abs() < 1e-5, "transparent stop must have alpha 0");
+        assert!(resolved.last().unwrap().1.a.abs() < 1e-5, "transparent stop must have alpha 0");
+        // Alpha decreases monotonically across the (subdivided) ramp.
+        for w in resolved.windows(2) {
+            assert!(w[1].1.a <= w[0].1.a + 1e-5, "mask alpha must not increase");
+        }
     }
 
     #[test]
