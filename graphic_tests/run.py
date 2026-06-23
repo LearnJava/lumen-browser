@@ -220,6 +220,7 @@ TESTS: list[tuple[str, str, float, str]] = [
 # Добавлять ТОЛЬКО Phase 2+ фичи с OPEN BUG-NNN и diff-изображением,
 # подтверждающим что расхождение локализовано в области нереализованной фичи.
 KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
+    '90': ('BUG-209', 1.71),    # AVIF <picture>/<img>: доминирующая причина девиации (вложенный column-flex item схлопывался по контенту вместо растяжения на cross-size ряда) исправлена BUG-241 (гейт `explicit_cross.is_some()` в lay_out_flex). TEST-90 2.27%→1.71%: рамки/фоны ячеек теперь совпадают с Edge пиксель-в-пиксель (diff чёрный). AVIF-данные в тесте обрезаны — ни Lumen, ни Edge их не декодируют; Edge рисует placeholder сломанной картинки (иконка + alt-текст), Lumen — нет. Остаток = эта chrome-иконка (не совпадёт с Edge пиксельно) + вертикальный сдвиг подписи + font-parity меток (rule 3)
     '122': ('BUG-237', 11.19),  # line-height-step: Lumen спек-корректно округляет line-box (48/60/40px фоны), Edge свойство не поддерживает (удалён из Chromium ~2018) → эталон рисует un-stepped 24px fallback. Lumen корректнее reference-браузера (класс BUG-126/TEST-77 inset-area, BUG-199/TEST-71 @starting-style). Совпасть = отключить рабочую реализацию (запрещено). Остаток + font-parity переноса natural-колонки (rule 3)
     '54': ('BUG-173', 2.5),     # SVG <path> fill+stroke остаток (AA-швы, self-intersecting fill)
     '57': ('BUG-099', 2.96),    # <canvas> getContext("2d") — Phase 2. Ратчет вниз 4.14→2.96 (прогон 2026-06-23)
