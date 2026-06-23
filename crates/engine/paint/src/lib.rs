@@ -35,6 +35,7 @@ pub mod layer_cache;
 pub mod renderer;
 pub mod scroll_snap;
 pub mod svg_path;
+pub mod varied_text;
 #[cfg(feature = "backend-wgpu")]
 pub mod texture_pool;
 pub mod tile_grid;

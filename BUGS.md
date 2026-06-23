@@ -124,7 +124,7 @@
 | [BUG-106](bugs/BUG-106-FIXED.md) | FIXED 2026-06-09 | layout | TEST-64 table: missing UA heading defaults → h3 без размера и margin |
 | [BUG-107](bugs/BUG-107-FIXED.md) | FIXED 2026-06-09 | layout | flex align-content: normal/stretch не распределял свободное пространство |
 | [BUG-108](bugs/BUG-108-FIXED.md) | FIXED 2026-06-17 | layout | TEST-66 5.24%→1.08%: реальная причина — parent↔last-child bottom margin не коллапсил (CSS 2.1 §8.3.1), свотчи уезжали вниз +30px/секция. Остаток 1.08% — текст (font-parity, rule 3) + border-radius AA |
-| [BUG-109](bugs/BUG-109-OPEN.md) | OPEN | css-parser/font | font-variation-settings: wght/wdth/slnt не передаются растеризатору — TEST-68: 3.21% |
+| [BUG-109](bugs/BUG-109-FIXED.md) | FIXED 2026-06-23 | paint/font | font-variation-settings: wght/wdth/slnt не применялись в femtovg-окне — варьируемый run теперь рендерится через lumen-font outlines (vector fill). GPU-путь применял оси и раньше; TEST-68 переписан на пустые боксы, исходные 3.21% более не воспроизводятся |
 | [BUG-110](bugs/BUG-110-FIXED.md) | FIXED 2026-06-14 | layout/paint | object-fit: SVG viewBox scaling ~8% deviation — TEST-70: 8.03% |
 | [BUG-111](bugs/BUG-111-FIXED.md) | FIXED 2026-06-08 | paint/shell | lumen-paint/shell не компилировались после мержа A-2 CSS Custom Highlight API |
 | [BUG-112](bugs/BUG-112-FIXED.md) | FIXED 2026-06-08 | driver | test_32_list_markers регрессия: P4 добавил 2 @counter-style списка |

@@ -1373,6 +1373,86 @@ impl FemtovgBackend {
         let _ = self.canvas.fill_text(x, y + font_size * 0.8, text, &paint);
     }
 
+    /// BUG-109: renders a text run with `font-variation-settings` axes applied,
+    /// bypassing femtovg's variation-blind text engine.
+    ///
+    /// Resolves the first CSS-declared family that maps to a **variable** face,
+    /// builds filled-glyph paths at the requested axis coordinates via
+    /// [`crate::varied_text::build_varied_text_paths`], and fills them with the
+    /// text colour through the current canvas transform/clip. Returns `true`
+    /// when the run was rendered here; `false` when no variable face was found
+    /// (no provider, only static/generic families) so the caller falls back to
+    /// femtovg's native text path.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_varied_text(
+        &mut self,
+        rect: &Rect,
+        text: &str,
+        font_size: f32,
+        color: Color,
+        families: &[String],
+        weight: u16,
+        style: FontStyle,
+        axes: &[([u8; 4], f32)],
+        tab_size: f32,
+    ) -> bool {
+        let Some(provider) = self.font_provider.clone() else {
+            return false;
+        };
+        let core_style = match style {
+            FontStyle::Normal => lumen_core::ext::FontStyle::Normal,
+            FontStyle::Italic => lumen_core::ext::FontStyle::Italic,
+            FontStyle::Oblique => lumen_core::ext::FontStyle::Oblique,
+        };
+        for fam in families {
+            let lc = fam.to_ascii_lowercase();
+            if matches!(
+                lc.as_str(),
+                "serif" | "sans-serif" | "monospace" | "cursive" | "fantasy" | "system-ui"
+            ) {
+                continue;
+            }
+            let Some(rec) = provider.pick_face(fam, weight, core_style) else {
+                continue;
+            };
+            let Some(bytes) = provider
+                .read_face_bytes(&rec.path)
+                .or_else(|| std::fs::read(&rec.path).ok())
+            else {
+                continue;
+            };
+            // `build_varied_text_paths` returns None for static faces — defer to
+            // the next family (and ultimately femtovg) in that case.
+            if let Some(cmds) = crate::varied_text::build_varied_text_paths(
+                &bytes, axes, text, font_size, rect.x, rect.y, tab_size,
+            ) {
+                self.fill_glyph_path(&cmds, color);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Fills a set of [`crate::varied_text::PathCmd`]s (screen pixels, Y-down)
+    /// with a solid colour, honouring the canvas's current transform and clip.
+    fn fill_glyph_path(&mut self, cmds: &[crate::varied_text::PathCmd], color: Color) {
+        use crate::varied_text::PathCmd;
+        if cmds.is_empty() {
+            return;
+        }
+        let mut path = femtovg::Path::new();
+        for cmd in cmds {
+            match *cmd {
+                PathCmd::MoveTo(x, y) => path.move_to(x, y),
+                PathCmd::LineTo(x, y) => path.line_to(x, y),
+                PathCmd::QuadTo(cx, cy, x, y) => path.quad_to(cx, cy, x, y),
+                PathCmd::Close => path.close(),
+            }
+        }
+        let paint = femtovg::Paint::color(lumen_to_fvg(color));
+        self.canvas.fill_path(&path, &paint);
+    }
+
     /// Применяет filter-chain к offscreen-слою и композирует результат на
     /// предыдущий render target (экран или внешний offscreen-слой).
     ///
@@ -2241,7 +2321,19 @@ impl FemtovgBackend {
                     }
                 }
             }
-            DisplayCommand::DrawText { rect, text, font_size, color, font_family, font_weight, font_style, .. } => {
+            DisplayCommand::DrawText { rect, text, font_size, color, font_family, font_weight, font_style, font_variation_axes, tab_size, highlight_name: _ } => {
+                // BUG-109: femtovg's text API cannot apply font-variation-settings
+                // axes. When axes are present and resolve to a variable face,
+                // render the run via lumen-font outlines (vector fill) so wght/
+                // wdth/slnt take effect; otherwise use femtovg's fast text path.
+                if !font_variation_axes.is_empty()
+                    && self.draw_varied_text(
+                        rect, text, *font_size, *color, font_family,
+                        font_weight.0, *font_style, font_variation_axes, *tab_size,
+                    )
+                {
+                    return;
+                }
                 let chain = self.resolve_font_chain(font_family, font_weight.0, *font_style);
                 self.draw_text(rect.x, rect.y, text, *font_size, *color, &chain);
             }

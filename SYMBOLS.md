@@ -1620,28 +1620,28 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/animation.rs:49` **struct** `AnimationFrame` — Output of `AnimationScheduler::tick` — per-node animated values for one frame
 `crates/engine/layout/src/animation.rs:61` **fn** `merge` — Merge `other` into `self`; `other` values take precedence per property
 `crates/engine/layout/src/animation.rs:80` **fn** `merge_from` — Extract only compositor-offloadable properties (opacity, transform)
-`crates/engine/layout/src/animation.rs:97` **fn** `to_compositor_frame` — Extract only compositor-offloadable properties (opacity, transform)
-`crates/engine/layout/src/animation.rs:120` **struct** `CompositorOverride` — Compositor-offloadable overrides for one element
-`crates/engine/layout/src/animation.rs:130` **struct** `CompositorAnimFrame` — Per-frame compositor overrides — output of `AnimationFrame::to_compositor_frame`
-`crates/engine/layout/src/animation.rs:136` **fn** `is_empty`
-`crates/engine/layout/src/animation.rs:140` **fn** `get`
-`crates/engine/layout/src/animation.rs:148` **struct** `KeyframeStyle` — Sparse style extracted from one `@keyframes` frame's declarations
-`crates/engine/layout/src/animation.rs:157` **fn** `parse_keyframe_style` — Parse the `declarations` of one `@keyframes` frame into a [`KeyframeStyle`]
-`crates/engine/layout/src/animation.rs:195` **enum** `AnimValue` — Анимируемое значение. Phase 0: восемь вариантов — Number / Length / Color /
-`crates/engine/layout/src/animation.rs:231` **trait** `AnimationInterpolator` — Trait для интерполяции пары computed values
-`crates/engine/layout/src/animation.rs:245` **struct** `NoopInterpolator` — Stub-реализация: step-half для любой пары значений
-`crates/engine/layout/src/animation.rs:276` **struct** `LinearInterpolator` — Реальная импл §5.2 — linear для Number / Length (same-unit) / Color
-`crates/engine/layout/src/animation.rs:760` **struct** `AnimationScheduler` — CSS Animations L1 §3 — scheduler that maps `@keyframes` to interpolated
-`crates/engine/layout/src/animation.rs:766` **fn** `new`
-`crates/engine/layout/src/animation.rs:776` **fn** `sync` — Register or refresh animations for `node` based on its computed style
-`crates/engine/layout/src/animation.rs:797` **fn** `remove_node` — Remove all animation state for `node` (e.g. when the node is removed from the DOM)
-`crates/engine/layout/src/animation.rs:807` **fn** `tick` — Compute per-node animated style overrides for the current frame
-`crates/engine/layout/src/animation.rs:1130` **struct** `TransitionScheduler` — CSS Transitions L1 §2 — detects property value changes and interpolates
-`crates/engine/layout/src/animation.rs:1144` **fn** `new`
-`crates/engine/layout/src/animation.rs:1153` **fn** `set_auto_height` — Store the resolved auto-height for `node` from the last layout pass
-`crates/engine/layout/src/animation.rs:1166` **fn** `sync` — Detect value changes between `old` and `new` style for properties listed
-`crates/engine/layout/src/animation.rs:1272` **fn** `remove_node` — Remove all transition state for `node` (called when node leaves DOM)
-`crates/engine/layout/src/animation.rs:1310` **fn** `tick` — Compute interpolated style overrides for the current frame
+`crates/engine/layout/src/animation.rs:99` **fn** `to_compositor_frame` — Extract only compositor-offloadable properties (opacity, transform)
+`crates/engine/layout/src/animation.rs:128` **struct** `CompositorOverride` — Compositor-offloadable overrides for one element
+`crates/engine/layout/src/animation.rs:142` **struct** `CompositorAnimFrame` — Per-frame compositor overrides — output of `AnimationFrame::to_compositor_frame`
+`crates/engine/layout/src/animation.rs:148` **fn** `is_empty`
+`crates/engine/layout/src/animation.rs:152` **fn** `get`
+`crates/engine/layout/src/animation.rs:160` **struct** `KeyframeStyle` — Sparse style extracted from one `@keyframes` frame's declarations
+`crates/engine/layout/src/animation.rs:169` **fn** `parse_keyframe_style` — Parse the `declarations` of one `@keyframes` frame into a [`KeyframeStyle`]
+`crates/engine/layout/src/animation.rs:207` **enum** `AnimValue` — Анимируемое значение. Phase 0: восемь вариантов — Number / Length / Color /
+`crates/engine/layout/src/animation.rs:243` **trait** `AnimationInterpolator` — Trait для интерполяции пары computed values
+`crates/engine/layout/src/animation.rs:257` **struct** `NoopInterpolator` — Stub-реализация: step-half для любой пары значений
+`crates/engine/layout/src/animation.rs:288` **struct** `LinearInterpolator` — Реальная импл §5.2 — linear для Number / Length (same-unit) / Color
+`crates/engine/layout/src/animation.rs:772` **struct** `AnimationScheduler` — CSS Animations L1 §3 — scheduler that maps `@keyframes` to interpolated
+`crates/engine/layout/src/animation.rs:778` **fn** `new`
+`crates/engine/layout/src/animation.rs:788` **fn** `sync` — Register or refresh animations for `node` based on its computed style
+`crates/engine/layout/src/animation.rs:809` **fn** `remove_node` — Remove all animation state for `node` (e.g. when the node is removed from the DOM)
+`crates/engine/layout/src/animation.rs:819` **fn** `tick` — Compute per-node animated style overrides for the current frame
+`crates/engine/layout/src/animation.rs:1142` **struct** `TransitionScheduler` — CSS Transitions L1 §2 — detects property value changes and interpolates
+`crates/engine/layout/src/animation.rs:1156` **fn** `new`
+`crates/engine/layout/src/animation.rs:1165` **fn** `set_auto_height` — Store the resolved auto-height for `node` from the last layout pass
+`crates/engine/layout/src/animation.rs:1178` **fn** `sync` — Detect value changes between `old` and `new` style for properties listed
+`crates/engine/layout/src/animation.rs:1284` **fn** `remove_node` — Remove all transition state for `node` (called when node leaves DOM)
+`crates/engine/layout/src/animation.rs:1322` **fn** `tick` — Compute interpolated style overrides for the current frame
 `crates/engine/layout/src/box_tree.rs:172` **struct** `ViewBox` — SVG `viewBox="min-x min-y width height"` attribute. Maps SVG user-unit space
 `crates/engine/layout/src/box_tree.rs:187` **struct** `PreserveAspectRatio` — SVG `preserveAspectRatio` attribute for aspect-ratio preservation
 `crates/engine/layout/src/box_tree.rs:198` **enum** `SvgAlignX` — SVG preserveAspectRatio horizontal alignment
@@ -2504,7 +2504,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/webauthn.rs:69` **fn** `new` — Create an empty authenticator with no registered credentials
 `crates/network/src/webauthn.rs:74` **fn** `credential_count` — Number of credentials currently registered (test / introspection helper)
 
-## lumen-paint  (348 symbols)
+## lumen-paint  (350 symbols)
 
 `crates/engine/paint/src/atlas.rs:35` **struct** `AtlasKey` — Композитный ключ glyph-кэша. См. module-level docs
 `crates/engine/paint/src/atlas.rs:43` **fn** `new`
@@ -2633,7 +2633,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/display_list.rs:3098` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
 `crates/engine/paint/src/display_list.rs:3227` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
 `crates/engine/paint/src/display_list.rs:4004` **fn** `point_on_resize_grip` — Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента
-`crates/engine/paint/src/display_list.rs:14247` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
+`crates/engine/paint/src/display_list.rs:14370` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
 `crates/engine/paint/src/display_list_cache.rs:21` **struct** `CachedDisplayLayer` — Cached display list for a stacking context or page subtree
 `crates/engine/paint/src/display_list_cache.rs:45` **struct** `DisplayListCache` — LRU cache that maps `NodeId` (u32) to a pre-built `Vec<DisplayCommand>`
 `crates/engine/paint/src/display_list_cache.rs:59` **fn** `new` — Create a cache with the default 32 MB budget
@@ -2701,14 +2701,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/layer_cache.rs:218` **fn** `sync_promoted_layers` — Remove promoted layers for nodes NOT in `current_nodes`
 `crates/engine/paint/src/layer_cache.rs:231` **fn** `promoted_count` — Number of nodes currently promoted to their own GPU layer
 `crates/engine/paint/src/layer_cache.rs:240` **fn** `on_memory_pressure` — React to an OS memory pressure event by evicting GPU layer textures
-`crates/engine/paint/src/lib.rs:100` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
-`crates/engine/paint/src/lib.rs:114` **fn** `new` — Создаёт измеритель из уже разобранного [`lumen_font::Font`]
-`crates/engine/paint/src/lib.rs:299` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
-`crates/engine/paint/src/lib.rs:309` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
-`crates/engine/paint/src/lib.rs:323` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family` без unicode-range ограничений
-`crates/engine/paint/src/lib.rs:337` **fn** `register_family_with_ranges` — Регистрирует @font-face шрифт с `unicode-range` ограничением
-`crates/engine/paint/src/lib.rs:353` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
-`crates/engine/paint/src/lib.rs:368` **fn** `resolve_font_stretch` — Resolves `font-stretch` percentage for the first matching family
+`crates/engine/paint/src/lib.rs:101` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
+`crates/engine/paint/src/lib.rs:115` **fn** `new` — Создаёт измеритель из уже разобранного [`lumen_font::Font`]
+`crates/engine/paint/src/lib.rs:300` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
+`crates/engine/paint/src/lib.rs:310` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
+`crates/engine/paint/src/lib.rs:324` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family` без unicode-range ограничений
+`crates/engine/paint/src/lib.rs:338` **fn** `register_family_with_ranges` — Регистрирует @font-face шрифт с `unicode-range` ограничением
+`crates/engine/paint/src/lib.rs:354` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
+`crates/engine/paint/src/lib.rs:369` **fn** `resolve_font_stretch` — Resolves `font-stretch` percentage for the first matching family
 `crates/engine/paint/src/matrix_util.rs:19` **fn** `mat4_to_2d_affine` — Извлекает 2D-аффинные компоненты `[a, b, c, d, e, f]` из column-major
 `crates/engine/paint/src/renderer.rs:1271` **struct** `OffscreenLayer` — GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
 `crates/engine/paint/src/renderer.rs:1302` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
@@ -2792,6 +2792,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/tile_grid.rs:71` **fn** `mark_all_dirty` — Mark all tiles covered by the given page dimensions dirty
 `crates/engine/paint/src/tile_grid.rs:84` **fn** `dirty_tiles` — Return all tiles currently marked dirty
 `crates/engine/paint/src/tile_grid.rs:107` **fn** `update_from_diff` — Diff `old_dl` against `new_dl` and mark tiles that contain changed
+`crates/engine/paint/src/varied_text.rs:27` **enum** `PathCmd` — One path-building command in screen pixels (origin top-left, Y down)
+`crates/engine/paint/src/varied_text.rs:114` **fn** `build_varied_text_paths` — Builds filled-glyph path commands for a text run rendered with
 `crates/engine/paint/src/webgl.rs:114` **struct** `SoftwareWebGl` — Pure-Rust software WebGL 1.0 context
 `crates/engine/paint/src/webgl.rs:170` **fn** `new` — Create a context with a `width × height` drawing buffer
 `crates/engine/paint/src/webgl.rs:197` **fn** `width` — Drawing-buffer width in pixels
@@ -4219,4 +4221,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4148 symbols in 22 crates*
+*Total: 4150 symbols in 22 crates*
