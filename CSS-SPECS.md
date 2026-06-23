@@ -424,9 +424,10 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `clip-rule` | ⬜ | evenodd/nonzero (SVG-only; CSS clip-path uses path()/polygon() fill-rule ✅ 2026-06-14) |
 | `mask` (shorthand) | 🟡 | |
 | `mask-image` | 🟡 | GPU mask composite pipeline ✅ (PushMask/PopMask + PushMaskLayer/PopMaskLayer); alpha compositing ✅; luminance mode ✅ 2026-05-29 |
-| `mask-repeat` / `mask-size` / `mask-position` | 🟡 | parsed |
+| `mask-repeat` / `mask-size` / `mask-position` | 🟡 | parsed; `mask-position` wired into `PushMaskImage` (initial `center`, CSS Masking L1 §4.4) 2026-06-22; `mask-repeat` tiling ⬜ |
 | `mask-mode` | ✅ | `alpha` / `luminance` / `match-source` (CSS Masking L1 §6.4); gradient masks bake `luminance(rgb)·alpha` into stop alpha (BUG-218, 2026-06-19) |
-| `mask-origin` / `mask-clip` / `mask-composite` | 🟡 | PushMaskLayer supports Alpha + Luminance modes ✅; mask-composite multi-layer ⬜ |
+| `mask-origin` | 🟡 | wired: sets the mask positioning area (border/padding/content box) via `background_origin_rect`, initial `border-box` (§4.5) 2026-06-22 |
+| `mask-clip` / `mask-composite` | 🟡 | parsed only; `mask-clip` painting-area clip ⬜ (needs clip rect through PushMask*/PopMask + backend scissor); `mask-composite` multi-layer ⬜ |
 
 ### [T2] Compositing
 
