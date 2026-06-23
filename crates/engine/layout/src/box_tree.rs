@@ -2574,6 +2574,30 @@ fn propagate_canvas_background(doc: &Document, root: &mut LayoutBox) {
     html_box.style.background_layers = bg_layers;
 }
 
+/// CSS Backgrounds §3.11.1 — the canvas background color.
+///
+/// Returns the opaque background color of the root element box (the color
+/// `propagate_canvas_background` moved onto `<html>`, originally the root's or
+/// `<body>`'s background). The renderer clears the **entire** surface to this
+/// color so the page background covers the whole viewport even when the root
+/// element's box is shorter or narrower than the window — e.g. a fixed 1024×720
+/// page in a maximized window, where painting only the root box's rect would
+/// leave the rest of the canvas the UA-default white (and the root's own
+/// `background-color` shows only as a band the size of the box, not the canvas).
+///
+/// Returns `None` (→ UA-default white clear) when the root element has no
+/// background color or the color is not fully opaque: a translucent root
+/// background must composite over the UA canvas, which the root box's own
+/// background `FillRect` already handles within its rect.
+pub fn canvas_background_color(root: &LayoutBox) -> Option<crate::style::Color> {
+    let html = root
+        .children
+        .iter()
+        .find(|c| matches!(c.kind, BoxKind::Block | BoxKind::FlowRoot))?;
+    let color = html.style.background_color?.to_color_opt()?;
+    (color.a == 255).then_some(color)
+}
+
 fn is_html_element_named(doc: &Document, id: NodeId, want: &str) -> bool {
     matches!(
         doc.get(id).element_name(),

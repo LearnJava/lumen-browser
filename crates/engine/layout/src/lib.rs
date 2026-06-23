@@ -70,7 +70,7 @@ pub use animation::{
     AnimationScheduler, TransitionScheduler,
 };
 pub use box_tree::{
-    apply_container_styles, build_iframe_document,
+    apply_container_styles, build_iframe_document, canvas_background_color,
     collect_background_image_requests, collect_image_requests, is_open_details, layout, layout_measured,
     layout_measured_hyp, layout_streaming_incremental, lay_out_incremental, BoxKind, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox,
     PseudoKind, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, ViewBox,

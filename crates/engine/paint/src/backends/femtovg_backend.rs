@@ -421,6 +421,10 @@ pub struct FemtovgBackend {
     viewport_css_w: f32,
     /// CSS высота viewport (height / scale), нужна для sticky-вычислений.
     viewport_css_h: f32,
+    /// Фон канвы (CSS Backgrounds §3.11.1): цвет, которым заливается весь кадр
+    /// перед отрисовкой content. `None` → UA-дефолт (белый). Устанавливается
+    /// shell-ом через `set_canvas_background` из фона корневого элемента.
+    canvas_bg: Option<Color>,
     /// Offscreen filter layer stack. Each entry holds an offscreen ImageId and
     /// the filter chain to apply on PopFilter. Supports nested filters.
     filter_layer_stack: Vec<FilterLayerEntry>,
@@ -1052,6 +1056,7 @@ impl FemtovgBackend {
             scroll_x: 0.0,
             viewport_css_w: size.width as f32 / scale as f32,
             viewport_css_h: size.height as f32 / scale as f32,
+            canvas_bg: None,
             filter_layer_stack: Vec::new(),
             filter_layer_pending_delete: Vec::new(),
             opacity_layer_stack: Vec::new(),
@@ -3020,10 +3025,14 @@ impl RenderBackend for FemtovgBackend {
         self.viewport_css_h = (self.height as f64 / self.scale) as f32;
 
         self.canvas.set_size(self.width, self.height, self.scale as f32);
-        self.canvas.clear_rect(
-            0, 0, self.width, self.height,
-            femtovg::Color::rgb(255, 255, 255),
-        );
+        // CSS Backgrounds §3.11.1: the root element's background becomes the
+        // canvas background and covers the whole surface. Clear to it so the
+        // page background fills the viewport even when the root box is smaller
+        // than the window (e.g. a 1024×720 page maximized); `None` → white.
+        let clear = self
+            .canvas_bg
+            .map_or(femtovg::Color::rgb(255, 255, 255), lumen_to_fvg);
+        self.canvas.clear_rect(0, 0, self.width, self.height, clear);
 
         // Контент — с учётом scroll.
         self.canvas.save();
@@ -3063,6 +3072,10 @@ impl RenderBackend for FemtovgBackend {
         self.gl_surface
             .swap_buffers(&self.gl_context)
             .map_err(|e| RenderError::Other(e.to_string()))
+    }
+
+    fn set_canvas_background(&mut self, color: Option<Color>) {
+        self.canvas_bg = color;
     }
 
     fn resize(&mut self, width: u32, height: u32) {

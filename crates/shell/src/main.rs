@@ -10812,7 +10812,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // aware across all four sidebars (tabs / AI / web).
                 let page_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
 
+                // CSS Backgrounds §3.11.1: clear the whole surface to the canvas
+                // background (the root element's propagated background color) so the
+                // page background fills the viewport even when the page box is smaller
+                // than the window. Computed before borrowing the renderer mutably.
+                let canvas_bg = self
+                    .layout_box
+                    .as_ref()
+                    .and_then(lumen_layout::canvas_background_color);
+
                 if let Some(r) = self.renderer.as_mut() {
+                    r.set_canvas_background(canvas_bg);
                     if let Some(combined) = split_combined {
                         // Split-view mode: combined DL with baked scroll; renderer gets 0,0.
                         if let Err(err) = r.render(&combined, &overlay_buf, 0.0, 0.0) {
