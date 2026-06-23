@@ -2,26 +2,32 @@
 """Генератор данных для roadmap-деревьев (docs/roadmap-*.html).
 
 Источник правды:
-  - docs/roadmap.json  — курируемая структура фаз/задач + ручные связи баг→задача (поле "bugs").
-  - BUGS.md            — живой статус/заголовок/компонент каждого бага (парсится автоматически).
+  - ROADMAP.md  — плоская (одна задача = одна строка) структура фаз/задач + связи баг→задача
+                  (колонка "bugs"). Grep-friendly: `grep "| U-6 " ROADMAP.md`.
+  - BUGS.md     — живой статус/заголовок/компонент каждого бага (парсится автоматически).
 
 Что делает:
-  1. Читает roadmap.json (структура) и BUGS.md (актуальные баги).
-  2. Сшивает: каждой задаче с полем "bugs" подмешивает живой статус из BUGS.md.
-  3. ВЫВОДИТ статус задачи автоматически (см. derive_status): из живых багов и подзадач.
-     Ручной "status" в roadmap.json — лишь запасной вариант для фич без багов и без подзадач.
-  4. Баги без ручной привязки → группа "Прочие баги (по компоненту)".
-  5. Вшивает итоговый JSON в <script id="roadmap-data"> обоих HTML-файлов.
+  1. Читает ROADMAP.md (структура: таблицы «Фазы» и «Задачи») и BUGS.md (актуальные баги).
+  2. Собирает дерево из плоских строк по колонкам phase/parent.
+  3. Сшивает: каждой задаче с непустой колонкой "bugs" подмешивает живой статус из BUGS.md.
+  4. ВЫВОДИТ статус задачи автоматически (см. derive_status): из живых багов и подзадач.
+     Ручной "status" в ROADMAP.md — лишь запасной вариант для фич без багов и без подзадач.
+  5. Баги без ручной привязки → группа "Прочие баги (по компоненту)".
+  6. Вшивает итоговый JSON в <script id="roadmap-data"> обоих HTML-файлов.
 
-Почему авто-вывод: раньше статус задачи копировался из roadmap.json дословно, поэтому
-после закрытия бага в BUGS.md задача оставалась "blocker"/"ready" (дрейф: зелёный баг под
-красной задачей). Теперь статус задачи производный — править руками нужно только статусы
-чисто-фичевых задач без багов/подзадач (planned-фичи).
+Почему авто-вывод: раньше статус задачи копировался дословно, поэтому после закрытия бага в
+BUGS.md задача оставалась "blocker"/"ready" (дрейф: зелёный баг под красной задачей). Теперь
+статус задачи производный — править руками нужно только статусы чисто-фичевых задач без
+багов/подзадач (planned-фичи).
+
+Почему ROADMAP.md, а не roadmap.json: вложенный json нельзя грепнуть по одной записи (задача
+размазана по дереву отступов). Плоский markdown — одна строка на задачу, размер файла
+нерелевантен, читается тем же приёмом, что BUGS.md.
 
 Запуск (из корня репозитория):
   python scripts/gen_roadmap.py
 
-Обновляй после правки roadmap.json ИЛИ при добавлении/закрытии багов в BUGS.md.
+Обновляй после правки ROADMAP.md ИЛИ при добавлении/закрытии багов в BUGS.md.
 """
 import json
 import re
@@ -30,7 +36,7 @@ from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-ROADMAP_JSON = ROOT / "docs" / "roadmap.json"
+ROADMAP_MD = ROOT / "ROADMAP.md"
 BUGS_MD = ROOT / "BUGS.md"
 HTML_FILES = [
     ROOT / "docs" / "roadmap-B-twotrees.html",
@@ -56,6 +62,98 @@ def parse_status(raw):
         m = re.search(r"(\d{4}-\d{2}-\d{2})", raw)
         return "fixed", (m.group(1) if m else None)
     return "open", None
+
+
+def _table_rows(lines, header_contains):
+    """Возвращает строки markdown-таблицы (списки ячеек) под заголовком, содержащим header_contains.
+
+    Ищет строку-шапку таблицы (`| col | col |`), где встречается header_contains, пропускает
+    разделитель (`|---|`) и собирает строки данных до первой не-`|`-строки.
+    """
+    rows = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i].strip()
+        if line.startswith("|") and header_contains in line:
+            i += 2  # шапка + разделитель |---|
+            while i < n and lines[i].strip().startswith("|"):
+                cells = [c.strip() for c in lines[i].strip().strip("|").split("|")]
+                rows.append(cells)
+                i += 1
+            return rows
+        i += 1
+    return rows
+
+
+def parse_roadmap():
+    """Читает ROADMAP.md → {"phases": [...]} в том же виде, что прежний roadmap.json.
+
+    Две таблицы: «Фазы» (id|status|date|title) и «Задачи»
+    (id|phase|parent|status|size|bugs|note|title). Дерево собирается по колонкам phase/parent
+    с сохранением порядка строк.
+    """
+    lines = ROADMAP_MD.read_text(encoding="utf-8").splitlines()
+
+    phase_rows = _table_rows(lines, "title |")  # первая таблица с колонкой title — «Фазы»
+    # Шапка фаз: id | status | date | title (4 колонки). Шапка задач: 8 колонок.
+    phases = []
+    phase_by_id = {}
+    for cells in phase_rows:
+        if len(cells) != 4:
+            continue
+        pid, status, dt, title = cells
+        node = {"id": pid, "title": title, "status": status or "planned", "tasks": []}
+        if dt:
+            node["date"] = dt
+        phases.append(node)
+        phase_by_id[pid] = node
+
+    # Таблица задач: ищем шапку с колонкой parent.
+    task_rows = _table_rows(lines, "parent |")
+    task_by_id = {}
+    order = []
+    for cells in task_rows:
+        if len(cells) != 8:
+            continue
+        tid, phase, parent, status, size, bugs, note, title = cells
+        node = {"id": tid, "title": title, "status": status or "planned"}
+        if size:
+            node["size"] = size
+        if note:
+            node["note"] = note
+        if bugs:
+            node["bugs"] = [b.strip() for b in bugs.split(",") if b.strip()]
+        node["_phase"] = phase
+        node["_parent"] = parent
+        node["tasks"] = []
+        task_by_id[tid] = node
+        order.append(tid)
+
+    # Сшивка дерева: parent пуст → под фазой; иначе → под задачей-родителем.
+    for tid in order:
+        node = task_by_id[tid]
+        parent = node.pop("_parent")
+        phase = node.pop("_phase")
+        if parent and parent in task_by_id:
+            task_by_id[parent]["tasks"].append(node)
+        elif phase in phase_by_id:
+            phase_by_id[phase]["tasks"].append(node)
+        else:
+            print(f"ВНИМАНИЕ: задача {tid} ссылается на неизвестные phase={phase!r}/parent={parent!r}")
+
+    # Уберём пустые "tasks", чтобы JSON совпадал с прежней формой (лист без подзадач не имеет ключа).
+    def _strip_empty(node):
+        for t in node.get("tasks", []):
+            _strip_empty(t)
+        if not node.get("tasks"):
+            node.pop("tasks", None)
+
+    for ph in phases:
+        for t in ph["tasks"]:
+            _strip_empty(t)
+
+    return {"phases": phases}
 
 
 def parse_bugs():
@@ -148,12 +246,12 @@ def derive_status(node, bugs, warnings, infer_active=True):
 
 
 def main():
-    if not ROADMAP_JSON.exists():
-        sys.exit(f"нет {ROADMAP_JSON}")
+    if not ROADMAP_MD.exists():
+        sys.exit(f"нет {ROADMAP_MD}")
     if not BUGS_MD.exists():
         sys.exit(f"нет {BUGS_MD}")
 
-    roadmap = json.loads(ROADMAP_JSON.read_text(encoding="utf-8"))
+    roadmap = parse_roadmap()
     bugs = parse_bugs()
 
     # авто-вывод статусов задач/фаз из живых багов + подзадач (правит roadmap["phases"] на месте)

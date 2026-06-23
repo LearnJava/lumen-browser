@@ -903,6 +903,81 @@ fn fit_with_ratio(iw: f32, ih: f32, bw: f32, bh: f32, cover: bool) -> (f32, f32)
     (iw * s, ih * s)
 }
 
+/// Tile geometry for a background image from `background-size` /
+/// `background-position` / `background-repeat` (CSS Backgrounds L3 §3.3–3.5).
+///
+/// Pure (GL-free) so both the femtovg backend and the deterministic CPU
+/// rasterizer derive identical placement. `img_w`/`img_h` — intrinsic image
+/// size; `oarea_*` — the `background-origin` positioning area (x/y/width/height).
+///
+/// Returns `(tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y)`:
+/// one tile's size, the top-left corner of the first tile, and the per-axis
+/// repeat flags. The caller tiles from `(tile_x_start, tile_y_start)` across the
+/// painting area, stepping by `(tile_w, tile_h)` while the corresponding repeat
+/// flag is set, clipping to the painting rect.
+// BUG-235: only the femtovg window and the tiny-skia CPU snapshot tile
+// backgrounds via this helper; the wgpu renderer tiles on the GPU. Gate it to
+// its consumers so a wgpu-only build (e.g. lumen-driver default features) does
+// not flag it as dead code under `-D warnings`.
+#[cfg(any(feature = "backend-femtovg", feature = "cpu-render"))]
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub(crate) fn bg_tile_geometry(
+    size: BackgroundSize,
+    position: &ObjectPosition,
+    repeat: BackgroundRepeat,
+    img_w: f32,
+    img_h: f32,
+    oarea_w: f32,
+    oarea_h: f32,
+    oarea_x: f32,
+    oarea_y: f32,
+) -> (f32, f32, f32, f32, bool, bool) {
+    let (tile_w, tile_h) = match size {
+        BackgroundSize::Auto => (img_w, img_h),
+        BackgroundSize::Cover => {
+            let s = (oarea_w / img_w).max(oarea_h / img_h);
+            (img_w * s, img_h * s)
+        }
+        BackgroundSize::Contain => {
+            let s = (oarea_w / img_w).min(oarea_h / img_h);
+            (img_w * s, img_h * s)
+        }
+        BackgroundSize::Length(w, h) => {
+            let tw = w.max(1.0);
+            let th = h.unwrap_or_else(|| img_h * (tw / img_w)).max(1.0);
+            (tw, th)
+        }
+    };
+
+    let off_x = match position.x {
+        PositionComponent::Px(px) => px,
+        PositionComponent::Percent(p) => (oarea_w - tile_w) * p,
+    };
+    let off_y = match position.y {
+        PositionComponent::Px(py) => py,
+        PositionComponent::Percent(p) => (oarea_h - tile_h) * p,
+    };
+    let tile_x0 = oarea_x + off_x;
+    let tile_y0 = oarea_y + off_y;
+
+    let (tile_x_start, repeat_x, repeat_y) = match repeat {
+        BackgroundRepeat::NoRepeat => (tile_x0, false, false),
+        BackgroundRepeat::RepeatX => (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, false),
+        BackgroundRepeat::RepeatY => (tile_x0, false, true),
+        BackgroundRepeat::Repeat | BackgroundRepeat::Round | BackgroundRepeat::Space => {
+            (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, true)
+        }
+    };
+    let tile_y_start = if repeat_y {
+        tile_y0 - (off_y / tile_h).ceil() * tile_h
+    } else {
+        tile_y0
+    };
+
+    (tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y)
+}
+
 /// Финальный GPU-quad для `<img>`: пересечение «полного» placement-rect
 /// (см. [`fit_image_rect`]) с `box_rect` плюс соответствующие UV-bounds
 /// исходной текстуры. Спецификация CSS Images L3 §5.5 требует «clipped to
@@ -3474,15 +3549,27 @@ fn mask_stops_for_mode(stops: &[GradientStop], mode: lumen_layout::MaskMode) -> 
 }
 
 fn emit_push_mask(out: &mut Vec<DisplayCommand>, b: &LayoutBox) -> bool {
-    let rect = b.rect;
+    // CSS Masking L1 §4.5 — `mask-origin` sets the mask **positioning area**
+    // (border/padding/content box). Reuses the background-origin geometry; for
+    // the default `border-box` this equals `b.rect`, so existing behaviour is
+    // unchanged.
+    let rect = background_origin_rect(b, b.style.mask_origin);
     let mode = b.style.mask_mode;
+    // CSS: mask-clip — the painting/clip area still defaults to the positioning
+    // area here. Full wiring needs a separate clip rect threaded through the
+    // PushMask* / PopMask pair plus a backend scissor.
+    // CSS: mask-composite — needs the multi-layer mask infrastructure (mask-image
+    // as a layer list) before add/subtract/intersect/exclude can be applied.
     match &b.style.mask_image {
         BackgroundImage::Url(src) if !src.is_empty() => {
             out.push(DisplayCommand::PushMaskImage {
                 rect,
                 src: src.clone(),
                 size: b.style.mask_size,
-                position: ObjectPosition::background_initial(),
+                // CSS Masking L1 §4.4 — `mask-position` (same syntax as
+                // background-position). Applies to image masks; gradient masks
+                // derive their geometry from `rect` above.
+                position: b.style.mask_position,
                 repeat: b.style.mask_repeat,
                 image_rendering: b.style.image_rendering,
             });
@@ -4205,11 +4292,11 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
     // (border/padding/background) is already stripped in
     // `strip_ua_appearance_box_styling` (before the author cascade); here we
     // suppress the painted indicator so authors can fully restyle it.
-    // BUG-225: this gate also suppresses text-input value/placeholder text — too
-    // broad; only the native primitives should be suppressed.
-    if b.style.appearance == Appearance::None {
-        return;
-    }
+    // BUG-225: the suppression is scoped to the native primitives only (color
+    // swatch, checkbox tick, radio dot, range slider, progress/meter bar, select
+    // arrow). Text-input `value`/`placeholder` and button labels are author
+    // content, not a UA primitive, so they keep rendering under `appearance:none`.
+    let suppress_primitive = b.style.appearance == Appearance::None;
     // CSS UI L4 §6.1 — accent-color tints the "accent" of checkbox, radio,
     // range and progress controls. `auto` (None) keeps the UA default blue.
     // <meter> is intentionally excluded: its bar keeps the semantic
@@ -4223,22 +4310,27 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
             // `#000000`. Drawn before the `checked` gate since color is not
             // a checkable type.
             if *input_type == InputType::Color {
-                let swatch = lumen_layout::style::parse_color(value_text)
-                    .unwrap_or(Color { r: 0, g: 0, b: 0, a: 255 });
-                let bl = b.style.border_left_width;
-                let bt = b.style.border_top_width;
-                let br = b.style.border_right_width;
-                let bb = b.style.border_bottom_width;
-                let pad = 2.0;
-                out.push(DisplayCommand::FillRect {
-                    rect: Rect::new(
-                        b.rect.x + bl + pad,
-                        b.rect.y + bt + pad,
-                        (b.rect.width  - bl - br - pad * 2.0).max(1.0),
-                        (b.rect.height - bt - bb - pad * 2.0).max(1.0),
-                    ),
-                    color: swatch,
-                });
+                // The swatch is the native primitive — suppressed under
+                // `appearance:none` (the control has no text value to fall back
+                // to, so nothing else is painted here).
+                if !suppress_primitive {
+                    let swatch = lumen_layout::style::parse_color(value_text)
+                        .unwrap_or(Color { r: 0, g: 0, b: 0, a: 255 });
+                    let bl = b.style.border_left_width;
+                    let bt = b.style.border_top_width;
+                    let br = b.style.border_right_width;
+                    let bb = b.style.border_bottom_width;
+                    let pad = 2.0;
+                    out.push(DisplayCommand::FillRect {
+                        rect: Rect::new(
+                            b.rect.x + bl + pad,
+                            b.rect.y + bt + pad,
+                            (b.rect.width  - bl - br - pad * 2.0).max(1.0),
+                            (b.rect.height - bt - bb - pad * 2.0).max(1.0),
+                        ),
+                        color: swatch,
+                    });
+                }
                 return;
             }
             // HTML rendering §15.5.5 — text-like inputs paint their `value` as
@@ -4274,6 +4366,9 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
                 }
                 _ => {}
             }
+            // The checked checkbox tick / radio dot is a native primitive —
+            // suppressed under `appearance:none`.
+            if suppress_primitive { return; }
             if !checked { return; }
             if *input_type != InputType::Checkbox && *input_type != InputType::Radio {
                 return;
@@ -4327,17 +4422,26 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
             }
         }
         FormControlKind::Select { selected_text } => {
-            emit_select_indicator(b, selected_text, out);
+            // The select arrow is the native primitive; the selected option text
+            // is author-visible content and keeps rendering. `emit_select_indicator`
+            // draws both, so pass the suppression flag down rather than gating here.
+            emit_select_indicator(b, selected_text, suppress_primitive, out);
         }
         FormControlKind::Button | FormControlKind::Textarea { .. } => {}
         FormControlKind::Range { value, min, max } => {
-            emit_range_slider(b, *value, *min, *max, accent, out);
+            if !suppress_primitive {
+                emit_range_slider(b, *value, *min, *max, accent, out);
+            }
         }
         FormControlKind::Progress { value, max } => {
-            emit_progress_bar(b, *value, *max, accent, out);
+            if !suppress_primitive {
+                emit_progress_bar(b, *value, *max, accent, out);
+            }
         }
         FormControlKind::Meter { value, min, max, low, high, optimum } => {
-            emit_meter_bar(b, *value, *min, *max, *low, *high, *optimum, out);
+            if !suppress_primitive {
+                emit_meter_bar(b, *value, *min, *max, *low, *high, *optimum, out);
+            }
         }
     }
 }
@@ -4481,14 +4585,20 @@ pub(crate) fn meter_gauge_color(value: f32, _min: f32, _max: f32, low: f32, high
 }
 
 /// Draw the selected option label and a dropdown arrow (▼) inside a `<select>` box.
-fn emit_select_indicator(b: &LayoutBox, selected_text: &str, out: &mut Vec<DisplayCommand>) {
+///
+/// `suppress_primitive` (set by `appearance: none`, BUG-225) drops the native
+/// separator line and dropdown arrow; the selected option label is author-visible
+/// content and is always painted.
+fn emit_select_indicator(b: &LayoutBox, selected_text: &str, suppress_primitive: bool, out: &mut Vec<DisplayCommand>) {
     let s = &b.style;
     let fg = s.color;
     let font_size = s.font_size.clamp(10.0, 14.0);
     let pad = 4.0;
-    // Arrow column width (enough for "▼" glyph).
+    // Arrow column width (enough for "▼" glyph). When the native arrow is
+    // suppressed the label reclaims that column.
     let arrow_w = font_size + pad * 2.0;
-    let text_w = (b.rect.width - arrow_w - pad * 2.0).max(1.0);
+    let reserved = if suppress_primitive { 0.0 } else { arrow_w };
+    let text_w = (b.rect.width - reserved - pad * 2.0).max(1.0);
 
     // Selected label — clipped to available width.
     if !selected_text.is_empty() {
@@ -4506,29 +4616,32 @@ fn emit_select_indicator(b: &LayoutBox, selected_text: &str, out: &mut Vec<Displ
         });
     }
 
-    // Separator line before the arrow.
-    let sep_x = b.rect.x + b.rect.width - arrow_w;
-    out.push(DisplayCommand::DrawBorder {
-        rect: Rect::new(sep_x, b.rect.y, 1.0, b.rect.height),
-        widths: [0.0, 0.0, 0.0, 1.0],
-        colors: [fg; 4],
-        styles: [lumen_layout::BorderStyle::Solid; 4],
-        radii: crate::CornerRadii::default(),
-    });
+    // Native separator line + dropdown arrow — suppressed under `appearance:none`.
+    if !suppress_primitive {
+        // Separator line before the arrow.
+        let sep_x = b.rect.x + b.rect.width - arrow_w;
+        out.push(DisplayCommand::DrawBorder {
+            rect: Rect::new(sep_x, b.rect.y, 1.0, b.rect.height),
+            widths: [0.0, 0.0, 0.0, 1.0],
+            colors: [fg; 4],
+            styles: [lumen_layout::BorderStyle::Solid; 4],
+            radii: crate::CornerRadii::default(),
+        });
 
-    // Dropdown arrow "▼".
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(sep_x + pad, b.rect.y + pad, arrow_w - pad, b.rect.height - pad * 2.0),
-        text: "\u{25BC}".to_owned(),
-        font_size: font_size * 0.75,
-        color: fg,
-        font_family: s.font_family.clone(),
-        font_weight: s.font_weight,
-        font_style: s.font_style,
-        font_variation_axes: vec![],
-        tab_size: 0.0,
-        highlight_name: None,
-    });
+        // Dropdown arrow "▼".
+        out.push(DisplayCommand::DrawText {
+            rect: Rect::new(sep_x + pad, b.rect.y + pad, arrow_w - pad, b.rect.height - pad * 2.0),
+            text: "\u{25BC}".to_owned(),
+            font_size: font_size * 0.75,
+            color: fg,
+            font_family: s.font_family.clone(),
+            font_weight: s.font_weight,
+            font_style: s.font_style,
+            font_variation_axes: vec![],
+            tab_size: 0.0,
+            highlight_name: None,
+        });
+    }
 }
 
 /// CSS Lists L3 §2.1 — renders the `::marker` pseudo-element.
@@ -7360,6 +7473,70 @@ mod tests {
         );
     }
 
+    /// BUG-225 — `appearance: none` must NOT suppress a text input's `value`
+    /// text: the value is author content, not a UA primitive. Only the native
+    /// primitives (tick/dot/slider/bar/arrow/swatch) are removed.
+    #[test]
+    fn appearance_none_keeps_text_input_value() {
+        let dl = build(
+            r#"<input type=text value="typed">"#,
+            "input { appearance: none; }",
+        );
+        assert!(
+            texts(&dl).contains(&"typed"),
+            "appearance:none text input must still paint its value, got {:?}",
+            texts(&dl)
+        );
+    }
+
+    /// BUG-225 — `appearance: none` must keep the placeholder hint of an empty
+    /// text input (placeholder is author content, not a UA primitive).
+    #[test]
+    fn appearance_none_keeps_text_input_placeholder() {
+        let dl = build(
+            r#"<input type=text value="" placeholder="hint here">"#,
+            "input { appearance: none; }",
+        );
+        assert!(
+            texts(&dl).contains(&"hint here"),
+            "appearance:none empty input must still paint its placeholder, got {:?}",
+            texts(&dl)
+        );
+    }
+
+    /// BUG-225 — `appearance: none` must keep a button's label.
+    #[test]
+    fn appearance_none_keeps_button_label() {
+        let dl = build(
+            r#"<input type=submit value="Send">"#,
+            "input { appearance: none; }",
+        );
+        assert!(
+            texts(&dl).contains(&"Send"),
+            "appearance:none button must still paint its label, got {:?}",
+            texts(&dl)
+        );
+    }
+
+    /// BUG-225 — `appearance: none` keeps the `<select>` selected option label
+    /// but drops the native dropdown arrow (▼).
+    #[test]
+    fn appearance_none_keeps_select_label_drops_arrow() {
+        let dl = build(
+            "<select><option selected>Chosen</option></select>",
+            "select { appearance: none; }",
+        );
+        let t = texts(&dl);
+        assert!(
+            t.contains(&"Chosen"),
+            "appearance:none select must still paint the selected label, got {t:?}"
+        );
+        assert!(
+            !t.iter().any(|s| s.contains('\u{25BC}')),
+            "appearance:none select must drop the native dropdown arrow, got {t:?}"
+        );
+    }
+
     #[test]
     fn empty_input_empty_list() {
         let dl = build("", "");
@@ -8851,6 +9028,67 @@ mod tests {
             assert!((rect.width - 116.0).abs() < 0.1, "rect.width={}", rect.width);
             assert!((origin_rect.width - 100.0).abs() < 0.1, "origin_rect.width={}", origin_rect.width);
         }
+    }
+
+    // ── Тесты mask-origin / mask-position (CSS Masking L1 §4.4–§4.5) ────────────
+
+    fn push_mask_gradient_rect(dl: &DisplayList) -> lumen_core::geom::Rect {
+        dl.iter()
+            .find_map(|c| match c {
+                DisplayCommand::PushMaskLinearGradient { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .expect("gradient mask must emit PushMaskLinearGradient")
+    }
+
+    #[test]
+    fn mask_origin_default_border_box_uses_full_box() {
+        // mask-origin initial value is `border-box` (CSS Masking L1 §4.5), unlike
+        // background-origin (`padding-box`). content-box 100×60 + padding 10 +
+        // border 5 → border-box 130×90; the gradient mask covers the full box.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; \
+             mask-image: linear-gradient(to bottom, black, transparent); \
+             border: 5px solid red; padding: 10px; }",
+        );
+        let rect = push_mask_gradient_rect(&dl);
+        assert!((rect.width - 130.0).abs() < 0.1, "rect.width={}", rect.width);
+        assert!((rect.height - 90.0).abs() < 0.1, "rect.height={}", rect.height);
+    }
+
+    #[test]
+    fn mask_origin_content_box_shrinks_push_mask_rect() {
+        // mask-origin: content-box positions the mask over the content box only.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; \
+             mask-image: linear-gradient(to bottom, black, transparent); \
+             border: 5px solid red; padding: 10px; mask-origin: content-box; }",
+        );
+        let rect = push_mask_gradient_rect(&dl);
+        assert!((rect.width - 100.0).abs() < 0.1, "rect.width={}", rect.width);
+        assert!((rect.height - 60.0).abs() < 0.1, "rect.height={}", rect.height);
+    }
+
+    #[test]
+    fn mask_position_threaded_into_push_mask_image() {
+        // mask-position must reach the PushMaskImage command (no longer hardcoded
+        // to background_initial). 25% 75% → Percent(0.25)/Percent(0.75).
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; \
+             mask-image: url(m.png); mask-position: 25% 75%; }",
+        );
+        let pos = dl
+            .iter()
+            .find_map(|c| match c {
+                DisplayCommand::PushMaskImage { position, .. } => Some(*position),
+                _ => None,
+            })
+            .expect("url mask must emit PushMaskImage");
+        assert_eq!(pos.x, PositionComponent::Percent(0.25), "mask-position x");
+        assert_eq!(pos.y, PositionComponent::Percent(0.75), "mask-position y");
     }
 
     #[test]

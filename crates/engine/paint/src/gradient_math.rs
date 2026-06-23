@@ -70,6 +70,70 @@ pub fn resolve_stop_positions(stops: &[GradientStop], line_len: f32) -> Vec<(f32
         .collect()
 }
 
+/// CSS Images L4 §3.1 — gradient colour interpolation is defined in
+/// **premultiplied** sRGBA. The raster backends (tiny-skia, femtovg) interpolate
+/// between adjacent stops in *straight* (non-premultiplied) space, which is only
+/// equivalent when the two endpoints share the same alpha. When alpha varies
+/// across a segment — most visibly a fade to the `transparent` keyword
+/// (`rgba(0,0,0,0)`) — straight interpolation drags the colour toward black,
+/// producing a dark/muddy fringe instead of the correct premultiplied fade
+/// (orange → transparent should stay orange-hued, only its alpha dropping).
+///
+/// This subdivides every segment whose endpoints differ in alpha into `STEPS`
+/// intermediate stops sampled by premultiplied interpolation (lerp the
+/// premultiplied channels, then un-premultiply), so a straight-interpolating
+/// backend reproduces the premultiplied curve between the dense stops. Segments
+/// with equal endpoint alpha (the common all-opaque gradient) are emitted
+/// verbatim — byte-identical to before, so solid gradients never regress.
+///
+/// Used by both raster stop builders (`femtovg_stops`, `skia_gradient_stops`)
+/// so the window and the CPU snapshot stay in lock-step (BUG-190).
+#[must_use]
+pub fn premultiplied_subdivide_stops(resolved: &[(f32, Color)]) -> Vec<(f32, Color)> {
+    if resolved.len() < 2 {
+        return resolved.to_vec();
+    }
+    /// Intermediate stops inserted per transparency-bearing segment. 16 keeps the
+    /// premultiplied curve visually smooth (≤1/255 step over a full fade) while
+    /// staying well under the femtovg 256-texel gradient texture resolution.
+    const STEPS: usize = 16;
+    let mut out: Vec<(f32, Color)> = Vec::with_capacity(resolved.len() * 2);
+    out.push(resolved[0]);
+    for w in resolved.windows(2) {
+        let (p0, c0) = w[0];
+        let (p1, c1) = w[1];
+        // Premultiplied and straight interpolation diverge only when the segment's
+        // endpoint alphas differ; otherwise the un-premultiply cancels exactly.
+        if c0.a != c1.a && (p1 - p0).abs() > 1e-6 {
+            for k in 1..STEPS {
+                let f = k as f32 / STEPS as f32;
+                out.push((p0 + (p1 - p0) * f, lerp_color_premul(c0, c1, f)));
+            }
+        }
+        out.push(w[1]);
+    }
+    out
+}
+
+/// Premultiplied linear interpolation between two straight RGBA8 colours
+/// (CSS Images L4 §3.1): interpolate the premultiplied channels, then
+/// un-premultiply. A fully-transparent result collapses to `rgba(0,0,0,0)`.
+#[must_use]
+pub fn lerp_color_premul(a: Color, b: Color, f: f32) -> Color {
+    let aa = a.a as f32 / 255.0;
+    let ba = b.a as f32 / 255.0;
+    let lin = |x: f32, y: f32| x + (y - x) * f;
+    let pr = lin(a.r as f32 * aa, b.r as f32 * ba);
+    let pg = lin(a.g as f32 * aa, b.g as f32 * ba);
+    let pb = lin(a.b as f32 * aa, b.b as f32 * ba);
+    let pa = lin(aa, ba);
+    if pa <= 1e-6 {
+        return Color { r: 0, g: 0, b: 0, a: 0 };
+    }
+    let un = |p: f32| (p / pa).round().clamp(0.0, 255.0) as u8;
+    Color { r: un(pr), g: un(pg), b: un(pb), a: (pa * 255.0).round().clamp(0.0, 255.0) as u8 }
+}
+
 /// Sample a resolved gradient stop list at position `t` (straight-colour linear
 /// interpolation), mirroring the GPU `sample_grad`: `repeating` wraps `t` to
 /// `[0,1)`, otherwise it clamps; positions outside the first/last stop take the
@@ -216,6 +280,72 @@ mod tests {
     #[test]
     fn resolve_empty_input_is_empty() {
         assert!(resolve_stop_positions(&[], 100.0).is_empty());
+    }
+
+    // ── premultiplied_subdivide_stops (BUG-190) ──────────────────────────────
+
+    const TRANSPARENT: Color = Color { r: 0, g: 0, b: 0, a: 0 };
+
+    #[test]
+    fn subdivide_opaque_segment_unchanged() {
+        // Equal alpha (both opaque) → premul == straight → emit verbatim.
+        let resolved = vec![(0.0, RED), (1.0, BLUE)];
+        assert_eq!(premultiplied_subdivide_stops(&resolved), resolved);
+    }
+
+    #[test]
+    fn subdivide_inserts_stops_for_alpha_varying_segment() {
+        let orange = Color { r: 255, g: 200, b: 100, a: 204 }; // rgba(...,0.8)
+        let resolved = vec![(0.0, orange), (0.7, TRANSPARENT)];
+        let out = premultiplied_subdivide_stops(&resolved);
+        // endpoints preserved + 15 interior stops (STEPS-1).
+        assert_eq!(out.len(), 2 + 15);
+        assert_eq!(out.first().unwrap().1, orange);
+        assert_eq!(out.last().unwrap().1, TRANSPARENT);
+    }
+
+    #[test]
+    fn subdivide_fade_to_transparent_keeps_hue() {
+        // orange → `transparent` (rgba 0,0,0,0): premultiplied interpolation must
+        // hold the orange hue while alpha falls, NOT drift toward black.
+        let orange = Color { r: 255, g: 200, b: 100, a: 204 };
+        let out = premultiplied_subdivide_stops(&[(0.0, orange), (1.0, TRANSPARENT)]);
+        for &(_, c) in &out {
+            if c.a == 0 {
+                continue; // fully transparent endpoint carries no colour
+            }
+            // Hue (R:G:B ratio) stays orange to within rounding.
+            assert!(c.r >= c.g && c.g >= c.b, "channel order lost: {c:?}");
+            assert!((c.r as i32 - 255).abs() <= 1, "R drifted: {c:?}");
+            assert!((c.g as i32 - 200).abs() <= 1, "G drifted: {c:?}");
+            assert!((c.b as i32 - 100).abs() <= 1, "B drifted: {c:?}");
+        }
+    }
+
+    #[test]
+    fn lerp_premul_constant_hue_for_color_to_transparent() {
+        let orange = Color { r: 255, g: 200, b: 100, a: 204 };
+        let mid = lerp_color_premul(orange, TRANSPARENT, 0.5);
+        assert_eq!((mid.r, mid.g, mid.b), (255, 200, 100));
+        assert_eq!(mid.a, 102); // alpha halved (0.8 → 0.4)
+    }
+
+    #[test]
+    fn lerp_premul_fully_transparent_collapses() {
+        let a = Color { r: 10, g: 20, b: 30, a: 0 };
+        let b = Color { r: 200, g: 100, b: 50, a: 0 };
+        assert_eq!(lerp_color_premul(a, b, 0.5), TRANSPARENT);
+    }
+
+    #[test]
+    fn lerp_premul_equal_alpha_matches_straight() {
+        // Constant alpha → premultiplied result equals straight interpolation.
+        let a = Color { r: 0, g: 0, b: 0, a: 128 };
+        let b = Color { r: 255, g: 255, b: 255, a: 128 };
+        let premul = lerp_color_premul(a, b, 0.5);
+        let straight = lerp_color(a, b, 0.5);
+        assert!((premul.r as i32 - straight.r as i32).abs() <= 1);
+        assert_eq!(premul.a, straight.a);
     }
 
     // ── sample_gradient_color ────────────────────────────────────────────────

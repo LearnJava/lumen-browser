@@ -12,13 +12,13 @@ Update this file whenever you change architecture, invariants, or policies.
 
 **Lumen** — private, lightweight, transparent browser in Rust with a custom engine. Not a Chromium/WebKit wrapper; a standalone rendering engine with an embedded JS engine.
 
-Current phase: **Phase 2 — v0.5 «Interactive» (in progress)**, app version **v0.2.0**. Phase 0 (prototype) closed 2026-05-26; Phase 1 «Reader» largely complete. Phase 2 work active: QuickJS, Canvas 2D, CSS Grid, Shadow DOM, accessibility tree, forms, find-in-page, DevTools/CDP, knowledge layer.
+Current phase: **Phase 2 — v0.5 «Interactive» (complete)**, app version **v0.5.0**. Phase 0 (prototype) closed 2026-05-26; Phase 1 «Reader» largely complete. Phase 2 delivered: QuickJS, Canvas 2D, CSS Grid, Shadow DOM, accessibility tree, forms, find-in-page, DevTools/CDP, knowledge layer.
 
 ### Versioning & phase policy
 
 Single source of truth for the version is `[workspace.package] version` in `Cargo.toml`. All machine-readable version strings (User-Agent, Sec-CH-UA, CDP `Browser.getVersion`, window title, startup banner) derive from `CARGO_PKG_VERSION` — do **not** hardcode a version number in code. The one manual-bump site is the `navigator.userAgent` literal in `crates/js/src/dom.rs` (JS shim string).
 
-Version↔phase mapping (from `docs/plan/phases.md`): Phase 1 → v0.1, **Phase 2 → v0.5** (target on phase completion), Phase 3 → v1.0. Mid-phase the version climbs toward the target (currently **0.2.0** inside active Phase 2). When Phase 2 goals are met, bump to 0.5.0; reaching Phase 3 → 1.0.0. Keep the phase label in sync across `README.md`, `docs/plan/phases.md`, this file, and the shell startup banner.
+Version↔phase mapping (from `docs/plan/phases.md`): Phase 1 → v0.1, **Phase 2 → v0.5** (target on phase completion), Phase 3 → v1.0. Mid-phase the version climbs toward the target (Phase 2 reached its **0.5.0** target). Reaching Phase 3 → 1.0.0. Keep the phase label in sync across `README.md`, `docs/plan/phases.md`, this file, and the shell startup banner.
 
 | File | Contents |
 |---|---|
@@ -32,7 +32,8 @@ Version↔phase mapping (from `docs/plan/phases.md`): Phase 1 → v0.1, **Phase 
 | `lumen-plan.md` | TOC index: links to 14 section files in `docs/plan/`. Read for architecture/history; for daily status use `STATUS-PN.md` instead. |
 | `docs/plan/` | Design doc split into 14 files: status, roadmap, history, architecture, tech-stack, engine, web-apis-shell, privacy, features, knowledge, security-performance, testing, phases, meta. |
 | `CSS-SPECS.md` | Complete CSS property & spec roadmap: all W3C modules, per-property status (✅🟡⬜🚫), P4 priority queue. |
-| `docs/roadmap-trees.md` | **How to use the interactive roadmap trees** (`docs/roadmap-*.html`): open in a browser, filters/search, and how to keep them current (`docs/roadmap.json` + `python scripts/gen_roadmap.py`, auto-pulls bug status from `BUGS.md`). |
+| `docs/roadmap-trees.md` | **How to use the interactive roadmap trees** (`docs/roadmap-*.html`): open in a browser, filters/search, and how to keep them current (`ROADMAP.md` + `python scripts/gen_roadmap.py`, auto-pulls bug status from `BUGS.md`). |
+| `ROADMAP.md` | Flat, grep-friendly source of the phase/task tree (two markdown tables: phases + tasks, one task per line). Feeds `gen_roadmap.py`; replaced the old nested `docs/roadmap.json`. Bug↔task links live in its `bugs` column. |
 | `CLAUDE.md` | (this file) Conventions and invariants for the assistant. |
 | `docs/decisions/` | Formal ADR files (one per architectural decision). See README.md + TEMPLATE.md inside. |
 | `DECISIONS.md` | Historical decisions (pre-ADR format). Read-only — add new decisions to `docs/decisions/` instead. |
@@ -611,7 +612,7 @@ Do not re-read a whole file to make a small update — use `grep -n` to find the
 | Architectural decision | `docs/decisions/ADR-NNN.md` | new file from TEMPLATE.md; update `docs/decisions/README.md` index |
 | Known gotcha found/fixed | `CLAUDE.md` → "Known gotchas" | append/remove the bullet |
 | New public API (`pub fn/struct`) | `SYMBOLS.md` | regenerate: `python scripts/gen_symbols.py` |
-| Roadmap structure (phase/task) or bug status change | `docs/roadmap.json` (structure + bug↔task links) → regenerate | edit `docs/roadmap.json` if a phase/task/link changed, then run `python scripts/gen_roadmap.py` — it re-pulls live bug status from `BUGS.md` and inlines data into `docs/roadmap-*.html`. Bug-only status changes need just the script (no JSON edit). |
+| Roadmap structure (phase/task) or bug status change | `ROADMAP.md` (structure + bug↔task links) → regenerate | edit `ROADMAP.md` if a phase/task/link changed (one task = one line, `grep "| U-6 " ROADMAP.md`), then run `python scripts/gen_roadmap.py` — it re-pulls live bug status from `BUGS.md` and inlines data into `docs/roadmap-*.html`. Bug-only status changes need just the script (no ROADMAP.md edit). |
 
 ### What NOT to update
 

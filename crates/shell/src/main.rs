@@ -43,6 +43,7 @@ mod links;
 mod momentum_anim;
 mod notification;
 mod omnibox;
+mod panel_layout;
 mod panels;
 mod platform;
 mod prefetch;
@@ -444,7 +445,7 @@ fn run_window_mode(
     no_scrollbar: bool,
     deterministic: bool,
 ) -> ExitCode {
-    println!("Lumen v{} — Phase 2 (Interactive, in progress)", env!("CARGO_PKG_VERSION"));
+    println!("Lumen v{} — Phase 2 (Interactive) complete", env!("CARGO_PKG_VERSION"));
 
     // Wire navigator.clipboard to the OS clipboard (task #26). Process-global,
     // installed once; the JS bindings _lumen_clipboard_read/_write forward here.
@@ -663,7 +664,10 @@ fn run_window_mode(
         shields: panels::shields_panel::ShieldsPanel::new(blocked_log),
         permission: panels::permission_panel::PermissionPanel::new(),
         sidebar: panels::sidebar_panel::SidebarPanel::new(),
+        sidebar_source: None,
         ai_panel: panels::ai_panel::AiPanel::new(),
+        panel_layout: panel_layout::PanelLayout::load(),
+        panel_resize: None,
         note_viewer: panels::note_viewer::NoteViewerPanel::new(),
         ai_backend: Box::new(lumen_core::NullAiBackend),
         bookmarks: lumen_storage::Bookmarks::open_in_memory().expect("bookmarks in-memory"),
@@ -2756,6 +2760,8 @@ enum KeyCommand {
     ToggleVerticalTabs,
     /// Показать/скрыть tree-style панель вкладок (Ctrl+Shift+B).
     ToggleTreeTabs,
+    /// Перенести активный сайдбар вкладок к противоположному краю окна (Ctrl+Alt+B).
+    FlipActiveDock,
     /// Показать/скрыть панель воркспейсов (Ctrl+Shift+W).
     ToggleWorkspaces,
     /// Показать/скрыть панель Shields (Ctrl+Shift+S).
@@ -2879,6 +2885,10 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         // Ctrl+Shift+B — toggle tree-style tab sidebar
         KeyCode::KeyB if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleTreeTabs)
+        }
+        // Ctrl+Alt+B — move the active tab sidebar to the opposite edge (cross-dock)
+        KeyCode::KeyB if mods == (ModifiersState::CONTROL | ModifiersState::ALT) => {
+            Some(KeyCommand::FlipActiveDock)
         }
         // Ctrl+Shift+W — toggle workspace switcher bar
         KeyCode::KeyW if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
@@ -5579,6 +5589,12 @@ struct Lumen {
     /// When visible, `page_content_width_css()` subtracts
     /// [`panels::sidebar_panel::PANEL_WIDTH`] and `relayout()` fires.
     sidebar: panels::sidebar_panel::SidebarPanel,
+    /// Re-layoutable source of the web sidebar page (parsed DOM + stylesheet).
+    ///
+    /// Kept so a drag-resize of the sidebar can reflow its content to the new
+    /// width instead of stretching a frozen display list. `None` until a page
+    /// is opened via [`Self::open_sidebar_page`].
+    sidebar_source: Option<LayoutSource>,
     /// AI assistant sidebar panel (§12.8, GG-1).
     ///
     /// Right-docked 200 CSS px panel with a prompt input field and response area.
@@ -5586,6 +5602,16 @@ struct Lumen {
     /// subtracts [`panels::ai_panel::PANEL_WIDTH`] and `relayout()` fires.
     /// Queries are dispatched to [`Self::ai_backend`] synchronously (Phase 0).
     ai_panel: panels::ai_panel::AiPanel,
+    /// Persisted, drag-resizable widths of the docked sidebars (F2-6).
+    ///
+    /// Replaces the panels' compiled `PANEL_WIDTH` constants: `width_for(id,
+    /// default)` supplies the active width, dragging a panel's inner edge calls
+    /// `set_width` + `relayout` + `save`. Loaded at startup, so the layout
+    /// survives a restart.
+    panel_layout: panel_layout::PanelLayout,
+    /// In-flight docked-panel resize drag: `(dock side, panel id)` of the edge
+    /// currently being dragged, or `None` when no resize is active.
+    panel_resize: Option<(panel_layout::Dock, &'static str)>,
     /// Floating overlay showing a single user annotation (§12.2, GG-2).
     ///
     /// Opened when the user selects a `@notes`-search result from the omnibox
@@ -8098,6 +8124,21 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_position = Some(position);
+                // F2-6: while resizing a docked panel, the drag owns the cursor —
+                // update its width and relayout, skip page/inspector hover work.
+                if self.panel_resize.is_some() {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                        .max(1e-6);
+                    let x_css = (position.x as f32) / dpr;
+                    if self.drag_panel_resize(x_css) {
+                        self.request_redraw();
+                    }
+                    self.update_cursor_icon();
+                    return;
+                }
                 self.update_cursor_icon();
                 // DevTools inspector: highlight the box under the cursor.
                 if self.dom_inspector.visible {
@@ -8166,6 +8207,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                     // Collect events to fire while mutating state, then release the
                     // mutable borrow before calling self.js_drag_event() (needs &self).
+                    // Width of any left-docked sidebar, computed before the
+                    // `dnd_state` mutable borrow so page-coord conversion can
+                    // subtract it. Cross-dock aware across all four sidebars.
+                    let left_dock_w = self.left_dock().map_or(0.0, |(_, w)| w);
                     let ev_opt: Option<DndMoveEvents> = if let Some(dnd) = self.dnd_state.as_mut() {
                         let dpr = self
                             .renderer
@@ -8174,15 +8219,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             .max(1e-6);
                         let x_css = (position.x as f32) / dpr;
                         let y_css = (position.y as f32) / dpr;
-                        let (page_x, page_y) = {
-                            let panel_x = if self.vertical_tabs.visible {
-                                panels::vertical_tabs::PANEL_WIDTH
-                            } else if self.tree_tabs.visible {
-                                panels::tree_tabs::PANEL_WIDTH
-                            } else { 0.0 };
-                            (x_css - panel_x + self.scroll_x,
-                             y_css - tabs::strip::TAB_BAR_HEIGHT + self.scroll_y)
-                        };
+                        let (page_x, page_y) = (
+                            x_css - left_dock_w + self.scroll_x,
+                            y_css - tabs::strip::TAB_BAR_HEIGHT + self.scroll_y,
+                        );
                         let target_nid = self.layout_box.as_ref().and_then(|lb| {
                             hit_test(Point::new(page_x, page_y), lb)
                         }).map(|r| r.node);
@@ -8478,6 +8518,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .max(1e-6);
                     let x_css = (cursor.x as f32) / dpr;
                     let y_css = (cursor.y as f32) / dpr;
+                    // F2-6: a press on a docked panel's inner edge begins a
+                    // resize drag; the click never reaches the page / panels.
+                    if let Some(edge) = self.resize_edge_at(x_css, y_css) {
+                        self.panel_resize = Some(edge);
+                        return;
+                    }
                     // CC-4: while the tab context menu is open it captures the
                     // click — picking a row runs the action, anywhere else just
                     // dismisses it. The click never reaches the page / panels.
@@ -8772,18 +8818,28 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
 
-                    // Vertical tab panel: intercept clicks in x < PANEL_WIDTH area.
+                    // Vertical tab panel: intercept clicks within its (possibly
+                    // cross-docked) area. Panel hit-test is left-relative, so map
+                    // the window x into panel-local space.
+                    let vt_w = self.panel_layout.width_for(
+                        panel_layout::ID_VERTICAL_TABS,
+                        panels::vertical_tabs::PANEL_WIDTH,
+                    );
+                    let vt_origin = self
+                        .dock_origin_x(self.sidebar_dock_side(panel_layout::ID_VERTICAL_TABS), vt_w);
                     if self.vertical_tabs.visible
-                        && x_css < panels::vertical_tabs::PANEL_WIDTH
+                        && x_css >= vt_origin
+                        && x_css < vt_origin + vt_w
                     {
                         let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
                         match panels::vertical_tabs::hit_test(
                             &self.tab_strip,
-                            x_css,
+                            x_css - vt_origin,
                             y_css,
                             tabs::strip::TAB_BAR_HEIGHT,
                             win_h,
                             self.vertical_tabs.scroll_y,
+                            vt_w,
                         ) {
                             Some(panels::vertical_tabs::VTabHit::Tab(idx)) => {
                                 self.switch_tab(idx);
@@ -8796,18 +8852,27 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
-                    // Tree-style tab panel: intercept clicks in x < PANEL_WIDTH area.
+                    // Tree-style tab panel: intercept clicks within its (possibly
+                    // cross-docked) area, mapping window x into panel-local space.
+                    let tt_w = self.panel_layout.width_for(
+                        panel_layout::ID_TREE_TABS,
+                        panels::tree_tabs::PANEL_WIDTH,
+                    );
+                    let tt_origin = self
+                        .dock_origin_x(self.sidebar_dock_side(panel_layout::ID_TREE_TABS), tt_w);
                     if self.tree_tabs.visible
-                        && x_css < panels::tree_tabs::PANEL_WIDTH
+                        && x_css >= tt_origin
+                        && x_css < tt_origin + tt_w
                     {
                         let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
                         match panels::tree_tabs::hit_test(
                             &self.tab_strip,
                             &self.tree_tabs,
-                            x_css,
+                            x_css - tt_origin,
                             y_css,
                             tabs::strip::TAB_BAR_HEIGHT,
                             win_h,
+                            tt_w,
                         ) {
                             Some(panels::tree_tabs::TreeTabHit::Tab(idx)) => {
                                 self.switch_tab(idx);
@@ -9347,18 +9412,23 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
 
-                    // AI sidebar panel (§12.8): right-docked AI assistant.
+                    // AI sidebar panel (§12.8): cross-dockable AI assistant.
                     if self.ai_panel.visible {
-                        let win_w = self.viewport_width_css();
                         let tab_h = tabs::strip::TAB_BAR_HEIGHT;
                         let win_h = self.viewport_height_css() + tab_h;
+                        let ai_w = self
+                            .panel_layout
+                            .width_for(panel_layout::ID_AI, panels::ai_panel::PANEL_WIDTH);
+                        let ai_side = self.sidebar_dock_side(panel_layout::ID_AI);
+                        let ai_x = self.dock_origin_x(ai_side, ai_w);
                         if let Some(hit) = panels::ai_panel::hit_test(
                             &self.ai_panel,
                             x_css,
                             y_css,
-                            win_w,
+                            ai_x,
                             tab_h,
                             win_h,
+                            ai_w,
                         ) {
                             match hit {
                                 panels::ai_panel::AiHit::Close => {
@@ -9374,18 +9444,23 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
 
-                    // Sidebar web panel (7D.3): right-docked panel.
+                    // Sidebar web panel (7D.3): cross-dockable panel.
                     if self.sidebar.visible {
-                        let win_w = self.viewport_width_css();
                         let tab_h = tabs::strip::TAB_BAR_HEIGHT;
                         let win_h = self.viewport_height_css() + tab_h;
+                        let sb_w = self
+                            .panel_layout
+                            .width_for(panel_layout::ID_SIDEBAR, panels::sidebar_panel::PANEL_WIDTH);
+                        let sb_side = self.sidebar_dock_side(panel_layout::ID_SIDEBAR);
+                        let sb_x = self.dock_origin_x(sb_side, sb_w);
                         if let Some(hit) = panels::sidebar_panel::hit_test(
                             &self.sidebar,
                             x_css,
                             y_css,
-                            win_w,
+                            sb_x,
                             tab_h,
                             win_h,
+                            sb_w,
                         ) {
                             match hit {
                                 panels::sidebar_panel::SidebarHit::Close => {
@@ -9503,6 +9578,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 } else {
                     // Released — завершаем drag (если был) и сбрасываем resize.
                     self.resize_active = None;
+                    // F2-6: end a docked-panel resize drag and persist the layout.
+                    if let Some((_, id)) = self.panel_resize.take() {
+                        self.panel_layout.save();
+                        // Reflow the web sidebar page to its new width: its content
+                        // is a frozen display list, so unlike the AI panel (drawn
+                        // procedurally) it does not reflow during the drag itself.
+                        if id == panel_layout::ID_SIDEBAR {
+                            self.relayout_sidebar();
+                        }
+                        self.update_cursor_icon();
+                        return;
+                    }
                     // CSS :active — clear on release.
                     if self.active_nid.is_some() {
                         self.active_nid = None;
@@ -10324,13 +10411,22 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Rendered before the tab bar so tab bar draws on top.
                 if self.vertical_tabs.visible {
                     let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                    let vt_w = self.panel_layout.width_for(
+                        panel_layout::ID_VERTICAL_TABS,
+                        panels::vertical_tabs::PANEL_WIDTH,
+                    );
                     let mut vt_cmds = panels::vertical_tabs::build_tab_bar_vertical(
                         &self.tab_strip,
                         tabs::strip::TAB_BAR_HEIGHT,
                         win_h,
                         self.vertical_tabs.scroll_y,
                         &pal,
+                        vt_w,
                     );
+                    // Cross-dock: the panel paints left-relative; re-home it onto
+                    // the right edge when flipped there.
+                    let vt_side = self.sidebar_dock_side(panel_layout::ID_VERTICAL_TABS);
+                    Self::offset_overlay_x(&mut vt_cmds, self.dock_origin_x(vt_side, vt_w));
                     overlay_buf.append(&mut vt_cmds);
                 }
 
@@ -10339,13 +10435,22 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Toggle via Ctrl+Shift+B; occupies the same PANEL_WIDTH as vertical_tabs.
                 if self.tree_tabs.visible {
                     let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                    let tt_w = self.panel_layout.width_for(
+                        panel_layout::ID_TREE_TABS,
+                        panels::tree_tabs::PANEL_WIDTH,
+                    );
                     let mut tt_cmds = panels::tree_tabs::build_panel(
                         &self.tab_strip,
                         &self.tree_tabs,
                         tabs::strip::TAB_BAR_HEIGHT,
                         win_h,
                         &pal,
+                        tt_w,
                     );
+                    // Cross-dock: re-home the left-relative panel onto the right
+                    // edge when flipped there.
+                    let tt_side = self.sidebar_dock_side(panel_layout::ID_TREE_TABS);
+                    Self::offset_overlay_x(&mut tt_cmds, self.dock_origin_x(tt_side, tt_w));
                     overlay_buf.append(&mut tt_cmds);
                 }
 
@@ -10385,32 +10490,42 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut nv_cmds);
                 }
 
-                // AI sidebar panel (§12.8, GG-1): right-docked AI assistant.
+                // AI sidebar panel (§12.8, GG-1): cross-dockable AI assistant.
                 if self.ai_panel.visible {
-                    let win_w = self.viewport_width_css();
                     let tab_h = tabs::strip::TAB_BAR_HEIGHT;
                     let win_h = self.viewport_height_css() + tab_h;
+                    let ai_w = self
+                        .panel_layout
+                        .width_for(panel_layout::ID_AI, panels::ai_panel::PANEL_WIDTH);
+                    let ai_side = self.sidebar_dock_side(panel_layout::ID_AI);
+                    let ai_x = self.dock_origin_x(ai_side, ai_w);
                     let mut ai_cmds = panels::ai_panel::build_panel(
                         &self.ai_panel,
-                        win_w,
+                        ai_x,
                         tab_h,
                         win_h,
                         &pal,
+                        ai_w,
                     );
                     overlay_buf.append(&mut ai_cmds);
                 }
 
-                // Sidebar web panel (7D.3): right-docked secondary viewport.
+                // Sidebar web panel (7D.3): cross-dockable secondary viewport.
                 if self.sidebar.visible {
-                    let win_w = self.viewport_width_css();
                     let tab_h = tabs::strip::TAB_BAR_HEIGHT;
                     let win_h = self.viewport_height_css() + tab_h;
+                    let sb_w = self
+                        .panel_layout
+                        .width_for(panel_layout::ID_SIDEBAR, panels::sidebar_panel::PANEL_WIDTH);
+                    let sb_side = self.sidebar_dock_side(panel_layout::ID_SIDEBAR);
+                    let sb_x = self.dock_origin_x(sb_side, sb_w);
                     let mut sb_cmds = panels::sidebar_panel::build_panel(
                         &self.sidebar,
-                        win_w,
+                        sb_x,
                         tab_h,
                         win_h,
                         &pal,
+                        sb_w,
                     );
                     overlay_buf.append(&mut sb_cmds);
                 }
@@ -10692,6 +10807,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     Vec::new()
                 };
 
+                // Width of any left-docked sidebar, computed before the renderer
+                // borrow so the page transform can shift right of it. Cross-dock
+                // aware across all four sidebars (tabs / AI / web).
+                let page_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
+
                 if let Some(r) = self.renderer.as_mut() {
                     if let Some(combined) = split_combined {
                         // Split-view mode: combined DL with baked scroll; renderer gets 0,0.
@@ -10707,13 +10827,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             .unwrap_or(&self.display_list);
                         let mut shifted: lumen_paint::DisplayList =
                             Vec::with_capacity(base.len() + 2);
-                        let page_x_offset = if self.vertical_tabs.visible {
-                            panels::vertical_tabs::PANEL_WIDTH
-                        } else if self.tree_tabs.visible {
-                            panels::tree_tabs::PANEL_WIDTH
-                        } else {
-                            0.0
-                        };
                         shifted.push(lumen_paint::DisplayCommand::PushTransform {
                             matrix: Mat4::translation_2d(
                                 page_x_offset,
@@ -10830,13 +10943,7 @@ impl Lumen {
     /// a click.  No-op when there is no JS context or no element at the position.
     /// Also fires the matching W3C `pointermove` event per Pointer Events L2 §10.
     fn dispatch_mouse_move(&mut self, x_css: f32, y_css: f32) {
-        let panel_x_offset = if self.vertical_tabs.visible {
-            panels::vertical_tabs::PANEL_WIDTH
-        } else if self.tree_tabs.visible {
-            panels::tree_tabs::PANEL_WIDTH
-        } else {
-            0.0
-        };
+        let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
         let page_x = (x_css - panel_x_offset) + self.scroll_x;
         let page_y = (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y;
         let hit = self.layout_box.as_ref().and_then(|lb| {
@@ -10867,13 +10974,7 @@ impl Lumen {
     /// [`Lumen::handle_click_at`] so hit tests stay consistent across input
     /// paths.
     fn page_point(&self, x_css: f32, y_css: f32) -> (f32, f32) {
-        let panel_x_offset = if self.vertical_tabs.visible {
-            panels::vertical_tabs::PANEL_WIDTH
-        } else if self.tree_tabs.visible {
-            panels::tree_tabs::PANEL_WIDTH
-        } else {
-            0.0
-        };
+        let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
         (
             (x_css - panel_x_offset) + self.scroll_x,
             (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y,
@@ -11060,13 +11161,7 @@ impl Lumen {
         // right by PANEL_WIDTH, so we subtract that offset to convert to page coords.
         // Page content is also shifted down by TAB_BAR_HEIGHT via PushTransform,
         // so we subtract that offset from y to get layout coordinates.
-        let panel_x_offset = if self.vertical_tabs.visible {
-            panels::vertical_tabs::PANEL_WIDTH
-        } else if self.tree_tabs.visible {
-            panels::tree_tabs::PANEL_WIDTH
-        } else {
-            0.0
-        };
+        let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
         let page_x = (x_css - panel_x_offset) + self.scroll_x;
         let page_y = (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y;
         let hit_result = self.layout_box.as_ref().and_then(|lb| {
@@ -11928,6 +12023,13 @@ impl Lumen {
                 // Viewport width changes when switching to/from tree view.
                 self.relayout();
                 self.request_redraw();
+            }
+            KeyCommand::FlipActiveDock => {
+                // Cross-dock the active sidebar (tabs, AI, or web);
+                // flip_active_sidebar_dock relayouts internally on success.
+                if self.flip_active_sidebar_dock() {
+                    self.request_redraw();
+                }
             }
             KeyCommand::ToggleWorkspaces => {
                 self.workspace_panel.toggle();
@@ -13381,21 +13483,169 @@ impl Lumen {
     /// ширина вертикальных панелей вкладок (слева) и sidebar (справа), если
     /// они видимы. Используется для клампинга горизонтального скролла.
     fn page_content_width_css(&self) -> f32 {
-        let left_offset = if self.vertical_tabs.visible {
-            panels::vertical_tabs::PANEL_WIDTH
-        } else if self.tree_tabs.visible {
-            panels::tree_tabs::PANEL_WIDTH
-        } else {
-            0.0
-        };
-        let right_offset = if self.ai_panel.visible {
-            panels::ai_panel::PANEL_WIDTH
-        } else if self.sidebar.visible {
-            panels::sidebar_panel::PANEL_WIDTH
-        } else {
-            0.0
-        };
+        let (left_offset, right_offset) = self.docked_panel_offsets();
         (self.viewport_width_css() - left_offset - right_offset).max(0.0)
+    }
+
+    /// All four cross-dockable docked sidebars as `(persist id, visible, default
+    /// width)`, in side-resolution priority order (outermost first). Each can be
+    /// flipped to either window edge; [`Self::left_dock`] / [`Self::right_dock`]
+    /// pick the first visible one whose effective side matches.
+    fn dockable_sidebars(&self) -> [(&'static str, bool, f32); 4] {
+        [
+            (
+                panel_layout::ID_VERTICAL_TABS,
+                self.vertical_tabs.visible,
+                panels::vertical_tabs::PANEL_WIDTH,
+            ),
+            (
+                panel_layout::ID_TREE_TABS,
+                self.tree_tabs.visible,
+                panels::tree_tabs::PANEL_WIDTH,
+            ),
+            (
+                panel_layout::ID_AI,
+                self.ai_panel.visible,
+                panels::ai_panel::PANEL_WIDTH,
+            ),
+            (
+                panel_layout::ID_SIDEBAR,
+                self.sidebar.visible,
+                panels::sidebar_panel::PANEL_WIDTH,
+            ),
+        ]
+    }
+
+    /// Effective dock side of a cross-dockable sidebar: its persisted override,
+    /// falling back to [`panel_layout::default_dock`].
+    fn sidebar_dock_side(&self, id: &'static str) -> panel_layout::Dock {
+        self.panel_layout.dock_for(id, panel_layout::default_dock(id))
+    }
+
+    /// Left x-origin (CSS px) of a docked sidebar of `width` on `side`: left
+    /// docks hug `x = 0`, right docks hug the window's right edge.
+    fn dock_origin_x(&self, side: panel_layout::Dock, width: f32) -> f32 {
+        match side {
+            panel_layout::Dock::Left => 0.0,
+            panel_layout::Dock::Right => (self.viewport_width_css() - width).max(0.0),
+        }
+    }
+
+    /// Active left-docked sidebar as `(persist id, current width CSS px)`, or
+    /// `None` when no left sidebar is visible. Honours per-panel cross-dock side
+    /// overrides: a sidebar moved to the right edge no longer counts here.
+    fn left_dock(&self) -> Option<(&'static str, f32)> {
+        self.dockable_sidebars().into_iter().find_map(|(id, visible, default_w)| {
+            (visible && self.sidebar_dock_side(id) == panel_layout::Dock::Left)
+                .then(|| (id, self.panel_layout.width_for(id, default_w)))
+        })
+    }
+
+    /// Active right-docked sidebar as `(persist id, current width CSS px)`, or
+    /// `None` when none is visible. Resolved in [`Self::dockable_sidebars`]
+    /// priority order: a tab sidebar flipped to the right edge precedes the AI
+    /// panel, which precedes the web sidebar — mirroring
+    /// [`Self::page_content_width_css`].
+    fn right_dock(&self) -> Option<(&'static str, f32)> {
+        self.dockable_sidebars().into_iter().find_map(|(id, visible, default_w)| {
+            (visible && self.sidebar_dock_side(id) == panel_layout::Dock::Right)
+                .then(|| (id, self.panel_layout.width_for(id, default_w)))
+        })
+    }
+
+    /// Move the active docked sidebar to the opposite window edge, persist the
+    /// choice, and relayout. The "active" sidebar is the first visible one in
+    /// [`Self::dockable_sidebars`] order (tab sidebars, then AI, then web).
+    /// Refuses the move when the target edge is already occupied by another
+    /// docked panel (avoids overlap), and is a no-op when no sidebar is open.
+    /// Returns `true` if a panel was moved.
+    fn flip_active_sidebar_dock(&mut self) -> bool {
+        let Some((id, _, _)) = self
+            .dockable_sidebars()
+            .into_iter()
+            .find(|(_, visible, _)| *visible)
+        else {
+            return false;
+        };
+        let target = self.sidebar_dock_side(id).opposite();
+        let occupied = match target {
+            panel_layout::Dock::Left => self.left_dock().is_some(),
+            panel_layout::Dock::Right => self.right_dock().is_some(),
+        };
+        if occupied {
+            return false;
+        }
+        self.panel_layout.set_dock(id, target);
+        self.panel_layout.save();
+        self.relayout();
+        true
+    }
+
+    /// Shift every rect-bearing command in `cmds` right by `dx` CSS px.
+    ///
+    /// Used to re-home a left-relative sidebar display list onto the right edge
+    /// when its dock side is flipped. The tab sidebars emit only `FillRect`,
+    /// `FillRoundedRect`, and `DrawText`; other variants are left untouched.
+    fn offset_overlay_x(cmds: &mut lumen_paint::DisplayList, dx: f32) {
+        if dx == 0.0 {
+            return;
+        }
+        for cmd in cmds.iter_mut() {
+            match cmd {
+                lumen_paint::DisplayCommand::FillRect { rect, .. }
+                | lumen_paint::DisplayCommand::FillRoundedRect { rect, .. }
+                | lumen_paint::DisplayCommand::DrawText { rect, .. } => rect.x += dx,
+                _ => {}
+            }
+        }
+    }
+
+    /// `(left, right)` docked-sidebar widths in CSS px (0 when not visible).
+    fn docked_panel_offsets(&self) -> (f32, f32) {
+        (
+            self.left_dock().map_or(0.0, |(_, w)| w),
+            self.right_dock().map_or(0.0, |(_, w)| w),
+        )
+    }
+
+    /// If the cursor at `(x_css, y_css)` is within [`panel_layout::RESIZE_GRAB`]
+    /// of a visible docked sidebar's inner edge (and below the tab bar), return
+    /// the `(dock side, panel id)` a press there would start resizing.
+    ///
+    /// Left docks have their handle at `x = width`; right docks at
+    /// `x = viewport_width − width`.
+    fn resize_edge_at(&self, x_css: f32, y_css: f32) -> Option<(panel_layout::Dock, &'static str)> {
+        if y_css < tabs::strip::TAB_BAR_HEIGHT {
+            return None;
+        }
+        let grab = panel_layout::RESIZE_GRAB;
+        if let Some((id, w)) = self.left_dock()
+            && (x_css - w).abs() <= grab
+        {
+            return Some((panel_layout::Dock::Left, id));
+        }
+        if let Some((id, w)) = self.right_dock()
+            && (x_css - (self.viewport_width_css() - w)).abs() <= grab
+        {
+            return Some((panel_layout::Dock::Right, id));
+        }
+        None
+    }
+
+    /// Apply an in-flight docked-panel resize drag: turn the cursor x into a new
+    /// width for the dragged dock, store it (clamped) in [`Self::panel_layout`],
+    /// and relayout the page. Returns `true` if the width changed.
+    fn drag_panel_resize(&mut self, x_css: f32) -> bool {
+        let Some((dock, id)) = self.panel_resize else {
+            return false;
+        };
+        let new_w = dock.width_from_cursor(x_css, self.viewport_width_css());
+        if self.panel_layout.set_width(id, new_w) {
+            self.relayout();
+            true
+        } else {
+            false
+        }
     }
 
     /// Open the sidebar with `url` and populate it with a freshly-laid-out page.
@@ -13429,16 +13679,40 @@ impl Lumen {
         };
 
         let sidebar_vp = Size::new(
-            panels::sidebar_panel::PANEL_WIDTH,
+            self.panel_layout
+                .width_for(panel_layout::ID_SIDEBAR, panels::sidebar_panel::PANEL_WIDTH),
             self.viewport_height_css().max(100.0),
         );
         let (dl, _lb) = relayout_page(&src, sidebar_vp, &*self.hyp_provider, self.dark_mode, &self.web_fonts);
         let content_h = content_height_of(&dl);
         self.sidebar.set_page(dl, doc_title, content_h);
+        // Retain the parsed source so a later drag-resize can reflow the page to
+        // the new width (F2-6) instead of stretching the frozen display list.
+        self.sidebar_source = Some(src);
 
         if !was_visible {
             self.relayout();
         }
+        self.request_redraw();
+    }
+
+    /// Reflow the web sidebar page to the current sidebar width.
+    ///
+    /// Re-runs layout over the retained [`Self::sidebar_source`] at the panel's
+    /// active `panel_layout` width, replacing the frozen display list while
+    /// preserving the title and clamping the scroll offset. No-op when the
+    /// sidebar has no open page. Called on a sidebar resize drag release (F2-6).
+    fn relayout_sidebar(&mut self) {
+        let Some(src) = self.sidebar_source.as_ref() else {
+            return;
+        };
+        let width = self
+            .panel_layout
+            .width_for(panel_layout::ID_SIDEBAR, panels::sidebar_panel::PANEL_WIDTH);
+        let vp = Size::new(width, self.viewport_height_css().max(100.0));
+        let (dl, _lb) = relayout_page(src, vp, &*self.hyp_provider, self.dark_mode, &self.web_fonts);
+        let content_h = content_height_of(&dl);
+        self.sidebar.update_page(dl, content_h);
         self.request_redraw();
     }
 
@@ -14245,7 +14519,11 @@ impl Lumen {
         );
         let scrollbar_icon = cursor_icon_for_hover(hover, self.scroll_drag.is_some());
 
-        let desired = if scrollbar_icon != CursorIcon::Default {
+        // F2-6: a docked-panel resize drag (or hovering an edge) shows the
+        // horizontal-resize cursor, ahead of scrollbar/page hover.
+        let desired = if self.panel_resize.is_some() || self.resize_edge_at(x_css, y_css).is_some() {
+            CursorIcon::EwResize
+        } else if scrollbar_icon != CursorIcon::Default {
             scrollbar_icon
         } else if let Some(lb) = &self.layout_box {
             // Hit-test layout tree in page coordinates (viewport + scroll offset).

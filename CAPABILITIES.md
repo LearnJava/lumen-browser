@@ -16,7 +16,7 @@ capability, and drift from code (see CLAUDE.md). For per-CSS-property detail see
 **same commit** as the `STATUS-PN.md` "Recent" update. This is the only file that must stay
 true to code; keep it honest about ⬜ gaps too.
 
-Snapshot: **Phase 2 «Interactive», app v0.2.0**. ~21 crates.
+Snapshot: **Phase 2 «Interactive» (complete), app v0.5.0**. ~21 crates.
 
 ---
 
@@ -79,14 +79,14 @@ Snapshot: **Phase 2 «Interactive», app v0.2.0**. ~21 crates.
 
 ### lumen-paint (`crates/engine/paint`)
 - ✅ **Live default render path is `FemtovgBackend`** (OpenGL ES via glutin), with wgpu auto-fallback; `LUMEN_BACKEND` overrides. **Paint bugs from graphic_tests are fixed in `femtovg_backend.rs`, not `renderer.rs`.**
-- ✅ DisplayCommand primitives (all in enum + handled by femtovg): FillRect, FillRoundedRect (SDF), DrawBorder (solid/dashed/dotted/double), DrawText, DrawOutline, DrawImage (object-fit/position), Linear/Radial/Conic gradients (incl. repeating), SvgPath, clip, opacity, blend modes, transforms, filters, backdrop-filter, scroll layers, masks, layer snapshots, page breaks.
+- ✅ DisplayCommand primitives (all in enum + handled by femtovg): FillRect, FillRoundedRect (SDF), DrawBorder (solid/dashed/dotted/double), DrawText, DrawOutline, DrawImage (object-fit/position), Linear/Radial/Conic gradients (incl. repeating; premultiplied stop interpolation for fades to `transparent`, CSS Images L4 §3.1 — BUG-190), SvgPath, clip, opacity, blend modes, transforms, filters, backdrop-filter, scroll layers, masks, layer snapshots, page breaks.
 - ✅ Stacking contexts + paint order (CSS 2.1 Appendix E), stacking-aware hit testing (transform inversion).
 - ✅ CSS Motion Path L1 (`offset-path: path()`/`ray()`, `offset-distance`, `offset-rotate` auto/reverse/fixed, `offset-anchor`) — box's anchor placed on the path point, rotated around it (`forward_box_transform` + property-tree `walk`). TEST-76 boxes pixel-identical to Edge.
 - ✅ box-shadow (outset+inset), text-shadow, text-decoration (underline/overline/line-through, wavy/dotted/dashed/double, thickness), border-radius SDF.
 - ✅ CSS filters (GPU color-matrix + Gaussian blur), backdrop-filter (LRU cache), clip-path (bbox approximation).
 - ✅ 3D transforms (perspective, preserve-3d depth sort) in wgpu renderer; multi-size + variation-aware glyph atlas, per-char codepoint fallback cascade.
-- ✅ Compositor scaffolding (two-buffer commit, threaded compositor, 60fps vsync); print (`render_print_pages` → images); CPU rasterizer (`cpu_raster.rs`, feature `cpu-render`, cross-OS bit-identical, snapshot gate; **femtovg-parity for `<img>` decode+`object-fit`+area-averaged downscale, circular radial gradients, and clamped `border-radius` fills — BUG-221**); software WebGL 1.0 (GLSL ES vertex+fragment interpreter executes — `glsl.rs`; framebuffer readable via `readPixels`, not yet presented to the page `<canvas>`).
-- 🟡 femtovg `mask-image` gradient masks are **true per-pixel alpha masks** (offscreen FBO + `DestinationIn`, linear/radial/conic; BUG-183). `mask-mode: luminance` ✅ wired (BUG-218): `emit_push_mask` bakes `luminance(rgb)·alpha` into each gradient stop's alpha, so both femtovg and CPU paths honour it. `url()` image masks still scissor bbox (no decoded source).
+- ✅ Compositor scaffolding (two-buffer commit, threaded compositor, 60fps vsync); print (`render_print_pages` → images); CPU rasterizer (`cpu_raster.rs`, feature `cpu-render`, cross-OS bit-identical, snapshot gate; **femtovg-parity for `<img>` decode+`object-fit`+area-averaged downscale, circular radial gradients, clamped `border-radius` fills — BUG-221; `background-image` url()/`image-set()` tiling (`background-size`/`position`/`repeat` via shared `bg_tile_geometry`) and `cross-fade()` blending**); software WebGL 1.0 (GLSL ES vertex+fragment interpreter executes — `glsl.rs`; framebuffer readable via `readPixels`, not yet presented to the page `<canvas>`).
+- 🟡 femtovg `mask-image` gradient masks are **true per-pixel alpha masks** (offscreen FBO + `DestinationIn`, linear/radial/conic; BUG-183). `mask-mode: luminance` ✅ wired (BUG-218): `emit_push_mask` bakes `luminance(rgb)·alpha` into each gradient stop's alpha, so both femtovg and CPU paths honour it. `mask-origin` ✅ wired (2026-06-22): the mask positioning rect comes from `background_origin_rect` (border/padding/content box, initial `border-box`); `mask-position` threaded into `PushMaskImage` (initial `center`). `url()` image masks still scissor bbox (no decoded source), so `mask-position`/`mask-repeat` tiling have no visible effect yet. `mask-clip` (painting-area clip) and `mask-composite` (multi-layer) not wired.
 - ⬜ GPU shadow pipeline, Groove/Ridge/Inset/Outset borders, exact polygon clip-path, elliptical border-radius (rx≠ry), Vello backend (no-op stub).
 
 ### lumen-font (`crates/engine/font`)
@@ -138,7 +138,8 @@ Modern ES (ES2020+: classes, async/await, generators, Promise, Proxy, BigInt, mo
 - ✅ HTTP auth (Basic + Digest MD5/SHA-256, 401 retry), Range requests, HSTS (+ preload), SOCKS5 proxy (proxy-side DNS, Tor-ready).
 - ✅ DNS: system + DoH (RFC 8484) + DoT (RFC 7858); `RequestFilter` hook (EasyList/hosts ad-block; **Phase 2 `$`-options** — resource-type `$script`/`$image`/`$stylesheet`/`$font`/`$xmlhttprequest`/`$subdocument`/`$media`/`$other` + `~`-negation, plus `$third-party`/`$first-party`, matched against a per-request `RequestContext`; `domain=` parsed-but-ignored); fingerprint/TLS profiles (Chrome/Firefox/Safari/Edge/Tor/Lumen/Strict — header order, H2 SETTINGS, Client Hints).
 - ✅ WebSockets (+ permessage-deflate), EventSource, Fetch bridge, software WebAuthn `VirtualAuthenticator` + CTAP2-over-HID (no USB enumeration).
-- ⬜ Cache-Control revalidation, mTLS/client certs, `qop=auth-int`, CORS POST/PUT bodies, H2 send-side flow control.
+- ✅ **Cross-navigation HTTP cache wired into the shell (RFC 7234):** one shared `DiskHttpCache` (`<exe_dir>/data/cache/http_cache.db`, survives restart) attached to every client via `apply_http`; subresources/`fetch()` are served fresh-hit or revalidated with conditional GET (304) on repeat visits instead of re-downloaded. Private/Tor sessions use an in-memory cache (nothing on disk).
+- ⬜ mTLS/client certs, `qop=auth-int`, CORS POST/PUT bodies, H2 send-side flow control.
 
 ### lumen-ipc (`crates/ipc`)
 - ✅ Length-prefixed bincode over TCP loopback; `IpcChannel/Server/Client` blocking RPC; messages `Fetch/Ping/Shutdown`; powers out-of-process network service (`--network-service`).
@@ -166,7 +167,7 @@ Modern ES (ES2020+: classes, async/await, generators, Promise, Proxy, BigInt, mo
 
 **Reading/Content** — ✅ reader view, find-in-page (Ctrl+F, highlights/next-prev/scroll-to), source view, read-later panel, note viewer.
 
-**UI panels** — ✅ command palette, settings, bookmarks, history, AI sidebar (Ctrl+Shift+A, `AiBackend` trait, `NullAiBackend` default), Picture-in-Picture (+ OS window), certificate viewer, permission popover, a11y/focus/sidebar panels, light/dark/system themes + accents (a central `Palette` drives the tab strip, address bar, **and all ~22 secondary panels** — each follows the light/dark setting via a threaded `&Palette` of role-named tokens; only panel drag&drop docking is pending — F2-6 stage 2).
+**UI panels** — ✅ command palette, settings, bookmarks, history, AI sidebar (Ctrl+Shift+A, `AiBackend` trait, `NullAiBackend` default), Picture-in-Picture (+ OS window), certificate viewer, permission popover, a11y/focus/sidebar panels, light/dark/system themes + accents (a central `Palette` drives the tab strip, address bar, **and all ~22 secondary panels** — each follows the light/dark setting via a threaded `&Palette` of role-named tokens). Docked sidebars (vertical tabs, tree tabs, AI, web sidebar) are **drag-resizable** — drag a panel's inner edge to change its width; the web sidebar **reflows its page content to the new width** on release; the layout persists across restarts in `<exe_dir>/data/ui/panel_layout.txt` (`panel_layout::PanelLayout`). 🟡 Cross-dock (moving a sidebar left↔right via `Ctrl+Alt+B`, persisted) works for **all four** docked sidebars — vertical tabs, tree tabs, AI, and web sidebar; the only F2-6 remainder is the infrastructure-only `SurfaceManager` (ADR-009) migration of the live shell (no new user-facing capability).
 
 **Input** — ✅ Vimium-style click hints, vim mode, gestures, human-like + native input injection, HTML5 drag-and-drop, forms runtime (validation + picker overlays), per-tab zoom, smooth scroll + scrollbar (drag + track-click) + momentum. ⬜ no horizontal scroll; no relayout-on-resize (viewport hardcoded 1024×720).
 

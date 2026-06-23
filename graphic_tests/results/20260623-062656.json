@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-06-23T08:04:59",
+  "timestamp": "2026-06-23T06:26:56",
   "git": {
-    "commit": "8d4b2957",
+    "commit": "a30dbfd9",
     "branch": "main",
-    "subject": "Р’Р»РёС‚СЊ РІРµС‚РєСѓ p1-test122-line-height-step-debtor: BUG-237 TEST-122 line-height-step в†’ KNOWN_DEBTOR (Edge РЅРµ РїРѕРґРґРµСЂР¶РёРІР°РµС‚ СЃРІРѕР№СЃС‚РІРѕ)"
+    "subject": "Р’Р»РёС‚СЊ РІРµС‚РєСѓ p1-bug190-blend-mode: BUG-190 premultiplied-РёРЅС‚РµСЂРїРѕР»СЏС†РёСЏ РіСЂР°РґРёРµРЅС‚РѕРІ (fade РІ transparent)"
   },
   "crop_offset": [
     8,
@@ -12,10 +12,10 @@
   "halted_at": null,
   "summary": {
     "total": 128,
-    "passed": 71,
-    "failed": 24,
+    "passed": 70,
+    "failed": 26,
     "errors": 1,
-    "debtors": 32,
+    "debtors": 31,
     "skipped": 0
   },
   "tests": [
@@ -1716,13 +1716,13 @@
       "label": "CSS Motion Path L1 §2.2: offset-path: ray(<angle>) — восемь боксов по лучам 0/45/.../315deg формируют кольцо вокруг центра; turn-единица; offset-distance 0 держит центр",
       "html": "99-offset-path-ray.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0003,
+      "status": "FAIL",
+      "diff_pct": 3.2766,
       "diff_region": {
-        "top": 193,
-        "left": 667,
-        "bottom": 194,
-        "right": 668
+        "top": 134,
+        "left": 321,
+        "bottom": 520,
+        "right": 707
       }
     },
     {
@@ -1896,18 +1896,13 @@
       "label": "CSS Rhythmic Sizing L1 §2: line-height-step — высота каждого line-box округляется вверх до кратного шагу; цветные inline-фоны заливают округлённый line-box, поэтому полосы у stepped-колонки (48px) вдвое выше natural-колонки (24px), одиночная строка округлена до 60px, child наследует шаг 40px",
       "html": "122-line-height-step.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
+      "status": "FAIL",
       "diff_pct": 11.1863,
       "diff_region": {
         "top": 32,
         "left": 41,
         "bottom": 344,
         "right": 627
-      },
-      "debtor": {
-        "bug": "BUG-237",
-        "baseline": 11.19,
-        "verdict": "OK"
       }
     },
     {
