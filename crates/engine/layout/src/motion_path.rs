@@ -14,15 +14,23 @@ use crate::style::OffsetRotate;
 
 /// Result of resolving a motion offset along an `offset-path`.
 ///
-/// All values are in CSS px. `rotation_deg` is the total rotation in degrees
-/// (CW positive, matching CSS `rotate(Xdeg)`). Apply as:
-///   1. Translate element origin by `(translate_x, translate_y)`.
-///   2. Rotate around element's `offset-anchor` by `rotation_deg`.
+/// `(translate_x, translate_y)` is the **path point** in the element's local
+/// coordinate space (box-origin-relative, CSS px) onto which the element's
+/// `offset-anchor` is placed. `rotation_deg` is the total rotation in degrees
+/// (CW positive, matching CSS `rotate(Xdeg)`). The caller builds the offset
+/// transform as `T(box_origin + path_point) · R(rotation_deg) · T(-(box_origin +
+/// anchor))`, so the anchor lands exactly on the path point.
+///
+/// Both `path()` and `ray()` return absolute path points in this same space:
+/// for `ray()` the point is `anchor + ray_displacement` (the ray starts at the
+/// element's `offset-position`, which equals the anchor's normal location), so
+/// the anchor-subtraction in the caller's matrix nets to the pure ray
+/// displacement regardless of anchor.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MotionTransform {
-    /// Horizontal displacement from the element's containing-block origin (CSS px).
+    /// X of the path point (box-local px) the `offset-anchor` is placed onto.
     pub translate_x: f32,
-    /// Vertical displacement from the element's containing-block origin (CSS px).
+    /// Y of the path point (box-local px) the `offset-anchor` is placed onto.
     pub translate_y: f32,
     /// Clockwise rotation in degrees applied after translation.
     pub rotation_deg: f32,
@@ -36,15 +44,20 @@ pub struct MotionTransform {
 /// - `offset_distance_px`: resolved `offset-distance` in CSS px.  Pass the
 ///   containing-block diagonal multiplied by the percentage, or the raw px value.
 /// - `rotate`: resolved `offset-rotate` value from `ComputedStyle`.
+/// - `anchor`: the element's resolved `offset-anchor` in box-local px (the point
+///   that is placed onto the path). Used only by `ray()`, whose ray origin is the
+///   anchor's normal position; `path()` ignores it (its coordinates are already
+///   box-origin-relative).
 ///
 /// Returns `None` if `path_str` is `"none"`, unparseable, or describes an empty path.
 pub fn resolve_motion_transform(
     path_str: &str,
     offset_distance_px: f32,
     rotate: OffsetRotate,
+    anchor: (f32, f32),
 ) -> Option<MotionTransform> {
     if let Some(ray_angle_deg) = parse_ray_angle(path_str) {
-        return Some(resolve_ray(ray_angle_deg, offset_distance_px, rotate));
+        return Some(resolve_ray(ray_angle_deg, offset_distance_px, rotate, anchor));
     }
     let d = extract_path_d(path_str)?;
     let segs = parse_svg_path(d);
@@ -76,14 +89,24 @@ pub fn resolve_motion_transform(
 /// components only affect how *percentage* `offset-distance` values and clamping
 /// resolve; with a px `offset-distance` they have no effect, so this Phase 1
 /// implementation parses only the angle and ignores the rest.
-fn resolve_ray(angle_deg: f32, offset_distance_px: f32, rotate: OffsetRotate) -> MotionTransform {
+///
+/// The ray origin is the element's `offset-position`, which in this engine equals
+/// the anchor's normal position (`anchor`). The returned path point is therefore
+/// `anchor + displacement`, so that the caller's `T(path) · … · T(-anchor)`
+/// matrix nets to the pure ray displacement (independent of the anchor offset).
+fn resolve_ray(
+    angle_deg: f32,
+    offset_distance_px: f32,
+    rotate: OffsetRotate,
+    anchor: (f32, f32),
+) -> MotionTransform {
     let rad = angle_deg.to_radians();
     // 0deg points straight up (−y in this Y-down coordinate space); angle grows
     // clockwise toward +x.
     let dir_x = rad.sin();
     let dir_y = -rad.cos();
-    let translate_x = offset_distance_px * dir_x;
-    let translate_y = offset_distance_px * dir_y;
+    let translate_x = anchor.0 + offset_distance_px * dir_x;
+    let translate_y = anchor.1 + offset_distance_px * dir_y;
     // Tangent measured from +x axis (CW positive in Y-down space), to match the
     // path() tangent convention fed into `OffsetRotate`.
     let tangent_deg = (dir_y as f64).atan2(dir_x as f64).to_degrees() as f32;
@@ -843,6 +866,7 @@ mod tests {
             r#"path("M 0 0 L 100 0")"#,
             50.0,
             OffsetRotate::Auto,
+            (0.0, 0.0),
         ).unwrap();
         assert!((mt.translate_x - 50.0).abs() < 0.5, "tx={}", mt.translate_x);
         assert!(mt.translate_y.abs() < 0.5, "ty={}", mt.translate_y);
@@ -855,13 +879,14 @@ mod tests {
             r#"path("M 0 0 L 100 0")"#,
             50.0,
             OffsetRotate::Angle(45.0),
+            (0.0, 0.0),
         ).unwrap();
         assert!((mt.rotation_deg - 45.0).abs() < 0.5);
     }
 
     #[test]
     fn resolve_motion_none_returns_none() {
-        assert!(resolve_motion_transform("none", 50.0, OffsetRotate::Auto).is_none());
+        assert!(resolve_motion_transform("none", 50.0, OffsetRotate::Auto, (0.0, 0.0)).is_none());
     }
 
     #[test]
@@ -871,6 +896,7 @@ mod tests {
             r#"path("M 0 0 L 100 0")"#,
             50.0,
             OffsetRotate::Reverse,
+            (0.0, 0.0),
         ).unwrap();
         assert!((mt.rotation_deg.abs() - 180.0).abs() < 1.0, "rot={}", mt.rotation_deg);
     }
@@ -890,7 +916,7 @@ mod tests {
     #[test]
     fn ray_zero_deg_goes_up() {
         // 0deg → straight up: translate_y negative, translate_x ≈ 0.
-        let mt = resolve_motion_transform("ray(0deg)", 100.0, OffsetRotate::Angle(0.0)).unwrap();
+        let mt = resolve_motion_transform("ray(0deg)", 100.0, OffsetRotate::Angle(0.0), (0.0, 0.0)).unwrap();
         assert!(mt.translate_x.abs() < 0.01, "tx={}", mt.translate_x);
         assert!((mt.translate_y + 100.0).abs() < 0.01, "ty={}", mt.translate_y);
     }
@@ -898,7 +924,7 @@ mod tests {
     #[test]
     fn ray_ninety_deg_goes_right() {
         // 90deg → straight right: translate_x positive, translate_y ≈ 0.
-        let mt = resolve_motion_transform("ray(90deg)", 100.0, OffsetRotate::Angle(0.0)).unwrap();
+        let mt = resolve_motion_transform("ray(90deg)", 100.0, OffsetRotate::Angle(0.0), (0.0, 0.0)).unwrap();
         assert!((mt.translate_x - 100.0).abs() < 0.01, "tx={}", mt.translate_x);
         assert!(mt.translate_y.abs() < 0.01, "ty={}", mt.translate_y);
     }
@@ -906,20 +932,34 @@ mod tests {
     #[test]
     fn ray_auto_rotation_tracks_direction() {
         // 90deg ray travels along +x → tangent 0° → auto rotation ≈ 0°.
-        let right = resolve_motion_transform("ray(90deg)", 50.0, OffsetRotate::Auto).unwrap();
+        let right = resolve_motion_transform("ray(90deg)", 50.0, OffsetRotate::Auto, (0.0, 0.0)).unwrap();
         assert!(right.rotation_deg.abs() < 0.5, "rot={}", right.rotation_deg);
         // 0deg ray travels up (−y) → tangent −90° → auto rotation ≈ −90°.
-        let up = resolve_motion_transform("ray(0deg)", 50.0, OffsetRotate::Auto).unwrap();
+        let up = resolve_motion_transform("ray(0deg)", 50.0, OffsetRotate::Auto, (0.0, 0.0)).unwrap();
         assert!((up.rotation_deg + 90.0).abs() < 0.5, "rot={}", up.rotation_deg);
     }
 
     #[test]
     fn ray_fixed_rotation_ignores_direction() {
-        let mt = resolve_motion_transform("ray(180deg)", 30.0, OffsetRotate::Angle(45.0)).unwrap();
+        let mt = resolve_motion_transform("ray(180deg)", 30.0, OffsetRotate::Angle(45.0), (0.0, 0.0)).unwrap();
         assert!((mt.rotation_deg - 45.0).abs() < 0.5, "rot={}", mt.rotation_deg);
         // 180deg → straight down.
         assert!((mt.translate_y - 30.0).abs() < 0.01, "ty={}", mt.translate_y);
         assert!(mt.translate_x.abs() < 0.01, "tx={}", mt.translate_x);
+    }
+
+    #[test]
+    fn ray_path_point_is_anchor_plus_displacement() {
+        // BUG-236: the ray path point must be `anchor + displacement` so the
+        // caller's `T(path)·…·T(-anchor)` matrix nets to the pure ray
+        // displacement. A non-zero anchor (e.g. the box centre 20,20) shifts the
+        // returned point by the same amount, leaving the net translation equal to
+        // the displacement (here +100px to the right for 90deg).
+        let mt =
+            resolve_motion_transform("ray(90deg)", 100.0, OffsetRotate::Angle(0.0), (20.0, 20.0))
+                .unwrap();
+        assert!((mt.translate_x - 120.0).abs() < 0.01, "tx={}", mt.translate_x);
+        assert!((mt.translate_y - 20.0).abs() < 0.01, "ty={}", mt.translate_y);
     }
 
     #[test]
@@ -928,6 +968,7 @@ mod tests {
             "ray(90deg farthest-corner contain at center)",
             100.0,
             OffsetRotate::Angle(0.0),
+            (0.0, 0.0),
         )
         .unwrap();
         assert!((mt.translate_x - 100.0).abs() < 0.01, "tx={}", mt.translate_x);
@@ -940,6 +981,7 @@ mod tests {
             r#"path("M 0 0 C 50 0 50 100 100 100")"#,
             50.0,
             OffsetRotate::Auto,
+            (0.0, 0.0),
         ).unwrap();
         assert!(mt.translate_x.is_finite() && mt.translate_y.is_finite());
         assert!(mt.rotation_deg.is_finite());

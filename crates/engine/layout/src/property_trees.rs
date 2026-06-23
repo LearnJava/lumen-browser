@@ -742,8 +742,8 @@ pub fn forward_box_transform(b: &LayoutBox) -> Option<Mat4> {
             .offset_distance
             .resolve(b.style.font_size, Some(diagonal), Size::default())
             .unwrap_or(0.0);
-        if let Some(mt) = resolve_motion_transform(path, dist_px, b.style.offset_rotate) {
-            let (ax, ay) = motion_anchor_px(&b.style, b.rect.width, b.rect.height);
+        let (ax, ay) = motion_anchor_px(&b.style, b.rect.width, b.rect.height);
+        if let Some(mt) = resolve_motion_transform(path, dist_px, b.style.offset_rotate, (ax, ay)) {
             let rad = mt.rotation_deg * (core::f32::consts::PI / 180.0);
             return Some(
                 Mat4::translation_2d(b.rect.x + mt.translate_x, b.rect.y + mt.translate_y)
@@ -879,8 +879,8 @@ fn walk(
                     .offset_distance
                     .resolve(style.font_size, Some(diagonal), Size::default())
                     .unwrap_or(0.0);
-                if let Some(mt) = resolve_motion_transform(path, dist_px, style.offset_rotate) {
-                    let (ax, ay) = motion_anchor_px(style, b.rect.width, b.rect.height);
+                let (ax, ay) = motion_anchor_px(style, b.rect.width, b.rect.height);
+                if let Some(mt) = resolve_motion_transform(path, dist_px, style.offset_rotate, (ax, ay)) {
                     let motion = Mat4::translation_2d(mt.translate_x, mt.translate_y)
                         .multiply(&Mat4::rotate_2d(
                             mt.rotation_deg * (core::f32::consts::PI / 180.0),
