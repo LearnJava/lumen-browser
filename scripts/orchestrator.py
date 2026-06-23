@@ -252,7 +252,18 @@ def _extract_section(content: str, heading: str) -> str:
 
 
 def has_tasks(developer: str) -> bool:
-    """Проверить, есть ли задачи в STATUS-файле."""
+    """Проверить, есть ли задачи в STATUS-файле.
+
+    Поддерживает два формата STATUS-PN.md:
+
+    1. Новый (P1/P3/P4) — голые строки-указатели `<источник>:NN`, по одной
+       на задачу: `ROADMAP.md:92`, `BUGS.md:133`, `CSS-SPECS.md:221`,
+       либо код-якорь `crates/.../ruby.rs:76`. Без заголовков и таблиц.
+       Любая такая строка = открытая задача.
+    2. Старый (P5 — рекуррентная ревизия; P2 — резерв) — секции
+       `## In progress` / `## Next` с таблицами, чекбоксами или
+       подзаголовками `### N.`.
+    """
     status_file = PROJECT_DIR / f"STATUS-{developer}.md"
     if not status_file.exists():
         log(developer, f"STATUS-файл не найден: {status_file}")
@@ -260,9 +271,19 @@ def has_tasks(developer: str) -> bool:
 
     content = status_file.read_text(encoding="utf-8")
 
-    # Секция "In progress": непустая и не является заглушкой _(none)_
+    # Новый формат: строка-указатель `<источник>:NN` (источник — путь к файлу
+    # без пробелов, NN — номер строки). Игнорируем заголовки/цитаты/прозу.
+    for line in content.splitlines():
+        s = line.strip()
+        if not s or s.startswith(("#", ">", "-", "_", "*")):
+            continue
+        if re.match(r"^\S+:\d+$", s):
+            return True
+
+    # Секция "In progress": непустая и не италик-заглушка вида
+    # _(none)_, _(нет)_, _(none — роль-резерв)_ и т.п.
     in_progress = _extract_section(content, "In progress")
-    if in_progress and in_progress != "_(none)_":
+    if in_progress and not re.fullmatch(r"_\(.*\)_", in_progress, re.DOTALL):
         return True
 
     # Секция "Next": содержит строки таблицы | N |, чекбоксы - [ или заголовки ### N.
