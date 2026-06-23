@@ -2574,6 +2574,30 @@ fn propagate_canvas_background(doc: &Document, root: &mut LayoutBox) {
     html_box.style.background_layers = bg_layers;
 }
 
+/// CSS Backgrounds §3.11.1 — the canvas background color.
+///
+/// Returns the opaque background color of the root element box (the color
+/// `propagate_canvas_background` moved onto `<html>`, originally the root's or
+/// `<body>`'s background). The renderer clears the **entire** surface to this
+/// color so the page background covers the whole viewport even when the root
+/// element's box is shorter or narrower than the window — e.g. a fixed 1024×720
+/// page in a maximized window, where painting only the root box's rect would
+/// leave the rest of the canvas the UA-default white (and the root's own
+/// `background-color` shows only as a band the size of the box, not the canvas).
+///
+/// Returns `None` (→ UA-default white clear) when the root element has no
+/// background color or the color is not fully opaque: a translucent root
+/// background must composite over the UA canvas, which the root box's own
+/// background `FillRect` already handles within its rect.
+pub fn canvas_background_color(root: &LayoutBox) -> Option<crate::style::Color> {
+    let html = root
+        .children
+        .iter()
+        .find(|c| matches!(c.kind, BoxKind::Block | BoxKind::FlowRoot))?;
+    let color = html.style.background_color?.to_color_opt()?;
+    (color.a == 255).then_some(color)
+}
+
 fn is_html_element_named(doc: &Document, id: NodeId, want: &str) -> bool {
     matches!(
         doc.get(id).element_name(),
@@ -7691,7 +7715,19 @@ fn lay_out_flex(
                         // children were collapsed to flex-basis against an indefinite
                         // main size — they must be re-laid-out against the stretched
                         // height so they fill it.
+                        //
+                        // BUG-209: gate the re-layout on a *definite* container cross
+                        // size. When `explicit_cross` is None the effective cross size
+                        // falls back to `line_cross` (the line's own tallest item), so
+                        // the "stretch" is a no-op against the item's current height.
+                        // Re-laying-out anyway writes a resolved px `style.height` back
+                        // onto the item (below), which permanently clobbers its
+                        // `height: auto` state. A later pass that *does* have a definite
+                        // cross size then sees `is.height.is_some()` and skips the real
+                        // stretch — collapsing nested flex cells to content height
+                        // (TEST-90: cell-items stuck at ~40px instead of filling the row).
                         let relayout_column_flex = is.height.is_none()
+                            && explicit_cross.is_some()
                             && stretch_h > 0.0
                             && matches!(is.display, Display::Flex | Display::InlineFlex)
                             && matches!(
@@ -12834,6 +12870,34 @@ mod tests {
         assert_eq!(a.rect.height, 200.0, "first item in stretched column should grow to 200, got {}", a.rect.height);
         assert_eq!(b.rect.height, 200.0, "second item in stretched column should grow to 200, got {}", b.rect.height);
         assert_eq!(b.rect.y, 200.0, "second item starts after first; b.y={}", b.rect.y);
+    }
+
+    #[test]
+    fn flex_nested_stretch_after_indefinite_pass_fills_row() {
+        // BUG-209 (TEST-90): a column-flex item (#col) nested inside a row-flex cell
+        // (#cell) that is itself a flex item of an outer column (#outer). The outer
+        // column lays #cell out twice: first an indefinite preliminary pass (the row's
+        // cross size is unknown), then a real pass with #cell stretched to its grown
+        // height. On the preliminary pass the stretch fell back to the line's own
+        // height and wrote a px `style.height` back onto #col, clobbering its
+        // `height:auto`; the real pass then skipped the genuine stretch and #col
+        // collapsed to content height. Here #col must fill the row's full cross size.
+        let html = r#"<div id="outer"><div id="cell"><div id="col">x</div></div></div>"#;
+        let css = "body{margin:0} \
+                   #outer{display:flex;flex-direction:column;height:300px;width:400px} \
+                   #cell{flex:1;display:flex} \
+                   #col{flex:1;display:flex;flex-direction:column}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let cell = find_by_id_all(&root, &doc, "cell").expect("cell");
+        assert_eq!(cell.rect.height, 300.0, "row cell should fill the outer column (300), got {}", cell.rect.height);
+        let col = find_by_id_all(&root, &doc, "col").expect("col");
+        assert_eq!(
+            col.rect.height, 300.0,
+            "nested column item must stretch to the cell's cross size (300), not collapse to content; got {}",
+            col.rect.height
+        );
     }
 
     #[test]

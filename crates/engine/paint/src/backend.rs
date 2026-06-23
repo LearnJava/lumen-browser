@@ -25,6 +25,7 @@ use std::sync::Arc;
 use lumen_core::ext::{FontProvider, MemoryPressureLevel};
 use lumen_core::geom::Size;
 use lumen_image::Image;
+use lumen_layout::Color;
 
 use crate::DisplayCommand;
 
@@ -119,6 +120,17 @@ pub trait RenderBackend: Send {
     ///
     /// `None` означает возврат к bundled Inter fallback.
     fn set_font_provider(&mut self, provider: Option<Arc<dyn FontProvider>>);
+
+    /// Устанавливает фон канвы (CSS Backgrounds §3.11.1) — цвет, которым весь
+    /// кадр заливается перед отрисовкой display-list.
+    ///
+    /// `Some(color)` — фон корневого элемента (распространённый с `<body>`/`<html>`),
+    /// заливающий **всю** поверхность, чтобы фон страницы покрывал вьюпорт целиком,
+    /// даже когда бокс корня меньше окна (фикс. 1024×720 страница в развёрнутом окне).
+    /// `None` — UA-дефолт (белый). Дефолтная реализация — no-op (бэкенд продолжает
+    /// чистить в белый). Shell вызывает перед каждым [`render`][RenderBackend::render]
+    /// с результатом `lumen_layout::canvas_background_color`.
+    fn set_canvas_background(&mut self, _color: Option<Color>) {}
 
     /// Возвращает текущий размер viewport в **logical** (CSS) пикселях.
     ///
