@@ -151,13 +151,42 @@ Full role definition: `STATUS-P5.md`.
 - **Add extension points yourself.** Don't block on "P3 hasn't added the trait yet" — add it yourself, P3 reviews post-factum.
 - **P1/P2/P3 → P4 handoff.** When a new algorithm needs a CSS property, add `// CSS: <property>` comment at the call site and note it in `STATUS-P4.md` under "Needs wiring". Do not wait for P4 — ship the algorithm, P4 wires CSS independently.
 
-### Reserving a task
+### Task tracking schema (invariant)
 
-Create a feature branch (`git checkout -b <name>`) → in the **first commit on that branch** update `STATUS-PN.md`:
+Three artifacts, strict roles — do not duplicate descriptions across them:
 
 ```
-In progress: <task name>  branch: <branch-name>
-Next step: <what to do first>  <file.rs:line>
+ROADMAP.md (one line per task, status ≠ done)   ← master task list (grep "| <id> " ROADMAP.md)
+   │
+   ├─ STATUS-PN.md: bare pointer lines `ROADMAP.md:NN`, one per open task, priority top→bottom.
+   │     NOTHING else — no headers, tables, descriptions, completed tasks, In progress/Recent.
+   │     (history lives in git log; readiness in ROADMAP status / CAPABILITIES.md)
+   │
+   └─ docs/tasks/<id>.md   ← detailed brief, ONLY for an unimplemented task
+```
+
+- **A task file exists only while the task is unimplemented.** A done task is just a `done` line
+  in `ROADMAP.md` — no STATUS line, no task file.
+- **`STATUS-PN.md` holds only `ROADMAP.md:NN` lines.** The `<id>`/task-file link is recovered from
+  that ROADMAP row. Stable anchor is the row `<id>`; the `:NN` line number is fragile.
+- **Reindex on ROADMAP insertion (mandatory).** When you insert `K` new rows into `ROADMAP.md` at
+  line `L`, every pointer `ROADMAP.md:NN` (in all `STATUS-PN.md`) with `NN ≥ L` must be bumped by
+  `+K`. After any ROADMAP edit that shifts rows, verify each STATUS pointer still lands on its
+  intended row (`sed -n 'NNp' ROADMAP.md`). Prefer appending new rows at the end of a phase block
+  to minimise shift. Append-only edits below all pointers need no reindex.
+- **On completion:** delete the STATUS-PN.md line → delete (or `## Status: MERGED`) the task file →
+  set `ROADMAP.md` status to `done` (run `python scripts/gen_roadmap.py`) → mark
+  `CAPABILITIES.md`/`CSS-SPECS.md`/`BUGS.md`. (Full list — §«Task completion checklist».)
+- Full rules + template: [`docs/tasks/README.md`](docs/tasks/README.md).
+
+### Reserving a task
+
+Create a feature branch (`git checkout -b <name>`) → in the **first commit on that branch** move the
+task's pointer line in `STATUS-PN.md` from "Next" to "In progress":
+
+```
+In progress: <id> — <short name>   branch: p<N>-<id>
+Next step: <what to do first>   docs/tasks/<id>.md
 ```
 
 ---
