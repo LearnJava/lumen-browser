@@ -1482,6 +1482,12 @@ fn skia_gradient_stops(
     if resolved.len() < 2 {
         return None;
     }
+    // CSS Images L4 §3.1 — interpolate fades to/through transparency in
+    // premultiplied space (BUG-190); tiny-skia samples these dense stops in
+    // straight space, reproducing the premultiplied curve. Opaque segments are
+    // untouched, so solid gradients stay byte-identical.
+    let subdivided = crate::gradient_math::premultiplied_subdivide_stops(resolved);
+    let resolved = &subdivided[..];
     let first = resolved.first().map(|s| s.0).unwrap_or(0.0);
     let last = resolved.last().map(|s| s.0).unwrap_or(1.0);
     let span = (last - first).max(1e-6);
@@ -3270,3 +3276,4 @@ mod tests {
         assert!(g > 230 && r < 25 && b < 25, "p=1 → green, got ({r},{g},{b})");
     }
 }
+
