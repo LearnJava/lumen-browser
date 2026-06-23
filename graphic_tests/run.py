@@ -220,6 +220,7 @@ TESTS: list[tuple[str, str, float, str]] = [
 # Добавлять ТОЛЬКО Phase 2+ фичи с OPEN BUG-NNN и diff-изображением,
 # подтверждающим что расхождение локализовано в области нереализованной фичи.
 KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
+    '122': ('BUG-237', 11.19),  # line-height-step: Lumen спек-корректно округляет line-box (48/60/40px фоны), Edge свойство не поддерживает (удалён из Chromium ~2018) → эталон рисует un-stepped 24px fallback. Lumen корректнее reference-браузера (класс BUG-126/TEST-77 inset-area, BUG-199/TEST-71 @starting-style). Совпасть = отключить рабочую реализацию (запрещено). Остаток + font-parity переноса natural-колонки (rule 3)
     '54': ('BUG-173', 2.5),     # SVG <path> fill+stroke остаток (AA-швы, self-intersecting fill)
     '57': ('BUG-099', 4.14),    # <canvas> getContext("2d") — Phase 2
     '60': ('BUG-173', 1.5),     # SVG stroke advanced остаток (triangle-soup AA-швы, dash-on-curve)
