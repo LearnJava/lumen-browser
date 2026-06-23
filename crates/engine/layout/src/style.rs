@@ -3950,6 +3950,35 @@ impl BackgroundRepeat {
     }
 }
 
+/// CSS Backgrounds L3 §3.5 — one axis of an explicit `background-size` value.
+///
+/// `Px`/`Percent` are resolved against the positioning area extent along this
+/// axis at paint time; `Auto` derives the extent from the other axis (preserving
+/// the image's intrinsic aspect ratio).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BgSizeAxis {
+    /// Derive this axis from the other axis / the image's intrinsic ratio.
+    Auto,
+    /// Fixed length in CSS px.
+    Px(f32),
+    /// Percentage of the positioning area along this axis (fraction `0.0..`).
+    Percent(f32),
+}
+
+impl BgSizeAxis {
+    /// Resolve to a concrete px extent against `area` (the positioning-area
+    /// size along this axis). Returns `None` for `Auto` (caller derives it from
+    /// the other axis / intrinsic ratio).
+    #[must_use]
+    pub fn resolve(self, area: f32) -> Option<f32> {
+        match self {
+            BgSizeAxis::Auto => None,
+            BgSizeAxis::Px(v) => Some(v),
+            BgSizeAxis::Percent(p) => Some(p * area),
+        }
+    }
+}
+
 /// CSS Backgrounds L3 §3.5 — `background-size`.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub enum BackgroundSize {
@@ -3957,8 +3986,9 @@ pub enum BackgroundSize {
     Auto,
     Cover,
     Contain,
-    /// Width / Height в px. None для height = auto.
-    Length(f32, Option<f32>),
+    /// Explicit width / height, each `auto` | `<length>` | `<percentage>`.
+    /// Percentages resolve against the positioning area at paint time.
+    Length(BgSizeAxis, BgSizeAxis),
 }
 
 /// CSS Backgrounds L3 §3.6 — `background-attachment`.
@@ -12432,20 +12462,9 @@ fn apply_declaration(
         "background-size" => {
             // CSS Backgrounds L3 §3.5 — comma-separated list (cycling).
             let pieces = split_top_level_commas(val.trim());
-            let sizes: Vec<BackgroundSize> = pieces.iter().map(|s| {
-                let s = s.trim();
-                let parts: Vec<&str> = s.split_whitespace().collect();
-                let first = parts.first().copied().unwrap_or("auto");
-                let mut size = parse_background_size_single(first, em_basis, viewport, is_quirks);
-                // Второй токен как height
-                if let (BackgroundSize::Length(w, None), Some(&h_s)) = (size, parts.get(1))
-                    && !h_s.eq_ignore_ascii_case("auto")
-                    && let Some(h) = resolve_box_length(h_s, em_basis, viewport, is_quirks)
-                {
-                    size = BackgroundSize::Length(w, Some(h));
-                }
-                size
-            }).collect();
+            let sizes: Vec<BackgroundSize> = pieces.iter()
+                .map(|s| parse_background_size_value(s, em_basis, viewport, is_quirks))
+                .collect();
             if sizes.is_empty() { return; }
             if style.background_layers.is_empty() {
                 style.background_layers.push(BackgroundLayer::default());
@@ -13252,27 +13271,7 @@ fn apply_declaration(
             }
         }
         "mask-size" => {
-            let trimmed = val.trim();
-            if trimmed.eq_ignore_ascii_case("auto") {
-                style.mask_size = BackgroundSize::Auto;
-            } else if trimmed.eq_ignore_ascii_case("cover") {
-                style.mask_size = BackgroundSize::Cover;
-            } else if trimmed.eq_ignore_ascii_case("contain") {
-                style.mask_size = BackgroundSize::Contain;
-            } else {
-                let parts: Vec<&str> = trimmed.split_whitespace().collect();
-                let w = parts.first().and_then(|s| resolve_box_length(s, em_basis, viewport, is_quirks));
-                let h = parts.get(1).and_then(|s| {
-                    if s.eq_ignore_ascii_case("auto") {
-                        None
-                    } else {
-                        resolve_box_length(s, em_basis, viewport, is_quirks)
-                    }
-                });
-                if let Some(w) = w {
-                    style.mask_size = BackgroundSize::Length(w, h);
-                }
-            }
+            style.mask_size = parse_background_size_value(val, em_basis, viewport, is_quirks);
         }
         "scrollbar-width" => {
             if let Some(v) = ScrollbarWidth::parse(val) {
@@ -16986,20 +16985,59 @@ fn is_bg_position_token(s: &str) -> bool {
         || s.parse::<f32>().is_ok_and(|v| v == 0.0)
 }
 
+/// CSS Backgrounds L3 §3.5 — parse one axis token of `background-size` /
+/// `mask-size`: `auto` → `Auto`, `<percentage>` → `Percent` (fraction),
+/// `<length>` → `Px`. Returns `None` if the token isn't a valid axis value.
+fn parse_bg_size_axis(s: &str, em_basis: f32, viewport: Size, is_quirks: bool) -> Option<BgSizeAxis> {
+    let s = s.trim();
+    if s.eq_ignore_ascii_case("auto") {
+        return Some(BgSizeAxis::Auto);
+    }
+    if let Some(pct) = s.strip_suffix('%') {
+        return pct.trim().parse::<f32>().ok().map(|v| BgSizeAxis::Percent(v / 100.0));
+    }
+    resolve_box_length(s, em_basis, viewport, is_quirks).map(BgSizeAxis::Px)
+}
+
 /// CSS Backgrounds L3 §3.5 — parse background-size от одного токена
-/// (`auto` / `cover` / `contain` / длина).
+/// (`auto` / `cover` / `contain` / длина / процент). Height axis = `Auto`;
+/// the caller may combine a following token for the second axis.
 fn parse_background_size_single(s: &str, em_basis: f32, viewport: Size, is_quirks: bool) -> BackgroundSize {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "auto" => BackgroundSize::Auto,
-        "cover" => BackgroundSize::Cover,
-        "contain" => BackgroundSize::Contain,
-        other => {
-            if let Some(w) = resolve_box_length(other, em_basis, viewport, is_quirks) {
-                BackgroundSize::Length(w, None)
-            } else {
-                BackgroundSize::Auto
-            }
-        }
+    let t = s.trim();
+    if t.eq_ignore_ascii_case("cover") {
+        return BackgroundSize::Cover;
+    }
+    if t.eq_ignore_ascii_case("contain") {
+        return BackgroundSize::Contain;
+    }
+    match parse_bg_size_axis(t, em_basis, viewport, is_quirks) {
+        Some(BgSizeAxis::Auto) | None => BackgroundSize::Auto,
+        Some(w) => BackgroundSize::Length(w, BgSizeAxis::Auto),
+    }
+}
+
+/// CSS Backgrounds L3 §3.5 — parse a single-layer `background-size` / `mask-size`
+/// value: `cover` / `contain` / one or two `<length-percentage> | auto` axes.
+fn parse_background_size_value(s: &str, em_basis: f32, viewport: Size, is_quirks: bool) -> BackgroundSize {
+    let t = s.trim();
+    if t.eq_ignore_ascii_case("cover") {
+        return BackgroundSize::Cover;
+    }
+    if t.eq_ignore_ascii_case("contain") {
+        return BackgroundSize::Contain;
+    }
+    let parts: Vec<&str> = t.split_whitespace().collect();
+    let Some(w) = parts.first().and_then(|p| parse_bg_size_axis(p, em_basis, viewport, is_quirks))
+    else {
+        return BackgroundSize::Auto;
+    };
+    let h = parts.get(1)
+        .and_then(|p| parse_bg_size_axis(p, em_basis, viewport, is_quirks))
+        .unwrap_or(BgSizeAxis::Auto);
+    if w == BgSizeAxis::Auto && h == BgSizeAxis::Auto {
+        BackgroundSize::Auto
+    } else {
+        BackgroundSize::Length(w, h)
     }
 }
 
@@ -17130,15 +17168,17 @@ fn parse_single_bg_layer(
                         && BackgroundAttachment::parse(tokens[idx]).is_none()
                         && BackgroundOrigin::parse(tokens[idx]).is_none()
                     {
-                        if let BackgroundSize::Length(w, None) = size {
-                            if let Some(h) = resolve_box_length(tokens[idx], em_basis, viewport, is_quirks) {
-                                size = BackgroundSize::Length(w, Some(h));
+                        if let BackgroundSize::Length(w, BgSizeAxis::Auto) = size {
+                            if let Some(h) = parse_bg_size_axis(tokens[idx], em_basis, viewport, is_quirks) {
+                                size = BackgroundSize::Length(w, h);
                                 idx += 1;
                             }
                         } else if matches!(size, BackgroundSize::Auto) {
-                            // auto <height>
-                            if let Some(_h) = resolve_box_length(tokens[idx], em_basis, viewport, is_quirks) {
-                                // auto height — CSS spec: "auto auto" = auto (keep Auto)
+                            // `auto <axis>` → width auto, height = axis (intrinsic-ratio width).
+                            if let Some(h) = parse_bg_size_axis(tokens[idx], em_basis, viewport, is_quirks) {
+                                if h != BgSizeAxis::Auto {
+                                    size = BackgroundSize::Length(BgSizeAxis::Auto, h);
+                                }
                                 idx += 1;
                             }
                         }

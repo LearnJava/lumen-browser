@@ -950,9 +950,21 @@ pub(crate) fn bg_tile_geometry(
             (img_w * s, img_h * s)
         }
         BackgroundSize::Length(w, h) => {
-            let tw = w.max(1.0);
-            let th = h.unwrap_or_else(|| img_h * (tw / img_w)).max(1.0);
-            (tw, th)
+            // CSS Backgrounds L3 §3.5: percent axes resolve against the
+            // positioning area; an `auto` axis derives from the other via the
+            // image's intrinsic aspect ratio.
+            match (w.resolve(oarea_w), h.resolve(oarea_h)) {
+                (Some(tw), Some(th)) => (tw.max(1.0), th.max(1.0)),
+                (Some(tw), None) => {
+                    let tw = tw.max(1.0);
+                    (tw, (img_h * (tw / img_w)).max(1.0))
+                }
+                (None, Some(th)) => {
+                    let th = th.max(1.0);
+                    ((img_w * (th / img_h)).max(1.0), th)
+                }
+                (None, None) => (img_w, img_h),
+            }
         }
     };
 
@@ -3339,8 +3351,10 @@ fn gradient_tile_rects(
 fn gradient_paint_rects(layer: &BackgroundLayer, origin: Rect, clip: Rect) -> (Vec<Rect>, bool) {
     match layer.size {
         BackgroundSize::Length(w, h) => {
-            let tile_w = w.max(1.0);
-            let tile_h = h.unwrap_or(origin.height).max(1.0);
+            // Gradients have no intrinsic size/ratio: an `auto` axis falls back
+            // to the positioning-area extent; percent resolves against it.
+            let tile_w = w.resolve(origin.width).unwrap_or(origin.width).max(1.0);
+            let tile_h = h.resolve(origin.height).unwrap_or(origin.height).max(1.0);
             let tiles =
                 gradient_tile_rects(tile_w, tile_h, layer.position, layer.repeat, origin, clip);
             (tiles, true)

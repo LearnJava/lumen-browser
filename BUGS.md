@@ -130,7 +130,7 @@
 | [BUG-112](bugs/BUG-112-FIXED.md) | FIXED 2026-06-08 | driver | test_32_list_markers регрессия: P4 добавил 2 @counter-style списка |
 | [BUG-113](bugs/BUG-113-FIXED.md) | FIXED 2026-06-09 | layout | TEST-53 row-2 drift ~24px: trailing cross_gap утекал в single-line flex |
 | [BUG-114](bugs/BUG-114-OPEN.md) | OPEN | css-parser | `font` shorthand drops font-size/line-height — TEST-53 residual ~4px |
-| [BUG-115](bugs/BUG-115-OPEN.md) | OPEN | css-parser | percent `background-size` not supported — TEST-45 residual |
+| [BUG-115](bugs/BUG-115-FIXED.md) | FIXED 2026-06-23 | css-parser | percent `background-size` not supported — TEST-45 residual |
 | [BUG-116](bugs/BUG-116-FIXED.md) | FIXED 2026-06-09 | layout | auto table column widths: content-based sizing (CSS 2.1 §17.5.2) |
 | [BUG-117](bugs/BUG-117-FIXED.md) | FIXED 2026-06-09 | layout | multi-column greedy assignment two bugs — TEST-33 16.14% |
 | [BUG-118](bugs/BUG-118-FIXED.md) | FIXED 2026-06-09 | test/snapshot | snapshot_cpu reference PNGs outdated for 12 pages |
