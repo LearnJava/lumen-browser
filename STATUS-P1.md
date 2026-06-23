@@ -6,7 +6,12 @@
 
 ## In progress
 
-_(нет активных задач)_
+**CPU-снимок: паритет `background-image` + `cross-fade()`** (`p1-cpu-bg-image`, U-6/линия BUG-221).
+CPU-бэкенд (`cpu_raster.rs`) игнорирует `DrawBackgroundImage` (no-op :319) и `DrawCrossFade`
+(не обработан) → `--screenshot`/`--ipc` рисуют пустые ячейки на любой странице с
+`background-image`/`image-set()`/`cross-fade()` (видно на TEST-59, BUG-101). femtovg рисует обе.
+Next step: вынести `bg_tile_geometry` из `femtovg_backend.rs:2920` в общий `display_list.rs`,
+реализовать обе команды в `cpu_raster.rs:319`, проверить через `--screenshot` TEST-59.
 
 ---
 
