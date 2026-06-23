@@ -75,8 +75,8 @@
 {
  "generated": "2026-06-23",
  "counts": {
-  "open": 39,
-  "fixed": 191,
+  "open": 37,
+  "fixed": 193,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -2179,10 +2179,10 @@
    "debtor": false
   },
   "BUG-225": {
-   "status": "open",
-   "title": "`appearance: none` подавляет value/placeholder-текст у text-input'ов: `emit_form_control_indicator` (display_list.rs:4207) делает ранний `return` при `Appearanc…",
+   "status": "fixed",
+   "title": "`appearance: none` подавлял value/placeholder-текст у text-input'ов: `emit_form_control_indicator` делал ранний `return` при `Appearance::None`. Фикс: ранний re…",
    "component": "paint",
-   "date": null,
+   "date": "2026-06-23",
    "debtor": false
   },
   "BUG-227": {
@@ -2228,10 +2228,10 @@
    "debtor": false
   },
   "BUG-234": {
-   "status": "open",
-   "title": "HTTP-кэш не подключён к загрузке подресурсов: `HttpCache`/`DiskHttpCache` есть в lumen-network, но `with_http_cache` зовётся только в тестах; `http_client_for_s…",
+   "status": "fixed",
+   "title": "HTTP-кэш подключён к загрузке подресурсов. Новый process-global `HTTP_CACHE` (config.rs) шарит один `DiskHttpCache` (`<exe_dir>/data/cache/http_cache.db`, переж…",
    "component": "shell/network",
-   "date": null,
+   "date": "2026-06-23",
    "debtor": false
   }
  },

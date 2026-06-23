@@ -1,11 +1,35 @@
 # BUG-234
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-06-23
 **Компонент:** shell (network)
-**Файл:** `crates/shell/src/main.rs:3024` (`http_client_for_subresource`),
-`crates/shell/src/config.rs:213` (`apply_http`)
+**Файл:** `crates/shell/src/config.rs` (`HTTP_CACHE` / `build_http_cache` / `apply_http`)
 
-## Описание
+## Решение (2026-06-23)
+
+Подключён общий кросс-навигационный HTTP-кэш. В `config.rs` добавлен
+process-global `HTTP_CACHE: OnceLock<Option<Arc<dyn HttpCacheBackend>>>`,
+инициализируемый лениво через `build_http_cache(private)`:
+
+- обычная сессия → `DiskHttpCache` по пути `<exe_dir>/data/cache/http_cache.db`
+  (политика портативного хранения `browser_data_dir`, переживает рестарт);
+- `no_persistent_state` / `http_profile == TorBrowser` → in-memory `HttpCache`
+  (на диск ничего не пишется);
+- если дисковую БД открыть не удалось → `None` (кэш отключён, поведение как
+  раньше — всё из сети).
+
+Проводка `.with_http_cache(Arc::clone(...))` добавлена в `apply_http` — это
+choke point, через который собираются **все** клиенты (главная навигация,
+подресурсы `http_client_for_subresource`, `fetch()`), поэтому один общий кэш
+(шарится через `Arc`) покрывает весь трафик. RFC 7234-семантика
+(`Cache-Control`/`ETag`/`Last-Modified`/304/freshness) уже была реализована в
+`HttpClient::fetch_subresource`. DoH-bootstrap клиент строится в обход
+`apply_http` и кэш не получает (корректно).
+
+Тесты: `private_http_cache_is_in_memory_and_present`, `http_cache_is_shared_via_arc`
+(config.rs). RFC 7234-поведение покрыто существующими тестами `lumen-network`
+(MockTransport, lib.rs:6849–6952).
+
+## Описание (исходная)
 
 HTTP-кэш не подключён к загрузке страниц/подресурсов. В `lumen-network` есть
 полноценный RFC 7234 кэш — `HttpCache` (in-memory LRU, 50 МБ) и `DiskHttpCache`
