@@ -3429,7 +3429,7 @@ fn emit_background_layer(
             for r in &rects {
                 // Resolve the CSS ending-shape/size to concrete px radii against
                 // this paint rect (CSS Images L3 §3.5.1) — circle keeps rx == ry,
-                // ellipse gets independent radii (BUG-238).
+                // ellipse gets independent radii (BUG-239).
                 let (radius_x, radius_y) = lumen_layout::radial_gradient_radii(
                     *shape, *size, *center_x_pct, *center_y_pct, r.width, r.height,
                 );

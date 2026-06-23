@@ -1,4 +1,4 @@
-# BUG-238
+# BUG-239
 
 **Статус:** FIXED 2026-06-23
 **Компонент:** layout (css-parser) + paint

@@ -2087,7 +2087,7 @@ impl FemtovgBackend {
     /// Renders a radial gradient per-pixel into a device-resolution texture and
     /// blits it, bypassing femtovg's 256-texel gradient LUT (BUG-085) **and** its
     /// circle-only `radial_gradient_stops` (which renders an `ellipse` gradient
-    /// as a circle — BUG-238). `t` is the elliptical distance from the centre,
+    /// as a circle — BUG-239). `t` is the elliptical distance from the centre,
     /// `sqrt((dx/rx)² + (dy/ry)²)`, so a stop at fraction 1.0 lands on the ellipse
     /// `(rx, ry)`; for a circle `rx == ry`. Centre and radii are rect-local CSS px.
     fn draw_radial_gradient_cpu(
@@ -2410,7 +2410,7 @@ impl FemtovgBackend {
                 }
                 // BUG-085: render radial gradients per-pixel to bypass femtovg's
                 // 256-texel LUT (quantizes repeating rings + smooth interpolation)
-                // and its circle-only paint (BUG-238: an `ellipse` gradient must
+                // and its circle-only paint (BUG-239: an `ellipse` gradient must
                 // use independent rx/ry). Centre is rect-local (origin at the box
                 // top-left) to match draw_radial_gradient_cpu.
                 self.draw_radial_gradient_cpu(

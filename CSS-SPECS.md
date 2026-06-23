@@ -217,7 +217,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `font` / `font-size` / `font-weight` / `font-style` / `font-family` | ✅ | |
 | `font-variant` / `font-variant-caps` | 🟡 | small-caps only; all-small-caps ⬜ |
 | `font-stretch` | 🟡 | % parsed; matcher ⬜ |
-| `font-variation-settings` | ✅ | fvar+avar normalization |
+| `font-variation-settings` | ✅ | fvar+avar normalization; applied on CPU/wgpu paths, femtovg window renders default instance (see CAPABILITIES) |
 | `font-feature-settings` | ⬜ | OT feature flags |
 | `font-size-adjust` | ✅ | real OS/2 x-height scaling (P4 2026-06-13); тест 95 |
 | `font-optical-sizing` | ✅ | auto injects opsz=font-size into variation axes; none skips |

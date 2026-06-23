@@ -1586,7 +1586,7 @@ fn rasterize_linear_gradient(
 /// radius_y`) is drawn isotropically, matching the femtovg backend byte for byte
 /// (BUG-221, TEST-39). An **ellipse** is drawn as a unit circle of radius
 /// `radius_x` plus a vertical scale `radius_y/radius_x` about the centre, so the
-/// rings stretch to the elliptical ending shape Edge produces (BUG-238).
+/// rings stretch to the elliptical ending shape Edge produces (BUG-239).
 #[allow(clippy::too_many_arguments)]
 fn rasterize_radial_gradient(
     pixmap: &mut tiny_skia::Pixmap,

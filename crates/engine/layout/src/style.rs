@@ -28815,7 +28815,7 @@ mod tests {
         }
     }
 
-    // ── radial-gradient shape / size (CSS Images L3 §3.5, BUG-238) ─────────────
+    // ── radial-gradient shape / size (CSS Images L3 §3.5, BUG-239) ─────────────
 
     #[test]
     fn radial_shape_size_parses_circle_and_ellipse() {
