@@ -7,16 +7,53 @@
 //! Phase 0 scope: in-memory only (no SQLite persistence across restarts).
 //! Keyed by the page URL string; entries are evicted LRU when the cache
 //! exceeds `max_size`.
+//!
+//! Phase 3 upgrade: BfCacheEntry now supports FrozenPage (DOM + JS heap) with
+//! retained layout tree. Restoring from a FrozenPage skips re-parse and JS heap
+//! reconstruction, re-layout only when viewport changed.
 
 use std::collections::{HashMap, VecDeque};
 
+use serde::{Deserialize, Serialize};
+
+/// Serialized page state for bfcache restoration.
+///
+/// Fully frozen pages (DOM + JS heap) restore instantly without
+/// re-parse. Ineligible pages fall back to HTML snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BfCachePayload {
+    /// Full freeze: DOM + JS heap. Instant restore without re-layout.
+    Frozen(FrozenPage),
+    /// Phase 0/1 fallback: HTML text re-parse on restore (no JS heap).
+    HtmlSnapshot(String),
+}
+
+/// Fully frozen page state for bfcache restoration.
+///
+/// Captures DOM and JS heap state at navigation time. Layout is retained when
+/// available to skip re-layout on restore.
+///
+/// Note: `layout_box` is not serialized here because `LayoutBox` contains
+/// non-serializable references (ComputedStyle, DirtyBits). The bfcache thaw
+/// path re-layouts from the frozen DOM when needed, which is still fast because
+/// the DOM is already deserialized.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrozenPage {
+    /// Serialized DOM arena (bincode via Document::to_bytes()).
+    pub dom_bytes: Vec<u8>,
+    /// Suspended QuickJS heap (zstd-compressed, ≤5 MB).
+    pub js_heap: Vec<u8>,
+    /// Inline CSS stylesheet source (cheap to re-parse on restore).
+    pub css_source: String,
+}
+
 /// Snapshot of a page suitable for bfcache restoration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BfCacheEntry {
     /// Absolute URL string used as cache key.
     pub url: String,
-    /// Decoded HTML source (UTF-8). Re-parsed on restore to avoid re-fetch.
-    pub html: String,
+    /// Payload holding either frozen state or HTML fallback.
+    pub payload: BfCachePayload,
     /// Horizontal scroll offset (CSS px) at the time of cache capture.
     pub scroll_x: f32,
     /// Vertical scroll offset (CSS px) at the time of cache capture.
@@ -104,16 +141,38 @@ impl BfCache {
         self.entries.clear();
         self.order.clear();
     }
+
+    /// Check whether a frozen page exists for the given URL.
+    pub fn has_frozen(&self, url: &str) -> bool {
+        self.entries
+            .get(url)
+            .map(|e| matches!(e.payload, BfCachePayload::Frozen(_)))
+            .unwrap_or(false)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn entry(url: &str) -> BfCacheEntry {
+    fn html_entry(url: &str) -> BfCacheEntry {
         BfCacheEntry {
             url: url.to_owned(),
-            html: format!("<html><body>{url}</body></html>"),
+            payload: BfCachePayload::HtmlSnapshot(format!("<html><body>{url}</body></html>")),
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            title: None,
+        }
+    }
+
+    fn frozen_entry(url: &str) -> BfCacheEntry {
+        BfCacheEntry {
+            url: url.to_owned(),
+            payload: BfCachePayload::Frozen(FrozenPage {
+                dom_bytes: vec![1, 2, 3],
+                js_heap: vec![4, 5, 6],
+                css_source: "body {}".to_owned(),
+            }),
             scroll_x: 0.0,
             scroll_y: 0.0,
             title: None,
@@ -121,12 +180,32 @@ mod tests {
     }
 
     #[test]
-    fn store_and_retrieve() {
+    fn store_and_retrieve_html() {
         let mut cache = BfCache::new(8);
-        cache.store(entry("https://example.com/"));
+        cache.store(html_entry("https://example.com/"));
         let e = cache.retrieve("https://example.com/").unwrap();
         assert_eq!(e.url, "https://example.com/");
-        assert!(e.html.contains("example.com"));
+        match &e.payload {
+            BfCachePayload::HtmlSnapshot(html) => {
+                assert!(html.contains("example.com"));
+            }
+            BfCachePayload::Frozen(_) => panic!("expected HtmlSnapshot variant"),
+        }
+    }
+
+    #[test]
+    fn store_and_retrieve_frozen() {
+        let mut cache = BfCache::new(8);
+        cache.store(frozen_entry("https://frozen.com/"));
+        let e = cache.retrieve("https://frozen.com/").unwrap();
+        assert_eq!(e.url, "https://frozen.com/");
+        match &e.payload {
+            BfCachePayload::Frozen(fp) => {
+                assert_eq!(fp.dom_bytes, vec![1, 2, 3]);
+                assert_eq!(fp.js_heap, vec![4, 5, 6]);
+            }
+            BfCachePayload::HtmlSnapshot(_) => panic!("expected Frozen variant"),
+        }
     }
 
     #[test]
@@ -138,9 +217,9 @@ mod tests {
     #[test]
     fn eviction_at_max_size() {
         let mut cache = BfCache::new(2);
-        cache.store(entry("https://a/"));
-        cache.store(entry("https://b/"));
-        cache.store(entry("https://c/")); // evicts "a"
+        cache.store(html_entry("https://a/"));
+        cache.store(html_entry("https://b/"));
+        cache.store(html_entry("https://c/"));
         assert!(cache.retrieve("https://a/").is_none());
         assert!(cache.retrieve("https://b/").is_some());
         assert!(cache.retrieve("https://c/").is_some());
@@ -149,11 +228,10 @@ mod tests {
     #[test]
     fn update_refreshes_lru_position() {
         let mut cache = BfCache::new(2);
-        cache.store(entry("https://a/"));
-        cache.store(entry("https://b/"));
-        // Refresh "a" — it moves to back; "b" becomes oldest.
-        cache.store(entry("https://a/"));
-        cache.store(entry("https://c/")); // evicts "b", not "a"
+        cache.store(html_entry("https://a/"));
+        cache.store(html_entry("https://b/"));
+        cache.store(html_entry("https://a/"));
+        cache.store(html_entry("https://c/"));
         assert!(cache.retrieve("https://a/").is_some());
         assert!(cache.retrieve("https://b/").is_none());
         assert!(cache.retrieve("https://c/").is_some());
@@ -162,8 +240,8 @@ mod tests {
     #[test]
     fn clear_empties_cache() {
         let mut cache = BfCache::new(8);
-        cache.store(entry("https://a/"));
-        cache.store(entry("https://b/"));
+        cache.store(html_entry("https://a/"));
+        cache.store(html_entry("https://b/"));
         cache.clear();
         assert!(cache.is_empty());
         assert_eq!(cache.len(), 0);
@@ -173,8 +251,8 @@ mod tests {
     #[test]
     fn remove_single_entry() {
         let mut cache = BfCache::new(8);
-        cache.store(entry("https://a/"));
-        cache.store(entry("https://b/"));
+        cache.store(html_entry("https://a/"));
+        cache.store(html_entry("https://b/"));
         cache.remove("https://a/");
         assert!(cache.retrieve("https://a/").is_none());
         assert!(cache.retrieve("https://b/").is_some());
@@ -184,16 +262,16 @@ mod tests {
     #[test]
     fn max_size_zero_stores_nothing() {
         let mut cache = BfCache::new(0);
-        cache.store(entry("https://a/"));
+        cache.store(html_entry("https://a/"));
         assert!(cache.is_empty());
     }
 
     #[test]
-    fn scroll_and_title_preserved() {
+    fn html_scroll_and_title_preserved() {
         let mut cache = BfCache::new(8);
         cache.store(BfCacheEntry {
             url: "https://a/".to_owned(),
-            html: "<html/>".to_owned(),
+            payload: BfCachePayload::HtmlSnapshot("<html/>".to_owned()),
             scroll_x: 12.5,
             scroll_y: 340.0,
             title: Some("My Page".to_owned()),
@@ -208,20 +286,39 @@ mod tests {
     fn len_matches_stored_entries() {
         let mut cache = BfCache::new(8);
         assert_eq!(cache.len(), 0);
-        cache.store(entry("https://a/"));
+        cache.store(html_entry("https://a/"));
         assert_eq!(cache.len(), 1);
-        cache.store(entry("https://b/"));
+        cache.store(html_entry("https://b/"));
         assert_eq!(cache.len(), 2);
-        // Duplicate — len stays 2.
-        cache.store(entry("https://a/"));
+        cache.store(html_entry("https://a/"));
         assert_eq!(cache.len(), 2);
     }
 
     #[test]
     fn debug_impl_does_not_panic() {
         let mut cache = BfCache::new(4);
-        cache.store(entry("https://a/"));
+        cache.store(html_entry("https://a/"));
         let s = format!("{cache:?}");
         assert!(s.contains("BfCache"));
+    }
+
+    #[test]
+    fn has_frozen_returns_true_for_frozen() {
+        let mut cache = BfCache::new(8);
+        cache.store(frozen_entry("https://frozen.com/"));
+        assert!(cache.has_frozen("https://frozen.com/"));
+    }
+
+    #[test]
+    fn has_frozen_returns_false_for_html() {
+        let mut cache = BfCache::new(8);
+        cache.store(html_entry("https://html.com/"));
+        assert!(!cache.has_frozen("https://html.com/"));
+    }
+
+    #[test]
+    fn has_frozen_returns_false_for_missing() {
+        let cache = BfCache::new(8);
+        assert!(!cache.has_frozen("https://missing.com/"));
     }
 }

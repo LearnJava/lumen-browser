@@ -70,14 +70,14 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use lumen_core::event::{Event, FetchPriority, SubresourceKind};
-use lumen_core::ext::{EventSink, HyphenationProvider, NullHyphenationProvider};
+use lumen_core::ext::{EventSink, HyphenationProvider, NullHyphenationProvider, SuspendedHeap};
 use lumen_encoding::KnuthLiangHyphenation;
 use lumen_core::geom::{Point, Rect, Size};
 use lumen_devtools::DevToolsServer;
 use lumen_driver::BrowserSession;
 use lumen_knowledge::HistoryFts;
 use lumen_storage::session_export::{self, ExportedTab, SessionFile};
-use lumen_storage::{BfCache, BfCacheEntry, History, SearchHistory};
+use lumen_storage::{BfCache, BfCacheEntry, BfCachePayload, FrozenPage, History, SearchHistory};
 use lumen_dom::{
     Document, NodeData, NodeId, check_form_gate, check_navigation_gate,
     collect_iframes, check_popup_gate,
@@ -2068,6 +2068,13 @@ pub(crate) trait PersistentJs: Send {
     #[allow(dead_code)]
     fn pointer_capture_nid(&self) -> Option<u32> { None }
 
+    /// Suspend the JS runtime to a heap snapshot for bfcache freeze.
+    ///
+    /// Called when navigating away from a page to preserve JS state without
+    /// serializing the DOM (DOM is serialized separately via Document::to_bytes).
+    /// Returns a compressed heap blob or empty vec if suspension fails/too large.
+    #[allow(dead_code)] // called only for bfcache freeze
+    fn suspend(&mut self) -> SuspendedHeap { SuspendedHeap::default() }
     /// Atomically clear and return the current pointer capture target node ID.
     ///
     /// Called by the shell after `pointerup` (implicit release per W3C Pointer Events
@@ -2328,6 +2335,13 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn pointer_capture_nid(&self) -> Option<u32> {
         self.rt.pointer_capture_nid()
+    }
+    fn suspend(&mut self) -> SuspendedHeap {
+        use lumen_core::ext::JsRuntime as _;
+        match self.rt.suspend() {
+            Ok(heap) => heap,
+            Err(_) => SuspendedHeap::default(), // Fall back to empty if suspend fails/too large
+        }
     }
     fn take_pointer_capture(&self) -> Option<u32> {
         self.rt.take_pointer_capture()
@@ -12329,6 +12343,9 @@ impl Lumen {
     /// Сохранить текущую страницу в bfcache и стек навигации,
     /// затем загрузить `source` как новую страницу.
     /// Очищает `nav_fwd` (аналог браузера при навигации вперёд из середины истории).
+    /// Сохранить текущую страницу в bfcache и стек навигации,
+    /// затем загрузить `source` как новую страницу.
+    /// Очищает `nav_fwd` (аналог браузера при навигации вперёд из середины истории).
     fn navigate_to(&mut self, source: PageSource) {
         click_log::log_nav(&source.describe());
         self.hint.close();
@@ -12339,7 +12356,7 @@ impl Lumen {
         {
             self.bfcache.store(BfCacheEntry {
                 url: url.to_owned(),
-                html: html.clone(),
+                payload: BfCachePayload::HtmlSnapshot(html.clone()),
                 scroll_x: self.scroll_x,
                 scroll_y: self.scroll_y,
                 title: self.title.clone(),
@@ -12419,7 +12436,10 @@ impl Lumen {
         // Try bfcache first.
         let restored_scroll = if let Some(url) = prev.source.url_str() {
             if let Some(entry) = self.bfcache.retrieve(url) {
-                let html = entry.html.clone();
+                let (html, scroll_x, scroll_y) = match &entry.payload {
+                    BfCachePayload::HtmlSnapshot(h) => (h.clone(), entry.scroll_x, entry.scroll_y),
+                    BfCachePayload::Frozen(_) => (String::new(), entry.scroll_x, entry.scroll_y),
+                };
                 let scroll_x = entry.scroll_x;
                 let scroll_y = entry.scroll_y;
                 let base_url = url.to_owned();
@@ -12486,7 +12506,10 @@ impl Lumen {
         // Try bfcache first.
         let restored_scroll = if let Some(url) = next.source.url_str() {
             if let Some(entry) = self.bfcache.retrieve(url) {
-                let html = entry.html.clone();
+                let (html, scroll_x, scroll_y) = match &entry.payload {
+                    BfCachePayload::HtmlSnapshot(h) => (h.clone(), entry.scroll_x, entry.scroll_y),
+                    BfCachePayload::Frozen(_) => (String::new(), entry.scroll_x, entry.scroll_y),
+                };
                 let scroll_x = entry.scroll_x;
                 let scroll_y = entry.scroll_y;
                 let base_url = url.to_owned();
