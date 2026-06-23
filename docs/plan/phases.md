@@ -139,7 +139,7 @@
 - **Цель:** стабильный релиз.
 
 ### Фаза 4 — После 1.0
-- Подмножество WebGL (по запросам). 🟡 Базовый функциональный контекст готов (§7F): `canvas.getContext('webgl')` → `lumen_paint::SoftwareWebGl` (CPU-растеризатор), buffers/shaders/programs/attribs/uniform4f/drawArrays/readPixels. GLSL не исполняется — плоская заливка цветом из uniform4f.
+- Подмножество WebGL (по запросам). 🟡 Базовый функциональный контекст готов (§7F): `canvas.getContext('webgl')` → `lumen_paint::SoftwareWebGl` (CPU-растеризатор), buffers/shaders/programs/attribs/uniforms/drawArrays/readPixels. **GLSL ES исполняется** — `crates/engine/paint/src/glsl.rs` (~1700 строк: парсер + интерпретатор; `draw_arrays_shaded` гоняет `exec_main` для vertex-шейдера и `run_fragment_at` для fragment-шейдера). Остаточный gap: фреймбуфер `SoftwareWebGl::pixels()` НЕ презентится в страничный `<canvas>` — результат доступен только через `readPixels` (в отличие от WebGPU-пути `canvas2d::present_rgba`). Доделать: present-путь webgl→canvas (аналог U-4c Stage 3 для WebGPU).
 - Mobile (Android через NDK; iOS — упрётся в Apple-policy).
 - **Sync через E2E (§12.11)** — self-host или P2P. Mobile-клиент критичен для real use-case.
 - **Граф знаний (§12.9)** — визуализация коллекции.

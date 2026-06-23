@@ -90,3 +90,67 @@ git worktree remove .claude/worktrees/<kebab-name>
 - [ ] Тесты проходят
 - [ ] В STATUS-PN.md задача перенесена в "Recent"
 ```
+
+---
+
+## Индекс фазовых задач
+
+Декомпозиция `docs/plan/phases.md` (Фазы 3 и 4) в отдельные task-файлы. Каждый
+файл — Goal / Current state / Entry points (реальные `file:line`) / Steps / Tests
+/ Definition of done. Многие пункты уже частично реализованы — DoD каждого файла
+помечает фактический остаток (см. также расхождения плана с кодом ниже).
+
+### Фаза 3 — v1.0 (Tier 2 Web APIs, движок-замена, безопасность)
+
+| Файл | Задача |
+|---|---|
+| [ph3-tier2-web-apis.md](ph3-tier2-web-apis.md) | Tier 2 Web APIs — зонтичный индекс |
+| [ph3-indexeddb.md](ph3-indexeddb.md) | IndexedDB |
+| [ph3-service-workers.md](ph3-service-workers.md) | Service Worker runtime |
+| [ph3-websockets-sse-fetch.md](ph3-websockets-sse-fetch.md) | WebSockets + SSE + Fetch/AbortController |
+| [ph3-web-animations-api.md](ph3-web-animations-api.md) | Web Animations API runtime |
+| [ph3-navigation-history-api.md](ph3-navigation-history-api.md) | Navigation API + History API |
+| [ph3-contenteditable-selection.md](ph3-contenteditable-selection.md) | contenteditable + Input Events L2 + Selection/Range |
+| [ph3-bfcache.md](ph3-bfcache.md) | Back/forward cache (bfcache) |
+| [ph3-extensions.md](ph3-extensions.md) | Extensions (minimal native format) |
+| [ph3-permission-download-ui.md](ph3-permission-download-ui.md) | Permission prompt UI + Download UI |
+| [ph3-spell-check.md](ph3-spell-check.md) | Spell check (Hunspell) |
+| [ph3-print-pipeline.md](ph3-print-pipeline.md) | Print pipeline (pagination + vector PDF + preview) |
+| [ph3-color-management.md](ph3-color-management.md) | Color management (Display P3 / Rec2020 / wide gamut) |
+| [ph3-variable-fonts.md](ph3-variable-fonts.md) | Variable fonts (axes runtime) |
+| [ph3-woff2-webfonts.md](ph3-woff2-webfonts.md) | WebFonts (@font-face + WOFF2) |
+| [ph3-http3.md](ph3-http3.md) | HTTP/3 (QUIC) |
+| [ph3-tls-security-hardening.md](ph3-tls-security-hardening.md) | TLS/security hardening (OCSP+CT+cert UI, Negotiate/NTLM+mTLS) |
+| [ph3-gpu-process-sandbox.md](ph3-gpu-process-sandbox.md) | GPU process / sandbox |
+| [ph3-gc-js-dom.md](ph3-gc-js-dom.md) | GC integration JS ↔ DOM (cross-boundary cycles) |
+| [ph3-v8-migration.md](ph3-v8-migration.md) | Migrate JS engine to V8 (rusty_v8) |
+| [ph3-cdp-shim.md](ph3-cdp-shim.md) | lumen-cdp-shim (Chrome DevTools Protocol subset) |
+| [ph3-ai-module.md](ph3-ai-module.md) | AI module (lumen-ai) + semantic bookmarks |
+
+### Фаза 4 — пост-v1.0 (платформы, экосистема, знание)
+
+| Файл | Задача |
+|---|---|
+| [ph4-webgl.md](ph4-webgl.md) | WebGL subset (GLSL execution) |
+| [ph4-knowledge-graph.md](ph4-knowledge-graph.md) | Knowledge graph visualization |
+| [ph4-e2e-sync.md](ph4-e2e-sync.md) | E2E-encrypted sync |
+| [ph4-ui-localization.md](ph4-ui-localization.md) | UI localization |
+| [ph4-mobile.md](ph4-mobile.md) | Mobile (Android NDK) |
+
+### Расхождения плана с кодом (найдены при декомпозиции)
+
+Многие «будущие» пункты уже частично реализованы — DoD соответствующих файлов
+помечает устаревшие записи. Ключевые:
+
+- **WebGL** — GLSL ES интерпретатор уже написан (`crates/engine/paint/src/glsl.rs`),
+  шейдеры исполняются; реальный gap — фреймбуфер `SoftwareWebGl::pixels()` не
+  выводится на экран (только через `readPixels`).
+- **IndexedDB / Service Workers / WebSockets / SSE / Fetch** — работают end-to-end
+  против реального `HttpClient`, не заглушки. Остаток = hardening.
+- **Variable fonts** — реально ~90%: femtovg-бэкенд (окно) рендерит default
+  instance, варьируются только CPU/wgpu пути.
+- **bfcache / extensions / permissions / downloads / cert UI / Navigation API /
+  AiBackend** — у всех рабочие слои/трейты; файлы описывают точечный остаток.
+- **Хранение в OS-каталогах** (`%APPDATA%`) вместо портативного `<exe>/data/`:
+  `lumen_idb_dir` (`main.rs:4304`), `extensions_dir` (`extensions/mod.rs:80`) —
+  заведено как [BUG-235](../../BUGS.md), помечено в task-файлах как Step 1.
