@@ -64,9 +64,14 @@ fn body_layout_box(mut root: lumen_layout::LayoutBox) -> lumen_layout::LayoutBox
     root
 }
 
+// Neutralise the UA `body { margin: 8px }` (HTML Rendering §14.3.3, BUG-204) so
+// these snapshots reflect element geometry, not the body margin — exactly as a
+// real page does with `* { margin: 0 }`.
+const BODY_RESET: &str = "body{margin:0}";
+
 fn build(html: &str, css: &str, width: f32) -> String {
     let doc = lumen_html_parser::parse(html);
-    let sheet = lumen_css_parser::parse(css);
+    let sheet = lumen_css_parser::parse(&format!("{BODY_RESET}{css}"));
     let tree = lumen_layout::layout(&doc, &sheet, Size::new(width, 600.0));
     lumen_layout::serialize_layout_tree(&body_layout_box(tree))
 }
@@ -80,7 +85,7 @@ impl lumen_layout::TextMeasurer for Fixed8 {
 
 fn build_measured(html: &str, css: &str, width: f32) -> String {
     let doc = lumen_html_parser::parse(html);
-    let sheet = lumen_css_parser::parse(css);
+    let sheet = lumen_css_parser::parse(&format!("{BODY_RESET}{css}"));
     let tree = lumen_layout::layout_measured(&doc, &sheet, Size::new(width, 600.0), &Fixed8);
     lumen_layout::serialize_layout_tree(&body_layout_box(tree))
 }

@@ -102,7 +102,9 @@ mod tests {
 
     fn build(html: &str, css: &str) -> LayoutBox {
         let doc = lumen_html_parser::parse(html);
-        let sheet = lumen_css_parser::parse(css);
+        // Neutralise UA `body { margin: 8px }` (HTML Rendering §14.3.3, BUG-204)
+        // so snap offsets are measured from the page origin.
+        let sheet = lumen_css_parser::parse(&format!("body{{margin:0}}{css}"));
         layout(&doc, &sheet, Size::new(800.0, 600.0))
     }
 

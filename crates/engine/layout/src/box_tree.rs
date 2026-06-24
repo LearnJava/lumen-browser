@@ -10686,7 +10686,7 @@ mod tests {
     fn margin_auto_left_only_pushes_to_right() {
         // margin-left: auto, margin-right: 0 → element flush-right.
         let html = r#"<div id="box"></div>"#;
-        let css = "#box { width: 200px; height: 50px; margin-left: auto; margin-right: 0; }";
+        let css = "body{margin:0}#box { width: 200px; height: 50px; margin-left: auto; margin-right: 0; }";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
         let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
@@ -10699,7 +10699,7 @@ mod tests {
     fn margin_auto_right_only_no_x_shift() {
         // margin-right: auto, margin-left: 20px → element at x=20.
         let html = r#"<div id="box"></div>"#;
-        let css = "#box { width: 200px; height: 50px; margin-left: 20px; margin-right: auto; }";
+        let css = "body{margin:0}#box { width: 200px; height: 50px; margin-left: 20px; margin-right: auto; }";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
         let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
@@ -10712,7 +10712,7 @@ mod tests {
     fn margin_auto_no_explicit_width_fills_container() {
         // Without explicit width, auto margins resolve to 0 (width takes remaining).
         let html = r#"<div id="box"></div>"#;
-        let css = "#box { height: 50px; margin: 0 auto; }";
+        let css = "body{margin:0}#box { height: 50px; margin: 0 auto; }";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
         let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
@@ -10727,7 +10727,7 @@ mod tests {
         // position:sticky element with margin: 20px auto 0 in 1022px container.
         // Static view: sticky behaves like normal flow → centering applies.
         let html = r#"<div id="wrap"><div id="sticky"></div></div>"#;
-        let css = "#wrap { width: 1022px; position: relative; } \
+        let css = "body{margin:0} #wrap { width: 1022px; position: relative; } \
                    #sticky { position: sticky; top: 10px; width: 600px; height: 60px; margin: 20px auto 0; }";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
@@ -10776,7 +10776,7 @@ mod tests {
     fn margin_auto_float_not_centered() {
         // float:left with margin: 0 auto must NOT be centered — floats ignore auto margins.
         let html = r#"<div id="box"></div>"#;
-        let css = "#box { float: left; width: 100px; height: 50px; margin: 0 auto; }";
+        let css = "body{margin:0}#box { float: left; width: 100px; height: 50px; margin: 0 auto; }";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
         let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
@@ -12116,7 +12116,8 @@ mod tests {
                  </div>",
             ),
             &lumen_css_parser::parse(
-                ".cell{position:relative;width:300px;height:300px;overflow:hidden}\
+                "body{margin:0}\
+                 .cell{position:relative;width:300px;height:300px;overflow:hidden}\
                  .fl{float:left;width:120px;height:120px;background:#ed8936}\
                  .cl{clear:both;margin-top:30px;height:80px;background:#4fd1c5}",
             ),
@@ -12141,7 +12142,8 @@ mod tests {
                  </div>",
             ),
             &lumen_css_parser::parse(
-                ".cell{position:relative;width:300px;height:300px;overflow:hidden}\
+                "body{margin:0}\
+                 .cell{position:relative;width:300px;height:300px;overflow:hidden}\
                  .f{float:left;width:130px;height:90px;margin:8px;background:#4299e1}\
                  .g{float:left;width:130px;height:90px;margin:8px;background:#fc8181}",
             ),
@@ -13439,7 +13441,7 @@ mod tests {
                     <use href=\"#r1\" x=\"20\" y=\"20\"/>\
                     <use href=\"#r1\" x=\"100\" y=\"60\"/></svg>";
         let doc = lumen_html_parser::parse(html);
-        let sheet = lumen_css_parser::parse("");
+        let sheet = lumen_css_parser::parse("body{margin:0}");
         let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
 
         fn collect_rects(b: &super::LayoutBox, acc: &mut Vec<super::Rect>) {

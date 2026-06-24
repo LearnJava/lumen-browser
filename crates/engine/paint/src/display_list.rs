@@ -7158,9 +7158,14 @@ mod tests {
         assert!((c.br_y - 45.0).abs() < 1e-4);
     }
 
+    /// Neutralise the UA `body { margin: 8px }` (HTML Rendering §14.3.3, BUG-204)
+    /// so display-list coordinates reflect the element under test, not the body
+    /// margin — exactly as a real page does with `* { margin: 0 }`.
+    const BODY_RESET: &str = "body{margin:0}";
+
     fn build(html: &str, css: &str) -> DisplayList {
         let doc = lumen_html_parser::parse(html);
-        let sheet = lumen_css_parser::parse(css);
+        let sheet = lumen_css_parser::parse(&format!("{BODY_RESET}{css}"));
         let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
         build_display_list(&tree)
     }
@@ -7174,7 +7179,7 @@ mod tests {
 
     fn build_wrapped(html: &str, css: &str, width: f32) -> DisplayList {
         let doc = lumen_html_parser::parse(html);
-        let sheet = lumen_css_parser::parse(css);
+        let sheet = lumen_css_parser::parse(&format!("{BODY_RESET}{css}"));
         let tree = lumen_layout::layout_measured(&doc, &sheet, Size::new(width, 600.0), &Fixed8);
         build_display_list(&tree)
     }
