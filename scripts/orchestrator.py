@@ -788,8 +788,324 @@ def announce_fallback(developer: str, reason: str, model: str) -> None:
     log(developer, "")
 
 
-def task_prompt(developer: str) -> str:
+# =====================================================================
+# Делегирование в Laguna M.1 (poolside)
+# =====================================================================
+#
+# Два режима, выбираются флагом `--laguna {assist,solo}`:
+#
+#   assist — Claude остаётся водителем (читает STATUS, правит файлы,
+#            гоняет cargo/git, зовёт /lumen-task-finish), но САМО написание
+#            кода делегирует Laguna через `python .tmp/laguna.py`. Это лишь
+#            добавка к промпту — никакого нового исполнения.
+#
+#   solo   — оркестратор сам становится агент-харнессом: ведёт многоходовый
+#            диалог с Laguna по текстовому tool-протоколу (READ/LIST/WRITE/
+#            BASH/DONE), применяет правки, гоняет `cargo check`, при ошибке
+#            возвращает их Laguna, на успехе коммитит. Claude не участвует.
+#
+# ПРИВАТНОСТЬ: всё, что уходит в Laguna (включая содержимое исходников при
+# READ в solo-режиме), публикуется на серверах poolside. Режимы включаются
+# только явным флагом. См. memory feedback_laguna_delegation_triggers.
+
+LAGUNA_BASE_URL = "https://inference.poolside.ai/v1"
+LAGUNA_MODEL = "poolside/laguna-m.1"
+LAGUNA_ENV = PROJECT_DIR / ".tmp" / "poolside.env"
+LAGUNA_MAX_ITERS = 24
+
+# Добавка к промпту Claude в режиме assist.
+LAGUNA_ASSIST_NOTE = (
+    " РЕЖИМ LAGUNA(assist): код НЕ пиши сам — делегируй написание Laguna M.1. "
+    "Сформулируй точное ТЗ (нужные сигнатуры, путь к файлу, ограничения) и вызови "
+    "`python .tmp/laguna.py \"<ТЗ>\"` (добавь --think для сложной логики). Получив код — "
+    "САМ проверь его: cargo check/clippy/test -p <crate>; при ошибках отправь на доработку "
+    "тем же вызовом с описанием ошибки. Затем интегрируй по правилам Lumen и закоммить. "
+    "Финальная сборка, тесты и ревью — всегда твои, наружу шли только не-секретный код."
+)
+
+
+def _load_poolside_key() -> str | None:
+    """Достать POOLSIDE_API_KEY из env или .tmp/poolside.env (как laguna.py)."""
+    if os.environ.get("POOLSIDE_API_KEY"):
+        return os.environ["POOLSIDE_API_KEY"]
+    if LAGUNA_ENV.exists():
+        for line in LAGUNA_ENV.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("export "):
+                line = line[len("export "):]
+            if "=" in line and not line.startswith("#"):
+                k, v = line.split("=", 1)
+                if k.strip() == "POOLSIDE_API_KEY":
+                    return v.strip().strip('"').strip("'")
+    return None
+
+
+class LagunaClient:
+    """Тонкий клиент к Laguna M.1 поверх OpenAI SDK (многоходовый, in-process).
+
+    Сеть тут работает (оркестратор живёт в реальном cmd-окне, а не в песочнице
+    Claude Code). enable_thinking=false по умолчанию — иначе reasoning-модель
+    тратит минуты на thinking перед ответом.
+    """
+
+    def __init__(self) -> None:
+        from openai import OpenAI  # ленивый импорт: нужен только в laguna-режимах
+
+        key = _load_poolside_key()
+        if not key:
+            raise RuntimeError(
+                "POOLSIDE_API_KEY не найден (ни в env, ни в .tmp/poolside.env)"
+            )
+        self.client = OpenAI(api_key=key, base_url=LAGUNA_BASE_URL)
+
+    def chat(self, messages: list[dict], think: bool = False, max_tokens: int = 8000) -> str:
+        """Один проход диалога. Возвращает собранный content (без reasoning)."""
+        resp = self.client.chat.completions.create(
+            model=LAGUNA_MODEL,
+            messages=messages,
+            stream=True,
+            max_completion_tokens=max_tokens,
+            temperature=0.2,
+            extra_body={"chat_template_kwargs": {"enable_thinking": think}},
+        )
+        parts: list[str] = []
+        for chunk in resp:
+            if chunk.choices and chunk.choices[0].delta.content is not None:
+                parts.append(chunk.choices[0].delta.content)
+        return "".join(parts)
+
+
+# --- Текстовый tool-протокол для solo-режима ---
+
+LAGUNA_CMD_RE = re.compile(r"^(READ|LIST|WRITE|BASH|DONE)\b(.*)$")
+# Что Laguna разрешено запускать через BASH: только чтение + сборка/тесты.
+LAGUNA_BASH_ALLOW = re.compile(
+    r"^\s*(cargo\s+(check|test|clippy|build|fmt)|grep|rg|ls|git\s+(status|diff|log|branch))\b"
+)
+# Явный чёрный список разрушительного.
+LAGUNA_BASH_DENY = re.compile(
+    r"(\brm\b|\bdel\b|>>?|\bpush\b|reset\s+--hard|checkout|--force|\brebase\b|clean\s+-|:\s*>)",
+    re.IGNORECASE,
+)
+
+
+def _safe_path(rel: str) -> Path | None:
+    """Разрешить путь только внутри корня проекта (рабочая граница)."""
+    try:
+        p = (PROJECT_DIR / rel.strip()).resolve()
+    except (OSError, ValueError):
+        return None
+    if p != PROJECT_DIR and PROJECT_DIR not in p.parents:
+        return None
+    return p
+
+
+def parse_laguna_commands(text: str) -> list[tuple[str, str, str | None]]:
+    """Разобрать ответ Laguna в список (cmd, arg, body).
+
+    WRITE забирает следующий за ним fenced-блок ```...``` как body (полное
+    новое содержимое файла). Остальные команды — однострочные, body=None.
+    """
+    lines = text.splitlines()
+    cmds: list[tuple[str, str, str | None]] = []
+    i = 0
+    while i < len(lines):
+        m = LAGUNA_CMD_RE.match(lines[i].strip())
+        if not m:
+            i += 1
+            continue
+        cmd, arg = m.group(1), m.group(2).strip()
+        if cmd == "WRITE":
+            j = i + 1
+            while j < len(lines) and not lines[j].lstrip().startswith("```"):
+                j += 1
+            if j < len(lines):
+                k = j + 1
+                buf: list[str] = []
+                while k < len(lines) and not lines[k].lstrip().startswith("```"):
+                    buf.append(lines[k])
+                    k += 1
+                cmds.append((cmd, arg, "\n".join(buf)))
+                i = k + 1
+                continue
+        cmds.append((cmd, arg, None))
+        i += 1
+    return cmds
+
+
+def _laguna_do_read(arg: str) -> str:
+    p = _safe_path(arg)
+    if p is None or not p.is_file():
+        return f"READ {arg}: файл не найден или вне проекта."
+    text = p.read_text(encoding="utf-8", errors="replace")
+    if len(text) > 16000:
+        text = text[:16000] + "\n…(обрезано)…"
+    return f"=== READ {arg} ===\n{text}"
+
+
+def _laguna_do_list(arg: str) -> str:
+    pattern = arg or "*"
+    try:
+        hits = sorted(str(p.relative_to(PROJECT_DIR)) for p in PROJECT_DIR.glob(pattern))
+    except (ValueError, OSError) as e:
+        return f"LIST {arg}: ошибка ({e})"
+    return f"=== LIST {arg} ({len(hits)}) ===\n" + "\n".join(hits[:200])
+
+
+def _laguna_do_write(developer: str, arg: str, body: str | None, written: set[str]) -> str:
+    if body is None:
+        return f"WRITE {arg}: нет fenced-блока с содержимым — пропущено."
+    p = _safe_path(arg)
+    if p is None:
+        return f"WRITE {arg}: путь вне проекта — отказано."
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(body, encoding="utf-8")
+    written.add(str(p.relative_to(PROJECT_DIR)))
+    log(developer, f"  Laguna записал: {arg} ({len(body)} симв.)")
+    return f"WRITE {arg}: ок ({len(body)} симв.)."
+
+
+def _laguna_do_bash(developer: str, arg: str) -> str:
+    if LAGUNA_BASH_DENY.search(arg) or not LAGUNA_BASH_ALLOW.match(arg):
+        return f"BASH {arg}: команда запрещена (разрешены cargo/grep/rg/ls/git status|diff|log)."
+    log(developer, f"  $ {arg[:200]}")
+    try:
+        r = subprocess.run(
+            arg, shell=True, cwd=PROJECT_DIR, capture_output=True,
+            text=True, encoding="utf-8", errors="replace", timeout=600,
+        )
+    except subprocess.TimeoutExpired:
+        return f"BASH {arg}: таймаут 600с."
+    out = (r.stdout or "") + (r.stderr or "")
+    if len(out) > 12000:
+        out = out[:12000] + "\n…(обрезано)…"
+    return f"=== BASH {arg} (exit {r.returncode}) ===\n{out}"
+
+
+def _git_current_branch() -> str:
+    r = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=PROJECT_DIR, capture_output=True, text=True,
+    )
+    return r.stdout.strip()
+
+
+def _laguna_commit(developer: str, msg: str, paths: set[str]) -> None:
+    """Закоммитить написанные Laguna файлы. На main — сначала отводит ветку."""
+    branch = _git_current_branch()
+    if branch == "main":
+        num = developer[1:] if developer.startswith("P") else developer
+        new_branch = f"p{num}-laguna-{datetime.now().strftime('%H%M%S')}"
+        subprocess.run(["git", "checkout", "-b", new_branch], cwd=PROJECT_DIR)
+        log(developer, f"  Был на main — отвёл ветку {new_branch} (прямой коммит в main запрещён).")
+    if paths:
+        subprocess.run(["git", "add", *paths], cwd=PROJECT_DIR)
+    full = (
+        msg
+        + "\n\nНаписано Laguna M.1 (poolside) через solo-оркестратор; "
+        "сборка проверена cargo check.\n\n"
+        "Co-Authored-By: Laguna M.1 (poolside) <noreply@poolside.ai>\n"
+    )
+    subprocess.run(["git", "commit", "-m", full], cwd=PROJECT_DIR)
+
+
+def laguna_solo_system_prompt(developer: str) -> str:
+    return (
+        f"Ты автономный разработчик {developer} в проекте Lumen — браузерный движок на Rust. "
+        f"Корень проекта: {PROJECT_DIR}. Прямого доступа к файлам у тебя НЕТ — взаимодействуй "
+        "ТОЛЬКО командами, каждая с НОВОЙ строки, в начале строки:\n"
+        "  READ <путь>            — прислать содержимое файла (путь относительно корня)\n"
+        "  LIST <glob>            — список файлов по маске (напр. crates/**/*.rs)\n"
+        "  WRITE <путь>           — СЛЕДУЮЩИМ идёт один ```-блок с ПОЛНЫМ новым содержимым файла\n"
+        "  BASH <команда>         — только cargo check|test|clippy|build, grep, rg, ls, git status|diff|log\n"
+        "  DONE <текст коммита>   — задача готова; я соберу и закоммичу\n\n"
+        "В одном ответе можно несколько команд. После WRITE я применю файл. "
+        "ПЕРЕД WRITE всегда сделай READ изменяемого файла — WRITE перезаписывает файл целиком, "
+        "частичный текст уничтожит остальное. Соблюдай стиль Lumen: edition 2024, без unwrap/panic "
+        "в проде, /// doc-комменты на pub. Перед DONE прогони `cargo check`. "
+        "Не пиши прозу вне команд — она игнорируется. "
+        f"Начни с: READ STATUS-{developer}.md"
+    )
+
+
+def run_laguna_solo(developer: str, task_number: int, think: bool = False) -> bool:
+    """Solo-режим: оркестратор ведёт агент-петлю поверх Laguna без Claude.
+
+    Возвращает True при успешном завершении (cargo check зелёный + коммит),
+    False при исчерпании итераций или фатальной ошибке клиента.
+    """
+    try:
+        client = LagunaClient()
+    except (RuntimeError, ImportError) as e:
+        log(developer, f"Laguna недоступна: {e}")
+        return False
+
+    messages: list[dict] = [
+        {"role": "system", "content": laguna_solo_system_prompt(developer)},
+        {
+            "role": "user",
+            "content": (
+                f"Возьми текущую задачу разработчика {developer}: прочитай STATUS-{developer}.md, "
+                "определи первую задачу-указатель, реализуй её end-to-end. Когда cargo check зелёный — DONE."
+            ),
+        },
+    ]
+    written: set[str] = set()
+
+    for it in range(1, LAGUNA_MAX_ITERS + 1):
+        log(developer, f"Laguna solo: итерация {it}/{LAGUNA_MAX_ITERS}...")
+        set_jobstatus(developer, "laguna-solo", f"задача #{task_number}, итер. {it}")
+        try:
+            reply = client.chat(messages, think=think)
+        except Exception as e:  # сетевые/SDK сбои — подождать и повторить
+            log(developer, f"  Ошибка Laguna API: {e}. Пауза 20с.")
+            time.sleep(20)
+            continue
+
+        messages.append({"role": "assistant", "content": reply})
+        cmds = parse_laguna_commands(reply)
+        if not cmds:
+            messages.append({
+                "role": "user",
+                "content": "Не нашёл ни одной команды (READ/LIST/WRITE/BASH/DONE). Повтори в формате протокола.",
+            })
+            continue
+
+        feedback: list[str] = []
+        commit_msg: str | None = None
+        for cmd, arg, body in cmds:
+            if cmd == "READ":
+                feedback.append(_laguna_do_read(arg))
+            elif cmd == "LIST":
+                feedback.append(_laguna_do_list(arg))
+            elif cmd == "WRITE":
+                feedback.append(_laguna_do_write(developer, arg, body, written))
+            elif cmd == "BASH":
+                feedback.append(_laguna_do_bash(developer, arg))
+            elif cmd == "DONE":
+                commit_msg = arg or f"{developer}: задача #{task_number} (Laguna)"
+
+        if commit_msg is not None:
+            log(developer, "  Laguna заявил DONE — проверяю cargo check...")
+            check = _laguna_do_bash(developer, "cargo check")
+            if "exit 0" in check.splitlines()[0]:
+                _laguna_commit(developer, commit_msg, written)
+                log(developer, "Laguna solo: задача завершена и закоммичена.")
+                return True
+            feedback.append("DONE ОТКЛОНЁН: cargo check не прошёл:\n" + check + "\nИсправь и снова DONE.")
+
+        joined = "\n\n".join(feedback)
+        if len(joined) > 24000:
+            joined = joined[:24000] + "\n…(обрезано)…"
+        messages.append({"role": "user", "content": joined})
+
+    log(developer, f"Laguna solo: исчерпан лимит итераций ({LAGUNA_MAX_ITERS}). Останов.")
+    return False
+
+
+def task_prompt(developer: str, laguna_mode: str | None = None) -> str:
     """Стандартный промпт для старта задачи с чистым диалогом."""
+    note = LAGUNA_ASSIST_NOTE if laguna_mode == "assist" else ""
     if developer == "P3":
         return (
             "Ты разработчик P3 (только баг-фиксы). "
@@ -798,19 +1114,20 @@ def task_prompt(developer: str) -> str:
             "Если нет — возьми ПЕРВЫЙ баг из 'Next' (только один, не больше). "
             "Когда баг исправлен — вызови /lumen-task-finish. "
             "ВАЖНО: после /lumen-task-finish немедленно заверши сессию. "
-            "Не бери следующий баг. Один баг = одна сессия."
+            "Не бери следующий баг. Один баг = одна сессия." + note
         )
     return (
         f"Ты разработчик {developer}. "
         f"Прочитай STATUS-{developer}.md. "
         f"Если есть 'In progress' — продолжи эту задачу. "
         f"Если нет — возьми первую задачу из 'Next'. "
-        f"Когда задача завершена — вызови /lumen-task-finish."
+        f"Когда задача завершена — вызови /lumen-task-finish." + note
     )
 
 
-def resume_after_error_prompt(developer: str) -> str:
+def resume_after_error_prompt(developer: str, laguna_mode: str | None = None) -> str:
     """Промпт для возобновления сессии, прерванной ошибкой (rate limit / 403 / сбой CLI)."""
+    note = LAGUNA_ASSIST_NOTE if laguna_mode == "assist" else ""
     base = (
         "Сессия была прервана ошибкой (rate limit / auth error / сбой CLI). "
         "Выполни git status, сверься с историей диалога выше и продолжи текущую "
@@ -820,8 +1137,8 @@ def resume_after_error_prompt(developer: str) -> str:
         return base + (
             " ВАЖНО: после /lumen-task-finish немедленно заверши сессию. "
             "Не бери следующий баг. Один баг = одна сессия."
-        )
-    return base
+        ) + note
+    return base + note
 
 
 def run_task_loop(
@@ -830,8 +1147,14 @@ def run_task_loop(
     fallback_preset: str | None = None,
     force_new: bool = False,
     initial_model: str | None = None,
+    laguna_mode: str | None = None,
 ):
     """Цикл задач для одного разработчика.
+
+    laguna_mode — режим делегирования в Laguna M.1:
+      None     — обычный Claude-цикл;
+      "assist" — Claude-водитель, но код пишет через .tmp/laguna.py (добавка к промпту);
+      "solo"   — Claude не используется: задачу гонит run_laguna_solo() поверх Laguna.
 
     Любая ошибка внутри задачи (rate limit, 403, ненулевой код выхода)
     не бросает задачу: сессия возобновляется через `claude --resume`
@@ -857,6 +1180,10 @@ def run_task_loop(
     log(developer, f"Старт. Проект: {PROJECT_DIR}")
     if initial_model:
         log(developer, f"Стартовая модель: {initial_model}")
+    if laguna_mode:
+        log(developer, f"Режим Laguna: {laguna_mode}")
+        if laguna_mode == "solo":
+            log(developer, "  ВНИМАНИЕ: solo шлёт исходники в Laguna (poolside) — всё публикуется на их серверах.")
 
     def attempt_task(task_number: int, prompt: str, resume_id: str | None) -> bool:
         """Выполнить задачу #task_number с повторами до успеха.
@@ -896,7 +1223,7 @@ def run_task_loop(
             saved_id = state.get("session_id") if state else None
             if saved_id:
                 resume_id = saved_id
-                prompt = resume_after_error_prompt(developer)
+                prompt = resume_after_error_prompt(developer, laguna_mode)
 
             if rate_limited:
                 generic_failures = 0
@@ -923,7 +1250,7 @@ def run_task_loop(
                     clear_session_state(developer)
                     save_session_state(developer, task_number)
                     resume_id = None
-                    prompt = task_prompt(developer)
+                    prompt = task_prompt(developer, laguna_mode)
                     generic_failures = 0
                 log(developer, "Пауза 30 секунд перед повтором...")
                 time.sleep(30)
@@ -940,8 +1267,9 @@ def run_task_loop(
         else:
             log(developer, "Флаг --new: сохранённого состояния нет, стартую с нуля.")
 
-    # --- Восстановление после краша ---
-    existing = load_session_state(developer)
+    # --- Восстановление после краша (только для Claude-режимов; solo не
+    #     ведёт claude-сессию, восстанавливать нечего — задача начнётся заново) ---
+    existing = load_session_state(developer) if laguna_mode != "solo" else None
     if existing:
         task_number = existing.get("task_number", 1)
         session_id = existing.get("session_id")
@@ -999,11 +1327,21 @@ def run_task_loop(
         log(developer, f"=== Задача #{task_count} ===")
         set_jobstatus(developer, "работает", f"задача #{task_count}")
 
+        if laguna_mode == "solo":
+            # Solo: оркестратор сам агент поверх Laguna, без claude и без
+            # .session-файла (нечего возобновлять через --resume).
+            log(developer, "Запуск Laguna (solo)...")
+            if not run_laguna_solo(developer, task_count):
+                task_count -= 1  # задача не завершилась — останов цикла
+                break
+            log(developer, f"Задача #{task_count} завершена (Laguna solo).")
+            continue
+
         # Записать состояние ДО запуска — чтобы не потерять при краше
         save_session_state(developer, task_count)
 
         log(developer, "Запуск claude...")
-        if not attempt_task(task_count, task_prompt(developer), None):
+        if not attempt_task(task_count, task_prompt(developer, laguna_mode), None):
             task_count -= 1  # запуск claude не состоялся
             break
         log(developer, f"Задача #{task_count} завершена.")
@@ -1078,6 +1416,18 @@ def main():
         ),
     )
     parser.add_argument(
+        "--laguna",
+        type=str,
+        default=None,
+        choices=["assist", "solo"],
+        help=(
+            "Делегировать задачи в Laguna M.1 (poolside). "
+            "assist — Claude остаётся водителем, но код пишет через .tmp/laguna.py; "
+            "solo — оркестратор сам ведёт агент-петлю поверх Laguna без Claude "
+            "(шлёт исходники в poolside — всё публикуется). Требует .tmp/poolside.env."
+        ),
+    )
+    parser.add_argument(
         "--stop",
         nargs="+",
         choices=["P1", "P2", "P3", "P4", "P5"],
@@ -1129,6 +1479,7 @@ def main():
         # Один разработчик — в текущем окне
         run_task_loop(
             developers[0], args.max_tasks, fallback_model_preset, args.new, initial_model,
+            args.laguna,
         )
     else:
         # Несколько — каждый в отдельном окне консоли.
@@ -1138,9 +1489,10 @@ def main():
         fb_arg = f" --fallback-model {fallback_model_preset}" if fallback_model_preset else ""
         new_arg = " --new" if args.new else ""
         model_arg = f" --model {initial_model}" if initial_model else ""
+        laguna_arg = f" --laguna {args.laguna}" if args.laguna else ""
 
         for dev in developers:
-            cmd = f'python "{script}" {dev}{max_arg}{fb_arg}{new_arg}{model_arg}'
+            cmd = f'python "{script}" {dev}{max_arg}{fb_arg}{new_arg}{model_arg}{laguna_arg}'
             title = f"Lumen {dev}"
 
             if os.name == "nt":
