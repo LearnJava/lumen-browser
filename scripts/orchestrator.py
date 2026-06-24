@@ -889,13 +889,13 @@ LAGUNA_BASH_DENY = re.compile(
 )
 
 
-def _safe_path(rel: str) -> Path | None:
-    """Разрешить путь только внутри корня проекта (рабочая граница)."""
+def _safe_path(rel: str, base: Path) -> Path | None:
+    """Разрешить путь только внутри `base` (рабочая граница — worktree)."""
     try:
-        p = (PROJECT_DIR / rel.strip()).resolve()
+        p = (base / rel.strip()).resolve()
     except (OSError, ValueError):
         return None
-    if p != PROJECT_DIR and PROJECT_DIR not in p.parents:
+    if p != base and base not in p.parents:
         return None
     return p
 
@@ -933,96 +933,156 @@ def parse_laguna_commands(text: str) -> list[tuple[str, str, str | None]]:
     return cmds
 
 
-def _laguna_do_read(arg: str) -> str:
-    p = _safe_path(arg)
+def _run_shell(cmd: str, base: Path, timeout: int = 900) -> tuple[int, str]:
+    """Низкоуровневый запуск команды в `base`. Возвращает (returncode, output)."""
+    try:
+        r = subprocess.run(
+            cmd, shell=True, cwd=base, capture_output=True,
+            text=True, encoding="utf-8", errors="replace", timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return 124, f"(таймаут {timeout}с)"
+    return r.returncode, (r.stdout or "") + (r.stderr or "")
+
+
+def _laguna_do_read(arg: str, base: Path) -> str:
+    p = _safe_path(arg, base)
     if p is None or not p.is_file():
-        return f"READ {arg}: файл не найден или вне проекта."
+        return f"READ {arg}: файл не найден или вне worktree."
     text = p.read_text(encoding="utf-8", errors="replace")
     if len(text) > 16000:
         text = text[:16000] + "\n…(обрезано)…"
     return f"=== READ {arg} ===\n{text}"
 
 
-def _laguna_do_list(arg: str) -> str:
+def _laguna_do_list(arg: str, base: Path) -> str:
     pattern = arg or "*"
     try:
-        hits = sorted(str(p.relative_to(PROJECT_DIR)) for p in PROJECT_DIR.glob(pattern))
+        hits = sorted(str(p.relative_to(base)) for p in base.glob(pattern))
     except (ValueError, OSError) as e:
         return f"LIST {arg}: ошибка ({e})"
     return f"=== LIST {arg} ({len(hits)}) ===\n" + "\n".join(hits[:200])
 
 
-def _laguna_do_write(developer: str, arg: str, body: str | None, written: set[str]) -> str:
+def _laguna_do_write(developer: str, arg: str, body: str | None, written: set[str], base: Path) -> str:
     if body is None:
         return f"WRITE {arg}: нет fenced-блока с содержимым — пропущено."
-    p = _safe_path(arg)
+    p = _safe_path(arg, base)
     if p is None:
-        return f"WRITE {arg}: путь вне проекта — отказано."
+        return f"WRITE {arg}: путь вне worktree — отказано."
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(body, encoding="utf-8")
-    written.add(str(p.relative_to(PROJECT_DIR)))
+    written.add(str(p.relative_to(base)).replace("\\", "/"))
     log(developer, f"  Laguna записал: {arg} ({len(body)} симв.)")
     return f"WRITE {arg}: ок ({len(body)} симв.)."
 
 
-def _laguna_do_bash(developer: str, arg: str) -> str:
+def _laguna_do_bash(developer: str, arg: str, base: Path) -> str:
     if LAGUNA_BASH_DENY.search(arg) or not LAGUNA_BASH_ALLOW.match(arg):
         return f"BASH {arg}: команда запрещена (разрешены cargo/grep/rg/ls/git status|diff|log)."
     log(developer, f"  $ {arg[:200]}")
-    try:
-        r = subprocess.run(
-            arg, shell=True, cwd=PROJECT_DIR, capture_output=True,
-            text=True, encoding="utf-8", errors="replace", timeout=600,
-        )
-    except subprocess.TimeoutExpired:
-        return f"BASH {arg}: таймаут 600с."
-    out = (r.stdout or "") + (r.stderr or "")
+    rc, out = _run_shell(arg, base, timeout=600)
     if len(out) > 12000:
         out = out[:12000] + "\n…(обрезано)…"
-    return f"=== BASH {arg} (exit {r.returncode}) ===\n{out}"
+    return f"=== BASH {arg} (exit {rc}) ===\n{out}"
 
 
-def _git_current_branch() -> str:
-    r = subprocess.run(
-        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        cwd=PROJECT_DIR, capture_output=True, text=True,
+def _crate_for_path(rel: str, base: Path) -> str | None:
+    """Имя crate (`name` из ближайшего `[package]` Cargo.toml) для файла."""
+    p = _safe_path(rel, base)
+    if p is None:
+        return None
+    d = p if p.is_dir() else p.parent
+    while True:
+        cargo = d / "Cargo.toml"
+        if cargo.is_file():
+            txt = cargo.read_text(encoding="utf-8", errors="replace")
+            if "[package]" in txt:
+                m = re.search(r'(?m)^\s*name\s*=\s*"([^"]+)"', txt)
+                if m:
+                    return m.group(1)
+        if d == base or base not in d.parents:
+            return None
+        d = d.parent
+
+
+def _run_solo_gates(developer: str, base: Path, written: set[str]) -> tuple[bool, str]:
+    """Жёсткие ворота перед коммитом: check + clippy -D warnings + test по
+    затронутым crates (правила Lumen). Если crate не определён — общий
+    `cargo check`. Возвращает (ok, склеенный вывод неудачных/всех прогонов).
+    """
+    crates = sorted({c for rel in written if (c := _crate_for_path(rel, base))})
+    if not crates:
+        rc, out = _run_shell("cargo check", base)
+        return rc == 0, f"=== cargo check (exit {rc}) ===\n{out[:12000]}"
+
+    log(developer, f"  Ворота для crates: {', '.join(crates)}")
+    outputs: list[str] = []
+    for c in crates:
+        for cmd in (
+            f"cargo check -p {c}",
+            f"cargo clippy -p {c} --all-targets -- -D warnings",
+            f"cargo test -p {c}",
+        ):
+            log(developer, f"  ворота: {cmd}")
+            rc, out = _run_shell(cmd, base)
+            outputs.append(f"=== {cmd} (exit {rc}) ===\n{out[:8000]}")
+            if rc != 0:
+                return False, "\n\n".join(outputs)
+    return True, "\n\n".join(outputs)
+
+
+def _create_solo_worktree(developer: str, task_number: int) -> tuple[Path | None, str | None, str]:
+    """Создать изолированный worktree+ветку от main для solo-задачи.
+
+    Возвращает (path, branch, err). При ошибке path/branch = None, err — текст.
+    """
+    num = developer[1:] if developer.startswith("P") else developer
+    stamp = datetime.now().strftime("%H%M%S")
+    branch = f"p{num}-laguna-t{task_number}-{stamp}"
+    wt = PROJECT_DIR / ".claude" / "worktrees" / f"{developer.lower()}-laguna-{stamp}"
+    rc, out = _run_shell(
+        f'git worktree add "{wt}" -b {branch} main', PROJECT_DIR, timeout=120
     )
-    return r.stdout.strip()
+    if rc != 0:
+        return None, None, out
+    return wt, branch, ""
 
 
-def _laguna_commit(developer: str, msg: str, paths: set[str]) -> None:
-    """Закоммитить написанные Laguna файлы. На main — сначала отводит ветку."""
-    branch = _git_current_branch()
-    if branch == "main":
-        num = developer[1:] if developer.startswith("P") else developer
-        new_branch = f"p{num}-laguna-{datetime.now().strftime('%H%M%S')}"
-        subprocess.run(["git", "checkout", "-b", new_branch], cwd=PROJECT_DIR)
-        log(developer, f"  Был на main — отвёл ветку {new_branch} (прямой коммит в main запрещён).")
+def _laguna_commit(developer: str, msg: str, paths: set[str], base: Path) -> None:
+    """Закоммитить написанные Laguna файлы в worktree (ветка уже своя)."""
     if paths:
-        subprocess.run(["git", "add", *paths], cwd=PROJECT_DIR)
+        _run_shell("git add " + " ".join(f'"{p}"' for p in paths), base, timeout=120)
     full = (
         msg
         + "\n\nНаписано Laguna M.1 (poolside) через solo-оркестратор; "
-        "сборка проверена cargo check.\n\n"
+        "ворота: cargo check + clippy -D warnings + test пройдены.\n\n"
         "Co-Authored-By: Laguna M.1 (poolside) <noreply@poolside.ai>\n"
     )
-    subprocess.run(["git", "commit", "-m", full], cwd=PROJECT_DIR)
+    # Сообщение через временный файл, чтобы не воевать с экранированием.
+    msg_file = base / ".laguna-commit-msg.txt"
+    msg_file.write_text(full, encoding="utf-8")
+    _run_shell('git commit -F ".laguna-commit-msg.txt"', base, timeout=120)
+    msg_file.unlink(missing_ok=True)
 
 
 def laguna_solo_system_prompt(developer: str) -> str:
     return (
         f"Ты автономный разработчик {developer} в проекте Lumen — браузерный движок на Rust. "
-        f"Корень проекта: {PROJECT_DIR}. Прямого доступа к файлам у тебя НЕТ — взаимодействуй "
-        "ТОЛЬКО командами, каждая с НОВОЙ строки, в начале строки:\n"
-        "  READ <путь>            — прислать содержимое файла (путь относительно корня)\n"
+        "Работаешь в изолированном worktree (своя ветка). Прямого доступа к файлам у тебя НЕТ — "
+        "взаимодействуй ТОЛЬКО командами, каждая с НОВОЙ строки, в начале строки:\n"
+        "  READ <путь>            — прислать содержимое файла (путь относительно корня worktree)\n"
         "  LIST <glob>            — список файлов по маске (напр. crates/**/*.rs)\n"
         "  WRITE <путь>           — СЛЕДУЮЩИМ идёт один ```-блок с ПОЛНЫМ новым содержимым файла\n"
         "  BASH <команда>         — только cargo check|test|clippy|build, grep, rg, ls, git status|diff|log\n"
-        "  DONE <текст коммита>   — задача готова; я соберу и закоммичу\n\n"
+        "  DONE <текст коммита>   — задача готова; я прогоню ворота и закоммичу\n\n"
         "В одном ответе можно несколько команд. После WRITE я применю файл. "
         "ПЕРЕД WRITE всегда сделай READ изменяемого файла — WRITE перезаписывает файл целиком, "
         "частичный текст уничтожит остальное. Соблюдай стиль Lumen: edition 2024, без unwrap/panic "
-        "в проде, /// doc-комменты на pub. Перед DONE прогони `cargo check`. "
+        "в проде, /// doc-комменты на всех pub. "
+        "ВОРОТА на DONE (обязаны пройти, иначе DONE отклонён): по каждому затронутому crate "
+        "`cargo check -p <crate>`, `cargo clippy -p <crate> --all-targets -- -D warnings`, "
+        "`cargo test -p <crate>`. Прогоняй их сам через BASH до DONE и чини ошибки/варнинги. "
         "Не пиши прозу вне команд — она игнорируется. "
         f"Начни с: READ STATUS-{developer}.md"
     )
@@ -1031,8 +1091,11 @@ def laguna_solo_system_prompt(developer: str) -> str:
 def run_laguna_solo(developer: str, task_number: int, think: bool = False) -> bool:
     """Solo-режим: оркестратор ведёт агент-петлю поверх Laguna без Claude.
 
-    Возвращает True при успешном завершении (cargo check зелёный + коммит),
-    False при исчерпании итераций или фатальной ошибке клиента.
+    Работает в изолированном worktree (своя ветка p<N>-laguna-*). Перед
+    коммитом — жёсткие ворота: cargo check + clippy -D warnings + test по
+    затронутым crates. Возвращает True при успешном завершении (ворота
+    зелёные + коммит). Worktree/ветка ОСТАЮТСЯ для ревью и финиша по правилам
+    (merge/доки/STATUS — вручную или отдельным проходом Claude).
     """
     try:
         client = LagunaClient()
@@ -1040,13 +1103,20 @@ def run_laguna_solo(developer: str, task_number: int, think: bool = False) -> bo
         log(developer, f"Laguna недоступна: {e}")
         return False
 
+    work_dir, branch, err = _create_solo_worktree(developer, task_number)
+    if work_dir is None:
+        log(developer, f"Не удалось создать worktree для Laguna: {err}")
+        return False
+    log(developer, f"  Worktree: {work_dir}  (ветка {branch})")
+
     messages: list[dict] = [
         {"role": "system", "content": laguna_solo_system_prompt(developer)},
         {
             "role": "user",
             "content": (
                 f"Возьми текущую задачу разработчика {developer}: прочитай STATUS-{developer}.md, "
-                "определи первую задачу-указатель, реализуй её end-to-end. Когда cargo check зелёный — DONE."
+                "определи первую задачу-указатель, реализуй её end-to-end. "
+                "Когда ворота (check + clippy -D warnings + test) зелёные — DONE."
             ),
         },
     ]
@@ -1075,24 +1145,28 @@ def run_laguna_solo(developer: str, task_number: int, think: bool = False) -> bo
         commit_msg: str | None = None
         for cmd, arg, body in cmds:
             if cmd == "READ":
-                feedback.append(_laguna_do_read(arg))
+                feedback.append(_laguna_do_read(arg, work_dir))
             elif cmd == "LIST":
-                feedback.append(_laguna_do_list(arg))
+                feedback.append(_laguna_do_list(arg, work_dir))
             elif cmd == "WRITE":
-                feedback.append(_laguna_do_write(developer, arg, body, written))
+                feedback.append(_laguna_do_write(developer, arg, body, written, work_dir))
             elif cmd == "BASH":
-                feedback.append(_laguna_do_bash(developer, arg))
+                feedback.append(_laguna_do_bash(developer, arg, work_dir))
             elif cmd == "DONE":
                 commit_msg = arg or f"{developer}: задача #{task_number} (Laguna)"
 
         if commit_msg is not None:
-            log(developer, "  Laguna заявил DONE — проверяю cargo check...")
-            check = _laguna_do_bash(developer, "cargo check")
-            if "exit 0" in check.splitlines()[0]:
-                _laguna_commit(developer, commit_msg, written)
-                log(developer, "Laguna solo: задача завершена и закоммичена.")
+            log(developer, "  Laguna заявил DONE — прогоняю ворота (check + clippy -D + test)...")
+            ok, gate_out = _run_solo_gates(developer, work_dir, written)
+            if ok:
+                _laguna_commit(developer, commit_msg, written, work_dir)
+                log(developer, "Laguna solo: ворота пройдены, закоммичено.")
+                log(developer, f"  Готово к ревью/финишу: ветка {branch} @ {work_dir}")
                 return True
-            feedback.append("DONE ОТКЛОНЁН: cargo check не прошёл:\n" + check + "\nИсправь и снова DONE.")
+            feedback.append(
+                "DONE ОТКЛОНЁН — ворота не прошли:\n" + gate_out[:14000]
+                + "\nИсправь ошибки/варнинги и снова DONE."
+            )
 
         joined = "\n\n".join(feedback)
         if len(joined) > 24000:
@@ -1100,6 +1174,8 @@ def run_laguna_solo(developer: str, task_number: int, think: bool = False) -> bo
         messages.append({"role": "user", "content": joined})
 
     log(developer, f"Laguna solo: исчерпан лимит итераций ({LAGUNA_MAX_ITERS}). Останов.")
+    log(developer, f"  Worktree с незавершённой работой оставлен: {work_dir}")
+    log(developer, f"  Убрать: git worktree remove {work_dir} --force && git branch -D {branch}")
     return False
 
 
