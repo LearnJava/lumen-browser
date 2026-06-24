@@ -72,6 +72,20 @@ clean; targeted tests green. **Still open for full Phase B:** event-loop push
 delivery (no JS `_lumen_ws_poll`), `bufferedAmount` semantics, close-handshake
 state machine audit (CONNECTING/OPEN/CLOSING/CLOSED).
 
+**Phase B step 3 DONE (2026-06-25)** — WebSocket close/send ready-state machine
+(WHATWG/RFC 6455 §7). `send()` in CONNECTING throws `InvalidStateError`; in
+CLOSING/CLOSED data is discarded but counted in `bufferedAmount` (new
+`_lumen_ws_bytelen` helper, UTF-8 via `TextEncoder`). `close()` validates the
+code (`1000` or `3000–4999` else `InvalidAccessError`) and reason length
+(`>123` UTF-8 bytes → `SyntaxError`), and is idempotent in CLOSING/CLOSED.
+readyState constants duplicated onto `WebSocket.prototype` so instances expose
+`ws.CONNECTING`/`OPEN`/`CLOSING`/`CLOSED`. +6 lumen-js unit tests
+(`websocket_send_in_connecting_throws`, `websocket_close_code_validation`,
+`websocket_close_reason_too_long_throws`, `websocket_buffered_amount_in_closing`,
+`websocket_instance_constants`, `websocket_close_idempotent`). 23 WS tests +
+clippy green. **Still open for full Phase B:** event-loop push delivery
+(no JS `_lumen_ws_poll` — requires shell integration, P3 domain).
+
 **Remaining (not yet done):**
 - **Step 3** — JS `fetch()` wiring (`crates/js/src/dom.rs:7328`). **Design note (blocker):** JS is
   single-threaded and the current `fetch()` is *synchronous* (blocks the JS thread), so an
