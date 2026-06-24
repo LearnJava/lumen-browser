@@ -6,6 +6,7 @@
 Каждая задача — отдельная сессия с чистым контекстом.
 
 Использование:
+    python scripts/orchestrator.py                                      # БЕЗ аргументов — пошаговый мастер
     python scripts/orchestrator.py P1                                   # один разработчик
     python scripts/orchestrator.py P1 P2                                # два в параллель
     python scripts/orchestrator.py P1 P2 P3 P4 P5                       # все пятеро
@@ -1565,7 +1566,260 @@ def create_stop_file(developers: list[str]):
         print(f"{dev} будет остановлен после текущей задачи. ({sf})")
 
 
+def dispatch_run(
+    developers: list[str],
+    max_tasks: int,
+    fallback_preset: str | None,
+    force_new: bool,
+    initial_model: str | None,
+    laguna_mode: str | None,
+) -> None:
+    """Запустить разработчиков: одного — в текущем окне, нескольких — по окнам.
+
+    Модели уже развёрнуты в полный ID. Общая точка входа для CLI (`main`) и
+    интерактивного мастера (`run_wizard`).
+    """
+    if len(developers) == 1:
+        run_task_loop(
+            developers[0], max_tasks, fallback_preset, force_new, initial_model, laguna_mode,
+        )
+        return
+
+    # Несколько — каждый в отдельном окне консоли. В дочерние окна передаём
+    # уже развёрнутые полные ID — повторного резолва не нужно.
+    script = Path(__file__).resolve()
+    max_arg = f" --max-tasks {max_tasks}" if max_tasks > 0 else ""
+    fb_arg = f" --fallback-model {fallback_preset}" if fallback_preset else ""
+    new_arg = " --new" if force_new else ""
+    model_arg = f" --model {initial_model}" if initial_model else ""
+    laguna_arg = f" --laguna {laguna_mode}" if laguna_mode else ""
+
+    for dev in developers:
+        cmd = f'python "{script}" {dev}{max_arg}{fb_arg}{new_arg}{model_arg}{laguna_arg}'
+        title = f"Lumen {dev}"
+        if os.name == "nt":
+            subprocess.Popen(f'start "{title}" cmd /k {cmd}', shell=True, cwd=PROJECT_DIR)
+        else:
+            subprocess.Popen(["bash", "-c", f"{cmd}; exec bash"], cwd=PROJECT_DIR)
+        print(f"Запущен {dev} в отдельном окне.")
+
+    print()
+    print("Для остановки: python scripts/orchestrator.py --stop P1")
+    print("Остановить всех: python scripts/orchestrator.py --stop-all")
+
+
+# =====================================================================
+# Интерактивный мастер (запуск без аргументов)
+# =====================================================================
+
+def _wiz_menu(title: str, options: list[tuple[str, str]], default: int = 1) -> int:
+    """Показать нумерованное меню, вернуть выбранный 1-based индекс."""
+    print()
+    print(title)
+    for i, (label, hint) in enumerate(options, 1):
+        line = f"  {i}) {label}"
+        if hint:
+            line += f"  — {hint}"
+        print(line)
+    while True:
+        raw = input(f"Выбор [{default}]: ").strip()
+        if not raw:
+            return default
+        if raw.isdigit() and 1 <= int(raw) <= len(options):
+            return int(raw)
+        print(f"  Введите число 1..{len(options)}.")
+
+
+def _wiz_yes_no(prompt: str, default: bool = False) -> bool:
+    d = "Y/n" if default else "y/N"
+    while True:
+        raw = input(f"{prompt} [{d}]: ").strip().lower()
+        if not raw:
+            return default
+        if raw in ("y", "yes", "д", "да"):
+            return True
+        if raw in ("n", "no", "н", "нет"):
+            return False
+        print("  Ответьте y/n.")
+
+
+def _wiz_int(prompt: str, default: int) -> int:
+    while True:
+        raw = input(f"{prompt} [{default}]: ").strip()
+        if not raw:
+            return default
+        if raw.isdigit():
+            return int(raw)
+        print("  Введите целое число.")
+
+
+def _wiz_model(prompt: str, allow_default: bool = True) -> str | None:
+    """Выбор модели через меню. Возвращает полный model ID или None (дефолт CLI)."""
+    opts: list[tuple[str, str]] = []
+    if allow_default:
+        opts.append(("(по умолчанию CLI)", "не передавать --model"))
+    opts += [
+        ("haiku", MODEL_ALIASES["haiku"]),
+        ("sonnet", MODEL_ALIASES["sonnet"]),
+        ("opus", MODEL_ALIASES["opus"]),
+        ("fable", MODEL_ALIASES["fable"]),
+        ("ввести вручную", "alias или полный claude-*"),
+    ]
+    idx = _wiz_menu(prompt, opts, default=1)
+    label = opts[idx - 1][0]
+    if allow_default and idx == 1:
+        return None
+    if label == "ввести вручную":
+        return resolve_model_alias(input("  Имя модели: ").strip())
+    return MODEL_ALIASES[label]
+
+
+# Роли разработчиков — подсказки в мастере.
+_WIZ_ROLES: dict[str, str] = {
+    "P1": "фичи (любая подсистема)",
+    "P2": "резерв (задач обычно нет)",
+    "P3": "только баг-фиксы",
+    "P4": "только CSS-свойства",
+    "P5": "здоровье кода (ставь лимит 1)",
+}
+
+
+def _wiz_developers(prompt: str = "Каких разработчиков запустить?") -> list[str]:
+    print()
+    print(prompt + " (P1–P5)")
+    for d, h in _WIZ_ROLES.items():
+        print(f"  {d} — {h}")
+    while True:
+        raw = input("Список (напр. '1 3 4' или 'P1 P3'): ").strip()
+        if not raw:
+            print("  Нужен хотя бы один.")
+            continue
+        toks = raw.replace(",", " ").upper().split()
+        devs: list[str] = []
+        ok = True
+        for t in toks:
+            if t.isdigit():
+                t = "P" + t
+            if t in _WIZ_ROLES:
+                if t not in devs:
+                    devs.append(t)
+            else:
+                print(f"  Неизвестно: {t}")
+                ok = False
+                break
+        if ok and devs:
+            return devs
+
+
+def _wiz_equiv_cmd(developers, max_tasks, fallback_preset, force_new, initial_model, laguna_mode) -> str:
+    """Эквивалентная CLI-команда для показа в сводке (учит флагам)."""
+    parts = [f"python scripts/orchestrator.py {' '.join(developers)}"]
+    if max_tasks > 0:
+        parts.append(f"--max-tasks {max_tasks}")
+    if initial_model:
+        parts.append(f"--model {initial_model}")
+    if fallback_preset:
+        parts.append(f"--fallback-model {fallback_preset}")
+    if laguna_mode:
+        parts.append(f"--laguna {laguna_mode}")
+    if force_new:
+        parts.append("--new")
+    return " ".join(parts)
+
+
+def run_wizard() -> None:
+    """Пошаговый мастер: вызывается при запуске без аргументов."""
+    print("=" * 60)
+    print("  Оркестратор Lumen — интерактивный запуск")
+    print("  (для неинтерактивного режима см. --help)")
+    print("=" * 60)
+    try:
+        action = _wiz_menu("Что сделать?", [
+            ("Запустить разработчиков", ""),
+            ("Показать статус", ""),
+            ("Остановить разработчика(ов)", ""),
+            ("Остановить всех", ""),
+            ("Выход", ""),
+        ], default=1)
+
+        if action == 2:
+            show_status()
+            return
+        if action == 3:
+            create_stop_file(_wiz_developers("Кого остановить?"))
+            return
+        if action == 4:
+            create_stop_file(["P1", "P2", "P3", "P4", "P5"])
+            return
+        if action == 5:
+            print("Выход.")
+            return
+
+        # action 1 — сбор параметров запуска
+        developers = _wiz_developers()
+
+        mode_idx = _wiz_menu("Режим выполнения:", [
+            ("Claude (обычный)", "сессии Claude Code"),
+            ("Laguna assist", "Claude-водитель, код пишет Laguna"),
+            ("Laguna solo", "без Claude, оркестратор-агент поверх Laguna"),
+        ], default=1)
+        laguna_mode = {1: None, 2: "assist", 3: "solo"}[mode_idx]
+        if laguna_mode:
+            print("  (нужны POOLSIDE_API_KEY в env/.tmp/poolside.env и пакет openai)")
+            if laguna_mode == "solo":
+                print("  ВНИМАНИЕ: solo шлёт исходники в poolside — всё публикуется.")
+
+        # Модель и резерв — только для режимов с Claude (solo их игнорирует).
+        initial_model: str | None = None
+        fallback_preset: str | None = None
+        if laguna_mode != "solo":
+            initial_model = _wiz_model("Стартовая модель Claude:", allow_default=True)
+            if _wiz_yes_no("Задать резервную модель при rate limit?", default=False):
+                fallback_preset = _wiz_model("Резервная модель:", allow_default=False)
+
+        # Лимит задач.
+        recommend_one = "P5" in developers or laguna_mode == "solo"
+        if "P5" in developers:
+            print("\nP5 — ревизия рекуррентна, без лимита крутится бесконечно. Рекомендуется 1.")
+        elif laguna_mode == "solo":
+            print("\nsolo — финиш по правилам делается вручную. Рекомендуется 1.")
+        else:
+            print("\nЛимит задач на разработчика (0 = без лимита).")
+        max_tasks = _wiz_int("Макс. задач", 1 if recommend_one else 0)
+
+        force_new = _wiz_yes_no(
+            "Старт с чистого листа (--new, не возобновлять прерванную сессию)?", default=False
+        )
+
+        # Сводка + эквивалентная команда.
+        cmd = _wiz_equiv_cmd(developers, max_tasks, fallback_preset, force_new, initial_model, laguna_mode)
+        print()
+        print("-" * 60)
+        print(f"  Разработчики : {' '.join(developers)}")
+        print(f"  Режим        : {laguna_mode or 'Claude'}")
+        if laguna_mode != "solo":
+            print(f"  Модель       : {initial_model or '(дефолт CLI)'}")
+            print(f"  Резерв       : {fallback_preset or '(нет)'}")
+        print(f"  Лимит задач  : {max_tasks or 'без лимита'}")
+        print(f"  --new        : {'да' if force_new else 'нет'}")
+        print(f"  Эквивалент   : {cmd}")
+        print("-" * 60)
+        if not _wiz_yes_no("Запустить?", default=True):
+            print("Отменено.")
+            return
+
+        dispatch_run(developers, max_tasks, fallback_preset, force_new, initial_model, laguna_mode)
+    except (EOFError, KeyboardInterrupt):
+        print()
+        print("Прервано. Ничего не запущено.")
+
+
 def main():
+    # Запуск без аргументов вообще — пошаговый мастер.
+    if len(sys.argv) == 1:
+        run_wizard()
+        return
+
     parser = argparse.ArgumentParser(
         description="Оркестратор задач Lumen — автозапуск сессий Claude Code."
     )
@@ -1673,8 +1927,6 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    developers = args.developers
-
     # Приоритет: CLI > env > None. Алиасы (opus/sonnet/haiku) сразу
     # разворачиваются в полный model ID — дальше по коду уже только full ID.
     initial_model = resolve_model_alias(args.model) or resolve_model_alias(
@@ -1682,45 +1934,10 @@ def main():
     )
     fallback_model_preset = resolve_model_alias(args.fallback_model)
 
-    if len(developers) == 1:
-        # Один разработчик — в текущем окне
-        run_task_loop(
-            developers[0], args.max_tasks, fallback_model_preset, args.new, initial_model,
-            args.laguna,
-        )
-    else:
-        # Несколько — каждый в отдельном окне консоли.
-        # В дочерние окна передаём уже развёрнутые полные ID — повторного резолва не нужно.
-        script = Path(__file__).resolve()
-        max_arg = f" --max-tasks {args.max_tasks}" if args.max_tasks > 0 else ""
-        fb_arg = f" --fallback-model {fallback_model_preset}" if fallback_model_preset else ""
-        new_arg = " --new" if args.new else ""
-        model_arg = f" --model {initial_model}" if initial_model else ""
-        laguna_arg = f" --laguna {args.laguna}" if args.laguna else ""
-
-        for dev in developers:
-            cmd = f'python "{script}" {dev}{max_arg}{fb_arg}{new_arg}{model_arg}{laguna_arg}'
-            title = f"Lumen {dev}"
-
-            if os.name == "nt":
-                # Windows: start открывает новое окно с заголовком
-                subprocess.Popen(
-                    f'start "{title}" cmd /k {cmd}',
-                    shell=True,
-                    cwd=PROJECT_DIR,
-                )
-            else:
-                # Linux/macOS fallback
-                subprocess.Popen(
-                    ["bash", "-c", f"{cmd}; exec bash"],
-                    cwd=PROJECT_DIR,
-                )
-
-            print(f"Запущен {dev} в отдельном окне.")
-
-        print()
-        print("Для остановки: python scripts/orchestrator.py --stop P1")
-        print("Остановить всех: python scripts/orchestrator.py --stop-all")
+    dispatch_run(
+        args.developers, args.max_tasks, fallback_model_preset,
+        args.new, initial_model, args.laguna,
+    )
 
 
 if __name__ == "__main__":
