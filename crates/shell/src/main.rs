@@ -70,14 +70,14 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use lumen_core::event::{Event, FetchPriority, SubresourceKind};
-use lumen_core::ext::{EventSink, HyphenationProvider, NullHyphenationProvider};
+use lumen_core::ext::{EventSink, HyphenationProvider, NullHyphenationProvider, SuspendedHeap};
 use lumen_encoding::KnuthLiangHyphenation;
 use lumen_core::geom::{Point, Rect, Size};
 use lumen_devtools::DevToolsServer;
 use lumen_driver::BrowserSession;
 use lumen_knowledge::HistoryFts;
 use lumen_storage::session_export::{self, ExportedTab, SessionFile};
-use lumen_storage::{BfCache, BfCacheEntry, History, SearchHistory};
+use lumen_storage::{BfCache, BfCacheEntry, BfCachePayload, History, SearchHistory};
 use lumen_dom::{
     Document, NodeData, NodeId, check_form_gate, check_navigation_gate,
     collect_iframes, check_popup_gate,
@@ -592,6 +592,7 @@ fn run_window_mode(
         preload_dispatched: std::collections::HashSet::new(),
         stream_images_requested: std::collections::HashSet::new(),
         pending_restore_scroll: None,
+        pending_pageshow_persisted: false,
         load_generation: 0,
         ime_composing: None,
         bfcache: BfCache::new(16),
@@ -1949,6 +1950,20 @@ pub(crate) trait PersistentJs: Send {
     /// Calls `_lumen_deliver_popstate(state_json, url)` via `eval_js`.
     #[allow(dead_code)]
     fn fire_popstate(&self, state_json: &str, url: &str);
+    /// Fire a page-lifecycle event (`pageshow` / `pagehide`) on `window`
+    /// (HTML Living Standard §8.6 — back/forward cache).
+    ///
+    /// `event` is `"pageshow"` or `"pagehide"` (always a fixed literal supplied
+    /// by the shell — never user data). `persisted` is the `PageTransitionEvent`
+    /// `.persisted` flag: `true` when the page was/will be retained in bfcache
+    /// (restorable without a reload), `false` for a fresh load or a discarded
+    /// page. Delivered via `_lumen_fire_page_lifecycle` in the JS shim.
+    #[allow(dead_code)]
+    fn fire_page_lifecycle(&self, event: &str, persisted: bool) {
+        self.eval_js(&format!(
+            "_lumen_fire_page_lifecycle('{event}', {persisted})"
+        ));
+    }
     /// Drain dirty `<canvas>` 2D pixel buffers for upload to the renderer.
     ///
     /// Returns `(node_index, width, height, rgba)` for every canvas drawn to
@@ -2068,6 +2083,13 @@ pub(crate) trait PersistentJs: Send {
     #[allow(dead_code)]
     fn pointer_capture_nid(&self) -> Option<u32> { None }
 
+    /// Suspend the JS runtime to a heap snapshot for bfcache freeze.
+    ///
+    /// Called when navigating away from a page to preserve JS state without
+    /// serializing the DOM (DOM is serialized separately via Document::to_bytes).
+    /// Returns a compressed heap blob or empty vec if suspension fails/too large.
+    #[allow(dead_code)] // called only for bfcache freeze
+    fn suspend(&mut self) -> SuspendedHeap { SuspendedHeap::default() }
     /// Atomically clear and return the current pointer capture target node ID.
     ///
     /// Called by the shell after `pointerup` (implicit release per W3C Pointer Events
@@ -2328,6 +2350,11 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn pointer_capture_nid(&self) -> Option<u32> {
         self.rt.pointer_capture_nid()
+    }
+    fn suspend(&mut self) -> SuspendedHeap {
+        use lumen_core::ext::JsRuntime as _;
+        // Fall back to an empty heap if suspend fails or the heap is too large.
+        self.rt.suspend().unwrap_or_default()
     }
     fn take_pointer_capture(&self) -> Option<u32> {
         self.rt.take_pointer_capture()
@@ -5349,6 +5376,12 @@ struct Lumen {
     /// synchronous — the old code set `scroll_x/y` right after `reload()`
     /// returned, but the scroll reset now happens later, at `LoadEvent::LoadDone`.
     pending_restore_scroll: Option<(f32, f32)>,
+    /// Bfcache (HTML LS §8.6): `.persisted` flag for the `pageshow` event fired
+    /// after the next page load completes. Set `true` by `navigate_back`/
+    /// `navigate_forward` when the destination is restored from bfcache,
+    /// consumed (and reset to `false`) in `apply_loaded_page` right after
+    /// `notify_window_loaded`. `false` for ordinary fresh loads.
+    pending_pageshow_persisted: bool,
     /// U-1: monotonic navigation generation. Bumped on every async navigation
     /// (`reload` when a window exists) and on the initial streaming load. Each
     /// streaming `LoadEvent` carries the generation it was spawned under;
@@ -7157,10 +7190,17 @@ impl Lumen {
         // JS may have requested navigation via location.href= etc.
         self.pending_js_navigate = page.js_navigate;
         // HTML LS §8.2.3 — all resources loaded: readyState → "complete" + window.load event.
+        // HTML LS §8.6 — `pageshow` fires right after `load`. `persisted=true`
+        // only when this page was restored from bfcache (set by navigate_back/
+        // navigate_forward); a fresh load fires `persisted=false`.
+        let pageshow_persisted = std::mem::take(&mut self.pending_pageshow_persisted);
         #[cfg(feature = "quickjs")]
         if let Some(js) = &self.js_ctx {
             js.notify_window_loaded();
+            js.fire_page_lifecycle("pageshow", pageshow_persisted);
         }
+        #[cfg(not(feature = "quickjs"))]
+        let _ = pageshow_persisted;
 
         // Rebuild accessibility tree and push to OS platform bridge (O-5).
         self.update_platform_ax_tree();
@@ -12339,21 +12379,33 @@ impl Lumen {
     /// Сохранить текущую страницу в bfcache и стек навигации,
     /// затем загрузить `source` как новую страницу.
     /// Очищает `nav_fwd` (аналог браузера при навигации вперёд из середины истории).
+    /// Сохранить текущую страницу в bfcache и стек навигации,
+    /// затем загрузить `source` как новую страницу.
+    /// Очищает `nav_fwd` (аналог браузера при навигации вперёд из середины истории).
     fn navigate_to(&mut self, source: PageSource) {
         click_log::log_nav(&source.describe());
         self.hint.close();
         // Snapshot current page into bfcache if it has an HTML source.
+        let mut persisted = false;
         if let Some(ref ls) = self.layout_source
             && let Some(ref html) = ls.html_source
             && let Some(url) = self.source.url_str()
         {
             self.bfcache.store(BfCacheEntry {
                 url: url.to_owned(),
-                html: html.clone(),
+                payload: BfCachePayload::HtmlSnapshot(html.clone()),
                 scroll_x: self.scroll_x,
                 scroll_y: self.scroll_y,
                 title: self.title.clone(),
             });
+            persisted = true;
+        }
+        // HTML LS §8.6: fire `pagehide` on the outgoing page before it unloads.
+        // `persisted = true` signals it was retained in bfcache (restorable on
+        // back-navigation), so listeners can skip teardown they will redo on
+        // `pageshow`.
+        if let Some(js) = &self.js_ctx {
+            js.fire_page_lifecycle("pagehide", persisted);
         }
         // Push current page to back stack (full-doc entry: no same_doc_state_json).
         self.nav_back.push(NavEntry {
@@ -12412,6 +12464,10 @@ impl Lumen {
         }
 
         // Full-document navigation: restore page and reload.
+        // HTML LS §8.6: fire `pagehide` on the current page before it unloads.
+        if let Some(js) = &self.js_ctx {
+            js.fire_page_lifecycle("pagehide", false);
+        }
         // Push current page to forward stack.
         let cur_display = self.display_url.take();
         let cur_state = std::mem::replace(
@@ -12429,11 +12485,20 @@ impl Lumen {
         // Try bfcache first.
         let restored_scroll = if let Some(url) = prev.source.url_str() {
             if let Some(entry) = self.bfcache.retrieve(url) {
-                let html = entry.html.clone();
+                let html = match &entry.payload {
+                    BfCachePayload::HtmlSnapshot(h) => h.clone(),
+                    // Frozen (DOM + JS heap) restore is not yet wired — the JS
+                    // heap suspend path is stubbed. Falls back to a blank reload
+                    // until full freeze/thaw lands. Never reached today because
+                    // the store path only writes HtmlSnapshot payloads.
+                    BfCachePayload::Frozen(_) => String::new(),
+                };
                 let scroll_x = entry.scroll_x;
                 let scroll_y = entry.scroll_y;
                 let base_url = url.to_owned();
                 self.source = PageSource::Snapshot { html, base_url };
+                // Restored from bfcache → the next `pageshow` is `persisted=true`.
+                self.pending_pageshow_persisted = true;
                 Some((scroll_x, scroll_y))
             } else {
                 self.source = prev.source;
@@ -12481,6 +12546,10 @@ impl Lumen {
         }
 
         // Full-document forward navigation.
+        // HTML LS §8.6: fire `pagehide` on the current page before it unloads.
+        if let Some(js) = &self.js_ctx {
+            js.fire_page_lifecycle("pagehide", false);
+        }
         let cur_display = self.display_url.take();
         let cur_state = std::mem::replace(
             &mut self.current_history_state_json,
@@ -12496,11 +12565,20 @@ impl Lumen {
         // Try bfcache first.
         let restored_scroll = if let Some(url) = next.source.url_str() {
             if let Some(entry) = self.bfcache.retrieve(url) {
-                let html = entry.html.clone();
+                let html = match &entry.payload {
+                    BfCachePayload::HtmlSnapshot(h) => h.clone(),
+                    // Frozen (DOM + JS heap) restore is not yet wired — the JS
+                    // heap suspend path is stubbed. Falls back to a blank reload
+                    // until full freeze/thaw lands. Never reached today because
+                    // the store path only writes HtmlSnapshot payloads.
+                    BfCachePayload::Frozen(_) => String::new(),
+                };
                 let scroll_x = entry.scroll_x;
                 let scroll_y = entry.scroll_y;
                 let base_url = url.to_owned();
                 self.source = PageSource::Snapshot { html, base_url };
+                // Restored from bfcache → the next `pageshow` is `persisted=true`.
+                self.pending_pageshow_persisted = true;
                 Some((scroll_x, scroll_y))
             } else {
                 self.source = next.source;

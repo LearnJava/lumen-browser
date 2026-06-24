@@ -2185,6 +2185,7 @@ dependencies = [
  "lz4_flex",
  "psl",
  "rusqlite",
+ "serde",
  "sha2",
 ]
 
