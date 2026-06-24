@@ -1,8 +1,3 @@
-BUGS.md:222
-BUGS.md:221
-BUGS.md:223
-BUGS.md:224
-BUGS.md:225
 BUGS.md:211
 BUGS.md:212
 BUGS.md:198

@@ -1334,15 +1334,22 @@ mod tests {
         root
     }
 
+    /// UA `body { margin: 8px }` (HTML Rendering §14.3.3, BUG-204) shifts all
+    /// normal-flow content by 8px. These layout-unit helpers test child geometry
+    /// in isolation, so they neutralise the UA body margin with an explicit reset
+    /// — exactly as real pages do via `* { margin: 0 }`. Tests that specifically
+    /// verify the UA body margin use the `cascade_at` style helper instead.
+    const BODY_RESET: &str = "body{margin:0}";
+
     fn lay(html: &str, css: &str) -> LayoutBox {
         let doc = lumen_html_parser::parse(html);
-        let sheet = lumen_css_parser::parse(css);
+        let sheet = lumen_css_parser::parse(&format!("{BODY_RESET}{css}"));
         body_layout_box(layout(&doc, &sheet, Size::new(800.0, 600.0)))
     }
 
     fn lay_viewport(html: &str, css: &str, vp: Size) -> LayoutBox {
         let doc = lumen_html_parser::parse(html);
-        let sheet = lumen_css_parser::parse(css);
+        let sheet = lumen_css_parser::parse(&format!("{BODY_RESET}{css}"));
         body_layout_box(layout(&doc, &sheet, vp))
     }
 
@@ -1356,7 +1363,7 @@ mod tests {
 
     fn lay_measured(html: &str, css: &str, width: f32) -> LayoutBox {
         let doc = lumen_html_parser::parse(html);
-        let sheet = lumen_css_parser::parse(css);
+        let sheet = lumen_css_parser::parse(&format!("{BODY_RESET}{css}"));
         body_layout_box(layout_measured(&doc, &sheet, Size::new(width, 600.0), &Fixed8))
     }
 

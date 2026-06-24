@@ -5835,6 +5835,8 @@ pub fn compute_style(
     // Set font-size here (before the author font-size pre-pass) so author CSS overrides it.
     apply_ua_heading_style(doc, node, inherited, &mut style);
     apply_ua_hr_style(doc, node, &mut style);
+    // UA stylesheet: <body> → margin: 8px. HTML Rendering §14.3.3. Author CSS перекроет.
+    apply_ua_body_margin(doc, node, &mut style);
     // UA stylesheet: form controls — display, intrinsic dimensions, border,
     // background, and foreground color. HTML5 §15.5. Author CSS поверх перекроет.
     //
@@ -9250,6 +9252,29 @@ fn apply_ua_hr_style(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
     style.margin_bottom = LengthOrAuto::Length(Length::Em(0.5));
     style.margin_left = LengthOrAuto::Auto;
     style.margin_right = LengthOrAuto::Auto;
+}
+
+/// UA stylesheet для `<body>` (HTML Rendering §14.3.3): `body { margin: 8px }`.
+///
+/// Без этого правила `<body>` прижимается вплотную к краю viewport, и весь
+/// контент в нормальном потоке сдвинут на 8px относительно настоящих браузеров.
+/// Применяется ДО CSS-каскада, поэтому author `body { margin: 0 }` или
+/// `* { margin: 0 }` перекрывает его (как в большинстве graphic-тестов с reset).
+///
+/// BUG-204: страницы anchor-positioning (тесты 85–89) без CSS-reset расходились
+/// с Edge на ~2% — Edge сдвигал `.__f`-рамку на 8px (body margin), Lumen рисовал
+/// её вплотную к краю.
+fn apply_ua_body_margin(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    if name.local.as_str() != "body" {
+        return;
+    }
+    style.margin_top = LengthOrAuto::Length(Length::Px(8.0));
+    style.margin_right = LengthOrAuto::Length(Length::Px(8.0));
+    style.margin_bottom = LengthOrAuto::Length(Length::Px(8.0));
+    style.margin_left = LengthOrAuto::Length(Length::Px(8.0));
 }
 
 /// UA stylesheet для `<h1>`–`<h6>` (HTML Rendering §15.3.3 «Sections and headings»).
@@ -25349,6 +25374,25 @@ mod tests {
     fn margin_inline_end_maps_to_margin_right() {
         let s = cascade_at("<div>", "div { margin-inline-end: 20px; }", &[0]);
         assert_eq!(s.margin_right, LengthOrAuto::Length(Length::Px(20.0)));
+    }
+
+    #[test]
+    fn ua_body_default_margin_is_8px() {
+        // HTML Rendering §14.3.3: body { margin: 8px }. BUG-204 — без этого
+        // правила body прижимался к краю viewport и контент сдвигался на 8px.
+        let s = cascade_at("<div></div>", "", &[]);
+        assert_eq!(s.margin_top, LengthOrAuto::Length(Length::Px(8.0)));
+        assert_eq!(s.margin_right, LengthOrAuto::Length(Length::Px(8.0)));
+        assert_eq!(s.margin_bottom, LengthOrAuto::Length(Length::Px(8.0)));
+        assert_eq!(s.margin_left, LengthOrAuto::Length(Length::Px(8.0)));
+    }
+
+    #[test]
+    fn ua_body_margin_overridden_by_author_reset() {
+        // Author `body { margin: 0 }` (или `* { margin: 0 }` reset) перекрывает UA-правило.
+        let s = cascade_at("<div></div>", "body { margin: 0; }", &[]);
+        assert_eq!(s.margin_top, LengthOrAuto::ZERO);
+        assert_eq!(s.margin_left, LengthOrAuto::ZERO);
     }
 
     #[test]

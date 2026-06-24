@@ -6,15 +6,19 @@ use lumen_layout::{layout, BoxKind, Color, SvgPaint, SvgShapeKind};
 use lumen_html_parser::parse as parse_html;
 use lumen_css_parser::parse as parse_css;
 
+// Neutralise the UA `body { margin: 8px }` (HTML Rendering §14.3.3, BUG-204) so
+// SVG shapes are positioned from the page origin, as these tests expect.
+const BODY_RESET: &str = "body{margin:0}";
+
 fn do_layout(html: &str) -> lumen_layout::LayoutBox {
     let doc = parse_html(html);
-    let sheet = parse_css("");
+    let sheet = parse_css(BODY_RESET);
     layout(&doc, &sheet, Size::new(800.0, 600.0))
 }
 
 fn do_layout_css(html: &str, css: &str) -> lumen_layout::LayoutBox {
     let doc = parse_html(html);
-    let sheet = parse_css(css);
+    let sheet = parse_css(&format!("{BODY_RESET}{css}"));
     layout(&doc, &sheet, Size::new(800.0, 600.0))
 }
 
