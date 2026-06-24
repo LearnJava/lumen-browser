@@ -1593,6 +1593,32 @@ pub trait JsFetchProvider: Send + Sync {
         }
         self.fetch_sync(url, method)
     }
+
+    /// Cooperative-cancellation variant of `fetch_with_body_sync` mirroring AbortSignal.
+    ///
+    /// Identical contract to [`fetch_cancellable`](Self::fetch_cancellable) but for
+    /// requests that carry a body (POST/PUT/PATCH/DELETE). The default implementation
+    /// only checks the token before issuing the request (pre-flight cancellation) and
+    /// then delegates to `fetch_with_body_sync`. Implementations backed by a real socket
+    /// should additionally tear the connection down to achieve in-flight abort.
+    ///
+    /// On abort, this returns `Error::Aborted`, which the JS layer maps to a
+    /// DOMException `AbortError` (or `TimeoutError` for `AbortSignal.timeout`).
+    fn fetch_with_body_cancellable(
+        &self,
+        url: &str,
+        method: &str,
+        content_type: &str,
+        body: &[u8],
+        token: &AbortToken,
+    ) -> Result<JsFetchResult> {
+        if token.is_aborted() {
+            return Err(crate::error::Error::Aborted(
+                "fetch aborted before send".to_string(),
+            ));
+        }
+        self.fetch_with_body_sync(url, method, content_type, body)
+    }
 }
 
 #[cfg(test)]
@@ -1624,6 +1650,31 @@ mod fetch_cancellable_tests {
         let token = AbortToken::new();
         let provider = DummyFetch;
         let result = provider.fetch_cancellable("http://example.com", "GET", &token);
+        match result {
+            Err(crate::error::Error::Network(msg)) => assert_eq!(msg, "net-called"),
+            _ => panic!("expected Network error from fetch_sync"),
+        }
+    }
+
+    #[test]
+    fn body_pre_aborted_token_returns_aborted() {
+        let token = AbortToken::new();
+        token.abort();
+        let provider = DummyFetch;
+        let result =
+            provider.fetch_with_body_cancellable("http://example.com", "POST", "text/plain", b"x", &token);
+        match result {
+            Err(crate::error::Error::Aborted(_)) => {}
+            _ => panic!("expected Aborted error"),
+        }
+    }
+
+    #[test]
+    fn body_live_token_delegates_to_fetch_sync() {
+        let token = AbortToken::new();
+        let provider = DummyFetch;
+        let result =
+            provider.fetch_with_body_cancellable("http://example.com", "POST", "text/plain", b"x", &token);
         match result {
             Err(crate::error::Error::Network(msg)) => assert_eq!(msg, "net-called"),
             _ => panic!("expected Network error from fetch_sync"),

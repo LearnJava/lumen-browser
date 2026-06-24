@@ -3333,7 +3333,31 @@ impl JsFetchProvider for HttpClient {
         }
 
         conn.write_request_with_body(method, &host_ascii, &path_and_query, content_type, body, "", self.fingerprint_profile)?;
-        let resp = read_response(&mut conn)?;
+        // In-flight abort (Phase A): mirror `do_request` so the body-carrying path
+        // honours an installed AbortToken. When no cancellable caller installed a
+        // token, `current_abort_token()` is None and behaviour is unchanged.
+        let token = current_abort_token();
+        if let Some(t) = &token
+            && t.is_aborted()
+        {
+            return Err(Error::Aborted("fetch aborted before response".to_string()));
+        }
+        let mut watchdog: Option<AbortWatchdog> = None;
+        if let Some(t) = &token
+            && let Some(sock) = conn.try_clone_socket()
+        {
+            watchdog = Some(AbortWatchdog::spawn(t.clone(), sock));
+        }
+        let read_result: Result<Response> = read_response(&mut conn);
+        if let Some(wd) = watchdog {
+            wd.stop();
+        }
+        if let Some(t) = &token
+            && t.is_aborted()
+        {
+            return Err(Error::Aborted("fetch aborted in-flight".to_string()));
+        }
+        let resp = read_result?;
         if !conn.closed {
             self.pool.release(key, conn);
         }
@@ -3363,6 +3387,28 @@ impl JsFetchProvider for HttpClient {
         }
         let _scope = AbortScope::new(token.clone());
         self.fetch_sync(url, method)
+    }
+
+    /// In-flight-cancellable variant of `fetch_with_body_sync`.
+    ///
+    /// Same teardown machinery as [`fetch_cancellable`](Self::fetch_cancellable):
+    /// a pre-flight `is_aborted` short-circuit, then an [`AbortScope`] installs the
+    /// token for the request duration so `do_request` deep in the read path spawns
+    /// an [`AbortWatchdog`] that shuts the socket down if `abort()` fires mid-response,
+    /// surfacing as `Error::Aborted`.
+    fn fetch_with_body_cancellable(
+        &self,
+        url: &str,
+        method: &str,
+        content_type: &str,
+        body: &[u8],
+        token: &AbortToken,
+    ) -> Result<JsFetchResult> {
+        if token.is_aborted() {
+            return Err(Error::Aborted("fetch aborted before send".to_string()));
+        }
+        let _scope = AbortScope::new(token.clone());
+        self.fetch_with_body_sync(url, method, content_type, body)
     }
 }
 
@@ -4506,6 +4552,52 @@ mod tests {
             Err(Error::Aborted(_)) => {}
             Err(e) => panic!("expected Error::Aborted, got Err({e:?})"),
             Ok(_) => panic!("expected Error::Aborted, got Ok(_) — body must not be delivered"),
+        }
+    }
+
+    /// Phase A (body variant): aborting during the blocking body read of a POST
+    /// tears the socket down and yields `Error::Aborted`, delivering no body.
+    #[test]
+    fn fetch_with_body_cancellable_aborts_in_flight() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+
+        let server = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(sock.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\nConnection: close\r\n\r\npartial");
+            thread::sleep(std::time::Duration::from_secs(1));
+            let _ = sock.shutdown(std::net::Shutdown::Both);
+        });
+
+        let client = HttpClient::new();
+        let token = AbortToken::new();
+        let token2 = token.clone();
+
+        let aborter = thread::spawn(move || {
+            thread::sleep(std::time::Duration::from_millis(150));
+            token2.abort();
+        });
+
+        let url = format!("http://127.0.0.1:{port}/");
+        let result = client.fetch_with_body_cancellable(&url, "POST", "text/plain", b"hi", &token);
+
+        aborter.join().ok();
+        server.join().ok();
+
+        match result {
+            Err(Error::Aborted(_)) => {}
+            Err(e) => panic!("expected Error::Aborted, got Err({e:?})"),
+            Ok(_) => panic!("expected Error::Aborted, got Ok(_) - body must not be delivered"),
         }
     }
 

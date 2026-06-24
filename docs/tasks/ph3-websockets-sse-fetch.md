@@ -99,8 +99,31 @@ socket — it returns whole bodies synchronously — so the localhost-listener
 pattern from the SSE/fetch tests is reused.) **Still open for full Phase B:**
 event-loop push delivery (no JS `_lumen_ws_poll` — requires shell integration).
 
+**Phase A step 3 DONE (2026-06-25)** — JS-observable in-flight abort via the
+timeout deadline. `AbortSignal.timeout(ms)` now records `signal._timeoutMs`;
+`fetch()` routes a positive deadline to two new native bridges
+`_lumen_fetch_cancellable(url, method, timeout_ms)` and
+`_lumen_fetch_cancellable_with_body(url, method, content_type, body, timeout_ms)`
+(`0` ok / `1` net-error / `2` aborted). When `timeout_ms > 0` the bridge spawns a
+Rust deadline thread that flips an `AbortToken`; the network-layer `AbortWatchdog`
+(Step 2) tears the socket down, so `fetch(url, {signal: AbortSignal.timeout(ms)})`
+against a slow server now actually rejects with a `TimeoutError` even though the
+JS thread is parked in the synchronous call. New trait method
+`JsFetchProvider::fetch_with_body_cancellable` (default = pre-flight check + delegate;
+`HttpClient` override = `AbortScope` + `fetch_with_body_sync`). **Bug found & fixed:**
+the POST/PUT/… path (`fetch_with_body_sync`) called `read_response` directly,
+bypassing the watchdog — wrapped it in the same `do_request` abort machinery, so
+body requests now tear down mid-stream too. Tests: +2 core unit (body pre-flight /
+delegate), +1 network integration (`fetch_with_body_cancellable_aborts_in_flight`,
+real localhost), +3 JS (`abort_signal_timeout_records_deadline`,
+`fetch_cancellable_bridge_reports_abort`, `fetch_cancellable_bridge_reports_ok`).
+`lumen-core`/`lumen-network`/`lumen-js` clippy clean; targeted tests green.
+**Still deferred:** a generic `AbortController.abort()` fired *during* a request
+(not a timeout) still has no in-flight effect in the sync model — true async fetch
+(JS event-loop pump) remains the bulk of a future Step.
+
 **Remaining (not yet done):**
-- **Step 3** — JS `fetch()` wiring (`crates/js/src/dom.rs:7328`). **Design note (blocker):** JS is
+- **Step 3 (async fetch)** — JS `fetch()` wiring (`crates/js/src/dom.rs:7328`). **Design note (blocker):** JS is
   single-threaded and the current `fetch()` is *synchronous* (blocks the JS thread), so an
   `AbortController.abort()` fired from JS cannot run *during* the request — the JS thread is parked
   inside the native call. The network-layer in-flight abort built in Step 2 is therefore only

@@ -13,7 +13,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
-use lumen_core::ext::{CacheBackend, CookieProvider, IdbBackend, JsFetchProvider, JsSseEvent, JsSseProvider, JsWebSocketProvider, JsWsEvent, SwBackend};
+use lumen_core::ext::{AbortToken, CacheBackend, CookieProvider, IdbBackend, JsFetchProvider, JsSseEvent, JsSseProvider, JsWebSocketProvider, JsWsEvent, SwBackend};
 use lumen_core::url::Url;
 use lumen_dom::{
     Attribute, Document, DomPosition, NodeData, NodeId, QualName, Range as DomRange, Selection,
@@ -1145,6 +1145,10 @@ fn install_primitives(
 
         let fp2 = fetch_provider.clone();
         let fp_beacon = fetch_provider.clone();
+        let fp_cancel = fetch_provider.clone();
+        let fp_cancel_body = fetch_provider.clone();
+        let c_cancel = Arc::clone(&cache);
+        let c_cancel_body = Arc::clone(&cache);
         let (fp, c) = (fetch_provider, Arc::clone(&cache));
         reg!("_lumen_fetch_sync", move |url: String, method: String| -> bool {
             let Some(ref provider) = fp else { return false };
@@ -1278,6 +1282,71 @@ fn install_primitives(
                 }
             );
         }
+
+        // _lumen_fetch_cancellable(url, method, timeout_ms) → u32
+        // In-flight-cancellable GET/HEAD. Returns 0 = ok (body in FetchCache),
+        // 1 = network error, 2 = aborted/timed-out. When timeout_ms > 0 a detached
+        // deadline thread flips the AbortToken; the network layer tears the socket
+        // down, so a `fetch(url, {signal: AbortSignal.timeout(ms)})` against a slow
+        // server actually aborts even though the JS thread is parked in the call.
+        reg!("_lumen_fetch_cancellable", move |url: String, method: String, timeout_ms: u32| -> u32 {
+            let Some(ref provider) = fp_cancel else { return 1 };
+            let token = AbortToken::new();
+            if timeout_ms > 0 {
+                let t = token.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(u64::from(timeout_ms)));
+                    t.abort();
+                });
+            }
+            match provider.fetch_cancellable(&url, &method, &token) {
+                Ok(resp) => {
+                    let mut flat = Vec::with_capacity(resp.headers.len() * 2);
+                    for (k, v) in resp.headers { flat.push(k); flat.push(v); }
+                    *c_cancel.lock().unwrap() = Some(FetchCache {
+                        status: resp.status,
+                        status_text: resp.status_text,
+                        headers: flat,
+                        body: resp.body,
+                    });
+                    0
+                }
+                Err(lumen_core::error::Error::Aborted(_)) => 2,
+                Err(e) => { eprintln!("fetch error: {e}"); 1 }
+            }
+        });
+
+        // _lumen_fetch_cancellable_with_body(url, method, content_type, body, timeout_ms) → u32
+        // Body-carrying (POST/PUT/...) sibling of _lumen_fetch_cancellable.
+        reg!(
+            "_lumen_fetch_cancellable_with_body",
+            move |url: String, method: String, content_type: String, body: Vec<u8>, timeout_ms: u32| -> u32 {
+                let Some(ref provider) = fp_cancel_body else { return 1 };
+                let token = AbortToken::new();
+                if timeout_ms > 0 {
+                    let t = token.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(u64::from(timeout_ms)));
+                        t.abort();
+                    });
+                }
+                match provider.fetch_with_body_cancellable(&url, &method, &content_type, &body, &token) {
+                    Ok(resp) => {
+                        let mut flat = Vec::with_capacity(resp.headers.len() * 2);
+                        for (k, v) in resp.headers { flat.push(k); flat.push(v); }
+                        *c_cancel_body.lock().unwrap() = Some(FetchCache {
+                            status: resp.status,
+                            status_text: resp.status_text,
+                            headers: flat,
+                            body: resp.body,
+                        });
+                        0
+                    }
+                    Err(lumen_core::error::Error::Aborted(_)) => 2,
+                    Err(e) => { eprintln!("fetch_with_body error: {e}"); 1 }
+                }
+            }
+        );
 
         // ── Per-response stream slots ────────────────────────────────────────────
         // Each call to Response._fromFetchCache() allocates a dedicated slot so the
@@ -6420,6 +6489,10 @@ AbortSignal.abort = function(reason) {
 // shell timer queue (setTimeout shim) fires.
 AbortSignal.timeout = function(ms) {
     var sig = new AbortSignal();
+    // Recorded so fetch() can enforce the deadline natively: the JS thread is
+    // parked inside the synchronous native fetch, so this setTimeout can never
+    // fire mid-request — the native deadline thread does the in-flight abort.
+    sig._timeoutMs = (typeof ms === 'number' && ms > 0) ? ms : 0;
     setTimeout(function() {
         _lumen_abort_signal_fire(sig, new DOMException('signal timed out', 'TimeoutError'));
     }, ms);
@@ -7363,6 +7436,11 @@ function fetch(input, init) {
         var reqBody = (init && init.body !== undefined && init.body !== null) ? init.body
                     : (typeof input === 'object' && input.body ? input.body : null);
 
+        // AbortSignal.timeout(ms) deadline is enforced natively (the JS thread is
+        // parked in the synchronous fetch, so the JS setTimeout can't fire): a
+        // positive _timeoutMs routes to the cancellable bridge whose deadline
+        // thread tears the in-flight socket down (rc === 2 → TimeoutError).
+        var _timeoutMs = (fetchSignal && typeof fetchSignal._timeoutMs === 'number' && fetchSignal._timeoutMs > 0) ? fetchSignal._timeoutMs : 0;
         var ok;
         if (reqBody !== null && reqBody !== undefined) {
             var bodyBytes, contentType;
@@ -7400,9 +7478,21 @@ function fetch(input, init) {
                     }
                 }
             }
-            ok = _lumen_fetch_sync_with_body(url, method, contentType, bodyBytes);
+            if (_timeoutMs > 0) {
+                var rc = _lumen_fetch_cancellable_with_body(url, method, contentType, bodyBytes, _timeoutMs);
+                if (rc === 2) { return Promise.reject(new DOMException('signal timed out', 'TimeoutError')); }
+                ok = (rc === 0);
+            } else {
+                ok = _lumen_fetch_sync_with_body(url, method, contentType, bodyBytes);
+            }
         } else {
-            ok = _lumen_fetch_sync(url, method);
+            if (_timeoutMs > 0) {
+                var rc2 = _lumen_fetch_cancellable(url, method, _timeoutMs);
+                if (rc2 === 2) { return Promise.reject(new DOMException('signal timed out', 'TimeoutError')); }
+                ok = (rc2 === 0);
+            } else {
+                ok = _lumen_fetch_sync(url, method);
+            }
         }
 
         if (!ok) {
@@ -18276,6 +18366,54 @@ mod tests {
         let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider;
         rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, false).unwrap();
         rt
+    }
+
+    // Mock fetch provider whose cancellable variants always report an abort,
+    // exercising the _lumen_fetch_cancellable* bridge → code 2 path.
+    struct AbortFetch;
+    impl lumen_core::ext::JsFetchProvider for AbortFetch {
+        fn fetch_sync(&self, _url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+        }
+        fn fetch_with_body_sync(&self, _url: &str, _method: &str, _content_type: &str, _body: &[u8]) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+        }
+        fn fetch_cancellable(&self, _url: &str, _method: &str, _token: &lumen_core::ext::AbortToken) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            Err(lumen_core::error::Error::Aborted("aborted".into()))
+        }
+        fn fetch_with_body_cancellable(&self, _url: &str, _method: &str, _content_type: &str, _body: &[u8], _token: &lumen_core::ext::AbortToken) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            Err(lumen_core::error::Error::Aborted("aborted".into()))
+        }
+    }
+    impl AbortFetch {
+        fn new() -> Arc<Self> { Arc::new(AbortFetch) }
+    }
+
+    fn runtime_with_abort_fetch() -> QuickJsRuntime {
+        let rt = QuickJsRuntime::new().unwrap();
+        let p: Arc<dyn lumen_core::ext::JsFetchProvider> = AbortFetch::new();
+        rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, false).unwrap();
+        rt
+    }
+
+    #[test]
+    fn abort_signal_timeout_records_deadline() {
+        let rt = runtime_with_fetch(CaptureFetch::new());
+        assert_eq!(rt.eval("AbortSignal.timeout(50)._timeoutMs === 50").unwrap(), lumen_core::JsValue::Bool(true));
+        assert_eq!(rt.eval("AbortSignal.timeout(0)._timeoutMs === 0").unwrap(), lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn fetch_cancellable_bridge_reports_abort() {
+        let rt = runtime_with_abort_fetch();
+        assert_eq!(rt.eval("_lumen_fetch_cancellable('https://example.com/','GET',0) === 2").unwrap(), lumen_core::JsValue::Bool(true));
+        assert_eq!(rt.eval("_lumen_fetch_cancellable_with_body('https://example.com/','POST','text/plain',[104,105],0) === 2").unwrap(), lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn fetch_cancellable_bridge_reports_ok() {
+        let rt = runtime_with_fetch(CaptureFetch::new());
+        assert_eq!(rt.eval("_lumen_fetch_cancellable('https://example.com/','GET',0) === 0").unwrap(), lumen_core::JsValue::Bool(true));
     }
 
     #[test]
