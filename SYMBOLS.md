@@ -2861,7 +2861,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgpu_compute.rs:980` **enum** `GpuOp` — Одна записанная операция command-encoder для исполнения на `queue.submit`
 `crates/engine/paint/src/webgpu_compute.rs:1035` **fn** `submit` — Исполняет набор операций в одном `CommandEncoder` и сабмитит на очередь
 
-## lumen-shell  (855 symbols)
+## lumen-shell  (868 symbols)
 
 `crates/shell/src/adblock.rs:44` **fn** `browser_data_dir` — Root of all browser user data (portable): `<exe_dir>/data`
 `crates/shell/src/adblock.rs:52` **fn** `adblock_dir` — `<data>/adblock` — root of the ad-block subsystem's files
@@ -3548,38 +3548,49 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/surface/ctx.rs:22` **struct** `PaintCtx` — Read-only context for [`super::Panel::paint`]
 `crates/shell/src/surface/ctx.rs:39` **fn** `new` — Build a paint context with default (non-focused, non-hovered) hints
 `crates/shell/src/surface/ctx.rs:56` **struct** `EventCtx` — Side effects a panel may request while handling an event
-`crates/shell/src/surface/ctx.rs:69` **fn** `new` — A fresh context with no pending effects
-`crates/shell/src/surface/ctx.rs:74` **fn** `dispatch` — Queue a command to be applied after `on_event` returns
-`crates/shell/src/surface/ctx.rs:79` **fn** `request_repaint` — Mark this panel dirty so it repaints on the next frame
-`crates/shell/src/surface/ctx.rs:84` **fn** `set_cursor` — Ask the shell to show `cursor` while over this panel
-`crates/shell/src/surface/ctx.rs:89` **fn** `request_focus` — Ask to capture keyboard focus
-`crates/shell/src/surface/ctx.rs:94` **fn** `release_focus` — Ask to release keyboard focus
-`crates/shell/src/surface/ctx.rs:101` **fn** `commands` — Commands queued during this event, in dispatch order
-`crates/shell/src/surface/ctx.rs:106` **fn** `take_commands` — Take ownership of the queued commands, leaving the context empty
-`crates/shell/src/surface/ctx.rs:111` **fn** `wants_repaint` — Whether the panel requested a repaint
-`crates/shell/src/surface/ctx.rs:116` **fn** `requested_cursor` — The cursor the panel requested, if any
-`crates/shell/src/surface/ctx.rs:122` **fn** `requested_focus_change` — The focus change the panel requested: `Some(true)` to capture focus,
-`crates/shell/src/surface/manager.rs:41` **struct** `SlotRect` — Resolved window-space rect for a named docked slot
-`crates/shell/src/surface/manager.rs:49` **struct** `LayoutNode` — Informational snapshot of one slot in the docked layout tree
-`crates/shell/src/surface/manager.rs:75` **struct** `SurfaceManager` — Single coordinator for all shell UI panels (ADR-009 §SurfaceManager)
-`crates/shell/src/surface/manager.rs:87` **fn** `new` — Create an empty manager sized to `(width, height)` CSS px
-`crates/shell/src/surface/manager.rs:100` **fn** `register` — Register a panel.  Its rect is computed immediately; `on_mount` is called
-`crates/shell/src/surface/manager.rs:113` **fn** `composite` — Composite all visible panels into one `DisplayList` for the renderer
-`crates/shell/src/surface/manager.rs:148` **fn** `slot_rect` — Resolved rect for a named docked slot, or `None` if not present
-`crates/shell/src/surface/manager.rs:155` **fn** `layout_snapshot` — Snapshot of the docked layout tree (diagnostic / test helper)
-`crates/shell/src/surface/manager.rs:170` **fn** `on_resize` — Notify that the window was resized.  All panel rects are recomputed and
-`crates/shell/src/surface/manager.rs:186` **fn** `set_visible` — Show or hide a panel by id.  Triggers layout recomputation
-`crates/shell/src/surface/manager.rs:195` **fn** `set_theme` — Set the active `Theme` for all subsequent `paint()` calls
-`crates/shell/src/surface/manager.rs:200` **fn** `theme` — Active theme
-`crates/shell/src/surface/manager.rs:205` **fn** `has_panel` — Whether a panel with `id` is registered
-`crates/shell/src/surface/manager.rs:210` **fn** `panel_count` — Number of registered panels
-`crates/shell/src/surface/manager.rs:215` **fn** `window_size` — Current window size (CSS px)
-`crates/shell/src/surface/manager.rs:220` **fn** `panel_rect` — Rect of a registered panel, or `None` if not found / hidden
-`crates/shell/src/surface/manager.rs:232` **fn** `route_mouse_move` — Route a mouse-move event and return the combined response
-`crates/shell/src/surface/manager.rs:237` **fn** `route_mouse_down` — Route a mouse-down event
-`crates/shell/src/surface/manager.rs:242` **fn** `route_mouse_up` — Route a mouse-up event
-`crates/shell/src/surface/manager.rs:247` **fn** `route_click` — Route a click (press + release in the same panel)
-`crates/shell/src/surface/manager.rs:252` **fn** `route_scroll` — Route a scroll event
+`crates/shell/src/surface/ctx.rs:71` **fn** `new` — A fresh context with no pending effects
+`crates/shell/src/surface/ctx.rs:76` **fn** `dispatch` — Queue a command to be applied after `on_event` returns
+`crates/shell/src/surface/ctx.rs:81` **fn** `request_repaint` — Mark this panel dirty so it repaints on the next frame
+`crates/shell/src/surface/ctx.rs:86` **fn** `set_cursor` — Ask the shell to show `cursor` while over this panel
+`crates/shell/src/surface/ctx.rs:91` **fn** `request_focus` — Ask to capture keyboard focus
+`crates/shell/src/surface/ctx.rs:96` **fn** `release_focus` — Ask to release keyboard focus
+`crates/shell/src/surface/ctx.rs:101` **fn** `start_drag` — Ask the manager to begin dragging this panel (window-local `grab_offset`)
+`crates/shell/src/surface/ctx.rs:108` **fn** `commands` — Commands queued during this event, in dispatch order
+`crates/shell/src/surface/ctx.rs:113` **fn** `take_commands` — Take ownership of the queued commands, leaving the context empty
+`crates/shell/src/surface/ctx.rs:118` **fn** `wants_repaint` — Whether the panel requested a repaint
+`crates/shell/src/surface/ctx.rs:123` **fn** `requested_cursor` — The cursor the panel requested, if any
+`crates/shell/src/surface/ctx.rs:129` **fn** `requested_focus_change` — The focus change the panel requested: `Some(true)` to capture focus,
+`crates/shell/src/surface/ctx.rs:134` **fn** `requested_drag` — The drag the panel requested to start, if any
+`crates/shell/src/surface/manager.rs:61` **struct** `SlotRect` — Resolved window-space rect for a named docked slot
+`crates/shell/src/surface/manager.rs:69` **struct** `LayoutNode` — Informational snapshot of one slot in the docked layout tree
+`crates/shell/src/surface/manager.rs:95` **struct** `SurfaceManager` — Single coordinator for all shell UI panels (ADR-009 §SurfaceManager)
+`crates/shell/src/surface/manager.rs:126` **fn** `new` — Create an empty manager sized to `(width, height)` CSS px
+`crates/shell/src/surface/manager.rs:141` **fn** `register` — Register a panel.  Its rect is computed immediately; `on_mount` is called
+`crates/shell/src/surface/manager.rs:154` **fn** `composite` — Composite all visible panels into one `DisplayList` for the renderer
+`crates/shell/src/surface/manager.rs:189` **fn** `slot_rect` — Resolved rect for a named docked slot, or `None` if not present
+`crates/shell/src/surface/manager.rs:196` **fn** `layout_snapshot` — Snapshot of the docked layout tree (diagnostic / test helper)
+`crates/shell/src/surface/manager.rs:211` **fn** `on_resize` — Notify that the window was resized.  All panel rects are recomputed and
+`crates/shell/src/surface/manager.rs:227` **fn** `set_visible` — Show or hide a panel by id.  Triggers layout recomputation
+`crates/shell/src/surface/manager.rs:236` **fn** `set_theme` — Set the active `Theme` for all subsequent `paint()` calls
+`crates/shell/src/surface/manager.rs:241` **fn** `theme` — Active theme
+`crates/shell/src/surface/manager.rs:246` **fn** `has_panel` — Whether a panel with `id` is registered
+`crates/shell/src/surface/manager.rs:251` **fn** `panel_count` — Number of registered panels
+`crates/shell/src/surface/manager.rs:256` **fn** `window_size` — Current window size (CSS px)
+`crates/shell/src/surface/manager.rs:261` **fn** `panel_rect` — Rect of a registered panel, or `None` if not found / hidden
+`crates/shell/src/surface/manager.rs:275` **fn** `route_mouse_move` — Route a mouse-move event and return the combined response
+`crates/shell/src/surface/manager.rs:291` **fn** `route_mouse_down` — Route a mouse-down event
+`crates/shell/src/surface/manager.rs:303` **fn** `route_mouse_up` — Route a mouse-up event
+`crates/shell/src/surface/manager.rs:316` **fn** `route_click` — Route a click (press + release in the same panel)
+`crates/shell/src/surface/manager.rs:321` **fn** `route_scroll` — Route a scroll event
+`crates/shell/src/surface/manager.rs:331` **fn** `move_panel_to_slot` — Override the slot a panel is docked into and recompute the layout
+`crates/shell/src/surface/manager.rs:348` **fn** `set_slot_size` — Set a per-slot size override (px) and recompute the layout
+`crates/shell/src/surface/manager.rs:357` **fn** `panel_slot` — Effective docked slot of the panel with `id`, or `None` if not docked
+`crates/shell/src/surface/manager.rs:366` **fn** `is_dragging` — `true` while a panel is being dragged to a new slot
+`crates/shell/src/surface/manager.rs:372` **fn** `drop_target_rect` — Rect of the slot currently hovered as the drop target, for an insertion
+`crates/shell/src/surface/manager.rs:380` **fn** `begin_drag` — Begin dragging `panel_id`, grabbed at panel-local `grab_offset`, with the
+`crates/shell/src/surface/manager.rs:390` **fn** `cancel_drag` — Abort any in-progress drag without redocking
+`crates/shell/src/surface/manager.rs:402` **fn** `serialize_layout` — Serialise the current panel layout to a compact, forward-compatible
+`crates/shell/src/surface/manager.rs:423` **fn** `apply_layout` — Apply a layout previously produced by [`Self::serialize_layout`]
 `crates/shell/src/surface/mod.rs:48` **trait** `Panel` — A self-contained shell UI block
 `crates/shell/src/surface/theme.rs:21` **struct** `Theme` — All design tokens for one shell appearance
 `crates/shell/src/surface/theme.rs:90` **fn** `sand_indigo` — V1 / default: warm sand + indigo (light)
@@ -3596,13 +3607,15 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/surface/types.rs:155` **enum** `MouseButton` — Mouse button identity
 `crates/shell/src/surface/types.rs:163` **struct** `ScrollDelta` — Scroll wheel / trackpad delta in CSS px
 `crates/shell/src/surface/types.rs:175` **enum** `PanelEvent` — An event delivered to a panel via [`super::Panel::on_event`]
-`crates/shell/src/surface/types.rs:206` **enum** `EventResponse` — What a panel returns from [`super::Panel::on_event`]
-`crates/shell/src/surface/types.rs:226` **enum** `Command` — State-changing intents a panel can emit
-`crates/shell/src/surface/types.rs:258` **enum** `CursorIcon` — Mouse cursor shape requested for a hit target
-`crates/shell/src/surface/types.rs:270` **enum** `HitElement` — Semantic identity of the element under the cursor
-`crates/shell/src/surface/types.rs:295` **struct** `HitTarget` — Result of [`super::Panel::hit_test`]: what is under a point and how the shell
-`crates/shell/src/surface/types.rs:308` **fn** `new` — A minimal hit target for `element` with a default cursor and no tooltip
-`crates/shell/src/surface/types.rs:334` **fn** `rect_contains` — `true` if `rect` contains `p` (left/top inclusive, right/bottom exclusive)
+`crates/shell/src/surface/types.rs:218` **struct** `DragData` — State carried while a panel is being dragged from its dock slot
+`crates/shell/src/surface/types.rs:229` **fn** `new` — Build drag state for `source_panel` grabbed at `grab_offset` (window-local
+`crates/shell/src/surface/types.rs:238` **enum** `EventResponse` — What a panel returns from [`super::Panel::on_event`]
+`crates/shell/src/surface/types.rs:258` **enum** `Command` — State-changing intents a panel can emit
+`crates/shell/src/surface/types.rs:290` **enum** `CursorIcon` — Mouse cursor shape requested for a hit target
+`crates/shell/src/surface/types.rs:302` **enum** `HitElement` — Semantic identity of the element under the cursor
+`crates/shell/src/surface/types.rs:327` **struct** `HitTarget` — Result of [`super::Panel::hit_test`]: what is under a point and how the shell
+`crates/shell/src/surface/types.rs:340` **fn** `new` — A minimal hit target for `element` with a default cursor and no tooltip
+`crates/shell/src/surface/types.rs:366` **fn** `rect_contains` — `true` if `rect` contains `p` (left/top inclusive, right/bottom exclusive)
 `crates/shell/src/tab_lifecycle/manager.rs:14` **type** `TabId` — Opaque tab identifier. Callers create sequential IDs (0, 1, 2, …) or any u64
 `crates/shell/src/tab_lifecycle/manager.rs:18` **struct** `TierTransition` — A tier transition that occurred during `tick_idle` or `lru_evict`
 `crates/shell/src/tab_lifecycle/manager.rs:35` **struct** `TabLifecycleManager` — Manages lifecycle state for all open tabs
@@ -3719,7 +3732,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/zoom.rs:31` **fn** `zoom_reset` — Reset zoom to 100%
 `crates/shell/src/zoom.rs:40` **fn** `effective_viewport` — Compute the CSS layout viewport size from the physical window size
 
-## lumen-storage  (505 symbols)
+## lumen-storage  (507 symbols)
 
 `crates/storage/src/a11y_prefs.rs:38` **enum** `CursorSize` — Accessibility cursor magnification level
 `crates/storage/src/a11y_prefs.rs:50` **fn** `as_str` — Serialize to the storage string representation
@@ -3796,30 +3809,32 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/broadcast_channels.rs:174` **fn** `unregister` — `channel.close()` — снять регистрацию
 `crates/storage/src/broadcast_channels.rs:188` **fn** `unregister_context` — При закрытии вкладки — снять все регистрации этого context-а
 `crates/storage/src/broadcast_channels.rs:202` **fn** `count`
-`crates/storage/src/browser_settings.rs:43` **struct** `BrowserSettingsSnapshot` — All browser settings in a single value type for easy read/write
-`crates/storage/src/browser_settings.rs:83` **struct** `BrowserSettings` — Persistent settings store
-`crates/storage/src/browser_settings.rs:106` **fn** `open` — Open (or create) an on-disk settings database
-`crates/storage/src/browser_settings.rs:112` **fn** `open_in_memory` — Create an in-memory settings database (for tests / ephemeral sessions)
-`crates/storage/src/browser_settings.rs:172` **fn** `homepage` — Homepage / new-tab URL
-`crates/storage/src/browser_settings.rs:177` **fn** `set_homepage` — Set homepage URL
-`crates/storage/src/browser_settings.rs:182` **fn** `search_engine_id` — ID of the default search engine (`SearchProviderEntry::id`)
-`crates/storage/src/browser_settings.rs:187` **fn** `set_search_engine_id` — Set default search engine ID
-`crates/storage/src/browser_settings.rs:192` **fn** `shields_enabled` — Whether shields (tracker blocker) are globally enabled
-`crates/storage/src/browser_settings.rs:197` **fn** `set_shields_enabled` — Set shields on/off
-`crates/storage/src/browser_settings.rs:202` **fn** `fingerprint_mode` — Fingerprint resistance mode: `"standard"`, `"strict"`, or `"off"`
-`crates/storage/src/browser_settings.rs:207` **fn** `set_fingerprint_mode` — Set fingerprint resistance mode
-`crates/storage/src/browser_settings.rs:212` **fn** `doh_enabled` — Whether DNS-over-HTTPS is enabled
-`crates/storage/src/browser_settings.rs:217` **fn** `set_doh_enabled` — Set DNS-over-HTTPS on/off
-`crates/storage/src/browser_settings.rs:222` **fn** `font_size` — Base font size in CSS px (e.g. 16.0)
-`crates/storage/src/browser_settings.rs:227` **fn** `set_font_size` — Set base font size
-`crates/storage/src/browser_settings.rs:232` **fn** `theme` — UI theme: `"dark"`, `"light"`, or `"system"`
-`crates/storage/src/browser_settings.rs:237` **fn** `set_theme` — Set UI theme
-`crates/storage/src/browser_settings.rs:242` **fn** `download_path` — Absolute path to the default download directory. Empty = OS default
-`crates/storage/src/browser_settings.rs:247` **fn** `set_download_path` — Set default download directory path
-`crates/storage/src/browser_settings.rs:252` **fn** `tab_layout` — Tab layout mode: `"horizontal"` or `"vertical"` (GG-4)
-`crates/storage/src/browser_settings.rs:257` **fn** `set_tab_layout` — Set tab layout mode
-`crates/storage/src/browser_settings.rs:262` **fn** `snapshot` — Read all settings into a snapshot value
-`crates/storage/src/browser_settings.rs:277` **fn** `apply_snapshot` — Persist all fields from a snapshot in one call
+`crates/storage/src/browser_settings.rs:45` **struct** `BrowserSettingsSnapshot` — All browser settings in a single value type for easy read/write
+`crates/storage/src/browser_settings.rs:91` **struct** `BrowserSettings` — Persistent settings store
+`crates/storage/src/browser_settings.rs:114` **fn** `open` — Open (or create) an on-disk settings database
+`crates/storage/src/browser_settings.rs:120` **fn** `open_in_memory` — Create an in-memory settings database (for tests / ephemeral sessions)
+`crates/storage/src/browser_settings.rs:180` **fn** `homepage` — Homepage / new-tab URL
+`crates/storage/src/browser_settings.rs:185` **fn** `set_homepage` — Set homepage URL
+`crates/storage/src/browser_settings.rs:190` **fn** `search_engine_id` — ID of the default search engine (`SearchProviderEntry::id`)
+`crates/storage/src/browser_settings.rs:195` **fn** `set_search_engine_id` — Set default search engine ID
+`crates/storage/src/browser_settings.rs:200` **fn** `shields_enabled` — Whether shields (tracker blocker) are globally enabled
+`crates/storage/src/browser_settings.rs:205` **fn** `set_shields_enabled` — Set shields on/off
+`crates/storage/src/browser_settings.rs:210` **fn** `fingerprint_mode` — Fingerprint resistance mode: `"standard"`, `"strict"`, or `"off"`
+`crates/storage/src/browser_settings.rs:215` **fn** `set_fingerprint_mode` — Set fingerprint resistance mode
+`crates/storage/src/browser_settings.rs:220` **fn** `doh_enabled` — Whether DNS-over-HTTPS is enabled
+`crates/storage/src/browser_settings.rs:225` **fn** `set_doh_enabled` — Set DNS-over-HTTPS on/off
+`crates/storage/src/browser_settings.rs:230` **fn** `font_size` — Base font size in CSS px (e.g. 16.0)
+`crates/storage/src/browser_settings.rs:235` **fn** `set_font_size` — Set base font size
+`crates/storage/src/browser_settings.rs:240` **fn** `theme` — UI theme: `"dark"`, `"light"`, or `"system"`
+`crates/storage/src/browser_settings.rs:245` **fn** `set_theme` — Set UI theme
+`crates/storage/src/browser_settings.rs:250` **fn** `download_path` — Absolute path to the default download directory. Empty = OS default
+`crates/storage/src/browser_settings.rs:255` **fn** `set_download_path` — Set default download directory path
+`crates/storage/src/browser_settings.rs:260` **fn** `tab_layout` — Tab layout mode: `"horizontal"` or `"vertical"` (GG-4)
+`crates/storage/src/browser_settings.rs:265` **fn** `set_tab_layout` — Set tab layout mode
+`crates/storage/src/browser_settings.rs:270` **fn** `panel_layout` — Serialised docked-panel layout string (F2-6c); empty = built-in defaults
+`crates/storage/src/browser_settings.rs:275` **fn** `set_panel_layout` — Persist the serialised docked-panel layout
+`crates/storage/src/browser_settings.rs:280` **fn** `snapshot` — Read all settings into a snapshot value
+`crates/storage/src/browser_settings.rs:296` **fn** `apply_snapshot` — Persist all fields from a snapshot in one call
 `crates/storage/src/cache_storage.rs:19` **struct** `CachedEntry`
 `crates/storage/src/cache_storage.rs:30` **struct** `CacheStorage`
 `crates/storage/src/cache_storage.rs:41` **fn** `open`
@@ -4228,4 +4243,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4157 symbols in 22 crates*
+*Total: 4172 symbols in 22 crates*

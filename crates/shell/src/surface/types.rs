@@ -197,6 +197,38 @@ pub enum PanelEvent {
     Resized { new_rect: Rect },
     /// The active [`super::Theme`] changed.
     ThemeChanged,
+    /// A drag gesture began on this panel's drag handle.
+    ///
+    /// Unlike the mouse events above (which are panel-local), drag positions are
+    /// in **window-local** coordinates because a drag crosses panel boundaries.
+    DragStart { pos: Point },
+    /// The drag pointer moved. Position is **window-local** (see [`PanelEvent::DragStart`]).
+    DragMove { pos: Point },
+    /// The drag gesture was released. Position is **window-local**.
+    DragEnd { pos: Point },
+}
+
+/// State carried while a panel is being dragged from its dock slot.
+///
+/// Produced when a [`PanelEvent::DragStart`] is recognised over a
+/// [`HitElement::DragHandle`]; the manager keeps one of these alive for the
+/// duration of the gesture so it can re-anchor the panel under the cursor and,
+/// on release, redock it into the hovered slot.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DragData {
+    /// Id of the panel being dragged ([`super::Panel::id`]).
+    pub source_panel: &'static str,
+    /// Window-local offset from the dragged panel's top-left corner to the grab
+    /// point, so the panel can be re-anchored under the cursor without jumping.
+    pub grab_offset: Point,
+}
+
+impl DragData {
+    /// Build drag state for `source_panel` grabbed at `grab_offset` (window-local
+    /// offset from the panel's top-left to the cursor).
+    pub fn new(source_panel: &'static str, grab_offset: Point) -> Self {
+        Self { source_panel, grab_offset }
+    }
 }
 
 // ── Event responses & commands ───────────────────────────────────────────────
@@ -388,6 +420,33 @@ mod tests {
         assert!(!rect_contains(r, Point::new(110.0, 40.0))); // right exclusive
         assert!(!rect_contains(r, Point::new(50.0, 70.0))); // bottom exclusive
         assert!(!rect_contains(r, Point::new(0.0, 0.0)));
+    }
+
+    #[test]
+    fn drag_data_new_round_trips_fields() {
+        let offset = Point::new(10.0, 20.0);
+        let drag_data = DragData::new("test_panel", offset);
+        assert_eq!(drag_data.source_panel, "test_panel");
+        assert_eq!(drag_data.grab_offset, offset);
+    }
+
+    #[test]
+    fn panel_event_drag_move_pattern_match() {
+        let event = PanelEvent::DragMove { pos: Point::new(50.0, 60.0) };
+        if let PanelEvent::DragMove { pos } = event {
+            assert_eq!(pos, Point::new(50.0, 60.0));
+        } else {
+            panic!("Expected DragMove event");
+        }
+    }
+
+    #[test]
+    fn drag_data_partial_eq() {
+        let data1 = DragData::new("panel1", Point::new(1.0, 2.0));
+        let data2 = DragData::new("panel1", Point::new(1.0, 2.0));
+        let data3 = DragData::new("panel2", Point::new(1.0, 2.0));
+        assert_eq!(data1, data2);
+        assert_ne!(data1, data3);
     }
 
     #[test]

@@ -31,8 +31,8 @@ pub use ctx::{EventCtx, PaintCtx};
 pub use manager::{LayoutNode, SlotRect, SurfaceManager};
 pub use theme::Theme;
 pub use types::{
-    rect_contains, Command, Corner, CursorIcon, EventResponse, FloatAnchor, HitElement, HitTarget,
-    MouseButton, PanelEvent, ScrollDelta, SizeRule, Surface,
+    rect_contains, Command, Corner, CursorIcon, DragData, EventResponse, FloatAnchor, HitElement,
+    HitTarget, MouseButton, PanelEvent, ScrollDelta, SizeRule, Surface,
 };
 
 use lumen_core::geom::{Point, Rect};

@@ -16,7 +16,10 @@ use lumen_paint::DisplayList;
 use super::{
     ctx::{EventCtx, PaintCtx},
     theme::Theme,
-    types::{Corner, EventResponse, FloatAnchor, MouseButton, PanelEvent, ScrollDelta, Surface},
+    types::{
+        Corner, EventResponse, FloatAnchor, HitElement, HitTarget, MouseButton, PanelEvent,
+        ScrollDelta, Surface,
+    },
     Panel,
 };
 
@@ -27,11 +30,28 @@ struct PanelEntry {
     /// Panel rect in window coordinates; zero when hidden.
     rect: Rect,
     visible: bool,
+    /// Slot this panel is docked into when it differs from `panel.surface()`.
+    ///
+    /// Set by [`SurfaceManager::move_panel_to_slot`] when the user redocks a
+    /// panel; `None` means follow the panel's declared `Surface::Docked` slot.
+    slot_override: Option<&'static str>,
 }
 
 impl PanelEntry {
     fn new(panel: Box<dyn Panel>) -> Self {
-        Self { panel, rect: Rect::ZERO, visible: true }
+        Self { panel, rect: Rect::ZERO, visible: true, slot_override: None }
+    }
+
+    /// Effective docked slot: the redock override if set, else the panel's own
+    /// `Surface::Docked` slot, else `None` (float/modal/os-window panels).
+    fn effective_slot(&self) -> Option<&'static str> {
+        self.slot_override.or_else(|| {
+            if let Surface::Docked { slot } = self.panel.surface() {
+                Some(slot)
+            } else {
+                None
+            }
+        })
     }
 }
 
@@ -80,6 +100,25 @@ pub struct SurfaceManager {
     focused: Option<usize>,
     /// Resolved rects for the five docked slots.
     docked_rects: HashMap<&'static str, Rect>,
+    /// Per-slot size override in px (left/right override width, top/bottom
+    /// override height), set when the user resizes a slot. Empty = derive size
+    /// from the first visible panel's `SizeRule`.
+    slot_size_overrides: HashMap<&'static str, f32>,
+    /// Active drag gesture, if a panel is being dragged to a new slot.
+    drag: Option<DragState>,
+}
+
+/// In-flight panel drag gesture tracked by [`SurfaceManager`].
+#[derive(Debug, Clone, PartialEq)]
+struct DragState {
+    /// Id of the panel being dragged.
+    panel_id: &'static str,
+    /// Window-local offset from the panel's top-left to the grab point.
+    grab_offset: Point,
+    /// Latest window-local pointer position.
+    pos: Point,
+    /// Slot currently hovered as the drop target, if any.
+    hover_slot: Option<&'static str>,
 }
 
 impl SurfaceManager {
@@ -91,6 +130,8 @@ impl SurfaceManager {
             theme: Theme::default(),
             focused: None,
             docked_rects: HashMap::new(),
+            slot_size_overrides: HashMap::new(),
+            drag: None,
         };
         mgr.compute_slot_rects();
         mgr
@@ -227,19 +268,47 @@ impl SurfaceManager {
 
     /// Route a mouse-move event and return the combined response.
     ///
-    /// Float panels are tested first (highest z-order wins), then docked panels
-    /// in reverse registration order (last registered = visually topmost).
+    /// While a drag is in progress this tracks the pointer and the hovered drop
+    /// slot and consumes the event. Otherwise: float panels are tested first
+    /// (highest z-order wins), then docked panels in reverse registration order
+    /// (last registered = visually topmost).
     pub fn route_mouse_move(&mut self, pos: Point) -> EventResponse {
+        if self.drag.is_some() {
+            let slot = self.slot_at(pos);
+            if let Some(drag) = self.drag.as_mut() {
+                drag.pos = pos;
+                drag.hover_slot = slot;
+            }
+            return EventResponse::Consumed;
+        }
         self.route_mouse(pos, |local| PanelEvent::MouseMove { pos: local })
     }
 
     /// Route a mouse-down event.
+    ///
+    /// If the press lands on a panel's drag handle, a drag gesture begins and the
+    /// event is consumed; otherwise it is routed to the topmost panel.
     pub fn route_mouse_down(&mut self, pos: Point, button: MouseButton) -> EventResponse {
+        if let Some((id, off)) = self.drag_handle_panel_at(pos) {
+            self.begin_drag(id, off, pos);
+            return EventResponse::Consumed;
+        }
         self.route_mouse(pos, |local| PanelEvent::MouseDown { pos: local, button })
     }
 
     /// Route a mouse-up event.
+    ///
+    /// Completes an in-progress drag by redocking the panel into the hovered slot
+    /// (if different); otherwise routes the event normally.
     pub fn route_mouse_up(&mut self, pos: Point, button: MouseButton) -> EventResponse {
+        if let Some(drag) = self.drag.take() {
+            if let Some(slot) = drag.hover_slot
+                && Some(slot) != self.panel_slot(drag.panel_id)
+            {
+                self.move_panel_to_slot(drag.panel_id, slot);
+            }
+            return EventResponse::Consumed;
+        }
         self.route_mouse(pos, |local| PanelEvent::MouseUp { pos: local, button })
     }
 
@@ -253,7 +322,186 @@ impl SurfaceManager {
         self.route_mouse(pos, |_local| PanelEvent::Scroll { delta })
     }
 
+    // ── Redock & slot sizing ──────────────────────────────────────────────────
+
+    /// Override the slot a panel is docked into and recompute the layout.
+    ///
+    /// `slot` must be one of the known slot names (`top`/`left`/`right`/
+    /// `bottom`/`content`); returns `true` if the panel was found and moved.
+    pub fn move_panel_to_slot(&mut self, id: &str, slot: &'static str) -> bool {
+        if as_static_slot(slot).is_none() {
+            return false;
+        }
+        let Some(idx) = self.panels.iter().position(|e| e.panel.id() == id) else {
+            return false;
+        };
+        self.panels[idx].slot_override = Some(slot);
+        self.compute_slot_rects();
+        self.assign_panel_rects();
+        true
+    }
+
+    /// Set a per-slot size override (px) and recompute the layout.
+    ///
+    /// For `left`/`right` this is the slot width; for `top`/`bottom` the height.
+    /// Ignored for unknown slot names.
+    pub fn set_slot_size(&mut self, slot: &'static str, size: f32) {
+        if as_static_slot(slot).is_some() {
+            self.slot_size_overrides.insert(slot, size.max(0.0));
+            self.compute_slot_rects();
+            self.assign_panel_rects();
+        }
+    }
+
+    /// Effective docked slot of the panel with `id`, or `None` if not docked.
+    pub fn panel_slot(&self, id: &str) -> Option<&'static str> {
+        self.panels.iter()
+            .find(|e| e.panel.id() == id)
+            .and_then(|e| e.effective_slot())
+    }
+
+    // ── Drag gesture ──────────────────────────────────────────────────────────
+
+    /// `true` while a panel is being dragged to a new slot.
+    pub fn is_dragging(&self) -> bool {
+        self.drag.is_some()
+    }
+
+    /// Rect of the slot currently hovered as the drop target, for an insertion
+    /// highlight overlay. `None` when not dragging or hovering no slot.
+    pub fn drop_target_rect(&self) -> Option<Rect> {
+        self.drag.as_ref().and_then(|d| {
+            d.hover_slot.and_then(|slot| self.docked_rects.get(slot).copied())
+        })
+    }
+
+    /// Begin dragging `panel_id`, grabbed at panel-local `grab_offset`, with the
+    /// pointer at window-local `pos`.
+    pub fn begin_drag(&mut self, panel_id: &'static str, grab_offset: Point, pos: Point) {
+        self.drag = Some(DragState {
+            panel_id,
+            grab_offset,
+            pos,
+            hover_slot: self.slot_at(pos),
+        });
+    }
+
+    /// Abort any in-progress drag without redocking.
+    pub fn cancel_drag(&mut self) {
+        self.drag = None;
+    }
+
+    // ── Layout persistence ──────────────────────────────────────────────────────
+
+    /// Serialise the current panel layout to a compact, forward-compatible
+    /// string for persistence.
+    ///
+    /// Format: a version line `1`, then one `panel <id> <slot> <0|1>` line per
+    /// docked panel (slot = effective slot, last field = visibility) and one
+    /// `slot <name> <size>` line per slot with a size override.
+    pub fn serialize_layout(&self) -> String {
+        let mut out = String::from("1\n");
+        for entry in &self.panels {
+            if let Some(slot) = entry.effective_slot() {
+                let v = if entry.visible { "1" } else { "0" };
+                out.push_str(&format!("panel {} {} {}\n", entry.panel.id(), slot, v));
+            }
+        }
+        for name in SLOT_NAMES.iter() {
+            if let Some(size) = self.slot_size_overrides.get(name) {
+                out.push_str(&format!("slot {name} {size}\n"));
+            }
+        }
+        out
+    }
+
+    /// Apply a layout previously produced by [`Self::serialize_layout`].
+    ///
+    /// Restores each known panel's slot + visibility and per-slot size
+    /// overrides, then recomputes the layout. Unknown panel ids, unknown slot
+    /// names, and malformed/old-version input are skipped (forward-compatible).
+    pub fn apply_layout(&mut self, data: &str) {
+        let mut lines = data.lines();
+        if lines.next().unwrap_or("") != "1" {
+            return;
+        }
+
+        let mut updates: Vec<(usize, &'static str, bool)> = Vec::new();
+        for line in lines {
+            let tokens: Vec<&str> = line.split_whitespace().collect();
+            match tokens.as_slice() {
+                ["panel", id, slot, v] => {
+                    if let Some(s) = as_static_slot(slot)
+                        && let Some(i) = self.panels.iter().position(|e| &e.panel.id() == id)
+                    {
+                        updates.push((i, s, *v == "1"));
+                    }
+                }
+                ["slot", name, size] => {
+                    if let Some(n) = as_static_slot(name)
+                        && let Ok(sz) = size.parse::<f32>()
+                    {
+                        self.slot_size_overrides.insert(n, sz.max(0.0));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        for (i, slot, vis) in updates {
+            self.panels[i].slot_override = Some(slot);
+            self.panels[i].visible = vis;
+        }
+
+        self.compute_slot_rects();
+        self.assign_panel_rects();
+    }
+
     // ── Private ───────────────────────────────────────────────────────────────
+
+    /// Maps a window-local point to the dock slot whose edge zone it falls in.
+    ///
+    /// Used for drag-to-redock: resolving by window quarter-bands (not by the
+    /// current slot rects) keeps empty, zero-sized slots reachable as drop
+    /// targets. Priority: left, right, top, bottom, then content.
+    fn slot_at(&self, pos: Point) -> Option<&'static str> {
+        let (w, h) = self.window_size;
+        if w <= 0.0 || h <= 0.0 {
+            return None;
+        }
+        if pos.x < w * 0.25 {
+            as_static_slot("left")
+        } else if pos.x > w * 0.75 {
+            as_static_slot("right")
+        } else if pos.y < h * 0.25 {
+            as_static_slot("top")
+        } else if pos.y > h * 0.75 {
+            as_static_slot("bottom")
+        } else {
+            as_static_slot("content")
+        }
+    }
+
+    /// Topmost visible docked panel under `pos` whose `hit_test` reports a
+    /// [`HitElement::DragHandle`], with the panel-local grab offset.
+    fn drag_handle_panel_at(&self, pos: Point) -> Option<(&'static str, Point)> {
+        for entry in self.panels.iter().rev() {
+            if !entry.visible {
+                continue;
+            }
+            if let Surface::Docked { .. } = entry.panel.surface()
+                && rect_hit(entry.rect, pos)
+            {
+                let local = local_pos(entry.rect, pos);
+                if let Some(HitTarget { element: HitElement::DragHandle, .. }) =
+                    entry.panel.hit_test(local)
+                {
+                    return Some((entry.panel.id(), local));
+                }
+            }
+        }
+        None
+    }
 
     /// Recompute the five docked slot rects from window size and visible panels.
     fn compute_slot_rects(&mut self) {
@@ -283,7 +531,9 @@ impl SurfaceManager {
                 return Rect::ZERO;
             }
             match entry.panel.surface() {
-                Surface::Docked { slot } => {
+                Surface::Docked { .. } => {
+                    // Honour a redock override; fall back to the declared slot.
+                    let slot = entry.effective_slot().unwrap_or("content");
                     self.docked_rects.get(slot).copied().unwrap_or(Rect::ZERO)
                 }
                 Surface::Float { anchor, .. } => {
@@ -310,13 +560,16 @@ impl SurfaceManager {
         }
     }
 
-    /// Resolved size (width or height) for the first visible panel in `slot`.
+    /// Resolved size (width or height) for `slot`.
+    ///
+    /// Prefers a stored per-slot size override (set via [`Self::set_slot_size`]);
+    /// otherwise uses the first visible panel whose *effective* slot is `slot`.
     fn docked_axis_size(&self, slot: &str, for_width: bool, available: f32) -> f32 {
+        if let Some(&override_size) = self.slot_size_overrides.get(slot) {
+            return override_size.max(0.0).min(available);
+        }
         self.panels.iter()
-            .find(|e| {
-                e.visible
-                    && matches!(e.panel.surface(), Surface::Docked { slot: s } if s == slot)
-            })
+            .find(|e| e.visible && e.effective_slot() == Some(slot))
             .map(|e| {
                 if for_width { e.panel.width() } else { e.panel.height() }
                     .resolve(available)
@@ -734,5 +987,106 @@ mod tests {
     fn layout_snapshot_has_five_slots() {
         let mgr = SurfaceManager::new(1024.0, 768.0);
         assert_eq!(mgr.layout_snapshot().len(), 5);
+    }
+
+    // ── Redock & drag ─────────────────────────────────────────────────────────
+
+    /// A docked panel whose `hit_test` always reports a drag handle.
+    struct DragHandlePanel;
+
+    impl Panel for DragHandlePanel {
+        fn id(&self) -> &'static str { "drag-src" }
+        fn surface(&self) -> Surface { Surface::Docked { slot: "left" } }
+        fn width(&self) -> SizeRule { SizeRule::Fixed(200.0) }
+        fn height(&self) -> SizeRule { SizeRule::Fixed(0.0) }
+        fn paint(&self, _ctx: &PaintCtx) -> DisplayList { vec![] }
+        fn on_event(&mut self, _ev: &PanelEvent, _ctx: &mut EventCtx) -> EventResponse {
+            EventResponse::Ignored
+        }
+        fn hit_test(&self, _pos: Point) -> Option<crate::surface::types::HitTarget> {
+            Some(crate::surface::types::HitTarget::new(
+                crate::surface::types::HitElement::DragHandle,
+            ))
+        }
+    }
+
+    #[test]
+    fn move_panel_to_slot_relocates_and_recomputes() {
+        let mut mgr = SurfaceManager::new(1000.0, 600.0);
+        mgr.register(Box::new(FixedPanel { id: "sidebar", slot: "left", w: 200.0, h: 0.0 }));
+        assert_eq!(mgr.panel_slot("sidebar"), Some("left"));
+        assert!(mgr.move_panel_to_slot("sidebar", "right"));
+        assert_eq!(mgr.panel_slot("sidebar"), Some("right"));
+        // left slot is now empty → reclaimed; right slot holds the panel.
+        assert_eq!(mgr.slot_rect("left").unwrap().rect.width, 0.0);
+        assert_eq!(mgr.slot_rect("right").unwrap().rect.width, 200.0);
+    }
+
+    #[test]
+    fn move_panel_to_slot_rejects_unknown() {
+        let mut mgr = SurfaceManager::new(1000.0, 600.0);
+        mgr.register(Box::new(FixedPanel { id: "sidebar", slot: "left", w: 200.0, h: 0.0 }));
+        assert!(!mgr.move_panel_to_slot("sidebar", "nope"));
+        assert!(!mgr.move_panel_to_slot("missing", "right"));
+    }
+
+    #[test]
+    fn set_slot_size_overrides_first_panel_size() {
+        let mut mgr = SurfaceManager::new(1000.0, 600.0);
+        mgr.register(Box::new(FixedPanel { id: "sidebar", slot: "left", w: 200.0, h: 0.0 }));
+        mgr.set_slot_size("left", 320.0);
+        assert_eq!(mgr.slot_rect("left").unwrap().rect.width, 320.0);
+        assert_eq!(mgr.slot_rect("content").unwrap().rect.x, 320.0);
+    }
+
+    #[test]
+    fn drag_handle_redocks_left_to_right() {
+        let mut mgr = SurfaceManager::new(1000.0, 600.0);
+        mgr.register(Box::new(FixedPanel { id: "top-bar", slot: "top", w: 0.0, h: 36.0 }));
+        mgr.register(Box::new(DragHandlePanel));
+        mgr.route_mouse_down(Point::new(50.0, 300.0), MouseButton::Left);
+        assert!(mgr.is_dragging());
+        mgr.route_mouse_move(Point::new(980.0, 300.0));
+        assert!(mgr.drop_target_rect().is_some());
+        mgr.route_mouse_up(Point::new(980.0, 300.0), MouseButton::Left);
+        assert_eq!(mgr.panel_slot("drag-src"), Some("right"));
+        assert!(!mgr.is_dragging());
+    }
+
+    #[test]
+    fn cancel_drag_aborts_without_redock() {
+        let mut mgr = SurfaceManager::new(1000.0, 600.0);
+        mgr.register(Box::new(DragHandlePanel));
+        mgr.route_mouse_down(Point::new(50.0, 300.0), MouseButton::Left);
+        assert!(mgr.is_dragging());
+        mgr.cancel_drag();
+        assert!(!mgr.is_dragging());
+        assert_eq!(mgr.panel_slot("drag-src"), Some("left"));
+    }
+
+    #[test]
+    fn serialize_apply_round_trip() {
+        let mut mgr = SurfaceManager::new(1000.0, 600.0);
+        mgr.register(Box::new(FixedPanel { id: "sidebar", slot: "left", w: 200.0, h: 0.0 }));
+        mgr.register(Box::new(FixedPanel { id: "tabs", slot: "top", w: 0.0, h: 36.0 }));
+        mgr.move_panel_to_slot("sidebar", "right");
+        mgr.set_slot_size("right", 250.0);
+        let s = mgr.serialize_layout();
+
+        let mut fresh = SurfaceManager::new(1000.0, 600.0);
+        fresh.register(Box::new(FixedPanel { id: "sidebar", slot: "left", w: 200.0, h: 0.0 }));
+        fresh.register(Box::new(FixedPanel { id: "tabs", slot: "top", w: 0.0, h: 36.0 }));
+        fresh.apply_layout(&s);
+
+        assert_eq!(fresh.panel_slot("sidebar"), Some("right"));
+        assert_eq!(fresh.slot_rect("right").unwrap().rect.width, 250.0);
+    }
+
+    #[test]
+    fn apply_layout_ignores_bad_version() {
+        let mut mgr = SurfaceManager::new(1000.0, 600.0);
+        mgr.register(Box::new(FixedPanel { id: "sidebar", slot: "left", w: 200.0, h: 0.0 }));
+        mgr.apply_layout("99\npanel sidebar right 1\n");
+        assert_eq!(mgr.panel_slot("sidebar"), Some("left"));
     }
 }

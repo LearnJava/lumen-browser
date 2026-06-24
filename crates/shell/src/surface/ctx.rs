@@ -13,7 +13,7 @@ use std::time::Duration;
 use lumen_core::geom::{Point, Rect};
 
 use super::theme::Theme;
-use super::types::{Command, CursorIcon};
+use super::types::{Command, CursorIcon, DragData};
 
 /// Read-only context for [`super::Panel::paint`].
 ///
@@ -62,6 +62,8 @@ pub struct EventCtx {
     cursor: Option<CursorIcon>,
     /// `Some(true)` = request focus, `Some(false)` = release focus.
     focus_change: Option<bool>,
+    /// Drag the panel requested to start, if any.
+    drag: Option<DragData>,
 }
 
 impl EventCtx {
@@ -95,6 +97,11 @@ impl EventCtx {
         self.focus_change = Some(false);
     }
 
+    /// Ask the manager to begin dragging this panel (window-local `grab_offset`).
+    pub fn start_drag(&mut self, data: DragData) {
+        self.drag = Some(data);
+    }
+
     // ── Read-back (used by the manager / shell) ──────────────────────────
 
     /// Commands queued during this event, in dispatch order.
@@ -121,6 +128,11 @@ impl EventCtx {
     /// `Some(false)` to release it, `None` for no change.
     pub fn requested_focus_change(&self) -> Option<bool> {
         self.focus_change
+    }
+
+    /// The drag the panel requested to start, if any.
+    pub fn requested_drag(&self) -> Option<&DragData> {
+        self.drag.as_ref()
     }
 }
 
@@ -167,5 +179,21 @@ mod tests {
         assert_eq!(ctx.requested_focus_change(), Some(true));
         ctx.release_focus();
         assert_eq!(ctx.requested_focus_change(), Some(false));
+    }
+
+    #[test]
+    fn fresh_event_ctx_has_no_requested_drag() {
+        let ctx = EventCtx::new();
+        assert!(ctx.requested_drag().is_none());
+    }
+
+    #[test]
+    fn start_drag_sets_requested_drag() {
+        use super::super::types::DragData;
+        let mut ctx = EventCtx::new();
+        ctx.start_drag(DragData::new("p", lumen_core::geom::Point::new(1.0, 2.0)));
+        let drag = ctx.requested_drag().unwrap();
+        assert_eq!(drag.source_panel, "p");
+        assert_eq!(drag.grab_offset, lumen_core::geom::Point::new(1.0, 2.0));
     }
 }

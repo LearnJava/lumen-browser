@@ -5,6 +5,28 @@
 **Size:** L
 **Crates:** `lumen-shell` (surface/, panels/, tabs/)
 
+## Progress (2026-06-24)
+
+**Steps 1–5 DONE** (infrastructure slice, fully unit-tested, branch `p1-f2-6c-panel-dnd`):
+- Step 1 — `PanelEvent::DragStart/DragMove/DragEnd` + `DragData` in `surface/types.rs`.
+- Step 2 — `EventCtx::start_drag`/`requested_drag` in `surface/ctx.rs`.
+- Step 3 — `SurfaceManager` redock: `slot_override`/`effective_slot`, `slot_size_overrides`,
+  `move_panel_to_slot`/`set_slot_size`/`panel_slot`, mouse-driven drag state machine
+  (`route_mouse_*` + `begin_drag`/`cancel_drag`/`is_dragging`), `drop_target_rect`.
+  Drop slot resolved by window quarter-bands (`slot_at`) so empty slots are reachable.
+- Step 4 — `serialize_layout`/`apply_layout` (compact version-tagged text format, no serde).
+- Step 5 — `BrowserSettings::panel_layout`/`set_panel_layout` + snapshot field.
+
+Tests: 46 `surface::*` + 14 `storage::browser_settings` green; both crates clippy-clean.
+
+**Steps 6–8 REMAINING** (live-shell migration onto `SurfaceManager`; main.rs ~17.5k lines,
+no new user-facing capability — the running shell already drag-resizes/cross-docks/persists
+via the ad-hoc `panel_layout::PanelLayout` path):
+- Step 6 — implement `Panel` for vertical-tabs + sidebar panels.
+- Step 7 — construct/register a live `SurfaceManager` in `App`; drive content x-offset from
+  `slot_rect("content")` instead of the inline `PANEL_WIDTH` offsets.
+- Step 8 — drain `EventCtx` effects (`take_commands`/`requested_cursor`/`requested_drag`).
+
 ## Goal
 
 Make shell panels (sidebars / vertical tabs) movable and dockable instead of hard-positioned, by routing their placement through the existing `Surface` / `SurfaceManager` infrastructure (ADR-009) rather than the ad-hoc `x = 0..PANEL_WIDTH` offsets scattered across `main.rs`. Add a drag-to-redock interaction (grab a panel by its header, drag it to a different dock slot, drop) and persist the resulting layout (which panel is in which slot, slot sizes, visibility) so it survives a restart. This is the remaining part 2.2 of F2-6; stages 1 (chrome theming) and 2.1 (theming ~22 panels) are already merged.
