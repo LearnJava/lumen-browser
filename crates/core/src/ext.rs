@@ -1368,6 +1368,10 @@ pub trait WebSocketSession: Send {
     fn recv(&mut self) -> Result<WsMessage>;
     /// Инициировать закрытие: отправить Close-фрейм с кодом и причиной.
     fn close(&mut self, code: u16, reason: &str) -> Result<()>;
+    /// Server-selected sub-protocol (RFC 6455 §4.1); empty if none was negotiated.
+    fn protocol(&self) -> &str {
+        ""
+    }
 }
 
 /// Фабрика WebSocket-соединений. Реализуется `lumen-network::HttpClient`.
@@ -2036,6 +2040,10 @@ pub trait JsWebSocketSession: Send {
     fn poll(&self) -> Option<JsWsEvent>;
     /// Send a Close frame and mark the session as closed.
     fn close(&self, code: u16, reason: &str) -> Result<()>;
+    /// Server-selected sub-protocol; empty until/unless negotiated.
+    fn protocol(&self) -> String {
+        String::new()
+    }
 }
 
 /// Factory that opens WebSocket connections for the JS runtime.
@@ -2048,7 +2056,10 @@ pub trait JsWebSocketProvider: Send + Sync {
     /// The handshake runs synchronously. On success, `onopen` can be fired
     /// immediately; subsequent server messages are buffered in the returned
     /// session and delivered via `poll()`.
-    fn connect(&self, url: &str) -> Result<Box<dyn JsWebSocketSession>>;
+    ///
+    /// `protocols` is the client's ordered list of sub-protocol preferences
+    /// (`Sec-WebSocket-Protocol`); pass an empty slice to request none.
+    fn connect(&self, url: &str, protocols: &[String]) -> Result<Box<dyn JsWebSocketSession>>;
 }
 
 /// Persistence boundary for the IndexedDB JS shim.

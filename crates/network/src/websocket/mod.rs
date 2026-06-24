@@ -61,18 +61,22 @@ pub(crate) struct WebSocket {
     deflate_enabled:  bool,
     /// Compress outgoing data frames when deflate is enabled (WebSocket.compress opt-in).
     compress:         bool,
+    /// Server-selected sub-protocol (RFC 6455 §4.1 `Sec-WebSocket-Protocol`); empty if none negotiated.
+    protocol:         String,
 }
 
 impl WebSocket {
     /// Establish a WebSocket connection to `url` (`ws://` or `wss://`).
     ///
     /// Does not negotiate permessage-deflate. Use [`Self::connect_deflate`] for compression.
+    /// `protocols` is the client's ordered preference list of sub-protocols.
     pub(crate) fn connect(
-        url:      &Url,
-        resolver: &dyn DnsResolver,
-        hsts:     Option<&dyn HstsEnforcement>,
-        sink:     Arc<dyn EventSink>,
-        tab_id:   TabId,
+        url:       &Url,
+        resolver:  &dyn DnsResolver,
+        hsts:      Option<&dyn HstsEnforcement>,
+        sink:      Arc<dyn EventSink>,
+        tab_id:    TabId,
+        protocols: &[String],
     ) -> Result<Self> {
         let (host, port, mut is_tls, path) = require_ws_scheme(url)?;
 
@@ -90,7 +94,7 @@ impl WebSocket {
         let mut stream = conn.into_stream();
 
         let key = upgrade::generate_key();
-        upgrade::perform(&mut stream, &host, &path, &key, &[])?;
+        let protocol = upgrade::perform(&mut stream, &host, &path, &key, protocols)?;
 
         sink.emit(&Event::WebSocketConnected {
             tab_id,
@@ -108,6 +112,7 @@ impl WebSocket {
             closed:          false,
             deflate_enabled: false,
             compress:        false,
+            protocol,
         })
     }
 
@@ -115,13 +120,15 @@ impl WebSocket {
     ///
     /// `compress` controls whether outgoing data frames are compressed.
     /// Incoming frames with RSV1=1 are always decompressed when deflate is active.
+    /// `protocols` is the client's ordered preference list of sub-protocols.
     pub(crate) fn connect_deflate(
-        url:      &Url,
-        resolver: &dyn DnsResolver,
-        hsts:     Option<&dyn HstsEnforcement>,
-        sink:     Arc<dyn EventSink>,
-        tab_id:   TabId,
-        compress: bool,
+        url:       &Url,
+        resolver:  &dyn DnsResolver,
+        hsts:      Option<&dyn HstsEnforcement>,
+        sink:      Arc<dyn EventSink>,
+        tab_id:    TabId,
+        compress:  bool,
+        protocols: &[String],
     ) -> Result<Self> {
         let (host, port, mut is_tls, path) = require_ws_scheme(url)?;
 
@@ -139,7 +146,8 @@ impl WebSocket {
         let mut stream = conn.into_stream();
 
         let key = upgrade::generate_key();
-        let deflate_enabled = upgrade::perform_with_deflate(&mut stream, &host, &path, &key)?;
+        let (deflate_enabled, protocol) =
+            upgrade::perform_with_deflate(&mut stream, &host, &path, &key, protocols)?;
 
         sink.emit(&Event::WebSocketConnected {
             tab_id,
@@ -157,6 +165,7 @@ impl WebSocket {
             closed:          false,
             deflate_enabled,
             compress: compress && deflate_enabled,
+            protocol,
         })
     }
 
@@ -300,5 +309,9 @@ impl WebSocketSession for WebSocket {
             self.closed = true;
         }
         Ok(())
+    }
+
+    fn protocol(&self) -> &str {
+        &self.protocol
     }
 }

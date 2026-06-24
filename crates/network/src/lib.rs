@@ -3379,6 +3379,7 @@ impl WebSocketProvider for HttpClient {
             self.hsts.as_deref(),
             sink,
             tab_id,
+            &[],
         )?;
         Ok(Box::new(ws))
     }
@@ -3481,10 +3482,14 @@ impl JsWebSocketSession for JsWebSocketSessionImpl {
     fn close(&self, code: u16, reason: &str) -> Result<()> {
         self.session.lock().unwrap().close(code, reason)
     }
+
+    fn protocol(&self) -> String {
+        self.session.lock().unwrap().protocol().to_string()
+    }
 }
 
 impl JsWebSocketProvider for HttpClient {
-    fn connect(&self, url: &str) -> Result<Box<dyn JsWebSocketSession>> {
+    fn connect(&self, url: &str, protocols: &[String]) -> Result<Box<dyn JsWebSocketSession>> {
         let parsed = Url::parse(url)
             .map_err(|e| Error::Network(format!("ws: invalid URL: {e}")))?;
         // Always offer permessage-deflate (RFC 7692) — browsers do this by default.
@@ -3496,6 +3501,7 @@ impl JsWebSocketProvider for HttpClient {
             Arc::new(NoopEventSink),
             lumen_core::event::TabId(0),
             false,
+            protocols,
         )?;
         let impl_ = JsWebSocketSessionImpl::new(ws);
         // Push the Open event immediately — handshake already completed.

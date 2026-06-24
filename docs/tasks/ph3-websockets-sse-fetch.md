@@ -55,6 +55,23 @@ in `fill_queue` on EOF, once in `EventSource::close`); harmless on the JS path
 (`NoopEventSink`) but worth an "already closed" guard when the shell wires a real
 sink.
 
+**Phase B step 2 DONE (2026-06-25)** — WebSocket sub-protocol negotiation +
+`CloseEvent.wasClean`. RFC 6455 §4.1 `Sec-WebSocket-Protocol` is negotiated
+end-to-end: `upgrade::perform`/`perform_with_deflate` take a `protocols: &[String]`
+list, send the request header, and `expect_101` parses the server-selected
+protocol (`perform` → `Result<String>`, `perform_with_deflate` →
+`Result<(bool, String)>`). `WebSocket` stores `protocol`; new trait defaults
+`WebSocketSession::protocol() -> &str` and `JsWebSocketSession::protocol() -> String`
+keep mocks compiling. `JsWebSocketProvider::connect` now takes `(url, protocols)`.
+JS: `new WebSocket(url, protocols)` (string|array) → CSV → bridge; the `Open` poll
+event carries the negotiated protocol → `ws.protocol`; `CloseEvent.wasClean` is
+`true` for a received Close frame instead of the `code === 1000` heuristic. Tests:
++3 network unit (upgrade.rs), +2 JS (`websocket_subprotocol_surfaced_on_open`,
+`websocket_subprotocol_string_arg`). `lumen-core`/`lumen-network`/`lumen-js` clippy
+clean; targeted tests green. **Still open for full Phase B:** event-loop push
+delivery (no JS `_lumen_ws_poll`), `bufferedAmount` semantics, close-handshake
+state machine audit (CONNECTING/OPEN/CLOSING/CLOSED).
+
 **Remaining (not yet done):**
 - **Step 3** — JS `fetch()` wiring (`crates/js/src/dom.rs:7328`). **Design note (blocker):** JS is
   single-threaded and the current `fetch()` is *synchronous* (blocks the JS thread), so an

@@ -1409,9 +1409,14 @@ fn install_primitives(
         let next_id: Arc<Mutex<u32>> = Arc::new(Mutex::new(1));
 
         let (reg_c, nid_c, wp) = (Arc::clone(&registry), Arc::clone(&next_id), ws_provider);
-        reg!("_lumen_ws_connect", move |url: String| -> u32 {
+        reg!("_lumen_ws_connect", move |url: String, proto_csv: String| -> u32 {
             let Some(ref provider) = wp else { return 0 };
-            match provider.connect(&url) {
+            let protos: Vec<String> = proto_csv
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            match provider.connect(&url, &protos) {
                 Ok(session) => {
                     let id = {
                         let mut n = nid_c.lock().unwrap();
@@ -1470,7 +1475,10 @@ fn install_primitives(
                 let map = reg_c.lock().unwrap();
                 let sess = map.get(&handle)?;
                 sess.poll().map(|ev| match ev {
-                    JsWsEvent::Open => r#"{"t":"open"}"#.to_string(),
+                    JsWsEvent::Open => {
+                        let proto = sess.protocol().replace('\\', "\\\\").replace('"', "\\\"");
+                        format!(r#"{{"t":"open","protocol":"{proto}"}}"#)
+                    }
                     JsWsEvent::Message { data, is_binary } => {
                         if is_binary {
                             // Encode binary payload as base64-like hex for Phase 0.
@@ -7465,6 +7473,7 @@ function _lumen_ws_pump_one(ws) {
             var ev = JSON.parse(raw);
             if (ev.t === 'open') {
                 ws.readyState = 1;
+                ws.protocol = ev.protocol || '';
                 _lumen_ws_fire(ws, new Event('open', { isTrusted: true }));
             } else if (ev.t === 'msg') {
                 if (ws.readyState !== 1) { continue; }
@@ -7484,7 +7493,8 @@ function _lumen_ws_pump_one(ws) {
                 _lumen_ws_fire(ws, new MessageEvent(msgData, { isTrusted: true }));
             } else if (ev.t === 'close') {
                 ws.readyState = 3;
-                _lumen_ws_fire(ws, new CloseEvent(ev.code, ev.reason, ev.code === 1000, { isTrusted: true }));
+                // A received Close frame means the closing handshake completed → wasClean.
+                _lumen_ws_fire(ws, new CloseEvent(ev.code, ev.reason, true, { isTrusted: true }));
                 ws._handle = 0;
                 break;
             } else if (ev.t === 'error') {
@@ -7503,7 +7513,7 @@ function _lumen_pump_websockets() {
     }
 }
 
-function WebSocket(url) {
+function WebSocket(url, protocols) {
     this.url = String(url || '');
     this.readyState = 0;
     this.protocol = '';
@@ -7515,7 +7525,15 @@ function WebSocket(url) {
     this._handle = 0;
     this._listeners = {};
     var self = this;
-    var h = _lumen_ws_connect(this.url);
+    var protoCsv = '';
+    if (protocols != null) {
+        if (Array.isArray(protocols)) {
+            protoCsv = protocols.filter(function(p) { return typeof p === 'string' && p.length > 0; }).join(',');
+        } else if (typeof protocols === 'string') {
+            protoCsv = protocols;
+        }
+    }
+    var h = _lumen_ws_connect(this.url, protoCsv);
     if (!h) {
         this.readyState = 3;
         setTimeout(function() {
@@ -14287,7 +14305,7 @@ mod tests {
     // Mock WS provider: connect always fails (no server).
     struct FailWsProvider;
     impl lumen_core::ext::JsWebSocketProvider for FailWsProvider {
-        fn connect(&self, _url: &str) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsWebSocketSession>> {
+        fn connect(&self, _url: &str, _protocols: &[String]) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsWebSocketSession>> {
             Err(lumen_core::error::Error::Network("test: no server".into()))
         }
     }
@@ -14338,6 +14356,8 @@ mod tests {
     struct MockWsProvider;
     struct MockWsSession {
         queue: std::sync::Mutex<std::collections::VecDeque<lumen_core::ext::JsWsEvent>>,
+        /// Sub-protocol echoed back to the client (first requested, "" if none).
+        protocol: String,
     }
     impl lumen_core::ext::JsWebSocketSession for MockWsSession {
         fn send_text(&self, _text: &str) -> lumen_core::error::Result<()> { Ok(()) }
@@ -14346,14 +14366,17 @@ mod tests {
             self.queue.lock().unwrap().pop_front()
         }
         fn close(&self, _code: u16, _reason: &str) -> lumen_core::error::Result<()> { Ok(()) }
+        fn protocol(&self) -> String { self.protocol.clone() }
     }
     impl lumen_core::ext::JsWebSocketProvider for MockWsProvider {
-        fn connect(&self, _url: &str) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsWebSocketSession>> {
+        fn connect(&self, _url: &str, protocols: &[String]) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsWebSocketSession>> {
             use lumen_core::ext::JsWsEvent;
             let mut q = std::collections::VecDeque::new();
             q.push_back(JsWsEvent::Open);
             q.push_back(JsWsEvent::Message { data: b"hello".to_vec(), is_binary: false });
-            Ok(Box::new(MockWsSession { queue: std::sync::Mutex::new(q) }))
+            // Echo the client's first requested sub-protocol, mirroring a real server.
+            let protocol = protocols.first().cloned().unwrap_or_default();
+            Ok(Box::new(MockWsSession { queue: std::sync::Mutex::new(q), protocol }))
         }
     }
 
@@ -14389,6 +14412,36 @@ mod tests {
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 
+    /// `new WebSocket(url, protocols)` forwards the requested sub-protocol; on open,
+    /// the server-selected protocol is surfaced as `ws.protocol`. The mock echoes the
+    /// first requested protocol.
+    #[test]
+    fn websocket_subprotocol_surfaced_on_open() {
+        let rt = runtime_with_mock_ws(make_doc());
+        let r = rt
+            .eval(
+                "var ws = new WebSocket('ws://mock', ['chat', 'superchat']);
+                 _lumen_pump_websockets();
+                 ws.protocol",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("chat".into()));
+    }
+
+    /// A string `protocols` argument is accepted and surfaced as `ws.protocol`.
+    #[test]
+    fn websocket_subprotocol_string_arg() {
+        let rt = runtime_with_mock_ws(make_doc());
+        let r = rt
+            .eval(
+                "var ws = new WebSocket('ws://mock', 'json');
+                 _lumen_pump_websockets();
+                 ws.protocol",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("json".into()));
+    }
+
     #[test]
     fn websocket_mock_message_via_pump() {
         let rt = runtime_with_mock_ws(make_doc());
@@ -14409,7 +14462,7 @@ mod tests {
     fn websocket_no_provider_connect_returns_zero() {
         // Without ws_provider, _lumen_ws_connect always returns 0.
         let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("_lumen_ws_connect('ws://test')").unwrap();
+        let r = rt.eval("_lumen_ws_connect('ws://test', '')").unwrap();
         assert_eq!(r, lumen_core::JsValue::Number(0.0));
     }
 
@@ -14783,7 +14836,7 @@ mod tests {
         fn close(&self, _code: u16, _reason: &str) -> lumen_core::error::Result<()> { Ok(()) }
     }
     impl lumen_core::ext::JsWebSocketProvider for MockBinaryWsProvider {
-        fn connect(&self, _url: &str) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsWebSocketSession>> {
+        fn connect(&self, _url: &str, _protocols: &[String]) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsWebSocketSession>> {
             use lumen_core::ext::JsWsEvent;
             let mut q = std::collections::VecDeque::new();
             q.push_back(JsWsEvent::Open);
