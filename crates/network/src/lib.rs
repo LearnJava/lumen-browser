@@ -3515,8 +3515,11 @@ impl JsWebSocketProvider for HttpClient {
 struct JsSseSessionImpl {
     /// Buffered events produced by the background recv thread.
     queue: Arc<std::sync::Mutex<std::collections::VecDeque<JsSseEvent>>>,
-    /// Set by `close()` to ask the background thread to stop reconnecting.
-    closed: Arc<std::sync::atomic::AtomicBool>,
+    /// Cancellation handle shared with the underlying [`SseSession`]. Signalling
+    /// it stops the reconnect loop and wakes a pending reconnect sleep so
+    /// `close()` takes effect within one tick instead of after the full retry
+    /// delay.
+    cancel: lumen_core::ext::SseCancel,
 }
 
 impl JsSseSessionImpl {
@@ -3524,23 +3527,24 @@ impl JsSseSessionImpl {
     ///
     /// The thread pushes [`JsSseEvent::Open`] first, then forwards every server
     /// event until the stream ends ([`JsSseEvent::Close`]) or errors
-    /// ([`JsSseEvent::Error`]). The blocking [`SseSession::next_event`] cannot be
-    /// interrupted mid-call, so `close()` sets a flag the loop checks before each
-    /// read; an in-flight read finishes naturally when the server closes.
+    /// ([`JsSseEvent::Error`]). `close()` signals the shared cancel handle: it
+    /// wakes a pending reconnect delay immediately, and the loop also checks it
+    /// before each read so an idle session exits promptly. A read already
+    /// blocked in the socket finishes naturally when the server closes.
     fn new(mut session: Box<dyn SseSession>) -> Self {
-        use std::sync::atomic::{AtomicBool, Ordering};
         let queue: Arc<std::sync::Mutex<std::collections::VecDeque<JsSseEvent>>> =
             Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
-        let closed = Arc::new(AtomicBool::new(false));
+        let cancel = session.cancel();
+        let cancel_bg = cancel.clone();
 
         let q2 = Arc::clone(&queue);
-        let c2 = Arc::clone(&closed);
 
         std::thread::spawn(move || {
             q2.lock().unwrap().push_back(JsSseEvent::Open);
             loop {
-                if c2.load(Ordering::Relaxed) {
+                if cancel_bg.is_cancelled() {
                     session.close();
+                    q2.lock().unwrap().push_back(JsSseEvent::Close);
                     break;
                 }
                 match session.next_event() {
@@ -3567,7 +3571,7 @@ impl JsSseSessionImpl {
             }
         });
 
-        Self { queue, closed }
+        Self { queue, cancel }
     }
 }
 
@@ -3577,8 +3581,7 @@ impl JsSseSession for JsSseSessionImpl {
     }
 
     fn close(&mut self) {
-        self.closed
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.cancel.signal();
     }
 }
 
@@ -3701,6 +3704,84 @@ mod tests {
             }
         );
         assert_eq!(evs[2], JsSseEvent::Close);
+    }
+
+    /// Phase C: `close()` must interrupt a pending reconnect delay. The server
+    /// serves one event then drops the connection, so the client enters a 20 s
+    /// reconnect sleep (`retry: 20000`); `close()` has to wake that sleep and
+    /// deliver `Close` within a tick rather than waiting the full delay.
+    #[test]
+    fn js_sse_close_interrupts_reconnect() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::time::{Duration, Instant};
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+
+        let server = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(sock.try_clone().expect("clone"));
+            let mut line = String::new();
+            while reader.read_line(&mut line).expect("read") > 0 {
+                if line.trim().is_empty() {
+                    break;
+                }
+                line.clear();
+            }
+            let _ = sock.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\nretry: 20000\ndata: hi\n\n",
+            );
+            let _ = sock.flush();
+            thread::sleep(Duration::from_millis(100));
+            let _ = sock.shutdown(std::net::Shutdown::Both);
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let session = <HttpClient as SseProvider>::connect_sse(
+            &client,
+            &url,
+            TabId(0),
+            Arc::new(NoopEventSink),
+        )
+        .expect("connect_sse");
+        let mut sess = JsSseSessionImpl::new(session);
+
+        // Drain until the "hi" message arrives (ignore Open / Retry).
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut saw_message = false;
+        while Instant::now() < deadline {
+            if let Some(JsSseEvent::Message { data, .. }) = sess.poll() {
+                assert_eq!(data, "hi");
+                saw_message = true;
+                break;
+            }
+            thread::yield_now();
+        }
+        assert!(saw_message, "expected the SSE message before reconnect");
+
+        // Let the client hit EOF and enter the 20 s reconnect sleep, then close.
+        thread::sleep(Duration::from_millis(200));
+        let t = Instant::now();
+        sess.close();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut saw_close = false;
+        while Instant::now() < deadline {
+            if let Some(JsSseEvent::Close) = sess.poll() {
+                saw_close = true;
+                break;
+            }
+            thread::yield_now();
+        }
+        assert!(saw_close, "close() did not deliver JsSseEvent::Close");
+        assert!(
+            t.elapsed() < Duration::from_secs(3),
+            "close must interrupt the 20s reconnect sleep, took {:?}",
+            t.elapsed()
+        );
+
+        server.join().ok();
     }
 
     // ── ALPN (5A.1) ──────────────────────────────────────────────────────────

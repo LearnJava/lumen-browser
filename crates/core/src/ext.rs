@@ -1418,6 +1418,19 @@ pub trait SseSession: Send {
 
     /// Закрыть соединение и остановить переподключение.
     fn close(&mut self);
+
+    /// Cancellation handle that wakes a pending reconnect delay from another
+    /// thread.
+    ///
+    /// The JS-facing wrapper grabs this handle before moving the session onto
+    /// its background thread; calling [`SseCancel::signal`] then interrupts the
+    /// reconnect back-off so [`close`](Self::close) takes effect within one tick
+    /// rather than after the full retry delay. The default returns a detached
+    /// handle (no-op) for sessions that never sleep between reconnects, such as
+    /// test mocks.
+    fn cancel(&self) -> SseCancel {
+        SseCancel::new()
+    }
 }
 
 /// Фабрика SSE-соединений. Реализуется `lumen-network::HttpClient`.
@@ -1696,6 +1709,106 @@ mod abort_token_tests {
     fn default_produces_non_aborted_token() {
         let token = AbortToken::default();
         assert!(!token.is_aborted());
+    }
+}
+
+/// An interruptible-delay handle shared across threads.
+///
+/// Lets a pending delay be cut short from another thread. SSE
+/// (Server-Sent Events) uses it for the reconnect back-off: the background
+/// session thread sleeps `retry_ms` between reconnect attempts via
+/// [`sleep`](Self::sleep), and [`EventSource::close`](crate::ext::SseSession::close)
+/// from the script thread calls [`signal`](Self::signal) to wake that sleep
+/// immediately, so a closed source stops reconnecting within one tick instead of
+/// waiting out the full retry delay. All clones share one underlying flag via
+/// `Arc`, so signalling one affects all.
+#[derive(Clone, Default)]
+pub struct SseCancel {
+    inner: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+}
+
+impl SseCancel {
+    /// Creates a new, not-yet-cancelled handle.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Signals cancellation and wakes any thread parked in [`sleep`](Self::sleep).
+    ///
+    /// Sets the internal flag to `true` and notifies all waiters. Idempotent.
+    pub fn signal(&self) {
+        let (lock, cvar) = &*self.inner;
+        let mut cancelled = lock.lock().unwrap();
+        *cancelled = true;
+        cvar.notify_all();
+    }
+
+    /// Returns whether cancellation has been signalled.
+    pub fn is_cancelled(&self) -> bool {
+        let (lock, _) = &*self.inner;
+        *lock.lock().unwrap()
+    }
+
+    /// Blocks up to `dur`, returning early if cancellation is signalled.
+    ///
+    /// Returns `true` if cancellation was (or becomes) signalled — the caller
+    /// should stop — and `false` if the timeout elapsed first.
+    pub fn sleep(&self, dur: std::time::Duration) -> bool {
+        let (lock, cvar) = &*self.inner;
+        let cancelled = lock.lock().unwrap();
+        // `wait_timeout_while` re-checks the predicate after every wakeup, so a
+        // spurious wakeup keeps waiting the remaining time instead of returning
+        // a false "timeout". Returns once cancelled or `dur` elapses.
+        *cvar
+            .wait_timeout_while(cancelled, dur, |cancelled| !*cancelled)
+            .unwrap()
+            .0
+    }
+}
+
+#[cfg(test)]
+mod sse_cancel_tests {
+    use super::SseCancel;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn signal_then_sleep_returns_true_immediately() {
+        let handle = SseCancel::new();
+        handle.signal();
+        let start = Instant::now();
+        let result = handle.sleep(Duration::from_secs(10));
+        assert!(result);
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn sleep_times_out_returns_false() {
+        let handle = SseCancel::new();
+        assert!(!handle.sleep(Duration::from_millis(50)));
+    }
+
+    #[test]
+    fn another_thread_signal_wakes_sleep() {
+        let handle = SseCancel::new();
+        let handle_clone = handle.clone();
+        let thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            handle_clone.signal();
+        });
+        let start = Instant::now();
+        let result = handle.sleep(Duration::from_secs(10));
+        assert!(result);
+        assert!(start.elapsed() < Duration::from_secs(2));
+        thread.join().unwrap();
+    }
+
+    #[test]
+    fn is_cancelled_reflects_state() {
+        let handle = SseCancel::new();
+        assert!(!handle.is_cancelled());
+        handle.signal();
+        assert!(handle.is_cancelled());
     }
 }
 

@@ -198,8 +198,9 @@ pub(crate) struct EventSource {
     /// Active HTTP stream; None when disconnected (will reconnect on next call).
     stream: Option<BufReader<RawStream>>,
     retry_ms: u64,
-    /// Whether close() was called — stops reconnection loop.
-    closed: bool,
+    /// Shared cancellation handle: stops the reconnect loop and wakes a pending
+    /// reconnect sleep when `close()` is signalled from another thread.
+    cancel: lumen_core::ext::SseCancel,
 }
 
 impl EventSource {
@@ -219,7 +220,7 @@ impl EventSource {
             parser: SseParser::new(),
             stream: None,
             retry_ms: DEFAULT_RETRY_MS,
-            closed: false,
+            cancel: lumen_core::ext::SseCancel::new(),
         };
         es.open_connection()?;
         Ok(es)
@@ -347,7 +348,7 @@ impl EventSource {
 impl SseSession for EventSource {
     fn next_event(&mut self) -> Result<Option<SseEvent>> {
         loop {
-            if self.closed {
+            if self.cancel.is_cancelled() {
                 return Ok(None);
             }
 
@@ -379,14 +380,14 @@ impl SseSession for EventSource {
                 }
             }
 
-            if self.closed {
+            if self.cancel.is_cancelled() {
                 return Ok(None);
             }
 
-            // Reconnect after retry_ms delay (spec §9.2.1).
-            std::thread::sleep(Duration::from_millis(self.retry_ms));
-
-            if self.closed {
+            // Reconnect after retry_ms delay (spec §9.2.1). The sleep is
+            // interruptible: close() signals the cancel handle and we stop
+            // immediately instead of waiting out the full retry delay.
+            if self.cancel.sleep(Duration::from_millis(self.retry_ms)) {
                 return Ok(None);
             }
 
@@ -401,13 +402,19 @@ impl SseSession for EventSource {
     }
 
     fn close(&mut self) {
-        self.closed = true;
+        self.cancel.signal();
         self.stream = None;
         self.sink.emit(&Event::SseClosed {
             tab_id: self.tab_id,
             url: self.url.clone(),
             reason: "client closed".into(),
         });
+    }
+
+    /// Shares the reconnect-cancellation handle so another thread can interrupt
+    /// a pending reconnect delay (see [`SseCancel`](lumen_core::ext::SseCancel)).
+    fn cancel(&self) -> lumen_core::ext::SseCancel {
+        self.cancel.clone()
     }
 }
 

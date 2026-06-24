@@ -38,6 +38,23 @@
   2 integration tests (real localhost listener): pre-flight abort + mid-stream abort. All 795
   network lib tests green, clippy clean.
 
+**Phase C step 1 DONE (2026-06-25)** — SSE reconnect is now interruptible. New
+`lumen_core::ext::SseCancel` (`Arc<(Mutex<bool>, Condvar)>`, clonable; `signal` /
+`is_cancelled` / `sleep(dur) -> bool`) replaces `EventSource.closed: bool`. The
+reconnect back-off `std::thread::sleep(retry_ms)` (`sse.rs:387`) became
+`cancel.sleep(retry_ms)`, woken immediately by `close()` → `cancel.signal()`.
+`SseSession::cancel()` (default = detached handle) exposes the shared handle so
+`JsSseSessionImpl::close()` (`lib.rs`) signals the same `Arc` the bg thread sleeps
+on. Tests: 4 unit (`SseCancel`) + 1 integration (`js_sse_close_interrupts_reconnect`,
+real localhost listener, `retry: 20000` → `close()` delivers `Close` in 0.21 s).
+`lumen-core` 271 + `lumen-network` 796 green, clippy clean. **Still blocking
+delivery:** `next_event` blocked in a socket read is not interrupted (only the
+reconnect sleep is) — a full event-loop push delivery (Phase B/C step 2) remains.
+Minor pre-existing follow-up: `SseClosed` can be emitted twice to the sink (once
+in `fill_queue` on EOF, once in `EventSource::close`); harmless on the JS path
+(`NoopEventSink`) but worth an "already closed" guard when the shell wires a real
+sink.
+
 **Remaining (not yet done):**
 - **Step 3** — JS `fetch()` wiring (`crates/js/src/dom.rs:7328`). **Design note (blocker):** JS is
   single-threaded and the current `fetch()` is *synchronous* (blocks the JS thread), so an
