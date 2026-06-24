@@ -3,8 +3,10 @@
 //! Row 1 holds three 80px-wide inline-blocks of differing heights (100/60/40)
 //! aligned top / middle / bottom within a 120px row (100px line area starting at
 //! y=21). Assertions check the alignment geometry: top box sits at the line top,
-//! bottom box's bottom edge equals the top box's bottom edge, middle box is
-//! centered on the line.
+//! bottom box's bottom edge equals the top box's bottom edge, and the middle box
+//! aligns its centre to `baseline − x-height/2` (CSS 2.1 §10.8.1) — NOT the line
+//! centre. The tall top-aligned box pulls the baseline up to ~34px from the line
+//! top, so the 60px middle box's top sits at the line top (BUG-182).
 
 use lumen_driver::{BrowserSession, InProcessSession};
 
@@ -67,12 +69,17 @@ fn test_24_vertical_align() {
         "vertical-align:bottom should align bottom edges: top={top_bottom}, bottom={bottom_bottom}"
     );
 
-    // vertical-align:middle → the middle box is centered within the line box.
-    let middle_center = middle.border_box.y + middle.border_box.height / 2.0;
-    let line_center = (line_top + line_bottom) / 2.0;
+    // vertical-align:middle → box centre aligns to (baseline − x-height/2), NOT the
+    // line centre (BUG-182). The 100px top-aligned box raises the baseline to ~34px
+    // from the line top, so the 60px middle box (centre 30px below the baseline minus
+    // x/2) lands with its top at the line top — matching Edge, which renders the teal
+    // box flush with the red box top. This is NOT the line centre (line_top + 20).
+    let _ = line_bottom;
     assert!(
-        (middle_center - line_center).abs() < 2.0,
-        "vertical-align:middle should center the box: center={middle_center}, line_center={line_center}"
+        (middle.border_box.y - line_top).abs() < 2.0,
+        "vertical-align:middle box top should sit at the line top (baseline-correct), \
+         got middle.y={}, line_top={line_top}",
+        middle.border_box.y
     );
 
     let row2 = session

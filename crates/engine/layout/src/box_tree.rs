@@ -5965,6 +5965,10 @@ fn lay_out(
             // Для строк, где все элементы используют top/bottom/middle, strut не
             // нужен — baseline вообще не задействован (Edge/Blink подтверждено).
             let strut_descent = measurer.map_or(0.0, |m| m.descent_px(b.style.font_size));
+            // Strut ascent + half x-height of the row's font: needed to locate the
+            // baseline inside the line box for `vertical-align: middle` (CSS 2.1 §10.8.1).
+            let strut_ascent = measurer.map_or(0.0, |m| m.ascent_px(b.style.font_size));
+            let x_half = measurer.map_or(0.0, |m| m.x_height_px(b.style.font_size)) / 2.0;
             // rows: (row_y, row_max_h, has_baseline, Vec<child_index>)
             let mut rows: Vec<(f32, f32, bool, Vec<usize>)> = Vec::new();
             let mut cur_x = content_x;
@@ -6041,20 +6045,53 @@ fn lay_out(
             // Baseline: dy = row_h - child_h  (bottom at baseline, strut below).
             // Bottom: dy = row_full_h - child_h (bottom at line-box bottom).
             let mut adjustments: Vec<(usize, f32)> = Vec::new();
+            let child_full_h = |idx: usize| -> f32 {
+                let child = &b.children[idx];
+                let c_em = child.style.font_size;
+                child.style.margin_top.resolve_or_zero(c_em, content_width, viewport)
+                    + child.rect.height
+                    + child.style.margin_bottom.resolve_or_zero(c_em, content_width, viewport)
+            };
             for (_, row_h, has_baseline, child_idxs) in &rows {
                 let row_strut = if *has_baseline { strut_descent } else { 0.0 };
                 let row_full_h = row_h + row_strut;
+                // Locate the baseline within the line box (distance `above` from the line-box
+                // top). `vertical-align: middle` aligns the box centre with (baseline − x/2),
+                // which coincides with the line-box centre ONLY when the baseline sits at
+                // mid-height. A tall top/bottom-aligned box pulls the baseline off-centre, so
+                // centring middle on the line box is wrong (BUG-182, TEST-24 row1). The strut
+                // (row font) covers any baseline-aligned text runs; explicit baseline-aligned
+                // inline-blocks sit with their bottom margin edge on the baseline.
+                let mut above = strut_ascent;
+                let mut below = strut_descent;
                 for &idx in child_idxs {
-                    let child = &b.children[idx];
-                    let c_em = child.style.font_size;
-                    let child_mt = child.style.margin_top.resolve_or_zero(c_em, content_width, viewport);
-                    let child_mb = child.style.margin_bottom.resolve_or_zero(c_em, content_width, viewport);
-                    let child_full_h = child_mt + child.rect.height + child_mb;
-                    let dy = match child.style.vertical_align {
-                        VerticalAlign::Baseline => row_h - child_full_h,
-                        VerticalAlign::Bottom | VerticalAlign::TextBottom => row_full_h - child_full_h,
+                    let fh = child_full_h(idx);
+                    match b.children[idx].style.vertical_align {
+                        VerticalAlign::Baseline => above = above.max(fh),
+                        VerticalAlign::Middle => {
+                            above = above.max(fh / 2.0 + x_half);
+                            below = below.max(fh / 2.0 - x_half);
+                        }
+                        _ => {}
+                    }
+                }
+                // top-aligned boxes extend the line below the baseline; bottom-aligned ones
+                // extend it above — both shift where the baseline lands.
+                for &idx in child_idxs {
+                    let fh = child_full_h(idx);
+                    match b.children[idx].style.vertical_align {
+                        VerticalAlign::Top | VerticalAlign::TextTop => below = below.max(fh - above),
+                        VerticalAlign::Bottom | VerticalAlign::TextBottom => above = above.max(fh - below),
+                        _ => {}
+                    }
+                }
+                for &idx in child_idxs {
+                    let fh = child_full_h(idx);
+                    let dy = match b.children[idx].style.vertical_align {
+                        VerticalAlign::Baseline => row_h - fh,
+                        VerticalAlign::Bottom | VerticalAlign::TextBottom => row_full_h - fh,
                         VerticalAlign::Top | VerticalAlign::TextTop => 0.0,
-                        VerticalAlign::Middle => (row_full_h - child_full_h) / 2.0,
+                        VerticalAlign::Middle => above - x_half - fh / 2.0,
                         _ => 0.0,
                     };
                     if dy > 0.001 {
@@ -12698,6 +12735,61 @@ mod tests {
             (pill.rect.width - 52.0).abs() < 1.0,
             "expected ~52px (32 text + 20 padding), got {}",
             pill.rect.width
+        );
+    }
+
+    fn collect_inline_blocks<'a>(b: &'a super::LayoutBox, out: &mut Vec<&'a super::LayoutBox>) {
+        if b.style.display == crate::style::Display::InlineBlock {
+            out.push(b);
+        }
+        for c in &b.children {
+            collect_inline_blocks(c, out);
+        }
+    }
+
+    #[test]
+    fn bug182_vertical_align_middle_uses_baseline_not_line_center() {
+        // BUG-182 / TEST-24 row1: three inline-blocks of different heights with
+        // vertical-align top/middle/bottom. A 100px top-aligned box pulls the baseline
+        // up off the line-box centre, so `vertical-align: middle` (centre aligned to
+        // baseline − x-height/2) must NOT be centred on the line box. With default font
+        // metrics (ascent 0.8em, x-height 0.5em at 16px) the 60px middle box lands with
+        // its top at the line-box top (dy = 0), matching Edge — not at dy = 20 (line
+        // centre). The bottom-aligned 40px box sits at dy = 60.
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 {
+                8.0
+            }
+        }
+        let html = r#"<div class="row"><div class="ib top"></div><div class="ib mid"></div><div class="ib bot"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".row { width: 400px; height: 120px; } \
+             .ib { display: inline-block; width: 80px; } \
+             .top { vertical-align: top; height: 100px; } \
+             .mid { vertical-align: middle; height: 60px; } \
+             .bot { vertical-align: bottom; height: 40px; }",
+        );
+        let root = super::layout_measured(&doc, &sheet, Size::new(400.0, 300.0), &Fixed8);
+        let mut ibs = Vec::new();
+        collect_inline_blocks(&root, &mut ibs);
+        assert_eq!(ibs.len(), 3, "expected 3 inline-blocks, got {}", ibs.len());
+        let top = ibs.iter().find(|b| (b.rect.height - 100.0).abs() < 0.5).unwrap();
+        let mid = ibs.iter().find(|b| (b.rect.height - 60.0).abs() < 0.5).unwrap();
+        let bot = ibs.iter().find(|b| (b.rect.height - 40.0).abs() < 0.5).unwrap();
+        // Middle box top aligns with the line-box top (baseline at 34px from top,
+        // box centre at baseline − x/2 = 30px ⇒ top at 0), NOT centred at dy = 20px.
+        assert!(
+            (mid.rect.y - top.rect.y).abs() < 1.0,
+            "middle box should align to line top (baseline-correct), got dy={}",
+            mid.rect.y - top.rect.y
+        );
+        // Bottom-aligned box bottom touches the line-box bottom (top.y + 100).
+        assert!(
+            ((bot.rect.y + bot.rect.height) - (top.rect.y + 100.0)).abs() < 1.0,
+            "bottom box bottom should touch line bottom, got {}",
+            bot.rect.y + bot.rect.height
         );
     }
 
