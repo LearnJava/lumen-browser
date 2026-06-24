@@ -2733,6 +2733,62 @@ fn anon_inline_run(node: NodeId, parent: &ComputedStyle, segs: Vec<InlineSegment
     }
 }
 
+/// CSS Flexbox §4 / Grid §6: a contiguous run of text directly inside a flex or
+/// grid container is wrapped in an anonymous (blockified) item. Returns `None`
+/// for a whitespace/control-only run — such runs do not generate an item.
+///
+/// The item is an anonymous `Block` container (so its inline content formats into
+/// line boxes like any block) holding a single `InlineRun` with the text. Without
+/// this, the text node's box is `Skip` and the text vanishes — BUG-194: white
+/// digit labels inside `.item { display: flex }` were dropped entirely.
+#[allow(clippy::too_many_arguments)]
+fn build_anon_text_item(
+    doc: &Document,
+    sheet: &Stylesheet,
+    id: NodeId,
+    parent: &ComputedStyle,
+    viewport: Size,
+    flat: &FlatTree,
+    counters: &CounterMap,
+    registry: &CounterStyleRegistry,
+    dark_mode: bool,
+) -> Option<LayoutBox> {
+    let NodeData::Text(s) = &doc.get(id).data else {
+        return None;
+    };
+    if s.chars().all(|c| c.is_whitespace() || is_invisible_control(c)) {
+        return None;
+    }
+    let mut segs = Vec::new();
+    // Each anonymous text item is its own inline context — ::first-letter does not
+    // apply to anonymous flex/grid items, so disable the candidate flag.
+    let mut need_first_letter = false;
+    collect_inline_segments(
+        doc, sheet, id, parent, viewport, &mut segs, flat, counters, registry,
+        &mut need_first_letter, dark_mode,
+    );
+    if segs.is_empty() {
+        return None;
+    }
+    let run = anon_inline_run(id, parent, segs);
+    let mut item_style = anon_style(parent);
+    // The anonymous item is blockified regardless of the container's own display.
+    item_style.display = Display::Block;
+    Some(LayoutBox {
+        node: id,
+        rect: Rect::ZERO,
+        style: item_style,
+        kind: BoxKind::Block,
+        children: vec![run],
+        col_span: 1,
+        row_span: 1,
+        svg_group_transform: None,
+        scroll_x: 0.0,
+        scroll_y: 0.0,
+        dirty: Default::default(),
+    })
+}
+
 /// CSS Pseudo-elements L4 §5.4: applies `::first-letter` style to the first grapheme of the
 /// `FirstLetter`-marked segment. Splits the segment if it contains more than one character so
 /// only the first grapheme gets the pseudo-element style; the remainder keeps the original style.
@@ -3633,7 +3689,25 @@ fn build_box(
                 | Display::TableRowGroup | Display::TableHeaderGroup | Display::TableFooterGroup
         );
         if is_item_container {
+            // CSS Flexbox §4 / Grid §6: text runs directly inside a flex/grid
+            // container become anonymous items. Tables keep their own
+            // anonymous-box rules (text → anonymous cell), so wrap only for
+            // flex/grid here.
+            let wrap_text_items = matches!(
+                style.display,
+                Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
+            );
             for child_id in dom_children {
+                if wrap_text_items
+                    && matches!(doc.get(child_id).data, NodeData::Text(_))
+                {
+                    if let Some(item) = build_anon_text_item(
+                        doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode,
+                    ) {
+                        children.push(item);
+                    }
+                    continue;
+                }
                 let child_box = build_box(doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode);
                 if !matches!(child_box.kind, BoxKind::Skip) {
                     children.push(child_box);
@@ -7722,12 +7796,21 @@ fn lay_out_flex(
                 let m_b = is.margin_bottom.resolve_or_zero(iem, cb, viewport);
                 let align = if matches!(is.align_self, AlignValue::Auto) { s.align_items } else { is.align_self };
                 let outer_cross = item.rect.height + m_t + m_b;
+                // The item was laid out at the line's cross-start (`content_y +
+                // cross_cursor + m_t`). Cross alignment must move the *whole*
+                // subtree, not just `rect.y`: the item's descendants were already
+                // positioned in absolute coordinates during the main-axis pass, so
+                // shifting only `rect.y` leaves nested content (e.g. an anonymous
+                // text item's InlineRun) at the cross-start — BUG-194 (centered
+                // digit labels stuck at the box top). Same rationale as BUG-165.
                 match align {
                     AlignValue::End => {
-                        item.rect.y = content_y + cross_cursor + effective_cross - outer_cross + m_t;
+                        let new_y = content_y + cross_cursor + effective_cross - outer_cross + m_t;
+                        shift_y_box(item, new_y - item.rect.y);
                     }
                     AlignValue::Center => {
-                        item.rect.y = content_y + cross_cursor + m_t + (effective_cross - outer_cross) / 2.0;
+                        let new_y = content_y + cross_cursor + m_t + (effective_cross - outer_cross) / 2.0;
+                        shift_y_box(item, new_y - item.rect.y);
                     }
                     AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal => {
                         // CSS Flexbox §9.5: stretch applies only when the item's cross size
@@ -12833,6 +12916,41 @@ mod tests {
         let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
         let a = find_by_id_all(&root, &doc, "a").expect("a");
         assert_eq!(a.rect.y, 75.0, "a.y with single-line center {}", a.rect.y);
+    }
+
+    #[test]
+    fn flex_text_child_is_wrapped_and_centered() {
+        // BUG-194: raw text directly inside a flex item must be wrapped in an
+        // anonymous (blockified) flex item (CSS Flexbox §4) and rendered. With
+        // align-items:center the item — and its InlineRun — must be centered on the
+        // cross axis: the cross-alignment shift moves the whole subtree, not just
+        // the item's own rect (previously the InlineRun stayed at the box top).
+        fn find_inline_run(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) {
+                return Some(b);
+            }
+            for c in &b.children {
+                if let Some(f) = find_inline_run(c) {
+                    return Some(f);
+                }
+            }
+            None
+        }
+        let html = r#"<div id="box">1</div>"#;
+        let css = "body{margin:0} #box{display:flex;align-items:center;justify-content:center;width:50px;height:50px;font-size:12px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let box_b = find_by_id_all(&root, &doc, "box").expect("box");
+        let run = find_inline_run(box_b).expect("anonymous InlineRun with text was dropped");
+        // One line of 12px text (~14.4px line-box) centered in a 50px box → center ≈ 25.
+        assert!(run.rect.height > 0.0, "run has a non-zero line box");
+        let center = run.rect.y + run.rect.height / 2.0;
+        assert!(
+            (center - 25.0).abs() < 3.0,
+            "text not vertically centered: center={center}, run.y={}, h={}",
+            run.rect.y, run.rect.height
+        );
     }
 
     #[test]
