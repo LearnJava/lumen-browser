@@ -1560,6 +1560,91 @@ pub trait JsFetchProvider: Send + Sync {
     }
 }
 
+/// A cheaply-clonable cooperative cancellation flag for aborting in-flight fetches.
+///
+/// This type mirrors the WHATWG `AbortSignal` concept, allowing the network layer
+/// to poll between socket reads to check if an operation should be aborted.
+/// All clones share the same underlying atomic flag via `Arc`, so aborting one
+/// affects all others.
+#[derive(Clone, Debug)]
+pub struct AbortToken {
+    flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl AbortToken {
+    /// Creates a new, non-aborted `AbortToken`.
+    ///
+    /// The returned token represents a fresh cancellation flag that has not been
+    /// triggered. Clones of this token will share the same underlying flag.
+    pub fn new() -> Self {
+        Self {
+            flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// Signals abortion by setting the internal flag to `true`.
+    ///
+    /// This operation is idempotent; calling it multiple times has no additional effect
+    /// beyond the first call. Uses `Ordering::SeqCst` to ensure synchronization.
+    pub fn abort(&self) {
+        self.flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Returns whether this token has been aborted.
+    ///
+    /// Uses `Ordering::SeqCst` to ensure a consistent view of the flag across threads.
+    /// Since all clones share the same flag, this reflects the state set by any clone.
+    pub fn is_aborted(&self) -> bool {
+        self.flag.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl Default for AbortToken {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod abort_token_tests {
+    use super::AbortToken;
+
+    #[test]
+    fn fresh_token_is_not_aborted() {
+        let token = AbortToken::new();
+        assert!(!token.is_aborted());
+    }
+
+    #[test]
+    fn abort_flips_is_aborted_to_true() {
+        let token = AbortToken::new();
+        token.abort();
+        assert!(token.is_aborted());
+    }
+
+    #[test]
+    fn abort_is_idempotent() {
+        let token = AbortToken::new();
+        token.abort();
+        token.abort();
+        assert!(token.is_aborted());
+    }
+
+    #[test]
+    fn clone_observes_abort_on_original() {
+        let token = AbortToken::new();
+        let cloned = token.clone();
+        token.abort();
+        assert!(cloned.is_aborted());
+    }
+
+    #[test]
+    fn default_produces_non_aborted_token() {
+        let token = AbortToken::default();
+        assert!(!token.is_aborted());
+    }
+}
+
 /// Synchronous access to the host platform clipboard for the JS runtime.
 ///
 /// Backs `navigator.clipboard.readText()` / `writeText()`. The JS shim delegates
