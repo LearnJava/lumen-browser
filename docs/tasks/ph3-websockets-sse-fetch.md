@@ -12,6 +12,32 @@
 
 **Honest framing.** This is *not* a greenfield item. All three runtimes already exist and work end-to-end against the real `HttpClient` (verified, not stubs). The Phase 3 mandate is to **harden them to production grade**: convert the synchronous / poll-based delivery model to true async event-loop delivery, add in-flight cancellation, and close the protocol-correctness gaps each runtime carries from its Phase 0/2 implementation. Treat the existing code as the baseline to *upgrade*, never to rewrite.
 
+## Progress (2026-06-25, P1 — branch `p1-ph3-ws-sse-fetch`)
+
+**Phase A — Fetch in-flight abort: foundation + interface landed (steps 1–2 partial).**
+
+- **Step 1 DONE** — `AbortToken` added to `lumen-core::ext` (`crates/core/src/ext.rs`):
+  `Arc<AtomicBool>`-backed clonable cooperative cancel flag (`new`/`abort`/`is_aborted`,
+  `Default`), SeqCst ordering, 5 unit tests. Commit `0505c722`.
+- **Step 2 partial (interface-first) DONE** — `JsFetchProvider::fetch_cancellable(url, method,
+  &AbortToken)` back-compatible default method with **pre-flight** cancellation
+  (`token.is_aborted() → Error::Aborted`, else delegate to `fetch_sync`); new typed
+  `Error::Aborted(String)` variant in `lumen-core::error` for the JS layer to map to
+  DOMException `AbortError`. 2 unit tests. `lumen-core` + `lumen-network` compile clean.
+  Commit `4404027f`.
+
+**Remaining (not yet done):**
+- **Step 2 deep half** — real in-flight teardown on `HttpClient::fetch_cancellable`: poll the
+  token between socket reads and shut the connection down. Blocked on the network read path being
+  fully blocking (`read_response`/`read_exact` at `crates/network/src/lib.rs:460`,
+  `read_chunked` loop) — needs non-blocking reads / read timeouts or a watchdog thread that
+  `shutdown()`s the socket on abort. Largest remaining piece of Phase A.
+- **Step 3** — JS `fetch()` wiring (`crates/js/src/dom.rs:7328`): create a token, register an
+  `abort` listener that flips it, thread it through a `_lumen_fetch_cancellable` bridge, reject
+  with `signal.reason`.
+- **Step 4** — `MockTransport` tests for mid-stream abort.
+- **Phases B (WS async delivery) and C (SSE non-blocking reconnect)** — untouched.
+
 ---
 
 ## Goal
