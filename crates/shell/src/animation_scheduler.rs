@@ -22,9 +22,12 @@ use lumen_layout::{
         LinearInterpolator, parse_keyframe_style,
     },
     style::{
-        AnimationDirection, AnimationFillMode, AnimationPlayState, IterationCount, TimingFunction,
+        AnimationDirection, AnimationFillMode, AnimationPlayState, AnimationTimeline,
+        IterationCount, TimingFunction,
     },
-    LayoutBox,
+    collect_named_scroll_timelines, collect_named_view_timelines, resolve_scroll_progress,
+    resolve_view_progress, LayoutBox, NamedScrollTimeline, NamedViewTimeline, ScrollTimeline,
+    ViewTimeline, Viewport,
 };
 
 /// Ключ одного экземпляра анимации: (элемент, индекс в списке animation-name).
@@ -43,6 +46,70 @@ struct RunState {
     paused_at: Option<f64>,
 }
 
+/// Scroll-context для одного тика: всё, что нужно резолверам прогресса
+/// scroll-driven анимаций (CSS Scroll-Driven Animations L1).
+///
+/// Собирается один раз в начале `tick` из корня layout-дерева и текущих
+/// scroll-офсетов, затем протягивается в `process_node`.
+struct ScrollCtx<'a> {
+    /// Корень layout-дерева — резолверы прогресса ищут от него subject/container.
+    root: &'a LayoutBox,
+    /// Текущий горизонтальный scroll-офсет корневого вьюпорта (CSS px).
+    scroll_x: f32,
+    /// Текущий вертикальный scroll-офсет корневого вьюпорта (CSS px).
+    scroll_y: f32,
+    /// Размеры вьюпорта (CSS px) для view()-прогресса.
+    viewport: Viewport,
+    /// Именованные `scroll-timeline` из дерева (для `animation-timeline: --name`).
+    named_scroll: Vec<NamedScrollTimeline>,
+    /// Именованные `view-timeline` из дерева (для `animation-timeline: --name`).
+    named_view: Vec<NamedViewTimeline>,
+}
+
+impl ScrollCtx<'_> {
+    /// Прогресс `[0,1]` для timeline узла `node`, либо `None` если timeline =
+    /// `auto` (тогда анимация управляется обычными часами `@keyframes`).
+    ///
+    /// * `scroll()` — прогресс корневого вьюпорта по нужной оси. `nearest`/`self`
+    ///   аппроксимируются корневым вьюпортом (полный резолвинг ближайшего
+    ///   scroll-контейнера — задача L2).
+    /// * `view()` — view-прогресс самого узла как subject (cover-диапазон).
+    /// * `<custom-ident>` — матч против именованных scroll/view timeline-ов;
+    ///   неизвестное имя → inactive timeline, удерживаем прогресс 0 (from-state).
+    fn progress_for(&self, timeline: &AnimationTimeline, node: NodeId) -> Option<f32> {
+        match timeline {
+            AnimationTimeline::Auto => None,
+            AnimationTimeline::Scroll { axis, .. } => {
+                let tl = ScrollTimeline { element: None, axis: *axis };
+                Some(resolve_scroll_progress(
+                    &tl, self.root, self.scroll_x, self.scroll_y, self.viewport,
+                ))
+            }
+            AnimationTimeline::View { axis } => {
+                let tl = ViewTimeline { element: node, axis: *axis };
+                Some(resolve_view_progress(
+                    &tl, self.root, self.scroll_y, self.scroll_x, self.viewport,
+                ))
+            }
+            AnimationTimeline::Named(name) => {
+                if let Some(t) = self.named_scroll.iter().find(|t| t.name == *name) {
+                    let tl = ScrollTimeline { element: Some(t.container), axis: t.axis };
+                    Some(resolve_scroll_progress(
+                        &tl, self.root, self.scroll_x, self.scroll_y, self.viewport,
+                    ))
+                } else if let Some(t) = self.named_view.iter().find(|t| t.name == *name) {
+                    let tl = ViewTimeline { element: t.subject, axis: t.axis };
+                    Some(resolve_view_progress(
+                        &tl, self.root, self.scroll_y, self.scroll_x, self.viewport,
+                    ))
+                } else {
+                    Some(0.0)
+                }
+            }
+        }
+    }
+}
+
 /// Планировщик CSS-анимаций. Хранит timing-состояние между кадрами.
 /// Single-threaded; создаётся один раз в `Lumen` и тикается на каждом
 /// `RedrawRequested` после `run_rendering_step`.
@@ -59,14 +126,29 @@ impl AnimationScheduler {
 
     /// Тик планировщика: обходит layout-дерево, для каждой активной анимации
     /// вычисляет интерполированный стиль и записывает в `AnimationFrame`.
+    ///
+    /// `scroll_x`/`scroll_y`/`viewport` дают контекст для scroll-driven анимаций
+    /// (`animation-timeline: scroll()|view()|<custom-ident>`): их прогресс берётся
+    /// из положения скролла/вьюпорта, а не из часов `@keyframes`.
     pub fn tick(
         &mut self,
         timestamp_ms: f64,
         layout: &LayoutBox,
         stylesheet: &Stylesheet,
+        scroll_x: f32,
+        scroll_y: f32,
+        viewport: Viewport,
     ) -> AnimationFrame {
         let mut frame = AnimationFrame::default();
-        self.tick_box(timestamp_ms, layout, stylesheet, &mut frame);
+        let ctx = ScrollCtx {
+            root: layout,
+            scroll_x,
+            scroll_y,
+            viewport,
+            named_scroll: collect_named_scroll_timelines(layout),
+            named_view: collect_named_view_timelines(layout),
+        };
+        self.tick_box(timestamp_ms, layout, stylesheet, &ctx, &mut frame);
         frame
     }
 
@@ -81,11 +163,12 @@ impl AnimationScheduler {
         ts: f64,
         lb: &LayoutBox,
         ss: &Stylesheet,
+        ctx: &ScrollCtx,
         frame: &mut AnimationFrame,
     ) {
-        self.process_node(ts, lb, ss, frame);
+        self.process_node(ts, lb, ss, ctx, frame);
         for child in &lb.children {
-            self.tick_box(ts, child, ss, frame);
+            self.tick_box(ts, child, ss, ctx, frame);
         }
     }
 
@@ -94,6 +177,7 @@ impl AnimationScheduler {
         ts: f64,
         lb: &LayoutBox,
         ss: &Stylesheet,
+        ctx: &ScrollCtx,
         frame: &mut AnimationFrame,
     ) {
         let style = &lb.style;
@@ -108,81 +192,101 @@ impl AnimationScheduler {
                 continue;
             }
 
-            // Параметры анимации из параллельных списков ComputedStyle (cyclic).
-            let duration = get_cyclic(&style.animation_durations, i).copied().unwrap_or(0.0);
-            if duration <= 0.0 {
-                continue;
-            }
-            let delay = get_cyclic(&style.animation_delays, i).copied().unwrap_or(0.0);
-            let play_state = get_cyclic(&style.animation_play_states, i)
-                .copied()
-                .unwrap_or(AnimationPlayState::Running);
-            let iter_count = get_cyclic(&style.animation_iteration_counts, i)
-                .cloned()
-                .unwrap_or(IterationCount::Finite(1.0));
+            // Параметры, общие для time-based и scroll-driven путей.
             let direction = get_cyclic(&style.animation_directions, i)
                 .copied()
                 .unwrap_or(AnimationDirection::Normal);
             let timing_fn = get_cyclic(&style.animation_timing_functions, i)
                 .cloned()
                 .unwrap_or_default();
-            let fill_mode = get_cyclic(&style.animation_fill_modes, i)
-                .copied()
-                .unwrap_or(AnimationFillMode::None);
-
-            let key = AnimKey {
-                node: lb.node,
-                index: i,
-            };
-
-            // Регистрируем новую анимацию — начало отсчёта = сейчас.
-            self.running.entry(key.clone()).or_insert(RunState {
-                start_ms: ts,
-                paused_at: None,
-            });
-
-            let state = self.running.get_mut(&key).unwrap();
-
-            // Учёт play-state: пауза/возобновление.
-            match play_state {
-                AnimationPlayState::Paused => {
-                    if state.paused_at.is_none() {
-                        state.paused_at = Some(ts);
-                    }
-                }
-                AnimationPlayState::Running => {
-                    if let Some(paused_at) = state.paused_at.take() {
-                        // Сдвигаем start_ms на время паузы.
-                        state.start_ms += ts - paused_at;
-                    }
-                }
-            }
-
-            // Локальное время (в секундах) с учётом задержки.
-            let elapsed_ms = match state.paused_at {
-                Some(paused_at) => paused_at - state.start_ms,
-                None => ts - state.start_ms,
-            };
-            let local_time_s = elapsed_ms / 1000.0 - delay as f64;
+            // animation-timeline для этого индекса (cyclic, default `auto`).
+            let timeline = get_cyclic(&style.animation_timelines, i)
+                .cloned()
+                .unwrap_or_default();
 
             // Найти @keyframes по имени.
             let Some(kf_rule) = ss.keyframes.iter().find(|k| k.name == *name) else {
                 continue;
             };
 
-            // Вычислить t ∈ [0,1] для текущего момента.
-            let Some(t) = compute_t(
-                local_time_s,
-                duration as f64,
-                &iter_count,
-                direction,
-                &timing_fn,
-                fill_mode,
-            ) else {
-                continue;
-            };
+            let t = match ctx.progress_for(&timeline, lb.node) {
+                // CSS Scroll-Driven Animations L1 — прогресс задаёт scroll/view
+                // timeline, а не часы. animation-duration игнорируется; has_active
+                // НЕ взводим — кадр перевычисляется на следующем скролле/redraw,
+                // непрерывная перерисовка не нужна.
+                Some(progress) => {
+                    let t_raw = apply_direction(progress.clamp(0.0, 1.0), 0, direction);
+                    timing_fn.progress(t_raw)
+                }
+                // animation-timeline: auto — обычная анимация по часам.
+                None => {
+                    let duration =
+                        get_cyclic(&style.animation_durations, i).copied().unwrap_or(0.0);
+                    if duration <= 0.0 {
+                        continue;
+                    }
+                    let delay = get_cyclic(&style.animation_delays, i).copied().unwrap_or(0.0);
+                    let play_state = get_cyclic(&style.animation_play_states, i)
+                        .copied()
+                        .unwrap_or(AnimationPlayState::Running);
+                    let iter_count = get_cyclic(&style.animation_iteration_counts, i)
+                        .cloned()
+                        .unwrap_or(IterationCount::Finite(1.0));
+                    let fill_mode = get_cyclic(&style.animation_fill_modes, i)
+                        .copied()
+                        .unwrap_or(AnimationFillMode::None);
 
-            frame.has_active = true;
+                    let key = AnimKey {
+                        node: lb.node,
+                        index: i,
+                    };
+
+                    // Регистрируем новую анимацию — начало отсчёта = сейчас.
+                    self.running.entry(key.clone()).or_insert(RunState {
+                        start_ms: ts,
+                        paused_at: None,
+                    });
+
+                    let state = self.running.get_mut(&key).unwrap();
+
+                    // Учёт play-state: пауза/возобновление.
+                    match play_state {
+                        AnimationPlayState::Paused => {
+                            if state.paused_at.is_none() {
+                                state.paused_at = Some(ts);
+                            }
+                        }
+                        AnimationPlayState::Running => {
+                            if let Some(paused_at) = state.paused_at.take() {
+                                // Сдвигаем start_ms на время паузы.
+                                state.start_ms += ts - paused_at;
+                            }
+                        }
+                    }
+
+                    // Локальное время (в секундах) с учётом задержки.
+                    let elapsed_ms = match state.paused_at {
+                        Some(paused_at) => paused_at - state.start_ms,
+                        None => ts - state.start_ms,
+                    };
+                    let local_time_s = elapsed_ms / 1000.0 - delay as f64;
+
+                    // Вычислить t ∈ [0,1] для текущего момента.
+                    let Some(t) = compute_t(
+                        local_time_s,
+                        duration as f64,
+                        &iter_count,
+                        direction,
+                        &timing_fn,
+                        fill_mode,
+                    ) else {
+                        continue;
+                    };
+
+                    frame.has_active = true;
+                    t
+                }
+            };
 
             // Интерполировать keyframe-значения.
             let animated = interpolate_at(kf_rule, t);
@@ -512,5 +616,96 @@ mod tests {
     fn get_cyclic_empty_returns_none() {
         let list: Vec<f32> = Vec::new();
         assert_eq!(get_cyclic(&list, 0), None);
+    }
+
+    // ── ScrollCtx::progress_for — scroll-driven timeline resolution ──────────
+
+    use lumen_core::geom::Rect;
+    use lumen_layout::style::ComputedStyle;
+    use lumen_layout::{BoxKind, ScrollAxis};
+    use lumen_dom::NodeId;
+
+    fn node(id: u32) -> NodeId {
+        NodeId::from_index(id as usize)
+    }
+
+    fn make_box(id: u32, x: f32, y: f32, w: f32, h: f32) -> LayoutBox {
+        LayoutBox {
+            node: node(id),
+            rect: Rect { x, y, width: w, height: h },
+            style: ComputedStyle::root(),
+            kind: BoxKind::Block,
+            children: Vec::new(),
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            dirty: Default::default(),
+        }
+    }
+
+    fn ctx_for(root: &LayoutBox, scroll_y: f32) -> ScrollCtx<'_> {
+        ScrollCtx {
+            root,
+            scroll_x: 0.0,
+            scroll_y,
+            viewport: Viewport { width: 1024.0, height: 720.0 },
+            named_scroll: collect_named_scroll_timelines(root),
+            named_view: collect_named_view_timelines(root),
+        }
+    }
+
+    // animation-timeline: auto → None (управляется часами).
+    #[test]
+    fn progress_for_auto_is_none() {
+        let root = make_box(1, 0.0, 0.0, 1024.0, 720.0);
+        let ctx = ctx_for(&root, 0.0);
+        assert_eq!(ctx.progress_for(&AnimationTimeline::Auto, node(1)), None);
+    }
+
+    // scroll() корневого вьюпорта: scroll 0 → 0, половина → ~0.5.
+    #[test]
+    fn progress_for_scroll_root() {
+        let mut root = make_box(1, 0.0, 0.0, 1024.0, 720.0);
+        root.children.push(make_box(2, 0.0, 0.0, 1024.0, 2000.0));
+        let tl = AnimationTimeline::Scroll { axis: ScrollAxis::Block, nearest: true };
+
+        let at0 = ctx_for(&root, 0.0).progress_for(&tl, node(1)).unwrap();
+        assert!(at0.abs() < 1e-6, "scroll 0 → progress 0, got {at0}");
+
+        // content 2000, vp 720 → max 1280; scroll 640 → 0.5.
+        let half = ctx_for(&root, 640.0).progress_for(&tl, node(1)).unwrap();
+        assert!((half - 0.5).abs() < 0.01, "expected ~0.5, got {half}");
+    }
+
+    // Named scroll-timeline резолвится по своему контейнеру, не по корню.
+    #[test]
+    fn progress_for_named_scroll_container() {
+        let mut root = make_box(1, 0.0, 0.0, 1024.0, 720.0);
+        let mut container = make_box(2, 0.0, 0.0, 400.0, 160.0);
+        container.style.scroll_timeline_name = Some("--page".to_string());
+        container.style.scroll_timeline_axis = ScrollAxis::Block;
+        container.scroll_y = 60.0;
+        // content 400 tall inside 160 container → max_scroll 240; 60/240 = 0.25.
+        container.children.push(make_box(3, 0.0, 0.0, 400.0, 400.0));
+        root.children.push(container);
+
+        let ctx = ctx_for(&root, 0.0);
+        let p = ctx
+            .progress_for(&AnimationTimeline::Named("--page".into()), node(9))
+            .unwrap();
+        assert!((p - 0.25).abs() < 0.01, "expected ~0.25, got {p}");
+    }
+
+    // Неизвестное имя timeline → inactive, удерживаем from-state (progress 0).
+    #[test]
+    fn progress_for_named_unknown_is_zero() {
+        let root = make_box(1, 0.0, 0.0, 1024.0, 720.0);
+        let ctx = ctx_for(&root, 0.0);
+        let p = ctx
+            .progress_for(&AnimationTimeline::Named("--missing".into()), node(1))
+            .unwrap();
+        assert_eq!(p, 0.0);
     }
 }

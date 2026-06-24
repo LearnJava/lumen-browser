@@ -15,6 +15,8 @@ use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
+use crate::panels::themes::Palette;
+
 // ── Visual constants ─────────────────────────────────────────────────────────
 
 /// Width of the floating permission panel in CSS px.
@@ -32,17 +34,13 @@ const ROW_H: f32 = 30.0;
 /// Horizontal padding inside the panel.
 const PAD_X: f32 = 10.0;
 
-const BG: Color = Color { r: 20, g: 20, b: 28, a: 245 };
-const BORDER: Color = Color { r: 50, g: 50, b: 65, a: 255 };
-const TEXT_MAIN: Color = Color { r: 220, g: 220, b: 228, a: 255 };
-const TEXT_DIM: Color = Color { r: 130, g: 130, b: 145, a: 255 };
+// Semantic action-state colors — carry meaning (Allow=green / Deny=red / Ask=amber).
 const ALLOW_FG: Color = Color { r: 60, g: 200, b: 120, a: 255 };
 const DENY_FG: Color = Color { r: 180, g: 80, b: 80, a: 255 };
 const ASK_FG: Color = Color { r: 160, g: 140, b: 60, a: 255 };
 const ALLOW_BG: Color = Color { r: 25, g: 70, b: 45, a: 255 };
 const DENY_BG: Color = Color { r: 80, g: 30, b: 30, a: 255 };
 const ASK_BG: Color = Color { r: 65, g: 58, b: 22, a: 255 };
-const CLOSE_FG: Color = Color { r: 140, g: 80, b: 80, a: 255 };
 
 const FONT_SZ: f32 = 11.0;
 const FONT_SZ_SM: f32 = 10.0;
@@ -258,8 +256,10 @@ pub fn hit_test(
 /// Build the display list for the permission floating panel.
 ///
 /// The panel is anchored at the top-left of the window, offset by
-/// `tab_bar_h` from the top.
-pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32) -> DisplayList {
+/// `tab_bar_h` from the top.  `pal` controls all surface / chrome colors;
+/// semantic action colors (Allow/Deny/Ask) are hard-coded and independent of
+/// the theme.
+pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32, pal: &Palette) -> DisplayList {
     let (px, py) = panel_origin(tab_bar_h);
     let mut out = DisplayList::with_capacity(30);
     let radii = uniform_radii(PANEL_RADIUS);
@@ -268,12 +268,12 @@ pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32) -> DisplayList {
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px, py, PANEL_W, PANEL_H),
         radii,
-        color: BORDER,
+        color: pal.overlay_border,
     });
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(px + 1.0, py + 1.0, PANEL_W - 2.0, PANEL_H - 2.0),
         radii: uniform_radii(PANEL_RADIUS - 1.0),
-        color: BG,
+        color: pal.overlay_bg,
     });
 
     // Header: lock icon + origin label + close "×".
@@ -281,7 +281,7 @@ pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32) -> DisplayList {
         rect: Rect::new(px + PAD_X, py + 6.0, 16.0, 16.0),
         text: "🔒".to_owned(),
         font_size: 13.0,
-        color: TEXT_DIM,
+        color: pal.text_dim,
         font_family: Vec::new(),
         font_weight: FontWeight::NORMAL,
         font_style: FontStyle::Normal,
@@ -298,7 +298,7 @@ pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32) -> DisplayList {
         rect: Rect::new(px + PAD_X + 18.0, py + 8.0, PANEL_W - 54.0, FONT_SZ * 1.3),
         text: origin_text,
         font_size: FONT_SZ,
-        color: TEXT_MAIN,
+        color: pal.text,
         font_family: Vec::new(),
         font_weight: FontWeight::BOLD,
         font_style: FontStyle::Normal,
@@ -313,7 +313,7 @@ pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32) -> DisplayList {
         rect: Rect::new(close_x, py + 6.0, 14.0, FONT_SZ * 1.2),
         text: "×".to_owned(),
         font_size: FONT_SZ,
-        color: CLOSE_FG,
+        color: pal.text_dim,
         font_family: Vec::new(),
         font_weight: FontWeight::NORMAL,
         font_style: FontStyle::Normal,
@@ -325,7 +325,7 @@ pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32) -> DisplayList {
     // Divider line between header and rows.
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(px + 1.0, py + HEADER_H - 1.0, PANEL_W - 2.0, 1.0),
-        color: BORDER,
+        color: pal.divider,
     });
 
     // Permission rows.
@@ -338,7 +338,7 @@ pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32) -> DisplayList {
             rect: Rect::new(px + PAD_X, row_top + 7.0, 16.0, 16.0),
             text: kind.icon().to_owned(),
             font_size: 12.0,
-            color: TEXT_MAIN,
+            color: pal.text,
             font_family: Vec::new(),
             font_weight: FontWeight::NORMAL,
             font_style: FontStyle::Normal,
@@ -352,7 +352,7 @@ pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32) -> DisplayList {
             rect: Rect::new(px + PAD_X + 18.0, row_top + 9.0, 90.0, FONT_SZ_SM * 1.3),
             text: kind.label().to_owned(),
             font_size: FONT_SZ_SM,
-            color: TEXT_MAIN,
+            color: pal.text,
             font_family: Vec::new(),
             font_weight: FontWeight::NORMAL,
             font_style: FontStyle::Normal,
@@ -573,14 +573,14 @@ mod tests {
     #[test]
     fn build_panel_emits_commands() {
         let p = make_panel(Some("https://example.com"));
-        let dl = build_panel(&p, TAB_H);
+        let dl = build_panel(&p, TAB_H, &Palette::DARK);
         assert!(!dl.is_empty());
     }
 
     #[test]
     fn build_panel_shows_origin() {
         let p = make_panel(Some("https://example.com"));
-        let dl = build_panel(&p, TAB_H);
+        let dl = build_panel(&p, TAB_H, &Palette::DARK);
         let has_origin = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("example.com"))
         });
@@ -590,7 +590,7 @@ mod tests {
     #[test]
     fn build_panel_shows_all_kinds() {
         let p = make_panel(Some("https://example.com"));
-        let dl = build_panel(&p, TAB_H);
+        let dl = build_panel(&p, TAB_H, &Palette::DARK);
         for kind in PermissionKind::ALL {
             let found = dl.iter().any(|c| {
                 matches!(c, DisplayCommand::DrawText { text, .. } if text == kind.label())
@@ -603,7 +603,7 @@ mod tests {
     fn build_panel_shows_allow_label_after_grant() {
         let mut p = make_panel(Some("https://example.com"));
         p.cycle_permission(PermissionKind::Camera);
-        let dl = build_panel(&p, TAB_H);
+        let dl = build_panel(&p, TAB_H, &Palette::DARK);
         let has_allow = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "Allow")
         });

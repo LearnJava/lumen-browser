@@ -48,7 +48,7 @@ use lumen_layout::Color;
 
 use lumen_layout::{
     BackgroundRepeat, BackgroundSize, BorderStyle, FontStyle, GradientStop, ObjectFit,
-    ObjectPosition, PositionComponent,
+    ObjectPosition,
 };
 
 use lumen_core::geom::Rect;
@@ -56,7 +56,7 @@ use lumen_core::geom::Rect;
 use crate::backend::{RenderBackend, RenderError};
 use crate::blend_modes::mix_blend_rgba;
 use crate::dash_math::{dashed_border_offsets, dotted_border_offsets};
-use crate::display_list::{BlendMode, CornerRadii, DisplayCommand, ResolvedClipShape, fit_image_rect};
+use crate::display_list::{BlendMode, CornerRadii, DisplayCommand, ResolvedClipShape, bg_tile_geometry, fit_image_rect};
 use crate::gradient_math::{conic_sample_t, sample_gradient_color};
 use crate::matrix_util::mat4_to_2d_affine;
 
@@ -154,6 +154,10 @@ fn femtovg_stops(
     if resolved.is_empty() {
         return vec![];
     }
+    // CSS Images L4 §3.1 — interpolate fades to/through transparency in
+    // premultiplied space (BUG-190); femtovg's 256-texel texture samples these
+    // dense stops straight, reproducing the premultiplied curve.
+    let resolved = crate::gradient_math::premultiplied_subdivide_stops(&resolved);
     if !repeating {
         let mut out: Vec<(f32, femtovg::Color)> = resolved
             .iter()
@@ -196,6 +200,75 @@ fn femtovg_stops(
         tiles += 1;
     }
     out
+}
+
+/// Samples a `[0,1]`-tiled femtovg stop list (the output of [`femtovg_stops`]) at
+/// position `t`, clamping `t` to `[0,1]` and linearly interpolating between the
+/// two bracketing stops in straight (non-premultiplied) sRGBA.
+///
+/// This reproduces *exactly* what femtovg's native gradient does internally —
+/// clamp-sample a `[0,1]` texture — except per-pixel instead of through a
+/// 256-texel LUT. Used by the CPU gradient fill (BUG-085) so the only difference
+/// from the native path is the eliminated quantization, never the colour ramp.
+fn sample_fvg_stops(resolved: &[(f32, femtovg::Color)], t: f32) -> femtovg::Color {
+    let n = resolved.len();
+    if n == 0 {
+        return femtovg::Color::rgbaf(0.0, 0.0, 0.0, 0.0);
+    }
+    if n == 1 {
+        return resolved[0].1;
+    }
+    let tc = t.clamp(0.0, 1.0);
+    if tc <= resolved[0].0 {
+        return resolved[0].1;
+    }
+    let last = n - 1;
+    if tc >= resolved[last].0 {
+        return resolved[last].1;
+    }
+    for i in 0..last {
+        let (ap, ac) = resolved[i];
+        let (bp, bc) = resolved[i + 1];
+        if tc >= ap && tc <= bp {
+            let s = bp - ap;
+            let f = if s > 1e-6 { (tc - ap) / s } else { 0.0 };
+            return femtovg::Color::rgbaf(
+                ac.r + (bc.r - ac.r) * f,
+                ac.g + (bc.g - ac.g) * f,
+                ac.b + (bc.b - ac.b) * f,
+                ac.a + (bc.a - ac.a) * f,
+            );
+        }
+    }
+    resolved[last].1
+}
+
+/// Converts a straight-alpha femtovg `Color` (channels in `[0,1]`) to `rgb::RGBA8`
+/// for upload as a CPU-rendered gradient texture (BUG-085).
+#[inline]
+fn fvg_to_rgba8(c: femtovg::Color) -> rgb::RGBA8 {
+    let q = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
+    rgb::RGBA8 { r: q(c.r), g: q(c.g), b: q(c.b), a: q(c.a) }
+}
+
+/// Fills an `iw×ih` RGBA8 texture by sampling `color_at` once per texel over a
+/// normalized box coordinate space (BUG-085). `color_at(cx, cy)` is evaluated at
+/// texel centres with `cx, cy ∈ [0,1]` (fraction across the box). Sampling at
+/// device resolution (rather than femtovg's 256-texel LUT) is what removes the
+/// quantization; the texel-centre sample mirrors what a GPU shader would do.
+fn fill_gradient_texture(
+    iw: usize, ih: usize, color_at: impl Fn(f32, f32) -> femtovg::Color,
+) -> Vec<rgb::RGBA8> {
+    let mut pixels = vec![rgb::RGBA8 { r: 0, g: 0, b: 0, a: 0 }; iw * ih];
+    for iy in 0..ih {
+        let cy = (iy as f32 + 0.5) / ih as f32;
+        let row = iy * iw;
+        for ix in 0..iw {
+            let cx = (ix as f32 + 0.5) / iw as f32;
+            pixels[row + ix] = fvg_to_rgba8(color_at(cx, cy));
+        }
+    }
+    pixels
 }
 
 /// Вычисляет начало и конец линейного градиента для femtovg из CSS angle_deg.
@@ -348,6 +421,10 @@ pub struct FemtovgBackend {
     viewport_css_w: f32,
     /// CSS высота viewport (height / scale), нужна для sticky-вычислений.
     viewport_css_h: f32,
+    /// Фон канвы (CSS Backgrounds §3.11.1): цвет, которым заливается весь кадр
+    /// перед отрисовкой content. `None` → UA-дефолт (белый). Устанавливается
+    /// shell-ом через `set_canvas_background` из фона корневого элемента.
+    canvas_bg: Option<Color>,
     /// Offscreen filter layer stack. Each entry holds an offscreen ImageId and
     /// the filter chain to apply on PopFilter. Supports nested filters.
     filter_layer_stack: Vec<FilterLayerEntry>,
@@ -381,6 +458,12 @@ pub struct FemtovgBackend {
     /// Currently active render target image. `None` means Screen.
     /// Updated by [`Self::switch_render_target`] whenever the RT changes.
     active_rt_image: Option<femtovg::ImageId>,
+    /// Per-pixel gradient images (BUG-085) queued for deletion after the next
+    /// `canvas.flush()`. Repeating linear and all radial gradients are rendered
+    /// CPU-side into a device-resolution texture to bypass femtovg's 256-texel
+    /// gradient LUT (which quantizes repeating-stop boundaries); the texture is
+    /// blitted with `fill_path`, whose draw command holds the ImageId until flush.
+    gradient_pending_delete: Vec<femtovg::ImageId>,
 }
 
 // SAFETY: FemtovgBackend используется только из одного потока одновременно
@@ -759,41 +842,116 @@ fn fsin(mut rad: f32) -> f32 {
 /// Apply a separable box blur to RGBA pixel data in-place.
 /// `sigma` controls the kernel radius (radius = round(sigma * 1.5)).
 /// This is a 3-pass approximation of Gaussian blur (3× box blur ≈ Gaussian).
-fn box_blur_rgba(pixels: &mut [u8], width: usize, height: usize, sigma: f32) {
-    let r = ((sigma * 1.5).round() as usize).max(1);
-    let stride = width * 4;
-    // Horizontal pass.
-    let mut tmp = pixels.to_vec();
-    for y in 0..height {
-        for x in 0..width {
+/// Computes the three box-blur radii whose successive application approximates
+/// a Gaussian of standard deviation `sigma` (Kovesi, *Fast Almost-Gaussian
+/// Filtering*; n = 3 boxes). Three boxes are visually indistinguishable from a
+/// true Gaussian and far closer than a single box, which is what Edge/Chrome
+/// rasterize for `filter: blur()` / `backdrop-filter: blur()`. Each returned
+/// value is the half-width `r` of a `(2r+1)`-wide averaging window.
+fn gaussian_box_radii(sigma: f32) -> [usize; 3] {
+    const N: f32 = 3.0;
+    // Ideal (real) box width matching the Gaussian variance across N boxes.
+    let w_ideal = (12.0 * sigma * sigma / N + 1.0).sqrt();
+    let mut wl = w_ideal.floor() as i32;
+    if wl % 2 == 0 {
+        wl -= 1; // box widths must be odd to stay symmetric around a pixel.
+    }
+    let wu = wl + 2;
+    // How many of the N boxes use the lower width `wl` (the rest use `wu`).
+    let m_ideal = (12.0 * sigma * sigma
+        - N * (wl * wl) as f32
+        - 4.0 * N * wl as f32
+        - 3.0 * N)
+        / (-4.0 * wl as f32 - 4.0);
+    let m = m_ideal.round() as i32;
+    let mut radii = [1usize; 3];
+    for (i, slot) in radii.iter_mut().enumerate() {
+        let w = if (i as i32) < m { wl } else { wu };
+        *slot = (((w - 1) / 2).max(1)) as usize;
+    }
+    radii
+}
+
+/// One box-blur pass (separable: horizontal then vertical) of half-width `r`,
+/// restricted to `region` (`[rx0, rx1) × [ry0, ry1)` in pixel coords). Sampling
+/// is clamped to the region so the window never reaches outside it. `scratch`
+/// is reused across passes to avoid per-pass allocation.
+fn box_blur_pass_region(
+    pixels: &mut [u8],
+    scratch: &mut [u8],
+    stride: usize,
+    region: (usize, usize, usize, usize),
+    r: usize,
+) {
+    let (rx0, ry0, rx1, ry1) = region;
+    // Horizontal pass: pixels → scratch.
+    for y in ry0..ry1 {
+        for x in rx0..rx1 {
             let mut sum = [0u32; 4];
             let mut count = 0u32;
-            let x0 = x.saturating_sub(r);
-            let x1 = (x + r + 1).min(width);
+            let x0 = x.saturating_sub(r).max(rx0);
+            let x1 = (x + r + 1).min(rx1);
             for sx in x0..x1 {
                 let off = y * stride + sx * 4;
                 for c in 0..4 { sum[c] += pixels[off + c] as u32; }
                 count += 1;
             }
             let off = y * stride + x * 4;
-            for c in 0..4 { tmp[off + c] = (sum[c] / count) as u8; }
+            for c in 0..4 { scratch[off + c] = (sum[c] / count) as u8; }
         }
     }
-    // Vertical pass.
-    for y in 0..height {
-        for x in 0..width {
+    // Vertical pass: scratch → pixels.
+    for y in ry0..ry1 {
+        for x in rx0..rx1 {
             let mut sum = [0u32; 4];
             let mut count = 0u32;
-            let y0 = y.saturating_sub(r);
-            let y1 = (y + r + 1).min(height);
+            let y0 = y.saturating_sub(r).max(ry0);
+            let y1 = (y + r + 1).min(ry1);
             for sy in y0..y1 {
                 let off = sy * stride + x * 4;
-                for c in 0..4 { sum[c] += tmp[off + c] as u32; }
+                for c in 0..4 { sum[c] += scratch[off + c] as u32; }
                 count += 1;
             }
             let off = y * stride + x * 4;
             for c in 0..4 { pixels[off + c] = (sum[c] / count) as u8; }
         }
+    }
+}
+
+/// Three-iteration box blur approximating a Gaussian of deviation `sigma`,
+/// restricted to `region` (pixel coords, half-open `[x0, x1) × [y0, y1)`).
+///
+/// Three successive box passes (radii from [`gaussian_box_radii`]) match a true
+/// Gaussian closely — a single box pass (the previous implementation, despite
+/// its "3-pass" comment) reads boxy versus Edge's Gaussian `blur()` and was the
+/// dominant residual on BUG-144's blur cards.
+///
+/// Sampling is clamped to the region: blur near a region edge averages only
+/// pixels inside the region, which duplicates the region's own edge content
+/// instead of bleeding in whatever lies outside it. This is required for
+/// `backdrop-filter`, whose input is the backdrop image cropped to the
+/// element's border box (CSS Filter Effects §backdrop-filter) — blurring the
+/// whole canvas and then cropping pulls the dark page background above a card
+/// into the card's top edge (BUG-144 edge-bleed). Pixels outside the region
+/// are left untouched.
+fn box_blur_rgba_region(
+    pixels: &mut [u8],
+    width: usize,
+    height: usize,
+    sigma: f32,
+    region: (usize, usize, usize, usize),
+) {
+    let (rx0, ry0, mut rx1, mut ry1) = region;
+    rx1 = rx1.min(width);
+    ry1 = ry1.min(height);
+    if rx0 >= rx1 || ry0 >= ry1 {
+        return;
+    }
+    let stride = width * 4;
+    let clamped = (rx0, ry0, rx1, ry1);
+    let mut scratch = pixels.to_vec();
+    for r in gaussian_box_radii(sigma) {
+        box_blur_pass_region(pixels, &mut scratch, stride, clamped, r);
     }
 }
 
@@ -898,6 +1056,7 @@ impl FemtovgBackend {
             scroll_x: 0.0,
             viewport_css_w: size.width as f32 / scale as f32,
             viewport_css_h: size.height as f32 / scale as f32,
+            canvas_bg: None,
             filter_layer_stack: Vec::new(),
             filter_layer_pending_delete: Vec::new(),
             opacity_layer_stack: Vec::new(),
@@ -908,6 +1067,7 @@ impl FemtovgBackend {
             backdrop_filter_pending_delete: Vec::new(),
             clip_stack: Vec::new(),
             active_rt_image: None,
+            gradient_pending_delete: Vec::new(),
         })
     }
 
@@ -1216,6 +1376,86 @@ impl FemtovgBackend {
         }
         paint.set_font_size(font_size);
         let _ = self.canvas.fill_text(x, y + font_size * 0.8, text, &paint);
+    }
+
+    /// BUG-109: renders a text run with `font-variation-settings` axes applied,
+    /// bypassing femtovg's variation-blind text engine.
+    ///
+    /// Resolves the first CSS-declared family that maps to a **variable** face,
+    /// builds filled-glyph paths at the requested axis coordinates via
+    /// [`crate::varied_text::build_varied_text_paths`], and fills them with the
+    /// text colour through the current canvas transform/clip. Returns `true`
+    /// when the run was rendered here; `false` when no variable face was found
+    /// (no provider, only static/generic families) so the caller falls back to
+    /// femtovg's native text path.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_varied_text(
+        &mut self,
+        rect: &Rect,
+        text: &str,
+        font_size: f32,
+        color: Color,
+        families: &[String],
+        weight: u16,
+        style: FontStyle,
+        axes: &[([u8; 4], f32)],
+        tab_size: f32,
+    ) -> bool {
+        let Some(provider) = self.font_provider.clone() else {
+            return false;
+        };
+        let core_style = match style {
+            FontStyle::Normal => lumen_core::ext::FontStyle::Normal,
+            FontStyle::Italic => lumen_core::ext::FontStyle::Italic,
+            FontStyle::Oblique => lumen_core::ext::FontStyle::Oblique,
+        };
+        for fam in families {
+            let lc = fam.to_ascii_lowercase();
+            if matches!(
+                lc.as_str(),
+                "serif" | "sans-serif" | "monospace" | "cursive" | "fantasy" | "system-ui"
+            ) {
+                continue;
+            }
+            let Some(rec) = provider.pick_face(fam, weight, core_style) else {
+                continue;
+            };
+            let Some(bytes) = provider
+                .read_face_bytes(&rec.path)
+                .or_else(|| std::fs::read(&rec.path).ok())
+            else {
+                continue;
+            };
+            // `build_varied_text_paths` returns None for static faces — defer to
+            // the next family (and ultimately femtovg) in that case.
+            if let Some(cmds) = crate::varied_text::build_varied_text_paths(
+                &bytes, axes, text, font_size, rect.x, rect.y, tab_size,
+            ) {
+                self.fill_glyph_path(&cmds, color);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Fills a set of [`crate::varied_text::PathCmd`]s (screen pixels, Y-down)
+    /// with a solid colour, honouring the canvas's current transform and clip.
+    fn fill_glyph_path(&mut self, cmds: &[crate::varied_text::PathCmd], color: Color) {
+        use crate::varied_text::PathCmd;
+        if cmds.is_empty() {
+            return;
+        }
+        let mut path = femtovg::Path::new();
+        for cmd in cmds {
+            match *cmd {
+                PathCmd::MoveTo(x, y) => path.move_to(x, y),
+                PathCmd::LineTo(x, y) => path.line_to(x, y),
+                PathCmd::QuadTo(cx, cy, x, y) => path.quad_to(cx, cy, x, y),
+                PathCmd::Close => path.close(),
+            }
+        }
+        let paint = femtovg::Paint::color(lumen_to_fvg(color));
+        self.canvas.fill_path(&path, &paint);
     }
 
     /// Применяет filter-chain к offscreen-слою и композирует результат на
@@ -1592,6 +1832,7 @@ impl FemtovgBackend {
     fn apply_backdrop_filters(
         &mut self,
         filters: &[lumen_layout::FilterFn],
+        bounds: &Rect,
     ) -> Option<femtovg::ImageId> {
         // Screenshot the current RT (flush must have been called already).
         // `screenshot()` reverses GL's bottom-up rows, so `rgba` is the raw
@@ -1609,6 +1850,19 @@ impl FemtovgBackend {
             .flat_map(|p| [p.r, p.g, p.b, p.a])
             .collect();
 
+        // Backdrop-filter input is the backdrop image cropped to the element's
+        // border box (CSS Filter Effects §backdrop-filter), so blur must clamp
+        // its sampling window to that box — otherwise the box blur near a card's
+        // top edge averages in the dark page background painted above it
+        // (BUG-144 edge-bleed). Convert CSS-px `bounds` to the screenshot's
+        // device-pixel coordinates and clamp to the snapshot extent.
+        let scale = self.scale as f32;
+        let bx0 = (bounds.x * scale).floor().max(0.0) as usize;
+        let by0 = (bounds.y * scale).floor().max(0.0) as usize;
+        let bx1 = ((bounds.x + bounds.width) * scale).ceil().max(0.0) as usize;
+        let by1 = ((bounds.y + bounds.height) * scale).ceil().max(0.0) as usize;
+        let region = (bx0.min(iw), by0.min(ih), bx1.min(iw), by1.min(ih));
+
         // Apply the filter chain left-to-right (CSS Filter Effects §2.2). Blur is
         // a 3-pass box approximation of the Gaussian; colour-matrix functions
         // share `apply_filter_rgba` with the PushFilter path. `opacity()` is a
@@ -1617,7 +1871,7 @@ impl FemtovgBackend {
         for f in filters {
             match f {
                 lumen_layout::FilterFn::Blur(sigma) if *sigma > 0.0 => {
-                    box_blur_rgba(&mut rgba, iw, ih, *sigma);
+                    box_blur_rgba_region(&mut rgba, iw, ih, *sigma, region);
                 }
                 lumen_layout::FilterFn::Blur(_) | lumen_layout::FilterFn::Opacity(_) => {}
                 _ => apply_filter_rgba(&mut rgba, f),
@@ -1857,6 +2111,85 @@ impl FemtovgBackend {
         Some(id)
     }
 
+    /// Device-pixel resolution of a CPU gradient texture for `rect` (BUG-085),
+    /// clamped to keep per-frame cost bounded for huge background gradients.
+    /// Returns `(iw, ih)`, both ≥ 1.
+    fn gradient_tex_size(&self, rect: &Rect) -> (usize, usize) {
+        /// Hard cap per axis. A 2048² texture (~16 MB) is far beyond any visible
+        /// gradient ramp; above it the femtovg bilinear upscale is imperceptible
+        /// while the CPU fill + GPU upload cost would balloon.
+        const MAX_DIM: usize = 2048;
+        let iw = ((rect.width as f64 * self.scale).round() as usize).clamp(1, MAX_DIM);
+        let ih = ((rect.height as f64 * self.scale).round() as usize).clamp(1, MAX_DIM);
+        (iw, ih)
+    }
+
+    /// Blits a CPU-rendered gradient texture `pixels` (size `iw×ih`) over `rect`,
+    /// queuing the texture for deletion after the frame's flush. Shared tail of
+    /// [`Self::draw_linear_gradient_cpu`] / [`Self::draw_radial_gradient_cpu`].
+    fn blit_gradient_texture(&mut self, rect: &Rect, pixels: &[rgb::RGBA8], iw: usize, ih: usize) {
+        let img = imgref::ImgRef::new(pixels, iw, ih);
+        let Ok(id) = self
+            .canvas
+            .create_image(femtovg::ImageSource::Rgba(img), femtovg::ImageFlags::empty())
+        else {
+            return;
+        };
+        let paint = femtovg::Paint::image(id, rect.x, rect.y, rect.width, rect.height, 0.0, 1.0);
+        let mut path = femtovg::Path::new();
+        path.rect(rect.x, rect.y, rect.width, rect.height);
+        self.canvas.fill_path(&path, &paint);
+        // The fill_path draw command holds `id` by copy; delete only after flush.
+        self.gradient_pending_delete.push(id);
+    }
+
+    /// Renders a linear gradient per-pixel into a device-resolution texture and
+    /// blits it, bypassing femtovg's 256-texel gradient LUT (BUG-085). Used for
+    /// repeating linear gradients, whose many tiled periods compress into the LUT
+    /// and band at the period boundaries; per-pixel sampling matches Edge's
+    /// analytic fill. `t` is the projection of each pixel onto the CSS gradient
+    /// line, identical to femtovg's own parametrization. Each device texel is
+    /// supersampled (`GRAD_SS²` sub-samples) so hard-stop boundaries — e.g. the
+    /// 45° stripes of `repeating-linear-gradient`. Per-pixel device-resolution
+    /// sampling removes the LUT quantization; smooth non-repeating linear ramps
+    /// stay on the cheaper femtovg-native path.
+    fn draw_linear_gradient_cpu(
+        &mut self, rect: &Rect, angle_deg: f32, resolved: &[(f32, femtovg::Color)],
+    ) {
+        let (iw, ih) = self.gradient_tex_size(rect);
+        // Endpoints in rect-local CSS coordinates (origin at the box's top-left).
+        let ([sx, sy], [ex, ey]) =
+            linear_gradient_endpoints(0.0, 0.0, rect.width, rect.height, angle_deg);
+        let (dx, dy) = (ex - sx, ey - sy);
+        let len2 = (dx * dx + dy * dy).max(1e-6);
+        let pixels = fill_gradient_texture(iw, ih, |cx, cy| {
+            let t = ((cx * rect.width - sx) * dx + (cy * rect.height - sy) * dy) / len2;
+            sample_fvg_stops(resolved, t)
+        });
+        self.blit_gradient_texture(rect, &pixels, iw, ih);
+    }
+
+    /// Renders a radial gradient per-pixel into a device-resolution texture and
+    /// blits it, bypassing femtovg's 256-texel gradient LUT (BUG-085) **and** its
+    /// circle-only `radial_gradient_stops` (which renders an `ellipse` gradient
+    /// as a circle — BUG-239). `t` is the elliptical distance from the centre,
+    /// `sqrt((dx/rx)² + (dy/ry)²)`, so a stop at fraction 1.0 lands on the ellipse
+    /// `(rx, ry)`; for a circle `rx == ry`. Centre and radii are rect-local CSS px.
+    fn draw_radial_gradient_cpu(
+        &mut self, rect: &Rect, cx_local: f32, cy_local: f32, rx: f32, ry: f32,
+        resolved: &[(f32, femtovg::Color)],
+    ) {
+        let (iw, ih) = self.gradient_tex_size(rect);
+        let inv_rx = 1.0 / rx.max(1e-6);
+        let inv_ry = 1.0 / ry.max(1e-6);
+        let pixels = fill_gradient_texture(iw, ih, |cx, cy| {
+            let nx = (cx * rect.width - cx_local) * inv_rx;
+            let ny = (cy * rect.height - cy_local) * inv_ry;
+            sample_fvg_stops(resolved, nx.hypot(ny))
+        });
+        self.blit_gradient_texture(rect, &pixels, iw, ih);
+    }
+
     /// Рисует conic gradient как веер треугольников, обрезанный по box rect.
     ///
     /// femtovg не поддерживает conic gradient нативно. Аппроксимируем через
@@ -1993,7 +2326,19 @@ impl FemtovgBackend {
                     }
                 }
             }
-            DisplayCommand::DrawText { rect, text, font_size, color, font_family, font_weight, font_style, .. } => {
+            DisplayCommand::DrawText { rect, text, font_size, color, font_family, font_weight, font_style, font_variation_axes, tab_size, highlight_name: _ } => {
+                // BUG-109: femtovg's text API cannot apply font-variation-settings
+                // axes. When axes are present and resolve to a variable face,
+                // render the run via lumen-font outlines (vector fill) so wght/
+                // wdth/slnt take effect; otherwise use femtovg's fast text path.
+                if !font_variation_axes.is_empty()
+                    && self.draw_varied_text(
+                        rect, text, *font_size, *color, font_family,
+                        font_weight.0, *font_style, font_variation_axes, *tab_size,
+                    )
+                {
+                    return;
+                }
                 let chain = self.resolve_font_chain(font_family, font_weight.0, *font_style);
                 self.draw_text(rect.x, rect.y, text, *font_size, *color, &chain);
             }
@@ -2129,6 +2474,15 @@ impl FemtovgBackend {
                 if resolved.len() < 2 {
                     return;
                 }
+                // BUG-085: repeating linear gradients tile many periods into
+                // femtovg's 256-texel LUT and band at the boundaries — render
+                // per-pixel instead. Smooth non-repeating linear ramps are
+                // already pixel-accurate through the LUT and stay on the native
+                // (cheaper, no per-frame texture) path.
+                if *repeating {
+                    self.draw_linear_gradient_cpu(rect, *angle_deg, &resolved);
+                    return;
+                }
                 let paint = femtovg::Paint::linear_gradient_stops(
                     sx, sy, ex, ey,
                     resolved,
@@ -2138,26 +2492,32 @@ impl FemtovgBackend {
                 self.canvas.fill_path(&path, &paint);
             }
 
-            DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating } => {
+            DisplayCommand::DrawRadialGradient {
+                rect, center_x_pct, center_y_pct, radius_x, radius_y, stops, repeating,
+            } => {
                 if rect.width <= 0.0 || rect.height <= 0.0 || stops.is_empty() {
                     return;
                 }
-                let cx = rect.x + center_x_pct * rect.width;
-                let cy = rect.y + center_y_pct * rect.height;
-                let dx = center_x_pct.max(1.0 - center_x_pct) * rect.width;
-                let dy = center_y_pct.max(1.0 - center_y_pct) * rect.height;
-                let outer_r = dx.hypot(dy).max(1.0);
-                let resolved = femtovg_stops(stops, outer_r, *repeating);
+                // Px stops resolve against the gradient ray length; the larger
+                // radius is a reasonable scalar for the (rare) px-positioned stop.
+                let line_len = radius_x.max(*radius_y).max(1.0);
+                let resolved = femtovg_stops(stops, line_len, *repeating);
                 if resolved.len() < 2 {
                     return;
                 }
-                let paint = femtovg::Paint::radial_gradient_stops(
-                    cx, cy, 0.0, outer_r,
-                    resolved,
+                // BUG-085: render radial gradients per-pixel to bypass femtovg's
+                // 256-texel LUT (quantizes repeating rings + smooth interpolation)
+                // and its circle-only paint (BUG-239: an `ellipse` gradient must
+                // use independent rx/ry). Centre is rect-local (origin at the box
+                // top-left) to match draw_radial_gradient_cpu.
+                self.draw_radial_gradient_cpu(
+                    rect,
+                    center_x_pct * rect.width,
+                    center_y_pct * rect.height,
+                    *radius_x,
+                    *radius_y,
+                    &resolved,
                 );
-                let mut path = femtovg::Path::new();
-                path.rect(rect.x, rect.y, rect.width, rect.height);
-                self.canvas.fill_path(&path, &paint);
             }
 
             DisplayCommand::DrawConicGradient {
@@ -2489,7 +2849,7 @@ impl FemtovgBackend {
                 // Flush so backdrop has all content rendered.
                 self.canvas.flush();
                 // Apply filters to a screenshot of the current RT.
-                let filtered_backdrop_id = self.apply_backdrop_filters(filters);
+                let filtered_backdrop_id = self.apply_backdrop_filters(filters, bounds);
 
                 if let Some(filt_id) = filtered_backdrop_id {
                     // Restore prev_rt after apply_backdrop_filters may have switched.
@@ -2665,10 +3025,14 @@ impl RenderBackend for FemtovgBackend {
         self.viewport_css_h = (self.height as f64 / self.scale) as f32;
 
         self.canvas.set_size(self.width, self.height, self.scale as f32);
-        self.canvas.clear_rect(
-            0, 0, self.width, self.height,
-            femtovg::Color::rgb(255, 255, 255),
-        );
+        // CSS Backgrounds §3.11.1: the root element's background becomes the
+        // canvas background and covers the whole surface. Clear to it so the
+        // page background fills the viewport even when the root box is smaller
+        // than the window (e.g. a 1024×720 page maximized); `None` → white.
+        let clear = self
+            .canvas_bg
+            .map_or(femtovg::Color::rgb(255, 255, 255), lumen_to_fvg);
+        self.canvas.clear_rect(0, 0, self.width, self.height, clear);
 
         // Контент — с учётом scroll.
         self.canvas.save();
@@ -2699,10 +3063,19 @@ impl RenderBackend for FemtovgBackend {
         for id in backdrop_del {
             self.canvas.delete_image(id);
         }
+        // BUG-085: per-pixel gradient textures (repeating linear + radial).
+        let gradient_del: Vec<_> = self.gradient_pending_delete.drain(..).collect();
+        for id in gradient_del {
+            self.canvas.delete_image(id);
+        }
 
         self.gl_surface
             .swap_buffers(&self.gl_context)
             .map_err(|e| RenderError::Other(e.to_string()))
+    }
+
+    fn set_canvas_background(&mut self, color: Option<Color>) {
+        self.canvas_bg = color;
     }
 
     fn resize(&mut self, width: u32, height: u32) {
@@ -2817,99 +3190,17 @@ fn image_placement(
     }
 }
 
-/// Считает геометрию плиток фоновой картинки из `background-size` /
-/// `background-position` / `background-repeat` (CSS Backgrounds L3 §3.3–3.5).
-///
-/// Чистая функция (без GL) — зеркалит tiling-математику wgpu `Renderer`, чтобы
-/// femtovg-бэкенд (default) давал тот же результат. `img_w`/`img_h` — размер
-/// исходной картинки; `oarea_*` — positioning area (`background-origin`).
-///
-/// Возвращает `(tile_w, tile_h, tile_x_start, tile_y_start, repeat_x,
-/// repeat_y)`: размер одной плитки, координату левого-верхнего угла первой
-/// плитки и флаги повтора по осям.
-#[allow(clippy::too_many_arguments)]
-fn bg_tile_geometry(
-    size: BackgroundSize,
-    position: &ObjectPosition,
-    repeat: BackgroundRepeat,
-    img_w: f32,
-    img_h: f32,
-    oarea_w: f32,
-    oarea_h: f32,
-    oarea_x: f32,
-    oarea_y: f32,
-) -> (f32, f32, f32, f32, bool, bool) {
-    let (tile_w, tile_h) = match size {
-        BackgroundSize::Auto => (img_w, img_h),
-        BackgroundSize::Cover => {
-            let s = (oarea_w / img_w).max(oarea_h / img_h);
-            (img_w * s, img_h * s)
-        }
-        BackgroundSize::Contain => {
-            let s = (oarea_w / img_w).min(oarea_h / img_h);
-            (img_w * s, img_h * s)
-        }
-        BackgroundSize::Length(w, h) => {
-            let tw = w.max(1.0);
-            let th = h.unwrap_or_else(|| img_h * (tw / img_w)).max(1.0);
-            (tw, th)
-        }
-    };
-
-    let off_x = match position.x {
-        PositionComponent::Px(px) => px,
-        PositionComponent::Percent(p) => (oarea_w - tile_w) * p,
-    };
-    let off_y = match position.y {
-        PositionComponent::Px(py) => py,
-        PositionComponent::Percent(p) => (oarea_h - tile_h) * p,
-    };
-    let tile_x0 = oarea_x + off_x;
-    let tile_y0 = oarea_y + off_y;
-
-    let (tile_x_start, repeat_x, repeat_y) = match repeat {
-        BackgroundRepeat::NoRepeat => (tile_x0, false, false),
-        BackgroundRepeat::RepeatX => (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, false),
-        BackgroundRepeat::RepeatY => (tile_x0, false, true),
-        BackgroundRepeat::Repeat | BackgroundRepeat::Round | BackgroundRepeat::Space => {
-            (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, true)
-        }
-    };
-    let tile_y_start = if repeat_y {
-        tile_y0 - (off_y / tile_h).ceil() * tile_h
-    } else {
-        tile_y0
-    };
-
-    (tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y)
-}
-
 /// Конвертирует `lumen_image::Image` в вектор `RGBA8` пикселей для femtovg.
 fn image_to_rgba8_vec(img: &Image) -> Vec<rgb::RGBA8> {
-    use lumen_image::PixelFormat;
     use rgb::RGBA;
-    match img.format {
-        PixelFormat::Rgba8 => img
-            .data
-            .chunks_exact(4)
-            .map(|px| RGBA { r: px[0], g: px[1], b: px[2], a: px[3] })
-            .collect(),
-        PixelFormat::Rgb8 => img
-            .data
-            .chunks_exact(3)
-            .map(|px| RGBA { r: px[0], g: px[1], b: px[2], a: 255 })
-            .collect(),
-        PixelFormat::Gray8 => img
-            .data
-            .iter()
-            .map(|&v| RGBA { r: v, g: v, b: v, a: 255 })
-            .collect(),
-        PixelFormat::GrayAlpha8 => img
-            .data
-            .chunks_exact(2)
-            .map(|px| RGBA { r: px[0], g: px[0], b: px[0], a: px[1] })
-            .collect(),
-    }
+    // `to_rgba8` applies ICC colour management (ICC-3 matrix-shaper for RGB
+    // profiles, gamut tone-mapping otherwise), so wide-gamut photos render
+    // colour-correct in the live femtovg window. For images without a profile
+    // it is a plain format conversion (no-op tone mapping).
+    img.to_rgba8()
+        .chunks_exact(4)
+        .map(|px| RGBA { r: px[0], g: px[1], b: px[2], a: px[3] })
+        .collect()
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -2917,6 +3208,8 @@ fn image_to_rgba8_vec(img: &Image) -> Vec<rgb::RGBA8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumen_layout::BgSizeAxis;
+    use lumen_layout::PositionComponent;
     use lumen_layout::Length;
 
     /// BUG-133 / BUG-146 / BUG-144: offscreen layers composited directly from
@@ -3018,7 +3311,7 @@ mod tests {
             y: PositionComponent::Percent(0.0),
         };
         let (tw, th, x0, y0, rx, ry) = bg_tile_geometry(
-            BackgroundSize::Length(80.0, Some(60.0)),
+            BackgroundSize::Length(BgSizeAxis::Px(80.0), BgSizeAxis::Px(60.0)),
             &pos,
             BackgroundRepeat::NoRepeat,
             100.0,
@@ -3042,7 +3335,7 @@ mod tests {
             y: PositionComponent::Percent(1.0),
         };
         let (tw, th, x0, y0, ..) = bg_tile_geometry(
-            BackgroundSize::Length(80.0, Some(60.0)),
+            BackgroundSize::Length(BgSizeAxis::Px(80.0), BgSizeAxis::Px(60.0)),
             &pos,
             BackgroundRepeat::NoRepeat,
             100.0,
@@ -3056,6 +3349,45 @@ mod tests {
         // x0 = 30 + (180 - 80) = 130; y0 = 30 + (120 - 60) = 90.
         assert!((x0 - 130.0).abs() < 1e-3);
         assert!((y0 - 90.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn bg_tile_geometry_percent_resolves_against_oarea() {
+        // BUG-115: `background-size: 40% 60%` → tile = 40%×60% of the positioning area.
+        let pos = ObjectPosition::default();
+        let (tw, th, ..) = bg_tile_geometry(
+            BackgroundSize::Length(BgSizeAxis::Percent(0.4), BgSizeAxis::Percent(0.6)),
+            &pos,
+            BackgroundRepeat::NoRepeat,
+            100.0,
+            100.0,
+            180.0,
+            120.0,
+            0.0,
+            0.0,
+        );
+        // 0.4 * 180 = 72; 0.6 * 120 = 72.
+        assert!((tw - 72.0).abs() < 1e-3);
+        assert!((th - 72.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn bg_tile_geometry_mixed_px_percent() {
+        // BUG-115: `background-size: 20px 100%` → fixed width, full-height tile.
+        let pos = ObjectPosition::default();
+        let (tw, th, ..) = bg_tile_geometry(
+            BackgroundSize::Length(BgSizeAxis::Px(20.0), BgSizeAxis::Percent(1.0)),
+            &pos,
+            BackgroundRepeat::RepeatX,
+            100.0,
+            100.0,
+            180.0,
+            120.0,
+            0.0,
+            0.0,
+        );
+        assert!((tw - 20.0).abs() < 1e-3);
+        assert!((th - 120.0).abs() < 1e-3);
     }
 
     #[test]
@@ -3085,7 +3417,7 @@ mod tests {
             y: PositionComponent::Percent(0.0),
         };
         let (tw, th, x0, y0, rx, ry) = bg_tile_geometry(
-            BackgroundSize::Length(40.0, Some(40.0)),
+            BackgroundSize::Length(BgSizeAxis::Px(40.0), BgSizeAxis::Px(40.0)),
             &pos,
             BackgroundRepeat::Repeat,
             100.0,
@@ -3264,6 +3596,52 @@ mod tests {
         assert!((r[0].0).abs() < 1e-5 && (r[1].0 - 1.0).abs() < 1e-5);
     }
 
+    // ── BUG-085: per-pixel CPU gradient sampler (bypasses 256-texel LUT) ──────
+
+    #[test]
+    fn sample_fvg_stops_clamps_outside_range() {
+        // Mirrors femtovg's LUT: positions outside [0,1] take the boundary colour.
+        let red = femtovg::Color::rgbaf(1.0, 0.0, 0.0, 1.0);
+        let blue = femtovg::Color::rgbaf(0.0, 0.0, 1.0, 1.0);
+        let resolved = [(0.2_f32, red), (0.8_f32, blue)];
+        let lo = sample_fvg_stops(&resolved, -1.0);
+        let hi = sample_fvg_stops(&resolved, 2.0);
+        assert!((lo.r - 1.0).abs() < 1e-6 && lo.b.abs() < 1e-6, "below-range = first stop");
+        assert!(hi.r.abs() < 1e-6 && (hi.b - 1.0).abs() < 1e-6, "above-range = last stop");
+    }
+
+    #[test]
+    fn sample_fvg_stops_interpolates_midpoint() {
+        let red = femtovg::Color::rgbaf(1.0, 0.0, 0.0, 1.0);
+        let blue = femtovg::Color::rgbaf(0.0, 0.0, 1.0, 1.0);
+        let resolved = [(0.0_f32, red), (1.0_f32, blue)];
+        let mid = sample_fvg_stops(&resolved, 0.5);
+        assert!((mid.r - 0.5).abs() < 1e-6, "R halfway, got {}", mid.r);
+        assert!((mid.b - 0.5).abs() < 1e-6, "B halfway, got {}", mid.b);
+    }
+
+    #[test]
+    fn sample_fvg_stops_hard_stop_is_sharp() {
+        // Coincident positions (hard stop): the colour flips sharply across 0.5
+        // with no visible ramp on either side.
+        let a = femtovg::Color::rgbaf(0.2, 0.2, 0.2, 1.0);
+        let b = femtovg::Color::rgbaf(0.4, 0.4, 0.4, 1.0);
+        let resolved = [(0.0_f32, a), (0.5_f32, a), (0.5_f32, b), (1.0_f32, b)];
+        let just_below = sample_fvg_stops(&resolved, 0.49);
+        let just_above = sample_fvg_stops(&resolved, 0.51);
+        assert!((just_below.r - 0.2).abs() < 1e-3, "below hard stop = a");
+        assert!((just_above.r - 0.4).abs() < 1e-3, "above hard stop = b");
+    }
+
+    #[test]
+    fn fvg_to_rgba8_quantizes_channels() {
+        let c = femtovg::Color::rgbaf(1.0, 0.5, 0.0, 1.0);
+        let q = fvg_to_rgba8(c);
+        assert_eq!((q.r, q.b, q.a), (255, 0, 255));
+        // 0.5 * 255 = 127.5 → rounds to 128.
+        assert_eq!(q.g, 128);
+    }
+
     /// BUG-183 — a gradient `mask-image` is applied by painting the gradient
     /// over the masked layer with `CompositeOperation::DestinationIn`, which
     /// multiplies the layer's alpha by the gradient's *alpha* (`mask-mode: alpha`,
@@ -3280,11 +3658,18 @@ mod tests {
             GradientStop { color: Color::TRANSPARENT, position: None },
         ];
         let resolved = resolve_stops(&stops, 200.0);
-        assert_eq!(resolved.len(), 2);
+        // The black→transparent segment is subdivided for premultiplied
+        // interpolation (BUG-190), so the count grows beyond 2; the endpoints
+        // (the mask's defining values) must still be alpha 1 → 0, monotonically.
+        assert!(resolved.len() >= 2);
         // Opaque end → mask = 1 (content fully shown).
-        assert!((resolved[0].1.a - 1.0).abs() < 1e-5, "opaque stop must keep alpha 1");
+        assert!((resolved.first().unwrap().1.a - 1.0).abs() < 1e-5, "opaque stop must keep alpha 1");
         // Transparent end → mask = 0 (content fully hidden).
-        assert!(resolved[1].1.a.abs() < 1e-5, "transparent stop must have alpha 0");
+        assert!(resolved.last().unwrap().1.a.abs() < 1e-5, "transparent stop must have alpha 0");
+        // Alpha decreases monotonically across the (subdivided) ramp.
+        for w in resolved.windows(2) {
+            assert!(w[1].1.a <= w[0].1.a + 1e-5, "mask alpha must not increase");
+        }
     }
 
     #[test]
@@ -3387,7 +3772,7 @@ mod tests {
     fn box_blur_rgba_single_pixel_unchanged() {
         // Single pixel: no neighbors, should remain unchanged.
         let mut px = vec![255u8, 0, 0, 255]; // red pixel
-        box_blur_rgba(&mut px, 1, 1, 2.0);
+        box_blur_rgba_region(&mut px, 1, 1, 2.0, (0, 0, 1, 1));
         assert_eq!(&px, &[255, 0, 0, 255]); // single pixel — unchanged
     }
 
@@ -3399,10 +3784,70 @@ mod tests {
             0,   0, 0, 255,   // black
             255, 0, 0, 255,   // red
         ];
-        box_blur_rgba(&mut px, 3, 1, 1.0);
+        box_blur_rgba_region(&mut px, 3, 1, 1.0, (0, 0, 3, 1));
         // Middle pixel (index 1) should now be average of all three: 255+0+255/3 = 170
         let mid_r = px[4]; // offset 1*4 + 0
         assert!(mid_r > 100, "middle pixel should be brightened by blur: got {mid_r}");
+    }
+
+    #[test]
+    fn gaussian_box_radii_three_positive_passes() {
+        // Three boxes, each a valid (≥1) half-width; their combined variance
+        // should be in the neighbourhood of the requested Gaussian variance.
+        for &sigma in &[1.0f32, 2.0, 4.0, 8.0] {
+            let radii = gaussian_box_radii(sigma);
+            assert!(radii.iter().all(|&r| r >= 1), "sigma {sigma}: radii {radii:?}");
+            // Variance of a (2r+1)-box is ((2r+1)²-1)/12; three boxes add up.
+            let var: f32 = radii.iter().map(|&r| {
+                let w = (2 * r + 1) as f32;
+                (w * w - 1.0) / 12.0
+            }).sum();
+            let target = sigma * sigma;
+            // Discrete radii can't hit the target exactly, but should be close.
+            assert!((var - target).abs() <= target * 0.6 + 1.0,
+                "sigma {sigma}: variance {var} far from target {target} (radii {radii:?})");
+        }
+    }
+
+    #[test]
+    fn box_blur_rgba_region_leaves_outside_pixels_untouched() {
+        // 4×1 strip: white, white, white, black. Blur only the first 3 (the
+        // "card"); the 4th pixel (outside the region) must stay pure black —
+        // proving the region path never writes outside its rectangle.
+        let mut px = vec![
+            255u8, 255, 255, 255,
+            255,   255, 255, 255,
+            255,   255, 255, 255,
+            0,     0,   0,   255,
+        ];
+        box_blur_rgba_region(&mut px, 4, 1, 2.0, (0, 0, 3, 1));
+        assert_eq!(&px[12..16], &[0, 0, 0, 255], "outside-region pixel must be untouched");
+    }
+
+    #[test]
+    fn box_blur_rgba_region_clamps_sampling_no_edge_bleed() {
+        // 4×1 strip: black background, then 3 white "card" pixels.
+        // Blurring the card region [1,4) must NOT pull the black pixel at x=0
+        // into the card's left edge: the whole card stays pure white because
+        // sampling is clamped to [1,4) (edge pixels duplicate within the card).
+        let mut px = vec![
+            0u8,   0,   0,   255, // black background (outside region)
+            255,   255, 255, 255, // card start
+            255,   255, 255, 255,
+            255,   255, 255, 255,
+        ];
+        box_blur_rgba_region(&mut px, 4, 1, 2.0, (1, 0, 4, 1));
+        assert_eq!(&px[4..8], &[255, 255, 255, 255], "card left edge must not bleed black background");
+        // Sanity: the unclamped full-width blur *would* darken the card's left
+        // edge — confirm the difference is real, not a no-op test.
+        let mut full = vec![
+            0u8,   0,   0,   255,
+            255,   255, 255, 255,
+            255,   255, 255, 255,
+            255,   255, 255, 255,
+        ];
+        box_blur_rgba_region(&mut full, 4, 1, 2.0, (0, 0, 4, 1));
+        assert!(full[4] < 255, "unclamped blur should bleed black into card edge (got {})", full[4]);
     }
 
     // ── apply_filter_rgba tests ──────────────────────────────────────────────

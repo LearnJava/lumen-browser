@@ -486,6 +486,12 @@ pub enum DisplayCommand {
         rect: Rect,
         center_x_pct: f32,
         center_y_pct: f32,
+        /// Horizontal radius of the ending shape in CSS px (`radius_x == radius_y`
+        /// for a `circle`). Resolved from the CSS shape/size keywords against the
+        /// box by [`lumen_layout::radial_gradient_radii`] (CSS Images L3 §3.5).
+        radius_x: f32,
+        /// Vertical radius of the ending shape in CSS px.
+        radius_y: f32,
         stops: Vec<GradientStop>,
         repeating: bool,
     },
@@ -901,6 +907,93 @@ fn fit_with_ratio(iw: f32, ih: f32, bw: f32, bh: f32, cover: bool) -> (f32, f32)
     let sy = bh / ih;
     let s = if cover { sx.max(sy) } else { sx.min(sy) };
     (iw * s, ih * s)
+}
+
+/// Tile geometry for a background image from `background-size` /
+/// `background-position` / `background-repeat` (CSS Backgrounds L3 §3.3–3.5).
+///
+/// Pure (GL-free) so both the femtovg backend and the deterministic CPU
+/// rasterizer derive identical placement. `img_w`/`img_h` — intrinsic image
+/// size; `oarea_*` — the `background-origin` positioning area (x/y/width/height).
+///
+/// Returns `(tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y)`:
+/// one tile's size, the top-left corner of the first tile, and the per-axis
+/// repeat flags. The caller tiles from `(tile_x_start, tile_y_start)` across the
+/// painting area, stepping by `(tile_w, tile_h)` while the corresponding repeat
+/// flag is set, clipping to the painting rect.
+// BUG-235: only the femtovg window and the tiny-skia CPU snapshot tile
+// backgrounds via this helper; the wgpu renderer tiles on the GPU. Gate it to
+// its consumers so a wgpu-only build (e.g. lumen-driver default features) does
+// not flag it as dead code under `-D warnings`.
+#[cfg(any(feature = "backend-femtovg", feature = "cpu-render"))]
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub(crate) fn bg_tile_geometry(
+    size: BackgroundSize,
+    position: &ObjectPosition,
+    repeat: BackgroundRepeat,
+    img_w: f32,
+    img_h: f32,
+    oarea_w: f32,
+    oarea_h: f32,
+    oarea_x: f32,
+    oarea_y: f32,
+) -> (f32, f32, f32, f32, bool, bool) {
+    let (tile_w, tile_h) = match size {
+        BackgroundSize::Auto => (img_w, img_h),
+        BackgroundSize::Cover => {
+            let s = (oarea_w / img_w).max(oarea_h / img_h);
+            (img_w * s, img_h * s)
+        }
+        BackgroundSize::Contain => {
+            let s = (oarea_w / img_w).min(oarea_h / img_h);
+            (img_w * s, img_h * s)
+        }
+        BackgroundSize::Length(w, h) => {
+            // CSS Backgrounds L3 §3.5: percent axes resolve against the
+            // positioning area; an `auto` axis derives from the other via the
+            // image's intrinsic aspect ratio.
+            match (w.resolve(oarea_w), h.resolve(oarea_h)) {
+                (Some(tw), Some(th)) => (tw.max(1.0), th.max(1.0)),
+                (Some(tw), None) => {
+                    let tw = tw.max(1.0);
+                    (tw, (img_h * (tw / img_w)).max(1.0))
+                }
+                (None, Some(th)) => {
+                    let th = th.max(1.0);
+                    ((img_w * (th / img_h)).max(1.0), th)
+                }
+                (None, None) => (img_w, img_h),
+            }
+        }
+    };
+
+    let off_x = match position.x {
+        PositionComponent::Px(px) => px,
+        PositionComponent::Percent(p) => (oarea_w - tile_w) * p,
+    };
+    let off_y = match position.y {
+        PositionComponent::Px(py) => py,
+        PositionComponent::Percent(p) => (oarea_h - tile_h) * p,
+    };
+    let tile_x0 = oarea_x + off_x;
+    let tile_y0 = oarea_y + off_y;
+
+    let (tile_x_start, repeat_x, repeat_y) = match repeat {
+        BackgroundRepeat::NoRepeat => (tile_x0, false, false),
+        BackgroundRepeat::RepeatX => (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, false),
+        BackgroundRepeat::RepeatY => (tile_x0, false, true),
+        BackgroundRepeat::Repeat | BackgroundRepeat::Round | BackgroundRepeat::Space => {
+            (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, true)
+        }
+    };
+    let tile_y_start = if repeat_y {
+        tile_y0 - (off_y / tile_h).ceil() * tile_h
+    } else {
+        tile_y0
+    };
+
+    (tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y)
 }
 
 /// Финальный GPU-quad для `<img>`: пересечение «полного» placement-rect
@@ -1390,9 +1483,11 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     rect.x, rect.y, rect.width, rect.height, stops.len(),
                 ));
             }
-            DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating } => {
+            DisplayCommand::DrawRadialGradient {
+                rect, center_x_pct, center_y_pct, radius_x, radius_y, stops, repeating,
+            } => {
                 out.push_str(&format!(
-                    "DrawRadialGradient ({:.2}, {:.2}, {:.2}, {:.2}) center=({center_x_pct:.2},{center_y_pct:.2}) stops={} repeating={repeating}\n",
+                    "DrawRadialGradient ({:.2}, {:.2}, {:.2}, {:.2}) center=({center_x_pct:.2},{center_y_pct:.2}) radii=({radius_x:.2},{radius_y:.2}) stops={} repeating={repeating}\n",
                     rect.x, rect.y, rect.width, rect.height, stops.len(),
                 ));
             }
@@ -2506,6 +2601,12 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
                 scroll_y: b.scroll_y,
             });
             overflow_post.push(DisplayCommand::PopScrollLayer);
+            // BUG-220: the ordered (stacking-context) path lost the scrollbar —
+            // only `walk` emitted DrawScrollbar. Emit it here too, into
+            // `overflow_post` after PopScrollLayer (caller flushes overflow_post
+            // after children, so the bars render at a fixed position over the
+            // scrolled content). Same helper as `walk` for pixel parity.
+            emit_scrollbars(b, (px, py, pw, ph), is_scroll_x, is_scroll_y, &mut overflow_post);
         } else {
             // BUG-132: скруглённый клип для border-radius + overflow:hidden
             // Разрешаем border-radius значения используя padding-box width как basis
@@ -2635,7 +2736,7 @@ fn fill_buckets(
             bucket.pre.push(clip.clone());
         }
         bucket.pre.extend(ops.pre);
-        emit_box_self(b, &mut bucket.root_bg, dpr, None);
+        emit_box_self(b, &mut bucket.root_bg, dpr, None, ov);
         // Overflow-клип — после собственных bg/border (они не клиппятся
         // своим overflow, BUG-123), но до contents с детьми.
         bucket.root_bg.extend(ops.overflow_pre);
@@ -2680,7 +2781,7 @@ fn fill_buckets(
         // триггерят SC сами, до сюда не дойдут с не-пустым pre).
         let bucket = &mut buckets[current_sc.0 as usize];
         bucket.contents.extend(ops.pre);
-        emit_box_self(b, &mut bucket.contents, dpr, None);
+        emit_box_self(b, &mut bucket.contents, dpr, None, ov);
         // Overflow-клип после собственных bg/border (BUG-123).
         bucket.contents.extend(ops.overflow_pre.iter().cloned());
 
@@ -3256,8 +3357,10 @@ fn gradient_tile_rects(
 fn gradient_paint_rects(layer: &BackgroundLayer, origin: Rect, clip: Rect) -> (Vec<Rect>, bool) {
     match layer.size {
         BackgroundSize::Length(w, h) => {
-            let tile_w = w.max(1.0);
-            let tile_h = h.unwrap_or(origin.height).max(1.0);
+            // Gradients have no intrinsic size/ratio: an `auto` axis falls back
+            // to the positioning-area extent; percent resolves against it.
+            let tile_w = w.resolve(origin.width).unwrap_or(origin.width).max(1.0);
+            let tile_h = h.resolve(origin.height).unwrap_or(origin.height).max(1.0);
             let tiles =
                 gradient_tile_rects(tile_w, tile_h, layer.position, layer.repeat, origin, clip);
             (tiles, true)
@@ -3336,16 +3439,26 @@ fn emit_background_layer(
                 out.push(DisplayCommand::PopClip);
             }
         }
-        BackgroundImage::Gradient(ParsedGradient::Radial { center_x_pct, center_y_pct, stops, repeating }) => {
+        BackgroundImage::Gradient(ParsedGradient::Radial {
+            center_x_pct, center_y_pct, shape, size, stops, repeating,
+        }) => {
             let (rects, needs_clip) = gradient_paint_rects(layer, origin, clip);
             if needs_clip && !rects.is_empty() {
                 out.push(DisplayCommand::PushClipRect { rect: clip });
             }
             for r in &rects {
+                // Resolve the CSS ending-shape/size to concrete px radii against
+                // this paint rect (CSS Images L3 §3.5.1) — circle keeps rx == ry,
+                // ellipse gets independent radii (BUG-239).
+                let (radius_x, radius_y) = lumen_layout::radial_gradient_radii(
+                    *shape, *size, *center_x_pct, *center_y_pct, r.width, r.height,
+                );
                 out.push(DisplayCommand::DrawRadialGradient {
                     rect: *r,
                     center_x_pct: *center_x_pct,
                     center_y_pct: *center_y_pct,
+                    radius_x,
+                    radius_y,
                     stops: stops.clone(),
                     repeating: *repeating,
                 });
@@ -3474,15 +3587,27 @@ fn mask_stops_for_mode(stops: &[GradientStop], mode: lumen_layout::MaskMode) -> 
 }
 
 fn emit_push_mask(out: &mut Vec<DisplayCommand>, b: &LayoutBox) -> bool {
-    let rect = b.rect;
+    // CSS Masking L1 §4.5 — `mask-origin` sets the mask **positioning area**
+    // (border/padding/content box). Reuses the background-origin geometry; for
+    // the default `border-box` this equals `b.rect`, so existing behaviour is
+    // unchanged.
+    let rect = background_origin_rect(b, b.style.mask_origin);
     let mode = b.style.mask_mode;
+    // CSS: mask-clip — the painting/clip area still defaults to the positioning
+    // area here. Full wiring needs a separate clip rect threaded through the
+    // PushMask* / PopMask pair plus a backend scissor.
+    // CSS: mask-composite — needs the multi-layer mask infrastructure (mask-image
+    // as a layer list) before add/subtract/intersect/exclude can be applied.
     match &b.style.mask_image {
         BackgroundImage::Url(src) if !src.is_empty() => {
             out.push(DisplayCommand::PushMaskImage {
                 rect,
                 src: src.clone(),
                 size: b.style.mask_size,
-                position: ObjectPosition::background_initial(),
+                // CSS Masking L1 §4.4 — `mask-position` (same syntax as
+                // background-position). Applies to image masks; gradient masks
+                // derive their geometry from `rect` above.
+                position: b.style.mask_position,
                 repeat: b.style.mask_repeat,
                 image_rendering: b.style.image_rendering,
             });
@@ -3498,7 +3623,7 @@ fn emit_push_mask(out: &mut Vec<DisplayCommand>, b: &LayoutBox) -> bool {
             true
         }
         BackgroundImage::Gradient(ParsedGradient::Radial {
-            center_x_pct, center_y_pct, stops, repeating
+            center_x_pct, center_y_pct, stops, repeating, ..
         }) => {
             out.push(DisplayCommand::PushMaskRadialGradient {
                 rect,
@@ -3841,6 +3966,86 @@ fn scrollbar_rects(i: &ScrollbarInput) -> (ScrollbarAxis, ScrollbarAxis) {
     };
 
     (v, h)
+}
+
+/// Emit `DrawScrollbar` track+thumb commands for a scroll container's padding box.
+///
+/// Shared by the legacy `walk` path and the ordered (stacking-context)
+/// `box_layer_ops` path (BUG-220) so both render identical scrollbars. The
+/// caller MUST emit these AFTER `PopScrollLayer`, so the bars stay at a fixed
+/// position instead of translating with the scrolled content.
+///
+/// `padding_box` is `(px, py, pw, ph)` — padding-box origin and size in
+/// document-space CSS px (border excluded). Content extent is measured relative
+/// to the padding-box origin and floored at the padding-box size, so a border
+/// does not inflate `content_w`/`content_h` past the clip and spawn a phantom
+/// scrollbar.
+///
+/// No-op when `scrollbar-width: none` (gutter collapses to 0) — the container
+/// still scrolls via keyboard/JS, only the visual bar is suppressed.
+fn emit_scrollbars(
+    b: &LayoutBox,
+    padding_box: (f32, f32, f32, f32),
+    is_scroll_x: bool,
+    is_scroll_y: bool,
+    out: &mut Vec<DisplayCommand>,
+) {
+    let (px, py, pw, ph) = padding_box;
+    let gutter_px = match b.style.scrollbar_width {
+        ScrollbarWidth::Auto => SCROLLBAR_WIDTH,
+        ScrollbarWidth::Thin => SCROLLBAR_WIDTH_THIN,
+        ScrollbarWidth::None => 0.0,
+    };
+    // Only emit when the scrollbar is visible (gutter_px > 0).
+    if gutter_px <= 0.0 {
+        return;
+    }
+    let (thumb_color, track_color) = match b.style.scrollbar_color {
+        Some((thumb, track)) => (color_u8_to_f32(thumb), color_u8_to_f32(track)),
+        None => (SCROLLBAR_THUMB_COLOR, SCROLLBAR_TRACK_COLOR),
+    };
+    // Content extent relative to padding-box origin, floored at padding-box size
+    // (not border-box): a border must not make content_w exceed clip_w and fake
+    // a horizontal scrollbar.
+    let content_w = b
+        .children
+        .iter()
+        .fold(pw, |acc, c| acc.max(c.rect.x + c.rect.width - px));
+    let content_h = b
+        .children
+        .iter()
+        .fold(ph, |acc, c| acc.max(c.rect.y + c.rect.height - py));
+    let (v_bars, h_bars) = scrollbar_rects(&ScrollbarInput {
+        clip_x: px,
+        clip_y: py,
+        clip_w: pw,
+        clip_h: ph,
+        scroll_x: b.scroll_x,
+        scroll_y: b.scroll_y,
+        content_w,
+        content_h,
+        need_v: is_scroll_y,
+        need_h: is_scroll_x,
+        gutter_px,
+    });
+    if let Some((track, thumb)) = v_bars {
+        out.push(DisplayCommand::DrawScrollbar {
+            track_rect: track,
+            thumb_rect: thumb,
+            vertical: true,
+            thumb_color,
+            track_color,
+        });
+    }
+    if let Some((track, thumb)) = h_bars {
+        out.push(DisplayCommand::DrawScrollbar {
+            track_rect: track,
+            thumb_rect: thumb,
+            vertical: false,
+            thumb_color,
+            track_color,
+        });
+    }
 }
 
 fn emit_outline(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
@@ -4202,11 +4407,14 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
     // `-moz-` aliases, normalised to `Appearance::None` at parse time) removes
     // the native "primitive appearance" of a form control: the checkbox tick,
     // radio dot, range slider, progress bar, meter bar and select arrow. The box
-    // (border/padding/background) is already stripped in `apply_ua_appearance`;
-    // here we suppress the painted indicator so authors can fully restyle it.
-    if b.style.appearance == Appearance::None {
-        return;
-    }
+    // (border/padding/background) is already stripped in
+    // `strip_ua_appearance_box_styling` (before the author cascade); here we
+    // suppress the painted indicator so authors can fully restyle it.
+    // BUG-225: the suppression is scoped to the native primitives only (color
+    // swatch, checkbox tick, radio dot, range slider, progress/meter bar, select
+    // arrow). Text-input `value`/`placeholder` and button labels are author
+    // content, not a UA primitive, so they keep rendering under `appearance:none`.
+    let suppress_primitive = b.style.appearance == Appearance::None;
     // CSS UI L4 §6.1 — accent-color tints the "accent" of checkbox, radio,
     // range and progress controls. `auto` (None) keeps the UA default blue.
     // <meter> is intentionally excluded: its bar keeps the semantic
@@ -4220,22 +4428,27 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
             // `#000000`. Drawn before the `checked` gate since color is not
             // a checkable type.
             if *input_type == InputType::Color {
-                let swatch = lumen_layout::style::parse_color(value_text)
-                    .unwrap_or(Color { r: 0, g: 0, b: 0, a: 255 });
-                let bl = b.style.border_left_width;
-                let bt = b.style.border_top_width;
-                let br = b.style.border_right_width;
-                let bb = b.style.border_bottom_width;
-                let pad = 2.0;
-                out.push(DisplayCommand::FillRect {
-                    rect: Rect::new(
-                        b.rect.x + bl + pad,
-                        b.rect.y + bt + pad,
-                        (b.rect.width  - bl - br - pad * 2.0).max(1.0),
-                        (b.rect.height - bt - bb - pad * 2.0).max(1.0),
-                    ),
-                    color: swatch,
-                });
+                // The swatch is the native primitive — suppressed under
+                // `appearance:none` (the control has no text value to fall back
+                // to, so nothing else is painted here).
+                if !suppress_primitive {
+                    let swatch = lumen_layout::style::parse_color(value_text)
+                        .unwrap_or(Color { r: 0, g: 0, b: 0, a: 255 });
+                    let bl = b.style.border_left_width;
+                    let bt = b.style.border_top_width;
+                    let br = b.style.border_right_width;
+                    let bb = b.style.border_bottom_width;
+                    let pad = 2.0;
+                    out.push(DisplayCommand::FillRect {
+                        rect: Rect::new(
+                            b.rect.x + bl + pad,
+                            b.rect.y + bt + pad,
+                            (b.rect.width  - bl - br - pad * 2.0).max(1.0),
+                            (b.rect.height - bt - bb - pad * 2.0).max(1.0),
+                        ),
+                        color: swatch,
+                    });
+                }
                 return;
             }
             // HTML rendering §15.5.5 — text-like inputs paint their `value` as
@@ -4271,6 +4484,9 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
                 }
                 _ => {}
             }
+            // The checked checkbox tick / radio dot is a native primitive —
+            // suppressed under `appearance:none`.
+            if suppress_primitive { return; }
             if !checked { return; }
             if *input_type != InputType::Checkbox && *input_type != InputType::Radio {
                 return;
@@ -4324,17 +4540,26 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
             }
         }
         FormControlKind::Select { selected_text } => {
-            emit_select_indicator(b, selected_text, out);
+            // The select arrow is the native primitive; the selected option text
+            // is author-visible content and keeps rendering. `emit_select_indicator`
+            // draws both, so pass the suppression flag down rather than gating here.
+            emit_select_indicator(b, selected_text, suppress_primitive, out);
         }
         FormControlKind::Button | FormControlKind::Textarea { .. } => {}
         FormControlKind::Range { value, min, max } => {
-            emit_range_slider(b, *value, *min, *max, accent, out);
+            if !suppress_primitive {
+                emit_range_slider(b, *value, *min, *max, accent, out);
+            }
         }
         FormControlKind::Progress { value, max } => {
-            emit_progress_bar(b, *value, *max, accent, out);
+            if !suppress_primitive {
+                emit_progress_bar(b, *value, *max, accent, out);
+            }
         }
         FormControlKind::Meter { value, min, max, low, high, optimum } => {
-            emit_meter_bar(b, *value, *min, *max, *low, *high, *optimum, out);
+            if !suppress_primitive {
+                emit_meter_bar(b, *value, *min, *max, *low, *high, *optimum, out);
+            }
         }
     }
 }
@@ -4478,14 +4703,20 @@ pub(crate) fn meter_gauge_color(value: f32, _min: f32, _max: f32, low: f32, high
 }
 
 /// Draw the selected option label and a dropdown arrow (▼) inside a `<select>` box.
-fn emit_select_indicator(b: &LayoutBox, selected_text: &str, out: &mut Vec<DisplayCommand>) {
+///
+/// `suppress_primitive` (set by `appearance: none`, BUG-225) drops the native
+/// separator line and dropdown arrow; the selected option label is author-visible
+/// content and is always painted.
+fn emit_select_indicator(b: &LayoutBox, selected_text: &str, suppress_primitive: bool, out: &mut Vec<DisplayCommand>) {
     let s = &b.style;
     let fg = s.color;
     let font_size = s.font_size.clamp(10.0, 14.0);
     let pad = 4.0;
-    // Arrow column width (enough for "▼" glyph).
+    // Arrow column width (enough for "▼" glyph). When the native arrow is
+    // suppressed the label reclaims that column.
     let arrow_w = font_size + pad * 2.0;
-    let text_w = (b.rect.width - arrow_w - pad * 2.0).max(1.0);
+    let reserved = if suppress_primitive { 0.0 } else { arrow_w };
+    let text_w = (b.rect.width - reserved - pad * 2.0).max(1.0);
 
     // Selected label — clipped to available width.
     if !selected_text.is_empty() {
@@ -4503,29 +4734,32 @@ fn emit_select_indicator(b: &LayoutBox, selected_text: &str, out: &mut Vec<Displ
         });
     }
 
-    // Separator line before the arrow.
-    let sep_x = b.rect.x + b.rect.width - arrow_w;
-    out.push(DisplayCommand::DrawBorder {
-        rect: Rect::new(sep_x, b.rect.y, 1.0, b.rect.height),
-        widths: [0.0, 0.0, 0.0, 1.0],
-        colors: [fg; 4],
-        styles: [lumen_layout::BorderStyle::Solid; 4],
-        radii: crate::CornerRadii::default(),
-    });
+    // Native separator line + dropdown arrow — suppressed under `appearance:none`.
+    if !suppress_primitive {
+        // Separator line before the arrow.
+        let sep_x = b.rect.x + b.rect.width - arrow_w;
+        out.push(DisplayCommand::DrawBorder {
+            rect: Rect::new(sep_x, b.rect.y, 1.0, b.rect.height),
+            widths: [0.0, 0.0, 0.0, 1.0],
+            colors: [fg; 4],
+            styles: [lumen_layout::BorderStyle::Solid; 4],
+            radii: crate::CornerRadii::default(),
+        });
 
-    // Dropdown arrow "▼".
-    out.push(DisplayCommand::DrawText {
-        rect: Rect::new(sep_x + pad, b.rect.y + pad, arrow_w - pad, b.rect.height - pad * 2.0),
-        text: "\u{25BC}".to_owned(),
-        font_size: font_size * 0.75,
-        color: fg,
-        font_family: s.font_family.clone(),
-        font_weight: s.font_weight,
-        font_style: s.font_style,
-        font_variation_axes: vec![],
-        tab_size: 0.0,
-        highlight_name: None,
-    });
+        // Dropdown arrow "▼".
+        out.push(DisplayCommand::DrawText {
+            rect: Rect::new(sep_x + pad, b.rect.y + pad, arrow_w - pad, b.rect.height - pad * 2.0),
+            text: "\u{25BC}".to_owned(),
+            font_size: font_size * 0.75,
+            color: fg,
+            font_family: s.font_family.clone(),
+            font_weight: s.font_weight,
+            font_style: s.font_style,
+            font_variation_axes: vec![],
+            tab_size: 0.0,
+            highlight_name: None,
+        });
+    }
 }
 
 /// CSS Lists L3 §2.1 — renders the `::marker` pseudo-element.
@@ -4558,8 +4792,14 @@ fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     let em = s.font_size;
     let cx = b.rect.x + b.rect.width * 0.5;
     let cy = b.rect.y + b.rect.height * 0.5;
+    // CSS Lists L3 §2.1 / Pseudo-elements L4 §14.2 — a non-empty `text` means the
+    // marker carries a string: either a counter glyph (decimal/roman/alpha) or an
+    // explicit `::marker { content: … }` override. In both cases the string wins over
+    // the bullet glyph, so the disc/circle/square shapes only draw when `text` is empty
+    // (otherwise a `list-style-type: disc` list with `::marker { content: "→ " }` would
+    // paint the disc instead of the arrow — BUG-185).
     match list_style_type {
-        ListStyleType::Disc => {
+        ListStyleType::Disc if text.is_empty() => {
             // Filled circle ~0.4em in diameter, centered in marker rect.
             let d = em * 0.40;
             let r = d * 0.5;
@@ -4567,7 +4807,7 @@ fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             let radii = CornerRadii { tl: r, tl_y: r, tr: r, tr_y: r, br: r, br_y: r, bl: r, bl_y: r };
             out.push(DisplayCommand::FillRoundedRect { rect, color, radii });
         }
-        ListStyleType::Circle => {
+        ListStyleType::Circle if text.is_empty() => {
             // Hollow circle ~0.4em in diameter, border ~0.08em thick.
             let d = em * 0.40;
             let r = d * 0.5;
@@ -4582,14 +4822,15 @@ fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                 radii,
             });
         }
-        ListStyleType::Square => {
+        ListStyleType::Square if text.is_empty() => {
             // Filled square ~0.35em side, centered in marker rect.
             let d = em * 0.35;
             let rect = Rect::new(cx - d * 0.5, cy - d * 0.5, d, d);
             out.push(DisplayCommand::FillRect { rect, color });
         }
         _ => {
-            // Counter types: decimal, roman, alpha, greek — render as text.
+            // Counter types (decimal, roman, alpha, greek) and `::marker { content }`
+            // overrides — render the string.
             if !text.is_empty() {
                 out.push(DisplayCommand::DrawText {
                     rect: b.rect,
@@ -4653,12 +4894,22 @@ fn box_generates_content(c: &LayoutBox) -> bool {
 
 /// Эмитит DisplayCommand-ы для одного box-а БЕЗ рекурсии в детей. Аналог
 /// тела `walk` для одного box-а.
-fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32, sel: Option<&SelectionHighlight>) {
+fn emit_box_self(
+    b: &LayoutBox,
+    out: &mut Vec<DisplayCommand>,
+    dpr: f32,
+    sel: Option<&SelectionHighlight>,
+    ov: Option<&CompositorOverride>,
+) {
     // opacity:0 → whole-subtree invisible (см. is_opacity_subtree_painted).
     // emit_box_self не идёт в children, но self-content тоже skip-аем.
     if !is_opacity_subtree_painted(b) {
         return;
     }
+    // BUG-231: remember where this box's own commands start so an animated
+    // background-color / color compositor override can be patched into them
+    // afterwards (see `apply_color_override`) without relayout.
+    let cmd_start = out.len();
     match &b.kind {
         BoxKind::Skip => {}
         BoxKind::Block | BoxKind::FlowRoot | BoxKind::TableRow
@@ -5056,7 +5307,56 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f32, sel: Op
             emit_svg_text(b, text, *text_anchor, *dominant_baseline, *baseline_shift, out);
         }
     }
+    // BUG-231: apply animated background-color / color compositor override to the
+    // commands this box just emitted (range `cmd_start..`), before the resize grip.
+    if let Some(ov) = ov
+        && (ov.background_color.is_some() || ov.color.is_some())
+    {
+        apply_color_override(b, ov, &mut out[cmd_start..]);
+    }
     emit_resize_grip(b, out);
+}
+
+/// BUG-231: patch a box's own background fill and currentColor-derived border /
+/// outline colours with the compositor override `ov`, in place, without relayout.
+///
+/// The background fill is identified by its exact clip rect: drop-shadow fills use
+/// a different (offset/spread-expanded) rect, so they are left untouched. Borders
+/// and outline are re-resolved from the box style against the overridden
+/// currentColor. Only fills already present are patched — a transition starting
+/// from a transparent background still needs relayout to inject a fill.
+fn apply_color_override(b: &LayoutBox, ov: &CompositorOverride, cmds: &mut [DisplayCommand]) {
+    if let Some(bg) = ov.background_color {
+        let clip = background_clip_rect(b, background_color_clip(b));
+        for c in cmds.iter_mut() {
+            match c {
+                DisplayCommand::FillRect { rect, color } if *rect == clip => *color = bg,
+                DisplayCommand::FillRoundedRect { rect, color, .. } if *rect == clip => *color = bg,
+                _ => {}
+            }
+        }
+    }
+    if let Some(cur) = ov.color {
+        let s = &b.style;
+        let outline_uses_current = matches!(
+            s.outline_color,
+            OutlineColor::Auto | OutlineColor::CurrentColor
+        );
+        for c in cmds.iter_mut() {
+            match c {
+                DisplayCommand::DrawBorder { colors, .. } => {
+                    *colors = [
+                        s.border_top_color.resolve(cur),
+                        s.border_right_color.resolve(cur),
+                        s.border_bottom_color.resolve(cur),
+                        s.border_left_color.resolve(cur),
+                    ];
+                }
+                DisplayCommand::DrawOutline { color, .. } if outline_uses_current => *color = cur,
+                _ => {}
+            }
+        }
+    }
 }
 
 /// CSS Transforms L2 §6.1 — does this box establish a **3D rendering context**
@@ -5450,59 +5750,9 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
                     out.push(DisplayCommand::PopScrollLayer);
                     // Emit scrollbar track + thumb after the scroll layer so they
                     // render at a fixed position (not translated with scrolled content).
-                    // `scrollbar-width: none` suppresses the visual scrollbar while
-                    // keeping the scroll layer (container still scrolls via keyboard/JS).
-                    if let Some((px, py, pw, ph)) = scroll_padding_box {
-                        let gutter_px = match b.style.scrollbar_width {
-                            ScrollbarWidth::Auto => SCROLLBAR_WIDTH,
-                            ScrollbarWidth::Thin => SCROLLBAR_WIDTH_THIN,
-                            ScrollbarWidth::None => 0.0,
-                        };
-                        // Only emit when scrollbar is visible (gutter_px > 0).
-                        if gutter_px > 0.0 {
-                            let (thumb_color, track_color) = match b.style.scrollbar_color {
-                                Some((thumb, track)) => (color_u8_to_f32(thumb), color_u8_to_f32(track)),
-                                None => (SCROLLBAR_THUMB_COLOR, SCROLLBAR_TRACK_COLOR),
-                            };
-                            // Compute content size from children (same as layout's content_height/width).
-                            let content_w = b.children.iter().fold(b.rect.width, |acc, c| {
-                                acc.max(c.rect.x + c.rect.width - b.rect.x)
-                            });
-                            let content_h = b.children.iter().fold(b.rect.height, |acc, c| {
-                                acc.max(c.rect.y + c.rect.height - b.rect.y)
-                            });
-                            let (v_bars, h_bars) = scrollbar_rects(&ScrollbarInput {
-                                clip_x: px,
-                                clip_y: py,
-                                clip_w: pw,
-                                clip_h: ph,
-                                scroll_x: b.scroll_x,
-                                scroll_y: b.scroll_y,
-                                content_w,
-                                content_h,
-                                need_v: is_scroll_y,
-                                need_h: is_scroll_x,
-                                gutter_px,
-                            });
-                            if let Some((track, thumb)) = v_bars {
-                                out.push(DisplayCommand::DrawScrollbar {
-                                    track_rect: track,
-                                    thumb_rect: thumb,
-                                    vertical: true,
-                                    thumb_color,
-                                    track_color,
-                                });
-                            }
-                            if let Some((track, thumb)) = h_bars {
-                                out.push(DisplayCommand::DrawScrollbar {
-                                    track_rect: track,
-                                    thumb_rect: thumb,
-                                    vertical: false,
-                                    thumb_color,
-                                    track_color,
-                                });
-                            }
-                        }
+                    // BUG-220: shared with the ordered `box_layer_ops` path.
+                    if let Some(padding_box) = scroll_padding_box {
+                        emit_scrollbars(b, padding_box, is_scroll_x, is_scroll_y, out);
                     }
                 } else {
                     out.push(DisplayCommand::PopClip);
@@ -5926,12 +6176,30 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
             }
             if let Some(sc) = stroke_color && stroke_w > 0.0 {
                 let w = stroke_w;
+                // SVG 2 §13.7: the stroke is centred on the geometry edge — half its
+                // width outside, half inside. `DrawBorder` paints inward from `rect`,
+                // so inflate the box by w/2 on every side (outer edge moves out by w/2)
+                // and grow the outer radii by w/2; the even-odd ring (BUG-175) puts the
+                // inner edge at r − w/2, leaving the centre-line on the original edge.
+                // Square corners (no radius) stay square. Fill keeps the original rect.
+                let half = w * 0.5;
+                let stroke_rect = Rect::new(
+                    b.rect.x - half,
+                    b.rect.y - half,
+                    b.rect.width + w,
+                    b.rect.height + w,
+                );
+                let (orx, ory) = if has_radius { (r + half, r_y + half) } else { (0.0, 0.0) };
+                let stroke_radii = CornerRadii {
+                    tl: orx, tl_y: ory, tr: orx, tr_y: ory,
+                    br: orx, br_y: ory, bl: orx, bl_y: ory,
+                };
                 stroke_cmds.push(DisplayCommand::DrawBorder {
-                    rect: b.rect,
+                    rect: stroke_rect,
                     widths: [w, w, w, w],
                     colors: [sc, sc, sc, sc],
                     styles: [BorderStyle::Solid; 4],
-                    radii,
+                    radii: stroke_radii,
                 });
             }
         }
@@ -5944,20 +6212,54 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
             }
             if let Some(sc) = stroke_color && stroke_w > 0.0 {
                 let w = stroke_w;
+                // SVG 2 §13.7: stroke centred on the geometry edge (see Rect arm).
+                // Inflate the bbox by w/2 so the outer edge of the inward-painted
+                // border lands w/2 outside the geometry; the outer radii grow to
+                // match (= half the inflated box → still a full ellipse).
+                let half = w * 0.5;
+                let stroke_rect = Rect::new(
+                    b.rect.x - half,
+                    b.rect.y - half,
+                    b.rect.width + w,
+                    b.rect.height + w,
+                );
+                let orx = rx_px + half;
+                let ory = ry_px + half;
+                let stroke_radii = CornerRadii {
+                    tl: orx, tl_y: ory, tr: orx, tr_y: ory,
+                    br: orx, br_y: ory, bl: orx, bl_y: ory,
+                };
                 stroke_cmds.push(DisplayCommand::DrawBorder {
-                    rect: b.rect,
+                    rect: stroke_rect,
                     widths: [w, w, w, w],
                     colors: [sc, sc, sc, sc],
                     styles: [BorderStyle::Solid; 4],
-                    radii,
+                    radii: stroke_radii,
                 });
             }
         }
-        SvgShapeKind::Line { .. } => {
-            // SVG <line> has no fill; rendered as a stroke-width rect. paint-order
-            // is irrelevant (single component), so emit directly.
-            let color = stroke_color.or(fill_color).unwrap_or(Color::BLACK);
-            out.push(DisplayCommand::FillRect { rect: b.rect, color });
+        SvgShapeKind::Line { x1, y1, x2, y2 } => {
+            // SVG <line> (§9.5): a stroked segment between (x1,y1) and (x2,y2). It
+            // has no fill — only the stroke paints. The old code filled `b.rect`,
+            // which for a diagonal line is the whole (large) bounding box, painting
+            // a solid rectangle instead of a thin diagonal (BUG-189). `b.rect` is
+            // the doc-space bbox of the segment (already viewBox-scaled); the signs
+            // of the user-space endpoints tell us which diagonal of that box the
+            // segment runs along. The painter has no SVG transform here, so a
+            // rotated line is approximated by its bbox diagonal — the same
+            // axis-aligned assumption rect/ellipse strokes already make.
+            if let Some(sc) = stroke_color
+                && stroke_w > 0.0
+            {
+                let ax = if x1 <= x2 { b.rect.x } else { b.rect.x + b.rect.width };
+                let ay = if y1 <= y2 { b.rect.y } else { b.rect.y + b.rect.height };
+                let bx = if x1 <= x2 { b.rect.x + b.rect.width } else { b.rect.x };
+                let by = if y1 <= y2 { b.rect.y + b.rect.height } else { b.rect.y };
+                let mut v: Vec<[f32; 2]> = Vec::with_capacity(6);
+                push_thick_segment(&mut v, [ax, ay], [bx, by], stroke_w * 0.5);
+                // paint-order is irrelevant (single component), so emit directly.
+                out.push(DisplayCommand::DrawSvgPath { vertices: v, color: sc });
+            }
         }
         SvgShapeKind::Path { d } => {
             let need_fill   = fill_color.is_some();
@@ -6472,7 +6774,13 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
             let self_visible = is_paint_visible(b) && !is_hidden_empty_cell(b);
             if self_visible {
                 emit_box_shadows(b, out);
-                if let Some(CssColor::Rgba(bg)) = b.style.background_color
+                // BUG-231: animated background-color override wins over the base value.
+                let base_bg = match b.style.background_color {
+                    Some(CssColor::Rgba(c)) => Some(c),
+                    _ => None,
+                };
+                let eff_bg = ov.and_then(|o| o.background_color).or(base_bg);
+                if let Some(bg) = eff_bg
                     && bg.a > 0
                 {
                     let clip = background_clip_rect(b, background_color_clip(b));
@@ -6487,7 +6795,8 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
                     || s.border_bottom_style.is_visible()
                     || s.border_left_style.is_visible();
                 if has_border {
-                    let cur = s.color;
+                    // BUG-231: animated color override resolves currentColor.
+                    let cur = ov.and_then(|o| o.color).unwrap_or(s.color);
                     out.push(DisplayCommand::DrawBorder {
                         rect: b.rect,
                         widths: [
@@ -6898,9 +7207,14 @@ mod tests {
         assert!((c.br_y - 45.0).abs() < 1e-4);
     }
 
+    /// Neutralise the UA `body { margin: 8px }` (HTML Rendering §14.3.3, BUG-204)
+    /// so display-list coordinates reflect the element under test, not the body
+    /// margin — exactly as a real page does with `* { margin: 0 }`.
+    const BODY_RESET: &str = "body{margin:0}";
+
     fn build(html: &str, css: &str) -> DisplayList {
         let doc = lumen_html_parser::parse(html);
-        let sheet = lumen_css_parser::parse(css);
+        let sheet = lumen_css_parser::parse(&format!("{BODY_RESET}{css}"));
         let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
         build_display_list(&tree)
     }
@@ -6914,7 +7228,7 @@ mod tests {
 
     fn build_wrapped(html: &str, css: &str, width: f32) -> DisplayList {
         let doc = lumen_html_parser::parse(html);
-        let sheet = lumen_css_parser::parse(css);
+        let sheet = lumen_css_parser::parse(&format!("{BODY_RESET}{css}"));
         let tree = lumen_layout::layout_measured(&doc, &sheet, Size::new(width, 600.0), &Fixed8);
         build_display_list(&tree)
     }
@@ -7308,6 +7622,70 @@ mod tests {
             rounded_fills(&dl).is_empty(),
             "appearance:none must suppress the range slider, got {:?}",
             rounded_fills(&dl)
+        );
+    }
+
+    /// BUG-225 — `appearance: none` must NOT suppress a text input's `value`
+    /// text: the value is author content, not a UA primitive. Only the native
+    /// primitives (tick/dot/slider/bar/arrow/swatch) are removed.
+    #[test]
+    fn appearance_none_keeps_text_input_value() {
+        let dl = build(
+            r#"<input type=text value="typed">"#,
+            "input { appearance: none; }",
+        );
+        assert!(
+            texts(&dl).contains(&"typed"),
+            "appearance:none text input must still paint its value, got {:?}",
+            texts(&dl)
+        );
+    }
+
+    /// BUG-225 — `appearance: none` must keep the placeholder hint of an empty
+    /// text input (placeholder is author content, not a UA primitive).
+    #[test]
+    fn appearance_none_keeps_text_input_placeholder() {
+        let dl = build(
+            r#"<input type=text value="" placeholder="hint here">"#,
+            "input { appearance: none; }",
+        );
+        assert!(
+            texts(&dl).contains(&"hint here"),
+            "appearance:none empty input must still paint its placeholder, got {:?}",
+            texts(&dl)
+        );
+    }
+
+    /// BUG-225 — `appearance: none` must keep a button's label.
+    #[test]
+    fn appearance_none_keeps_button_label() {
+        let dl = build(
+            r#"<input type=submit value="Send">"#,
+            "input { appearance: none; }",
+        );
+        assert!(
+            texts(&dl).contains(&"Send"),
+            "appearance:none button must still paint its label, got {:?}",
+            texts(&dl)
+        );
+    }
+
+    /// BUG-225 — `appearance: none` keeps the `<select>` selected option label
+    /// but drops the native dropdown arrow (▼).
+    #[test]
+    fn appearance_none_keeps_select_label_drops_arrow() {
+        let dl = build(
+            "<select><option selected>Chosen</option></select>",
+            "select { appearance: none; }",
+        );
+        let t = texts(&dl);
+        assert!(
+            t.contains(&"Chosen"),
+            "appearance:none select must still paint the selected label, got {t:?}"
+        );
+        assert!(
+            !t.iter().any(|s| s.contains('\u{25BC}')),
+            "appearance:none select must drop the native dropdown arrow, got {t:?}"
         );
     }
 
@@ -8802,6 +9180,67 @@ mod tests {
             assert!((rect.width - 116.0).abs() < 0.1, "rect.width={}", rect.width);
             assert!((origin_rect.width - 100.0).abs() < 0.1, "origin_rect.width={}", origin_rect.width);
         }
+    }
+
+    // ── Тесты mask-origin / mask-position (CSS Masking L1 §4.4–§4.5) ────────────
+
+    fn push_mask_gradient_rect(dl: &DisplayList) -> lumen_core::geom::Rect {
+        dl.iter()
+            .find_map(|c| match c {
+                DisplayCommand::PushMaskLinearGradient { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .expect("gradient mask must emit PushMaskLinearGradient")
+    }
+
+    #[test]
+    fn mask_origin_default_border_box_uses_full_box() {
+        // mask-origin initial value is `border-box` (CSS Masking L1 §4.5), unlike
+        // background-origin (`padding-box`). content-box 100×60 + padding 10 +
+        // border 5 → border-box 130×90; the gradient mask covers the full box.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; \
+             mask-image: linear-gradient(to bottom, black, transparent); \
+             border: 5px solid red; padding: 10px; }",
+        );
+        let rect = push_mask_gradient_rect(&dl);
+        assert!((rect.width - 130.0).abs() < 0.1, "rect.width={}", rect.width);
+        assert!((rect.height - 90.0).abs() < 0.1, "rect.height={}", rect.height);
+    }
+
+    #[test]
+    fn mask_origin_content_box_shrinks_push_mask_rect() {
+        // mask-origin: content-box positions the mask over the content box only.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; \
+             mask-image: linear-gradient(to bottom, black, transparent); \
+             border: 5px solid red; padding: 10px; mask-origin: content-box; }",
+        );
+        let rect = push_mask_gradient_rect(&dl);
+        assert!((rect.width - 100.0).abs() < 0.1, "rect.width={}", rect.width);
+        assert!((rect.height - 60.0).abs() < 0.1, "rect.height={}", rect.height);
+    }
+
+    #[test]
+    fn mask_position_threaded_into_push_mask_image() {
+        // mask-position must reach the PushMaskImage command (no longer hardcoded
+        // to background_initial). 25% 75% → Percent(0.25)/Percent(0.75).
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; \
+             mask-image: url(m.png); mask-position: 25% 75%; }",
+        );
+        let pos = dl
+            .iter()
+            .find_map(|c| match c {
+                DisplayCommand::PushMaskImage { position, .. } => Some(*position),
+                _ => None,
+            })
+            .expect("url mask must emit PushMaskImage");
+        assert_eq!(pos.x, PositionComponent::Percent(0.25), "mask-position x");
+        assert_eq!(pos.y, PositionComponent::Percent(0.75), "mask-position y");
     }
 
     #[test]
@@ -11106,6 +11545,32 @@ mod tests {
     }
 
     #[test]
+    fn ordered_scroll_container_emits_scrollbar() {
+        // BUG-220: scroll containers painted through the ordered (stacking-
+        // context) path lost their scrollbar — box_layer_ops emitted
+        // PushScrollLayer but no DrawScrollbar (only the legacy `walk` did).
+        // Both paths must now draw it via the shared `emit_scrollbars` helper.
+        let dl = build_ordered(
+            "<div class='sc'><div class='tall'></div></div>",
+            ".sc { width: 100px; height: 100px; overflow: scroll; } \
+             .tall { width: 50px; height: 500px; background: #f00; }",
+        );
+        let bars = count_variant(&dl, |c| matches!(c, DisplayCommand::DrawScrollbar { .. }));
+        assert!(bars >= 1, "ordered scroll container must emit DrawScrollbar, got {bars}");
+        // The bar must follow PopScrollLayer so it renders at a fixed position
+        // (not translated with the scrolled content).
+        let pop = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::PopScrollLayer))
+            .expect("scroll container emits PopScrollLayer");
+        let bar = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::DrawScrollbar { .. }))
+            .expect("scroll container emits DrawScrollbar");
+        assert!(pop < bar, "DrawScrollbar must follow PopScrollLayer: pop={pop} bar={bar}");
+    }
+
+    #[test]
     fn transform_origin_affects_matrix() {
         // С transform-origin (10, 20) и translate(0, 0) матрица =
         // T(10+box_x, 20+box_y) · I · T(-(10+box_x), -(20+box_y)) = I.
@@ -11241,7 +11706,7 @@ mod tests {
         // Override opacity=0.5 for the body node (root).
         let node = tree.node;
         let mut overrides = HashMap::new();
-        overrides.insert(node, CompositorOverride { opacity: Some(0.5), transform: None });
+        overrides.insert(node, CompositorOverride { opacity: Some(0.5), ..Default::default() });
         let frame = CompositorAnimFrame { overrides, has_active: true };
         let anim_dl = build_display_list_with_anim(&tree, Some(&frame));
 
@@ -11266,7 +11731,7 @@ mod tests {
         let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
         let node = tree.node;
         let mut overrides = HashMap::new();
-        overrides.insert(node, CompositorOverride { opacity: Some(0.7), transform: None });
+        overrides.insert(node, CompositorOverride { opacity: Some(0.7), ..Default::default() });
         let frame = CompositorAnimFrame { overrides, has_active: true };
         let dl = build_display_list_with_anim(&tree, Some(&frame));
 
@@ -11276,6 +11741,63 @@ mod tests {
         let pop_tx = dl.iter().filter(|c| matches!(c, DisplayCommand::PopTransform)).count();
         assert_eq!(push_op, pop_op, "PushOpacity/PopOpacity must balance");
         assert_eq!(push_tx, pop_tx, "PushTransform/PopTransform must balance");
+    }
+
+    /// Recursively find the node of the first box whose resolved background colour
+    /// equals `want` — used to target a compositor override at the right box.
+    fn find_bg_node(b: &lumen_layout::LayoutBox, want: Color) -> Option<NodeId> {
+        if b.style.background_color.and_then(|c| c.to_color_opt()) == Some(want) {
+            return Some(b.node);
+        }
+        b.children.iter().find_map(|c| find_bg_node(c, want))
+    }
+
+    /// BUG-231: an animated background-color compositor override must replace the
+    /// box's background FillRect colour in the ordered (live) paint path without
+    /// relayout — the green base fill becomes the overridden orange.
+    #[test]
+    fn anim_background_color_override_patches_fill_ordered() {
+        let html = r#"<div style="background:#008000;width:100px;height:50px"></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let green = Color { r: 0, g: 0x80, b: 0, a: 255 };
+        let orange = Color { r: 0xff, g: 0x8f, b: 0, a: 255 };
+        let node = find_bg_node(&tree, green).expect("box with green background");
+
+        let stacking_tree = lumen_layout::StackingTree::build(&tree);
+        let order = lumen_layout::PaintOrder::from_tree(&stacking_tree);
+
+        // Base ordered DL paints the green background.
+        let base = build_display_list_ordered(&tree, &stacking_tree, &order);
+        assert!(
+            base.iter().any(|c| matches!(c,
+                DisplayCommand::FillRect { color, .. } | DisplayCommand::FillRoundedRect { color, .. }
+                if *color == green)),
+            "base DL должен заливать зелёным фоном"
+        );
+
+        // Override background-color → orange.
+        let mut overrides = HashMap::new();
+        overrides.insert(node, CompositorOverride {
+            background_color: Some(orange),
+            ..Default::default()
+        });
+        let frame = CompositorAnimFrame { overrides, has_active: true };
+        let anim = build_display_list_ordered_with_anim(&tree, &stacking_tree, &order, Some(&frame));
+
+        assert!(
+            anim.iter().any(|c| matches!(c,
+                DisplayCommand::FillRect { color, .. } | DisplayCommand::FillRoundedRect { color, .. }
+                if *color == orange)),
+            "override должен перекрасить фон в оранжевый"
+        );
+        assert!(
+            !anim.iter().any(|c| matches!(c,
+                DisplayCommand::FillRect { color, .. } | DisplayCommand::FillRoundedRect { color, .. }
+                if *color == green)),
+            "после override зелёного фона быть не должно"
+        );
     }
 
     // ── text-emphasis rendering ───────────────────────────────────────────────
@@ -11818,6 +12340,27 @@ mod tests {
             _ => None,
         }).collect();
         assert_eq!(alpha_texts.len(), 2, "lower-alpha markers: expected 'a. ' and 'b. '");
+    }
+
+    /// BUG-185: `::marker { content: "→ " }` on a `list-style-type: disc` list must
+    /// paint the override string, not the disc bullet glyph. The marker carries both
+    /// `list_style_type: Disc` and the content text; the text wins.
+    #[test]
+    fn marker_content_override_renders_text_not_bullet() {
+        let dl = build(
+            r#"<ul class="cm" style="list-style-type:disc;padding-left:32px"><li>Arrow A</li></ul>"#,
+            r#".cm li::marker { content: "→ "; color: #68d391; }"#,
+        );
+        // The disc bullet must be suppressed: no FillRoundedRect from the marker.
+        let discs = dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. }))
+            .count();
+        assert_eq!(discs, 0,
+            "content override must suppress the disc bullet, got {discs} FillRoundedRect");
+        // The arrow string is painted instead.
+        let arrows = dl.iter().any(|c| matches!(c,
+            DisplayCommand::DrawText { text, .. } if text.contains('\u{2192}')));
+        assert!(arrows, "content override must paint the arrow text");
     }
 
     // ── CSS Compositing L1 §8.3 — background-blend-mode ──
@@ -12409,7 +12952,7 @@ mod tests {
             DisplayCommand::FillRect { rect: r, color: Color { r: 1, g: 2, b: 3, a: 255 } },
             DisplayCommand::FillRoundedRect { rect: r, color: Color { r: 1, g: 2, b: 3, a: 255 }, radii: CornerRadii::default() },
             DisplayCommand::DrawLinearGradient { rect: r, angle_deg: 0.0, stops: vec![], repeating: false },
-            DisplayCommand::DrawRadialGradient { rect: r, center_x_pct: 0.5, center_y_pct: 0.5, stops: vec![], repeating: false },
+            DisplayCommand::DrawRadialGradient { rect: r, center_x_pct: 0.5, center_y_pct: 0.5, radius_x: 2.5, radius_y: 2.5, stops: vec![], repeating: false },
             DisplayCommand::DrawConicGradient { rect: r, center_x_pct: 0.5, center_y_pct: 0.5, from_angle_deg: 0.0, stops: vec![], repeating: false },
             DisplayCommand::DrawBackgroundImage {
                 rect: r, origin_rect: r, src: "bg.png".to_owned(),
@@ -13193,6 +13736,70 @@ mod tests {
             svg_paths.iter().all(|c| c.r == 233 && c.g == 69 && c.b == 96),
             "path must paint in stroke colour #e94560, not a default black fill; got {svg_paths:?}",
         );
+    }
+
+    #[test]
+    fn svg_diagonal_line_strokes_segment_not_filled_bbox() {
+        // BUG-189: a diagonal SVG <line> used to render as `FillRect { rect: b.rect }`
+        // — filling the entire (large) bounding box of the segment with the stroke
+        // colour, producing a solid orange rectangle instead of a thin diagonal.
+        // The line must now emit a `DrawSvgPath` (a thick segment) in the stroke
+        // colour, and NO `FillRect` in that colour.
+        let stroke = "#f39c12"; // (243, 156, 18)
+        let html = "<svg width='160' height='100'>\
+            <line x1='10' y1='10' x2='150' y2='90' stroke='#f39c12' stroke-width='6' fill='none'/>\
+        </svg>";
+        for dl in [build(html, ""), build_ordered(html, "")] {
+            let stroke_paths: Vec<&Vec<[f32; 2]>> = dl.iter().filter_map(|c| match c {
+                DisplayCommand::DrawSvgPath { vertices, color }
+                    if color.r == 243 && color.g == 156 && color.b == 18 => Some(vertices),
+                _ => None,
+            }).collect();
+            assert_eq!(stroke_paths.len(), 1, "line must emit one stroke DrawSvgPath ({stroke}), got {dl:?}");
+            assert_eq!(stroke_paths[0].len(), 6, "a single butt-cap segment = two triangles (6 verts)");
+            // The old bug: a FillRect in the stroke colour spanning the bbox.
+            let solid_fill = dl.iter().any(|c| matches!(c,
+                DisplayCommand::FillRect { color, .. } if color.r == 243 && color.g == 156 && color.b == 18));
+            assert!(!solid_fill, "line must NOT paint a solid {stroke} FillRect (BUG-189), got {dl:?}");
+        }
+    }
+
+    #[test]
+    fn svg_rect_stroke_is_centred_on_edge() {
+        // BUG-226: an SVG stroke is centred on the geometry edge (SVG 2 §13.7) —
+        // half its width outside the box, half inside. Previously the stroke was
+        // painted entirely inside (`DrawBorder { rect: b.rect }`, border-box model),
+        // shrinking the visible orange-core by stroke-width/2 per side (79×59 vs
+        // Edge 89×69 at stroke-width 10). The stroke's DrawBorder rect must now be
+        // the fill rect inflated by stroke-width/2 on every side, with the fill left
+        // on the original geometry.
+        let html = "<svg width='200' height='160'>\
+            <rect x='20' y='20' width='100' height='80' fill='#3498db' stroke='#e74c3c' stroke-width='10'/>\
+        </svg>";
+        for dl in [build(html, ""), build_ordered(html, "")] {
+            // fill (#3498db = 52,152,219) FillRect on the original geometry.
+            let fill = dl.iter().find_map(|c| match c {
+                DisplayCommand::FillRect { rect, color }
+                    if color.r == 52 && color.g == 152 && color.b == 219 => Some(*rect),
+                _ => None,
+            }).expect("fill FillRect present");
+            // stroke (#e74c3c = 231,76,60) DrawBorder, inflated by w/2 per side.
+            let (srect, widths) = dl.iter().find_map(|c| match c {
+                DisplayCommand::DrawBorder { rect, widths, colors, .. }
+                    if colors[0].r == 231 && colors[0].g == 76 && colors[0].b == 60 => Some((*rect, *widths)),
+                _ => None,
+            }).expect("stroke DrawBorder present");
+            assert_eq!(widths[0], 10.0, "stroke width preserved");
+            let half = 5.0_f32; // stroke-width / 2
+            assert!((srect.x - (fill.x - half)).abs() < 0.01,
+                "stroke rect moves out by w/2: x {} want {}", srect.x, fill.x - half);
+            assert!((srect.y - (fill.y - half)).abs() < 0.01,
+                "stroke rect moves out by w/2: y {} want {}", srect.y, fill.y - half);
+            assert!((srect.width - (fill.width + 10.0)).abs() < 0.01,
+                "stroke rect width grows by w: {} want {}", srect.width, fill.width + 10.0);
+            assert!((srect.height - (fill.height + 10.0)).abs() < 0.01,
+                "stroke rect height grows by w: {} want {}", srect.height, fill.height + 10.0);
+        }
     }
 
     #[test]

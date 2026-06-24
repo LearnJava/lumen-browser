@@ -35,9 +35,14 @@ fn parse_png_icc_profile(bytes: &[u8]) -> Option<IccProfile> {
             let compressed_data = &chunk_data[null_pos + 2..];
             if compressed_data.is_empty() { return None; }
 
-            // Decompress using flate2
+            // PNG `iCCP` (compression method 0) stores the profile as a *zlib*
+            // datastream (RFC 1950: 2-byte header + DEFLATE body + Adler-32),
+            // not raw DEFLATE — so it must be inflated with `ZlibDecoder`. Using
+            // a raw `DeflateDecoder` here (BUG-229) silently failed on every
+            // real encoder's output (PIL, libpng, …), dropping the profile and
+            // skipping colour management.
             let mut decompressed = Vec::new();
-            let mut decoder = flate2::read::DeflateDecoder::new(compressed_data);
+            let mut decoder = flate2::read::ZlibDecoder::new(compressed_data);
             if decoder.read_to_end(&mut decompressed).is_ok() && decompressed.len() >= 128 {
                 return Some(IccProfile { data: decompressed });
             }

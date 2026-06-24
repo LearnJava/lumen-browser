@@ -243,6 +243,28 @@ fn mark_dirty(nid: u32) {
     });
 }
 
+/// Present a WebGPU-rendered RGBA8 frame into the `<canvas>` `nid`'s CPU buffer.
+///
+/// Used by the WebGPU canvas-present path (`getContext('webgpu')` → render → `queue.submit`):
+/// `lumen_paint::webgpu_compute::texture_read_rgba` reads the rendered texture back to dense
+/// top-left-origin RGBA8, and this writes it into the same `Context2D` buffer the shell uploads
+/// as `canvas:{nid}`. Creates the backing context if absent and resizes it to match the frame,
+/// then marks the canvas dirty so `flush_dirty` re-uploads it next frame.
+pub fn present_rgba(nid: u32, width: u32, height: u32, rgba: &[u8]) {
+    let w = width.clamp(1, MAX_CANVAS_DIM);
+    let h = height.clamp(1, MAX_CANVAS_DIM);
+    CANVASES.with(|c| {
+        if let Ok(mut map) = c.try_borrow_mut() {
+            let ctx = map.entry(nid).or_insert_with(|| Context2D::new(w, h));
+            if ctx.width() != w || ctx.height() != h {
+                ctx.resize(w, h);
+            }
+            ctx.put_image_data(rgba, w, h, 0, 0);
+        }
+    });
+    mark_dirty(nid);
+}
+
 /// Drain dirty canvases and return their current RGBA buffers.
 ///
 /// Each tuple is `(node_index, width, height, rgba_pixels)` where `rgba_pixels`
@@ -1770,6 +1792,42 @@ mod tests {
             install_canvas2d_bindings(&ctx).unwrap();
             let result: bool = ctx.eval("_lumen_canvas_is_transferred(999999)").unwrap();
             assert!(!result);
+        });
+    }
+
+    #[test]
+    fn present_rgba_writes_pixels_and_marks_dirty() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|_ctx| {
+            reset_state();
+            // 2×1 frame: red, green pixels — the WebGPU present path delivers dense RGBA8.
+            let frame = [255u8, 0, 0, 255, 0, 255, 0, 255];
+            present_rgba(77, 2, 1, &frame);
+            let updates = flush_dirty();
+            assert_eq!(updates.len(), 1, "present marks the canvas dirty exactly once");
+            let (nid, w, h, pixels) = &updates[0];
+            assert_eq!(*nid, 77);
+            assert_eq!((*w, *h), (2, 1));
+            assert_eq!(pixels, &frame, "presented pixels land in the canvas buffer verbatim");
+        });
+    }
+
+    #[test]
+    fn present_rgba_resizes_existing_canvas() {
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            reset_state();
+            install_canvas2d_bindings(&ctx).unwrap();
+            ctx.eval::<(), _>("_lumen_canvas2d_create(78, 4, 4);").unwrap();
+            let _ = flush_dirty();
+            // A present at a different size resizes the backing buffer to match the frame.
+            let frame = [1u8, 2, 3, 4, 5, 6, 7, 8];
+            present_rgba(78, 2, 1, &frame);
+            let updates = flush_dirty();
+            assert_eq!(updates.len(), 1);
+            let (_, w, h, pixels) = &updates[0];
+            assert_eq!((*w, *h), (2, 1), "canvas resized to the presented frame");
+            assert_eq!(pixels, &frame);
         });
     }
 }

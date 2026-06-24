@@ -21,7 +21,7 @@ use crate::style::{
     set_cq_context, AlignValue,
     BackgroundImage, BorderCollapse, BoxSizing, ClearSide, ContainFlags, ContainerContext, ContainerType, Content,
     ContentItem, ComputedStyle, Direction, Display, FlexBasis, FlexDirection, FlexWrap, FloatSide,
-    GridAutoFlow, GridLine, GridTrackSize, Hyphens, Length, LengthOrAuto, ListStylePosition, MasonryAutoFlow,
+    GridAutoFlow, GridLine, GridTrackSize, Hyphens, Length, LengthOrAuto, ListStylePosition,
     ListStyleType, Overflow, OverflowWrap, Position, ScrollbarGutter, ScrollbarWidth,
     TextAlign, TextAlignLast, TextOverflow,
     TextWrapMode, TextWrapStyle,
@@ -2496,6 +2496,27 @@ fn font_size_adjust_used(style: &ComputedStyle, m: &dyn TextMeasurer) -> f32 {
     }
 }
 
+/// Apply `font-size-adjust` to a single style in place (CSS Fonts L5 §4).
+///
+/// Mutates `font_size` to the x-height-normalised used size. Because an absolute
+/// `line-height` (`<length>`/`<percentage>`/`em`/`rem`) computes to a fixed line
+/// box that must NOT rescale with the used font-size, the ratio-encoded
+/// `line_height` is corrected inversely so the absolute line box stays constant
+/// (CSS2 §10.8.1). Relative line-heights (`normal`/`<number>`) keep their ratio
+/// and scale with the new size, as the spec requires.
+fn apply_font_size_adjust_to_style(style: &mut ComputedStyle, m: &dyn TextMeasurer) {
+    use crate::style::FontSizeAdjust;
+    if matches!(style.font_size_adjust, FontSizeAdjust::None) {
+        return;
+    }
+    let old_size = style.font_size;
+    let new_size = font_size_adjust_used(style, m);
+    style.font_size = new_size;
+    if !style.line_height_is_relative && new_size > 0.0 {
+        style.line_height = style.line_height * old_size / new_size;
+    }
+}
+
 /// CSS Fonts L5 §4 — post-build pass rewriting `font_size` wherever
 /// `font-size-adjust` is a number, using the measurer's real x-height.
 ///
@@ -2504,15 +2525,10 @@ fn font_size_adjust_used(style: &ComputedStyle, m: &dyn TextMeasurer) -> f32 {
 /// `frag.style.font_size`) pick up the scaled size from a single source. Inline
 /// text segments carry their own cloned style, so they are adjusted too.
 fn apply_font_size_adjust(b: &mut LayoutBox, m: &dyn TextMeasurer) {
-    use crate::style::FontSizeAdjust;
-    if !matches!(b.style.font_size_adjust, FontSizeAdjust::None) {
-        b.style.font_size = font_size_adjust_used(&b.style, m);
-    }
+    apply_font_size_adjust_to_style(&mut b.style, m);
     if let BoxKind::InlineRun { segments, .. } = &mut b.kind {
         for seg in segments.iter_mut() {
-            if !matches!(seg.style.font_size_adjust, FontSizeAdjust::None) {
-                seg.style.font_size = font_size_adjust_used(&seg.style, m);
-            }
+            apply_font_size_adjust_to_style(&mut seg.style, m);
         }
     }
     for child in &mut b.children {
@@ -2582,6 +2598,30 @@ fn propagate_canvas_background(doc: &Document, root: &mut LayoutBox) {
     let bg_layers = std::mem::take(&mut body.style.background_layers);
     html_box.style.background_color = bg_color;
     html_box.style.background_layers = bg_layers;
+}
+
+/// CSS Backgrounds §3.11.1 — the canvas background color.
+///
+/// Returns the opaque background color of the root element box (the color
+/// `propagate_canvas_background` moved onto `<html>`, originally the root's or
+/// `<body>`'s background). The renderer clears the **entire** surface to this
+/// color so the page background covers the whole viewport even when the root
+/// element's box is shorter or narrower than the window — e.g. a fixed 1024×720
+/// page in a maximized window, where painting only the root box's rect would
+/// leave the rest of the canvas the UA-default white (and the root's own
+/// `background-color` shows only as a band the size of the box, not the canvas).
+///
+/// Returns `None` (→ UA-default white clear) when the root element has no
+/// background color or the color is not fully opaque: a translucent root
+/// background must composite over the UA canvas, which the root box's own
+/// background `FillRect` already handles within its rect.
+pub fn canvas_background_color(root: &LayoutBox) -> Option<crate::style::Color> {
+    let html = root
+        .children
+        .iter()
+        .find(|c| matches!(c.kind, BoxKind::Block | BoxKind::FlowRoot))?;
+    let color = html.style.background_color?.to_color_opt()?;
+    (color.a == 255).then_some(color)
 }
 
 fn is_html_element_named(doc: &Document, id: NodeId, want: &str) -> bool {
@@ -2717,6 +2757,62 @@ fn anon_inline_run(node: NodeId, parent: &ComputedStyle, segs: Vec<InlineSegment
         col_span: 1,
         row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
     }
+}
+
+/// CSS Flexbox §4 / Grid §6: a contiguous run of text directly inside a flex or
+/// grid container is wrapped in an anonymous (blockified) item. Returns `None`
+/// for a whitespace/control-only run — such runs do not generate an item.
+///
+/// The item is an anonymous `Block` container (so its inline content formats into
+/// line boxes like any block) holding a single `InlineRun` with the text. Without
+/// this, the text node's box is `Skip` and the text vanishes — BUG-194: white
+/// digit labels inside `.item { display: flex }` were dropped entirely.
+#[allow(clippy::too_many_arguments)]
+fn build_anon_text_item(
+    doc: &Document,
+    sheet: &Stylesheet,
+    id: NodeId,
+    parent: &ComputedStyle,
+    viewport: Size,
+    flat: &FlatTree,
+    counters: &CounterMap,
+    registry: &CounterStyleRegistry,
+    dark_mode: bool,
+) -> Option<LayoutBox> {
+    let NodeData::Text(s) = &doc.get(id).data else {
+        return None;
+    };
+    if s.chars().all(|c| c.is_whitespace() || is_invisible_control(c)) {
+        return None;
+    }
+    let mut segs = Vec::new();
+    // Each anonymous text item is its own inline context — ::first-letter does not
+    // apply to anonymous flex/grid items, so disable the candidate flag.
+    let mut need_first_letter = false;
+    collect_inline_segments(
+        doc, sheet, id, parent, viewport, &mut segs, flat, counters, registry,
+        &mut need_first_letter, dark_mode,
+    );
+    if segs.is_empty() {
+        return None;
+    }
+    let run = anon_inline_run(id, parent, segs);
+    let mut item_style = anon_style(parent);
+    // The anonymous item is blockified regardless of the container's own display.
+    item_style.display = Display::Block;
+    Some(LayoutBox {
+        node: id,
+        rect: Rect::ZERO,
+        style: item_style,
+        kind: BoxKind::Block,
+        children: vec![run],
+        col_span: 1,
+        row_span: 1,
+        svg_group_transform: None,
+        scroll_x: 0.0,
+        scroll_y: 0.0,
+        dirty: Default::default(),
+    })
 }
 
 /// CSS Pseudo-elements L4 §5.4: applies `::first-letter` style to the first grapheme of the
@@ -2888,7 +2984,23 @@ fn collect_inline_segments(
                 source_char_offset: 0,
             });
         }
-        NodeData::Text(_) => {}
+        NodeData::Text(_) => {
+            // CSS Text L3 §4.1.1 — a collapsing whitespace-only text node between
+            // inline-level boxes collapses to a single space. We don't emit a
+            // segment for it (it would split to zero words); instead we record the
+            // collapsible space on the preceding segment by giving its text a
+            // trailing space, so `wrap_inline_run` inserts exactly one inter-word
+            // gap at that boundary. Without this, adjacent segments would be joined
+            // tightly even when source whitespace separated them. Leading
+            // whitespace (no preceding segment) collapses away entirely.
+            if let Some(last) = out.last_mut()
+                && !last.forced_break
+                && !last.style.white_space.preserves_whitespace()
+                && !last.text.ends_with(|c: char| c.is_whitespace())
+            {
+                last.text.push(' ');
+            }
+        }
         NodeData::Element { .. } => {
             let s = compute_style(doc, id, sheet, inherited, viewport, dark_mode);
             if s.display == Display::None {
@@ -3603,7 +3715,25 @@ fn build_box(
                 | Display::TableRowGroup | Display::TableHeaderGroup | Display::TableFooterGroup
         );
         if is_item_container {
+            // CSS Flexbox §4 / Grid §6: text runs directly inside a flex/grid
+            // container become anonymous items. Tables keep their own
+            // anonymous-box rules (text → anonymous cell), so wrap only for
+            // flex/grid here.
+            let wrap_text_items = matches!(
+                style.display,
+                Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid
+            );
             for child_id in dom_children {
+                if wrap_text_items
+                    && matches!(doc.get(child_id).data, NodeData::Text(_))
+                {
+                    if let Some(item) = build_anon_text_item(
+                        doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode,
+                    ) {
+                        children.push(item);
+                    }
+                    continue;
+                }
                 let child_box = build_box(doc, sheet, child_id, &style, viewport, flat, counters, registry, dark_mode);
                 if !matches!(child_box.kind, BoxKind::Skip) {
                     children.push(child_box);
@@ -3676,6 +3806,19 @@ fn build_box(
                         _ => {}
                     }
                     if is_inline_content(doc, sheet, cid, &style, viewport, dark_mode) {
+                        // CSS §4.1.1 — collapsed whitespace between inline-level
+                        // siblings becomes a single inter-word gap. Record it as a
+                        // trailing space on the previous segment so wrap_inline_run
+                        // inserts exactly one space at the boundary; without it,
+                        // `<span>a</span> <span>b</span>` would join tightly.
+                        if had_ws
+                            && let Some(last) = pending.last_mut()
+                            && !last.forced_break
+                            && !last.style.white_space.preserves_whitespace()
+                            && !last.text.ends_with(|c: char| c.is_whitespace())
+                        {
+                            last.text.push(' ');
+                        }
                         collect_inline_segments(doc, sheet, cid, &style, viewport, &mut pending, flat, counters, registry, &mut need_first_letter, dark_mode);
                         had_ws = false;
                         i += 1;
@@ -5365,11 +5508,28 @@ fn lay_out(
                     }
                     // CSS Lists L3 §2.4 — position ::marker outside or inside principal block.
                     if matches!(&child.kind, BoxKind::Marker { .. }) {
-                        let (position, em, lh) = if let BoxKind::Marker { position, .. } = &child.kind {
-                            (*position, child.style.font_size, child.style.line_height)
-                        } else { unreachable!() };
+                        let (position, em, lh, marker_text) =
+                            if let BoxKind::Marker { position, text, .. } = &child.kind {
+                                (*position, child.style.font_size, child.style.line_height, text.clone())
+                            } else { unreachable!() };
                         let line_h = em * lh;
-                        let marker_w = em * 1.5; // CSS: list-style-type determines exact width
+                        // CSS Lists L3 §2.4 — the outside marker occupies the area to the
+                        // left of the principal box. The default box is `em * 1.5`; a text
+                        // marker (counter glyph or `::marker { content }`) wider than that —
+                        // e.g. a custom `@counter-style` with a long prefix/suffix like
+                        // "#1: " — must grow the box leftward so its string right-aligns at
+                        // the content edge instead of overflowing into the first word
+                        // ("#1:One" instead of "#1: One" — BUG-185).
+                        let default_w = em * 1.5;
+                        let text_w = if marker_text.is_empty() {
+                            0.0
+                        } else {
+                            measurer.map_or(0.0, |m| {
+                                let ts = child.style.tab_size * m.char_width(' ', em);
+                                measure_text_w(&marker_text, em, child.style.letter_spacing, ts, m)
+                            })
+                        };
+                        let marker_w = default_w.max(text_w); // CSS: list-style-type determines exact width
                         match position {
                             ListStylePosition::Outside => {
                                 // Out of flow: does not advance child_y.
@@ -5831,6 +5991,10 @@ fn lay_out(
             // Для строк, где все элементы используют top/bottom/middle, strut не
             // нужен — baseline вообще не задействован (Edge/Blink подтверждено).
             let strut_descent = measurer.map_or(0.0, |m| m.descent_px(b.style.font_size));
+            // Strut ascent + half x-height of the row's font: needed to locate the
+            // baseline inside the line box for `vertical-align: middle` (CSS 2.1 §10.8.1).
+            let strut_ascent = measurer.map_or(0.0, |m| m.ascent_px(b.style.font_size));
+            let x_half = measurer.map_or(0.0, |m| m.x_height_px(b.style.font_size)) / 2.0;
             // rows: (row_y, row_max_h, has_baseline, Vec<child_index>)
             let mut rows: Vec<(f32, f32, bool, Vec<usize>)> = Vec::new();
             let mut cur_x = content_x;
@@ -5907,20 +6071,53 @@ fn lay_out(
             // Baseline: dy = row_h - child_h  (bottom at baseline, strut below).
             // Bottom: dy = row_full_h - child_h (bottom at line-box bottom).
             let mut adjustments: Vec<(usize, f32)> = Vec::new();
+            let child_full_h = |idx: usize| -> f32 {
+                let child = &b.children[idx];
+                let c_em = child.style.font_size;
+                child.style.margin_top.resolve_or_zero(c_em, content_width, viewport)
+                    + child.rect.height
+                    + child.style.margin_bottom.resolve_or_zero(c_em, content_width, viewport)
+            };
             for (_, row_h, has_baseline, child_idxs) in &rows {
                 let row_strut = if *has_baseline { strut_descent } else { 0.0 };
                 let row_full_h = row_h + row_strut;
+                // Locate the baseline within the line box (distance `above` from the line-box
+                // top). `vertical-align: middle` aligns the box centre with (baseline − x/2),
+                // which coincides with the line-box centre ONLY when the baseline sits at
+                // mid-height. A tall top/bottom-aligned box pulls the baseline off-centre, so
+                // centring middle on the line box is wrong (BUG-182, TEST-24 row1). The strut
+                // (row font) covers any baseline-aligned text runs; explicit baseline-aligned
+                // inline-blocks sit with their bottom margin edge on the baseline.
+                let mut above = strut_ascent;
+                let mut below = strut_descent;
                 for &idx in child_idxs {
-                    let child = &b.children[idx];
-                    let c_em = child.style.font_size;
-                    let child_mt = child.style.margin_top.resolve_or_zero(c_em, content_width, viewport);
-                    let child_mb = child.style.margin_bottom.resolve_or_zero(c_em, content_width, viewport);
-                    let child_full_h = child_mt + child.rect.height + child_mb;
-                    let dy = match child.style.vertical_align {
-                        VerticalAlign::Baseline => row_h - child_full_h,
-                        VerticalAlign::Bottom | VerticalAlign::TextBottom => row_full_h - child_full_h,
+                    let fh = child_full_h(idx);
+                    match b.children[idx].style.vertical_align {
+                        VerticalAlign::Baseline => above = above.max(fh),
+                        VerticalAlign::Middle => {
+                            above = above.max(fh / 2.0 + x_half);
+                            below = below.max(fh / 2.0 - x_half);
+                        }
+                        _ => {}
+                    }
+                }
+                // top-aligned boxes extend the line below the baseline; bottom-aligned ones
+                // extend it above — both shift where the baseline lands.
+                for &idx in child_idxs {
+                    let fh = child_full_h(idx);
+                    match b.children[idx].style.vertical_align {
+                        VerticalAlign::Top | VerticalAlign::TextTop => below = below.max(fh - above),
+                        VerticalAlign::Bottom | VerticalAlign::TextBottom => above = above.max(fh - below),
+                        _ => {}
+                    }
+                }
+                for &idx in child_idxs {
+                    let fh = child_full_h(idx);
+                    let dy = match b.children[idx].style.vertical_align {
+                        VerticalAlign::Baseline => row_h - fh,
+                        VerticalAlign::Bottom | VerticalAlign::TextBottom => row_full_h - fh,
                         VerticalAlign::Top | VerticalAlign::TextTop => 0.0,
-                        VerticalAlign::Middle => (row_full_h - child_full_h) / 2.0,
+                        VerticalAlign::Middle => above - x_half - fh / 2.0,
                         _ => 0.0,
                     };
                     if dy > 0.001 {
@@ -6923,6 +7120,55 @@ fn box_is_column_sliceable(b: &LayoutBox) -> bool {
         && b.style.border_right_width == 0.0
 }
 
+/// CSS Multicol §7.1 — balanced column height for atomic (unsliceable) boxes.
+///
+/// Returns the smallest column height `H` such that greedily packing `outer_hs`
+/// (each box's margin-box height, in source order, opening a new column whenever
+/// the running height would exceed `H`) fits within `n_cols` columns. This is the
+/// target browsers minimise when `column-fill: balance` and items cannot be split
+/// across columns — e.g. 9 cards of varying height fill 3 columns as 3/3/3 rather
+/// than packing the first column to the container height.
+fn balanced_column_height(outer_hs: &[f32], n_cols: usize) -> f32 {
+    let total: f32 = outer_hs.iter().sum();
+    if n_cols <= 1 || outer_hs.is_empty() {
+        return total.max(1.0);
+    }
+    let max_item = outer_hs.iter().cloned().fold(0.0_f32, f32::max);
+    // Any feasible height is at least the tallest single item and at least the
+    // perfectly even split; the sum is always feasible (one column holds all).
+    let mut lo = max_item.max(total / n_cols as f32);
+    let mut hi = total.max(lo);
+    let fits = |h: f32| -> bool {
+        let mut cols = 1usize;
+        let mut cur = 0.0f32;
+        for &x in outer_hs {
+            if cur > 0.0 && cur + x > h {
+                cols += 1;
+                if cols > n_cols {
+                    return false;
+                }
+                cur = x;
+            } else {
+                cur += x;
+            }
+        }
+        true
+    };
+    // Binary search for the minimal feasible height (~0.25 px precision).
+    for _ in 0..40 {
+        if hi - lo <= 0.25 {
+            break;
+        }
+        let mid = (lo + hi) * 0.5;
+        if fits(mid) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    hi.ceil().max(1.0)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn lay_out_multicol_children(
     children: &mut Vec<LayoutBox>,
@@ -7077,34 +7323,31 @@ fn lay_out_multicol_children(
                 cur_y += seg_extent.max(0.0);
             } else {
                 // Atomic fallback: place each whole box into a column (greedy by height).
+                // In balance mode the target is the optimal balanced column height
+                // (smallest H that packs all boxes into n_cols columns) — matches how
+                // browsers distribute unsliceable items (e.g. 9 cards → 3×3, not 5/4/0).
+                // column-fill:auto fills each column to the container height instead.
                 let target_h = if balance {
-                    (total_h / n_cols as f32).ceil().max(1.0)
+                    balanced_column_height(&outer_hs, n_cols as usize)
                 } else {
                     container_h.unwrap_or_else(|| (total_h / n_cols as f32).ceil()).max(1.0)
                 };
-                // Count-based per-column cap prevents starvation when content heights are
-                // equal — but only in balance mode. column-fill:auto fills purely by height
-                // (a column may hold many short items), so the count cap must not apply there.
-                let per_col_cap = seg_idxs.len().div_ceil(n_cols as usize);
 
                 let mut col_assignment = vec![0usize; seg_idxs.len()];
                 let mut col_fill = vec![0.0f32; n_cols as usize];
-                let mut col_count = vec![0usize; n_cols as usize];
                 let mut cur_col = 0usize;
                 for (j, &oh) in outer_hs.iter().enumerate() {
                     let height_overflow = col_fill[cur_col] + oh > target_h && oh > 0.0;
-                    let count_overflow = balance && col_count[cur_col] >= per_col_cap;
                     // Never advance past an empty column: a column must hold at least one item
                     // before overflowing to the next, otherwise an item taller than target_h
                     // would skip column 0 and leave it blank (CSS Multicol §3.4 — every column
                     // box is filled in order, starting from the first).
-                    let col_nonempty = col_count[cur_col] > 0;
-                    if cur_col + 1 < n_cols as usize && col_nonempty && (height_overflow || count_overflow) {
+                    let col_nonempty = col_fill[cur_col] > 0.0;
+                    if cur_col + 1 < n_cols as usize && col_nonempty && height_overflow {
                         cur_col += 1;
                     }
                     col_assignment[j] = cur_col;
                     col_fill[cur_col] += oh;
-                    col_count[cur_col] += 1;
                 }
 
                 // Final positioning.
@@ -7547,13 +7790,20 @@ fn lay_out_flex(
 
             if is_column {
                 let inner_main = (outer_main - m_t - m_b).max(0.0);
+                // `inner_main` is the item's resolved *border-box* main size (it is
+                // derived from the preliminary border-box height and the flex
+                // grow/shrink result). Force border-box before re-layout so the value
+                // is used verbatim instead of having border+padding added on top of it
+                // for a content-box item (which double-counts the border). Mirrors the
+                // cross-axis stretch path below.
+                children[i].style.box_sizing = BoxSizing::BorderBox;
                 children[i].style.height = Some(Length::Px(inner_main));
                 lay_out(
                     &mut children[i],
                     content_x + m_l,
                     content_y + main_cursor + m_t,
                     content_width - m_l - m_r,
-                    None,
+                    Some(inner_main),
                     measurer,
                     viewport,
                     pcb,
@@ -7609,12 +7859,21 @@ fn lay_out_flex(
                 let m_b = is.margin_bottom.resolve_or_zero(iem, cb, viewport);
                 let align = if matches!(is.align_self, AlignValue::Auto) { s.align_items } else { is.align_self };
                 let outer_cross = item.rect.height + m_t + m_b;
+                // The item was laid out at the line's cross-start (`content_y +
+                // cross_cursor + m_t`). Cross alignment must move the *whole*
+                // subtree, not just `rect.y`: the item's descendants were already
+                // positioned in absolute coordinates during the main-axis pass, so
+                // shifting only `rect.y` leaves nested content (e.g. an anonymous
+                // text item's InlineRun) at the cross-start — BUG-194 (centered
+                // digit labels stuck at the box top). Same rationale as BUG-165.
                 match align {
                     AlignValue::End => {
-                        item.rect.y = content_y + cross_cursor + effective_cross - outer_cross + m_t;
+                        let new_y = content_y + cross_cursor + effective_cross - outer_cross + m_t;
+                        shift_y_box(item, new_y - item.rect.y);
                     }
                     AlignValue::Center => {
-                        item.rect.y = content_y + cross_cursor + m_t + (effective_cross - outer_cross) / 2.0;
+                        let new_y = content_y + cross_cursor + m_t + (effective_cross - outer_cross) / 2.0;
+                        shift_y_box(item, new_y - item.rect.y);
                     }
                     AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal => {
                         // CSS Flexbox §9.5: stretch applies only when the item's cross size
@@ -7631,7 +7890,19 @@ fn lay_out_flex(
                         // children were collapsed to flex-basis against an indefinite
                         // main size — they must be re-laid-out against the stretched
                         // height so they fill it.
+                        //
+                        // BUG-209: gate the re-layout on a *definite* container cross
+                        // size. When `explicit_cross` is None the effective cross size
+                        // falls back to `line_cross` (the line's own tallest item), so
+                        // the "stretch" is a no-op against the item's current height.
+                        // Re-laying-out anyway writes a resolved px `style.height` back
+                        // onto the item (below), which permanently clobbers its
+                        // `height: auto` state. A later pass that *does* have a definite
+                        // cross size then sees `is.height.is_some()` and skips the real
+                        // stretch — collapsing nested flex cells to content height
+                        // (TEST-90: cell-items stuck at ~40px instead of filling the row).
                         let relayout_column_flex = is.height.is_none()
+                            && explicit_cross.is_some()
                             && stretch_h > 0.0
                             && matches!(is.display, Display::Flex | Display::InlineFlex)
                             && matches!(
@@ -7804,12 +8075,16 @@ fn lay_out_grid(
     let inherited_rows: Option<SubgridContext> = SUBGRID_ROW_CTX.with(|c| c.borrow_mut().take());
 
     // Indices of actual items (non-Skip).
-    let item_idxs: Vec<usize> = children
+    let mut item_idxs: Vec<usize> = children
         .iter()
         .enumerate()
         .filter(|(_, c)| !matches!(c.kind, BoxKind::Skip))
         .map(|(i, _)| i)
         .collect();
+    // CSS Grid §6: grid items are placed in "modified document order" — source order
+    // reordered by the `order` property. A stable sort preserves source order among
+    // items with equal `order`, so auto-placement honours `order` like Edge does.
+    item_idxs.sort_by_key(|&i| children[i].style.order);
 
     if item_idxs.is_empty() {
         return 0.0;
@@ -7843,78 +8118,15 @@ fn lay_out_grid(
         &s.grid_template_columns
     };
 
-    // CSS Grid L3 §14: masonry layout — early dispatch before normal grid placement.
-    // `masonry` as grid_template_rows → column-masonry (most common, Pinterest-style).
-    // `masonry` as grid_template_columns → row-masonry (transposed).
+    // CSS Masonry Layout (CSS Grid L3 §14) is not shipped by any stable browser —
+    // Edge/Chrome treat `masonry` as an invalid track value and drop it, so the axis
+    // falls back to `none` (a regular auto-sized grid). We match that ground truth:
+    // strip the `masonry` sentinel from the effective track list on whichever axis
+    // carries it, then fall through to the normal grid placement algorithm below.
     let col_is_masonry = eff_col_template.first() == Some(&GridTrackSize::Masonry);
     let row_is_masonry = s.grid_template_rows.first() == Some(&GridTrackSize::Masonry);
-
-    if col_is_masonry || row_is_masonry {
-        // CSS Masonry Layout §9 — masonry-auto-flow controls placement order.
-        let sorted_idxs: Vec<usize> = {
-            let mut idxs = item_idxs.clone();
-            match s.masonry_auto_flow {
-                MasonryAutoFlow::DefiniteFirst => {
-                    // Items with an explicit grid-axis position first, then auto items.
-                    let is_definite = |i: usize| -> bool {
-                        if row_is_masonry {
-                            !matches!(children[i].style.grid_column_start, GridLine::Auto)
-                        } else {
-                            !matches!(children[i].style.grid_row_start, GridLine::Auto)
-                        }
-                    };
-                    idxs.sort_by_key(|&i| if is_definite(i) { 0usize } else { 1 });
-                }
-                MasonryAutoFlow::Next => { /* source order — no-op */ }
-                MasonryAutoFlow::Ordered => {
-                    idxs.sort_by_key(|&i| children[i].style.order);
-                }
-            }
-            idxs
-        };
-
-        let (track_count, track_gap) = if row_is_masonry {
-            // Grid axis = columns (defined by grid_template_columns), masonry axis = rows.
-            (eff_col_template.len().max(1), col_gap)
-        } else {
-            // Grid axis = rows (defined by grid_template_rows), masonry axis = columns.
-            (s.grid_template_rows.len().max(1), row_gap)
-        };
-        let total_track_gap = track_gap * track_count.saturating_sub(1) as f32;
-        let track_size = ((content_width - total_track_gap) / track_count as f32).max(0.0);
-        let item_gap = if row_is_masonry { row_gap } else { col_gap };
-
-        // Step 1: lay out all items at track_size to establish their intrinsic height.
-        for &i in &sorted_idxs {
-            lay_out(&mut children[i], content_x, content_y, track_size, None, measurer, viewport, pcb, hp, false);
-        }
-
-        // Step 2: greedy waterfall placement — each item placed in the track with minimum height.
-        let mut track_heights = vec![0.0_f32; track_count];
-        for &i in &sorted_idxs {
-            let min_track = track_heights
-                .iter()
-                .enumerate()
-                .min_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|(idx, _)| idx)
-                .unwrap_or(0);
-
-            if row_is_masonry {
-                children[i].rect.x = content_x + min_track as f32 * (track_size + track_gap);
-                children[i].rect.y = content_y + track_heights[min_track];
-            } else {
-                // Row-masonry: column positions waterfall, row positions from explicit tracks.
-                children[i].rect.x = content_x + track_heights[min_track];
-                children[i].rect.y = content_y + min_track as f32 * (track_size + track_gap);
-            }
-            children[i].rect.width = track_size;
-            track_heights[min_track] += children[i].rect.height + item_gap;
-        }
-
-        // Total height = max track accumulation (subtract trailing gap).
-        let total_h = track_heights.iter().cloned().fold(0.0_f32, f32::max);
-        return (total_h - item_gap).max(0.0);
-    }
+    let eff_col_template: &[GridTrackSize] = if col_is_masonry { &[] } else { eff_col_template };
+    let eff_row_template: &[GridTrackSize] = if row_is_masonry { &[] } else { &s.grid_template_rows };
 
     // Determine explicit track counts.
     // Subgrid sentinel `[Subgrid]` is a single-element vec meaning "inherit all parent tracks";
@@ -8071,7 +8283,7 @@ fn lay_out_grid(
             }
         } else {
             // Column flow: fill top-to-bottom, wrap to next column.
-            let n_explicit_rows = s.grid_template_rows.len().max(1) as u32;
+            let n_explicit_rows = eff_row_template.len().max(1) as u32;
             let fixed_rs = if rs != 0 { rs } else { 0 };
             let fixed_re = if rs != 0 { re } else { 0 };
 
@@ -8198,7 +8410,7 @@ fn lay_out_grid(
     } else {
         (0..n_rows)
             .map(|r| {
-                match grid_track(r, &s.grid_template_rows, &s.grid_auto_rows) {
+                match grid_track(r, eff_row_template, &s.grid_auto_rows) {
                     GridTrackSize::Length(l) => l.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0),
                     GridTrackSize::Minmax(min, _) => min.resolve_fixed(em, content_width, viewport).unwrap_or(0.0),
                     GridTrackSize::Subgrid => 0.0,
@@ -8263,7 +8475,7 @@ fn lay_out_grid(
         if r0 < row_heights.len()
             && inherited_rows.is_none()
             && matches!(
-                grid_track(r0 as u32, &s.grid_template_rows, &s.grid_auto_rows),
+                grid_track(r0 as u32, eff_row_template, &s.grid_auto_rows),
                 GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent | GridTrackSize::Fr(_)
             )
         {
@@ -8282,12 +8494,12 @@ fn lay_out_grid(
         let container_h = s.height.as_ref().and_then(|h| h.resolve(em, Some(content_width), viewport));
         let free_row = container_h.map(|h| (h - fixed_row_total).max(0.0)).unwrap_or(0.0);
         let total_row_fr: f32 = (0..n_rows)
-            .map(|r| grid_track(r, &s.grid_template_rows, &s.grid_auto_rows).fr().unwrap_or(0.0))
+            .map(|r| grid_track(r, eff_row_template, &s.grid_auto_rows).fr().unwrap_or(0.0))
             .sum();
         if total_row_fr > 0.0 && free_row > 0.0 {
             let fr_h = free_row / total_row_fr;
             for r in 0..n_rows {
-                if let Some(f) = grid_track(r, &s.grid_template_rows, &s.grid_auto_rows).fr() {
+                if let Some(f) = grid_track(r, eff_row_template, &s.grid_auto_rows).fr() {
                     row_heights[r as usize] = (f * fr_h).max(row_heights[r as usize]);
                 }
             }
@@ -8378,7 +8590,10 @@ fn lay_out_grid(
                 item.rect.y = cell_y + (cell_h - item_outer_h) / 2.0 + m_t;
             }
             AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal => {
-                if item.rect.height < cell_h - m_t - m_b {
+                // CSS Grid §11.2: `stretch` only grows items whose used block size is
+                // `auto`; an explicit `height` is preserved (the item is top-aligned in
+                // the cell, leaving free space below — like Edge).
+                if is.height.is_none() && item.rect.height < cell_h - m_t - m_b {
                     item.rect.height = (cell_h - m_t - m_b).max(item.rect.height);
                 }
                 item.rect.y = cell_y + m_t;
@@ -8931,20 +9146,32 @@ fn wrap_inline_run(
     let mut current_line: Vec<InlineFrag> = Vec::new();
     // CSS Text L3 §7.1: text-indent только на первой строке.
     let mut current_x = text_indent;
+    // CSS Text L3 §4.1.1 — whether the previous segment ended with collapsible
+    // whitespace, so the first word of the next segment gets one inter-word gap.
+    // A segment boundary with no whitespace on either side joins tightly (e.g.
+    // `<q>` `::before` open-quote glued to the quoted text, `<a>link</a>!`).
+    let mut prev_trailing_ws = false;
 
     for seg in segments {
         // Forced line break from \n in white-space: pre/pre-wrap text.
         if seg.forced_break {
             result.push(std::mem::take(&mut current_line));
             current_x = 0.0;
+            prev_trailing_ws = false;
             continue;
         }
+
+        // Does this segment's source text carry collapsible whitespace at its
+        // edges? Used to decide the boundary gap with the previous segment.
+        let seg_lead_ws = seg.text.starts_with(|c: char| c.is_whitespace());
+        let seg_trail_ws = seg.text.ends_with(|c: char| c.is_whitespace());
 
         // Pre-mode: whitespace preserved, no word wrapping, tabs are tab_size wide.
         if white_space.preserves_whitespace() {
             if seg.text.is_empty() {
                 continue;
             }
+            prev_trailing_ws = false;
             let style = &seg.style;
             let em = style.font_size;
             let ls = style.letter_spacing;
@@ -8976,12 +9203,14 @@ fn wrap_inline_run(
         // Image segments are fixed-width, non-breakable inline replaced elements.
         if let Some(img_src) = &seg.img_src {
             let img_w = seg.img_width;
-            let gap = if current_line.is_empty() { 0.0 } else { space_w };
+            // A space precedes the image only when collapsible whitespace did.
+            let img_space = if prev_trailing_ws { space_w } else { 0.0 };
+            let gap = if current_line.is_empty() { 0.0 } else { img_space };
             if !current_line.is_empty() && current_x + gap + seg.pre_space + img_w > max_width {
                 result.push(std::mem::take(&mut current_line));
                 current_x = 0.0;
             }
-            let line_gap = if current_line.is_empty() { 0.0 } else { space_w };
+            let line_gap = if current_line.is_empty() { 0.0 } else { img_space };
             current_x += line_gap + seg.pre_space;
             let em = seg.style.font_size;
             let pad_l = seg.style.padding_left.resolve_or_zero(em, max_width, viewport);
@@ -9002,12 +9231,19 @@ fn wrap_inline_run(
                 source_char_offset: seg.source_char_offset,
             });
             current_x += img_w + seg.post_space;
+            // Trailing whitespace after the image (a collapsed ws-only node) is
+            // recorded as a trailing space on its alt text by collect_inline_segments.
+            prev_trailing_ws = seg_trail_ws;
             continue;
         }
 
         // Collect words; split_whitespace preserves U+00AD within tokens.
         let raw_words: Vec<&str> = seg.text.split_whitespace().collect();
         if raw_words.is_empty() {
+            // Whitespace-only segment (rare in collapsing mode): propagate the gap.
+            if seg_lead_ws || seg_trail_ws {
+                prev_trailing_ws = true;
+            }
             continue;
         }
         let style = &seg.style;
@@ -9046,7 +9282,16 @@ fn wrap_inline_run(
             let post = if is_seg_last { seg.post_space } else { 0.0 };
 
             let word_w = measure_text_w_varied(&display_word, style.font_size, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
-            let gap = if current_line.is_empty() { 0.0 } else { inter_word };
+            // CSS Text L3 §4.1.1 — inter-word gap before this word. Words within a
+            // segment are always separated (they were split on real whitespace);
+            // the first word of a segment is separated from the previous fragment
+            // only when collapsible whitespace bordered the segment boundary.
+            let word_inter = if is_seg_first && !(prev_trailing_ws || seg_lead_ws) {
+                0.0
+            } else {
+                inter_word
+            };
+            let gap = if current_line.is_empty() { 0.0 } else { word_inter };
 
             // Wrap: слово не влезает (но первое слово строки добавляем всегда).
             let needs_wrap = !current_line.is_empty()
@@ -9113,7 +9358,7 @@ fn wrap_inline_run(
                 // CSS Text L3 §5.1: word-break: break-all — char-break at the
                 // current line position before wrapping.
                 if word_break == WordBreak::BreakAll {
-                    let gap_w = if current_line.is_empty() { 0.0 } else { inter_word };
+                    let gap_w = if current_line.is_empty() { 0.0 } else { word_inter };
                     current_x += gap_w + pre;
                     let mut rest = display_word.as_str();
                     let mut first_chunk = true;
@@ -9164,7 +9409,7 @@ fn wrap_inline_run(
                 || matches!(overflow_wrap, OverflowWrap::BreakWord | OverflowWrap::Anywhere))
                 && word_w > max_width;
             if ow_char_break {
-                let line_gap_ow = if current_line.is_empty() { 0.0 } else { inter_word };
+                let line_gap_ow = if current_line.is_empty() { 0.0 } else { word_inter };
                 current_x += line_gap_ow + pre;
                 let mut rest = display_word.as_str();
                 let mut first_chunk = true;
@@ -9203,7 +9448,7 @@ fn wrap_inline_run(
                 continue;
             }
 
-            let line_gap = if current_line.is_empty() { 0.0 } else { inter_word };
+            let line_gap = if current_line.is_empty() { 0.0 } else { word_inter };
             current_x += line_gap + pre;
             let frag_x = current_x;
 
@@ -9213,9 +9458,13 @@ fn wrap_inline_run(
             let merged = if no_box {
                 if let Some(last) = current_line.last_mut() {
                     if last.style.text_rendering_eq(style) && last.padding_right == 0.0 {
-                        last.text.push(' ');
+                        // No separating space when the boundary joined tightly
+                        // (word_inter == 0): the glyphs abut, e.g. `“`+`auto`.
+                        if word_inter > 0.0 {
+                            last.text.push(' ');
+                        }
                         last.text.push_str(&display_word);
-                        last.width += inter_word + word_w;
+                        last.width += word_inter + word_w;
                         current_x += word_w;
                         true
                     } else {
@@ -9249,6 +9498,8 @@ fn wrap_inline_run(
 
             current_x += post;
         }
+        // The next segment joins with a gap only if this one ended in whitespace.
+        prev_trailing_ws = seg_trail_ws;
     }
 
     if !current_line.is_empty() {
@@ -9376,6 +9627,10 @@ fn apply_inline_vertical_align(lines: &mut [Vec<InlineFrag>], line_h: f32) {
 /// через layout_measured().
 fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
     let mut frags: Vec<InlineFrag> = Vec::new();
+    // CSS Text L3 §4.1.1 — same boundary rule as wrap_inline_run: two segments
+    // join with a single space only when collapsible whitespace bordered them;
+    // otherwise they abut (e.g. `<q>` open-quote glued to the quoted text).
+    let mut prev_trailing_ws = false;
     for seg in segments {
         // Image segment: emit with pre-computed width, don't merge with text.
         if let Some(img_src) = &seg.img_src {
@@ -9394,15 +9649,24 @@ fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
                 source_node: seg.source_node,
                 source_char_offset: seg.source_char_offset,
             });
+            prev_trailing_ws = seg.text.ends_with(|c: char| c.is_whitespace());
             continue;
         }
+        let seg_lead_ws = seg.text.starts_with(|c: char| c.is_whitespace());
+        let seg_trail_ws = seg.text.ends_with(|c: char| c.is_whitespace());
         let text: String = seg.text.split_whitespace().collect::<Vec<_>>().join(" ");
         if text.is_empty() {
+            if seg_lead_ws || seg_trail_ws {
+                prev_trailing_ws = true;
+            }
             continue;
         }
+        let boundary_space = prev_trailing_ws || seg_lead_ws;
         let merged = if let Some(last) = frags.last_mut() {
             if last.style.text_rendering_eq(&seg.style) && last.img_src.is_none() {
-                last.text.push(' ');
+                if boundary_space {
+                    last.text.push(' ');
+                }
                 last.text.push_str(&text);
                 true
             } else {
@@ -9428,6 +9692,7 @@ fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
                 source_char_offset: seg.source_char_offset,
             });
         }
+        prev_trailing_ws = seg_trail_ws;
     }
     if frags.is_empty() { vec![] } else { vec![frags] }
 }
@@ -10567,7 +10832,7 @@ mod tests {
     fn margin_auto_left_only_pushes_to_right() {
         // margin-left: auto, margin-right: 0 → element flush-right.
         let html = r#"<div id="box"></div>"#;
-        let css = "#box { width: 200px; height: 50px; margin-left: auto; margin-right: 0; }";
+        let css = "body{margin:0}#box { width: 200px; height: 50px; margin-left: auto; margin-right: 0; }";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
         let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
@@ -10580,7 +10845,7 @@ mod tests {
     fn margin_auto_right_only_no_x_shift() {
         // margin-right: auto, margin-left: 20px → element at x=20.
         let html = r#"<div id="box"></div>"#;
-        let css = "#box { width: 200px; height: 50px; margin-left: 20px; margin-right: auto; }";
+        let css = "body{margin:0}#box { width: 200px; height: 50px; margin-left: 20px; margin-right: auto; }";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
         let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
@@ -10593,7 +10858,7 @@ mod tests {
     fn margin_auto_no_explicit_width_fills_container() {
         // Without explicit width, auto margins resolve to 0 (width takes remaining).
         let html = r#"<div id="box"></div>"#;
-        let css = "#box { height: 50px; margin: 0 auto; }";
+        let css = "body{margin:0}#box { height: 50px; margin: 0 auto; }";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
         let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
@@ -10608,7 +10873,7 @@ mod tests {
         // position:sticky element with margin: 20px auto 0 in 1022px container.
         // Static view: sticky behaves like normal flow → centering applies.
         let html = r#"<div id="wrap"><div id="sticky"></div></div>"#;
-        let css = "#wrap { width: 1022px; position: relative; } \
+        let css = "body{margin:0} #wrap { width: 1022px; position: relative; } \
                    #sticky { position: sticky; top: 10px; width: 600px; height: 60px; margin: 20px auto 0; }";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
@@ -10657,7 +10922,7 @@ mod tests {
     fn margin_auto_float_not_centered() {
         // float:left with margin: 0 auto must NOT be centered — floats ignore auto margins.
         let html = r#"<div id="box"></div>"#;
-        let css = "#box { float: left; width: 100px; height: 50px; margin: 0 auto; }";
+        let css = "body{margin:0}#box { float: left; width: 100px; height: 50px; margin: 0 auto; }";
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
         let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
@@ -11665,6 +11930,70 @@ mod tests {
         );
     }
 
+    /// Concatenates the post-`wrap_inline_run` fragment text of every InlineRun
+    /// in document order. Unlike `collect_seg_text` (pre-wrap segments), this
+    /// reflects how adjacent inline boxes were joined — tightly or with a single
+    /// collapsed space (CSS Text L3 §4.1.1).
+    fn collect_frag_text(b: &super::LayoutBox, out: &mut String) {
+        if let super::BoxKind::InlineRun { lines, .. } = &b.kind {
+            for line in lines {
+                for f in line {
+                    out.push_str(&f.text);
+                }
+            }
+        }
+        for c in &b.children {
+            collect_frag_text(c, out);
+        }
+    }
+
+    #[test]
+    fn bug216_open_close_quote_abut_quoted_text() {
+        // BUG-216: open-quote / close-quote glue to the quoted text with no
+        // inter-word space (the ::before/::after content and the text share the
+        // <q> inline box; no source whitespace separates them).
+        let root = super::layout(
+            &lumen_html_parser::parse("<p><q>auto quotes</q></p>"),
+            &lumen_css_parser::parse(
+                "q::before{content:open-quote} q::after{content:close-quote}",
+            ),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut text = String::new();
+        collect_frag_text(&root, &mut text);
+        assert_eq!(
+            text, "\u{201C}auto quotes\u{201D}",
+            "quotes must abut the quoted text: {text:?}",
+        );
+    }
+
+    #[test]
+    fn bug216_adjacent_inline_boxes_join_tight() {
+        // BUG-216: no source whitespace between inline boxes → no spurious space.
+        let root = super::layout(
+            &lumen_html_parser::parse("<p><span>foo</span><span>bar</span></p>"),
+            &lumen_css_parser::parse(""),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut text = String::new();
+        collect_frag_text(&root, &mut text);
+        assert_eq!(text, "foobar", "adjacent inline boxes must not gain a space: {text:?}");
+    }
+
+    #[test]
+    fn bug216_inter_box_whitespace_collapses_to_one_space() {
+        // The regression guard's complement: a whitespace-only text node between
+        // inline boxes must still collapse to exactly one space (CSS Text L3 §4.1.1).
+        let root = super::layout(
+            &lumen_html_parser::parse("<p><span>foo</span> <span>bar</span></p>"),
+            &lumen_css_parser::parse(""),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        let mut text = String::new();
+        collect_frag_text(&root, &mut text);
+        assert_eq!(text, "foo bar", "collapsed inter-box whitespace must remain one space: {text:?}");
+    }
+
     // ── BUG-196: ::before / ::after on a flex container generate flex items ──
 
     /// Recursively counts boxes whose background equals `rgba`.
@@ -11735,6 +12064,40 @@ mod tests {
             markers[0].style.color.r > 200,
             "marker should inherit red color from ul, got r={}", markers[0].style.color.r,
         );
+    }
+
+    #[test]
+    fn wide_marker_box_grows_and_right_aligns_at_content_edge() {
+        // BUG-185: a marker string wider than the default `em*1.5` box (e.g. a long
+        // `@counter-style` prefix/suffix like "#1: ") must grow the marker box leftward
+        // so its right edge meets the content edge — otherwise the string overflows
+        // into the first content word ("#1:Item" instead of "#1: Item").
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        fn find_run(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { return Some(b); }
+            for c in &b.children { if let Some(f) = find_run(c) { return Some(f); } }
+            None
+        }
+        let root = super::layout_measured(
+            &lumen_html_parser::parse("<ul><li>Item</li></ul>"),
+            &lumen_css_parser::parse("li::marker { content: \"#1: \"; }"),
+            lumen_core::geom::Size::new(800.0, 600.0),
+            &Fixed8,
+        );
+        let mut markers = Vec::new();
+        find_markers(&root, &mut markers);
+        let m = markers.first().expect("expected a marker");
+        // "#1: " = 4 chars × 8px (Fixed8) = 32px > default 24px → box widened.
+        assert!(m.rect.width >= 31.0,
+            "wide marker box must grow to fit the text, got width={}", m.rect.width);
+        // Right edge of the marker aligns with the content (InlineRun) left edge.
+        let run = find_run(&root).expect("content InlineRun");
+        let marker_right = m.rect.x + m.rect.width;
+        assert!((marker_right - run.rect.x).abs() <= 1.0,
+            "marker right edge {marker_right} must meet content edge {}", run.rect.x);
     }
 
     #[test]
@@ -11899,7 +12262,8 @@ mod tests {
                  </div>",
             ),
             &lumen_css_parser::parse(
-                ".cell{position:relative;width:300px;height:300px;overflow:hidden}\
+                "body{margin:0}\
+                 .cell{position:relative;width:300px;height:300px;overflow:hidden}\
                  .fl{float:left;width:120px;height:120px;background:#ed8936}\
                  .cl{clear:both;margin-top:30px;height:80px;background:#4fd1c5}",
             ),
@@ -11924,7 +12288,8 @@ mod tests {
                  </div>",
             ),
             &lumen_css_parser::parse(
-                ".cell{position:relative;width:300px;height:300px;overflow:hidden}\
+                "body{margin:0}\
+                 .cell{position:relative;width:300px;height:300px;overflow:hidden}\
                  .f{float:left;width:130px;height:90px;margin:8px;background:#4299e1}\
                  .g{float:left;width:130px;height:90px;margin:8px;background:#fc8181}",
             ),
@@ -12399,6 +12764,61 @@ mod tests {
         );
     }
 
+    fn collect_inline_blocks<'a>(b: &'a super::LayoutBox, out: &mut Vec<&'a super::LayoutBox>) {
+        if b.style.display == crate::style::Display::InlineBlock {
+            out.push(b);
+        }
+        for c in &b.children {
+            collect_inline_blocks(c, out);
+        }
+    }
+
+    #[test]
+    fn bug182_vertical_align_middle_uses_baseline_not_line_center() {
+        // BUG-182 / TEST-24 row1: three inline-blocks of different heights with
+        // vertical-align top/middle/bottom. A 100px top-aligned box pulls the baseline
+        // up off the line-box centre, so `vertical-align: middle` (centre aligned to
+        // baseline − x-height/2) must NOT be centred on the line box. With default font
+        // metrics (ascent 0.8em, x-height 0.5em at 16px) the 60px middle box lands with
+        // its top at the line-box top (dy = 0), matching Edge — not at dy = 20 (line
+        // centre). The bottom-aligned 40px box sits at dy = 60.
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 {
+                8.0
+            }
+        }
+        let html = r#"<div class="row"><div class="ib top"></div><div class="ib mid"></div><div class="ib bot"></div></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(
+            ".row { width: 400px; height: 120px; } \
+             .ib { display: inline-block; width: 80px; } \
+             .top { vertical-align: top; height: 100px; } \
+             .mid { vertical-align: middle; height: 60px; } \
+             .bot { vertical-align: bottom; height: 40px; }",
+        );
+        let root = super::layout_measured(&doc, &sheet, Size::new(400.0, 300.0), &Fixed8);
+        let mut ibs = Vec::new();
+        collect_inline_blocks(&root, &mut ibs);
+        assert_eq!(ibs.len(), 3, "expected 3 inline-blocks, got {}", ibs.len());
+        let top = ibs.iter().find(|b| (b.rect.height - 100.0).abs() < 0.5).unwrap();
+        let mid = ibs.iter().find(|b| (b.rect.height - 60.0).abs() < 0.5).unwrap();
+        let bot = ibs.iter().find(|b| (b.rect.height - 40.0).abs() < 0.5).unwrap();
+        // Middle box top aligns with the line-box top (baseline at 34px from top,
+        // box centre at baseline − x/2 = 30px ⇒ top at 0), NOT centred at dy = 20px.
+        assert!(
+            (mid.rect.y - top.rect.y).abs() < 1.0,
+            "middle box should align to line top (baseline-correct), got dy={}",
+            mid.rect.y - top.rect.y
+        );
+        // Bottom-aligned box bottom touches the line-box bottom (top.y + 100).
+        assert!(
+            ((bot.rect.y + bot.rect.height) - (top.rect.y + 100.0)).abs() < 1.0,
+            "bottom box bottom should touch line bottom, got {}",
+            bot.rect.y + bot.rect.height
+        );
+    }
+
     #[test]
     fn content_visibility_auto_in_viewport_lays_out_children() {
         crate::content_visibility::set_cv_scroll(0.0, 0.0);
@@ -12617,6 +13037,41 @@ mod tests {
     }
 
     #[test]
+    fn flex_text_child_is_wrapped_and_centered() {
+        // BUG-194: raw text directly inside a flex item must be wrapped in an
+        // anonymous (blockified) flex item (CSS Flexbox §4) and rendered. With
+        // align-items:center the item — and its InlineRun — must be centered on the
+        // cross axis: the cross-alignment shift moves the whole subtree, not just
+        // the item's own rect (previously the InlineRun stayed at the box top).
+        fn find_inline_run(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) {
+                return Some(b);
+            }
+            for c in &b.children {
+                if let Some(f) = find_inline_run(c) {
+                    return Some(f);
+                }
+            }
+            None
+        }
+        let html = r#"<div id="box">1</div>"#;
+        let css = "body{margin:0} #box{display:flex;align-items:center;justify-content:center;width:50px;height:50px;font-size:12px}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let box_b = find_by_id_all(&root, &doc, "box").expect("box");
+        let run = find_inline_run(box_b).expect("anonymous InlineRun with text was dropped");
+        // One line of 12px text (~14.4px line-box) centered in a 50px box → center ≈ 25.
+        assert!(run.rect.height > 0.0, "run has a non-zero line box");
+        let center = run.rect.y + run.rect.height / 2.0;
+        assert!(
+            (center - 25.0).abs() < 3.0,
+            "text not vertically centered: center={center}, run.y={}, h={}",
+            run.rect.y, run.rect.height
+        );
+    }
+
+    #[test]
     fn flex_align_content_stretch_repositions_lines() {
         // BUG-107: explicit align-content:stretch grows lines AND shifts later lines
         // down by the cumulative growth of preceding lines (previously the growth was
@@ -12796,6 +13251,34 @@ mod tests {
         assert_eq!(a.rect.height, 200.0, "first item in stretched column should grow to 200, got {}", a.rect.height);
         assert_eq!(b.rect.height, 200.0, "second item in stretched column should grow to 200, got {}", b.rect.height);
         assert_eq!(b.rect.y, 200.0, "second item starts after first; b.y={}", b.rect.y);
+    }
+
+    #[test]
+    fn flex_nested_stretch_after_indefinite_pass_fills_row() {
+        // BUG-209 (TEST-90): a column-flex item (#col) nested inside a row-flex cell
+        // (#cell) that is itself a flex item of an outer column (#outer). The outer
+        // column lays #cell out twice: first an indefinite preliminary pass (the row's
+        // cross size is unknown), then a real pass with #cell stretched to its grown
+        // height. On the preliminary pass the stretch fell back to the line's own
+        // height and wrote a px `style.height` back onto #col, clobbering its
+        // `height:auto`; the real pass then skipped the genuine stretch and #col
+        // collapsed to content height. Here #col must fill the row's full cross size.
+        let html = r#"<div id="outer"><div id="cell"><div id="col">x</div></div></div>"#;
+        let css = "body{margin:0} \
+                   #outer{display:flex;flex-direction:column;height:300px;width:400px} \
+                   #cell{flex:1;display:flex} \
+                   #col{flex:1;display:flex;flex-direction:column}";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let cell = find_by_id_all(&root, &doc, "cell").expect("cell");
+        assert_eq!(cell.rect.height, 300.0, "row cell should fill the outer column (300), got {}", cell.rect.height);
+        let col = find_by_id_all(&root, &doc, "col").expect("col");
+        assert_eq!(
+            col.rect.height, 300.0,
+            "nested column item must stretch to the cell's cross size (300), not collapse to content; got {}",
+            col.rect.height
+        );
     }
 
     #[test]
@@ -13194,7 +13677,7 @@ mod tests {
                     <use href=\"#r1\" x=\"20\" y=\"20\"/>\
                     <use href=\"#r1\" x=\"100\" y=\"60\"/></svg>";
         let doc = lumen_html_parser::parse(html);
-        let sheet = lumen_css_parser::parse("");
+        let sheet = lumen_css_parser::parse("body{margin:0}");
         let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
 
         fn collect_rects(b: &super::LayoutBox, acc: &mut Vec<super::Rect>) {
@@ -14455,7 +14938,10 @@ mod tests {
         assert!((sx - sy).abs() < 1e-4, "meet must be uniform");
     }
 
-    // ── masonry-auto-flow integration tests ──────────────────────────────────
+    // ── grid `masonry` fallback integration tests ────────────────────────────
+    // CSS masonry is not shipped by stable browsers (Edge ignores `grid-template-*:
+    // masonry`). We match that: the axis falls back to `none` → a regular auto-sized
+    // grid that still honours the `order` property. These tests lock that behaviour.
 
     fn masonry_grid_children(css: &str, vp: f32) -> Vec<super::LayoutBox> {
         let html = r#"<div id="grid"><div id="a"></div><div id="b"></div><div id="c"></div></div>"#;
@@ -14473,16 +14959,15 @@ mod tests {
     }
 
     #[test]
-    fn masonry_auto_flow_ordered_respects_css_order() {
-        // 3-column masonry, items have explicit `order` overriding source order.
-        // c has order:-1 → placed first in track 0.
-        // a has order:0, b has order:0 → placed in source order after c.
+    fn grid_masonry_fallback_respects_order() {
+        // `grid-template-rows: masonry` is ignored (Edge fallback) → regular 3-column
+        // grid. The `order` property still reorders items: c (order:-1) is placed
+        // first, so it lands in column 1 (leftmost).
         let css = r#"
             #grid {
                 display: grid;
                 grid-template-columns: 1fr 1fr 1fr;
                 grid-template-rows: masonry;
-                masonry-auto-flow: ordered;
                 width: 300px;
                 gap: 0px;
             }
@@ -14491,27 +14976,23 @@ mod tests {
             #c { height: 40px; order: -1; }
         "#;
         let children = masonry_grid_children(css, 300.0);
-        // With ordered: item c (order=-1) → placed first into track 0.
-        // After that, a (order=0) → track 1 (min height), b (order=0) → track 2 (min height).
-        // → track0 contains c at y=0, track1 contains a, track2 contains b.
         let c_box = children.iter().find(|b| b.rect.height == 40.0);
-        assert!(c_box.is_some(), "item c (height=40) not found in masonry children");
+        assert!(c_box.is_some(), "item c (height=40) not found in grid children");
         if let Some(c) = c_box {
-            // c has order=-1, placed first → lands in track 0 (leftmost x=0).
-            assert!(c.rect.x < 110.0, "c with order=-1 should be in track 0, got x={}", c.rect.x);
+            // c has order=-1, placed first → column 1 (leftmost x≈0).
+            assert!(c.rect.x < 110.0, "c with order=-1 should be in column 1, got x={}", c.rect.x);
         }
     }
 
     #[test]
-    fn masonry_auto_flow_next_source_order() {
-        // With masonry-auto-flow: next, items appear in DOM source order.
-        // item a (height=100) → track 0; item b (height=60) → track 1; item c (height=40) → track 2.
+    fn grid_masonry_fallback_source_order() {
+        // `grid-template-rows: masonry` ignored → regular 3-column grid, items in
+        // source order: a → column 1, b → column 2, c → column 3.
         let css = r#"
             #grid {
                 display: grid;
                 grid-template-columns: 1fr 1fr 1fr;
                 grid-template-rows: masonry;
-                masonry-auto-flow: next;
                 width: 300px;
                 gap: 0px;
             }
@@ -14525,8 +15006,8 @@ mod tests {
         assert!(a_box.is_some(), "item a (height=100) not found");
         assert!(b_box.is_some(), "item b (height=60) not found");
         if let (Some(a), Some(b)) = (a_box, b_box) {
-            // a first → track 0 (x near 0), b second → track 1 (x near 100).
-            assert!(a.rect.x < b.rect.x, "a should be in track 0 (x<b.x), got a.x={} b.x={}", a.rect.x, b.rect.x);
+            // a first → column 1 (x≈0), b second → column 2 (x≈100).
+            assert!(a.rect.x < b.rect.x, "a should be in column 1 (x<b.x), got a.x={} b.x={}", a.rect.x, b.rect.x);
         }
     }
 
@@ -14748,6 +15229,77 @@ mod tests {
         } else {
             panic!("expected InlineRun");
         }
+    }
+
+    /// BUG-212: an absolute `line-height` (`<length>`/`<percentage>`) must keep its
+    /// computed line box constant when `font-size-adjust` rescales the used
+    /// font-size. `line_height` is ratio-encoded (×font-size), so the ratio is
+    /// corrected inversely. Here `line-height: 100px` over font-size 60 with a tall
+    /// font (aspect 0.8) gives used size 60·0.5/0.8 = 37.5; the line box must remain
+    /// 100px, not collapse to 37.5·(100/60) = 62.5.
+    #[test]
+    fn font_size_adjust_keeps_absolute_line_height_fixed() {
+        use crate::style::{ComputedStyle, FontSizeAdjust};
+        let m = AspectMeasurer(0.8);
+        let mut s = ComputedStyle::root();
+        s.font_size = 60.0;
+        s.line_height = 100.0 / 60.0; // `line-height: 100px` → ratio
+        s.line_height_is_relative = false; // absolute length
+        s.font_size_adjust = FontSizeAdjust::Value(0.5);
+        let mut b = super::LayoutBox {
+            node: lumen_dom::NodeId::from_index(0),
+            rect: super::Rect::new(0.0, 0.0, 0.0, 0.0),
+            style: s,
+            kind: super::BoxKind::Block,
+            children: vec![],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            dirty: Default::default(),
+        };
+        super::apply_font_size_adjust(&mut b, &m);
+        assert!((b.style.font_size - 37.5).abs() < 0.01, "used size {}", b.style.font_size);
+        let line_box = b.style.font_size * b.style.line_height;
+        assert!(
+            (line_box - 100.0).abs() < 0.01,
+            "absolute line-height must stay 100px, got {line_box}"
+        );
+    }
+
+    /// BUG-212 counterpart: a relative `line-height` (unitless `<number>`) MUST
+    /// scale with the adjusted used font-size — the ratio is left untouched.
+    /// `line-height: 1.5` over used size 37.5 → line box 56.25.
+    #[test]
+    fn font_size_adjust_scales_relative_number_line_height() {
+        use crate::style::{ComputedStyle, FontSizeAdjust};
+        let m = AspectMeasurer(0.8);
+        let mut s = ComputedStyle::root();
+        s.font_size = 60.0;
+        s.line_height = 1.5; // unitless number → relative
+        s.line_height_is_relative = true;
+        s.font_size_adjust = FontSizeAdjust::Value(0.5);
+        let mut b = super::LayoutBox {
+            node: lumen_dom::NodeId::from_index(0),
+            rect: super::Rect::new(0.0, 0.0, 0.0, 0.0),
+            style: s,
+            kind: super::BoxKind::Block,
+            children: vec![],
+            col_span: 1,
+            row_span: 1,
+            svg_group_transform: None,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            dirty: Default::default(),
+        };
+        super::apply_font_size_adjust(&mut b, &m);
+        assert!((b.style.line_height - 1.5).abs() < 0.001, "ratio must be unchanged");
+        let line_box = b.style.font_size * b.style.line_height;
+        assert!(
+            (line_box - 56.25).abs() < 0.01,
+            "relative line-height must scale to 56.25, got {line_box}"
+        );
     }
 
     // --- is_open_details ---

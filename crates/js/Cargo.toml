@@ -59,4 +59,11 @@ aes-gcm = "0.10"
 # Lightweight JSON parser; reuses serde which is already in the workspace.
 serde_json = "1.0"
 
+[features]
+# Реальный WebGPU-бэкенд (U-4c, Stage 1): включает wgpu-устройство в lumen-paint и
+# регистрирует нативы `_lumen_webgpu_*`, через которые JS-шим navigator.gpu получает
+# настоящую информацию об адаптере и валидацию WGSL. Без фичи navigator.gpu остаётся
+# чистым in-memory JS-шимом (Phase 0). Включается shell-фичей `quickjs`.
+webgpu = ["lumen-paint/backend-wgpu"]
+
 [dev-dependencies]

@@ -781,7 +781,9 @@ impl ColorFloat {
     /// Out-of-gamut значения клипируются в [0, 255].
     pub fn to_srgb_color(self) -> Color {
         let (lr, lg, lb) = match self.space {
-            ColorSpace::Srgb => {
+            // Lab is a PCS encoding, not an RGB `ColorFloat` channel space, so it
+            // never reaches this RGB→sRGB path; decode as sRGB to stay panic-free.
+            ColorSpace::Srgb | ColorSpace::Lab => {
                 let lr = srgb_gamma_decode(self.r);
                 let lg = srgb_gamma_decode(self.g);
                 let lb = srgb_gamma_decode(self.b);
@@ -811,7 +813,9 @@ impl ColorFloat {
     /// Линейные sRGB-каналы [0..1] для прямой передачи в GPU без квантизации.
     pub fn to_linear_srgb(self) -> [f32; 4] {
         let (lr, lg, lb) = match self.space {
-            ColorSpace::Srgb => {
+            // Lab is a PCS encoding, not an RGB `ColorFloat` channel space, so it
+            // never reaches this RGB→sRGB path; decode as sRGB to stay panic-free.
+            ColorSpace::Srgb | ColorSpace::Lab => {
                 let lr = srgb_gamma_decode(self.r);
                 let lg = srgb_gamma_decode(self.g);
                 let lb = srgb_gamma_decode(self.b);
@@ -2255,6 +2259,15 @@ pub struct ComputedStyle {
     pub background_color: Option<CssColor>,
     pub font_size: f32,
     pub line_height: f32,
+    /// CSS2 §10.8.1 / CSS Fonts L5 §4 — whether `line-height` was specified as a
+    /// relative value (`normal` or a unitless `<number>`) that scales with the
+    /// used font-size, vs. an absolute `<length>`/`<percentage>` whose computed
+    /// line box is frozen. `line_height` is always stored as a ratio (×font-size);
+    /// this flag records which kind it was so `font-size-adjust` (which mutates the
+    /// used font-size post-cascade) can keep an absolute line box constant instead
+    /// of re-scaling it. Initial: `true` (`normal` is relative). Inherited with
+    /// `line_height`.
+    pub line_height_is_relative: bool,
     /// CSS Rhythmic Sizing L1 §2 — `line-height-step` step unit in px.
     /// When `> 0`, each line box's used height is rounded up to the closest
     /// multiple of this value and the extra space is distributed as half-leading.
@@ -2557,9 +2570,10 @@ pub struct ComputedStyle {
     /// `None` (False), `Some(true)` = `all` (элемент растягивается через
     /// все колонки). Не наследуется. Phase 0: parse+store.
     pub column_span_all: bool,
-    /// CSS Multi-column L1 §6.2 — `column-fill: auto | balance`. `false`
-    /// = auto (default — заполняет последовательно), `true` = balance.
-    /// Не наследуется.
+    /// CSS Multi-column L1 §6.2 — `column-fill: balance | auto`. `true`
+    /// = balance (spec default — распределяет содержимое поровну между
+    /// колонками), `false` = auto (заполняет колонки последовательно до
+    /// высоты контейнера). Не наследуется.
     pub column_fill_balance: bool,
     /// CSS Fragmentation L3 §3.1 — `break-before`. Phase 0 — enum со
     /// значениями auto/avoid/always/page/column/region. Не наследуется.
@@ -2723,6 +2737,17 @@ pub struct ComputedStyle {
     /// CSS Masking L1 §6.4 — `mask-mode: alpha | luminance | match-source`.
     /// Non-inherited. `match-source` resolves to `Alpha` for `<image>` sources.
     pub mask_mode: MaskMode,
+    /// CSS Masking L1 §4.4 — `mask-position`. Default `50% 50%`. Non-inherited.
+    pub mask_position: ObjectPosition,
+    /// CSS Masking L1 §4.5 — `mask-origin: border-box | padding-box | content-box`.
+    /// Default `BorderBox`. Non-inherited.
+    pub mask_origin: BackgroundOrigin,
+    /// CSS Masking L1 §4.6 — `mask-clip`. Same keywords as background-clip.
+    /// Default `BorderBox`. Non-inherited.
+    pub mask_clip: BackgroundClip,
+    /// CSS Masking L1 §4.7 — `mask-composite: add | subtract | intersect | exclude`.
+    /// Non-inherited. Default `Add`.
+    pub mask_composite: MaskComposite,
     /// CSS Scrollbars 1 — `scrollbar-width: auto | thin | none`.
     pub scrollbar_width: ScrollbarWidth,
     /// CSS Scrollbars 1 — `scrollbar-color: auto | <color> <color>`
@@ -3774,11 +3799,16 @@ pub enum ParsedGradient {
         /// True when the original function was `repeating-linear-gradient`.
         repeating: bool,
     },
-    /// `radial-gradient(...)` — elliptical gradient centred at `(cx, cy)`.
+    /// `radial-gradient(...)` — radial gradient centred at `(cx, cy)`.
     Radial {
         /// Centre as fraction of box width/height ([0, 1] = [left/top, right/bottom]).
         center_x_pct: f32,
         center_y_pct: f32,
+        /// Ending shape — `circle` or `ellipse` (CSS Images L3 §3.5). The radii
+        /// are resolved against the box at paint time via [`radial_gradient_radii`].
+        shape: RadialShape,
+        /// Sizing keyword for the ending shape (default `farthest-corner`).
+        size: RadialSize,
         stops: Vec<GradientStop>,
         /// True when the original function was `repeating-radial-gradient`.
         repeating: bool,
@@ -3800,6 +3830,73 @@ pub enum ParsedGradient {
     },
     /// Fallback for any future gradient variant not yet rendered.
     Unknown(String),
+}
+
+/// CSS Images L3 §3.5 — ending-shape of a `radial-gradient`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RadialShape {
+    /// `circle` — isotropic, a single radius along every direction.
+    Circle,
+    /// `ellipse` (also the default when no shape keyword is given) — independent
+    /// horizontal and vertical radii.
+    Ellipse,
+}
+
+/// CSS Images L3 §3.5 — sizing keyword controlling the radii of a
+/// `radial-gradient`'s ending shape. Explicit `<length>` radii are not yet
+/// modelled; they fall back to [`RadialSize::FarthestCorner`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RadialSize {
+    /// Ending shape meets the side(s) nearest the centre.
+    ClosestSide,
+    /// Ending shape passes through the corner nearest the centre.
+    ClosestCorner,
+    /// Ending shape meets the side(s) farthest from the centre.
+    FarthestSide,
+    /// Ending shape passes through the corner farthest from the centre (default).
+    FarthestCorner,
+}
+
+/// CSS Images L3 §3.5.1 — resolves a `radial-gradient` ending shape to concrete
+/// `(radius_x, radius_y)` in CSS px for a box `w×h` with centre at
+/// `(cx_pct·w, cy_pct·h)`. For [`RadialShape::Circle`] both radii are equal.
+/// Corner sizes use the aspect ratio of the matching side size and scale the
+/// ellipse to pass through the chosen corner (CSS Images L3 §3.5.1, last list
+/// item). Radii are clamped to ≥ 1 px to avoid a degenerate gradient.
+#[must_use]
+pub fn radial_gradient_radii(
+    shape: RadialShape, size: RadialSize, cx_pct: f32, cy_pct: f32, w: f32, h: f32,
+) -> (f32, f32) {
+    let cx = cx_pct * w;
+    let cy = cy_pct * h;
+    let near_x = cx.abs().min((w - cx).abs());
+    let far_x = cx.abs().max((w - cx).abs());
+    let near_y = cy.abs().min((h - cy).abs());
+    let far_y = cy.abs().max((h - cy).abs());
+    // Ellipse with aspect ratio `sx:sy` scaled to pass through corner (cdx, cdy).
+    let through_corner = |sx: f32, sy: f32, cdx: f32, cdy: f32| -> (f32, f32) {
+        let a = (sx / sy.max(1e-6)).max(1e-6); // rx / ry
+        let ry = ((cdx / a).powi(2) + cdy * cdy).sqrt().max(1.0);
+        ((a * ry).max(1.0), ry)
+    };
+    match shape {
+        RadialShape::Circle => {
+            let r = match size {
+                RadialSize::ClosestSide => near_x.min(near_y),
+                RadialSize::FarthestSide => far_x.max(far_y),
+                RadialSize::ClosestCorner => near_x.hypot(near_y),
+                RadialSize::FarthestCorner => far_x.hypot(far_y),
+            }
+            .max(1.0);
+            (r, r)
+        }
+        RadialShape::Ellipse => match size {
+            RadialSize::ClosestSide => (near_x.max(1.0), near_y.max(1.0)),
+            RadialSize::FarthestSide => (far_x.max(1.0), far_y.max(1.0)),
+            RadialSize::ClosestCorner => through_corner(near_x, near_y, near_x, near_y),
+            RadialSize::FarthestCorner => through_corner(far_x, far_y, far_x, far_y),
+        },
+    }
 }
 
 /// CSS Backgrounds L3 §3.1 / CSS Images L4 §4 — `background-image` value.
@@ -3856,6 +3953,35 @@ impl BackgroundRepeat {
     }
 }
 
+/// CSS Backgrounds L3 §3.5 — one axis of an explicit `background-size` value.
+///
+/// `Px`/`Percent` are resolved against the positioning area extent along this
+/// axis at paint time; `Auto` derives the extent from the other axis (preserving
+/// the image's intrinsic aspect ratio).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BgSizeAxis {
+    /// Derive this axis from the other axis / the image's intrinsic ratio.
+    Auto,
+    /// Fixed length in CSS px.
+    Px(f32),
+    /// Percentage of the positioning area along this axis (fraction `0.0..`).
+    Percent(f32),
+}
+
+impl BgSizeAxis {
+    /// Resolve to a concrete px extent against `area` (the positioning-area
+    /// size along this axis). Returns `None` for `Auto` (caller derives it from
+    /// the other axis / intrinsic ratio).
+    #[must_use]
+    pub fn resolve(self, area: f32) -> Option<f32> {
+        match self {
+            BgSizeAxis::Auto => None,
+            BgSizeAxis::Px(v) => Some(v),
+            BgSizeAxis::Percent(p) => Some(p * area),
+        }
+    }
+}
+
 /// CSS Backgrounds L3 §3.5 — `background-size`.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub enum BackgroundSize {
@@ -3863,8 +3989,9 @@ pub enum BackgroundSize {
     Auto,
     Cover,
     Contain,
-    /// Width / Height в px. None для height = auto.
-    Length(f32, Option<f32>),
+    /// Explicit width / height, each `auto` | `<length>` | `<percentage>`.
+    /// Percentages resolve against the positioning area at paint time.
+    Length(BgSizeAxis, BgSizeAxis),
 }
 
 /// CSS Backgrounds L3 §3.6 — `background-attachment`.
@@ -4961,6 +5088,29 @@ pub enum MaskMode {
     Luminance,
 }
 
+/// CSS Masking L1 §4.7 — `mask-composite`. Controls how multiple mask layers
+/// are composited together. Single value for now; multi-layer cycling deferred.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MaskComposite {
+    #[default]
+    Add,
+    Subtract,
+    Intersect,
+    Exclude,
+}
+
+impl MaskComposite {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "add" => Some(Self::Add),
+            "subtract" => Some(Self::Subtract),
+            "intersect" => Some(Self::Intersect),
+            "exclude" => Some(Self::Exclude),
+            _ => None,
+        }
+    }
+}
+
 impl ComputedStyle {
     /// CSS 2.1 §17.6.1 / Basic UI L4 §5.2 — **used** value `outline-width`
     /// равно 0, если `outline-style` равен `none` (это spec, не аппроксимация).
@@ -5005,6 +5155,7 @@ impl ComputedStyle {
             background_color: None,
             font_size: 16.0,
             line_height: 1.2,
+            line_height_is_relative: true,
             line_height_step: 0.0,
             font_style: FontStyle::Normal,
             font_weight: FontWeight::NORMAL,
@@ -5114,7 +5265,7 @@ impl ComputedStyle {
             border_spacing_h: 0.0,
             border_spacing_v: 0.0,
             column_span_all: false,
-            column_fill_balance: false,
+            column_fill_balance: true,
             break_before: BreakValue::Auto,
             break_after: BreakValue::Auto,
             break_inside: BreakValue::Auto,
@@ -5184,6 +5335,10 @@ impl ComputedStyle {
             mask_repeat: BackgroundRepeat::Repeat,
             mask_size: BackgroundSize::Auto,
             mask_mode: MaskMode::Alpha,
+            mask_position: ObjectPosition::default(),
+            mask_origin: BackgroundOrigin::BorderBox,
+            mask_clip: BackgroundClip::BorderBox,
+            mask_composite: MaskComposite::Add,
             scrollbar_width: ScrollbarWidth::Auto,
             scrollbar_color: None,
             scrollbar_gutter: ScrollbarGutter::Auto,
@@ -5303,6 +5458,7 @@ pub fn compute_style(
         direction: inherited.direction,
         font_size: inherited.font_size,
         line_height: inherited.line_height,
+        line_height_is_relative: inherited.line_height_is_relative,
         line_height_step: inherited.line_height_step,
         font_style: inherited.font_style,
         font_weight: inherited.font_weight,
@@ -5422,7 +5578,7 @@ pub fn compute_style(
         gap_rule_style: BorderStyle::None,
         gap_rule_color: CssColor::CurrentColor,
         column_span_all: false,
-        column_fill_balance: false,
+        column_fill_balance: true,
         break_before: BreakValue::Auto,
         break_after: BreakValue::Auto,
         break_inside: BreakValue::Auto,
@@ -5506,6 +5662,10 @@ pub fn compute_style(
         mask_repeat: BackgroundRepeat::Repeat,
         mask_size: BackgroundSize::Auto,
         mask_mode: MaskMode::Alpha,
+        mask_position: ObjectPosition::default(),
+        mask_origin: BackgroundOrigin::BorderBox,
+        mask_clip: BackgroundClip::BorderBox,
+        mask_composite: MaskComposite::Add,
         // CSS Scrollbars — scrollbar-width/-color inherited;
         // scrollbar-gutter не наследуется.
         scrollbar_width: inherited.scrollbar_width,
@@ -5681,6 +5841,8 @@ pub fn compute_style(
     // Set font-size here (before the author font-size pre-pass) so author CSS overrides it.
     apply_ua_heading_style(doc, node, inherited, &mut style);
     apply_ua_hr_style(doc, node, &mut style);
+    // UA stylesheet: <body> → margin: 8px. HTML Rendering §14.3.3. Author CSS перекроет.
+    apply_ua_body_margin(doc, node, &mut style);
     // UA stylesheet: form controls — display, intrinsic dimensions, border,
     // background, and foreground color. HTML5 §15.5. Author CSS поверх перекроет.
     //
@@ -6152,6 +6314,24 @@ pub fn compute_style(
         doc, node, &mut style, em_basis, viewport, parent_weight, inherited, is_quirks,
     );
 
+    // CSS Basic UI L4 §5 — pre-scan the cascade-winning `appearance` value
+    // (matched is cascade-sorted; later = higher priority, inline included) so
+    // that `appearance: none` strips UA-default border/background/padding
+    // *before* the author cascade. Stripping after the cascade clobbered
+    // author-specified border/background/padding (BUG-211).
+    let mut appearance_none = false;
+    for (_, _, _, _, _, _, decl) in &matched {
+        match decl.property.as_str() {
+            "appearance" | "-webkit-appearance" | "-moz-appearance" => {
+                appearance_none = decl.value.trim().eq_ignore_ascii_case("none");
+            }
+            _ => {}
+        }
+    }
+    if appearance_none {
+        strip_ua_appearance_box_styling(doc, node, &mut style);
+    }
+
     for (_, _, _, _, _, _, decl) in &matched {
         // CSS Cascade L5 §6.4.6: a `revert-layer` declaration that survived the
         // pre-pass was overridden by a higher layer for the same property, so it
@@ -6183,10 +6363,6 @@ pub fn compute_style(
 
     // CSS Logical Properties L1 — resolve logical properties to physical.
     resolve_logical_properties(&mut style);
-
-    // CSS Basic UI L4 §5 — appearance: none removes UA styling from form controls.
-    // Applied after CSS declarations so author `appearance: none` takes effect.
-    apply_ua_appearance(doc, node, &mut style);
 
     // CSS Basic UI L4 §4.4 — field-sizing: content post-pass.
     // apply_ua_form_controls ran before the cascade and may have set explicit UA
@@ -6423,6 +6599,7 @@ pub fn compute_pseudo_element_style(
     style.direction = parent.direction;
     style.font_size = parent.font_size;
     style.line_height = parent.line_height;
+    style.line_height_is_relative = parent.line_height_is_relative;
     style.line_height_step = parent.line_height_step;
     style.font_style = parent.font_style;
     style.font_weight = parent.font_weight;
@@ -9084,6 +9261,29 @@ fn apply_ua_hr_style(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
     style.margin_right = LengthOrAuto::Auto;
 }
 
+/// UA stylesheet для `<body>` (HTML Rendering §14.3.3): `body { margin: 8px }`.
+///
+/// Без этого правила `<body>` прижимается вплотную к краю viewport, и весь
+/// контент в нормальном потоке сдвинут на 8px относительно настоящих браузеров.
+/// Применяется ДО CSS-каскада, поэтому author `body { margin: 0 }` или
+/// `* { margin: 0 }` перекрывает его (как в большинстве graphic-тестов с reset).
+///
+/// BUG-204: страницы anchor-positioning (тесты 85–89) без CSS-reset расходились
+/// с Edge на ~2% — Edge сдвигал `.__f`-рамку на 8px (body margin), Lumen рисовал
+/// её вплотную к краю.
+fn apply_ua_body_margin(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    if name.local.as_str() != "body" {
+        return;
+    }
+    style.margin_top = LengthOrAuto::Length(Length::Px(8.0));
+    style.margin_right = LengthOrAuto::Length(Length::Px(8.0));
+    style.margin_bottom = LengthOrAuto::Length(Length::Px(8.0));
+    style.margin_left = LengthOrAuto::Length(Length::Px(8.0));
+}
+
 /// UA stylesheet для `<h1>`–`<h6>` (HTML Rendering §15.3.3 «Sections and headings»).
 ///
 /// Браузеры задают заголовкам увеличенный `font-size` (em относительно
@@ -9256,14 +9456,18 @@ fn apply_ua_form_controls_field_sizing_clear(doc: &Document, node: NodeId, style
     }
 }
 
-/// CSS Basic UI L4 §5 — when `appearance: none`, removes UA styling
-/// (border, padding, background) from form controls.
+/// CSS Basic UI L4 §5 — strips UA-default styling (border, padding, background)
+/// from a form control under `appearance: none`.
+///
+/// Called *before* the author cascade (gated on the pre-scanned cascade-winning
+/// `appearance` value, see `compute_style`) so author-specified
+/// border/background/padding declarations apply on top of the cleared UA
+/// defaults. Running this *after* the cascade (the pre-BUG-211 behaviour)
+/// clobbered author values, leaving content-sized fields with width-0 borders
+/// and a transparent background.
+///
 /// Applies to: <input>, <button>, <select>, <textarea>, <progress>, <meter>.
-fn apply_ua_appearance(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
-    if style.appearance != Appearance::None {
-        return;
-    }
-
+fn strip_ua_appearance_box_styling(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
     let NodeData::Element { name, .. } = &doc.get(node).data else { return; };
     match name.local.as_str() {
         "input" | "button" | "select" | "textarea" | "progress" | "meter" => {
@@ -11419,6 +11623,44 @@ fn apply_declaration(
                 style.max_height = Some(len);
             }
         }
+        // CSS Logical Properties L1 — min/max inline-size / block-size.
+        // Phase 0: horizontal-tb writing mode maps these to physical properties.
+        "min-inline-size" => {
+            if val.trim() == "auto" {
+                style.min_width = None;
+            } else if let Some(len) = parse_sizing_length(val, is_quirks)
+                && !matches!(&len, Length::Px(v) if *v < 0.0)
+            {
+                style.min_width = Some(len);
+            }
+        }
+        "max-inline-size" => {
+            if val.trim() == "none" {
+                style.max_width = None;
+            } else if let Some(len) = parse_sizing_length(val, is_quirks)
+                && !matches!(&len, Length::Px(v) if *v < 0.0)
+            {
+                style.max_width = Some(len);
+            }
+        }
+        "min-block-size" => {
+            if val.trim() == "auto" {
+                style.min_height = None;
+            } else if let Some(len) = parse_sizing_length(val, is_quirks)
+                && !matches!(&len, Length::Px(v) if *v < 0.0)
+            {
+                style.min_height = Some(len);
+            }
+        }
+        "max-block-size" => {
+            if val.trim() == "none" {
+                style.max_height = None;
+            } else if let Some(len) = parse_sizing_length(val, is_quirks)
+                && !matches!(&len, Length::Px(v) if *v < 0.0)
+            {
+                style.max_height = Some(len);
+            }
+        }
         "font-size" => {
             // Обрабатывается в pre-pass; в этой ветке пропускаем.
         }
@@ -11441,6 +11683,36 @@ fn apply_declaration(
             let list = parse_font_family(val);
             if !list.is_empty() {
                 style.font_family = list;
+            }
+        }
+        "font" => {
+            // CSS Fonts L4 §6.10 — `font` shorthand (BUG-114). `<font-size>`
+            // уже резолвлен в pre-pass (`apply_font_size`); здесь применяем
+            // остальные longhand-ы. Shorthand сбрасывает ВСЕ управляемые
+            // longhand-ы в initial (CSS Cascade L4 §3.1), затем выставляет
+            // явно заданные компоненты.
+            if let Some(parts) = parse_font_shorthand(val) {
+                style.font_style = parts.style.unwrap_or(FontStyle::Normal);
+                style.font_variant =
+                    if parts.small_caps { FontVariant::SmallCaps } else { FontVariant::Normal };
+                style.font_weight = parts
+                    .weight
+                    .as_deref()
+                    .and_then(|w| parse_font_weight(w, parent_font_weight))
+                    .unwrap_or(FontWeight::NORMAL);
+                style.font_stretch = parts.stretch.unwrap_or(FontStretch::NORMAL);
+                // line-height: initial `normal` ≈ 1.2 relative (как в root()).
+                style.line_height = 1.2;
+                style.line_height_is_relative = true;
+                if let Some(lh) = parts.line_height.as_deref()
+                    && lh != "normal"
+                {
+                    apply_line_height_value(style, lh, em_basis, viewport);
+                }
+                let fam = parse_font_family(&parts.family);
+                if !fam.is_empty() {
+                    style.font_family = fam;
+                }
             }
         }
         "font-variation-settings" => {
@@ -11871,6 +12143,26 @@ fn apply_declaration(
                 };
             }
         }
+        "grid-column-gap" => {
+            // CSS Grid L1 §7.3: legacy alias for column-gap (deprecated).
+            if let Some(len) = parse_length_q(val, is_quirks) {
+                style.column_gap = if matches!(&len, Length::Px(v) if *v < 0.0) {
+                    Length::Px(0.0)
+                } else {
+                    len
+                };
+            }
+        }
+        "grid-row-gap" => {
+            // CSS Grid L1 §7.3: legacy alias for row-gap (deprecated).
+            if let Some(len) = parse_length_q(val, is_quirks) {
+                style.row_gap = if matches!(&len, Length::Px(v) if *v < 0.0) {
+                    Length::Px(0.0)
+                } else {
+                    len
+                };
+            }
+        }
         "gap" => {
             // Shorthand: `<row-gap> <column-gap>?` (если column отсутствует,
             // = row).
@@ -12232,20 +12524,9 @@ fn apply_declaration(
         "background-size" => {
             // CSS Backgrounds L3 §3.5 — comma-separated list (cycling).
             let pieces = split_top_level_commas(val.trim());
-            let sizes: Vec<BackgroundSize> = pieces.iter().map(|s| {
-                let s = s.trim();
-                let parts: Vec<&str> = s.split_whitespace().collect();
-                let first = parts.first().copied().unwrap_or("auto");
-                let mut size = parse_background_size_single(first, em_basis, viewport, is_quirks);
-                // Второй токен как height
-                if let (BackgroundSize::Length(w, None), Some(&h_s)) = (size, parts.get(1))
-                    && !h_s.eq_ignore_ascii_case("auto")
-                    && let Some(h) = resolve_box_length(h_s, em_basis, viewport, is_quirks)
-                {
-                    size = BackgroundSize::Length(w, Some(h));
-                }
-                size
-            }).collect();
+            let sizes: Vec<BackgroundSize> = pieces.iter()
+                .map(|s| parse_background_size_value(s, em_basis, viewport, is_quirks))
+                .collect();
             if sizes.is_empty() { return; }
             if style.background_layers.is_empty() {
                 style.background_layers.push(BackgroundLayer::default());
@@ -13026,28 +13307,33 @@ fn apply_declaration(
                 style.mask_mode = MaskMode::Alpha;
             }
         }
-        "mask-size" => {
-            let trimmed = val.trim();
-            if trimmed.eq_ignore_ascii_case("auto") {
-                style.mask_size = BackgroundSize::Auto;
-            } else if trimmed.eq_ignore_ascii_case("cover") {
-                style.mask_size = BackgroundSize::Cover;
-            } else if trimmed.eq_ignore_ascii_case("contain") {
-                style.mask_size = BackgroundSize::Contain;
-            } else {
-                let parts: Vec<&str> = trimmed.split_whitespace().collect();
-                let w = parts.first().and_then(|s| resolve_box_length(s, em_basis, viewport, is_quirks));
-                let h = parts.get(1).and_then(|s| {
-                    if s.eq_ignore_ascii_case("auto") {
-                        None
-                    } else {
-                        resolve_box_length(s, em_basis, viewport, is_quirks)
-                    }
-                });
-                if let Some(w) = w {
-                    style.mask_size = BackgroundSize::Length(w, h);
-                }
+        "mask-position" => {
+            // CSS Masking L1 §4.4 — `<position>` same as background-position.
+            if let Some(pos) = ObjectPosition::parse(val.trim(), em_basis, viewport) {
+                style.mask_position = pos;
             }
+        }
+        "mask-origin" => {
+            // CSS Masking L1 §4.5 — `border-box | padding-box | content-box`.
+            if let Some(o) = BackgroundOrigin::parse(val.trim()) {
+                style.mask_origin = o;
+            }
+        }
+        "mask-clip" => {
+            // CSS Masking L1 §4.6 — same keywords as background-clip.
+            if let Some(c) = BackgroundClip::parse(val.trim()) {
+                style.mask_clip = c;
+            }
+        }
+        "mask-composite" => {
+            // CSS Masking L1 §4.7 — `add | subtract | intersect | exclude`.
+            // Phase 0: store single value; multi-layer cycling deferred.
+            if let Some(c) = MaskComposite::parse(val.trim()) {
+                style.mask_composite = c;
+            }
+        }
+        "mask-size" => {
+            style.mask_size = parse_background_size_value(val, em_basis, viewport, is_quirks);
         }
         "scrollbar-width" => {
             if let Some(v) = ScrollbarWidth::parse(val) {
@@ -13297,46 +13583,7 @@ fn apply_declaration(
             }
         }
         "line-height" => {
-            // `1.5` (unitless) — коэффициент. `1.5em` — то же самое.
-            // `150%` — то же самое. `24px` / `5vh` — конкретная высота,
-            // переводим в коэффициент / font_size.
-            if let Ok(v) = val.parse::<f32>() {
-                style.line_height = v;
-            } else if let Some(len) = parse_length(val) {
-                match &len {
-                    Length::Px(v) => style.line_height = v / style.font_size,
-                    Length::Em(v) => style.line_height = *v,
-                    Length::Rem(v) => {
-                        style.line_height = v * ROOT_FONT_SIZE / style.font_size;
-                    }
-                    Length::Percent(v) => style.line_height = v / 100.0,
-                    Length::Vh(_)
-                    | Length::Vw(_)
-                    | Length::Vmin(_)
-                    | Length::Vmax(_)
-                    | Length::Cqw(_)
-                    | Length::Cqh(_)
-                    | Length::Cqi(_)
-                    | Length::Cqb(_)
-                    | Length::Cqmin(_)
-                    | Length::Cqmax(_)
-                    | Length::Calc(_) => {
-                        // Резолвим в px и переводим в коэффициент.
-                        // Для calc() — то же самое: если выражение содержит
-                        // только unitless (`calc(1 + 0.5)`) → результат уже
-                        // коэффициент, но мы не умеем сейчас отличить unitless
-                        // от px; делим всегда на font_size — это даёт верный
-                        // ответ для length-результатов и неверный для чистых
-                        // чисел внутри calc. Phase 0 ограничение: для чистых
-                        // чисел используйте bare-form `line-height: 1.5`.
-                        if let Some(px) = len.resolve(em_basis, None, viewport) {
-                            style.line_height = px / style.font_size;
-                        }
-                    }
-                    // Intrinsic keywords not meaningful for line-height — ignore.
-                    Length::MinContent | Length::MaxContent | Length::FitContent(_) => {}
-                }
-            }
+            apply_line_height_value(style, val, em_basis, viewport);
         }
         "line-height-step" => {
             // CSS Rhythmic Sizing L1 §2 — `<length>` step unit (`none`/`normal`/`0`
@@ -14519,6 +14766,11 @@ fn apply_css_wide_keyword(
         }
         "line-height" => {
             style.line_height = if inh { inherited.line_height } else { init.line_height };
+            style.line_height_is_relative = if inh {
+                inherited.line_height_is_relative
+            } else {
+                init.line_height_is_relative
+            };
         }
         "line-height-step" => {
             style.line_height_step =
@@ -16578,34 +16830,147 @@ fn parse_bg_image_value(s: &str) -> Option<BackgroundImage> {
     None
 }
 
-/// CSS Images L4 §4 — parse `cross-fade(<image-a>, <image-b>, <percentage>)`.
+/// Parse a `cross-fade()` / `-webkit-cross-fade()` function into the two-image
+/// blend `(image-a, image-b, t)` where `t ∈ 0.0..=1.0` is the fraction occupied
+/// by `image-b` (`0.0` = only `image-a`, `1.0` = only `image-b`).
 ///
-/// Supports both `cross-fade(…)` and `-webkit-cross-fade(…)` syntax.
-/// Returns `None` if `s` does not start with the function prefix or has an
-/// unexpected argument count.
+/// Two grammars are accepted, selected by the vendor prefix:
+///
+/// * **`-webkit-cross-fade(<from>, <to>, <percentage>)`** — the legacy
+///   three-argument form. `<percentage>` is the blend progress from `<from>`
+///   (`0%`) to `<to>` (`100%`). Kept for content that targets the prefixed
+///   syntax.
+/// * **`cross-fade( [<percentage>? && <image>]# )`** — the standard
+///   CSS Images L4 §4 form. Only the common two-image case is supported; each
+///   argument is an `<image>` with an optional opacity `<percentage>` in either
+///   order. A bare percentage with no image is invalid.
+///
+/// The legacy three-argument `cross-fade(<from>, <to>, <percentage>)` **without**
+/// the `-webkit-` prefix is rejected (returns `None`) — the trailing bare
+/// `<percentage>` is not a valid `<image>`. This matches reference browsers
+/// (Edge/Chromium drop the declaration), so the caller renders nothing.
+///
+/// Returns `None` when `s` is not a cross-fade function or violates the grammar
+/// for its prefix; the declaration is then dropped by the caller.
 fn parse_cross_fade(s: &str) -> Option<(BackgroundImage, BackgroundImage, f32)> {
     let s = s.trim();
-    let lower = s.to_ascii_lowercase();
-    let inner = if lower.starts_with("cross-fade(") && s.ends_with(')') {
-        &s["cross-fade(".len()..s.len() - 1]
-    } else if lower.starts_with("-webkit-cross-fade(") && s.ends_with(')') {
-        &s["-webkit-cross-fade(".len()..s.len() - 1]
-    } else {
+    if !s.ends_with(')') {
         return None;
-    };
+    }
+    let lower = s.to_ascii_lowercase();
+    if lower.starts_with("-webkit-cross-fade(") {
+        let inner = &s["-webkit-cross-fade(".len()..s.len() - 1];
+        return parse_webkit_cross_fade(inner);
+    }
+    if lower.starts_with("cross-fade(") {
+        let inner = &s["cross-fade(".len()..s.len() - 1];
+        return parse_l4_cross_fade(inner);
+    }
+    None
+}
+
+/// Legacy `-webkit-cross-fade(<from>, <to>, <percentage>)` — exactly three
+/// arguments; `<percentage>` is the blend progress toward `<to>`.
+fn parse_webkit_cross_fade(inner: &str) -> Option<(BackgroundImage, BackgroundImage, f32)> {
     let parts = split_top_level_commas(inner);
     if parts.len() != 3 {
         return None;
     }
     let a = parse_bg_image_value(parts[0].trim())?;
     let b = parse_bg_image_value(parts[1].trim())?;
-    let t_str = parts[2].trim();
-    let t = if let Some(pct) = t_str.strip_suffix('%') {
-        pct.trim().parse::<f32>().ok()? / 100.0
-    } else {
-        t_str.parse::<f32>().ok()?
-    };
+    let t = parse_cf_percentage(parts[2].trim())?;
     Some((a, b, t.clamp(0.0, 1.0)))
+}
+
+/// Standard L4 `cross-fade( [<percentage>? && <image>]# )` — two-image form.
+///
+/// Each argument carries an optional opacity percentage. The returned `t` is the
+/// fraction of `image-b`: an image's opacity is its declared percentage, and an
+/// image without one takes the remaining weight.
+fn parse_l4_cross_fade(inner: &str) -> Option<(BackgroundImage, BackgroundImage, f32)> {
+    let parts = split_top_level_commas(inner);
+    if parts.len() != 2 {
+        return None;
+    }
+    let (img_a, pct_a) = parse_cf_image(parts[0].trim())?;
+    let (img_b, pct_b) = parse_cf_image(parts[1].trim())?;
+    let t = match (pct_a, pct_b) {
+        (None, None) => 0.5,
+        (Some(pa), None) => 1.0 - pa,
+        (None, Some(pb)) => pb,
+        (Some(pa), Some(pb)) => {
+            let sum = pa + pb;
+            if sum > 0.0 { pb / sum } else { 0.5 }
+        }
+    };
+    Some((img_a, img_b, t.clamp(0.0, 1.0)))
+}
+
+/// Parse one L4 `<cf-image>` = `<percentage>? && <image>` (tokens in any order).
+///
+/// Returns the image plus its optional opacity fraction (`0.0..=1.0`). `None`
+/// when there is no `<image>` (e.g. a bare percentage) or the tokens don't form
+/// a valid image-plus-optional-percentage pair.
+fn parse_cf_image(part: &str) -> Option<(BackgroundImage, Option<f32>)> {
+    let tokens = split_top_level_ws(part);
+    match tokens.as_slice() {
+        [tok] => {
+            // A lone token must be an image; a bare percentage is invalid.
+            Some((parse_bg_image_value(tok)?, None))
+        }
+        [a, b] => {
+            // `<percentage> <image>` or `<image> <percentage>`.
+            if let Some(p) = parse_cf_percentage(a) {
+                Some((parse_bg_image_value(b)?, Some(p.clamp(0.0, 1.0))))
+            } else if let Some(p) = parse_cf_percentage(b) {
+                Some((parse_bg_image_value(a)?, Some(p.clamp(0.0, 1.0))))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Parse a cross-fade percentage/number argument into a `0.0..=1.0` fraction.
+/// `50%` → `0.5`, `0.5` → `0.5`. `None` if the token is not a number.
+fn parse_cf_percentage(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(pct) = s.strip_suffix('%') {
+        Some(pct.trim().parse::<f32>().ok()? / 100.0)
+    } else {
+        s.parse::<f32>().ok()
+    }
+}
+
+/// Split `s` on top-level ASCII whitespace, keeping parenthesised groups
+/// (e.g. `url(a b)`, `linear-gradient(…)`) intact. Empty tokens are dropped.
+fn split_top_level_ws(s: &str) -> Vec<&str> {
+    let bytes = s.as_bytes();
+    let mut tokens = Vec::new();
+    let mut start = 0;
+    let mut depth = 0usize;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            b' ' | b'\t' | b'\n' | b'\r' if depth == 0 => {
+                let tok = s[start..i].trim();
+                if !tok.is_empty() {
+                    tokens.push(tok);
+                }
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let tok = s[start..].trim();
+    if !tok.is_empty() {
+        tokens.push(tok);
+    }
+    tokens
 }
 
 /// CSS Backgrounds L3 §3 — разбить строку одного слоя на токены.
@@ -16660,20 +17025,59 @@ fn is_bg_position_token(s: &str) -> bool {
         || s.parse::<f32>().is_ok_and(|v| v == 0.0)
 }
 
+/// CSS Backgrounds L3 §3.5 — parse one axis token of `background-size` /
+/// `mask-size`: `auto` → `Auto`, `<percentage>` → `Percent` (fraction),
+/// `<length>` → `Px`. Returns `None` if the token isn't a valid axis value.
+fn parse_bg_size_axis(s: &str, em_basis: f32, viewport: Size, is_quirks: bool) -> Option<BgSizeAxis> {
+    let s = s.trim();
+    if s.eq_ignore_ascii_case("auto") {
+        return Some(BgSizeAxis::Auto);
+    }
+    if let Some(pct) = s.strip_suffix('%') {
+        return pct.trim().parse::<f32>().ok().map(|v| BgSizeAxis::Percent(v / 100.0));
+    }
+    resolve_box_length(s, em_basis, viewport, is_quirks).map(BgSizeAxis::Px)
+}
+
 /// CSS Backgrounds L3 §3.5 — parse background-size от одного токена
-/// (`auto` / `cover` / `contain` / длина).
+/// (`auto` / `cover` / `contain` / длина / процент). Height axis = `Auto`;
+/// the caller may combine a following token for the second axis.
 fn parse_background_size_single(s: &str, em_basis: f32, viewport: Size, is_quirks: bool) -> BackgroundSize {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "auto" => BackgroundSize::Auto,
-        "cover" => BackgroundSize::Cover,
-        "contain" => BackgroundSize::Contain,
-        other => {
-            if let Some(w) = resolve_box_length(other, em_basis, viewport, is_quirks) {
-                BackgroundSize::Length(w, None)
-            } else {
-                BackgroundSize::Auto
-            }
-        }
+    let t = s.trim();
+    if t.eq_ignore_ascii_case("cover") {
+        return BackgroundSize::Cover;
+    }
+    if t.eq_ignore_ascii_case("contain") {
+        return BackgroundSize::Contain;
+    }
+    match parse_bg_size_axis(t, em_basis, viewport, is_quirks) {
+        Some(BgSizeAxis::Auto) | None => BackgroundSize::Auto,
+        Some(w) => BackgroundSize::Length(w, BgSizeAxis::Auto),
+    }
+}
+
+/// CSS Backgrounds L3 §3.5 — parse a single-layer `background-size` / `mask-size`
+/// value: `cover` / `contain` / one or two `<length-percentage> | auto` axes.
+fn parse_background_size_value(s: &str, em_basis: f32, viewport: Size, is_quirks: bool) -> BackgroundSize {
+    let t = s.trim();
+    if t.eq_ignore_ascii_case("cover") {
+        return BackgroundSize::Cover;
+    }
+    if t.eq_ignore_ascii_case("contain") {
+        return BackgroundSize::Contain;
+    }
+    let parts: Vec<&str> = t.split_whitespace().collect();
+    let Some(w) = parts.first().and_then(|p| parse_bg_size_axis(p, em_basis, viewport, is_quirks))
+    else {
+        return BackgroundSize::Auto;
+    };
+    let h = parts.get(1)
+        .and_then(|p| parse_bg_size_axis(p, em_basis, viewport, is_quirks))
+        .unwrap_or(BgSizeAxis::Auto);
+    if w == BgSizeAxis::Auto && h == BgSizeAxis::Auto {
+        BackgroundSize::Auto
+    } else {
+        BackgroundSize::Length(w, h)
     }
 }
 
@@ -16804,15 +17208,17 @@ fn parse_single_bg_layer(
                         && BackgroundAttachment::parse(tokens[idx]).is_none()
                         && BackgroundOrigin::parse(tokens[idx]).is_none()
                     {
-                        if let BackgroundSize::Length(w, None) = size {
-                            if let Some(h) = resolve_box_length(tokens[idx], em_basis, viewport, is_quirks) {
-                                size = BackgroundSize::Length(w, Some(h));
+                        if let BackgroundSize::Length(w, BgSizeAxis::Auto) = size {
+                            if let Some(h) = parse_bg_size_axis(tokens[idx], em_basis, viewport, is_quirks) {
+                                size = BackgroundSize::Length(w, h);
                                 idx += 1;
                             }
                         } else if matches!(size, BackgroundSize::Auto) {
-                            // auto <height>
-                            if let Some(_h) = resolve_box_length(tokens[idx], em_basis, viewport, is_quirks) {
-                                // auto height — CSS spec: "auto auto" = auto (keep Auto)
+                            // `auto <axis>` → width auto, height = axis (intrinsic-ratio width).
+                            if let Some(h) = parse_bg_size_axis(tokens[idx], em_basis, viewport, is_quirks) {
+                                if h != BgSizeAxis::Auto {
+                                    size = BackgroundSize::Length(BgSizeAxis::Auto, h);
+                                }
                                 idx += 1;
                             }
                         }
@@ -16977,10 +17383,18 @@ pub fn parse_background_gradient(s: &str) -> ParsedGradient {
         let stops = interp(parse_gradient_stops(s));
         ParsedGradient::Linear { angle_deg, stops, repeating: repeating_linear }
     } else if is_radial {
-        // Radial: look for `at <x> <y>` in the first segment.
+        // Radial: look for `[<shape> || <size>]? [at <x> <y>]?` in the first segment.
         let (cx, cy) = parse_radial_gradient_center(&clean_first);
+        let (shape, size) = parse_radial_gradient_shape_size(&clean_first);
         let stops = interp(parse_gradient_stops(s));
-        ParsedGradient::Radial { center_x_pct: cx, center_y_pct: cy, stops, repeating: repeating_radial }
+        ParsedGradient::Radial {
+            center_x_pct: cx,
+            center_y_pct: cy,
+            shape,
+            size,
+            stops,
+            repeating: repeating_radial,
+        }
     } else {
         // Conic: `[from <angle>]? [at <x> <y>]?` in the first segment.
         let (from_angle_deg, cx, cy) = parse_conic_gradient_params(&clean_first);
@@ -17194,6 +17608,41 @@ fn parse_radial_gradient_center(first_seg: &str) -> (f32, f32) {
     }
     // Default centre = 50% 50%.
     (0.5, 0.5)
+}
+
+/// CSS Images L3 §3.5 — parse the ending-shape and size keywords from the first
+/// segment of a `radial-gradient` (the part before any `at <position>`).
+///
+/// Recognises the `circle`/`ellipse` shape keyword and the four extent keywords
+/// (`closest-side`, `closest-corner`, `farthest-side`, `farthest-corner`).
+/// Defaults per spec: shape = `ellipse`, size = `farthest-corner`. A lone
+/// `circle` keyword with no size still defaults to farthest-corner. Explicit
+/// `<length>` radii are not modelled yet and leave the size at its default.
+fn parse_radial_gradient_shape_size(first_seg: &str) -> (RadialShape, RadialSize) {
+    // Only the prelude before `at` carries shape/size.
+    let s = first_seg.trim().to_ascii_lowercase();
+    let prelude = match s.find(" at ") {
+        Some(i) => &s[..i],
+        None if s.starts_with("at ") => "",
+        None => s.as_str(),
+    };
+    let mut shape: Option<RadialShape> = None;
+    let mut size: Option<RadialSize> = None;
+    for tok in prelude.split_whitespace() {
+        match tok {
+            "circle" => shape = Some(RadialShape::Circle),
+            "ellipse" => shape = Some(RadialShape::Ellipse),
+            "closest-side" => size = Some(RadialSize::ClosestSide),
+            "closest-corner" => size = Some(RadialSize::ClosestCorner),
+            "farthest-side" => size = Some(RadialSize::FarthestSide),
+            "farthest-corner" => size = Some(RadialSize::FarthestCorner),
+            _ => {}
+        }
+    }
+    (
+        shape.unwrap_or(RadialShape::Ellipse),
+        size.unwrap_or(RadialSize::FarthestCorner),
+    )
 }
 
 /// Parse `[from <angle>]? [at <x> <y>]?` from the first segment of a
@@ -17427,6 +17876,10 @@ fn media_context_from_viewport(viewport: Size, dark_mode: bool) -> MediaContext 
 /// Применяет `font-size`-декларацию, если она задана. Размер `em` берётся
 /// относительно `parent_fs` (родительский font-size), `rem` — относительно
 /// ROOT_FONT_SIZE, `%` — относительно `parent_fs`.
+///
+/// Обрабатывает также `font`-shorthand (BUG-114): в pre-pass резолвится только
+/// `<font-size>`-компонент; остальные longhand-ы (style/variant/weight/stretch/
+/// line-height/family) применяются в main-pass — арм `"font" =>`.
 fn apply_font_size(
     style: &mut ComputedStyle,
     decl: &Declaration,
@@ -17434,6 +17887,12 @@ fn apply_font_size(
     viewport: Size,
     is_quirks: bool,
 ) {
+    if decl.property == "font" {
+        if let Some(parts) = parse_font_shorthand(&decl.value) {
+            resolve_font_size(style, &parts.size, parent_fs, viewport, is_quirks);
+        }
+        return;
+    }
     if decl.property != "font-size" {
         return;
     }
@@ -17449,6 +17908,20 @@ fn apply_font_size(
         };
         return;
     }
+    resolve_font_size(style, val, parent_fs, viewport, is_quirks);
+}
+
+/// Резолвит `<font-size>`-значение (без CSS-wide keyword-ов) в абсолютный px и
+/// записывает в `style.font_size`. `em`/`%` — от `parent_fs`, `rem` — от
+/// ROOT_FONT_SIZE, viewport-единицы — от `viewport`. Используется и longhand-ом
+/// `font-size`, и `<font-size>`-компонентом `font`-shorthand.
+fn resolve_font_size(
+    style: &mut ComputedStyle,
+    val: &str,
+    parent_fs: f32,
+    viewport: Size,
+    is_quirks: bool,
+) {
     let Some(len) = parse_length_q(val, is_quirks) else {
         return;
     };
@@ -17480,6 +17953,194 @@ fn apply_font_size(
         // Intrinsic keywords not meaningful for font-size — ignore.
         Length::MinContent | Length::MaxContent | Length::FitContent(_) => return,
     };
+}
+
+/// Применяет `<line-height>`-значение в `style.line_height` (+ флаг
+/// `line_height_is_relative`). `1.5` (unitless) — относительный коэффициент;
+/// unit-несущие значения (`24px`, `1.5em`, `150%`) фиксируются в абсолютную
+/// высоту (CSS2 §10.8.1) и хранятся как ratio для горячего пути layout-а.
+/// Используется longhand-ом `line-height` и `<line-height>`-компонентом
+/// `font`-shorthand.
+fn apply_line_height_value(style: &mut ComputedStyle, val: &str, em_basis: f32, viewport: Size) {
+    if let Ok(v) = val.parse::<f32>() {
+        // Unitless `<number>` — relative: the line box scales with the
+        // used font-size (incl. any `font-size-adjust` rescale).
+        style.line_height = v;
+        style.line_height_is_relative = true;
+    } else if let Some(len) = parse_length(val) {
+        // Every unit-bearing value computes to an absolute length
+        // (CSS2 §10.8.1: `<length>`/`<percentage>`/`em`/`rem` line-height
+        // resolves at computed-value time), so the line box must be frozen
+        // and must NOT rescale when `font-size-adjust` changes the used
+        // font-size. Stored as a ratio purely for the layout hot path.
+        style.line_height_is_relative = false;
+        match &len {
+            Length::Px(v) => style.line_height = v / style.font_size,
+            Length::Em(v) => style.line_height = *v,
+            Length::Rem(v) => {
+                style.line_height = v * ROOT_FONT_SIZE / style.font_size;
+            }
+            Length::Percent(v) => style.line_height = v / 100.0,
+            Length::Vh(_)
+            | Length::Vw(_)
+            | Length::Vmin(_)
+            | Length::Vmax(_)
+            | Length::Cqw(_)
+            | Length::Cqh(_)
+            | Length::Cqi(_)
+            | Length::Cqb(_)
+            | Length::Cqmin(_)
+            | Length::Cqmax(_)
+            | Length::Calc(_) => {
+                // Резолвим в px и переводим в коэффициент.
+                // Для calc() — то же самое: если выражение содержит
+                // только unitless (`calc(1 + 0.5)`) → результат уже
+                // коэффициент, но мы не умеем сейчас отличить unitless
+                // от px; делим всегда на font_size — это даёт верный
+                // ответ для length-результатов и неверный для чистых
+                // чисел внутри calc. Phase 0 ограничение: для чистых
+                // чисел используйте bare-form `line-height: 1.5`.
+                if let Some(px) = len.resolve(em_basis, None, viewport) {
+                    style.line_height = px / style.font_size;
+                }
+            }
+            // Intrinsic keywords not meaningful for line-height — ignore.
+            Length::MinContent | Length::MaxContent | Length::FitContent(_) => {}
+        }
+    }
+}
+
+/// Разобранные компоненты CSS `font`-shorthand (CSS Fonts L4 §6.10):
+///
+/// `font = [ <font-style> || <font-variant-css2> || <font-weight> ||
+///           <font-width-css3> ]? <font-size> [ / <line-height> ]? <font-family>`
+///
+/// Каждое поле хранит «сырой» токен(ы) соответствующего longhand-а, чтобы
+/// финальный разбор делали уже существующие парсеры (`parse_font_weight`,
+/// `parse_font_family`, резолвер `line-height`) — единый источник истины.
+/// `None`/пустое = компонент опущен и должен сброситься в initial-значение
+/// (shorthand сбрасывает все управляемые им longhand-ы — CSS Cascade L4 §3.1).
+struct FontShorthand {
+    /// `italic` / `oblique`; `None` → initial `normal`.
+    style: Option<FontStyle>,
+    /// `true`, если в leading-секции встретился `small-caps`.
+    small_caps: bool,
+    /// Сырой токен веса (`bold`/`bolder`/`lighter`/`100`..`900`); `None` → `normal`.
+    weight: Option<String>,
+    /// `font-stretch` keyword; `None` → initial `normal`.
+    stretch: Option<FontStretch>,
+    /// Сырой `<font-size>`-токен (обязателен), напр. `13px`.
+    size: String,
+    /// Сырой `<line-height>`-токен после `/`; `None` → initial `normal`.
+    line_height: Option<String>,
+    /// Сырой `<font-family>`-хвост (обязателен), напр. `"Helvetica Neue", sans-serif`.
+    family: String,
+}
+
+/// `true`, если токен — валидный `<font-size>`: absolute/relative-size keyword
+/// (CSS Fonts L4 §2.2) либо `<length>`/`<percentage>`. Bare-number (вес) в
+/// standards-mode отбрасывается `parse_length_q`, поэтому `700` не спутается с
+/// размером.
+fn is_font_size_token(tok: &str) -> bool {
+    if matches!(
+        tok,
+        "xx-small" | "x-small" | "small" | "medium" | "large" | "x-large" | "xx-large"
+            | "xxx-large" | "larger" | "smaller"
+    ) {
+        return true;
+    }
+    matches!(parse_length_q(tok, false), Some(Length::Px(_) | Length::Em(_) | Length::Rem(_)
+        | Length::Percent(_) | Length::Vh(_) | Length::Vw(_) | Length::Vmin(_) | Length::Vmax(_)))
+}
+
+/// Разбирает CSS `font`-shorthand в компоненты. Возвращает `None`, если значение
+/// невалидно или это system-font/CSS-wide keyword (их раскрытие не делаем).
+///
+/// Алгоритм: нормализуем `/` пробелами (он не встречается в валидном
+/// font-family), токенизируем по whitespace. Leading-секция = `style || variant
+/// || weight || width` в любом порядке (плюс no-op `normal` и `oblique <angle>`),
+/// потребляется до первого `<font-size>`-токена. Дальше — `<font-size>`,
+/// опциональный `/ <line-height>`, остаток — обязательный `<font-family>`.
+fn parse_font_shorthand(val: &str) -> Option<FontShorthand> {
+    let trimmed = val.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // System-font keywords и CSS-wide keywords здесь не раскрываем.
+    let lower = trimmed.to_ascii_lowercase();
+    if matches!(
+        lower.as_str(),
+        "caption" | "icon" | "menu" | "message-box" | "small-caption" | "status-bar"
+            | "inherit" | "initial" | "unset" | "revert" | "revert-layer"
+    ) {
+        return None;
+    }
+
+    // `13px/1.4`, `13px /1.4`, `13px/ 1.4`, `13px / 1.4` → одинаковая токенизация.
+    let normalised = trimmed.replace('/', " / ");
+    let tokens: Vec<&str> = normalised.split_whitespace().collect();
+
+    let mut style: Option<FontStyle> = None;
+    let mut small_caps = false;
+    let mut weight: Option<String> = None;
+    let mut stretch: Option<FontStretch> = None;
+
+    // Leading-секция: потребляем до первого валидного <font-size>-токена.
+    let mut i = 0;
+    while i < tokens.len() {
+        let tl = tokens[i].to_ascii_lowercase();
+        if is_font_size_token(&tl) {
+            break;
+        }
+        match tl.as_str() {
+            "normal" => {}
+            "italic" => style = Some(FontStyle::Italic),
+            "oblique" => style = Some(FontStyle::Oblique),
+            "small-caps" => small_caps = true,
+            "bold" | "bolder" | "lighter" => weight = Some(tl),
+            // `oblique <angle>` — угол после oblique игнорируем (Phase 0 берёт
+            // oblique без угла), но потребляем как часть leading-секции.
+            _ if tl.ends_with("deg")
+                || tl.ends_with("grad")
+                || tl.ends_with("rad")
+                || tl.ends_with("turn") => {}
+            _ => {
+                if let Some(fs) = FontStretch::from_keyword(&tl) {
+                    stretch = Some(fs);
+                } else if tl.parse::<u16>().ok().filter(|&n| (1..=1000).contains(&n)).is_some() {
+                    weight = Some(tl);
+                } else {
+                    // Неизвестный leading-токен → невалидный shorthand.
+                    return None;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    // <font-size> обязателен.
+    let size = tokens.get(i)?;
+    if !is_font_size_token(&size.to_ascii_lowercase()) {
+        return None;
+    }
+    let size = (*size).to_string();
+    i += 1;
+
+    // Опциональный `/ <line-height>`.
+    let mut line_height = None;
+    if tokens.get(i) == Some(&"/") {
+        i += 1;
+        line_height = Some((*tokens.get(i)?).to_string());
+        i += 1;
+    }
+
+    // <font-family> обязателен — весь остаток.
+    if i >= tokens.len() {
+        return None;
+    }
+    let family = tokens[i..].join(" ");
+
+    Some(FontShorthand { style, small_caps, weight, stretch, size, line_height, family })
 }
 
 /// Резолвит длину для margin / padding / border. `%` в Phase 0 не поддержан
@@ -22234,11 +22895,12 @@ mod tests {
     }
 
     #[test]
-    fn cross_fade_two_urls_parsed() {
-        // CSS Images L4 §4: cross-fade(<image-a>, <image-b>, <pct>) → CrossFade variant.
+    fn cross_fade_l4_two_images_with_percentage() {
+        // CSS Images L4 §4: cross-fade( <image> <pct>?, <image> ) → CrossFade.
+        // `url(a) 30%` ⇒ a at 30% opacity, b at 70% ⇒ t (fraction of b) = 0.70.
         let s = cascade_at(
             "<div></div>",
-            r#"div { background-image: cross-fade(url("a.png"), url("b.png"), 30%); }"#,
+            r#"div { background-image: cross-fade(url("a.png") 30%, url("b.png")); }"#,
             &[0],
         );
         assert_eq!(s.background_layers.len(), 1);
@@ -22246,15 +22908,34 @@ mod tests {
             BackgroundImage::CrossFade { a, b, t } => {
                 assert_eq!(a.as_ref(), &BackgroundImage::Url("a.png".into()));
                 assert_eq!(b.as_ref(), &BackgroundImage::Url("b.png".into()));
-                assert!((t - 0.30).abs() < 0.001, "t should be 0.30, got {t}");
+                assert!((t - 0.70).abs() < 0.001, "t should be 0.70, got {t}");
             }
             other => panic!("expected CrossFade, got {other:?}"),
         }
     }
 
     #[test]
+    fn cross_fade_unprefixed_legacy_three_arg_rejected() {
+        // The legacy three-argument webkit form WITHOUT the -webkit- prefix is
+        // invalid per CSS Images L4 (trailing bare `<percentage>` is not an
+        // `<image>`). Edge/Chromium drop the declaration; Lumen must too —
+        // BUG-101 / TEST-59. The cell stays empty (BackgroundImage::None).
+        let s = cascade_at(
+            "<div></div>",
+            r#"div { background-image: cross-fade(url("a.png"), url("b.png"), 30%); }"#,
+            &[0],
+        );
+        assert_eq!(s.background_layers.len(), 1);
+        assert!(
+            matches!(&s.background_layers[0].image, BackgroundImage::None),
+            "unprefixed legacy 3-arg cross-fade() must be invalid → None, got {:?}",
+            s.background_layers[0].image
+        );
+    }
+
+    #[test]
     fn webkit_cross_fade_parsed() {
-        // -webkit-cross-fade() vendor prefix.
+        // -webkit-cross-fade(<from>, <to>, <pct>) vendor-prefixed legacy form.
         let s = cascade_at(
             "<div></div>",
             r#"div { background-image: -webkit-cross-fade(url("x.png"), url("y.png"), 50%); }"#,
@@ -22269,14 +22950,16 @@ mod tests {
 
     #[test]
     fn cross_fade_t_clamped_to_unit_interval() {
-        // t > 1.0 should be clamped to 1.0.
+        // An out-of-range opacity percentage is clamped into 0.0..=1.0.
         let s = cascade_at(
             "<div></div>",
-            r#"div { background-image: cross-fade(url("a.png"), url("b.png"), 150%); }"#,
+            r#"div { background-image: -webkit-cross-fade(url("a.png"), url("b.png"), 150%); }"#,
             &[0],
         );
         if let BackgroundImage::CrossFade { t, .. } = &s.background_layers[0].image {
             assert!(*t <= 1.0, "t should be clamped to ≤ 1.0, got {t}");
+        } else {
+            panic!("expected CrossFade");
         }
     }
 
@@ -23945,6 +24628,83 @@ mod tests {
         compute_style(&doc, node, &sheet, &root_style, Size::new(800.0, 600.0), false)
     }
 
+    // ── BUG-114: `font` shorthand expands font-size/line-height ───────────
+
+    /// Computes the style of `<p>` under the given author CSS (applied to `p`).
+    fn p_style_with_css(css: &str) -> ComputedStyle {
+        let doc = lumen_html_parser::parse("<p>x</p>");
+        let sheet = lumen_css_parser::parse(css);
+        let root_style = ComputedStyle::root();
+        let body = doc.body().unwrap();
+        let p = doc.get(body).children[0];
+        compute_style(&doc, p, &sheet, &root_style, Size::new(800.0, 600.0), false)
+    }
+
+    #[test]
+    fn font_shorthand_size_weight_line_height_family() {
+        // BUG-114: `font: 700 13px/1.4 sans-serif` previously dropped size and
+        // line-height, only applying weight.
+        let s = p_style_with_css("p { font: 700 13px/1.4 sans-serif; }");
+        assert_eq!(s.font_size, 13.0);
+        assert_eq!(s.font_weight, FontWeight(700));
+        assert!(s.line_height_is_relative);
+        assert!((s.line_height - 1.4).abs() < 1e-4);
+        assert_eq!(s.font_family.first().map(String::as_str), Some("sans-serif"));
+    }
+
+    #[test]
+    fn font_shorthand_size_line_height_only() {
+        // BUG-114: `font: 11px/1.5 monospace` — no leading section.
+        let s = p_style_with_css("p { font: 11px/1.5 monospace; }");
+        assert_eq!(s.font_size, 11.0);
+        assert!((s.line_height - 1.5).abs() < 1e-4);
+        assert_eq!(s.font_family.first().map(String::as_str), Some("monospace"));
+        // Unspecified components reset to initial.
+        assert_eq!(s.font_weight, FontWeight::NORMAL);
+        assert_eq!(s.font_style, FontStyle::Normal);
+    }
+
+    #[test]
+    fn font_shorthand_style_variant_weight() {
+        let s = p_style_with_css("p { font: italic small-caps bold 20px Georgia; }");
+        assert_eq!(s.font_size, 20.0);
+        assert_eq!(s.font_style, FontStyle::Italic);
+        assert_eq!(s.font_variant, FontVariant::SmallCaps);
+        assert_eq!(s.font_weight, FontWeight::BOLD);
+        assert_eq!(s.font_family.first().map(String::as_str), Some("Georgia"));
+    }
+
+    #[test]
+    fn font_shorthand_no_line_height_resets_to_initial() {
+        // No `/line-height` → initial normal (≈1.2 relative).
+        let s = p_style_with_css("p { font: 18px serif; }");
+        assert_eq!(s.font_size, 18.0);
+        assert!(s.line_height_is_relative);
+        assert!((s.line_height - 1.2).abs() < 1e-4);
+    }
+
+    #[test]
+    fn font_shorthand_resets_prior_longhands() {
+        // Shorthand must reset longhands it controls (CSS Cascade L4 §3.1):
+        // the earlier `font-weight: bold` is wiped by the later `font`.
+        let s = p_style_with_css("p { font-weight: bold; font: 16px serif; }");
+        assert_eq!(s.font_weight, FontWeight::NORMAL);
+    }
+
+    #[test]
+    fn font_shorthand_multiword_family() {
+        let s = p_style_with_css("p { font: 14px \"Helvetica Neue\", sans-serif; }");
+        assert_eq!(s.font_size, 14.0);
+        assert_eq!(s.font_family.first().map(String::as_str), Some("Helvetica Neue"));
+    }
+
+    #[test]
+    fn font_shorthand_invalid_no_family_ignored() {
+        // Missing family → invalid → declaration ignored, defaults kept.
+        let s = p_style_with_css("p { font: 16px; }");
+        assert_eq!(s.font_size, 16.0); // matches default; no panic
+    }
+
     #[test]
     fn bgcolor_hint_body_named() {
         let s = doc_root_child_style("<body bgcolor=\"red\"></body>");
@@ -24977,6 +25737,25 @@ mod tests {
     fn margin_inline_end_maps_to_margin_right() {
         let s = cascade_at("<div>", "div { margin-inline-end: 20px; }", &[0]);
         assert_eq!(s.margin_right, LengthOrAuto::Length(Length::Px(20.0)));
+    }
+
+    #[test]
+    fn ua_body_default_margin_is_8px() {
+        // HTML Rendering §14.3.3: body { margin: 8px }. BUG-204 — без этого
+        // правила body прижимался к краю viewport и контент сдвигался на 8px.
+        let s = cascade_at("<div></div>", "", &[]);
+        assert_eq!(s.margin_top, LengthOrAuto::Length(Length::Px(8.0)));
+        assert_eq!(s.margin_right, LengthOrAuto::Length(Length::Px(8.0)));
+        assert_eq!(s.margin_bottom, LengthOrAuto::Length(Length::Px(8.0)));
+        assert_eq!(s.margin_left, LengthOrAuto::Length(Length::Px(8.0)));
+    }
+
+    #[test]
+    fn ua_body_margin_overridden_by_author_reset() {
+        // Author `body { margin: 0 }` (или `* { margin: 0 }` reset) перекрывает UA-правило.
+        let s = cascade_at("<div></div>", "body { margin: 0; }", &[]);
+        assert_eq!(s.margin_top, LengthOrAuto::ZERO);
+        assert_eq!(s.margin_left, LengthOrAuto::ZERO);
     }
 
     #[test]
@@ -26101,6 +26880,34 @@ mod tests {
     }
 
     #[test]
+    fn appearance_none_preserves_author_border_and_background() {
+        // BUG-211: with `appearance: none`, UA-default border/background must be
+        // stripped *before* the author cascade so author-specified values win.
+        // Previously the strip ran after the cascade and clobbered them, leaving
+        // content-sized fields with width-0 borders and a transparent background.
+        let doc = lumen_html_parser::parse("<input value=\"ab\" />");
+        let sheet = lumen_css_parser::parse(
+            "input { appearance: none; border: 2px solid #003366; background: #b3d9ff; }",
+        );
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.body().unwrap()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(style.appearance, Appearance::None);
+        // Author border width survives (was clobbered to 0.0 before the fix).
+        assert_eq!(style.border_top_width, 2.0);
+        assert_eq!(style.border_right_width, 2.0);
+        assert_eq!(style.border_bottom_width, 2.0);
+        assert_eq!(style.border_left_width, 2.0);
+        // Author background survives (was clobbered to transparent before the fix).
+        match style.background_color {
+            Some(CssColor::Rgba(Color { r, g, b, a })) => {
+                assert_eq!((r, g, b, a), (0xb3, 0xd9, 0xff, 0xff));
+            }
+            other => panic!("expected author rgba background, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn appearance_auto_preserves_ua_styling() {
         let doc = lumen_html_parser::parse("<input />");
         let sheet = lumen_css_parser::parse(""); // appearance: auto (default)
@@ -26752,6 +27559,28 @@ mod tests {
         let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.font_size_adjust, FontSizeAdjust::Auto);
+    }
+
+    // ── line-height relative/absolute classification (BUG-212) ─────────────────
+
+    #[test]
+    fn line_height_px_is_absolute_number_is_relative() {
+        let doc = lumen_html_parser::parse("<div id=a></div><div id=b></div>");
+        let root = ComputedStyle::root();
+        let vp = Size::new(800.0, 600.0);
+        // `<length>` → absolute (frozen under font-size-adjust).
+        let sheet_px = lumen_css_parser::parse("div { line-height: 100px; }");
+        let a = doc.find_by_id("a").unwrap();
+        let s_px = compute_style(&doc, a, &sheet_px, &root, vp, false);
+        assert!(!s_px.line_height_is_relative, "px line-height must be absolute");
+        // unitless `<number>` → relative (scales with font-size).
+        let sheet_num = lumen_css_parser::parse("div { line-height: 1.5; }");
+        let s_num = compute_style(&doc, a, &sheet_num, &root, vp, false);
+        assert!(s_num.line_height_is_relative, "number line-height must be relative");
+        // `normal` (default) → relative.
+        let sheet_none = lumen_css_parser::parse("");
+        let s_def = compute_style(&doc, a, &sheet_none, &root, vp, false);
+        assert!(s_def.line_height_is_relative, "default/normal line-height must be relative");
     }
 
     // ── writing-mode ──────────────────────────────────────────────────────────
@@ -28431,6 +29260,61 @@ mod tests {
         } else {
             panic!("expected linear");
         }
+    }
+
+    // ── radial-gradient shape / size (CSS Images L3 §3.5, BUG-239) ─────────────
+
+    #[test]
+    fn radial_shape_size_parses_circle_and_ellipse() {
+        let circle = parse_background_gradient("radial-gradient(circle, red, blue)");
+        let ParsedGradient::Radial { shape, size, .. } = circle else { panic!("radial") };
+        assert_eq!(shape, RadialShape::Circle);
+        assert_eq!(size, RadialSize::FarthestCorner, "default size");
+
+        let ellipse = parse_background_gradient("radial-gradient(ellipse at center, red, blue)");
+        let ParsedGradient::Radial { shape, .. } = ellipse else { panic!("radial") };
+        assert_eq!(shape, RadialShape::Ellipse);
+
+        // No shape keyword → ellipse default (CSS Images L3 §3.5).
+        let bare = parse_background_gradient("radial-gradient(red, blue)");
+        let ParsedGradient::Radial { shape, .. } = bare else { panic!("radial") };
+        assert_eq!(shape, RadialShape::Ellipse);
+
+        let cs = parse_background_gradient("radial-gradient(circle closest-side, red, blue)");
+        let ParsedGradient::Radial { shape, size, .. } = cs else { panic!("radial") };
+        assert_eq!((shape, size), (RadialShape::Circle, RadialSize::ClosestSide));
+    }
+
+    #[test]
+    fn radial_radii_circle_is_farthest_corner_distance() {
+        // Centred circle in 240×120 → farthest corner at (120, 60): r = hypot.
+        let (rx, ry) = radial_gradient_radii(
+            RadialShape::Circle, RadialSize::FarthestCorner, 0.5, 0.5, 240.0, 120.0,
+        );
+        let expected = 120.0_f32.hypot(60.0);
+        assert!((rx - expected).abs() < 0.5 && (rx - ry).abs() < 1e-3, "circle isotropic: {rx},{ry}");
+    }
+
+    #[test]
+    fn radial_radii_ellipse_farthest_corner_matches_spec() {
+        // ellipse at center in 240×120: farthest-side aspect = 120/60 = 2; the
+        // ellipse passes through the corner (120,60) → ry = √(60²+60²) ≈ 84.85,
+        // rx = 2·ry ≈ 169.7 (CSS Images L3 §3.5.1).
+        let (rx, ry) = radial_gradient_radii(
+            RadialShape::Ellipse, RadialSize::FarthestCorner, 0.5, 0.5, 240.0, 120.0,
+        );
+        assert!((ry - 84.85).abs() < 0.5, "ry ≈ 84.85, got {ry}");
+        assert!((rx - 169.7).abs() < 1.0, "rx ≈ 169.7, got {rx}");
+    }
+
+    #[test]
+    fn radial_radii_ellipse_closest_side() {
+        // Off-centre ellipse, closest-side: rx = nearest h-edge, ry = nearest v-edge.
+        let (rx, ry) = radial_gradient_radii(
+            RadialShape::Ellipse, RadialSize::ClosestSide, 0.25, 0.25, 200.0, 100.0,
+        );
+        assert!((rx - 50.0).abs() < 0.5, "rx = min(50,150)=50, got {rx}");
+        assert!((ry - 25.0).abs() < 0.5, "ry = min(25,75)=25, got {ry}");
     }
 
     // ── color() predefined color spaces (CSS Color L4 §10) ─────────────────────

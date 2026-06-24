@@ -25,6 +25,7 @@ use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
+use crate::panels::themes::Palette;
 use crate::tab_lifecycle::state::TabState;
 use crate::tabs::strip::TabStrip;
 use crate::tabs::tree::visible_order;
@@ -40,18 +41,16 @@ pub const ROW_H: f32 = 36.0;
 /// Indent per depth level in CSS px.
 const INDENT: f32 = 8.0;
 
-const PANEL_BG: Color = Color { r: 18, g: 18, b: 22, a: 255 };
-const ROW_INACTIVE_BG: Color = Color { r: 24, g: 24, b: 29, a: 255 };
-const ROW_ACTIVE_BG: Color = Color { r: 32, g: 32, b: 40, a: 255 };
-const ACCENT: Color = Color { r: 100, g: 160, b: 255, a: 255 };
-const TEXT_ACTIVE: Color = Color { r: 218, g: 218, b: 228, a: 255 };
-const TEXT_DIM: Color = Color { r: 140, g: 140, b: 148, a: 255 };
+// Surface colors removed — replaced by Palette tokens in build_panel.
+
+/// Semantic red used for the close button ×. Not themed.
 const CLOSE_FG: Color = Color { r: 180, g: 80, b: 80, a: 255 };
-const DIVIDER: Color = Color { r: 35, g: 36, b: 42, a: 255 };
+/// Favicon placeholder fill. Not themed (neutral icon stand-in).
 const ICON_BG: Color = Color { r: 60, g: 60, b: 70, a: 255 };
+/// Lifecycle badge — amber for BackgroundOld. Semantic, not themed.
 const BADGE_OLD: Color = Color { r: 255, g: 168, b: 0, a: 210 };
+/// Lifecycle badge — grey for Hibernated. Semantic, not themed.
 const BADGE_HIB: Color = Color { r: 110, g: 110, b: 120, a: 210 };
-const ARROW_COLOR: Color = Color { r: 160, g: 160, b: 170, a: 255 };
 
 const FONT_SZ: f32 = 12.0;
 /// Left margin before the collapse/expand arrow.
@@ -144,8 +143,9 @@ pub fn hit_test(
     y: f32,
     tab_bar_height: f32,
     window_h: f32,
+    width: f32,
 ) -> Option<TreeTabHit> {
-    if x >= PANEL_WIDTH || y < tab_bar_height || y >= window_h {
+    if x >= width || y < tab_bar_height || y >= window_h {
         return None;
     }
     let rows = visible_order(&strip.tabs, &panel.collapsed);
@@ -158,7 +158,7 @@ pub fn hit_test(
     let indent = row.depth as f32 * INDENT;
     let arrow_left = ARROW_LEFT_BASE + indent;
     let arrow_right = arrow_left + ARROW_W;
-    let close_left = PANEL_WIDTH - CLOSE_RIGHT_MARGIN - CLOSE_W;
+    let close_left = width - CLOSE_RIGHT_MARGIN - CLOSE_W;
 
     if x >= close_left {
         Some(TreeTabHit::Close(row.strip_idx))
@@ -176,26 +176,32 @@ pub fn hit_test(
 /// Panel occupies `x = 0..PANEL_WIDTH`, `y = tab_bar_height..window_h`.
 /// Rows correspond to the visible tabs from [`visible_order`]; collapsed
 /// subtrees are omitted. Each row is indented `depth × 8` px.
+///
+/// `pal` controls all surface colors (background, tab rows, dividers, text).
+/// Semantic colors (close button red, lifecycle badge amber/grey) are hard-coded.
 pub fn build_panel(
     strip: &TabStrip,
     panel: &TreeTabsPanel,
     tab_bar_height: f32,
     window_h: f32,
+    pal: &Palette,
+    width: f32,
 ) -> DisplayList {
+    let pw = width;
     let panel_h = (window_h - tab_bar_height).max(0.0);
     let rows = visible_order(&strip.tabs, &panel.collapsed);
     let mut out = DisplayList::with_capacity(4 + rows.len() * 9);
 
     // Panel background.
     out.push(DisplayCommand::FillRect {
-        rect: Rect::new(0.0, tab_bar_height, PANEL_WIDTH, panel_h),
-        color: PANEL_BG,
+        rect: Rect::new(0.0, tab_bar_height, pw, panel_h),
+        color: pal.overlay_bg,
     });
 
     // Right border divider.
     out.push(DisplayCommand::FillRect {
-        rect: Rect::new(PANEL_WIDTH - 1.0, tab_bar_height, 1.0, panel_h),
-        color: DIVIDER,
+        rect: Rect::new(pw - 1.0, tab_bar_height, 1.0, panel_h),
+        color: pal.overlay_border,
     });
 
     for (row_pos, row) in rows.iter().enumerate() {
@@ -205,12 +211,12 @@ pub fn build_panel(
         }
         let tab = &strip.tabs[row.strip_idx];
         let is_active = row.strip_idx == strip.active;
-        let row_bg = if is_active { ROW_ACTIVE_BG } else { ROW_INACTIVE_BG };
+        let row_bg = if is_active { pal.tab_active_bg } else { pal.tab_inactive_bg };
         let indent = row.depth as f32 * INDENT;
 
         // Row background.
         out.push(DisplayCommand::FillRect {
-            rect: Rect::new(0.0, row_top, PANEL_WIDTH - 1.0, ROW_H),
+            rect: Rect::new(0.0, row_top, pw - 1.0, ROW_H),
             color: row_bg,
         });
 
@@ -218,14 +224,14 @@ pub fn build_panel(
         if is_active {
             out.push(DisplayCommand::FillRect {
                 rect: Rect::new(0.0, row_top, 2.0, ROW_H),
-                color: ACCENT,
+                color: pal.accent,
             });
         }
 
         // Row bottom divider.
         out.push(DisplayCommand::FillRect {
-            rect: Rect::new(0.0, row_top + ROW_H - 1.0, PANEL_WIDTH - 1.0, 1.0),
-            color: DIVIDER,
+            rect: Rect::new(0.0, row_top + ROW_H - 1.0, pw - 1.0, 1.0),
+            color: pal.divider,
         });
 
         // Collapse/expand arrow.
@@ -238,7 +244,7 @@ pub fn build_panel(
                 rect: Rect::new(arrow_left, arrow_top, ARROW_W, FONT_SZ * 1.2),
                 text: arrow_ch.to_owned(),
                 font_size: FONT_SZ * 0.8,
-                color: ARROW_COLOR,
+                color: pal.text_dim,
                 font_family: Vec::new(),
                 font_weight: FontWeight::NORMAL,
                 font_style: FontStyle::Normal,
@@ -286,7 +292,7 @@ pub fn build_panel(
         }
 
         // Close button ×.
-        let close_left = PANEL_WIDTH - CLOSE_RIGHT_MARGIN - CLOSE_W;
+        let close_left = pw - CLOSE_RIGHT_MARGIN - CLOSE_W;
         let close_top = row_top + (ROW_H - FONT_SZ * 1.2) * 0.5;
         out.push(DisplayCommand::DrawText {
             rect: Rect::new(close_left, close_top, CLOSE_W, FONT_SZ * 1.2),
@@ -306,7 +312,7 @@ pub fn build_panel(
         let text_right = close_left - 4.0;
         let text_w = (text_right - text_left).max(0.0);
         let text_top = row_top + (ROW_H - FONT_SZ * 1.3) * 0.5;
-        let text_color = if is_active { TEXT_ACTIVE } else { TEXT_DIM };
+        let text_color = if is_active { pal.text } else { pal.text_dim };
         out.push(DisplayCommand::DrawText {
             rect: Rect::new(text_left, text_top, text_w, FONT_SZ * 1.3),
             text: tab.title.clone(),
@@ -381,21 +387,21 @@ mod tests {
     fn hit_outside_returns_none() {
         let s = TabStrip::new();
         let p = TreeTabsPanel::new();
-        assert_eq!(hit_test(&s, &p, PANEL_WIDTH + 1.0, 50.0, TAB_H, WIN_H), None);
+        assert_eq!(hit_test(&s, &p, PANEL_WIDTH + 1.0, 50.0, TAB_H, WIN_H, PANEL_WIDTH), None);
     }
 
     #[test]
     fn hit_above_tab_bar_returns_none() {
         let s = TabStrip::new();
         let p = TreeTabsPanel::new();
-        assert_eq!(hit_test(&s, &p, 10.0, TAB_H - 1.0, TAB_H, WIN_H), None);
+        assert_eq!(hit_test(&s, &p, 10.0, TAB_H - 1.0, TAB_H, WIN_H, PANEL_WIDTH), None);
     }
 
     #[test]
     fn hit_row_body_returns_tab() {
         let s = TabStrip::new();
         let p = TreeTabsPanel::new();
-        let hit = hit_test(&s, &p, 80.0, TAB_H + ROW_H * 0.5, TAB_H, WIN_H);
+        let hit = hit_test(&s, &p, 80.0, TAB_H + ROW_H * 0.5, TAB_H, WIN_H, PANEL_WIDTH);
         assert_eq!(hit, Some(TreeTabHit::Tab(0)));
     }
 
@@ -404,7 +410,7 @@ mod tests {
         let s = TabStrip::new();
         let p = TreeTabsPanel::new();
         let cx = PANEL_WIDTH - CLOSE_RIGHT_MARGIN - CLOSE_W + 2.0;
-        let hit = hit_test(&s, &p, cx, TAB_H + ROW_H * 0.5, TAB_H, WIN_H);
+        let hit = hit_test(&s, &p, cx, TAB_H + ROW_H * 0.5, TAB_H, WIN_H, PANEL_WIDTH);
         assert_eq!(hit, Some(TreeTabHit::Close(0)));
     }
 
@@ -414,7 +420,7 @@ mod tests {
         let p = TreeTabsPanel::new();
         // Arrow at depth=0: x in [ARROW_LEFT_BASE, ARROW_LEFT_BASE + ARROW_W)
         let ax = ARROW_LEFT_BASE + ARROW_W * 0.5;
-        let hit = hit_test(&s, &p, ax, TAB_H + ROW_H * 0.5, TAB_H, WIN_H);
+        let hit = hit_test(&s, &p, ax, TAB_H + ROW_H * 0.5, TAB_H, WIN_H, PANEL_WIDTH);
         assert_eq!(hit, Some(TreeTabHit::Arrow(0))); // id of root tab = 0
     }
 
@@ -423,7 +429,7 @@ mod tests {
         let s = TabStrip::new(); // single tab, no children
         let p = TreeTabsPanel::new();
         let ax = ARROW_LEFT_BASE + ARROW_W * 0.5;
-        let hit = hit_test(&s, &p, ax, TAB_H + ROW_H * 0.5, TAB_H, WIN_H);
+        let hit = hit_test(&s, &p, ax, TAB_H + ROW_H * 0.5, TAB_H, WIN_H, PANEL_WIDTH);
         // No arrow on leaf — should return Tab, not Arrow
         assert_eq!(hit, Some(TreeTabHit::Tab(0)));
     }
@@ -435,7 +441,7 @@ mod tests {
         p.toggle_collapsed(0); // collapse root → child row disappears
         // Row 0 = root (visible), row 1 = should not exist
         let below_y = TAB_H + ROW_H + ROW_H * 0.5;
-        let hit = hit_test(&s, &p, 50.0, below_y, TAB_H, WIN_H);
+        let hit = hit_test(&s, &p, 50.0, below_y, TAB_H, WIN_H, PANEL_WIDTH);
         assert_eq!(hit, Some(TreeTabHit::Empty));
     }
 
@@ -445,7 +451,7 @@ mod tests {
     fn build_panel_emits_commands() {
         let s = TabStrip::new();
         let p = TreeTabsPanel::new();
-        let dl = build_panel(&s, &p, TAB_H, WIN_H);
+        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
         assert!(!dl.is_empty());
     }
 
@@ -453,7 +459,7 @@ mod tests {
     fn build_panel_has_title_text() {
         let s = TabStrip::new();
         let p = TreeTabsPanel::new();
-        let dl = build_panel(&s, &p, TAB_H, WIN_H);
+        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
         let has_title = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("вкладка"))
         });
@@ -464,7 +470,7 @@ mod tests {
     fn build_panel_shows_arrow_for_parent() {
         let s = strip_with_child();
         let p = TreeTabsPanel::new();
-        let dl = build_panel(&s, &p, TAB_H, WIN_H);
+        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
         let has_arrow = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "▼" || text == "▶")
         });
@@ -475,7 +481,7 @@ mod tests {
     fn build_panel_no_arrow_for_leaf() {
         let s = TabStrip::new();
         let p = TreeTabsPanel::new();
-        let dl = build_panel(&s, &p, TAB_H, WIN_H);
+        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
         let has_arrow = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "▼" || text == "▶")
         });
@@ -487,7 +493,7 @@ mod tests {
         let s = strip_with_child();
         let mut p = TreeTabsPanel::new();
         p.toggle_collapsed(0);
-        let dl = build_panel(&s, &p, TAB_H, WIN_H);
+        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
         let has_right_arrow = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "▶")
         });
@@ -499,7 +505,7 @@ mod tests {
         let s = strip_with_child();
         let mut p = TreeTabsPanel::new();
         p.toggle_collapsed(0);
-        let dl = build_panel(&s, &p, TAB_H, WIN_H);
+        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
         // Only 1 tab visible; title count = 1.
         let title_count = dl.iter().filter(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("вкладка"))
@@ -513,7 +519,7 @@ mod tests {
         // We verify by checking that we get 3 title rows.
         let s = strip_with_grandchild();
         let p = TreeTabsPanel::new();
-        let dl = build_panel(&s, &p, TAB_H, WIN_H);
+        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
         let title_count = dl.iter().filter(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("вкладка"))
         }).count();
@@ -526,7 +532,7 @@ mod tests {
         s.push_blank(0.0);
         s.set_tab_state(0, TabState::BackgroundOld);
         let p = TreeTabsPanel::new();
-        let dl = build_panel(&s, &p, TAB_H, WIN_H);
+        let dl = build_panel(&s, &p, TAB_H, WIN_H, &Palette::DARK, PANEL_WIDTH);
         let has_amber = dl.iter().any(|c| match c {
             DisplayCommand::FillRoundedRect { color, .. } => {
                 color.r == BADGE_OLD.r && color.g == BADGE_OLD.g

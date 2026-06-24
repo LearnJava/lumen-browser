@@ -12,8 +12,10 @@
 //! `PushTransform` commands).
 
 use lumen_core::geom::Rect;
-use lumen_layout::{Color, Mat4};
+use lumen_layout::Mat4;
 use lumen_paint::{DisplayCommand, DisplayList};
+
+use crate::panels::themes::Palette;
 
 /// Which pane receives keyboard and scroll input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -93,6 +95,7 @@ impl SplitView {
     /// * `split_x` — x of the divider in CSS px (typically `viewport_width / 2`).
     /// * `tab_bar_height` — tab strip height in CSS px (content starts below it).
     /// * `viewport_height` — full window height in CSS px (including tab strip).
+    #[allow(clippy::too_many_arguments)]
     pub fn build_combined_dl(
         &self,
         left_dl: &[DisplayCommand],
@@ -101,6 +104,7 @@ impl SplitView {
         split_x: f32,
         tab_bar_height: f32,
         viewport_height: f32,
+        pal: &Palette,
     ) -> DisplayList {
         let content_h = viewport_height - tab_bar_height;
         let right_x = split_x + 1.0;
@@ -125,7 +129,7 @@ impl SplitView {
         // ── Divider ────────────────────────────────────────────────────────
         out.push(DisplayCommand::FillRect {
             rect: Rect { x: split_x, y: tab_bar_height, width: 1.0, height: content_h },
-            color: Color { r: 55, g: 55, b: 65, a: 255 },
+            color: pal.overlay_border,
         });
 
         // ── Right pane ─────────────────────────────────────────────────────
@@ -207,6 +211,7 @@ impl SplitView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumen_layout::Color;
 
     fn blank_sv() -> SplitView {
         SplitView::new(42, vec![], 0.0, 0.0, 800.0, 1024.0)
@@ -267,7 +272,7 @@ mod tests {
             color: Color { r: 255, g: 0, b: 0, a: 255 },
         }];
         let sv = SplitView::new(1, vec![], 0.0, 0.0, 720.0, 512.0);
-        let combined = sv.build_combined_dl(&left_dl, 0.0, 0.0, 512.0, 36.0, 720.0);
+        let combined = sv.build_combined_dl(&left_dl, 0.0, 0.0, 512.0, 36.0, 720.0, &Palette::DARK);
         // Left: PushClipRect PushTransform FillRect PopTransform PopClip (5)
         // Divider: FillRect (1)
         // Right: PushClipRect PushTransform PopTransform PopClip (4, right_dl empty)

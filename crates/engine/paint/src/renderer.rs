@@ -4675,9 +4675,20 @@ impl Renderer {
                             (img_w * s, img_h * s)
                         }
                         BackgroundSize::Length(w, h) => {
-                            let tw = w.max(1.0);
-                            let th = h.unwrap_or_else(|| img_h * (tw / img_w)).max(1.0);
-                            (tw, th)
+                            // CSS Backgrounds L3 §3.5: percent axes resolve against the
+                            // positioning area; `auto` derives from the intrinsic ratio.
+                            match (w.resolve(oarea.width), h.resolve(oarea.height)) {
+                                (Some(tw), Some(th)) => (tw.max(1.0), th.max(1.0)),
+                                (Some(tw), None) => {
+                                    let tw = tw.max(1.0);
+                                    (tw, (img_h * (tw / img_w)).max(1.0))
+                                }
+                                (None, Some(th)) => {
+                                    let th = th.max(1.0);
+                                    ((img_w * (th / img_h)).max(1.0), th)
+                                }
+                                (None, None) => (img_w, img_h),
+                            }
                         }
                     };
 
@@ -4773,7 +4784,7 @@ impl Renderer {
                     draw_ops.push(DrawOp::Gradient { v_start, v_count, grad_batch_idx });
                 }
                 // CSS Images L3 §3.5 — GPU radial gradient pipeline.
-                DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating } => {
+                DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating, .. } => {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
@@ -4987,9 +4998,20 @@ impl Renderer {
                                         (img_w * s, img_h * s)
                                     }
                                     BackgroundSize::Length(w, h) => {
-                                        let tw = w.max(1.0);
-                                        let th = h.unwrap_or_else(|| img_h * (tw / img_w)).max(1.0);
-                                        (tw, th)
+                                        // CSS Masking L1 §4: percent axes resolve against the
+                                        // mask painting area; `auto` keeps the intrinsic ratio.
+                                        match (w.resolve(area.width), h.resolve(area.height)) {
+                                            (Some(tw), Some(th)) => (tw.max(1.0), th.max(1.0)),
+                                            (Some(tw), None) => {
+                                                let tw = tw.max(1.0);
+                                                (tw, (img_h * (tw / img_w)).max(1.0))
+                                            }
+                                            (None, Some(th)) => {
+                                                let th = th.max(1.0);
+                                                ((img_w * (th / img_h)).max(1.0), th)
+                                            }
+                                            (None, None) => (img_w, img_h),
+                                        }
                                     }
                                 };
                                 let off_x = match info.position.x {

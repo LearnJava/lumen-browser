@@ -43,6 +43,7 @@ mod links;
 mod momentum_anim;
 mod notification;
 mod omnibox;
+mod panel_layout;
 mod panels;
 mod platform;
 mod prefetch;
@@ -69,14 +70,14 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use lumen_core::event::{Event, FetchPriority, SubresourceKind};
-use lumen_core::ext::{EventSink, HyphenationProvider, NullHyphenationProvider};
+use lumen_core::ext::{EventSink, HyphenationProvider, NullHyphenationProvider, SuspendedHeap};
 use lumen_encoding::KnuthLiangHyphenation;
 use lumen_core::geom::{Point, Rect, Size};
 use lumen_devtools::DevToolsServer;
 use lumen_driver::BrowserSession;
 use lumen_knowledge::HistoryFts;
 use lumen_storage::session_export::{self, ExportedTab, SessionFile};
-use lumen_storage::{BfCache, BfCacheEntry, History, SearchHistory};
+use lumen_storage::{BfCache, BfCacheEntry, BfCachePayload, History, SearchHistory};
 use lumen_dom::{
     Document, NodeData, NodeId, check_form_gate, check_navigation_gate,
     collect_iframes, check_popup_gate,
@@ -444,7 +445,7 @@ fn run_window_mode(
     no_scrollbar: bool,
     deterministic: bool,
 ) -> ExitCode {
-    println!("Lumen v{} — Phase 2 (Interactive, in progress)", env!("CARGO_PKG_VERSION"));
+    println!("Lumen v{} — Phase 2 (Interactive) complete", env!("CARGO_PKG_VERSION"));
 
     // Wire navigator.clipboard to the OS clipboard (task #26). Process-global,
     // installed once; the JS bindings _lumen_clipboard_read/_write forward here.
@@ -591,6 +592,7 @@ fn run_window_mode(
         preload_dispatched: std::collections::HashSet::new(),
         stream_images_requested: std::collections::HashSet::new(),
         pending_restore_scroll: None,
+        pending_pageshow_persisted: false,
         load_generation: 0,
         ime_composing: None,
         bfcache: BfCache::new(16),
@@ -663,7 +665,10 @@ fn run_window_mode(
         shields: panels::shields_panel::ShieldsPanel::new(blocked_log),
         permission: panels::permission_panel::PermissionPanel::new(),
         sidebar: panels::sidebar_panel::SidebarPanel::new(),
+        sidebar_source: None,
         ai_panel: panels::ai_panel::AiPanel::new(),
+        panel_layout: panel_layout::PanelLayout::load(),
+        panel_resize: None,
         note_viewer: panels::note_viewer::NoteViewerPanel::new(),
         ai_backend: Box::new(lumen_core::NullAiBackend),
         bookmarks: lumen_storage::Bookmarks::open_in_memory().expect("bookmarks in-memory"),
@@ -1945,6 +1950,20 @@ pub(crate) trait PersistentJs: Send {
     /// Calls `_lumen_deliver_popstate(state_json, url)` via `eval_js`.
     #[allow(dead_code)]
     fn fire_popstate(&self, state_json: &str, url: &str);
+    /// Fire a page-lifecycle event (`pageshow` / `pagehide`) on `window`
+    /// (HTML Living Standard §8.6 — back/forward cache).
+    ///
+    /// `event` is `"pageshow"` or `"pagehide"` (always a fixed literal supplied
+    /// by the shell — never user data). `persisted` is the `PageTransitionEvent`
+    /// `.persisted` flag: `true` when the page was/will be retained in bfcache
+    /// (restorable without a reload), `false` for a fresh load or a discarded
+    /// page. Delivered via `_lumen_fire_page_lifecycle` in the JS shim.
+    #[allow(dead_code)]
+    fn fire_page_lifecycle(&self, event: &str, persisted: bool) {
+        self.eval_js(&format!(
+            "_lumen_fire_page_lifecycle('{event}', {persisted})"
+        ));
+    }
     /// Drain dirty `<canvas>` 2D pixel buffers for upload to the renderer.
     ///
     /// Returns `(node_index, width, height, rgba)` for every canvas drawn to
@@ -2064,6 +2083,13 @@ pub(crate) trait PersistentJs: Send {
     #[allow(dead_code)]
     fn pointer_capture_nid(&self) -> Option<u32> { None }
 
+    /// Suspend the JS runtime to a heap snapshot for bfcache freeze.
+    ///
+    /// Called when navigating away from a page to preserve JS state without
+    /// serializing the DOM (DOM is serialized separately via Document::to_bytes).
+    /// Returns a compressed heap blob or empty vec if suspension fails/too large.
+    #[allow(dead_code)] // called only for bfcache freeze
+    fn suspend(&mut self) -> SuspendedHeap { SuspendedHeap::default() }
     /// Atomically clear and return the current pointer capture target node ID.
     ///
     /// Called by the shell after `pointerup` (implicit release per W3C Pointer Events
@@ -2324,6 +2350,11 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn pointer_capture_nid(&self) -> Option<u32> {
         self.rt.pointer_capture_nid()
+    }
+    fn suspend(&mut self) -> SuspendedHeap {
+        use lumen_core::ext::JsRuntime as _;
+        // Fall back to an empty heap if suspend fails or the heap is too large.
+        self.rt.suspend().unwrap_or_default()
     }
     fn take_pointer_capture(&self) -> Option<u32> {
         self.rt.take_pointer_capture()
@@ -2756,6 +2787,8 @@ enum KeyCommand {
     ToggleVerticalTabs,
     /// Показать/скрыть tree-style панель вкладок (Ctrl+Shift+B).
     ToggleTreeTabs,
+    /// Перенести активный сайдбар вкладок к противоположному краю окна (Ctrl+Alt+B).
+    FlipActiveDock,
     /// Показать/скрыть панель воркспейсов (Ctrl+Shift+W).
     ToggleWorkspaces,
     /// Показать/скрыть панель Shields (Ctrl+Shift+S).
@@ -2879,6 +2912,10 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         // Ctrl+Shift+B — toggle tree-style tab sidebar
         KeyCode::KeyB if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
             Some(KeyCommand::ToggleTreeTabs)
+        }
+        // Ctrl+Alt+B — move the active tab sidebar to the opposite edge (cross-dock)
+        KeyCode::KeyB if mods == (ModifiersState::CONTROL | ModifiersState::ALT) => {
+            Some(KeyCommand::FlipActiveDock)
         }
         // Ctrl+Shift+W — toggle workspace switcher bar
         KeyCode::KeyW if mods == (ModifiersState::CONTROL | ModifiersState::SHIFT) => {
@@ -5339,6 +5376,12 @@ struct Lumen {
     /// synchronous — the old code set `scroll_x/y` right after `reload()`
     /// returned, but the scroll reset now happens later, at `LoadEvent::LoadDone`.
     pending_restore_scroll: Option<(f32, f32)>,
+    /// Bfcache (HTML LS §8.6): `.persisted` flag for the `pageshow` event fired
+    /// after the next page load completes. Set `true` by `navigate_back`/
+    /// `navigate_forward` when the destination is restored from bfcache,
+    /// consumed (and reset to `false`) in `apply_loaded_page` right after
+    /// `notify_window_loaded`. `false` for ordinary fresh loads.
+    pending_pageshow_persisted: bool,
     /// U-1: monotonic navigation generation. Bumped on every async navigation
     /// (`reload` when a window exists) and on the initial streaming load. Each
     /// streaming `LoadEvent` carries the generation it was spawned under;
@@ -5579,6 +5622,12 @@ struct Lumen {
     /// When visible, `page_content_width_css()` subtracts
     /// [`panels::sidebar_panel::PANEL_WIDTH`] and `relayout()` fires.
     sidebar: panels::sidebar_panel::SidebarPanel,
+    /// Re-layoutable source of the web sidebar page (parsed DOM + stylesheet).
+    ///
+    /// Kept so a drag-resize of the sidebar can reflow its content to the new
+    /// width instead of stretching a frozen display list. `None` until a page
+    /// is opened via [`Self::open_sidebar_page`].
+    sidebar_source: Option<LayoutSource>,
     /// AI assistant sidebar panel (§12.8, GG-1).
     ///
     /// Right-docked 200 CSS px panel with a prompt input field and response area.
@@ -5586,6 +5635,16 @@ struct Lumen {
     /// subtracts [`panels::ai_panel::PANEL_WIDTH`] and `relayout()` fires.
     /// Queries are dispatched to [`Self::ai_backend`] synchronously (Phase 0).
     ai_panel: panels::ai_panel::AiPanel,
+    /// Persisted, drag-resizable widths of the docked sidebars (F2-6).
+    ///
+    /// Replaces the panels' compiled `PANEL_WIDTH` constants: `width_for(id,
+    /// default)` supplies the active width, dragging a panel's inner edge calls
+    /// `set_width` + `relayout` + `save`. Loaded at startup, so the layout
+    /// survives a restart.
+    panel_layout: panel_layout::PanelLayout,
+    /// In-flight docked-panel resize drag: `(dock side, panel id)` of the edge
+    /// currently being dragged, or `None` when no resize is active.
+    panel_resize: Option<(panel_layout::Dock, &'static str)>,
     /// Floating overlay showing a single user annotation (§12.2, GG-2).
     ///
     /// Opened when the user selects a `@notes`-search result from the omnibox
@@ -7131,10 +7190,17 @@ impl Lumen {
         // JS may have requested navigation via location.href= etc.
         self.pending_js_navigate = page.js_navigate;
         // HTML LS §8.2.3 — all resources loaded: readyState → "complete" + window.load event.
+        // HTML LS §8.6 — `pageshow` fires right after `load`. `persisted=true`
+        // only when this page was restored from bfcache (set by navigate_back/
+        // navigate_forward); a fresh load fires `persisted=false`.
+        let pageshow_persisted = std::mem::take(&mut self.pending_pageshow_persisted);
         #[cfg(feature = "quickjs")]
         if let Some(js) = &self.js_ctx {
             js.notify_window_loaded();
+            js.fire_page_lifecycle("pageshow", pageshow_persisted);
         }
+        #[cfg(not(feature = "quickjs"))]
+        let _ = pageshow_persisted;
 
         // Rebuild accessibility tree and push to OS platform bridge (O-5).
         self.update_platform_ax_tree();
@@ -8098,6 +8164,21 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_position = Some(position);
+                // F2-6: while resizing a docked panel, the drag owns the cursor —
+                // update its width and relayout, skip page/inspector hover work.
+                if self.panel_resize.is_some() {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                        .max(1e-6);
+                    let x_css = (position.x as f32) / dpr;
+                    if self.drag_panel_resize(x_css) {
+                        self.request_redraw();
+                    }
+                    self.update_cursor_icon();
+                    return;
+                }
                 self.update_cursor_icon();
                 // DevTools inspector: highlight the box under the cursor.
                 if self.dom_inspector.visible {
@@ -8166,6 +8247,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                     // Collect events to fire while mutating state, then release the
                     // mutable borrow before calling self.js_drag_event() (needs &self).
+                    // Width of any left-docked sidebar, computed before the
+                    // `dnd_state` mutable borrow so page-coord conversion can
+                    // subtract it. Cross-dock aware across all four sidebars.
+                    let left_dock_w = self.left_dock().map_or(0.0, |(_, w)| w);
                     let ev_opt: Option<DndMoveEvents> = if let Some(dnd) = self.dnd_state.as_mut() {
                         let dpr = self
                             .renderer
@@ -8174,15 +8259,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             .max(1e-6);
                         let x_css = (position.x as f32) / dpr;
                         let y_css = (position.y as f32) / dpr;
-                        let (page_x, page_y) = {
-                            let panel_x = if self.vertical_tabs.visible {
-                                panels::vertical_tabs::PANEL_WIDTH
-                            } else if self.tree_tabs.visible {
-                                panels::tree_tabs::PANEL_WIDTH
-                            } else { 0.0 };
-                            (x_css - panel_x + self.scroll_x,
-                             y_css - tabs::strip::TAB_BAR_HEIGHT + self.scroll_y)
-                        };
+                        let (page_x, page_y) = (
+                            x_css - left_dock_w + self.scroll_x,
+                            y_css - tabs::strip::TAB_BAR_HEIGHT + self.scroll_y,
+                        );
                         let target_nid = self.layout_box.as_ref().and_then(|lb| {
                             hit_test(Point::new(page_x, page_y), lb)
                         }).map(|r| r.node);
@@ -8478,6 +8558,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .max(1e-6);
                     let x_css = (cursor.x as f32) / dpr;
                     let y_css = (cursor.y as f32) / dpr;
+                    // F2-6: a press on a docked panel's inner edge begins a
+                    // resize drag; the click never reaches the page / panels.
+                    if let Some(edge) = self.resize_edge_at(x_css, y_css) {
+                        self.panel_resize = Some(edge);
+                        return;
+                    }
                     // CC-4: while the tab context menu is open it captures the
                     // click — picking a row runs the action, anywhere else just
                     // dismisses it. The click never reaches the page / panels.
@@ -8772,18 +8858,28 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
 
-                    // Vertical tab panel: intercept clicks in x < PANEL_WIDTH area.
+                    // Vertical tab panel: intercept clicks within its (possibly
+                    // cross-docked) area. Panel hit-test is left-relative, so map
+                    // the window x into panel-local space.
+                    let vt_w = self.panel_layout.width_for(
+                        panel_layout::ID_VERTICAL_TABS,
+                        panels::vertical_tabs::PANEL_WIDTH,
+                    );
+                    let vt_origin = self
+                        .dock_origin_x(self.sidebar_dock_side(panel_layout::ID_VERTICAL_TABS), vt_w);
                     if self.vertical_tabs.visible
-                        && x_css < panels::vertical_tabs::PANEL_WIDTH
+                        && x_css >= vt_origin
+                        && x_css < vt_origin + vt_w
                     {
                         let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
                         match panels::vertical_tabs::hit_test(
                             &self.tab_strip,
-                            x_css,
+                            x_css - vt_origin,
                             y_css,
                             tabs::strip::TAB_BAR_HEIGHT,
                             win_h,
                             self.vertical_tabs.scroll_y,
+                            vt_w,
                         ) {
                             Some(panels::vertical_tabs::VTabHit::Tab(idx)) => {
                                 self.switch_tab(idx);
@@ -8796,18 +8892,27 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         return;
                     }
 
-                    // Tree-style tab panel: intercept clicks in x < PANEL_WIDTH area.
+                    // Tree-style tab panel: intercept clicks within its (possibly
+                    // cross-docked) area, mapping window x into panel-local space.
+                    let tt_w = self.panel_layout.width_for(
+                        panel_layout::ID_TREE_TABS,
+                        panels::tree_tabs::PANEL_WIDTH,
+                    );
+                    let tt_origin = self
+                        .dock_origin_x(self.sidebar_dock_side(panel_layout::ID_TREE_TABS), tt_w);
                     if self.tree_tabs.visible
-                        && x_css < panels::tree_tabs::PANEL_WIDTH
+                        && x_css >= tt_origin
+                        && x_css < tt_origin + tt_w
                     {
                         let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
                         match panels::tree_tabs::hit_test(
                             &self.tab_strip,
                             &self.tree_tabs,
-                            x_css,
+                            x_css - tt_origin,
                             y_css,
                             tabs::strip::TAB_BAR_HEIGHT,
                             win_h,
+                            tt_w,
                         ) {
                             Some(panels::tree_tabs::TreeTabHit::Tab(idx)) => {
                                 self.switch_tab(idx);
@@ -9347,18 +9452,23 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
 
-                    // AI sidebar panel (§12.8): right-docked AI assistant.
+                    // AI sidebar panel (§12.8): cross-dockable AI assistant.
                     if self.ai_panel.visible {
-                        let win_w = self.viewport_width_css();
                         let tab_h = tabs::strip::TAB_BAR_HEIGHT;
                         let win_h = self.viewport_height_css() + tab_h;
+                        let ai_w = self
+                            .panel_layout
+                            .width_for(panel_layout::ID_AI, panels::ai_panel::PANEL_WIDTH);
+                        let ai_side = self.sidebar_dock_side(panel_layout::ID_AI);
+                        let ai_x = self.dock_origin_x(ai_side, ai_w);
                         if let Some(hit) = panels::ai_panel::hit_test(
                             &self.ai_panel,
                             x_css,
                             y_css,
-                            win_w,
+                            ai_x,
                             tab_h,
                             win_h,
+                            ai_w,
                         ) {
                             match hit {
                                 panels::ai_panel::AiHit::Close => {
@@ -9374,18 +9484,23 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         }
                     }
 
-                    // Sidebar web panel (7D.3): right-docked panel.
+                    // Sidebar web panel (7D.3): cross-dockable panel.
                     if self.sidebar.visible {
-                        let win_w = self.viewport_width_css();
                         let tab_h = tabs::strip::TAB_BAR_HEIGHT;
                         let win_h = self.viewport_height_css() + tab_h;
+                        let sb_w = self
+                            .panel_layout
+                            .width_for(panel_layout::ID_SIDEBAR, panels::sidebar_panel::PANEL_WIDTH);
+                        let sb_side = self.sidebar_dock_side(panel_layout::ID_SIDEBAR);
+                        let sb_x = self.dock_origin_x(sb_side, sb_w);
                         if let Some(hit) = panels::sidebar_panel::hit_test(
                             &self.sidebar,
                             x_css,
                             y_css,
-                            win_w,
+                            sb_x,
                             tab_h,
                             win_h,
+                            sb_w,
                         ) {
                             match hit {
                                 panels::sidebar_panel::SidebarHit::Close => {
@@ -9503,6 +9618,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 } else {
                     // Released — завершаем drag (если был) и сбрасываем resize.
                     self.resize_active = None;
+                    // F2-6: end a docked-panel resize drag and persist the layout.
+                    if let Some((_, id)) = self.panel_resize.take() {
+                        self.panel_layout.save();
+                        // Reflow the web sidebar page to its new width: its content
+                        // is a frozen display list, so unlike the AI panel (drawn
+                        // procedurally) it does not reflow during the drag itself.
+                        if id == panel_layout::ID_SIDEBAR {
+                            self.relayout_sidebar();
+                        }
+                        self.update_cursor_icon();
+                        return;
+                    }
                     // CSS :active — clear on release.
                     if self.active_nid.is_some() {
                         self.active_nid = None;
@@ -9925,10 +10052,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Both schedulers are ticked once per frame and merged into a single
                 // AnimationFrame. Transition values override @keyframes when both apply.
                 if let (Some(lb), Some(src)) = (&self.layout_box, &self.layout_source) {
+                    let vp = lumen_layout::Viewport {
+                        width: self.viewport_width_css(),
+                        height: self.viewport_height_css(),
+                    };
                     let mut frame = self.animation_scheduler.tick(
                         timestamp_ms,
                         lb,
                         &src.stylesheet,
+                        self.scroll_x,
+                        self.scroll_y,
+                        vp,
                     );
                     let now_s = (timestamp_ms / 1000.0) as f32;
                     let trans_frame = self.transition_scheduler.tick(now_s);
@@ -10049,6 +10183,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // перед своими DrawText (когда find открыт). Прокручивается.
                 // Overlay-полоса: find-bar + scrollbar — viewport-locked.
                 // Без find — page = self.display_list, overlay = только scrollbar.
+                // Resolved chrome palette for the active theme — passed to every
+                // themed overlay panel so they follow the light/dark setting.
+                let pal = self.shell_theme.palette(self.dark_mode);
+
                 let (page_buf, mut overlay_buf): (Option<lumen_paint::DisplayList>, lumen_paint::DisplayList) =
                     if self.find.is_open() {
                         let win_size = self.window.as_ref().map_or((1024, 720), |w| {
@@ -10162,14 +10300,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let mut bar = address_bar::build_bar_overlay(
                         &self.address_bar,
                         address_bar::BarOverlay { window_size: win_size },
+                        &pal,
                     );
                     bar.append(&mut overlay_buf);
                     overlay_buf = bar;
                 }
 
-                // Compositor offload: если есть активные анимации с opacity/transform —
-                // пересобираем display list из layout_box с overrides, минуя relayout.
-                // color/background-color остаются в anim_frame на будущее (требуют relayout).
+                // Compositor offload: если есть активные анимации с opacity/transform/
+                // color/background-color — пересобираем display list из layout_box с
+                // overrides, минуя relayout (BUG-231 распространил offload на цвета).
                 let anim_dl: Option<lumen_paint::DisplayList> =
                     if let (Some(frame), Some(lb)) = (&self.anim_frame, &self.layout_box) {
                         let comp = frame.to_compositor_frame();
@@ -10274,6 +10413,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         &self.privacy,
                         priv_win_size,
                         tabs::strip::TAB_BAR_HEIGHT,
+                        &pal,
                     );
                     overlay_buf.append(&mut priv_cmds);
                 }
@@ -10311,12 +10451,22 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Rendered before the tab bar so tab bar draws on top.
                 if self.vertical_tabs.visible {
                     let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                    let vt_w = self.panel_layout.width_for(
+                        panel_layout::ID_VERTICAL_TABS,
+                        panels::vertical_tabs::PANEL_WIDTH,
+                    );
                     let mut vt_cmds = panels::vertical_tabs::build_tab_bar_vertical(
                         &self.tab_strip,
                         tabs::strip::TAB_BAR_HEIGHT,
                         win_h,
                         self.vertical_tabs.scroll_y,
+                        &pal,
+                        vt_w,
                     );
+                    // Cross-dock: the panel paints left-relative; re-home it onto
+                    // the right edge when flipped there.
+                    let vt_side = self.sidebar_dock_side(panel_layout::ID_VERTICAL_TABS);
+                    Self::offset_overlay_x(&mut vt_cmds, self.dock_origin_x(vt_side, vt_w));
                     overlay_buf.append(&mut vt_cmds);
                 }
 
@@ -10325,12 +10475,22 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Toggle via Ctrl+Shift+B; occupies the same PANEL_WIDTH as vertical_tabs.
                 if self.tree_tabs.visible {
                     let win_h = self.viewport_height_css() + tabs::strip::TAB_BAR_HEIGHT;
+                    let tt_w = self.panel_layout.width_for(
+                        panel_layout::ID_TREE_TABS,
+                        panels::tree_tabs::PANEL_WIDTH,
+                    );
                     let mut tt_cmds = panels::tree_tabs::build_panel(
                         &self.tab_strip,
                         &self.tree_tabs,
                         tabs::strip::TAB_BAR_HEIGHT,
                         win_h,
+                        &pal,
+                        tt_w,
                     );
+                    // Cross-dock: re-home the left-relative panel onto the right
+                    // edge when flipped there.
+                    let tt_side = self.sidebar_dock_side(panel_layout::ID_TREE_TABS);
+                    Self::offset_overlay_x(&mut tt_cmds, self.dock_origin_x(tt_side, tt_w));
                     overlay_buf.append(&mut tt_cmds);
                 }
 
@@ -10344,6 +10504,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         &self.shields,
                         win_w,
                         tab_h,
+                        &pal,
                     );
                     overlay_buf.append(&mut sh_cmds);
                 }
@@ -10354,6 +10515,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let mut perm_cmds = panels::permission_panel::build_panel(
                         &self.permission,
                         tab_h,
+                        &pal,
                     );
                     overlay_buf.append(&mut perm_cmds);
                 }
@@ -10364,34 +10526,46 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         let s = w.inner_size();
                         (s.width, s.height)
                     });
-                    let mut nv_cmds = panels::note_viewer::build_note_viewer(&self.note_viewer, win_size);
+                    let mut nv_cmds = panels::note_viewer::build_note_viewer(&self.note_viewer, win_size, &pal);
                     overlay_buf.append(&mut nv_cmds);
                 }
 
-                // AI sidebar panel (§12.8, GG-1): right-docked AI assistant.
+                // AI sidebar panel (§12.8, GG-1): cross-dockable AI assistant.
                 if self.ai_panel.visible {
-                    let win_w = self.viewport_width_css();
                     let tab_h = tabs::strip::TAB_BAR_HEIGHT;
                     let win_h = self.viewport_height_css() + tab_h;
+                    let ai_w = self
+                        .panel_layout
+                        .width_for(panel_layout::ID_AI, panels::ai_panel::PANEL_WIDTH);
+                    let ai_side = self.sidebar_dock_side(panel_layout::ID_AI);
+                    let ai_x = self.dock_origin_x(ai_side, ai_w);
                     let mut ai_cmds = panels::ai_panel::build_panel(
                         &self.ai_panel,
-                        win_w,
+                        ai_x,
                         tab_h,
                         win_h,
+                        &pal,
+                        ai_w,
                     );
                     overlay_buf.append(&mut ai_cmds);
                 }
 
-                // Sidebar web panel (7D.3): right-docked secondary viewport.
+                // Sidebar web panel (7D.3): cross-dockable secondary viewport.
                 if self.sidebar.visible {
-                    let win_w = self.viewport_width_css();
                     let tab_h = tabs::strip::TAB_BAR_HEIGHT;
                     let win_h = self.viewport_height_css() + tab_h;
+                    let sb_w = self
+                        .panel_layout
+                        .width_for(panel_layout::ID_SIDEBAR, panels::sidebar_panel::PANEL_WIDTH);
+                    let sb_side = self.sidebar_dock_side(panel_layout::ID_SIDEBAR);
+                    let sb_x = self.dock_origin_x(sb_side, sb_w);
                     let mut sb_cmds = panels::sidebar_panel::build_panel(
                         &self.sidebar,
-                        win_w,
+                        sb_x,
                         tab_h,
                         win_h,
+                        &pal,
+                        sb_w,
                     );
                     overlay_buf.append(&mut sb_cmds);
                 }
@@ -10408,6 +10582,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         &self.workspace_panel,
                         win_w,
                         win_h,
+                        &pal,
                     );
                     overlay_buf.append(&mut ws_cmds);
                 }
@@ -10418,7 +10593,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 if self.bookmark_panel.visible {
                     let (ax, ay) = self.bookmark_anchor();
                     let mut bm_cmds =
-                        panels::bookmark_panel::build_panel(&self.bookmark_panel, ax, ay);
+                        panels::bookmark_panel::build_panel(&self.bookmark_panel, ax, ay, &pal);
                     overlay_buf.append(&mut bm_cmds);
                 }
 
@@ -10428,7 +10603,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let win_h = self.viewport_height_css();
                     let win_size = (win_w as u32, win_h as u32);
                     let mut a11y_cmds =
-                        panels::a11y_panel::build_a11y_panel(&self.a11y_panel, win_size);
+                        panels::a11y_panel::build_a11y_panel(&self.a11y_panel, win_size, &pal);
                     overlay_buf.append(&mut a11y_cmds);
                 }
 
@@ -10444,7 +10619,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         color: lumen_layout::Color { r: 0, g: 0, b: 0, a: 110 },
                     });
                     let mut pp_cmds =
-                        panels::print_panel::build_panel(&self.print_panel, pp_x, pp_y);
+                        panels::print_panel::build_panel(&self.print_panel, pp_x, pp_y, &pal);
                     overlay_buf.append(&mut pp_cmds);
                 }
 
@@ -10454,7 +10629,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let win_h = self.viewport_height_css();
                     let sp_x = (win_w - panels::settings_panel::PANEL_W) * 0.5;
                     let sp_y = (win_h - panels::settings_panel::PANEL_H) * 0.5;
-                    panels::settings_panel::build_panel(&self.settings_panel, &mut overlay_buf, sp_x, sp_y);
+                    panels::settings_panel::build_panel(&self.settings_panel, &mut overlay_buf, sp_x, sp_y, &pal);
                 }
 
                 // Keyboard shortcuts panel (§D-4): centred floating overlay.
@@ -10463,7 +10638,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let win_h = self.viewport_height_css();
                     let kp_x = (win_w - panels::shortcuts_panel::PANEL_W) * 0.5;
                     let kp_y = (win_h - panels::shortcuts_panel::PANEL_H) * 0.5;
-                    self.shortcuts_panel.build_panel(&mut overlay_buf, kp_x, kp_y);
+                    self.shortcuts_panel.build_panel(&mut overlay_buf, kp_x, kp_y, &pal);
                 }
 
                 // Certificate viewer panel (§D-1): centred floating overlay.
@@ -10472,7 +10647,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let win_h = self.viewport_height_css();
                     let cp_x = (win_w - panels::cert_panel::PANEL_W) * 0.5;
                     let cp_y = (win_h - panels::cert_panel::PANEL_H) * 0.5;
-                    panels::cert_panel::build_panel(&self.cert_panel, &mut overlay_buf, cp_x, cp_y);
+                    panels::cert_panel::build_panel(&self.cert_panel, &mut overlay_buf, cp_x, cp_y, &pal);
                 }
 
                 // History panel (task D-5): centred floating overlay.
@@ -10480,7 +10655,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let win_w = self.viewport_width_css();
                     let tab_h = tabs::strip::TAB_BAR_HEIGHT;
                     let mut hist_cmds =
-                        panels::history_panel::build_panel(&self.history_panel, win_w, tab_h);
+                        panels::history_panel::build_panel(&self.history_panel, win_w, tab_h, &pal);
                     overlay_buf.append(&mut hist_cmds);
                 }
 
@@ -10492,6 +10667,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         &self.read_later_panel,
                         win_w,
                         tab_h,
+                        &pal,
                     );
                     overlay_buf.append(&mut rl_cmds);
                 }
@@ -10510,7 +10686,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let mut tab_cmds = tabs::strip::build_tab_bar(
                         &self.tab_strip,
                         tab_area_w,
-                        self.shell_theme.accent_color(),
+                        &pal,
                         self.tab_drag.as_ref(),
                     );
                     overlay_buf.append(&mut tab_cmds);
@@ -10574,6 +10750,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         &self.command_palette,
                         win_w,
                         win_h,
+                        &pal,
                     );
                     overlay_buf.append(&mut cp_cmds);
                 }
@@ -10584,14 +10761,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 if self.focus.active {
                     let win_w = self.viewport_width_css();
                     let mut focus_cmds =
-                        panels::focus_panel::build_panel(&self.focus, win_w);
+                        panels::focus_panel::build_panel(&self.focus, win_w, &pal);
                     overlay_buf.append(&mut focus_cmds);
                 }
 
                 // Picture-in-picture window (task #21) — drawn last so it floats
                 // above all other chrome.
                 if self.pip.active {
-                    let mut pip_cmds = panels::pip_window::build_panel(&self.pip);
+                    let mut pip_cmds = panels::pip_window::build_panel(&self.pip, &pal);
                     overlay_buf.append(&mut pip_cmds);
                 }
 
@@ -10641,6 +10818,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             split_x,
                             tab_h,
                             vp_full_h,
+                            &pal,
                         ))
                     } else {
                         None
@@ -10669,7 +10847,22 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     Vec::new()
                 };
 
+                // Width of any left-docked sidebar, computed before the renderer
+                // borrow so the page transform can shift right of it. Cross-dock
+                // aware across all four sidebars (tabs / AI / web).
+                let page_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
+
+                // CSS Backgrounds §3.11.1: clear the whole surface to the canvas
+                // background (the root element's propagated background color) so the
+                // page background fills the viewport even when the page box is smaller
+                // than the window. Computed before borrowing the renderer mutably.
+                let canvas_bg = self
+                    .layout_box
+                    .as_ref()
+                    .and_then(lumen_layout::canvas_background_color);
+
                 if let Some(r) = self.renderer.as_mut() {
+                    r.set_canvas_background(canvas_bg);
                     if let Some(combined) = split_combined {
                         // Split-view mode: combined DL with baked scroll; renderer gets 0,0.
                         if let Err(err) = r.render(&combined, &overlay_buf, 0.0, 0.0) {
@@ -10684,13 +10877,6 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             .unwrap_or(&self.display_list);
                         let mut shifted: lumen_paint::DisplayList =
                             Vec::with_capacity(base.len() + 2);
-                        let page_x_offset = if self.vertical_tabs.visible {
-                            panels::vertical_tabs::PANEL_WIDTH
-                        } else if self.tree_tabs.visible {
-                            panels::tree_tabs::PANEL_WIDTH
-                        } else {
-                            0.0
-                        };
                         shifted.push(lumen_paint::DisplayCommand::PushTransform {
                             matrix: Mat4::translation_2d(
                                 page_x_offset,
@@ -10807,13 +10993,7 @@ impl Lumen {
     /// a click.  No-op when there is no JS context or no element at the position.
     /// Also fires the matching W3C `pointermove` event per Pointer Events L2 §10.
     fn dispatch_mouse_move(&mut self, x_css: f32, y_css: f32) {
-        let panel_x_offset = if self.vertical_tabs.visible {
-            panels::vertical_tabs::PANEL_WIDTH
-        } else if self.tree_tabs.visible {
-            panels::tree_tabs::PANEL_WIDTH
-        } else {
-            0.0
-        };
+        let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
         let page_x = (x_css - panel_x_offset) + self.scroll_x;
         let page_y = (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y;
         let hit = self.layout_box.as_ref().and_then(|lb| {
@@ -10844,13 +11024,7 @@ impl Lumen {
     /// [`Lumen::handle_click_at`] so hit tests stay consistent across input
     /// paths.
     fn page_point(&self, x_css: f32, y_css: f32) -> (f32, f32) {
-        let panel_x_offset = if self.vertical_tabs.visible {
-            panels::vertical_tabs::PANEL_WIDTH
-        } else if self.tree_tabs.visible {
-            panels::tree_tabs::PANEL_WIDTH
-        } else {
-            0.0
-        };
+        let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
         (
             (x_css - panel_x_offset) + self.scroll_x,
             (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y,
@@ -11037,13 +11211,7 @@ impl Lumen {
         // right by PANEL_WIDTH, so we subtract that offset to convert to page coords.
         // Page content is also shifted down by TAB_BAR_HEIGHT via PushTransform,
         // so we subtract that offset from y to get layout coordinates.
-        let panel_x_offset = if self.vertical_tabs.visible {
-            panels::vertical_tabs::PANEL_WIDTH
-        } else if self.tree_tabs.visible {
-            panels::tree_tabs::PANEL_WIDTH
-        } else {
-            0.0
-        };
+        let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
         let page_x = (x_css - panel_x_offset) + self.scroll_x;
         let page_y = (y_css - tabs::strip::TAB_BAR_HEIGHT) + self.scroll_y;
         let hit_result = self.layout_box.as_ref().and_then(|lb| {
@@ -11906,6 +12074,13 @@ impl Lumen {
                 self.relayout();
                 self.request_redraw();
             }
+            KeyCommand::FlipActiveDock => {
+                // Cross-dock the active sidebar (tabs, AI, or web);
+                // flip_active_sidebar_dock relayouts internally on success.
+                if self.flip_active_sidebar_dock() {
+                    self.request_redraw();
+                }
+            }
             KeyCommand::ToggleWorkspaces => {
                 self.workspace_panel.toggle();
                 // Viewport height changes — re-layout so content doesn't hide under bar.
@@ -12204,21 +12379,33 @@ impl Lumen {
     /// Сохранить текущую страницу в bfcache и стек навигации,
     /// затем загрузить `source` как новую страницу.
     /// Очищает `nav_fwd` (аналог браузера при навигации вперёд из середины истории).
+    /// Сохранить текущую страницу в bfcache и стек навигации,
+    /// затем загрузить `source` как новую страницу.
+    /// Очищает `nav_fwd` (аналог браузера при навигации вперёд из середины истории).
     fn navigate_to(&mut self, source: PageSource) {
         click_log::log_nav(&source.describe());
         self.hint.close();
         // Snapshot current page into bfcache if it has an HTML source.
+        let mut persisted = false;
         if let Some(ref ls) = self.layout_source
             && let Some(ref html) = ls.html_source
             && let Some(url) = self.source.url_str()
         {
             self.bfcache.store(BfCacheEntry {
                 url: url.to_owned(),
-                html: html.clone(),
+                payload: BfCachePayload::HtmlSnapshot(html.clone()),
                 scroll_x: self.scroll_x,
                 scroll_y: self.scroll_y,
                 title: self.title.clone(),
             });
+            persisted = true;
+        }
+        // HTML LS §8.6: fire `pagehide` on the outgoing page before it unloads.
+        // `persisted = true` signals it was retained in bfcache (restorable on
+        // back-navigation), so listeners can skip teardown they will redo on
+        // `pageshow`.
+        if let Some(js) = &self.js_ctx {
+            js.fire_page_lifecycle("pagehide", persisted);
         }
         // Push current page to back stack (full-doc entry: no same_doc_state_json).
         self.nav_back.push(NavEntry {
@@ -12277,6 +12464,10 @@ impl Lumen {
         }
 
         // Full-document navigation: restore page and reload.
+        // HTML LS §8.6: fire `pagehide` on the current page before it unloads.
+        if let Some(js) = &self.js_ctx {
+            js.fire_page_lifecycle("pagehide", false);
+        }
         // Push current page to forward stack.
         let cur_display = self.display_url.take();
         let cur_state = std::mem::replace(
@@ -12294,11 +12485,20 @@ impl Lumen {
         // Try bfcache first.
         let restored_scroll = if let Some(url) = prev.source.url_str() {
             if let Some(entry) = self.bfcache.retrieve(url) {
-                let html = entry.html.clone();
+                let html = match &entry.payload {
+                    BfCachePayload::HtmlSnapshot(h) => h.clone(),
+                    // Frozen (DOM + JS heap) restore is not yet wired — the JS
+                    // heap suspend path is stubbed. Falls back to a blank reload
+                    // until full freeze/thaw lands. Never reached today because
+                    // the store path only writes HtmlSnapshot payloads.
+                    BfCachePayload::Frozen(_) => String::new(),
+                };
                 let scroll_x = entry.scroll_x;
                 let scroll_y = entry.scroll_y;
                 let base_url = url.to_owned();
                 self.source = PageSource::Snapshot { html, base_url };
+                // Restored from bfcache → the next `pageshow` is `persisted=true`.
+                self.pending_pageshow_persisted = true;
                 Some((scroll_x, scroll_y))
             } else {
                 self.source = prev.source;
@@ -12346,6 +12546,10 @@ impl Lumen {
         }
 
         // Full-document forward navigation.
+        // HTML LS §8.6: fire `pagehide` on the current page before it unloads.
+        if let Some(js) = &self.js_ctx {
+            js.fire_page_lifecycle("pagehide", false);
+        }
         let cur_display = self.display_url.take();
         let cur_state = std::mem::replace(
             &mut self.current_history_state_json,
@@ -12361,11 +12565,20 @@ impl Lumen {
         // Try bfcache first.
         let restored_scroll = if let Some(url) = next.source.url_str() {
             if let Some(entry) = self.bfcache.retrieve(url) {
-                let html = entry.html.clone();
+                let html = match &entry.payload {
+                    BfCachePayload::HtmlSnapshot(h) => h.clone(),
+                    // Frozen (DOM + JS heap) restore is not yet wired — the JS
+                    // heap suspend path is stubbed. Falls back to a blank reload
+                    // until full freeze/thaw lands. Never reached today because
+                    // the store path only writes HtmlSnapshot payloads.
+                    BfCachePayload::Frozen(_) => String::new(),
+                };
                 let scroll_x = entry.scroll_x;
                 let scroll_y = entry.scroll_y;
                 let base_url = url.to_owned();
                 self.source = PageSource::Snapshot { html, base_url };
+                // Restored from bfcache → the next `pageshow` is `persisted=true`.
+                self.pending_pageshow_persisted = true;
                 Some((scroll_x, scroll_y))
             } else {
                 self.source = next.source;
@@ -12539,6 +12752,17 @@ impl Lumen {
             return;
         }
 
+        // `switch-tab:<id>` — switch to an open tab by its stable id (§12.4,
+        // `@tabs` omnibox prefix). Resolve id → current index (tabs reorder).
+        if let Some(id_str) = value.trim().strip_prefix("switch-tab:") {
+            if let Ok(id) = id_str.parse::<usize>()
+                && let Some(idx) = self.tab_strip.tabs.iter().position(|t| t.id == id)
+            {
+                self.switch_tab(idx);
+            }
+            return;
+        }
+
         // `about:settings` — open the browser settings overlay (task D-7).
         if value.trim() == "about:settings" {
             let snap = self.settings_store.snapshot();
@@ -12674,6 +12898,49 @@ impl Lumen {
                             snippet: hit.snippet,
                             viewer_url,
                         });
+                    }
+                }
+            }
+            OmniboxPrefix::ReadLater => {
+                // @read-later <query> — FTS5-поиск по сохранённым страницам §12.3
+                // (до 7 результатов). Выбор подсказки → навигация на URL.
+                if !query.is_empty() && let Ok(hits) = self.read_later_store.search(query, 7) {
+                    for hit in hits {
+                        suggestions.push(OmniboxSuggestion::ReadLater {
+                            url: hit.entry.url,
+                            title: hit.entry.title,
+                            snippet: hit.snippet,
+                        });
+                    }
+                }
+            }
+            OmniboxPrefix::Tabs => {
+                // @tabs <query> — подстрочный поиск по открытым вкладкам §12.4
+                // (заголовок + URL), case-insensitive. Пустой запрос → все
+                // вкладки. Выбор подсказки → переключение по стабильному id.
+                let needle = query.to_lowercase();
+                let active = self.tab_strip.active;
+                for (idx, tab) in self.tab_strip.tabs.iter().enumerate() {
+                    let url = if idx == active {
+                        self.source.url_str().unwrap_or("").to_owned()
+                    } else {
+                        self.bg_tabs
+                            .get(&tab.id)
+                            .and_then(|s| s.source.url_str().map(str::to_owned))
+                            .unwrap_or_default()
+                    };
+                    if needle.is_empty()
+                        || tab.title.to_lowercase().contains(&needle)
+                        || url.to_lowercase().contains(&needle)
+                    {
+                        suggestions.push(OmniboxSuggestion::Tab {
+                            title: tab.title.clone(),
+                            url,
+                            switch_value: format!("switch-tab:{}", tab.id),
+                        });
+                    }
+                    if suggestions.len() >= 8 {
+                        break;
                     }
                 }
             }
@@ -13304,21 +13571,169 @@ impl Lumen {
     /// ширина вертикальных панелей вкладок (слева) и sidebar (справа), если
     /// они видимы. Используется для клампинга горизонтального скролла.
     fn page_content_width_css(&self) -> f32 {
-        let left_offset = if self.vertical_tabs.visible {
-            panels::vertical_tabs::PANEL_WIDTH
-        } else if self.tree_tabs.visible {
-            panels::tree_tabs::PANEL_WIDTH
-        } else {
-            0.0
-        };
-        let right_offset = if self.ai_panel.visible {
-            panels::ai_panel::PANEL_WIDTH
-        } else if self.sidebar.visible {
-            panels::sidebar_panel::PANEL_WIDTH
-        } else {
-            0.0
-        };
+        let (left_offset, right_offset) = self.docked_panel_offsets();
         (self.viewport_width_css() - left_offset - right_offset).max(0.0)
+    }
+
+    /// All four cross-dockable docked sidebars as `(persist id, visible, default
+    /// width)`, in side-resolution priority order (outermost first). Each can be
+    /// flipped to either window edge; [`Self::left_dock`] / [`Self::right_dock`]
+    /// pick the first visible one whose effective side matches.
+    fn dockable_sidebars(&self) -> [(&'static str, bool, f32); 4] {
+        [
+            (
+                panel_layout::ID_VERTICAL_TABS,
+                self.vertical_tabs.visible,
+                panels::vertical_tabs::PANEL_WIDTH,
+            ),
+            (
+                panel_layout::ID_TREE_TABS,
+                self.tree_tabs.visible,
+                panels::tree_tabs::PANEL_WIDTH,
+            ),
+            (
+                panel_layout::ID_AI,
+                self.ai_panel.visible,
+                panels::ai_panel::PANEL_WIDTH,
+            ),
+            (
+                panel_layout::ID_SIDEBAR,
+                self.sidebar.visible,
+                panels::sidebar_panel::PANEL_WIDTH,
+            ),
+        ]
+    }
+
+    /// Effective dock side of a cross-dockable sidebar: its persisted override,
+    /// falling back to [`panel_layout::default_dock`].
+    fn sidebar_dock_side(&self, id: &'static str) -> panel_layout::Dock {
+        self.panel_layout.dock_for(id, panel_layout::default_dock(id))
+    }
+
+    /// Left x-origin (CSS px) of a docked sidebar of `width` on `side`: left
+    /// docks hug `x = 0`, right docks hug the window's right edge.
+    fn dock_origin_x(&self, side: panel_layout::Dock, width: f32) -> f32 {
+        match side {
+            panel_layout::Dock::Left => 0.0,
+            panel_layout::Dock::Right => (self.viewport_width_css() - width).max(0.0),
+        }
+    }
+
+    /// Active left-docked sidebar as `(persist id, current width CSS px)`, or
+    /// `None` when no left sidebar is visible. Honours per-panel cross-dock side
+    /// overrides: a sidebar moved to the right edge no longer counts here.
+    fn left_dock(&self) -> Option<(&'static str, f32)> {
+        self.dockable_sidebars().into_iter().find_map(|(id, visible, default_w)| {
+            (visible && self.sidebar_dock_side(id) == panel_layout::Dock::Left)
+                .then(|| (id, self.panel_layout.width_for(id, default_w)))
+        })
+    }
+
+    /// Active right-docked sidebar as `(persist id, current width CSS px)`, or
+    /// `None` when none is visible. Resolved in [`Self::dockable_sidebars`]
+    /// priority order: a tab sidebar flipped to the right edge precedes the AI
+    /// panel, which precedes the web sidebar — mirroring
+    /// [`Self::page_content_width_css`].
+    fn right_dock(&self) -> Option<(&'static str, f32)> {
+        self.dockable_sidebars().into_iter().find_map(|(id, visible, default_w)| {
+            (visible && self.sidebar_dock_side(id) == panel_layout::Dock::Right)
+                .then(|| (id, self.panel_layout.width_for(id, default_w)))
+        })
+    }
+
+    /// Move the active docked sidebar to the opposite window edge, persist the
+    /// choice, and relayout. The "active" sidebar is the first visible one in
+    /// [`Self::dockable_sidebars`] order (tab sidebars, then AI, then web).
+    /// Refuses the move when the target edge is already occupied by another
+    /// docked panel (avoids overlap), and is a no-op when no sidebar is open.
+    /// Returns `true` if a panel was moved.
+    fn flip_active_sidebar_dock(&mut self) -> bool {
+        let Some((id, _, _)) = self
+            .dockable_sidebars()
+            .into_iter()
+            .find(|(_, visible, _)| *visible)
+        else {
+            return false;
+        };
+        let target = self.sidebar_dock_side(id).opposite();
+        let occupied = match target {
+            panel_layout::Dock::Left => self.left_dock().is_some(),
+            panel_layout::Dock::Right => self.right_dock().is_some(),
+        };
+        if occupied {
+            return false;
+        }
+        self.panel_layout.set_dock(id, target);
+        self.panel_layout.save();
+        self.relayout();
+        true
+    }
+
+    /// Shift every rect-bearing command in `cmds` right by `dx` CSS px.
+    ///
+    /// Used to re-home a left-relative sidebar display list onto the right edge
+    /// when its dock side is flipped. The tab sidebars emit only `FillRect`,
+    /// `FillRoundedRect`, and `DrawText`; other variants are left untouched.
+    fn offset_overlay_x(cmds: &mut lumen_paint::DisplayList, dx: f32) {
+        if dx == 0.0 {
+            return;
+        }
+        for cmd in cmds.iter_mut() {
+            match cmd {
+                lumen_paint::DisplayCommand::FillRect { rect, .. }
+                | lumen_paint::DisplayCommand::FillRoundedRect { rect, .. }
+                | lumen_paint::DisplayCommand::DrawText { rect, .. } => rect.x += dx,
+                _ => {}
+            }
+        }
+    }
+
+    /// `(left, right)` docked-sidebar widths in CSS px (0 when not visible).
+    fn docked_panel_offsets(&self) -> (f32, f32) {
+        (
+            self.left_dock().map_or(0.0, |(_, w)| w),
+            self.right_dock().map_or(0.0, |(_, w)| w),
+        )
+    }
+
+    /// If the cursor at `(x_css, y_css)` is within [`panel_layout::RESIZE_GRAB`]
+    /// of a visible docked sidebar's inner edge (and below the tab bar), return
+    /// the `(dock side, panel id)` a press there would start resizing.
+    ///
+    /// Left docks have their handle at `x = width`; right docks at
+    /// `x = viewport_width − width`.
+    fn resize_edge_at(&self, x_css: f32, y_css: f32) -> Option<(panel_layout::Dock, &'static str)> {
+        if y_css < tabs::strip::TAB_BAR_HEIGHT {
+            return None;
+        }
+        let grab = panel_layout::RESIZE_GRAB;
+        if let Some((id, w)) = self.left_dock()
+            && (x_css - w).abs() <= grab
+        {
+            return Some((panel_layout::Dock::Left, id));
+        }
+        if let Some((id, w)) = self.right_dock()
+            && (x_css - (self.viewport_width_css() - w)).abs() <= grab
+        {
+            return Some((panel_layout::Dock::Right, id));
+        }
+        None
+    }
+
+    /// Apply an in-flight docked-panel resize drag: turn the cursor x into a new
+    /// width for the dragged dock, store it (clamped) in [`Self::panel_layout`],
+    /// and relayout the page. Returns `true` if the width changed.
+    fn drag_panel_resize(&mut self, x_css: f32) -> bool {
+        let Some((dock, id)) = self.panel_resize else {
+            return false;
+        };
+        let new_w = dock.width_from_cursor(x_css, self.viewport_width_css());
+        if self.panel_layout.set_width(id, new_w) {
+            self.relayout();
+            true
+        } else {
+            false
+        }
     }
 
     /// Open the sidebar with `url` and populate it with a freshly-laid-out page.
@@ -13352,16 +13767,40 @@ impl Lumen {
         };
 
         let sidebar_vp = Size::new(
-            panels::sidebar_panel::PANEL_WIDTH,
+            self.panel_layout
+                .width_for(panel_layout::ID_SIDEBAR, panels::sidebar_panel::PANEL_WIDTH),
             self.viewport_height_css().max(100.0),
         );
         let (dl, _lb) = relayout_page(&src, sidebar_vp, &*self.hyp_provider, self.dark_mode, &self.web_fonts);
         let content_h = content_height_of(&dl);
         self.sidebar.set_page(dl, doc_title, content_h);
+        // Retain the parsed source so a later drag-resize can reflow the page to
+        // the new width (F2-6) instead of stretching the frozen display list.
+        self.sidebar_source = Some(src);
 
         if !was_visible {
             self.relayout();
         }
+        self.request_redraw();
+    }
+
+    /// Reflow the web sidebar page to the current sidebar width.
+    ///
+    /// Re-runs layout over the retained [`Self::sidebar_source`] at the panel's
+    /// active `panel_layout` width, replacing the frozen display list while
+    /// preserving the title and clamping the scroll offset. No-op when the
+    /// sidebar has no open page. Called on a sidebar resize drag release (F2-6).
+    fn relayout_sidebar(&mut self) {
+        let Some(src) = self.sidebar_source.as_ref() else {
+            return;
+        };
+        let width = self
+            .panel_layout
+            .width_for(panel_layout::ID_SIDEBAR, panels::sidebar_panel::PANEL_WIDTH);
+        let vp = Size::new(width, self.viewport_height_css().max(100.0));
+        let (dl, _lb) = relayout_page(src, vp, &*self.hyp_provider, self.dark_mode, &self.web_fonts);
+        let content_h = content_height_of(&dl);
+        self.sidebar.update_page(dl, content_h);
         self.request_redraw();
     }
 
@@ -14168,7 +14607,11 @@ impl Lumen {
         );
         let scrollbar_icon = cursor_icon_for_hover(hover, self.scroll_drag.is_some());
 
-        let desired = if scrollbar_icon != CursorIcon::Default {
+        // F2-6: a docked-panel resize drag (or hovering an edge) shows the
+        // horizontal-resize cursor, ahead of scrollbar/page hover.
+        let desired = if self.panel_resize.is_some() || self.resize_edge_at(x_css, y_css).is_some() {
+            CursorIcon::EwResize
+        } else if scrollbar_icon != CursorIcon::Default {
             scrollbar_icon
         } else if let Some(lb) = &self.layout_box {
             // Hit-test layout tree in page coordinates (viewport + scroll offset).

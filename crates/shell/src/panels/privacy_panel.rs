@@ -31,6 +31,7 @@ use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
 
 use crate::devtools::network_panel::{NetworkEntry, NetworkLog};
+use crate::panels::themes::Palette;
 
 // ── Layout constants ────────────────────────────────────────────────────────────
 
@@ -57,20 +58,11 @@ const CLOSE_SIZE: f32 = 22.0;
 
 // ── Colours ─────────────────────────────────────────────────────────────────────
 
-const BG: Color = Color { r: 22, g: 23, b: 28, a: 245 };
-const HEADER_BG: Color = Color { r: 30, g: 31, b: 38, a: 255 };
-const SUMMARY_BG: Color = Color { r: 26, g: 27, b: 33, a: 255 };
-const BORDER: Color = Color { r: 52, g: 54, b: 62, a: 255 };
-const ROW_ALT_BG: Color = Color { r: 27, g: 28, b: 34, a: 255 };
-const FG_TITLE: Color = Color { r: 226, g: 228, b: 234, a: 255 };
-const FG_DOMAIN: Color = Color { r: 214, g: 216, b: 222, a: 255 };
-const FG_DIM: Color = Color { r: 132, g: 134, b: 142, a: 255 };
-const FG_CLOSE: Color = Color { r: 170, g: 172, b: 180, a: 255 };
-/// Blocked dot + matched-filter text (red).
+/// Blocked dot + matched-filter text (red). Semantic — never palette-mapped.
 const BLOCKED: Color = Color { r: 237, g: 90, b: 90, a: 255 };
-/// Allowed dot (green).
+/// Allowed dot (green). Semantic — never palette-mapped.
 const ALLOWED: Color = Color { r: 90, g: 200, b: 120, a: 255 };
-/// Pending (in-flight) dot (grey).
+/// Pending (in-flight) dot (grey). Semantic — never palette-mapped.
 const PENDING: Color = Color { r: 150, g: 152, b: 160, a: 255 };
 
 /// Height in CSS px of the scrollable request-list area, given the full window
@@ -218,11 +210,13 @@ pub fn hit_test(
 ///
 /// Returns an empty `DisplayList` when `panel.visible` is `false`. `(win_w,
 /// win_h)` are the window dimensions in CSS px; `tab_bar_h` is the tab strip
-/// height (the panel starts directly below it).
+/// height (the panel starts directly below it). `pal` supplies the active
+/// theme palette for all surface colors.
 pub fn build_privacy_panel(
     panel: &PrivacyPanel,
     (win_w, win_h): (u32, u32),
     tab_bar_h: f32,
+    pal: &Palette,
 ) -> DisplayList {
     if !panel.visible {
         return Vec::new();
@@ -236,17 +230,17 @@ pub fn build_privacy_panel(
     // Panel background + left border.
     let mut out: DisplayList = vec![DisplayCommand::FillRect {
         rect: Rect::new(px, tab_bar_h, PANEL_WIDTH, panel_h),
-        color: BG,
+        color: pal.overlay_bg,
     }];
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(px, tab_bar_h, 1.0, panel_h),
-        color: BORDER,
+        color: pal.overlay_border,
     });
 
     // Header bar + title.
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(px, tab_bar_h, PANEL_WIDTH, HEADER_H),
-        color: HEADER_BG,
+        color: pal.header_bg,
     });
     out.push(make_text(
         "Privacy".to_string(),
@@ -255,7 +249,7 @@ pub fn build_privacy_panel(
         160.0,
         FONT_SIZE,
         FontWeight::BOLD,
-        FG_TITLE,
+        pal.text,
     ));
     // Close button.
     out.push(make_text(
@@ -265,18 +259,18 @@ pub fn build_privacy_panel(
         CLOSE_SIZE,
         FONT_SIZE + 4.0,
         FontWeight::NORMAL,
-        FG_CLOSE,
+        pal.text_dim,
     ));
 
     // Summary bar: blocked / allowed tallies.
     let summary_y = tab_bar_h + HEADER_H;
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(px, summary_y, PANEL_WIDTH, SUMMARY_H),
-        color: SUMMARY_BG,
+        color: pal.header_bg,
     });
     out.push(DisplayCommand::FillRect {
         rect: Rect::new(px, summary_y + SUMMARY_H - 1.0, PANEL_WIDTH, 1.0),
-        color: BORDER,
+        color: pal.divider,
     });
     let blocked = panel.blocked_count();
     let allowed = panel.allowed_count();
@@ -312,7 +306,7 @@ pub fn build_privacy_panel(
             PANEL_WIDTH - H_PAD * 2.0,
             FONT_SIZE,
             FontWeight::NORMAL,
-            FG_DIM,
+            pal.text_dim,
         ));
         return out;
     }
@@ -339,7 +333,7 @@ pub fn build_privacy_panel(
         if i % 2 == 1 {
             out.push(DisplayCommand::FillRect {
                 rect: Rect::new(px, row_y, PANEL_WIDTH, ROW_H),
-                color: ROW_ALT_BG,
+                color: pal.row_alt_bg,
             });
         }
 
@@ -359,11 +353,11 @@ pub fn build_privacy_panel(
             PANEL_WIDTH - TEXT_X - H_PAD,
             FONT_SIZE,
             FontWeight::NORMAL,
-            FG_DOMAIN,
+            pal.text,
         ));
 
         // Secondary line: matched filter (blocked) or status (allowed).
-        let (sub, sub_color) = sub_line(entry);
+        let (sub, sub_color) = sub_line(entry, pal);
         out.push(make_text(
             sub,
             px + TEXT_X,
@@ -387,7 +381,7 @@ pub fn build_privacy_panel(
             56.0,
             SUB_FONT_SIZE,
             FontWeight::NORMAL,
-            FG_DIM,
+            pal.text_dim,
         ));
     }
 
@@ -408,15 +402,16 @@ fn dot_color(entry: &NetworkEntry) -> Color {
 }
 
 /// Secondary row line: the matched filter for blocked requests, otherwise the
-/// HTTP status (or `"pending…"`), paired with its colour.
-fn sub_line(entry: &NetworkEntry) -> (String, Color) {
+/// HTTP status (or `"pending…"`), paired with its colour. The dim text color
+/// for non-blocked lines comes from the active palette.
+fn sub_line(entry: &NetworkEntry, pal: &Palette) -> (String, Color) {
     if entry.blocked {
         let rule = entry.reason.as_deref().unwrap_or("blocked");
         (format!("blocked · {rule}"), BLOCKED)
     } else if let Some(code) = entry.status {
-        (format!("allowed · {code}"), FG_DIM)
+        (format!("allowed · {code}"), pal.text_dim)
     } else {
-        ("pending…".to_string(), FG_DIM)
+        ("pending…".to_string(), pal.text_dim)
     }
 }
 
@@ -590,7 +585,7 @@ mod tests {
         log.lock().unwrap().record_blocked("https://a.com/x", "||evil^");
         let mut p = PrivacyPanel::new(log);
         p.refresh();
-        let (text, color) = sub_line(&p.entries[0]);
+        let (text, color) = sub_line(&p.entries[0], &Palette::DARK);
         assert!(text.contains("||evil^"));
         assert_eq!(color, BLOCKED);
     }
@@ -647,7 +642,7 @@ mod tests {
     #[test]
     fn build_hidden_returns_empty() {
         let p = PrivacyPanel::new(make_log());
-        assert!(build_privacy_panel(&p, (1280, 800), 36.0).is_empty());
+        assert!(build_privacy_panel(&p, (1280, 800), 36.0, &Palette::DARK).is_empty());
     }
 
     #[test]
@@ -657,7 +652,7 @@ mod tests {
         let mut p = PrivacyPanel::new(log);
         p.visible = true;
         p.refresh();
-        let dl = build_privacy_panel(&p, (1280, 800), 36.0);
+        let dl = build_privacy_panel(&p, (1280, 800), 36.0, &Palette::DARK);
         let has_title = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "Privacy")
         });
@@ -675,7 +670,7 @@ mod tests {
         let mut p = PrivacyPanel::new(log);
         p.visible = true;
         p.refresh();
-        let dl = build_privacy_panel(&p, (1280, 800), 36.0);
+        let dl = build_privacy_panel(&p, (1280, 800), 36.0, &Palette::DARK);
         let has_domain = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "ads.tracker.com")
         });
@@ -690,7 +685,7 @@ mod tests {
     fn build_empty_shows_placeholder() {
         let mut p = PrivacyPanel::new(make_log());
         p.visible = true;
-        let dl = build_privacy_panel(&p, (1280, 800), 36.0);
+        let dl = build_privacy_panel(&p, (1280, 800), 36.0, &Palette::DARK);
         let has_placeholder = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text.contains("No requests"))
         });

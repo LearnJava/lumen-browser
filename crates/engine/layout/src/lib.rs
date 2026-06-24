@@ -70,7 +70,7 @@ pub use animation::{
     AnimationScheduler, TransitionScheduler,
 };
 pub use box_tree::{
-    apply_container_styles, build_iframe_document,
+    apply_container_styles, build_iframe_document, canvas_background_color,
     collect_background_image_requests, collect_image_requests, is_open_details, layout, layout_measured,
     layout_measured_hyp, layout_streaming_incremental, lay_out_incremental, BoxKind, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox,
     PseudoKind, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, SvgBaselineShift, ViewBox,
@@ -115,10 +115,11 @@ pub use style::{
     set_interactive_state, clear_interactive_state,
     parse_background_gradient, parse_color, parse_css_wide_keyword, parse_gradient_stops,
     parse_grid_template_areas, parse_transform_list,
+    radial_gradient_radii, RadialShape, RadialSize,
     AlignValue, AnimationDirection, Appearance, ContainerContext,
     AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat,
-    BackgroundSize, BorderCollapse, BorderStyle,
+    BackgroundSize, BgSizeAxis, BorderCollapse, BorderStyle,
     BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ColorFloat,
     ClearSide, ContainFlags, ComputedStyle, Content,
     ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, EmptyCells, FilterFn, FloatSide, FontOpticalSizing, FontStretch,
@@ -1333,15 +1334,22 @@ mod tests {
         root
     }
 
+    /// UA `body { margin: 8px }` (HTML Rendering §14.3.3, BUG-204) shifts all
+    /// normal-flow content by 8px. These layout-unit helpers test child geometry
+    /// in isolation, so they neutralise the UA body margin with an explicit reset
+    /// — exactly as real pages do via `* { margin: 0 }`. Tests that specifically
+    /// verify the UA body margin use the `cascade_at` style helper instead.
+    const BODY_RESET: &str = "body{margin:0}";
+
     fn lay(html: &str, css: &str) -> LayoutBox {
         let doc = lumen_html_parser::parse(html);
-        let sheet = lumen_css_parser::parse(css);
+        let sheet = lumen_css_parser::parse(&format!("{BODY_RESET}{css}"));
         body_layout_box(layout(&doc, &sheet, Size::new(800.0, 600.0)))
     }
 
     fn lay_viewport(html: &str, css: &str, vp: Size) -> LayoutBox {
         let doc = lumen_html_parser::parse(html);
-        let sheet = lumen_css_parser::parse(css);
+        let sheet = lumen_css_parser::parse(&format!("{BODY_RESET}{css}"));
         body_layout_box(layout(&doc, &sheet, vp))
     }
 
@@ -1355,7 +1363,7 @@ mod tests {
 
     fn lay_measured(html: &str, css: &str, width: f32) -> LayoutBox {
         let doc = lumen_html_parser::parse(html);
-        let sheet = lumen_css_parser::parse(css);
+        let sheet = lumen_css_parser::parse(&format!("{BODY_RESET}{css}"));
         body_layout_box(layout_measured(&doc, &sheet, Size::new(width, 600.0), &Fixed8))
     }
 
@@ -9221,6 +9229,38 @@ mod tests {
         );
     }
 
+    /// BUG-125 / TEST-76 regression: CSS Motion Path L1 places the box's
+    /// `offset-anchor` (default `auto` = `transform-origin` = centre) ONTO the
+    /// path point — not the box's top-left corner. The path coordinate origin is
+    /// the box's normal position, so the centre of a box on
+    /// `offset-path: path("M 0 0 L 960 0")` at `offset-distance: 480px` must map
+    /// to `rect_topleft + (480, 0)`. Without the `T(-anchor)` term the box sat
+    /// half-a-box down-and-right of Edge (the original 3.18% TEST-76 diff).
+    #[test]
+    fn motion_path_centres_anchor_on_path_point() {
+        let root = lay(
+            "<div>x</div>",
+            r#"div { width: 40px; height: 40px; offset-path: path("M 0 0 L 960 0"); offset-distance: 480px; offset-rotate: 0deg; }"#,
+        );
+        let div = root
+            .children
+            .iter()
+            .find(|c| matches!(&c.kind, BoxKind::Block))
+            .expect("div box");
+        let m = forward_box_transform(div).expect("motion-path box has a matrix");
+
+        // Box centre (= default anchor) must land on the path point, which is
+        // `rect_topleft + (480, 0)` — NOT `rect_topleft + centre + (480, 0)`.
+        let cx = div.rect.x + div.rect.width / 2.0;
+        let cy = div.rect.y + div.rect.height / 2.0;
+        let (mx, my) = m.transform_point_2d(cx, cy);
+        let (ex, ey) = (div.rect.x + 480.0, div.rect.y);
+        assert!(
+            (mx - ex).abs() < 0.05 && (my - ey).abs() < 0.05,
+            "anchor must map to path point ({ex}, {ey}); got ({mx}, {my})"
+        );
+    }
+
     #[test]
     fn filter_blur() {
         let root = lay("<p>x</p>", "p { filter: blur(5px); }");
@@ -11288,8 +11328,8 @@ mod tests {
         let root = lay("<p>x</p>", "p { background-size: 200px; }");
         match first_p_style(&root).background_layers[0].size {
             BackgroundSize::Length(w, h) => {
-                assert!((w - 200.0).abs() < 0.01);
-                assert_eq!(h, None);
+                assert_eq!(w, BgSizeAxis::Px(200.0));
+                assert_eq!(h, BgSizeAxis::Auto);
             }
             _ => panic!("expected Length"),
         }
@@ -11300,11 +11340,50 @@ mod tests {
         let root = lay("<p>x</p>", "p { background-size: 200px 100px; }");
         match first_p_style(&root).background_layers[0].size {
             BackgroundSize::Length(w, h) => {
-                assert!((w - 200.0).abs() < 0.01);
-                assert_eq!(h, Some(100.0));
+                assert_eq!(w, BgSizeAxis::Px(200.0));
+                assert_eq!(h, BgSizeAxis::Px(100.0));
             }
             _ => panic!("expected Length"),
         }
+    }
+
+    #[test]
+    fn background_size_percent_pair() {
+        // BUG-115: percent background-size must be preserved as Percent fractions.
+        let root = lay("<p>x</p>", "p { background-size: 40% 60%; }");
+        match first_p_style(&root).background_layers[0].size {
+            BackgroundSize::Length(w, h) => {
+                assert_eq!(w, BgSizeAxis::Percent(0.4));
+                assert_eq!(h, BgSizeAxis::Percent(0.6));
+            }
+            _ => panic!("expected Length"),
+        }
+    }
+
+    #[test]
+    fn background_size_mixed_px_percent() {
+        // BUG-115: `20px 100%` — one fixed axis, one percent axis.
+        let root = lay("<p>x</p>", "p { background-size: 20px 100%; }");
+        match first_p_style(&root).background_layers[0].size {
+            BackgroundSize::Length(w, h) => {
+                assert_eq!(w, BgSizeAxis::Px(20.0));
+                assert_eq!(h, BgSizeAxis::Percent(1.0));
+            }
+            _ => panic!("expected Length"),
+        }
+    }
+
+    #[test]
+    fn background_shorthand_percent_size() {
+        // BUG-115: `background: <grad> left center / 40% 60% no-repeat` — the
+        // percent size in the shorthand must reach the layer as Percent axes.
+        let css = "p { background: linear-gradient(to right, #e74c3c, #c0392b) left center / 40% 60% no-repeat, #2c3e50; }";
+        let root = lay("<p>x</p>", css);
+        let layers = &first_p_style(&root).background_layers;
+        assert_eq!(
+            layers[0].size,
+            BackgroundSize::Length(BgSizeAxis::Percent(0.4), BgSizeAxis::Percent(0.6))
+        );
     }
 
     #[test]

@@ -1909,7 +1909,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-a11y"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "lumen-dom",
  "lumen-html-parser",
@@ -1920,7 +1920,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-bench"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "libc",
  "lumen-core",
@@ -1936,7 +1936,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-bidi-server"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "lumen-core",
  "lumen-devtools",
@@ -1944,7 +1944,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-canvas"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "lumen-core",
  "lumen-layout",
@@ -1952,25 +1952,25 @@ dependencies = [
 
 [[package]]
 name = "lumen-core"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "lumen-css-parser"
-version = "0.2.0"
+version = "0.5.0"
 
 [[package]]
 name = "lumen-devtools"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "lumen-core",
 ]
 
 [[package]]
 name = "lumen-dom"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "bincode",
  "lumen-core",
@@ -1979,7 +1979,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-driver"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "lumen-a11y",
  "lumen-core",
@@ -2000,7 +2000,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-encoding"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "hyphenation",
  "icu_provider",
@@ -2011,7 +2011,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-font"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "brotli-decompressor",
  "lumen-core",
@@ -2020,7 +2020,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-html-parser"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "lumen-core",
  "lumen-dom",
@@ -2028,7 +2028,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-image"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "flate2",
  "gif",
@@ -2043,7 +2043,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-ipc"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "bincode",
  "lumen-core",
@@ -2052,7 +2052,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-js"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "aes-gcm",
  "flate2",
@@ -2074,7 +2074,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-knowledge"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "lumen-core",
  "lumen-storage",
@@ -2083,7 +2083,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-layout"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "lumen-core",
  "lumen-css-parser",
@@ -2094,7 +2094,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-mcp"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "lumen-core",
  "lumen-driver",
@@ -2104,7 +2104,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-network"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "brotli-decompressor",
  "flate2",
@@ -2122,7 +2122,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-paint"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "femtovg",
  "glutin",
@@ -2143,7 +2143,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-shell"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "cpal",
  "lumen-a11y",
@@ -2173,7 +2173,7 @@ dependencies = [
 
 [[package]]
 name = "lumen-storage"
-version = "0.2.0"
+version = "0.5.0"
 dependencies = [
  "aes-gcm",
  "flate2",
@@ -2185,6 +2185,7 @@ dependencies = [
  "lz4_flex",
  "psl",
  "rusqlite",
+ "serde",
  "sha2",
 ]
 

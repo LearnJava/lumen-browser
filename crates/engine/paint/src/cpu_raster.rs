@@ -4,12 +4,15 @@
 //! across Windows/macOS/Linux.
 
 use lumen_image::Image;
-use lumen_layout::{BorderStyle, Color, FilterFn, GradientStop, ObjectFit, ObjectPosition};
+use lumen_layout::{
+    BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, GradientStop, ObjectFit,
+    ObjectPosition,
+};
 use crate::dash_math::{dashed_border_offsets, dotted_border_offsets};
 use crate::gradient_math::{atan2_det, resolve_stop_positions, sample_gradient_color};
 use crate::matrix_util::mat4_to_2d_affine;
 use crate::{DisplayCommand, CornerRadii};
-use crate::display_list::ResolvedClipShape;
+use crate::display_list::{ResolvedClipShape, bg_tile_geometry};
 use lumen_core::geom::Rect;
 
 /// Bundled Inter Regular — the only face the deterministic CPU path can
@@ -211,11 +214,13 @@ pub(crate) fn rasterize_cpu(
                     layers.last_mut().expect("base layer"), rect, *angle_deg, stops, *repeating, c,
                 )?;
             }
-            DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating } => {
+            DisplayCommand::DrawRadialGradient {
+                rect, center_x_pct, center_y_pct, radius_x, radius_y, stops, repeating,
+            } => {
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
                 rasterize_radial_gradient(
                     layers.last_mut().expect("base layer"), rect, *center_x_pct, *center_y_pct,
-                    stops, *repeating, c,
+                    *radius_x, *radius_y, stops, *repeating, c,
                 )?;
             }
             DisplayCommand::DrawConicGradient {
@@ -312,11 +317,36 @@ pub(crate) fn rasterize_cpu(
                     None => rasterize_image_placeholder(layer, rect, c)?,
                 }
             }
-            // CSS Backgrounds L3 §3.3 — background-image url(). The CPU path has
-            // no image decoder, so this is a no-op — mirrors the GPU renderer
-            // (`renderer.rs` line 4348: `let Some(gpu) = self.images.get(src) else { continue }`)
-            // which skips unregistered images silently.
-            DisplayCommand::DrawBackgroundImage { .. } => {}
+            // CSS Backgrounds L3 §3.3 — background-image url() (also the resolved
+            // `image-set()` candidate). Tiled per background-size/position/repeat
+            // (shared `bg_tile_geometry` with the femtovg backend), clipped to the
+            // background painting area. Unregistered `src` (no decoded pixels) is
+            // skipped silently, mirroring the GPU renderer (`renderer.rs`).
+            DisplayCommand::DrawBackgroundImage {
+                rect, origin_rect, src, size, position, repeat, ..
+            } => {
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
+                let layer = layers.last_mut().expect("base layer");
+                if let Some(img) = image_map.get(src.as_str()) {
+                    rasterize_background_image(
+                        layer, rect, origin_rect, img, *size, position, *repeat, c,
+                    )?;
+                }
+            }
+            // CSS Images L4 §4 — cross-fade(a, b, p): the two images are stretched
+            // to fill `dest` and alpha-blended (`a` at `1−p`, `b` at `p`). Mirrors
+            // the femtovg backend's `DrawCrossFade` arm. Missing sources are skipped.
+            DisplayCommand::DrawCrossFade { dest, src_a, src_b, progress } => {
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(dest));
+                let layer = layers.last_mut().expect("base layer");
+                let p = progress.clamp(0.0, 1.0);
+                if let Some(img) = image_map.get(src_a.as_str()) {
+                    blit_image_into_rect(layer, *dest, *dest, img, 1.0 - p, c)?;
+                }
+                if let Some(img) = image_map.get(src_b.as_str()) {
+                    blit_image_into_rect(layer, *dest, *dest, img, p, c)?;
+                }
+            }
             DisplayCommand::DrawText {
                 rect, text, font_size, color, tab_size, ..
             } => {
@@ -626,8 +656,13 @@ fn render_mask(spec: &MaskSpec, width: u32, height: u32) -> Option<tiny_skia::Pi
             rasterize_linear_gradient(&mut mask, rect, *angle_deg, stops, *repeating, None).ok()?;
         }
         MaskSpec::Radial { rect, center_x_pct, center_y_pct, stops, repeating } => {
+            // Mask radial gradients stay circular (farthest-corner) — the mask
+            // command carries no ending-shape, matching the femtovg mask path.
+            let dx = center_x_pct.max(1.0 - center_x_pct) * rect.width;
+            let dy = center_y_pct.max(1.0 - center_y_pct) * rect.height;
+            let r = dx.hypot(dy).max(1.0);
             rasterize_radial_gradient(
-                &mut mask, rect, *center_x_pct, *center_y_pct, stops, *repeating, None,
+                &mut mask, rect, *center_x_pct, *center_y_pct, r, r, stops, *repeating, None,
             ).ok()?;
         }
         MaskSpec::Conic { rect, center_x_pct, center_y_pct, from_angle_deg, stops, repeating } => {
@@ -1454,6 +1489,12 @@ fn skia_gradient_stops(
     if resolved.len() < 2 {
         return None;
     }
+    // CSS Images L4 §3.1 — interpolate fades to/through transparency in
+    // premultiplied space (BUG-190); tiny-skia samples these dense stops in
+    // straight space, reproducing the premultiplied curve. Opaque segments are
+    // untouched, so solid gradients stay byte-identical.
+    let subdivided = crate::gradient_math::premultiplied_subdivide_stops(resolved);
+    let resolved = &subdivided[..];
     let first = resolved.first().map(|s| s.0).unwrap_or(0.0);
     let last = resolved.last().map(|s| s.0).unwrap_or(1.0);
     let span = (last - first).max(1e-6);
@@ -1538,49 +1579,59 @@ fn rasterize_linear_gradient(
     Ok(())
 }
 
-/// CSS Images L3 §3.3 — `radial-gradient(...)` via tiny-skia `RadialGradient`.
+/// CSS Images L3 §3.3/§3.5 — `radial-gradient(...)` via tiny-skia `RadialGradient`.
 ///
-/// Mirrors the femtovg backend (`DrawRadialGradient`): a **circle** whose radius
-/// is the farthest-corner distance `hypot(dx, dy)` with `dx = max(cx,1-cx)·w`,
-/// `dy = max(cy,1-cy)·h`. The window backend draws the gradient as an isotropic
-/// circle (not an anisotropic ellipse), and the CPU snapshot must match it byte
-/// for byte (BUG-221, TEST-39): the previous ellipse stretched the rings
-/// horizontally, diverging from both femtovg and Edge.
+/// The ending-shape radii `(radius_x, radius_y)` are resolved upstream
+/// ([`lumen_layout::radial_gradient_radii`]). A **circle** (`radius_x ==
+/// radius_y`) is drawn isotropically, matching the femtovg backend byte for byte
+/// (BUG-221, TEST-39). An **ellipse** is drawn as a unit circle of radius
+/// `radius_x` plus a vertical scale `radius_y/radius_x` about the centre, so the
+/// rings stretch to the elliptical ending shape Edge produces (BUG-239).
+#[allow(clippy::too_many_arguments)]
 fn rasterize_radial_gradient(
     pixmap: &mut tiny_skia::Pixmap,
     rect: &Rect,
     center_x_pct: f32,
     center_y_pct: f32,
+    radius_x: f32,
+    radius_y: f32,
     stops: &[GradientStop],
     repeating: bool,
     clip: Option<&tiny_skia::Mask>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use tiny_skia::{Paint, Point, RadialGradient, SpreadMode, Transform};
 
-    let dx = center_x_pct.max(1.0 - center_x_pct) * rect.width;
-    let dy = center_y_pct.max(1.0 - center_y_pct) * rect.height;
-    let outer_r = dx.hypot(dy).max(1.0);
-    let resolved = resolve_stop_positions(stops, outer_r);
+    let rx = radius_x.max(1.0);
+    let ry = radius_y.max(1.0);
+    // Px stops resolve against the gradient ray; use the larger radius (matches
+    // the femtovg backend's `line_len`).
+    let resolved = resolve_stop_positions(stops, rx.max(ry));
     let Some((skia_stops, lo, hi)) = skia_gradient_stops(&resolved, repeating) else {
         return Ok(());
     };
 
-    // Circle centred at the gradient origin. For non-repeating gradients the
-    // resolved stops already fill `[0,1]` so `hi-lo == 1` and the radius is the
-    // full farthest-corner distance; for repeating ones the radius is shortened
-    // to the `[lo,hi]` period so `SpreadMode::Repeat` tiles the rings outward.
+    // Unit circle of radius `rx` centred at the gradient origin. For
+    // non-repeating gradients the resolved stops already fill `[0,1]` so
+    // `hi-lo == 1` and the radius is the full horizontal radius; for repeating
+    // ones it is shortened to the `[lo,hi]` period so `SpreadMode::Repeat` tiles
+    // the rings outward. A vertical scale turns the circle into the ellipse.
     let cx = rect.x + center_x_pct * rect.width;
     let cy = rect.y + center_y_pct * rect.height;
-    let radius = (outer_r * (hi - lo)).max(1e-3);
+    let radius = (rx * (hi - lo)).max(1e-3);
     let center = Point::from_xy(cx, cy);
     let mode = if repeating { SpreadMode::Repeat } else { SpreadMode::Pad };
+    // Scale y about the centre by ry/rx (identity for a circle → byte-identical).
+    let sy = (ry / rx).max(1e-6);
+    let local = Transform::from_translate(cx, cy)
+        .pre_scale(1.0, sy)
+        .pre_translate(-cx, -cy);
     let shader = RadialGradient::new(
         center,
         center,
         radius,
         skia_stops,
         mode,
-        Transform::identity(),
+        local,
     )
     .ok_or("degenerate radial gradient")?;
 
@@ -1782,8 +1833,6 @@ fn rasterize_image(
     position: ObjectPosition,
     clip: Option<&tiny_skia::Mask>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use tiny_skia::{FilterQuality, Pattern, SpreadMode, Transform};
-
     if rect.width <= 0.0 || rect.height <= 0.0 || img.width == 0 || img.height == 0 {
         return Ok(());
     }
@@ -1792,24 +1841,6 @@ fn rasterize_image(
     if placed.width <= 0.0 || placed.height <= 0.0 {
         return Ok(());
     }
-
-    // Area-averaged downscale to the placement size before sampling — mirrors the
-    // femtovg backend (`resolve_image_for_rect` + `downscale_target`, BUG-077):
-    // bilinear sampling of a full-res photo into a much smaller box undersamples
-    // and produces high-frequency noise that diverges from Edge's high-quality
-    // resampler (BUG-221, TEST-18). Pre-shrinking with `resize_area_avg` (a box
-    // filter) yields the same averaged texels the GPU path uploads, so the final
-    // pattern draw is a near-1:1 blit. Upscale / exact size keeps the original.
-    let tw = placed.width.round().max(1.0) as u32;
-    let th = placed.height.round().max(1.0) as u32;
-    let downscaled;
-    let texture: &Image = if tw < img.width || th < img.height {
-        downscaled = lumen_image::resize_area_avg(img, tw, th);
-        &downscaled
-    } else {
-        img
-    };
-    let src = image_to_pixmap(texture).ok_or("failed to build image pixmap")?;
 
     // Visible region = placement ∩ content box. `object-fit: cover` makes the
     // placement larger than the box (clipped here); `contain` makes it smaller
@@ -1821,21 +1852,143 @@ fn rasterize_image(
     if vx1 <= vx0 || vy1 <= vy0 {
         return Ok(());
     }
+    let visible = Rect::new(vx0, vy0, vx1 - vx0, vy1 - vy0);
+    blit_image_into_rect(pixmap, placed, visible, img, 1.0, clip)
+}
+
+/// Paint `img` scaled to fill the `placed` target rect, drawing only the
+/// `visible` sub-rect (the part inside the painting/content area), blended at
+/// `alpha`. Shared by `<img>` object-fit, `background-image` tiles and
+/// `cross-fade()` so all three sample identically.
+///
+/// Area-averages the texture down before the pattern draw when the target is
+/// smaller than the source — mirrors the femtovg backend
+/// (`resolve_image_for_rect`/`downscale_target`, BUG-077): plain bilinear
+/// sampling of a full-res photo into a much smaller box undersamples and
+/// produces high-frequency noise that diverges from Edge's high-quality
+/// resampler (BUG-221, TEST-18). Upscale or exact-size targets keep the
+/// original texture (bilinear is correct there).
+fn blit_image_into_rect(
+    pixmap: &mut tiny_skia::Pixmap,
+    placed: Rect,
+    visible: Rect,
+    img: &Image,
+    alpha: f32,
+    clip: Option<&tiny_skia::Mask>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tiny_skia::{FilterQuality, Pattern, SpreadMode, Transform};
+
+    if placed.width <= 0.0 || placed.height <= 0.0 || img.width == 0 || img.height == 0 {
+        return Ok(());
+    }
+    if visible.width <= 0.0 || visible.height <= 0.0 {
+        return Ok(());
+    }
+
+    let tw = placed.width.round().max(1.0) as u32;
+    let th = placed.height.round().max(1.0) as u32;
+    let downscaled;
+    let texture: &Image = if tw < img.width || th < img.height {
+        downscaled = lumen_image::resize_area_avg(img, tw, th);
+        &downscaled
+    } else {
+        img
+    };
+    let src = image_to_pixmap(texture).ok_or("failed to build image pixmap")?;
 
     // Map (downscaled) source texels (0..w, 0..h) onto the placement rect.
     let sx = placed.width / texture.width as f32;
     let sy = placed.height / texture.height as f32;
     let ts = Transform::from_row(sx, 0.0, 0.0, sy, placed.x, placed.y);
-    let shader = Pattern::new(src.as_ref(), SpreadMode::Pad, FilterQuality::Bilinear, 1.0, ts);
+    let shader = Pattern::new(
+        src.as_ref(), SpreadMode::Pad, FilterQuality::Bilinear, alpha.clamp(0.0, 1.0), ts,
+    );
     let paint = tiny_skia::Paint {
         shader,
         anti_alias: true,
         force_hq_pipeline: false,
         blend_mode: tiny_skia::BlendMode::SourceOver,
     };
-    let vis = tiny_skia::Rect::from_xywh(vx0, vy0, vx1 - vx0, vy1 - vy0)
+    let vis = tiny_skia::Rect::from_xywh(visible.x, visible.y, visible.width, visible.height)
         .ok_or("invalid visible image rect")?;
     pixmap.fill_rect(vis, &paint, Transform::identity(), clip);
+    Ok(())
+}
+
+/// Draw a `background-image` (`DrawBackgroundImage`) on the CPU path.
+///
+/// `rect` is the background painting area (`background-clip`); `origin_rect` is
+/// the positioning area (`background-origin`). Tile size/start/repeat come from
+/// the shared [`bg_tile_geometry`] (identical to the femtovg backend), so the
+/// CPU snapshot matches the live window. Each tile is blitted via
+/// [`blit_image_into_rect`] clipped to its intersection with the painting area,
+/// so `no-repeat`/`cover` overflow is trimmed and `repeat` fills the box.
+#[allow(clippy::too_many_arguments)]
+fn rasterize_background_image(
+    pixmap: &mut tiny_skia::Pixmap,
+    rect: &Rect,
+    origin_rect: &Rect,
+    img: &Image,
+    size: BackgroundSize,
+    position: &ObjectPosition,
+    repeat: BackgroundRepeat,
+    clip: Option<&tiny_skia::Mask>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if rect.width <= 0.0 || rect.height <= 0.0 || img.width == 0 || img.height == 0 {
+        return Ok(());
+    }
+
+    let (tile_w, tile_h, tile_x_start, tile_y_start, repeat_x, repeat_y) = bg_tile_geometry(
+        size,
+        position,
+        repeat,
+        img.width as f32,
+        img.height as f32,
+        origin_rect.width,
+        origin_rect.height,
+        origin_rect.x,
+        origin_rect.y,
+    );
+    if tile_w <= 0.0 || tile_h <= 0.0 {
+        return Ok(());
+    }
+
+    let x_end = rect.x + rect.width;
+    let y_end = rect.y + rect.height;
+    let mut ty = tile_y_start;
+    loop {
+        if ty >= y_end {
+            break;
+        }
+        if ty + tile_h > rect.y {
+            let mut tx = tile_x_start;
+            loop {
+                if tx >= x_end {
+                    break;
+                }
+                if tx + tile_w > rect.x {
+                    // visible = tile ∩ painting area (trims overflow per axis).
+                    let vx0 = tx.max(rect.x);
+                    let vy0 = ty.max(rect.y);
+                    let vx1 = (tx + tile_w).min(x_end);
+                    let vy1 = (ty + tile_h).min(y_end);
+                    if vx1 > vx0 && vy1 > vy0 {
+                        let placed = Rect::new(tx, ty, tile_w, tile_h);
+                        let visible = Rect::new(vx0, vy0, vx1 - vx0, vy1 - vy0);
+                        blit_image_into_rect(pixmap, placed, visible, img, 1.0, clip)?;
+                    }
+                }
+                if !repeat_x {
+                    break;
+                }
+                tx += tile_w;
+            }
+        }
+        if !repeat_y {
+            break;
+        }
+        ty += tile_h;
+    }
     Ok(())
 }
 
@@ -3040,6 +3193,9 @@ mod tests {
             rect: rect(0.0, 0.0, 120.0, 40.0),
             center_x_pct: 0.5,
             center_y_pct: 0.5,
+            // Equal radii → a circle (isotropic), the `circle` keyword case.
+            radius_x: 63.25,
+            radius_y: 63.25,
             stops: vec![
                 GradientStop { color: red, position: None },
                 GradientStop { color: blue, position: None },
@@ -3058,4 +3214,86 @@ mod tests {
             "isotropic: horizontal ({hr},{hb}) ≈ vertical ({vr},{vb})"
         );
     }
+
+    fn solid_2x2(rgba: [u8; 4]) -> Image {
+        Image {
+            width: 2,
+            height: 2,
+            format: lumen_image::PixelFormat::Rgba8,
+            data: rgba.repeat(4),
+            icc_profile: None,
+        }
+    }
+
+    /// `DrawBackgroundImage` paints the decoded background (solid-blue 2×2) into
+    /// its painting area on the CPU path. Pre-fix this command was a no-op, so
+    /// any `background-image`/`image-set()` rendered blank in `--screenshot`.
+    #[test]
+    fn draw_background_image_paints_into_area() {
+        let images = vec![("blue.png".to_string(), solid_2x2([0, 0, 255, 255]))];
+        let area = rect(10.0, 10.0, 40.0, 40.0);
+        let cmds = vec![DisplayCommand::DrawBackgroundImage {
+            rect: area,
+            origin_rect: area,
+            src: "blue.png".to_string(),
+            size: BackgroundSize::Cover,
+            position: ObjectPosition::default(),
+            repeat: BackgroundRepeat::NoRepeat,
+            image_rendering: lumen_layout::ImageRendering::Auto,
+        }];
+        let img = rasterize_cpu(64, 64, &cmds, &images, 0.0, 0.0).expect("rasterize");
+        let (r, g, b, a) = px(&img, 30, 30);
+        assert!(b > 230 && r < 25 && g < 25 && a == 255, "bg centre is blue, got ({r},{g},{b},{a})");
+        // The single `cover` tile is clipped to the painting area — outside stays white.
+        assert_eq!(px(&img, 55, 55), (255, 255, 255, 255), "outside painting area is white");
+    }
+
+    /// `DrawBackgroundImage` with `repeat` tiles a small image across the whole
+    /// painting area (geometry shared with the femtovg backend).
+    #[test]
+    fn draw_background_image_tiles_on_repeat() {
+        let images = vec![("g.png".to_string(), solid_2x2([0, 200, 0, 255]))];
+        let area = rect(0.0, 0.0, 64.0, 64.0);
+        let cmds = vec![DisplayCommand::DrawBackgroundImage {
+            rect: area,
+            origin_rect: area,
+            src: "g.png".to_string(),
+            // Auto size = 2×2 intrinsic; Repeat fills the box with tiles.
+            size: BackgroundSize::Auto,
+            position: ObjectPosition::default(),
+            repeat: BackgroundRepeat::Repeat,
+            image_rendering: lumen_layout::ImageRendering::Auto,
+        }];
+        let img = rasterize_cpu(64, 64, &cmds, &images, 0.0, 0.0).expect("rasterize");
+        // Both a near-origin and a far corner pixel are painted green (tiled).
+        for (x, y) in [(3u32, 3u32), (60, 60)] {
+            let (r, g, b, _) = px(&img, x, y);
+            assert!(g > 150 && r < 60 && b < 60, "tile at ({x},{y}) green, got ({r},{g},{b})");
+        }
+    }
+
+    /// `DrawCrossFade` blends two images by `progress` on the CPU path: at p=0
+    /// only `src_a` shows, at p=1 only `src_b`. Pre-fix the command was unhandled.
+    #[test]
+    fn draw_cross_fade_respects_progress() {
+        let images = vec![
+            ("a.png".to_string(), solid_2x2([255, 0, 0, 255])),
+            ("b.png".to_string(), solid_2x2([0, 255, 0, 255])),
+        ];
+        let mk = |p: f32| {
+            vec![DisplayCommand::DrawCrossFade {
+                dest: rect(10.0, 10.0, 40.0, 40.0),
+                src_a: "a.png".to_string(),
+                src_b: "b.png".to_string(),
+                progress: p,
+            }]
+        };
+        let img0 = rasterize_cpu(64, 64, &mk(0.0), &images, 0.0, 0.0).expect("rasterize");
+        let (r, g, b, _) = px(&img0, 30, 30);
+        assert!(r > 230 && g < 25 && b < 25, "p=0 → red, got ({r},{g},{b})");
+        let img1 = rasterize_cpu(64, 64, &mk(1.0), &images, 0.0, 0.0).expect("rasterize");
+        let (r, g, b, _) = px(&img1, 30, 30);
+        assert!(g > 230 && r < 25 && b < 25, "p=1 → green, got ({r},{g},{b})");
+    }
 }
+

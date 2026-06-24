@@ -18,7 +18,7 @@
 
 ## Текущее состояние
 
-**Phase 2 — v0.5 «Interactive» (в работе), версия приложения v0.2.0.** Phase 0 (прототип) закрыта, Phase 1 «Reader» в основном выполнена. Сейчас в активной разработке интерактивный слой: QuickJS, Canvas 2D, CSS Grid, Shadow DOM, accessibility tree, формы, find-in-page, DevTools/CDP, knowledge layer; часть фич Phase 3 (IndexedDB, Service Workers, WebSockets, WOFF2, печать в PDF) уже подтянута вперёд.
+**Phase 2 — v0.5 «Interactive» (завершена), версия приложения v0.5.0.** Phase 0 (прототип) закрыта, Phase 1 «Reader» в основном выполнена. Интерактивный слой реализован: QuickJS, Canvas 2D, CSS Grid, Shadow DOM, accessibility tree, формы, find-in-page, DevTools/CDP, knowledge layer; часть фич Phase 3 (IndexedDB, Service Workers, WebSockets, WOFF2, печать в PDF) уже подтянута вперёд.
 
 > Актуальный статус реализации — в [`CAPABILITIES.md`](CAPABILITIES.md). Список ниже — ранние вехи прототипа (Phase 0); полный набор возможностей давно шире.
 
@@ -91,14 +91,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 ## Что увидишь
 
 ### `cargo run -p lumen-shell`
-Окно 1024×720 с заголовком «Lumen 0.2.0» (версия берётся из `Cargo.toml`), белый фон. Закрытие — крестик в углу. Это «нулевая» проверка, что winit/wgpu работают на твоей системе.
+Окно 1024×720 с заголовком «Lumen 0.5.0» (версия берётся из `Cargo.toml`), белый фон. Закрытие — крестик в углу. Это «нулевая» проверка, что winit/wgpu работают на твоей системе.
 
 ### `cargo run -p lumen-shell -- samples/page.html`
 Окно с распарсенной [`samples/page.html`](samples/page.html): фоновые цвета блоков, текст через bundled Inter, рамки, инлайн-поток. Сравнить с тем, как страницу показывает «настоящий» браузер, можно открыв тот же HTML в Chrome/Firefox.
 
 В консоль печатается:
 ```
-Lumen v0.2.0 — Phase 2 (Interactive, in progress)
+Lumen v0.5.0 — Phase 2 (Interactive) complete
 Распарсено: 47 DOM-узлов, 7 CSS-правил, 8 paint-команд
 ```
 

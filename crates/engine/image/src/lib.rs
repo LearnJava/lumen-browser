@@ -50,6 +50,19 @@ pub fn supported_mime_types() -> &'static [&'static str] {
 /// - [`ImageError::Avif`] — AVIF ftyp-бокс обнаружен, но декодирование не удалось.
 /// - [`ImageError::Jxl`] — JPEG XL сигнатура обнаружена, но декодирование не поддерживается.
 pub fn decode(bytes: &[u8]) -> Result<Image, ImageError> {
+    let mut image = decode_raw(bytes)?;
+    // ICC-5: colour-manage to sRGB once, at decode time, so every later
+    // `to_rgba8` / register / resize works on already-corrected pixels and the
+    // profile's transform is built/applied exactly once per image.
+    color_manage_in_place(&mut image);
+    Ok(image)
+}
+
+/// Decodes a raster image to its native pixel format, leaving any embedded ICC
+/// profile attached and unapplied. [`decode`] wraps this and runs decode-time
+/// colour management; callers wanting the colour-managed result should use
+/// [`decode`].
+fn decode_raw(bytes: &[u8]) -> Result<Image, ImageError> {
     if bytes.len() >= PNG_SIGNATURE.len() && bytes[..PNG_SIGNATURE.len()] == PNG_SIGNATURE {
         return decode_png(bytes).map_err(ImageError::Png);
     }
@@ -238,9 +251,20 @@ fn contains_utf16be(haystack: &[u8], text: &str) -> bool {
 
 /// Применяет ICC-коррекцию к RGBA8 пикселям in-place.
 ///
-/// Конвертирует Display P3 или Rec2020 пиксели в sRGB для корректного отображения
-/// на sRGB-мониторах. Для `IccGamut::Srgb` и `IccGamut::Unknown` — no-op.
+/// ICC-3: предпочитает настоящий matrix-shaper трансформ, построенный из
+/// колорант-примариев и TRC-кривых профиля ([`lumen_core::icc`]), что делает
+/// цветокорректным любой RGB ICC-профиль (не только три зашитых охвата). Если
+/// matrix-shaper построить нельзя (LUT-only / не-RGB профиль), откатывается на
+/// грубое определение охвата (`detect_gamut`): Display P3 / Rec2020 → sRGB,
+/// для sRGB / неизвестного — no-op.
 pub fn correct_rgba_pixels(rgba: &mut [u8], profile: &IccProfile) {
+    // ICC-5: look the compiled transform up in the process-wide cache so the
+    // profile is parsed/compiled at most once regardless of how many images or
+    // paints reuse it.
+    if let Some(transform) = lumen_core::icc::cached_rgb_transform(&profile.data) {
+        apply_icc_rgb_transform(&transform, rgba);
+        return;
+    }
     match profile.detect_gamut() {
         IccGamut::DisplayP3 => convert_pixels_to_srgb(rgba, p3_to_srgb_pixel),
         IccGamut::Rec2020 => convert_pixels_to_srgb(rgba, rec2020_to_srgb_pixel),
@@ -249,7 +273,20 @@ pub fn correct_rgba_pixels(rgba: &mut [u8], profile: &IccProfile) {
 }
 
 fn convert_pixels_to_srgb(rgba: &mut [u8], converter: fn(f32, f32, f32) -> (f32, f32, f32)) {
-    for pixel in rgba.chunks_exact_mut(4) {
+    convert_packed_to_srgb(rgba, 4, converter);
+}
+
+/// Gamut-converts packed pixels in place at an arbitrary byte stride (3 for
+/// `Rgb8`, 4 for `Rgba8`). Only the first three bytes of each `stride`-sized
+/// chunk (R, G, B) are touched; any trailing alpha byte is left unchanged.
+/// Used both by the RGBA paint path and by decode-time colour management
+/// (ICC-5), which keeps the source pixel format compact.
+fn convert_packed_to_srgb(
+    data: &mut [u8],
+    stride: usize,
+    converter: fn(f32, f32, f32) -> (f32, f32, f32),
+) {
+    for pixel in data.chunks_exact_mut(stride) {
         let r = pixel[0] as f32 / 255.0;
         let g = pixel[1] as f32 / 255.0;
         let b = pixel[2] as f32 / 255.0;
@@ -257,7 +294,7 @@ fn convert_pixels_to_srgb(rgba: &mut [u8], converter: fn(f32, f32, f32) -> (f32,
         pixel[0] = (sr.clamp(0.0, 1.0) * 255.0).round() as u8;
         pixel[1] = (sg.clamp(0.0, 1.0) * 255.0).round() as u8;
         pixel[2] = (sb.clamp(0.0, 1.0) * 255.0).round() as u8;
-        // alpha channel unchanged
+        // alpha channel (if any) unchanged
     }
 }
 
@@ -360,6 +397,22 @@ impl Image {
             }
             PixelFormat::Rgba8 => { out.extend_from_slice(&self.data); }
         }
+        // ICC-3: prefer the profile's actual matrix-shaper transform (real TRC
+        // curves + colorant primaries), so any RGB ICC profile — not just the
+        // three hard-coded gamuts — renders colour-correct on an sRGB display.
+        // Fall back to gamut-based tone mapping when no matrix-shaper transform
+        // can be built (e.g. LUT-only or non-RGB profiles).
+        // ICC-5: a profile is normally consumed at decode time (see `decode`),
+        // which clears `icc_profile`, so this colour branch is a no-op for
+        // pipeline-decoded images. It still runs for `Image`s constructed
+        // directly (e.g. grayscale formats deferred from decode, or test
+        // fixtures); the cached transform keeps repeat calls cheap.
+        if let Some(ref profile) = self.icc_profile
+            && let Some(transform) = lumen_core::icc::cached_rgb_transform(&profile.data)
+        {
+            apply_icc_rgb_transform(&transform, &mut out);
+            return out;
+        }
         let color_space = self.detect_color_space();
         apply_tone_mapping(color_space, &mut out);
         out
@@ -372,6 +425,71 @@ impl Image {
     pub fn to_rgba8_tone_mapped(&self) -> Vec<u8> {
         self.to_rgba8()
     }
+}
+
+/// Applies a compiled ICC matrix-shaper transform to RGBA8 pixels in place.
+///
+/// Each pixel's RGB is run through the profile's real per-channel tone curves and
+/// colorant matrix to land in gamma-encoded sRGB; the alpha channel is untouched.
+/// This is the ICC-3 colour-managed path used when an RGB matrix-shaper profile
+/// is present (see [`Image::to_rgba8`]).
+pub fn apply_icc_rgb_transform(transform: &lumen_core::icc::RgbTransform, pixel_data: &mut [u8]) {
+    apply_rgb_transform_packed(pixel_data, 4, transform);
+}
+
+/// Applies a compiled ICC matrix-shaper transform to packed pixels in place at an
+/// arbitrary byte stride (3 for `Rgb8`, 4 for `Rgba8`).
+///
+/// Only the leading R, G, B bytes of each `stride`-sized chunk are transformed;
+/// any trailing alpha byte is left untouched. Shared by the RGBA paint path
+/// ([`apply_icc_rgb_transform`]) and decode-time colour management (ICC-5).
+fn apply_rgb_transform_packed(
+    data: &mut [u8],
+    stride: usize,
+    transform: &lumen_core::icc::RgbTransform,
+) {
+    for chunk in data.chunks_exact_mut(stride) {
+        let r = f64::from(chunk[0]) / 255.0;
+        let g = f64::from(chunk[1]) / 255.0;
+        let b = f64::from(chunk[2]) / 255.0;
+        let (sr, sg, sb) = transform.apply(r, g, b);
+        chunk[0] = (sr * 255.0).round().clamp(0.0, 255.0) as u8;
+        chunk[1] = (sg * 255.0).round().clamp(0.0, 255.0) as u8;
+        chunk[2] = (sb * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+}
+
+/// Colour-manages a freshly-decoded image once, in place, then clears its ICC
+/// profile so later `to_rgba8` / `correct_rgba_pixels` calls do no colour work
+/// (ICC-5: "each image transformed once").
+///
+/// Only packed RGB formats (`Rgb8` / `Rgba8`) are managed here, applying the
+/// profile's matrix-shaper transform (preferred) or a gamut tone-map fallback
+/// directly to the compact source buffer — no RGBA expansion, so the decode
+/// cache keeps its original footprint. Grayscale formats keep their profile and
+/// are handled later by the expand-then-convert path in [`Image::to_rgba8`].
+/// Profiles with no buildable transform and an unrecognised gamut are a graceful
+/// no-op (pixels treated as sRGB).
+fn color_manage_in_place(image: &mut Image) {
+    let Some(profile) = image.icc_profile.as_ref() else { return };
+    let stride = match image.format {
+        PixelFormat::Rgb8 => 3,
+        PixelFormat::Rgba8 => 4,
+        // Grayscale: defer to `to_rgba8` (rare; an RGB profile on gray data
+        // needs the expand-to-RGB path and would change the pixel format here).
+        PixelFormat::Gray8 | PixelFormat::GrayAlpha8 => return,
+    };
+    if let Some(transform) = lumen_core::icc::cached_rgb_transform(&profile.data) {
+        apply_rgb_transform_packed(&mut image.data, stride, &transform);
+        image.icc_profile = None;
+        return;
+    }
+    match profile.detect_gamut() {
+        IccGamut::DisplayP3 => convert_packed_to_srgb(&mut image.data, stride, p3_to_srgb_pixel),
+        IccGamut::Rec2020 => convert_packed_to_srgb(&mut image.data, stride, rec2020_to_srgb_pixel),
+        IccGamut::Srgb | IccGamut::Unknown => {}
+    }
+    image.icc_profile = None;
 }
 
 /// Apply tone mapping for a detected color space.
@@ -389,6 +507,9 @@ pub fn apply_tone_mapping(color_space: lumen_core::ColorSpace, pixel_data: &mut 
         }
         lumen_core::ColorSpace::Rec2020 => {
             apply_rec2020_to_srgb(pixel_data);
+        }
+        lumen_core::ColorSpace::Lab => {
+            // Lab is a PCS encoding, not a display pixel space — no tone mapping.
         }
     }
 }
@@ -1058,9 +1179,14 @@ mod tests {
         );
     }
 
+    // BUG-227 (lumen-image copy): the profile description string is NOT a
+    // colour-space signal. The ICC refactor (slice ICC-1) made
+    // `detect_color_space_from_icc` classify RGB profiles by their colorant
+    // primaries, not by sniffing the description text. A buffer that merely
+    // embeds "Display P3" as text — with no `'acsp'` marker and no real
+    // `rXYZ/gXYZ/bXYZ` tags — is not a valid profile and must fall back to sRGB.
     #[test]
-    fn detect_color_space_with_display_p3_icc() {
-        // Create a Display P3 ICC profile (with "Display P3" text marker)
+    fn detect_color_space_description_text_is_not_sniffed() {
         let mut profile_data = vec![0u8; 200];
         profile_data[16] = 0x52;
         profile_data[17] = 0x47;
@@ -1069,9 +1195,7 @@ mod tests {
 
         let p3_text = b"Display P3";
         for (i, &b) in p3_text.iter().enumerate() {
-            if 150 + i < profile_data.len() {
-                profile_data[150 + i] = b;
-            }
+            profile_data[150 + i] = b;
         }
 
         let img = Image {
@@ -1083,8 +1207,8 @@ mod tests {
         };
         assert_eq!(
             img.detect_color_space(),
-            lumen_core::ColorSpace::DisplayP3,
-            "Display P3 profile should be detected correctly"
+            lumen_core::ColorSpace::Srgb,
+            "a text-only marker without real colorant primaries must not be sniffed"
         );
     }
 
@@ -1150,5 +1274,244 @@ mod tests {
         assert_eq!(pixels[3], 255);
         assert_eq!(pixels[7], 255);
         assert_eq!(pixels[11], 255);
+    }
+
+    // ── ICC-3 matrix-shaper colour management (to_rgba8 path) ──────────────
+
+    /// Builds a minimal but real RGB matrix-shaper ICC profile with the given
+    /// colorant primaries (each `(X, Y, Z)` in the D50 PCS) and a shared gamma
+    /// TRC. Parseable by `lumen_core::icc::IccProfile::parse`.
+    fn build_icc_rgb_profile(
+        r: (f64, f64, f64),
+        g: (f64, f64, f64),
+        b: (f64, f64, f64),
+        gamma: f64,
+    ) -> Vec<u8> {
+        fn be32(v: &mut Vec<u8>, x: u32) { v.extend_from_slice(&x.to_be_bytes()); }
+        fn s15(v: &mut Vec<u8>, x: f64) {
+            v.extend_from_slice(&((x * 65536.0).round() as i32).to_be_bytes());
+        }
+        let xyz = |c: (f64, f64, f64)| {
+            let mut t = Vec::new();
+            be32(&mut t, 0x58595A20); // 'XYZ '
+            be32(&mut t, 0);
+            s15(&mut t, c.0);
+            s15(&mut t, c.1);
+            s15(&mut t, c.2);
+            t
+        };
+        let r_blob = xyz(r);
+        let g_blob = xyz(g);
+        let b_blob = xyz(b);
+        let wtpt_blob = xyz((0.9642, 1.0, 0.8249)); // D50
+        let mut trc = Vec::new();
+        be32(&mut trc, 0x63757276); // 'curv'
+        be32(&mut trc, 0);
+        be32(&mut trc, 1); // single-entry gamma
+        trc.extend_from_slice(&((gamma * 256.0).round() as u16).to_be_bytes());
+
+        let tags: [(u32, &[u8]); 7] = [
+            (0x7258595A, &r_blob),
+            (0x6758595A, &g_blob),
+            (0x6258595A, &b_blob),
+            (0x77747074, &wtpt_blob),
+            (0x72545243, &trc),
+            (0x67545243, &trc),
+            (0x62545243, &trc),
+        ];
+
+        let mut header = vec![0u8; 128];
+        header[16..20].copy_from_slice(&0x52474220u32.to_be_bytes()); // 'RGB '
+        header[20..24].copy_from_slice(&0x58595A20u32.to_be_bytes()); // 'XYZ '
+        header[36..40].copy_from_slice(&0x61637370u32.to_be_bytes()); // 'acsp'
+
+        let data_start = 132 + tags.len() * 12;
+        let mut dir = Vec::new();
+        let mut blobs = Vec::new();
+        let mut cursor = data_start;
+        for (sig, blob) in tags.iter() {
+            be32(&mut dir, *sig);
+            be32(&mut dir, cursor as u32);
+            be32(&mut dir, blob.len() as u32);
+            blobs.extend_from_slice(blob);
+            cursor += blob.len();
+        }
+        let mut out = header;
+        out.extend_from_slice(&(tags.len() as u32).to_be_bytes());
+        out.extend_from_slice(&dir);
+        out.extend_from_slice(&blobs);
+        out
+    }
+
+    #[test]
+    fn to_rgba8_srgb_profile_round_trips() {
+        // sRGB primaries + gamma 2.2: a neutral grey must survive ~unchanged.
+        let profile = build_icc_rgb_profile(
+            (0.4361, 0.2225, 0.0139),
+            (0.3851, 0.7169, 0.0971),
+            (0.1431, 0.0606, 0.7141),
+            2.2,
+        );
+        let img = Image {
+            width: 1,
+            height: 1,
+            format: PixelFormat::Rgba8,
+            data: vec![128, 128, 128, 255],
+            icc_profile: Some(IccProfile { data: profile }),
+        };
+        let out = img.to_rgba8();
+        // Within a few 8-bit levels of the input grey.
+        assert!((out[0] as i32 - 128).abs() <= 4, "R {}", out[0]);
+        assert!((out[1] as i32 - 128).abs() <= 4, "G {}", out[1]);
+        assert!((out[2] as i32 - 128).abs() <= 4, "B {}", out[2]);
+        assert_eq!(out[3], 255, "alpha preserved");
+    }
+
+    #[test]
+    fn to_rgba8_p3_profile_brings_red_in_gamut() {
+        // Display-P3 colorants (D50-adapted). A saturated P3 red must be mapped
+        // into the sRGB gamut (all channels valid) and stay red-dominant.
+        let profile = build_icc_rgb_profile(
+            (0.5151, 0.2412, -0.0011),
+            (0.2920, 0.6922, 0.0419),
+            (0.1571, 0.0666, 0.7841),
+            2.2,
+        );
+        let img = Image {
+            width: 1,
+            height: 1,
+            format: PixelFormat::Rgba8,
+            data: vec![255, 0, 0, 200],
+            icc_profile: Some(IccProfile { data: profile }),
+        };
+        let out = img.to_rgba8();
+        assert!(out[0] > out[1] && out[0] > out[2], "red-dominant: {out:?}");
+        assert_eq!(out[3], 200, "alpha preserved");
+
+        // White through the same profile stays white.
+        let white = Image {
+            width: 1,
+            height: 1,
+            format: PixelFormat::Rgba8,
+            data: vec![255, 255, 255, 255],
+            icc_profile: Some(IccProfile {
+                data: build_icc_rgb_profile(
+                    (0.5151, 0.2412, -0.0011),
+                    (0.2920, 0.6922, 0.0419),
+                    (0.1571, 0.0666, 0.7841),
+                    2.2,
+                ),
+            }),
+        };
+        let wout = white.to_rgba8();
+        assert!(wout[0] >= 250 && wout[1] >= 250 && wout[2] >= 250, "white: {wout:?}");
+    }
+
+    #[test]
+    fn to_rgba8_no_profile_is_unchanged() {
+        let img = Image {
+            width: 1,
+            height: 1,
+            format: PixelFormat::Rgba8,
+            data: vec![10, 20, 30, 255],
+            icc_profile: None,
+        };
+        assert_eq!(img.to_rgba8(), vec![10, 20, 30, 255]);
+    }
+
+    // ── ICC-5: decode-time colour management (transform once, clear profile) ──
+
+    /// A P3-ish matrix-shaper profile reused by the decode-time tests.
+    fn p3_profile() -> Vec<u8> {
+        build_icc_rgb_profile(
+            (0.5151, 0.2412, -0.0011),
+            (0.2920, 0.6922, 0.0419),
+            (0.1571, 0.0666, 0.7841),
+            2.2,
+        )
+    }
+
+    #[test]
+    fn color_manage_clears_profile_and_matches_to_rgba8_rgba() {
+        let profile = p3_profile();
+        // Reference: the legacy paint-time path (profile still attached).
+        let reference = Image {
+            width: 1,
+            height: 1,
+            format: PixelFormat::Rgba8,
+            data: vec![255, 0, 0, 200],
+            icc_profile: Some(IccProfile { data: profile.clone() }),
+        }
+        .to_rgba8();
+
+        // Decode-time: apply once, in place, then clear the profile.
+        let mut img = Image {
+            width: 1,
+            height: 1,
+            format: PixelFormat::Rgba8,
+            data: vec![255, 0, 0, 200],
+            icc_profile: Some(IccProfile { data: profile }),
+        };
+        color_manage_in_place(&mut img);
+        assert!(img.icc_profile.is_none(), "profile cleared after decode-time management");
+        assert_eq!(img.data, reference, "decode-time result equals paint-time result");
+        // Idempotent: a second to_rgba8 (profile now None) does no further work.
+        assert_eq!(img.to_rgba8(), reference);
+    }
+
+    #[test]
+    fn color_manage_rgb8_matches_paint_path() {
+        let profile = p3_profile();
+        // Paint-time reference on the RGB triple expanded to RGBA.
+        let reference = Image {
+            width: 1,
+            height: 1,
+            format: PixelFormat::Rgb8,
+            data: vec![255, 0, 0],
+            icc_profile: Some(IccProfile { data: profile.clone() }),
+        }
+        .to_rgba8();
+
+        let mut img = Image {
+            width: 1,
+            height: 1,
+            format: PixelFormat::Rgb8,
+            data: vec![255, 0, 0],
+            icc_profile: Some(IccProfile { data: profile }),
+        };
+        color_manage_in_place(&mut img);
+        assert!(img.icc_profile.is_none());
+        // Stays Rgb8 (compact), pixels colour-managed; expand must match reference.
+        assert_eq!(img.format, PixelFormat::Rgb8);
+        assert_eq!(img.to_rgba8(), reference);
+    }
+
+    #[test]
+    fn color_manage_grayscale_keeps_profile() {
+        // Gray formats are deferred to the to_rgba8 expand path; the profile must
+        // survive decode-time management so colour is still applied later.
+        let mut img = Image {
+            width: 1,
+            height: 1,
+            format: PixelFormat::Gray8,
+            data: vec![128],
+            icc_profile: Some(IccProfile { data: p3_profile() }),
+        };
+        color_manage_in_place(&mut img);
+        assert!(img.icc_profile.is_some(), "grayscale keeps its profile for to_rgba8");
+    }
+
+    #[test]
+    fn color_manage_no_profile_is_noop() {
+        let mut img = Image {
+            width: 1,
+            height: 1,
+            format: PixelFormat::Rgba8,
+            data: vec![10, 20, 30, 255],
+            icc_profile: None,
+        };
+        color_manage_in_place(&mut img);
+        assert_eq!(img.data, vec![10, 20, 30, 255]);
+        assert!(img.icc_profile.is_none());
     }
 }

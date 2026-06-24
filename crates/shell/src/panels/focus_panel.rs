@@ -14,6 +14,7 @@
 //! wall-clock millisecond timestamp fed from the shell's `about_to_wait` loop,
 //! so it can be unit-tested without a real clock.
 
+use crate::panels::themes::Palette;
 use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand, DisplayList};
@@ -49,14 +50,15 @@ const RING_SEGMENTS: usize = 96;
 /// Side length of the square `×` exit hit-zone in the card's top-right corner.
 const CLOSE_W: f32 = 22.0;
 
-const CARD_BG: Color = Color { r: 18, g: 18, b: 24, a: 235 };
-const CARD_BORDER: Color = Color { r: 46, g: 46, b: 58, a: 255 };
+/// Ring track (annulus background) — fixed dark-on-dark appearance regardless of theme.
 const RING_TRACK: Color = Color { r: 44, g: 44, b: 56, a: 255 };
+/// Ring fill color: active work session (red).
 const RING_FILL: Color = Color { r: 240, g: 96, b: 84, a: 255 };
+/// Ring fill color: paused state (neutral gray).
 const RING_FILL_PAUSED: Color = Color { r: 150, g: 150, b: 160, a: 255 };
+/// Ring fill color: session complete (green).
 const RING_FILL_DONE: Color = Color { r: 90, g: 200, b: 110, a: 255 };
-const TEXT_TIME: Color = Color { r: 232, g: 232, b: 240, a: 255 };
-const TEXT_DIM: Color = Color { r: 150, g: 150, b: 160, a: 255 };
+/// `×` exit button foreground — semantic danger/close color.
 const CLOSE_FG: Color = Color { r: 180, g: 90, b: 90, a: 255 };
 
 const CARD_RADIUS: f32 = 12.0;
@@ -251,7 +253,8 @@ pub fn hit_test(panel: &FocusModePanel, x: f32, y: f32, window_w: f32) -> Option
 ///
 /// Rendered as a top-right floating card containing the arc progress ring and
 /// the remaining-time label.  `window_w` is the full window width in CSS px.
-pub fn build_panel(panel: &FocusModePanel, window_w: f32) -> DisplayList {
+/// `pal` provides the theme palette for surface (non-semantic) colors.
+pub fn build_panel(panel: &FocusModePanel, window_w: f32, pal: &Palette) -> DisplayList {
     let mut out = DisplayList::with_capacity(8);
     if !panel.active {
         return out;
@@ -269,12 +272,12 @@ pub fn build_panel(panel: &FocusModePanel, window_w: f32) -> DisplayList {
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(cx0 - 1.0, cy0 - 1.0, CARD_W + 2.0, CARD_H + 2.0),
         radii,
-        color: CARD_BORDER,
+        color: pal.overlay_border,
     });
     out.push(DisplayCommand::FillRoundedRect {
         rect: Rect::new(cx0, cy0, CARD_W, CARD_H),
         radii,
-        color: CARD_BG,
+        color: pal.overlay_bg,
     });
 
     // Progress ring.
@@ -309,7 +312,7 @@ pub fn build_panel(panel: &FocusModePanel, window_w: f32) -> DisplayList {
         rect: Rect::new(ring_cx - RING_OUTER, ring_cy - time_sz * 0.55, RING_OUTER * 2.0, time_sz * 1.2),
         text: time,
         font_size: time_sz,
-        color: TEXT_TIME,
+        color: pal.text,
         font_family: Vec::new(),
         font_weight: FontWeight::BOLD,
         font_style: FontStyle::Normal,
@@ -331,7 +334,7 @@ pub fn build_panel(panel: &FocusModePanel, window_w: f32) -> DisplayList {
         rect: Rect::new(cx0, cy0 + RING_CY_OFFSET + RING_OUTER + 12.0, CARD_W, status_sz * 1.4),
         text: status.to_owned(),
         font_size: status_sz,
-        color: TEXT_DIM,
+        color: pal.text_dim,
         font_family: Vec::new(),
         font_weight: FontWeight::NORMAL,
         font_style: FontStyle::Normal,
@@ -345,7 +348,7 @@ pub fn build_panel(panel: &FocusModePanel, window_w: f32) -> DisplayList {
         rect: Rect::new(cx0, cy0 + CARD_H - status_sz * 1.8, CARD_W, status_sz * 1.4),
         text: "click: pause  ·  Esc: exit".to_owned(),
         font_size: 9.0,
-        color: TEXT_DIM,
+        color: pal.text_dim,
         font_family: Vec::new(),
         font_weight: FontWeight::NORMAL,
         font_style: FontStyle::Normal,
@@ -600,7 +603,7 @@ mod tests {
     #[test]
     fn build_panel_inactive_empty() {
         let p = FocusModePanel::new();
-        let dl = build_panel(&p, WIN_W);
+        let dl = build_panel(&p, WIN_W, &Palette::DARK);
         assert!(dl.is_empty());
     }
 
@@ -608,7 +611,7 @@ mod tests {
     fn build_panel_active_emits_commands() {
         let mut p = FocusModePanel::new();
         p.enter(25);
-        let dl = build_panel(&p, WIN_W);
+        let dl = build_panel(&p, WIN_W, &Palette::DARK);
         assert!(!dl.is_empty());
     }
 
@@ -616,7 +619,7 @@ mod tests {
     fn build_panel_draws_time_label() {
         let mut p = FocusModePanel::new();
         p.enter(25);
-        let dl = build_panel(&p, WIN_W);
+        let dl = build_panel(&p, WIN_W, &Palette::DARK);
         let has_time = dl.iter().any(|c| {
             matches!(c, DisplayCommand::DrawText { text, .. } if text == "25:00")
         });
@@ -627,7 +630,7 @@ mod tests {
     fn build_panel_emits_ring_path() {
         let mut p = FocusModePanel::new();
         p.enter(25);
-        let dl = build_panel(&p, WIN_W);
+        let dl = build_panel(&p, WIN_W, &Palette::DARK);
         let ring_count = dl
             .iter()
             .filter(|c| matches!(c, DisplayCommand::DrawSvgPath { .. }))
@@ -642,7 +645,7 @@ mod tests {
         p.enter(1);
         p.tick(0.0);
         p.tick(30_000.0); // 50% progress
-        let dl = build_panel(&p, WIN_W);
+        let dl = build_panel(&p, WIN_W, &Palette::DARK);
         let ring_count = dl
             .iter()
             .filter(|c| matches!(c, DisplayCommand::DrawSvgPath { .. }))

@@ -12,13 +12,13 @@ Update this file whenever you change architecture, invariants, or policies.
 
 **Lumen** — private, lightweight, transparent browser in Rust with a custom engine. Not a Chromium/WebKit wrapper; a standalone rendering engine with an embedded JS engine.
 
-Current phase: **Phase 2 — v0.5 «Interactive» (in progress)**, app version **v0.2.0**. Phase 0 (prototype) closed 2026-05-26; Phase 1 «Reader» largely complete. Phase 2 work active: QuickJS, Canvas 2D, CSS Grid, Shadow DOM, accessibility tree, forms, find-in-page, DevTools/CDP, knowledge layer.
+Current phase: **Phase 2 — v0.5 «Interactive» (complete)**, app version **v0.5.0**. Phase 0 (prototype) closed 2026-05-26; Phase 1 «Reader» largely complete. Phase 2 delivered: QuickJS, Canvas 2D, CSS Grid, Shadow DOM, accessibility tree, forms, find-in-page, DevTools/CDP, knowledge layer.
 
 ### Versioning & phase policy
 
 Single source of truth for the version is `[workspace.package] version` in `Cargo.toml`. All machine-readable version strings (User-Agent, Sec-CH-UA, CDP `Browser.getVersion`, window title, startup banner) derive from `CARGO_PKG_VERSION` — do **not** hardcode a version number in code. The one manual-bump site is the `navigator.userAgent` literal in `crates/js/src/dom.rs` (JS shim string).
 
-Version↔phase mapping (from `docs/plan/phases.md`): Phase 1 → v0.1, **Phase 2 → v0.5** (target on phase completion), Phase 3 → v1.0. Mid-phase the version climbs toward the target (currently **0.2.0** inside active Phase 2). When Phase 2 goals are met, bump to 0.5.0; reaching Phase 3 → 1.0.0. Keep the phase label in sync across `README.md`, `docs/plan/phases.md`, this file, and the shell startup banner.
+Version↔phase mapping (from `docs/plan/phases.md`): Phase 1 → v0.1, **Phase 2 → v0.5** (target on phase completion), Phase 3 → v1.0. Mid-phase the version climbs toward the target (Phase 2 reached its **0.5.0** target). Reaching Phase 3 → 1.0.0. Keep the phase label in sync across `README.md`, `docs/plan/phases.md`, this file, and the shell startup banner.
 
 | File | Contents |
 |---|---|
@@ -32,7 +32,8 @@ Version↔phase mapping (from `docs/plan/phases.md`): Phase 1 → v0.1, **Phase 
 | `lumen-plan.md` | TOC index: links to 14 section files in `docs/plan/`. Read for architecture/history; for daily status use `STATUS-PN.md` instead. |
 | `docs/plan/` | Design doc split into 14 files: status, roadmap, history, architecture, tech-stack, engine, web-apis-shell, privacy, features, knowledge, security-performance, testing, phases, meta. |
 | `CSS-SPECS.md` | Complete CSS property & spec roadmap: all W3C modules, per-property status (✅🟡⬜🚫), P4 priority queue. |
-| `docs/roadmap-trees.md` | **How to use the interactive roadmap trees** (`docs/roadmap-*.html`): open in a browser, filters/search, and how to keep them current (`docs/roadmap.json` + `python scripts/gen_roadmap.py`, auto-pulls bug status from `BUGS.md`). |
+| `docs/roadmap-trees.md` | **How to use the interactive roadmap trees** (`docs/roadmap-*.html`): open in a browser, filters/search, and how to keep them current (`ROADMAP.md` + `python scripts/gen_roadmap.py`, auto-pulls bug status from `BUGS.md`). |
+| `ROADMAP.md` | Flat, grep-friendly source of the phase/task tree (two markdown tables: phases + tasks, one task per line). Feeds `gen_roadmap.py`; replaced the old nested `docs/roadmap.json`. Bug↔task links live in its `bugs` column. |
 | `CLAUDE.md` | (this file) Conventions and invariants for the assistant. |
 | `docs/decisions/` | Formal ADR files (one per architectural decision). See README.md + TEMPLATE.md inside. |
 | `DECISIONS.md` | Historical decisions (pre-ADR format). Read-only — add new decisions to `docs/decisions/` instead. |
@@ -55,7 +56,7 @@ Exception: Claude memory (`~/.claude/projects/.../memory/`) lives outside the re
 
 Five parallel developers (5 Claude Code sessions, each in its own `git worktree`). Each owns a distinct domain:
 
-**If the user says "you are developer N" at session start — read `STATUS-PN.md` and take the first item from "Next". If "In progress" is set — continue that task. If all your tasks are taken — ask the user which task to take next.**
+**If the user says "you are developer N" at session start — read `STATUS-PN.md` and take the first pointer line. If a `p<N>-…` branch already exists for you (`git branch`), continue that task instead. If all your tasks are taken — ask the user which task to take next.**
 
 Crates: `shell` | `core` | `dom` `html-parser` `css-parser` `layout` `paint` `font` `encoding` `image` | `ipc` `network` `storage` `knowledge` `bench`
 
@@ -71,7 +72,7 @@ Crates: `shell` | `core` | `dom` `html-parser` `css-parser` `layout` `paint` `fo
 
 **P1 and P2 work on features from the roadmap in parallel.** Coordination:
 - **Before starting:** Check `STATUS-P1.md` and `STATUS-P2.md` to avoid duplicate task pickup
-- **When reserving a task:** Update your `STATUS-PN.md` first (add "In progress" with branch name)
+- **When reserving a task:** create your `p<N>-…` branch first — the branch's existence is the reservation signal (the STATUS pointer line stays in place)
 - **Cross-domain work** (layout + paint): Use separate branches, coordinate via commit messages
 - **Crate conflicts:** Check git branches before touching a crate. If conflict, one session delays start
 
@@ -122,7 +123,7 @@ P2 writes:  fn apply_filter_pass(cmd: FilterCommand)  // CSS: filter, backdrop-f
 P4 writes:  ComputedStyle.filter field + apply_declaration("filter") + emits FilterCommand
 ```
 
-**P4 workflow:** When P1/P2 add a `// CSS: <property>` comment, P4 picks it up from `STATUS-P4.md` "Needs wiring" section. P4 implements end-to-end, then moves to "Recent". Async workflow — no pre-coordination required.
+**P4 workflow:** When P1/P2 add a `// CSS: <property>` comment, P4 picks it up as a `crates/...:line` pointer line in `STATUS-P4.md`. P4 implements end-to-end, then deletes that pointer line. Async workflow — no pre-coordination required.
 
 ### Code health: P5 only
 
@@ -134,8 +135,8 @@ P5's mandate is **audit + cheap safe cleanup + filing tasks** — never solo ref
 - **What P5 fixes directly (no separate task):** delete `--merged` branches, prune orphaned worktrees, regenerate `SYMBOLS.md`, trivial clippy fixes (unused import, stray `&`) **in its own crate only**.
 - **What P5 does NOT fix — it files instead:**
   - visual/logic bug → `OPEN` line in `BUGS.md` (next BUG-NNN)
-  - duplication / needed refactor → "Next" item in `STATUS-P1.md`/`STATUS-P2.md` with `file:line`
-  - dangling `// CSS:` handoff → "Needs wiring" item in `STATUS-P4.md`
+  - duplication / needed refactor → `ROADMAP.md` row + a pointer line (`ROADMAP.md:NN` or code `file:line`) in `STATUS-P1.md`/`STATUS-P2.md`
+  - dangling `// CSS:` handoff → `crates/...:line` pointer line in `STATUS-P4.md`
 - **Workspace-clippy exception.** P5 is the only role allowed `cargo clippy --workspace` (see Cargo output rules) — the full sweep is its whole point; it catches cross-crate breakage that per-crate checks hide after multi-session merges.
 - **Branch prefix:** `p5-health-<date>` or `p5-<topic>`. Worktree mandatory, same as P1–P4.
 
@@ -148,16 +149,50 @@ Full role definition: `STATUS-P5.md`.
 - **`lumen-shell` is P3's.** Only P3 integrates into the shell. P1/P2 describe integration points in commit body; P3 picks them up as separate tasks.
 - **Interface-first.** Cross-team tasks start with the owner publishing **types/traits** (with `todo!()` stubs) in a dedicated commit. Consumers implement against the stub; the real impl is a drop-in replacement.
 - **Add extension points yourself.** Don't block on "P3 hasn't added the trait yet" — add it yourself, P3 reviews post-factum.
-- **P1/P2/P3 → P4 handoff.** When a new algorithm needs a CSS property, add `// CSS: <property>` comment at the call site and note it in `STATUS-P4.md` under "Needs wiring". Do not wait for P4 — ship the algorithm, P4 wires CSS independently.
+- **P1/P2/P3 → P4 handoff.** When a new algorithm needs a CSS property, add `// CSS: <property>` comment at the call site and add a `crates/...:line` pointer line for it in `STATUS-P4.md`. Do not wait for P4 — ship the algorithm, P4 wires CSS independently.
+
+### Task tracking schema (invariant)
+
+Three artifacts, strict roles — do not duplicate descriptions across them:
+
+```
+ROADMAP.md (one line per task, status ≠ done)   ← master task list for P1/P2 (grep "| <id> " ROADMAP.md)
+   │   P3's source list is BUGS.md (OPEN rows); P4's is CSS-SPECS.md (⬜/🟡 rows) + `// CSS:` handoffs.
+   │
+   ├─ STATUS-PN.md: bare pointer lines `<source>:NN`, one per open task, priority top→bottom.
+   │     <source> = the role's master list — ROADMAP.md (P1/P2) · BUGS.md (P3) · CSS-SPECS.md (P4);
+   │     a code `file:line` (e.g. crates/.../ruby.rs:76) is allowed when the task is anchored in a
+   │     `// CSS:` / `// BUG-NNN` handoff rather than a list row.
+   │     NOTHING else — no headers, tables, descriptions, completed tasks, In progress/Recent.
+   │     (history lives in git log; readiness in ROADMAP status / CAPABILITIES.md / BUGS.md)
+   │
+   └─ docs/tasks/<id>.md   ← detailed brief, ONLY for an unimplemented task
+```
+
+- **A task file exists only while the task is unimplemented.** A done task is just a `done` line
+  in `ROADMAP.md` — no STATUS line, no task file.
+- **`STATUS-PN.md` holds only `<source>:NN` pointer lines** — `<source>` ∈ {ROADMAP.md, BUGS.md,
+  CSS-SPECS.md} or a code `file:line`. The `<id>`/task-file link is recovered from that row. Stable
+  anchor is the row key (`<id>` in ROADMAP, `BUG-NNN` in BUGS.md, property name in CSS-SPECS.md);
+  the `:NN` line number is fragile. BUGS.md is append-only (fixed bugs flip OPEN→FIXED in place,
+  never deleted), so a `BUGS.md:NN` pointer stays valid until rows are inserted above it.
+- **Reindex on source insertion (mandatory).** When you insert `K` new rows into a source file
+  (`ROADMAP.md` / `BUGS.md` / `CSS-SPECS.md`) at line `L`, every pointer into that same file (in all
+  `STATUS-PN.md`) with `NN ≥ L` must be bumped by `+K`. After any edit that shifts rows, verify each
+  STATUS pointer still lands on its intended row (`sed -n 'NNp' <source>`). Prefer appending new rows
+  at the end (ROADMAP: end of phase block; BUGS.md: end of file) to minimise shift. Append-only edits
+  below all pointers need no reindex.
+- **On completion:** delete the STATUS-PN.md line → delete (or `## Status: MERGED`) the task file →
+  set `ROADMAP.md` status to `done` (run `python scripts/gen_roadmap.py`) → mark
+  `CAPABILITIES.md`/`CSS-SPECS.md`/`BUGS.md`. (Full list — §«Task completion checklist».)
+- Full rules + template: [`docs/tasks/README.md`](docs/tasks/README.md).
 
 ### Reserving a task
 
-Create a feature branch (`git checkout -b <name>`) → in the **first commit on that branch** update `STATUS-PN.md`:
-
-```
-In progress: <task name>  branch: <branch-name>
-Next step: <what to do first>  <file.rs:line>
-```
+Create the feature branch and worktree (`p<N>-<id>`). **The branch's existence is the reservation
+signal** — a parallel session sees it via `git branch` and skips that task. The `STATUS-PN.md` pointer
+line stays put (it is deleted only on completion); there is no "In progress"/"Next" section to move it
+between. Keep the working details at hand in `docs/tasks/<id>.md`.
 
 ---
 
@@ -256,7 +291,7 @@ grep "LayoutBox" SYMBOLS.md
 **SYMBOLS.md — symbol index.** Auto-generated index of every `pub fn/struct/enum/trait/type` with `file:line`. `grep "SymbolName" SYMBOLS.md` → `Read file offset=<line> limit=30`. Regenerate on every public API change: `python scripts/gen_symbols.py` (add to same commit).
 
 **Session start protocol.** At the beginning of each session:
-1. Read `STATUS-PN.md` (your developer number) — current "In progress" task
+1. Read `STATUS-PN.md` (your developer number) — pointer lines to your open tasks; `git branch` shows any `p<N>-…` task already in progress
 2. Run `git branch` — verify you're on main
 3. If you need architecture context: read `docs/plan/architecture.md` (§1 Principles) and `docs/plan/tech-stack.md` (§5 Dependency policy)
 4. If you need architectural decisions: read `docs/decisions/README.md` index
@@ -497,11 +532,10 @@ Branch names: short kebab-case. **Developer sessions (P1–P4) must prefix the b
 Multiple Claude Code sessions may work simultaneously. Full workflow for task lifecycle:
 
 **Step 1: Task startup (BEFORE coding)**
-1. Read `STATUS-PN.md` + `git branch` — check what's in progress
-2. If "In progress" is already set — that task is taken, pick from "Next" instead
+1. Read `STATUS-PN.md` + `git branch` — check which tasks already have a `p<N>-…` branch
+2. If a `p<N>-…` branch already exists for the task — it's taken, pick the next pointer line instead
 3. Create a feature branch and worktree: `git worktree add .claude/worktrees/<task-name> -b p<N>-task-name`
-4. In the **first commit**, update `STATUS-PN.md`: set "In progress: <task>" + branch name + next step
-5. Push the branch: `git push origin p<N>-task-name`
+4. Push the branch: `git push origin p<N>-task-name` — its existence reserves the task (the STATUS pointer line stays in place)
 
 **Step 2: During work** — see "Worktree isolation" section below
 
@@ -562,8 +596,7 @@ git merge --no-ff p<N>-task-name -m "Merge p<N>-task-name: описание"
 git branch -d p<N>-task-name
 
 # 4. Update STATUS-PN.md on main
-# — remove line from "In progress"
-# — move task to "Recent"
+# — delete the completed task's pointer line (history lives in git log)
 git add STATUS-PN.md
 git commit -m "P<N>: отметить task-name как завершённую"
 
@@ -603,7 +636,7 @@ Do not re-read a whole file to make a small update — use `grep -n` to find the
 |---|---|---|
 | New feature / capability | `CAPABILITIES.md` | `grep -n "<subsystem>\|<keyword>" CAPABILITIES.md` → change ⬜/🟡 → ✅ on that line |
 | New feature / capability | `subsystems/<crate>.md` | append bullet to **Done** section (file is small — read whole) |
-| New feature / capability | `STATUS-PN.md` (your role) | move task from "In progress" to "Recent merges" |
+| New feature / capability | `STATUS-PN.md` (your role) | delete the completed task's pointer line |
 | Bug fixed | `BUGS.md` | `grep -n "BUG-NNN" BUGS.md` → change `OPEN` → `FIXED <date>` |
 | CSS property (P4) | `CSS-SPECS.md` | `grep -n "<property-name>" CSS-SPECS.md` → change ⬜ → ✅ |
 | CSS property (P4) | `CAPABILITIES.md` | same as "New feature" above |
@@ -611,7 +644,7 @@ Do not re-read a whole file to make a small update — use `grep -n` to find the
 | Architectural decision | `docs/decisions/ADR-NNN.md` | new file from TEMPLATE.md; update `docs/decisions/README.md` index |
 | Known gotcha found/fixed | `CLAUDE.md` → "Known gotchas" | append/remove the bullet |
 | New public API (`pub fn/struct`) | `SYMBOLS.md` | regenerate: `python scripts/gen_symbols.py` |
-| Roadmap structure (phase/task) or bug status change | `docs/roadmap.json` (structure + bug↔task links) → regenerate | edit `docs/roadmap.json` if a phase/task/link changed, then run `python scripts/gen_roadmap.py` — it re-pulls live bug status from `BUGS.md` and inlines data into `docs/roadmap-*.html`. Bug-only status changes need just the script (no JSON edit). |
+| Roadmap structure (phase/task) or bug status change | `ROADMAP.md` (structure + bug↔task links) → regenerate | edit `ROADMAP.md` if a phase/task/link changed (one task = one line, `grep "| U-6 " ROADMAP.md`), then run `python scripts/gen_roadmap.py` — it re-pulls live bug status from `BUGS.md` and inlines data into `docs/roadmap-*.html`. Bug-only status changes need just the script (no ROADMAP.md edit). |
 
 ### What NOT to update
 

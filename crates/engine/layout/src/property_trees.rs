@@ -649,6 +649,22 @@ pub fn compute_local_transform(fns: &[TransformFn], origin: (f32, f32, f32)) -> 
         .multiply(&Mat4::translation_2d(-ox, -oy))
 }
 
+/// Resolve `offset-anchor` to px relative to the box's border-box top-left.
+///
+/// CSS Motion Path L1 §3.3: the anchor is the point on the element that is
+/// placed onto the path. The initial value `auto` resolves to the element's
+/// `transform-origin`, which itself defaults to the box centre (`50% 50%`).
+/// Percentages resolve against the box's own `width`/`height`.
+fn motion_anchor_px(style: &ComputedStyle, width: f32, height: f32) -> (f32, f32) {
+    match &style.offset_anchor {
+        Some(pos) => (pos.x.resolve(width), pos.y.resolve(height)),
+        None => {
+            let (ox, oy, _) = style.transform_origin;
+            (ox.resolve(width), oy.resolve(height))
+        }
+    }
+}
+
 /// Forward-матрица бокса в viewport-координатах. CSS Transforms L1 §13:
 /// pivot задан в локальных px бокса, а трансформация применяется в той же
 /// системе координат, в которой лежит `b.rect` (обычно viewport). Поэтому
@@ -711,7 +727,14 @@ pub fn forward_box_transform(b: &LayoutBox) -> Option<Mat4> {
         };
         m = m.multiply(&step);
     }
-    // CSS Motion Path L1: prepend translate+rotate from offset-path before CSS transform.
+    // CSS Motion Path L1: the offset transform places the box's `offset-anchor`
+    // onto the path point and rotates around it. Per spec the used
+    // transform-origin becomes the offset-anchor, so the whole matrix is built
+    // around `rect + anchor` rather than the regular `transform-origin` pivot:
+    //   final = T(rect + path) · R(θ) · m · T(-(rect + anchor))
+    // where `m` is the regular transform list (applied around the anchor). The
+    // anchor defaults to the box centre, so without it the box would sit
+    // top-left-on-path instead of centred-on-path (off by half the box).
     if let Some(path) = &b.style.offset_path {
         let diagonal = (b.rect.width * b.rect.width + b.rect.height * b.rect.height).sqrt();
         let dist_px = b
@@ -719,11 +742,15 @@ pub fn forward_box_transform(b: &LayoutBox) -> Option<Mat4> {
             .offset_distance
             .resolve(b.style.font_size, Some(diagonal), Size::default())
             .unwrap_or(0.0);
-        if let Some(mt) = resolve_motion_transform(path, dist_px, b.style.offset_rotate) {
+        let (ax, ay) = motion_anchor_px(&b.style, b.rect.width, b.rect.height);
+        if let Some(mt) = resolve_motion_transform(path, dist_px, b.style.offset_rotate, (ax, ay)) {
             let rad = mt.rotation_deg * (core::f32::consts::PI / 180.0);
-            let motion = Mat4::translation_2d(mt.translate_x, mt.translate_y)
-                .multiply(&Mat4::rotate_2d(rad));
-            m = motion.multiply(&m);
+            return Some(
+                Mat4::translation_2d(b.rect.x + mt.translate_x, b.rect.y + mt.translate_y)
+                    .multiply(&Mat4::rotate_2d(rad))
+                    .multiply(&m)
+                    .multiply(&Mat4::translation_2d(-(b.rect.x + ax), -(b.rect.y + ay))),
+            );
         }
     }
     if pivot_x == 0.0 && pivot_y == 0.0 {
@@ -842,6 +869,9 @@ fn walk(
             let resolved_origin = (raw_ox.resolve(b.rect.width), raw_oy.resolve(b.rect.height), oz);
             let mut local = compute_local_transform(&style.transform, resolved_origin);
             // CSS Motion Path L1 (offset-path / offset-distance / offset-rotate).
+            // Place the `offset-anchor` (default = transform-origin = centre) onto
+            // the path point and rotate around it; the `T(-anchor)` term keeps the
+            // box centred on the path rather than top-left-on-path.
             if let Some(path) = &style.offset_path {
                 let diagonal =
                     (b.rect.width * b.rect.width + b.rect.height * b.rect.height).sqrt();
@@ -849,11 +879,13 @@ fn walk(
                     .offset_distance
                     .resolve(style.font_size, Some(diagonal), Size::default())
                     .unwrap_or(0.0);
-                if let Some(mt) = resolve_motion_transform(path, dist_px, style.offset_rotate) {
+                let (ax, ay) = motion_anchor_px(style, b.rect.width, b.rect.height);
+                if let Some(mt) = resolve_motion_transform(path, dist_px, style.offset_rotate, (ax, ay)) {
                     let motion = Mat4::translation_2d(mt.translate_x, mt.translate_y)
                         .multiply(&Mat4::rotate_2d(
                             mt.rotation_deg * (core::f32::consts::PI / 180.0),
-                        ));
+                        ))
+                        .multiply(&Mat4::translation_2d(-ax, -ay));
                     // Motion path positions first; CSS transform refines within that frame.
                     local = motion.multiply(&local);
                 }
@@ -1459,15 +1491,20 @@ mod tests {
     }
 
     #[test]
-    fn offset_path_at_zero_distance_is_at_path_start() {
-        // offset-distance: 0 → элемент у начала пути → translate(0, 0) → identity.
+    fn offset_path_at_zero_distance_centres_anchor_on_path_start() {
+        // offset-distance: 0 → offset-anchor (центр 50,50 у 100×100 бокса)
+        // садится на начало пути (0,0). Значит бокс сдвигается на (-50,-50):
+        // его центр уезжает к началу пути, а не его top-left (CSS Motion Path L1
+        // §3.3 — anchor-on-path, не corner-on-path).
         let trees = build(
             "<div>x</div>",
             r#"div { width:100px; height:100px; offset-path: path("M 0 0 L 200 0"); offset-distance: 0px; offset-rotate: 0deg; }"#,
         );
         assert_eq!(trees.transform.nodes.len(), 2);
-        // Нулевое смещение + нулевой поворот → identity (нет реального сдвига).
-        assert!(trees.transform.nodes[1].local.is_identity());
+        let n = &trees.transform.nodes[1];
+        assert!(!n.local.is_identity());
+        assert!(approx(n.local.0[12], -50.0), "tx={}", n.local.0[12]);
+        assert!(approx(n.local.0[13], -50.0), "ty={}", n.local.0[13]);
     }
 
     #[test]

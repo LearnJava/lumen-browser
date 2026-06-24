@@ -5,6 +5,7 @@
 //! Clicking a row enters rebind mode — the next keypress is recorded
 //! as the new binding and persisted via `lumen_storage::KeyboardShortcuts`.
 
+use crate::panels::themes::Palette;
 use lumen_core::geom::Rect;
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::{CornerRadii, DisplayCommand};
@@ -30,19 +31,14 @@ const CONTENT_H: f32 = PANEL_H - HEADER_H;
 
 // ── Colours ──────────────────────────────────────────────────────────────────
 
-const PANEL_BG: Color = Color { r: 18, g: 18, b: 26, a: 254 };
-const PANEL_BORDER: Color = Color { r: 52, g: 52, b: 66, a: 255 };
-const HEADER_BG: Color = Color { r: 26, g: 26, b: 36, a: 255 };
-const HEADER_TEXT: Color = Color { r: 210, g: 210, b: 225, a: 255 };
-const CLOSE_COL: Color = Color { r: 180, g: 80, b: 80, a: 255 };
-const ROW_EVEN: Color = Color { r: 22, g: 22, b: 32, a: 255 };
-const ROW_ODD: Color = Color { r: 26, g: 26, b: 36, a: 255 };
-const ROW_REBIND: Color = Color { r: 30, g: 50, b: 80, a: 255 };
-const LABEL_COL: Color = Color { r: 200, g: 200, b: 218, a: 255 };
-const KEY_COL: Color = Color { r: 100, g: 160, b: 240, a: 255 };
-const KEY_BADGE_BG: Color = Color { r: 34, g: 44, b: 64, a: 255 };
+/// Semantic amber used for the "awaiting keypress" rebind hint — not a surface colour.
 const REBIND_TEXT: Color = Color { r: 200, g: 170, b: 80, a: 255 };
-const SEPARATOR: Color = Color { r: 36, g: 36, b: 50, a: 255 };
+/// Semantic red used for the × close glyph — not a surface colour.
+const CLOSE_COL: Color = Color { r: 180, g: 80, b: 80, a: 255 };
+/// Semantic blue used for key-binding text — not a surface colour.
+const KEY_COL: Color = Color { r: 100, g: 160, b: 240, a: 255 };
+/// Semantic blue highlight used for the rebind-active row background — not a surface colour.
+const ROW_REBIND: Color = Color { r: 30, g: 50, b: 80, a: 255 };
 
 // ── Shortcut row data ─────────────────────────────────────────────────────────
 
@@ -229,18 +225,21 @@ impl ShortcutsPanel {
     }
 
     /// Render the panel into `dl`, anchored at `(ox, oy)` in screen space.
-    pub fn build_panel(&self, dl: &mut DisplayList, ox: f32, oy: f32) {
+    ///
+    /// `pal` — active theme palette; surface colours are read from it so the
+    /// panel follows light/dark theme switches.
+    pub fn build_panel(&self, dl: &mut DisplayList, ox: f32, oy: f32, pal: &Palette) {
         // Outer border.
         dl.push(DisplayCommand::FillRoundedRect {
             rect: Rect::new(ox - 1.0, oy - 1.0, PANEL_W + 2.0, PANEL_H + 2.0),
             radii: CornerRadii { tl: 6.0, tl_y: 6.0, tr: 6.0, tr_y: 6.0,
                                  bl: 6.0, bl_y: 6.0, br: 6.0, br_y: 6.0 },
-            color: PANEL_BORDER,
+            color: pal.overlay_border,
         });
         // Panel background.
         dl.push(DisplayCommand::FillRect {
             rect: Rect::new(ox, oy, PANEL_W, PANEL_H),
-            color: PANEL_BG,
+            color: pal.overlay_bg,
         });
 
         // Header bar.
@@ -248,10 +247,10 @@ impl ShortcutsPanel {
             rect: Rect::new(ox, oy, PANEL_W, HEADER_H),
             radii: CornerRadii { tl: 5.0, tl_y: 5.0, tr: 5.0, tr_y: 5.0,
                                  bl: 0.0, bl_y: 0.0, br: 0.0, br_y: 0.0 },
-            color: HEADER_BG,
+            color: pal.header_bg,
         });
         dl.push(txt("Горячие клавиши", ox + PAD_H, oy + 10.0,
-                    PANEL_W - PAD_H * 2.0 - CLOSE_W, 13.0, FontWeight::BOLD, HEADER_TEXT));
+                    PANEL_W - PAD_H * 2.0 - CLOSE_W, 13.0, FontWeight::BOLD, pal.text));
         dl.push(txt("×", ox + PANEL_W - CLOSE_W + 6.0, oy + 9.0,
                     20.0, 15.0, FontWeight::BOLD, CLOSE_COL));
 
@@ -271,9 +270,9 @@ impl ShortcutsPanel {
             let bg = if self.rebinding == Some(i) {
                 ROW_REBIND
             } else if i % 2 == 0 {
-                ROW_EVEN
+                pal.overlay_bg
             } else {
-                ROW_ODD
+                pal.row_alt_bg
             };
             dl.push(DisplayCommand::FillRect {
                 rect: Rect::new(ox, row_top, PANEL_W, ROW_H),
@@ -282,11 +281,11 @@ impl ShortcutsPanel {
             // Separator at bottom of row.
             dl.push(DisplayCommand::FillRect {
                 rect: Rect::new(ox, row_top + ROW_H - 1.0, PANEL_W, 1.0),
-                color: SEPARATOR,
+                color: pal.divider,
             });
             // Action label (left).
             dl.push(txt(row.label, ox + PAD_H, row_top + 10.0,
-                        PANEL_W * 0.58, 12.0, FontWeight::NORMAL, LABEL_COL));
+                        PANEL_W * 0.58, 12.0, FontWeight::NORMAL, pal.text));
             // Key badge (right) or rebind hint.
             let (badge_text, badge_col) = if self.rebinding == Some(i) {
                 ("Нажмите клавишу\u{2026}".to_owned(), REBIND_TEXT)
@@ -298,7 +297,7 @@ impl ShortcutsPanel {
                 rect: Rect::new(badge_x - 4.0, row_top + 7.0, 128.0, 22.0),
                 radii: CornerRadii { tl: 3.0, tl_y: 3.0, tr: 3.0, tr_y: 3.0,
                                      bl: 3.0, bl_y: 3.0, br: 3.0, br_y: 3.0 },
-                color: KEY_BADGE_BG,
+                color: pal.item_bg,
             });
             dl.push(txt(badge_text, badge_x, row_top + 10.0,
                         120.0, 11.0, FontWeight::NORMAL, badge_col));
@@ -327,6 +326,15 @@ fn txt(text: impl Into<String>, x: f32, y: f32, w: f32, font_size: f32,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::panels::themes::Palette;
+
+    #[test]
+    fn build_panel_emits_commands() {
+        let p = ShortcutsPanel::new(&[]);
+        let mut dl: DisplayList = Vec::new();
+        p.build_panel(&mut dl, 0.0, 0.0, &Palette::DARK);
+        assert!(!dl.is_empty());
+    }
 
     #[test]
     fn new_panel_is_hidden() {
