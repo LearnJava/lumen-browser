@@ -1558,6 +1558,60 @@ pub trait JsFetchProvider: Send + Sync {
         let _ = (content_type, body);
         self.fetch_sync(url, method)
     }
+
+    /// Cooperative-cancellation variant of fetch_sync mirroring AbortSignal.
+    ///
+    /// The default implementation only checks the token before issuing the request
+    /// (pre-flight cancellation) and then delegates to `fetch_sync`. This ensures
+    /// back-compatibility with existing implementations.
+    ///
+    /// Implementations backed by a real socket should additionally poll the token
+    /// between reads and tear the connection down to achieve in-flight abort.
+    ///
+    /// On abort, this returns `Error::Aborted`, which the JS layer maps to a
+    /// DOMException `AbortError`.
+    fn fetch_cancellable(&self, url: &str, method: &str, token: &AbortToken) -> Result<JsFetchResult> {
+        if token.is_aborted() {
+            return Err(crate::error::Error::Aborted("fetch aborted before send".to_string()));
+        }
+        self.fetch_sync(url, method)
+    }
+}
+
+#[cfg(test)]
+mod fetch_cancellable_tests {
+    use super::*;
+
+    struct DummyFetch;
+
+    impl JsFetchProvider for DummyFetch {
+        fn fetch_sync(&self, _url: &str, _method: &str) -> Result<JsFetchResult> {
+            Err(crate::error::Error::Network("net-called".to_string()))
+        }
+    }
+
+    #[test]
+    fn pre_aborted_token_returns_aborted() {
+        let token = AbortToken::new();
+        token.abort();
+        let provider = DummyFetch;
+        let result = provider.fetch_cancellable("http://example.com", "GET", &token);
+        match result {
+            Err(crate::error::Error::Aborted(_)) => {}
+            _ => panic!("expected Aborted error"),
+        }
+    }
+
+    #[test]
+    fn live_token_delegates_to_fetch_sync() {
+        let token = AbortToken::new();
+        let provider = DummyFetch;
+        let result = provider.fetch_cancellable("http://example.com", "GET", &token);
+        match result {
+            Err(crate::error::Error::Network(msg)) => assert_eq!(msg, "net-called"),
+            _ => panic!("expected Network error from fetch_sync"),
+        }
+    }
 }
 
 /// A cheaply-clonable cooperative cancellation flag for aborting in-flight fetches.
