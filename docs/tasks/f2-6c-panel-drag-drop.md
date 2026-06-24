@@ -1,9 +1,38 @@
 # F2-6c — Panel drag & drop + Surface/SurfaceManager + layout persistence
 
 **Developer:** P1
-**Branch:** `p1-f2-6c-panel-dnd`
-**Size:** L
+**Branch:** foundation (steps 1–5) merged to `main` 2026-06-25; remaining work (steps 6–8) needs a fresh `p1-…` branch.
+**Size:** L (remaining: M — main.rs wiring only)
 **Crates:** `lumen-shell` (surface/, panels/, tabs/)
+
+> **Scope note (2026-06-25).** Steps 1–5 — the tested `SurfaceManager` foundation —
+> are **merged to `main`**. Steps 6–8 are the live-shell migration and are **deferred as a
+> separate task**: they replace the already-working, persisted 4-panel docking system
+> (`panel_layout::PanelLayout`, drag-resize + cross-dock + restart persistence — see
+> `CAPABILITIES.md` line ~170) and add **no new user-facing capability**, so they were not
+> bundled into the foundation merge. Pick this up only as a deliberate architecture-refactor task.
+
+## Progress (2026-06-25)
+
+**Steps 1–5 DONE** (infrastructure slice, fully unit-tested, merged to `main`):
+- Step 1 — `PanelEvent::DragStart/DragMove/DragEnd` + `DragData` in `surface/types.rs`.
+- Step 2 — `EventCtx::start_drag`/`requested_drag` in `surface/ctx.rs`.
+- Step 3 — `SurfaceManager` redock: `slot_override`/`effective_slot`, `slot_size_overrides`,
+  `move_panel_to_slot`/`set_slot_size`/`panel_slot`, mouse-driven drag state machine
+  (`route_mouse_*` + `begin_drag`/`cancel_drag`/`is_dragging`), `drop_target_rect`.
+  Drop slot resolved by window quarter-bands (`slot_at`) so empty slots are reachable.
+- Step 4 — `serialize_layout`/`apply_layout` (compact version-tagged text format, no serde).
+- Step 5 — `BrowserSettings::panel_layout`/`set_panel_layout` + snapshot field.
+
+Tests: 46 `surface::*` + 14 `storage::browser_settings` green; both crates clippy-clean.
+
+**Steps 6–8 REMAINING** (live-shell migration onto `SurfaceManager`; main.rs ~17.5k lines,
+no new user-facing capability — the running shell already drag-resizes/cross-docks/persists
+via the ad-hoc `panel_layout::PanelLayout` path):
+- Step 6 — implement `Panel` for vertical-tabs + sidebar panels.
+- Step 7 — construct/register a live `SurfaceManager` in `App`; drive content x-offset from
+  `slot_rect("content")` instead of the inline `PANEL_WIDTH` offsets.
+- Step 8 — drain `EventCtx` effects (`take_commands`/`requested_cursor`/`requested_drag`).
 
 ## Goal
 

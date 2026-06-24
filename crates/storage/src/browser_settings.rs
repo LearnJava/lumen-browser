@@ -25,6 +25,7 @@ const KEY_FONT_SIZE: &str = "font_size";
 const KEY_THEME: &str = "theme";
 const KEY_DOWNLOAD_PATH: &str = "download_path";
 const KEY_TAB_LAYOUT: &str = "tab_layout";
+const KEY_PANEL_LAYOUT: &str = "panel_layout";
 
 // ── Defaults ────────────────────────────────────────────────────────────────
 
@@ -37,6 +38,7 @@ const DEFAULT_FONT_SIZE: f64 = 16.0;
 const DEFAULT_THEME: &str = "dark";
 const DEFAULT_DOWNLOAD_PATH: &str = "";
 const DEFAULT_TAB_LAYOUT: &str = "horizontal";
+const DEFAULT_PANEL_LAYOUT: &str = "";
 
 /// All browser settings in a single value type for easy read/write.
 #[derive(Debug, Clone, PartialEq)]
@@ -61,6 +63,11 @@ pub struct BrowserSettingsSnapshot {
     ///
     /// Serialised as a string so future modes can be added without a schema migration.
     pub tab_layout: String,
+    /// Serialised docked-panel layout (slot assignment + per-slot size +
+    /// visibility), as produced by `SurfaceManager::serialize_layout`.
+    ///
+    /// Empty string means no saved layout — the shell uses built-in defaults.
+    pub panel_layout: String,
 }
 
 impl Default for BrowserSettingsSnapshot {
@@ -75,6 +82,7 @@ impl Default for BrowserSettingsSnapshot {
             theme: DEFAULT_THEME.to_owned(),
             download_path: DEFAULT_DOWNLOAD_PATH.to_owned(),
             tab_layout: DEFAULT_TAB_LAYOUT.to_owned(),
+            panel_layout: DEFAULT_PANEL_LAYOUT.to_owned(),
         }
     }
 }
@@ -258,6 +266,16 @@ impl BrowserSettings {
         self.set_str(KEY_TAB_LAYOUT, mode)
     }
 
+    /// Serialised docked-panel layout string (F2-6c); empty = built-in defaults.
+    pub fn panel_layout(&self) -> String {
+        self.get_str(KEY_PANEL_LAYOUT, DEFAULT_PANEL_LAYOUT)
+    }
+
+    /// Persist the serialised docked-panel layout.
+    pub fn set_panel_layout(&self, layout: &str) -> Result<()> {
+        self.set_str(KEY_PANEL_LAYOUT, layout)
+    }
+
     /// Read all settings into a snapshot value.
     pub fn snapshot(&self) -> BrowserSettingsSnapshot {
         BrowserSettingsSnapshot {
@@ -270,6 +288,7 @@ impl BrowserSettings {
             theme: self.theme(),
             download_path: self.download_path(),
             tab_layout: self.tab_layout(),
+            panel_layout: self.panel_layout(),
         }
     }
 
@@ -284,6 +303,7 @@ impl BrowserSettings {
         self.set_theme(&snap.theme)?;
         self.set_download_path(&snap.download_path)?;
         self.set_tab_layout(&snap.tab_layout)?;
+        self.set_panel_layout(&snap.panel_layout)?;
         Ok(())
     }
 }
@@ -384,6 +404,7 @@ mod tests {
             theme: "light".to_owned(),
             download_path: "/tmp/dl".to_owned(),
             tab_layout: "vertical".to_owned(),
+            panel_layout: "1\npanel sidebar right 1\n".to_owned(),
         };
         s.apply_snapshot(&snap).unwrap();
         assert_eq!(s.snapshot(), snap);
@@ -402,5 +423,17 @@ mod tests {
         assert_eq!(s.tab_layout(), "vertical");
         s.set_tab_layout("horizontal").unwrap();
         assert_eq!(s.tab_layout(), "horizontal");
+    }
+
+    #[test]
+    fn panel_layout_default_is_empty() {
+        assert_eq!(store().panel_layout(), "");
+    }
+
+    #[test]
+    fn panel_layout_round_trip() {
+        let s = store();
+        s.set_panel_layout("1\npanel sidebar right 1\n").unwrap();
+        assert_eq!(s.panel_layout(), "1\npanel sidebar right 1\n");
     }
 }
