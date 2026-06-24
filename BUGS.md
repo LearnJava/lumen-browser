@@ -129,7 +129,7 @@
 | [BUG-111](bugs/BUG-111-FIXED.md) | FIXED 2026-06-08 | paint/shell | lumen-paint/shell не компилировались после мержа A-2 CSS Custom Highlight API |
 | [BUG-112](bugs/BUG-112-FIXED.md) | FIXED 2026-06-08 | driver | test_32_list_markers регрессия: P4 добавил 2 @counter-style списка |
 | [BUG-113](bugs/BUG-113-FIXED.md) | FIXED 2026-06-09 | layout | TEST-53 row-2 drift ~24px: trailing cross_gap утекал в single-line flex |
-| [BUG-114](bugs/BUG-114-OPEN.md) | OPEN | css-parser | `font` shorthand drops font-size/line-height — TEST-53 residual ~4px |
+| [BUG-114](bugs/BUG-114-FIXED.md) | FIXED 2026-06-24 (DEBTOR) | css-parser/layout | `font` shorthand drops font-size/line-height — TEST-53 9.62%→1.71%. Не было арма `"font" =>` в `apply_declaration` (style.rs), shorthand падал в `_ => {}`; font-size игнорировался pre-pass-ом. Фикс: `parse_font_shorthand` (CSS Fonts L4 §6.10) + резолв `<font-size>` в `apply_font_size` + арм `"font" =>` (style/variant/weight/stretch/line-height/family, reset-to-initial по §3.1) + вынесен `apply_line_height_value`. 7 юнит-тестов. Остаток 1.71% = font-parity (Inter vs Edge sans/mono, rule 3) → KNOWN_DEBTORS '53' (BUG-128) |
 | [BUG-115](bugs/BUG-115-FIXED.md) | FIXED 2026-06-23 | css-parser | percent `background-size` not supported — TEST-45 residual |
 | [BUG-116](bugs/BUG-116-FIXED.md) | FIXED 2026-06-09 | layout | auto table column widths: content-based sizing (CSS 2.1 §17.5.2) |
 | [BUG-117](bugs/BUG-117-FIXED.md) | FIXED 2026-06-09 | layout | multi-column greedy assignment two bugs — TEST-33 16.14% |
