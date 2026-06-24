@@ -1,8 +1,32 @@
 # BUG-220
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-06-24
 **Компонент:** paint (`crates/engine/paint/src/display_list.rs`)
 **Тест:** —  (обнаружено при разборе BUG-202; визуальный эффект мал — overlay scrollbar)
+
+## Исправление
+
+Логика scrollbar (gutter из `scrollbar-width`, цвета из `scrollbar-color`,
+`scrollbar_rects`) вынесена в общий хелпер
+`emit_scrollbars(b, padding_box, is_scroll_x, is_scroll_y, out)` и вызывается из
+обеих веток построения display-list-а:
+
+- `walk` (legacy путь) — после `PopScrollLayer`;
+- `box_layer_ops` (ordered / stacking-context путь) — `DrawScrollbar` пушится в
+  `overflow_post` сразу после `PopScrollLayer`; caller (`fill_buckets`) сбрасывает
+  `overflow_post` после детей (в `bucket.post` для SC-root, в `bucket.contents`
+  для non-SC), поэтому бары рисуются на фиксированной позиции поверх
+  проскролленного контента.
+
+Хелпер измеряет content-extent относительно **padding-box** origin и с полом
+**padding-box** размера (а не border-box) — это устраняет описанный ниже риск
+ложного горизонтального scrollbar при наличии border.
+
+Проверка: `--dump-display-list 83-scroll-behavior.html` теперь даёт 3
+`DrawScrollbar` на 3 `PushScrollLayer` (было 0). Регресс-тест
+`ordered_scroll_container_emits_scrollbar` в `display_list.rs`. TEST-83 остаётся
+KNOWN_DEBTOR (BUG-128, font-parity): добавленные полупрозрачные бары (~0.3–0.8%
+площади) в пределах ратчет-полосы baseline 7.88% ±2%.
 
 ## Описание
 
