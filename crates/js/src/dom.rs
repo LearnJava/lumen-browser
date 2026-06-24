@@ -7548,13 +7548,48 @@ function WebSocket(url, protocols) {
     // Phase 0: no persistent event loop — caller must invoke _lumen_pump_websockets()
     // after setting onopen/onmessage to receive queued events.
 }
+// Application-data byte length used for bufferedAmount accounting (WHATWG WebSocket).
+function _lumen_ws_bytelen(data) {
+    if (typeof data === 'string') {
+        return new TextEncoder().encode(data).length;
+    }
+    if (data instanceof ArrayBuffer) {
+        return data.byteLength;
+    }
+    if (typeof data.byteLength === 'number') {
+        return data.byteLength;
+    }
+    return new TextEncoder().encode(String(data)).length;
+}
+
 WebSocket.prototype.send = function(data) {
-    if (this.readyState !== 1) return;
-    if (typeof data === 'string') { _lumen_ws_send(this._handle, data); }
-    else { _lumen_ws_send_bin(this._handle, data instanceof Uint8Array ? data : new Uint8Array(data)); }
+    if (this.readyState === 0) {
+        throw new DOMException(\"Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.\", 'InvalidStateError');
+    }
+    var n = _lumen_ws_bytelen(data);
+    if (this.readyState === 1) {
+        if (typeof data === 'string') {
+            _lumen_ws_send(this._handle, data);
+        } else {
+            _lumen_ws_send_bin(this._handle, data instanceof Uint8Array ? data : new Uint8Array(data));
+        }
+    } else if (this.readyState === 2 || this.readyState === 3) {
+        // CLOSING/CLOSED: data is discarded but counted (WHATWG §the-websocket-interface send()).
+        this.bufferedAmount += n;
+    }
 };
 WebSocket.prototype.close = function(code, reason) {
-    if (this.readyState === 3) return;
+    if (code !== undefined && code !== null) {
+        if (code !== 1000 && (code < 3000 || code > 4999)) {
+            throw new DOMException(\"Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 4999.\", 'InvalidAccessError');
+        }
+    }
+    if (typeof reason === 'string' && new TextEncoder().encode(reason).length > 123) {
+        throw new DOMException(\"Failed to execute 'close' on 'WebSocket': The close reason must not be greater than 123 UTF-8 bytes.\", 'SyntaxError');
+    }
+    if (this.readyState === 2 || this.readyState === 3) {
+        return;
+    }
     this.readyState = 2;
     _lumen_ws_close(this._handle, typeof code === 'number' ? code : 1000, typeof reason === 'string' ? reason : '');
 };
@@ -7570,6 +7605,8 @@ WebSocket.prototype.removeEventListener = function(type, fn) {
 };
 WebSocket.CONNECTING = 0; WebSocket.OPEN = 1;
 WebSocket.CLOSING = 2;    WebSocket.CLOSED = 3;
+WebSocket.prototype.CONNECTING = 0; WebSocket.prototype.OPEN = 1;
+WebSocket.prototype.CLOSING = 2;    WebSocket.prototype.CLOSED = 3;
 
 // ── Web Storage (localStorage / sessionStorage) ───────────────────────────────
 // Spec: https://html.spec.whatwg.org/multipage/webstorage.html §8
@@ -14456,6 +14493,96 @@ mod tests {
             )
             .unwrap();
         assert_eq!(r, lumen_core::JsValue::String("hello".into()));
+    }
+
+    /// `send()` while CONNECTING must throw `InvalidStateError` (WHATWG WebSocket).
+    #[test]
+    fn websocket_send_in_connecting_throws() {
+        let rt = runtime_with_mock_ws(make_doc());
+        // No pump → stays CONNECTING (readyState 0).
+        let r = rt
+            .eval(
+                "var ws = new WebSocket('ws://mock');
+                 try { ws.send('x'); 'nothrow'; } catch (e) { e.name; }",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("InvalidStateError".into()));
+    }
+
+    /// `close()` with an out-of-range code throws `InvalidAccessError`; a valid
+    /// custom code (3000–4999) transitions the socket to CLOSING (2).
+    #[test]
+    fn websocket_close_code_validation() {
+        let rt = runtime_with_mock_ws(make_doc());
+        let bad = rt
+            .eval(
+                "var ws = new WebSocket('ws://mock');
+                 try { ws.close(1234); 'nothrow'; } catch (e) { e.name; }",
+            )
+            .unwrap();
+        assert_eq!(bad, lumen_core::JsValue::String("InvalidAccessError".into()));
+        let ok = rt
+            .eval(
+                "var ws2 = new WebSocket('ws://mock');
+                 ws2.close(3001); ws2.readyState",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Number(2.0));
+    }
+
+    /// `close()` with a reason longer than 123 UTF-8 bytes throws `SyntaxError`.
+    #[test]
+    fn websocket_close_reason_too_long_throws() {
+        let rt = runtime_with_mock_ws(make_doc());
+        let r = rt
+            .eval(
+                "var ws = new WebSocket('ws://mock');
+                 var long = 'a'.repeat(124);
+                 try { ws.close(1000, long); 'nothrow'; } catch (e) { e.name; }",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("SyntaxError".into()));
+    }
+
+    /// `send()` in CLOSING/CLOSED discards data but counts it in `bufferedAmount`.
+    #[test]
+    fn websocket_buffered_amount_in_closing() {
+        let rt = runtime_with_mock_ws(make_doc());
+        let r = rt
+            .eval(
+                "var ws = new WebSocket('ws://mock');
+                 ws.close();           // CONNECTING → CLOSING
+                 ws.send('hello');     // 5 bytes, discarded but counted
+                 ws.bufferedAmount",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(5.0));
+    }
+
+    /// Ready-state constants are exposed on instances, not only the constructor.
+    #[test]
+    fn websocket_instance_constants() {
+        let rt = runtime_with_mock_ws(make_doc());
+        let r = rt
+            .eval(
+                "var ws = new WebSocket('ws://mock');
+                 ws.CONNECTING === 0 && ws.OPEN === 1 && ws.CLOSING === 2 && ws.CLOSED === 3",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    /// A second `close()` is a no-op (idempotent), readyState stays CLOSING.
+    #[test]
+    fn websocket_close_idempotent() {
+        let rt = runtime_with_mock_ws(make_doc());
+        let r = rt
+            .eval(
+                "var ws = new WebSocket('ws://mock');
+                 ws.close(); ws.close(); ws.readyState",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(2.0));
     }
 
     #[test]
