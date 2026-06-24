@@ -104,6 +104,23 @@ Fallback на резервную модель при rate limit
 5 минут (`wait_for_rate_limit`).
 
 Сбросить fallback можно только перезапуском оркестратора.
+
+Делегирование в Laguna M.1 (флаг --laguna)
+------------------------------------------
+Опционально задачи можно отдавать модели Laguna M.1 (poolside), а не Claude:
+
+    --laguna assist  — Claude остаётся водителем (STATUS/правки/cargo/git/
+                       /lumen-task-finish), но написание кода делегирует Laguna
+                       через .tmp/laguna.py (к промпту добавляется LAGUNA_ASSIST_NOTE).
+    --laguna solo    — Claude НЕ участвует: run_laguna_solo() ведёт агент-петлю
+                       поверх Laguna в собственном worktree по текстовому tool-
+                       протоколу READ/LIST/WRITE/BASH/DONE; перед коммитом — ворота
+                       cargo check + clippy -D warnings + test по затронутым crates.
+
+Нужен POOLSIDE_API_KEY (env или .tmp/poolside.env) и пакет openai (ленивый импорт).
+ПРИВАТНОСТЬ: всё, что уходит в Laguna, публикуется на серверах poolside; solo шлёт
+исходники (READ). Полная документация всех нюансов — scripts/README.md, раздел
+«Делегирование в Laguna M.1».
 """
 
 import argparse
