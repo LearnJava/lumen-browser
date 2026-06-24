@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<!-- SVG 1.1 §10.9.2 / CSS Inline L3 §5.2 — baseline-shift as a CSS property.
+     baseline-shift moves an SVG <text> vertically relative to its `y` baseline:
+     `super` raises it, `sub` lowers it, a positive <length>/<percentage> raises it.
+     Each row draws a magenta horizontal reference line at the element's `y` (the
+     unshifted baseline); the text shifts above/below that line per its shift value.
+     Rows 1-3 set the value via the presentation attribute; rows 4-5 set it via a
+     CSS rule (row 5 also proves CSS overrides a conflicting presentation attribute).
+     NOTE: glyph rasterisation diverges from Edge (rule #3), so the authoritative
+     gate is the deterministic CPU snapshot (snapshot_cpu.rs) + --dump-display-list,
+     not the Edge pixel pipeline. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; }
+  .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; overflow: hidden; padding: 20px; box-sizing: border-box; }
+  svg { display: block; }
+  /* CSS-set baseline-shift (no presentation attribute on this <text>). */
+  .css-up { baseline-shift: 24px; }
+  /* CSS super overrides the conflicting baseline-shift="sub" presentation attribute. */
+  .css-super { baseline-shift: super; }
+</style>
+</head>
+<body>
+  <div class="__f">
+    <svg width="960" height="640">
+      <!-- Row 1: no shift — text sits on the reference line. -->
+      <rect x="60" y="88" width="840" height="4" fill="#ff00ff"/>
+      <text x="80" y="90" font-size="48" fill="#101010">BASELINE</text>
+
+      <!-- Row 2: attribute super — text raised above the line. -->
+      <rect x="60" y="218" width="840" height="4" fill="#ff00ff"/>
+      <text x="80" y="220" font-size="48" fill="#0e8f8f" baseline-shift="super">SUPER</text>
+
+      <!-- Row 3: attribute sub — text lowered below the line. -->
+      <rect x="60" y="348" width="840" height="4" fill="#ff00ff"/>
+      <text x="80" y="350" font-size="48" fill="#c81e3a" baseline-shift="sub">SUB</text>
+
+      <!-- Row 4: CSS length 24px (no attribute) — raised by 24px. -->
+      <rect x="60" y="478" width="840" height="4" fill="#ff00ff"/>
+      <text x="80" y="480" font-size="48" fill="#1a5ac0" class="css-up">CSS-24PX</text>
+
+      <!-- Row 5: CSS super overrides attribute sub — raised. -->
+      <rect x="60" y="608" width="840" height="4" fill="#ff00ff"/>
+      <text x="80" y="610" font-size="48" fill="#7a3cc8" baseline-shift="sub" class="css-super">CSS-SUPER</text>
+    </svg>
+  </div>
+</body>
+</html>

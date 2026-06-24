@@ -211,6 +211,12 @@ const PAGES: &[&str] = &[
     // which diverges from Edge (rule #3), so this deterministic CPU snapshot — not
     // run.py's Edge pipeline — is the regression gate for the text-anchor wiring.
     "127-svg-text-anchor",
+    // SVG 1.1 §10.9.2 / CSS Inline L3 §5.2 — baseline-shift as a CSS property
+    // (super/sub/length via presentation attribute + CSS, incl. CSS-overrides-attr).
+    // The visible effect is a vertical glyph shift, which diverges from Edge (rule
+    // #3), so this deterministic CPU snapshot — not run.py's Edge pipeline — is the
+    // regression gate for the baseline-shift wiring.
+    "128-baseline-shift",
     // Kitchen-sink final page: ~80 objects combining every implemented property.
     // Manual-only in the Edge pipeline (no run.py entry); here it serves as a
     // broad regression baseline for the CPU path.
