@@ -10,6 +10,7 @@
 //! только IEEE-точные операции (без platform libm), поэтому пригодны для
 //! кросс-OS bit-identical CPU snapshot гейта.
 
+use lumen_core::geom::Size;
 use lumen_layout::{Color, GradientStop, Length};
 
 /// CSS Images L3 §3.3 — resolve `GradientStop` positions to normalized [0,1].
@@ -32,6 +33,16 @@ pub fn resolve_stop_positions(stops: &[GradientStop], line_len: f32) -> Vec<(f32
             s.position.as_ref().map(|l| match l {
                 Length::Percent(p) => p / 100.0,
                 Length::Px(v) if line_len > 0.0 => v / line_len,
+                // `calc()` stop positions (e.g. `calc(50% + 10px)`) resolve their
+                // inner `%` against the gradient-line length, then the whole pixel
+                // result is normalized by `line_len` (CSS Images L3 §3.3, BUG-230).
+                // Without this arm a Calc position fell through to `_ => 0.0`,
+                // collapsing the stop to offset 0 and degenerating the gradient.
+                // em/viewport units inside such a calc are out of scope here, so a
+                // nominal em basis and a zero viewport are passed.
+                Length::Calc(_) if line_len > 0.0 => l
+                    .resolve(16.0, Some(line_len), Size { width: 0.0, height: 0.0 })
+                    .map_or(0.0, |px| px / line_len),
                 _ => 0.0,
             })
         })
@@ -280,6 +291,21 @@ mod tests {
     #[test]
     fn resolve_empty_input_is_empty() {
         assert!(resolve_stop_positions(&[], 100.0).is_empty());
+    }
+
+    #[test]
+    fn resolve_calc_stop_resolves_against_line_len() {
+        // BUG-230: `calc(50% + 10px)` must resolve its `%` against the gradient
+        // line length, then normalize by it: (100 + 10) / 200 = 0.55. Before the
+        // fix the Calc position fell to `_ => 0.0`, collapsing the gradient.
+        use lumen_layout::CalcNode;
+        let calc = Length::Calc(Box::new(CalcNode::Add(
+            Box::new(CalcNode::Length(Length::Percent(50.0))),
+            Box::new(CalcNode::Length(Length::Px(10.0))),
+        )));
+        let stops = [stop(RED, Some(Length::Px(0.0))), stop(BLUE, Some(calc))];
+        let r = resolve_stop_positions(&stops, 200.0);
+        assert!((r[1].0 - 0.55).abs() < 1e-6, "calc stop = {}, want 0.55", r[1].0);
     }
 
     // ── premultiplied_subdivide_stops (BUG-190) ──────────────────────────────
