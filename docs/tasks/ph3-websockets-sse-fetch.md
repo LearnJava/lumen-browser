@@ -86,6 +86,19 @@ readyState constants duplicated onto `WebSocket.prototype` so instances expose
 clippy green. **Still open for full Phase B:** event-loop push delivery
 (no JS `_lumen_ws_poll` — requires shell integration, P3 domain).
 
+**Phase B step 4 DONE (2026-06-25)** — WebSocket end-to-end protocol test
+suite. New `mod tests` block in `crates/network/src/lib.rs` spins up a real
+localhost `TcpListener` acting as a minimal RFC 6455 server (handshake via the
+crate-internal `compute_accept`, frames via `read_frame`/`write_frame`) and
+drives the real client through `WebSocketProvider::connect_ws`. Covers: handshake
++ Text echo, Binary echo, fragmentation reassembly (first frame fin=0 +
+Continuation), Ping→Pong auto-reply (server reads back the masked Pong), and
+server-initiated Close surfaced + echoed. 5 integration tests; `lumen-network`
+788 lib tests green, clippy clean. (`MockTransport` itself can't exercise a
+socket — it returns whole bodies synchronously — so the localhost-listener
+pattern from the SSE/fetch tests is reused.) **Still open for full Phase B:**
+event-loop push delivery (no JS `_lumen_ws_poll` — requires shell integration).
+
 **Remaining (not yet done):**
 - **Step 3** — JS `fetch()` wiring (`crates/js/src/dom.rs:7328`). **Design note (blocker):** JS is
   single-threaded and the current `fetch()` is *synchronous* (blocks the JS thread), so an

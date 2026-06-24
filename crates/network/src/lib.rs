@@ -3790,6 +3790,183 @@ mod tests {
         server.join().ok();
     }
 
+    // ── WebSocket end-to-end protocol (RFC 6455) ─────────────────────────────
+    // A real localhost `TcpListener` plays a minimal WebSocket server; the real
+    // client is driven through `WebSocketProvider::connect_ws` and we assert the
+    // hand-rolled frame codec round-trips correctly (handshake, text/binary echo,
+    // fragmentation reassembly, Ping→Pong auto-reply, server-initiated Close echo).
+    use lumen_core::ext::WsMessage;
+
+    /// RFC 6455 §4.1 server handshake: read the client's upgrade request, reply
+    /// `101 Switching Protocols` with the computed `Sec-WebSocket-Accept`. Frames
+    /// are read from the raw `sock` afterwards (the client sends none before 101).
+    fn ws_server_handshake(sock: &mut std::net::TcpStream) {
+        use std::io::{BufRead, BufReader, Write};
+        let mut reader = BufReader::new(sock.try_clone().unwrap());
+        let mut key = None;
+        let mut line = String::new();
+        while reader.read_line(&mut line).unwrap() > 0 {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                break;
+            }
+            if trimmed.to_ascii_lowercase().starts_with("sec-websocket-key:") {
+                let parts: Vec<&str> = trimmed.split(':').collect();
+                if parts.len() == 2 {
+                    key = Some(parts[1].trim().to_string());
+                }
+            }
+            line.clear();
+        }
+        let key = key.expect("Missing Sec-WebSocket-Key header");
+        let accept = crate::websocket::upgrade::compute_accept(&key);
+        let response = format!(
+            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+        );
+        sock.write_all(response.as_bytes()).unwrap();
+        sock.flush().unwrap();
+    }
+
+    /// Handshake + text echo: a single Text frame round-trips intact.
+    #[test]
+    fn ws_handshake_and_text_echo() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            ws_server_handshake(&mut sock);
+            loop {
+                let frame = crate::websocket::frame::read_frame(&mut sock).unwrap();
+                match frame.opcode {
+                    crate::websocket::frame::Opcode::Text => {
+                        crate::websocket::frame::write_frame(
+                            &mut sock,
+                            true,
+                            false,
+                            crate::websocket::frame::Opcode::Text,
+                            &frame.payload,
+                            None,
+                        )
+                        .unwrap();
+                    }
+                    crate::websocket::frame::Opcode::Close => break,
+                    _ => {}
+                }
+            }
+        });
+        let client = HttpClient::new();
+        let url = lumen_core::url::Url::parse(&format!("ws://127.0.0.1:{port}/")).unwrap();
+        let mut ws: Box<dyn lumen_core::ext::WebSocketSession> =
+            <HttpClient as WebSocketProvider>::connect_ws(&client, &url, TabId(0), std::sync::Arc::new(NoopEventSink))
+                .expect("connect_ws");
+        ws.send_text("hello").unwrap();
+        assert_eq!(ws.recv().unwrap(), WsMessage::Text("hello".to_string()));
+        ws.close(1000, "bye").unwrap();
+        server.join().ok();
+    }
+
+    /// Binary echo: a Binary frame (with high/zero bytes) round-trips intact.
+    #[test]
+    fn ws_binary_echo() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            ws_server_handshake(&mut sock);
+            let frame = crate::websocket::frame::read_frame(&mut sock).unwrap();
+            assert_eq!(frame.opcode, crate::websocket::frame::Opcode::Binary);
+            crate::websocket::frame::write_frame(
+                &mut sock,
+                true,
+                false,
+                crate::websocket::frame::Opcode::Binary,
+                &frame.payload,
+                None,
+            )
+            .unwrap();
+        });
+        let client = HttpClient::new();
+        let url = lumen_core::url::Url::parse(&format!("ws://127.0.0.1:{port}/")).unwrap();
+        let mut ws: Box<dyn lumen_core::ext::WebSocketSession> =
+            <HttpClient as WebSocketProvider>::connect_ws(&client, &url, TabId(0), std::sync::Arc::new(NoopEventSink))
+                .expect("connect_ws");
+        ws.send_binary(&[1, 2, 3, 255, 0]).unwrap();
+        assert_eq!(ws.recv().unwrap(), WsMessage::Binary(vec![1, 2, 3, 255, 0]));
+        ws.close(1000, "").unwrap();
+        server.join().ok();
+    }
+
+    /// Fragmentation (RFC 6455 §5.4): a Text message split across a first frame
+    /// (fin=0) + a Continuation frame (fin=1) is reassembled by the client.
+    #[test]
+    fn ws_fragmented_message_reassembled() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            ws_server_handshake(&mut sock);
+            crate::websocket::frame::write_frame(&mut sock, false, false, crate::websocket::frame::Opcode::Text, b"Hel", None).unwrap();
+            crate::websocket::frame::write_frame(&mut sock, true, false, crate::websocket::frame::Opcode::Continuation, b"lo", None).unwrap();
+        });
+        let client = HttpClient::new();
+        let url = lumen_core::url::Url::parse(&format!("ws://127.0.0.1:{port}/")).unwrap();
+        let mut ws: Box<dyn lumen_core::ext::WebSocketSession> =
+            <HttpClient as WebSocketProvider>::connect_ws(&client, &url, TabId(0), std::sync::Arc::new(NoopEventSink)).expect("connect_ws");
+        assert_eq!(ws.recv().unwrap(), WsMessage::Text("Hello".to_string()));
+        server.join().ok();
+    }
+
+    /// Control frames (RFC 6455 §5.5.2): a server Ping triggers an automatic
+    /// client Pong with the same payload; the Ping is also surfaced to the caller.
+    #[test]
+    fn ws_ping_triggers_pong_autoreply() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || -> bool {
+            let (mut sock, _) = listener.accept().unwrap();
+            ws_server_handshake(&mut sock);
+            crate::websocket::frame::write_frame(&mut sock, true, false, crate::websocket::frame::Opcode::Ping, b"pingdata", None).unwrap();
+            let reply = crate::websocket::frame::read_frame(&mut sock).unwrap();
+            reply.opcode == crate::websocket::frame::Opcode::Pong && reply.payload == b"pingdata"
+        });
+        let client = HttpClient::new();
+        let url = lumen_core::url::Url::parse(&format!("ws://127.0.0.1:{port}/")).unwrap();
+        let mut ws: Box<dyn lumen_core::ext::WebSocketSession> =
+            <HttpClient as WebSocketProvider>::connect_ws(&client, &url, TabId(0), std::sync::Arc::new(NoopEventSink)).expect("connect_ws");
+        assert_eq!(ws.recv().unwrap(), WsMessage::Ping(b"pingdata".to_vec()));
+        ws.close(1000, "").unwrap();
+        assert!(server.join().unwrap(), "client must auto-reply Pong");
+    }
+
+    /// Close handshake (RFC 6455 §5.5.1): a server Close is surfaced with its
+    /// code/reason and echoed back by the client.
+    #[test]
+    fn ws_server_initiated_close_echoed() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || -> bool {
+            let (mut sock, _) = listener.accept().unwrap();
+            ws_server_handshake(&mut sock);
+            let payload = crate::websocket::frame::make_close_payload(1001, "going away");
+            crate::websocket::frame::write_frame(&mut sock, true, false, crate::websocket::frame::Opcode::Close, &payload, None).unwrap();
+            let echo = crate::websocket::frame::read_frame(&mut sock).unwrap();
+            echo.opcode == crate::websocket::frame::Opcode::Close
+        });
+        let client = HttpClient::new();
+        let url = lumen_core::url::Url::parse(&format!("ws://127.0.0.1:{port}/")).unwrap();
+        let mut ws: Box<dyn lumen_core::ext::WebSocketSession> =
+            <HttpClient as WebSocketProvider>::connect_ws(&client, &url, TabId(0), std::sync::Arc::new(NoopEventSink)).expect("connect_ws");
+        let m = ws.recv().unwrap();
+        match m {
+            WsMessage::Close { code, reason } => {
+                assert_eq!(code, Some(1001));
+                assert_eq!(reason, "going away");
+            }
+            _ => panic!("expected Close, got {m:?}"),
+        }
+        assert!(server.join().unwrap(), "client must echo Close");
+    }
+
     // ── ALPN (5A.1) ──────────────────────────────────────────────────────────
 
     #[test]
