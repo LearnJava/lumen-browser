@@ -30,6 +30,7 @@ last_session.db
 /scripts/.stop-*
 /scripts/.jobstatus-*
 /scripts/.session-*.json
+/scripts/.laguna-session-*.json
 /.jobstatus-*
 __pycache__/
 

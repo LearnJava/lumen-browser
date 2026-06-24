@@ -1105,28 +1105,49 @@ def laguna_solo_system_prompt(developer: str) -> str:
     )
 
 
-def run_laguna_solo(developer: str, task_number: int, think: bool = False) -> bool:
-    """Solo-режим: оркестратор ведёт агент-петлю поверх Laguna без Claude.
+def laguna_session_path(developer: str) -> Path:
+    """Путь к файлу персиста solo-сессии Laguna (для восстановления после краша)."""
+    return SCRIPTS_DIR / f".laguna-session-{developer}.json"
 
-    Работает в изолированном worktree (своя ветка p<N>-laguna-*). Перед
-    коммитом — жёсткие ворота: cargo check + clippy -D warnings + test по
-    затронутым crates. Возвращает True при успешном завершении (ворота
-    зелёные + коммит). Worktree/ветка ОСТАЮТСЯ для ревью и финиша по правилам
-    (merge/доки/STATUS — вручную или отдельным проходом Claude).
+
+def save_laguna_session(developer: str, state: dict) -> None:
+    """Сохранить состояние solo-сессии: messages + worktree + ветка + written.
+
+    Зачем: API Laguna (OpenAI-совместимый chat completions) — stateless,
+    серверного `--resume` нет (см. docs/orchestrator README). Единственный
+    способ возобновить прерванный диалог — переиграть сохранённый `messages`.
+    Ключ POOLSIDE_API_KEY СЮДА НЕ пишется — он перечитывается из env/.tmp при
+    каждом запуске (это секрет, не часть состояния сессии).
     """
     try:
-        client = LagunaClient()
-    except (RuntimeError, ImportError) as e:
-        log(developer, f"Laguna недоступна: {e}")
-        return False
+        laguna_session_path(developer).write_text(
+            json.dumps(state, ensure_ascii=False), encoding="utf-8"
+        )
+    except OSError as e:
+        log(developer, f"  (не удалось сохранить laguna-сессию: {e})")
 
-    work_dir, branch, err = _create_solo_worktree(developer, task_number)
-    if work_dir is None:
-        log(developer, f"Не удалось создать worktree для Laguna: {err}")
-        return False
-    log(developer, f"  Worktree: {work_dir}  (ветка {branch})")
 
-    messages: list[dict] = [
+def load_laguna_session(developer: str) -> dict | None:
+    """Загрузить сохранённое состояние solo-сессии, если есть."""
+    path = laguna_session_path(developer)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def clear_laguna_session(developer: str) -> None:
+    """Удалить файл персиста solo-сессии (на успехе / max-iters / --new)."""
+    path = laguna_session_path(developer)
+    if path.exists():
+        path.unlink()
+
+
+def _laguna_initial_messages(developer: str) -> list[dict]:
+    """Стартовый диалог для свежей solo-сессии."""
+    return [
         {"role": "system", "content": laguna_solo_system_prompt(developer)},
         {
             "role": "user",
@@ -1137,14 +1158,92 @@ def run_laguna_solo(developer: str, task_number: int, think: bool = False) -> bo
             ),
         },
     ]
-    written: set[str] = set()
 
-    for it in range(1, LAGUNA_MAX_ITERS + 1):
+
+def run_laguna_solo(developer: str, task_number: int, think: bool = False) -> bool:
+    """Solo-режим: оркестратор ведёт агент-петлю поверх Laguna без Claude.
+
+    Работает в изолированном worktree (своя ветка p<N>-laguna-*). Перед
+    коммитом — жёсткие ворота: cargo check + clippy -D warnings + test по
+    затронутым crates. Возвращает True при успешном завершении (ворота
+    зелёные + коммит). Worktree/ветка ОСТАЮТСЯ для ревью и финиша по правилам
+    (merge/доки/STATUS — вручную или отдельным проходом Claude).
+
+    Восстановление после краша. API Laguna stateless (серверного resume нет),
+    поэтому состояние диалога персистится локально в `.laguna-session-PN.json`
+    после каждой итерации (messages + worktree + ветка + written; ключ НЕ
+    сохраняется). Если при старте найден файл и его worktree цел — диалог
+    переигрывается из сохранённого messages в ТОМ ЖЕ worktree, продолжая с
+    места обрыва. Файл удаляется на успехе, на исчерпании итераций и по `--new`
+    (последнее — в run_task_loop). Если worktree пропал — старт заново.
+    """
+    try:
+        client = LagunaClient()
+    except (RuntimeError, ImportError) as e:
+        log(developer, f"Laguna недоступна: {e}")
+        return False
+
+    # --- Возобновление прерванной solo-сессии (если есть и worktree цел) ---
+    work_dir: Path | None = None
+    branch: str | None = None
+    written: set[str] = set()
+    messages: list[dict] = []
+    start_iter = 1
+
+    saved = load_laguna_session(developer)
+    if saved:
+        wt = Path(saved.get("worktree", ""))
+        if wt.is_dir() and saved.get("messages"):
+            work_dir = wt
+            branch = saved.get("branch")
+            written = set(saved.get("written", []))
+            messages = saved["messages"]
+            task_number = saved.get("task_number", task_number)
+            start_iter = int(saved.get("iter", 0)) + 1
+            if start_iter > LAGUNA_MAX_ITERS:
+                # Прошлая сессия упёрлась в лимит итераций — резюмировать нечего.
+                log(developer, "Сохранённая solo-сессия исчерпала лимит итераций — старт заново.")
+                clear_laguna_session(developer)
+                work_dir = None
+            else:
+                log(developer, f"Возобновляю прерванную solo-сессию: задача #{task_number}, итер. {start_iter}")
+                log(developer, f"  Worktree: {work_dir}  (ветка {branch})")
+                log(developer, f"  Диалог восстановлен: {len(messages)} сообщений, файлов записано: {len(written)}")
+        else:
+            log(developer, "Найдено состояние solo-сессии, но worktree отсутствует/пуст — старт заново.")
+            clear_laguna_session(developer)
+
+    if work_dir is None:
+        work_dir, branch, err = _create_solo_worktree(developer, task_number)
+        if work_dir is None:
+            log(developer, f"Не удалось создать worktree для Laguna: {err}")
+            return False
+        log(developer, f"  Worktree: {work_dir}  (ветка {branch})")
+        messages = _laguna_initial_messages(developer)
+        start_iter = 1
+
+    def _persist(cur_iter: int) -> None:
+        save_laguna_session(developer, {
+            "developer": developer,
+            "task_number": task_number,
+            "iter": cur_iter,
+            "worktree": str(work_dir),
+            "branch": branch,
+            "written": sorted(written),
+            "messages": messages,
+        })
+
+    # Зафиксировать worktree/диалог сразу — чтобы краш на первой же итерации
+    # был восстановим (worktree уже записан, его подхватит следующий запуск).
+    _persist(start_iter - 1)
+
+    it = start_iter
+    while it <= LAGUNA_MAX_ITERS:
         log(developer, f"Laguna solo: итерация {it}/{LAGUNA_MAX_ITERS}...")
         set_jobstatus(developer, "laguna-solo", f"задача #{task_number}, итер. {it}")
         try:
             reply = client.chat(messages, think=think)
-        except Exception as e:  # сетевые/SDK сбои — подождать и повторить
+        except Exception as e:  # сетевые/SDK сбои — подождать и повторить (без +it)
             log(developer, f"  Ошибка Laguna API: {e}. Пауза 20с.")
             time.sleep(20)
             continue
@@ -1156,6 +1255,8 @@ def run_laguna_solo(developer: str, task_number: int, think: bool = False) -> bo
                 "role": "user",
                 "content": "Не нашёл ни одной команды (READ/LIST/WRITE/BASH/DONE). Повтори в формате протокола.",
             })
+            _persist(it)
+            it += 1
             continue
 
         feedback: list[str] = []
@@ -1177,6 +1278,7 @@ def run_laguna_solo(developer: str, task_number: int, think: bool = False) -> bo
             ok, gate_out = _run_solo_gates(developer, work_dir, written)
             if ok:
                 _laguna_commit(developer, commit_msg, written, work_dir)
+                clear_laguna_session(developer)
                 log(developer, "Laguna solo: ворота пройдены, закоммичено.")
                 log(developer, f"  Готово к ревью/финишу: ветка {branch} @ {work_dir}")
                 return True
@@ -1189,7 +1291,13 @@ def run_laguna_solo(developer: str, task_number: int, think: bool = False) -> bo
         if len(joined) > 24000:
             joined = joined[:24000] + "\n…(обрезано)…"
         messages.append({"role": "user", "content": joined})
+        _persist(it)
+        it += 1
 
+    # Исчерпан лимит итераций — терминальная неудача (не краш). Снимаем персист,
+    # чтобы повторный запуск НЕ возобновлял заведомо застрявший диалог, а начал
+    # новую попытку. Worktree оставляем для ручного ревью.
+    clear_laguna_session(developer)
     log(developer, f"Laguna solo: исчерпан лимит итераций ({LAGUNA_MAX_ITERS}). Останов.")
     log(developer, f"  Worktree с незавершённой работой оставлен: {work_dir}")
     log(developer, f"  Убрать: git worktree remove {work_dir} --force && git branch -D {branch}")
@@ -1354,14 +1462,20 @@ def run_task_loop(
 
     # --- Принудительный старт с чистого листа ---
     if force_new:
-        if session_state_path(developer).exists():
+        if laguna_mode == "solo":
+            if laguna_session_path(developer).exists():
+                log(developer, "Флаг --new: удаляю сохранённую solo-сессию Laguna, начинаю заново.")
+                clear_laguna_session(developer)
+            else:
+                log(developer, "Флаг --new: сохранённой solo-сессии нет, стартую с нуля.")
+        elif session_state_path(developer).exists():
             log(developer, "Флаг --new: удаляю сохранённое состояние сессии, не возобновляю.")
             clear_session_state(developer)
         else:
             log(developer, "Флаг --new: сохранённого состояния нет, стартую с нуля.")
 
-    # --- Восстановление после краша (только для Claude-режимов; solo не
-    #     ведёт claude-сессию, восстанавливать нечего — задача начнётся заново) ---
+    # --- Восстановление после краша (только для Claude-режимов; solo резюмируется
+    #     внутри run_laguna_solo через .laguna-session-PN.json, не здесь) ---
     existing = load_session_state(developer) if laguna_mode != "solo" else None
     if existing:
         task_number = existing.get("task_number", 1)
