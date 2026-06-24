@@ -2601,6 +2601,12 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
                 scroll_y: b.scroll_y,
             });
             overflow_post.push(DisplayCommand::PopScrollLayer);
+            // BUG-220: the ordered (stacking-context) path lost the scrollbar —
+            // only `walk` emitted DrawScrollbar. Emit it here too, into
+            // `overflow_post` after PopScrollLayer (caller flushes overflow_post
+            // after children, so the bars render at a fixed position over the
+            // scrolled content). Same helper as `walk` for pixel parity.
+            emit_scrollbars(b, (px, py, pw, ph), is_scroll_x, is_scroll_y, &mut overflow_post);
         } else {
             // BUG-132: скруглённый клип для border-radius + overflow:hidden
             // Разрешаем border-radius значения используя padding-box width как basis
@@ -3960,6 +3966,86 @@ fn scrollbar_rects(i: &ScrollbarInput) -> (ScrollbarAxis, ScrollbarAxis) {
     };
 
     (v, h)
+}
+
+/// Emit `DrawScrollbar` track+thumb commands for a scroll container's padding box.
+///
+/// Shared by the legacy `walk` path and the ordered (stacking-context)
+/// `box_layer_ops` path (BUG-220) so both render identical scrollbars. The
+/// caller MUST emit these AFTER `PopScrollLayer`, so the bars stay at a fixed
+/// position instead of translating with the scrolled content.
+///
+/// `padding_box` is `(px, py, pw, ph)` — padding-box origin and size in
+/// document-space CSS px (border excluded). Content extent is measured relative
+/// to the padding-box origin and floored at the padding-box size, so a border
+/// does not inflate `content_w`/`content_h` past the clip and spawn a phantom
+/// scrollbar.
+///
+/// No-op when `scrollbar-width: none` (gutter collapses to 0) — the container
+/// still scrolls via keyboard/JS, only the visual bar is suppressed.
+fn emit_scrollbars(
+    b: &LayoutBox,
+    padding_box: (f32, f32, f32, f32),
+    is_scroll_x: bool,
+    is_scroll_y: bool,
+    out: &mut Vec<DisplayCommand>,
+) {
+    let (px, py, pw, ph) = padding_box;
+    let gutter_px = match b.style.scrollbar_width {
+        ScrollbarWidth::Auto => SCROLLBAR_WIDTH,
+        ScrollbarWidth::Thin => SCROLLBAR_WIDTH_THIN,
+        ScrollbarWidth::None => 0.0,
+    };
+    // Only emit when the scrollbar is visible (gutter_px > 0).
+    if gutter_px <= 0.0 {
+        return;
+    }
+    let (thumb_color, track_color) = match b.style.scrollbar_color {
+        Some((thumb, track)) => (color_u8_to_f32(thumb), color_u8_to_f32(track)),
+        None => (SCROLLBAR_THUMB_COLOR, SCROLLBAR_TRACK_COLOR),
+    };
+    // Content extent relative to padding-box origin, floored at padding-box size
+    // (not border-box): a border must not make content_w exceed clip_w and fake
+    // a horizontal scrollbar.
+    let content_w = b
+        .children
+        .iter()
+        .fold(pw, |acc, c| acc.max(c.rect.x + c.rect.width - px));
+    let content_h = b
+        .children
+        .iter()
+        .fold(ph, |acc, c| acc.max(c.rect.y + c.rect.height - py));
+    let (v_bars, h_bars) = scrollbar_rects(&ScrollbarInput {
+        clip_x: px,
+        clip_y: py,
+        clip_w: pw,
+        clip_h: ph,
+        scroll_x: b.scroll_x,
+        scroll_y: b.scroll_y,
+        content_w,
+        content_h,
+        need_v: is_scroll_y,
+        need_h: is_scroll_x,
+        gutter_px,
+    });
+    if let Some((track, thumb)) = v_bars {
+        out.push(DisplayCommand::DrawScrollbar {
+            track_rect: track,
+            thumb_rect: thumb,
+            vertical: true,
+            thumb_color,
+            track_color,
+        });
+    }
+    if let Some((track, thumb)) = h_bars {
+        out.push(DisplayCommand::DrawScrollbar {
+            track_rect: track,
+            thumb_rect: thumb,
+            vertical: false,
+            thumb_color,
+            track_color,
+        });
+    }
 }
 
 fn emit_outline(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
@@ -5664,59 +5750,9 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
                     out.push(DisplayCommand::PopScrollLayer);
                     // Emit scrollbar track + thumb after the scroll layer so they
                     // render at a fixed position (not translated with scrolled content).
-                    // `scrollbar-width: none` suppresses the visual scrollbar while
-                    // keeping the scroll layer (container still scrolls via keyboard/JS).
-                    if let Some((px, py, pw, ph)) = scroll_padding_box {
-                        let gutter_px = match b.style.scrollbar_width {
-                            ScrollbarWidth::Auto => SCROLLBAR_WIDTH,
-                            ScrollbarWidth::Thin => SCROLLBAR_WIDTH_THIN,
-                            ScrollbarWidth::None => 0.0,
-                        };
-                        // Only emit when scrollbar is visible (gutter_px > 0).
-                        if gutter_px > 0.0 {
-                            let (thumb_color, track_color) = match b.style.scrollbar_color {
-                                Some((thumb, track)) => (color_u8_to_f32(thumb), color_u8_to_f32(track)),
-                                None => (SCROLLBAR_THUMB_COLOR, SCROLLBAR_TRACK_COLOR),
-                            };
-                            // Compute content size from children (same as layout's content_height/width).
-                            let content_w = b.children.iter().fold(b.rect.width, |acc, c| {
-                                acc.max(c.rect.x + c.rect.width - b.rect.x)
-                            });
-                            let content_h = b.children.iter().fold(b.rect.height, |acc, c| {
-                                acc.max(c.rect.y + c.rect.height - b.rect.y)
-                            });
-                            let (v_bars, h_bars) = scrollbar_rects(&ScrollbarInput {
-                                clip_x: px,
-                                clip_y: py,
-                                clip_w: pw,
-                                clip_h: ph,
-                                scroll_x: b.scroll_x,
-                                scroll_y: b.scroll_y,
-                                content_w,
-                                content_h,
-                                need_v: is_scroll_y,
-                                need_h: is_scroll_x,
-                                gutter_px,
-                            });
-                            if let Some((track, thumb)) = v_bars {
-                                out.push(DisplayCommand::DrawScrollbar {
-                                    track_rect: track,
-                                    thumb_rect: thumb,
-                                    vertical: true,
-                                    thumb_color,
-                                    track_color,
-                                });
-                            }
-                            if let Some((track, thumb)) = h_bars {
-                                out.push(DisplayCommand::DrawScrollbar {
-                                    track_rect: track,
-                                    thumb_rect: thumb,
-                                    vertical: false,
-                                    thumb_color,
-                                    track_color,
-                                });
-                            }
-                        }
+                    // BUG-220: shared with the ordered `box_layer_ops` path.
+                    if let Some(padding_box) = scroll_padding_box {
+                        emit_scrollbars(b, padding_box, is_scroll_x, is_scroll_y, out);
                     }
                 } else {
                     out.push(DisplayCommand::PopClip);
@@ -11493,6 +11529,32 @@ mod tests {
         let pops = count_variant(&dl, |c| matches!(c, DisplayCommand::PopTransform));
         assert_eq!(pushes, 1);
         assert_eq!(pops, 1);
+    }
+
+    #[test]
+    fn ordered_scroll_container_emits_scrollbar() {
+        // BUG-220: scroll containers painted through the ordered (stacking-
+        // context) path lost their scrollbar — box_layer_ops emitted
+        // PushScrollLayer but no DrawScrollbar (only the legacy `walk` did).
+        // Both paths must now draw it via the shared `emit_scrollbars` helper.
+        let dl = build_ordered(
+            "<div class='sc'><div class='tall'></div></div>",
+            ".sc { width: 100px; height: 100px; overflow: scroll; } \
+             .tall { width: 50px; height: 500px; background: #f00; }",
+        );
+        let bars = count_variant(&dl, |c| matches!(c, DisplayCommand::DrawScrollbar { .. }));
+        assert!(bars >= 1, "ordered scroll container must emit DrawScrollbar, got {bars}");
+        // The bar must follow PopScrollLayer so it renders at a fixed position
+        // (not translated with the scrolled content).
+        let pop = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::PopScrollLayer))
+            .expect("scroll container emits PopScrollLayer");
+        let bar = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::DrawScrollbar { .. }))
+            .expect("scroll container emits DrawScrollbar");
+        assert!(pop < bar, "DrawScrollbar must follow PopScrollLayer: pop={pop} bar={bar}");
     }
 
     #[test]
