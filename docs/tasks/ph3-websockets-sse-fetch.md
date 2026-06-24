@@ -26,16 +26,31 @@
   DOMException `AbortError`. 2 unit tests. `lumen-core` + `lumen-network` compile clean.
   Commit `4404027f`.
 
+- **Step 2 deep half DONE** — real in-flight teardown on `HttpClient::fetch_cancellable`.
+  A thread-local `ACTIVE_ABORT` + RAII `AbortScope` installs the token for the duration of the
+  (synchronous) fetch, so the deeply-nested read path picks it up without threading a parameter
+  through all 14 `fetch_with_redirect` call sites. `do_request` (`crates/network/src/lib.rs`)
+  clones the socket (`Connection::try_clone_socket` → `RawStream::try_clone_tcp`, handles both
+  Plain and TLS `StreamOwned.sock`) and spawns an `AbortWatchdog` that `shutdown(Both)`s the
+  socket on abort, unblocking the blocking read. The post-read abort check takes precedence even
+  over a truncated `Ok` body (a shut-down socket can yield partial data) → `Error::Aborted`.
+  Watchdog uses `park_timeout(20ms)` + `unpark` so a completed request pays no poll latency.
+  2 integration tests (real localhost listener): pre-flight abort + mid-stream abort. All 795
+  network lib tests green, clippy clean.
+
 **Remaining (not yet done):**
-- **Step 2 deep half** — real in-flight teardown on `HttpClient::fetch_cancellable`: poll the
-  token between socket reads and shut the connection down. Blocked on the network read path being
-  fully blocking (`read_response`/`read_exact` at `crates/network/src/lib.rs:460`,
-  `read_chunked` loop) — needs non-blocking reads / read timeouts or a watchdog thread that
-  `shutdown()`s the socket on abort. Largest remaining piece of Phase A.
-- **Step 3** — JS `fetch()` wiring (`crates/js/src/dom.rs:7328`): create a token, register an
-  `abort` listener that flips it, thread it through a `_lumen_fetch_cancellable` bridge, reject
-  with `signal.reason`.
-- **Step 4** — `MockTransport` tests for mid-stream abort.
+- **Step 3** — JS `fetch()` wiring (`crates/js/src/dom.rs:7328`). **Design note (blocker):** JS is
+  single-threaded and the current `fetch()` is *synchronous* (blocks the JS thread), so an
+  `AbortController.abort()` fired from JS cannot run *during* the request — the JS thread is parked
+  inside the native call. The network-layer in-flight abort built in Step 2 is therefore only
+  observable when the token is flipped from **another thread** (shell tab-close / navigation
+  cancel — a real and valuable capability). JS-observable mid-flight abort requires **async fetch**
+  (run `fetch_cancellable` on a worker thread, pump the JS event loop, let `abort()` flip the token,
+  watchdog tears down, then resolve/reject). That async-fetch rework is the bulk of Step 3 and was
+  explicitly deferred to "Phase 2+" in the original in-code comments. Pre-flight abort already works
+  at the JS layer (`dom.rs:7335`).
+- **Step 4** — mid-stream abort test: DONE at the network layer via a real localhost listener
+  (`MockTransport` can't exercise a socket — it returns whole bodies synchronously with no stream).
 - **Phases B (WS async delivery) and C (SSE non-blocking reconnect)** — untouched.
 
 ---

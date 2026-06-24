@@ -27,7 +27,7 @@ use rustls::pki_types::ServerName;
 use lumen_core::error::{Error, Result};
 use lumen_core::event::{Event, RequestStage, TabId};
 use lumen_core::ext::{
-    ContentDecoder, CookieProvider, DnsResolver, EventSink, FetchInterceptor, HstsEnforcement,
+    AbortToken, ContentDecoder, CookieProvider, DnsResolver, EventSink, FetchInterceptor, HstsEnforcement,
     HttpAuthScheme, HttpCredentialProvider, JsFetchProvider, JsFetchResult, JsSseEvent, JsSseProvider,
     JsSseSession, JsWebSocketProvider, JsWebSocketSession, JsWsEvent, NetworkTransport, NoopEventSink,
     RequestFilter, SseProvider, SseSession, WebSocketProvider, WebSocketSession,
@@ -455,6 +455,109 @@ fn read_head(conn: &mut Connection) -> Result<ResponseHead> {
         .unwrap_or(false);
 
     Ok((status, headers, server_wants_close))
+}
+
+// ── Fetch in-flight abort (Phase A) ──────────────────────────────────────────
+
+thread_local! {
+    /// Holds the active `AbortToken` for the current thread, if any.
+    ///
+    /// A synchronous fetch runs entirely on one thread, so an RAII guard
+    /// (`AbortScope`) installs the token here for the call duration and the
+    /// deeply-nested read path (`do_request`) reads it via `current_abort_token`
+    /// without threading a parameter through every redirect/connect hop.
+    static ACTIVE_ABORT: std::cell::RefCell<Option<AbortToken>> = const { std::cell::RefCell::new(None) };
+}
+
+/// RAII guard installing an `AbortToken` into the thread-local for its lifetime.
+///
+/// Created at the top of `fetch_cancellable`; cleared on drop so a later
+/// non-cancellable fetch on the same thread never sees a stale token.
+pub(crate) struct AbortScope;
+
+impl AbortScope {
+    /// Installs the given `AbortToken` into the thread-local and returns a guard.
+    pub(crate) fn new(token: AbortToken) -> Self {
+        ACTIVE_ABORT.with(|cell| cell.replace(Some(token)));
+        AbortScope
+    }
+}
+
+impl Drop for AbortScope {
+    fn drop(&mut self) {
+        ACTIVE_ABORT.with(|cell| cell.replace(None));
+    }
+}
+
+/// Returns a clone of the abort token installed on the current thread, if any.
+pub(crate) fn current_abort_token() -> Option<AbortToken> {
+    ACTIVE_ABORT.with(|cell| cell.borrow().as_ref().cloned())
+}
+
+impl RawStream {
+    /// Clones a handle to the underlying TCP socket for out-of-band shutdown.
+    ///
+    /// Used by [`AbortWatchdog`] to call `shutdown` on the socket from another
+    /// thread, unblocking a blocking read on abort. Returns `None` if the OS
+    /// refuses to duplicate the descriptor.
+    pub(crate) fn try_clone_tcp(&self) -> Option<TcpStream> {
+        match self {
+            RawStream::Plain(s) => s.try_clone().ok(),
+            RawStream::Tls(s) => s.sock.try_clone().ok(),
+        }
+    }
+}
+
+impl Connection {
+    /// Clones the underlying TCP socket (see [`RawStream::try_clone_tcp`]).
+    pub(crate) fn try_clone_socket(&self) -> Option<TcpStream> {
+        self.reader.get_ref().try_clone_tcp()
+    }
+}
+
+/// Background thread that shuts the socket down when an `AbortToken` fires.
+///
+/// The HTTP read path is fully blocking; to cancel an in-flight request we hand
+/// a cloned socket handle to this watchdog, which polls the token and calls
+/// `shutdown(Both)` on abort — that surfaces in the blocking read as an error
+/// (or truncated EOF). `do_request` then maps the aborted state to
+/// `Error::Aborted`. The watchdog is stopped (and joined) the instant the read
+/// completes, so a successful request pays no poll latency.
+pub(crate) struct AbortWatchdog {
+    /// Set by `stop` to tell the watchdog thread to exit its poll loop.
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Handle to the watchdog thread, taken and joined in `stop`.
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl AbortWatchdog {
+    /// Spawns a watchdog polling `token`; on abort it shuts `sock` down.
+    pub(crate) fn spawn(token: AbortToken, sock: TcpStream) -> AbortWatchdog {
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_clone = stop.clone();
+        let handle = std::thread::spawn(move || {
+            while !stop_clone.load(std::sync::atomic::Ordering::SeqCst) {
+                if token.is_aborted() {
+                    let _ = sock.shutdown(std::net::Shutdown::Both);
+                    return;
+                }
+                std::thread::park_timeout(std::time::Duration::from_millis(20));
+            }
+        });
+        AbortWatchdog {
+            stop,
+            handle: Some(handle),
+        }
+    }
+
+    /// Signals the watchdog to exit and joins its thread.
+    pub(crate) fn stop(mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(h) = self.handle.take() {
+            h.thread().unpark();
+            let _ = h.join();
+        }
+    }
 }
 
 fn read_response(conn: &mut Connection) -> Result<Response> {
@@ -1445,10 +1548,36 @@ fn do_request(
         extra_headers,
         http_profile,
     )?;
-    let resp = match stream_sink {
-        Some(sink) => read_response_streamed(&mut conn, sink)?,
-        None => read_response(&mut conn)?,
+    // In-flight abort (Phase A): if a cancellable fetch installed an abort token
+    // on this thread, watch it on a side thread and tear the socket down on
+    // abort so the blocking read below unblocks. The abort check after the read
+    // takes precedence even over an `Ok` body — a shut-down socket can yield a
+    // truncated body that must NOT be delivered to the aborted fetch.
+    let token = current_abort_token();
+    if let Some(t) = &token
+        && t.is_aborted()
+    {
+        return Err(Error::Aborted("fetch aborted before response".to_string()));
+    }
+    let mut watchdog: Option<AbortWatchdog> = None;
+    if let Some(t) = &token
+        && let Some(sock) = conn.try_clone_socket()
+    {
+        watchdog = Some(AbortWatchdog::spawn(t.clone(), sock));
+    }
+    let read_result: Result<Response> = match stream_sink {
+        Some(sink) => read_response_streamed(&mut conn, sink),
+        None => read_response(&mut conn),
     };
+    if let Some(wd) = watchdog {
+        wd.stop();
+    }
+    if let Some(t) = &token
+        && t.is_aborted()
+    {
+        return Err(Error::Aborted("fetch aborted in-flight".to_string()));
+    }
+    let resp = read_result?;
     Ok((resp, conn))
 }
 
@@ -3219,6 +3348,22 @@ impl JsFetchProvider for HttpClient {
             body: resp.body,
         })
     }
+
+    /// Synchronous GET/HEAD fetch that honours an `AbortToken` in-flight.
+    ///
+    /// Pre-flight: an already-aborted token short-circuits with `Error::Aborted`
+    /// before any socket work. Otherwise the token is installed on the current
+    /// thread for the duration of the (synchronous) request via [`AbortScope`];
+    /// `do_request` deep in the read path spawns an [`AbortWatchdog`] that shuts
+    /// the socket down if `abort()` fires mid-response, surfacing as
+    /// `Error::Aborted`. The JS layer maps that to a DOMException `AbortError`.
+    fn fetch_cancellable(&self, url: &str, method: &str, token: &AbortToken) -> Result<JsFetchResult> {
+        if token.is_aborted() {
+            return Err(Error::Aborted("fetch aborted before send".to_string()));
+        }
+        let _scope = AbortScope::new(token.clone());
+        self.fetch_sync(url, method)
+    }
 }
 
 impl WebSocketProvider for HttpClient {
@@ -4040,6 +4185,64 @@ mod tests {
             let _ = sock.shutdown(std::net::Shutdown::Both);
         });
         (port, handle)
+    }
+
+    /// Phase A: an already-aborted token short-circuits before any socket work.
+    #[test]
+    fn fetch_cancellable_preflight_abort() {
+        let client = HttpClient::new();
+        let token = AbortToken::new();
+        token.abort();
+        let result = client.fetch_cancellable("http://127.0.0.1:1/", "GET", &token);
+        assert!(matches!(result, Err(Error::Aborted(_))));
+    }
+
+    /// Phase A: aborting during the (blocking) body read tears the socket down
+    /// and yields `Error::Aborted`, delivering no body.
+    #[test]
+    fn fetch_cancellable_aborts_in_flight() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+
+        let server = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(sock.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            // Promise 1 MB but send only 7 bytes → the client blocks in the body
+            // read until the abort watchdog shuts the socket down.
+            let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\nConnection: close\r\n\r\npartial");
+            thread::sleep(std::time::Duration::from_secs(1));
+            let _ = sock.shutdown(std::net::Shutdown::Both);
+        });
+
+        let client = HttpClient::new();
+        let token = AbortToken::new();
+        let token2 = token.clone();
+
+        let aborter = thread::spawn(move || {
+            thread::sleep(std::time::Duration::from_millis(150));
+            token2.abort();
+        });
+
+        let url = format!("http://127.0.0.1:{port}/");
+        let result = client.fetch_cancellable(&url, "GET", &token);
+
+        aborter.join().ok();
+        server.join().ok();
+
+        match result {
+            Err(Error::Aborted(_)) => {}
+            Err(e) => panic!("expected Error::Aborted, got Err({e:?})"),
+            Ok(_) => panic!("expected Error::Aborted, got Ok(_) — body must not be delivered"),
+        }
     }
 
     #[test]
