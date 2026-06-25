@@ -33,7 +33,14 @@ Merged slice (`crates/js/src/dom.rs`, `location` shim):
 - Any non-fragment difference (path/host/search) or an identical full URL falls through to the existing full-navigation `_lumen_navigate`.
 - Reuses the shell's pushState same-document path — **no shell change needed**. Tests: 8 `location_{href,assign,replace}_*fragment*`; full `lumen-js` suite green (2303).
 
-**Still remaining** (Phase 1b + Phase 2): link-click fragment navigation (`crates/shell/src/main.rs:13282` is a shell-side path, not covered by the JS-shim helper above) should reuse the same same-document path (fire `hashchange` instead of a full reload); cross-document single-authority unification (JS `HistoryState` mirror vs shell `nav_back`/`nav_fwd` drift on multi-step `go` across full-document boundaries), shell-side `popstate` accompanying fragment traversal, post-back `history.state` from shell-restored value, and the entire Navigation API wiring (steps 5–10 below). The ROADMAP `P3-navapi` row stays `planned` until those land.
+### Progress (2026-06-25) — Phase 1b-iii (link-click fragment nav syncs JS) DONE
+
+Merged slice (`crates/shell/src/main.rs` `navigate_fragment`, `crates/shell/src/links.rs`):
+- Clicking `<a href="#id">` previously ran a shell-only `navigate_fragment` (`:target` cascade + scroll) that left the JS side stale: `location.hash`/`href` did not update, no `hashchange` fired, and no session-history entry was pushed (back/forward broken for fragment nav).
+- `navigate_fragment` now first routes through the JS `_lumen_navigate_or_fragment(new_url, false)` path (the same helper `location.href=` uses, Phase 1b-ii). New helper `links::fragment_url(current, frag)` builds the target URL (replaces the fragment of the current display URL; empty `frag` strips it). The JS path updates `location`, pushes a same-document history entry (queued `HistoryUrlUpdate` drained into `nav_back`), and fires `hashchange` — then the existing `:target`/scroll logic runs.
+- No JS change needed (reuses the Phase 1b-ii helper). Tests: `links::fragment_url_builds_same_document_urls`; `cargo clippy -p lumen-shell` clean, `cargo test -p lumen-shell` green.
+
+**Still remaining** (Phase 1b + Phase 2): same-document detection for full-URL same-page links (`<a href="page#x">` where `page` is the current document still does a full reload via the `is_navigable_href` branch); cross-document single-authority unification (JS `HistoryState` mirror vs shell `nav_back`/`nav_fwd` drift on multi-step `go` across full-document boundaries), shell-side `popstate` accompanying fragment traversal, post-back `history.state` from shell-restored value, and the entire Navigation API wiring (steps 5–10 below). The ROADMAP `P3-navapi` row stays `planned` until those land.
 
 ---
 

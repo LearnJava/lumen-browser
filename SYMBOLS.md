@@ -2873,7 +2873,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgpu_compute.rs:980` **enum** `GpuOp` — Одна записанная операция command-encoder для исполнения на `queue.submit`
 `crates/engine/paint/src/webgpu_compute.rs:1035` **fn** `submit` — Исполняет набор операций в одном `CommandEncoder` и сабмитит на очередь
 
-## lumen-shell  (868 symbols)
+## lumen-shell  (869 symbols)
 
 `crates/shell/src/adblock.rs:44` **fn** `browser_data_dir` — Root of all browser user data (portable): `<exe_dir>/data`
 `crates/shell/src/adblock.rs:52` **fn** `adblock_dir` — `<data>/adblock` — root of the ad-block subsystem's files
@@ -3153,7 +3153,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/links.rs:15` **fn** `find_link_href` — Walk up the ancestor chain from `node_id` to find the nearest `<a>` element
 `crates/shell/src/links.rs:43` **fn** `is_navigable_href` — Return true if `href` is a URL scheme the browser should navigate to
 `crates/shell/src/links.rs:53` **fn** `fragment_only` — If `href` is a fragment-only reference (starts with `#`), return the
-`crates/shell/src/links.rs:60` **fn** `find_element_by_id` — Walk the document tree and return the first element whose `id` attribute
+`crates/shell/src/links.rs:63` **fn** `fragment_url` — Build the absolute URL for a same-document fragment navigation: replaces the
+`crates/shell/src/links.rs:78` **fn** `find_element_by_id` — Walk the document tree and return the first element whose `id` attribute
 `crates/shell/src/memory_poll.rs:23` **struct** `MemoryPollTick` — Throttled memory pressure poller
 `crates/shell/src/memory_poll.rs:36` **fn** `new` — Create a new poller using the given platform source
 `crates/shell/src/memory_poll.rs:49` **fn** `tick` — Poll memory pressure and broadcast to `registry` if pressure is Medium or High
@@ -4259,4 +4260,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4188 symbols in 22 crates*
+*Total: 4189 symbols in 22 crates*

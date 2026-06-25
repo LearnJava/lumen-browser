@@ -6445,6 +6445,17 @@ impl Lumen {
     /// Triggers a full re-layout so that `:target`-based CSS rules take effect
     /// before the scroll position is calculated.
     fn navigate_fragment(&mut self, fragment: String) {
+        // Same-document fragment navigation must keep the JS side in sync: update
+        // `location`, push a same-document history entry, and fire `hashchange`
+        // (HTML LS §7.4.2 fragment-navigation). Route through the existing JS
+        // `_lumen_navigate_or_fragment` path — it resolves the target, sees only
+        // the fragment differs, updates `location`, queues a `HistoryUrlUpdate`
+        // (drained into `nav_back` so back/forward works), and fires `hashchange`.
+        let new_url = links::fragment_url(self.current_display_url(), &fragment);
+        if let Some(js) = &self.js_ctx {
+            let escaped = new_url.replace('\\', "\\\\").replace('\'', "\\'");
+            js.eval_js(&format!("_lumen_navigate_or_fragment('{escaped}', false)"));
+        }
         if let Some(src) = self.layout_source.as_mut() {
             let mut doc = src.document.lock().unwrap();
             if fragment.is_empty() {
