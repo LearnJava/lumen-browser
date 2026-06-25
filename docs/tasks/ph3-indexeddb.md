@@ -9,8 +9,29 @@
 
 ## Status
 
-**Phase 3 future (v1.0).** Greenfield task — not started. Listed here as a design reference
-so the architecture is settled before implementation begins.
+**Phase 3 — storage foundation IN PROGRESS (branch `p1-ph3-indexeddb`).**
+
+### Progress (2026-06-25) — Steps 0–2 done (Rust storage layer)
+
+- **Step 0 ✅** — `lumen_idb_dir()` (`crates/shell/src/main.rs`) now resolves the portable
+  `<exe>/data/idb/` via `adblock::browser_data_dir()` instead of `%APPDATA%`/`~/.config`.
+- **Step 1 ✅** — `IdbBackend` (`crates/core/src/ext.rs`) extended with `IdbSchemaOp`,
+  `IdbRecordOp`, `IdbOpResult` and five default-no-op methods (`db_version`,
+  `list_databases`, `apply_schema`, `exec_op`, `commit_txn`). Existing `IdbStore` unchanged.
+- **Step 2 ✅** — `NativeIdbStore` (`crates/storage/src/indexed_db.rs`): structured SQLite
+  schema (`idb_meta`/`idb_stores`/`idb_indexes`/`idb_records` + `idb_snapshot` blob fallback),
+  full impl of the extended trait, exported from `lumen-storage`. 11 new unit tests
+  (26 total in `indexed_db`). `cargo test -p lumen-storage` green; clippy clean for
+  `lumen-storage`/`lumen-core`; `lumen-shell` compiles.
+
+**Remaining (Steps 3–5): JS shim + shell wiring.** Add Rust primitives
+`_lumen_idb_exec_op`/`_lumen_idb_commit_txn`/`_lumen_idb_schema_op` and have
+`_lumen_idb_flush` (`crates/js/src/dom.rs:10317`) route per-request structured calls
+instead of (or alongside) the full-snapshot `_lumen_idb_persist`; swap `install_dom_api`
+(`crates/shell/src/main.rs:2532`) to pass a `NativeIdbStore` per origin. The blob path
+stays as a fallback. This is the bulk of the remaining XL work and is a separate session.
+
+The original greenfield design reference follows below.
 
 ---
 
