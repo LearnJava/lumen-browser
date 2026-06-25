@@ -1,21 +1,21 @@
 {
-  "timestamp": "2026-06-23T08:04:59",
+  "timestamp": "2026-06-24T02:14:40",
   "git": {
-    "commit": "8d4b2957",
+    "commit": "e1c2151b",
     "branch": "main",
-    "subject": "Р’Р»РёС‚СЊ РІРµС‚РєСѓ p1-test122-line-height-step-debtor: BUG-237 TEST-122 line-height-step в†’ KNOWN_DEBTOR (Edge РЅРµ РїРѕРґРґРµСЂР¶РёРІР°РµС‚ СЃРІРѕР№СЃС‚РІРѕ)"
+    "subject": "Р’Р»РёС‚СЊ РІРµС‚РєСѓ p3-bug209-debtor: BUG-209 TEST-90 Р·Р°РєСЂС‹С‚ РєР°Рє DEBTOR (flex-РїСЂРёС‡РёРЅР° РІ BUG-241)"
   },
   "crop_offset": [
-    8,
-    67
+    0,
+    0
   ],
   "halted_at": null,
   "summary": {
     "total": 128,
-    "passed": 71,
-    "failed": 24,
-    "errors": 1,
-    "debtors": 32,
+    "passed": 68,
+    "failed": 26,
+    "errors": 0,
+    "debtors": 34,
     "skipped": 0
   },
   "tests": [
@@ -25,8 +25,8 @@
       "label": "calibration",
       "html": "00-calibration.html",
       "threshold": 0.5,
-      "status": "ERROR",
-      "diff_pct": -1.0,
+      "status": "PASS",
+      "diff_pct": 0.0,
       "diff_region": null
     },
     {
@@ -156,7 +156,7 @@
       "html": "12-display.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2376,
+      "diff_pct": 0.2387,
       "diff_region": {
         "top": 308,
         "left": 25,
@@ -171,7 +171,7 @@
       "html": "13-visibility-opacity.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2357,
+      "diff_pct": 0.2224,
       "diff_region": {
         "top": 148,
         "left": 25,
@@ -205,9 +205,14 @@
       "label": "outline",
       "html": "16-outline.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.0,
-      "diff_region": null
+      "status": "FAIL",
+      "diff_pct": 2.8038,
+      "diff_region": {
+        "top": 15,
+        "left": 21,
+        "bottom": 244,
+        "right": 836
+      }
     },
     {
       "id": "17",
@@ -226,10 +231,10 @@
       "html": "18-images.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.1053,
+      "diff_pct": 2.1505,
       "diff_region": {
         "top": 28,
-        "left": 28,
+        "left": 25,
         "bottom": 718,
         "right": 905
       },
@@ -246,7 +251,7 @@
       "html": "19-object-fit.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 8.9941,
+      "diff_pct": 8.9202,
       "diff_region": {
         "top": 26,
         "left": 26,
@@ -266,7 +271,7 @@
       "html": "20-quirks-bgcolor.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1135,
+      "diff_pct": 0.2279,
       "diff_region": {
         "top": 140,
         "left": 25,
@@ -280,8 +285,8 @@
       "label": "border-style dashed/dotted/double",
       "html": "21-border-style.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.488,
+      "status": "FAIL",
+      "diff_pct": 1.5356,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -296,12 +301,12 @@
       "html": "22-transform.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0004,
+      "diff_pct": 0.1632,
       "diff_region": {
-        "top": 443,
-        "left": 126,
-        "bottom": 524,
-        "right": 251
+        "top": 287,
+        "left": 149,
+        "bottom": 692,
+        "right": 792
       }
     },
     {
@@ -361,11 +366,11 @@
       "html": "27-direction-rtl.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3885,
+      "diff_pct": 0.3615,
       "diff_region": {
         "top": 191,
         "left": 140,
-        "bottom": 283,
+        "bottom": 282,
         "right": 984
       }
     },
@@ -395,8 +400,8 @@
       "label": "CSS filter: grayscale/sepia/brightness/invert/contrast/saturate/opacity/blur/hue-rotate",
       "html": "30-css-filter.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 4.2737,
+      "status": "FAIL",
+      "diff_pct": 2.0959,
       "diff_region": {
         "top": 31,
         "left": 31,
@@ -406,7 +411,7 @@
       "debtor": {
         "bug": "BUG-144",
         "baseline": 4.36,
-        "verdict": "OK"
+        "verdict": "RATCHET"
       }
     },
     {
@@ -415,13 +420,13 @@
       "label": "clip-path: inset/circle/ellipse/polygon bounding-box clip",
       "html": "31-clip-path.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 0.5857,
+      "status": "PASS",
+      "diff_pct": 0.0623,
       "diff_region": {
         "top": 181,
-        "left": 41,
-        "bottom": 719,
-        "right": 636
+        "left": 61,
+        "bottom": 610,
+        "right": 635
       }
     },
     {
@@ -431,7 +436,7 @@
       "html": "32-list-markers.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.7488,
+      "diff_pct": 3.7272,
       "diff_region": {
         "top": 33,
         "left": 60,
@@ -451,12 +456,12 @@
       "html": "33-multi-column.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.118,
+      "diff_pct": 0.1023,
       "diff_region": {
         "top": 172,
         "left": 191,
         "bottom": 555,
-        "right": 742
+        "right": 578
       }
     },
     {
@@ -466,7 +471,7 @@
       "html": "34-forms.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.2769,
+      "diff_pct": 2.9967,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -500,18 +505,18 @@
       "label": "border-radius: uniform/pill/circle/asymmetric SDF rendering",
       "html": "36-border-radius.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 0.963,
+      "status": "FAIL",
+      "diff_pct": 0.2077,
       "diff_region": {
         "top": 25,
-        "left": 22,
-        "bottom": 595,
+        "left": 25,
+        "bottom": 592,
         "right": 774
       },
       "debtor": {
         "bug": "BUG-176",
         "baseline": 1.11,
-        "verdict": "OK"
+        "verdict": "REMOVE"
       }
     },
     {
@@ -541,11 +546,11 @@
       "html": "39-gradients.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.6226,
+      "diff_pct": 1.3973,
       "diff_region": {
         "top": 117,
-        "left": 21,
-        "bottom": 332,
+        "left": 609,
+        "bottom": 236,
         "right": 848
       },
       "debtor": {
@@ -561,11 +566,11 @@
       "html": "40-conic-gradients.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.4753,
+      "diff_pct": 0.0543,
       "diff_region": {
-        "top": 21,
-        "left": 106,
-        "bottom": 504,
+        "top": 217,
+        "left": 414,
+        "bottom": 396,
         "right": 788
       }
     },
@@ -626,7 +631,7 @@
       "html": "45-multiple-backgrounds.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 4.7304,
+      "diff_pct": 4.7437,
       "diff_region": {
         "top": 0,
         "left": 0,
@@ -641,11 +646,11 @@
       "html": "46-individual-transforms.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.9561,
+      "diff_pct": 2.0721,
       "diff_region": {
         "top": 43,
-        "left": 26,
-        "bottom": 564,
+        "left": 16,
+        "bottom": 576,
         "right": 680
       },
       "debtor": {
@@ -661,12 +666,12 @@
       "html": "47-svg-basic.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.1967,
+      "diff_pct": 0.8035,
       "diff_region": {
-        "top": 25,
-        "left": 28,
-        "bottom": 647,
-        "right": 990
+        "top": 38,
+        "left": 29,
+        "bottom": 646,
+        "right": 987
       },
       "debtor": {
         "bug": "BUG-176",
@@ -696,11 +701,11 @@
       "html": "49-background-blend-mode.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.4725,
+      "diff_pct": 0.1389,
       "diff_region": {
         "top": 0,
         "left": 0,
-        "bottom": 719,
+        "bottom": 0,
         "right": 1023
       }
     },
@@ -711,13 +716,8 @@
       "html": "50-css-variables.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0001,
-      "diff_region": {
-        "top": 21,
-        "left": 327,
-        "bottom": 21,
-        "right": 327
-      }
+      "diff_pct": 0.0,
+      "diff_region": null
     },
     {
       "id": "51",
@@ -726,7 +726,7 @@
       "html": "51-scrollbar-rendering.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.0886,
+      "diff_pct": 1.0669,
       "diff_region": {
         "top": 22,
         "left": 21,
@@ -746,12 +746,12 @@
       "html": "52-text-shadow-blur.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 4.2508,
+      "diff_pct": 4.3605,
       "diff_region": {
-        "top": 38,
+        "top": 37,
         "left": 110,
         "bottom": 324,
-        "right": 919
+        "right": 921
       },
       "debtor": {
         "bug": "BUG-128",
@@ -766,12 +766,12 @@
       "html": "53-background-origin.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 9.6216,
+      "diff_pct": 9.0152,
       "diff_region": {
         "top": 35,
-        "left": 32,
+        "left": 33,
         "bottom": 531,
-        "right": 801
+        "right": 800
       }
     },
     {
@@ -781,11 +781,11 @@
       "html": "54-svg-path-stroke.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.3029,
+      "diff_pct": 1.3795,
       "diff_region": {
-        "top": 22,
-        "left": 18,
-        "bottom": 684,
+        "top": 26,
+        "left": 27,
+        "bottom": 681,
         "right": 976
       },
       "debtor": {
@@ -801,12 +801,12 @@
       "html": "55-video-placeholder.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 0.5489,
+      "diff_pct": 0.5356,
       "diff_region": {
         "top": 124,
         "left": 119,
         "bottom": 411,
-        "right": 712
+        "right": 711
       }
     },
     {
@@ -815,13 +815,13 @@
       "label": "CSS Compositing L1 §5 — mix-blend-mode: normal/multiply/darken/color-burn/screen/lighten/color-dodge/overlay/hard-light/soft-light/difference/exclusion/hue/saturation/color/luminosity + nesting",
       "html": "56-mix-blend-mode.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.4725,
+      "status": "FAIL",
+      "diff_pct": 0.8545,
       "diff_region": {
-        "top": 0,
-        "left": 0,
-        "bottom": 719,
-        "right": 1023
+        "top": 434,
+        "left": 60,
+        "bottom": 503,
+        "right": 149
       }
     },
     {
@@ -830,8 +830,8 @@
       "label": "HTML LS §4.12.4 — <canvas> getContext(\"2d\"): fillRect/strokeRect/arc/path fill; UA default 300×150; attr dimensions; CSS background + border + border-radius on the canvas element box",
       "html": "57-canvas-2d.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 2.9564,
+      "status": "FAIL",
+      "diff_pct": 27.9606,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -840,8 +840,8 @@
       },
       "debtor": {
         "bug": "BUG-099",
-        "baseline": 4.14,
-        "verdict": "OK"
+        "baseline": 2.96,
+        "verdict": "REGRESS"
       }
     },
     {
@@ -850,13 +850,18 @@
       "label": "CSS Pseudo-elements L4 §5.3-5.4 — ::first-letter drop-cap (large yellow, float:left) + ::first-line green bold first line",
       "html": "58-first-letter-line.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 4.9239,
+      "status": "DEBTOR",
+      "diff_pct": 4.8743,
       "diff_region": {
         "top": 35,
         "left": 33,
         "bottom": 183,
         "right": 988
+      },
+      "debtor": {
+        "bug": "BUG-100",
+        "baseline": 4.92,
+        "verdict": "OK"
       }
     },
     {
@@ -866,12 +871,17 @@
       "html": "59-image-set-cross-fade.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 24.1832,
+      "diff_pct": 23.8677,
       "diff_region": {
         "top": 25,
         "left": 25,
         "bottom": 413,
         "right": 1022
+      },
+      "debtor": {
+        "bug": "BUG-101",
+        "baseline": 17.15,
+        "verdict": "REGRESS"
       }
     },
     {
@@ -880,18 +890,18 @@
       "label": "SVG stroke advanced: stroke-linecap (butt/round/square), stroke-linejoin (miter/bevel/round), stroke-miterlimit, stroke-dasharray, stroke-dashoffset, fill-rule (nonzero/evenodd)",
       "html": "60-svg-stroke-advanced.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 1.406,
+      "status": "FAIL",
+      "diff_pct": 0.2045,
       "diff_region": {
-        "top": 19,
-        "left": 27,
+        "top": 20,
+        "left": 28,
         "bottom": 650,
-        "right": 990
+        "right": 989
       },
       "debtor": {
         "bug": "BUG-173",
         "baseline": 1.5,
-        "verdict": "OK"
+        "verdict": "REMOVE"
       }
     },
     {
@@ -900,18 +910,18 @@
       "label": "View Transitions API: document.startViewTransition(cb) — JS API, ViewTransition object, Begin/End events, 300 ms cross-fade",
       "html": "61-view-transitions.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 10.9939,
+      "status": "DEBTOR",
+      "diff_pct": 10.7077,
       "diff_region": {
         "top": 33,
         "left": 40,
-        "bottom": 275,
-        "right": 983
+        "bottom": 274,
+        "right": 982
       },
       "debtor": {
         "bug": "BUG-103",
-        "baseline": 99.53,
-        "verdict": "RATCHET"
+        "baseline": 10.99,
+        "verdict": "OK"
       }
     },
     {
@@ -921,11 +931,11 @@
       "html": "62-scroll-snap.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.3211,
+      "diff_pct": 1.5195,
       "diff_region": {
         "top": 0,
         "left": 0,
-        "bottom": 711,
+        "bottom": 708,
         "right": 1023
       },
       "debtor": {
@@ -941,7 +951,7 @@
       "html": "63-masonry.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.0702,
+      "diff_pct": 2.0588,
       "diff_region": {
         "top": 34,
         "left": 11,
@@ -960,18 +970,18 @@
       "label": "CSS 2.1 §17 Table layout: emit_table_box() renders table/thead/tbody/tr/td cells with separate border-spacing, cell backgrounds, borders; col_span/row_span in struct",
       "html": "64-table.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 9.1359,
+      "status": "FAIL",
+      "diff_pct": 6.979,
       "diff_region": {
         "top": 42,
-        "left": 20,
-        "bottom": 414,
+        "left": 21,
+        "bottom": 413,
         "right": 1023
       },
       "debtor": {
         "bug": "BUG-128",
         "baseline": 8.99,
-        "verdict": "OK"
+        "verdict": "RATCHET"
       }
     },
     {
@@ -981,11 +991,11 @@
       "html": "65-flex-align-content.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 1.3612,
+      "diff_pct": 2.0584,
       "diff_region": {
-        "top": 10,
+        "top": 1,
         "left": 1,
-        "bottom": 694,
+        "bottom": 695,
         "right": 989
       }
     },
@@ -996,7 +1006,7 @@
       "html": "66-selection-pseudo.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 1.071,
+      "diff_pct": 1.0623,
       "diff_region": {
         "top": 43,
         "left": 41,
@@ -1011,7 +1021,7 @@
       "html": "67-attr-typed.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.3553,
+      "diff_pct": 1.3293,
       "diff_region": {
         "top": 62,
         "left": 41,
@@ -1031,12 +1041,12 @@
       "html": "68-font-variation-settings.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0011,
+      "diff_pct": 0.0022,
       "diff_region": {
-        "top": 22,
-        "left": 21,
-        "bottom": 228,
-        "right": 632
+        "top": 21,
+        "left": 24,
+        "bottom": 232,
+        "right": 768
       }
     },
     {
@@ -1056,11 +1066,11 @@
       "html": "70-object-fit.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.6334,
+      "diff_pct": 1.2657,
       "diff_region": {
         "top": 27,
         "left": 20,
-        "bottom": 719,
+        "bottom": 718,
         "right": 192
       },
       "debtor": {
@@ -1076,7 +1086,7 @@
       "html": "71-starting-style.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 7.026,
+      "diff_pct": 7.0264,
       "diff_region": {
         "top": 260,
         "left": 292,
@@ -1096,12 +1106,12 @@
       "html": "72-host-slotted.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0008,
+      "diff_pct": 0.0019,
       "diff_region": {
-        "top": 42,
-        "left": 31,
-        "bottom": 296,
-        "right": 34
+        "top": 41,
+        "left": 32,
+        "bottom": 300,
+        "right": 330
       }
     },
     {
@@ -1121,12 +1131,12 @@
       "html": "74-font-stretch.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0117,
+      "diff_pct": 0.0064,
       "diff_region": {
         "top": 25,
-        "left": 25,
+        "left": 27,
         "bottom": 220,
-        "right": 996
+        "right": 924
       }
     },
     {
@@ -1151,11 +1161,11 @@
       "html": "76-motion-path.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.5446,
+      "diff_pct": 0.537,
       "diff_region": {
         "top": 221,
         "left": 31,
-        "bottom": 524,
+        "bottom": 525,
         "right": 999
       },
       "debtor": {
@@ -1191,12 +1201,12 @@
       "html": "78-scroll-driven-animations.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 10.0663,
+      "diff_pct": 10.4895,
       "diff_region": {
         "top": 29,
-        "left": 24,
-        "bottom": 565,
-        "right": 905
+        "left": 25,
+        "bottom": 563,
+        "right": 904
       },
       "debtor": {
         "bug": "BUG-127",
@@ -1210,13 +1220,18 @@
       "label": "CSS Text Decoration L4: text-underline-offset (px/auto/negative) + text-underline-position (under) wired to push_text_decoration",
       "html": "79-text-underline-offset.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 6.7608,
+      "status": "DEBTOR",
+      "diff_pct": 6.7249,
       "diff_region": {
         "top": 45,
         "left": 60,
         "bottom": 486,
         "right": 600
+      },
+      "debtor": {
+        "bug": "BUG-128",
+        "baseline": 6.76,
+        "verdict": "OK"
       }
     },
     {
@@ -1226,12 +1241,12 @@
       "html": "80-border-collapse.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 9.9136,
+      "diff_pct": 8.731,
       "diff_region": {
         "top": 23,
-        "left": 20,
+        "left": 21,
         "bottom": 495,
-        "right": 669
+        "right": 668
       },
       "debtor": {
         "bug": "BUG-128",
@@ -1246,7 +1261,7 @@
       "html": "81-view-transition-name.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0016,
+      "diff_pct": 0.0027,
       "diff_region": {
         "top": 260,
         "left": 152,
@@ -1261,12 +1276,12 @@
       "html": "82-svg-use.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.3082,
+      "diff_pct": 2.1743,
       "diff_region": {
-        "top": 32,
+        "top": 35,
         "left": 20,
         "bottom": 637,
-        "right": 613
+        "right": 609
       },
       "debtor": {
         "bug": "BUG-128",
@@ -1281,12 +1296,12 @@
       "html": "83-scroll-behavior.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 7.8833,
+      "diff_pct": 6.6756,
       "diff_region": {
         "top": 33,
-        "left": 50,
-        "bottom": 522,
-        "right": 973
+        "left": 51,
+        "bottom": 521,
+        "right": 972
       },
       "debtor": {
         "bug": "BUG-128",
@@ -1301,7 +1316,7 @@
       "html": "84-text-decoration-skip-ink.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 6.025,
+      "diff_pct": 6.0296,
       "diff_region": {
         "top": 33,
         "left": 41,
@@ -1320,17 +1335,25 @@
       "label": "INTERACTION: transform × overflow:hidden — клиппинг трансформированных слоёв, поворот самого клип-контейнера",
       "html": "100-transform-overflow.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.281,
+      "status": "FAIL",
+      "diff_pct": 9.6469,
       "diff_region": {
-        "top": 449,
-        "left": 365,
-        "bottom": 674,
-        "right": 1008
+        "top": 0,
+        "left": 225,
+        "bottom": 719,
+        "right": 1023
       },
       "deps": [
         "22",
         "14"
+      ],
+      "affected": [
+        "c0: translate clipped",
+        "c1: rotate corners clipped",
+        "c2: scale clipped",
+        "c3: CONTROL no clip",
+        "c4: negative translate clipped",
+        "c5: rotated clip container"
       ]
     },
     {
@@ -1340,11 +1363,11 @@
       "html": "101-radius-overflow.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 3.8997,
+      "diff_pct": 3.6199,
       "diff_region": {
         "top": 25,
         "left": 25,
-        "bottom": 675,
+        "bottom": 674,
         "right": 1004
       },
       "deps": [
@@ -1381,12 +1404,12 @@
       "html": "103-filter-transform.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0396,
+      "diff_pct": 0.2597,
       "diff_region": {
-        "top": 118,
-        "left": 457,
-        "bottom": 571,
-        "right": 978
+        "top": 256,
+        "left": 394,
+        "bottom": 645,
+        "right": 783
       },
       "deps": [
         "30",
@@ -1400,12 +1423,12 @@
       "html": "104-mask-gradient-radius.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.4404,
+      "diff_pct": 0.3655,
       "diff_region": {
         "top": 25,
         "left": 25,
         "bottom": 674,
-        "right": 1005
+        "right": 1004
       },
       "deps": [
         "26",
@@ -1435,12 +1458,12 @@
       "html": "106-transform-zindex.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0152,
+      "diff_pct": 0.2752,
       "diff_region": {
-        "top": 29,
+        "top": 81,
         "left": 70,
-        "bottom": 332,
-        "right": 913
+        "bottom": 638,
+        "right": 620
       },
       "deps": [
         "22",
@@ -1454,12 +1477,12 @@
       "html": "107-shadow-radius-overflow.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.1427,
+      "diff_pct": 0.0258,
       "diff_region": {
         "top": 65,
         "left": 65,
-        "bottom": 602,
-        "right": 930
+        "bottom": 599,
+        "right": 929
       },
       "deps": [
         "15",
@@ -1474,12 +1497,12 @@
       "html": "108-nested-transforms.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0016,
+      "diff_pct": 0.3711,
       "diff_region": {
-        "top": 430,
-        "left": 420,
-        "bottom": 550,
-        "right": 949
+        "top": 94,
+        "left": 94,
+        "bottom": 620,
+        "right": 950
       },
       "deps": [
         "22"
@@ -1491,18 +1514,24 @@
       "label": "INTERACTION: clip-path × transform × border-radius — клип в локальном боксе элемента сквозь трансформацию",
       "html": "109-clippath-transform.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.2459,
+      "status": "FAIL",
+      "diff_pct": 1.7323,
       "diff_region": {
-        "top": 85,
-        "left": 86,
-        "bottom": 644,
-        "right": 964
+        "top": 78,
+        "left": 16,
+        "bottom": 682,
+        "right": 634
       },
       "deps": [
         "31",
         "22",
         "36"
+      ],
+      "affected": [
+        "c0: circle clip on rotated",
+        "c1: inset clip on scaled",
+        "c3: clipped parent, transformed child",
+        "c4: clip-path ∩ border-radius"
       ]
     },
     {
@@ -1527,7 +1556,7 @@
       "html": "86-position-anchor-fallback.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 2.1208,
+      "diff_pct": 2.1219,
       "diff_region": {
         "top": 1,
         "left": 1,
@@ -1586,13 +1615,18 @@
       "label": "AVIF image decoder — <picture> с AVIF source + PNG fallback, direct <img src=\"...avif\">",
       "html": "90-avif-image.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 2.2681,
+      "status": "DEBTOR",
+      "diff_pct": 1.7034,
       "diff_region": {
-        "top": 20,
-        "left": 20,
+        "top": 23,
+        "left": 21,
         "bottom": 719,
         "right": 1023
+      },
+      "debtor": {
+        "bug": "BUG-209",
+        "baseline": 1.71,
+        "verdict": "OK"
       }
     },
     {
@@ -1632,12 +1666,12 @@
       "html": "93-field-sizing.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.6932,
+      "diff_pct": 3.4947,
       "diff_region": {
         "top": 13,
-        "left": 12,
-        "bottom": 289,
-        "right": 246
+        "left": 13,
+        "bottom": 288,
+        "right": 245
       },
       "debtor": {
         "bug": "BUG-225",
@@ -1662,12 +1696,12 @@
       "html": "95-font-size-adjust.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.9743,
+      "diff_pct": 2.9473,
       "diff_region": {
         "top": 50,
         "left": 40,
         "bottom": 521,
-        "right": 486
+        "right": 485
       },
       "debtor": {
         "bug": "BUG-128",
@@ -1691,13 +1725,18 @@
       "label": "CSS Lists L3 §4: counter-set — порядок reset→increment→set (set перекрывает increment), создание счётчика на never-reset; ::before content: counter(c) показывает 5/6/0/1/42",
       "html": "97-counter-set.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 2.7771,
+      "status": "DEBTOR",
+      "diff_pct": 2.7559,
       "diff_region": {
         "top": 54,
         "left": 46,
         "bottom": 632,
         "right": 340
+      },
+      "debtor": {
+        "bug": "BUG-128",
+        "baseline": 2.78,
+        "verdict": "OK"
       }
     },
     {
@@ -1717,12 +1756,12 @@
       "html": "99-offset-path-ray.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.0003,
+      "diff_pct": 0.0217,
       "diff_region": {
-        "top": 193,
+        "top": 154,
         "left": 667,
         "bottom": 194,
-        "right": 668
+        "right": 707
       }
     },
     {
@@ -1731,13 +1770,18 @@
       "label": "CSS UI L4 §6.1: accent-color — тинт чекбокса/радио/range/progress; пять рядов с разными accent (red/green/orange/purple/UA-blue); <meter> исключён (семантические цвета)",
       "html": "110-accent-color.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 1.6989,
+      "status": "DEBTOR",
+      "diff_pct": 1.5138,
       "diff_region": {
         "top": 25,
         "left": 25,
-        "bottom": 194,
+        "bottom": 193,
         "right": 521
+      },
+      "debtor": {
+        "bug": "BUG-214",
+        "baseline": 1.7,
+        "verdict": "OK"
       }
     },
     {
@@ -1762,12 +1806,12 @@
       "html": "112-clip-path-fill-rule.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3776,
+      "diff_pct": 0.2262,
       "diff_region": {
-        "top": 60,
-        "left": 44,
-        "bottom": 531,
-        "right": 347
+        "top": 90,
+        "left": 256,
+        "bottom": 137,
+        "right": 305
       }
     },
     {
@@ -1776,13 +1820,18 @@
       "label": "CSS Shapes L1 §4: shape-outside: path() — inline-block квадраты обтекают треугольный float по флэттенному SVG-контуру; колонка path() должна совпасть с эталонной колонкой polygon() (одинаковая лесенка)",
       "html": "113-shape-outside-path.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 1.4103,
+      "status": "DEBTOR",
+      "diff_pct": 1.3563,
       "diff_region": {
         "top": 41,
         "left": 41,
         "bottom": 240,
         "right": 958
+      },
+      "debtor": {
+        "bug": "BUG-215",
+        "baseline": 1.41,
+        "verdict": "OK"
       }
     },
     {
@@ -1812,12 +1861,12 @@
       "html": "116-gradient-interpolation.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.4316,
+      "diff_pct": 0.3768,
       "diff_region": {
         "top": 147,
-        "left": 16,
-        "bottom": 559,
-        "right": 1000
+        "left": 27,
+        "bottom": 560,
+        "right": 1006
       }
     },
     {
@@ -1827,9 +1876,9 @@
       "html": "117-quotes.html",
       "threshold": 0.5,
       "status": "FAIL",
-      "diff_pct": 2.2786,
+      "diff_pct": 2.231,
       "diff_region": {
-        "top": 55,
+        "top": 56,
         "left": 41,
         "bottom": 277,
         "right": 493
@@ -1851,18 +1900,13 @@
       "label": "CSS Fill & Stroke L3 §6 / SVG2 §13.7: paint-order — thick-stroked <path> с centred stroke; верхний ряд normal (полная ширина обводки поверх заливки), нижний paint-order:stroke (заливка поверх обводки → видимая обводка вдвое тоньше, заливка крупнее)",
       "html": "119-paint-order.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 0.8078,
-      "diff_region": {
-        "top": 45,
-        "left": 43,
-        "bottom": 668,
-        "right": 954
-      },
+      "status": "FAIL",
+      "diff_pct": 0.0,
+      "diff_region": null,
       "debtor": {
         "bug": "BUG-173",
         "baseline": 0.81,
-        "verdict": "OK"
+        "verdict": "REMOVE"
       }
     },
     {
@@ -1871,13 +1915,18 @@
       "label": "Media Queries L5 §5.5-5.6: prefers-contrast/prefers-reduced-data — без пользовательских предпочтений matched-свотчи (no-preference) зелёные, no-match (more/less/custom/reduce) остаются красными",
       "html": "120-media-contrast-data.html",
       "threshold": 0.5,
-      "status": "FAIL",
+      "status": "DEBTOR",
       "diff_pct": 3.2639,
       "diff_region": {
         "top": 47,
         "left": 271,
         "bottom": 174,
         "right": 458
+      },
+      "debtor": {
+        "bug": "BUG-217",
+        "baseline": 3.26,
+        "verdict": "OK"
       }
     },
     {
@@ -1897,7 +1946,7 @@
       "html": "122-line-height-step.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 11.1863,
+      "diff_pct": 11.1313,
       "diff_region": {
         "top": 32,
         "left": 41,

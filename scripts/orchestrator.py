@@ -1076,13 +1076,23 @@ class LagunaClient:
             f"think={think} max_tokens={max_tokens}",
         )
         t0 = time.monotonic()
+        # Форма запроса как в Kilo Code (openai-chat protocol,
+        # packages/llm/src/protocols/openai-chat.ts): reasoning_effort —
+        # нативный top-level скаляр OpenAI SDK. Эмпирически проверено на реальном
+        # 48КБ-запросе: poolside принимает его (none/medium/без — все OK за 70–130с).
+        # Прежние варианты не годились: chat_template_kwargs.enable_thinking —
+        # это флаг `vllm serve`, хостинг его игнорирует (Laguna M.1 «reasoning by
+        # default» молча думала ~10 мин → простой стрима → TLS bad-record-mac);
+        # object-форма reasoning.effort давала обрыв соединения на 25с.
+        # think=False → effort "none" (без раздумий), think=True → "high".
         resp = self.client.chat.completions.create(
             model=LAGUNA_MODEL,
             messages=messages,
             stream=True,
-            max_completion_tokens=max_tokens,
+            stream_options={"include_usage": True},
+            max_tokens=max_tokens,
             temperature=0.2,
-            extra_body={"chat_template_kwargs": {"enable_thinking": think}},
+            reasoning_effort="high" if think else "none",
         )
         parts: list[str] = []
         n_chunks = 0
