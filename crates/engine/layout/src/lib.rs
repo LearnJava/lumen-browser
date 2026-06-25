@@ -1285,6 +1285,48 @@ fn collect_vt_names_rec(b: &LayoutBox, out: &mut Vec<(lumen_dom::NodeId, Box<str
     }
 }
 
+/// CSS View Transitions L1 §4 — collect each `view-transition-name` element with
+/// the geometry the morph engine animates from/to.
+///
+/// Like [`collect_view_transition_names`] but additionally returns the element's
+/// **border-box rectangle** (document-relative CSS px; includes padding + border,
+/// excludes margin — see [`box_tree::LayoutBox::rect`]). One entry per named
+/// element in document order; `display: none` boxes (no layout) are skipped.
+///
+/// Per the spec, a `view-transition-name` must be unique on a page: when a name
+/// repeats, only the **first** occurrence is a valid capture source. This
+/// collector returns every occurrence as-is (mirroring
+/// [`collect_view_transition_names`]); the shell deduplicates by name, keeping
+/// the first, when it pairs old↔new snapshots.
+// CSS: ::view-transition / ::view-transition-group(name) / -image-pair / -old / -new —
+// P4 to add PseudoElementKind variants + functional-pseudo parsing
+// (css-parser/src/parser.rs:345) so author animation-duration /
+// animation-timing-function on these pseudos can override the morph's hardcoded
+// 300 ms per group. Until then the shell uses the default duration for every group.
+pub fn collect_view_transition_groups(
+    root: &LayoutBox,
+) -> Vec<(lumen_dom::NodeId, Box<str>, lumen_core::geom::Rect)> {
+    let mut out = Vec::new();
+    collect_vt_groups_rec(root, &mut out);
+    out
+}
+
+fn collect_vt_groups_rec(
+    b: &LayoutBox,
+    out: &mut Vec<(lumen_dom::NodeId, Box<str>, lumen_core::geom::Rect)>,
+) {
+    use box_tree::BoxKind;
+    if matches!(b.kind, BoxKind::Skip) {
+        return;
+    }
+    if let Some(ref name) = b.style.view_transition_name {
+        out.push((b.node, name.clone(), b.rect));
+    }
+    for child in &b.children {
+        collect_vt_groups_rec(child, out);
+    }
+}
+
 /// `x` and `y` are in CSS px, document-relative (same coordinate space as
 /// `ScrollContainer::clip_rect`).
 pub fn find_scroll_container_at(
@@ -16922,6 +16964,52 @@ mod tests {
         );
         let names = collect_view_transition_names(&root);
         assert!(names.is_empty(), "view-transition-name:none should not appear");
+    }
+
+    // ── collect_view_transition_groups (name + border-box rect) ───────────────
+
+    #[test]
+    fn vt_groups_empty_without_property() {
+        let root = lay("<div></div>", "div { width: 100px; height: 50px; }");
+        assert!(collect_view_transition_groups(&root).is_empty());
+    }
+
+    #[test]
+    fn vt_groups_returns_border_box_rect() {
+        // A named, absolutely-sized box at a known offset: the collector must
+        // report its border-box rect (the geometry the morph animates from/to).
+        let root = lay_viewport(
+            "<div class='f'><div class='hero'></div></div>",
+            ".f { width: 1022px; height: 718px; } \
+             .hero { view-transition-name: hero; width: 200px; height: 120px; \
+                     margin-left: 40px; margin-top: 30px; }",
+            Size::new(1024.0, 720.0),
+        );
+        let groups = collect_view_transition_groups(&root);
+        assert_eq!(groups.len(), 1, "one named element");
+        let (_, ref name, rect) = groups[0];
+        assert_eq!(name.as_ref(), "hero");
+        // Border-box excludes margin: width/height are the content+border box,
+        // x/y are the top-left after margin.
+        assert!((rect.width - 200.0).abs() < 0.5, "width, got {}", rect.width);
+        assert!((rect.height - 120.0).abs() < 0.5, "height, got {}", rect.height);
+        assert!((rect.x - 40.0).abs() < 0.5, "x after margin-left, got {}", rect.x);
+        assert!((rect.y - 30.0).abs() < 0.5, "y after margin-top, got {}", rect.y);
+    }
+
+    #[test]
+    fn vt_groups_document_order_and_duplicate_names() {
+        // Two elements share the name "dup": the collector returns both in
+        // document order; the shell keeps the first when pairing.
+        let root = lay(
+            "<div id='a'></div><div id='b'></div><div id='c'></div>",
+            "#a { view-transition-name: dup; width: 100px; height: 50px; } \
+             #b { view-transition-name: solo; width: 100px; height: 50px; } \
+             #c { view-transition-name: dup; width: 100px; height: 50px; }",
+        );
+        let groups = collect_view_transition_groups(&root);
+        let names: Vec<&str> = groups.iter().map(|(_, n, _)| n.as_ref()).collect();
+        assert_eq!(names, ["dup", "solo", "dup"], "all occurrences, document order");
     }
 
     // BUG-130: view-transition-name must not affect normal-flow rendering — a box

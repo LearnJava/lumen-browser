@@ -116,6 +116,30 @@ pub trait RenderBackend: Send {
     /// Вызывается при навигации на новую страницу или при явной очистке кэша.
     fn clear_images(&mut self);
 
+    /// Регистрирует offscreen RGBA-снимок слоя под числовым `id`.
+    ///
+    /// После вызова [`DisplayCommand::DrawLayerSnapshot`] с тем же `id` рисует
+    /// `image` в `rect` команды с её `alpha`. Используется движком View
+    /// Transitions (CSS View Transitions L1 §4): shell захватывает старое и новое
+    /// поддерево каждого `view-transition-name`-элемента в изображение и морфит
+    /// его на протяжении перехода.
+    ///
+    /// `image` интерпретируется как [`PixelFormat::Rgba8`][lumen_image::PixelFormat]
+    /// (иные форматы конвертируются). Возвращает `Err(msg)` при ошибке загрузки в
+    /// GPU. Дефолт — no-op, возвращающий `Ok(())` (бэкенды без поддержки снимков
+    /// игнорируют вызов).
+    fn register_snapshot(&mut self, _id: u64, _image: &Image) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Сбрасывает все зарегистрированные layer-снимки (см. [`register_snapshot`]).
+    ///
+    /// Вызывается shell-ом при завершении или отмене view-перехода, чтобы
+    /// освободить per-element текстуры снимков. Дефолт — no-op.
+    ///
+    /// [`register_snapshot`]: RenderBackend::register_snapshot
+    fn clear_snapshots(&mut self) {}
+
     /// Устанавливает провайдер шрифтов для растеризации глифов.
     ///
     /// `None` означает возврат к bundled Inter fallback.
@@ -283,6 +307,17 @@ mod tests {
         let img = Image { width: 1, height: 1, format: PixelFormat::Rgba8, data: vec![255; 4], icc_profile: None };
         let mut b: Box<dyn RenderBackend> = Box::new(NullBackend);
         assert!(b.register_image("test".into(), &img).is_ok());
+    }
+
+    #[test]
+    fn null_backend_register_snapshot_default_ok() {
+        use lumen_image::{Image, PixelFormat};
+        // Default trait impl accepts any snapshot and reports success; backends
+        // without snapshot support silently ignore it (View Transitions L1).
+        let img = Image { width: 1, height: 1, format: PixelFormat::Rgba8, data: vec![255; 4], icc_profile: None };
+        let mut b: Box<dyn RenderBackend> = Box::new(NullBackend);
+        assert!(b.register_snapshot(7, &img).is_ok());
+        b.clear_snapshots(); // no-op, must not panic
     }
 
     #[test]
