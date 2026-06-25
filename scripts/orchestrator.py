@@ -134,6 +134,7 @@ import sys
 import re
 import threading
 import time
+import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -930,6 +931,31 @@ LAGUNA_BASE_URL = "https://inference.poolside.ai/v1"
 LAGUNA_MODEL = "poolside/laguna-m.1"
 LAGUNA_ENV = PROJECT_DIR / ".tmp" / "poolside.env"
 LAGUNA_MAX_ITERS = 24
+# Таймаут одного запроса к Laguna, сек. Дефолт OpenAI SDK = 600с (10 мин): при
+# залипшем streaming-соединении это значит 10 минут простоя до ошибки. Режем до
+# 120с — застрявший поток падает быстро и цикл повторяет запрос. Override: env.
+LAGUNA_TIMEOUT = float(os.environ.get("LAGUNA_TIMEOUT", "120"))
+# Keep-alive пула httpx. Протухшее переиспользуемое TLS-соединение — типичная
+# причина `[SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC]` после паузы между
+# итерациями. LAGUNA_KEEPALIVE=0 → новое соединение на каждый запрос (Connection:
+# close): чуть медленнее на рукопожатии, но без stale-connection SSL-сбоев.
+LAGUNA_KEEPALIVE = os.environ.get("LAGUNA_KEEPALIVE", "1").lower() not in ("0", "false", "no")
+
+
+def laguna_debug(developer: str, message: str) -> None:
+    """Дописать строку в scripts/laguna-debug-PN.log — полный лог обмена с Laguna.
+
+    Отдельно от консольного `log()`: сюда идут размеры запроса/ответа, тайминг,
+    счётчик chunk'ов и полный трейсбэк сетевых сбоев — чтобы постфактум понять,
+    уходит ли запрос и приходит ли ответ, и на чём именно рвётся соединение.
+    """
+    try:
+        path = SCRIPTS_DIR / f"laguna-debug-{developer}.log"
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with path.open("a", encoding="utf-8") as f:
+            f.write(f"[{ts}] {message}\n")
+    except OSError:
+        pass
 
 # Добавка к промпту Claude в режиме assist.
 LAGUNA_ASSIST_NOTE = (
@@ -966,18 +992,48 @@ class LagunaClient:
     тратит минуты на thinking перед ответом.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, developer: str = "P?") -> None:
         from openai import OpenAI  # ленивый импорт: нужен только в laguna-режимах
+        import httpx
 
         key = _load_poolside_key()
         if not key:
             raise RuntimeError(
                 "POOLSIDE_API_KEY не найден (ни в env, ни в .tmp/poolside.env)"
             )
-        self.client = OpenAI(api_key=key, base_url=LAGUNA_BASE_URL)
+        self.developer = developer
+        # Свой httpx-клиент: явный таймаут + управляемый keep-alive (см. константы).
+        if LAGUNA_KEEPALIVE:
+            http = httpx.Client(timeout=LAGUNA_TIMEOUT)
+        else:
+            http = httpx.Client(
+                timeout=LAGUNA_TIMEOUT,
+                limits=httpx.Limits(max_keepalive_connections=0, max_connections=10),
+                headers={"Connection": "close"},
+            )
+        self.client = OpenAI(
+            api_key=key, base_url=LAGUNA_BASE_URL, http_client=http, max_retries=0,
+        )
+        laguna_debug(
+            developer,
+            f"LagunaClient init: base={LAGUNA_BASE_URL} model={LAGUNA_MODEL} "
+            f"timeout={LAGUNA_TIMEOUT}s keepalive={LAGUNA_KEEPALIVE} key=...{key[-4:]}",
+        )
 
     def chat(self, messages: list[dict], think: bool = False, max_tokens: int = 8000) -> str:
-        """Один проход диалога. Возвращает собранный content (без reasoning)."""
+        """Один проход диалога. Возвращает собранный content (без reasoning).
+
+        Пишет в laguna-debug-PN.log размер запроса, тайминг, число chunk'ов и
+        размер ответа — чтобы видеть, реально ли идёт обмен с Laguna. Сетевые
+        исключения НЕ глушит: их с полным трейсбэком ловит вызывающий цикл.
+        """
+        req_chars = sum(len(str(m.get("content", ""))) for m in messages)
+        laguna_debug(
+            self.developer,
+            f"→ chat: msgs={len(messages)} req_chars={req_chars} "
+            f"think={think} max_tokens={max_tokens}",
+        )
+        t0 = time.monotonic()
         resp = self.client.chat.completions.create(
             model=LAGUNA_MODEL,
             messages=messages,
@@ -987,10 +1043,19 @@ class LagunaClient:
             extra_body={"chat_template_kwargs": {"enable_thinking": think}},
         )
         parts: list[str] = []
+        n_chunks = 0
         for chunk in resp:
+            n_chunks += 1
             if chunk.choices and chunk.choices[0].delta.content is not None:
                 parts.append(chunk.choices[0].delta.content)
-        return "".join(parts)
+        out = "".join(parts)
+        dt = time.monotonic() - t0
+        laguna_debug(
+            self.developer,
+            f"← chat OK: {dt:.1f}s chunks={n_chunks} resp_chars={len(out)}"
+            + ("  (ПУСТОЙ ответ!)" if not out else ""),
+        )
+        return out
 
 
 # --- Текстовый tool-протокол для solo-режима ---
@@ -1296,7 +1361,7 @@ def run_laguna_solo(developer: str, task_number: int, think: bool = False) -> bo
     (последнее — в run_task_loop). Если worktree пропал — старт заново.
     """
     try:
-        client = LagunaClient()
+        client = LagunaClient(developer)
     except (RuntimeError, ImportError) as e:
         log(developer, f"Laguna недоступна: {e}")
         return False
@@ -1378,7 +1443,24 @@ def run_laguna_solo(developer: str, task_number: int, think: bool = False) -> bo
         try:
             reply = client.chat(messages, think=think)
         except Exception as e:  # сетевые/SDK сбои — подождать и повторить (без +it)
-            log(developer, f"  Ошибка Laguna API: {e}. Пауза 20с.")
+            # Полная диагностика в laguna-debug-PN.log: тип, цепочка причин
+            # (там обычно настоящий SSL-объект) и трейсбэк. В консоль — кратко.
+            cause = e.__cause__ or e.__context__
+            chain: list[str] = []
+            depth = 0
+            while cause and depth < 6:
+                chain.append(f"{type(cause).__name__}: {cause}")
+                cause = cause.__cause__ or cause.__context__
+                depth += 1
+            laguna_debug(
+                developer,
+                f"✗ chat FAIL (итер. {it}): {type(e).__name__}: {e}\n"
+                f"  причины: {' <- '.join(chain) or '—'}\n"
+                f"{traceback.format_exc()}",
+            )
+            log(developer,
+                f"  Ошибка Laguna API: {type(e).__name__}: {e}. Пауза 20с. "
+                f"(детали → scripts/laguna-debug-{developer}.log)")
             time.sleep(20)
             continue
 
