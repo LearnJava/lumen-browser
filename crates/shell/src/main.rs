@@ -4402,7 +4402,9 @@ fn idb_store_for_url(
             .to_string()
     };
     if let Some(dir) = idb_dir {
-        lumen_storage::IdbStore::for_origin(&etld_plus_one, dir).ok()
+        // Phase 3: structured per-origin SQLite backend (idb_meta/stores/indexes/records
+        // + snapshot-blob fallback). Falls back to ephemeral in-memory below when no dir.
+        lumen_storage::NativeIdbStore::for_origin(&etld_plus_one, dir).ok()
     } else {
         let origin = format!("{}://{}", parsed.scheme(), parsed.host());
         Some(Arc::new(lumen_storage::IdbStore::new(

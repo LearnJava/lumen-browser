@@ -46,6 +46,10 @@ Anti-pattern to avoid: one-DB-per-table. JOINs and atomic transactions only span
 file; hundreds of tiny DBs waste handles/connections and lose cross-table atomicity.
 
 Already in practice: IndexedDB is sharded per origin (`{sha256(eTLD+1)[:16]}.db`).
+As of `p1-ph3-indexeddb` (2026-06-25) those files live in the **portable** browser
+folder `<exe>/data/idb/` (via `browser_data_dir()`, not OS dirs) and carry a
+structured relational schema (`idb_meta`/`idb_stores`/`idb_indexes`/`idb_records`
++ a single-row snapshot blob), not just an opaque blob — see `NativeIdbStore`.
 
 **3. No second storage engine without a measured bottleneck.** A key/value engine
 (redb preferred — pure-Rust, ACID, mmap, single file; sled rejected — beta on-disk format;

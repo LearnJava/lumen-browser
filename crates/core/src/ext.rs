@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use crate::error::Result;
 use crate::event::Event;
 use crate::url::Url;
+use serde::{Deserialize, Serialize};
 
 /// Сетевой транспорт. Подменяется на mock для тестов или на альтернативный стек.
 pub trait NetworkTransport: Send + Sync {
@@ -2136,7 +2137,8 @@ pub trait JsWebSocketProvider: Send + Sync {
 /// Each variant maps to one row-level change in the structured per-origin schema
 /// (see `lumen-storage::indexed_db::NativeIdbStore`). `db_name` / `store_name` /
 /// `index_name` are the IDB-level names exactly as the page declared them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
 pub enum IdbSchemaOp {
     /// Set (or create) the stored version number of a database.
     SetVersion {
@@ -2198,7 +2200,8 @@ pub enum IdbSchemaOp {
 /// and never interprets their structure. Range bounds (`lower`/`upper`) are
 /// inclusive `key_json` strings; `None` means unbounded on that side. Lexicographic
 /// ordering of `key_json` is the storage order (the shim emits order-preserving keys).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
 pub enum IdbRecordOp {
     /// Insert or replace a single record (add/put).
     Put {
@@ -2274,7 +2277,8 @@ pub enum IdbRecordOp {
 }
 
 /// Result of executing a single [`IdbRecordOp`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "data")]
 pub enum IdbOpResult {
     /// No payload — produced by mutating ops (`Put`/`Delete`/`DeleteRange`/`Clear`).
     None,

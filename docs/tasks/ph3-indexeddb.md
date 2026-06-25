@@ -1,5 +1,15 @@
 # Ph3 — IndexedDB
 
+## Status: MERGED 2026-06-25
+
+Steps 0–6 complete. Storage foundation (Steps 0–2) + JS/shell wiring (Steps 3–5)
++ `databases()` (Step 6, satisfied via blob-restored in-heap state) all landed.
+Records persist via the lossless snapshot blob inside the structured per-origin
+SQLite file; schema (version/stores/indexes) is mirrored into `idb_meta`/
+`idb_stores`/`idb_indexes` via `_lumen_idb_schema_op`. Per-record `idb_records`
+population from transaction deltas is the documented future incremental
+optimisation. JS integration test: `crates/js/tests/indexed_db.rs`.
+
 **Developer:** P1
 **Branch:** `p1-ph3-indexeddb`
 **Size:** XL (new native Rust-SQLite storage layer, new `lumen-js` primitives, shell wiring)

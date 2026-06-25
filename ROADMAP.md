@@ -105,7 +105,7 @@ FIXED/DEBTOR → `done`, IN PROGRESS → `active`) и из подзадач (в�
 | P2-scrolldriven | P2 | | planned | | BUG-127 | | CSS Scroll-Driven Animations L1 |
 | P2-motionpath | P2 | | done | | BUG-125 | BUG-125 FIXED 2026-06-22 | CSS Motion Path L1 (offset-path) |
 | P3-v8 | P3 | | planned | | | | Переход на V8 (rusty_v8) + Tier 2 Web APIs |
-| P3-idb | P3 | | planned | | | | IndexedDB |
+| P3-idb | P3 | | done | | | P3-idb ✅ 2026-06-25 (NativeIdbStore wired into shell; structured schema mirror via _lumen_idb_schema_op; snapshot-blob restore; JS integration test) | IndexedDB |
 | P3-h3 | P3 | | planned | | | | HTTP/3 |
 | PH3-20 | P3 | | done | | | | Service Workers (PH3-20 fetch interception Phase 1) |
 | P3-woff2 | P3 | | done | | | | WebFonts WOFF2 |

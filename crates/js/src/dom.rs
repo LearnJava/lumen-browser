@@ -1877,6 +1877,46 @@ fn install_primitives(
         reg!("_lumen_idb_persist", move |snapshot: String| {
             b.save(&snapshot);
         });
+        // Structured (Phase 3) row-level path. The JS shim keeps the in-heap
+        // database authoritative and the opaque snapshot (above) as the lossless
+        // restore source; these primitives additionally mirror schema + records
+        // into the per-origin SQLite tables so `databases()` and future row-level
+        // queries survive a reload. No-op on blob-only backends (default trait impls).
+        let b = Arc::clone(&idb);
+        reg!("_lumen_idb_schema_op", move |json: String| -> bool {
+            match serde_json::from_str::<lumen_core::ext::IdbSchemaOp>(&json) {
+                Ok(op) => b.apply_schema(&op).is_ok(),
+                Err(_) => false,
+            }
+        });
+        let b = Arc::clone(&idb);
+        reg!("_lumen_idb_commit_txn", move |json: String| -> bool {
+            match serde_json::from_str::<Vec<lumen_core::ext::IdbRecordOp>>(&json) {
+                Ok(ops) => b.commit_txn(&ops).is_ok(),
+                Err(_) => false,
+            }
+        });
+        let b = Arc::clone(&idb);
+        reg!("_lumen_idb_exec_op", move |json: String| -> Option<String> {
+            serde_json::from_str::<lumen_core::ext::IdbRecordOp>(&json)
+                .ok()
+                .and_then(|op| b.exec_op(&op).ok())
+                .and_then(|result| serde_json::to_string(&result).ok())
+        });
+        let b = Arc::clone(&idb);
+        reg!("_lumen_idb_db_version", move |db_name: String| -> i32 {
+            b.db_version(&db_name) as i32
+        });
+        let b = Arc::clone(&idb);
+        reg!("_lumen_idb_databases", move || -> String {
+            let dbs = b.list_databases();
+            serde_json::to_string(
+                &dbs.iter()
+                    .map(|(name, version)| serde_json::json!({ "name": name, "version": version }))
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap_or_else(|_| "[]".to_string())
+        });
     }
 
     // ── performance.now() — high-resolution timestamp ────────────────────────
@@ -9839,9 +9879,57 @@ function _idb_deserialize(json) {
 function _idb_persist_if_dirty() {
     if (!_idb_dirty) return;
     _idb_dirty = false;
-    if (typeof _lumen_idb_persist !== 'function') return;
-    try { _lumen_idb_persist(_idb_serialize()); }
-    catch (e) { _lumen_console_error('IDB persist: ' + e); }
+    if (typeof _lumen_idb_persist === 'function') {
+        try { _lumen_idb_persist(_idb_serialize()); }
+        catch (e) { _lumen_console_error('IDB persist: ' + e); }
+    }
+    // Phase 3: mirror schema (db version / object stores / indexes) into the
+    // structured per-origin SQLite tables so db_version()/list_databases() are
+    // queryable independently of the opaque snapshot. Records stay in the snapshot
+    // blob, which remains the authoritative lossless restore path; populating
+    // idb_records row-by-row is a future incremental optimisation.
+    _idb_persist_schema();
+}
+
+// Encode a store keyPath (null | string | array) for IdbSchemaOp::CreateStore.key_path
+// (Option<String> on the Rust side): null stays null, arrays are JSON-stringified.
+function _idb_keypath_store(kp) {
+    if (kp === null || kp === undefined) return null;
+    if (Array.isArray(kp)) return JSON.stringify(kp);
+    return String(kp);
+}
+
+// Encode an index keyPath (string | array) for IdbSchemaOp::CreateIndex.key_path
+// (required String on the Rust side): arrays are JSON-stringified.
+function _idb_keypath_index(kp) {
+    if (Array.isArray(kp)) return JSON.stringify(kp);
+    return String(kp);
+}
+
+// Write-through the current in-heap schema (versions, stores, indexes) into the
+// structured backend. Idempotent (Rust side uses INSERT OR REPLACE). No-op when no
+// structured backend is installed.
+function _idb_persist_schema() {
+    if (typeof _lumen_idb_schema_op !== 'function') return;
+    try {
+        for (var dbName in _idb_databases) {
+            if (!_idb_databases.hasOwnProperty(dbName)) continue;
+            var db = _idb_databases[dbName];
+            _lumen_idb_schema_op(JSON.stringify({kind:'SetVersion',db_name:db.name,version:db.version ? Number(db.version) : 1}));
+            for (var storeName in db.stores) {
+                if (!db.stores.hasOwnProperty(storeName)) continue;
+                var store = db.stores[storeName];
+                _lumen_idb_schema_op(JSON.stringify({kind:'CreateStore',db_name:db.name,store_name:store.name,key_path:_idb_keypath_store(store.keyPath),auto_increment:!!store.autoIncrement}));
+                for (var indexName in store.indexes) {
+                    if (!store.indexes.hasOwnProperty(indexName)) continue;
+                    var index = store.indexes[indexName];
+                    _lumen_idb_schema_op(JSON.stringify({kind:'CreateIndex',db_name:db.name,store_name:store.name,index_name:index.name,key_path:_idb_keypath_index(index.keyPath),unique:!!index.unique,multi_entry:!!index.multiEntry}));
+                }
+            }
+        }
+    } catch (e) {
+        _lumen_console_error('IDB schema mirror: ' + e);
+    }
 }
 
 // --- key validation / comparison / extraction (Indexed DB §3.1) --------------
