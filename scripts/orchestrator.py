@@ -316,6 +316,106 @@ def has_tasks(developer: str) -> bool:
     return False
 
 
+# --- Worklog + STATUS-маркировка наработок Laguna (solo) ---
+#
+# В solo-режиме Laguna коммитит в своём worktree, но НЕ вливает в main. Чтобы
+# Claude-разработчик потом нашёл, проверил и влил эти наработки, оркестратор:
+#   1) метит строку-указатель в STATUS-PN.md как `<указатель> | <ветка> | LagunaM1`
+#      (третий параметр-маркёр = «сделано Laguna, ждёт проверки и влития»);
+#   2) пишет читаемый отчёт в scripts/laguna-worklog.md (worktree/ветка/commit/
+#      описание задачи).
+# После проверки + merge Claude удаляет строку из worklog и снимает указатель из
+# STATUS-PN.md (см. LAGUNA_REVIEW_NOTE в task_prompt).
+
+LAGUNA_WORKLOG = SCRIPTS_DIR / "laguna-worklog.md"
+LAGUNA_STATUS_MARKER = "LagunaM1"
+_WORKLOG_HEADER = (
+    "# Laguna solo worklog\n\n"
+    "Наработки Laguna M.1 в solo-режиме оркестратора, ожидающие проверки и "
+    "влития в main Claude-сессией разработчика. Одна строка таблицы = одна "
+    "задача. После проверки + merge строку удаляет Claude (и снимает маркёр "
+    "`LagunaM1` со строки-указателя в STATUS-PN.md).\n\n"
+    "| Время | Dev | Задача | Указатель | Ветка | Worktree | Commit |\n"
+    "|---|---|---|---|---|---|---|\n"
+)
+
+
+def pick_laguna_task(developer: str) -> tuple[int, str] | None:
+    """Выбрать первую НЕпомеченную строку-указатель из STATUS-PN.md (новый формат).
+
+    Возвращает (номер строки 1-based, текст указателя `<источник>:NN`) или
+    None, если непомеченных указателей нет. Уже помеченные строки
+    (`<указатель> | <ветка> | LagunaM1`) пропускаются — они сделаны Laguna и
+    ждут влития, повторно их брать нельзя.
+    """
+    status_file = PROJECT_DIR / f"STATUS-{developer}.md"
+    if not status_file.exists():
+        return None
+    for idx, line in enumerate(status_file.read_text(encoding="utf-8").splitlines(), 1):
+        s = line.strip()
+        if re.match(r"^\S+:\d+$", s):  # голый указатель, ещё не помечен LagunaM1
+            return idx, s
+    return None
+
+
+def resolve_pointer_desc(pointer: str) -> str:
+    """Прочитать строку `<источник>:NN` и вернуть текст задачи для лога.
+
+    `<источник>` — путь к файлу относительно корня проекта (ROADMAP.md,
+    BUGS.md, CSS-SPECS.md или код-якорь file.rs), NN — 1-based номер строки.
+    Возвращает обрезанный до 200 симв. текст этой строки; при сбое — сам
+    указатель.
+    """
+    m = re.match(r"^(\S+):(\d+)$", pointer)
+    if not m:
+        return pointer
+    src = PROJECT_DIR / m.group(1)
+    ln = int(m.group(2))
+    try:
+        lines = src.read_text(encoding="utf-8").splitlines()
+        if 1 <= ln <= len(lines):
+            return lines[ln - 1].strip()[:200] or pointer
+    except OSError:
+        pass
+    return pointer
+
+
+def mark_laguna_task(developer: str, pointer: str, branch: str) -> None:
+    """Пометить строку-указатель в STATUS-PN.md как сделанную Laguna.
+
+    Переписывает первую строку, чей текст равен `pointer`, в формат
+    `<указатель> | <ветка> | LagunaM1`. Это сигнал Claude-разработчику:
+    наработку надо проверить и влить в main перед своей задачей. Если строка
+    не найдена (формат изменился) — STATUS не трогается.
+    """
+    status_file = PROJECT_DIR / f"STATUS-{developer}.md"
+    if not status_file.exists():
+        return
+    lines = status_file.read_text(encoding="utf-8").splitlines()
+    for i, line in enumerate(lines):
+        if line.strip() == pointer:
+            lines[i] = f"{pointer} | {branch} | {LAGUNA_STATUS_MARKER}"
+            break
+    status_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def append_worklog(
+    developer: str, desc: str, pointer: str, branch: str, worktree: str, commit: str
+) -> None:
+    """Добавить строку о завершённой Laguna-задаче в scripts/laguna-worklog.md.
+
+    Создаёт файл с заголовком при первом вызове. `|` в описании экранируется,
+    чтобы не разрушить markdown-таблицу.
+    """
+    if not LAGUNA_WORKLOG.exists():
+        LAGUNA_WORKLOG.write_text(_WORKLOG_HEADER, encoding="utf-8")
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    safe_desc = desc.replace("|", "\\|")
+    row = f"| {ts} | {developer} | {safe_desc} | {pointer} | {branch} | {worktree} | {commit} |\n"
+    with LAGUNA_WORKLOG.open("a", encoding="utf-8") as f:
+        f.write(row)
+
+
 def stop_file_path(developer: str) -> Path:
     return SCRIPTS_DIR / f".stop-{developer}"
 
@@ -1146,16 +1246,25 @@ def clear_laguna_session(developer: str) -> None:
         path.unlink()
 
 
-def _laguna_initial_messages(developer: str) -> list[dict]:
-    """Стартовый диалог для свежей solo-сессии."""
+def _laguna_initial_messages(developer: str, pointer: str, desc: str) -> list[dict]:
+    """Стартовый диалог для свежей solo-сессии.
+
+    Задачу выбирает оркестратор (`pick_laguna_task`) и передаёт явным
+    указателем `pointer` (`<источник>:NN`) — Laguna не выбирает сама, чтобы
+    оркестратор точно знал, какую строку STATUS пометить `LagunaM1` на успехе.
+    """
     return [
         {"role": "system", "content": laguna_solo_system_prompt(developer)},
         {
             "role": "user",
             "content": (
-                f"Возьми текущую задачу разработчика {developer}: прочитай STATUS-{developer}.md, "
-                "определи первую задачу-указатель, реализуй её end-to-end. "
-                "Когда ворота (check + clippy -D warnings + test) зелёные — DONE."
+                f"Твоя задача — указатель `{pointer}` из STATUS-{developer}.md "
+                "(формат `<файл>:<номер_строки>`). Сначала READ этот источник, "
+                f"найди на строке {pointer.split(':')[-1]} формулировку задачи и "
+                "реализуй её end-to-end. "
+                f"Краткое описание задачи: {desc}\n"
+                "Когда ворота (check + clippy -D warnings + test) зелёные — "
+                "DONE с осмысленным текстом коммита."
             ),
         },
     ]
@@ -1164,11 +1273,19 @@ def _laguna_initial_messages(developer: str) -> list[dict]:
 def run_laguna_solo(developer: str, task_number: int, think: bool = False) -> bool:
     """Solo-режим: оркестратор ведёт агент-петлю поверх Laguna без Claude.
 
-    Работает в изолированном worktree (своя ветка p<N>-laguna-*). Перед
-    коммитом — жёсткие ворота: cargo check + clippy -D warnings + test по
-    затронутым crates. Возвращает True при успешном завершении (ворота
-    зелёные + коммит). Worktree/ветка ОСТАЮТСЯ для ревью и финиша по правилам
-    (merge/доки/STATUS — вручную или отдельным проходом Claude).
+    Работает в изолированном worktree (своя ветка p<N>-laguna-*). Задачу
+    выбирает САМ оркестратор — первый непомеченный указатель из STATUS-PN.md
+    (`pick_laguna_task`). Перед коммитом — жёсткие ворота: cargo check +
+    clippy -D warnings + test по затронутым crates. Возвращает True при
+    успешном завершении (ворота зелёные + коммит).
+
+    На успехе worktree/ветка ОСТАЮТСЯ для ревью, и оркестратор оставляет два
+    следа для Claude-разработчика, который позже проверит и вольёт работу:
+      - помечает строку-указатель в STATUS-PN.md как
+        `<указатель> | <ветка> | LagunaM1` (`mark_laguna_task`);
+      - дописывает отчёт (worktree/ветка/commit/описание) в
+        scripts/laguna-worklog.md (`append_worklog`).
+    Само влитие в main/доксинк/чистку делает Claude (см. laguna_review_note).
 
     Восстановление после краша. API Laguna stateless (серверного resume нет),
     поэтому состояние диалога персистится локально в `.laguna-session-PN.json`
@@ -1190,6 +1307,8 @@ def run_laguna_solo(developer: str, task_number: int, think: bool = False) -> bo
     written: set[str] = set()
     messages: list[dict] = []
     start_iter = 1
+    pointer: str | None = None  # строка-указатель STATUS, над которой работаем
+    pointer_desc: str = ""
 
     saved = load_laguna_session(developer)
     if saved:
@@ -1200,6 +1319,8 @@ def run_laguna_solo(developer: str, task_number: int, think: bool = False) -> bo
             written = set(saved.get("written", []))
             messages = saved["messages"]
             task_number = saved.get("task_number", task_number)
+            pointer = saved.get("pointer")
+            pointer_desc = saved.get("pointer_desc", "")
             start_iter = int(saved.get("iter", 0)) + 1
             if start_iter > LAGUNA_MAX_ITERS:
                 # Прошлая сессия упёрлась в лимит итераций — резюмировать нечего.
@@ -1215,12 +1336,22 @@ def run_laguna_solo(developer: str, task_number: int, think: bool = False) -> bo
             clear_laguna_session(developer)
 
     if work_dir is None:
+        # Оркестратор сам выбирает задачу — первый непомеченный указатель из
+        # STATUS-PN.md. Это нужно, чтобы на успехе пометить именно её LagunaM1.
+        picked = pick_laguna_task(developer)
+        if picked is None:
+            log(developer, f"В STATUS-{developer}.md нет непомеченных задач-указателей — solo нечего делать.")
+            return False
+        _, pointer = picked
+        pointer_desc = resolve_pointer_desc(pointer)
+        log(developer, f"  Задача (указатель): {pointer} — {pointer_desc}")
+
         work_dir, branch, err = _create_solo_worktree(developer, task_number)
         if work_dir is None:
             log(developer, f"Не удалось создать worktree для Laguna: {err}")
             return False
         log(developer, f"  Worktree: {work_dir}  (ветка {branch})")
-        messages = _laguna_initial_messages(developer)
+        messages = _laguna_initial_messages(developer, pointer, pointer_desc)
         start_iter = 1
 
     def _persist(cur_iter: int) -> None:
@@ -1230,6 +1361,8 @@ def run_laguna_solo(developer: str, task_number: int, think: bool = False) -> bo
             "iter": cur_iter,
             "worktree": str(work_dir),
             "branch": branch,
+            "pointer": pointer,
+            "pointer_desc": pointer_desc,
             "written": sorted(written),
             "messages": messages,
         })
@@ -1279,9 +1412,21 @@ def run_laguna_solo(developer: str, task_number: int, think: bool = False) -> bo
             ok, gate_out = _run_solo_gates(developer, work_dir, written)
             if ok:
                 _laguna_commit(developer, commit_msg, written, work_dir)
+                # Хеш только что созданного коммита — для отчёта в worklog.
+                rc_h, head = _run_shell("git rev-parse --short HEAD", work_dir, timeout=30)
+                commit_hash = head.strip().splitlines()[-1] if rc_h == 0 and head.strip() else "?"
+                # Пометить строку STATUS как сделанную Laguna + записать отчёт.
+                if pointer:
+                    mark_laguna_task(developer, pointer, branch or "?")
+                    append_worklog(
+                        developer, pointer_desc, pointer, branch or "?",
+                        str(work_dir), commit_hash,
+                    )
+                    log(developer, f"  STATUS-{developer}.md: указатель помечен `{LAGUNA_STATUS_MARKER}`.")
+                    log(developer, f"  Отчёт дописан в {LAGUNA_WORKLOG}")
                 clear_laguna_session(developer)
                 log(developer, "Laguna solo: ворота пройдены, закоммичено.")
-                log(developer, f"  Готово к ревью/финишу: ветка {branch} @ {work_dir}")
+                log(developer, f"  Готово к ревью/влитию Claude: ветка {branch} @ {work_dir} (commit {commit_hash})")
                 return True
             feedback.append(
                 "DONE ОТКЛОНЁН — ворота не прошли:\n" + gate_out[:14000]
@@ -1305,13 +1450,39 @@ def run_laguna_solo(developer: str, task_number: int, think: bool = False) -> bo
     return False
 
 
+def laguna_review_note(developer: str) -> str:
+    """Пред-шаг для Claude-разработчика: проверить и влить наработки Laguna.
+
+    В solo-режиме оркестратор метит сделанные Laguna строки STATUS маркёром
+    `LagunaM1` и пишет отчёт в scripts/laguna-worklog.md, но НЕ вливает их в
+    main. Перед своей задачей разработчик обязан разобраться с этими
+    наработками: проверить ворота и влить (или отклонить), затем почистить
+    worklog и STATUS.
+    """
+    return (
+        f" ПЕРЕД своей задачей проверь наработки Laguna. Открой STATUS-{developer}.md и "
+        "найди строки с третьим параметром-маркёром `LagunaM1` (формат "
+        "`<указатель> | <ветка> | LagunaM1`). Для КАЖДОЙ такой строки: "
+        "(1) посмотри scripts/laguna-worklog.md — там worktree, ветка, commit и описание; "
+        "(2) прогони ворота на её ветке (cargo check + clippy -D warnings + test по затронутым crate); "
+        "(3) при ЗЕЛЁНЫХ воротах влей ветку в main (git merge --no-ff), удали ветку и worktree; "
+        "(4) после влития удали строку этой задачи из scripts/laguna-worklog.md и удали её "
+        "строку-указатель из STATUS-{0}.md; (5) git push origin main. "
+        "Если ворота КРАСНЫЕ — НЕ вливай: оставь строку и worklog как есть, сообщи об этом. "
+        "Только разобравшись со всеми наработками Laguna, приступай к своей задаче. "
+    ).format(developer)
+
+
 def task_prompt(developer: str, laguna_mode: str | None = None) -> str:
     """Стандартный промпт для старта задачи с чистым диалогом."""
     note = LAGUNA_ASSIST_NOTE if laguna_mode == "assist" else ""
+    # Claude-режимы (None/assist) сначала проверяют и вливают наработки Laguna.
+    # В solo Claude не участвует — пред-шаг не нужен.
+    review = laguna_review_note(developer) if laguna_mode != "solo" else ""
     if developer == "P3":
         return (
-            "Ты разработчик P3 (только баг-фиксы). "
-            "Прочитай STATUS-P3.md. "
+            "Ты разработчик P3 (только баг-фиксы)." + review +
+            " Прочитай STATUS-P3.md. "
             "Если есть 'In progress' — продолжи ЭТОТ ОДИН баг. "
             "Если нет — возьми ПЕРВЫЙ баг из 'Next' (только один, не больше). "
             "Когда баг исправлен — вызови /lumen-task-finish. "
@@ -1319,8 +1490,8 @@ def task_prompt(developer: str, laguna_mode: str | None = None) -> str:
             "Не бери следующий баг. Один баг = одна сессия." + note
         )
     return (
-        f"Ты разработчик {developer}. "
-        f"Прочитай STATUS-{developer}.md. "
+        f"Ты разработчик {developer}." + review +
+        f" Прочитай STATUS-{developer}.md. "
         f"Если есть 'In progress' — продолжи эту задачу. "
         f"Если нет — возьми первую задачу из 'Next'. "
         f"Когда задача завершена — вызови /lumen-task-finish." + note

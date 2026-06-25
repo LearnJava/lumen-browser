@@ -31,6 +31,8 @@ last_session.db
 /scripts/.jobstatus-*
 /scripts/.session-*.json
 /scripts/.laguna-session-*.json
+# Laguna solo worklog: отчёт о наработках, ожидающих влития; чистится Claude после merge.
+/scripts/laguna-worklog.md
 /.jobstatus-*
 __pycache__/
 
