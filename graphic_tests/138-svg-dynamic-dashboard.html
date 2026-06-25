@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<!-- TEST-138 — dynamic SVG (createElementNS), no text: kitchen-sink "dashboard"
+     combining nested <g>, <defs>/<use>, fill-opacity, <path>, <polygon>, <polyline>
+     stroke, <circle>/<ellipse>. The most complex composition; all solid/deterministic
+     so it still holds ≤0.5% against Edge. Broad regression for BUG-243 wiring. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; }
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f { background: #0d1117; width: 1022px; height: 718px; margin: 1px; padding: 0; overflow: hidden; }
+  #g { display: block; width: 1022px; height: 718px; }
+</style>
+</head>
+<body>
+  <div class="__f"><svg id="g"></svg></div>
+<script>
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.getElementById('g');
+  function s(tag, a) {
+    const e = document.createElementNS(NS, tag);
+    for (const k in (a || {})) e.setAttribute(k, a[k]);
+    return e;
+  }
+  svg.setAttribute('viewBox', '0 0 1022 718');
+  svg.appendChild(s('rect', { x: 0, y: 0, width: 1022, height: 718, fill: '#0d1117' }));
+
+  const COLS = ['#1f6feb', '#238636', '#8957e5', '#9e6a03', '#1f9e9e', '#a83254', '#f0883e', '#58a6ff'];
+  function panel(x, y, w, h) {
+    const g = s('g', { transform: `translate(${x},${y})` });
+    g.appendChild(s('rect', { x: 0, y: 0, width: w, height: h, rx: 10, fill: '#161b22' }));
+    g.appendChild(s('rect', { x: 0, y: 0, width: w, height: 8, rx: 4, fill: '#1f6feb' }));
+    svg.appendChild(g);
+    return g;
+  }
+
+  // defs: a "dot" symbol reused for legends/KPIs.
+  const defs = s('defs');
+  const dot = s('symbol', { id: 'kpi', viewBox: '0 0 40 40' });
+  dot.appendChild(s('circle', { cx: 20, cy: 20, r: 18, fill: '#238636' }));
+  dot.appendChild(s('circle', { cx: 20, cy: 20, r: 9, fill: '#0d1117' }));
+  defs.appendChild(dot);
+  svg.appendChild(defs);
+
+  // Header bar.
+  const head = s('g');
+  head.append(
+    s('rect', { x: 16, y: 14, width: 990, height: 52, rx: 10, fill: '#161b22' }),
+    s('rect', { x: 16, y: 14, width: 6, height: 52, fill: '#58a6ff' })
+  );
+  for (let i = 0; i < 6; i++) head.appendChild(s('circle', { cx: 60 + i * 40, cy: 40, r: 11, fill: COLS[i] }));
+  svg.appendChild(head);
+
+  // Panel 1: bar chart.
+  const p1 = panel(20, 86, 470, 290);
+  const bars = [120, 200, 90, 240, 160, 210, 70, 180];
+  for (let i = 0; i < bars.length; i++) {
+    p1.appendChild(s('rect', { x: 30 + i * 52, y: 270 - bars[i], width: 38, height: bars[i], fill: COLS[i % COLS.length] }));
+  }
+
+  // Panel 2: fan "pie" from polygon wedges (no arc command).
+  const p2 = panel(510, 86, 496, 290);
+  const cx = 150, cy = 150, R = 110;
+  const seg = [0, 60, 130, 180, 240, 300, 360];
+  for (let i = 0; i < seg.length - 1; i++) {
+    let d = `M${cx},${cy} `;
+    for (let a = seg[i]; a <= seg[i + 1]; a += 6) {
+      const r = a * Math.PI / 180;
+      d += `L${(cx + R * Math.cos(r)).toFixed(2)},${(cy + R * Math.sin(r)).toFixed(2)} `;
+    }
+    p2.appendChild(s('path', { d: d + 'Z', fill: COLS[i % COLS.length] }));
+  }
+  // KPI dots column in panel 2.
+  for (let i = 0; i < 4; i++) p2.appendChild(s('use', { href: '#kpi', x: 330, y: 30 + i * 60, width: 44, height: 44 }));
+
+  // Panel 3: area + line chart.
+  const p3 = panel(20, 392, 600, 306);
+  const series = [40, 90, 60, 150, 110, 200, 160, 230, 190, 250, 210, 270];
+  const stepX = 46, baseY = 270;
+  let line = '', area = `M30,${baseY} `;
+  for (let i = 0; i < series.length; i++) {
+    const x = 30 + i * stepX, y = baseY - series[i];
+    line += `${x},${y} `;
+    area += `L${x},${y} `;
+  }
+  area += `L${30 + (series.length - 1) * stepX},${baseY} Z`;
+  p3.appendChild(s('path', { d: area, fill: '#1f6feb', 'fill-opacity': 0.35 }));
+  p3.appendChild(s('polyline', { points: line.trim(), fill: 'none', stroke: '#58a6ff', 'stroke-width': 5, 'stroke-linejoin': 'round' }));
+  for (let i = 0; i < series.length; i++) p3.appendChild(s('circle', { cx: 30 + i * stepX, cy: baseY - series[i], r: 6, fill: '#7ee787' }));
+
+  // Panel 4: gauge of stacked translucent ellipses + a rotated marker.
+  const p4 = panel(640, 392, 366, 306);
+  for (let i = 0; i < 6; i++) p4.appendChild(s('ellipse', { cx: 180, cy: 160, rx: 150 - i * 22, ry: 110 - i * 16, fill: COLS[(i + 2) % COLS.length], 'fill-opacity': 0.55 }));
+  p4.appendChild(s('rect', { x: 176, y: 40, width: 8, height: 120, fill: '#0d1117', transform: 'rotate(35 180 160)' }));
+</script>
+</body>
+</html>

@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<!--
+  TEST-129 — dynamic SVG built at runtime via document.createElementNS (BUG-243).
+
+  Regression guard for BUG-243: a page that constructs its entire SVG subtree on the
+  client (createElementNS + setAttribute + appendChild/append) must render identically
+  to a browser that natively supports the SVG DOM. This mirrors real data-viz pages
+  (the project's own docs/roadmap-*.html) but uses ONLY solid graphics — no <text>/
+  <tspan> — so the diff is not polluted by font-parity (rule 3) and can hold ≤0.5%.
+
+  NOTE: requires the JS-executing capture path (default gdigrab run), NOT --ipc/CPU
+  (the deterministic CPU snapshot does not run scripts → SVG would be empty).
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; }
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  /* 1px magenta frame shows through .__f's margins on all four sides */
+  .__f { background: #0d1117; width: 1022px; height: 718px; margin: 1px; padding: 0; overflow: hidden; }
+  #g { display: block; width: 1022px; height: 718px; }
+</style>
+</head>
+<body>
+  <div class="__f"><svg id="g"></svg></div>
+<script>
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.getElementById('g');
+
+  // BUG-243 helper: every node is created via createElementNS so it becomes a NATIVE
+  // arena node (with __nid__) that layout/paint can see. setAttribute drives geometry.
+  function s(tag, a) {
+    const e = document.createElementNS(NS, tag);
+    for (const k in (a || {})) e.setAttribute(k, a[k]);
+    return e;
+  }
+
+  // Exercise firstChild + removeChild (used by re-render clear loops).
+  function clr() { while (svg.firstChild) svg.removeChild(svg.firstChild); }
+
+  function render() {
+    clr();
+    svg.setAttribute('viewBox', '0 0 1022 718');
+
+    // Backdrop panel (solid, axis-aligned → crisp edges).
+    svg.appendChild(s('rect', { x: 0, y: 0, width: 1022, height: 718, fill: '#0d1117' }));
+
+    // Header bar built with append() (variadic) — exercises ParentNode.append.
+    const head = s('g');
+    head.append(
+      s('rect', { x: 16, y: 16, width: 990, height: 56, fill: '#161b22' }),
+      s('rect', { x: 16, y: 16, width: 6,   height: 56, fill: '#58a6ff' })
+    );
+    svg.appendChild(head);
+
+    // Legend row: solid status dots (circles) + solid square swatches.
+    const cols = ['#3fb950', '#58a6ff', '#f85149', '#d29922', '#a371f7', '#f0883e'];
+    for (let i = 0; i < cols.length; i++) {
+      svg.appendChild(s('circle', { cx: 60 + i * 90, cy: 110, r: 12, fill: cols[i] }));
+      svg.appendChild(s('rect',   { x: 80 + i * 90, y: 98, width: 24, height: 24, fill: cols[i] }));
+    }
+
+    // A "tree" of solid square nodes connected by thin solid rectangles (connectors
+    // as rects, not stroked lines → no stroke AA). Built inside a translated <g> to
+    // exercise group transform via createElementNS.
+    const tree = s('g', { transform: 'translate(40,160)' });
+    const ROW = 46, R = 14, LEFT = 24, INDENT = 60;
+    const rows = [0, 1, 1, 2, 2, 1, 2, 3, 0, 1, 2];   // indent depth per row
+    let prevX = [];
+    for (let i = 0; i < rows.length; i++) {
+      const depth = rows[i];
+      const x = LEFT + depth * INDENT;
+      const y = i * ROW;
+      // vertical + horizontal connector (solid thin rects) to the parent column
+      if (depth > 0) {
+        const px = LEFT + (depth - 1) * INDENT;
+        tree.appendChild(s('rect', { x: px + R / 2 - 1, y: y - ROW + R, width: 2, height: ROW, fill: '#30363d' }));
+        tree.appendChild(s('rect', { x: px + R / 2,     y: y + R - 1,   width: x - px - R / 2, height: 2, fill: '#30363d' }));
+      }
+      // node square
+      const fill = cols[(depth + i) % cols.length];
+      tree.appendChild(s('rect', { x: x, y: y, width: 2 * R, height: 2 * R, fill: fill }));
+      // a filled diamond marker (path) next to deep nodes — exercises <path> fill
+      if (depth >= 2) {
+        const dx = x + 2 * R + 18, dy = y + R;
+        tree.appendChild(s('path', {
+          d: `M${dx},${dy - R} L${dx + R},${dy} L${dx},${dy + R} L${dx - R},${dy} Z`,
+          fill: '#f0883e'
+        }));
+      }
+    }
+    svg.appendChild(tree);
+
+    // Right-side solid blocks grid — large flat fills dominate the frame to keep AA
+    // contribution low.
+    const grid = s('g', { transform: 'translate(620,170)' });
+    const gcols = ['#1f6feb', '#238636', '#8957e5', '#9e6a03'];
+    for (let r = 0; r < 5; r++) {
+      for (let c = 0; c < 4; c++) {
+        grid.appendChild(s('rect', {
+          x: c * 90, y: r * 90, width: 78, height: 78, fill: gcols[(r + c) % gcols.length]
+        }));
+      }
+    }
+    svg.appendChild(grid);
+  }
+
+  render();
+</script>
+</body>
+</html>

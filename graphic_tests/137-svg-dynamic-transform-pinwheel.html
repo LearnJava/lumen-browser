@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<!-- TEST-137 — dynamic SVG (createElementNS), no text: rotate(angle cx cy) +
+     scale + matrix() presentation transforms on solid shapes — pinwheels and a
+     mirrored/sheared motif. Exercises every parse_svg_transform branch end-to-end. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; }
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f { background: #0d1117; width: 1022px; height: 718px; margin: 1px; padding: 0; overflow: hidden; }
+  #g { display: block; width: 1022px; height: 718px; }
+</style>
+</head>
+<body>
+  <div class="__f"><svg id="g"></svg></div>
+<script>
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.getElementById('g');
+  function s(tag, a) {
+    const e = document.createElementNS(NS, tag);
+    for (const k in (a || {})) e.setAttribute(k, a[k]);
+    return e;
+  }
+  svg.setAttribute('viewBox', '0 0 1022 718');
+  svg.appendChild(s('rect', { x: 0, y: 0, width: 1022, height: 718, fill: '#0d1117' }));
+
+  const COLS = ['#1f6feb', '#238636', '#8957e5', '#9e6a03', '#1f9e9e', '#a83254', '#f0883e', '#58a6ff'];
+
+  // Pinwheel: a single blade triangle repeated by rotate(angle cx cy).
+  function pinwheel(cx, cy, blades, len, w) {
+    for (let i = 0; i < blades; i++) {
+      const ang = (360 / blades) * i;
+      const blade = s('path', {
+        d: `M${cx},${cy} L${cx + len},${cy - w} L${cx + len},${cy + w} Z`,
+        fill: COLS[i % COLS.length],
+        transform: `rotate(${ang.toFixed(2)} ${cx} ${cy})`
+      });
+      svg.appendChild(blade);
+    }
+    svg.appendChild(s('circle', { cx, cy, r: 16, fill: '#161b22' }));
+  }
+  pinwheel(280, 250, 10, 180, 34);
+  pinwheel(760, 230, 8, 150, 40);
+
+  // A ring of rectangles each rotated to face the centre (rotate about own anchor).
+  const CX = 280, CY = 560, R = 120;
+  for (let i = 0; i < 12; i++) {
+    const ang = i * 30;
+    svg.appendChild(s('rect', {
+      x: CX - 12, y: CY - R - 36, width: 24, height: 72, rx: 6,
+      fill: COLS[i % COLS.length],
+      transform: `rotate(${ang} ${CX} ${CY})`
+    }));
+  }
+  svg.appendChild(s('circle', { cx: CX, cy: CY, r: 28, fill: '#30363d' }));
+
+  // matrix() flip + scale: two mirrored solid chevrons via matrix(a b c d e f).
+  // base chevron path around origin; matrix mirrors horizontally and scales.
+  const chev = 'M0,-50 L40,0 L0,50 L-12,50 L24,0 L-12,-50 Z';
+  svg.appendChild(s('path', { d: chev, fill: '#7ee787', transform: 'matrix(1.4 0 0 1.4 720 540)' }));
+  svg.appendChild(s('path', { d: chev, fill: '#d29922', transform: 'matrix(-1.4 0 0 1.4 880 540)' }));
+  // skewX sheared bar grid for the last transform branch.
+  for (let i = 0; i < 5; i++) {
+    svg.appendChild(s('rect', { x: 640 + i * 30, y: 600, width: 18, height: 80, fill: '#1f6feb', transform: 'skewX(-20)' }));
+  }
+</script>
+</body>
+</html>

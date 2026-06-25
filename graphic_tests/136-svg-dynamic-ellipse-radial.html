@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<!-- TEST-136 — dynamic SVG (createElementNS), no text: <circle>/<ellipse> geometry —
+     concentric ellipses with varying rx/ry + a radial cluster of circles. Curved
+     edges align with Edge after magenta-crop, holding ≤0.5%. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; }
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f { background: #0d1117; width: 1022px; height: 718px; margin: 1px; padding: 0; overflow: hidden; }
+  #g { display: block; width: 1022px; height: 718px; }
+</style>
+</head>
+<body>
+  <div class="__f"><svg id="g"></svg></div>
+<script>
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.getElementById('g');
+  function s(tag, a) {
+    const e = document.createElementNS(NS, tag);
+    for (const k in (a || {})) e.setAttribute(k, a[k]);
+    return e;
+  }
+  svg.setAttribute('viewBox', '0 0 1022 718');
+  svg.appendChild(s('rect', { x: 0, y: 0, width: 1022, height: 718, fill: '#0d1117' }));
+
+  const COLS = ['#1f6feb', '#0d1117', '#238636', '#0d1117', '#8957e5', '#0d1117', '#9e6a03'];
+
+  // Concentric ellipses (alternating colour rings) — wide aspect.
+  for (let i = 0; i < 7; i++) {
+    svg.appendChild(s('ellipse', { cx: 300, cy: 220, rx: 220 - i * 30, ry: 130 - i * 18, fill: COLS[i] }));
+  }
+
+  // Concentric circles (bullseye).
+  const ring = ['#a83254', '#0d1117', '#f0883e', '#0d1117', '#7ee787'];
+  for (let i = 0; i < 5; i++) {
+    svg.appendChild(s('circle', { cx: 770, cy: 200, r: 150 - i * 30, fill: ring[i] }));
+  }
+
+  // Radial cluster: circles of varying radius placed on a ring (deterministic angles).
+  const CX = 320, CY = 540, R = 130;
+  for (let i = 0; i < 14; i++) {
+    const ang = (i / 14) * 2 * Math.PI;
+    const r = 14 + (i % 5) * 7;
+    svg.appendChild(s('circle', {
+      cx: (CX + R * Math.cos(ang)).toFixed(2),
+      cy: (CY + R * Math.sin(ang)).toFixed(2),
+      r, fill: ['#58a6ff', '#7ee787', '#d29922', '#a371f7'][i % 4]
+    }));
+  }
+  svg.appendChild(s('circle', { cx: CX, cy: CY, r: 40, fill: '#161b22' }));
+
+  // A row of ellipses morphing aspect ratio (rx fixed, ry growing).
+  for (let i = 0; i < 8; i++) {
+    svg.appendChild(s('ellipse', { cx: 600 + i * 50, cy: 560, rx: 22, ry: 12 + i * 9, fill: '#1f9e9e' }));
+  }
+</script>
+</body>
+</html>
