@@ -53,7 +53,19 @@ reconnect sleep is) — a full event-loop push delivery (Phase B/C step 2) remai
 Minor pre-existing follow-up: `SseClosed` can be emitted twice to the sink (once
 in `fill_queue` on EOF, once in `EventSource::close`); harmless on the JS path
 (`NoopEventSink`) but worth an "already closed" guard when the shell wires a real
-sink.
+sink. **(Resolved — see Phase C step 2.)**
+
+**Phase C step 2 DONE (2026-06-25)** — terminal `Event::SseClosed` now reaches the
+sink at most once (closes the follow-up above). A transient server EOF in
+`next_event` (`sse.rs`) no longer emits `SseClosed` before reconnecting — a dropped
+connection is transient per HTML SSE §9.2.1 (`EventSource` reconnects; not a
+terminal close). `EventSource::close()` is idempotent via a dedicated `closed: bool`
+field — **not** the cancel handle, which is signalled *before* `close()` runs on the
+JS path (`JsSseSessionImpl::close()` → `cancel.signal()`, bg thread then calls
+`session.close()`), so it cannot guard the emit. Regression test
+`sse_close_emits_closed_once` (real localhost listener, `CollectingSink`): a double
+`close()` yields exactly one `SseClosed`. `lumen-network` 805 lib tests green, clippy
+clean. Docs: `subsystems/network.md` Done bullet added.
 
 **Phase B step 2 DONE (2026-06-25)** — WebSocket sub-protocol negotiation +
 `CloseEvent.wasClean`. RFC 6455 §4.1 `Sec-WebSocket-Protocol` is negotiated
