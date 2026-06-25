@@ -5,6 +5,13 @@
 **Size:** XL
 **Crates:** `lumen-js`, `lumen-shell`, `lumen-engine` (paint/layout), `lumen-css-parser` (P4 handoff)
 
+## Progress
+
+- **Phase 1 — Per-element snapshot infrastructure (paint + layout) — DONE 2026-06-25** (branch `p1-laguna-t1-120955`):
+  - paint: `RenderBackend::register_snapshot(id, &Image)` + `clear_snapshots()` added to the trait (default no-op). femtovg backend (default) uploads straight-alpha RGBA into `self.snapshots` (replacing-id frees the old texture); wgpu backend forwards to `Renderer::upload_layer_snapshot`. `DrawLayerSnapshot` now has a public insertion path on the default backend. 1 trait-default test.
+  - layout: `collect_view_transition_groups(root) -> Vec<(NodeId, Box<str>, Rect)>` (name + border-box rect) at `crates/engine/layout/src/lib.rs`. 3 unit tests. `// CSS:` handoff comment at the fn; P4 pointer `crates/engine/css-parser/src/parser.rs:345` added to `STATUS-P4.md`.
+- **Remaining:** Phase 2 (named capture + pairing in shell), Phase 3 (per-element morph), Phase 4 (author timing via P4 pseudo tree), Phase 5 (skipTransition/Cancel robustness). The shell still uses the single whole-frame root cross-fade.
+
 ## Goal
 
 Root cross-fade already works end-to-end (F2-4, ✅ 2026-06-22): `document.startViewTransition(cb)` returns a correct `ViewTransition` object, the shell snapshots the old display list on `Begin` and cross-fades it over the relaid-out page on `End`. This task is the **optional remainder of full Level 1**, NOT validated by TEST-61: (1) **named transition groups** keyed by `view-transition-name`, (2) **per-element morph** — animating each named element from its old box geometry/snapshot to its new one, and (3) wiring the **`::view-transition*` pseudo-element tree** so author rules (`animation-duration`, `animation-timing-function`, custom keyframes) drive the per-group animation. This is a large feature spanning JS, layout snapshotting, paint, and CSS selector matching (the pseudo-element tree is a P4 handoff). Ship it incrementally — each phase below is independently shippable and visually checkable.
@@ -103,11 +110,11 @@ Phase 5 — Robustness [S]
 
 ## Definition of done
 
-- [ ] femtovg backend exposes a public snapshot-registration API; `DrawLayerSnapshot` renders shell-registered images (default backend works, not just wgpu).
+- [x] femtovg backend exposes a public snapshot-registration API; `DrawLayerSnapshot` renders shell-registered images (default backend works, not just wgpu). *(Phase 1, 2026-06-25)*
 - [ ] Shell captures **per-element** old + new snapshots for every `view-transition-name`, paired by name (matched / only-old / only-new handled).
 - [ ] Matched named elements **morph** (rect lerp old→new, cross-faded snapshots); un-named remainder still uses the root whole-frame cross-fade.
 - [ ] Group easing uses real timing-function evaluation (shared with `animation_scheduler`), not a linear/hardcoded curve.
-- [ ] `// CSS:` handoff comment placed at the shell call site and a `crates/...:line` pointer added in `STATUS-P4.md` for the `::view-transition*` selectors.
+- [x] `// CSS:` handoff comment placed (at the layout collector, the morph engine's input — shell call site lands in Phase 2/3) and a `crates/...:line` pointer added in `STATUS-P4.md` for the `::view-transition*` selectors. *(Phase 1, 2026-06-25)*
 - [ ] (If P4 selectors land in time) per-group `animation-duration` / `animation-timing-function` from the pseudo cascade override the 300 ms default.
 - [ ] Layout + paint unit tests added/extended; clippy clean and tests pass for `lumen-shell`, `lumen-paint`, `lumen-layout`.
 - [ ] Manual `--ipc` visual check confirms a named element morphs across the callback.

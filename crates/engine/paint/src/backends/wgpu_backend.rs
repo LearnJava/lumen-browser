@@ -123,6 +123,19 @@ impl RenderBackend for WgpuBackend {
         self.renderer.clear_images();
     }
 
+    fn register_snapshot(&mut self, id: u64, image: &Image) -> Result<(), String> {
+        // The wgpu snapshot uploader takes straight `Rgba8` bytes; convert any
+        // other source format first (mirrors `register_image`).
+        let rgba = image.to_rgba8();
+        self.renderer
+            .upload_layer_snapshot(id, &rgba, image.width, image.height)
+            .map_err(|e| e.to_string())
+    }
+
+    fn clear_snapshots(&mut self) {
+        self.renderer.clear_layer_snapshots();
+    }
+
     fn set_font_provider(&mut self, provider: Option<Arc<dyn FontProvider>>) {
         self.renderer.set_font_provider(provider);
     }

@@ -3118,6 +3118,32 @@ impl RenderBackend for FemtovgBackend {
         self.raw_images.clear();
     }
 
+    fn register_snapshot(&mut self, id: u64, image: &Image) -> Result<(), String> {
+        use femtovg::{ImageFlags, ImageSource};
+        use imgref::ImgRef;
+
+        let rgba = image_to_rgba8_vec(image);
+        let img = ImgRef::new(&rgba, image.width as usize, image.height as usize);
+        // Straight-alpha source (CPU-uploaded subtree render), matching
+        // `register_image`; `DrawLayerSnapshot` applies the per-frame alpha.
+        let img_id = self
+            .canvas
+            .create_image(ImageSource::Rgba(img), ImageFlags::empty())
+            .map_err(|e| format!("femtovg register_snapshot: {e:?}"))?;
+        // Replacing an existing snapshot id must free the old texture (the
+        // morph re-registers the "new" capture under the same id each transition).
+        if let Some(old) = self.snapshots.insert(id, img_id) {
+            self.canvas.delete_image(old);
+        }
+        Ok(())
+    }
+
+    fn clear_snapshots(&mut self) {
+        for (_, id) in self.snapshots.drain() {
+            self.canvas.delete_image(id);
+        }
+    }
+
     fn set_font_provider(&mut self, provider: Option<Arc<dyn FontProvider>>) {
         self.font_provider = provider.clone();
         self.fallback_chain.clear();
