@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<!-- TEST-130 — dynamic SVG (createElementNS), no text: deeply NESTED <g> transforms
+     (cumulative translate/rotate/scale matrix composition). Regression for BUG-243
+     combined with parse_svg_transform composition. Solid fills only → holds ≤0.5%. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; }
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f { background: #0d1117; width: 1022px; height: 718px; margin: 1px; padding: 0; overflow: hidden; }
+  #g { display: block; width: 1022px; height: 718px; }
+</style>
+</head>
+<body>
+  <div class="__f"><svg id="g"></svg></div>
+<script>
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.getElementById('g');
+  function s(tag, a) {
+    const e = document.createElementNS(NS, tag);
+    for (const k in (a || {})) e.setAttribute(k, a[k]);
+    return e;
+  }
+  svg.setAttribute('viewBox', '0 0 1022 718');
+  svg.appendChild(s('rect', { x: 0, y: 0, width: 1022, height: 718, fill: '#0d1117' }));
+
+  const COLS = ['#1f6feb', '#238636', '#8957e5', '#9e6a03', '#1f9e9e', '#a83254'];
+
+  // Left: a spiral of nested squares. Each <g> nests inside the previous and adds
+  // rotate(11) scale(0.86) → cumulative matrix. Tests transform composition depth.
+  const root = s('g', { transform: 'translate(300,360)' });
+  svg.appendChild(root);
+  let cur = root;
+  for (let d = 0; d < 16; d++) {
+    const g = s('g', { transform: 'rotate(11) scale(0.86)' });
+    g.appendChild(s('rect', { x: -150, y: -150, width: 300, height: 300, fill: COLS[d % COLS.length] }));
+    cur.appendChild(g);
+    cur = g;
+  }
+
+  // Right: a 4×4 catalogue of one motif drawn at increasing scale via per-cell
+  // translate()+scale() group transforms (independent matrices, not nested).
+  function motif(parent) {
+    const g = s('g');
+    g.appendChild(s('rect', { x: -18, y: -18, width: 36, height: 36, fill: '#30363d' }));
+    g.appendChild(s('rect', { x: -10, y: -10, width: 20, height: 20, fill: '#f0883e' }));
+    g.appendChild(s('circle', { cx: 0, cy: 0, r: 5, fill: '#0d1117' }));
+    parent.appendChild(g);
+  }
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      const sc = 0.6 + (r * 4 + c) * 0.09;
+      const g = s('g', { transform: `translate(${640 + c * 95},${120 + r * 150}) scale(${sc.toFixed(3)})` });
+      motif(g);
+      svg.appendChild(g);
+    }
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<!-- TEST-131 — dynamic SVG (createElementNS), no text: alpha compositing via
+     fill-opacity / stroke-opacity. Overlapping solid shapes produce blended regions
+     that must match Edge (straight sRGB alpha). Solid interiors → holds ≤0.5%. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; }
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f { background: #0d1117; width: 1022px; height: 718px; margin: 1px; padding: 0; overflow: hidden; }
+  #g { display: block; width: 1022px; height: 718px; }
+</style>
+</head>
+<body>
+  <div class="__f"><svg id="g"></svg></div>
+<script>
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.getElementById('g');
+  function s(tag, a) {
+    const e = document.createElementNS(NS, tag);
+    for (const k in (a || {})) e.setAttribute(k, a[k]);
+    return e;
+  }
+  svg.setAttribute('viewBox', '0 0 1022 718');
+  svg.appendChild(s('rect', { x: 0, y: 0, width: 1022, height: 718, fill: '#15191f' }));
+
+  // Three overlapping translucent discs (RGB additive-look via alpha) — classic Venn.
+  const venn = [
+    { cx: 300, cy: 250, fill: '#ff3b30' },
+    { cx: 430, cy: 250, fill: '#34c759' },
+    { cx: 365, cy: 360, fill: '#0a84ff' },
+  ];
+  for (const d of venn) {
+    svg.appendChild(s('circle', { cx: d.cx, cy: d.cy, r: 140, fill: d.fill, 'fill-opacity': 0.5 }));
+  }
+
+  // A column of solid rects under one rect with a ramp of fill-opacity values.
+  for (let i = 0; i < 10; i++) {
+    const a = (i + 1) / 10;
+    svg.appendChild(s('rect', { x: 620 + i * 36, y: 80, width: 60, height: 300, fill: '#f0883e', 'fill-opacity': a.toFixed(2) }));
+  }
+
+  // Stacked translucent squares (same colour) → deepening tint where they overlap.
+  for (let i = 0; i < 6; i++) {
+    svg.appendChild(s('rect', { x: 120 + i * 40, y: 470, width: 160, height: 160, fill: '#a371f7', 'fill-opacity': 0.28 }));
+  }
+
+  // Translucent strokes over solid fills (stroke-opacity).
+  for (let i = 0; i < 5; i++) {
+    svg.appendChild(s('rect', {
+      x: 640 + i * 6, y: 440 + i * 6, width: 320 - i * 12, height: 220 - i * 12,
+      fill: 'none', stroke: '#2dd4bf', 'stroke-width': 8, 'stroke-opacity': 0.6
+    }));
+  }
+</script>
+</body>
+</html>

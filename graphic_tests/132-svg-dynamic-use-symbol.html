@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<!-- TEST-132 — dynamic SVG (createElementNS), no text: <defs>/<symbol>/<use>
+     instancing. A multi-shape symbol is defined once, then instantiated many times
+     via <use> with per-instance translate/scale/rotate. Exercises the shadow-clone
+     path built entirely from JS. Solid fills → holds ≤0.5%. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; }
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f { background: #0d1117; width: 1022px; height: 718px; margin: 1px; padding: 0; overflow: hidden; }
+  #g { display: block; width: 1022px; height: 718px; }
+</style>
+</head>
+<body>
+  <div class="__f"><svg id="g"></svg></div>
+<script>
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.getElementById('g');
+  function s(tag, a) {
+    const e = document.createElementNS(NS, tag);
+    for (const k in (a || {})) e.setAttribute(k, a[k]);
+    return e;
+  }
+  svg.setAttribute('viewBox', '0 0 1022 718');
+  svg.appendChild(s('rect', { x: 0, y: 0, width: 1022, height: 718, fill: '#0d1117' }));
+
+  // Define a reusable "badge" symbol: outer square + inner diamond + dot.
+  const defs = s('defs');
+  const sym = s('symbol', { id: 'badge', viewBox: '0 0 40 40' });
+  sym.appendChild(s('rect', { x: 2, y: 2, width: 36, height: 36, fill: '#161b22' }));
+  sym.appendChild(s('path', { d: 'M20,6 L34,20 L20,34 L6,20 Z', fill: '#238636' }));
+  sym.appendChild(s('circle', { cx: 20, cy: 20, r: 6, fill: '#7ee787' }));
+  defs.appendChild(sym);
+  // A second symbol: concentric rings.
+  const ring = s('symbol', { id: 'ring', viewBox: '0 0 40 40' });
+  ring.appendChild(s('circle', { cx: 20, cy: 20, r: 18, fill: '#1f6feb' }));
+  ring.appendChild(s('circle', { cx: 20, cy: 20, r: 11, fill: '#0d1117' }));
+  ring.appendChild(s('circle', { cx: 20, cy: 20, r: 5, fill: '#58a6ff' }));
+  defs.appendChild(ring);
+  svg.appendChild(defs);
+
+  // Grid of badge instances at varying sizes.
+  for (let r = 0; r < 5; r++) {
+    for (let c = 0; c < 8; c++) {
+      const side = 50 + ((r + c) % 4) * 14;
+      svg.appendChild(s('use', { href: '#badge', x: 40 + c * 80, y: 60 + r * 80, width: side, height: side }));
+    }
+  }
+
+  // A ring of rotated ring-symbol instances (use + transform rotate about a centre).
+  const CX = 511, CY = 540, RAD = 140;
+  for (let i = 0; i < 12; i++) {
+    const ang = i * 30;
+    svg.appendChild(s('use', {
+      href: '#ring', width: 56, height: 56,
+      transform: `rotate(${ang} ${CX} ${CY}) translate(${CX - 28} ${CY - RAD - 28})`
+    }));
+  }
+</script>
+</body>
+</html>

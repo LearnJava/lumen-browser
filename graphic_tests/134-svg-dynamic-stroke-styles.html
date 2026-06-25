@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<!-- TEST-134 — dynamic SVG (createElementNS), no text: stroke presentation —
+     stroke-width / linecap / linejoin / dasharray / dashoffset on <rect>/<line>/
+     <polyline>/<path>. Thick axis-aligned strokes keep AA contribution low (≤0.5%). -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; }
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f { background: #0d1117; width: 1022px; height: 718px; margin: 1px; padding: 0; overflow: hidden; }
+  #g { display: block; width: 1022px; height: 718px; }
+</style>
+</head>
+<body>
+  <div class="__f"><svg id="g"></svg></div>
+<script>
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.getElementById('g');
+  function s(tag, a) {
+    const e = document.createElementNS(NS, tag);
+    for (const k in (a || {})) e.setAttribute(k, a[k]);
+    return e;
+  }
+  svg.setAttribute('viewBox', '0 0 1022 718');
+  svg.appendChild(s('rect', { x: 0, y: 0, width: 1022, height: 718, fill: '#0d1117' }));
+
+  // Concentric stroked rectangle frames (no fill) — increasing stroke widths.
+  for (let i = 0; i < 6; i++) {
+    svg.appendChild(s('rect', {
+      x: 60 + i * 22, y: 60 + i * 22, width: 360 - i * 44, height: 300 - i * 44,
+      fill: 'none', stroke: ['#1f6feb', '#238636', '#8957e5', '#9e6a03', '#1f9e9e', '#a83254'][i],
+      'stroke-width': 4 + i * 3
+    }));
+  }
+
+  // Horizontal dashed lines with varying dasharray + caps.
+  const caps = ['butt', 'round', 'square'];
+  for (let i = 0; i < 9; i++) {
+    svg.appendChild(s('line', {
+      x1: 60, y1: 410 + i * 30, x2: 470, y2: 410 + i * 30,
+      stroke: '#f0883e', 'stroke-width': 10,
+      'stroke-linecap': caps[i % 3],
+      'stroke-dasharray': `${10 + i * 4} ${8 + i * 2}`
+    }));
+  }
+
+  // A stepped polyline (axis-aligned) with different linejoins.
+  const joins = ['miter', 'round', 'bevel'];
+  for (let j = 0; j < 3; j++) {
+    let pts = '';
+    let x = 560, y = 110 + j * 200;
+    for (let k = 0; k < 6; k++) { pts += `${x},${y} `; x += 70; y += (k % 2 ? 80 : -80); }
+    svg.appendChild(s('polyline', {
+      points: pts.trim(), fill: 'none',
+      stroke: ['#58a6ff', '#7ee787', '#d29922'][j], 'stroke-width': 16, 'stroke-linejoin': joins[j]
+    }));
+  }
+
+  // Dashoffset comparison: two identical dashed frames, one offset.
+  svg.appendChild(s('rect', { x: 600, y: 560, width: 170, height: 120, fill: 'none', stroke: '#2dd4bf', 'stroke-width': 8, 'stroke-dasharray': '24 14' }));
+  svg.appendChild(s('rect', { x: 800, y: 560, width: 170, height: 120, fill: 'none', stroke: '#2dd4bf', 'stroke-width': 8, 'stroke-dasharray': '24 14', 'stroke-dashoffset': 19 }));
+</script>
+</body>
+</html>

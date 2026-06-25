@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<!-- TEST-133 — dynamic SVG (createElementNS), no text: fill-rule nonzero vs evenodd
+     on self-intersecting <path>/<polygon> stars and nested rings. The evenodd column
+     must show holes the nonzero column fills. Solid fills → holds ≤0.5%. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; }
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f { background: #0d1117; width: 1022px; height: 718px; margin: 1px; padding: 0; overflow: hidden; }
+  #g { display: block; width: 1022px; height: 718px; }
+</style>
+</head>
+<body>
+  <div class="__f"><svg id="g"></svg></div>
+<script>
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.getElementById('g');
+  function s(tag, a) {
+    const e = document.createElementNS(NS, tag);
+    for (const k in (a || {})) e.setAttribute(k, a[k]);
+    return e;
+  }
+  svg.setAttribute('viewBox', '0 0 1022 718');
+  svg.appendChild(s('rect', { x: 0, y: 0, width: 1022, height: 718, fill: '#0d1117' }));
+
+  // Build a 5-point star path (self-intersecting pentagram) centred at (cx,cy).
+  function starPath(cx, cy, R) {
+    let d = '';
+    for (let i = 0; i < 5; i++) {
+      // step by 2 vertices → pentagram (self-intersecting)
+      const ang = -Math.PI / 2 + (i * 4 * Math.PI / 5);
+      const x = cx + R * Math.cos(ang);
+      const y = cy + R * Math.sin(ang);
+      d += (i === 0 ? 'M' : 'L') + x.toFixed(2) + ',' + y.toFixed(2) + ' ';
+    }
+    return d + 'Z';
+  }
+
+  // Two columns of pentagrams: left nonzero (filled solid), right evenodd (hollow core).
+  const rows = [{ y: 150, R: 95, c: '#f0883e' }, { y: 410, R: 95, c: '#1f9e9e' }, { y: 640, R: 60, c: '#a371f7' }];
+  for (const row of rows) {
+    svg.appendChild(s('path', { d: starPath(230, row.y, row.R), fill: row.c, 'fill-rule': 'nonzero' }));
+    svg.appendChild(s('path', { d: starPath(470, row.y, row.R), fill: row.c, 'fill-rule': 'evenodd' }));
+  }
+
+  // Concentric squares as one polygon path (outer CW + inner CCW) → evenodd ring,
+  // compared to nonzero (filled). Right side.
+  function squareRings(cx, cy, rule) {
+    // outer 160, hole 100, inner-fill 60 — alternating with one subpath direction set.
+    const o = 80, m = 50, i = 26;
+    const d =
+      `M${cx - o},${cy - o} H${cx + o} V${cy + o} H${cx - o} Z ` +     // outer CW
+      `M${cx - m},${cy - m} H${cx + m} V${cy + m} H${cx - m} Z ` +     // middle CW
+      `M${cx - i},${cy - i} H${cx + i} V${cy + i} H${cx - i} Z`;       // inner CW
+    return s('path', { d, fill: '#238636', 'fill-rule': rule });
+  }
+  svg.appendChild(squareRings(720, 200, 'nonzero'));
+  svg.appendChild(squareRings(900, 200, 'evenodd'));
+
+  // A <polygon> chevron strip (non-intersecting) for contrast.
+  for (let i = 0; i < 6; i++) {
+    const x = 660 + i * 56;
+    svg.appendChild(s('polygon', {
+      points: `${x},420 ${x + 40},420 ${x + 60},520 ${x + 20},520`,
+      fill: i % 2 ? '#58a6ff' : '#1f6feb'
+    }));
+  }
+</script>
+</body>
+</html>
