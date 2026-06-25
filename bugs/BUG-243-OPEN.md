@@ -1,5 +1,36 @@
 # BUG-243
 
+**Статус:** FIXED 2026-06-25 (ветка `p3-bug-243`)
+
+## Резолюция
+
+Реализован вариант (B) из плана — корректная foreign-content поддержка:
+
+1. **`crates/js/src/dom.rs`** — нативный байндинг `_lumen_create_element_ns(ns, local)`
+   создаёт узел с `Namespace::Svg` для SVG-namespace (иначе Html), **без** `to_ascii_lowercase`
+   (case-sensitive теги `linearGradient`/`clipPath` сохраняют регистр в арене). На объект
+   `document` добавлен `createElementNS(ns, qualifiedName)`, возвращающий нативный
+   `_lumen_make_element(nid)` — узел с `__nid__`, который видят layout/paint.
+2. **`crates/js/src/svg.rs`** — `class SVGElement extends Element` заменён на
+   `extends (typeof Element !== 'undefined' ? Element : Object)`, поэтому весь
+   `install_svg_bindings` больше не падает при отсутствии глобального `Element`. Патч
+   `createElementNS` переписан: он **декорирует** нативный узел (`Object.setPrototypeOf(el, Ctor.prototype)`),
+   а не возвращает оторванный `new Ctor()`. Так сохраняются и нативный `__nid__` (рендер),
+   и типизированный `instanceof SVGCircleElement` + `getBBox()`. Это безопасно: методы
+   нативного элемента — собственные свойства объекта (`_lumen_make_element` возвращает
+   объект-литерал), `setPrototypeOf` их не теряет.
+3. **Регресс-тесты** (`crates/js/src/dom.rs`): `create_element_ns_builds_native_svg_tree`
+   (узлы попадают в нативную арену, `querySelectorAll('rect')` находит их),
+   `svg_shim_installs_and_exposes_svg_element` (шим не падает). 3 ранее падавших
+   `svg::create_element_ns_*` теста снова зелёные (типизированный путь сохранён).
+
+Вторичные пункты ниже (WebCodecs init failed; отсутствие глобальных `Element`/`Node`
+как классов) — отдельные баги, в этом фиксе не закрывались.
+
+---
+
+## (исходный бриф)
+
 **Статус:** OPEN
 **Компонент:** js (JS DOM API)
 **Симптом:** страницы, строящие SVG на клиенте через `document.createElementNS`, рендерятся пустыми (виден только HTML/CSS-каркас, само SVG-дерево не появляется).

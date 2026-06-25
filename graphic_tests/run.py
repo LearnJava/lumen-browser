@@ -204,6 +204,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('125', '125-media-scripting.html', 0.5, 'Media Queries L5 §6.2: scripting — Lumen с QuickJS по умолчанию scripting:enabled matched (зелёный a), none/initial-only не матчат (красные b/c), невалидное sometimes → Unsupported (красный d); Edge тоже scripting enabled'),
     ('126', '126-media-inverted-colors.html', 0.5, 'Media Queries L5 §5.8: inverted-colors — без инверсии цветов none matched (зелёный a), inverted не матчит (красный b), невалидное maybe → Unsupported (красный c); Edge тоже по умолчанию inverted-colors:none'),
     ('128', '128-icc-color-management.html', 0.5, 'ICC colour management (ICC-6): Display P3 PNG (iCCP matrix-shaper). Свотчи закодированы так, что корректный P3→sRGB matrix-shaper трансформ восстанавливает известные in-gamut sRGB-цвета; Edge и Lumen, оба управляя цветом, дают идентичные пиксели. CMYK-ICC (A2B0 LUT) не в графтесте — Edge не применяет встроенный CMYK-профиль (свой SWOP), поэтому покрыт детерминированным Rust-тестом icc_color_management.rs'),
+    ('129', '129-svg-dynamic-createelementns.html', 0.5, 'BUG-243: динамический SVG, построенный на клиенте через document.createElementNS + setAttribute + appendChild/append (как docs/roadmap-*.html), без текста — только solid-фигуры (rect/circle/path/g+transform). Узлы должны попасть в нативную арену и отрисоваться как в Edge. ТРЕБУЕТ JS-пути захвата (gdigrab по умолчанию), не --ipc/CPU (детерминированный снимок не исполняет скрипты)'),
 ]
 
 # --- Известные должники (Phase 2+ фичи, baseline-храповик) ---

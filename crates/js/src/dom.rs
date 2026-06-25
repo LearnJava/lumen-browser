@@ -16,7 +16,8 @@ use std::sync::{
 use lumen_core::ext::{AbortToken, CacheBackend, CookieProvider, IdbBackend, JsFetchProvider, JsSseEvent, JsSseProvider, JsWebSocketProvider, JsWsEvent, SwBackend};
 use lumen_core::url::Url;
 use lumen_dom::{
-    Attribute, Document, DomPosition, NodeData, NodeId, QualName, Range as DomRange, Selection,
+    Attribute, Document, DomPosition, Namespace, NodeData, NodeId, QualName, Range as DomRange,
+    Selection,
     ShadowRootMode, node_child_count, node_length, node_text_content, range_text,
 };
 use lumen_layout::{matches_selector, query_all};
@@ -718,6 +719,25 @@ fn install_primitives(
                 let mut doc = d.lock().unwrap();
                 // Returns u32::MAX when MAX_DOM_NODES is reached; JS shim handles this.
                 match doc.try_create_element(QualName::html(tag.to_ascii_lowercase())) {
+                    Ok(nid) => nid.index() as u32,
+                    Err(_) => u32::MAX,
+                }
+            }
+        );
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_create_element_ns",
+            move |ns: String, local: String| -> u32 {
+                let mut doc = d.lock().unwrap();
+                // Foreign-content namespace selection. SVG keeps the local name's
+                // original case (case-sensitive tags like `linearGradient`); all
+                // other namespaces fall back to HTML. Returns u32::MAX on overflow.
+                let namespace = if ns == "http://www.w3.org/2000/svg" {
+                    Namespace::Svg
+                } else {
+                    Namespace::Html
+                };
+                match doc.try_create_element(QualName { namespace, local }) {
                     Ok(nid) => nid.index() as u32,
                     Err(_) => u32::MAX,
                 }
@@ -4607,6 +4627,17 @@ function _lumen_make_element(nid) {
                 }
             }
         },
+        // ParentNode.append (DOM LS §4.2.5): appends nodes/strings as the last children.
+        append: function() {
+            for (var _ai = 0; _ai < arguments.length; _ai++) {
+                var _an = arguments[_ai];
+                if (typeof _an === 'string') {
+                    _lumen_append_child(nid, _lumen_create_text_node(_an));
+                } else if (_an && _an.__nid__ !== undefined) {
+                    _lumen_append_child(nid, _an.__nid__);
+                }
+            }
+        },
         // Replaces all children of this element.
         replaceChildren: function() {
             var old = _lumen_get_children(nid).slice();
@@ -5052,6 +5083,20 @@ function _lumen_make_element(nid) {
     });
     Object.defineProperty(_obj, 'children', {
         get: function() { return _lumen_get_children(nid).map(_lumen_make_element); },
+        enumerable: false, configurable: true,
+    });
+    Object.defineProperty(_obj, 'firstChild', {
+        get: function() {
+            var ch = _lumen_get_children(nid);
+            return ch.length > 0 ? _lumen_make_element(ch[0]) : null;
+        },
+        enumerable: false, configurable: true,
+    });
+    Object.defineProperty(_obj, 'lastChild', {
+        get: function() {
+            var ch = _lumen_get_children(nid);
+            return ch.length > 0 ? _lumen_make_element(ch[ch.length - 1]) : null;
+        },
         enumerable: false, configurable: true,
     });
     // Web Animations API (WAAPI Level 1) — element.animate() and getAnimations().
@@ -5536,6 +5581,18 @@ var document = {
         if (!__dom_node_warned && cnt >= 40000) {
             __dom_node_warned = true;
             console.warn('DOM tree exceeds 40000 nodes');
+        }
+        return _lumen_make_element(nid);
+    },
+    // DOM LS §4.5: createElementNS(namespace, qualifiedName) creates a native
+    // arena node (with __nid__) so layout/paint see it. SVG tag case is preserved
+    // (native binding does not lowercase) — `linearGradient`/`clipPath` stay intact.
+    createElementNS:   function(ns, qualifiedName) {
+        var local = String(qualifiedName || '').replace(/^[^:]+:/, '');
+        var nid = _lumen_create_element_ns(String(ns), local);
+        // QuickJS converts the Rust u32::MAX sentinel to -1 (signed overflow).
+        if (nid < 0) {
+            throw new DOMException('DOM node limit exceeded', 'QuotaExceededError');
         }
         return _lumen_make_element(nid);
     },
@@ -12458,6 +12515,64 @@ mod tests {
     fn console_log_does_not_crash() {
         let rt = runtime_with_dom(make_doc());
         rt.eval("console.log('hello from test')").unwrap();
+    }
+
+    // BUG-243: dynamic SVG built via document.createElementNS must produce NATIVE
+    // arena nodes (carrying __nid__) so that appendChild attaches them to the Rust
+    // document tree and layout/paint can see them. The previous svg.rs override
+    // returned detached `new Ctor()` objects without __nid__, which native
+    // appendChild silently dropped — leaving script-built SVG invisible.
+    #[test]
+    fn create_element_ns_builds_native_svg_tree() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "var NS = 'http://www.w3.org/2000/svg';\
+                 var svg = document.createElementNS(NS, 'svg');\
+                 var rect = document.createElementNS(NS, 'rect');\
+                 svg.appendChild(rect);\
+                 document.getElementById('main').appendChild(svg);\
+                 typeof svg.__nid__ === 'number' && typeof rect.__nid__ === 'number' \
+                   && document.querySelectorAll('svg').length === 1 \
+                   && document.querySelectorAll('rect').length === 1",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-243: the repro page (docs/roadmap-svg-cleaves.html) builds its UI with
+    // ParentNode.append() (variadic, accepts strings) and clears the SVG via
+    // `while (svg.firstChild) svg.removeChild(svg.firstChild)`. Both were missing on
+    // native elements, so the page threw "not a function" before rendering. Verify
+    // append() attaches node+string children and firstChild/removeChild can clear them.
+    #[test]
+    fn element_append_and_first_child_round_trip() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval(
+                "var box = document.createElement('div');\
+                 var a = document.createElement('span');\
+                 var b = document.createElement('b');\
+                 box.append(a, b);\
+                 var built = box.firstChild.__nid__ === a.__nid__ && box.lastChild.__nid__ === b.__nid__;\
+                 box.append('trailing text');\
+                 var n = 0; while (box.firstChild) { box.removeChild(box.firstChild); if (++n > 20) break; }\
+                 built && box.firstChild === null",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
+    }
+
+    // BUG-243: installing the SVG shim must not abort. It previously threw at
+    // `class SVGElement extends Element` because no global `Element` class exists,
+    // which killed the whole shim (and silently disabled SVG typed interfaces).
+    #[test]
+    fn svg_shim_installs_and_exposes_svg_element() {
+        let rt = runtime_with_dom(make_doc());
+        let ok = rt
+            .eval("typeof window.SVGElement === 'function' && typeof window.SVGSVGElement === 'function'")
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Bool(true));
     }
 
     // BUG-233: `self` must be defined as a global aliasing `window`
