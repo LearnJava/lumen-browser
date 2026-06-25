@@ -976,6 +976,12 @@ LAGUNA_TIMEOUT = float(os.environ.get("LAGUNA_TIMEOUT", "120"))
 # итерациями. LAGUNA_KEEPALIVE=0 → новое соединение на каждый запрос (Connection:
 # close): чуть медленнее на рукопожатии, но без stale-connection SSL-сбоев.
 LAGUNA_KEEPALIVE = os.environ.get("LAGUNA_KEEPALIVE", "1").lower() not in ("0", "false", "no")
+# Потолок подряд идущих сетевых/SSL-сбоев на одной итерации. Раньше except в
+# solo-цикле делал `sleep; continue` без инкремента `it` и без пересоздания
+# клиента — отравленное keepalive-соединение бралось из пула снова, и тот же
+# запрос вечно падал с `[SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC]`. Теперь
+# после стольких сбоев подряд solo-сессия сохраняется и завершается.
+LAGUNA_MAX_NET_FAILS = int(os.environ.get("LAGUNA_MAX_NET_FAILS", "5"))
 
 
 def laguna_debug(developer: str, message: str) -> None:
@@ -1092,6 +1098,19 @@ class LagunaClient:
             + ("  (ПУСТОЙ ответ!)" if not out else ""),
         )
         return out
+
+    def close(self) -> None:
+        """Закрыть нижележащий httpx-клиент (сбросить весь пул соединений).
+
+        Нужно при сетевом/SSL-сбое: отравленное keepalive-соединение остаётся в
+        пуле и переиспользуется на следующем запросе, давая тот же
+        `[SSL: DECRYPTION_FAILED_OR_BAD_RECORD_MAC]`. После close() вызывающий
+        код поднимает свежий LagunaClient с чистым пулом.
+        """
+        try:
+            self.client.close()
+        except Exception:  # noqa: BLE001 — закрытие best-effort, ошибки не важны
+            pass
 
 
 # --- Текстовый tool-протокол для solo-режима ---
@@ -1473,12 +1492,14 @@ def run_laguna_solo(developer: str, task_number: int, think: bool = False) -> bo
     _persist(start_iter - 1)
 
     it = start_iter
+    net_fails = 0  # подряд идущие сетевые/SSL-сбои на текущей итерации
     while it <= LAGUNA_MAX_ITERS:
         log(developer, f"Laguna solo: итерация {it}/{LAGUNA_MAX_ITERS}...")
         set_jobstatus(developer, "laguna-solo", f"задача #{task_number}, итер. {it}")
         try:
             reply = client.chat(messages, think=think)
-        except Exception as e:  # сетевые/SDK сбои — подождать и повторить (без +it)
+        except Exception as e:  # сетевые/SDK сбои — пересоздать клиент и повторить (без +it)
+            net_fails += 1
             # Полная диагностика в laguna-debug-PN.log: тип, цепочка причин
             # (там обычно настоящий SSL-объект) и трейсбэк. В консоль — кратко.
             cause = e.__cause__ or e.__context__
@@ -1490,16 +1511,35 @@ def run_laguna_solo(developer: str, task_number: int, think: bool = False) -> bo
                 depth += 1
             laguna_debug(
                 developer,
-                f"✗ chat FAIL (итер. {it}): {type(e).__name__}: {e}\n"
+                f"✗ chat FAIL (итер. {it}, сбой {net_fails}/{LAGUNA_MAX_NET_FAILS}): "
+                f"{type(e).__name__}: {e}\n"
                 f"  причины: {' <- '.join(chain) or '—'}\n"
                 f"{traceback.format_exc()}",
             )
+            # Сбросить пул соединений и поднять свежий клиент: отравленное
+            # keepalive-соединение (источник SSL bad-MAC) иначе берётся снова.
+            client.close()
+            try:
+                client = LagunaClient(developer)
+            except (RuntimeError, ImportError) as re_err:
+                laguna_debug(developer, f"✗ не удалось пересоздать LagunaClient: {re_err}")
+            if net_fails >= LAGUNA_MAX_NET_FAILS:
+                # Подряд слишком много сбоев — сеть/эндпоинт недоступны. Не
+                # крутиться вечно: сохранить диалог (резюмируемо) и выйти.
+                _persist(it - 1)
+                log(developer,
+                    f"  Laguna API: {net_fails} сетевых сбоев подряд — останов solo "
+                    f"(сессия сохранена, резюмируется позже). "
+                    f"Детали → scripts/laguna-debug-{developer}.log")
+                return False
             log(developer,
-                f"  Ошибка Laguna API: {type(e).__name__}: {e}. Пауза 20с. "
+                f"  Ошибка Laguna API: {type(e).__name__}: {e}. "
+                f"Сбой {net_fails}/{LAGUNA_MAX_NET_FAILS}, пересоздал клиент, пауза 20с. "
                 f"(детали → scripts/laguna-debug-{developer}.log)")
             time.sleep(20)
             continue
 
+        net_fails = 0  # успешный обмен — сбросить счётчик сбоев
         messages.append({"role": "assistant", "content": reply})
         cmds = parse_laguna_commands(reply)
         if not cmds:
