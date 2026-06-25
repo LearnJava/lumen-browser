@@ -3,6 +3,15 @@
 [build]
 rustc-wrapper = "sccache"
 
+# Порт sccache-сервера. Дефолтный 4226 попадает в зарезервированный Windows
+# диапазон port exclusion (winnat/Hyper-V/WSL), из-за чего сервер не стартует
+# (os error 10013). 4150 лежит в свободной щели 4091–4190.
+# Если ошибка вернётся после перезагрузки — проверь актуальные резервы:
+#   netsh interface ipv4 show excludedportrange protocol=tcp
+# и подбери порт вне всех диапазонов.
+[env]
+SCCACHE_SERVER_PORT = "4150"
+
 # rust-lld — встроенный в Rust LLVM-линковщик.
 # На Windows MSVC быстрее link.exe примерно в 2–5 раз на финальной линковке
 # (особенно заметно при --release: там линковка занимает 30–60% от всего времени).
