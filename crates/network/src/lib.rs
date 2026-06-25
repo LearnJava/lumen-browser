@@ -3930,6 +3930,10 @@ mod tests {
                 None,
             )
             .unwrap();
+            // Consume the client's Close frame so the socket stays open until
+            // close() completes — otherwise the server drops it and the client's
+            // Close write races into a broken pipe.
+            let _ = crate::websocket::frame::read_frame(&mut sock);
         });
         let client = HttpClient::new();
         let url = lumen_core::url::Url::parse(&format!("ws://127.0.0.1:{port}/")).unwrap();
@@ -4011,6 +4015,89 @@ mod tests {
             _ => panic!("expected Close, got {m:?}"),
         }
         assert!(server.join().unwrap(), "client must echo Close");
+    }
+
+    /// RFC 6455 §4.1 handshake that also negotiates RFC 7692 permessage-deflate:
+    /// the `101` response carries `Sec-WebSocket-Extensions: permessage-deflate`
+    /// so the client enables compression for the session. Mirrors
+    /// [`ws_server_handshake`] otherwise.
+    fn ws_server_handshake_deflate(sock: &mut std::net::TcpStream) {
+        use std::io::{BufRead, BufReader, Write};
+        let mut reader = BufReader::new(sock.try_clone().unwrap());
+        let mut key = None;
+        let mut line = String::new();
+        while reader.read_line(&mut line).unwrap() > 0 {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                break;
+            }
+            if trimmed.to_ascii_lowercase().starts_with("sec-websocket-key:") {
+                let parts: Vec<&str> = trimmed.split(':').collect();
+                if parts.len() == 2 {
+                    key = Some(parts[1].trim().to_string());
+                }
+            }
+            line.clear();
+        }
+        let key = key.expect("Missing Sec-WebSocket-Key header");
+        let accept = crate::websocket::upgrade::compute_accept(&key);
+        let response = format!(
+            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\nSec-WebSocket-Extensions: permessage-deflate; client_no_context_takeover; server_no_context_takeover\r\n\r\n"
+        );
+        sock.write_all(response.as_bytes()).unwrap();
+        sock.flush().unwrap();
+    }
+
+    /// End-to-end RFC 7692 permessage-deflate: both directions compress. The
+    /// client (`compress=true`) sends an RSV1 Text frame the server inflates; the
+    /// server replies with its own compressed RSV1 Text frame the client inflates.
+    #[test]
+    fn ws_permessage_deflate_roundtrip() {
+        use lumen_core::ext::WebSocketSession;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || -> bool {
+            let (mut sock, _) = listener.accept().unwrap();
+            ws_server_handshake_deflate(&mut sock);
+
+            let frame = crate::websocket::frame::read_frame(&mut sock).unwrap();
+            assert_eq!(frame.opcode, crate::websocket::frame::Opcode::Text);
+            assert!(frame.rsv1, "client frame must be permessage-deflate compressed");
+            let inflated = crate::websocket::deflate::decompress_message(&frame.payload).unwrap();
+            assert_eq!(inflated, b"client says hi");
+
+            let compressed = crate::websocket::deflate::compress_message(b"server says hi").unwrap();
+            crate::websocket::frame::write_frame(
+                &mut sock,
+                true,
+                true,
+                crate::websocket::frame::Opcode::Text,
+                &compressed,
+                None,
+            )
+            .unwrap();
+
+            let echo = crate::websocket::frame::read_frame(&mut sock).unwrap();
+            echo.opcode == crate::websocket::frame::Opcode::Close
+        });
+        let url = lumen_core::url::Url::parse(&format!("ws://127.0.0.1:{port}/")).unwrap();
+        let client = HttpClient::new();
+        let mut ws: Box<dyn WebSocketSession> = Box::new(
+            crate::websocket::WebSocket::connect_deflate(
+                &url,
+                client.resolver.as_ref(),
+                client.hsts.as_deref(),
+                std::sync::Arc::new(NoopEventSink),
+                TabId(0),
+                true,
+                &[],
+            )
+            .expect("connect_deflate"),
+        );
+        ws.send_text("client says hi").unwrap();
+        assert_eq!(ws.recv().unwrap(), WsMessage::Text("server says hi".to_string()));
+        ws.close(1000, "").unwrap();
+        assert!(server.join().unwrap(), "deflate frames must round-trip both ways");
     }
 
     // ── ALPN (5A.1) ──────────────────────────────────────────────────────────

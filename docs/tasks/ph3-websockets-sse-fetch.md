@@ -99,6 +99,20 @@ socket — it returns whole bodies synchronously — so the localhost-listener
 pattern from the SSE/fetch tests is reused.) **Still open for full Phase B:**
 event-loop push delivery (no JS `_lumen_ws_poll` — requires shell integration).
 
+**Phase B step 5 DONE (2026-06-25)** — closes the last Tests-list gap: an
+end-to-end RFC 7692 permessage-deflate round-trip. `ws_permessage_deflate_roundtrip`
+(`crates/network/src/lib.rs`) drives a real `WebSocket::connect_deflate(compress=true)`
+against a localhost server whose `101` negotiates `Sec-WebSocket-Extensions:
+permessage-deflate` (new `ws_server_handshake_deflate` helper). Both directions
+compress: the client sends an RSV1 Text frame the server inflates via
+`deflate::decompress_message`, the server replies with its own compressed RSV1 frame
+the client inflates. Exercises the `deflate.rs` codec end-to-end (previously only unit-
+tested in isolation). Also fixed a pre-existing teardown race in `ws_binary_echo`
+(server dropped the socket before the client's `close()` Close write landed → broken
+pipe; server now drains the client Close frame first). `lumen-network` 806 lib tests
+green, clippy clean. **Still open for full Phase B:** event-loop push delivery
+(no JS `_lumen_ws_poll` — requires shell integration, P3 domain).
+
 **Phase A step 3 DONE (2026-06-25)** — JS-observable in-flight abort via the
 timeout deadline. `AbortSignal.timeout(ms)` now records `signal._timeoutMs`;
 `fetch()` routes a positive deadline to two new native bridges
