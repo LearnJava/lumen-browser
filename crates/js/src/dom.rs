@@ -1149,6 +1149,8 @@ fn install_primitives(
         let fp_cancel_body = fetch_provider.clone();
         let c_cancel = Arc::clone(&cache);
         let c_cancel_body = Arc::clone(&cache);
+        let fp_async = fetch_provider.clone();
+        let c_async = Arc::clone(&cache);
         let (fp, c) = (fetch_provider, Arc::clone(&cache));
         reg!("_lumen_fetch_sync", move |url: String, method: String| -> bool {
             let Some(ref provider) = fp else { return false };
@@ -1347,6 +1349,136 @@ fn install_primitives(
                 }
             }
         );
+
+        // ── Async fetch (in-flight AbortController.abort) ────────────────────────
+        // Runs the request on a background thread so a JS `abort()` fired *during*
+        // the request (not just a pre-flight/timeout) flips the AbortToken and the
+        // network layer tears the socket down. JS fetch() drives a setTimeout poll
+        // loop that resolves/rejects once the worker finishes. No shell change: the
+        // existing timer pump drives the poll. Mirrors the WS/SSE poll model.
+        {
+            /// Background fetch result: success payload, or a typed failure.
+            enum AsyncOutcome {
+                /// Completed response (headers flattened: [name, value, ...]).
+                Ok {
+                    status: u16,
+                    status_text: String,
+                    headers: Vec<String>,
+                    body: Vec<u8>,
+                },
+                /// Network/transport error.
+                NetError,
+                /// Aborted in flight via the AbortToken.
+                Aborted,
+            }
+            /// Per-handle state shared between the worker thread and the JS poll.
+            struct AsyncFetchState {
+                token: AbortToken,
+                outcome: Option<AsyncOutcome>,
+            }
+            let async_map: Arc<Mutex<HashMap<u32, AsyncFetchState>>> =
+                Arc::new(Mutex::new(HashMap::new()));
+            let async_next: Arc<AtomicU32> = Arc::new(AtomicU32::new(1));
+
+            // _lumen_fetch_async_start(url, method, content_type, body, has_body) → handle u32 (0 = no provider)
+            let am_start = Arc::clone(&async_map);
+            reg!(
+                "_lumen_fetch_async_start",
+                move |url: String, method: String, content_type: String, body: Vec<u8>, has_body: bool| -> u32 {
+                    let provider = match fp_async.as_ref() {
+                        Some(p) => Arc::clone(p),
+                        None => return 0,
+                    };
+                    let id = async_next.fetch_add(1, Ordering::Relaxed);
+                    let token = AbortToken::new();
+                    am_start
+                        .lock()
+                        .unwrap()
+                        .insert(id, AsyncFetchState { token: token.clone(), outcome: None });
+                    let map = Arc::clone(&am_start);
+                    std::thread::spawn(move || {
+                        let res = if has_body {
+                            provider.fetch_with_body_cancellable(&url, &method, &content_type, &body, &token)
+                        } else {
+                            provider.fetch_cancellable(&url, &method, &token)
+                        };
+                        let outcome = match res {
+                            Ok(r) => AsyncOutcome::Ok {
+                                status: r.status,
+                                status_text: r.status_text,
+                                headers: r
+                                    .headers
+                                    .into_iter()
+                                    .flat_map(|(k, v)| [k, v])
+                                    .collect(),
+                                body: r.body,
+                            },
+                            Err(lumen_core::error::Error::Aborted(_)) => AsyncOutcome::Aborted,
+                            Err(_) => AsyncOutcome::NetError,
+                        };
+                        if let Some(s) = map.lock().unwrap().get_mut(&id) {
+                            s.outcome = Some(outcome);
+                        }
+                    });
+                    id
+                }
+            );
+
+            // _lumen_fetch_async_poll(handle) → 0 pending, 1 ok, 2 net-error, 3 aborted
+            let am_poll = Arc::clone(&async_map);
+            reg!("_lumen_fetch_async_poll", move |id: u32| -> u32 {
+                let map = am_poll.lock().unwrap();
+                match map.get(&id) {
+                    None => 2,
+                    Some(s) => match s.outcome {
+                        None => 0,
+                        Some(AsyncOutcome::Ok { .. }) => 1,
+                        Some(AsyncOutcome::NetError) => 2,
+                        Some(AsyncOutcome::Aborted) => 3,
+                    },
+                }
+            });
+
+            // _lumen_fetch_async_abort(handle) → flips the token (worker tears the socket down)
+            let am_abort = Arc::clone(&async_map);
+            reg!("_lumen_fetch_async_abort", move |id: u32| {
+                if let Some(s) = am_abort.lock().unwrap().get(&id) {
+                    s.token.abort();
+                }
+            });
+
+            // _lumen_fetch_async_commit(handle) → moves a completed Ok result into the
+            // global FetchCache slot so Response._fromFetchCache reads it. Returns false
+            // if the handle is unknown or not in the Ok state.
+            let am_commit = Arc::clone(&async_map);
+            reg!("_lumen_fetch_async_commit", move |id: u32| -> bool {
+                let mut map = am_commit.lock().unwrap();
+                match map.get_mut(&id) {
+                    None => false,
+                    Some(s) => match s.outcome.take() {
+                        Some(AsyncOutcome::Ok { status, status_text, headers, body }) => {
+                            *c_async.lock().unwrap() = Some(FetchCache {
+                                status,
+                                status_text,
+                                headers,
+                                body,
+                            });
+                            true
+                        }
+                        other => {
+                            s.outcome = other;
+                            false
+                        }
+                    },
+                }
+            });
+
+            // _lumen_fetch_async_free(handle) → drop the per-handle state
+            let am_free = Arc::clone(&async_map);
+            reg!("_lumen_fetch_async_free", move |id: u32| {
+                am_free.lock().unwrap().remove(&id);
+            });
+        }
 
         // ── Per-response stream slots ────────────────────────────────────────────
         // Each call to Response._fromFetchCache() allocates a dedicated slot so the
@@ -7441,9 +7573,14 @@ function fetch(input, init) {
         // positive _timeoutMs routes to the cancellable bridge whose deadline
         // thread tears the in-flight socket down (rc === 2 → TimeoutError).
         var _timeoutMs = (fetchSignal && typeof fetchSignal._timeoutMs === 'number' && fetchSignal._timeoutMs > 0) ? fetchSignal._timeoutMs : 0;
-        var ok;
-        if (reqBody !== null && reqBody !== undefined) {
-            var bodyBytes, contentType;
+        // SRI integrity (W3C SRI §3.3.5), hoisted so both the sync and async paths verify.
+        var integrity = (init && init.integrity) ? String(init.integrity)
+                      : (typeof input === 'object' && input && input.integrity ? String(input.integrity) : '');
+        // Body extraction is hoisted out of the dispatch branch so the async path can
+        // reuse it. bodyBytes/contentType stay null when there is no request body.
+        var hasBody = (reqBody !== null && reqBody !== undefined);
+        var bodyBytes = null, contentType = null;
+        if (hasBody) {
             if (reqBody instanceof FormData) {
                 // Fetch spec §5.4: FormData body → multipart/form-data with random boundary.
                 // Phase 0: deterministic boundary for testability; production boundary is random.
@@ -7478,6 +7615,75 @@ function fetch(input, init) {
                     }
                 }
             }
+        }
+
+        // Async path: a live, non-timeout AbortSignal. Run the request on a worker
+        // thread (via the _lumen_fetch_async_* bridges) and resolve/reject through a
+        // setTimeout poll loop, so an AbortController.abort() fired *during* the
+        // request flips the token and cancels the in-flight socket. Timeout signals
+        // keep the synchronous-cancellable path below (already torn down natively).
+        var useAsync = fetchSignal && !fetchSignal.aborted && !(_timeoutMs > 0);
+        if (useAsync) {
+            return new Promise(function(resolve, reject) {
+                var handle = _lumen_fetch_async_start(url, method, contentType || '', bodyBytes || [], !!hasBody);
+                if (!handle) {
+                    reject(new TypeError('fetch: network error for ' + url));
+                    return;
+                }
+                var settled = false;
+                function finish(fn) {
+                    if (settled) return;
+                    settled = true;
+                    try { fetchSignal.removeEventListener('abort', onAbort); } catch (e) {}
+                    fn();
+                }
+                function onAbort() { _lumen_fetch_async_abort(handle); }
+                try { fetchSignal.addEventListener('abort', onAbort); } catch (e) {}
+                function poll() {
+                    if (settled) return;
+                    var st = _lumen_fetch_async_poll(handle);
+                    if (st === 0) { setTimeout(poll, 1); return; }
+                    if (st === 3) {
+                        finish(function() {
+                            _lumen_fetch_async_free(handle);
+                            reject(fetchSignal.reason !== undefined ? fetchSignal.reason : new DOMException('The operation was aborted', 'AbortError'));
+                        });
+                        return;
+                    }
+                    if (st === 2) {
+                        finish(function() {
+                            _lumen_fetch_async_free(handle);
+                            reject(new TypeError('fetch: network error for ' + url));
+                        });
+                        return;
+                    }
+                    finish(function() {
+                        if (!_lumen_fetch_async_commit(handle)) {
+                            _lumen_fetch_async_free(handle);
+                            reject(new TypeError('fetch: network error for ' + url));
+                            return;
+                        }
+                        _lumen_fetch_async_free(handle);
+                        var astatus = _lumen_fetch_get_status();
+                        var astatusText = _lumen_fetch_get_status_text();
+                        var arawHeaders = _lumen_fetch_get_headers();
+                        if (integrity && !_lumen_check_sri_integrity(integrity)) {
+                            reject(new TypeError('fetch: SRI integrity check failed for ' + url));
+                            return;
+                        }
+                        var ahdrs = [];
+                        for (var i = 0; i + 1 < arawHeaders.length; i += 2) { ahdrs.push([arawHeaders[i], arawHeaders[i + 1]]); }
+                        var aresp = Response._fromFetchCache(astatus, astatusText, ahdrs);
+                        aresp.url = url;
+                        resolve(aresp);
+                    });
+                }
+                setTimeout(poll, 0);
+            });
+        }
+
+        var ok;
+        if (hasBody) {
             if (_timeoutMs > 0) {
                 var rc = _lumen_fetch_cancellable_with_body(url, method, contentType, bodyBytes, _timeoutMs);
                 if (rc === 2) { return Promise.reject(new DOMException('signal timed out', 'TimeoutError')); }
@@ -7503,8 +7709,6 @@ function fetch(input, init) {
         var rawHeaders = _lumen_fetch_get_headers();
         // SRI integrity check (W3C SRI §3.3.5): verify body hash before exposing response.
         // _lumen_check_sri_integrity reads directly from Rust FetchCache — no JS copy needed.
-        var integrity = (init && init.integrity) ? String(init.integrity)
-                      : (typeof input === 'object' && input && input.integrity ? String(input.integrity) : '');
         if (integrity && !_lumen_check_sri_integrity(integrity)) {
             return Promise.reject(new TypeError('fetch: SRI integrity check failed for ' + url));
         }
@@ -18394,6 +18598,51 @@ mod tests {
         let p: Arc<dyn lumen_core::ext::JsFetchProvider> = AbortFetch::new();
         rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, false).unwrap();
         rt
+    }
+
+    // Mock provider whose cancellable variants BLOCK until the AbortToken is flipped,
+    // then report an abort — simulates a slow in-flight request cancelled mid-stream.
+    struct BlockingFetch;
+    impl lumen_core::ext::JsFetchProvider for BlockingFetch {
+        fn fetch_sync(&self, _url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+        }
+        fn fetch_with_body_sync(&self, _url: &str, _method: &str, _content_type: &str, _body: &[u8]) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+        }
+        fn fetch_cancellable(&self, _url: &str, _method: &str, token: &lumen_core::ext::AbortToken) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            while !token.is_aborted() { std::thread::sleep(std::time::Duration::from_millis(5)); }
+            Err(lumen_core::error::Error::Aborted("aborted".into()))
+        }
+        fn fetch_with_body_cancellable(&self, _url: &str, _method: &str, _content_type: &str, _body: &[u8], token: &lumen_core::ext::AbortToken) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            while !token.is_aborted() { std::thread::sleep(std::time::Duration::from_millis(5)); }
+            Err(lumen_core::error::Error::Aborted("aborted".into()))
+        }
+    }
+    impl BlockingFetch {
+        fn new() -> Arc<Self> { Arc::new(BlockingFetch) }
+    }
+
+    fn runtime_with_blocking_fetch() -> QuickJsRuntime {
+        let rt = QuickJsRuntime::new().unwrap();
+        let p: Arc<dyn lumen_core::ext::JsFetchProvider> = BlockingFetch::new();
+        rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, false).unwrap();
+        rt
+    }
+
+    // A generic AbortController.abort() fired *during* an in-flight async fetch must
+    // reject the promise with an AbortError (not only the timeout path).
+    #[test]
+    fn fetch_inflight_abort_rejects_with_abort_error() {
+        let rt = runtime_with_blocking_fetch();
+        rt.eval("var c = new AbortController(); globalThis.__st='pending'; fetch('https://example.com/slow', {signal: c.signal}).then(function(){__st='resolved';}).catch(function(e){__st=e && e.name ? e.name : 'error';}); c.abort();").unwrap();
+        for _ in 0..400 {
+            let _ = rt.eval("_lumen_tick_timers();");
+            let _ = rt.eval("_lumen_drain_microtasks();");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            if rt.eval("__st").unwrap() != lumen_core::JsValue::String("pending".into()) { break; }
+        }
+        assert_eq!(rt.eval("__st").unwrap(), lumen_core::JsValue::String("AbortError".into()));
     }
 
     #[test]

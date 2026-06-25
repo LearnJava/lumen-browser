@@ -148,8 +148,30 @@ real localhost), +3 JS (`abort_signal_timeout_records_deadline`,
 (not a timeout) still has no in-flight effect in the sync model — true async fetch
 (JS event-loop pump) remains the bulk of a future Step.
 
+**Phase A step 4 DONE (2026-06-25)** — async fetch closes the generic in-flight
+abort gap. A live, non-timeout `AbortSignal` now routes `fetch()` through a worker
+thread so an `AbortController.abort()` fired *during* the request actually cancels
+it (previously only `AbortSignal.timeout` aborted in flight). Five new JS bridges
+in the Fetch block of `install_dom` (`crates/js/src/dom.rs`):
+`_lumen_fetch_async_start(url, method, content_type, body, has_body) -> handle`
+(spawns the request on a background thread holding the `AbortToken`),
+`_lumen_fetch_async_poll(handle) -> 0 pending/1 ok/2 net-error/3 aborted`,
+`_lumen_fetch_async_abort(handle)` (flips the token → network `AbortWatchdog` tears
+the socket down), `_lumen_fetch_async_commit(handle)` (moves the Ok result into the
+shared `FetchCache`), `_lumen_fetch_async_free(handle)`. JS `fetch()`: body
+extraction + `integrity` hoisted out of the dispatch branch; `useAsync = signal &&
+!signal.aborted && !timeout` returns a Promise resolved by a `setTimeout` poll loop
+(driven by the existing timer pump — **no shell change required**); the `abort`
+listener calls `_lumen_fetch_async_abort` and the poll rejects with `signal.reason`
+/ `AbortError`. No-signal and timeout-only fetches keep the synchronous fast path
+(unchanged for the 2284 existing lib tests + 25 fetch tests, all green). Test:
+`fetch_inflight_abort_rejects_with_abort_error` (blocking mock provider, abort →
+`AbortError` within the poll budget). `lumen-js` clippy clean. **Still deferred:**
+WS/SSE event-loop push delivery (replace JS polling) requires shell integration
+(P3 domain) — tracked as the remaining Phase B/C work below.
+
 **Remaining (not yet done):**
-- **Step 3 (async fetch)** — JS `fetch()` wiring (`crates/js/src/dom.rs:7328`). **Design note (blocker):** JS is
+- **Step 3 (async fetch)** — DONE (see "Phase A step 4 DONE" above). Original design note retained for context: JS is
   single-threaded and the current `fetch()` is *synchronous* (blocks the JS thread), so an
   `AbortController.abort()` fired from JS cannot run *during* the request — the JS thread is parked
   inside the native call. The network-layer in-flight abort built in Step 2 is therefore only
