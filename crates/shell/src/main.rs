@@ -4329,26 +4329,17 @@ fn meta_initial_scale(src: &LayoutSource) -> f32 {
 
 /// Get-or-create the localStorage partition for the given `ResourceBase` origin.
 /// Returns `None` for file: bases (no persistent origin-partitioned storage).
-/// Returns the platform-specific directory for per-origin IndexedDB SQLite files,
+/// Returns the portable directory for per-origin IndexedDB SQLite files,
 /// creating it if it does not exist.
 ///
-/// - Windows: `%APPDATA%\lumen\idb\`
-/// - Unix:    `$HOME/.config/lumen/idb/`
-/// - Fallback (env vars missing): `./lumen-idb/` (relative to working directory)
+/// Path: `<exe_dir>/data/idb/` via [`adblock::browser_data_dir`] — the project's
+/// portable-data convention (user decision 2026-06-16: keep all browser data in
+/// the browser folder, never in OS dirs like `%APPDATA%`/`~/.config`).
 ///
 /// Returns `None` when directory creation fails — the caller falls back to
 /// ephemeral in-memory IDB storage for the session.
 fn lumen_idb_dir() -> Option<std::path::PathBuf> {
-    let dir = if cfg!(target_os = "windows") {
-        std::env::var("APPDATA")
-            .ok()
-            .map(|p| std::path::PathBuf::from(p).join("lumen").join("idb"))
-    } else {
-        std::env::var("HOME")
-            .ok()
-            .map(|p| std::path::PathBuf::from(p).join(".config").join("lumen").join("idb"))
-    }
-    .unwrap_or_else(|| std::path::PathBuf::from("lumen-idb"));
+    let dir = adblock::browser_data_dir().join("idb");
 
     if let Err(e) = std::fs::create_dir_all(&dir) {
         eprintln!("idb: не удалось создать директорию {}: {e}", dir.display());
