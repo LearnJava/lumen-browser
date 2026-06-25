@@ -1368,6 +1368,10 @@ pub trait WebSocketSession: Send {
     fn recv(&mut self) -> Result<WsMessage>;
     /// Инициировать закрытие: отправить Close-фрейм с кодом и причиной.
     fn close(&mut self, code: u16, reason: &str) -> Result<()>;
+    /// Server-selected sub-protocol (RFC 6455 §4.1); empty if none was negotiated.
+    fn protocol(&self) -> &str {
+        ""
+    }
 }
 
 /// Фабрика WebSocket-соединений. Реализуется `lumen-network::HttpClient`.
@@ -1418,6 +1422,19 @@ pub trait SseSession: Send {
 
     /// Закрыть соединение и остановить переподключение.
     fn close(&mut self);
+
+    /// Cancellation handle that wakes a pending reconnect delay from another
+    /// thread.
+    ///
+    /// The JS-facing wrapper grabs this handle before moving the session onto
+    /// its background thread; calling [`SseCancel::signal`] then interrupts the
+    /// reconnect back-off so [`close`](Self::close) takes effect within one tick
+    /// rather than after the full retry delay. The default returns a detached
+    /// handle (no-op) for sessions that never sleep between reconnects, such as
+    /// test mocks.
+    fn cancel(&self) -> SseCancel {
+        SseCancel::new()
+    }
 }
 
 /// Фабрика SSE-соединений. Реализуется `lumen-network::HttpClient`.
@@ -1557,6 +1574,296 @@ pub trait JsFetchProvider: Send + Sync {
     ) -> Result<JsFetchResult> {
         let _ = (content_type, body);
         self.fetch_sync(url, method)
+    }
+
+    /// Cooperative-cancellation variant of fetch_sync mirroring AbortSignal.
+    ///
+    /// The default implementation only checks the token before issuing the request
+    /// (pre-flight cancellation) and then delegates to `fetch_sync`. This ensures
+    /// back-compatibility with existing implementations.
+    ///
+    /// Implementations backed by a real socket should additionally poll the token
+    /// between reads and tear the connection down to achieve in-flight abort.
+    ///
+    /// On abort, this returns `Error::Aborted`, which the JS layer maps to a
+    /// DOMException `AbortError`.
+    fn fetch_cancellable(&self, url: &str, method: &str, token: &AbortToken) -> Result<JsFetchResult> {
+        if token.is_aborted() {
+            return Err(crate::error::Error::Aborted("fetch aborted before send".to_string()));
+        }
+        self.fetch_sync(url, method)
+    }
+
+    /// Cooperative-cancellation variant of `fetch_with_body_sync` mirroring AbortSignal.
+    ///
+    /// Identical contract to [`fetch_cancellable`](Self::fetch_cancellable) but for
+    /// requests that carry a body (POST/PUT/PATCH/DELETE). The default implementation
+    /// only checks the token before issuing the request (pre-flight cancellation) and
+    /// then delegates to `fetch_with_body_sync`. Implementations backed by a real socket
+    /// should additionally tear the connection down to achieve in-flight abort.
+    ///
+    /// On abort, this returns `Error::Aborted`, which the JS layer maps to a
+    /// DOMException `AbortError` (or `TimeoutError` for `AbortSignal.timeout`).
+    fn fetch_with_body_cancellable(
+        &self,
+        url: &str,
+        method: &str,
+        content_type: &str,
+        body: &[u8],
+        token: &AbortToken,
+    ) -> Result<JsFetchResult> {
+        if token.is_aborted() {
+            return Err(crate::error::Error::Aborted(
+                "fetch aborted before send".to_string(),
+            ));
+        }
+        self.fetch_with_body_sync(url, method, content_type, body)
+    }
+}
+
+#[cfg(test)]
+mod fetch_cancellable_tests {
+    use super::*;
+
+    struct DummyFetch;
+
+    impl JsFetchProvider for DummyFetch {
+        fn fetch_sync(&self, _url: &str, _method: &str) -> Result<JsFetchResult> {
+            Err(crate::error::Error::Network("net-called".to_string()))
+        }
+    }
+
+    #[test]
+    fn pre_aborted_token_returns_aborted() {
+        let token = AbortToken::new();
+        token.abort();
+        let provider = DummyFetch;
+        let result = provider.fetch_cancellable("http://example.com", "GET", &token);
+        match result {
+            Err(crate::error::Error::Aborted(_)) => {}
+            _ => panic!("expected Aborted error"),
+        }
+    }
+
+    #[test]
+    fn live_token_delegates_to_fetch_sync() {
+        let token = AbortToken::new();
+        let provider = DummyFetch;
+        let result = provider.fetch_cancellable("http://example.com", "GET", &token);
+        match result {
+            Err(crate::error::Error::Network(msg)) => assert_eq!(msg, "net-called"),
+            _ => panic!("expected Network error from fetch_sync"),
+        }
+    }
+
+    #[test]
+    fn body_pre_aborted_token_returns_aborted() {
+        let token = AbortToken::new();
+        token.abort();
+        let provider = DummyFetch;
+        let result =
+            provider.fetch_with_body_cancellable("http://example.com", "POST", "text/plain", b"x", &token);
+        match result {
+            Err(crate::error::Error::Aborted(_)) => {}
+            _ => panic!("expected Aborted error"),
+        }
+    }
+
+    #[test]
+    fn body_live_token_delegates_to_fetch_sync() {
+        let token = AbortToken::new();
+        let provider = DummyFetch;
+        let result =
+            provider.fetch_with_body_cancellable("http://example.com", "POST", "text/plain", b"x", &token);
+        match result {
+            Err(crate::error::Error::Network(msg)) => assert_eq!(msg, "net-called"),
+            _ => panic!("expected Network error from fetch_sync"),
+        }
+    }
+}
+
+/// A cheaply-clonable cooperative cancellation flag for aborting in-flight fetches.
+///
+/// This type mirrors the WHATWG `AbortSignal` concept, allowing the network layer
+/// to poll between socket reads to check if an operation should be aborted.
+/// All clones share the same underlying atomic flag via `Arc`, so aborting one
+/// affects all others.
+#[derive(Clone, Debug)]
+pub struct AbortToken {
+    flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl AbortToken {
+    /// Creates a new, non-aborted `AbortToken`.
+    ///
+    /// The returned token represents a fresh cancellation flag that has not been
+    /// triggered. Clones of this token will share the same underlying flag.
+    pub fn new() -> Self {
+        Self {
+            flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// Signals abortion by setting the internal flag to `true`.
+    ///
+    /// This operation is idempotent; calling it multiple times has no additional effect
+    /// beyond the first call. Uses `Ordering::SeqCst` to ensure synchronization.
+    pub fn abort(&self) {
+        self.flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Returns whether this token has been aborted.
+    ///
+    /// Uses `Ordering::SeqCst` to ensure a consistent view of the flag across threads.
+    /// Since all clones share the same flag, this reflects the state set by any clone.
+    pub fn is_aborted(&self) -> bool {
+        self.flag.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl Default for AbortToken {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod abort_token_tests {
+    use super::AbortToken;
+
+    #[test]
+    fn fresh_token_is_not_aborted() {
+        let token = AbortToken::new();
+        assert!(!token.is_aborted());
+    }
+
+    #[test]
+    fn abort_flips_is_aborted_to_true() {
+        let token = AbortToken::new();
+        token.abort();
+        assert!(token.is_aborted());
+    }
+
+    #[test]
+    fn abort_is_idempotent() {
+        let token = AbortToken::new();
+        token.abort();
+        token.abort();
+        assert!(token.is_aborted());
+    }
+
+    #[test]
+    fn clone_observes_abort_on_original() {
+        let token = AbortToken::new();
+        let cloned = token.clone();
+        token.abort();
+        assert!(cloned.is_aborted());
+    }
+
+    #[test]
+    fn default_produces_non_aborted_token() {
+        let token = AbortToken::default();
+        assert!(!token.is_aborted());
+    }
+}
+
+/// An interruptible-delay handle shared across threads.
+///
+/// Lets a pending delay be cut short from another thread. SSE
+/// (Server-Sent Events) uses it for the reconnect back-off: the background
+/// session thread sleeps `retry_ms` between reconnect attempts via
+/// [`sleep`](Self::sleep), and [`EventSource::close`](crate::ext::SseSession::close)
+/// from the script thread calls [`signal`](Self::signal) to wake that sleep
+/// immediately, so a closed source stops reconnecting within one tick instead of
+/// waiting out the full retry delay. All clones share one underlying flag via
+/// `Arc`, so signalling one affects all.
+#[derive(Clone, Default)]
+pub struct SseCancel {
+    inner: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+}
+
+impl SseCancel {
+    /// Creates a new, not-yet-cancelled handle.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Signals cancellation and wakes any thread parked in [`sleep`](Self::sleep).
+    ///
+    /// Sets the internal flag to `true` and notifies all waiters. Idempotent.
+    pub fn signal(&self) {
+        let (lock, cvar) = &*self.inner;
+        let mut cancelled = lock.lock().unwrap();
+        *cancelled = true;
+        cvar.notify_all();
+    }
+
+    /// Returns whether cancellation has been signalled.
+    pub fn is_cancelled(&self) -> bool {
+        let (lock, _) = &*self.inner;
+        *lock.lock().unwrap()
+    }
+
+    /// Blocks up to `dur`, returning early if cancellation is signalled.
+    ///
+    /// Returns `true` if cancellation was (or becomes) signalled — the caller
+    /// should stop — and `false` if the timeout elapsed first.
+    pub fn sleep(&self, dur: std::time::Duration) -> bool {
+        let (lock, cvar) = &*self.inner;
+        let cancelled = lock.lock().unwrap();
+        // `wait_timeout_while` re-checks the predicate after every wakeup, so a
+        // spurious wakeup keeps waiting the remaining time instead of returning
+        // a false "timeout". Returns once cancelled or `dur` elapses.
+        *cvar
+            .wait_timeout_while(cancelled, dur, |cancelled| !*cancelled)
+            .unwrap()
+            .0
+    }
+}
+
+#[cfg(test)]
+mod sse_cancel_tests {
+    use super::SseCancel;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn signal_then_sleep_returns_true_immediately() {
+        let handle = SseCancel::new();
+        handle.signal();
+        let start = Instant::now();
+        let result = handle.sleep(Duration::from_secs(10));
+        assert!(result);
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn sleep_times_out_returns_false() {
+        let handle = SseCancel::new();
+        assert!(!handle.sleep(Duration::from_millis(50)));
+    }
+
+    #[test]
+    fn another_thread_signal_wakes_sleep() {
+        let handle = SseCancel::new();
+        let handle_clone = handle.clone();
+        let thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            handle_clone.signal();
+        });
+        let start = Instant::now();
+        let result = handle.sleep(Duration::from_secs(10));
+        assert!(result);
+        assert!(start.elapsed() < Duration::from_secs(2));
+        thread.join().unwrap();
+    }
+
+    #[test]
+    fn is_cancelled_reflects_state() {
+        let handle = SseCancel::new();
+        assert!(!handle.is_cancelled());
+        handle.signal();
+        assert!(handle.is_cancelled());
     }
 }
 
@@ -1784,6 +2091,10 @@ pub trait JsWebSocketSession: Send {
     fn poll(&self) -> Option<JsWsEvent>;
     /// Send a Close frame and mark the session as closed.
     fn close(&self, code: u16, reason: &str) -> Result<()>;
+    /// Server-selected sub-protocol; empty until/unless negotiated.
+    fn protocol(&self) -> String {
+        String::new()
+    }
 }
 
 /// Factory that opens WebSocket connections for the JS runtime.
@@ -1796,7 +2107,10 @@ pub trait JsWebSocketProvider: Send + Sync {
     /// The handshake runs synchronously. On success, `onopen` can be fired
     /// immediately; subsequent server messages are buffered in the returned
     /// session and delivered via `poll()`.
-    fn connect(&self, url: &str) -> Result<Box<dyn JsWebSocketSession>>;
+    ///
+    /// `protocols` is the client's ordered list of sub-protocol preferences
+    /// (`Sec-WebSocket-Protocol`); pass an empty slice to request none.
+    fn connect(&self, url: &str, protocols: &[String]) -> Result<Box<dyn JsWebSocketSession>>;
 }
 
 /// Persistence boundary for the IndexedDB JS shim.

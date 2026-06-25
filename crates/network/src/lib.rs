@@ -27,7 +27,7 @@ use rustls::pki_types::ServerName;
 use lumen_core::error::{Error, Result};
 use lumen_core::event::{Event, RequestStage, TabId};
 use lumen_core::ext::{
-    ContentDecoder, CookieProvider, DnsResolver, EventSink, FetchInterceptor, HstsEnforcement,
+    AbortToken, ContentDecoder, CookieProvider, DnsResolver, EventSink, FetchInterceptor, HstsEnforcement,
     HttpAuthScheme, HttpCredentialProvider, JsFetchProvider, JsFetchResult, JsSseEvent, JsSseProvider,
     JsSseSession, JsWebSocketProvider, JsWebSocketSession, JsWsEvent, NetworkTransport, NoopEventSink,
     RequestFilter, SseProvider, SseSession, WebSocketProvider, WebSocketSession,
@@ -455,6 +455,109 @@ fn read_head(conn: &mut Connection) -> Result<ResponseHead> {
         .unwrap_or(false);
 
     Ok((status, headers, server_wants_close))
+}
+
+// ── Fetch in-flight abort (Phase A) ──────────────────────────────────────────
+
+thread_local! {
+    /// Holds the active `AbortToken` for the current thread, if any.
+    ///
+    /// A synchronous fetch runs entirely on one thread, so an RAII guard
+    /// (`AbortScope`) installs the token here for the call duration and the
+    /// deeply-nested read path (`do_request`) reads it via `current_abort_token`
+    /// without threading a parameter through every redirect/connect hop.
+    static ACTIVE_ABORT: std::cell::RefCell<Option<AbortToken>> = const { std::cell::RefCell::new(None) };
+}
+
+/// RAII guard installing an `AbortToken` into the thread-local for its lifetime.
+///
+/// Created at the top of `fetch_cancellable`; cleared on drop so a later
+/// non-cancellable fetch on the same thread never sees a stale token.
+pub(crate) struct AbortScope;
+
+impl AbortScope {
+    /// Installs the given `AbortToken` into the thread-local and returns a guard.
+    pub(crate) fn new(token: AbortToken) -> Self {
+        ACTIVE_ABORT.with(|cell| cell.replace(Some(token)));
+        AbortScope
+    }
+}
+
+impl Drop for AbortScope {
+    fn drop(&mut self) {
+        ACTIVE_ABORT.with(|cell| cell.replace(None));
+    }
+}
+
+/// Returns a clone of the abort token installed on the current thread, if any.
+pub(crate) fn current_abort_token() -> Option<AbortToken> {
+    ACTIVE_ABORT.with(|cell| cell.borrow().as_ref().cloned())
+}
+
+impl RawStream {
+    /// Clones a handle to the underlying TCP socket for out-of-band shutdown.
+    ///
+    /// Used by [`AbortWatchdog`] to call `shutdown` on the socket from another
+    /// thread, unblocking a blocking read on abort. Returns `None` if the OS
+    /// refuses to duplicate the descriptor.
+    pub(crate) fn try_clone_tcp(&self) -> Option<TcpStream> {
+        match self {
+            RawStream::Plain(s) => s.try_clone().ok(),
+            RawStream::Tls(s) => s.sock.try_clone().ok(),
+        }
+    }
+}
+
+impl Connection {
+    /// Clones the underlying TCP socket (see [`RawStream::try_clone_tcp`]).
+    pub(crate) fn try_clone_socket(&self) -> Option<TcpStream> {
+        self.reader.get_ref().try_clone_tcp()
+    }
+}
+
+/// Background thread that shuts the socket down when an `AbortToken` fires.
+///
+/// The HTTP read path is fully blocking; to cancel an in-flight request we hand
+/// a cloned socket handle to this watchdog, which polls the token and calls
+/// `shutdown(Both)` on abort — that surfaces in the blocking read as an error
+/// (or truncated EOF). `do_request` then maps the aborted state to
+/// `Error::Aborted`. The watchdog is stopped (and joined) the instant the read
+/// completes, so a successful request pays no poll latency.
+pub(crate) struct AbortWatchdog {
+    /// Set by `stop` to tell the watchdog thread to exit its poll loop.
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Handle to the watchdog thread, taken and joined in `stop`.
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl AbortWatchdog {
+    /// Spawns a watchdog polling `token`; on abort it shuts `sock` down.
+    pub(crate) fn spawn(token: AbortToken, sock: TcpStream) -> AbortWatchdog {
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_clone = stop.clone();
+        let handle = std::thread::spawn(move || {
+            while !stop_clone.load(std::sync::atomic::Ordering::SeqCst) {
+                if token.is_aborted() {
+                    let _ = sock.shutdown(std::net::Shutdown::Both);
+                    return;
+                }
+                std::thread::park_timeout(std::time::Duration::from_millis(20));
+            }
+        });
+        AbortWatchdog {
+            stop,
+            handle: Some(handle),
+        }
+    }
+
+    /// Signals the watchdog to exit and joins its thread.
+    pub(crate) fn stop(mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(h) = self.handle.take() {
+            h.thread().unpark();
+            let _ = h.join();
+        }
+    }
 }
 
 fn read_response(conn: &mut Connection) -> Result<Response> {
@@ -1445,10 +1548,36 @@ fn do_request(
         extra_headers,
         http_profile,
     )?;
-    let resp = match stream_sink {
-        Some(sink) => read_response_streamed(&mut conn, sink)?,
-        None => read_response(&mut conn)?,
+    // In-flight abort (Phase A): if a cancellable fetch installed an abort token
+    // on this thread, watch it on a side thread and tear the socket down on
+    // abort so the blocking read below unblocks. The abort check after the read
+    // takes precedence even over an `Ok` body — a shut-down socket can yield a
+    // truncated body that must NOT be delivered to the aborted fetch.
+    let token = current_abort_token();
+    if let Some(t) = &token
+        && t.is_aborted()
+    {
+        return Err(Error::Aborted("fetch aborted before response".to_string()));
+    }
+    let mut watchdog: Option<AbortWatchdog> = None;
+    if let Some(t) = &token
+        && let Some(sock) = conn.try_clone_socket()
+    {
+        watchdog = Some(AbortWatchdog::spawn(t.clone(), sock));
+    }
+    let read_result: Result<Response> = match stream_sink {
+        Some(sink) => read_response_streamed(&mut conn, sink),
+        None => read_response(&mut conn),
     };
+    if let Some(wd) = watchdog {
+        wd.stop();
+    }
+    if let Some(t) = &token
+        && t.is_aborted()
+    {
+        return Err(Error::Aborted("fetch aborted in-flight".to_string()));
+    }
+    let resp = read_result?;
     Ok((resp, conn))
 }
 
@@ -3204,7 +3333,31 @@ impl JsFetchProvider for HttpClient {
         }
 
         conn.write_request_with_body(method, &host_ascii, &path_and_query, content_type, body, "", self.fingerprint_profile)?;
-        let resp = read_response(&mut conn)?;
+        // In-flight abort (Phase A): mirror `do_request` so the body-carrying path
+        // honours an installed AbortToken. When no cancellable caller installed a
+        // token, `current_abort_token()` is None and behaviour is unchanged.
+        let token = current_abort_token();
+        if let Some(t) = &token
+            && t.is_aborted()
+        {
+            return Err(Error::Aborted("fetch aborted before response".to_string()));
+        }
+        let mut watchdog: Option<AbortWatchdog> = None;
+        if let Some(t) = &token
+            && let Some(sock) = conn.try_clone_socket()
+        {
+            watchdog = Some(AbortWatchdog::spawn(t.clone(), sock));
+        }
+        let read_result: Result<Response> = read_response(&mut conn);
+        if let Some(wd) = watchdog {
+            wd.stop();
+        }
+        if let Some(t) = &token
+            && t.is_aborted()
+        {
+            return Err(Error::Aborted("fetch aborted in-flight".to_string()));
+        }
+        let resp = read_result?;
         if !conn.closed {
             self.pool.release(key, conn);
         }
@@ -3218,6 +3371,44 @@ impl JsFetchProvider for HttpClient {
                 .collect(),
             body: resp.body,
         })
+    }
+
+    /// Synchronous GET/HEAD fetch that honours an `AbortToken` in-flight.
+    ///
+    /// Pre-flight: an already-aborted token short-circuits with `Error::Aborted`
+    /// before any socket work. Otherwise the token is installed on the current
+    /// thread for the duration of the (synchronous) request via [`AbortScope`];
+    /// `do_request` deep in the read path spawns an [`AbortWatchdog`] that shuts
+    /// the socket down if `abort()` fires mid-response, surfacing as
+    /// `Error::Aborted`. The JS layer maps that to a DOMException `AbortError`.
+    fn fetch_cancellable(&self, url: &str, method: &str, token: &AbortToken) -> Result<JsFetchResult> {
+        if token.is_aborted() {
+            return Err(Error::Aborted("fetch aborted before send".to_string()));
+        }
+        let _scope = AbortScope::new(token.clone());
+        self.fetch_sync(url, method)
+    }
+
+    /// In-flight-cancellable variant of `fetch_with_body_sync`.
+    ///
+    /// Same teardown machinery as [`fetch_cancellable`](Self::fetch_cancellable):
+    /// a pre-flight `is_aborted` short-circuit, then an [`AbortScope`] installs the
+    /// token for the request duration so `do_request` deep in the read path spawns
+    /// an [`AbortWatchdog`] that shuts the socket down if `abort()` fires mid-response,
+    /// surfacing as `Error::Aborted`.
+    fn fetch_with_body_cancellable(
+        &self,
+        url: &str,
+        method: &str,
+        content_type: &str,
+        body: &[u8],
+        token: &AbortToken,
+    ) -> Result<JsFetchResult> {
+        if token.is_aborted() {
+            return Err(Error::Aborted("fetch aborted before send".to_string()));
+        }
+        let _scope = AbortScope::new(token.clone());
+        self.fetch_with_body_sync(url, method, content_type, body)
     }
 }
 
@@ -3234,6 +3425,7 @@ impl WebSocketProvider for HttpClient {
             self.hsts.as_deref(),
             sink,
             tab_id,
+            &[],
         )?;
         Ok(Box::new(ws))
     }
@@ -3336,10 +3528,14 @@ impl JsWebSocketSession for JsWebSocketSessionImpl {
     fn close(&self, code: u16, reason: &str) -> Result<()> {
         self.session.lock().unwrap().close(code, reason)
     }
+
+    fn protocol(&self) -> String {
+        self.session.lock().unwrap().protocol().to_string()
+    }
 }
 
 impl JsWebSocketProvider for HttpClient {
-    fn connect(&self, url: &str) -> Result<Box<dyn JsWebSocketSession>> {
+    fn connect(&self, url: &str, protocols: &[String]) -> Result<Box<dyn JsWebSocketSession>> {
         let parsed = Url::parse(url)
             .map_err(|e| Error::Network(format!("ws: invalid URL: {e}")))?;
         // Always offer permessage-deflate (RFC 7692) — browsers do this by default.
@@ -3351,6 +3547,7 @@ impl JsWebSocketProvider for HttpClient {
             Arc::new(NoopEventSink),
             lumen_core::event::TabId(0),
             false,
+            protocols,
         )?;
         let impl_ = JsWebSocketSessionImpl::new(ws);
         // Push the Open event immediately — handshake already completed.
@@ -3370,8 +3567,11 @@ impl JsWebSocketProvider for HttpClient {
 struct JsSseSessionImpl {
     /// Buffered events produced by the background recv thread.
     queue: Arc<std::sync::Mutex<std::collections::VecDeque<JsSseEvent>>>,
-    /// Set by `close()` to ask the background thread to stop reconnecting.
-    closed: Arc<std::sync::atomic::AtomicBool>,
+    /// Cancellation handle shared with the underlying [`SseSession`]. Signalling
+    /// it stops the reconnect loop and wakes a pending reconnect sleep so
+    /// `close()` takes effect within one tick instead of after the full retry
+    /// delay.
+    cancel: lumen_core::ext::SseCancel,
 }
 
 impl JsSseSessionImpl {
@@ -3379,23 +3579,24 @@ impl JsSseSessionImpl {
     ///
     /// The thread pushes [`JsSseEvent::Open`] first, then forwards every server
     /// event until the stream ends ([`JsSseEvent::Close`]) or errors
-    /// ([`JsSseEvent::Error`]). The blocking [`SseSession::next_event`] cannot be
-    /// interrupted mid-call, so `close()` sets a flag the loop checks before each
-    /// read; an in-flight read finishes naturally when the server closes.
+    /// ([`JsSseEvent::Error`]). `close()` signals the shared cancel handle: it
+    /// wakes a pending reconnect delay immediately, and the loop also checks it
+    /// before each read so an idle session exits promptly. A read already
+    /// blocked in the socket finishes naturally when the server closes.
     fn new(mut session: Box<dyn SseSession>) -> Self {
-        use std::sync::atomic::{AtomicBool, Ordering};
         let queue: Arc<std::sync::Mutex<std::collections::VecDeque<JsSseEvent>>> =
             Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
-        let closed = Arc::new(AtomicBool::new(false));
+        let cancel = session.cancel();
+        let cancel_bg = cancel.clone();
 
         let q2 = Arc::clone(&queue);
-        let c2 = Arc::clone(&closed);
 
         std::thread::spawn(move || {
             q2.lock().unwrap().push_back(JsSseEvent::Open);
             loop {
-                if c2.load(Ordering::Relaxed) {
+                if cancel_bg.is_cancelled() {
                     session.close();
+                    q2.lock().unwrap().push_back(JsSseEvent::Close);
                     break;
                 }
                 match session.next_event() {
@@ -3422,7 +3623,7 @@ impl JsSseSessionImpl {
             }
         });
 
-        Self { queue, closed }
+        Self { queue, cancel }
     }
 }
 
@@ -3432,8 +3633,7 @@ impl JsSseSession for JsSseSessionImpl {
     }
 
     fn close(&mut self) {
-        self.closed
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.cancel.signal();
     }
 }
 
@@ -3556,6 +3756,394 @@ mod tests {
             }
         );
         assert_eq!(evs[2], JsSseEvent::Close);
+    }
+
+    /// Phase C: `close()` must interrupt a pending reconnect delay. The server
+    /// serves one event then drops the connection, so the client enters a 20 s
+    /// reconnect sleep (`retry: 20000`); `close()` has to wake that sleep and
+    /// deliver `Close` within a tick rather than waiting the full delay.
+    #[test]
+    fn js_sse_close_interrupts_reconnect() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::time::{Duration, Instant};
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+
+        let server = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(sock.try_clone().expect("clone"));
+            let mut line = String::new();
+            while reader.read_line(&mut line).expect("read") > 0 {
+                if line.trim().is_empty() {
+                    break;
+                }
+                line.clear();
+            }
+            let _ = sock.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\nretry: 20000\ndata: hi\n\n",
+            );
+            let _ = sock.flush();
+            thread::sleep(Duration::from_millis(100));
+            let _ = sock.shutdown(std::net::Shutdown::Both);
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let session = <HttpClient as SseProvider>::connect_sse(
+            &client,
+            &url,
+            TabId(0),
+            Arc::new(NoopEventSink),
+        )
+        .expect("connect_sse");
+        let mut sess = JsSseSessionImpl::new(session);
+
+        // Drain until the "hi" message arrives (ignore Open / Retry).
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut saw_message = false;
+        while Instant::now() < deadline {
+            if let Some(JsSseEvent::Message { data, .. }) = sess.poll() {
+                assert_eq!(data, "hi");
+                saw_message = true;
+                break;
+            }
+            thread::yield_now();
+        }
+        assert!(saw_message, "expected the SSE message before reconnect");
+
+        // Let the client hit EOF and enter the 20 s reconnect sleep, then close.
+        thread::sleep(Duration::from_millis(200));
+        let t = Instant::now();
+        sess.close();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut saw_close = false;
+        while Instant::now() < deadline {
+            if let Some(JsSseEvent::Close) = sess.poll() {
+                saw_close = true;
+                break;
+            }
+            thread::yield_now();
+        }
+        assert!(saw_close, "close() did not deliver JsSseEvent::Close");
+        assert!(
+            t.elapsed() < Duration::from_secs(3),
+            "close must interrupt the 20s reconnect sleep, took {:?}",
+            t.elapsed()
+        );
+
+        server.join().ok();
+    }
+
+    #[test]
+    fn sse_close_emits_closed_once() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::time::Duration;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let server = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(sock.try_clone().unwrap());
+            let mut line = String::new();
+            while reader.read_line(&mut line).unwrap() > 0 {
+                if line.trim().is_empty() {
+                    break;
+                }
+                line.clear();
+            }
+            let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n");
+            let _ = sock.flush();
+            thread::sleep(Duration::from_millis(200));
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let sink = Arc::new(CollectingSink::new());
+        let mut session: Box<dyn SseSession> =
+            <HttpClient as SseProvider>::connect_sse(&client, &url, TabId(0), sink.clone()).unwrap();
+
+        // Second close() must be a no-op — close() is idempotent.
+        session.close();
+        session.close();
+
+        let closed = sink
+            .events()
+            .iter()
+            .filter(|e| matches!(e, Event::SseClosed { .. }))
+            .count();
+        assert_eq!(closed, 1, "close() must emit SseClosed exactly once");
+
+        let _ = server.join();
+    }
+
+    // ── WebSocket end-to-end protocol (RFC 6455) ─────────────────────────────
+    // A real localhost `TcpListener` plays a minimal WebSocket server; the real
+    // client is driven through `WebSocketProvider::connect_ws` and we assert the
+    // hand-rolled frame codec round-trips correctly (handshake, text/binary echo,
+    // fragmentation reassembly, Ping→Pong auto-reply, server-initiated Close echo).
+    use lumen_core::ext::WsMessage;
+
+    /// RFC 6455 §4.1 server handshake: read the client's upgrade request, reply
+    /// `101 Switching Protocols` with the computed `Sec-WebSocket-Accept`. Frames
+    /// are read from the raw `sock` afterwards (the client sends none before 101).
+    fn ws_server_handshake(sock: &mut std::net::TcpStream) {
+        use std::io::{BufRead, BufReader, Write};
+        let mut reader = BufReader::new(sock.try_clone().unwrap());
+        let mut key = None;
+        let mut line = String::new();
+        while reader.read_line(&mut line).unwrap() > 0 {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                break;
+            }
+            if trimmed.to_ascii_lowercase().starts_with("sec-websocket-key:") {
+                let parts: Vec<&str> = trimmed.split(':').collect();
+                if parts.len() == 2 {
+                    key = Some(parts[1].trim().to_string());
+                }
+            }
+            line.clear();
+        }
+        let key = key.expect("Missing Sec-WebSocket-Key header");
+        let accept = crate::websocket::upgrade::compute_accept(&key);
+        let response = format!(
+            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+        );
+        sock.write_all(response.as_bytes()).unwrap();
+        sock.flush().unwrap();
+    }
+
+    /// Handshake + text echo: a single Text frame round-trips intact.
+    #[test]
+    fn ws_handshake_and_text_echo() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            ws_server_handshake(&mut sock);
+            loop {
+                let frame = crate::websocket::frame::read_frame(&mut sock).unwrap();
+                match frame.opcode {
+                    crate::websocket::frame::Opcode::Text => {
+                        crate::websocket::frame::write_frame(
+                            &mut sock,
+                            true,
+                            false,
+                            crate::websocket::frame::Opcode::Text,
+                            &frame.payload,
+                            None,
+                        )
+                        .unwrap();
+                    }
+                    crate::websocket::frame::Opcode::Close => break,
+                    _ => {}
+                }
+            }
+        });
+        let client = HttpClient::new();
+        let url = lumen_core::url::Url::parse(&format!("ws://127.0.0.1:{port}/")).unwrap();
+        let mut ws: Box<dyn lumen_core::ext::WebSocketSession> =
+            <HttpClient as WebSocketProvider>::connect_ws(&client, &url, TabId(0), std::sync::Arc::new(NoopEventSink))
+                .expect("connect_ws");
+        ws.send_text("hello").unwrap();
+        assert_eq!(ws.recv().unwrap(), WsMessage::Text("hello".to_string()));
+        ws.close(1000, "bye").unwrap();
+        server.join().ok();
+    }
+
+    /// Binary echo: a Binary frame (with high/zero bytes) round-trips intact.
+    #[test]
+    fn ws_binary_echo() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            ws_server_handshake(&mut sock);
+            let frame = crate::websocket::frame::read_frame(&mut sock).unwrap();
+            assert_eq!(frame.opcode, crate::websocket::frame::Opcode::Binary);
+            crate::websocket::frame::write_frame(
+                &mut sock,
+                true,
+                false,
+                crate::websocket::frame::Opcode::Binary,
+                &frame.payload,
+                None,
+            )
+            .unwrap();
+            // Consume the client's Close frame so the socket stays open until
+            // close() completes — otherwise the server drops it and the client's
+            // Close write races into a broken pipe.
+            let _ = crate::websocket::frame::read_frame(&mut sock);
+        });
+        let client = HttpClient::new();
+        let url = lumen_core::url::Url::parse(&format!("ws://127.0.0.1:{port}/")).unwrap();
+        let mut ws: Box<dyn lumen_core::ext::WebSocketSession> =
+            <HttpClient as WebSocketProvider>::connect_ws(&client, &url, TabId(0), std::sync::Arc::new(NoopEventSink))
+                .expect("connect_ws");
+        ws.send_binary(&[1, 2, 3, 255, 0]).unwrap();
+        assert_eq!(ws.recv().unwrap(), WsMessage::Binary(vec![1, 2, 3, 255, 0]));
+        ws.close(1000, "").unwrap();
+        server.join().ok();
+    }
+
+    /// Fragmentation (RFC 6455 §5.4): a Text message split across a first frame
+    /// (fin=0) + a Continuation frame (fin=1) is reassembled by the client.
+    #[test]
+    fn ws_fragmented_message_reassembled() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            ws_server_handshake(&mut sock);
+            crate::websocket::frame::write_frame(&mut sock, false, false, crate::websocket::frame::Opcode::Text, b"Hel", None).unwrap();
+            crate::websocket::frame::write_frame(&mut sock, true, false, crate::websocket::frame::Opcode::Continuation, b"lo", None).unwrap();
+        });
+        let client = HttpClient::new();
+        let url = lumen_core::url::Url::parse(&format!("ws://127.0.0.1:{port}/")).unwrap();
+        let mut ws: Box<dyn lumen_core::ext::WebSocketSession> =
+            <HttpClient as WebSocketProvider>::connect_ws(&client, &url, TabId(0), std::sync::Arc::new(NoopEventSink)).expect("connect_ws");
+        assert_eq!(ws.recv().unwrap(), WsMessage::Text("Hello".to_string()));
+        server.join().ok();
+    }
+
+    /// Control frames (RFC 6455 §5.5.2): a server Ping triggers an automatic
+    /// client Pong with the same payload; the Ping is also surfaced to the caller.
+    #[test]
+    fn ws_ping_triggers_pong_autoreply() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || -> bool {
+            let (mut sock, _) = listener.accept().unwrap();
+            ws_server_handshake(&mut sock);
+            crate::websocket::frame::write_frame(&mut sock, true, false, crate::websocket::frame::Opcode::Ping, b"pingdata", None).unwrap();
+            let reply = crate::websocket::frame::read_frame(&mut sock).unwrap();
+            let success = reply.opcode == crate::websocket::frame::Opcode::Pong && reply.payload == b"pingdata";
+            // Drain the client's Close frame to avoid a connection-reset race during teardown.
+            let _ = crate::websocket::frame::read_frame(&mut sock);
+            success
+        });
+        let client = HttpClient::new();
+        let url = lumen_core::url::Url::parse(&format!("ws://127.0.0.1:{port}/")).unwrap();
+        let mut ws: Box<dyn lumen_core::ext::WebSocketSession> =
+            <HttpClient as WebSocketProvider>::connect_ws(&client, &url, TabId(0), std::sync::Arc::new(NoopEventSink)).expect("connect_ws");
+        assert_eq!(ws.recv().unwrap(), WsMessage::Ping(b"pingdata".to_vec()));
+        ws.close(1000, "").unwrap();
+        assert!(server.join().unwrap(), "client must auto-reply Pong");
+    }
+
+    /// Close handshake (RFC 6455 §5.5.1): a server Close is surfaced with its
+    /// code/reason and echoed back by the client.
+    #[test]
+    fn ws_server_initiated_close_echoed() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || -> bool {
+            let (mut sock, _) = listener.accept().unwrap();
+            ws_server_handshake(&mut sock);
+            let payload = crate::websocket::frame::make_close_payload(1001, "going away");
+            crate::websocket::frame::write_frame(&mut sock, true, false, crate::websocket::frame::Opcode::Close, &payload, None).unwrap();
+            let echo = crate::websocket::frame::read_frame(&mut sock).unwrap();
+            echo.opcode == crate::websocket::frame::Opcode::Close
+        });
+        let client = HttpClient::new();
+        let url = lumen_core::url::Url::parse(&format!("ws://127.0.0.1:{port}/")).unwrap();
+        let mut ws: Box<dyn lumen_core::ext::WebSocketSession> =
+            <HttpClient as WebSocketProvider>::connect_ws(&client, &url, TabId(0), std::sync::Arc::new(NoopEventSink)).expect("connect_ws");
+        let m = ws.recv().unwrap();
+        match m {
+            WsMessage::Close { code, reason } => {
+                assert_eq!(code, Some(1001));
+                assert_eq!(reason, "going away");
+            }
+            _ => panic!("expected Close, got {m:?}"),
+        }
+        assert!(server.join().unwrap(), "client must echo Close");
+    }
+
+    /// RFC 6455 §4.1 handshake that also negotiates RFC 7692 permessage-deflate:
+    /// the `101` response carries `Sec-WebSocket-Extensions: permessage-deflate`
+    /// so the client enables compression for the session. Mirrors
+    /// [`ws_server_handshake`] otherwise.
+    fn ws_server_handshake_deflate(sock: &mut std::net::TcpStream) {
+        use std::io::{BufRead, BufReader, Write};
+        let mut reader = BufReader::new(sock.try_clone().unwrap());
+        let mut key = None;
+        let mut line = String::new();
+        while reader.read_line(&mut line).unwrap() > 0 {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                break;
+            }
+            if trimmed.to_ascii_lowercase().starts_with("sec-websocket-key:") {
+                let parts: Vec<&str> = trimmed.split(':').collect();
+                if parts.len() == 2 {
+                    key = Some(parts[1].trim().to_string());
+                }
+            }
+            line.clear();
+        }
+        let key = key.expect("Missing Sec-WebSocket-Key header");
+        let accept = crate::websocket::upgrade::compute_accept(&key);
+        let response = format!(
+            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\nSec-WebSocket-Extensions: permessage-deflate; client_no_context_takeover; server_no_context_takeover\r\n\r\n"
+        );
+        sock.write_all(response.as_bytes()).unwrap();
+        sock.flush().unwrap();
+    }
+
+    /// End-to-end RFC 7692 permessage-deflate: both directions compress. The
+    /// client (`compress=true`) sends an RSV1 Text frame the server inflates; the
+    /// server replies with its own compressed RSV1 Text frame the client inflates.
+    #[test]
+    fn ws_permessage_deflate_roundtrip() {
+        use lumen_core::ext::WebSocketSession;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || -> bool {
+            let (mut sock, _) = listener.accept().unwrap();
+            ws_server_handshake_deflate(&mut sock);
+
+            let frame = crate::websocket::frame::read_frame(&mut sock).unwrap();
+            assert_eq!(frame.opcode, crate::websocket::frame::Opcode::Text);
+            assert!(frame.rsv1, "client frame must be permessage-deflate compressed");
+            let inflated = crate::websocket::deflate::decompress_message(&frame.payload).unwrap();
+            assert_eq!(inflated, b"client says hi");
+
+            let compressed = crate::websocket::deflate::compress_message(b"server says hi").unwrap();
+            crate::websocket::frame::write_frame(
+                &mut sock,
+                true,
+                true,
+                crate::websocket::frame::Opcode::Text,
+                &compressed,
+                None,
+            )
+            .unwrap();
+
+            let echo = crate::websocket::frame::read_frame(&mut sock).unwrap();
+            echo.opcode == crate::websocket::frame::Opcode::Close
+        });
+        let url = lumen_core::url::Url::parse(&format!("ws://127.0.0.1:{port}/")).unwrap();
+        let client = HttpClient::new();
+        let mut ws: Box<dyn WebSocketSession> = Box::new(
+            crate::websocket::WebSocket::connect_deflate(
+                &url,
+                client.resolver.as_ref(),
+                client.hsts.as_deref(),
+                std::sync::Arc::new(NoopEventSink),
+                TabId(0),
+                true,
+                &[],
+            )
+            .expect("connect_deflate"),
+        );
+        ws.send_text("client says hi").unwrap();
+        assert_eq!(ws.recv().unwrap(), WsMessage::Text("server says hi".to_string()));
+        ws.close(1000, "").unwrap();
+        assert!(server.join().unwrap(), "deflate frames must round-trip both ways");
     }
 
     // ── ALPN (5A.1) ──────────────────────────────────────────────────────────
@@ -4040,6 +4628,110 @@ mod tests {
             let _ = sock.shutdown(std::net::Shutdown::Both);
         });
         (port, handle)
+    }
+
+    /// Phase A: an already-aborted token short-circuits before any socket work.
+    #[test]
+    fn fetch_cancellable_preflight_abort() {
+        let client = HttpClient::new();
+        let token = AbortToken::new();
+        token.abort();
+        let result = client.fetch_cancellable("http://127.0.0.1:1/", "GET", &token);
+        assert!(matches!(result, Err(Error::Aborted(_))));
+    }
+
+    /// Phase A: aborting during the (blocking) body read tears the socket down
+    /// and yields `Error::Aborted`, delivering no body.
+    #[test]
+    fn fetch_cancellable_aborts_in_flight() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+
+        let server = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(sock.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            // Promise 1 MB but send only 7 bytes → the client blocks in the body
+            // read until the abort watchdog shuts the socket down.
+            let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\nConnection: close\r\n\r\npartial");
+            thread::sleep(std::time::Duration::from_secs(1));
+            let _ = sock.shutdown(std::net::Shutdown::Both);
+        });
+
+        let client = HttpClient::new();
+        let token = AbortToken::new();
+        let token2 = token.clone();
+
+        let aborter = thread::spawn(move || {
+            thread::sleep(std::time::Duration::from_millis(150));
+            token2.abort();
+        });
+
+        let url = format!("http://127.0.0.1:{port}/");
+        let result = client.fetch_cancellable(&url, "GET", &token);
+
+        aborter.join().ok();
+        server.join().ok();
+
+        match result {
+            Err(Error::Aborted(_)) => {}
+            Err(e) => panic!("expected Error::Aborted, got Err({e:?})"),
+            Ok(_) => panic!("expected Error::Aborted, got Ok(_) — body must not be delivered"),
+        }
+    }
+
+    /// Phase A (body variant): aborting during the blocking body read of a POST
+    /// tears the socket down and yields `Error::Aborted`, delivering no body.
+    #[test]
+    fn fetch_with_body_cancellable_aborts_in_flight() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+
+        let server = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(sock.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\nConnection: close\r\n\r\npartial");
+            thread::sleep(std::time::Duration::from_secs(1));
+            let _ = sock.shutdown(std::net::Shutdown::Both);
+        });
+
+        let client = HttpClient::new();
+        let token = AbortToken::new();
+        let token2 = token.clone();
+
+        let aborter = thread::spawn(move || {
+            thread::sleep(std::time::Duration::from_millis(150));
+            token2.abort();
+        });
+
+        let url = format!("http://127.0.0.1:{port}/");
+        let result = client.fetch_with_body_cancellable(&url, "POST", "text/plain", b"hi", &token);
+
+        aborter.join().ok();
+        server.join().ok();
+
+        match result {
+            Err(Error::Aborted(_)) => {}
+            Err(e) => panic!("expected Error::Aborted, got Err({e:?})"),
+            Ok(_) => panic!("expected Error::Aborted, got Ok(_) - body must not be delivered"),
+        }
     }
 
     #[test]

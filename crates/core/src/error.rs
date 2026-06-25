@@ -13,6 +13,9 @@ pub enum Error {
     PermissionDenied(String),
     NotFound(String),
     Other(String),
+    /// Operation was cooperatively cancelled (e.g. an in-flight `fetch()` aborted
+    /// via an `AbortSignal`). The JS layer maps this to a DOMException `AbortError`.
+    Aborted(String),
 }
 
 impl fmt::Display for Error {
@@ -26,6 +29,7 @@ impl fmt::Display for Error {
             Self::PermissionDenied(s) => write!(f, "permission denied: {s}"),
             Self::NotFound(s) => write!(f, "not found: {s}"),
             Self::Other(s) => write!(f, "{s}"),
+            Self::Aborted(s) => write!(f, "aborted: {s}"),
         }
     }
 }

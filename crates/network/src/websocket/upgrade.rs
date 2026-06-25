@@ -25,33 +25,50 @@ pub(crate) fn generate_key() -> String {
 /// `stream` must be a fresh (unread) TCP/TLS connection to the WS server.
 /// On success the stream is in "WebSocket data mode" — caller hands it to
 /// the frame codec.
+/// Performs the WebSocket handshake and returns the server-selected sub-protocol
+/// (RFC 6455 §4.1 `Sec-WebSocket-Protocol`). Returns an empty string if no
+/// sub-protocol was negotiated. `protocols` is the client's ordered preference list.
 pub(crate) fn perform<S: Read + Write>(
-    stream:        &mut S,
-    host:          &str,
-    path:          &str,
-    key_b64:       &str,
-    extra_headers: &[(&str, &str)],
-) -> Result<()> {
-    send_upgrade_request(stream, host, path, key_b64, extra_headers)?;
-    expect_101(stream, key_b64).map(|_| ())
+    stream:    &mut S,
+    host:      &str,
+    path:      &str,
+    key_b64:   &str,
+    protocols: &[String],
+) -> Result<String> {
+    // `proto_hdr` is hoisted to function scope so its borrow outlives `extra_headers`.
+    let proto_hdr = protocols.join(", ");
+    let mut extra_headers: Vec<(&str, &str)> = Vec::new();
+    if !protocols.is_empty() {
+        extra_headers.push(("Sec-WebSocket-Protocol", &proto_hdr));
+    }
+    send_upgrade_request(stream, host, path, key_b64, &extra_headers)?;
+    expect_101(stream, key_b64).map(|(_, selected)| selected)
 }
 
 /// Like [`perform`] but offers `permessage-deflate` extension (RFC 7692).
 ///
-/// Returns `true` if the server confirmed the extension in its 101 response.
-/// Uses `client_no_context_takeover; server_no_context_takeover` so each
-/// message is independently compressed — no shared zlib state between messages.
+/// Returns `(deflate_negotiated, selected_protocol)`: the first element is `true`
+/// if the server confirmed the extension, the second is the server-chosen
+/// sub-protocol (empty string if none). Uses
+/// `client_no_context_takeover; server_no_context_takeover` so each message is
+/// independently compressed — no shared zlib state between messages.
 pub(crate) fn perform_with_deflate<S: Read + Write>(
-    stream:  &mut S,
-    host:    &str,
-    path:    &str,
-    key_b64: &str,
-) -> Result<bool> {
-    let deflate_ext = [(
+    stream:    &mut S,
+    host:      &str,
+    path:      &str,
+    key_b64:   &str,
+    protocols: &[String],
+) -> Result<(bool, String)> {
+    // `proto_hdr` is hoisted to function scope so its borrow outlives `extra_headers`.
+    let proto_hdr = protocols.join(", ");
+    let mut extra_headers: Vec<(&str, &str)> = vec![(
         "Sec-WebSocket-Extensions",
         "permessage-deflate; client_no_context_takeover; server_no_context_takeover",
     )];
-    send_upgrade_request(stream, host, path, key_b64, &deflate_ext)?;
+    if !protocols.is_empty() {
+        extra_headers.push(("Sec-WebSocket-Protocol", &proto_hdr));
+    }
+    send_upgrade_request(stream, host, path, key_b64, &extra_headers)?;
     expect_101(stream, key_b64)
 }
 
@@ -89,8 +106,10 @@ fn send_upgrade_request<W: Write>(
 
 // ── Response parsing ──────────────────────────────────────────────────────────
 
-/// Parse the 101 response. Returns `true` if the server agreed to permessage-deflate.
-fn expect_101<R: Read>(r: &mut R, key_b64: &str) -> Result<bool> {
+/// Parse the 101 response. Returns `(deflate_negotiated, selected_protocol)`:
+/// whether the server agreed to permessage-deflate, and the trimmed value of the
+/// `Sec-WebSocket-Protocol` response header (empty string if absent).
+fn expect_101<R: Read>(r: &mut R, key_b64: &str) -> Result<(bool, String)> {
     let status = read_line(r)?;
     if !status.contains("101") {
         return Err(Error::Network(format!(
@@ -102,6 +121,7 @@ fn expect_101<R: Read>(r: &mut R, key_b64: &str) -> Result<bool> {
     let expected = compute_accept(key_b64);
     let mut got_accept = false;
     let mut deflate_negotiated = false;
+    let mut selected_protocol = String::new();
     loop {
         let line = read_line(r)?;
         let line = line.trim_end_matches(['\r', '\n']);
@@ -118,6 +138,9 @@ fn expect_101<R: Read>(r: &mut R, key_b64: &str) -> Result<bool> {
         {
             deflate_negotiated = true;
         }
+        if let Some(val) = header_value(line, "Sec-WebSocket-Protocol") {
+            selected_protocol = val.trim().to_string();
+        }
     }
 
     if !got_accept {
@@ -125,7 +148,7 @@ fn expect_101<R: Read>(r: &mut R, key_b64: &str) -> Result<bool> {
             "ws: missing or invalid Sec-WebSocket-Accept".into(),
         ));
     }
-    Ok(deflate_negotiated)
+    Ok((deflate_negotiated, selected_protocol))
 }
 
 /// Read one CRLF-terminated line (≤ 8 KiB) byte-by-byte.
@@ -371,7 +394,7 @@ mod tests {
         );
         let mut cur = std::io::Cursor::new(response.as_bytes());
         // No deflate header → returns false (no deflate negotiated), but not an error.
-        assert!(!expect_101(&mut cur, key).unwrap());
+        assert!(!expect_101(&mut cur, key).unwrap().0);
     }
 
     #[test]
@@ -422,7 +445,7 @@ mod tests {
              \r\n"
         );
         let mut cur = std::io::Cursor::new(response.as_bytes());
-        assert!(expect_101(&mut cur, key).unwrap());
+        assert!(expect_101(&mut cur, key).unwrap().0);
     }
 
     /// If the server does not include the extension, expect_101 returns false (no deflate).
@@ -438,6 +461,52 @@ mod tests {
              \r\n"
         );
         let mut cur = std::io::Cursor::new(response.as_bytes());
-        assert!(!expect_101(&mut cur, key).unwrap());
+        assert!(!expect_101(&mut cur, key).unwrap().0);
+    }
+
+    /// The upgrade request carries a `Sec-WebSocket-Protocol` header listing the
+    /// client's requested sub-protocols (comma+space joined).
+    #[test]
+    fn upgrade_request_includes_subprotocol_header() {
+        let key = "dGhlIHNhbXBsZSBub25jZQ==";
+        let protos = ["chat".to_string(), "superchat".to_string()];
+        let hdr = protos.join(", ");
+        let ext = [("Sec-WebSocket-Protocol", hdr.as_str())];
+        let mut buf = Vec::new();
+        send_upgrade_request(&mut buf, "example.com", "/ws", key, &ext).unwrap();
+        let req = String::from_utf8(buf).unwrap();
+        assert!(req.contains("Sec-WebSocket-Protocol: chat, superchat\r\n"));
+    }
+
+    /// `expect_101` returns the server-selected sub-protocol from the response.
+    #[test]
+    fn expect_101_parses_selected_subprotocol() {
+        let key = "dGhlIHNhbXBsZSBub25jZQ==";
+        let accept = compute_accept(key);
+        let response = format!(
+            "HTTP/1.1 101 Switching Protocols\r\n\
+             Upgrade: websocket\r\n\
+             Connection: Upgrade\r\n\
+             Sec-WebSocket-Accept: {accept}\r\n\
+             Sec-WebSocket-Protocol: superchat\r\n\
+             \r\n"
+        );
+        let mut cur = std::io::Cursor::new(response.as_bytes());
+        let (deflate, selected) = expect_101(&mut cur, key).unwrap();
+        assert!(!deflate);
+        assert_eq!(selected, "superchat");
+    }
+
+    /// With no `Sec-WebSocket-Protocol` response header, the selected protocol is empty.
+    #[test]
+    fn expect_101_no_subprotocol_is_empty() {
+        let key = "dGhlIHNhbXBsZSBub25jZQ==";
+        let accept = compute_accept(key);
+        let response = format!(
+            "HTTP/1.1 101 Switching Protocols\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+        );
+        let mut cur = std::io::Cursor::new(response.as_bytes());
+        let (_, selected) = expect_101(&mut cur, key).unwrap();
+        assert_eq!(selected, "");
     }
 }

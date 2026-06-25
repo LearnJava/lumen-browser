@@ -13,7 +13,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU32, Ordering},
 };
 
-use lumen_core::ext::{CacheBackend, CookieProvider, IdbBackend, JsFetchProvider, JsSseEvent, JsSseProvider, JsWebSocketProvider, JsWsEvent, SwBackend};
+use lumen_core::ext::{AbortToken, CacheBackend, CookieProvider, IdbBackend, JsFetchProvider, JsSseEvent, JsSseProvider, JsWebSocketProvider, JsWsEvent, SwBackend};
 use lumen_core::url::Url;
 use lumen_dom::{
     Attribute, Document, DomPosition, NodeData, NodeId, QualName, Range as DomRange, Selection,
@@ -1145,6 +1145,12 @@ fn install_primitives(
 
         let fp2 = fetch_provider.clone();
         let fp_beacon = fetch_provider.clone();
+        let fp_cancel = fetch_provider.clone();
+        let fp_cancel_body = fetch_provider.clone();
+        let c_cancel = Arc::clone(&cache);
+        let c_cancel_body = Arc::clone(&cache);
+        let fp_async = fetch_provider.clone();
+        let c_async = Arc::clone(&cache);
         let (fp, c) = (fetch_provider, Arc::clone(&cache));
         reg!("_lumen_fetch_sync", move |url: String, method: String| -> bool {
             let Some(ref provider) = fp else { return false };
@@ -1279,6 +1285,201 @@ fn install_primitives(
             );
         }
 
+        // _lumen_fetch_cancellable(url, method, timeout_ms) → u32
+        // In-flight-cancellable GET/HEAD. Returns 0 = ok (body in FetchCache),
+        // 1 = network error, 2 = aborted/timed-out. When timeout_ms > 0 a detached
+        // deadline thread flips the AbortToken; the network layer tears the socket
+        // down, so a `fetch(url, {signal: AbortSignal.timeout(ms)})` against a slow
+        // server actually aborts even though the JS thread is parked in the call.
+        reg!("_lumen_fetch_cancellable", move |url: String, method: String, timeout_ms: u32| -> u32 {
+            let Some(ref provider) = fp_cancel else { return 1 };
+            let token = AbortToken::new();
+            if timeout_ms > 0 {
+                let t = token.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(u64::from(timeout_ms)));
+                    t.abort();
+                });
+            }
+            match provider.fetch_cancellable(&url, &method, &token) {
+                Ok(resp) => {
+                    let mut flat = Vec::with_capacity(resp.headers.len() * 2);
+                    for (k, v) in resp.headers { flat.push(k); flat.push(v); }
+                    *c_cancel.lock().unwrap() = Some(FetchCache {
+                        status: resp.status,
+                        status_text: resp.status_text,
+                        headers: flat,
+                        body: resp.body,
+                    });
+                    0
+                }
+                Err(lumen_core::error::Error::Aborted(_)) => 2,
+                Err(e) => { eprintln!("fetch error: {e}"); 1 }
+            }
+        });
+
+        // _lumen_fetch_cancellable_with_body(url, method, content_type, body, timeout_ms) → u32
+        // Body-carrying (POST/PUT/...) sibling of _lumen_fetch_cancellable.
+        reg!(
+            "_lumen_fetch_cancellable_with_body",
+            move |url: String, method: String, content_type: String, body: Vec<u8>, timeout_ms: u32| -> u32 {
+                let Some(ref provider) = fp_cancel_body else { return 1 };
+                let token = AbortToken::new();
+                if timeout_ms > 0 {
+                    let t = token.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(u64::from(timeout_ms)));
+                        t.abort();
+                    });
+                }
+                match provider.fetch_with_body_cancellable(&url, &method, &content_type, &body, &token) {
+                    Ok(resp) => {
+                        let mut flat = Vec::with_capacity(resp.headers.len() * 2);
+                        for (k, v) in resp.headers { flat.push(k); flat.push(v); }
+                        *c_cancel_body.lock().unwrap() = Some(FetchCache {
+                            status: resp.status,
+                            status_text: resp.status_text,
+                            headers: flat,
+                            body: resp.body,
+                        });
+                        0
+                    }
+                    Err(lumen_core::error::Error::Aborted(_)) => 2,
+                    Err(e) => { eprintln!("fetch_with_body error: {e}"); 1 }
+                }
+            }
+        );
+
+        // ── Async fetch (in-flight AbortController.abort) ────────────────────────
+        // Runs the request on a background thread so a JS `abort()` fired *during*
+        // the request (not just a pre-flight/timeout) flips the AbortToken and the
+        // network layer tears the socket down. JS fetch() drives a setTimeout poll
+        // loop that resolves/rejects once the worker finishes. No shell change: the
+        // existing timer pump drives the poll. Mirrors the WS/SSE poll model.
+        {
+            /// Background fetch result: success payload, or a typed failure.
+            enum AsyncOutcome {
+                /// Completed response (headers flattened: [name, value, ...]).
+                Ok {
+                    status: u16,
+                    status_text: String,
+                    headers: Vec<String>,
+                    body: Vec<u8>,
+                },
+                /// Network/transport error.
+                NetError,
+                /// Aborted in flight via the AbortToken.
+                Aborted,
+            }
+            /// Per-handle state shared between the worker thread and the JS poll.
+            struct AsyncFetchState {
+                token: AbortToken,
+                outcome: Option<AsyncOutcome>,
+            }
+            let async_map: Arc<Mutex<HashMap<u32, AsyncFetchState>>> =
+                Arc::new(Mutex::new(HashMap::new()));
+            let async_next: Arc<AtomicU32> = Arc::new(AtomicU32::new(1));
+
+            // _lumen_fetch_async_start(url, method, content_type, body, has_body) → handle u32 (0 = no provider)
+            let am_start = Arc::clone(&async_map);
+            reg!(
+                "_lumen_fetch_async_start",
+                move |url: String, method: String, content_type: String, body: Vec<u8>, has_body: bool| -> u32 {
+                    let provider = match fp_async.as_ref() {
+                        Some(p) => Arc::clone(p),
+                        None => return 0,
+                    };
+                    let id = async_next.fetch_add(1, Ordering::Relaxed);
+                    let token = AbortToken::new();
+                    am_start
+                        .lock()
+                        .unwrap()
+                        .insert(id, AsyncFetchState { token: token.clone(), outcome: None });
+                    let map = Arc::clone(&am_start);
+                    std::thread::spawn(move || {
+                        let res = if has_body {
+                            provider.fetch_with_body_cancellable(&url, &method, &content_type, &body, &token)
+                        } else {
+                            provider.fetch_cancellable(&url, &method, &token)
+                        };
+                        let outcome = match res {
+                            Ok(r) => AsyncOutcome::Ok {
+                                status: r.status,
+                                status_text: r.status_text,
+                                headers: r
+                                    .headers
+                                    .into_iter()
+                                    .flat_map(|(k, v)| [k, v])
+                                    .collect(),
+                                body: r.body,
+                            },
+                            Err(lumen_core::error::Error::Aborted(_)) => AsyncOutcome::Aborted,
+                            Err(_) => AsyncOutcome::NetError,
+                        };
+                        if let Some(s) = map.lock().unwrap().get_mut(&id) {
+                            s.outcome = Some(outcome);
+                        }
+                    });
+                    id
+                }
+            );
+
+            // _lumen_fetch_async_poll(handle) → 0 pending, 1 ok, 2 net-error, 3 aborted
+            let am_poll = Arc::clone(&async_map);
+            reg!("_lumen_fetch_async_poll", move |id: u32| -> u32 {
+                let map = am_poll.lock().unwrap();
+                match map.get(&id) {
+                    None => 2,
+                    Some(s) => match s.outcome {
+                        None => 0,
+                        Some(AsyncOutcome::Ok { .. }) => 1,
+                        Some(AsyncOutcome::NetError) => 2,
+                        Some(AsyncOutcome::Aborted) => 3,
+                    },
+                }
+            });
+
+            // _lumen_fetch_async_abort(handle) → flips the token (worker tears the socket down)
+            let am_abort = Arc::clone(&async_map);
+            reg!("_lumen_fetch_async_abort", move |id: u32| {
+                if let Some(s) = am_abort.lock().unwrap().get(&id) {
+                    s.token.abort();
+                }
+            });
+
+            // _lumen_fetch_async_commit(handle) → moves a completed Ok result into the
+            // global FetchCache slot so Response._fromFetchCache reads it. Returns false
+            // if the handle is unknown or not in the Ok state.
+            let am_commit = Arc::clone(&async_map);
+            reg!("_lumen_fetch_async_commit", move |id: u32| -> bool {
+                let mut map = am_commit.lock().unwrap();
+                match map.get_mut(&id) {
+                    None => false,
+                    Some(s) => match s.outcome.take() {
+                        Some(AsyncOutcome::Ok { status, status_text, headers, body }) => {
+                            *c_async.lock().unwrap() = Some(FetchCache {
+                                status,
+                                status_text,
+                                headers,
+                                body,
+                            });
+                            true
+                        }
+                        other => {
+                            s.outcome = other;
+                            false
+                        }
+                    },
+                }
+            });
+
+            // _lumen_fetch_async_free(handle) → drop the per-handle state
+            let am_free = Arc::clone(&async_map);
+            reg!("_lumen_fetch_async_free", move |id: u32| {
+                am_free.lock().unwrap().remove(&id);
+            });
+        }
+
         // ── Per-response stream slots ────────────────────────────────────────────
         // Each call to Response._fromFetchCache() allocates a dedicated slot so the
         // body can be consumed independently of subsequent fetch() calls that would
@@ -1409,9 +1610,14 @@ fn install_primitives(
         let next_id: Arc<Mutex<u32>> = Arc::new(Mutex::new(1));
 
         let (reg_c, nid_c, wp) = (Arc::clone(&registry), Arc::clone(&next_id), ws_provider);
-        reg!("_lumen_ws_connect", move |url: String| -> u32 {
+        reg!("_lumen_ws_connect", move |url: String, proto_csv: String| -> u32 {
             let Some(ref provider) = wp else { return 0 };
-            match provider.connect(&url) {
+            let protos: Vec<String> = proto_csv
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            match provider.connect(&url, &protos) {
                 Ok(session) => {
                     let id = {
                         let mut n = nid_c.lock().unwrap();
@@ -1470,7 +1676,10 @@ fn install_primitives(
                 let map = reg_c.lock().unwrap();
                 let sess = map.get(&handle)?;
                 sess.poll().map(|ev| match ev {
-                    JsWsEvent::Open => r#"{"t":"open"}"#.to_string(),
+                    JsWsEvent::Open => {
+                        let proto = sess.protocol().replace('\\', "\\\\").replace('"', "\\\"");
+                        format!(r#"{{"t":"open","protocol":"{proto}"}}"#)
+                    }
                     JsWsEvent::Message { data, is_binary } => {
                         if is_binary {
                             // Encode binary payload as base64-like hex for Phase 0.
@@ -6412,6 +6621,10 @@ AbortSignal.abort = function(reason) {
 // shell timer queue (setTimeout shim) fires.
 AbortSignal.timeout = function(ms) {
     var sig = new AbortSignal();
+    // Recorded so fetch() can enforce the deadline natively: the JS thread is
+    // parked inside the synchronous native fetch, so this setTimeout can never
+    // fire mid-request — the native deadline thread does the in-flight abort.
+    sig._timeoutMs = (typeof ms === 'number' && ms > 0) ? ms : 0;
     setTimeout(function() {
         _lumen_abort_signal_fire(sig, new DOMException('signal timed out', 'TimeoutError'));
     }, ms);
@@ -7355,9 +7568,19 @@ function fetch(input, init) {
         var reqBody = (init && init.body !== undefined && init.body !== null) ? init.body
                     : (typeof input === 'object' && input.body ? input.body : null);
 
-        var ok;
-        if (reqBody !== null && reqBody !== undefined) {
-            var bodyBytes, contentType;
+        // AbortSignal.timeout(ms) deadline is enforced natively (the JS thread is
+        // parked in the synchronous fetch, so the JS setTimeout can't fire): a
+        // positive _timeoutMs routes to the cancellable bridge whose deadline
+        // thread tears the in-flight socket down (rc === 2 → TimeoutError).
+        var _timeoutMs = (fetchSignal && typeof fetchSignal._timeoutMs === 'number' && fetchSignal._timeoutMs > 0) ? fetchSignal._timeoutMs : 0;
+        // SRI integrity (W3C SRI §3.3.5), hoisted so both the sync and async paths verify.
+        var integrity = (init && init.integrity) ? String(init.integrity)
+                      : (typeof input === 'object' && input && input.integrity ? String(input.integrity) : '');
+        // Body extraction is hoisted out of the dispatch branch so the async path can
+        // reuse it. bodyBytes/contentType stay null when there is no request body.
+        var hasBody = (reqBody !== null && reqBody !== undefined);
+        var bodyBytes = null, contentType = null;
+        if (hasBody) {
             if (reqBody instanceof FormData) {
                 // Fetch spec §5.4: FormData body → multipart/form-data with random boundary.
                 // Phase 0: deterministic boundary for testability; production boundary is random.
@@ -7392,9 +7615,90 @@ function fetch(input, init) {
                     }
                 }
             }
-            ok = _lumen_fetch_sync_with_body(url, method, contentType, bodyBytes);
+        }
+
+        // Async path: a live, non-timeout AbortSignal. Run the request on a worker
+        // thread (via the _lumen_fetch_async_* bridges) and resolve/reject through a
+        // setTimeout poll loop, so an AbortController.abort() fired *during* the
+        // request flips the token and cancels the in-flight socket. Timeout signals
+        // keep the synchronous-cancellable path below (already torn down natively).
+        var useAsync = fetchSignal && !fetchSignal.aborted && !(_timeoutMs > 0);
+        if (useAsync) {
+            return new Promise(function(resolve, reject) {
+                var handle = _lumen_fetch_async_start(url, method, contentType || '', bodyBytes || [], !!hasBody);
+                if (!handle) {
+                    reject(new TypeError('fetch: network error for ' + url));
+                    return;
+                }
+                var settled = false;
+                function finish(fn) {
+                    if (settled) return;
+                    settled = true;
+                    try { fetchSignal.removeEventListener('abort', onAbort); } catch (e) {}
+                    fn();
+                }
+                function onAbort() { _lumen_fetch_async_abort(handle); }
+                try { fetchSignal.addEventListener('abort', onAbort); } catch (e) {}
+                function poll() {
+                    if (settled) return;
+                    var st = _lumen_fetch_async_poll(handle);
+                    if (st === 0) { setTimeout(poll, 1); return; }
+                    if (st === 3) {
+                        finish(function() {
+                            _lumen_fetch_async_free(handle);
+                            reject(fetchSignal.reason !== undefined ? fetchSignal.reason : new DOMException('The operation was aborted', 'AbortError'));
+                        });
+                        return;
+                    }
+                    if (st === 2) {
+                        finish(function() {
+                            _lumen_fetch_async_free(handle);
+                            reject(new TypeError('fetch: network error for ' + url));
+                        });
+                        return;
+                    }
+                    finish(function() {
+                        if (!_lumen_fetch_async_commit(handle)) {
+                            _lumen_fetch_async_free(handle);
+                            reject(new TypeError('fetch: network error for ' + url));
+                            return;
+                        }
+                        _lumen_fetch_async_free(handle);
+                        var astatus = _lumen_fetch_get_status();
+                        var astatusText = _lumen_fetch_get_status_text();
+                        var arawHeaders = _lumen_fetch_get_headers();
+                        if (integrity && !_lumen_check_sri_integrity(integrity)) {
+                            reject(new TypeError('fetch: SRI integrity check failed for ' + url));
+                            return;
+                        }
+                        var ahdrs = [];
+                        for (var i = 0; i + 1 < arawHeaders.length; i += 2) { ahdrs.push([arawHeaders[i], arawHeaders[i + 1]]); }
+                        var aresp = Response._fromFetchCache(astatus, astatusText, ahdrs);
+                        aresp.url = url;
+                        resolve(aresp);
+                    });
+                }
+                setTimeout(poll, 0);
+            });
+        }
+
+        var ok;
+        if (hasBody) {
+            if (_timeoutMs > 0) {
+                var rc = _lumen_fetch_cancellable_with_body(url, method, contentType, bodyBytes, _timeoutMs);
+                if (rc === 2) { return Promise.reject(new DOMException('signal timed out', 'TimeoutError')); }
+                ok = (rc === 0);
+            } else {
+                ok = _lumen_fetch_sync_with_body(url, method, contentType, bodyBytes);
+            }
         } else {
-            ok = _lumen_fetch_sync(url, method);
+            if (_timeoutMs > 0) {
+                var rc2 = _lumen_fetch_cancellable(url, method, _timeoutMs);
+                if (rc2 === 2) { return Promise.reject(new DOMException('signal timed out', 'TimeoutError')); }
+                ok = (rc2 === 0);
+            } else {
+                ok = _lumen_fetch_sync(url, method);
+            }
         }
 
         if (!ok) {
@@ -7405,8 +7709,6 @@ function fetch(input, init) {
         var rawHeaders = _lumen_fetch_get_headers();
         // SRI integrity check (W3C SRI §3.3.5): verify body hash before exposing response.
         // _lumen_check_sri_integrity reads directly from Rust FetchCache — no JS copy needed.
-        var integrity = (init && init.integrity) ? String(init.integrity)
-                      : (typeof input === 'object' && input && input.integrity ? String(input.integrity) : '');
         if (integrity && !_lumen_check_sri_integrity(integrity)) {
             return Promise.reject(new TypeError('fetch: SRI integrity check failed for ' + url));
         }
@@ -7465,6 +7767,7 @@ function _lumen_ws_pump_one(ws) {
             var ev = JSON.parse(raw);
             if (ev.t === 'open') {
                 ws.readyState = 1;
+                ws.protocol = ev.protocol || '';
                 _lumen_ws_fire(ws, new Event('open', { isTrusted: true }));
             } else if (ev.t === 'msg') {
                 if (ws.readyState !== 1) { continue; }
@@ -7484,7 +7787,8 @@ function _lumen_ws_pump_one(ws) {
                 _lumen_ws_fire(ws, new MessageEvent(msgData, { isTrusted: true }));
             } else if (ev.t === 'close') {
                 ws.readyState = 3;
-                _lumen_ws_fire(ws, new CloseEvent(ev.code, ev.reason, ev.code === 1000, { isTrusted: true }));
+                // A received Close frame means the closing handshake completed → wasClean.
+                _lumen_ws_fire(ws, new CloseEvent(ev.code, ev.reason, true, { isTrusted: true }));
                 ws._handle = 0;
                 break;
             } else if (ev.t === 'error') {
@@ -7503,7 +7807,7 @@ function _lumen_pump_websockets() {
     }
 }
 
-function WebSocket(url) {
+function WebSocket(url, protocols) {
     this.url = String(url || '');
     this.readyState = 0;
     this.protocol = '';
@@ -7515,7 +7819,15 @@ function WebSocket(url) {
     this._handle = 0;
     this._listeners = {};
     var self = this;
-    var h = _lumen_ws_connect(this.url);
+    var protoCsv = '';
+    if (protocols != null) {
+        if (Array.isArray(protocols)) {
+            protoCsv = protocols.filter(function(p) { return typeof p === 'string' && p.length > 0; }).join(',');
+        } else if (typeof protocols === 'string') {
+            protoCsv = protocols;
+        }
+    }
+    var h = _lumen_ws_connect(this.url, protoCsv);
     if (!h) {
         this.readyState = 3;
         setTimeout(function() {
@@ -7530,13 +7842,48 @@ function WebSocket(url) {
     // Phase 0: no persistent event loop — caller must invoke _lumen_pump_websockets()
     // after setting onopen/onmessage to receive queued events.
 }
+// Application-data byte length used for bufferedAmount accounting (WHATWG WebSocket).
+function _lumen_ws_bytelen(data) {
+    if (typeof data === 'string') {
+        return new TextEncoder().encode(data).length;
+    }
+    if (data instanceof ArrayBuffer) {
+        return data.byteLength;
+    }
+    if (typeof data.byteLength === 'number') {
+        return data.byteLength;
+    }
+    return new TextEncoder().encode(String(data)).length;
+}
+
 WebSocket.prototype.send = function(data) {
-    if (this.readyState !== 1) return;
-    if (typeof data === 'string') { _lumen_ws_send(this._handle, data); }
-    else { _lumen_ws_send_bin(this._handle, data instanceof Uint8Array ? data : new Uint8Array(data)); }
+    if (this.readyState === 0) {
+        throw new DOMException(\"Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.\", 'InvalidStateError');
+    }
+    var n = _lumen_ws_bytelen(data);
+    if (this.readyState === 1) {
+        if (typeof data === 'string') {
+            _lumen_ws_send(this._handle, data);
+        } else {
+            _lumen_ws_send_bin(this._handle, data instanceof Uint8Array ? data : new Uint8Array(data));
+        }
+    } else if (this.readyState === 2 || this.readyState === 3) {
+        // CLOSING/CLOSED: data is discarded but counted (WHATWG §the-websocket-interface send()).
+        this.bufferedAmount += n;
+    }
 };
 WebSocket.prototype.close = function(code, reason) {
-    if (this.readyState === 3) return;
+    if (code !== undefined && code !== null) {
+        if (code !== 1000 && (code < 3000 || code > 4999)) {
+            throw new DOMException(\"Failed to execute 'close' on 'WebSocket': The code must be either 1000, or between 3000 and 4999.\", 'InvalidAccessError');
+        }
+    }
+    if (typeof reason === 'string' && new TextEncoder().encode(reason).length > 123) {
+        throw new DOMException(\"Failed to execute 'close' on 'WebSocket': The close reason must not be greater than 123 UTF-8 bytes.\", 'SyntaxError');
+    }
+    if (this.readyState === 2 || this.readyState === 3) {
+        return;
+    }
     this.readyState = 2;
     _lumen_ws_close(this._handle, typeof code === 'number' ? code : 1000, typeof reason === 'string' ? reason : '');
 };
@@ -7552,6 +7899,8 @@ WebSocket.prototype.removeEventListener = function(type, fn) {
 };
 WebSocket.CONNECTING = 0; WebSocket.OPEN = 1;
 WebSocket.CLOSING = 2;    WebSocket.CLOSED = 3;
+WebSocket.prototype.CONNECTING = 0; WebSocket.prototype.OPEN = 1;
+WebSocket.prototype.CLOSING = 2;    WebSocket.prototype.CLOSED = 3;
 
 // ── Web Storage (localStorage / sessionStorage) ───────────────────────────────
 // Spec: https://html.spec.whatwg.org/multipage/webstorage.html §8
@@ -14287,7 +14636,7 @@ mod tests {
     // Mock WS provider: connect always fails (no server).
     struct FailWsProvider;
     impl lumen_core::ext::JsWebSocketProvider for FailWsProvider {
-        fn connect(&self, _url: &str) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsWebSocketSession>> {
+        fn connect(&self, _url: &str, _protocols: &[String]) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsWebSocketSession>> {
             Err(lumen_core::error::Error::Network("test: no server".into()))
         }
     }
@@ -14338,6 +14687,8 @@ mod tests {
     struct MockWsProvider;
     struct MockWsSession {
         queue: std::sync::Mutex<std::collections::VecDeque<lumen_core::ext::JsWsEvent>>,
+        /// Sub-protocol echoed back to the client (first requested, "" if none).
+        protocol: String,
     }
     impl lumen_core::ext::JsWebSocketSession for MockWsSession {
         fn send_text(&self, _text: &str) -> lumen_core::error::Result<()> { Ok(()) }
@@ -14346,14 +14697,17 @@ mod tests {
             self.queue.lock().unwrap().pop_front()
         }
         fn close(&self, _code: u16, _reason: &str) -> lumen_core::error::Result<()> { Ok(()) }
+        fn protocol(&self) -> String { self.protocol.clone() }
     }
     impl lumen_core::ext::JsWebSocketProvider for MockWsProvider {
-        fn connect(&self, _url: &str) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsWebSocketSession>> {
+        fn connect(&self, _url: &str, protocols: &[String]) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsWebSocketSession>> {
             use lumen_core::ext::JsWsEvent;
             let mut q = std::collections::VecDeque::new();
             q.push_back(JsWsEvent::Open);
             q.push_back(JsWsEvent::Message { data: b"hello".to_vec(), is_binary: false });
-            Ok(Box::new(MockWsSession { queue: std::sync::Mutex::new(q) }))
+            // Echo the client's first requested sub-protocol, mirroring a real server.
+            let protocol = protocols.first().cloned().unwrap_or_default();
+            Ok(Box::new(MockWsSession { queue: std::sync::Mutex::new(q), protocol }))
         }
     }
 
@@ -14389,6 +14743,36 @@ mod tests {
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 
+    /// `new WebSocket(url, protocols)` forwards the requested sub-protocol; on open,
+    /// the server-selected protocol is surfaced as `ws.protocol`. The mock echoes the
+    /// first requested protocol.
+    #[test]
+    fn websocket_subprotocol_surfaced_on_open() {
+        let rt = runtime_with_mock_ws(make_doc());
+        let r = rt
+            .eval(
+                "var ws = new WebSocket('ws://mock', ['chat', 'superchat']);
+                 _lumen_pump_websockets();
+                 ws.protocol",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("chat".into()));
+    }
+
+    /// A string `protocols` argument is accepted and surfaced as `ws.protocol`.
+    #[test]
+    fn websocket_subprotocol_string_arg() {
+        let rt = runtime_with_mock_ws(make_doc());
+        let r = rt
+            .eval(
+                "var ws = new WebSocket('ws://mock', 'json');
+                 _lumen_pump_websockets();
+                 ws.protocol",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("json".into()));
+    }
+
     #[test]
     fn websocket_mock_message_via_pump() {
         let rt = runtime_with_mock_ws(make_doc());
@@ -14405,11 +14789,101 @@ mod tests {
         assert_eq!(r, lumen_core::JsValue::String("hello".into()));
     }
 
+    /// `send()` while CONNECTING must throw `InvalidStateError` (WHATWG WebSocket).
+    #[test]
+    fn websocket_send_in_connecting_throws() {
+        let rt = runtime_with_mock_ws(make_doc());
+        // No pump → stays CONNECTING (readyState 0).
+        let r = rt
+            .eval(
+                "var ws = new WebSocket('ws://mock');
+                 try { ws.send('x'); 'nothrow'; } catch (e) { e.name; }",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("InvalidStateError".into()));
+    }
+
+    /// `close()` with an out-of-range code throws `InvalidAccessError`; a valid
+    /// custom code (3000–4999) transitions the socket to CLOSING (2).
+    #[test]
+    fn websocket_close_code_validation() {
+        let rt = runtime_with_mock_ws(make_doc());
+        let bad = rt
+            .eval(
+                "var ws = new WebSocket('ws://mock');
+                 try { ws.close(1234); 'nothrow'; } catch (e) { e.name; }",
+            )
+            .unwrap();
+        assert_eq!(bad, lumen_core::JsValue::String("InvalidAccessError".into()));
+        let ok = rt
+            .eval(
+                "var ws2 = new WebSocket('ws://mock');
+                 ws2.close(3001); ws2.readyState",
+            )
+            .unwrap();
+        assert_eq!(ok, lumen_core::JsValue::Number(2.0));
+    }
+
+    /// `close()` with a reason longer than 123 UTF-8 bytes throws `SyntaxError`.
+    #[test]
+    fn websocket_close_reason_too_long_throws() {
+        let rt = runtime_with_mock_ws(make_doc());
+        let r = rt
+            .eval(
+                "var ws = new WebSocket('ws://mock');
+                 var long = 'a'.repeat(124);
+                 try { ws.close(1000, long); 'nothrow'; } catch (e) { e.name; }",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("SyntaxError".into()));
+    }
+
+    /// `send()` in CLOSING/CLOSED discards data but counts it in `bufferedAmount`.
+    #[test]
+    fn websocket_buffered_amount_in_closing() {
+        let rt = runtime_with_mock_ws(make_doc());
+        let r = rt
+            .eval(
+                "var ws = new WebSocket('ws://mock');
+                 ws.close();           // CONNECTING → CLOSING
+                 ws.send('hello');     // 5 bytes, discarded but counted
+                 ws.bufferedAmount",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(5.0));
+    }
+
+    /// Ready-state constants are exposed on instances, not only the constructor.
+    #[test]
+    fn websocket_instance_constants() {
+        let rt = runtime_with_mock_ws(make_doc());
+        let r = rt
+            .eval(
+                "var ws = new WebSocket('ws://mock');
+                 ws.CONNECTING === 0 && ws.OPEN === 1 && ws.CLOSING === 2 && ws.CLOSED === 3",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    /// A second `close()` is a no-op (idempotent), readyState stays CLOSING.
+    #[test]
+    fn websocket_close_idempotent() {
+        let rt = runtime_with_mock_ws(make_doc());
+        let r = rt
+            .eval(
+                "var ws = new WebSocket('ws://mock');
+                 ws.close(); ws.close(); ws.readyState",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(2.0));
+    }
+
     #[test]
     fn websocket_no_provider_connect_returns_zero() {
         // Without ws_provider, _lumen_ws_connect always returns 0.
         let rt = runtime_with_dom(make_doc());
-        let r = rt.eval("_lumen_ws_connect('ws://test')").unwrap();
+        let r = rt.eval("_lumen_ws_connect('ws://test', '')").unwrap();
         assert_eq!(r, lumen_core::JsValue::Number(0.0));
     }
 
@@ -14783,7 +15257,7 @@ mod tests {
         fn close(&self, _code: u16, _reason: &str) -> lumen_core::error::Result<()> { Ok(()) }
     }
     impl lumen_core::ext::JsWebSocketProvider for MockBinaryWsProvider {
-        fn connect(&self, _url: &str) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsWebSocketSession>> {
+        fn connect(&self, _url: &str, _protocols: &[String]) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsWebSocketSession>> {
             use lumen_core::ext::JsWsEvent;
             let mut q = std::collections::VecDeque::new();
             q.push_back(JsWsEvent::Open);
@@ -18096,6 +18570,99 @@ mod tests {
         let p: Arc<dyn lumen_core::ext::JsFetchProvider> = provider;
         rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, false).unwrap();
         rt
+    }
+
+    // Mock fetch provider whose cancellable variants always report an abort,
+    // exercising the _lumen_fetch_cancellable* bridge → code 2 path.
+    struct AbortFetch;
+    impl lumen_core::ext::JsFetchProvider for AbortFetch {
+        fn fetch_sync(&self, _url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+        }
+        fn fetch_with_body_sync(&self, _url: &str, _method: &str, _content_type: &str, _body: &[u8]) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+        }
+        fn fetch_cancellable(&self, _url: &str, _method: &str, _token: &lumen_core::ext::AbortToken) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            Err(lumen_core::error::Error::Aborted("aborted".into()))
+        }
+        fn fetch_with_body_cancellable(&self, _url: &str, _method: &str, _content_type: &str, _body: &[u8], _token: &lumen_core::ext::AbortToken) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            Err(lumen_core::error::Error::Aborted("aborted".into()))
+        }
+    }
+    impl AbortFetch {
+        fn new() -> Arc<Self> { Arc::new(AbortFetch) }
+    }
+
+    fn runtime_with_abort_fetch() -> QuickJsRuntime {
+        let rt = QuickJsRuntime::new().unwrap();
+        let p: Arc<dyn lumen_core::ext::JsFetchProvider> = AbortFetch::new();
+        rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, false).unwrap();
+        rt
+    }
+
+    // Mock provider whose cancellable variants BLOCK until the AbortToken is flipped,
+    // then report an abort — simulates a slow in-flight request cancelled mid-stream.
+    struct BlockingFetch;
+    impl lumen_core::ext::JsFetchProvider for BlockingFetch {
+        fn fetch_sync(&self, _url: &str, _method: &str) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+        }
+        fn fetch_with_body_sync(&self, _url: &str, _method: &str, _content_type: &str, _body: &[u8]) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            Ok(lumen_core::ext::JsFetchResult { status: 200, status_text: "OK".into(), headers: vec![], body: b"ok".to_vec() })
+        }
+        fn fetch_cancellable(&self, _url: &str, _method: &str, token: &lumen_core::ext::AbortToken) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            while !token.is_aborted() { std::thread::sleep(std::time::Duration::from_millis(5)); }
+            Err(lumen_core::error::Error::Aborted("aborted".into()))
+        }
+        fn fetch_with_body_cancellable(&self, _url: &str, _method: &str, _content_type: &str, _body: &[u8], token: &lumen_core::ext::AbortToken) -> lumen_core::error::Result<lumen_core::ext::JsFetchResult> {
+            while !token.is_aborted() { std::thread::sleep(std::time::Duration::from_millis(5)); }
+            Err(lumen_core::error::Error::Aborted("aborted".into()))
+        }
+    }
+    impl BlockingFetch {
+        fn new() -> Arc<Self> { Arc::new(BlockingFetch) }
+    }
+
+    fn runtime_with_blocking_fetch() -> QuickJsRuntime {
+        let rt = QuickJsRuntime::new().unwrap();
+        let p: Arc<dyn lumen_core::ext::JsFetchProvider> = BlockingFetch::new();
+        rt.install_dom(make_doc(), "https://example.com/", Some(p), None, None, None, None, None, None, None, false).unwrap();
+        rt
+    }
+
+    // A generic AbortController.abort() fired *during* an in-flight async fetch must
+    // reject the promise with an AbortError (not only the timeout path).
+    #[test]
+    fn fetch_inflight_abort_rejects_with_abort_error() {
+        let rt = runtime_with_blocking_fetch();
+        rt.eval("var c = new AbortController(); globalThis.__st='pending'; fetch('https://example.com/slow', {signal: c.signal}).then(function(){__st='resolved';}).catch(function(e){__st=e && e.name ? e.name : 'error';}); c.abort();").unwrap();
+        for _ in 0..400 {
+            let _ = rt.eval("_lumen_tick_timers();");
+            let _ = rt.eval("_lumen_drain_microtasks();");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            if rt.eval("__st").unwrap() != lumen_core::JsValue::String("pending".into()) { break; }
+        }
+        assert_eq!(rt.eval("__st").unwrap(), lumen_core::JsValue::String("AbortError".into()));
+    }
+
+    #[test]
+    fn abort_signal_timeout_records_deadline() {
+        let rt = runtime_with_fetch(CaptureFetch::new());
+        assert_eq!(rt.eval("AbortSignal.timeout(50)._timeoutMs === 50").unwrap(), lumen_core::JsValue::Bool(true));
+        assert_eq!(rt.eval("AbortSignal.timeout(0)._timeoutMs === 0").unwrap(), lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn fetch_cancellable_bridge_reports_abort() {
+        let rt = runtime_with_abort_fetch();
+        assert_eq!(rt.eval("_lumen_fetch_cancellable('https://example.com/','GET',0) === 2").unwrap(), lumen_core::JsValue::Bool(true));
+        assert_eq!(rt.eval("_lumen_fetch_cancellable_with_body('https://example.com/','POST','text/plain',[104,105],0) === 2").unwrap(), lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn fetch_cancellable_bridge_reports_ok() {
+        let rt = runtime_with_fetch(CaptureFetch::new());
+        assert_eq!(rt.eval("_lumen_fetch_cancellable('https://example.com/','GET',0) === 0").unwrap(), lumen_core::JsValue::Bool(true));
     }
 
     #[test]

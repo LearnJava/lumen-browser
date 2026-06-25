@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-06-23",
+ "generated": "2026-06-25",
  "counts": {
-  "open": 39,
-  "fixed": 197,
+  "open": 24,
+  "fixed": 214,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 236,
+ "total_bugs": 238,
  "phases": [
   {
    "id": "P0",
@@ -508,7 +508,8 @@
     {
      "id": "P3-ws",
      "title": "WebSockets + SSE + Fetch API + AbortController",
-     "status": "planned"
+     "status": "done",
+     "note": "P3-ws ✅ 2026-06-25 (in-flight fetch abort + SSE non-blocking reconnect + WS sub-protocol/wasClean/state-machine + e2e suite; deep zero-poll WS push = optional shell refinement)"
     },
     {
      "id": "P3-auth",
@@ -548,7 +549,7 @@
     {
      "id": "P3-varfonts",
      "title": "Variable fonts axes runtime (font-variation-settings)",
-     "status": "planned",
+     "status": "done",
      "bugs": [
       "BUG-109"
      ]
@@ -1368,10 +1369,10 @@
    "debtor": false
   },
   "BUG-109": {
-   "status": "open",
-   "title": "font-variation-settings: wght/wdth/slnt не передаются растеризатору — TEST-68: 3.21%",
-   "component": "css-parser/font",
-   "date": null,
+   "status": "fixed",
+   "title": "font-variation-settings: wght/wdth/slnt не применялись в femtovg-окне — варьируемый run теперь рендерится через lumen-font outlines (vector fill). GPU-путь прим…",
+   "component": "paint/font",
+   "date": "2026-06-23",
    "debtor": false
   },
   "BUG-110": {
@@ -1403,17 +1404,17 @@
    "debtor": false
   },
   "BUG-114": {
-   "status": "open",
-   "title": "`font` shorthand drops font-size/line-height — TEST-53 residual ~4px",
-   "component": "css-parser",
-   "date": null,
-   "debtor": false
+   "status": "fixed",
+   "title": "`font` shorthand drops font-size/line-height — TEST-53 9.62%→1.71%. Не было арма `\"font\" =>` в `apply_declaration` (style.rs), shorthand падал в `_ => {}`; font…",
+   "component": "css-parser/layout",
+   "date": "2026-06-24",
+   "debtor": true
   },
   "BUG-115": {
-   "status": "open",
+   "status": "fixed",
    "title": "percent `background-size` not supported — TEST-45 residual",
    "component": "css-parser",
-   "date": null,
+   "date": "2026-06-23",
    "debtor": false
   },
   "BUG-116": {
@@ -1858,10 +1859,10 @@
    "debtor": true
   },
   "BUG-182": {
-   "status": "open",
-   "title": "`vertical-align` inline y-offset deviation — TEST-24: 0.98%",
+   "status": "fixed",
+   "title": "`vertical-align: middle` on inline-block centred the box on the line-box instead of the baseline. With a tall `vertical-align: top` box (100px) in the same row…",
    "component": "layout/paint",
-   "date": null,
+   "date": "2026-06-24",
    "debtor": false
   },
   "BUG-183": {
@@ -1873,10 +1874,10 @@
   },
   "BUG-184": {
    "status": "open",
-   "title": "`clip-path` deviation — TEST-31: 0.59%",
+   "title": "`clip-path` deviation — TEST-31: 0.60% KNOWN_DEBTOR (femtovg shape-fill AA-fringe ~1px на curved/diagonal клипах; inset/rect = perfect via scissor; класс BUG-17…",
    "component": "paint",
    "date": null,
-   "debtor": false
+   "debtor": true
   },
   "BUG-185": {
    "status": "fixed",
@@ -1936,10 +1937,10 @@
   },
   "BUG-192": {
    "status": "open",
-   "title": "`<video>` placeholder deviation — TEST-55: 0.89%",
+   "title": "`<video>` placeholder — расследовано: фича корректна. Edge рисует `<video src=\"nonexistent.mp4\">` без серого placeholder (прозрачный бокс, виден только фон); Lu…",
    "component": "paint",
    "date": null,
-   "debtor": false
+   "debtor": true
   },
   "BUG-193": {
    "status": "fixed",
@@ -1949,18 +1950,18 @@
    "debtor": true
   },
   "BUG-194": {
-   "status": "open",
-   "title": "Flexbox `align-content` multi-line deviation — TEST-65: 1.33%",
+   "status": "fixed",
+   "title": "`align-content` геометрия всех 7 кейсов пиксель-в-пиксель с Edge; реальный дефект — текст-потомок flex-item (`.item{display:flex}`) терялся (`NodeData::Text`→`B…",
    "component": "layout",
-   "date": null,
-   "debtor": false
+   "date": "2026-06-24",
+   "debtor": true
   },
   "BUG-195": {
-   "status": "open",
-   "title": "`::selection` color override deviation — TEST-66: 1.07%",
+   "status": "fixed",
+   "title": "`::selection` — расследовано: правила парсятся, но тест не выделяет текст, поэтому фича не видна без user-selection. Свотчи (#0078D4/#e74c3c/#1a6ead) совпадают…",
    "component": "paint",
-   "date": null,
-   "debtor": false
+   "date": "2026-06-24",
+   "debtor": true
   },
   "BUG-196": {
    "status": "fixed",
@@ -2019,46 +2020,46 @@
    "debtor": true
   },
   "BUG-204": {
-   "status": "open",
-   "title": "`anchor-name` basic stub deviation — TEST-85: 1.98%",
+   "status": "fixed",
+   "title": "`anchor-name` basic «stub» deviation — root cause: missing UA `body { margin: 8px }`; tests 85–89 lack a CSS reset, so Edge shifts the frame 8px while Lumen dre…",
    "component": "layout",
-   "date": null,
+   "date": "2026-06-24",
    "debtor": false
   },
   "BUG-205": {
-   "status": "open",
-   "title": "`position-anchor` fallback stub deviation — TEST-86: 2.12%",
+   "status": "fixed",
+   "title": "`position-anchor` fallback «stub» deviation — same root cause as BUG-204 (UA body margin). TEST-86→0.13%",
    "component": "layout",
-   "date": null,
+   "date": "2026-06-24",
    "debtor": false
   },
   "BUG-206": {
-   "status": "open",
-   "title": "`inset-area: none` stub deviation — TEST-87: 1.98%",
+   "status": "fixed",
+   "title": "`inset-area: none` «stub» deviation — same root cause as BUG-204 (UA body margin). TEST-87→0.00%",
    "component": "layout",
-   "date": null,
+   "date": "2026-06-24",
    "debtor": false
   },
   "BUG-207": {
-   "status": "open",
-   "title": "`anchor-name` nested stub deviation — TEST-88: 1.98%",
+   "status": "fixed",
+   "title": "`anchor-name` nested «stub» deviation — same root cause as BUG-204 (UA body margin). TEST-88→0.00%",
    "component": "layout",
-   "date": null,
+   "date": "2026-06-24",
    "debtor": false
   },
   "BUG-208": {
-   "status": "open",
-   "title": "multiple `anchor-name` stub deviation — TEST-89: 1.98%",
+   "status": "fixed",
+   "title": "multiple `anchor-name` «stub» deviation — same root cause as BUG-204 (UA body margin). TEST-89→0.00%",
    "component": "layout",
-   "date": null,
+   "date": "2026-06-24",
    "debtor": false
   },
   "BUG-209": {
    "status": "open",
-   "title": "AVIF decoder not implemented — TEST-90: 2.75%",
-   "component": "image",
+   "title": "TEST-90 (AVIF `<picture>`/`<img>`): доминирующая причина девиации — вложенный column-flex item схлопывался по контенту вместо растяжения на cross-size ряда — ис…",
+   "component": "layout",
    "date": null,
-   "debtor": false
+   "debtor": true
   },
   "BUG-210": {
    "status": "fixed",
@@ -2082,11 +2083,11 @@
    "debtor": true
   },
   "BUG-213": {
-   "status": "open",
-   "title": "`counter-set` order deviation — TEST-97: 2.78%",
+   "status": "fixed",
+   "title": "`counter-set` order — расследовано: порядок reset→increment→set уже спек-корректен (`counters.rs` apply_reset/apply_increment/apply_set, CSS Lists L3 §4). Все 5…",
    "component": "css-parser/layout",
-   "date": null,
-   "debtor": false
+   "date": "2026-06-23",
+   "debtor": true
   },
   "BUG-214": {
    "status": "open",
@@ -2104,10 +2105,10 @@
   },
   "BUG-216": {
    "status": "open",
-   "title": "CSS `quotes` + `open-quote`/`close-quote` deviation — TEST-117: 2.28%",
-   "component": "css-parser/layout",
+   "title": "CSS `quotes` + `open-quote`/`close-quote` — реальный дефект исправлен: `::before`/`::after` generated content и текст `<q>` склеивались через лишний inter-word…",
+   "component": "layout",
    "date": null,
-   "debtor": false
+   "debtor": true
   },
   "BUG-217": {
    "status": "open",
@@ -2131,10 +2132,10 @@
    "debtor": true
   },
   "BUG-220": {
-   "status": "open",
-   "title": "scroll-контейнер в ordered (stacking-context) пути теряет scrollbar: `box_layer_ops` эмитит `PushScrollLayer`/`PopScrollLayer`, но не `DrawScrollbar` (есть толь…",
+   "status": "fixed",
+   "title": "scroll-контейнер в ordered (stacking-context) пути терял scrollbar: `box_layer_ops` эмитил `PushScrollLayer`/`PopScrollLayer`, но не `DrawScrollbar` (был только…",
    "component": "paint",
-   "date": null,
+   "date": "2026-06-24",
    "debtor": false
   },
   "BUG-221": {
@@ -2187,18 +2188,18 @@
    "debtor": false
   },
   "BUG-230": {
-   "status": "open",
-   "title": "`calc()` в позиции color-stop линейного градиента схлопывает градиент (`blue calc(50% + 10px)` → сплошной синий; diagonal-stripe `calc(50% ± 2px)` → прозрачный)…",
+   "status": "fixed",
+   "title": "`calc()` в позиции color-stop градиента схлопывал градиент. Корень: `resolve_stop_positions` (paint/src/gradient_math.rs) не имел ветки `Length::Calc` — позиция…",
    "component": "layout/paint",
-   "date": null,
-   "debtor": true
+   "date": "2026-06-24",
+   "debtor": false
   },
   "BUG-231": {
-   "status": "open",
-   "title": "Анимированные `background-color`/`color` не применяются в живом окне без relayout: compositor-offload (`to_compositor_frame`→`CompositorOverride`) несёт только…",
+   "status": "fixed",
+   "title": "Анимированные `background-color`/`color` теперь композятся без relayout (D2-2). В `CompositorOverride` добавлены `color`/`background_color`; `to_compositor_fram…",
    "component": "paint/shell",
-   "date": null,
-   "debtor": false
+   "date": "2026-06-23",
+   "debtor": true
   },
   "BUG-232": {
    "status": "fixed",
@@ -2256,6 +2257,20 @@
    "date": "2026-06-23",
    "debtor": false
   },
+  "BUG-241": {
+   "status": "fixed",
+   "title": "Вложенный column-flex item схлопывался по контенту вместо растяжения на cross-size ячейки (TEST-90: ячейки `.cell-item` короткие полоски вместо заполнения рядов…",
+   "component": "layout",
+   "date": "2026-06-23",
+   "debtor": false
+  },
+  "BUG-242": {
+   "status": "fixed",
+   "title": "Фон канвы (CSS Backgrounds §3.11.1) не покрывал вьюпорт: фон корня (`<body>`→`<html>` через `propagate_canvas_background`) красился только на rect html-бокса (=…",
+   "component": "layout/paint/shell",
+   "date": "2026-06-23",
+   "debtor": false
+  },
   "BUG-240": {
    "status": "open",
    "title": "TEST-45 (multiple-backgrounds) стабильно FAIL 4.73% — пред-существует (тот же 4.7304% в коммит-прогоне 20260623-062656, до правок D2-1). Не вызвано BUG-239 (ell…",
@@ -2268,16 +2283,15 @@
   "css-parser": [
    "BUG-022",
    "BUG-041",
-   "BUG-114",
    "BUG-115",
    "BUG-217"
   ],
   "css-parser/layout": [
    "BUG-088",
    "BUG-092",
+   "BUG-114",
    "BUG-196",
-   "BUG-213",
-   "BUG-216"
+   "BUG-213"
   ],
   "css-parser/paint": [
    "BUG-016",
@@ -2304,7 +2318,6 @@
   "image": [
    "BUG-014",
    "BUG-069",
-   "BUG-209",
    "BUG-229"
   ],
   "image/paint": [
@@ -2389,14 +2402,17 @@
    "BUG-206",
    "BUG-207",
    "BUG-208",
+   "BUG-209",
    "BUG-210",
    "BUG-211",
    "BUG-212",
    "BUG-215",
+   "BUG-216",
    "BUG-224",
    "BUG-232",
    "BUG-236",
-   "BUG-237"
+   "BUG-237",
+   "BUG-241"
   ],
   "layout+paint": [
    "BUG-005",
@@ -2422,6 +2438,9 @@
    "BUG-198",
    "BUG-230",
    "BUG-239"
+  ],
+  "layout/paint/shell": [
+   "BUG-242"
   ],
   "layout/text": [
    "BUG-120"

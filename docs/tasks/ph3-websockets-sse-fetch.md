@@ -8,9 +8,186 @@
 
 ## Status
 
-**Phase 3 — future.** Do not start until Phase 2 closes (`STATUS-P1.md` "Закрытие Фазы 2" block, version bump 0.5.0). This file scopes the work ahead of time so the eventual session does not re-research.
+**MERGED 2026-06-25 (P1, branch `p1-ph3-ws-sse-fetch`).** Production-hardening complete: fetch in-flight abort (sync timeout + async `AbortController.abort()`), SSE non-blocking interruptible reconnect + single terminal close, WebSocket sub-protocol negotiation / `CloseEvent.wasClean` / close-send ready-state machine + `bufferedAmount`, end-to-end RFC 6455 + RFC 7692 permessage-deflate protocol suite. WS/SSE delivery runs on the shell timer-pump event loop (same mechanism async fetch uses). **Deferred as optional future refinement (shell domain, P3):** a deep zero-poll WS push path replacing the `_lumen_ws_poll`-per-tick drain — the feature already works via the timer pump; this is an architecture nicety, not a functional gap.
+
+---
+
+**Original framing (Phase 3 — future).** Do not start until Phase 2 closes (`STATUS-P1.md` "Закрытие Фазы 2" block, version bump 0.5.0). This file scopes the work ahead of time so the eventual session does not re-research.
 
 **Honest framing.** This is *not* a greenfield item. All three runtimes already exist and work end-to-end against the real `HttpClient` (verified, not stubs). The Phase 3 mandate is to **harden them to production grade**: convert the synchronous / poll-based delivery model to true async event-loop delivery, add in-flight cancellation, and close the protocol-correctness gaps each runtime carries from its Phase 0/2 implementation. Treat the existing code as the baseline to *upgrade*, never to rewrite.
+
+## Progress (2026-06-25, P1 — branch `p1-ph3-ws-sse-fetch`)
+
+**Phase A — Fetch in-flight abort: foundation + interface landed (steps 1–2 partial).**
+
+- **Step 1 DONE** — `AbortToken` added to `lumen-core::ext` (`crates/core/src/ext.rs`):
+  `Arc<AtomicBool>`-backed clonable cooperative cancel flag (`new`/`abort`/`is_aborted`,
+  `Default`), SeqCst ordering, 5 unit tests. Commit `0505c722`.
+- **Step 2 partial (interface-first) DONE** — `JsFetchProvider::fetch_cancellable(url, method,
+  &AbortToken)` back-compatible default method with **pre-flight** cancellation
+  (`token.is_aborted() → Error::Aborted`, else delegate to `fetch_sync`); new typed
+  `Error::Aborted(String)` variant in `lumen-core::error` for the JS layer to map to
+  DOMException `AbortError`. 2 unit tests. `lumen-core` + `lumen-network` compile clean.
+  Commit `4404027f`.
+
+- **Step 2 deep half DONE** — real in-flight teardown on `HttpClient::fetch_cancellable`.
+  A thread-local `ACTIVE_ABORT` + RAII `AbortScope` installs the token for the duration of the
+  (synchronous) fetch, so the deeply-nested read path picks it up without threading a parameter
+  through all 14 `fetch_with_redirect` call sites. `do_request` (`crates/network/src/lib.rs`)
+  clones the socket (`Connection::try_clone_socket` → `RawStream::try_clone_tcp`, handles both
+  Plain and TLS `StreamOwned.sock`) and spawns an `AbortWatchdog` that `shutdown(Both)`s the
+  socket on abort, unblocking the blocking read. The post-read abort check takes precedence even
+  over a truncated `Ok` body (a shut-down socket can yield partial data) → `Error::Aborted`.
+  Watchdog uses `park_timeout(20ms)` + `unpark` so a completed request pays no poll latency.
+  2 integration tests (real localhost listener): pre-flight abort + mid-stream abort. All 795
+  network lib tests green, clippy clean.
+
+**Phase C step 1 DONE (2026-06-25)** — SSE reconnect is now interruptible. New
+`lumen_core::ext::SseCancel` (`Arc<(Mutex<bool>, Condvar)>`, clonable; `signal` /
+`is_cancelled` / `sleep(dur) -> bool`) replaces `EventSource.closed: bool`. The
+reconnect back-off `std::thread::sleep(retry_ms)` (`sse.rs:387`) became
+`cancel.sleep(retry_ms)`, woken immediately by `close()` → `cancel.signal()`.
+`SseSession::cancel()` (default = detached handle) exposes the shared handle so
+`JsSseSessionImpl::close()` (`lib.rs`) signals the same `Arc` the bg thread sleeps
+on. Tests: 4 unit (`SseCancel`) + 1 integration (`js_sse_close_interrupts_reconnect`,
+real localhost listener, `retry: 20000` → `close()` delivers `Close` in 0.21 s).
+`lumen-core` 271 + `lumen-network` 796 green, clippy clean. **Still blocking
+delivery:** `next_event` blocked in a socket read is not interrupted (only the
+reconnect sleep is) — a full event-loop push delivery (Phase B/C step 2) remains.
+Minor pre-existing follow-up: `SseClosed` can be emitted twice to the sink (once
+in `fill_queue` on EOF, once in `EventSource::close`); harmless on the JS path
+(`NoopEventSink`) but worth an "already closed" guard when the shell wires a real
+sink. **(Resolved — see Phase C step 2.)**
+
+**Phase C step 2 DONE (2026-06-25)** — terminal `Event::SseClosed` now reaches the
+sink at most once (closes the follow-up above). A transient server EOF in
+`next_event` (`sse.rs`) no longer emits `SseClosed` before reconnecting — a dropped
+connection is transient per HTML SSE §9.2.1 (`EventSource` reconnects; not a
+terminal close). `EventSource::close()` is idempotent via a dedicated `closed: bool`
+field — **not** the cancel handle, which is signalled *before* `close()` runs on the
+JS path (`JsSseSessionImpl::close()` → `cancel.signal()`, bg thread then calls
+`session.close()`), so it cannot guard the emit. Regression test
+`sse_close_emits_closed_once` (real localhost listener, `CollectingSink`): a double
+`close()` yields exactly one `SseClosed`. `lumen-network` 805 lib tests green, clippy
+clean. Docs: `subsystems/network.md` Done bullet added.
+
+**Phase B step 2 DONE (2026-06-25)** — WebSocket sub-protocol negotiation +
+`CloseEvent.wasClean`. RFC 6455 §4.1 `Sec-WebSocket-Protocol` is negotiated
+end-to-end: `upgrade::perform`/`perform_with_deflate` take a `protocols: &[String]`
+list, send the request header, and `expect_101` parses the server-selected
+protocol (`perform` → `Result<String>`, `perform_with_deflate` →
+`Result<(bool, String)>`). `WebSocket` stores `protocol`; new trait defaults
+`WebSocketSession::protocol() -> &str` and `JsWebSocketSession::protocol() -> String`
+keep mocks compiling. `JsWebSocketProvider::connect` now takes `(url, protocols)`.
+JS: `new WebSocket(url, protocols)` (string|array) → CSV → bridge; the `Open` poll
+event carries the negotiated protocol → `ws.protocol`; `CloseEvent.wasClean` is
+`true` for a received Close frame instead of the `code === 1000` heuristic. Tests:
++3 network unit (upgrade.rs), +2 JS (`websocket_subprotocol_surfaced_on_open`,
+`websocket_subprotocol_string_arg`). `lumen-core`/`lumen-network`/`lumen-js` clippy
+clean; targeted tests green. **Still open for full Phase B:** event-loop push
+delivery (no JS `_lumen_ws_poll`), `bufferedAmount` semantics, close-handshake
+state machine audit (CONNECTING/OPEN/CLOSING/CLOSED).
+
+**Phase B step 3 DONE (2026-06-25)** — WebSocket close/send ready-state machine
+(WHATWG/RFC 6455 §7). `send()` in CONNECTING throws `InvalidStateError`; in
+CLOSING/CLOSED data is discarded but counted in `bufferedAmount` (new
+`_lumen_ws_bytelen` helper, UTF-8 via `TextEncoder`). `close()` validates the
+code (`1000` or `3000–4999` else `InvalidAccessError`) and reason length
+(`>123` UTF-8 bytes → `SyntaxError`), and is idempotent in CLOSING/CLOSED.
+readyState constants duplicated onto `WebSocket.prototype` so instances expose
+`ws.CONNECTING`/`OPEN`/`CLOSING`/`CLOSED`. +6 lumen-js unit tests
+(`websocket_send_in_connecting_throws`, `websocket_close_code_validation`,
+`websocket_close_reason_too_long_throws`, `websocket_buffered_amount_in_closing`,
+`websocket_instance_constants`, `websocket_close_idempotent`). 23 WS tests +
+clippy green. **Still open for full Phase B:** event-loop push delivery
+(no JS `_lumen_ws_poll` — requires shell integration, P3 domain).
+
+**Phase B step 4 DONE (2026-06-25)** — WebSocket end-to-end protocol test
+suite. New `mod tests` block in `crates/network/src/lib.rs` spins up a real
+localhost `TcpListener` acting as a minimal RFC 6455 server (handshake via the
+crate-internal `compute_accept`, frames via `read_frame`/`write_frame`) and
+drives the real client through `WebSocketProvider::connect_ws`. Covers: handshake
++ Text echo, Binary echo, fragmentation reassembly (first frame fin=0 +
+Continuation), Ping→Pong auto-reply (server reads back the masked Pong), and
+server-initiated Close surfaced + echoed. 5 integration tests; `lumen-network`
+788 lib tests green, clippy clean. (`MockTransport` itself can't exercise a
+socket — it returns whole bodies synchronously — so the localhost-listener
+pattern from the SSE/fetch tests is reused.) **Still open for full Phase B:**
+event-loop push delivery (no JS `_lumen_ws_poll` — requires shell integration).
+
+**Phase B step 5 DONE (2026-06-25)** — closes the last Tests-list gap: an
+end-to-end RFC 7692 permessage-deflate round-trip. `ws_permessage_deflate_roundtrip`
+(`crates/network/src/lib.rs`) drives a real `WebSocket::connect_deflate(compress=true)`
+against a localhost server whose `101` negotiates `Sec-WebSocket-Extensions:
+permessage-deflate` (new `ws_server_handshake_deflate` helper). Both directions
+compress: the client sends an RSV1 Text frame the server inflates via
+`deflate::decompress_message`, the server replies with its own compressed RSV1 frame
+the client inflates. Exercises the `deflate.rs` codec end-to-end (previously only unit-
+tested in isolation). Also fixed a pre-existing teardown race in `ws_binary_echo`
+(server dropped the socket before the client's `close()` Close write landed → broken
+pipe; server now drains the client Close frame first). `lumen-network` 806 lib tests
+green, clippy clean. **Still open for full Phase B:** event-loop push delivery
+(no JS `_lumen_ws_poll` — requires shell integration, P3 domain).
+
+**Phase A step 3 DONE (2026-06-25)** — JS-observable in-flight abort via the
+timeout deadline. `AbortSignal.timeout(ms)` now records `signal._timeoutMs`;
+`fetch()` routes a positive deadline to two new native bridges
+`_lumen_fetch_cancellable(url, method, timeout_ms)` and
+`_lumen_fetch_cancellable_with_body(url, method, content_type, body, timeout_ms)`
+(`0` ok / `1` net-error / `2` aborted). When `timeout_ms > 0` the bridge spawns a
+Rust deadline thread that flips an `AbortToken`; the network-layer `AbortWatchdog`
+(Step 2) tears the socket down, so `fetch(url, {signal: AbortSignal.timeout(ms)})`
+against a slow server now actually rejects with a `TimeoutError` even though the
+JS thread is parked in the synchronous call. New trait method
+`JsFetchProvider::fetch_with_body_cancellable` (default = pre-flight check + delegate;
+`HttpClient` override = `AbortScope` + `fetch_with_body_sync`). **Bug found & fixed:**
+the POST/PUT/… path (`fetch_with_body_sync`) called `read_response` directly,
+bypassing the watchdog — wrapped it in the same `do_request` abort machinery, so
+body requests now tear down mid-stream too. Tests: +2 core unit (body pre-flight /
+delegate), +1 network integration (`fetch_with_body_cancellable_aborts_in_flight`,
+real localhost), +3 JS (`abort_signal_timeout_records_deadline`,
+`fetch_cancellable_bridge_reports_abort`, `fetch_cancellable_bridge_reports_ok`).
+`lumen-core`/`lumen-network`/`lumen-js` clippy clean; targeted tests green.
+**Still deferred:** a generic `AbortController.abort()` fired *during* a request
+(not a timeout) still has no in-flight effect in the sync model — true async fetch
+(JS event-loop pump) remains the bulk of a future Step.
+
+**Phase A step 4 DONE (2026-06-25)** — async fetch closes the generic in-flight
+abort gap. A live, non-timeout `AbortSignal` now routes `fetch()` through a worker
+thread so an `AbortController.abort()` fired *during* the request actually cancels
+it (previously only `AbortSignal.timeout` aborted in flight). Five new JS bridges
+in the Fetch block of `install_dom` (`crates/js/src/dom.rs`):
+`_lumen_fetch_async_start(url, method, content_type, body, has_body) -> handle`
+(spawns the request on a background thread holding the `AbortToken`),
+`_lumen_fetch_async_poll(handle) -> 0 pending/1 ok/2 net-error/3 aborted`,
+`_lumen_fetch_async_abort(handle)` (flips the token → network `AbortWatchdog` tears
+the socket down), `_lumen_fetch_async_commit(handle)` (moves the Ok result into the
+shared `FetchCache`), `_lumen_fetch_async_free(handle)`. JS `fetch()`: body
+extraction + `integrity` hoisted out of the dispatch branch; `useAsync = signal &&
+!signal.aborted && !timeout` returns a Promise resolved by a `setTimeout` poll loop
+(driven by the existing timer pump — **no shell change required**); the `abort`
+listener calls `_lumen_fetch_async_abort` and the poll rejects with `signal.reason`
+/ `AbortError`. No-signal and timeout-only fetches keep the synchronous fast path
+(unchanged for the 2284 existing lib tests + 25 fetch tests, all green). Test:
+`fetch_inflight_abort_rejects_with_abort_error` (blocking mock provider, abort →
+`AbortError` within the poll budget). `lumen-js` clippy clean. **Still deferred:**
+WS/SSE event-loop push delivery (replace JS polling) requires shell integration
+(P3 domain) — tracked as the remaining Phase B/C work below.
+
+**Remaining (not yet done):**
+- **Step 3 (async fetch)** — DONE (see "Phase A step 4 DONE" above). Original design note retained for context: JS is
+  single-threaded and the current `fetch()` is *synchronous* (blocks the JS thread), so an
+  `AbortController.abort()` fired from JS cannot run *during* the request — the JS thread is parked
+  inside the native call. The network-layer in-flight abort built in Step 2 is therefore only
+  observable when the token is flipped from **another thread** (shell tab-close / navigation
+  cancel — a real and valuable capability). JS-observable mid-flight abort requires **async fetch**
+  (run `fetch_cancellable` on a worker thread, pump the JS event loop, let `abort()` flip the token,
+  watchdog tears down, then resolve/reject). That async-fetch rework is the bulk of Step 3 and was
+  explicitly deferred to "Phase 2+" in the original in-code comments. Pre-flight abort already works
+  at the JS layer (`dom.rs:7335`).
+- **Step 4** — mid-stream abort test: DONE at the network layer via a real localhost listener
+  (`MockTransport` can't exercise a socket — it returns whole bodies synchronously with no stream).
+- **Phases B (WS async delivery) and C (SSE non-blocking reconnect)** — untouched.
 
 ---
 
