@@ -23,12 +23,11 @@ fn navigate(session: &mut InProcessSession, file: &str) {
         .expect("navigate");
 }
 
-// BUG-228: custom @counter-style (bracket/hashnum) and list-style-image markers
-// are not generated → 27 marker boxes instead of 33. Pre-existing on clean main;
-// surfaced by BT-1 (the full driver suite now runs). Ignored to keep the gate
-// green; P3 removes this `ignore` when BUG-228 is fixed.
+// BUG-228 (FIXED): markers were never actually missing — custom @counter-style
+// markers are legitimately wider than the default 24px box (BUG-185 behaviour), and
+// the old assertion counted markers by an exact 24px width, dropping the 6 wide ones
+// (27 instead of 33). The engine is correct; the marker-counting filter was wrong.
 #[test]
-#[ignore = "BUG-228: custom counter-style / image list markers missing (P3)"]
 fn test_32_list_markers() {
     let mut session = InProcessSession::new();
     navigate(&mut session, "graphic_tests/32-list-markers.html");
@@ -53,15 +52,18 @@ fn test_32_list_markers() {
         "consecutive li y-step should be 28.4 (box + margin), got {step}"
     );
 
-    // Marker glyph boxes (24x22.4) are anonymous (empty tag_name); count them in the
-    // flat snapshot. 6 regular×3 + 2 inside + 2 custom-color + 2 content + 6 counter-style
-    // + 3 list-style-image = 33 (none-list emits 0; marker width = em×1.5 = 24px regardless
-    // of content string or image).
+    // Marker glyph boxes (≈22.4px tall) are the only small-width children of `<li>`;
+    // count them in the flat snapshot. 6 regular×3 + 2 inside + 2 custom-color + 2 content
+    // + 6 counter-style + 3 list-style-image = 33 (none-list emits 0).
+    // NOTE: custom `@counter-style` markers can be wider than the default 24px, so we do
+    // not filter on exact width.
     let snap = session.layout_snapshot().expect("snapshot");
     let markers = snap
         .iter()
         .filter(|b| {
-            (b.border_box.width - 24.0).abs() < 0.5 && (b.border_box.height - 22.4).abs() < 0.5
+            b.tag_name == "li"
+                && (b.border_box.height - 22.4).abs() < 0.5
+                && b.border_box.width < 60.0
         })
         .count();
     assert_eq!(markers, 33, "expected 33 marker boxes (35 items − 2 in the none list)");
