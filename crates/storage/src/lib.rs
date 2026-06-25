@@ -76,7 +76,7 @@ pub use dns_cache::{DnsCache, DnsEntry};
 pub use downloads::{DownloadEntry, DownloadStatus, Downloads};
 pub use history::{History, HistoryEntry};
 pub use http_cache::{CacheControl, CachedResponse, HttpCache};
-pub use indexed_db::IdbStore;
+pub use indexed_db::{IdbStore, NativeIdbStore};
 pub use notifications::{Notification, Notifications};
 pub use print_prefs::{PrintPrefs, PrintPrefsSnapshot};
 pub use permissions::{PermissionEntry, PermissionKind, PermissionState, Permissions};
