@@ -48,7 +48,14 @@ Merged slice (`crates/shell/src/links.rs`, `crates/shell/src/main.rs` link-click
 - Both link-click sites (`crates/shell/src/main.rs` hit-test click + form-click `Nothing` path) now, after `resolve_href`, check `same_document_fragment(self.current_display_url(), &resolved)`; on `Some(frag)` they route through `navigate_fragment(frag)` (Phase 1b-iii — syncs JS `location`, pushes a same-document history entry, fires `hashchange`, runs `:target`/scroll) instead of `navigate_to`. The click-log outcome for that path is `LinkFragment` rather than `LinkNavigate`.
 - Tests: 10 `links::same_document_fragment_*` (add/change/remove fragment, identical-URL reload, different path/host/query, query-preserved-in-base, first-`#`-splits). `cargo clippy -p lumen-shell --all-targets` clean, `cargo test -p lumen-shell links::` green (23/23).
 
-**Still remaining** (Phase 1b + Phase 2): cross-document single-authority unification (JS `HistoryState` mirror vs shell `nav_back`/`nav_fwd` drift on multi-step `go` across full-document boundaries), shell-side `popstate` accompanying fragment traversal, post-back `history.state` from shell-restored value, and the entire Navigation API wiring (steps 5–10 below). The ROADMAP `P3-navapi` row stays `planned` until those land.
+### Progress (2026-06-25) — Phase 1b-v (fragment traversal fires `hashchange` + `popstate`) DONE
+
+Merged slice (`crates/js/src/dom.rs`, `_lumen_deliver_popstate`):
+- Traversing back/forward over a same-document entry that differs only in its fragment now fires **both** `popstate` and `hashchange` (HTML LS §7.4.6). Previously `_lumen_deliver_popstate` (the shell→JS same-document delivery primitive used by `navigate_back`/`navigate_forward`) fired only `popstate`, so a `<a href="#x">` link click followed by Alt+Left did not deliver `hashchange` to the page.
+- The helper now captures the old `_lumen_loc_href` fragment before `_lumen_location_update(url)`, computes the new fragment, fires `popstate` as before, then — iff `url` is non-empty and the fragments differ — calls the existing `_lumen_fire_hashchange(oldHref, newHref)` (Phase 1b-i). Order is spec-correct: popstate first, hashchange after. Empty `url` (keep-current) and same-fragment path-only traversals fire no `hashchange`.
+- Tests: 4 `deliver_popstate_*hashchange*`; full `lumen-js` suite green (2307).
+
+**Still remaining** (Phase 1b + Phase 2): cross-document single-authority unification (JS `HistoryState` mirror vs shell `nav_back`/`nav_fwd` drift on multi-step `go` across full-document boundaries), post-back `history.state` from shell-restored value, and the entire Navigation API wiring (steps 5–10 below). The ROADMAP `P3-navapi` row stays `planned` until those land.
 
 ---
 
