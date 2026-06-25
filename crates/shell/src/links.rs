@@ -54,6 +54,24 @@ pub fn fragment_only(href: &str) -> Option<&str> {
     href.strip_prefix('#')
 }
 
+/// Build the absolute URL for a same-document fragment navigation: replaces the
+/// fragment of `current` with `frag` (an element id, WITHOUT a leading `#`).
+/// An empty `frag` strips the fragment entirely (top-of-page navigation).
+/// Any query string in `current` is preserved; only the part after the first
+/// `#` changes. Used to keep the JS `location` object and the session-history
+/// stack in sync when the user clicks `<a href="#id">`.
+pub fn fragment_url(current: &str, frag: &str) -> String {
+    let base = match current.split_once('#') {
+        Some((before, _)) => before,
+        None => current,
+    };
+    if frag.is_empty() {
+        base.to_owned()
+    } else {
+        format!("{base}#{frag}")
+    }
+}
+
 /// Walk the document tree and return the first element whose `id` attribute
 /// equals `id_value` (case-sensitive per HTML LS §3.2.6). Returns `None` if
 /// no such element exists.
@@ -104,6 +122,16 @@ mod tests {
         let text = doc.create_text("click me");
         doc.append_child(span, text);
         (doc, text)
+    }
+
+    #[test]
+    fn fragment_url_builds_same_document_urls() {
+        assert_eq!(fragment_url("http://x/p?q=1", "sec"), "http://x/p?q=1#sec");
+        assert_eq!(fragment_url("http://x/p#old", "new"), "http://x/p#new");
+        assert_eq!(fragment_url("http://x/p#old", ""), "http://x/p");
+        assert_eq!(fragment_url("http://x/p", ""), "http://x/p");
+        // Only the first '#' splits the base from the fragment.
+        assert_eq!(fragment_url("http://x/a#b#c", "z"), "http://x/a#z");
     }
 
     #[test]
