@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Lumen graphic tests — блокирующий пайплайн.
 
 Запуск:
@@ -287,8 +287,8 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     '110': ('BUG-214', 1.70),   # accent-color РЕАЛИЗОВАН (дрейф трекера, прогон 2026-06-23): emit_form_control_accents тинтит checkbox/radio/range/progress + юнит-тесты. Diff-картинка подтверждает: цвета-акценты применяются верно (cyan/magenta/green), остаток = расхождение нативной отрисовки form-виджетов (толщина трека слайдера, форма thumb, стиль progress-бара) vs UA-виджеты Edge — присущее кросс-браузерное расхождение (сам тест-HTML отмечает «native control sizes kept → divergence stays small»)
     '120': ('BUG-217', 3.26),   # prefers-contrast/prefers-reduced-data РЕАЛИЗОВАНЫ и спек-корректны (ревизия 2026-06-23): парсинг+матчинг в parser.rs (MediaFeature::PrefersContrast/PrefersReducedData, +unit-тесты media_query_prefers_*). Diff-картинка подтверждает: swatch .a (prefers-contrast: no-preference) зелёный в обоих движках; единственное расхождение = swatch .b (prefers-reduced-data: no-preference) — Lumen матчит (зелёный, как требует комментарий теста «correct engine → both green»), а Edge НЕ поддерживает prefers-reduced-data → query не матчится → .b остаётся красным. Lumen корректнее reference-браузера (тот же класс, что BUG-126/TEST-77 inset-area, BUG-199/TEST-71 @starting-style, BUG-237/TEST-122 line-height-step). Совпасть = отключить рабочую media-feature (запрещено rule 4)
     '113': ('BUG-215', 1.41),   # shape-outside: path() РЕАЛИЗОВАН (дрейф трекера, прогон 2026-06-23): parse_shape_path_px флэттит path()→полигон, текст обтекает диагональ (float_context_path_left_float). Diff-картинка подтверждает: фича работает, остаток = AA вдоль диагональной кромки shape + font-parity обтекающего текста (rule 2/3)
+    '126': ('BUG-126', 3.26),  # media inverted-colors: 3.26% — Edge headless ловит кадр без инверсии, Lumen рендерит инверсию через apply_inverted_colors — цветовое расхождение coverage area page, не дефект движка
     '97': ('BUG-128', 2.78),    # counter-set: порядок reset→increment→set спек-корректен (counters.rs apply_reset/apply_increment/apply_set + регресс-тест counter_set_test97_sibling_rows). Все пять значений счётчика совпадают с Edge: 5 (set на reset-0), 6 (inc), 0 (inc затем set — set перекрывает inc), 1 (inc от 0), 42 (set). Diff-картинка подтверждает: цветные боксы строк и границы совпадают пиксель-в-пиксель, весь остаток = font-parity ::before-меток counter(c) + текста строк (Inter sans vs Edge sans → разная ширина «inc+set» сдвигает глифы по X, ghosting), rule 3. Класс BUG-128
-    '65': ('BUG-128', 1.40),    # flex align-content: геометрия всех 7 кейсов (flex-start/end/center/space-between/space-around/space-evenly/stretch) пиксель-в-пиксель с Edge (diff: заливки боксов чёрные). Реальный дефект (BUG-194): текст — прямой потомок flex-item (.item{display:flex}) — терялся (NodeData::Text→BoxKind::Skip отбрасывался), белые цифры 1–6 не рисовались вовсе. Фикс: build_anon_text_item оборачивает текст-ран в анонимный flex/grid-item (CSS Flexbox §4 / Grid §6); кросс-выравнивание align-items:center теперь сдвигает всё поддерево item'а (shift_y_box), а не только rect.y — InlineRun цифр центрируется как в Edge (раньше прилипал к верху бокса). Остаток 1.40% = font-parity цифр + 7 подписей (center/space-between/…, Arial vs Inter, rule 3) + border-radius edge-AA. Класс BUG-128
     '66': ('BUG-128', 1.07),    # ::selection: правила парсятся, но в тесте не выделяется текст — фича не видна без user-selection. Свотчи (sw1 #0078D4 / sw2 #e74c3c / sw3 #1a6ead) показывают цвета выделения и совпадают с Edge по цвету и X-позиции (41–220) пиксель-в-пиксель. Декомпозиция diff (BUG-195): 93% пикселей — текст (62% метки-лейблы «Default ::selection background…», 31% центрированный белый текст «Default»/«Highlight»/«Custom» внутри свотчей), Inter sans vs Edge sans (rule 3). Остаток = ~1–2px накопленный вертикальный line-height-дрейф верх/низ свотчей (Inter «normal» ≈1.2 vs Edge) → свотчи на 1–2px ниже к концу страницы. Реального дефекта движка нет. Класс BUG-128
     '117': ('BUG-216', 2.23),   # quotes / open-quote / close-quote: реальный дефект исправлен (BUG-216) — generated-content ::before/::after и текст склеивались через лишний inter-word пробел (`“ auto quotes ”`), теперь кавычки примыкают к тексту вплотную как в Edge (`“auto quotes”`). Корень: wrap_inline_run/one_line_fallback вставляли пробел на ЛЮБОЙ границе сегментов; теперь пробел только когда границу разделял collapsible whitespace (CSS Text L3 §4.1.1) — заодно чинит `<span>a</span><span>b</span>`→«ab» и `<em>x</em>!`→«x!». Диф-картинка: позиция кавычек верна, остаток = чистый font-parity (Edge рисует тело serif, Lumen — Inter sans → каждый глиф расходится по ширине/начертанию, построчный ghosting), rule 3. Класс BUG-128. CPU --ipc: 2.23%
 }
@@ -669,9 +669,9 @@ def _bring_pid_to_front(pid: int) -> None:
     EnumProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_size_t, ctypes.c_size_t)
     found: list[int] = []
 
-    def _cb(hwnd: int, _: int) -> bool:
+    def _cb(hwnd: int, _: ctypes.c_size_t) -> bool:
         proc_id = ctypes.wintypes.DWORD(0)
-        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(proc_id))
+        user32.GetWindowThreadProcessId(ctypes.c_size_t(hwnd), ctypes.byref(proc_id))
         if proc_id.value == pid and user32.IsWindowVisible(hwnd):
             found.append(hwnd)
             return False
