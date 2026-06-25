@@ -347,3 +347,132 @@ fn overflow_y_hidden_x_visible_coerces_to_both_clip() {
     );
     assert!(!actual.contains("2000000.00"), "no unconstrained sentinel after coercion");
 }
+
+// ── CSS filter ────────────────────────────────────────────────────────────────
+
+/// `filter: blur(4px)` must open a `PushFilter [blur]` group before the
+/// element's own paint commands and close it with `PopFilter`.
+#[test]
+fn css_filter_blur_emits_push_filter() {
+    let actual = build(
+        "<div>text</div>",
+        "div { filter: blur(4px); color: red; }",
+        800.0,
+    );
+    assert!(actual.contains("PushFilter [blur]"), "must contain PushFilter [blur]; got:\n{actual}");
+    assert!(actual.contains("PopFilter"), "must contain PopFilter; got:\n{actual}");
+}
+
+/// Chained filters (`blur` + `brightness`) must all appear in the same
+/// `PushFilter` group in declaration order.
+#[test]
+fn css_filter_chain_emits_all_functions() {
+    let actual = build(
+        "<div>x</div>",
+        "div { filter: blur(2px) brightness(1.2); background: red; }",
+        800.0,
+    );
+    assert!(
+        actual.contains("PushFilter [blur, brightness]"),
+        "chained filters must be comma-separated; got:\n{actual}"
+    );
+}
+
+// ── backdrop-filter ──────────────────────────────────────────────────────────
+
+/// `backdrop-filter: blur(6px)` must emit a `PushBackdropFilter` group with
+/// bounds matching the element's box.
+#[test]
+fn backdrop_filter_blur_emits_push_backdrop_filter() {
+    let actual = build(
+        "<div>x</div>",
+        "div { backdrop-filter: blur(6px); width: 100px; height: 50px; position: relative; z-index: 1; background: rgba(0,0,0,0.3); }",
+        800.0,
+    );
+    assert!(
+        actual.contains("PushBackdropFilter [blur]"),
+        "must contain PushBackdropFilter [blur]; got:\n{actual}"
+    );
+    assert!(actual.contains("PopBackdropFilter"), "must contain PopBackdropFilter; got:\n{actual}");
+}
+
+/// Without `backdrop-filter` there must be no `PushBackdropFilter` / `PopBackdropFilter`
+/// in the display list.
+#[test]
+fn no_backdrop_filter_no_commands() {
+    let actual = build("<div>x</div>", "div { background: red; }", 800.0);
+    assert!(!actual.contains("BackdropFilter"), "no backdrop-filter commands without the property");
+}
+
+// ── Canvas 2D (replaced element placeholder) ─────────────────────────────────
+
+/// `<canvas>` is a replaced element: the display list must emit a `DrawImage`
+/// with `src=canvas:{node_id}` so the shell can bind the rasterised bitmap.
+#[test]
+fn canvas_element_emits_draw_image_with_canvas_src() {
+    let actual = build(
+        r#"<canvas width="64" height="48"></canvas>"#,
+        "",
+        800.0,
+    );
+    assert!(actual.contains("DrawImage"), "canvas must produce DrawImage; got:\n{actual}");
+    assert!(
+        actual.contains("canvas:"),
+        "DrawImage src must start with canvas:; got:\n{actual}"
+    );
+}
+
+/// A styled `<canvas>` (border + background) must paint the placeholder
+/// background/border before the `canvas:{nid}` bitmap.
+#[test]
+fn canvas_with_border_background_paint_order() {
+    let actual = build(
+        r#"<canvas width="64" height="48"></canvas>"#,
+        "canvas { border: 2px solid red; background: navy; }",
+        800.0,
+    );
+    let draw_image_pos = actual.find("DrawImage").expect("DrawImage must appear");
+    let fill_rect_pos = actual.find("FillRect").expect("background FillRect must appear");
+    assert!(
+        fill_rect_pos < draw_image_pos,
+        "background FillRect must precede DrawImage; got:\n{actual}"
+    );
+}
+
+// ── Multiple background layers ────────────────────────────────────────────────
+
+/// Two `background-image` URLs must produce two `DrawBackgroundImage` commands,
+/// one per layer, in source order.
+#[test]
+fn multiple_background_layers_emit_multiple_commands() {
+    let actual = build(
+        "<div>x</div>",
+        "div { background-image: url(a.png), url(b.png); background-color: red; width: 100px; height: 50px; }",
+        800.0,
+    );
+    let count = actual.matches("DrawBackgroundImage").count();
+    assert!(count >= 2, "expected >=2 DrawBackgroundImage commands, got {count}; got:\n{actual}");
+}
+
+/// Three background layers (CSS gradients + URL) — verifies that mixing
+/// gradients and image URLs produces multiple distinct paint commands.
+#[test]
+fn three_background_layers_emit_multiple_commands() {
+    let actual = build(
+        "<div>x</div>",
+        "div { background: linear-gradient(red,blue), url(c.png), yellow; width: 100px; height: 50px; }",
+        800.0,
+    );
+    assert!(
+        actual.contains("DrawBackgroundImage"),
+        "url layer must produce DrawBackgroundImage; got:\n{actual}"
+    );
+    assert!(
+        actual.contains("DrawLinearGradient"),
+        "gradient layer must produce DrawLinearGradient; got:\n{actual}"
+    );
+    assert!(
+        actual.contains("FillRect"),
+        "color layer must produce FillRect; got:\n{actual}"
+    );
+}

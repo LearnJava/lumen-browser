@@ -955,6 +955,82 @@ fn box_blur_rgba_region(
     }
 }
 
+/// Replicate edge pixels of `region` outward by `extend_px` in every direction.
+///
+/// For `backdrop-filter: blur()`, the CSS backdrop is cropped to the element's
+/// border box. A box blur clamped to that crop truncates its kernel at the
+/// boundary, producing a brighter/fringed edge (BUG-144 edge-bleed). By
+/// extending the region with replicated edge pixels before blurring, each edge
+/// pixel sees a symmetric kernel and the result matches a proper Gaussian
+/// falloff. Returns the extended (clamped) region.
+fn extend_region_replicated(
+    pixels: &mut [u8],
+    width: usize,
+    height: usize,
+    region: (usize, usize, usize, usize),
+    extend_px: usize,
+) -> (usize, usize, usize, usize) {
+    if extend_px == 0 {
+        return region;
+    }
+    let (rx0, ry0, rx1, ry1) = region;
+    if rx0 >= rx1 || ry0 >= ry1 {
+        return region;
+    }
+    let ex0 = rx0.saturating_sub(extend_px);
+    let ey0 = ry0.saturating_sub(extend_px);
+    let ex1 = (rx1 + extend_px).min(width);
+    let ey1 = (ry1 + extend_px).min(height);
+    let stride = width * 4;
+    let rxl = rx1.saturating_sub(1);
+    let ryl = ry1.saturating_sub(1);
+
+    // Top band (ey0..ry0): replicate row ry0 (covers top-left/top-right corners).
+    for y in ey0..ry0 {
+        for x in ex0..ex1 {
+            let src_x = if x < rx0 { rx0 } else if x > rxl { rxl } else { x };
+            let src_off = (ry0 * stride) + src_x * 4;
+            let dst_off = (y * stride) + x * 4;
+            let mut tmp = [0u8; 4];
+            tmp.copy_from_slice(&pixels[src_off..src_off + 4]);
+            pixels[dst_off..dst_off + 4].copy_from_slice(&tmp);
+        }
+    }
+    // Bottom band (ry1..ey1): replicate row ry1-1 (covers bottom corners).
+    for y in ry1..ey1 {
+        for x in ex0..ex1 {
+            let src_x = if x < rx0 { rx0 } else if x > rxl { rxl } else { x };
+            let src_off = (ryl * stride) + src_x * 4;
+            let dst_off = (y * stride) + x * 4;
+            let mut tmp = [0u8; 4];
+            tmp.copy_from_slice(&pixels[src_off..src_off + 4]);
+            pixels[dst_off..dst_off + 4].copy_from_slice(&tmp);
+        }
+    }
+    // Left band (ry0..ry1, ex0..rx0): replicate column rx0 (middle only).
+    for y in ry0..ry1 {
+        for x in ex0..rx0 {
+            let src_off = (y * stride) + rx0 * 4;
+            let dst_off = (y * stride) + x * 4;
+            let mut tmp = [0u8; 4];
+            tmp.copy_from_slice(&pixels[src_off..src_off + 4]);
+            pixels[dst_off..dst_off + 4].copy_from_slice(&tmp);
+        }
+    }
+    // Right band (ry0..ry1, rx1..ex1): replicate column rx1-1 (middle only).
+    for y in ry0..ry1 {
+        for x in rx1..ex1 {
+            let src_off = (y * stride) + rxl * 4;
+            let dst_off = (y * stride) + x * 4;
+            let mut tmp = [0u8; 4];
+            tmp.copy_from_slice(&pixels[src_off..src_off + 4]);
+            pixels[dst_off..dst_off + 4].copy_from_slice(&tmp);
+        }
+    }
+
+    (ex0, ey0, ex1, ey1)
+}
+
 impl FemtovgBackend {
     /// Создаёт оконный femtovg-бэкенд из winit-окна.
     ///
@@ -1861,7 +1937,27 @@ impl FemtovgBackend {
         let by0 = (bounds.y * scale).floor().max(0.0) as usize;
         let bx1 = ((bounds.x + bounds.width) * scale).ceil().max(0.0) as usize;
         let by1 = ((bounds.y + bounds.height) * scale).ceil().max(0.0) as usize;
-        let region = (bx0.min(iw), by0.min(ih), bx1.min(iw), by1.min(ih));
+        let mut region = (bx0.min(iw), by0.min(ih), bx1.min(iw), by1.min(ih));
+
+        // For `backdrop-filter: blur()` the CSS backdrop is cropped to the
+        // element's border box. Clamping the box-blur kernel to that crop
+        // truncates the window at the edges, producing an asymmetric average
+        // that leaves a brighter/fringed edge (BUG-144 edge-bleed). Extend the
+        // region with replicated edge pixels so every kernel sample within the
+        // original box sees proper symmetric context.
+        let max_blur_extension: usize = filters
+            .iter()
+            .filter_map(|f| match f {
+                lumen_layout::FilterFn::Blur(sigma) if *sigma > 0.0 => {
+                    Some((*sigma * 2.0).ceil() as usize)
+                }
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
+        if max_blur_extension > 0 {
+            region = extend_region_replicated(&mut rgba, iw, ih, region, max_blur_extension);
+        }
 
         // Apply the filter chain left-to-right (CSS Filter Effects §2.2). Blur is
         // a 3-pass box approximation of the Gaussian; colour-matrix functions
@@ -4029,5 +4125,59 @@ mod tests {
         let result = blend_composite_pixel(BlendMode::Overlay,
             [128, 128, 128, 255], [64, 64, 64, 255]);
         assert!(approx_u8(result[0], 64), "R: expected ≈64, got {}", result[0]);
+    }
+
+    // ── extend_region_replicated tests ────────────────────────────────────────
+
+    #[test]
+    fn extend_region_replicated_zero_extension_is_noop() {
+        let mut px = vec![10u8, 20, 30, 255, 40, 50, 60, 255];
+        let _region = extend_region_replicated(&mut px, 2, 1, (0, 0, 2, 1), 0);
+        assert_eq!(&px, &[10, 20, 30, 255, 40, 50, 60, 255]);
+    }
+
+    #[test]
+    fn extend_region_replicated_fills_top_band() {
+        // 4×1 strip: red, green, blue, white. Region = [1,3). Extend by 1.
+        // Top band (x=0..4, y=-1 conceptually but clamped to 0): replicate row 0.
+        let mut px = vec![
+            255, 0,   0,   255, // x=0 red
+              0, 255, 0,   255, // x=1 green (region start)
+              0,   0, 255, 255, // x=2 blue  (region end-1)
+            255, 255, 255, 255, // x=3 white
+        ];
+        let region = extend_region_replicated(&mut px, 4, 1, (1, 0, 3, 1), 1);
+        // Extended region should cover [0, 4). Top band is same row in 1-high image,
+        // so no new rows. Left extension x=0 should replicate from x=1 (green).
+        let g = [0u8, 255, 0, 255];
+        assert_eq!(&px[0..4], &g, "left extension must replicate left edge of region");
+        // Right extension x=3 should replicate from x=2 (blue).
+        let b = [0u8, 0, 255, 255];
+        assert_eq!(&px[12..16], &b, "right extension must replicate right edge of region");
+    }
+
+    #[test]
+    fn extend_region_replicated_2d_corners_and_edges() {
+        // 4×2 image:
+        //   row 0: black  white  white  black
+        //   row 1: black  white  white  black
+        // Region = [1,3) × [0,2) = the 2 white pixels in both rows.
+        // Extend by 1: the 6 surrounding pixels should all become white.
+        let mut px = vec![
+            0,   0,   0,   255,   // (0,0) black
+          255, 255, 255, 255,     // (1,0) white
+          255, 255, 255, 255,     // (2,0) white
+            0,   0,   0, 255,     // (3,0) black
+            0,   0,   0, 255,     // (0,1) black
+          255, 255, 255, 255,     // (1,1) white
+          255, 255, 255, 255,     // (2,1) white
+            0,   0,   0, 255,     // (3,1) black
+        ];
+        let _ = extend_region_replicated(&mut px, 4, 2, (1, 0, 3, 2), 1);
+        let white = [255u8, 255, 255, 255];
+        // Corners and edges all replicated from nearest white edge.
+        for &off in &[0, 4, 8, 12, 16, 20] {
+            assert_eq!(&px[off..off+4], &white, "pixel at offset {off} must be replicated white");
+        }
     }
 }

@@ -102,31 +102,32 @@ pub struct FontMeasurer<'a> {
     hmtx: Hmtx<'a>,
     cmap: Cmap<'a>,
     units_per_em: u16,
-    /// Абсолютное значение hhea.descent (descent < 0 по конвенции OpenType).
+    ascent_units: u16,
     descent_units: u16,
-    /// OS/2 `sxHeight` в font units (высота строчной `x`). CSS Fonts L5 §4 —
-    /// основа для `font-size-adjust`. Если таблица OS/2 отсутствует или версия
-    /// < 2 (нет поля sxHeight), используется приближение `units_per_em / 2`.
     x_height_units: u16,
 }
 
 impl<'a> FontMeasurer<'a> {
-    /// Создаёт измеритель из уже разобранного [`lumen_font::Font`].
     pub fn new(font: &lumen_font::Font<'a>) -> Result<Self, FontError> {
         let head = font.head()?;
         let hmtx = font.hmtx()?;
         let cmap = font.cmap()?;
         let hhea = font.hhea()?;
-        let descent_units = hhea.descent.unsigned_abs();
         let units_per_em = head.units_per_em;
-        // OS/2 sxHeight (v2+); fallback к units_per_em/2 (aspect ≈ 0.5).
+        let (ascent_units, descent_units) = match font.os2() {
+            Ok(os2) => (os2.typo_ascender.unsigned_abs(), os2.typo_descender.unsigned_abs()),
+            Err(_) => (hhea.ascent.unsigned_abs(), hhea.descent.unsigned_abs()),
+        };
         let x_height_units = font
             .os2()
             .ok()
             .and_then(|o| o.x_height)
             .filter(|&v| v > 0)
             .map_or(units_per_em / 2, |v| v as u16);
-        Ok(Self { hmtx, cmap, units_per_em, descent_units, x_height_units })
+        Ok(Self {
+            hmtx, cmap, units_per_em,
+            ascent_units, descent_units, x_height_units,
+        })
     }
 }
 
@@ -141,7 +142,21 @@ impl<'a> TextMeasurer for FontMeasurer<'a> {
     }
 
     fn descent_px(&self, font_size_px: f32) -> f32 {
-        self.descent_units as f32 * font_size_px / self.units_per_em as f32
+        let total = self.ascent_units as f32 + self.descent_units as f32;
+        if total > 0.0 {
+            (self.descent_units as f32 / total) * font_size_px
+        } else {
+            font_size_px * 0.2
+        }
+    }
+
+    fn ascent_px(&self, font_size_px: f32) -> f32 {
+        let total = self.ascent_units as f32 + self.descent_units as f32;
+        if total > 0.0 {
+            (self.ascent_units as f32 / total) * font_size_px
+        } else {
+            font_size_px * 0.8
+        }
     }
 
     fn x_height_px(&self, font_size_px: f32) -> f32 {
