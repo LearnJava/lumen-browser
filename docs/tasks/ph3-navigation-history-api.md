@@ -12,6 +12,15 @@
 
 Important framing: this is **not greenfield**. The classic **History API is already implemented and wired to the real shell back-forward stack** (Phase 0/2 work). The modern **Navigation API exists only as a standalone pure-JS shim** with its own in-memory entry list that is *not* connected to the shell, `location`, or the History stack. The bulk of this task is (a) finishing History API edge cases and (b) wiring the Navigation API shim into the real navigation pipeline.
 
+### Progress (2026-06-25) — Phase 1a (History `go` semantics) DONE
+
+Merged slice (`crates/js/src/dom.rs`, `history.go`):
+- `history.go(0)` now reloads the current document (was a silent no-op) — HTML LS history-traversal.
+- Non-zero `history.go(n)` delivers popstate through `_lumen_deliver_popstate`, so a `go()` traversal now (a) syncs `location` (`location.pathname`/`href` were stale before) and (b) fires a real `PopStateEvent` instead of an ad-hoc inline object — identical to a shell-driven traversal.
+- Tests: `history_go_zero_reloads`, `history_go_updates_location`, `history_go_out_of_bounds_no_popstate`; existing 15 history + 9 popstate tests still green.
+
+**Still remaining** (Phase 1b + Phase 2): cross-document single-authority unification (JS `HistoryState` mirror vs shell `nav_back`/`nav_fwd` drift on multi-step `go` across full-document boundaries), `hashchange`+`popstate` for fragment nav, post-back `history.state` from shell-restored value, and the entire Navigation API wiring (steps 5–10 below). The ROADMAP `P3-navapi` row stays `planned` until those land.
+
 ---
 
 ## Goal

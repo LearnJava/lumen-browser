@@ -6405,17 +6405,17 @@ var history = {
     back:    function() { history.go(-1); },
     forward: function() { history.go(1); },
     go: function(delta) {
+        // HTML LS (history traversal): history.go(0) reloads the current document.
+        if ((delta | 0) === 0) {
+            _lumen_reload();
+            return;
+        }
+        // Non-zero delta: move the history cursor; on success deliver popstate
+        // through the same path as a shell-driven traversal so location sync and
+        // PopStateEvent semantics are identical (no ad-hoc inline event object).
         var ok = _lumen_history_go((delta | 0));
         if (ok) {
-            var s;
-            try { s = JSON.parse(_lumen_history_state_json()); } catch(e) { s = null; }
-            var ev = { type: 'popstate', state: s };
-            if (typeof window.onpopstate === 'function') {
-                try { window.onpopstate(ev); } catch(e) {}
-            }
-            for (var i = 0; i < _popstate_listeners.length; i++) {
-                try { _popstate_listeners[i](ev); } catch(e) {}
-            }
+            _lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url());
         }
     },
 };
@@ -13414,6 +13414,40 @@ mod tests {
         assert_eq!(len, lumen_core::JsValue::Number(3.0));
         let state = rt.eval("history.state.n").unwrap();
         assert_eq!(state, lumen_core::JsValue::Number(3.0));
+    }
+
+    #[test]
+    fn history_go_zero_reloads() {
+        let rt = runtime_with_url("https://example.com/");
+        rt.eval("history.go(0)").unwrap();
+        let req = rt.take_navigate_request();
+        assert!(matches!(req, Some(NavigateRequest::Reload)));
+    }
+
+    #[test]
+    fn history_go_updates_location() {
+        let rt = runtime_with_url("https://example.com/start");
+        rt.eval(
+            "history.pushState({},'','https://example.com/p1'); \
+             history.pushState({},'','https://example.com/p2'); \
+             history.go(-1);",
+        )
+        .unwrap();
+        let path = rt.eval("location.pathname").unwrap();
+        assert_eq!(path, lumen_core::JsValue::String("/p1".into()));
+    }
+
+    #[test]
+    fn history_go_out_of_bounds_no_popstate() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var fired=false; \
+             window.addEventListener('popstate', function(){fired=true;}); \
+             history.go(7);",
+        )
+        .unwrap();
+        let fired = rt.eval("fired").unwrap();
+        assert_eq!(fired, lumen_core::JsValue::Bool(false));
     }
 
     #[test]
