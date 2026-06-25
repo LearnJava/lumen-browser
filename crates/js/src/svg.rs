@@ -243,7 +243,7 @@ const SVG_SHIM: &str = r#"
   // ── Base element classes ──────────────────────────────────────────────────
 
   // SVGElement — base for all SVG elements (W3C SVG 2 §4.3)
-  class SVGElement extends Element {
+  class SVGElement extends (typeof Element !== 'undefined' ? Element : Object) {
     constructor() {
       super();
       this.namespaceURI = SVG_NS;
@@ -892,23 +892,25 @@ const SVG_SHIM: &str = r#"
     'metadata':         SVGMetadataElement,
   };
 
-  // Patch document.createElementNS: for SVG namespace return typed SVG element.
-  // For all other namespaces delegate to the original implementation.
+  // Decorate document.createElementNS: keep the AUTHORITATIVE native implementation
+  // (crates/js/src/dom.rs) — it returns a real arena node carrying __nid__ so that
+  // appendChild attaches it and layout/paint render it (BUG-243). For the SVG
+  // namespace we additionally re-point the node's prototype at the matching typed
+  // SVG*Element class so `instanceof SVGCircleElement` and getBBox()/getCTM() work.
+  // _lumen_make_element returns a plain object whose methods are OWN properties, so
+  // setPrototypeOf preserves every native method while adding the typed chain.
   if (typeof document !== 'undefined' && typeof document.createElementNS === 'function') {
     const _origCreateElementNS = document.createElementNS.bind(document);
-    document.createElementNS = function createElementNS(ns, qualifiedName) {
+    document.createElementNS = function(ns, qualifiedName) {
       if (ns === SVG_NS) {
-        // Strip namespace prefix (e.g. "svg:rect" → "rect")
-        const localName = (qualifiedName || '').replace(/^[^:]+:/, '').toLowerCase();
-        // Canonically keep original casing for case-sensitive tags (e.g. linearGradient)
-        const tagLC = localName;
-        const Ctor = SVG_TAG_MAP[qualifiedName.replace(/^[^:]+:/, '')] ||
-                     SVG_TAG_MAP[tagLC] ||
-                     SVGElement;
-        const el = new Ctor();
-        // Store qualified name for serialisation compatibility
-        el._qualifiedName = qualifiedName;
-        el.namespaceURI = SVG_NS;
+        const local = (qualifiedName || '').replace(/^[^:]+:/, '');
+        const Ctor = SVG_TAG_MAP[qualifiedName] || SVG_TAG_MAP[local] || SVG_TAG_MAP[local.toLowerCase()] || SVGElement;
+        const el = _origCreateElementNS(ns, qualifiedName);
+        try {
+          Object.setPrototypeOf(el, Ctor.prototype);
+        } catch (e) {
+          // ignore prototype assignment failure
+        }
         return el;
       }
       return _origCreateElementNS(ns, qualifiedName);
