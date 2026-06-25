@@ -3836,6 +3836,49 @@ mod tests {
         server.join().ok();
     }
 
+    #[test]
+    fn sse_close_emits_closed_once() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::time::Duration;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let server = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(sock.try_clone().unwrap());
+            let mut line = String::new();
+            while reader.read_line(&mut line).unwrap() > 0 {
+                if line.trim().is_empty() {
+                    break;
+                }
+                line.clear();
+            }
+            let _ = sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n");
+            let _ = sock.flush();
+            thread::sleep(Duration::from_millis(200));
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let sink = Arc::new(CollectingSink::new());
+        let mut session: Box<dyn SseSession> =
+            <HttpClient as SseProvider>::connect_sse(&client, &url, TabId(0), sink.clone()).unwrap();
+
+        // Second close() must be a no-op — close() is idempotent.
+        session.close();
+        session.close();
+
+        let closed = sink
+            .events()
+            .iter()
+            .filter(|e| matches!(e, Event::SseClosed { .. }))
+            .count();
+        assert_eq!(closed, 1, "close() must emit SseClosed exactly once");
+
+        let _ = server.join();
+    }
+
     // ── WebSocket end-to-end protocol (RFC 6455) ─────────────────────────────
     // A real localhost `TcpListener` plays a minimal WebSocket server; the real
     // client is driven through `WebSocketProvider::connect_ws` and we assert the

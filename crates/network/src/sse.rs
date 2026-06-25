@@ -201,6 +201,8 @@ pub(crate) struct EventSource {
     /// Shared cancellation handle: stops the reconnect loop and wakes a pending
     /// reconnect sleep when `close()` is signalled from another thread.
     cancel: lumen_core::ext::SseCancel,
+    /// True once the terminal SseClosed has been emitted; makes close() idempotent.
+    closed: bool,
 }
 
 impl EventSource {
@@ -221,6 +223,7 @@ impl EventSource {
             stream: None,
             retry_ms: DEFAULT_RETRY_MS,
             cancel: lumen_core::ext::SseCancel::new(),
+            closed: false,
         };
         es.open_connection()?;
         Ok(es)
@@ -361,13 +364,8 @@ impl SseSession for EventSource {
                 match self.fill_queue() {
                     Ok(true) => continue,  // read more; queue may now have events
                     Ok(false) => {
-                        // EOF: drop stream, prepare to reconnect.
+                        // Transient drop -> reconnect, no terminal close (HTML SSE §9.2.1).
                         self.stream = None;
-                        self.sink.emit(&Event::SseClosed {
-                            tab_id: self.tab_id,
-                            url: self.url.clone(),
-                            reason: "server closed connection".into(),
-                        });
                     }
                     Err(e) => {
                         self.stream = None;
@@ -402,6 +400,10 @@ impl SseSession for EventSource {
     }
 
     fn close(&mut self) {
+        if self.closed {
+            return;
+        }
+        self.closed = true;
         self.cancel.signal();
         self.stream = None;
         self.sink.emit(&Event::SseClosed {
