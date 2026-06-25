@@ -33,6 +33,8 @@ last_session.db
 /scripts/.laguna-session-*.json
 # Laguna solo worklog: отчёт о наработках, ожидающих влития; чистится Claude после merge.
 /scripts/laguna-worklog.md
+# Laguna debug-логи обмена (тайминг/трейсбэки сетевых сбоев) — транзиентные.
+/scripts/laguna-debug-*.log
 /.jobstatus-*
 __pycache__/
 
