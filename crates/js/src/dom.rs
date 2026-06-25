@@ -6435,8 +6435,14 @@ var _popstate_listeners = [];
 // Called by the shell (via eval_js) when the user navigates back/forward to a
 // same-document (pushState) history entry.  Updates location and fires popstate.
 // state_json is already valid JSON; url may be empty (means keep current).
+// HTML LS §7.4.6: traversing between two entries that differ only in their
+// fragment fires popstate AND hashchange (popstate first, hashchange after).
 function _lumen_deliver_popstate(state_json, url) {
+    var oldHref = _lumen_loc_href;
+    var oldHash = oldHref.indexOf('#') >= 0 ? oldHref.slice(oldHref.indexOf('#')) : '';
     if (url) _lumen_location_update(url);
+    var newHref = url ? url : oldHref;
+    var newHash = newHref.indexOf('#') >= 0 ? newHref.slice(newHref.indexOf('#')) : '';
     var s;
     try { s = JSON.parse(state_json); } catch(e) { s = null; }
     var ev = new PopStateEvent('popstate', { state: s, bubbles: true });
@@ -6445,6 +6451,9 @@ function _lumen_deliver_popstate(state_json, url) {
     }
     for (var i = 0; i < _popstate_listeners.length; i++) {
         try { _popstate_listeners[i](ev); } catch(e) {}
+    }
+    if (url && oldHash !== newHash) {
+        _lumen_fire_hashchange(oldHref, newHref);
     }
 }
 
@@ -15827,6 +15836,42 @@ mod tests {
         rt.eval("_lumen_deliver_popstate('{\"n\":5}', '')").unwrap();
         let r = rt.eval("count").unwrap();
         assert_eq!(r, lumen_core::JsValue::Number(5.0));
+    }
+
+    #[test]
+    fn deliver_popstate_fires_hashchange_on_fragment_change() {
+        let rt = runtime_with_url("https://example.com/page#a");
+        rt.eval("var __h = null; window.onhashchange = function(e) { window.__h = e.newURL; };").unwrap();
+        rt.eval("_lumen_deliver_popstate('null', 'https://example.com/page#b')").unwrap();
+        let r = rt.eval("window.__h").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("https://example.com/page#b".into()));
+    }
+
+    #[test]
+    fn deliver_popstate_hashchange_addeventlistener() {
+        let rt = runtime_with_url("https://example.com/p#a");
+        rt.eval("var n = 0; window.addEventListener('hashchange', function() { n++; });").unwrap();
+        rt.eval("_lumen_deliver_popstate('null', 'https://example.com/p#z')").unwrap();
+        let r = rt.eval("n").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn deliver_popstate_no_hashchange_same_fragment() {
+        let rt = runtime_with_url("https://example.com/a#sec");
+        rt.eval("var n = 0; window.addEventListener('hashchange', function() { n++; });").unwrap();
+        rt.eval("_lumen_deliver_popstate('null', 'https://example.com/b#sec')").unwrap();
+        let r = rt.eval("n").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn deliver_popstate_no_hashchange_empty_url() {
+        let rt = runtime_with_url("https://example.com/page#a");
+        rt.eval("var n = 0; window.addEventListener('hashchange', function() { n++; });").unwrap();
+        rt.eval("_lumen_deliver_popstate('null', '')").unwrap();
+        let r = rt.eval("n").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(0.0));
     }
 
     #[test]
