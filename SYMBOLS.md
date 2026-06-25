@@ -170,7 +170,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/canvas/src/rasterize.rs:73` **fn** `build_clip_mask` — Build a boolean clip mask by rasterizing `path` with even-odd rule
 `crates/engine/canvas/src/rasterize.rs:107` **fn** `collect_lines` — Extract `(x0, y0, x1, y1)` line tuples from `path`, tessellating Bézier curves
 
-## lumen-core  (262 symbols)
+## lumen-core  (265 symbols)
 
 `crates/core/src/capability.rs:7` **enum** `Capability`
 `crates/core/src/capability.rs:27` **struct** `CapabilityToken`
@@ -195,134 +195,137 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/core/src/event.rs:67` **enum** `FetchPriority` — Приоритет выборки subresource-а. Отражает HTML Living Standard §17.2.3
 `crates/core/src/event.rs:79` **fn** `for_kind` — Приоритет по типу subresource (Fetch Standard §2.2)
 `crates/core/src/event.rs:91` **enum** `Event`
-`crates/core/src/ext.rs:19` **trait** `NetworkTransport` — Сетевой транспорт. Подменяется на mock для тестов или на альтернативный стек
-`crates/core/src/ext.rs:39` **trait** `EventSink` — Приёмник событий из подсистем (network, навигация, вкладки)
-`crates/core/src/ext.rs:46` **struct** `NoopEventSink` — EventSink, который молча игнорирует все события. Дефолт для подсистем,
-`crates/core/src/ext.rs:57` **trait** `StorageBackend` — Хранилище ключ/значение для cookies, истории, кэша
-`crates/core/src/ext.rs:89` **trait** `SearchProvider` — Поисковая система для omnibox
-`crates/core/src/ext.rs:100` **trait** `FilterListSource` — Источник списка фильтров рекламы / трекеров
-`crates/core/src/ext.rs:116` **trait** `RequestFilter` — Решение «блокировать ли исходящий запрос». Реализация смотрит URL и
-`crates/core/src/ext.rs:143` **enum** `ResourceType` — Тип ресурса исходящего запроса для EasyList type-опций (`$script`,
-`crates/core/src/ext.rs:170` **struct** `RequestContext` — Контекст исходящего запроса, передаваемый в
-`crates/core/src/ext.rs:182` **fn** `unknown` — Контекст без информации: оба поля `None`. Заставляет
-`crates/core/src/ext.rs:207` **trait** `DnsResolver` — DNS-резолвер: hostname → список IP-адресов (с портом, готовых к connect)
-`crates/core/src/ext.rs:232` **trait** `HstsEnforcement` — HSTS-политика: должны ли HTTP-запросы к данному host принудительно
-`crates/core/src/ext.rs:256` **enum** `HttpAuthScheme` — HTTP authentication scheme, разрешённый `HttpClient` для re-request
-`crates/core/src/ext.rs:267` **fn** `as_str`
-`crates/core/src/ext.rs:288` **struct** `HttpAuthChallenge` — Запрос учётных данных от credential-провайдера. Передаётся в
-`crates/core/src/ext.rs:301` **struct** `HttpCredentials` — Учётные данные для HTTP auth: username + plaintext password
-`crates/core/src/ext.rs:324` **trait** `HttpCredentialProvider` — Поставщик учётных данных HTTP-auth
-`crates/core/src/ext.rs:333` **trait** `CookieProvider` — HTTP cookie storage provider. Bridges lumen-network (fetch pipeline) to
-`crates/core/src/ext.rs:372` **trait** `EncodingDetector` — Определение кодировки HTML-документа. Для кириллицы критично уметь
-`crates/core/src/ext.rs:382` **enum** `FontStyle` — Начертание face-а: `font-style` из CSS Fonts L4. Phase 0 — три
-`crates/core/src/ext.rs:391` **fn** `parse_keyword` — Парсит CSS-ключевое слово `normal | italic | oblique` (case-insensitive)
-`crates/core/src/ext.rs:413` **struct** `FaceRecord` — Метаданные одного face-а в индексе шрифтов
-`crates/core/src/ext.rs:453` **trait** `FontProvider` — Источник системных шрифтов. Реализация — в `lumen-font::system_fonts`
-`crates/core/src/ext.rs:507` **fn** `match_face` — CSS Fonts L4 §5.2 алгоритм матчинга — извлечён из trait-а в свободную
-`crates/core/src/ext.rs:546` **fn** `match_face_no_stretch` — Legacy функция match_face для backward compatibility (без stretch)
-`crates/core/src/ext.rs:846` **trait** `JsRuntime` — JavaScript runtime — исполнение JS-кода (HTML inline scripts, `eval`,
-`crates/core/src/ext.rs:912` **struct** `SuspendedHeap` — Serialized JS heap snapshot for T2→T3 hibernation (ADR-008, Invariant 2)
-`crates/core/src/ext.rs:919` **fn** `new` — Create a new suspended heap from compressed bytes
-`crates/core/src/ext.rs:924` **fn** `len` — Get the size in bytes of the compressed snapshot
-`crates/core/src/ext.rs:929` **fn** `is_empty` — Check if the snapshot is empty
-`crates/core/src/ext.rs:936` **enum** `JsValue` — Простые JSON-совместимые типы для передачи через trait-границу
-`crates/core/src/ext.rs:949` **fn** `object` — Хелпер: построить object из key-value пар
-`crates/core/src/ext.rs:959` **enum** `JsError` — Ошибка исполнения JavaScript: либо syntax error (parse), либо runtime
-`crates/core/src/ext.rs:980` **type** `JsResult`
-`crates/core/src/ext.rs:985` **struct** `NullJsRuntime` — Null implementation — всегда возвращает `JsError::NotImplemented`
-`crates/core/src/ext.rs:1035` **trait** `UnicodeProvider` — Unicode-таблицы: line break (UAX #14), grapheme/word segmentation
-`crates/core/src/ext.rs:1060` **struct** `NullUnicodeProvider` — Null-реализация `UnicodeProvider` — все методы возвращают пустые векторы
-`crates/core/src/ext.rs:1088` **trait** `IdnaProvider` — IDN (Internationalized Domain Names) полный UTS #46. Свой Punycode-encoder
-`crates/core/src/ext.rs:1098` **struct** `NullIdnaProvider` — Null-реализация `IdnaProvider` — все методы возвращают `None`. Потребитель
-`crates/core/src/ext.rs:1123` **trait** `PublicSuffixList` — Public Suffix List — отделение публичных суффиксов от регистрируемых
-`crates/core/src/ext.rs:1144` **struct** `NullPublicSuffixList` — Null-реализация `PublicSuffixList` — все запросы возвращают `None`/`false`
-`crates/core/src/ext.rs:1170` **trait** `ContentDecoder` — HTTP `Content-Encoding` декодер. Один экземпляр trait-а = один кодек
-`crates/core/src/ext.rs:1185` **struct** `UnsupportedContentDecoder` — Stub-реализация `ContentDecoder` для encoding-а, на который нет
-`crates/core/src/ext.rs:1216` **trait** `FontFormat` — Декодер альтернативных файловых форматов шрифта (WOFF2, WOFF) в raw
-`crates/core/src/ext.rs:1234` **struct** `NullFontFormat` — Null-реализация `FontFormat` — `can_decode` всегда `false`,
-`crates/core/src/ext.rs:1259` **trait** `ImageDecoder` — Plug-in декодер растровых изображений для форматов, не встроенных в
-`crates/core/src/ext.rs:1286` **trait** `SpellChecker` — Spell checker — проверка орфографии для form field / contenteditable
-`crates/core/src/ext.rs:1300` **struct** `NullSpellChecker` — Null-реализация `SpellChecker` — `check` всегда возвращает `true`, чтобы
-`crates/core/src/ext.rs:1317` **trait** `HyphenationProvider` — Hyphenation — поиск позиций мягких переносов для CSS `hyphens: auto`
-`crates/core/src/ext.rs:1328` **struct** `NullHyphenationProvider` — Null-реализация `HyphenationProvider` — никаких переносов не предлагается
-`crates/core/src/ext.rs:1345` **enum** `WsMessage` — Сообщение, полученное от WebSocket-сервера (RFC 6455 §5.6)
-`crates/core/src/ext.rs:1361` **trait** `WebSocketSession` — Открытое WebSocket-соединение. Объект владеет TCP/TLS-стримом
-`crates/core/src/ext.rs:1381` **trait** `WebSocketProvider` — Фабрика WebSocket-соединений. Реализуется `lumen-network::HttpClient`
-`crates/core/src/ext.rs:1399` **struct** `SseEvent` — Полностью разобранное SSE-событие (HTML Living Standard §9.2.6)
-`crates/core/src/ext.rs:1415` **trait** `SseSession` — Открытое SSE-соединение (EventSource). Блокирующий интерфейс
-`crates/core/src/ext.rs:1445` **trait** `SseProvider` — Фабрика SSE-соединений. Реализуется `lumen-network::HttpClient`
-`crates/core/src/ext.rs:1461` **enum** `JsSseEvent` — A single queued event from an SSE connection, ready for delivery to JS
-`crates/core/src/ext.rs:1487` **trait** `JsSseSession` — A live SSE connection from the JS runtime's perspective
-`crates/core/src/ext.rs:1498` **trait** `JsSseProvider` — Factory that opens SSE connections for the JS runtime
-`crates/core/src/ext.rs:1524` **trait** `FetchInterceptor` — Перехватчик fetch-запросов уровня Service Worker
-`crates/core/src/ext.rs:1536` **struct** `JsFetchResult` — Full HTTP response for a synchronous JS `fetch()` call
-`crates/core/src/ext.rs:1555` **trait** `JsFetchProvider` — Synchronous HTTP fetch bridge for the JS runtime
-`crates/core/src/ext.rs:1692` **struct** `AbortToken` — A cheaply-clonable cooperative cancellation flag for aborting in-flight fetches
-`crates/core/src/ext.rs:1701` **fn** `new` — Creates a new, non-aborted `AbortToken`
-`crates/core/src/ext.rs:1711` **fn** `abort` — Signals abortion by setting the internal flag to `true`
-`crates/core/src/ext.rs:1719` **fn** `is_aborted` — Returns whether this token has been aborted
-`crates/core/src/ext.rs:1781` **struct** `SseCancel` — An interruptible-delay handle shared across threads
-`crates/core/src/ext.rs:1787` **fn** `new` — Creates a new, not-yet-cancelled handle
-`crates/core/src/ext.rs:1794` **fn** `signal` — Signals cancellation and wakes any thread parked in [`sleep`](Self::sleep)
-`crates/core/src/ext.rs:1802` **fn** `is_cancelled` — Returns whether cancellation has been signalled
-`crates/core/src/ext.rs:1811` **fn** `sleep` — Blocks up to `dur`, returning early if cancellation is signalled
-`crates/core/src/ext.rs:1880` **trait** `ClipboardProvider` — Synchronous access to the host platform clipboard for the JS runtime
-`crates/core/src/ext.rs:1901` **enum** `WebAuthnError` — Failure reason from a [`CredentialProvider`] operation
-`crates/core/src/ext.rs:1919` **fn** `dom_exception_name` — The `DOMException` name `lumen-js` should reject the promise with
-`crates/core/src/ext.rs:1935` **struct** `WebAuthnCreateRequest` — A WebAuthn credential-creation (registration) request
-`crates/core/src/ext.rs:1965` **struct** `WebAuthnCreateResponse` — The result of a successful [`CredentialProvider::create`]
-`crates/core/src/ext.rs:1988` **struct** `WebAuthnGetRequest` — A WebAuthn assertion (authentication) request
-`crates/core/src/ext.rs:2005` **struct** `WebAuthnGetResponse` — The result of a successful [`CredentialProvider::get`]
-`crates/core/src/ext.rs:2035` **trait** `CredentialProvider` — Provider of WebAuthn / passkey credentials, backing `navigator.credentials`
-`crates/core/src/ext.rs:2055` **enum** `JsWsEvent` — A single queued event from a WebSocket connection, ready for delivery to JS
-`crates/core/src/ext.rs:2085` **trait** `JsWebSocketSession` — A live WebSocket connection from the JS runtime's perspective
-`crates/core/src/ext.rs:2104` **trait** `JsWebSocketProvider` — Factory that opens WebSocket connections for the JS runtime
-`crates/core/src/ext.rs:2134` **trait** `IdbBackend` — Persistence boundary for the IndexedDB JS shim
-`crates/core/src/ext.rs:2157` **trait** `SwBackend` — Per-origin Service Worker registration persistence
-`crates/core/src/ext.rs:2179` **trait** `CacheBackend` — Per-origin Cache API persistence (W3C Service Worker spec §cache-objects)
-`crates/core/src/ext.rs:2212` **enum** `ClockMode` — Clock mode for deterministic testing (BrowserSession::set_clock, 8F.1)
-`crates/core/src/ext.rs:2236` **trait** `BrowserSession` — Browser automation session — unified interface for in-process tests, MCP agents,
-`crates/core/src/ext.rs:2371` **struct** `NullBrowserSession` — Null implementation of `BrowserSession` — all methods return `NotImplemented`
-`crates/core/src/ext.rs:2480` **enum** `MemoryPressureLevel` — OS memory pressure level (ADR-008, task 10H)
-`crates/core/src/ext.rs:2500` **trait** `MemoryPressureSource` — Source of OS memory pressure signals (ADR-008, task 10H)
-`crates/core/src/ext.rs:2507` **struct** `NullMemoryPressureSource` — Null implementation — always reports `Low`. For tests and platforms without
-`crates/core/src/ext.rs:2529` **trait** `EvictableCache` — Common interface for all cross-tab shared memory caches (ADR-008, task 10D.3)
-`crates/core/src/ext.rs:2563` **struct** `CacheRegistry` — Registry of all cross-tab shared memory caches (ADR-008, task 10D.3)
-`crates/core/src/ext.rs:2569` **fn** `new` — Create an empty registry
-`crates/core/src/ext.rs:2574` **fn** `register` — Register a cache. Caches are notified in registration order
-`crates/core/src/ext.rs:2579` **fn** `broadcast_pressure` — Broadcast a memory pressure event to all registered caches
-`crates/core/src/ext.rs:2586` **fn** `total_used_bytes` — Total memory currently used across all registered caches, in bytes
-`crates/core/src/ext.rs:2594` **fn** `total_budget_bytes` — Total memory budget across all caches with a finite budget, in bytes
-`crates/core/src/ext.rs:2603` **fn** `clear_all` — Evict all entries in every registered cache
-`crates/core/src/ext.rs:2610` **fn** `len` — Number of registered caches
-`crates/core/src/ext.rs:2615` **fn** `is_empty` — `true` if no caches are registered
-`crates/core/src/ext.rs:2998` **struct** `KnowledgeHistoryHit` — Result of a full-text history search. Mirrors `lumen_knowledge::SearchHit`
-`crates/core/src/ext.rs:3014` **struct** `KnowledgeNoteHit` — Result of a full-text notes search
-`crates/core/src/ext.rs:3031` **struct** `KnowledgeReadLaterHit` — Result of a full-text read-later search
-`crates/core/src/ext.rs:3046` **struct** `KnowledgeTabHit` — Result of a live open-tabs search
-`crates/core/src/ext.rs:3067` **trait** `KnowledgeStore` — Unified knowledge-store interface covering the §12 feature set:
-`crates/core/src/ext.rs:3232` **trait** `AiBackend` — Synchronous AI inference backend for the sidebar AI assistant (§12.8)
-`crates/core/src/ext.rs:3244` **struct** `NullAiBackend` — Null AI backend — always returns an informational stub
-`crates/core/src/ext.rs:3280` **struct** `AudioDeviceDescriptor` — Describes a single audio input or output device available on the host platform
-`crates/core/src/ext.rs:3302` **struct** `AudioCaptureConfig` — Constraints forwarded from JS `getUserMedia({audio: {…}})`
-`crates/core/src/ext.rs:3319` **enum** `AudioCaptureError` — Errors returned by [`AudioCaptureProvider::capture`]
-`crates/core/src/ext.rs:3335` **trait** `AudioCaptureHandle` — Live audio capture stream returned by [`AudioCaptureProvider::capture`]
-`crates/core/src/ext.rs:3363` **trait** `AudioCaptureProvider` — Platform audio capture backend backing `navigator.mediaDevices.getUserMedia({audio})`
-`crates/core/src/ext.rs:3383` **struct** `NullAudioCaptureProvider` — Stub `AudioCaptureProvider` that returns zero devices and always rejects capture
-`crates/core/src/ext.rs:3434` **struct** `ScreenSourceDescriptor` — Describes a capturable screen source (monitor or application window)
-`crates/core/src/ext.rs:3451` **struct** `ScreenCaptureConfig` — Constraints forwarded from JS `getDisplayMedia({video: {…}})`
-`crates/core/src/ext.rs:3464` **enum** `ScreenCaptureError` — Errors returned by [`ScreenCaptureProvider::capture`]
-`crates/core/src/ext.rs:3474` **struct** `VideoFrame` — Single captured video frame (raw RGBA pixels, top-to-bottom row-major)
-`crates/core/src/ext.rs:3487` **trait** `ScreenCaptureHandle` — Live screen capture session returned by [`ScreenCaptureProvider::capture`]
-`crates/core/src/ext.rs:3512` **trait** `ScreenCaptureProvider` — Platform screen capture backend backing `navigator.mediaDevices.getDisplayMedia`
-`crates/core/src/ext.rs:3527` **struct** `NullScreenCaptureProvider` — Stub `ScreenCaptureProvider` that returns zero sources and always rejects capture
-`crates/core/src/ext.rs:3582` **trait** `AudioPlaybackProvider` — Platform audio playback backend backing `HTMLAudioElement` (PH3-11)
-`crates/core/src/ext.rs:3651` **struct** `NullAudioPlaybackProvider` — Stub `AudioPlaybackProvider` installed when no real audio backend is available
-`crates/core/src/ext.rs:3680` **trait** `WakeLockProvider` — Platform provider for Screen Wake Lock API (W3C Screen Wake Lock Level 1)
-`crates/core/src/ext.rs:3696` **struct** `NullWakeLockProvider` — Stub provider used in tests and headless mode
-`crates/core/src/ext.rs:3808` **struct** `SwFetchRequest` — Message sent from the main thread to a Service Worker execution thread
-`crates/core/src/ext.rs:3823` **struct** `SwWorkerHandle` — Opaque handle to a running Service Worker execution thread
-`crates/core/src/ext.rs:3836` **type** `SwWorkerStore` — Map from `(origin, scope)` to live SW worker handles
+`crates/core/src/ext.rs:20` **trait** `NetworkTransport` — Сетевой транспорт. Подменяется на mock для тестов или на альтернативный стек
+`crates/core/src/ext.rs:40` **trait** `EventSink` — Приёмник событий из подсистем (network, навигация, вкладки)
+`crates/core/src/ext.rs:47` **struct** `NoopEventSink` — EventSink, который молча игнорирует все события. Дефолт для подсистем,
+`crates/core/src/ext.rs:58` **trait** `StorageBackend` — Хранилище ключ/значение для cookies, истории, кэша
+`crates/core/src/ext.rs:90` **trait** `SearchProvider` — Поисковая система для omnibox
+`crates/core/src/ext.rs:101` **trait** `FilterListSource` — Источник списка фильтров рекламы / трекеров
+`crates/core/src/ext.rs:117` **trait** `RequestFilter` — Решение «блокировать ли исходящий запрос». Реализация смотрит URL и
+`crates/core/src/ext.rs:144` **enum** `ResourceType` — Тип ресурса исходящего запроса для EasyList type-опций (`$script`,
+`crates/core/src/ext.rs:171` **struct** `RequestContext` — Контекст исходящего запроса, передаваемый в
+`crates/core/src/ext.rs:183` **fn** `unknown` — Контекст без информации: оба поля `None`. Заставляет
+`crates/core/src/ext.rs:208` **trait** `DnsResolver` — DNS-резолвер: hostname → список IP-адресов (с портом, готовых к connect)
+`crates/core/src/ext.rs:233` **trait** `HstsEnforcement` — HSTS-политика: должны ли HTTP-запросы к данному host принудительно
+`crates/core/src/ext.rs:257` **enum** `HttpAuthScheme` — HTTP authentication scheme, разрешённый `HttpClient` для re-request
+`crates/core/src/ext.rs:268` **fn** `as_str`
+`crates/core/src/ext.rs:289` **struct** `HttpAuthChallenge` — Запрос учётных данных от credential-провайдера. Передаётся в
+`crates/core/src/ext.rs:302` **struct** `HttpCredentials` — Учётные данные для HTTP auth: username + plaintext password
+`crates/core/src/ext.rs:325` **trait** `HttpCredentialProvider` — Поставщик учётных данных HTTP-auth
+`crates/core/src/ext.rs:334` **trait** `CookieProvider` — HTTP cookie storage provider. Bridges lumen-network (fetch pipeline) to
+`crates/core/src/ext.rs:373` **trait** `EncodingDetector` — Определение кодировки HTML-документа. Для кириллицы критично уметь
+`crates/core/src/ext.rs:383` **enum** `FontStyle` — Начертание face-а: `font-style` из CSS Fonts L4. Phase 0 — три
+`crates/core/src/ext.rs:392` **fn** `parse_keyword` — Парсит CSS-ключевое слово `normal | italic | oblique` (case-insensitive)
+`crates/core/src/ext.rs:414` **struct** `FaceRecord` — Метаданные одного face-а в индексе шрифтов
+`crates/core/src/ext.rs:454` **trait** `FontProvider` — Источник системных шрифтов. Реализация — в `lumen-font::system_fonts`
+`crates/core/src/ext.rs:508` **fn** `match_face` — CSS Fonts L4 §5.2 алгоритм матчинга — извлечён из trait-а в свободную
+`crates/core/src/ext.rs:547` **fn** `match_face_no_stretch` — Legacy функция match_face для backward compatibility (без stretch)
+`crates/core/src/ext.rs:847` **trait** `JsRuntime` — JavaScript runtime — исполнение JS-кода (HTML inline scripts, `eval`,
+`crates/core/src/ext.rs:913` **struct** `SuspendedHeap` — Serialized JS heap snapshot for T2→T3 hibernation (ADR-008, Invariant 2)
+`crates/core/src/ext.rs:920` **fn** `new` — Create a new suspended heap from compressed bytes
+`crates/core/src/ext.rs:925` **fn** `len` — Get the size in bytes of the compressed snapshot
+`crates/core/src/ext.rs:930` **fn** `is_empty` — Check if the snapshot is empty
+`crates/core/src/ext.rs:937` **enum** `JsValue` — Простые JSON-совместимые типы для передачи через trait-границу
+`crates/core/src/ext.rs:950` **fn** `object` — Хелпер: построить object из key-value пар
+`crates/core/src/ext.rs:960` **enum** `JsError` — Ошибка исполнения JavaScript: либо syntax error (parse), либо runtime
+`crates/core/src/ext.rs:981` **type** `JsResult`
+`crates/core/src/ext.rs:986` **struct** `NullJsRuntime` — Null implementation — всегда возвращает `JsError::NotImplemented`
+`crates/core/src/ext.rs:1036` **trait** `UnicodeProvider` — Unicode-таблицы: line break (UAX #14), grapheme/word segmentation
+`crates/core/src/ext.rs:1061` **struct** `NullUnicodeProvider` — Null-реализация `UnicodeProvider` — все методы возвращают пустые векторы
+`crates/core/src/ext.rs:1089` **trait** `IdnaProvider` — IDN (Internationalized Domain Names) полный UTS #46. Свой Punycode-encoder
+`crates/core/src/ext.rs:1099` **struct** `NullIdnaProvider` — Null-реализация `IdnaProvider` — все методы возвращают `None`. Потребитель
+`crates/core/src/ext.rs:1124` **trait** `PublicSuffixList` — Public Suffix List — отделение публичных суффиксов от регистрируемых
+`crates/core/src/ext.rs:1145` **struct** `NullPublicSuffixList` — Null-реализация `PublicSuffixList` — все запросы возвращают `None`/`false`
+`crates/core/src/ext.rs:1171` **trait** `ContentDecoder` — HTTP `Content-Encoding` декодер. Один экземпляр trait-а = один кодек
+`crates/core/src/ext.rs:1186` **struct** `UnsupportedContentDecoder` — Stub-реализация `ContentDecoder` для encoding-а, на который нет
+`crates/core/src/ext.rs:1217` **trait** `FontFormat` — Декодер альтернативных файловых форматов шрифта (WOFF2, WOFF) в raw
+`crates/core/src/ext.rs:1235` **struct** `NullFontFormat` — Null-реализация `FontFormat` — `can_decode` всегда `false`,
+`crates/core/src/ext.rs:1260` **trait** `ImageDecoder` — Plug-in декодер растровых изображений для форматов, не встроенных в
+`crates/core/src/ext.rs:1287` **trait** `SpellChecker` — Spell checker — проверка орфографии для form field / contenteditable
+`crates/core/src/ext.rs:1301` **struct** `NullSpellChecker` — Null-реализация `SpellChecker` — `check` всегда возвращает `true`, чтобы
+`crates/core/src/ext.rs:1318` **trait** `HyphenationProvider` — Hyphenation — поиск позиций мягких переносов для CSS `hyphens: auto`
+`crates/core/src/ext.rs:1329` **struct** `NullHyphenationProvider` — Null-реализация `HyphenationProvider` — никаких переносов не предлагается
+`crates/core/src/ext.rs:1346` **enum** `WsMessage` — Сообщение, полученное от WebSocket-сервера (RFC 6455 §5.6)
+`crates/core/src/ext.rs:1362` **trait** `WebSocketSession` — Открытое WebSocket-соединение. Объект владеет TCP/TLS-стримом
+`crates/core/src/ext.rs:1382` **trait** `WebSocketProvider` — Фабрика WebSocket-соединений. Реализуется `lumen-network::HttpClient`
+`crates/core/src/ext.rs:1400` **struct** `SseEvent` — Полностью разобранное SSE-событие (HTML Living Standard §9.2.6)
+`crates/core/src/ext.rs:1416` **trait** `SseSession` — Открытое SSE-соединение (EventSource). Блокирующий интерфейс
+`crates/core/src/ext.rs:1446` **trait** `SseProvider` — Фабрика SSE-соединений. Реализуется `lumen-network::HttpClient`
+`crates/core/src/ext.rs:1462` **enum** `JsSseEvent` — A single queued event from an SSE connection, ready for delivery to JS
+`crates/core/src/ext.rs:1488` **trait** `JsSseSession` — A live SSE connection from the JS runtime's perspective
+`crates/core/src/ext.rs:1499` **trait** `JsSseProvider` — Factory that opens SSE connections for the JS runtime
+`crates/core/src/ext.rs:1525` **trait** `FetchInterceptor` — Перехватчик fetch-запросов уровня Service Worker
+`crates/core/src/ext.rs:1537` **struct** `JsFetchResult` — Full HTTP response for a synchronous JS `fetch()` call
+`crates/core/src/ext.rs:1556` **trait** `JsFetchProvider` — Synchronous HTTP fetch bridge for the JS runtime
+`crates/core/src/ext.rs:1693` **struct** `AbortToken` — A cheaply-clonable cooperative cancellation flag for aborting in-flight fetches
+`crates/core/src/ext.rs:1702` **fn** `new` — Creates a new, non-aborted `AbortToken`
+`crates/core/src/ext.rs:1712` **fn** `abort` — Signals abortion by setting the internal flag to `true`
+`crates/core/src/ext.rs:1720` **fn** `is_aborted` — Returns whether this token has been aborted
+`crates/core/src/ext.rs:1782` **struct** `SseCancel` — An interruptible-delay handle shared across threads
+`crates/core/src/ext.rs:1788` **fn** `new` — Creates a new, not-yet-cancelled handle
+`crates/core/src/ext.rs:1795` **fn** `signal` — Signals cancellation and wakes any thread parked in [`sleep`](Self::sleep)
+`crates/core/src/ext.rs:1803` **fn** `is_cancelled` — Returns whether cancellation has been signalled
+`crates/core/src/ext.rs:1812` **fn** `sleep` — Blocks up to `dur`, returning early if cancellation is signalled
+`crates/core/src/ext.rs:1881` **trait** `ClipboardProvider` — Synchronous access to the host platform clipboard for the JS runtime
+`crates/core/src/ext.rs:1902` **enum** `WebAuthnError` — Failure reason from a [`CredentialProvider`] operation
+`crates/core/src/ext.rs:1920` **fn** `dom_exception_name` — The `DOMException` name `lumen-js` should reject the promise with
+`crates/core/src/ext.rs:1936` **struct** `WebAuthnCreateRequest` — A WebAuthn credential-creation (registration) request
+`crates/core/src/ext.rs:1966` **struct** `WebAuthnCreateResponse` — The result of a successful [`CredentialProvider::create`]
+`crates/core/src/ext.rs:1989` **struct** `WebAuthnGetRequest` — A WebAuthn assertion (authentication) request
+`crates/core/src/ext.rs:2006` **struct** `WebAuthnGetResponse` — The result of a successful [`CredentialProvider::get`]
+`crates/core/src/ext.rs:2036` **trait** `CredentialProvider` — Provider of WebAuthn / passkey credentials, backing `navigator.credentials`
+`crates/core/src/ext.rs:2056` **enum** `JsWsEvent` — A single queued event from a WebSocket connection, ready for delivery to JS
+`crates/core/src/ext.rs:2086` **trait** `JsWebSocketSession` — A live WebSocket connection from the JS runtime's perspective
+`crates/core/src/ext.rs:2105` **trait** `JsWebSocketProvider` — Factory that opens WebSocket connections for the JS runtime
+`crates/core/src/ext.rs:2142` **enum** `IdbSchemaOp` — Persistence boundary for the IndexedDB JS shim
+`crates/core/src/ext.rs:2205` **enum** `IdbRecordOp` — A record-level operation against one object store, executed within a
+`crates/core/src/ext.rs:2282` **enum** `IdbOpResult` — Result of executing a single [`IdbRecordOp`]
+`crates/core/src/ext.rs:2293` **trait** `IdbBackend`
+`crates/core/src/ext.rs:2350` **trait** `SwBackend` — Per-origin Service Worker registration persistence
+`crates/core/src/ext.rs:2372` **trait** `CacheBackend` — Per-origin Cache API persistence (W3C Service Worker spec §cache-objects)
+`crates/core/src/ext.rs:2405` **enum** `ClockMode` — Clock mode for deterministic testing (BrowserSession::set_clock, 8F.1)
+`crates/core/src/ext.rs:2429` **trait** `BrowserSession` — Browser automation session — unified interface for in-process tests, MCP agents,
+`crates/core/src/ext.rs:2564` **struct** `NullBrowserSession` — Null implementation of `BrowserSession` — all methods return `NotImplemented`
+`crates/core/src/ext.rs:2673` **enum** `MemoryPressureLevel` — OS memory pressure level (ADR-008, task 10H)
+`crates/core/src/ext.rs:2693` **trait** `MemoryPressureSource` — Source of OS memory pressure signals (ADR-008, task 10H)
+`crates/core/src/ext.rs:2700` **struct** `NullMemoryPressureSource` — Null implementation — always reports `Low`. For tests and platforms without
+`crates/core/src/ext.rs:2722` **trait** `EvictableCache` — Common interface for all cross-tab shared memory caches (ADR-008, task 10D.3)
+`crates/core/src/ext.rs:2756` **struct** `CacheRegistry` — Registry of all cross-tab shared memory caches (ADR-008, task 10D.3)
+`crates/core/src/ext.rs:2762` **fn** `new` — Create an empty registry
+`crates/core/src/ext.rs:2767` **fn** `register` — Register a cache. Caches are notified in registration order
+`crates/core/src/ext.rs:2772` **fn** `broadcast_pressure` — Broadcast a memory pressure event to all registered caches
+`crates/core/src/ext.rs:2779` **fn** `total_used_bytes` — Total memory currently used across all registered caches, in bytes
+`crates/core/src/ext.rs:2787` **fn** `total_budget_bytes` — Total memory budget across all caches with a finite budget, in bytes
+`crates/core/src/ext.rs:2796` **fn** `clear_all` — Evict all entries in every registered cache
+`crates/core/src/ext.rs:2803` **fn** `len` — Number of registered caches
+`crates/core/src/ext.rs:2808` **fn** `is_empty` — `true` if no caches are registered
+`crates/core/src/ext.rs:3191` **struct** `KnowledgeHistoryHit` — Result of a full-text history search. Mirrors `lumen_knowledge::SearchHit`
+`crates/core/src/ext.rs:3207` **struct** `KnowledgeNoteHit` — Result of a full-text notes search
+`crates/core/src/ext.rs:3224` **struct** `KnowledgeReadLaterHit` — Result of a full-text read-later search
+`crates/core/src/ext.rs:3239` **struct** `KnowledgeTabHit` — Result of a live open-tabs search
+`crates/core/src/ext.rs:3260` **trait** `KnowledgeStore` — Unified knowledge-store interface covering the §12 feature set:
+`crates/core/src/ext.rs:3425` **trait** `AiBackend` — Synchronous AI inference backend for the sidebar AI assistant (§12.8)
+`crates/core/src/ext.rs:3437` **struct** `NullAiBackend` — Null AI backend — always returns an informational stub
+`crates/core/src/ext.rs:3473` **struct** `AudioDeviceDescriptor` — Describes a single audio input or output device available on the host platform
+`crates/core/src/ext.rs:3495` **struct** `AudioCaptureConfig` — Constraints forwarded from JS `getUserMedia({audio: {…}})`
+`crates/core/src/ext.rs:3512` **enum** `AudioCaptureError` — Errors returned by [`AudioCaptureProvider::capture`]
+`crates/core/src/ext.rs:3528` **trait** `AudioCaptureHandle` — Live audio capture stream returned by [`AudioCaptureProvider::capture`]
+`crates/core/src/ext.rs:3556` **trait** `AudioCaptureProvider` — Platform audio capture backend backing `navigator.mediaDevices.getUserMedia({audio})`
+`crates/core/src/ext.rs:3576` **struct** `NullAudioCaptureProvider` — Stub `AudioCaptureProvider` that returns zero devices and always rejects capture
+`crates/core/src/ext.rs:3627` **struct** `ScreenSourceDescriptor` — Describes a capturable screen source (monitor or application window)
+`crates/core/src/ext.rs:3644` **struct** `ScreenCaptureConfig` — Constraints forwarded from JS `getDisplayMedia({video: {…}})`
+`crates/core/src/ext.rs:3657` **enum** `ScreenCaptureError` — Errors returned by [`ScreenCaptureProvider::capture`]
+`crates/core/src/ext.rs:3667` **struct** `VideoFrame` — Single captured video frame (raw RGBA pixels, top-to-bottom row-major)
+`crates/core/src/ext.rs:3680` **trait** `ScreenCaptureHandle` — Live screen capture session returned by [`ScreenCaptureProvider::capture`]
+`crates/core/src/ext.rs:3705` **trait** `ScreenCaptureProvider` — Platform screen capture backend backing `navigator.mediaDevices.getDisplayMedia`
+`crates/core/src/ext.rs:3720` **struct** `NullScreenCaptureProvider` — Stub `ScreenCaptureProvider` that returns zero sources and always rejects capture
+`crates/core/src/ext.rs:3775` **trait** `AudioPlaybackProvider` — Platform audio playback backend backing `HTMLAudioElement` (PH3-11)
+`crates/core/src/ext.rs:3844` **struct** `NullAudioPlaybackProvider` — Stub `AudioPlaybackProvider` installed when no real audio backend is available
+`crates/core/src/ext.rs:3873` **trait** `WakeLockProvider` — Platform provider for Screen Wake Lock API (W3C Screen Wake Lock Level 1)
+`crates/core/src/ext.rs:3889` **struct** `NullWakeLockProvider` — Stub provider used in tests and headless mode
+`crates/core/src/ext.rs:4001` **struct** `SwFetchRequest` — Message sent from the main thread to a Service Worker execution thread
+`crates/core/src/ext.rs:4016` **struct** `SwWorkerHandle` — Opaque handle to a running Service Worker execution thread
+`crates/core/src/ext.rs:4029` **type** `SwWorkerStore` — Map from `(origin, scope)` to live SW worker handles
 `crates/core/src/form.rs:15` **struct** `FormEntry` — Запись формы — пара (name, value) с опциональным filename (для multipart)
 `crates/core/src/form.rs:21` **enum** `FormValue`
 `crates/core/src/form.rs:33` **fn** `text`
@@ -3741,7 +3744,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/zoom.rs:31` **fn** `zoom_reset` — Reset zoom to 100%
 `crates/shell/src/zoom.rs:40` **fn** `effective_viewport` — Compute the CSS layout viewport size from the physical window size
 
-## lumen-storage  (507 symbols)
+## lumen-storage  (511 symbols)
 
 `crates/storage/src/a11y_prefs.rs:38` **enum** `CursorSize` — Accessibility cursor magnification level
 `crates/storage/src/a11y_prefs.rs:50` **fn** `as_str` — Serialize to the storage string representation
@@ -3954,11 +3957,15 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/http_cache.rs:253` **fn** `clear_expired` — Удалить expired записи. Возвращает число удалённых строк
 `crates/storage/src/http_cache.rs:268` **fn** `clear` — Полная очистка кеша
 `crates/storage/src/http_cache.rs:279` **fn** `count` — Общее число записей
-`crates/storage/src/indexed_db.rs:38` **fn** `origin_key` — Вычислить безопасный файловый ключ для origin
-`crates/storage/src/indexed_db.rs:61` **struct** `IdbStore` — Per-origin persistence для IndexedDB поверх [`StorageBackend`]
-`crates/storage/src/indexed_db.rs:72` **fn** `new` — Создать store для конкретного `origin` поверх разделяемого `backend`
-`crates/storage/src/indexed_db.rs:85` **fn** `open_or_create` — Открыть или создать выделенный SQLite-файл для IndexedDB
-`crates/storage/src/indexed_db.rs:97` **fn** `for_origin` — Открыть или создать IDB-хранилище для `etld_plus_one` в директории `idb_dir`
+`crates/storage/src/indexed_db.rs:42` **fn** `origin_key` — Вычислить безопасный файловый ключ для origin
+`crates/storage/src/indexed_db.rs:65` **struct** `IdbStore` — Per-origin persistence для IndexedDB поверх [`StorageBackend`]
+`crates/storage/src/indexed_db.rs:76` **fn** `new` — Создать store для конкретного `origin` поверх разделяемого `backend`
+`crates/storage/src/indexed_db.rs:89` **fn** `open_or_create` — Открыть или создать выделенный SQLite-файл для IndexedDB
+`crates/storage/src/indexed_db.rs:101` **fn** `for_origin` — Открыть или создать IDB-хранилище для `etld_plus_one` в директории `idb_dir`
+`crates/storage/src/indexed_db.rs:147` **struct** `NativeIdbStore` — Structured per-origin SQLite backend for IndexedDB (Phase 3)
+`crates/storage/src/indexed_db.rs:198` **fn** `open_or_create` — Open or create the structured IDB store at `path` (file is created if absent)
+`crates/storage/src/indexed_db.rs:205` **fn** `open_in_memory` — Open an in-memory structured IDB store (tests / ephemeral sessions)
+`crates/storage/src/indexed_db.rs:214` **fn** `for_origin` — Open/create the structured store for `etld_plus_one` under `idb_dir`
 `crates/storage/src/keyboard_shortcuts.rs:15` **struct** `KeyboardShortcutEntry` — A single keybinding: a command name paired with its modifier + key strings
 `crates/storage/src/keyboard_shortcuts.rs:27` **struct** `KeyboardShortcuts` — Persistent store for keyboard shortcut overrides
 `crates/storage/src/keyboard_shortcuts.rs:51` **fn** `open` — Open (or create) an on-disk shortcuts database
@@ -4252,4 +4259,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4181 symbols in 22 crates*
+*Total: 4188 symbols in 22 crates*
