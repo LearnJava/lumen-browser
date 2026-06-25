@@ -5826,6 +5826,7 @@ function _lumen_parse_url(url) {
 }
 var _lumen_loc_parts = _lumen_parse_url(typeof _LUMEN_PAGE_URL !== 'undefined' ? _LUMEN_PAGE_URL : '');
 var _lumen_loc_href  = _lumen_loc_parts.href;
+var _lumen_loc_hash  = _lumen_loc_parts.hash;
 function _lumen_location_update(url) {
     var p = _lumen_parse_url(url);
     _lumen_loc_href    = p.href;
@@ -5835,7 +5836,7 @@ function _lumen_location_update(url) {
     location.port      = p.port;
     location.pathname  = p.pathname;
     location.search    = p.search;
-    location.hash      = p.hash;
+    _lumen_loc_hash    = p.hash;
     location.origin    = p.origin;
 }
 var location = {
@@ -5847,13 +5848,49 @@ var location = {
     port:      _lumen_loc_parts.port,
     pathname:  _lumen_loc_parts.pathname,
     search:    _lumen_loc_parts.search,
-    hash:      _lumen_loc_parts.hash,
+    get hash()    { return _lumen_loc_hash; },
+    set hash(v)   { _lumen_set_location_hash(v); },
     origin:    _lumen_loc_parts.origin,
     assign:    function(url) { _lumen_navigate(String(url || ''), false); },
     replace:   function(url) { _lumen_navigate(String(url || ''), true); },
     reload:    function()    { _lumen_reload(); },
     toString:  function()    { return this.href; }
 };
+// HTML LS Location.hash setter: same-document fragment navigation.
+// Mutates only the fragment of the current URL; updates location + history
+// without a page reload and fires `hashchange`. Internal updates use the
+// `_lumen_loc_hash` backing var directly to avoid re-triggering this path.
+function _lumen_set_location_hash(v) {
+    var frag = String(v || '');
+    if (frag.charAt(0) === '#') frag = frag.substring(1);
+    var baseWithoutFragment = _lumen_loc_href.split('#')[0];
+    var newHref = frag.length ? (baseWithoutFragment + '#' + frag) : baseWithoutFragment;
+    if (newHref === _lumen_loc_href) return;
+    var oldHref = _lumen_loc_href;
+    _lumen_location_update(newHref);
+    _lumen_history_push('null', newHref);
+    _lumen_history_push_url(newHref, 'null');
+    _lumen_fire_hashchange(oldHref, newHref);
+}
+// Dispatch a `hashchange` event to window.onhashchange + addEventListener('hashchange').
+function _lumen_fire_hashchange(oldURL, newURL) {
+    var ev;
+    try {
+        ev = new HashChangeEvent('hashchange', { oldURL: oldURL, newURL: newURL, bubbles: false });
+    } catch (e) {
+        ev = { type: 'hashchange', oldURL: oldURL, newURL: newURL };
+    }
+    if (typeof window.onhashchange === 'function') {
+        try { window.onhashchange.call(window, ev); } catch (e) {}
+    }
+    var arr = _other_win_listeners['hashchange'];
+    if (arr) {
+        arr = arr.slice();
+        for (var i = 0; i < arr.length; i++) {
+            try { arr[i].call(window, ev); } catch (e) {}
+        }
+    }
+}
 
 // ── Service Worker API ────────────────────────────────────────────────────────
 
@@ -8677,6 +8714,7 @@ var _other_win_listeners = {};
 var window = {
     history: history,
     onpopstate: null,
+    onhashchange: null,
     onmessage: null,
     onpageshow: null,
     onpagehide: null,
@@ -15524,6 +15562,76 @@ mod tests {
         let rt = runtime_with_url("https://example.com/");
         rt.eval("1 + 1").unwrap();
         assert!(rt.take_navigate_request().is_none());
+    }
+
+    #[test]
+    fn location_hash_setter_updates_hash() {
+        let rt = runtime_with_url("https://example.com/page");
+        rt.eval("location.hash = 'sec';").unwrap();
+        assert_eq!(rt.eval("location.hash").unwrap(), lumen_core::JsValue::String("#sec".into()));
+        assert_eq!(
+            rt.eval("location.href").unwrap(),
+            lumen_core::JsValue::String("https://example.com/page#sec".into())
+        );
+    }
+
+    #[test]
+    fn location_hash_setter_strips_leading_hash() {
+        let rt = runtime_with_url("https://example.com/page");
+        rt.eval("location.hash = '#top';").unwrap();
+        assert_eq!(rt.eval("location.hash").unwrap(), lumen_core::JsValue::String("#top".into()));
+    }
+
+    #[test]
+    fn location_hash_setter_fires_hashchange() {
+        let rt = runtime_with_url("https://example.com/page");
+        rt.eval("var fired=null; window.onhashchange=function(e){ fired=e.newURL; }; location.hash='x';")
+            .unwrap();
+        assert_eq!(
+            rt.eval("fired").unwrap(),
+            lumen_core::JsValue::String("https://example.com/page#x".into())
+        );
+    }
+
+    #[test]
+    fn location_hash_setter_fires_addeventlistener() {
+        let rt = runtime_with_url("https://example.com/page");
+        rt.eval("var n=0; window.addEventListener('hashchange', function(){ n++; }); location.hash='a';")
+            .unwrap();
+        assert_eq!(rt.eval("n").unwrap(), lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn location_hash_setter_same_value_noop() {
+        let rt = runtime_with_url("https://example.com/page#sec");
+        rt.eval("var n=0; window.addEventListener('hashchange', function(){ n++; }); location.hash='sec';")
+            .unwrap();
+        assert_eq!(rt.eval("n").unwrap(), lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn location_hash_setter_no_navigate_request() {
+        let rt = runtime_with_url("https://example.com/page");
+        rt.eval("location.hash='b';").unwrap();
+        assert!(rt.take_navigate_request().is_none());
+    }
+
+    #[test]
+    fn location_hash_setter_enqueues_history_push() {
+        let rt = runtime_with_url("https://example.com/p");
+        rt.eval("location.hash='c';").unwrap();
+        let updates = rt.take_history_url_updates();
+        assert_eq!(updates.len(), 1);
+        assert!(matches!(&updates[0], HistoryUrlUpdate::Push { url, .. } if url == "https://example.com/p#c"));
+    }
+
+    #[test]
+    fn location_hash_setter_increments_history_length() {
+        let rt = runtime_with_url("https://example.com/page");
+        let delta = rt
+            .eval("var before = history.length; location.hash='d'; history.length - before;")
+            .unwrap();
+        assert_eq!(delta, lumen_core::JsValue::Number(1.0));
     }
 
     #[test]

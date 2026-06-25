@@ -19,7 +19,14 @@ Merged slice (`crates/js/src/dom.rs`, `history.go`):
 - Non-zero `history.go(n)` delivers popstate through `_lumen_deliver_popstate`, so a `go()` traversal now (a) syncs `location` (`location.pathname`/`href` were stale before) and (b) fires a real `PopStateEvent` instead of an ad-hoc inline object — identical to a shell-driven traversal.
 - Tests: `history_go_zero_reloads`, `history_go_updates_location`, `history_go_out_of_bounds_no_popstate`; existing 15 history + 9 popstate tests still green.
 
-**Still remaining** (Phase 1b + Phase 2): cross-document single-authority unification (JS `HistoryState` mirror vs shell `nav_back`/`nav_fwd` drift on multi-step `go` across full-document boundaries), `hashchange`+`popstate` for fragment nav, post-back `history.state` from shell-restored value, and the entire Navigation API wiring (steps 5–10 below). The ROADMAP `P3-navapi` row stays `planned` until those land.
+### Progress (2026-06-25) — Phase 1b-i (`location.hash` setter + `hashchange`) DONE
+
+Merged slice (`crates/js/src/dom.rs`, `location`/`window` shim):
+- `location.hash` is now an HTML LS setter (was an inert data property). Assigning it changes only the fragment and performs a **same-document** navigation: no reload.
+- The setter updates `location` through a private `_lumen_loc_hash` backing var (so internal `_lumen_location_update` writes bypass the setter), pushes a same-document history entry (`_lumen_history_push` JS mirror + `_lumen_history_push_url` shell), and fires `hashchange` via `_lumen_fire_hashchange` on `window.onhashchange` + `addEventListener('hashchange')`. Setting hash to its current value is a no-op.
+- Added `window.onhashchange`. Tests: 8 `location_hash_setter_*`; full `lumen-js` suite green (2295).
+
+**Still remaining** (Phase 1b + Phase 2): fragment-only routing through `location.href=`/`assign()`/link clicks should reuse the same same-document path (so they fire `hashchange` instead of a full reload); cross-document single-authority unification (JS `HistoryState` mirror vs shell `nav_back`/`nav_fwd` drift on multi-step `go` across full-document boundaries), shell-side `popstate` accompanying fragment traversal, post-back `history.state` from shell-restored value, and the entire Navigation API wiring (steps 5–10 below). The ROADMAP `P3-navapi` row stays `planned` until those land.
 
 ---
 
