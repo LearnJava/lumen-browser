@@ -11569,21 +11569,40 @@ impl Lumen {
                         self.navigate_fragment(frag.to_owned());
                     } else if links::is_navigable_href(&href) {
                         let resolved = self.source.resolve_href(&href);
-                        if click_log::is_enabled() {
-                            let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
-                                node_id: *nid, tag, id_attr: id, class_attr: cls,
-                            });
-                            click_log::log_click(&click_log::ClickInfo {
-                                win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
-                                hit: hit_ref,
-                                outcome: click_log::ClickOutcome::LinkNavigate {
-                                    href: &href,
-                                    resolved: &resolved,
-                                },
-                            });
+                        // A full-URL link to the current document differing only in
+                        // its fragment (`<a href="/page#x">` clicked from `/page`)
+                        // is a same-document fragment navigation, not a full reload.
+                        if let Some(frag) =
+                            links::same_document_fragment(self.current_display_url(), &resolved)
+                        {
+                            if click_log::is_enabled() {
+                                let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
+                                    node_id: *nid, tag, id_attr: id, class_attr: cls,
+                                });
+                                click_log::log_click(&click_log::ClickInfo {
+                                    win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                                    hit: hit_ref,
+                                    outcome: click_log::ClickOutcome::LinkFragment(&frag),
+                                });
+                            }
+                            self.navigate_fragment(frag);
+                        } else {
+                            if click_log::is_enabled() {
+                                let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
+                                    node_id: *nid, tag, id_attr: id, class_attr: cls,
+                                });
+                                click_log::log_click(&click_log::ClickInfo {
+                                    win_x: x_css, win_y: y_css, page_x, page_y, scroll_y,
+                                    hit: hit_ref,
+                                    outcome: click_log::ClickOutcome::LinkNavigate {
+                                        href: &href,
+                                        resolved: &resolved,
+                                    },
+                                });
+                            }
+                            let target = PageSource::from_arg(Some(&resolved));
+                            self.navigate_to(target);
                         }
-                        let target = PageSource::from_arg(Some(&resolved));
-                        self.navigate_to(target);
                     } else {
                         if click_log::is_enabled() {
                             let hit_ref = click_log_hit.as_ref().map(|(nid, tag, id, cls)| click_log::HitInfo {
@@ -13482,7 +13501,16 @@ impl Lumen {
                         self.navigate_fragment(frag.to_owned());
                     } else if links::is_navigable_href(&href) {
                         let resolved = self.source.resolve_href(&href);
-                        self.navigate_to(PageSource::from_arg(Some(&resolved)));
+                        // A full-URL link to the current document differing only
+                        // in its fragment (`<a href="/page#x">` from `/page`) is a
+                        // same-document fragment navigation, not a full reload.
+                        if let Some(frag) =
+                            links::same_document_fragment(self.current_display_url(), &resolved)
+                        {
+                            self.navigate_fragment(frag);
+                        } else {
+                            self.navigate_to(PageSource::from_arg(Some(&resolved)));
+                        }
                     }
                 }
             }

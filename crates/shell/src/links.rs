@@ -72,6 +72,39 @@ pub fn fragment_url(current: &str, frag: &str) -> String {
     }
 }
 
+/// Determine whether navigating from `current` to `resolved` is a same-document
+/// fragment navigation. Returns `Some(fragment)` when both absolute URLs share
+/// the same base (everything before the first `'#'`) but differ in their
+/// fragment — `fragment` is the part after the first `'#'` in `resolved`,
+/// WITHOUT the leading `'#'` (an empty string when `resolved` has no fragment,
+/// i.e. a top-of-page navigation). Returns `None` when the base portions differ
+/// (a real cross-document navigation) or when the fragments are identical (an
+/// identical URL = a reload, not a fragment navigation).
+///
+/// Mirrors the JS `_lumen_navigate_or_fragment` decision so a full-URL link to
+/// the current document (`<a href="/page#x">` clicked from `/page`) is treated
+/// as a same-document fragment navigation, not a full reload.
+pub fn same_document_fragment(current: &str, resolved: &str) -> Option<String> {
+    let (current_base, current_frag) = match current.split_once('#') {
+        Some((base, frag)) => (base, Some(frag)),
+        None => (current, None),
+    };
+    let (resolved_base, resolved_frag) = match resolved.split_once('#') {
+        Some((base, frag)) => (base, Some(frag)),
+        None => (resolved, None),
+    };
+
+    if current_base != resolved_base {
+        return None;
+    }
+
+    if current_frag == resolved_frag {
+        return None;
+    }
+
+    Some(resolved_frag.unwrap_or("").to_string())
+}
+
 /// Walk the document tree and return the first element whose `id` attribute
 /// equals `id_value` (case-sensitive per HTML LS §3.2.6). Returns `None` if
 /// no such element exists.
@@ -132,6 +165,74 @@ mod tests {
         assert_eq!(fragment_url("http://x/p", ""), "http://x/p");
         // Only the first '#' splits the base from the fragment.
         assert_eq!(fragment_url("http://x/a#b#c", "z"), "http://x/a#z");
+    }
+
+    #[test]
+    fn same_document_fragment_adds_fragment() {
+        assert_eq!(
+            same_document_fragment("http://x/p", "http://x/p#sec"),
+            Some("sec".to_string())
+        );
+    }
+
+    #[test]
+    fn same_document_fragment_changes_fragment() {
+        assert_eq!(
+            same_document_fragment("http://x/p#old", "http://x/p#new"),
+            Some("new".to_string())
+        );
+    }
+
+    #[test]
+    fn same_document_fragment_removes_fragment() {
+        assert_eq!(
+            same_document_fragment("http://x/p#old", "http://x/p"),
+            Some("".to_string())
+        );
+    }
+
+    #[test]
+    fn same_document_fragment_identical_urls() {
+        assert_eq!(same_document_fragment("http://x/p", "http://x/p"), None);
+    }
+
+    #[test]
+    fn same_document_fragment_identical_with_fragment() {
+        assert_eq!(same_document_fragment("http://x/p#a", "http://x/p#a"), None);
+    }
+
+    #[test]
+    fn same_document_fragment_different_path() {
+        assert_eq!(same_document_fragment("http://x/p", "http://x/q#sec"), None);
+    }
+
+    #[test]
+    fn same_document_fragment_preserves_query_in_base() {
+        assert_eq!(
+            same_document_fragment("http://x/p?k=1", "http://x/p?k=1#sec"),
+            Some("sec".to_string())
+        );
+    }
+
+    #[test]
+    fn same_document_fragment_different_query() {
+        assert_eq!(
+            same_document_fragment("http://x/p?k=1", "http://x/p?k=2#sec"),
+            None
+        );
+    }
+
+    #[test]
+    fn same_document_fragment_only_first_hash_splits() {
+        assert_eq!(
+            same_document_fragment("http://x/a#b#c", "http://x/a#z"),
+            Some("z".to_string())
+        );
+    }
+
+    #[test]
+    fn same_document_fragment_different_host() {
+        assert_eq!(same_document_fragment("http://x/p", "http://y/p#sec"), None);
     }
 
     #[test]
