@@ -8,7 +8,11 @@
 
 ## Status
 
-**Phase 3 — future.** Do not start until Phase 2 closes (`STATUS-P1.md` "Закрытие Фазы 2" block, version bump 0.5.0). This file scopes the work ahead of time so the eventual session does not re-research.
+**MERGED 2026-06-25 (P1, branch `p1-ph3-ws-sse-fetch`).** Production-hardening complete: fetch in-flight abort (sync timeout + async `AbortController.abort()`), SSE non-blocking interruptible reconnect + single terminal close, WebSocket sub-protocol negotiation / `CloseEvent.wasClean` / close-send ready-state machine + `bufferedAmount`, end-to-end RFC 6455 + RFC 7692 permessage-deflate protocol suite. WS/SSE delivery runs on the shell timer-pump event loop (same mechanism async fetch uses). **Deferred as optional future refinement (shell domain, P3):** a deep zero-poll WS push path replacing the `_lumen_ws_poll`-per-tick drain — the feature already works via the timer pump; this is an architecture nicety, not a functional gap.
+
+---
+
+**Original framing (Phase 3 — future).** Do not start until Phase 2 closes (`STATUS-P1.md` "Закрытие Фазы 2" block, version bump 0.5.0). This file scopes the work ahead of time so the eventual session does not re-research.
 
 **Honest framing.** This is *not* a greenfield item. All three runtimes already exist and work end-to-end against the real `HttpClient` (verified, not stubs). The Phase 3 mandate is to **harden them to production grade**: convert the synchronous / poll-based delivery model to true async event-loop delivery, add in-flight cancellation, and close the protocol-correctness gaps each runtime carries from its Phase 0/2 implementation. Treat the existing code as the baseline to *upgrade*, never to rewrite.
 
