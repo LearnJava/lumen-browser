@@ -26,7 +26,14 @@ Merged slice (`crates/js/src/dom.rs`, `location`/`window` shim):
 - The setter updates `location` through a private `_lumen_loc_hash` backing var (so internal `_lumen_location_update` writes bypass the setter), pushes a same-document history entry (`_lumen_history_push` JS mirror + `_lumen_history_push_url` shell), and fires `hashchange` via `_lumen_fire_hashchange` on `window.onhashchange` + `addEventListener('hashchange')`. Setting hash to its current value is a no-op.
 - Added `window.onhashchange`. Tests: 8 `location_hash_setter_*`; full `lumen-js` suite green (2295).
 
-**Still remaining** (Phase 1b + Phase 2): fragment-only routing through `location.href=`/`assign()`/link clicks should reuse the same same-document path (so they fire `hashchange` instead of a full reload); cross-document single-authority unification (JS `HistoryState` mirror vs shell `nav_back`/`nav_fwd` drift on multi-step `go` across full-document boundaries), shell-side `popstate` accompanying fragment traversal, post-back `history.state` from shell-restored value, and the entire Navigation API wiring (steps 5–10 below). The ROADMAP `P3-navapi` row stays `planned` until those land.
+### Progress (2026-06-25) — Phase 1b-ii (`location.href=`/`assign()`/`replace()` fragment routing) DONE
+
+Merged slice (`crates/js/src/dom.rs`, `location` shim):
+- `location.href=`, `location.assign(url)`, `location.replace(url)` now route through a new `_lumen_navigate_or_fragment(rawUrl, replace)` helper. It resolves the target against the current href (`new URL(url, _lumen_loc_href)`); if the resolved URL differs **only** in its fragment, it performs a same-document navigation (no reload): updates `location`, pushes/replaces a same-document history entry (`_lumen_history_push`/`replace` JS mirror + `_lumen_history_push_url`/`replace_url` shell handoff → existing `same_doc_state_json: Some(_)` machinery), and fires `hashchange`. `replace()` uses Replace; `href=`/`assign()` use Push.
+- Any non-fragment difference (path/host/search) or an identical full URL falls through to the existing full-navigation `_lumen_navigate`.
+- Reuses the shell's pushState same-document path — **no shell change needed**. Tests: 8 `location_{href,assign,replace}_*fragment*`; full `lumen-js` suite green (2303).
+
+**Still remaining** (Phase 1b + Phase 2): link-click fragment navigation (`crates/shell/src/main.rs:13282` is a shell-side path, not covered by the JS-shim helper above) should reuse the same same-document path (fire `hashchange` instead of a full reload); cross-document single-authority unification (JS `HistoryState` mirror vs shell `nav_back`/`nav_fwd` drift on multi-step `go` across full-document boundaries), shell-side `popstate` accompanying fragment traversal, post-back `history.state` from shell-restored value, and the entire Navigation API wiring (steps 5–10 below). The ROADMAP `P3-navapi` row stays `planned` until those land.
 
 ---
 
