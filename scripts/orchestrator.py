@@ -341,20 +341,56 @@ _WORKLOG_HEADER = (
 )
 
 
+def _pointer_is_actionable(pointer: str) -> bool:
+    """Указатель ведёт на реальную открытую работу?
+
+    Защита от протухших STATUS-PN.md: указатель на строку ROADMAP.md со
+    статусом `done` означает уже выполненную задачу — Laguna там нечего
+    реализовывать, она лишь впустую гоняет READ/grep до лимита итераций.
+    Такие (и снятые `cancelled`/`dropped`) указатели пропускаем.
+
+    Для не-ROADMAP источников (BUGS.md, CSS-SPECS.md, код file:line) считаем
+    указатель actionable — у них своя семантика статуса, не ломаем её.
+    """
+    m = re.match(r"^(\S+):(\d+)$", pointer)
+    if not m:
+        return True
+    if not m.group(1).endswith("ROADMAP.md"):
+        return True
+    src = PROJECT_DIR / m.group(1)
+    ln = int(m.group(2))
+    try:
+        lines = src.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return True
+    if not (1 <= ln <= len(lines)):
+        return True
+    cols = lines[ln - 1].split("|")
+    # Формат строки ROADMAP: `| id | phase | <пусто> | status | ...`.
+    # status — 4-й столбец между разделителями (индекс 4 после split по '|').
+    if len(cols) < 5:
+        return True
+    status = cols[4].strip().lower()
+    return status not in {"done", "cancelled", "dropped", "wontfix"}
+
+
 def pick_laguna_task(developer: str) -> tuple[int, str] | None:
-    """Выбрать первую НЕпомеченную строку-указатель из STATUS-PN.md (новый формат).
+    """Выбрать первую НЕпомеченную actionable строку-указатель из STATUS-PN.md.
 
     Возвращает (номер строки 1-based, текст указателя `<источник>:NN`) или
-    None, если непомеченных указателей нет. Уже помеченные строки
-    (`<указатель> | <ветка> | LagunaM1`) пропускаются — они сделаны Laguna и
-    ждут влития, повторно их брать нельзя.
+    None, если непомеченных actionable указателей нет. Пропускаются:
+    - уже помеченные строки (`<указатель> | <ветка> | LagunaM1`) — сделаны
+      Laguna и ждут влития, повторно их брать нельзя;
+    - указатели на строки ROADMAP.md со статусом `done`/`cancelled`/… —
+      задача уже закрыта, Laguna там зациклится на разведке (см.
+      `_pointer_is_actionable`).
     """
     status_file = PROJECT_DIR / f"STATUS-{developer}.md"
     if not status_file.exists():
         return None
     for idx, line in enumerate(status_file.read_text(encoding="utf-8").splitlines(), 1):
         s = line.strip()
-        if re.match(r"^\S+:\d+$", s):  # голый указатель, ещё не помечен LagunaM1
+        if re.match(r"^\S+:\d+$", s) and _pointer_is_actionable(s):
             return idx, s
     return None
 
