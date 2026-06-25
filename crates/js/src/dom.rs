@@ -5841,7 +5841,7 @@ function _lumen_location_update(url) {
 }
 var location = {
     get href()    { return _lumen_loc_href; },
-    set href(v)   { _lumen_navigate(String(v || ''), false); },
+    set href(v)   { _lumen_navigate_or_fragment(String(v || ''), false); },
     protocol:  _lumen_loc_parts.protocol,
     hostname:  _lumen_loc_parts.hostname,
     host:      _lumen_loc_parts.host,
@@ -5851,8 +5851,8 @@ var location = {
     get hash()    { return _lumen_loc_hash; },
     set hash(v)   { _lumen_set_location_hash(v); },
     origin:    _lumen_loc_parts.origin,
-    assign:    function(url) { _lumen_navigate(String(url || ''), false); },
-    replace:   function(url) { _lumen_navigate(String(url || ''), true); },
+    assign:    function(url) { _lumen_navigate_or_fragment(String(url || ''), false); },
+    replace:   function(url) { _lumen_navigate_or_fragment(String(url || ''), true); },
     reload:    function()    { _lumen_reload(); },
     toString:  function()    { return this.href; }
 };
@@ -5871,6 +5871,38 @@ function _lumen_set_location_hash(v) {
     _lumen_history_push('null', newHref);
     _lumen_history_push_url(newHref, 'null');
     _lumen_fire_hashchange(oldHref, newHref);
+}
+// HTML LS navigation entry point for location.href= / assign() / replace().
+// If the resolved target differs from the current URL only in its fragment,
+// performs a same-document fragment navigation (no reload): updates location,
+// pushes/replaces a same-document history entry, and fires `hashchange`.
+// Otherwise falls through to a full navigation via `_lumen_navigate`.
+function _lumen_navigate_or_fragment(rawUrl, replace) {
+    var url = String(rawUrl || '');
+    var resolved = null;
+    try {
+        resolved = new URL(url, _lumen_loc_href).href;
+    } catch (e) {
+        resolved = null;
+    }
+    if (resolved !== null) {
+        var curBase = _lumen_loc_href.split('#')[0];
+        var newBase = resolved.split('#')[0];
+        if (curBase === newBase && resolved !== _lumen_loc_href) {
+            var oldHref = _lumen_loc_href;
+            _lumen_location_update(resolved);
+            if (replace) {
+                _lumen_history_replace('null', resolved);
+                _lumen_history_replace_url(resolved, 'null');
+            } else {
+                _lumen_history_push('null', resolved);
+                _lumen_history_push_url(resolved, 'null');
+            }
+            _lumen_fire_hashchange(oldHref, resolved);
+            return;
+        }
+    }
+    _lumen_navigate(url, replace);
 }
 // Dispatch a `hashchange` event to window.onhashchange + addEventListener('hashchange').
 function _lumen_fire_hashchange(oldURL, newURL) {
@@ -15632,6 +15664,77 @@ mod tests {
             .eval("var before = history.length; location.hash='d'; history.length - before;")
             .unwrap();
         assert_eq!(delta, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn location_href_fragment_no_navigate_request() {
+        let rt = runtime_with_url("https://example.com/page");
+        rt.eval("location.href = '#sec';").unwrap();
+        assert!(rt.take_navigate_request().is_none());
+    }
+
+    #[test]
+    fn location_href_fragment_updates_hash() {
+        let rt = runtime_with_url("https://example.com/page");
+        rt.eval("location.href = '#sec';").unwrap();
+        assert_eq!(rt.eval("location.hash").unwrap(), lumen_core::JsValue::String("#sec".into()));
+        assert_eq!(
+            rt.eval("location.href").unwrap(),
+            lumen_core::JsValue::String("https://example.com/page#sec".into())
+        );
+    }
+
+    #[test]
+    fn location_href_fragment_fires_hashchange() {
+        let rt = runtime_with_url("https://example.com/page");
+        rt.eval("var fired=null; window.addEventListener('hashchange', function(e){ fired=e.newURL; }); location.href='#x';")
+            .unwrap();
+        assert_eq!(
+            rt.eval("fired").unwrap(),
+            lumen_core::JsValue::String("https://example.com/page#x".into())
+        );
+    }
+
+    #[test]
+    fn location_href_fragment_enqueues_history_push() {
+        let rt = runtime_with_url("https://example.com/page");
+        rt.eval("location.href='#c';").unwrap();
+        let u = rt.take_history_url_updates();
+        assert_eq!(u.len(), 1);
+        assert!(matches!(&u[0], HistoryUrlUpdate::Push { url, .. } if url == "https://example.com/page#c"));
+    }
+
+    #[test]
+    fn location_assign_fragment_no_reload() {
+        let rt = runtime_with_url("https://example.com/page");
+        rt.eval("location.assign('#a');").unwrap();
+        assert!(rt.take_navigate_request().is_none());
+        let u = rt.take_history_url_updates();
+        assert_eq!(u.len(), 1);
+    }
+
+    #[test]
+    fn location_replace_fragment_enqueues_replace() {
+        let rt = runtime_with_url("https://example.com/page");
+        rt.eval("location.replace('#b');").unwrap();
+        assert!(rt.take_navigate_request().is_none());
+        let u = rt.take_history_url_updates();
+        assert_eq!(u.len(), 1);
+        assert!(matches!(&u[0], HistoryUrlUpdate::Replace { url, .. } if url == "https://example.com/page#b"));
+    }
+
+    #[test]
+    fn location_href_cross_document_still_navigates() {
+        let rt = runtime_with_url("https://example.com/page");
+        rt.eval("location.href='https://example.com/other';").unwrap();
+        assert!(rt.take_navigate_request().is_some());
+    }
+
+    #[test]
+    fn location_href_different_path_with_fragment_navigates() {
+        let rt = runtime_with_url("https://example.com/page");
+        rt.eval("location.href='https://example.com/other#x';").unwrap();
+        assert!(rt.take_navigate_request().is_some());
     }
 
     #[test]
