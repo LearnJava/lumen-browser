@@ -2131,6 +2131,161 @@ pub trait JsWebSocketProvider: Send + Sync {
 /// same data can live in memory (process lifetime) or on disk (SQLite),
 /// partitioned by origin. `lumen-js` references only this trait, keeping the
 /// crate dependency graph acyclic (mirrors [`JsFetchProvider`]).
+/// A schema-level mutation applied inside an IndexedDB `versionchange` transaction.
+///
+/// Each variant maps to one row-level change in the structured per-origin schema
+/// (see `lumen-storage::indexed_db::NativeIdbStore`). `db_name` / `store_name` /
+/// `index_name` are the IDB-level names exactly as the page declared them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IdbSchemaOp {
+    /// Set (or create) the stored version number of a database.
+    SetVersion {
+        /// IDB database name.
+        db_name: String,
+        /// New version number (monotonically increasing per spec).
+        version: u32,
+    },
+    /// Create an object store within a database.
+    CreateStore {
+        /// IDB database name.
+        db_name: String,
+        /// Object-store name to create.
+        store_name: String,
+        /// Key path; `None` = out-of-line keys, `Some("")` = the value itself,
+        /// `Some("a.b")` = a dotted in-line key path.
+        key_path: Option<String>,
+        /// Whether the store auto-generates monotonically increasing keys.
+        auto_increment: bool,
+    },
+    /// Delete an object store (and all its records and indexes).
+    DeleteStore {
+        /// IDB database name.
+        db_name: String,
+        /// Object-store name to delete.
+        store_name: String,
+    },
+    /// Create an index on an object store.
+    CreateIndex {
+        /// IDB database name.
+        db_name: String,
+        /// Object-store the index belongs to.
+        store_name: String,
+        /// Index name to create.
+        index_name: String,
+        /// Key path the index materialises from each record's value.
+        key_path: String,
+        /// Whether index entries must be unique.
+        unique: bool,
+        /// Whether an array-valued key path yields one entry per element.
+        multi_entry: bool,
+    },
+    /// Delete an index from an object store.
+    DeleteIndex {
+        /// IDB database name.
+        db_name: String,
+        /// Object-store the index belongs to.
+        store_name: String,
+        /// Index name to delete.
+        index_name: String,
+    },
+}
+
+/// A record-level operation against one object store, executed within a
+/// read/write (or read-only) IndexedDB transaction.
+///
+/// `key_json` / `value_json` are **opaque pre-serialised JSON strings** produced
+/// by the JS shim's `_idb_serialize` encoding; the backend treats them as blobs
+/// and never interprets their structure. Range bounds (`lower`/`upper`) are
+/// inclusive `key_json` strings; `None` means unbounded on that side. Lexicographic
+/// ordering of `key_json` is the storage order (the shim emits order-preserving keys).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IdbRecordOp {
+    /// Insert or replace a single record (add/put).
+    Put {
+        /// IDB database name.
+        db_name: String,
+        /// Object-store name.
+        store_name: String,
+        /// Serialised primary key.
+        key_json: String,
+        /// Serialised record value.
+        value_json: String,
+    },
+    /// Delete a single record by exact key.
+    Delete {
+        /// IDB database name.
+        db_name: String,
+        /// Object-store name.
+        store_name: String,
+        /// Serialised primary key to delete.
+        key_json: String,
+    },
+    /// Delete every record whose key falls in the inclusive range `[lower, upper]`.
+    DeleteRange {
+        /// IDB database name.
+        db_name: String,
+        /// Object-store name.
+        store_name: String,
+        /// Inclusive lower bound (`None` = unbounded).
+        lower: Option<String>,
+        /// Inclusive upper bound (`None` = unbounded).
+        upper: Option<String>,
+    },
+    /// Remove all records from an object store.
+    Clear {
+        /// IDB database name.
+        db_name: String,
+        /// Object-store name.
+        store_name: String,
+    },
+    /// Read a single record by exact key.
+    Get {
+        /// IDB database name.
+        db_name: String,
+        /// Object-store name.
+        store_name: String,
+        /// Serialised primary key to read.
+        key_json: String,
+    },
+    /// Read all records in the inclusive key range `[lower, upper]`, ascending.
+    GetAll {
+        /// IDB database name.
+        db_name: String,
+        /// Object-store name.
+        store_name: String,
+        /// Inclusive lower bound (`None` = unbounded).
+        lower: Option<String>,
+        /// Inclusive upper bound (`None` = unbounded).
+        upper: Option<String>,
+        /// Maximum number of records to return; `0` = unlimited.
+        count: u32,
+    },
+    /// Count records in the inclusive key range `[lower, upper]`.
+    Count {
+        /// IDB database name.
+        db_name: String,
+        /// Object-store name.
+        store_name: String,
+        /// Inclusive lower bound (`None` = unbounded).
+        lower: Option<String>,
+        /// Inclusive upper bound (`None` = unbounded).
+        upper: Option<String>,
+    },
+}
+
+/// Result of executing a single [`IdbRecordOp`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IdbOpResult {
+    /// No payload — produced by mutating ops (`Put`/`Delete`/`DeleteRange`/`Clear`).
+    None,
+    /// A single value (`Get`); inner `None` = no record matched the key.
+    Value(Option<String>),
+    /// `(key_json, value_json)` pairs (`GetAll`), ordered ascending by `key_json`.
+    Records(Vec<(String, String)>),
+    /// A record count (`Count`).
+    Count(u64),
+}
+
 pub trait IdbBackend: Send + Sync {
     /// Return the persisted IndexedDB snapshot for this origin, or `None` if no
     /// snapshot has been stored yet.
@@ -2142,6 +2297,40 @@ pub trait IdbBackend: Send + Sync {
     /// abort the JS transaction that triggered it (persistence is best-effort,
     /// the in-heap state remains authoritative for the session).
     fn save(&self, snapshot: &str);
+
+    /// Return the stored version of `db_name` for this origin, or `0` if the
+    /// database is unknown to the backend. Default: `0` (blob-only backends).
+    fn db_version(&self, db_name: &str) -> u32 {
+        let _ = db_name;
+        0
+    }
+
+    /// List all `(db_name, version)` pairs known to this origin's backend.
+    /// Default: empty (blob-only backends do not track structured databases).
+    fn list_databases(&self) -> Vec<(String, u32)> {
+        Vec::new()
+    }
+
+    /// Apply one schema mutation from a `versionchange` transaction.
+    /// Default: no-op `Ok(())` so blob-only backends keep compiling.
+    fn apply_schema(&self, op: &IdbSchemaOp) -> Result<()> {
+        let _ = op;
+        Ok(())
+    }
+
+    /// Execute one read/write record operation and return its result.
+    /// Default: `Ok(IdbOpResult::None)` (blob-only backends do no row-level work).
+    fn exec_op(&self, op: &IdbRecordOp) -> Result<IdbOpResult> {
+        let _ = op;
+        Ok(IdbOpResult::None)
+    }
+
+    /// Atomically commit a batch of write operations as one transaction.
+    /// Default: no-op `Ok(())`.
+    fn commit_txn(&self, ops: &[IdbRecordOp]) -> Result<()> {
+        let _ = ops;
+        Ok(())
+    }
 }
 
 /// Per-origin Service Worker registration persistence.
