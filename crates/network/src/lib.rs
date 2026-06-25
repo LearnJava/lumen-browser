@@ -4020,7 +4020,10 @@ mod tests {
             ws_server_handshake(&mut sock);
             crate::websocket::frame::write_frame(&mut sock, true, false, crate::websocket::frame::Opcode::Ping, b"pingdata", None).unwrap();
             let reply = crate::websocket::frame::read_frame(&mut sock).unwrap();
-            reply.opcode == crate::websocket::frame::Opcode::Pong && reply.payload == b"pingdata"
+            let success = reply.opcode == crate::websocket::frame::Opcode::Pong && reply.payload == b"pingdata";
+            // Drain the client's Close frame to avoid a connection-reset race during teardown.
+            let _ = crate::websocket::frame::read_frame(&mut sock);
+            success
         });
         let client = HttpClient::new();
         let url = lumen_core::url::Url::parse(&format!("ws://127.0.0.1:{port}/")).unwrap();
