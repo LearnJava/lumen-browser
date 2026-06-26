@@ -55,7 +55,14 @@ Merged slice (`crates/js/src/dom.rs`, `_lumen_deliver_popstate`):
 - The helper now captures the old `_lumen_loc_href` fragment before `_lumen_location_update(url)`, computes the new fragment, fires `popstate` as before, then — iff `url` is non-empty and the fragments differ — calls the existing `_lumen_fire_hashchange(oldHref, newHref)` (Phase 1b-i). Order is spec-correct: popstate first, hashchange after. Empty `url` (keep-current) and same-fragment path-only traversals fire no `hashchange`.
 - Tests: 4 `deliver_popstate_*hashchange*`; full `lumen-js` suite green (2307).
 
-**Still remaining** (Phase 1b + Phase 2): cross-document single-authority unification (JS `HistoryState` mirror vs shell `nav_back`/`nav_fwd` drift on multi-step `go` across full-document boundaries), post-back `history.state` from shell-restored value, and the entire Navigation API wiring (steps 5–10 below). The ROADMAP `P3-navapi` row stays `planned` until those land.
+### Progress (2026-06-26) — Phase 1c (post-back `history.state` sync) DONE
+
+Merged slice (`crates/js/src/dom.rs`, `HistoryState` + `_lumen_deliver_popstate`):
+- `_lumen_deliver_popstate(state_json, url)` (the shell→JS traversal-delivery primitive) fired the `popstate` event but never wrote `state_json` into the JS-side `HistoryState` mirror, so `history.state` stayed stale — `null` after a full-document back even though the shell restored a real state object (HTML LS §7.4.6 requires `history.state` to reflect the current entry).
+- New `HistoryState::set_state(state_json)` updates **only** the current entry's serialized state (leaves `url` untouched — the popstate `url` arg can be empty = "keep current"). Exposed via native binding `_lumen_history_set_state`; `_lumen_deliver_popstate` now calls it right after `_lumen_location_update`, before listeners run, so handlers reading `history.state` see the restored value.
+- Tests: `deliver_popstate_updates_history_state`, `deliver_popstate_empty_url_keeps_url_updates_state` (empty url keeps location, still updates state); full `lumen-js` history+popstate suites green.
+
+**Still remaining** (Phase 1b + Phase 2): cross-document single-authority unification (JS `HistoryState` mirror vs shell `nav_back`/`nav_fwd` drift on multi-step `go` across full-document boundaries), and the entire Navigation API wiring (steps 5–10 below). The ROADMAP `P3-navapi` row stays `planned` until those land.
 
 ---
 

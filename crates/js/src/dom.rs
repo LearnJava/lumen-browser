@@ -61,6 +61,15 @@ impl HistoryState {
         }
     }
 
+    /// Updates only the current entry's serialized state, leaving its URL
+    /// untouched. Used when the shell delivers a traversal popstate so that
+    /// `history.state` reflects the shell-restored state object.
+    fn set_state(&mut self, state_json: String) {
+        if let Some(e) = self.entries.get_mut(self.current) {
+            e.state_json = state_json;
+        }
+    }
+
     // Returns false when delta is 0 (Phase 0: reload not implemented) or out of bounds.
     fn go(&mut self, delta: i32) -> bool {
         if delta == 0 {
@@ -1094,6 +1103,11 @@ fn install_primitives(
         let h = Arc::clone(&hist);
         reg!("_lumen_history_go", move |delta: i32| -> bool {
             h.lock().unwrap().go(delta)
+        });
+
+        let h = Arc::clone(&hist);
+        reg!("_lumen_history_set_state", move |state_json: String| {
+            h.lock().unwrap().set_state(state_json)
         });
 
         let h = Arc::clone(&hist);
@@ -6498,6 +6512,9 @@ function _lumen_deliver_popstate(state_json, url) {
     var oldHref = _lumen_loc_href;
     var oldHash = oldHref.indexOf('#') >= 0 ? oldHref.slice(oldHref.indexOf('#')) : '';
     if (url) _lumen_location_update(url);
+    // Sync the JS-side HistoryState mirror so history.state reflects the
+    // state object delivered by a shell-driven traversal (HTML LS §7.4.6).
+    _lumen_history_set_state(state_json);
     var newHref = url ? url : oldHref;
     var newHash = newHref.indexOf('#') >= 0 ? newHref.slice(newHref.indexOf('#')) : '';
     var s;
@@ -15987,6 +16004,24 @@ mod tests {
         rt.eval("_lumen_deliver_popstate('null', '')").unwrap();
         let r = rt.eval("n").unwrap();
         assert_eq!(r, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn deliver_popstate_updates_history_state() {
+        let rt = runtime_with_url("https://example.com/page1");
+        rt.eval("_lumen_deliver_popstate('{\"x\":42}', '/page0');").unwrap();
+        assert_eq!(rt.eval("history.state.x").unwrap(), lumen_core::JsValue::Number(42.0));
+    }
+
+    #[test]
+    fn deliver_popstate_empty_url_keeps_url_updates_state() {
+        let rt = runtime_with_url("https://example.com/page1");
+        rt.eval("_lumen_deliver_popstate('{\"n\":9}', '');").unwrap();
+        assert_eq!(rt.eval("history.state.n").unwrap(), lumen_core::JsValue::Number(9.0));
+        assert_eq!(
+            rt.eval("location.href").unwrap(),
+            lumen_core::JsValue::String("https://example.com/page1".into())
+        );
     }
 
     #[test]
