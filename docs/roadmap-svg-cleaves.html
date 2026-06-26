@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-06-25",
+ "generated": "2026-06-26",
  "counts": {
   "open": 24,
-  "fixed": 214,
+  "fixed": 215,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 238,
+ "total_bugs": 239,
  "phases": [
   {
    "id": "P0",
@@ -749,7 +749,8 @@
     {
      "id": "P3-storagebuckets",
      "title": "Storage Buckets API + quota management",
-     "status": "planned"
+     "status": "done",
+     "note": "P1 2026-06-26 (navigator.storageBuckets open/keys/delete + StorageBucket persist/estimate/durability/expires/getDirectory, Phase 0 in-memory)"
     },
     {
      "id": "P3-permissions",
@@ -1727,10 +1728,10 @@
   },
   "BUG-124": {
    "status": "open",
-   "title": "TEST-51 residual 1.09%: fractional layout Y coords vs Edge pixel snapping",
+   "title": "TEST-51 residual 1.09%: бокс у Edge стоит на 1px ВЫШЕ Lumen (бордер y=195 vs 196, контент 197 vs 198) — расхождение позиции в layout (накопление line-height 19.…",
    "component": "layout/paint",
    "date": null,
-   "debtor": false
+   "debtor": true
   },
   "BUG-125": {
    "status": "fixed",
@@ -2525,9 +2526,16 @@
   },
   "BUG-240": {
    "status": "open",
-   "title": "TEST-45 (multiple-backgrounds) стабильно FAIL 4.73% — пред-существует (тот же 4.7304% в коммит-прогоне 20260623-062656, до правок D2-1). Не вызвано BUG-239 (ell…",
+   "title": "TEST-45: «4.73%» = артефакт устаревшего gdigrab-снимка (run.py без `--build`). Свежая сборка 2026-06-25 → **1.02%**; отрисовка слоёв корректна (свежий рендер со…",
    "component": "paint/test-harness",
    "date": null,
+   "debtor": true
+  },
+  "BUG-243": {
+   "status": "fixed",
+   "title": "`document.createElementNS` не определён на настоящем `document` (`dom.rs:5529`) + `install_svg_bindings` целиком падает (`svg.rs:246` `class SVGElement extends…",
+   "component": "js",
+   "date": "2026-06-25",
    "debtor": false
   }
  },
@@ -2582,7 +2590,8 @@
    "BUG-070",
    "BUG-072",
    "BUG-073",
-   "BUG-155"
+   "BUG-155",
+   "BUG-243"
   ],
   "js (shell)": [
    "BUG-233"
