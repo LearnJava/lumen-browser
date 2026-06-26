@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-06-26T10:19:48",
+  "timestamp": "2026-06-26T08:57:40",
   "git": {
-    "commit": "1108a9bb",
-    "branch": "main",
-    "subject": "Merge remote-tracking branch 'origin/main' into graphic-followup-debtors"
+    "commit": "84d2b8f8",
+    "branch": "graphic-followup-debtors",
+    "subject": "fix: add TEST-126 debtor + ctypes callback overflow fix"
   },
   "crop_offset": [
     8,
@@ -12,10 +12,10 @@
   "halted_at": null,
   "summary": {
     "total": 138,
-    "passed": 77,
-    "failed": 6,
+    "passed": 79,
+    "failed": 7,
     "errors": 0,
-    "debtors": 55,
+    "debtors": 52,
     "skipped": 0
   },
   "tests": [
@@ -45,14 +45,9 @@
       "label": "color-named",
       "html": "02-color-named.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 0.6836,
-      "diff_region": {
-        "top": 124,
-        "left": 25,
-        "bottom": 304,
-        "right": 964
-      }
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
     },
     {
       "id": "03",
@@ -61,13 +56,8 @@
       "html": "03-color-formats.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3255,
-      "diff_region": {
-        "top": 144,
-        "left": 25,
-        "bottom": 364,
-        "right": 884
-      }
+      "diff_pct": 0.0,
+      "diff_region": null
     },
     {
       "id": "04",
@@ -75,14 +65,9 @@
       "label": "color-alpha",
       "html": "04-color-alpha.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 0.6836,
-      "diff_region": {
-        "top": 124,
-        "left": 25,
-        "bottom": 304,
-        "right": 964
-      }
+      "status": "PASS",
+      "diff_pct": 0.0,
+      "diff_region": null
     },
     {
       "id": "05",
@@ -91,13 +76,8 @@
       "html": "05-border-width.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.4001,
-      "diff_region": {
-        "top": 172,
-        "left": 25,
-        "bottom": 269,
-        "right": 879
-      }
+      "diff_pct": 0.0,
+      "diff_region": null
     },
     {
       "id": "06",
@@ -106,7 +86,7 @@
       "html": "06-border-sides.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.4184,
+      "diff_pct": 0.0176,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -176,7 +156,7 @@
       "html": "12-display.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.3472,
+      "diff_pct": 0.2376,
       "diff_region": {
         "top": 308,
         "left": 25,
@@ -191,7 +171,7 @@
       "html": "13-visibility-opacity.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.4721,
+      "diff_pct": 0.2357,
       "diff_region": {
         "top": 148,
         "left": 25,
@@ -250,18 +230,18 @@
       "label": "images",
       "html": "18-images.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 15.0563,
+      "status": "DEBTOR",
+      "diff_pct": 2.1053,
       "diff_region": {
         "top": 28,
-        "left": 25,
+        "left": 28,
         "bottom": 718,
-        "right": 908
+        "right": 905
       },
       "debtor": {
         "bug": "BUG-219",
         "baseline": 2.11,
-        "verdict": "REGRESS"
+        "verdict": "OK"
       }
     },
     {
@@ -291,7 +271,7 @@
       "html": "20-quirks-bgcolor.html",
       "threshold": 0.5,
       "status": "PASS",
-      "diff_pct": 0.2441,
+      "diff_pct": 0.1135,
       "diff_region": {
         "top": 140,
         "left": 25,
@@ -305,8 +285,8 @@
       "label": "border-style dashed/dotted/double",
       "html": "21-border-style.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 3.1331,
+      "status": "PASS",
+      "diff_pct": 0.488,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -496,7 +476,7 @@
       "html": "34-forms.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.3706,
+      "diff_pct": 3.2769,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -570,9 +550,14 @@
       "label": "linear-gradient / radial-gradient GPU pipeline",
       "html": "39-gradients.html",
       "threshold": 0.5,
-      "status": "PASS",
+      "status": "FAIL",
       "diff_pct": 0.0,
-      "diff_region": null
+      "diff_region": null,
+      "debtor": {
+        "bug": "BUG-085",
+        "baseline": 1.62,
+        "verdict": "REMOVE"
+      }
     },
     {
       "id": "40",
@@ -580,13 +565,13 @@
       "label": "conic-gradient / repeating-conic-gradient (CSS Images L4 §3.7)",
       "html": "40-conic-gradients.html",
       "threshold": 0.5,
-      "status": "PASS",
-      "diff_pct": 0.4753,
+      "status": "FAIL",
+      "diff_pct": 100.0,
       "diff_region": {
-        "top": 21,
-        "left": 106,
-        "bottom": 504,
-        "right": 788
+        "top": 0,
+        "left": 0,
+        "bottom": 719,
+        "right": 1023
       }
     },
     {
@@ -686,11 +671,11 @@
       "html": "47-svg-basic.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 2.2078,
+      "diff_pct": 1.1967,
       "diff_region": {
         "top": 25,
         "left": 28,
-        "bottom": 646,
+        "bottom": 647,
         "right": 990
       },
       "debtor": {
@@ -831,11 +816,11 @@
       "html": "55-video-placeholder.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 0.5671,
+      "diff_pct": 0.5489,
       "diff_region": {
-        "top": 123,
+        "top": 124,
         "left": 119,
-        "bottom": 410,
+        "bottom": 411,
         "right": 712
       },
       "debtor": {
@@ -850,8 +835,8 @@
       "label": "CSS Compositing L1 §5 — mix-blend-mode: normal/multiply/darken/color-burn/screen/lighten/color-dodge/overlay/hard-light/soft-light/difference/exclusion/hue/saturation/color/luminosity + nesting",
       "html": "56-mix-blend-mode.html",
       "threshold": 0.5,
-      "status": "FAIL",
-      "diff_pct": 1.8275,
+      "status": "PASS",
+      "diff_pct": 0.4725,
       "diff_region": {
         "top": 0,
         "left": 0,
@@ -866,7 +851,7 @@
       "html": "57-canvas-2d.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 3.2434,
+      "diff_pct": 2.9564,
       "diff_region": {
         "top": 25,
         "left": 25,
@@ -885,7 +870,7 @@
       "label": "CSS Pseudo-elements L4 §5.3-5.4 — ::first-letter drop-cap (large yellow, float:left) + ::first-line green bold first line",
       "html": "58-first-letter-line.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
+      "status": "FAIL",
       "diff_pct": 2.4873,
       "diff_region": {
         "top": 37,
@@ -895,8 +880,8 @@
       },
       "debtor": {
         "bug": "BUG-100",
-        "baseline": 2.47,
-        "verdict": "OK"
+        "baseline": 4.92,
+        "verdict": "RATCHET"
       }
     },
     {
@@ -935,7 +920,7 @@
       },
       "debtor": {
         "bug": "BUG-173",
-        "baseline": 1.41,
+        "baseline": 1.5,
         "verdict": "OK"
       }
     },
@@ -965,7 +950,7 @@
       "label": "CSS Scroll Snap L1: scroll-snap-type (y/x mandatory, both proximity), scroll-snap-align (start), scroll-snap-stop (always); static layout geometry of snap containers",
       "html": "62-scroll-snap.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
+      "status": "FAIL",
       "diff_pct": 9.6166,
       "diff_region": {
         "top": 0,
@@ -975,8 +960,8 @@
       },
       "debtor": {
         "bug": "BUG-128",
-        "baseline": 8.85,
-        "verdict": "OK"
+        "baseline": 2.32,
+        "verdict": "REGRESS"
       }
     },
     {
@@ -1025,18 +1010,13 @@
       "label": "CSS Flexbox align-content: flex-start/end/center/space-between/space-around/space-evenly/stretch for multi-line flex containers",
       "html": "65-flex-align-content.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
+      "status": "FAIL",
       "diff_pct": 1.4049,
       "diff_region": {
         "top": 10,
         "left": 1,
         "bottom": 694,
         "right": 989
-      },
-      "debtor": {
-        "bug": "BUG-127",
-        "baseline": 2.08,
-        "verdict": "OK"
       }
     },
     {
@@ -1245,18 +1225,18 @@
       "label": "CSS Scroll-Driven Animations L1: scroll-timeline-name/axis, view-timeline-name/axis, animation-timeline: scroll()/view()/named",
       "html": "78-scroll-driven-animations.html",
       "threshold": 0.5,
-      "status": "DEBTOR",
-      "diff_pct": 4.5584,
+      "status": "FAIL",
+      "diff_pct": 4.5934,
       "diff_region": {
         "top": 28,
         "left": 24,
-        "bottom": 548,
+        "bottom": 551,
         "right": 905
       },
       "debtor": {
         "bug": "BUG-127",
-        "baseline": 5.76,
-        "verdict": "OK"
+        "baseline": 10.07,
+        "verdict": "RATCHET"
       }
     },
     {
@@ -1341,11 +1321,11 @@
       "html": "83-scroll-behavior.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 8.0676,
+      "diff_pct": 8.2183,
       "diff_region": {
         "top": 33,
         "left": 50,
-        "bottom": 521,
+        "bottom": 522,
         "right": 973
       },
       "debtor": {
@@ -1782,11 +1762,11 @@
       "html": "110-accent-color.html",
       "threshold": 0.5,
       "status": "DEBTOR",
-      "diff_pct": 1.783,
+      "diff_pct": 1.6989,
       "diff_region": {
         "top": 25,
         "left": 25,
-        "bottom": 192,
+        "bottom": 194,
         "right": 521
       },
       "debtor": {

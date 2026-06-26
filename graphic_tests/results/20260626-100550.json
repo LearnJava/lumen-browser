@@ -1,0 +1,43 @@
+{
+  "timestamp": "2026-06-26T10:05:50",
+  "git": {
+    "commit": "1108a9bb",
+    "branch": "main",
+    "subject": "Merge remote-tracking branch 'origin/main' into graphic-followup-debtors"
+  },
+  "crop_offset": [
+    8,
+    67
+  ],
+  "halted_at": "18",
+  "summary": {
+    "total": 138,
+    "passed": 0,
+    "failed": 1,
+    "errors": 0,
+    "debtors": 0,
+    "skipped": 137
+  },
+  "tests": [
+    {
+      "id": "18",
+      "stem": "18-images",
+      "label": "images",
+      "html": "18-images.html",
+      "threshold": 0.5,
+      "status": "FAIL",
+      "diff_pct": 15.0563,
+      "diff_region": {
+        "top": 28,
+        "left": 25,
+        "bottom": 718,
+        "right": 908
+      },
+      "debtor": {
+        "bug": "BUG-219",
+        "baseline": 2.11,
+        "verdict": "REGRESS"
+      }
+    }
+  ]
+}
