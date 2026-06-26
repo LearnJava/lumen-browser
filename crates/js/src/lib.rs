@@ -342,6 +342,23 @@ pub struct QuickJsRuntime {
     /// registers it here. `ServiceWorkerInterceptor` reads the same store to route
     /// network requests to the correct SW thread.
     sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
+    /// Navigation state — serialised JSON of the shell's authoritative nav history.
+    ///
+    /// Updated by the shell after each back/forward/cross-document navigation
+    /// (via `eval_js` → `_lumen_navigation_set_state` or a `run()` closure).
+    ///
+    /// Read by the Navigation API JS accessors `_lumen_navigation_entries_json`,
+    /// `_lumen_navigation_current_index`, `_lumen_navigation_can_go_back`,
+    /// `_lumen_navigation_can_go_forward`.
+    ///
+    /// Format: `{"entries":[{"url":..,"key":..,"id":..,"state":..},…],"index":N}`.
+    /// Defaults to an empty list + index 0.
+    nav_state_json: Arc<Mutex<String>>,
+    // ─── Navigation API request queue ──────────────────────────────────────────
+    // Queued by `_lumen_navigation_request` during JS execution; drained by
+    // the shell in `about_to_wait` to gain single authority over `navigation.*`
+    // methods (replaces the in-JS `_entries` mirror).
+    pending_navigation_updates: Arc<Mutex<Vec<dom::NavUpdate>>>,
 }
 
 /// The QuickJS runtime + context, owned exclusively by the JS thread.
@@ -411,6 +428,12 @@ fn js_thread_main(
     // `inner` (Runtime + Context) drops here, on its owning thread.
 }
 
+/// Default empty navigation state (serialised JSON). Used until the shell pushes
+/// the first update after the initial page load.
+fn default_nav_state() -> String {
+    String::from(r#"{"entries":[],"index":0}"#)
+}
+
 impl QuickJsRuntime {
     pub fn new() -> Result<Self, JsError> {
         let module_registry = esm::new_registry();
@@ -467,6 +490,8 @@ impl QuickJsRuntime {
             pending_focus_requests: Arc::new(Mutex::new(Vec::new())),
             pending_history_url_updates: Arc::new(Mutex::new(Vec::new())),
             pending_history_traversals: Arc::new(Mutex::new(Vec::new())),
+            nav_state_json: Arc::new(Mutex::new(default_nav_state())),
+            pending_navigation_updates: Arc::new(Mutex::new(Vec::new())),
             fullscreen_requests: Arc::new(Mutex::new(Vec::new())),
             view_transition_events: Arc::new(Mutex::new(Vec::new())),
             print_requests: Arc::new(Mutex::new(Vec::new())),
@@ -741,6 +766,8 @@ impl QuickJsRuntime {
                 Arc::clone(&self.console_messages),
                 Arc::clone(&self.pending_history_url_updates),
                 Arc::clone(&self.pending_history_traversals),
+                Arc::clone(&self.nav_state_json),
+                Arc::clone(&self.pending_navigation_updates),
                 Arc::clone(&self.fullscreen_requests),
                 Arc::clone(&self.print_requests),
                 Arc::clone(&self.pending_focus_requests),
@@ -1613,6 +1640,33 @@ impl QuickJsRuntime {
     /// Must be called before `drop(runtime)` to avoid losing the request.
     pub fn take_navigate_request(&self) -> Option<NavigateRequest> {
         self.nav_out.lock().unwrap().take()
+    }
+
+    /// Update the authoritative navigation state from the shell.
+    ///
+    /// Called by the shell after each back/forward/cross-document navigation
+    /// so that `_lumen_navigation_entries_json` / `_lumen_navigation_current_index`
+    /// / `_lumen_navigation_can_go_*` return current truth.  The JSON string
+    /// format is `{"entries":[{"url":..,"key":..,"id":..,"state":..},…],"index":N}`.
+    pub fn update_nav_state(&self, json: impl Into<String>) {
+        *self.nav_state_json.lock().unwrap() = json.into();
+    }
+
+    /// Drain all Navigation API update requests queued by `_lumen_navigation_request`
+    /// during JS execution.
+    ///
+    /// The shell calls this in `about_to_wait` to gain shell-authority over
+    /// `navigation.navigate()` / `back()` / `forward()` / `traverseTo()`.
+    pub fn take_nav_updates(&self) -> Vec<dom::NavUpdate> {
+        std::mem::take(&mut *self.pending_navigation_updates.lock().unwrap())
+    }
+
+    /// Push a Navigation API update into the queue (called by `_lumen_navigation_request`).
+    pub fn push_nav_update(&self, update: dom::NavUpdate) {
+        self.pending_navigation_updates
+            .lock()
+            .unwrap()
+            .push(update);
     }
 
     /// Drain `history.pushState` / `history.replaceState` URL-update notifications
