@@ -1712,6 +1712,33 @@ struct NavEntry {
     same_doc_state_json: Option<String>,
 }
 
+impl NavEntry {
+    /// Move the history cursor one intermediate hop toward `back` (true) or
+    /// forward (false) WITHOUT rendering or firing events — the building block of
+    /// a multi-step `history.go(n)` (see `Lumen::navigate_by`). The current entry
+    /// `cur` is pushed onto the opposite stack and the popped target entry is
+    /// returned as the new current.
+    ///
+    /// The caller MUST have range-checked that the source stack is non-empty;
+    /// `pop` is therefore expected to succeed.
+    fn shift_history_entry(
+        nav_back: &mut Vec<NavEntry>,
+        nav_fwd: &mut Vec<NavEntry>,
+        cur: NavEntry,
+        back: bool,
+    ) -> NavEntry {
+        if back {
+            let popped = nav_back.pop().expect("source stack must be non-empty");
+            nav_fwd.push(cur);
+            popped
+        } else {
+            let popped = nav_fwd.pop().expect("source stack must be non-empty");
+            nav_back.push(cur);
+            popped
+        }
+    }
+}
+
 /// Навигационный запрос от JS (location.href=, assign, replace, reload).
 /// Хранится в `Lumen::pending_js_navigate` и выполняется в `about_to_wait`.
 #[cfg_attr(not(feature = "quickjs"), allow(dead_code))]
@@ -1943,6 +1970,14 @@ pub(crate) trait PersistentJs: Send {
     /// means `replaceState` (updates the displayed URL only).
     #[allow(dead_code)]
     fn take_history_url_updates(&self) -> Vec<(bool, String, String)>;
+    /// Drain `history.go(n)` / `back` / `forward` traversal deltas queued by JS.
+    ///
+    /// Each `delta` (negative = back, positive = forward) is applied by the shell
+    /// to its real `nav_back`/`nav_fwd` stacks via `Lumen::navigate_by`, which
+    /// delivers the destination popstate or reload. The shell is the single
+    /// authority for traversal; the JS `HistoryState` is only a read-cache.
+    #[allow(dead_code)]
+    fn take_history_traversals(&self) -> Vec<i32>;
     /// Fire a `popstate` event in JS for a same-document back/forward navigation.
     ///
     /// `state_json` is the already-serialised state for the destination entry.
@@ -2271,6 +2306,9 @@ impl PersistentJs for QuickPersistentJs {
                 }
             })
             .collect()
+    }
+    fn take_history_traversals(&self) -> Vec<i32> {
+        self.rt.take_history_traversals()
     }
     fn fire_popstate(&self, state_json: &str, url: &str) {
         // Escape url for embedding in a JS string literal (single-quoted).
@@ -7653,6 +7691,22 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
         }
 
+        // ── History API: history.go(n) / back / forward traversal ─────────────
+        // Drain JS-initiated traversal deltas and apply them to the real
+        // nav_back/nav_fwd stacks (single authority). Collect first so the
+        // immutable `js_ctx` borrow is released before the `&mut self` calls.
+        #[cfg(feature = "quickjs")]
+        {
+            let traversals = self
+                .js_ctx
+                .as_ref()
+                .map(|js| js.take_history_traversals())
+                .unwrap_or_default();
+            for delta in traversals {
+                self.navigate_by(delta);
+            }
+        }
+
         // ── Native input injection (ADR-007 §8C) ─────────────────────────────
         // Drain injected commands and route through the same dispatch path as
         // real OS events so events have isTrusted=true.
@@ -12619,6 +12673,77 @@ impl Lumen {
         if let Some(w) = self.window.as_ref() { w.request_redraw(); }
     }
 
+    /// Traverse the session history by `delta` (negative = back, positive =
+    /// forward) as a SINGLE logical step (HTML LS history traversal): the
+    /// intermediate entries of a multi-step `history.go(n)` are skipped without
+    /// rendering, and only the destination entry fires `popstate` (same-document)
+    /// or reloads (full-document) — exactly one observable event, delivered by the
+    /// final `navigate_back` / `navigate_forward`. An out-of-range `delta` is a
+    /// no-op (per spec, a step outside the history range does nothing).
+    ///
+    /// This is the single authority for JS-initiated traversal: `history.go` /
+    /// `back` / `forward` queue a delta that the shell drains into this method, so
+    /// the real `nav_back` / `nav_fwd` stacks (not the JS read-cache mirror) decide
+    /// what actually happens — eliminating the multi-step `go` drift where the JS
+    /// mirror moved its cursor but the shell stacks did not. Known limitation: a
+    /// multi-step traversal that crosses a full-document boundary yet lands on a
+    /// same-document entry of a different document fires `popstate` without
+    /// re-rendering that document (the remaining cross-document unification).
+    #[cfg_attr(not(feature = "quickjs"), allow(dead_code))]
+    fn navigate_by(&mut self, delta: i32) {
+        if delta == 0 {
+            return;
+        }
+        let back = delta < 0;
+        let steps = delta.unsigned_abs() as usize;
+
+        // Out-of-range traversal is a no-op (the shell stacks are authoritative).
+        if back && self.nav_back.len() < steps {
+            return;
+        }
+        if !back && self.nav_fwd.len() < steps {
+            return;
+        }
+
+        // Skip the intermediate entries without rendering: shuttle the current
+        // entry and each crossed entry onto the opposite stack, leaving `self`
+        // positioned at the entry just before the destination. The final
+        // navigate_back/forward then performs the one real (popstate/reload) hop.
+        if steps > 1 {
+            let mut cur = NavEntry {
+                source: self.source.clone(),
+                scroll_x: self.scroll_x,
+                scroll_y: self.scroll_y,
+                display_url: self.display_url.clone(),
+                same_doc_state_json: if self.current_history_state_json != "null" {
+                    Some(self.current_history_state_json.clone())
+                } else {
+                    None
+                },
+            };
+            for _ in 1..steps {
+                cur = NavEntry::shift_history_entry(
+                    &mut self.nav_back,
+                    &mut self.nav_fwd,
+                    cur,
+                    back,
+                );
+            }
+            self.source = cur.source;
+            self.scroll_x = cur.scroll_x;
+            self.scroll_y = cur.scroll_y;
+            self.display_url = cur.display_url;
+            self.current_history_state_json =
+                cur.same_doc_state_json.unwrap_or_else(|| "null".to_string());
+        }
+
+        if back {
+            self.navigate_back();
+        } else {
+            self.navigate_forward();
+        }
+    }
+
     /// Execute a gesture action produced by the right-button drag recognizer.
     fn execute_gesture_action(
         &mut self,
@@ -17517,5 +17642,74 @@ mod tests {
             }
         }
         assert_eq!(dispatched, vec!["a.png".to_owned()], "lazy пропущен, дубль a.png схлопнут");
+    }
+}
+
+/// Unit tests for the pure stack-shuffling core of `Lumen::navigate_by`
+/// (`NavEntry::shift_history_entry`). The full `navigate_by` needs the live app
+/// (window + renderer), so only the rendering-free hop is unit-tested here; the
+/// destination popstate/reload is covered by `navigate_back`/`navigate_forward`.
+#[cfg(test)]
+mod navigate_by_tests {
+    use super::*;
+
+    /// Build a same-document `NavEntry` tagged by `tag` (used as the display URL
+    /// and the serialized state) so a hop's effect is observable by tag.
+    fn entry(tag: &str) -> NavEntry {
+        NavEntry {
+            source: PageSource::Static {
+                html: String::new(),
+                url: tag.to_string(),
+            },
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+            display_url: Some(tag.to_string()),
+            same_doc_state_json: Some(format!("\"{tag}\"")),
+        }
+    }
+
+    #[test]
+    fn shift_back_once() {
+        let mut nav_back = vec![entry("e1"), entry("e2")];
+        let mut nav_fwd = vec![];
+        let cur = entry("e3");
+
+        let result = NavEntry::shift_history_entry(&mut nav_back, &mut nav_fwd, cur, true);
+
+        assert_eq!(result.display_url, Some("e2".to_string()));
+        assert_eq!(nav_back.len(), 1);
+        assert_eq!(nav_back[0].display_url, Some("e1".to_string()));
+        assert_eq!(nav_fwd.len(), 1);
+        assert_eq!(nav_fwd[0].display_url, Some("e3".to_string()));
+    }
+
+    #[test]
+    fn shift_back_twice() {
+        let mut nav_back = vec![entry("e1"), entry("e2")];
+        let mut nav_fwd = vec![];
+        let cur = entry("e3");
+
+        let cur2 = NavEntry::shift_history_entry(&mut nav_back, &mut nav_fwd, cur, true);
+        let cur3 = NavEntry::shift_history_entry(&mut nav_back, &mut nav_fwd, cur2, true);
+
+        assert_eq!(cur3.display_url, Some("e1".to_string()));
+        assert!(nav_back.is_empty());
+        assert_eq!(nav_fwd.len(), 2);
+        assert_eq!(nav_fwd[0].display_url, Some("e3".to_string()));
+        assert_eq!(nav_fwd[1].display_url, Some("e2".to_string()));
+    }
+
+    #[test]
+    fn shift_forward_once() {
+        let mut nav_fwd = vec![entry("f1")];
+        let mut nav_back = vec![];
+        let cur = entry("c");
+
+        let result = NavEntry::shift_history_entry(&mut nav_back, &mut nav_fwd, cur, false);
+
+        assert_eq!(result.display_url, Some("f1".to_string()));
+        assert_eq!(nav_back.len(), 1);
+        assert_eq!(nav_back[0].display_url, Some("c".to_string()));
+        assert!(nav_fwd.is_empty());
     }
 }

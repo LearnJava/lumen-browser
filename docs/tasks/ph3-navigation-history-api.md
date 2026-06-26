@@ -62,7 +62,16 @@ Merged slice (`crates/js/src/dom.rs`, `HistoryState` + `_lumen_deliver_popstate`
 - New `HistoryState::set_state(state_json)` updates **only** the current entry's serialized state (leaves `url` untouched — the popstate `url` arg can be empty = "keep current"). Exposed via native binding `_lumen_history_set_state`; `_lumen_deliver_popstate` now calls it right after `_lumen_location_update`, before listeners run, so handlers reading `history.state` see the restored value.
 - Tests: `deliver_popstate_updates_history_state`, `deliver_popstate_empty_url_keeps_url_updates_state` (empty url keeps location, still updates state); full `lumen-js` history+popstate suites green.
 
-**Still remaining** (Phase 1b + Phase 2): cross-document single-authority unification (JS `HistoryState` mirror vs shell `nav_back`/`nav_fwd` drift on multi-step `go` across full-document boundaries), and the entire Navigation API wiring (steps 5–10 below). The ROADMAP `P3-navapi` row stays `planned` until those land.
+### Progress (2026-06-26) — Phase 1d (multi-step `history.go(n)` single authority) DONE
+
+Closes Phase-1 **Step 1**: JS-initiated traversal is now SHELL-AUTHORITATIVE, removing the JS-mirror-vs-shell drift on multi-step `go`.
+
+- **JS** (`crates/js/src/dom.rs`, `crates/js/src/lib.rs`): new `pending_history_traversals` queue + binding `_lumen_history_traverse(delta)` + `JsRuntime::take_history_traversals()`. `history.go(delta)` (non-zero) now moves only the read-cache cursor (`_lumen_history_go`, keeps `history.state`/`length` + pushState truncation correct) and, on success, queues the real `delta` for the shell — it no longer calls `_lumen_deliver_popstate` itself. `back()`/`forward()` route through `go(∓1)`. `go(0)` still reloads.
+- **Shell** (`crates/shell/src/main.rs`): `Lumen::navigate_by(delta)` drains the queue in `about_to_wait` and traverses the real `nav_back`/`nav_fwd` stacks as ONE logical step — intermediate entries of a multi-step `go(n)` are shuffled across the cursor without rendering (pure `NavEntry::shift_history_entry`), and only the destination fires `popstate` (same-document) or reloads (full-document) via the existing `navigate_back`/`navigate_forward`. Out-of-range deltas are a no-op. `JsBridge::take_history_traversals` added.
+- **Tests**: JS — `history_go_queues_single_step_traversal`, `history_go_multistep_queues_full_delta_and_moves_cache`, `history_go_zero_does_not_queue_traversal`, `history_go_out_of_range_does_not_queue_traversal`; `history_back_fires_popstate_with_previous_state` + `history_go_updates_location` updated to simulate the shell's popstate delivery. Shell — `navigate_by_tests` (pure `shift_history_entry` hop bookkeeping). All green.
+- **Known limitation (deferred to Phase 2)**: a multi-step traversal that crosses a full-document boundary yet lands on a same-document entry of a *different* document fires `popstate` without re-rendering that document — the genuine cross-document unification still ahead.
+
+**Still remaining** (Phase 2): the entire Navigation API wiring (steps 5–10 below) and the cross-document edge noted above. The ROADMAP `P3-navapi` row stays `planned` until those land.
 
 ---
 
