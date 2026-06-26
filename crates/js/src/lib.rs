@@ -359,6 +359,11 @@ pub struct QuickJsRuntime {
     // the shell in `about_to_wait` to gain single authority over `navigation.*`
     // methods (replaces the in-JS `_entries` mirror).
     pending_navigation_updates: Arc<Mutex<Vec<dom::NavUpdate>>>,
+    // ─── Navigation API intercept report queue ─────────────────────────────────
+    // Queued by `_lumen_navigation_report_intercept` during `NavigateEvent`
+    // dispatch; drained by the shell before each navigation to decide whether
+    // to commit or cancel (intercept / preventDefault round-trip).
+    pending_nav_intercepted: Arc<Mutex<Vec<(bool, bool)>>>,
 }
 
 /// The QuickJS runtime + context, owned exclusively by the JS thread.
@@ -492,6 +497,7 @@ impl QuickJsRuntime {
             pending_history_traversals: Arc::new(Mutex::new(Vec::new())),
             nav_state_json: Arc::new(Mutex::new(default_nav_state())),
             pending_navigation_updates: Arc::new(Mutex::new(Vec::new())),
+            pending_nav_intercepted: Arc::new(Mutex::new(Vec::new())),
             fullscreen_requests: Arc::new(Mutex::new(Vec::new())),
             view_transition_events: Arc::new(Mutex::new(Vec::new())),
             print_requests: Arc::new(Mutex::new(Vec::new())),
@@ -768,6 +774,7 @@ impl QuickJsRuntime {
                 Arc::clone(&self.pending_history_traversals),
                 Arc::clone(&self.nav_state_json),
                 Arc::clone(&self.pending_navigation_updates),
+                Arc::clone(&self.pending_nav_intercepted),
                 Arc::clone(&self.fullscreen_requests),
                 Arc::clone(&self.print_requests),
                 Arc::clone(&self.pending_focus_requests),
@@ -1659,6 +1666,15 @@ impl QuickJsRuntime {
     /// `navigation.navigate()` / `back()` / `forward()` / `traverseTo()`.
     pub fn take_nav_updates(&self) -> Vec<dom::NavUpdate> {
         std::mem::take(&mut *self.pending_navigation_updates.lock().unwrap())
+    }
+
+    /// Drain `NavigateEvent` intercept results queued by `_lumen_navigation_report_intercept`
+    /// during event dispatch.
+    ///
+    /// The shell calls this before each navigation to decide whether to proceed
+    /// or cancel (intercept / preventDefault round-trip).
+    pub fn take_nav_intercept_result(&self) -> Vec<(bool, bool)> {
+        std::mem::take(&mut *self.pending_nav_intercepted.lock().unwrap())
     }
 
     /// Push a Navigation API update into the queue (called by `_lumen_navigation_request`).

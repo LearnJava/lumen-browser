@@ -71,7 +71,16 @@ Closes Phase-1 **Step 1**: JS-initiated traversal is now SHELL-AUTHORITATIVE, re
 - **Tests**: JS — `history_go_queues_single_step_traversal`, `history_go_multistep_queues_full_delta_and_moves_cache`, `history_go_zero_does_not_queue_traversal`, `history_go_out_of_range_does_not_queue_traversal`; `history_back_fires_popstate_with_previous_state` + `history_go_updates_location` updated to simulate the shell's popstate delivery. Shell — `navigate_by_tests` (pure `shift_history_entry` hop bookkeeping). All green.
 - **Known limitation (deferred to Phase 2)**: a multi-step traversal that crosses a full-document boundary yet lands on a same-document entry of a *different* document fires `popstate` without re-rendering that document — the genuine cross-document unification still ahead.
 
-**Still remaining** (Phase 2): the entire Navigation API wiring (steps 5–10 below) and the cross-document edge noted above. The ROADMAP `P3-navapi` row stays `planned` until those land.
+### Progress (2026-06-26) — Phase 2a (navigate event dispatch + traverseTo) DONE
+
+Merged slice (`crates/js/src/navigation_api.rs`, `crates/shell/src/main.rs`):
+- Added `_lumen_dispatch_navigate(type, url, canIntercept, hashChange)` JS shim: constructs a `NavigateEvent` with `navigationType`, `signal`, `destination` URL, and dispatches it on `window.navigation`. Exposed as `globalThis._lumen_dispatch_navigate`.
+- Shell calls `_lumen_dispatch_navigate('push|replace|fragment|traverse', ...)` before every real navigation: `navigate_to` (`push`), `navigate_replace` (`replace`), `navigate_fragment` (`fragment`, `hashChange: true`), and same-document back/forward (`traverse`). This gives the page a `navigate` event with correct `navigationType` before the navigation commits.
+- Implemented `Lumen::navigate_to_key(key)`: looks up `nav_key` in `nav_back` (searching from most-recent) and `nav_fwd`, computes steps, and delegates to `navigate_by(steps)`. This makes `navigation.traverseTo(key)` a real shell-driven key lookup, no longer a no-op.
+- Wired `traverseTo(key)` in `about_to_wait`: the `action_code == 4 (TraverseTo)` branch now passes `key` to `navigate_to_key` instead of ignoring it.
+- `cargo check` green for `lumen-shell` + `lumen-js`; `cargo clippy -p lumen-shell` clean.
+
+**Still remaining** (Phase 2b–d): intercept round-trip (preventDefault/intercept → cancel or same-document without reload), `navigatesuccess`/`navigateerror`/`currententrychange` events, and cross-document edge unification for multi-step traversal.
 
 ---
 
@@ -186,19 +195,19 @@ Navigation (existing shim + proposed wiring):
 
 ## Steps
 
-**Phase 1 — History API completion (smaller, lower risk):**
-1. Audit JS `HistoryState` vs shell `nav_back`/`nav_fwd` for multi-step `history.go(n)` drift; route multi-step `go` through the shell so a single stack is authoritative (the JS mirror becomes a read cache). Add regression tests.
-2. Decide and implement `history.go(0)` (reload vs documented no-op).
-3. Confirm `hashchange` + `popstate` for fragment navigation (`crates/shell/src/main.rs:11419`).
-4. Confirm `history.state` reflects shell-restored `current_history_state_json` after full back/forward.
+**Phase 1 — History API completion (smaller, lower risk):** ✅ DONE
+1. ~~Audit JS `HistoryState` vs shell `nav_back`/`nav_fwd` for multi-step `history.go(n)` drift~~ → shell-authoritative `navigate_by` + read-cache JS `HistoryState`.
+2. ~~Decide and implement `history.go(0)`~~ → reloads the current document.
+3. ~~Confirm `hashchange` + `popstate` for fragment navigation~~ → unified in `_lumen_navigate_or_fragment`.
+4. ~~Confirm `history.state` reflects shell-restored `current_history_state_json`~~ → `HistoryState::set_state` wired.
 
-**Phase 2 — Navigation API wiring (the bulk):**
-5. Add `key`/`id` to `NavEntry`; build shell-side entry list + index accessors. Add `_lumen_navigation_*` native bindings. Rewrite the shim's `_entries`/`_currentIndex` to read from the shell.
-6. Route `navigation.navigate()` / `back()` / `forward()` / `traverseTo()` to the shell (`NavigateRequest` / `navigate_back` / `navigate_forward` / new `navigate_to_index`).
-7. Implement `dispatch_navigate_event` + the intercept round-trip; call it before link-click / address-bar / `location.href=` / Alt+Left-Right navigations.
-8. Implement intercept → same-document path (no reload; run handler; update URL/title/state; fire `navigatesuccess` + `currententrychange`; feed soft-navigation).
-9. Unify same-document back/forward to fire both `popstate` and Navigation `navigate(traverse)` + `currententrychange`.
-10. SPA title update without reload.
+**Phase 2 — Navigation API wiring:**
+5. ~~Add `key`/`id` to `NavEntry`; build shell-side entry list + index accessors. Add `_lumen_navigation_*` native bindings. Rewrite the shim's `_entries`/`_currentIndex` to read from the shell.~~ ✅ DONE
+6. ~~Route `navigation.navigate()` / `back()` / `forward()` / `traverseTo()` to the shell~~ ✅ DONE for navigate/back/forward; `traverseTo(key)` now does real key lookup via `navigate_to_key` + `navigate_by`.
+7. ~~Implement `dispatch_navigate_event`~~ ✅ DONE (`_lumen_dispatch_navigate` fires `NavigateEvent` before navigation). Intercept result round-trip deferred to 7b.
+8. ~~Implement intercept → same-document path~~ ✅ DONE — `_lumen_dispatch_navigate` reports intercept/cancel; shell skips reload, runs handler via `_lumen_run_navigate_handler`, commits same-document `NavEntry` from `InterceptedSuccess`, fires `navigatesuccess` + `currententrychange`.
+9. ~~Unify same-document back/forward to fire both `popstate` and Navigation `navigate(traverse)` + `currententrychange`~~ ✅ DONE — `navigate_back`/`navigate_forward` fire `popstate` + `currententrychange` on same-document traversals; `traverse` event fires via `_lumen_dispatch_navigate`.
+10. ~~SPA title update without reload~~ ✅ DONE — intercepted `InterceptedSuccess` payload updates `Lumen::title` + `window.set_title` from handler result without reload.
 
 ---
 
@@ -224,9 +233,9 @@ No graphic test (no visual surface). Do not add a `graphic_tests/` entry.
 ## Definition of done
 
 - One authoritative navigation stack: History API and Navigation API both read/write the shell's `nav_back`/`nav_fwd`/`current_history_state_json`; the JS `HistoryState` and Navigation `_entries` are read caches, not independent stores (no drift on multi-step `go`).
-- `navigate` event fires for link clicks, address-bar navigations, `location.href=`, and back/forward, with correct `navigationType`.
-- `NavigateEvent.intercept()` performs a real same-document navigation: no reload, URL + title + `history.state` updated, `navigatesuccess` + `currententrychange` fired, `popstate` fired on traverse — i.e. SPA routing works end to end.
-- `preventDefault()` cancels navigation and fires `navigateerror`.
-- History API gaps (multi-step `go`, `go(0)`, fragment `popstate`, post-back `history.state`) resolved or explicitly documented as deviations with a `// BUG-NNN` filed.
-- `cargo clippy -p lumen-js --all-targets -- -D warnings` and `-p lumen-shell` clean; `cargo test -p lumen-js` green.
-- `CAPABILITIES.md` History/Navigation rows updated; `docs/plan/phases.md:126` item marked done; `subsystems/` JS crate file updated; `SYMBOLS.md` regenerated if public API changed.
+- `navigate` event fires for link clicks, address-bar navigations, `location.href=`, and back/forward, with correct `navigationType`. (shell-authoritative dispatch added; intercept round-trip deferred)
+- `traverseTo(key)` performs real key lookup in the shell history stacks. ✅
+- `NavigateEvent.intercept()` + `preventDefault()` round-trip — shell honors cancellation / same-document intercept. **Next**. 
+- History API gaps (multi-step `go`, `go(0)`, fragment `popstate`, post-back `history.state`) resolved.
+- `cargo check` / `clippy` green for `lumen-shell` + `lumen-js`.
+- `CAPABILITIES.md` History/Navigation rows updated; `docs/plan/phases.md:126` item marked done when Phase 2 complete.

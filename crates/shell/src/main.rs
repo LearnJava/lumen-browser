@@ -599,6 +599,7 @@ fn run_window_mode(
         nav_back: Vec::new(),
         nav_fwd: Vec::new(),
         nav_key_counter: 0,
+        pending_intercepted: None,
         form_state: HashMap::new(),
         validation_tooltip: None,
         color_picker_node: None,
@@ -1768,6 +1769,16 @@ pub(crate) trait PersistentJs: Send {
     fn eval_js(&self, script: &str);
     /// Consume any navigation request placed by JS during the last `eval_js`.
     fn take_navigate_request(&self) -> Option<JsNavigateRequest>;
+    /// Drain `NavigateEvent` intercept results queued since the last call.
+    fn take_nav_intercept_result(&self) -> Vec<(bool, bool)>;
+    /// Drain all navigation updates queued by JS since the last call.
+    fn take_nav_updates(&self) -> Vec<(u8, String, String, String)>;
+    /// Fire `navigatesuccess` event on `window.navigation`.
+    fn fire_navigate_success(&self);
+    /// Fire `navigateerror` event on `window.navigation`.
+    fn fire_navigate_error(&self);
+    /// Fire `currententrychange` event on `window.navigation`.
+    fn fire_current_entry_change(&self);
     /// Drain all expired JS timers (setTimeout/setInterval).
     ///
     /// Called each `about_to_wait`. Timer callbacks run synchronously inside
@@ -1983,14 +1994,6 @@ pub(crate) trait PersistentJs: Send {
     /// authority for traversal; the JS `HistoryState` is only a read-cache.
     #[allow(dead_code)]
     fn take_history_traversals(&self) -> Vec<i32>;
-    /// Drain Navigation API update requests queued by JS.
-    ///
-    /// Each entry is `(action, url, key, data)` where `action` is one of
-    /// `Push, Replace, Back, Forward, TraverseTo, Reload`.  The shell
-    /// processes these in `about_to_wait` to become the single authority
-    /// for `navigation.navigate()` / `back()` / `forward()` / `traverseTo()`.
-    #[allow(dead_code)]
-    fn take_nav_updates(&self) -> Vec<(u8, String, String, String)>;
     /// Fire a `popstate` event in JS for a same-document back/forward navigation.
     ///
     /// `state_json` is the already-serialised state for the destination entry.
@@ -2168,6 +2171,25 @@ impl PersistentJs for QuickPersistentJs {
             lumen_js::NavigateRequest::Reload     => JsNavigateRequest::Reload,
         })
     }
+    fn take_nav_intercept_result(&self) -> Vec<(bool, bool)> {
+        self.rt.take_nav_intercept_result()
+    }
+    fn take_nav_updates(&self) -> Vec<(u8, String, String, String)> {
+        self.rt
+            .take_nav_updates()
+            .into_iter()
+            .map(|(a, url, key, data)| (a as u8, url, key, data))
+            .collect()
+    }
+    fn fire_navigate_success(&self) {
+        self.eval_js("if(typeof _lumen_fire_navigate_success==='function')_lumen_fire_navigate_success();");
+    }
+    fn fire_navigate_error(&self) {
+        self.eval_js("if(typeof _lumen_fire_navigate_error==='function')_lumen_fire_navigate_error();");
+    }
+    fn fire_current_entry_change(&self) {
+        self.eval_js("if(typeof _lumen_fire_currententrychange==='function')_lumen_fire_currententrychange();");
+    }
     fn tick_timers(&self) {
         self.eval_js("_lumen_tick_timers()");
     }
@@ -2322,13 +2344,6 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn take_history_traversals(&self) -> Vec<i32> {
         self.rt.take_history_traversals()
-    }
-    fn take_nav_updates(&self) -> Vec<(u8, String, String, String)> {
-        self.rt
-            .take_nav_updates()
-            .into_iter()
-            .map(|(a, url, key, data)| (a as u8, url, key, data))
-            .collect()
     }
     fn fire_popstate(&self, state_json: &str, url: &str) {
         // Escape url for embedding in a JS string literal (single-quoted).
@@ -5454,6 +5469,8 @@ struct Lumen {
     /// Monotonic counter for Navigation API entry keys.
     /// Incremented on each new entry so `key` is unique across the session.
     nav_key_counter: u64,
+    /// Pending intercepted navigation awaiting handler completion.
+    pending_intercepted: Option<PendingIntercepted>,
     /// Runtime form control state (value, checked) keyed by NodeId.
     /// Persists for the lifetime of the current page; cleared on load/reload.
     form_state: forms::FormState,
@@ -6019,6 +6036,14 @@ enum ViewTransitionEvent {
     End,
     /// Transition was cancelled (nested startViewTransition or explicit abort).
     Cancel,
+}
+
+/// Pending intercepted navigation awaiting handler completion.
+enum PendingIntercepted {
+    Push { url: String, handler_started: bool },
+    Replace { url: String, handler_started: bool },
+    Back { handler_started: bool },
+    Forward { handler_started: bool },
 }
 
 impl Lumen {
@@ -7732,6 +7757,37 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
         }
 
+        // ── Navigation API: run pending intercept handler ──────────────────────
+        if let Some(pending) = &mut self.pending_intercepted {
+            let started = match pending {
+                PendingIntercepted::Push { handler_started, .. }
+                | PendingIntercepted::Replace { handler_started, .. }
+                | PendingIntercepted::Back { handler_started, .. }
+                | PendingIntercepted::Forward { handler_started, .. } => *handler_started,
+            };
+            if !started {
+                if let Some(js) = &self.js_ctx {
+                    js.eval_js("_lumen_run_navigate_handler()");
+                }
+                *pending = match pending {
+                    PendingIntercepted::Push { url, .. } => PendingIntercepted::Push {
+                        url: url.clone(),
+                        handler_started: true,
+                    },
+                    PendingIntercepted::Replace { url, .. } => PendingIntercepted::Replace {
+                        url: url.clone(),
+                        handler_started: true,
+                    },
+                    PendingIntercepted::Back { .. } => PendingIntercepted::Back {
+                        handler_started: true,
+                    },
+                    PendingIntercepted::Forward { .. } => PendingIntercepted::Forward {
+                        handler_started: true,
+                    },
+                };
+            }
+        }
+
         // ── Navigation API: drain queued navigation requests ─────────────────
         // Shell is the single authority for `navigation.navigate()` / `back()` /
         // `forward()` / `traverseTo()`. Each entry is `(action_code, url, key, data)`.
@@ -7750,6 +7806,62 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     3 => self.navigate_forward(),
                     4 => { let _ = data; }
                     5 => self.reload(),
+                    6 => {
+                        let parsed: serde_json::Value =
+                            serde_json::from_str(&data).unwrap_or_default();
+                        let new_url = parsed
+                            .get("url")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(&url)
+                            .to_string();
+                        let state = parsed
+                            .get("state")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("null")
+                            .to_string();
+                        let title = parsed
+                            .get("title")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        if let Some(pending) = self.pending_intercepted.take() {
+                            match pending {
+                                PendingIntercepted::Push { .. }
+                                | PendingIntercepted::Replace { .. }
+                                | PendingIntercepted::Back { .. }
+                                | PendingIntercepted::Forward { .. } => {
+                                    self.display_url = Some(new_url.clone());
+                                    self.current_history_state_json = state.clone();
+                                    if let Some(t) = title {
+                                        self.title = Some(t.clone());
+                                        if let Some(w) = self.window.as_ref() {
+                                            w.set_title(&window_title(Some(&t)));
+                                        }
+                                    }
+                                    if matches!(pending, PendingIntercepted::Push { .. }) {
+                                        self.nav_key_counter += 1;
+                                        self.nav_back.push(NavEntry {
+                                            source: PageSource::Url(new_url.clone()),
+                                            scroll_x: 0.0,
+                                            scroll_y: 0.0,
+                                            display_url: None,
+                                            same_doc_state_json: Some(state),
+                                            nav_key: format!(
+                                                "nav-{}",
+                                                self.nav_key_counter
+                                            ),
+                                        });
+                                    }
+                                    self.commit_nav_state();
+                                    self.fire_navigate_success();
+                                    self.fire_current_entry_change();
+                                }
+                            }
+                        }
+                    }
+                    7 => {
+                        self.pending_intercepted.take();
+                        self.fire_navigate_error();
+                    }
                     _ => {}
                 }
             }
@@ -12544,6 +12656,24 @@ impl Lumen {
         }
     }
 
+    fn fire_navigate_success(&self) {
+        if let Some(js) = &self.js_ctx {
+            js.fire_navigate_success();
+        }
+    }
+
+    fn fire_navigate_error(&self) {
+        if let Some(js) = &self.js_ctx {
+            js.fire_navigate_error();
+        }
+    }
+
+    fn fire_current_entry_change(&self) {
+        if let Some(js) = &self.js_ctx {
+            js.fire_current_entry_change();
+        }
+    }
+
     /// Сохранить текущую страницу в bfcache и стек навигации,
     /// затем загрузить `source` как новую страницу.
     /// Очищает `nav_fwd` (аналог браузера при навигации вперёд из середины истории).
@@ -12551,6 +12681,30 @@ impl Lumen {
     /// затем загрузить `source` как новую страницу.
     /// Очищает `nav_fwd` (аналог браузера при навигации вперёд из середины истории).
     fn navigate_to(&mut self, source: PageSource) {
+        if let Some(js) = &self.js_ctx {
+            let url = source.url_str().unwrap_or("");
+            js.eval_js(&format!("_lumen_dispatch_navigate('push', '{url}', true, false)"));
+        }
+        if let Some(js) = &self.js_ctx {
+            let intercept = js.take_nav_intercept_result();
+            if let Some(&(true, false)) = intercept.last() {
+                self.pending_intercepted = Some(PendingIntercepted::Push {
+                    url: source.url_str().unwrap_or("").to_string(),
+                    handler_started: false,
+                });
+                js.eval_js("_lumen_run_navigate_handler()");
+                if let Some(PendingIntercepted::Push { handler_started, .. }) =
+                    self.pending_intercepted.as_mut()
+                {
+                    *handler_started = true;
+                }
+                return;
+            }
+            if let Some(&(false, true)) = intercept.last() {
+                self.fire_navigate_error();
+                return;
+            }
+        }
         click_log::log_nav(&source.describe());
         self.hint.close();
         // Snapshot current page into bfcache if it has an HTML source.
@@ -12598,6 +12752,30 @@ impl Lumen {
     /// Перейти на `source`, заменяя текущую запись истории (без push в back-stack).
     /// Аналог `history.replaceState` / `location.replace()` в браузере.
     fn navigate_replace(&mut self, source: PageSource) {
+        if let Some(js) = &self.js_ctx {
+            let url = source.url_str().unwrap_or("");
+            js.eval_js(&format!("_lumen_dispatch_navigate('replace', '{url}', true, false)"));
+        }
+        if let Some(js) = &self.js_ctx {
+            let intercept = js.take_nav_intercept_result();
+            if let Some(&(true, false)) = intercept.last() {
+                self.pending_intercepted = Some(PendingIntercepted::Replace {
+                    url: source.url_str().unwrap_or("").to_string(),
+                    handler_started: false,
+                });
+                js.eval_js("_lumen_run_navigate_handler()");
+                if let Some(PendingIntercepted::Replace { handler_started, .. }) =
+                    self.pending_intercepted.as_mut()
+                {
+                    *handler_started = true;
+                }
+                return;
+            }
+            if let Some(&(false, true)) = intercept.last() {
+                self.fire_navigate_error();
+                return;
+            }
+        }
         // New navigation invalidates forward history but does NOT push to back stack.
         self.nav_fwd.clear();
         self.display_url = None;
@@ -12608,6 +12786,28 @@ impl Lumen {
 
     /// Перейти на предыдущую страницу в истории (Alt+Left).
     fn navigate_back(&mut self) {
+        if let Some(js) = &self.js_ctx {
+            js.eval_js("_lumen_dispatch_navigate('traverse', '', true, false)");
+        }
+        if let Some(js) = &self.js_ctx {
+            let intercept = js.take_nav_intercept_result();
+            if let Some(&(true, false)) = intercept.last() {
+                self.pending_intercepted = Some(PendingIntercepted::Back {
+                    handler_started: false,
+                });
+                js.eval_js("_lumen_run_navigate_handler()");
+                if let Some(PendingIntercepted::Back { handler_started }) =
+                    self.pending_intercepted.as_mut()
+                {
+                    *handler_started = true;
+                }
+                return;
+            }
+            if let Some(&(false, true)) = intercept.last() {
+                self.fire_navigate_error();
+                return;
+            }
+        }
         let Some(prev) = self.nav_back.pop() else { return };
 
         if let Some(state_json) = prev.same_doc_state_json {
@@ -12632,6 +12832,7 @@ impl Lumen {
             if let Some(js) = &self.js_ctx {
                 js.fire_popstate(&state_json, &url);
             }
+            self.fire_current_entry_change();
             self.request_redraw();
             self.commit_nav_state();
             return;
@@ -12697,6 +12898,28 @@ impl Lumen {
 
     /// Перейти на следующую страницу в истории (Alt+Right).
     fn navigate_forward(&mut self) {
+        if let Some(js) = &self.js_ctx {
+            js.eval_js("_lumen_dispatch_navigate('traverse', '', true, false)");
+        }
+        if let Some(js) = &self.js_ctx {
+            let intercept = js.take_nav_intercept_result();
+            if let Some(&(true, false)) = intercept.last() {
+                self.pending_intercepted = Some(PendingIntercepted::Forward {
+                    handler_started: false,
+                });
+                js.eval_js("_lumen_run_navigate_handler()");
+                if let Some(PendingIntercepted::Forward { handler_started }) =
+                    self.pending_intercepted.as_mut()
+                {
+                    *handler_started = true;
+                }
+                return;
+            }
+            if let Some(&(false, true)) = intercept.last() {
+                self.fire_navigate_error();
+                return;
+            }
+        }
         let Some(next) = self.nav_fwd.pop() else { return };
 
         if let Some(state_json) = next.same_doc_state_json {
@@ -12720,6 +12943,7 @@ impl Lumen {
             if let Some(js) = &self.js_ctx {
                 js.fire_popstate(&state_json, &url);
             }
+            self.fire_current_entry_change();
             self.request_redraw();
             self.commit_nav_state();
             return;

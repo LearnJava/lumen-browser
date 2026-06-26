@@ -8,7 +8,7 @@
 
 ## Status
 
-**Phase 3 (v1.0) — future.** Do not start until Phase 2 is fully closed (target v0.5.0).
+**Phase 3 (v1.0) — in progress.** Shell-side freeze/thaw implemented.
 
 ---
 

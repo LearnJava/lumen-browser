@@ -162,6 +162,8 @@ pub enum NavAction {
     Forward    = 3,
     TraverseTo = 4,
     Reload     = 5,
+    InterceptedSuccess = 6,
+    InterceptedError   = 7,
 }
 
 // ─── Navigation API update record ─────────────────────────────────────────────
@@ -305,13 +307,17 @@ pub fn install_dom_api(
     nav_state: Arc<Mutex<String>>,
     // Queued by `_lumen_navigation_request`; drained by the shell in `about_to_wait`.
     pending_navigation_updates: Arc<Mutex<Vec<NavUpdate>>>,
+    // Queued by `_lumen_navigation_report_intercept` during `NavigateEvent`
+    // dispatch; drained by the shell before each navigation to decide whether
+    // to commit or cancel (intercept / preventDefault round-trip).
+    pending_nav_intercepted: Arc<Mutex<Vec<(bool, bool)>>>,
     fullscreen_requests: Arc<Mutex<Vec<FullscreenRequest>>>,
     print_requests: Arc<Mutex<Vec<PrintRequest>>>,
     pending_focus_requests: Arc<Mutex<Vec<Option<u32>>>>,
     // True when COOP=same-origin + COEP=require-corp are both present on this document.
     cross_origin_isolated: bool,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, sse_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, cache_backend, sw_worker_store, scroll_states, pending_scrolls, pending_page_scrolls, page_scroll_y, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages, pending_history_url_updates, pending_history_traversals, Arc::clone(&nav_state), Arc::clone(&pending_navigation_updates), fullscreen_requests, print_requests, pending_focus_requests)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, sse_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, cache_backend, sw_worker_store, scroll_states, pending_scrolls, pending_page_scrolls, page_scroll_y, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages, pending_history_url_updates, pending_history_traversals, Arc::clone(&nav_state), Arc::clone(&pending_navigation_updates), Arc::clone(&pending_nav_intercepted), fullscreen_requests, print_requests, pending_focus_requests)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -425,6 +431,10 @@ fn install_primitives(
     pending_history_traversals: Arc<Mutex<Vec<i32>>>,
     nav_state: Arc<Mutex<String>>,
     pending_navigation_updates: Arc<Mutex<Vec<NavUpdate>>>,
+    // Queued by `_lumen_navigation_report_intercept` during `NavigateEvent`
+    // dispatch; drained by the shell before each navigation to decide whether
+    // to commit or cancel (intercept / preventDefault round-trip).
+    pending_nav_intercepted: Arc<Mutex<Vec<(bool, bool)>>>,
     fullscreen_requests: Arc<Mutex<Vec<FullscreenRequest>>>,
     print_requests: Arc<Mutex<Vec<PrintRequest>>>,
     pending_focus_requests: Arc<Mutex<Vec<Option<u32>>>>,
@@ -1205,6 +1215,7 @@ fn install_primitives(
         let ns_fwd     = Arc::clone(&nav_state);
         let ns_set     = Arc::clone(&nav_state);
         let q          = Arc::clone(&pending_navigation_updates);
+        let pi         = Arc::clone(&pending_nav_intercepted);
 
         // ── accessors (read nav_state JSON, locked only for copy) ────────────────
         reg!(
@@ -1265,6 +1276,14 @@ fn install_primitives(
 
         // ── navigation action queue ──────────────────────────────────────────────
         reg!(
+            "_lumen_navigation_report_intercept",
+            move |intercepted: bool, cancelled: bool| {
+                let mut q = pi.lock().unwrap();
+                q.push((intercepted, cancelled));
+            }
+        );
+
+        reg!(
             "_lumen_navigation_request",
             move |action_code: u8, url: String, key: String, data: String| {
                 let action = match action_code {
@@ -1274,6 +1293,8 @@ fn install_primitives(
                     3 => NavAction::Forward,
                     4 => NavAction::TraverseTo,
                     5 => NavAction::Reload,
+                    6 => NavAction::InterceptedSuccess,
+                    7 => NavAction::InterceptedError,
                     _ => return,
                 };
                 q.lock().unwrap().push((action, url, key, data));

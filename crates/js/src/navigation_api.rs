@@ -74,6 +74,7 @@ class NavigationHistoryEntry {
       this._intercepted = true;
       const handler = options.handler || (() => {});
       this._handledPromise = Promise.resolve().then(handler);
+      window._lumen_pending_intercept_handler = handler;
     }
 
     _isIntercepted() {
@@ -237,6 +238,61 @@ class NavigationHistoryEntry {
       configurable: false
     });
   }
+
+  // ── Navigation API shell wire-up ──────────────────────────────────────────
+  window._lumen_pending_intercept_handler = null;
+
+  window._lumen_dispatch_navigate = function(type, url, canIntercept, hashChange) {
+    var destination = null;
+    if (url) {
+      try { destination = new URL(url, window.location.href); } catch (e) {}
+    }
+    var event = new NavigateEvent({
+      navigationType: type,
+      destination: destination,
+      hashChange: hashChange,
+      signal: new AbortSignal()
+    });
+    window.navigation.dispatchEvent(event);
+    if (event._isIntercepted()) {
+      window._lumen_navigation_report_intercept(true, false);
+      return true;
+    }
+    if (event.defaultPrevented) {
+      window._lumen_navigation_report_intercept(false, true);
+      return true;
+    }
+    return false;
+  };
+
+  window._lumen_run_navigate_handler = function() {
+    if (!window._lumen_pending_intercept_handler) return Promise.resolve();
+    var handler = window._lumen_pending_intercept_handler;
+    window._lumen_pending_intercept_handler = null;
+    return Promise.resolve().then(handler).then(function(result) {
+      var data = result || {};
+      _lumen_navigation_request(
+        6,
+        data.url || '',
+        '',
+        JSON.stringify({ state: data.state || null, title: data.title || '' })
+      );
+    }).catch(function() {
+      _lumen_navigation_request(7, '', '', '');
+    });
+  };
+
+  window._lumen_fire_navigate_success = function() {
+    window.navigation.dispatchEvent(new Event('navigatesuccess'));
+  };
+
+  window._lumen_fire_navigate_error = function() {
+    window.navigation.dispatchEvent(new Event('navigateerror'));
+  };
+
+  window._lumen_fire_currententrychange = function() {
+    window.navigation.dispatchEvent(new Event('currententrychange'));
+  };
 
   // Export classes
   globalThis.NavigationHistoryEntry = NavigationHistoryEntry;

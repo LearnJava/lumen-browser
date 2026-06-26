@@ -2168,6 +2168,7 @@ dependencies = [
  "pdf-writer",
  "regex",
  "rodio",
+ "serde_json",
  "winit",
 ]
 
