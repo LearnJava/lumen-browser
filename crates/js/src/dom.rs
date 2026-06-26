@@ -6,8 +6,8 @@
 //!
 //! Full CSS selector support via lumen_layout::query_all / matches_selector:
 //! tag, .class, #id, compound (div.foo), combinators ( > + ~), pseudo-classes.
-
 use std::collections::HashMap;
+
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicU32, Ordering},
@@ -145,6 +145,31 @@ pub enum HistoryUrlUpdate {
     },
 }
 
+// ─── Navigation API action tag ────────────────────────────────────────────────
+
+/// Discriminant embedded in `pending_navigation_updates` to tell the shell
+/// which Navigation API method produced this request.
+///
+/// The shell matches on the integer discriminant and reads the remaining fields
+/// as `(url, key, data)`.  Only `url` is populated for `Push`/`Replace`; only
+/// `key` for `TraverseTo`; only `data` for `TraverseBy` (data = `delta` string).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum NavAction {
+    Push       = 0,
+    Replace    = 1,
+    Back       = 2,
+    Forward    = 3,
+    TraverseTo = 4,
+    Reload     = 5,
+}
+
+// ─── Navigation API update record ─────────────────────────────────────────────
+
+/// Tuple stored in `pending_navigation_updates`:
+/// `(action, url, key, data)`.
+pub type NavUpdate = (NavAction, String, String, String);
+
 /// A popup window request emitted by JS `window.open(url, target, features)`.
 ///
 /// Captured in `window_open_requests` during script execution and drained by the
@@ -275,13 +300,18 @@ pub fn install_dom_api(
     // `history.go(n)` / `back` / `forward` traversal deltas queued by JS; drained
     // by the shell, which applies them to its real `nav_back`/`nav_fwd` stacks.
     pending_history_traversals: Arc<Mutex<Vec<i32>>>,
+    // Shell-backed Navigation API state (serialised JSON of the nav history list
+    // + current index). Updated by the shell; read by Navigation API accessors.
+    nav_state: Arc<Mutex<String>>,
+    // Queued by `_lumen_navigation_request`; drained by the shell in `about_to_wait`.
+    pending_navigation_updates: Arc<Mutex<Vec<NavUpdate>>>,
     fullscreen_requests: Arc<Mutex<Vec<FullscreenRequest>>>,
     print_requests: Arc<Mutex<Vec<PrintRequest>>>,
     pending_focus_requests: Arc<Mutex<Vec<Option<u32>>>>,
     // True when COOP=same-origin + COEP=require-corp are both present on this document.
     cross_origin_isolated: bool,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, sse_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, cache_backend, sw_worker_store, scroll_states, pending_scrolls, pending_page_scrolls, page_scroll_y, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages, pending_history_url_updates, pending_history_traversals, fullscreen_requests, print_requests, pending_focus_requests)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, sse_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, cache_backend, sw_worker_store, scroll_states, pending_scrolls, pending_page_scrolls, page_scroll_y, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages, pending_history_url_updates, pending_history_traversals, Arc::clone(&nav_state), Arc::clone(&pending_navigation_updates), fullscreen_requests, print_requests, pending_focus_requests)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -393,6 +423,8 @@ fn install_primitives(
     console_messages: Arc<Mutex<Vec<(u8, String)>>>,
     pending_history_url_updates: Arc<Mutex<Vec<HistoryUrlUpdate>>>,
     pending_history_traversals: Arc<Mutex<Vec<i32>>>,
+    nav_state: Arc<Mutex<String>>,
+    pending_navigation_updates: Arc<Mutex<Vec<NavUpdate>>>,
     fullscreen_requests: Arc<Mutex<Vec<FullscreenRequest>>>,
     print_requests: Arc<Mutex<Vec<PrintRequest>>>,
     pending_focus_requests: Arc<Mutex<Vec<Option<u32>>>>,
@@ -1158,6 +1190,93 @@ fn install_primitives(
                 q.lock()
                     .unwrap()
                     .push(HistoryUrlUpdate::Replace { url, new_state_json });
+            }
+        );
+    }
+
+    // ── Navigation API ──────────────────────────────────────────────────────────
+    // Shell-backed Navigation API.  All mutations are queued via
+    // `pending_navigation_updates`; the shell drains them in `about_to_wait`
+    // and is the single authority for the nav_back / nav_fwd stacks.
+    {
+        let ns_entries = Arc::clone(&nav_state);
+        let ns_index   = Arc::clone(&nav_state);
+        let ns_back    = Arc::clone(&nav_state);
+        let ns_fwd     = Arc::clone(&nav_state);
+        let ns_set     = Arc::clone(&nav_state);
+        let q          = Arc::clone(&pending_navigation_updates);
+
+        // ── accessors (read nav_state JSON, locked only for copy) ────────────────
+        reg!(
+            "_lumen_navigation_entries_json",
+            move || -> String {
+                ns_entries.lock().map(|s| s.clone()).unwrap_or_default()
+            }
+        );
+
+        reg!(
+            "_lumen_navigation_current_index",
+            move || -> i32 {
+                ns_index.lock()
+                    .ok()
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .map(|v: serde_json::Value| v.get("index").and_then(|i| i.as_i64()).unwrap_or(0) as i32)
+                    .unwrap_or(0)
+            }
+        );
+
+        reg!(
+            "_lumen_navigation_can_go_back",
+            move || -> bool {
+                ns_back.lock()
+                    .ok()
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .map(|v: serde_json::Value| {
+                        let idx = v.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
+                        let len = v.get("entries").and_then(|e| e.as_array()).map(|a| a.len()).unwrap_or(0);
+                        idx > 0 && len > 0
+                    })
+                    .unwrap_or(false)
+            }
+        );
+
+        reg!(
+            "_lumen_navigation_can_go_forward",
+            move || -> bool {
+                ns_fwd.lock()
+                    .ok()
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .map(|v: serde_json::Value| {
+                        let idx = v.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
+                        let len = v.get("entries").and_then(|e| e.as_array()).map(|a| a.len()).unwrap_or(0);
+                        idx + 1 < (len as u64)
+                    })
+                    .unwrap_or(false)
+            }
+        );
+
+        // ── state setter (called from shell via eval_js) ─────────────────────────
+        reg!(
+            "_lumen_navigation_set_state",
+            move |json: String| {
+                *ns_set.lock().unwrap() = json;
+            }
+        );
+
+        // ── navigation action queue ──────────────────────────────────────────────
+        reg!(
+            "_lumen_navigation_request",
+            move |action_code: u8, url: String, key: String, data: String| {
+                let action = match action_code {
+                    0 => NavAction::Push,
+                    1 => NavAction::Replace,
+                    2 => NavAction::Back,
+                    3 => NavAction::Forward,
+                    4 => NavAction::TraverseTo,
+                    5 => NavAction::Reload,
+                    _ => return,
+                };
+                q.lock().unwrap().push((action, url, key, data));
             }
         );
     }

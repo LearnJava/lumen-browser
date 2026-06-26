@@ -598,6 +598,7 @@ fn run_window_mode(
         bfcache: BfCache::new(16),
         nav_back: Vec::new(),
         nav_fwd: Vec::new(),
+        nav_key_counter: 0,
         form_state: HashMap::new(),
         validation_tooltip: None,
         color_picker_node: None,
@@ -1710,6 +1711,10 @@ struct NavEntry {
     /// `None` → full navigation (popping this entry reloads the page).
     /// `Some(json)` → same-document (popping fires `popstate` with this state).
     same_doc_state_json: Option<String>,
+    /// Navigation API key assigned by the shell for this entry.
+    /// Used by `navigation.traverseTo(key)` and reported via
+    /// `_lumen_navigation_entries_json` so JS can correlate entries.
+    nav_key: String,
 }
 
 impl NavEntry {
@@ -1978,6 +1983,14 @@ pub(crate) trait PersistentJs: Send {
     /// authority for traversal; the JS `HistoryState` is only a read-cache.
     #[allow(dead_code)]
     fn take_history_traversals(&self) -> Vec<i32>;
+    /// Drain Navigation API update requests queued by JS.
+    ///
+    /// Each entry is `(action, url, key, data)` where `action` is one of
+    /// `Push, Replace, Back, Forward, TraverseTo, Reload`.  The shell
+    /// processes these in `about_to_wait` to become the single authority
+    /// for `navigation.navigate()` / `back()` / `forward()` / `traverseTo()`.
+    #[allow(dead_code)]
+    fn take_nav_updates(&self) -> Vec<(u8, String, String, String)>;
     /// Fire a `popstate` event in JS for a same-document back/forward navigation.
     ///
     /// `state_json` is the already-serialised state for the destination entry.
@@ -2309,6 +2322,13 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn take_history_traversals(&self) -> Vec<i32> {
         self.rt.take_history_traversals()
+    }
+    fn take_nav_updates(&self) -> Vec<(u8, String, String, String)> {
+        self.rt
+            .take_nav_updates()
+            .into_iter()
+            .map(|(a, url, key, data)| (a as u8, url, key, data))
+            .collect()
     }
     fn fire_popstate(&self, state_json: &str, url: &str) {
         // Escape url for embedding in a JS string literal (single-quoted).
@@ -5431,6 +5451,9 @@ struct Lumen {
     /// Forward history stack — pages the user went back from.
     /// Top = most recently visited "forward" page.
     nav_fwd: Vec<NavEntry>,
+    /// Monotonic counter for Navigation API entry keys.
+    /// Incremented on each new entry so `key` is unique across the session.
+    nav_key_counter: u64,
     /// Runtime form control state (value, checked) keyed by NodeId.
     /// Persists for the lifetime of the current page; cleared on load/reload.
     form_state: forms::FormState,
@@ -7675,13 +7698,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         &mut self.current_history_state_json,
                         new_state_json,
                     );
-                    self.nav_back.push(NavEntry {
-                        source: self.source.clone(),
-                        scroll_x: self.scroll_x,
-                        scroll_y: self.scroll_y,
-                        display_url: old_display,
-                        same_doc_state_json: Some(old_state),
-                    });
+                     self.nav_key_counter += 1;
+                     self.nav_back.push(NavEntry {
+                         source: self.source.clone(),
+                         scroll_x: self.scroll_x,
+                         scroll_y: self.scroll_y,
+                         display_url: old_display,
+                         same_doc_state_json: Some(old_state),
+                         nav_key: format!("nav-{}", self.nav_key_counter),
+                     });
                     self.display_url = Some(url);
                 } else {
                     // replaceState: update URL + state, no nav_back push.
@@ -7704,6 +7729,29 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 .unwrap_or_default();
             for delta in traversals {
                 self.navigate_by(delta);
+            }
+        }
+
+        // ── Navigation API: drain queued navigation requests ─────────────────
+        // Shell is the single authority for `navigation.navigate()` / `back()` /
+        // `forward()` / `traverseTo()`. Each entry is `(action_code, url, key, data)`.
+        #[cfg(feature = "quickjs")]
+        {
+            let navs = self
+                .js_ctx
+                .as_ref()
+                .map(|js| js.take_nav_updates())
+                .unwrap_or_default();
+            for (action_code, url, _key, data) in navs {
+                match action_code {
+                    0 if !url.is_empty() => self.navigate_to(PageSource::Url(url)),
+                    1 if !url.is_empty() => self.navigate_replace(PageSource::Url(url)),
+                    2 => self.navigate_back(),
+                    3 => self.navigate_forward(),
+                    4 => { let _ = data; }
+                    5 => self.reload(),
+                    _ => {}
+                }
             }
         }
 
@@ -12453,6 +12501,49 @@ impl Lumen {
         }
     }
 
+    /// Commit the current navigation state to the JS side so that
+    /// `window.navigation.entries()` and `currentEntry` reflect the truth.
+    ///
+    /// Builds a serialised JSON of `nav_back` + current + `nav_fwd` with the
+    /// shell-assigned `nav_key` for each entry and pushes it via
+    /// `_lumen_navigation_set_state`.
+    fn commit_nav_state(&self) {
+        let mut entries: Vec<serde_json::Value> = Vec::new();
+        for e in &self.nav_back {
+            entries.push(serde_json::json!({
+                "url": e.source.url_str().unwrap_or(""),
+                "key": e.nav_key,
+                "id": format!("id-{}", e.nav_key.strip_prefix("nav-").unwrap_or("0")),
+                "state": e.same_doc_state_json.as_deref().unwrap_or("null"),
+            }));
+        }
+        let cur_url = self.source.url_str().unwrap_or("");
+        let cur_key = format!("nav-{}", self.nav_key_counter);
+        entries.push(serde_json::json!({
+            "url": cur_url,
+            "key": cur_key,
+            "id": format!("id-{}", self.nav_key_counter),
+            "state": self.current_history_state_json.as_str(),
+        }));
+        let idx = self.nav_back.len();
+        for e in &self.nav_fwd {
+            entries.push(serde_json::json!({
+                "url": e.source.url_str().unwrap_or(""),
+                "key": e.nav_key,
+                "id": format!("id-{}", e.nav_key.strip_prefix("nav-").unwrap_or("0")),
+                "state": e.same_doc_state_json.as_deref().unwrap_or("null"),
+            }));
+        }
+        let state = serde_json::json!({ "entries": entries, "index": idx });
+        let json = match serde_json::to_string(&state) {
+            Ok(j) => j,
+            Err(_) => return,
+        };
+        if let Some(js) = &self.js_ctx {
+            js.eval_js(&format!("_lumen_navigation_set_state({json})"));
+        }
+    }
+
     /// Сохранить текущую страницу в bfcache и стек навигации,
     /// затем загрузить `source` как новую страницу.
     /// Очищает `nav_fwd` (аналог браузера при навигации вперёд из середины истории).
@@ -12485,12 +12576,14 @@ impl Lumen {
             js.fire_page_lifecycle("pagehide", persisted);
         }
         // Push current page to back stack (full-doc entry: no same_doc_state_json).
+        self.nav_key_counter += 1;
         self.nav_back.push(NavEntry {
             source: self.source.clone(),
             scroll_x: self.scroll_x,
             scroll_y: self.scroll_y,
             display_url: None,
             same_doc_state_json: None,
+            nav_key: format!("nav-{}", self.nav_key_counter),
         });
         // New navigation invalidates forward history and resets same-doc state.
         self.nav_fwd.clear();
@@ -12498,6 +12591,7 @@ impl Lumen {
         self.current_history_state_json = String::from("null");
         // Load new page.
         self.source = source;
+        self.commit_nav_state();
         self.reload();
     }
 
@@ -12524,12 +12618,14 @@ impl Lumen {
                 &mut self.current_history_state_json,
                 state_json.clone(),
             );
+            self.nav_key_counter += 1;
             self.nav_fwd.push(NavEntry {
                 source: self.source.clone(),
                 scroll_x: self.scroll_x,
                 scroll_y: self.scroll_y,
                 display_url: cur_display,
                 same_doc_state_json: Some(cur_state),
+                nav_key: format!("nav-{}", self.nav_key_counter),
             });
             let url = prev.display_url.unwrap_or_default();
             self.display_url = if url.is_empty() { None } else { Some(url.clone()) };
@@ -12537,6 +12633,7 @@ impl Lumen {
                 js.fire_popstate(&state_json, &url);
             }
             self.request_redraw();
+            self.commit_nav_state();
             return;
         }
 
@@ -12551,13 +12648,15 @@ impl Lumen {
             &mut self.current_history_state_json,
             String::from("null"),
         );
+        self.nav_key_counter += 1;
         self.nav_fwd.push(NavEntry {
             source: self.source.clone(),
             scroll_x: self.scroll_x,
             scroll_y: self.scroll_y,
             display_url: cur_display,
-            // If we were in a same-doc state before this full-page nav, record it.
+
             same_doc_state_json: if cur_state != "null" { Some(cur_state) } else { None },
+            nav_key: format!("nav-{}", self.nav_key_counter),
         });
         // Try bfcache first.
         let restored_scroll = if let Some(url) = prev.source.url_str() {
@@ -12593,6 +12692,7 @@ impl Lumen {
         self.pending_restore_scroll = Some((sx, sy));
         self.reload();
         if let Some(w) = self.window.as_ref() { w.request_redraw(); }
+        self.commit_nav_state();
     }
 
     /// Перейти на следующую страницу в истории (Alt+Right).
@@ -12606,12 +12706,14 @@ impl Lumen {
                 &mut self.current_history_state_json,
                 state_json.clone(),
             );
+            self.nav_key_counter += 1;
             self.nav_back.push(NavEntry {
                 source: self.source.clone(),
                 scroll_x: self.scroll_x,
                 scroll_y: self.scroll_y,
                 display_url: cur_display,
                 same_doc_state_json: Some(cur_state),
+                nav_key: format!("nav-{}", self.nav_key_counter),
             });
             let url = next.display_url.unwrap_or_default();
             self.display_url = if url.is_empty() { None } else { Some(url.clone()) };
@@ -12619,6 +12721,7 @@ impl Lumen {
                 js.fire_popstate(&state_json, &url);
             }
             self.request_redraw();
+            self.commit_nav_state();
             return;
         }
 
@@ -12632,12 +12735,14 @@ impl Lumen {
             &mut self.current_history_state_json,
             String::from("null"),
         );
+        self.nav_key_counter += 1;
         self.nav_back.push(NavEntry {
             source: self.source.clone(),
             scroll_x: self.scroll_x,
             scroll_y: self.scroll_y,
             display_url: cur_display,
             same_doc_state_json: if cur_state != "null" { Some(cur_state) } else { None },
+            nav_key: format!("nav-{}", self.nav_key_counter),
         });
         // Try bfcache first.
         let restored_scroll = if let Some(url) = next.source.url_str() {
@@ -12670,6 +12775,7 @@ impl Lumen {
         let (sx, sy) = restored_scroll.unwrap_or((next.scroll_x, next.scroll_y));
         self.pending_restore_scroll = Some((sx, sy));
         self.reload();
+        self.commit_nav_state();
         if let Some(w) = self.window.as_ref() { w.request_redraw(); }
     }
 
@@ -12710,6 +12816,7 @@ impl Lumen {
         // positioned at the entry just before the destination. The final
         // navigate_back/forward then performs the one real (popstate/reload) hop.
         if steps > 1 {
+            self.nav_key_counter += 1;
             let mut cur = NavEntry {
                 source: self.source.clone(),
                 scroll_x: self.scroll_x,
@@ -12720,6 +12827,7 @@ impl Lumen {
                 } else {
                     None
                 },
+                nav_key: format!("nav-{}", self.nav_key_counter),
             };
             for _ in 1..steps {
                 cur = NavEntry::shift_history_entry(
@@ -17665,6 +17773,7 @@ mod navigate_by_tests {
             scroll_y: 0.0,
             display_url: Some(tag.to_string()),
             same_doc_state_json: Some(format!("\"{tag}\"")),
+            nav_key: format!("nav-{tag}"),
         }
     }
 

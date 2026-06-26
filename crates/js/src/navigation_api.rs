@@ -17,40 +17,25 @@ pub fn install_navigation_api(ctx: &Ctx) -> rquickjs::Result<()> {
 const NAVIGATION_API_SHIM: &str = r#"(function() {
   'use strict';
 
-  /// NavigationHistoryEntry class: represents a single entry in the navigation history.
-  class NavigationHistoryEntry {
-    constructor(url, key, id, index) {
-      this._url = url;
-      this._key = key;
-      this._id = id;
-      this._index = index;
-      this._state = null;
-    }
-
-    get url() {
-      return this._url;
-    }
-
-    get key() {
-      return this._key;
-    }
-
-    get id() {
-      return this._id;
-    }
-
-    get index() {
-      return this._index;
-    }
-
-    getState() {
-      return this._state;
-    }
-
-    _setState(state) {
-      this._state = state;
-    }
+/// NavigationHistoryEntry class: represents a single entry in the navigation history.
+/// Backed by the shell's `nav_back`/`nav_fwd` stacks — **not** an in-JS mirror.
+class NavigationHistoryEntry {
+  constructor(url, key, id, index) {
+    this._url = url;
+    this._key = key;
+    this._id = id;
+    this._index = index;
+    this._state = null;
   }
+
+  get url()      { return this._url; }
+  get key()      { return this._key; }
+  get id()       { return this._id; }
+  get index()    { return this._index; }
+
+  getState()     { return this._state; }
+  _setState(s)   { this._state = s; }
+}
 
   /// NavigateEvent: fired before navigation.
   class NavigateEvent extends Event {
@@ -101,96 +86,84 @@ const NAVIGATION_API_SHIM: &str = r#"(function() {
   }
 
   /// Navigation singleton class.
+  /// State is read from the shell; mutations are sent to the shell (single authority).
   class Navigation extends EventTarget {
     constructor() {
       super();
-      this._currentIndex = 0;
-      this._entries = [];
-      this._nextKeyId = 1;
+      this._keyCounter = 0;
       this._nextEntryId = 1;
+      this._synced = false;
+    }
 
-      // Initialize with single blank entry
-      const initialEntry = new NavigationHistoryEntry(
-        window.location.href,
-        'key-0',
-        'id-0',
-        0
-      );
-      this._entries.push(initialEntry);
+    /** Build a fresh key string. */
+    _mkKey() { return String(this._keyCounter++); }
+    _mkId()  { return 'id-' + String(this._nextEntryId++); }
+
+    // ── shell-backed state accessors ──────────────────────────────────────────
+
+    get _shellEntries() {
+      try {
+        const raw = _lumen_navigation_entries_json();
+        return JSON.parse(raw);
+      } catch { return []; }
+    }
+
+    get _currentIndex() {
+      try { return _lumen_navigation_current_index(); } catch { return 0; }
     }
 
     get currentEntry() {
-      return this._entries[this._currentIndex] || null;
+      const entries = this._shellEntries;
+      const i = this._currentIndex;
+      if (!entries.length || i < 0 || i >= entries.length) return null;
+      const e = entries[i];
+      const entry = new NavigationHistoryEntry(e.url, e.key, e.id, i);
+      entry._setState(e.state);
+      return entry;
     }
 
     entries() {
-      return [...this._entries];
+      const entries = this._shellEntries;
+      const i = this._currentIndex;
+      return entries.map((e, idx) => {
+        const entry = new NavigationHistoryEntry(e.url, e.key, e.id, idx);
+        entry._setState(e.state);
+        return entry;
+      });
     }
+
+    canGoBack()    { try { return _lumen_navigation_can_go_back(); }    catch { return false; } }
+    canGoForward() { try { return _lumen_navigation_can_go_forward(); } catch { return false; } }
+
+    // ── navigation methods (fire navigate event, shell commits) ─────────────
 
     navigate(url, options = {}) {
       const {state, replace} = options;
-
       return new Promise((resolve, reject) => {
+        // Enqueue the request for the shell to process.
+        const key = this._mkKey();
+        const id  = this._mkId();
+        const stateJson = JSON.stringify(state !== undefined ? state : null);
+        const action = replace ? 'Replace' : 'Push';
+        try {
+          _lumen_navigation_request(action, url, key, stateJson);
+        } catch { reject(new Error('Navigation queue full')); return; }
+
+        // Allow the shell to process and fire events.
         setTimeout(() => {
-          const navigateEvent = new NavigateEvent({
-            navigationType: replace ? 'replace' : 'push',
-            userInitiated: true,
-            destination: {
-              url: url,
-              key: '',
-              id: ''
+          try {
+            const newEntries = this._shellEntries;
+            const newIdx = this._currentIndex;
+            const entry = newEntries[newIdx];
+            if (!entry || entry.key !== key) {
+              // Shell either recycled the queue or navigated elsewhere; resolve anyway.
+              resolve({ committed: Promise.resolve(this.currentEntry), finished: Promise.resolve(this.currentEntry) });
+              return;
             }
-          });
-
-          // Dispatch navigate event
-          const dispatchResult = this.dispatchEvent(navigateEvent);
-
-          if (!dispatchResult) {
-            // Event was cancelled
-            const errorEvent = new Event('navigateerror');
-            errorEvent.error = new Error('Navigation cancelled');
-            this.dispatchEvent(errorEvent);
-            reject(new Error('Navigation cancelled'));
-            return;
-          }
-
-          // Wait for intercept handler if present
-          navigateEvent._getHandledPromise()
-            .then(() => {
-              // Perform navigation
-              const newEntry = new NavigationHistoryEntry(
-                url,
-                'key-' + (this._nextKeyId++),
-                'id-' + (this._nextEntryId++),
-                replace ? this._currentIndex : this._currentIndex + 1
-              );
-              newEntry._setState(state);
-
-              if (replace) {
-                this._entries[this._currentIndex] = newEntry;
-              } else {
-                // Remove forward history if present
-                this._entries = this._entries.slice(0, this._currentIndex + 1);
-                this._entries.push(newEntry);
-                this._currentIndex++;
-              }
-
-              // Dispatch navigatesuccess event
-              this.dispatchEvent(new Event('navigatesuccess'));
-              this.dispatchEvent(new Event('currententrychange'));
-
-              resolve({
-                committed: Promise.resolve(this.currentEntry),
-                finished: Promise.resolve(this.currentEntry)
-              });
-            })
-            .catch((error) => {
-              // Dispatch navigateerror event
-              const errorEvent = new Event('navigateerror');
-              errorEvent.error = error;
-              this.dispatchEvent(errorEvent);
-              reject(error);
-            });
+            const entryObj = new NavigationHistoryEntry(entry.url, entry.key, entry.id, newIdx);
+            entryObj._setState(entry.state);
+            resolve({ committed: Promise.resolve(entryObj), finished: Promise.resolve(entryObj) });
+          } catch { resolve({ committed: Promise.resolve(this.currentEntry), finished: Promise.resolve(this.currentEntry) }); }
         }, 0);
       });
     }
@@ -204,65 +177,40 @@ const NAVIGATION_API_SHIM: &str = r#"(function() {
     }
 
     traverseTo(key, options = {}) {
-      const entry = this._entries.find((e) => e.key === key);
-      if (!entry) {
-        return Promise.reject(new Error('No entry with key: ' + key));
-      }
-
-      const delta = this._entries.indexOf(entry) - this._currentIndex;
-      return this._traverseBy(delta, options);
+      return new Promise((resolve, reject) => {
+        try {
+          _lumen_navigation_request('TraverseTo', '', key, '');
+        } catch { reject(new Error('Navigation queue full')); return; }
+        setTimeout(() => {
+          const entries = this._shellEntries;
+          const i = this._currentIndex;
+          const entry = entries[i];
+          if (!entry || entry.key !== key) {
+            reject(new Error('Traversal target no longer valid'));
+            return;
+          }
+          const obj = new NavigationHistoryEntry(entry.url, entry.key, entry.id, i);
+          obj._setState(entry.state);
+          resolve({ committed: Promise.resolve(obj), finished: Promise.resolve(obj) });
+        }, 0);
+      });
     }
 
     _traverseBy(delta, options = {}) {
       return new Promise((resolve, reject) => {
         setTimeout(() => {
-          const newIndex = this._currentIndex + delta;
-
-          if (newIndex < 0 || newIndex >= this._entries.length) {
-            reject(new Error('Cannot traverse beyond history bounds'));
-            return;
-          }
-
-          const oldEntry = this.currentEntry;
-          const newEntry = this._entries[newIndex];
-
-          const navigateEvent = new NavigateEvent({
-            navigationType: delta > 0 ? 'forward' : 'back',
-            userInitiated: true,
-            destination: {
-              url: newEntry.url,
-              key: newEntry.key,
-              id: newEntry.id
-            }
-          });
-
-          const dispatchResult = this.dispatchEvent(navigateEvent);
-
-          if (!dispatchResult) {
-            const errorEvent = new Event('navigateerror');
-            errorEvent.error = new Error('Traversal cancelled');
-            this.dispatchEvent(errorEvent);
-            reject(new Error('Traversal cancelled'));
-            return;
-          }
-
-          navigateEvent._getHandledPromise()
-            .then(() => {
-              this._currentIndex = newIndex;
-              this.dispatchEvent(new Event('navigatesuccess'));
-              this.dispatchEvent(new Event('currententrychange'));
-
-              resolve({
-                committed: Promise.resolve(newEntry),
-                finished: Promise.resolve(newEntry)
-              });
-            })
-            .catch((error) => {
-              const errorEvent = new Event('navigateerror');
-              errorEvent.error = error;
-              this.dispatchEvent(errorEvent);
-              reject(error);
-            });
+          try {
+            _lumen_navigation_request('TraverseBy', '', '', String(delta));
+          } catch { reject(new Error('Navigation queue full')); return; }
+          setTimeout(() => {
+            const entries = this._shellEntries;
+            const i = this._currentIndex;
+            const e = entries[i];
+            if (!e) { reject(new Error('No current entry after traversal')); return; }
+            const obj = new NavigationHistoryEntry(e.url, e.key, e.id, i);
+            obj._setState(e.state);
+            resolve({ committed: Promise.resolve(obj), finished: Promise.resolve(obj) });
+          }, 0);
         }, 0);
       });
     }
