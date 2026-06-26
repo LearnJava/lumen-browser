@@ -272,13 +272,16 @@ pub fn install_dom_api(
     deterministic_seed: Option<u64>,
     console_messages: Arc<Mutex<Vec<(u8, String)>>>,
     pending_history_url_updates: Arc<Mutex<Vec<HistoryUrlUpdate>>>,
+    // `history.go(n)` / `back` / `forward` traversal deltas queued by JS; drained
+    // by the shell, which applies them to its real `nav_back`/`nav_fwd` stacks.
+    pending_history_traversals: Arc<Mutex<Vec<i32>>>,
     fullscreen_requests: Arc<Mutex<Vec<FullscreenRequest>>>,
     print_requests: Arc<Mutex<Vec<PrintRequest>>>,
     pending_focus_requests: Arc<Mutex<Vec<Option<u32>>>>,
     // True when COOP=same-origin + COEP=require-corp are both present on this document.
     cross_origin_isolated: bool,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, sse_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, cache_backend, sw_worker_store, scroll_states, pending_scrolls, pending_page_scrolls, page_scroll_y, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages, pending_history_url_updates, fullscreen_requests, print_requests, pending_focus_requests)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, sse_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, sw_backend, cache_backend, sw_worker_store, scroll_states, pending_scrolls, pending_page_scrolls, page_scroll_y, computed_styles, Arc::clone(&window_open_requests), deterministic_seed, console_messages, pending_history_url_updates, pending_history_traversals, fullscreen_requests, print_requests, pending_focus_requests)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -389,6 +392,7 @@ fn install_primitives(
     deterministic_seed: Option<u64>,
     console_messages: Arc<Mutex<Vec<(u8, String)>>>,
     pending_history_url_updates: Arc<Mutex<Vec<HistoryUrlUpdate>>>,
+    pending_history_traversals: Arc<Mutex<Vec<i32>>>,
     fullscreen_requests: Arc<Mutex<Vec<FullscreenRequest>>>,
     print_requests: Arc<Mutex<Vec<PrintRequest>>>,
     pending_focus_requests: Arc<Mutex<Vec<Option<u32>>>>,
@@ -1103,6 +1107,15 @@ fn install_primitives(
         let h = Arc::clone(&hist);
         reg!("_lumen_history_go", move |delta: i32| -> bool {
             h.lock().unwrap().go(delta)
+        });
+
+        // Queue a real session-history traversal for the shell. `history.go(n)` /
+        // `back` / `forward` call this so the shell (single authority) moves its
+        // `nav_back`/`nav_fwd` stacks by `delta` and delivers the destination
+        // popstate or reload — the JS `HistoryState` above is only a read-cache.
+        let t = Arc::clone(&pending_history_traversals);
+        reg!("_lumen_history_traverse", move |delta: i32| {
+            t.lock().unwrap().push(delta);
         });
 
         let h = Arc::clone(&hist);
@@ -6562,12 +6575,15 @@ var history = {
             _lumen_reload();
             return;
         }
-        // Non-zero delta: move the history cursor; on success deliver popstate
-        // through the same path as a shell-driven traversal so location sync and
-        // PopStateEvent semantics are identical (no ad-hoc inline event object).
+        // Non-zero delta: traversal is now SHELL-AUTHORITATIVE. Move the JS
+        // read-cache cursor (keeps history.state/length and pushState truncation
+        // correct), and on success queue the real traversal so the shell moves
+        // its nav_back/nav_fwd stacks and delivers the destination popstate (same-
+        // document) or reload (full-document). We no longer fire popstate here —
+        // that avoids a double popstate and lets the shell decide same-doc vs reload.
         var ok = _lumen_history_go((delta | 0));
         if (ok) {
-            _lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url());
+            _lumen_history_traverse((delta | 0));
         }
     },
 };
@@ -13560,6 +13576,12 @@ mod tests {
              history.back();",
         )
         .unwrap();
+        // Traversal is shell-authoritative: history.back() moved the read-cache
+        // cursor and queued a -1 delta, but the popstate is delivered by the shell.
+        // Simulate the shell handing the destination entry back to JS.
+        assert_eq!(rt.take_history_traversals(), vec![-1]);
+        rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
+            .unwrap();
         let len = rt.eval("events.length").unwrap();
         assert_eq!(len, lumen_core::JsValue::Number(1.0));
         let page = rt.eval("events[0].page").unwrap();
@@ -13644,8 +13666,64 @@ mod tests {
              history.go(-1);",
         )
         .unwrap();
+        // go(-1) queued the traversal and moved the read-cache cursor; the shell
+        // delivers the popstate that syncs `location`. Simulate that delivery.
+        assert_eq!(rt.take_history_traversals(), vec![-1]);
+        rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
+            .unwrap();
         let path = rt.eval("location.pathname").unwrap();
         assert_eq!(path, lumen_core::JsValue::String("/p1".into()));
+    }
+
+    #[test]
+    fn history_go_queues_single_step_traversal() {
+        let rt = runtime_with_url("https://example.com/start");
+        rt.eval(
+            "history.pushState({},'','/p1'); \
+             history.pushState({},'','/p2'); \
+             history.back();",
+        )
+        .unwrap();
+        // back() routes through history.go(-1): one shell traversal queued.
+        assert_eq!(rt.take_history_traversals(), vec![-1]);
+    }
+
+    #[test]
+    fn history_go_multistep_queues_full_delta_and_moves_cache() {
+        let rt = runtime_with_url("https://example.com/start");
+        rt.eval(
+            "history.pushState({n:1},'','/p1'); \
+             history.pushState({n:2},'','/p2'); \
+             history.pushState({n:3},'','/p3'); \
+             history.go(-2);",
+        )
+        .unwrap();
+        // The full multi-step delta is queued once (the shell fires a single
+        // destination popstate), and the read-cache cursor jumped two entries.
+        assert_eq!(rt.take_history_traversals(), vec![-2]);
+        assert_eq!(
+            rt.eval("history.state.n").unwrap(),
+            lumen_core::JsValue::Number(1.0)
+        );
+    }
+
+    #[test]
+    fn history_go_zero_does_not_queue_traversal() {
+        let rt = runtime_with_url("https://example.com/");
+        rt.eval("history.go(0)").unwrap();
+        assert!(rt.take_history_traversals().is_empty());
+        assert!(matches!(
+            rt.take_navigate_request(),
+            Some(NavigateRequest::Reload)
+        ));
+    }
+
+    #[test]
+    fn history_go_out_of_range_does_not_queue_traversal() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("history.go(7)").unwrap();
+        // Out of range in the read-cache → no traversal handed to the shell.
+        assert!(rt.take_history_traversals().is_empty());
     }
 
     #[test]

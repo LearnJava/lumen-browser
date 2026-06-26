@@ -281,6 +281,14 @@ pub struct QuickJsRuntime {
     /// entry here.  The shell drains via `take_history_url_updates()` and updates
     /// the address-bar display URL and navigation stack accordingly.
     pending_history_url_updates: Arc<Mutex<Vec<dom::HistoryUrlUpdate>>>,
+    /// `history.go(n)` / `back` / `forward` traversal deltas.
+    ///
+    /// Each non-zero `history.go(delta)` (and `back`/`forward`, which call it)
+    /// appends `delta` here. The shell drains via `take_history_traversals()` and
+    /// applies each to its real `nav_back`/`nav_fwd` stacks — the single authority
+    /// for traversal. The in-JS `HistoryState` mirror is only a synchronous
+    /// read-cache for `history.length`/`history.state` and pushState truncation.
+    pending_history_traversals: Arc<Mutex<Vec<i32>>>,
     /// Fullscreen requests emitted by `element.requestFullscreen()` and
     /// `document.exitFullscreen()`.
     ///
@@ -458,6 +466,7 @@ impl QuickJsRuntime {
             shared_worker_outbox: Arc::new(Mutex::new(Vec::new())),
             pending_focus_requests: Arc::new(Mutex::new(Vec::new())),
             pending_history_url_updates: Arc::new(Mutex::new(Vec::new())),
+            pending_history_traversals: Arc::new(Mutex::new(Vec::new())),
             fullscreen_requests: Arc::new(Mutex::new(Vec::new())),
             view_transition_events: Arc::new(Mutex::new(Vec::new())),
             print_requests: Arc::new(Mutex::new(Vec::new())),
@@ -731,6 +740,7 @@ impl QuickJsRuntime {
                 deterministic_seed,
                 Arc::clone(&self.console_messages),
                 Arc::clone(&self.pending_history_url_updates),
+                Arc::clone(&self.pending_history_traversals),
                 Arc::clone(&self.fullscreen_requests),
                 Arc::clone(&self.print_requests),
                 Arc::clone(&self.pending_focus_requests),
@@ -1613,6 +1623,16 @@ impl QuickJsRuntime {
     /// and the same-document navigation stack.
     pub fn take_history_url_updates(&self) -> Vec<dom::HistoryUrlUpdate> {
         std::mem::take(&mut *self.pending_history_url_updates.lock().unwrap())
+    }
+
+    /// Drain all `history.go(n)` / `back` / `forward` traversal deltas queued by
+    /// JS. Each `delta` (negative = back, positive = forward) is applied by the
+    /// shell to its real `nav_back`/`nav_fwd` stacks (single authority for
+    /// traversal), which delivers the destination popstate or reload.
+    ///
+    /// Returns an empty `Vec` when no traversal was requested.
+    pub fn take_history_traversals(&self) -> Vec<i32> {
+        std::mem::take(&mut *self.pending_history_traversals.lock().unwrap())
     }
 
     /// Drain all fullscreen requests queued by `element.requestFullscreen()` and
