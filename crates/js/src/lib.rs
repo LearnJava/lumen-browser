@@ -23,6 +23,7 @@ pub mod clipboard;
 pub mod contacts;
 pub mod cookie_banner;
 pub mod cookie_store;
+pub mod storage_buckets;
 pub mod payment_request;
 pub mod credentials;
 pub mod device_sensors;
@@ -989,6 +990,14 @@ impl QuickJsRuntime {
             // get/getAll/set/delete and CookieChangeEvent. Phase 0: in-memory store.
             if let Err(e) = cookie_store::init_cookie_store(&ctx) {
                 eprintln!("Cookie Store API init failed: {}", e);
+            }
+
+            // Install Storage Buckets API (W3C Storage Buckets, Phase 0) — after DOM so
+            // Promise, navigator and DOMException are available. Provides
+            // navigator.storageBuckets with open/keys/delete and StorageBucket objects.
+            // Phase 0: in-memory buckets for the lifetime of the JS context.
+            if let Err(e) = storage_buckets::init_storage_buckets(&ctx) {
+                eprintln!("Storage Buckets API init failed: {}", e);
             }
 
             // Install cookie-banner auto-dismiss shim (7C.3) — last, after full DOM.

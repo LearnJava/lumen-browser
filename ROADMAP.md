@@ -159,7 +159,7 @@ FIXED/DEBTOR → `done`, IN PROGRESS → `active`) и из подзадач (в�
 | P3-webtransport | P3 | | planned | | | | WebTransport (поверх HTTP/3) |
 | P3-reporting | P3 | | planned | | | | Reporting API + Network Error Logging |
 | P3-earlyhints | P3 | | planned | | | | fetch Priority Hints + 103 Early Hints |
-| P3-storagebuckets | P3 | | planned | | | | Storage Buckets API + quota management |
+| P3-storagebuckets | P3 | | done | | | P1 2026-06-26 (navigator.storageBuckets open/keys/delete + StorageBucket persist/estimate/durability/expires/getDirectory, Phase 0 in-memory) | Storage Buckets API + quota management |
 | P3-permissions | P3 | | planned | | | | Permissions API (query / onchange) |
 | P3-notifications | P3 | | planned | | | | Notifications API + системные уведомления |
 | P3-pushapi | P3 | | planned | | | | Push API (через Service Worker) |
