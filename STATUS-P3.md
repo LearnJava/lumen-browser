@@ -1,14 +1,53 @@
-ROADMAP.md:118 — done (navapi blocked; last commit `e31a08ee` completed Steps 8–10)
-ROADMAP.md:124 — ph3-color-management complete (Steps 1–7 done; remaining OPEN items belong to other feature owners or require hardware verification)
-   - Step 1: done — commit `c486539c` (`DisplayColorProfile` trait, Windows GDI `GetICMProfileA`, `Lumen::target_color_space()`).
-   - Step 2: done — commit `ff18c93a` (`IccProfile::build_rgb_transform_to(target)` DisplayP3/Rec2020 matrices, `RgbTransform.encode`, `ColorFloat::to_display(target)`).
-   - Step 3: done — commit `72a7dfaa` (carry `ColorSpace` in `GradientStop`; `Color` derives `Default`).
-   - Step 4: done — commit `510b0e6d` (wgpu renderer selects wide-gamut format `Rgba16Float` for DisplayP3/Rec2020; `Renderer::target_color_space()` getter; `WgpuBackend::target_color_space()`).
-   - Step 5: done — commit `510b0e6d` (`set_canvas_background` wired into wgpu backend; `LoadOpChoice::Clear(wgpu::Color)`; sRGB→DisplayP3/Rec2020 gamma+matrix conversion at frame start; `Renderer::wgpu_color_for_canvas_bg`).
-   - Step 6: done — commit `510b0e6d` (`decode_to(bytes, target)` added to `lumen-image`; `color_manage_in_place` target-aware; shell threads `self.target_color_space()` through all decode paths; per-pixel P3↔Rec2020 converters added).
-   - Step 7: done — `WgpuBackend::is_wide_gamut()`; femtoovg 8-bit sRGB constraint documented.
-   All per-crate tests pass (lumen-core 277, lumen-image 152, lumen-paint 813).
-   Out-of-scope OPEN bugs (NOT ph3-color-management responsibility):
-     - BUG-255/256: Navigation API state serialization + nav-key collision — belongs to `P1-ph3-navapi` feature owner.
-     - BUG-257: GDI `GetICMProfileA` NULL-buffer early-return — requires runtime verification on physical P3 monitor; owned by shell/platform/display-color-profile.
-     - BUG-252/253: already FIXED 2026-06-27 (clippy dead code + rec2020 OETF sign).
+Verification audit 2026-06-27 (all tests via `cargo test --lib -p <crate>` unless noted):
+
+=lumen-core=: 278 passed
+=lumen-image=: 152 passed
+=lumen-paint=: 813 passed
+=lumen-layout=: 3011 passed (incl. inline doctests)
+=lumen-js=: 2324 passed
+=lumen-css-parser=: all checks pass
+=lumen-driver=: 111 passed; 2 pre-existing failures (BUG-250 font baseline, BUG-247 SVG AA) — unrelated to P3-color
+
+## DONE (implemented + tested)
+
+P3-color (ph3-color-management): Steps 1–7 complete, pushed 510b0e6d + bbd9802c. BUG-252/253/255/256/257 fixed.
+P3-colormix: color_mix.rs (12 interpolation spaces) + parse_color_mix wired in style.rs; 30 tests pass.
+P3-navapi: shell history stacks + JS Navigation singleton + BUG-255/256 fixes; navigate_to/back/forward/navigate_by/replaceState/pushState fully wired.
+P3-bfcache: HTML-snapshot store/retrieve + scroll restore + pageshow persisted flag.
+P3-varfonts: BUG-109 fixed; vector outlines render path in femtovg + wgpu; variation axes parsed.
+P3-regprop: @property parsing + syntax validation + inherits/initial-value inheritance; 30+ tests pass.
+P3-subgrid: Grid L2 subgrid columns/rows inherited track sizes + collect_subgrid_items; 9 tests pass.
+P3-has: :has() selector parsing + cascade matching; 86 tests pass.
+P3-nesting: CSS Nesting L1 parser (explicit `&` + implicit descendant/child/relative combinators + nested at-rules); 17 parser tests + cascade tests pass.
+P3-textwrap: text-wrap-mode / text-wrap-style / text-wrap shorthand parsed + inherited; balance widening/narrowing tests pass (5 tests).
+P3-multicol: column-count / column-width / column-gap / column-fill balance/auto / column-span all; 9 tests pass.
+P3-resizeobs: ResizeObserver JS singleton + `_lumen_deliver_resize_observers` + border-box-size entries; tests pass.
+P3-intersectobs2: IntersectionObserver v2 (threshold, rootMargin, unobserve, lazy-image integration); 10 tests pass.
+P3-streams: WritableStream + sink/pipeThrough + backpressure; 59 stream-related tests pass.
+P3-webcrypto: SubtleCrypto HMAC + ECDSA + AES-GCM + import/export JWK/PKCS8; 16 tests pass.
+P3-weblocks: LockManager + query/request/ifAvailable; 6 tests pass.
+P3-broadcast: BroadcastChannel name-isolation + message delivery + close; 14 tests pass.
+P3-clipboard: Async Clipboard read/write text; tests pass.
+P3-cookiestore: Cookie Store API partitioned by origin; tests pass.
+P3-cacheapi: CacheStorage + Cache + match/put/delete/keys on sqlite backend; 32 tests pass.
+P3-permissions: Permissions.query + onchange + per-name grants; 10 tests pass.
+P3-notifications: Notification.requestPermission + show + SW getNotifications; 26 tests pass.
+P3-offscreencanvas: OffscreenCanvas transfer + 2D native from ImageData; 24 tests pass.
+
+## IN PROGRESS / NEEDS WORK
+
+P3-bfcache: HTML snapshot works; JS heap freeze (Frozen payload) is stubbed — requires heap serialization for full bfcache.
+P3-anchorpos: anchor-name / position-anchor parsed; `anchor()` function resolution exists but L1 `inset-area` / `position-area` may be partial.
+P3-scope: CSS @scope at-rule may not be parsed/applied (no tests found).
+P3-stylequery: Container style queries (`style()` function) likely not implemented (no tests found).
+P3-counterstyle: @counter-style at-rule may be parsed but not wired to marker generation.
+P3-fragmentation: break-inside / widows / orphans props likely stubbed.
+P3-initialletter: initial-letter drop-cap not implemented in layout.
+P3-vertical: CSS writing-mode vertical text (full layout) not implemented.
+P3-pushapi: Push API file exists but may be stub-level.
+P3-reporting: Reporting API stub-level.
+P3-earlyhints: 103 Early Hints + fetch Priority Hints — may need server-side simulation.
+
+Next concrete task: implement one of the clearly-incomplete CSS layout features
+(e.g. P3-vertical, P3-initialletter, P3-fragmentation, P3-multicol rule/gap completeness)
+or a JS API stub upgrade (e.g. P3-pushapi, P3-reporting, P3-structuredClone).
