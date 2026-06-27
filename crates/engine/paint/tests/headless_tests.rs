@@ -6,6 +6,7 @@
 /// Run explicitly with:
 ///   cargo test -p lumen-paint --test headless_tests -- --include-ignored
 use lumen_core::geom::Rect;
+use lumen_core::ColorSpace;
 use lumen_layout::Color;
 use lumen_paint::{DisplayCommand, Renderer};
 
@@ -21,7 +22,7 @@ fn red_rect_dl(w: f32, h: f32) -> Vec<DisplayCommand> {
 #[test]
 #[ignore = "requires GPU adapter"]
 fn headless_render_dimensions() {
-    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 48)
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 48, ColorSpace::Srgb)
         .expect("headless renderer");
     let img = r.render_to_image(&red_rect_dl(64.0, 48.0), 0.0, 0.0)
         .expect("render_to_image");
@@ -33,7 +34,7 @@ fn headless_render_dimensions() {
 #[test]
 #[ignore = "requires GPU adapter"]
 fn headless_render_red_rect() {
-    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 64)
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 64, ColorSpace::Srgb)
         .expect("headless renderer");
     r.set_font_provider(None);
     let img = r.render_to_image(&red_rect_dl(64.0, 64.0), 0.0, 0.0)
@@ -52,7 +53,7 @@ fn headless_render_red_rect() {
 #[test]
 #[ignore = "requires GPU adapter"]
 fn headless_resize_updates_dimensions() {
-    let mut r = Renderer::new_headless(INTER.to_vec(), 32, 32)
+    let mut r = Renderer::new_headless(INTER.to_vec(), 32, 32, ColorSpace::Srgb)
         .expect("headless renderer");
     r.resize(128, 96);
     let img = r.render_to_image(&red_rect_dl(128.0, 96.0), 0.0, 0.0)

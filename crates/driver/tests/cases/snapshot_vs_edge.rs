@@ -191,7 +191,7 @@ fn snapshot_vs_edge() {
     const W: u32 = 1024;
     const H: u32 = 720;
     let font = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf").to_vec();
-    let mut renderer = lumen_paint::Renderer::new_headless(font, W, H)
+    let mut renderer = lumen_paint::Renderer::new_headless(font, W, H, lumen_core::ColorSpace::Srgb)
         .expect("headless renderer init");
 
     let mut pass = 0usize;

@@ -9,6 +9,7 @@
 
 use lumen_core::ext::DisplayColorProfile;
 use lumen_core::ColorSpace;
+use std::sync::OnceLock;
 
 // ── Platform dispatch ──────────────────────────────────────────────────────────
 
@@ -51,7 +52,8 @@ mod windows_impl {
             }
 
             let mut buf_size: u32 = 0;
-            if GetICMProfileA(hdc, std::ptr::null_mut(), &mut buf_size) == 0 || buf_size == 0 {
+            GetICMProfileA(hdc, std::ptr::null_mut(), &mut buf_size);
+            if buf_size == 0 {
                 let _ = DeleteDC(hdc);
                 return None;
             }
@@ -80,23 +82,23 @@ mod windows_impl {
 
     /// Windows display-color-profile provider via GDI `GetICMProfile`.
     ///
-    /// Queries the primary display's ICC profile path once and caches the result.
-    /// All subsequent calls return the cached value.
-    #[derive(Debug, Clone, Copy, Default)]
+    /// Queries the primary display's ICC profile path once and caches the result
+    /// via `OnceLock`. All subsequent calls return the cached value without
+    /// re-querying GDI.
+    #[derive(Debug, Clone, Default)]
     pub struct PlatformDisplayColorProfile {
-        cached: Option<ColorSpace>,
+        cached: OnceLock<ColorSpace>,
     }
 
     impl PlatformDisplayColorProfile {
         pub fn new() -> Self {
-            Self { cached: None }
+            Self { cached: OnceLock::new() }
         }
     }
 
     impl DisplayColorProfile for PlatformDisplayColorProfile {
         fn active_profile(&self) -> ColorSpace {
-            self.cached
-                .unwrap_or_else(|| query_gdi_icc_profile().unwrap_or(ColorSpace::Srgb))
+            *self.cached.get_or_init(|| query_gdi_icc_profile().unwrap_or(ColorSpace::Srgb))
         }
     }
 }
