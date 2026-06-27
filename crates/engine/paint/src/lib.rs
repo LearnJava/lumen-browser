@@ -142,12 +142,7 @@ impl<'a> TextMeasurer for FontMeasurer<'a> {
     }
 
     fn descent_px(&self, font_size_px: f32) -> f32 {
-        let total = self.ascent_units as f32 + self.descent_units as f32;
-        if total > 0.0 {
-            (self.descent_units as f32 / total) * font_size_px
-        } else {
-            font_size_px * 0.2
-        }
+        self.descent_units as f32 * font_size_px / self.units_per_em as f32
     }
 
     fn ascent_px(&self, font_size_px: f32) -> f32 {
