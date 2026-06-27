@@ -408,6 +408,56 @@ impl IccProfile {
             green_trc: self.green_trc.clone().unwrap_or(ToneCurve::Identity),
             blue_trc: self.blue_trc.clone().unwrap_or(ToneCurve::Identity),
             matrix,
+            encode: srgb_encode,
+        })
+    }
+
+    /// Compiles a matrix-shaper transform from device RGB to gamma-encoded
+    /// target gamut (sRGB, Display P3, or Rec.2020).
+    ///
+    /// Generalises [`build_rgb_transform`] to an arbitrary [`ColorSpace`] target
+    /// by swapping the final linear→target-linear matrix and the output
+    /// transfer function. The device-linear→target-linear path is still built
+    /// from the profile's actual colorants plus Bradford D50→D65 adaptation,
+    /// so any RGB matrix-shaper profile renders colour-correct on a wide-gamut
+    /// display.
+    ///
+    /// Returns `None` for non-RGB profiles or RGB profiles missing colorants
+    /// (LUT-only). Unsupported targets fall back to `build_rgb_transform()`.
+    pub fn build_rgb_transform_to(&self, target: crate::ColorSpace) -> Option<RgbTransform> {
+        if self.data_color_space != DataColorSpace::Rgb {
+            return None;
+        }
+        let (r, g, b) = (self.red_xyz?, self.green_xyz?, self.blue_xyz?);
+        let r = crate::pcs::Xyz::from(r).d50_to_d65();
+        let g = crate::pcs::Xyz::from(g).d50_to_d65();
+        let b = crate::pcs::Xyz::from(b).d50_to_d65();
+
+        let target_matrix = match target {
+            crate::ColorSpace::Srgb => &XYZ_D65_TO_SRGB,
+            crate::ColorSpace::DisplayP3 => &XYZ_D65_TO_DISPLAYP3_LINEAR,
+            crate::ColorSpace::Rec2020 => &XYZ_D65_TO_REC2020_LINEAR,
+            crate::ColorSpace::Lab => &XYZ_D65_TO_SRGB,
+        };
+        let target_encode: fn(f64) -> f64 = match target {
+            crate::ColorSpace::Srgb | crate::ColorSpace::DisplayP3 => srgb_encode,
+            crate::ColorSpace::Rec2020 => rec2020_encode,
+            crate::ColorSpace::Lab => srgb_encode,
+        };
+
+        let colorant = [
+            [r.x, g.x, b.x],
+            [r.y, g.y, b.y],
+            [r.z, g.z, b.z],
+        ];
+        let matrix = matmul3(target_matrix, &colorant);
+
+        Some(RgbTransform {
+            red_trc: self.red_trc.clone().unwrap_or(ToneCurve::Identity),
+            green_trc: self.green_trc.clone().unwrap_or(ToneCurve::Identity),
+            blue_trc: self.blue_trc.clone().unwrap_or(ToneCurve::Identity),
+            matrix,
+            encode: target_encode,
         })
     }
 
@@ -844,22 +894,24 @@ pub struct RgbTransform {
     green_trc: ToneCurve,
     /// Blue-channel tone curve (device-encoded → linear).
     blue_trc: ToneCurve,
-    /// Combined linear matrix: device-linear RGB → linear sRGB (D65-referenced).
+    /// Combined linear matrix: device-linear RGB → linear target.
     matrix: [[f64; 3]; 3],
+    /// Output transfer function: linear → gamma-encoded target.
+    encode: fn(f64) -> f64,
 }
 
 impl RgbTransform {
     /// Transforms one gamma-encoded device RGB triple (each in `[0, 1]`) to a
-    /// gamma-encoded sRGB triple, each clamped to `[0, 1]`.
+    /// gamma-encoded target-space triple, each clamped to `[0, 1]`.
     pub fn apply(&self, r: f64, g: f64, b: f64) -> (f64, f64, f64) {
         let lr = self.red_trc.eval(r);
         let lg = self.green_trc.eval(g);
         let lb = self.blue_trc.eval(b);
         let m = &self.matrix;
-        let sr = m[0][0] * lr + m[0][1] * lg + m[0][2] * lb;
-        let sg = m[1][0] * lr + m[1][1] * lg + m[1][2] * lb;
-        let sb = m[2][0] * lr + m[2][1] * lg + m[2][2] * lb;
-        (srgb_encode(sr), srgb_encode(sg), srgb_encode(sb))
+        let tr = m[0][0] * lr + m[0][1] * lg + m[0][2] * lb;
+        let tg = m[1][0] * lr + m[1][1] * lg + m[1][2] * lb;
+        let tb = m[2][0] * lr + m[2][1] * lg + m[2][2] * lb;
+        ((self.encode)(tr), (self.encode)(tg), (self.encode)(tb))
     }
 }
 
@@ -946,6 +998,46 @@ const XYZ_D65_TO_SRGB: [[f64; 3]; 3] = [
     [ 0.055_643_4, -0.204_025_9,  1.057_225_2],
 ];
 
+/// sRGB primaries → XYZ(D65) (inverse of `XYZ_D65_TO_SRGB`).
+#[rustfmt::skip]
+const SRGB_TO_XYZ_D65: [[f64; 3]; 3] = [
+    [0.412_456_4, 0.357_576_1, 0.180_437_5],
+    [0.212_672_9, 0.715_152_2, 0.072_175_0],
+    [0.019_333_9, 0.119_192_0, 0.950_304_1],
+];
+
+/// Display P3 (DCI-P3 D65) primaries → XYZ(D65).
+#[rustfmt::skip]
+const DISPLAYP3_TO_XYZ_D65: [[f64; 3]; 3] = [
+    [0.486_570, 0.265_667, 0.198_217],
+    [0.228_974, 0.691_738, 0.079_288],
+    [0.000_000, 0.045_113, 1.043_944],
+];
+
+/// Rec.2020 (BT.2020 D65) primaries → XYZ(D65).
+#[rustfmt::skip]
+const REC2020_TO_XYZ_D65: [[f64; 3]; 3] = [
+    [0.636_958, 0.144_617, 0.168_880],
+    [0.262_700, 0.677_998, 0.059_302],
+    [0.000_000, 0.028_073, 1.060_985],
+];
+
+/// XYZ(D65) → linear Display P3 matrix (inverse of `DISPLAYP3_TO_XYZ_D65`).
+#[rustfmt::skip]
+const XYZ_D65_TO_DISPLAYP3_LINEAR: [[f64; 3]; 3] = [
+    [ 2.493_496, -0.829_489,  0.035_166],
+    [-0.931_383,  1.762_664, -0.076_148],
+    [-0.402_710,  0.023_625,  1.150_521],
+];
+
+/// XYZ(D65) → linear Rec.2020 matrix (inverse of `REC2020_TO_XYZ_D65`).
+#[rustfmt::skip]
+const XYZ_D65_TO_REC2020_LINEAR: [[f64; 3]; 3] = [
+    [ 1.716_651, -0.355_670, -0.253_366],
+    [-0.666_684,  1.616_481,  0.015_769],
+    [ 0.017_639, -0.042_770,  0.942_103],
+];
+
 /// sRGB output transfer function: linear → gamma-encoded (IEC 61966-2-1).
 /// Negative / out-of-gamut inputs are clamped to `[0, 1]`.
 fn srgb_encode(c: f64) -> f64 {
@@ -954,6 +1046,19 @@ fn srgb_encode(c: f64) -> f64 {
         c * 12.92
     } else {
         1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+/// Rec.2020 output transfer function: linear → gamma-encoded (ITU-R BT.2020).
+/// Negative / out-of-gamut inputs are clamped to `[0, 1]`.
+fn rec2020_encode(c: f64) -> f64 {
+    const ALPHA: f64 = 1.099_296_8;
+    const BETA: f64 = 0.018_053_97;
+    let c = c.clamp(0.0, 1.0);
+    if c < 4.5 * BETA {
+        c * 4.5
+    } else {
+        (ALPHA - 1.0) + ALPHA * c.powf(0.45)
     }
 }
 
@@ -1566,5 +1671,70 @@ mod tests {
         let junk = vec![0xABu8; 200];
         assert!(cached_rgb_transform(&junk).is_none());
         assert!(cached_rgb_transform(&junk).is_none());
+    }
+
+    #[test]
+    fn build_rgb_transform_to_srgb_matches_legacy() {
+        // A well-formed P3 profile should produce the same values via the legacy
+        // `build_rgb_transform()` and the target-parametrised
+        // `build_rgb_transform_to(ColorSpace::Srgb)`.
+        let data = build_rgb_profile(
+            (0.486570, 0.265667, 0.198217),
+            (0.228974, 0.691738, 0.079288),
+            (0.000000, 0.045113, 1.043944),
+        );
+        let p = IccProfile::parse(&data).expect("parse P3");
+        let legacy = p.build_rgb_transform().expect("legacy sRGB");
+        let targeted = p
+            .build_rgb_transform_to(crate::ColorSpace::Srgb)
+            .expect("targeted sRGB");
+        let (lr, lg, lb) = legacy.apply(0.3, 0.6, 0.9);
+        let (tr, tg, tb) = targeted.apply(0.3, 0.6, 0.9);
+        assert!((lr - tr).abs() < 1e-12 && (lg - tg).abs() < 1e-12 && (lb - tb).abs() < 1e-12);
+    }
+
+    #[test]
+    fn build_rgb_transform_to_display_p3_accepts_p3_profile() {
+        let data = build_rgb_profile(
+            (0.486570, 0.265667, 0.198217),
+            (0.228974, 0.691738, 0.079288),
+            (0.000000, 0.045113, 1.043944),
+        );
+        let p = IccProfile::parse(&data).expect("parse P3");
+        let t = p
+            .build_rgb_transform_to(crate::ColorSpace::DisplayP3)
+            .expect("P3 target");
+        let (r, g, b) = t.apply(1.0, 0.0, 0.0);
+        assert!((0.0..=1.0).contains(&r), "P3 red out of range: {r}");
+        assert!(r > g && r > b, "expected red-dominant P3, got ({r}, {g}, {b})");
+        let (wr, wg, wb) = t.apply(1.0, 1.0, 1.0);
+        assert!((wr - 1.0).abs() < 0.02);
+        assert!((wg - 1.0).abs() < 0.02);
+        assert!((wb - 1.0).abs() < 0.02);
+    }
+
+    #[test]
+    fn build_rgb_transform_to_rec2020_accepts_rec2020_profile() {
+        let data = build_rgb_profile(
+            (0.636958, 0.144617, 0.168880),
+            (0.262700, 0.677998, 0.059302),
+            (0.000000, 0.028073, 1.060985),
+        );
+        let p = IccProfile::parse(&data).expect("parse Rec2020");
+        let t = p
+            .build_rgb_transform_to(crate::ColorSpace::Rec2020)
+            .expect("Rec2020 target");
+    }
+
+    #[test]
+    fn build_rgb_transform_to_rejects_non_rgb() {
+        let mut data = build_rgb_profile(
+            (0.4361, 0.2225, 0.0139),
+            (0.3851, 0.7169, 0.0971),
+            (0.1431, 0.0606, 0.7141),
+        );
+        data[16..20].copy_from_slice(&[0x47, 0x52, 0x41, 0x59]); // 'GRAY'
+        let p = IccProfile::parse(&data).expect("parse");
+        assert!(p.build_rgb_transform_to(crate::ColorSpace::Srgb).is_none());
     }
 }

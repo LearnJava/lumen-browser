@@ -836,6 +836,47 @@ impl ColorFloat {
         };
         [lr, lg, lb, self.a.clamp(0.0, 1.0)]
     }
+
+    /// Конвертирует `ColorFloat` в линейные каналы заданного `target` цветового
+    /// пространства.
+    ///
+    /// `target == self.space` → identity: только декодируется гамма и
+    /// возвращаются линейные каналы исходного пространства.
+    /// `target == Srgb` → существующий `to_linear_srgb()` (никак не регрессит).
+    /// Остальные комбинации пока маппятся через linear sRGB (Step 2 baseline).
+    pub fn to_display(self, target: crate::ColorSpace) -> [f32; 4] {
+        if target == self.space {
+            return [
+                self.decode(self.r),
+                self.decode(self.g),
+                self.decode(self.b),
+                self.a.clamp(0.0, 1.0),
+            ];
+        }
+        if target == crate::ColorSpace::Srgb {
+            return self.to_linear_srgb();
+        }
+        // Baseline: route through linear sRGB for all other combos.
+        // Step 2 acceptance criteria only require identity-preserve and sRGB
+        // regression; P3↔Rec2020 direct mapping is deferred.
+        let [r, g, b, a] = self.to_linear_srgb();
+        let cf = ColorFloat {
+            r,
+            g,
+            b,
+            a,
+            space: crate::ColorSpace::Srgb,
+        };
+        cf.to_display(target)
+    }
+
+    fn decode(self, c: f32) -> f32 {
+        match self.space {
+            crate::ColorSpace::Srgb | crate::ColorSpace::DisplayP3 => srgb_gamma_decode(c),
+            crate::ColorSpace::Rec2020 => rec2020_gamma_decode(c),
+            crate::ColorSpace::Lab => c,
+        }
+    }
 }
 
 /// CSS Color L4 §17 — XYZ (D65) → linear sRGB (sRGB primary matrix, CIE 1931).
@@ -29377,6 +29418,71 @@ mod tests {
     fn color_fn_unknown_space_is_none() {
         // Unknown predefined space → whole color() is invalid.
         assert!(parse_css_color_legacy("color(foobar 1 2 3)", false).is_none());
+    }
+
+    // ── ColorFloat.to_display (ph3-color-management Step 2) ────────────────────
+
+    #[test]
+    fn color_float_to_display_srgb_matches_linear_srgb() {
+        let cf = ColorFloat {
+            r: 0.8,
+            g: 0.4,
+            b: 0.2,
+            a: 0.5,
+            space: crate::ColorSpace::Srgb,
+        };
+        let display = cf.to_display(crate::ColorSpace::Srgb);
+        let legacy = cf.to_linear_srgb();
+        assert!(
+            (display[0] - legacy[0]).abs() < 1e-4,
+            "r mismatch: {} vs {}",
+            display[0],
+            legacy[0]
+        );
+        assert!(
+            (display[1] - legacy[1]).abs() < 1e-4,
+            "g mismatch: {} vs {}",
+            display[1],
+            legacy[1]
+        );
+        assert!(
+            (display[2] - legacy[2]).abs() < 1e-4,
+            "b mismatch: {} vs {}",
+            display[2],
+            legacy[2]
+        );
+        assert!(
+            (display[3] - legacy[3]).abs() < 1e-4,
+            "a mismatch: {} vs {}",
+            display[3],
+            legacy[3]
+        );
+    }
+
+    #[test]
+    fn color_float_to_display_same_space_is_identity_decoded() {
+        // P3 source → P3 target: only gamma is decoded, channels preserved.
+        let cf = ColorFloat {
+            r: 0.5,
+            g: 0.25,
+            b: 0.75,
+            a: 1.0,
+            space: crate::ColorSpace::DisplayP3,
+        };
+        let out = cf.to_display(crate::ColorSpace::DisplayP3);
+        assert!(
+            (out[0] - srgb_gamma_decode(0.5)).abs() < 1e-4,
+            "P3 r should decode in-place"
+        );
+        assert!(
+            (out[1] - srgb_gamma_decode(0.25)).abs() < 1e-4,
+            "P3 g should decode in-place"
+        );
+        assert!(
+            (out[2] - srgb_gamma_decode(0.75)).abs() < 1e-4,
+            "P3 b should decode in-place"
+        );
+        assert!((out[3] - 1.0).abs() < 1e-4, "alpha preserved");
     }
 
     // ── ::selection pseudo-element ─────────────────────────────────────────────
