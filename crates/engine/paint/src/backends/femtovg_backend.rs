@@ -4147,8 +4147,10 @@ mod tests {
             255, 255, 255, 255, // x=3 white
         ];
         let region = extend_region_replicated(&mut px, 4, 1, (1, 0, 3, 1), 1);
-        // Extended region should cover [0, 4). Top band is same row in 1-high image,
-        // so no new rows. Left extension x=0 should replicate from x=1 (green).
+        // Extended region grows by 1px each side, clamped to the 4×1 image bounds.
+        assert_eq!(region, (0, 0, 4, 1), "extended region must clamp to image bounds");
+        // Top band is same row in 1-high image, so no new rows.
+        // Left extension x=0 should replicate from x=1 (green).
         let g = [0u8, 255, 0, 255];
         assert_eq!(&px[0..4], &g, "left extension must replicate left edge of region");
         // Right extension x=3 should replicate from x=2 (blue).

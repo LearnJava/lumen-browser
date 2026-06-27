@@ -1029,31 +1029,9 @@ const XYZ_D65_TO_SRGB: [[f64; 3]; 3] = [
     [ 0.055_643_4, -0.204_025_9,  1.057_225_2],
 ];
 
-/// sRGB primaries → XYZ(D65) (inverse of `XYZ_D65_TO_SRGB`).
-#[rustfmt::skip]
-const SRGB_TO_XYZ_D65: [[f64; 3]; 3] = [
-    [0.412_456_4, 0.357_576_1, 0.180_437_5],
-    [0.212_672_9, 0.715_152_2, 0.072_175_0],
-    [0.019_333_9, 0.119_192_0, 0.950_304_1],
-];
-
-/// Display P3 (DCI-P3 D65) primaries → XYZ(D65).
-#[rustfmt::skip]
-const DISPLAYP3_TO_XYZ_D65: [[f64; 3]; 3] = [
-    [0.486_570, 0.265_667, 0.198_217],
-    [0.228_974, 0.691_738, 0.079_288],
-    [0.000_000, 0.045_113, 1.043_944],
-];
-
-/// Rec.2020 (BT.2020 D65) primaries → XYZ(D65).
-#[rustfmt::skip]
-const REC2020_TO_XYZ_D65: [[f64; 3]; 3] = [
-    [0.636_958, 0.144_617, 0.168_880],
-    [0.262_700, 0.677_998, 0.059_302],
-    [0.000_000, 0.028_073, 1.060_985],
-];
-
-/// XYZ(D65) → linear Display P3 matrix (inverse of `DISPLAYP3_TO_XYZ_D65`).
+/// XYZ(D65) → linear Display P3 matrix (inverse of the DCI-P3 D65 RGB→XYZ
+/// primaries). Left-multiplies the profile's parsed colorant matrix in
+/// [`IccProfile::build_rgb_transform_to`] to map profile-RGB → linear P3.
 #[rustfmt::skip]
 const XYZ_D65_TO_DISPLAYP3_LINEAR: [[f64; 3]; 3] = [
     [ 2.493_496, -0.829_489,  0.035_166],
@@ -1061,7 +1039,8 @@ const XYZ_D65_TO_DISPLAYP3_LINEAR: [[f64; 3]; 3] = [
     [-0.402_710,  0.023_625,  1.150_521],
 ];
 
-/// XYZ(D65) → linear Rec.2020 matrix (inverse of `REC2020_TO_XYZ_D65`).
+/// XYZ(D65) → linear Rec.2020 matrix (inverse of the BT.2020 D65 RGB→XYZ
+/// primaries).
 #[rustfmt::skip]
 const XYZ_D65_TO_REC2020_LINEAR: [[f64; 3]; 3] = [
     [ 1.716_651, -0.355_670, -0.253_366],
@@ -1089,7 +1068,8 @@ fn rec2020_encode(c: f64) -> f64 {
     if c < 4.5 * BETA {
         c * 4.5
     } else {
-        (ALPHA - 1.0) + ALPHA * c.powf(0.45)
+        // BT.2020 OETF: E' = α·E^0.45 − (α−1). At E=1 this yields exactly 1.0.
+        ALPHA * c.powf(0.45) - (ALPHA - 1.0)
     }
 }
 
@@ -1755,6 +1735,19 @@ mod tests {
         let t = p
             .build_rgb_transform_to(crate::ColorSpace::Rec2020)
             .expect("Rec2020 target");
+        let (r, g, b) = t.apply(1.0, 0.0, 0.0);
+        assert!((0.0..=1.0).contains(&r), "Rec2020 red out of range: {r}");
+        assert!(r > g && r > b, "expected red-dominant Rec2020, got ({r}, {g}, {b})");
+    }
+
+    #[test]
+    fn rec2020_oetf_maps_unit_to_unit() {
+        // BT.2020 OETF must satisfy E'(0)=0 and E'(1)=1. The pre-fix form
+        // `(α−1) + α·E^0.45` (wrong sign) gives ≈1.199 at E=1.
+        assert!((rec2020_encode(0.0)).abs() < 1e-9, "OETF(0) = {}", rec2020_encode(0.0));
+        assert!((rec2020_encode(1.0) - 1.0).abs() < 1e-6, "OETF(1) = {}", rec2020_encode(1.0));
+        // Linear segment near black: E'(E) = 4.5·E below the BETA breakpoint.
+        assert!((rec2020_encode(0.01) - 0.045).abs() < 1e-9);
     }
 
     #[test]
