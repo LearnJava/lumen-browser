@@ -13894,13 +13894,28 @@ mod tests {
              function handler(e) { count++; } \
              window.addEventListener('popstate', handler); \
              history.pushState({}, '', '/p'); \
-             history.back(); \
-             window.removeEventListener('popstate', handler); \
+             history.back();",
+        )
+        .unwrap();
+        // Traversal is shell-authoritative: history.back() queues a -1 delta and
+        // the shell delivers the popstate. While registered, the handler fires once.
+        assert_eq!(rt.take_history_traversals(), vec![-1]);
+        rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
+            .unwrap();
+        // Remove the listener, then traverse again. The shell still delivers a
+        // popstate for each queued delta, but the removed handler must not fire.
+        rt.eval(
+            "window.removeEventListener('popstate', handler); \
              history.forward(); \
              history.back();",
         )
         .unwrap();
-        // handler fires once (on first back), then is removed
+        let _ = rt.take_history_traversals();
+        rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
+            .unwrap();
+        rt.eval("_lumen_deliver_popstate(_lumen_history_state_json(), _lumen_history_url())")
+            .unwrap();
+        // handler fired once (before removal), then stayed silent.
         let result = rt.eval("count").unwrap();
         assert_eq!(result, lumen_core::JsValue::Number(1.0));
     }
