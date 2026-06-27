@@ -4,6 +4,7 @@ pub mod audio_capture;
 pub mod audio_player;
 pub mod clipboard;
 pub mod dark_mode;
+pub mod display_color_profile;
 pub mod file_dialog;
 pub mod screen_capture;
 pub mod wake_lock;

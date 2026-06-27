@@ -3893,6 +3893,34 @@ impl WakeLockProvider for NullWakeLockProvider {
     fn release(&self) {}
 }
 
+/// Цветовой профиль активного дисплея (OS level).
+///
+/// Платформенная реализация (Windows WCS / DXGI / EDID) query'ит
+/// активный монитор и возвращает его гамму как `ColorSpace`.
+/// В Phase 3 это foundation для wide-gamut output (Display P3 / Rec2020):
+/// paint знает, в какое пространство target'ить wide-gamut цвета
+/// из CSS + картинок.
+///
+/// Default implementation — `Srgb`, что делает весь feature no-op на
+/// обычных sRGB-панелях и не регрессит сегодняшний вывод.
+pub trait DisplayColorProfile: Send + Sync {
+    /// Возвращает цветовое пространство активного дисплея.
+    /// `None` означает «не удалось определить» — consumer должен
+    /// трактовать это как `ColorSpace::Srgb`.
+    fn active_profile(&self) -> crate::ColorSpace;
+}
+
+/// No-op: всегда возвращает `ColorSpace::Srgb`.
+///
+/// Устанавливается по умолчанию в headless/тестах/неизвестном железе.
+pub struct NullDisplayColorProfile;
+
+impl DisplayColorProfile for NullDisplayColorProfile {
+    fn active_profile(&self) -> crate::ColorSpace {
+        crate::ColorSpace::Srgb
+    }
+}
+
 #[cfg(test)]
 mod wake_lock_tests {
     use super::*;

@@ -70,9 +70,10 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use lumen_core::event::{Event, FetchPriority, SubresourceKind};
-use lumen_core::ext::{EventSink, HyphenationProvider, NullHyphenationProvider, SuspendedHeap};
-use lumen_encoding::KnuthLiangHyphenation;
+use lumen_core::ext::{DisplayColorProfile, EventSink, HyphenationProvider, NullHyphenationProvider, SuspendedHeap};
 use lumen_core::geom::{Point, Rect, Size};
+use lumen_core::ColorSpace;
+use lumen_encoding::KnuthLiangHyphenation;
 use lumen_devtools::DevToolsServer;
 use lumen_driver::BrowserSession;
 use lumen_knowledge::HistoryFts;
@@ -548,6 +549,7 @@ fn run_window_mode(
         event_sink,
         modifiers: ModifiersState::empty(),
         window: None,
+        display_color_profile: platform::display_color_profile::PlatformDisplayColorProfile::new(),
         renderer: None,
         runtime: runtime::EventLoop::new(),
         animation_scheduler: animation_scheduler::AnimationScheduler::new(),
@@ -5255,6 +5257,13 @@ struct Lumen {
     event_sink: Arc<dyn EventSink>,
     modifiers: ModifiersState,
     window: Option<Arc<Window>>,
+    /// Detected target `ColorSpace` for the active display.
+    /// Populated at startup from the OS (Windows WCS/DXGI/EDID query).
+    /// Defaults to `ColorSpace::Srgb` when the display profile is unknown or
+    /// the OS query fails — making the whole wide-gamut pipeline a no-op on
+    /// sRGB-only hardware.
+    #[allow(dead_code)] // потребитель появится при P3 wiring (ph3-color-management Step 1)
+    display_color_profile: platform::display_color_profile::PlatformDisplayColorProfile,
     renderer: Option<Box<dyn RenderBackend>>,
     /// HTML event loop runtime. На каждой итерации winit-loop (AboutToWait)
     /// выполняется одна task, на RedrawRequested — run_rendering_step
@@ -14008,6 +14017,16 @@ impl Lumen {
             .as_deref()
             .or_else(|| self.source.url_str())
             .unwrap_or("")
+    }
+
+    /// Returns the detected target `ColorSpace` for the active display.
+    ///
+    /// Used by the paint layer to decide wide-gamut output (Step 4) and
+    /// by ICC transforms (Step 2). Defaults to `ColorSpace::Srgb` when
+    /// the OS query fails or the display is sRGB-only.
+    #[allow(dead_code)] // consumer: ph3-color-management Steps 2+4
+    fn target_color_space(&self) -> ColorSpace {
+        self.display_color_profile.active_profile()
     }
 
     /// Текущая логическая (CSS px) высота viewport-а. Если окно ещё не создано —
