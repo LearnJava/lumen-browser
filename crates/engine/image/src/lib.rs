@@ -39,23 +39,27 @@ pub fn supported_mime_types() -> &'static [&'static str] {
     &["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/avif"]
 }
 
+/// Декодирует растровое изображение по сигнатуре первых байтов и colour-manages
+/// it to `target` (ICC-5: transform once at decode time).
+pub fn decode_to(bytes: &[u8], target: lumen_core::ColorSpace) -> Result<Image, ImageError> {
+    let mut image = decode_raw(bytes)?;
+    color_manage_in_place(&mut image, target);
+    Ok(image)
+}
+
 /// Декодирует растровое изображение по сигнатуре первых байтов.
 ///
 /// # Errors
 /// - [`ImageError::UnknownFormat`] — сигнатура не распознана.
 /// - [`ImageError::Png`] — PNG-сигнатура совпала, но декодер выдал ошибку.
 /// - [`ImageError::Jpeg`] — JPEG-сигнатура совпала, но декодер выдал ошибку.
-/// - [`ImageError::Gif`] — GIF-сигнатура (GIF87a/GIF89a) совпала, но декодер выдал ошибку.
-/// - [`ImageError::Webp`] — WebP-сигнатура (RIFF/WEBP) совпала, но декодер выдал ошибку.
+/// - [`ImageError::Gif`] — GIF-сигнатура (GIF87a/GIF89a) совпала, но декодирование не удалось.
+/// - [`ImageError::Webp`] — WebP-сигнатура (RIFF/WEBP) совпала, но декодирование не удалось.
 /// - [`ImageError::Avif`] — AVIF ftyp-бокс обнаружен, но декодирование не удалось.
 /// - [`ImageError::Jxl`] — JPEG XL сигнатура обнаружена, но декодирование не поддерживается.
+/// - [`ImageError::Heic`] — HEIC/HEIF ftyp-бокс обнаружен, но декодирование не поддерживается.
 pub fn decode(bytes: &[u8]) -> Result<Image, ImageError> {
-    let mut image = decode_raw(bytes)?;
-    // ICC-5: colour-manage to sRGB once, at decode time, so every later
-    // `to_rgba8` / register / resize works on already-corrected pixels and the
-    // profile's transform is built/applied exactly once per image.
-    color_manage_in_place(&mut image);
-    Ok(image)
+    decode_to(bytes, lumen_core::ColorSpace::Srgb)
 }
 
 /// Decodes a raster image to its native pixel format, leaving any embedded ICC
@@ -273,7 +277,7 @@ pub fn correct_rgba_pixels(rgba: &mut [u8], profile: &IccProfile) {
 }
 
 fn convert_pixels_to_srgb(rgba: &mut [u8], converter: fn(f32, f32, f32) -> (f32, f32, f32)) {
-    convert_packed_to_srgb(rgba, 4, converter);
+    convert_packed(rgba, 4, converter);
 }
 
 /// Gamut-converts packed pixels in place at an arbitrary byte stride (3 for
@@ -281,7 +285,7 @@ fn convert_pixels_to_srgb(rgba: &mut [u8], converter: fn(f32, f32, f32) -> (f32,
 /// chunk (R, G, B) are touched; any trailing alpha byte is left unchanged.
 /// Used both by the RGBA paint path and by decode-time colour management
 /// (ICC-5), which keeps the source pixel format compact.
-fn convert_packed_to_srgb(
+fn convert_packed(
     data: &mut [u8],
     stride: usize,
     converter: fn(f32, f32, f32) -> (f32, f32, f32),
@@ -294,7 +298,6 @@ fn convert_packed_to_srgb(
         pixel[0] = (sr.clamp(0.0, 1.0) * 255.0).round() as u8;
         pixel[1] = (sg.clamp(0.0, 1.0) * 255.0).round() as u8;
         pixel[2] = (sb.clamp(0.0, 1.0) * 255.0).round() as u8;
-        // alpha channel (if any) unchanged
     }
 }
 
@@ -317,6 +320,24 @@ fn rec2020_to_srgb_pixel(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
     (srgb_gamma_encode(sr), srgb_gamma_encode(sg), srgb_gamma_encode(sb))
 }
 
+/// Display P3 gamma-encoded → Rec2020 gamma-encoded (per-pixel).
+fn p3_to_rec2020_pixel(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let lr = srgb_gamma_decode(r);
+    let lg = srgb_gamma_decode(g);
+    let lb = srgb_gamma_decode(b);
+    let (rr, rg, rb) = p3_linear_to_rec2020_linear(lr, lg, lb);
+    (rec2020_gamma_encode(rr), rec2020_gamma_encode(rg), rec2020_gamma_encode(rb))
+}
+
+/// Rec2020 gamma-encoded → Display P3 gamma-encoded (per-pixel).
+fn rec2020_to_p3_pixel(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let lr = rec2020_gamma_decode(r);
+    let lg = rec2020_gamma_decode(g);
+    let lb = rec2020_gamma_decode(b);
+    let (pr, pg, pb) = rec2020_linear_to_p3_linear(lr, lg, lb);
+    (srgb_gamma_encode(pr), srgb_gamma_encode(pg), srgb_gamma_encode(pb))
+}
+
 /// Display P3 linear → sRGB linear (CSS Color L4 §10.9 matrix).
 fn p3_linear_to_srgb_linear(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
     let sr =  1.224_94  * r - 0.224_94  * g;
@@ -331,6 +352,22 @@ fn rec2020_linear_to_srgb_linear(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
     let sg = -0.124_551 * r + 1.132_9   * g - 0.008_35  * b;
     let sb = -0.018_151 * r - 0.100_578 * g + 1.118_73  * b;
     (sr, sg, sb)
+}
+
+/// Display P3 linear → Rec2020 linear.
+fn p3_linear_to_rec2020_linear(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let lr =  0.627_404 * r + 0.329_275 * g + 0.043_321 * b;
+    let lg =  0.069_097 * r + 0.919_541 * g + 0.011_361 * b;
+    let lb =  0.016_392 * r + 0.088_012 * g + 0.895_596 * b;
+    (lr, lg, lb)
+}
+
+/// Rec2020 linear → Display P3 linear.
+fn rec2020_linear_to_p3_linear(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let pr =  0.822_462 * r + 0.177_538 * g;
+    let pg =  0.033_076 * r + 0.966_924 * g;
+    let pb = -0.028_917 * r - 0.080_739 * g + 1.109_655 * b;
+    (pr, pg, pb)
 }
 
 /// sRGB / P3 gamma decode: encoded → linear (IEC 61966-2-1).
@@ -349,6 +386,12 @@ fn rec2020_gamma_decode(c: f32) -> f32 {
     const ALPHA: f32 = 1.099_296_8;
     const BETA: f32 = 0.018_053_97;
     if c < 4.5 * BETA { c / 4.5 } else { ((c + (ALPHA - 1.0)) / ALPHA).powf(1.0 / 0.45) }
+}
+
+/// Rec2020 (BT.2020 OETF) gamma encode: linear → encoded.
+fn rec2020_gamma_encode(c: f32) -> f32 {
+    let c = c.max(0.0);
+    if c < 0.018_053_968 { 4.5 * c } else { 1.099_296_826 * c.powf(0.45) - 0.099_296_826 }
 }
 
 /// Декодированное растровое изображение в плотной row-major упаковке.
@@ -459,9 +502,9 @@ fn apply_rgb_transform_packed(
     }
 }
 
-/// Colour-manages a freshly-decoded image once, in place, then clears its ICC
-/// profile so later `to_rgba8` / `correct_rgba_pixels` calls do no colour work
-/// (ICC-5: "each image transformed once").
+/// Colour-manages a freshly-decoded image once, in place, to `target`, then
+/// clears its ICC profile so later `to_rgba8` / `correct_rgba_pixels` calls
+/// do no colour work (ICC-5: "each image transformed once").
 ///
 /// Only packed RGB formats (`Rgb8` / `Rgba8`) are managed here, applying the
 /// profile's matrix-shaper transform (preferred) or a gamut tone-map fallback
@@ -469,25 +512,46 @@ fn apply_rgb_transform_packed(
 /// cache keeps its original footprint. Grayscale formats keep their profile and
 /// are handled later by the expand-then-convert path in [`Image::to_rgba8`].
 /// Profiles with no buildable transform and an unrecognised gamut are a graceful
-/// no-op (pixels treated as sRGB).
-fn color_manage_in_place(image: &mut Image) {
+/// no-op (pixels treated as the source space, i.e. left intact).
+fn color_manage_in_place(image: &mut Image, target: lumen_core::ColorSpace) {
     let Some(profile) = image.icc_profile.as_ref() else { return };
     let stride = match image.format {
         PixelFormat::Rgb8 => 3,
         PixelFormat::Rgba8 => 4,
-        // Grayscale: defer to `to_rgba8` (rare; an RGB profile on gray data
-        // needs the expand-to-RGB path and would change the pixel format here).
         PixelFormat::Gray8 | PixelFormat::GrayAlpha8 => return,
     };
-    if let Some(transform) = lumen_core::icc::cached_rgb_transform(&profile.data) {
+    // Prefer the actual ICC matrix-shaper transform (real TRC curves + colorant
+    // primaries + Bradford D50→D65 adaptation) for any target that supports it.
+    if let Some(transform) =
+        lumen_core::icc::cached_rgb_transform_to(&profile.data, target)
+    {
         apply_rgb_transform_packed(&mut image.data, stride, &transform);
         image.icc_profile = None;
         return;
     }
-    match profile.detect_gamut() {
-        IccGamut::DisplayP3 => convert_packed_to_srgb(&mut image.data, stride, p3_to_srgb_pixel),
-        IccGamut::Rec2020 => convert_packed_to_srgb(&mut image.data, stride, rec2020_to_srgb_pixel),
-        IccGamut::Srgb | IccGamut::Unknown => {}
+    let source = profile.detect_gamut();
+    let same_gamut = (source == IccGamut::DisplayP3 && target == lumen_core::ColorSpace::DisplayP3)
+        || (source == IccGamut::Rec2020 && target == lumen_core::ColorSpace::Rec2020)
+        || ((source == IccGamut::Srgb || source == IccGamut::Unknown)
+            && target == lumen_core::ColorSpace::Srgb);
+    if same_gamut {
+        image.icc_profile = None;
+        return;
+    }
+    match (source, target) {
+        (IccGamut::DisplayP3, lumen_core::ColorSpace::Srgb) => {
+            convert_packed(&mut image.data, stride, p3_to_srgb_pixel)
+        }
+        (IccGamut::Rec2020, lumen_core::ColorSpace::Srgb) => {
+            convert_packed(&mut image.data, stride, rec2020_to_srgb_pixel)
+        }
+        (IccGamut::DisplayP3, lumen_core::ColorSpace::Rec2020) => {
+            convert_packed(&mut image.data, stride, p3_to_rec2020_pixel)
+        }
+        (IccGamut::Rec2020, lumen_core::ColorSpace::DisplayP3) => {
+            convert_packed(&mut image.data, stride, rec2020_to_p3_pixel)
+        }
+        _ => {}
     }
     image.icc_profile = None;
 }
@@ -1452,7 +1516,7 @@ mod tests {
             data: vec![255, 0, 0, 200],
             icc_profile: Some(IccProfile { data: profile }),
         };
-        color_manage_in_place(&mut img);
+        color_manage_in_place(&mut img, lumen_core::ColorSpace::Srgb);
         assert!(img.icc_profile.is_none(), "profile cleared after decode-time management");
         assert_eq!(img.data, reference, "decode-time result equals paint-time result");
         // Idempotent: a second to_rgba8 (profile now None) does no further work.
@@ -1479,7 +1543,7 @@ mod tests {
             data: vec![255, 0, 0],
             icc_profile: Some(IccProfile { data: profile }),
         };
-        color_manage_in_place(&mut img);
+        color_manage_in_place(&mut img, lumen_core::ColorSpace::Srgb);
         assert!(img.icc_profile.is_none());
         // Stays Rgb8 (compact), pixels colour-managed; expand must match reference.
         assert_eq!(img.format, PixelFormat::Rgb8);
@@ -1497,7 +1561,7 @@ mod tests {
             data: vec![128],
             icc_profile: Some(IccProfile { data: p3_profile() }),
         };
-        color_manage_in_place(&mut img);
+        color_manage_in_place(&mut img, lumen_core::ColorSpace::Srgb);
         assert!(img.icc_profile.is_some(), "grayscale keeps its profile for to_rgba8");
     }
 
@@ -1510,7 +1574,7 @@ mod tests {
             data: vec![10, 20, 30, 255],
             icc_profile: None,
         };
-        color_manage_in_place(&mut img);
+        color_manage_in_place(&mut img, lumen_core::ColorSpace::Srgb);
         assert_eq!(img.data, vec![10, 20, 30, 255]);
         assert!(img.icc_profile.is_none());
     }

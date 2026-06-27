@@ -12,6 +12,7 @@
 //! Phase 2 (текущая): femtovg по умолчанию; fallback → wgpu (ADR-010 RB-9).
 //! Phase 3: vello станет default (RB-10).
 
+use lumen_core::ColorSpace;
 use std::sync::Arc;
 
 use lumen_paint::RenderBackend;
@@ -39,17 +40,18 @@ use winit::window::Window;
 pub fn create_backend(
     window: Arc<Window>,
     font_bytes: Vec<u8>,
+    target_color_space: ColorSpace,
 ) -> Result<Box<dyn RenderBackend>, Box<dyn std::error::Error>> {
     let requested = std::env::var("LUMEN_BACKEND").unwrap_or_default();
     let name = requested.trim().to_ascii_lowercase();
 
     match name.as_str() {
         // Phase 2 default: femtovg → fallback wgpu (ADR-010 RB-9)
-        "" => create_femtovg_or_wgpu(window, font_bytes),
+        "" => create_femtovg_or_wgpu(window, font_bytes, target_color_space),
         // Явный запрос femtovg: тот же путь (femtovg → wgpu при ошибке)
-        "femtovg" => create_femtovg_or_wgpu(window, font_bytes),
+        "femtovg" => create_femtovg_or_wgpu(window, font_bytes, target_color_space),
         // Явный запрос wgpu: прямой, без femtovg fallback
-        "wgpu" => create_wgpu(window, font_bytes),
+        "wgpu" => create_wgpu(window, font_bytes, target_color_space),
         "vello" => {
             #[cfg(feature = "backend-vello")]
             {
@@ -59,7 +61,7 @@ pub fn create_backend(
             #[cfg(not(feature = "backend-vello"))]
             {
                 eprintln!("LUMEN_BACKEND=vello: скомпилировано без backend-vello, используется femtovg");
-                create_femtovg_or_wgpu(window, font_bytes)
+                create_femtovg_or_wgpu(window, font_bytes, target_color_space)
             }
         }
         "cpu" => {
@@ -69,7 +71,7 @@ pub fn create_backend(
         }
         other => {
             eprintln!("Неизвестный LUMEN_BACKEND={other:?}, используется femtovg");
-            create_femtovg_or_wgpu(window, font_bytes)
+            create_femtovg_or_wgpu(window, font_bytes, target_color_space)
         }
     }
 }
@@ -80,6 +82,7 @@ pub fn create_backend(
 fn create_femtovg_or_wgpu(
     window: Arc<Window>,
     font_bytes: Vec<u8>,
+    target_color_space: ColorSpace,
 ) -> Result<Box<dyn RenderBackend>, Box<dyn std::error::Error>> {
     #[cfg(feature = "backend-femtovg")]
     {
@@ -88,7 +91,7 @@ fn create_femtovg_or_wgpu(
             Err(e) => eprintln!("femtovg: ошибка инициализации ({e}), fallback → wgpu"),
         }
     }
-    create_wgpu(window, font_bytes)
+    create_wgpu(window, font_bytes, target_color_space)
 }
 
 /// Создаёт `WgpuBackend` (Phase 1 / Phase 2 fallback).
@@ -96,8 +99,9 @@ fn create_femtovg_or_wgpu(
 fn create_wgpu(
     window: Arc<Window>,
     font_bytes: Vec<u8>,
+    target_color_space: ColorSpace,
 ) -> Result<Box<dyn RenderBackend>, Box<dyn std::error::Error>> {
-    Ok(Box::new(WgpuBackend::new(window, font_bytes)?))
+    Ok(Box::new(WgpuBackend::new(window, font_bytes, target_color_space)?))
 }
 
 /// Создаёт `FemtovgBackend` (Phase 2 default, ADR-010 RB-9).

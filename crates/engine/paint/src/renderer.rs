@@ -25,6 +25,7 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use lumen_core::ColorSpace;
 use lumen_core::ext::{FontProvider, FontStyle as CssFontStyle};
 use lumen_core::geom::Rect;
 use lumen_font::{
@@ -1411,6 +1412,18 @@ pub struct Renderer {
     /// Обновляется через [`Renderer::set_scale_factor`] при `ScaleFactorChanged`
     /// событии winit (например, drag окна между мониторами с разной DPI).
     scale_factor: f64,
+    /// Target color space for wide-gamut output (ph3-color-management Step 4).
+    /// Determines the chosen swap-chain format:
+    /// `DisplayP3`/`Rec2020` → `Rgba16Float` (or first non-sRGB fallback);
+    /// `Srgb` → non-sRGB preferred (existing behaviour).
+    target_color_space: ColorSpace,
+
+    /// PILI-CANVAS-BG: sRGB background color (root element's `background-color`)
+    /// at the time the current frame started rendering. `None` means use white
+    /// (CSS UA default). Used for the LoadOp clear colour at frame start.
+    /// Converted from sRGB to `target_color_space` before being passed to the
+    /// GPU clear colour (ph3-color-management Step 5).
+    canvas_bg: Option<Color>,
 
     /// GPU depth buffer for CSS 3D transforms (`transform-style: preserve-3d`).
     /// Size matches the frame surface; recreated on every `resize()`.
@@ -1554,16 +1567,51 @@ fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu
     (texture, view)
 }
 
+/// Selects the best swap-chain format for the given `target` color space
+/// from the adapter-reported `caps.formats` (ph3-color-management Step 4).
+///
+/// * `DisplayP3` / `Rec2020` — prefer `Rgba16Float` (wide-gamut linear float),
+///   falling back to the first non-sRGB format when the adapter cannot provide it.
+/// * `Srgb` — keep the existing non-sRGB preference so the GPU does not
+///   perform automatic decode/encode that conflicts with the CPU-side ICC
+///   pipeline; fall back to `caps.formats[0]`.
+fn select_surface_format(
+    caps: &wgpu::SurfaceCapabilities,
+    target: ColorSpace,
+) -> wgpu::TextureFormat {
+    match target {
+        ColorSpace::DisplayP3 | ColorSpace::Rec2020 => caps
+            .formats
+            .iter()
+            .find(|f| **f == wgpu::TextureFormat::Rgba16Float)
+            .copied()
+            .unwrap_or_else(|| {
+                caps.formats
+                    .iter()
+                    .find(|f| !f.is_srgb())
+                    .copied()
+                    .unwrap_or(caps.formats[0])
+            }),
+        _ => caps
+            .formats
+            .iter()
+            .find(|f| !f.is_srgb())
+            .copied()
+            .unwrap_or(caps.formats[0]),
+    }
+}
+
 impl Renderer {
-    pub fn new(window: Arc<Window>, font_bytes: Vec<u8>) -> Result<Self, Box<dyn Error>> {
+    pub fn new(window: Arc<Window>, font_bytes: Vec<u8>, target_color_space: ColorSpace) -> Result<Self, Box<dyn Error>> {
         // Валидируем шрифт сразу, чтобы при битом файле не падать в первом кадре.
         Font::parse(&font_bytes).map_err(|e| format!("парсинг шрифта: {e}"))?;
-        block_on(Self::new_async(window, font_bytes))
+        block_on(Self::new_async(window, font_bytes, target_color_space))
     }
 
     async fn new_async(
         window: Arc<Window>,
         font_bytes: Vec<u8>,
+        target_color_space: ColorSpace,
     ) -> Result<Self, Box<dyn Error>> {
         let size = window.inner_size();
         let width = size.width.max(1);
@@ -1607,12 +1655,7 @@ impl Renderer {
             .await?;
 
         let caps = surface.get_capabilities(&adapter);
-        let format = caps
-            .formats
-            .iter()
-            .find(|f| !f.is_srgb())
-            .copied()
-            .unwrap_or(caps.formats[0]);
+        let format = select_surface_format(&caps, target_color_space);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
@@ -1638,6 +1681,7 @@ impl Renderer {
             0,
             0,
             scale_factor,
+            target_color_space,
             gpu_fingerprint,
         )
     }
@@ -1648,15 +1692,21 @@ impl Renderer {
     ///
     /// # Errors
     /// Returns `Err` if no GPU adapter is available or device creation fails.
-    pub fn new_headless(font_bytes: Vec<u8>, width: u32, height: u32) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new_headless(
+        font_bytes: Vec<u8>,
+        width: u32,
+        height: u32,
+        target_color_space: ColorSpace,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         Font::parse(&font_bytes).map_err(|e| format!("парсинг шрифта: {e}"))?;
-        block_on(Self::new_headless_async(font_bytes, width, height))
+        block_on(Self::new_headless_async(font_bytes, width, height, target_color_space))
     }
 
     async fn new_headless_async(
         font_bytes: Vec<u8>,
         width: u32,
         height: u32,
+        target_color_space: ColorSpace,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Mirror the windowed-mode backend choice (BUG-057).
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -1688,6 +1738,8 @@ impl Renderer {
 
         // Use Rgba8Unorm: no surface capability query needed, widely supported,
         // and matches lumen_image::PixelFormat::Rgba8 for zero-copy readback.
+        // Target color space is recorded for render path queries but headless
+        // readback always returns sRGB bytes for snapshot determinism.
         let format = wgpu::TextureFormat::Rgba8Unorm;
 
         let adapter_info = adapter.get_info();
@@ -1703,6 +1755,7 @@ impl Renderer {
             width.max(1),
             height.max(1),
             1.0,
+            target_color_space,
             gpu_fingerprint,
         )
     }
@@ -1721,6 +1774,7 @@ impl Renderer {
         headless_w: u32,
         headless_h: u32,
         scale_factor: f64,
+        target_color_space: ColorSpace,
         gpu_fingerprint: GpuFingerprint,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // ── Uniform bind group (viewport) — общий для fill и text ──────────
@@ -3054,9 +3108,11 @@ impl Renderer {
             gradient_pipeline,
             scratch_layer: None,
             layer_sampler,
-            layer_textures: Vec::new(),
-            surface_format: format,
-            atlas,
+             layer_textures: Vec::new(),
+             surface_format: format,
+             target_color_space,
+             canvas_bg: None,
+             atlas,
             faces: vec![LoadedFace { bytes: font_bytes }],
             face_id_by_path: HashMap::new(),
             font_provider: Some(Arc::new(SystemFontIndex::new())),
@@ -3636,6 +3692,65 @@ impl Renderer {
         self.scale_factor
     }
 
+    /// Target color space for this renderer's output surface.
+    ///
+    /// Informs the compositor and paint steps whether depth → display conversion
+    /// must be performed. Srgb ≈ legacy path; DisplayP3/Rec2020 enable wide-gamut
+    /// output (ph3-color-management Step 4).
+    #[must_use]
+    pub fn target_color_space(&self) -> ColorSpace {
+        self.target_color_space
+    }
+
+    /// Updates the root-element canvas background used as the framebuffer clear colour.
+    ///
+    /// Receives an sRGB `Color` (8-bit gamma-encoded) from shell. Stored verbatim;
+    /// the conversion to the current `target_color_space` happens lazily at the
+    /// start of each `render()` call inside `flush_batch` (ph3-color-management Step 5).
+    pub fn set_canvas_background(&mut self, color: Option<Color>) {
+        self.canvas_bg = color;
+    }
+
+    fn wgpu_color_for_canvas_bg(color: &Color, target: ColorSpace) -> [f32; 4] {
+        fn srgb_gamma_decode(c: f32) -> f32 {
+            if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+        }
+        fn srgb_gamma_encode(c: f32) -> f32 {
+            let c = c.clamp(0.0, 1.0);
+            if c <= 0.0031308 { 12.92 * c } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
+        }
+        fn rec2020_gamma_decode(c: f32) -> f32 {
+            let c = c.clamp(0.0, 1.0);
+            if c < 4.5 * 0.018053_968 { c / 4.5 } else { ((c + 0.099_296_826) / 1.099_296_826).powf(1.0 / 0.45) }
+        }
+        fn rec2020_gamma_encode(c: f32) -> f32 {
+            let c = c.clamp(0.0, 1.0);
+            if c < 0.018053_968 { 4.5 * c } else { 1.099_296_826 * c.powf(0.45) - 0.099_296_826 }
+        }
+        fn srgb_linear_to_p3_linear(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+            (0.822_462_128 * r + 0.177_537_872 * g, 0.033_076_440 * r + 0.966_923_560 * g, -0.028_916_533 * r - 0.080_738_964 * g + 1.109_655_497 * b)
+        }
+        fn srgb_linear_to_rec2020_linear(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+            (0.627_403_924 * r + 0.329_275_124 * g + 0.043_320_952 * b, 0.069_097_289 * r + 0.919_541_392 * g + 0.011_361_319 * b, 0.016_391_587 * r + 0.088_012_209 * g + 0.895_596_204 * b)
+        }
+
+        let r = color.r as f32 / 255.0;
+        let g = color.g as f32 / 255.0;
+        let b = color.b as f32 / 255.0;
+        let a = color.a as f32 / 255.0;
+        match target {
+            ColorSpace::Srgb | ColorSpace::Lab => [r, g, b, a],
+            ColorSpace::DisplayP3 => {
+                let (pr, pg, pb) = srgb_linear_to_p3_linear(srgb_gamma_decode(r), srgb_gamma_decode(g), srgb_gamma_decode(b));
+                [srgb_gamma_encode(pr), srgb_gamma_encode(pg), srgb_gamma_encode(pb), a]
+            }
+            ColorSpace::Rec2020 => {
+                let (rr, rg, rb) = srgb_linear_to_rec2020_linear(srgb_gamma_decode(r), srgb_gamma_decode(g), srgb_gamma_decode(b));
+                [rec2020_gamma_encode(rr), rec2020_gamma_encode(rg), rec2020_gamma_encode(rb), a]
+            }
+        }
+    }
+
     /// Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`.
     /// Используется shell-ом для relayout при Resized.
     #[must_use]
@@ -3946,7 +4061,14 @@ impl Renderer {
 
         // Render plan: список батчей и composite-переходов.
         #[derive(Clone, Copy)]
-        enum LoadOpChoice { ClearWhite, ClearTransparent, Load }
+        enum LoadOpChoice {
+            /// Clear colour converted to the target `target_color_space` (default: white).
+            Clear(wgpu::Color),
+            /// Transparent clear for off-screen opacity layers.
+            ClearTransparent,
+            /// Load existing contents (accumulate).
+            Load,
+        }
         struct DrawBatchPlan { target_level: usize, load_op: LoadOpChoice, ops_start: usize, ops_end: usize }
         struct CompositePlan { from_level: usize, comp_v_start: u32, mode: BlendMode }
         // CSS Masking L1 §4: gradient mask spec — stored in plan for render-time GPU pass.
@@ -4059,10 +4181,19 @@ impl Renderer {
             () => {{
                 let first = level_first.get(current_level).copied().unwrap_or(false);
                 let load_op = if first {
-                    if current_level == 0 { LoadOpChoice::ClearWhite } else { LoadOpChoice::ClearTransparent }
+                    if current_level == 0 {
+                        let rgba = self.canvas_bg
+                            .map_or_else(
+                                || Self::wgpu_color_for_canvas_bg(&Color::WHITE, self.target_color_space),
+                                |bg| Self::wgpu_color_for_canvas_bg(&bg, self.target_color_space),
+                            );
+                        LoadOpChoice::Clear(wgpu::Color { r: rgba[0] as f64, g: rgba[1] as f64, b: rgba[2] as f64, a: rgba[3] as f64 })
+                    } else {
+                        LoadOpChoice::ClearTransparent
+                    }
                 } else {
                     LoadOpChoice::Load
-                };
+                };;
                 let has_ops = batch_start < draw_ops.len();
                 if has_ops || first {
                     render_plan.push(RenderPlanItem::Draw(DrawBatchPlan {
@@ -5722,7 +5853,7 @@ impl Renderer {
                         &self.layer_textures[batch.target_level - 1].view
                     };
                     let load = match batch.load_op {
-                        LoadOpChoice::ClearWhite => wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                        LoadOpChoice::Clear(c) => wgpu::LoadOp::Clear(c),
                         LoadOpChoice::ClearTransparent => {
                             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
                         }
@@ -5733,20 +5864,21 @@ impl Renderer {
                     // wgpu validation requires: pipeline has depth → pass has depth attachment.
                     // Off-screen opacity layers don't need depth sorting, so they always
                     // clear to 1.0 (far plane) — correct result; they are composited by alpha.
-                    let depth_attachment = self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
-                        view: dv,
-                        depth_ops: Some(wgpu::Operations {
-                            // Level 0: clear at frame start (ClearWhite/ClearTransparent),
-                            //          load to accumulate depth across same-frame batches.
-                            // Level > 0: always clear to 1.0 so depth sorting within the
-                            //            offscreen layer is independent of the parent frame.
-                            load: if batch.target_level > 0 {
-                                wgpu::LoadOp::Clear(1.0)
-                            } else if matches!(batch.load_op, LoadOpChoice::Load) {
-                                wgpu::LoadOp::Load
-                            } else {
-                                wgpu::LoadOp::Clear(1.0)
-                            },
+                     let depth_attachment = self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                         view: dv,
+                         depth_ops: Some(wgpu::Operations {
+                             // Level 0: clear to 1.0 (far) at the start of each draw
+                             //          batch so depth tests within the pass are
+                             //          accumulated across same-frame batches.
+                             // Level > 0: clear to 1.0 so depth sorting within the
+                             //            offscreen layer is independent of the parent frame.
+                             load: if batch.target_level > 0 {
+                                 wgpu::LoadOp::Clear(1.0)
+                             } else if matches!(batch.load_op, LoadOpChoice::Load) {
+                                 wgpu::LoadOp::Load
+                             } else {
+                                 wgpu::LoadOp::Clear(1.0)
+                             },
                             store: wgpu::StoreOp::Store,
                         }),
                         stencil_ops: None,
@@ -6761,11 +6893,12 @@ impl Renderer {
         pages: &[Vec<crate::DisplayCommand>],
         page_w: u32,
         page_h: u32,
+        target_color_space: ColorSpace,
     ) -> Result<Vec<lumen_image::Image>, Box<dyn std::error::Error>> {
         if pages.is_empty() {
             return Ok(vec![]);
         }
-        let mut renderer = Renderer::new_headless(font_bytes, page_w, page_h)?;
+        let mut renderer = Renderer::new_headless(font_bytes, page_w, page_h, target_color_space)?;
         let mut images = Vec::with_capacity(pages.len());
         for page_cmds in pages {
             let img = renderer.render_to_image(page_cmds, 0.0, 0.0)?;

@@ -368,7 +368,7 @@ impl BrowserSession for InProcessSession {
         // Create headless renderer for off-screen rendering.
         let width = self.viewport.width as u32;
         let height = self.viewport.height as u32;
-        let mut renderer = lumen_paint::Renderer::new_headless(INTER_FONT.to_vec(), width, height)
+        let mut renderer = lumen_paint::Renderer::new_headless(INTER_FONT.to_vec(), width, height, lumen_core::ColorSpace::Srgb)
             .map_err(|e| Error::Other(format!("headless renderer: {e}")))?;
 
         // Render to image (RGBA8).

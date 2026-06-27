@@ -645,7 +645,7 @@ impl BrowserSession for WinitSession {
         let display_list = lumen_paint::build_display_list_ordered(&state.layout_root, &sc_tree, &sc_order);
         let width = self.viewport.width as u32;
         let height = self.viewport.height as u32;
-        let mut renderer = lumen_paint::Renderer::new_headless(INTER_FONT.to_vec(), width, height)
+        let mut renderer = lumen_paint::Renderer::new_headless(INTER_FONT.to_vec(), width, height, lumen_core::ColorSpace::Srgb)
             .map_err(|e| Error::Other(format!("headless renderer: {e}")))?;
 
         let image = renderer

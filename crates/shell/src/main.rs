@@ -889,6 +889,7 @@ fn render_source_to_png(
         raw.cross_origin_isolated,
         None,  // sw_worker_store
         None,  // cache_backend
+        lumen_core::ColorSpace::Srgb,
     )?;
 
     // Полная высота страницы (контент может быть длиннее экрана), с потолком.
@@ -1052,6 +1053,7 @@ fn do_print_to_pdf(
         raw.cross_origin_isolated,
         None,  // sw_worker_store: not needed in headless PDF mode
         None,  // cache_backend: not needed in headless PDF mode
+        lumen_core::ColorSpace::Srgb,
     )?;
 
     let ctx = PaginationContext {
@@ -1074,6 +1076,7 @@ fn do_print_to_pdf(
         &split_pages,
         PDF_PAGE_W,
         PDF_PAGE_H,
+        ColorSpace::Srgb,
     )?;
 
     let page_count = images.len();
@@ -1123,6 +1126,7 @@ fn do_print_to_pdf_with_opts(
         raw.cross_origin_isolated,
         None, // sw_worker_store: not needed in headless print mode
         None, // cache_backend: not needed in headless print mode
+        lumen_core::ColorSpace::Srgb,
     )?;
 
     let ctx = PaginationContext {
@@ -1146,6 +1150,7 @@ fn do_print_to_pdf_with_opts(
         &split_pages,
         PDF_PAGE_W,
         PDF_PAGE_H,
+        ColorSpace::Srgb,
     )?;
 
     let page_count = images.len();
@@ -1295,13 +1300,13 @@ fn run_dump(
         }
         DumpKind::Layout => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None, false, None, None)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None, false, None, None, lumen_core::ColorSpace::Srgb)?;
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None, false, None, None)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None, false, None, None, lumen_core::ColorSpace::Srgb)?;
             let dl = paint_ordered(&parsed.layout);
             print!("{}", lumen_paint::serialize_display_list(&dl));
             Ok(())
@@ -2645,7 +2650,7 @@ impl PageSource {
         }
         let raw = self.load_bytes(sink.clone(), None)?;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, false, false, None, raw.cross_origin_isolated, None, None)?;
+            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, false, false, None, raw.cross_origin_isolated, None, None, lumen_core::ColorSpace::Srgb)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }
@@ -3437,6 +3442,7 @@ fn fetch_and_decode_images(
     sink: &Arc<dyn EventSink>,
     viewport: lumen_core::geom::Size,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    target: lumen_core::ColorSpace,
 ) -> (Vec<(String, lumen_image::Image)>, Vec<(String, lumen_image::AnimatedGif)>, Vec<(u32, String)>) {
     let requests = lumen_layout::collect_image_requests(doc, viewport);
 
@@ -3473,7 +3479,7 @@ fn fetch_and_decode_images(
         }
         let wants_intrinsic = !req.has_explicit_width && !req.has_explicit_height;
         let decoded = image_cache::IMAGE_CACHE.get_or_decode_current(&req.url, || {
-            decode_image(&req.url, base, sink, cookie_jar.clone())
+            decode_image(&req.url, base, sink, cookie_jar.clone(), target)
         });
         match decoded {
             None => ImgOutcome::Skip,
@@ -3572,6 +3578,7 @@ fn decode_image(
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    target: lumen_core::ColorSpace,
 ) -> Option<image_cache::DecodedImage> {
     use image_cache::DecodedImage;
     let bytes = match fetch_image_bytes(raw_src, base, sink, cookie_jar) {
@@ -3614,7 +3621,7 @@ fn decode_image(
         };
     }
 
-    match lumen_image::decode(&bytes) {
+    match lumen_image::decode_to(&bytes, target) {
         Ok(image) => {
             eprintln!(
                 "Загружена картинка: {} ({}×{}, {:?})",
@@ -3810,10 +3817,9 @@ fn parse_and_layout(
     dark_mode: bool,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     cross_origin_isolated: bool,
-    // PH3-20: live SW worker threads. `None` in headless/PDF/snapshot modes.
     sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
-    // PH3-20: shared Cache API backend (page + SW worker). `None` in headless modes.
     cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
+    target: lumen_core::ColorSpace,
 ) -> Result<ParsedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
@@ -3925,7 +3931,7 @@ fn parse_and_layout(
     // loading="lazy" изображения возвращаются в lazy_pairs и не загружаются сейчас.
     let (images, animated_gifs, lazy_pairs) = {
         let mut d = doc_arc.lock().unwrap();
-        fetch_and_decode_images(&mut d, base, sink, viewport, cookie_jar.clone())
+        fetch_and_decode_images(&mut d, base, sink, viewport, cookie_jar.clone(), target)
     };
 
     // Register decoded <img> bitmaps with the JS runtime so Canvas 2D
@@ -4015,7 +4021,7 @@ fn parse_and_layout(
     // и добавляем к `images` тем же ключом, что эмиттер кладёт в
     // `DisplayCommand::DrawBackgroundImage.src`.
     let mut images = images;
-    for (src, image) in fetch_and_decode_background_images(&layout, base, sink, cookie_jar.clone()) {
+    for (src, image) in fetch_and_decode_background_images(&layout, base, sink, cookie_jar.clone(), target) {
         images.push((src, image));
     }
 
@@ -4048,6 +4054,7 @@ fn fetch_and_decode_background_images(
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+    target: lumen_core::ColorSpace,
 ) -> Vec<(String, lumen_image::Image)> {
     let urls = lumen_layout::collect_background_image_requests(layout);
     // Параллельная загрузка+декодирование, порядок сохраняем (ключи уникальны).
@@ -4059,7 +4066,7 @@ fn fetch_and_decode_background_images(
                 return None;
             }
         };
-        let image = match lumen_image::decode(&bytes) {
+        let image = match lumen_image::decode_to(&bytes, target) {
             Ok(i) => i,
             Err(e) => {
                 eprintln!("Не декодируется bg-картинка {url}: {e}");
@@ -4525,8 +4532,9 @@ fn render_bytes(
     cross_origin_isolated: bool,
     sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
     cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
+    target: lumen_core::ColorSpace,
 ) -> Result<RenderedPage, Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, target)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -7018,11 +7026,12 @@ impl Lumen {
             let sink = Arc::clone(&self.event_sink);
             let cookie_jar = Arc::clone(&self.cookie_jar);
             let proxy = self.load_proxy.clone();
+            let target = self.target_color_space();
             std::thread::spawn(move || {
                 // Fill the shared cache so the final `fetch_and_decode_images` pass
                 // reuses these pixels instead of re-fetching+re-decoding (BUG-172).
                 let decoded = image_cache::IMAGE_CACHE.get_or_decode(generation, &req.url, || {
-                    decode_image(&req.url, &base, &sink, Some(cookie_jar))
+                    decode_image(&req.url, &base, &sink, Some(cookie_jar), target)
                 });
                 match decoded {
                     // streaming best-effort: финальный pipeline залогирует/применит.
@@ -7366,7 +7375,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
         };
 
-        let mut renderer = match backend_factory::create_backend(window.clone(), INTER_FONT.to_vec()) {
+        let mut renderer = match backend_factory::create_backend(
+            window.clone(),
+            INTER_FONT.to_vec(),
+            self.target_color_space(),
+        ) {
             Ok(r) => r,
             Err(err) => {
                 eprintln!("Не удалось инициализировать рендер: {err}");
@@ -7561,6 +7574,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 let dark_mode = self.dark_mode;
                 let proxy = self.load_proxy.clone();
                 let mut preload_dispatched = std::mem::take(&mut self.preload_dispatched);
+                let target = self.target_color_space();
                 std::thread::spawn(move || {
                     let result = render_bytes(
                         &raw.bytes,
@@ -7580,6 +7594,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         raw.cross_origin_isolated,
                         sw_worker_store,
                         cache_backend,
+                        target,
                     )
                     .map_err(|e| e.to_string());
                     // Если event loop уже закрыт — Box (вместе с JS-хэндлом)
@@ -12571,7 +12586,11 @@ impl Lumen {
                 return;
             }
         };
-        let renderer = match backend_factory::create_backend(window.clone(), INTER_FONT.to_vec()) {
+        let renderer = match backend_factory::create_backend(
+            window.clone(),
+            INTER_FONT.to_vec(),
+            self.target_color_space(),
+        ) {
             Ok(r) => r,
             Err(err) => {
                 eprintln!("PiP: не удалось создать рендер OS-окна ({err}); fallback на overlay");

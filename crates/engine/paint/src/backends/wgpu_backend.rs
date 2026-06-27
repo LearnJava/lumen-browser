@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use lumen_core::ColorSpace;
 use lumen_core::ext::{FontProvider, MemoryPressureLevel};
 use lumen_core::geom::Size;
 use lumen_image::Image;
@@ -51,6 +52,10 @@ fn surface_error_to_render_error(e: wgpu::SurfaceError) -> RenderError {
 pub struct WgpuBackend {
     /// Внутренний wgpu-растеризатор.
     renderer: Renderer,
+    /// Target color space for wide-gamut output (ph3-color-management Step 4).
+    /// Mirrors [`Renderer::target_color_space`] so shell can gate wide-gamut
+    /// features (Step 7) without downcasting.
+    target_color_space: ColorSpace,
 }
 
 impl WgpuBackend {
@@ -62,8 +67,12 @@ impl WgpuBackend {
     pub fn new(
         window: Arc<Window>,
         font_bytes: Vec<u8>,
+        target_color_space: ColorSpace,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(Self { renderer: Renderer::new(window, font_bytes)? })
+        Ok(Self {
+            renderer: Renderer::new(window, font_bytes, target_color_space)?,
+            target_color_space,
+        })
     }
 
     /// Создаёт headless-бэкенд для тестов и `--print-to-pdf`.
@@ -74,8 +83,32 @@ impl WgpuBackend {
         font_bytes: Vec<u8>,
         width: u32,
         height: u32,
+        target_color_space: ColorSpace,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        Ok(Self { renderer: Renderer::new_headless(font_bytes, width, height)? })
+        Ok(Self {
+            renderer: Renderer::new_headless(font_bytes, width, height, target_color_space)?,
+            target_color_space,
+        })
+    }
+
+    /// Target color space selected for the output surface.
+    ///
+    /// `Srgb` — legacy 8-bit path (existing behaviour).
+    /// `DisplayP3` / `Rec2020` — wide-gamut surface was requested (Step 4);
+    /// Step 7 gates wide-gamut exposure to this value.
+    #[must_use]
+    pub fn target_color_space(&self) -> ColorSpace {
+        self.target_color_space
+    }
+
+    /// `true` если текущий вывод configured для wide-gamut (Display P3 или Rec.2020).
+    ///
+    /// Используется в shell/driver для:
+    /// - гейта wide-gamut фич (Step 7);
+    /// - выбора ICC-трансформа для изображений (Step 6).
+    #[must_use]
+    pub fn is_wide_gamut(&self) -> bool {
+        matches!(self.target_color_space, ColorSpace::DisplayP3 | ColorSpace::Rec2020)
     }
 
     /// Неизменяемый доступ к внутреннему [`Renderer`].
@@ -111,6 +144,10 @@ impl RenderBackend for WgpuBackend {
 
     fn set_scale_factor(&mut self, scale: f64) {
         self.renderer.set_scale_factor(scale);
+    }
+
+    fn set_canvas_background(&mut self, color: Option<lumen_layout::Color>) {
+        self.renderer.set_canvas_background(color);
     }
 
     fn register_image(&mut self, src: String, image: &Image) -> Result<(), String> {

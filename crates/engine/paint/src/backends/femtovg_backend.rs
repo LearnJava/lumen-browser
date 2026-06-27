@@ -3637,8 +3637,8 @@ mod tests {
     #[test]
     fn resolve_stops_evenly_spaced() {
         let stops = vec![
-            GradientStop { color: Color::WHITE, position: None },
-            GradientStop { color: Color::BLACK, position: None },
+            GradientStop { color: Color::WHITE, position: None , ..Default::default() },
+            GradientStop { color: Color::BLACK, position: None , ..Default::default() },
         ];
         let resolved = resolve_stops(&stops, 100.0);
         assert_eq!(resolved.len(), 2);
@@ -3649,9 +3649,9 @@ mod tests {
     #[test]
     fn resolve_stops_fixed_positions() {
         let stops = vec![
-            GradientStop { color: Color::WHITE, position: Some(Length::Percent(0.0)) },
-            GradientStop { color: Color::BLACK, position: Some(Length::Percent(50.0)) },
-            GradientStop { color: Color::WHITE, position: Some(Length::Percent(100.0)) },
+            GradientStop { color: Color::WHITE, position: Some(Length::Percent(0.0)) , ..Default::default() },
+            GradientStop { color: Color::BLACK, position: Some(Length::Percent(50.0)) , ..Default::default() },
+            GradientStop { color: Color::WHITE, position: Some(Length::Percent(100.0)) , ..Default::default() },
         ];
         let resolved = resolve_stops(&stops, 100.0);
         assert_eq!(resolved.len(), 3);
@@ -3665,8 +3665,8 @@ mod tests {
         let red = Color { r: 255, g: 0, b: 0, a: 255 };
         let green = Color { r: 0, g: 255, b: 0, a: 255 };
         let stops = vec![
-            GradientStop { color: red, position: Some(Length::Percent(50.0)) },
-            GradientStop { color: green, position: Some(Length::Percent(50.0)) },
+            GradientStop { color: red, position: Some(Length::Percent(50.0)) , ..Default::default() },
+            GradientStop { color: green, position: Some(Length::Percent(50.0)) , ..Default::default() },
         ];
         let r = femtovg_stops(&stops, 100.0, false);
         let last = *r.last().unwrap();
@@ -3679,8 +3679,8 @@ mod tests {
         let red = Color { r: 255, g: 0, b: 0, a: 255 };
         let blue = Color { r: 0, g: 0, b: 255, a: 255 };
         let stops = vec![
-            GradientStop { color: red, position: None },
-            GradientStop { color: blue, position: None },
+            GradientStop { color: red, position: None , ..Default::default() },
+            GradientStop { color: blue, position: None , ..Default::default() },
         ];
         // Стопы 0/1 не требуют дозаполнения хвоста.
         assert_eq!(femtovg_stops(&stops, 100.0, false).len(), 2);
@@ -3693,10 +3693,10 @@ mod tests {
         let c1 = Color { r: 0x33, g: 0x33, b: 0x33, a: 255 };
         let c2 = Color { r: 0x66, g: 0x66, b: 0x66, a: 255 };
         let stops = vec![
-            GradientStop { color: c1, position: Some(Length::Px(0.0)) },
-            GradientStop { color: c1, position: Some(Length::Px(10.0)) },
-            GradientStop { color: c2, position: Some(Length::Px(10.0)) },
-            GradientStop { color: c2, position: Some(Length::Px(20.0)) },
+            GradientStop { color: c1, position: Some(Length::Px(0.0)) , ..Default::default() },
+            GradientStop { color: c1, position: Some(Length::Px(10.0)) , ..Default::default() },
+            GradientStop { color: c2, position: Some(Length::Px(10.0)) , ..Default::default() },
+            GradientStop { color: c2, position: Some(Length::Px(20.0)) , ..Default::default() },
         ];
         let r = femtovg_stops(&stops, 200.0, true);
         assert!(r.windows(2).all(|w| w[1].0 >= w[0].0 - 1e-6), "позиции должны быть неубывающими");
@@ -3710,8 +3710,8 @@ mod tests {
         // Нулевой период (оба стопа в одной позиции) → сплошной цвет, без зацикливания.
         let c = Color { r: 10, g: 20, b: 30, a: 255 };
         let stops = vec![
-            GradientStop { color: c, position: Some(Length::Percent(50.0)) },
-            GradientStop { color: c, position: Some(Length::Percent(50.0)) },
+            GradientStop { color: c, position: Some(Length::Percent(50.0)) , ..Default::default() },
+            GradientStop { color: c, position: Some(Length::Percent(50.0)) , ..Default::default() },
         ];
         let r = femtovg_stops(&stops, 100.0, true);
         assert_eq!(r.len(), 2);
@@ -3776,8 +3776,8 @@ mod tests {
     #[test]
     fn mask_gradient_alpha_decreases_black_to_transparent() {
         let stops = vec![
-            GradientStop { color: Color::BLACK, position: None },
-            GradientStop { color: Color::TRANSPARENT, position: None },
+            GradientStop { color: Color::BLACK, position: None , ..Default::default() },
+            GradientStop { color: Color::TRANSPARENT, position: None , ..Default::default() },
         ];
         let resolved = resolve_stops(&stops, 200.0);
         // The black→transparent segment is subdivided for premultiplied

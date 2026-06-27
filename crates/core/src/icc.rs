@@ -16,6 +16,8 @@
 //! The parser is deliberately allocation-light and never panics: every accessor
 //! is bounds-checked and malformed input yields `None` rather than an error.
 
+use crate::ColorSpace;
+
 /// Profile/device class (header bytes 12–15).
 ///
 /// Identifies the role of the profile in a colour-managed workflow.
@@ -929,8 +931,10 @@ impl RgbTransform {
 /// collision risk; distinct profiles per page number in the low single digits and
 /// each is only a few kilobytes.
 struct TransformCache {
-    /// Compiled RGB matrix-shaper transforms by profile bytes.
+    /// Compiled RGB matrix-shaper transforms by profile bytes (target: sRGB).
     rgb: std::collections::HashMap<Vec<u8>, Option<std::sync::Arc<RgbTransform>>>,
+    /// Compiled RGB matrix-shaper transforms by (profile bytes, target).
+    rgb_targeted: std::collections::HashMap<(Vec<u8>, ColorSpace), Option<std::sync::Arc<RgbTransform>>>,
     /// Compiled CMYK `A2B0` LUT transforms by profile bytes.
     cmyk: std::collections::HashMap<Vec<u8>, Option<std::sync::Arc<CmykTransform>>>,
 }
@@ -941,6 +945,7 @@ static TRANSFORM_CACHE: std::sync::LazyLock<std::sync::Mutex<TransformCache>> =
     std::sync::LazyLock::new(|| {
         std::sync::Mutex::new(TransformCache {
             rgb: std::collections::HashMap::new(),
+            rgb_targeted: std::collections::HashMap::new(),
             cmyk: std::collections::HashMap::new(),
         })
     });
@@ -965,6 +970,32 @@ pub fn cached_rgb_transform(profile_bytes: &[u8]) -> Option<std::sync::Arc<RgbTr
         .and_then(|p| p.build_rgb_transform())
         .map(std::sync::Arc::new);
     cache.rgb.insert(profile_bytes.to_vec(), built.clone());
+    built
+}
+
+/// Returns the compiled RGB matrix-shaper transform for `profile_bytes` targeting
+/// `target` (`ColorSpace`), building and caching on first use (ICC-5).
+///
+/// Falls back to `build_rgb_transform()` (sRGB) for targets that the profile's
+/// TRC curves cannot encode, e.g. `Lab`. Returns `None` (also cached) when the
+/// profile has no buildable RGB matrix-shaper transform.
+#[must_use]
+pub fn cached_rgb_transform_to(
+    profile_bytes: &[u8],
+    target: ColorSpace,
+) -> Option<std::sync::Arc<RgbTransform>> {
+    let mut cache = match TRANSFORM_CACHE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let key = (profile_bytes.to_vec(), target);
+    if let Some(hit) = cache.rgb_targeted.get(&key) {
+        return hit.clone();
+    }
+    let built = IccProfile::parse(profile_bytes)
+        .and_then(|p| p.build_rgb_transform_to(target))
+        .map(std::sync::Arc::new);
+    cache.rgb_targeted.insert(key, built.clone());
     built
 }
 
