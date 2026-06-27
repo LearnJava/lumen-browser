@@ -735,7 +735,7 @@ impl ColorScheme {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Color {
     pub r: u8,
     pub g: u8,
@@ -5109,9 +5109,14 @@ pub enum FilterFn {
 /// <length-percentage>, <color-stop>`) — без позиции цвета, чисто
 /// midpoint-маркер — пока не моделируем: они отрабатывают на интерполяции
 /// между соседями и не имеют animation-смысла на уровне per-stop pair.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct GradientStop {
     pub color: Color,
+    /// Source color space of this stop. `Srgb` for legacy `<color>` values;
+    /// `DisplayP3` / `Rec2020` when the stop was written as `color(display-p3 …)`
+    /// / `color(rec2020 …)`. Carried through the display list so the renderer
+    /// can apply the correct output transform (ph3-color-management Step 3).
+    pub color_space: ColorSpace,
     pub position: Option<Length>,
 }
 
@@ -17575,6 +17580,7 @@ fn densify_gradient_stops_for_space(stops: &[GradientStop], space: MixColorSpace
     let mut out: Vec<GradientStop> = Vec::with_capacity((stops.len() - 1) * SEGMENTS + 1);
     out.push(GradientStop {
         color: stops[0].color,
+        color_space: stops[0].color_space,
         position: Some(Length::Percent(resolved[0])),
     });
     for w in 0..stops.len() - 1 {
@@ -17586,11 +17592,13 @@ fn densify_gradient_stops_for_space(stops: &[GradientStop], space: MixColorSpace
             let t = j as f32 / SEGMENTS as f32;
             out.push(GradientStop {
                 color: from_f(mix_colors(space, a, 1.0 - t, b, t)),
+                color_space: stops[w].color_space,
                 position: Some(Length::Percent(p0 + (p1 - p0) * t)),
             });
         }
         out.push(GradientStop {
             color: stops[w + 1].color,
+            color_space: stops[w + 1].color_space,
             position: Some(Length::Percent(p1)),
         });
     }
@@ -17815,9 +17823,17 @@ pub fn parse_gradient_stops(s: &str) -> Vec<GradientStop> {
         let pos1 = tokens.get(ci + 1).and_then(|t| parse_pos(t));
         let pos2 = tokens.get(ci + 2).and_then(|t| parse_pos(t));
 
-        stops.push(GradientStop { color, position: pos1 });
+        stops.push(GradientStop {
+            color,
+            position: pos1,
+            ..Default::default()
+        });
         if pos2.is_some() {
-            stops.push(GradientStop { color, position: pos2 });
+            stops.push(GradientStop {
+                color,
+                position: pos2,
+                ..Default::default()
+            });
         }
     }
 

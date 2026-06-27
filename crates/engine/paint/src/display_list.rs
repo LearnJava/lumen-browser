@@ -3579,6 +3579,7 @@ fn mask_stops_for_mode(stops: &[GradientStop], mode: lumen_layout::MaskMode) -> 
                 let a = (luma / 255.0 * f32::from(c.a)).round().clamp(0.0, 255.0) as u8;
                 GradientStop {
                     color: Color { a, ..c },
+                    color_space: s.color_space,
                     position: s.position.clone(),
                 }
             })
@@ -12570,8 +12571,16 @@ mod tests {
     #[test]
     fn mask_stops_alpha_mode_unchanged() {
         let stops = vec![
-            GradientStop { color: Color { r: 0, g: 0, b: 0, a: 255 }, position: None },
-            GradientStop { color: Color { r: 255, g: 255, b: 255, a: 255 }, position: None },
+            GradientStop {
+                color: Color { r: 0, g: 0, b: 0, a: 255 },
+                position: None,
+                ..Default::default()
+            },
+            GradientStop {
+                color: Color { r: 255, g: 255, b: 255, a: 255 },
+                position: None,
+                ..Default::default()
+            },
         ];
         let out = mask_stops_for_mode(&stops, lumen_layout::MaskMode::Alpha);
         assert_eq!(out, stops, "alpha mode leaves stops untouched");
@@ -12581,8 +12590,16 @@ mod tests {
     fn mask_stops_luminance_bakes_alpha() {
         // Black opaque → luma 0 → alpha 0; white opaque → luma 1 → alpha 255.
         let stops = vec![
-            GradientStop { color: Color { r: 0, g: 0, b: 0, a: 255 }, position: None },
-            GradientStop { color: Color { r: 255, g: 255, b: 255, a: 255 }, position: None },
+            GradientStop {
+                color: Color { r: 0, g: 0, b: 0, a: 255 },
+                position: None,
+                ..Default::default()
+            },
+            GradientStop {
+                color: Color { r: 255, g: 255, b: 255, a: 255 },
+                position: None,
+                ..Default::default()
+            },
         ];
         let out = mask_stops_for_mode(&stops, lumen_layout::MaskMode::Luminance);
         assert_eq!(out[0].color.a, 0, "black stop becomes fully transparent");
@@ -12598,6 +12615,7 @@ mod tests {
         let stops = vec![GradientStop {
             color: Color { r: 255, g: 255, b: 255, a: 128 },
             position: None,
+            ..Default::default()
         }];
         let out = mask_stops_for_mode(&stops, lumen_layout::MaskMode::Luminance);
         assert_eq!(out[0].color.a, 128, "luminance 1.0 keeps source alpha");
@@ -12609,6 +12627,7 @@ mod tests {
         let stops = vec![GradientStop {
             color: Color { r: 0, g: 255, b: 0, a: 255 },
             position: None,
+            ..Default::default()
         }];
         let out = mask_stops_for_mode(&stops, lumen_layout::MaskMode::Luminance);
         assert_eq!(out[0].color.a, 182, "0.7152·255 rounds to 182");

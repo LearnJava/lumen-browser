@@ -508,7 +508,11 @@ pub(crate) fn interpolate_gradient_stops(
             (Some(pa), Some(pb)) => Some(interpolate_length(pa, pb, t)?),
             _ => return None,
         };
-        out.push(GradientStop { color, position });
+        out.push(GradientStop {
+            color,
+            position,
+            ..Default::default()
+        });
     }
     Some(out)
 }
@@ -2266,6 +2270,7 @@ mod tests {
         GradientStop {
             color: Color { r, g, b, a: 255 },
             position: pos,
+            ..Default::default()
         }
     }
 

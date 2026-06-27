@@ -236,7 +236,11 @@ mod tests {
     use super::*;
 
     fn stop(color: Color, pos: Option<Length>) -> GradientStop {
-        GradientStop { color, position: pos }
+        GradientStop {
+    color,
+    position: pos,
+    ..Default::default()
+}
     }
 
     const RED: Color = Color { r: 255, g: 0, b: 0, a: 255 };
