@@ -251,6 +251,7 @@ pub fn build_panel(
                 font_variation_axes: Vec::new(),
                 tab_size: 0.0,
                 highlight_name: None,
+                text_orientation: None,
             });
         }
 
@@ -305,6 +306,7 @@ pub fn build_panel(
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
 
         // Tab title.
@@ -324,6 +326,7 @@ pub fn build_panel(
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
     }
 

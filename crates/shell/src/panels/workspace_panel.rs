@@ -272,6 +272,7 @@ pub fn build_panel(panel: &WorkspacePanel, window_w: f32, window_h: f32, pal: &P
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
 
         // Workspace name (truncated to leave room for "×").
@@ -289,6 +290,7 @@ pub fn build_panel(panel: &WorkspacePanel, window_w: f32, window_h: f32, pal: &P
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
 
         cursor_x = chip_right + CHIP_GAP;
@@ -313,6 +315,7 @@ pub fn build_panel(panel: &WorkspacePanel, window_w: f32, window_h: f32, pal: &P
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
 
     out

@@ -433,6 +433,7 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
 
     // Курсор — вертикальная линия. Не рисуется если выбрана подсказка.
@@ -502,6 +503,7 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
                 font_variation_axes: Vec::new(),
                 tab_size: 0.0,
                 highlight_name: None,
+                text_orientation: None,
             });
             out.push(DisplayCommand::DrawText {
                 rect: Rect::new(
@@ -519,6 +521,7 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
                 font_variation_axes: Vec::new(),
                 tab_size: 0.0,
                 highlight_name: None,
+                text_orientation: None,
             });
         } else {
             // Одна строка по центру высоты строки.
@@ -538,6 +541,7 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
                 font_variation_axes: Vec::new(),
                 tab_size: 0.0,
                 highlight_name: None,
+                text_orientation: None,
             });
         }
 
@@ -558,6 +562,7 @@ pub fn build_bar_overlay(state: &AddressBarState, bar: BarOverlay, pal: &Palette
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
     }
 

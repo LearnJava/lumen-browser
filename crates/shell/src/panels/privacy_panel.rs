@@ -467,6 +467,7 @@ fn make_text(
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     }
 }
 
