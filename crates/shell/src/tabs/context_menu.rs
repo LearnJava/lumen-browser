@@ -277,6 +277,7 @@ pub fn build_overlay(menu: &TabContextMenu, window_w: f32, window_h: f32) -> Dis
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
     }
 

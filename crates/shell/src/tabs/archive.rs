@@ -267,6 +267,7 @@ pub fn build_button(archive: &TabArchive, window_w: f32, tab_bar_h: f32) -> Disp
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
 
     // Count badge (top-right corner of button) when there are archived tabs.
@@ -299,6 +300,7 @@ pub fn build_button(archive: &TabArchive, window_w: f32, tab_bar_h: f32) -> Disp
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
     }
 
@@ -352,6 +354,7 @@ pub fn build_panel(archive: &TabArchive, window_w: f32, tab_bar_h: f32) -> Displ
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
 
     // Empty state placeholder.
@@ -367,6 +370,7 @@ pub fn build_panel(archive: &TabArchive, window_w: f32, tab_bar_h: f32) -> Displ
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
         return out;
     }
@@ -408,6 +412,7 @@ pub fn build_panel(archive: &TabArchive, window_w: f32, tab_bar_h: f32) -> Displ
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
 
         // Dismiss button (×) — right side.
@@ -422,6 +427,7 @@ pub fn build_panel(archive: &TabArchive, window_w: f32, tab_bar_h: f32) -> Displ
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
 
         // Title text — truncated.
@@ -437,6 +443,7 @@ pub fn build_panel(archive: &TabArchive, window_w: f32, tab_bar_h: f32) -> Displ
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
 
         // URL text — smaller, truncated.
@@ -453,6 +460,7 @@ pub fn build_panel(archive: &TabArchive, window_w: f32, tab_bar_h: f32) -> Displ
                 font_variation_axes: Vec::new(),
                 tab_size: 0.0,
                 highlight_name: None,
+                text_orientation: None,
             });
         }
     }

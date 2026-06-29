@@ -295,6 +295,7 @@ pub fn build_panel(pip: &PipWindow, pal: &Palette) -> DisplayList {
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
 
     // `×` close glyph.
@@ -309,6 +310,7 @@ pub fn build_panel(pip: &PipWindow, pal: &Palette) -> DisplayList {
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
 
     // Centre play / pause button: circular scrim + glyph.

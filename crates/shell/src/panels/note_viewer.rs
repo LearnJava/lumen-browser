@@ -196,6 +196,7 @@ pub fn build_note_viewer(panel: &NoteViewerPanel, window_size: (u32, u32), pal: 
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
 
     // Close button [×].
@@ -216,6 +217,7 @@ pub fn build_note_viewer(panel: &NoteViewerPanel, window_size: (u32, u32), pal: 
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
 
     // ── URL row ───────────────────────────────────────────────────────────────
@@ -236,6 +238,7 @@ pub fn build_note_viewer(panel: &NoteViewerPanel, window_size: (u32, u32), pal: 
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
 
     // ── Selection area ────────────────────────────────────────────────────────
@@ -270,6 +273,7 @@ pub fn build_note_viewer(panel: &NoteViewerPanel, window_size: (u32, u32), pal: 
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
 
     // ── Comment area (only if non-empty) ──────────────────────────────────────
@@ -296,6 +300,7 @@ pub fn build_note_viewer(panel: &NoteViewerPanel, window_size: (u32, u32), pal: 
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
         out.push(DisplayCommand::DrawText {
             rect: Rect::new(x + PAD, cmt_y + 4.0 + FONT_LABEL * 1.5, OVERLAY_W - PAD * 2.0, FONT_COMMENT * 1.3),
@@ -308,6 +313,7 @@ pub fn build_note_viewer(panel: &NoteViewerPanel, window_size: (u32, u32), pal: 
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
     }
 
