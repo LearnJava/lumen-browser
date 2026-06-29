@@ -2295,8 +2295,8 @@ mod tests {
             center_y_pct: 0.5,
             from_angle_deg: 0.0,
             stops: vec![
-                GradientStop { color: red, position: None },
-                GradientStop { color: blue, position: None },
+                GradientStop { color: red, color_space: lumen_layout::ColorSpace::Srgb, position: None },
+                GradientStop { color: blue, color_space: lumen_layout::ColorSpace::Srgb, position: None },
             ],
             repeating: false,
         }];
@@ -2902,8 +2902,8 @@ mod tests {
                 rect: rect(0.0, 0.0, 40.0, 40.0),
                 angle_deg: 180.0, // CSS "to bottom"
                 stops: vec![
-                    GradientStop { color: black, position: None },
-                    GradientStop { color: clear, position: None },
+                    GradientStop { color: black, color_space: lumen_layout::ColorSpace::Srgb, position: None },
+                    GradientStop { color: clear, color_space: lumen_layout::ColorSpace::Srgb, position: None },
                 ],
                 repeating: false,
             },
@@ -2933,8 +2933,8 @@ mod tests {
                 center_x_pct: 0.5,
                 center_y_pct: 0.5,
                 stops: vec![
-                    GradientStop { color: black, position: None },
-                    GradientStop { color: clear, position: None },
+                    GradientStop { color: black, color_space: lumen_layout::ColorSpace::Srgb, position: None },
+                    GradientStop { color: clear, color_space: lumen_layout::ColorSpace::Srgb, position: None },
                 ],
                 repeating: false,
             },
@@ -3197,8 +3197,8 @@ mod tests {
             radius_x: 63.25,
             radius_y: 63.25,
             stops: vec![
-                GradientStop { color: red, position: None },
-                GradientStop { color: blue, position: None },
+                GradientStop { color: red, color_space: lumen_layout::ColorSpace::Srgb, position: None },
+                GradientStop { color: blue, color_space: lumen_layout::ColorSpace::Srgb, position: None },
             ],
             repeating: false,
         }];

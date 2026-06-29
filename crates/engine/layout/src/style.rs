@@ -11210,6 +11210,7 @@ fn parse_initial_letter(val: &str) -> Option<(f32, u32)> {
     Some((size, sink))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_declaration(
     style: &mut ComputedStyle,
     decl: &Declaration,
