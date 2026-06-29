@@ -625,6 +625,7 @@ pub fn build_layout_toggle_btn(tab_layout: TabLayout, btn_x: f32) -> DisplayList
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         },
     ]
 }
@@ -796,6 +797,7 @@ pub fn build_tab_bar(
                 font_variation_axes: Vec::new(),
                 tab_size: 0.0,
                 highlight_name: None,
+                text_orientation: None,
             });
         }
 
@@ -814,6 +816,7 @@ pub fn build_tab_bar(
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
 
         // Per-tab ad-block checkbox — small square at the tab's left edge,
@@ -837,6 +840,7 @@ pub fn build_tab_bar(
                 font_variation_axes: Vec::new(),
                 tab_size: 0.0,
                 highlight_name: None,
+                text_orientation: None,
             });
         }
 
@@ -856,6 +860,7 @@ pub fn build_tab_bar(
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
     }
 
@@ -919,6 +924,7 @@ pub fn build_tab_tooltip(
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         },
     ])
 }

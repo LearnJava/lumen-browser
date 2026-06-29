@@ -477,6 +477,7 @@ pub fn build_validation_tooltip(
         font_variation_axes: vec![],
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
     out
 }
@@ -864,6 +865,7 @@ pub fn build_select_dropdown(
             font_variation_axes: vec![],
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
     }
 
@@ -1091,6 +1093,7 @@ pub fn build_date_picker(
         font_variation_axes: vec![],
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
     // Month/year label centered
     let label = format!("{} {}", month_name(month), year);
@@ -1105,6 +1108,7 @@ pub fn build_date_picker(
         font_variation_axes: vec![],
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
     // Next arrow
     out.push(DisplayCommand::FillRect {
@@ -1122,6 +1126,7 @@ pub fn build_date_picker(
         font_variation_axes: vec![],
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
 
     // ── Day-of-week header ───────────────────────────────────────────
@@ -1140,6 +1145,7 @@ pub fn build_date_picker(
             font_variation_axes: vec![],
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
     }
 
@@ -1174,6 +1180,7 @@ pub fn build_date_picker(
             font_variation_axes: vec![],
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
     }
 

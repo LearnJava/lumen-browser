@@ -288,6 +288,7 @@ pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32, pal: &Palette) -> Di
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
     let origin_label = panel
         .current_origin
@@ -305,6 +306,7 @@ pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32, pal: &Palette) -> Di
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
 
     // Close "×" button.
@@ -320,6 +322,7 @@ pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32, pal: &Palette) -> Di
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
 
     // Divider line between header and rows.
@@ -345,6 +348,7 @@ pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32, pal: &Palette) -> Di
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
 
         // Label.
@@ -359,6 +363,7 @@ pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32, pal: &Palette) -> Di
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
 
         // Toggle button: coloured badge on the right.
@@ -381,6 +386,7 @@ pub fn build_panel(panel: &PermissionPanel, tab_bar_h: f32, pal: &Palette) -> Di
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
     }
 

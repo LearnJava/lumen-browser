@@ -271,6 +271,7 @@ pub fn build_panel(
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
 
     // Close button background.
@@ -293,6 +294,7 @@ pub fn build_panel(
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
 
     // ── Content area ──────────────────────────────────────────────────────────
@@ -326,6 +328,7 @@ pub fn build_panel(
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
         out.push(DisplayCommand::DrawText {
             rect: Rect::new(px + 10.0, content_y + 38.0, pw - 20.0, FONT_SZ * 1.4),
@@ -338,6 +341,7 @@ pub fn build_panel(
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
     }
 

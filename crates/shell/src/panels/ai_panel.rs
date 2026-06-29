@@ -218,6 +218,7 @@ pub fn build_panel(
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
     let close_x = px + pw - CLOSE_RIGHT - CLOSE_SIZE;
     let close_y = tab_bar_h + (HEADER_H - CLOSE_SIZE) / 2.0;
@@ -237,6 +238,7 @@ pub fn build_panel(
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
 
     // ── Response area ─────────────────────────────────────────────────────────
@@ -255,6 +257,7 @@ pub fn build_panel(
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
     } else {
         let line_h = FONT_SZ * 1.5;
@@ -272,6 +275,7 @@ pub fn build_panel(
                     font_variation_axes: Vec::new(),
                     tab_size: 0.0,
                     highlight_name: None,
+                    text_orientation: None,
                 });
             }
             line_y += line_h;
@@ -307,6 +311,7 @@ pub fn build_panel(
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
     let input_display = if panel.input.is_empty() {
         "type a prompt…".to_owned()
@@ -325,6 +330,7 @@ pub fn build_panel(
         font_variation_axes: Vec::new(),
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: None,
     });
 
     out
