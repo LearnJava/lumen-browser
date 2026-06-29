@@ -15042,7 +15042,9 @@ mod tests {
         assert_eq!(f.rect.y,   0.0, "float right: y at top");
     }
 
-    /// Float left сужает доступную ширину последующего block-брата.
+    /// Float left: последующий in-flow block-брат сохраняет полную ширину
+    /// containing-block, но его line-box сдвигается за float (CSS 2.1 §9.5).
+    /// RP-4: раньше клипали сам бокс (x=100, width=300) — это была аппроксимация.
     #[test]
     fn float_left_narrows_sibling_width() {
         let root = lay(
@@ -15055,12 +15057,18 @@ mod tests {
         let sibling = c.children.iter()
             .find(|ch| matches!(ch.kind, BoxKind::Block) && ch.style.float_side == FloatSide::None)
             .expect("sibling block");
-        // Sibling starts after left float (x=100) and has width = 400-100 = 300.
-        assert_eq!(sibling.rect.x,     100.0, "sibling starts after float");
-        assert_eq!(sibling.rect.width, 300.0, "sibling width narrowed");
+        // CSS 2.1 §9.5: the block keeps the full containing-block width, not narrowed.
+        assert_eq!(sibling.rect.x,     0.0,   "sibling keeps full-width origin");
+        assert_eq!(sibling.rect.width, 400.0, "sibling keeps full containing-block width");
+        // Only its line box recedes past the float (the inner inline run starts at 100).
+        let run = sibling.children.iter()
+            .find(|ch| matches!(ch.kind, BoxKind::InlineRun { .. }))
+            .expect("inline run");
+        assert_eq!(run.rect.x, 100.0, "line box starts after the left float");
     }
 
-    /// Float right сужает доступную ширину последующего block-брата.
+    /// Float right: последующий in-flow block-брат сохраняет полную ширину;
+    /// его line-box укорачивается справа на ширину float (CSS 2.1 §9.5).
     #[test]
     fn float_right_narrows_sibling_width() {
         let root = lay(
@@ -15073,9 +15081,15 @@ mod tests {
         let sibling = c.children.iter()
             .find(|ch| matches!(ch.kind, BoxKind::Block) && ch.style.float_side == FloatSide::None)
             .expect("sibling block");
-        // Sibling starts at x=0 (right float doesn't push it right), width = 400-100 = 300.
-        assert_eq!(sibling.rect.x,     0.0, "sibling starts at left edge");
-        assert_eq!(sibling.rect.width, 300.0, "sibling width narrowed by right float");
+        // CSS 2.1 §9.5: the block keeps the full containing-block width.
+        assert_eq!(sibling.rect.x,     0.0,   "sibling starts at left edge");
+        assert_eq!(sibling.rect.width, 400.0, "sibling keeps full containing-block width");
+        // Its line box starts at the left edge but is shortened by the right float.
+        let run = sibling.children.iter()
+            .find(|ch| matches!(ch.kind, BoxKind::InlineRun { .. }))
+            .expect("inline run");
+        assert_eq!(run.rect.x, 0.0, "line box starts at left edge");
+        assert!(run.rect.width <= 300.0 + 0.01, "line box shortened by right float, got {}", run.rect.width);
     }
 
     /// Два `float: left` выстраиваются горизонтально.

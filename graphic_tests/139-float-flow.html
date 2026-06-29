@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 139 float flow (nested blocks)</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+    .__f { background: #f7fafc; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
+    /* Each scenario is its own block formatting context so its floats stay local. */
+    .row { overflow: hidden; margin-bottom: 24px; }
+  </style>
+</head>
+<body>
+  <div class="__f">
+
+    <!-- Scenario 1 (RP-4 §9.5.2): `clear` inside a NON-BFC wrapper must clear the
+         enclosing context's float. Red float top-left; the blue cleared block lives
+         in a transparent wrapper that is the float's sibling, yet drops BELOW the
+         float (y ≥ 80) and spans the full width. -->
+    <div class="row" style="height: 130px;">
+      <div style="float: left; width: 120px; height: 80px; background: #e53e3e;"></div>
+      <div>
+        <div style="clear: left; height: 40px; background: #3182ce;"></div>
+      </div>
+    </div>
+
+    <!-- Scenario 2 (RP-4 §9.5): a block that establishes its OWN BFC (overflow:hidden)
+         beside a float must not overlap it — it shifts past the float's right edge.
+         Green float left; light-blue BFC block sits to its right on the same row. -->
+    <div class="row" style="height: 80px;">
+      <div style="float: left; width: 120px; height: 80px; background: #38a169;"></div>
+      <div style="overflow: hidden; height: 80px; background: #bee3f8;"></div>
+    </div>
+
+    <!-- Scenario 3 (RP-4 §9.5.1): a float declared inside a non-BFC wrapper placed
+         beside an outer float stacks to the RIGHT of the outer float (its inline
+         position is measured against the inherited float context). Purple outer
+         float at x=0; orange nested float stacks at x=120. -->
+    <div class="row" style="height: 80px;">
+      <div style="float: left; width: 120px; height: 80px; background: #805ad5;"></div>
+      <div>
+        <div style="float: left; width: 60px; height: 40px; background: #d69e2e;"></div>
+        <div style="height: 80px;"></div>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>
