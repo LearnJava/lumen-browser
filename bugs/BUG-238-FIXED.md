@@ -3,7 +3,17 @@
 > Переномерован из BUG-235 при мерже ветки декомпозиции roadmap (2026-06-23):
 > на main номер BUG-235 уже занят paint-build-багом (FIXED). Содержание то же.
 
-**Статус:** OPEN
+**Статус:** FIXED 2026-06-29
+
+> Починка: все три точки переведены на `browser_data_dir().join(...)`.
+> `lumen_idb_dir` → `<exe_dir>/data/idb/` был мигрирован ранее; этой правкой
+> мигрированы `extensions_dir` → `<exe_dir>/data/extensions/` и `config_path`
+> → `<exe_dir>/data/fingerprint.toml`. Пользователь подтвердил миграцию и
+> конфига (fingerprint.toml), хотя бриф помечал его как пограничный случай.
+> Опциональная миграция старых данных из `%APPDATA%` (п.4) не делалась —
+> низкий приоритет. Добавлены регресс-тесты `extensions_dir_is_portable`
+> (extensions/mod.rs) и обновлён `config_path_is_some` (config.rs).
+
 **Компонент:** shell (storage)
 **Файл:** `crates/shell/src/main.rs:4304` (`lumen_idb_dir`),
 `crates/shell/src/extensions/mod.rs:80` (`extensions_dir`),

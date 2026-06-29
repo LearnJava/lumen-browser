@@ -1,13 +1,13 @@
 //! Browser extension system stub (D-6).
 //!
-//! Phase 0: loads extensions from `<config>/lumen/extensions/<id>/manifest.json`,
+//! Phase 0: loads extensions from `<exe_dir>/data/extensions/<id>/manifest.json`,
 //! injects matching `content_scripts` into each page as extra scripts, and
 //! provides a `chrome.runtime.sendMessage()` stub so existing extension code
 //! does not throw on import.
 //!
 //! Directory layout expected on disk:
 //! ```text
-//! <config>/lumen/extensions/
+//! <exe_dir>/data/extensions/
 //!   my-ext/
 //!     manifest.json
 //!     content.js
@@ -70,24 +70,19 @@ pub struct ExtensionRegistry {
     extensions: Vec<LoadedExtension>,
 }
 
-/// Return the extensions directory for the current profile.
+/// Return the extensions directory under the portable browser-data folder.
 ///
-/// - Windows: `%APPDATA%\lumen\extensions\`
-/// - other:   `$XDG_CONFIG_HOME/lumen/extensions/` or `~/.config/lumen/extensions/`
+/// Path: `<exe_dir>/data/extensions/` via [`crate::adblock::browser_data_dir`] —
+/// the project's portable-data convention (user decision 2026-06-16: keep all
+/// browser data in the browser folder, never in OS dirs like `%APPDATA%` /
+/// `~/.config`). See BUG-238.
 ///
-/// Returns `None` only when none of the required environment variables are set.
+/// Always returns `Some` (the portable path is derived from the executable
+/// location, with a `./data` fallback); the `Option` is kept for API stability
+/// with existing callers.
 #[must_use]
 pub fn extensions_dir() -> Option<PathBuf> {
-    let base: PathBuf = if cfg!(windows) {
-        std::env::var_os("APPDATA")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))?
-    } else {
-        std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?
-    };
-    Some(base.join("lumen").join("extensions"))
+    Some(crate::adblock::browser_data_dir().join("extensions"))
 }
 
 impl ExtensionRegistry {
@@ -416,6 +411,16 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).unwrap();
         base
+    }
+
+    /// BUG-238: the extensions directory must live under the portable
+    /// `<exe_dir>/data/` folder, never in an OS config dir (`%APPDATA%` / XDG).
+    #[test]
+    fn extensions_dir_is_portable() {
+        let dir = extensions_dir().expect("portable path is always available");
+        assert!(dir.ends_with("data/extensions") || dir.ends_with("data\\extensions"));
+        let s = dir.to_string_lossy();
+        assert!(!s.contains(".config"), "must not use XDG config dir: {s}");
     }
 
     fn make_ext_dir(parent: &Path, id: &str, manifest: &str, scripts: &[(&str, &str)]) {

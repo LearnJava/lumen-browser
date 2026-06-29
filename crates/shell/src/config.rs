@@ -4,15 +4,14 @@
 //! of values via a small TOML file, so every page sees a consistent, chosen
 //! identity instead of the engine defaults.
 //!
-//! Path (resolved by [`config_path`]):
-//! - Windows: `%APPDATA%\lumen\fingerprint.toml`
-//! - other:   `$XDG_CONFIG_HOME/lumen/fingerprint.toml`, else `~/.config/lumen/fingerprint.toml`
+//! Path (resolved by [`config_path`]): `<exe_dir>/data/fingerprint.toml`
+//! (portable browser-data folder, see BUG-238).
 //!
 //! The file is a flat `key = value` subset of TOML (no tables/arrays). Unknown
 //! keys are ignored; malformed values fall back to the profile default. Example:
 //!
 //! ```toml
-//! # ~/.config/lumen/fingerprint.toml
+//! # <exe_dir>/data/fingerprint.toml
 //! http_profile        = "chrome"        # chrome|firefox|safari|edge|tor|lumen|strict
 //! tls_profile         = "standard"      # standard|strict|tor (default: derived from http_profile)
 //! screen_width        = 1920
@@ -326,22 +325,19 @@ impl FingerprintProfile {
     }
 }
 
-/// Resolve the platform-specific path to `fingerprint.toml`.
+/// Resolve the path to the portable `fingerprint.toml`.
 ///
-/// Returns `None` only when neither `%APPDATA%`/`XDG_CONFIG_HOME`/`HOME` (nor
-/// `USERPROFILE` on Windows) is set — in which case there is nowhere to look.
+/// Path: `<exe_dir>/data/fingerprint.toml` via [`crate::adblock::browser_data_dir`]
+/// — the project's portable-data convention (user decision 2026-06-16: keep all
+/// browser state in the browser folder, never in OS dirs like `%APPDATA%` /
+/// `~/.config`). See BUG-238.
+///
+/// Always returns `Some` (the portable path is derived from the executable
+/// location, with a `./data` fallback); the `Option` is kept for API stability
+/// with existing callers.
 #[must_use]
 pub fn config_path() -> Option<PathBuf> {
-    let base: PathBuf = if cfg!(windows) {
-        std::env::var_os("APPDATA")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))?
-    } else {
-        std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?
-    };
-    Some(base.join("lumen").join("fingerprint.toml"))
+    Some(crate::adblock::browser_data_dir().join("fingerprint.toml"))
 }
 
 /// Load and parse the fingerprint profile from the default config path.
@@ -722,11 +718,11 @@ mod tests {
 
     #[test]
     fn config_path_is_some() {
-        // At least one of the env vars used for resolution is set in any
-        // normal environment (HOME on unix, APPDATA/USERPROFILE on Windows).
+        // The portable path is derived from the executable location (with a
+        // `./data` fallback), so it is always available — see BUG-238.
         assert!(config_path().is_some());
         let path = config_path().unwrap();
-        assert!(path.ends_with("lumen/fingerprint.toml") || path.ends_with("lumen\\fingerprint.toml"));
+        assert!(path.ends_with("data/fingerprint.toml") || path.ends_with("data\\fingerprint.toml"));
     }
 
     // ── Tor / SOCKS5 tests ────────────────────────────────────────────────
