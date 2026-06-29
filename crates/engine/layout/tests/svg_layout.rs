@@ -496,3 +496,54 @@ fn svg_path_inline_block_wrap_keeps_child_in_root() {
         );
     }
 }
+
+#[test]
+fn svg_use_clones_in_flex_keep_position_across_relayout() {
+    // BUG-261 regression (same root cause as BUG-262): a flex container lays out its
+    // SVG child more than once (intrinsic-size pass + final pass). BUG-244 stored the
+    // document-space paint matrix back into `BoxKind::SvgShape.svg_transform`; on the
+    // second pass that matrix was misread as the element's own transform, drifting
+    // `<use>` clones out of their SVG clip rect (TEST-82 rendered only a subset of the
+    // clones — `<g>`/`<symbol>`/nested rows vanished entirely). The fix routes the
+    // paint matrix through the separate `svg_paint_matrix` output field, leaving
+    // `svg_transform` an immutable layout input. Both clones must land at their exact
+    // document positions regardless of how many times layout runs.
+    let html = r##"
+        <div style="display:flex">
+          <svg width="200" height="120">
+            <defs><rect id="r1" x="0" y="0" width="50" height="35" fill="#f00"/></defs>
+            <use href="#r1" x="20" y="20"/>
+            <use href="#r1" x="100" y="60"/>
+          </svg>
+        </div>"##;
+    let tree = do_layout(html);
+
+    let mut shapes = Vec::new();
+    collect_boxes(
+        &tree,
+        &|b| matches!(b.kind, BoxKind::SvgShape { shape: SvgShapeKind::Rect { .. }, .. }),
+        &mut shapes,
+    );
+    // Both `<use>` clones expand to a rect shape; the original in `<defs>` is not laid
+    // out (it is only painted through instantiation), so exactly two shapes appear.
+    assert_eq!(shapes.len(), 2, "two <use> clones laid out");
+
+    // Body margin is reset to 0, so the SVG root sits at the page origin and the clone
+    // rects map directly to their user-space (x, y) offsets: 50×35 at (20,20)/(100,60).
+    let mut rects: Vec<(f32, f32)> = shapes.iter().map(|s| (s.rect.x, s.rect.y)).collect();
+    rects.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    assert!(
+        (rects[0].0 - 20.0).abs() < 0.5 && (rects[0].1 - 20.0).abs() < 0.5,
+        "first clone at (20,20), got {:?}", rects[0],
+    );
+    assert!(
+        (rects[1].0 - 100.0).abs() < 0.5 && (rects[1].1 - 60.0).abs() < 0.5,
+        "second clone at (100,60), got {:?}", rects[1],
+    );
+    for s in &shapes {
+        assert!(
+            (s.rect.width - 50.0).abs() < 0.5 && (s.rect.height - 35.0).abs() < 0.5,
+            "clone keeps 50×35 size, got {}×{}", s.rect.width, s.rect.height,
+        );
+    }
+}
