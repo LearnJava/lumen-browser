@@ -1002,6 +1002,7 @@ fn process_svg_node(
                         ry: svg_attr_f32(doc, child_id, "ry"),
                     },
                     svg_transform: svg_transform.clone(),
+                    svg_paint_matrix: SvgTransform::identity(),
                 },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
@@ -1018,6 +1019,7 @@ fn process_svg_node(
                         r: svg_attr_f32(doc, child_id, "r"),
                     },
                     svg_transform: svg_transform.clone(),
+                    svg_paint_matrix: SvgTransform::identity(),
                 },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
@@ -1034,6 +1036,7 @@ fn process_svg_node(
                         ry: svg_attr_f32(doc, child_id, "ry"),
                     },
                     svg_transform: svg_transform.clone(),
+                    svg_paint_matrix: SvgTransform::identity(),
                 },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
@@ -1050,6 +1053,7 @@ fn process_svg_node(
                         y2: svg_attr_f32(doc, child_id, "y2"),
                     },
                     svg_transform: svg_transform.clone(),
+                    svg_paint_matrix: SvgTransform::identity(),
                 },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
@@ -1059,7 +1063,7 @@ fn process_svg_node(
             let d = doc.get(child_id).get_attr("d").unwrap_or("").to_string();
             out.push(LayoutBox {
                 node: child_id, rect: Rect::ZERO, style,
-                kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone() },
+                kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone(), svg_paint_matrix: SvgTransform::identity() },
                 children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
             });
             collect_svg_shapes_impl(doc, sheet, child_id, inherited, viewport, flat, out, dark_mode, use_stack);
@@ -1174,7 +1178,7 @@ fn process_svg_node(
             if let Some(d) = points_to_path_d(&points, close) {
                 out.push(LayoutBox {
                     node: child_id, rect: Rect::ZERO, style,
-                    kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone() },
+                    kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone(), svg_paint_matrix: SvgTransform::identity() },
                     children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
                 });
             }
@@ -1326,13 +1330,16 @@ fn lay_out_svg_element_position(b: &mut LayoutBox, ox: f32, oy: f32, sx: f32, sy
     // the off-diagonal (rotate/skew) components an AABB cannot represent. The
     // viewport maps user→document as `doc = (ox + sx·x, oy + sy·y)`, applied AFTER
     // `composed` — mirroring the `bbox.x = ox + bbox.x * sx` mapping above.
-    // `BoxKind::SvgShape.svg_transform` is otherwise unread after layout, so we
-    // repurpose it as the paint matrix; pure translate/scale (b=c=0) leaves paint
-    // on its existing axis-aligned `b.rect` fast path.
-    if let BoxKind::SvgShape { svg_transform, .. } = &mut b.kind {
+    // Stored in the dedicated `svg_paint_matrix` output field — NOT back into
+    // `svg_transform` (BUG-262): an inline-block `<svg>` that wraps gets laid out
+    // twice, and the first pass's matrix (carrying the viewport translation) would
+    // be misread as the element transform on the second pass, drifting the shape
+    // out of its clip. Pure translate/scale (b=c=0) leaves paint on its existing
+    // axis-aligned `b.rect` fast path.
+    if let BoxKind::SvgShape { svg_paint_matrix, .. } = &mut b.kind {
         let mut m_doc = SvgTransform { matrix: [sx, 0.0, 0.0, sy, ox, oy] };
         m_doc.compose(&composed);
-        *svg_transform = m_doc;
+        *svg_paint_matrix = m_doc;
     }
 }
 
@@ -1827,7 +1834,18 @@ pub enum BoxKind {
         shape: SvgShapeKind,
         /// Parsed SVG `transform` presentation attribute (Phase 2: nested transforms).
         /// Composed with parent transforms during layout for accurate positioning.
+        /// This is layout *input* — the element's own transform — and must never be
+        /// mutated by layout (BUG-262: an inline-block `<svg>` that wraps to a new
+        /// line is laid out twice; overwriting this field on the first pass poisoned
+        /// the second pass, drifting the shape outside its clip).
         svg_transform: SvgTransform,
+        /// Document-space paint matrix `viewport ∘ parent ∘ element`, computed by
+        /// layout (`lay_out_svg_element_position`) and consumed by paint as the
+        /// canvas CTM for rotate/skew (BUG-244). Layout *output* only; defaults to
+        /// identity at construction. Kept separate from `svg_transform` so re-layout
+        /// (inline-block wrap, incremental relayout) always recomposes from the
+        /// pristine element transform rather than a previous pass's result.
+        svg_paint_matrix: SvgTransform,
     },
     /// SVG text element (`<text>`, `<tspan>`, `<textPath>`).
     /// `LayoutBox.rect` is the text bounding box in *document coordinates*.
