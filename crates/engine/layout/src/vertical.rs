@@ -487,6 +487,7 @@ mod tests {
 }
 
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn lay_out_vertical_inline_run(
     b: &mut LayoutBox,
     start_x: f32,
@@ -545,6 +546,7 @@ pub(crate) fn lay_out_vertical_inline_run(
     b.rect.height = total_vertical_extent;
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn wrap_inline_run_vertical(
     segments: &[InlineSegment],
     max_height: f32,
