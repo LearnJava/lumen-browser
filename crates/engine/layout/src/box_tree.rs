@@ -1996,6 +1996,133 @@ fn extract_first_letter_float(
     None
 }
 
+/// CSS Inline Layout L3 §5 — `initial-letter` drop cap (Phase 0).
+///
+/// Promotes the block's first-letter segment (already marked
+/// `PseudoKind::FirstLetter` by `collect_inline_segments`) to an inline-start
+/// float `Block` whose glyph spans `size` lines and which reserves `sink` text
+/// lines beside it. Reuses the float wrap machinery (the surrounding text lines
+/// narrow around the float automatically).
+///
+/// Phase 0 approximations: inline-start = left (LTR only); the precise
+/// cap-height/baseline alignment of the spec is approximated by
+/// `font-size = size × parent line-height`, and the glyph box is clipped to the
+/// reserved `sink`-line height. `letter_style` carries the optional
+/// `::first-letter` author style (color/font); falls back to an anonymous style
+/// derived from `base`.
+///
+/// `base` — the parent block style (supplies the reference `line-height` in px).
+/// `size` — cap height in lines (> 1). `sink` — in-flow lines (`0` = `floor(size)`).
+/// Returns `None` when no first-letter segment is present (e.g. the block opens
+/// with an image or is empty).
+fn extract_initial_letter(
+    row_items: &mut Vec<LayoutBox>,
+    base: &ComputedStyle,
+    letter_style: Option<&ComputedStyle>,
+    size: f32,
+    sink: u32,
+) -> Option<LayoutBox> {
+    for ri in 0..row_items.len() {
+        let BoxKind::InlineRun { segments, .. } = &mut row_items[ri].kind else {
+            continue;
+        };
+        let Some(pos) = segments.iter().position(|s| s.pseudo_kind == PseudoKind::FirstLetter)
+        else {
+            continue;
+        };
+        // Split off the first-letter unit. With a `::first-letter` rule present,
+        // `apply_first_letter_pseudo` has already isolated the letter (rest is a
+        // sibling segment); without one (initial-letter set on the element), the
+        // whole opening text segment is still marked FirstLetter and must be
+        // split here.
+        let boundary = first_letter_text_len(&segments[pos].text);
+        let mut seg = segments[pos].clone();
+        let rest_text = seg.text.split_off(boundary);
+        // Strip leading source whitespace (pretty-print newlines/indent): it
+        // would inflate the cap's shrink-to-fit width.
+        let ws_len = seg.text.len() - seg.text.trim_start().len();
+        if ws_len > 0 {
+            seg.text.drain(..ws_len);
+            seg.source_char_offset += ws_len as u32;
+        }
+        if seg.text.is_empty() {
+            // No actual letter (all whitespace/punctuation) — leave content as-is.
+            return None;
+        }
+        seg.pre_space = 0.0;
+        seg.post_space = 0.0;
+        let node = seg.source_node;
+        // Put the remainder back into the run (or drop the now-empty run).
+        if rest_text.is_empty() {
+            segments.remove(pos);
+            if segments.is_empty() {
+                row_items.remove(ri);
+            }
+        } else {
+            let rest = &mut segments[pos];
+            rest.source_char_offset += boundary as u32;
+            rest.text = rest_text;
+            rest.pseudo_kind = PseudoKind::None;
+            rest.pre_space = 0.0;
+        }
+
+        // Used line-height in px: the engine stores `line_height` as a multiplier
+        // of `font_size` (relative) or px/font_size (absolute), so the product is
+        // the px line box height in both cases (mirrors `font_size * line_height`
+        // used throughout layout/paint).
+        let ref_line = (base.font_size * base.line_height).max(1.0);
+        let cap_font = (size * ref_line).max(1.0);
+        let sink_lines = if sink == 0 { size.floor().max(1.0) as u32 } else { sink };
+        let sink_px = sink_lines as f32 * ref_line;
+
+        // Inner anonymous run: enlarged glyph metrics, never floats/indents itself.
+        let mut inner_style = letter_style.cloned().unwrap_or_else(|| anon_style(base));
+        inner_style.font_size = cap_font;
+        // Tight line box equal to the cap font size (ratio 1.0): `line_height` is a
+        // multiplier of `font_size`, so 1.0 → line box height == cap_font.
+        inner_style.line_height = 1.0;
+        inner_style.line_height_is_relative = true;
+        inner_style.float_side = FloatSide::None;
+        inner_style.clear = ClearSide::None;
+        inner_style.text_indent = Length::Px(0.0);
+        inner_style.initial_letter_size = 1.0;
+        inner_style.initial_letter_sink = 0;
+        seg.style = inner_style.clone();
+
+        let inner = LayoutBox {
+            node,
+            rect: Rect::ZERO,
+            style: inner_style,
+            kind: BoxKind::InlineRun { segments: vec![seg], lines: vec![], first_line_style: None },
+            children: vec![],
+            col_span: 1,
+            row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+        };
+
+        // Outer block: inline-start float reserving exactly `sink` text lines.
+        let mut outer_style = letter_style.cloned().unwrap_or_else(|| anon_style(base));
+        outer_style.display = Display::Block;
+        outer_style.float_side = FloatSide::Left;
+        outer_style.clear = ClearSide::None;
+        outer_style.text_indent = Length::Px(0.0);
+        outer_style.initial_letter_size = 1.0;
+        outer_style.initial_letter_sink = 0;
+        outer_style.height = Some(Length::Px(sink_px));
+        outer_style.overflow_x = crate::style::Overflow::Hidden;
+        outer_style.overflow_y = crate::style::Overflow::Hidden;
+        return Some(LayoutBox {
+            node,
+            rect: Rect::ZERO,
+            style: outer_style,
+            kind: BoxKind::Block,
+            children: vec![inner],
+            col_span: 1,
+            row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0, dirty: Default::default(),
+        });
+    }
+    None
+}
+
 /// True for the synthesized drop-cap box produced by
 /// [`extract_first_letter_float`]: a float `Block` whose only child is an
 /// `InlineRun` with a single `PseudoKind::FirstLetter` segment. Used to keep
@@ -3876,16 +4003,38 @@ fn build_box(
                 // collect_inline_segments marks the first non-whitespace text segment
                 // with PseudoKind::FirstLetter; split it here so wrap_inline_run uses
                 // the override font metrics for both the letter and the remainder.
-                if let Some(fl_style) = compute_pseudo_element_style(
+                let fl_pseudo = compute_pseudo_element_style(
                     doc, id, "first-letter", sheet, &style, viewport, dark_mode,
-                ) {
+                );
+                // CSS Inline Layout L3 §5 — `initial-letter`. Effective value:
+                // a ::first-letter pseudo `initial-letter` wins over the element's
+                // own; `size > 1` activates the drop cap and supersedes the legacy
+                // float-::first-letter path.
+                let initial_letter = fl_pseudo
+                    .as_ref()
+                    .map(|p| (p.initial_letter_size, p.initial_letter_sink))
+                    .filter(|(s, _)| *s > 1.0)
+                    .or_else(|| {
+                        (style.initial_letter_size > 1.0)
+                            .then_some((style.initial_letter_size, style.initial_letter_sink))
+                    });
+                // ::first-letter / initial-letter target the block's first formatted
+                // line, so only the inline group that opens the block qualifies.
+                let first_group = children
+                    .iter()
+                    .all(|c| matches!(c.kind, BoxKind::Marker { .. }));
+                if let Some((size, sink)) = initial_letter {
+                    if first_group
+                        && let Some(letter) = extract_initial_letter(
+                            &mut row_items, &style, fl_pseudo.as_ref(), size, sink,
+                        )
+                    {
+                        children.push(letter);
+                    }
+                } else if let Some(fl_style) = fl_pseudo {
                     // CSS Pseudo-elements L4 §5.2 — float ::first-letter → drop cap
                     // (BB-2): promote the letter to a block-level float sibling placed
-                    // before the run. Only for the inline group that opens the block
-                    // (::first-letter targets the block's first formatted line).
-                    let first_group = children
-                        .iter()
-                        .all(|c| matches!(c.kind, BoxKind::Marker { .. }));
+                    // before the run.
                     if fl_style.float_side != FloatSide::None && first_group {
                         if let Some(letter) = extract_first_letter_float(&mut row_items, &fl_style) {
                             children.push(letter);
@@ -11257,6 +11406,115 @@ mod tests {
                 lines[0].iter().all(|f| f.style.font_size == 32.0),
                 "drop-cap frags must keep the ::first-letter font, not ::first-line",
             );
+        }
+    }
+
+    /// CSS Inline Layout L3 §5 — `initial-letter` drop cap (Phase 0).
+    mod initial_letter {
+        struct Fixed8;
+        impl super::super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+
+        fn layout(html: &str, css: &str) -> super::super::LayoutBox {
+            super::super::layout_measured(
+                &lumen_html_parser::parse(html),
+                &lumen_css_parser::parse(css),
+                lumen_core::geom::Size::new(800.0, 600.0),
+                &Fixed8,
+            )
+        }
+
+        /// The synthesized cap reuses the first-letter-box shape (float + single
+        /// FirstLetter segment), so `is_first_letter_box` locates it.
+        fn find_cap(b: &super::super::LayoutBox) -> Option<&super::super::LayoutBox> {
+            if super::super::is_first_letter_box(b) {
+                return Some(b);
+            }
+            b.children.iter().find_map(find_cap)
+        }
+
+        fn find_rest_run(b: &super::super::LayoutBox) -> Option<&super::super::LayoutBox> {
+            if super::super::is_first_letter_box(b) {
+                return None;
+            }
+            if matches!(b.kind, super::super::BoxKind::InlineRun { .. }) {
+                return Some(b);
+            }
+            b.children.iter().find_map(find_rest_run)
+        }
+
+        fn letter_seg(b: &super::super::LayoutBox) -> &super::super::InlineSegment {
+            let super::super::BoxKind::InlineRun { segments, .. } = &b.children[0].kind else {
+                panic!("cap inner box must be InlineRun");
+            };
+            &segments[0]
+        }
+
+        fn cap_height(b: &super::super::LayoutBox) -> f32 {
+            match &b.style.height {
+                Some(crate::style::Length::Px(p)) => *p,
+                other => panic!("cap must reserve a fixed px height, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn element_initial_letter_extracts_cap() {
+            // initial-letter on the element itself (no ::first-letter rule).
+            let root = layout("<p>Hello world</p>", "p { initial-letter: 3; }");
+            let cap = find_cap(&root).expect("initial-letter cap not created");
+            assert_eq!(letter_seg(cap).text, "H");
+            // Glyph enlarged to ~3 lines: font-size > base 16px.
+            assert!(
+                letter_seg(cap).style.font_size > 16.0,
+                "cap font {} must be enlarged",
+                letter_seg(cap).style.font_size,
+            );
+            assert!(cap_height(cap) > 0.0, "cap must reserve sink height");
+            let rest = find_rest_run(&root).expect("rest run missing");
+            let super::super::BoxKind::InlineRun { segments, .. } = &rest.kind else {
+                unreachable!();
+            };
+            assert_eq!(segments[0].text, "ello world");
+        }
+
+        #[test]
+        fn pseudo_initial_letter_extracts_cap() {
+            // initial-letter via the ::first-letter pseudo-element.
+            let root = layout("<p>Hello</p>", "p::first-letter { initial-letter: 2; }");
+            let cap = find_cap(&root).expect("pseudo initial-letter cap not created");
+            assert_eq!(letter_seg(cap).text, "H");
+        }
+
+        #[test]
+        fn cap_narrows_following_text() {
+            let root = layout("<p>Hello world</p>", "p { initial-letter: 3; }");
+            let cap = find_cap(&root).expect("cap not created");
+            let rest = find_rest_run(&root).expect("rest run missing");
+            assert!(
+                rest.rect.x >= cap.rect.x + cap.rect.width - 0.01,
+                "rest x={} must start past cap right edge {}",
+                rest.rect.x,
+                cap.rect.x + cap.rect.width,
+            );
+        }
+
+        #[test]
+        fn explicit_sink_reserves_fewer_lines() {
+            // `4 2`: glyph spans 4 lines but only 2 in-flow lines are reserved,
+            // so the reserved height is smaller than the default sink=floor(4).
+            let four = layout("<p>Hello world here we go again</p>", "p { initial-letter: 4; }");
+            let four_two =
+                layout("<p>Hello world here we go again</p>", "p { initial-letter: 4 2; }");
+            let h4 = cap_height(find_cap(&four).expect("cap"));
+            let h2 = cap_height(find_cap(&four_two).expect("cap"));
+            assert!(h2 < h4, "sink 2 height {h2} must be < default sink height {h4}");
+        }
+
+        #[test]
+        fn normal_value_leaves_no_cap() {
+            let root = layout("<p>Hello world</p>", "p { initial-letter: normal; }");
+            assert!(find_cap(&root).is_none(), "initial-letter:normal must not create a cap");
         }
     }
 
