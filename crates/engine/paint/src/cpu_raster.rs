@@ -70,6 +70,18 @@ enum LayerComposite {
     /// rasterised (tiny-skia path fill — deterministic) and multiplied into
     /// the layer's alpha before plain `SourceOver` compositing.
     ClipShape(ResolvedClipShape),
+    /// BUG-249 — скруглённый клип (`overflow:hidden` + `border-radius`,
+    /// `PushClipRoundedRect`/`PopClip`). Как `ClipShape`, но форма — rounded-rect
+    /// `rect`/`radii` (`[tl, tr, br, bl]` px). Раньше клип был прямоугольным
+    /// (square scissor) — углы детей расходились с Edge (TEST-101). Subtree
+    /// рендерится в full-size слой, на закрытии умножается на анти-алиасное
+    /// покрытие скруглённого контура.
+    ClipRoundedRect {
+        /// Клип-прямоугольник (padding-box) в page-координатах.
+        rect: Rect,
+        /// Радиусы углов `[tl, tr, br, bl]` в px.
+        radii: [f32; 4],
+    },
 }
 
 /// Kind of clip opened by a `PushClip*` command, so the shared `PopClip`
@@ -250,11 +262,15 @@ pub(crate) fn rasterize_cpu(
             // fallback femtovg, BUG-132) — rect-клип. Явный обработчик нужен
             // для баланса пар: раньше команда падала в `_ => {}`, а её парный
             // PopClip попал чужой rect из clip_stack.
-            DisplayCommand::PushClipRoundedRect { rect, radii: _ } => {
-                clip_stack.push(*rect);
-                clip_rect = clip_intersection(&clip_stack);
-                clip_mask = build_clip_mask(width, height, clip_rect);
-                clip_kinds.push(CpuClipKind::Rect);
+            DisplayCommand::PushClipRoundedRect { rect, radii } => {
+                // BUG-249: скруглённый клип через off-screen слой + покрытие
+                // (как PushClipPath/BUG-140), а не прямоугольный scissor — углы
+                // детей следуют border-radius контейнера (TEST-101).
+                let layer = tiny_skia::Pixmap::new(width, height)
+                    .ok_or("Failed to create rounded-clip layer")?;
+                layers.push(layer);
+                layer_ops.push(LayerComposite::ClipRoundedRect { rect: *rect, radii: *radii });
+                clip_kinds.push(CpuClipKind::Shape);
             }
             // BUG-140: shape-клип (clip-path circle/ellipse/polygon) — слой
             // + альфа-покрытие формы на закрытии.
@@ -541,7 +557,81 @@ fn close_layer(dst: &mut tiny_skia::Pixmap, src: &tiny_skia::Pixmap, op: &LayerC
         LayerComposite::Filter(filters) => composite_filter_layer(dst, src, filters),
         LayerComposite::Mask(spec) => composite_mask_layer(dst, src, spec),
         LayerComposite::ClipShape(shape) => composite_clip_shape_layer(dst, src, shape),
+        LayerComposite::ClipRoundedRect { rect, radii } => {
+            composite_clip_rounded_rect_layer(dst, src, rect, radii);
+        }
     }
+}
+
+/// BUG-249: применяет скруглённый клип (`overflow:hidden` + `border-radius`) к
+/// off-screen слою `src` и композитит результат на `dst` (`SourceOver`).
+/// Зеркало [`composite_clip_shape_layer`], но покрытие — rounded-rect контур.
+fn composite_clip_rounded_rect_layer(
+    dst: &mut tiny_skia::Pixmap,
+    src: &tiny_skia::Pixmap,
+    rect: &Rect,
+    radii: &[f32; 4],
+) {
+    let (w, h) = (src.width(), src.height());
+    let mut masked = src.clone();
+    if let Some(coverage) = rasterize_rounded_rect_coverage(rect, radii, w, h) {
+        multiply_alpha_by_mask(&mut masked, &coverage);
+    } else {
+        // Вырожденный rect (нулевая ширина/высота) клиппит всё.
+        masked.data_mut().fill(0);
+    }
+    let paint = tiny_skia::PixmapPaint {
+        opacity: 1.0,
+        blend_mode: tiny_skia::BlendMode::SourceOver,
+        quality: tiny_skia::FilterQuality::Nearest,
+    };
+    dst.draw_pixmap(0, 0, masked.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+}
+
+/// Растеризует анти-алиасное покрытие скруглённого прямоугольника `rect` с
+/// радиусами `[tl, tr, br, bl]` (px) в transparent-pixmap (альфа = покрытие).
+/// Радиусы клампятся к половине меньшей стороны, чтобы соседние углы не
+/// перекрывались. `None`, если `rect` вырожден.
+fn rasterize_rounded_rect_coverage(
+    rect: &Rect,
+    radii: &[f32; 4],
+    width: u32,
+    height: u32,
+) -> Option<tiny_skia::Pixmap> {
+    const K: f32 = 0.5523;
+    let (x, y, w, h) = (rect.x, rect.y, rect.width, rect.height);
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let max_r = (w.min(h) / 2.0).max(0.0);
+    let tl = radii[0].clamp(0.0, max_r);
+    let tr = radii[1].clamp(0.0, max_r);
+    let br = radii[2].clamp(0.0, max_r);
+    let bl = radii[3].clamp(0.0, max_r);
+    let mut pb = tiny_skia::PathBuilder::new();
+    pb.move_to(x + tl, y);
+    pb.line_to(x + w - tr, y);
+    pb.cubic_to(x + w - tr + K * tr, y, x + w, y + tr - K * tr, x + w, y + tr);
+    pb.line_to(x + w, y + h - br);
+    pb.cubic_to(x + w, y + h - br + K * br, x + w - br + K * br, y + h, x + w - br, y + h);
+    pb.line_to(x + bl, y + h);
+    pb.cubic_to(x + bl - K * bl, y + h, x, y + h - bl + K * bl, x, y + h - bl);
+    pb.line_to(x, y + tl);
+    pb.cubic_to(x, y + tl - K * tl, x + tl - K * tl, y, x + tl, y);
+    pb.close();
+    let path = pb.finish()?;
+    let mut coverage = tiny_skia::Pixmap::new(width, height)?;
+    let mut paint = tiny_skia::Paint::default();
+    paint.set_color_rgba8(255, 255, 255, 255);
+    paint.anti_alias = true;
+    coverage.fill_path(
+        &path,
+        &paint,
+        tiny_skia::FillRule::Winding,
+        tiny_skia::Transform::identity(),
+        None,
+    );
+    Some(coverage)
 }
 
 /// BUG-140: применяет shape-клип (`clip-path` circle/ellipse/polygon) к
@@ -2271,6 +2361,29 @@ mod tests {
         assert_eq!(px(&img, 60, 60), (255, 255, 255, 255), "exterior stays white");
     }
 
+    /// BUG-249: `PushClipRoundedRect` clips children to the rounded contour —
+    /// a child fill covering the whole box is cut at the corner (transparent →
+    /// stays white) while the box centre is painted. Before the fix the clip was
+    /// a square scissor, so the corner pixel was wrongly filled (TEST-101).
+    #[test]
+    fn rounded_clip_cuts_child_corners() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        // 60×60 box at origin, uniform 30px radius → a full circle (radius = w/2).
+        let cmds = vec![
+            DisplayCommand::PushClipRoundedRect {
+                rect: Rect::new(0.0, 0.0, 60.0, 60.0),
+                radii: [30.0; 4],
+            },
+            DisplayCommand::FillRect { rect: Rect::new(0.0, 0.0, 60.0, 60.0), color: red },
+            DisplayCommand::PopClip,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        // Centre is inside the circle → red.
+        assert_eq!(px(&img, 30, 30), (255, 0, 0, 255), "centre painted");
+        // Top-left corner (1,1) is well outside the circle → clipped, stays white.
+        assert_eq!(px(&img, 1, 1), (255, 255, 255, 255), "corner clipped by radius");
+    }
+
     /// A degenerate path (fewer than 3 vertices) is a no-op, not a panic.
     #[test]
     fn svg_path_empty_is_noop() {
@@ -2520,6 +2633,7 @@ mod tests {
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         }];
         let img = rasterize_cpu(128, 48, &cmds, &[], 0.0, 0.0).expect("rasterize");
 
@@ -2551,6 +2665,7 @@ mod tests {
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         }];
         let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 10, 10), (255, 255, 255, 255), "empty text left bg white");
@@ -2575,6 +2690,7 @@ mod tests {
                 font_variation_axes: Vec::new(),
                 tab_size: 0.0,
                 highlight_name: None,
+                text_orientation: None,
             },
             DisplayCommand::PopClip,
         ];
