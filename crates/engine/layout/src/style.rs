@@ -2444,6 +2444,14 @@ pub struct ComputedStyle {
     /// CSS 2.1 §9.5.2 — `clear`. Не наследуется. Определяет, мимо каких
     /// float-ов блок обязан «пройти» перед размещением в потоке.
     pub clear: ClearSide,
+    /// CSS Inline Layout L3 §5 — `initial-letter` высота буквицы в строках.
+    /// Не наследуется. `1.0` = `normal` (без эффекта); `> 1.0` активирует
+    /// буквицу высотой в это число строк (значение может быть дробным).
+    pub initial_letter_size: f32,
+    /// CSS Inline Layout L3 §5 — `initial-letter` «утопление» (sink): сколько
+    /// строк нормального потока занимает буквица сбоку. Не наследуется.
+    /// `0` = `auto`, выводится как `floor(initial_letter_size)`.
+    pub initial_letter_sink: u32,
     /// CSS Compositing & Blending L1 §2.1 — `isolation`. Не наследуется.
     /// `Isolate` создаёт stacking context.
     pub isolation: Isolation,
@@ -5260,6 +5268,8 @@ impl ComputedStyle {
             z_index: None,
             float_side: FloatSide::None,
             clear: ClearSide::None,
+            initial_letter_size: 1.0,
+            initial_letter_sink: 0,
             isolation: Isolation::Auto,
             mix_blend_mode: MixBlendMode::Normal,
             border_top_left_radius: Length::Px(0.0),
@@ -5572,6 +5582,8 @@ pub fn compute_style(
         z_index: None,
         float_side: FloatSide::None,
         clear: ClearSide::None,
+        initial_letter_size: 1.0,
+        initial_letter_sink: 0,
         isolation: Isolation::Auto,
         mix_blend_mode: MixBlendMode::Normal,
         // border-radius не наследуется.
@@ -11165,6 +11177,39 @@ fn expand_grouped_transition_property(prop: &str) -> Vec<String> {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// CSS Inline Layout L3 §5 — parse `initial-letter: normal | <number> <integer>?`.
+///
+/// Returns `(size, sink)`: `size` is the cap height in lines (≥ 1, may be
+/// fractional) and `sink` is the number of in-flow lines the letter occupies
+/// (`0` = `auto`, later resolved to `floor(size)`). `normal` → `(1.0, 0)`.
+/// Returns `None` on malformed input, so the declaration is ignored and the
+/// previous value is kept (CSS error recovery).
+fn parse_initial_letter(val: &str) -> Option<(f32, u32)> {
+    let v = val.trim();
+    if v.eq_ignore_ascii_case("normal") {
+        return Some((1.0, 0));
+    }
+    let mut it = v.split_whitespace();
+    let size: f32 = it.next()?.parse().ok()?;
+    if !size.is_finite() || size < 1.0 {
+        return None;
+    }
+    let sink = match it.next() {
+        Some(tok) => {
+            let n: i64 = tok.parse().ok()?;
+            if n < 1 {
+                return None;
+            }
+            u32::try_from(n).ok()?
+        }
+        None => 0,
+    };
+    if it.next().is_some() {
+        return None;
+    }
+    Some((size, sink))
+}
+
 fn apply_declaration(
     style: &mut ComputedStyle,
     decl: &Declaration,
@@ -12794,6 +12839,12 @@ fn apply_declaration(
         "clear" => {
             if let Some(v) = ClearSide::parse(val) {
                 style.clear = v;
+            }
+        }
+        "initial-letter" => {
+            if let Some((size, sink)) = parse_initial_letter(val) {
+                style.initial_letter_size = size;
+                style.initial_letter_sink = sink;
             }
         }
         "isolation" => {
@@ -19786,6 +19837,44 @@ mod tests {
 
     fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color {
         Color { r, g, b, a }
+    }
+
+    #[test]
+    fn initial_letter_parse() {
+        // normal → no effect.
+        assert_eq!(parse_initial_letter("normal"), Some((1.0, 0)));
+        assert_eq!(parse_initial_letter("  Normal "), Some((1.0, 0)));
+        // single value: sink = auto (0 → floor(size) resolved at layout).
+        assert_eq!(parse_initial_letter("3"), Some((3.0, 0)));
+        assert_eq!(parse_initial_letter("2.5"), Some((2.5, 0)));
+        // two values: explicit sink.
+        assert_eq!(parse_initial_letter("3 2"), Some((3.0, 2)));
+        // size must be ≥ 1, sink ≥ 1.
+        assert_eq!(parse_initial_letter("0.5"), None);
+        assert_eq!(parse_initial_letter("3 0"), None);
+        assert_eq!(parse_initial_letter("-1"), None);
+        // malformed.
+        assert_eq!(parse_initial_letter("foo"), None);
+        assert_eq!(parse_initial_letter("3 2 1"), None);
+        assert_eq!(parse_initial_letter(""), None);
+    }
+
+    #[test]
+    fn initial_letter_apply_declaration() {
+        // Property reaches ComputedStyle via the cascade.
+        let sheet = lumen_css_parser::parse("p { initial-letter: 4 3; }");
+        let doc = lumen_html_parser::parse("<p>Hi</p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let st = compute_style(
+            &doc,
+            pid,
+            &sheet,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        assert_eq!(st.initial_letter_size, 4.0);
+        assert_eq!(st.initial_letter_sink, 3);
     }
 
     #[test]

@@ -566,6 +566,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |----------|--------|-------|
 | `line-height` | 🟡 | parsed; leading in line box ⬜ |
 | `line-height-step` | ✅ | CSS Rhythmic Sizing L1 §2 (p4-line-height-step 2026-06-19): inherited `line_height_step` px field; line boxes rounded up to nearest multiple in box_tree + paint; тест 122 |
+| `initial-letter` | 🟡 | CSS Inline L3 §5 (ph3-initialletter 2026-06-29): `normal \| <number> <integer>?` parsed → non-inherited `initial_letter_size`/`initial_letter_sink`; Phase 0 layout promotes the first-letter unit to an inline-start float drop cap spanning `size × line-height`, reserving `sink` (default `floor(size)`) text lines beside it; works on the element or via `::first-letter`. Deferred: precise cap-height/baseline alignment, raised-cap above first line (sink<size clipped), `initial-letter-align`, RTL inline-start. |
 
 ### [T3] Scrollbars
 

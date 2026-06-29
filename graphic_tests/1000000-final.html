@@ -908,6 +908,19 @@
   <div class="fline-mini">The first line is green and bold via ::first-line style override.</div>
 </div>
 
+<!-- initial-letter drop-cap demo (CSS Inline Layout L3 §5) -->
+<style>
+  .il-row { margin-top: 10px; display: flex; gap: 16px; }
+  .il-mini { width: 200px; font: 13px/1.4 sans-serif; color: #e2e8f0; background: #1a202c; padding: 6px; border-radius: 3px; }
+  /* size 3 = three-line cap, default sink = floor(3) */
+  .il-mini::first-letter { initial-letter: 3; color: #f6ad55; font-weight: 700; }
+  .il-sink::first-letter { initial-letter: 3 2; color: #63b3ed; font-weight: 700; }
+</style>
+<div class="il-row">
+  <div class="il-mini">Drop cap via initial-letter three. Plain paragraph text wraps to the side of the enlarged opening letter.</div>
+  <div class="il-mini il-sink">Sunken cap: initial-letter three two raises the glyph while reserving two lines.</div>
+</div>
+
 <!-- View Transitions API demo -->
 <style>
   .vt-row { margin-top: 10px; display: flex; gap: 12px; align-items: center; }
