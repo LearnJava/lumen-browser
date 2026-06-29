@@ -214,6 +214,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('136', '136-svg-dynamic-ellipse-radial.html', 0.5, 'BUG-243 (dynamic SVG, без текста): геометрия <circle>/<ellipse> — концентрические эллипсы (varying rx/ry), мишень из кругов, радиальный кластер кругов, ряд эллипсов с растущим ry. ТРЕБУЕТ JS-захвата (gdigrab)'),
     ('137', '137-svg-dynamic-transform-pinwheel.html', 0.5, 'BUG-243 (dynamic SVG, без текста): presentation-трансформы rotate(angle cx cy)/scale/matrix()/skewX — вертушки из лепестков-треугольников, кольцо повёрнутых прямоугольников, зеркальные matrix()-шевроны, skewX-сетка. Покрывает все ветки parse_svg_transform. ТРЕБУЕТ JS-захвата (gdigrab)'),
     ('138', '138-svg-dynamic-dashboard.html', 0.5, 'BUG-243 (dynamic SVG, без текста): kitchen-sink «дашборд» — вложенные <g>, <defs>/<use>, fill-opacity, <path>-«пирог» из полигональных секторов, bar-chart, area+line-chart (polyline stroke + полупрозрачная заливка), <circle>/<ellipse>. Самая сложная композиция, всё solid/детерминировано. ТРЕБУЕТ JS-захвата (gdigrab)'),
+    ('139', '139-float-flow.html', 0.5, 'RP-4 общий float-поток (CSS 2.1 §9.5): (1) clear:left во вложенном НЕ-BFC обёртке клирит float родителя — синий блок падает под красный float на полную ширину; (2) overflow:hidden BFC-блок рядом с float сдвигается за его правый край, не лезет под; (3) float внутри не-BFC обёртки стыкуется справа от внешнего float (наследуется float-контекст). Только solid-боксы без перекрытий (текст игнорируется, rule 3)'),
 ]
 
 # --- Известные должники (Phase 2+ фичи, baseline-храповик) ---

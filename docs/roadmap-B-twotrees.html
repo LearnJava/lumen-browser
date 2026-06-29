@@ -848,7 +848,7 @@
     {
      "id": "RP",
      "title": "RP: Рендер-паритет реального веба",
-     "status": "active",
+     "status": "done",
      "note": "Открывать произвольные сайты так же, как Edge; декомпозиция в RP-1…RP-4",
      "tasks": [
       {
@@ -875,9 +875,9 @@
       {
        "id": "RP-4",
        "title": "RP-4: Общий float-поток",
-       "status": "ready",
+       "status": "done",
        "size": "L",
-       "note": "float:left/right + clear для любых блоков (FloatSide/ClearSide/wrap-машинерия есть, дёргается только для ::first-letter drop-cap)"
+       "note": "float:left/right + clear для любых блоков: float-контекст пробрасывается во вложенные не-BFC блоки (line-box'ы сужаются вместо клипа), BFC-блоки сдвигаются, clear/вложенные float на глубине; drop-cap не регрессировал"
       }
      ]
     }

@@ -4596,6 +4596,7 @@ pub(crate) fn parse_shape_path_px(s: &str) -> Option<Vec<(f32, f32)>> {
 
 /// CSS Shapes L1 §5.2 — polygon shape for `shape-outside` on a float.
 /// Points are stored in content-area coordinates (same as FloatContext).
+#[derive(Clone)]
 struct ShapePolygon {
     top_y: f32,
     bottom_y: f32,
@@ -4607,6 +4608,7 @@ struct ShapePolygon {
 
 /// CSS Shapes L1 §5.2 — ellipse shape for `shape-outside` on a float.
 /// All coordinates are in content-area space (same as FloatContext).
+#[derive(Clone)]
 struct ShapeEllipse {
     top_y: f32,
     bottom_y: f32,
@@ -4622,6 +4624,7 @@ struct ShapeEllipse {
 /// All coordinates are in content-area space (same as FloatContext). The rectangle
 /// spans `[left_x, right_x] × [top_y, bottom_y]` with optional uniform corner
 /// rounding of `radius` px.
+#[derive(Clone)]
 struct ShapeInset {
     top_y: f32,
     bottom_y: f32,
@@ -4658,6 +4661,7 @@ fn inset_corner_inward(y: f32, top_y: f32, bottom_y: f32, radius: f32) -> f32 {
 /// context.  Simplified Phase-0 implementation: only axis-aligned rectangles,
 /// no shape-outside wrapping.  All coordinates are in the same space as the
 /// block container's content area (i.e. not relative to viewport).
+#[derive(Clone)]
 struct FloatContext {
     /// Left floats: `(bottom_y, right_edge)` — right edge of the float margin
     /// box in content-area coordinates.  Active while `bottom_y > query_y`.
@@ -4675,6 +4679,12 @@ struct FloatContext {
     shape_ellipses: Vec<ShapeEllipse>,
     /// CSS Shapes L1 — `shape-outside: inset(...)` overrides.
     shape_insets: Vec<ShapeInset>,
+    /// CSS 2.1 §9.5 — floats belonging to an *enclosing* block formatting
+    /// context, inherited by a non-BFC child so its line boxes are shortened by
+    /// the parent's floats (the child does not own them: they are excluded from
+    /// this context's height enclosure and float placement). Coordinates are
+    /// absolute (same space as the owned floats). Chains through nesting levels.
+    inherited: Option<Box<FloatContext>>,
 }
 
 impl FloatContext {
@@ -4686,7 +4696,19 @@ impl FloatContext {
             shape_polygons: Vec::new(),
             shape_ellipses: Vec::new(),
             shape_insets: Vec::new(),
+            inherited: None,
         }
+    }
+
+    /// CSS 2.1 §9.5 — a fresh context for a non-BFC child that inherits all
+    /// floats currently visible in `parent` (the parent's own floats *and* any
+    /// the parent itself inherited). The child adds its own floats to the empty
+    /// owned buckets; queries (`left_edge_at`/`clear_y`/…) see both via the
+    /// `inherited` chain. Coordinates are absolute, so no translation is needed.
+    fn inheriting(parent: &FloatContext) -> Self {
+        let mut c = Self::new();
+        c.inherited = Some(Box::new(parent.clone()));
+        c
     }
 
     /// Left boundary of available inline space at `y` (= rightmost right-edge
@@ -4724,11 +4746,16 @@ impl FloatContext {
             })
             .fold(after_polygons, f32::max);
         // CSS Shapes L1: inset() boundary (right edge at y, minus rounded corner).
-        self.shape_insets
+        let own = self.shape_insets
             .iter()
             .filter(|s| s.is_left && s.top_y <= y && s.bottom_y > y)
             .map(|s| s.right_x - inset_corner_inward(y, s.top_y, s.bottom_y, s.radius))
-            .fold(after_ellipses, f32::max)
+            .fold(after_ellipses, f32::max);
+        // CSS 2.1 §9.5: enclosing-context floats also push the left edge right.
+        match &self.inherited {
+            Some(p) => p.left_edge_at(y, own),
+            None => own,
+        }
     }
 
     /// Right boundary of available inline space at `y` (= leftmost left-edge
@@ -4766,11 +4793,16 @@ impl FloatContext {
             })
             .fold(after_polygons, f32::min);
         // CSS Shapes L1: inset() boundary (left edge at y, plus rounded corner).
-        self.shape_insets
+        let own = self.shape_insets
             .iter()
             .filter(|s| !s.is_left && s.top_y <= y && s.bottom_y > y)
             .map(|s| s.left_x + inset_corner_inward(y, s.top_y, s.bottom_y, s.radius))
-            .fold(after_ellipses, f32::min)
+            .fold(after_ellipses, f32::min);
+        // CSS 2.1 §9.5: enclosing-context floats also pull the right edge left.
+        match &self.inherited {
+            Some(p) => p.right_edge_at(y, own),
+            None => own,
+        }
     }
 
     /// Record a left float occupying `[y_top, bottom_y)` with right margin
@@ -4792,12 +4824,19 @@ impl FloatContext {
         let do_right = matches!(side, ClearSide::Right | ClearSide::Both);
         if do_left  { for (bot, _) in &self.left  { result = result.max(*bot); } }
         if do_right { for (bot, _) in &self.right { result = result.max(*bot); } }
-        result
+        // CSS 2.1 §9.5.2: `clear` on a nested block clears the enclosing
+        // context's floats too (their bottoms are absolute, like ours).
+        match &self.inherited {
+            Some(p) => p.clear_y(result, side),
+            None => result,
+        }
     }
 
-    /// True when there are no active floats at all.
+    /// True when there are no active floats at all (owned or inherited).
     fn is_empty(&self) -> bool {
-        self.left.is_empty() && self.right.is_empty()
+        self.left.is_empty()
+            && self.right.is_empty()
+            && self.inherited.as_ref().is_none_or(|p| p.is_empty())
     }
 
     /// CSS 2.1 §9.5.1 rule 8 — the smallest float bottom strictly below `y`
@@ -4805,10 +4844,16 @@ impl FloatContext {
     /// drops to the next such bottom, where the line widens. Returns `None`
     /// when no float ends below `y` (nothing left to clear).
     fn next_float_bottom(&self, y: f32) -> Option<f32> {
-        self.left.iter().chain(self.right.iter())
+        let own = self.left.iter().chain(self.right.iter())
             .map(|(bot, _)| *bot)
             .filter(|bot| *bot > y + 0.01)
-            .fold(None, |acc, bot| Some(acc.map_or(bot, |a: f32| a.min(bot))))
+            .fold(None, |acc, bot| Some(acc.map_or(bot, |a: f32| a.min(bot))));
+        // CSS 2.1 §9.5.1 rule 8: enclosing-context floats also widen the band.
+        let inh = self.inherited.as_ref().and_then(|p| p.next_float_bottom(y));
+        match (own, inh) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
     }
 }
 
@@ -5062,6 +5107,34 @@ fn lay_out(
     start_x: f32,
     start_y: f32,
     available_width: f32,
+    available_height: Option<f32>,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    pcb: Rect,
+    hp: &dyn HyphenationProvider,
+    in_block_flow: bool,
+) {
+    // Thin wrapper: most call sites lay out boxes that establish an independent
+    // formatting context (flex/grid items, table cells, the document root), so
+    // they inherit no enclosing floats. The block-flow normal-child recursion in
+    // `lay_out_inner` is the one site that propagates a parent `FloatContext`.
+    lay_out_inner(
+        b, start_x, start_y, available_width, available_height,
+        measurer, viewport, pcb, hp, in_block_flow, None,
+    );
+}
+
+/// CSS 2.1 §9.5 — same as [`lay_out`] but threads `outer_floats`: the float
+/// context of an *enclosing* block formatting context, present only when `b` is
+/// an in-flow non-BFC block child laid out beside the parent's floats. When set,
+/// `b`'s own float context inherits those floats so its (and its descendants')
+/// line boxes are shortened by them, instead of the box itself being clipped.
+#[allow(clippy::too_many_arguments)]
+fn lay_out_inner(
+    b: &mut LayoutBox,
+    start_x: f32,
+    start_y: f32,
+    available_width: f32,
     // CSS 2.1 §10.5: definite content height of the containing block, or None if auto.
     // None means percentage heights on children compute to 'auto'.
     available_height: Option<f32>,
@@ -5070,6 +5143,7 @@ fn lay_out(
     pcb: Rect,
     hp: &dyn HyphenationProvider,
     in_block_flow: bool,
+    outer_floats: Option<&FloatContext>,
 ) {
     if matches!(b.kind, BoxKind::Skip) {
         b.rect = Rect::new(start_x, start_y, 0.0, 0.0);
@@ -5652,7 +5726,13 @@ fn lay_out(
                 )
             } else {
                 // CSS 2.1 §9.5 — float context for this block formatting context.
-                let mut fc = FloatContext::new();
+                // A non-BFC block laid out beside an enclosing context's floats
+                // inherits them so its line boxes are shortened (it does not own
+                // them). A BFC root starts fresh — it never overlaps outer floats.
+                let mut fc = match outer_floats {
+                    Some(p) if !establishes_bfc(b) => FloatContext::inheriting(p),
+                    _ => FloatContext::new(),
+                };
                 let container_right = content_x + content_width;
 
                 let mut child_y = content_y;
@@ -5944,30 +6024,45 @@ fn lay_out(
                     };
                     // CSS 2.1 §9.5: a block-level box in normal flow is NOT narrowed by
                     // floats — its width and margins resolve against the full containing
-                    // block and only its line boxes are shortened. For an *empty* auto-width
-                    // block (no in-flow content to reflow) resolve geometry against the full
-                    // content width, then clip the result to the non-float band: this keeps
-                    // the visual identical when the box would overlap a float (Lumen paints
-                    // floats in source order, so the clip stands in for float-over-block
-                    // painting), while restoring a margin'd box that fits in the gap between
-                    // two floats — which the naive narrowing collapsed to zero width.
+                    // block and only its line boxes are shortened.
+                    //
+                    // `outer_for_child` carries this block's float context down into an
+                    // in-flow non-BFC child so its (and its descendants') line boxes are
+                    // shortened by the active floats — instead of the box itself being
+                    // narrowed/clipped (the legacy approximation).
+                    let mut outer_for_child: Option<&FloatContext> = None;
                     if (flow_left > content_x || flow_right < container_right)
                         && child.style.width.is_none()
                         && matches!(child.kind, BoxKind::Block)
                         && !establishes_bfc(child)
-                        && !has_in_flow_content(child)
                     {
-                        let cem = child.style.font_size;
-                        let ml = child.style.margin_left.resolve_or_zero(cem, content_width, viewport);
-                        let mr = child.style.margin_right.resolve_or_zero(cem, content_width, viewport);
-                        let bw = (content_width - ml - mr).max(0.0);
-                        let nat_x = content_x + ml;
-                        let vx = nat_x.max(flow_left);
-                        let vw = ((nat_x + bw).min(flow_right) - vx).max(0.0);
-                        // Reproduce the clipped border-box through lay_out's margin re-add:
-                        // it places x at eff_left + ml and width at eff_w − ml − mr.
-                        eff_left = vx - ml;
-                        eff_w = vw + ml + mr;
+                        if has_in_flow_content(child) {
+                            // Auto-width non-BFC block with content beside a float: keep the
+                            // full containing-block width and propagate the float context so
+                            // the child's line boxes recede past the float (CSS 2.1 §9.5).
+                            eff_left = content_x;
+                            eff_w = content_width;
+                            outer_for_child = Some(&fc);
+                        } else {
+                            // *Empty* auto-width block (no in-flow content to reflow): resolve
+                            // geometry against the full content width, then clip the result to
+                            // the non-float band. This keeps the visual identical when the box
+                            // would overlap a float (Lumen paints floats in source order, so the
+                            // clip stands in for float-over-block painting), while restoring a
+                            // margin'd box that fits in the gap between two floats — which the
+                            // naive narrowing collapsed to zero width.
+                            let cem = child.style.font_size;
+                            let ml = child.style.margin_left.resolve_or_zero(cem, content_width, viewport);
+                            let mr = child.style.margin_right.resolve_or_zero(cem, content_width, viewport);
+                            let bw = (content_width - ml - mr).max(0.0);
+                            let nat_x = content_x + ml;
+                            let vx = nat_x.max(flow_left);
+                            let vw = ((nat_x + bw).min(flow_right) - vx).max(0.0);
+                            // Reproduce the clipped border-box through lay_out's margin re-add:
+                            // it places x at eff_left + ml and width at eff_w − ml − mr.
+                            eff_left = vx - ml;
+                            eff_w = vw + ml + mr;
+                        }
                     }
 
                     // CSS 2.1 §8.3.1: collapse adjacent sibling block margins.
@@ -6027,9 +6122,9 @@ fn lay_out(
                         child_y
                     };
 
-                    lay_out(child, eff_left, start_y, eff_w,
+                    lay_out_inner(child, eff_left, start_y, eff_w,
                             children_available_height, measurer, viewport, children_pcb, hp,
-                            !child_is_root_element);
+                            !child_is_root_element, outer_for_child);
                     if matches!(child.kind, BoxKind::Skip) {
                         // Zero-height; does not break the collapsing chain.
                         continue;
@@ -12635,6 +12730,153 @@ mod tests {
             (b.x - (a.x + 140.0)).abs() < 1.0,
             "second inner float must sit to the right of the first (b.x {}, expected {})",
             b.x, a.x + 140.0
+        );
+    }
+
+    /// Every glyph is 10px wide — gives line wrapping deterministic widths.
+    struct Fixed10Float;
+    impl super::TextMeasurer for Fixed10Float {
+        fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+    }
+
+    /// Absolute `rect.x` of the first `InlineRun` box found (depth-first). Line
+    /// fragment positions are run-relative, so the run's own origin is what moves
+    /// when its line boxes are narrowed by a float.
+    fn first_run_x(b: &super::LayoutBox) -> Option<f32> {
+        if matches!(b.kind, super::BoxKind::InlineRun { .. }) {
+            return Some(b.rect.x);
+        }
+        b.children.iter().find_map(first_run_x)
+    }
+
+    #[test]
+    fn float_narrows_line_boxes_in_nested_block() {
+        // RP-4 (4a): a float in the cell + a nested non-BFC <p> with text. CSS 2.1
+        // §9.5 — the <p> keeps the full containing-block width (300); only its line
+        // boxes recede past the float. The legacy approximation narrowed the <p>
+        // box itself (width 200, x=100); the fix keeps it full-width and shortens
+        // its line boxes via the inherited float context.
+        let root = super::layout_measured(
+            &lumen_html_parser::parse(
+                "<div class=cell>\
+                   <div class=fl></div>\
+                   <p class=par>aaa aaa aaa</p>\
+                 </div>",
+            ),
+            &lumen_css_parser::parse(
+                "body{margin:0}\
+                 .cell{width:300px;height:300px}\
+                 .fl{float:left;width:100px;height:80px;background:#e53e3e}\
+                 .par{height:60px;background:#f6e05e}",
+            ),
+            lumen_core::geom::Size::new(1024.0, 720.0),
+            &Fixed10Float,
+        );
+        let par = find_one_bg(&root, 0xf6e05e);
+        assert!(
+            (par.width - 300.0).abs() < 1.0,
+            "nested block must keep full width 300 (not narrowed to the float band), got {}",
+            par.width,
+        );
+        let run_x = first_run_x(&root).expect("paragraph inline run missing");
+        assert!(
+            run_x >= 100.0 - 0.01,
+            "first line box must start after the float right edge (100), got x={run_x}",
+        );
+    }
+
+    #[test]
+    fn bfc_block_does_not_overlap_float() {
+        // RP-4 (4b): a block that establishes its own BFC (overflow:hidden) beside a
+        // float must NOT overlap the float — its border box shifts past the float's
+        // right edge (CSS 2.1 §9.5) instead of sliding under it.
+        let root = super::layout_measured(
+            &lumen_html_parser::parse(
+                "<div class=cell>\
+                   <div class=fl></div>\
+                   <div class=bfc></div>\
+                 </div>",
+            ),
+            &lumen_css_parser::parse(
+                "body{margin:0}\
+                 .cell{width:300px;height:300px}\
+                 .fl{float:left;width:100px;height:80px;background:#e53e3e}\
+                 .bfc{overflow:hidden;height:40px;background:#4299e1}",
+            ),
+            lumen_core::geom::Size::new(1024.0, 720.0),
+            &Fixed10Float,
+        );
+        let bfc = find_one_bg(&root, 0x4299e1);
+        assert!(
+            bfc.x >= 100.0 - 0.01,
+            "BFC block must shift past the float right edge (100), got x={}",
+            bfc.x,
+        );
+    }
+
+    #[test]
+    fn clear_in_nested_block_clears_parent_floats() {
+        // RP-4 (4c): `clear:left` on a block nested inside a non-BFC wrapper must
+        // clear the *enclosing* context's float (CSS 2.1 §9.5.2) — it drops below
+        // the float bottom (80) even though the float is the wrapper's sibling, not
+        // the wrapper's own child.
+        let root = super::layout_measured(
+            &lumen_html_parser::parse(
+                "<div class=cell>\
+                   <div class=fl></div>\
+                   <div class=outer>\
+                     <div class=cl></div>\
+                   </div>\
+                 </div>",
+            ),
+            &lumen_css_parser::parse(
+                "body{margin:0}\
+                 .cell{width:300px;height:300px}\
+                 .fl{float:left;width:100px;height:80px;background:#e53e3e}\
+                 .cl{clear:left;height:30px;background:#9f7aea}",
+            ),
+            lumen_core::geom::Size::new(1024.0, 720.0),
+            &Fixed10Float,
+        );
+        let cl = find_one_bg(&root, 0x9f7aea);
+        assert!(
+            cl.y >= 80.0 - 0.01,
+            "nested cleared block must drop below the parent float bottom (80), got y={}",
+            cl.y,
+        );
+    }
+
+    #[test]
+    fn nested_floats_stack() {
+        // RP-4 (4c): a float declared inside a non-BFC block placed beside an outer
+        // float must stack to the *right* of the outer float (its inline position is
+        // measured against the inherited context), not reset to the wrapper's left
+        // content edge. The wrapper has text so it counts as in-flow content and
+        // receives the propagated float context.
+        let root = super::layout_measured(
+            &lumen_html_parser::parse(
+                "<div class=cell>\
+                   <div class=fl></div>\
+                   <div class=outer>\
+                     <div class=inner></div>\
+                     aaa\
+                   </div>\
+                 </div>",
+            ),
+            &lumen_css_parser::parse(
+                "body{margin:0}\
+                 .cell{width:300px;height:300px}\
+                 .fl{float:left;width:100px;height:80px;background:#e53e3e}\
+                 .inner{float:left;width:50px;height:40px;background:#22bb44}",
+            ),
+            lumen_core::geom::Size::new(1024.0, 720.0),
+            &Fixed10Float,
+        );
+        let inner = find_one_bg(&root, 0x22bb44);
+        assert!(
+            (inner.x - 100.0).abs() < 1.0,
+            "nested float must stack beside the outer float (x≈100), got x={}",
+            inner.x,
         );
     }
 
