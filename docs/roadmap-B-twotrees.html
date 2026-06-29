@@ -73,14 +73,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-06-26",
+ "generated": "2026-06-29",
  "counts": {
   "open": 24,
-  "fixed": 215,
+  "fixed": 216,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 239,
+ "total_bugs": 240,
  "phases": [
   {
    "id": "P0",
@@ -844,6 +844,42 @@
      "id": "P3-viewtransnav",
      "title": "View Transitions для cross-document навигации (MPA)",
      "status": "planned"
+    },
+    {
+     "id": "RP",
+     "title": "RP: Рендер-паритет реального веба",
+     "status": "active",
+     "note": "Открывать произвольные сайты так же, как Edge; декомпозиция в RP-1…RP-4",
+     "tasks": [
+      {
+       "id": "RP-1",
+       "title": "RP-1: Проценты в block-потоке",
+       "status": "ready",
+       "size": "M",
+       "note": "%-длины width/height/margin/padding резолвятся против containing-block, а не cb_width=0 (тип Length уже умеет, block-поток передаёт 0)"
+      },
+      {
+       "id": "RP-2",
+       "title": "RP-2: Relayout под живой размер окна",
+       "status": "ready",
+       "size": "M",
+       "note": "layout-viewport отслеживает живой inner_size окна; убрать хардкод 1024×720 (обработчик Resized + relayout уже есть)"
+      },
+      {
+       "id": "RP-3",
+       "title": "RP-3: HTTP gzip/deflate декодер",
+       "status": "ready",
+       "size": "S",
+       "note": "gzip/deflate ContentDecoder + объявить в Accept-Encoding (есть только brotli; flate2 уже в депах)"
+      },
+      {
+       "id": "RP-4",
+       "title": "RP-4: Общий float-поток",
+       "status": "ready",
+       "size": "L",
+       "note": "float:left/right + clear для любых блоков (FloatSide/ClearSide/wrap-машинерия есть, дёргается только для ::first-letter drop-cap)"
+      }
+     ]
     }
    ],
    "date": "36–48 мес"
@@ -2555,6 +2591,13 @@
    "component": "js",
    "date": "2026-06-25",
    "debtor": false
+  },
+  "BUG-250": {
+   "status": "fixed",
+   "title": "TEST-02/04 (`color-named`/`color-alpha`) и TEST-56 (`mix-blend-mode`) пересекли порог 0.5% после коммита 51dbf9fd (FontMeasurer: хардкод ascent/descent 0.8/0.2…",
+   "component": "paint (font-metrics)",
+   "date": "2026-06-27",
+   "debtor": false
   }
  },
  "unlinked": {
@@ -2795,6 +2838,9 @@
   ],
   "paint (build)": [
    "BUG-235"
+  ],
+  "paint (font-metrics)": [
+   "BUG-250"
   ],
   "paint/cpu_raster": [
    "BUG-052"

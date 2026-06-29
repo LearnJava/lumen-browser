@@ -127,6 +127,18 @@ git worktree remove .claude/worktrees/<kebab-name>
 / Definition of done. Многие пункты уже частично реализованы — DoD каждого файла
 помечает фактический остаток (см. также расхождения плана с кодом ниже).
 
+### Фаза 3 — RP: рендер-паритет реального веба
+
+Цель группы `RP` — открывать произвольные сайты так же, как Edge. Все четыре —
+**не greenfield**: инфраструктура частично есть, брифы помечают фактический остаток.
+
+| Файл | Задача |
+|---|---|
+| [rp-1-percentage-sizing.md](rp-1-percentage-sizing.md) | RP-1: проценты в block-потоке (width/height/margin/padding против containing-block) |
+| [rp-2-resize-viewport.md](rp-2-resize-viewport.md) | RP-2: relayout под живой размер окна (убрать хардкод 1024×720) |
+| [rp-3-gzip-deflate.md](rp-3-gzip-deflate.md) | RP-3: HTTP gzip/deflate Content-Encoding декодер (flate2 уже в депах) |
+| [rp-4-float-layout.md](rp-4-float-layout.md) | RP-4: проброс float-контекста в вложенные блоки (общий float-поток) |
+
 ### Фаза 3 — v1.0 (Tier 2 Web APIs, движок-замена, безопасность)
 
 | Файл | Задача |
