@@ -75,7 +75,8 @@ Snapshot: **Phase 2 «Interactive» (complete), app v0.5.0**. ~21 crates.
 - ✅ Animations/transitions scheduling (`@keyframes` interpolation, timing functions, transform/gradient/filter interpolation; `background:<color>` shorthand in keyframes); `content-visibility: auto` skip; Shadow DOM flat-tree integration.
 - 🟡 Scroll-Driven Animations L1: `animation-timeline: scroll()|view()|<named>` drives animation progress from scroll/viewport position (not the clock) — opacity/transform render in the live window; animated `background-color` not yet composited (BUG-231).
 - ✅ Algorithm stubs awaiting P4 CSS wiring: anchor positioning, subgrid context.
-- ⬜ `float` (only first-letter drop-cap), `%` in margin/padding/width/height, `ch`/`ex` units, real `direction: rtl` reordering, CSS4 color spaces (lab/lch/oklab/oklch), `attr()`/`counter()` content. Many L3/L4 properties are **parse+store only** (text-emphasis, container queries, touch-action, appearance, resize).
+- ✅ `%` lengths in block flow (RP-1): `width`/`margin-*`/`padding-*` resolve against the containing block's **width** (vertical margin/padding included, per CSS 2.1 §8); percentage `height` resolves against the CB **height** when definite, else computes to `auto`.
+- ⬜ `float` (only first-letter drop-cap), `ch`/`ex` units, real `direction: rtl` reordering, CSS4 color spaces (lab/lch/oklab/oklch), `attr()`/`counter()` content. Many L3/L4 properties are **parse+store only** (text-emphasis, container queries, touch-action, appearance, resize).
 
 ### lumen-paint (`crates/engine/paint`)
 - ✅ **Live default render path is `FemtoovgBackend`** (OpenGL ES via glutin), with wgpu auto-fallback; `LUMEN_BACKEND` overrides. **Paint bugs from graphic_tests are fixed in `femtovg_backend.rs`, not `renderer.rs`.**
