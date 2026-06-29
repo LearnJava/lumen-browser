@@ -33,6 +33,7 @@ P3-cacheapi: CacheStorage + Cache + match/put/delete/keys on sqlite backend; 32 
 P3-permissions: Permissions.query + onchange + per-name grants; 10 tests pass.
 P3-notifications: Notification.requestPermission + show + SW getNotifications; 26 tests pass.
 P3-offscreencanvas: OffscreenCanvas transfer + 2D native from ImageData; 24 tests pass.
+P3-initialletter: initial-letter drop cap (Phase 0) — `normal | <number> <integer>?` parsed → non-inherited size/sink fields; first-letter unit promoted to inline-start float spanning `size × line-height`, reserving `sink` (default floor(size)) lines; works on element + via ::first-letter; 7 tests pass. Deferred: cap-height/baseline precision, raised cap (sink<size), initial-letter-align, RTL, dedicated graphic test (text-parity debtor class, BUG-100).
 
 ## IN PROGRESS / NEEDS WORK
 
@@ -42,7 +43,6 @@ P3-scope: CSS @scope at-rule may not be parsed/applied (no tests found).
 P3-stylequery: Container style queries (`style()` function) likely not implemented (no tests found).
 P3-counterstyle: @counter-style at-rule may be parsed but not wired to marker generation.
 P3-fragmentation: break-inside / widows / orphans props likely stubbed.
-P3-initialletter: initial-letter drop-cap not implemented in layout.
 P3-vertical: CSS writing-mode vertical text — Phase 2 (vertical inline text flow + sideways glyphs) implemented. `wrap_inline_run_vertical` + `lay_out_vertical_inline_run` added; `text_orientation` field propagated through display list; existing tests pass. Paint-side glyph rotation (90° CW/upright/CJK mixed) deferred to Phase 2b.
 P3-pushapi: Push API file exists but may be stub-level.
 P3-reporting: Reporting API stub-level.
