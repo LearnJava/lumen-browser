@@ -6216,7 +6216,7 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
     // Pure translate/scale (b = c = 0) keeps the existing exact `b.rect` path: no
     // transform command, no anti-aliasing change for the common case.
     let xmat: [f32; 6] = match &b.kind {
-        BoxKind::SvgShape { svg_transform, .. } => svg_transform.matrix,
+        BoxKind::SvgShape { svg_paint_matrix, .. } => svg_paint_matrix.matrix,
         _ => [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
     };
     let has_rot_skew = xmat[1].abs() > 1e-6 || xmat[2].abs() > 1e-6;

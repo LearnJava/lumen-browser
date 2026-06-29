@@ -1685,26 +1685,26 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/box_tree.rs:430` **fn** `collect_selectlist_label` — Collect the selected `<option>` label from a `<selectlist>` element
 `crates/engine/layout/src/box_tree.rs:468` **fn** `is_selectlist` — Returns `true` when `node` is a `<selectlist>` element (Customizable Select)
 `crates/engine/layout/src/box_tree.rs:560` **fn** `is_open_details` — Returns `true` when `id` is a `<details>` element with the `open` attribute set
-`crates/engine/layout/src/box_tree.rs:1390` **struct** `ImageRequest` — Запрос на предзагрузку изображения: URL после picking-а по
-`crates/engine/layout/src/box_tree.rs:1405` **fn** `collect_image_requests` — Обходит DOM и возвращает запросы на загрузку для всех `<img>`-элементов
-`crates/engine/layout/src/box_tree.rs:1425` **fn** `collect_background_image_requests` — Обходит готовое layout-дерево и возвращает уникальные URL-ы из
-`crates/engine/layout/src/box_tree.rs:1533` **struct** `LayoutBox`
-`crates/engine/layout/src/box_tree.rs:1564` **struct** `InlineSegment` — Отрезок inline-контента с собственным стилем (до layout)
-`crates/engine/layout/src/box_tree.rs:1604` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
-`crates/engine/layout/src/box_tree.rs:1622` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
-`crates/engine/layout/src/box_tree.rs:1656` **enum** `BoxKind`
-`crates/engine/layout/src/box_tree.rs:2452` **fn** `layout` — Lay out a document without a text measurer. For tests and headless dump modes
-`crates/engine/layout/src/box_tree.rs:2477` **fn** `layout_measured` — Layout without a text measurer. For tests and headless modes; uses `layout_measured_hyp` with `dark_mode=false`
-`crates/engine/layout/src/box_tree.rs:2490` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
-`crates/engine/layout/src/box_tree.rs:2538` **fn** `lay_out_incremental` — Incremental re-layout pass: skips clean subtrees, re-lays out only dirty ones
-`crates/engine/layout/src/box_tree.rs:2575` **fn** `layout_streaming_incremental` — Streaming incremental layout (PH1-2b)
-`crates/engine/layout/src/box_tree.rs:2672` **fn** `build_iframe_document` — Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5)
-`crates/engine/layout/src/box_tree.rs:2745` **fn** `canvas_background_color` — CSS Backgrounds §3.11.1 — the canvas background color
-`crates/engine/layout/src/box_tree.rs:8809` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
-`crates/engine/layout/src/box_tree.rs:8992` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
-`crates/engine/layout/src/box_tree.rs:9011` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
-`crates/engine/layout/src/box_tree.rs:9041` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
-`crates/engine/layout/src/box_tree.rs:10013` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
+`crates/engine/layout/src/box_tree.rs:1416` **struct** `ImageRequest` — Запрос на предзагрузку изображения: URL после picking-а по
+`crates/engine/layout/src/box_tree.rs:1431` **fn** `collect_image_requests` — Обходит DOM и возвращает запросы на загрузку для всех `<img>`-элементов
+`crates/engine/layout/src/box_tree.rs:1451` **fn** `collect_background_image_requests` — Обходит готовое layout-дерево и возвращает уникальные URL-ы из
+`crates/engine/layout/src/box_tree.rs:1559` **struct** `LayoutBox`
+`crates/engine/layout/src/box_tree.rs:1590` **struct** `InlineSegment` — Отрезок inline-контента с собственным стилем (до layout)
+`crates/engine/layout/src/box_tree.rs:1630` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
+`crates/engine/layout/src/box_tree.rs:1648` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
+`crates/engine/layout/src/box_tree.rs:1682` **enum** `BoxKind`
+`crates/engine/layout/src/box_tree.rs:2489` **fn** `layout` — Lay out a document without a text measurer. For tests and headless dump modes
+`crates/engine/layout/src/box_tree.rs:2514` **fn** `layout_measured` — Layout without a text measurer. For tests and headless modes; uses `layout_measured_hyp` with `dark_mode=false`
+`crates/engine/layout/src/box_tree.rs:2527` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
+`crates/engine/layout/src/box_tree.rs:2575` **fn** `lay_out_incremental` — Incremental re-layout pass: skips clean subtrees, re-lays out only dirty ones
+`crates/engine/layout/src/box_tree.rs:2612` **fn** `layout_streaming_incremental` — Streaming incremental layout (PH1-2b)
+`crates/engine/layout/src/box_tree.rs:2709` **fn** `build_iframe_document` — Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5)
+`crates/engine/layout/src/box_tree.rs:2782` **fn** `canvas_background_color` — CSS Backgrounds §3.11.1 — the canvas background color
+`crates/engine/layout/src/box_tree.rs:8941` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
+`crates/engine/layout/src/box_tree.rs:9124` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
+`crates/engine/layout/src/box_tree.rs:9143` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
+`crates/engine/layout/src/box_tree.rs:9173` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
+`crates/engine/layout/src/box_tree.rs:10145` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
 `crates/engine/layout/src/color_mix.rs:38` **enum** `MixColorSpace` — CSS Color L5 §10.2 — interpolation color space for `color-mix()`
 `crates/engine/layout/src/color_mix.rs:63` **fn** `from_css` — Parse a CSS `color-mix()` interpolation space identifier (case-insensitive)
 `crates/engine/layout/src/color_mix.rs:80` **fn** `is_polar` — Returns `true` if this space has a hue (polar) axis
@@ -2186,13 +2186,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/style.rs:10275` **fn** `resolve_or_zero` — Резолвит с `cb_width` как percent_basis; возвращает 0.0 при неудаче
 `crates/engine/layout/src/style.rs:10281` **fn** `px` — Извлекает пиксельное значение для уже-разрешённых `Px`-значений
 `crates/engine/layout/src/style.rs:10436` **fn** `parse_length`
-`crates/engine/layout/src/style.rs:14090` **fn** `resolve_logical_property` — Resolve CSS Logical Properties based on writing-mode
-`crates/engine/layout/src/style.rs:16122` **fn** `parse_transform_list` — Парсит `<transform-list>` — последовательность `func(args)` через
-`crates/engine/layout/src/style.rs:17356` **fn** `parse_grid_template_areas` — CSS Grid L1 §7.3 — parse `grid-template-areas` value
-`crates/engine/layout/src/style.rs:17436` **fn** `parse_background_gradient` — CSS Images L3/L4 §3.3/§3.7 — parses color stops from a CSS gradient string
-`crates/engine/layout/src/style.rs:17834` **fn** `parse_gradient_stops` — The leading direction / angle / shape argument (e.g. `to right`,
-`crates/engine/layout/src/style.rs:18704` **fn** `parse_color`
-`crates/engine/layout/src/style.rs:18867` **fn** `system_color` — CSS Color Module Level 4 §6.2 — резолв системных цветовых ключевых слов
+`crates/engine/layout/src/style.rs:14091` **fn** `resolve_logical_property` — Resolve CSS Logical Properties based on writing-mode
+`crates/engine/layout/src/style.rs:16123` **fn** `parse_transform_list` — Парсит `<transform-list>` — последовательность `func(args)` через
+`crates/engine/layout/src/style.rs:17357` **fn** `parse_grid_template_areas` — CSS Grid L1 §7.3 — parse `grid-template-areas` value
+`crates/engine/layout/src/style.rs:17437` **fn** `parse_background_gradient` — CSS Images L3/L4 §3.3/§3.7 — parses color stops from a CSS gradient string
+`crates/engine/layout/src/style.rs:17835` **fn** `parse_gradient_stops` — The leading direction / angle / shape argument (e.g. `to right`,
+`crates/engine/layout/src/style.rs:18705` **fn** `parse_color`
+`crates/engine/layout/src/style.rs:18868` **fn** `system_color` — CSS Color Module Level 4 §6.2 — резолв системных цветовых ключевых слов
 `crates/engine/layout/src/subgrid.rs:24` **struct** `SubgridContext` — Resolved track sizes and cumulative offsets for one grid axis (columns or rows)
 `crates/engine/layout/src/subgrid.rs:35` **fn** `from_parent_tracks` — Build from a slice of parent track sizes and the gap value used between them
 `crates/engine/layout/src/subgrid.rs:46` **fn** `total_size` — Total span width/height occupied by all inherited tracks (including inter-track gaps)
@@ -2668,7 +2668,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/display_list.rs:3136` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
 `crates/engine/paint/src/display_list.rs:3265` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
 `crates/engine/paint/src/display_list.rs:4125` **fn** `point_on_resize_grip` — Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента
-`crates/engine/paint/src/display_list.rs:14557` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
+`crates/engine/paint/src/display_list.rs:14653` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
 `crates/engine/paint/src/display_list_cache.rs:21` **struct** `CachedDisplayLayer` — Cached display list for a stacking context or page subtree
 `crates/engine/paint/src/display_list_cache.rs:45` **struct** `DisplayListCache` — LRU cache that maps `NodeId` (u32) to a pre-built `Vec<DisplayCommand>`
 `crates/engine/paint/src/display_list_cache.rs:59` **fn** `new` — Create a cache with the default 32 MB budget
@@ -3079,32 +3079,32 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/forms.rs:373` **fn** `collect_modal_dialogs` — Walk `doc` and collect all NodeIds with `data-lumen-modal` attribute
 `crates/shell/src/forms.rs:397` **fn** `build_dialog_overlay` — Build a `::backdrop` + translated dialog overlay for a modal `<dialog>`
 `crates/shell/src/forms.rs:438` **fn** `build_validation_tooltip` — Build a validation tooltip anchored below `anchor` (document coordinates)
-`crates/shell/src/forms.rs:495` **fn** `collect_form_entries` — Собрать данные формы для submit — DOM-значения, поверх которых наложен
-`crates/shell/src/forms.rs:538` **fn** `build_form_submit_event` — Построить параметры отправки формы: `(action, method, body)`
-`crates/shell/src/forms.rs:548` **fn** `encode_form_fields` — Encode form fields for submission. Wraps a FormSubmitEvent::Valid variant
-`crates/shell/src/forms.rs:561` **fn** `encode_form_fields_multipart` — Encode form fields as `multipart/form-data` (RFC 7578)
-`crates/shell/src/forms.rs:573` **fn** `get_form_enctype` — Return the `enctype` attribute of the `<form>` ancestor of `submit_node`,
-`crates/shell/src/forms.rs:591` **fn** `build_form_submit`
-`crates/shell/src/forms.rs:623` **fn** `make_get_url` — Построить итоговый URL для GET-формы: добавить `?body` к action URL
-`crates/shell/src/forms.rs:663` **fn** `build_color_picker` — Build a color-swatch picker anchored below `anchor` (document coordinates)
-`crates/shell/src/forms.rs:700` **fn** `hit_color_swatch` — If viewport-space point `(px, py)` lands on a swatch, return its `[r, g, b]`
-`crates/shell/src/forms.rs:721` **fn** `swatch_to_css_color` — Format `[r, g, b]` as CSS `#rrggbb`
-`crates/shell/src/forms.rs:731` **struct** `SelectOption` — One entry in a `<select>` dropdown list
-`crates/shell/src/forms.rs:754` **fn** `collect_select_options` — Collect all direct `<option>` children of a `<select>` DOM node
-`crates/shell/src/forms.rs:791` **fn** `build_select_dropdown` — Build a dropdown overlay anchored below (or above if near the bottom of the
-`crates/shell/src/forms.rs:874` **fn** `hit_select_option` — If viewport-space point `(px, py)` lands on an option row, return its index
-`crates/shell/src/forms.rs:911` **fn** `apply_select_choice` — Apply the selection of option at `opt_idx` to the `<select>` DOM node:
-`crates/shell/src/forms.rs:932` **enum** `DatePickerHit` — What a viewport-space click hit inside an open date picker
-`crates/shell/src/forms.rs:961` **fn** `is_leap_year` — True if `year` is a leap year
-`crates/shell/src/forms.rs:966` **fn** `days_in_month` — Number of days in the given month (1-based month, Gregorian calendar)
-`crates/shell/src/forms.rs:977` **fn** `first_weekday_of_month` — ISO weekday (0=Mon … 6=Sun) of the first day of the given month
-`crates/shell/src/forms.rs:992` **fn** `month_name` — English month name, 1-based
-`crates/shell/src/forms.rs:1004` **fn** `parse_date_value` — Parse an ISO 8601 date string `YYYY-MM-DD` → `(year, month, day)`
-`crates/shell/src/forms.rs:1015` **fn** `format_date_value` — Format `(year, month, day)` as `YYYY-MM-DD`
-`crates/shell/src/forms.rs:1021` **fn** `today_year_month` — Return the current year and month derived from the system clock
-`crates/shell/src/forms.rs:1045` **fn** `build_date_picker` — Build a calendar date-picker overlay anchored below `anchor` (document coords)
-`crates/shell/src/forms.rs:1188` **fn** `hit_date_picker` — Hit-test a viewport-space click `(px, py)` against an open date picker
-`crates/shell/src/forms.rs:1250` **fn** `advance_month` — Advance display month by `delta` months (positive = forward, negative = backward)
+`crates/shell/src/forms.rs:496` **fn** `collect_form_entries` — Собрать данные формы для submit — DOM-значения, поверх которых наложен
+`crates/shell/src/forms.rs:539` **fn** `build_form_submit_event` — Построить параметры отправки формы: `(action, method, body)`
+`crates/shell/src/forms.rs:549` **fn** `encode_form_fields` — Encode form fields for submission. Wraps a FormSubmitEvent::Valid variant
+`crates/shell/src/forms.rs:562` **fn** `encode_form_fields_multipart` — Encode form fields as `multipart/form-data` (RFC 7578)
+`crates/shell/src/forms.rs:574` **fn** `get_form_enctype` — Return the `enctype` attribute of the `<form>` ancestor of `submit_node`,
+`crates/shell/src/forms.rs:592` **fn** `build_form_submit`
+`crates/shell/src/forms.rs:624` **fn** `make_get_url` — Построить итоговый URL для GET-формы: добавить `?body` к action URL
+`crates/shell/src/forms.rs:664` **fn** `build_color_picker` — Build a color-swatch picker anchored below `anchor` (document coordinates)
+`crates/shell/src/forms.rs:701` **fn** `hit_color_swatch` — If viewport-space point `(px, py)` lands on a swatch, return its `[r, g, b]`
+`crates/shell/src/forms.rs:722` **fn** `swatch_to_css_color` — Format `[r, g, b]` as CSS `#rrggbb`
+`crates/shell/src/forms.rs:732` **struct** `SelectOption` — One entry in a `<select>` dropdown list
+`crates/shell/src/forms.rs:755` **fn** `collect_select_options` — Collect all direct `<option>` children of a `<select>` DOM node
+`crates/shell/src/forms.rs:792` **fn** `build_select_dropdown` — Build a dropdown overlay anchored below (or above if near the bottom of the
+`crates/shell/src/forms.rs:876` **fn** `hit_select_option` — If viewport-space point `(px, py)` lands on an option row, return its index
+`crates/shell/src/forms.rs:913` **fn** `apply_select_choice` — Apply the selection of option at `opt_idx` to the `<select>` DOM node:
+`crates/shell/src/forms.rs:934` **enum** `DatePickerHit` — What a viewport-space click hit inside an open date picker
+`crates/shell/src/forms.rs:963` **fn** `is_leap_year` — True if `year` is a leap year
+`crates/shell/src/forms.rs:968` **fn** `days_in_month` — Number of days in the given month (1-based month, Gregorian calendar)
+`crates/shell/src/forms.rs:979` **fn** `first_weekday_of_month` — ISO weekday (0=Mon … 6=Sun) of the first day of the given month
+`crates/shell/src/forms.rs:994` **fn** `month_name` — English month name, 1-based
+`crates/shell/src/forms.rs:1006` **fn** `parse_date_value` — Parse an ISO 8601 date string `YYYY-MM-DD` → `(year, month, day)`
+`crates/shell/src/forms.rs:1017` **fn** `format_date_value` — Format `(year, month, day)` as `YYYY-MM-DD`
+`crates/shell/src/forms.rs:1023` **fn** `today_year_month` — Return the current year and month derived from the system clock
+`crates/shell/src/forms.rs:1047` **fn** `build_date_picker` — Build a calendar date-picker overlay anchored below `anchor` (document coords)
+`crates/shell/src/forms.rs:1195` **fn** `hit_date_picker` — Hit-test a viewport-space click `(px, py)` against an open date picker
+`crates/shell/src/forms.rs:1257` **fn** `advance_month` — Advance display month by `delta` months (positive = forward, negative = backward)
 `crates/shell/src/gc_tick.rs:20` **struct** `GcTick` — Throttled idle GC poller
 `crates/shell/src/gc_tick.rs:27` **fn** `new` — Create a new `GcTick`. The first poll fires after [`GC_INTERVAL`] elapses
 `crates/shell/src/gc_tick.rs:42` **fn** `poll` — Poll the GC scheduler
@@ -3245,7 +3245,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/cert_panel.rs:126` **fn** `scroll_by` — Scroll the content by `delta` CSS px (positive = down)
 `crates/shell/src/panels/cert_panel.rs:134` **fn** `hit_test` — Hit-test a pointer position relative to panel origin
 `crates/shell/src/panels/cert_panel.rs:147` **enum** `CertHit` — Result of a pointer hit test on the cert panel
-`crates/shell/src/panels/cert_panel.rs:240` **fn** `build_panel` — Append display commands for the cert panel to `buf`
+`crates/shell/src/panels/cert_panel.rs:241` **fn** `build_panel` — Append display commands for the cert panel to `buf`
 `crates/shell/src/panels/command_palette.rs:80` **enum** `PaletteAction` — A built-in browser action invokable from the palette
 `crates/shell/src/panels/command_palette.rs:111` **fn** `label` — Human-readable label shown in the result row
 `crates/shell/src/panels/command_palette.rs:130` **fn** `shortcut` — Keyboard-shortcut hint rendered right-aligned in the row (`""` if none)
@@ -3390,7 +3390,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/read_later_panel.rs:98` **enum** `ReadLaterHit` — Result of a click inside or near the panel
 `crates/shell/src/panels/read_later_panel.rs:114` **fn** `hit_test` — Classify a click at `(mx, my)` (window-space CSS px)
 `crates/shell/src/panels/read_later_panel.rs:152` **fn** `build_panel` — Build the panel display list
-`crates/shell/src/panels/read_later_panel.rs:349` **fn** `extract_title_from_html` — Extract the page title from raw HTML bytes
+`crates/shell/src/panels/read_later_panel.rs:350` **fn** `extract_title_from_html` — Extract the page title from raw HTML bytes
 `crates/shell/src/panels/restore_spinner.rs:24` **fn** `build_spinner` — Build spinner overlay if restore has taken longer than THRESHOLD_MS
 `crates/shell/src/panels/settings_panel.rs:63` **enum** `SettingsSection` — The four top-level settings sections
 `crates/shell/src/panels/settings_panel.rs:85` **fn** `label` — Display label for the tab
@@ -3494,7 +3494,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/panels/workspace_panel.rs:125` **enum** `WorkspaceHit` — Result of a click inside the workspace switcher bar
 `crates/shell/src/panels/workspace_panel.rs:140` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the workspace switcher bar
 `crates/shell/src/panels/workspace_panel.rs:199` **fn** `build_panel` — Build the display list for the workspace switcher bar
-`crates/shell/src/panels/workspace_panel.rs:326` **fn** `parse_ws_color` — Convert a stored CSS colour string (`#RRGGBB`, `#RGB`, or named colour
+`crates/shell/src/panels/workspace_panel.rs:329` **fn** `parse_ws_color` — Convert a stored CSS colour string (`#RRGGBB`, `#RGB`, or named colour
 `crates/shell/src/platform/audio_capture.rs:40` **struct** `PlatformAudioCapture` — Platform audio capture provider (WASAPI / ALSA via `cpal`)
 `crates/shell/src/platform/audio_player.rs:98` **struct** `PlatformAudioPlayer` — Shell-side implementation of `AudioPlaybackProvider` using `rodio`
 `crates/shell/src/platform/audio_player.rs:105` **fn** `new` — Create a new player (no OS resources allocated until the first handle)
@@ -3695,7 +3695,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tabs/archive.rs:177` **fn** `hit_test_button` — Hit-test the archive toolbar button area
 `crates/shell/src/tabs/archive.rs:185` **fn** `hit_test_panel` — Hit-test the archive panel when it is open
 `crates/shell/src/tabs/archive.rs:238` **fn** `build_button` — Build the archive toolbar button appended to the right of the tab bar
-`crates/shell/src/tabs/archive.rs:311` **fn** `build_panel` — Build the drop-down archive panel anchored below the archive button
+`crates/shell/src/tabs/archive.rs:313` **fn** `build_panel` — Build the drop-down archive panel anchored below the archive button
 `crates/shell/src/tabs/containers.rs:44` **enum** `ContainerKind` — Kind of tab container. Drives the border-top colour in the tab strip
 `crates/shell/src/tabs/containers.rs:65` **fn** `border_color` — Border-top strip colour, or `None` for [`ContainerKind::None`]
 `crates/shell/src/tabs/containers.rs:82` **fn** `name` — Human-readable container name for UI labels
@@ -3756,9 +3756,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tabs/strip.rs:579` **fn** `as_str` — Serialize to a settings string
 `crates/shell/src/tabs/strip.rs:592` **fn** `hit_test_layout_btn` — Returns `true` if `(x, y)` falls inside the layout-mode toggle button
 `crates/shell/src/tabs/strip.rs:601` **fn** `build_layout_toggle_btn` — Build a display list for the vertical-tab layout toggle button
-`crates/shell/src/tabs/strip.rs:643` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
-`crates/shell/src/tabs/strip.rs:685` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
-`crates/shell/src/tabs/strip.rs:882` **fn** `build_tab_tooltip` — Build a small tooltip overlay for a tab with a non-Active tier badge
+`crates/shell/src/tabs/strip.rs:644` **fn** `hit_test` — Hit-test a click at CSS-px `(x, y)` against the tab bar
+`crates/shell/src/tabs/strip.rs:686` **fn** `build_tab_bar` — Build a viewport-locked display list for the tab bar
+`crates/shell/src/tabs/strip.rs:887` **fn** `build_tab_tooltip` — Build a small tooltip overlay for a tab with a non-Active tier badge
 `crates/shell/src/tabs/tree.rs:22` **fn** `depth_of` — Compute the tree depth of the tab with `id` in the given slice
 `crates/shell/src/tabs/tree.rs:38` **fn** `children_of` — Return the IDs of direct children of `parent_id` in strip order
 `crates/shell/src/tabs/tree.rs:48` **fn** `subtree_ids` — Collect the IDs of all tabs in the subtree rooted at `root_id` (inclusive)

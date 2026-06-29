@@ -434,3 +434,65 @@ fn svg_transform_rotate_basic() {
     assert!(shape.rect.width > 0.0, "rotated shape has non-zero width");
     assert!(shape.rect.height > 0.0, "rotated shape has non-zero height");
 }
+
+/// Collects every box matching `pred` in document order.
+fn collect_boxes<'a>(
+    b: &'a lumen_layout::LayoutBox,
+    pred: &dyn Fn(&lumen_layout::LayoutBox) -> bool,
+    out: &mut Vec<&'a lumen_layout::LayoutBox>,
+) {
+    if pred(b) {
+        out.push(b);
+    }
+    for child in &b.children {
+        collect_boxes(child, pred, out);
+    }
+}
+
+#[test]
+fn svg_path_inline_block_wrap_keeps_child_in_root() {
+    // BUG-262 regression: an inline-block `<svg>` whose `<path>` wraps to a second
+    // line is laid out twice. The first pass used to overwrite `svg_transform` with
+    // the document-space paint matrix (carrying the line-1 viewport translation);
+    // the second pass then misread that as the element transform and drifted the
+    // path child far outside its SVG root's clip rect (TEST-119 lost a whole cell).
+    // Two 460px-wide inline-block SVGs do not both fit in the 800px viewport, so the
+    // second wraps. Its path child must stay anchored at the second SVG root origin.
+    let html = r##"
+        <div style="display:inline-block">
+          <svg width="460" height="320"><path d="M 40 40 L 420 40 L 420 280 L 40 280 Z" fill="#ff0"/></svg>
+        </div><div style="display:inline-block">
+          <svg width="460" height="320"><path d="M 40 40 L 420 40 L 420 280 L 40 280 Z" fill="#0ff"/></svg>
+        </div>"##;
+    let tree = do_layout(html);
+
+    let mut roots = Vec::new();
+    collect_boxes(&tree, &|b| matches!(b.kind, BoxKind::SvgRoot { .. }), &mut roots);
+    let mut paths = Vec::new();
+    collect_boxes(
+        &tree,
+        &|b| matches!(b.kind, BoxKind::SvgShape { shape: SvgShapeKind::Path { .. }, .. }),
+        &mut paths,
+    );
+    assert_eq!(roots.len(), 2, "two SVG roots");
+    assert_eq!(paths.len(), 2, "two SVG paths");
+
+    // Sanity: the second SVG actually wrapped to a new line (below the first).
+    assert!(roots[1].rect.y > roots[0].rect.y, "second SVG wrapped to line 2");
+
+    // The path child branch anchors `rect` at its SVG root origin (zero-size box;
+    // paint shifts the raw `d` coords by this origin). Both paths must therefore
+    // land exactly on their own root origin — the wrapped one included.
+    for (i, (path, root)) in paths.iter().zip(roots.iter()).enumerate() {
+        assert!(
+            (path.rect.x - root.rect.x).abs() < 0.5,
+            "path[{i}] x {} should match its SVG root x {}",
+            path.rect.x, root.rect.x,
+        );
+        assert!(
+            (path.rect.y - root.rect.y).abs() < 0.5,
+            "path[{i}] y {} should match its SVG root y {}",
+            path.rect.y, root.rect.y,
+        );
+    }
+}
