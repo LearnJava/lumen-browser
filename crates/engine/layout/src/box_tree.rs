@@ -769,13 +769,17 @@ fn parse_svg_transform(attr: Option<&str>) -> SvgTransform {
                 if cx.abs() < 0.001 && cy.abs() < 0.001 {
                     SvgTransform { matrix: [cos, sin, -sin, cos, 0.0, 0.0] }
                 } else {
-                    // rotate(a cx cy) = translate(cx cy) rotate(a) translate(-cx -cy)
-                    let mut m = SvgTransform { matrix: [1.0, 0.0, 0.0, 1.0, cx, cy] };
-                    let mut rot = SvgTransform { matrix: [cos, sin, -sin, cos, 0.0, 0.0] };
-                    rot.compose(&m);
-                    m = SvgTransform { matrix: [1.0, 0.0, 0.0, 1.0, -cx, -cy] };
-                    rot.compose(&m);
-                    rot
+                    // rotate(a cx cy) = translate(cx cy) · rotate(a) · translate(-cx -cy).
+                    // `compose` is `self × other` (other is applied first to a point),
+                    // so the list must be accumulated left-to-right starting from the
+                    // outermost translate. The previous code started from `R` and
+                    // post-composed both translates, which cancel out
+                    // (R · T(cx,cy) · T(-cx,-cy) = R) — silently dropping the rotation
+                    // centre (BUG-244).
+                    let mut m = SvgTransform::translate(cx, cy);
+                    m.compose(&SvgTransform { matrix: [cos, sin, -sin, cos, 0.0, 0.0] });
+                    m.compose(&SvgTransform::translate(-cx, -cy));
+                    m
                 }
             }
             "skewx" => {
@@ -1314,6 +1318,21 @@ fn lay_out_svg_element_position(b: &mut LayoutBox, ox: f32, oy: f32, sx: f32, sy
         // <g> group: position its children with composed transform, then compute union bbox.
         lay_out_svg_children_positions(&mut b.children, ox, oy, sx, sy, &composed);
         b.rect = svg_children_union_bbox(&b.children);
+    }
+
+    // BUG-244: store the full document-space transform (viewport V ∘ composed) on
+    // the shape so paint can apply rotation/skew as a canvas CTM. `b.rect` above
+    // remains the axis-aligned bounds (used for clip/hit-test); the matrix carries
+    // the off-diagonal (rotate/skew) components an AABB cannot represent. The
+    // viewport maps user→document as `doc = (ox + sx·x, oy + sy·y)`, applied AFTER
+    // `composed` — mirroring the `bbox.x = ox + bbox.x * sx` mapping above.
+    // `BoxKind::SvgShape.svg_transform` is otherwise unread after layout, so we
+    // repurpose it as the paint matrix; pure translate/scale (b=c=0) leaves paint
+    // on its existing axis-aligned `b.rect` fast path.
+    if let BoxKind::SvgShape { svg_transform, .. } = &mut b.kind {
+        let mut m_doc = SvgTransform { matrix: [sx, 0.0, 0.0, sy, ox, oy] };
+        m_doc.compose(&composed);
+        *svg_transform = m_doc;
     }
 }
 

@@ -391,7 +391,7 @@ fn rec2020_gamma_decode(c: f32) -> f32 {
 /// Rec2020 (BT.2020 OETF) gamma encode: linear → encoded.
 fn rec2020_gamma_encode(c: f32) -> f32 {
     let c = c.max(0.0);
-    if c < 0.018_053_968 { 4.5 * c } else { 1.099_296_826 * c.powf(0.45) - 0.099_296_826 }
+    if c < 0.018_053_968 { 4.5 * c } else { 1.099_296_8 * c.powf(0.45) - 0.099_296_82 }
 }
 
 /// Декодированное растровое изображение в плотной row-major упаковке.

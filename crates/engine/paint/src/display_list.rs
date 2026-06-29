@@ -6207,17 +6207,52 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
     let mut fill_cmds: DisplayList = Vec::new();
     let mut stroke_cmds: DisplayList = Vec::new();
 
+    // BUG-244: the shape carries its full document-space transform (set by layout in
+    // `lay_out_svg_element_position`, matrix = viewport ∘ composed). When it contains
+    // rotation or skew (off-diagonal b or c ≠ 0), the axis-aligned `b.rect` cannot
+    // represent the result — an AABB of a rotated box collapses the rotation. So we
+    // paint the shape geometry in its *user* coordinate system wrapped in a
+    // `PushTransform` CTM, mirroring how a browser applies the SVG CTM at paint time.
+    // Pure translate/scale (b = c = 0) keeps the existing exact `b.rect` path: no
+    // transform command, no anti-aliasing change for the common case.
+    let xmat: [f32; 6] = match &b.kind {
+        BoxKind::SvgShape { svg_transform, .. } => svg_transform.matrix,
+        _ => [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+    };
+    let has_rot_skew = xmat[1].abs() > 1e-6 || xmat[2].abs() > 1e-6;
+    // `geom` is the rect the shape arms draw into; `path_shift` offsets raw `<path>`
+    // `d` vertices. Under a rotate/skew CTM both live in user space (shift = 0, the
+    // matrix positions everything); otherwise they are the document-space `b.rect`.
+    let (geom, path_shift) = if has_rot_skew {
+        let user_bbox = match shape {
+            SvgShapeKind::Rect { x, y, width, height, .. } => Rect::new(*x, *y, *width, *height),
+            SvgShapeKind::Circle { cx, cy, r } => Rect::new(cx - r, cy - r, 2.0 * r, 2.0 * r),
+            SvgShapeKind::Ellipse { cx, cy, rx, ry } => Rect::new(cx - rx, cy - ry, 2.0 * rx, 2.0 * ry),
+            SvgShapeKind::Line { x1, y1, x2, y2 } =>
+                Rect::new(x1.min(*x2), y1.min(*y2), (x2 - x1).abs(), (y2 - y1).abs()),
+            SvgShapeKind::Path { .. } => Rect::ZERO,
+        };
+        (user_bbox, (0.0_f32, 0.0_f32))
+    } else {
+        (b.rect, (b.rect.x, b.rect.y))
+    };
+    if has_rot_skew {
+        out.push(DisplayCommand::PushTransform {
+            matrix: Mat4::from_2d_affine(xmat[0], xmat[1], xmat[2], xmat[3], xmat[4], xmat[5]),
+        });
+    }
+
     match shape {
         SvgShapeKind::Rect { rx, ry, .. } => {
             let has_radius = *rx > 0.0 || *ry > 0.0;
-            let r = (*rx).min(b.rect.width / 2.0);
-            let r_y = (*ry).min(b.rect.height / 2.0);
+            let r = (*rx).min(geom.width / 2.0);
+            let r_y = (*ry).min(geom.height / 2.0);
             let radii = CornerRadii { tl: r, tl_y: r_y, tr: r, tr_y: r_y, br: r, br_y: r_y, bl: r, bl_y: r_y };
             if let Some(fc) = fill_color {
                 if has_radius {
-                    fill_cmds.push(DisplayCommand::FillRoundedRect { rect: b.rect, color: fc, radii });
+                    fill_cmds.push(DisplayCommand::FillRoundedRect { rect: geom, color: fc, radii });
                 } else {
-                    fill_cmds.push(DisplayCommand::FillRect { rect: b.rect, color: fc });
+                    fill_cmds.push(DisplayCommand::FillRect { rect: geom, color: fc });
                 }
             }
             if let Some(sc) = stroke_color && stroke_w > 0.0 {
@@ -6230,10 +6265,10 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
                 // Square corners (no radius) stay square. Fill keeps the original rect.
                 let half = w * 0.5;
                 let stroke_rect = Rect::new(
-                    b.rect.x - half,
-                    b.rect.y - half,
-                    b.rect.width + w,
-                    b.rect.height + w,
+                    geom.x - half,
+                    geom.y - half,
+                    geom.width + w,
+                    geom.height + w,
                 );
                 let (orx, ory) = if has_radius { (r + half, r_y + half) } else { (0.0, 0.0) };
                 let stroke_radii = CornerRadii {
@@ -6250,11 +6285,11 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
             }
         }
         SvgShapeKind::Circle { .. } | SvgShapeKind::Ellipse { .. } => {
-            let rx_px = b.rect.width / 2.0;
-            let ry_px = b.rect.height / 2.0;
+            let rx_px = geom.width / 2.0;
+            let ry_px = geom.height / 2.0;
             let radii = CornerRadii { tl: rx_px, tl_y: ry_px, tr: rx_px, tr_y: ry_px, br: rx_px, br_y: ry_px, bl: rx_px, bl_y: ry_px };
             if let Some(fc) = fill_color {
-                fill_cmds.push(DisplayCommand::FillRoundedRect { rect: b.rect, color: fc, radii });
+                fill_cmds.push(DisplayCommand::FillRoundedRect { rect: geom, color: fc, radii });
             }
             if let Some(sc) = stroke_color && stroke_w > 0.0 {
                 let w = stroke_w;
@@ -6264,10 +6299,10 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
                 // match (= half the inflated box → still a full ellipse).
                 let half = w * 0.5;
                 let stroke_rect = Rect::new(
-                    b.rect.x - half,
-                    b.rect.y - half,
-                    b.rect.width + w,
-                    b.rect.height + w,
+                    geom.x - half,
+                    geom.y - half,
+                    geom.width + w,
+                    geom.height + w,
                 );
                 let orx = rx_px + half;
                 let ory = ry_px + half;
@@ -6288,19 +6323,20 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
             // SVG <line> (§9.5): a stroked segment between (x1,y1) and (x2,y2). It
             // has no fill — only the stroke paints. The old code filled `b.rect`,
             // which for a diagonal line is the whole (large) bounding box, painting
-            // a solid rectangle instead of a thin diagonal (BUG-189). `b.rect` is
-            // the doc-space bbox of the segment (already viewBox-scaled); the signs
-            // of the user-space endpoints tell us which diagonal of that box the
-            // segment runs along. The painter has no SVG transform here, so a
-            // rotated line is approximated by its bbox diagonal — the same
-            // axis-aligned assumption rect/ellipse strokes already make.
+            // a solid rectangle instead of a thin diagonal (BUG-189). `geom` is the
+            // segment's bbox (doc-space for the axis-aligned fast path, user-space
+            // under a rotate/skew CTM — BUG-244); the signs of the user-space
+            // endpoints tell us which diagonal of that box the segment runs along.
+            // Under a CTM the matrix carries any rotation; the axis-aligned path
+            // still approximates a transformed line by its bbox diagonal, the same
+            // assumption rect/ellipse strokes make.
             if let Some(sc) = stroke_color
                 && stroke_w > 0.0
             {
-                let ax = if x1 <= x2 { b.rect.x } else { b.rect.x + b.rect.width };
-                let ay = if y1 <= y2 { b.rect.y } else { b.rect.y + b.rect.height };
-                let bx = if x1 <= x2 { b.rect.x + b.rect.width } else { b.rect.x };
-                let by = if y1 <= y2 { b.rect.y + b.rect.height } else { b.rect.y };
+                let ax = if x1 <= x2 { geom.x } else { geom.x + geom.width };
+                let ay = if y1 <= y2 { geom.y } else { geom.y + geom.height };
+                let bx = if x1 <= x2 { geom.x + geom.width } else { geom.x };
+                let by = if y1 <= y2 { geom.y + geom.height } else { geom.y };
                 let mut v: Vec<[f32; 2]> = Vec::with_capacity(6);
                 push_thick_segment(&mut v, [ax, ay], [bx, by], stroke_w * 0.5);
                 // paint-order is irrelevant (single component), so emit directly.
@@ -6323,7 +6359,7 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
                     if !vertices.is_empty() {
                         let shifted: Vec<[f32; 2]> = vertices
                             .iter()
-                            .map(|[x, y]| [x + b.rect.x, y + b.rect.y])
+                            .map(|[x, y]| [x + path_shift.0, y + path_shift.1])
                             .collect();
                         fill_cmds.push(DisplayCommand::DrawSvgPath { vertices: shifted, color: fc });
                     }
@@ -6351,7 +6387,7 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
                     if !vertices.is_empty() {
                         let shifted: Vec<[f32; 2]> = vertices
                             .iter()
-                            .map(|[x, y]| [x + b.rect.x, y + b.rect.y])
+                            .map(|[x, y]| [x + path_shift.0, y + path_shift.1])
                             .collect();
                         stroke_cmds.push(DisplayCommand::DrawSvgPath { vertices: shifted, color: sc });
                     }
@@ -6367,6 +6403,11 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
     } else {
         out.append(&mut stroke_cmds);
         out.append(&mut fill_cmds);
+    }
+
+    // Close the rotate/skew CTM opened above (BUG-244).
+    if has_rot_skew {
+        out.push(DisplayCommand::PopTransform);
     }
 }
 
@@ -13832,6 +13873,61 @@ mod tests {
                 DisplayCommand::FillRect { color, .. } if color.r == 243 && color.g == 156 && color.b == 18));
             assert!(!solid_fill, "line must NOT paint a solid {stroke} FillRect (BUG-189), got {dl:?}");
         }
+    }
+
+    #[test]
+    fn svg_rotated_rect_paints_under_ctm_in_user_space() {
+        // BUG-244: a rotated SVG shape used to collapse to its axis-aligned bounding
+        // box (`apply_transform_to_bbox` re-bounds the rotated corners), silently
+        // dropping the rotation. The fix mirrors a browser CTM: the shape's geometry
+        // is painted in *user* coordinates wrapped in a `PushTransform` carrying the
+        // full document-space matrix (viewport ∘ composed), with off-diagonal
+        // (rotate/skew) components an AABB cannot represent.
+        let html = "<svg width='200' height='200'>\
+            <rect x='40' y='40' width='80' height='40' transform='rotate(45)' fill='#00ff00'/>\
+        </svg>";
+        for dl in [build(html, ""), build_ordered(html, "")] {
+            // A PushTransform with a non-zero off-diagonal `b` (= sin θ) must wrap the
+            // shape — the rotation survives instead of being flattened to an AABB.
+            let ctm = dl.iter().find_map(|c| match c {
+                DisplayCommand::PushTransform { matrix } if matrix.0[1].abs() > 0.1 => Some(*matrix),
+                _ => None,
+            });
+            assert!(ctm.is_some(), "rotated <rect> must emit a PushTransform with rotation, got {dl:?}");
+            // The fill is painted in the rect's *user* coordinates (40,40,80,40); the
+            // matrix (not the rect) positions it. Before the fix the FillRect carried
+            // the inflated rotated AABB instead.
+            let fill = dl.iter().find_map(|c| match c {
+                DisplayCommand::FillRect { rect, color }
+                    if color.r == 0 && color.g == 255 && color.b == 0 => Some(*rect),
+                _ => None,
+            }).expect("green FillRect present");
+            assert!(
+                (fill.x - 40.0).abs() < 0.5 && (fill.y - 40.0).abs() < 0.5
+                    && (fill.width - 80.0).abs() < 0.5 && (fill.height - 40.0).abs() < 0.5,
+                "rotated rect fill must stay in user coords (40,40,80,40), got {fill:?}",
+            );
+            // The CTM must be balanced by a PopTransform.
+            assert!(
+                dl.iter().any(|c| matches!(c, DisplayCommand::PopTransform)),
+                "PushTransform must be closed by PopTransform, got {dl:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn svg_untransformed_rect_has_no_ctm() {
+        // BUG-244 guard: a plain (translate/scale-only) shape keeps the exact
+        // axis-aligned `b.rect` fast path — no PushTransform, no AA change. Only
+        // rotation/skew (off-diagonal components) trigger the CTM path.
+        let html = "<svg width='100' height='100'>\
+            <rect x='10' y='10' width='50' height='50' fill='#ff0000'/>\
+        </svg>";
+        let dl = build(html, "");
+        assert!(
+            !dl.iter().any(|c| matches!(c, DisplayCommand::PushTransform { .. })),
+            "untransformed <rect> must not emit a PushTransform, got {dl:?}",
+        );
     }
 
     #[test]
