@@ -5182,6 +5182,26 @@ fn lay_out(
         pcb
     };
 
+    // Vertical InlineRun layout (Phase 2): text flows top→bottom with
+    // glyph rotation handled in paint. Dispatches before the horizontal
+    // InlineRun branch so vertical text gets axis-swapped wrapping.
+    if !matches!(s.writing_mode, crate::style::WritingMode::HorizontalTb)
+        && matches!(b.kind, BoxKind::InlineRun { .. })
+    {
+        crate::vertical::lay_out_vertical_inline_run(
+            b,
+            start_x,
+            start_y,
+            available_width,
+            available_height,
+            measurer,
+            viewport,
+            pcb,
+            hp,
+        );
+        return;
+    }
+
     // InlineRun обрабатывается до основного match.
     if let BoxKind::InlineRun { segments, lines, first_line_style } = &mut b.kind {
         if let Some(m) = measurer {
@@ -8805,7 +8825,7 @@ fn resolve_named_lines(
 
 /// Strips U+00AD (soft hyphens) from a word and collects break positions
 /// (byte offsets in the returned display string).
-fn strip_soft_hyphens(raw: &str) -> (String, Vec<usize>) {
+pub(crate) fn strip_soft_hyphens(raw: &str) -> (String, Vec<usize>) {
     let mut display = String::with_capacity(raw.len());
     let mut positions: Vec<usize> = Vec::new();
     for ch in raw.chars() {

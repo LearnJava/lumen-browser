@@ -25,9 +25,27 @@
 use lumen_core::ext::HyphenationProvider;
 use lumen_core::geom::{Rect, Size};
 
-use crate::TextMeasurer;
-use crate::box_tree::{BoxKind, LayoutBox};
+use crate::{InlineFrag, InlineSegment, TextMeasurer};
+use crate::box_tree::{measure_text_w_varied, strip_soft_hyphens, BoxKind, LayoutBox};
 use crate::style::{BoxSizing, Length, WritingMode};
+
+#[allow(dead_code)]
+pub(crate) fn is_cjk(ch: char) -> bool {
+    matches!(ch as u32,
+        0x3000..=0x303F |
+        0x3040..=0x309F |
+        0x30A0..=0x30FF |
+        0x3400..=0x4DBF |
+        0x4E00..=0x9FFF |
+        0xF900..=0xFAFF |
+        0xFF00..=0xFFEF
+    )
+}
+
+#[allow(dead_code)]
+pub(crate) fn is_vertical(mode: WritingMode) -> bool {
+    !matches!(mode, WritingMode::HorizontalTb)
+}
 
 /// Lay out a Block/FlowRoot box in vertical writing mode.
 ///
@@ -467,3 +485,259 @@ mod tests {
         );
     }
 }
+
+
+pub(crate) fn lay_out_vertical_inline_run(
+    b: &mut LayoutBox,
+    start_x: f32,
+    start_y: f32,
+    _available_width: f32,
+    available_height: Option<f32>,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    _pcb: Rect,
+    hp: &dyn HyphenationProvider,
+) {
+    let s = b.style.clone();
+    let em = s.font_size;
+
+    let inline_size_avail = available_height.unwrap_or(viewport.height).max(0.0);
+    let padding_top = s.padding_top.resolve_or_zero(em, inline_size_avail, viewport);
+    let padding_bottom = s.padding_bottom.resolve_or_zero(em, inline_size_avail, viewport);
+    let frame_vert = padding_top + padding_bottom + s.border_top_width + s.border_bottom_width;
+    let content_inline = (inline_size_avail - frame_vert).max(0.0);
+
+    let BoxKind::InlineRun { segments, lines, .. } = &mut b.kind else {
+        return;
+    };
+    let Some(m) = measurer else {
+        return;
+    };
+
+    let wrap_budget = if s.white_space.is_nowrap() || s.text_wrap_mode == crate::style::TextWrapMode::Nowrap {
+        f32::INFINITY
+    } else {
+        content_inline
+    };
+
+    *lines = wrap_inline_run_vertical(
+        segments,
+        wrap_budget,
+        em,
+        viewport,
+        m,
+        hp,
+        s.white_space,
+        s.word_break,
+        s.overflow_wrap,
+        s.writing_mode,
+        s.text_orientation,
+    );
+
+    let total_advance: f32 = lines.iter().flat_map(|l| l.iter()).map(|f| f.width).sum();
+    let min_height = em * s.line_height;
+    let total_vertical_extent = total_advance.max(min_height);
+
+    b.rect.x = start_x;
+    b.rect.y = start_y;
+    let col_width = em * s.line_height;
+    b.rect.width = col_width;
+    b.rect.height = total_vertical_extent;
+}
+
+pub(crate) fn wrap_inline_run_vertical(
+    segments: &[InlineSegment],
+    max_height: f32,
+    container_font_size: f32,
+    viewport: Size,
+    m: &dyn TextMeasurer,
+    _hp: &dyn HyphenationProvider,
+    _white_space: crate::style::WhiteSpace,
+    _word_break: crate::style::WordBreak,
+    _overflow_wrap: crate::style::OverflowWrap,
+    _writing_mode: WritingMode,
+    _text_orientation: crate::style::TextOrientation,
+) -> Vec<Vec<InlineFrag>> {
+    let space_w = m.char_width(' ', container_font_size);
+
+    let mut result: Vec<Vec<InlineFrag>> = vec![Vec::new()];
+    let mut current_line: &mut Vec<InlineFrag> = result.last_mut().unwrap();
+    let mut current_y: f32 = 0.0;
+    let mut prev_trailing_ws: bool = false;
+
+    for seg in segments {
+        if seg.forced_break {
+            if !current_line.is_empty() && !current_line.last().map(|f| f.text == "\n").unwrap_or(false) {
+                current_line.push(InlineFrag {
+                    x: 0.0,
+                    y_offset: 0.0,
+                    width: 0.0,
+                    text: "\n".to_string(),
+                    style: seg.style.clone(),
+                    padding_left: 0.0,
+                    padding_right: 0.0,
+                    is_element_box: false,
+                    img_src: None,
+                    img_is_lazy: false,
+                    is_first_line: false,
+                    source_node: seg.source_node,
+                    source_char_offset: seg.source_char_offset,
+                });
+            }
+            current_y = 0.0;
+            prev_trailing_ws = false;
+            continue;
+        }
+
+        let seg_lead_ws = seg.text.starts_with(|c: char| c.is_whitespace());
+        let seg_trail_ws = seg.text.ends_with(|c: char| c.is_whitespace());
+
+        if _white_space.preserves_whitespace() {
+            if seg.text.is_empty() {
+                continue;
+            }
+            prev_trailing_ws = false;
+            let style = &seg.style;
+            let em_s = style.font_size;
+            let ls = style.letter_spacing;
+            let tab_size = style.tab_size;
+            let pad_l = style.padding_left.resolve_or_zero(em_s, max_height, viewport);
+            let _pad_r = style.padding_right.resolve_or_zero(em_s, max_height, viewport);
+            let frag_h = measure_text_w_varied(&seg.text, em_s, ls, tab_size, &style.font_family, &style.font_variation_settings, m);
+            current_line.push(InlineFrag {
+                x: current_y,
+                y_offset: 0.0,
+                width: frag_h,
+                text: seg.text.clone(),
+                style: style.clone(),
+                padding_left: pad_l,
+                padding_right: 0.0,
+                is_element_box: seg.is_element_box,
+                img_src: None,
+                img_is_lazy: false,
+                is_first_line: false,
+                source_node: seg.source_node,
+                source_char_offset: seg.source_char_offset,
+            });
+            current_y += frag_h;
+            continue;
+        }
+
+        if let Some(img_src) = &seg.img_src {
+            let img_advance = m.char_width(' ', container_font_size) * 3.0;
+            if !current_line.is_empty() && current_y + img_advance > max_height {
+                result.push(Vec::new());
+                current_line = result.last_mut().unwrap();
+                current_y = 0.0;
+            }
+            current_line.push(InlineFrag {
+                x: current_y,
+                y_offset: 0.0,
+                width: img_advance,
+                text: seg.text.clone(),
+                style: seg.style.clone(),
+                padding_left: 0.0,
+                padding_right: 0.0,
+                is_element_box: true,
+                img_src: Some(img_src.clone()),
+                img_is_lazy: seg.img_is_lazy,
+                is_first_line: false,
+                source_node: seg.source_node,
+                source_char_offset: seg.source_char_offset,
+            });
+            current_y += img_advance;
+            prev_trailing_ws = seg_trail_ws;
+            continue;
+        }
+
+        let raw_words: Vec<&str> = seg.text.split_whitespace().collect();
+        if raw_words.is_empty() {
+            if seg_lead_ws || seg_trail_ws {
+                prev_trailing_ws = true;
+            }
+            continue;
+        }
+
+        let style = &seg.style;
+        let em_s = style.font_size;
+        let ls = style.letter_spacing;
+        let ws = style.word_spacing;
+        let inter_word = space_w + ls + ws;
+        let pad_l = style.padding_left.resolve_or_zero(em_s, max_height, viewport);
+        let _pad_r = style.padding_right.resolve_or_zero(em_s, max_height, viewport);
+
+        let n = raw_words.len();
+        for (wi, raw_word) in raw_words.iter().enumerate() {
+            let is_seg_first = wi == 0;
+            let is_seg_last = wi == n - 1;
+            let (display_word, _) = strip_soft_hyphens(raw_word);
+
+            let frag_source_offset = {
+                let raw_ptr = raw_word.as_ptr() as usize;
+                let seg_ptr = seg.text.as_ptr() as usize;
+                let word_off = if raw_ptr >= seg_ptr && raw_ptr <= seg_ptr + seg.text.len() {
+                    (raw_ptr - seg_ptr) as u32
+                } else {
+                    0u32
+                };
+                seg.source_char_offset.saturating_add(word_off)
+            };
+
+            let pre = if is_seg_first { seg.pre_space } else { 0.0 };
+            let post = if is_seg_last { seg.post_space } else { 0.0 };
+
+            let word_h = measure_text_w_varied(&display_word, em_s, ls, 0.0, &style.font_family, &style.font_variation_settings, m);
+            let word_inter = if is_seg_first && !(prev_trailing_ws || seg_lead_ws) { 0.0 } else { inter_word };
+            let gap = if current_line.is_empty() { 0.0 } else { word_inter };
+
+            let needs_wrap = !current_line.is_empty()
+                && current_y + gap + pre + word_h > max_height;
+
+            if needs_wrap {
+                current_line.push(InlineFrag {
+                    x: current_y,
+                    y_offset: 0.0,
+                    width: gap + pre,
+                    text: " ".repeat(0),
+                    style: style.clone(),
+                    padding_left: if is_seg_first { pad_l } else { 0.0 },
+                    padding_right: 0.0,
+                    is_element_box: seg.is_element_box,
+                    img_src: None,
+                    img_is_lazy: false,
+                    is_first_line: false,
+                    source_node: seg.source_node,
+                    source_char_offset: frag_source_offset,
+                });
+                result.push(Vec::new());
+                current_line = result.last_mut().unwrap();
+                current_y = 0.0;
+            }
+
+            let _entry_pre = if is_seg_first { pre } else { 0.0 };
+            current_line.push(InlineFrag {
+                x: current_y,
+                y_offset: 0.0,
+                width: word_h,
+                text: display_word.to_string(),
+                style: style.clone(),
+                padding_left: if is_seg_first { pad_l } else { 0.0 },
+                padding_right: 0.0,
+                is_element_box: seg.is_element_box,
+                img_src: None,
+                img_is_lazy: false,
+                is_first_line: false,
+                source_node: seg.source_node,
+                source_char_offset: frag_source_offset,
+            });
+            current_y += word_h + post;
+            prev_trailing_ws = seg_trail_ws;
+        }
+    }
+
+    if result.is_empty() {
+        result.push(Vec::new());
+    }
+    result
+}
+

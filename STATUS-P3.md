@@ -43,7 +43,7 @@ P3-stylequery: Container style queries (`style()` function) likely not implement
 P3-counterstyle: @counter-style at-rule may be parsed but not wired to marker generation.
 P3-fragmentation: break-inside / widows / orphans props likely stubbed.
 P3-initialletter: initial-letter drop-cap not implemented in layout.
-P3-vertical: CSS writing-mode vertical text (full layout) not implemented.
+P3-vertical: CSS writing-mode vertical text — Phase 2 (vertical inline text flow + sideways glyphs) implemented. `wrap_inline_run_vertical` + `lay_out_vertical_inline_run` added; `text_orientation` field propagated through display list; existing tests pass. Paint-side glyph rotation (90° CW/upright/CJK mixed) deferred to Phase 2b.
 P3-pushapi: Push API file exists but may be stub-level.
 P3-reporting: Reporting API stub-level.
 P3-earlyhints: 103 Early Hints + fetch Priority Hints — may need server-side simulation.

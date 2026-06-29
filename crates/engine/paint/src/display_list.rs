@@ -29,7 +29,7 @@ use lumen_layout::{
     StackingContextId, StackingTree, TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness,
     TextEmphasisShape, TextEmphasisStyle, TextOverflow, TextUnderlinePosition,
     TransformStyle,
-    Visibility,
+    Visibility, style::TextOrientation,
 };
 
 use crate::gap_decorations::{emit_gap_rules, GapDecorationContext, GapSegment};
@@ -395,7 +395,12 @@ pub enum DisplayCommand {
         /// CSS Text L3 §10.1 — pixel width for a tab character (\t).
         /// 0.0 means no tab characters in text (renderer skips tab expansion).
         tab_size: f32,
-        highlight_name: Option<String>
+        highlight_name: Option<String>,
+        /// CSS Writing Modes L3 §6.5 — `text-orientation`. `None` = horizontal text;
+        /// `Some(...)` signals vertical layout: paint rotates glyphs 90° CW for
+        /// `Sideways`, and applies per-glyph mixed-mode in `Mixed` (deferred to
+        /// Phase 2+; Phase 1 treats `Mixed` as `Sideways`).
+        text_orientation: Option<TextOrientation>,
     },
     /// Растровое изображение из `<img>`. `rect` — итоговая коробка после
     /// расчёта по CSS (width/height + HTML presentational hints), `src` —
@@ -1391,7 +1396,7 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             DisplayCommand::DrawText {
                 rect, text, font_size, color, font_family, font_weight, font_style,
                 font_variation_axes, tab_size: _,
-                highlight_name: _,
+                highlight_name: _, text_orientation: _,
             } => {
                 out.push_str(&format!(
                     "DrawText ({:.2}, {:.2}, {:.2}, {:.2}) {:?} {:.2} #{:02x}{:02x}{:02x}{:02x}",
@@ -1982,6 +1987,7 @@ fn emit_margin_box_text(margin_box: &MarginBox, cmds: &mut DisplayList) {
             font_variation_axes: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
     }
 }
@@ -2244,6 +2250,7 @@ fn emit_text_emphasis_marks(
             font_variation_axes: vec![],
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         });
     }
 }
@@ -2329,8 +2336,6 @@ fn emit_text_frags(
                 {
                     axes.push((*b"opsz", frag.style.font_size));
                 }
-                // CSS Fonts L4 §5.2: inject `wdth` for non-normal font-stretch
-                // unless the author already set it via font-variation-settings.
                 if frag.style.font_stretch != FontStretch::NORMAL
                     && !axes.iter().any(|(t, _)| t == b"wdth")
                 {
@@ -2340,6 +2345,11 @@ fn emit_text_frags(
             },
             tab_size: frag.style.tab_size,
             highlight_name: None,
+            text_orientation: if frag.style.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
+                Some(frag.style.text_orientation)
+            } else {
+                None
+            },
         });
         push_text_decoration(out, container_x, frag_y, frag);
         emit_text_emphasis_marks(out, container_x, line_h, frag_y, frag);
@@ -2477,6 +2487,11 @@ fn emit_inline_run(
                 },
                 tab_size: 0.0,
                 highlight_name: None,
+                text_orientation: if ef.style.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
+                    Some(ef.style.text_orientation)
+                } else {
+                    None
+                },
             });
         } else {
             emit_text_frags(line, b.rect.x, b.rect.width, line_y, line_h, sel, out);
@@ -3029,6 +3044,11 @@ fn emit_text_shadows(
             },
             tab_size: frag.style.tab_size,
             highlight_name: None,
+            text_orientation: if frag.style.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
+                Some(frag.style.text_orientation)
+            } else {
+                None
+            },
         });
         if sigma > 0.0 {
             out.push(DisplayCommand::PopFilter);
@@ -4325,6 +4345,11 @@ fn emit_input_value_text(
         font_variation_axes: vec![],
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: if s.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
+            Some(s.text_orientation)
+        } else {
+            None
+        },
     });
     out.push(DisplayCommand::PopClip);
 }
@@ -4364,6 +4389,11 @@ fn emit_input_placeholder_text(b: &LayoutBox, placeholder: &str, out: &mut Vec<D
         font_variation_axes: vec![],
         tab_size: 0.0,
         highlight_name: None,
+        text_orientation: if s.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
+            Some(s.text_orientation)
+        } else {
+            None
+        },
     });
     out.push(DisplayCommand::PopClip);
 }
@@ -4732,6 +4762,11 @@ fn emit_select_indicator(b: &LayoutBox, selected_text: &str, suppress_primitive:
             font_variation_axes: vec![],
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: if s.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
+                Some(s.text_orientation)
+            } else {
+                None
+            },
         });
     }
 
@@ -4759,6 +4794,11 @@ fn emit_select_indicator(b: &LayoutBox, selected_text: &str, suppress_primitive:
             font_variation_axes: vec![],
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: if s.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
+                Some(s.text_orientation)
+            } else {
+                None
+            },
         });
     }
 }
@@ -4855,13 +4895,18 @@ fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                             axes.push((*b"wdth", s.font_stretch.0 as f32 / 10.0));
                         }
                         axes
-                    },
-                    tab_size: 0.0,
-                    highlight_name: None,
-                });
-            }
-        }
-    }
+                     },
+                     tab_size: 0.0,
+                     highlight_name: None,
+                     text_orientation: if s.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
+                         Some(s.text_orientation)
+                     } else {
+                         None
+                     },
+                 });
+             }
+         }
+     }
 }
 
 /// CSS Tables L2 §17.6.1.1 — true when `b` is a table cell that must suppress its
@@ -6398,6 +6443,11 @@ fn emit_svg_text(
             font_variation_axes: vec![],
             tab_size: b.style.tab_size,
             highlight_name: None,
+            text_orientation: if b.style.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
+                Some(b.style.text_orientation)
+            } else {
+                None
+            },
         });
     }
 }
@@ -12983,6 +13033,7 @@ mod tests {
                 color: Color { r: 0, g: 0, b: 0, a: 255 }, font_family: vec![],
                 font_weight: FontWeight::NORMAL, font_style: FontStyle::Normal,
                 font_variation_axes: vec![], tab_size: 0.0, highlight_name: None,
+                text_orientation: None,
             },
             DisplayCommand::DrawImage {
                 rect: r, src: "img.png".to_owned(), alt: String::new(),
@@ -14514,6 +14565,7 @@ pub fn emit_text_with_highlights(
     font_variation_axes: Vec<([u8; 4], f32)>,
     tab_size: f32,
     highlight_name: Option<String>,
+    text_orientation: Option<TextOrientation>,
     out: &mut DisplayList,
 ) {
     out.push(DisplayCommand::DrawText {
@@ -14527,6 +14579,7 @@ pub fn emit_text_with_highlights(
         font_variation_axes,
         tab_size,
         highlight_name,
+        text_orientation,
     });
 }
 
@@ -14548,6 +14601,7 @@ mod highlight_tests {
             font_variation_axes: vec![],
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         }]);
         
         if let DisplayCommand::DrawText { highlight_name, .. } = &dl[0] {
@@ -14569,6 +14623,7 @@ mod highlight_tests {
             vec![],
             0.0,
             Some("search".to_string()),
+            None,
             &mut out,
         );
         
@@ -14595,6 +14650,7 @@ mod highlight_tests {
                 vec![],
                 0.0,
                 Some(name.to_string()),
+                None,
                 &mut out,
             );
             
@@ -14617,6 +14673,7 @@ mod highlight_tests {
             FontStyle::Normal,
             vec![],
             0.0,
+            None,
             None,
             &mut out,
         );
@@ -14644,6 +14701,7 @@ mod highlight_tests {
             vec![],
             4.0,
             Some("custom".to_string()),
+            None,
             &mut out,
         );
         
@@ -14675,6 +14733,7 @@ mod highlight_tests {
             vec![],
             0.0,
             Some("empty".to_string()),
+            None,
             &mut out,
         );
         
@@ -14701,6 +14760,7 @@ mod highlight_tests {
             vec![],
             0.0,
             Some("search".to_string()),
+            None,
             &mut out1,
         );
         
@@ -14715,6 +14775,7 @@ mod highlight_tests {
             vec![],
             0.0,
             Some("spelling".to_string()),
+            None,
             &mut out2,
         );
         
@@ -14747,6 +14808,7 @@ mod highlight_tests {
             axes.clone(),
             0.0,
             Some("variable-font".to_string()),
+            None,
             &mut out,
         );
         
