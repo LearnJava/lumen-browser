@@ -861,9 +861,9 @@
       {
        "id": "RP-2",
        "title": "RP-2: Relayout под живой размер окна",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "layout-viewport отслеживает живой inner_size окна; убрать хардкод 1024×720 (обработчик Resized + relayout уже есть)"
+       "note": "layout-viewport отслеживает живой inner_size окна. Resized→resize→relayout уже был; RP-2 закрепил: relayout берёт CSS-viewport из content_layout_viewport (живой surface минус tab-strip + workspace-switcher по высоте), а не из полного окна — vw/vh/%/@media следуют за окном, headless остаётся 1024×720; 6 регресс-тестов"
       },
       {
        "id": "RP-3",

@@ -4324,6 +4324,34 @@ fn decide_fullscreen_poll(prev: (u32, u32), cur: (u32, u32), attempts: u8) -> Fu
     }
 }
 
+/// CSS-px layout viewport (width, height) for the page content region, derived
+/// from the full renderer surface size `surface` (already in CSS px).
+///
+/// In an interactive window the page is composited *below* the browser chrome:
+/// the tab strip (`TAB_BAR_HEIGHT`) always, plus the workspace switcher
+/// (`SWITCHER_HEIGHT`) when visible. The page content is shifted down by that
+/// chrome via `PushTransform`, and scroll clamping uses the same reduced height
+/// (`viewport_height_css`). The layout pass must therefore see the *content*
+/// height — not the full window — so that `vh`/`%`-heights/`@media (height)`
+/// resolve against the actually-visible page region. Width is unaffected (the
+/// chrome only occupies vertical space).
+///
+/// Headless surfaces (`--screenshot` / `--dump-*` / `--ipc-server`, i.e.
+/// `has_window == false`) have no chrome: the full surface is the viewport,
+/// which keeps those paths deterministic at 1024×720.
+fn content_layout_viewport(surface: Size, has_window: bool, workspace_visible: bool) -> (f32, f32) {
+    if !has_window {
+        return (surface.width, surface.height);
+    }
+    let chrome_h = tabs::strip::TAB_BAR_HEIGHT
+        + if workspace_visible {
+            panels::workspace_panel::SWITCHER_HEIGHT
+        } else {
+            0.0
+        };
+    (surface.width, (surface.height - chrome_h).max(0.0))
+}
+
 /// Повторный layout+paint по сохранённому `LayoutSource` с новым viewport.
 /// Возвращает `(DisplayList, LayoutBox)` — LayoutBox нужен для animation scheduler.
 /// `dark_mode` is forwarded to `layout_measured_hyp` so `@media (prefers-color-scheme: dark)`
@@ -6200,14 +6228,23 @@ impl Lumen {
         let Some(src) = self.layout_source.as_ref() else { return };
         let Some(r) = self.renderer.as_ref() else { return };
         let vp_size = r.viewport_size();
+        // RP-2: lay out against the live page content region, not the full
+        // window. In an interactive window the page sits below the tab strip
+        // (+ workspace switcher), so the layout viewport must exclude that
+        // chrome to match scroll clamping (`viewport_height_css`) and the
+        // PushTransform that shifts content down. Headless surfaces have no
+        // chrome and use the full surface. Tracks live `inner_size` because
+        // `viewport_size()` reflects the last `r.resize()` on `Resized`.
+        let (vp_w, vp_h) =
+            content_layout_viewport(vp_size, self.window.is_some(), self.workspace_panel.visible);
         // Guard against degenerate viewport (renderer not yet configured or minimized).
-        if vp_size.width <= 0.0 || vp_size.height <= 0.0 {
+        if vp_w <= 0.0 || vp_h <= 0.0 {
             return;
         }
         // Apply <meta viewport initial-scale> + user zoom to derive the CSS layout viewport.
         let meta_scale = meta_initial_scale(src);
         let (css_w, css_h) =
-            zoom::effective_viewport(vp_size.width, vp_size.height, meta_scale, self.zoom_factor);
+            zoom::effective_viewport(vp_w, vp_h, meta_scale, self.zoom_factor);
         let viewport = Size::new(css_w, css_h);
         // Set interactive hover/focus/active state for this layout pass so that
         // :hover / :focus / :active / :focus-within CSS rules evaluate correctly.
@@ -16555,6 +16592,7 @@ fn build_split_placeholder(url: &str) -> lumen_paint::DisplayList {
             font_variation_axes: vec![],
             tab_size: 0.0,
             highlight_name: None,
+            text_orientation: None,
         },
     ]
 }
@@ -16580,6 +16618,62 @@ fn escape_js_string_char(ch: char) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── RP-2: live layout viewport tracks window size, minus chrome ─────────
+
+    #[test]
+    fn content_layout_viewport_subtracts_tab_strip() {
+        // Interactive window at 1280×800 → page content area excludes the tab
+        // strip (TAB_BAR_HEIGHT) but keeps the full width.
+        let (w, h) = content_layout_viewport(Size::new(1280.0, 800.0), true, false);
+        assert!((w - 1280.0).abs() < 1e-3);
+        assert!((h - (800.0 - tabs::strip::TAB_BAR_HEIGHT)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn content_layout_viewport_tracks_resized_window() {
+        // After a resize the surface (= r.viewport_size()) follows inner_size;
+        // the content height follows it too (no hardcoded 720).
+        let (w, h) = content_layout_viewport(Size::new(640.0, 480.0), true, false);
+        assert!((w - 640.0).abs() < 1e-3);
+        assert!((h - (480.0 - tabs::strip::TAB_BAR_HEIGHT)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn content_layout_viewport_default_window_yields_720() {
+        // The interactive window opens at 1024 × (720 + TAB_BAR_HEIGHT) so the
+        // page gets exactly 720 CSS px, as graphic tests expect.
+        let surface = Size::new(1024.0, 720.0 + tabs::strip::TAB_BAR_HEIGHT);
+        let (w, h) = content_layout_viewport(surface, true, false);
+        assert!((w - 1024.0).abs() < 1e-3);
+        assert!((h - 720.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn content_layout_viewport_subtracts_workspace_switcher() {
+        // With the workspace switcher visible the page loses both bars.
+        let surface = Size::new(1024.0, 800.0);
+        let (_w, h) = content_layout_viewport(surface, true, true);
+        let expected =
+            800.0 - tabs::strip::TAB_BAR_HEIGHT - panels::workspace_panel::SWITCHER_HEIGHT;
+        assert!((h - expected).abs() < 1e-3);
+    }
+
+    #[test]
+    fn content_layout_viewport_headless_uses_full_surface() {
+        // Headless (--screenshot/--dump/--ipc): no chrome → full surface,
+        // keeping those paths deterministic at 1024×720.
+        let (w, h) = content_layout_viewport(Size::new(1024.0, 720.0), false, false);
+        assert!((w - 1024.0).abs() < 1e-3);
+        assert!((h - 720.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn content_layout_viewport_clamps_tiny_window_to_zero() {
+        // A window shorter than the chrome must not yield a negative height.
+        let (_w, h) = content_layout_viewport(Size::new(800.0, 10.0), true, false);
+        assert!(h >= 0.0);
+    }
 
     // ── BUG-171 этап 2: off-UI-thread финальный pipeline ────────────────────
     //
