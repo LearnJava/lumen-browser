@@ -233,14 +233,14 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     # --- BUG-243 dynamic-SVG suite (JS-built SVG, gdigrab): tests are CORRECT; these
     #     fail until the SVG-engine gaps they uncovered are fixed. Do NOT edit the tests
     #     (user rule) — fix the engine, then delete these entries. ---
-    '130': ('BUG-244', 11.32),  # nested <g rotate scale>: rotation dropped (transform collapsed to axis-aligned bbox) → concentric instead of spiral. Fix BUG-244 → ≤0.5%
-    '132': ('BUG-244', 11.07),  # <use> rotated ring collapses (BUG-244) + <use>/<symbol> width/height not scaled (BUG-246). Fix both → ≤0.5%
+    # '130' removed: BUG-244 FIXED (11.32%→0.10%) — nested <g rotate scale> now renders as a spiral via SVG CTM (PushTransform), geometry = Edge
+    '132': ('BUG-246', 10.97),  # <use> rotated ring: rotation now applied (BUG-244 FIXED, CTM) but instances still not scaled by <symbol> viewBox→width/height → dominant residual is BUG-246. Was ('BUG-244', 11.07)→10.97; fix BUG-246 → ≤0.5%
     '133': ('BUG-245', 3.91),   # fill-rule:evenodd not honoured on self-intersecting paths (pentagram/ring centres filled like nonzero) + diagonal-edge AA (BUG-247). Fix BUG-245 → near AA floor
     '134': ('BUG-247', 3.69),   # stroke-dasharray placement diverges from Edge under gdigrab (high-freq pattern × subpixel shift); solid strokes match. Inherent AA, not a logic defect
-    '135': ('BUG-244', 15.62),  # fanned cards use rotate(a cx cy) → collapse to one upright stack (BUG-244). Fix BUG-244 → ≤0.5%
+    '135': ('BUG-247', 0.54),   # fanned cards rotate(a cx cy): BUG-244 FIXED (15.62%→0.54%) — rotation centre now correct, cards fan out as in Edge. Residual 0.54% = rotated-rect edge AA (BUG-247 class), just over 0.5%
     '136': ('BUG-247', 1.98),   # <circle>/<ellipse> curve-edge AA vs Edge (geometry/colour correct; only ~1px edge AA differs). Inherent rasterizer-vs-Edge AA
-    '137': ('BUG-244', 20.79),  # pinwheels/skew rely on rotate()/skewX() → dropped (BUG-244); matrix(a 0 0 d e f) parts render. Fix BUG-244 → ≤0.5%
-    '138': ('BUG-244', 3.29),   # rotated gauge marker dropped (BUG-244) + pie/area diagonal+curve AA (BUG-247). Fix BUG-244 → near AA floor
+    '137': ('BUG-247', 4.74),   # pinwheels/skew: BUG-244 FIXED (20.79%→4.74%) — rotate()/skewX() now applied via CTM, blades fan correctly. Residual 4.74% = edge AA of many thin high-frequency skewed blades (BUG-247 class, amplified by frequency like TEST-134 dash)
+    '138': ('BUG-247', 2.18),   # gauge: BUG-244 FIXED (3.29%→2.18%) — rotated marker now drawn via CTM. Residual = pie/area diagonal+curve edge AA (BUG-247)
 
     '02': ('BUG-250', 0.68),    # color-named: baseline-сдвиг текста после смены FontMeasurer (51dbf9fd, OS/2 sTypoAscender/Descender). Текстовая строка y124-304 разошлась с Edge на доли пикселя. Класс «rule 3» (font-parity, как BUG-128). Промоут baseline 0.0% (25.06 21:22) устарел
     '04': ('BUG-250', 0.68),    # color-alpha: тот же baseline-сдвиг текста, что TEST-02 (BUG-250)
