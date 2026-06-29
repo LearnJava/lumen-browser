@@ -188,6 +188,8 @@ impl InProcessSession {
         lumen_network::HttpClient::new()
             .with_sink(Arc::new(NoopEventSink))
             .with_content_decoder(Arc::new(lumen_network::BrotliContentDecoder::new()))
+            .with_content_decoder(Arc::new(lumen_network::GzipContentDecoder::new()))
+            .with_content_decoder(Arc::new(lumen_network::DeflateContentDecoder::new()))
             .with_fingerprint_profile(self.context.fingerprint_profile().to_http_profile())
     }
 
