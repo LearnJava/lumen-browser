@@ -15603,5 +15603,87 @@ mod tests {
         let s = doc.find_by_id("s").expect("summary not found");
         assert!(!super::is_open_details(&doc, s), "<summary> is never a details disclosure root");
     }
+
+    // --- RP-1: percentage sizing in block flow ---
+    //
+    // Verifies CSS 2.1 §10 percentage resolution for block-level boxes in normal
+    // flow: width / horizontal & vertical margin / padding resolve against the
+    // containing block's *width*; height resolves against the containing block's
+    // *height* (only when definite, else `auto`).
+    mod rp1_percentage_sizing {
+        use lumen_core::geom::Size;
+
+        /// Lays out `<div class=p><div class=c></div></div>` and returns the inner
+        /// child Block box (`.c`). Uses `layout_measured` so the inline/measurer
+        /// path matches real rendering rather than the fallback.
+        fn child_block(css: &str) -> super::super::LayoutBox {
+            let html = r#"<div class="p"><div class="c"></div></div>"#;
+            let doc = lumen_html_parser::parse(html);
+            let sheet = lumen_css_parser::parse(css);
+            let root = super::super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+            // The `.c` box is the deepest empty Block in the tree
+            // (html > body > div.p > div.c). Pick the Block at maximum depth.
+            fn deepest<'a>(
+                b: &'a super::super::LayoutBox,
+                depth: usize,
+                best: &mut (usize, Option<&'a super::super::LayoutBox>),
+            ) {
+                if matches!(b.kind, super::super::BoxKind::Block)
+                    && b.children.is_empty()
+                    && depth > best.0
+                {
+                    *best = (depth, Some(b));
+                }
+                for c in &b.children {
+                    deepest(c, depth + 1, best);
+                }
+            }
+            let mut best = (0usize, None);
+            deepest(&root, 0, &mut best);
+            best.1.cloned().expect("child .c block not found")
+        }
+
+        #[test]
+        fn percent_width_resolves_against_containing_block() {
+            // Parent 400px, child width:50% → 200px border-box.
+            let c = child_block(".p { width: 400px; } .c { width: 50%; }");
+            assert!((c.rect.width - 200.0).abs() < 0.5, "width={}", c.rect.width);
+        }
+
+        #[test]
+        fn percent_horizontal_margin_against_cb_width() {
+            // margin: 0 10% in a 400px parent → 40px each side; child fills the
+            // remaining 320px (auto width shrinks by the resolved margins). The
+            // parent sits 8px in from the viewport edge (UA body margin), so the
+            // child's left edge lands at 8 + 40 = 48px.
+            let c = child_block(".p { width: 400px; } .c { margin: 0 10%; }");
+            assert!((c.rect.x - 48.0).abs() < 0.5, "x={}", c.rect.x);
+            assert!((c.rect.width - 320.0).abs() < 0.5, "width={}", c.rect.width);
+        }
+
+        #[test]
+        fn percent_vertical_padding_against_cb_width() {
+            // padding-top: 25% resolves against *width* (400px) → 100px, NOT height.
+            let c = child_block(".p { width: 400px; } .c { padding-top: 25%; }");
+            // content starts 100px below the child's top border edge.
+            let pad = c.rect.height; // empty child: height == padding-top (content 0).
+            assert!((pad - 100.0).abs() < 0.5, "padding-derived height={}", pad);
+        }
+
+        #[test]
+        fn percent_height_auto_when_cb_height_indefinite() {
+            // Parent has auto height → child height:50% computes to auto → 0 for an
+            // empty box (no content), NOT 50% of viewport.
+            let c = child_block(".p { width: 400px; } .c { height: 50%; }");
+            assert!(c.rect.height < 0.5, "height should collapse to auto/0, got {}", c.rect.height);
+        }
+
+        #[test]
+        fn percent_height_resolves_when_cb_height_definite() {
+            // Parent height:300px (definite) → child height:50% → 150px.
+            let c = child_block(".p { width: 400px; height: 300px; } .c { height: 50%; }");
+            assert!((c.rect.height - 150.0).abs() < 0.5, "height={}", c.rect.height);
+        }
+    }
 }
 

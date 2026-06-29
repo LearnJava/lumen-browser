@@ -854,9 +854,9 @@
       {
        "id": "RP-1",
        "title": "RP-1: Проценты в block-потоке",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "%-длины width/height/margin/padding резолвятся против containing-block, а не cb_width=0 (тип Length уже умеет, block-поток передаёт 0)"
+       "note": "%-длины width/height/margin/padding в block-потоке резолвятся против containing-block (горизонталь+vertical pad/margin → cb-width; height → cb-height-if-definite). Уже было реализовано в движке (cb=available_width с 1B.1, definite-height threading с BUG-136); RP-1 закрепил поведение 5 регресс-тестами (box_tree.rs mod rp1_percentage_sizing)"
       },
       {
        "id": "RP-2",
