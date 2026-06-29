@@ -36,6 +36,7 @@ use lumen_core::url::Url;
 
 mod auth;
 mod brotli;
+mod flate;
 pub mod coop;
 pub mod csp;
 pub mod permissions_policy;
@@ -68,6 +69,7 @@ pub use ctap2::{CompositeCredentialProvider, CtapRoamingTransport};
 pub use socks5::Socks5Proxy;
 pub use webauthn::VirtualAuthenticator;
 pub use brotli::BrotliContentDecoder;
+pub use flate::{DeflateContentDecoder, GzipContentDecoder};
 pub use filter::{DefaultFilterList, EasyListFilter, HostsFilter, CompositeFilter};
 
 // ── Process-global ad-block filter ────────────────────────────────────────────

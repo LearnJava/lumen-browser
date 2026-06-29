@@ -818,6 +818,12 @@ impl BrowserSession for WinitSession {
                 .with_content_decoder(std::sync::Arc::new(
                     lumen_network::BrotliContentDecoder::new(),
                 ))
+                .with_content_decoder(std::sync::Arc::new(
+                    lumen_network::GzipContentDecoder::new(),
+                ))
+                .with_content_decoder(std::sync::Arc::new(
+                    lumen_network::DeflateContentDecoder::new(),
+                ))
                 .with_fingerprint_profile(self.context.fingerprint_profile().to_http_profile());
             let bytes = client.fetch(&lumen_url)?;
             return self.run_pipeline(&bytes, Some("text/html"), url.to_owned());

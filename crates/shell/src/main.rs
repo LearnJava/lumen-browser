@@ -2538,12 +2538,16 @@ impl PageSource {
             }
             PageSource::Url(url) => {
                 use lumen_core::url::Url;
-                use lumen_network::{BrotliContentDecoder, HttpClient};
+                use lumen_network::{
+                    BrotliContentDecoder, DeflateContentDecoder, GzipContentDecoder, HttpClient,
+                };
 
                 let lumen_url = Url::parse(url)?;
                 let mut builder = HttpClient::new()
                     .with_sink(sink)
-                    .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()));
+                    .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()))
+                    .with_content_decoder(std::sync::Arc::new(GzipContentDecoder::new()))
+                    .with_content_decoder(std::sync::Arc::new(DeflateContentDecoder::new()));
                 if let Some(jar) = cookie_jar {
                     builder = builder.with_cookie_jar(
                         Arc::new(lumen_storage::CookieJarProvider::new(jar)),
@@ -2604,12 +2608,16 @@ impl PageSource {
             return self.load_bytes(sink, cookie_jar);
         };
         use lumen_core::url::Url;
-        use lumen_network::{BrotliContentDecoder, HttpClient};
+        use lumen_network::{
+            BrotliContentDecoder, DeflateContentDecoder, GzipContentDecoder, HttpClient,
+        };
 
         let lumen_url = Url::parse(url)?;
         let mut builder = HttpClient::new()
             .with_sink(sink)
-            .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()));
+            .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()))
+            .with_content_decoder(std::sync::Arc::new(GzipContentDecoder::new()))
+            .with_content_decoder(std::sync::Arc::new(DeflateContentDecoder::new()));
         if let Some(jar) = cookie_jar {
             builder = builder.with_cookie_jar(
                 Arc::new(lumen_storage::CookieJarProvider::new(jar)),
@@ -3144,10 +3152,15 @@ impl ResourceBase {
         sink: Arc<dyn EventSink>,
         cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
     ) -> lumen_network::HttpClient {
-        use lumen_network::{BrotliContentDecoder, HttpClient, MixedContentMode};
+        use lumen_network::{
+            BrotliContentDecoder, DeflateContentDecoder, GzipContentDecoder, HttpClient,
+            MixedContentMode,
+        };
         let mut builder = HttpClient::new()
             .with_sink(sink)
-            .with_content_decoder(Arc::new(BrotliContentDecoder::new()));
+            .with_content_decoder(Arc::new(BrotliContentDecoder::new()))
+            .with_content_decoder(Arc::new(GzipContentDecoder::new()))
+            .with_content_decoder(Arc::new(DeflateContentDecoder::new()));
         if let Some(jar) = cookie_jar {
             builder = builder.with_cookie_jar(
                 Arc::new(lumen_storage::CookieJarProvider::new(jar)),
