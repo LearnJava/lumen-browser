@@ -590,6 +590,86 @@ enum ClipEntry {
         /// Render target, активный до PushClipPath.
         prev_render_target: femtovg::RenderTarget,
     },
+    /// Скруглённый клип (`PushClipRoundedRect`, BUG-249): как `PathLayer`, но
+    /// форма — rounded-rect. Subtree рендерится в offscreen `image_id`, а
+    /// `PopClip` композитит его одним `fill_path` по скруглённому контуру —
+    /// углы детей обрезаются по border-radius (а не square scissor).
+    RoundedRectLayer {
+        /// Offscreen-слой с содержимым клип-группы (full-RT, FLIP_Y FBO).
+        image_id: femtovg::ImageId,
+        /// Клип-прямоугольник (padding-box) в page-координатах.
+        rect: lumen_core::geom::Rect,
+        /// Радиусы углов `[tl, tr, br, bl]` в px (page-пространство).
+        radii: [f32; 4],
+        /// Матрица канвы на момент Push (включая transform элемента).
+        transform: femtovg::Transform2D,
+        /// Render target, активный до PushClipRoundedRect.
+        prev_render_target: femtovg::RenderTarget,
+    },
+}
+
+/// Клампит per-corner радиусы `[tl, tr, br, bl]` к половине меньшей стороны
+/// `rect`, чтобы соседние углы не перекрывались (CSS Backgrounds L3 §5.5,
+/// упрощение до симметричного радиуса). Для `border-radius: 50%` на квадрате
+/// даёт полный круг, для большого радиуса на широком боксе — pill. Чистая
+/// функция, вынесена ради regression-теста.
+fn clamp_clip_radii(rect: &lumen_core::geom::Rect, radii: &[f32; 4]) -> [f32; 4] {
+    let max_r = (rect.width.min(rect.height) / 2.0).max(0.0);
+    [
+        radii[0].clamp(0.0, max_r),
+        radii[1].clamp(0.0, max_r),
+        radii[2].clamp(0.0, max_r),
+        radii[3].clamp(0.0, max_r),
+    ]
+}
+
+/// Строит femtovg-путь скруглённого прямоугольника `rect` с радиусами
+/// `[tl, tr, br, bl]`, применяя `t` к каждой опорной/контрольной точке вручную
+/// (как [`clip_shape_path`]) — клип переносится transform-ом элемента при
+/// композите под identity-канвой. Радиусы клампятся к половине меньшей стороны,
+/// чтобы соседние углы не перекрывались.
+fn rounded_rect_clip_path(
+    rect: &lumen_core::geom::Rect,
+    radii: &[f32; 4],
+    t: &femtovg::Transform2D,
+) -> femtovg::Path {
+    const K: f32 = 0.5523;
+    let (x, y, w, h) = (rect.x, rect.y, rect.width, rect.height);
+    let [tl, tr, br, bl] = clamp_clip_radii(rect, radii);
+    let p = |px: f32, py: f32| t.transform_point(px, py);
+    let mut path = femtovg::Path::new();
+    let (sx, sy) = p(x + tl, y);
+    path.move_to(sx, sy);
+    // Верхняя грань → правый-верхний угол.
+    let (ex, ey) = p(x + w - tr, y);
+    path.line_to(ex, ey);
+    let (c1x, c1y) = p(x + w - tr + K * tr, y);
+    let (c2x, c2y) = p(x + w, y + tr - K * tr);
+    let (ex, ey) = p(x + w, y + tr);
+    path.bezier_to(c1x, c1y, c2x, c2y, ex, ey);
+    // Правая грань → правый-нижний угол.
+    let (ex, ey) = p(x + w, y + h - br);
+    path.line_to(ex, ey);
+    let (c1x, c1y) = p(x + w, y + h - br + K * br);
+    let (c2x, c2y) = p(x + w - br + K * br, y + h);
+    let (ex, ey) = p(x + w - br, y + h);
+    path.bezier_to(c1x, c1y, c2x, c2y, ex, ey);
+    // Нижняя грань → левый-нижний угол.
+    let (ex, ey) = p(x + bl, y + h);
+    path.line_to(ex, ey);
+    let (c1x, c1y) = p(x + bl - K * bl, y + h);
+    let (c2x, c2y) = p(x, y + h - bl + K * bl);
+    let (ex, ey) = p(x, y + h - bl);
+    path.bezier_to(c1x, c1y, c2x, c2y, ex, ey);
+    // Левая грань → левый-верхний угол.
+    let (ex, ey) = p(x, y + tl);
+    path.line_to(ex, ey);
+    let (c1x, c1y) = p(x, y + tl - K * tl);
+    let (c2x, c2y) = p(x + tl - K * tl, y);
+    let (ex, ey) = p(x + tl, y);
+    path.bezier_to(c1x, c1y, c2x, c2y, ex, ey);
+    path.close();
+    path
 }
 
 /// Строит femtovg-путь формы клипа, применяя `t` к каждой точке вручную.
@@ -1664,22 +1744,51 @@ impl FemtovgBackend {
         t: &femtovg::Transform2D,
         prev_render_target: femtovg::RenderTarget,
     ) {
-        self.switch_render_target(prev_render_target);
-        self.canvas.save();
-        self.canvas.reset_transform();
-        let css_w = (self.width as f64 / self.scale) as f32;
-        let css_h = (self.height as f64 / self.scale) as f32;
         // CSS Shapes L1 §3/§4 — even-odd оставляет дырки в самопересекающихся
         // clip-формах (polygon()/path()); по умолчанию nonzero.
         let fill_rule = match shape {
             ResolvedClipShape::Polygon { even_odd: true, .. } => femtovg::FillRule::EvenOdd,
             _ => femtovg::FillRule::NonZero,
         };
+        let path = clip_shape_path(shape, t);
+        self.composite_clip_layer(src_id, &path, fill_rule, prev_render_target);
+    }
+
+    /// BUG-249: композитит offscreen-слой скруглённого клипа (`RoundedRectLayer`)
+    /// на `prev_render_target`, обрезая содержимое по скруглённому контуру
+    /// `rect`/`radii` (углы детей следуют border-radius контейнера).
+    fn composite_rounded_rect_clip_layer(
+        &mut self,
+        src_id: femtovg::ImageId,
+        rect: &lumen_core::geom::Rect,
+        radii: &[f32; 4],
+        t: &femtovg::Transform2D,
+        prev_render_target: femtovg::RenderTarget,
+    ) {
+        let path = rounded_rect_clip_path(rect, radii, t);
+        self.composite_clip_layer(src_id, &path, femtovg::FillRule::NonZero, prev_render_target);
+    }
+
+    /// Общий хвост композита клип-слоёв (`composite_clip_path_layer` /
+    /// `composite_rounded_rect_clip_layer`): рисует offscreen `src_id` на
+    /// `prev_render_target`, маскируя его уже трансформированным `path` под
+    /// identity-канвой (антиалиасинг края пути — бесплатно).
+    fn composite_clip_layer(
+        &mut self,
+        src_id: femtovg::ImageId,
+        path: &femtovg::Path,
+        fill_rule: femtovg::FillRule,
+        prev_render_target: femtovg::RenderTarget,
+    ) {
+        self.switch_render_target(prev_render_target);
+        self.canvas.save();
+        self.canvas.reset_transform();
+        let css_w = (self.width as f64 / self.scale) as f32;
+        let css_h = (self.height as f64 / self.scale) as f32;
         let paint = femtovg::Paint::image(src_id, 0.0, 0.0, css_w, css_h, 0.0, 1.0)
             .with_anti_alias(true)
             .with_fill_rule(fill_rule);
-        let path = clip_shape_path(shape, t);
-        self.canvas.fill_path(&path, &paint);
+        self.canvas.fill_path(path, &paint);
         self.canvas.restore();
         // Delete after flush — pending GPU commands still reference the id.
         self.filter_layer_pending_delete.push(src_id);
@@ -2444,14 +2553,42 @@ impl FemtovgBackend {
                 self.clip_stack.push(ClipEntry::Scissor);
                 self.layer_stack_depth += 1;
             }
-            DisplayCommand::PushClipRoundedRect { rect, radii: _ } => {
-                // BUG-132 fix: скруглённый клип. femtovg по умолчанию поддерживает
-                // только прямоугольный scissor, поэтому используем его как fallback.
-                // Phase 1: реальная маска с border-radius через offline canvas
-                // + blend_mode с alpha-маской.
-                self.canvas.save();
-                self.canvas.scissor(rect.x, rect.y, rect.width, rect.height);
-                self.clip_stack.push(ClipEntry::Scissor);
+            DisplayCommand::PushClipRoundedRect { rect, radii } => {
+                // BUG-249: скруглённый клип через offscreen-слой + маска (как
+                // PushClipPath/BUG-140). Раньше использовался прямоугольный
+                // scissor (BUG-132 fallback) — углы детей оставались острыми,
+                // расходясь с Edge (TEST-101). Subtree рендерится в FBO, а
+                // PopClip композитит его одним fill_path по скруглённому контуру.
+                let prev_rt = self.current_rt();
+                let entry = match self.canvas.create_image_empty(
+                    self.width as usize,
+                    self.height as usize,
+                    femtovg::PixelFormat::Rgba8,
+                    offscreen_layer_image_flags(),
+                ) {
+                    Ok(img_id) => {
+                        self.switch_render_target(femtovg::RenderTarget::Image(img_id));
+                        self.canvas.clear_rect(
+                            0, 0, self.width, self.height,
+                            femtovg::Color::rgba(0, 0, 0, 0),
+                        );
+                        ClipEntry::RoundedRectLayer {
+                            image_id: img_id,
+                            rect: *rect,
+                            radii: *radii,
+                            transform: self.canvas.transform(),
+                            prev_render_target: prev_rt,
+                        }
+                    }
+                    Err(_) => {
+                        // Fallback при сбое аллокации слоя — прямоугольный scissor
+                        // (углы острые, но содержимое всё равно обрезано по боксу).
+                        self.canvas.save();
+                        self.canvas.scissor(rect.x, rect.y, rect.width, rect.height);
+                        ClipEntry::Scissor
+                    }
+                };
+                self.clip_stack.push(entry);
                 self.layer_stack_depth += 1;
             }
             // BUG-140: shape-клип (clip-path circle/ellipse/polygon). Subtree
@@ -2500,6 +2637,9 @@ impl FemtovgBackend {
                 match self.clip_stack.pop() {
                     Some(ClipEntry::PathLayer { image_id, shape, transform, prev_render_target }) => {
                         self.composite_clip_path_layer(image_id, &shape, &transform, prev_render_target);
+                    }
+                    Some(ClipEntry::RoundedRectLayer { image_id, rect, radii, transform, prev_render_target }) => {
+                        self.composite_rounded_rect_clip_layer(image_id, &rect, &radii, &transform, prev_render_target);
                     }
                     Some(ClipEntry::Scissor) => self.canvas.restore(),
                     // Защита от рассинхрона пар (эмиттер гарантирует парность):
@@ -3349,6 +3489,36 @@ mod tests {
         let flags = offscreen_layer_image_flags();
         assert!(flags.contains(femtovg::ImageFlags::FLIP_Y));
         assert!(flags.contains(femtovg::ImageFlags::PREMULTIPLIED));
+    }
+
+    /// BUG-249: скруглённый клип (`overflow:hidden` + `border-radius`) теперь
+    /// маскируется по rounded-rect контуру (offscreen-слой), а не square scissor.
+    /// Радиусы должны клампиться к половине меньшей стороны, иначе `border-radius`
+    /// `50%` / pill дали бы перекрывающиеся углы и битый контур.
+    #[test]
+    fn clip_radii_clamped_to_half_min_side() {
+        use lumen_core::geom::Rect;
+        // Pill: огромный радиус на широком боксе → клампится к h/2.
+        let r = Rect::new(0.0, 0.0, 200.0, 60.0);
+        assert_eq!(clamp_clip_radii(&r, &[999.0; 4]), [30.0; 4]);
+        // Круг: 50%-радиус на квадрате (w/2) проходит без обрезки.
+        let sq = Rect::new(10.0, 10.0, 80.0, 80.0);
+        assert_eq!(clamp_clip_radii(&sq, &[40.0; 4]), [40.0; 4]);
+        // Малые углы сохраняются как есть; per-corner независимо.
+        let box_ = Rect::new(0.0, 0.0, 100.0, 100.0);
+        assert_eq!(clamp_clip_radii(&box_, &[8.0, 16.0, 0.0, 4.0]), [8.0, 16.0, 0.0, 4.0]);
+    }
+
+    /// BUG-249: путь скруглённого клипа строится без паники и даёт замкнутый
+    /// контур (4 угла + 4 грани). Под identity-трансформом опорная стартовая
+    /// точка лежит на верхней грани со сдвигом на tl-радиус.
+    #[test]
+    fn rounded_rect_clip_path_builds() {
+        use lumen_core::geom::Rect;
+        let r = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let path = rounded_rect_clip_path(&r, &[20.0; 4], &femtovg::Transform2D::identity());
+        // Непустой путь (femtovg накопил verbs) — построение не паникует и не пустое.
+        assert!(path.verbs().count() > 0);
     }
 
     #[test]
