@@ -1,6 +1,31 @@
 //! Test GpuSession implementation (Phase 4b)
 
-use lumen_driver::{BrowserSession, GpuSession, WinitSession};
+use lumen_driver::{BrowserSession, GpuSession, WinitSession, Target, ScrollDelta};
+
+#[test]
+fn test_browser_session_scroll() {
+    let mut session = WinitSession::new();
+
+    // Load a simple test page
+    let workspace_root = env!("CARGO_MANIFEST_DIR");
+    let test_file = std::path::Path::new(workspace_root)
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("Could not find workspace root")
+        .join("graphic_tests/01-sanity.html");
+    let url = format!("file://{}", test_file.display());
+    session.navigate(&url).expect("Failed to navigate");
+
+    // Initial scroll position
+    assert_eq!(session.scroll_position(), (0.0, 0.0), "Initial scroll should be (0, 0)");
+
+    // Use BrowserSession::scroll API
+    let delta = ScrollDelta { x: 50.0, y: 100.0 };
+    session.scroll(&Target::Point { x: 0.0, y: 0.0 }, delta).expect("Failed to scroll");
+
+    // Verify scroll position updated
+    assert_eq!(session.scroll_position(), (50.0, 100.0), "Scroll should be (50, 100)");
+}
 
 #[test]
 fn test_gpu_session_render_to_gpu() {

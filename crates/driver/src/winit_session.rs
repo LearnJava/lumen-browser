@@ -217,6 +217,13 @@ impl WinitSession {
         self.scroll_y = 0.0;
         Ok(())
     }
+
+    /// Load HTML string without URL navigation. Used in tests (headless mode).
+    pub fn navigate_html(&mut self, html: &str) -> Result<()> {
+        self.net_log.clear();
+        self.con_log.clear();
+        self.run_pipeline(html.as_bytes(), Some("text/html"), "about:blank".to_owned())
+    }
 }
 
 /// Извлечь содержимое всех <style> блоков из документа.
@@ -868,8 +875,13 @@ impl BrowserSession for WinitSession {
         Ok(())
     }
 
-    fn scroll(&mut self, _target: &Target, _delta: ScrollDelta) -> Result<()> {
-        // Scroll state management — задача 8A.7 (shell-as-driver-client).
+    fn scroll(&mut self, _target: &Target, delta: ScrollDelta) -> Result<()> {
+        // Update logical position (for scroll_position()) and compositor scroll nodes
+        // (for live rendering). scroll_page_by() is a no-op without an active tree,
+        // so the fields are the authoritative fallback for headless mode.
+        self.scroll_x = (self.scroll_x + delta.x).max(0.0);
+        self.scroll_y = (self.scroll_y + delta.y).max(0.0);
+        self.scroll_page_by(delta.x, delta.y);
         Ok(())
     }
 

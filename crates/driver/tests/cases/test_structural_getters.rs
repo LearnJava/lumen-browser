@@ -1,6 +1,45 @@
 //! Test structural-getters API (8A.4): layout_box_by_selector and all_layout_boxes_by_selector
 
-use lumen_driver::{BrowserSession, InProcessSession};
+use lumen_driver::{BrowserSession, InProcessSession, WinitSession, Target};
+
+#[test]
+fn test_winit_session_click_target() {
+    let mut session = WinitSession::new();
+    session
+        .navigate_html("<button id='btn'>Click me</button>")
+        .expect("Failed to navigate HTML");
+
+    // Click on button by selector should succeed (headless mode just validates target exists)
+    session
+        .click(&Target::Selector("#btn".to_string()))
+        .expect("click should succeed");
+}
+
+#[test]
+fn test_winit_session_click_point() {
+    let mut session = WinitSession::new();
+    session
+        .navigate_html("<div style='width:200px;height:100px;'></div>")
+        .expect("Failed to navigate HTML");
+
+    // Click at document point should succeed
+    session
+        .click(&Target::Point { x: 100.0, y: 50.0 })
+        .expect("click should succeed");
+}
+
+#[test]
+fn test_winit_session_type_text() {
+    let mut session = WinitSession::new();
+    session
+        .navigate_html("<input id='inp' type='text' />")
+        .expect("Failed to navigate HTML");
+
+    // Type into input by selector should succeed (headless mode just validates target exists)
+    session
+        .type_text(&Target::Selector("#inp".to_string()), "hello")
+        .expect("type_text should succeed");
+}
 
 #[test]
 fn test_layout_box_by_selector() {
