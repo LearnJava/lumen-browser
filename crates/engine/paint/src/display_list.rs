@@ -6350,10 +6350,14 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
                 let segs = crate::svg_path::parse_svg_path(d);
                 let contours = crate::svg_path::flatten_path(&segs, 0.5);
                 if let Some(fc) = fill_color {
-                    // even-odd fill uses same tessellation (GPU nonzero approx for multi-contour).
+                    // BUG-245: `fill-rule: evenodd` honoured via a scanline
+                    // trapezoid decomposition of the even-odd region (handles
+                    // self-intersecting stars + concentric rings). `nonzero`
+                    // keeps the per-contour ear-clip fast path unchanged.
                     let vertices = match b.style.svg_fill_rule {
-                        FillRule::NonZero | FillRule::EvenOdd => {
-                            crate::svg_path::tessellate_fill(&contours)
+                        FillRule::NonZero => crate::svg_path::tessellate_fill(&contours),
+                        FillRule::EvenOdd => {
+                            crate::svg_path::tessellate_fill_even_odd(&contours)
                         }
                     };
                     if !vertices.is_empty() {
