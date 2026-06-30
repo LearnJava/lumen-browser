@@ -33,6 +33,8 @@ lumen-font = { workspace = true }
 lumen-image = { workspace = true }
 lumen-network = { workspace = true }
 lumen-storage = { workspace = true }
+# Phase 4: QuickJS runtime for JS eval in headless mode (SDC-1a).
+lumen-js = { workspace = true, optional = true }
 # Exception #1: winit for OS windowing
 winit.workspace = true
 # Why this dependency (serde): serialization for network transport (MCP, BiDi) — permanent.
@@ -45,6 +47,9 @@ serde_json = "1.0"
 # lumen-paint's tiny-skia path so InProcessSession can render cross-OS-identical
 # pixels without a GPU. Off by default; enable with --features cpu-render.
 cpu-render = ["lumen-paint/cpu-render"]
+
+# QuickJS runtime for JS eval in headless mode (SDC-1a).
+quickjs = ["dep:lumen-js"]
 
 # CompareBackend integration tests (ADR-010 RB-8): enables CompareBackend + CpuBackend
 # for pixel-diff comparison between two headless backends.
