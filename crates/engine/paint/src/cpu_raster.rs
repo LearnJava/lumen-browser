@@ -252,6 +252,14 @@ pub(crate) fn rasterize_cpu(
                 );
                 rasterize_svg_path(layers.last_mut().expect("base layer"), vertices, color, c)?;
             }
+            DisplayCommand::DrawSvgFill { contours, color } => {
+                let c = effective_clip(
+                    clip_mask.as_ref(),
+                    clip_rect.as_ref(),
+                    contours_bounds(contours),
+                );
+                rasterize_svg_fill(layers.last_mut().expect("base layer"), contours, color, c)?;
+            }
             DisplayCommand::PushClipRect { rect } => {
                 clip_stack.push(*rect);
                 clip_rect = clip_intersection(&clip_stack);
@@ -1205,6 +1213,24 @@ fn vertices_bounds(vertices: &[[f32; 2]]) -> (f32, f32, f32, f32) {
     (l, t, r, b)
 }
 
+/// Axis-aligned bounding box `(left, top, right, bottom)` of a set of contours
+/// (for [`DisplayCommand::DrawSvgFill`]).
+fn contours_bounds(contours: &[Vec<[f32; 2]>]) -> (f32, f32, f32, f32) {
+    let mut l = f32::INFINITY;
+    let mut t = f32::INFINITY;
+    let mut r = f32::NEG_INFINITY;
+    let mut b = f32::NEG_INFINITY;
+    for contour in contours {
+        for v in contour {
+            l = l.min(v[0]);
+            t = t.min(v[1]);
+            r = r.max(v[0]);
+            b = b.max(v[1]);
+        }
+    }
+    (l, t, r, b)
+}
+
 /// Effective clip mask for a draw whose bounding box is `bounds`.
 ///
 /// Returns the mask only when a clip is active *and* `bounds` is not fully
@@ -1868,6 +1894,51 @@ fn rasterize_svg_path(
         pb.line_to(tri[1][0], tri[1][1]);
         pb.line_to(tri[2][0], tri[2][1]);
         pb.close();
+    }
+
+    let Some(path) = pb.finish() else {
+        return Ok(());
+    };
+
+    let paint = Paint {
+        shader: tiny_skia::Shader::SolidColor(color_to_skia(*color)),
+        anti_alias: true,
+        force_hq_pipeline: false,
+        blend_mode: tiny_skia::BlendMode::SourceOver,
+    };
+    pixmap.fill_path(
+        &path,
+        &paint,
+        tiny_skia::FillRule::Winding,
+        tiny_skia::Transform::identity(),
+        clip,
+    );
+    Ok(())
+}
+
+/// `DrawSvgFill` fills the raw outline contours with the nonzero (`Winding`)
+/// rule (BUG-247 / BUG-173). Unlike [`rasterize_svg_path`], which receives a
+/// pre-tessellated triangle soup whose internal shared edges each pick up a
+/// ~1px AA fringe, this builds the true shape outline so tiny_skia's analytic
+/// anti-aliaser only feathers the real boundary — matching Edge.
+fn rasterize_svg_fill(
+    pixmap: &mut tiny_skia::Pixmap,
+    contours: &[Vec<[f32; 2]>],
+    color: &Color,
+    clip: Option<&tiny_skia::Mask>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tiny_skia::Paint;
+
+    let mut pb = tiny_skia::PathBuilder::new();
+    for contour in contours {
+        let mut pts = contour.iter();
+        if let Some(&[x0, y0]) = pts.next() {
+            pb.move_to(x0, y0);
+            for &[x, y] in pts {
+                pb.line_to(x, y);
+            }
+            pb.close();
+        }
     }
 
     let Some(path) = pb.finish() else {

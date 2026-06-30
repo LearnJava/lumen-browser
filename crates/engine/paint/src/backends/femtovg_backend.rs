@@ -2800,6 +2800,28 @@ impl FemtovgBackend {
                 self.canvas.fill_path(&path, &paint);
             }
 
+            // ── SVG nonzero area fill (BUG-247 / BUG-173) ────────────────────
+            // Fill the raw outline contours natively so analytic AA lands only
+            // on the true boundary. Feeding a pre-tessellated triangle soup made
+            // femtovg fringe every internal shared edge (~1px seams across the
+            // fill). femtovg's fill is nonzero-winding by contour direction, so
+            // opposite-wound holes are honoured without an explicit fill rule.
+            DisplayCommand::DrawSvgFill { contours, color } => {
+                let paint = femtovg::Paint::color(lumen_to_fvg(*color));
+                let mut path = femtovg::Path::new();
+                for contour in contours {
+                    let mut pts = contour.iter();
+                    if let Some(&[x0, y0]) = pts.next() {
+                        path.move_to(x0, y0);
+                        for &[x, y] in pts {
+                            path.line_to(x, y);
+                        }
+                        path.close();
+                    }
+                }
+                self.canvas.fill_path(&path, &paint);
+            }
+
             // ── Cross-fade ──────────────────────────────────────────────────
             DisplayCommand::DrawCrossFade { dest, src_a, src_b, progress } => {
                 let p = progress.clamp(0.0, 1.0);
