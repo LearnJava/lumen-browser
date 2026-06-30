@@ -302,3 +302,39 @@ impl FingerprintProfile {
         }
     }
 }
+
+/// Command for automation API — sent to shell via IPC channel (SDC-1a).
+///
+/// This enum defines the contract between `lumen-driver` and `lumen-shell`.
+/// Each variant represents one actionable command that the shell can execute
+/// against its live window.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AutomationCommand {
+    /// Navigate to a URL.
+    Navigate(String),
+    /// Click at element center (resolved from Target).
+    Click(Target),
+    /// Type text into an input element.
+    Type(Target, String),
+    /// Scroll by delta in document coordinates.
+    Scroll(ScrollDelta),
+    /// Evaluate JavaScript in the active tab.
+    Eval(String),
+    /// Take a screenshot.
+    Screenshot,
+    /// Wait for condition.
+    Wait(WaitCondition, u64),
+}
+
+/// Reply from automation API — returned from shell after command execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AutomationReply {
+    /// Command acknowledged, no result.
+    Ack,
+    /// PNG screenshot bytes.
+    Screenshot(Vec<u8>),
+    /// Eval result as JSON string.
+    Eval(String),
+    /// Error message.
+    Error(String),
+}
