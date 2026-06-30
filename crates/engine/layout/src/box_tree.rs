@@ -1145,6 +1145,36 @@ fn process_svg_node(
                 .map(|n| n.local.as_str().to_owned())
                 .unwrap_or_default();
 
+            // BUG-246: a `<use>` referencing a `<symbol>` (or `<svg>`) with a
+            // `viewBox` establishes a new viewport (SVG 2 §5.7). The instance is
+            // sized by the `<use>`'s `width`/`height` (overriding the symbol's),
+            // and the symbol's `viewBox` is mapped into that viewport via
+            // `preserveAspectRatio`. Without this, every instance renders at the
+            // viewBox's intrinsic size regardless of width/height. Compose the
+            // viewBox→viewport scale onto `combined` *after* the use's x/y
+            // translate, so it operates in the symbol's local coordinate system.
+            if matches!(target_tag.as_str(), "symbol" | "svg")
+                && let Some(vb) = parse_view_box(doc, target_id)
+            {
+                // Viewport size: `<use>` width/height win; else the symbol's own
+                // width/height; else fall back to the viewBox dims (→ identity).
+                let attr_dim = |id: NodeId, attr: &str| -> Option<f32> {
+                    doc.get(id).get_attr(attr)
+                        .and_then(|v| v.trim().trim_end_matches("px").parse::<f32>().ok())
+                        .filter(|d| *d > 0.0)
+                };
+                let vp_w = attr_dim(child_id, "width")
+                    .or_else(|| attr_dim(target_id, "width"))
+                    .unwrap_or(vb.width);
+                let vp_h = attr_dim(child_id, "height")
+                    .or_else(|| attr_dim(target_id, "height"))
+                    .unwrap_or(vb.height);
+                let par = parse_preserve_aspect_ratio(doc, target_id);
+                let (sx, sy, tx, ty) =
+                    compute_preserve_aspect_ratio_transform(&vb, vp_w, vp_h, &par);
+                combined.compose(&SvgTransform { matrix: [sx, 0.0, 0.0, sy, tx, ty] });
+            }
+
             if matches!(target_tag.as_str(), "g" | "symbol") {
                 // Container: recursively collect its children as the clone content.
                 collect_svg_shapes_impl(doc, sheet, target_id, &style, viewport, flat, &mut use_children, dark_mode, &new_stack);
@@ -14170,6 +14200,33 @@ mod tests {
             b.children.iter().any(has_any_shape)
         }
         assert!(has_any_shape(&root), "<symbol> target via <use> should produce shape in layout");
+    }
+
+    #[test]
+    fn svg_use_symbol_viewbox_scales_to_use_size() {
+        // BUG-246: a <use> referencing a <symbol viewBox="0 0 40 40"> is sized by
+        // the <use>'s width/height — the symbol's viewBox maps into that viewport.
+        // Two instances of differing size must render at differing scales, not at
+        // the viewBox's intrinsic 40×40 size.
+        let html = "<svg width=\"400\" height=\"400\">\
+                    <symbol id=\"s\" viewBox=\"0 0 40 40\"><rect x=\"0\" y=\"0\" width=\"40\" height=\"40\"/></symbol>\
+                    <use href=\"#s\" x=\"0\" y=\"0\" width=\"40\" height=\"40\"/>\
+                    <use href=\"#s\" x=\"0\" y=\"0\" width=\"80\" height=\"80\"/></svg>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("body{margin:0}");
+        let root = super::layout(&doc, &sheet, Size::new(400.0, 400.0));
+
+        fn collect_rects(b: &super::LayoutBox, acc: &mut Vec<super::Rect>) {
+            if matches!(&b.kind, super::BoxKind::SvgShape { shape: super::SvgShapeKind::Rect { .. }, .. }) {
+                acc.push(b.rect);
+            }
+            b.children.iter().for_each(|c| collect_rects(c, acc));
+        }
+        let mut rects = Vec::new();
+        collect_rects(&root, &mut rects);
+        assert_eq!(rects.len(), 2, "both <use> instances should clone the symbol rect; got {rects:?}");
+        assert!(rects.iter().any(|r| (r.width - 40.0).abs() < 0.5), "width=40 instance should render at 40px; got {rects:?}");
+        assert!(rects.iter().any(|r| (r.width - 80.0).abs() < 0.5), "width=80 instance should scale to 80px; got {rects:?}");
     }
 
     #[test]
