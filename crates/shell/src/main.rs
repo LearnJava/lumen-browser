@@ -93,6 +93,7 @@ use lumen_layout::style::{ComputedStyle, ScrollBehavior};
 use lumen_layout::computed_style_to_map;
 use lumen_paint::{build_display_list_ordered, build_display_list_ordered_with_anim, hit_test, DisplayList, RenderBackend};
 use lumen_layout::Cursor as CssCursor;
+use lumen_driver::{AutomationCommand, AutomationReply};
 use winit::application::ApplicationHandler;
 
 /// Событие от background-потока загрузки страницы в event loop.
@@ -534,6 +535,9 @@ fn run_window_mode(
         }
     };
     let load_proxy = event_loop.create_proxy();
+    // SDC-1b: automation command channel for BiDi/MCP/graphic_tests control
+    let (automation_cmd_tx, automation_rx) = std::sync::mpsc::channel::<AutomationCommand>();
+    let (automation_reply_tx, _) = std::sync::mpsc::channel::<AutomationReply>();
     let (input_tx, input_rx) = input::channel();
     let (read_later_tx, read_later_rx) =
         std::sync::mpsc::channel::<(String, String, Vec<u8>)>();
@@ -636,6 +640,9 @@ fn run_window_mode(
         video_gif_frames: HashMap::new(),
         video_gif_store,
         image_cache: lumen_image::ImageDecodeCache::new(),
+        automation_rx,
+        automation_cmd_tx,
+        automation_reply_tx,
         input_rx,
         input_tx,
         focused_node: None,
@@ -5643,6 +5650,19 @@ struct Lumen {
     /// `try_discard_offscreen_images` once an image leaves the
     /// `gate_image_requests` zone (viewport ± 2 screens).
     image_cache: lumen_image::ImageDecodeCache,
+    /// Receiver side of the automation command channel (SDC-1b).
+    ///
+    /// Connected to an external sender for BiDi/MCP/graphic_tests control.
+    /// Commands are drained in `about_to_wait`.
+    #[allow(dead_code)]
+    automation_rx: std::sync::mpsc::Receiver<AutomationCommand>,
+    /// Sender side of the automation command channel - cloned for external callers.
+    #[allow(dead_code)]
+    automation_cmd_tx: std::sync::mpsc::Sender<AutomationCommand>,
+    /// Sender side of the automation reply channel (SDC-1b).
+    ///
+    /// Replies sent after command execution.
+    automation_reply_tx: std::sync::mpsc::Sender<AutomationReply>,
     /// Receiver side of the input injection channel (ADR-007 §8C).
     ///
     /// Drained each `about_to_wait`; commands are processed through the same
@@ -7944,6 +7964,57 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         self.fire_navigate_error();
                     }
                     _ => {}
+                }
+            }
+        }
+
+        // ── Automation commands (SDC-1b) ────────────────────────────────────────────
+        // Drain external commands (BiDi/MCP/graphic_tests) and route to shell actions.
+        let automation_cmds: Vec<(AutomationCommand, std::sync::mpsc::Sender<AutomationReply>)> =
+            self.automation_rx.try_iter().map(|cmd| (cmd, self.automation_reply_tx.clone())).collect();
+        for (cmd, reply_tx) in automation_cmds {
+            match cmd {
+                AutomationCommand::Navigate(url) => {
+                    self.navigate_to(PageSource::Url(url));
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
+                AutomationCommand::Click(target) => {
+                    let point = self.resolve_automation_target(&target);
+                    if let Some((x, y)) = point {
+                        self.handle_click_at(x, y);
+                        let _ = reply_tx.send(AutomationReply::Ack);
+                    } else {
+                        let _ = reply_tx.send(AutomationReply::Error("Element not found".to_string()));
+                    }
+                }
+                AutomationCommand::Type(target, text) => {
+                    let point = self.resolve_automation_target(&target);
+                    if let Some((x, y)) = point {
+                        self.handle_click_at(x, y);
+                    }
+                    for ch in text.chars() {
+                        self.inject_char(ch);
+                    }
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
+                AutomationCommand::Scroll(delta) => {
+                    self.scroll_by_delta(delta.x, delta.y);
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
+                AutomationCommand::Eval(js) => {
+                    if let Some(js_ctx) = &self.js_ctx {
+                        js_ctx.eval_js(&js);
+                        let _ = reply_tx.send(AutomationReply::Ack);
+                    } else {
+                        let _ = reply_tx.send(AutomationReply::Error("JS context not available".to_string()));
+                    }
+                }
+                AutomationCommand::Screenshot => {
+                    let _ = reply_tx.send(AutomationReply::Ack);
+                }
+                AutomationCommand::Wait(_cond, _timeout_ms) => {
+                    // TODO: Implement condition waiting
+                    let _ = reply_tx.send(AutomationReply::Ack);
                 }
             }
         }
@@ -11205,6 +11276,14 @@ impl Lumen {
     #[allow(dead_code)]
     pub fn input_sender(&self) -> input::InputSender {
         self.input_tx.clone()
+    }
+
+    /// Return a cloneable sender for automation commands (SDC-1b).
+    ///
+    /// Callers on any thread can use this to send [`AutomationCommand`]s;
+    /// they are drained and dispatched in `about_to_wait`.
+    pub fn automation_sender(&self) -> std::sync::mpsc::Sender<AutomationCommand> {
+        self.automation_cmd_tx.clone()
     }
 
     /// Return the current keyboard modifier flags as a bitmask.
@@ -16163,8 +16242,38 @@ impl Lumen {
                 self.discard_tab_resources(&removed);
                 self.request_redraw();
             }
+}
         }
-    }
+
+        /// Resolve an automation click target to CSS-pixel viewport coordinates.
+        ///
+        /// Returns `None` if the target cannot be found (no page loaded, element not visible).
+        fn resolve_automation_target(&self, target: &lumen_driver::Target) -> Option<(f32, f32)> {
+            use lumen_driver::Target;
+            match target {
+                Target::Point { x, y } => Some((*x, *y)),
+                Target::NodeId(id) => {
+                    let lb = self.layout_box.as_ref()?;
+                    let node = lumen_dom::NodeId::from_index(*id as usize);
+                    let rect = forms::find_box_rect(lb, node)?;
+                    Some((rect.x + rect.width / 2.0, rect.y + rect.height / 2.0))
+                }
+                Target::Selector(_selector) => {
+                    // TODO: Implement selector resolution via DOM traversal
+                    // For now, return None
+                    None
+                }
+            }
+        }
+
+        /// Apply scroll delta with bounds clamping.
+        fn scroll_by_delta(&mut self, dx: f32, dy: f32) {
+            self.scroll_x = (self.scroll_x + dx).max(0.0);
+            self.scroll_y = (self.scroll_y + dy).max(0.0);
+            if let Some(w) = self.window.as_ref() {
+                w.request_redraw();
+            }
+        }
 
     /// Drop the cached page resources of background tabs removed in bulk
     /// (CC-4 "Close others" / "Close to the right"). Mirrors the background
