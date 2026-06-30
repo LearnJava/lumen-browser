@@ -73,10 +73,10 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-06-29",
+ "generated": "2026-06-30",
  "counts": {
-  "open": 24,
-  "fixed": 216,
+  "open": 23,
+  "fixed": 217,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -231,6 +231,42 @@
      "id": "P1-tablife1",
      "title": "Tab lifecycle Phase 1 (TabState T0–T4, memory pressure, image LRU, T1 paused)",
      "status": "done"
+    },
+    {
+     "id": "SDC",
+     "title": "SDC: Управление живым окном (8A.7 Ф4)",
+     "status": "active",
+     "note": "Shell-as-driver-client: управление ЖИВЫМ видимым окном Lumen напрямую командами (Selenium/WebDriver-подобно, без headless-прокладки) — закрытие 8A.7 Фазы 4 по `docs/plans/8A.7-shell-as-driver-client-plan.md` + ADR-006. Разрез по владению: SDC-1a (P1 driver) → SDC-1b (P3 shell) → {SDC-2 (P1 фронты), SDC-3 (P3 графтест)}. Цепочка зависимостей строгая",
+     "tasks": [
+      {
+       "id": "SDC-1a",
+       "title": "SDC-1a: WinitSession-команды (driver)",
+       "status": "ready",
+       "size": "M",
+       "note": "8A.7 Ф4 (driver-часть): дореализовать заглушки `click/type_text/scroll/eval/wait` в `crates/driver/src/winit_session.rs:838-915` (сейчас `Err(\"8A.7\"/\"8A.8\")`) + опубликовать командный интерфейс `AutomationCommand{Navigate,Click,Type,Scroll,Eval,Screenshot,Wait}` (enum/трейт) для шелла. Нативный ввод + auto-wait по ADR-006. Interface-first: shell-проводку делает P3 (SDC-1b)"
+      },
+      {
+       "id": "SDC-1b",
+       "title": "SDC-1b: канал команд в живое окно (shell)",
+       "status": "wait",
+       "size": "M",
+       "note": "8A.7 Ф4 (shell-часть, ТРЕБУЕТ SDC-1a; `lumen-shell` = территория P3): подключить `AutomationCommand` в живое окно — варианты `LoadEvent` (main.rs:105), обработка в `ApplicationHandler` (main.rs:7410) против активного таба, слушающий поток (`lumen_ipc`/loopback) + CLI-флаг. Ответ наружу через `EventLoopProxy`, ack `Painted` после `RedrawRequested`"
+      },
+      {
+       "id": "SDC-2",
+       "title": "SDC-2: BiDi/MCP на живое окно (MVP)",
+       "status": "wait",
+       "size": "M",
+       "note": "Протокол-фронты на живое окно через канал SDC-1b (ТРЕБУЕТ SDC-1b). `lumen-bidi-server`: снять in-memory `BidiState` (CAPABILITIES.md:200) → **MVP-команды**: `browsingContext.navigate`/`captureScreenshot`, `script.evaluate`, `input.performActions` против живой сессии; `lumen-mcp` на тот же путь (`screenshot`/`eval` больше не `Err`). По ADR-006 BiDi+MCP, CDP опц./последним"
+      },
+      {
+       "id": "SDC-3",
+       "title": "SDC-3: графтест на одном живом окне",
+       "status": "wait",
+       "size": "M",
+       "note": "`graphic_tests/run.py` — потребитель канала SDC-1b (ТРЕБУЕТ SDC-1b): один живой экземпляр на весь прогон (запуск + калибровка TEST-00 один раз), цикл Navigate→ждать ack→скриншот→diff. Уровень 2-3 `testing.md` против реального окна вместо process-per-test gdigrab"
+      }
+     ]
     }
    ],
    "date": "2026-06"
@@ -2523,10 +2559,10 @@
    "debtor": false
   },
   "BUG-238": {
-   "status": "open",
-   "title": "Подсистемы хранят данные в OS-каталогах (`%APPDATA%\\lumen\\…` / `~/.config/lumen/…`) вместо портативного `<exe_dir>/data/` — нарушение политики портативного хран…",
+   "status": "fixed",
+   "title": "Подсистемы хранили данные в OS-каталогах (`%APPDATA%\\lumen\\…` / `~/.config/lumen/…`) вместо портативного `<exe_dir>/data/` — нарушение политики портативного хра…",
    "component": "shell/storage",
-   "date": null,
+   "date": "2026-06-29",
    "debtor": false
   },
   "BUG-235": {
