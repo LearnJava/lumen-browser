@@ -236,7 +236,7 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     #     (user rule) — fix the engine, then delete these entries. ---
     # '130' removed: BUG-244 FIXED (11.32%→0.10%) — nested <g rotate scale> now renders as a spiral via SVG CTM (PushTransform), geometry = Edge
     '132': ('BUG-246', 10.97),  # <use> rotated ring: rotation now applied (BUG-244 FIXED, CTM) but instances still not scaled by <symbol> viewBox→width/height → dominant residual is BUG-246. Was ('BUG-244', 11.07)→10.97; fix BUG-246 → ≤0.5%
-    '133': ('BUG-245', 3.91),   # fill-rule:evenodd not honoured on self-intersecting paths (pentagram/ring centres filled like nonzero) + diagonal-edge AA (BUG-247). Fix BUG-245 → near AA floor
+    '133': ('BUG-247', 1.95),   # BUG-245 FIXED 2026-06-30 (3.91%→1.95%): fill-rule:evenodd now honoured (scanline even-odd tessellation) — pentagram/ring centres hollow as in Edge. Residual = diagonal/star-edge AA under gdigrab (BUG-247 class), re-pointed to that OPEN bug
     '134': ('BUG-247', 3.69),   # stroke-dasharray placement diverges from Edge under gdigrab (high-freq pattern × subpixel shift); solid strokes match. Inherent AA, not a logic defect
     '135': ('BUG-247', 0.54),   # fanned cards rotate(a cx cy): BUG-244 FIXED (15.62%→0.54%) — rotation centre now correct, cards fan out as in Edge. Residual 0.54% = rotated-rect edge AA (BUG-247 class), just over 0.5%
     '136': ('BUG-247', 1.98),   # <circle>/<ellipse> curve-edge AA vs Edge (geometry/colour correct; only ~1px edge AA differs). Inherent rasterizer-vs-Edge AA

@@ -587,6 +587,138 @@ pub fn tessellate_fill(contours: &[Vec<[f32; 2]>]) -> Vec<[f32; 2]> {
     contours.iter().flat_map(|c| tessellate_polygon(c)).collect()
 }
 
+/// Tessellate the **even-odd** fill region of all contours into a flat triangle
+/// vertex list (3 `[f32;2]` per triangle), SVG §13.4 / CSS `fill-rule: evenodd`.
+///
+/// Unlike [`tessellate_fill`] (per-contour ear-clipping, which fills everything
+/// the contours cover — the nonzero approximation), this honours even-odd: a
+/// point is inside iff a ray from it crosses the path boundary an odd number of
+/// times. That leaves the centre of a self-intersecting pentagram empty and
+/// punches alternating holes through concentric rings (BUG-245).
+///
+/// Method: a horizontal sweep. Critical scanlines are placed at every vertex Y
+/// **and** every edge–edge intersection Y, so within each band the active edges
+/// keep a stable left-to-right order (no crossings inside a band). At each band
+/// the edges crossing its mid-line are sorted by X and paired even-odd — the
+/// gap between the 0th/1st, 2nd/3rd, … crossings is "inside" and emitted as a
+/// trapezoid (two triangles). The output is a non-overlapping tiling of exactly
+/// the even-odd region, so the backends' default nonzero fill of the triangle
+/// soup reproduces the even-odd shape.
+#[must_use]
+pub fn tessellate_fill_even_odd(contours: &[Vec<[f32; 2]>]) -> Vec<[f32; 2]> {
+    const EPS: f32 = 1e-4;
+
+    // Collect non-horizontal edges, each normalised to run top→bottom (y0 < y1).
+    let mut edges: Vec<([f32; 2], [f32; 2])> = Vec::new();
+    for c in contours {
+        let n = c.len();
+        if n < 2 {
+            continue;
+        }
+        for i in 0..n {
+            let a = c[i];
+            let b = c[(i + 1) % n];
+            if (a[1] - b[1]).abs() < EPS {
+                continue; // horizontal edge: contributes no scanline crossing
+            }
+            edges.push(if a[1] < b[1] { (a, b) } else { (b, a) });
+        }
+    }
+    if edges.is_empty() {
+        return Vec::new();
+    }
+
+    // Critical Y values: every edge endpoint + every edge–edge intersection.
+    let mut ys: Vec<f32> = Vec::with_capacity(edges.len() * 2);
+    for e in &edges {
+        ys.push(e.0[1]);
+        ys.push(e.1[1]);
+    }
+    for i in 0..edges.len() {
+        for j in (i + 1)..edges.len() {
+            if let Some(y) = edge_intersection_y(&edges[i], &edges[j]) {
+                ys.push(y);
+            }
+        }
+    }
+    ys.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    ys.dedup_by(|a, b| (*a - *b).abs() < EPS);
+
+    let x_at = |e: &([f32; 2], [f32; 2]), y: f32| -> f32 {
+        let t = (y - e.0[1]) / (e.1[1] - e.0[1]);
+        e.0[0] + t * (e.1[0] - e.0[0])
+    };
+
+    let mut tris: Vec<[f32; 2]> = Vec::new();
+    for w in ys.windows(2) {
+        let (y0, y1) = (w[0], w[1]);
+        if y1 - y0 < EPS {
+            continue;
+        }
+        let mid = 0.5 * (y0 + y1);
+        // Edges spanning this band (they cross `mid`, hence span the whole band
+        // since no vertex/intersection lies strictly inside it). For each, record
+        // its X at the top, mid and bottom of the band.
+        let mut spans: Vec<(f32, f32, f32)> = Vec::new();
+        for e in &edges {
+            if e.0[1] <= mid && e.1[1] > mid {
+                spans.push((x_at(e, y0), x_at(e, mid), x_at(e, y1)));
+            }
+        }
+        spans.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        // Even-odd: fill between consecutive pairs (0,1), (2,3), …
+        let mut k = 0;
+        while k + 1 < spans.len() {
+            let l = spans[k];
+            let r = spans[k + 1];
+            // Trapezoid corners (CCW-agnostic — backends fill nonzero):
+            //   top    y0: l.0 → r.0
+            //   bottom y1: l.2 → r.2
+            let a = [l.0, y0];
+            let b = [r.0, y0];
+            let c = [r.2, y1];
+            let d = [l.2, y1];
+            tris.push(a);
+            tris.push(b);
+            tris.push(c);
+            tris.push(a);
+            tris.push(c);
+            tris.push(d);
+            k += 2;
+        }
+    }
+    tris
+}
+
+/// Y coordinate where two top→bottom edges cross strictly inside both segments,
+/// or `None` if they are parallel or only meet at an endpoint. Used by
+/// [`tessellate_fill_even_odd`] to split scanline bands at self-intersections so
+/// the active-edge ordering stays stable within each band.
+fn edge_intersection_y(
+    e1: &([f32; 2], [f32; 2]),
+    e2: &([f32; 2], [f32; 2]),
+) -> Option<f32> {
+    const EPS: f32 = 1e-4;
+    let (p1, p2) = (e1.0, e1.1);
+    let (p3, p4) = (e2.0, e2.1);
+    let d1 = [p2[0] - p1[0], p2[1] - p1[1]];
+    let d2 = [p4[0] - p3[0], p4[1] - p3[1]];
+    let denom = d1[0] * d2[1] - d1[1] * d2[0];
+    if denom.abs() < EPS {
+        return None; // parallel / collinear
+    }
+    let dx = p3[0] - p1[0];
+    let dy = p3[1] - p1[1];
+    let t = (dx * d2[1] - dy * d2[0]) / denom;
+    let u = (dx * d1[1] - dy * d1[0]) / denom;
+    // Strictly interior (not at shared vertices) on both segments.
+    if t > EPS && t < 1.0 - EPS && u > EPS && u < 1.0 - EPS {
+        Some(p1[1] + t * d1[1])
+    } else {
+        None
+    }
+}
+
 /// Signed area of polygon (positive = CCW in Y-down coordinate system).
 fn signed_area(pts: &[[f32; 2]]) -> f32 {
     let n = pts.len();
@@ -1675,5 +1807,63 @@ mod tests {
             tris.chunks(3).map(|t| cross2d(t[0], t[1], t[2]).abs() * 0.5).sum()
         };
         assert!(area_fn(&dashed) < area_fn(&solid), "dashed covers less area than solid");
+    }
+
+    // ── Even-odd fill (BUG-245) ───────────────────────────────────────────────
+
+    /// True if point `p` lies inside any triangle of a flat triangle list.
+    fn covered_by(tris: &[[f32; 2]], p: [f32; 2]) -> bool {
+        tris.chunks_exact(3).any(|t| point_in_triangle(p, t[0], t[1], t[2]))
+    }
+
+    /// A self-intersecting pentagram filled even-odd must leave its centre empty
+    /// while the five arms stay covered. Nonzero (ear-clip) is *not* asked to.
+    #[test]
+    fn even_odd_pentagram_has_hollow_centre() {
+        // 5 pentagram tips around (0,0), R=100, stepping by 2 vertices (144°).
+        let cx = 0.0_f32;
+        let cy = 0.0_f32;
+        let r = 100.0_f32;
+        let mut ring: Vec<[f32; 2]> = Vec::new();
+        for i in 0..5 {
+            let ang = -std::f32::consts::FRAC_PI_2 + (i as f32) * 4.0 * std::f32::consts::PI / 5.0;
+            ring.push([cx + r * ang.cos(), cy + r * ang.sin()]);
+        }
+        let contours = vec![ring];
+        let eo = tessellate_fill_even_odd(&contours);
+        assert!(!eo.is_empty(), "even-odd pentagram must tessellate");
+        // Centre is enclosed an even number of times → hole.
+        assert!(!covered_by(&eo, [cx, cy]), "even-odd centre must be hollow");
+        // A point on the top arm (just below the top tip, well outside the inner
+        // pentagon) must be filled.
+        assert!(covered_by(&eo, [cx, cy - 80.0]), "even-odd arm tip must be filled");
+    }
+
+    /// Concentric same-winding squares: even-odd alternates fill/hole/fill from
+    /// outside in, whereas nonzero would fill the whole outer square solid.
+    #[test]
+    fn even_odd_concentric_squares_punch_ring() {
+        let sq = |h: f32| -> Vec<[f32; 2]> {
+            vec![[-h, -h], [h, -h], [h, h], [-h, h]]
+        };
+        let contours = vec![sq(80.0), sq(50.0), sq(26.0)];
+        let eo = tessellate_fill_even_odd(&contours);
+        assert!(!eo.is_empty(), "concentric squares must tessellate");
+        // Band between outer(80) and middle(50) → filled.
+        assert!(covered_by(&eo, [0.0, 65.0]), "outer ring must be filled");
+        // Band between middle(50) and inner(26) → hole.
+        assert!(!covered_by(&eo, [0.0, 38.0]), "middle ring must be a hole");
+        // Innermost (<26) → filled again.
+        assert!(covered_by(&eo, [0.0, 0.0]), "inner core must be filled");
+    }
+
+    /// A simple convex polygon (triangle) fills the same whether even-odd or
+    /// nonzero — even-odd must not regress the non-self-intersecting case.
+    #[test]
+    fn even_odd_simple_triangle_is_filled() {
+        let contours = vec![vec![[0.0_f32, 0.0], [100.0, 0.0], [50.0, 80.0]]];
+        let eo = tessellate_fill_even_odd(&contours);
+        assert!(covered_by(&eo, [50.0, 30.0]), "interior of a simple triangle is filled");
+        assert!(!covered_by(&eo, [50.0, 90.0]), "point below the triangle is empty");
     }
 }
