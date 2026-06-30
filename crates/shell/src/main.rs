@@ -16494,6 +16494,7 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PushScrollLayer { .. }
             | DisplayCommand::PopScrollLayer
             | DisplayCommand::DrawSvgPath { .. }
+            | DisplayCommand::DrawSvgFill { .. }
             | DisplayCommand::DrawScrollbar { .. }
             | DisplayCommand::PageBreak
             | DisplayCommand::BoxModelOverlay { .. } => continue,
@@ -16552,6 +16553,7 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PushScrollLayer { .. }
             | DisplayCommand::PopScrollLayer
             | DisplayCommand::DrawSvgPath { .. }
+            | DisplayCommand::DrawSvgFill { .. }
             | DisplayCommand::DrawScrollbar { .. }
             | DisplayCommand::PageBreak
             | DisplayCommand::BoxModelOverlay { .. } => continue,

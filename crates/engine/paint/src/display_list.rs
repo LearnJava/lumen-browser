@@ -757,6 +757,28 @@ pub enum DisplayCommand {
         /// Resolved fill colour (already has `fill-opacity` applied).
         color: Color,
     },
+    /// SVG `<path>`/`<polygon>` **nonzero** area fill, given as the raw closed
+    /// outline contours instead of a pre-tessellated triangle soup (BUG-247 /
+    /// BUG-173). Backends that own an analytic rasteriser (femtovg, tiny_skia
+    /// CPU) fill these contours natively, so anti-aliasing is applied only on
+    /// the true shape boundary — a triangle soup made femtovg/tiny_skia fringe
+    /// every *internal* shared edge, producing ~1px seams across the fill that
+    /// diverged from Edge. The GPU/wgpu backend, which has no native path fill,
+    /// tessellates these contours with `svg_path::tessellate_fill` and renders
+    /// the resulting triangles — bit-identical to the old `DrawSvgPath` fill.
+    ///
+    /// Filled with the **nonzero** winding rule (each contour keeps its source
+    /// direction, so holes wound opposite to the outer ring are honoured).
+    /// `fill-rule: evenodd` is *not* routed here — it stays on `DrawSvgPath`
+    /// via `svg_path::tessellate_fill_even_odd` (femtovg/wgpu have no even-odd
+    /// path-fill mode).
+    DrawSvgFill {
+        /// Closed sub-path outlines in CSS-pixel page coordinates (same system
+        /// as all other rects). Already shifted into document space.
+        contours: Vec<Vec<[f32; 2]>>,
+        /// Resolved fill colour (already has `fill-opacity` applied).
+        color: Color,
+    },
     /// DevTools box model overlay (7E.3). Draws four semi-transparent coloured
     /// layers (orange margin, yellow border, green padding, blue content)
     /// stacked from outermost to innermost. Each rect is the outer edge of
@@ -1659,6 +1681,15 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                 out.push_str(&format!(
                     "DrawSvgPath tris={} #{:02x}{:02x}{:02x}{:02x}\n",
                     vertices.len() / 3,
+                    color.r, color.g, color.b, color.a,
+                ));
+            }
+            DisplayCommand::DrawSvgFill { contours, color } => {
+                let pts: usize = contours.iter().map(std::vec::Vec::len).sum();
+                out.push_str(&format!(
+                    "DrawSvgFill contours={} pts={} #{:02x}{:02x}{:02x}{:02x}\n",
+                    contours.len(),
+                    pts,
                     color.r, color.g, color.b, color.a,
                 ));
             }
@@ -6350,22 +6381,48 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
                 let segs = crate::svg_path::parse_svg_path(d);
                 let contours = crate::svg_path::flatten_path(&segs, 0.5);
                 if let Some(fc) = fill_color {
-                    // BUG-245: `fill-rule: evenodd` honoured via a scanline
-                    // trapezoid decomposition of the even-odd region (handles
-                    // self-intersecting stars + concentric rings). `nonzero`
-                    // keeps the per-contour ear-clip fast path unchanged.
-                    let vertices = match b.style.svg_fill_rule {
-                        FillRule::NonZero => crate::svg_path::tessellate_fill(&contours),
-                        FillRule::EvenOdd => {
-                            crate::svg_path::tessellate_fill_even_odd(&contours)
+                    match b.style.svg_fill_rule {
+                        // BUG-247 / BUG-173: nonzero fills are emitted as raw
+                        // outline contours (`DrawSvgFill`), not a triangle soup.
+                        // femtovg/tiny_skia then fill them natively so AA lands
+                        // only on the true boundary — a triangle soup made both
+                        // rasterisers fringe every internal shared edge (~1px
+                        // seams across the fill). wgpu tessellates the same
+                        // contours, so its output is unchanged.
+                        FillRule::NonZero => {
+                            let shifted: Vec<Vec<[f32; 2]>> = contours
+                                .iter()
+                                .filter(|c| c.len() >= 2)
+                                .map(|c| {
+                                    c.iter()
+                                        .map(|[x, y]| [x + path_shift.0, y + path_shift.1])
+                                        .collect()
+                                })
+                                .collect();
+                            if !shifted.is_empty() {
+                                fill_cmds.push(DisplayCommand::DrawSvgFill {
+                                    contours: shifted,
+                                    color: fc,
+                                });
+                            }
                         }
-                    };
-                    if !vertices.is_empty() {
-                        let shifted: Vec<[f32; 2]> = vertices
-                            .iter()
-                            .map(|[x, y]| [x + path_shift.0, y + path_shift.1])
-                            .collect();
-                        fill_cmds.push(DisplayCommand::DrawSvgPath { vertices: shifted, color: fc });
+                        // BUG-245: `fill-rule: evenodd` stays on the scanline
+                        // trapezoid decomposition (self-intersecting stars +
+                        // concentric rings); femtovg/wgpu have no even-odd
+                        // path-fill mode, so it cannot be routed to DrawSvgFill.
+                        FillRule::EvenOdd => {
+                            let vertices = crate::svg_path::tessellate_fill_even_odd(&contours);
+                            if !vertices.is_empty() {
+                                let shifted: Vec<[f32; 2]> = vertices
+                                    .iter()
+                                    .map(|[x, y]| [x + path_shift.0, y + path_shift.1])
+                                    .collect();
+                                fill_cmds.push(DisplayCommand::DrawSvgPath {
+                                    vertices: shifted,
+                                    color: fc,
+                                });
+                            }
+                        }
                     }
                 }
                 if let Some(sc) = stroke_color
@@ -8621,6 +8678,7 @@ mod tests {
                 DisplayCommand::PushScrollLayer { .. } => "PushScrollLayer",
                 DisplayCommand::PopScrollLayer => "PopScrollLayer",
                 DisplayCommand::DrawSvgPath { .. } => "DrawSvgPath",
+                DisplayCommand::DrawSvgFill { .. } => "DrawSvgFill",
                 DisplayCommand::BoxModelOverlay { .. } => "BoxModelOverlay",
                 DisplayCommand::DrawScrollbar { .. } => "DrawScrollbar",
                 DisplayCommand::PageBreak => "PageBreak",
@@ -13854,6 +13912,49 @@ mod tests {
     }
 
     #[test]
+    fn nonzero_path_fill_emits_drawsvgfill_not_triangle_soup() {
+        // BUG-247 / BUG-173: a nonzero `<path>` area fill is emitted as the raw
+        // outline contours (`DrawSvgFill`) so femtovg/tiny_skia anti-alias only
+        // the true boundary. A triangle soup (`DrawSvgPath`) made them fringe
+        // every internal shared edge (~1px seams). `fill-rule: evenodd` cannot be
+        // filled natively (no even-odd path mode in femtovg/wgpu), so it stays a
+        // triangle soup via the scanline decomposition.
+        let filled_triangle =
+            "<svg width='200' height='160'>\
+                <path d='M 100 10 L 185 145 L 15 145 Z' fill='#0f3460'/>\
+             </svg>"; // #0f3460 = (15, 52, 96)
+        for dl in [build(filled_triangle, ""), build_ordered(filled_triangle, "")] {
+            let fills: Vec<&Vec<Vec<[f32; 2]>>> = dl.iter().filter_map(|c| match c {
+                DisplayCommand::DrawSvgFill { contours, color }
+                    if color.r == 15 && color.g == 52 && color.b == 96 => Some(contours),
+                _ => None,
+            }).collect();
+            assert_eq!(fills.len(), 1, "nonzero fill must emit one DrawSvgFill, got {dl:?}");
+            assert!(
+                fills[0].iter().any(|c| c.len() >= 3),
+                "DrawSvgFill must carry the closed outline (≥3 points), got {:?}", fills[0],
+            );
+            // No triangle-soup fill in the fill colour.
+            let soup = dl.iter().any(|c| matches!(c,
+                DisplayCommand::DrawSvgPath { color, .. } if color.r == 15 && color.g == 52 && color.b == 96));
+            assert!(!soup, "nonzero fill must NOT emit a DrawSvgPath triangle soup, got {dl:?}");
+        }
+
+        // even-odd keeps the triangle-soup path (DrawSvgPath), no DrawSvgFill.
+        let even_odd =
+            "<svg width='200' height='160'>\
+                <path d='M 100 10 L 185 145 L 15 145 Z' fill='#0f3460' fill-rule='evenodd'/>\
+             </svg>";
+        for dl in [build(even_odd, ""), build_ordered(even_odd, "")] {
+            let has_soup = dl.iter().any(|c| matches!(c,
+                DisplayCommand::DrawSvgPath { color, .. } if color.r == 15 && color.g == 52 && color.b == 96));
+            let has_fill = dl.iter().any(|c| matches!(c, DisplayCommand::DrawSvgFill { .. }));
+            assert!(has_soup, "even-odd fill must emit DrawSvgPath (scanline tessellation), got {dl:?}");
+            assert!(!has_fill, "even-odd fill must NOT emit DrawSvgFill (no native even-odd), got {dl:?}");
+        }
+    }
+
+    #[test]
     fn svg_diagonal_line_strokes_segment_not_filled_bbox() {
         // BUG-189: a diagonal SVG <line> used to render as `FillRect { rect: b.rect }`
         // — filling the entire (large) bounding box of the segment with the stroke
@@ -13982,13 +14083,16 @@ mod tests {
              </svg>",
             "",
         );
+        // Fill is now a native `DrawSvgFill` (BUG-247), stroke stays a tessellated
+        // `DrawSvgPath` — collect both in document (paint) order.
         let colors: Vec<&Color> = dl.iter()
             .filter_map(|c| match c {
-                DisplayCommand::DrawSvgPath { color, .. } => Some(color),
+                DisplayCommand::DrawSvgFill { color, .. }
+                | DisplayCommand::DrawSvgPath { color, .. } => Some(color),
                 _ => None,
             })
             .collect();
-        assert_eq!(colors.len(), 2, "fill + stroke → two DrawSvgPath, got {dl:?}");
+        assert_eq!(colors.len(), 2, "fill + stroke → two svg paint commands, got {dl:?}");
         assert_eq!((colors[0].r, colors[0].b), (255, 0), "fill (red) painted first");
         assert_eq!((colors[1].r, colors[1].b), (0, 255), "stroke (blue) painted on top");
     }
@@ -14003,13 +14107,16 @@ mod tests {
              </svg>",
             "",
         );
+        // Fill is now a native `DrawSvgFill` (BUG-247), stroke stays a tessellated
+        // `DrawSvgPath` — collect both in document (paint) order.
         let colors: Vec<&Color> = dl.iter()
             .filter_map(|c| match c {
-                DisplayCommand::DrawSvgPath { color, .. } => Some(color),
+                DisplayCommand::DrawSvgFill { color, .. }
+                | DisplayCommand::DrawSvgPath { color, .. } => Some(color),
                 _ => None,
             })
             .collect();
-        assert_eq!(colors.len(), 2, "fill + stroke → two DrawSvgPath, got {dl:?}");
+        assert_eq!(colors.len(), 2, "fill + stroke → two svg paint commands, got {dl:?}");
         assert_eq!((colors[0].r, colors[0].b), (0, 255), "stroke (blue) painted first, under fill");
         assert_eq!((colors[1].r, colors[1].b), (255, 0), "fill (red) painted on top");
     }
