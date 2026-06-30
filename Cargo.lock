@@ -1989,6 +1989,7 @@ dependencies = [
  "lumen-font",
  "lumen-html-parser",
  "lumen-image",
+ "lumen-js",
  "lumen-layout",
  "lumen-network",
  "lumen-paint",
