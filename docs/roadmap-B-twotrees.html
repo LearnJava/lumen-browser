@@ -73,7 +73,7 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-06-30",
+ "generated": "2026-07-01",
  "counts": {
   "open": 23,
   "fixed": 217,
@@ -241,16 +241,16 @@
       {
        "id": "SDC-1a",
        "title": "SDC-1a: WinitSession-команды (driver)",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "8A.7 Ф4 (driver-часть): дореализовать заглушки `click/type_text/scroll/eval/wait` в `crates/driver/src/winit_session.rs:838-915` (сейчас `Err(\"8A.7\"/\"8A.8\")`) + опубликовать командный интерфейс `AutomationCommand{Navigate,Click,Type,Scroll,Eval,Screenshot,Wait}` (enum/трейт) для шелла. Нативный ввод + auto-wait по ADR-006. Interface-first: shell-проводку делает P3 (SDC-1b)"
+       "note": "8A.7 Ф4 (driver-часть): `click/type_text/scroll/eval/wait` в `crates/driver/src/winit_session.rs` реализованы headless-семантикой (click follows `<a href>`/toggles checkbox-radio `checked`; type_text пишет `value`; eval — one-shot QuickJS под `--features quickjs`, `install_dom` на снимке текущего DOM) + `AutomationCommand`/`AutomationReply` опубликованы из `lumen-driver`. Юнит-тесты `crates/driver/tests/cases/test_automation_commands.rs`"
       },
       {
        "id": "SDC-1b",
        "title": "SDC-1b: канал команд в живое окно (shell)",
-       "status": "wait",
+       "status": "ready",
        "size": "M",
-       "note": "8A.7 Ф4 (shell-часть, ТРЕБУЕТ SDC-1a; `lumen-shell` = территория P3): подключить `AutomationCommand` в живое окно — варианты `LoadEvent` (main.rs:105), обработка в `ApplicationHandler` (main.rs:7410) против активного таба, слушающий поток (`lumen_ipc`/loopback) + CLI-флаг. Ответ наружу через `EventLoopProxy`, ack `Painted` после `RedrawRequested`"
+       "note": "8A.7 Ф4 (shell-часть, ТРЕБУЕТ SDC-1a — done; `lumen-shell` = территория P3): подключить `AutomationCommand` в живое окно — варианты `LoadEvent` (main.rs:105), обработка в `ApplicationHandler` (main.rs:7410) против активного таба, слушающий поток (`lumen_ipc`/loopback) + CLI-флаг. Ответ наружу через `EventLoopProxy`, ack `Painted` после `RedrawRequested`"
       },
       {
        "id": "SDC-2",

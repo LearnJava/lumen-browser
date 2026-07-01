@@ -952,6 +952,55 @@ impl JsValue {
         v.sort_by(|a, b| a.0.cmp(&b.0));
         Self::Object(v)
     }
+
+    /// Сериализовать в JSON-строку (используется automation API — SDC-1a/1b —
+    /// для передачи результата `eval()` наружу как `AutomationReply::Eval`).
+    pub fn to_json_string(&self) -> String {
+        match self {
+            Self::Null => "null".to_string(),
+            Self::Undefined => "null".to_string(),
+            Self::Bool(b) => b.to_string(),
+            Self::Number(n) => {
+                if n.is_finite() {
+                    n.to_string()
+                } else {
+                    "null".to_string()
+                }
+            }
+            Self::String(s) => json_quote(s),
+            Self::Array(items) => {
+                let parts: Vec<String> = items.iter().map(Self::to_json_string).collect();
+                format!("[{}]", parts.join(","))
+            }
+            Self::Object(entries) => {
+                let parts: Vec<String> = entries
+                    .iter()
+                    .map(|(k, v)| format!("{}:{}", json_quote(k), v.to_json_string()))
+                    .collect();
+                format!("{{{}}}", parts.join(","))
+            }
+        }
+    }
+}
+
+/// Экранировать строку в JSON string literal (кавычки, обратный слэш,
+/// управляющие символы).
+fn json_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Ошибка исполнения JavaScript: либо syntax error (parse), либо runtime

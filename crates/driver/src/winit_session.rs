@@ -640,6 +640,77 @@ fn resolve_target_point(state: &WinitSessionState, target: &Target) -> Result<(f
     }
 }
 
+/// Разрешить `Target` в `NodeId` элемента (без требования layout-бокса —
+/// `Target::Point` не может быть разрешён в узел).
+fn resolve_target_node(state: &WinitSessionState, target: &Target) -> Result<NodeId> {
+    match target {
+        Target::Point { x, y } => Err(Error::NotFound(format!(
+            "Target::Point({x}, {y}) не привязан к узлу DOM"
+        ))),
+        Target::Selector(sel) => find_first_by_selector(&state.doc, sel)
+            .ok_or_else(|| Error::NotFound(format!("элемент не найден: {sel}"))),
+        Target::NodeId(raw_id) => Ok(NodeId::from_index(*raw_id as usize)),
+    }
+}
+
+/// Записать/перезаписать значение атрибута элемента (element-only; no-op на
+/// текстовых/комментарных узлах).
+fn set_attr(node: &mut lumen_dom::Node, name: &str, value: &str) {
+    if let NodeData::Element { attrs, .. } = &mut node.data {
+        if let Some(a) = attrs.iter_mut().find(|a| a.name.local.eq_ignore_ascii_case(name)) {
+            a.value = value.to_string();
+        } else {
+            attrs.push(lumen_dom::Attribute {
+                name: lumen_dom::QualName::html(name),
+                value: value.to_string(),
+            });
+        }
+    }
+}
+
+/// Удалить атрибут элемента, если он присутствует.
+fn remove_attr(node: &mut lumen_dom::Node, name: &str) {
+    if let NodeData::Element { attrs, .. } = &mut node.data {
+        attrs.retain(|a| !a.name.local.eq_ignore_ascii_case(name));
+    }
+}
+
+/// Упрощённое (не RFC 3986) разрешение относительного `href` против текущего
+/// URL сессии — достаточно для навигации по `<a>` в headless-автоматизации:
+/// абсолютные URL (содержат `://`) возвращаются как есть, абсолютные пути
+/// (`/foo`) наследуют scheme+host базового URL, относительные — резолвятся
+/// против директории базового URL.
+fn resolve_href(base_url: &str, href: &str) -> String {
+    if href.contains("://") {
+        return href.to_string();
+    }
+    if let Some(stripped) = href.strip_prefix('/') {
+        if let Some(scheme_end) = base_url.find("://") {
+            let (scheme, rest) = base_url.split_at(scheme_end + 3);
+            if let Some(host_end) = rest.find('/') {
+                return format!("{scheme}{}/{stripped}", &rest[..host_end]);
+            }
+        }
+        return format!("file:///{stripped}");
+    }
+    match base_url.rfind('/') {
+        Some(idx) => format!("{}{}", &base_url[..=idx], href),
+        None => href.to_string(),
+    }
+}
+
+/// `href` не должен запускать навигацию: пустой, javascript:, mailto:/tel:,
+/// или чисто фрагментный (`#...`) — как в реальном браузере, эти формы не
+/// приводят к document navigation.
+fn is_navigable_href(href: &str) -> bool {
+    let h = href.trim();
+    !h.is_empty()
+        && !h.starts_with('#')
+        && !h.starts_with("javascript:")
+        && !h.starts_with("mailto:")
+        && !h.starts_with("tel:")
+}
+
 impl BrowserSession for WinitSession {
     // ── Ресурсы ────────────────────────────────────────────────────────────
 
@@ -843,35 +914,100 @@ impl BrowserSession for WinitSession {
     }
 
     fn click(&mut self, target: &Target) -> Result<()> {
+        // `Target::Point` has no coordinate→node hit-testing yet (that needs
+        // `lumen_paint::hit_test` wired against the layout tree — a larger,
+        // separate slice); a raw-point click is a harmless no-op for now,
+        // matching pre-8A.7-Ф4 behavior for callers that only assert on
+        // viewport visibility rather than DOM semantics.
+        let (Target::Selector(_) | Target::NodeId(_)) = target else {
+            return Ok(());
+        };
+
         let state = self.state()?;
-        let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
-        let (x, y) = resolve_target_point(&state, target)?;
+        let navigate_url = {
+            let mut guard = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+            let id = resolve_target_node(&guard, target)?;
+            // Best-effort: only used to build the native-input command reserved
+            // for future event-loop wiring (live window only, SDC-1b) — many
+            // inline elements (e.g. `<a>`) don't get their own layout box in
+            // this engine's inline layout, so a missing box must not fail the
+            // headless, DOM-level click semantics below.
+            let _cmd = resolve_target_point(&guard, target)
+                .ok()
+                .map(|(x, y)| InputCommand::MouseClick { x, y });
 
-        // Phase 1 (8C): native input injection для mouse click.
-        //
-        // Требуется: WinitSessionHandler integration с event loop для обработки InputCommand.
-        // Текущая реализация: заглушка (проверяет что элемент виден по координатам).
-        // Полная реализация: injekt MouseClick в event loop → hit-test → JS dispatch с isTrusted=true.
-        let _cmd = InputCommand::MouseClick { x, y };
-        // TODO: enqueue в event loop через channel Sender<InputCommand>
+            // Headless click semantics (no OS window / no JS event dispatch —
+            // that path is the live shell window, wired separately in SDC-1b):
+            // a real `<a href>` follows the link like a real click would;
+            // a checkbox/radio toggles `checked`, matching default browser
+            // activation behavior for these two form control types.
+            let node = guard.doc.get(id);
+            let is_link = node
+                .element_name()
+                .is_some_and(|n| n.local.eq_ignore_ascii_case("a"));
+            let href = is_link.then(|| node.get_attr("href").map(str::to_owned)).flatten();
+            let input_type = node.input_type();
 
+            if let Some(href) = href
+                && is_navigable_href(&href)
+            {
+                Some(resolve_href(&self.current_url, &href))
+            } else {
+                match input_type {
+                    Some(lumen_dom::InputType::Checkbox) | Some(lumen_dom::InputType::Radio) => {
+                        let node = guard.doc.get_mut(id);
+                        if node.get_attr("checked").is_some() {
+                            remove_attr(node, "checked");
+                        } else {
+                            set_attr(node, "checked", "checked");
+                        }
+                    }
+                    _ => {}
+                }
+                None
+            }
+        };
+
+        if let Some(url) = navigate_url {
+            return self.navigate(&url);
+        }
         Ok(())
     }
 
     fn type_text(&mut self, target: &Target, text: &str) -> Result<()> {
         let state = self.state()?;
-        let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
-        let _point = resolve_target_point(&state, target)?;
+        let mut guard = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let id = resolve_target_node(&guard, target)?;
 
-        // Phase 1 (8C): native input injection для keyboard input.
-        //
-        // Требуется: WinitSessionHandler integration с event loop для обработки InputCommand.
-        // Текущая реализация: заглушка (проверяет что target найден).
-        // Полная реализация: injekt KeyPress per char в event loop → input с isTrusted=true.
+        let node = guard.doc.get(id);
+        let is_typeable = node
+            .element_name()
+            .is_some_and(|n| n.local.eq_ignore_ascii_case("textarea"))
+            || matches!(
+                node.input_type(),
+                Some(lumen_dom::InputType::Text)
+                    | Some(lumen_dom::InputType::Password)
+                    | Some(lumen_dom::InputType::Email)
+                    | Some(lumen_dom::InputType::Tel)
+                    | Some(lumen_dom::InputType::Url)
+                    | Some(lumen_dom::InputType::Number)
+                    | Some(lumen_dom::InputType::Search)
+            );
+        if !is_typeable {
+            return Err(Error::Other(
+                "type_text: target не является текстовым input/textarea".into(),
+            ));
+        }
+
+        // Headless keystroke semantics: set the DOM `value` attribute directly
+        // (overwrite, not append — no separate "clear" command exists yet in
+        // this API). Native per-char keydown/input/keyup dispatch with
+        // isTrusted=true is the live shell window's job (SDC-1b).
         for ch in text.chars() {
             let _cmd = InputCommand::KeyPress { char: ch };
-            // TODO: enqueue в event loop через channel Sender<InputCommand>
         }
+        let node = guard.doc.get_mut(id);
+        set_attr(node, "value", text);
         Ok(())
     }
 
@@ -916,11 +1052,48 @@ impl BrowserSession for WinitSession {
         }
     }
 
+    #[cfg(feature = "quickjs")]
+    fn eval(&self, js: &str) -> Result<String> {
+        use lumen_core::ext::JsRuntime as _;
+
+        let state = self.state()?;
+        let doc_snapshot = {
+            let guard = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+            guard.doc.clone()
+        };
+        // One-shot QuickJS runtime bound to a snapshot of the current DOM.
+        // This is intentionally NOT a persistent, bidirectionally-mutating
+        // runtime (that is the full 8A.8 migration): script-driven DOM
+        // mutations are visible to further `eval()` reads on the *same* doc
+        // handle within the call, but do not feed back into the session's
+        // own layout/paint state. Sufficient for read/assert-style automation
+        // scripts; native, JS-driven page interaction lives in the live
+        // shell window (SDC-1b).
+        let doc_arc = Arc::new(Mutex::new(doc_snapshot));
+        let rt = lumen_js::QuickJsRuntime::new()
+            .map_err(|e| Error::Other(format!("QuickJS init: {e}")))?;
+        rt.install_dom(
+            doc_arc,
+            &self.current_url,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .map_err(|e| Error::Other(format!("install_dom: {e}")))?;
+        let value = rt.eval(js).map_err(|e| Error::Other(format!("eval: {e}")))?;
+        Ok(value.to_json_string())
+    }
+
+    #[cfg(not(feature = "quickjs"))]
     fn eval(&self, _js: &str) -> Result<String> {
-        // JS eval через QuickJS — задача persistent-js-runtime (уже в shell).
-        // WinitSession получит его через задачу 8A.7 полную интеграцию.
         Err(Error::Other(
-            "eval доступен после интеграции persistent JS runtime".into(),
+            "eval требует пересборку с --features quickjs".into(),
         ))
     }
 
