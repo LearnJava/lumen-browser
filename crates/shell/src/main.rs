@@ -16472,30 +16472,40 @@ impl Lumen {
 }
         }
 
-        /// Resolve an automation click target to CSS-pixel viewport coordinates.
+        /// Resolve an automation click target to `handle_click_at`'s expected
+        /// OS-window CSS-pixel coordinates.
         ///
         /// `NodeId`/`Selector` rects come out of the layout tree in *page*
-        /// (document) space; `handle_click_at` expects *viewport* space (what a
-        /// real OS mouse event reports — see `page_point`, which converts the
-        /// other way: `page = viewport - tab_bar/panel_offset + scroll`). This
-        /// applies the inverse so a click lands on the resolved element instead
-        /// of wherever page-space coordinates happen to fall in viewport space
-        /// (off by the tab-bar height and current scroll — silently "worked"
-        /// only by coincidence when scroll was 0 and the target sat within the
-        /// tab-bar-height band). `Target::Point` is untouched: BiDi/MCP callers
-        /// (e.g. `input.performActions` pointer coordinates) already supply
-        /// viewport coordinates for it, matching real pointer-event semantics.
+        /// (document) space; `handle_click_at` expects *OS window* space (what
+        /// a real OS mouse event reports — see `page_point`, which converts the
+        /// other way: `page = window - tab_bar/panel_offset + scroll`). This
+        /// applies the inverse (`window = page - scroll + tab_bar/panel_offset`)
+        /// so a click lands on the resolved element instead of wherever
+        /// page-space coordinates happen to fall in window space (off by the
+        /// tab-bar height and current scroll — silently "worked" only by
+        /// coincidence when scroll was 0 and the target sat within the
+        /// tab-bar-height band).
+        ///
+        /// `Target::Point` gets a *different* correction: BiDi/MCP callers
+        /// (`input.performActions` pointer coordinates) supply pixels in the
+        /// rendered *content-viewport* space — the same space `captureScreenshot`
+        /// renders (no scroll subtraction needed, since it's relative to the
+        /// already-scrolled visible viewport, not absolute document position) —
+        /// so only the tab-bar/panel offset is added, not scroll. Confirmed by
+        /// hand: without this, `input.performActions` clicks landed above the
+        /// target by exactly `TAB_BAR_HEIGHT` (real pixel offset validated with
+        /// a manual BiDi click→navigate scenario).
         fn resolve_automation_target(&self, target: &lumen_driver::Target) -> Option<(f32, f32)> {
             use lumen_driver::Target;
+            let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
             let page_to_viewport = |px: f32, py: f32| {
-                let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
                 (
                     px - self.scroll_x + panel_x_offset,
                     py - self.scroll_y + tabs::strip::TAB_BAR_HEIGHT,
                 )
             };
             match target {
-                Target::Point { x, y } => Some((*x, *y)),
+                Target::Point { x, y } => Some((x + panel_x_offset, y + tabs::strip::TAB_BAR_HEIGHT)),
                 Target::NodeId(id) => {
                     let lb = self.layout_box.as_ref()?;
                     let node = lumen_dom::NodeId::from_index(*id as usize);
