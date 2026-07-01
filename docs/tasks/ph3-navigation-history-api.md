@@ -71,9 +71,19 @@ Closes Phase-1 **Step 1**: JS-initiated traversal is now SHELL-AUTHORITATIVE, re
 - **Tests**: JS — `history_go_queues_single_step_traversal`, `history_go_multistep_queues_full_delta_and_moves_cache`, `history_go_zero_does_not_queue_traversal`, `history_go_out_of_range_does_not_queue_traversal`; `history_back_fires_popstate_with_previous_state` + `history_go_updates_location` updated to simulate the shell's popstate delivery. Shell — `navigate_by_tests` (pure `shift_history_entry` hop bookkeeping). All green.
 - **Known limitation (deferred to Phase 2)**: a multi-step traversal that crosses a full-document boundary yet lands on a same-document entry of a *different* document fires `popstate` without re-rendering that document — the genuine cross-document unification still ahead.
 
-### Progress (2026-06-26) — Phase 2a (navigate event dispatch + traverseTo) DONE
+### Progress (2026-06-26) — Phase 2a (navigate event dispatch + traverseTo) — DONE on branch, NOT on main
 
-Merged slice (`crates/js/src/navigation_api.rs`, `crates/shell/src/main.rs`):
+**Drift found by P5 health-check 2026-07-01:** this slice was written on branch
+`p1-ph3-navapi` (commit `451ba19f`, worktree `.claude/worktrees/ph3-navapi`) but never
+merged. That branch sits ~99 commits behind current main with 1 unmerged commit.
+The `_lumen_dispatch_navigate` event-firing part *did* land on main separately (via
+later commits), but `Lumen::navigate_to_key` does not exist on main and
+`action_code == 4 (TraverseTo)` is still a no-op (`crates/shell/src/main.rs:~8080`:
+`4 => { let _ = data; }`) — `navigation.traverseTo(key)` does not actually traverse.
+Reintegration is a P1 task: rebase the branch's `navigate_to_key` + wiring onto
+current main (straight merge will conflict after ~99 commits of drift).
+
+Original description of the branch slice (`crates/js/src/navigation_api.rs`, `crates/shell/src/main.rs`):
 - Added `_lumen_dispatch_navigate(type, url, canIntercept, hashChange)` JS shim: constructs a `NavigateEvent` with `navigationType`, `signal`, `destination` URL, and dispatches it on `window.navigation`. Exposed as `globalThis._lumen_dispatch_navigate`.
 - Shell calls `_lumen_dispatch_navigate('push|replace|fragment|traverse', ...)` before every real navigation: `navigate_to` (`push`), `navigate_replace` (`replace`), `navigate_fragment` (`fragment`, `hashChange: true`), and same-document back/forward (`traverse`). This gives the page a `navigate` event with correct `navigationType` before the navigation commits.
 - Implemented `Lumen::navigate_to_key(key)`: looks up `nav_key` in `nav_back` (searching from most-recent) and `nav_fwd`, computes steps, and delegates to `navigate_by(steps)`. This makes `navigation.traverseTo(key)` a real shell-driven key lookup, no longer a no-op.

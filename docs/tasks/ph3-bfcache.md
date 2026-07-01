@@ -8,7 +8,17 @@
 
 ## Status
 
-**Phase 3 (v1.0) — in progress.** Shell-side freeze/thaw implemented.
+**Phase 3 (v1.0) — in progress, NOT on main.** Shell-side freeze/thaw was implemented
+on branch `p1-ph3-bfcache` (commit `54ecd6c3`, worktree `.claude/worktrees/ph3-bfcache`)
+but never merged — that branch sits ~100 commits behind current main with 1 unmerged
+commit. **Main still has the pre-freeze/thaw code**: `navigate_to` only ever stores
+`BfCachePayload::HtmlSnapshot`, and the `BfCachePayload::Frozen` match arm in
+`navigate_back`/`navigate_forward` (`crates/shell/src/main.rs:~13267`) is dead code
+with a comment saying so. Found during P5 health-check 2026-07-01 (docs-drift audit);
+BUGS.md/health-check does not track this — reintegration is a P1 task (rebase the
+branch's diff onto current main, since a straight merge will conflict after ~100
+commits of drift). `js_heap: Vec::new()` placeholder in that branch is still gated on
+the separate blocked QuickJS heap serialization work (10C.2).
 
 ---
 
