@@ -93,7 +93,7 @@ use lumen_layout::style::{ComputedStyle, ScrollBehavior};
 use lumen_layout::computed_style_to_map;
 use lumen_paint::{build_display_list_ordered, build_display_list_ordered_with_anim, hit_test, DisplayList, RenderBackend};
 use lumen_layout::Cursor as CssCursor;
-use lumen_driver::{AutomationCommand, AutomationReply};
+use lumen_driver::{AutomationCommand, AutomationReply, WaitCondition};
 use winit::application::ApplicationHandler;
 
 /// Событие от background-потока загрузки страницы в event loop.
@@ -643,6 +643,7 @@ fn run_window_mode(
         automation_rx,
         automation_cmd_tx,
         automation_reply_tx,
+        pending_waits: Vec::new(),
         input_rx,
         input_tx,
         focused_node: None,
@@ -1782,6 +1783,9 @@ enum JsNavigateRequest {
 pub(crate) trait PersistentJs: Send {
     /// Evaluate a JS script (event handler dispatch, rAF tick, etc.).
     fn eval_js(&self, script: &str);
+    /// Evaluate `script` and return its result as a JSON string (SDC-1b
+    /// `AutomationCommand::Eval` — unlike `eval_js`, the value is not discarded).
+    fn eval_js_value(&self, script: &str) -> Result<String, String>;
     /// Consume any navigation request placed by JS during the last `eval_js`.
     fn take_navigate_request(&self) -> Option<JsNavigateRequest>;
     /// Drain `NavigateEvent` intercept results queued since the last call.
@@ -2178,6 +2182,13 @@ impl PersistentJs for QuickPersistentJs {
         {
             eprintln!("JS event error: {e}");
         }
+    }
+    fn eval_js_value(&self, script: &str) -> Result<String, String> {
+        use lumen_core::ext::JsRuntime as _;
+        self.rt
+            .eval(script)
+            .map(|v| v.to_json_string())
+            .map_err(|e| e.to_string())
     }
     fn take_navigate_request(&self) -> Option<JsNavigateRequest> {
         self.rt.take_navigate_request().map(|r| match r {
@@ -5282,6 +5293,17 @@ struct DndState {
 
 // ── Window + Renderer ────────────────────────────────────────────────────────
 
+/// A queued `AutomationCommand::Wait` request (SDC-1b), re-checked once per
+/// frame in `about_to_wait` rather than blocking the event loop.
+struct PendingWait {
+    /// Condition to poll — see [`check_pending_wait_condition`].
+    cond: WaitCondition,
+    /// When this wait gives up and replies `AutomationReply::Error`.
+    deadline: std::time::Instant,
+    /// Where to send the `Ack`/`Error` reply once resolved.
+    reply_tx: std::sync::mpsc::Sender<AutomationReply>,
+}
+
 struct Lumen {
     display_list: DisplayList,
     /// Tile-based dirty-rect tracker. Updated on every display-list change via
@@ -5663,6 +5685,13 @@ struct Lumen {
     ///
     /// Replies sent after command execution.
     automation_reply_tx: std::sync::mpsc::Sender<AutomationReply>,
+    /// `AutomationCommand::Wait` requests not yet satisfied (SDC-1b).
+    ///
+    /// The event loop cannot block on `Wait` (that would freeze rendering and
+    /// starve the very state — network completions, JS ticks — the condition
+    /// depends on), so a wait is queued here and re-checked once per frame in
+    /// `about_to_wait` until it is satisfied or its deadline passes.
+    pending_waits: Vec<PendingWait>,
     /// Receiver side of the input injection channel (ADR-007 §8C).
     ///
     /// Drained each `about_to_wait`; commands are processed through the same
@@ -8003,20 +8032,57 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
                 AutomationCommand::Eval(js) => {
                     if let Some(js_ctx) = &self.js_ctx {
-                        js_ctx.eval_js(&js);
-                        let _ = reply_tx.send(AutomationReply::Ack);
+                        match js_ctx.eval_js_value(&js) {
+                            Ok(json) => {
+                                let _ = reply_tx.send(AutomationReply::Eval(json));
+                            }
+                            Err(e) => {
+                                let _ = reply_tx.send(AutomationReply::Error(e));
+                            }
+                        }
                     } else {
                         let _ = reply_tx.send(AutomationReply::Error("JS context not available".to_string()));
                     }
                 }
                 AutomationCommand::Screenshot => {
-                    let _ = reply_tx.send(AutomationReply::Ack);
+                    match self.render_current_page_to_png() {
+                        Ok(png) => {
+                            let _ = reply_tx.send(AutomationReply::Screenshot(png));
+                        }
+                        Err(e) => {
+                            let _ = reply_tx.send(AutomationReply::Error(e));
+                        }
+                    }
                 }
-                AutomationCommand::Wait(_cond, _timeout_ms) => {
-                    // TODO: Implement condition waiting
-                    let _ = reply_tx.send(AutomationReply::Ack);
+                AutomationCommand::Wait(cond, timeout_ms) => {
+                    self.pending_waits.push(PendingWait {
+                        cond,
+                        deadline: std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms),
+                        reply_tx,
+                    });
                 }
             }
+        }
+
+        // Re-check queued `Wait` requests once per frame — never block the
+        // event loop on a wait (see `PendingWait` doc comment for why).
+        if !self.pending_waits.is_empty() {
+            let now = std::time::Instant::now();
+            let drained = std::mem::take(&mut self.pending_waits);
+            let mut still_pending = Vec::with_capacity(drained.len());
+            for pending in drained {
+                if self.check_wait_condition(&pending.cond) {
+                    let _ = pending.reply_tx.send(AutomationReply::Ack);
+                } else if now >= pending.deadline {
+                    let _ = pending.reply_tx.send(AutomationReply::Error(format!(
+                        "wait timeout: {:?}",
+                        pending.cond
+                    )));
+                } else {
+                    still_pending.push(pending);
+                }
+            }
+            self.pending_waits = still_pending;
         }
 
         // ── Native input injection (ADR-007 §8C) ─────────────────────────────
@@ -16258,11 +16324,45 @@ impl Lumen {
                     let rect = forms::find_box_rect(lb, node)?;
                     Some((rect.x + rect.width / 2.0, rect.y + rect.height / 2.0))
                 }
-                Target::Selector(_selector) => {
-                    // TODO: Implement selector resolution via DOM traversal
-                    // For now, return None
-                    None
+                Target::Selector(selector) => {
+                    let lb = self.layout_box.as_ref()?;
+                    let doc = self.layout_source.as_ref()?.document.lock().ok()?;
+                    let rect = lumen_layout::selector_query::find_all_by_selector(lb, &doc, selector)
+                        .first()?
+                        .rect;
+                    Some((rect.x + rect.width / 2.0, rect.y + rect.height / 2.0))
                 }
+            }
+        }
+
+        /// Poll an `AutomationCommand::Wait` condition against current shell
+        /// state (SDC-1b). Never blocks — called once per frame from
+        /// `about_to_wait` via `self.pending_waits` until it returns `true` or
+        /// the wait's deadline passes.
+        ///
+        /// `NetworkIdle` and `Stable` are conservative approximations (no
+        /// in-flight-request counter or cross-frame rect history exists yet in
+        /// the shell — same simplification `InProcessSession::check_wait_condition`
+        /// uses headless): `NetworkIdle` falls back to `DocumentReady`, and
+        /// `Stable` only checks that the selector currently matches an element.
+        fn check_wait_condition(&self, cond: &WaitCondition) -> bool {
+            match cond {
+                WaitCondition::DocumentReady | WaitCondition::NetworkIdle => self.layout_box.is_some(),
+                WaitCondition::Visible(selector) => {
+                    let Some(lb) = self.layout_box.as_ref() else { return false };
+                    let Some(source) = self.layout_source.as_ref() else { return false };
+                    let Ok(doc) = source.document.lock() else { return false };
+                    lumen_layout::selector_query::find_all_by_selector(lb, &doc, selector)
+                        .first()
+                        .is_some_and(|b| b.rect.width > 0.0 && b.rect.height > 0.0)
+                }
+                WaitCondition::Stable(selector) => {
+                    let Some(lb) = self.layout_box.as_ref() else { return false };
+                    let Some(source) = self.layout_source.as_ref() else { return false };
+                    let Ok(doc) = source.document.lock() else { return false };
+                    !lumen_layout::selector_query::find_all_by_selector(lb, &doc, selector).is_empty()
+                }
+                WaitCondition::JsIdle => self.js_ctx.as_ref().is_none_or(|c| !c.has_raf_pending()),
             }
         }
 
@@ -16273,6 +16373,32 @@ impl Lumen {
             if let Some(w) = self.window.as_ref() {
                 w.request_redraw();
             }
+        }
+
+        /// Render the currently loaded page's content area to PNG bytes
+        /// (`AutomationCommand::Screenshot`, SDC-1b).
+        ///
+        /// Renders `self.display_list` — the page content only, not the browser
+        /// chrome (tab strip/panels) — through the deterministic CPU rasterizer
+        /// (same renderer as `--screenshot`/`--ipc-server`), at the current
+        /// window's content viewport size and scroll offset. Images are not
+        /// included (empty images slice — CPU path renders their placeholder
+        /// box, matching existing headless CPU-render behavior elsewhere);
+        /// registering the live decoded image set here is future work.
+        fn render_current_page_to_png(&self) -> Result<Vec<u8>, String> {
+            use lumen_paint::Renderer;
+            let width = (self.viewport_width_css().max(1.0)) as u32;
+            let height = (self.viewport_height_css().max(1.0)) as u32;
+            let image = Renderer::render_to_image_cpu(
+                width,
+                height,
+                &self.display_list,
+                &[],
+                self.scroll_x,
+                self.scroll_y,
+            )
+            .map_err(|e| format!("render_to_image_cpu: {e}"))?;
+            lumen_image::encode_png_rgba8(&image).map_err(|e| format!("PNG encoding: {e}"))
         }
 
     /// Drop the cached page resources of background tabs removed in bulk
