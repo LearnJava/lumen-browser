@@ -9,6 +9,7 @@
 //! drive a live window and get an answer back.
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use lumen_core::error::{Error, Result};
@@ -22,6 +23,15 @@ use crate::{AutomationCommand, AutomationReply};
 /// construct and drain this pair without depending on shell internals.
 pub type AutomationRequest = (AutomationCommand, Sender<AutomationReply>);
 
+/// A callback that interrupts a parked (`winit::event_loop::ControlFlow::Wait`)
+/// event loop so it promptly drains a newly-enqueued [`AutomationRequest`].
+///
+/// Opaque `Arc<dyn Fn>` rather than a concrete winit type: `lumen-driver` sits
+/// below `lumen-shell` in the crate graph and must not depend on it (or on
+/// `winit`) — the shell supplies this as `move || { let _ =
+/// load_proxy.send_event(LoadEvent::AutomationWake); }` via [`AutomationHandle::set_wake`].
+pub type WakeFn = Arc<dyn Fn() + Send + Sync>;
+
 /// Thread-safe, cloneable handle for sending [`AutomationCommand`]s to a live
 /// shell window and blocking for the reply.
 ///
@@ -34,12 +44,26 @@ pub type AutomationRequest = (AutomationCommand, Sender<AutomationReply>);
 #[derive(Clone)]
 pub struct AutomationHandle {
     tx: Sender<AutomationRequest>,
+    /// Shared so a wake callback attached later (`set_wake`, once the event
+    /// loop exists) is visible to clones already handed out — `main()`
+    /// constructs the handle and spawns `--bidi-port`/`--mcp-live-port`
+    /// front-ends *before* the window (and its `EventLoopProxy`) exists.
+    wake: Arc<Mutex<Option<WakeFn>>>,
 }
 
 impl AutomationHandle {
-    /// Wrap the sending half of a shell's automation channel.
+    /// Wrap the sending half of a shell's automation channel. No wake
+    /// callback yet — see [`set_wake`](Self::set_wake).
     pub fn new(tx: Sender<AutomationRequest>) -> Self {
-        Self { tx }
+        Self { tx, wake: Arc::new(Mutex::new(None)) }
+    }
+
+    /// Attach (or replace) the event-loop wake callback. Visible immediately
+    /// to every existing and future clone of this handle (shared cell).
+    pub fn set_wake(&self, wake: WakeFn) {
+        if let Ok(mut guard) = self.wake.lock() {
+            *guard = Some(wake);
+        }
     }
 
     /// Send `command` to the live window and block for its reply, up to `timeout`.
@@ -52,6 +76,11 @@ impl AutomationHandle {
         self.tx
             .send((command, reply_tx))
             .map_err(|_| Error::Other("automation channel closed — no live window running".into()))?;
+        if let Ok(guard) = self.wake.lock()
+            && let Some(wake) = guard.as_ref()
+        {
+            wake();
+        }
         reply_rx.recv_timeout(timeout).map_err(|e| match e {
             RecvTimeoutError::Timeout => Error::Other("automation command timed out".into()),
             RecvTimeoutError::Disconnected => {

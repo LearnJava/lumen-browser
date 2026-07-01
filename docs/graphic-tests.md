@@ -48,7 +48,11 @@ python graphic_tests/run.py --recheck                # re-run only FAIL tests fr
 python graphic_tests/run.py --build                  # cargo build --release first, then run
 python graphic_tests/run.py --no-cache               # force re-capture Edge screenshots
 python graphic_tests/run.py --bisect 100             # run unit deps of an interaction test, then the test; prints verdict
+python graphic_tests/run.py --ipc                    # deterministic CPU snapshot over TCP (TAB-7); no window/gdigrab, no real JS
+python graphic_tests/run.py --live                    # one live lumen window for the whole run (SDC-3); gdigrab capture, real JS
 ```
+
+`--live` (SDC-3): keeps a single `lumen.exe --mcp-live-port N` window open for the entire run instead of killing and relaunching a process per test — the process-per-test model was the main source of wall-clock cost and focus-race flakiness ("magenta marker not found"). Navigation is driven through MCP (`LiveWindowSession`, SDC-2): `tools/call navigate` + `tools/call wait{condition:document_ready}` give a real load-complete signal instead of a blind `time.sleep`. The pixel capture itself is still gdigrab against the real femtovg-rendered window (not MCP's `resource://screenshot`, which renders through the CPU path and isn't at parity with femtovg — same gap as `--ipc`), so `--live` is safe for real-JS tests (57, 129–138) unlike `--ipc`. TEST-00 magenta calibration still runs once and the offset is reused for the rest of the run, same as the default mode.
 
 Results are saved to `graphic_tests/results/`:
 - `YYYYMMDD-HHMMSS.json` — full results: status, diff%, diff_region bounding box per test

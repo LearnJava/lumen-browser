@@ -36,6 +36,13 @@ headless pipeline without winit/wgpu/ffmpeg.
   `AutomationHandle::execute(cmd, timeout)` sends it and blocks on `recv_timeout`. `main()`
   now builds the channel before dispatching to any CLI mode (not inside `run_window_mode`),
   so `--bidi-port`/`--mcp-live-port` front-ends spawned earlier already hold a valid handle.
+  `execute()` also invokes an optional wake callback (`set_wake`, `WakeFn = Arc<dyn Fn() +
+  Send + Sync>`, shared via `Arc<Mutex<..>>` so it's visible to clones handed out before the
+  callback is attached) after enqueueing — without it, a command from a BiDi/MCP thread has
+  no way to interrupt a parked `winit::ControlFlow::Wait` event loop (an `mpsc` send isn't an
+  OS event/timer/redraw), so it could sit undrained indefinitely. The shell attaches the real
+  callback (`EventLoopProxy::send_event(LoadEvent::AutomationWake)`) once its event loop
+  exists — see `subsystems/shell.md` SDC-3 entry.
 - `LiveWindowSession` (`crates/driver/src/live_session.rs`, SDC-2): a full `BrowserSession`
   impl over `AutomationHandle` — same trait `InProcessSession`/`WinitSession` implement, so
   `lumen-bidi-server` and `lumen-mcp` drive a real window with no protocol-specific glue.

@@ -107,6 +107,17 @@ use winit::application::ApplicationHandler;
 /// `IncrementalTreeBuilder::feed_bytes`; (2) `LoadDone` — все байты доступны,
 /// запускаем полный pipeline (CSS + изображения); (3) `LoadError` — ошибка fetch.
 enum LoadEvent {
+    /// No-op wake-up (SDC-2). `winit`'s `ControlFlow::Wait` genuinely parks
+    /// the event loop until an OS window event, a scheduled `WaitUntil`
+    /// deadline, or a proxied user event arrives — an `AutomationCommand`
+    /// enqueued from a BiDi/MCP thread is none of those, so without this the
+    /// loop could sit parked indefinitely and never drain it.
+    /// `AutomationHandle::execute` sends this through `load_proxy` right
+    /// after queuing a command; `user_event` below does nothing with it —
+    /// merely *receiving* a proxied event is what interrupts `Wait` and
+    /// triggers the next `about_to_wait` (where automation commands are
+    /// actually drained).
+    AutomationWake,
     /// Subresource-хинты из первого chunk HTML (HTML LS §13.2.6.4.7
     /// «Speculative HTML parsing»). Отправляются ДО первого `HtmlChunk`,
     /// чтобы sink мог начать загружать CSS/шрифты ещё в процессе парсинга.
@@ -457,12 +468,40 @@ fn main() -> ExitCode {
 
     match cli {
         CliMode::Dump { source, kind } => run_dump_mode(&source, kind, event_sink),
-        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, det_mode, automation_cmd_tx, automation_rx),
+        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, det_mode, automation_handle, automation_cmd_tx, automation_rx),
         CliMode::PrintToPdf { source, output } => run_print_to_pdf(&source, &output, event_sink),
         CliMode::Screenshot { source, output } => run_screenshot(&source, &output, event_sink),
         CliMode::Mcp(mcp) => run_mcp_mode(mcp),
         CliMode::IpcServer { port } => run_ipc_server(port, event_sink),
     }
+}
+
+/// Resolve an `AutomationCommand::Navigate` URL string to a `PageSource` (SDC-2/SDC-3).
+///
+/// Mirrors `PageSource::from_arg`'s http(s)/`about:blank` cases, but also
+/// parses a `file://` prefix into a real filesystem path. Automation callers
+/// (BiDi/MCP/graphic_tests) pass full `file:///abs/path` URLs, not bare CLI
+/// paths — `from_arg`'s "anything else is a literal path" fallback would
+/// otherwise hand `PathBuf` the whole `file://...` string, which doesn't
+/// exist on disk (and on Windows, a naive `strip_prefix("file://")` alone
+/// leaves a leading slash before the drive letter — `/D:/foo` — which also
+/// doesn't resolve; this strips that slash only when a drive letter follows,
+/// so `file:///home/x` (POSIX, where the slash IS the root) is untouched).
+fn page_source_for_automation_url(url: &str) -> PageSource {
+    if url.starts_with("http://") || url.starts_with("https://") {
+        return PageSource::Url(url.to_owned());
+    }
+    if url == "about:blank" {
+        return PageSource::AboutBlank;
+    }
+    if let Some(rest) = url.strip_prefix("file://") {
+        let path = rest
+            .strip_prefix('/')
+            .filter(|p| p.as_bytes().get(1) == Some(&b':'))
+            .unwrap_or(rest);
+        return PageSource::File(PathBuf::from(path));
+    }
+    PageSource::File(PathBuf::from(url))
 }
 
 /// Collect the concatenated text content of `id`'s subtree (SDC-2 `Query` support).
@@ -512,6 +551,7 @@ fn run_window_mode(
     initial_scroll: (f32, f32),
     no_scrollbar: bool,
     deterministic: bool,
+    automation_handle: AutomationHandle,
     automation_cmd_tx: std::sync::mpsc::Sender<AutomationRequest>,
     automation_rx: std::sync::mpsc::Receiver<AutomationRequest>,
 ) -> ExitCode {
@@ -606,6 +646,20 @@ fn run_window_mode(
     // SDC-1b/SDC-2: automation command channel for BiDi/MCP/graphic_tests control.
     // Created by main() (not here) so front-ends spawned before the window
     // exists (bidi_spawn) already hold a valid handle — see call site.
+    //
+    // Attach the wake callback now that `load_proxy` exists: without it, a
+    // command enqueued from a BiDi/MCP thread has no way to interrupt a
+    // parked `ControlFlow::Wait` event loop (no OS event, timer, or redraw
+    // is inherently triggered by an mpsc send from an unrelated thread) and
+    // could sit undrained indefinitely. `set_wake` updates the shared cell
+    // every clone of `automation_handle` — including the ones already handed
+    // to `bidi_spawn`/`lumen_mcp::spawn_live` in `main()` — points to.
+    {
+        let wake_proxy = load_proxy.clone();
+        automation_handle.set_wake(std::sync::Arc::new(move || {
+            let _ = wake_proxy.send_event(LoadEvent::AutomationWake);
+        }));
+    }
     let (input_tx, input_rx) = input::channel();
     let (read_later_tx, read_later_rx) =
         std::sync::mpsc::channel::<(String, String, Vec<u8>)>();
@@ -7637,6 +7691,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: LoadEvent) {
         match event {
+            // Nothing to do — its only purpose is to interrupt `ControlFlow::Wait`
+            // (see the variant doc comment); the automation dispatch that runs
+            // right after in `about_to_wait` handles the actual command.
+            LoadEvent::AutomationWake => {}
             LoadEvent::EarlyPreloadHints(hints, base, generation) => {
                 if generation != self.load_generation { return; }
                 // Ранние хинты из первого chunk — отправить в sink немедленно.
@@ -8094,7 +8152,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         for (cmd, reply_tx) in automation_cmds {
             match cmd {
                 AutomationCommand::Navigate(url) => {
-                    self.navigate_to(PageSource::Url(url));
+                    self.navigate_to(page_source_for_automation_url(&url));
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
                 AutomationCommand::Click(target) => {
