@@ -2003,7 +2003,7 @@ mod tests {
         let mut state = BidiState::with_live_session(fake_live_session());
         let r = dispatch(r#"{"id":1,"method":"browsingContext.captureScreenshot","params":{}}"#, &mut state);
         let v = parse(&r.frames[0]);
-        assert!(v.get("result").unwrap().get("data").unwrap().as_str().unwrap().len() > 0);
+        assert!(!v.get("result").unwrap().get("data").unwrap().as_str().unwrap().is_empty());
     }
 
     #[test]

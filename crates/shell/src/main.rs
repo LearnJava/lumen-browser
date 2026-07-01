@@ -543,6 +543,7 @@ fn automation_ax_node(ax: &lumen_a11y::AXNode) -> lumen_driver::A11yNode {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_window_mode(
     source: PageSource,
     event_sink: Arc<dyn EventSink>,
