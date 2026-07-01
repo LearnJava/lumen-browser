@@ -21,6 +21,8 @@ Updated with every plan-item commit. For ground truth — `git log --oneline` + 
 | lumen-storage | ✅ SQLite + cookies + history + … | [subsystems/storage.md](subsystems/storage.md) |
 | lumen-knowledge | 🟡 FTS5 history + notes + read-later | [subsystems/knowledge.md](subsystems/knowledge.md) |
 | lumen-ipc | ✅ TCP IPC channel (PH1-4) | [subsystems/network.md](subsystems/network.md) |
+| lumen-bidi-server | 🟡 WebDriver BiDi WebSocket server, thin `AutomationHandle` front-end | [subsystems/driver.md](subsystems/driver.md) |
+| lumen-mcp | 🟡 MCP tool-server binary, thin `AutomationHandle` front-end | [subsystems/driver.md](subsystems/driver.md) |
 | lumen-network | ✅ HTTP/1.1 + HTTPS + CORS + auth + IPC transport | [subsystems/network.md](subsystems/network.md) |
 | lumen-driver | ✅ BrowserSession trait + InProcessSession headless | [subsystems/driver.md](subsystems/driver.md) |
 | lumen-shell | 🟡 window + render + event loop | [subsystems/shell.md](subsystems/shell.md) |
