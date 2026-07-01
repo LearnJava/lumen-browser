@@ -213,3 +213,4 @@ cargo build --release
 
 - [`lumen-plan.md`](lumen-plan.md) — подробный design doc (~20 разделов, от scope до плагинной модели).
 - `samples/page.html` — тестовая страница, открой её в обоих браузерах и сравни.
+- [`docs/testing-your-site-with-lumen.md`](docs/testing-your-site-with-lumen.md) — тестируешь свой сайт через Lumen? Гайд для тестировщиков: Selenium/WebDriver BiDi, MCP, нативный Rust-API — с рабочими примерами кода.
