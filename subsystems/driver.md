@@ -27,6 +27,29 @@ headless pipeline without winit/wgpu/ffmpeg.
   (`lumen_core::ext::JsValue::to_json_string`). `AutomationCommand`/`AutomationReply`
   (`crates/driver/src/types.rs`) are the published contract shell integrates against
   (SDC-1b). Tests: `crates/driver/tests/cases/test_automation_commands.rs`.
+- `AutomationHandle`/`AutomationRequest` (`crates/driver/src/automation.rs`, SDC-2): the
+  request/reply half SDC-1b was missing — `Lumen`'s automation channel used to fan every
+  reply out through one `Sender<AutomationReply>` whose receiver was immediately dropped
+  (`let (automation_reply_tx, _) = channel()` in `main.rs`), so callers outside the shell
+  process had no way to read a result. `AutomationRequest = (AutomationCommand,
+  Sender<AutomationReply>)` carries its own one-shot reply channel per call;
+  `AutomationHandle::execute(cmd, timeout)` sends it and blocks on `recv_timeout`. `main()`
+  now builds the channel before dispatching to any CLI mode (not inside `run_window_mode`),
+  so `--bidi-port`/`--mcp-live-port` front-ends spawned earlier already hold a valid handle.
+- `LiveWindowSession` (`crates/driver/src/live_session.rs`, SDC-2): a full `BrowserSession`
+  impl over `AutomationHandle` — same trait `InProcessSession`/`WinitSession` implement, so
+  `lumen-bidi-server` and `lumen-mcp` drive a real window with no protocol-specific glue.
+  Real round-trips: `navigate`/`click`/`type_text`/`scroll`/`wait`/`eval`/`screenshot`/
+  `query`/`a11y_tree` (+ `query_a11y`/`query_a11y_all`, composed locally from `a11y_tree()`).
+  `AutomationCommand` gained `Query(String)`/`A11yTree` variants for this (shell-side
+  handlers reuse `lumen_layout::selector_query::find_all_by_selector` and
+  `lumen_a11y::build_ax_tree`, same helpers `resolve_automation_target`/
+  `update_platform_ax_tree` already used). `current_url()` changed from `&str` to owned
+  `String` across the whole `BrowserSession` trait (all implementors updated) — the old
+  borrow-tied signature would have forced `LiveWindowSession` to leak memory on every read
+  to satisfy the lifetime. Layout/computed-style/network-console-log/fingerprint-isolation
+  methods are local stub defaults (documented per-method) — the automation channel doesn't
+  carry those commands yet.
 
 ## Deferred
 
@@ -35,7 +58,11 @@ headless pipeline without winit/wgpu/ffmpeg.
 - `WinitSession::eval` without `--features quickjs` still errors.
 - Native OS-level input dispatch (isTrusted mouse/keyboard events) for click/type — that's the live shell window's job (SDC-1b), not this headless session.
 - Full auto-wait (`WaitCondition::Visible/Stable/NetworkIdle/JsIdle`) beyond `WinitSession::wait`'s existing poll loop — task 8D refinements.
-- Remote transport (BiDi over WebSocket) — task 8H.
+- `LiveWindowSession`'s `layout_snapshot`/`computed_style(_snapshot)`/`layout_box_by_selector`/
+  `all_layout_boxes_by_selector`/`network_log`/`console_log`/fingerprint-isolation methods —
+  local stub defaults, not yet threaded through `AutomationCommand` (SDC-2 MVP scope).
+- Remote transport (BiDi over WebSocket) — live navigate/eval/captureScreenshot/input done
+  (SDC-2); network interception, cookie/storage events, `domContentLoaded` remain 8H.3.
 - CSS selector: descendant/child combinators, pseudo-classes — when needed.
 
 ## Invariants

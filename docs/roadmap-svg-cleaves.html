@@ -237,9 +237,9 @@
       {
        "id": "SDC-2",
        "title": "SDC-2: BiDi/MCP на живое окно (MVP)",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "Протокол-фронты на живое окно через канал SDC-1b (ТРЕБУЕТ SDC-1b — done). `lumen-bidi-server`: снять in-memory `BidiState` (CAPABILITIES.md:200) → **MVP-команды**: `browsingContext.navigate`/`captureScreenshot`, `script.evaluate`, `input.performActions` против живой сессии; `lumen-mcp` на тот же путь (`screenshot`/`eval` больше не `Err`). По ADR-006 BiDi+MCP, CDP опц./последним"
+       "note": "Протокол-фронты на живое окно через канал SDC-1b. `lumen-bidi-server` (`--bidi-port` + окно): `browsingContext.navigate`/`captureScreenshot`, `script.evaluate`, `input.performActions` (pointer+key) против `LiveWindowSession`; `lumen-mcp --mcp-live-port <N>` на тот же путь (`screenshot`/`eval`/`query`/`a11y_tree` больше не `Err`). Общий адаптер `lumen_driver::LiveWindowSession: BrowserSession` + `AutomationHandle`/`AutomationRequest` (запрос несёт свой канал ответа — SDC-1b реплаи раньше уходили в никуда). По ADR-006 BiDi+MCP, CDP опц./последним"
       },
       {
        "id": "SDC-3",

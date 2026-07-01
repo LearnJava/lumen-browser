@@ -10,9 +10,12 @@
 //! - `lumen --print-to-pdf <out.pdf> <path-or-url>` — сохранить страницу как PDF (A4).
 //! - `lumen --screenshot <out.png> <path-or-url>` — детерминированный CPU-снимок страницы в PNG.
 //! - `lumen --devtools-port <N>` — запустить DevTools WebSocket сервер на порту N.
-//! - `lumen --bidi-port <N>` — запустить WebDriver BiDi WebSocket сервер на порту N.
-//! - `lumen --mcp [url]` — MCP-сервер (stdio) для AI-агентов (Claude, Browser Use…).
-//! - `lumen --mcp-port <N> [url]` — MCP-сервер на TCP порту N (отладка через netcat).
+//! - `lumen --bidi-port <N>` — запустить WebDriver BiDi WebSocket сервер на порту N
+//!   (SDC-2: если совмещён с открытым окном — реальные navigate/eval/captureScreenshot).
+//! - `lumen --mcp [url]` — MCP-сервер (stdio) для AI-агентов (Claude, Browser Use…), headless.
+//! - `lumen --mcp-port <N> [url]` — MCP-сервер на TCP порту N (отладка через netcat), headless.
+//! - `lumen --mcp-live-port <N> <path-or-url>` — MCP-сервер на TCP порту N против ЖИВОГО
+//!   окна (SDC-2, `LiveWindowSession`): `screenshot`/`eval` возвращают реальный результат.
 //!
 //! Dump-режимы не создают окна и не инициализируют wgpu — pipeline прогоняется
 //! до нужной фазы, результат сериализуется и пишется в stdout. Полезно для CI
@@ -93,7 +96,7 @@ use lumen_layout::style::{ComputedStyle, ScrollBehavior};
 use lumen_layout::computed_style_to_map;
 use lumen_paint::{build_display_list_ordered, build_display_list_ordered_with_anim, hit_test, DisplayList, RenderBackend};
 use lumen_layout::Cursor as CssCursor;
-use lumen_driver::{AutomationCommand, AutomationReply, WaitCondition};
+use lumen_driver::{AutomationCommand, AutomationHandle, AutomationReply, AutomationRequest, WaitCondition};
 use winit::application::ApplicationHandler;
 
 /// Событие от background-потока загрузки страницы в event loop.
@@ -298,6 +301,14 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let (mcp_live_port, rest_args) = match extract_mcp_live_port(&rest_args) {
+        Ok(r) => r,
+        Err(err) => {
+            eprintln!("Ошибка аргументов: {err}");
+            print_usage();
+            return ExitCode::FAILURE;
+        }
+    };
     let (import_session, rest_args) = match extract_import_session(&rest_args) {
         Ok(r) => r,
         Err(err) => {
@@ -380,10 +391,26 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // SDC-2: automation channel created here (not inside run_window_mode) so
+    // BiDi/MCP front-ends spawned below get a handle that stays valid once the
+    // live window's event loop starts draining `automation_rx`. Without an
+    // open window (e.g. --dump/--screenshot/--mcp combined with --bidi-port),
+    // the receiver is simply never drained and calls through the handle time out.
+    let (automation_cmd_tx, automation_rx) =
+        std::sync::mpsc::channel::<AutomationRequest>();
+    let automation_handle = AutomationHandle::new(automation_cmd_tx.clone());
+
     if let Some(port) = bidi_port
-        && let Err(e) = bidi_spawn(port)
+        && let Err(e) = bidi_spawn(port, automation_handle.clone())
     {
         eprintln!("Ошибка запуска BiDi на порту {port}: {e}");
+        return ExitCode::FAILURE;
+    }
+
+    if let Some(port) = mcp_live_port
+        && let Err(e) = lumen_mcp::spawn_live(port, automation_handle.clone())
+    {
+        eprintln!("Ошибка запуска MCP (live) на порту {port}: {e}");
         return ExitCode::FAILURE;
     }
 
@@ -430,11 +457,50 @@ fn main() -> ExitCode {
 
     match cli {
         CliMode::Dump { source, kind } => run_dump_mode(&source, kind, event_sink),
-        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, det_mode),
+        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, blocked_log, network_log, initial_scroll, no_scrollbar, det_mode, automation_cmd_tx, automation_rx),
         CliMode::PrintToPdf { source, output } => run_print_to_pdf(&source, &output, event_sink),
         CliMode::Screenshot { source, output } => run_screenshot(&source, &output, event_sink),
         CliMode::Mcp(mcp) => run_mcp_mode(mcp),
         CliMode::IpcServer { port } => run_ipc_server(port, event_sink),
+    }
+}
+
+/// Collect the concatenated text content of `id`'s subtree (SDC-2 `Query` support).
+fn collect_automation_text(doc: &lumen_dom::Document, id: lumen_dom::NodeId, out: &mut String) {
+    let node = doc.get(id);
+    if let NodeData::Text(s) = &node.data {
+        out.push_str(s);
+    }
+    for &child in &node.children {
+        collect_automation_text(doc, child, out);
+    }
+}
+
+/// Convert a `lumen_a11y::AXNode` into the driver's public `A11yNode` reply
+/// type (SDC-2 `A11yTree` support). Mirrors `lumen_driver`'s own private
+/// conversion in `session.rs`/`winit_session.rs` — kept local here since the
+/// shell has no dependency the other direction.
+fn automation_ax_node(ax: &lumen_a11y::AXNode) -> lumen_driver::A11yNode {
+    let state = lumen_driver::A11yState {
+        disabled: ax.state.disabled,
+        checked: ax.state.checked,
+        expanded: ax.state.expanded,
+        hidden: ax.state.hidden,
+        selected: ax.state.selected,
+        pressed: ax.state.pressed,
+        required: ax.state.required,
+        readonly: ax.state.readonly,
+        invalid: ax.state.invalid,
+        level: ax.state.level,
+    };
+    lumen_driver::A11yNode {
+        node_id: ax.node_id.index() as u32,
+        role: ax.role.as_str().to_owned(),
+        name: ax.name.clone(),
+        description: ax.description.clone(),
+        placeholder: ax.placeholder.clone(),
+        state,
+        children: ax.children.iter().map(automation_ax_node).collect(),
     }
 }
 
@@ -446,6 +512,8 @@ fn run_window_mode(
     initial_scroll: (f32, f32),
     no_scrollbar: bool,
     deterministic: bool,
+    automation_cmd_tx: std::sync::mpsc::Sender<AutomationRequest>,
+    automation_rx: std::sync::mpsc::Receiver<AutomationRequest>,
 ) -> ExitCode {
     println!("Lumen v{} — Phase 2 (Interactive) complete", env!("CARGO_PKG_VERSION"));
 
@@ -535,9 +603,9 @@ fn run_window_mode(
         }
     };
     let load_proxy = event_loop.create_proxy();
-    // SDC-1b: automation command channel for BiDi/MCP/graphic_tests control
-    let (automation_cmd_tx, automation_rx) = std::sync::mpsc::channel::<AutomationCommand>();
-    let (automation_reply_tx, _) = std::sync::mpsc::channel::<AutomationReply>();
+    // SDC-1b/SDC-2: automation command channel for BiDi/MCP/graphic_tests control.
+    // Created by main() (not here) so front-ends spawned before the window
+    // exists (bidi_spawn) already hold a valid handle — see call site.
     let (input_tx, input_rx) = input::channel();
     let (read_later_tx, read_later_rx) =
         std::sync::mpsc::channel::<(String, String, Vec<u8>)>();
@@ -642,7 +710,6 @@ fn run_window_mode(
         image_cache: lumen_image::ImageDecodeCache::new(),
         automation_rx,
         automation_cmd_tx,
-        automation_reply_tx,
         pending_waits: Vec::new(),
         input_rx,
         input_tx,
@@ -1334,6 +1401,7 @@ fn print_usage() {
     eprintln!("  lumen --screenshot <out.png> <path-or-url>     — CPU-снимок страницы в PNG (без окна)");
     eprintln!("  [--devtools-port <N>]                           — DevTools WS сервер (любой режим)");
     eprintln!("  [--bidi-port <N>]                               — WebDriver BiDi WS сервер (любой режим)");
+    eprintln!("  [--mcp-live-port <N>]                           — MCP-сервер (TCP) на живом окне (любой режим, SDC-2)");
     eprintln!("  [--proxy <url>]                                 — HTTP прокси (http://host:port или user:pass@host:port)");
     eprintln!("  [--tor [--tor-port <N>]]                        — Tor-режим: TorBrowser fingerprint + SOCKS5 9050 (или N)");
     eprintln!("  --import-session <file.lsession>                — восстановить сессию из файла");
@@ -1624,6 +1692,30 @@ fn extract_bidi_port(args: &[String]) -> Result<(Option<u16>, Vec<String>), Stri
         if args[i] == "--bidi-port" {
             i += 1;
             let s = args.get(i).ok_or("--bidi-port требует номер порта")?;
+            port = Some(s.parse::<u16>().map_err(|_| format!("неверный порт: {s}"))?);
+        } else {
+            rest.push(args[i].clone());
+        }
+        i += 1;
+    }
+    Ok((port, rest))
+}
+
+/// Извлечь `--mcp-live-port N` из аргументов, вернуть (port, остальные аргументы).
+///
+/// Отдельно от `--mcp`/`--mcp-port` (см. [`extract_mcp_mode`]): те выбирают
+/// эксклюзивный headless `CliMode::Mcp` поверх `InProcessSession`. Этот флаг —
+/// как `--bidi-port`/`--devtools-port` — поднимает MCP-фронт фоновым потоком
+/// рядом с любым другим режимом, направленный на живое окно через SDC-2
+/// (`lumen_mcp::spawn_live`), чтобы `screenshot`/`eval` работали по-настоящему.
+fn extract_mcp_live_port(args: &[String]) -> Result<(Option<u16>, Vec<String>), String> {
+    let mut port: Option<u16> = None;
+    let mut rest = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--mcp-live-port" {
+            i += 1;
+            let s = args.get(i).ok_or("--mcp-live-port требует номер порта")?;
             port = Some(s.parse::<u16>().map_err(|_| format!("неверный порт: {s}"))?);
         } else {
             rest.push(args[i].clone());
@@ -5672,19 +5764,16 @@ struct Lumen {
     /// `try_discard_offscreen_images` once an image leaves the
     /// `gate_image_requests` zone (viewport ± 2 screens).
     image_cache: lumen_image::ImageDecodeCache,
-    /// Receiver side of the automation command channel (SDC-1b).
+    /// Receiver side of the automation command channel (SDC-1b/SDC-2).
     ///
     /// Connected to an external sender for BiDi/MCP/graphic_tests control.
-    /// Commands are drained in `about_to_wait`.
-    #[allow(dead_code)]
-    automation_rx: std::sync::mpsc::Receiver<AutomationCommand>,
+    /// Each request carries its own reply sender (see [`AutomationRequest`]),
+    /// so replies reach the specific caller that issued the command instead
+    /// of a shared, unread channel. Commands are drained in `about_to_wait`.
+    automation_rx: std::sync::mpsc::Receiver<AutomationRequest>,
     /// Sender side of the automation command channel - cloned for external callers.
     #[allow(dead_code)]
-    automation_cmd_tx: std::sync::mpsc::Sender<AutomationCommand>,
-    /// Sender side of the automation reply channel (SDC-1b).
-    ///
-    /// Replies sent after command execution.
-    automation_reply_tx: std::sync::mpsc::Sender<AutomationReply>,
+    automation_cmd_tx: std::sync::mpsc::Sender<AutomationRequest>,
     /// `AutomationCommand::Wait` requests not yet satisfied (SDC-1b).
     ///
     /// The event loop cannot block on `Wait` (that would freeze rendering and
@@ -7997,10 +8086,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
         }
 
-        // ── Automation commands (SDC-1b) ────────────────────────────────────────────
+        // ── Automation commands (SDC-1b/SDC-2) ──────────────────────────────────────
         // Drain external commands (BiDi/MCP/graphic_tests) and route to shell actions.
-        let automation_cmds: Vec<(AutomationCommand, std::sync::mpsc::Sender<AutomationReply>)> =
-            self.automation_rx.try_iter().map(|cmd| (cmd, self.automation_reply_tx.clone())).collect();
+        // Each request already carries the reply sender for its specific caller
+        // (SDC-2) — no more fan-out through one shared, unread channel.
+        let automation_cmds: Vec<AutomationRequest> = self.automation_rx.try_iter().collect();
         for (cmd, reply_tx) in automation_cmds {
             match cmd {
                 AutomationCommand::Navigate(url) => {
@@ -8061,6 +8151,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         reply_tx,
                     });
                 }
+                AutomationCommand::Query(selector) => {
+                    let nodes = self.query_automation_nodes(&selector);
+                    let _ = reply_tx.send(AutomationReply::Query(nodes));
+                }
+                AutomationCommand::A11yTree => match self.automation_a11y_tree() {
+                    Some(tree) => {
+                        let _ = reply_tx.send(AutomationReply::A11yTree(Box::new(tree)));
+                    }
+                    None => {
+                        let _ = reply_tx.send(AutomationReply::Error("no page loaded".to_string()));
+                    }
+                },
             }
         }
 
@@ -11344,12 +11446,13 @@ impl Lumen {
         self.input_tx.clone()
     }
 
-    /// Return a cloneable sender for automation commands (SDC-1b).
+    /// Return a cloneable handle for driving this window's automation channel (SDC-2).
     ///
-    /// Callers on any thread can use this to send [`AutomationCommand`]s;
-    /// they are drained and dispatched in `about_to_wait`.
-    pub fn automation_sender(&self) -> std::sync::mpsc::Sender<AutomationCommand> {
-        self.automation_cmd_tx.clone()
+    /// Callers on any thread can use this to send [`AutomationCommand`]s and
+    /// block for their reply; commands are drained and dispatched in `about_to_wait`.
+    #[allow(dead_code)]
+    pub fn automation_handle(&self) -> AutomationHandle {
+        AutomationHandle::new(self.automation_cmd_tx.clone())
     }
 
     /// Return the current keyboard modifier flags as a bitmask.
@@ -16333,6 +16436,44 @@ impl Lumen {
                     Some((rect.x + rect.width / 2.0, rect.y + rect.height / 2.0))
                 }
             }
+        }
+
+        /// Find DOM nodes by CSS selector for `AutomationCommand::Query` (SDC-2).
+        ///
+        /// Returns an empty vector if no page is loaded or nothing matches —
+        /// mirrors `InProcessSession::query`'s behavior for the same case.
+        fn query_automation_nodes(&self, selector: &str) -> Vec<lumen_driver::NodeRef> {
+            let Some(lb) = self.layout_box.as_ref() else { return Vec::new() };
+            let Some(source) = self.layout_source.as_ref() else { return Vec::new() };
+            let Ok(doc) = source.document.lock() else { return Vec::new() };
+            lumen_layout::selector_query::find_all_by_selector(lb, &doc, selector)
+                .into_iter()
+                .map(|found| {
+                    let tag_name = match &doc.get(found.node).data {
+                        NodeData::Element { name, .. } => name.local.to_string(),
+                        _ => String::new(),
+                    };
+                    let mut text_content = String::new();
+                    collect_automation_text(&doc, found.node, &mut text_content);
+                    lumen_driver::NodeRef {
+                        node_id: found.node.index() as u32,
+                        tag_name,
+                        text_content,
+                        bounding_rect: found.rect,
+                    }
+                })
+                .collect()
+        }
+
+        /// Build the accessibility tree for `AutomationCommand::A11yTree` (SDC-2).
+        ///
+        /// Returns `None` if no page is loaded.
+        fn automation_a11y_tree(&self) -> Option<lumen_driver::A11yNode> {
+            let source = self.layout_source.as_ref()?;
+            let doc = source.document.lock().ok()?;
+            let flat_tree = lumen_dom::build_flat_tree(&doc);
+            let ax_tree = lumen_a11y::build_ax_tree(&doc, doc.root(), &flat_tree);
+            Some(automation_ax_node(&ax_tree.root))
         }
 
         /// Poll an `AutomationCommand::Wait` condition against current shell

@@ -324,6 +324,10 @@ pub enum AutomationCommand {
     Screenshot,
     /// Wait for condition.
     Wait(WaitCondition, u64),
+    /// Find DOM nodes by CSS selector (SDC-2).
+    Query(String),
+    /// Snapshot the accessibility tree (SDC-2).
+    A11yTree,
 }
 
 /// Reply from automation API — returned from shell after command execution.
@@ -337,4 +341,8 @@ pub enum AutomationReply {
     Eval(String),
     /// Error message.
     Error(String),
+    /// `Query` result: matching DOM nodes (SDC-2).
+    Query(Vec<NodeRef>),
+    /// `A11yTree` result: accessibility tree snapshot (SDC-2).
+    A11yTree(Box<A11yNode>),
 }

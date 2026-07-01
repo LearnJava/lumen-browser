@@ -25,9 +25,11 @@
 //! ```
 
 mod types;
+pub mod automation;
 pub mod context;
 pub mod determinism;
 pub mod isolation;
+pub mod live_session;
 pub mod session;
 pub mod winit_session;
 pub mod gpu_session;
@@ -36,6 +38,8 @@ pub use types::{
     A11yNode, A11yState, AxQuery, AutomationCommand, AutomationReply, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel,
     FingerprintProfile, InputCommand, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
 };
+pub use automation::{AutomationHandle, AutomationRequest};
+pub use live_session::LiveWindowSession;
 pub use session::InProcessSession;
 pub use winit_session::WinitSession;
 pub use gpu_session::{GpuSession, RenderedPage, JsNavigateRequest};
@@ -127,7 +131,11 @@ pub trait BrowserSession {
     fn console_log(&self) -> Result<Vec<ConsoleEntry>>;
 
     /// URL текущей страницы (пустая строка если страница не загружена).
-    fn current_url(&self) -> &str;
+    ///
+    /// Returns an owned `String` (not `&str`) so implementations that track
+    /// the URL behind a lock or a remote round-trip (e.g. [`LiveWindowSession`])
+    /// don't need to leak memory to satisfy the borrow.
+    fn current_url(&self) -> String;
 
     // ── Инструменты ────────────────────────────────────────────────────────
 

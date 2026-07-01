@@ -550,8 +550,8 @@ mod tests {
             Ok(None)
         }
 
-        fn current_url(&self) -> &str {
-            "about:blank"
+        fn current_url(&self) -> String {
+            "about:blank".to_string()
         }
 
         fn navigate(&mut self, _url: &str) -> lumen_core::error::Result<()> {

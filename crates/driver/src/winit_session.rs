@@ -869,8 +869,8 @@ impl BrowserSession for WinitSession {
         Ok(self.con_log.clone())
     }
 
-    fn current_url(&self) -> &str {
-        &self.current_url
+    fn current_url(&self) -> String {
+        self.current_url.clone()
     }
 
     // ── Инструменты ────────────────────────────────────────────────────────
