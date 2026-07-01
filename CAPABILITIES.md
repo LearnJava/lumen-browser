@@ -185,7 +185,8 @@ Modern ES (ES2020+: classes, async/await, generators, Promise, Proxy, BigInt, mo
 
 ### lumen-driver (`crates/driver`) — headless engine interface
 - ✅ `BrowserSession` trait: 6 resources (screenshot/a11y_tree/layout/computed_style/network_log/console_log) + 6 tools (navigate/click/type/scroll/wait/eval/query); `InProcessSession` full headless pipeline; simple selector engine (tag/#id/.class); deterministic CPU snapshot (`screenshot_cpu_rgba/png`, cross-OS-identical, 57-page gate).
-- ⬜ GPU `screenshot()` returns Err; `eval(js)` returns Err (8A.7); full auto-wait + native input + combinators/pseudo deferred.
+- ✅ `WinitSession` (SDC-1a, 8A.7 Ф4 driver-side): `click`/`type_text` implement headless DOM-level semantics (click follows `<a href>` / toggles checkbox-radio `checked`; type_text writes `value`); `eval(js)` runs a one-shot QuickJS runtime bound to a snapshot of the current DOM under `--features quickjs` (returns a JSON-string result); `AutomationCommand`/`AutomationReply` published from `lumen-driver` for shell integration (SDC-1b).
+- ⬜ `InProcessSession`'s own click/type/scroll/wait/eval remain headless-pipeline stubs (no persistent JS runtime there); `WinitSession.eval()` without `--features quickjs` still errors; full native input event dispatch (isTrusted, real event-loop wiring) lives in the live shell window (SDC-1b), not this headless session; auto-wait combinators/pseudo-selectors deferred.
 
 ### lumen-devtools (`crates/devtools`) — CDP-over-WebSocket (Phase 0 minimal)
 - ✅ RFC 6455 WebSocket (handshake, frames, close/ping/pong, 1 MB guard); CDP `Browser.getVersion` (real), `DOM.getDocument` (stub), `*.enable` ACKs.
