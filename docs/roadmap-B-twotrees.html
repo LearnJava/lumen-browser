@@ -248,23 +248,23 @@
       {
        "id": "SDC-1b",
        "title": "SDC-1b: канал команд в живое окно (shell)",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "8A.7 Ф4 (shell-часть, ТРЕБУЕТ SDC-1a — done; `lumen-shell` = территория P3): подключить `AutomationCommand` в живое окно — варианты `LoadEvent` (main.rs:105), обработка в `ApplicationHandler` (main.rs:7410) против активного таба, слушающий поток (`lumen_ipc`/loopback) + CLI-флаг. Ответ наружу через `EventLoopProxy`, ack `Painted` после `RedrawRequested`"
+       "note": "8A.7 Ф4 (shell-часть): `AutomationCommand` подключён в живое окно (`main.rs` automation-dispatch блок, ~8000): Navigate/Click/Type/Scroll реальны; `Selector`-таргетинг заработал через `resolve_automation_target` (`lumen_layout::selector_query::find_all_by_selector`); Eval возвращает реальный `AutomationReply::Eval(json)` (`PersistentJs::eval_js_value`, использует `JsValue::to_json_string` из SDC-1a); Screenshot рендерит текущий `display_list` в PNG (`render_current_page_to_png`, CPU-путь); Wait поллится раз/кадр через `pending_waits` (не блокирует event loop)"
       },
       {
        "id": "SDC-2",
        "title": "SDC-2: BiDi/MCP на живое окно (MVP)",
-       "status": "wait",
+       "status": "ready",
        "size": "M",
-       "note": "Протокол-фронты на живое окно через канал SDC-1b (ТРЕБУЕТ SDC-1b). `lumen-bidi-server`: снять in-memory `BidiState` (CAPABILITIES.md:200) → **MVP-команды**: `browsingContext.navigate`/`captureScreenshot`, `script.evaluate`, `input.performActions` против живой сессии; `lumen-mcp` на тот же путь (`screenshot`/`eval` больше не `Err`). По ADR-006 BiDi+MCP, CDP опц./последним"
+       "note": "Протокол-фронты на живое окно через канал SDC-1b (ТРЕБУЕТ SDC-1b — done). `lumen-bidi-server`: снять in-memory `BidiState` (CAPABILITIES.md:200) → **MVP-команды**: `browsingContext.navigate`/`captureScreenshot`, `script.evaluate`, `input.performActions` против живой сессии; `lumen-mcp` на тот же путь (`screenshot`/`eval` больше не `Err`). По ADR-006 BiDi+MCP, CDP опц./последним"
       },
       {
        "id": "SDC-3",
        "title": "SDC-3: графтест на одном живом окне",
-       "status": "wait",
+       "status": "ready",
        "size": "M",
-       "note": "`graphic_tests/run.py` — потребитель канала SDC-1b (ТРЕБУЕТ SDC-1b): один живой экземпляр на весь прогон (запуск + калибровка TEST-00 один раз), цикл Navigate→ждать ack→скриншот→diff. Уровень 2-3 `testing.md` против реального окна вместо process-per-test gdigrab"
+       "note": "`graphic_tests/run.py` — потребитель канала SDC-1b (ТРЕБУЕТ SDC-1b — done): один живой экземпляр на весь прогон (запуск + калибровка TEST-00 один раз), цикл Navigate→ждать ack→скриншот→diff. Уровень 2-3 `testing.md` против реального окна вместо process-per-test gdigrab"
       }
      ]
     }
