@@ -11,6 +11,7 @@
     python graphic_tests/run.py --no-cache          # принудительная пересъёмка Edge-скриншотов
     python graphic_tests/run.py --bisect 100        # юнит-зависимости interaction-теста + сам тест
     python graphic_tests/run.py --ipc               # захват Lumen по IPC (CPU-снимок), без gdigrab (TAB-7)
+    python graphic_tests/run.py --live               # одно живое окно на весь прогон, gdigrab-снимок (SDC-3)
 
 Workflow:
   1. Снимаем Edge headless + Lumen (gdigrab) для каждого теста по порядку.
@@ -26,6 +27,18 @@ length-prefixed bincode (см. секцию «IPC client» ниже и crates/ip
 Edge-эталон, ffmpeg-crop и diff-метрика — те же. NB: CPU-бэкенд снимка пока не на
 паритете с femtovg по border-radius/gradients/images (BUG-221), поэтому --ipc
 опционален, а gdigrab остаётся дефолтным захватом.
+
+Режим --live (SDC-3): один процесс/окно lumen на весь прогон вместо kill+relaunch
+на каждый тест (то был главный источник расхода времени и гонок фокуса — «magenta
+marker not found»). Управление окном — MCP (`--mcp-live-port`, SDC-2) через
+LiveWindowSession: `tools/call navigate` грузит страницу, `tools/call
+wait{condition:document_ready}` даёт настоящий сигнал готовности вместо
+`time.sleep(LUMEN_WAIT_SEC)`. Сам пиксельный снимок — по-прежнему gdigrab
+настоящего femtovg-окна (не CPU-путь MCP `resource://screenshot`, у которого тот
+же разрыв паритета, что и у --ipc), поэтому --live совместим с реальным JS
+(TEST-57, 129-138 — им нужен настоящий движок, не CPU-снимок без исполнения
+скриптов). TEST-00 калибрует crop offset один раз за прогон, как и раньше —
+окно/процесс просто не пересоздаётся между тестами.
 
 Результаты:
   graphic_tests/results/YYYYMMDD-HHMMSS.json — полные результаты прогона
@@ -646,9 +659,140 @@ class LumenIpcClient:
             self.proc.kill()
 
 
+# --- Live-window client (SDC-3: один процесс lumen на весь прогон) ---
+#
+# В отличие от --ipc (детерминированный CPU-снимок по TCP, без окна), этот
+# режим держит ОДНО настоящее окно lumen открытым на весь прогон и управляет
+# им через MCP (`--mcp-live-port`, SDC-2): `tools/call navigate` грузит
+# страницу, `tools/call wait{condition:document_ready}` даёт реальный сигнал
+# готовности вместо слепого `time.sleep(LUMEN_WAIT_SEC)`. Сам пиксельный
+# снимок по-прежнему берётся через gdigrab (реальный femtovg-рендер) — MCP
+# `resource://screenshot` рендерит через CPU-путь, который пока не на
+# паритете с femtovg по border-radius/градиентам/картинкам (тот же разрыв,
+# что и у --ipc, см. докстринг модуля).
+
+# document_ready проверяет только `layout_box.is_some()` — сам GPU-рендер
+# (femtovg/wgpu present) и композитинг ОС идут отдельным циклом и не
+# гарантированно успевают до возврата wait(); эмпирически 0.5с было мало
+# (снимок ловил ещё не отрисованное белое окно), 2.0с — надёжно. Всё ещё
+# намного меньше LUMEN_WAIT_SEC=5 на тест из старого режима.
+LIVE_SETTLE_SEC = 1.5
+
+
+class McpLiveError(Exception):
+    """Сбой MCP-обмена с lumen --mcp-live-port (протокол, соединение или ошибка инструмента)."""
+
+
+class LiveWindowClient:
+    """Клиент к `lumen.exe --mcp-live-port N <url>` — одно живое окно на весь прогон (SDC-3).
+
+    Спавнит окно один раз, подключается по TCP loopback и говорит line-delimited
+    JSON-RPC (MCP, см. `crates/mcp/src/protocol.rs`): один JSON-объект на строку,
+    ответ — тоже одна строка. `navigate`/`wait` — единственные нужные здесь
+    инструменты; `LiveWindowSession` (SDC-2) исполняет их против настоящего окна.
+    """
+
+    def __init__(self, lumen_path: str, cwd: str, port: int) -> None:
+        self.proc = subprocess.Popen(
+            [lumen_path, '--mcp-live-port', str(port), '--no-scrollbar', 'about:blank'],
+            cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        self.sock = self._connect_with_retry(port)
+        self._reader = self.sock.makefile('r', encoding='utf-8', newline='\n')
+        self._next_id = 1
+
+    def _connect_with_retry(self, port: int, attempts: int = 200, delay: float = 0.1) -> socket.socket:
+        """Poll for the MCP TCP listener — window/GPU startup takes longer than
+        a single connect attempt. `attempts * delay` = 20s ceiling.
+
+        The 5s timeout is for the *connect* attempt only — reset to a generous
+        60s afterward, since `_call` reuses this same socket for `wait` requests
+        whose Rust-side round trip can legitimately take up to `timeout_ms + 2s`
+        (see `AutomationHandle::execute` in `crates/driver/src/live_session.rs`).
+        """
+        last_err: Exception | None = None
+        for _ in range(attempts):
+            try:
+                s = socket.create_connection(('127.0.0.1', port), timeout=5)
+                s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                s.settimeout(60)
+                return s
+            except OSError as e:
+                last_err = e
+                time.sleep(delay)
+        self.proc.kill()
+        raise McpLiveError(f'lumen --mcp-live-port {port} не поднялся за отведённое время: {last_err}')
+
+    def _call(self, method: str, params: dict) -> dict:
+        req_id = self._next_id
+        self._next_id += 1
+        request = json.dumps({'jsonrpc': '2.0', 'id': req_id, 'method': method, 'params': params})
+        self.sock.sendall((request + '\n').encode('utf-8'))
+        line = self._reader.readline()
+        if not line:
+            raise McpLiveError('MCP-соединение закрыто сервером (окно упало?)')
+        resp = json.loads(line)
+        if resp.get('error') is not None:
+            raise McpLiveError(f'{method}: {resp["error"]}')
+        return resp.get('result') or {}
+
+    def navigate(self, url: str) -> None:
+        """`navigate` — грузит страницу в живом окне; блокируется до Ack от шелла."""
+        self._call('tools/call', {'name': 'navigate', 'arguments': {'url': url}})
+
+    def wait_document_ready(self, timeout_ms: int = 10_000) -> None:
+        """`wait{condition:document_ready}` — реальный сигнал готовности вместо `sleep`."""
+        self._call('tools/call', {
+            'name': 'wait',
+            'arguments': {'condition': 'document_ready', 'timeout_ms': timeout_ms},
+        })
+
+    def shutdown(self) -> None:
+        """Закрыть соединение и корректно (или принудительно) завершить процесс."""
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+        try:
+            self.proc.terminate()
+            self.proc.wait(timeout=5)
+        except Exception:
+            self.proc.kill()
+
+
+def _free_tcp_port() -> int:
+    """Выделить свободный локальный порт (bind-and-release; см. `LiveWindowClient`)."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(('127.0.0.1', 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def capture_lumen_live(client: LiveWindowClient, test_path: str, out_png: str) -> None:
+    """Живое окно (SDC-3): Navigate + wait(document_ready) вместо kill+relaunch
+    процесса на каждый тест, затем gdigrab того же desktop-кадра как в
+    `capture_lumen`. `test_path` — абсолютный путь (как в `ipc_capture_lumen`).
+    """
+    url = 'file:///' + os.path.abspath(test_path).replace('\\', '/')
+    client.navigate(url)
+    client.wait_document_ready()
+    time.sleep(LIVE_SETTLE_SEC)
+    _bring_pid_to_front(client.proc.pid)
+    time.sleep(0.2)  # brief pause for window compositor to repaint
+    subprocess.run(
+        [FFMPEG, '-f', 'gdigrab', '-i', 'desktop',
+         '-vframes', '1', '-update', '1', out_png, '-y'],
+        capture_output=True, timeout=15,
+    )
+
+
 # Активный IPC-клиент и вкладка (заполняются в main при --ipc; иначе None).
 _IPC_CLIENT: LumenIpcClient | None = None
 _IPC_TAB: int = 0
+
+# Активный live-window клиент (заполняется в main при --live; иначе None).
+_LIVE_CLIENT: LiveWindowClient | None = None
 
 
 def ipc_capture_lumen(test_path: str, out_png: str) -> None:
@@ -919,6 +1063,32 @@ def run_one(tid: str, html: str, threshold: float, label: str,
             return False, crop_offset, -1.0, None
         # CPU-снимок уже от (0,0): магента-калибровка/crop offset не нужны.
         crop_offset = (0, 0)
+    elif _LIVE_CLIENT is not None:
+        # Live-window режим (SDC-3): один процесс/окно на весь прогон, но
+        # снимок всё ещё через gdigrab — та же магента-калибровка, что и в
+        # process-per-test режиме ниже (offset один и тот же весь прогон).
+        try:
+            capture_lumen_live(_LIVE_CLIENT, test_path, lumen_raw)
+        except (McpLiveError, OSError) as e:
+            print(f'TEST-{tid}: ERROR (live: {e})', flush=True)
+            return False, crop_offset, -1.0, None
+        if not os.path.exists(lumen_raw):
+            print(f'TEST-{tid}: FAIL (live-window screenshot missing)')
+            return False, crop_offset, -1.0, None
+
+        if tid == '00':
+            origin = find_marker_origin(lumen_raw)
+            if origin is None:
+                print(f'TEST-{tid}: FAIL (magenta marker not found)')
+                return False, None, -1.0, None
+            crop_offset = origin
+            _save_crop_offset(crop_offset)
+
+        if crop_offset is None:
+            crop_offset = _load_crop_offset()
+        if crop_offset is None:
+            print(f'TEST-{tid}: FAIL (no crop offset — run TEST-00 first)')
+            return False, None, -1.0, None
     else:
         capture_lumen(rel_html, lumen_raw)
         if not os.path.exists(lumen_raw):
@@ -1233,10 +1403,19 @@ def main() -> int:
     parser.add_argument('--ipc', action='store_true',
                         help='Захват Lumen через `--ipc-server` (детерминированный CPU-снимок по TCP) '
                              'вместо gdigrab — без окна/ffmpeg-grab/магента-калибровки (TAB-7)')
+    parser.add_argument('--live', action='store_true',
+                        help='Один процесс/окно lumen на весь прогон вместо kill+relaunch на каждый тест: '
+                             'Navigate+wait(document_ready) через `--mcp-live-port` (SDC-2), '
+                             'снимок по-прежнему через gdigrab (SDC-3). Совместим с реальным JS '
+                             '(TEST-57, 129-138), в отличие от --ipc.')
     parser.add_argument('--bisect', metavar='ID',
                         help='Прогнать юнит-зависимости interaction-теста (DEPS), затем сам тест; '
                              'вердикт: сломано свойство или взаимодействие')
     args = parser.parse_args()
+
+    if args.ipc and args.live:
+        print('--ipc и --live взаимоисключающие (два разных способа захвата Lumen).')
+        return 2
 
     os.makedirs(SHOTS, exist_ok=True)
     ensure_lumen(force_build=args.build)
@@ -1255,6 +1434,22 @@ def main() -> int:
         import atexit
         atexit.register(_IPC_CLIENT.shutdown)
         print(f'IPC-сервер готов (вкладка {_IPC_TAB}); gdigrab/магента-калибровка отключены.')
+
+    # Live-window режим (SDC-3): один раз поднимаем настоящее окно lumen
+    # (--mcp-live-port) и держим его на весь прогон вместо kill+relaunch на
+    # каждый тест. gdigrab/магента-калибровка остаются (см. capture_lumen_live).
+    if args.live:
+        global _LIVE_CLIENT
+        port = _free_tcp_port()
+        print(f'Live-режим: запуск lumen --mcp-live-port {port}...')
+        try:
+            _LIVE_CLIENT = LiveWindowClient(LUMEN, REPO, port)
+        except McpLiveError as e:
+            print(f'Не удалось запустить живое окно: {e}')
+            return 2
+        import atexit
+        atexit.register(_LIVE_CLIENT.shutdown)
+        print('Живое окно готово; один процесс на весь прогон.')
 
     crop_offset: tuple[int, int] | None = None
     results: list[dict] = []

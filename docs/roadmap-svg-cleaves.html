@@ -217,7 +217,7 @@
     {
      "id": "SDC",
      "title": "SDC: Управление живым окном (8A.7 Ф4)",
-     "status": "active",
+     "status": "done",
      "note": "Shell-as-driver-client: управление ЖИВЫМ видимым окном Lumen напрямую командами (Selenium/WebDriver-подобно, без headless-прокладки) — закрытие 8A.7 Фазы 4 по `docs/plans/8A.7-shell-as-driver-client-plan.md` + ADR-006. Разрез по владению: SDC-1a (P1 driver) → SDC-1b (P3 shell) → {SDC-2 (P1 фронты), SDC-3 (P3 графтест)}. Цепочка зависимостей строгая",
      "tasks": [
       {
@@ -244,9 +244,9 @@
       {
        "id": "SDC-3",
        "title": "SDC-3: графтест на одном живом окне",
-       "status": "ready",
+       "status": "done",
        "size": "M",
-       "note": "`graphic_tests/run.py` — потребитель канала SDC-1b (ТРЕБУЕТ SDC-1b — done): один живой экземпляр на весь прогон (запуск + калибровка TEST-00 один раз), цикл Navigate→ждать ack→скриншот→diff. Уровень 2-3 `testing.md` против реального окна вместо process-per-test gdigrab"
+       "note": "`graphic_tests/run.py --live`: один живой `lumen --mcp-live-port` процесс/окно на весь прогон вместо kill+relaunch на каждый тест (`LiveWindowClient`, MCP JSON-RPC — `navigate`+`wait(document_ready)` вместо блокирующего `time.sleep(LUMEN_WAIT_SEC=5)`); пиксельный снимок остался gdigrab-ом реального femtovg-окна (не CPU `resource://screenshot`, тот же разрыв паритета что у `--ipc`), поэтому проходят и JS-тесты (57, 129–138). TEST-00 калибрует crop offset один раз, как раньше. Валидировано полным прогоном: результат идентичен baseline (`Изменений нет`), 139 тестов за ~10.5 мин. По пути найдены и исправлены 2 бага живого окна, важных и для SDC-2: `AutomationCommand::Navigate` не поддерживал `file://` (всегда `PageSource::Url` → сетевой `HttpClient` → \"unsupported scheme: file\"); команда с BiDi/MCP-потока не будила запаркованный `ControlFlow::Wait` event loop (добавлен `LoadEvent::AutomationWake` + `AutomationHandle::set_wake`)"
       }
      ]
     }

@@ -734,12 +734,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/dom/src/lib.rs:3004` **fn** `node_length` — DOM-spec "length" of `node`: UTF-16 code-unit count for text nodes, child
 `crates/engine/dom/src/lib.rs:3016` **fn** `range_text` — Extracts the text covered by `range` (WHATWG DOM §4.6 `stringification`)
 
-## lumen-driver  (97 symbols)
+## lumen-driver  (99 symbols)
 
-`crates/driver/src/automation.rs:23` **type** `AutomationRequest` — One outstanding request to the live shell window: a command plus the
-`crates/driver/src/automation.rs:35` **struct** `AutomationHandle` — Thread-safe, cloneable handle for sending [`AutomationCommand`]s to a live
-`crates/driver/src/automation.rs:41` **fn** `new` — Wrap the sending half of a shell's automation channel
-`crates/driver/src/automation.rs:50` **fn** `execute` — Send `command` to the live window and block for its reply, up to `timeout`
+`crates/driver/src/automation.rs:24` **type** `AutomationRequest` — One outstanding request to the live shell window: a command plus the
+`crates/driver/src/automation.rs:33` **type** `WakeFn` — A callback that interrupts a parked (`winit::event_loop::ControlFlow::Wait`)
+`crates/driver/src/automation.rs:45` **struct** `AutomationHandle` — Thread-safe, cloneable handle for sending [`AutomationCommand`]s to a live
+`crates/driver/src/automation.rs:57` **fn** `new` — Wrap the sending half of a shell's automation channel. No wake
+`crates/driver/src/automation.rs:63` **fn** `set_wake` — Attach (or replace) the event-loop wake callback. Visible immediately
+`crates/driver/src/automation.rs:74` **fn** `execute` — Send `command` to the live window and block for its reply, up to `timeout`
 `crates/driver/src/context.rs:22` **struct** `SessionContext` — Isolated context for a single BrowserSession
 `crates/driver/src/context.rs:45` **fn** `new` — Create a new context with default (Standard) fingerprint profile and real system clock
 `crates/driver/src/context.rs:60` **fn** `with_fingerprint_profile` — Create a context with a specific fingerprint profile and real system clock
@@ -4297,4 +4299,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4226 symbols in 22 crates*
+*Total: 4228 symbols in 22 crates*
