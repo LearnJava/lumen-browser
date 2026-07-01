@@ -16474,16 +16474,33 @@ impl Lumen {
 
         /// Resolve an automation click target to CSS-pixel viewport coordinates.
         ///
-        /// Returns `None` if the target cannot be found (no page loaded, element not visible).
+        /// `NodeId`/`Selector` rects come out of the layout tree in *page*
+        /// (document) space; `handle_click_at` expects *viewport* space (what a
+        /// real OS mouse event reports — see `page_point`, which converts the
+        /// other way: `page = viewport - tab_bar/panel_offset + scroll`). This
+        /// applies the inverse so a click lands on the resolved element instead
+        /// of wherever page-space coordinates happen to fall in viewport space
+        /// (off by the tab-bar height and current scroll — silently "worked"
+        /// only by coincidence when scroll was 0 and the target sat within the
+        /// tab-bar-height band). `Target::Point` is untouched: BiDi/MCP callers
+        /// (e.g. `input.performActions` pointer coordinates) already supply
+        /// viewport coordinates for it, matching real pointer-event semantics.
         fn resolve_automation_target(&self, target: &lumen_driver::Target) -> Option<(f32, f32)> {
             use lumen_driver::Target;
+            let page_to_viewport = |px: f32, py: f32| {
+                let panel_x_offset = self.left_dock().map_or(0.0, |(_, w)| w);
+                (
+                    px - self.scroll_x + panel_x_offset,
+                    py - self.scroll_y + tabs::strip::TAB_BAR_HEIGHT,
+                )
+            };
             match target {
                 Target::Point { x, y } => Some((*x, *y)),
                 Target::NodeId(id) => {
                     let lb = self.layout_box.as_ref()?;
                     let node = lumen_dom::NodeId::from_index(*id as usize);
                     let rect = forms::find_box_rect(lb, node)?;
-                    Some((rect.x + rect.width / 2.0, rect.y + rect.height / 2.0))
+                    Some(page_to_viewport(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0))
                 }
                 Target::Selector(selector) => {
                     let lb = self.layout_box.as_ref()?;
@@ -16491,7 +16508,7 @@ impl Lumen {
                     let rect = lumen_layout::selector_query::find_all_by_selector(lb, &doc, selector)
                         .first()?
                         .rect;
-                    Some((rect.x + rect.width / 2.0, rect.y + rect.height / 2.0))
+                    Some(page_to_viewport(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0))
                 }
             }
         }
