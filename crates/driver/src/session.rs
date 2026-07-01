@@ -431,8 +431,8 @@ impl BrowserSession for InProcessSession {
         Ok(computed_style_by_selector(&state.layout_root, &state.doc, selector))
     }
 
-    fn current_url(&self) -> &str {
-        &self.current_url
+    fn current_url(&self) -> String {
+        self.current_url.clone()
     }
 
     // ── Инструменты ────────────────────────────────────────────────────────

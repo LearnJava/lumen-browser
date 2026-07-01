@@ -10,3 +10,4 @@ description = "WebDriver BiDi WebSocket server for Lumen browser (W3C WebDriver 
 [dependencies]
 lumen-core.workspace = true
 lumen-devtools.workspace = true
+lumen-driver.workspace = true

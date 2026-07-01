@@ -12,7 +12,8 @@
 //!
 //! Implemented commands:
 //! - `session.*`          — status/new/subscribe/unsubscribe/end/setDefaultUserContextLocale
-//! - `browsingContext.*`  — create/close/navigate/activate/getTree/handleUserPrompt/setViewport
+//! - `browsingContext.*`  — create/close/navigate/activate/getTree/captureScreenshot/
+//!   handleUserPrompt/setViewport
 //! - `script.*`           — evaluate/callFunction/addPreloadScript(+contexts)/removePreloadScript/disown/getRealms
 //! - `network.*`          — getResponseBody/setOfflineStatus/addIntercept/removeIntercept/
 //!   continueRequest/continueResponse/continueWithAuth/failRequest/setCacheBehavior
@@ -30,13 +31,21 @@
 //! - [`BidiState::record_cookie_change`]— emit `storage.cookieAdded/Changed/Removed`
 //!   (also auto-emitted by `storage.setCookie` / `storage.deleteCookies`)
 //!
-//! Live wiring to the actual engine (real navigation, `domContentLoaded`, cookie events)
-//! is a P3 handoff — roadmap 8H.3.
-//! This layer is a pure protocol state machine: one connection = one [`BidiState`].
+//! Live wiring to the actual engine (SDC-2, `--bidi-port` + an open window,
+//! see [`BidiState::with_live_session`]): `browsingContext.navigate`,
+//! `script.evaluate`, `browsingContext.captureScreenshot`, and the pointer/key
+//! subset of `input.performActions` execute for real against a live
+//! [`lumen_driver::LiveWindowSession`] instead of only updating in-memory
+//! bookkeeping. Everything else (cookie events, network interception,
+//! `domContentLoaded`, full input action-chain fidelity) remains a later
+//! handoff — roadmap 8H.3.
+//! Without a live window this layer stays a pure protocol state machine: one
+//! connection = one [`BidiState`].
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use lumen_core::json::{parse as parse_json, JsonValue};
+use lumen_driver::{BrowserSession, LiveWindowSession, Target};
 
 /// Один browsing context в рамках соединения.
 struct BidiContext {
@@ -201,12 +210,29 @@ pub struct BidiState {
     ///
     /// Populated by [`BidiState::fire_user_prompt`]; dismissed via `browsingContext.handleUserPrompt`.
     user_prompts: Vec<UserPrompt>,
+    /// Live shell window this connection drives (SDC-2), if one is available.
+    ///
+    /// `None` when `--bidi-port` was passed without opening a window (e.g.
+    /// `--dump`/`--screenshot`/`--mcp`) — in that case `browsingContext.navigate`,
+    /// `script.evaluate`, `browsingContext.captureScreenshot`, and
+    /// `input.performActions` fall back to their Phase 1 in-memory stub behavior.
+    live: Option<LiveWindowSession>,
 }
 
 impl BidiState {
-    /// Новое пустое состояние соединения.
+    /// Новое пустое состояние соединения (без живого окна — Phase 1 stub behavior).
+    ///
+    /// Production connections always go through [`BidiState::with_live_session`]
+    /// (see `transport::handle`); this constructor is the unit-test entry point.
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// State connected to a live shell window (SDC-2): real navigation,
+    /// script evaluation, screenshots, and pointer/key input.
+    pub fn with_live_session(live: LiveWindowSession) -> Self {
+        Self { live: Some(live), ..Self::default() }
     }
 
     /// Сгенерировать псевдо-UUID из монотонного счётчика.
@@ -602,6 +628,7 @@ pub fn dispatch(message: &str, state: &mut BidiState) -> DispatchResult {
         "browsingContext.getTree" => {
             DispatchResult::single(make_success(id, browsing_context_tree(state)))
         }
+        "browsingContext.captureScreenshot" => bc_capture_screenshot(id, &params, state),
         "script.evaluate" => script_evaluate(id, &params, state),
         "script.callFunction" => script_call_function(id, &params, state),
         "script.addPreloadScript" => script_add_preload(id, &params, state),
@@ -796,8 +823,12 @@ fn bc_close(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResul
 
 /// `browsingContext.navigate` — обновить URL контекста.
 ///
-/// Возвращает `{navigation, url}`. Реальной загрузки на этом слое нет (handoff
-/// P3 в `lumen-driver`); эмитит `browsingContext.load`, если подписан.
+/// Возвращает `{navigation, url}`. Когда соединение привязано к живому окну
+/// (SDC-2, `--bidi-port` + окно), реально загружает страницу через
+/// `LiveWindowSession::navigate` перед ответом клиенту; ошибка навигации
+/// возвращается как BiDi `unknown error`. Без живого окна — только
+/// bookkeeping контекста (Phase 1 stub). Эмитит `browsingContext.load`, если
+/// подписан.
 fn bc_navigate(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     let Some(cid) = params.get("context").and_then(|v| v.as_str()).map(str::to_owned) else {
         return DispatchResult::single(make_error(Some(id), "invalid argument", "missing context"));
@@ -811,6 +842,12 @@ fn bc_navigate(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchRe
             "no such frame",
             &format!("no such context: {cid}"),
         ));
+    }
+
+    if let Some(live) = &mut state.live
+        && let Err(e) = live.navigate(&url)
+    {
+        return DispatchResult::single(make_error(Some(id), "unknown error", &format!("navigate: {e}")));
     }
 
     let navigation_id = state.next_id(0x4a71);
@@ -851,6 +888,43 @@ fn bc_activate(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchRe
         ));
     }
     DispatchResult::single(make_success(id, empty_obj()))
+}
+
+/// `browsingContext.captureScreenshot` — снимок текущей страницы (BiDi §6.6.1, SDC-2).
+///
+/// Возвращает `{data: <base64 PNG>}`. Требует живое окно (SDC-2); без него —
+/// `unknown error` (Phase 1 не может растеризовать без реального рендерера).
+fn bc_capture_screenshot(id: i64, params: &JsonValue, state: &BidiState) -> DispatchResult {
+    if let Some(cid) = params.get("context").and_then(|v| v.as_str())
+        && state.find(cid).is_none()
+    {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "no such frame",
+            &format!("no such context: {cid}"),
+        ));
+    }
+
+    let Some(live) = &state.live else {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "unknown error",
+            "captureScreenshot requires a live window (--bidi-port with an open window)",
+        ));
+    };
+
+    match live.screenshot() {
+        Ok(png) => {
+            let mut result = BTreeMap::new();
+            result.insert("data".into(), JsonValue::String(lumen_core::hash::base64_encode(&png)));
+            DispatchResult::single(make_success(id, JsonValue::Object(result)))
+        }
+        Err(e) => DispatchResult::single(make_error(
+            Some(id),
+            "unknown error",
+            &format!("captureScreenshot: {e}"),
+        )),
+    }
 }
 
 /// Capabilities, которые движок объявляет клиенту (BiDi §session.new).
@@ -970,9 +1044,14 @@ fn make_error(id: Option<i64>, code: &str, message: &str) -> String {
 
 /// `script.evaluate` — выполнить JS expression в browsing context (BiDi §10.2.4).
 ///
-/// Phase 1 stub: проверяет что context существует, возвращает `{type:"undefined"}`.
-/// Реальное выполнение требует 8A.7 (shell-as-driver-client).
-fn script_evaluate(id: i64, params: &JsonValue, state: &BidiState) -> DispatchResult {
+/// When bound to a live window (SDC-2), runs `params.expression` through
+/// `LiveWindowSession::eval` and maps the JSON result to a best-effort BiDi
+/// `RemoteValue` (primitives get their proper `type` tag; arrays/objects fall
+/// back to a `"string"` value carrying their JSON text — full `RemoteValue`
+/// serialization is future work). Without a live window, or when
+/// `expression` is absent (e.g. forwarded from `script.callFunction`),
+/// returns the Phase 1 `{type:"undefined"}` stub.
+fn script_evaluate(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     let ctx_id = params
         .get("target")
         .and_then(|t| t.get("context"))
@@ -988,22 +1067,75 @@ fn script_evaluate(id: i64, params: &JsonValue, state: &BidiState) -> DispatchRe
         ));
     }
 
-    // Phase 1: return undefined stub.
-    let mut result = BTreeMap::new();
-    result.insert("type".into(), JsonValue::String("undefined".into()));
+    let expression = params.get("expression").and_then(|v| v.as_str());
+    let result = match (expression, &state.live) {
+        (Some(expr), Some(live)) => match live.eval(expr) {
+            Ok(json) => eval_result_to_remote_value(&json),
+            Err(e) => {
+                return DispatchResult::single(make_error(
+                    Some(id),
+                    "javascript error",
+                    &format!("eval: {e}"),
+                ));
+            }
+        },
+        _ => {
+            let mut undefined = BTreeMap::new();
+            undefined.insert("type".into(), JsonValue::String("undefined".into()));
+            JsonValue::Object(undefined)
+        }
+    };
 
     let mut outer = BTreeMap::new();
-    outer.insert("result".into(), JsonValue::Object(result));
+    outer.insert("type".into(), JsonValue::String("success".into()));
+    outer.insert("result".into(), result);
     outer.insert("realm".into(), JsonValue::String("stub-realm".into()));
 
     DispatchResult::single(make_success(id, JsonValue::Object(outer)))
 }
 
+/// Map an `eval()` JSON-string result to a best-effort BiDi `RemoteValue`.
+///
+/// Primitives (`null`/`bool`/`number`/`string`) get their proper BiDi `type`
+/// tag. Arrays and objects — and unparseable input — fall back to a
+/// `"string"` RemoteValue carrying the raw JSON text; full structural
+/// `RemoteValue` serialization (BiDi §10.1.2 LocalValue tables) is future work.
+fn eval_result_to_remote_value(json: &str) -> JsonValue {
+    let mut obj = BTreeMap::new();
+    match parse_json(json) {
+        Ok(JsonValue::Null) => {
+            obj.insert("type".into(), JsonValue::String("null".into()));
+        }
+        Ok(JsonValue::Bool(b)) => {
+            obj.insert("type".into(), JsonValue::String("boolean".into()));
+            obj.insert("value".into(), JsonValue::Bool(b));
+        }
+        Ok(JsonValue::Number(n)) => {
+            obj.insert("type".into(), JsonValue::String("number".into()));
+            obj.insert("value".into(), JsonValue::Number(n));
+        }
+        Ok(JsonValue::String(s)) => {
+            obj.insert("type".into(), JsonValue::String("string".into()));
+            obj.insert("value".into(), JsonValue::String(s));
+        }
+        Ok(other) => {
+            obj.insert("type".into(), JsonValue::String("string".into()));
+            obj.insert("value".into(), JsonValue::String(other.to_string()));
+        }
+        Err(_) => {
+            obj.insert("type".into(), JsonValue::String("string".into()));
+            obj.insert("value".into(), JsonValue::String(json.to_owned()));
+        }
+    }
+    JsonValue::Object(obj)
+}
+
 /// `script.callFunction` — вызвать функцию в browsing context (BiDi §10.2.5).
 ///
-/// Phase 1 stub: те же проверки что script.evaluate, возвращает `{type:"undefined"}`.
-fn script_call_function(id: i64, params: &JsonValue, state: &BidiState) -> DispatchResult {
-    // Same validation + stub response as evaluate.
+/// Phase 1 stub: те же проверки что script.evaluate, возвращает `{type:"undefined"}`
+/// (no `expression` field in its params, so `script_evaluate` always takes its
+/// stub branch here — real `functionDeclaration` + argument marshalling is future work).
+fn script_call_function(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     script_evaluate(id, params, state)
 }
 
@@ -1680,7 +1812,7 @@ fn download_event_params(
 ///
 /// Phase 1 stub: validates `context` and `actions` parameters, returns ACK.
 /// Actual action dispatch to the windowing layer requires 8H.3.
-fn input_perform_actions(id: i64, params: &JsonValue, state: &BidiState) -> DispatchResult {
+fn input_perform_actions(id: i64, params: &JsonValue, state: &mut BidiState) -> DispatchResult {
     // Validate context if provided.
     if let Some(ctx_id) = params.get("context").and_then(|v| v.as_str())
         && state.find(ctx_id).is_none()
@@ -1693,18 +1825,72 @@ fn input_perform_actions(id: i64, params: &JsonValue, state: &BidiState) -> Disp
     }
 
     // Validate actions is an array.
-    match params.get("actions") {
-        Some(JsonValue::Array(_)) | None => {}
-        _ => {
-            return DispatchResult::single(make_error(
-                Some(id),
-                "invalid argument",
-                "actions must be an array",
-            ));
-        }
+    let Some(sources) = (match params.get("actions") {
+        Some(JsonValue::Array(arr)) => Some(arr.clone()),
+        None => Some(Vec::new()),
+        _ => None,
+    }) else {
+        return DispatchResult::single(make_error(
+            Some(id),
+            "invalid argument",
+            "actions must be an array",
+        ));
+    };
+
+    if let Some(live) = &mut state.live {
+        replay_input_actions(live, &sources);
     }
 
     DispatchResult::single(make_success(id, empty_obj()))
+}
+
+/// Replay the pointer-click and key-input subset of a BiDi `input.performActions`
+/// action chain against a live window (SDC-2 MVP).
+///
+/// Supported: a `"pointer"` source's `pointerMove {x,y}` followed by
+/// `pointerDown` clicks at that point; a `"key"` source's `keyDown {value}`
+/// entries are concatenated and typed at the last-known pointer position (or
+/// the viewport origin if no pointer action preceded it). NOT modeled: pauses,
+/// multi-touch/wheel sources, drag gestures, or `pointerUp`-gated release
+/// semantics — full W3C Actions fidelity is future work; this covers the
+/// common click-then-type automation pattern.
+fn replay_input_actions(live: &mut LiveWindowSession, sources: &[JsonValue]) {
+    let mut last_point = Target::Point { x: 0.0, y: 0.0 };
+    for source in sources {
+        let source_type = source.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let Some(actions) = source.get("actions").and_then(|v| v.as_array()) else { continue };
+        match source_type {
+            "pointer" => {
+                for action in actions {
+                    match action.get("type").and_then(|v| v.as_str()) {
+                        Some("pointerMove") => {
+                            let x = action.get("x").and_then(|v| v.as_number()).unwrap_or(0.0) as f32;
+                            let y = action.get("y").and_then(|v| v.as_number()).unwrap_or(0.0) as f32;
+                            last_point = Target::Point { x, y };
+                        }
+                        Some("pointerDown") => {
+                            let _ = live.click(&last_point);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            "key" => {
+                let mut text = String::new();
+                for action in actions {
+                    if action.get("type").and_then(|v| v.as_str()) == Some("keyDown")
+                        && let Some(v) = action.get("value").and_then(|v| v.as_str())
+                    {
+                        text.push_str(v);
+                    }
+                }
+                if !text.is_empty() {
+                    let _ = live.type_text(&last_point, &text);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// `input.releaseActions` — release all active input sources (BiDi §15.7.4).
@@ -1764,6 +1950,84 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned()
+    }
+
+    /// A fake "live window" for SDC-2 tests: answers `AutomationCommand`s from
+    /// a background thread without any real winit/GPU state, so
+    /// `LiveWindowSession` round-trips exercise the exact same channel path a
+    /// real shell window uses.
+    fn fake_live_session() -> LiveWindowSession {
+        use lumen_driver::{AutomationCommand, AutomationHandle, AutomationReply};
+        let (tx, rx) = std::sync::mpsc::channel::<lumen_driver::AutomationRequest>();
+        std::thread::spawn(move || {
+            for (cmd, reply_tx) in rx {
+                let reply = match cmd {
+                    AutomationCommand::Navigate(_) => AutomationReply::Ack,
+                    AutomationCommand::Eval(js) => AutomationReply::Eval(format!("\"{js}\"")),
+                    AutomationCommand::Screenshot => AutomationReply::Screenshot(vec![0x89, b'P', b'N', b'G']),
+                    AutomationCommand::Click(_) | AutomationCommand::Type(_, _) | AutomationCommand::Scroll(_) => {
+                        AutomationReply::Ack
+                    }
+                    _ => AutomationReply::Error("unsupported in fake_live_session".into()),
+                };
+                let _ = reply_tx.send(reply);
+            }
+        });
+        LiveWindowSession::new(AutomationHandle::new(tx))
+    }
+
+    #[test]
+    fn navigate_with_live_window_executes_real_navigate() {
+        let mut state = BidiState::with_live_session(fake_live_session());
+        let cid = new_session_ctx(&mut state);
+        let cmd = format!(
+            r#"{{"id":10,"method":"browsingContext.navigate","params":{{"context":"{cid}","url":"https://example.com/"}}}}"#
+        );
+        let r = dispatch(&cmd, &mut state);
+        assert_eq!(parse(&r.frames[0]).get("type").and_then(|x| x.as_str()), Some("success"));
+    }
+
+    #[test]
+    fn script_evaluate_with_live_window_returns_real_result() {
+        let mut state = BidiState::with_live_session(fake_live_session());
+        let cmd = r#"{"id":1,"method":"script.evaluate","params":{"expression":"1+1","awaitPromise":false}}"#;
+        let r = dispatch(cmd, &mut state);
+        let v = parse(&r.frames[0]);
+        let result = v.get("result").unwrap().get("result").unwrap();
+        assert_eq!(result.get("type").and_then(|x| x.as_str()), Some("string"));
+        assert_eq!(result.get("value").and_then(|x| x.as_str()), Some("1+1"));
+    }
+
+    #[test]
+    fn capture_screenshot_with_live_window_returns_base64_data() {
+        let mut state = BidiState::with_live_session(fake_live_session());
+        let r = dispatch(r#"{"id":1,"method":"browsingContext.captureScreenshot","params":{}}"#, &mut state);
+        let v = parse(&r.frames[0]);
+        assert!(v.get("result").unwrap().get("data").unwrap().as_str().unwrap().len() > 0);
+    }
+
+    #[test]
+    fn capture_screenshot_without_live_window_errors() {
+        let mut state = BidiState::new();
+        let r = dispatch(r#"{"id":1,"method":"browsingContext.captureScreenshot","params":{}}"#, &mut state);
+        let v = parse(&r.frames[0]);
+        assert_eq!(v.get("error").and_then(|x| x.as_str()), Some("unknown error"));
+    }
+
+    #[test]
+    fn input_perform_actions_with_live_window_clicks() {
+        let mut state = BidiState::with_live_session(fake_live_session());
+        let cid = new_session_ctx(&mut state);
+        let cmd = format!(
+            r#"{{"id":1,"method":"input.performActions","params":{{"context":"{cid}","actions":[
+                {{"type":"pointer","id":"m","actions":[
+                    {{"type":"pointerMove","x":10,"y":20}},
+                    {{"type":"pointerDown","button":0}}
+                ]}}
+            ]}}}}"#
+        );
+        let r = dispatch(&cmd, &mut state);
+        assert!(r.frames[0].contains("success"), "got: {}", r.frames[0]);
     }
 
     #[test]

@@ -23,10 +23,12 @@
 //! - `eval` — выполнить JS
 //! - `query` — поиск по селектору
 
+pub mod live;
 pub mod protocol;
 pub mod server;
 pub mod transport;
 
+pub use live::spawn as spawn_live;
 pub use protocol::{McpMessage, McpRequest, McpResponse, McpResource, McpTool};
 pub use server::McpServer;
 pub use transport::{StdioTransport, TcpTransport, Transport};

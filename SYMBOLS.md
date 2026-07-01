@@ -41,33 +41,34 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/bench/src/util.rs:9` **fn** `get_rss_bytes` — Returns the current process RSS (resident set size) in bytes
 `crates/bench/src/util.rs:48` **fn** `extract_style_blocks` — Concatenates all `<style>` text blocks from the document
 
-## lumen-bidi-server  (25 symbols)
+## lumen-bidi-server  (26 symbols)
 
-`crates/bidi-server/src/protocol.rs:150` **struct** `BidiState` — Connection-level BiDi state
-`crates/bidi-server/src/protocol.rs:208` **fn** `new` — Новое пустое состояние соединения
-`crates/bidi-server/src/protocol.rs:247` **fn** `locale`
-`crates/bidi-server/src/protocol.rs:256` **fn** `timezone`
-`crates/bidi-server/src/protocol.rs:263` **fn** `is_offline`
-`crates/bidi-server/src/protocol.rs:270` **fn** `user_agent_for`
-`crates/bidi-server/src/protocol.rs:283` **fn** `viewport_for`
-`crates/bidi-server/src/protocol.rs:295` **fn** `cache_behavior`
-`crates/bidi-server/src/protocol.rs:302` **fn** `intercept_count`
-`crates/bidi-server/src/protocol.rs:311` **fn** `preload_scripts_for_context` — Return preload scripts that apply to `context_id`
-`crates/bidi-server/src/protocol.rs:323` **fn** `begin_download` — Register a new download and emit `browser.downloadWillBegin` if subscribed
-`crates/bidi-server/src/protocol.rs:350` **fn** `update_download` — Update download progress and emit `browser.downloadItemUpdated` if subscribed
-`crates/bidi-server/src/protocol.rs:375` **fn** `complete_download` — Mark download as completed and emit `browser.downloadItemCompleted` if subscribed
-`crates/bidi-server/src/protocol.rs:395` **fn** `abort_download` — Mark download as aborted and emit `browser.downloadItemAborted` if subscribed
-`crates/bidi-server/src/protocol.rs:418` **fn** `record_cookie_change` — Record a cookie change (add/update/remove) and emit `storage.cookie*` events
-`crates/bidi-server/src/protocol.rs:465` **fn** `fire_user_prompt` — Open a user-prompt dialog and emit `browsingContext.userPromptOpened` if subscribed
-`crates/bidi-server/src/protocol.rs:504` **fn** `open_prompt_count` — Number of currently open user prompts (for testing)
-`crates/bidi-server/src/protocol.rs:510` **fn** `cookie_count` — Number of cookies in the session (for testing)
-`crates/bidi-server/src/protocol.rs:516` **fn** `download_count` — Number of active download items
-`crates/bidi-server/src/protocol.rs:522` **fn** `preload_script_count` — Number of registered preload scripts
-`crates/bidi-server/src/protocol.rs:534` **fn** `record_response_body`
-`crates/bidi-server/src/protocol.rs:548` **struct** `DispatchResult` — Результат обработки одной команды
-`crates/bidi-server/src/protocol.rs:563` **fn** `dispatch` — Обработать одно BiDi-сообщение, вернуть фреймы для отправки клиенту
-`crates/bidi-server/src/server.rs:14` **fn** `spawn` — Spawn the BiDi server on `127.0.0.1:port`. Non-blocking — runs in a background thread
-`crates/bidi-server/src/transport.rs:18` **fn** `handle` — Handle one accepted TCP stream: WS upgrade → BiDi command loop
+`crates/bidi-server/src/protocol.rs:159` **struct** `BidiState` — Connection-level BiDi state
+`crates/bidi-server/src/protocol.rs:228` **fn** `new` — Новое пустое состояние соединения (без живого окна — Phase 1 stub behavior)
+`crates/bidi-server/src/protocol.rs:234` **fn** `with_live_session` — State connected to a live shell window (SDC-2): real navigation,
+`crates/bidi-server/src/protocol.rs:273` **fn** `locale`
+`crates/bidi-server/src/protocol.rs:282` **fn** `timezone`
+`crates/bidi-server/src/protocol.rs:289` **fn** `is_offline`
+`crates/bidi-server/src/protocol.rs:296` **fn** `user_agent_for`
+`crates/bidi-server/src/protocol.rs:309` **fn** `viewport_for`
+`crates/bidi-server/src/protocol.rs:321` **fn** `cache_behavior`
+`crates/bidi-server/src/protocol.rs:328` **fn** `intercept_count`
+`crates/bidi-server/src/protocol.rs:337` **fn** `preload_scripts_for_context` — Return preload scripts that apply to `context_id`
+`crates/bidi-server/src/protocol.rs:349` **fn** `begin_download` — Register a new download and emit `browser.downloadWillBegin` if subscribed
+`crates/bidi-server/src/protocol.rs:376` **fn** `update_download` — Update download progress and emit `browser.downloadItemUpdated` if subscribed
+`crates/bidi-server/src/protocol.rs:401` **fn** `complete_download` — Mark download as completed and emit `browser.downloadItemCompleted` if subscribed
+`crates/bidi-server/src/protocol.rs:421` **fn** `abort_download` — Mark download as aborted and emit `browser.downloadItemAborted` if subscribed
+`crates/bidi-server/src/protocol.rs:444` **fn** `record_cookie_change` — Record a cookie change (add/update/remove) and emit `storage.cookie*` events
+`crates/bidi-server/src/protocol.rs:491` **fn** `fire_user_prompt` — Open a user-prompt dialog and emit `browsingContext.userPromptOpened` if subscribed
+`crates/bidi-server/src/protocol.rs:530` **fn** `open_prompt_count` — Number of currently open user prompts (for testing)
+`crates/bidi-server/src/protocol.rs:536` **fn** `cookie_count` — Number of cookies in the session (for testing)
+`crates/bidi-server/src/protocol.rs:542` **fn** `download_count` — Number of active download items
+`crates/bidi-server/src/protocol.rs:548` **fn** `preload_script_count` — Number of registered preload scripts
+`crates/bidi-server/src/protocol.rs:560` **fn** `record_response_body`
+`crates/bidi-server/src/protocol.rs:574` **struct** `DispatchResult` — Результат обработки одной команды
+`crates/bidi-server/src/protocol.rs:589` **fn** `dispatch` — Обработать одно BiDi-сообщение, вернуть фреймы для отправки клиенту
+`crates/bidi-server/src/server.rs:23` **fn** `spawn` — Spawn the BiDi server on `127.0.0.1:port`. Non-blocking — runs in a background thread
+`crates/bidi-server/src/transport.rs:20` **fn** `handle` — Handle one accepted TCP stream: WS upgrade → BiDi command loop
 
 ## lumen-canvas  (98 symbols)
 
@@ -733,8 +734,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/dom/src/lib.rs:3004` **fn** `node_length` — DOM-spec "length" of `node`: UTF-16 code-unit count for text nodes, child
 `crates/engine/dom/src/lib.rs:3016` **fn** `range_text` — Extracts the text covered by `range` (WHATWG DOM §4.6 `stringification`)
 
-## lumen-driver  (91 symbols)
+## lumen-driver  (97 symbols)
 
+`crates/driver/src/automation.rs:23` **type** `AutomationRequest` — One outstanding request to the live shell window: a command plus the
+`crates/driver/src/automation.rs:35` **struct** `AutomationHandle` — Thread-safe, cloneable handle for sending [`AutomationCommand`]s to a live
+`crates/driver/src/automation.rs:41` **fn** `new` — Wrap the sending half of a shell's automation channel
+`crates/driver/src/automation.rs:50` **fn** `execute` — Send `command` to the live window and block for its reply, up to `timeout`
 `crates/driver/src/context.rs:22` **struct** `SessionContext` — Isolated context for a single BrowserSession
 `crates/driver/src/context.rs:45` **fn** `new` — Create a new context with default (Standard) fingerprint profile and real system clock
 `crates/driver/src/context.rs:60` **fn** `with_fingerprint_profile` — Create a context with a specific fingerprint profile and real system clock
@@ -788,7 +793,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/driver/src/isolation.rs:158` **fn** `idb_load` — Load the IndexedDB JSON snapshot for `origin`, or `None` if absent
 `crates/driver/src/isolation.rs:166` **fn** `cookie_jar` — Shared `Arc<CookieJar>` for this origin group
 `crates/driver/src/isolation.rs:171` **fn** `same_group` — Check whether two origins belong to the same origin group (same eTLD+1)
-`crates/driver/src/lib.rs:62` **trait** `BrowserSession` — Программный интерфейс к браузерному сеансу
+`crates/driver/src/lib.rs:66` **trait** `BrowserSession` — Программный интерфейс к браузерному сеансу
+`crates/driver/src/live_session.rs:42` **struct** `LiveWindowSession` — [`BrowserSession`] adapter that drives a live `lumen-shell` window through
+`crates/driver/src/live_session.rs:50` **fn** `new` — Bind a new session to `handle`, the sending half of a live window's
 `crates/driver/src/session.rs:53` **struct** `InProcessSession` — Headless in-process сессия браузера
 `crates/driver/src/session.rs:91` **fn** `new` — Создать сессию с viewport 1024×720
 `crates/driver/src/session.rs:107` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
@@ -819,7 +826,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/driver/src/types.rs:275` **enum** `FingerprintProfile` — Профиль отпечатка браузера (fingerprint profile) для BrowserSession
 `crates/driver/src/types.rs:297` **fn** `to_http_profile` — Map this session-level profile to the network [`HttpProfile`] that drives
 `crates/driver/src/types.rs:312` **enum** `AutomationCommand` — Command for automation API — sent to shell via IPC channel (SDC-1a)
-`crates/driver/src/types.rs:331` **enum** `AutomationReply` — Reply from automation API — returned from shell after command execution
+`crates/driver/src/types.rs:335` **enum** `AutomationReply` — Reply from automation API — returned from shell after command execution
 `crates/driver/src/winit_session.rs:66` **struct** `WinitSession` — Оконная сессия браузера
 `crates/driver/src/winit_session.rs:93` **fn** `new` — Создать сессию с viewport 1024×720
 `crates/driver/src/winit_session.rs:108` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
@@ -2213,8 +2220,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/text_iter.rs:17` **struct** `TextFragment` — A visible text fragment with its absolute screen rectangle
 `crates/engine/layout/src/text_iter.rs:37` **fn** `collect_visible_text` — Walk the layout tree and collect all visible text fragments with screen coordinates
 
-## lumen-mcp  (24 symbols)
+## lumen-mcp  (25 symbols)
 
+`crates/mcp/src/live.rs:23` **fn** `spawn` — Spawn the live-window MCP server on `127.0.0.1:port`. Non-blocking — runs
 `crates/mcp/src/protocol.rs:8` **struct** `McpResource` — MCP resource describing a read-only data snapshot
 `crates/mcp/src/protocol.rs:21` **struct** `McpTool` — MCP tool describing a callable action
 `crates/mcp/src/protocol.rs:32` **struct** `McpRequest` — MCP JSON-RPC запрос
@@ -4289,4 +4297,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4218 symbols in 22 crates*
+*Total: 4226 symbols in 22 crates*

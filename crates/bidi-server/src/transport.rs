@@ -8,6 +8,7 @@ use std::net::TcpStream;
 use std::time::Duration;
 
 use lumen_devtools::ws::{read_text_frame, upgrade, write_text_frame, WsError};
+use lumen_driver::{AutomationHandle, LiveWindowSession};
 
 use crate::protocol::{dispatch, BidiState};
 
@@ -15,7 +16,8 @@ use crate::protocol::{dispatch, BidiState};
 ///
 /// Blocks until the connection is closed (by `session.end`, read timeout, or error).
 /// The `stream` is fully consumed; the caller must not use it afterwards.
-pub fn handle(mut stream: TcpStream) {
+/// `automation` binds this connection's `BidiState` to a live window (SDC-2).
+pub fn handle(mut stream: TcpStream, automation: AutomationHandle) {
     // 60-second read timeout — guards against stalled connections.
     let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
 
@@ -24,7 +26,7 @@ pub fn handle(mut stream: TcpStream) {
         return;
     }
 
-    let mut state = BidiState::new();
+    let mut state = BidiState::with_live_session(LiveWindowSession::new(automation));
     loop {
         match read_text_frame(&mut stream) {
             Ok(msg) => {
