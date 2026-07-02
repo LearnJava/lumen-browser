@@ -36,7 +36,52 @@ pub const JPEG_SIGNATURE_PREFIX: [u8; 3] = [0xFF, 0xD8, 0xFF];
 /// `image/avif` остаётся: декодер настоящий, лишь за feature-флагом `avif`.
 #[must_use]
 pub fn supported_mime_types() -> &'static [&'static str] {
-    &["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/avif"]
+    &[
+        "image/png",
+        "image/jpeg",
+        "image/jpg",
+        "image/gif",
+        "image/webp",
+        "image/avif",
+        "image/svg+xml",
+    ]
+}
+
+/// Checks whether the given bytes look like an SVG document.
+///
+/// SVG has no magic-byte signature: after skipping an optional UTF-8 BOM and
+/// ASCII whitespace the bytes must start with `<svg`, `<!DOCTYPE svg` or an
+/// XML prolog (`<?xml`) followed by a `<svg` tag within the first 4096 bytes
+/// (the prolog alone is not enough — XHTML starts the same way). Matching is
+/// ASCII-case-insensitive. `lumen-image` only detects SVG; rasterization
+/// happens upstream (the shell renders SVG through the normal layout/paint
+/// pipeline), so [`decode`] still returns `UnknownFormat` for SVG bytes.
+#[must_use]
+pub fn is_svg(bytes: &[u8]) -> bool {
+    let starts_with_ci = |hay: &[u8], needle: &[u8]| -> bool {
+        hay.len() >= needle.len() && hay[..needle.len()].eq_ignore_ascii_case(needle)
+    };
+
+    // Skip an optional UTF-8 BOM, then ASCII whitespace.
+    let mut i = 0;
+    if bytes.len() >= 3 && bytes[..3] == [0xEF, 0xBB, 0xBF] {
+        i = 3;
+    }
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    let rest = &bytes[i..];
+
+    if starts_with_ci(rest, b"<svg") || starts_with_ci(rest, b"<!doctype svg") {
+        return true;
+    }
+    if starts_with_ci(rest, b"<?xml") {
+        let search_end = rest.len().min(4096);
+        return rest[..search_end]
+            .windows(4)
+            .any(|w| w.eq_ignore_ascii_case(b"<svg"));
+    }
+    false
 }
 
 /// Декодирует растровое изображение по сигнатуре первых байтов и colour-manages
@@ -781,6 +826,32 @@ mod tests {
     #[test]
     fn empty_input_unknown_format() {
         assert_eq!(decode(&[]), Err(ImageError::UnknownFormat));
+    }
+
+    #[test]
+    fn is_svg_detects_plain_svg_tag() {
+        assert!(is_svg(b"<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>"));
+        assert!(is_svg(b"  \n\t<SVG width=\"10\"></SVG>"));
+    }
+
+    #[test]
+    fn is_svg_detects_xml_prolog_and_doctype() {
+        assert!(is_svg(b"<?xml version=\"1.0\"?>\n<svg></svg>"));
+        assert!(is_svg(b"<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\"><svg/>"));
+    }
+
+    #[test]
+    fn is_svg_skips_utf8_bom() {
+        assert!(is_svg(b"\xEF\xBB\xBF<svg></svg>"));
+    }
+
+    #[test]
+    fn is_svg_rejects_non_svg() {
+        assert!(!is_svg(b""));
+        assert!(!is_svg(b"<html><body></body></html>"));
+        // XML prolog without an <svg> tag (e.g. XHTML) is not SVG.
+        assert!(!is_svg(b"<?xml version=\"1.0\"?><html xmlns=\"x\"></html>"));
+        assert!(!is_svg(&[0x89, 0x50, 0x4E, 0x47]));
     }
 
     #[test]
