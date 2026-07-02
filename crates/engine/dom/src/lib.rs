@@ -20,6 +20,9 @@ pub use lumen_core::sandbox::{parse_sandbox_value, SandboxFlags};
 pub mod contenteditable;
 pub use contenteditable::{CommandHistory, DomCommand, DragData, PasteData, drop_into, paste_into};
 
+pub mod vtt;
+pub use vtt::{TrackInfo, VideoTracks, VttCue, VttCueSettings, collect_video_tracks, parse_vtt};
+
 /// Width dimension of a `<meta name=viewport>` tag.
 ///
 /// `DeviceWidth` means `width=device-width` — match the physical viewport.
