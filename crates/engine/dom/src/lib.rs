@@ -2491,6 +2491,23 @@ pub struct IframeInfo {
     pub sandbox: SandboxFlags,
     /// `true` если у элемента есть атрибут `sandbox` (независимо от значения).
     pub is_sandboxed: bool,
+    /// `loading="lazy"` (HTML LS §4.8.5): отложить загрузку sub-документа до
+    /// приближения к viewport. Phase 0: sub-документы не загружаются вовсе —
+    /// поле является проводкой для Phase 1.
+    pub loading_lazy: bool,
+    /// `fetchpriority` (HTML LS §2.5.7): нормализованное `"high"`/`"low"`;
+    /// `auto`, мусор и отсутствие атрибута → `None`.
+    pub fetch_priority: Option<String>,
+}
+
+/// Нормализует значение атрибута `fetchpriority` (HTML LS §2.5.7):
+/// ASCII-lowercase, допустимы только `"high"` и `"low"`; `auto`/мусор/None → `None`.
+fn normalize_fetch_priority(raw: Option<&str>) -> Option<String> {
+    let lowered = raw?.trim().to_ascii_lowercase();
+    match lowered.as_str() {
+        "high" | "low" => Some(lowered),
+        _ => None,
+    }
 }
 
 fn collect_iframes_inner(doc: &Document, id: NodeId, out: &mut Vec<IframeInfo>) {
@@ -2504,7 +2521,11 @@ fn collect_iframes_inner(doc: &Document, id: NodeId, out: &mut Vec<IframeInfo>) 
         let srcdoc = node.get_attr("srcdoc").filter(|s| !s.is_empty()).map(str::to_owned);
         let is_sandboxed = node.get_attr("sandbox").is_some();
         let sandbox = node.sandbox_flags().unwrap_or_else(SandboxFlags::empty);
-        out.push(IframeInfo { src, srcdoc, sandbox, is_sandboxed });
+        let loading_lazy = node
+            .get_attr("loading")
+            .is_some_and(|v| v.eq_ignore_ascii_case("lazy"));
+        let fetch_priority = normalize_fetch_priority(node.get_attr("fetchpriority"));
+        out.push(IframeInfo { src, srcdoc, sandbox, is_sandboxed, loading_lazy, fetch_priority });
     }
     for &child in &node.children.clone() {
         collect_iframes_inner(doc, child, out);
@@ -4987,6 +5008,42 @@ mod tests {
         assert!(frames[0].is_sandboxed);
         assert!(!frames[0].sandbox.contains(SandboxFlags::SCRIPTS));
         assert!(frames[0].sandbox.contains(SandboxFlags::FORMS));
+    }
+
+    #[test]
+    fn collect_iframes_loading_and_fetchpriority() {
+        let mut doc = Document::new();
+        // iframe1: loading="lazy", fetchpriority="high"
+        let iframe1 = doc.create_element(QualName::html("iframe"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(iframe1).data {
+            attrs.push(Attribute { name: QualName::html("src"), value: "a.html".to_string() });
+            attrs.push(Attribute { name: QualName::html("loading"), value: "LAZY".to_string() });
+            attrs.push(Attribute { name: QualName::html("fetchpriority"), value: "HIGH".to_string() });
+        }
+        // iframe2: loading="eager", fetchpriority="low"
+        let iframe2 = doc.create_element(QualName::html("iframe"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(iframe2).data {
+            attrs.push(Attribute { name: QualName::html("src"), value: "b.html".to_string() });
+            attrs.push(Attribute { name: QualName::html("loading"), value: "eager".to_string() });
+            attrs.push(Attribute { name: QualName::html("fetchpriority"), value: "low".to_string() });
+        }
+        // iframe3: fetchpriority="auto" → None, без loading
+        let iframe3 = doc.create_element(QualName::html("iframe"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(iframe3).data {
+            attrs.push(Attribute { name: QualName::html("src"), value: "c.html".to_string() });
+            attrs.push(Attribute { name: QualName::html("fetchpriority"), value: "auto".to_string() });
+        }
+        doc.append_child(doc.root(), iframe1);
+        doc.append_child(doc.root(), iframe2);
+        doc.append_child(doc.root(), iframe3);
+        let iframes = collect_iframes(&doc);
+        assert_eq!(iframes.len(), 3);
+        assert!(iframes[0].loading_lazy, "loading=LAZY (case-insensitive) must set loading_lazy");
+        assert_eq!(iframes[0].fetch_priority, Some("high".to_string()));
+        assert!(!iframes[1].loading_lazy, "loading=eager must not set loading_lazy");
+        assert_eq!(iframes[1].fetch_priority, Some("low".to_string()));
+        assert!(!iframes[2].loading_lazy, "absent loading must not set loading_lazy");
+        assert_eq!(iframes[2].fetch_priority, None, "fetchpriority=auto must map to None");
     }
 
     #[test]
