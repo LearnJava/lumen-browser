@@ -71,17 +71,36 @@ Closes Phase-1 **Step 1**: JS-initiated traversal is now SHELL-AUTHORITATIVE, re
 - **Tests**: JS — `history_go_queues_single_step_traversal`, `history_go_multistep_queues_full_delta_and_moves_cache`, `history_go_zero_does_not_queue_traversal`, `history_go_out_of_range_does_not_queue_traversal`; `history_back_fires_popstate_with_previous_state` + `history_go_updates_location` updated to simulate the shell's popstate delivery. Shell — `navigate_by_tests` (pure `shift_history_entry` hop bookkeeping). All green.
 - **Known limitation (deferred to Phase 2)**: a multi-step traversal that crosses a full-document boundary yet lands on a same-document entry of a *different* document fires `popstate` without re-rendering that document — the genuine cross-document unification still ahead.
 
-### Progress (2026-06-26) — Phase 2a (navigate event dispatch + traverseTo) — DONE on branch, NOT on main
+### Progress (2026-07-02) — Phase 2a reintegrated on main + 5 wiring defects fixed
 
-**Drift found by P5 health-check 2026-07-01:** this slice was written on branch
-`p1-ph3-navapi` (commit `451ba19f`, worktree `.claude/worktrees/ph3-navapi`) but never
-merged. That branch sits ~99 commits behind current main with 1 unmerged commit.
-The `_lumen_dispatch_navigate` event-firing part *did* land on main separately (via
-later commits), but `Lumen::navigate_to_key` does not exist on main and
-`action_code == 4 (TraverseTo)` is still a no-op (`crates/shell/src/main.rs:~8080`:
-`4 => { let _ = data; }`) — `navigation.traverseTo(key)` does not actually traverse.
-Reintegration is a P1 task: rebase the branch's `navigate_to_key` + wiring onto
-current main (straight merge will conflict after ~99 commits of drift).
+The stale `p1-ph3-navapi` branch (commit `451ba19f`, ~113 commits behind) was
+reintegrated onto current main as a fresh port (mixed-programming session):
+
+- `Lumen::navigate_to_key(key)` implemented via the pure, unit-tested
+  `Lumen::key_traversal_delta` helper + `navigate_by`; drain arm
+  `action_code == 4 (TraverseTo)` wired — `navigation.traverseTo(key)` performs a
+  real multi-step shell traversal (verified live over MCP: A→B→C, then
+  traverseTo(key of A) lands back on A).
+- `navigate_fragment` now fires `_lumen_dispatch_navigate('fragment', url, true, true)`.
+
+Live acceptance surfaced five pre-existing wiring defects, all fixed in the same slice:
+1. Shim `_shellEntries` parsed `{"entries":[...],"index":N}` and called `.map()`
+   on the object — `navigation.entries()` always threw "not a function".
+2. Fresh runtimes never received Navigation state: `commit_nav_state()` fired only
+   at the dying runtime before `reload()`. Now re-seeded after both runtime-install
+   sites (sync `reload()` + async `apply_loaded_page`).
+3. `commit_nav_state` passed a bare JS object literal into the
+   `_lumen_navigation_set_state(json: String)` binding — the arg conversion failed
+   silently, so the state never reached ANY runtime. Now double-encoded as a JS
+   string literal.
+4. The shim sent string action names (`'Push'`/`'TraverseTo'`/`'TraverseBy'`) into
+   the `u8` binding `_lumen_navigation_request` — `navigate()/back()/forward()/
+   traverseTo()` never enqueued anything. Now numeric codes (TraverseBy maps to
+   Back/Forward).
+5. `history.go()` was client-side-rejected in a fresh runtime (empty JS mirror ⇒
+   `history.length === 1` after any cross-document navigation) — `history.back()`
+   was dead on real pages. `go()` and `length` now fall back to the shell-backed
+   Navigation state when the mirror rejects.
 
 Original description of the branch slice (`crates/js/src/navigation_api.rs`, `crates/shell/src/main.rs`):
 - Added `_lumen_dispatch_navigate(type, url, canIntercept, hashChange)` JS shim: constructs a `NavigateEvent` with `navigationType`, `signal`, `destination` URL, and dispatches it on `window.navigation`. Exposed as `globalThis._lumen_dispatch_navigate`.

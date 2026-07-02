@@ -6838,6 +6838,7 @@ impl Lumen {
         let new_url = links::fragment_url(self.current_display_url(), &fragment);
         if let Some(js) = &self.js_ctx {
             let escaped = new_url.replace('\\', "\\\\").replace('\'', "\\'");
+            js.eval_js(&format!("_lumen_dispatch_navigate('fragment', '{escaped}', true, true)"));
             js.eval_js(&format!("_lumen_navigate_or_fragment('{escaped}', false)"));
         }
         if let Some(src) = self.layout_source.as_mut() {
@@ -6959,6 +6960,8 @@ impl Lumen {
                 self.js_ctx = None;
                 self.layout_source = new_layout_source;
                 self.js_ctx = new_js_ctx;
+                // The new runtime starts empty; re-seed it with the current Navigation state.
+                self.commit_nav_state();
                 self.content_height = content_height_of(&page.display_list);
                 self.content_width = content_width_of(&page.display_list);
                 // On full page load, mark all tiles dirty — content has changed completely.
@@ -7344,6 +7347,8 @@ impl Lumen {
         self.js_ctx = None;
         self.layout_source = new_layout_source;
         self.js_ctx = new_js_ctx;
+        // The new runtime starts empty; re-seed it with the current Navigation state.
+        self.commit_nav_state();
         self.content_height = content_height_of(&page.display_list);
         self.content_width = content_width_of(&page.display_list);
         // Full page load: force all tiles dirty.
@@ -8108,13 +8113,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 .as_ref()
                 .map(|js| js.take_nav_updates())
                 .unwrap_or_default();
-            for (action_code, url, _key, data) in navs {
+            for (action_code, url, key, data) in navs {
                 match action_code {
                     0 if !url.is_empty() => self.navigate_to(PageSource::Url(url)),
                     1 if !url.is_empty() => self.navigate_replace(PageSource::Url(url)),
                     2 => self.navigate_back(),
                     3 => self.navigate_forward(),
-                    4 => { let _ = data; }
+                    4 => self.navigate_to_key(&key),
                     5 => self.reload(),
                     6 => {
                         let parsed: serde_json::Value =
@@ -13079,8 +13084,13 @@ impl Lumen {
         }
         let state = serde_json::json!({ "entries": entries, "index": idx });
         if let Some(js) = &self.js_ctx {
-            let quoted = serde_json::to_string(&state).unwrap();
-            js.eval_js(&format!("_lumen_navigation_set_state({})", quoted));
+            // The native binding takes a String argument, so the JSON text must
+            // be embedded as a JS string literal (double encoding) — passing a
+            // bare object literal makes the arg conversion fail and the state
+            // silently never reaches the runtime.
+            let Ok(json) = serde_json::to_string(&state) else { return };
+            let Ok(quoted) = serde_json::to_string(&json) else { return };
+            js.eval_js(&format!("_lumen_navigation_set_state({quoted})"));
         }
     }
 
@@ -13632,6 +13642,39 @@ impl Lumen {
             self.navigate_back();
         } else {
             self.navigate_forward();
+        }
+    }
+
+    /// Compute the delta in history steps needed to reach `key`.
+    ///
+    /// `nav_back` and `nav_fwd` are stacks where the *last* element is the
+    /// nearest entry relative to the current one.  Returns a negative delta
+    /// when the key is found in `nav_back` (steps back) and a positive delta
+    /// when it is found in `nav_fwd` (steps forward).  `len - pos` counts how
+    /// many entries lie between the chosen entry and the top of its stack.
+    fn key_traversal_delta(nav_back: &[NavEntry], nav_fwd: &[NavEntry], key: &str) -> Option<i32> {
+        if let Some(pos) = nav_back.iter().rposition(|e| e.nav_key == key) {
+            Some(-((nav_back.len() - pos) as i32))
+        } else {
+            nav_fwd
+                .iter()
+                .rposition(|e| e.nav_key == key)
+                .map(|pos| (nav_fwd.len() - pos) as i32)
+        }
+    }
+
+    /// Perform a history traversal to the entry identified by `key`.
+    ///
+    /// Backs the JS `navigation.traverseTo(key)` call.  If `key` matches the
+    /// current entry no traversal occurs.  Unknown keys are silently ignored
+    /// per the Navigation API specification.
+    #[cfg_attr(not(feature = "quickjs"), allow(dead_code))]
+    fn navigate_to_key(&mut self, key: &str) {
+        if key == self.current_nav_key {
+            return;
+        }
+        if let Some(delta) = Self::key_traversal_delta(&self.nav_back, &self.nav_fwd, key) {
+            self.navigate_by(delta);
         }
     }
 
@@ -18830,5 +18873,31 @@ mod navigate_by_tests {
         assert_eq!(nav_back.len(), 1);
         assert_eq!(nav_back[0].display_url, Some("c".to_string()));
         assert!(nav_fwd.is_empty());
+    }
+
+    #[test]
+    fn key_delta_found_in_back() {
+        let nav_back = vec![entry("a"), entry("b")];
+        let nav_fwd: Vec<NavEntry> = vec![];
+
+        assert_eq!(Lumen::key_traversal_delta(&nav_back, &nav_fwd, "nav-a"), Some(-2));
+        assert_eq!(Lumen::key_traversal_delta(&nav_back, &nav_fwd, "nav-b"), Some(-1));
+    }
+
+    #[test]
+    fn key_delta_found_in_fwd() {
+        let nav_back: Vec<NavEntry> = vec![];
+        let nav_fwd = vec![entry("x"), entry("y")];
+
+        assert_eq!(Lumen::key_traversal_delta(&nav_back, &nav_fwd, "nav-x"), Some(2));
+        assert_eq!(Lumen::key_traversal_delta(&nav_back, &nav_fwd, "nav-y"), Some(1));
+    }
+
+    #[test]
+    fn key_delta_missing_is_none() {
+        let nav_back = vec![entry("a")];
+        let nav_fwd = vec![entry("b")];
+
+        assert_eq!(Lumen::key_traversal_delta(&nav_back, &nav_fwd, "nav-zzz"), None);
     }
 }
