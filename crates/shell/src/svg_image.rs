@@ -124,53 +124,6 @@ fn clamp_round(v: f32) -> u32 {
     (v.round() as u32).clamp(1, 4096)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::svg_intrinsic_size;
-
-    #[test]
-    fn width_height_attributes_win() {
-        assert_eq!(svg_intrinsic_size(r#"<svg width="120" height="80"></svg>"#), (120, 80));
-        assert_eq!(svg_intrinsic_size(r#"<svg width="24px" height="24px"/>"#), (24, 24));
-    }
-
-    #[test]
-    fn viewbox_fallback() {
-        assert_eq!(svg_intrinsic_size(r#"<svg viewBox="0 0 64 32"></svg>"#), (64, 32));
-        assert_eq!(svg_intrinsic_size(r#"<svg viewBox="0,0,10,20"/>"#), (10, 20));
-    }
-
-    #[test]
-    fn percent_width_falls_through_to_viewbox() {
-        assert_eq!(
-            svg_intrinsic_size(r#"<svg width="100%" height="100%" viewBox="0 0 48 16"/>"#),
-            (48, 16)
-        );
-    }
-
-    #[test]
-    fn stroke_width_is_not_width() {
-        assert_eq!(
-            svg_intrinsic_size(r#"<svg stroke-width="4" viewBox="0 0 30 40"/>"#),
-            (30, 40)
-        );
-    }
-
-    #[test]
-    fn css_default_when_nothing_given() {
-        assert_eq!(svg_intrinsic_size("<svg></svg>"), (300, 150));
-        assert_eq!(svg_intrinsic_size("no svg here"), (300, 150));
-    }
-
-    #[test]
-    fn xml_prolog_before_svg_is_ignored() {
-        assert_eq!(
-            svg_intrinsic_size(r#"<?xml version="1.0"?><svg width="12" height="34"/>"#),
-            (12, 34)
-        );
-    }
-}
-
 /// Rasterizes SVG bytes into a raster image using the existing HTML rendering
 /// pipeline.
 ///
@@ -225,5 +178,52 @@ pub(crate) fn rasterize_svg(
             eprintln!("Не растеризуется SVG: {e}");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::svg_intrinsic_size;
+
+    #[test]
+    fn width_height_attributes_win() {
+        assert_eq!(svg_intrinsic_size(r#"<svg width="120" height="80"></svg>"#), (120, 80));
+        assert_eq!(svg_intrinsic_size(r#"<svg width="24px" height="24px"/>"#), (24, 24));
+    }
+
+    #[test]
+    fn viewbox_fallback() {
+        assert_eq!(svg_intrinsic_size(r#"<svg viewBox="0 0 64 32"></svg>"#), (64, 32));
+        assert_eq!(svg_intrinsic_size(r#"<svg viewBox="0,0,10,20"/>"#), (10, 20));
+    }
+
+    #[test]
+    fn percent_width_falls_through_to_viewbox() {
+        assert_eq!(
+            svg_intrinsic_size(r#"<svg width="100%" height="100%" viewBox="0 0 48 16"/>"#),
+            (48, 16)
+        );
+    }
+
+    #[test]
+    fn stroke_width_is_not_width() {
+        assert_eq!(
+            svg_intrinsic_size(r#"<svg stroke-width="4" viewBox="0 0 30 40"/>"#),
+            (30, 40)
+        );
+    }
+
+    #[test]
+    fn css_default_when_nothing_given() {
+        assert_eq!(svg_intrinsic_size("<svg></svg>"), (300, 150));
+        assert_eq!(svg_intrinsic_size("no svg here"), (300, 150));
+    }
+
+    #[test]
+    fn xml_prolog_before_svg_is_ignored() {
+        assert_eq!(
+            svg_intrinsic_size(r#"<?xml version="1.0"?><svg width="12" height="34"/>"#),
+            (12, 34)
+        );
     }
 }
