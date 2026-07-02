@@ -1452,6 +1452,9 @@ pub struct ImageRequest {
     /// Shell skips eager fetch and instead registers the image for IntersectionObserver
     /// proximity check; loaded once the element scrolls within one viewport of the fold.
     pub is_lazy: bool,
+    /// `fetchpriority` (HTML LS §2.5.7): нормализованное `"high"`/`"low"`;
+    /// `auto`, мусор и отсутствие атрибута → `None`.
+    pub fetch_priority: Option<String>,
 }
 
 /// Обходит DOM и возвращает запросы на загрузку для всех `<img>`-элементов.
@@ -1518,6 +1521,12 @@ fn collect_requests_inner(doc: &Document, id: NodeId, viewport: Size, out: &mut 
             a.name.local.eq_ignore_ascii_case("loading")
                 && a.value.as_str().eq_ignore_ascii_case("lazy")
         });
+        // HTML LS §2.5.7: нормализация fetchpriority — только "high"/"low".
+        let fetch_priority = attrs
+            .iter()
+            .find(|a| a.name.local.eq_ignore_ascii_case("fetchpriority"))
+            .map(|a| a.value.trim().to_ascii_lowercase())
+            .filter(|v| v == "high" || v == "low");
         let source = resolve_image_source(doc, id, viewport);
         if !source.url.is_empty() {
             out.push(ImageRequest {
@@ -1526,6 +1535,7 @@ fn collect_requests_inner(doc: &Document, id: NodeId, viewport: Size, out: &mut 
                 has_explicit_width,
                 has_explicit_height,
                 is_lazy,
+                fetch_priority,
             });
         }
         return; // void element — нет children
@@ -11307,6 +11317,18 @@ mod tests {
         assert!(!reqs[0].is_lazy, "first img (no attr) must not be lazy");
         assert!(reqs[1].is_lazy, "second img (loading=lazy) must be lazy");
         assert!(!reqs[2].is_lazy, "third img (no attr) must not be lazy");
+    }
+
+    #[test]
+    fn fetchpriority_variants() {
+        let html = r#"<img src="a.png" fetchpriority="high"><img src="b.png" fetchpriority="LOW"><img src="c.png" fetchpriority="auto"><img src="d.png">"#;
+        let doc = lumen_html_parser::parse(html);
+        let reqs = super::collect_image_requests(&doc, Size::new(800.0, 600.0));
+        assert_eq!(reqs.len(), 4);
+        assert_eq!(reqs[0].fetch_priority, Some("high".to_string()));
+        assert_eq!(reqs[1].fetch_priority, Some("low".to_string()), "LOW must normalize to low");
+        assert_eq!(reqs[2].fetch_priority, None, "auto must map to None");
+        assert_eq!(reqs[3].fetch_priority, None, "absent attr must map to None");
     }
 
     // ── ::first-letter / ::first-line structural markers ─────────────────────
