@@ -204,6 +204,176 @@ fn parse_timestamp(s: &str) -> Option<f64> {
     }
 }
 
+/// Высота одной строки cue в пикселях.
+const CUE_LINE_HEIGHT_PX: f32 = 24.0;
+
+/// Горизонтальное выравнивание текста внутри cue-бокса.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CueTextAlign {
+    /// По левому краю бокса.
+    Start,
+    /// По центру бокса.
+    Center,
+    /// По правому краю бокса.
+    End,
+}
+
+/// Разрешённый бокс cue поверх видео.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CueBox {
+    /// Левый край, px.
+    pub x: f32,
+    /// Верхний край (якорь верха первой строки текста), px.
+    pub y: f32,
+    /// Ширина бокса, px.
+    pub w: f32,
+    /// Выравнивание текста внутри бокса.
+    pub align: CueTextAlign,
+}
+
+/// Cues, активные в момент `t` (секунды): `start_s <= t < end_s`. Исходный порядок сохраняется.
+pub fn active_cues(cues: &[VttCue], t: f64) -> Vec<&VttCue> {
+    cues.iter().filter(|c| c.start_s <= t && t < c.end_s).collect()
+}
+
+/// Убирает WebVTT-разметку из текста cue: теги (`<v Имя>`, `</v>`, `<b>`, `<i>`, `<c.class>`,
+/// `<lang ru>`, таймстампы `<00:01:30.500>`) и декодирует базовые HTML-сущности.
+/// Переводы строк сохраняются.
+pub fn strip_cue_markup(text: &str) -> String {
+    // Удаляем теги
+    let mut without_tags = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '<' {
+            // Пропускаем все символы до ближайшего '>' или до конца строки
+            for ch in chars.by_ref() {
+                if ch == '>' {
+                    break;
+                }
+            }
+        } else {
+            without_tags.push(c);
+        }
+    }
+
+    // Обрабатываем HTML-сущности
+    let mut result = String::with_capacity(without_tags.len());
+    let mut chars = without_tags.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '&' {
+            let mut entity = String::new();
+            let mut found_semi = false;
+            for ch in chars.by_ref() {
+                if ch == ';' {
+                    found_semi = true;
+                    break;
+                }
+                entity.push(ch);
+            }
+            if found_semi {
+                match entity.as_str() {
+                    "amp" => result.push('&'),
+                    "lt" => result.push('<'),
+                    "gt" => result.push('>'),
+                    "quot" => result.push('"'),
+                    "apos" => result.push('\''),
+                    "nbsp" => result.push('\u{00A0}'),
+                    "lrm" | "rlm" => {}
+                    _ => {
+                        result.push('&');
+                        result.push_str(&entity);
+                        result.push(';');
+                    }
+                }
+            } else {
+                // Голый '&' без ';': возвращаем и амперсанд, и съеденный хвост.
+                result.push('&');
+                result.push_str(&entity);
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+/// Парсит процентное значение из строки (например "80%"). Обрезает по первой запятой.
+/// Возвращает None если значение не является процентом, clamp результата в 0.0..=100.0.
+fn parse_percent(s: &str) -> Option<f32> {
+    let s = if let Some(idx) = s.find(',') {
+        &s[..idx]
+    } else {
+        s
+    };
+    if !s.ends_with('%') {
+        return None;
+    }
+    let num_str = &s[..s.len() - 1];
+    match num_str.parse::<f32>() {
+        Ok(n) => Some(n.clamp(0.0, 100.0)),
+        Err(_) => None,
+    }
+}
+
+/// Раскладывает cue-бокс в координатах видео-бокса.
+pub fn resolve_cue_box(settings: &VttCueSettings, vx: f32, vy: f32, vw: f32, vh: f32) -> CueBox {
+    // Ширина бокса
+    let size = parse_percent(settings.size.as_deref().unwrap_or("100%")).unwrap_or(100.0);
+    let w = vw * size / 100.0;
+
+    // Горизонтальная позиция якоря
+    let pos = parse_percent(settings.position.as_deref().unwrap_or("50%")).unwrap_or(50.0);
+    let ax = vx + vw * pos / 100.0;
+    let mut x = ax - w / 2.0;
+    let max_x = vx + vw - w;
+    if x < vx {
+        x = vx;
+    }
+    if x > max_x {
+        x = max_x;
+    }
+
+    // Вертикальная позиция
+    let mut y = if let Some(line_str) = &settings.line {
+        let line_val = if let Some(idx) = line_str.find(',') {
+            &line_str[..idx]
+        } else {
+            line_str
+        };
+        if let Some(percent) = parse_percent(line_val) {
+            vy + vh * percent / 100.0
+        } else {
+            if let Ok(n) = line_val.parse::<f32>() {
+                if n >= 0.0 {
+                    vy + n * CUE_LINE_HEIGHT_PX
+                } else {
+                    vy + vh + n * CUE_LINE_HEIGHT_PX
+                }
+            } else {
+                vy + vh * 0.85
+            }
+        }
+    } else {
+        vy + vh * 0.85
+    };
+    let max_y = vy + vh;
+    if y < vy {
+        y = vy;
+    }
+    if y > max_y {
+        y = max_y;
+    }
+
+    // Выравнивание текста
+    let align = match settings.align.as_deref() {
+        Some("start" | "left") => CueTextAlign::Start,
+        Some("end" | "right") => CueTextAlign::End,
+        _ => CueTextAlign::Center,
+    };
+
+    CueBox { x, y, w, align }
+}
+
 /// Информация о track-е медиа.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrackInfo {
@@ -420,5 +590,159 @@ mod tests {
     fn collect_video_tracks_no_video() {
         let doc = Document::new();
         assert!(collect_video_tracks(&doc).is_empty());
+    }
+
+    #[test]
+    fn active_cues_basic() {
+        let cues = vec![
+            VttCue {
+                id: None,
+                start_s: 0.0,
+                end_s: 1.0,
+                settings: VttCueSettings::default(),
+                text: "".to_string(),
+            },
+            VttCue {
+                id: None,
+                start_s: 0.5,
+                end_s: 2.0,
+                settings: VttCueSettings::default(),
+                text: "".to_string(),
+            },
+        ];
+        let active7 = active_cues(&cues, 0.7);
+        assert_eq!(active7.len(), 2);
+        assert_eq!(active7[0].start_s, 0.0);
+        assert_eq!(active7[1].start_s, 0.5);
+
+        let active1 = active_cues(&cues, 1.0);
+        assert_eq!(active1.len(), 1);
+        assert_eq!(active1[0].start_s, 0.5);
+
+        let active0 = active_cues(&cues, 0.0);
+        assert_eq!(active0.len(), 1);
+        assert_eq!(active0[0].start_s, 0.0);
+    }
+
+    #[test]
+    fn active_cues_empty() {
+        let cues: Vec<VttCue> = vec![];
+        assert!(active_cues(&cues, 5.0).is_empty());
+    }
+
+    #[test]
+    fn strip_markup_voice_and_bold() {
+        let input = "<v Роман>Привет <b>мир</b></v>";
+        assert_eq!(strip_cue_markup(input), "Привет мир");
+    }
+
+    #[test]
+    fn strip_markup_timestamp() {
+        let input = "<00:01:30.500>слово";
+        assert_eq!(strip_cue_markup(input), "слово");
+    }
+
+    #[test]
+    fn strip_markup_entities() {
+        let input = "a &amp;&lt;&gt;&quot;&apos; b &nbsp;&lrm;&rlm;";
+        assert_eq!(strip_cue_markup(input), "a &<>\"' b \u{00A0}");
+    }
+
+    #[test]
+    fn strip_markup_unknown_entity_kept() {
+        let input = "x &foo; y";
+        assert_eq!(strip_cue_markup(input), "x &foo; y");
+    }
+
+    #[test]
+    fn strip_markup_bare_ampersand_kept() {
+        assert_eq!(strip_cue_markup("Tom & Jerry"), "Tom & Jerry");
+    }
+
+    #[test]
+    fn strip_markup_plain_multiline() {
+        let input = "a\nb";
+        assert_eq!(strip_cue_markup(input), "a\nb");
+    }
+
+    #[test]
+    fn strip_markup_unterminated_tag() {
+        let input = "a <v Ром";
+        assert_eq!(strip_cue_markup(input), "a ");
+    }
+
+    #[test]
+    fn resolve_cue_box_defaults() {
+        let settings = VttCueSettings::default();
+        let box_ = resolve_cue_box(&settings, 0.0, 0.0, 1000.0, 500.0);
+        assert!((box_.w - 1000.0).abs() < 1e-4);
+        assert!((box_.x - 0.0).abs() < 1e-4);
+        assert!((box_.y - 425.0).abs() < 1e-4);
+        assert_eq!(box_.align, CueTextAlign::Center);
+    }
+
+    #[test]
+    fn resolve_cue_box_size_position() {
+        let settings = VttCueSettings {
+            size: Some("50%".to_string()),
+            position: Some("50%".to_string()),
+            ..Default::default()
+        };
+        let box_ = resolve_cue_box(&settings, 0.0, 0.0, 1000.0, 500.0);
+        assert!((box_.w - 500.0).abs() < 1e-4);
+        assert!((box_.x - 250.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn resolve_cue_box_line_percent() {
+        let settings = VttCueSettings {
+            line: Some("90%".to_string()),
+            ..Default::default()
+        };
+        let box_ = resolve_cue_box(&settings, 0.0, 0.0, 1000.0, 500.0);
+        assert!((box_.y - 450.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn resolve_cue_box_line_negative() {
+        let settings = VttCueSettings {
+            line: Some("-2".to_string()),
+            ..Default::default()
+        };
+        let box_ = resolve_cue_box(&settings, 0.0, 0.0, 1000.0, 500.0);
+        assert!((box_.y - 452.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn resolve_cue_box_align_variants() {
+        let settings_start = VttCueSettings {
+            align: Some("start".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(resolve_cue_box(&settings_start, 0.0, 0.0, 1000.0, 500.0).align, CueTextAlign::Start);
+
+        let settings_right = VttCueSettings {
+            align: Some("right".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(resolve_cue_box(&settings_right, 0.0, 0.0, 1000.0, 500.0).align, CueTextAlign::End);
+
+        let settings_center = VttCueSettings {
+            align: Some("center".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(resolve_cue_box(&settings_center, 0.0, 0.0, 1000.0, 500.0).align, CueTextAlign::Center);
+    }
+
+    #[test]
+    fn resolve_cue_box_position_comma_suffix() {
+        let settings = VttCueSettings {
+            position: Some("10%,line-left".to_string()),
+            size: Some("20%".to_string()),
+            ..Default::default()
+        };
+        let box_ = resolve_cue_box(&settings, 0.0, 0.0, 1000.0, 500.0);
+        assert!((box_.w - 200.0).abs() < 1e-4);
+        assert!((box_.x - 0.0).abs() < 1e-4);
     }
 }
