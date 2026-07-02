@@ -82,7 +82,7 @@ use lumen_devtools::DevToolsServer;
 use lumen_driver::BrowserSession;
 use lumen_knowledge::HistoryFts;
 use lumen_storage::session_export::{self, ExportedTab, SessionFile};
-use lumen_storage::{BfCache, BfCacheEntry, BfCachePayload, History, SearchHistory};
+use lumen_storage::{BfCache, BfCacheEntry, BfCachePayload, FrozenPage, History, SearchHistory};
 use lumen_dom::{
     Document, NodeData, NodeId, check_form_gate, check_navigation_gate,
     collect_iframes, check_popup_gate,
@@ -726,6 +726,7 @@ fn run_window_mode(
         load_generation: 0,
         ime_composing: None,
         bfcache: BfCache::new(16),
+        frozen_styles: HashMap::new(),
         nav_back: Vec::new(),
         nav_fwd: Vec::new(),
         nav_key_counter: 0,
@@ -3947,6 +3948,9 @@ struct PageSnapshot {
     stream_images_requested: std::collections::HashSet<String>,
     ime_composing: Option<String>,
     bfcache: BfCache,
+    /// Parsed stylesheets of frozen bfcache pages, keyed by URL.
+    /// Kept shell-side because `Stylesheet` is not serializable.
+    frozen_styles: HashMap<String, lumen_css_parser::Stylesheet>,
     nav_back: Vec<NavEntry>,
     nav_fwd: Vec<NavEntry>,
     form_state: forms::FormState,
@@ -5720,6 +5724,10 @@ struct Lumen {
     /// In-memory bfcache — HTML snapshots keyed by URL for instant back/forward
     /// restoration without a network round-trip (HTML Living Standard §8.6).
     bfcache: BfCache,
+    /// Parsed stylesheets of frozen bfcache pages, keyed by URL.
+    /// Kept shell-side because `Stylesheet` is not serializable.
+    /// Pruned lazily against `bfcache.has_frozen`.
+    frozen_styles: HashMap<String, lumen_css_parser::Stylesheet>,
     /// Navigation history stack — pages the user navigated away from.
     /// Top = most recent previous page.
     nav_back: Vec<NavEntry>,
@@ -13104,6 +13112,91 @@ impl Lumen {
         }
     }
 
+    /// Whether the current page may be stored as a full bfcache freeze.
+    /// Always `true` for now; ineligibility filters (open WebSocket/EventSource,
+    /// Cache-Control: no-store, unload handlers) land incrementally.
+    fn bfcache_eligible(&self) -> bool {
+        true
+    }
+
+    /// Thaw a frozen page — restore DOM + stylesheet, reinstall a fresh JS runtime
+    /// (heap resume gated on 10C.2), re-layout, restore scroll/title, fire
+    /// pageshow(persisted=true). Returns false when DOM bytes fail to decode or
+    /// the stylesheet was evicted (caller falls back to a normal reload).
+    fn bfcache_thaw(&mut self, entry: &BfCacheEntry, frozen: &FrozenPage) -> bool {
+        let url = entry.url.as_str();
+        let Some(stylesheet) = self.frozen_styles.get(url).cloned() else {
+            return false;
+        };
+        let Ok(doc) = Document::from_bytes(&frozen.dom_bytes) else {
+            return false;
+        };
+        let doc_arc = Arc::new(Mutex::new(doc));
+        self.layout_source = Some(LayoutSource {
+            document: Arc::clone(&doc_arc),
+            stylesheet,
+            html_source: None,
+        });
+        #[cfg(feature = "quickjs")]
+        {
+            match lumen_js::QuickJsRuntime::new() {
+                Ok(rt) => {
+                    rt.set_cookie_banner_dismiss(self.cookie_banner_dismiss);
+                    if self.deterministic {
+                        rt.set_deterministic_mode();
+                    }
+                    let ls_store = self
+                        .source
+                        .origin_str()
+                        .and_then(|o| self.ls_storage.get(&o).cloned());
+                    let idb_backend = self.idb_dir.as_deref().and_then(|d| idb_store_for_url(url, Some(d)));
+                    let fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>> = None;
+                    let ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>> = None;
+                    let sse_provider: Option<Arc<dyn lumen_core::ext::JsSseProvider>> = None;
+                    let sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>> = None;
+                    let cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>> = None;
+                    if let Err(e) = rt.install_dom(
+                        Arc::clone(&doc_arc),
+                        url,
+                        fetch_provider,
+                        ws_provider,
+                        sse_provider,
+                        ls_store,
+                        idb_backend,
+                        sw_backend,
+                        cache_backend,
+                        None,
+                        false,
+                    ) {
+                        eprintln!("bfcache thaw: JS DOM init failed: {e}");
+                    }
+                    self.js_ctx = Some(Box::new(QuickPersistentJs { rt }) as Box<dyn PersistentJs>);
+                }
+                Err(e) => {
+                    eprintln!("bfcache thaw: QuickJS init failed: {e}");
+                    self.js_ctx = None;
+                }
+            }
+        }
+        #[cfg(not(feature = "quickjs"))]
+        {
+            self.js_ctx = None;
+        }
+        self.relayout();
+        self.scroll_x = entry.scroll_x;
+        self.scroll_y = entry.scroll_y;
+        self.title = entry.title.clone();
+        if let Some(w) = self.window.as_ref() {
+            w.set_title(&window_title(self.title.as_deref()));
+        }
+        if let Some(js) = &self.js_ctx {
+            js.eval_js("_lumen_fire_page_lifecycle('pageshow', true)");
+        }
+        self.request_redraw();
+        self.commit_nav_state();
+        true
+    }
+
     /// Сохранить текущую страницу в bfcache и стек навигации,
     /// затем загрузить `source` как новую страницу.
     /// Очищает `nav_fwd` (аналог браузера при навигации вперёд из середины истории).
@@ -13137,9 +13230,40 @@ impl Lumen {
         }
         click_log::log_nav(&source.describe());
         self.hint.close();
-        // Snapshot current page into bfcache if it has an HTML source.
+        // Phase-3 freeze: serialize live DOM arena + shell-side stylesheet.
+        // JS heap suspend is gated on 10C.2, so event handlers are NOT retained.
+        // The thaw path reinstalls a fresh runtime over the restored DOM.
         let mut persisted = false;
-        if let Some(ref ls) = self.layout_source
+        if self.bfcache_eligible()
+            && let Some(ref ls) = self.layout_source
+            && let Some(url) = self.source.url_str()
+            && let Ok(guard) = ls.document.lock()
+            && let Ok(dom_bytes) = guard.to_bytes()
+        {
+            drop(guard);
+            self.frozen_styles.insert(url.to_owned(), ls.stylesheet.clone());
+            // Lazy prune: if we have too many stylesheets, drop those whose
+            // corresponding bfcache entries are no longer frozen.
+            if self.frozen_styles.len() > 32 {
+                let bf = &self.bfcache;
+                self.frozen_styles.retain(|k, _| bf.has_frozen(k));
+            }
+            self.bfcache.store(BfCacheEntry {
+                url: url.to_owned(),
+                payload: BfCachePayload::Frozen(FrozenPage {
+                    dom_bytes,
+                    js_heap: Vec::new(),
+                    css_source: String::new(),
+                }),
+                scroll_x: self.scroll_x,
+                scroll_y: self.scroll_y,
+                title: self.title.clone(),
+            });
+            persisted = true;
+        }
+        // Fallback: store an HTML snapshot if freeze was not possible.
+        if !persisted
+            && let Some(ref ls) = self.layout_source
             && let Some(ref html) = ls.html_source
             && let Some(url) = self.source.url_str()
         {
@@ -13291,24 +13415,29 @@ impl Lumen {
             same_doc_state_json: if cur_state != "null" { Some(cur_state) } else { None },
             nav_key: self.current_nav_key.clone(),
         });
-        // Try bfcache first.
+        // Try bfcache first: a Frozen payload thaws in place (no reload); an
+        // HtmlSnapshot falls back to the existing re-parse path.
         let restored_scroll = if let Some(url) = prev.source.url_str() {
-            if let Some(entry) = self.bfcache.retrieve(url) {
-                let html = match &entry.payload {
-                    BfCachePayload::HtmlSnapshot(h) => h.clone(),
-                    // Frozen (DOM + JS heap) restore is not yet wired — the JS
-                    // heap suspend path is stubbed. Falls back to a blank reload
-                    // until full freeze/thaw lands. Never reached today because
-                    // the store path only writes HtmlSnapshot payloads.
-                    BfCachePayload::Frozen(_) => String::new(),
-                };
-                let scroll_x = entry.scroll_x;
-                let scroll_y = entry.scroll_y;
-                let base_url = url.to_owned();
-                self.source = PageSource::Snapshot { html, base_url };
-                // Restored from bfcache → the next `pageshow` is `persisted=true`.
-                self.pending_pageshow_persisted = true;
-                Some((scroll_x, scroll_y))
+            if let Some(entry) = self.bfcache.retrieve(url).cloned() {
+                match entry.payload {
+                    BfCachePayload::Frozen(ref frozen) => {
+                        self.source = prev.source.clone();
+                        self.current_nav_key = prev.nav_key.clone();
+                        if self.bfcache_thaw(&entry, frozen) {
+                            return;
+                        }
+                        // Thaw failed (stylesheet evicted / DOM decode error):
+                        // fall through to a normal reload of the previous source.
+                        None
+                    }
+                    BfCachePayload::HtmlSnapshot(ref html) => {
+                        let base_url = url.to_owned();
+                        self.source = PageSource::Snapshot { html: html.clone(), base_url };
+                        // Restored from bfcache → the next `pageshow` is `persisted=true`.
+                        self.pending_pageshow_persisted = true;
+                        Some((entry.scroll_x, entry.scroll_y))
+                    }
+                }
             } else {
                 self.source = prev.source;
                 None
@@ -13402,24 +13531,29 @@ impl Lumen {
             same_doc_state_json: if cur_state != "null" { Some(cur_state) } else { None },
             nav_key: self.current_nav_key.clone(),
         });
-        // Try bfcache first.
+        // Try bfcache first: a Frozen payload thaws in place (no reload); an
+        // HtmlSnapshot falls back to the existing re-parse path.
         let restored_scroll = if let Some(url) = next.source.url_str() {
-            if let Some(entry) = self.bfcache.retrieve(url) {
-                let html = match &entry.payload {
-                    BfCachePayload::HtmlSnapshot(h) => h.clone(),
-                    // Frozen (DOM + JS heap) restore is not yet wired — the JS
-                    // heap suspend path is stubbed. Falls back to a blank reload
-                    // until full freeze/thaw lands. Never reached today because
-                    // the store path only writes HtmlSnapshot payloads.
-                    BfCachePayload::Frozen(_) => String::new(),
-                };
-                let scroll_x = entry.scroll_x;
-                let scroll_y = entry.scroll_y;
-                let base_url = url.to_owned();
-                self.source = PageSource::Snapshot { html, base_url };
-                // Restored from bfcache → the next `pageshow` is `persisted=true`.
-                self.pending_pageshow_persisted = true;
-                Some((scroll_x, scroll_y))
+            if let Some(entry) = self.bfcache.retrieve(url).cloned() {
+                match entry.payload {
+                    BfCachePayload::Frozen(ref frozen) => {
+                        self.source = next.source.clone();
+                        self.current_nav_key = next.nav_key.clone();
+                        if self.bfcache_thaw(&entry, frozen) {
+                            return;
+                        }
+                        // Thaw failed (stylesheet evicted / DOM decode error):
+                        // fall through to a normal reload of the next source.
+                        None
+                    }
+                    BfCachePayload::HtmlSnapshot(ref html) => {
+                        let base_url = url.to_owned();
+                        self.source = PageSource::Snapshot { html: html.clone(), base_url };
+                        // Restored from bfcache → the next `pageshow` is `persisted=true`.
+                        self.pending_pageshow_persisted = true;
+                        Some((entry.scroll_x, entry.scroll_y))
+                    }
+                }
             } else {
                 self.source = next.source;
                 None
@@ -16164,6 +16298,7 @@ impl Lumen {
             stream_images_requested: std::mem::take(&mut self.stream_images_requested),
             ime_composing: self.ime_composing.take(),
             bfcache: std::mem::replace(&mut self.bfcache, BfCache::new(16)),
+            frozen_styles: std::mem::take(&mut self.frozen_styles),
             nav_back: std::mem::take(&mut self.nav_back),
             nav_fwd: std::mem::take(&mut self.nav_fwd),
             form_state: std::mem::take(&mut self.form_state),
@@ -16237,6 +16372,7 @@ impl Lumen {
         self.stream_images_requested = snap.stream_images_requested;
         self.ime_composing = snap.ime_composing;
         self.bfcache = snap.bfcache;
+        self.frozen_styles = snap.frozen_styles;
         self.nav_back = snap.nav_back;
         self.nav_fwd = snap.nav_fwd;
         self.form_state = snap.form_state;
@@ -16321,6 +16457,7 @@ impl Lumen {
         self.stream_images_requested = std::collections::HashSet::new();
         self.ime_composing = None;
         self.bfcache = BfCache::new(16);
+        self.frozen_styles = HashMap::new();
         self.nav_back = Vec::new();
         self.nav_fwd = Vec::new();
         self.form_state = HashMap::new();

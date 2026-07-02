@@ -8,17 +8,32 @@
 
 ## Status
 
-**Phase 3 (v1.0) — in progress, NOT on main.** Shell-side freeze/thaw was implemented
-on branch `p1-ph3-bfcache` (commit `54ecd6c3`, worktree `.claude/worktrees/ph3-bfcache`)
-but never merged — that branch sits ~100 commits behind current main with 1 unmerged
-commit. **Main still has the pre-freeze/thaw code**: `navigate_to` only ever stores
-`BfCachePayload::HtmlSnapshot`, and the `BfCachePayload::Frozen` match arm in
-`navigate_back`/`navigate_forward` (`crates/shell/src/main.rs:~13267`) is dead code
-with a comment saying so. Found during P5 health-check 2026-07-01 (docs-drift audit);
-BUGS.md/health-check does not track this — reintegration is a P1 task (rebase the
-branch's diff onto current main, since a straight merge will conflict after ~100
-commits of drift). `js_heap: Vec::new()` placeholder in that branch is still gated on
-the separate blocked QuickJS heap serialization work (10C.2).
+**Phase 3 (v1.0) — DOM freeze/thaw merged to main 2026-07-02** (reintegration of the
+stale `54ecd6c3` slice as a fresh port; mixed-programming session, Laguna M.1 worker
++ reviewer). What landed:
+
+- `navigate_to` freezes the outgoing document: `Document::to_bytes()` into
+  `BfCachePayload::Frozen(FrozenPage)` + a clone of the parsed `Stylesheet` into
+  the new per-tab shell-side map `Lumen::frozen_styles` (keyed by URL; `Stylesheet`
+  is not serializable, so it never enters `FrozenPage`; lazily pruned against
+  `bfcache.has_frozen` above 32 entries). HTML-snapshot store remains as the
+  fallback when the freeze fails.
+- `navigate_back` / `navigate_forward` on a `Frozen` hit call `bfcache_thaw()`:
+  restore DOM + stylesheet, reinstall a **fresh** QuickJS runtime over the restored
+  document (no script re-run — the DOM keeps all pre-freeze mutations), re-layout,
+  restore scroll/title, fire `pageshow(persisted=true)`, skip `reload()` entirely.
+  `bfcache_thaw` returns `false` (→ normal reload) on DOM decode failure or an
+  evicted stylesheet.
+- Live acceptance (MCP window, local HTTP): page A writes a random token into the
+  DOM → navigate to B → `history.back()` → the token is byte-identical (a reload
+  would have re-run the script and produced a new token) and the address bar is
+  back on A.
+
+Still gated on 10C.2 (QuickJS heap serialization): `js_heap` stays `Vec::new()`,
+so JS listeners/globals do NOT survive the freeze — the thaw installs a fresh
+runtime. Eligibility filters (open WebSocket/EventSource, `Cache-Control:
+no-store`, unload handlers) are still `bfcache_eligible() == true` for all pages.
+`bfcache_restore_ms` benchmark (step 9) not yet added.
 
 ---
 
