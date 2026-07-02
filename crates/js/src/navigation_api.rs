@@ -105,7 +105,9 @@ class NavigationHistoryEntry {
     get _shellEntries() {
       try {
         const raw = _lumen_navigation_entries_json();
-        return JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+        return Array.isArray(parsed.entries) ? parsed.entries : [];
       } catch { return []; }
     }
 
@@ -145,7 +147,7 @@ class NavigationHistoryEntry {
         const key = this._mkKey();
         const id  = this._mkId();
         const stateJson = JSON.stringify(state !== undefined ? state : null);
-        const action = replace ? 'Replace' : 'Push';
+        const action = replace ? 1 : 0;
         try {
           _lumen_navigation_request(action, url, key, stateJson);
         } catch { reject(new Error('Navigation queue full')); return; }
@@ -180,7 +182,7 @@ class NavigationHistoryEntry {
     traverseTo(key, options = {}) {
       return new Promise((resolve, reject) => {
         try {
-          _lumen_navigation_request('TraverseTo', '', key, '');
+          _lumen_navigation_request(4, '', key, '');
         } catch { reject(new Error('Navigation queue full')); return; }
         setTimeout(() => {
           const entries = this._shellEntries;
@@ -200,8 +202,9 @@ class NavigationHistoryEntry {
     _traverseBy(delta, options = {}) {
       return new Promise((resolve, reject) => {
         setTimeout(() => {
+          // navigation.back()/forward() only ever use ±1.
           try {
-            _lumen_navigation_request('TraverseBy', '', '', String(delta));
+            _lumen_navigation_request(delta < 0 ? 2 : 3, '', '', '');
           } catch { reject(new Error('Navigation queue full')); return; }
           setTimeout(() => {
             const entries = this._shellEntries;

@@ -6685,7 +6685,11 @@ function _lumen_deliver_popstate(state_json, url) {
 }
 
 var history = {
-    get length()  { return _lumen_history_length(); },
+    get length()  {
+        var m = _lumen_history_length();
+        try { var st = JSON.parse(_lumen_navigation_entries_json()); if (st && st.entries && st.entries.length > m) return st.entries.length; } catch (e) {}
+        return m;
+    },
     get state()   {
         try { return JSON.parse(_lumen_history_state_json()); } catch(e) { return null; }
     },
@@ -6721,9 +6725,19 @@ var history = {
         // its nav_back/nav_fwd stacks and delivers the destination popstate (same-
         // document) or reload (full-document). We no longer fire popstate here —
         // that avoids a double popstate and lets the shell decide same-doc vs reload.
-        var ok = _lumen_history_go((delta | 0));
+        var d = (delta | 0);
+        var ok = _lumen_history_go(d);
         if (ok) {
-            _lumen_history_traverse((delta | 0));
+            _lumen_history_traverse(d);
+        } else {
+            // The mirror is a same-document read cache; after a cross-document
+            // navigation only the shell state knows the full session history.
+            try {
+                var st = JSON.parse(_lumen_navigation_entries_json());
+                if (st && st.entries && st.entries.length > 0 && 0 <= st.index + d && st.index + d < st.entries.length) {
+                    _lumen_history_traverse(d);
+                }
+            } catch (e) {}
         }
     },
 };
@@ -24954,6 +24968,56 @@ mod tests {
                  && typeof window.navigation === 'object'",
             )
             .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn navigation_entries_reads_shell_state() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval(
+                "_lumen_navigation_set_state('{\"entries\":[{\"url\":\"https://a/\",\"key\":\"nav-1\",\"id\":\"id-1\",\"state\":null},{\"url\":\"https://b/\",\"key\":\"nav-2\",\"id\":\"id-2\",\"state\":null}],\"index\":1}');\
+                 navigation.entries().length === 2\
+                 && navigation.entries()[0].key === 'nav-1'\
+                 && navigation.currentEntry.key === 'nav-2'\
+                 && navigation.canGoBack() === true\
+                 && navigation.canGoForward() === false",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn navigation_traverse_to_queues_numeric_action() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("navigation.traverseTo('nav-1'); true").unwrap();
+        let q = rt.take_nav_updates();
+        assert!(q.iter().any(|(action, _, key, _)| matches!(action, NavAction::TraverseTo) && key == "nav-1"));
+    }
+
+    #[test]
+    fn history_go_falls_back_to_shell_state() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("_lumen_navigation_set_state('{\"entries\":[{\"url\":\"https://a/\",\"key\":\"nav-1\",\"id\":\"id-1\",\"state\":null},{\"url\":\"https://b/\",\"key\":\"nav-2\",\"id\":\"id-2\",\"state\":null}],\"index\":1}')").unwrap();
+        rt.eval("history.go(-1); true").unwrap();
+        let travs = rt.take_history_traversals();
+        assert!(travs.contains(&-1));
+    }
+
+    #[test]
+    fn history_go_shell_state_out_of_range_not_queued() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("_lumen_navigation_set_state('{\"entries\":[{\"url\":\"https://a/\",\"key\":\"nav-1\",\"id\":\"id-1\",\"state\":null},{\"url\":\"https://b/\",\"key\":\"nav-2\",\"id\":\"id-2\",\"state\":null}],\"index\":1}')").unwrap();
+        rt.eval("history.go(-5); true").unwrap();
+        let travs = rt.take_history_traversals();
+        assert!(travs.is_empty());
+    }
+
+    #[test]
+    fn history_length_prefers_shell_entries() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("_lumen_navigation_set_state('{\"entries\":[{\"url\":\"https://a/\",\"key\":\"nav-1\",\"id\":\"id-1\",\"state\":null},{\"url\":\"https://b/\",\"key\":\"nav-2\",\"id\":\"id-2\",\"state\":null}],\"index\":1}')").unwrap();
+        let r = rt.eval("history.length === 2").unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 
