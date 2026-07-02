@@ -9,6 +9,22 @@ Append-only журнал свипов здоровья кодовой базы (
 
 ---
 
+## 2026-07-02 — `docs` (аудит документации + чистка)
+
+Ветка: `p5-docs-cleanup`. Полный аудит ~90 md-файлов (4 параллельных ревизора + ручная сверка спорных находок с кодом).
+
+| Подсистема | Итог |
+|---|---|
+| **удалено** | `docs/plan/history.md` (deprecated-заглушка), `docs/plan/roadmap.md` (76 КБ архив, путал с корневым ROADMAP.md), `SESSION-HANDOFF-2026-06-27.md` (разовый handoff), брифы выполненных задач `docs/tasks/ph3-indexeddb.md` (MERGED 2026-06-25) и `rp-3-gzip-deflate.md` (RP-3 done) |
+| **дрейф** | Закрыты все 8 пунктов «Known doc-drift» из CAPABILITIES.md: image.md (GIF/AVIF из Deferred → Done), paint.md (femtovg ⬜→✅ default), dom.md (+contenteditable.rs), js.md (+coverage note ~90 API), network.md (cookie jar/SOCKS5 из Deferred), storage.md (+SW store/CacheStorage), css-parser.md (+at-rules, 229→316 тестов), phases.md:31 (streaming → ✅ PH1-2) |
+| **ROADMAP** | P2-usability `active`→`ready` (все подзадачи done, U-6 ready); P3-bfcache/P3-navapi `planned`→`active` (незавершённые ветки `p1-ph3-*`, см. запись 2026-07-01) |
+| **ссылки** | Битые ссылки на удалённые файлы почищены: lumen-plan.md, doc-sync.md, commands.md, CLAUDE.md, docs/tasks/README.md (RP-секция: брифы rp-1/2/4 уже отсутствовали), ph3-tier2-web-apis.md, ph3-cdp-shim.md |
+| **прочее** | CSS-SPECS.md Quick stats пересчитан (2026-05-24 → 2026-07-02: ✅~237/🟡~135/⬜~114); спекулятивные брифы `p2-view-transitions-l1-full.md`, `p2-wpt-integration.md` помечены «not tracked in ROADMAP.md» |
+
+**Не тронуто (нужны отдельные решения):** переименование `docs/plans/` vs `docs/plan/`; реструктуризация changelog-стиля `subsystems/js.md`/`layout.md`; папка `docs/roles/` с единственным P1.md.
+
+---
+
 ## 2026-07-01 — `full` (clippy + stubs + branches + docs + deps)
 
 Ветка: `p5-health-2026-07-01`.

@@ -27,5 +27,6 @@
 - **CSS `@font-face` (CSS Fonts L4 §4):** `Stylesheet.font_faces: Vec<FontFaceRule>`. Phase 0: full descriptor parsing — family, src (url/local + format hints), weight, style, stretch, display, unicode-range, variant, feature-settings, variation-settings. No fetch/loading yet (shell task). 6 new tests added (229 total).
 - **CSS `@import url(...)` (CSS Cascade L4 §6.5):** `Stylesheet.imports: Vec<ImportRule>`. Parser only extracts URL — fetch and incorporation into cascade — consumer task (shell).
 - **CSS Properties and Values L1 §1.1 `@property`:** `Stylesheet { rules, properties }` — alongside regular rules stores `Vec<PropertyRule { name, syntax, inherits, initial_value }>`. Other @-rules syntactically skipped as before.
+- **More at-rules since shipped (see `parser.rs`):** `@supports` (condition evaluation), `@keyframes` (animation keyframe blocks), `@scope`, `@container` (container queries). This file does not detail them — `CAPABILITIES.md` is the source of truth for at-rule coverage.
 - **Deferred:** namespace prefix in selectors, typed declaration values (length / color / calc — types stored in layout, not parser), `:checked` / `:indeterminate` / `:default` / `:in-range` / `:out-of-range` (require runtime form-state).
-- 229 tests.
+- 316 `#[test]` fns in `src/` (2026-07-02; older per-feature counts in bullets above are historical).

@@ -25,9 +25,8 @@ Do not re-read a whole file to make a small update — use `grep -n` to find the
 
 ## What NOT to update
 
-- `lumen-plan.md` — 24-line TOC only, no status content
-- `docs/plan/history.md` — deprecated stub (use `git log`)
-- `docs/plan/roadmap.md` — historical reference, not a task tracker
+- `lumen-plan.md` — short TOC only, no status content
+- Implementation chronology — that is `git log`, not a doc (the former `docs/plan/history.md` / `docs/plan/roadmap.md` were deleted 2026-07-02; task tracking lives in `ROADMAP.md` + `STATUS-PN.md`)
 
 ---
 

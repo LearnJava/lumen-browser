@@ -3,6 +3,10 @@
 Crate providing the `JsRuntime` implementation backed by QuickJS via `rquickjs` v0.11.
 Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
 
+> **Coverage note (2026-07-02):** the code wires **~90 Web-API modules**; this file curates
+> only the highlights with implementation detail. For the full shipped-API list use
+> `CAPABILITIES.md` (source of truth), not this file.
+
 ## Scope
 
 - `QuickJsRuntime` struct: wraps `rquickjs::Runtime + Context` under a `Mutex`.

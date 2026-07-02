@@ -12,8 +12,7 @@
 **Phase 3 (v1.0), Automation track, OPTIONAL — on-demand per ADR-006.**
 
 Do not start this task until the graduation trigger fires (see "Trigger condition" below).
-Roadmap references: `docs/plan/phases.md:138`, `docs/plan/roadmap.md:230` (item 8I),
-`docs/plan/engine.md:176`.
+Roadmap references: `docs/plan/phases.md:138`, `docs/plan/engine.md:176`.
 
 ---
 

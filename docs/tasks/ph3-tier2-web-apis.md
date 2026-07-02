@@ -50,7 +50,7 @@ Each link is to `docs/tasks/`.
 
 | Task file | API cluster | Current phase state |
 |---|---|---|
-| [ph3-indexeddb.md](ph3-indexeddb.md) | IndexedDB (W3C IDB 3.0) | Full JS shim + per-origin SQLite backend present (`crates/js/src/dom.rs:9452`). Transaction semantics and cursor edge-cases need WPT hardening. |
+| IndexedDB — MERGED 2026-06-25, brief deleted | IndexedDB (W3C IDB 3.0) | Full JS shim + per-origin SQLite backend present (`crates/js/src/dom.rs:9452`). Transaction semantics and cursor edge-cases need WPT hardening. |
 | [ph3-service-workers.md](ph3-service-workers.md) | Service Worker runtime | Lifecycle + registration persist ✅; fetch interception Phase 1 (SW runs in dedicated QuickJS thread, `FetchEvent`/`respondWith` dispatched). In-SW `fetch()` / `cache.addAll()` precaching absent. |
 | [ph3-websockets-sse-fetch.md](ph3-websockets-sse-fetch.md) | WebSocket + SSE + Fetch/AbortController | WebSocket (RFC 6455 + permessage-deflate) ✅; SSE ✅; Fetch + AbortController ✅. Phase 3 = edge-case hardening + AbortSignal.timeout/any. |
 | [ph3-navigation-history-api.md](ph3-navigation-history-api.md) | Navigation API + History API | `window.history` push/replace/back/forward present. Navigation API (`navigation.navigate()`, `NavigationEvent`) is a JS-only stub (`crates/js/src/navigation_api.rs`). |
