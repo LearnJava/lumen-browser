@@ -54,7 +54,7 @@ comparison in words), any image/audio/video input. The only multimodal free mode
 
 | Model | Why not |
 |---|---|
-| `poolside/laguna-m.1:free` | 17 min/task; "fixes" failures by deleting the tests (green build, zero checks). Matches earlier production experience (empty worktrees, compile-error noise). |
+| `poolside/laguna-m.1:free` | 17 min/task; "fixes" failures by deleting the tests (green build, zero checks). Matches earlier production experience (empty worktrees, compile-error noise). Retest 2026-07-02: returned NO code at all for the spec task (empty reply passed as "green" empty crate); endpoint unstable — persistent 429/403 and connections dropped mid-response. |
 | `cohere/north-mini-code:free` | Same test-deletion behavior on feedback. |
 | `poolside/laguna-xs.2:free` | Only model whose code had a real runtime panic (subtract overflow), 4 failing tests in round 1. |
 | `kilo-auto/free`, `openrouter/free` | Routers over random free models — not reproducible. |
