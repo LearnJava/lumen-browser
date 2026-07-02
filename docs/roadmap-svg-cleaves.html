@@ -481,6 +481,7 @@
      "id": "P2-scrolldriven",
      "title": "CSS Scroll-Driven Animations L1",
      "status": "done",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): парсинг + resolve прогресса от scroll/view готовы (scroll_timeline.rs); дошить — композит animated background-color (BUG-127/231)",
      "bugs": [
       "BUG-127"
      ]
@@ -518,7 +519,8 @@
     {
      "id": "P3-h3",
      "title": "HTTP/3",
-     "status": "planned"
+     "status": "planned",
+     "note": "OPEN (сверка с кодом 2026-07-02, в коде пусто): HTTP/3 — нет QUIC/H3 транспорта (только H1.1+H2)"
     },
     {
      "id": "PH3-20",
@@ -533,7 +535,8 @@
     {
      "id": "P3-ext",
      "title": "Расширения (минимальный формат)",
-     "status": "planned"
+     "status": "done",
+     "note": "реализовано (сверка с кодом 2026-07-02): расширения Phase 0 (MV3-subset: manifest.json loader + content_scripts + chrome.runtime стаб) — shell/extensions"
     },
     {
      "id": "P3-wpt",
@@ -586,12 +589,14 @@
     {
      "id": "P3-spell",
      "title": "Spell check (Hunspell, русский словарь)",
-     "status": "planned"
+     "status": "planned",
+     "note": "OPEN (сверка с кодом 2026-07-02, только null-стаб): проверка орфографии (Hunspell) — trait без реализации"
     },
     {
      "id": "P3-varfonts",
      "title": "Variable fonts axes runtime (font-variation-settings)",
      "status": "done",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): fvar/gvar/avar/HVAR/MVAR + apply_variations в CPU/wgpu (variation.rs); дошить — проводка в живое окно femtovg (BUG-109, сейчас дефолт-instance)",
      "bugs": [
       "BUG-109"
      ]
@@ -619,172 +624,194 @@
     {
      "id": "P3-subgrid",
      "title": "CSS Subgrid (grid-template-rows/columns: subgrid)",
-     "status": "planned"
+     "status": "planned",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): алгоритм subgrid.rs наследует треки родителя; дошить — CSS-проводка keyword subgrid в каскад (CSS-SPECS §42)"
     },
     {
      "id": "P3-anchorpos",
      "title": "CSS Anchor Positioning L1 (anchor()/anchor-size()/position-area)",
-     "status": "planned"
+     "status": "planned",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): анкер-алгоритм anchor.rs (resolve_anchor/inset_area) готов; дошить — CSS-проводка anchor-name/position-anchor/inset-area/anchor-size() в каскад (BUG-126)"
     },
     {
      "id": "P3-nesting",
      "title": "CSS Nesting (полный спек: & и вложенные правила)",
-     "status": "planned"
+     "status": "done",
+     "note": "реализовано (сверка с кодом 2026-07-02): полный CSS Nesting L1 — parser.rs expand_nesting (& явный/неявный + вложенные @media/@supports/@layer/@container), 20 тестов"
     },
     {
      "id": "P3-scope",
      "title": "CSS @scope (scoped styling + donut scope)",
-     "status": "planned"
+     "status": "planned",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): @scope root-matching готов (node_is_in_scope); дошить — donut/limit (inner-scope), CSS-SPECS §53 Phase 2"
     },
     {
      "id": "P3-stylequery",
      "title": "CSS Container Style Queries (style()/state())",
-     "status": "planned"
+     "status": "planned",
+     "note": "OPEN (сверка с кодом 2026-07-02, в коде пусто): CSS Container Style Queries (style()/state())"
     },
     {
      "id": "P3-textwrap",
      "title": "CSS text-wrap: balance / pretty",
-     "status": "planned"
+     "status": "planned",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): text-wrap-mode/style парсятся в ComputedStyle; дошить — алгоритм balance/pretty в line-break (сейчас поля не влияют на перенос)"
     },
     {
      "id": "P3-has",
      "title": "Селектор :has() (полная поддержка в каскаде)",
-     "status": "planned"
+     "status": "done",
+     "note": "реализовано (сверка с кодом 2026-07-02): :has() relational matching в каскаде — style.rs matches_relative (Selectors L4 §17.2)"
     },
     {
      "id": "P3-colormix",
      "title": "CSS color-mix() + relative color syntax",
-     "status": "planned"
+     "status": "done",
+     "note": "реализовано (сверка с кодом 2026-07-02): color-mix() + relative color syntax — color_mix.rs (все color-spaces srgb/hsl/hwb/lab/lch/oklab/oklch/xyz)"
     },
     {
      "id": "P3-regprop",
      "title": "CSS @property (registered custom props + Typed OM)",
-     "status": "planned"
+     "status": "done",
+     "note": "реализовано (сверка с кодом 2026-07-02): @property registration + typed enforcement — style.rs PropertyRule/registry (syntax/inherits/initial-value)"
     },
     {
      "id": "P3-counterstyle",
      "title": "CSS @counter-style (кастомные маркеры списков)",
-     "status": "planned"
+     "status": "planned",
+     "note": "OPEN (сверка с кодом 2026-07-02, в коде пусто): @counter-style (counter-reset/increment есть, at-rule нет)"
     },
     {
      "id": "P3-multicol",
      "title": "CSS Multi-column layout (column-count/width/gap/rule)",
-     "status": "planned"
+     "status": "done",
+     "note": "реализовано (сверка с кодом 2026-07-02): column-count/width/gap/rule + балансировка высоты — box_tree.rs multi_column_layout + column-rule paint"
     },
     {
      "id": "P3-contentvis",
      "title": "CSS content-visibility + contain-intrinsic-size",
-     "status": "planned"
+     "status": "planned",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): content-visibility hidden/auto работают (skip + ratchet); дошить — применение contain-intrinsic-size как размер-хинта в layout"
     },
     {
      "id": "P3-fragmentation",
      "title": "CSS Fragmentation (break-inside / widows / orphans)",
-     "status": "planned"
+     "status": "planned",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): break-before/after/inside + orphans/widows парсятся, применяются в pagination.rs (print); дошить — применение вне печати (multicol/regions)"
     },
     {
      "id": "P3-initialletter",
      "title": "CSS initial-letter (буквица drop-cap)",
-     "status": "planned"
+     "status": "planned",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): Phase 0 drop-cap float (size×line-height, sink); дошить — точное cap-height/baseline выравнивание, raised-cap, RTL"
     },
     {
      "id": "P3-vertical",
      "title": "CSS writing-mode: вертикальный текст (полный layout)",
-     "status": "planned"
+     "status": "planned",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): block axis-swap vertical-rl/lr готов (vertical.rs); дошить — вертикальный inline-поток (Phase 2, lay_out_vertical_inline_run)"
     },
     {
      "id": "P3-resizeobs",
      "title": "ResizeObserver",
-     "status": "planned"
+     "status": "done",
+     "note": "реализовано (сверка с кодом 2026-07-02): ResizeObserver observe/unobserve/disconnect + delivery после relayout — dom.rs"
     },
     {
      "id": "P3-intersectobs2",
      "title": "IntersectionObserver v2 (visibility tracking)",
-     "status": "planned"
+     "status": "done",
+     "note": "реализовано (сверка с кодом 2026-07-02): IntersectionObserver + threshold/isIntersecting/rootMargin — dom.rs (используется lazy-load)"
     },
     {
      "id": "P3-streams",
      "title": "Streams API (Readable/Writable/Transform)",
-     "status": "planned"
+     "status": "done",
+     "note": "реализовано (сверка с кодом 2026-07-02): ReadableStream/WritableStream/TransformStream (getReader/tee/pipeTo/pipeThrough) — dom.rs (Phase 0, без pull-backpressure)"
     },
     {
      "id": "P3-webcrypto",
      "title": "Web Crypto SubtleCrypto (полный набор алгоритмов)",
-     "status": "planned"
+     "status": "planned",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): ECDSA-P256 + HMAC-SHA* + AES-GCM (subtle_crypto.rs); дошить — RSA/Ed25519/PBKDF2/HKDF/AES-CBC-CTR/standalone digest (~20 алгоритмов спека)"
     },
     {
      "id": "P3-weblocks",
      "title": "Web Locks API",
-     "status": "planned"
+     "status": "done",
+     "note": "реализовано (сверка с кодом 2026-07-02): navigator.locks request/query (exclusive/shared, ifAvailable, steal, signal) — web_locks.rs (Phase 0, без cross-tab)"
     },
     {
      "id": "P3-broadcast",
      "title": "BroadcastChannel",
-     "status": "planned"
+     "status": "done",
+     "note": "реализовано (сверка с кодом 2026-07-02): BroadcastChannel cross-runtime (process-global hub + pump в event loop) — broadcast_channel.rs"
     },
     {
      "id": "P3-structclone",
      "title": "structuredClone + Transferable objects",
-     "status": "planned"
+     "status": "planned",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): structuredClone (примитивы/Map/Set/массивы/объекты) — dom.rs; дошить — Transferable (ArrayBuffer/ImageBitmap/OffscreenCanvas transfer)"
     },
     {
      "id": "P3-ricallback",
      "title": "requestIdleCallback / IdleDeadline",
-     "status": "planned"
+     "status": "done",
+     "note": "реализовано (сверка с кодом 2026-07-02): requestIdleCallback/IdleDeadline (timeout honored) — dom.rs (idle эмулируется таймером)"
     },
     {
      "id": "P3-clipboard",
      "title": "Async Clipboard API (read/write text+image)",
-     "status": "planned"
-    },
-    {
-     "id": "P3-trustedtypes",
-     "title": "Trusted Types (защита от DOM XSS)",
-     "status": "planned"
+     "status": "done",
+     "note": "реализовано (сверка с кодом 2026-07-02): navigator.clipboard readText/writeText через platform provider — clipboard.rs (Phase 0, текст; image — стаб)"
     },
     {
      "id": "P3-sanitizer",
      "title": "HTML Sanitizer API",
-     "status": "planned"
+     "status": "done",
+     "note": "реализовано (сверка с кодом 2026-07-02): Sanitizer/setHTML — sanitizer.rs (Phase 0, regex: срез <script> + on*-атрибуты)"
     },
     {
      "id": "P3-customstate",
      "title": "ElementInternals + custom element states (:state())",
-     "status": "planned"
+     "status": "planned",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): ElementInternals + CustomStateSet готовы (element_internals.rs); дошить — CSS-селектор :state() в каскаде (P4-handoff)"
     },
     {
      "id": "P3-pointerfull",
      "title": "Pointer Events L3 (coalesced / predicted events)",
-     "status": "planned"
+     "status": "planned",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): base PointerEvent L2 работает; дошить — L3 getCoalescedEvents/getPredictedEvents (сейчас возвращают [])"
     },
     {
      "id": "P3-compressionstream",
      "title": "Compression Streams (gzip/deflate/brotli)",
-     "status": "planned"
+     "status": "planned",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): классы CompressionStream/DecompressionStream есть, но throw для всех форматов; дошить — реальный gzip/deflate/brotli (переиспользовать декодеры lumen-network flate/brotli)"
     },
     {
      "id": "P3-cookiestore",
      "title": "Cookie Store API",
-     "status": "planned"
-    },
-    {
-     "id": "P3-cacheapi",
-     "title": "Cache API + offline-first навигация",
-     "status": "planned"
+     "status": "done",
+     "note": "реализовано (сверка с кодом 2026-07-02): cookieStore get/getAll/set/delete + CookieChangeEvent — cookie_store.rs (Phase 0, in-memory)"
     },
     {
      "id": "P3-webtransport",
      "title": "WebTransport (поверх HTTP/3)",
-     "status": "planned"
+     "status": "planned",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): стаб webtransport.rs всегда reject (нет QUIC); дошить — зависит от QUIC/H3 (P3-h3)"
     },
     {
      "id": "P3-reporting",
      "title": "Reporting API + Network Error Logging",
-     "status": "planned"
+     "status": "done",
+     "note": "реализовано (сверка с кодом 2026-07-02): ReportingObserver observe/disconnect/takeRecords — reporting_api.rs"
     },
     {
      "id": "P3-earlyhints",
      "title": "fetch Priority Hints + 103 Early Hints",
-     "status": "planned"
+     "status": "planned",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): FetchPriority enum (High/Med/Low) есть — core/event.rs; дошить — обработка 103 Early Hints ответа"
     },
     {
      "id": "P3-storagebuckets",
@@ -795,77 +822,92 @@
     {
      "id": "P3-permissions",
      "title": "Permissions API (query / onchange)",
-     "status": "planned"
+     "status": "done",
+     "note": "реализовано (сверка с кодом 2026-07-02): navigator.permissions.query -> PermissionStatus — dom.rs (desktop-политика)"
     },
     {
      "id": "P3-notifications",
      "title": "Notifications API + системные уведомления",
-     "status": "planned"
+     "status": "done",
+     "note": "реализовано (сверка с кодом 2026-07-02): Notification + requestPermission + show/close/click, OS-доставка через шелл — notifications_bindings.rs"
     },
     {
      "id": "P3-pushapi",
      "title": "Push API (через Service Worker)",
-     "status": "planned"
+     "status": "planned",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): PushManager subscribe/getSubscription стаб (push_api.rs), подписки in-memory; дошить — реальная доставка push-endpoint"
     },
     {
      "id": "P3-offscreencanvas",
      "title": "OffscreenCanvas + рендеринг в Worker",
-     "status": "planned"
+     "status": "done",
+     "note": "реализовано (сверка с кодом 2026-07-02): OffscreenCanvas getContext/transferToImageBitmap + transferControlToOffscreen, работает в Worker — offscreen_canvas.rs"
     },
     {
      "id": "P3-webgl2",
      "title": "WebGL2 подмножество",
-     "status": "planned"
+     "status": "planned",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): WebGL2-контекст + GLSL ES 3.0 интерпретатор (webgl_bindings.rs); дошить — present фреймбуфера в страничный <canvas> (как P4-webgl, сейчас только readPixels)"
     },
     {
      "id": "P3-avif",
      "title": "AVIF / JPEG XL декодирование",
-     "status": "planned"
+     "status": "planned",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): AVIF-декодер за feature-флагом avif (libavif+cmake+nasm), в дефолт-сборке не декодит; дошить — AVIF в дефолте + JPEG XL (сейчас sniff-only Err)"
     },
     {
      "id": "P3-webvtt",
      "title": "WebVTT субтитры для <video> (<track>)",
-     "status": "planned"
+     "status": "planned",
+     "note": "OPEN (сверка с кодом 2026-07-02, только комменты): WebVTT/<track> — нет парсинга cue и рендера"
     },
     {
      "id": "P3-mediasession",
      "title": "Media Session API",
-     "status": "planned"
+     "status": "done",
+     "note": "реализовано (сверка с кодом 2026-07-02): MediaSession metadata/playbackState/setActionHandler/setPositionState — media_session.rs (Phase 0, JS-сторона)"
     },
     {
      "id": "P3-pip",
      "title": "Picture-in-Picture API",
-     "status": "planned"
+     "status": "planned",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): Document PiP requestWindow готов (document_pip.rs), Element.requestPictureInPicture частично; дошить — element-PiP + полноценное OS-окно"
     },
     {
      "id": "P3-imagebitmap",
      "title": "createImageBitmap + ImageBitmapRenderingContext",
-     "status": "planned"
+     "status": "planned",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): createImageBitmap(ImageData) + transferToImageBitmap (offscreen_canvas.rs); дошить — ImageBitmapRenderingContext (bitmaprenderer)"
     },
     {
      "id": "P3-dialog",
      "title": "<dialog> модальные окна + атрибут inert",
-     "status": "planned"
+     "status": "done",
+     "note": "реализовано (сверка с кодом 2026-07-02): <dialog> show/showModal/close + returnValue + inert + возврат фокуса — dom.rs + layout"
     },
     {
      "id": "P3-popover",
      "title": "Popover API (атрибут popover + ::backdrop)",
-     "status": "planned"
+     "status": "done",
+     "note": "реализовано (сверка с кодом 2026-07-02): Popover API showPopover/hidePopover/togglePopover + :popover-open — dom.rs + parser"
     },
     {
      "id": "P3-selectmenu",
      "title": "Кастомизируемый <select> (appearance: base-select)",
-     "status": "planned"
+     "status": "planned",
+     "note": "OPEN (сверка с кодом 2026-07-02, отдан P4): кастомный <select> appearance:base-select — CSS есть, HTMLSelectMenu нет"
     },
     {
      "id": "P3-lazyembed",
      "title": "loading=lazy для <iframe> + fetchpriority",
-     "status": "planned"
+     "status": "planned",
+     "note": "OPEN (сверка с кодом 2026-07-02, в коде пусто): loading=lazy для <iframe> + fetchpriority"
     },
     {
      "id": "P3-viewtransnav",
      "title": "View Transitions для cross-document навигации (MPA)",
-     "status": "planned"
+     "status": "planned",
+     "note": "PARTIAL (сверка с кодом 2026-07-02): SPA startViewTransition + ::view-transition-* готовы (layout); дошить — cross-document (MPA) навигационные переходы"
     },
     {
      "id": "RP",
