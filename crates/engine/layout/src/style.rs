@@ -3530,19 +3530,27 @@ pub struct ContainerContext {
     pub height: Option<f32>,
     /// The container's `container-name` values (for named queries).
     pub names: Vec<String>,
+    /// Custom properties (`--*`) контейнера — для style() queries (CSS Containment L3 §4).
+    pub custom_props: HashMap<String, String>,
 }
 
 /// Evaluates a raw @container condition string against a `ContainerContext`.
 ///
 /// Phase 0: handles `(min-width: Npx)`, `(max-width: Npx)`, `(min-height: Npx)`,
 /// `(max-height: Npx)`, `(width: Npx)`, `(height: Npx)`, and `and`/`or`/`not` operators.
+/// Also supports `style(--prop: value)` and boolean `style(--prop)` forms
+/// (CSS Containment L3 §4). Phase 0 limitations:
+/// - Only a single declaration inside `style()` (no comma-separated list).
+/// - Literal string comparison, no `var()` substitution.
+/// - Only custom properties (`--*`) are recognized; other names return false.
+///
 /// Unknown features → false (safe fallback).
 pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> bool {
     let s = condition.trim();
-    // Handle `not (...)`.
+    // Handle `not (...)` and `not style(...)`.
     if let Some(rest) = s.strip_prefix("not") {
         let rest = rest.trim();
-        if rest.starts_with('(') {
+        if rest.starts_with('(') || rest.to_ascii_lowercase().starts_with("style(") {
             return !evaluate_container_condition(rest, ctx);
         }
     }
@@ -3552,6 +3560,30 @@ pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> 
     }
     if let Some((lhs, rhs)) = split_top_level_logical(s, " or ") {
         return evaluate_container_condition(lhs, ctx) || evaluate_container_condition(rhs, ctx);
+    }
+    // Handle `style(...)` queries.
+    let s_lower = s.to_ascii_lowercase();
+    if s_lower.starts_with("style(") && s.ends_with(')') {
+        // Extract content between `style(` and the final `)`.
+        let inner = &s[6..s.len()-1].trim();
+        // Boolean form: `style(--prop)`
+        if !inner.contains(':') {
+            let name = inner.trim();
+            if name.starts_with("--") {
+                return ctx.custom_props.get(name).is_some_and(|v| !v.trim().is_empty());
+            }
+            return false;
+        }
+        // Declaration form: `style(--prop: value)`
+        if let Some((name, value)) = inner.split_once(':') {
+            let name = name.trim();
+            let value = value.trim();
+            if name.starts_with("--") {
+                return ctx.custom_props.get(name).map(|v| v.trim()) == Some(value);
+            }
+            return false;
+        }
+        return false;
     }
     // Feature: `(feature: value)`.
     let inner = s.strip_prefix('(').and_then(|x| x.strip_suffix(')'));

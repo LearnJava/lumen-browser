@@ -536,6 +536,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `container-type` / `container-name` | ✅ | |
 | `@container` | ✅ | condition matching ✅; 2nd-pass re-layout ✅; cq* units ✅ 2026-05-25 |
 | Container query units (`cq*`) | ✅ | cqw/cqh/cqi/cqb/cqmin/cqmax 2026-05-25 |
+| Style queries `style(--prop[: value])` | 🟡 | Phase 0 2026-07-02: single declaration, literal compare, custom props only; `state()` ⬜ |
 
 ### [T3] Counters & Lists (rendering)
 
