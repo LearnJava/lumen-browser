@@ -7315,6 +7315,81 @@ mod tests {
         assert_eq!(div.rect.height, 0.0, "contain:strict → auto height must be 0, got {}", div.rect.height);
     }
 
+    // ── CSS Container Style Queries (Phase 0) ──────────────────────────────
+
+    fn style_ctx(props: &[(&str, &str)]) -> crate::ContainerContext {
+        let mut map = std::collections::HashMap::new();
+        for (k, v) in props {
+            map.insert(k.to_string(), v.to_string());
+        }
+        crate::ContainerContext {
+            width: 200.0,
+            height: Some(100.0),
+            names: vec![],
+            custom_props: map,
+        }
+    }
+
+    #[test]
+    fn style_query_with_value_true() {
+        let ctx = style_ctx(&[("--theme", "dark")]);
+        assert!(crate::evaluate_container_condition("style(--theme: dark)", &ctx));
+    }
+
+    #[test]
+    fn style_query_with_value_false() {
+        let ctx = style_ctx(&[("--theme", "light")]);
+        assert!(!crate::evaluate_container_condition("style(--theme: dark)", &ctx));
+    }
+
+    #[test]
+    fn style_query_with_value_missing() {
+        let ctx = style_ctx(&[]);
+        assert!(!crate::evaluate_container_condition("style(--theme: dark)", &ctx));
+    }
+
+    #[test]
+    fn style_query_boolean_true() {
+        let ctx = style_ctx(&[("--theme", "dark")]);
+        assert!(crate::evaluate_container_condition("style(--theme)", &ctx));
+    }
+
+    #[test]
+    fn style_query_boolean_false() {
+        let ctx = style_ctx(&[]);
+        assert!(!crate::evaluate_container_condition("style(--theme)", &ctx));
+    }
+
+    #[test]
+    fn style_query_with_extra_spaces() {
+        let ctx = style_ctx(&[("--theme", "dark")]);
+        assert!(crate::evaluate_container_condition("style(--theme:  dark )", &ctx));
+    }
+
+    #[test]
+    fn style_query_not() {
+        let ctx = style_ctx(&[("--theme", "light")]);
+        assert!(crate::evaluate_container_condition("not style(--theme: dark)", &ctx));
+    }
+
+    #[test]
+    fn style_query_combined_with_size() {
+        let ctx = style_ctx(&[("--theme", "dark")]);
+        assert!(crate::evaluate_container_condition("(min-width: 150px) and style(--theme: dark)", &ctx));
+    }
+
+    #[test]
+    fn style_query_combined_with_size_false() {
+        let ctx = style_ctx(&[("--theme", "light")]);
+        assert!(!crate::evaluate_container_condition("(min-width: 150px) and style(--theme: dark)", &ctx));
+    }
+
+    #[test]
+    fn style_query_non_custom_property_returns_false() {
+        let ctx = style_ctx(&[]);
+        assert!(!crate::evaluate_container_condition("style(width: 100px)", &ctx));
+    }
+
     // ── CSS Container Queries L1 ──────────────────────────────────────────
 
     /// @container (min-width) — rule applies when container is wide enough.
@@ -7332,6 +7407,60 @@ mod tests {
         assert!(
             (p.rect.height - 40.0).abs() < 0.5,
             "container min-width:150px should apply to 200px container, got height={}",
+            p.rect.height,
+        );
+    }
+
+    /// @container style(--prop: value) — rule applies when container has the custom property.
+    #[test]
+    fn container_style_query_applies() {
+        let root = lay_measured(
+            "<div><p></p></div>",
+            "div { container-type: size; width: 200px; height: 100px; --theme: dark; }
+             @container style(--theme: dark) { p { height: 40px; } }",
+            400.0,
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!(
+            (p.rect.height - 40.0).abs() < 0.5,
+            "container style(--theme: dark) should apply, got height={}",
+            p.rect.height,
+        );
+    }
+
+    /// @container style(--prop: value) — rule does not apply when value differs.
+    #[test]
+    fn container_style_query_not_applies() {
+        let root = lay_measured(
+            "<div><p></p></div>",
+            "div { container-type: size; width: 200px; height: 100px; --theme: light; }
+             @container style(--theme: dark) { p { height: 40px; } }",
+            400.0,
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!(
+            p.rect.height < 1.0,
+            "container style(--theme: dark) should NOT apply with --theme: light, got height={}",
+            p.rect.height,
+        );
+    }
+
+    /// @container (min-width) and style(...) — combined condition.
+    #[test]
+    fn container_style_query_combined_with_size() {
+        let root = lay_measured(
+            "<div><p></p></div>",
+            "div { container-type: size; width: 200px; height: 100px; --theme: dark; }
+             @container (min-width: 150px) and style(--theme: dark) { p { height: 40px; } }",
+            400.0,
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!(
+            (p.rect.height - 40.0).abs() < 0.5,
+            "combined (min-width: 150px) and style(--theme: dark) should apply, got height={}",
             p.rect.height,
         );
     }
