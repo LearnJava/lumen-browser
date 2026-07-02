@@ -204,6 +204,8 @@ fn parse_timestamp(s: &str) -> Option<f64> {
     }
 }
 
+// VTT-SLICE2-FNS
+
 /// Информация о track-е медиа.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrackInfo {
@@ -421,4 +423,6 @@ mod tests {
         let doc = Document::new();
         assert!(collect_video_tracks(&doc).is_empty());
     }
+
+    // VTT-SLICE2-TESTS
 }
