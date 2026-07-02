@@ -971,9 +971,9 @@
       {
        "id": "RP-6",
        "title": "RP-6: Синтетический bold + подбор шрифта",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Аудит 2026-07-02: нет синтеза bold/italic — в CPU/headless-пути только бандловый Inter Regular, все заголовки не жирные. Fake-bold (обводка) + fake-italic (shear) как fallback + Inter-Bold/-Italic в бандл. Бриф docs/tasks/rp6-synthetic-bold-font-match.md"
+       "note": "Срез A 2026-07-02: синтетический bold (двойной блит/повторный fill_text со сдвигом ≤2px, advance-метрики не меняются) + fake-italic (shear 12°: CPU — наклон контура глифа, femtovg — Transform2D вокруг baseline) как fallback в обоих текст-путях; настоящий bold/italic-фейс от FontProvider имеет приоритет (resolve_font_chain возвращает true_bold/true_italic). Срез B (Inter-Bold/-Italic в бандл, системный подбор в headless) отложен. Бриф docs/tasks/rp6-synthetic-bold-font-match.md"
       },
       {
        "id": "RP-7",

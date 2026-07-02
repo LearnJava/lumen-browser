@@ -372,14 +372,15 @@ pub(crate) fn rasterize_cpu(
                 }
             }
             DisplayCommand::DrawText {
-                rect, text, font_size, color, tab_size, ..
+                rect, text, font_size, color, tab_size, font_weight, font_style, ..
             } => {
-                // Text uses the bundled Inter face only; family/weight/style are
-                // ignored on the CPU path (no FontProvider here). Clip is the
-                // active rectangular `overflow` region, applied per glyph pixel.
+                // Text uses the bundled Inter face only; family is ignored on
+                // the CPU path (no FontProvider here), weight/style are
+                // emulated (synthetic bold/italic). Clip is the active
+                // rectangular `overflow` region, applied per glyph pixel.
                 rasterize_text(
                     layers.last_mut().expect("base layer"), rect, text, *font_size, color,
-                    *tab_size, clip_rect.as_ref(),
+                    *tab_size, clip_rect.as_ref(), font_weight.0, *font_style,
                 )?;
             }
             // CSS Color L3 §3.2 — `opacity < 1` renders the element's subtree as
@@ -2231,6 +2232,13 @@ fn load_bundled_face() -> Option<CpuFace<'static>> {
 /// then a one-shot `fill_rect` paints the text colour through it — the same
 /// `SourceOver` blend as every other CPU primitive, so anti-aliased glyph
 /// edges composite identically to fills.
+///
+/// Synthetic styles (RP-6): the bundled face is Regular-only, so
+/// `font_weight >= 600` is emulated by double-blitting each glyph with a small
+/// horizontal offset (fake bold) and a non-`Normal` `font_style` by shearing
+/// the glyph outline (fake italic). Both leave advances untouched — layout
+/// metrics must not change.
+#[allow(clippy::too_many_arguments)]
 fn rasterize_text(
     pixmap: &mut tiny_skia::Pixmap,
     rect: &Rect,
@@ -2239,6 +2247,8 @@ fn rasterize_text(
     color: &Color,
     tab_size: f32,
     clip: Option<&Rect>,
+    font_weight: u16,
+    font_style: lumen_layout::FontStyle,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if text.is_empty() || font_size <= 0.0 || color.a == 0 {
         return Ok(());
@@ -2251,6 +2261,9 @@ fn rasterize_text(
     let baseline_y = rect.y + font_size * ascent_ratio;
     let advance_scale = font_size / f32::from(face.units_per_em);
     let rasterizer = lumen_font::Rasterizer::new(font_size, face.units_per_em);
+    let bold_offset = (font_size / 24.0).clamp(0.5, 2.0);
+    let synth_bold = font_weight >= 600;
+    let synth_italic = !matches!(font_style, lumen_layout::FontStyle::Normal);
 
     let width = pixmap.width();
     let height = pixmap.height();
@@ -2289,19 +2302,38 @@ fn rasterize_text(
         for sg in &shaped {
             let pen_x = cursor_x + sg.x_offset as f32 * advance_scale;
             let glyph_baseline = baseline_y - sg.y_offset as f32 * advance_scale;
-            if let Ok(Some(glyph)) = face.font.glyph_resolved(sg.glyph_id)
-                && let Some(bitmap) = rasterizer.rasterize(&glyph)
-                && blit_glyph_coverage(
-                    &mut mask,
-                    &bitmap,
-                    pen_x,
-                    glyph_baseline,
-                    clip,
-                    width,
-                    height,
-                )
-            {
-                any_coverage = true;
+            if let Ok(Some(mut glyph)) = face.font.glyph_resolved(sg.glyph_id) {
+                if synth_italic {
+                    shear_glyph(&mut glyph);
+                }
+                if let Some(bitmap) = rasterizer.rasterize(&glyph) {
+                    if blit_glyph_coverage(
+                        &mut mask,
+                        &bitmap,
+                        pen_x,
+                        glyph_baseline,
+                        clip,
+                        width,
+                        height,
+                    ) {
+                        any_coverage = true;
+                    }
+                    // Fake bold: second blit shifted right; the advance below
+                    // stays the same so line metrics are unchanged.
+                    if synth_bold
+                        && blit_glyph_coverage(
+                            &mut mask,
+                            &bitmap,
+                            pen_x + bold_offset,
+                            glyph_baseline,
+                            clip,
+                            width,
+                            height,
+                        )
+                    {
+                        any_coverage = true;
+                    }
+                }
             }
             cursor_x += sg.x_advance as f32 * advance_scale;
         }
@@ -2321,6 +2353,40 @@ fn rasterize_text(
         .ok_or("Invalid pixmap dimensions")?;
     pixmap.fill_rect(full, &paint, tiny_skia::Transform::identity(), Some(&mask));
     Ok(())
+}
+
+/// Horizontal shear factor for synthetic italic — tan 12°.
+const ITALIC_SKEW: f32 = 0.2126;
+
+/// Shear a glyph outline horizontally for synthetic italic:
+/// `x' = x + y * ITALIC_SKEW` (font units, y-up), bbox expanded accordingly.
+/// Composite outlines are left unchanged (the rasterizer skips them anyway).
+fn shear_glyph(glyph: &mut lumen_font::Glyph) {
+    match &mut glyph.outline {
+        lumen_font::Outline::Simple(contours) => {
+            for contour in contours.iter_mut() {
+                for point in contour.points.iter_mut() {
+                    point.x = (point.x as f32 + point.y as f32 * ITALIC_SKEW).round() as i16;
+                }
+            }
+        }
+        lumen_font::Outline::Composite(_) => return,
+    }
+    let s = ITALIC_SKEW;
+    let candidates = [
+        glyph.bbox.x_min as f32 + glyph.bbox.y_min as f32 * s,
+        glyph.bbox.x_min as f32 + glyph.bbox.y_max as f32 * s,
+        glyph.bbox.x_max as f32 + glyph.bbox.y_min as f32 * s,
+        glyph.bbox.x_max as f32 + glyph.bbox.y_max as f32 * s,
+    ];
+    let mut min_val = candidates[0];
+    let mut max_val = candidates[0];
+    for &v in &candidates[1..] {
+        min_val = min_val.min(v);
+        max_val = max_val.max(v);
+    }
+    glyph.bbox.x_min = min_val.floor() as i16;
+    glyph.bbox.x_max = max_val.ceil() as i16;
 }
 
 /// Composite one glyph's coverage bitmap into `mask`, returning whether any

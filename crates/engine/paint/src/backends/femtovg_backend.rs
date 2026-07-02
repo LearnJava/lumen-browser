@@ -1473,13 +1473,20 @@ impl FemtovgBackend {
     /// Generic keywords (serif/sans-serif/monospace/cursive/fantasy/system-ui)
     /// are skipped — they fall through to Inter which covers Latin well enough.
     /// Returns at least `[inter_id]` when no provider is set.
+    ///
+    /// The two booleans report whether the FIRST provider-resolved face is a
+    /// true bold (`weight >= 600`) / true italic — callers use them to decide
+    /// whether synthetic bold/italic fallbacks are needed (RP-6). When the
+    /// chain is bundled-Inter-only both flags are `false`.
     fn resolve_font_chain(
         &mut self,
         families: &[String],
         weight: u16,
         style: FontStyle,
-    ) -> Vec<femtovg::FontId> {
+    ) -> (Vec<femtovg::FontId>, bool, bool) {
         let mut ids: Vec<femtovg::FontId> = Vec::new();
+        let mut true_bold = false;
+        let mut true_italic = false;
 
         if let Some(provider) = self.font_provider.clone() {
             let core_style = match style {
@@ -1499,6 +1506,10 @@ impl FemtovgBackend {
                     && let Some(id) = self.load_font_by_path(&rec.path.clone(), &provider)
                     && !ids.contains(&id)
                 {
+                    if ids.is_empty() {
+                        true_bold = rec.weight >= 600;
+                        true_italic = !matches!(rec.style, lumen_core::ext::FontStyle::Normal);
+                    }
                     ids.push(id);
                 }
             }
@@ -1518,20 +1529,50 @@ impl FemtovgBackend {
             }
         }
 
-        ids
+        (ids, true_bold, true_italic)
     }
 
-    /// Рисует текст с уже разрешённой font chain.
+    /// Рисует текст с опциональными синтетическими bold/italic (RP-6).
     ///
-    /// Baseline ≈ 80% от font_size (аппроксимация;
-    /// точные метрики — из font metrics в будущих задачах).
-    fn draw_text(&mut self, x: f32, y: f32, text: &str, font_size: f32, color: Color, chain: &[femtovg::FontId]) {
+    /// Fake bold — повторный `fill_text` со сдвигом вправо; fake italic —
+    /// shear-трансформ ~12° вокруг baseline. Оба эффекта чисто визуальные:
+    /// advance-метрики layout-а не меняются.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_text_styled(
+        &mut self,
+        x: f32,
+        y: f32,
+        text: &str,
+        font_size: f32,
+        color: Color,
+        chain: &[femtovg::FontId],
+        synth_bold: bool,
+        synth_italic: bool,
+    ) {
         let mut paint = femtovg::Paint::color(lumen_to_fvg(color));
         if !chain.is_empty() {
             paint.set_font(chain);
         }
         paint.set_font_size(font_size);
-        let _ = self.canvas.fill_text(x, y + font_size * 0.8, text, &paint);
+        let baseline_y = y + font_size * 0.8;
+
+        if synth_italic {
+            self.canvas.save();
+            let s = 0.2126; // tan 12°
+            let transform = femtovg::Transform2D([1.0, 0.0, -s, 1.0, s * baseline_y, 0.0]);
+            self.canvas.set_transform(&transform);
+        }
+
+        let _ = self.canvas.fill_text(x, baseline_y, text, &paint);
+
+        if synth_bold {
+            let bold_offset = (font_size / 24.0).clamp(0.5, 2.0);
+            let _ = self.canvas.fill_text(x + bold_offset, baseline_y, text, &paint);
+        }
+
+        if synth_italic {
+            self.canvas.restore();
+        }
     }
 
     /// BUG-109: renders a text run with `font-variation-settings` axes applied,
@@ -2544,8 +2585,13 @@ impl FemtovgBackend {
                 {
                     return;
                 }
-                let chain = self.resolve_font_chain(font_family, font_weight.0, *font_style);
-                self.draw_text(rect.x, rect.y, text, *font_size, *color, &chain);
+                let (chain, true_bold, true_italic) =
+                    self.resolve_font_chain(font_family, font_weight.0, *font_style);
+                let synth_bold = font_weight.0 >= 600 && !true_bold;
+                let synth_italic = !matches!(font_style, FontStyle::Normal) && !true_italic;
+                self.draw_text_styled(
+                    rect.x, rect.y, text, *font_size, *color, &chain, synth_bold, synth_italic,
+                );
             }
             DisplayCommand::PushClipRect { rect } => {
                 self.canvas.save();
