@@ -10,10 +10,46 @@
 
 ## Status
 
-**Phase 3 future item.** Not yet started. Recorded here to preserve architecture
-decisions and pre-computed entry points before Phase 3 begins.
+**Phase 3 — unlocked (v0.5.0 shipped), not started. Recommended as the highest-leverage
+Phase 3 item after the RP render-parity fixes, but NOT the immediate next step.**
 
-Phase 2 target version: v0.5.0. This task unlocks after that milestone.
+### Audit 2026-07-02 — evidence for/against migrating now
+
+Real-world audit (14 sites vs Edge, headless `--screenshot`) put hard numbers on the JS
+problem:
+
+- **github.com did not finish rendering in 280 s.** All ~50 script bundles fetched by 6.6 s,
+  then silence — the stall is in JS execution and/or layout, not the network. QuickJS is an
+  interpreter with no JIT; on megabytes of modern bundle JS it is 10–100× slower than V8 and
+  in practice hangs.
+- Static/server-rendered sites (Hacker News, gnu.org, example.com, w3.org) render fine — their
+  content does not depend on heavy client JS. QuickJS is adequate there.
+
+**Recommendation: do the render-parity (RP-*) fixes first, V8 second.** Rationale:
+
+1. The *majority* of "renders unlike Edge" defects the audit found are **not** JS-engine
+   problems — they are: external SVG not decoded (RP-5), `@media print` link leak (BUG-268),
+   no synthetic bold (RP-6), anti-bot 403 (RP-7), and the CPU-rasterizer blow-up (BUG-267).
+   None of these get better by swapping the JS engine, and together they account for most of
+   what a user sees wrong on a page that *does* load. They are also far cheaper (M/L each vs
+   XL for V8).
+2. V8 is an **XL, multi-session, high-risk** task (Windows linking, 15–150 MB binary, ~35
+   binding modules to port, startup-snapshot work). Starting it before the cheap parity wins
+   land means the browser still looks broken on simple sites while a huge migration is in
+   flight.
+3. But V8 is the **only** fix for the class github.com falls into (heavy SPAs), and it also
+   unblocks the long-blocked heap-snapshot task 10C.2. Once RP-* is done, V8 is the single
+   biggest remaining lever for "open arbitrary sites like Edge" and should be the flagship
+   Phase 3 effort.
+
+**Interim mitigation (optional, before committing to V8):** add a hard JS execution budget /
+watchdog so pages like github.com fail gracefully (stop the script, render what parsed)
+instead of hanging the render for minutes. Cheap, and improves the worst case regardless of
+whether V8 lands. Track under RP-7's sibling or a small shell task if pursued.
+
+Phase 2 target version v0.5.0 has shipped — this task is unlocked. See the RP-* briefs
+(`rp5-external-svg-images.md`, `rp6-synthetic-bold-font-match.md`, `rp7-antibot-403.md`) and
+`bugs/BUG-267-OPEN.md` / `bugs/BUG-268-OPEN.md` for the work that should precede it.
 
 ---
 

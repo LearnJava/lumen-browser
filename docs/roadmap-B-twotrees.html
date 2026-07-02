@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-02",
  "counts": {
-  "open": 23,
+  "open": 25,
   "fixed": 217,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 240,
+ "total_bugs": 242,
  "phases": [
   {
    "id": "P0",
@@ -523,7 +523,9 @@
     {
      "id": "P3-v8",
      "title": "Переход на V8 (rusty_v8) + Tier 2 Web APIs",
-     "status": "planned"
+     "status": "planned",
+     "size": "XL",
+     "note": "Разблокирован (v0.5.0 вышел). Единственное лекарство для тяжёлых SPA: аудит 2026-07-02 — github.com не дорендерился за 280 с (ресурсы загружены к 6.6 с, затык в QuickJS-интерпретаторе без JIT). Рекомендация: делать ПОСЛЕ дешёвых RP-5…RP-9 (они закрывают бо́льшую часть «не как в Edge» и не зависят от JS-движка), затем V8 как флагман Phase 3. Опц. промежуточный митигейт — watchdog/бюджет исполнения JS, чтобы страницы падали graceful, а не висли. Бриф docs/tasks/ph3-v8-migration.md"
     },
     {
      "id": "P3-idb",
@@ -886,8 +888,8 @@
     {
      "id": "RP",
      "title": "RP: Рендер-паритет реального веба",
-     "status": "done",
-     "note": "Открывать произвольные сайты так же, как Edge; декомпозиция в RP-1…RP-4",
+     "status": "active",
+     "note": "Открывать произвольные сайты так же, как Edge. RP-1…RP-4 done; RP-5…RP-9 заведены по аудиту 14 сайтов vs Edge 2026-07-02 (см. память realworld-site-audit-2026-07): внешние SVG, синтетический bold, анти-бот 403, CPU-растеризатор, print-стили",
      "tasks": [
       {
        "id": "RP-1",
@@ -916,6 +918,47 @@
        "status": "done",
        "size": "L",
        "note": "float:left/right + clear для любых блоков: float-контекст пробрасывается во вложенные не-BFC блоки (line-box'ы сужаются вместо клипа), BFC-блоки сдвигаются, clear/вложенные float на глубине; drop-cap не регрессировал"
+      },
+      {
+       "id": "RP-5",
+       "title": "RP-5: Внешние SVG-картинки",
+       "status": "planned",
+       "size": "L",
+       "note": "Аудит 2026-07-02: внешние SVG (`<img src=*.svg>`, `background-image:url(*.svg)`) не декодируются (`lumen-image` знает только png/jpeg/gif/webp/avif) — пропадают логотипы/иконки на большинстве сайтов. Мост «SVG-байты → растр» через собственный SVG-движок (инлайн-SVG уже рисуется). Бриф docs/tasks/rp5-external-svg-images.md"
+      },
+      {
+       "id": "RP-6",
+       "title": "RP-6: Синтетический bold + подбор шрифта",
+       "status": "planned",
+       "size": "M",
+       "note": "Аудит 2026-07-02: нет синтеза bold/italic — в CPU/headless-пути только бандловый Inter Regular, все заголовки не жирные. Fake-bold (обводка) + fake-italic (shear) как fallback + Inter-Bold/-Italic в бандл. Бриф docs/tasks/rp6-synthetic-bold-font-match.md"
+      },
+      {
+       "id": "RP-7",
+       "title": "RP-7: Устойчивость к анти-бот 403",
+       "status": "planned",
+       "size": "M",
+       "note": "Аудит 2026-07-02: 4/14 сайтов не открылись на уровне HTTP — 403 (stackoverflow/crates.io/ria.ru), 500 (docs.rs). TLS уже под Chrome-130 JA3 + Chrome-заголовки, значит режет более умная защита (вероятно `Accept: */*` вместо браузерного, дрейф JA3/H2-fingerprint, либо Cloudflare JS-challenge). Диагностика → дешёвые фиксы → решение по challenge. Бриф docs/tasks/rp7-antibot-403.md"
+      },
+      {
+       "id": "RP-8",
+       "title": "RP-8: Ускорение CPU-растеризатора (layer bbox)",
+       "status": "planned",
+       "size": "L",
+       "note": "Аудит 2026-07-02: CPU-растеризатор аллоцирует полнополотный Pixmap на каждый Push-слой и игнорирует bounds у PushFilter → 136 с paint на lenta.ru (headless). Только CPU-путь (скриншот/PDF/тест-гейт), окно на GPU не затронуто. Фикс по bbox. См. BUG-267",
+       "bugs": [
+        "BUG-267"
+       ]
+      },
+      {
+       "id": "RP-9",
+       "title": "RP-9: Фильтр print-таблиц стилей",
+       "status": "planned",
+       "size": "S",
+       "note": "Аудит 2026-07-02: шелл грузит `<link rel=stylesheet media=\"print\">` в экранный каскад → print-стили протекают (URL после ссылок на w3.org). Гейт по media у `<link>`. См. BUG-268",
+       "bugs": [
+        "BUG-268"
+       ]
       }
      ]
     }
@@ -2635,6 +2678,20 @@
    "title": "TEST-02/04 (`color-named`/`color-alpha`) и TEST-56 (`mix-blend-mode`) пересекли порог 0.5% после коммита 51dbf9fd (FontMeasurer: хардкод ascent/descent 0.8/0.2…",
    "component": "paint (font-metrics)",
    "date": "2026-06-27",
+   "debtor": false
+  },
+  "BUG-267": {
+   "status": "open",
+   "title": "CPU-путь рендера (`--screenshot`/PDF/IPC-снимок/cpu_vs_edge-гейт) катастрофически медленный на больших полотнах с тенями/фильтрами: `lenta.ru` `--screenshot` =…",
+   "component": "paint (CPU-растеризатор)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-268": {
+   "status": "open",
+   "title": "Экранный рендер применяет `<link rel=stylesheet media=\"print\">`: на `www.w3.org` после каждой ссылки печатается её URL в угловых скобках (print-правило `a::afte…",
+   "component": "shell (загрузчик стилей) + css-parser (media)",
+   "date": null,
    "debtor": false
   }
  },

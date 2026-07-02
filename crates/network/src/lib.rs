@@ -5,9 +5,11 @@
 //! **HTTP/1.1 keep-alive + connection pool** (переиспользование TCP/TLS
 //! между запросами к одному origin-у), retry-on-stale при попытке писать
 //! в закрытое сервером idle-соединение.
-//! TLS handshake негоциирует ALPN `[h2, http/1.1]`; HTTP/2 пока возвращает
-//! placeholder-ошибку (5A.1 — клиентский H2-стек в 5A.2–5A.6).
-//! Не поддерживает: HTTP/2 wire-protocol, кэширование, аутентификацию.
+//! TLS handshake негоциирует ALPN `[h2, http/1.1]`; при `h2` запрос идёт через
+//! полноценный клиентский HTTP/2-стек (`h2/`: frame codec RFC 9113, HPACK
+//! RFC 7541, мультиплексирование потоков, flow-control, пул по origin) —
+//! `check_negotiated_alpn` → `h2_do_request`. HTTP/1.1 остаётся для origin-ов
+//! без h2.
 //!
 //! URL парсится в `lumen_core::url::Url` — никакого собственного парсера здесь
 //! не держим. Из `Url` берём scheme, host (Punycode для DNS/TLS/Host header
