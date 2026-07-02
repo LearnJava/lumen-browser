@@ -21,6 +21,7 @@ pub mod module;
 pub mod pcs;
 pub mod punycode;
 pub mod sandbox;
+pub mod spell;
 pub mod sri;
 pub mod url;
 pub mod web_storage;
