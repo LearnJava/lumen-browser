@@ -52,6 +52,7 @@ mod platform;
 mod prefetch;
 mod reader_view;
 mod source_view;
+mod svg_image;
 pub mod surface;
 mod runtime;
 mod scroll;
@@ -3800,6 +3801,21 @@ fn decode_image(
         };
     }
 
+    // RP-5: внешний SVG не имеет растрового декодера — рендерим разметку
+    // через обычный layout/paint-pipeline в intrinsic-размере.
+    if lumen_image::is_svg(&bytes) {
+        return match svg_image::rasterize_svg(&bytes, base, sink) {
+            Some(image) => {
+                eprintln!(
+                    "Загружена SVG-картинка: {} ({}×{})",
+                    raw_src, image.width, image.height
+                );
+                Some(DecodedImage::Static(Arc::new(image)))
+            }
+            None => None,
+        };
+    }
+
     match lumen_image::decode_to(&bytes, target) {
         Ok(image) => {
             eprintln!(
@@ -4245,11 +4261,20 @@ fn fetch_and_decode_background_images(
                 return None;
             }
         };
-        let image = match lumen_image::decode_to(&bytes, target) {
-            Ok(i) => i,
-            Err(e) => {
-                eprintln!("Не декодируется bg-картинка {url}: {e}");
-                return None;
+        // RP-5: внешний SVG рендерится через layout/paint-pipeline, как в
+        // decode_image; остальные форматы — обычным растровым декодером.
+        let image = if lumen_image::is_svg(&bytes) {
+            match svg_image::rasterize_svg(&bytes, base, sink) {
+                Some(i) => i,
+                None => return None,
+            }
+        } else {
+            match lumen_image::decode_to(&bytes, target) {
+                Ok(i) => i,
+                Err(e) => {
+                    eprintln!("Не декодируется bg-картинка {url}: {e}");
+                    return None;
+                }
             }
         };
         eprintln!(

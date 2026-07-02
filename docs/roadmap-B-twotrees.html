@@ -75,12 +75,12 @@
 {
  "generated": "2026-07-02",
  "counts": {
-  "open": 25,
+  "open": 26,
   "fixed": 217,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 242,
+ "total_bugs": 243,
  "phases": [
   {
    "id": "P0",
@@ -964,9 +964,9 @@
       {
        "id": "RP-5",
        "title": "RP-5: Внешние SVG-картинки",
-       "status": "planned",
+       "status": "done",
        "size": "L",
-       "note": "Аудит 2026-07-02: внешние SVG (`<img src=*.svg>`, `background-image:url(*.svg)`) не декодируются (`lumen-image` знает только png/jpeg/gif/webp/avif) — пропадают логотипы/иконки на большинстве сайтов. Мост «SVG-байты → растр» через собственный SVG-движок (инлайн-SVG уже рисуется). Бриф docs/tasks/rp5-external-svg-images.md"
+       "note": "2026-07-02: внешние SVG рисуются — `lumen_image::is_svg` сниффит разметку, шелл (`svg_image.rs`) оборачивает её в минимальный HTML и рендерит через обычный детерминированный pipeline (`parse_and_layout` → `paint_ordered` → `render_to_image_cpu`) в intrinsic-размере (width/height → viewBox → 300×150). Покрыты `<img>` (decode_image) и `background-image` (fetch_and_decode_background_images). Отложено: перерастеризация под CSS-размер бокса, currentColor хоста. Бриф docs/tasks/rp5-external-svg-images.md"
       },
       {
        "id": "RP-6",
@@ -2735,6 +2735,13 @@
    "component": "shell (загрузчик стилей) + css-parser (media)",
    "date": null,
    "debtor": false
+  },
+  "BUG-269": {
+   "status": "open",
+   "title": "`<img width=\"240\">` без явной высоты рендерится с нулевой высотой (невидим): `apply_intrinsic_size` добавляет intrinsic-размеры только когда нет НИ `width`, НИ…",
+   "component": "layout (замещаемые элементы, aspect-ratio)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -2872,6 +2879,9 @@
    "BUG-236",
    "BUG-237",
    "BUG-241"
+  ],
+  "layout (замещаемые элементы, aspect-ratio)": [
+   "BUG-269"
   ],
   "layout+paint": [
    "BUG-005",
