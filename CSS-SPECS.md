@@ -9,14 +9,14 @@ Legend: ✅ implemented · 🟡 parsed/stored, rendering deferred · ⬜ not sta
 
 ---
 
-## Quick stats (2026-05-24 backdrop-filter)
+## Quick stats (2026-07-02, recounted by table rows: `grep -c "^| .*<marker>"`)
 
 | Status | Properties |
 |--------|-----------|
-| ✅ Fully implemented | ~139 |
-| 🟡 Partial (parsed, not rendered) | ~88 |
-| ⬜ Not started | ~14 |
-| 🚫 Out of scope | ~20 |
+| ✅ Fully implemented | ~237 |
+| 🟡 Partial (parsed, not rendered) | ~135 |
+| ⬜ Not started | ~114 |
+| 🚫 Out of scope | ~20 (props in "Out of scope" modules) |
 
 ---
 

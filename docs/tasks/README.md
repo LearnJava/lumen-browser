@@ -129,22 +129,15 @@ git worktree remove .claude/worktrees/<kebab-name>
 
 ### Фаза 3 — RP: рендер-паритет реального веба
 
-Цель группы `RP` — открывать произвольные сайты так же, как Edge. Все четыре —
-**не greenfield**: инфраструктура частично есть, брифы помечают фактический остаток.
-
-| Файл | Задача |
-|---|---|
-| [rp-1-percentage-sizing.md](rp-1-percentage-sizing.md) | RP-1: проценты в block-потоке (width/height/margin/padding против containing-block) |
-| [rp-2-resize-viewport.md](rp-2-resize-viewport.md) | RP-2: relayout под живой размер окна (убрать хардкод 1024×720) |
-| [rp-3-gzip-deflate.md](rp-3-gzip-deflate.md) | RP-3: HTTP gzip/deflate Content-Encoding декодер (flate2 уже в депах) |
-| [rp-4-float-layout.md](rp-4-float-layout.md) | RP-4: проброс float-контекста в вложенные блоки (общий float-поток) |
+Группа `RP` (RP-1…RP-4) **завершена** — все четыре задачи `done` в `ROADMAP.md`,
+брифы удалены после мержа (см. `git log --grep="RP-"`). Остаточные баги рендер-паритета
+ведутся через `BUGS.md` (зонтик U-6).
 
 ### Фаза 3 — v1.0 (Tier 2 Web APIs, движок-замена, безопасность)
 
 | Файл | Задача |
 |---|---|
 | [ph3-tier2-web-apis.md](ph3-tier2-web-apis.md) | Tier 2 Web APIs — зонтичный индекс |
-| [ph3-indexeddb.md](ph3-indexeddb.md) | IndexedDB |
 | [ph3-service-workers.md](ph3-service-workers.md) | Service Worker runtime |
 | [ph3-websockets-sse-fetch.md](ph3-websockets-sse-fetch.md) | WebSockets + SSE + Fetch/AbortController |
 | [ph3-web-animations-api.md](ph3-web-animations-api.md) | Web Animations API runtime |

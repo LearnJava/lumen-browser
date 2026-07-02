@@ -62,7 +62,7 @@ cargo run -p lumen-shell -- --dump-display-list samples/page.html 2>&1 | grep -A
 
 **docs/plan/ reading rule:**
 - **DO read if you need:** `docs/plan/architecture.md` (§1 Principles, §5 Dependency policy), `docs/plan/knowledge.md` (§12 Unique features), `docs/decisions/ADR-*.md`
-- **DON'T read:** `docs/plan/roadmap.md` (use `STATUS-PN.md` instead) · `docs/plan/history.md` (use `git log` instead) · `docs/plan/phases.md` / `lumen-plan.md` markers (use `CAPABILITIES.md` for what's done)
+- **DON'T read:** `docs/plan/phases.md` / `lumen-plan.md` markers (use `CAPABILITIES.md` for what's done). Task status → `ROADMAP.md` + `STATUS-PN.md`; implementation chronology → `git log`
 
 **Grep instead of reading whole files.** Use targeted grep before opening large files:
 

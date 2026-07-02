@@ -1,5 +1,8 @@
 # P2-wpt — Web Platform Tests integration
 
+> **SPECULATIVE — not tracked in `ROADMAP.md`.** Forward design brief; verify assumptions
+> against code and add a ROADMAP.md row before starting.
+
 **Developer:** P1
 **Branch:** `p1-p2-wpt`
 **Size:** XL

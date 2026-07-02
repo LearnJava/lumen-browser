@@ -1,5 +1,9 @@
 # P2-viewtrans — View Transitions Level 1 (full: named groups, morph, ::view-transition* pseudo)
 
+> **Not tracked in `ROADMAP.md`** (no P2-viewtrans row). Phase 1 below is real merged work;
+> the remaining phases are a forward plan — verify against code before resuming, and add a
+> ROADMAP.md row when picking this up.
+
 **Developer:** P1 (with P4 handoff for the CSS pseudo-element selectors)
 **Branch:** `p1-p2-view-transitions-full`
 **Size:** XL

@@ -96,8 +96,8 @@ pub trait RenderBackend: Send {
 
 | File | Feature flag | Status | Notes |
 |---|---|---|---|
-| `backends/wgpu_backend.rs` | `backend-wgpu` | ✅ exists (current `Renderer`) | wrapped, stays as fallback |
-| `backends/femtovg_backend.rs` | `backend-femtovg` | ⬜ Phase 2 | new default; OpenGL ES 2.0; no custom shaders |
+| `backends/wgpu_backend.rs` | `backend-wgpu` | ✅ exists (`Renderer`) | wrapped, fallback |
+| `backends/femtovg_backend.rs` | `backend-femtovg` | ✅ **live default** | OpenGL ES 2.0; no custom shaders; paint bugs from graphic_tests are fixed here |
 | `backends/vello_backend.rs` | `backend-vello` | ⬜ Phase 3 | compute-based; stub until vello API stabilises |
 | `backends/cpu_backend.rs` | `backend-cpu` | ✅ exists (`cpu_raster`) | CI / no-GPU |
 | `backends/compare_backend.rs` | `compare` | ⬜ Phase 2 | renders with two backends, pixel diff |

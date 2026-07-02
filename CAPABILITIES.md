@@ -208,13 +208,7 @@ Modern ES (ES2020+: classes, async/await, generators, Promise, Proxy, BigInt, mo
 
 ---
 
-## Known doc-drift (found while building this file)
-These curated docs lag behind code; **trust this file + code over them**:
-- `subsystems/css-parser.md` omits `@supports`/`@keyframes`/`@scope`/`@container`; stale test counts.
-- `subsystems/dom.md` omits the whole `contenteditable.rs` editing module.
-- `subsystems/paint.md` marks femtovg backend as ⬜ Phase 2 though it is the compiled **default** live path.
-- `subsystems/image.md` lists GIF/AVIF as deferred though both decode (GIF animated; AVIF feature-gated).
-- `subsystems/js.md` curates ~30 APIs; code wires ~90.
-- `subsystems/network.md` lists cookie jar + SOCKS5/Tor as deferred though both are wired.
-- `subsystems/storage.md` omits Service Worker store + Cache Storage.
-- `docs/plan/phases.md:31` describes streaming as unbuilt though PH1-2 shipped (PH1-2a TCP body streaming + PH1-2b incremental layout + PH1-2c progressive image loading all done — see `git log`).
+## Known doc-drift
+All drift items found while building this file were fixed in the 2026-07-02 docs sweep
+(`p5-docs-cleanup`). When curated docs and this file disagree, **trust this file + code**
+and log the drift here.
