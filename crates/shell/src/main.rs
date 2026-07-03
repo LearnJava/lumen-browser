@@ -11538,6 +11538,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         // Cue сменяются временем — держим цикл перерисовки,
                         // пока страница с субтитрами активна.
                         self.request_redraw();
+                    }
+                }
+
                 // P3-spell срез 2: красное squiggly-подчёркивание ошибочных слов
                 // в фокусном текстовом поле (<input>/<textarea>). Проверяется
                 // каждый DrawText внутри бокса поля; placeholder пропускается.
