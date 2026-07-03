@@ -1596,6 +1596,7 @@ impl FemtovgBackend {
         weight: u16,
         style: FontStyle,
         axes: &[([u8; 4], f32)],
+        features: &[([u8; 4], u32)],
         tab_size: f32,
     ) -> bool {
         let Some(provider) = self.font_provider.clone() else {
@@ -1626,7 +1627,7 @@ impl FemtovgBackend {
             // `build_varied_text_paths` returns None for static faces — defer to
             // the next family (and ultimately femtovg) in that case.
             if let Some(cmds) = crate::varied_text::build_varied_text_paths(
-                &bytes, axes, text, font_size, rect.x, rect.y, tab_size,
+                &bytes, axes, features, text, font_size, rect.x, rect.y, tab_size,
             ) {
                 self.fill_glyph_path(&cmds, color);
                 return true;
@@ -2572,7 +2573,7 @@ impl FemtovgBackend {
                     }
                 }
             }
-            DisplayCommand::DrawText { rect, text, font_size, color, font_family, font_weight, font_style, font_variation_axes, tab_size, highlight_name: _, text_orientation: _ } => {
+            DisplayCommand::DrawText { rect, text, font_size, color, font_family, font_weight, font_style, font_variation_axes, font_features, tab_size, highlight_name: _, text_orientation: _ } => {
                 // BUG-109: femtovg's text API cannot apply font-variation-settings
                 // axes. When axes are present and resolve to a variable face,
                 // render the run via lumen-font outlines (vector fill) so wght/
@@ -2580,7 +2581,8 @@ impl FemtovgBackend {
                 if !font_variation_axes.is_empty()
                     && self.draw_varied_text(
                         rect, text, *font_size, *color, font_family,
-                        font_weight.0, *font_style, font_variation_axes, *tab_size,
+                        font_weight.0, *font_style, font_variation_axes, font_features,
+                        *tab_size,
                     )
                 {
                     return;

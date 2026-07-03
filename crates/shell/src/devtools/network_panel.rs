@@ -611,6 +611,7 @@ fn make_text(text: String, x: f32, y: f32, w: f32, font_size: f32, color: Color)
         font_weight: FontWeight::NORMAL,
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
+        font_features: Vec::new(),
         tab_size: 0.0,
         highlight_name: None,
         text_orientation: None,

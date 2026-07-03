@@ -465,6 +465,7 @@ fn make_text(
         font_weight: weight,
         font_style: FontStyle::Normal,
         font_variation_axes: Vec::new(),
+        font_features: Vec::new(),
         tab_size: 0.0,
         highlight_name: None,
         text_orientation: None,

@@ -50,8 +50,17 @@ impl<'a> Gsub<'a> {
     /// default substitution features. Returns `None` if the table is
     /// malformed; an empty lookup set is valid (no substitutions apply).
     pub fn parse(data: &'a [u8]) -> Option<Self> {
+        Self::parse_with_features(data, &[])
+    }
+
+    /// Like [`Gsub::parse`], but with CSS `font-feature-settings` overrides
+    /// applied on top of the default feature set: `(tag, 0)` disables a
+    /// feature, `(tag, >=1)` enables it. Tags absent from the font's
+    /// FeatureList are silently ignored.
+    pub fn parse_with_features(data: &'a [u8], overrides: &[([u8; 4], u32)]) -> Option<Self> {
         let table = LayoutTable::parse(data)?;
-        let lookups = table.enabled_lookups(&GSUB_FEATURES);
+        let tags = crate::otlayout::apply_feature_overrides(&GSUB_FEATURES, overrides);
+        let lookups = table.enabled_lookups(&tags);
         Some(Self { table, lookups })
     }
 

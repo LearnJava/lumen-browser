@@ -488,6 +488,21 @@ pub struct FontVariationSetting {
     pub value: f32,
 }
 
+/// CSS Fonts L3 §6 — одна запись `font-feature-settings`.
+///
+/// `tag` — четырёхбайтный OpenType feature tag (например `b"liga"`,
+/// `b"smcp"`). `value` — целое значение фичи: `0` = выключена, `1`
+/// (или `on`, или опущено) = включена, >1 = выбор альтернативы
+/// (например `"salt" 2`). `normal` → пустой Vec; шейпер применяет свой
+/// default-набор фич (`liga`/`clig`/`calt`/`rlig`/`ccmp` + `kern`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FontFeatureSetting {
+    /// Четырёхбайтный OpenType feature tag (ASCII U+20–U+7E).
+    pub tag: [u8; 4],
+    /// Значение фичи: 0 = off, 1 = on, >1 = номер альтернативы.
+    pub value: u32,
+}
+
 /// Набор активных линий `text-decoration` для элемента.
 ///
 /// CSS3 разделяет shorthand `text-decoration` на `-line`, `-style`, `-color`;
@@ -2333,6 +2348,11 @@ pub struct ComputedStyle {
     /// Initial: пустой Vec (эквивалентно `normal`). Renderer нормализует
     /// через fvar + avar при растеризации глифов.
     pub font_variation_settings: Vec<FontVariationSetting>,
+    /// CSS Fonts L3 §6 — `font-feature-settings`. Inherited.
+    /// Initial: пустой Vec (эквивалентно `normal`). Шейпер (lumen-font)
+    /// накладывает записи поверх default-набора OpenType-фич: value 0
+    /// выключает фичу, ≥1 включает.
+    pub font_feature_settings: Vec<FontFeatureSetting>,
     /// CSS Fonts L4 §7.12 — `font-optical-sizing: auto | none`. Inherited.
     /// `auto` (initial): renderer injects `opsz = font_size` variation axis.
     pub font_optical_sizing: FontOpticalSizing,
@@ -5221,6 +5241,7 @@ impl ComputedStyle {
             && self.font_weight == other.font_weight
             && self.font_variant == other.font_variant
             && self.font_stretch == other.font_stretch
+            && self.font_feature_settings == other.font_feature_settings
             && (self.letter_spacing - other.letter_spacing).abs() < f32::EPSILON
             && (self.word_spacing - other.word_spacing).abs() < f32::EPSILON
             && self.text_decoration_line == other.text_decoration_line
@@ -5249,6 +5270,7 @@ impl ComputedStyle {
             font_stretch: FontStretch::NORMAL,
             font_family: Vec::new(),
             font_variation_settings: Vec::new(),
+            font_feature_settings: Vec::new(),
             font_optical_sizing: FontOpticalSizing::Auto,
             text_transform: TextTransform::None,
             white_space: WhiteSpace::Normal,
@@ -5554,6 +5576,7 @@ pub fn compute_style(
         font_stretch: inherited.font_stretch,
         font_family: inherited.font_family.clone(),
         font_variation_settings: inherited.font_variation_settings.clone(),
+        font_feature_settings: inherited.font_feature_settings.clone(),
         font_optical_sizing: inherited.font_optical_sizing,
         text_transform: inherited.text_transform,
         white_space: ua_white_space(doc, node).unwrap_or(inherited.white_space),
@@ -6697,6 +6720,7 @@ pub fn compute_pseudo_element_style(
     style.font_stretch = parent.font_stretch;
     style.font_family = parent.font_family.clone();
     style.font_variation_settings = parent.font_variation_settings.clone();
+    style.font_feature_settings = parent.font_feature_settings.clone();
     style.text_transform = parent.text_transform;
     style.white_space = parent.white_space;
     style.text_indent = parent.text_indent.clone();
@@ -9726,6 +9750,56 @@ pub fn parse_font_variation_settings(val: &str) -> Option<Vec<FontVariationSetti
     Some(out)
 }
 
+/// Парсит CSS `font-feature-settings` (CSS Fonts L3 §6).
+///
+/// Синтаксис: `normal | <feature-tag-value>#`, где
+/// `<feature-tag-value> = <string> [ <integer> | on | off ]?`.
+/// Пример: `"liga" 0, "smcp", "salt" 2, "kern" off`.
+///
+/// Тег — ровно 4 символа ASCII U+20–U+7E; значение опущено → 1,
+/// `on` → 1, `off` → 0, целое должно быть ≥ 0. Возвращает `None` при
+/// синтаксической ошибке (cascade игнорирует невалидные объявления).
+/// `normal` → `Some(Vec::new())`.
+pub fn parse_font_feature_settings(val: &str) -> Option<Vec<FontFeatureSetting>> {
+    let val = val.trim();
+    if val.eq_ignore_ascii_case("normal") {
+        return Some(Vec::new());
+    }
+    let mut out = Vec::new();
+    for token_pair in val.split(',') {
+        let pair = token_pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        // Первый токен — quoted 4-char tag.
+        let (tag_str, rest) = if let Some(stripped) = pair.strip_prefix('"') {
+            let end = stripped.find('"')?;
+            (&stripped[..end], stripped[end + 1..].trim())
+        } else if let Some(stripped) = pair.strip_prefix('\'') {
+            let end = stripped.find('\'')?;
+            (&stripped[..end], stripped[end + 1..].trim())
+        } else {
+            return None;
+        };
+        // Тег — ровно 4 печатных ASCII-символа (U+20–U+7E).
+        if tag_str.len() != 4 || !tag_str.bytes().all(|b| (0x20..=0x7E).contains(&b)) {
+            return None;
+        }
+        let tag_bytes = tag_str.as_bytes();
+        let tag: [u8; 4] = [tag_bytes[0], tag_bytes[1], tag_bytes[2], tag_bytes[3]];
+        // Второй токен опционален: <integer ≥ 0> | on | off; по умолчанию 1.
+        let value: u32 = if rest.is_empty() || rest.eq_ignore_ascii_case("on") {
+            1
+        } else if rest.eq_ignore_ascii_case("off") {
+            0
+        } else {
+            rest.parse().ok()?
+        };
+        out.push(FontFeatureSetting { tag, value });
+    }
+    Some(out)
+}
+
 /// Парсит CSS `font-weight`. Поддерживает:
 ///   - `normal` → 400, `bold` → 700;
 ///   - численные `100`..`900` (или любое число 1..1000 — Variable Fonts);
@@ -11842,6 +11916,11 @@ fn apply_declaration(
         "font-variation-settings" => {
             if let Some(v) = parse_font_variation_settings(val) {
                 style.font_variation_settings = v;
+            }
+        }
+        "font-feature-settings" => {
+            if let Some(v) = parse_font_feature_settings(val) {
+                style.font_feature_settings = v;
             }
         }
         "font-optical-sizing" => {
@@ -14930,6 +15009,13 @@ fn apply_css_wide_keyword(
                 inherited.font_variation_settings.clone()
             } else {
                 init.font_variation_settings.clone()
+            };
+        }
+        "font-feature-settings" => {
+            style.font_feature_settings = if inh {
+                inherited.font_feature_settings.clone()
+            } else {
+                init.font_feature_settings.clone()
             };
         }
         "font-optical-sizing" => {
@@ -25568,6 +25654,87 @@ mod tests {
         assert_eq!(span_style.font_variation_settings, vec![
             FontVariationSetting { tag: *b"wght", value: 400.0 }
         ]);
+    }
+
+    // ── font-feature-settings (CSS Fonts L3 §6) ──────────────────────────
+
+    #[test]
+    fn font_feature_settings_normal_is_empty() {
+        // `normal` → пустой Vec (default-набор фич шейпера)
+        assert_eq!(parse_font_feature_settings("normal"), Some(vec![]));
+    }
+
+    #[test]
+    fn font_feature_settings_value_forms() {
+        // Опущенное значение → 1; on → 1; off → 0; целое как есть
+        let result = parse_font_feature_settings(
+            "\"smcp\", \"liga\" off, \"kern\" on, \"salt\" 2",
+        );
+        assert_eq!(result, Some(vec![
+            FontFeatureSetting { tag: *b"smcp", value: 1 },
+            FontFeatureSetting { tag: *b"liga", value: 0 },
+            FontFeatureSetting { tag: *b"kern", value: 1 },
+            FontFeatureSetting { tag: *b"salt", value: 2 },
+        ]));
+    }
+
+    #[test]
+    fn font_feature_settings_invalid_declarations() {
+        // Тег не из 4 символов, отрицательное/нечисловое значение,
+        // неквотированный тег → None (объявление игнорируется)
+        assert_eq!(parse_font_feature_settings("\"lig\" 1"), None);
+        assert_eq!(parse_font_feature_settings("\"ligaa\" 1"), None);
+        assert_eq!(parse_font_feature_settings("\"liga\" -1"), None);
+        assert_eq!(parse_font_feature_settings("\"liga\" x"), None);
+        assert_eq!(parse_font_feature_settings("liga 1"), None);
+    }
+
+    #[test]
+    fn font_feature_settings_initial_is_empty() {
+        // Без объявления = initial = пустой Vec
+        let s = style_for("");
+        assert!(s.font_feature_settings.is_empty());
+    }
+
+    #[test]
+    fn font_feature_settings_applied() {
+        let s = style_for("font-feature-settings: \"liga\" 0");
+        assert_eq!(s.font_feature_settings, vec![
+            FontFeatureSetting { tag: *b"liga", value: 0 }
+        ]);
+    }
+
+    #[test]
+    fn font_feature_settings_inherited() {
+        // Свойство наследуется от родителя к потомку
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { font-feature-settings: \"smcp\" 1; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span_style =
+            compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(span_style.font_feature_settings, vec![
+            FontFeatureSetting { tag: *b"smcp", value: 1 }
+        ]);
+    }
+
+    #[test]
+    fn font_feature_settings_child_overrides_parent() {
+        // Потомок сбрасывает наследуемое значение через `normal`
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse(
+            "div { font-feature-settings: \"liga\" 0; } \
+             span { font-feature-settings: normal; }",
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span_style =
+            compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert!(span_style.font_feature_settings.is_empty());
     }
 
     // ── font-optical-sizing (CSS Fonts L4 §7.12) ─────────────────────────
