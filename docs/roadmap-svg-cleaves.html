@@ -859,7 +859,7 @@
      "id": "P3-webvtt",
      "title": "WebVTT субтитры для <video> (<track>)",
      "status": "active",
-     "note": "PARTIAL 2026-07-02 (смешанное программирование, step-3.7-flash, срезы 1-2): lumen_dom::vtt — спек-парсер cue + collect_video_tracks + срез 2: active_cues(t), strip_cue_markup (теги/сущности), resolve_cue_box (size/position/line/align → бокс поверх видео), 30 тестов; дошить — фетч src в шелле, TextTrack JS API, рендер активного cue поверх video-бокса"
+     "note": "PARTIAL 2026-07-03 (смешанное программирование, step-3.7-flash, срезы 1-3): lumen_dom::vtt — спек-парсер cue + collect_video_tracks + active_cues/strip_cue_markup/resolve_cue_box + срез 3: shell::tracks (load_video_tracks c fetch-замыканием, build_cue_overlay, collect_video_rects) + обвязка main.rs (фетч .vtt при загрузке, cue-оверлей в paint, живая MCP-приёмка PASS), 40 тестов; дошить — TextTrack JS API, playback-клок вместо t=от-навигации"
     },
     {
      "id": "P3-mediasession",
