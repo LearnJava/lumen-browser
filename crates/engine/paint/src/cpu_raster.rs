@@ -135,6 +135,50 @@ enum MaskSpec {
     },
 }
 
+/// Axis-aligned draw bounds `(left, top, right, bottom)` in page px — the
+/// shape produced by `rect_bounds` / `vertices_bounds` / `contours_bounds`.
+type DrawBounds = (f32, f32, f32, f32);
+
+/// One off-screen pixmap on the group-layer stack plus the running
+/// axis-aligned bounding box of everything drawn into it.
+///
+/// The pixmap is always full-canvas (page coordinates), so nested groups, clip
+/// masks and composite ops need no coordinate translation. `dirty` tracks the
+/// union bbox `(left, top, right, bottom)` of every draw targeted at this
+/// layer — a superset of the actual ink (draws mark their geometric bounds;
+/// anti-aliasing cannot bleed beyond them by more than ~1px, absorbed by the
+/// crop slack in [`composite_filter_layer`]). BUG-267: `PopFilter` /
+/// `PushBackdropFilter` use it to blur and composite only the inked window
+/// instead of the whole canvas — the full-canvas Gaussian blur per shadow is
+/// what made shadow-heavy pages take minutes on the CPU path.
+struct CpuLayer {
+    /// Full-canvas draw target for this group (page coordinates).
+    pm: tiny_skia::Pixmap,
+    /// Union bbox `(left, top, right, bottom)` in page px of all draws into
+    /// `pm`; `None` while the layer is untouched (fully transparent).
+    dirty: Option<DrawBounds>,
+}
+
+impl CpuLayer {
+    /// Wrap a freshly-allocated (transparent) pixmap with an empty dirty box.
+    fn new(pm: tiny_skia::Pixmap) -> Self {
+        Self { pm, dirty: None }
+    }
+
+    /// Union draw bounds `(left, top, right, bottom)` into the dirty box.
+    fn mark(&mut self, bounds: DrawBounds) {
+        self.dirty = Some(match self.dirty {
+            None => bounds,
+            Some((l, t, r, b)) => (
+                l.min(bounds.0),
+                t.min(bounds.1),
+                r.max(bounds.2),
+                b.max(bounds.3),
+            ),
+        });
+    }
+}
+
 /// Rasterize display commands to an image using tiny-skia (CPU only, deterministic).
 pub(crate) fn rasterize_cpu(
     width: u32,
@@ -165,8 +209,9 @@ pub(crate) fn rasterize_cpu(
     // the matching pop the top layer is composited onto the layer below per its
     // `LayerComposite` op (alpha-blend for opacity, affine `draw_pixmap` for
     // transform). Full-size layers keep the page coordinate space and clip masks
-    // valid without translation.
-    let mut layers: Vec<Pixmap> = vec![base];
+    // valid without translation. Each layer carries its dirty bbox (BUG-267) so
+    // filter groups blur/composite only the inked window.
+    let mut layers: Vec<CpuLayer> = vec![CpuLayer::new(base)];
     let mut layer_ops: Vec<LayerComposite> = Vec::new();
 
     // Active rectangular clip regions (CSS `overflow: hidden`, `PushClipRect`).
@@ -192,20 +237,25 @@ pub(crate) fn rasterize_cpu(
     for cmd in commands {
         match cmd {
             DisplayCommand::FillRect { rect, color } => {
-                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
-                rasterize_fill_rect(layers.last_mut().expect("base layer"), rect, color, c)?;
+                let b = rect_bounds(rect);
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), b);
+                let layer = layers.last_mut().expect("base layer");
+                rasterize_fill_rect(&mut layer.pm, rect, color, c)?;
+                layer.mark(b);
             }
             DisplayCommand::FillRoundedRect { rect, color, radii } => {
-                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
-                rasterize_fill_rounded_rect(
-                    layers.last_mut().expect("base layer"), rect, color, radii, c,
-                )?;
+                let b = rect_bounds(rect);
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), b);
+                let layer = layers.last_mut().expect("base layer");
+                rasterize_fill_rounded_rect(&mut layer.pm, rect, color, radii, c)?;
+                layer.mark(b);
             }
             DisplayCommand::DrawBorder { rect, widths, colors, styles, radii } => {
-                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
-                rasterize_draw_border(
-                    layers.last_mut().expect("base layer"), rect, widths, colors, styles, radii, c,
-                )?;
+                let b = rect_bounds(rect);
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), b);
+                let layer = layers.last_mut().expect("base layer");
+                rasterize_draw_border(&mut layer.pm, rect, widths, colors, styles, radii, c)?;
+                layer.mark(b);
             }
             DisplayCommand::DrawOutline { rect, width, style: _, color, offset } => {
                 // Outline expands the rect by `offset` on every side.
@@ -216,49 +266,56 @@ pub(crate) fn rasterize_cpu(
                     rect.y + rect.height + offset,
                 );
                 let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), b);
-                rasterize_draw_outline(
-                    layers.last_mut().expect("base layer"), rect, *width, color, *offset, c,
-                )?;
+                let layer = layers.last_mut().expect("base layer");
+                rasterize_draw_outline(&mut layer.pm, rect, *width, color, *offset, c)?;
+                // The stroke band extends `width` beyond the offset rect, so the
+                // dirty box is wider than the clip-decision box above.
+                layer.mark((b.0 - width, b.1 - width, b.2 + width, b.3 + width));
             }
             DisplayCommand::DrawLinearGradient { rect, angle_deg, stops, repeating } => {
-                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
-                rasterize_linear_gradient(
-                    layers.last_mut().expect("base layer"), rect, *angle_deg, stops, *repeating, c,
-                )?;
+                let b = rect_bounds(rect);
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), b);
+                let layer = layers.last_mut().expect("base layer");
+                rasterize_linear_gradient(&mut layer.pm, rect, *angle_deg, stops, *repeating, c)?;
+                layer.mark(b);
             }
             DisplayCommand::DrawRadialGradient {
                 rect, center_x_pct, center_y_pct, radius_x, radius_y, stops, repeating,
             } => {
-                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
+                let b = rect_bounds(rect);
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), b);
+                let layer = layers.last_mut().expect("base layer");
                 rasterize_radial_gradient(
-                    layers.last_mut().expect("base layer"), rect, *center_x_pct, *center_y_pct,
+                    &mut layer.pm, rect, *center_x_pct, *center_y_pct,
                     *radius_x, *radius_y, stops, *repeating, c,
                 )?;
+                layer.mark(b);
             }
             DisplayCommand::DrawConicGradient {
                 rect, center_x_pct, center_y_pct, from_angle_deg, stops, repeating,
             } => {
-                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
+                let b = rect_bounds(rect);
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), b);
+                let layer = layers.last_mut().expect("base layer");
                 rasterize_conic_gradient(
-                    layers.last_mut().expect("base layer"), rect, *center_x_pct, *center_y_pct,
+                    &mut layer.pm, rect, *center_x_pct, *center_y_pct,
                     *from_angle_deg, stops, *repeating, c,
                 )?;
+                layer.mark(b);
             }
             DisplayCommand::DrawSvgPath { vertices, color } => {
-                let c = effective_clip(
-                    clip_mask.as_ref(),
-                    clip_rect.as_ref(),
-                    vertices_bounds(vertices),
-                );
-                rasterize_svg_path(layers.last_mut().expect("base layer"), vertices, color, c)?;
+                let b = vertices_bounds(vertices);
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), b);
+                let layer = layers.last_mut().expect("base layer");
+                rasterize_svg_path(&mut layer.pm, vertices, color, c)?;
+                layer.mark(b);
             }
             DisplayCommand::DrawSvgFill { contours, color } => {
-                let c = effective_clip(
-                    clip_mask.as_ref(),
-                    clip_rect.as_ref(),
-                    contours_bounds(contours),
-                );
-                rasterize_svg_fill(layers.last_mut().expect("base layer"), contours, color, c)?;
+                let b = contours_bounds(contours);
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), b);
+                let layer = layers.last_mut().expect("base layer");
+                rasterize_svg_fill(&mut layer.pm, contours, color, c)?;
+                layer.mark(b);
             }
             DisplayCommand::PushClipRect { rect } => {
                 clip_stack.push(*rect);
@@ -276,7 +333,7 @@ pub(crate) fn rasterize_cpu(
                 // детей следуют border-radius контейнера (TEST-101).
                 let layer = tiny_skia::Pixmap::new(width, height)
                     .ok_or("Failed to create rounded-clip layer")?;
-                layers.push(layer);
+                layers.push(CpuLayer::new(layer));
                 layer_ops.push(LayerComposite::ClipRoundedRect { rect: *rect, radii: *radii });
                 clip_kinds.push(CpuClipKind::Shape);
             }
@@ -285,7 +342,7 @@ pub(crate) fn rasterize_cpu(
             DisplayCommand::PushClipPath { shape } => {
                 let layer = tiny_skia::Pixmap::new(width, height)
                     .ok_or("Failed to create clip-path layer")?;
-                layers.push(layer);
+                layers.push(CpuLayer::new(layer));
                 layer_ops.push(LayerComposite::ClipShape(shape.clone()));
                 clip_kinds.push(CpuClipKind::Shape);
             }
@@ -322,24 +379,28 @@ pub(crate) fn rasterize_cpu(
                 clip_mask = build_clip_mask(width, height, clip_rect);
             }
             DisplayCommand::DrawImage { rect, src, object_fit, object_position, .. } => {
-                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
+                let b = rect_bounds(rect);
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), b);
                 let layer = layers.last_mut().expect("base layer");
                 match image_map.get(src.as_str()) {
                     Some(img) => {
-                        rasterize_image(layer, rect, img, *object_fit, *object_position, c)?;
+                        rasterize_image(&mut layer.pm, rect, img, *object_fit, *object_position, c)?;
                     }
-                    None => rasterize_image_placeholder(layer, rect, c)?,
+                    None => rasterize_image_placeholder(&mut layer.pm, rect, c)?,
                 }
+                layer.mark(b);
             }
             DisplayCommand::LazyImageSlot { rect, src, object_fit, object_position, .. } => {
-                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
+                let b = rect_bounds(rect);
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), b);
                 let layer = layers.last_mut().expect("base layer");
                 match image_map.get(src.as_str()) {
                     Some(img) => {
-                        rasterize_image(layer, rect, img, *object_fit, *object_position, c)?;
+                        rasterize_image(&mut layer.pm, rect, img, *object_fit, *object_position, c)?;
                     }
-                    None => rasterize_image_placeholder(layer, rect, c)?,
+                    None => rasterize_image_placeholder(&mut layer.pm, rect, c)?,
                 }
+                layer.mark(b);
             }
             // CSS Backgrounds L3 §3.3 — background-image url() (also the resolved
             // `image-set()` candidate). Tiled per background-size/position/repeat
@@ -349,26 +410,31 @@ pub(crate) fn rasterize_cpu(
             DisplayCommand::DrawBackgroundImage {
                 rect, origin_rect, src, size, position, repeat, ..
             } => {
-                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
+                let b = rect_bounds(rect);
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), b);
                 let layer = layers.last_mut().expect("base layer");
                 if let Some(img) = image_map.get(src.as_str()) {
                     rasterize_background_image(
-                        layer, rect, origin_rect, img, *size, position, *repeat, c,
+                        &mut layer.pm, rect, origin_rect, img, *size, position, *repeat, c,
                     )?;
+                    layer.mark(b);
                 }
             }
             // CSS Images L4 §4 — cross-fade(a, b, p): the two images are stretched
             // to fill `dest` and alpha-blended (`a` at `1−p`, `b` at `p`). Mirrors
             // the femtovg backend's `DrawCrossFade` arm. Missing sources are skipped.
             DisplayCommand::DrawCrossFade { dest, src_a, src_b, progress } => {
-                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(dest));
+                let b = rect_bounds(dest);
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), b);
                 let layer = layers.last_mut().expect("base layer");
                 let p = progress.clamp(0.0, 1.0);
                 if let Some(img) = image_map.get(src_a.as_str()) {
-                    blit_image_into_rect(layer, *dest, *dest, img, 1.0 - p, c)?;
+                    blit_image_into_rect(&mut layer.pm, *dest, *dest, img, 1.0 - p, c)?;
+                    layer.mark(b);
                 }
                 if let Some(img) = image_map.get(src_b.as_str()) {
-                    blit_image_into_rect(layer, *dest, *dest, img, p, c)?;
+                    blit_image_into_rect(&mut layer.pm, *dest, *dest, img, p, c)?;
+                    layer.mark(b);
                 }
             }
             DisplayCommand::DrawText {
@@ -378,10 +444,13 @@ pub(crate) fn rasterize_cpu(
                 // the CPU path (no FontProvider here), weight/style are
                 // emulated (synthetic bold/italic). Clip is the active
                 // rectangular `overflow` region, applied per glyph pixel.
-                rasterize_text(
-                    layers.last_mut().expect("base layer"), rect, text, *font_size, color,
+                let layer = layers.last_mut().expect("base layer");
+                if let Some(ink) = rasterize_text(
+                    &mut layer.pm, rect, text, *font_size, color,
                     *tab_size, clip_rect.as_ref(), font_weight.0, *font_style,
-                )?;
+                )? {
+                    layer.mark(ink);
+                }
             }
             // CSS Color L3 §3.2 — `opacity < 1` renders the element's subtree as
             // an off-screen group, then alpha-blends it. Push a transparent
@@ -390,7 +459,7 @@ pub(crate) fn rasterize_cpu(
             DisplayCommand::PushOpacity { alpha } => {
                 let layer = tiny_skia::Pixmap::new(width, height)
                     .ok_or("Failed to create opacity layer")?;
-                layers.push(layer);
+                layers.push(CpuLayer::new(layer));
                 layer_ops.push(LayerComposite::Opacity(alpha.clamp(0.0, 1.0)));
             }
             // CSS Transforms L1 §13 — the box's subtree (own background/border +
@@ -403,7 +472,7 @@ pub(crate) fn rasterize_cpu(
                 let t = tiny_skia::Transform::from_row(a, b, c, d, e, f);
                 let layer = tiny_skia::Pixmap::new(width, height)
                     .ok_or("Failed to create transform layer")?;
-                layers.push(layer);
+                layers.push(CpuLayer::new(layer));
                 layer_ops.push(LayerComposite::Transform(t));
             }
             // CSS Compositing & Blending L1 §5 — `mix-blend-mode` on the box.
@@ -415,7 +484,7 @@ pub(crate) fn rasterize_cpu(
             DisplayCommand::PushBlendMode { mode } => {
                 let layer = tiny_skia::Pixmap::new(width, height)
                     .ok_or("Failed to create blend layer")?;
-                layers.push(layer);
+                layers.push(CpuLayer::new(layer));
                 layer_ops.push(LayerComposite::Blend(map_blend_mode(*mode)));
             }
             // CSS Filter Effects L1 §4 — `filter` chain. Emitted by `walk` to
@@ -424,11 +493,14 @@ pub(crate) fn rasterize_cpu(
             // for the element's own `filter` property. Like the other group
             // effects, the wrapped draws accumulate into a transparent full-size
             // layer; the matching `PopFilter` applies the chain to that layer and
-            // composites it down.
+            // composites it down. BUG-267: the emitter's `bounds` hint is ignored
+            // in favour of the layer's tracked dirty box — the hint is the border
+            // box for the element `filter` case and would under-cover overflowing
+            // children, while the dirty box is a guaranteed ink superset.
             DisplayCommand::PushFilter { filters, bounds: _ } => {
                 let layer = tiny_skia::Pixmap::new(width, height)
                     .ok_or("Failed to create filter layer")?;
-                layers.push(layer);
+                layers.push(CpuLayer::new(layer));
                 layer_ops.push(LayerComposite::Filter(filters.clone()));
             }
             // CSS Masking L1 §4 — `mask-image`. Like `PushOpacity`, the element's
@@ -441,13 +513,13 @@ pub(crate) fn rasterize_cpu(
             DisplayCommand::PushMaskImage { .. } => {
                 let layer = tiny_skia::Pixmap::new(width, height)
                     .ok_or("Failed to create mask layer")?;
-                layers.push(layer);
+                layers.push(CpuLayer::new(layer));
                 layer_ops.push(LayerComposite::Mask(MaskSpec::None));
             }
             DisplayCommand::PushMaskLinearGradient { rect, angle_deg, stops, repeating } => {
                 let layer = tiny_skia::Pixmap::new(width, height)
                     .ok_or("Failed to create mask layer")?;
-                layers.push(layer);
+                layers.push(CpuLayer::new(layer));
                 layer_ops.push(LayerComposite::Mask(MaskSpec::Linear {
                     rect: *rect,
                     angle_deg: *angle_deg,
@@ -460,7 +532,7 @@ pub(crate) fn rasterize_cpu(
             } => {
                 let layer = tiny_skia::Pixmap::new(width, height)
                     .ok_or("Failed to create mask layer")?;
-                layers.push(layer);
+                layers.push(CpuLayer::new(layer));
                 layer_ops.push(LayerComposite::Mask(MaskSpec::Radial {
                     rect: *rect,
                     center_x_pct: *center_x_pct,
@@ -474,7 +546,7 @@ pub(crate) fn rasterize_cpu(
             } => {
                 let layer = tiny_skia::Pixmap::new(width, height)
                     .ok_or("Failed to create mask layer")?;
-                layers.push(layer);
+                layers.push(CpuLayer::new(layer));
                 layer_ops.push(LayerComposite::Mask(MaskSpec::Conic {
                     rect: *rect,
                     center_x_pct: *center_x_pct,
@@ -508,7 +580,10 @@ pub(crate) fn rasterize_cpu(
             // which is therefore a no-op.
             DisplayCommand::PushBackdropFilter { filters, bounds } => {
                 let target = layers.last_mut().expect("base layer");
-                apply_backdrop_filter(target, filters, bounds, width, height);
+                apply_backdrop_filter(&mut target.pm, filters, bounds, width, height);
+                // Blur can spread existing backdrop ink into previously-blank
+                // pixels, but only within the written-back `bounds` region.
+                target.mark(rect_bounds(bounds));
             }
             DisplayCommand::PopBackdropFilter => {
                 // No-op: the backdrop was filtered in place at the matching Push.
@@ -529,7 +604,7 @@ pub(crate) fn rasterize_cpu(
             close_layer(dst, &top, &op);
         }
     }
-    let pixmap = layers.pop().expect("base layer");
+    let pixmap = layers.pop().expect("base layer").pm;
     let data = pixmap.data().to_vec();
     Ok(Image {
         width,
@@ -558,18 +633,64 @@ fn composite_layer(dst: &mut tiny_skia::Pixmap, src: &tiny_skia::Pixmap, alpha: 
 
 /// Composite an off-screen group layer `src` onto `dst` per its `LayerComposite`
 /// op. Used by `PopOpacity` / `PopTransform` (and the trailing balance loop).
-fn close_layer(dst: &mut tiny_skia::Pixmap, src: &tiny_skia::Pixmap, op: &LayerComposite) {
+///
+/// BUG-267: an untouched group (`src.dirty == None`, fully transparent) is
+/// skipped outright — every composite op leaves the backdrop bit-identical for
+/// a transparent source (SourceOver adds nothing, all CSS blend modes reduce to
+/// the backdrop, masks/clips only scale the source's zero alpha) — and the
+/// closed group's dirty box is propagated into `dst` so nested filter groups
+/// still see a correct ink superset.
+fn close_layer(dst: &mut CpuLayer, src: &CpuLayer, op: &LayerComposite) {
+    let Some(src_dirty) = src.dirty else { return };
     match op {
-        LayerComposite::Opacity(a) => composite_layer(dst, src, *a),
-        LayerComposite::Transform(t) => composite_transform_layer(dst, src, *t),
-        LayerComposite::Blend(mode) => composite_blend_layer(dst, src, *mode),
-        LayerComposite::Filter(filters) => composite_filter_layer(dst, src, filters),
-        LayerComposite::Mask(spec) => composite_mask_layer(dst, src, spec),
-        LayerComposite::ClipShape(shape) => composite_clip_shape_layer(dst, src, shape),
+        LayerComposite::Opacity(a) => {
+            composite_layer(&mut dst.pm, &src.pm, *a);
+            dst.mark(src_dirty);
+        }
+        LayerComposite::Transform(t) => {
+            composite_transform_layer(&mut dst.pm, &src.pm, *t);
+            dst.mark(transform_bounds(*t, src_dirty));
+        }
+        LayerComposite::Blend(mode) => {
+            composite_blend_layer(&mut dst.pm, &src.pm, *mode);
+            dst.mark(src_dirty);
+        }
+        LayerComposite::Filter(filters) => {
+            if let Some(written) = composite_filter_layer(&mut dst.pm, &src.pm, filters, src_dirty)
+            {
+                dst.mark(written);
+            }
+        }
+        LayerComposite::Mask(spec) => {
+            composite_mask_layer(&mut dst.pm, &src.pm, spec);
+            dst.mark(src_dirty);
+        }
+        LayerComposite::ClipShape(shape) => {
+            composite_clip_shape_layer(&mut dst.pm, &src.pm, shape);
+            dst.mark(src_dirty);
+        }
         LayerComposite::ClipRoundedRect { rect, radii } => {
-            composite_clip_rounded_rect_layer(dst, src, rect, radii);
+            composite_clip_rounded_rect_layer(&mut dst.pm, &src.pm, rect, radii);
+            dst.mark(src_dirty);
         }
     }
+}
+
+/// Map an axis-aligned bbox `(left, top, right, bottom)` through a 2D affine
+/// and return the enclosing axis-aligned bbox, inflated by 1px for the bilinear
+/// resampling bleed of [`composite_transform_layer`].
+fn transform_bounds(t: tiny_skia::Transform, b: DrawBounds) -> DrawBounds {
+    let (l, tp, r, btm) = b;
+    let mut out = (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for (x, y) in [(l, tp), (r, tp), (l, btm), (r, btm)] {
+        let nx = t.sx * x + t.kx * y + t.tx;
+        let ny = t.ky * x + t.sy * y + t.ty;
+        out.0 = out.0.min(nx);
+        out.1 = out.1.min(ny);
+        out.2 = out.2.max(nx);
+        out.3 = out.3.max(ny);
+    }
+    (out.0 - 1.0, out.1 - 1.0, out.2 + 1.0, out.3 + 1.0)
 }
 
 /// BUG-249: применяет скруглённый клип (`overflow:hidden` + `border-radius`) к
@@ -800,12 +921,26 @@ fn multiply_alpha_by_mask(layer: &mut tiny_skia::Pixmap, mask: &tiny_skia::Pixma
 /// (`gaussian_blur`, integer-only so it is cross-OS bit-identical), the
 /// colour-matrix filters mirror the GPU `apply_filter_fn` shader. The filtered
 /// layer then blends over the backdrop accumulated in `dst`.
+///
+/// BUG-267: the chain runs on a crop of `src` — `src_dirty` (the ink superset
+/// tracked by [`CpuLayer`]) inflated by the chain's spatial reach plus 2px of
+/// anti-aliasing slack — instead of the whole canvas. Outside that window `src`
+/// is fully transparent, the colour-matrix filters keep transparent pixels
+/// transparent, and blur cannot carry ink further than its reach, so the crop
+/// output is bit-identical to filtering the full canvas (the box-blur running
+/// sums accumulate exact zeros until the first ink sample, which leaves the f32
+/// accumulator unchanged). Returns the composited window `(left, top, right,
+/// bottom)` for the caller's dirty propagation, `None` when the window misses
+/// the canvas entirely.
 fn composite_filter_layer(
     dst: &mut tiny_skia::Pixmap,
     src: &tiny_skia::Pixmap,
     filters: &[FilterFn],
-) {
-    let mut cur = src.clone();
+    src_dirty: DrawBounds,
+) -> Option<DrawBounds> {
+    let margin = filter_chain_reach(filters) + 2.0;
+    let (cx0, cy0, cx1, cy1) = clamp_crop(src_dirty, margin, src.width(), src.height())?;
+    let mut cur = crop_pixmap(src, cx0, cy0, cx1 - cx0, cy1 - cy0)?;
     for f in filters {
         match f {
             FilterFn::Blur(sigma) => cur = gaussian_blur(&cur, *sigma),
@@ -817,20 +952,86 @@ fn composite_filter_layer(
         blend_mode: tiny_skia::BlendMode::SourceOver,
         quality: tiny_skia::FilterQuality::Nearest,
     };
-    dst.draw_pixmap(0, 0, cur.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+    dst.draw_pixmap(
+        cx0 as i32,
+        cy0 as i32,
+        cur.as_ref(),
+        &paint,
+        tiny_skia::Transform::identity(),
+        None,
+    );
+    Some((cx0 as f32, cy0 as f32, cx1 as f32, cy1 as f32))
+}
+
+/// Total spatial reach in px of a filter chain — how far the chain can carry
+/// ink beyond its source. Only `blur()` is spatial: three box passes of radius
+/// `r` (the same `r` [`gaussian_blur`] derives from σ — keep the formulas in
+/// sync) reach `3r` per side; the colour-matrix filters are per-pixel. Chained
+/// blurs add their reaches.
+fn filter_chain_reach(filters: &[FilterFn]) -> f32 {
+    filters
+        .iter()
+        .map(|f| match f {
+            FilterFn::Blur(sigma) => {
+                let radius = (((4.0 * sigma * sigma + 1.0).sqrt() - 1.0) / 2.0).round();
+                3.0 * radius.max(0.0)
+            }
+            _ => 0.0,
+        })
+        .sum()
+}
+
+/// Integer crop window: `dirty` `(left, top, right, bottom)` inflated by
+/// `margin` px on every side and clamped to the `width`×`height` canvas.
+/// `None` when the window is empty (all ink off-canvas, or a degenerate dirty
+/// box) — the caller then skips filtering and compositing entirely.
+fn clamp_crop(
+    dirty: DrawBounds,
+    margin: f32,
+    width: u32,
+    height: u32,
+) -> Option<(u32, u32, u32, u32)> {
+    let x0 = ((dirty.0 - margin).floor().max(0.0) as u32).min(width);
+    let y0 = ((dirty.1 - margin).floor().max(0.0) as u32).min(height);
+    let x1 = ((dirty.2 + margin).ceil().max(0.0) as u32).min(width);
+    let y1 = ((dirty.3 + margin).ceil().max(0.0) as u32).min(height);
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    Some((x0, y0, x1, y1))
+}
+
+/// Byte-exact copy of the `w`×`h` window at `(x0, y0)` of `src` into a fresh
+/// pixmap. Plain row memcpy — no blending or resampling — so filtering the crop
+/// is bit-identical to filtering the full canvas (see
+/// [`composite_filter_layer`]). The window must lie inside `src`.
+fn crop_pixmap(src: &tiny_skia::Pixmap, x0: u32, y0: u32, w: u32, h: u32) -> Option<tiny_skia::Pixmap> {
+    let mut out = tiny_skia::Pixmap::new(w, h)?;
+    let sw = src.width() as usize;
+    let (x0, y0, w, h) = (x0 as usize, y0 as usize, w as usize, h as usize);
+    let sd = src.data();
+    let od = out.data_mut();
+    for row in 0..h {
+        let s = ((y0 + row) * sw + x0) * 4;
+        let d = row * w * 4;
+        od[d..d + w * 4].copy_from_slice(&sd[s..s + w * 4]);
+    }
+    Some(out)
 }
 
 /// Apply a `backdrop-filter` chain (CSS Filter Effects L1 §6.2) to the content
 /// already painted in `target` within `bounds`, in place.
 ///
 /// The filter operates on the *backdrop* — the content painted behind the
-/// element so far, i.e. the current active layer. The whole layer is cloned and
-/// filtered (so Gaussian blur samples neighbouring backdrop pixels rather than
-/// only those inside `bounds`), then only the `bounds` border-box region of the
-/// filtered copy is written back over `target` with `Source` blend (replace).
-/// The element's own background/border paint on top afterwards via subsequent
-/// draws, so the matching `PopBackdropFilter` is a no-op. Reuses the same
-/// integer-only `gaussian_blur` and un-premultiplied `apply_color_filter` as
+/// element so far, i.e. the current active layer. A window of the layer —
+/// `bounds` inflated by the chain's blur reach, so Gaussian blur samples every
+/// neighbouring backdrop pixel that can influence a pixel inside `bounds`
+/// (BUG-267: previously the whole canvas was cloned and blurred) — is cropped
+/// and filtered, then only the `bounds` border-box region of the filtered copy
+/// is written back over `target` with `Source` blend (replace). The element's
+/// own background/border paint on top afterwards via subsequent draws, so the
+/// matching `PopBackdropFilter` is a no-op. Reuses the same integer-only
+/// `gaussian_blur` and un-premultiplied `apply_color_filter` as
 /// `composite_filter_layer`, so the result is cross-OS bit-identical.
 fn apply_backdrop_filter(
     target: &mut tiny_skia::Pixmap,
@@ -839,7 +1040,14 @@ fn apply_backdrop_filter(
     width: u32,
     height: u32,
 ) {
-    let mut filtered = target.clone();
+    let reach = filter_chain_reach(filters);
+    let Some((cx0, cy0, cx1, cy1)) = clamp_crop(rect_bounds(bounds), reach, width, height) else {
+        // `bounds` misses the canvas — the masked write-back would be empty.
+        return;
+    };
+    let Some(mut filtered) = crop_pixmap(target, cx0, cy0, cx1 - cx0, cy1 - cy0) else {
+        return;
+    };
     for f in filters {
         match f {
             FilterFn::Blur(sigma) => filtered = gaussian_blur(&filtered, *sigma),
@@ -849,6 +1057,8 @@ fn apply_backdrop_filter(
     // Write back only the element's border-box region. A hard rect mask scopes
     // the replace to `bounds`; `Source` blend overwrites the backdrop there with
     // its filtered counterpart (outside the mask the original target is kept).
+    // The crop window contains all of `bounds ∩ canvas`, so every masked pixel
+    // is covered by the drawn pixmap.
     let mask = build_clip_mask(width, height, Some(*bounds));
     let paint = tiny_skia::PixmapPaint {
         opacity: 1.0,
@@ -856,8 +1066,8 @@ fn apply_backdrop_filter(
         quality: tiny_skia::FilterQuality::Nearest,
     };
     target.draw_pixmap(
-        0,
-        0,
+        cx0 as i32,
+        cy0 as i32,
         filtered.as_ref(),
         &paint,
         tiny_skia::Transform::identity(),
@@ -2249,12 +2459,12 @@ fn rasterize_text(
     clip: Option<&Rect>,
     font_weight: u16,
     font_style: lumen_layout::FontStyle,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<Option<DrawBounds>, Box<dyn std::error::Error>> {
     if text.is_empty() || font_size <= 0.0 || color.a == 0 {
-        return Ok(());
+        return Ok(None);
     }
     let Some(face) = load_bundled_face() else {
-        return Ok(());
+        return Ok(None);
     };
     let denom = face.ascent - face.descent;
     let ascent_ratio = if denom != 0.0 { face.ascent / denom } else { 0.8 };
@@ -2269,6 +2479,16 @@ fn rasterize_text(
     let height = pixmap.height();
     let mut mask = tiny_skia::Mask::new(width, height).ok_or("Failed to create glyph mask")?;
     let mut any_coverage = false;
+    // BUG-267: union bbox of every glyph bitmap actually blitted (page px),
+    // returned to the caller for the layer's dirty tracking. Uses the unclipped
+    // bitmap extent — a superset of the written pixels.
+    let mut ink: Option<DrawBounds> = None;
+    let mark_ink = |b: DrawBounds, ink: &mut Option<DrawBounds>| {
+        *ink = Some(match *ink {
+            None => b,
+            Some((l, t, r, btm)) => (l.min(b.0), t.min(b.1), r.max(b.2), btm.max(b.3)),
+        });
+    };
 
     // Tab handling (CSS Text L3 §10.1): a tab advances by `tab_size` pixels
     // and draws nothing. Shaping operates per tab-delimited segment so a tab
@@ -2307,6 +2527,11 @@ fn rasterize_text(
                     shear_glyph(&mut glyph);
                 }
                 if let Some(bitmap) = rasterizer.rasterize(&glyph) {
+                    // Unclipped page-px extent of this glyph bitmap (mirrors the
+                    // origin snap in `blit_glyph_coverage`).
+                    let gx0 = (pen_x + bitmap.left).round();
+                    let gy0 = (glyph_baseline - bitmap.top).round();
+                    let gb = (gx0, gy0, gx0 + bitmap.width as f32, gy0 + bitmap.height as f32);
                     if blit_glyph_coverage(
                         &mut mask,
                         &bitmap,
@@ -2317,6 +2542,7 @@ fn rasterize_text(
                         height,
                     ) {
                         any_coverage = true;
+                        mark_ink(gb, &mut ink);
                     }
                     // Fake bold: second blit shifted right; the advance below
                     // stays the same so line metrics are unchanged.
@@ -2332,6 +2558,9 @@ fn rasterize_text(
                         )
                     {
                         any_coverage = true;
+                        // The bold blit re-snaps its origin; ±1px covers the
+                        // rounding drift of `bold_offset`.
+                        mark_ink((gb.0 - 1.0, gb.1, gb.2 + bold_offset + 1.0, gb.3), &mut ink);
                     }
                 }
             }
@@ -2340,7 +2569,7 @@ fn rasterize_text(
     }
 
     if !any_coverage {
-        return Ok(());
+        return Ok(None);
     }
 
     let paint = tiny_skia::Paint {
@@ -2352,7 +2581,7 @@ fn rasterize_text(
     let full = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32)
         .ok_or("Invalid pixmap dimensions")?;
     pixmap.fill_rect(full, &paint, tiny_skia::Transform::identity(), Some(&mask));
-    Ok(())
+    Ok(ink)
 }
 
 /// Horizontal shear factor for synthetic italic — tan 12°.
@@ -3040,6 +3269,95 @@ mod tests {
         let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 20, 20), (0, 0, 255, 255), "blur(0) leaves the fill intact");
         assert_eq!(px(&img, 50, 50), (255, 255, 255, 255), "exterior stays white");
+    }
+
+    /// BUG-267 reference: the pre-crop full-canvas filter path — draw the rect
+    /// into a full-size transparent layer, blur the WHOLE canvas, composite at
+    /// (0,0) over white. The cropped production path must match byte-for-byte.
+    fn full_canvas_blur_reference(
+        width: u32,
+        height: u32,
+        r: Rect,
+        color: Color,
+        sigma: f32,
+    ) -> Vec<u8> {
+        let mut base = tiny_skia::Pixmap::new(width, height).expect("base");
+        base.fill(tiny_skia::Color::from_rgba8(255, 255, 255, 255));
+        let mut layer = tiny_skia::Pixmap::new(width, height).expect("layer");
+        rasterize_fill_rect(&mut layer, &r, &color, None).expect("fill");
+        let blurred = gaussian_blur(&layer, sigma);
+        let paint = tiny_skia::PixmapPaint {
+            opacity: 1.0,
+            blend_mode: tiny_skia::BlendMode::SourceOver,
+            quality: tiny_skia::FilterQuality::Nearest,
+        };
+        base.draw_pixmap(0, 0, blurred.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+        base.data().to_vec()
+    }
+
+    /// BUG-267: blurring only the dirty-box crop must produce exactly the same
+    /// pixels as blurring the full canvas — interior shadow case.
+    #[test]
+    fn filter_blur_crop_matches_full_canvas_blur() {
+        let black = Color { r: 0, g: 0, b: 0, a: 255 };
+        let shadow = rect(60.0, 40.0, 30.0, 20.0);
+        let cmds = vec![
+            DisplayCommand::PushFilter { filters: vec![FilterFn::Blur(4.0)], bounds: None },
+            DisplayCommand::FillRect { rect: shadow, color: black },
+            DisplayCommand::PopFilter,
+        ];
+        let img = rasterize_cpu(200, 150, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        let reference = full_canvas_blur_reference(200, 150, shadow, black, 4.0);
+        assert_eq!(img.data, reference, "cropped blur must be bit-identical to full-canvas blur");
+    }
+
+    /// BUG-267: same equivalence with the ink hugging the canvas corner, where
+    /// the crop window clamps to the canvas edge and the box-blur edge-replicate
+    /// clamping kicks in on both paths.
+    #[test]
+    fn filter_blur_crop_matches_full_at_canvas_edge() {
+        let black = Color { r: 0, g: 0, b: 0, a: 255 };
+        let shadow = rect(0.0, 0.0, 30.0, 20.0);
+        let cmds = vec![
+            DisplayCommand::PushFilter { filters: vec![FilterFn::Blur(5.0)], bounds: None },
+            DisplayCommand::FillRect { rect: shadow, color: black },
+            DisplayCommand::PopFilter,
+        ];
+        let img = rasterize_cpu(120, 90, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        let reference = full_canvas_blur_reference(120, 90, shadow, black, 5.0);
+        assert_eq!(img.data, reference, "edge-hugging cropped blur must match full-canvas blur");
+    }
+
+    /// BUG-267: a filter group whose ink lies fully off-canvas composites
+    /// nothing — the canvas stays white and nothing panics.
+    #[test]
+    fn filter_offcanvas_ink_is_skipped() {
+        let black = Color { r: 0, g: 0, b: 0, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushFilter { filters: vec![FilterFn::Blur(4.0)], bounds: None },
+            DisplayCommand::FillRect { rect: rect(-100.0, 10.0, 50.0, 20.0), color: black },
+            DisplayCommand::PopFilter,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        assert!(
+            img.data.chunks_exact(4).all(|p| p == [255, 255, 255, 255]),
+            "off-canvas filtered ink must leave the canvas white"
+        );
+    }
+
+    /// BUG-267: an empty filter group (no draws between Push and Pop) is a
+    /// no-op — the untouched layer is skipped without a full-canvas composite.
+    #[test]
+    fn filter_empty_group_is_noop() {
+        let cmds = vec![
+            DisplayCommand::PushFilter { filters: vec![FilterFn::Blur(4.0)], bounds: None },
+            DisplayCommand::PopFilter,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        assert!(
+            img.data.chunks_exact(4).all(|p| p == [255, 255, 255, 255]),
+            "empty filter group must leave the canvas white"
+        );
     }
 
     /// `filter: grayscale(1)` collapses a saturated colour to its luminance.
