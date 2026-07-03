@@ -73,7 +73,7 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-02",
+ "generated": "2026-07-03",
  "counts": {
   "open": 26,
   "fixed": 217,
@@ -608,7 +608,7 @@
      "id": "P3-spell",
      "title": "Spell check (Hunspell, русский словарь)",
      "status": "active",
-     "note": "PARTIAL 2026-07-02 (смешанное программирование, nemotron-3-ultra, срез 1): lumen_core::spell — pure-Rust движок Hunspell-формата (.aff/.dic: TRY/SFX/PFX/cross-product, condition-классы, check case-insensitive, suggest edit-distance-1, 12 тестов, без новых зависимостей); дошить — реальные ru/en словари в data/, подключение SpellChecker в шелле (contenteditable/forms), squiggly + suggestions в UI"
+     "note": "PARTIAL 2026-07-03 (смешанное программирование, nemotron-3-ultra, срезы 1-2): lumen_core::spell — pure-Rust движок Hunspell + срез 2: shell::spellcheck (load_dictionaries из data/spell, MultiDictionary, extract_words/misspelled_ranges, build_spell_overlay) + обвязка main.rs (фоновая загрузка словарей при старте, squiggly в paint для фокусного input/textarea, живая приёмка на словарях LibreOffice en_US+ru_RU PASS), 24 теста; дошить — suggestions в контекст-меню, contenteditable"
     },
     {
      "id": "P3-varfonts",

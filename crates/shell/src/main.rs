@@ -52,6 +52,7 @@ mod platform;
 mod prefetch;
 mod reader_view;
 mod source_view;
+mod spellcheck;
 mod svg_image;
 pub mod surface;
 mod runtime;
@@ -544,6 +545,11 @@ fn automation_ax_node(ax: &lumen_a11y::AXNode) -> lumen_driver::A11yNode {
     }
 }
 
+/// P3-spell срез 2: словари Hunspell, загруженные фоновым потоком при старте
+/// окна из `data/spell/` (`spellcheck::load_dictionaries`). До завершения
+/// загрузки `get()` возвращает `None` и спелл-чек молчит.
+static SPELL_DICTS: std::sync::OnceLock<spellcheck::MultiDictionary> = std::sync::OnceLock::new();
+
 #[allow(clippy::too_many_arguments)]
 fn run_window_mode(
     source: PageSource,
@@ -572,6 +578,17 @@ fn run_window_mode(
     lumen_js::set_audio_capture_provider(std::sync::Arc::new(
         platform::audio_capture::PlatformAudioCapture,
     ));
+
+    // P3-spell срез 2: словари Hunspell грузятся фоном (разворачивание аффиксов
+    // больших словарей занимает секунды) — старт окна не ждёт.
+    std::thread::spawn(|| {
+        let dicts = spellcheck::load_dictionaries(&spellcheck::spell_data_dir());
+        if !dicts.is_empty() {
+            use lumen_core::ext::SpellChecker;
+            println!("Spell: словари загружены ({})", dicts.locale());
+        }
+        let _ = SPELL_DICTS.set(dicts);
+    });
 
     // Wire HTMLAudioElement play/pause/seek to the platform audio playback
     // backend (PH3-11). Process-global; installed before any JS context starts.
@@ -10822,7 +10839,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // themed overlay panel so they follow the light/dark setting.
                 let pal = self.shell_theme.palette(self.dark_mode);
 
-                let (page_buf, mut overlay_buf): (Option<lumen_paint::DisplayList>, lumen_paint::DisplayList) =
+                let (mut page_buf, mut overlay_buf): (Option<lumen_paint::DisplayList>, lumen_paint::DisplayList) =
                     if self.find.is_open() {
                         let win_size = self.window.as_ref().map_or((1024, 720), |w| {
                             let s = w.inner_size();
@@ -10944,7 +10961,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Compositor offload: если есть активные анимации с opacity/transform/
                 // color/background-color — пересобираем display list из layout_box с
                 // overrides, минуя relayout (BUG-231 распространил offload на цвета).
-                let anim_dl: Option<lumen_paint::DisplayList> =
+                let mut anim_dl: Option<lumen_paint::DisplayList> =
                     if let (Some(frame), Some(lb)) = (&self.anim_frame, &self.layout_box) {
                         let comp = frame.to_compositor_frame();
                         if !comp.is_empty() {
@@ -11431,6 +11448,62 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     {
                         overlay_buf.append(&mut hint);
                         self.request_redraw();
+                    }
+                }
+
+                // P3-spell срез 2: красное squiggly-подчёркивание ошибочных слов
+                // в фокусном текстовом поле (<input>/<textarea>). Проверяется
+                // каждый DrawText внутри бокса поля; placeholder пропускается.
+                if let (Some(nid), Some(dicts)) = (self.focused_node, SPELL_DICTS.get())
+                    && !dicts.is_empty()
+                    && let Some(placeholder) = self.spell_target_placeholder(nid)
+                    && let Some(node_lb) = self
+                        .layout_box
+                        .as_ref()
+                        .and_then(|lb| forms::find_layout_box(lb, nid))
+                    && let Ok(font) = lumen_font::Font::parse(INTER_FONT)
+                    && let Ok(m) = lumen_paint::FontMeasurer::new(&font)
+                {
+                    let node_rect = node_lb.rect;
+                    let mut squiggles: lumen_paint::DisplayList = Vec::new();
+                    for cmd in &self.display_list {
+                        let lumen_paint::DisplayCommand::DrawText {
+                            rect, text, font_size, ..
+                        } = cmd
+                        else {
+                            continue;
+                        };
+                        if rect.x < node_rect.x
+                            || rect.y < node_rect.y
+                            || rect.x >= node_rect.x + node_rect.width
+                            || rect.y >= node_rect.y + node_rect.height
+                            || (!placeholder.is_empty() && text == &placeholder)
+                        {
+                            continue;
+                        }
+                        let ranges = spellcheck::misspelled_ranges(dicts, text);
+                        if ranges.is_empty() {
+                            continue;
+                        }
+                        let fs = *font_size;
+                        let measure = |s: &str| -> f32 {
+                            use lumen_layout::TextMeasurer;
+                            s.chars().map(|c| m.char_width(c, fs)).sum()
+                        };
+                        squiggles.extend(spellcheck::build_spell_overlay(
+                            text, rect.x, rect.y, fs, &ranges, &measure,
+                        ));
+                    }
+                    if !squiggles.is_empty() {
+                        if let Some(dl) = anim_dl.as_mut() {
+                            dl.extend(squiggles);
+                        } else {
+                            let mut buf = page_buf
+                                .take()
+                                .unwrap_or_else(|| self.display_list.clone());
+                            buf.extend(squiggles);
+                            page_buf = Some(buf);
+                        }
                     }
                 }
 
@@ -15758,6 +15831,30 @@ impl Lumen {
             find::find_matches(&self.display_list, self.find.query(), &measurer)
         }
     }
+
+    /// P3-spell срез 2: для текстового поля, подлежащего спелл-чеку —
+    /// `<textarea>` или `<input>` с текстовым type (password исключён) —
+    /// возвращает его placeholder (пустую строку при отсутствии), иначе `None`.
+    fn spell_target_placeholder(&self, nid: lumen_dom::NodeId) -> Option<String> {
+        let ls = self.layout_source.as_ref()?;
+        let doc = ls.document.lock().ok()?;
+        let node = doc.get(nid);
+        let name = node.element_name()?;
+        let is_textarea = name.local.eq_ignore_ascii_case("textarea");
+        let is_text_input = name.local.eq_ignore_ascii_case("input")
+            && matches!(
+                node.get_attr("type")
+                    .unwrap_or("text")
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "text" | "search" | "email" | "url"
+            );
+        if !is_textarea && !is_text_input {
+            return None;
+        }
+        Some(node.get_attr("placeholder").unwrap_or_default().to_owned())
+    }
+
 
     /// Сохранить текущую вкладку в `last_session.lsession` при закрытии окна.
     ///
