@@ -1,0 +1,413 @@
+//! Spell-check integration (P3-spell slice 2): dictionary loading from the
+//! portable `data/spell/` folder, word extraction, misspelled-range detection
+//! and the red squiggly-underline overlay for form controls.
+//!
+//! Pure logic layer: text measurement is abstracted behind a closure so the
+//! module is unit-testable without a font backend; painting produces plain
+//! `DisplayCommand`s that the shell appends to the overlay display list.
+
+use std::path::{Path, PathBuf};
+
+use lumen_core::ext::SpellChecker;
+use lumen_core::geom::Rect;
+use lumen_core::spell::HunspellDictionary;
+use lumen_layout::Color;
+use lumen_paint::DisplayCommand;
+
+use crate::adblock::browser_data_dir;
+
+/// Папка с пользовательскими словарями: `<exe_dir>/data/spell`.
+pub fn spell_data_dir() -> PathBuf {
+    browser_data_dir().join("spell")
+}
+
+/// Комбинированный словарь нескольких локалей. Слово считается верным,
+/// если оно верно хотя бы в одном из подключённых словарей.
+#[derive(Debug, Default)]
+pub struct MultiDictionary {
+    dicts: Vec<HunspellDictionary>,
+    locale: String,
+}
+
+impl MultiDictionary {
+    /// Создаёт пустой набор словарей (спелл-чек отключён).
+    pub fn empty() -> Self {
+        Self {
+            dicts: Vec::new(),
+            locale: "null".to_string(),
+        }
+    }
+
+    /// Проверяет, загружен ли хотя бы один словарь.
+    pub fn is_empty(&self) -> bool {
+        self.dicts.is_empty()
+    }
+}
+
+impl SpellChecker for MultiDictionary {
+    fn check(&self, word: &str) -> bool {
+        if self.dicts.is_empty() {
+            return true;
+        }
+        self.dicts.iter().any(|d| d.check(word))
+    }
+
+    fn suggest(&self, word: &str) -> Vec<String> {
+        if self.check(word) {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for d in &self.dicts {
+            for s in d.suggest(word) {
+                if seen.insert(s.clone()) {
+                    out.push(s);
+                    if out.len() >= 8 {
+                        return out;
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn locale(&self) -> &str {
+        &self.locale
+    }
+}
+
+/// Константы для волнистой линии (перенесены из lumen-paint).
+const WAVY_AMPLITUDE_FACTOR: f32 = 1.5;
+const WAVY_WAVELENGTH_FACTOR: f32 = 4.0;
+
+/// Рисует волнистое подчёркивание в `out`.
+fn emit_wavy_line(out: &mut Vec<DisplayCommand>, x: f32, y: f32, width: f32, thickness: f32, color: Color) {
+    let amplitude = thickness * WAVY_AMPLITUDE_FACTOR;
+    let wavelength = thickness * WAVY_WAVELENGTH_FACTOR;
+    let step = (thickness * 0.5).max(1.0);
+    let cy = y + thickness * 0.5;
+    let end = x + width;
+    let mut cx = x;
+    while cx < end {
+        let w = step.min(end - cx);
+        if w <= 0.0 {
+            break;
+        }
+        let sample_x = cx + w * 0.5;
+        let phase = (sample_x - x) / wavelength * std::f32::consts::TAU;
+        let dy = phase.sin() * amplitude;
+        out.push(DisplayCommand::FillRect {
+            rect: Rect::new(cx, cy + dy - thickness * 0.5, w, thickness),
+            color,
+        });
+        cx += step;
+    }
+}
+
+/// Загружает все пары `<stem>.aff` + `<stem>.dic` из `dir`.
+/// Пары сортируются по имени для детерминизма. Нечитаемые файлы или ошибки
+/// парсинга пропускаются молча. Локаль результата — стемы через "+", при пустом
+/// наборе — "null". Несуществующая директория даёт empty().
+pub fn load_dictionaries(dir: &Path) -> MultiDictionary {
+    let mut entries: Vec<_> = match std::fs::read_dir(dir) {
+        Ok(it) => it.filter_map(|e| e.ok()).collect(),
+        Err(_) => return MultiDictionary::empty(),
+    };
+    entries.sort_by_key(|e| e.file_name());
+
+    let mut dicts = Vec::new();
+    let mut stems = Vec::new();
+
+    for entry in entries {
+        let path = entry.path();
+        let stem = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(s) => s,
+            None => continue,
+        };
+        if path.extension().and_then(|e| e.to_str()) != Some("aff") {
+            continue;
+        }
+        let dic_path = path.with_extension("dic");
+        if !dic_path.exists() {
+            continue;
+        }
+        let aff_bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let dic_bytes = match std::fs::read(&dic_path) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let aff = String::from_utf8_lossy(&aff_bytes);
+        let dic = String::from_utf8_lossy(&dic_bytes);
+        match HunspellDictionary::from_aff_dic(&aff, &dic, stem) {
+            Ok(d) => {
+                dicts.push(d);
+                stems.push(stem.to_string());
+            }
+            Err(_) => continue,
+        }
+    }
+
+    let locale = if stems.is_empty() {
+        "null".to_string()
+    } else {
+        stems.join("+")
+    };
+    MultiDictionary { dicts, locale }
+}
+
+/// Извлекает байтовые диапазоны слов в `text`.
+/// Токен — максимальная последовательность символов, где каждый символ
+/// удовлетворяет `is_alphanumeric() || c == '\'' || c == '’' || c == '-'`.
+/// Токены, содержащие цифры, пропускаются. Краевые `'`, `’`, `-` обрезаются.
+/// Возвращает Vec<(start_byte, end_byte)>, валидные для `&text[s..e]`.
+pub fn extract_words(text: &str) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut start: Option<usize> = None;
+
+    for (idx, ch) in text.char_indices() {
+        let is_word_char = ch.is_alphanumeric() || ch == '\'' || ch == '’' || ch == '-';
+        if is_word_char {
+            if start.is_none() {
+                start = Some(idx);
+            }
+        } else if let Some(s) = start.take() {
+            let token = &text[s..idx];
+            if !token.chars().any(|c| c.is_ascii_digit()) {
+                let trimmed = token.trim_matches(|c| c == '\'' || c == '’' || c == '-');
+                if !trimmed.is_empty() {
+                    let trimmed_start = s + (trimmed.as_ptr() as usize - token.as_ptr() as usize);
+                    let trimmed_end = trimmed_start + trimmed.len();
+                    ranges.push((trimmed_start, trimmed_end));
+                }
+            }
+        }
+    }
+
+    if let Some(s) = start {
+        let token = &text[s..];
+        if !token.chars().any(|c| c.is_ascii_digit()) {
+            let trimmed = token.trim_matches(|c| c == '\'' || c == '’' || c == '-');
+            if !trimmed.is_empty() {
+                let trimmed_start = s + (trimmed.as_ptr() as usize - token.as_ptr() as usize);
+                let trimmed_end = trimmed_start + trimmed.len();
+                ranges.push((trimmed_start, trimmed_end));
+            }
+        }
+    }
+
+    ranges
+}
+
+/// Возвращает диапазоны слов, для которых `checker.check` вернул `false`.
+/// Ограничение: не более 100 диапазонов.
+pub fn misspelled_ranges(checker: &dyn SpellChecker, text: &str) -> Vec<(usize, usize)> {
+    extract_words(text)
+        .into_iter()
+        .filter(|(s, e)| !checker.check(&text[*s..*e]))
+        .take(100)
+        .collect()
+}
+
+/// Строит команды отрисовки волнистого подчёркивания для ошибочных диапазонов.
+/// `measure` — замыкание, возвращающее ширину строки в пикселях.
+/// Цвет волны: красный (221, 30, 30, 255). Толщина 1.0, y = text_y + font_size * 0.95.
+pub fn build_spell_overlay(
+    text: &str,
+    text_x: f32,
+    text_y: f32,
+    font_size: f32,
+    ranges: &[(usize, usize)],
+    measure: &dyn Fn(&str) -> f32,
+) -> Vec<DisplayCommand> {
+    let mut out = Vec::new();
+    if ranges.is_empty() {
+        return out;
+    }
+    let wave_y = text_y + font_size * 0.95;
+    let color = Color { r: 221, g: 30, b: 30, a: 255 };
+    let thickness = 1.0;
+
+    for &(s, e) in ranges {
+        let prefix = &text[..s];
+        let word = &text[s..e];
+        let x0 = text_x + measure(prefix);
+        let w = measure(word);
+        if w > 0.0 {
+            emit_wavy_line(&mut out, x0, wave_y, w, thickness, color);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const AFF: &str = r#"
+SET UTF-8
+TRY esianrtolcdugmphbyfvkwz
+SFX D Y 2
+SFX D   0   ed   [^e]
+SFX D   e   ed   e
+PFX U Y 1
+PFX U   0   un   .
+"#;
+
+    const DIC: &str = r#"
+4
+walk/D
+smile/D
+lock/DU
+привет
+"#;
+
+    #[test]
+    fn extract_words_hello_world() {
+        let text = "hello world";
+        let ranges = extract_words(text);
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(&text[ranges[0].0..ranges[0].1], "hello");
+        assert_eq!(&text[ranges[1].0..ranges[1].1], "world");
+    }
+
+    #[test]
+    fn extract_words_dont_stop() {
+        let text = "don't stop";
+        let ranges = extract_words(text);
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(&text[ranges[0].0..ranges[0].1], "don't");
+        assert_eq!(&text[ranges[1].0..ranges[1].1], "stop");
+    }
+
+    #[test]
+    fn extract_words_cyrillic_hyphen() {
+        let text = "по-русски и ещё";
+        let ranges = extract_words(text);
+        assert_eq!(ranges.len(), 3);
+        assert_eq!(&text[ranges[0].0..ranges[0].1], "по-русски");
+        assert_eq!(&text[ranges[1].0..ranges[1].1], "и");
+        assert_eq!(&text[ranges[2].0..ranges[2].1], "ещё");
+    }
+
+    #[test]
+    fn extract_words_digits_and_trim() {
+        let text = "abc123 x2y";
+        let ranges = extract_words(text);
+        assert!(ranges.is_empty(), "tokens with digits should be skipped");
+
+        let text2 = "'quoted'";
+        let ranges2 = extract_words(text2);
+        assert_eq!(ranges2.len(), 1);
+        assert_eq!(&text2[ranges2[0].0..ranges2[0].1], "quoted");
+    }
+
+    #[test]
+    fn multi_dictionary_empty() {
+        let md = MultiDictionary::empty();
+        assert!(md.is_empty());
+        assert_eq!(md.locale(), "null");
+        assert!(md.check("anything"));
+        assert!(md.suggest("anything").is_empty());
+    }
+
+    #[test]
+    fn multi_dictionary_two_dicts() {
+        let dict1 = HunspellDictionary::from_aff_dic(AFF, DIC, "en_US").unwrap();
+        let aff2 = "TRY ab\n";
+        let dic2 = "1\nпока";
+        let dict2 = HunspellDictionary::from_aff_dic(aff2, dic2, "ru_RU").unwrap();
+
+        let mut md = MultiDictionary::empty();
+        md.dicts = vec![dict1, dict2];
+        md.locale = "en_US+ru_RU".to_string();
+
+        assert!(md.check("walked"));
+        assert!(md.check("пока"));
+        assert!(!md.check("qqqq"));
+    }
+
+    #[test]
+    fn multi_dictionary_suggest() {
+        let dict1 = HunspellDictionary::from_aff_dic(AFF, DIC, "en_US").unwrap();
+        let mut md = MultiDictionary::empty();
+        md.dicts = vec![dict1];
+        md.locale = "en_US".to_string();
+
+        let sugg = md.suggest("walkk");
+        assert!(!sugg.is_empty());
+        assert!(sugg.contains(&"walk".to_string()));
+        assert_eq!(sugg.len(), sugg.iter().collect::<std::collections::HashSet<_>>().len());
+        assert!(sugg.len() <= 8);
+    }
+
+    #[test]
+    fn misspelled_ranges_basic() {
+        let dict = HunspellDictionary::from_aff_dic(AFF, DIC, "en_US").unwrap();
+        let text = "walk walkz привет превет";
+        let ranges = misspelled_ranges(&dict, text);
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(&text[ranges[0].0..ranges[0].1], "walkz");
+        assert_eq!(&text[ranges[1].0..ranges[1].1], "превет");
+    }
+
+    #[test]
+    fn build_spell_overlay_non_empty() {
+        let dict = HunspellDictionary::from_aff_dic(AFF, DIC, "en_US").unwrap();
+        let text = "walk walkz";
+        let ranges = misspelled_ranges(&dict, text);
+        let measure = |s: &str| s.chars().count() as f32 * 10.0;
+        let cmds = build_spell_overlay(text, 10.0, 20.0, 16.0, &ranges, &measure);
+
+        assert!(!cmds.is_empty());
+        for cmd in &cmds {
+            let DisplayCommand::FillRect { rect, color } = cmd else {
+                panic!("ожидались только FillRect");
+            };
+            assert_eq!(color.r, 221);
+            assert_eq!(color.g, 30);
+            assert_eq!(color.b, 30);
+            assert_eq!(color.a, 255);
+            let expected_y = 20.0 + 16.0 * 0.95;
+            assert!((rect.y - expected_y).abs() < 2.0);
+        }
+        let DisplayCommand::FillRect { rect: first_rect, .. } = &cmds[0] else {
+            panic!("ожидался FillRect");
+        };
+        let first_x = first_rect.x;
+        let expected_first_x = 10.0 + measure("walk ");
+        assert!((first_x - expected_first_x).abs() < 0.01);
+    }
+
+    #[test]
+    fn build_spell_overlay_empty_ranges() {
+        let cmds = build_spell_overlay("hello", 0.0, 0.0, 16.0, &[], &|s| s.len() as f32 * 10.0);
+        assert!(cmds.is_empty());
+    }
+
+    #[test]
+    fn load_dictionaries_temp_dir() {
+        let dir = std::env::temp_dir().join("lumen_spell_test_load_dicts");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("en_US.aff"), AFF).unwrap();
+        std::fs::write(dir.join("en_US.dic"), DIC).unwrap();
+
+        let md = load_dictionaries(&dir);
+        assert!(!md.is_empty());
+        assert_eq!(md.locale(), "en_US");
+        assert!(md.check("walked"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_dictionaries_nonexistent() {
+        let dir = std::env::temp_dir().join("lumen_spell_test_nonexistent_12345");
+        let md = load_dictionaries(&dir);
+        assert!(md.is_empty());
+        assert_eq!(md.locale(), "null");
+    }
+}
