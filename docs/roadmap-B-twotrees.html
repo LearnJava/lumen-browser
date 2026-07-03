@@ -73,10 +73,10 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-03",
+ "generated": "2026-07-04",
  "counts": {
-  "open": 26,
-  "fixed": 217,
+  "open": 25,
+  "fixed": 218,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -985,9 +985,9 @@
       {
        "id": "RP-8",
        "title": "RP-8: Ускорение CPU-растеризатора (layer bbox)",
-       "status": "planned",
+       "status": "done",
        "size": "L",
-       "note": "Аудит 2026-07-02: CPU-растеризатор аллоцирует полнополотный Pixmap на каждый Push-слой и игнорирует bounds у PushFilter → 136 с paint на lenta.ru (headless). Только CPU-путь (скриншот/PDF/тест-гейт), окно на GPU не затронуто. Фикс по bbox. См. BUG-267",
+       "note": "Срез A 2026-07-03: dirty-bbox на слоях (CpuLayer), PopFilter/PushBackdropFilter кропают blur до bbox ink ⊕ 3r (бенч теней 169.5с → 1.5с, ×113). Срезы B–D 2026-07-03: clip/mask/opacity/blend-композиты по dirty-окну ⊕ 2px AA (бенч clip+mask+opacity+blend 40.1с → 0.34с, ×117); PNG байт-в-байт, 145/145 graphic_tests идентичны; transform-композит не кропается (bilinear не бит-идентичен). См. BUG-267",
        "bugs": [
         "BUG-267"
        ]
@@ -2723,10 +2723,10 @@
    "debtor": false
   },
   "BUG-267": {
-   "status": "open",
-   "title": "CPU-путь рендера (`--screenshot`/PDF/IPC-снимок/cpu_vs_edge-гейт) катастрофически медленный на больших полотнах с тенями/фильтрами: `lenta.ru` `--screenshot` =…",
+   "status": "fixed",
+   "title": "CPU-путь рендера (`--screenshot`/PDF/IPC-снимок/cpu_vs_edge-гейт) был катастрофически медленным на больших полотнах со слоями/фильтрами: `lenta.ru` `--screensho…",
    "component": "paint (CPU-растеризатор)",
-   "date": null,
+   "date": "2026-07-03",
    "debtor": false
   },
   "BUG-268": {
