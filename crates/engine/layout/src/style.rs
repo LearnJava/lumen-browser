@@ -5595,8 +5595,8 @@ pub fn compute_style(
         text_decoration_skip_ink: inherited.text_decoration_skip_ink,
         accent_color: inherited.accent_color,
         color_scheme: inherited.color_scheme,
-        // CSS Color Adjustment L1 §4: forced-color-adjust is NOT inherited — reset.
-        forced_color_adjust: ForcedColorAdjust::Auto,
+        // CSS Color Adjustment L1 §4: forced-color-adjust IS inherited.
+        forced_color_adjust: inherited.forced_color_adjust,
         // CSS Variables L1: все custom properties inherited.
         custom_props: inherited.custom_props.clone(),
         // Ненаследуемые — сброс.
@@ -6470,6 +6470,15 @@ pub fn compute_style(
     // already resolved inline in the `"color"` branch of apply_declaration.
     resolve_system_colors_in_style(&mut style, dark_mode);
 
+    // CSS Color Adjustment L1 §3 — Forced Colors Mode: when the user preference
+    // is active, override author colors with the forced system palette
+    // (respecting `forced-color-adjust`). Runs after system-color resolution so
+    // it sees final Rgba values and after the full cascade so it sees the final
+    // `forced-color-adjust` value.
+    if forced_colors_active() {
+        apply_forced_colors_mode(doc, node, &mut style, dark_mode);
+    }
+
     // CSS Overflow L3 §2.1: if one axis is `visible` and the other is not,
     // the `visible` axis becomes `auto` (both axes must agree on visibility).
     (style.overflow_x, style.overflow_y) = coerce_overflow_axes(style.overflow_x, style.overflow_y);
@@ -6519,6 +6528,126 @@ fn resolve_system_colors_in_style(style: &mut ComputedStyle, dark_mode: bool) {
     resolve!(&mut style.border_left_color);
     resolve!(&mut style.column_rule_color);
     resolve!(&mut style.gap_rule_color);
+}
+
+/// CSS Color Adjustment L1 §3.1 — forces the element's colors to the system
+/// palette when Forced Colors Mode is active.
+///
+/// `forced-color-adjust` is honored: `none` leaves the element untouched;
+/// `preserve-parent-color` forces everything except `color`, which keeps its
+/// computed (typically inherited, already-forced) value.
+///
+/// Forced values follow element semantics (§3.1 + HTML UA guidance):
+/// links (`a[href]`/`area[href]`) → `LinkText`, disabled controls → `GrayText`,
+/// buttons → `ButtonText`/`ButtonFace`/`ButtonBorder`, text fields →
+/// `CanvasText`/`Field`; everything else → `CanvasText`/`Canvas`.
+/// `box-shadow`/`text-shadow` are forced to none; non-`url()` background
+/// images (gradients, cross-fades, `paint()`) are dropped — `url()` images
+/// are kept per spec. `background-color` keeps the author's full transparency:
+/// an unset or `transparent` background stays transparent.
+fn apply_forced_colors_mode(doc: &Document, node: NodeId, style: &mut ComputedStyle, dark_mode: bool) {
+    if style.forced_color_adjust == ForcedColorAdjust::None {
+        return;
+    }
+    let dark = style.color_scheme.used_dark(dark_mode);
+
+    // Element semantics for system-color pair selection.
+    let mut is_link = false;
+    let mut is_button = false;
+    let mut is_field = false;
+    let mut is_disabled = false;
+    if let NodeData::Element { name, .. } = &doc.get(node).data {
+        let tag = name.local.as_str();
+        is_link = matches!(tag, "a" | "area") && doc.get(node).get_attr("href").is_some();
+        let input_type = if tag == "input" {
+            doc.get(node)
+                .get_attr("type")
+                .map(|s| s.trim().to_ascii_lowercase())
+                .unwrap_or_else(|| "text".to_string())
+        } else {
+            String::new()
+        };
+        is_button = tag == "button" || matches!(input_type.as_str(), "button" | "submit" | "reset");
+        is_field = matches!(tag, "textarea" | "select") || (tag == "input" && !is_button);
+        is_disabled = matches!(tag, "input" | "textarea" | "select" | "button")
+            && doc.get(node).get_attr("disabled").is_some();
+    }
+
+    let fg_kw = if is_disabled {
+        SystemColor::GrayText
+    } else if is_link {
+        SystemColor::LinkText
+    } else if is_button {
+        SystemColor::ButtonText
+    } else {
+        SystemColor::CanvasText
+    };
+    let fg = fg_kw.resolve_color(dark);
+    let border = if is_button { SystemColor::ButtonBorder } else { SystemColor::CanvasText }
+        .resolve_color(dark);
+    let bg = if is_button {
+        SystemColor::ButtonFace
+    } else if is_field {
+        SystemColor::Field
+    } else {
+        SystemColor::Canvas
+    }
+    .resolve_color(dark);
+
+    // §3.2 `preserve-parent-color`: only the `color` property escapes forcing.
+    if style.forced_color_adjust != ForcedColorAdjust::PreserveParentColor {
+        style.color = fg;
+    }
+
+    // background-color: forced to the backdrop system color, but the author's
+    // full transparency is preserved (unset / alpha 0 stays transparent).
+    let bg_visible = match &style.background_color {
+        Some(CssColor::Rgba(c)) => c.a > 0,
+        Some(CssColor::Wide(w)) => w.a > 0.0,
+        // System already resolved to Rgba by resolve_system_colors_in_style;
+        // CurrentColor follows the (forced, opaque) `color`.
+        Some(CssColor::CurrentColor) | Some(CssColor::System(_)) => true,
+        None => false,
+    };
+    if bg_visible {
+        style.background_color = Some(CssColor::Rgba(bg));
+    }
+
+    style.border_top_color = CssColor::Rgba(border);
+    style.border_right_color = CssColor::Rgba(border);
+    style.border_bottom_color = CssColor::Rgba(border);
+    style.border_left_color = CssColor::Rgba(border);
+    style.column_rule_color = CssColor::Rgba(border);
+    style.gap_rule_color = CssColor::Rgba(border);
+    if !matches!(style.outline_color, OutlineColor::Auto) {
+        style.outline_color = OutlineColor::Color(fg);
+    }
+    style.text_decoration_color = CssColor::Rgba(fg);
+    style.text_emphasis_color = CssColor::Rgba(fg);
+    if style.caret_color.is_some() {
+        // `auto` (None) already follows the forced `color`.
+        style.caret_color = Some(fg);
+    }
+
+    // SVG geometry is painted from `fill`/`stroke` (§3.1 lists both).
+    if !matches!(style.svg_fill, SvgPaint::None) {
+        style.svg_fill = SvgPaint::Color(fg);
+    }
+    if !matches!(style.svg_stroke, SvgPaint::None) {
+        style.svg_stroke = SvgPaint::Color(fg);
+    }
+
+    // Shadows are forced to `none`.
+    style.box_shadow.clear();
+    style.text_shadow.clear();
+
+    // background-image: gradients / cross-fades / paint() are dropped;
+    // `url()` images are kept (spec: forced to none unless a url()).
+    for layer in &mut style.background_layers {
+        if !matches!(layer.image, BackgroundImage::None | BackgroundImage::Url(_)) {
+            layer.image = BackgroundImage::None;
+        }
+    }
 }
 
 /// CSS Overflow L3 §2.1: coerce mismatched overflow axes.
@@ -9900,6 +10029,30 @@ pub fn set_interactive_state(
 /// Clears hover/focus/active state after layout.
 pub fn clear_interactive_state() {
     set_interactive_state(None, None, None);
+}
+
+thread_local! {
+    /// CSS Color Adjustment L1 §3 — Forced Colors Mode active flag.
+    /// Set by the shell via [`set_forced_colors`] from the user's accessibility
+    /// preference before a layout pass on this thread. Read by `compute_style`
+    /// (system-palette forcing post-pass) and by `media_context_from_viewport`
+    /// (the `(forced-colors: active)` media feature).
+    static FORCED_COLORS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Enables/disables Forced Colors Mode (CSS Color Adjustment L1 §3) for all
+/// subsequent layout passes on the current thread.
+///
+/// Call before `layout_measured` / `layout_measured_hyp` on the layout thread.
+/// The flag is sticky (a UA-wide user preference, not per-pass state), so there
+/// is no paired `clear_*` — call with `false` to disable.
+pub fn set_forced_colors(active: bool) {
+    FORCED_COLORS.with(|f| f.set(active));
+}
+
+/// True when Forced Colors Mode is active on the current thread.
+pub fn forced_colors_active() -> bool {
+    FORCED_COLORS.with(|f| f.get())
 }
 
 /// CSS Cascade L6 §5.1 — true when `node` is a descendant of (or is) an element
@@ -15286,7 +15439,8 @@ fn apply_css_wide_keyword(
             style.offset_anchor = if inh_only_inherit { inherited.offset_anchor } else { init.offset_anchor };
         }
         "forced-color-adjust" => {
-            style.forced_color_adjust = if inh_only_inherit {
+            // Inherited property: `unset`/`revert` behave as `inherit`.
+            style.forced_color_adjust = if inh {
                 inherited.forced_color_adjust
             } else {
                 init.forced_color_adjust
@@ -18095,7 +18249,7 @@ fn media_context_from_viewport(viewport: Size, dark_mode: bool) -> MediaContext 
         height: viewport.height,
         prefers_dark: dark_mode,
         prefers_reduced_motion: false,
-        forced_colors: false,
+        forced_colors: forced_colors_active(),
         ..Default::default()
     }
 }
@@ -26854,7 +27008,8 @@ mod tests {
     }
 
     #[test]
-    fn forced_color_adjust_not_inherited() {
+    fn forced_color_adjust_inherited() {
+        // CSS Color Adjustment L1 §4: forced-color-adjust is an inherited property.
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { forced-color-adjust: none; }");
         let root = ComputedStyle::root();
@@ -26863,7 +27018,7 @@ mod tests {
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.forced_color_adjust, ForcedColorAdjust::None);
-        assert_eq!(span_style.forced_color_adjust, ForcedColorAdjust::Auto);
+        assert_eq!(span_style.forced_color_adjust, ForcedColorAdjust::None);
     }
 
     #[test]
@@ -26874,6 +27029,148 @@ mod tests {
         let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.forced_color_adjust, ForcedColorAdjust::Auto);
+    }
+
+    // ── Forced Colors Mode (CSS Color Adjustment L1 §3) ──────────────────────
+
+    /// Runs `f` with Forced Colors Mode enabled on this thread, then disables it.
+    fn with_forced_colors<F: FnOnce()>(f: F) {
+        set_forced_colors(true);
+        f();
+        set_forced_colors(false);
+    }
+
+    #[test]
+    fn forced_colors_color_forced_to_canvastext() {
+        with_forced_colors(|| {
+            let s = cascade_at("<div>", "div { color: red; }", &[0]);
+            assert_eq!(s.color, SystemColor::CanvasText.resolve_color(false));
+        });
+    }
+
+    #[test]
+    fn forced_colors_adjust_none_keeps_author_colors() {
+        with_forced_colors(|| {
+            let s = cascade_at(
+                "<div>",
+                "div { color: red; background-color: blue; forced-color-adjust: none; }",
+                &[0],
+            );
+            assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+            assert_eq!(
+                s.background_color,
+                Some(CssColor::Rgba(Color { r: 0, g: 0, b: 255, a: 255 }))
+            );
+        });
+    }
+
+    #[test]
+    fn forced_colors_link_gets_linktext() {
+        with_forced_colors(|| {
+            let s = cascade_at("<a href='#'>x</a>", "a { color: red; }", &[0]);
+            assert_eq!(s.color, SystemColor::LinkText.resolve_color(false));
+        });
+    }
+
+    #[test]
+    fn forced_colors_disabled_control_gets_graytext() {
+        with_forced_colors(|| {
+            let s = cascade_at("<button disabled>x</button>", "button { color: red; }", &[0]);
+            assert_eq!(s.color, SystemColor::GrayText.resolve_color(false));
+        });
+    }
+
+    #[test]
+    fn forced_colors_shadows_forced_to_none() {
+        with_forced_colors(|| {
+            let s = cascade_at(
+                "<div>",
+                "div { box-shadow: 2px 2px 4px red; text-shadow: 1px 1px 2px blue; }",
+                &[0],
+            );
+            assert!(s.box_shadow.is_empty());
+            assert!(s.text_shadow.is_empty());
+        });
+    }
+
+    #[test]
+    fn forced_colors_background_forced_but_transparency_preserved() {
+        with_forced_colors(|| {
+            let opaque = cascade_at("<div>", "div { background-color: red; }", &[0]);
+            assert_eq!(
+                opaque.background_color,
+                Some(CssColor::Rgba(SystemColor::Canvas.resolve_color(false)))
+            );
+            let unset = cascade_at("<div>", "div { color: red; }", &[0]);
+            assert_eq!(unset.background_color, None);
+            let transparent = cascade_at("<div>", "div { background-color: transparent; }", &[0]);
+            assert_ne!(
+                transparent.background_color,
+                Some(CssColor::Rgba(SystemColor::Canvas.resolve_color(false)))
+            );
+        });
+    }
+
+    #[test]
+    fn forced_colors_gradient_background_dropped_url_kept() {
+        with_forced_colors(|| {
+            let s = cascade_at(
+                "<div>",
+                "div { background-image: linear-gradient(red, blue); }",
+                &[0],
+            );
+            assert!(
+                s.background_layers.iter().all(|l| matches!(l.image, BackgroundImage::None)),
+                "gradient background must be forced to none"
+            );
+            let s = cascade_at("<div>", "div { background-image: url('a.png'); }", &[0]);
+            assert!(
+                s.background_layers.iter().any(|l| matches!(l.image, BackgroundImage::Url(_))),
+                "url() background must be kept"
+            );
+        });
+    }
+
+    #[test]
+    fn forced_colors_preserve_parent_color_keeps_color_forces_rest() {
+        with_forced_colors(|| {
+            let s = cascade_at(
+                "<div>",
+                "div { color: red; border: 1px solid blue; \
+                       forced-color-adjust: preserve-parent-color; }",
+                &[0],
+            );
+            assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+            assert_eq!(
+                s.border_top_color,
+                CssColor::Rgba(SystemColor::CanvasText.resolve_color(false))
+            );
+        });
+    }
+
+    #[test]
+    fn forced_colors_media_query_matches_when_active() {
+        // `(forced-colors: active)` media feature is driven by the same flag.
+        with_forced_colors(|| {
+            let s = cascade_at(
+                "<div>",
+                "@media (forced-colors: active) { div { display: none; } }",
+                &[0],
+            );
+            assert_eq!(s.display, Display::None);
+        });
+        let s = cascade_at(
+            "<div>",
+            "@media (forced-colors: active) { div { display: none; } }",
+            &[0],
+        );
+        assert_ne!(s.display, Display::None);
+    }
+
+    #[test]
+    fn forced_colors_off_keeps_author_colors() {
+        let s = cascade_at("<div>", "div { color: red; }", &[0]);
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
     }
 
     // ── order ─────────────────────────────────────────────────────────────────
