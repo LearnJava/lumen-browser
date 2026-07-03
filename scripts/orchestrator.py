@@ -2165,7 +2165,6 @@ def main():
     parser.add_argument(
         "developers",
         nargs="*",
-        choices=["P1", "P2", "P3", "P4", "P5"],
         metavar="DEV",
         help="Разработчики для запуска: P1 P2 P3 P4 P5",
     )
@@ -2246,6 +2245,18 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # `choices` намеренно не задан на позиционном `developers` (nargs="*"):
+    # argparse в связке nargs="*" + choices ломается с "invalid choice: []",
+    # если позиционных аргументов ноль, а есть любой другой флаг (--stop,
+    # --status, --stop-all). Валидируем значения вручную.
+    valid_devs = {"P1", "P2", "P3", "P4", "P5"}
+    invalid = [d for d in args.developers if d not in valid_devs]
+    if invalid:
+        parser.error(
+            f"argument DEV: invalid choice: {invalid[0]!r} "
+            f"(choose from {', '.join(sorted(valid_devs))})"
+        )
 
     # Режим статуса
     if args.status:
