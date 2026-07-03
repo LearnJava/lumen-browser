@@ -218,7 +218,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `font-variant` / `font-variant-caps` | 🟡 | small-caps only; all-small-caps ⬜ |
 | `font-stretch` | 🟡 | % parsed; matcher ⬜ |
 | `font-variation-settings` | ✅ | fvar+avar normalization; applied on CPU/wgpu paths, femtovg window renders default instance (see CAPABILITIES) |
-| `font-feature-settings` | ⬜ | OT feature flags |
+| `font-feature-settings` | ✅ | parse + ComputedStyle (inherited) + DrawText.font_features; shaper overrides default GSUB/GPOS set (liga/clig/calt/rlig/ccmp + kern) on CPU path & femtovg varied-text path; native femtovg text shapes itself (class BUG-109) |
 | `font-size-adjust` | ✅ | real OS/2 x-height scaling (P4 2026-06-13); тест 95 |
 | `font-optical-sizing` | ✅ | auto injects opsz=font-size into variation axes; none skips |
 | `font-palette` | ⬜ | CSS Fonts L5 |

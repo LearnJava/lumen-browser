@@ -38,8 +38,17 @@ impl<'a> Gpos<'a> {
     /// Parse the `GPOS` table bytes and pre-select the lookups for the
     /// default positioning features (`kern`). Returns `None` if malformed.
     pub fn parse(data: &'a [u8]) -> Option<Self> {
+        Self::parse_with_features(data, &[])
+    }
+
+    /// Like [`Gpos::parse`], but with CSS `font-feature-settings` overrides
+    /// applied on top of the default feature set: `(tag, 0)` disables a
+    /// feature (e.g. `"kern" 0` turns kerning off), `(tag, >=1)` enables it.
+    /// Tags absent from the font's FeatureList are silently ignored.
+    pub fn parse_with_features(data: &'a [u8], overrides: &[([u8; 4], u32)]) -> Option<Self> {
         let table = LayoutTable::parse(data)?;
-        let lookups = table.enabled_lookups(&GPOS_FEATURES);
+        let tags = crate::otlayout::apply_feature_overrides(&GPOS_FEATURES, overrides);
+        let lookups = table.enabled_lookups(&tags);
         Some(Self { table, lookups })
     }
 

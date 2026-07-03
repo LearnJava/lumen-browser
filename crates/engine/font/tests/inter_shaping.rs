@@ -139,3 +139,45 @@ fn empty_input_yields_empty_run() {
     let shaper = Shaper::new(&font);
     assert!(shaper.shape(&[], &hmtx).is_empty());
 }
+
+#[test]
+fn feature_override_calt_off_keeps_arrow_apart() {
+    // CSS `font-feature-settings: "calt" 0` must disable Inter's default-on
+    // contextual-alternates ligature, so "->" stays two glyphs.
+    let data = font_bytes();
+    let font = Font::parse(&data).expect("parse Inter");
+    let hmtx = font.hmtx().expect("hmtx");
+    let shaper = Shaper::with_features(&font, &[(*b"calt", 0)]);
+
+    let ids = glyph_ids(&font, "->");
+    let shaped = shaper.shape(&ids, &hmtx);
+    assert_eq!(shaped.len(), 2, "'->' must not ligate with calt off");
+}
+
+#[test]
+fn feature_override_kern_off_keeps_base_advance() {
+    // CSS `font-feature-settings: "kern" 0` must disable GPOS kerning, so
+    // the "AV" pair keeps its base hmtx advances.
+    let data = font_bytes();
+    let font = Font::parse(&data).expect("parse Inter");
+    let hmtx = font.hmtx().expect("hmtx");
+    let shaper = Shaper::with_features(&font, &[(*b"kern", 0)]);
+
+    let ids = glyph_ids(&font, "AV");
+    let base_a = hmtx.advance_width(ids[0]).unwrap() as i32;
+    let shaped = shaper.shape(&ids, &hmtx);
+    assert_eq!(shaped.len(), 2);
+    assert_eq!(shaped[0].x_advance, base_a, "A must not kern with kern off");
+}
+
+#[test]
+fn feature_override_empty_matches_default() {
+    // Пустой список переопределений эквивалентен Shaper::new.
+    let data = font_bytes();
+    let font = Font::parse(&data).expect("parse Inter");
+    let hmtx = font.hmtx().expect("hmtx");
+    let ids = glyph_ids(&font, "AV->x");
+    let a = Shaper::new(&font).shape(&ids, &hmtx);
+    let b = Shaper::with_features(&font, &[]).shape(&ids, &hmtx);
+    assert_eq!(a, b);
+}

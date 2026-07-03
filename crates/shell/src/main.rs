@@ -17448,6 +17448,7 @@ fn build_split_placeholder(url: &str) -> lumen_paint::DisplayList {
             font_weight: FontWeight(400),
             font_style: FontStyle::Normal,
             font_variation_axes: vec![],
+            font_features: Vec::new(),
             tab_size: 0.0,
             highlight_name: None,
             text_orientation: None,

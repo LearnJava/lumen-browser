@@ -252,6 +252,8 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 
 - **font-variation-settings** — ✅ реализован (CSS Fonts L4 §6.3): parse_font_variation_settings() в style.rs; field в ComputedStyle + cascade inheritance; OwnedVariableFont в lumen-paint хранит fvar axes + Hvar; MultiFontMeasurer::char_width_varied() применяет HVAR advance width deltas для variable fonts; measure_text_w_varied() в box_tree.rs используется при line wrapping; тест 68
 
+- **font-feature-settings** — ✅ реализован (CSS Fonts L3 §6): parse_font_feature_settings() в style.rs (`normal | <string> [<integer>|on|off]?#`); FontFeatureSetting { tag, value } в ComputedStyle, наследуемое; DisplayCommand::DrawText несёт font_features; lumen-font Shaper::with_features()/apply_feature_overrides() накладывает переопределения на default-набор (liga/clig/calt/rlig/ccmp + kern) — value 0 выключает фичу, ≥1 включает; применяется на CPU-растре и векторном variable-font пути femtovg; нативный femtovg-текст шейпит сам и переопределения не видит (класс BUG-109); графический тест не добавлен — окно не применяет свойство, валидация unit/integration-тестами (style.rs, otlayout.rs, inter_shaping.rs) и `--dump-display-list` (feat=[...])
+
 - **object-fit** — ✅ реализован (CSS Images L3 §5.5): compute_object_fit_transform() в box_tree.rs; объекты Fill/Contain/Cover/None/ScaleDown применяются к SVG viewBox; object-position (x/y PositionComponent) управляет выравниванием контента в свободном пространстве; при Fill (default) сохраняется поведение SVG preserveAspectRatio; тест 70
 - **object-position** — ✅ реализован (CSS Images L3 §5.5): PositionComponent::Px/Percent; resolve(free_space) → px offset; default 50% 50% (центр); парсинг keyword/length/percent; тест 70
 
