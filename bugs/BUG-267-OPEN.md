@@ -30,16 +30,14 @@ DisplayCommand::PushFilter { filters, bounds: _ } => {
 
 ## Как чинить (срез за срезом, каждый — отдельный merge)
 
-**Срез A — `PushFilter`/`PushBackdropFilter` по bounds (наибольший выигрыш):**
-1. В обработчике `PushFilter` использовать `bounds` (если `Some`): аллоцировать слой размером с `bounds` (в device-пикселях, с запасом на радиус размытия ≈ `ceil(3σ)` по каждой стороне), рисовать вложенный субдерево со сдвигом `-bounds.origin`, размывать только этот прямоугольник, при `PopFilter` композить обратно со сдвигом `+bounds.origin`.
-2. Клэмпить bbox к полотну (пустой/вне-экранный слой → skip subtree).
-3. `bounds == None` → текущее полнополотное поведение (fallback, сохранить).
+**Срез A — `PushFilter`/`PushBackdropFilter` по bounds (наибольший выигрыш): ✅ СДЕЛАН 2026-07-03 (P3, ветка `p3-bug-267`).**
+Реализация отличается от плана в лучшую сторону: вместо доверия эмиттерному `bounds` (который для element-`filter` = border box и недопокрывает переполняющих детей) каждый слой (`CpuLayer`) трекает **dirty-bbox** — union bbox всех отрисовок в него (гарантированный суперсет ink, с пропагацией от вложенных групп через `close_layer`). Слои остаются полнополотными (lazy-zero аллокация дешёвая), но `PopFilter` кропает слой до `dirty ⊕ (3r_blur + 2px)`, гоняет blur/цветовые фильтры только по кропу и композитит его обратно со сдвигом; `PushBackdropFilter` аналогично кропает `bounds ⊕ 3r`. Пустая (нетронутая) группа — полный skip композита. Бит-идентичность доказана 4 регресс-юнитами (кроп == полнополотный проход byte-for-byte, в т.ч. у кромки полотна) и бенчем `.tmp/bug267-bench.html` (1024×6040, 60 blur-теней + 6 `filter:blur`): **169.5 с → 1.5 с (×113), PNG байт-в-байт идентичен**. Нюанс: для `backdrop-filter`-blur f32-running-sum стартует от кропа, возможен дрейф ±1 LSB против старого полнополотного результата (окружение ненулевое); все существующие backdrop-тесты зелёные.
 
-**Срез B — clip-слои по rect:** `PushClipRect`/`PushClipRoundedRect` — аллоцировать слой по пересечению `rect` с текущим полотном, а не полное.
+**Срез B — clip-слои по rect:** `PushClipRect`/`PushClipRoundedRect` — после среза A проще, чем планировалось: у каждого слоя уже есть dirty-bbox — кропать clone/coverage/композит в `composite_clip_*_layer` по нему, как сделано в `composite_filter_layer`.
 
-**Срез C — маски по rect:** `PushMask*` — то же по их `rect`.
+**Срез C — маски по rect:** `PushMask*` — то же в `composite_mask_layer` (через dirty-bbox слоя).
 
-**Срез D — `PushOpacity`/`PushTransform` без bounds:** у них bbox нет. Вариант — вычислять bbox субдерева проходом вперёд по display-list до парного `Pop` (дешёвый scan рамок команд), либо (проще и почти всегда достаточно) оставить полнополотными — они дешевле фильтров (один alpha-blend без blur).
+**Срез D — `PushOpacity`/`PushTransform` без bounds:** после среза A bbox субдерева уже есть (dirty-bbox слоя) — кропать композит в `composite_layer`/`composite_transform_layer`/`composite_blend_layer`. Пустые группы уже скипаются срезом A.
 
 ## Валидация
 
