@@ -62,6 +62,7 @@ mod scrollbar;
 mod session_persist;
 mod tab_lifecycle;
 mod tabs;
+mod tracks;
 mod zoom;
 mod network_service;
 
@@ -686,6 +687,7 @@ fn run_window_mode(
         prev_styles: HashMap::new(),
         anim_frame: None,
         layout_box: None,
+        page_tracks: tracks::PageTracks::default(),
         snap_containers: Vec::new(),
         scroll_containers: Vec::new(),
         epoch: std::time::Instant::now(),
@@ -2964,6 +2966,8 @@ struct LoadedPage {
     /// Навигационный запрос от JS (location.href= и т.п.), выполненный
     /// в процессе загрузки. Обрабатывается в `about_to_wait`.
     js_navigate: Option<JsNavigateRequest>,
+    /// P3-webvtt срез 3: WebVTT-cues по каждому `<video>` страницы.
+    page_tracks: tracks::PageTracks,
 }
 
 impl LoadedPage {
@@ -2988,6 +2992,7 @@ impl LoadedPage {
             font_registry: Arc::new(lumen_font::FontRegistry::new()),
             pending_web_fonts: Vec::new(),
             js_navigate: None,
+            page_tracks: tracks::PageTracks::default(),
         }
     }
 }
@@ -3889,6 +3894,8 @@ struct ParsedPage {
     /// event handlers registered via `addEventListener` continue to work.
     /// `None` when the quickjs feature is disabled or script init failed.
     js_ctx: Option<Box<dyn PersistentJs>>,
+    /// P3-webvtt срез 3: WebVTT-cues, загруженные из `<track>` каждого `<video>`.
+    page_tracks: tracks::PageTracks,
 }
 
 /// Источник для повторного layout без повторной загрузки/парсинга.
@@ -3925,6 +3932,8 @@ struct PageSnapshot {
     prev_styles: HashMap<NodeId, ComputedStyle>,
     anim_frame: Option<lumen_layout::AnimationFrame>,
     layout_box: Option<lumen_layout::LayoutBox>,
+    /// P3-webvtt срез 3: cues страницы — переезжают вместе с вкладкой.
+    page_tracks: tracks::PageTracks,
     find: find::FindState,
     address_bar: address_bar::AddressBarState,
     hint: hints::HintState,
@@ -4133,6 +4142,15 @@ fn parse_and_layout(
         fetch_and_decode_images(&mut d, base, sink, viewport, cookie_jar.clone(), target)
     };
 
+    // P3-webvtt срез 3: загрузка WebVTT-субтитров из <track> каждого <video>.
+    // Ошибки фетча/парсинга не валят страницу — видео просто остаётся без cues.
+    let page_tracks = {
+        let d = doc_arc.lock().unwrap();
+        tracks::load_video_tracks(&d, &|src| {
+            fetch_vtt_text(src, base, sink, cookie_jar.clone())
+        })
+    };
+
     // Register decoded <img> bitmaps with the JS runtime so Canvas 2D
     // drawImage(imgElement, …) can read the pixels. Collect nid→url from DOM
     // (same traversal fetch_and_decode_images used), join with decoded images by
@@ -4240,7 +4258,31 @@ fn parse_and_layout(
         pending_web_fonts,
         js_navigate: js_nav,
         js_ctx,
+        page_tracks,
     })
+}
+
+/// P3-webvtt срез 3: фетчит текст `.vtt` по `src` из `<track>` (файл или URL).
+/// `None` — ресурс не скачался; страница продолжает жить без субтитров.
+fn fetch_vtt_text(
+    src: &str,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+    cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
+) -> Option<String> {
+    match base.resolve(src) {
+        ResolvedResource::File(path) => std::fs::read_to_string(&path).ok(),
+        ResolvedResource::Url(url) => {
+            use lumen_core::url::Url;
+            use lumen_network::RequestDestination;
+            let sub_url = Url::parse(&url).ok()?;
+            let client = base.http_client_for_subresource(sink.clone(), cookie_jar);
+            let bytes = client
+                .fetch_subresource(&sub_url, RequestDestination::Media)
+                .ok()?;
+            Some(String::from_utf8_lossy(&bytes).into_owned())
+        }
+    }
 }
 
 /// Скачивает и декодирует все `background-image: url(...)` из готового
@@ -4797,6 +4839,7 @@ fn render_bytes(
             font_registry: parsed.font_registry,
             pending_web_fonts: parsed.pending_web_fonts,
             js_navigate: parsed.js_navigate,
+            page_tracks: parsed.page_tracks,
         },
         layout_source,
         parsed.js_ctx,
@@ -5547,6 +5590,8 @@ struct Lumen {
     /// Layout-дерево текущей страницы — нужен scheduler-у для обхода узлов
     /// и извлечения animation-longhands. Обновляется при load/reload/relayout.
     layout_box: Option<lumen_layout::LayoutBox>,
+    /// P3-webvtt срез 3: WebVTT-cues текущей страницы (`<video>` → cues).
+    page_tracks: tracks::PageTracks,
     /// CSS Scroll Snap L1 containers collected from `layout_box` after every
     /// layout update. Used by `start_smooth_scroll` / `scroll_x_by` to apply
     /// snap positions. Empty when `layout_box` is `None` or the page has no
@@ -7127,6 +7172,7 @@ impl Lumen {
             font_registry: Arc::new(lumen_font::FontRegistry::new()),
             pending_web_fonts: Vec::new(),
             js_navigate,
+            page_tracks: tracks::PageTracks::default(),
         })
     }
 
@@ -7360,6 +7406,7 @@ impl Lumen {
         self.prev_styles.clear();
         collect_box_styles(&page.layout_box, &mut self.prev_styles);
         self.layout_box = Some(page.layout_box);
+        self.page_tracks = page.page_tracks;
         // content-visibility: auto (BB-4): новая страница — ratchet с нуля.
         self.cv_relevant.clear();
         self.cv_events.clear();
@@ -10822,7 +10869,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // themed overlay panel so they follow the light/dark setting.
                 let pal = self.shell_theme.palette(self.dark_mode);
 
-                let (page_buf, mut overlay_buf): (Option<lumen_paint::DisplayList>, lumen_paint::DisplayList) =
+                let (mut page_buf, mut overlay_buf): (Option<lumen_paint::DisplayList>, lumen_paint::DisplayList) =
                     if self.find.is_open() {
                         let win_size = self.window.as_ref().map_or((1024, 720), |w| {
                             let s = w.inner_size();
@@ -10944,7 +10991,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Compositor offload: если есть активные анимации с opacity/transform/
                 // color/background-color — пересобираем display list из layout_box с
                 // overrides, минуя relayout (BUG-231 распространил offload на цвета).
-                let anim_dl: Option<lumen_paint::DisplayList> =
+                let mut anim_dl: Option<lumen_paint::DisplayList> =
                     if let (Some(frame), Some(lb)) = (&self.anim_frame, &self.layout_box) {
                         let comp = frame.to_compositor_frame();
                         if !comp.is_empty() {
@@ -11430,6 +11477,49 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         panels::sleep_hint::build_sleep_hint(elapsed_ms, win_w)
                     {
                         overlay_buf.append(&mut hint);
+                        self.request_redraw();
+                    }
+                }
+
+                // P3-webvtt срез 3: активные WebVTT-cue поверх video-боксов.
+                // Команды добавляются в page-полосу (скроллятся со страницей);
+                // при активном compositor-offload — в anim_dl. Время «воспроизведения»
+                // отсчитывается от старта навигации (реального playback пока нет).
+                if !self.page_tracks.is_empty() {
+                    let mut video_rects = Vec::new();
+                    if let Some(lb) = &self.layout_box {
+                        tracks::collect_video_rects(lb, &mut video_rects);
+                    }
+                    if !video_rects.is_empty()
+                        && let Ok(font) = lumen_font::Font::parse(INTER_FONT)
+                        && let Ok(m) = lumen_paint::FontMeasurer::new(&font)
+                    {
+                        let t = self
+                            .nav_start
+                            .map_or(0.0, |s| s.elapsed().as_secs_f64());
+                        let measure = |s: &str, fs: f32| -> f32 {
+                            use lumen_layout::TextMeasurer;
+                            s.chars().map(|c| m.char_width(c, fs)).sum()
+                        };
+                        let mut cue_cmds = tracks::build_cue_overlay(
+                            &self.page_tracks,
+                            &video_rects,
+                            t,
+                            &measure,
+                        );
+                        if !cue_cmds.is_empty() {
+                            if let Some(dl) = anim_dl.as_mut() {
+                                dl.append(&mut cue_cmds);
+                            } else {
+                                let mut buf = page_buf
+                                    .take()
+                                    .unwrap_or_else(|| self.display_list.clone());
+                                buf.append(&mut cue_cmds);
+                                page_buf = Some(buf);
+                            }
+                        }
+                        // Cue сменяются временем — держим цикл перерисовки,
+                        // пока страница с субтитрами активна.
                         self.request_redraw();
                     }
                 }
@@ -16277,6 +16367,7 @@ impl Lumen {
             prev_styles: std::mem::take(&mut self.prev_styles),
             anim_frame: self.anim_frame.take(),
             layout_box: self.layout_box.take(),
+            page_tracks: std::mem::take(&mut self.page_tracks),
             find: std::mem::take(&mut self.find),
             address_bar: std::mem::take(&mut self.address_bar),
             hint: std::mem::take(&mut self.hint),
@@ -16354,6 +16445,7 @@ impl Lumen {
         self.prev_styles = snap.prev_styles;
         self.anim_frame = snap.anim_frame;
         self.layout_box = snap.layout_box;
+        self.page_tracks = snap.page_tracks;
         self.find = snap.find;
         self.address_bar = snap.address_bar;
         self.hint = snap.hint;
