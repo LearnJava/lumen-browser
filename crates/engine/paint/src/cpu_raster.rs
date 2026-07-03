@@ -622,13 +622,34 @@ pub(crate) fn rasterize_cpu(
 /// reproduces CSS group opacity (the children are *not* individually faded).
 /// tiny-skia's `draw_pixmap` blends premultiplied RGBA deterministically, so the
 /// result is cross-OS bit-identical like the rest of the CPU path.
-fn composite_layer(dst: &mut tiny_skia::Pixmap, src: &tiny_skia::Pixmap, alpha: f32) {
+///
+/// BUG-267 (slice D): only the layer's dirty window is cloned and blended —
+/// outside it `src` is fully transparent, and `SourceOver` of a transparent
+/// source leaves the backdrop bit-identical, so skipping those pixels changes
+/// nothing. The integer-offset `draw_pixmap` with `Nearest` quality blends the
+/// same source values onto the same destination pixels as the full-canvas pass.
+fn composite_layer(
+    dst: &mut tiny_skia::Pixmap,
+    src: &tiny_skia::Pixmap,
+    alpha: f32,
+    src_dirty: DrawBounds,
+) {
+    let Some((cx0, cy0, crop)) = crop_dirty_window(src, src_dirty) else {
+        return;
+    };
     let paint = tiny_skia::PixmapPaint {
         opacity: alpha.clamp(0.0, 1.0),
         blend_mode: tiny_skia::BlendMode::SourceOver,
         quality: tiny_skia::FilterQuality::Nearest,
     };
-    dst.draw_pixmap(0, 0, src.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+    dst.draw_pixmap(
+        cx0 as i32,
+        cy0 as i32,
+        crop.as_ref(),
+        &paint,
+        tiny_skia::Transform::identity(),
+        None,
+    );
 }
 
 /// Composite an off-screen group layer `src` onto `dst` per its `LayerComposite`
@@ -644,15 +665,22 @@ fn close_layer(dst: &mut CpuLayer, src: &CpuLayer, op: &LayerComposite) {
     let Some(src_dirty) = src.dirty else { return };
     match op {
         LayerComposite::Opacity(a) => {
-            composite_layer(&mut dst.pm, &src.pm, *a);
+            composite_layer(&mut dst.pm, &src.pm, *a, src_dirty);
             dst.mark(src_dirty);
         }
+        // BUG-267: the transform composite is NOT cropped to the dirty window.
+        // `draw_pixmap` under a non-trivial affine resamples with bilinear
+        // filtering; baking the crop offset into the transform changes the f32
+        // rounding of the composed matrix (and of its inverse used for source
+        // sampling), so the crop output is not guaranteed bit-identical to the
+        // full-canvas pass — unlike the integer-offset `Nearest` composites of
+        // the other ops. Empty transform groups are still skipped above.
         LayerComposite::Transform(t) => {
             composite_transform_layer(&mut dst.pm, &src.pm, *t);
             dst.mark(transform_bounds(*t, src_dirty));
         }
         LayerComposite::Blend(mode) => {
-            composite_blend_layer(&mut dst.pm, &src.pm, *mode);
+            composite_blend_layer(&mut dst.pm, &src.pm, *mode, src_dirty);
             dst.mark(src_dirty);
         }
         LayerComposite::Filter(filters) => {
@@ -662,15 +690,15 @@ fn close_layer(dst: &mut CpuLayer, src: &CpuLayer, op: &LayerComposite) {
             }
         }
         LayerComposite::Mask(spec) => {
-            composite_mask_layer(&mut dst.pm, &src.pm, spec);
+            composite_mask_layer(&mut dst.pm, &src.pm, spec, src_dirty);
             dst.mark(src_dirty);
         }
         LayerComposite::ClipShape(shape) => {
-            composite_clip_shape_layer(&mut dst.pm, &src.pm, shape);
+            composite_clip_shape_layer(&mut dst.pm, &src.pm, shape, src_dirty);
             dst.mark(src_dirty);
         }
         LayerComposite::ClipRoundedRect { rect, radii } => {
-            composite_clip_rounded_rect_layer(&mut dst.pm, &src.pm, rect, radii);
+            composite_clip_rounded_rect_layer(&mut dst.pm, &src.pm, rect, radii, src_dirty);
             dst.mark(src_dirty);
         }
     }
@@ -696,26 +724,43 @@ fn transform_bounds(t: tiny_skia::Transform, b: DrawBounds) -> DrawBounds {
 /// BUG-249: применяет скруглённый клип (`overflow:hidden` + `border-radius`) к
 /// off-screen слою `src` и композитит результат на `dst` (`SourceOver`).
 /// Зеркало [`composite_clip_shape_layer`], но покрытие — rounded-rect контур.
+///
+/// BUG-267 (срез B): клонируется, умножается на покрытие и композитится только
+/// dirty-окно слоя — вне его `src` полностью прозрачен, и `SourceOver`
+/// прозрачного источника оставляет фон бит-идентичным. Само покрытие
+/// растеризуется по-прежнему во всё полотно: AA-заливка пути должна идти в
+/// page-координатах — перенос пути на смещение кропа меняет f32-округление
+/// позиций рёбер и не гарантирует бит-идентичное покрытие. Аллокация + локальная
+/// заливка дёшевы против устранённых полнополотных clone/умножения/блендинга.
 fn composite_clip_rounded_rect_layer(
     dst: &mut tiny_skia::Pixmap,
     src: &tiny_skia::Pixmap,
     rect: &Rect,
     radii: &[f32; 4],
+    src_dirty: DrawBounds,
 ) {
     let (w, h) = (src.width(), src.height());
-    let mut masked = src.clone();
-    if let Some(coverage) = rasterize_rounded_rect_coverage(rect, radii, w, h) {
-        multiply_alpha_by_mask(&mut masked, &coverage);
-    } else {
-        // Вырожденный rect (нулевая ширина/высота) клиппит всё.
-        masked.data_mut().fill(0);
-    }
+    let Some((cx0, cy0, mut masked)) = crop_dirty_window(src, src_dirty) else {
+        return;
+    };
+    let Some(coverage) = rasterize_rounded_rect_coverage(rect, radii, w, h) else {
+        // Вырожденный rect (нулевая ширина/высота) клиппит всё — композит пуст.
+        return;
+    };
+    multiply_alpha_by_mask(&mut masked, &coverage, cx0, cy0);
     let paint = tiny_skia::PixmapPaint {
         opacity: 1.0,
         blend_mode: tiny_skia::BlendMode::SourceOver,
         quality: tiny_skia::FilterQuality::Nearest,
     };
-    dst.draw_pixmap(0, 0, masked.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+    dst.draw_pixmap(
+        cx0 as i32,
+        cy0 as i32,
+        masked.as_ref(),
+        &paint,
+        tiny_skia::Transform::identity(),
+        None,
+    );
 }
 
 /// Растеризует анти-алиасное покрытие скруглённого прямоугольника `rect` с
@@ -772,25 +817,37 @@ fn rasterize_rounded_rect_coverage(
 /// `composite_mask_layer`. Координаты формы — page px (до transform
 /// элемента): команда эмитится внутри `PushTransform`, поэтому слой
 /// transform-группы выше переносит уже обрезанный результат.
+///
+/// BUG-267 (срез B): clone/умножение/композит идут по dirty-окну слоя, покрытие
+/// остаётся полнополотным — см. [`composite_clip_rounded_rect_layer`].
 fn composite_clip_shape_layer(
     dst: &mut tiny_skia::Pixmap,
     src: &tiny_skia::Pixmap,
     shape: &ResolvedClipShape,
+    src_dirty: DrawBounds,
 ) {
     let (w, h) = (src.width(), src.height());
-    let mut masked = src.clone();
-    if let Some(coverage) = rasterize_clip_shape_coverage(shape, w, h) {
-        multiply_alpha_by_mask(&mut masked, &coverage);
-    } else {
+    let Some((cx0, cy0, mut masked)) = crop_dirty_window(src, src_dirty) else {
+        return;
+    };
+    let Some(coverage) = rasterize_clip_shape_coverage(shape, w, h) else {
         // Вырожденная форма (нулевой радиус / <3 вершин полигона) клиппит всё.
-        masked.data_mut().fill(0);
-    }
+        return;
+    };
+    multiply_alpha_by_mask(&mut masked, &coverage, cx0, cy0);
     let paint = tiny_skia::PixmapPaint {
         opacity: 1.0,
         blend_mode: tiny_skia::BlendMode::SourceOver,
         quality: tiny_skia::FilterQuality::Nearest,
     };
-    dst.draw_pixmap(0, 0, masked.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+    dst.draw_pixmap(
+        cx0 as i32,
+        cy0 as i32,
+        masked.as_ref(),
+        &paint,
+        tiny_skia::Transform::identity(),
+        None,
+    );
 }
 
 /// Растеризует анти-алиасное покрытие формы клипа в transparent-pixmap
@@ -851,18 +908,39 @@ fn rasterize_clip_shape_coverage(
 /// alpha-only mask. Integer-only multiplication keeps the result cross-OS
 /// bit-identical, like the rest of the CPU path. `MaskSpec::None` (image masks,
 /// no decoded source) composites the layer unchanged.
-fn composite_mask_layer(dst: &mut tiny_skia::Pixmap, src: &tiny_skia::Pixmap, spec: &MaskSpec) {
+///
+/// BUG-267 (slice C): only the layer's dirty window is cloned, multiplied and
+/// composited — outside it `src` is fully transparent, so those pixels never
+/// change the backdrop. The mask gradient itself is still rasterised full-canvas
+/// so the existing gradient routines run in page coordinates unchanged (their
+/// output must stay bit-identical); that is one allocation plus a rect-local
+/// fill, cheap next to the eliminated full-canvas clone/multiply/blend passes.
+fn composite_mask_layer(
+    dst: &mut tiny_skia::Pixmap,
+    src: &tiny_skia::Pixmap,
+    spec: &MaskSpec,
+    src_dirty: DrawBounds,
+) {
     let (w, h) = (src.width(), src.height());
-    let mut masked = src.clone();
+    let Some((cx0, cy0, mut masked)) = crop_dirty_window(src, src_dirty) else {
+        return;
+    };
     if let Some(mask) = render_mask(spec, w, h) {
-        multiply_alpha_by_mask(&mut masked, &mask);
+        multiply_alpha_by_mask(&mut masked, &mask, cx0, cy0);
     }
     let paint = tiny_skia::PixmapPaint {
         opacity: 1.0,
         blend_mode: tiny_skia::BlendMode::SourceOver,
         quality: tiny_skia::FilterQuality::Nearest,
     };
-    dst.draw_pixmap(0, 0, masked.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+    dst.draw_pixmap(
+        cx0 as i32,
+        cy0 as i32,
+        masked.as_ref(),
+        &paint,
+        tiny_skia::Transform::identity(),
+        None,
+    );
 }
 
 /// Rasterise a `MaskSpec` gradient into a fresh transparent pixmap whose alpha
@@ -900,13 +978,30 @@ fn render_mask(spec: &MaskSpec, width: u32, height: u32) -> Option<tiny_skia::Pi
 /// scaling all four channels by the mask alpha yields the premultiplied form of
 /// the same colour with its alpha reduced — an alpha-only mask. Rounded integer
 /// division (`(v·m + 127) / 255`) keeps the result deterministic across OSes.
-fn multiply_alpha_by_mask(layer: &mut tiny_skia::Pixmap, mask: &tiny_skia::Pixmap) {
-    let mp = mask.data().to_vec();
-    let lp = layer.data_mut();
-    for (px, mpx) in lp.chunks_exact_mut(4).zip(mp.chunks_exact(4)) {
-        let m = u32::from(mpx[3]);
-        for ch in px.iter_mut() {
-            *ch = ((u32::from(*ch) * m + 127) / 255) as u8;
+///
+/// BUG-267: `layer` is a dirty-window crop whose top-left sits at `(x0, y0)` of
+/// the full-canvas `mask`, so each crop pixel is multiplied by exactly the same
+/// mask alpha as in the pre-crop full-canvas pass. The crop must lie inside the
+/// mask (guaranteed by [`crop_dirty_window`]'s canvas clamp).
+fn multiply_alpha_by_mask(
+    layer: &mut tiny_skia::Pixmap,
+    mask: &tiny_skia::Pixmap,
+    x0: u32,
+    y0: u32,
+) {
+    let mw = mask.width() as usize;
+    let (w, h) = (layer.width() as usize, layer.height() as usize);
+    let (x0, y0) = (x0 as usize, y0 as usize);
+    let md = mask.data();
+    let ld = layer.data_mut();
+    for row in 0..h {
+        let l = row * w * 4;
+        let m = ((y0 + row) * mw + x0) * 4;
+        for col in 0..w {
+            let a = u32::from(md[m + col * 4 + 3]);
+            for ch in &mut ld[l + col * 4..l + (col + 1) * 4] {
+                *ch = ((u32::from(*ch) * a + 127) / 255) as u8;
+            }
         }
     }
 }
@@ -1017,6 +1112,23 @@ fn crop_pixmap(src: &tiny_skia::Pixmap, x0: u32, y0: u32, w: u32, h: u32) -> Opt
         od[d..d + w * 4].copy_from_slice(&sd[s..s + w * 4]);
     }
     Some(out)
+}
+
+/// BUG-267 (slices B–D): cut the dirty window out of group layer `src` before
+/// compositing. The window is `dirty` inflated by 2px of anti-aliasing slack
+/// (draws mark their geometric bounds; AA bleed stays within ~1px) and clamped
+/// to the canvas; the returned pixmap is a byte-exact [`crop_pixmap`] copy with
+/// its canvas origin `(x0, y0)`. `None` when the window misses the canvas —
+/// there `src` holds no on-canvas ink, and a fully transparent source leaves
+/// every composite op's backdrop bit-identical (see [`close_layer`]), so the
+/// caller skips the composite outright.
+fn crop_dirty_window(
+    src: &tiny_skia::Pixmap,
+    dirty: DrawBounds,
+) -> Option<(u32, u32, tiny_skia::Pixmap)> {
+    let (cx0, cy0, cx1, cy1) = clamp_crop(dirty, 2.0, src.width(), src.height())?;
+    let crop = crop_pixmap(src, cx0, cy0, cx1 - cx0, cy1 - cy0)?;
+    Some((cx0, cy0, crop))
 }
 
 /// Apply a `backdrop-filter` chain (CSS Filter Effects L1 §6.2) to the content
@@ -1289,17 +1401,34 @@ fn sin_approx(rad: f32) -> f32 {
 /// reproduces `mix-blend-mode` (CSS Compositing & Blending L1 §5). tiny-skia
 /// applies the separable/non-separable blend per premultiplied pixel
 /// deterministically, so the result is cross-OS bit-identical.
+///
+/// BUG-267 (slice D): only the layer's dirty window is cloned and blended.
+/// Outside it `src` is fully transparent, and every CSS blend mode composited
+/// per Porter-Duff reduces to the unchanged backdrop for a zero-alpha source
+/// (the same property the empty-group skip in [`close_layer`] already relies
+/// on), so skipping those pixels is bit-identical to the full-canvas pass.
 fn composite_blend_layer(
     dst: &mut tiny_skia::Pixmap,
     src: &tiny_skia::Pixmap,
     mode: tiny_skia::BlendMode,
+    src_dirty: DrawBounds,
 ) {
+    let Some((cx0, cy0, crop)) = crop_dirty_window(src, src_dirty) else {
+        return;
+    };
     let paint = tiny_skia::PixmapPaint {
         opacity: 1.0,
         blend_mode: mode,
         quality: tiny_skia::FilterQuality::Nearest,
     };
-    dst.draw_pixmap(0, 0, src.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+    dst.draw_pixmap(
+        cx0 as i32,
+        cy0 as i32,
+        crop.as_ref(),
+        &paint,
+        tiny_skia::Transform::identity(),
+        None,
+    );
 }
 
 /// Map a paint-crate `BlendMode` (`mix-blend-mode` keyword) to its tiny-skia
@@ -3357,6 +3486,250 @@ mod tests {
         assert!(
             img.data.chunks_exact(4).all(|p| p == [255, 255, 255, 255]),
             "empty filter group must leave the canvas white"
+        );
+    }
+
+    /// BUG-267 (slices B–D) reference scaffolding: white base with a full-canvas
+    /// gradient backdrop (so destination pixels vary in colour) plus a group
+    /// layer holding a semi-transparent fill (so blending exercises non-trivial
+    /// alpha rounding). Mirrors exactly what `rasterize_cpu` does before the
+    /// group's Pop.
+    fn crop_reference_scene(
+        width: u32,
+        height: u32,
+        fill: Rect,
+        color: Color,
+    ) -> (tiny_skia::Pixmap, tiny_skia::Pixmap) {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let stops = vec![
+            GradientStop { color: red, color_space: lumen_layout::ColorSpace::Srgb, position: None },
+            GradientStop { color: blue, color_space: lumen_layout::ColorSpace::Srgb, position: None },
+        ];
+        let mut base = tiny_skia::Pixmap::new(width, height).expect("base");
+        base.fill(tiny_skia::Color::from_rgba8(255, 255, 255, 255));
+        rasterize_linear_gradient(
+            &mut base,
+            &rect(0.0, 0.0, width as f32, height as f32),
+            90.0,
+            &stops,
+            false,
+            None,
+        )
+        .expect("backdrop gradient");
+        let mut layer = tiny_skia::Pixmap::new(width, height).expect("layer");
+        rasterize_fill_rect(&mut layer, &fill, &color, None).expect("fill");
+        (base, layer)
+    }
+
+    /// The display-list prefix matching [`crop_reference_scene`]'s backdrop.
+    fn crop_scene_backdrop_cmds(width: u32, height: u32) -> Vec<DisplayCommand> {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        vec![DisplayCommand::DrawLinearGradient {
+            rect: rect(0.0, 0.0, width as f32, height as f32),
+            angle_deg: 90.0,
+            stops: vec![
+                GradientStop { color: red, color_space: lumen_layout::ColorSpace::Srgb, position: None },
+                GradientStop { color: blue, color_space: lumen_layout::ColorSpace::Srgb, position: None },
+            ],
+            repeating: false,
+        }]
+    }
+
+    /// BUG-267 (slice D): compositing only the opacity layer's dirty window must
+    /// match the pre-crop full-canvas composite byte-for-byte.
+    #[test]
+    fn opacity_crop_matches_full_canvas() {
+        let green = Color { r: 0, g: 160, b: 40, a: 128 };
+        let fill = rect(50.0, 30.0, 40.0, 25.0);
+        let mut cmds = crop_scene_backdrop_cmds(160, 120);
+        cmds.extend([
+            DisplayCommand::PushOpacity { alpha: 0.5 },
+            DisplayCommand::FillRect { rect: fill, color: green },
+            DisplayCommand::PopOpacity,
+        ]);
+        let img = rasterize_cpu(160, 120, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        let (mut base, layer) = crop_reference_scene(160, 120, fill, green);
+        let paint = tiny_skia::PixmapPaint {
+            opacity: 0.5,
+            blend_mode: tiny_skia::BlendMode::SourceOver,
+            quality: tiny_skia::FilterQuality::Nearest,
+        };
+        base.draw_pixmap(0, 0, layer.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+        assert_eq!(img.data, base.data().to_vec(), "cropped opacity composite must be bit-identical");
+    }
+
+    /// BUG-267 (slice D): the cropped blend composite must match the pre-crop
+    /// full-canvas composite byte-for-byte — outside the dirty window every CSS
+    /// blend mode must leave the varied backdrop untouched for the transparent
+    /// source. Sweeps every supported `mix-blend-mode`.
+    #[test]
+    fn blend_crop_matches_full_canvas_all_modes() {
+        use crate::BlendMode as B;
+        let modes = [
+            B::Normal, B::Multiply, B::Screen, B::Overlay, B::Darken, B::Lighten,
+            B::ColorDodge, B::ColorBurn, B::HardLight, B::SoftLight, B::Difference,
+            B::Exclusion, B::Hue, B::Saturation, B::Color, B::Luminosity, B::PlusLighter,
+        ];
+        let orange = Color { r: 230, g: 120, b: 10, a: 128 };
+        let fill = rect(40.0, 20.0, 50.0, 30.0);
+        for mode in modes {
+            let mut cmds = crop_scene_backdrop_cmds(160, 120);
+            cmds.extend([
+                DisplayCommand::PushBlendMode { mode },
+                DisplayCommand::FillRect { rect: fill, color: orange },
+                DisplayCommand::PopBlendMode,
+            ]);
+            let img = rasterize_cpu(160, 120, &cmds, &[], 0.0, 0.0).expect("rasterize");
+            let (mut base, layer) = crop_reference_scene(160, 120, fill, orange);
+            let paint = tiny_skia::PixmapPaint {
+                opacity: 1.0,
+                blend_mode: map_blend_mode(mode),
+                quality: tiny_skia::FilterQuality::Nearest,
+            };
+            base.draw_pixmap(0, 0, layer.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+            assert_eq!(
+                img.data,
+                base.data().to_vec(),
+                "cropped blend composite must be bit-identical for {mode:?}"
+            );
+        }
+    }
+
+    /// BUG-267 (slice B): the cropped rounded-rect clip composite must match the
+    /// pre-crop full-canvas composite byte-for-byte, including the AA coverage
+    /// multiply along the curved corners.
+    #[test]
+    fn clip_rounded_rect_crop_matches_full_canvas() {
+        let purple = Color { r: 120, g: 0, b: 200, a: 200 };
+        let clip = rect(30.0, 25.0, 60.0, 40.0);
+        let radii = [12.0, 8.0, 16.0, 4.0];
+        // The fill overflows the clip on every side.
+        let fill = rect(20.0, 15.0, 80.0, 60.0);
+        let mut cmds = crop_scene_backdrop_cmds(160, 120);
+        cmds.extend([
+            DisplayCommand::PushClipRoundedRect { rect: clip, radii },
+            DisplayCommand::FillRect { rect: fill, color: purple },
+            DisplayCommand::PopClip,
+        ]);
+        let img = rasterize_cpu(160, 120, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        let (mut base, mut layer) = crop_reference_scene(160, 120, fill, purple);
+        let coverage =
+            rasterize_rounded_rect_coverage(&clip, &radii, 160, 120).expect("coverage");
+        multiply_alpha_by_mask(&mut layer, &coverage, 0, 0);
+        let paint = tiny_skia::PixmapPaint {
+            opacity: 1.0,
+            blend_mode: tiny_skia::BlendMode::SourceOver,
+            quality: tiny_skia::FilterQuality::Nearest,
+        };
+        base.draw_pixmap(0, 0, layer.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+        assert_eq!(img.data, base.data().to_vec(), "cropped rounded clip must be bit-identical");
+    }
+
+    /// BUG-267 (slice B): same equivalence for a `clip-path` shape layer.
+    #[test]
+    fn clip_shape_crop_matches_full_canvas() {
+        let teal = Color { r: 0, g: 140, b: 140, a: 220 };
+        let shape = ResolvedClipShape::Circle { cx: 70.0, cy: 55.0, r: 28.0 };
+        let fill = rect(30.0, 20.0, 80.0, 70.0);
+        let mut cmds = crop_scene_backdrop_cmds(160, 120);
+        cmds.extend([
+            DisplayCommand::PushClipPath { shape: shape.clone() },
+            DisplayCommand::FillRect { rect: fill, color: teal },
+            DisplayCommand::PopClip,
+        ]);
+        let img = rasterize_cpu(160, 120, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        let (mut base, mut layer) = crop_reference_scene(160, 120, fill, teal);
+        let coverage = rasterize_clip_shape_coverage(&shape, 160, 120).expect("coverage");
+        multiply_alpha_by_mask(&mut layer, &coverage, 0, 0);
+        let paint = tiny_skia::PixmapPaint {
+            opacity: 1.0,
+            blend_mode: tiny_skia::BlendMode::SourceOver,
+            quality: tiny_skia::FilterQuality::Nearest,
+        };
+        base.draw_pixmap(0, 0, layer.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+        assert_eq!(img.data, base.data().to_vec(), "cropped shape clip must be bit-identical");
+    }
+
+    /// BUG-267 (slice C): the cropped mask composite must match the pre-crop
+    /// full-canvas composite byte-for-byte, with the fill hugging the canvas
+    /// edge so the crop clamps like the filter edge test.
+    #[test]
+    fn mask_crop_matches_full_canvas_at_canvas_edge() {
+        let navy = Color { r: 0, g: 30, b: 120, a: 255 };
+        let black = Color { r: 0, g: 0, b: 0, a: 255 };
+        let clear = Color { r: 0, g: 0, b: 0, a: 0 };
+        let fill = rect(0.0, 0.0, 50.0, 40.0);
+        let spec_rect = rect(0.0, 0.0, 50.0, 40.0);
+        let stops = vec![
+            GradientStop { color: black, color_space: lumen_layout::ColorSpace::Srgb, position: None },
+            GradientStop { color: clear, color_space: lumen_layout::ColorSpace::Srgb, position: None },
+        ];
+        let mut cmds = crop_scene_backdrop_cmds(160, 120);
+        cmds.extend([
+            DisplayCommand::PushMaskLinearGradient {
+                rect: spec_rect,
+                angle_deg: 180.0,
+                stops: stops.clone(),
+                repeating: false,
+            },
+            DisplayCommand::FillRect { rect: fill, color: navy },
+            DisplayCommand::PopMask,
+        ]);
+        let img = rasterize_cpu(160, 120, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        let (mut base, mut layer) = crop_reference_scene(160, 120, fill, navy);
+        let spec = MaskSpec::Linear { rect: spec_rect, angle_deg: 180.0, stops, repeating: false };
+        let mask = render_mask(&spec, 160, 120).expect("mask");
+        multiply_alpha_by_mask(&mut layer, &mask, 0, 0);
+        let paint = tiny_skia::PixmapPaint {
+            opacity: 1.0,
+            blend_mode: tiny_skia::BlendMode::SourceOver,
+            quality: tiny_skia::FilterQuality::Nearest,
+        };
+        base.draw_pixmap(0, 0, layer.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+        assert_eq!(img.data, base.data().to_vec(), "cropped mask composite must be bit-identical");
+    }
+
+    /// BUG-267 (slice B): clipped ink lying fully off-canvas composites nothing
+    /// — the canvas stays white and nothing panics (the dirty window misses the
+    /// canvas, so the whole composite is skipped).
+    #[test]
+    fn clip_rounded_rect_offcanvas_ink_is_skipped() {
+        let black = Color { r: 0, g: 0, b: 0, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushClipRoundedRect {
+                rect: rect(-90.0, 10.0, 40.0, 20.0),
+                radii: [4.0; 4],
+            },
+            DisplayCommand::FillRect { rect: rect(-100.0, 10.0, 50.0, 20.0), color: black },
+            DisplayCommand::PopClip,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        assert!(
+            img.data.chunks_exact(4).all(|p| p == [255, 255, 255, 255]),
+            "off-canvas clipped ink must leave the canvas white"
+        );
+    }
+
+    /// BUG-267 (slice B): a degenerate (zero-size) rounded clip rect clips
+    /// everything out — the composite is skipped entirely, matching the old
+    /// full-canvas path that zeroed the masked layer.
+    #[test]
+    fn clip_rounded_rect_degenerate_clips_all() {
+        let black = Color { r: 0, g: 0, b: 0, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushClipRoundedRect {
+                rect: rect(20.0, 20.0, 0.0, 10.0),
+                radii: [0.0; 4],
+            },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: black },
+            DisplayCommand::PopClip,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, &[], 0.0, 0.0).expect("rasterize");
+        assert!(
+            img.data.chunks_exact(4).all(|p| p == [255, 255, 255, 255]),
+            "degenerate rounded clip must clip everything out"
         );
     }
 
