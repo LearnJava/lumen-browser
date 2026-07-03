@@ -6537,6 +6537,10 @@ impl Lumen {
         // Set interactive hover/focus/active state for this layout pass so that
         // :hover / :focus / :active / :focus-within CSS rules evaluate correctly.
         lumen_layout::set_interactive_state(self.hovered_nid, self.focused_node, self.active_nid);
+        // Forced Colors Mode (CSS Color Adjust L1 §3) — a11y preference drives
+        // the forced system palette and the `(forced-colors: active)` media
+        // feature for this layout pass.
+        lumen_layout::set_forced_colors(self.a11y_store.forced_colors());
         // content-visibility: auto (BB-4) — relevance-проверка против текущего
         // scroll-положения + ratchet-набора. Сброс к дефолтам после прохода,
         // чтобы layout других документов (sidebar, фоновый парс) не унаследовал
@@ -9830,6 +9834,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 let _ = self.a11y_store.apply_snapshot(&self.a11y_panel.draft);
                                 self.a11y_panel.visible = false;
                                 self.deliver_a11y_media_changes();
+                                // Re-style with the (possibly toggled) forced-colors pref.
+                                self.relayout();
                             }
                             A11yHit::FontMultiplier(v) => {
                                 self.a11y_panel.draft.font_size_multiplier = v as f64;
@@ -9850,6 +9856,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 let _ = self.a11y_store.apply_snapshot(&self.a11y_panel.draft);
                                 self.a11y_panel.visible = false;
                                 self.deliver_a11y_media_changes();
+                                // Re-style with the (possibly toggled) forced-colors pref.
+                                self.relayout();
                             }
                         }
                         self.request_redraw();
@@ -12951,6 +12959,8 @@ impl Lumen {
                     let _ = self.a11y_store.apply_snapshot(&self.a11y_panel.draft);
                     self.a11y_panel.visible = false;
                     self.deliver_a11y_media_changes();
+                    // Re-style with the (possibly toggled) forced-colors pref.
+                    self.relayout();
                 } else {
                     self.a11y_panel.load_draft(self.a11y_store.snapshot());
                     self.a11y_panel.visible = true;

@@ -204,7 +204,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `color` | ✅ | named/hex/rgb/rgba/hsl/hsla/oklch; currentColor |
 | `background-color` | ✅ | |
 | `color-scheme` | 🟡 | parsed; UA switching ⬜ |
-| `forced-color-adjust` | 🟡 | parsed; Forced Colors Mode ⬜ |
+| `forced-color-adjust` | ✅ | Forced Colors Mode (Color Adjust L1 §3): system-palette forcing post-pass in compute_style (element-aware LinkText/ButtonText/GrayText/Field pairs, shadows→none, non-url() background-image→none, bg transparency preserved); `(forced-colors: active)` media wired; shell a11y toggle relayouts (P4 2026-07-04) |
 | `print-color-adjust` / `color-adjust` | 🟡 | parsed/stored; print rendering ⬜ |
 | `accent-color` | ✅ | parsed + wired to form controls (checkbox/radio/range/progress) in display_list.rs (P4 2026-06-14); 5 tests + graphic 110 |
 | `color-mix()` | ✅ | parse_color_mix() in style.rs (P4 2026-06-08); 3 tests |

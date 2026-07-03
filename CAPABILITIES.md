@@ -72,6 +72,7 @@ Snapshot: **Phase 2 «Interactive» (complete), app v0.5.0**. ~21 crates.
 - ✅ Replaced: `<img>` (picture/srcset picker), `<iframe>` placeholder.
 - ✅ Cascade: specificity + `!important`, RTL selector matching, all CSS3 structural + L4 form/UI pseudo, `:has()`, `::before/::after` (string content), `::first-line/::first-letter` (drop-cap float), `initial-letter` (size/sink drop cap, Phase 0).
 - ✅ Values: `calc/min/max/clamp` + math fns, `var()`, `@property` registration, viewport units, intrinsic sizing (`min/max/fit-content`).
+- ✅ Forced Colors Mode (CSS Color Adjust L1 §3): a11y-panel preference forces the system palette element-aware (LinkText/ButtonText/GrayText/Field), clears shadows, drops non-`url()` background images, honours `forced-color-adjust: auto|none|preserve-parent-color`; drives `@media (forced-colors: active)`. JS `matchMedia` shim not yet wired.
 - ✅ Animations/transitions scheduling (`@keyframes` interpolation, timing functions, transform/gradient/filter interpolation; `background:<color>` shorthand in keyframes); `content-visibility: auto` skip; Shadow DOM flat-tree integration.
 - 🟡 Scroll-Driven Animations L1: `animation-timeline: scroll()|view()|<named>` drives animation progress from scroll/viewport position (not the clock) — opacity/transform render in the live window; animated `background-color` not yet composited (BUG-231).
 - ✅ Algorithm stubs awaiting P4 CSS wiring: anchor positioning, subgrid context.
