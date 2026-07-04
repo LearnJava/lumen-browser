@@ -42,11 +42,17 @@
 //!   congestion window through slow start, congestion avoidance, and recovery,
 //!   halving it on loss (RFC 9002 §7.3.2) and collapsing it under persistent
 //!   congestion (RFC 9002 §7.6). No sent-packet registry, no loss detection, no
-//!   IO — those are the next slice.
-//! - Slice 8+ (planned) — the rest of the QUIC transport (UDP datagrams,
-//!   header protection, TLS 1.3 handshake, packet protection, packet-number
-//!   spaces, the sent-packet registry and loss detection that feeds
-//!   [`recovery`], RFC 9002 §6), unidirectional/request stream framing, and
+//!   IO — that is the next slice.
+//! - Slice 8 — the QUIC sent-packet registry + loss detection ([`loss`],
+//!   RFC 9002 §6): the per-packet-number-space registry of in-flight packets,
+//!   ack processing that removes newly-acknowledged packets and produces the RTT
+//!   sample, and the packet-threshold (§6.1.1) and time-threshold (§6.1.2) loss
+//!   detection that decides which packets are lost and feeds [`recovery`]. Pure
+//!   state machine driven by decoded ACK frames and a caller-supplied clock; no
+//!   PTO timer, no IO.
+//! - Slice 9+ (planned) — the rest of the QUIC transport (UDP datagrams,
+//!   header protection, TLS 1.3 handshake, packet protection, the PTO timer and
+//!   probe sending (RFC 9002 §6.2), unidirectional/request stream framing, and
 //!   `h3_do_request` dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
@@ -57,6 +63,7 @@
 
 pub mod alt_svc;
 pub mod frame;
+pub mod loss;
 pub mod packet;
 pub mod qpack;
 pub mod qpack_stream;
