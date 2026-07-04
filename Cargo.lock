@@ -2108,6 +2108,8 @@ dependencies = [
 name = "lumen-network"
 version = "0.5.0"
 dependencies = [
+ "aes",
+ "aes-gcm",
  "brotli-decompressor",
  "flate2",
  "getrandom 0.2.17",
