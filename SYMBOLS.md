@@ -2301,7 +2301,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (528 symbols)
+## lumen-network  (550 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -2659,6 +2659,28 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/stream.rs:630` **fn** `reset` — Abruptly terminates the sending half with `error_code`, discarding any
 `crates/network/src/h3/stream.rs:640` **fn** `on_reset_ack` — Acknowledges the RESET_STREAM, moving to `ResetRecvd` (RFC 9000 §3.1)
 `crates/network/src/h3/stream.rs:648` **fn** `reset_error` — The application error code if the stream was reset (RFC 9000 §19.4)
+`crates/network/src/h3/tls_message.rs:124` **enum** `TlsError` — Codec error. [`Handshake::parse`] signals "need more bytes" out of band with
+`crates/network/src/h3/tls_message.rs:161` **struct** `Extension` — A single TLS extension: a 2-byte type and an opaque `<0..2^16-1>` body
+`crates/network/src/h3/tls_message.rs:171` **fn** `new` — Construct an extension from its type code and raw body
+`crates/network/src/h3/tls_message.rs:182` **struct** `ClientHello` — ClientHello (RFC 8446 §4.1.2). `legacy_version` is always
+`crates/network/src/h3/tls_message.rs:199` **struct** `ServerHello` — ServerHello (RFC 8446 §4.1.3). A HelloRetryRequest is a ServerHello whose
+`crates/network/src/h3/tls_message.rs:214` **fn** `is_hello_retry_request` — Whether this ServerHello is actually a HelloRetryRequest, identified by
+`crates/network/src/h3/tls_message.rs:223` **struct** `CertificateEntry` — A single entry of a Certificate message's `certificate_list`
+`crates/network/src/h3/tls_message.rs:232` **struct** `Certificate` — Certificate message (RFC 8446 §4.4.2)
+`crates/network/src/h3/tls_message.rs:243` **struct** `CertificateRequest` — CertificateRequest message (RFC 8446 §4.3.2), sent by a server that wants
+`crates/network/src/h3/tls_message.rs:255` **struct** `CertificateVerify` — CertificateVerify message (RFC 8446 §4.4.3): a signature over the handshake
+`crates/network/src/h3/tls_message.rs:265` **struct** `NewSessionTicket` — NewSessionTicket message (RFC 8446 §4.6.1), a post-handshake message that
+`crates/network/src/h3/tls_message.rs:281` **enum** `KeyUpdateRequest` — KeyUpdate `request_update` value (RFC 8446 §4.6.3): whether the peer is asked
+`crates/network/src/h3/tls_message.rs:294` **enum** `Handshake` — One TLS 1.3 handshake message, i.e. the body of the `Handshake` wrapper
+`crates/network/src/h3/tls_message.rs:357` **fn** `parse` — Parse one handshake message from the front of `buf`
+`crates/network/src/h3/tls_message.rs:493` **fn** `encode` — Serialize this message (`msg_type` · `uint24 length` · body) onto `out`
+`crates/network/src/h3/tls_message.rs:564` **struct** `KeyShareEntry` — One `KeyShareEntry` (RFC 8446 §4.2.8): a named group and the corresponding
+`crates/network/src/h3/tls_message.rs:578` **fn** `parse_client_hello` — Parse the `key_share` extension body from a **ClientHello**: a
+`crates/network/src/h3/tls_message.rs:596` **fn** `encode_client_hello` — Encode a ClientHello `key_share` extension body from a list of entries
+`crates/network/src/h3/tls_message.rs:612` **fn** `parse_server_hello` — Parse the `key_share` extension body from a **ServerHello**: a single
+`crates/network/src/h3/tls_message.rs:624` **fn** `encode_server_hello` — Encode a ServerHello `key_share` extension body (a single entry)
+`crates/network/src/h3/tls_message.rs:654` **fn** `supported_versions` — Parse the `supported_versions` body from a **ClientHello**: a
+`crates/network/src/h3/tls_message.rs:667` **fn** `encode_supported_versions` — Encode a ClientHello `supported_versions` body from a version list — a
 `crates/network/src/h3/tls_schedule.rs:84` **fn** `transcript_hash` — `Transcript-Hash(messages)` (RFC 8446 §4.4.1) — the KDF hash (SHA-256) over
 `crates/network/src/h3/tls_schedule.rs:99` **fn** `derive_secret` — `Derive-Secret(Secret, Label, Messages)` (RFC 8446 §7.1):
 `crates/network/src/h3/tls_schedule.rs:123` **fn** `early_secret` — The Early Secret with **no** PSK: `HKDF-Extract(0, 0)`, where both the salt
@@ -4610,4 +4632,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4539 symbols in 22 crates*
+*Total: 4561 symbols in 22 crates*
