@@ -538,7 +538,7 @@
      "id": "P3-h3",
      "title": "HTTP/3",
      "status": "active",
-     "note": "В работе (P1): срез 1 ✅ 2026-07-04 — QUIC varint (RFC 9000 §16) + HTTP/3 frame codec (RFC 9114 §7.2), pure parse/serialize без IO (crates/network/src/h3/, 17 тестов). Остаётся: QPACK (RFC 9204), QUIC transport (UDP+TLS 1.3+packet protection+loss recovery+congestion control), stream framing, h3_do_request"
+     "note": "В работе (P1): срез 1 ✅ 2026-07-04 — QUIC varint (RFC 9000 §16) + HTTP/3 frame codec (RFC 9114 §7.2); срез 2 ✅ 2026-07-04 — QPACK field-section codec (RFC 9204, static table only = поведение при SETTINGS_QPACK_MAX_TABLE_CAPACITY=0; переиспользует HPACK-примитивы), pure parse/serialize без IO (crates/network/src/h3/, 34 теста). Остаётся: QPACK dynamic table + encoder/decoder streams, QUIC transport (UDP+TLS 1.3+packet protection+loss recovery+congestion control), stream framing, h3_do_request"
     },
     {
      "id": "PH3-20",

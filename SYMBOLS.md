@@ -2299,7 +2299,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (299 symbols)
+## lumen-network  (315 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -2446,6 +2446,22 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h2/hpack.rs:844` **fn** `encode` — Encode a list of `(name, value)` pairs into a header block fragment
 `crates/network/src/h2/pool.rs:35` **struct** `H2Pool` — A shared pool of HTTP/2 connections, one per origin
 `crates/network/src/h2/pool.rs:40` **fn** `new`
+`crates/network/src/h3/frame.rs:89` **enum** `FrameError` — Codec-level error. Each variant maps to exactly one RFC 9114 §8.1 wire error
+`crates/network/src/h3/frame.rs:132` **enum** `Frame` — A parsed HTTP/3 frame (RFC 9114 §7.2). Field sections in `Headers` /
+`crates/network/src/h3/frame.rs:196` **fn** `parse` — Parse one frame from the front of `buf`
+`crates/network/src/h3/frame.rs:254` **fn** `encode` — Serialize this frame (type · length · payload) onto `out`
+`crates/network/src/h3/qpack.rs:61` **enum** `QpackError` — Field-section codec error. Every variant is a decompression failure at the
+`crates/network/src/h3/qpack.rs:262` **struct** `HeaderField` — A decoded header field. `sensitive` reflects the QPACK "never index" (`N`)
+`crates/network/src/h3/qpack.rs:274` **fn** `new` — Build a non-sensitive field from `name`/`value`
+`crates/network/src/h3/qpack.rs:280` **fn** `sensitive` — Build a field with the "never index" (`N`) bit set
+`crates/network/src/h3/qpack.rs:286` **fn** `name_str` — The name as UTF-8 (best-effort; non-UTF-8 yields `""`)
+`crates/network/src/h3/qpack.rs:292` **fn** `value_str` — The value as UTF-8 (best-effort; non-UTF-8 yields `""`)
+`crates/network/src/h3/qpack.rs:387` **fn** `encode_field_section` — Encode a list of header fields into a QPACK field section (RFC 9204 §4.5),
+`crates/network/src/h3/qpack.rs:426` **fn** `decode_field_section` — Decode a QPACK field section (RFC 9204 §4.5) that references only the static
+`crates/network/src/h3/varint.rs:22` **struct** `VarIntTooLarge` — Error returned by [`encode`] when a value does not fit in a QUIC varint
+`crates/network/src/h3/varint.rs:35` **fn** `encoded_len` — Number of bytes the varint encoding of `value` occupies (1, 2, 4, or 8), or
+`crates/network/src/h3/varint.rs:51` **fn** `encode` — Append the shortest QUIC varint encoding of `value` to `out`
+`crates/network/src/h3/varint.rs:69` **fn** `decode` — Decode one QUIC varint from the front of `buf`
 `crates/network/src/hsts_preload.rs:23` **struct** `HstsPreloadList` — HSTS Preload List: быстрый поиск по eTLD+1
 `crates/network/src/hsts_preload.rs:36` **fn** `load` — Создать preload list из встроенного JSON (Chromium формат)
 `crates/network/src/hsts_preload.rs:100` **fn** `is_preloaded` — Проверить, есть ли хост в preload list
@@ -2487,45 +2503,45 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/http_cache.rs:399` **fn** `new` — Open or create a cache database at `path`
 `crates/network/src/http_cache.rs:423` **fn** `open_default` — Open or create the default cache database at [`lumen_cache_dir`]`/http_cache.db`
 `crates/network/src/http_cache.rs:567` **fn** `lumen_cache_dir` — Returns the Lumen cache directory for the current user
-`crates/network/src/lib.rs:99` **fn** `set_global_adblock_enabled` — Enable or disable the process-global ad-block filter
-`crates/network/src/lib.rs:105` **fn** `global_adblock_enabled` — Whether the process-global ad-block filter is currently enabled
-`crates/network/src/lib.rs:114` **fn** `install_global_adblock_filter` — Install (or replace) the process-global ad-block filter
-`crates/network/src/lib.rs:2216` **struct** `HttpProxy` — HTTP proxy configuration (RFC 7230 proxy behavior)
-`crates/network/src/lib.rs:2228` **fn** `new` — Создать новый прокси без аутентификации
-`crates/network/src/lib.rs:2237` **fn** `with_basic_auth` — Создать прокси с базовой аутентификацией (username:password)
-`crates/network/src/lib.rs:2280` **struct** `HttpClient` — HTTP/1.1 + HTTPS клиент
-`crates/network/src/lib.rs:2319` **fn** `new`
-`crates/network/src/lib.rs:2345` **fn** `with_sink` — Подключить EventSink. По умолчанию sink-а нет (события не эмитятся)
-`crates/network/src/lib.rs:2356` **fn** `with_filter` — Подключить RequestFilter. По умолчанию фильтра нет — `fetch` всегда
-`crates/network/src/lib.rs:2368` **fn** `with_interceptor` — Подключить Service Worker перехватчик fetch-запросов. Проверяется
-`crates/network/src/lib.rs:2377` **fn** `with_pool` — Подключить shared `ConnectionPool`. По умолчанию у каждого `HttpClient`
-`crates/network/src/lib.rs:2387` **fn** `with_h2_pool` — Подключить shared `H2Pool` (RFC 9113 §9.1.1). По умолчанию HTTP/2
-`crates/network/src/lib.rs:2396` **fn** `with_dns_resolver` — Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
-`crates/network/src/lib.rs:2413` **fn** `with_hsts` — Подключить HSTS-store (RFC 6797). По умолчанию — нет:
-`crates/network/src/lib.rs:2429` **fn** `with_credentials` — Подключить credential-провайдер для HTTP authentication (RFC 7235 /
-`crates/network/src/lib.rs:2440` **fn** `with_tab` — Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
-`crates/network/src/lib.rs:2460` **fn** `with_mixed_content_policy` — Подключить mixed-content policy (W3C Mixed Content §5). По умолчанию
-`crates/network/src/lib.rs:2484` **fn** `with_content_decoder` — Зарегистрировать `ContentDecoder` для одного encoding. Декодер попадает
-`crates/network/src/lib.rs:2530` **fn** `with_cors_cache` — Запросить только диапазон байт ресурса (RFC 7233). Если сервер
-`crates/network/src/lib.rs:2542` **fn** `with_cookie_jar` — Attach a cookie store. The provider receives `Cookie:` injection
-`crates/network/src/lib.rs:2566` **fn** `with_http_cache` — Подключить HTTP response cache (RFC 7234)
-`crates/network/src/lib.rs:2577` **fn** `with_proxy` — Подключить HTTP прокси (RFC 7230). По умолчанию прокси не подключён — запросы
-`crates/network/src/lib.rs:2590` **fn** `with_socks5_proxy` — Подключить SOCKS5 прокси (RFC 1928) для туннелирования всех TCP-соединений
-`crates/network/src/lib.rs:2601` **fn** `with_fingerprint_profile` — Установить HTTP fingerprinting profile (Standard/Strict/Tor) для Chrome-matching
-`crates/network/src/lib.rs:2609` **fn** `fingerprint_profile` — Получить текущий HTTP fingerprinting profile
-`crates/network/src/lib.rs:2620` **fn** `with_tls_profile` — Override the TLS fingerprint profile independently of the HTTP profile
-`crates/network/src/lib.rs:2626` **fn** `tls_profile` — Получить текущий TLS fingerprinting profile
-`crates/network/src/lib.rs:2660` **fn** `fetch_cors` — CORS-enabled fetch для cross-origin subresource (Fetch §3-§4)
-`crates/network/src/lib.rs:2709` **fn** `fetch_range`
-`crates/network/src/lib.rs:2777` **fn** `fetch_multi_range` — Multi-range запрос (RFC 7233 §4.1). Один request на несколько
-`crates/network/src/lib.rs:2864` **fn** `fetch_subresource` — Загрузить подресурс с проверкой mixed-content по подключённой
-`crates/network/src/lib.rs:2964` **fn** `fetch_conditional` — Perform a **conditional GET** (RFC 7232) and report whether the resource
-`crates/network/src/lib.rs:3020` **enum** `ConditionalFetch` — Outcome of [`HttpClient::fetch_conditional`]
-`crates/network/src/lib.rs:3040` **fn** `fetch_page` — Fetch a top-level page and return the response body together with all
-`crates/network/src/lib.rs:3101` **fn** `fetch_page_streaming` — Как [`HttpClient::fetch_page`], но тело финального 2xx-ответа стримится
-`crates/network/src/lib.rs:3701` **struct** `InMemoryFetchInterceptor` — In-memory реализация `FetchInterceptor` для тестов без SQLite
-`crates/network/src/lib.rs:3707` **fn** `new`
-`crates/network/src/lib.rs:3714` **fn** `insert` — Добавить запись: ответ для (origin, url) берётся из кэша без сети
+`crates/network/src/lib.rs:100` **fn** `set_global_adblock_enabled` — Enable or disable the process-global ad-block filter
+`crates/network/src/lib.rs:106` **fn** `global_adblock_enabled` — Whether the process-global ad-block filter is currently enabled
+`crates/network/src/lib.rs:115` **fn** `install_global_adblock_filter` — Install (or replace) the process-global ad-block filter
+`crates/network/src/lib.rs:2217` **struct** `HttpProxy` — HTTP proxy configuration (RFC 7230 proxy behavior)
+`crates/network/src/lib.rs:2229` **fn** `new` — Создать новый прокси без аутентификации
+`crates/network/src/lib.rs:2238` **fn** `with_basic_auth` — Создать прокси с базовой аутентификацией (username:password)
+`crates/network/src/lib.rs:2281` **struct** `HttpClient` — HTTP/1.1 + HTTPS клиент
+`crates/network/src/lib.rs:2320` **fn** `new`
+`crates/network/src/lib.rs:2346` **fn** `with_sink` — Подключить EventSink. По умолчанию sink-а нет (события не эмитятся)
+`crates/network/src/lib.rs:2357` **fn** `with_filter` — Подключить RequestFilter. По умолчанию фильтра нет — `fetch` всегда
+`crates/network/src/lib.rs:2369` **fn** `with_interceptor` — Подключить Service Worker перехватчик fetch-запросов. Проверяется
+`crates/network/src/lib.rs:2378` **fn** `with_pool` — Подключить shared `ConnectionPool`. По умолчанию у каждого `HttpClient`
+`crates/network/src/lib.rs:2388` **fn** `with_h2_pool` — Подключить shared `H2Pool` (RFC 9113 §9.1.1). По умолчанию HTTP/2
+`crates/network/src/lib.rs:2397` **fn** `with_dns_resolver` — Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
+`crates/network/src/lib.rs:2414` **fn** `with_hsts` — Подключить HSTS-store (RFC 6797). По умолчанию — нет:
+`crates/network/src/lib.rs:2430` **fn** `with_credentials` — Подключить credential-провайдер для HTTP authentication (RFC 7235 /
+`crates/network/src/lib.rs:2441` **fn** `with_tab` — Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
+`crates/network/src/lib.rs:2461` **fn** `with_mixed_content_policy` — Подключить mixed-content policy (W3C Mixed Content §5). По умолчанию
+`crates/network/src/lib.rs:2485` **fn** `with_content_decoder` — Зарегистрировать `ContentDecoder` для одного encoding. Декодер попадает
+`crates/network/src/lib.rs:2531` **fn** `with_cors_cache` — Запросить только диапазон байт ресурса (RFC 7233). Если сервер
+`crates/network/src/lib.rs:2543` **fn** `with_cookie_jar` — Attach a cookie store. The provider receives `Cookie:` injection
+`crates/network/src/lib.rs:2567` **fn** `with_http_cache` — Подключить HTTP response cache (RFC 7234)
+`crates/network/src/lib.rs:2578` **fn** `with_proxy` — Подключить HTTP прокси (RFC 7230). По умолчанию прокси не подключён — запросы
+`crates/network/src/lib.rs:2591` **fn** `with_socks5_proxy` — Подключить SOCKS5 прокси (RFC 1928) для туннелирования всех TCP-соединений
+`crates/network/src/lib.rs:2602` **fn** `with_fingerprint_profile` — Установить HTTP fingerprinting profile (Standard/Strict/Tor) для Chrome-matching
+`crates/network/src/lib.rs:2610` **fn** `fingerprint_profile` — Получить текущий HTTP fingerprinting profile
+`crates/network/src/lib.rs:2621` **fn** `with_tls_profile` — Override the TLS fingerprint profile independently of the HTTP profile
+`crates/network/src/lib.rs:2627` **fn** `tls_profile` — Получить текущий TLS fingerprinting profile
+`crates/network/src/lib.rs:2661` **fn** `fetch_cors` — CORS-enabled fetch для cross-origin subresource (Fetch §3-§4)
+`crates/network/src/lib.rs:2710` **fn** `fetch_range`
+`crates/network/src/lib.rs:2778` **fn** `fetch_multi_range` — Multi-range запрос (RFC 7233 §4.1). Один request на несколько
+`crates/network/src/lib.rs:2865` **fn** `fetch_subresource` — Загрузить подресурс с проверкой mixed-content по подключённой
+`crates/network/src/lib.rs:2965` **fn** `fetch_conditional` — Perform a **conditional GET** (RFC 7232) and report whether the resource
+`crates/network/src/lib.rs:3021` **enum** `ConditionalFetch` — Outcome of [`HttpClient::fetch_conditional`]
+`crates/network/src/lib.rs:3041` **fn** `fetch_page` — Fetch a top-level page and return the response body together with all
+`crates/network/src/lib.rs:3102` **fn** `fetch_page_streaming` — Как [`HttpClient::fetch_page`], но тело финального 2xx-ответа стримится
+`crates/network/src/lib.rs:3702` **struct** `InMemoryFetchInterceptor` — In-memory реализация `FetchInterceptor` для тестов без SQLite
+`crates/network/src/lib.rs:3708` **fn** `new`
+`crates/network/src/lib.rs:3715` **fn** `insert` — Добавить запись: ответ для (origin, url) берётся из кэша без сети
 `crates/network/src/mixed_content.rs:33` **enum** `RequestDestination` — Назначение подресурса по Fetch spec §3.2.7 «request destination» —
 `crates/network/src/mixed_content.rs:59` **enum** `MixedContentLevel` — Mixed-content уровень для запроса в secure-контексте
 `crates/network/src/mixed_content.rs:75` **fn** `is_strict_blocked` — Должны ли мы блокировать запрос по строгому режиму. По умолчанию
@@ -4379,4 +4395,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4308 symbols in 22 crates*
+*Total: 4324 symbols in 22 crates*
