@@ -48,6 +48,7 @@ mod doh;
 mod dot;
 pub mod filter;
 pub mod h2;
+pub mod h3;
 pub mod http;
 pub mod http_cache;
 mod hsts;
