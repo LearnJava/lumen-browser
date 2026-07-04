@@ -1659,7 +1659,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/knowledge/src/store.rs:77` **fn** `read_later` — Direct access to the read-later store for status / touch operations
 `crates/knowledge/src/store.rs:83` **fn** `notes` — Direct access to the notes store for URL-based note listing and
 
-## lumen-layout  (609 symbols)
+## lumen-layout  (611 symbols)
 
 `crates/engine/layout/src/anchor.rs:44` **enum** `AnchorSide` — Which edge or point of an anchor element the `anchor()` function references
 `crates/engine/layout/src/anchor.rs:73` **enum** `InsetAreaKeyword` — Single-axis `inset-area` keyword, as defined in §5.2 of the spec
@@ -1798,28 +1798,28 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/inert.rs:46` **fn** `is_inert` — Returns `true` if `node` or any of its ancestors carries the `inert`
 `crates/engine/layout/src/inert.rs:66` **struct** `InertRegion` — A rectangular region in the layout tree that belongs to an inert subtree
 `crates/engine/layout/src/inert.rs:87` **fn** `collect_inert_regions` — Walk the layout tree and return every inert root box as an [`InertRegion`]
-`crates/engine/layout/src/lib.rs:158` **struct** `SelectionHighlight` — Computed `::selection` highlight data — passed to the paint layer so it can
-`crates/engine/layout/src/lib.rs:174` **trait** `TextMeasurer` — Интерфейс измерения ширины символов для line wrapping
-`crates/engine/layout/src/lib.rs:241` **enum** `ClickableKind` — Classification of an interactive element found during layout-tree traversal
-`crates/engine/layout/src/lib.rs:262` **struct** `ClickableElement` — An interactive element with its screen-space bounding rect
-`crates/engine/layout/src/lib.rs:283` **fn** `collect_clickable_elements` — Collect all interactive elements from the layout tree in document order
-`crates/engine/layout/src/lib.rs:516` **struct** `StickyBox` — Snapshot of a `position: sticky` element captured after normal-flow layout
-`crates/engine/layout/src/lib.rs:544` **fn** `collect_sticky_boxes` — Collect all `position: sticky` elements from the layout tree in document order
-`crates/engine/layout/src/lib.rs:603` **fn** `compute_sticky_offset` — Compute the visual offset `(dx, dy)` in CSS px to apply to a sticky element
-`crates/engine/layout/src/lib.rs:676` **struct** `SnapPoint` — A single snap area inside a [`SnapContainer`]
-`crates/engine/layout/src/lib.rs:694` **struct** `SnapContainer` — A scroll container that participates in CSS Scroll Snap L1
-`crates/engine/layout/src/lib.rs:727` **fn** `collect_snap_containers` — Collect all scroll containers that participate in CSS Scroll Snap L1
-`crates/engine/layout/src/lib.rs:906` **fn** `find_snap_target` — Find the nearest snap target for a scroll gesture
-`crates/engine/layout/src/lib.rs:1005` **struct** `SnapTargets` — The snap areas a container is currently snapped to, one per axis
-`crates/engine/layout/src/lib.rs:1028` **fn** `find_snapped_nodes` — Determine which snap areas a container is snapped to at scroll offset `scroll`
-`crates/engine/layout/src/lib.rs:1078` **struct** `ScrollContainer` — A scrollable overflow container collected from the layout tree
-`crates/engine/layout/src/lib.rs:1110` **fn** `collect_scroll_containers` — Collect all `overflow: scroll` / `overflow: auto` containers from the layout tree
-`crates/engine/layout/src/lib.rs:1166` **fn** `overscroll_should_propagate` — CSS Overscroll Behavior L1 §3 — decide whether a scroll delta a container
-`crates/engine/layout/src/lib.rs:1214` **fn** `collect_computed_styles` — Walks the layout tree and returns a map of `NodeId index → CSS property map`
-`crates/engine/layout/src/lib.rs:1240` **fn** `set_scroll_position` — Update the scroll position of a node in the layout tree
-`crates/engine/layout/src/lib.rs:1273` **fn** `collect_view_transition_names` — Find the innermost scroll container whose `clip_rect` contains `(x, y)`
-`crates/engine/layout/src/lib.rs:1310` **fn** `collect_view_transition_groups`
-`crates/engine/layout/src/lib.rs:1336` **fn** `find_scroll_container_at` — `x` and `y` are in CSS px, document-relative (same coordinate space as
+`crates/engine/layout/src/lib.rs:159` **struct** `SelectionHighlight` — Computed `::selection` highlight data — passed to the paint layer so it can
+`crates/engine/layout/src/lib.rs:175` **trait** `TextMeasurer` — Интерфейс измерения ширины символов для line wrapping
+`crates/engine/layout/src/lib.rs:242` **enum** `ClickableKind` — Classification of an interactive element found during layout-tree traversal
+`crates/engine/layout/src/lib.rs:263` **struct** `ClickableElement` — An interactive element with its screen-space bounding rect
+`crates/engine/layout/src/lib.rs:284` **fn** `collect_clickable_elements` — Collect all interactive elements from the layout tree in document order
+`crates/engine/layout/src/lib.rs:517` **struct** `StickyBox` — Snapshot of a `position: sticky` element captured after normal-flow layout
+`crates/engine/layout/src/lib.rs:545` **fn** `collect_sticky_boxes` — Collect all `position: sticky` elements from the layout tree in document order
+`crates/engine/layout/src/lib.rs:604` **fn** `compute_sticky_offset` — Compute the visual offset `(dx, dy)` in CSS px to apply to a sticky element
+`crates/engine/layout/src/lib.rs:677` **struct** `SnapPoint` — A single snap area inside a [`SnapContainer`]
+`crates/engine/layout/src/lib.rs:695` **struct** `SnapContainer` — A scroll container that participates in CSS Scroll Snap L1
+`crates/engine/layout/src/lib.rs:728` **fn** `collect_snap_containers` — Collect all scroll containers that participate in CSS Scroll Snap L1
+`crates/engine/layout/src/lib.rs:907` **fn** `find_snap_target` — Find the nearest snap target for a scroll gesture
+`crates/engine/layout/src/lib.rs:1006` **struct** `SnapTargets` — The snap areas a container is currently snapped to, one per axis
+`crates/engine/layout/src/lib.rs:1029` **fn** `find_snapped_nodes` — Determine which snap areas a container is snapped to at scroll offset `scroll`
+`crates/engine/layout/src/lib.rs:1079` **struct** `ScrollContainer` — A scrollable overflow container collected from the layout tree
+`crates/engine/layout/src/lib.rs:1111` **fn** `collect_scroll_containers` — Collect all `overflow: scroll` / `overflow: auto` containers from the layout tree
+`crates/engine/layout/src/lib.rs:1167` **fn** `overscroll_should_propagate` — CSS Overscroll Behavior L1 §3 — decide whether a scroll delta a container
+`crates/engine/layout/src/lib.rs:1215` **fn** `collect_computed_styles` — Walks the layout tree and returns a map of `NodeId index → CSS property map`
+`crates/engine/layout/src/lib.rs:1241` **fn** `set_scroll_position` — Update the scroll position of a node in the layout tree
+`crates/engine/layout/src/lib.rs:1274` **fn** `collect_view_transition_names` — Find the innermost scroll container whose `clip_rect` contains `(x, y)`
+`crates/engine/layout/src/lib.rs:1311` **fn** `collect_view_transition_groups`
+`crates/engine/layout/src/lib.rs:1337` **fn** `find_scroll_container_at` — `x` and `y` are in CSS px, document-relative (same coordinate space as
 `crates/engine/layout/src/masonry.rs:33` **fn** `lay_out_masonry` — Greedy waterfall masonry placement algorithm (CSS Grid L3 §14)
 `crates/engine/layout/src/masonry.rs:64` **fn** `min_track_idx` — Returns the index of the track with the minimum running height
 `crates/engine/layout/src/mathml.rs:28` **enum** `MathStyle` — CSS `math-style` (MathML Core §2.1.1). Inherited. Initial: `Normal`
@@ -2233,28 +2233,30 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/style.rs:10249` **fn** `clear_interactive_state` — Clears hover/focus/active state after layout
 `crates/engine/layout/src/style.rs:10268` **fn** `set_forced_colors` — Enables/disables Forced Colors Mode (CSS Color Adjustment L1 §3) for all
 `crates/engine/layout/src/style.rs:10273` **fn** `forced_colors_active` — True when Forced Colors Mode is active on the current thread
-`crates/engine/layout/src/style.rs:10318` **enum** `LengthOrAuto` — CSS `<length> | auto` — для margin и offset-свойств, где `auto` имеет
-`crates/engine/layout/src/style.rs:10326` **fn** `is_auto`
-`crates/engine/layout/src/style.rs:10333` **fn** `to_px_opt` — Returns the raw pixel value for `Length::Px` variants; `Auto` and all
-`crates/engine/layout/src/style.rs:10343` **fn** `resolve` — Резолвит в пиксели. `Auto` → `None`; нерезолвируемый `%` → `None`
-`crates/engine/layout/src/style.rs:10351` **fn** `resolve_or_zero` — Резолвит в пиксели; для `Auto` и нерезолвируемых значений → 0.0
-`crates/engine/layout/src/style.rs:10362` **enum** `Length` — Типизированная длина CSS до резолва в пиксели
-`crates/engine/layout/src/style.rs:10427` **enum** `CalcNode` — CSS Values L4 §10 — AST `calc()`-выражения. Хранится как двоичное дерево
-`crates/engine/layout/src/style.rs:10456` **enum** `MathFn` — CSS Values L4 §10.7-10.9 — научные math-функции. Имена case-insensitive
-`crates/engine/layout/src/style.rs:10485` **enum** `RoundStrategy` — CSS Values L4 §10.5.1 — стратегия округления для `round()`
-`crates/engine/layout/src/style.rs:10509` **fn** `resolve` — Резолвит выражение в `f32`-пиксели по тем же правилам, что
-`crates/engine/layout/src/style.rs:10707` **fn** `resolve` — Возвращает длину в пикселях. `em_basis` — fs, относительно которого
-`crates/engine/layout/src/style.rs:10747` **fn** `is_intrinsic` — Returns `true` if this is an intrinsic sizing keyword (min-content,
-`crates/engine/layout/src/style.rs:10753` **fn** `resolve_or_zero` — Резолвит с `cb_width` как percent_basis; возвращает 0.0 при неудаче
-`crates/engine/layout/src/style.rs:10759` **fn** `px` — Извлекает пиксельное значение для уже-разрешённых `Px`-значений
-`crates/engine/layout/src/style.rs:10914` **fn** `parse_length`
-`crates/engine/layout/src/style.rs:14656` **fn** `resolve_logical_property` — Resolve CSS Logical Properties based on writing-mode
-`crates/engine/layout/src/style.rs:16741` **fn** `parse_transform_list` — Парсит `<transform-list>` — последовательность `func(args)` через
-`crates/engine/layout/src/style.rs:17975` **fn** `parse_grid_template_areas` — CSS Grid L1 §7.3 — parse `grid-template-areas` value
-`crates/engine/layout/src/style.rs:18055` **fn** `parse_background_gradient` — CSS Images L3/L4 §3.3/§3.7 — parses color stops from a CSS gradient string
-`crates/engine/layout/src/style.rs:18453` **fn** `parse_gradient_stops` — The leading direction / angle / shape argument (e.g. `to right`,
-`crates/engine/layout/src/style.rs:19323` **fn** `parse_color`
-`crates/engine/layout/src/style.rs:19486` **fn** `system_color` — CSS Color Module Level 4 §6.2 — резолв системных цветовых ключевых слов
+`crates/engine/layout/src/style.rs:10292` **fn** `set_print_media` — Selects the `print` (`true`) or `screen` (`false`) `@media` type for all
+`crates/engine/layout/src/style.rs:10297` **fn** `print_media_active` — True when the current layout pass renders for `print` media
+`crates/engine/layout/src/style.rs:10342` **enum** `LengthOrAuto` — CSS `<length> | auto` — для margin и offset-свойств, где `auto` имеет
+`crates/engine/layout/src/style.rs:10350` **fn** `is_auto`
+`crates/engine/layout/src/style.rs:10357` **fn** `to_px_opt` — Returns the raw pixel value for `Length::Px` variants; `Auto` and all
+`crates/engine/layout/src/style.rs:10367` **fn** `resolve` — Резолвит в пиксели. `Auto` → `None`; нерезолвируемый `%` → `None`
+`crates/engine/layout/src/style.rs:10375` **fn** `resolve_or_zero` — Резолвит в пиксели; для `Auto` и нерезолвируемых значений → 0.0
+`crates/engine/layout/src/style.rs:10386` **enum** `Length` — Типизированная длина CSS до резолва в пиксели
+`crates/engine/layout/src/style.rs:10451` **enum** `CalcNode` — CSS Values L4 §10 — AST `calc()`-выражения. Хранится как двоичное дерево
+`crates/engine/layout/src/style.rs:10480` **enum** `MathFn` — CSS Values L4 §10.7-10.9 — научные math-функции. Имена case-insensitive
+`crates/engine/layout/src/style.rs:10509` **enum** `RoundStrategy` — CSS Values L4 §10.5.1 — стратегия округления для `round()`
+`crates/engine/layout/src/style.rs:10533` **fn** `resolve` — Резолвит выражение в `f32`-пиксели по тем же правилам, что
+`crates/engine/layout/src/style.rs:10731` **fn** `resolve` — Возвращает длину в пикселях. `em_basis` — fs, относительно которого
+`crates/engine/layout/src/style.rs:10771` **fn** `is_intrinsic` — Returns `true` if this is an intrinsic sizing keyword (min-content,
+`crates/engine/layout/src/style.rs:10777` **fn** `resolve_or_zero` — Резолвит с `cb_width` как percent_basis; возвращает 0.0 при неудаче
+`crates/engine/layout/src/style.rs:10783` **fn** `px` — Извлекает пиксельное значение для уже-разрешённых `Px`-значений
+`crates/engine/layout/src/style.rs:10938` **fn** `parse_length`
+`crates/engine/layout/src/style.rs:14680` **fn** `resolve_logical_property` — Resolve CSS Logical Properties based on writing-mode
+`crates/engine/layout/src/style.rs:16765` **fn** `parse_transform_list` — Парсит `<transform-list>` — последовательность `func(args)` через
+`crates/engine/layout/src/style.rs:17999` **fn** `parse_grid_template_areas` — CSS Grid L1 §7.3 — parse `grid-template-areas` value
+`crates/engine/layout/src/style.rs:18079` **fn** `parse_background_gradient` — CSS Images L3/L4 §3.3/§3.7 — parses color stops from a CSS gradient string
+`crates/engine/layout/src/style.rs:18477` **fn** `parse_gradient_stops` — The leading direction / angle / shape argument (e.g. `to right`,
+`crates/engine/layout/src/style.rs:19348` **fn** `parse_color`
+`crates/engine/layout/src/style.rs:19511` **fn** `system_color` — CSS Color Module Level 4 §6.2 — резолв системных цветовых ключевых слов
 `crates/engine/layout/src/subgrid.rs:24` **struct** `SubgridContext` — Resolved track sizes and cumulative offsets for one grid axis (columns or rows)
 `crates/engine/layout/src/subgrid.rs:35` **fn** `from_parent_tracks` — Build from a slice of parent track sizes and the gap value used between them
 `crates/engine/layout/src/subgrid.rs:46` **fn** `total_size` — Total span width/height occupied by all inherited tracks (including inter-track gaps)
@@ -2299,7 +2301,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (315 symbols)
+## lumen-network  (489 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -2446,18 +2448,192 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h2/hpack.rs:844` **fn** `encode` — Encode a list of `(name, value)` pairs into a header block fragment
 `crates/network/src/h2/pool.rs:35` **struct** `H2Pool` — A shared pool of HTTP/2 connections, one per origin
 `crates/network/src/h2/pool.rs:40` **fn** `new`
+`crates/network/src/h3/alt_svc.rs:54` **struct** `AltSvcEntry` — One parsed alternative service entry (RFC 7838 §3) for the `h3` protocol
+`crates/network/src/h3/alt_svc.rs:75` **fn** `parse` — Parse an `Alt-Svc` header value into the HTTP/3 alternatives it advertises
+`crates/network/src/h3/alt_svc.rs:191` **struct** `AltSvcCache` — Per-origin memory of advertised HTTP/3 alternatives (RFC 7838 §3)
+`crates/network/src/h3/alt_svc.rs:198` **fn** `new` — Create an empty cache
+`crates/network/src/h3/alt_svc.rs:207` **fn** `insert` — Record the first `h3` alternative from a parsed `Alt-Svc` header for
+`crates/network/src/h3/alt_svc.rs:224` **fn** `get` — Look up a still-fresh HTTP/3 alternative for `origin` as of `now`
+`crates/network/src/h3/alt_svc.rs:236` **fn** `remove` — Clear any cached alternative for `origin` (RFC 7838 §2.4 "broken":
+`crates/network/src/h3/alt_svc.rs:241` **fn** `insert_now` — [`insert`](Self::insert) using the current wall clock
+`crates/network/src/h3/alt_svc.rs:246` **fn** `get_now` — [`get`](Self::get) using the current wall clock
+`crates/network/src/h3/conn_flow.rs:46` **enum** `StreamDir` — A stream's directionality, the axis `MAX_STREAMS` accounts on separately
+`crates/network/src/h3/conn_flow.rs:77` **enum** `ConnError` — A connection-level protocol violation. Each variant maps to a single QUIC
+`crates/network/src/h3/conn_flow.rs:131` **struct** `SendConnFlow` — Our view of the peer's connection-level flow-control limit: the sum of stream
+`crates/network/src/h3/conn_flow.rs:143` **fn** `new` — Creates the send-side accounting bounded by `initial_max_data` (the peer's
+`crates/network/src/h3/conn_flow.rs:149` **fn** `max_data` — The peer's current connection-level limit (RFC 9000 §4.1)
+`crates/network/src/h3/conn_flow.rs:155` **fn** `sent` — The connection-wide total of stream bytes sent so far
+`crates/network/src/h3/conn_flow.rs:162` **fn** `available` — How many more stream bytes the connection limit currently permits
+`crates/network/src/h3/conn_flow.rs:169` **fn** `allowed` — The largest number of bytes, up to `want`, that may be sent right now
+`crates/network/src/h3/conn_flow.rs:175` **fn** `on_sent` — Records that `n` stream bytes were sent across the connection
+`crates/network/src/h3/conn_flow.rs:181` **fn** `update_max_data` — Raises the peer's connection limit from a received `MAX_DATA` frame
+`crates/network/src/h3/conn_flow.rs:189` **fn** `is_blocked` — Whether the connection limit is exhausted (no bytes may be sent). The
+`crates/network/src/h3/conn_flow.rs:196` **fn** `blocked_at` — The offset at which the sender is connection-flow-control blocked, if
+`crates/network/src/h3/conn_flow.rs:208` **struct** `RecvConnFlow` — The connection-level flow-control limit we advertise and police: it caps the
+`crates/network/src/h3/conn_flow.rs:223` **fn** `new` — Creates the receive-side accounting advertising `initial_max_data` bytes
+`crates/network/src/h3/conn_flow.rs:229` **fn** `limit` — The connection limit currently advertised (RFC 9000 §4.1)
+`crates/network/src/h3/conn_flow.rs:235` **fn** `received` — The connection-wide total of the highest offsets received so far
+`crates/network/src/h3/conn_flow.rs:241` **fn** `read` — The connection-wide total of bytes the application has consumed so far
+`crates/network/src/h3/conn_flow.rs:249` **fn** `record_received` — Records that a stream's highest received offset advanced by `delta` bytes
+`crates/network/src/h3/conn_flow.rs:260` **fn** `record_read` — Records that the application consumed `delta` more stream bytes across the
+`crates/network/src/h3/conn_flow.rs:267` **fn** `window_update` — Re-advertises the connection limit as `read + window` and returns the new
+`crates/network/src/h3/conn_flow.rs:281` **struct** `SendStreamLimit` — How many streams of one direction the peer lets *us* open, and the IDs of the
+`crates/network/src/h3/conn_flow.rs:295` **fn** `new` — Creates the send-side count bounded by `initial_max_streams` (the peer's
+`crates/network/src/h3/conn_flow.rs:301` **fn** `dir` — The stream-count axis this tracks (RFC 9000 §4.6)
+`crates/network/src/h3/conn_flow.rs:307` **fn** `opened` — How many streams of this direction we have opened so far
+`crates/network/src/h3/conn_flow.rs:313` **fn** `max_streams` — The peer's current limit on streams of this direction (RFC 9000 §4.6)
+`crates/network/src/h3/conn_flow.rs:320` **fn** `can_open` — Whether another stream of this direction may be opened right now
+`crates/network/src/h3/conn_flow.rs:329` **fn** `open` — Opens the next client-initiated stream of this direction and returns its
+`crates/network/src/h3/conn_flow.rs:344` **fn** `update_max_streams` — Raises the peer's limit from a received `MAX_STREAMS` frame
+`crates/network/src/h3/conn_flow.rs:352` **fn** `is_blocked` — Whether we want to open a stream but the peer's limit forbids it — the
+`crates/network/src/h3/conn_flow.rs:359` **fn** `blocked_at` — The stream-count limit at which we are blocked, if blocked
+`crates/network/src/h3/conn_flow.rs:369` **struct** `RecvStreamLimit` — How many streams of one direction we let the peer open, the enforcement of
+`crates/network/src/h3/conn_flow.rs:385` **fn** `new` — Creates the receive-side count advertising `initial_max_streams` (our
+`crates/network/src/h3/conn_flow.rs:391` **fn** `dir` — The stream-count axis this tracks (RFC 9000 §4.6)
+`crates/network/src/h3/conn_flow.rs:397` **fn** `opened` — The highest stream count of this direction the peer has opened
+`crates/network/src/h3/conn_flow.rs:403` **fn** `closed` — The number of streams of this direction that have finished
+`crates/network/src/h3/conn_flow.rs:409` **fn** `max_streams` — The limit currently advertised to the peer (RFC 9000 §4.6)
+`crates/network/src/h3/conn_flow.rs:417` **fn** `record_open` — Records that the peer opened a stream whose cumulative count is `count`
+`crates/network/src/h3/conn_flow.rs:427` **fn** `record_closed` — Records that `delta` more streams of this direction have finished
+`crates/network/src/h3/conn_flow.rs:435` **fn** `window_update` — Re-advertises the limit as `closed + concurrency` and returns the new
 `crates/network/src/h3/frame.rs:89` **enum** `FrameError` — Codec-level error. Each variant maps to exactly one RFC 9114 §8.1 wire error
 `crates/network/src/h3/frame.rs:132` **enum** `Frame` — A parsed HTTP/3 frame (RFC 9114 §7.2). Field sections in `Headers` /
 `crates/network/src/h3/frame.rs:196` **fn** `parse` — Parse one frame from the front of `buf`
 `crates/network/src/h3/frame.rs:254` **fn** `encode` — Serialize this frame (type · length · payload) onto `out`
+`crates/network/src/h3/loss.rs:89` **enum** `PacketNumberSpace` — One of QUIC's three packet-number spaces (RFC 9000 §12.3). Loss detection is
+`crates/network/src/h3/loss.rs:104` **fn** `uses_ack_delay` — Whether acknowledgements in this space may carry a non-zero `ack_delay`
+`crates/network/src/h3/loss.rs:112` **struct** `SentPacket` — A packet recorded in a [`SentPacketRegistry`] (RFC 9002 §A.1
+`crates/network/src/h3/loss.rs:133` **struct** `AckOutcome` — The result of processing one ACK frame (RFC 9002 §A.7)
+`crates/network/src/h3/loss.rs:149` **struct** `SentPacketRegistry` — One packet-number space's sent-packet registry and loss-detection state
+`crates/network/src/h3/loss.rs:171` **fn** `new` — Creates an empty registry for the given packet-number space
+`crates/network/src/h3/loss.rs:183` **fn** `space` — The packet-number space this registry tracks
+`crates/network/src/h3/loss.rs:189` **fn** `largest_acked` — The largest packet number acknowledged so far, or `None` before the first
+`crates/network/src/h3/loss.rs:195` **fn** `loss_time` — The earliest time a pending packet will be declared lost by the time
+`crates/network/src/h3/loss.rs:201` **fn** `time_of_last_ack_eliciting_packet` — The send time of the most recent ack-eliciting packet, the PTO anchor
+`crates/network/src/h3/loss.rs:207` **fn** `ack_eliciting_in_flight` — Whether any ack-eliciting packet is still outstanding (RFC 9002 §6.2.1);
+`crates/network/src/h3/loss.rs:212` **fn** `outstanding` — The number of packets currently tracked (sent, not yet acked or lost)
+`crates/network/src/h3/loss.rs:221` **fn** `on_packet_sent` — Records that a packet was sent (RFC 9002 §A.5 `OnPacketSent`)
+`crates/network/src/h3/loss.rs:240` **fn** `on_ack_received` — Processes an ACK frame's acknowledged ranges (RFC 9002 §A.7)
+`crates/network/src/h3/loss.rs:302` **fn** `detect_and_remove_lost_packets` — Declares and removes lost packets (RFC 9002 §A.10
+`crates/network/src/h3/loss.rs:413` **fn** `establishes_persistent_congestion` — Whether a run of lost packets establishes persistent congestion (RFC 9002
+`crates/network/src/h3/packet.rs:90` **enum** `PacketError` — Packet-header codec error. The connection layer maps these to the
+`crates/network/src/h3/packet.rs:141` **enum** `Packet` — A parsed QUIC packet header plus its opaque protected region (RFC 9000 §17)
+`crates/network/src/h3/packet.rs:261` **fn** `parse` — Parse one QUIC packet header (and its protected remainder) from the
+`crates/network/src/h3/packet.rs:368` **fn** `encode` — Serialize this packet header and its protected region onto `out`
+`crates/network/src/h3/pto.rs:68` **enum** `LossTimer` — The state the single loss-detection timer should be left in after
+`crates/network/src/h3/pto.rs:80` **fn** `deadline` — The instant the timer is armed for, or `None` when [`LossTimer::Disarmed`]
+`crates/network/src/h3/pto.rs:88` **fn** `is_armed` — Whether the timer is armed
+`crates/network/src/h3/pto.rs:96` **enum** `TimeoutAction` — What the caller must do when the loss-detection timer fires
+`crates/network/src/h3/pto.rs:124` **struct** `LossDetection` — The RFC 9002 Appendix A loss-detection and PTO state machine, tying the three
+`crates/network/src/h3/pto.rs:157` **fn** `new` — Creates a fresh loss-detection state machine with the peer's advertised
+`crates/network/src/h3/pto.rs:172` **fn** `registry` — The registry for `space`, borrowed immutably
+`crates/network/src/h3/pto.rs:183` **fn** `registry_mut` — The registry for `space`, borrowed mutably so the caller can record sent
+`crates/network/src/h3/pto.rs:192` **fn** `rtt` — The RTT estimator, borrowed immutably
+`crates/network/src/h3/pto.rs:199` **fn** `rtt_mut` — The RTT estimator, borrowed mutably so the caller can fold in a sample
+`crates/network/src/h3/pto.rs:204` **fn** `pto_count` — The current PTO backoff exponent (`pto_count`, RFC 9002 §6.2.1)
+`crates/network/src/h3/pto.rs:211` **fn** `reset_pto_count` — Resets the PTO backoff to zero (RFC 9002 §6.2.1): done whenever a fresh RTT
+`crates/network/src/h3/pto.rs:217` **fn** `set_has_handshake_keys` — Records that Handshake keys are now available (RFC 9002 §6.2.2.1); switches
+`crates/network/src/h3/pto.rs:223` **fn** `set_handshake_confirmed` — Records whether the TLS handshake is confirmed (RFC 9001 §4.1.2). The
+`crates/network/src/h3/pto.rs:229` **fn** `set_peer_completed_address_validation` — Records whether the peer has validated this endpoint's address (RFC 9000
+`crates/network/src/h3/pto.rs:239` **fn** `discard_space` — Discards a packet-number space (RFC 9002 §A.4 `OnPacketNumberSpaceDiscarded`)
+`crates/network/src/h3/pto.rs:247` **fn** `any_ack_eliciting_in_flight` — Whether any packet-number space still has an ack-eliciting packet in flight
+`crates/network/src/h3/pto.rs:256` **fn** `get_loss_time_and_space` — The earliest pending time-threshold loss time and its space, or `None` when
+`crates/network/src/h3/pto.rs:298` **fn** `get_pto_time_and_space` — The instant the PTO should fire and the space it belongs to, or `None` when
+`crates/network/src/h3/pto.rs:343` **fn** `set_loss_detection_timer` — Computes the state the single loss-detection timer should be left in
+`crates/network/src/h3/pto.rs:368` **fn** `on_timeout` — Handles the loss-detection timer firing (RFC 9002 §A.9
 `crates/network/src/h3/qpack.rs:61` **enum** `QpackError` — Field-section codec error. Every variant is a decompression failure at the
 `crates/network/src/h3/qpack.rs:262` **struct** `HeaderField` — A decoded header field. `sensitive` reflects the QPACK "never index" (`N`)
 `crates/network/src/h3/qpack.rs:274` **fn** `new` — Build a non-sensitive field from `name`/`value`
 `crates/network/src/h3/qpack.rs:280` **fn** `sensitive` — Build a field with the "never index" (`N`) bit set
 `crates/network/src/h3/qpack.rs:286` **fn** `name_str` — The name as UTF-8 (best-effort; non-UTF-8 yields `""`)
 `crates/network/src/h3/qpack.rs:292` **fn** `value_str` — The value as UTF-8 (best-effort; non-UTF-8 yields `""`)
-`crates/network/src/h3/qpack.rs:387` **fn** `encode_field_section` — Encode a list of header fields into a QPACK field section (RFC 9204 §4.5),
-`crates/network/src/h3/qpack.rs:426` **fn** `decode_field_section` — Decode a QPACK field section (RFC 9204 §4.5) that references only the static
+`crates/network/src/h3/qpack.rs:393` **fn** `encode_field_section` — Encode a list of header fields into a QPACK field section (RFC 9204 §4.5),
+`crates/network/src/h3/qpack.rs:432` **fn** `decode_field_section` — Decode a QPACK field section (RFC 9204 §4.5) that references only the static
+`crates/network/src/h3/qpack_stream.rs:62` **enum** `QpackStreamError` — An error decoding an instruction stream or mutating the dynamic table
+`crates/network/src/h3/qpack_stream.rs:163` **struct** `DynamicTable` — The QPACK dynamic table: a FIFO of `(name, value)` entries with a
+`crates/network/src/h3/qpack_stream.rs:181` **fn** `new` — Create an empty table whose capacity starts at 0 and may be raised up to
+`crates/network/src/h3/qpack_stream.rs:193` **fn** `entry_size` — The size in bytes an entry occupies (RFC 9204 §3.2.1)
+`crates/network/src/h3/qpack_stream.rs:199` **fn** `capacity` — The current capacity in bytes
+`crates/network/src/h3/qpack_stream.rs:205` **fn** `size` — The total size in bytes of all live entries
+`crates/network/src/h3/qpack_stream.rs:211` **fn** `len` — The number of entries currently in the table
+`crates/network/src/h3/qpack_stream.rs:217` **fn** `is_empty` — Whether the table currently holds no entries
+`crates/network/src/h3/qpack_stream.rs:225` **fn** `insert_count` — The Insert Count — the number of insertions performed so far, equal to
+`crates/network/src/h3/qpack_stream.rs:238` **fn** `get_absolute` — Look up an entry by its absolute index (RFC 9204 §3.2.4). Returns `None`
+`crates/network/src/h3/qpack_stream.rs:265` **fn** `set_capacity` — Set the table capacity (RFC 9204 §3.2.3 / the Set Dynamic Table Capacity
+`crates/network/src/h3/qpack_stream.rs:294` **fn** `insert` — Insert a `(name, value)` entry, evicting older entries to make room
+`crates/network/src/h3/qpack_stream.rs:317` **fn** `apply` — Apply a parsed [`EncoderInstruction`] to the table, resolving name and
+`crates/network/src/h3/qpack_stream.rs:357` **enum** `EncoderInstruction` — An instruction on the QPACK encoder stream (RFC 9204 §4.3)
+`crates/network/src/h3/qpack_stream.rs:385` **fn** `encode` — Serialize this instruction onto `out`. `use_huffman` enables Huffman
+`crates/network/src/h3/qpack_stream.rs:416` **fn** `decode` — Parse a single instruction from the front of `src`, returning it and the
+`crates/network/src/h3/qpack_stream.rs:446` **fn** `decode_encoder_stream` — Decode a full encoder-stream buffer into a list of instructions
+`crates/network/src/h3/qpack_stream.rs:463` **enum** `DecoderInstruction` — An instruction on the QPACK decoder stream (RFC 9204 §4.4)
+`crates/network/src/h3/qpack_stream.rs:474` **fn** `encode` — Serialize this instruction onto `out`
+`crates/network/src/h3/qpack_stream.rs:492` **fn** `decode` — Parse a single instruction from the front of `src`, returning it and the
+`crates/network/src/h3/qpack_stream.rs:512` **fn** `decode_decoder_stream` — Decode a full decoder-stream buffer into a list of instructions
+`crates/network/src/h3/quic_frame.rs:122` **enum** `QuicFrameError` — Frame-codec error. Every variant is a `FRAME_ENCODING_ERROR` at the QUIC
+`crates/network/src/h3/quic_frame.rs:174` **struct** `AckRange` — A single additional ACK range in an ACK frame (RFC 9000 §19.3.1). The first
+`crates/network/src/h3/quic_frame.rs:185` **struct** `EcnCounts` — ECN counts carried by an ACK frame of type `0x03` (RFC 9000 §19.3.2)
+`crates/network/src/h3/quic_frame.rs:200` **enum** `Frame` — A parsed QUIC transport frame (RFC 9000 §19). Variable-length payloads
+`crates/network/src/h3/quic_frame.rs:343` **fn** `parse` — Parse exactly one frame from the front of `input`
+`crates/network/src/h3/quic_frame.rs:443` **fn** `encode` — Serialize this frame onto `out`. STREAM frames always emit an explicit
+`crates/network/src/h3/quic_frame.rs:596` **fn** `parse_all` — Parse a full packet payload — a sequence of frames back to back — into a
+`crates/network/src/h3/quic_frame.rs:611` **fn** `encode_all` — Serialize a sequence of frames back to back onto `out` (RFC 9000 §12.4)
+`crates/network/src/h3/recovery.rs:87` **struct** `RttEstimator` — The round-trip-time estimator of RFC 9002 §5
+`crates/network/src/h3/recovery.rs:110` **fn** `new` — Creates an estimator seeded with [`K_INITIAL_RTT`] (RFC 9002 §6.2.2):
+`crates/network/src/h3/recovery.rs:121` **fn** `latest_rtt` — The most recent RTT sample (RFC 9002 §5.1)
+`crates/network/src/h3/recovery.rs:127` **fn** `min_rtt` — The minimum RTT seen so far (RFC 9002 §5.2); [`Duration::ZERO`] before
+`crates/network/src/h3/recovery.rs:132` **fn** `smoothed_rtt` — The smoothed RTT estimate (RFC 9002 §5.3)
+`crates/network/src/h3/recovery.rs:137` **fn** `rttvar` — The RTT variance estimate (RFC 9002 §5.3)
+`crates/network/src/h3/recovery.rs:143` **fn** `has_sample` — Whether a measured RTT sample has been folded in (as opposed to the
+`crates/network/src/h3/recovery.rs:153` **fn** `update_rtt` — Folds a new RTT sample into the estimate (RFC 9002 §5.3)
+`crates/network/src/h3/recovery.rs:198` **fn** `pto` — The probe timeout (RFC 9002 §6.2.1):
+`crates/network/src/h3/recovery.rs:205` **struct** `LostPacket` — A packet reported lost to [`CongestionController::on_packets_lost`]
+`crates/network/src/h3/recovery.rs:219` **struct** `CongestionController` — The NewReno congestion controller of RFC 9002 §7 (pseudocode Appendix B)
+`crates/network/src/h3/recovery.rs:241` **fn** `new` — Creates a controller for the given `max_datagram_size` (bytes), with the
+`crates/network/src/h3/recovery.rs:259` **fn** `minimum_window` — The minimum congestion window (RFC 9002 §7.2): `2 * max_datagram_size`
+`crates/network/src/h3/recovery.rs:264` **fn** `congestion_window` — The current congestion window in bytes (RFC 9002 §7)
+`crates/network/src/h3/recovery.rs:269` **fn** `bytes_in_flight` — The bytes currently in flight (sent but unacknowledged)
+`crates/network/src/h3/recovery.rs:275` **fn** `ssthresh` — The slow-start threshold, or `None` while it is still infinite (before
+`crates/network/src/h3/recovery.rs:281` **fn** `in_slow_start` — Whether the controller is in slow start (`congestion_window < ssthresh`,
+`crates/network/src/h3/recovery.rs:287` **fn** `available_window` — The number of additional bytes that may be sent right now
+`crates/network/src/h3/recovery.rs:293` **fn** `can_send` — Whether at least one more datagram may be sent under the current window
+`crates/network/src/h3/recovery.rs:299` **fn** `on_packet_sent` — Records that `sent_bytes` of ack-eliciting, in-flight data left the host
+`crates/network/src/h3/recovery.rs:319` **fn** `on_packet_acked` — Processes one newly acknowledged packet (RFC 9002 Appendix B.5)
+`crates/network/src/h3/recovery.rs:343` **fn** `on_congestion_event` — Enters (or stays in) a recovery period in response to a congestion signal
+`crates/network/src/h3/recovery.rs:359` **fn** `on_packets_lost` — Processes a batch of lost packets (RFC 9002 Appendix B.7
+`crates/network/src/h3/recovery.rs:380` **fn** `on_persistent_congestion` — Collapses the window to the minimum on established persistent congestion
+`crates/network/src/h3/recovery.rs:393` **fn** `persistent_congestion_duration` — The persistent-congestion period (RFC 9002 §7.6.1):
+`crates/network/src/h3/stream.rs:71` **enum** `StreamError` — A stream-layer protocol violation. Each variant maps to a single QUIC
+`crates/network/src/h3/stream.rs:144` **enum** `RecvState` — The state of the receiving part of a stream (RFC 9000 §3.2)
+`crates/network/src/h3/stream.rs:163` **struct** `RecvStream` — The receiving half of a QUIC stream: reassembly buffer, receive flow-control
+`crates/network/src/h3/stream.rs:189` **fn** `new` — Creates a receive stream advertising `initial_max_data` bytes of receive
+`crates/network/src/h3/stream.rs:203` **fn** `state` — The current receive state (RFC 9000 §3.2)
+`crates/network/src/h3/stream.rs:209` **fn** `read_offset` — The next offset the application will read (bytes below are delivered)
+`crates/network/src/h3/stream.rs:215` **fn** `max_data` — The currently advertised receive flow-control limit (RFC 9000 §4.1)
+`crates/network/src/h3/stream.rs:221` **fn** `is_readable` — Whether contiguous data is available to [`Self::read`]
+`crates/network/src/h3/stream.rs:227` **fn** `reset_error` — The application error code if the stream was reset (RFC 9000 §19.4)
+`crates/network/src/h3/stream.rs:233` **fn** `is_finished` — Whether the application has consumed the whole stream (`DataRead`)
+`crates/network/src/h3/stream.rs:245` **fn** `recv` — Processes a received STREAM frame (RFC 9000 §19.8): `offset`/`data` is the
+`crates/network/src/h3/stream.rs:295` **fn** `recv_reset` — Processes a received RESET_STREAM frame (RFC 9000 §19.4): the peer aborts
+`crates/network/src/h3/stream.rs:318` **fn** `read` — Pops and returns the contiguous readable prefix, advancing the read
+`crates/network/src/h3/stream.rs:334` **fn** `window_update` — Re-advertises the receive flow-control limit as `read_offset + window`
+`crates/network/src/h3/stream.rs:430` **enum** `SendState` — The state of the sending part of a stream (RFC 9000 §3.1)
+`crates/network/src/h3/stream.rs:447` **struct** `StreamChunk` — A STREAM frame to transmit, produced by [`SendStream::poll_transmit`]
+`crates/network/src/h3/stream.rs:459` **struct** `SendStream` — The sending half of a QUIC stream: outgoing buffer, send flow-control
+`crates/network/src/h3/stream.rs:485` **fn** `new` — Creates a send stream bounded by `initial_max_data` (the peer's
+`crates/network/src/h3/stream.rs:501` **fn** `state` — The current send state (RFC 9000 §3.1)
+`crates/network/src/h3/stream.rs:507` **fn** `max_data` — The peer's current flow-control limit for this stream (RFC 9000 §4.1)
+`crates/network/src/h3/stream.rs:513` **fn** `write_offset` — The total number of bytes written by the application so far
+`crates/network/src/h3/stream.rs:519` **fn** `write` — Queues application `data` for transmission (RFC 9000 §3.1). Ignored once
+`crates/network/src/h3/stream.rs:535` **fn** `finish` — Marks the end of the stream (RFC 9000 §3.1). No further [`Self::write`]
+`crates/network/src/h3/stream.rs:547` **fn** `update_max_data` — Raises the peer's flow-control limit from a received MAX_STREAM_DATA
+`crates/network/src/h3/stream.rs:561` **fn** `is_blocked` — Whether the stream has unsent data but is blocked by flow control
+`crates/network/src/h3/stream.rs:568` **fn** `blocked_at` — The offset at which the sender is flow-control blocked, if blocked
+`crates/network/src/h3/stream.rs:579` **fn** `poll_transmit` — Produces the next STREAM frame to transmit, at most `max_len` data bytes
+`crates/network/src/h3/stream.rs:611` **fn** `on_ack` — Records that the byte range `[offset, offset + len)` was acknowledged,
+`crates/network/src/h3/stream.rs:630` **fn** `reset` — Abruptly terminates the sending half with `error_code`, discarding any
+`crates/network/src/h3/stream.rs:640` **fn** `on_reset_ack` — Acknowledges the RESET_STREAM, moving to `ResetRecvd` (RFC 9000 §3.1)
+`crates/network/src/h3/stream.rs:648` **fn** `reset_error` — The application error code if the stream was reset (RFC 9000 §19.4)
 `crates/network/src/h3/varint.rs:22` **struct** `VarIntTooLarge` — Error returned by [`encode`] when a value does not fit in a QUIC varint
 `crates/network/src/h3/varint.rs:35` **fn** `encoded_len` — Number of bytes the varint encoding of `value` occupies (1, 2, 4, or 8), or
 `crates/network/src/h3/varint.rs:51` **fn** `encode` — Append the shortest QUIC varint encoding of `value` to `out`
@@ -4395,4 +4571,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4324 symbols in 22 crates*
+*Total: 4500 symbols in 22 crates*
