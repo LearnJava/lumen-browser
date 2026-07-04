@@ -81,10 +81,24 @@
 //!   re-advertisement as data is consumed and streams complete. Pure state
 //!   machine driven by the connection layer's sent/received/opened/closed
 //!   reports; no IO.
-//! - Slice 12+ (planned) — the rest of the QUIC transport (UDP datagrams,
+//! - Slice 12 — the HTTP/3 stream layer ([`h3_stream`], RFC 9114 §6.2, §7.1,
+//!   §4.1): unidirectional stream-type demux ([`h3_stream::UniStreamType`] —
+//!   control / push+Push-ID / QPACK encoder / QPACK decoder / reserved), the
+//!   "exactly one control / QPACK-encoder / QPACK-decoder stream" rule
+//!   ([`h3_stream::UniStreamRegistry`], `H3_STREAM_CREATION_ERROR` on a duplicate,
+//!   `H3_CLOSED_CRITICAL_STREAM` on closing one), the control-stream frame grammar
+//!   ([`h3_stream::ControlStream`] — first frame is SETTINGS else
+//!   `H3_MISSING_SETTINGS`, SETTINGS at most once, no request frames), and the
+//!   request/response-stream frame grammar ([`h3_stream::RequestStream`] —
+//!   HEADERS+ → DATA* → optional trailer HEADERS, interleaved PUSH_PROMISE,
+//!   everything else `H3_FRAME_UNEXPECTED`). Pure state machine over decoded
+//!   [`frame::Frame`]s; no IO. Reuses [`frame`]'s type codes and
+//!   `H3_FRAME_UNEXPECTED`.
+//! - Slice 13+ (planned) — the rest of the QUIC transport (UDP datagrams,
 //!   header protection, TLS 1.3 handshake, packet protection, actually arming the
-//!   PTO timer and assembling probe datagrams, unidirectional/request stream
-//!   framing, and `h3_do_request` dispatch alongside the existing H1/H2 paths.
+//!   PTO timer and assembling probe datagrams, the QPACK encoder/decoder stream
+//!   instruction wiring, and `h3_do_request` dispatch alongside the existing
+//!   H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -95,6 +109,7 @@
 pub mod alt_svc;
 pub mod conn_flow;
 pub mod frame;
+pub mod h3_stream;
 pub mod loss;
 pub mod packet;
 pub mod pto;

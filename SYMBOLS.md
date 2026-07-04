@@ -2301,7 +2301,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (489 symbols)
+## lumen-network  (500 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -2500,6 +2500,17 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/frame.rs:132` **enum** `Frame` — A parsed HTTP/3 frame (RFC 9114 §7.2). Field sections in `Headers` /
 `crates/network/src/h3/frame.rs:196` **fn** `parse` — Parse one frame from the front of `buf`
 `crates/network/src/h3/frame.rs:254` **fn** `encode` — Serialize this frame (type · length · payload) onto `out`
+`crates/network/src/h3/h3_stream.rs:94` **enum** `StreamLayerError` — A stream-layer protocol violation. Each variant maps to exactly one RFC 9114
+`crates/network/src/h3/h3_stream.rs:140` **enum** `UniStreamType` — The decoded type of a unidirectional stream (RFC 9114 §6.2)
+`crates/network/src/h3/h3_stream.rs:165` **fn** `parse` — Parse the stream-type prefix from the front of `buf`
+`crates/network/src/h3/h3_stream.rs:193` **struct** `UniStreamRegistry` — Tracks the singleton unidirectional streams an endpoint has opened, enforcing
+`crates/network/src/h3/h3_stream.rs:213` **fn** `open` — Register a newly opened unidirectional stream of type `ty`
+`crates/network/src/h3/h3_stream.rs:255` **fn** `close` — Report that a stream of type `ty` closed
+`crates/network/src/h3/h3_stream.rs:292` **struct** `ControlStream` — Frame sequencer for the HTTP/3 control stream (RFC 9114 §6.2.1). The first
+`crates/network/src/h3/h3_stream.rs:317` **fn** `accept` — Validate the next frame on the control stream
+`crates/network/src/h3/h3_stream.rs:346` **enum** `RequestState` — The frame-sequencing state of a request/response stream (RFC 9114 §4.1)
+`crates/network/src/h3/h3_stream.rs:364` **struct** `RequestStream` — Frame sequencer for a request/response stream (RFC 9114 §4.1, §7.1): a header
+`crates/network/src/h3/h3_stream.rs:396` **fn** `accept` — Validate the next frame on a request/response stream and advance the
 `crates/network/src/h3/loss.rs:89` **enum** `PacketNumberSpace` — One of QUIC's three packet-number spaces (RFC 9000 §12.3). Loss detection is
 `crates/network/src/h3/loss.rs:104` **fn** `uses_ack_delay` — Whether acknowledgements in this space may carry a non-zero `ack_delay`
 `crates/network/src/h3/loss.rs:112` **struct** `SentPacket` — A packet recorded in a [`SentPacketRegistry`] (RFC 9002 §A.1
@@ -4571,4 +4582,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4500 symbols in 22 crates*
+*Total: 4511 symbols in 22 crates*
