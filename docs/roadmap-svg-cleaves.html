@@ -57,8 +57,8 @@
 {
  "generated": "2026-07-04",
  "counts": {
-  "open": 25,
-  "fixed": 218,
+  "open": 24,
+  "fixed": 219,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -481,7 +481,7 @@
      "id": "P2-scrolldriven",
      "title": "CSS Scroll-Driven Animations L1",
      "status": "done",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): парсинг + resolve прогресса от scroll/view готовы (scroll_timeline.rs); дошить — композит animated background-color (BUG-127/231)",
+     "note": "PARTIAL (ревизия P3 2026-07-04): парсинг + resolve прогресса от scroll/view готовы (scroll_timeline.rs), композит animated background-color готов (BUG-231 FIXED); TEST-78 остаток = font-parity (BUG-127 → KNOWN_DEBTOR 4.64)",
      "bugs": [
       "BUG-127"
      ]
@@ -977,7 +977,7 @@
       {
        "id": "RP-9",
        "title": "RP-9: Фильтр print-таблиц стилей",
-       "status": "planned",
+       "status": "done",
        "size": "S",
        "note": "Аудит 2026-07-02: шелл грузит `<link rel=stylesheet media=\"print\">` в экранный каскад → print-стили протекают (URL после ссылок на w3.org). Гейт по media у `<link>`. См. BUG-268",
        "bugs": [
@@ -2712,10 +2712,10 @@
    "debtor": false
   },
   "BUG-268": {
-   "status": "open",
-   "title": "Экранный рендер применяет `<link rel=stylesheet media=\"print\">`: на `www.w3.org` после каждой ссылки печатается её URL в угловых скобках (print-правило `a::afte…",
-   "component": "shell (загрузчик стилей) + css-parser (media)",
-   "date": null,
+   "status": "fixed",
+   "title": "Экранный рендер применял `<link rel=stylesheet media=\"print\">`: на `www.w3.org` после каждой ссылки печатался её URL в угловых скобках (print-правило `a::after{…",
+   "component": "shell (загрузчик стилей) + html-parser (preload)",
+   "date": "2026-07-04",
    "debtor": false
   },
   "BUG-269": {
