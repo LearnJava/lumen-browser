@@ -116,11 +116,26 @@
 //!   [`packet_protect::remove_header_protection`]). AES suite only (ChaCha20
 //!   deferred). Pure functions over byte buffers; validated against the RFC 9001
 //!   Appendix A.2/A.3 vectors.
-//! - Slice 15+ (planned) — the rest of the QUIC transport (UDP datagrams,
-//!   the TLS 1.3 handshake and its Handshake / 1-RTT traffic secrets, actually
-//!   arming the PTO timer and assembling probe datagrams, the QPACK
-//!   encoder/decoder stream instruction wiring, and `h3_do_request` dispatch
-//!   alongside the existing H1/H2 paths.
+//! - Slice 15 — the TLS 1.3 key schedule ([`tls_schedule`], RFC 8446 §7.1) that
+//!   produces the Handshake and 1-RTT (application) traffic secrets QUIC uses at
+//!   the encryption levels TLS negotiates (RFC 9001 §5), on the same HKDF
+//!   primitives as slice 13. `Transcript-Hash` / `Derive-Secret`
+//!   ([`tls_schedule::transcript_hash`], [`tls_schedule::derive_secret`]) over
+//!   SHA-256, the no-PSK Early Secret ([`tls_schedule::early_secret`]), the
+//!   `(EC)DHE`-mixed Handshake Secret ([`tls_schedule::handshake_secret`]) and
+//!   its per-direction traffic secrets ([`tls_schedule::HandshakeTrafficSecrets`]),
+//!   the Master Secret ([`tls_schedule::master_secret`]) and its 1-RTT traffic
+//!   secrets ([`tls_schedule::ApplicationTrafficSecrets`]), plus the exporter /
+//!   resumption secrets. Each traffic secret bridges to QUIC keys through the
+//!   existing [`key_schedule::PacketProtectionKeys`]. Pure functions; validated
+//!   against the RFC 8448 §3 handshake trace. The X25519 agreement and the
+//!   handshake message codecs that feed the `(EC)DHE` secret and transcript
+//!   hashes are later slices.
+//! - Slice 16+ (planned) — the rest of the QUIC transport (UDP datagrams,
+//!   the X25519 key agreement and TLS 1.3 handshake message codecs that feed
+//!   slice 15, actually arming the PTO timer and assembling probe datagrams, the
+//!   QPACK encoder/decoder stream instruction wiring, and `h3_do_request`
+//!   dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -142,4 +157,5 @@ pub mod qpack_stream;
 pub mod quic_frame;
 pub mod recovery;
 pub mod stream;
+pub mod tls_schedule;
 pub mod varint;
