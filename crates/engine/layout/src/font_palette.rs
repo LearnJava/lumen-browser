@@ -4,21 +4,15 @@
 //! an element's `font-palette` property value (e.g. `"--my-palette"`), resolves
 //! the CPAL index overrides to apply when rendering COLR color glyphs.
 //!
-//! Entry point: [`resolve_font_palette_overrides`].
-//!
-//! # P4 handoff
-//!
-//! Add `font_palette: String` to `ComputedStyle` (parsed from `font-palette`
-//! CSS property — values: `normal`, `light`, `dark`, or a `<dashed-ident>`
-//! like `--my-palette`). In `emit_text_fragments()` in `paint/display_list.rs`,
-//! call `resolve_font_palette_overrides(stylesheet, &style.font_palette, &font_family)`
-//! to get `Vec<(u16, Color)>` overrides and pass them to the glyph atlas.
-//!
-//! // CSS: font-palette
+//! Entry point: [`resolve_font_palette_overrides`] — called at the end of
+//! `compute_style`, which stores the result in
+//! `ComputedStyle::font_palette_resolved`. Paint maps the computed style to a
+//! renderer-facing [`FontPaletteSelection`] via [`palette_selection`] and
+//! copies it into `DrawText.font_palette`.
 
 use lumen_css_parser::FontPaletteValuesRule;
 
-use crate::style::{parse_color, Color};
+use crate::style::{parse_color, Color, ComputedStyle, FontPalette};
 
 /// Resolved CPAL color override: `(palette_index, color)`.
 /// Renderer substitutes these colors when painting COLR v0/v1 glyph layers.
@@ -78,6 +72,44 @@ pub struct ResolvedFontPalette {
     pub base_palette: Option<u16>,
     /// Per-slot color overrides on top of `base_palette`.
     pub overrides: Vec<PaletteColorOverride>,
+}
+
+/// Renderer-facing `font-palette` selection, copied into `DrawText`.
+///
+/// `None` in `DrawText.font_palette` means `normal` (default CPAL palette 0).
+#[derive(Debug, Clone, PartialEq)]
+pub enum FontPaletteSelection {
+    /// `font-palette: light` — first CPAL palette flagged
+    /// USABLE_WITH_LIGHT_BACKGROUND (CPAL paletteType bit 0).
+    Light,
+    /// `font-palette: dark` — first CPAL palette flagged
+    /// USABLE_WITH_DARK_BACKGROUND (CPAL paletteType bit 1).
+    Dark,
+    /// Custom `@font-palette-values` palette.
+    Custom {
+        /// Built-in CPAL palette index to start from (0 = default).
+        base_palette: u16,
+        /// Per-slot color overrides on top of `base_palette`.
+        overrides: Vec<PaletteColorOverride>,
+    },
+}
+
+/// Maps a computed style to the `DrawText` palette selection.
+///
+/// `None` = `normal`, or a `<dashed-ident>` with no matching
+/// `@font-palette-values` rule (spec: behaves as `normal`).
+pub fn palette_selection(style: &ComputedStyle) -> Option<FontPaletteSelection> {
+    match &style.font_palette {
+        FontPalette::Normal => None,
+        FontPalette::Light => Some(FontPaletteSelection::Light),
+        FontPalette::Dark => Some(FontPaletteSelection::Dark),
+        FontPalette::Custom(_) => {
+            style.font_palette_resolved.as_ref().map(|r| FontPaletteSelection::Custom {
+                base_palette: r.base_palette.unwrap_or(0),
+                overrides: r.overrides.clone(),
+            })
+        }
+    }
 }
 
 #[cfg(test)]

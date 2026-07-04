@@ -107,7 +107,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | Motion Path L1 | [motion-1](https://www.w3.org/TR/motion-1/) | 🟡 | `offset-path: path()` ✅ 2026-06-10 (P4: ComputedStyle fields + resolve_motion_transform wiring in property_trees); `offset-distance`/`offset-rotate` ✅; `ray(<angle>)` ✅ 2026-06-13 (p4-offset-ray: deg/grad/rad/turn, size/contain/at parsed-and-ignored for px distance); `offset-anchor` ⬜ Phase 3; `url()` paths ⬜ | **#44** |
 | CSS Fragmentation L3 | [css3-break](https://www.w3.org/TR/css3-break/) | ✅ | break-before/after/inside + orphans/widows in `ComputedStyle`; `pagination.rs` applies rules | **#45** |
 | CSS Color L5 | [css-color-5](https://www.w3.org/TR/css-color-5/) | ✅ | color-mix() ✅ (p4-color-mix-parsing 2026-06-08); relative color syntax ✅ (p4-relative-color 2026-06-13) | **#46** |
-| CSS Fonts L5 | [css-fonts-5](https://www.w3.org/TR/css-fonts-5/) | ⬜ | font-palette; @font-palette-values | **#47** |
+| CSS Fonts L5 | [css-fonts-5](https://www.w3.org/TR/css-fonts-5/) | 🟡 | font-palette + @font-palette-values 🟡 2026-07-04 (p4-font-palette: parse → ComputedStyle → resolve → DrawText.font_palette; COLR/CPAL rasterization deferred in lumen-font) | **#47** |
 | CSS Easing L2 | [css-easing-2](https://www.w3.org/TR/css-easing-2/) | ✅ | linear() easing TimingFunction::LinearStops 2026-05-24 | **#48** |
 | CSS Overscroll L1 | [css-overscroll-1](https://www.w3.org/TR/css-overscroll-1/) | 🟡 | gesture boundary handling | **#49** |
 | CSS Gap Decorations L1 | [css-gaps-1](https://www.w3.org/TR/css-gaps-1/) | ✅ | `gap-rule-width/style/color` shorthand+longhands; `collect_gap_segments()` in display_list.rs; flex + grid containers wired (p4-gap-rule, 2026-06-10) | **#50** |
@@ -221,9 +221,9 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `font-feature-settings` | ✅ | parse + ComputedStyle (inherited) + DrawText.font_features; shaper overrides default GSUB/GPOS set (liga/clig/calt/rlig/ccmp + kern) on CPU path & femtovg varied-text path; native femtovg text shapes itself (class BUG-109) |
 | `font-size-adjust` | ✅ | real OS/2 x-height scaling (P4 2026-06-13); тест 95 |
 | `font-optical-sizing` | ✅ | auto injects opsz=font-size into variation axes; none skips |
-| `font-palette` | ⬜ | CSS Fonts L5 |
+| `font-palette` | 🟡 | normal/light/dark/dashed-ident parsed (inherited); custom idents resolved against @font-palette-values in compute_style → DrawText.font_palette; renderer ignores it — no COLR/CPAL rasterization in lumen-font yet |
 | `@font-face` | 🟡 | all descriptors parsed; file loading ⬜ |
-| `@font-palette-values` | ⬜ | CSS Fonts L5 |
+| `@font-palette-values` | 🟡 | parsed + matched (name/family, base-palette, override-colors); rendering deferred with COLR |
 
 ### [T0] Text Styling
 
@@ -602,7 +602,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `@layer` | ✅ | parsed; cascade ordering ✅ |
 | `@container` | ✅ | condition matching ✅; 2nd-pass re-layout ✅; cq* units ✅ 2026-05-25 |
 | `@color-profile` | ⬜ | CSS Color L5 |
-| `@font-palette-values` | ⬜ | CSS Fonts L5 |
+| `@font-palette-values` | 🟡 | parsed (name + font-family + base-palette + override-colors); matched by name/family in compute_style; rendering deferred with COLR |
 | `@counter-style` | ⬜ | CSS Counter Styles L3 |
 | `@scope` | ⬜ | CSS Scoping |
 | `@function` | ⬜ | CSS Functions & Mixins |

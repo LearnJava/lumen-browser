@@ -30,6 +30,7 @@ use lumen_layout::{
     TextEmphasisShape, TextEmphasisStyle, TextOverflow, TextUnderlinePosition,
     TransformStyle,
     Visibility, style::TextOrientation,
+    font_palette::{palette_selection, FontPaletteSelection},
 };
 
 use crate::gap_decorations::{emit_gap_rules, GapDecorationContext, GapSegment};
@@ -399,6 +400,14 @@ pub enum DisplayCommand {
         /// (CPU-растр, векторный variable-font путь femtovg); нативный
         /// femtovg-текст шейпит сам и переопределения игнорирует.
         font_features: Vec<([u8; 4], u32)>,
+        /// CSS Fonts L4 §11.3 — `font-palette` selection for COLR color
+        /// glyphs. `None` = `normal` (default CPAL palette 0). `Light`/`Dark`
+        /// pick the first CPAL palette with the matching paletteType flag;
+        /// `Custom` carries a resolved `@font-palette-values` rule (base
+        /// index + per-slot color overrides). Renderer currently ignores the
+        /// field: lumen-font has no COLR/CPAL rasterization yet (deferred) —
+        /// the value is wired so palette data is display-list-complete.
+        font_palette: Option<FontPaletteSelection>,
         /// CSS Text L3 §10.1 — pixel width for a tab character (\t).
         /// 0.0 means no tab characters in text (renderer skips tab expansion).
         tab_size: f32,
@@ -1424,7 +1433,7 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             }
             DisplayCommand::DrawText {
                 rect, text, font_size, color, font_family, font_weight, font_style,
-                font_variation_axes, font_features, tab_size: _,
+                font_variation_axes, font_features, font_palette, tab_size: _,
                 highlight_name: _, text_orientation: _,
             } => {
                 out.push_str(&format!(
@@ -1475,6 +1484,17 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                         out.push_str(&format!("{tag_str:?}={val}"));
                     }
                     out.push(']');
+                }
+                match font_palette {
+                    None => {}
+                    Some(FontPaletteSelection::Light) => out.push_str(" palette=light"),
+                    Some(FontPaletteSelection::Dark) => out.push_str(" palette=dark"),
+                    Some(FontPaletteSelection::Custom { base_palette, overrides }) => {
+                        out.push_str(&format!(
+                            " palette=custom(base={base_palette},overrides={})",
+                            overrides.len()
+                        ));
+                    }
                 }
                 out.push('\n');
             }
@@ -2035,6 +2055,7 @@ fn emit_margin_box_text(margin_box: &MarginBox, cmds: &mut DisplayList) {
             font_style: FontStyle::Normal,
             font_variation_axes: Vec::new(),
             font_features: Vec::new(),
+            font_palette: None,
             tab_size: 0.0,
             highlight_name: None,
             text_orientation: None,
@@ -2299,6 +2320,7 @@ fn emit_text_emphasis_marks(
             font_style: frag.style.font_style,
             font_variation_axes: vec![],
             font_features: Vec::new(),
+            font_palette: None,
             tab_size: 0.0,
             highlight_name: None,
             text_orientation: None,
@@ -2380,6 +2402,7 @@ fn emit_text_frags(
             font_weight: frag.style.font_weight,
             font_style: frag.style.font_style,
             font_features: frag.style.font_feature_settings.iter().map(|f| (f.tag, f.value)).collect(),
+            font_palette: palette_selection(&frag.style),
             font_variation_axes: {
                 let mut axes: Vec<([u8; 4], f32)> = frag.style.font_variation_settings
                     .iter().map(|a| (a.tag, a.value)).collect();
@@ -2523,6 +2546,7 @@ fn emit_inline_run(
                 font_weight: ef.style.font_weight,
                 font_style: ef.style.font_style,
                 font_features: ef.style.font_feature_settings.iter().map(|f| (f.tag, f.value)).collect(),
+                font_palette: palette_selection(&ef.style),
                 font_variation_axes: {
                     let mut axes: Vec<([u8; 4], f32)> = ef.style.font_variation_settings
                         .iter().map(|a| (a.tag, a.value)).collect();
@@ -3080,6 +3104,7 @@ fn emit_text_shadows(
             // normalizes it via fvar like any other axis. Skipped for `none` to let
             // font-variation-settings control opsz directly.
             font_features: frag.style.font_feature_settings.iter().map(|f| (f.tag, f.value)).collect(),
+            font_palette: palette_selection(&frag.style),
             font_variation_axes: {
                 let mut axes: Vec<([u8; 4], f32)> = frag.style.font_variation_settings
                     .iter().map(|s| (s.tag, s.value)).collect();
@@ -4398,6 +4423,7 @@ fn emit_input_value_text(
         font_style: s.font_style,
         font_variation_axes: vec![],
         font_features: Vec::new(),
+        font_palette: None,
         tab_size: 0.0,
         highlight_name: None,
         text_orientation: if s.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
@@ -4443,6 +4469,7 @@ fn emit_input_placeholder_text(b: &LayoutBox, placeholder: &str, out: &mut Vec<D
         font_style: s.font_style,
         font_variation_axes: vec![],
         font_features: Vec::new(),
+        font_palette: None,
         tab_size: 0.0,
         highlight_name: None,
         text_orientation: if s.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
@@ -4817,6 +4844,7 @@ fn emit_select_indicator(b: &LayoutBox, selected_text: &str, suppress_primitive:
             font_style: s.font_style,
             font_variation_axes: vec![],
             font_features: Vec::new(),
+            font_palette: None,
             tab_size: 0.0,
             highlight_name: None,
             text_orientation: if s.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
@@ -4850,6 +4878,7 @@ fn emit_select_indicator(b: &LayoutBox, selected_text: &str, suppress_primitive:
             font_style: s.font_style,
             font_variation_axes: vec![],
             font_features: Vec::new(),
+            font_palette: None,
             tab_size: 0.0,
             highlight_name: None,
             text_orientation: if s.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
@@ -4940,6 +4969,7 @@ fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                     font_weight: s.font_weight,
                     font_style: s.font_style,
                     font_features: s.font_feature_settings.iter().map(|f| (f.tag, f.value)).collect(),
+                    font_palette: palette_selection(s),
                     font_variation_axes: {
                         let mut axes: Vec<([u8; 4], f32)> = s.font_variation_settings
                             .iter().map(|a| (a.tag, a.value)).collect();
@@ -6572,6 +6602,7 @@ fn emit_svg_text(
             font_style: b.style.font_style,
             font_variation_axes: vec![],
             font_features: Vec::new(),
+            font_palette: None,
             tab_size: b.style.tab_size,
             highlight_name: None,
             text_orientation: if b.style.writing_mode != lumen_layout::style::WritingMode::HorizontalTb {
@@ -13165,6 +13196,7 @@ mod tests {
                 color: Color { r: 0, g: 0, b: 0, a: 255 }, font_family: vec![],
                 font_weight: FontWeight::NORMAL, font_style: FontStyle::Normal,
                 font_variation_axes: vec![], font_features: vec![], tab_size: 0.0,
+                font_palette: None,
                 highlight_name: None, text_orientation: None,
             },
             DisplayCommand::DrawImage {
@@ -14815,6 +14847,7 @@ pub fn emit_text_with_highlights(
         font_style,
         font_variation_axes,
         font_features,
+        font_palette: None,
         tab_size,
         highlight_name,
         text_orientation,
@@ -14838,6 +14871,7 @@ mod highlight_tests {
             font_style: FontStyle::Normal,
             font_variation_axes: vec![],
             font_features: Vec::new(),
+            font_palette: None,
             tab_size: 0.0,
             highlight_name: None,
             text_orientation: None,

@@ -158,6 +158,7 @@ pub const SUPPORTED_PROPERTIES: &[&str] = &[
     "font",
     "font-family",
     "font-optical-sizing",
+    "font-palette",
     "font-size",
     "font-size-adjust",
     "font-stretch",

@@ -18,6 +18,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use crate::color_mix::{MixColorSpace, mix_colors};
+use crate::font_palette::{resolve_font_palette_overrides, ResolvedFontPalette};
 use crate::rule_index::RuleIndex;
 use crate::scroll_timeline::ScrollAxis;
 
@@ -2353,6 +2354,16 @@ pub struct ComputedStyle {
     /// накладывает записи поверх default-набора OpenType-фич: value 0
     /// выключает фичу, ≥1 включает.
     pub font_feature_settings: Vec<FontFeatureSetting>,
+    /// CSS Fonts L4 §11.3 — `font-palette`. Inherited. Initial: `Normal`
+    /// (default CPAL palette). Selects the color palette for COLR color
+    /// glyphs; no effect on monochrome text.
+    pub font_palette: FontPalette,
+    /// Resolved `@font-palette-values` data when [`Self::font_palette`] is
+    /// `Custom` — resolved at the end of `compute_style` against the
+    /// stylesheet (paint builds the display list from `ComputedStyle` alone
+    /// and has no stylesheet access). `None` for keyword values and unknown
+    /// palette names (spec: behaves as `normal`).
+    pub font_palette_resolved: Option<ResolvedFontPalette>,
     /// CSS Fonts L4 §7.12 — `font-optical-sizing: auto | none`. Inherited.
     /// `auto` (initial): renderer injects `opsz = font_size` variation axis.
     pub font_optical_sizing: FontOpticalSizing,
@@ -5271,6 +5282,8 @@ impl ComputedStyle {
             font_family: Vec::new(),
             font_variation_settings: Vec::new(),
             font_feature_settings: Vec::new(),
+            font_palette: FontPalette::Normal,
+            font_palette_resolved: None,
             font_optical_sizing: FontOpticalSizing::Auto,
             text_transform: TextTransform::None,
             white_space: WhiteSpace::Normal,
@@ -5577,6 +5590,8 @@ pub fn compute_style(
         font_family: inherited.font_family.clone(),
         font_variation_settings: inherited.font_variation_settings.clone(),
         font_feature_settings: inherited.font_feature_settings.clone(),
+        font_palette: inherited.font_palette.clone(),
+        font_palette_resolved: inherited.font_palette_resolved.clone(),
         font_optical_sizing: inherited.font_optical_sizing,
         text_transform: inherited.text_transform,
         white_space: ua_white_space(doc, node).unwrap_or(inherited.white_space),
@@ -6494,6 +6509,19 @@ pub fn compute_style(
         apply_ua_form_controls_field_sizing_clear(doc, node, &mut style);
     }
 
+    // CSS Fonts L4 §13 — resolve `font-palette: <dashed-ident>` against the
+    // stylesheet's `@font-palette-values` rules now: paint builds the display
+    // list from ComputedStyle alone and has no stylesheet access. Runs after
+    // the full cascade so it sees the final `font-palette` and `font-family`.
+    style.font_palette_resolved = match &style.font_palette {
+        FontPalette::Custom(name) => resolve_font_palette_overrides(
+            &sheet.font_palette_values,
+            name,
+            style.font_family.first().map(String::as_str).unwrap_or(""),
+        ),
+        _ => None,
+    };
+
     style
 }
 
@@ -6850,6 +6878,8 @@ pub fn compute_pseudo_element_style(
     style.font_family = parent.font_family.clone();
     style.font_variation_settings = parent.font_variation_settings.clone();
     style.font_feature_settings = parent.font_feature_settings.clone();
+    style.font_palette = parent.font_palette.clone();
+    style.font_palette_resolved = parent.font_palette_resolved.clone();
     style.text_transform = parent.text_transform;
     style.white_space = parent.white_space;
     style.text_indent = parent.text_indent.clone();
@@ -9929,6 +9959,42 @@ pub fn parse_font_feature_settings(val: &str) -> Option<Vec<FontFeatureSetting>>
     Some(out)
 }
 
+/// CSS Fonts L4 §11.3 — computed value of `font-palette`.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum FontPalette {
+    /// Default CPAL palette (index 0). Initial value.
+    #[default]
+    Normal,
+    /// First CPAL palette flagged «usable with light background».
+    Light,
+    /// First CPAL palette flagged «usable with dark background».
+    Dark,
+    /// `<dashed-ident>` naming a `@font-palette-values` rule (case-sensitive,
+    /// stored with the leading `--`).
+    Custom(String),
+}
+
+/// Парсит CSS `font-palette`: `normal | light | dark | <dashed-ident>`
+/// (CSS Fonts L4 §11.3). Ключевые слова case-insensitive, dashed-ident
+/// case-sensitive. Возвращает `None` при невалидном значении (cascade
+/// игнорирует объявление).
+pub fn parse_font_palette(val: &str) -> Option<FontPalette> {
+    let v = val.trim();
+    if v.eq_ignore_ascii_case("normal") {
+        return Some(FontPalette::Normal);
+    }
+    if v.eq_ignore_ascii_case("light") {
+        return Some(FontPalette::Light);
+    }
+    if v.eq_ignore_ascii_case("dark") {
+        return Some(FontPalette::Dark);
+    }
+    if v.len() > 2 && v.starts_with("--") && !v.contains(char::is_whitespace) {
+        return Some(FontPalette::Custom(v.to_string()));
+    }
+    None
+}
+
 /// Парсит CSS `font-weight`. Поддерживает:
 ///   - `normal` → 400, `bold` → 700;
 ///   - численные `100`..`900` (или любое число 1..1000 — Variable Fonts);
@@ -12074,6 +12140,11 @@ fn apply_declaration(
         "font-feature-settings" => {
             if let Some(v) = parse_font_feature_settings(val) {
                 style.font_feature_settings = v;
+            }
+        }
+        "font-palette" => {
+            if let Some(v) = parse_font_palette(val) {
+                style.font_palette = v;
             }
         }
         "font-optical-sizing" => {
@@ -15169,6 +15240,15 @@ fn apply_css_wide_keyword(
                 inherited.font_feature_settings.clone()
             } else {
                 init.font_feature_settings.clone()
+            };
+        }
+        "font-palette" => {
+            style.font_palette =
+                if inh { inherited.font_palette.clone() } else { init.font_palette.clone() };
+            style.font_palette_resolved = if inh {
+                inherited.font_palette_resolved.clone()
+            } else {
+                init.font_palette_resolved.clone()
             };
         }
         "font-optical-sizing" => {
@@ -25889,6 +25969,97 @@ mod tests {
         let span_style =
             compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert!(span_style.font_feature_settings.is_empty());
+    }
+
+    // ── font-palette (CSS Fonts L4 §11.3) ────────────────────────────────
+
+    #[test]
+    fn font_palette_parse_forms() {
+        assert_eq!(parse_font_palette("normal"), Some(FontPalette::Normal));
+        assert_eq!(parse_font_palette("LIGHT"), Some(FontPalette::Light));
+        assert_eq!(parse_font_palette(" dark "), Some(FontPalette::Dark));
+        assert_eq!(
+            parse_font_palette("--Cool"),
+            Some(FontPalette::Custom("--Cool".to_string()))
+        );
+        assert_eq!(parse_font_palette("banana"), None);
+        assert_eq!(parse_font_palette("123"), None);
+        assert_eq!(parse_font_palette("--"), None);
+        assert_eq!(parse_font_palette("--a b"), None);
+    }
+
+    #[test]
+    fn font_palette_initial_is_normal() {
+        let s = style_for("");
+        assert_eq!(s.font_palette, FontPalette::Normal);
+        assert!(s.font_palette_resolved.is_none());
+    }
+
+    #[test]
+    fn font_palette_applied() {
+        let s = style_for("font-palette: dark");
+        assert_eq!(s.font_palette, FontPalette::Dark);
+    }
+
+    #[test]
+    fn font_palette_invalid_value_ignored() {
+        let s = style_for("font-palette: 2");
+        assert_eq!(s.font_palette, FontPalette::Normal);
+    }
+
+    #[test]
+    fn font_palette_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { font-palette: light; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span_style =
+            compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(span_style.font_palette, FontPalette::Light);
+    }
+
+    #[test]
+    fn font_palette_custom_resolves_against_at_rule() {
+        // `font-palette: --brand` + matching `@font-palette-values` →
+        // `font_palette_resolved` заполнен в compute_style.
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@font-palette-values --brand { base-palette: 1; override-colors: 0 #ff0000; } \
+             div { font-palette: --brand; }",
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(s.font_palette, FontPalette::Custom("--brand".to_string()));
+        let resolved = s.font_palette_resolved.as_ref().expect("palette must resolve");
+        assert_eq!(resolved.base_palette, Some(1));
+        assert_eq!(resolved.overrides.len(), 1);
+        assert_eq!(resolved.overrides[0].index, 0);
+        assert_eq!(resolved.overrides[0].color.r, 255);
+
+        // palette_selection маппит в renderer-facing Custom.
+        match crate::font_palette::palette_selection(&s) {
+            Some(crate::font_palette::FontPaletteSelection::Custom { base_palette, overrides }) => {
+                assert_eq!(base_palette, 1);
+                assert_eq!(overrides.len(), 1);
+            }
+            other => panic!("expected Custom selection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn font_palette_unknown_ident_behaves_as_normal() {
+        // Нет подходящего @font-palette-values → resolved None → selection None.
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { font-palette: --missing; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(s.font_palette, FontPalette::Custom("--missing".to_string()));
+        assert!(s.font_palette_resolved.is_none());
+        assert!(crate::font_palette::palette_selection(&s).is_none());
     }
 
     // ── font-optical-sizing (CSS Fonts L4 §7.12) ─────────────────────────
