@@ -3399,6 +3399,7 @@ enum ResolvedResource {
 /// путей `start_streaming_load`: сетевого streaming-а (URL) и нарезки
 /// уже-загруженного буфера (File/Snapshot/Static). Hint-ы шлются ДО передачи
 /// chunk-а DOM-парсеру, чтобы fetch подресурсов стартовал раньше.
+#[allow(clippy::too_many_arguments)]
 fn feed_preload_and_emit(
     scanner: &mut lumen_html_parser::PreloadScanner,
     chunk: &[u8],
@@ -3407,6 +3408,7 @@ fn feed_preload_and_emit(
     generation: u64,
     sink: &Arc<dyn EventSink>,
     cookie_jar: Option<&Arc<lumen_storage::CookieJar>>,
+    media_ctx: &lumen_css_parser::MediaContext,
 ) {
     use lumen_network::RequestDestination;
 
@@ -3424,7 +3426,14 @@ fn feed_preload_and_emit(
     // parse here to feed progressive intermediate frames (the previous PH1-2 path).
     for hint in &early {
         let (raw_url, dest, is_css) = match hint {
-            lumen_html_parser::PreloadHint::Stylesheet { url } => {
+            lumen_html_parser::PreloadHint::Stylesheet { url, media } => {
+                // BUG-268: print-only лист финальный pipeline всё равно не
+                // возьмёт (media-гейт в collect_link_hrefs) — не греем кэш
+                // и, главное, не эмитим CssLoaded: промежуточные progressive-
+                // кадры не должны красить страницу print-правилами.
+                if media.as_deref().is_some_and(|m| !link_media_matches(m, media_ctx)) {
+                    continue;
+                }
                 (url, RequestDestination::Style, true)
             }
             lumen_html_parser::PreloadHint::Script { url } => {
@@ -3534,9 +3543,39 @@ where
         .collect()
 }
 
-fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>, cookie_jar: Option<Arc<lumen_storage::CookieJar>>) -> String {
+/// BUG-268: media-гейт для `<link rel=stylesheet media=...>` (HTML LS §4.2.4).
+///
+/// Отсутствующий/пустой атрибут = «all» → лист применяется. Иначе строка
+/// парсится штатным media-query-парсером lumen-css-parser и матчится против
+/// переданного контекста — второй матчер не пишем. `ctx` передаётся
+/// параметром (а не хардкодится «screen»), чтобы print-пайплайн мог
+/// использовать тот же гейт с `media_type: "print"`, когда каскад научится
+/// print-контексту (см. BUGS.md BUG-270).
+fn link_media_matches(media: &str, ctx: &lumen_css_parser::MediaContext) -> bool {
+    let media = media.trim();
+    if media.is_empty() {
+        return true;
+    }
+    lumen_css_parser::parse_media_query(media).matches(ctx)
+}
+
+/// Экранный `MediaContext` для media-гейта `<link>`: те же media_type /
+/// размеры / prefers-color-scheme, что каскад строит внутри layout
+/// (`media_context_from_viewport`, layout/src/style.rs) — гейт на `<link>`
+/// и фильтр `@media`-блоков должны решать одинаково.
+fn screen_media_context(viewport: Size, dark_mode: bool) -> lumen_css_parser::MediaContext {
+    lumen_css_parser::MediaContext {
+        media_type: "screen".into(),
+        width: viewport.width,
+        height: viewport.height,
+        prefers_dark: dark_mode,
+        ..Default::default()
+    }
+}
+
+fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>, cookie_jar: Option<Arc<lumen_storage::CookieJar>>, media_ctx: &lumen_css_parser::MediaContext) -> String {
     let mut hrefs = Vec::new();
-    collect_link_hrefs(doc, doc.root(), &mut hrefs);
+    collect_link_hrefs(doc, doc.root(), &mut hrefs, media_ctx);
 
     // Загружаем все таблицы параллельно (сеть — главный тормоз), затем
     // конкатенируем строго в порядке объявления, чтобы каскад не нарушился.
@@ -3594,7 +3633,7 @@ fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn E
     css
 }
 
-fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<String>) {
+fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<String>, media_ctx: &lumen_css_parser::MediaContext) {
     let node = doc.get(id);
     if let NodeData::Element { name, attrs } = &node.data
         && name.local == "link"
@@ -3609,15 +3648,24 @@ fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<String>) {
             .find(|a| a.name.local == "href")
             .map(|a| a.value.as_str())
             .unwrap_or("");
+        // BUG-268: print-only (и вообще не матчащие контекст) листы не
+        // вливаются в каскад — их правила не обёрнуты в `@media`, каскад
+        // сам их не отфильтрует.
+        let media = attrs
+            .iter()
+            .find(|a| a.name.local == "media")
+            .map(|a| a.value.as_str())
+            .unwrap_or("");
         if rel.split_ascii_whitespace().any(|r| r.eq_ignore_ascii_case("stylesheet"))
             && !href.is_empty()
+            && link_media_matches(media, media_ctx)
         {
             out.push(href.to_owned());
         }
         return;
     }
     for &child in &node.children {
-        collect_link_hrefs(doc, child, out);
+        collect_link_hrefs(doc, child, out, media_ctx);
     }
 }
 
@@ -4196,7 +4244,13 @@ fn parse_and_layout(
     let css = {
         let d = doc_arc.lock().unwrap();
         let mut css = extract_style_blocks(&d);
-        css.push_str(&load_linked_stylesheets(&d, base, sink, cookie_jar.clone()));
+        css.push_str(&load_linked_stylesheets(
+            &d,
+            base,
+            sink,
+            cookie_jar.clone(),
+            &screen_media_context(viewport, dark_mode),
+        ));
         css
     };
 
@@ -4886,7 +4940,7 @@ fn dispatch_preload_hints(
     let mut resolved: Vec<(String, SubresourceKind)> = Vec::with_capacity(hints.len());
     for hint in hints {
         let pair = match hint {
-            PreloadHint::Stylesheet { url } =>
+            PreloadHint::Stylesheet { url, .. } =>
                 (base.resolve_str(url), SubresourceKind::Stylesheet),
             PreloadHint::Script { url } =>
                 (base.resolve_str(url), SubresourceKind::Script),
@@ -7229,6 +7283,19 @@ impl Lumen {
         let sink = Arc::clone(&self.event_sink);
         let proxy = self.load_proxy.clone();
         let cookie_jar = Arc::clone(&self.cookie_jar);
+        // BUG-268: media-контекст экрана — для гейта speculative-фетча
+        // `<link rel=stylesheet media=...>`, чтобы print-only лист не грел
+        // кэш и не слал CssLoaded (progressive-кадры не красятся print-стилями).
+        let media_ctx = {
+            let viewport = self.renderer.as_ref().map_or_else(
+                || Size::new(1024.0, 720.0),
+                |r| {
+                    let s = r.viewport_size();
+                    Size::new(s.width, s.height)
+                },
+            );
+            screen_media_context(viewport, self.dark_mode)
+        };
 
         std::thread::spawn(move || {
             // PH1-8: инкрементальный preload-сканер — обрабатывает каждый chunk.
@@ -7256,6 +7323,7 @@ impl Lumen {
                         generation,
                         &sink_prefetch,
                         cj_prefetch.as_ref(),
+                        &media_ctx,
                     );
                     let _ = chunk_proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec(), generation));
                 };
@@ -7287,6 +7355,7 @@ impl Lumen {
                         generation,
                         &sink,
                         cj_prefetch.as_ref(),
+                        &media_ctx,
                     );
                     if proxy.send_event(LoadEvent::HtmlChunk(chunk.to_vec(), generation)).is_err() {
                         return; // event loop завершён
@@ -17814,7 +17883,7 @@ mod tests {
             Arc::new(CollectingSink(Mutex::new(Vec::new())));
         let base = ResourceBase::Url("https://example.com/".to_owned());
         let hints = vec![
-            PreloadHint::Stylesheet { url: "reset.css".into() },
+            PreloadHint::Stylesheet { url: "reset.css".into(), media: None },
             PreloadHint::Script { url: "https://cdn.example.com/lib.js".into() },
         ];
 
@@ -17854,8 +17923,8 @@ mod tests {
         // rel="preload stylesheet" создаёт два хинта на один href
         let hints = vec![
             PreloadHint::Preload { url: "style.css".into(), as_kind: Some("style".into()) },
-            PreloadHint::Stylesheet { url: "style.css".into() },
-            PreloadHint::Stylesheet { url: "other.css".into() },
+            PreloadHint::Stylesheet { url: "style.css".into(), media: None },
+            PreloadHint::Stylesheet { url: "other.css".into(), media: None },
         ];
 
         dispatch_preload_hints(&hints, &base, &sink, &mut std::collections::HashSet::new());
@@ -17888,12 +17957,12 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
 
         // Первый вызов — ранний скан (streaming chunk)
-        let early = vec![PreloadHint::Stylesheet { url: "reset.css".into() }];
+        let early = vec![PreloadHint::Stylesheet { url: "reset.css".into(), media: None }];
         dispatch_preload_hints(&early, &base, &sink, &mut seen);
 
         // Второй вызов — финальный pipeline: те же хинты + новый
         let full = vec![
-            PreloadHint::Stylesheet { url: "reset.css".into() },
+            PreloadHint::Stylesheet { url: "reset.css".into(), media: None },
             PreloadHint::Image { url: Some("hero.png".into()), srcset: None, sizes: None },
         ];
         dispatch_preload_hints(&full, &base, &sink, &mut seen);
@@ -17926,7 +17995,7 @@ mod tests {
         let hints = vec![
             PreloadHint::Image { url: Some("hero.png".into()), srcset: None, sizes: None },
             PreloadHint::Script { url: "app.js".into() },
-            PreloadHint::Stylesheet { url: "main.css".into() },
+            PreloadHint::Stylesheet { url: "main.css".into(), media: None },
         ];
 
         dispatch_preload_hints(&hints, &base, &sink, &mut std::collections::HashSet::new());
@@ -17949,8 +18018,28 @@ mod tests {
             r#"<html><head><link rel="stylesheet" href="style.css"></head><body></body></html>"#,
         );
         let mut hrefs = Vec::new();
-        collect_link_hrefs(&doc, doc.root(), &mut hrefs);
+        collect_link_hrefs(&doc, doc.root(), &mut hrefs, &screen_media_context(Size::new(1024.0, 720.0), false));
         assert_eq!(hrefs, vec!["style.css"]);
+    }
+
+    /// BUG-268: `<link rel=stylesheet media=print>` must NOT enter the screen
+    /// cascade, while `media=screen`/`all`/matching `@media`-features do.
+    #[test]
+    fn collect_link_hrefs_media_gate() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><head>
+                <link rel="stylesheet" media="print" href="print.css">
+                <link rel="stylesheet" media="screen" href="screen.css">
+                <link rel="stylesheet" media="all" href="all.css">
+                <link rel="stylesheet" href="plain.css">
+                <link rel="stylesheet" media="(min-width: 500px)" href="wide.css">
+                <link rel="stylesheet" media="(min-width: 5000px)" href="huge.css">
+            </head><body></body></html>"#,
+        );
+        let mut hrefs = Vec::new();
+        collect_link_hrefs(&doc, doc.root(), &mut hrefs, &screen_media_context(Size::new(1024.0, 720.0), false));
+        // print.css отсеян; huge.css отсеян (viewport 1024px < 5000px); остальные — да.
+        assert_eq!(hrefs, vec!["screen.css", "all.css", "plain.css", "wide.css"]);
     }
 
     #[test]
@@ -17959,7 +18048,7 @@ mod tests {
             r#"<html><head><link rel="icon" href="favicon.ico"></head><body></body></html>"#,
         );
         let mut hrefs = Vec::new();
-        collect_link_hrefs(&doc, doc.root(), &mut hrefs);
+        collect_link_hrefs(&doc, doc.root(), &mut hrefs, &screen_media_context(Size::new(1024.0, 720.0), false));
         assert!(hrefs.is_empty());
     }
 
@@ -18185,7 +18274,7 @@ mod tests {
             </head><body></body></html>"#,
         );
         let mut hrefs = Vec::new();
-        collect_link_hrefs(&doc, doc.root(), &mut hrefs);
+        collect_link_hrefs(&doc, doc.root(), &mut hrefs, &screen_media_context(Size::new(1024.0, 720.0), false));
         assert_eq!(hrefs, vec!["a.css", "b.css"]);
     }
 
