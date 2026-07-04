@@ -10,15 +10,22 @@
 //!   only (the wire behaviour of a peer advertising a zero-size dynamic
 //!   table). Pure encode/decode of the header block carried in HEADERS /
 //!   PUSH_PROMISE frames; no dynamic table, no encoder/decoder streams.
-//! - Slice 3+ (planned) — the QPACK dynamic table + encoder/decoder streams,
+//! - Slice 3 — the `Alt-Svc` discovery layer ([`alt_svc`], RFC 7838): parses
+//!   the response header that advertises HTTP/3 for an origin and caches the
+//!   `h3` alternatives per origin with TTL expiry. Pure parse + in-memory
+//!   cache, no IO on the parse path (only the `*_now` cache wrappers read the
+//!   clock). This is the trigger that later routes a request onto QUIC.
+//! - Slice 4+ (planned) — the QPACK dynamic table + encoder/decoder streams,
 //!   QUIC transport (UDP datagrams, TLS 1.3 handshake, packet protection, loss
 //!   recovery, congestion control), unidirectional/request stream framing, and
 //!   `h3_do_request` dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the frame codec carries an opaque
-//! QPACK field block, and [`qpack`] turns that block into header fields.
+//! QPACK field block, [`qpack`] turns that block into header fields, and
+//! [`alt_svc`] decides when an origin is eligible for the QUIC path at all.
 
+pub mod alt_svc;
 pub mod frame;
 pub mod qpack;
 pub mod varint;
