@@ -15,17 +15,25 @@
 //!   `h3` alternatives per origin with TTL expiry. Pure parse + in-memory
 //!   cache, no IO on the parse path (only the `*_now` cache wrappers read the
 //!   clock). This is the trigger that later routes a request onto QUIC.
-//! - Slice 4+ (planned) — the QPACK dynamic table + encoder/decoder streams,
-//!   QUIC transport (UDP datagrams, TLS 1.3 handshake, packet protection, loss
-//!   recovery, congestion control), unidirectional/request stream framing, and
-//!   `h3_do_request` dispatch alongside the existing H1/H2 paths.
+//! - Slice 4 — the QUIC transport frame codec ([`quic_frame`], RFC 9000 §19):
+//!   pure parse/serialize of every QUIC frame type (PADDING…HANDSHAKE_DONE)
+//!   the connection layer exchanges inside a packet's protected payload, on
+//!   the same [`varint`] primitive as the HTTP/3 frame codec. No packet
+//!   protection, no packet-number spaces, no IO.
+//! - Slice 5+ (planned) — the QPACK dynamic table + encoder/decoder streams,
+//!   the rest of the QUIC transport (UDP datagrams, packet headers, TLS 1.3
+//!   handshake, packet protection, loss recovery, congestion control),
+//!   unidirectional/request stream framing, and `h3_do_request` dispatch
+//!   alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
-//! transport-layer fields and HTTP/3 frames, the frame codec carries an opaque
-//! QPACK field block, [`qpack`] turns that block into header fields, and
-//! [`alt_svc`] decides when an origin is eligible for the QUIC path at all.
+//! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
+//! transport payload, the HTTP/3 frame codec carries an opaque QPACK field
+//! block, [`qpack`] turns that block into header fields, and [`alt_svc`]
+//! decides when an origin is eligible for the QUIC path at all.
 
 pub mod alt_svc;
 pub mod frame;
 pub mod qpack;
+pub mod quic_frame;
 pub mod varint;
