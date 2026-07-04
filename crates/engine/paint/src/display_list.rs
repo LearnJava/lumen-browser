@@ -795,6 +795,29 @@ pub enum DisplayCommand {
         /// Resolved fill colour (already has `fill-opacity` applied).
         color: Color,
     },
+    /// SVG `<path>` **stroke** given as the raw source contours plus the full
+    /// stroke parameters, instead of a pre-tessellated triangle soup (BUG-247).
+    /// Backends that own an analytic stroker (femtovg) stroke these contours
+    /// natively, so anti-aliasing lands only on the true stroke boundary — the
+    /// old `DrawSvgPath` triangle soup made femtovg fringe every *internal*
+    /// shared edge, producing ~1px seams along curved and dashed strokes that
+    /// diverged from Edge (the dominant TEST-134 dash / TEST-136 curve error).
+    /// Backends with no native stroker (CPU tiny_skia, GPU/wgpu) call
+    /// `svg_path::tessellate_stroke_ex` on the same contours and render the
+    /// resulting triangles — bit-identical to the old `DrawSvgPath` stroke.
+    ///
+    /// The contours are already shifted into document space; dash splitting is
+    /// deferred to the backend (`params.dasharray`/`dashoffset`) so the native
+    /// stroker and the tessellating fallback dash identically.
+    DrawSvgStroke {
+        /// Source stroke contours (flattened polylines) in CSS-pixel page
+        /// coordinates. A contour whose first point equals its last is closed.
+        contours: Vec<Vec<[f32; 2]>>,
+        /// Resolved stroke colour (already has `stroke-opacity` applied).
+        color: Color,
+        /// Width, caps, joins, miter limit and dash pattern.
+        params: crate::svg_path::StrokeParams,
+    },
     /// DevTools box model overlay (7E.3). Draws four semi-transparent coloured
     /// layers (orange margin, yellow border, green padding, blue content)
     /// stacked from outermost to innermost. Each rect is the outer edge of
@@ -1728,6 +1751,17 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     "DrawSvgFill contours={} pts={} #{:02x}{:02x}{:02x}{:02x}\n",
                     contours.len(),
                     pts,
+                    color.r, color.g, color.b, color.a,
+                ));
+            }
+            DisplayCommand::DrawSvgStroke { contours, color, params } => {
+                let pts: usize = contours.iter().map(std::vec::Vec::len).sum();
+                out.push_str(&format!(
+                    "DrawSvgStroke contours={} pts={} w={:.2} dash={} #{:02x}{:02x}{:02x}{:02x}\n",
+                    contours.len(),
+                    pts,
+                    params.half_width * 2.0,
+                    params.dasharray.len(),
                     color.r, color.g, color.b, color.a,
                 ));
             }
@@ -6502,13 +6536,26 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
                         dasharray: b.style.svg_stroke_dasharray.clone(),
                         dashoffset: b.style.svg_stroke_dashoffset,
                     };
-                    let vertices = crate::svg_path::tessellate_stroke_ex(&contours, &stroke_params);
-                    if !vertices.is_empty() {
-                        let shifted: Vec<[f32; 2]> = vertices
-                            .iter()
-                            .map(|[x, y]| [x + path_shift.0, y + path_shift.1])
-                            .collect();
-                        stroke_cmds.push(DisplayCommand::DrawSvgPath { vertices: shifted, color: sc });
+                    // BUG-247: emit the raw contours + stroke params instead of
+                    // a pre-tessellated triangle soup. femtovg strokes them
+                    // natively (AA only on the true boundary, no internal seams);
+                    // the CPU/GPU fallbacks re-tessellate with
+                    // `tessellate_stroke_ex` for bit-identical output.
+                    let shifted: Vec<Vec<[f32; 2]>> = contours
+                        .iter()
+                        .filter(|c| c.len() >= 2)
+                        .map(|c| {
+                            c.iter()
+                                .map(|[x, y]| [x + path_shift.0, y + path_shift.1])
+                                .collect()
+                        })
+                        .collect();
+                    if !shifted.is_empty() {
+                        stroke_cmds.push(DisplayCommand::DrawSvgStroke {
+                            contours: shifted,
+                            color: sc,
+                            params: stroke_params,
+                        });
                     }
                 }
             }
@@ -8739,6 +8786,7 @@ mod tests {
                 DisplayCommand::PopScrollLayer => "PopScrollLayer",
                 DisplayCommand::DrawSvgPath { .. } => "DrawSvgPath",
                 DisplayCommand::DrawSvgFill { .. } => "DrawSvgFill",
+                DisplayCommand::DrawSvgStroke { .. } => "DrawSvgStroke",
                 DisplayCommand::BoxModelOverlay { .. } => "BoxModelOverlay",
                 DisplayCommand::DrawScrollbar { .. } => "DrawScrollbar",
                 DisplayCommand::PageBreak => "PageBreak",
@@ -13946,30 +13994,41 @@ mod tests {
     }
 
     #[test]
-    fn ordered_svg_path_stroke_emits_drawsvgpath() {
+    fn ordered_svg_path_stroke_emits_drawsvgstroke() {
         // BUG-096: an SVG <path> has a zero-size layout rect (path bbox is deferred
         // to paint), so `emit_svg_shape`'s 0×0 guard used to drop every path in the
-        // ordered pipeline → TEST-54 painted nothing. The path must now emit a
-        // DrawSvgPath tessellated in its stroke colour (#e94560 = 233,69,96), and
-        // `fill="none"` (an SVG presentation attribute) must suppress the fill so no
-        // black fill leaks in.
+        // ordered pipeline → TEST-54 painted nothing. The path must emit its stroke
+        // in the stroke colour (#e94560 = 233,69,96), and `fill="none"` (an SVG
+        // presentation attribute) must suppress the fill so no black fill leaks in.
+        //
+        // BUG-247: the stroke is now emitted as `DrawSvgStroke` (raw contours +
+        // params) rather than a pre-tessellated `DrawSvgPath` triangle soup, so
+        // femtovg can stroke it natively without internal AA seams.
         let dl = build_ordered(
             "<svg width='200' height='160'>\
                 <path d='M 20 140 L 180 20' fill='none' stroke='#e94560' stroke-width='8'/>\
              </svg>",
             "",
         );
-        let svg_paths: Vec<&Color> = dl.iter()
+        let strokes: Vec<(&Color, &crate::svg_path::StrokeParams)> = dl.iter()
             .filter_map(|c| match c {
-                DisplayCommand::DrawSvgPath { color, .. } => Some(color),
+                DisplayCommand::DrawSvgStroke { color, params, .. } => Some((color, params)),
                 _ => None,
             })
             .collect();
-        assert!(!svg_paths.is_empty(), "ordered path must emit DrawSvgPath for <path>, got {dl:?}");
+        assert!(!strokes.is_empty(), "ordered path must emit DrawSvgStroke for <path>, got {dl:?}");
         assert!(
-            svg_paths.iter().all(|c| c.r == 233 && c.g == 69 && c.b == 96),
-            "path must paint in stroke colour #e94560, not a default black fill; got {svg_paths:?}",
+            strokes.iter().all(|(c, _)| c.r == 233 && c.g == 69 && c.b == 96),
+            "path must stroke in colour #e94560, not a default black fill; got {strokes:?}",
         );
+        assert!(
+            strokes.iter().all(|(_, p)| (p.half_width - 4.0).abs() < 1e-3),
+            "stroke-width:8 → half_width 4.0; got {strokes:?}",
+        );
+        // The old triangle-soup stroke must be gone in the stroke colour.
+        let soup = dl.iter().any(|c| matches!(c,
+            DisplayCommand::DrawSvgPath { color, .. } if color.r == 233 && color.g == 69 && color.b == 96));
+        assert!(!soup, "stroke must NOT emit a DrawSvgPath triangle soup, got {dl:?}");
     }
 
     #[test]
@@ -14144,12 +14203,12 @@ mod tests {
              </svg>",
             "",
         );
-        // Fill is now a native `DrawSvgFill` (BUG-247), stroke stays a tessellated
-        // `DrawSvgPath` — collect both in document (paint) order.
+        // Fill is a native `DrawSvgFill`, stroke a native `DrawSvgStroke`
+        // (BUG-247) — collect both in document (paint) order.
         let colors: Vec<&Color> = dl.iter()
             .filter_map(|c| match c {
                 DisplayCommand::DrawSvgFill { color, .. }
-                | DisplayCommand::DrawSvgPath { color, .. } => Some(color),
+                | DisplayCommand::DrawSvgStroke { color, .. } => Some(color),
                 _ => None,
             })
             .collect();
@@ -14168,12 +14227,12 @@ mod tests {
              </svg>",
             "",
         );
-        // Fill is now a native `DrawSvgFill` (BUG-247), stroke stays a tessellated
-        // `DrawSvgPath` — collect both in document (paint) order.
+        // Fill is a native `DrawSvgFill`, stroke a native `DrawSvgStroke`
+        // (BUG-247) — collect both in document (paint) order.
         let colors: Vec<&Color> = dl.iter()
             .filter_map(|c| match c {
                 DisplayCommand::DrawSvgFill { color, .. }
-                | DisplayCommand::DrawSvgPath { color, .. } => Some(color),
+                | DisplayCommand::DrawSvgStroke { color, .. } => Some(color),
                 _ => None,
             })
             .collect();

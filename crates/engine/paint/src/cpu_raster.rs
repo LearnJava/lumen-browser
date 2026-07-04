@@ -317,6 +317,20 @@ pub(crate) fn rasterize_cpu(
                 rasterize_svg_fill(&mut layer.pm, contours, color, c)?;
                 layer.mark(b);
             }
+            // BUG-247: the CPU rasteriser has no native stroker, so re-tessellate
+            // the stroke contours into the same triangle soup the emitter used to
+            // produce (`DrawSvgPath`) — CPU snapshots stay byte-identical while
+            // the femtovg window gets seam-free native strokes.
+            DisplayCommand::DrawSvgStroke { contours, color, params } => {
+                let vertices = crate::svg_path::tessellate_stroke_ex(contours, params);
+                if !vertices.is_empty() {
+                    let b = vertices_bounds(&vertices);
+                    let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), b);
+                    let layer = layers.last_mut().expect("base layer");
+                    rasterize_svg_path(&mut layer.pm, &vertices, color, c)?;
+                    layer.mark(b);
+                }
+            }
             DisplayCommand::PushClipRect { rect } => {
                 clip_stack.push(*rect);
                 clip_rect = clip_intersection(&clip_stack);
@@ -2837,6 +2851,36 @@ mod tests {
         assert_eq!(px(&img, 30, 23), (255, 0, 0, 255), "interior should be red");
         // Far corner outside the triangle stays white.
         assert_eq!(px(&img, 1, 1), (255, 255, 255, 255), "exterior stays white");
+    }
+
+    /// BUG-247: `DrawSvgStroke` on the CPU rasteriser re-tessellates the stroke
+    /// contours with `tessellate_stroke_ex` and fills the identical triangle
+    /// soup the emitter used to bake into a `DrawSvgPath` — so CPU snapshots stay
+    /// byte-for-byte identical while the femtovg window gets native strokes.
+    #[test]
+    fn svg_stroke_cpu_matches_tessellated_path() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let contours = vec![vec![[10.0, 10.0], [54.0, 10.0], [54.0, 54.0], [10.0, 54.0], [10.0, 10.0]]];
+        let params = crate::svg_path::StrokeParams {
+            half_width: 3.0,
+            linecap: crate::svg_path::StrokeLinecap::Butt,
+            linejoin: crate::svg_path::StrokeLinejoin::Miter,
+            miterlimit: 4.0,
+            dasharray: vec![6.0, 4.0],
+            dashoffset: 0.0,
+        };
+        let stroke_cmd = vec![DisplayCommand::DrawSvgStroke {
+            contours: contours.clone(),
+            color: blue,
+            params: params.clone(),
+        }];
+        let path_cmd = vec![DisplayCommand::DrawSvgPath {
+            vertices: crate::svg_path::tessellate_stroke_ex(&contours, &params),
+            color: blue,
+        }];
+        let a = rasterize_cpu(64, 64, &stroke_cmd, &[], 0.0, 0.0).expect("stroke");
+        let b = rasterize_cpu(64, 64, &path_cmd, &[], 0.0, 0.0).expect("path");
+        assert_eq!(a.data, b.data, "CPU DrawSvgStroke must be byte-identical to the old triangle soup");
     }
 
     /// `DrawImage` fills its box with the light-grey placeholder quad

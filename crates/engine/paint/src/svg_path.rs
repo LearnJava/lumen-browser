@@ -939,7 +939,7 @@ pub enum StrokeLinejoin {
 }
 
 /// Parameters for advanced stroke tessellation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StrokeParams {
     /// Half of `stroke-width` in px (≥ 0).
     pub half_width: f32,
