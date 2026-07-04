@@ -62,7 +62,7 @@ pub use image_set::{
     ImageSetOption, SupportedTypes,
 };
 pub use mathml::{MathmlBox, MathmlElementKind, lay_out_mathml, collect_mathml_structure};
-pub use ruby::{RubyBox, RubyPosition, lay_out_ruby};
+pub use ruby::{RubyAlign, RubyBox, RubyMerge, RubyPosition, lay_out_ruby};
 pub use animation::{
     AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator,
     LinearInterpolator, NoopInterpolator, parse_keyframe_style, KeyframeStyle,

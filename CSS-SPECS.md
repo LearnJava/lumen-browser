@@ -120,6 +120,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS View Transitions L1 | [css-view-transitions-1](https://www.w3.org/TR/css-view-transitions-1/) | 🟡 | `document.startViewTransition` JS API + 300 ms cross-fade ✅ 2026-06-03; `view-transition-name` ✅ P4 2026-06-10 (ComputedStyle field + parsing + collect_view_transition_names); `::view-transition-*` pseudos ⬜ Phase 3 | **#57** |
 | CSS Fill & Stroke L3 | [fill-stroke-3](https://www.w3.org/TR/fill-stroke-3/) | 🟡 | fill/stroke/fill-opacity/stroke-opacity/stroke-width ✅ 2026-05-27; fill-rule/stroke-linecap/linejoin/miterlimit/dasharray/dashoffset ✅; paint-order ✅ 2026-06-14 (p4-paint-order: `SvgPaintOrder` inherited field + `emit_svg_shape` fill/stroke reorder); `text-anchor`/`dominant-baseline` as CSS properties ✅ 2026-06-21 (p4-svg-text-anchor: inherited `Option` fields folded through `apply_svg_presentational_hints` so author CSS overrides the presentation attribute and inherits from `<g>`) | **#58** |
 | CSS Scroll Snap L2 | [css-scroll-snap-2](https://www.w3.org/TR/css-scroll-snap-2/) | 🟡 | snapchanging/snapchanged events: SnapChangeEvent (snapTargetBlock/Inline) + лэйаут-резолв снапнутых узлов (find_snapped_nodes/SnapTargets) + QuickJsRuntime::fire_snap_changing/changed; shell-диспатч при scroll-snap завершении — Phase 1 2026-06-10 | **#59** |
+| CSS Ruby L1 | [css-ruby-1](https://www.w3.org/TR/css-ruby-1/) | 🟡 | `ruby-position`/`ruby-align`/`ruby-merge` ✅ 2026-07-04 (p4-ruby-css-props: parse → inherited ComputedStyle fields → `RubyBox::from_style` drives `lay_out_ruby`: align distribution + separate/merge pairing); `<ruby>` box-tree inline integration ⬜ (module has no pipeline callers — P1) | **#60** |
 
 ### Out of scope 🚫
 
@@ -127,7 +128,6 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 |--------|------|--------|
 | CSS Paged Media | [css3-page](https://www.w3.org/TR/css3-page/) | No print support planned |
 | CSS Speech | [css3-speech](https://www.w3.org/TR/css3-speech/) | Audio/TTS not in Lumen scope |
-| CSS Ruby Annotation | [css3-ruby](https://www.w3.org/TR/css3-ruby/) | Rare; deferred post-Phase 2 |
 | CSS Shadow Parts | [css-shadow-parts-1](https://www.w3.org/TR/css-shadow-parts-1/) | Shadow DOM not planned |
 | CSS Regions | [css3-regions](https://www.w3.org/TR/css3-regions/) | Deprecated direction by W3C |
 | CSSOM JS API | [cssom](https://www.w3.org/TR/cssom/) | Requires JsRuntime (P3) |
