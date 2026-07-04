@@ -1059,6 +1059,7 @@ fn render_source_to_png(
         None,  // sw_worker_store
         None,  // cache_backend
         lumen_core::ColorSpace::Srgb,
+        false, // media_print: screenshot uses screen media
     )?;
 
     // Полная высота страницы (контент может быть длиннее экрана), с потолком.
@@ -1223,6 +1224,7 @@ fn do_print_to_pdf(
         None,  // sw_worker_store: not needed in headless PDF mode
         None,  // cache_backend: not needed in headless PDF mode
         lumen_core::ColorSpace::Srgb,
+        true,  // media_print: apply @media print for PDF output (BUG-270)
     )?;
 
     let ctx = PaginationContext {
@@ -1296,6 +1298,7 @@ fn do_print_to_pdf_with_opts(
         None, // sw_worker_store: not needed in headless print mode
         None, // cache_backend: not needed in headless print mode
         lumen_core::ColorSpace::Srgb,
+        true, // media_print: apply @media print for PDF output (BUG-270)
     )?;
 
     let ctx = PaginationContext {
@@ -1469,13 +1472,13 @@ fn run_dump(
         }
         DumpKind::Layout => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None, false, None, None, lumen_core::ColorSpace::Srgb)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None, false, None, None, lumen_core::ColorSpace::Srgb, false)?;
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None, false, None, None, lumen_core::ColorSpace::Srgb)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, None, &NullHyphenationProvider, false, false, false, None, false, None, None, lumen_core::ColorSpace::Srgb, false)?;
             let dl = paint_ordered(&parsed.layout);
             print!("{}", lumen_paint::serialize_display_list(&dl));
             Ok(())
@@ -3590,6 +3593,20 @@ fn screen_media_context(viewport: Size, dark_mode: bool) -> lumen_css_parser::Me
     }
 }
 
+/// Print `MediaContext` для media-гейта `<link>` при генерации PDF (BUG-270):
+/// `media_type: "print"`, чтобы `<link rel=stylesheet media=print>` попадали в
+/// каскад, а `media=screen` — нет. Каскадный фильтр `@media` внутри layout
+/// решает так же через `set_print_media` → `media_context_from_viewport`.
+fn print_media_context(viewport: Size, dark_mode: bool) -> lumen_css_parser::MediaContext {
+    lumen_css_parser::MediaContext {
+        media_type: "print".into(),
+        width: viewport.width,
+        height: viewport.height,
+        prefers_dark: dark_mode,
+        ..Default::default()
+    }
+}
+
 fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>, cookie_jar: Option<Arc<lumen_storage::CookieJar>>, media_ctx: &lumen_css_parser::MediaContext) -> String {
     let mut hrefs = Vec::new();
     collect_link_hrefs(doc, doc.root(), &mut hrefs, media_ctx);
@@ -4162,6 +4179,7 @@ fn parse_and_layout(
     sw_worker_store: Option<lumen_core::ext::SwWorkerStore>,
     cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
     target: lumen_core::ColorSpace,
+    media_print: bool,
 ) -> Result<ParsedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
@@ -4313,12 +4331,17 @@ fn parse_and_layout(
     let css = {
         let d = doc_arc.lock().unwrap();
         let mut css = extract_style_blocks(&d);
+        let link_media_ctx = if media_print {
+            print_media_context(viewport, dark_mode)
+        } else {
+            screen_media_context(viewport, dark_mode)
+        };
         css.push_str(&load_linked_stylesheets(
             &d,
             base,
             sink,
             cookie_jar.clone(),
-            &screen_media_context(viewport, dark_mode),
+            &link_media_ctx,
         ));
         css
     };
@@ -4368,10 +4391,15 @@ fn parse_and_layout(
     }
     let font_provider = Arc::new(font_registry);
 
+    // BUG-270: печать в PDF фильтрует каскад по media_type="print" через
+    // sticky thread-local. Флаг per-pass, поэтому сбрасываем сразу после layout,
+    // чтобы последующие экранные проходы на этом же потоке не наследовали print.
+    lumen_layout::set_print_media(media_print);
     let layout = {
         let d = doc_arc.lock().unwrap();
         lumen_layout::layout_measured_hyp(&d, &sheet, viewport, &measurer, hp, dark_mode)
     };
+    lumen_layout::set_print_media(false);
 
     // CSS Backgrounds L3 §3.10 — собираем `background-image: url(...)` уже
     // после layout-а (картинки фона не влияют на расчёт коробок). Декодируем
@@ -4952,7 +4980,7 @@ fn render_bytes(
     cache_backend: Option<Arc<dyn lumen_core::ext::CacheBackend>>,
     target: lumen_core::ColorSpace,
 ) -> Result<RenderedPage, Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, target)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, sw_backend, hp, cookie_banner_dismiss, deterministic, dark_mode, cookie_jar, cross_origin_isolated, sw_worker_store, cache_backend, target, false)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",

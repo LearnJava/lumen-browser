@@ -10274,6 +10274,30 @@ pub fn forced_colors_active() -> bool {
     FORCED_COLORS.with(|f| f.get())
 }
 
+thread_local! {
+    /// Media Queries L4 §2.3 — `print` media type active for the current layout
+    /// pass. Set by the shell via [`set_print_media`] before laying out for PDF
+    /// output; read by `media_context_from_viewport` so the cascade filters
+    /// `@media print` / `@media screen` blocks the same way a print-to-PDF
+    /// rendering pipeline should (BUG-270). Defaults to `false` (screen).
+    static PRINT_MEDIA: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Selects the `print` (`true`) or `screen` (`false`) `@media` type for all
+/// subsequent layout passes on the current thread (Media Queries L4 §2.3).
+///
+/// Call before `layout_measured` / `layout_measured_hyp` on the layout thread.
+/// Unlike `set_forced_colors`, this is per-pass state (the screen pipeline is
+/// the default), so the shell resets it to `false` after a print pass.
+pub fn set_print_media(active: bool) {
+    PRINT_MEDIA.with(|p| p.set(active));
+}
+
+/// True when the current layout pass renders for `print` media.
+pub fn print_media_active() -> bool {
+    PRINT_MEDIA.with(|p| p.get())
+}
+
 /// CSS Cascade L6 §5.1 — true when `node` is a descendant of (or is) an element
 /// matching any selector in `root_sel_str`. Empty `root_sel_str` → always true
 /// (implicit scope = document root, i.e. the rule applies everywhere).
@@ -18589,8 +18613,9 @@ fn parse_filter_fn(name: &str, args: &str) -> Option<FilterFn> {
 /// прокинутое shell-ом через `layout_measured_hyp`.
 fn media_context_from_viewport(viewport: Size, dark_mode: bool) -> MediaContext {
     // hover/pointer берут desktop-дефолты (мышь) из `MediaContext::default()`.
+    // media_type = "print" во время печати в PDF (BUG-270), иначе "screen".
     MediaContext {
-        media_type: "screen".into(),
+        media_type: if print_media_active() { "print".into() } else { "screen".into() },
         width: viewport.width,
         height: viewport.height,
         prefers_dark: dark_mode,
@@ -20456,6 +20481,26 @@ mod tests {
 
     fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color {
         Color { r, g, b, a }
+    }
+
+    #[test]
+    fn bug270_print_media_flag_switches_cascade_media_type() {
+        // BUG-270: media_context_from_viewport reflects the print flag so the
+        // cascade filters `@media print`/`@media screen` correctly during PDF
+        // rendering. The flag is a sticky thread-local — reset it around the test.
+        let vp = Size::new(816.0, 1056.0);
+
+        set_print_media(false);
+        assert!(!print_media_active());
+        assert_eq!(media_context_from_viewport(vp, false).media_type, "screen");
+
+        set_print_media(true);
+        assert!(print_media_active());
+        assert_eq!(media_context_from_viewport(vp, false).media_type, "print");
+
+        // Reset so later tests on this thread see the screen default.
+        set_print_media(false);
+        assert_eq!(media_context_from_viewport(vp, false).media_type, "screen");
     }
 
     #[test]
