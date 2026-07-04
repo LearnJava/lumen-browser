@@ -19,6 +19,7 @@ use crate::style::{
     FontVariant, Isolation, Length, LengthOrAuto, MixBlendMode, Overflow, OutlineColor,
     OutlineStyle, PointerEvents, Position, TextAlign, TextDecorationLine, TextDecorationStyle,
     TextEmphasisStyle, TextOverflow, TextTransform, TransformFn, Visibility, WhiteSpace,
+    WhiteSpaceCollapse,
     ComputedStyle,
 };
 
@@ -695,6 +696,14 @@ pub fn computed_style_to_map(style: &ComputedStyle) -> HashMap<String, String> {
         WhiteSpace::Pre => "pre",
         WhiteSpace::PreWrap => "pre-wrap",
         WhiteSpace::PreLine => "pre-line",
+        WhiteSpace::BreakSpaces => "break-spaces",
+    }.into());
+    m.insert("white-space-collapse".into(), match style.white_space_collapse {
+        WhiteSpaceCollapse::Collapse => "collapse",
+        WhiteSpaceCollapse::Preserve => "preserve",
+        WhiteSpaceCollapse::PreserveBreaks => "preserve-breaks",
+        WhiteSpaceCollapse::PreserveSpaces => "preserve-spaces",
+        WhiteSpaceCollapse::BreakSpaces => "break-spaces",
     }.into());
     m.insert("text-decoration-line".into(), {
         let td = &style.text_decoration_line;

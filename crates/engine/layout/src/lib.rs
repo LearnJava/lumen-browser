@@ -10962,6 +10962,142 @@ mod tests {
     }
 
     #[test]
+    fn white_space_break_spaces_parsed() {
+        let root = lay("<p>x</p>", "p { white-space: break-spaces; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.white_space, crate::style::WhiteSpace::BreakSpaces);
+        assert_eq!(s.white_space_collapse, crate::style::WhiteSpaceCollapse::BreakSpaces);
+        assert_eq!(s.text_wrap_mode, crate::style::TextWrapMode::Wrap);
+    }
+
+    #[test]
+    fn white_space_collapse_default_collapse() {
+        let root = lay("<p>x</p>", "");
+        let s = first_p_style(&root);
+        assert_eq!(s.white_space_collapse, crate::style::WhiteSpaceCollapse::Collapse);
+        assert_eq!(s.white_space, crate::style::WhiteSpace::Normal);
+    }
+
+    #[test]
+    fn white_space_collapse_preserve_gives_pre_wrap() {
+        // CSS Text L4 §2.1: collapse=preserve + wrap-mode=wrap (initial) → pre-wrap.
+        let root = lay("<p>x</p>", "p { white-space-collapse: preserve; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.white_space_collapse, crate::style::WhiteSpaceCollapse::Preserve);
+        assert_eq!(s.white_space, crate::style::WhiteSpace::PreWrap);
+    }
+
+    #[test]
+    fn white_space_collapse_preserve_plus_nowrap_gives_pre() {
+        let root = lay(
+            "<p>x</p>",
+            "p { white-space-collapse: preserve; text-wrap-mode: nowrap; }",
+        );
+        assert_eq!(first_p_style(&root).white_space, crate::style::WhiteSpace::Pre);
+    }
+
+    #[test]
+    fn text_wrap_mode_before_collapse_order_independent() {
+        // Longhand-ы применяются в порядке каскада; результат не должен
+        // зависеть от порядка объявлений.
+        let root = lay(
+            "<p>x</p>",
+            "p { text-wrap-mode: nowrap; white-space-collapse: preserve; }",
+        );
+        assert_eq!(first_p_style(&root).white_space, crate::style::WhiteSpace::Pre);
+    }
+
+    #[test]
+    fn white_space_collapse_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { white-space-collapse: preserve-breaks; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.white_space_collapse, crate::style::WhiteSpaceCollapse::PreserveBreaks);
+        assert_eq!(p.style.white_space, crate::style::WhiteSpace::PreLine);
+    }
+
+    #[test]
+    fn white_space_collapse_invalid_ignored() {
+        let root = lay("<p>x</p>", "p { white-space-collapse: bogus; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.white_space_collapse, crate::style::WhiteSpaceCollapse::Collapse);
+        assert_eq!(s.white_space, crate::style::WhiteSpace::Normal);
+    }
+
+    #[test]
+    fn text_wrap_mode_nowrap_updates_effective_white_space() {
+        // Integration (CSS Text L4 §6.4.1): text-wrap-mode теперь влияет на
+        // эффективный white_space, которым пользуется layout.
+        let root = lay("<p>x</p>", "p { text-wrap-mode: nowrap; }");
+        assert_eq!(first_p_style(&root).white_space, crate::style::WhiteSpace::Nowrap);
+    }
+
+    #[test]
+    fn white_space_shorthand_resets_collapse_component() {
+        // white-space — shorthand: значение normal сбрасывает preserve,
+        // унаследованный от родителя.
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { white-space: pre; } p { white-space: normal; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.white_space_collapse, crate::style::WhiteSpaceCollapse::Collapse);
+        assert_eq!(p.style.white_space, crate::style::WhiteSpace::Normal);
+    }
+
+    #[test]
+    fn pre_line_newline_creates_two_lines() {
+        // CSS Text L4 §3.1 preserve-breaks: \n — forced break, пробелы
+        // вокруг него схлопываются.
+        let root = lay_measured("<p>line1   \n   line2</p>", "p { white-space: pre-line; }", 800.0);
+        let p_box = root.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
+        let run = p_box.children.iter().find(|c| matches!(c.kind, BoxKind::InlineRun { .. })).unwrap();
+        if let BoxKind::InlineRun { lines, .. } = &run.kind {
+            assert_eq!(lines.len(), 2, "expected 2 lines for \\n in pre-line, got {}", lines.len());
+            assert_eq!(lines[0][0].text, "line1");
+            assert_eq!(lines[1][0].text, "line2");
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
+    fn white_space_collapse_preserve_breaks_newline_layout() {
+        // End-to-end через longhand: preserve-breaks сохраняет \n.
+        let root = lay_measured(
+            "<p>a\nb</p>",
+            "p { white-space-collapse: preserve-breaks; }",
+            800.0,
+        );
+        let p_box = root.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
+        let run = p_box.children.iter().find(|c| matches!(c.kind, BoxKind::InlineRun { .. })).unwrap();
+        if let BoxKind::InlineRun { lines, .. } = &run.kind {
+            assert_eq!(lines.len(), 2, "preserve-breaks must keep \\n, got {} lines", lines.len());
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
+    fn break_spaces_preserves_space_runs() {
+        // break-spaces сохраняет последовательности пробелов (Phase 0 —
+        // как pre-wrap).
+        let root = lay_measured("<p>a  b</p>", "p { white-space: break-spaces; }", 800.0);
+        let p_box = root.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
+        let run = p_box.children.iter().find(|c| matches!(c.kind, BoxKind::InlineRun { .. })).unwrap();
+        if let BoxKind::InlineRun { lines, .. } = &run.kind {
+            assert_eq!(lines.len(), 1);
+            assert_eq!(lines[0][0].text, "a  b", "double space must be preserved");
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
     fn caret_color_named() {
         let root = lay("<p>x</p>", "p { caret-color: red; }");
         assert_eq!(
@@ -16917,17 +17053,34 @@ mod tests {
     }
 
     #[test]
-    fn text_wrap_nowrap_ignores_balance() {
-        // white-space: nowrap overrides text-wrap — line count must stay 1.
+    fn text_wrap_shorthand_after_nowrap_reenables_wrap() {
+        // CSS Text L4 §6.4.3: text-wrap — shorthand над text-wrap-mode/style
+        // и сбрасывает mode к initial (wrap). Объявленный после
+        // white-space: nowrap, он снова включает перенос строк.
         let root = lay_measured(
             "<p>aaaa bb cc dd</p>",
             "p { white-space: nowrap; text-wrap: balance; }",
             80.0,
         );
+        assert!(
+            twrap_line_count(&root) >= 2,
+            "text-wrap after nowrap must reset wrap mode and wrap lines"
+        );
+    }
+
+    #[test]
+    fn white_space_nowrap_after_text_wrap_stays_single_line() {
+        // Обратный порядок: white-space (shorthand) объявлен позже и
+        // сбрасывает text-wrap-mode к nowrap — одна строка.
+        let root = lay_measured(
+            "<p>aaaa bb cc dd</p>",
+            "p { text-wrap: balance; white-space: nowrap; }",
+            80.0,
+        );
         assert_eq!(
             twrap_line_count(&root),
             1,
-            "nowrap must produce single line regardless of text-wrap-style"
+            "later white-space: nowrap must win over earlier text-wrap"
         );
     }
 

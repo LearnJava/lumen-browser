@@ -73,7 +73,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Fonts L4 | [css-fonts-4](https://www.w3.org/TR/css-fonts-4/) | 🟡 | @font-face actual loading ⬜; font-optical-sizing ✅ 2026-05-29 | **#20** |
 | CSS Intrinsic Sizing L3 | [css3-sizing](https://www.w3.org/TR/css3-sizing/) | ✅ | min-content/max-content/fit-content/fit-content(L) for width/height/min-max; 11 tests 2026-05-24 | **#21** |
 | CSS Overflow L3 (scroll) | [css-overflow-3](https://www.w3.org/TR/css-overflow-3/) | 🟡 | scrollable containers; overflow:scroll rendering | **#22** |
-| CSS Text L3/L4 | [css3-text](https://www.w3.org/TR/css3-text/) | 🟡 | text-align-last ✅ 2026-06-08; hyphens:auto ✅ (P1 2026-05-29, KnuthLiangHyphenation); line-break CJK / text-wrap integration ⬜ | **#23** |
+| CSS Text L3/L4 | [css3-text](https://www.w3.org/TR/css3-text/) | 🟡 | text-align-last ✅ 2026-06-08; hyphens:auto ✅ (P1 2026-05-29, KnuthLiangHyphenation); white-space-collapse ✅ + break-spaces ✅ (p4-white-space-collapse 2026-07-04); line-break CJK / text-wrap-style ⬜ | **#23** |
 | CSS Transforms L2 | [css-transforms-2](https://www.w3.org/TR/css-transforms-2/) | 🟡 | individual translate/rotate/scale ✅ 2026-05-26; 3D matrix primitive + perspective-correct rendering ✅ 2026-05-29 (P2); 3D function parsing/`perspective` wiring ⬜ (P4) | **#24** |
 | CSS Values L4/L5 | [css-values-4](https://www.w3.org/TR/css-values-4/) | 🟡 | env(); attr() with type; cq* units | **#25** |
 
@@ -233,7 +233,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `text-align` | ✅ | start/end/left/center/right; LTR/RTL |
 | `text-indent` | ✅ | |
 | `text-transform` | ✅ | none/uppercase/lowercase/capitalize |
-| `white-space` | ✅ | normal/nowrap/pre/pre-wrap/pre-line — UA default for &lt;pre&gt; |
+| `white-space` | ✅ | normal/nowrap/pre/pre-wrap/pre-line/break-spaces — UA default for &lt;pre&gt;; L4 shorthand над white-space-collapse + text-wrap-mode (p4-white-space-collapse 2026-07-04) |
+| `white-space-collapse` | ✅ | collapse/preserve/preserve-breaks/preserve-spaces/break-spaces (CSS Text L4 §3.1); longhand; пересчитывает эффективный white-space через WhiteSpace::combine (preserve-spaces ≈ preserve, Phase 0) (p4-white-space-collapse 2026-07-04) |
 | `word-spacing` / `letter-spacing` | ✅ | |
 | `word-break` / `overflow-wrap` | ✅ | |
 | `text-decoration` / `text-decoration-*` | ✅ | line/style/color/thickness |
@@ -243,7 +244,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `hyphens` | ✅ | none/manual/auto; auto = KnuthLiangHyphenation (lumen-encoding, 11 locales) wired in shell via layout_measured_hyp (P1 2026-05-29) |
 | `tab-size` | ✅ | parsed; \t expanded in pre/pre-wrap; renderer advances cursor by tab_size |
 | `line-break` | 🟡 | parsed; CJK-aware breaking ⬜ |
-| `text-wrap-mode` / `text-wrap-style` | 🟡 | parsed; integration ⬜ |
+| `text-wrap-mode` / `text-wrap-style` | 🟡 | parsed; text-wrap-mode wired into effective white-space (nowrap disables wrap in layout, p4-white-space-collapse 2026-07-04); text-wrap-style (balance/pretty) line-breaker integration ⬜ |
 | `text-underline-position` / `text-underline-offset` | ✅ | wired in push_text_decoration(); Under→fs*0.25; offset adds to base (p4-text-underline 2026-06-10) |
 | `text-emphasis` / `text-emphasis-*` | ✅ | per-char marks rendered (emit_text_emphasis_marks) |
 

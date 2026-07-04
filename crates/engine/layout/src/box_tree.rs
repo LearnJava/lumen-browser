@@ -3155,6 +3155,61 @@ fn collect_inline_segments(
                 byte_offset += line.len() as u32;
             }
         }
+        NodeData::Text(s)
+            if inherited.white_space.preserves_newlines() && s.contains('\n') =>
+        {
+            // CSS Text L4 §3.1 preserve-breaks (white-space: pre-line):
+            // segment breaks сохраняются как forced line breaks, остальной
+            // whitespace схлопывается как в normal (word-split в
+            // wrap_inline_run). Сюда попадает только PreLine — режимы с
+            // preserves_whitespace() перехвачены веткой выше.
+            let style = inherited.clone();
+            let mut byte_offset: u32 = 0;
+            for (i, line) in s.split('\n').enumerate() {
+                if i > 0 {
+                    out.push(InlineSegment {
+                        text: String::new(),
+                        style: style.clone(),
+                        pre_space: 0.0,
+                        post_space: 0.0,
+                        is_element_box: false,
+                        img_src: None,
+                        img_is_lazy: false,
+                        img_width: 0.0,
+                        forced_break: true,
+                        pseudo_kind: PseudoKind::None,
+                        source_node: id,
+                        source_char_offset: byte_offset,
+                    });
+                    byte_offset += 1; // the \n character
+                }
+                let stripped = strip_invisible_controls(line);
+                if !stripped.chars().all(|c| c.is_whitespace()) {
+                    let text = inherited.text_transform.apply(&stripped);
+                    let kind = if *need_first_letter && !text.trim().is_empty() {
+                        *need_first_letter = false;
+                        PseudoKind::FirstLetter
+                    } else {
+                        PseudoKind::None
+                    };
+                    out.push(InlineSegment {
+                        text,
+                        style: style.clone(),
+                        pre_space: 0.0,
+                        post_space: 0.0,
+                        is_element_box: false,
+                        img_src: None,
+                        img_is_lazy: false,
+                        img_width: 0.0,
+                        forced_break: false,
+                        pseudo_kind: kind,
+                        source_node: id,
+                        source_char_offset: byte_offset,
+                    });
+                }
+                byte_offset += line.len() as u32;
+            }
+        }
         NodeData::Text(s) if !s.chars().all(|c| c.is_whitespace() || is_invisible_control(c)) => {
             // BUG-120: strip invisible controls before transform/measure — Edge
             // renders them zero-advance, they must not contribute glyphs.
