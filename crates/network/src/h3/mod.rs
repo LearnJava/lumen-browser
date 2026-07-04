@@ -50,10 +50,19 @@
 //!   detection that decides which packets are lost and feeds [`recovery`]. Pure
 //!   state machine driven by decoded ACK frames and a caller-supplied clock; no
 //!   PTO timer, no IO.
-//! - Slice 9+ (planned) — the rest of the QUIC transport (UDP datagrams,
-//!   header protection, TLS 1.3 handshake, packet protection, the PTO timer and
-//!   probe sending (RFC 9002 §6.2), unidirectional/request stream framing, and
-//!   `h3_do_request` dispatch alongside the existing H1/H2 paths.
+//! - Slice 9 — the QUIC loss-detection timer + PTO ([`pto`], RFC 9002 §6.2,
+//!   Appendix A): [`pto::LossDetection`] ties the three per-space registries and
+//!   the RTT estimator into the single loss-detection timer. It computes
+//!   `SetLossDetectionTimer` (earliest time-threshold loss time, else the
+//!   exponentially-backed-off probe timeout, else disarm) and drives
+//!   `OnLossDetectionTimeout` (declare time-threshold losses, or send one/two
+//!   ack-eliciting probes and bump the backoff), including the anti-deadlock PTO
+//!   and the Application-Data-until-handshake-confirmed guard. Pure state machine
+//!   driven by a caller-supplied clock; no timer IO, no probe assembly.
+//! - Slice 10+ (planned) — the rest of the QUIC transport (UDP datagrams,
+//!   header protection, TLS 1.3 handshake, packet protection, actually arming the
+//!   PTO timer and assembling probe datagrams, unidirectional/request stream
+//!   framing, and `h3_do_request` dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -65,6 +74,7 @@ pub mod alt_svc;
 pub mod frame;
 pub mod loss;
 pub mod packet;
+pub mod pto;
 pub mod qpack;
 pub mod qpack_stream;
 pub mod quic_frame;
