@@ -15,11 +15,32 @@ use lumen_dom::{Document, NodeId};
 use lumen_layout::{Color, FontStyle, FontWeight};
 use lumen_paint::DisplayCommand;
 
+/// Один `<track>` элемента `<video>`, отражённый в `TextTrack` JS-API.
+///
+/// Хранит метаданные всех треков (для перечисления `video.textTracks`) и cues
+/// только у показываемого («showing») трека — остальные `disabled` без cues,
+/// как и в спецификации (cues грузятся только при `mode != disabled`).
+#[derive(Debug, Clone)]
+pub struct LoadedTrack {
+    /// `TextTrack.kind` (`subtitles`/`captions`/`chapters`/…).
+    pub kind: String,
+    /// `TextTrack.label`.
+    pub label: String,
+    /// `TextTrack.language` (из атрибута `srclang`).
+    pub language: String,
+    /// `TextTrack.mode`: `"showing"` у выбранного трека, иначе `"disabled"`.
+    pub mode: String,
+    /// Разобранные cues; непустые только у показываемого трека.
+    pub cues: Vec<VttCue>,
+}
+
 /// Загруженные cues по каждому `<video>` страницы.
 #[derive(Debug, Default)]
 pub struct PageTracks {
-    /// NodeId элемента `<video>` -> cues выбранного `<track>`.
+    /// NodeId элемента `<video>` -> cues выбранного `<track>` (для оверлея).
     pub cues_by_video: HashMap<NodeId, Vec<VttCue>>,
+    /// NodeId элемента `<video>` -> все его треки (для `video.textTracks`).
+    pub tracks_by_video: HashMap<NodeId, Vec<LoadedTrack>>,
 }
 
 impl PageTracks {
@@ -29,25 +50,21 @@ impl PageTracks {
     }
 }
 
-/// Выбирает подходящий `<track>` для видео: приоритет — первый с `default == true`,
-/// иначе первый с kind "subtitles"/"captions" (регистронезависимо).
-fn choose_track(tracks: &[TrackInfo]) -> Option<&TrackInfo> {
-    // Сначала ищем дефолтный трек среди подходящих по kind
-    let default_track = tracks.iter().find(|t| {
-        let kind = t.kind.to_lowercase();
-        (kind == "subtitles" || kind == "captions") && t.default
-    });
-    if default_track.is_some() {
-        return default_track;
-    }
-    // Если дефолтного нет, берем первый подходящий по kind
-    tracks.iter().find(|t| {
+/// Индекс подходящего `<track>` для видео: приоритет — первый с `default == true`
+/// среди kind "subtitles"/"captions", иначе первый подходящий по kind.
+fn choose_track_index(tracks: &[TrackInfo]) -> Option<usize> {
+    let is_subs = |t: &TrackInfo| {
         let kind = t.kind.to_lowercase();
         kind == "subtitles" || kind == "captions"
-    })
+    };
+    if let Some(i) = tracks.iter().position(|t| is_subs(t) && t.default) {
+        return Some(i);
+    }
+    tracks.iter().position(is_subs)
 }
 
-/// Обходит документ, для каждого `<video>` выбирает один `<track>` и грузит его.
+/// Обходит документ, для каждого `<video>` выбирает один `<track>` для оверлея,
+/// а также отражает метаданные всех треков для `TextTrack` JS-API.
 pub fn load_video_tracks(
     doc: &Document,
     fetch: &dyn Fn(&str) -> Option<String>,
@@ -55,28 +72,51 @@ pub fn load_video_tracks(
     let mut result = PageTracks::default();
     let video_tracks = collect_video_tracks(doc);
     for vt in video_tracks {
-        let track = match choose_track(&vt.tracks) {
-            Some(t) => t,
-            None => continue,
-        };
-        let text = match fetch(&track.src) {
-            Some(t) => t,
-            None => continue,
-        };
-        let cues = match parse_vtt(&text) {
-            Ok(c) if !c.is_empty() => c,
-            _ => continue,
-        };
-        result.cues_by_video.insert(vt.video, cues);
+        if vt.tracks.is_empty() {
+            continue;
+        }
+        let chosen = choose_track_index(&vt.tracks);
+        // Грузим cues выбранного трека один раз.
+        let chosen_cues = chosen.and_then(|i| {
+            let text = fetch(&vt.tracks[i].src)?;
+            match parse_vtt(&text) {
+                Ok(c) if !c.is_empty() => Some(c),
+                _ => None,
+            }
+        });
+
+        let mut loaded = Vec::with_capacity(vt.tracks.len());
+        for (i, ti) in vt.tracks.iter().enumerate() {
+            let is_showing = chosen == Some(i) && chosen_cues.is_some();
+            let cues = if is_showing {
+                chosen_cues.clone().unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            loaded.push(LoadedTrack {
+                kind: ti.kind.clone(),
+                label: ti.label.clone(),
+                language: ti.srclang.clone(),
+                mode: if is_showing { "showing" } else { "disabled" }.to_string(),
+                cues,
+            });
+        }
+        result.tracks_by_video.insert(vt.video, loaded);
+
+        if let (Some(_), Some(cues)) = (chosen, chosen_cues) {
+            result.cues_by_video.insert(vt.video, cues);
+        }
     }
     result
 }
 
-/// Строит оверлей активных cue в момент `t` (секунды от начала «воспроизведения»).
+/// Строит оверлей активных cue. Время воспроизведения каждого видео
+/// вычисляется замыканием `time_for` (секунды): для GIF-видео — реальный
+/// playback-клок из `VideoGifStore`, иначе фолбэк на время от навигации.
 pub fn build_cue_overlay(
     tracks: &PageTracks,
     video_rects: &[(NodeId, Rect)],
-    t: f64,
+    time_for: &dyn Fn(NodeId) -> f64,
     measure: &dyn Fn(&str, f32) -> f32,
 ) -> Vec<DisplayCommand> {
     let rect_map: HashMap<NodeId, Rect> = video_rects.iter().cloned().collect();
@@ -88,6 +128,7 @@ pub fn build_cue_overlay(
             None => continue,
         };
 
+        let t = time_for(video_id);
         let font_size = (rect.height * 0.06).clamp(12.0, 26.0);
         let line_height = font_size * 1.3;
         let pad = font_size * 0.3;
@@ -224,6 +265,64 @@ mod tests {
     }
 
     #[test]
+    fn test_tracks_by_video_exposes_all_tracks() {
+        let mut doc = Document::new();
+        let video = doc.create_element(QualName::html("video"));
+
+        let subs = doc.create_element(QualName::html("track"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(subs).data {
+            for (k, v) in [
+                ("src", "subs.vtt"),
+                ("kind", "subtitles"),
+                ("srclang", "en"),
+                ("label", "English"),
+            ] {
+                attrs.push(Attribute {
+                    name: QualName::html(k),
+                    value: v.to_string(),
+                });
+            }
+            attrs.push(Attribute {
+                name: QualName::html("default"),
+                value: String::new(),
+            });
+        }
+        let chapters = doc.create_element(QualName::html("track"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(chapters).data {
+            for (k, v) in [("src", "chapters.vtt"), ("kind", "chapters")] {
+                attrs.push(Attribute {
+                    name: QualName::html(k),
+                    value: v.to_string(),
+                });
+            }
+        }
+        doc.append_child(video, subs);
+        doc.append_child(video, chapters);
+        doc.append_child(doc.root(), video);
+
+        let fetch = |src: &str| {
+            if src == "subs.vtt" {
+                Some("WEBVTT\n\n00:00.000 --> 00:05.000\nHi".to_string())
+            } else {
+                None
+            }
+        };
+        let tracks = load_video_tracks(&doc, &fetch);
+        let list = tracks.tracks_by_video.get(&video).unwrap();
+        assert_eq!(list.len(), 2, "both <track> elements exposed");
+
+        let showing = list.iter().find(|t| t.mode == "showing").unwrap();
+        assert_eq!(showing.kind, "subtitles");
+        assert_eq!(showing.language, "en");
+        assert_eq!(showing.label, "English");
+        assert_eq!(showing.cues.len(), 1);
+
+        let chap = list.iter().find(|t| t.kind == "chapters").unwrap();
+        assert_eq!(chap.mode, "disabled");
+        assert!(chap.cues.is_empty(), "non-showing tracks carry no cues");
+    }
+
+    #[test]
     fn test_ignores_non_subtitle_kinds() {
         let mut doc = Document::new();
         let video = doc.create_element(QualName::html("video"));
@@ -342,7 +441,7 @@ mod tests {
         let tracks = load_video_tracks(&doc, &fetch);
         let rect = Rect::new(0.0, 0.0, 400.0, 300.0);
         let measure = |_: &str, _: f32| 100.0;
-        let overlay = build_cue_overlay(&tracks, &[(video, rect)], 2.0, &measure);
+        let overlay = build_cue_overlay(&tracks, &[(video, rect)], &|_| 2.0, &measure);
         assert!(overlay.is_empty());
     }
 
@@ -370,7 +469,7 @@ mod tests {
         let tracks = load_video_tracks(&doc, &fetch);
         let rect = Rect::new(0.0, 0.0, 400.0, 300.0);
         let measure = |s: &str, fs: f32| s.chars().count() as f32 * fs * 0.5;
-        let overlay = build_cue_overlay(&tracks, &[(video, rect)], 0.0, &measure);
+        let overlay = build_cue_overlay(&tracks, &[(video, rect)], &|_| 0.0, &measure);
 
         assert_eq!(overlay.len(), 2);
         match &overlay[0] {
@@ -407,7 +506,7 @@ mod tests {
         let tracks = load_video_tracks(&doc, &fetch);
         let rect = Rect::new(0.0, 0.0, 400.0, 300.0);
         let measure = |_: &str, _: f32| 100.0;
-        let overlay = build_cue_overlay(&tracks, &[(video, rect)], 0.0, &measure);
+        let overlay = build_cue_overlay(&tracks, &[(video, rect)], &|_| 0.0, &measure);
 
         let draw_text = overlay
             .iter()
@@ -447,7 +546,7 @@ mod tests {
         let tracks = load_video_tracks(&doc, &fetch);
         let rect = Rect::new(0.0, 0.0, 400.0, 300.0);
         let measure = |_: &str, _: f32| 50.0;
-        let overlay = build_cue_overlay(&tracks, &[(video, rect)], 0.0, &measure);
+        let overlay = build_cue_overlay(&tracks, &[(video, rect)], &|_| 0.0, &measure);
         // Expect 2 FillRects + 2 DrawTexts = 4 commands
         assert_eq!(overlay.len(), 4);
         // Проверяем y второй строки: ly = y_top + line_height
@@ -489,7 +588,7 @@ mod tests {
         let tracks = load_video_tracks(&doc, &fetch);
         let rect = Rect::new(0.0, 0.0, 400.0, 300.0);
         let measure = |_: &str, _: f32| 50.0;
-        let overlay = build_cue_overlay(&tracks, &[(video, rect)], 0.0, &measure);
+        let overlay = build_cue_overlay(&tracks, &[(video, rect)], &|_| 0.0, &measure);
         let draw_rects: Vec<_> = overlay
             .iter()
             .filter_map(|cmd| {
@@ -514,7 +613,7 @@ mod tests {
         let tracks = PageTracks::default();
         let rect = Rect::new(0.0, 0.0, 400.0, 300.0);
         let measure = |_: &str, _: f32| 50.0;
-        let overlay = build_cue_overlay(&tracks, &[(video, rect)], 0.0, &measure);
+        let overlay = build_cue_overlay(&tracks, &[(video, rect)], &|_| 0.0, &measure);
         assert!(overlay.is_empty());
     }
 }

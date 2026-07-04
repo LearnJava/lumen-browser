@@ -624,6 +624,18 @@ fn run_window_mode(
     let video_gif_store: std::sync::Arc<lumen_js::VideoGifStore> =
         std::sync::Arc::new(lumen_js::VideoGifStore::default());
 
+    // Wire the TextTrack store (P3-webvtt slice 4) — mirrors parsed `<track>`
+    // cues into the JS `video.textTracks` API. Same Arc shared with bindings.
+    #[cfg(feature = "quickjs")]
+    let text_track_store = {
+        let store = std::sync::Arc::new(lumen_js::TextTrackStore::default());
+        lumen_js::set_text_track_store(store.clone());
+        store
+    };
+    #[cfg(not(feature = "quickjs"))]
+    let text_track_store: std::sync::Arc<lumen_js::TextTrackStore> =
+        std::sync::Arc::new(lumen_js::TextTrackStore::default());
+
     // Apply the fingerprint profile's navigator/screen/timezone values (9F.1).
     // Process-global; consumed by lumen_js when each page's JS context spins up.
     #[cfg(feature = "quickjs")]
@@ -783,6 +795,7 @@ fn run_window_mode(
         video_gif_last_frame: HashMap::new(),
         video_gif_frames: HashMap::new(),
         video_gif_store,
+        text_track_store,
         image_cache: lumen_image::ImageDecodeCache::new(),
         automation_rx,
         automation_cmd_tx,
@@ -5960,6 +5973,11 @@ struct Lumen {
     /// creation time.  The shell's render tick drains `pending_loads`, decodes
     /// GIFs, and re-registers frames under `"video:{nid}"` image keys.
     video_gif_store: std::sync::Arc<lumen_js::VideoGifStore>,
+    /// Shared TextTrack store — same Arc used by JS native bindings (P3-webvtt).
+    ///
+    /// Mirrors `page_tracks.tracks_by_video` so `video.textTracks` exposes the
+    /// shell's parsed `<track>` cues. Re-synced on load, cleared on navigation.
+    text_track_store: std::sync::Arc<lumen_js::TextTrackStore>,
     /// CPU-side decoded image cache (ADR-008 §10E.4 scroll-discard).
     ///
     /// Stores one `ImageHandle` per image URL so far-away images can be evicted
@@ -6814,6 +6832,38 @@ impl Lumen {
         }
     }
 
+    /// Mirror `page_tracks.tracks_by_video` into the shared
+    /// [`lumen_js::TextTrackStore`] so `video.textTracks` reflects the parsed
+    /// `<track>` cues. Fully replaces the store's contents (clear + repopulate),
+    /// so navigating to a track-less page empties it.
+    fn sync_text_track_store(&self) {
+        let mut guard = self.text_track_store.tracks.lock().unwrap();
+        guard.clear();
+        for (node, tracks) in &self.page_tracks.tracks_by_video {
+            let nid = node.index() as u32;
+            let data: Vec<lumen_js::TextTrackData> = tracks
+                .iter()
+                .map(|t| lumen_js::TextTrackData {
+                    kind: t.kind.clone(),
+                    label: t.label.clone(),
+                    language: t.language.clone(),
+                    mode: t.mode.clone(),
+                    cues: t
+                        .cues
+                        .iter()
+                        .map(|c| lumen_js::CueData {
+                            id: c.id.clone().unwrap_or_default(),
+                            start: c.start_s,
+                            end: c.end_s,
+                            text: c.text.clone(),
+                        })
+                        .collect(),
+                })
+                .collect();
+            guard.insert(nid, data);
+        }
+    }
+
     /// Advance GIF-backed `<video>` playback: drain pending loads, decode GIFs,
     /// register current frames, request redraws while any video is playing.
     ///
@@ -7497,6 +7547,7 @@ impl Lumen {
         collect_box_styles(&page.layout_box, &mut self.prev_styles);
         self.layout_box = Some(page.layout_box);
         self.page_tracks = page.page_tracks;
+        self.sync_text_track_store();
         // content-visibility: auto (BB-4): новая страница — ratchet с нуля.
         self.cv_relevant.clear();
         self.cv_events.clear();
@@ -11575,10 +11626,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                 }
 
-                // P3-webvtt срез 3: активные WebVTT-cue поверх video-боксов.
+                // P3-webvtt срез 4: активные WebVTT-cue поверх video-боксов.
                 // Команды добавляются в page-полосу (скроллятся со страницей);
-                // при активном compositor-offload — в anim_dl. Время «воспроизведения»
-                // отсчитывается от старта навигации (реального playback пока нет).
+                // при активном compositor-offload — в anim_dl. Время
+                // воспроизведения берётся из реального playback-клока видео
+                // (`VideoGifStore`); для не-GIF/не-запущенных видео — фолбэк на
+                // время от старта навигации.
                 if !self.page_tracks.is_empty() {
                     let mut video_rects = Vec::new();
                     if let Some(lb) = &self.layout_box {
@@ -11588,9 +11641,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         && let Ok(font) = lumen_font::Font::parse(INTER_FONT)
                         && let Ok(m) = lumen_paint::FontMeasurer::new(&font)
                     {
-                        let t = self
+                        let nav_t = self
                             .nav_start
                             .map_or(0.0, |s| s.elapsed().as_secs_f64());
+                        let clock_ms = self.epoch.elapsed().as_millis() as u64;
+                        let playback = self.video_gif_store.playback.lock().unwrap();
+                        let time_for = |node: lumen_dom::NodeId| -> f64 {
+                            let nid = node.index() as u32;
+                            match playback.get(&nid) {
+                                Some(st) => st.current_ms(clock_ms) as f64 / 1000.0,
+                                None => nav_t,
+                            }
+                        };
                         let measure = |s: &str, fs: f32| -> f32 {
                             use lumen_layout::TextMeasurer;
                             s.chars().map(|c| m.char_width(c, fs)).sum()
@@ -11598,7 +11660,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         let mut cue_cmds = tracks::build_cue_overlay(
                             &self.page_tracks,
                             &video_rects,
-                            t,
+                            &time_for,
                             &measure,
                         );
                         if !cue_cmds.is_empty() {
@@ -16622,6 +16684,7 @@ impl Lumen {
         self.anim_frame = snap.anim_frame;
         self.layout_box = snap.layout_box;
         self.page_tracks = snap.page_tracks;
+        self.sync_text_track_store();
         self.find = snap.find;
         self.address_bar = snap.address_bar;
         self.hint = snap.hint;

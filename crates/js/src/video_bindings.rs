@@ -32,9 +32,11 @@
 //! | `__lumen_video_width` | `(nid: f64) → f64` | GIF pixel width |
 //! | `__lumen_video_height` | `(nid: f64) → f64` | GIF pixel height |
 //! | `__lumen_video_can_play_type` | `(mime: String) → String` | canPlayType probe |
+//! | `__lumen_texttracks_json` | `(nid: f64) → String` | JSON of parsed `<track>` cues |
 
 use rquickjs::{Ctx, Function, Object};
 
+use crate::text_track_store::get_text_track_store;
 use crate::video_gif_store::get_video_gif_store;
 
 /// Install HTMLVideoElement Phase 1 bindings into the JS context.
@@ -267,6 +269,21 @@ fn install_native_bindings(ctx: &Ctx) -> rquickjs::Result<()> {
         )?;
     }
 
+    // __lumen_texttracks_json(nid) → String — JSON snapshot of this video's
+    // parsed `<track>` cues (populated by the shell). "[]" when none.
+    {
+        let store = get_text_track_store();
+        g.set(
+            "__lumen_texttracks_json",
+            Function::new(ctx.clone(), move |nid: f64| -> String {
+                store
+                    .as_ref()
+                    .map(|s| s.tracks_json(nid as u32))
+                    .unwrap_or_else(|| "[]".to_string())
+            }),
+        )?;
+    }
+
     Ok(())
 }
 
@@ -300,6 +317,119 @@ const VIDEO_SHIM: &str = r#"(function() {
     try {
       el.dispatchEvent(new Event(name, { bubbles: false, cancelable: false }));
     } catch(e) {}
+  }
+
+  // ── TextTrack API (HTML §4.8.11) ────────────────────────────────────────────
+  // Read-only view over the shell's parsed <track> cues. No cue mutation.
+
+  function makeCueList(cues) {
+    var list = {
+      length: cues.length,
+      getCueById: function(id) {
+        for (var i = 0; i < cues.length; i++) { if (cues[i].id === id) return cues[i]; }
+        return null;
+      },
+      item: function(i) { return cues[i] || null; },
+    };
+    for (var i = 0; i < cues.length; i++) list[i] = cues[i];
+    return list;
+  }
+
+  function buildTextTracks(el, nid) {
+    var raw = [];
+    if (typeof __lumen_texttracks_json === 'function' && nid) {
+      try { raw = JSON.parse(__lumen_texttracks_json(nid) || '[]'); } catch(e) { raw = []; }
+    }
+    var tracks = [];
+    for (var i = 0; i < raw.length; i++) {
+      var td = raw[i] || {};
+      var rawCues = td.cues || [];
+      var myCues = [];
+      var track = {
+        kind: td.kind || '',
+        label: td.label || '',
+        language: td.language || '',
+        mode: td.mode || 'disabled',
+        id: '',
+        oncuechange: null,
+        _cues: myCues,
+        _activeSig: null,
+        _listeners: [],
+        addEventListener: function(type, cb) {
+          if (type === 'cuechange' && typeof cb === 'function') this._listeners.push(cb);
+        },
+        removeEventListener: function(type, cb) {
+          if (type !== 'cuechange') return;
+          var k = this._listeners.indexOf(cb);
+          if (k >= 0) this._listeners.splice(k, 1);
+        },
+      };
+      for (var j = 0; j < rawCues.length; j++) {
+        var rc = rawCues[j] || {};
+        myCues.push({
+          id: rc.id || '',
+          startTime: +rc.start || 0,
+          endTime: +rc.end || 0,
+          text: rc.text || '',
+          track: track,
+          pauseOnExit: false,
+        });
+      }
+      Object.defineProperty(track, 'cues', {
+        get: function() { return this.mode === 'disabled' ? null : makeCueList(this._cues); },
+        configurable: true,
+      });
+      Object.defineProperty(track, 'activeCues', {
+        get: function() {
+          if (this.mode === 'disabled') return null;
+          var ct = el.currentTime || 0;
+          var act = [];
+          for (var k = 0; k < this._cues.length; k++) {
+            var c = this._cues[k];
+            if (c.startTime <= ct && ct < c.endTime) act.push(c);
+          }
+          return makeCueList(act);
+        },
+        configurable: true,
+      });
+      tracks.push(track);
+    }
+    var listObj = {
+      length: tracks.length,
+      getTrackById: function(id) {
+        for (var i = 0; i < tracks.length; i++) { if (tracks[i].id === id) return tracks[i]; }
+        return null;
+      },
+      _tracks: tracks,
+    };
+    for (var i2 = 0; i2 < tracks.length; i2++) listObj[i2] = tracks[i2];
+    return listObj;
+  }
+
+  function fireTrackCueChange(track) {
+    var ev = { type: 'cuechange', target: track };
+    if (typeof track.oncuechange === 'function') { try { track.oncuechange(ev); } catch(e) {} }
+    for (var i = 0; i < track._listeners.length; i++) {
+      try { track._listeners[i].call(track, ev); } catch(e) {}
+    }
+  }
+
+  function checkCueChanges(el) {
+    var tl = el.__lumen_text_tracks;
+    // Late population: the shell may parse <track> files after the shim ran.
+    if (!tl || tl.length === 0) { tl = el.textTracks; }
+    if (!tl) return;
+    var ct = el.currentTime || 0;
+    for (var i = 0; i < tl.length; i++) {
+      var tr = tl[i];
+      if (tr.mode === 'disabled') continue;
+      var sig = '';
+      for (var j = 0; j < tr._cues.length; j++) {
+        var c = tr._cues[j];
+        if (c.startTime <= ct && ct < c.endTime) sig += j + ',';
+      }
+      if (sig !== tr._activeSig) { tr._activeSig = sig; fireTrackCueChange(tr); }
+    }
   }
 
   function patchVideoElement(el) {
@@ -348,6 +478,7 @@ const VIDEO_SHIM: &str = r#"(function() {
           clearInterval(_tupdateTimer); _tupdateTimer = null; return;
         }
         fireEvent(el, 'timeupdate');
+        checkCueChanges(el);
         var ended = __lumen_video_ended(nid, nowMs());
         if (ended) {
           clearInterval(_tupdateTimer); _tupdateTimer = null;
@@ -393,6 +524,7 @@ const VIDEO_SHIM: &str = r#"(function() {
         var secs = Number(v) || 0;
         if (_gifBacked && HAS_STORE && nid) __lumen_video_seek(nid, secs, nowMs());
         fireEvent(el, 'seeking'); fireEvent(el, 'seeked');
+        checkCueChanges(el);
       },
       configurable: true,
     });
@@ -438,6 +570,18 @@ const VIDEO_SHIM: &str = r#"(function() {
       get: function() {
         if (_gifBacked && HAS_STORE && nid) return __lumen_video_height(nid);
         return 0;
+      },
+      configurable: true,
+    });
+
+    // textTracks — lazily built from the shell's parsed <track> snapshot.
+    // Rebuilt while empty so late shell-side population is picked up.
+    Object.defineProperty(el, 'textTracks', {
+      get: function() {
+        if (!el.__lumen_text_tracks || el.__lumen_text_tracks.length === 0) {
+          el.__lumen_text_tracks = buildTextTracks(el, nid);
+        }
+        return el.__lumen_text_tracks;
       },
       configurable: true,
     });
@@ -489,6 +633,12 @@ const VIDEO_SHIM: &str = r#"(function() {
           el.dispatchEvent(new Event('canplay'));
         } catch(e) {}
       }
+    }
+
+    // Fire an initial cuechange for cues active at t=0 once the shell has
+    // parsed the <track> files (deferred so late population is picked up).
+    if (typeof setTimeout === 'function') {
+      setTimeout(function() { try { checkCueChanges(el); } catch(e) {} }, 0);
     }
   }
 
@@ -699,6 +849,81 @@ el.canPlayType('video/mp4') === ''
         let loads = store.pending_loads.lock().unwrap();
         assert!(!loads.is_empty(), "load should be queued");
         assert!(loads.iter().any(|(n, s)| *n == 99 && s == "test.gif"));
+    }
+
+    #[test]
+    fn text_tracks_exposed_from_store() {
+        use crate::text_track_store::{
+            set_text_track_store, CueData, TextTrackData, TextTrackStore,
+        };
+        use std::sync::Arc;
+        let _guard = STORE_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let tstore = Arc::new(TextTrackStore::default());
+        tstore.tracks.lock().unwrap().insert(
+            42,
+            vec![TextTrackData {
+                kind: "subtitles".to_string(),
+                label: "English".to_string(),
+                language: "en".to_string(),
+                mode: "showing".to_string(),
+                cues: vec![CueData {
+                    id: "c1".to_string(),
+                    start: 0.0,
+                    end: 5.0,
+                    text: "Hi".to_string(),
+                }],
+            }],
+        );
+        set_text_track_store(tstore);
+
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install_minimal_dom(&ctx);
+            install_video_bindings(&ctx).unwrap();
+            let ok: bool = ctx
+                .eval(
+                    r#"
+var el = document.createElement('video');
+var tt = el.textTracks;
+tt.length === 1
+  && tt[0].kind === 'subtitles'
+  && tt[0].language === 'en'
+  && tt[0].mode === 'showing'
+  && tt[0].cues.length === 1
+  && tt[0].cues[0].text === 'Hi'
+  && tt[0].cues[0].startTime === 0
+  && tt[0].cues[0].endTime === 5
+  && tt[0].activeCues.length === 1
+  && tt.getTrackById('') === tt[0]
+"#,
+                )
+                .unwrap();
+            assert!(ok, "textTracks should expose the shell-parsed cues");
+        });
+    }
+
+    #[test]
+    fn text_tracks_empty_without_store_entry() {
+        use crate::text_track_store::{set_text_track_store, TextTrackStore};
+        use std::sync::Arc;
+        let _guard = STORE_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        // Fresh empty store so a prior test's nid=42 entry can't leak in.
+        set_text_track_store(Arc::new(TextTrackStore::default()));
+
+        let (_rt, ctx) = make_ctx();
+        ctx.with(|ctx| {
+            install_minimal_dom(&ctx);
+            install_video_bindings(&ctx).unwrap();
+            let len: i32 = ctx
+                .eval(
+                    r#"
+var el = document.createElement('video');
+el.textTracks.length
+"#,
+                )
+                .unwrap();
+            assert_eq!(len, 0, "no store entry → empty TextTrackList");
+        });
     }
 
     #[test]
