@@ -2870,6 +2870,63 @@ impl FemtovgBackend {
                 self.canvas.fill_path(&path, &paint);
             }
 
+            // ── SVG stroke (BUG-247) ─────────────────────────────────────────
+            // Stroke the raw contours natively so analytic AA lands only on the
+            // true stroke boundary. Feeding a pre-tessellated triangle soup
+            // (the old `DrawSvgPath` stroke) made femtovg fringe every internal
+            // shared edge — ~1px seams along curved and dashed strokes. femtovg
+            // 0.9 has no native dash, so dash-split first with the same routine
+            // the tessellating fallback uses (`apply_dash_pattern`), then stroke
+            // each resulting open sub-path with butt-cap/round-cap as requested.
+            DisplayCommand::DrawSvgStroke { contours, color, params } => {
+                if params.half_width <= 0.0 {
+                    return;
+                }
+                let dashed = crate::svg_path::apply_dash_pattern(
+                    contours,
+                    &params.dasharray,
+                    params.dashoffset,
+                );
+                let mut paint = femtovg::Paint::color(lumen_to_fvg(*color));
+                paint.set_line_width(params.half_width * 2.0);
+                paint.set_miter_limit(params.miterlimit);
+                paint.set_line_cap(match params.linecap {
+                    crate::svg_path::StrokeLinecap::Butt => femtovg::LineCap::Butt,
+                    crate::svg_path::StrokeLinecap::Round => femtovg::LineCap::Round,
+                    crate::svg_path::StrokeLinecap::Square => femtovg::LineCap::Square,
+                });
+                paint.set_line_join(match params.linejoin {
+                    crate::svg_path::StrokeLinejoin::Miter => femtovg::LineJoin::Miter,
+                    crate::svg_path::StrokeLinejoin::Round => femtovg::LineJoin::Round,
+                    crate::svg_path::StrokeLinejoin::Bevel => femtovg::LineJoin::Bevel,
+                });
+                let mut path = femtovg::Path::new();
+                for contour in &dashed {
+                    let n = contour.len();
+                    if n < 2 {
+                        continue;
+                    }
+                    // A contour whose first point coincides with its last is a
+                    // closed sub-path — emit `close()` so the seam vertex joins
+                    // per `linejoin` instead of being capped as two open ends.
+                    let closed = n > 2
+                        && (contour[0][0] - contour[n - 1][0]).abs() < 1e-4
+                        && (contour[0][1] - contour[n - 1][1]).abs() < 1e-4;
+                    let wpts = if closed { &contour[..n - 1] } else { &contour[..] };
+                    let mut pts = wpts.iter();
+                    if let Some(&[x0, y0]) = pts.next() {
+                        path.move_to(x0, y0);
+                        for &[x, y] in pts {
+                            path.line_to(x, y);
+                        }
+                        if closed {
+                            path.close();
+                        }
+                    }
+                }
+                self.canvas.stroke_path(&path, &paint);
+            }
+
             // ── Cross-fade ──────────────────────────────────────────────────
             DisplayCommand::DrawCrossFade { dest, src_a, src_b, progress } => {
                 let p = progress.clamp(0.0, 1.0);
