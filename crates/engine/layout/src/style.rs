@@ -19,6 +19,7 @@ use std::collections::HashMap;
 
 use crate::color_mix::{MixColorSpace, mix_colors};
 use crate::font_palette::{resolve_font_palette_overrides, ResolvedFontPalette};
+use crate::mathml::MathStyle;
 use crate::rule_index::RuleIndex;
 use crate::ruby::{RubyAlign, RubyMerge, RubyPosition};
 use crate::scroll_timeline::ScrollAxis;
@@ -2987,6 +2988,12 @@ pub struct ComputedStyle {
     pub ruby_align: RubyAlign,
     /// CSS Ruby L1 §4 — `ruby-merge`. Inherited. Initial: `Separate`.
     pub ruby_merge: RubyMerge,
+    /// MathML Core §2.1.1 — `math-style`. Inherited. Initial: `Normal`.
+    /// Drives `lay_out_mathml` (compact scales mfrac children); `<math>` box-tree integration — deferred.
+    pub math_style: MathStyle,
+    /// MathML Core §2.1.2 — `math-depth`. Inherited. Computed value: integer. Initial: `0`.
+    /// `auto-add` / `add(<integer>)` resolve against the inherited depth at compute time.
+    pub math_depth: i32,
     /// CSS Shapes L1 §3 — `shape-outside`. NOT inherited. Initial: `None`.
     /// Phase 0: parse + store; float-wrap shape application — deferred.
     pub shape_outside: ShapeOutside,
@@ -5517,6 +5524,8 @@ impl ComputedStyle {
             ruby_position: RubyPosition::Over,
             ruby_align: RubyAlign::SpaceAround,
             ruby_merge: RubyMerge::Separate,
+            math_style: MathStyle::Normal,
+            math_depth: 0,
             shape_outside: ShapeOutside::None,
             shape_margin: Length::Px(0.0),
             shape_image_threshold: 0.0,
@@ -5871,6 +5880,9 @@ pub fn compute_style(
         ruby_position: inherited.ruby_position,
         ruby_align: inherited.ruby_align,
         ruby_merge: inherited.ruby_merge,
+        // MathML Core §2.1 — оба inherited (math-depth уже как computed integer).
+        math_style: inherited.math_style,
+        math_depth: inherited.math_depth,
         // CSS Shapes L1 / Motion Path — не наследуются. Initial values.
         shape_outside: ShapeOutside::None,
         shape_margin: Length::Px(0.0),
@@ -6937,6 +6949,8 @@ pub fn compute_pseudo_element_style(
     style.ruby_position = parent.ruby_position;
     style.ruby_align = parent.ruby_align;
     style.ruby_merge = parent.ruby_merge;
+    style.math_style = parent.math_style;
+    style.math_depth = parent.math_depth;
     style.font_size_adjust = parent.font_size_adjust;
     style.text_wrap_mode = parent.text_wrap_mode;
     style.text_wrap_style = parent.text_wrap_style;
@@ -13400,6 +13414,29 @@ fn apply_declaration(
                 _ => style.ruby_merge,
             };
         }
+        "math-style" => {
+            style.math_style = match val.trim() {
+                "normal" => MathStyle::Normal,
+                "compact" => MathStyle::Compact,
+                _ => style.math_style,
+            };
+        }
+        "math-depth" => {
+            // Computed value — целое; относительные формы резолвятся от inherited
+            // (MathML Core §2.1.2: auto-add и add(n) — относительно родителя).
+            let v = val.trim();
+            if v == "auto-add" {
+                // +1 только если унаследованный math-style компактный.
+                style.math_depth = inherited.math_depth
+                    + i32::from(inherited.math_style == MathStyle::Compact);
+            } else if let Some(inner) = v.strip_prefix("add(").and_then(|s| s.strip_suffix(')')) {
+                if let Ok(n) = inner.trim().parse::<i32>() {
+                    style.math_depth = inherited.math_depth + n;
+                }
+            } else if let Ok(n) = v.parse::<i32>() {
+                style.math_depth = n;
+            }
+        }
         "user-select" => {
             if let Some(v) = UserSelect::parse(val) {
                 style.user_select = v;
@@ -15452,6 +15489,12 @@ fn apply_css_wide_keyword(
         }
         "ruby-merge" => {
             style.ruby_merge = if inh { inherited.ruby_merge } else { init.ruby_merge };
+        }
+        "math-style" => {
+            style.math_style = if inh { inherited.math_style } else { init.math_style };
+        }
+        "math-depth" => {
+            style.math_depth = if inh { inherited.math_depth } else { init.math_depth };
         }
         "accent-color" => {
             style.accent_color = if inh { inherited.accent_color } else { init.accent_color };
@@ -20365,6 +20408,127 @@ mod tests {
         assert_eq!(st.ruby_position, RubyPosition::Over);
         assert_eq!(st.ruby_align, RubyAlign::SpaceAround);
         assert_eq!(st.ruby_merge, RubyMerge::Separate);
+    }
+
+    #[test]
+    fn math_properties_apply_declaration() {
+        // MathML Core: оба свойства доезжают до ComputedStyle через каскад.
+        let sheet = lumen_css_parser::parse("p { math-style: compact; math-depth: 2; }");
+        let doc = lumen_html_parser::parse("<p>Hi</p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let st = compute_style(
+            &doc,
+            pid,
+            &sheet,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        assert_eq!(st.math_style, MathStyle::Compact);
+        assert_eq!(st.math_depth, 2);
+    }
+
+    #[test]
+    fn math_properties_initial_values() {
+        // Без объявлений — initial по спеке: normal / 0.
+        let sheet = lumen_css_parser::parse("p { color: red; }");
+        let doc = lumen_html_parser::parse("<p>Hi</p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let st = compute_style(
+            &doc,
+            pid,
+            &sheet,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        assert_eq!(st.math_style, MathStyle::Normal);
+        assert_eq!(st.math_depth, 0);
+    }
+
+    #[test]
+    fn math_properties_inherited_by_child() {
+        // Оба свойства наследуются: <span> внутри <p> получает значения родителя.
+        let sheet = lumen_css_parser::parse("p { math-style: compact; math-depth: 3; }");
+        let doc = lumen_html_parser::parse("<p><span>x</span></p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let parent = compute_style(
+            &doc,
+            pid,
+            &sheet,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        let sid = doc.get(pid).children[0];
+        let child = compute_style(&doc, sid, &sheet, &parent, Size::new(800.0, 600.0), false);
+        assert_eq!(child.math_style, MathStyle::Compact);
+        assert_eq!(child.math_depth, 3);
+    }
+
+    #[test]
+    fn math_depth_add_and_auto_add_resolve_against_inherited() {
+        // add(n) = inherited + n; auto-add = inherited + 1 только при
+        // унаследованном math-style: compact (MathML Core §2.1.2).
+        let sheet = lumen_css_parser::parse(
+            "p { math-style: compact; math-depth: 1; } \
+             span { math-depth: add(2); } \
+             b { math-depth: auto-add; }",
+        );
+        let doc = lumen_html_parser::parse("<p><span>x</span><b>y</b></p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let parent = compute_style(
+            &doc,
+            pid,
+            &sheet,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        assert_eq!(parent.math_depth, 1);
+        let sid = doc.get(pid).children[0];
+        let span = compute_style(&doc, sid, &sheet, &parent, Size::new(800.0, 600.0), false);
+        assert_eq!(span.math_depth, 3);
+        let bid = doc.get(pid).children[1];
+        let bold = compute_style(&doc, bid, &sheet, &parent, Size::new(800.0, 600.0), false);
+        assert_eq!(bold.math_depth, 2);
+    }
+
+    #[test]
+    fn math_depth_auto_add_noop_when_style_normal() {
+        // При унаследованном math-style: normal auto-add не инкрементирует.
+        let sheet = lumen_css_parser::parse("span { math-depth: auto-add; }");
+        let doc = lumen_html_parser::parse("<p><span>x</span></p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let parent = compute_style(
+            &doc,
+            pid,
+            &sheet,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        let sid = doc.get(pid).children[0];
+        let span = compute_style(&doc, sid, &sheet, &parent, Size::new(800.0, 600.0), false);
+        assert_eq!(span.math_depth, 0);
+    }
+
+    #[test]
+    fn math_properties_invalid_values_ignored() {
+        // Невалидные значения игнорируются, остаются initial.
+        let sheet = lumen_css_parser::parse("p { math-style: bogus; math-depth: foo; }");
+        let doc = lumen_html_parser::parse("<p>Hi</p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let st = compute_style(
+            &doc,
+            pid,
+            &sheet,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        assert_eq!(st.math_style, MathStyle::Normal);
+        assert_eq!(st.math_depth, 0);
     }
 
     #[test]

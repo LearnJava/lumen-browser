@@ -61,7 +61,10 @@ pub use image_set::{
     parse_image_set, select_image_set_candidate, select_image_set_url,
     ImageSetOption, SupportedTypes,
 };
-pub use mathml::{MathmlBox, MathmlElementKind, lay_out_mathml, collect_mathml_structure};
+pub use mathml::{
+    MATH_SCRIPT_SCALE, MathStyle, MathmlBox, MathmlElementKind, collect_mathml_structure,
+    lay_out_mathml, math_depth_scale,
+};
 pub use ruby::{RubyAlign, RubyBox, RubyMerge, RubyPosition, lay_out_ruby};
 pub use animation::{
     AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator,
