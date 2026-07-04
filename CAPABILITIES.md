@@ -63,6 +63,7 @@ Snapshot: **Phase 2 «Interactive» (complete), app v0.5.0**. ~21 crates.
 
 ### lumen-layout (`crates/engine/layout`)
 - ✅ Block + inline flow (line wrap, margin collapsing, `margin: 0 auto`, `line-height-step` vertical rhythm).
+- ✅ `white-space` (normal/nowrap/pre/pre-wrap/pre-line/break-spaces) + CSS Text L4 longhands `white-space-collapse` (collapse/preserve/preserve-breaks/preserve-spaces/break-spaces) and `text-wrap-mode` — the legacy value is the L4 shorthand, layout reads an effective `WhiteSpace` recomputed via `WhiteSpace::combine`; `pre-line`/`preserve-breaks` keep source `\n` as forced breaks while collapsing surrounding spaces (`preserve-spaces` ≈ `preserve`, Phase 0).
 - ✅ Flexbox (full: direction, grow/shrink/basis, justify/align, gap, wrap). ⬜ column-direction wrapping.
 - ✅ CSS Grid (px/fr/auto/repeat/minmax, explicit+auto placement, dense, subgrid, `order`). ⬜ grid-template-areas, named lines. `grid-template-*: masonry` / `display: masonry` fall back to a regular grid / multicol (matches Edge, which ships no CSS masonry).
 - ✅ Multi-column (`column-count`/`column-width`/`column-gap`/`column-rule`/`column-span`, `column-fill: balance|auto` — balanced atomic-box distribution via binary-searched column height).

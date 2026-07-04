@@ -296,9 +296,14 @@ pub enum Visibility {
     Collapse,
 }
 
-/// CSS Text Module L3 §3.1 — `white-space`. Inherited.
+/// CSS Text Module L3 §3.1 / L4 §2.1 — `white-space`. Inherited.
 ///
-/// Управляет collapse-ом whitespace и переносами строк.
+/// Управляет collapse-ом whitespace и переносами строк. В CSS Text L4 это
+/// shorthand над `white-space-collapse` + `text-wrap-mode`; здесь хранится
+/// «эффективное» комбинированное значение, которым пользуется layout, а
+/// longhand-компоненты лежат в [`ComputedStyle::white_space_collapse`] и
+/// `text_wrap_mode` и пересчитывают это поле через
+/// [`WhiteSpace::combine`] при каждом применении.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum WhiteSpace {
     #[default]
@@ -310,17 +315,106 @@ pub enum WhiteSpace {
     PreWrap,
     /// Collapses spaces but preserves newlines; wraps at available width.
     PreLine,
+    /// CSS Text L3 §3.1 `break-spaces` — like `pre-wrap`, but any sequence of
+    /// preserved spaces takes up space and provides wrap opportunities.
+    /// Phase 0: layout behaves as `pre-wrap` (trailing-space hang nuance
+    /// deferred until the line-breaker distinguishes hanging spaces).
+    BreakSpaces,
 }
 
 impl WhiteSpace {
     /// True when whitespace (tabs, newlines) is preserved rather than collapsed.
     pub fn preserves_whitespace(self) -> bool {
-        matches!(self, WhiteSpace::Pre | WhiteSpace::PreWrap)
+        matches!(self, WhiteSpace::Pre | WhiteSpace::PreWrap | WhiteSpace::BreakSpaces)
     }
 
     /// True when line wrapping is disabled (lines only break at forced breaks).
     pub fn is_nowrap(self) -> bool {
         matches!(self, WhiteSpace::Pre | WhiteSpace::Nowrap)
+    }
+
+    /// True when segment breaks (`\n`) in the source are preserved as forced
+    /// line breaks (CSS Text L4 §3.1: `preserve` / `preserve-breaks` /
+    /// `break-spaces` collapse modes).
+    pub fn preserves_newlines(self) -> bool {
+        self.preserves_whitespace() || self == WhiteSpace::PreLine
+    }
+
+    /// CSS Text L4 §2.1 — recombine the two longhand components into the
+    /// effective legacy value used by layout.
+    ///
+    /// `preserve-breaks + nowrap` and the `preserve-spaces` mode have no
+    /// legacy equivalent; they map to the closest legacy value (`pre-line`
+    /// and `pre-wrap`/`pre` respectively) — documented approximation.
+    pub fn combine(collapse: WhiteSpaceCollapse, wrap: TextWrapMode) -> Self {
+        let wraps = wrap == TextWrapMode::Wrap;
+        match collapse {
+            WhiteSpaceCollapse::Collapse => {
+                if wraps { WhiteSpace::Normal } else { WhiteSpace::Nowrap }
+            }
+            WhiteSpaceCollapse::Preserve => {
+                if wraps { WhiteSpace::PreWrap } else { WhiteSpace::Pre }
+            }
+            WhiteSpaceCollapse::PreserveBreaks => WhiteSpace::PreLine,
+            WhiteSpaceCollapse::PreserveSpaces => {
+                if wraps { WhiteSpace::PreWrap } else { WhiteSpace::Pre }
+            }
+            WhiteSpaceCollapse::BreakSpaces => {
+                if wraps { WhiteSpace::BreakSpaces } else { WhiteSpace::Pre }
+            }
+        }
+    }
+
+    /// Decompose the legacy `white-space` value into its L4 collapse component
+    /// (CSS Text L4 §2.1 shorthand expansion).
+    pub fn collapse_component(self) -> WhiteSpaceCollapse {
+        match self {
+            WhiteSpace::Normal | WhiteSpace::Nowrap => WhiteSpaceCollapse::Collapse,
+            WhiteSpace::Pre | WhiteSpace::PreWrap => WhiteSpaceCollapse::Preserve,
+            WhiteSpace::PreLine => WhiteSpaceCollapse::PreserveBreaks,
+            WhiteSpace::BreakSpaces => WhiteSpaceCollapse::BreakSpaces,
+        }
+    }
+
+    /// Decompose the legacy `white-space` value into its L4 wrap component
+    /// (CSS Text L4 §2.1 shorthand expansion).
+    pub fn wrap_component(self) -> TextWrapMode {
+        if self.is_nowrap() { TextWrapMode::Nowrap } else { TextWrapMode::Wrap }
+    }
+}
+
+/// CSS Text Module L4 §3.1 — `white-space-collapse`. Inherited.
+///
+/// Longhand-компонента shorthand-а `white-space`, управляющая collapse-ом
+/// пробелов и segment break-ов. Применение пересчитывает эффективное
+/// [`ComputedStyle::white_space`] через [`WhiteSpace::combine`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WhiteSpaceCollapse {
+    /// `collapse` (initial) — последовательности whitespace схлопываются.
+    #[default]
+    Collapse,
+    /// `preserve` — пробелы и segment break-и сохраняются.
+    Preserve,
+    /// `preserve-breaks` — segment break-и сохраняются, пробелы схлопываются.
+    PreserveBreaks,
+    /// `preserve-spaces` — пробелы сохраняются, segment break-и и табы
+    /// превращаются в пробелы. Phase 0: аппроксимируется как `preserve`.
+    PreserveSpaces,
+    /// `break-spaces` — как `preserve`, но preserved-пробелы занимают место
+    /// и дают wrap opportunities.
+    BreakSpaces,
+}
+
+impl WhiteSpaceCollapse {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "collapse" => Some(Self::Collapse),
+            "preserve" => Some(Self::Preserve),
+            "preserve-breaks" => Some(Self::PreserveBreaks),
+            "preserve-spaces" => Some(Self::PreserveSpaces),
+            "break-spaces" => Some(Self::BreakSpaces),
+            _ => None,
+        }
     }
 }
 
@@ -2371,6 +2465,10 @@ pub struct ComputedStyle {
     pub font_optical_sizing: FontOpticalSizing,
     pub text_transform: TextTransform,
     pub white_space: WhiteSpace,
+    /// CSS Text L4 §3.1 — `white-space-collapse`. Inherited. Longhand-компонента
+    /// `white-space`; хранится для каскада/наследования, layout читает
+    /// эффективное `white_space` (пересчитывается через [`WhiteSpace::combine`]).
+    pub white_space_collapse: WhiteSpaceCollapse,
     /// CSS Text L3 §7.1: отступ перед первой строкой inline-content.
     /// Inherited. Typed `Length`; `%` = % cb_width, резолвится при layout.
     pub text_indent: Length,
@@ -5318,6 +5416,7 @@ impl ComputedStyle {
             font_optical_sizing: FontOpticalSizing::Auto,
             text_transform: TextTransform::None,
             white_space: WhiteSpace::Normal,
+            white_space_collapse: WhiteSpaceCollapse::Collapse,
             text_indent: Length::Px(0.0),
             letter_spacing: 0.0,
             word_spacing: 0.0,
@@ -5632,6 +5731,9 @@ pub fn compute_style(
         font_optical_sizing: inherited.font_optical_sizing,
         text_transform: inherited.text_transform,
         white_space: ua_white_space(doc, node).unwrap_or(inherited.white_space),
+        white_space_collapse: ua_white_space(doc, node)
+            .map(WhiteSpace::collapse_component)
+            .unwrap_or(inherited.white_space_collapse),
         text_indent: inherited.text_indent.clone(),
         letter_spacing: inherited.letter_spacing,
         word_spacing: inherited.word_spacing,
@@ -6927,6 +7029,7 @@ pub fn compute_pseudo_element_style(
     style.font_palette_resolved = parent.font_palette_resolved.clone();
     style.text_transform = parent.text_transform;
     style.white_space = parent.white_space;
+    style.white_space_collapse = parent.white_space_collapse;
     style.text_indent = parent.text_indent.clone();
     style.letter_spacing = parent.letter_spacing;
     style.word_spacing = parent.word_spacing;
@@ -11838,8 +11941,11 @@ fn apply_declaration(
         }
         "text-wrap-mode" => {
             // CSS Text Module Level 4 §6.4.1: wrap | nowrap. Inherited.
+            // Пересчитываем эффективное white_space (L4 §2.1: white-space —
+            // shorthand над white-space-collapse + text-wrap-mode).
             if let Some(v) = TextWrapMode::parse(val) {
                 style.text_wrap_mode = v;
+                style.white_space = WhiteSpace::combine(style.white_space_collapse, v);
             }
         }
         "text-wrap-style" => {
@@ -12271,14 +12377,31 @@ fn apply_declaration(
             };
         }
         "white-space" => {
-            style.white_space = match val.trim() {
-                "normal" => WhiteSpace::Normal,
-                "nowrap" => WhiteSpace::Nowrap,
-                "pre" => WhiteSpace::Pre,
-                "pre-wrap" => WhiteSpace::PreWrap,
-                "pre-line" => WhiteSpace::PreLine,
-                _ => style.white_space,
+            // CSS Text L4 §2.1: shorthand над white-space-collapse и
+            // text-wrap-mode — раскладываем на обе longhand-компоненты,
+            // чтобы каскад последующих longhand-ов пересчитывал корректно.
+            let parsed = match val.trim() {
+                "normal" => Some(WhiteSpace::Normal),
+                "nowrap" => Some(WhiteSpace::Nowrap),
+                "pre" => Some(WhiteSpace::Pre),
+                "pre-wrap" => Some(WhiteSpace::PreWrap),
+                "pre-line" => Some(WhiteSpace::PreLine),
+                "break-spaces" => Some(WhiteSpace::BreakSpaces),
+                _ => None,
             };
+            if let Some(ws) = parsed {
+                style.white_space = ws;
+                style.white_space_collapse = ws.collapse_component();
+                style.text_wrap_mode = ws.wrap_component();
+            }
+        }
+        "white-space-collapse" => {
+            // CSS Text L4 §3.1: longhand; эффективное white_space
+            // пересчитывается из пары (collapse, text-wrap-mode).
+            if let Some(v) = WhiteSpaceCollapse::parse(val) {
+                style.white_space_collapse = v;
+                style.white_space = WhiteSpace::combine(v, style.text_wrap_mode);
+            }
         }
         "visibility" => {
             style.visibility = match val.trim() {
@@ -15031,31 +15154,36 @@ fn apply_text_wrap_shorthand(style: &mut ComputedStyle, val: &str) {
     style.text_wrap_mode = TextWrapMode::Wrap;
     style.text_wrap_style = TextWrapStyle::Auto;
 
-    let mut mode: Option<TextWrapMode> = None;
-    let mut wrap_style: Option<TextWrapStyle> = None;
-    for tok in val.split_whitespace() {
-        if let Some(m) = TextWrapMode::parse(tok) {
-            if mode.is_some() {
-                return;
+    'parse: {
+        let mut mode: Option<TextWrapMode> = None;
+        let mut wrap_style: Option<TextWrapStyle> = None;
+        for tok in val.split_whitespace() {
+            if let Some(m) = TextWrapMode::parse(tok) {
+                if mode.is_some() {
+                    break 'parse;
+                }
+                mode = Some(m);
+                continue;
             }
-            mode = Some(m);
-            continue;
-        }
-        if let Some(s) = TextWrapStyle::parse(tok) {
-            if wrap_style.is_some() {
-                return;
+            if let Some(s) = TextWrapStyle::parse(tok) {
+                if wrap_style.is_some() {
+                    break 'parse;
+                }
+                wrap_style = Some(s);
+                continue;
             }
-            wrap_style = Some(s);
-            continue;
+            break 'parse;
         }
-        return;
+        if let Some(m) = mode {
+            style.text_wrap_mode = m;
+        }
+        if let Some(s) = wrap_style {
+            style.text_wrap_style = s;
+        }
     }
-    if let Some(m) = mode {
-        style.text_wrap_mode = m;
-    }
-    if let Some(s) = wrap_style {
-        style.text_wrap_style = s;
-    }
+    // CSS Text L4 §2.1: text-wrap-mode — компонента white-space; пересчитать
+    // эффективное значение (shorthand мог сбросить mode к initial).
+    style.white_space = WhiteSpace::combine(style.white_space_collapse, style.text_wrap_mode);
 }
 
 /// CSS Flexbox L1 §5.3 — `flex-flow` shorthand.
@@ -15383,7 +15511,19 @@ fn apply_css_wide_keyword(
             style.text_transform = if inh { inherited.text_transform } else { init.text_transform };
         }
         "white-space" => {
+            // L4 §2.1: shorthand — CSS-wide keyword применяется к обеим
+            // longhand-компонентам.
             style.white_space = if inh { inherited.white_space } else { init.white_space };
+            style.white_space_collapse =
+                if inh { inherited.white_space_collapse } else { init.white_space_collapse };
+            style.text_wrap_mode =
+                if inh { inherited.text_wrap_mode } else { init.text_wrap_mode };
+        }
+        "white-space-collapse" => {
+            style.white_space_collapse =
+                if inh { inherited.white_space_collapse } else { init.white_space_collapse };
+            style.white_space =
+                WhiteSpace::combine(style.white_space_collapse, style.text_wrap_mode);
         }
         "text-indent" => {
             style.text_indent = if inh { inherited.text_indent.clone() } else { init.text_indent.clone() };
@@ -16173,6 +16313,8 @@ fn apply_css_wide_keyword(
             } else {
                 init.text_wrap_mode
             };
+            style.white_space =
+                WhiteSpace::combine(style.white_space_collapse, style.text_wrap_mode);
         }
         "text-wrap-style" => {
             style.text_wrap_style = if inh {
@@ -16192,6 +16334,8 @@ fn apply_css_wide_keyword(
             } else {
                 init.text_wrap_style
             };
+            style.white_space =
+                WhiteSpace::combine(style.white_space_collapse, style.text_wrap_mode);
         }
         // CSS Fragmentation L3 §3.3 — orphans / widows inherited.
         "orphans" => {
