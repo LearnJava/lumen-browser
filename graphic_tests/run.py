@@ -250,11 +250,11 @@ KNOWN_DEBTORS: dict[str, tuple[str, float]] = {
     # '130' removed: BUG-244 FIXED (11.32%→0.10%) — nested <g rotate scale> now renders as a spiral via SVG CTM (PushTransform), geometry = Edge
     '132': ('BUG-246', 10.97),  # <use> rotated ring: rotation now applied (BUG-244 FIXED, CTM) but instances still not scaled by <symbol> viewBox→width/height → dominant residual is BUG-246. Was ('BUG-244', 11.07)→10.97; fix BUG-246 → ≤0.5%
     '133': ('BUG-247', 1.95),   # BUG-245 FIXED 2026-06-30 (3.91%→1.95%): fill-rule:evenodd now honoured (scanline even-odd tessellation) — pentagram/ring centres hollow as in Edge. Residual = diagonal/star-edge AA under gdigrab (BUG-247 class), re-pointed to that OPEN bug
-    '134': ('BUG-247', 3.69),   # stroke-dasharray placement diverges from Edge under gdigrab (high-freq pattern × subpixel shift); solid strokes match. Inherent AA, not a logic defect
+    '134': ('BUG-247', 3.35),   # stroke-dasharray placement diverges from Edge under gdigrab (high-freq pattern × subpixel shift); solid strokes match. Inherent AA, not a logic defect. Ратчет 3.69→3.35 (P3 2026-07-04): нативный femtovg-штрих `DrawSvgStroke` (без внутренних triangle-soup AA-швов на пунктире) — замер подтверждён двумя чистыми gdigrab-прогонами
     '135': ('BUG-247', 0.54),   # fanned cards rotate(a cx cy): BUG-244 FIXED (15.62%→0.54%) — rotation centre now correct, cards fan out as in Edge. Residual 0.54% = rotated-rect edge AA (BUG-247 class), just over 0.5%
     '136': ('BUG-247', 1.98),   # <circle>/<ellipse> curve-edge AA vs Edge (geometry/colour correct; only ~1px edge AA differs). Inherent rasterizer-vs-Edge AA
     '137': ('BUG-247', 4.74),   # pinwheels/skew: BUG-244 FIXED (20.79%→4.74%) — rotate()/skewX() now applied via CTM, blades fan correctly. Residual 4.74% = edge AA of many thin high-frequency skewed blades (BUG-247 class, amplified by frequency like TEST-134 dash)
-    '138': ('BUG-247', 2.18),   # gauge: BUG-244 FIXED (3.29%→2.18%) — rotated marker now drawn via CTM. Residual = pie/area diagonal+curve edge AA (BUG-247)
+    '138': ('BUG-247', 1.79),   # gauge: BUG-244 FIXED (3.29%→2.18%) — rotated marker now drawn via CTM. Residual = pie/area diagonal+curve edge AA (BUG-247). Ратчет 2.18→1.79 (P3 2026-07-04): нативный femtovg-штрих `DrawSvgStroke` сгладил polyline-обводки area+line-chart
 
     # '02','04','56' убраны (прогон 2026-06-29, REMOVE): BUG-250 FIXED (font-metrics descent revert) — все ≤0.5% на свежей сборке (02 0.00%, 04 0.00%, 56 0.47%)
     # '21' убран (прогон 2026-06-29, REMOVE): BUG-248 FIXED — border-style dashed/dotted/double 0.49% на свежей сборке (≤0.5%; прежний 3.13% был артефактом устаревшего gdigrab-снимка, класс BUG-240)
