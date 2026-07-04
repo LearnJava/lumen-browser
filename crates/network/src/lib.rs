@@ -1300,7 +1300,7 @@ fn fetch_single(
         let h2_key = pool::PoolKey { host: connect_host.to_owned(), port: connect_port, is_tls: connect_is_tls };
         if let Some(h2_conn) = h2p.acquire(&h2_key) {
             let scheme = if is_tls { "https" } else { "http" };
-            match h2_do_request_conn(h2_conn, scheme, request_host_header, request_path, extra_headers) {
+            match h2_do_request_conn(h2_conn, scheme, request_host_header, request_path, extra_headers, http_profile, accept_encoding) {
                 Ok((resp, h2_conn)) => {
                     h2p.release(h2_key, h2_conn);
                     return Ok(resp);
@@ -1423,7 +1423,7 @@ fn fetch_single(
     // HTTP/2: establish fresh H2Conn, use it, then store back in h2_pool.
     if conn.is_h2 {
         let scheme = if is_tls { "https" } else { "http" };
-        return h2_do_request(conn, scheme, request_host_header, request_path, extra_headers, h2_pool, host, port, is_tls, http_profile);
+        return h2_do_request(conn, scheme, request_host_header, request_path, extra_headers, h2_pool, host, port, is_tls, http_profile, accept_encoding);
     }
 
     // Для HTTP-прокси: отправляем абсолютный URL вместо относительного пути.
@@ -1467,13 +1467,17 @@ fn h2_do_request(
     port: u16,
     is_tls: bool,
     http_profile: HttpProfile,
+    accept_encoding: Option<&str>,
 ) -> Result<Response> {
     use h2::conn::H2Conn;
     let stream = conn.into_stream();
     let mut h2 = H2Conn::connect_with_profile(stream, http_profile)?;
 
-    let parsed_extra = parse_extra_headers_str(extra_headers);
-    let extra_refs: Vec<(&[u8], &[u8])> = parsed_extra
+    // RP-7: the H2 path must carry the same browser-fingerprint headers
+    // (User-Agent/Accept/Sec-Fetch/…) the H1 path builds in `write_request`;
+    // without them Cloudflare-class anti-bot layers answer 403.
+    let all_headers = build_h2_headers(http_profile, accept_encoding, extra_headers);
+    let extra_refs: Vec<(&[u8], &[u8])> = all_headers
         .iter()
         .map(|(k, v)| (k.as_slice(), v.as_slice()))
         .collect();
@@ -1496,15 +1500,45 @@ fn h2_do_request_conn(
     authority: &str,
     path: &str,
     extra_headers: &str,
+    http_profile: HttpProfile,
+    accept_encoding: Option<&str>,
 ) -> Result<(Response, h2::conn::H2Conn<RawStream>)> {
-    let parsed_extra = parse_extra_headers_str(extra_headers);
-    let extra_refs: Vec<(&[u8], &[u8])> = parsed_extra
+    // Same fingerprint set as a fresh H2 connection (RP-7) — a pooled
+    // connection must not send a weaker header block than a new one.
+    let all_headers = build_h2_headers(http_profile, accept_encoding, extra_headers);
+    let extra_refs: Vec<(&[u8], &[u8])> = all_headers
         .iter()
         .map(|(k, v)| (k.as_slice(), v.as_slice()))
         .collect();
 
     let (status, headers, body) = h2.fetch("GET", scheme, authority, path, &extra_refs)?;
     Ok((Response { status, headers, body }, h2))
+}
+
+/// Build the full HTTP/2 request header list — browser-fingerprint headers
+/// merged with caller-supplied extras (cookies, cache validators, CORS) — as
+/// owned lowercase byte pairs ready for HPACK encoding.
+///
+/// The fingerprint headers ([`http::h2_fingerprint_headers`]) come first; a
+/// caller-supplied header with the same lowercase name suppresses the
+/// fingerprint default so author/CORS/cache headers always win (RP-7).
+fn build_h2_headers(
+    http_profile: HttpProfile,
+    accept_encoding: Option<&str>,
+    extra_headers: &str,
+) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let parsed_extra = parse_extra_headers_str(extra_headers);
+    let extra_names: std::collections::HashSet<&[u8]> =
+        parsed_extra.iter().map(|(k, _)| k.as_slice()).collect();
+    let mut out: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    for (name, value) in http::h2_fingerprint_headers(http_profile, accept_encoding.unwrap_or("")) {
+        let name_bytes = name.into_bytes();
+        if !extra_names.contains(name_bytes.as_slice()) {
+            out.push((name_bytes, value.into_bytes()));
+        }
+    }
+    out.extend(parsed_extra);
+    out
 }
 
 /// Разобрать строку вида `"Key: Value\r\nKey2: Value2\r\n"` в вектор пар байт.

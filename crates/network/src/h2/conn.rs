@@ -121,6 +121,10 @@ pub struct H2Conn<S: Read + Write> {
     /// Empty when using single-stream [`fetch`]; populated when using
     /// [`send_request`]/[`read_response_for_stream`].
     pending_streams: HashMap<u32, StreamState>,
+    /// Impersonated browser profile — determines the HTTP/2 pseudo-header order
+    /// (part of the HTTP/2 fingerprint anti-bot layers key on; see
+    /// [`H2Conn::pseudo_headers`]).
+    profile: HttpProfile,
 }
 
 impl<S: Read + Write> H2Conn<S> {
@@ -177,6 +181,7 @@ impl<S: Read + Write> H2Conn<S> {
             next_stream_id: 1,
             conn_recv_window: INITIAL_WINDOW,
             pending_streams: HashMap::new(),
+            profile,
         };
 
         conn.await_server_settings()?;
@@ -262,6 +267,39 @@ impl<S: Read + Write> H2Conn<S> {
         id
     }
 
+    /// Build the ordered HTTP/2 pseudo-header list for the impersonated profile.
+    ///
+    /// The pseudo-header order is part of the HTTP/2 fingerprint (the
+    /// "Akamai fingerprint") that anti-bot layers key on (RP-7), so it must
+    /// match the browser we impersonate:
+    /// - Chrome / Edge / Strict / Lumen: `:method :authority :scheme :path`
+    /// - Firefox / Tor Browser: `:method :path :authority :scheme`
+    /// - Safari: `:method :scheme :path :authority`
+    fn pseudo_headers<'a>(
+        &self,
+        method: &'a str,
+        scheme: &'a str,
+        authority: &'a str,
+        path: &'a str,
+    ) -> Vec<(&'a [u8], &'a [u8])> {
+        let (nm, na, ns, np): (&'a [u8], &'a [u8], &'a [u8], &'a [u8]) =
+            (b":method", b":authority", b":scheme", b":path");
+        let (m, s, a, p) = (
+            method.as_bytes(),
+            scheme.as_bytes(),
+            authority.as_bytes(),
+            path.as_bytes(),
+        );
+        match self.profile {
+            HttpProfile::Firefox | HttpProfile::TorBrowser => {
+                vec![(nm, m), (np, p), (na, a), (ns, s)]
+            }
+            HttpProfile::Safari => vec![(nm, m), (ns, s), (np, p), (na, a)],
+            // Chrome / Edge / Strict / Lumen — Chrome pseudo-header order.
+            _ => vec![(nm, m), (na, a), (ns, s), (np, p)],
+        }
+    }
+
     // ── Public fetch ──────────────────────────────────────────────────────
 
     /// Perform a single HTTP/2 request and collect the response.
@@ -289,13 +327,8 @@ impl<S: Read + Write> H2Conn<S> {
     ) -> Result<H2Response, Error> {
         let sid = self.allocate_stream_id();
 
-        // Build HPACK request header block.
-        let mut req: Vec<(&[u8], &[u8])> = vec![
-            (b":method", method.as_bytes()),
-            (b":scheme", scheme.as_bytes()),
-            (b":path", path.as_bytes()),
-            (b":authority", authority.as_bytes()),
-        ];
+        // Build HPACK request header block (profile-ordered pseudo-headers).
+        let mut req = self.pseudo_headers(method, scheme, authority, path);
         req.extend_from_slice(extra_headers);
         let block = self.encoder.encode(&req);
 
@@ -465,13 +498,8 @@ impl<S: Read + Write> H2Conn<S> {
         // Initialize StreamState for this in-flight request.
         self.pending_streams.insert(sid, StreamState::new());
 
-        // Build HPACK request header block.
-        let mut req: Vec<(&[u8], &[u8])> = vec![
-            (b":method", method.as_bytes()),
-            (b":scheme", scheme.as_bytes()),
-            (b":path", path.as_bytes()),
-            (b":authority", authority.as_bytes()),
-        ];
+        // Build HPACK request header block (profile-ordered pseudo-headers).
+        let mut req = self.pseudo_headers(method, scheme, authority, path);
         req.extend_from_slice(extra_headers);
         let block = self.encoder.encode(&req);
 

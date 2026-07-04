@@ -75,8 +75,8 @@
 {
  "generated": "2026-07-04",
  "counts": {
-  "open": 25,
-  "fixed": 218,
+  "open": 24,
+  "fixed": 219,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -930,7 +930,7 @@
     {
      "id": "RP",
      "title": "RP: Рендер-паритет реального веба",
-     "status": "active",
+     "status": "done",
      "note": "Открывать произвольные сайты так же, как Edge. RP-1…RP-4 done; RP-5…RP-9 заведены по аудиту 14 сайтов vs Edge 2026-07-02 (см. память realworld-site-audit-2026-07): внешние SVG, синтетический bold, анти-бот 403, CPU-растеризатор, print-стили",
      "tasks": [
       {
@@ -978,9 +978,9 @@
       {
        "id": "RP-7",
        "title": "RP-7: Устойчивость к анти-бот 403",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "Аудит 2026-07-02: 4/14 сайтов не открылись на уровне HTTP — 403 (stackoverflow/crates.io/ria.ru), 500 (docs.rs). TLS уже под Chrome-130 JA3 + Chrome-заголовки, значит режет более умная защита (вероятно `Accept: */*` вместо браузерного, дрейф JA3/H2-fingerprint, либо Cloudflare JS-challenge). Диагностика → дешёвые фиксы → решение по challenge. Бриф docs/tasks/rp7-antibot-403.md"
+       "note": "2026-07-04: root cause найден по коду — **HTTP/2-путь не слал fingerprint-заголовки**. `build_request_headers` (UA/Accept/Accept-Language/Accept-Encoding/Sec-Fetch/DNT) вызывался только в HTTP/1.1-ветке (`write_request`); H2-запрос (`h2.fetch`) уходил с одними псевдо-заголовками + cookie/cache/CORS → к Cloudflare-сайту приходил запрос без User-Agent = очевидный бот → 403. Фикс: `http::h2_fingerprint_headers` (тот же per-profile набор, что и H1, минус Host/Connection, lowercase) + `build_h2_headers` вклеивает в оба H2-пути (свежий и pooled) с dedup по имени и advertise Accept-Encoding (заодно включило сжатие на H2). Гипотеза 1: Chrome/Edge Accept навигации `*/*`→полный `text/html,...` (`CHROME_NAVIGATE_ACCEPT`). Гипотеза 3: порядок псевдо-заголовков H2 per-family (Chrome `:method :authority :scheme :path`). Cloudflare JS-challenge (`cf_clearance`) намеренно не трогали — отдельная связка cookie-jar+JS. Бриф docs/tasks/rp7-antibot-403.md"
       },
       {
        "id": "RP-8",
@@ -995,7 +995,7 @@
       {
        "id": "RP-9",
        "title": "RP-9: Фильтр print-таблиц стилей",
-       "status": "planned",
+       "status": "done",
        "size": "S",
        "note": "Аудит 2026-07-02: шелл грузит `<link rel=stylesheet media=\"print\">` в экранный каскад → print-стили протекают (URL после ссылок на w3.org). Гейт по media у `<link>`. См. BUG-268",
        "bugs": [
@@ -2730,10 +2730,10 @@
    "debtor": false
   },
   "BUG-268": {
-   "status": "open",
-   "title": "Экранный рендер применяет `<link rel=stylesheet media=\"print\">`: на `www.w3.org` после каждой ссылки печатается её URL в угловых скобках (print-правило `a::afte…",
-   "component": "shell (загрузчик стилей) + css-parser (media)",
-   "date": null,
+   "status": "fixed",
+   "title": "Экранный рендер применял `<link rel=stylesheet media=\"print\">`: на `www.w3.org` после каждой ссылки печатался её URL в угловых скобках (print-правило `a::after{…",
+   "component": "shell (загрузчик стилей) + html-parser (preload)",
+   "date": "2026-07-04",
    "debtor": false
   },
   "BUG-269": {

@@ -7,7 +7,27 @@
 
 ## Статус
 
-**OPEN / расследование.** Аудит 2026-07-02: из 14 сайтов **4 не открылись на уровне HTTP** — `stackoverflow.com` (403), `crates.io` (403), `ria.ru` (403), `docs.rs` (500). Edge открывает все. Страницы физически нет — это не рендер-баг.
+**RESOLVED 2026-07-04 (P1).** Root cause найден по коду, а не по гипотезам аудита: **HTTP/2-путь вообще не отправлял browser-fingerprint заголовки.** `build_request_headers` (User-Agent / Accept / Accept-Language / Accept-Encoding / Sec-Fetch-* / DNT) вызывается только в HTTP/1.1-ветке (`write_request` → `do_request`). HTTP/2-запрос (`h2_do_request` → `H2Conn::fetch`) отправлял **только псевдо-заголовки** (`:method/:scheme/:path/:authority`) + caller-extras (cookie, cache-валидаторы, CORS). То есть к любому HTTP/2-сайту (а Cloudflare/анти-бот всегда за h2) уходил запрос **без User-Agent, без Accept, без Sec-Fetch** — однозначный бот → 403. TLS/JA3 при этом были корректны, что и делало 403 «удивительным».
+
+### Что сделано
+
+- **`http::h2_fingerprint_headers(profile, accept_encoding)`** (`headers.rs`) — строит fingerprint-набор для H2 как lowercase `(name,value)`, переиспользуя тот же per-profile вывод `build_request_headers` (H1 и H2 не расходятся — расхождение само было бы фингерпринтом), затем выбрасывает запрещённые в H2 connection-заголовки (`host`/`connection`/`keep-alive`/… — RFC 9113 §8.2.2) и лоуэркейсит имена (§8.2.1).
+- **`build_h2_headers`** (`lib.rs`) — вклеивает fingerprint-набор в оба H2-пути (свежее соединение `h2_do_request` и pooled `h2_do_request_conn`) с dedup по имени (caller-header побеждает fingerprint-дефолт). `accept_encoding` проброшен в оба пути → H2 теперь advertise `gzip, deflate, br` и получает сжатые ответы (общий `apply_content_encoding` их декодирует — раньше H2 качал identity).
+- **Гипотеза 1** (`headers.rs` + `CHROME_NAVIGATE_ACCEPT`): Chrome/Edge/Strict Accept навигации `*/*` → полный документный `text/html,application/xhtml+xml,…,application/signed-exchange;v=b3;q=0.7`.
+- **Гипотеза 3** (`h2/conn.rs` `H2Conn::pseudo_headers`): порядок псевдо-заголовков H2 теперь per-family (Chrome `:method :authority :scheme :path`, Firefox/Tor `:method :path :authority :scheme`, Safari `:method :scheme :path :authority`) — это «Akamai HTTP/2 fingerprint».
+
+### Отложено (не смешивать)
+
+- **Cloudflare JS-challenge** (`cf_clearance` cookie): требует исполнить JS-challenge (cookie-jar + рабочий JS-движок по таймингу) — большая отдельная связка, гипотеза 4. Не трогали.
+- **Client Hints** (`sec-ch-ua*`) и `upgrade-insecure-requests`: сейчас их не шлёт ни H1, ни H2 (паритет сохранён) — отдельное улучшение.
+- **Per-destination subresource `Accept`** (CSS `text/css`, images `image/*`): `build_request_headers` хардкодит `Sec-Fetch-Dest: document` для всех запросов — отдельный рефактор request-destination awareness.
+- **`docs.rs` 500**: отдельно не диагностирован; вероятно закрывается тем же фиксом (полноценный H2-браузерный запрос), требует проверки живым прогоном.
+
+---
+
+### Исходная постановка (аудит 2026-07-02)
+
+Из 14 сайтов **4 не открылись на уровне HTTP** — `stackoverflow.com` (403), `crates.io` (403), `ria.ru` (403), `docs.rs` (500). Edge открывает все. Страницы физически нет — это не рендер-баг.
 
 ## Что уже сделано (и почему 403 удивителен)
 
