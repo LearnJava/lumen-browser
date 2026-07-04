@@ -59,10 +59,21 @@
 //!   ack-eliciting probes and bump the backoff), including the anti-deadlock PTO
 //!   and the Application-Data-until-handshake-confirmed guard. Pure state machine
 //!   driven by a caller-supplied clock; no timer IO, no probe assembly.
-//! - Slice 10+ (planned) — the rest of the QUIC transport (UDP datagrams,
+//! - Slice 10 — the QUIC stream data model ([`stream`], RFC 9000 §2, §3, §4):
+//!   the per-stream receive reassembly buffer, per-stream flow-control
+//!   accounting on both directions (RFC 9000 §4.1), the final-size invariants
+//!   (RFC 9000 §4.5), and the send/receive stream state machines (RFC 9000 §3).
+//!   [`stream::RecvStream`] merges out-of-order / overlapping STREAM frames into
+//!   an ordered byte stream and re-advertises the receive window; [`stream::
+//!   SendStream`] buffers application data and emits STREAM frames bounded by the
+//!   peer's flow-control limit, advancing to `DataRecvd` on acknowledgement. Pure
+//!   state machine driven by decoded frames; no connection-level flow control, no
+//!   retransmission, no IO.
+//! - Slice 11+ (planned) — the rest of the QUIC transport (UDP datagrams,
 //!   header protection, TLS 1.3 handshake, packet protection, actually arming the
-//!   PTO timer and assembling probe datagrams, unidirectional/request stream
-//!   framing, and `h3_do_request` dispatch alongside the existing H1/H2 paths.
+//!   PTO timer and assembling probe datagrams, connection-level flow control and
+//!   stream-count limits, unidirectional/request stream framing, and
+//!   `h3_do_request` dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -79,4 +90,5 @@ pub mod qpack;
 pub mod qpack_stream;
 pub mod quic_frame;
 pub mod recovery;
+pub mod stream;
 pub mod varint;
