@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use crate::color_mix::{MixColorSpace, mix_colors};
 use crate::font_palette::{resolve_font_palette_overrides, ResolvedFontPalette};
 use crate::rule_index::RuleIndex;
+use crate::ruby::{RubyAlign, RubyMerge, RubyPosition};
 use crate::scroll_timeline::ScrollAxis;
 
 use lumen_core::geom::Size;
@@ -2979,6 +2980,13 @@ pub struct ComputedStyle {
     /// CSS Writing Modes L3 §6.5 — `text-orientation`. Inherited. Initial: `Mixed`.
     /// Phase 0: parse + store; glyph rotation — deferred.
     pub text_orientation: TextOrientation,
+    /// CSS Ruby L1 §4 — `ruby-position`. Inherited. Initial: `Over`.
+    /// Drives `lay_out_ruby`; `<ruby>` box-tree integration — deferred.
+    pub ruby_position: RubyPosition,
+    /// CSS Ruby L1 §4 — `ruby-align`. Inherited. Initial: `SpaceAround`.
+    pub ruby_align: RubyAlign,
+    /// CSS Ruby L1 §4 — `ruby-merge`. Inherited. Initial: `Separate`.
+    pub ruby_merge: RubyMerge,
     /// CSS Shapes L1 §3 — `shape-outside`. NOT inherited. Initial: `None`.
     /// Phase 0: parse + store; float-wrap shape application — deferred.
     pub shape_outside: ShapeOutside,
@@ -5506,6 +5514,9 @@ impl ComputedStyle {
             font_size_adjust: FontSizeAdjust::None,
             writing_mode: WritingMode::HorizontalTb,
             text_orientation: TextOrientation::Mixed,
+            ruby_position: RubyPosition::Over,
+            ruby_align: RubyAlign::SpaceAround,
+            ruby_merge: RubyMerge::Separate,
             shape_outside: ShapeOutside::None,
             shape_margin: Length::Px(0.0),
             shape_image_threshold: 0.0,
@@ -5856,6 +5867,10 @@ pub fn compute_style(
         // CSS Writing Modes L3 — оба inherited.
         writing_mode: inherited.writing_mode,
         text_orientation: inherited.text_orientation,
+        // CSS Ruby L1 §4 — все три inherited.
+        ruby_position: inherited.ruby_position,
+        ruby_align: inherited.ruby_align,
+        ruby_merge: inherited.ruby_merge,
         // CSS Shapes L1 / Motion Path — не наследуются. Initial values.
         shape_outside: ShapeOutside::None,
         shape_margin: Length::Px(0.0),
@@ -6919,6 +6934,9 @@ pub fn compute_pseudo_element_style(
     style.image_rendering = parent.image_rendering;
     style.writing_mode = parent.writing_mode;
     style.text_orientation = parent.text_orientation;
+    style.ruby_position = parent.ruby_position;
+    style.ruby_align = parent.ruby_align;
+    style.ruby_merge = parent.ruby_merge;
     style.font_size_adjust = parent.font_size_adjust;
     style.text_wrap_mode = parent.text_wrap_mode;
     style.text_wrap_style = parent.text_wrap_style;
@@ -13357,6 +13375,31 @@ fn apply_declaration(
                 _ => style.text_orientation,
             };
         }
+        "ruby-position" => {
+            style.ruby_position = match val.trim() {
+                // `alternate` (одиночный) по спеке ведёт себя как over.
+                "over" | "alternate" => RubyPosition::Over,
+                "under" => RubyPosition::Under,
+                _ => style.ruby_position,
+            };
+        }
+        "ruby-align" => {
+            style.ruby_align = match val.trim() {
+                "start" => RubyAlign::Start,
+                "center" => RubyAlign::Center,
+                "space-between" => RubyAlign::SpaceBetween,
+                "space-around" => RubyAlign::SpaceAround,
+                _ => style.ruby_align,
+            };
+        }
+        "ruby-merge" => {
+            style.ruby_merge = match val.trim() {
+                "separate" => RubyMerge::Separate,
+                "merge" => RubyMerge::Merge,
+                "auto" => RubyMerge::Auto,
+                _ => style.ruby_merge,
+            };
+        }
         "user-select" => {
             if let Some(v) = UserSelect::parse(val) {
                 style.user_select = v;
@@ -15400,6 +15443,15 @@ fn apply_css_wide_keyword(
             } else {
                 init.text_orientation
             };
+        }
+        "ruby-position" => {
+            style.ruby_position = if inh { inherited.ruby_position } else { init.ruby_position };
+        }
+        "ruby-align" => {
+            style.ruby_align = if inh { inherited.ruby_align } else { init.ruby_align };
+        }
+        "ruby-merge" => {
+            style.ruby_merge = if inh { inherited.ruby_merge } else { init.ruby_merge };
         }
         "accent-color" => {
             style.accent_color = if inh { inherited.accent_color } else { init.accent_color };
@@ -20228,6 +20280,91 @@ mod tests {
         );
         assert_eq!(st.initial_letter_size, 4.0);
         assert_eq!(st.initial_letter_sink, 3);
+    }
+
+    #[test]
+    fn ruby_properties_apply_declaration() {
+        // CSS Ruby L1: все три свойства доезжают до ComputedStyle через каскад.
+        let sheet = lumen_css_parser::parse(
+            "p { ruby-position: under; ruby-align: center; ruby-merge: merge; }",
+        );
+        let doc = lumen_html_parser::parse("<p>Hi</p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let st = compute_style(
+            &doc,
+            pid,
+            &sheet,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        assert_eq!(st.ruby_position, RubyPosition::Under);
+        assert_eq!(st.ruby_align, RubyAlign::Center);
+        assert_eq!(st.ruby_merge, RubyMerge::Merge);
+    }
+
+    #[test]
+    fn ruby_properties_initial_values() {
+        // Без объявлений — initial по спеке: over / space-around / separate.
+        let sheet = lumen_css_parser::parse("p { color: red; }");
+        let doc = lumen_html_parser::parse("<p>Hi</p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let st = compute_style(
+            &doc,
+            pid,
+            &sheet,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        assert_eq!(st.ruby_position, RubyPosition::Over);
+        assert_eq!(st.ruby_align, RubyAlign::SpaceAround);
+        assert_eq!(st.ruby_merge, RubyMerge::Separate);
+    }
+
+    #[test]
+    fn ruby_properties_inherited_by_child() {
+        // Все три свойства наследуются: <span> внутри <p> получает значения родителя.
+        let sheet = lumen_css_parser::parse(
+            "p { ruby-position: under; ruby-align: start; ruby-merge: auto; }",
+        );
+        let doc = lumen_html_parser::parse("<p><span>x</span></p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let parent = compute_style(
+            &doc,
+            pid,
+            &sheet,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        let sid = doc.get(pid).children[0];
+        let child = compute_style(&doc, sid, &sheet, &parent, Size::new(800.0, 600.0), false);
+        assert_eq!(child.ruby_position, RubyPosition::Under);
+        assert_eq!(child.ruby_align, RubyAlign::Start);
+        assert_eq!(child.ruby_merge, RubyMerge::Auto);
+    }
+
+    #[test]
+    fn ruby_properties_invalid_values_ignored() {
+        // Невалидные (и неподдерживаемый inter-character) значения игнорируются,
+        // остаются initial; alternate парсится как over.
+        let sheet = lumen_css_parser::parse(
+            "p { ruby-position: inter-character; ruby-align: bogus; ruby-merge: 42; }",
+        );
+        let doc = lumen_html_parser::parse("<p>Hi</p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let st = compute_style(
+            &doc,
+            pid,
+            &sheet,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        assert_eq!(st.ruby_position, RubyPosition::Over);
+        assert_eq!(st.ruby_align, RubyAlign::SpaceAround);
+        assert_eq!(st.ruby_merge, RubyMerge::Separate);
     }
 
     #[test]
