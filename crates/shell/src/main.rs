@@ -3745,7 +3745,12 @@ fn fetch_and_decode_images(
         if req.is_lazy {
             return ImgOutcome::Lazy;
         }
-        let wants_intrinsic = !req.has_explicit_width && !req.has_explicit_height;
+        // BUG-269: apply intrinsic size whenever the author left AT LEAST ONE
+        // dimension unset (not only when BOTH are unset). A replaced element
+        // with a fixed width and `height: auto` must derive its height from the
+        // intrinsic aspect ratio (CSS 2.1 §10.6.2); `apply_intrinsic_size` fills
+        // the missing slot from that ratio.
+        let wants_intrinsic = !(req.has_explicit_width && req.has_explicit_height);
         let decoded = image_cache::IMAGE_CACHE.get_or_decode_current(&req.url, || {
             decode_image(&req.url, base, sink, cookie_jar.clone(), target)
         });
@@ -3924,17 +3929,64 @@ fn apply_intrinsic_size(doc: &mut Document, node_id: NodeId, width: u32, height:
     let NodeData::Element { attrs, .. } = &mut doc.get_mut(node_id).data else {
         return;
     };
-    // Защита от race: если другой проход уже добавил атрибут, не дублируем.
-    if !attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("width")) {
+    // Presence of the author's width/height content attributes (any value —
+    // including percentages — counts as "set" and must never be duplicated).
+    let has_w = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("width"));
+    let has_h = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("height"));
+    // Author values parsed as non-negative integer px (HTML dimension-attr
+    // grammar). `None` when absent OR non-integer (e.g. `width="50%"`).
+    let attr_w = attrs
+        .iter()
+        .find(|a| a.name.local.eq_ignore_ascii_case("width"))
+        .and_then(|a| a.value.trim().parse::<u32>().ok());
+    let attr_h = attrs
+        .iter()
+        .find(|a| a.name.local.eq_ignore_ascii_case("height"))
+        .and_then(|a| a.value.trim().parse::<u32>().ok());
+
+    // BUG-269: fill the missing dimension from the intrinsic aspect ratio
+    // (CSS 2.1 §10.6.2) rather than from the raw intrinsic value, so a
+    // fixed-width `<img width="240">` (intrinsic 120×80) becomes 240×160, not
+    // 240×80 — and, crucially, is not left with a collapsed `height: auto` = 0.
+    // Push only into empty attribute slots (presentational hint, specificity 0
+    // — authored CSS still wins). A pixel-parsed author dimension drives the
+    // ratio; a non-integer one (percentage) falls back to the raw intrinsic
+    // value for the other axis.
+    let (new_w, new_h) = match (attr_w, attr_h) {
+        (Some(w), None) => {
+            let h = if width > 0 {
+                ((w as u64 * height as u64 + width as u64 / 2) / width as u64) as u32
+            } else {
+                height
+            };
+            (None, Some(h))
+        }
+        (None, Some(h)) => {
+            let w = if height > 0 {
+                ((h as u64 * width as u64 + height as u64 / 2) / height as u64) as u32
+            } else {
+                width
+            };
+            (Some(w), None)
+        }
+        // Both integers set, or one/both present but non-integer: fill any
+        // still-empty slot with the raw intrinsic value.
+        _ => (
+            (!has_w).then_some(width),
+            (!has_h).then_some(height),
+        ),
+    };
+
+    if !has_w && let Some(w) = new_w {
         attrs.push(Attribute {
             name: QualName::html("width"),
-            value: width.to_string(),
+            value: w.to_string(),
         });
     }
-    if !attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("height")) {
+    if !has_h && let Some(h) = new_h {
         attrs.push(Attribute {
             name: QualName::html("height"),
-            value: height.to_string(),
+            value: h.to_string(),
         });
     }
 }
@@ -17894,6 +17946,84 @@ mod tests {
         // A window shorter than the chrome must not yield a negative height.
         let (_w, h) = content_layout_viewport(Size::new(800.0, 10.0), true, false);
         assert!(h >= 0.0);
+    }
+
+    // ── BUG-269: replaced-element intrinsic aspect-ratio sizing ─────────────
+
+    /// Depth-first search for the first `<img>` node in a parsed document.
+    fn find_img(doc: &Document, id: NodeId) -> Option<NodeId> {
+        if let NodeData::Element { name, .. } = &doc.get(id).data
+            && name.local == "img"
+        {
+            return Some(id);
+        }
+        for &child in &doc.get(id).children {
+            if let Some(found) = find_img(doc, child) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// Parse `html`, run `apply_intrinsic_size` on its `<img>` with the given
+    /// intrinsic size, and return the resulting `(width, height)` attributes.
+    fn img_dims(html: &str, iw: u32, ih: u32) -> (Option<String>, Option<String>) {
+        let mut doc = lumen_html_parser::parse(html);
+        let img = find_img(&doc, doc.root()).expect("img present");
+        apply_intrinsic_size(&mut doc, img, iw, ih);
+        let NodeData::Element { attrs, .. } = &doc.get(img).data else {
+            unreachable!()
+        };
+        let pick = |name: &str| {
+            attrs
+                .iter()
+                .find(|a| a.name.local.eq_ignore_ascii_case(name))
+                .map(|a| a.value.to_string())
+        };
+        (pick("width"), pick("height"))
+    }
+
+    #[test]
+    fn bug269_fixed_width_derives_height_from_ratio() {
+        // `<img width="240">` with intrinsic 120×80 → height = 240·80/120 = 160,
+        // not the raw intrinsic 80 (and never a collapsed `height: auto` = 0).
+        let (w, h) = img_dims(r#"<img src="p.png" width="240">"#, 120, 80);
+        assert_eq!(w.as_deref(), Some("240"));
+        assert_eq!(h.as_deref(), Some("160"));
+    }
+
+    #[test]
+    fn bug269_fixed_height_derives_width_from_ratio() {
+        // Symmetric case: author height only → width from the intrinsic ratio.
+        let (w, h) = img_dims(r#"<img src="p.png" height="160">"#, 120, 80);
+        assert_eq!(w.as_deref(), Some("240"));
+        assert_eq!(h.as_deref(), Some("160"));
+    }
+
+    #[test]
+    fn bug269_no_attrs_uses_raw_intrinsic() {
+        // Neither dimension set → both filled with the raw intrinsic values.
+        let (w, h) = img_dims(r#"<img src="p.png">"#, 120, 80);
+        assert_eq!(w.as_deref(), Some("120"));
+        assert_eq!(h.as_deref(), Some("80"));
+    }
+
+    #[test]
+    fn bug269_both_attrs_unchanged() {
+        // Both author dimensions set → intrinsic size never overrides them.
+        let (w, h) = img_dims(r#"<img src="p.png" width="10" height="20">"#, 120, 80);
+        assert_eq!(w.as_deref(), Some("10"));
+        assert_eq!(h.as_deref(), Some("20"));
+    }
+
+    #[test]
+    fn bug269_percentage_width_falls_back_to_intrinsic_height() {
+        // A non-integer (percentage) width has no shell-resolvable px value to
+        // drive the ratio, but the image must still be visible → fill the height
+        // with the raw intrinsic value and leave the percentage width intact.
+        let (w, h) = img_dims(r#"<img src="p.png" width="50%">"#, 120, 80);
+        assert_eq!(w.as_deref(), Some("50%"));
+        assert_eq!(h.as_deref(), Some("80"));
     }
 
     // ── BUG-171 этап 2: off-UI-thread финальный pipeline ────────────────────
