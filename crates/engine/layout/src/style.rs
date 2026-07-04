@@ -2752,6 +2752,10 @@ pub struct ComputedStyle {
     /// CSS Transforms L2 §6 — `transform-style: flat | preserve-3d`.
     /// `Preserve3d` makes children participate in 3D rendering context.
     pub transform_style: TransformStyle,
+    /// CSS Transforms L2 §5.1 — `backface-visibility: visible | hidden`.
+    /// Stored on ComputedStyle; actual back-face culling deferred until
+    /// a 3D rendering context exists (3D projection ⬜).
+    pub backface_visibility: BackfaceVisibility,
     /// CSS Lists L3 §2.1 — `list-style-type`.
     pub list_style_type: ListStyleType,
     /// CSS Lists L3 §2.3 — `list-style-position`.
@@ -5122,6 +5126,18 @@ pub enum TransformStyle {
     Preserve3d,
 }
 
+/// CSS Transforms L2 §5.1 — `backface-visibility: visible | hidden`.
+/// `Hidden` = element is invisible when its back face is oriented toward
+/// the viewer (requires a 3D rendering context to have any effect).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BackfaceVisibility {
+    /// Back face is visible (initial value).
+    #[default]
+    Visible,
+    /// Back face is hidden.
+    Hidden,
+}
+
 /// CSS transform functions — translate/scale/rotate/skew/skewX/skewY/matrix
 /// and all 3D variants (CSS Transforms L2).
 #[derive(Debug, Clone, PartialEq)]
@@ -5448,6 +5464,7 @@ impl ComputedStyle {
             perspective: None,
             perspective_origin: (PositionComponent::Percent(0.5), PositionComponent::Percent(0.5)),
             transform_style: TransformStyle::Flat,
+            backface_visibility: BackfaceVisibility::Visible,
             list_style_type: ListStyleType::Disc,
             list_style_position: ListStylePosition::Outside,
             list_style_image: None,
@@ -5782,6 +5799,7 @@ pub fn compute_style(
         perspective: None,
         perspective_origin: (PositionComponent::Percent(0.5), PositionComponent::Percent(0.5)),
         transform_style: TransformStyle::Flat,
+        backface_visibility: BackfaceVisibility::Visible,
         // CSS Lists — list-style-* наследуются.
         list_style_type: inherited.list_style_type.clone(),
         list_style_position: inherited.list_style_position,
@@ -13644,6 +13662,15 @@ fn apply_declaration(
             } else {
                 TransformStyle::Flat
             };
+        }
+        "backface-visibility" => {
+            // CSS Transforms L2 §5.1 — `backface-visibility: visible | hidden`.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("hidden") {
+                style.backface_visibility = BackfaceVisibility::Hidden;
+            } else if trimmed.eq_ignore_ascii_case("visible") {
+                style.backface_visibility = BackfaceVisibility::Visible;
+            }
         }
         "list-style-type" => {
             if let Some(v) = ListStyleType::parse(val) {
@@ -29836,6 +29863,50 @@ mod tests {
         let s = ts_prop("perspective-origin", "25% 75%");
         assert_eq!(s.perspective_origin.0, PositionComponent::Percent(0.25));
         assert_eq!(s.perspective_origin.1, PositionComponent::Percent(0.75));
+    }
+
+    #[test]
+    fn parse_backface_visibility_hidden() {
+        let s = ts_prop("backface-visibility", "hidden");
+        assert_eq!(s.backface_visibility, BackfaceVisibility::Hidden);
+        // Case-insensitive per CSS keyword rules.
+        let s = ts_prop("backface-visibility", "HIDDEN");
+        assert_eq!(s.backface_visibility, BackfaceVisibility::Hidden);
+    }
+
+    #[test]
+    fn parse_backface_visibility_initial_visible() {
+        let s = ComputedStyle::root();
+        assert_eq!(s.backface_visibility, BackfaceVisibility::Visible);
+        let s = ts_prop("backface-visibility", "visible");
+        assert_eq!(s.backface_visibility, BackfaceVisibility::Visible);
+    }
+
+    #[test]
+    fn parse_backface_visibility_invalid_ignored() {
+        // Invalid value → declaration ignored, prior value kept.
+        let mut s = ComputedStyle::root();
+        let vp = Size::new(800.0, 600.0);
+        let root = ComputedStyle::root();
+        let hidden = Declaration { property: "backface-visibility".to_string(), value: "hidden".to_string(), important: false };
+        apply_declaration(&mut s, &hidden, 16.0, vp, FontWeight::NORMAL, &root, false, false);
+        let bogus = Declaration { property: "backface-visibility".to_string(), value: "translucent".to_string(), important: false };
+        apply_declaration(&mut s, &bogus, 16.0, vp, FontWeight::NORMAL, &root, false, false);
+        assert_eq!(s.backface_visibility, BackfaceVisibility::Hidden);
+    }
+
+    #[test]
+    fn backface_visibility_not_inherited() {
+        // backface-visibility — non-inherited (CSS Transforms L2 §5.1).
+        let doc = lumen_html_parser::parse("<div><p>x</p></div>");
+        let sheet = lumen_css_parser::parse("div { backface-visibility: hidden; }");
+        let root_style = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let p = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0), false);
+        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(div_style.backface_visibility, BackfaceVisibility::Hidden);
+        assert_eq!(p_style.backface_visibility, BackfaceVisibility::Visible);
     }
 
     // ── @supports cascade wiring ──────────────────────────────────────────────

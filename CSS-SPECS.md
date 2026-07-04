@@ -287,7 +287,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `transform-origin` | ✅ | pivot via T(o)·M·T(-o) |
 | `transform-style` | 🟡 | flat/preserve-3d; 3D context ⬜ |
 | `perspective` / `perspective-origin` | 🟡 | parsed; 3D projection ⬜ |
-| `backface-visibility` | 🟡 | parsed; 3D flip ⬜ |
+| `backface-visibility` | 🟡 | parsed → `ComputedStyle` ✅ 2026-07-04 (p4-backface-visibility); 3D back-face culling ⬜ |
 | `translate` / `rotate` / `scale` | ✅ | individual props (Transforms L2); compose before `transform` ✅ 2026-05-26 |
 
 ### [T0] Logical Properties
@@ -493,7 +493,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |----------|--------|-------|
 | `perspective` / `perspective-origin` | 🟡 | parsed; 3D projection ⬜ |
 | `transform-style: preserve-3d` | 🟡 | parsed; 3D context ⬜ |
-| `backface-visibility` | 🟡 | parsed; 3D flip ⬜ |
+| `backface-visibility` | 🟡 | parsed → `ComputedStyle` ✅ 2026-07-04 (p4-backface-visibility); 3D back-face culling ⬜ |
 | `translate` / `rotate` / `scale` (individual) | ✅ | CSS Transforms L2; compose before `transform` 2026-05-26 |
 
 ### [T2] Values (advanced)
