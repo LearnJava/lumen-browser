@@ -129,7 +129,9 @@ pub fn build_request_headers(
             headers.add("Connection", "keep-alive");
             headers.add("Cache-Control", "max-age=0");
             headers.add("User-Agent", super::CHROME_USER_AGENT);
-            headers.add("Accept", "*/*");
+            // Real Chrome sends the full document `Accept` on a navigation,
+            // not `*/*` (RP-7: `*/*` is a cheap anti-bot tell).
+            headers.add("Accept", super::CHROME_NAVIGATE_ACCEPT);
 
             if !accept_encoding.is_empty() {
                 headers.add("Accept-Encoding", accept_encoding);
@@ -178,7 +180,8 @@ pub fn build_request_headers(
             headers.add("Connection", "keep-alive");
             headers.add("Cache-Control", "max-age=0");
             headers.add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0");
-            headers.add("Accept", "*/*");
+            // Edge (Chromium) sends the same document `Accept` as Chrome (RP-7).
+            headers.add("Accept", super::CHROME_NAVIGATE_ACCEPT);
 
             if !accept_encoding.is_empty() {
                 headers.add("Accept-Encoding", accept_encoding);
@@ -253,6 +256,58 @@ pub fn build_request_headers(
         + "\r\n"
 }
 
+/// Connection-management field names that are illegal or auto-generated in
+/// HTTP/2 and therefore must never appear in an H2 header block
+/// (RFC 9113 §8.2.2 — `connection`-specific headers are a connection error;
+/// `host` is replaced by the `:authority` pseudo-header).
+const H2_FORBIDDEN_HEADERS: &[&str] = &[
+    "host",
+    "connection",
+    "keep-alive",
+    "proxy-connection",
+    "transfer-encoding",
+    "upgrade",
+];
+
+/// Build the browser-fingerprint request headers for the HTTP/2 path as
+/// lowercase `(name, value)` pairs.
+///
+/// The HTTP/2 request path sends only pseudo-headers plus caller-supplied
+/// extras (cookies, cache validators, CORS). Without this, an H2 navigation
+/// would carry no `User-Agent` / `Accept` / `Accept-Language` / `Sec-Fetch-*`
+/// at all — an obvious bot signature that anti-bot layers (Cloudflare/DataDome)
+/// answer with `403` (RP-7).
+///
+/// The set is derived from the exact same per-profile fingerprint the HTTP/1.1
+/// path emits ([`build_request_headers`]) so H1 and H2 never diverge (a
+/// divergence would itself be a fingerprint), then adapted for HTTP/2:
+/// - `Host` / `Connection` and other connection-management headers are dropped
+///   (see [`H2_FORBIDDEN_HEADERS`]),
+/// - field names are lowercased (HTTP/2 requires lowercase, RFC 9113 §8.2.1).
+///
+/// `accept_encoding` is advertised the same way as on HTTP/1.1; the shared
+/// response path decodes any resulting `Content-Encoding`.
+pub fn h2_fingerprint_headers(profile: HttpProfile, accept_encoding: &str) -> Vec<(String, String)> {
+    // Reuse the HTTP/1.1 builder with an empty host/extra so we get exactly the
+    // profile's fingerprint block, then filter + lowercase for H2.
+    let block = build_request_headers("", accept_encoding, "", profile);
+    let mut out = Vec::new();
+    for line in block.split("\r\n") {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            let name = name.trim().to_ascii_lowercase();
+            if H2_FORBIDDEN_HEADERS.contains(&name.as_str()) {
+                continue;
+            }
+            out.push((name, value.trim().to_string()));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,9 +317,40 @@ mod tests {
         let headers = build_request_headers("example.com", "gzip, deflate, br", "", HttpProfile::Chrome);
         assert!(headers.contains("Host: example.com"));
         assert!(headers.contains("User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)"));
-        assert!(headers.contains("Accept: */*"));
+        // RP-7: navigations carry the full document Accept, not `*/*`.
+        assert!(headers.contains("Accept: text/html,application/xhtml+xml"));
+        assert!(!headers.contains("Accept: */*"));
         assert!(headers.contains("Accept-Language: en-US,en;q=0.9"));
         assert!(headers.contains("Connection: keep-alive"));
+    }
+
+    #[test]
+    fn test_h2_fingerprint_headers_are_lowercase_and_drop_connection_headers() {
+        // RP-7: the H2 path must carry the same fingerprint the H1 path does,
+        // otherwise anti-bot layers see a UA-less request and answer 403.
+        let hdrs = h2_fingerprint_headers(HttpProfile::Chrome, "gzip, deflate, br");
+        let get = |name: &str| hdrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str());
+
+        // Field names are lowercase (RFC 9113 §8.2.1).
+        assert!(hdrs.iter().all(|(k, _)| k.chars().all(|c| !c.is_ascii_uppercase())));
+        // The bot-relevant fingerprint headers are present.
+        assert_eq!(get("user-agent"), Some(super::super::CHROME_USER_AGENT));
+        assert_eq!(get("accept"), Some(super::super::CHROME_NAVIGATE_ACCEPT));
+        assert_eq!(get("accept-language"), Some(super::super::DEFAULT_ACCEPT_LANGUAGE));
+        assert_eq!(get("accept-encoding"), Some("gzip, deflate, br"));
+        assert_eq!(get("sec-fetch-site"), Some("none"));
+        assert_eq!(get("sec-fetch-mode"), Some("navigate"));
+        assert_eq!(get("sec-fetch-dest"), Some("document"));
+        // Connection-management headers are illegal in H2 and must be absent.
+        for forbidden in ["host", "connection", "keep-alive"] {
+            assert!(get(forbidden).is_none(), "H2 header block must not contain {forbidden}");
+        }
+    }
+
+    #[test]
+    fn test_h2_fingerprint_headers_omit_accept_encoding_when_empty() {
+        let hdrs = h2_fingerprint_headers(HttpProfile::Chrome, "");
+        assert!(hdrs.iter().all(|(k, _)| k != "accept-encoding"));
     }
 
     #[test]

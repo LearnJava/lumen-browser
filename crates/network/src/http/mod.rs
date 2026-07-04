@@ -19,7 +19,7 @@ pub mod headers;
 pub mod h2_settings;
 pub mod client_hints;
 
-pub use headers::{HttpProfile, HeaderOrder, build_request_headers};
+pub use headers::{HttpProfile, HeaderOrder, build_request_headers, h2_fingerprint_headers};
 pub use h2_settings::{H2Settings, H2StreamPriority};
 pub use client_hints::{ClientHintsProfile, should_send_client_hints, client_hints_headers};
 
@@ -37,6 +37,18 @@ pub const CHROME_USER_AGENT: &str =
 
 /// Default Accept-Language header (does not leak real locale).
 pub const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
+
+/// Chrome 130 `Accept` header for a **top-level document navigation**.
+///
+/// Real Chrome sends this exact string when navigating to an HTML document;
+/// a bare `*/*` (what a generic HTTP client sends) is a cheap anti-bot signal
+/// (Cloudflare/DataDome flag it). Used by the `Chrome`/`Edge`/`Strict` profiles
+/// on the navigation request (RP-7). Subresource-destination-specific `Accept`
+/// values (CSS `text/css,*/*;q=0.1`, images, etc.) are a separate refinement —
+/// this module currently treats every request as a document navigation
+/// (`Sec-Fetch-Dest: document`).
+pub const CHROME_NAVIGATE_ACCEPT: &str =
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7";
 
 /// Tor Browser User-Agent — pinned uniformly across **all** host platforms
 /// (Windows NT 10.0, no `Win64`/architecture token), based on the current
