@@ -57,7 +57,15 @@ pub enum PreloadHint {
     /// `<link rel="stylesheet" href="...">`. Caller должен дополнительно
     /// проверить, что у author-а нет `disabled`-атрибута (для Phase 0
     /// мы это не делаем — disabled-stylesheets редкие).
-    Stylesheet { url: String },
+    Stylesheet {
+        /// Значение атрибута `href` (trimmed).
+        url: String,
+        /// Значение атрибута `media` как есть (trimmed), `None` если атрибут
+        /// отсутствует или пуст. Матчинг против текущего media-контекста —
+        /// работа caller-а (BUG-268: print-only листы не должны попадать
+        /// в экранный каскад).
+        media: Option<String>,
+    },
     /// `<script src="...">`. Без `type="module"` и атрибутов defer/async —
     /// caller-у достаточно URL.
     Script { url: String },
@@ -114,6 +122,10 @@ fn collect_link_hints(attrs: &[(String, String)], out: &mut Vec<PreloadHint>) {
     let rel = find_attr(attrs, "rel").map(|v| v.to_ascii_lowercase());
     let href = find_attr(attrs, "href").map(str::trim).filter(|s| !s.is_empty());
     let as_kind = find_attr(attrs, "as").map(|v| v.trim().to_ascii_lowercase());
+    let media = find_attr(attrs, "media")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
 
     let Some(rel) = rel else {
         return;
@@ -128,6 +140,7 @@ fn collect_link_hints(attrs: &[(String, String)], out: &mut Vec<PreloadHint>) {
         match token {
             "stylesheet" => out.push(PreloadHint::Stylesheet {
                 url: href.to_string(),
+                media: media.clone(),
             }),
             "preload" => out.push(PreloadHint::Preload {
                 url: href.to_string(),
@@ -305,8 +318,29 @@ mod tests {
         assert_eq!(
             hints,
             vec![PreloadHint::Stylesheet {
-                url: "theme.css".into()
+                url: "theme.css".into(),
+                media: None,
             }]
+        );
+    }
+
+    #[test]
+    fn link_stylesheet_media_attr_preserved() {
+        // BUG-268: атрибут media должен дойти до caller-а, чтобы shell
+        // мог не вливать print-only лист в экранный каскад.
+        let hints = scan_preload_hints(r#"<link rel="stylesheet" media="print" href="print.css">"#);
+        assert_eq!(
+            hints,
+            vec![PreloadHint::Stylesheet {
+                url: "print.css".into(),
+                media: Some("print".into()),
+            }]
+        );
+        // Пустой/whitespace-only media эквивалентен отсутствию атрибута.
+        let hints = scan_preload_hints(r#"<link rel="stylesheet" media="  " href="a.css">"#);
+        assert_eq!(
+            hints,
+            vec![PreloadHint::Stylesheet { url: "a.css".into(), media: None }]
         );
     }
 
@@ -318,7 +352,8 @@ mod tests {
         assert_eq!(
             hints,
             vec![PreloadHint::Stylesheet {
-                url: "theme.css".into()
+                url: "theme.css".into(),
+                media: None,
             }]
         );
     }
@@ -391,6 +426,7 @@ mod tests {
                 },
                 PreloadHint::Stylesheet {
                     url: "hero.css".into(),
+                    media: None,
                 },
             ]
         );
@@ -610,7 +646,8 @@ mod tests {
         assert_eq!(
             hints,
             vec![PreloadHint::Stylesheet {
-                url: "/тема.css".into()
+                url: "/тема.css".into(),
+                media: None,
             }]
         );
     }
@@ -624,7 +661,8 @@ mod tests {
         assert_eq!(
             hints,
             vec![PreloadHint::Stylesheet {
-                url: "theme.css".into()
+                url: "theme.css".into(),
+                media: None,
             }]
         );
     }
@@ -726,7 +764,7 @@ mod streaming_tests {
         hints.extend(scanner.end());
         assert_eq!(
             hints,
-            vec![PreloadHint::Stylesheet { url: "styles.css".into() }]
+            vec![PreloadHint::Stylesheet { url: "styles.css".into(), media: None }]
         );
     }
 
@@ -741,7 +779,7 @@ mod streaming_tests {
         assert_eq!(batch, streaming);
         assert_eq!(
             streaming,
-            vec![PreloadHint::Stylesheet { url: "late.css".into() }]
+            vec![PreloadHint::Stylesheet { url: "late.css".into(), media: None }]
         );
     }
 
@@ -758,7 +796,7 @@ mod streaming_tests {
         let hints = scan_byte_by_byte(html);
         assert_eq!(
             hints,
-            vec![PreloadHint::Stylesheet { url: "/тема.css".into() }]
+            vec![PreloadHint::Stylesheet { url: "/тема.css".into(), media: None }]
         );
     }
 
