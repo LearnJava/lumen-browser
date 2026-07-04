@@ -2959,7 +2959,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgpu_compute.rs:980` **enum** `GpuOp` — Одна записанная операция command-encoder для исполнения на `queue.submit`
 `crates/engine/paint/src/webgpu_compute.rs:1035` **fn** `submit` — Исполняет набор операций в одном `CommandEncoder` и сабмитит на очередь
 
-## lumen-shell  (886 symbols)
+## lumen-shell  (902 symbols)
 
 `crates/shell/src/adblock.rs:44` **fn** `browser_data_dir` — Root of all browser user data (portable): `<exe_dir>/data`
 `crates/shell/src/adblock.rs:52` **fn** `adblock_dir` — `<data>/adblock` — root of the ad-block subsystem's files
@@ -3257,6 +3257,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/notification.rs:18` **fn** `show_os_notification` — Show a desktop notification asynchronously
 `crates/shell/src/omnibox/mod.rs:20` **enum** `AliasAction` — Action produced by resolving a raw omnibox input against the alias table
 `crates/shell/src/omnibox/mod.rs:39` **fn** `resolve` — Resolve `input` against the alias table and built-in `@` actions
+`crates/shell/src/page_context_menu.rs:45` **enum** `SpellMenuAction` — An action the user can pick from the spell suggestion menu
+`crates/shell/src/page_context_menu.rs:58` **struct** `SpellTarget` — Everything the shell needs to apply the chosen action: which control holds
+`crates/shell/src/page_context_menu.rs:72` **fn** `word` — The misspelled word slice
+`crates/shell/src/page_context_menu.rs:77` **fn** `apply` — Rebuild the control's value with the word replaced by `replacement`
+`crates/shell/src/page_context_menu.rs:88` **struct** `PageContextMenu` — State of the page-level spell suggestion menu. One menu is open at a time
+`crates/shell/src/page_context_menu.rs:107` **fn** `open_for` — Open the menu at cursor `(x, y)` for `target`, offering `suggestions`
+`crates/shell/src/page_context_menu.rs:121` **fn** `close` — Hide the menu and drop its context
+`crates/shell/src/page_context_menu.rs:129` **fn** `is_open` — `true` while the menu is visible
+`crates/shell/src/page_context_menu.rs:134` **fn** `target` — The target context (word + control), if the menu is open
+`crates/shell/src/page_context_menu.rs:158` **fn** `item_at` — Map a CSS-px `(x, y)` to the row index under it, or `None`
+`crates/shell/src/page_context_menu.rs:176` **fn** `action_at` — Map a CSS-px `(x, y)` to the [`SpellMenuAction`] under it, or `None`
+`crates/shell/src/page_context_menu.rs:181` **fn** `build_overlay` — Build a viewport-locked display list for the open menu; empty when closed
 `crates/shell/src/panel_layout.rs:46` **enum** `Dock` — Which window edge a docked sidebar hugs
 `crates/shell/src/panel_layout.rs:58` **fn** `width_from_cursor` — Resolve the dragged cursor x-position into a panel width for this dock,
 `crates/shell/src/panel_layout.rs:67` **fn** `opposite` — The opposite window edge (used by cross-dock "move to other side")
@@ -3647,14 +3659,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/session_persist.rs:31` **fn** `open_store` — Open the session store at [`SESSION_DB_PATH`], falling back to an in-memory
 `crates/shell/src/session_persist.rs:43` **fn** `active_index` — Index of the tab to make active after restore: the first `is_active` tab, or
 `crates/shell/src/source_view.rs:15` **fn** `build_view_source_html` — Wrap `raw` HTML source in a syntax-highlighted page
-`crates/shell/src/spellcheck.rs:20` **fn** `spell_data_dir` — Папка с пользовательскими словарями: `<exe_dir>/data/spell`
-`crates/shell/src/spellcheck.rs:27` **struct** `MultiDictionary` — Комбинированный словарь нескольких локалей. Слово считается верным,
-`crates/shell/src/spellcheck.rs:34` **fn** `empty` — Создаёт пустой набор словарей (спелл-чек отключён)
-`crates/shell/src/spellcheck.rs:42` **fn** `is_empty` — Проверяет, загружен ли хотя бы один словарь
-`crates/shell/src/spellcheck.rs:111` **fn** `load_dictionaries` — Загружает все пары `<stem>.aff` + `<stem>.dic` из `dir`
-`crates/shell/src/spellcheck.rs:166` **fn** `extract_words` — Извлекает байтовые диапазоны слов в `text`
-`crates/shell/src/spellcheck.rs:206` **fn** `misspelled_ranges` — Возвращает диапазоны слов, для которых `checker.check` вернул `false`
-`crates/shell/src/spellcheck.rs:217` **fn** `build_spell_overlay` — Строит команды отрисовки волнистого подчёркивания для ошибочных диапазонов
+`crates/shell/src/spellcheck.rs:22` **fn** `spell_data_dir` — Папка с пользовательскими словарями: `<exe_dir>/data/spell`
+`crates/shell/src/spellcheck.rs:29` **struct** `MultiDictionary` — Комбинированный словарь нескольких локалей. Слово считается верным,
+`crates/shell/src/spellcheck.rs:36` **fn** `empty` — Создаёт пустой набор словарей (спелл-чек отключён)
+`crates/shell/src/spellcheck.rs:44` **fn** `is_empty` — Проверяет, загружен ли хотя бы один словарь
+`crates/shell/src/spellcheck.rs:113` **fn** `load_dictionaries` — Загружает все пары `<stem>.aff` + `<stem>.dic` из `dir`
+`crates/shell/src/spellcheck.rs:168` **fn** `extract_words` — Извлекает байтовые диапазоны слов в `text`
+`crates/shell/src/spellcheck.rs:210` **fn** `misspelled_ranges_with` — Возвращает диапазоны слов, для которых `checker.check` вернул `false`, при
+`crates/shell/src/spellcheck.rs:228` **fn** `word_at_x` — Находит байтовый диапазон слова в `text`, чья горизонтальная проекция
+`crates/shell/src/spellcheck.rs:240` **fn** `user_words_path` — Путь к пользовательскому словарю: `<exe_dir>/data/spell/user_words.txt`
+`crates/shell/src/spellcheck.rs:246` **fn** `load_user_words` — Загружает пользовательский словарь: по одному слову в строке, lowercase
+`crates/shell/src/spellcheck.rs:259` **fn** `add_user_word` — Добавляет слово (lowercase) в файл пользовательского словаря, дописывая
+`crates/shell/src/spellcheck.rs:270` **fn** `build_spell_overlay` — Строит команды отрисовки волнистого подчёркивания для ошибочных диапазонов
 `crates/shell/src/surface/ctx.rs:22` **struct** `PaintCtx` — Read-only context for [`super::Panel::paint`]
 `crates/shell/src/surface/ctx.rs:39` **fn** `new` — Build a paint context with default (non-focused, non-hovered) hints
 `crates/shell/src/surface/ctx.rs:56` **struct** `EventCtx` — Side effects a panel may request while handling an event
@@ -4363,4 +4379,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4292 symbols in 22 crates*
+*Total: 4308 symbols in 22 crates*

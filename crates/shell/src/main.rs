@@ -47,6 +47,7 @@ mod momentum_anim;
 mod notification;
 mod omnibox;
 mod panel_layout;
+mod page_context_menu;
 mod panels;
 mod platform;
 mod prefetch;
@@ -896,6 +897,9 @@ fn run_window_mode(
         tab_drag: None,
         dnd_state: None,
         tab_context_menu: tabs::context_menu::TabContextMenu::default(),
+        page_context_menu: page_context_menu::PageContextMenu::default(),
+        spell_user_words: spellcheck::load_user_words(&spellcheck::user_words_path()),
+        spell_ignored: std::collections::HashSet::new(),
         shell_theme: panels::themes::ShellTheme::default(),
         reader_original_source: None,
         cert_info: None,
@@ -6418,6 +6422,16 @@ struct Lumen {
     /// Right-click tab context menu (CC-4): Duplicate / Pin / Move to new
     /// window / Close others / Close to the right. Hidden unless `open`.
     tab_context_menu: tabs::context_menu::TabContextMenu,
+    /// Page-level spell-check suggestion menu (P3-spell slice 3): opened by
+    /// right-clicking a misspelled word in a focused text `<input>`. Hidden
+    /// unless open.
+    page_context_menu: page_context_menu::PageContextMenu,
+    /// Words the user added to the persistent dictionary
+    /// (`data/spell/user_words.txt`), lowercase. Treated as correct spellings.
+    spell_user_words: std::collections::HashSet<String>,
+    /// Words the user chose to ignore for this session ("Пропустить"),
+    /// lowercase. Cleared on restart.
+    spell_ignored: std::collections::HashSet<String>,
     /// Shell UI theme: base brightness + accent colour (§O-9).
     ///
     /// Initialised from `BrowserSettings` on startup.  Updated when the user
@@ -9333,6 +9347,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         .cursor_position
                         .map(|p| ((p.x as f32) / dpr, (p.y as f32) / dpr))
                         .unwrap_or((0.0, 0.0));
+                    // P3-spell: a fresh right-click dismisses any stale spell
+                    // menu before deciding whether to reopen it.
+                    if state == ElementState::Pressed && self.page_context_menu.is_open() {
+                        self.page_context_menu.close();
+                    }
                     // CC-4: right-click on a tab opens the tab context menu
                     // instead of starting a mouse gesture.
                     if state == ElementState::Pressed && !self.focus.active {
@@ -9351,6 +9370,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             self.request_redraw();
                             return;
                         }
+                    }
+                    // P3-spell срез 3: right-click on a misspelled word in a
+                    // focused text input opens the spell suggestion menu instead
+                    // of starting a mouse gesture.
+                    if state == ElementState::Pressed && self.try_open_spell_menu(x_css, y_css) {
+                        self.request_redraw();
+                        return;
                     }
                     if state == ElementState::Pressed {
                         self.gesture.begin(x_css, y_css);
@@ -9404,6 +9430,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         if let Some(action) = action {
                             self.exec_tab_menu_action(action, event_loop);
                         }
+                        self.request_redraw();
+                        return;
+                    }
+                    // P3-spell срез 3: while the page spell menu is open it
+                    // captures the click — picking a row applies the correction /
+                    // dictionary action, anywhere else just dismisses it.
+                    if self.page_context_menu.is_open() {
+                        let win_w = self.viewport_width_css();
+                        let win_h = self.window_height_css();
+                        let action = self.page_context_menu.action_at(x_css, y_css, win_w, win_h);
+                        if let Some(action) = action {
+                            self.exec_spell_menu_action(action);
+                        }
+                        self.page_context_menu.close();
                         self.request_redraw();
                         return;
                     }
@@ -11567,6 +11607,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf.append(&mut menu_cmds);
                 }
 
+                // P3-spell срез 3: page spell suggestion menu — drawn above the
+                // page and tab strip like the tab context menu.
+                if self.page_context_menu.is_open() {
+                    let win_w = self.viewport_width_css();
+                    let win_h = self.window_height_css();
+                    let mut menu_cmds = self.page_context_menu.build_overlay(win_w, win_h);
+                    overlay_buf.append(&mut menu_cmds);
+                }
+
                 // Command palette (task #23): modal — drawn above everything,
                 // including the tab bar, with a full-window dimming scrim.
                 if self.command_palette.visible {
@@ -11680,20 +11729,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                 }
 
-                // P3-spell срез 2: красное squiggly-подчёркивание ошибочных слов
-                // в фокусном текстовом поле (<input>/<textarea>). Проверяется
-                // каждый DrawText внутри бокса поля; placeholder пропускается.
+                // P3-spell срез 2+3: красное squiggly-подчёркивание ошибочных
+                // слов в фокусном редактируемом поле — <input>/<textarea> или
+                // хост contenteditable. Проверяется каждый DrawText внутри
+                // бокса поля; placeholder пропускается. Слова из
+                // пользовательского словаря и «Пропущенные» на сессию —
+                // считаются верными.
                 if let (Some(nid), Some(dicts)) = (self.focused_node, SPELL_DICTS.get())
                     && !dicts.is_empty()
-                    && let Some(placeholder) = self.spell_target_placeholder(nid)
+                    && let Some((target_nid, placeholder)) = self.spell_target(nid)
                     && let Some(node_lb) = self
                         .layout_box
                         .as_ref()
-                        .and_then(|lb| forms::find_layout_box(lb, nid))
+                        .and_then(|lb| forms::find_layout_box(lb, target_nid))
                     && let Ok(font) = lumen_font::Font::parse(INTER_FONT)
                     && let Ok(m) = lumen_paint::FontMeasurer::new(&font)
                 {
                     let node_rect = node_lb.rect;
+                    let allow = self.spell_allow_set();
                     let mut squiggles: lumen_paint::DisplayList = Vec::new();
                     for cmd in &self.display_list {
                         let lumen_paint::DisplayCommand::DrawText {
@@ -11710,7 +11763,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         {
                             continue;
                         }
-                        let ranges = spellcheck::misspelled_ranges(dicts, text);
+                        let ranges = spellcheck::misspelled_ranges_with(dicts, text, &allow);
                         if ranges.is_empty() {
                             continue;
                         }
@@ -12832,6 +12885,17 @@ impl Lumen {
             && !key_event.repeat
         {
             self.tab_context_menu.close();
+            self.request_redraw();
+            return;
+        }
+
+        // P3-spell срез 3: Escape closes the page spell suggestion menu.
+        if self.page_context_menu.is_open()
+            && code == KeyCode::Escape
+            && self.modifiers.is_empty()
+            && !key_event.repeat
+        {
+            self.page_context_menu.close();
             self.request_redraw();
             return;
         }
@@ -16063,27 +16127,180 @@ impl Lumen {
         }
     }
 
-    /// P3-spell срез 2: для текстового поля, подлежащего спелл-чеку —
-    /// `<textarea>` или `<input>` с текстовым type (password исключён) —
-    /// возвращает его placeholder (пустую строку при отсутствии), иначе `None`.
-    fn spell_target_placeholder(&self, nid: lumen_dom::NodeId) -> Option<String> {
+    /// P3-spell срез 2+3: для узла `nid` под фокусом определяет цель спелл-чека.
+    /// Возвращает `(target_node, placeholder)`:
+    /// * `<textarea>` или `<input>` текстового типа (password исключён) — сам
+    ///   узел и его `placeholder` (пустая строка при отсутствии);
+    /// * узел внутри `contenteditable` — редактирующий хост и пустой
+    ///   placeholder (у contenteditable нет placeholder-атрибута);
+    /// * иначе — `None`.
+    fn spell_target(&self, nid: lumen_dom::NodeId) -> Option<(lumen_dom::NodeId, String)> {
         let ls = self.layout_source.as_ref()?;
         let doc = ls.document.lock().ok()?;
         let node = doc.get(nid);
-        let name = node.element_name()?;
-        let is_textarea = name.local.eq_ignore_ascii_case("textarea");
-        let is_text_input = name.local.eq_ignore_ascii_case("input")
-            && matches!(
-                node.get_attr("type")
-                    .unwrap_or("text")
-                    .to_ascii_lowercase()
-                    .as_str(),
-                "text" | "search" | "email" | "url"
-            );
-        if !is_textarea && !is_text_input {
-            return None;
+        if let Some(name) = node.element_name() {
+            let is_textarea = name.local.eq_ignore_ascii_case("textarea");
+            let is_text_input = name.local.eq_ignore_ascii_case("input")
+                && matches!(
+                    node.get_attr("type")
+                        .unwrap_or("text")
+                        .to_ascii_lowercase()
+                        .as_str(),
+                    "text" | "search" | "email" | "url"
+                );
+            if is_textarea || is_text_input {
+                let placeholder = node.get_attr("placeholder").unwrap_or_default().to_owned();
+                return Some((nid, placeholder));
+            }
         }
-        Some(node.get_attr("placeholder").unwrap_or_default().to_owned())
+        // contenteditable: check the DOM directly for an editing host.
+        lumen_dom::find_editing_host(&doc, nid).map(|host| (host, String::new()))
+    }
+
+    /// P3-spell срез 3: слова, которые не считаются ошибочными помимо словарей —
+    /// объединение пользовательского словаря и «Пропущенных» на сессию. Все
+    /// слова уже в lowercase.
+    fn spell_allow_set(&self) -> std::collections::HashSet<String> {
+        self.spell_user_words
+            .iter()
+            .chain(self.spell_ignored.iter())
+            .cloned()
+            .collect()
+    }
+
+    /// P3-spell срез 3: `true`, если фокусный узел — однострочный текстовый
+    /// `<input>` (`text`/`search`/`email`/`url`), где правка значения на месте
+    /// корректна (текст DrawText совпадает со значением поля). `<textarea>` и
+    /// contenteditable исключены: их значение многострочное и правка одной
+    /// визуальной строки небезопасна.
+    fn is_single_line_spell_input(&self, nid: lumen_dom::NodeId) -> bool {
+        let Some(ls) = self.layout_source.as_ref() else { return false };
+        let Ok(doc) = ls.document.lock() else { return false };
+        let node = doc.get(nid);
+        let Some(name) = node.element_name() else { return false };
+        name.local.eq_ignore_ascii_case("input")
+            && matches!(
+                node.get_attr("type").unwrap_or("text").to_ascii_lowercase().as_str(),
+                "text" | "search" | "email" | "url"
+            )
+    }
+
+    /// P3-spell срез 3: при right-click по ошибочному слову в фокусном
+    /// однострочном `<input>` открывает меню подсказок. Возвращает `true`, если
+    /// меню открыто (клик обработан), иначе `false` (клик идёт дальше — жест).
+    fn try_open_spell_menu(&mut self, x_css: f32, y_css: f32) -> bool {
+        use lumen_core::ext::SpellChecker;
+        let Some(dicts) = SPELL_DICTS.get() else { return false };
+        if dicts.is_empty() {
+            return false;
+        }
+        let Some(nid) = self.focused_node else { return false };
+        if !self.is_single_line_spell_input(nid) {
+            return false;
+        }
+        let Some(node_lb) = self
+            .layout_box
+            .as_ref()
+            .and_then(|lb| forms::find_layout_box(lb, nid))
+        else {
+            return false;
+        };
+        let node_rect = node_lb.rect;
+        let (page_x, page_y) = self.page_point(x_css, y_css);
+        if page_x < node_rect.x
+            || page_y < node_rect.y
+            || page_x >= node_rect.x + node_rect.width
+            || page_y >= node_rect.y + node_rect.height
+        {
+            return false;
+        }
+        let Ok(font) = lumen_font::Font::parse(INTER_FONT) else { return false };
+        let Ok(m) = lumen_paint::FontMeasurer::new(&font) else { return false };
+        let allow = self.spell_allow_set();
+
+        // Find the DrawText under the cursor and the misspelled word inside it.
+        // Collected first (immutable borrows of display_list) so the mutable
+        // `open_for` call below does not overlap the borrow.
+        let hit: Option<(Vec<String>, page_context_menu::SpellTarget)> = {
+            let mut found = None;
+            for cmd in &self.display_list {
+                let lumen_paint::DisplayCommand::DrawText { rect, text, font_size, .. } = cmd
+                else {
+                    continue;
+                };
+                if page_x < rect.x
+                    || page_y < rect.y
+                    || page_x >= rect.x + rect.width
+                    || page_y >= rect.y + rect.height
+                    || rect.x < node_rect.x
+                    || rect.y < node_rect.y
+                {
+                    continue;
+                }
+                let fs = *font_size;
+                let measure = |s: &str| -> f32 {
+                    use lumen_layout::TextMeasurer;
+                    s.chars().map(|c| m.char_width(c, fs)).sum()
+                };
+                let Some((s, e)) = spellcheck::word_at_x(text, page_x - rect.x, &measure) else {
+                    continue;
+                };
+                let word = &text[s..e];
+                if dicts.check(word) || allow.contains(&word.to_lowercase()) {
+                    // Word under cursor is spelled correctly — no menu.
+                    return false;
+                }
+                let suggestions = dicts.suggest(word);
+                found = Some((
+                    suggestions,
+                    page_context_menu::SpellTarget {
+                        node: nid,
+                        text: text.clone(),
+                        word_start: s,
+                        word_end: e,
+                    },
+                ));
+                break;
+            }
+            found
+        };
+
+        match hit {
+            Some((suggestions, target)) => {
+                self.page_context_menu.open_for(x_css, y_css, suggestions, target);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// P3-spell срез 3: применяет выбранное действие меню подсказок.
+    /// `Use` заменяет слово в значении поля и перевёрстывает; `AddToDict`
+    /// добавляет слово в пользовательский словарь (файл + память); `Ignore`
+    /// добавляет слово в набор пропущенных на сессию.
+    fn exec_spell_menu_action(&mut self, action: page_context_menu::SpellMenuAction) {
+        use page_context_menu::SpellMenuAction;
+        let Some(target) = self.page_context_menu.target().cloned() else { return };
+        match action {
+            SpellMenuAction::Use(replacement) => {
+                let new_val = target.apply(&replacement);
+                if let Some(src) = self.layout_source.as_mut()
+                    && let Ok(mut doc) = src.document.lock()
+                {
+                    forms::set_value(&mut doc, target.node, &new_val);
+                }
+                self.form_state.entry(target.node).or_default().value = new_val;
+                self.relayout();
+            }
+            SpellMenuAction::AddToDict => {
+                let word = target.word().to_lowercase();
+                let _ = spellcheck::add_user_word(&spellcheck::user_words_path(), &word);
+                self.spell_user_words.insert(word);
+            }
+            SpellMenuAction::Ignore => {
+                self.spell_ignored.insert(target.word().to_lowercase());
+            }
+        }
     }
 
 
