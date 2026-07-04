@@ -27,10 +27,32 @@
 //!   as opaque bytes. No header protection, no packet protection, no IO. This
 //!   is the frame the connection layer parses first, before removing header
 //!   protection and AEAD-decrypting the payload into [`quic_frame`] frames.
-//! - Slice 6+ (planned) — the QPACK dynamic table + encoder/decoder streams,
-//!   the rest of the QUIC transport (UDP datagrams, header protection, TLS 1.3
-//!   handshake, packet protection, packet-number spaces, loss recovery,
-//!   congestion control), unidirectional/request stream framing, and
+//! - Slice 6 — the QPACK dynamic table + instruction streams ([`qpack_stream`],
+//!   RFC 9204 §3.2, §4.3, §4.4): the shared dynamic table (byte-budget
+//!   capacity, FIFO eviction, absolute/relative indexing) plus the encoder
+//!   stream (Set Capacity / Insert With Name Reference / Insert With Literal
+//!   Name / Duplicate) and the decoder stream (Section Acknowledgment / Stream
+//!   Cancellation / Insert Count Increment). Pure parse/serialize plus the
+//!   in-memory table; applying an encoder stream reproduces the peer's table
+//!   state. No IO, no unidirectional-stream framing.
+//! - Slice 7 — the QUIC RTT estimator + NewReno congestion controller
+//!   ([`recovery`], RFC 9002 §5, §7): pure state machines the loss-recovery
+//!   layer drives with acked/lost packets. The estimator produces the smoothed
+//!   RTT and probe timeout (RFC 9002 §6.2.1); the controller tracks the
+//!   congestion window through slow start, congestion avoidance, and recovery,
+//!   halving it on loss (RFC 9002 §7.3.2) and collapsing it under persistent
+//!   congestion (RFC 9002 §7.6). No sent-packet registry, no loss detection, no
+//!   IO — that is the next slice.
+//! - Slice 8 — the QUIC sent-packet registry + loss detection ([`loss`],
+//!   RFC 9002 §6): the per-packet-number-space registry of in-flight packets,
+//!   ack processing that removes newly-acknowledged packets and produces the RTT
+//!   sample, and the packet-threshold (§6.1.1) and time-threshold (§6.1.2) loss
+//!   detection that decides which packets are lost and feeds [`recovery`]. Pure
+//!   state machine driven by decoded ACK frames and a caller-supplied clock; no
+//!   PTO timer, no IO.
+//! - Slice 9+ (planned) — the rest of the QUIC transport (UDP datagrams,
+//!   header protection, TLS 1.3 handshake, packet protection, the PTO timer and
+//!   probe sending (RFC 9002 §6.2), unidirectional/request stream framing, and
 //!   `h3_do_request` dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
@@ -41,7 +63,10 @@
 
 pub mod alt_svc;
 pub mod frame;
+pub mod loss;
 pub mod packet;
 pub mod qpack;
+pub mod qpack_stream;
 pub mod quic_frame;
+pub mod recovery;
 pub mod varint;
