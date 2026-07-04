@@ -35,10 +35,19 @@
 //!   Cancellation / Insert Count Increment). Pure parse/serialize plus the
 //!   in-memory table; applying an encoder stream reproduces the peer's table
 //!   state. No IO, no unidirectional-stream framing.
-//! - Slice 7+ (planned) — the rest of the QUIC transport (UDP datagrams,
+//! - Slice 7 — the QUIC RTT estimator + NewReno congestion controller
+//!   ([`recovery`], RFC 9002 §5, §7): pure state machines the loss-recovery
+//!   layer drives with acked/lost packets. The estimator produces the smoothed
+//!   RTT and probe timeout (RFC 9002 §6.2.1); the controller tracks the
+//!   congestion window through slow start, congestion avoidance, and recovery,
+//!   halving it on loss (RFC 9002 §7.3.2) and collapsing it under persistent
+//!   congestion (RFC 9002 §7.6). No sent-packet registry, no loss detection, no
+//!   IO — those are the next slice.
+//! - Slice 8+ (planned) — the rest of the QUIC transport (UDP datagrams,
 //!   header protection, TLS 1.3 handshake, packet protection, packet-number
-//!   spaces, loss recovery, congestion control), unidirectional/request stream
-//!   framing, and `h3_do_request` dispatch alongside the existing H1/H2 paths.
+//!   spaces, the sent-packet registry and loss detection that feeds
+//!   [`recovery`], RFC 9002 §6), unidirectional/request stream framing, and
+//!   `h3_do_request` dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -52,4 +61,5 @@ pub mod packet;
 pub mod qpack;
 pub mod qpack_stream;
 pub mod quic_frame;
+pub mod recovery;
 pub mod varint;
