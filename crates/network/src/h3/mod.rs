@@ -27,11 +27,18 @@
 //!   as opaque bytes. No header protection, no packet protection, no IO. This
 //!   is the frame the connection layer parses first, before removing header
 //!   protection and AEAD-decrypting the payload into [`quic_frame`] frames.
-//! - Slice 6+ (planned) — the QPACK dynamic table + encoder/decoder streams,
-//!   the rest of the QUIC transport (UDP datagrams, header protection, TLS 1.3
-//!   handshake, packet protection, packet-number spaces, loss recovery,
-//!   congestion control), unidirectional/request stream framing, and
-//!   `h3_do_request` dispatch alongside the existing H1/H2 paths.
+//! - Slice 6 — the QPACK dynamic table + instruction streams ([`qpack_stream`],
+//!   RFC 9204 §3.2, §4.3, §4.4): the shared dynamic table (byte-budget
+//!   capacity, FIFO eviction, absolute/relative indexing) plus the encoder
+//!   stream (Set Capacity / Insert With Name Reference / Insert With Literal
+//!   Name / Duplicate) and the decoder stream (Section Acknowledgment / Stream
+//!   Cancellation / Insert Count Increment). Pure parse/serialize plus the
+//!   in-memory table; applying an encoder stream reproduces the peer's table
+//!   state. No IO, no unidirectional-stream framing.
+//! - Slice 7+ (planned) — the rest of the QUIC transport (UDP datagrams,
+//!   header protection, TLS 1.3 handshake, packet protection, packet-number
+//!   spaces, loss recovery, congestion control), unidirectional/request stream
+//!   framing, and `h3_do_request` dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -43,5 +50,6 @@ pub mod alt_svc;
 pub mod frame;
 pub mod packet;
 pub mod qpack;
+pub mod qpack_stream;
 pub mod quic_frame;
 pub mod varint;

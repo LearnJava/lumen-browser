@@ -229,7 +229,7 @@ const STATIC_TABLE: [(&str, &str); 99] = [
 pub const STATIC_TABLE_SIZE: usize = STATIC_TABLE.len();
 
 /// Look up a static-table entry by 0-based index.
-fn static_entry(index: u64) -> Result<(&'static str, &'static str), QpackError> {
+pub(crate) fn static_entry(index: u64) -> Result<(&'static str, &'static str), QpackError> {
     usize::try_from(index)
         .ok()
         .and_then(|i| STATIC_TABLE.get(i).copied())
@@ -302,7 +302,7 @@ impl HeaderField {
 /// `prefix_bits`-wide length prefix in its low bits (the representation-type
 /// bits above `H` are ignored — the caller already dispatched on them).
 /// Returns `(bytes, consumed)`.
-fn decode_string(src: &[u8], prefix_bits: u8) -> Result<(Vec<u8>, usize), QpackError> {
+pub(crate) fn decode_string(src: &[u8], prefix_bits: u8) -> Result<(Vec<u8>, usize), QpackError> {
     let first = *src.first().ok_or(QpackError::UnexpectedEof)?;
     let huffman = first & (1 << prefix_bits) != 0;
     let (len, hdr) = decode_int(src, prefix_bits).map_err(from_hpack)?;
@@ -326,7 +326,13 @@ fn decode_string(src: &[u8], prefix_bits: u8) -> Result<(Vec<u8>, usize), QpackE
 /// byte (already positioned above the `H` flag); the `H` flag sits at bit
 /// `prefix_bits`. Huffman coding is used only when it is not longer than the
 /// raw bytes.
-fn encode_string(out: &mut Vec<u8>, s: &[u8], prefix_bits: u8, type_prefix: u8, use_huffman: bool) {
+pub(crate) fn encode_string(
+    out: &mut Vec<u8>,
+    s: &[u8],
+    prefix_bits: u8,
+    type_prefix: u8,
+    use_huffman: bool,
+) {
     let huff_bit = 1u8 << prefix_bits;
     if use_huffman {
         let encoded = huffman_encode(s);
