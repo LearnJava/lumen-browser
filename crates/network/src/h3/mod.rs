@@ -69,11 +69,22 @@
 //!   peer's flow-control limit, advancing to `DataRecvd` on acknowledgement. Pure
 //!   state machine driven by decoded frames; no connection-level flow control, no
 //!   retransmission, no IO.
-//! - Slice 11+ (planned) — the rest of the QUIC transport (UDP datagrams,
+//! - Slice 11 — the connection-level flow control + stream-count limits
+//!   ([`conn_flow`], RFC 9000 §4.1, §4.6): the connection-wide `MAX_DATA` budget
+//!   that caps the sum of stream data across all streams (independent of each
+//!   stream's own `MAX_STREAM_DATA`) and the `MAX_STREAMS` budget that caps how
+//!   many streams of each direction an endpoint may open. [`conn_flow::
+//!   SendConnFlow`] / [`conn_flow::RecvConnFlow`] track the send/receive halves of
+//!   the connection data budget; [`conn_flow::SendStreamLimit`] / [`conn_flow::
+//!   RecvStreamLimit`] track the send/receive halves of the stream-count budget,
+//!   including the block signals (`DATA_BLOCKED` / `STREAMS_BLOCKED`) and the
+//!   re-advertisement as data is consumed and streams complete. Pure state
+//!   machine driven by the connection layer's sent/received/opened/closed
+//!   reports; no IO.
+//! - Slice 12+ (planned) — the rest of the QUIC transport (UDP datagrams,
 //!   header protection, TLS 1.3 handshake, packet protection, actually arming the
-//!   PTO timer and assembling probe datagrams, connection-level flow control and
-//!   stream-count limits, unidirectional/request stream framing, and
-//!   `h3_do_request` dispatch alongside the existing H1/H2 paths.
+//!   PTO timer and assembling probe datagrams, unidirectional/request stream
+//!   framing, and `h3_do_request` dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -82,6 +93,7 @@
 //! decides when an origin is eligible for the QUIC path at all.
 
 pub mod alt_svc;
+pub mod conn_flow;
 pub mod frame;
 pub mod loss;
 pub mod packet;
