@@ -111,9 +111,11 @@ fn emit_contour(
 /// in that case variation has no effect and the caller should fall back to its
 /// native text path. Returns `Some` (possibly empty for whitespace-only runs)
 /// when the face is variable and was processed here.
+#[allow(clippy::too_many_arguments)]
 pub fn build_varied_text_paths(
     font_bytes: &[u8],
     axes: &[([u8; 4], f32)],
+    features: &[([u8; 4], u32)],
     text: &str,
     font_size: f32,
     origin_x: f32,
@@ -135,7 +137,7 @@ pub fn build_varied_text_paths(
     let hhea = font.hhea().ok()?;
     let cmap = font.cmap().ok()?;
     let hmtx = font.hmtx().ok()?;
-    let shaper = lumen_font::Shaper::new(&font);
+    let shaper = lumen_font::Shaper::with_features(&font, features);
 
     let units_per_em = f32::from(head.units_per_em);
     if units_per_em == 0.0 {
@@ -201,13 +203,13 @@ mod tests {
     #[test]
     fn static_font_returns_none() {
         const INTER: &[u8] = include_bytes!("../../../../assets/fonts/Inter-Regular.ttf");
-        let cmds = build_varied_text_paths(INTER, &[(*b"wght", 700.0)], "Ag", 16.0, 0.0, 0.0, 0.0);
+        let cmds = build_varied_text_paths(INTER, &[(*b"wght", 700.0)], &[], "Ag", 16.0, 0.0, 0.0, 0.0);
         assert!(cmds.is_none(), "static face must defer to the native text path");
     }
 
     #[test]
     fn garbage_bytes_return_none() {
-        assert!(build_varied_text_paths(&[0u8; 8], &[], "x", 16.0, 0.0, 0.0, 0.0).is_none());
+        assert!(build_varied_text_paths(&[0u8; 8], &[], &[], "x", 16.0, 0.0, 0.0, 0.0).is_none());
     }
 
     #[test]

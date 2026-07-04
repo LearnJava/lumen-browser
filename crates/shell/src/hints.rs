@@ -199,6 +199,8 @@ pub fn build_hints_overlay(state: &HintState, scroll_x: f32, scroll_y: f32) -> D
                 font_weight: FontWeight(700),
                 font_style: FontStyle::Normal,
                 font_variation_axes: Vec::new(),
+                font_features: Vec::new(),
+                font_palette: None,
                 tab_size: 0.0,
                 highlight_name: None,
                 text_orientation: None,

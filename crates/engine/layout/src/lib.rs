@@ -61,8 +61,11 @@ pub use image_set::{
     parse_image_set, select_image_set_candidate, select_image_set_url,
     ImageSetOption, SupportedTypes,
 };
-pub use mathml::{MathmlBox, MathmlElementKind, lay_out_mathml, collect_mathml_structure};
-pub use ruby::{RubyBox, RubyPosition, lay_out_ruby};
+pub use mathml::{
+    MATH_SCRIPT_SCALE, MathStyle, MathmlBox, MathmlElementKind, collect_mathml_structure,
+    lay_out_mathml, math_depth_scale,
+};
+pub use ruby::{RubyAlign, RubyBox, RubyMerge, RubyPosition, lay_out_ruby};
 pub use animation::{
     AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator,
     LinearInterpolator, NoopInterpolator, parse_keyframe_style, KeyframeStyle,
@@ -113,6 +116,7 @@ pub use stacking::{
 pub use style::{
     apply_container_rules, evaluate_container_condition,
     set_interactive_state, clear_interactive_state,
+    set_forced_colors, forced_colors_active,
     parse_background_gradient, parse_color, parse_css_wide_keyword, parse_gradient_stops,
     parse_grid_template_areas, parse_transform_list,
     radial_gradient_radii, RadialShape, RadialSize,
@@ -121,7 +125,7 @@ pub use style::{
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat,
     BackgroundSize, BgSizeAxis, BorderCollapse, BorderStyle,
     BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ColorFloat,
-    ClearSide, ContainFlags, ComputedStyle, Content,
+    BackfaceVisibility, ClearSide, ContainFlags, ComputedStyle, Content,
     ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, EmptyCells, FilterFn, FloatSide, FontOpticalSizing, FontStretch,
     FontStyle,
     FontVariant, FontVariationSetting, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,

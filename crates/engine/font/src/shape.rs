@@ -53,8 +53,22 @@ impl<'a> Shaper<'a> {
     /// Build a shaper from a parsed font, reading its `GSUB`/`GPOS` tables.
     /// Always succeeds: missing/invalid tables simply disable that stage.
     pub fn new(font: &Font<'a>) -> Self {
-        let gsub = font.table(b"GSUB").and_then(Gsub::parse);
-        let gpos = font.table(b"GPOS").and_then(Gpos::parse);
+        Self::with_features(font, &[])
+    }
+
+    /// Like [`Shaper::new`], but with CSS `font-feature-settings` overrides
+    /// applied on top of the default feature sets of both tables: `(tag, 0)`
+    /// disables a feature (`"liga" 0`, `"kern" 0`), `(tag, >=1)` enables one
+    /// that is off by default (`"dlig" 1`, `"smcp" 1`). The full override
+    /// list is passed to both tables; each only matches tags present in its
+    /// own FeatureList, so a `GPOS` tag in the `GSUB` set is harmless.
+    pub fn with_features(font: &Font<'a>, overrides: &[([u8; 4], u32)]) -> Self {
+        let gsub = font
+            .table(b"GSUB")
+            .and_then(|d| Gsub::parse_with_features(d, overrides));
+        let gpos = font
+            .table(b"GPOS")
+            .and_then(|d| Gpos::parse_with_features(d, overrides));
         Self { gsub, gpos }
     }
 

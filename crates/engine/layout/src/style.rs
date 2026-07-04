@@ -18,7 +18,10 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use crate::color_mix::{MixColorSpace, mix_colors};
+use crate::font_palette::{resolve_font_palette_overrides, ResolvedFontPalette};
+use crate::mathml::MathStyle;
 use crate::rule_index::RuleIndex;
+use crate::ruby::{RubyAlign, RubyMerge, RubyPosition};
 use crate::scroll_timeline::ScrollAxis;
 
 use lumen_core::geom::Size;
@@ -486,6 +489,21 @@ impl Default for FontWeight {
 pub struct FontVariationSetting {
     pub tag: [u8; 4],
     pub value: f32,
+}
+
+/// CSS Fonts L3 §6 — одна запись `font-feature-settings`.
+///
+/// `tag` — четырёхбайтный OpenType feature tag (например `b"liga"`,
+/// `b"smcp"`). `value` — целое значение фичи: `0` = выключена, `1`
+/// (или `on`, или опущено) = включена, >1 = выбор альтернативы
+/// (например `"salt" 2`). `normal` → пустой Vec; шейпер применяет свой
+/// default-набор фич (`liga`/`clig`/`calt`/`rlig`/`ccmp` + `kern`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FontFeatureSetting {
+    /// Четырёхбайтный OpenType feature tag (ASCII U+20–U+7E).
+    pub tag: [u8; 4],
+    /// Значение фичи: 0 = off, 1 = on, >1 = номер альтернативы.
+    pub value: u32,
 }
 
 /// Набор активных линий `text-decoration` для элемента.
@@ -2333,6 +2351,21 @@ pub struct ComputedStyle {
     /// Initial: пустой Vec (эквивалентно `normal`). Renderer нормализует
     /// через fvar + avar при растеризации глифов.
     pub font_variation_settings: Vec<FontVariationSetting>,
+    /// CSS Fonts L3 §6 — `font-feature-settings`. Inherited.
+    /// Initial: пустой Vec (эквивалентно `normal`). Шейпер (lumen-font)
+    /// накладывает записи поверх default-набора OpenType-фич: value 0
+    /// выключает фичу, ≥1 включает.
+    pub font_feature_settings: Vec<FontFeatureSetting>,
+    /// CSS Fonts L4 §11.3 — `font-palette`. Inherited. Initial: `Normal`
+    /// (default CPAL palette). Selects the color palette for COLR color
+    /// glyphs; no effect on monochrome text.
+    pub font_palette: FontPalette,
+    /// Resolved `@font-palette-values` data when [`Self::font_palette`] is
+    /// `Custom` — resolved at the end of `compute_style` against the
+    /// stylesheet (paint builds the display list from `ComputedStyle` alone
+    /// and has no stylesheet access). `None` for keyword values and unknown
+    /// palette names (spec: behaves as `normal`).
+    pub font_palette_resolved: Option<ResolvedFontPalette>,
     /// CSS Fonts L4 §7.12 — `font-optical-sizing: auto | none`. Inherited.
     /// `auto` (initial): renderer injects `opsz = font_size` variation axis.
     pub font_optical_sizing: FontOpticalSizing,
@@ -2719,6 +2752,10 @@ pub struct ComputedStyle {
     /// CSS Transforms L2 §6 — `transform-style: flat | preserve-3d`.
     /// `Preserve3d` makes children participate in 3D rendering context.
     pub transform_style: TransformStyle,
+    /// CSS Transforms L2 §5.1 — `backface-visibility: visible | hidden`.
+    /// Stored on ComputedStyle; actual back-face culling deferred until
+    /// a 3D rendering context exists (3D projection ⬜).
+    pub backface_visibility: BackfaceVisibility,
     /// CSS Lists L3 §2.1 — `list-style-type`.
     pub list_style_type: ListStyleType,
     /// CSS Lists L3 §2.3 — `list-style-position`.
@@ -2948,6 +2985,19 @@ pub struct ComputedStyle {
     /// CSS Writing Modes L3 §6.5 — `text-orientation`. Inherited. Initial: `Mixed`.
     /// Phase 0: parse + store; glyph rotation — deferred.
     pub text_orientation: TextOrientation,
+    /// CSS Ruby L1 §4 — `ruby-position`. Inherited. Initial: `Over`.
+    /// Drives `lay_out_ruby`; `<ruby>` box-tree integration — deferred.
+    pub ruby_position: RubyPosition,
+    /// CSS Ruby L1 §4 — `ruby-align`. Inherited. Initial: `SpaceAround`.
+    pub ruby_align: RubyAlign,
+    /// CSS Ruby L1 §4 — `ruby-merge`. Inherited. Initial: `Separate`.
+    pub ruby_merge: RubyMerge,
+    /// MathML Core §2.1.1 — `math-style`. Inherited. Initial: `Normal`.
+    /// Drives `lay_out_mathml` (compact scales mfrac children); `<math>` box-tree integration — deferred.
+    pub math_style: MathStyle,
+    /// MathML Core §2.1.2 — `math-depth`. Inherited. Computed value: integer. Initial: `0`.
+    /// `auto-add` / `add(<integer>)` resolve against the inherited depth at compute time.
+    pub math_depth: i32,
     /// CSS Shapes L1 §3 — `shape-outside`. NOT inherited. Initial: `None`.
     /// Phase 0: parse + store; float-wrap shape application — deferred.
     pub shape_outside: ShapeOutside,
@@ -5076,6 +5126,18 @@ pub enum TransformStyle {
     Preserve3d,
 }
 
+/// CSS Transforms L2 §5.1 — `backface-visibility: visible | hidden`.
+/// `Hidden` = element is invisible when its back face is oriented toward
+/// the viewer (requires a 3D rendering context to have any effect).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BackfaceVisibility {
+    /// Back face is visible (initial value).
+    #[default]
+    Visible,
+    /// Back face is hidden.
+    Hidden,
+}
+
 /// CSS transform functions — translate/scale/rotate/skew/skewX/skewY/matrix
 /// and all 3D variants (CSS Transforms L2).
 #[derive(Debug, Clone, PartialEq)]
@@ -5221,6 +5283,7 @@ impl ComputedStyle {
             && self.font_weight == other.font_weight
             && self.font_variant == other.font_variant
             && self.font_stretch == other.font_stretch
+            && self.font_feature_settings == other.font_feature_settings
             && (self.letter_spacing - other.letter_spacing).abs() < f32::EPSILON
             && (self.word_spacing - other.word_spacing).abs() < f32::EPSILON
             && self.text_decoration_line == other.text_decoration_line
@@ -5249,6 +5312,9 @@ impl ComputedStyle {
             font_stretch: FontStretch::NORMAL,
             font_family: Vec::new(),
             font_variation_settings: Vec::new(),
+            font_feature_settings: Vec::new(),
+            font_palette: FontPalette::Normal,
+            font_palette_resolved: None,
             font_optical_sizing: FontOpticalSizing::Auto,
             text_transform: TextTransform::None,
             white_space: WhiteSpace::Normal,
@@ -5398,6 +5464,7 @@ impl ComputedStyle {
             perspective: None,
             perspective_origin: (PositionComponent::Percent(0.5), PositionComponent::Percent(0.5)),
             transform_style: TransformStyle::Flat,
+            backface_visibility: BackfaceVisibility::Visible,
             list_style_type: ListStyleType::Disc,
             list_style_position: ListStylePosition::Outside,
             list_style_image: None,
@@ -5471,6 +5538,11 @@ impl ComputedStyle {
             font_size_adjust: FontSizeAdjust::None,
             writing_mode: WritingMode::HorizontalTb,
             text_orientation: TextOrientation::Mixed,
+            ruby_position: RubyPosition::Over,
+            ruby_align: RubyAlign::SpaceAround,
+            ruby_merge: RubyMerge::Separate,
+            math_style: MathStyle::Normal,
+            math_depth: 0,
             shape_outside: ShapeOutside::None,
             shape_margin: Length::Px(0.0),
             shape_image_threshold: 0.0,
@@ -5554,6 +5626,9 @@ pub fn compute_style(
         font_stretch: inherited.font_stretch,
         font_family: inherited.font_family.clone(),
         font_variation_settings: inherited.font_variation_settings.clone(),
+        font_feature_settings: inherited.font_feature_settings.clone(),
+        font_palette: inherited.font_palette.clone(),
+        font_palette_resolved: inherited.font_palette_resolved.clone(),
         font_optical_sizing: inherited.font_optical_sizing,
         text_transform: inherited.text_transform,
         white_space: ua_white_space(doc, node).unwrap_or(inherited.white_space),
@@ -5572,8 +5647,8 @@ pub fn compute_style(
         text_decoration_skip_ink: inherited.text_decoration_skip_ink,
         accent_color: inherited.accent_color,
         color_scheme: inherited.color_scheme,
-        // CSS Color Adjustment L1 §4: forced-color-adjust is NOT inherited — reset.
-        forced_color_adjust: ForcedColorAdjust::Auto,
+        // CSS Color Adjustment L1 §4: forced-color-adjust IS inherited.
+        forced_color_adjust: inherited.forced_color_adjust,
         // CSS Variables L1: все custom properties inherited.
         custom_props: inherited.custom_props.clone(),
         // Ненаследуемые — сброс.
@@ -5724,6 +5799,7 @@ pub fn compute_style(
         perspective: None,
         perspective_origin: (PositionComponent::Percent(0.5), PositionComponent::Percent(0.5)),
         transform_style: TransformStyle::Flat,
+        backface_visibility: BackfaceVisibility::Visible,
         // CSS Lists — list-style-* наследуются.
         list_style_type: inherited.list_style_type.clone(),
         list_style_position: inherited.list_style_position,
@@ -5818,6 +5894,13 @@ pub fn compute_style(
         // CSS Writing Modes L3 — оба inherited.
         writing_mode: inherited.writing_mode,
         text_orientation: inherited.text_orientation,
+        // CSS Ruby L1 §4 — все три inherited.
+        ruby_position: inherited.ruby_position,
+        ruby_align: inherited.ruby_align,
+        ruby_merge: inherited.ruby_merge,
+        // MathML Core §2.1 — оба inherited (math-depth уже как computed integer).
+        math_style: inherited.math_style,
+        math_depth: inherited.math_depth,
         // CSS Shapes L1 / Motion Path — не наследуются. Initial values.
         shape_outside: ShapeOutside::None,
         shape_margin: Length::Px(0.0),
@@ -6447,6 +6530,15 @@ pub fn compute_style(
     // already resolved inline in the `"color"` branch of apply_declaration.
     resolve_system_colors_in_style(&mut style, dark_mode);
 
+    // CSS Color Adjustment L1 §3 — Forced Colors Mode: when the user preference
+    // is active, override author colors with the forced system palette
+    // (respecting `forced-color-adjust`). Runs after system-color resolution so
+    // it sees final Rgba values and after the full cascade so it sees the final
+    // `forced-color-adjust` value.
+    if forced_colors_active() {
+        apply_forced_colors_mode(doc, node, &mut style, dark_mode);
+    }
+
     // CSS Overflow L3 §2.1: if one axis is `visible` and the other is not,
     // the `visible` axis becomes `auto` (both axes must agree on visibility).
     (style.overflow_x, style.overflow_y) = coerce_overflow_axes(style.overflow_x, style.overflow_y);
@@ -6461,6 +6553,19 @@ pub fn compute_style(
     if style.field_sizing == FieldSizing::Content {
         apply_ua_form_controls_field_sizing_clear(doc, node, &mut style);
     }
+
+    // CSS Fonts L4 §13 — resolve `font-palette: <dashed-ident>` against the
+    // stylesheet's `@font-palette-values` rules now: paint builds the display
+    // list from ComputedStyle alone and has no stylesheet access. Runs after
+    // the full cascade so it sees the final `font-palette` and `font-family`.
+    style.font_palette_resolved = match &style.font_palette {
+        FontPalette::Custom(name) => resolve_font_palette_overrides(
+            &sheet.font_palette_values,
+            name,
+            style.font_family.first().map(String::as_str).unwrap_or(""),
+        ),
+        _ => None,
+    };
 
     style
 }
@@ -6496,6 +6601,126 @@ fn resolve_system_colors_in_style(style: &mut ComputedStyle, dark_mode: bool) {
     resolve!(&mut style.border_left_color);
     resolve!(&mut style.column_rule_color);
     resolve!(&mut style.gap_rule_color);
+}
+
+/// CSS Color Adjustment L1 §3.1 — forces the element's colors to the system
+/// palette when Forced Colors Mode is active.
+///
+/// `forced-color-adjust` is honored: `none` leaves the element untouched;
+/// `preserve-parent-color` forces everything except `color`, which keeps its
+/// computed (typically inherited, already-forced) value.
+///
+/// Forced values follow element semantics (§3.1 + HTML UA guidance):
+/// links (`a[href]`/`area[href]`) → `LinkText`, disabled controls → `GrayText`,
+/// buttons → `ButtonText`/`ButtonFace`/`ButtonBorder`, text fields →
+/// `CanvasText`/`Field`; everything else → `CanvasText`/`Canvas`.
+/// `box-shadow`/`text-shadow` are forced to none; non-`url()` background
+/// images (gradients, cross-fades, `paint()`) are dropped — `url()` images
+/// are kept per spec. `background-color` keeps the author's full transparency:
+/// an unset or `transparent` background stays transparent.
+fn apply_forced_colors_mode(doc: &Document, node: NodeId, style: &mut ComputedStyle, dark_mode: bool) {
+    if style.forced_color_adjust == ForcedColorAdjust::None {
+        return;
+    }
+    let dark = style.color_scheme.used_dark(dark_mode);
+
+    // Element semantics for system-color pair selection.
+    let mut is_link = false;
+    let mut is_button = false;
+    let mut is_field = false;
+    let mut is_disabled = false;
+    if let NodeData::Element { name, .. } = &doc.get(node).data {
+        let tag = name.local.as_str();
+        is_link = matches!(tag, "a" | "area") && doc.get(node).get_attr("href").is_some();
+        let input_type = if tag == "input" {
+            doc.get(node)
+                .get_attr("type")
+                .map(|s| s.trim().to_ascii_lowercase())
+                .unwrap_or_else(|| "text".to_string())
+        } else {
+            String::new()
+        };
+        is_button = tag == "button" || matches!(input_type.as_str(), "button" | "submit" | "reset");
+        is_field = matches!(tag, "textarea" | "select") || (tag == "input" && !is_button);
+        is_disabled = matches!(tag, "input" | "textarea" | "select" | "button")
+            && doc.get(node).get_attr("disabled").is_some();
+    }
+
+    let fg_kw = if is_disabled {
+        SystemColor::GrayText
+    } else if is_link {
+        SystemColor::LinkText
+    } else if is_button {
+        SystemColor::ButtonText
+    } else {
+        SystemColor::CanvasText
+    };
+    let fg = fg_kw.resolve_color(dark);
+    let border = if is_button { SystemColor::ButtonBorder } else { SystemColor::CanvasText }
+        .resolve_color(dark);
+    let bg = if is_button {
+        SystemColor::ButtonFace
+    } else if is_field {
+        SystemColor::Field
+    } else {
+        SystemColor::Canvas
+    }
+    .resolve_color(dark);
+
+    // §3.2 `preserve-parent-color`: only the `color` property escapes forcing.
+    if style.forced_color_adjust != ForcedColorAdjust::PreserveParentColor {
+        style.color = fg;
+    }
+
+    // background-color: forced to the backdrop system color, but the author's
+    // full transparency is preserved (unset / alpha 0 stays transparent).
+    let bg_visible = match &style.background_color {
+        Some(CssColor::Rgba(c)) => c.a > 0,
+        Some(CssColor::Wide(w)) => w.a > 0.0,
+        // System already resolved to Rgba by resolve_system_colors_in_style;
+        // CurrentColor follows the (forced, opaque) `color`.
+        Some(CssColor::CurrentColor) | Some(CssColor::System(_)) => true,
+        None => false,
+    };
+    if bg_visible {
+        style.background_color = Some(CssColor::Rgba(bg));
+    }
+
+    style.border_top_color = CssColor::Rgba(border);
+    style.border_right_color = CssColor::Rgba(border);
+    style.border_bottom_color = CssColor::Rgba(border);
+    style.border_left_color = CssColor::Rgba(border);
+    style.column_rule_color = CssColor::Rgba(border);
+    style.gap_rule_color = CssColor::Rgba(border);
+    if !matches!(style.outline_color, OutlineColor::Auto) {
+        style.outline_color = OutlineColor::Color(fg);
+    }
+    style.text_decoration_color = CssColor::Rgba(fg);
+    style.text_emphasis_color = CssColor::Rgba(fg);
+    if style.caret_color.is_some() {
+        // `auto` (None) already follows the forced `color`.
+        style.caret_color = Some(fg);
+    }
+
+    // SVG geometry is painted from `fill`/`stroke` (§3.1 lists both).
+    if !matches!(style.svg_fill, SvgPaint::None) {
+        style.svg_fill = SvgPaint::Color(fg);
+    }
+    if !matches!(style.svg_stroke, SvgPaint::None) {
+        style.svg_stroke = SvgPaint::Color(fg);
+    }
+
+    // Shadows are forced to `none`.
+    style.box_shadow.clear();
+    style.text_shadow.clear();
+
+    // background-image: gradients / cross-fades / paint() are dropped;
+    // `url()` images are kept (spec: forced to none unless a url()).
+    for layer in &mut style.background_layers {
+        if !matches!(layer.image, BackgroundImage::None | BackgroundImage::Url(_)) {
+            layer.image = BackgroundImage::None;
+        }
+    }
 }
 
 /// CSS Overflow L3 §2.1: coerce mismatched overflow axes.
@@ -6697,6 +6922,9 @@ pub fn compute_pseudo_element_style(
     style.font_stretch = parent.font_stretch;
     style.font_family = parent.font_family.clone();
     style.font_variation_settings = parent.font_variation_settings.clone();
+    style.font_feature_settings = parent.font_feature_settings.clone();
+    style.font_palette = parent.font_palette.clone();
+    style.font_palette_resolved = parent.font_palette_resolved.clone();
     style.text_transform = parent.text_transform;
     style.white_space = parent.white_space;
     style.text_indent = parent.text_indent.clone();
@@ -6736,6 +6964,11 @@ pub fn compute_pseudo_element_style(
     style.image_rendering = parent.image_rendering;
     style.writing_mode = parent.writing_mode;
     style.text_orientation = parent.text_orientation;
+    style.ruby_position = parent.ruby_position;
+    style.ruby_align = parent.ruby_align;
+    style.ruby_merge = parent.ruby_merge;
+    style.math_style = parent.math_style;
+    style.math_depth = parent.math_depth;
     style.font_size_adjust = parent.font_size_adjust;
     style.text_wrap_mode = parent.text_wrap_mode;
     style.text_wrap_style = parent.text_wrap_style;
@@ -9726,6 +9959,92 @@ pub fn parse_font_variation_settings(val: &str) -> Option<Vec<FontVariationSetti
     Some(out)
 }
 
+/// Парсит CSS `font-feature-settings` (CSS Fonts L3 §6).
+///
+/// Синтаксис: `normal | <feature-tag-value>#`, где
+/// `<feature-tag-value> = <string> [ <integer> | on | off ]?`.
+/// Пример: `"liga" 0, "smcp", "salt" 2, "kern" off`.
+///
+/// Тег — ровно 4 символа ASCII U+20–U+7E; значение опущено → 1,
+/// `on` → 1, `off` → 0, целое должно быть ≥ 0. Возвращает `None` при
+/// синтаксической ошибке (cascade игнорирует невалидные объявления).
+/// `normal` → `Some(Vec::new())`.
+pub fn parse_font_feature_settings(val: &str) -> Option<Vec<FontFeatureSetting>> {
+    let val = val.trim();
+    if val.eq_ignore_ascii_case("normal") {
+        return Some(Vec::new());
+    }
+    let mut out = Vec::new();
+    for token_pair in val.split(',') {
+        let pair = token_pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        // Первый токен — quoted 4-char tag.
+        let (tag_str, rest) = if let Some(stripped) = pair.strip_prefix('"') {
+            let end = stripped.find('"')?;
+            (&stripped[..end], stripped[end + 1..].trim())
+        } else if let Some(stripped) = pair.strip_prefix('\'') {
+            let end = stripped.find('\'')?;
+            (&stripped[..end], stripped[end + 1..].trim())
+        } else {
+            return None;
+        };
+        // Тег — ровно 4 печатных ASCII-символа (U+20–U+7E).
+        if tag_str.len() != 4 || !tag_str.bytes().all(|b| (0x20..=0x7E).contains(&b)) {
+            return None;
+        }
+        let tag_bytes = tag_str.as_bytes();
+        let tag: [u8; 4] = [tag_bytes[0], tag_bytes[1], tag_bytes[2], tag_bytes[3]];
+        // Второй токен опционален: <integer ≥ 0> | on | off; по умолчанию 1.
+        let value: u32 = if rest.is_empty() || rest.eq_ignore_ascii_case("on") {
+            1
+        } else if rest.eq_ignore_ascii_case("off") {
+            0
+        } else {
+            rest.parse().ok()?
+        };
+        out.push(FontFeatureSetting { tag, value });
+    }
+    Some(out)
+}
+
+/// CSS Fonts L4 §11.3 — computed value of `font-palette`.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum FontPalette {
+    /// Default CPAL palette (index 0). Initial value.
+    #[default]
+    Normal,
+    /// First CPAL palette flagged «usable with light background».
+    Light,
+    /// First CPAL palette flagged «usable with dark background».
+    Dark,
+    /// `<dashed-ident>` naming a `@font-palette-values` rule (case-sensitive,
+    /// stored with the leading `--`).
+    Custom(String),
+}
+
+/// Парсит CSS `font-palette`: `normal | light | dark | <dashed-ident>`
+/// (CSS Fonts L4 §11.3). Ключевые слова case-insensitive, dashed-ident
+/// case-sensitive. Возвращает `None` при невалидном значении (cascade
+/// игнорирует объявление).
+pub fn parse_font_palette(val: &str) -> Option<FontPalette> {
+    let v = val.trim();
+    if v.eq_ignore_ascii_case("normal") {
+        return Some(FontPalette::Normal);
+    }
+    if v.eq_ignore_ascii_case("light") {
+        return Some(FontPalette::Light);
+    }
+    if v.eq_ignore_ascii_case("dark") {
+        return Some(FontPalette::Dark);
+    }
+    if v.len() > 2 && v.starts_with("--") && !v.contains(char::is_whitespace) {
+        return Some(FontPalette::Custom(v.to_string()));
+    }
+    None
+}
+
 /// Парсит CSS `font-weight`. Поддерживает:
 ///   - `normal` → 400, `bold` → 700;
 ///   - численные `100`..`900` (или любое число 1..1000 — Variable Fonts);
@@ -9826,6 +10145,30 @@ pub fn set_interactive_state(
 /// Clears hover/focus/active state after layout.
 pub fn clear_interactive_state() {
     set_interactive_state(None, None, None);
+}
+
+thread_local! {
+    /// CSS Color Adjustment L1 §3 — Forced Colors Mode active flag.
+    /// Set by the shell via [`set_forced_colors`] from the user's accessibility
+    /// preference before a layout pass on this thread. Read by `compute_style`
+    /// (system-palette forcing post-pass) and by `media_context_from_viewport`
+    /// (the `(forced-colors: active)` media feature).
+    static FORCED_COLORS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Enables/disables Forced Colors Mode (CSS Color Adjustment L1 §3) for all
+/// subsequent layout passes on the current thread.
+///
+/// Call before `layout_measured` / `layout_measured_hyp` on the layout thread.
+/// The flag is sticky (a UA-wide user preference, not per-pass state), so there
+/// is no paired `clear_*` — call with `false` to disable.
+pub fn set_forced_colors(active: bool) {
+    FORCED_COLORS.with(|f| f.set(active));
+}
+
+/// True when Forced Colors Mode is active on the current thread.
+pub fn forced_colors_active() -> bool {
+    FORCED_COLORS.with(|f| f.get())
 }
 
 /// CSS Cascade L6 §5.1 — true when `node` is a descendant of (or is) an element
@@ -11844,6 +12187,16 @@ fn apply_declaration(
                 style.font_variation_settings = v;
             }
         }
+        "font-feature-settings" => {
+            if let Some(v) = parse_font_feature_settings(val) {
+                style.font_feature_settings = v;
+            }
+        }
+        "font-palette" => {
+            if let Some(v) = parse_font_palette(val) {
+                style.font_palette = v;
+            }
+        }
         "font-optical-sizing" => {
             style.font_optical_sizing = match val {
                 "auto" => FontOpticalSizing::Auto,
@@ -13054,6 +13407,54 @@ fn apply_declaration(
                 _ => style.text_orientation,
             };
         }
+        "ruby-position" => {
+            style.ruby_position = match val.trim() {
+                // `alternate` (одиночный) по спеке ведёт себя как over.
+                "over" | "alternate" => RubyPosition::Over,
+                "under" => RubyPosition::Under,
+                _ => style.ruby_position,
+            };
+        }
+        "ruby-align" => {
+            style.ruby_align = match val.trim() {
+                "start" => RubyAlign::Start,
+                "center" => RubyAlign::Center,
+                "space-between" => RubyAlign::SpaceBetween,
+                "space-around" => RubyAlign::SpaceAround,
+                _ => style.ruby_align,
+            };
+        }
+        "ruby-merge" => {
+            style.ruby_merge = match val.trim() {
+                "separate" => RubyMerge::Separate,
+                "merge" => RubyMerge::Merge,
+                "auto" => RubyMerge::Auto,
+                _ => style.ruby_merge,
+            };
+        }
+        "math-style" => {
+            style.math_style = match val.trim() {
+                "normal" => MathStyle::Normal,
+                "compact" => MathStyle::Compact,
+                _ => style.math_style,
+            };
+        }
+        "math-depth" => {
+            // Computed value — целое; относительные формы резолвятся от inherited
+            // (MathML Core §2.1.2: auto-add и add(n) — относительно родителя).
+            let v = val.trim();
+            if v == "auto-add" {
+                // +1 только если унаследованный math-style компактный.
+                style.math_depth = inherited.math_depth
+                    + i32::from(inherited.math_style == MathStyle::Compact);
+            } else if let Some(inner) = v.strip_prefix("add(").and_then(|s| s.strip_suffix(')')) {
+                if let Ok(n) = inner.trim().parse::<i32>() {
+                    style.math_depth = inherited.math_depth + n;
+                }
+            } else if let Ok(n) = v.parse::<i32>() {
+                style.math_depth = n;
+            }
+        }
         "user-select" => {
             if let Some(v) = UserSelect::parse(val) {
                 style.user_select = v;
@@ -13261,6 +13662,15 @@ fn apply_declaration(
             } else {
                 TransformStyle::Flat
             };
+        }
+        "backface-visibility" => {
+            // CSS Transforms L2 §5.1 — `backface-visibility: visible | hidden`.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("hidden") {
+                style.backface_visibility = BackfaceVisibility::Hidden;
+            } else if trimmed.eq_ignore_ascii_case("visible") {
+                style.backface_visibility = BackfaceVisibility::Visible;
+            }
         }
         "list-style-type" => {
             if let Some(v) = ListStyleType::parse(val) {
@@ -14932,6 +15342,22 @@ fn apply_css_wide_keyword(
                 init.font_variation_settings.clone()
             };
         }
+        "font-feature-settings" => {
+            style.font_feature_settings = if inh {
+                inherited.font_feature_settings.clone()
+            } else {
+                init.font_feature_settings.clone()
+            };
+        }
+        "font-palette" => {
+            style.font_palette =
+                if inh { inherited.font_palette.clone() } else { init.font_palette.clone() };
+            style.font_palette_resolved = if inh {
+                inherited.font_palette_resolved.clone()
+            } else {
+                init.font_palette_resolved.clone()
+            };
+        }
         "font-optical-sizing" => {
             style.font_optical_sizing =
                 if inh { inherited.font_optical_sizing } else { init.font_optical_sizing };
@@ -15082,6 +15508,21 @@ fn apply_css_wide_keyword(
                 init.text_orientation
             };
         }
+        "ruby-position" => {
+            style.ruby_position = if inh { inherited.ruby_position } else { init.ruby_position };
+        }
+        "ruby-align" => {
+            style.ruby_align = if inh { inherited.ruby_align } else { init.ruby_align };
+        }
+        "ruby-merge" => {
+            style.ruby_merge = if inh { inherited.ruby_merge } else { init.ruby_merge };
+        }
+        "math-style" => {
+            style.math_style = if inh { inherited.math_style } else { init.math_style };
+        }
+        "math-depth" => {
+            style.math_depth = if inh { inherited.math_depth } else { init.math_depth };
+        }
         "accent-color" => {
             style.accent_color = if inh { inherited.accent_color } else { init.accent_color };
         }
@@ -15200,7 +15641,8 @@ fn apply_css_wide_keyword(
             style.offset_anchor = if inh_only_inherit { inherited.offset_anchor } else { init.offset_anchor };
         }
         "forced-color-adjust" => {
-            style.forced_color_adjust = if inh_only_inherit {
+            // Inherited property: `unset`/`revert` behave as `inherit`.
+            style.forced_color_adjust = if inh {
                 inherited.forced_color_adjust
             } else {
                 init.forced_color_adjust
@@ -18009,7 +18451,7 @@ fn media_context_from_viewport(viewport: Size, dark_mode: bool) -> MediaContext 
         height: viewport.height,
         prefers_dark: dark_mode,
         prefers_reduced_motion: false,
-        forced_colors: false,
+        forced_colors: forced_colors_active(),
         ..Default::default()
     }
 }
@@ -19908,6 +20350,212 @@ mod tests {
         );
         assert_eq!(st.initial_letter_size, 4.0);
         assert_eq!(st.initial_letter_sink, 3);
+    }
+
+    #[test]
+    fn ruby_properties_apply_declaration() {
+        // CSS Ruby L1: все три свойства доезжают до ComputedStyle через каскад.
+        let sheet = lumen_css_parser::parse(
+            "p { ruby-position: under; ruby-align: center; ruby-merge: merge; }",
+        );
+        let doc = lumen_html_parser::parse("<p>Hi</p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let st = compute_style(
+            &doc,
+            pid,
+            &sheet,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        assert_eq!(st.ruby_position, RubyPosition::Under);
+        assert_eq!(st.ruby_align, RubyAlign::Center);
+        assert_eq!(st.ruby_merge, RubyMerge::Merge);
+    }
+
+    #[test]
+    fn ruby_properties_initial_values() {
+        // Без объявлений — initial по спеке: over / space-around / separate.
+        let sheet = lumen_css_parser::parse("p { color: red; }");
+        let doc = lumen_html_parser::parse("<p>Hi</p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let st = compute_style(
+            &doc,
+            pid,
+            &sheet,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        assert_eq!(st.ruby_position, RubyPosition::Over);
+        assert_eq!(st.ruby_align, RubyAlign::SpaceAround);
+        assert_eq!(st.ruby_merge, RubyMerge::Separate);
+    }
+
+    #[test]
+    fn ruby_properties_inherited_by_child() {
+        // Все три свойства наследуются: <span> внутри <p> получает значения родителя.
+        let sheet = lumen_css_parser::parse(
+            "p { ruby-position: under; ruby-align: start; ruby-merge: auto; }",
+        );
+        let doc = lumen_html_parser::parse("<p><span>x</span></p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let parent = compute_style(
+            &doc,
+            pid,
+            &sheet,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        let sid = doc.get(pid).children[0];
+        let child = compute_style(&doc, sid, &sheet, &parent, Size::new(800.0, 600.0), false);
+        assert_eq!(child.ruby_position, RubyPosition::Under);
+        assert_eq!(child.ruby_align, RubyAlign::Start);
+        assert_eq!(child.ruby_merge, RubyMerge::Auto);
+    }
+
+    #[test]
+    fn ruby_properties_invalid_values_ignored() {
+        // Невалидные (и неподдерживаемый inter-character) значения игнорируются,
+        // остаются initial; alternate парсится как over.
+        let sheet = lumen_css_parser::parse(
+            "p { ruby-position: inter-character; ruby-align: bogus; ruby-merge: 42; }",
+        );
+        let doc = lumen_html_parser::parse("<p>Hi</p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let st = compute_style(
+            &doc,
+            pid,
+            &sheet,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        assert_eq!(st.ruby_position, RubyPosition::Over);
+        assert_eq!(st.ruby_align, RubyAlign::SpaceAround);
+        assert_eq!(st.ruby_merge, RubyMerge::Separate);
+    }
+
+    #[test]
+    fn math_properties_apply_declaration() {
+        // MathML Core: оба свойства доезжают до ComputedStyle через каскад.
+        let sheet = lumen_css_parser::parse("p { math-style: compact; math-depth: 2; }");
+        let doc = lumen_html_parser::parse("<p>Hi</p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let st = compute_style(
+            &doc,
+            pid,
+            &sheet,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        assert_eq!(st.math_style, MathStyle::Compact);
+        assert_eq!(st.math_depth, 2);
+    }
+
+    #[test]
+    fn math_properties_initial_values() {
+        // Без объявлений — initial по спеке: normal / 0.
+        let sheet = lumen_css_parser::parse("p { color: red; }");
+        let doc = lumen_html_parser::parse("<p>Hi</p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let st = compute_style(
+            &doc,
+            pid,
+            &sheet,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        assert_eq!(st.math_style, MathStyle::Normal);
+        assert_eq!(st.math_depth, 0);
+    }
+
+    #[test]
+    fn math_properties_inherited_by_child() {
+        // Оба свойства наследуются: <span> внутри <p> получает значения родителя.
+        let sheet = lumen_css_parser::parse("p { math-style: compact; math-depth: 3; }");
+        let doc = lumen_html_parser::parse("<p><span>x</span></p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let parent = compute_style(
+            &doc,
+            pid,
+            &sheet,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        let sid = doc.get(pid).children[0];
+        let child = compute_style(&doc, sid, &sheet, &parent, Size::new(800.0, 600.0), false);
+        assert_eq!(child.math_style, MathStyle::Compact);
+        assert_eq!(child.math_depth, 3);
+    }
+
+    #[test]
+    fn math_depth_add_and_auto_add_resolve_against_inherited() {
+        // add(n) = inherited + n; auto-add = inherited + 1 только при
+        // унаследованном math-style: compact (MathML Core §2.1.2).
+        let sheet = lumen_css_parser::parse(
+            "p { math-style: compact; math-depth: 1; } \
+             span { math-depth: add(2); } \
+             b { math-depth: auto-add; }",
+        );
+        let doc = lumen_html_parser::parse("<p><span>x</span><b>y</b></p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let parent = compute_style(
+            &doc,
+            pid,
+            &sheet,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        assert_eq!(parent.math_depth, 1);
+        let sid = doc.get(pid).children[0];
+        let span = compute_style(&doc, sid, &sheet, &parent, Size::new(800.0, 600.0), false);
+        assert_eq!(span.math_depth, 3);
+        let bid = doc.get(pid).children[1];
+        let bold = compute_style(&doc, bid, &sheet, &parent, Size::new(800.0, 600.0), false);
+        assert_eq!(bold.math_depth, 2);
+    }
+
+    #[test]
+    fn math_depth_auto_add_noop_when_style_normal() {
+        // При унаследованном math-style: normal auto-add не инкрементирует.
+        let sheet = lumen_css_parser::parse("span { math-depth: auto-add; }");
+        let doc = lumen_html_parser::parse("<p><span>x</span></p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let parent = compute_style(
+            &doc,
+            pid,
+            &sheet,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        let sid = doc.get(pid).children[0];
+        let span = compute_style(&doc, sid, &sheet, &parent, Size::new(800.0, 600.0), false);
+        assert_eq!(span.math_depth, 0);
+    }
+
+    #[test]
+    fn math_properties_invalid_values_ignored() {
+        // Невалидные значения игнорируются, остаются initial.
+        let sheet = lumen_css_parser::parse("p { math-style: bogus; math-depth: foo; }");
+        let doc = lumen_html_parser::parse("<p>Hi</p>");
+        let pid = doc.get(doc.body().unwrap()).children[0];
+        let st = compute_style(
+            &doc,
+            pid,
+            &sheet,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+            false,
+        );
+        assert_eq!(st.math_style, MathStyle::Normal);
+        assert_eq!(st.math_depth, 0);
     }
 
     #[test]
@@ -25570,6 +26218,178 @@ mod tests {
         ]);
     }
 
+    // ── font-feature-settings (CSS Fonts L3 §6) ──────────────────────────
+
+    #[test]
+    fn font_feature_settings_normal_is_empty() {
+        // `normal` → пустой Vec (default-набор фич шейпера)
+        assert_eq!(parse_font_feature_settings("normal"), Some(vec![]));
+    }
+
+    #[test]
+    fn font_feature_settings_value_forms() {
+        // Опущенное значение → 1; on → 1; off → 0; целое как есть
+        let result = parse_font_feature_settings(
+            "\"smcp\", \"liga\" off, \"kern\" on, \"salt\" 2",
+        );
+        assert_eq!(result, Some(vec![
+            FontFeatureSetting { tag: *b"smcp", value: 1 },
+            FontFeatureSetting { tag: *b"liga", value: 0 },
+            FontFeatureSetting { tag: *b"kern", value: 1 },
+            FontFeatureSetting { tag: *b"salt", value: 2 },
+        ]));
+    }
+
+    #[test]
+    fn font_feature_settings_invalid_declarations() {
+        // Тег не из 4 символов, отрицательное/нечисловое значение,
+        // неквотированный тег → None (объявление игнорируется)
+        assert_eq!(parse_font_feature_settings("\"lig\" 1"), None);
+        assert_eq!(parse_font_feature_settings("\"ligaa\" 1"), None);
+        assert_eq!(parse_font_feature_settings("\"liga\" -1"), None);
+        assert_eq!(parse_font_feature_settings("\"liga\" x"), None);
+        assert_eq!(parse_font_feature_settings("liga 1"), None);
+    }
+
+    #[test]
+    fn font_feature_settings_initial_is_empty() {
+        // Без объявления = initial = пустой Vec
+        let s = style_for("");
+        assert!(s.font_feature_settings.is_empty());
+    }
+
+    #[test]
+    fn font_feature_settings_applied() {
+        let s = style_for("font-feature-settings: \"liga\" 0");
+        assert_eq!(s.font_feature_settings, vec![
+            FontFeatureSetting { tag: *b"liga", value: 0 }
+        ]);
+    }
+
+    #[test]
+    fn font_feature_settings_inherited() {
+        // Свойство наследуется от родителя к потомку
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { font-feature-settings: \"smcp\" 1; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span_style =
+            compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(span_style.font_feature_settings, vec![
+            FontFeatureSetting { tag: *b"smcp", value: 1 }
+        ]);
+    }
+
+    #[test]
+    fn font_feature_settings_child_overrides_parent() {
+        // Потомок сбрасывает наследуемое значение через `normal`
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse(
+            "div { font-feature-settings: \"liga\" 0; } \
+             span { font-feature-settings: normal; }",
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span_style =
+            compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert!(span_style.font_feature_settings.is_empty());
+    }
+
+    // ── font-palette (CSS Fonts L4 §11.3) ────────────────────────────────
+
+    #[test]
+    fn font_palette_parse_forms() {
+        assert_eq!(parse_font_palette("normal"), Some(FontPalette::Normal));
+        assert_eq!(parse_font_palette("LIGHT"), Some(FontPalette::Light));
+        assert_eq!(parse_font_palette(" dark "), Some(FontPalette::Dark));
+        assert_eq!(
+            parse_font_palette("--Cool"),
+            Some(FontPalette::Custom("--Cool".to_string()))
+        );
+        assert_eq!(parse_font_palette("banana"), None);
+        assert_eq!(parse_font_palette("123"), None);
+        assert_eq!(parse_font_palette("--"), None);
+        assert_eq!(parse_font_palette("--a b"), None);
+    }
+
+    #[test]
+    fn font_palette_initial_is_normal() {
+        let s = style_for("");
+        assert_eq!(s.font_palette, FontPalette::Normal);
+        assert!(s.font_palette_resolved.is_none());
+    }
+
+    #[test]
+    fn font_palette_applied() {
+        let s = style_for("font-palette: dark");
+        assert_eq!(s.font_palette, FontPalette::Dark);
+    }
+
+    #[test]
+    fn font_palette_invalid_value_ignored() {
+        let s = style_for("font-palette: 2");
+        assert_eq!(s.font_palette, FontPalette::Normal);
+    }
+
+    #[test]
+    fn font_palette_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { font-palette: light; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        let span_style =
+            compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(span_style.font_palette, FontPalette::Light);
+    }
+
+    #[test]
+    fn font_palette_custom_resolves_against_at_rule() {
+        // `font-palette: --brand` + matching `@font-palette-values` →
+        // `font_palette_resolved` заполнен в compute_style.
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(
+            "@font-palette-values --brand { base-palette: 1; override-colors: 0 #ff0000; } \
+             div { font-palette: --brand; }",
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(s.font_palette, FontPalette::Custom("--brand".to_string()));
+        let resolved = s.font_palette_resolved.as_ref().expect("palette must resolve");
+        assert_eq!(resolved.base_palette, Some(1));
+        assert_eq!(resolved.overrides.len(), 1);
+        assert_eq!(resolved.overrides[0].index, 0);
+        assert_eq!(resolved.overrides[0].color.r, 255);
+
+        // palette_selection маппит в renderer-facing Custom.
+        match crate::font_palette::palette_selection(&s) {
+            Some(crate::font_palette::FontPaletteSelection::Custom { base_palette, overrides }) => {
+                assert_eq!(base_palette, 1);
+                assert_eq!(overrides.len(), 1);
+            }
+            other => panic!("expected Custom selection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn font_palette_unknown_ident_behaves_as_normal() {
+        // Нет подходящего @font-palette-values → resolved None → selection None.
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { font-palette: --missing; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
+        assert_eq!(s.font_palette, FontPalette::Custom("--missing".to_string()));
+        assert!(s.font_palette_resolved.is_none());
+        assert!(crate::font_palette::palette_selection(&s).is_none());
+    }
+
     // ── font-optical-sizing (CSS Fonts L4 §7.12) ─────────────────────────
 
     #[test]
@@ -26687,7 +27507,8 @@ mod tests {
     }
 
     #[test]
-    fn forced_color_adjust_not_inherited() {
+    fn forced_color_adjust_inherited() {
+        // CSS Color Adjustment L1 §4: forced-color-adjust is an inherited property.
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { forced-color-adjust: none; }");
         let root = ComputedStyle::root();
@@ -26696,7 +27517,7 @@ mod tests {
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0), false);
         assert_eq!(div_style.forced_color_adjust, ForcedColorAdjust::None);
-        assert_eq!(span_style.forced_color_adjust, ForcedColorAdjust::Auto);
+        assert_eq!(span_style.forced_color_adjust, ForcedColorAdjust::None);
     }
 
     #[test]
@@ -26707,6 +27528,148 @@ mod tests {
         let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0), false);
         assert_eq!(style.forced_color_adjust, ForcedColorAdjust::Auto);
+    }
+
+    // ── Forced Colors Mode (CSS Color Adjustment L1 §3) ──────────────────────
+
+    /// Runs `f` with Forced Colors Mode enabled on this thread, then disables it.
+    fn with_forced_colors<F: FnOnce()>(f: F) {
+        set_forced_colors(true);
+        f();
+        set_forced_colors(false);
+    }
+
+    #[test]
+    fn forced_colors_color_forced_to_canvastext() {
+        with_forced_colors(|| {
+            let s = cascade_at("<div>", "div { color: red; }", &[0]);
+            assert_eq!(s.color, SystemColor::CanvasText.resolve_color(false));
+        });
+    }
+
+    #[test]
+    fn forced_colors_adjust_none_keeps_author_colors() {
+        with_forced_colors(|| {
+            let s = cascade_at(
+                "<div>",
+                "div { color: red; background-color: blue; forced-color-adjust: none; }",
+                &[0],
+            );
+            assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+            assert_eq!(
+                s.background_color,
+                Some(CssColor::Rgba(Color { r: 0, g: 0, b: 255, a: 255 }))
+            );
+        });
+    }
+
+    #[test]
+    fn forced_colors_link_gets_linktext() {
+        with_forced_colors(|| {
+            let s = cascade_at("<a href='#'>x</a>", "a { color: red; }", &[0]);
+            assert_eq!(s.color, SystemColor::LinkText.resolve_color(false));
+        });
+    }
+
+    #[test]
+    fn forced_colors_disabled_control_gets_graytext() {
+        with_forced_colors(|| {
+            let s = cascade_at("<button disabled>x</button>", "button { color: red; }", &[0]);
+            assert_eq!(s.color, SystemColor::GrayText.resolve_color(false));
+        });
+    }
+
+    #[test]
+    fn forced_colors_shadows_forced_to_none() {
+        with_forced_colors(|| {
+            let s = cascade_at(
+                "<div>",
+                "div { box-shadow: 2px 2px 4px red; text-shadow: 1px 1px 2px blue; }",
+                &[0],
+            );
+            assert!(s.box_shadow.is_empty());
+            assert!(s.text_shadow.is_empty());
+        });
+    }
+
+    #[test]
+    fn forced_colors_background_forced_but_transparency_preserved() {
+        with_forced_colors(|| {
+            let opaque = cascade_at("<div>", "div { background-color: red; }", &[0]);
+            assert_eq!(
+                opaque.background_color,
+                Some(CssColor::Rgba(SystemColor::Canvas.resolve_color(false)))
+            );
+            let unset = cascade_at("<div>", "div { color: red; }", &[0]);
+            assert_eq!(unset.background_color, None);
+            let transparent = cascade_at("<div>", "div { background-color: transparent; }", &[0]);
+            assert_ne!(
+                transparent.background_color,
+                Some(CssColor::Rgba(SystemColor::Canvas.resolve_color(false)))
+            );
+        });
+    }
+
+    #[test]
+    fn forced_colors_gradient_background_dropped_url_kept() {
+        with_forced_colors(|| {
+            let s = cascade_at(
+                "<div>",
+                "div { background-image: linear-gradient(red, blue); }",
+                &[0],
+            );
+            assert!(
+                s.background_layers.iter().all(|l| matches!(l.image, BackgroundImage::None)),
+                "gradient background must be forced to none"
+            );
+            let s = cascade_at("<div>", "div { background-image: url('a.png'); }", &[0]);
+            assert!(
+                s.background_layers.iter().any(|l| matches!(l.image, BackgroundImage::Url(_))),
+                "url() background must be kept"
+            );
+        });
+    }
+
+    #[test]
+    fn forced_colors_preserve_parent_color_keeps_color_forces_rest() {
+        with_forced_colors(|| {
+            let s = cascade_at(
+                "<div>",
+                "div { color: red; border: 1px solid blue; \
+                       forced-color-adjust: preserve-parent-color; }",
+                &[0],
+            );
+            assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+            assert_eq!(
+                s.border_top_color,
+                CssColor::Rgba(SystemColor::CanvasText.resolve_color(false))
+            );
+        });
+    }
+
+    #[test]
+    fn forced_colors_media_query_matches_when_active() {
+        // `(forced-colors: active)` media feature is driven by the same flag.
+        with_forced_colors(|| {
+            let s = cascade_at(
+                "<div>",
+                "@media (forced-colors: active) { div { display: none; } }",
+                &[0],
+            );
+            assert_eq!(s.display, Display::None);
+        });
+        let s = cascade_at(
+            "<div>",
+            "@media (forced-colors: active) { div { display: none; } }",
+            &[0],
+        );
+        assert_ne!(s.display, Display::None);
+    }
+
+    #[test]
+    fn forced_colors_off_keeps_author_colors() {
+        let s = cascade_at("<div>", "div { color: red; }", &[0]);
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
     }
 
     // ── order ─────────────────────────────────────────────────────────────────
@@ -28900,6 +29863,50 @@ mod tests {
         let s = ts_prop("perspective-origin", "25% 75%");
         assert_eq!(s.perspective_origin.0, PositionComponent::Percent(0.25));
         assert_eq!(s.perspective_origin.1, PositionComponent::Percent(0.75));
+    }
+
+    #[test]
+    fn parse_backface_visibility_hidden() {
+        let s = ts_prop("backface-visibility", "hidden");
+        assert_eq!(s.backface_visibility, BackfaceVisibility::Hidden);
+        // Case-insensitive per CSS keyword rules.
+        let s = ts_prop("backface-visibility", "HIDDEN");
+        assert_eq!(s.backface_visibility, BackfaceVisibility::Hidden);
+    }
+
+    #[test]
+    fn parse_backface_visibility_initial_visible() {
+        let s = ComputedStyle::root();
+        assert_eq!(s.backface_visibility, BackfaceVisibility::Visible);
+        let s = ts_prop("backface-visibility", "visible");
+        assert_eq!(s.backface_visibility, BackfaceVisibility::Visible);
+    }
+
+    #[test]
+    fn parse_backface_visibility_invalid_ignored() {
+        // Invalid value → declaration ignored, prior value kept.
+        let mut s = ComputedStyle::root();
+        let vp = Size::new(800.0, 600.0);
+        let root = ComputedStyle::root();
+        let hidden = Declaration { property: "backface-visibility".to_string(), value: "hidden".to_string(), important: false };
+        apply_declaration(&mut s, &hidden, 16.0, vp, FontWeight::NORMAL, &root, false, false);
+        let bogus = Declaration { property: "backface-visibility".to_string(), value: "translucent".to_string(), important: false };
+        apply_declaration(&mut s, &bogus, 16.0, vp, FontWeight::NORMAL, &root, false, false);
+        assert_eq!(s.backface_visibility, BackfaceVisibility::Hidden);
+    }
+
+    #[test]
+    fn backface_visibility_not_inherited() {
+        // backface-visibility — non-inherited (CSS Transforms L2 §5.1).
+        let doc = lumen_html_parser::parse("<div><p>x</p></div>");
+        let sheet = lumen_css_parser::parse("div { backface-visibility: hidden; }");
+        let root_style = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let p = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0), false);
+        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0), false);
+        assert_eq!(div_style.backface_visibility, BackfaceVisibility::Hidden);
+        assert_eq!(p_style.backface_visibility, BackfaceVisibility::Visible);
     }
 
     // ── @supports cascade wiring ──────────────────────────────────────────────

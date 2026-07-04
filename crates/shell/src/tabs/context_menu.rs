@@ -275,6 +275,8 @@ pub fn build_overlay(menu: &TabContextMenu, window_w: f32, window_h: f32) -> Dis
             font_weight: FontWeight::NORMAL,
             font_style: FontStyle::Normal,
             font_variation_axes: Vec::new(),
+            font_features: Vec::new(),
+            font_palette: None,
             tab_size: 0.0,
             highlight_name: None,
             text_orientation: None,

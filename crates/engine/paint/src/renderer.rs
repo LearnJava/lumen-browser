@@ -4418,6 +4418,8 @@ impl Renderer {
                     font_weight: _,
                     font_style: _,
                     font_variation_axes,
+                    font_features: _,
+                    font_palette: _,
                     tab_size,
                     highlight_name: _,
                     text_orientation: _,

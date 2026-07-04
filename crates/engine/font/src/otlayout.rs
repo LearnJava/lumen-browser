@@ -17,6 +17,30 @@
 
 use crate::binary::BinaryReader;
 
+/// Apply CSS `font-feature-settings` overrides to a default feature-tag set.
+///
+/// `defaults` is the table's built-in feature list (e.g. `liga`/`clig`/… for
+/// `GSUB`, `kern` for `GPOS`); `overrides` are `(tag, value)` pairs from CSS.
+/// A value of `0` disables the tag (removed from the set), any value `>= 1`
+/// enables it (appended if absent). Alternate selection (`value > 1`) is not
+/// honoured beyond "enabled" — our lookup machinery has no Type-3 alternate
+/// substitution. Returns the effective tag list to feed
+/// [`LayoutTable::enabled_lookups`].
+pub fn apply_feature_overrides(
+    defaults: &[[u8; 4]],
+    overrides: &[([u8; 4], u32)],
+) -> Vec<[u8; 4]> {
+    let mut tags: Vec<[u8; 4]> = defaults.to_vec();
+    for &(tag, value) in overrides {
+        if value == 0 {
+            tags.retain(|t| *t != tag);
+        } else if !tags.contains(&tag) {
+            tags.push(tag);
+        }
+    }
+    tags
+}
+
 /// Read a big-endian `u16` at an absolute byte offset, `None` if out of bounds.
 #[inline]
 fn u16_at(data: &[u8], pos: usize) -> Option<u16> {
@@ -498,6 +522,35 @@ pub fn resolve_extension(data: &[u8], offset: usize) -> Option<(u16, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn feature_overrides_disable_default() {
+        // "liga" 0 удаляет тег из default-набора
+        let defaults = [*b"liga", *b"kern"];
+        let tags = apply_feature_overrides(&defaults, &[(*b"liga", 0)]);
+        assert_eq!(tags, vec![*b"kern"]);
+    }
+
+    #[test]
+    fn feature_overrides_enable_extra() {
+        // "dlig" 1 добавляет тег, отсутствующий в default-наборе
+        let defaults = [*b"liga"];
+        let tags = apply_feature_overrides(&defaults, &[(*b"dlig", 1)]);
+        assert_eq!(tags, vec![*b"liga", *b"dlig"]);
+    }
+
+    #[test]
+    fn feature_overrides_noop_cases() {
+        // Выключение отсутствующего тега и повторное включение имеющегося
+        // не меняют набор; value > 1 трактуется как "включено".
+        let defaults = [*b"liga"];
+        assert_eq!(apply_feature_overrides(&defaults, &[(*b"dlig", 0)]), vec![*b"liga"]);
+        assert_eq!(apply_feature_overrides(&defaults, &[(*b"liga", 1)]), vec![*b"liga"]);
+        assert_eq!(
+            apply_feature_overrides(&[], &[(*b"salt", 2)]),
+            vec![*b"salt"]
+        );
+    }
 
     #[test]
     fn coverage_format1_index() {

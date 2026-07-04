@@ -438,7 +438,8 @@ pub(crate) fn rasterize_cpu(
                 }
             }
             DisplayCommand::DrawText {
-                rect, text, font_size, color, tab_size, font_weight, font_style, ..
+                rect, text, font_size, color, tab_size, font_weight, font_style,
+                font_features, ..
             } => {
                 // Text uses the bundled Inter face only; family is ignored on
                 // the CPU path (no FontProvider here), weight/style are
@@ -448,6 +449,7 @@ pub(crate) fn rasterize_cpu(
                 if let Some(ink) = rasterize_text(
                     &mut layer.pm, rect, text, *font_size, color,
                     *tab_size, clip_rect.as_ref(), font_weight.0, *font_style,
+                    font_features,
                 )? {
                     layer.mark(ink);
                 }
@@ -2536,14 +2538,16 @@ struct CpuFace<'a> {
     shaper: lumen_font::Shaper<'a>,
 }
 
-/// Parse the bundled Inter face once per `DrawText` run.
-fn load_bundled_face() -> Option<CpuFace<'static>> {
+/// Parse the bundled Inter face once per `DrawText` run. `features` are the
+/// CSS `font-feature-settings` overrides applied on top of the shaper's
+/// default feature set (empty slice = `normal`).
+fn load_bundled_face(features: &[([u8; 4], u32)]) -> Option<CpuFace<'static>> {
     let font = lumen_font::Font::parse(BUNDLED_FONT).ok()?;
     let head = font.head().ok()?;
     let hhea = font.hhea().ok()?;
     let cmap = font.cmap().ok()?;
     let hmtx = font.hmtx().ok()?;
-    let shaper = lumen_font::Shaper::new(&font);
+    let shaper = lumen_font::Shaper::with_features(&font, features);
     Some(CpuFace {
         font,
         units_per_em: head.units_per_em,
@@ -2588,11 +2592,12 @@ fn rasterize_text(
     clip: Option<&Rect>,
     font_weight: u16,
     font_style: lumen_layout::FontStyle,
+    font_features: &[([u8; 4], u32)],
 ) -> Result<Option<DrawBounds>, Box<dyn std::error::Error>> {
     if text.is_empty() || font_size <= 0.0 || color.a == 0 {
         return Ok(None);
     }
-    let Some(face) = load_bundled_face() else {
+    let Some(face) = load_bundled_face(font_features) else {
         return Ok(None);
     };
     let denom = face.ascent - face.descent;
@@ -3126,6 +3131,8 @@ mod tests {
             font_weight: lumen_layout::FontWeight::default(),
             font_style: lumen_layout::FontStyle::default(),
             font_variation_axes: Vec::new(),
+            font_features: Vec::new(),
+            font_palette: None,
             tab_size: 0.0,
             highlight_name: None,
             text_orientation: None,
@@ -3158,6 +3165,8 @@ mod tests {
             font_weight: lumen_layout::FontWeight::default(),
             font_style: lumen_layout::FontStyle::default(),
             font_variation_axes: Vec::new(),
+            font_features: Vec::new(),
+            font_palette: None,
             tab_size: 0.0,
             highlight_name: None,
             text_orientation: None,
@@ -3183,6 +3192,8 @@ mod tests {
                 font_weight: lumen_layout::FontWeight::default(),
                 font_style: lumen_layout::FontStyle::default(),
                 font_variation_axes: Vec::new(),
+                font_features: Vec::new(),
+                font_palette: None,
                 tab_size: 0.0,
                 highlight_name: None,
                 text_orientation: None,

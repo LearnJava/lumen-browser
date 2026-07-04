@@ -73,7 +73,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Fonts L4 | [css-fonts-4](https://www.w3.org/TR/css-fonts-4/) | 🟡 | @font-face actual loading ⬜; font-optical-sizing ✅ 2026-05-29 | **#20** |
 | CSS Intrinsic Sizing L3 | [css3-sizing](https://www.w3.org/TR/css3-sizing/) | ✅ | min-content/max-content/fit-content/fit-content(L) for width/height/min-max; 11 tests 2026-05-24 | **#21** |
 | CSS Overflow L3 (scroll) | [css-overflow-3](https://www.w3.org/TR/css-overflow-3/) | 🟡 | scrollable containers; overflow:scroll rendering | **#22** |
-| CSS Text L3/L4 | [css3-text](https://www.w3.org/TR/css3-text/) | 🟡 | text-align-last ✅ 2026-06-08; hyphens:auto ⬜ | **#23** |
+| CSS Text L3/L4 | [css3-text](https://www.w3.org/TR/css3-text/) | 🟡 | text-align-last ✅ 2026-06-08; hyphens:auto ✅ (P1 2026-05-29, KnuthLiangHyphenation); line-break CJK / text-wrap integration ⬜ | **#23** |
 | CSS Transforms L2 | [css-transforms-2](https://www.w3.org/TR/css-transforms-2/) | 🟡 | individual translate/rotate/scale ✅ 2026-05-26; 3D matrix primitive + perspective-correct rendering ✅ 2026-05-29 (P2); 3D function parsing/`perspective` wiring ⬜ (P4) | **#24** |
 | CSS Values L4/L5 | [css-values-4](https://www.w3.org/TR/css-values-4/) | 🟡 | env(); attr() with type; cq* units | **#25** |
 
@@ -107,7 +107,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | Motion Path L1 | [motion-1](https://www.w3.org/TR/motion-1/) | 🟡 | `offset-path: path()` ✅ 2026-06-10 (P4: ComputedStyle fields + resolve_motion_transform wiring in property_trees); `offset-distance`/`offset-rotate` ✅; `ray(<angle>)` ✅ 2026-06-13 (p4-offset-ray: deg/grad/rad/turn, size/contain/at parsed-and-ignored for px distance); `offset-anchor` ⬜ Phase 3; `url()` paths ⬜ | **#44** |
 | CSS Fragmentation L3 | [css3-break](https://www.w3.org/TR/css3-break/) | ✅ | break-before/after/inside + orphans/widows in `ComputedStyle`; `pagination.rs` applies rules | **#45** |
 | CSS Color L5 | [css-color-5](https://www.w3.org/TR/css-color-5/) | ✅ | color-mix() ✅ (p4-color-mix-parsing 2026-06-08); relative color syntax ✅ (p4-relative-color 2026-06-13) | **#46** |
-| CSS Fonts L5 | [css-fonts-5](https://www.w3.org/TR/css-fonts-5/) | ⬜ | font-palette; @font-palette-values | **#47** |
+| CSS Fonts L5 | [css-fonts-5](https://www.w3.org/TR/css-fonts-5/) | 🟡 | font-palette + @font-palette-values 🟡 2026-07-04 (p4-font-palette: parse → ComputedStyle → resolve → DrawText.font_palette; COLR/CPAL rasterization deferred in lumen-font) | **#47** |
 | CSS Easing L2 | [css-easing-2](https://www.w3.org/TR/css-easing-2/) | ✅ | linear() easing TimingFunction::LinearStops 2026-05-24 | **#48** |
 | CSS Overscroll L1 | [css-overscroll-1](https://www.w3.org/TR/css-overscroll-1/) | 🟡 | gesture boundary handling | **#49** |
 | CSS Gap Decorations L1 | [css-gaps-1](https://www.w3.org/TR/css-gaps-1/) | ✅ | `gap-rule-width/style/color` shorthand+longhands; `collect_gap_segments()` in display_list.rs; flex + grid containers wired (p4-gap-rule, 2026-06-10) | **#50** |
@@ -120,6 +120,8 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS View Transitions L1 | [css-view-transitions-1](https://www.w3.org/TR/css-view-transitions-1/) | 🟡 | `document.startViewTransition` JS API + 300 ms cross-fade ✅ 2026-06-03; `view-transition-name` ✅ P4 2026-06-10 (ComputedStyle field + parsing + collect_view_transition_names); `::view-transition-*` pseudos ⬜ Phase 3 | **#57** |
 | CSS Fill & Stroke L3 | [fill-stroke-3](https://www.w3.org/TR/fill-stroke-3/) | 🟡 | fill/stroke/fill-opacity/stroke-opacity/stroke-width ✅ 2026-05-27; fill-rule/stroke-linecap/linejoin/miterlimit/dasharray/dashoffset ✅; paint-order ✅ 2026-06-14 (p4-paint-order: `SvgPaintOrder` inherited field + `emit_svg_shape` fill/stroke reorder); `text-anchor`/`dominant-baseline` as CSS properties ✅ 2026-06-21 (p4-svg-text-anchor: inherited `Option` fields folded through `apply_svg_presentational_hints` so author CSS overrides the presentation attribute and inherits from `<g>`) | **#58** |
 | CSS Scroll Snap L2 | [css-scroll-snap-2](https://www.w3.org/TR/css-scroll-snap-2/) | 🟡 | snapchanging/snapchanged events: SnapChangeEvent (snapTargetBlock/Inline) + лэйаут-резолв снапнутых узлов (find_snapped_nodes/SnapTargets) + QuickJsRuntime::fire_snap_changing/changed; shell-диспатч при scroll-snap завершении — Phase 1 2026-06-10 | **#59** |
+| CSS Ruby L1 | [css-ruby-1](https://www.w3.org/TR/css-ruby-1/) | 🟡 | `ruby-position`/`ruby-align`/`ruby-merge` ✅ 2026-07-04 (p4-ruby-css-props: parse → inherited ComputedStyle fields → `RubyBox::from_style` drives `lay_out_ruby`: align distribution + separate/merge pairing); `<ruby>` box-tree inline integration ⬜ (module has no pipeline callers — P1) | **#60** |
+| MathML Core (CSS props) | [mathml-core](https://www.w3.org/TR/mathml-core/) | 🟡 | `math-style`/`math-depth` ✅ 2026-07-04 (p4-mathml-css-props: parse → inherited ComputedStyle fields, `auto-add`/`add(n)`/`<integer>` resolved to computed integer vs inherited → `lay_out_mathml`: compact mfrac scaling + script scale from depth delta, `MATH_SCRIPT_SCALE` 0.71/level); `<math>` box-tree integration ⬜ (module has no pipeline callers — P1); `font-size: math` ⬜ | **#61** |
 
 ### Out of scope 🚫
 
@@ -127,7 +129,6 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 |--------|------|--------|
 | CSS Paged Media | [css3-page](https://www.w3.org/TR/css3-page/) | No print support planned |
 | CSS Speech | [css3-speech](https://www.w3.org/TR/css3-speech/) | Audio/TTS not in Lumen scope |
-| CSS Ruby Annotation | [css3-ruby](https://www.w3.org/TR/css3-ruby/) | Rare; deferred post-Phase 2 |
 | CSS Shadow Parts | [css-shadow-parts-1](https://www.w3.org/TR/css-shadow-parts-1/) | Shadow DOM not planned |
 | CSS Regions | [css3-regions](https://www.w3.org/TR/css3-regions/) | Deprecated direction by W3C |
 | CSSOM JS API | [cssom](https://www.w3.org/TR/cssom/) | Requires JsRuntime (P3) |
@@ -204,7 +205,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `color` | ✅ | named/hex/rgb/rgba/hsl/hsla/oklch; currentColor |
 | `background-color` | ✅ | |
 | `color-scheme` | 🟡 | parsed; UA switching ⬜ |
-| `forced-color-adjust` | 🟡 | parsed; Forced Colors Mode ⬜ |
+| `forced-color-adjust` | ✅ | Forced Colors Mode (Color Adjust L1 §3): system-palette forcing post-pass in compute_style (element-aware LinkText/ButtonText/GrayText/Field pairs, shadows→none, non-url() background-image→none, bg transparency preserved); `(forced-colors: active)` media wired; shell a11y toggle relayouts (P4 2026-07-04) |
 | `print-color-adjust` / `color-adjust` | 🟡 | parsed/stored; print rendering ⬜ |
 | `accent-color` | ✅ | parsed + wired to form controls (checkbox/radio/range/progress) in display_list.rs (P4 2026-06-14); 5 tests + graphic 110 |
 | `color-mix()` | ✅ | parse_color_mix() in style.rs (P4 2026-06-08); 3 tests |
@@ -218,12 +219,12 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `font-variant` / `font-variant-caps` | 🟡 | small-caps only; all-small-caps ⬜ |
 | `font-stretch` | 🟡 | % parsed; matcher ⬜ |
 | `font-variation-settings` | ✅ | fvar+avar normalization; applied on CPU/wgpu paths, femtovg window renders default instance (see CAPABILITIES) |
-| `font-feature-settings` | ⬜ | OT feature flags |
+| `font-feature-settings` | ✅ | parse + ComputedStyle (inherited) + DrawText.font_features; shaper overrides default GSUB/GPOS set (liga/clig/calt/rlig/ccmp + kern) on CPU path & femtovg varied-text path; native femtovg text shapes itself (class BUG-109) |
 | `font-size-adjust` | ✅ | real OS/2 x-height scaling (P4 2026-06-13); тест 95 |
 | `font-optical-sizing` | ✅ | auto injects opsz=font-size into variation axes; none skips |
-| `font-palette` | ⬜ | CSS Fonts L5 |
+| `font-palette` | 🟡 | normal/light/dark/dashed-ident parsed (inherited); custom idents resolved against @font-palette-values in compute_style → DrawText.font_palette; renderer ignores it — no COLR/CPAL rasterization in lumen-font yet |
 | `@font-face` | 🟡 | all descriptors parsed; file loading ⬜ |
-| `@font-palette-values` | ⬜ | CSS Fonts L5 |
+| `@font-palette-values` | 🟡 | parsed + matched (name/family, base-palette, override-colors); rendering deferred with COLR |
 
 ### [T0] Text Styling
 
@@ -239,7 +240,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `text-shadow` | ✅ | |
 | `vertical-align` | ✅ | baseline/top/middle/bottom/sub/super/length/% |
 | `text-align-last` | ✅ | parsed + wired in align_lines; last-line override (CSS Text L3 §7.2); 4 tests |
-| `hyphens` | 🟡 | none/manual ✅; auto (HyphenationProvider) ⬜ |
+| `hyphens` | ✅ | none/manual/auto; auto = KnuthLiangHyphenation (lumen-encoding, 11 locales) wired in shell via layout_measured_hyp (P1 2026-05-29) |
 | `tab-size` | ✅ | parsed; \t expanded in pre/pre-wrap; renderer advances cursor by tab_size |
 | `line-break` | 🟡 | parsed; CJK-aware breaking ⬜ |
 | `text-wrap-mode` / `text-wrap-style` | 🟡 | parsed; integration ⬜ |
@@ -286,7 +287,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `transform-origin` | ✅ | pivot via T(o)·M·T(-o) |
 | `transform-style` | 🟡 | flat/preserve-3d; 3D context ⬜ |
 | `perspective` / `perspective-origin` | 🟡 | parsed; 3D projection ⬜ |
-| `backface-visibility` | 🟡 | parsed; 3D flip ⬜ |
+| `backface-visibility` | 🟡 | parsed → `ComputedStyle` ✅ 2026-07-04 (p4-backface-visibility); 3D back-face culling ⬜ |
 | `translate` / `rotate` / `scale` | ✅ | individual props (Transforms L2); compose before `transform` ✅ 2026-05-26 |
 
 ### [T0] Logical Properties
@@ -492,7 +493,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |----------|--------|-------|
 | `perspective` / `perspective-origin` | 🟡 | parsed; 3D projection ⬜ |
 | `transform-style: preserve-3d` | 🟡 | parsed; 3D context ⬜ |
-| `backface-visibility` | 🟡 | parsed; 3D flip ⬜ |
+| `backface-visibility` | 🟡 | parsed → `ComputedStyle` ✅ 2026-07-04 (p4-backface-visibility); 3D back-face culling ⬜ |
 | `translate` / `rotate` / `scale` (individual) | ✅ | CSS Transforms L2; compose before `transform` 2026-05-26 |
 
 ### [T2] Values (advanced)
@@ -602,7 +603,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `@layer` | ✅ | parsed; cascade ordering ✅ |
 | `@container` | ✅ | condition matching ✅; 2nd-pass re-layout ✅; cq* units ✅ 2026-05-25 |
 | `@color-profile` | ⬜ | CSS Color L5 |
-| `@font-palette-values` | ⬜ | CSS Fonts L5 |
+| `@font-palette-values` | 🟡 | parsed (name + font-family + base-palette + override-colors); matched by name/family in compute_style; rendering deferred with COLR |
 | `@counter-style` | ⬜ | CSS Counter Styles L3 |
 | `@scope` | ⬜ | CSS Scoping |
 | `@function` | ⬜ | CSS Functions & Mixins |

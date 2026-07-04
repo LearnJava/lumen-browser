@@ -11,12 +11,39 @@
 //! - `<msup>` — superscript (base + exponent)
 //! - `<msub>` — subscript (base + lower index)
 //!
-//! Phase 0: basic recognition and stacking. Phase 1: math-style, math-depth CSS properties (P4 wiring).
+//! Phase 0: basic recognition and stacking. Phase 1 (P4 2026-07-04): `math-style` /
+//! `math-depth` CSS properties wired — compact fractions scale their children, and
+//! script scale is derived from the cascade's `math-depth` when available.
 
 use crate::box_tree::{LayoutBox, BoxKind};
 use crate::style::ComputedStyle;
 use lumen_core::geom::Rect;
 use lumen_dom::NodeId;
+
+/// CSS `math-style` (MathML Core §2.1.1). Inherited. Initial: `Normal`.
+///
+/// `compact` requests math layout that minimises logical height: fractions and
+/// other sub-formulas render their content one `math-depth` level smaller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MathStyle {
+    /// Full-size math layout (display formulas).
+    #[default]
+    Normal,
+    /// Compact math layout (inline formulas): sub-formulas are scaled down.
+    Compact,
+}
+
+/// Font scale factor per `math-depth` level (MathML Core §2.2 fallback
+/// `scriptPercentScaleDown` used when the font has no OpenType MATH table).
+pub const MATH_SCRIPT_SCALE: f32 = 0.71;
+
+/// Relative font scale between two `math-depth` levels.
+///
+/// Each level deeper multiplies the size by [`MATH_SCRIPT_SCALE`]; shallower
+/// levels scale up symmetrically. Equal depths give `1.0`.
+pub fn math_depth_scale(from_depth: i32, to_depth: i32) -> f32 {
+    MATH_SCRIPT_SCALE.powi(to_depth - from_depth)
+}
 
 /// Represents the type of MathML element and its visual role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,8 +82,11 @@ pub struct MathmlBox {
     pub denominator_boxes: Option<Vec<LayoutBox>>,
     /// Exponent for msup or lower index for msub.
     pub annotation_boxes: Option<Vec<LayoutBox>>,
-    /// Scaling factor for superscript/subscript relative to base (default 0.7 = 70% of base size).
+    /// Scaling factor for superscript/subscript relative to base
+    /// (default [`MATH_SCRIPT_SCALE`] = one `math-depth` level down).
     pub annotation_scale: f32,
+    /// CSS `math-style` of the element; `Compact` scales mfrac children down one level.
+    pub math_style: MathStyle,
 }
 
 impl MathmlBox {
@@ -67,7 +97,8 @@ impl MathmlBox {
             main_boxes,
             denominator_boxes: None,
             annotation_boxes: None,
-            annotation_scale: 0.7,
+            annotation_scale: MATH_SCRIPT_SCALE,
+            math_style: MathStyle::Normal,
         }
     }
 
@@ -88,6 +119,12 @@ impl MathmlBox {
         self.annotation_scale = scale.clamp(0.1, 1.0);
         self
     }
+
+    /// Set the CSS `math-style` (taken from the element's `ComputedStyle`).
+    pub fn with_math_style(mut self, math_style: MathStyle) -> Self {
+        self.math_style = math_style;
+        self
+    }
 }
 
 /// Collect MathML element structure from a DOM node.
@@ -104,7 +141,7 @@ pub fn collect_mathml_structure(root: &LayoutBox) -> MathmlBox {
     // Determine element type from node (stub: default to Math for unknown).
     let kind = determine_mathml_kind(root);
 
-    match kind {
+    let mathml = match kind {
         MathmlElementKind::Mfrac => collect_mfrac_structure(root),
         MathmlElementKind::Msqrt => collect_msqrt_structure(root),
         MathmlElementKind::Msup => collect_msup_structure(root),
@@ -117,7 +154,10 @@ pub fn collect_mathml_structure(root: &LayoutBox) -> MathmlBox {
             // Leaf elements: treat as self.
             MathmlBox::new(kind, root.children.clone())
         }
-    }
+    };
+
+    // CSS math-style comes from the element's computed style (inherited).
+    mathml.with_math_style(root.style.math_style)
 }
 
 /// Layout algorithm for MathML content.
@@ -129,7 +169,8 @@ pub fn collect_mathml_structure(root: &LayoutBox) -> MathmlBox {
 /// # Returns
 /// A composed LayoutBox with MathML content laid out per CSS MathML spec.
 ///
-/// // CSS: math-style, math-depth
+/// CSS `math-style: compact` scales mfrac children by `annotation_scale`;
+/// script scale derives from the cascade's `math-depth` (see `collect_msup_structure`).
 pub fn lay_out_mathml(mathml: &MathmlBox) -> LayoutBox {
     match mathml.kind {
         MathmlElementKind::Mfrac => lay_out_mfrac(mathml),
@@ -211,7 +252,7 @@ fn collect_msup_structure(root: &LayoutBox) -> MathmlBox {
 
     MathmlBox::new(MathmlElementKind::Msup, base_boxes)
         .with_annotation(exponent_boxes)
-        .with_annotation_scale(0.7)
+        .with_annotation_scale(annotation_scale_from_styles(root))
 }
 
 /// Collect structure for `<msub>` (subscript) — base (first child) + lower index (second child).
@@ -229,7 +270,22 @@ fn collect_msub_structure(root: &LayoutBox) -> MathmlBox {
 
     MathmlBox::new(MathmlElementKind::Msub, base_boxes)
         .with_annotation(index_boxes)
-        .with_annotation_scale(0.7)
+        .with_annotation_scale(annotation_scale_from_styles(root))
+}
+
+/// Derive the script (superscript/subscript) scale from CSS `math-depth`.
+///
+/// When the cascade assigned a deeper `math-depth` to the script child than to
+/// the base (e.g. via `math-depth: auto-add` / `add(n)` in the UA or author
+/// sheet), the scale is `MATH_SCRIPT_SCALE^Δdepth`. Otherwise one level down
+/// is assumed (MathML Core default script behaviour).
+fn annotation_scale_from_styles(root: &LayoutBox) -> f32 {
+    let base_depth = root.children.first().map(|c| c.style.math_depth);
+    let script_depth = root.children.get(1).map(|c| c.style.math_depth);
+    match (base_depth, script_depth) {
+        (Some(b), Some(s)) if s > b => math_depth_scale(b, s),
+        _ => MATH_SCRIPT_SCALE,
+    }
 }
 
 /// Lay out a fraction: numerator and denominator stacked vertically with horizontal rule between them.
@@ -254,6 +310,17 @@ fn lay_out_mfrac(mathml: &MathmlBox) -> LayoutBox {
         }
     } else {
         panic!("lay_out_mfrac: fraction requires denominator");
+    };
+
+    // CSS math-style: compact — numerator and denominator render one
+    // math-depth level smaller (MathML Core §2.1.1).
+    let (numerator, denominator) = if mathml.math_style == MathStyle::Compact {
+        (
+            scale_box(&numerator, mathml.annotation_scale),
+            scale_box(&denominator, mathml.annotation_scale),
+        )
+    } else {
+        (numerator, denominator)
     };
 
     // Stack numerator + fraction rule + denominator vertically.
@@ -472,7 +539,8 @@ mod tests {
         assert_eq!(mathml.main_boxes.len(), 0);
         assert!(mathml.denominator_boxes.is_none());
         assert!(mathml.annotation_boxes.is_none());
-        assert_eq!(mathml.annotation_scale, 0.7);
+        assert_eq!(mathml.annotation_scale, MATH_SCRIPT_SCALE);
+        assert_eq!(mathml.math_style, MathStyle::Normal);
     }
 
     #[test]
@@ -540,10 +608,60 @@ mod tests {
     fn test_mathml_builder_chain() {
         let mathml = MathmlBox::new(MathmlElementKind::Mfrac, vec![])
             .with_denominator(vec![])
-            .with_annotation_scale(0.8);
+            .with_annotation_scale(0.8)
+            .with_math_style(MathStyle::Compact);
 
         assert_eq!(mathml.kind, MathmlElementKind::Mfrac);
         assert!(mathml.denominator_boxes.is_some());
         assert_eq!(mathml.annotation_scale, 0.8);
+        assert_eq!(mathml.math_style, MathStyle::Compact);
+    }
+
+    #[test]
+    fn test_math_depth_scale() {
+        assert_eq!(math_depth_scale(0, 0), 1.0);
+        assert!((math_depth_scale(0, 1) - MATH_SCRIPT_SCALE).abs() < 1e-6);
+        assert!((math_depth_scale(1, 3) - MATH_SCRIPT_SCALE * MATH_SCRIPT_SCALE).abs() < 1e-6);
+        // Shallower target scales up symmetrically.
+        assert!(math_depth_scale(2, 1) > 1.0);
+    }
+
+    /// Helper: box with a given rect and default style.
+    fn sized_box(width: f32, height: f32) -> LayoutBox {
+        let mut b = make_anonymous_box_with_style(ComputedStyle::root());
+        b.rect = Rect::new(0.0, 0.0, width, height);
+        b
+    }
+
+    #[test]
+    fn test_mfrac_compact_scales_children() {
+        // math-style: compact — numerator/denominator scale by annotation_scale.
+        let mathml = MathmlBox::new(MathmlElementKind::Mfrac, vec![sized_box(100.0, 20.0)])
+            .with_denominator(vec![sized_box(100.0, 20.0)])
+            .with_math_style(MathStyle::Compact);
+        let compact = lay_out_mathml(&mathml);
+
+        let normal_box = MathmlBox::new(MathmlElementKind::Mfrac, vec![sized_box(100.0, 20.0)])
+            .with_denominator(vec![sized_box(100.0, 20.0)]);
+        let normal = lay_out_mathml(&normal_box);
+
+        assert_eq!(normal.rect.height, 40.0);
+        assert!((compact.rect.height - 40.0 * MATH_SCRIPT_SCALE).abs() < 1e-3);
+        assert!((compact.rect.width - 100.0 * MATH_SCRIPT_SCALE).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_annotation_scale_from_math_depth() {
+        // Script child two math-depth levels deeper than the base →
+        // scale = MATH_SCRIPT_SCALE^2 instead of the one-level default.
+        let base = sized_box(50.0, 20.0);
+        let mut script = sized_box(30.0, 15.0);
+        script.style.math_depth = 2;
+        let mut root = sized_box(0.0, 0.0);
+        root.children = vec![base, script];
+
+        let mathml = collect_msup_structure(&root);
+        let expected = MATH_SCRIPT_SCALE * MATH_SCRIPT_SCALE;
+        assert!((mathml.annotation_scale - expected).abs() < 1e-6);
     }
 }
