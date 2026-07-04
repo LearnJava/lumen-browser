@@ -163,6 +163,7 @@ pub(crate) fn rasterize_svg(
         None,  // sw_worker_store
         None,  // cache_backend
         lumen_core::ColorSpace::Srgb,
+        false, // media_print: SVG rasterization uses screen media
     ) {
         Ok(p) => p,
         Err(e) => {
