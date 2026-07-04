@@ -1,6 +1,6 @@
 # BUG-144
 
-**Статус:** OPEN (DEBTOR 4.27%, baseline 4.36% — row-flip + gradient hard-stop + CPU backdrop-пайплайн + blur-качество (edge-bleed clamp + 3-pass Gaussian) исправлены; остаток = filter AA + текст, rule 3)
+**Статус:** OPEN (DEBTOR) — row-flip + gradient hard-stop + CPU backdrop-пайплайн + blur-качество (edge-bleed clamp + 3-pass Gaussian) исправлены; остаток = filter/edge AA + текст (rule 3), точечного P3-дефекта нет. KNOWN_DEBTOR baseline ратчет 4.36→4.27 (ревизия P3 2026-07-04)
 **Компонент:** paint
 **Файл:** `crates/engine/paint/src/backends/femtovg_backend.rs`
 
@@ -71,3 +71,25 @@ card 1) и `bd-none` (контроль, card 6); теперь корректны
 brightness/invert/contrast/saturate/hue-rotate vs Edge + gdigrab-шум + текст
 меток карт (rule 3). Метрика TEST-30 насыщена этими факторами, поэтому
 blur-улучшения дают лишь ~0.1pp; визуально blur-карты теперь корректны.
+
+## Ревизия P3 (2026-07-04)
+
+- Перепроверка на свежей сборке main (после мержа BUG-127, `fa00ba34`):
+  TEST-30 = **4.27%** (gdigrab, стабильно — совпадает с записанным в этом файле
+  результатом от 2026-06-23). Baseline в `run.py` оставался 4.36% и не был
+  затянут после blur-фикса — теперь ратчет **4.36 → 4.27**.
+- **Diff-декомпозиция** (`screenshots/30-css-filter-diff.png`): весь остаток
+  сконцентрирован по **кромкам**, залитых площадей нет:
+  - rows 1–3 (`filter:` карты) — тонкие 1px вертикальные AA-полосы по левой/правой
+    границе каждой карты: рассинхрон AA-ядра femtovg против downscale-ядра Edge
+    (тот же класс, что BUG-176 border-radius edge-AA и BUG-247 SVG-stroke AA);
+  - row 4 (`backdrop-filter` карты) — градиентная кайма по верхней/левой кромке
+    blur-карт: blur-kernel (3-pass box ≈ Gaussian) против точного Gaussian Edge;
+  - текст меток карт — font-parity (Inter vs Edge, rule 3, класс BUG-128).
+- Filter-математика (`apply_filter_rgba`: grayscale/sepia/invert/…) спек-корректна
+  и покрыта юнит-тестами (`apply_filter_rgba_*`), геометрия карт совпадает.
+- **Точечного P3-дефекта нет.** Остаток инхерентен (rasterizer-vs-Edge AA + текст)
+  и не закрывается P3-правкой — по прецеденту BUG-127/176/247 статус приведён к
+  OPEN (DEBTOR), указатель перенесён в группу должников STATUS-P3.
+
+KNOWN_DEBTORS['30'] = ('BUG-144', 4.27) — ратчет вниз 4.36 → 4.27.
