@@ -2301,7 +2301,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (500 symbols)
+## lumen-network  (508 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -2511,6 +2511,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/h3_stream.rs:346` **enum** `RequestState` — The frame-sequencing state of a request/response stream (RFC 9114 §4.1)
 `crates/network/src/h3/h3_stream.rs:364` **struct** `RequestStream` — Frame sequencer for a request/response stream (RFC 9114 §4.1, §7.1): a header
 `crates/network/src/h3/h3_stream.rs:396` **fn** `accept` — Validate the next frame on a request/response stream and advance the
+`crates/network/src/h3/key_schedule.rs:175` **struct** `PacketProtectionKeys` — The three secrets that protect packets at one encryption level for one
+`crates/network/src/h3/key_schedule.rs:207` **fn** `aes_128_gcm_from_secret` — Derive the AEAD key, nonce base, and header-protection key from a traffic
+`crates/network/src/h3/key_schedule.rs:220` **struct** `InitialKeys` — The Initial keys for both directions of a connection (RFC 9001 §5.2),
+`crates/network/src/h3/key_schedule.rs:231` **fn** `derive` — Derive both directions' Initial keys from the client's original
+`crates/network/src/h3/key_schedule.rs:244` **fn** `initial_secret` — The connection's Initial secret: `HKDF-Extract(initial_salt, client_dcid)`
+`crates/network/src/h3/key_schedule.rs:251` **fn** `client_initial_secret` — The client's Initial traffic secret (RFC 9001 §5.2):
+`crates/network/src/h3/key_schedule.rs:258` **fn** `server_initial_secret` — The server's Initial traffic secret (RFC 9001 §5.2):
+`crates/network/src/h3/key_schedule.rs:267` **fn** `next_generation_secret` — The next-generation traffic secret for a key update (RFC 9001 §6.1):
 `crates/network/src/h3/loss.rs:89` **enum** `PacketNumberSpace` — One of QUIC's three packet-number spaces (RFC 9000 §12.3). Loss detection is
 `crates/network/src/h3/loss.rs:104` **fn** `uses_ack_delay` — Whether acknowledgements in this space may carry a non-zero `ack_delay`
 `crates/network/src/h3/loss.rs:112` **struct** `SentPacket` — A packet recorded in a [`SentPacketRegistry`] (RFC 9002 §A.1
@@ -4582,4 +4590,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4511 symbols in 22 crates*
+*Total: 4519 symbols in 22 crates*
