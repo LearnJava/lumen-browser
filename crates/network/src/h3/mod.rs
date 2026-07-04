@@ -94,7 +94,17 @@
 //!   everything else `H3_FRAME_UNEXPECTED`). Pure state machine over decoded
 //!   [`frame::Frame`]s; no IO. Reuses [`frame`]'s type codes and
 //!   `H3_FRAME_UNEXPECTED`.
-//! - Slice 13+ (planned) — the rest of the QUIC transport (UDP datagrams,
+//! - Slice 13 — the QUIC key schedule ([`key_schedule`], RFC 9001 §5.1, §5.2):
+//!   the TLS 1.3 HKDF (`HKDF-Extract` / `HKDF-Expand` / `HKDF-Expand-Label`,
+//!   RFC 5869 + RFC 8446 §7.1) built on the existing SHA-256 dependency, the
+//!   QUIC v1 Initial salt, and the Initial-secret chain that derives both
+//!   directions' packet-protection keys (`key` / `iv` / `hp`, labels
+//!   `"quic key"` / `"quic iv"` / `"quic hp"`) deterministically from the
+//!   client's original Destination Connection ID, plus the `"quic ku"` key
+//!   update (§6.1). Pure functions; validated against the RFC 9001 Appendix A.1
+//!   test vectors. The header-protection and AEAD transforms that consume this
+//!   material are the next slices.
+//! - Slice 14+ (planned) — the rest of the QUIC transport (UDP datagrams,
 //!   header protection, TLS 1.3 handshake, packet protection, actually arming the
 //!   PTO timer and assembling probe datagrams, the QPACK encoder/decoder stream
 //!   instruction wiring, and `h3_do_request` dispatch alongside the existing
@@ -110,6 +120,7 @@ pub mod alt_svc;
 pub mod conn_flow;
 pub mod frame;
 pub mod h3_stream;
+pub mod key_schedule;
 pub mod loss;
 pub mod packet;
 pub mod pto;
