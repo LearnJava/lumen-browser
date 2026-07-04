@@ -57,8 +57,8 @@
 {
  "generated": "2026-07-04",
  "counts": {
-  "open": 23,
-  "fixed": 220,
+  "open": 21,
+  "fixed": 222,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -519,8 +519,8 @@
     {
      "id": "P3-h3",
      "title": "HTTP/3",
-     "status": "planned",
-     "note": "OPEN (сверка с кодом 2026-07-02, в коде пусто): HTTP/3 — нет QUIC/H3 транспорта (только H1.1+H2)"
+     "status": "active",
+     "note": "В работе (P1): срез 1 ✅ 2026-07-04 — QUIC varint (RFC 9000 §16) + HTTP/3 frame codec (RFC 9114 §7.2), pure parse/serialize без IO (crates/network/src/h3/, 17 тестов). Остаётся: QPACK (RFC 9204), QUIC transport (UDP+TLS 1.3+packet protection+loss recovery+congestion control), stream framing, h3_do_request"
     },
     {
      "id": "PH3-20",
@@ -2229,10 +2229,10 @@
    "debtor": false
   },
   "BUG-176": {
-   "status": "open",
-   "title": "TEST-36 остаток 1.11% после BUG-175: edge-AA вдоль скруглённых границ (sub-pixel snapping vs Edge) + кубическая kappa-аппроксимация эллиптических углов (row 6,…",
+   "status": "fixed",
+   "title": "Расследование P3: свежий full-build gdigrab TEST-36 = 0.96% (был baseline 1.11%). Гипотеза «эллиптическая kappa» (row 6, `border-radius: H/V`) ОПРОВЕРГНУТА — CP…",
    "component": "paint",
-   "date": null,
+   "date": "2026-07-04",
    "debtor": true
   },
   "BUG-177": {
@@ -2285,10 +2285,10 @@
    "debtor": false
   },
   "BUG-184": {
-   "status": "open",
-   "title": "`clip-path` deviation — TEST-31: 0.60% KNOWN_DEBTOR (femtovg shape-fill AA-fringe ~1px на curved/diagonal клипах; inset/rect = perfect via scissor; класс BUG-17…",
+   "status": "fixed",
+   "title": "`clip-path` deviation — TEST-31: 0.59% KNOWN_DEBTOR. P3-ревизия 2026-07-04: свежий full-build gdigrab = 0.59% (bad=4318; inset/rect=0 через scissor, femtovg sha…",
    "component": "paint",
-   "date": null,
+   "date": "2026-06-24",
    "debtor": true
   },
   "BUG-185": {
