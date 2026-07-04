@@ -2573,7 +2573,7 @@ impl FemtovgBackend {
                     }
                 }
             }
-            DisplayCommand::DrawText { rect, text, font_size, color, font_family, font_weight, font_style, font_variation_axes, font_features, tab_size, highlight_name: _, text_orientation: _ } => {
+            DisplayCommand::DrawText { rect, text, font_size, color, font_family, font_weight, font_style, font_variation_axes, font_features, font_palette: _, tab_size, highlight_name: _, text_orientation: _ } => {
                 // BUG-109: femtovg's text API cannot apply font-variation-settings
                 // axes. When axes are present and resolve to a variable face,
                 // render the run via lumen-font outlines (vector fill) so wght/
