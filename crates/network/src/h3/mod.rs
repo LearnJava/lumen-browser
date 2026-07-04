@@ -20,11 +20,18 @@
 //!   the connection layer exchanges inside a packet's protected payload, on
 //!   the same [`varint`] primitive as the HTTP/3 frame codec. No packet
 //!   protection, no packet-number spaces, no IO.
-//! - Slice 5+ (planned) — the QPACK dynamic table + encoder/decoder streams,
-//!   the rest of the QUIC transport (UDP datagrams, packet headers, TLS 1.3
-//!   handshake, packet protection, loss recovery, congestion control),
-//!   unidirectional/request stream framing, and `h3_do_request` dispatch
-//!   alongside the existing H1/H2 paths.
+//! - Slice 5 — the QUIC packet header codec ([`packet`], RFC 9000 §17): pure
+//!   parse/serialize of every packet shape (Initial, 0-RTT, Handshake, Retry,
+//!   Version Negotiation, and the short 1-RTT header), carrying the
+//!   header-protected first-byte bits and the AEAD-protected payload verbatim
+//!   as opaque bytes. No header protection, no packet protection, no IO. This
+//!   is the frame the connection layer parses first, before removing header
+//!   protection and AEAD-decrypting the payload into [`quic_frame`] frames.
+//! - Slice 6+ (planned) — the QPACK dynamic table + encoder/decoder streams,
+//!   the rest of the QUIC transport (UDP datagrams, header protection, TLS 1.3
+//!   handshake, packet protection, packet-number spaces, loss recovery,
+//!   congestion control), unidirectional/request stream framing, and
+//!   `h3_do_request` dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -34,6 +41,7 @@
 
 pub mod alt_svc;
 pub mod frame;
+pub mod packet;
 pub mod qpack;
 pub mod quic_frame;
 pub mod varint;
