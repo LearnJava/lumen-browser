@@ -104,11 +104,23 @@
 //!   update (§6.1). Pure functions; validated against the RFC 9001 Appendix A.1
 //!   test vectors. The header-protection and AEAD transforms that consume this
 //!   material are the next slices.
-//! - Slice 14+ (planned) — the rest of the QUIC transport (UDP datagrams,
-//!   header protection, TLS 1.3 handshake, packet protection, actually arming the
-//!   PTO timer and assembling probe datagrams, the QPACK encoder/decoder stream
-//!   instruction wiring, and `h3_do_request` dispatch alongside the existing
-//!   H1/H2 paths.
+//! - Slice 14 — QUIC packet protection ([`packet_protect`], RFC 9001 §5.3, §5.4):
+//!   the two transforms that consume slice 13's key material. AEAD payload
+//!   protection seals/opens the packet payload with AES-128-GCM
+//!   ([`packet_protect::aes_128_gcm_seal`] / [`packet_protect::aes_128_gcm_open`]),
+//!   deriving the nonce from the `iv` and packet number and authenticating the
+//!   unprotected header as associated data. Header protection masks the first
+//!   byte's low bits and the packet-number octets with a mask derived from an
+//!   AES-ECB sample of the ciphertext ([`packet_protect::aes_128_hp_mask`],
+//!   [`packet_protect::apply_header_protection`] /
+//!   [`packet_protect::remove_header_protection`]). AES suite only (ChaCha20
+//!   deferred). Pure functions over byte buffers; validated against the RFC 9001
+//!   Appendix A.2/A.3 vectors.
+//! - Slice 15+ (planned) — the rest of the QUIC transport (UDP datagrams,
+//!   the TLS 1.3 handshake and its Handshake / 1-RTT traffic secrets, actually
+//!   arming the PTO timer and assembling probe datagrams, the QPACK
+//!   encoder/decoder stream instruction wiring, and `h3_do_request` dispatch
+//!   alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -123,6 +135,7 @@ pub mod h3_stream;
 pub mod key_schedule;
 pub mod loss;
 pub mod packet;
+pub mod packet_protect;
 pub mod pto;
 pub mod qpack;
 pub mod qpack_stream;

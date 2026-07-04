@@ -29,6 +29,14 @@ brotli-decompressor = "5"
 p256 = { version = "0.13", features = ["ecdsa"] }
 # SHA-256 для clientDataHash и rpIdHash в WebAuthn (W3C WebAuthn L2 §6.1).
 sha2 = "0.10"
+# Exception #3 (§5): crypto. AES-128-GCM AEAD packet protection (RFC 9001 §5.3)
+# для QUIC/HTTP/3. Тот же RustCrypto-крейт уже используют lumen-js (Web Crypto) и
+# lumen-storage; pure-Rust, без native-кода. Своя реализация AEAD — security antipattern.
+aes-gcm = "0.10"
+# Exception #3 (§5): crypto. Сырой AES-128 блок (ECB) для QUIC header protection
+# (RFC 9001 §5.4) — маска строится из AES(hp_key, sample). Транзитивная зависимость
+# aes-gcm, объявлена явно ради BlockEncrypt. Своя реализация AES — security antipattern.
+aes = "0.8"
 # Permanent: OS CSPRNG для генерации passkey-ключей и credential ID в
 # VirtualAuthenticator. Delegates directly to OS (как в lumen-js Web Crypto).
 getrandom = "0.2"
