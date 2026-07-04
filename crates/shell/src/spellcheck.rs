@@ -6,6 +6,8 @@
 //! module is unit-testable without a font backend; painting produces plain
 //! `DisplayCommand`s that the shell appends to the overlay display list.
 
+use std::collections::HashSet;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use lumen_core::ext::SpellChecker;
@@ -201,14 +203,65 @@ pub fn extract_words(text: &str) -> Vec<(usize, usize)> {
     ranges
 }
 
-/// Возвращает диапазоны слов, для которых `checker.check` вернул `false`.
-/// Ограничение: не более 100 диапазонов.
-pub fn misspelled_ranges(checker: &dyn SpellChecker, text: &str) -> Vec<(usize, usize)> {
+/// Возвращает диапазоны слов, для которых `checker.check` вернул `false`, при
+/// этом слова, чей lowercase присутствует в `allow`, считаются верными
+/// (пользовательский словарь + «Пропустить» на сессию). Ограничение: не более
+/// 100 диапазонов.
+pub fn misspelled_ranges_with(
+    checker: &dyn SpellChecker,
+    text: &str,
+    allow: &HashSet<String>,
+) -> Vec<(usize, usize)> {
     extract_words(text)
         .into_iter()
-        .filter(|(s, e)| !checker.check(&text[*s..*e]))
+        .filter(|(s, e)| {
+            let word = &text[*s..*e];
+            !checker.check(word) && !allow.contains(&word.to_lowercase())
+        })
         .take(100)
         .collect()
+}
+
+/// Находит байтовый диапазон слова в `text`, чья горизонтальная проекция
+/// содержит `x` (пиксели от начала строки). `measure` — ширина подстроки в px.
+/// Возвращает `None`, если под точкой нет слова.
+pub fn word_at_x(text: &str, x: f32, measure: &dyn Fn(&str) -> f32) -> Option<(usize, usize)> {
+    for (s, e) in extract_words(text) {
+        let x0 = measure(&text[..s]);
+        let x1 = measure(&text[..e]);
+        if x >= x0 && x < x1 {
+            return Some((s, e));
+        }
+    }
+    None
+}
+
+/// Путь к пользовательскому словарю: `<exe_dir>/data/spell/user_words.txt`.
+pub fn user_words_path() -> PathBuf {
+    spell_data_dir().join("user_words.txt")
+}
+
+/// Загружает пользовательский словарь: по одному слову в строке, lowercase.
+/// Пустые строки и ошибки чтения игнорируются (возвращается пустой набор).
+pub fn load_user_words(path: &Path) -> HashSet<String> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => s
+            .lines()
+            .map(|l| l.trim().to_lowercase())
+            .filter(|l| !l.is_empty())
+            .collect(),
+        Err(_) => HashSet::new(),
+    }
+}
+
+/// Добавляет слово (lowercase) в файл пользовательского словаря, дописывая
+/// строку в конец. Создаёт родительские папки и файл при необходимости.
+pub fn add_user_word(path: &Path, word: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    writeln!(f, "{}", word.to_lowercase())
 }
 
 /// Строит команды отрисовки волнистого подчёркивания для ошибочных диапазонов.
@@ -347,7 +400,7 @@ lock/DU
     fn misspelled_ranges_basic() {
         let dict = HunspellDictionary::from_aff_dic(AFF, DIC, "en_US").unwrap();
         let text = "walk walkz привет превет";
-        let ranges = misspelled_ranges(&dict, text);
+        let ranges = misspelled_ranges_with(&dict, text, &HashSet::new());
         assert_eq!(ranges.len(), 2);
         assert_eq!(&text[ranges[0].0..ranges[0].1], "walkz");
         assert_eq!(&text[ranges[1].0..ranges[1].1], "превет");
@@ -357,7 +410,7 @@ lock/DU
     fn build_spell_overlay_non_empty() {
         let dict = HunspellDictionary::from_aff_dic(AFF, DIC, "en_US").unwrap();
         let text = "walk walkz";
-        let ranges = misspelled_ranges(&dict, text);
+        let ranges = misspelled_ranges_with(&dict, text, &HashSet::new());
         let measure = |s: &str| s.chars().count() as f32 * 10.0;
         let cmds = build_spell_overlay(text, 10.0, 20.0, 16.0, &ranges, &measure);
 
@@ -409,5 +462,50 @@ lock/DU
         let md = load_dictionaries(&dir);
         assert!(md.is_empty());
         assert_eq!(md.locale(), "null");
+    }
+
+    #[test]
+    fn misspelled_ranges_with_allow_set() {
+        let dict = HunspellDictionary::from_aff_dic(AFF, DIC, "en_US").unwrap();
+        let text = "walk walkz привет превет";
+        // Without allow-set: walkz + превет are misspelled.
+        assert_eq!(misspelled_ranges_with(&dict, text, &HashSet::new()).len(), 2);
+        // Allow "превет" (case-insensitive) → only walkz remains.
+        let mut allow = HashSet::new();
+        allow.insert("превет".to_string());
+        let ranges = misspelled_ranges_with(&dict, text, &allow);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(&text[ranges[0].0..ranges[0].1], "walkz");
+    }
+
+    #[test]
+    fn word_at_x_finds_word() {
+        let text = "walk walkz";
+        let measure = |s: &str| s.chars().count() as f32 * 10.0;
+        // "walk" spans x in [0, 40); "walkz" spans [50, 100).
+        assert_eq!(word_at_x(text, 5.0, &measure), Some((0, 4)));
+        assert_eq!(word_at_x(text, 60.0, &measure), Some((5, 10)));
+        // Space between words → no word.
+        assert_eq!(word_at_x(text, 45.0, &measure), None);
+        // Past the end → no word.
+        assert_eq!(word_at_x(text, 200.0, &measure), None);
+    }
+
+    #[test]
+    fn user_words_load_and_add() {
+        let dir = std::env::temp_dir().join("lumen_spell_test_user_words");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("user_words.txt");
+
+        assert!(load_user_words(&path).is_empty());
+
+        add_user_word(&path, "Превед").unwrap();
+        add_user_word(&path, "walkz").unwrap();
+        let words = load_user_words(&path);
+        assert!(words.contains("превед"), "stored lowercase");
+        assert!(words.contains("walkz"));
+        assert_eq!(words.len(), 2);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

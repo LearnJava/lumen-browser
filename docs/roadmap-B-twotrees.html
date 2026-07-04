@@ -75,8 +75,8 @@
 {
  "generated": "2026-07-04",
  "counts": {
-  "open": 24,
-  "fixed": 219,
+  "open": 23,
+  "fixed": 220,
   "inprogress": 0,
   "wontfix": 0
  },
@@ -608,7 +608,7 @@
      "id": "P3-spell",
      "title": "Spell check (Hunspell, русский словарь)",
      "status": "active",
-     "note": "PARTIAL 2026-07-03 (смешанное программирование, nemotron-3-ultra, срезы 1-2): lumen_core::spell — pure-Rust движок Hunspell + срез 2: shell::spellcheck (load_dictionaries из data/spell, MultiDictionary, extract_words/misspelled_ranges, build_spell_overlay) + обвязка main.rs (фоновая загрузка словарей при старте, squiggly в paint для фокусного input/textarea, живая приёмка на словарях LibreOffice en_US+ru_RU PASS), 24 теста; дошить — suggestions в контекст-меню, contenteditable"
+     "note": "PARTIAL 2026-07-04 (срезы 1-3): lumen_core::spell — pure-Rust движок Hunspell + срез 2: shell::spellcheck (load_dictionaries из data/spell, MultiDictionary, extract_words/misspelled_ranges, build_spell_overlay) + обвязка main.rs (squiggly для фокусного input/textarea) + срез 3 (P1, 2026-07-04): squiggly в contenteditable (find_editing_host), контекст-меню page_context_menu (right-click → ≤5 подсказок + «Добавить в словарь»/user_words.txt + «Пропустить»/сессия) для однострочного input, misspelled_ranges_with(allow-set), 25 тестов; дошить — apply в textarea/contenteditable, OS-провайдер ISpellChecker (опц.)"
     },
     {
      "id": "P3-varfonts",
@@ -2226,10 +2226,10 @@
    "debtor": false
   },
   "BUG-173": {
-   "status": "open",
-   "title": "Остаток SVG `<path>` vs Edge после BUG-102: triangle-soup AA-швы (DrawSvgPath), stroke-edge AA, self-intersecting fill (ear_clip, незалитая bowtie), dash-on-cur…",
+   "status": "fixed",
+   "title": "Остаток SVG `<path>` vs Edge после BUG-102 (triangle-soup AA-швы, stroke-edge AA, self-intersecting fill, dash-on-curve). Устранён двумя срезами: **fill** натив…",
    "component": "paint",
-   "date": null,
+   "date": "2026-07-04",
    "debtor": true
   },
   "BUG-174": {
