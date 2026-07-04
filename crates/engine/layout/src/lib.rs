@@ -117,6 +117,7 @@ pub use style::{
     apply_container_rules, evaluate_container_condition,
     set_interactive_state, clear_interactive_state,
     set_forced_colors, forced_colors_active,
+    set_print_media, print_media_active,
     parse_background_gradient, parse_color, parse_css_wide_keyword, parse_gradient_stops,
     parse_grid_template_areas, parse_transform_list,
     radial_gradient_radii, RadialShape, RadialSize,
