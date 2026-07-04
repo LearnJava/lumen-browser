@@ -145,6 +145,7 @@ Modern ES (ES2020+: classes, async/await, generators, Promise, Proxy, BigInt, mo
 
 ### lumen-network (`crates/network`)
 - ✅ HTTP/1.1 (keep-alive, connection pool), HTTPS (rustls 0.23 + webpki-roots, ALPN), **HTTP/2** (frame codec, HPACK, pool multiplexing, recv flow control).
+- 🟡 **HTTP/3** (slice 1): QUIC varint codec (RFC 9000 §16) + HTTP/3 frame codec (RFC 9114 §7.2 — DATA/HEADERS/CANCEL_PUSH/SETTINGS/PUSH_PROMISE/GOAWAY/MAX_PUSH_ID, reserved-type + SETTINGS validation), pure parse/serialize (`h3/`). Still ⬜: QPACK, QUIC transport (UDP+TLS 1.3+loss recovery), streams, `h3_do_request`.
 - ✅ Brotli + gzip + deflate content-decoding (`Accept-Encoding: br, gzip, deflate`); redirects (≤5), chunked decode, IDN→Punycode.
 - ✅ Cookie jar wired into client (inject/persist per hop); CORS preflight + enforcement; Origin/Mixed-Content/Sandbox/CSP/COOP classifiers.
 - ✅ HTTP auth (Basic + Digest MD5/SHA-256, 401 retry), Range requests, HSTS (+ preload), SOCKS5 proxy (proxy-side DNS, Tor-ready).
