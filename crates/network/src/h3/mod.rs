@@ -328,7 +328,27 @@
 //!   buffers the handshake bytes TLS emits, hands them back as CRYPTO frames
 //!   bounded by a size cap, and tracks the acknowledged ranges. Pure state
 //!   machine driven by decoded frames; no retransmission, no IO.
-//! - Slice 32+ (planned) — the rest of the QUIC transport: the UDP send/receive,
+//! - Slice 32 — QUIC connection-ID management ([`conn_id`], RFC 9000 §5.1): the
+//!   two connection-ID sets driven by the NEW_CONNECTION_ID (RFC 9000 §19.15) and
+//!   RETIRE_CONNECTION_ID (RFC 9000 §19.16) frames [`quic_frame`] already codecs.
+//!   [`conn_id::RemoteConnIds`] holds the IDs the peer issues for us to stamp on
+//!   the packets we send: seeded with the peer's handshake Source Connection ID
+//!   (sequence 0), it folds in each NEW_CONNECTION_ID frame — rejecting a
+//!   `Retire Prior To` past the sequence number or an out-of-range ID
+//!   ([`conn_id::ConnIdError::Malformed`] → `FRAME_ENCODING_ERROR`), a sequence
+//!   number reused for a different ID/token
+//!   ([`conn_id::ConnIdError::SequenceConflict`] → `PROTOCOL_VIOLATION`), and an
+//!   active-set overflow past the advertised `active_connection_id_limit`
+//!   ([`conn_id::ConnIdError::LimitExceeded`] → `CONNECTION_ID_LIMIT_ERROR`) —
+//!   honouring `Retire Prior To` (RFC 9000 §19.15) and reporting the sequence
+//!   numbers the connection layer must RETIRE_CONNECTION_ID, plus the
+//!   stateless-reset-token match (RFC 9000 §10.3.1) and voluntary migration.
+//!   [`conn_id::LocalConnIds`] holds the IDs we issue for the peer, assigning
+//!   monotonic sequence numbers, refusing to exceed the peer's limit, and dropping
+//!   an ID on RETIRE_CONNECTION_ID (a retire of an unissued ID is a
+//!   `PROTOCOL_VIOLATION`). Pure state machines driven by decoded frames; no IO,
+//!   no packet-level Destination-CID context.
+//! - Slice 33+ (planned) — the rest of the QUIC transport: the UDP send/receive,
 //!   actually arming the PTO/ACK-delay timers and assembling probe datagrams, the
 //!   QPACK encoder/decoder stream instruction wiring, and `h3_do_request` dispatch
 //!   alongside the existing H1/H2 paths.
@@ -342,6 +362,7 @@
 pub mod ack;
 pub mod alt_svc;
 pub mod conn_flow;
+pub mod conn_id;
 pub mod crypto_stream;
 pub mod datagram;
 pub mod frame;
