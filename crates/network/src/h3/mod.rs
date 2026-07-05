@@ -682,10 +682,29 @@
 //!   with no keys yet is counted undecryptable, and an AEAD failure or a malformed
 //!   coalesced header is silently discarded (RFC 9001 §5.5.2). Pure apart from the
 //!   caller-supplied `now`.
-//! - Slice 54+ (planned) — the rest of the QUIC transport: the connection driver
-//!   that decides *when* to ingest and flush by composing [`recv_path`] and
-//!   [`send_path`] with the timer loop over [`event_loop`], and the `h3_do_request`
-//!   dispatch alongside the existing H1/H2 paths.
+//! - Slice 54 — the QUIC connection driver ([`driver`], RFC 9000 §8.2.4, §10.1,
+//!   §10.2, §13.2.1; RFC 9002 §6.2): the loop body that decides *when* to ingest a
+//!   datagram and *when* to act on a timer, tying the receive path [`recv_path`] to
+//!   the timer scheduler [`timer`] over the event-loop wait [`event_loop`].
+//!   [`driver::ConnectionDriver`] owns the event loop, the [`connection`] receiver
+//!   state, the [`pto::LossDetection`] (which owns the send-side registries and PTO
+//!   timer), the unified [`timer::ConnectionTimers`], and the [`recv_path::RecvKeyRing`].
+//!   [`driver::ConnectionDriver::wait`] refreshes both timer sources — the
+//!   connection's own deadlines ([`connection::QuicConnection::refresh_timers`]) and
+//!   the loss-detection / PTO timer the connection leaves untouched
+//!   ([`pto::LossDetection::set_loss_detection_timer`]) — arms the socket read
+//!   timeout for the earliest, and blocks; on a datagram wake
+//!   [`driver::ConnectionDriver::ingest`] routes it through the receive path, and on
+//!   a timer wake [`driver::ConnectionDriver::dispatch_timers`] drives each elapsed
+//!   timer into its owning machine (PTO probe / declared loss, owed ACK, path
+//!   abandon, idle close, draining discard) and reports the send-side obligations as
+//!   [`driver::DriverAction`]s. Clock-free apart from the caller-supplied `now`;
+//!   deterministic under a [`udp::MockDatagramTransport`]. The send-path flush
+//!   ([`send_path::flush`], which borrows the per-space send state) and the
+//!   `h3_do_request` dispatch remain the caller's job.
+//! - Slice 55+ (planned) — the send-path flush integration (assembling and writing
+//!   the outgoing datagrams a [`driver::DriverAction`] calls for) and the
+//!   `h3_do_request` dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -702,6 +721,7 @@ pub mod crypto_state;
 pub mod crypto_stream;
 pub mod datagram;
 pub mod datagram_build;
+pub mod driver;
 pub mod event_loop;
 pub mod frame;
 pub mod h3_request;

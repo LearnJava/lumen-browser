@@ -472,6 +472,33 @@ impl QuicConnection {
         &self.lifecycle
     }
 
+    /// Whether the idle timeout has elapsed at `now` (RFC 9000 §10.1). When this
+    /// returns `true` the connection is silently discarded — the driver drops the
+    /// connection object and sends nothing further. Consults the same
+    /// [`idle_deadline`](super::lifecycle::ConnectionLifecycle::idle_deadline) the
+    /// [`QuicConnection::refresh_timers`] idle timer was armed from, using the
+    /// connection's current probe timeout as the floor.
+    pub fn is_idle_expired(&self, now: Instant) -> bool {
+        self.lifecycle.is_idle_expired(now, self.pto)
+    }
+
+    /// Drive the path-validation abandon timer (RFC 9000 §8.2.4): if a validation
+    /// is in progress and its deadline has elapsed at `now`, abandon it (the path
+    /// transitions to failed) and return `true`; otherwise leave the state
+    /// unchanged and return `false`.
+    pub fn on_path_validation_timeout(&mut self, now: Instant) -> bool {
+        self.path.on_timeout(now)
+    }
+
+    /// Drive the closing / draining period end (RFC 9000 §10.2): if the close
+    /// deadline has elapsed at `now`, discard the connection state (moving it to
+    /// [`ConnState::Closed`](super::lifecycle::ConnState::Closed)). Returns whether
+    /// the connection has reached the closed state, so the driver can stop.
+    pub fn on_close_timeout(&mut self, now: Instant) -> bool {
+        self.lifecycle.discard(now);
+        self.lifecycle.is_closed()
+    }
+
     /// The peer's connection-ID set (the IDs we stamp on outgoing packets).
     pub fn remote_conn_ids(&self) -> &RemoteConnIds {
         &self.remote_cids
