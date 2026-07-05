@@ -2301,7 +2301,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (927 symbols)
+## lumen-network  (976 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -2543,11 +2543,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/connection.rs:461` **fn** `read_crypto` — Reads the contiguous reassembled CRYPTO prefix available at `space`'s
 `crates/network/src/h3/connection.rs:466` **fn** `handshake_confirmed` — Whether the peer has confirmed the handshake (HANDSHAKE_DONE received)
 `crates/network/src/h3/connection.rs:471` **fn** `lifecycle` — The current connection lifecycle state
-`crates/network/src/h3/connection.rs:476` **fn** `remote_conn_ids` — The peer's connection-ID set (the IDs we stamp on outgoing packets)
-`crates/network/src/h3/connection.rs:481` **fn** `send_flow` — Our send-side view of the peer's connection-wide flow-control limit
-`crates/network/src/h3/connection.rs:486` **fn** `path` — The path validator driving connection migration and path challenges
-`crates/network/src/h3/connection.rs:491` **fn** `anti_amplification` — The anti-amplification limit on the peer's address (RFC 9000 §8.1)
-`crates/network/src/h3/connection.rs:496` **fn** `send_stream_limit` — The bidirectional / unidirectional stream-count limit we may open under
+`crates/network/src/h3/connection.rs:481` **fn** `is_idle_expired` — Whether the idle timeout has elapsed at `now` (RFC 9000 §10.1). When this
+`crates/network/src/h3/connection.rs:489` **fn** `on_path_validation_timeout` — Drive the path-validation abandon timer (RFC 9000 §8.2.4): if a validation
+`crates/network/src/h3/connection.rs:497` **fn** `on_close_timeout` — Drive the closing / draining period end (RFC 9000 §10.2): if the close
+`crates/network/src/h3/connection.rs:503` **fn** `remote_conn_ids` — The peer's connection-ID set (the IDs we stamp on outgoing packets)
+`crates/network/src/h3/connection.rs:508` **fn** `send_flow` — Our send-side view of the peer's connection-wide flow-control limit
+`crates/network/src/h3/connection.rs:513` **fn** `path` — The path validator driving connection migration and path challenges
+`crates/network/src/h3/connection.rs:518` **fn** `anti_amplification` — The anti-amplification limit on the peer's address (RFC 9000 §8.1)
+`crates/network/src/h3/connection.rs:523` **fn** `send_stream_limit` — The bidirectional / unidirectional stream-count limit we may open under
 `crates/network/src/h3/crypto_state.rs:54` **struct** `KeyPhase` — The Key Phase bit carried in a short-header packet's first byte (RFC 9000
 `crates/network/src/h3/crypto_state.rs:59` **fn** `zero` — The initial Key Phase, used for the first generation of 1-RTT keys
 `crates/network/src/h3/crypto_state.rs:66` **fn** `from_bit` — The Key Phase for a raw bit read from (or to write into) a packet's first
@@ -2608,6 +2611,20 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/datagram_build.rs:249` **fn** `initial_padding_shortfall` — How many bytes short of [`MIN_INITIAL_DATAGRAM_LEN`] the datagram is, or `0`
 `crates/network/src/h3/datagram_build.rs:259` **fn** `as_bytes` — The coalesced datagram bytes so far, for inspection
 `crates/network/src/h3/datagram_build.rs:265` **fn** `into_bytes` — Consume the builder and yield the finished datagram bytes, ready to send
+`crates/network/src/h3/driver.rs:87` **enum** `DriverAction` — A unit of work a fired connection timer produced, for the driver's caller to
+`crates/network/src/h3/driver.rs:140` **struct** `ConnectionDriver` — The running state of one QUIC connection: the event-loop socket wait, the
+`crates/network/src/h3/driver.rs:169` **fn** `new` — Builds a driver over an event loop, a fresh connection receiver state, and
+`crates/network/src/h3/driver.rs:188` **fn** `connection` — The connection receiver state, borrowed immutably (e.g. to read the
+`crates/network/src/h3/driver.rs:194` **fn** `connection_mut` — The connection receiver state, borrowed mutably (e.g. to read reassembled
+`crates/network/src/h3/driver.rs:199` **fn** `loss` — The loss-detection / PTO state machine, borrowed immutably
+`crates/network/src/h3/driver.rs:205` **fn** `loss_mut` — The loss-detection / PTO state machine, borrowed mutably (e.g. to record
+`crates/network/src/h3/driver.rs:212` **fn** `recv_keys_mut` — The receive keys, borrowed mutably so the caller installs each encryption
+`crates/network/src/h3/driver.rs:218` **fn** `events_mut` — The event loop, borrowed mutably (e.g. to send an outgoing datagram over
+`crates/network/src/h3/driver.rs:223` **fn** `timers` — The unified timer scheduler as last refreshed, for inspection
+`crates/network/src/h3/driver.rs:236` **fn** `refresh_timers` — Refreshes the unified timer scheduler from both sources at `now`: folds the
+`crates/network/src/h3/driver.rs:255` **fn** `wait` — Blocks for one event-loop turn at `now`: refreshes the timers, arms the
+`crates/network/src/h3/driver.rs:277` **fn** `ingest` — Dispatches a datagram woken by [`Wakeup::Datagram(n)`](super::event_loop::Wakeup::Datagram):
+`crates/network/src/h3/driver.rs:310` **fn** `dispatch_timers` — Drives every timer that has elapsed at `now` into its owning state machine,
 `crates/network/src/h3/event_loop.rs:48` **enum** `Wakeup` — Why one [`DatagramEventLoop::wait`] returned
 `crates/network/src/h3/event_loop.rs:67` **fn** `next_read_timeout` — The read timeout the next [`DatagramTransport::recv`] should block for, derived
 `crates/network/src/h3/event_loop.rs:80` **struct** `DatagramEventLoop` — One turn's receive side of the QUIC connection event loop: a
@@ -2788,19 +2805,20 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/pto.rs:157` **fn** `new` — Creates a fresh loss-detection state machine with the peer's advertised
 `crates/network/src/h3/pto.rs:172` **fn** `registry` — The registry for `space`, borrowed immutably
 `crates/network/src/h3/pto.rs:183` **fn** `registry_mut` — The registry for `space`, borrowed mutably so the caller can record sent
-`crates/network/src/h3/pto.rs:192` **fn** `rtt` — The RTT estimator, borrowed immutably
-`crates/network/src/h3/pto.rs:199` **fn** `rtt_mut` — The RTT estimator, borrowed mutably so the caller can fold in a sample
-`crates/network/src/h3/pto.rs:204` **fn** `pto_count` — The current PTO backoff exponent (`pto_count`, RFC 9002 §6.2.1)
-`crates/network/src/h3/pto.rs:211` **fn** `reset_pto_count` — Resets the PTO backoff to zero (RFC 9002 §6.2.1): done whenever a fresh RTT
-`crates/network/src/h3/pto.rs:217` **fn** `set_has_handshake_keys` — Records that Handshake keys are now available (RFC 9002 §6.2.2.1); switches
-`crates/network/src/h3/pto.rs:223` **fn** `set_handshake_confirmed` — Records whether the TLS handshake is confirmed (RFC 9001 §4.1.2). The
-`crates/network/src/h3/pto.rs:229` **fn** `set_peer_completed_address_validation` — Records whether the peer has validated this endpoint's address (RFC 9000
-`crates/network/src/h3/pto.rs:239` **fn** `discard_space` — Discards a packet-number space (RFC 9002 §A.4 `OnPacketNumberSpaceDiscarded`)
-`crates/network/src/h3/pto.rs:247` **fn** `any_ack_eliciting_in_flight` — Whether any packet-number space still has an ack-eliciting packet in flight
-`crates/network/src/h3/pto.rs:256` **fn** `get_loss_time_and_space` — The earliest pending time-threshold loss time and its space, or `None` when
-`crates/network/src/h3/pto.rs:298` **fn** `get_pto_time_and_space` — The instant the PTO should fire and the space it belongs to, or `None` when
-`crates/network/src/h3/pto.rs:343` **fn** `set_loss_detection_timer` — Computes the state the single loss-detection timer should be left in
-`crates/network/src/h3/pto.rs:368` **fn** `on_timeout` — Handles the loss-detection timer firing (RFC 9002 §A.9
+`crates/network/src/h3/pto.rs:201` **fn** `registries_mut` — All three per-space registries borrowed mutably at once, in the fixed order
+`crates/network/src/h3/pto.rs:206` **fn** `rtt` — The RTT estimator, borrowed immutably
+`crates/network/src/h3/pto.rs:213` **fn** `rtt_mut` — The RTT estimator, borrowed mutably so the caller can fold in a sample
+`crates/network/src/h3/pto.rs:218` **fn** `pto_count` — The current PTO backoff exponent (`pto_count`, RFC 9002 §6.2.1)
+`crates/network/src/h3/pto.rs:225` **fn** `reset_pto_count` — Resets the PTO backoff to zero (RFC 9002 §6.2.1): done whenever a fresh RTT
+`crates/network/src/h3/pto.rs:231` **fn** `set_has_handshake_keys` — Records that Handshake keys are now available (RFC 9002 §6.2.2.1); switches
+`crates/network/src/h3/pto.rs:237` **fn** `set_handshake_confirmed` — Records whether the TLS handshake is confirmed (RFC 9001 §4.1.2). The
+`crates/network/src/h3/pto.rs:243` **fn** `set_peer_completed_address_validation` — Records whether the peer has validated this endpoint's address (RFC 9000
+`crates/network/src/h3/pto.rs:253` **fn** `discard_space` — Discards a packet-number space (RFC 9002 §A.4 `OnPacketNumberSpaceDiscarded`)
+`crates/network/src/h3/pto.rs:261` **fn** `any_ack_eliciting_in_flight` — Whether any packet-number space still has an ack-eliciting packet in flight
+`crates/network/src/h3/pto.rs:270` **fn** `get_loss_time_and_space` — The earliest pending time-threshold loss time and its space, or `None` when
+`crates/network/src/h3/pto.rs:312` **fn** `get_pto_time_and_space` — The instant the PTO should fire and the space it belongs to, or `None` when
+`crates/network/src/h3/pto.rs:357` **fn** `set_loss_detection_timer` — Computes the state the single loss-detection timer should be left in
+`crates/network/src/h3/pto.rs:382` **fn** `on_timeout` — Handles the loss-detection timer firing (RFC 9002 §A.9
 `crates/network/src/h3/qpack.rs:70` **enum** `QpackError` — Field-section codec error. Every variant is a decompression failure at the
 `crates/network/src/h3/qpack.rs:286` **struct** `HeaderField` — A decoded header field. `sensitive` reflects the QPACK "never index" (`N`)
 `crates/network/src/h3/qpack.rs:298` **fn** `new` — Build a non-sensitive field from `name`/`value`
@@ -2881,6 +2899,17 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/recovery.rs:359` **fn** `on_packets_lost` — Processes a batch of lost packets (RFC 9002 Appendix B.7
 `crates/network/src/h3/recovery.rs:380` **fn** `on_persistent_congestion` — Collapses the window to the minimum on established persistent congestion
 `crates/network/src/h3/recovery.rs:393` **fn** `persistent_congestion_duration` — The persistent-congestion period (RFC 9002 §7.6.1):
+`crates/network/src/h3/recv_path.rs:71` **struct** `SpaceKeys` — One packet-number space's receive-side packet-protection state: the keys that
+`crates/network/src/h3/recv_path.rs:82` **fn** `new` — Wraps `keys` for a space that has processed no packets yet (`largest_pn`
+`crates/network/src/h3/recv_path.rs:95` **struct** `RecvKeyRing` — The receive keys for each packet-number space, installed as each encryption
+`crates/network/src/h3/recv_path.rs:107` **fn** `new` — An empty key ring with no space's keys installed yet
+`crates/network/src/h3/recv_path.rs:116` **fn** `install` — Installs `keys` for `space`, resetting its `largest_pn` to `0`
+`crates/network/src/h3/recv_path.rs:121` **fn** `space` — A shared reference to `space`'s installed keys, or `None` if not installed
+`crates/network/src/h3/recv_path.rs:130` **fn** `space_mut` — A mutable reference to `space`'s installed keys, or `None` if not installed
+`crates/network/src/h3/recv_path.rs:147` **struct** `IngestReport` — A summary of what one [`ingest_datagram`] did with a received datagram, plus the
+`crates/network/src/h3/recv_path.rs:175` **enum** `IngestError` — A connection error raised by an *authenticated* packet's content, which the
+`crates/network/src/h3/recv_path.rs:195` **fn** `code` — The QUIC transport error code to close the connection with (RFC 9000 §20.1)
+`crates/network/src/h3/recv_path.rs:292` **fn** `ingest_datagram` — Ingest one received UDP datagram into `conn`, decrypting and dispatching each of
 `crates/network/src/h3/retry.rs:48` **enum** `RetryError` — Failure processing a Retry packet
 `crates/network/src/h3/retry.rs:119` **fn** `retry_integrity_tag` — Compute the Retry Integrity Tag for `packet` given the `odcid` the client used
 `crates/network/src/h3/retry.rs:144` **fn** `verify_retry_integrity` — Verify a received Retry packet's Integrity Tag against the `odcid` the client
@@ -2907,6 +2936,26 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/send_path.rs:118` **enum** `FlushError` — Something that stopped [`flush`] or [`send_padded_initial`] from writing a
 `crates/network/src/h3/send_path.rs:192` **fn** `flush` — Flush every space's pending frames onto `transport` as coalesced datagrams,
 `crates/network/src/h3/send_path.rs:264` **fn** `send_padded_initial` — Send the client's first-flight Initial as its own datagram, padded to the
+`crates/network/src/h3/send_state.rs:83` **enum** `SendStateError` — Something that stopped a frame from being queued into a space's send scheduler
+`crates/network/src/h3/send_state.rs:148` **struct** `ConnectionSendState` — The send half of one QUIC connection: the per-space send state installed so far
+`crates/network/src/h3/send_state.rs:179` **fn** `new` — Creates an empty send state — no space installed yet — for a connection using
+`crates/network/src/h3/send_state.rs:193` **fn** `version` — The QUIC version stamped into long-header packets
+`crates/network/src/h3/send_state.rs:198` **fn** `dcid` — The Destination Connection ID packets are addressed to
+`crates/network/src/h3/send_state.rs:203` **fn** `scid` — The Source Connection ID carried in long-header packets
+`crates/network/src/h3/send_state.rs:208` **fn** `token` — The Initial address-validation Token (empty when none)
+`crates/network/src/h3/send_state.rs:214` **fn** `set_token` — Sets the Initial address-validation Token echoed in Initial packets — the
+`crates/network/src/h3/send_state.rs:220` **fn** `set_dcid` — Replaces the Destination Connection ID, e.g. after a Retry or a server's chosen
+`crates/network/src/h3/send_state.rs:232` **fn** `install` — Installs (or, on a key update, replaces the keys of) the send state for
+`crates/network/src/h3/send_state.rs:254` **fn** `discard` — Drops a space's send state (RFC 9001 §4.9): QUIC discards the Initial space
+`crates/network/src/h3/send_state.rs:259` **fn** `is_installed` — Whether `space` has send state installed (its keys have been derived)
+`crates/network/src/h3/send_state.rs:270` **fn** `enqueue` — Queues `frame` for the next packet in `space`
+`crates/network/src/h3/send_state.rs:280` **fn** `has_pending` — Whether any installed space has a frame queued to send
+`crates/network/src/h3/send_state.rs:288` **fn** `pending_in` — Whether `space` is installed and has a frame queued to send
+`crates/network/src/h3/send_state.rs:293` **fn** `congestion` — The congestion controller for `space`, if the space is installed
+`crates/network/src/h3/send_state.rs:299` **fn** `congestion_mut` — The congestion controller for `space`, borrowed mutably (e.g. to fold in an
+`crates/network/src/h3/send_state.rs:304` **fn** `next_packet_number` — The next packet number `space`'s next built packet will carry, if installed
+`crates/network/src/h3/send_state.rs:322` **fn** `flush` — Flushes every installed space's queued frames onto `transport` as coalesced
+`crates/network/src/h3/send_state.rs:367` **fn** `send_padded_initial` — Sends the client's first-flight Initial as its own datagram, padded to the
 `crates/network/src/h3/settings.rs:34` **enum** `H3SettingsError` — An error interpreting a peer's HTTP/3 SETTINGS
 `crates/network/src/h3/settings.rs:86` **struct** `H3Settings` — The typed contents of an HTTP/3 SETTINGS frame (RFC 9114 §7.2.4)
 `crates/network/src/h3/settings.rs:129` **fn** `for_profile` — Build the local SETTINGS Lumen sends on its control stream for the given
@@ -5009,4 +5058,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4938 symbols in 22 crates*
+*Total: 4987 symbols in 22 crates*

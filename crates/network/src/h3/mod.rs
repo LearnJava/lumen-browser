@@ -702,8 +702,26 @@
 //!   deterministic under a [`udp::MockDatagramTransport`]. The send-path flush
 //!   ([`send_path::flush`], which borrows the per-space send state) and the
 //!   `h3_do_request` dispatch remain the caller's job.
-//! - Slice 55+ (planned) — the send-path flush integration (assembling and writing
-//!   the outgoing datagrams a [`driver::DriverAction`] calls for) and the
+//! - Slice 55 — the QUIC send-side connection state ([`send_state`], RFC 9000
+//!   §12.3, §14.1; RFC 9002 §7): the owner of everything the send path needs that
+//!   the [`driver`] does not. [`send_state::ConnectionSendState`] holds one
+//!   send-state per installed packet-number space (the [`send_engine::SpaceSender`]
+//!   packet-number counter, the [`send::SendScheduler`] frame queue, the
+//!   send-direction [`key_schedule::PacketProtectionKeys`], and the space's
+//!   [`recovery::CongestionController`]) plus the header fields every packet shares
+//!   (version, Destination / Source Connection IDs, Initial token). A space is
+//!   absent until [`send_state::ConnectionSendState::install`] derives its keys and
+//!   falls away again on [`send_state::ConnectionSendState::discard`] (RFC 9001
+//!   §4.9). [`send_state::ConnectionSendState::flush`] borrows the per-space
+//!   registries from the driver's [`pto::LossDetection`]
+//!   ([`pto::LossDetection::registries_mut`]) and folds the installed spaces through
+//!   [`send_path::flush`] in send order — Initial, Handshake, Application Data — so
+//!   the long-header packets coalesce and the 1-RTT space seals the datagram (RFC
+//!   9000 §12.2); [`send_state::ConnectionSendState::send_padded_initial`] is the
+//!   client's first-flight path. Pure apart from the mockable transport write.
+//! - Slice 56+ (planned) — the driver ↔ send-state integration (turning a
+//!   [`driver::DriverAction`] and the receive path's
+//!   [`connection::PacketEffects`] into scheduled frames and a flush) and the
 //!   `h3_do_request` dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
@@ -749,6 +767,7 @@ pub mod retry;
 pub mod send;
 pub mod send_engine;
 pub mod send_path;
+pub mod send_state;
 pub mod settings;
 pub mod stream;
 pub mod stream_manager;
