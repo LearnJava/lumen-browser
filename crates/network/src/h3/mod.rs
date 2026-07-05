@@ -171,11 +171,26 @@
 //!   dependency, no IO. Validated end-to-end against the RFC 8448 §3 server /
 //!   client `Finished` values. Out of scope: the `CertificateVerify` signature
 //!   (RFC 8446 §4.4.3, a public-key verification over the same transcript).
-//! - Slice 19+ (planned) — the rest of the QUIC transport: UDP datagrams,
+//! - Slice 19 — the TLS 1.3 `CertificateVerify` signature ([`tls_cert_verify`],
+//!   RFC 8446 §4.4.3): the peer-authentication step of the handshake. QUIC
+//!   carries this message in CRYPTO frames (RFC 9001 §4), and unlike the
+//!   `Finished` MAC (slice 18, which only confirms key agreement) it proves the
+//!   peer holds the private key of the end-entity certificate.
+//!   [`tls_cert_verify::certificate_verify_content`] builds the signed content
+//!   (64 `0x20` octets · role context string · `0x00` · transcript hash, so a
+//!   TLS 1.3 signature cannot be confused across versions or roles);
+//!   [`tls_cert_verify::verify_certificate_verify`] verifies the DER signature
+//!   under the peer's public key for the named [`tls_cert_verify::signature_scheme`].
+//!   Only `ecdsa_secp256r1_sha256` (an RFC 8446 §9.1 mandatory-to-implement
+//!   scheme) is wired, reusing the existing `p256` dependency (WebAuthn ES256) —
+//!   no new dependency. Pure functions; the ECDSA primitive is validated against
+//!   the RFC 6979 Appendix A.2.5 P-256/SHA-256 vector. Out of scope:
+//!   `rsa_pss_rsae_sha256` / `ed25519` verifiers and X.509 `SubjectPublicKeyInfo`
+//!   extraction (the caller passes the SEC1 EC point).
+//! - Slice 20+ (planned) — the rest of the QUIC transport: UDP datagrams,
 //!   actually arming the PTO timer and assembling probe datagrams, the QPACK
-//!   encoder/decoder stream instruction wiring, the `CertificateVerify`
-//!   signature verification, and `h3_do_request` dispatch alongside the existing
-//!   H1/H2 paths.
+//!   encoder/decoder stream instruction wiring, the remaining `CertificateVerify`
+//!   schemes, and `h3_do_request` dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -198,6 +213,7 @@ pub mod qpack_stream;
 pub mod quic_frame;
 pub mod recovery;
 pub mod stream;
+pub mod tls_cert_verify;
 pub mod tls_finished;
 pub mod tls_message;
 pub mod tls_schedule;
