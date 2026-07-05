@@ -677,7 +677,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Feature | Status | Notes |
 |---------|--------|-------|
 | `color-mix()` | ✅ | parse_color_mix() 2026-06-08 |
-| `color-contrast()` | ⬜ | |
+| `color-contrast()` | ✅ | `parse_color_contrast` (style.rs); WCAG 2.1 ratio pick; `to AA/AA-large/AAA/AAA-large`/`<number>` targets 2026-07-05 |
 | Relative color syntax `oklch(from ...)` | ⬜ | |
 | `@color-profile` | ⬜ | |
 
