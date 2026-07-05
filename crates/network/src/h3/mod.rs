@@ -595,9 +595,24 @@
 //!   deadline into [`timer::ConnectionTimers`] for [`event_loop`]. Pure and
 //!   clock-driven by a caller-supplied `now`; packet decryption and the send path
 //!   remain the caller's job.
-//! - Slice 49+ (planned) — the rest of the QUIC transport: the stream manager, the
-//!   send path composed over [`event_loop`], and `h3_do_request` dispatch alongside
-//!   the existing H1/H2 paths.
+//! - Slice 49 — the QUIC stream manager ([`stream_manager`], RFC 9000 §2, §3,
+//!   §4, §19): the receive-side dispatcher for the per-stream frames slice 48
+//!   ([`connection`]) deferred. [`stream_manager::StreamManager`] owns every live
+//!   stream's [`stream::RecvStream`] / [`stream::SendStream`] halves, the
+//!   connection-wide receive flow-control budget ([`conn_flow::RecvConnFlow`]),
+//!   and the two receive stream-count limits ([`conn_flow::RecvStreamLimit`]), and
+//!   routes STREAM / RESET_STREAM to the receiving half (lazily creating it with
+//!   the receive window advertised for the stream type, enforcing the receive
+//!   stream-count limit for a peer-initiated stream and the connection-wide
+//!   receive budget across all streams), STOP_SENDING to the sending half
+//!   (resetting it and surfacing the RESET_STREAM to send, RFC 9000 §3.5),
+//!   MAX_STREAM_DATA to the sending half's per-stream limit, and STREAM_DATA_BLOCKED
+//!   as an accepted no-op. A stream's directionality (RFC 9000 §2.1) gates which
+//!   half a frame may touch (`STREAM_STATE_ERROR` otherwise). Pure state machine
+//!   over the decoded frames; no IO.
+//! - Slice 50+ (planned) — the rest of the QUIC transport: the send path composed
+//!   over [`event_loop`], and `h3_do_request` dispatch alongside the existing
+//!   H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -639,6 +654,7 @@ pub mod recovery;
 pub mod retry;
 pub mod settings;
 pub mod stream;
+pub mod stream_manager;
 pub mod tls_cert_verify;
 pub mod tls_finished;
 pub mod tls_handshake;
