@@ -509,7 +509,26 @@
 //!   ordered earliest-first, so the caller drives each owning state machine). It
 //!   holds no cross-timer policy — the connection cancels an irrelevant deadline by
 //!   setting it to `None`. Pure, no clock of its own, no IO.
-//! - Slice 44+ (planned) — the rest of the QUIC transport: the UDP send/receive,
+//! - Slice 44 — the QUIC 1-RTT key update state machine ([`crypto_state`],
+//!   RFC 9001 §6): the pure state that owns the rotation of the 1-RTT keys over
+//!   the life of the connection. Unlike the Initial / Handshake levels, whose keys
+//!   live for the handshake only, the 1-RTT keys are periodically advanced to the
+//!   next generation ([`key_schedule::next_generation_secret`]) to bound the
+//!   packets protected with any one key (§6.6), with a single Key Phase bit
+//!   (RFC 9000 §17.3.1) signalling the current generation.
+//!   [`crypto_state::OneRttKeyState`] holds our send keys and the peer's receive
+//!   keys at the current generation, pre-derives the next receive generation so a
+//!   phase-flipped packet can be trial-decrypted ([`crypto_state::RecvKeyDecision`]),
+//!   and retains the previous receive generation for a window so a packet reordered
+//!   across an update still decrypts (§6.3). It enforces the §6.1 initiation rules
+//!   (handshake confirmed; never a second update until the first is acknowledged)
+//!   and the §6.2 responder logic (detect a peer-initiated update from a differing
+//!   Key Phase bit and advance our own send keys in response, unless we initiated
+//!   it). The header-protection key is not rotated by a key update (§6.1). Pure
+//!   state machine driven by decoded events; no clock, no IO — the retirement
+//!   deadline lives with [`timer`], key discarding for the handshake levels
+//!   (RFC 9001 §4.9) with the connection driver.
+//! - Slice 45+ (planned) — the rest of the QUIC transport: the UDP send/receive,
 //!   wiring [`timer::ConnectionTimers`] to a real OS timer, and `h3_do_request`
 //!   dispatch alongside the existing H1/H2 paths.
 //!
@@ -523,6 +542,7 @@ pub mod ack;
 pub mod alt_svc;
 pub mod conn_flow;
 pub mod conn_id;
+pub mod crypto_state;
 pub mod crypto_stream;
 pub mod datagram;
 pub mod datagram_build;
