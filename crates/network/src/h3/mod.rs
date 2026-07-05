@@ -365,7 +365,23 @@
 //!   enforces at-most-one-Retry-per-connection (RFC 9000 §17.2.5), and reports
 //!   the [`retry::RetryOutcome`] (new DCID + Token). Pure functions and state,
 //!   no IO; validated against the RFC 9001 Appendix A.4 vector.
-//! - Slice 34+ (planned) — the rest of the QUIC transport: the UDP send/receive,
+//! - Slice 34 — QUIC packet payload assembly ([`packet_payload`], RFC 9000
+//!   §12.4, §13.2.1, §14.1; RFC 9002 §2): the layer between [`quic_frame`] and
+//!   [`packet_crypt`] that decides which frames go into a packet and packs them
+//!   to a byte budget. [`packet_payload::PacketType`] names the four frame-bearing
+//!   packet types and answers the §12.4 permission table
+//!   ([`packet_payload::PacketType::permits`]) — finer than the three
+//!   [`loss::PacketNumberSpace`] values, since 0-RTT and 1-RTT share the
+//!   Application Data space yet admit different frames (ACK, CRYPTO,
+//!   HANDSHAKE_DONE, NEW_TOKEN). [`packet_payload::PayloadBuilder`] accumulates
+//!   permitted frames up to a limit (rejecting a frame that does not fit without
+//!   mutating the payload, and a frame not permitted in the type as a
+//!   [`packet_payload::PayloadError::FrameNotPermitted`]), tracks whether the
+//!   packet is ack-eliciting (RFC 9000 §13.2.1) and in flight (RFC 9002 §2), and
+//!   pads to a target size for the 1200-byte client Initial datagram (RFC 9000
+//!   §14.1) or a [`path_mtu`] probe. Pure state over byte buffers; packet-number
+//!   assignment, header framing, and encryption remain the caller's job.
+//! - Slice 35+ (planned) — the rest of the QUIC transport: the UDP send/receive,
 //!   actually arming the PTO/ACK-delay timers and assembling probe datagrams, the
 //!   QPACK encoder/decoder stream instruction wiring, and `h3_do_request` dispatch
 //!   alongside the existing H1/H2 paths.
@@ -390,6 +406,7 @@ pub mod loss;
 pub mod packet;
 pub mod packet_crypt;
 pub mod packet_number;
+pub mod packet_payload;
 pub mod packet_protect;
 pub mod path_mtu;
 pub mod pto;
