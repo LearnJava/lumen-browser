@@ -496,9 +496,22 @@
 //!   PADDING frames inside the payload before encryption. This is the "assembling
 //!   probe datagrams" step of the transport plan — a PTO probe is a datagram built
 //!   here. Pure, no IO.
-//! - Slice 43+ (planned) — the rest of the QUIC transport: the UDP send/receive,
-//!   actually arming the PTO/ACK-delay timers, and `h3_do_request` dispatch
-//!   alongside the existing H1/H2 paths.
+//! - Slice 43 — the QUIC connection timer scheduler ([`timer`], RFC 9000 §8.2.4,
+//!   §10.1, §13.2.1; RFC 9002 §6.2): the pure multiplexer that unifies every
+//!   earlier slice's individual deadline — the loss-detection / PTO timer
+//!   ([`pto`]), the per-space delayed-ACK timers ([`ack`]), the idle timeout and
+//!   the closing/draining period ([`lifecycle`]), and the path-validation timeout
+//!   ([`path_validation`]) — into the single OS timer a QUIC event loop arms.
+//!   [`timer::ConnectionTimers`] takes each machine's current deadline and answers
+//!   [`timer::ConnectionTimers::next`] (the earliest deadline and which
+//!   [`timer::TimerKind`] owns it, i.e. exactly when and why to wake next) and
+//!   [`timer::ConnectionTimers::fired`] (after waking at `now`, every elapsed timer
+//!   ordered earliest-first, so the caller drives each owning state machine). It
+//!   holds no cross-timer policy — the connection cancels an irrelevant deadline by
+//!   setting it to `None`. Pure, no clock of its own, no IO.
+//! - Slice 44+ (planned) — the rest of the QUIC transport: the UDP send/receive,
+//!   wiring [`timer::ConnectionTimers`] to a real OS timer, and `h3_do_request`
+//!   dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -540,6 +553,7 @@ pub mod tls_cert_verify;
 pub mod tls_finished;
 pub mod tls_handshake;
 pub mod tls_message;
+pub mod timer;
 pub mod tls_schedule;
 pub mod transport_params;
 pub mod varint;
