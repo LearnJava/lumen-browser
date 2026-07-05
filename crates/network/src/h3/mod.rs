@@ -437,7 +437,22 @@
 //!   (the version to restart with). Pure state machine, no IO; the caller
 //!   re-derives Initial keys and re-sends its Initial. Downgrade protection
 //!   proper (RFC 9000 §6.3) lives with [`transport_params`].
-//! - Slice 39+ (planned) — the rest of the QUIC transport: the UDP send/receive,
+//! - Slice 39 — the client TLS 1.3 handshake flow ([`tls_handshake`],
+//!   RFC 8446 §4, RFC 9001 §4): the pure state machine that sequences the earlier
+//!   TLS primitives ([`tls_message`], [`key_agreement`], [`tls_schedule`],
+//!   [`tls_finished`], reassembled by [`crypto_stream`]) into the ordered client
+//!   handshake. [`tls_handshake::ClientHandshake`] is seeded with the client's
+//!   ephemeral X25519 private key and its ClientHello, then fed the server's
+//!   flight one message at a time: it enforces the RFC 8446 §4 ordering, runs the
+//!   (EC)DHE at ServerHello to report the Handshake-level packet keys, verifies
+//!   the server Finished MAC over `ClientHello…CertificateVerify`, and on success
+//!   derives the 1-RTT keys and the master / exporter / resumption secrets and
+//!   emits the client Finished to send. Fixed to `TLS_AES_128_GCM_SHA256` and
+//!   X25519; certificate-chain validation is the caller's job (the raw
+//!   Certificate / CertificateVerify are handed back for [`tls_cert_verify`]).
+//!   Pure state machine, no IO; HelloRetryRequest, PSK/resumption, client auth and
+//!   post-handshake messages are out of scope.
+//! - Slice 40+ (planned) — the rest of the QUIC transport: the UDP send/receive,
 //!   actually arming the PTO/ACK-delay timers and assembling probe datagrams, the
 //!   QPACK encoder/decoder stream instruction wiring, and `h3_do_request` dispatch
 //!   alongside the existing H1/H2 paths.
@@ -477,6 +492,7 @@ pub mod retry;
 pub mod stream;
 pub mod tls_cert_verify;
 pub mod tls_finished;
+pub mod tls_handshake;
 pub mod tls_message;
 pub mod tls_schedule;
 pub mod transport_params;
