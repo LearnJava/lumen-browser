@@ -544,9 +544,23 @@
 //!   §3), and ignoring unknown / greased identifiers (§7.2.4.2). Pure, no IO —
 //!   the control-stream framing and the SETTINGS-before-request sequencing live
 //!   with [`h3_stream`].
-//! - Slice 46+ (planned) — the rest of the QUIC transport: the UDP send/receive,
-//!   wiring [`timer::ConnectionTimers`] to a real OS timer, and `h3_do_request`
-//!   dispatch alongside the existing H1/H2 paths.
+//! - Slice 46 — the QUIC datagram transport ([`udp`], RFC 9000 §5, §12.2): the
+//!   first slice that touches an OS socket. [`udp::DatagramTransport`] is the
+//!   message-oriented send/receive seam the connection layer is generic over —
+//!   the QUIC analogue of the `Read + Write` byte stream [`crate::h2::conn::
+//!   H2Conn`] abstracts over — with a real [`udp::UdpDatagram`] (a connected
+//!   [`std::net::UdpSocket`]) in production and a [`udp::MockDatagramTransport`]
+//!   (scripted inbound datagrams + captured outbound) in tests. A read timeout
+//!   lets one blocking `recv` double as the event loop's timer wait:
+//!   [`udp::recv_timeout`] converts [`timer::ConnectionTimers`]' next [`std::
+//!   time::Instant`] deadline into the block duration, and [`udp::recv_timed_out`]
+//!   recognises the portable "deadline elapsed, fire timers instead" signal.
+//!   Reassembly, retransmission, and ordering stay with the connection layer;
+//!   the transport only moves opaque datagrams.
+//! - Slice 47+ (planned) — the rest of the QUIC transport: wiring
+//!   [`timer::ConnectionTimers`] to a real OS timer over [`udp`], the connection
+//!   engine that composes the state machines, and `h3_do_request` dispatch
+//!   alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -593,5 +607,6 @@ pub mod tls_message;
 pub mod timer;
 pub mod tls_schedule;
 pub mod transport_params;
+pub mod udp;
 pub mod varint;
 pub mod version_nego;
