@@ -215,6 +215,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 ## Не покрыто (намеренно или ограничения Phase 0)
 
 - **`%`-длины в block-потоке (width/margin/padding/height, RP-1)** — реализованы давно (`cb = available_width` с 1B.1, definite-height threading с BUG-136); геометрия зафиксирована 5 unit-тестами в `crates/engine/layout/src/box_tree.rs` (`mod rp1_percentage_sizing`): width 50%→cb-width, margin 0 10%→cb-width, padding-top 25%→cb-**width**, height 50%→cb-height-if-definite иначе auto. Отдельного графтеста нет: юнит-нумерация 00–99 заполнена, а геометрия проверяется детерминированными unit-тестами надёжнее, чем gdigrab-диффом.
+- **`justify-self` block-level (CSS Box Alignment L3 §5.2)** — 🟡 Phase 0: блочный бокс с определённой inline-шириной и не-auto margin выравнивается в inline-оси containing-блока (`start`→без сдвига, `center`→центр, `end`→к inline-концу) через тот же free-space путь, что и auto-margin центрирование (`box_tree.rs`, сразу после CSS 2.1 §10.3.3). Auto-margin имеет приоритет. Отложено: `justify-items` контейнера как дефолт для `justify-self: auto` (нужен стиль родителя). Графтеста нет — геометрия зафиксирована 6 unit-тестами (`justify_self_*` в box_tree.rs), детерминированнее gdigrab-диффа (как RP-1 выше).
 - **background-color: currentColor, transparent** — нет отдельного теста (встречается в 06-border-sides через border: solid)
 - **margin-right / margin-bottom** — только left и top в 09
 - **margin collapse** — требует специфичного layout-aware теста

@@ -5522,6 +5522,41 @@ fn lay_out_inner(
         b.rect.x = start_x + ml_computed;
     }
 
+    // CSS Box Alignment L3 §5.2 — `justify-self` for block-level boxes in normal
+    // flow with a definite inline size and no auto inline margins. Distributes the
+    // free inline space (containing block − box margin box) within the containing
+    // block: `center` centres, `end` flushes to the inline-end. `auto`/`normal`/
+    // `stretch`/`start` leave the box at the inline-start (current behaviour), so
+    // pages that don't set `justify-self` are unaffected. Auto margins take
+    // precedence (handled above), matching the spec's alignment/margin ordering.
+    // Same box class as auto-margin centring: non-replaced block-level in flow.
+    // Container-default via the parent's `justify-items` (for `justify-self: auto`)
+    // is deferred — the parent style isn't threaded here (Phase 0).
+    if !ml_is_auto
+        && !mr_is_auto
+        && s.width.is_some()
+        && matches!(s.justify_self, AlignValue::Center | AlignValue::End)
+        && !is_replaced
+        && !matches!(
+            s.display,
+            Display::InlineBlock
+                | Display::Flex
+                | Display::InlineFlex
+                | Display::Grid
+                | Display::InlineGrid
+        )
+        && !matches!(s.float_side, FloatSide::Left | FloatSide::Right)
+        && !matches!(s.position, Position::Absolute | Position::Fixed)
+    {
+        let remaining = (available_width - b.rect.width - margin_left - margin_right).max(0.0);
+        let shift = match s.justify_self {
+            AlignValue::Center => remaining / 2.0,
+            AlignValue::End => remaining,
+            _ => 0.0,
+        };
+        b.rect.x = start_x + margin_left + shift;
+    }
+
     let content_x = b.rect.x + padding_left + s.border_left_width;
     let content_y = b.rect.y + padding_top + s.border_top_width;
     let mut content_width = (b.rect.width
@@ -11275,6 +11310,60 @@ mod tests {
         // No explicit width → margin auto resolves to 0 → element fills 800px, x=0.
         assert_eq!(b.rect.x, 0.0, "x without explicit width must be 0, got {}", b.rect.x);
         assert_eq!(b.rect.width, 800.0, "width without explicit must fill 800px, got {}", b.rect.width);
+    }
+
+    // ── CSS Box Alignment L3 §5.2 — block-level justify-self ──────────────────
+
+    fn layout_box_x(css: &str) -> f32 {
+        let html = r#"<div id="box"></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        find_by_id_all(&root, &doc, "box").expect("box not found").rect.x
+    }
+
+    #[test]
+    fn justify_self_end_flushes_block_to_inline_end() {
+        // width 200 in an 800px CB, justify-self:end → right edge at 800 → x=600.
+        let x = layout_box_x("body{margin:0}#box { width: 200px; height: 50px; justify-self: end; }");
+        assert_eq!(x, 600.0, "justify-self:end x expected 600, got {x}");
+    }
+
+    #[test]
+    fn justify_self_center_centers_block() {
+        // (800 - 200) / 2 = 300.
+        let x = layout_box_x("body{margin:0}#box { width: 200px; height: 50px; justify-self: center; }");
+        assert_eq!(x, 300.0, "justify-self:center x expected 300, got {x}");
+    }
+
+    #[test]
+    fn justify_self_start_leaves_box_at_inline_start() {
+        // start = current behaviour, no shift → x=0.
+        let x = layout_box_x("body{margin:0}#box { width: 200px; height: 50px; justify-self: start; }");
+        assert_eq!(x, 0.0, "justify-self:start x expected 0, got {x}");
+    }
+
+    #[test]
+    fn justify_self_default_no_shift() {
+        // Without justify-self (auto) the block stays flush-start → x=0.
+        let x = layout_box_x("body{margin:0}#box { width: 200px; height: 50px; }");
+        assert_eq!(x, 0.0, "default justify-self x expected 0, got {x}");
+    }
+
+    #[test]
+    fn justify_self_ignored_without_definite_width() {
+        // No width → block stretches to fill; justify-self has no free space → x=0.
+        let x = layout_box_x("body{margin:0}#box { height: 50px; justify-self: end; }");
+        assert_eq!(x, 0.0, "auto-width justify-self:end must not shift, got {x}");
+    }
+
+    #[test]
+    fn justify_self_end_flushes_right_edge_past_fixed_left_margin() {
+        // margin-left:40 + width:200, justify-self:end → right edge still at 800.
+        let x = layout_box_x(
+            "body{margin:0}#box { width: 200px; height: 50px; margin-left: 40px; justify-self: end; }",
+        );
+        assert_eq!(x, 600.0, "justify-self:end with left margin x expected 600, got {x}");
     }
 
     #[test]

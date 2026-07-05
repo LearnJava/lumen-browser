@@ -278,7 +278,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `order` | ✅ | |
 | `align-items` / `align-self` / `align-content` | ✅ | |
 | `justify-content` | ✅ | |
-| `justify-items` / `justify-self` | 🟡 | parsed; grid cells only ⬜ |
+| `justify-items` / `justify-self` | 🟡 | grid cells ✅; block-level `justify-self` (start/center/end, box_tree.rs auto-margin path) ✅ 2026-07-05; container `justify-items` default for block children ⬜ |
 | `gap` / `row-gap` / `column-gap` | ✅ | |
 
 ### [T0] Transforms
@@ -561,7 +561,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `justify-items` | 🟡 | parsed; grid cells ⬜ |
-| `justify-self` | 🟡 | parsed; grid items ⬜ |
+| `justify-self` | 🟡 | grid items ✅; block-level start/center/end ✅ 2026-07-05; `justify-items` container default ⬜ |
 | `place-items` / `place-self` / `place-content` | 🟡 | shorthands; grid ⬜ |
 
 ### [T3] Inline / Line Box
