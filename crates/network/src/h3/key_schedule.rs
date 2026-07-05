@@ -50,7 +50,11 @@ const SHA256_OUT: usize = 32;
 
 /// `HMAC-SHA256(key, msg)` (RFC 2104). Infallible: HMAC accepts a key of any
 /// length, hashing keys longer than the block down first.
-fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; SHA256_OUT] {
+///
+/// `pub(crate)` so the TLS 1.3 `Finished` MAC (`tls_finished`) reuses it for
+/// `verify_data = HMAC(finished_key, Transcript-Hash(...))` (RFC 8446 §4.4.4)
+/// without a second HMAC implementation.
+pub(crate) fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; SHA256_OUT] {
     // K' — the key padded (or hashed then padded) to one SHA-256 block.
     let mut block = [0u8; SHA256_BLOCK];
     if key.len() > SHA256_BLOCK {

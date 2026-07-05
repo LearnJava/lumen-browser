@@ -157,11 +157,25 @@
 //!   `x25519-dalek` (constant-time); the module core is deterministic and
 //!   validated against the RFC 7748 §5.2/§6.1 test vectors, with only the
 //!   optional [`key_agreement::generate_x25519_private_key`] reading OS entropy.
-//! - Slice 18+ (planned) — the rest of the QUIC transport: UDP datagrams,
+//! - Slice 18 — the TLS 1.3 `Finished` MAC ([`tls_finished`], RFC 8446 §4.4.4):
+//!   the handshake key-confirmation that binds the whole transcript, carried in
+//!   QUIC CRYPTO frames (RFC 9001 §4). [`tls_finished::finished_key`] derives the
+//!   per-direction `finished_key = HKDF-Expand-Label(BaseKey, "finished", "",
+//!   Hash.length)` from a sender's handshake traffic secret ([`tls_schedule::
+//!   HandshakeTrafficSecrets`]); [`tls_finished::finished_verify_data`] is the
+//!   `verify_data = HMAC(finished_key, Transcript-Hash(…))` a sender writes; and
+//!   [`tls_finished::verify_finished`] is the constant-time check a receiver runs
+//!   against a peer's `Finished` (a mismatch is a fatal `decrypt_error`). Pure
+//!   functions over SHA-256, reusing [`key_schedule`]'s HMAC and
+//!   `HKDF-Expand-Label`; the transcript hash comes from [`tls_message`]. No new
+//!   dependency, no IO. Validated end-to-end against the RFC 8448 §3 server /
+//!   client `Finished` values. Out of scope: the `CertificateVerify` signature
+//!   (RFC 8446 §4.4.3, a public-key verification over the same transcript).
+//! - Slice 19+ (planned) — the rest of the QUIC transport: UDP datagrams,
 //!   actually arming the PTO timer and assembling probe datagrams, the QPACK
-//!   encoder/decoder stream instruction wiring, computing/verifying the
-//!   `Finished` MAC and `CertificateVerify` signature, and `h3_do_request`
-//!   dispatch alongside the existing H1/H2 paths.
+//!   encoder/decoder stream instruction wiring, the `CertificateVerify`
+//!   signature verification, and `h3_do_request` dispatch alongside the existing
+//!   H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -184,6 +198,7 @@ pub mod qpack_stream;
 pub mod quic_frame;
 pub mod recovery;
 pub mod stream;
+pub mod tls_finished;
 pub mod tls_message;
 pub mod tls_schedule;
 pub mod varint;
