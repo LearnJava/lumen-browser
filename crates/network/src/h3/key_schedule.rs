@@ -85,8 +85,11 @@ fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; SHA256_OUT] {
 
 /// `HKDF-Extract(salt, IKM)` over SHA-256 (RFC 5869 §2.2) — the pseudorandom
 /// key is simply `HMAC-Hash(salt, IKM)`.
+///
+/// `pub(crate)` so the TLS 1.3 key schedule (`tls_schedule`) reuses it for the
+/// Early / Handshake / Master secret extractions verbatim.
 #[must_use]
-fn hkdf_extract(salt: &[u8], ikm: &[u8]) -> [u8; SHA256_OUT] {
+pub(crate) fn hkdf_extract(salt: &[u8], ikm: &[u8]) -> [u8; SHA256_OUT] {
     hmac_sha256(salt, ikm)
 }
 

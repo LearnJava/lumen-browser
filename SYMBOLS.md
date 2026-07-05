@@ -2301,7 +2301,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (508 symbols)
+## lumen-network  (550 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -2511,14 +2511,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/h3_stream.rs:346` **enum** `RequestState` — The frame-sequencing state of a request/response stream (RFC 9114 §4.1)
 `crates/network/src/h3/h3_stream.rs:364` **struct** `RequestStream` — Frame sequencer for a request/response stream (RFC 9114 §4.1, §7.1): a header
 `crates/network/src/h3/h3_stream.rs:396` **fn** `accept` — Validate the next frame on a request/response stream and advance the
-`crates/network/src/h3/key_schedule.rs:175` **struct** `PacketProtectionKeys` — The three secrets that protect packets at one encryption level for one
-`crates/network/src/h3/key_schedule.rs:207` **fn** `aes_128_gcm_from_secret` — Derive the AEAD key, nonce base, and header-protection key from a traffic
-`crates/network/src/h3/key_schedule.rs:220` **struct** `InitialKeys` — The Initial keys for both directions of a connection (RFC 9001 §5.2),
-`crates/network/src/h3/key_schedule.rs:231` **fn** `derive` — Derive both directions' Initial keys from the client's original
-`crates/network/src/h3/key_schedule.rs:244` **fn** `initial_secret` — The connection's Initial secret: `HKDF-Extract(initial_salt, client_dcid)`
-`crates/network/src/h3/key_schedule.rs:251` **fn** `client_initial_secret` — The client's Initial traffic secret (RFC 9001 §5.2):
-`crates/network/src/h3/key_schedule.rs:258` **fn** `server_initial_secret` — The server's Initial traffic secret (RFC 9001 §5.2):
-`crates/network/src/h3/key_schedule.rs:267` **fn** `next_generation_secret` — The next-generation traffic secret for a key update (RFC 9001 §6.1):
+`crates/network/src/h3/key_schedule.rs:178` **struct** `PacketProtectionKeys` — The three secrets that protect packets at one encryption level for one
+`crates/network/src/h3/key_schedule.rs:210` **fn** `aes_128_gcm_from_secret` — Derive the AEAD key, nonce base, and header-protection key from a traffic
+`crates/network/src/h3/key_schedule.rs:223` **struct** `InitialKeys` — The Initial keys for both directions of a connection (RFC 9001 §5.2),
+`crates/network/src/h3/key_schedule.rs:234` **fn** `derive` — Derive both directions' Initial keys from the client's original
+`crates/network/src/h3/key_schedule.rs:247` **fn** `initial_secret` — The connection's Initial secret: `HKDF-Extract(initial_salt, client_dcid)`
+`crates/network/src/h3/key_schedule.rs:254` **fn** `client_initial_secret` — The client's Initial traffic secret (RFC 9001 §5.2):
+`crates/network/src/h3/key_schedule.rs:261` **fn** `server_initial_secret` — The server's Initial traffic secret (RFC 9001 §5.2):
+`crates/network/src/h3/key_schedule.rs:270` **fn** `next_generation_secret` — The next-generation traffic secret for a key update (RFC 9001 §6.1):
 `crates/network/src/h3/loss.rs:89` **enum** `PacketNumberSpace` — One of QUIC's three packet-number spaces (RFC 9000 §12.3). Loss detection is
 `crates/network/src/h3/loss.rs:104` **fn** `uses_ack_delay` — Whether acknowledgements in this space may carry a non-zero `ack_delay`
 `crates/network/src/h3/loss.rs:112` **struct** `SentPacket` — A packet recorded in a [`SentPacketRegistry`] (RFC 9002 §A.1
@@ -2539,6 +2539,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/packet.rs:141` **enum** `Packet` — A parsed QUIC packet header plus its opaque protected region (RFC 9000 §17)
 `crates/network/src/h3/packet.rs:261` **fn** `parse` — Parse one QUIC packet header (and its protected remainder) from the
 `crates/network/src/h3/packet.rs:368` **fn** `encode` — Serialize this packet header and its protected region onto `out`
+`crates/network/src/h3/packet_protect.rs:66` **enum** `ProtectionError` — Errors from the packet-protection transforms
+`crates/network/src/h3/packet_protect.rs:132` **fn** `aes_128_gcm_seal` — Seal a packet payload with AES-128-GCM (RFC 9001 §5.3). Returns
+`crates/network/src/h3/packet_protect.rs:154` **fn** `aes_128_gcm_open` — Open a sealed packet payload with AES-128-GCM (RFC 9001 §5.3), verifying the
+`crates/network/src/h3/packet_protect.rs:181` **fn** `aes_128_hp_mask` — Derive the 5-byte header-protection mask from a ciphertext sample
+`crates/network/src/h3/packet_protect.rs:221` **fn** `apply_header_protection` — Apply header protection to an assembled packet in place (RFC 9001 §5.4.1, the
+`crates/network/src/h3/packet_protect.rs:249` **fn** `remove_header_protection` — Remove header protection from a received packet in place (RFC 9001 §5.4.1,
 `crates/network/src/h3/pto.rs:68` **enum** `LossTimer` — The state the single loss-detection timer should be left in after
 `crates/network/src/h3/pto.rs:80` **fn** `deadline` — The instant the timer is armed for, or `None` when [`LossTimer::Disarmed`]
 `crates/network/src/h3/pto.rs:88` **fn** `is_armed` — Whether the timer is armed
@@ -2653,6 +2659,42 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/stream.rs:630` **fn** `reset` — Abruptly terminates the sending half with `error_code`, discarding any
 `crates/network/src/h3/stream.rs:640` **fn** `on_reset_ack` — Acknowledges the RESET_STREAM, moving to `ResetRecvd` (RFC 9000 §3.1)
 `crates/network/src/h3/stream.rs:648` **fn** `reset_error` — The application error code if the stream was reset (RFC 9000 §19.4)
+`crates/network/src/h3/tls_message.rs:124` **enum** `TlsError` — Codec error. [`Handshake::parse`] signals "need more bytes" out of band with
+`crates/network/src/h3/tls_message.rs:161` **struct** `Extension` — A single TLS extension: a 2-byte type and an opaque `<0..2^16-1>` body
+`crates/network/src/h3/tls_message.rs:171` **fn** `new` — Construct an extension from its type code and raw body
+`crates/network/src/h3/tls_message.rs:182` **struct** `ClientHello` — ClientHello (RFC 8446 §4.1.2). `legacy_version` is always
+`crates/network/src/h3/tls_message.rs:199` **struct** `ServerHello` — ServerHello (RFC 8446 §4.1.3). A HelloRetryRequest is a ServerHello whose
+`crates/network/src/h3/tls_message.rs:214` **fn** `is_hello_retry_request` — Whether this ServerHello is actually a HelloRetryRequest, identified by
+`crates/network/src/h3/tls_message.rs:223` **struct** `CertificateEntry` — A single entry of a Certificate message's `certificate_list`
+`crates/network/src/h3/tls_message.rs:232` **struct** `Certificate` — Certificate message (RFC 8446 §4.4.2)
+`crates/network/src/h3/tls_message.rs:243` **struct** `CertificateRequest` — CertificateRequest message (RFC 8446 §4.3.2), sent by a server that wants
+`crates/network/src/h3/tls_message.rs:255` **struct** `CertificateVerify` — CertificateVerify message (RFC 8446 §4.4.3): a signature over the handshake
+`crates/network/src/h3/tls_message.rs:265` **struct** `NewSessionTicket` — NewSessionTicket message (RFC 8446 §4.6.1), a post-handshake message that
+`crates/network/src/h3/tls_message.rs:281` **enum** `KeyUpdateRequest` — KeyUpdate `request_update` value (RFC 8446 §4.6.3): whether the peer is asked
+`crates/network/src/h3/tls_message.rs:294` **enum** `Handshake` — One TLS 1.3 handshake message, i.e. the body of the `Handshake` wrapper
+`crates/network/src/h3/tls_message.rs:357` **fn** `parse` — Parse one handshake message from the front of `buf`
+`crates/network/src/h3/tls_message.rs:493` **fn** `encode` — Serialize this message (`msg_type` · `uint24 length` · body) onto `out`
+`crates/network/src/h3/tls_message.rs:564` **struct** `KeyShareEntry` — One `KeyShareEntry` (RFC 8446 §4.2.8): a named group and the corresponding
+`crates/network/src/h3/tls_message.rs:578` **fn** `parse_client_hello` — Parse the `key_share` extension body from a **ClientHello**: a
+`crates/network/src/h3/tls_message.rs:596` **fn** `encode_client_hello` — Encode a ClientHello `key_share` extension body from a list of entries
+`crates/network/src/h3/tls_message.rs:612` **fn** `parse_server_hello` — Parse the `key_share` extension body from a **ServerHello**: a single
+`crates/network/src/h3/tls_message.rs:624` **fn** `encode_server_hello` — Encode a ServerHello `key_share` extension body (a single entry)
+`crates/network/src/h3/tls_message.rs:654` **fn** `supported_versions` — Parse the `supported_versions` body from a **ClientHello**: a
+`crates/network/src/h3/tls_message.rs:667` **fn** `encode_supported_versions` — Encode a ClientHello `supported_versions` body from a version list — a
+`crates/network/src/h3/tls_schedule.rs:84` **fn** `transcript_hash` — `Transcript-Hash(messages)` (RFC 8446 §4.4.1) — the KDF hash (SHA-256) over
+`crates/network/src/h3/tls_schedule.rs:99` **fn** `derive_secret` — `Derive-Secret(Secret, Label, Messages)` (RFC 8446 §7.1):
+`crates/network/src/h3/tls_schedule.rs:123` **fn** `early_secret` — The Early Secret with **no** PSK: `HKDF-Extract(0, 0)`, where both the salt
+`crates/network/src/h3/tls_schedule.rs:133` **fn** `handshake_secret` — The Handshake Secret: `HKDF-Extract(Derive-Secret(Early, "derived", ""),
+`crates/network/src/h3/tls_schedule.rs:142` **struct** `HandshakeTrafficSecrets` — The two Handshake-level traffic secrets (RFC 8446 §7.1), one per direction,
+`crates/network/src/h3/tls_schedule.rs:166` **fn** `derive` — Derive both directions' Handshake traffic secrets from the Handshake
+`crates/network/src/h3/tls_schedule.rs:177` **fn** `packet_keys` — The QUIC Handshake-level packet-protection keys for both directions,
+`crates/network/src/h3/tls_schedule.rs:190` **fn** `master_secret` — The Master Secret: `HKDF-Extract(Derive-Secret(Handshake, "derived", ""), 0)`
+`crates/network/src/h3/tls_schedule.rs:200` **struct** `ApplicationTrafficSecrets` — The two 1-RTT (application) traffic secrets (RFC 8446 §7.1), one per
+`crates/network/src/h3/tls_schedule.rs:224` **fn** `derive` — Derive both directions' 1-RTT traffic secrets from the Master Secret and
+`crates/network/src/h3/tls_schedule.rs:234` **fn** `packet_keys` — The QUIC 1-RTT packet-protection keys for both directions, bridging each
+`crates/network/src/h3/tls_schedule.rs:245` **fn** `exporter_master_secret` — The exporter master secret (RFC 8446 §7.5):
+`crates/network/src/h3/tls_schedule.rs:252` **fn** `resumption_master_secret` — The resumption master secret (RFC 8446 §7.1):
+`crates/network/src/h3/tls_schedule.rs:262` **struct** `DirectionalKeys` — A pair of QUIC packet-protection key sets, one for each direction of a
 `crates/network/src/h3/varint.rs:22` **struct** `VarIntTooLarge` — Error returned by [`encode`] when a value does not fit in a QUIC varint
 `crates/network/src/h3/varint.rs:35` **fn** `encoded_len` — Number of bytes the varint encoding of `value` occupies (1, 2, 4, or 8), or
 `crates/network/src/h3/varint.rs:51` **fn** `encode` — Append the shortest QUIC varint encoding of `value` to `out`
@@ -4590,4 +4632,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4519 symbols in 22 crates*
+*Total: 4561 symbols in 22 crates*
