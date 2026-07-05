@@ -1065,6 +1065,18 @@
 <div class="sel-swatch sel-custom"></div>
 </div><!-- /::selection card -->
 
+<!-- ::placeholder demo card -->
+<div class="card">
+<style>
+  input::placeholder      { color:#0078D4; }
+  .ph-warn::placeholder   { color:#e74c3c; }
+  .ph-faint::placeholder  { color:#000; opacity:0.4; }
+</style>
+<input type="text" placeholder="default ::placeholder">
+<input type="text" class="ph-warn" placeholder="warn ::placeholder">
+<input type="text" class="ph-faint" placeholder="faint ::placeholder">
+</div><!-- /::placeholder card -->
+
 <!-- attr() typed demo card -->
 <style>
   .attr-card { margin: 8px; padding: 12px; background: #fff; border: 1px solid #ddd; border-radius: 4px; }

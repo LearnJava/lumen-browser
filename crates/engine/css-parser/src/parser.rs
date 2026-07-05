@@ -365,6 +365,11 @@ pub enum PseudoElementKind {
     /// `::selection` (CSS Pseudo-Elements L4 §5.6) — selected text.
     /// В Phase 0 парсится как имя; P3 интеграция с DOM selection для highlight.
     Selection,
+    /// `::placeholder` (CSS Pseudo-Elements L4 §4.10) — placeholder hint text
+    /// of a text-like `<input>`/`<textarea>` (matched while the field's `value`
+    /// is empty). P4 wires: color/opacity/font-* overrides applied when the
+    /// UA paints the `placeholder` attribute hint.
+    Placeholder,
     /// `::highlight(name)` (CSS Highlight API L1 §3) — custom text highlight.
     /// Аргумент `name` — ключ в `CSS.highlights` реестре. Phase 0: парсирует имя,
     /// Phase 1: вызывает `emit_text_with_highlights()` для рендеринга.
@@ -680,6 +685,7 @@ fn pe_to_css_str(pe: &PseudoElementKind) -> String {
         }
         PseudoElementKind::Marker => "::marker".into(),
         PseudoElementKind::Selection => "::selection".into(),
+        PseudoElementKind::Placeholder => "::placeholder".into(),
         PseudoElementKind::Highlight(name) => format!("::highlight({name})"),
         PseudoElementKind::Unknown(name) => format!("::{name}"),
     }
@@ -3734,6 +3740,7 @@ impl<'a> Parser<'a> {
                 "first-letter" => PseudoElementKind::FirstLetter,
                 "marker" => PseudoElementKind::Marker,
                 "selection" => PseudoElementKind::Selection,
+                "placeholder" => PseudoElementKind::Placeholder,
                 _ => PseudoElementKind::Unknown(name),
             };
             return Some(SimpleSelector::PseudoElement(pe));

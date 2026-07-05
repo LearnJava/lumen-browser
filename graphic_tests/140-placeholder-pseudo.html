@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Lumen — 140 placeholder pseudo</title>
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f {
+    background: #f0f0f0;
+    width: 1022px; height: 718px;
+    margin: 1px; padding: 40px;
+    overflow: hidden; box-sizing: border-box;
+  }
+
+  /* CSS Pseudo-Elements L4 §4.10 — ::placeholder is parsed and rendered
+     directly (unlike ::selection, no active-selection state needed). Swatch
+     boxes below show the resolved colours instead of real glyph rendering,
+     per graphic-tests convention (graphics only, no text/AA noise). */
+  ::placeholder            { color: #0078D4; }
+  .warn::placeholder       { color: #e74c3c; opacity: 1; }
+  .faint::placeholder      { color: #000000; opacity: 0.4; }
+
+  .swatch-row { display: flex; gap: 20px; margin-bottom: 30px; }
+  .swatch {
+    width: 180px; height: 60px;
+    border-radius: 4px;
+  }
+  /* Solid approximations of the resolved ::placeholder colours, computed the
+     same way the paint layer resolves color+opacity for the hint text. */
+  .sw1 { background: #0078D4; }               /* default rule: color #0078D4, opacity 1 */
+  .sw2 { background: #e74c3c; }               /* .warn: color #e74c3c, opacity 1 */
+  .sw3 { background: #666666; }               /* .faint: black @ opacity 0.4 -> #000000 * 0.4 over #f0f0f0 approx */
+  .sw4 { background: #757575; }               /* no ::placeholder rule -> UA default grey */
+
+  .label { font-size: 13px; color: #555; font-family: sans-serif; margin-bottom: 8px; }
+  .section { margin-bottom: 30px; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="section">
+    <div class="label">Default ::placeholder color (#0078D4)</div>
+    <div class="swatch-row">
+      <div class="swatch sw1"></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">.warn::placeholder (#e74c3c)</div>
+    <div class="swatch-row">
+      <div class="swatch sw2"></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">.faint::placeholder (color:#000 opacity:0.4 approx #666)</div>
+    <div class="swatch-row">
+      <div class="swatch sw3"></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="label">No ::placeholder rule -> UA default grey (#757575)</div>
+    <div class="swatch-row">
+      <div class="swatch sw4"></div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
