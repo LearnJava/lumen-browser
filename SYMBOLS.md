@@ -1729,16 +1729,16 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/box_tree.rs:1493` **fn** `collect_background_image_requests` — Обходит готовое layout-дерево и возвращает уникальные URL-ы из
 `crates/engine/layout/src/box_tree.rs:1608` **struct** `LayoutBox`
 `crates/engine/layout/src/box_tree.rs:1639` **struct** `InlineSegment` — Отрезок inline-контента с собственным стилем (до layout)
-`crates/engine/layout/src/box_tree.rs:1679` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
-`crates/engine/layout/src/box_tree.rs:1697` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
-`crates/engine/layout/src/box_tree.rs:1731` **enum** `BoxKind`
-`crates/engine/layout/src/box_tree.rs:2538` **fn** `layout` — Lay out a document without a text measurer. For tests and headless dump modes
-`crates/engine/layout/src/box_tree.rs:2563` **fn** `layout_measured` — Layout without a text measurer. For tests and headless modes; uses `layout_measured_hyp` with `dark_mode=false`
-`crates/engine/layout/src/box_tree.rs:2576` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
-`crates/engine/layout/src/box_tree.rs:2624` **fn** `lay_out_incremental` — Incremental re-layout pass: skips clean subtrees, re-lays out only dirty ones
-`crates/engine/layout/src/box_tree.rs:2661` **fn** `layout_streaming_incremental` — Streaming incremental layout (PH1-2b)
-`crates/engine/layout/src/box_tree.rs:2758` **fn** `build_iframe_document` — Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5)
-`crates/engine/layout/src/box_tree.rs:2831` **fn** `canvas_background_color` — CSS Backgrounds §3.11.1 — the canvas background color
+`crates/engine/layout/src/box_tree.rs:1680` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
+`crates/engine/layout/src/box_tree.rs:1698` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
+`crates/engine/layout/src/box_tree.rs:1732` **enum** `BoxKind`
+`crates/engine/layout/src/box_tree.rs:2539` **fn** `layout` — Lay out a document without a text measurer. For tests and headless dump modes
+`crates/engine/layout/src/box_tree.rs:2564` **fn** `layout_measured` — Layout without a text measurer. For tests and headless modes; uses `layout_measured_hyp` with `dark_mode=false`
+`crates/engine/layout/src/box_tree.rs:2577` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
+`crates/engine/layout/src/box_tree.rs:2625` **fn** `lay_out_incremental` — Incremental re-layout pass: skips clean subtrees, re-lays out only dirty ones
+`crates/engine/layout/src/box_tree.rs:2662` **fn** `layout_streaming_incremental` — Streaming incremental layout (PH1-2b)
+`crates/engine/layout/src/box_tree.rs:2759` **fn** `build_iframe_document` — Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5)
+`crates/engine/layout/src/box_tree.rs:2832` **fn** `canvas_background_color` — CSS Backgrounds §3.11.1 — the canvas background color
 `crates/engine/layout/src/box_tree.rs:9083` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
 `crates/engine/layout/src/box_tree.rs:9266` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
 `crates/engine/layout/src/box_tree.rs:9285` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
@@ -2301,7 +2301,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (787 symbols)
+## lumen-network  (927 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -2527,6 +2527,52 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/conn_id.rs:420` **fn** `retire` — Drop one of our IDs because the peer sent RETIRE_CONNECTION_ID for it
 `crates/network/src/h3/conn_id.rs:432` **fn** `accepts` — Whether a peer-supplied Destination Connection ID matches one of the IDs
 `crates/network/src/h3/conn_id.rs:438` **fn** `active_count` — Number of IDs we currently have issued and active
+`crates/network/src/h3/connection.rs:57` **enum** `ProcessError` — A connection-level protocol violation surfaced while dispatching a packet's
+`crates/network/src/h3/connection.rs:114` **struct** `ConnectionConfig` — The configuration a [`QuicConnection`] needs at construction: the connection
+`crates/network/src/h3/connection.rs:146` **struct** `PacketEffects` — What the caller must do after [`QuicConnection::process_packet`] dispatched a
+`crates/network/src/h3/connection.rs:180` **struct** `QuicConnection` — The connection-wide receiver state of a QUIC client connection, composing
+`crates/network/src/h3/connection.rs:220` **fn** `new_client` — Builds a client connection's receiver state from the handshake-exchanged
+`crates/network/src/h3/connection.rs:255` **fn** `set_pto` — Updates the probe timeout used for the idle-timeout floor and the closing /
+`crates/network/src/h3/connection.rs:263` **fn** `set_idle_timeout` — Sets the effective idle timeout negotiated from both endpoints'
+`crates/network/src/h3/connection.rs:271` **fn** `on_datagram_received` — Records that a datagram of `datagram_len` bytes arrived at `now`, feeding
+`crates/network/src/h3/connection.rs:291` **fn** `process_packet` — Dispatches every frame of one decrypted packet, driving the owning state
+`crates/network/src/h3/connection.rs:417` **fn** `send_path_challenge` — Begins validating the current path by recording and returning a
+`crates/network/src/h3/connection.rs:425` **fn** `refresh_timers` — Folds every owned machine's current deadline into `timers`, so the event
+`crates/network/src/h3/connection.rs:443` **fn** `generate_ack` — Builds the pending acknowledgement for `space` at `now`, if any is owed,
+`crates/network/src/h3/connection.rs:454` **fn** `ack_urgency` — The acknowledgement urgency currently owed for `space` (RFC 9000 §13.2.1)
+`crates/network/src/h3/connection.rs:461` **fn** `read_crypto` — Reads the contiguous reassembled CRYPTO prefix available at `space`'s
+`crates/network/src/h3/connection.rs:466` **fn** `handshake_confirmed` — Whether the peer has confirmed the handshake (HANDSHAKE_DONE received)
+`crates/network/src/h3/connection.rs:471` **fn** `lifecycle` — The current connection lifecycle state
+`crates/network/src/h3/connection.rs:476` **fn** `remote_conn_ids` — The peer's connection-ID set (the IDs we stamp on outgoing packets)
+`crates/network/src/h3/connection.rs:481` **fn** `send_flow` — Our send-side view of the peer's connection-wide flow-control limit
+`crates/network/src/h3/connection.rs:486` **fn** `path` — The path validator driving connection migration and path challenges
+`crates/network/src/h3/connection.rs:491` **fn** `anti_amplification` — The anti-amplification limit on the peer's address (RFC 9000 §8.1)
+`crates/network/src/h3/connection.rs:496` **fn** `send_stream_limit` — The bidirectional / unidirectional stream-count limit we may open under
+`crates/network/src/h3/crypto_state.rs:54` **struct** `KeyPhase` — The Key Phase bit carried in a short-header packet's first byte (RFC 9000
+`crates/network/src/h3/crypto_state.rs:59` **fn** `zero` — The initial Key Phase, used for the first generation of 1-RTT keys
+`crates/network/src/h3/crypto_state.rs:66` **fn** `from_bit` — The Key Phase for a raw bit read from (or to write into) a packet's first
+`crates/network/src/h3/crypto_state.rs:72` **fn** `bit` — The raw bit to place in (or compare against) a packet's Key Phase bit
+`crates/network/src/h3/crypto_state.rs:87` **enum** `RecvKeyDecision` — Which generation of receive keys to try for an incoming 1-RTT packet, decided
+`crates/network/src/h3/crypto_state.rs:104` **enum** `KeyUpdateError` — Why an attempt to initiate a key update was refused (RFC 9001 §6.1)
+`crates/network/src/h3/crypto_state.rs:152` **struct** `OneRttKeyState` — The 1-RTT key state and key-update state machine for a QUIC client (RFC 9001
+`crates/network/src/h3/crypto_state.rs:188` **fn** `new` — Build the 1-RTT key state from the first-generation send (our) and receive
+`crates/network/src/h3/crypto_state.rs:208` **fn** `from_client_keys` — Build the 1-RTT key state for a client from the [`DirectionalKeys`] the TLS
+`crates/network/src/h3/crypto_state.rs:214` **fn** `confirm_handshake` — Mark the handshake confirmed (RFC 9001 §4.1.2), permitting key updates
+`crates/network/src/h3/crypto_state.rs:220` **fn** `send_keys` — The keys protecting our outgoing 1-RTT packets
+`crates/network/src/h3/crypto_state.rs:226` **fn** `send_phase` — The Key Phase bit to stamp on the next outgoing 1-RTT packet
+`crates/network/src/h3/crypto_state.rs:232` **fn** `recv_keys` — The current receive keys (for the current Key Phase)
+`crates/network/src/h3/crypto_state.rs:238` **fn** `recv_phase` — The Key Phase we currently expect on incoming 1-RTT packets
+`crates/network/src/h3/crypto_state.rs:245` **fn** `can_initiate_key_update` — Whether a subsequent key update may be initiated right now (RFC 9001 §6.1):
+`crates/network/src/h3/crypto_state.rs:258` **fn** `initiate_key_update` — Initiate a key update (RFC 9001 §6.1): advance our send keys to the next
+`crates/network/src/h3/crypto_state.rs:271` **fn** `on_packet_sent` — Record a sent 1-RTT packet for the AEAD confidentiality limit (RFC 9001
+`crates/network/src/h3/crypto_state.rs:277` **fn** `packets_sent_current_phase` — The number of packets protected with the current send key (RFC 9001 §6.6)
+`crates/network/src/h3/crypto_state.rs:285` **fn** `confidentiality_limit_reached` — Whether the AEAD confidentiality limit for the current send key has been
+`crates/network/src/h3/crypto_state.rs:292` **fn** `on_ack` — Record an acknowledgement of a packet sent with `acked_phase` (RFC 9001
+`crates/network/src/h3/crypto_state.rs:303` **fn** `recv_decision` — Decide which receive-key generation to try for an incoming 1-RTT packet
+`crates/network/src/h3/crypto_state.rs:320` **fn** `keys_for` — The receive keys for a [`RecvKeyDecision`], or `None` for
+`crates/network/src/h3/crypto_state.rs:340` **fn** `on_packet_decrypted` — Commit the state change after a packet at `packet_number` decrypted under
+`crates/network/src/h3/crypto_state.rs:369` **fn** `has_previous_recv_keys` — Whether a previous receive generation is still retained for reordered
+`crates/network/src/h3/crypto_state.rs:377` **fn** `retire_previous_recv_keys` — Discard the retained previous receive generation (RFC 9001 §6.3). The
 `crates/network/src/h3/crypto_stream.rs:84` **enum** `CryptoStreamError` — A CRYPTO-stream protocol violation. Maps to a single QUIC connection-error
 `crates/network/src/h3/crypto_stream.rs:122` **struct** `CryptoRecvStream` — The receiving half of a QUIC CRYPTO stream: an out-of-order reassembly
 `crates/network/src/h3/crypto_stream.rs:147` **fn** `new` — Creates a receive stream buffering up to [`DEFAULT_CRYPTO_BUFFER_LIMIT`]
@@ -2552,6 +2598,25 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/datagram.rs:55` **enum** `DatagramError` — Error splitting or assembling a coalesced QUIC datagram
 `crates/network/src/h3/datagram.rs:108` **fn** `parse_datagram` — Split a received UDP datagram into its ordered sequence of coalesced packets
 `crates/network/src/h3/datagram.rs:139` **fn** `encode_datagram` — Assemble an ordered sequence of packets into one UDP datagram payload
+`crates/network/src/h3/datagram_build.rs:58` **enum** `DatagramBuildError` — Something that prevented a packet from being coalesced into a datagram
+`crates/network/src/h3/datagram_build.rs:104` **struct** `DatagramBuilder` — Coalesces encrypted QUIC packets into one outgoing UDP datagram under a size
+`crates/network/src/h3/datagram_build.rs:146` **fn** `push` — Encrypt one packet and coalesce it into the datagram
+`crates/network/src/h3/datagram_build.rs:177` **fn** `push_encrypted` — Coalesce an already-encrypted packet's bytes
+`crates/network/src/h3/datagram_build.rs:211` **fn** `len` — The number of bytes coalesced so far
+`crates/network/src/h3/datagram_build.rs:217` **fn** `is_empty` — Whether no packet has been coalesced yet
+`crates/network/src/h3/datagram_build.rs:223` **fn** `remaining` — The remaining budget for further packets (`max_len` − current length)
+`crates/network/src/h3/datagram_build.rs:249` **fn** `initial_padding_shortfall` — How many bytes short of [`MIN_INITIAL_DATAGRAM_LEN`] the datagram is, or `0`
+`crates/network/src/h3/datagram_build.rs:259` **fn** `as_bytes` — The coalesced datagram bytes so far, for inspection
+`crates/network/src/h3/datagram_build.rs:265` **fn** `into_bytes` — Consume the builder and yield the finished datagram bytes, ready to send
+`crates/network/src/h3/event_loop.rs:48` **enum** `Wakeup` — Why one [`DatagramEventLoop::wait`] returned
+`crates/network/src/h3/event_loop.rs:67` **fn** `next_read_timeout` — The read timeout the next [`DatagramTransport::recv`] should block for, derived
+`crates/network/src/h3/event_loop.rs:80` **struct** `DatagramEventLoop` — One turn's receive side of the QUIC connection event loop: a
+`crates/network/src/h3/event_loop.rs:90` **fn** `new` — Wraps `transport` in an event loop with a fresh maximum-size receive
+`crates/network/src/h3/event_loop.rs:99` **fn** `transport` — A shared reference to the underlying transport (e.g. to read
+`crates/network/src/h3/event_loop.rs:105` **fn** `transport_mut` — A mutable reference to the underlying transport, e.g. to
+`crates/network/src/h3/event_loop.rs:110` **fn** `into_transport` — Consumes the loop and returns the owned transport
+`crates/network/src/h3/event_loop.rs:121` **fn** `datagram` — The bytes of the datagram reported by the most recent
+`crates/network/src/h3/event_loop.rs:137` **fn** `wait` — Blocks for one event-loop turn: arm the socket read timeout from `timers`
 `crates/network/src/h3/frame.rs:89` **enum** `FrameError` — Codec-level error. Each variant maps to exactly one RFC 9114 §8.1 wire error
 `crates/network/src/h3/frame.rs:132` **enum** `Frame` — A parsed HTTP/3 frame (RFC 9114 §7.2). Field sections in `Headers` /
 `crates/network/src/h3/frame.rs:196` **fn** `parse` — Parse one frame from the front of `buf`
@@ -2824,6 +2889,32 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/retry.rs:199` **fn** `new` — A fresh handler that has not yet accepted a Retry
 `crates/network/src/h3/retry.rs:205` **fn** `has_accepted` — Whether a Retry has already been accepted on this connection
 `crates/network/src/h3/retry.rs:219` **fn** `accept` — Process a received Retry against the `odcid` the client used in its first
+`crates/network/src/h3/send.rs:57` **enum** `SendPriority` — The priority class a frame is packed under, highest first (RFC 9000 §13.2.1,
+`crates/network/src/h3/send.rs:109` **enum** `SendError` — Something that prevented a frame from being queued or packed
+`crates/network/src/h3/send.rs:174` **struct** `SendScheduler` — A priority queue of frames owed to be sent in one packet type, packed into
+`crates/network/src/h3/send.rs:188` **fn** `new` — Start an empty scheduler for `packet_type`
+`crates/network/src/h3/send.rs:205` **fn** `enqueue` — Queue `frame` for sending under its [`SendPriority`]
+`crates/network/src/h3/send.rs:246` **fn** `build_next` — Pack the highest-priority queued frames that fit into one packet payload of
+`crates/network/src/h3/send_engine.rs:81` **fn** `max_packet_overhead` — The upper bound, in bytes, on everything a [`ProtectedHeader`] packet adds
+`crates/network/src/h3/send_engine.rs:127` **struct** `BuiltPacket` — One encrypted, on-wire QUIC packet together with the loss-recovery record and
+`crates/network/src/h3/send_engine.rs:146` **enum** `SendEngineError` — Something that prevented the send engine from producing a packet or datagram
+`crates/network/src/h3/send_engine.rs:218` **struct** `SpaceSender` — The send-side assembler for one packet-number space (RFC 9000 §12.3): it owns
+`crates/network/src/h3/send_engine.rs:272` **fn** `build_packet` — Pack the highest-priority pending frames into one packet payload of at most
+`crates/network/src/h3/send_engine.rs:324` **fn** `fill_datagram` — Drain every pending frame into `datagram`, coalescing as many packets as its
+`crates/network/src/h3/send_engine.rs:406` **fn** `build_padded_initial` — Build the client's first-flight Initial packet, padding its payload so the
+`crates/network/src/h3/send_path.rs:73` **struct** `SpaceFlush` — One packet-number space's complete send-side state, borrowed for the duration of
+`crates/network/src/h3/send_path.rs:106` **struct** `FlushReport` — A summary of what one [`flush`] wrote to the transport
+`crates/network/src/h3/send_path.rs:118` **enum** `FlushError` — Something that stopped [`flush`] or [`send_padded_initial`] from writing a
+`crates/network/src/h3/send_path.rs:192` **fn** `flush` — Flush every space's pending frames onto `transport` as coalesced datagrams,
+`crates/network/src/h3/send_path.rs:264` **fn** `send_padded_initial` — Send the client's first-flight Initial as its own datagram, padded to the
+`crates/network/src/h3/settings.rs:34` **enum** `H3SettingsError` — An error interpreting a peer's HTTP/3 SETTINGS
+`crates/network/src/h3/settings.rs:86` **struct** `H3Settings` — The typed contents of an HTTP/3 SETTINGS frame (RFC 9114 §7.2.4)
+`crates/network/src/h3/settings.rs:129` **fn** `for_profile` — Build the local SETTINGS Lumen sends on its control stream for the given
+`crates/network/src/h3/settings.rs:166` **fn** `to_pairs` — The `(identifier, value)` pairs this settings set serializes to, in the
+`crates/network/src/h3/settings.rs:186` **fn** `to_frame` — Build the SETTINGS frame Lumen sends as the first frame on its control
+`crates/network/src/h3/settings.rs:197` **fn** `encode` — Serialize the SETTINGS frame to its wire bytes
+`crates/network/src/h3/settings.rs:217` **fn** `from_pairs` — Interpret a peer's SETTINGS `(identifier, value)` pairs into typed
+`crates/network/src/h3/settings.rs:256` **fn** `from_frame` — Interpret a peer's decoded SETTINGS frame into typed settings
 `crates/network/src/h3/stream.rs:71` **enum** `StreamError` — A stream-layer protocol violation. Each variant maps to a single QUIC
 `crates/network/src/h3/stream.rs:144` **enum** `RecvState` — The state of the receiving part of a stream (RFC 9000 §3.2)
 `crates/network/src/h3/stream.rs:163` **struct** `RecvStream` — The receiving half of a QUIC stream: reassembly buffer, receive flow-control
@@ -2855,6 +2946,43 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/stream.rs:630` **fn** `reset` — Abruptly terminates the sending half with `error_code`, discarding any
 `crates/network/src/h3/stream.rs:640` **fn** `on_reset_ack` — Acknowledges the RESET_STREAM, moving to `ResetRecvd` (RFC 9000 §3.1)
 `crates/network/src/h3/stream.rs:648` **fn** `reset_error` — The application error code if the stream was reset (RFC 9000 §19.4)
+`crates/network/src/h3/stream_manager.rs:81` **enum** `StreamManagerError` — A stream-manager protocol violation surfaced while dispatching a per-stream
+`crates/network/src/h3/stream_manager.rs:138` **struct** `StreamManagerConfig` — The receive-window and stream-count transport parameters a [`StreamManager`]
+`crates/network/src/h3/stream_manager.rs:167` **struct** `StreamManager` — The connection-wide owner of every live stream's state, routing the per-stream
+`crates/network/src/h3/stream_manager.rs:189` **fn** `new` — Builds a stream manager advertising the receive windows and stream-count
+`crates/network/src/h3/stream_manager.rs:207` **fn** `open_send_stream` — Registers a sending half for `stream_id` bounded by `peer_initial_max_data`
+`crates/network/src/h3/stream_manager.rs:215` **fn** `recv_stream_ref` — The receiving half of `stream_id`, if one exists
+`crates/network/src/h3/stream_manager.rs:221` **fn** `send_stream` — The sending half of `stream_id`, if one exists
+`crates/network/src/h3/stream_manager.rs:226` **fn** `send_stream_mut` — The sending half of `stream_id`, mutably, if one exists
+`crates/network/src/h3/stream_manager.rs:232` **fn** `recv_flow` — The connection-wide receive flow-control budget (RFC 9000 §4.1)
+`crates/network/src/h3/stream_manager.rs:238` **fn** `recv_stream_limit` — The receive-side stream-count limit for `dir` (RFC 9000 §4.6)
+`crates/network/src/h3/stream_manager.rs:259` **fn** `recv_stream` — Dispatches a received STREAM frame (RFC 9000 §19.8), delivering `data` at
+`crates/network/src/h3/stream_manager.rs:292` **fn** `recv_reset` — Dispatches a received RESET_STREAM frame (RFC 9000 §19.4): the peer aborts
+`crates/network/src/h3/stream_manager.rs:318` **fn** `recv_stop_sending` — Dispatches a received STOP_SENDING frame (RFC 9000 §19.5): the peer requests
+`crates/network/src/h3/stream_manager.rs:346` **fn** `recv_max_stream_data` — Dispatches a received MAX_STREAM_DATA frame (RFC 9000 §19.10): raises the
+`crates/network/src/h3/stream_manager.rs:370` **fn** `recv_stream_data_blocked` — Dispatches a received STREAM_DATA_BLOCKED frame (RFC 9000 §19.13): the peer
+`crates/network/src/h3/stream_manager.rs:381` **fn** `read` — Pops and returns the contiguous readable prefix of `stream_id`, advancing
+`crates/network/src/h3/stream_manager.rs:395` **fn** `connection_window_update` — Re-advertises the connection-wide receive limit as `read + window` and
+`crates/network/src/h3/stream_manager.rs:483` **fn** `recv_stream_finished` — The number of a stream's halves that have fully closed, for the caller to feed
+`crates/network/src/h3/timer.rs:72` **enum** `TimerKind` — Which of the connection's timers a deadline belongs to
+`crates/network/src/h3/timer.rs:113` **struct** `ArmedTimer` — A single armed timer: the instant it is due and which timer it is
+`crates/network/src/h3/timer.rs:129` **struct** `ConnectionTimers` — The multiplexer over a connection's individual timer deadlines
+`crates/network/src/h3/timer.rs:146` **fn** `new` — A scheduler with every timer disarmed
+`crates/network/src/h3/timer.rs:153` **fn** `set_loss_detection` — Set (or, on [`LossTimer::Disarmed`], clear) the loss-detection / PTO timer
+`crates/network/src/h3/timer.rs:163` **fn** `set_ack_delay` — Arm (or clear) a packet-number space's delayed-ACK timer from the value
+`crates/network/src/h3/timer.rs:172` **fn** `set_idle_timeout` — Set the connection idle-timeout deadline (RFC 9000 §10.1) from
+`crates/network/src/h3/timer.rs:178` **fn** `set_path_validation` — Set the path-validation deadline (RFC 9000 §8.2.4) from
+`crates/network/src/h3/timer.rs:184` **fn** `set_draining_close` — Set the closing / draining period end (RFC 9000 §10.2) from
+`crates/network/src/h3/timer.rs:191` **fn** `clear` — Disarm every timer. Useful once the connection has reached
+`crates/network/src/h3/timer.rs:196` **fn** `loss_detection_deadline` — The loss-detection / PTO deadline, if armed
+`crates/network/src/h3/timer.rs:201` **fn** `ack_delay_deadline` — The delayed-ACK deadline for a packet-number space, if armed
+`crates/network/src/h3/timer.rs:206` **fn** `idle_timeout_deadline` — The connection idle-timeout deadline, if armed
+`crates/network/src/h3/timer.rs:211` **fn** `path_validation_deadline` — The path-validation deadline, if armed
+`crates/network/src/h3/timer.rs:216` **fn** `draining_close_deadline` — The closing / draining period end, if armed
+`crates/network/src/h3/timer.rs:257` **fn** `is_armed` — Whether any timer is currently armed
+`crates/network/src/h3/timer.rs:268` **fn** `next` — The single earliest armed timer — the deadline the caller arms one OS
+`crates/network/src/h3/timer.rs:284` **fn** `fired` — Every timer whose deadline is at or before `now`, ordered earliest-first
+`crates/network/src/h3/timer.rs:297` **fn** `has_fired` — Whether any timer's deadline is at or before `now`
 `crates/network/src/h3/tls_cert_verify.rs:169` **enum** `CertVerifyRole` — Which side signed the `CertificateVerify`, selecting the context string that
 `crates/network/src/h3/tls_cert_verify.rs:179` **fn** `context` — The context string this role signs into the content (RFC 8446 §4.4.3)
 `crates/network/src/h3/tls_cert_verify.rs:189` **enum** `CertVerifyError` — Why a `CertificateVerify` failed to verify
@@ -2924,6 +3052,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/transport_params.rs:332` **fn** `active_connection_id_limit` — Effective `active_connection_id_limit`, applying the RFC 9000 §18.2
 `crates/network/src/h3/transport_params.rs:344` **fn** `parse` — Parse the body of a `quic_transport_parameters` extension (RFC 9000 §18):
 `crates/network/src/h3/transport_params.rs:455` **fn** `serialize` — Serialize these transport parameters into an extension body (RFC 9000
+`crates/network/src/h3/udp.rs:48` **trait** `DatagramTransport` — A connected, message-oriented transport for QUIC datagrams (RFC 9000 §5)
+`crates/network/src/h3/udp.rs:104` **fn** `recv_timed_out` — Returns `true` if `err` is the "no datagram arrived before the read timeout"
+`crates/network/src/h3/udp.rs:120` **fn** `recv_timeout` — Converts the connection timer's next deadline into the receive timeout the
+`crates/network/src/h3/udp.rs:132` **struct** `UdpDatagram` — A [`DatagramTransport`] backed by a connected [`std::net::UdpSocket`]
+`crates/network/src/h3/udp.rs:147` **fn** `connect` — Binds a UDP socket to `local` and connects it to `peer`
+`crates/network/src/h3/udp.rs:161` **fn** `from_socket` — Wraps an already-connected [`UdpSocket`]
+`crates/network/src/h3/udp.rs:170` **fn** `socket` — The underlying socket, for callers needing platform-specific tuning
+`crates/network/src/h3/udp.rs:231` **struct** `MockDatagramTransport` — A scripted [`DatagramTransport`] for deterministic tests
+`crates/network/src/h3/udp.rs:244` **fn** `new` — Creates a mock connected between `local` and `peer` with no inbound
+`crates/network/src/h3/udp.rs:256` **fn** `push_inbound` — Queues a datagram for a later [`DatagramTransport::recv`] to return
+`crates/network/src/h3/udp.rs:261` **fn** `inbound_len` — The number of inbound datagrams still queued
+`crates/network/src/h3/udp.rs:268` **fn** `read_timeout` — The read timeout most recently set via
 `crates/network/src/h3/varint.rs:22` **struct** `VarIntTooLarge` — Error returned by [`encode`] when a value does not fit in a QUIC varint
 `crates/network/src/h3/varint.rs:35` **fn** `encoded_len` — Number of bytes the varint encoding of `value` occupies (1, 2, 4, or 8), or
 `crates/network/src/h3/varint.rs:51` **fn** `encode` — Append the shortest QUIC varint encoding of `value` to `out`
@@ -4869,4 +5009,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4798 symbols in 22 crates*
+*Total: 4938 symbols in 22 crates*
