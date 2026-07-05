@@ -6925,6 +6925,7 @@ fn pseudo_element_matches(kind: &PseudoElementKind, name: &str) -> bool {
         PseudoElementKind::Slotted(_) => name.eq_ignore_ascii_case("slotted"),
         PseudoElementKind::Marker => name.eq_ignore_ascii_case("marker"),
         PseudoElementKind::Selection => name.eq_ignore_ascii_case("selection"),
+        PseudoElementKind::Placeholder => name.eq_ignore_ascii_case("placeholder"),
         PseudoElementKind::Highlight(_) => name.eq_ignore_ascii_case("highlight"),
         PseudoElementKind::Unknown(s) => s.eq_ignore_ascii_case(name),
     }
@@ -7180,9 +7181,12 @@ pub fn compute_pseudo_element_style(
     // ::before/::after require content: to render; ::first-letter/::first-line do not.
     // ::marker renders by default (content comes from list-style-type); content:none suppresses it.
     // ::selection applies to active text selection — no content required (CSS Pseudo-elements L4 §5.6).
+    // ::placeholder styles the UA-generated placeholder hint text — no content required
+    // (CSS Pseudo-elements L4 §4.10).
     if pseudo.eq_ignore_ascii_case("first-letter")
         || pseudo.eq_ignore_ascii_case("first-line")
         || pseudo.eq_ignore_ascii_case("selection")
+        || pseudo.eq_ignore_ascii_case("placeholder")
     {
         Some(style)
     } else if pseudo.eq_ignore_ascii_case("marker") {
@@ -30888,6 +30892,64 @@ mod tests {
         assert!(result.is_some());
         let s = result.unwrap();
         assert!((s.font_size - 24.0).abs() < 0.01, "font-size should inherit: got {}", s.font_size);
+    }
+
+    // ── ::placeholder pseudo-element (CSS Pseudo-Elements L4 §4.10) ────────────
+
+    fn make_placeholder_doc() -> (lumen_dom::Document, lumen_dom::NodeId) {
+        let mut doc = lumen_dom::Document::new();
+        let root = doc.root();
+        let input = doc.create_element(lumen_dom::QualName::html("input"));
+        doc.append_child(root, input);
+        (doc, input)
+    }
+
+    #[test]
+    fn placeholder_style_returns_some_when_rules_match() {
+        let css = "input::placeholder { color: #808080; opacity: 0.5; }";
+        let sheet = lumen_css_parser::parse(css);
+        let (doc, node) = make_placeholder_doc();
+        let parent = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let result = compute_pseudo_element_style(&doc, node, "placeholder", &sheet, &parent, vp, false);
+        assert!(result.is_some(), "input::placeholder rules should produce Some(style)");
+        let s = result.unwrap();
+        assert_eq!(s.color.r, 0x80, "color r should be 0x80");
+        assert_eq!(s.color.g, 0x80, "color g should be 0x80");
+        assert!((s.opacity - 0.5).abs() < 1e-4, "opacity should be 0.5, got {}", s.opacity);
+    }
+
+    #[test]
+    fn placeholder_style_returns_none_when_no_rules() {
+        let sheet = lumen_css_parser::parse("input { color: red; }");
+        let (doc, node) = make_placeholder_doc();
+        let parent = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let result = compute_pseudo_element_style(&doc, node, "placeholder", &sheet, &parent, vp, false);
+        assert!(result.is_none(), "no input::placeholder rules → None");
+    }
+
+    #[test]
+    fn placeholder_style_no_content_required() {
+        let sheet = lumen_css_parser::parse("input::placeholder { font-style: italic; }");
+        let (doc, node) = make_placeholder_doc();
+        let parent = ComputedStyle::root();
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let result = compute_pseudo_element_style(&doc, node, "placeholder", &sheet, &parent, vp, false);
+        assert!(result.is_some(), "::placeholder without content should still return Some");
+        assert_eq!(result.unwrap().font_style, FontStyle::Italic);
+    }
+
+    #[test]
+    fn placeholder_style_inherits_font_from_parent() {
+        let sheet = lumen_css_parser::parse("input::placeholder { color: grey; }");
+        let (doc, node) = make_placeholder_doc();
+        let mut parent = ComputedStyle::root();
+        parent.font_size = 20.0;
+        let vp = lumen_core::geom::Size { width: 1024.0, height: 768.0 };
+        let result = compute_pseudo_element_style(&doc, node, "placeholder", &sheet, &parent, vp, false);
+        assert!(result.is_some());
+        assert!((result.unwrap().font_size - 20.0).abs() < 0.01);
     }
 
     // === CSS Values L4 §7.7 attr() typed substitution ===

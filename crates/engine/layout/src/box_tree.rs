@@ -347,7 +347,16 @@ pub enum FormControlKind {
     /// `value_text` is the `value` attribute content, used by `field-sizing: content`.
     /// `placeholder` is the `placeholder` attribute content, painted in grey by
     /// text-like inputs when `value_text` is empty (HTML rendering §15.5.5).
-    Input { input_type: lumen_dom::InputType, checked: bool, value_text: String, placeholder: String },
+    /// `placeholder_style` is the computed `::placeholder` override (CSS
+    /// Pseudo-Elements L4 §4.10), if any author rule targets
+    /// `input::placeholder` — `None` falls back to the UA default grey hint.
+    Input {
+        input_type: lumen_dom::InputType,
+        checked: bool,
+        value_text: String,
+        placeholder: String,
+        placeholder_style: Option<Box<ComputedStyle>>,
+    },
     Button,
     /// `<select>` — `selected_text` is the label of the currently selected
     /// `<option>` (first option if none is explicitly selected). Paint uses this
@@ -3882,7 +3891,10 @@ fn build_box(
                                 let placeholder = node.get_attr("placeholder")
                                     .unwrap_or("")
                                     .to_owned();
-                                FormControlKind::Input { input_type, checked, value_text, placeholder }
+                                let placeholder_style = compute_pseudo_element_style(
+                                    doc, id, "placeholder", sheet, &style, viewport, dark_mode,
+                                ).map(Box::new);
+                                FormControlKind::Input { input_type, checked, value_text, placeholder, placeholder_style }
                             }
                         }
                     }
