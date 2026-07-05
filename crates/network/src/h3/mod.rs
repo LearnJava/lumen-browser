@@ -198,11 +198,26 @@
 //!   dalek family, constant-time). Pure functions; validated against the RFC 8032
 //!   §7.1 TEST 1 vector. Out of scope: `rsa_pss_rsae_sha256` and the P-384/P-521
 //!   variants (still [`tls_cert_verify::CertVerifyError::UnsupportedScheme`]).
-//! - Slice 21+ (planned) — the rest of the QUIC transport: UDP datagrams,
+//! - Slice 21 — the `rsa_pss_rsae_sha256` `CertificateVerify` scheme
+//!   ([`tls_cert_verify::rsa_pss_sha256_verify`], RFC 8446 §4.2.3, RFC 8017 §8.1):
+//!   RSASSA-PSS with the MGF1-SHA-256 mask and SHA-256 message hash — the
+//!   signature the great majority of real server certificates carry.
+//!   [`tls_cert_verify::verify_certificate_verify`] now dispatches
+//!   `ecdsa_secp256r1_sha256`, `ed25519`, and `rsa_pss_rsae_sha256`; the public key
+//!   is the PKCS#1 DER `RSAPublicKey` (the `subjectPublicKey` of an rsaEncryption
+//!   `SubjectPublicKeyInfo`) and the signature is the raw big-endian integer TLS
+//!   carries. The verifier comes from the `rsa` crate (pure-Rust RustCrypto,
+//!   reusing the `sha2` already in the tree); the PSS salt length is recovered
+//!   during EMSA-PSS-VERIFY, so RFC 8446's salt-equals-digest-length signatures
+//!   verify interoperably. Pure functions; validated end-to-end by signing a
+//!   `CertificateVerify` content with a generated RSA key and rejecting every
+//!   tampering. Out of scope: the P-384/P-521 ECDSA variants and the SHA-384/512
+//!   RSA-PSS variants (still [`tls_cert_verify::CertVerifyError::UnsupportedScheme`]).
+//! - Slice 22+ (planned) — the rest of the QUIC transport: UDP datagrams,
 //!   actually arming the PTO timer and assembling probe datagrams, the QPACK
 //!   encoder/decoder stream instruction wiring, the remaining `CertificateVerify`
-//!   schemes (`rsa_pss_rsae_sha256`), and `h3_do_request` dispatch alongside the
-//!   existing H1/H2 paths.
+//!   schemes (P-384/P-521 ECDSA, SHA-384/512 RSA-PSS), and `h3_do_request`
+//!   dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
