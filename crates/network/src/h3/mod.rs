@@ -146,11 +146,22 @@
 //!   byte-exact round-trip of the RFC 8448 §3 ServerHello. Out of scope: the
 //!   X25519 agreement over two key shares, and computing/verifying the
 //!   `Finished` MAC and `CertificateVerify` signature.
-//! - Slice 17+ (planned) — the rest of the QUIC transport: the X25519 key
-//!   agreement that turns two [`tls_message::KeyShareEntry`] public keys into
-//!   the `(EC)DHE` secret, UDP datagrams, actually arming the PTO timer and
-//!   assembling probe datagrams, the QPACK encoder/decoder stream instruction
-//!   wiring, and `h3_do_request` dispatch alongside the existing H1/H2 paths.
+//! - Slice 17 — the X25519 key agreement ([`key_agreement`], RFC 7748,
+//!   RFC 8446 §4.2.8) that turns two [`tls_message::KeyShareEntry`] public keys
+//!   into the raw `(EC)DHE` shared secret [`tls_schedule::handshake_secret`]
+//!   consumes. [`key_agreement::x25519_public_key`] derives our ephemeral public
+//!   value for the `key_share` extension; [`key_agreement::x25519_shared_secret`]
+//!   / [`key_agreement::x25519_ecdhe_from_key_share`] perform the Curve25519
+//!   scalar multiplication against the peer's share (rejecting a small-order,
+//!   non-contributory key per RFC 7748 §6.1). The X25519 primitive comes from
+//!   `x25519-dalek` (constant-time); the module core is deterministic and
+//!   validated against the RFC 7748 §5.2/§6.1 test vectors, with only the
+//!   optional [`key_agreement::generate_x25519_private_key`] reading OS entropy.
+//! - Slice 18+ (planned) — the rest of the QUIC transport: UDP datagrams,
+//!   actually arming the PTO timer and assembling probe datagrams, the QPACK
+//!   encoder/decoder stream instruction wiring, computing/verifying the
+//!   `Finished` MAC and `CertificateVerify` signature, and `h3_do_request`
+//!   dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -162,6 +173,7 @@ pub mod alt_svc;
 pub mod conn_flow;
 pub mod frame;
 pub mod h3_stream;
+pub mod key_agreement;
 pub mod key_schedule;
 pub mod loss;
 pub mod packet;
