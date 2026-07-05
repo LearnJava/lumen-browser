@@ -19785,6 +19785,10 @@ fn parse_function_color(s: &str) -> Option<Color> {
     if lower.starts_with("color-mix(") && s.ends_with(')') {
         return parse_color_mix(&s["color-mix(".len()..s.len() - 1]);
     }
+    // CSS Color L5 §11 color-contrast().
+    if lower.starts_with("color-contrast(") && s.ends_with(')') {
+        return parse_color_contrast(&s["color-contrast(".len()..s.len() - 1]);
+    }
     let (kind, body) = if let Some(b) = lower.strip_prefix("rgba(").and_then(|t| t.strip_suffix(')')) {
         (ColorFn::Rgb, b)
     } else if let Some(b) = lower.strip_prefix("rgb(").and_then(|t| t.strip_suffix(')')) {
@@ -20354,6 +20358,128 @@ fn parse_color_mix(body: &str) -> Option<Color> {
         b: (out[2] * 255.0).round().clamp(0.0, 255.0) as u8,
         a: (out[3] * 255.0).round().clamp(0.0, 255.0) as u8,
     })
+}
+
+/// CSS Color L5 §11 — `color-contrast( <color> vs <color>#{2,} [ to <target> ]? )`.
+///
+/// Picks the candidate color that contrasts best against the base color using
+/// the WCAG 2.1 contrast-ratio formula. Without a `to <target>` clause the
+/// candidate with the highest contrast is returned. With a target (either a
+/// keyword — `AA`/`AA-large`/`AAA`/`AAA-large` — or a bare `<number>` ratio),
+/// the first candidate in list order that meets or exceeds the target is
+/// returned; if none reach it, the highest-contrast candidate is used.
+///
+/// Returns `None` when the syntax is malformed (missing `vs`, unparsable
+/// color, fewer than two candidates, or an invalid target).
+fn parse_color_contrast(body: &str) -> Option<Color> {
+    // Split base from the candidate list on the top-level `vs` keyword.
+    let (vs_start, vs_end) = find_keyword_at_depth0(body, "vs")?;
+    let base = parse_color(body[..vs_start].trim())?;
+    let rest = &body[vs_end..];
+
+    // Optional trailing `to <target>` clause (top-level `to` keyword).
+    let (list_str, target) = match find_keyword_at_depth0(rest, "to") {
+        Some((to_start, to_end)) => {
+            let t = parse_contrast_target(rest[to_end..].trim())?;
+            (&rest[..to_start], Some(t))
+        }
+        None => (rest, None),
+    };
+
+    let candidates: Vec<Color> = split_top_level_commas(list_str)
+        .iter()
+        .map(|s| parse_color(s.trim()))
+        .collect::<Option<Vec<_>>>()?;
+    if candidates.len() < 2 {
+        return None;
+    }
+
+    let best = |cands: &[Color]| -> Option<Color> {
+        cands
+            .iter()
+            .copied()
+            .max_by(|a, b| {
+                wcag_contrast_ratio(base, *a)
+                    .partial_cmp(&wcag_contrast_ratio(base, *b))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    };
+
+    match target {
+        None => best(&candidates),
+        Some(t) => candidates
+            .iter()
+            .copied()
+            .find(|c| wcag_contrast_ratio(base, *c) >= t)
+            .or_else(|| best(&candidates)),
+    }
+}
+
+/// Parses a `<contrast-target>` (CSS Color L5 §11): a WCAG level keyword or a
+/// bare numeric contrast ratio. Keyword ratios follow WCAG 2.1 §1.4.3/§1.4.6.
+fn parse_contrast_target(s: &str) -> Option<f32> {
+    match s.to_ascii_lowercase().as_str() {
+        "aa" => Some(4.5),
+        "aa-large" => Some(3.0),
+        "aaa" => Some(7.0),
+        "aaa-large" => Some(4.5),
+        other => other.parse::<f32>().ok(),
+    }
+}
+
+/// Finds a standalone ASCII keyword (`vs` / `to`) at parenthesis depth 0 and
+/// returns its `(start, end)` byte range. Word boundaries are honoured — only a
+/// complete alphabetic token equal to `kw` matches, so substrings inside color
+/// names (e.g. `to` in `tomato`) or function names are skipped, and keywords
+/// nested inside `rgb(…)`/`color-mix(…)` arguments are ignored.
+fn find_keyword_at_depth0(s: &str, kw: &str) -> Option<(usize, usize)> {
+    let bytes = s.as_bytes();
+    let mut depth: i32 = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'(' {
+            depth += 1;
+            i += 1;
+        } else if c == b')' {
+            depth -= 1;
+            i += 1;
+        } else if depth == 0 && c.is_ascii_alphabetic() {
+            let start = i;
+            while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+                i += 1;
+            }
+            if s[start..i].eq_ignore_ascii_case(kw) {
+                return Some((start, i));
+            }
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+/// WCAG 2.1 relative luminance of an sRGB color (alpha ignored). Channels are
+/// linearised per the WCAG formula before the 0.2126/0.7152/0.0722 weighting.
+fn wcag_relative_luminance(c: Color) -> f32 {
+    fn linearise(channel: u8) -> f32 {
+        let s = channel as f32 / 255.0;
+        if s <= 0.03928 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    0.2126 * linearise(c.r) + 0.7152 * linearise(c.g) + 0.0722 * linearise(c.b)
+}
+
+/// WCAG 2.1 contrast ratio between two colors, in `1.0..=21.0`
+/// (`(L_lighter + 0.05) / (L_darker + 0.05)`).
+fn wcag_contrast_ratio(a: Color, b: Color) -> f32 {
+    let la = wcag_relative_luminance(a);
+    let lb = wcag_relative_luminance(b);
+    let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
+    (hi + 0.05) / (lo + 0.05)
 }
 
 /// Parse `"<color> [N%]?"` → `(Color, Option<fraction>)`.
@@ -30536,6 +30662,56 @@ mod tests {
         assert!(parse_color("color-mix(srgb, red, blue)").is_none());
         // Only 2 comma-separated parts → None
         assert!(parse_color("color-mix(in srgb, red)").is_none());
+    }
+
+    // ── color-contrast() (CSS Color L5 §11) ───────────────────────────────────
+
+    #[test]
+    fn color_contrast_picks_highest_without_target() {
+        // Against white, black contrasts far more than dim grey → black wins.
+        let c = parse_color("color-contrast(white vs #888, black)").expect("parse");
+        assert_eq!(c, Color { r: 0, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn color_contrast_first_meeting_target_keyword() {
+        // Against white: #777 ratio ≈ 4.48 (< AA 4.5), #555 ≈ 7.0 (≥ AA).
+        // First candidate meeting AA in list order is #555.
+        let c = parse_color("color-contrast(white vs #777, #555, black to AA)").expect("parse");
+        assert_eq!(c, Color { r: 0x55, g: 0x55, b: 0x55, a: 255 });
+    }
+
+    #[test]
+    fn color_contrast_falls_back_to_best_when_target_unmet() {
+        // Neither light grey meets AAA (7.0) against white → highest-contrast wins.
+        let c = parse_color("color-contrast(white vs #bbb, #999 to AAA)").expect("parse");
+        assert_eq!(c, Color { r: 0x99, g: 0x99, b: 0x99, a: 255 });
+    }
+
+    #[test]
+    fn color_contrast_numeric_target() {
+        // Bare numeric ratio target: 3.0. Against white, #777 (≈4.48) meets it.
+        let c = parse_color("color-contrast(white vs #aaa, #777 to 3)").expect("parse");
+        assert_eq!(c, Color { r: 0x77, g: 0x77, b: 0x77, a: 255 });
+    }
+
+    #[test]
+    fn color_contrast_accepts_color_functions() {
+        // Base and candidates may themselves be color functions (top-level `vs`
+        // must be found past the parens/commas of rgb()).
+        let c = parse_color("color-contrast(rgb(255, 255, 255) vs rgb(200, 200, 200), black)")
+            .expect("parse");
+        assert_eq!(c, Color { r: 0, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn color_contrast_invalid_returns_none() {
+        // Missing "vs" keyword → None.
+        assert!(parse_color("color-contrast(white, black)").is_none());
+        // Fewer than two candidates → None.
+        assert!(parse_color("color-contrast(white vs black)").is_none());
+        // Unparsable candidate color → None.
+        assert!(parse_color("color-contrast(white vs black, notacolor)").is_none());
     }
 
     // ── gradient color-interpolation-method (CSS Images L4 §3.1) ──────────────
