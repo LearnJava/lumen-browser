@@ -610,9 +610,26 @@
 //!   as an accepted no-op. A stream's directionality (RFC 9000 §2.1) gates which
 //!   half a frame may touch (`STREAM_STATE_ERROR` otherwise). Pure state machine
 //!   over the decoded frames; no IO.
-//! - Slice 50+ (planned) — the rest of the QUIC transport: the send path composed
-//!   over [`event_loop`], and `h3_do_request` dispatch alongside the existing
-//!   H1/H2 paths.
+//! - Slice 50 — the QUIC send-side frame scheduler ([`send`], RFC 9000 §12.4,
+//!   §13.2.1; RFC 9002 §2): the first composition slice of the send path, the
+//!   mirror of the connection-level receive dispatch ([`connection`]). Where
+//!   [`connection::QuicConnection::process_packet`] routes each *received* frame to
+//!   its owning machine, [`send::SendScheduler`] queues the frames the connection
+//!   *owes* to send — the acknowledgement an [`ack::AckGenerator`] produced, the
+//!   PATH_RESPONSE / RETIRE_CONNECTION_ID a [`connection::PacketEffects`] surfaced,
+//!   the CRYPTO / STREAM data a send stream buffered — and packs them, by
+//!   descending [`send::SendPriority`] (Close → Ack → Crypto → Control → Stream →
+//!   Probe) under a byte budget, into the successive [`packet_payload::PayloadBuilder`]
+//!   payloads a packet carries. It validates each frame against the packet type's
+//!   permission table (RFC 9000 §12.4) at enqueue, packs FIFO within a priority
+//!   (skipping a frame too large for the remaining budget so a smaller later one of
+//!   the same class still fits), and reports [`send::SendError::FrameTooLarge`] when
+//!   a queued frame cannot fit even an empty packet. Pure state; packet-number
+//!   assignment, encryption ([`packet_crypt`]), and datagram coalescing
+//!   ([`datagram_build`]) remain later slices.
+//! - Slice 51+ (planned) — the rest of the QUIC transport: the send engine over
+//!   [`event_loop`] driving [`send`] + [`packet_crypt`] + [`datagram_build`], and
+//!   `h3_do_request` dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -652,6 +669,7 @@ pub mod qpack_stream;
 pub mod quic_frame;
 pub mod recovery;
 pub mod retry;
+pub mod send;
 pub mod settings;
 pub mod stream;
 pub mod stream_manager;
