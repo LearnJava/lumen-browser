@@ -452,7 +452,24 @@
 //!   Certificate / CertificateVerify are handed back for [`tls_cert_verify`]).
 //!   Pure state machine, no IO; HelloRetryRequest, PSK/resumption, client auth and
 //!   post-handshake messages are out of scope.
-//! - Slice 40+ (planned) — the rest of the QUIC transport: the UDP send/receive,
+//! - Slice 40 — the HTTP/3 request/response message translation ([`h3_request`],
+//!   RFC 9114 §4.1–§4.3): the semantic bridge between an HTTP message and the
+//!   QPACK field section a `HEADERS` frame carries — the request-path
+//!   counterpart of [`qpack`] (a field *list* → bytes) and [`frame`] (an
+//!   *opaque* field block → a frame), mirroring the HTTP/2 `h2::conn`
+//!   pseudo-header + fetch handling. [`h3_request::build_request_fields`] /
+//!   [`h3_request::encode_request`] build the ordered request field list — the
+//!   four request pseudo-headers (`:method`, `:scheme`, `:authority`, `:path`,
+//!   §4.3.1) in the impersonated browser's fingerprint order followed by the
+//!   regular fields — and QPACK-encode it into a `HEADERS` frame;
+//!   [`h3_request::decode_response`] / [`h3_request::validate_response_fields`]
+//!   decode a response field block back into the `:status` code and header list,
+//!   enforcing the §4.1.2/§4.2/§4.3.2 well-formedness rules (exactly one
+//!   `:status` first, no request/unknown pseudo-headers, lower-case names, no
+//!   connection-specific fields). Pure functions over the static-only QPACK
+//!   codec; request bodies, trailers, the dynamic table, and the transport are
+//!   out of scope.
+//! - Slice 41+ (planned) — the rest of the QUIC transport: the UDP send/receive,
 //!   actually arming the PTO/ACK-delay timers and assembling probe datagrams, the
 //!   QPACK encoder/decoder stream instruction wiring, and `h3_do_request` dispatch
 //!   alongside the existing H1/H2 paths.
@@ -470,6 +487,7 @@ pub mod conn_id;
 pub mod crypto_stream;
 pub mod datagram;
 pub mod frame;
+pub mod h3_request;
 pub mod h3_stream;
 pub mod key_agreement;
 pub mod key_schedule;

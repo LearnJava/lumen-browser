@@ -1739,11 +1739,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/box_tree.rs:2661` **fn** `layout_streaming_incremental` — Streaming incremental layout (PH1-2b)
 `crates/engine/layout/src/box_tree.rs:2758` **fn** `build_iframe_document` — Parse inline HTML from an `<iframe srcdoc="...">` attribute (HTML spec §4.8.5)
 `crates/engine/layout/src/box_tree.rs:2831` **fn** `canvas_background_color` — CSS Backgrounds §3.11.1 — the canvas background color
-`crates/engine/layout/src/box_tree.rs:9048` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
-`crates/engine/layout/src/box_tree.rs:9231` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
-`crates/engine/layout/src/box_tree.rs:9250` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
-`crates/engine/layout/src/box_tree.rs:9280` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
-`crates/engine/layout/src/box_tree.rs:10252` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
+`crates/engine/layout/src/box_tree.rs:9083` **fn** `resolve_auto_fill_fit_count` — CSS Grid Layout L3 §9 — Resolve `repeat(auto-fill|auto-fit, <track-list>)` count
+`crates/engine/layout/src/box_tree.rs:9266` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
+`crates/engine/layout/src/box_tree.rs:9285` **fn** `measure_text_w_families` — Как [`measure_text_w`], но учитывает CSS `font-family` каскад
+`crates/engine/layout/src/box_tree.rs:9315` **fn** `measure_text_w_varied` — Как [`measure_text_w_families`], но учитывает CSS `font-variation-settings`
+`crates/engine/layout/src/box_tree.rs:10287` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
 `crates/engine/layout/src/color_mix.rs:38` **enum** `MixColorSpace` — CSS Color L5 §10.2 — interpolation color space for `color-mix()`
 `crates/engine/layout/src/color_mix.rs:63` **fn** `from_css` — Parse a CSS `color-mix()` interpolation space identifier (case-insensitive)
 `crates/engine/layout/src/color_mix.rs:80` **fn** `is_polar` — Returns `true` if this space has a hue (polar) axis
@@ -2301,7 +2301,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (750 symbols)
+## lumen-network  (774 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -2556,6 +2556,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/frame.rs:132` **enum** `Frame` — A parsed HTTP/3 frame (RFC 9114 §7.2). Field sections in `Headers` /
 `crates/network/src/h3/frame.rs:196` **fn** `parse` — Parse one frame from the front of `buf`
 `crates/network/src/h3/frame.rs:254` **fn** `encode` — Serialize this frame (type · length · payload) onto `out`
+`crates/network/src/h3/h3_request.rs:37` **enum** `H3Profile` — The HTTP/2 (and thus HTTP/3) impersonation profile, selecting the pseudo-
+`crates/network/src/h3/h3_request.rs:54` **enum** `MessageError` — An error translating between an HTTP message and its QPACK field section
+`crates/network/src/h3/h3_request.rs:143` **struct** `H3ResponseHead` — A decoded HTTP/3 response head: the `:status` code and the ordinary header
+`crates/network/src/h3/h3_request.rs:185` **fn** `build_request_fields` — Build the ordered request field list: the four request pseudo-headers in the
+`crates/network/src/h3/h3_request.rs:221` **fn** `encode_request` — Encode a request into a complete `HEADERS` frame (RFC 9114 §4.1, §7.2.2):
+`crates/network/src/h3/h3_request.rs:263` **fn** `validate_response_fields` — Validate a decoded response field list (RFC 9114 §4.1.2, §4.2, §4.3.2) and
+`crates/network/src/h3/h3_request.rs:305` **fn** `decode_response` — Decode a response `HEADERS` frame's QPACK field block into an
 `crates/network/src/h3/h3_stream.rs:94` **enum** `StreamLayerError` — A stream-layer protocol violation. Each variant maps to exactly one RFC 9114
 `crates/network/src/h3/h3_stream.rs:140` **enum** `UniStreamType` — The decoded type of a unidirectional stream (RFC 9114 §6.2)
 `crates/network/src/h3/h3_stream.rs:165` **fn** `parse` — Parse the stream-type prefix from the front of `buf`
@@ -2850,6 +2857,15 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/tls_finished.rs:66` **fn** `finished_key` — The `finished_key` for one direction:
 `crates/network/src/h3/tls_finished.rs:81` **fn** `finished_verify_data` — The `verify_data` a sender writes into its `Finished` message:
 `crates/network/src/h3/tls_finished.rs:95` **fn** `verify_finished` — Verify a peer's `Finished`: recompute the expected `verify_data` from the
+`crates/network/src/h3/tls_handshake.rs:54` **enum** `HandshakeError` — Failure processing a step of the client handshake (RFC 8446 §4)
+`crates/network/src/h3/tls_handshake.rs:138` **enum** `HandshakeState` — The client handshake's progress through the server's flight (RFC 8446 §4),
+`crates/network/src/h3/tls_handshake.rs:161` **struct** `HandshakeComplete` — The 1-RTT key material and secrets produced when the server Finished verifies
+`crates/network/src/h3/tls_handshake.rs:208` **enum** `HandshakeEvent` — What processing one server handshake message accomplished
+`crates/network/src/h3/tls_handshake.rs:229` **struct** `ClientHandshake` — Client-side TLS 1.3 handshake flow state machine (RFC 8446 §4, RFC 9001 §4)
+`crates/network/src/h3/tls_handshake.rs:270` **fn** `new` — Start a client handshake
+`crates/network/src/h3/tls_handshake.rs:287` **fn** `state` — The current handshake state
+`crates/network/src/h3/tls_handshake.rs:293` **fn** `is_complete` — Whether the handshake has completed successfully
+`crates/network/src/h3/tls_handshake.rs:309` **fn** `handle_message` — Process exactly one complete server handshake message
 `crates/network/src/h3/tls_message.rs:124` **enum** `TlsError` — Codec error. [`Handshake::parse`] signals "need more bytes" out of band with
 `crates/network/src/h3/tls_message.rs:161` **struct** `Extension` — A single TLS extension: a 2-byte type and an opaque `<0..2^16-1>` body
 `crates/network/src/h3/tls_message.rs:171` **fn** `new` — Construct an extension from its type code and raw body
@@ -2899,6 +2915,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/varint.rs:35` **fn** `encoded_len` — Number of bytes the varint encoding of `value` occupies (1, 2, 4, or 8), or
 `crates/network/src/h3/varint.rs:51` **fn** `encode` — Append the shortest QUIC varint encoding of `value` to `out`
 `crates/network/src/h3/varint.rs:69` **fn** `decode` — Decode one QUIC varint from the front of `buf`
+`crates/network/src/h3/version_nego.rs:49` **enum** `VersionNegotiationError` — Failure processing a Version Negotiation packet (RFC 9000 §6.2)
+`crates/network/src/h3/version_nego.rs:95` **struct** `VersionNegotiationOutcome` — The result of processing a valid Version Negotiation packet (RFC 9000 §6.2):
+`crates/network/src/h3/version_nego.rs:109` **struct** `VersionNegotiator` — Client-side Version Negotiation state machine (RFC 9000 §6.2)
+`crates/network/src/h3/version_nego.rs:128` **fn** `new` — A negotiator that supports and attempted only [`QUIC_VERSION_1`]
+`crates/network/src/h3/version_nego.rs:137` **fn** `with_supported` — A negotiator with an explicit list of supported versions (in descending
+`crates/network/src/h3/version_nego.rs:143` **fn** `attempted_version` — The version the client used in its first Initial packet
+`crates/network/src/h3/version_nego.rs:150` **fn** `has_processed` — Whether a Version Negotiation packet has already been processed on this
+`crates/network/src/h3/version_nego.rs:178` **fn** `process` — Process a received Version Negotiation packet against the connection IDs
 `crates/network/src/hsts_preload.rs:23` **struct** `HstsPreloadList` — HSTS Preload List: быстрый поиск по eTLD+1
 `crates/network/src/hsts_preload.rs:36` **fn** `load` — Создать preload list из встроенного JSON (Chromium формат)
 `crates/network/src/hsts_preload.rs:100` **fn** `is_preloaded` — Проверить, есть ли хост в preload list
@@ -4832,4 +4856,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4761 symbols in 22 crates*
+*Total: 4785 symbols in 22 crates*
