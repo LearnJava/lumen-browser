@@ -2301,7 +2301,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (583 symbols)
+## lumen-network  (620 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -2448,6 +2448,20 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h2/hpack.rs:844` **fn** `encode` — Encode a list of `(name, value)` pairs into a header block fragment
 `crates/network/src/h2/pool.rs:35` **struct** `H2Pool` — A shared pool of HTTP/2 connections, one per origin
 `crates/network/src/h2/pool.rs:40` **fn** `new`
+`crates/network/src/h3/ack.rs:66` **enum** `EcnCodepoint` — The ECN codepoint the IP layer carried on a received packet (RFC 9000 §13.4,
+`crates/network/src/h3/ack.rs:79` **enum** `AckUrgency` — How urgently an acknowledgement is owed (RFC 9000 §13.2.1)
+`crates/network/src/h3/ack.rs:103` **struct** `AckGenerator` — One packet-number space's receiver-side acknowledgement state (RFC 9000 §13.2)
+`crates/network/src/h3/ack.rs:137` **fn** `new` — Creates an empty generator for the given space with the peer's `max_ack_delay`
+`crates/network/src/h3/ack.rs:156` **fn** `with_ack_eliciting_threshold` — Overrides the ack-eliciting threshold (default
+`crates/network/src/h3/ack.rs:162` **fn** `space` — The packet-number space this generator acknowledges
+`crates/network/src/h3/ack.rs:167` **fn** `largest_received` — The largest packet number received so far, or `None` before the first packet
+`crates/network/src/h3/ack.rs:172` **fn** `is_empty` — Whether any packet has been received (and therefore an ACK could be produced)
+`crates/network/src/h3/ack.rs:180` **fn** `on_packet_received` — Records receipt of packet `pn`, carrying ECN codepoint `ecn`, arriving at
+`crates/network/src/h3/ack.rs:244` **fn** `ack_urgency` — How urgently an acknowledgement is owed right now (RFC 9000 §13.2.1). An
+`crates/network/src/h3/ack.rs:256` **fn** `should_send_ack` — Whether an acknowledgement should be sent at `now`: an immediate one is owed,
+`crates/network/src/h3/ack.rs:269` **fn** `generate_ack_frame` — Builds the [`Frame::Ack`] acknowledging every packet received so far and clears
+`crates/network/src/h3/ack.rs:316` **fn** `on_ack_of_ack` — Discards received ranges the peer no longer needs acknowledged, given that it
+`crates/network/src/h3/ack.rs:339` **fn** `ecn_counts` — The cumulative ECN counts observed for this space (RFC 9000 §13.4)
 `crates/network/src/h3/alt_svc.rs:54` **struct** `AltSvcEntry` — One parsed alternative service entry (RFC 7838 §3) for the `h3` protocol
 `crates/network/src/h3/alt_svc.rs:75` **fn** `parse` — Parse an `Alt-Svc` header value into the HTTP/3 alternatives it advertises
 `crates/network/src/h3/alt_svc.rs:191` **struct** `AltSvcCache` — Per-origin memory of advertised HTTP/3 alternatives (RFC 7838 §3)
@@ -2548,12 +2562,35 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/packet.rs:141` **enum** `Packet` — A parsed QUIC packet header plus its opaque protected region (RFC 9000 §17)
 `crates/network/src/h3/packet.rs:261` **fn** `parse` — Parse one QUIC packet header (and its protected remainder) from the
 `crates/network/src/h3/packet.rs:378` **fn** `encode` — Serialize this packet header and its protected region onto `out`
+`crates/network/src/h3/packet_crypt.rs:40` **enum** `PacketCryptError` — Error from the packet protection pipeline. Each variant wraps the failing
+`crates/network/src/h3/packet_crypt.rs:99` **enum** `ProtectedHeader` — The header fields of a packet to encrypt, borrowing the connection IDs and
+`crates/network/src/h3/packet_crypt.rs:188` **struct** `DecryptedPacket` — A decrypted packet: the parsed header, the recovered full packet number, the
+`crates/network/src/h3/packet_crypt.rs:216` **fn** `encrypt_packet` — Encrypt `payload` into an on-wire QUIC packet, choosing the packet-number
+`crates/network/src/h3/packet_crypt.rs:240` **fn** `encrypt_packet_with_pn_length` — Encrypt `payload` with an explicit packet-number width, otherwise identical to
+`crates/network/src/h3/packet_crypt.rs:301` **fn** `decrypt_packet` — Decrypt the first packet at the front of `buf`, the inverse of
+`crates/network/src/h3/packet_number.rs:69` **enum** `PacketNumberError` — Error encoding a packet number
+`crates/network/src/h3/packet_number.rs:109` **fn** `packet_number_length` — The minimum number of bytes (1..=4) needed to truncate `full_pn` so a receiver
+`crates/network/src/h3/packet_number.rs:138` **fn** `encode_packet_number` — Append `full_pn` truncated to its minimal on-wire width (RFC 9000 §17.1,
+`crates/network/src/h3/packet_number.rs:163` **fn** `decode_packet_number` — Decode a truncated packet number back to its full 62-bit value
+`crates/network/src/h3/packet_number.rs:193` **fn** `read_truncated_packet_number` — Read a big-endian truncated packet number from its on-wire bytes
 `crates/network/src/h3/packet_protect.rs:66` **enum** `ProtectionError` — Errors from the packet-protection transforms
 `crates/network/src/h3/packet_protect.rs:132` **fn** `aes_128_gcm_seal` — Seal a packet payload with AES-128-GCM (RFC 9001 §5.3). Returns
 `crates/network/src/h3/packet_protect.rs:154` **fn** `aes_128_gcm_open` — Open a sealed packet payload with AES-128-GCM (RFC 9001 §5.3), verifying the
 `crates/network/src/h3/packet_protect.rs:181` **fn** `aes_128_hp_mask` — Derive the 5-byte header-protection mask from a ciphertext sample
 `crates/network/src/h3/packet_protect.rs:221` **fn** `apply_header_protection` — Apply header protection to an assembled packet in place (RFC 9001 §5.4.1, the
 `crates/network/src/h3/packet_protect.rs:249` **fn** `remove_header_protection` — Remove header protection from a received packet in place (RFC 9001 §5.4.1,
+`crates/network/src/h3/path_mtu.rs:67` **enum** `PmtuState` — The phase of the DPLPMTUD search (RFC 8899 §5.2)
+`crates/network/src/h3/path_mtu.rs:98` **struct** `PathMtuDiscovery` — The QUIC DPLPMTUD state machine (RFC 9000 §14.2–14.4, RFC 8899)
+`crates/network/src/h3/path_mtu.rs:126` **fn** `new` — Creates a discovery machine that first confirms the [`QUIC_MIN_PLPMTU`]
+`crates/network/src/h3/path_mtu.rs:148` **fn** `with_confirmed_base` — Creates a discovery machine that treats the [`QUIC_MIN_PLPMTU`] base size
+`crates/network/src/h3/path_mtu.rs:170` **fn** `max_datagram_size` — The current validated max datagram size, in bytes of UDP payload — the
+`crates/network/src/h3/path_mtu.rs:175` **fn** `state` — The current search phase
+`crates/network/src/h3/path_mtu.rs:181` **fn** `is_complete` — Whether the search has finished (either successfully or in error) and no
+`crates/network/src/h3/path_mtu.rs:203` **fn** `next_probe` — The size of the next PMTU probe to send, or `None` if none is wanted right
+`crates/network/src/h3/path_mtu.rs:241` **fn** `on_probe_sent` — Records that a probe of `size` bytes has been sent. Marks the probe as in
+`crates/network/src/h3/path_mtu.rs:256` **fn** `on_probe_acked` — Records that the outstanding PMTU probe of `size` bytes was acknowledged:
+`crates/network/src/h3/path_mtu.rs:295` **fn** `on_probe_lost` — Records that the outstanding PMTU probe of `size` bytes was lost
+`crates/network/src/h3/path_mtu.rs:332` **fn** `on_black_hole` — Reports a suspected black hole: ordinary datagrams at the current size are
 `crates/network/src/h3/pto.rs:68` **enum** `LossTimer` — The state the single loss-detection timer should be left in after
 `crates/network/src/h3/pto.rs:80` **fn** `deadline` — The instant the timer is armed for, or `None` when [`LossTimer::Disarmed`]
 `crates/network/src/h3/pto.rs:88` **fn** `is_armed` — Whether the timer is armed
@@ -4665,4 +4702,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4594 symbols in 22 crates*
+*Total: 4631 symbols in 22 crates*

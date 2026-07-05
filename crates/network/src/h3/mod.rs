@@ -300,7 +300,22 @@
 //!   set once the peer acknowledges one of our ACKs (RFC 9000 §13.2.4). Pure state
 //!   machine driven by a caller-supplied clock; no IO, no timer arming, no packet
 //!   assembly.
-//! - Slice 29+ (planned) — the rest of the QUIC transport: the UDP send/receive,
+//! - Slice 29 — the QUIC packet protection pipeline ([`packet_crypt`], RFC 9001
+//!   §5.3, §5.4): the single place that ties the header codec [`packet`], the
+//!   packet-number truncation codec [`packet_number`], the AEAD + header
+//!   protection transforms [`packet_protect`], and the [`key_schedule`] key set
+//!   into the two end-to-end operations the connection layer runs on every
+//!   1-RTT-bearing packet. [`packet_crypt::encrypt_packet`] assembles the header,
+//!   places the clear packet number, AEAD-seals the payload with the unprotected
+//!   header as associated data, and applies header protection, returning the
+//!   on-wire packet; [`packet_crypt::decrypt_packet`] is the inverse — it parses
+//!   the header, removes header protection, reconstructs the full 62-bit packet
+//!   number (Appendix A.3), and AEAD-opens the payload, reporting the bytes
+//!   consumed so a coalesced datagram (RFC 9000 §12.2) is walked packet by
+//!   packet. AES suite only, matching [`packet_protect`]. Pure functions over
+//!   byte buffers and a supplied key set; the round-trip and the in-the-clear
+//!   header layout are validated against the RFC 9001 Appendix A.2 client Initial.
+//! - Slice 30+ (planned) — the rest of the QUIC transport: the UDP send/receive,
 //!   actually arming the PTO/ACK-delay timers and assembling probe datagrams, the
 //!   QPACK encoder/decoder stream instruction wiring, and `h3_do_request` dispatch
 //!   alongside the existing H1/H2 paths.
@@ -321,6 +336,7 @@ pub mod key_agreement;
 pub mod key_schedule;
 pub mod loss;
 pub mod packet;
+pub mod packet_crypt;
 pub mod packet_number;
 pub mod packet_protect;
 pub mod path_mtu;
