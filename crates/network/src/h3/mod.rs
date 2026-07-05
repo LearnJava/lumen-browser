@@ -528,7 +528,23 @@
 //!   state machine driven by decoded events; no clock, no IO — the retirement
 //!   deadline lives with [`timer`], key discarding for the handshake levels
 //!   (RFC 9001 §4.9) with the connection driver.
-//! - Slice 45+ (planned) — the rest of the QUIC transport: the UDP send/receive,
+//! - Slice 45 — the HTTP/3 connection SETTINGS layer ([`settings`], RFC 9114
+//!   §7.2.4, RFC 9204 §5, RFC 9220 §3): the typed bridge between the raw
+//!   `(identifier, value)` pairs of the [`frame`] SETTINGS codec and the policy
+//!   layers that consume them — [`qpack_encoder`] reads the peer's advertised
+//!   QPACK dynamic-table capacity and blocked-stream budget, [`h3_request`]
+//!   honours the peer's maximum field-section size. [`settings::H3Settings::
+//!   for_profile`] builds the local SETTINGS Lumen sends on its control stream,
+//!   ordered to match the impersonated browser's fingerprint (mirroring
+//!   [`crate::http::h2_settings`]); [`settings::H3Settings::from_pairs`] parses
+//!   the peer's SETTINGS into typed values, applying the RFC default for each
+//!   absent identifier, re-enforcing the reserved-HTTP/2-identifier and
+//!   duplicate-identifier rules (§7.2.4.1) so the typed layer is self-contained,
+//!   validating the `SETTINGS_ENABLE_CONNECT_PROTOCOL` value range (RFC 9220
+//!   §3), and ignoring unknown / greased identifiers (§7.2.4.2). Pure, no IO —
+//!   the control-stream framing and the SETTINGS-before-request sequencing live
+//!   with [`h3_stream`].
+//! - Slice 46+ (planned) — the rest of the QUIC transport: the UDP send/receive,
 //!   wiring [`timer::ConnectionTimers`] to a real OS timer, and `h3_do_request`
 //!   dispatch alongside the existing H1/H2 paths.
 //!
@@ -568,6 +584,7 @@ pub mod qpack_stream;
 pub mod quic_frame;
 pub mod recovery;
 pub mod retry;
+pub mod settings;
 pub mod stream;
 pub mod tls_cert_verify;
 pub mod tls_finished;
