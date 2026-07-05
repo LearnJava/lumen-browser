@@ -627,8 +627,29 @@
 //!   a queued frame cannot fit even an empty packet. Pure state; packet-number
 //!   assignment, encryption ([`packet_crypt`]), and datagram coalescing
 //!   ([`datagram_build`]) remain later slices.
-//! - Slice 51+ (planned) — the rest of the QUIC transport: the send engine over
-//!   [`event_loop`] driving [`send`] + [`packet_crypt`] + [`datagram_build`], and
+//! - Slice 51 — the QUIC send engine ([`send_engine`], RFC 9000 §12.2, §14.1,
+//!   §17.1; RFC 9002 §2): the pure composition slice that turns the frames a
+//!   [`send::SendScheduler`] queued into on-wire, encrypted, coalesced UDP
+//!   datagrams and the [`loss::SentPacket`] records that feed loss recovery — the
+//!   send-path counterpart of the receive-path [`connection`]. A
+//!   [`send_engine::SpaceSender`] owns one packet-number space's monotonic
+//!   packet-number counter (RFC 9000 §12.3) and, given a scheduler, a
+//!   [`key_schedule::PacketProtectionKeys`] set, and a
+//!   [`packet_crypt::ProtectedHeader`], produces one encrypted packet at a time
+//!   ([`send_engine::SpaceSender::build_packet`], each carrying its
+//!   [`loss::SentPacket`]), drains a whole space into a
+//!   [`datagram_build::DatagramBuilder`] coalescing as many packets as the budget
+//!   allows ([`send_engine::SpaceSender::fill_datagram`] — long-header packets
+//!   coalesce, a short-header 1-RTT packet seals the datagram, RFC 9000 §12.2), or
+//!   builds the client's first-flight Initial padded to the
+//!   [`datagram::MIN_INITIAL_DATAGRAM_LEN`] floor
+//!   ([`send_engine::SpaceSender::build_padded_initial`], RFC 9000 §14.1). Each
+//!   payload is budgeted against [`send_engine::max_packet_overhead`] so coalescing
+//!   never overflows. Pure state, clock-driven by a caller-supplied `now`; the
+//!   socket write over [`event_loop`] and the `h3_do_request` dispatch are the next
+//!   slice.
+//! - Slice 52+ (planned) — the rest of the QUIC transport: the connection driver
+//!   that flushes [`send_engine`] datagrams over [`event_loop`] and the
 //!   `h3_do_request` dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
@@ -670,6 +691,7 @@ pub mod quic_frame;
 pub mod recovery;
 pub mod retry;
 pub mod send;
+pub mod send_engine;
 pub mod settings;
 pub mod stream;
 pub mod stream_manager;
