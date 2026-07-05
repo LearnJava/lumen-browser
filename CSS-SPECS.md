@@ -265,7 +265,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `:is(S)`, `:where(S)`, `:has(S)` | 🟡 | Selectors L4; matching ⬜ |
 | `::before`, `::after` | ✅ | block-level ✅; inline ✅ (display:inline/inline-block in IFC) |
 | `::first-line`, `::first-letter` | ⬜ | Pseudo-Elements L4 |
-| `::marker`, `::placeholder`, `::selection` | ⬜ | Pseudo-Elements L4 |
+| `::marker`, `::selection` | ✅ | Pseudo-Elements L4 |
+| `::placeholder` | ✅ | Pseudo-Elements L4 §4.10 (p4-placeholder-pseudo) |
 | `:nth-child(An+B of S)` | ⬜ | Selectors L5 |
 
 ### [T0] Flexbox
@@ -446,7 +447,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `::before` / `::after` | ✅ | block-level generation ✅; inline ✅ |
 | `::first-line` / `::first-letter` | ⬜ | line split required |
 | `::marker` | ⬜ | list marker box |
-| `::placeholder` | ⬜ | input placeholder |
+| `::placeholder` | ✅ | input placeholder (p4-placeholder-pseudo) |
 | `::selection` | ⬜ | text selection highlight |
 
 ### [T2] Backgrounds & Images

@@ -4473,7 +4473,17 @@ fn emit_input_value_text(
 /// (HTML rendering §15.5.5). Left-aligned, vertically centered and clipped to
 /// the content box, mirroring `emit_input_value_text` but with a fixed grey
 /// colour (`#757575`, the UA default) and no password masking.
-fn emit_input_placeholder_text(b: &LayoutBox, placeholder: &str, out: &mut Vec<DisplayCommand>) {
+///
+/// `placeholder_style` is the computed `input::placeholder` override (CSS
+/// Pseudo-Elements L4 §4.10), when an author rule matched. Only `color`,
+/// `opacity` (folded into the drawn color's alpha) and `font-*` are honoured —
+/// the same restricted-subset approach as `::selection`.
+fn emit_input_placeholder_text(
+    b: &LayoutBox,
+    placeholder: &str,
+    placeholder_style: Option<&lumen_layout::style::ComputedStyle>,
+    out: &mut Vec<DisplayCommand>,
+) {
     if placeholder.is_empty() {
         return;
     }
@@ -4487,8 +4497,18 @@ fn emit_input_placeholder_text(b: &LayoutBox, placeholder: &str, out: &mut Vec<D
     let content_y = b.rect.y + bt;
     let content_w = (b.rect.width - bl - br - inset * 2.0).max(1.0);
     let content_h = (b.rect.height - bt - bb).max(1.0);
-    let font_size = s.font_size;
+    let font_size = placeholder_style.map_or(s.font_size, |ps| ps.font_size);
     let text_y = content_y + ((content_h - font_size) / 2.0).max(0.0);
+
+    let default_color = Color { r: 0x75, g: 0x75, b: 0x75, a: 255 };
+    let color = match placeholder_style {
+        Some(ps) => Color { a: (ps.color.a as f32 * ps.opacity).round() as u8, ..ps.color },
+        None => default_color,
+    };
+    let (font_family, font_weight, font_style) = match placeholder_style {
+        Some(ps) => (ps.font_family.clone(), ps.font_weight, ps.font_style),
+        None => (s.font_family.clone(), s.font_weight, s.font_style),
+    };
 
     out.push(DisplayCommand::PushClipRect {
         rect: Rect::new(content_x, content_y, content_w, content_h),
@@ -4497,10 +4517,10 @@ fn emit_input_placeholder_text(b: &LayoutBox, placeholder: &str, out: &mut Vec<D
         rect: Rect::new(content_x, text_y, content_w, font_size),
         text: placeholder.to_owned(),
         font_size,
-        color: Color { r: 0x75, g: 0x75, b: 0x75, a: 255 },
-        font_family: s.font_family.clone(),
-        font_weight: s.font_weight,
-        font_style: s.font_style,
+        color,
+        font_family,
+        font_weight,
+        font_style,
         font_variation_axes: vec![],
         font_features: Vec::new(),
         font_palette: None,
@@ -4569,7 +4589,7 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
     // green/yellow/red coloring from HTML §4.10.14, not the accent color.
     let accent = b.style.accent_color.unwrap_or(ACCENT_DEFAULT);
     match kind {
-        FormControlKind::Input { input_type, checked, value_text, placeholder } => {
+        FormControlKind::Input { input_type, checked, value_text, placeholder, placeholder_style } => {
             // HTML §4.10.5.1.15 — a color input renders its value as a swatch
             // filling the content area, independent of any author `background`
             // (the native color widget ignores author bg). Default value is
@@ -4615,7 +4635,7 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
                         // `placeholder` as a grey hint (never masked, even for
                         // password). Drawn left-aligned, vertically centered and
                         // clipped to the content box, like the value text.
-                        emit_input_placeholder_text(b, placeholder, out);
+                        emit_input_placeholder_text(b, placeholder, placeholder_style.as_deref(), out);
                     } else {
                         emit_input_value_text(b, value_text, input_type, false, out);
                     }
@@ -7745,6 +7765,45 @@ mod tests {
             (color.r, color.g, color.b),
             (0x75, 0x75, 0x75),
             "placeholder should be grey, got {color:?}"
+        );
+    }
+
+    /// CSS Pseudo-Elements L4 §4.10 — `input::placeholder { color: ... }`
+    /// overrides the UA default grey hint.
+    #[test]
+    fn placeholder_pseudo_element_overrides_color() {
+        let dl = build(
+            r#"<input type=text value="" placeholder="text input">"#,
+            "input::placeholder { color: #ff0000; }",
+        );
+        let hint = dl.iter().find_map(|c| match c {
+            DisplayCommand::DrawText { text, color, .. } if text == "text input" => Some(color),
+            _ => None,
+        });
+        let color = hint.expect("placeholder text should be painted");
+        assert_eq!(
+            (color.r, color.g, color.b),
+            (0xff, 0, 0),
+            "::placeholder color override should apply, got {color:?}"
+        );
+    }
+
+    /// No `::placeholder` rule → the UA default grey hint is unaffected.
+    #[test]
+    fn placeholder_without_rule_keeps_ua_default_grey() {
+        let dl = build(
+            r#"<input type=text value="" placeholder="text input">"#,
+            "input { color: blue; }",
+        );
+        let hint = dl.iter().find_map(|c| match c {
+            DisplayCommand::DrawText { text, color, .. } if text == "text input" => Some(color),
+            _ => None,
+        });
+        let color = hint.expect("placeholder text should be painted");
+        assert_eq!(
+            (color.r, color.g, color.b),
+            (0x75, 0x75, 0x75),
+            "no ::placeholder rule → UA default grey, got {color:?}"
         );
     }
 
