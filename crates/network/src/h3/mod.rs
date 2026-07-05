@@ -381,7 +381,20 @@
 //!   pads to a target size for the 1200-byte client Initial datagram (RFC 9000
 //!   §14.1) or a [`path_mtu`] probe. Pure state over byte buffers; packet-number
 //!   assignment, header framing, and encryption remain the caller's job.
-//! - Slice 35+ (planned) — the rest of the QUIC transport: the UDP send/receive,
+//! - Slice 35 — the QUIC connection lifecycle ([`lifecycle`], RFC 9000 §10): the
+//!   pure state machine of the active/closing/draining/closed transitions.
+//!   [`lifecycle::ConnectionLifecycle`] tracks the idle-timeout deadline
+//!   (§10.1 — negotiating the effective `max_idle_timeout` from both endpoints'
+//!   advertised values, restarting the timer on a received packet or the first
+//!   ack-eliciting packet sent since, and honouring the `3·PTO` floor), the
+//!   immediate close that sends a `CONNECTION_CLOSE` and enters the closing state
+//!   (§10.2.1, with exponentially rate-limited resends in answer to stray
+//!   packets), the draining state entered on receiving a peer `CONNECTION_CLOSE`
+//!   (§10.2.2, which sends nothing further), and the `3·PTO` closing/draining
+//!   period after which the state is discarded. Pure state machine driven by a
+//!   caller-supplied clock and Probe Timeout ([`recovery::RttEstimator::pto`]);
+//!   no timer IO, no key retention.
+//! - Slice 36+ (planned) — the rest of the QUIC transport: the UDP send/receive,
 //!   actually arming the PTO/ACK-delay timers and assembling probe datagrams, the
 //!   QPACK encoder/decoder stream instruction wiring, and `h3_do_request` dispatch
 //!   alongside the existing H1/H2 paths.
@@ -402,6 +415,7 @@ pub mod frame;
 pub mod h3_stream;
 pub mod key_agreement;
 pub mod key_schedule;
+pub mod lifecycle;
 pub mod loss;
 pub mod packet;
 pub mod packet_crypt;
