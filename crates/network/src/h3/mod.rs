@@ -648,9 +648,26 @@
 //!   never overflows. Pure state, clock-driven by a caller-supplied `now`; the
 //!   socket write over [`event_loop`] and the `h3_do_request` dispatch are the next
 //!   slice.
-//! - Slice 52+ (planned) — the rest of the QUIC transport: the connection driver
-//!   that flushes [`send_engine`] datagrams over [`event_loop`] and the
-//!   `h3_do_request` dispatch alongside the existing H1/H2 paths.
+//! - Slice 52 — the QUIC send-path datagram flush ([`send_path`], RFC 9000 §12.2,
+//!   §12.4, §14.1; RFC 9002 §2, §6): the send-path counterpart of the receive-path
+//!   [`connection`]. Where [`connection::QuicConnection::process_packet`] decrypts
+//!   one inbound datagram and routes its frames inward, [`send_path::flush`] drives
+//!   the per-space [`send_engine`] outward — folding each space's pending frames
+//!   through [`send_engine::SpaceSender::fill_datagram`] into one
+//!   [`datagram_build::DatagramBuilder`] (long-header Initial / Handshake packets
+//!   coalesce, the first short-header 1-RTT packet seals the datagram, RFC 9000
+//!   §12.2), writing the coalesced bytes over the
+//!   [`udp::DatagramTransport`], and recording each [`loss::SentPacket`] into its
+//!   space's [`loss::SentPacketRegistry`] and [`recovery::CongestionController`]
+//!   `bytes_in_flight`. [`send_path::send_padded_initial`] is the client's
+//!   first-flight path, padding the lone Initial to the
+//!   [`datagram::MIN_INITIAL_DATAGRAM_LEN`] floor (RFC 9000 §14.1). Pure apart from
+//!   the mockable transport write; the flush is clock-driven by a caller-supplied
+//!   `now`.
+//! - Slice 53+ (planned) — the rest of the QUIC transport: the connection driver
+//!   that decides *when* to flush by composing [`send_path`] with the timer loop
+//!   over [`event_loop`] and the inbound decrypt path, and the `h3_do_request`
+//!   dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -692,6 +709,7 @@ pub mod recovery;
 pub mod retry;
 pub mod send;
 pub mod send_engine;
+pub mod send_path;
 pub mod settings;
 pub mod stream;
 pub mod stream_manager;
