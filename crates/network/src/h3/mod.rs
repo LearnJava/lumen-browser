@@ -407,7 +407,24 @@
 //!   Pure state machine driven by a caller-supplied clock, PTO, and challenge
 //!   bytes; no randomness, no timer IO, no datagram assembly — the full
 //!   connection-migration orchestration (§9) is deferred.
-//! - Slice 37+ (planned) — the rest of the QUIC transport: the UDP send/receive,
+//! - Slice 37 — QUIC connection migration ([`path_migration`], RFC 9000 §9): the
+//!   orchestration that lets a connection survive a path change, tying slice 36's
+//!   [`path_validation`] primitives to [`conn_id`] and [`recovery`].
+//!   [`path_migration::is_probing_frame`] / [`path_migration::is_probing_packet`]
+//!   classify probing vs non-probing packets (§9.1). [`path_migration::ConnectionMigration`]
+//!   gates migration on a confirmed handshake (§9), starts validating a new path
+//!   with a `PATH_CHALLENGE` while recording the fresh peer connection-ID sequence
+//!   to stamp on it (§9.2, §9.5), enforces the new path's anti-amplification limit
+//!   while the peer address there is unvalidated (§9.3), and on a matching
+//!   `PATH_RESPONSE` reports the [`path_migration::MigrationOutcome`] — which peer
+//!   connection ID is now active (§9.5) and whether the caller must reset the
+//!   congestion controller and RTT estimator, unless the change was port-only
+//!   (§9.4). A lapsed validation reverts to the old path. Pure state machine
+//!   driven by a caller-supplied clock, PTO, and challenge bytes; the
+//!   connection-ID retirement ([`conn_id::RemoteConnIds::switch_to`]) and
+//!   congestion reset are the caller's job, and simultaneous multi-path use is out
+//!   of scope.
+//! - Slice 38+ (planned) — the rest of the QUIC transport: the UDP send/receive,
 //!   actually arming the PTO/ACK-delay timers and assembling probe datagrams, the
 //!   QPACK encoder/decoder stream instruction wiring, and `h3_do_request` dispatch
 //!   alongside the existing H1/H2 paths.
@@ -435,6 +452,7 @@ pub mod packet_crypt;
 pub mod packet_number;
 pub mod packet_payload;
 pub mod packet_protect;
+pub mod path_migration;
 pub mod path_mtu;
 pub mod path_validation;
 pub mod pto;
