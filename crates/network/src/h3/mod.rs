@@ -557,10 +557,26 @@
 //!   recognises the portable "deadline elapsed, fire timers instead" signal.
 //!   Reassembly, retransmission, and ordering stay with the connection layer;
 //!   the transport only moves opaque datagrams.
-//! - Slice 47+ (planned) — the rest of the QUIC transport: wiring
-//!   [`timer::ConnectionTimers`] to a real OS timer over [`udp`], the connection
-//!   engine that composes the state machines, and `h3_do_request` dispatch
-//!   alongside the existing H1/H2 paths.
+//! - Slice 47 — the QUIC event-loop wait ([`event_loop`], RFC 9000 §10.1,
+//!   §13.2.1; RFC 9002 §6.2): the glue that ties the [`timer::ConnectionTimers`]
+//!   scheduler to the [`udp::DatagramTransport`] read timeout — the single place
+//!   that turns "the next QUIC deadline" into "block the socket for exactly this
+//!   long, then say why I woke". [`event_loop::DatagramEventLoop`] owns the
+//!   transport plus a reused maximum-size receive buffer; each
+//!   [`event_loop::DatagramEventLoop::wait`] arms the read timeout from
+//!   [`event_loop::next_read_timeout`] ([`timer::ConnectionTimers::next`] +
+//!   [`udp::recv_timeout`]) and receives, reporting a [`event_loop::Wakeup`] —
+//!   [`event_loop::Wakeup::Datagram`] with the bytes read, or
+//!   [`event_loop::Wakeup::TimerExpired`] on the portable read-timeout signal
+//!   ([`udp::recv_timed_out`]) so the caller drives whatever
+//!   [`timer::ConnectionTimers::fired`] reports. The block duration comes from a
+//!   caller-supplied `now` and the final `fired` call stays with the caller, so
+//!   the module is clock-free and driven deterministically by a
+//!   [`udp::MockDatagramTransport`] in tests. This is the wait *iteration* of the
+//!   loop, not the full loop.
+//! - Slice 48+ (planned) — the rest of the QUIC transport: the connection engine
+//!   that composes the state machines over [`event_loop`], and `h3_do_request`
+//!   dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -576,6 +592,7 @@ pub mod crypto_state;
 pub mod crypto_stream;
 pub mod datagram;
 pub mod datagram_build;
+pub mod event_loop;
 pub mod frame;
 pub mod h3_request;
 pub mod h3_stream;
