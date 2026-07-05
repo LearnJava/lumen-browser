@@ -2301,7 +2301,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (647 symbols)
+## lumen-network  (726 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -2510,6 +2510,23 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/conn_flow.rs:417` **fn** `record_open` — Records that the peer opened a stream whose cumulative count is `count`
 `crates/network/src/h3/conn_flow.rs:427` **fn** `record_closed` — Records that `delta` more streams of this direction have finished
 `crates/network/src/h3/conn_flow.rs:435` **fn** `window_update` — Re-advertises the limit as `closed + concurrency` and returns the new
+`crates/network/src/h3/conn_id.rs:59` **enum** `ConnIdError` — A connection-ID protocol violation. Each variant maps to a single QUIC
+`crates/network/src/h3/conn_id.rs:117` **struct** `ConnIdEntry` — One issued connection ID together with the 16-byte stateless reset token
+`crates/network/src/h3/conn_id.rs:144` **struct** `RemoteConnIds` — The set of connection IDs the peer has issued for us to use as the
+`crates/network/src/h3/conn_id.rs:169` **fn** `new` — Seed the set with the peer's handshake connection ID (sequence 0, no
+`crates/network/src/h3/conn_id.rs:203` **fn** `record_new_connection_id` — Fold a NEW_CONNECTION_ID frame (RFC 9000 §19.15) into the set
+`crates/network/src/h3/conn_id.rs:279` **fn** `current` — The connection ID we currently stamp on outgoing packets, or `None` if no
+`crates/network/src/h3/conn_id.rs:291` **fn** `active_count` — Number of connection IDs currently active (not yet retired)
+`crates/network/src/h3/conn_id.rs:298` **fn** `get` — Look up an active entry by sequence number, e.g. to recover the stateless
+`crates/network/src/h3/conn_id.rs:306` **fn** `is_stateless_reset` — Whether `token` matches the reset token of any active ID — the test an
+`crates/network/src/h3/conn_id.rs:316` **fn** `switch_to` — Voluntarily migrate to a different active ID (e.g. after a path change),
+`crates/network/src/h3/conn_id.rs:331` **struct** `LocalConnId` — One connection ID we have issued to the peer, plus its reset token
+`crates/network/src/h3/conn_id.rs:345` **struct** `LocalConnIds` — The set of connection IDs *we* have issued for the peer to address us
+`crates/network/src/h3/conn_id.rs:361` **fn** `new` — Seed with our handshake connection ID (sequence 0, no reset token). The
+`crates/network/src/h3/conn_id.rs:388` **fn** `issue` — Issue a fresh connection ID to the peer, returning the [`LocalConnId`] the
+`crates/network/src/h3/conn_id.rs:420` **fn** `retire` — Drop one of our IDs because the peer sent RETIRE_CONNECTION_ID for it
+`crates/network/src/h3/conn_id.rs:432` **fn** `accepts` — Whether a peer-supplied Destination Connection ID matches one of the IDs
+`crates/network/src/h3/conn_id.rs:438` **fn** `active_count` — Number of IDs we currently have issued and active
 `crates/network/src/h3/crypto_stream.rs:84` **enum** `CryptoStreamError` — A CRYPTO-stream protocol violation. Maps to a single QUIC connection-error
 `crates/network/src/h3/crypto_stream.rs:122` **struct** `CryptoRecvStream` — The receiving half of a QUIC CRYPTO stream: an out-of-order reassembly
 `crates/network/src/h3/crypto_stream.rs:147` **fn** `new` — Creates a receive stream buffering up to [`DEFAULT_CRYPTO_BUFFER_LIMIT`]
@@ -2564,6 +2581,28 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/key_schedule.rs:258` **fn** `client_initial_secret` — The client's Initial traffic secret (RFC 9001 §5.2):
 `crates/network/src/h3/key_schedule.rs:265` **fn** `server_initial_secret` — The server's Initial traffic secret (RFC 9001 §5.2):
 `crates/network/src/h3/key_schedule.rs:274` **fn** `next_generation_secret` — The next-generation traffic secret for a key update (RFC 9001 §6.1):
+`crates/network/src/h3/lifecycle.rs:50` **enum** `ConnState` — The lifecycle state of a QUIC connection (RFC 9000 §10)
+`crates/network/src/h3/lifecycle.rs:73` **fn** `effective_idle_timeout` — Compute the effective idle timeout from the two advertised `max_idle_timeout`
+`crates/network/src/h3/lifecycle.rs:93` **struct** `ConnectionLifecycle` — The QUIC connection lifecycle state machine (RFC 9000 §10)
+`crates/network/src/h3/lifecycle.rs:145` **fn** `new` — Create an active lifecycle with idle timeout disabled, starting the idle
+`crates/network/src/h3/lifecycle.rs:161` **fn** `set_idle_timeout` — Set the negotiated effective idle timeout (RFC 9000 §10.1), typically the
+`crates/network/src/h3/lifecycle.rs:167` **fn** `state` — The current lifecycle state
+`crates/network/src/h3/lifecycle.rs:173` **fn** `is_active` — `true` while the connection is active
+`crates/network/src/h3/lifecycle.rs:180` **fn** `is_closing` — `true` while this endpoint is in the closing state and may resend its
+`crates/network/src/h3/lifecycle.rs:186` **fn** `is_draining` — `true` while this endpoint is in the draining state and MUST NOT send
+`crates/network/src/h3/lifecycle.rs:192` **fn** `is_closed` — `true` once the connection state has been discarded
+`crates/network/src/h3/lifecycle.rs:200` **fn** `may_send` — Whether this endpoint may send an ordinary (non-close) packet: only in the
+`crates/network/src/h3/lifecycle.rs:207` **fn** `on_packet_received` — Restart the idle timer because a packet from the peer was received and
+`crates/network/src/h3/lifecycle.rs:217` **fn** `on_ack_eliciting_sent` — Restart the idle timer because an ack-eliciting packet was sent, but only
+`crates/network/src/h3/lifecycle.rs:229` **fn** `idle_deadline` — The instant the idle timer fires, given the current Probe Timeout `pto`
+`crates/network/src/h3/lifecycle.rs:241` **fn** `is_idle_expired` — Whether the idle timer has fired at `now` (RFC 9000 §10.1). The caller
+`crates/network/src/h3/lifecycle.rs:252` **fn** `close` — Begin an immediate close (RFC 9000 §10.2): record the `CONNECTION_CLOSE`
+`crates/network/src/h3/lifecycle.rs:280` **fn** `on_connection_close_received` — Handle a received `CONNECTION_CLOSE` frame (RFC 9000 §10.2.2)
+`crates/network/src/h3/lifecycle.rs:297` **fn** `on_packet_while_closing` — Handle an incoming packet while in the closing state (RFC 9000 §10.2.1)
+`crates/network/src/h3/lifecycle.rs:312` **fn** `close_frame` — The `CONNECTION_CLOSE` frame retained for the closing state, if any
+`crates/network/src/h3/lifecycle.rs:319` **fn** `close_deadline` — The instant the closing or draining period ends, if one is in progress
+`crates/network/src/h3/lifecycle.rs:326` **fn** `is_close_expired` — Whether the closing or draining period has elapsed at `now`. Once this is
+`crates/network/src/h3/lifecycle.rs:333` **fn** `discard` — Discard the connection state once the closing or draining period has
 `crates/network/src/h3/loss.rs:89` **enum** `PacketNumberSpace` — One of QUIC's three packet-number spaces (RFC 9000 §12.3). Loss detection is
 `crates/network/src/h3/loss.rs:104` **fn** `uses_ack_delay` — Whether acknowledgements in this space may carry a non-zero `ack_delay`
 `crates/network/src/h3/loss.rs:112` **struct** `SentPacket` — A packet recorded in a [`SentPacketRegistry`] (RFC 9002 §A.1
@@ -2595,6 +2634,17 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/packet_number.rs:138` **fn** `encode_packet_number` — Append `full_pn` truncated to its minimal on-wire width (RFC 9000 §17.1,
 `crates/network/src/h3/packet_number.rs:163` **fn** `decode_packet_number` — Decode a truncated packet number back to its full 62-bit value
 `crates/network/src/h3/packet_number.rs:193` **fn** `read_truncated_packet_number` — Read a big-endian truncated packet number from its on-wire bytes
+`crates/network/src/h3/packet_payload.rs:47` **enum** `PacketType` — One of the four QUIC packet types that carry frames (RFC 9000 §12.4)
+`crates/network/src/h3/packet_payload.rs:131` **enum** `PayloadError` — Something that prevented a frame from being placed in a [`PayloadBuilder`]
+`crates/network/src/h3/packet_payload.rs:186` **struct** `PayloadBuilder` — Accumulates the frames of one QUIC packet's payload up to a byte budget
+`crates/network/src/h3/packet_payload.rs:203` **fn** `new` — Start an empty payload for `packet_type` that may grow to `limit` bytes
+`crates/network/src/h3/packet_payload.rs:224` **fn** `try_push` — Try to append `frame` to the payload
+`crates/network/src/h3/packet_payload.rs:253` **fn** `pad_to` — Pad the payload up to `target_len` bytes with PADDING (RFC 9000 §19.1),
+`crates/network/src/h3/packet_payload.rs:272` **fn** `len` — The number of payload bytes accumulated so far
+`crates/network/src/h3/packet_payload.rs:278` **fn** `is_empty` — Whether no frames have been added yet
+`crates/network/src/h3/packet_payload.rs:284` **fn** `remaining` — The number of payload bytes still available before the `limit`
+`crates/network/src/h3/packet_payload.rs:306` **fn** `as_bytes` — Borrow the accumulated payload bytes
+`crates/network/src/h3/packet_payload.rs:312` **fn** `into_bytes` — Consume the builder and return the accumulated payload bytes
 `crates/network/src/h3/packet_protect.rs:66` **enum** `ProtectionError` — Errors from the packet-protection transforms
 `crates/network/src/h3/packet_protect.rs:132` **fn** `aes_128_gcm_seal` — Seal a packet payload with AES-128-GCM (RFC 9001 §5.3). Returns
 `crates/network/src/h3/packet_protect.rs:154` **fn** `aes_128_gcm_open` — Open a sealed packet payload with AES-128-GCM (RFC 9001 §5.3), verifying the
@@ -2613,6 +2663,27 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/path_mtu.rs:256` **fn** `on_probe_acked` — Records that the outstanding PMTU probe of `size` bytes was acknowledged:
 `crates/network/src/h3/path_mtu.rs:295` **fn** `on_probe_lost` — Records that the outstanding PMTU probe of `size` bytes was lost
 `crates/network/src/h3/path_mtu.rs:332` **fn** `on_black_hole` — Reports a suspected black hole: ordinary datagrams at the current size are
+`crates/network/src/h3/path_validation.rs:74` **struct** `AntiAmplificationLimit` — The anti-amplification limit for one peer address (RFC 9000 §8.1)
+`crates/network/src/h3/path_validation.rs:92` **fn** `new` — Create a fresh limit with no bytes counted and the address unvalidated
+`crates/network/src/h3/path_validation.rs:103` **fn** `on_received` — Record `bytes` received from the peer address, raising the send allowance
+`crates/network/src/h3/path_validation.rs:109` **fn** `on_sent` — Record `bytes` sent to the peer address, lowering the send allowance
+`crates/network/src/h3/path_validation.rs:117` **fn** `mark_validated` — Mark the peer's address as validated, lifting the limit (RFC 9000 §8.1):
+`crates/network/src/h3/path_validation.rs:123` **fn** `is_validated` — Whether the peer's address has been validated
+`crates/network/src/h3/path_validation.rs:132` **fn** `send_allowance` — How many more bytes may be sent to the peer address right now
+`crates/network/src/h3/path_validation.rs:146` **fn** `can_send` — Whether a datagram of `bytes` bytes may be sent without exceeding the
+`crates/network/src/h3/path_validation.rs:158` **fn** `is_blocked` — Whether the endpoint is currently blocked from sending by the limit
+`crates/network/src/h3/path_validation.rs:165` **enum** `PathState` — The state of a path validation (RFC 9000 §8.2)
+`crates/network/src/h3/path_validation.rs:185` **struct** `PathValidator` — The sender-side path validation state machine (RFC 9000 §8.2)
+`crates/network/src/h3/path_validation.rs:206` **fn** `new` — Create a validator with no challenge yet sent, in the
+`crates/network/src/h3/path_validation.rs:216` **fn** `state` — The current validation state
+`crates/network/src/h3/path_validation.rs:222` **fn** `is_validating` — Whether validation is still in progress
+`crates/network/src/h3/path_validation.rs:228` **fn** `is_validated` — Whether the path has been validated (RFC 9000 §8.2.3)
+`crates/network/src/h3/path_validation.rs:234` **fn** `is_failed` — Whether validation has been abandoned (RFC 9000 §8.2.4)
+`crates/network/src/h3/path_validation.rs:241` **fn** `deadline` — The instant path validation is abandoned, or `None` if no challenge is
+`crates/network/src/h3/path_validation.rs:254` **fn** `send_challenge` — Record and return a `PATH_CHALLENGE` carrying `data`, (re)arming the
+`crates/network/src/h3/path_validation.rs:277` **fn** `on_path_response` — Process the data from a received `PATH_RESPONSE` (RFC 9000 §8.2.3)
+`crates/network/src/h3/path_validation.rs:296` **fn** `on_timeout` — Abandon validation if the deadline has been reached (RFC 9000 §8.2.4)
+`crates/network/src/h3/path_validation.rs:317` **fn** `respond_to_challenge` — Build the `PATH_RESPONSE` that answers a received `PATH_CHALLENGE`
 `crates/network/src/h3/pto.rs:68` **enum** `LossTimer` — The state the single loss-detection timer should be left in after
 `crates/network/src/h3/pto.rs:80` **fn** `deadline` — The instant the timer is armed for, or `None` when [`LossTimer::Disarmed`]
 `crates/network/src/h3/pto.rs:88` **fn** `is_armed` — Whether the timer is armed
@@ -2701,6 +2772,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/recovery.rs:359` **fn** `on_packets_lost` — Processes a batch of lost packets (RFC 9002 Appendix B.7
 `crates/network/src/h3/recovery.rs:380` **fn** `on_persistent_congestion` — Collapses the window to the minimum on established persistent congestion
 `crates/network/src/h3/recovery.rs:393` **fn** `persistent_congestion_duration` — The persistent-congestion period (RFC 9002 §7.6.1):
+`crates/network/src/h3/retry.rs:48` **enum** `RetryError` — Failure processing a Retry packet
+`crates/network/src/h3/retry.rs:119` **fn** `retry_integrity_tag` — Compute the Retry Integrity Tag for `packet` given the `odcid` the client used
+`crates/network/src/h3/retry.rs:144` **fn** `verify_retry_integrity` — Verify a received Retry packet's Integrity Tag against the `odcid` the client
+`crates/network/src/h3/retry.rs:174` **struct** `RetryOutcome` — The result of accepting a valid Retry (RFC 9000 §17.2.5): the values the
+`crates/network/src/h3/retry.rs:191` **struct** `RetryHandler` — Client-side Retry state machine (RFC 9000 §17.2.5)
+`crates/network/src/h3/retry.rs:199` **fn** `new` — A fresh handler that has not yet accepted a Retry
+`crates/network/src/h3/retry.rs:205` **fn** `has_accepted` — Whether a Retry has already been accepted on this connection
+`crates/network/src/h3/retry.rs:219` **fn** `accept` — Process a received Retry against the `odcid` the client used in its first
 `crates/network/src/h3/stream.rs:71` **enum** `StreamError` — A stream-layer protocol violation. Each variant maps to a single QUIC
 `crates/network/src/h3/stream.rs:144` **enum** `RecvState` — The state of the receiving part of a stream (RFC 9000 §3.2)
 `crates/network/src/h3/stream.rs:163` **struct** `RecvStream` — The receiving half of a QUIC stream: reassembly buffer, receive flow-control
@@ -4729,4 +4808,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4658 symbols in 22 crates*
+*Total: 4737 symbols in 22 crates*

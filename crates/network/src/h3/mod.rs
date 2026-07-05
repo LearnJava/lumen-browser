@@ -394,7 +394,20 @@
 //!   period after which the state is discarded. Pure state machine driven by a
 //!   caller-supplied clock and Probe Timeout ([`recovery::RttEstimator::pto`]);
 //!   no timer IO, no key retention.
-//! - Slice 36+ (planned) — the rest of the QUIC transport: the UDP send/receive,
+//! - Slice 36 — QUIC path validation + anti-amplification limit
+//!   ([`path_validation`], RFC 9000 §8.1, §8.2): the two mechanisms that guard an
+//!   unvalidated peer address. [`path_validation::AntiAmplificationLimit`] caps the
+//!   bytes an endpoint may send to at most three times the bytes received from that
+//!   address (§8.1), lifting the cap once the address is validated;
+//!   [`path_validation::PathValidator`] is the sender-side state machine that emits
+//!   a `PATH_CHALLENGE` of eight caller-supplied unpredictable bytes, validates the
+//!   path on a matching `PATH_RESPONSE` (§8.2.3, any outstanding challenge on any
+//!   path), and abandons validation after `3·PTO` (§8.2.4);
+//!   [`path_validation::respond_to_challenge`] is the receiver-side echo (§8.2.2).
+//!   Pure state machine driven by a caller-supplied clock, PTO, and challenge
+//!   bytes; no randomness, no timer IO, no datagram assembly — the full
+//!   connection-migration orchestration (§9) is deferred.
+//! - Slice 37+ (planned) — the rest of the QUIC transport: the UDP send/receive,
 //!   actually arming the PTO/ACK-delay timers and assembling probe datagrams, the
 //!   QPACK encoder/decoder stream instruction wiring, and `h3_do_request` dispatch
 //!   alongside the existing H1/H2 paths.
@@ -423,6 +436,7 @@ pub mod packet_number;
 pub mod packet_payload;
 pub mod packet_protect;
 pub mod path_mtu;
+pub mod path_validation;
 pub mod pto;
 pub mod qpack;
 pub mod qpack_stream;
