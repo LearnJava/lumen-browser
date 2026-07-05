@@ -482,9 +482,23 @@
 //!   the Known Received Count on Section Acknowledgment / Insert Count Increment,
 //!   dropping references on Stream Cancellation (§2.1.4, §4.4). Pure state machine
 //!   over the two codecs; no IO.
-//! - Slice 42+ (planned) — the rest of the QUIC transport: the UDP send/receive,
-//!   actually arming the PTO/ACK-delay timers and assembling probe datagrams, and
-//!   `h3_do_request` dispatch alongside the existing H1/H2 paths.
+//! - Slice 42 — QUIC outgoing datagram assembly ([`datagram_build`], RFC 9000
+//!   §12.2, §14.1): the send-side mirror of [`datagram`].
+//!   [`datagram_build::DatagramBuilder`] coalesces the encrypted packet byte
+//!   strings from [`packet_crypt::encrypt_packet`] into one outgoing UDP
+//!   datagram, enforcing the same §12.2 coalescing rule on the send path (only a
+//!   length-delimited long-header packet may be followed by another; a
+//!   short-header packet seals the datagram) and bounding the result by the
+//!   confirmed path MTU ([`path_mtu`]). It refuses an overflowing packet without
+//!   mutation (so the caller flushes and retries in a fresh datagram) and reports
+//!   [`datagram_build::DatagramBuilder::initial_padding_shortfall`] so the caller
+//!   pads a client Initial to [`datagram::MIN_INITIAL_DATAGRAM_LEN`] (§14.1) with
+//!   PADDING frames inside the payload before encryption. This is the "assembling
+//!   probe datagrams" step of the transport plan — a PTO probe is a datagram built
+//!   here. Pure, no IO.
+//! - Slice 43+ (planned) — the rest of the QUIC transport: the UDP send/receive,
+//!   actually arming the PTO/ACK-delay timers, and `h3_do_request` dispatch
+//!   alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -498,6 +512,7 @@ pub mod conn_flow;
 pub mod conn_id;
 pub mod crypto_stream;
 pub mod datagram;
+pub mod datagram_build;
 pub mod frame;
 pub mod h3_request;
 pub mod h3_stream;
