@@ -226,11 +226,22 @@
 //!   generated RSA keys and rejecting a cross-digest signature. Out of scope: the
 //!   P-384/P-521 ECDSA variants (still
 //!   [`tls_cert_verify::CertVerifyError::UnsupportedScheme`]).
-//! - Slice 23+ (planned) — the rest of the QUIC transport: UDP datagrams,
-//!   actually arming the PTO timer and assembling probe datagrams, the QPACK
-//!   encoder/decoder stream instruction wiring, the remaining `CertificateVerify`
-//!   schemes (P-384/P-521 ECDSA), and `h3_do_request` dispatch alongside the
-//!   existing H1/H2 paths.
+//! - Slice 24 — QUIC datagram coalescing ([`datagram`], RFC 9000 §12.2, §14.1):
+//!   the pure layer over [`packet`] that splits one received UDP datagram into
+//!   its ordered sequence of coalesced packets ([`datagram::parse_datagram`]) and
+//!   assembles a sequence back into one datagram ([`datagram::encode_datagram`]).
+//!   Only the length-delimited long-header forms (Initial / 0-RTT / Handshake)
+//!   can be followed by another packet, so a short-header / Retry / Version
+//!   Negotiation packet may appear only last — enforced on encode
+//!   ([`datagram::DatagramError::UnterminatedCoalescing`]) and automatic on parse
+//!   (those forms consume the datagram tail). [`datagram::initial_padding_shortfall`]
+//!   reports how far below the [`datagram::MIN_INITIAL_DATAGRAM_LEN`] (RFC 9000
+//!   §14.1) a client Initial datagram is, for the frame layer to pad inside the
+//!   packet before encryption. Pure functions, no IO.
+//! - Slice 25+ (planned) — the rest of the QUIC transport: the UDP send/receive
+//!   and Path MTU, actually arming the PTO timer and assembling probe datagrams,
+//!   the QPACK encoder/decoder stream instruction wiring, and `h3_do_request`
+//!   dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -240,6 +251,7 @@
 
 pub mod alt_svc;
 pub mod conn_flow;
+pub mod datagram;
 pub mod frame;
 pub mod h3_stream;
 pub mod key_agreement;
