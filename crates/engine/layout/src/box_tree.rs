@@ -1661,8 +1661,8 @@ pub struct InlineSegment {
     pub forced_break: bool,
     /// CSS structural pseudo-element role of this segment.
     /// Split out by `collect_inline_segments` before wrapping.
-    /// // CSS: ::first-letter — P4 wires: look up `::first-letter` rule, override style of
-    /// segments where `pseudo_kind == PseudoKind::FirstLetter`.
+    /// `apply_first_letter_pseudo` looks up the `::first-letter` rule and overrides
+    /// the style of segments where `pseudo_kind == PseudoKind::FirstLetter`.
     pub pseudo_kind: PseudoKind,
     /// DOM text node that produced this segment, for Selection/Range mapping.
     /// `NodeId(0)` (document root) for generated content with no DOM origin.
@@ -1674,7 +1674,8 @@ pub struct InlineSegment {
 }
 
 /// Marks an inline segment as the target of a CSS structural pseudo-element.
-/// P4 uses this to apply `::first-letter` styles without touching layout geometry.
+/// `apply_first_letter_pseudo` applies `::first-letter` styles from this marker
+/// without touching layout geometry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PseudoKind {
     /// Regular content — no pseudo-element style override.
@@ -1682,8 +1683,8 @@ pub enum PseudoKind {
     None,
     /// CSS Pseudo-elements L4 §5.1 — typographic first letter of the block.
     /// Split from the first non-whitespace text node by `collect_inline_segments`.
-    /// P4 entry point: `compute_pseudo_element_style(node, "first-letter")` → override `seg.style`.
-    // CSS: ::first-letter
+    /// Applied by `apply_first_letter_pseudo` via
+    /// `compute_pseudo_element_style(node, "first-letter")`, which overrides `seg.style`.
     FirstLetter,
 }
 
@@ -1715,8 +1716,8 @@ pub struct InlineFrag {
     pub img_is_lazy: bool,
     /// True when this fragment lies on the first formatted line of its block container.
     /// Set by `lay_out` after `wrap_inline_run` completes.
-    /// // CSS: ::first-line — P4 wires: `compute_pseudo_element_style(node, "first-line")` →
-    /// override `frag.style` for all frags where `is_first_line = true`.
+    /// `split_first_line_boxes` applies `compute_pseudo_element_style(node, "first-line")`
+    /// to the box holding the first-line frags, overriding their style.
     pub is_first_line: bool,
     /// DOM text node that produced this fragment (for Selection/Range mapping).
     /// Matches the source `InlineSegment::source_node`. `NodeId(0)` for
@@ -2422,8 +2423,8 @@ fn split_segments_at_first_line(
 /// so the split gives the first line its correct (possibly larger) line box
 /// height with no paint-side changes. Single-line runs are restyled in place.
 /// Idempotent: `first_line_style` is cleared on every produced box.
-// CSS: ::first-line — P4 wires additional ::first-line properties (background,
-// text-decoration, …) via compute_pseudo_element_style; geometry is handled here.
+/// The box receives the full `::first-line` `ComputedStyle`, so background,
+/// text-decoration, color and font all take effect at paint time.
 pub(crate) fn split_first_line_boxes(b: &mut LayoutBox) {
     for child in &mut b.children {
         split_first_line_boxes(child);
@@ -3102,8 +3103,8 @@ fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items: Vec<Layout
 /// `need_first_letter` — starts `true` for the first call on a block container; set to `false`
 /// once the first non-whitespace text character is split into a `PseudoKind::FirstLetter` segment.
 /// Callers must initialize to `true` and pass through all recursive calls within the same run.
-// CSS: ::first-letter — P4 wires: after this function, check segments for PseudoKind::FirstLetter
-// and apply compute_pseudo_element_style(node, "first-letter") to override that segment's style.
+/// After collection, `apply_first_letter_pseudo` overrides the `PseudoKind::FirstLetter`
+/// segment's style via `compute_pseudo_element_style(node, "first-letter")`.
 #[allow(clippy::too_many_arguments)]
 fn collect_inline_segments(
     doc: &Document,
@@ -3227,10 +3228,9 @@ fn collect_inline_segments(
             // measurer считает ширину уже после преобразования.
             let text = inherited.text_transform.apply(&s);
             // CSS Pseudo-elements L4 §5.1: the first text segment in this inline run
-            // is the candidate for ::first-letter. Mark it so P4 can look up the
-            // ::first-letter rule and extract the first grapheme at render time.
-            // We mark the whole first non-whitespace segment; P4 splits at the character
-            // boundary when building the display list, using the full text metrics.
+            // is the candidate for ::first-letter. Mark the whole first non-whitespace
+            // segment; `apply_first_letter_pseudo` later looks up the ::first-letter rule
+            // and splits at the character boundary, restyling only the first letter.
             let kind = if *need_first_letter && !text.trim().is_empty() {
                 *need_first_letter = false;
                 PseudoKind::FirstLetter
