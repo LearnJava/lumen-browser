@@ -255,7 +255,24 @@
 //!   handling in [`loss`] / [`pto`]. Unknown / reserved (GREASE, RFC 9000 §18.1)
 //!   ids are preserved verbatim so the round-trip is byte-stable. Pure
 //!   functions, no IO; wiring the values into a live connection is a later slice.
-//! - Slice 26+ (planned) — the rest of the QUIC transport: the UDP send/receive
+//! - Slice 26 — the QUIC packet number encoding/decoding ([`packet_number`],
+//!   RFC 9000 §17.1, Appendix A): the truncation codec between the packet header
+//!   codec [`packet`] — which carries the packet number inside its opaque
+//!   `protected` region and its two-bit Packet Number Length in the
+//!   header-protected first byte — and the loss-recovery layer [`loss`] /
+//!   [`recovery`], which reasons in full 62-bit packet numbers. On send,
+//!   [`packet_number::packet_number_length`] picks the fewest bytes `b ∈ 1..=4`
+//!   with `2^(8·b − 1) ≥ num_unacked` (Appendix A.2) and
+//!   [`packet_number::encode_packet_number`] appends that many least-significant
+//!   big-endian bytes, with [`packet_number::encode_pn_length_bits`] supplying the
+//!   header's length field. On receive, [`packet_number::decode_packet_number`]
+//!   reconstructs the full number nearest `largest_pn + 1` from the truncation and
+//!   its width (Appendix A.3), with [`packet_number::pn_length_from_first_byte`]
+//!   and [`packet_number::read_truncated_packet_number`] recovering what the
+//!   header codec left opaque. Pure functions; validated against the RFC 9000
+//!   Appendix A.2/A.3 examples. No IO — wiring this into the header-protection /
+//!   AEAD path ([`packet_protect`]) is the connection layer's job.
+//! - Slice 27+ (planned) — the rest of the QUIC transport: the UDP send/receive
 //!   and Path MTU, actually arming the PTO timer and assembling probe datagrams,
 //!   the QPACK encoder/decoder stream instruction wiring, and `h3_do_request`
 //!   dispatch alongside the existing H1/H2 paths.
@@ -275,6 +292,7 @@ pub mod key_agreement;
 pub mod key_schedule;
 pub mod loss;
 pub mod packet;
+pub mod packet_number;
 pub mod packet_protect;
 pub mod pto;
 pub mod qpack;
