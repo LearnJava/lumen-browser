@@ -288,9 +288,21 @@
 //!   (RFC 8899 §5.4). Pure state machine driven by probe acknowledgement / loss;
 //!   no IO, no probe-packet assembly, and the caller must keep a lost probe out
 //!   of the congestion controller (RFC 9000 §14.4).
-//! - Slice 28+ (planned) — the rest of the QUIC transport: the UDP send/receive,
-//!   actually arming the PTO timer and assembling probe datagrams, the QPACK
-//!   encoder/decoder stream instruction wiring, and `h3_do_request` dispatch
+//! - Slice 28 — QUIC ACK generation ([`ack`], RFC 9000 §13.2, §19.3): the
+//!   receiver-side mirror of [`loss`]. [`ack::AckGenerator`] (one per
+//!   [`loss::PacketNumberSpace`]) records the packet numbers *we received* as a set
+//!   of disjoint inclusive ranges, decides when an acknowledgement is owed —
+//!   immediately on a reordered/gap-filling packet, on reaching the ack-eliciting
+//!   threshold (RFC 9000 §13.2.2), on an ECN-CE mark, or in the Initial/Handshake
+//!   spaces that never delay, else within the peer's `max_ack_delay` — and builds the
+//!   [`quic_frame::Frame::Ack`] reporting those ranges largest-first with the scaled
+//!   ACK Delay and ECN counts. [`ack::AckGenerator::on_ack_of_ack`] bounds the range
+//!   set once the peer acknowledges one of our ACKs (RFC 9000 §13.2.4). Pure state
+//!   machine driven by a caller-supplied clock; no IO, no timer arming, no packet
+//!   assembly.
+//! - Slice 29+ (planned) — the rest of the QUIC transport: the UDP send/receive,
+//!   actually arming the PTO/ACK-delay timers and assembling probe datagrams, the
+//!   QPACK encoder/decoder stream instruction wiring, and `h3_do_request` dispatch
 //!   alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
@@ -299,6 +311,7 @@
 //! block, [`qpack`] turns that block into header fields, and [`alt_svc`]
 //! decides when an origin is eligible for the QUIC path at all.
 
+pub mod ack;
 pub mod alt_svc;
 pub mod conn_flow;
 pub mod datagram;
