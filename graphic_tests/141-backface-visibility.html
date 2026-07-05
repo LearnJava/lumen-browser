@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 141 backface-visibility</title>
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f {
+    background: #1a1a2e;
+    width: 1022px; height: 718px;
+    margin: 1px; padding: 40px;
+    overflow: hidden;
+    box-sizing: border-box;
+  }
+
+  .row {
+    display: flex;
+    gap: 20px;
+    margin-bottom: 30px;
+    align-items: center;
+  }
+
+  .box {
+    width: 80px;
+    height: 80px;
+    background: #e94560;
+    flex-shrink: 0;
+  }
+
+  .label {
+    color: #a8dadc;
+    font-size: 13px;
+    font-family: monospace;
+    min-width: 420px;
+  }
+
+  /* CSS Transforms L2 §5.1 — backface-visibility: hidden culls the box once
+     its own 3D transform rotates its face past 90deg from the viewer. */
+  .hidden-flipped {
+    backface-visibility: hidden;
+    transform: rotateY(180deg);
+  }
+  .hidden-front {
+    backface-visibility: hidden;
+    transform: rotateY(0deg);
+  }
+  .visible-flipped {
+    backface-visibility: visible;
+    transform: rotateY(180deg);
+  }
+  .hidden-flipped-x {
+    backface-visibility: hidden;
+    transform: rotateX(180deg);
+  }
+</style>
+</head>
+<body>
+<div class="__f">
+
+  <div class="row">
+    <div class="box hidden-flipped"></div>
+    <div class="label">backface-visibility:hidden + rotateY(180deg) -&gt; culled (no box)</div>
+  </div>
+
+  <div class="row">
+    <div class="box hidden-front"></div>
+    <div class="label">backface-visibility:hidden + rotateY(0deg) -&gt; visible</div>
+  </div>
+
+  <div class="row">
+    <div class="box visible-flipped"></div>
+    <div class="label">backface-visibility:visible (default) + rotateY(180deg) -&gt; visible</div>
+  </div>
+
+  <div class="row">
+    <div class="box hidden-flipped-x"></div>
+    <div class="label">backface-visibility:hidden + rotateX(180deg) -&gt; culled (no box)</div>
+  </div>
+
+</div>
+</body>
+</html>

@@ -1077,6 +1077,19 @@
 <input type="text" class="ph-faint" placeholder="faint ::placeholder">
 </div><!-- /::placeholder card -->
 
+<!-- backface-visibility demo card -->
+<div class="card">
+<style>
+  .bf-swatch { display:inline-block; width:80px; height:80px; margin:4px; background:#e94560; }
+  .bf-hidden-flipped { backface-visibility:hidden; transform:rotateY(180deg); }
+  .bf-hidden-front    { backface-visibility:hidden; transform:rotateY(0deg); }
+  .bf-visible-flipped { backface-visibility:visible; transform:rotateY(180deg); }
+</style>
+<div class="bf-swatch bf-hidden-flipped"></div>
+<div class="bf-swatch bf-hidden-front"></div>
+<div class="bf-swatch bf-visible-flipped"></div>
+</div><!-- /backface-visibility card -->
+
 <!-- attr() typed demo card -->
 <style>
   .attr-card { margin: 8px; padding: 12px; background: #fff; border: 1px solid #ddd; border-radius: 4px; }

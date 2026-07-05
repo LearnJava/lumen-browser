@@ -18,7 +18,7 @@ use lumen_dom::InputType;
 use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
     transform_fns_to_matrix, CompositorAnimFrame, CompositorOverride,
-    Appearance,
+    Appearance, BackfaceVisibility,
     BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderStyle, BoxKind,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, Display, EmptyCells, FilterFn, FontOpticalSizing, FontStretch, FontStyle, FontWeight, ShapeValue,
     FillRule, FormControlKind, StrokeLinecap, StrokeLinejoin, SvgShapeKind, SvgTextAnchor, SvgDominantBaseline, SvgBaselineShift,
@@ -2770,8 +2770,17 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> BoxLayerOps 
         });
         post.push(DisplayCommand::PopBlendMode);
     }
-    // Opacity: animation override wins over style value.
-    let effective_opacity = ov.and_then(|o| o.opacity).unwrap_or(s.opacity);
+    // Opacity: animation override wins over style value. CSS Transforms L2
+    // §5.1 — `backface-visibility: hidden` culls the whole box (self +
+    // descendants) once its 3D transform has rotated the face away from the
+    // viewer; reusing the opacity-0 compositing layer is the SC-bucket path's
+    // equivalent of `walk`'s early return, since a box with any 3D rotation
+    // already owns a stacking context (`creates_stacking_context`).
+    let effective_opacity = if is_backface_hidden(b) {
+        0.0
+    } else {
+        ov.and_then(|o| o.opacity).unwrap_or(s.opacity)
+    };
     if effective_opacity < 1.0 {
         pre.push(DisplayCommand::PushOpacity { alpha: effective_opacity });
         post.push(DisplayCommand::PopOpacity);
@@ -5558,6 +5567,19 @@ fn establishes_3d_rendering_context(b: &LayoutBox) -> bool {
     b.style.transform_style == TransformStyle::Preserve3d
 }
 
+/// CSS Transforms L2 §5.1 — `backface-visibility: hidden` culls a box once
+/// its own 3D transform has rotated its face past 90° from the viewer.
+///
+/// The box's face normal in its own coordinate space is `(0, 0, 1)`; the
+/// linear part of `forward_box_transform` maps it to `(m[8], m[9], m[10])`
+/// (translation columns don't affect direction vectors), so `m[10]` alone —
+/// the same raw z used by [`child_z_depth`]'s `transform_z` — tells which way
+/// the face points: negative means it has flipped into the screen.
+fn is_backface_hidden(b: &LayoutBox) -> bool {
+    b.style.backface_visibility == BackfaceVisibility::Hidden
+        && matches!(forward_box_transform(b), Some(m) if m.0[10] < 0.0)
+}
+
 /// Transformed depth of a box's center within its parent's 3D rendering
 /// context. Applies the box's own forward transform (`forward_box_transform`,
 /// which includes `transform-origin` pivot) to the box-center at z=0 and takes
@@ -5713,6 +5735,12 @@ fn walk(b: &LayoutBox, out: &mut DisplayList, dpr: f32, sel: Option<&SelectionHi
     // skip-ом (отличие от visibility:hidden, где children могут
     // override через `:visible` — opacity-0 такого override не имеет).
     if !is_opacity_subtree_painted(b) {
+        return;
+    }
+    // CSS Transforms L2 §5.1 — `backface-visibility: hidden` culls the box
+    // (and its subtree) once its own 3D transform has rotated its face past
+    // 90°, so it points away from the viewer.
+    if is_backface_hidden(b) {
         return;
     }
     // CSS Positioning L3 §6.3 — position:sticky. Wraps the entire box in a
@@ -7000,6 +7028,10 @@ fn emit_wavy_line(
 fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut DisplayList, dpr: f32) {
     let ov = anim.and_then(|a| a.get(b.node));
 
+    // CSS Transforms L2 §5.1 — backface culling (same rule as `walk`).
+    if is_backface_hidden(b) {
+        return;
+    }
     // CSS Positioning L3 §6.3 — position:sticky (same as in walk).
     let is_sticky = matches!(b.style.position, Position::Sticky);
     if is_sticky {
@@ -9982,6 +10014,38 @@ mod tests {
         build_display_list_ordered(&tree, &stacking_tree, &order)
     }
 
+    #[test]
+    fn ordered_backface_hidden_rotated_past_90deg_forces_zero_opacity() {
+        // `build_display_list_ordered` is the path the real shell/screenshot
+        // renderer uses (unlike the simpler `walk`/`build_display_list`).
+        // A 3D-rotated box always owns its own stacking context
+        // (`creates_stacking_context`), so backface culling here must ride
+        // the existing opacity-0 compositing layer rather than a bare skip.
+        let dl = build_ordered(
+            r#"<div style="width:50px;height:50px;background:red;
+                transform: rotateY(180deg); backface-visibility: hidden;">x</div>"#,
+            "",
+        );
+        let alpha = dl.iter().find_map(|c| match c {
+            DisplayCommand::PushOpacity { alpha } => Some(*alpha),
+            _ => None,
+        });
+        assert_eq!(alpha, Some(0.0), "backface-hidden rotated box must force PushOpacity 0");
+    }
+
+    #[test]
+    fn ordered_backface_hidden_facing_viewer_still_opaque() {
+        let dl = build_ordered(
+            r#"<div style="width:50px;height:50px;background:red;
+                transform: rotateY(0deg); backface-visibility: hidden;">x</div>"#,
+            "",
+        );
+        assert!(
+            !dl.iter().any(|c| matches!(c, DisplayCommand::PushOpacity { alpha } if *alpha == 0.0)),
+            "front-facing box must not be forced to zero opacity"
+        );
+    }
+
     /// BUG-183: a gradient `mask-image` makes the box a stacking context, so it
     /// is painted through `build_display_list_ordered` (the bucket path), not
     /// `walk`. Before the fix `box_layer_ops` did not open the mask group, so the
@@ -11920,6 +11984,54 @@ mod tests {
         assert!((b - 1.0).abs() < 1e-5);
         assert!((c + 1.0).abs() < 1e-5);
         assert!(d.abs() < 1e-5);
+    }
+
+    // ─── CSS Transforms L2 §5.1 — backface-visibility culling ───────────────
+
+    #[test]
+    fn backface_hidden_rotated_past_90deg_culls_box() {
+        // rotateY(180deg) turns the face fully away from the viewer;
+        // backface-visibility: hidden must drop it from the display list.
+        let dl = build(
+            r#"<div style="width:50px;height:50px;background:red;
+                transform: rotateY(180deg); backface-visibility: hidden;">x</div>"#,
+            "",
+        );
+        assert_eq!(
+            count_variant(&dl, |c| matches!(c, DisplayCommand::FillRect { .. })),
+            0,
+            "backface-hidden box rotated past 90° must not paint"
+        );
+    }
+
+    #[test]
+    fn backface_hidden_facing_viewer_still_paints() {
+        // rotateY(0deg) — front face still points at the viewer, so the box
+        // paints normally even with backface-visibility: hidden set.
+        let dl = build(
+            r#"<div style="width:50px;height:50px;background:red;
+                transform: rotateY(0deg); backface-visibility: hidden;">x</div>"#,
+            "",
+        );
+        assert_eq!(
+            count_variant(&dl, |c| matches!(c, DisplayCommand::FillRect { .. })),
+            1
+        );
+    }
+
+    #[test]
+    fn backface_visible_paints_even_when_rotated_away() {
+        // Default `backface-visibility: visible` never culls, regardless of
+        // rotation.
+        let dl = build(
+            r#"<div style="width:50px;height:50px;background:red;
+                transform: rotateY(180deg);">x</div>"#,
+            "",
+        );
+        assert_eq!(
+            count_variant(&dl, |c| matches!(c, DisplayCommand::FillRect { .. })),
+            1
+        );
     }
 
     // ─── CSS Transforms L2 §6.2 — 3D depth sorting ───────────────────────────
