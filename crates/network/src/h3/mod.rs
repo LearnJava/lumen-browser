@@ -348,7 +348,24 @@
 //!   an ID on RETIRE_CONNECTION_ID (a retire of an unissued ID is a
 //!   `PROTOCOL_VIOLATION`). Pure state machines driven by decoded frames; no IO,
 //!   no packet-level Destination-CID context.
-//! - Slice 33+ (planned) — the rest of the QUIC transport: the UDP send/receive,
+//! - Slice 33 — QUIC Retry packet integrity + token handling ([`retry`],
+//!   RFC 9000 §17.2.5, §8.1; RFC 9001 §5.8): the pure crypto + state a client
+//!   runs on a received Retry packet ([`packet::Packet::Retry`]). A stateless
+//!   server answers the client's first Initial with a Retry that carries an
+//!   address-validation Token to echo, a fresh Source Connection ID the client
+//!   adopts as its new Destination CID, and a 16-byte Retry Integrity Tag.
+//!   [`retry::retry_integrity_tag`] / [`retry::verify_retry_integrity`] compute
+//!   and check that tag — `AEAD_AES_128_GCM` over an empty plaintext with the
+//!   version-fixed [`retry::RETRY_KEY_V1`] / [`retry::RETRY_NONCE_V1`] (reusing
+//!   [`packet_protect::aes_128_gcm_seal`]), authenticating the *Retry
+//!   Pseudo-Packet*: the Original Destination CID the client chose for its first
+//!   Initial (length-prefixed) followed by the Retry packet up to the tag. Since
+//!   the ODCID is never on the wire, an off-path attacker cannot forge a Retry.
+//!   [`retry::RetryHandler`] is the client state machine: it verifies the tag,
+//!   enforces at-most-one-Retry-per-connection (RFC 9000 §17.2.5), and reports
+//!   the [`retry::RetryOutcome`] (new DCID + Token). Pure functions and state,
+//!   no IO; validated against the RFC 9001 Appendix A.4 vector.
+//! - Slice 34+ (planned) — the rest of the QUIC transport: the UDP send/receive,
 //!   actually arming the PTO/ACK-delay timers and assembling probe datagrams, the
 //!   QPACK encoder/decoder stream instruction wiring, and `h3_do_request` dispatch
 //!   alongside the existing H1/H2 paths.
@@ -380,6 +397,7 @@ pub mod qpack;
 pub mod qpack_stream;
 pub mod quic_frame;
 pub mod recovery;
+pub mod retry;
 pub mod stream;
 pub mod tls_cert_verify;
 pub mod tls_finished;
