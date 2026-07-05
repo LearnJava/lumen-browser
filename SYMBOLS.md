@@ -2301,7 +2301,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (620 symbols)
+## lumen-network  (647 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -2510,6 +2510,28 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/conn_flow.rs:417` **fn** `record_open` — Records that the peer opened a stream whose cumulative count is `count`
 `crates/network/src/h3/conn_flow.rs:427` **fn** `record_closed` — Records that `delta` more streams of this direction have finished
 `crates/network/src/h3/conn_flow.rs:435` **fn** `window_update` — Re-advertises the limit as `closed + concurrency` and returns the new
+`crates/network/src/h3/crypto_stream.rs:84` **enum** `CryptoStreamError` — A CRYPTO-stream protocol violation. Maps to a single QUIC connection-error
+`crates/network/src/h3/crypto_stream.rs:122` **struct** `CryptoRecvStream` — The receiving half of a QUIC CRYPTO stream: an out-of-order reassembly
+`crates/network/src/h3/crypto_stream.rs:147` **fn** `new` — Creates a receive stream buffering up to [`DEFAULT_CRYPTO_BUFFER_LIMIT`]
+`crates/network/src/h3/crypto_stream.rs:154` **fn** `with_buffer_limit` — Creates a receive stream buffering up to `buffer_limit` bytes past the
+`crates/network/src/h3/crypto_stream.rs:165` **fn** `read_offset` — The next offset the TLS layer will read (bytes below are delivered)
+`crates/network/src/h3/crypto_stream.rs:171` **fn** `highest_received` — One past the highest byte offset ever received
+`crates/network/src/h3/crypto_stream.rs:177` **fn** `buffer_limit` — The reassembly bound past the read cursor (RFC 9000 §7.5)
+`crates/network/src/h3/crypto_stream.rs:183` **fn** `is_readable` — Whether contiguous data is available to [`Self::read`]
+`crates/network/src/h3/crypto_stream.rs:195` **fn** `recv` — Processes a received CRYPTO frame (RFC 9000 §19.6): `offset`/`data` is the
+`crates/network/src/h3/crypto_stream.rs:217` **fn** `recv_frame` — Convenience wrapper over [`Self::recv`] for a decoded
+`crates/network/src/h3/crypto_stream.rs:228` **fn** `read` — Pops and returns the contiguous readable prefix, advancing the read
+`crates/network/src/h3/crypto_stream.rs:296` **struct** `CryptoChunk` — A CRYPTO frame to transmit, produced by [`CryptoSendStream::poll_transmit`]
+`crates/network/src/h3/crypto_stream.rs:308` **fn** `into_frame` — Converts this chunk into a [`quic_frame::Frame::Crypto`] for framing
+`crates/network/src/h3/crypto_stream.rs:316` **struct** `CryptoSendStream` — The sending half of a QUIC CRYPTO stream: an outgoing handshake buffer with
+`crates/network/src/h3/crypto_stream.rs:328` **fn** `new` — Creates an empty send stream at offset 0
+`crates/network/src/h3/crypto_stream.rs:335` **fn** `write_offset` — The total number of bytes written by the TLS layer so far (also one past
+`crates/network/src/h3/crypto_stream.rs:341` **fn** `send_offset` — One past the highest offset ever emitted in a CRYPTO frame
+`crates/network/src/h3/crypto_stream.rs:347` **fn** `has_unsent` — Whether there is unsent handshake data awaiting a [`Self::poll_transmit`]
+`crates/network/src/h3/crypto_stream.rs:353` **fn** `write` — Queues handshake `data` for transmission (RFC 9000 §7.5). Empty writes
+`crates/network/src/h3/crypto_stream.rs:362` **fn** `poll_transmit` — Produces the next CRYPTO frame to transmit, at most `max_len` data bytes
+`crates/network/src/h3/crypto_stream.rs:375` **fn** `on_ack` — Records that the byte range `[offset, offset + len)` was acknowledged
+`crates/network/src/h3/crypto_stream.rs:384` **fn** `is_fully_acked` — Whether every byte written so far has been emitted and acknowledged, i.e
 `crates/network/src/h3/datagram.rs:55` **enum** `DatagramError` — Error splitting or assembling a coalesced QUIC datagram
 `crates/network/src/h3/datagram.rs:108` **fn** `parse_datagram` — Split a received UDP datagram into its ordered sequence of coalesced packets
 `crates/network/src/h3/datagram.rs:139` **fn** `encode_datagram` — Assemble an ordered sequence of packets into one UDP datagram payload
@@ -2612,35 +2634,40 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/pto.rs:298` **fn** `get_pto_time_and_space` — The instant the PTO should fire and the space it belongs to, or `None` when
 `crates/network/src/h3/pto.rs:343` **fn** `set_loss_detection_timer` — Computes the state the single loss-detection timer should be left in
 `crates/network/src/h3/pto.rs:368` **fn** `on_timeout` — Handles the loss-detection timer firing (RFC 9002 §A.9
-`crates/network/src/h3/qpack.rs:61` **enum** `QpackError` — Field-section codec error. Every variant is a decompression failure at the
-`crates/network/src/h3/qpack.rs:262` **struct** `HeaderField` — A decoded header field. `sensitive` reflects the QPACK "never index" (`N`)
-`crates/network/src/h3/qpack.rs:274` **fn** `new` — Build a non-sensitive field from `name`/`value`
-`crates/network/src/h3/qpack.rs:280` **fn** `sensitive` — Build a field with the "never index" (`N`) bit set
-`crates/network/src/h3/qpack.rs:286` **fn** `name_str` — The name as UTF-8 (best-effort; non-UTF-8 yields `""`)
-`crates/network/src/h3/qpack.rs:292` **fn** `value_str` — The value as UTF-8 (best-effort; non-UTF-8 yields `""`)
-`crates/network/src/h3/qpack.rs:393` **fn** `encode_field_section` — Encode a list of header fields into a QPACK field section (RFC 9204 §4.5),
-`crates/network/src/h3/qpack.rs:432` **fn** `decode_field_section` — Decode a QPACK field section (RFC 9204 §4.5) that references only the static
+`crates/network/src/h3/qpack.rs:70` **enum** `QpackError` — Field-section codec error. Every variant is a decompression failure at the
+`crates/network/src/h3/qpack.rs:286` **struct** `HeaderField` — A decoded header field. `sensitive` reflects the QPACK "never index" (`N`)
+`crates/network/src/h3/qpack.rs:298` **fn** `new` — Build a non-sensitive field from `name`/`value`
+`crates/network/src/h3/qpack.rs:304` **fn** `sensitive` — Build a field with the "never index" (`N`) bit set
+`crates/network/src/h3/qpack.rs:310` **fn** `name_str` — The name as UTF-8 (best-effort; non-UTF-8 yields `""`)
+`crates/network/src/h3/qpack.rs:316` **fn** `value_str` — The value as UTF-8 (best-effort; non-UTF-8 yields `""`)
+`crates/network/src/h3/qpack.rs:417` **fn** `encode_field_section` — Encode a list of header fields into a QPACK field section (RFC 9204 §4.5),
+`crates/network/src/h3/qpack.rs:456` **fn** `decode_field_section` — Decode a QPACK field section (RFC 9204 §4.5) that references only the static
+`crates/network/src/h3/qpack.rs:649` **fn** `encode_field_section_dynamic` — Encode header fields into a field section (RFC 9204 §4.5), referencing the
+`crates/network/src/h3/qpack.rs:738` **fn** `decode_field_section_dynamic` — Decode a field section (RFC 9204 §4.5) that may reference the supplied
 `crates/network/src/h3/qpack_stream.rs:62` **enum** `QpackStreamError` — An error decoding an instruction stream or mutating the dynamic table
-`crates/network/src/h3/qpack_stream.rs:163` **struct** `DynamicTable` — The QPACK dynamic table: a FIFO of `(name, value)` entries with a
-`crates/network/src/h3/qpack_stream.rs:181` **fn** `new` — Create an empty table whose capacity starts at 0 and may be raised up to
-`crates/network/src/h3/qpack_stream.rs:193` **fn** `entry_size` — The size in bytes an entry occupies (RFC 9204 §3.2.1)
-`crates/network/src/h3/qpack_stream.rs:199` **fn** `capacity` — The current capacity in bytes
-`crates/network/src/h3/qpack_stream.rs:205` **fn** `size` — The total size in bytes of all live entries
-`crates/network/src/h3/qpack_stream.rs:211` **fn** `len` — The number of entries currently in the table
-`crates/network/src/h3/qpack_stream.rs:217` **fn** `is_empty` — Whether the table currently holds no entries
-`crates/network/src/h3/qpack_stream.rs:225` **fn** `insert_count` — The Insert Count — the number of insertions performed so far, equal to
-`crates/network/src/h3/qpack_stream.rs:238` **fn** `get_absolute` — Look up an entry by its absolute index (RFC 9204 §3.2.4). Returns `None`
-`crates/network/src/h3/qpack_stream.rs:265` **fn** `set_capacity` — Set the table capacity (RFC 9204 §3.2.3 / the Set Dynamic Table Capacity
-`crates/network/src/h3/qpack_stream.rs:294` **fn** `insert` — Insert a `(name, value)` entry, evicting older entries to make room
-`crates/network/src/h3/qpack_stream.rs:317` **fn** `apply` — Apply a parsed [`EncoderInstruction`] to the table, resolving name and
-`crates/network/src/h3/qpack_stream.rs:357` **enum** `EncoderInstruction` — An instruction on the QPACK encoder stream (RFC 9204 §4.3)
-`crates/network/src/h3/qpack_stream.rs:385` **fn** `encode` — Serialize this instruction onto `out`. `use_huffman` enables Huffman
-`crates/network/src/h3/qpack_stream.rs:416` **fn** `decode` — Parse a single instruction from the front of `src`, returning it and the
-`crates/network/src/h3/qpack_stream.rs:446` **fn** `decode_encoder_stream` — Decode a full encoder-stream buffer into a list of instructions
-`crates/network/src/h3/qpack_stream.rs:463` **enum** `DecoderInstruction` — An instruction on the QPACK decoder stream (RFC 9204 §4.4)
-`crates/network/src/h3/qpack_stream.rs:474` **fn** `encode` — Serialize this instruction onto `out`
-`crates/network/src/h3/qpack_stream.rs:492` **fn** `decode` — Parse a single instruction from the front of `src`, returning it and the
-`crates/network/src/h3/qpack_stream.rs:512` **fn** `decode_decoder_stream` — Decode a full decoder-stream buffer into a list of instructions
+`crates/network/src/h3/qpack_stream.rs:166` **struct** `DynamicTable` — The QPACK dynamic table: a FIFO of `(name, value)` entries with a
+`crates/network/src/h3/qpack_stream.rs:184` **fn** `new` — Create an empty table whose capacity starts at 0 and may be raised up to
+`crates/network/src/h3/qpack_stream.rs:196` **fn** `entry_size` — The size in bytes an entry occupies (RFC 9204 §3.2.1)
+`crates/network/src/h3/qpack_stream.rs:202` **fn** `capacity` — The current capacity in bytes
+`crates/network/src/h3/qpack_stream.rs:208` **fn** `size` — The total size in bytes of all live entries
+`crates/network/src/h3/qpack_stream.rs:214` **fn** `len` — The number of entries currently in the table
+`crates/network/src/h3/qpack_stream.rs:220` **fn** `is_empty` — Whether the table currently holds no entries
+`crates/network/src/h3/qpack_stream.rs:228` **fn** `insert_count` — The Insert Count — the number of insertions performed so far, equal to
+`crates/network/src/h3/qpack_stream.rs:236` **fn** `max_entries` — `MaxEntries = floor(MaxTableCapacity / 32)` (RFC 9204 §3.2.2), the value
+`crates/network/src/h3/qpack_stream.rs:244` **fn** `find_absolute` — The absolute index of the most recent live entry whose name and value
+`crates/network/src/h3/qpack_stream.rs:254` **fn** `find_name_absolute` — The absolute index of the most recent live entry whose name matches, for
+`crates/network/src/h3/qpack_stream.rs:270` **fn** `get_absolute` — Look up an entry by its absolute index (RFC 9204 §3.2.4). Returns `None`
+`crates/network/src/h3/qpack_stream.rs:297` **fn** `set_capacity` — Set the table capacity (RFC 9204 §3.2.3 / the Set Dynamic Table Capacity
+`crates/network/src/h3/qpack_stream.rs:326` **fn** `insert` — Insert a `(name, value)` entry, evicting older entries to make room
+`crates/network/src/h3/qpack_stream.rs:349` **fn** `apply` — Apply a parsed [`EncoderInstruction`] to the table, resolving name and
+`crates/network/src/h3/qpack_stream.rs:389` **enum** `EncoderInstruction` — An instruction on the QPACK encoder stream (RFC 9204 §4.3)
+`crates/network/src/h3/qpack_stream.rs:417` **fn** `encode` — Serialize this instruction onto `out`. `use_huffman` enables Huffman
+`crates/network/src/h3/qpack_stream.rs:448` **fn** `decode` — Parse a single instruction from the front of `src`, returning it and the
+`crates/network/src/h3/qpack_stream.rs:478` **fn** `decode_encoder_stream` — Decode a full encoder-stream buffer into a list of instructions
+`crates/network/src/h3/qpack_stream.rs:495` **enum** `DecoderInstruction` — An instruction on the QPACK decoder stream (RFC 9204 §4.4)
+`crates/network/src/h3/qpack_stream.rs:506` **fn** `encode` — Serialize this instruction onto `out`
+`crates/network/src/h3/qpack_stream.rs:524` **fn** `decode` — Parse a single instruction from the front of `src`, returning it and the
+`crates/network/src/h3/qpack_stream.rs:544` **fn** `decode_decoder_stream` — Decode a full decoder-stream buffer into a list of instructions
 `crates/network/src/h3/quic_frame.rs:122` **enum** `QuicFrameError` — Frame-codec error. Every variant is a `FRAME_ENCODING_ERROR` at the QUIC
 `crates/network/src/h3/quic_frame.rs:174` **struct** `AckRange` — A single additional ACK range in an ACK frame (RFC 9000 §19.3.1). The first
 `crates/network/src/h3/quic_frame.rs:185` **struct** `EcnCounts` — ECN counts carried by an ACK frame of type `0x03` (RFC 9000 §19.3.2)
@@ -4702,4 +4729,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4631 symbols in 22 crates*
+*Total: 4658 symbols in 22 crates*
