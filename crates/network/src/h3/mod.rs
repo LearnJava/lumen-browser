@@ -574,9 +574,30 @@
 //!   the module is clock-free and driven deterministically by a
 //!   [`udp::MockDatagramTransport`] in tests. This is the wait *iteration* of the
 //!   loop, not the full loop.
-//! - Slice 48+ (planned) — the rest of the QUIC transport: the connection engine
-//!   that composes the state machines over [`event_loop`], and `h3_do_request`
-//!   dispatch alongside the existing H1/H2 paths.
+//! - Slice 48 — the QUIC connection-level receive dispatch ([`connection`],
+//!   RFC 9000 §12.4, §13, §19): the first composition slice of the connection
+//!   engine — the single place that owns the connection-wide state machines and
+//!   routes each decrypted frame to the machine that owns it.
+//!   [`connection::QuicConnection`] holds the per-space [`ack`] generators and
+//!   [`crypto_stream`] reassembly buffers, the send-side [`conn_flow`] limits, the
+//!   [`conn_id`] sets, the [`path_validation`] validator and anti-amplification
+//!   limit, and the [`lifecycle`], and drives them from one decrypted packet at a
+//!   time. [`connection::QuicConnection::process_packet`] records the packet number
+//!   for the space's acknowledgement, then dispatches each frame: MAX_DATA /
+//!   MAX_STREAMS raise our send limits, NEW_CONNECTION_ID / RETIRE_CONNECTION_ID
+//!   drive the ID sets (reporting the sequence numbers to retire), PATH_CHALLENGE is
+//!   echoed and PATH_RESPONSE validates the path (lifting the anti-amplification
+//!   limit), CRYPTO is reassembled per space, and CONNECTION_CLOSE / HANDSHAKE_DONE
+//!   move the lifecycle — while ACK (loss detection), the per-stream frames (the
+//!   stream manager), and NEW_TOKEN are surfaced in
+//!   [`connection::PacketEffects::deferred`] for a later slice.
+//!   [`connection::QuicConnection::refresh_timers`] folds every owned machine's
+//!   deadline into [`timer::ConnectionTimers`] for [`event_loop`]. Pure and
+//!   clock-driven by a caller-supplied `now`; packet decryption and the send path
+//!   remain the caller's job.
+//! - Slice 49+ (planned) — the rest of the QUIC transport: the stream manager, the
+//!   send path composed over [`event_loop`], and `h3_do_request` dispatch alongside
+//!   the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -588,6 +609,7 @@ pub mod ack;
 pub mod alt_svc;
 pub mod conn_flow;
 pub mod conn_id;
+pub mod connection;
 pub mod crypto_state;
 pub mod crypto_stream;
 pub mod datagram;
