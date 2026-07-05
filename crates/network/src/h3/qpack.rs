@@ -632,6 +632,22 @@ enum Repr {
     Literal,
 }
 
+/// Metadata about a dynamic field section, produced alongside its bytes by
+/// [`encode_field_section_dynamic_bounded`]. The connection-layer encoder needs
+/// these to track the section for acknowledgment and eviction (RFC 9204 §2.1).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DynSectionInfo {
+    /// The Required Insert Count (RFC 9204 §4.5.1.1): `0` when the section makes
+    /// no dynamic reference, otherwise `(highest referenced absolute index) + 1`.
+    /// A section with a Required Insert Count above the encoder's Known Received
+    /// Count references entries the decoder may not have yet — a blocked stream.
+    pub required_insert_count: u64,
+    /// The smallest absolute index the section references, or `None` if it makes
+    /// no dynamic reference. The encoder must not evict this entry — nor any
+    /// newer one — until the section is acknowledged (RFC 9204 §2.1.3).
+    pub min_referenced: Option<u64>,
+}
+
 /// Encode header fields into a field section (RFC 9204 §4.5), referencing the
 /// supplied dynamic table where an entry matches and otherwise falling back to
 /// the static table / literals.
@@ -651,26 +667,54 @@ pub fn encode_field_section_dynamic(
     table: &DynamicTable,
     use_huffman: bool,
 ) -> Vec<u8> {
+    encode_field_section_dynamic_bounded(fields, table, use_huffman, u64::MAX).0
+}
+
+/// Encode a field section like [`encode_field_section_dynamic`], but reference a
+/// dynamic-table entry only when its absolute index is **below**
+/// `dyn_ref_ceiling`; entries at or above the ceiling fall back to the static
+/// table / literals.
+///
+/// The connection-layer encoder passes its Known Received Count as the ceiling
+/// when it must not produce a blocked stream (RFC 9204 §2.1.2): no reference is
+/// made to an entry the decoder has not yet acknowledged receiving, so the
+/// resulting Required Insert Count never exceeds the Known Received Count. Pass
+/// [`u64::MAX`] to allow references to any live entry (the unbounded behaviour of
+/// [`encode_field_section_dynamic`]).
+///
+/// Returns the encoded bytes and the [`DynSectionInfo`] describing which entries
+/// were referenced.
+#[must_use]
+pub fn encode_field_section_dynamic_bounded(
+    fields: &[HeaderField],
+    table: &DynamicTable,
+    use_huffman: bool,
+    dyn_ref_ceiling: u64,
+) -> (Vec<u8>, DynSectionInfo) {
+    // A dynamic reference is usable only when the entry sits below the ceiling
+    // (its receipt has been acknowledged, or blocking is permitted).
+    let usable = |abs: u64| abs < dyn_ref_ceiling;
     // Pass 1: choose a representation per field and find the Required Insert
     // Count = (highest referenced absolute index) + 1.
     let mut plans = Vec::with_capacity(fields.len());
     let mut ric = 0u64;
+    let mut min_referenced: Option<u64> = None;
     for field in fields {
         let name = &field.name;
         let value = &field.value;
         let plan = if !field.sensitive {
-            if let Some(abs) = table.find_absolute(name, value) {
+            if let Some(abs) = table.find_absolute(name, value).filter(|&a| usable(a)) {
                 Repr::DynIndexed(abs)
             } else if let Some(idx) = find_static_full(name, value) {
                 Repr::StaticIndexed(idx)
-            } else if let Some(abs) = table.find_name_absolute(name) {
+            } else if let Some(abs) = table.find_name_absolute(name).filter(|&a| usable(a)) {
                 Repr::DynName(abs)
             } else if let Some(idx) = find_static_name(name) {
                 Repr::StaticName(idx)
             } else {
                 Repr::Literal
             }
-        } else if let Some(abs) = table.find_name_absolute(name) {
+        } else if let Some(abs) = table.find_name_absolute(name).filter(|&a| usable(a)) {
             Repr::DynName(abs)
         } else if let Some(idx) = find_static_name(name) {
             Repr::StaticName(idx)
@@ -679,6 +723,7 @@ pub fn encode_field_section_dynamic(
         };
         if let Repr::DynIndexed(abs) | Repr::DynName(abs) = plan {
             ric = ric.max(abs + 1);
+            min_referenced = Some(min_referenced.map_or(abs, |m| m.min(abs)));
         }
         plans.push(plan);
     }
@@ -723,7 +768,7 @@ pub fn encode_field_section_dynamic(
             }
         }
     }
-    out
+    (out, DynSectionInfo { required_insert_count: ric, min_referenced })
 }
 
 /// Decode a field section (RFC 9204 §4.5) that may reference the supplied
