@@ -664,9 +664,27 @@
 //!   [`datagram::MIN_INITIAL_DATAGRAM_LEN`] floor (RFC 9000 §14.1). Pure apart from
 //!   the mockable transport write; the flush is clock-driven by a caller-supplied
 //!   `now`.
-//! - Slice 53+ (planned) — the rest of the QUIC transport: the connection driver
-//!   that decides *when* to flush by composing [`send_path`] with the timer loop
-//!   over [`event_loop`] and the inbound decrypt path, and the `h3_do_request`
+//! - Slice 53 — the QUIC receive-path datagram ingest ([`recv_path`], RFC 9000
+//!   §8.1, §10.1, §12.2, §12.4; RFC 9001 §5.5): the receive-path counterpart of the
+//!   send-path [`send_path::flush`]. Where [`send_path::flush`] folds each space's
+//!   pending frames outward into coalesced datagrams, [`recv_path::ingest_datagram`]
+//!   draws one inbound datagram inward — crediting its bytes to the connection's
+//!   anti-amplification limit and idle timer
+//!   ([`connection::QuicConnection::on_datagram_received`]), then walking the
+//!   coalesced packets front to back (RFC 9000 §12.2): it peeks each header to pick
+//!   the [`recv_path::SpaceKeys`] from a [`recv_path::RecvKeyRing`], decrypts through
+//!   [`packet_crypt::decrypt_packet`], parses the authenticated payload into frames,
+//!   checks each against the packet type's permission table (RFC 9000 §12.4), and
+//!   dispatches them through [`connection::QuicConnection::process_packet`], merging
+//!   every packet's [`connection::PacketEffects`] into one [`recv_path::IngestReport`].
+//!   Only an authenticated packet's content raises a [`recv_path::IngestError`] (a
+//!   malformed frame, a barred frame, or a connection-level violation); a packet
+//!   with no keys yet is counted undecryptable, and an AEAD failure or a malformed
+//!   coalesced header is silently discarded (RFC 9001 §5.5.2). Pure apart from the
+//!   caller-supplied `now`.
+//! - Slice 54+ (planned) — the rest of the QUIC transport: the connection driver
+//!   that decides *when* to ingest and flush by composing [`recv_path`] and
+//!   [`send_path`] with the timer loop over [`event_loop`], and the `h3_do_request`
 //!   dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
@@ -706,6 +724,7 @@ pub mod qpack_encoder;
 pub mod qpack_stream;
 pub mod quic_frame;
 pub mod recovery;
+pub mod recv_path;
 pub mod retry;
 pub mod send;
 pub mod send_engine;
