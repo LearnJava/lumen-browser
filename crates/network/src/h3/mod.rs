@@ -238,7 +238,24 @@
 //!   reports how far below the [`datagram::MIN_INITIAL_DATAGRAM_LEN`] (RFC 9000
 //!   §14.1) a client Initial datagram is, for the frame layer to pad inside the
 //!   packet before encryption. Pure functions, no IO.
-//! - Slice 25+ (planned) — the rest of the QUIC transport: the UDP send/receive
+//! - Slice 25 — the QUIC transport parameters codec ([`transport_params`],
+//!   RFC 9000 §18, §7.4): the pure parse/serialize of the
+//!   `quic_transport_parameters` TLS extension body (RFC 9001 §8.2) — a bare
+//!   sequence of `(id, length, value)` entries over [`varint`] — into a typed
+//!   [`transport_params::TransportParameters`], with the RFC 9000 §18.2
+//!   validation (single occurrence per id, the `max_udp_payload_size` /
+//!   `ack_delay_exponent` / `max_ack_delay` / `active_connection_id_limit`
+//!   ranges, the fixed-width `stateless_reset_token` and preferred-address
+//!   fields) and default resolution. These are the values that configure the
+//!   connection state machines built above — the peer's `initial_max_data`
+//!   seeds [`conn_flow::SendConnFlow`], its `initial_max_stream_data_*` bound
+//!   [`stream::SendStream`], its `initial_max_streams_*` seed the [`conn_flow`]
+//!   stream limits, its `max_udp_payload_size` clamps the [`recovery`] datagram
+//!   size, and its `ack_delay_exponent` / `max_ack_delay` scale the ACK-delay
+//!   handling in [`loss`] / [`pto`]. Unknown / reserved (GREASE, RFC 9000 §18.1)
+//!   ids are preserved verbatim so the round-trip is byte-stable. Pure
+//!   functions, no IO; wiring the values into a live connection is a later slice.
+//! - Slice 26+ (planned) — the rest of the QUIC transport: the UDP send/receive
 //!   and Path MTU, actually arming the PTO timer and assembling probe datagrams,
 //!   the QPACK encoder/decoder stream instruction wiring, and `h3_do_request`
 //!   dispatch alongside the existing H1/H2 paths.
@@ -269,4 +286,5 @@ pub mod tls_cert_verify;
 pub mod tls_finished;
 pub mod tls_message;
 pub mod tls_schedule;
+pub mod transport_params;
 pub mod varint;

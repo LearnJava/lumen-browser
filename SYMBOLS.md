@@ -2301,7 +2301,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (566 symbols)
+## lumen-network  (583 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -2496,6 +2496,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/conn_flow.rs:417` **fn** `record_open` — Records that the peer opened a stream whose cumulative count is `count`
 `crates/network/src/h3/conn_flow.rs:427` **fn** `record_closed` — Records that `delta` more streams of this direction have finished
 `crates/network/src/h3/conn_flow.rs:435` **fn** `window_update` — Re-advertises the limit as `closed + concurrency` and returns the new
+`crates/network/src/h3/datagram.rs:55` **enum** `DatagramError` — Error splitting or assembling a coalesced QUIC datagram
+`crates/network/src/h3/datagram.rs:108` **fn** `parse_datagram` — Split a received UDP datagram into its ordered sequence of coalesced packets
+`crates/network/src/h3/datagram.rs:139` **fn** `encode_datagram` — Assemble an ordered sequence of packets into one UDP datagram payload
 `crates/network/src/h3/frame.rs:89` **enum** `FrameError` — Codec-level error. Each variant maps to exactly one RFC 9114 §8.1 wire error
 `crates/network/src/h3/frame.rs:132` **enum** `Frame` — A parsed HTTP/3 frame (RFC 9114 §7.2). Field sections in `Headers` /
 `crates/network/src/h3/frame.rs:196` **fn** `parse` — Parse one frame from the front of `buf`
@@ -2544,7 +2547,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/packet.rs:90` **enum** `PacketError` — Packet-header codec error. The connection layer maps these to the
 `crates/network/src/h3/packet.rs:141` **enum** `Packet` — A parsed QUIC packet header plus its opaque protected region (RFC 9000 §17)
 `crates/network/src/h3/packet.rs:261` **fn** `parse` — Parse one QUIC packet header (and its protected remainder) from the
-`crates/network/src/h3/packet.rs:368` **fn** `encode` — Serialize this packet header and its protected region onto `out`
+`crates/network/src/h3/packet.rs:378` **fn** `encode` — Serialize this packet header and its protected region onto `out`
 `crates/network/src/h3/packet_protect.rs:66` **enum** `ProtectionError` — Errors from the packet-protection transforms
 `crates/network/src/h3/packet_protect.rs:132` **fn** `aes_128_gcm_seal` — Seal a packet payload with AES-128-GCM (RFC 9001 §5.3). Returns
 `crates/network/src/h3/packet_protect.rs:154` **fn** `aes_128_gcm_open` — Open a sealed packet payload with AES-128-GCM (RFC 9001 §5.3), verifying the
@@ -2665,13 +2668,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/stream.rs:630` **fn** `reset` — Abruptly terminates the sending half with `error_code`, discarding any
 `crates/network/src/h3/stream.rs:640` **fn** `on_reset_ack` — Acknowledges the RESET_STREAM, moving to `ResetRecvd` (RFC 9000 §3.1)
 `crates/network/src/h3/stream.rs:648` **fn** `reset_error` — The application error code if the stream was reset (RFC 9000 §19.4)
-`crates/network/src/h3/tls_cert_verify.rs:125` **enum** `CertVerifyRole` — Which side signed the `CertificateVerify`, selecting the context string that
-`crates/network/src/h3/tls_cert_verify.rs:135` **fn** `context` — The context string this role signs into the content (RFC 8446 §4.4.3)
-`crates/network/src/h3/tls_cert_verify.rs:145` **enum** `CertVerifyError` — Why a `CertificateVerify` failed to verify
-`crates/network/src/h3/tls_cert_verify.rs:183` **fn** `certificate_verify_content` — Build the content a `CertificateVerify` signature is computed over
-`crates/network/src/h3/tls_cert_verify.rs:208` **fn** `ecdsa_p256_sha256_verify` — Verify an `ecdsa_secp256r1_sha256` signature (RFC 8446 §4.2.3): ECDSA over
-`crates/network/src/h3/tls_cert_verify.rs:238` **fn** `ed25519_verify` — Verify an `ed25519` signature (RFC 8446 §4.2.3, RFC 8032): EdDSA over
-`crates/network/src/h3/tls_cert_verify.rs:268` **fn** `verify_certificate_verify` — Verify a peer's `CertificateVerify` end to end (RFC 8446 §4.4.3): build the
+`crates/network/src/h3/tls_cert_verify.rs:169` **enum** `CertVerifyRole` — Which side signed the `CertificateVerify`, selecting the context string that
+`crates/network/src/h3/tls_cert_verify.rs:179` **fn** `context` — The context string this role signs into the content (RFC 8446 §4.4.3)
+`crates/network/src/h3/tls_cert_verify.rs:189` **enum** `CertVerifyError` — Why a `CertificateVerify` failed to verify
+`crates/network/src/h3/tls_cert_verify.rs:227` **fn** `certificate_verify_content` — Build the content a `CertificateVerify` signature is computed over
+`crates/network/src/h3/tls_cert_verify.rs:252` **fn** `ecdsa_p256_sha256_verify` — Verify an `ecdsa_secp256r1_sha256` signature (RFC 8446 §4.2.3): ECDSA over
+`crates/network/src/h3/tls_cert_verify.rs:283` **fn** `ecdsa_p384_sha384_verify` — Verify an `ecdsa_secp384r1_sha384` signature (RFC 8446 §4.2.3): ECDSA over
+`crates/network/src/h3/tls_cert_verify.rs:314` **fn** `ecdsa_p521_sha512_verify` — Verify an `ecdsa_secp521r1_sha512` signature (RFC 8446 §4.2.3): ECDSA over
+`crates/network/src/h3/tls_cert_verify.rs:344` **fn** `ed25519_verify` — Verify an `ed25519` signature (RFC 8446 §4.2.3, RFC 8032): EdDSA over
+`crates/network/src/h3/tls_cert_verify.rs:400` **fn** `rsa_pss_sha256_verify` — Verify an `rsa_pss_rsae_sha256` signature (RFC 8446 §4.2.3, RFC 8017 §8.1):
+`crates/network/src/h3/tls_cert_verify.rs:416` **fn** `rsa_pss_sha384_verify` — Verify an `rsa_pss_rsae_sha384` signature (RFC 8446 §4.2.3, RFC 8017 §8.1):
+`crates/network/src/h3/tls_cert_verify.rs:432` **fn** `rsa_pss_sha512_verify` — Verify an `rsa_pss_rsae_sha512` signature (RFC 8446 §4.2.3, RFC 8017 §8.1):
+`crates/network/src/h3/tls_cert_verify.rs:461` **fn** `verify_certificate_verify` — Verify a peer's `CertificateVerify` end to end (RFC 8446 §4.4.3): build the
 `crates/network/src/h3/tls_finished.rs:66` **fn** `finished_key` — The `finished_key` for one direction:
 `crates/network/src/h3/tls_finished.rs:81` **fn** `finished_verify_data` — The `verify_data` a sender writes into its `Finished` message:
 `crates/network/src/h3/tls_finished.rs:95` **fn** `verify_finished` — Verify a peer's `Finished`: recompute the expected `verify_data` from the
@@ -2711,6 +2719,15 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/tls_schedule.rs:245` **fn** `exporter_master_secret` — The exporter master secret (RFC 8446 §7.5):
 `crates/network/src/h3/tls_schedule.rs:252` **fn** `resumption_master_secret` — The resumption master secret (RFC 8446 §7.1):
 `crates/network/src/h3/tls_schedule.rs:262` **struct** `DirectionalKeys` — A pair of QUIC packet-protection key sets, one for each direction of a
+`crates/network/src/h3/transport_params.rs:139` **enum** `TransportParameterError` — Transport-parameters codec error. Every variant is a
+`crates/network/src/h3/transport_params.rs:203` **struct** `PreferredAddress` — The `preferred_address` parameter's value: a server address (both an IPv4
+`crates/network/src/h3/transport_params.rs:266` **struct** `TransportParameters` — A parsed set of QUIC transport parameters (RFC 9000 §18.2). Every parameter
+`crates/network/src/h3/transport_params.rs:311` **fn** `max_udp_payload_size` — Effective `max_udp_payload_size`, applying the RFC 9000 §18.2 default of
+`crates/network/src/h3/transport_params.rs:318` **fn** `ack_delay_exponent` — Effective `ack_delay_exponent`, applying the RFC 9000 §18.2 default of
+`crates/network/src/h3/transport_params.rs:325` **fn** `max_ack_delay_ms` — Effective `max_ack_delay` in milliseconds, applying the RFC 9000 §18.2
+`crates/network/src/h3/transport_params.rs:332` **fn** `active_connection_id_limit` — Effective `active_connection_id_limit`, applying the RFC 9000 §18.2
+`crates/network/src/h3/transport_params.rs:344` **fn** `parse` — Parse the body of a `quic_transport_parameters` extension (RFC 9000 §18):
+`crates/network/src/h3/transport_params.rs:455` **fn** `serialize` — Serialize these transport parameters into an extension body (RFC 9000
 `crates/network/src/h3/varint.rs:22` **struct** `VarIntTooLarge` — Error returned by [`encode`] when a value does not fit in a QUIC varint
 `crates/network/src/h3/varint.rs:35` **fn** `encoded_len` — Number of bytes the varint encoding of `value` occupies (1, 2, 4, or 8), or
 `crates/network/src/h3/varint.rs:51` **fn** `encode` — Append the shortest QUIC varint encoding of `value` to `out`
@@ -2998,10 +3015,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/display_list.rs:2040` **fn** `build_print_display_list` — Builds a print display list from paginated layout
 `crates/engine/paint/src/display_list.rs:2105` **fn** `split_at_page_breaks` — Splits a print display list at `PageBreak` markers
 `crates/engine/paint/src/display_list.rs:2132` **fn** `strip_background_graphics` — Removes background-graphics paint commands from each print page when the
-`crates/engine/paint/src/display_list.rs:3249` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
-`crates/engine/paint/src/display_list.rs:3378` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
-`crates/engine/paint/src/display_list.rs:4238` **fn** `point_on_resize_grip` — Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента
-`crates/engine/paint/src/display_list.rs:14943` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
+`crates/engine/paint/src/display_list.rs:3258` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
+`crates/engine/paint/src/display_list.rs:3387` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
+`crates/engine/paint/src/display_list.rs:4247` **fn** `point_on_resize_grip` — Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента
+`crates/engine/paint/src/display_list.rs:15055` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
 `crates/engine/paint/src/display_list_cache.rs:21` **struct** `CachedDisplayLayer` — Cached display list for a stacking context or page subtree
 `crates/engine/paint/src/display_list_cache.rs:45` **struct** `DisplayListCache` — LRU cache that maps `NodeId` (u32) to a pre-built `Vec<DisplayCommand>`
 `crates/engine/paint/src/display_list_cache.rs:59` **fn** `new` — Create a cache with the default 32 MB budget
@@ -4648,4 +4665,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4577 symbols in 22 crates*
+*Total: 4594 symbols in 22 crates*
