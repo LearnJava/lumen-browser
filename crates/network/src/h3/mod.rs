@@ -187,10 +187,22 @@
 //!   the RFC 6979 Appendix A.2.5 P-256/SHA-256 vector. Out of scope:
 //!   `rsa_pss_rsae_sha256` / `ed25519` verifiers and X.509 `SubjectPublicKeyInfo`
 //!   extraction (the caller passes the SEC1 EC point).
-//! - Slice 20+ (planned) — the rest of the QUIC transport: UDP datagrams,
+//! - Slice 20 — the `ed25519` `CertificateVerify` scheme
+//!   ([`tls_cert_verify::ed25519_verify`], RFC 8446 §4.2.3, RFC 8032): EdDSA over
+//!   Curve25519, which (unlike the ECDSA schemes) signs the signed content
+//!   directly with no prehash and carries the signature raw with no DER wrapper.
+//!   [`tls_cert_verify::verify_certificate_verify`] now dispatches
+//!   `ecdsa_secp256r1_sha256` and `ed25519`; the public key is the raw 32-octet
+//!   Ed25519 point (RFC 8410 §4). The verifier comes from `ed25519-dalek`, which
+//!   reuses the `curve25519-dalek` already in the tree via `x25519-dalek` (same
+//!   dalek family, constant-time). Pure functions; validated against the RFC 8032
+//!   §7.1 TEST 1 vector. Out of scope: `rsa_pss_rsae_sha256` and the P-384/P-521
+//!   variants (still [`tls_cert_verify::CertVerifyError::UnsupportedScheme`]).
+//! - Slice 21+ (planned) — the rest of the QUIC transport: UDP datagrams,
 //!   actually arming the PTO timer and assembling probe datagrams, the QPACK
 //!   encoder/decoder stream instruction wiring, the remaining `CertificateVerify`
-//!   schemes, and `h3_do_request` dispatch alongside the existing H1/H2 paths.
+//!   schemes (`rsa_pss_rsae_sha256`), and `h3_do_request` dispatch alongside the
+//!   existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the

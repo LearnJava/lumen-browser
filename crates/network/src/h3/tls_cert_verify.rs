@@ -43,20 +43,41 @@
 //!   content for the role and transcript, then verify the DER-encoded signature
 //!   under the peer's public key for the named scheme.
 //!
+//! ## Scheme coverage
+//!
+//! Two schemes are verified here, both TLS 1.3 mandatory-to-implement or widely
+//! deployed and both reusing crates already in this crate (no new-purpose
+//! dependency beyond the dalek family QUIC already pulls):
+//!
+//! - `ecdsa_secp256r1_sha256` (0x0403, [`ecdsa_p256_sha256_verify`]) — ECDSA over
+//!   NIST P-256 with SHA-256, an RFC 8446 §9.1 mandatory scheme, on the `p256`
+//!   crate (WebAuthn ES256). Public key is the SEC1 EC point; signature is DER.
+//! - `ed25519` (0x0807, [`ed25519_verify`]) — EdDSA over Curve25519 (RFC 8032),
+//!   signs the message directly with no prehash and no DER wrapper, on the
+//!   `ed25519-dalek` crate, which reuses the `curve25519-dalek` already in the
+//!   tree via `x25519-dalek`. Public key is the raw 32-octet Ed25519 point;
+//!   signature is the raw 64 octets.
+//!
 //! ## Deferred
 //!
-//! Only `ecdsa_secp256r1_sha256` (0x0403) is verified here — it is one of the
-//! TLS 1.3 mandatory-to-implement `CertificateVerify` schemes (RFC 8446 §9.1)
-//! and reuses the `p256` crate already in this crate (WebAuthn ES256), so this
-//! slice adds no dependency. The other schemes named in [`signature_scheme`]
-//! (`rsa_pss_rsae_sha256`, `ed25519`, the P-384/P-521 and RSA-PKCS1 variants)
-//! return [`CertVerifyError::UnsupportedScheme`] until a later slice wires their
+//! The remaining schemes named in [`signature_scheme`] (`rsa_pss_rsae_sha256`,
+//! the P-384/P-521 variants, and the RSA-PKCS1 / ed448 codepoints) return
+//! [`CertVerifyError::UnsupportedScheme`] until a later slice wires their
 //! verifiers. Extracting the public key from the end-entity certificate's
 //! `SubjectPublicKeyInfo` is the caller's job (X.509 parsing is delegated, see
-//! [`super::tls_message`]); this module takes the SEC1-encoded EC point directly.
+//! [`super::tls_message`]); this module takes the decoded key material directly
+//! (the SEC1 EC point for ECDSA, the raw 32-octet point for Ed25519).
 
-use p256::ecdsa::signature::Verifier;
+// `signature::Verifier` is the shared trait behind both `.verify()` calls below;
+// ed25519-dalek re-exports the very same trait p256 does, so one import covers both.
+use ed25519_dalek::{Signature as Ed25519Signature, Verifier, VerifyingKey as Ed25519VerifyingKey};
 use p256::ecdsa::{Signature, VerifyingKey};
+
+/// The length in octets of a raw Ed25519 public key (RFC 8032 §5.1).
+pub const ED25519_PUBLIC_KEY_LEN: usize = 32;
+
+/// The length in octets of a raw Ed25519 signature (RFC 8032 §5.1).
+pub const ED25519_SIGNATURE_LEN: usize = 64;
 
 /// The number of `0x20` (ASCII space) octets that prefix the signed content
 /// (RFC 8446 §4.4.3).
@@ -197,22 +218,56 @@ pub fn ecdsa_p256_sha256_verify(
         .map_err(|_| CertVerifyError::BadSignature)
 }
 
+/// Verify an `ed25519` signature (RFC 8446 §4.2.3, RFC 8032): EdDSA over
+/// Curve25519, which signs the message directly (no prehash) and carries the
+/// signature raw (no DER wrapper), unlike the ECDSA schemes.
+///
+/// `public_key` is the peer's raw 32-octet Ed25519 public key (the
+/// `subjectPublicKey` bit string of the end-entity certificate's
+/// `SubjectPublicKeyInfo`, RFC 8410 §4). `message` is the already-built signed
+/// content (see [`certificate_verify_content`]); Ed25519 hashes it internally as
+/// part of the signature equation, so it is passed verbatim. `signature` is the
+/// raw 64-octet `R ‖ S` value.
+///
+/// # Errors
+///
+/// [`CertVerifyError::MalformedPublicKey`] if `public_key` is not a valid
+/// 32-octet Ed25519 point, [`CertVerifyError::MalformedSignature`] if `signature`
+/// is not 64 octets, and [`CertVerifyError::BadSignature`] if the signature does
+/// not verify over `message`.
+pub fn ed25519_verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<(), CertVerifyError> {
+    let key_bytes: &[u8; ED25519_PUBLIC_KEY_LEN] =
+        public_key.try_into().map_err(|_| CertVerifyError::MalformedPublicKey)?;
+    let verifying_key =
+        Ed25519VerifyingKey::from_bytes(key_bytes).map_err(|_| CertVerifyError::MalformedPublicKey)?;
+    let signature =
+        Ed25519Signature::from_slice(signature).map_err(|_| CertVerifyError::MalformedSignature)?;
+    verifying_key
+        .verify(message, &signature)
+        .map_err(|_| CertVerifyError::BadSignature)
+}
+
 /// Verify a peer's `CertificateVerify` end to end (RFC 8446 §4.4.3): build the
 /// signed content for `role` and `transcript_hash`, then verify `signature`
 /// under `public_key_sec1` for the named `scheme`.
 ///
 /// `scheme` is the [`super::tls_message::CertificateVerify::algorithm`] value;
-/// `public_key_sec1` is the SEC1 EC point from the end-entity certificate;
+/// `public_key` is the peer's key material from the end-entity certificate
+/// (SEC1 EC point for ECDSA, raw 32-octet point for Ed25519);
 /// `transcript_hash` is `Transcript-Hash(Handshake Context, Certificate)`;
 /// `signature` is [`super::tls_message::CertificateVerify::signature`].
+///
+/// `public_key` is the decoded key material for the scheme — the SEC1 EC point
+/// for `ecdsa_secp256r1_sha256`, the raw 32-octet point for `ed25519`.
 ///
 /// # Errors
 ///
 /// [`CertVerifyError::UnsupportedScheme`] for any scheme other than
-/// `ecdsa_secp256r1_sha256`, plus the [`ecdsa_p256_sha256_verify`] errors.
+/// `ecdsa_secp256r1_sha256` or `ed25519`, plus the per-scheme verifier errors
+/// ([`ecdsa_p256_sha256_verify`], [`ed25519_verify`]).
 pub fn verify_certificate_verify(
     scheme: u16,
-    public_key_sec1: &[u8],
+    public_key: &[u8],
     role: CertVerifyRole,
     transcript_hash: &[u8],
     signature: &[u8],
@@ -220,7 +275,11 @@ pub fn verify_certificate_verify(
     match scheme {
         signature_scheme::ECDSA_SECP256R1_SHA256 => {
             let content = certificate_verify_content(role, transcript_hash);
-            ecdsa_p256_sha256_verify(public_key_sec1, &content, signature)
+            ecdsa_p256_sha256_verify(public_key, &content, signature)
+        }
+        signature_scheme::ED25519 => {
+            let content = certificate_verify_content(role, transcript_hash);
+            ed25519_verify(public_key, &content, signature)
         }
         other => Err(CertVerifyError::UnsupportedScheme(other)),
     }
@@ -369,6 +428,146 @@ mod tests {
         );
     }
 
+    // ── Ed25519 primitive against the RFC 8032 §7.1 vector ─────────────────
+    //
+    // RFC 8032 §7.1 TEST 2 fixes a secret key, the public key it derives to, a
+    // one-octet message `0x72`, and the resulting signature. We rebuild the
+    // signature deterministically from the RFC secret key (Ed25519 signing is
+    // deterministic, RFC 8032 §5.1.6, so the produced bytes ARE the RFC
+    // signature) and first assert the derived public key equals the RFC public
+    // key — pinning the vector to the RFC before feeding it to `ed25519_verify`.
+
+    /// The RFC 8032 §7.1 TEST 2 secret key (seed).
+    fn rfc8032_test2_secret_key() -> Vec<u8> {
+        hex("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb")
+    }
+
+    /// The RFC 8032 §7.1 TEST 2 public key (raw 32-octet Ed25519 point) the
+    /// secret key must derive to.
+    fn rfc8032_test2_public_key() -> Vec<u8> {
+        hex("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c")
+    }
+
+    /// The RFC 8032 §7.1 TEST 2 message (a single octet).
+    const RFC8032_TEST2_MESSAGE: &[u8] = &[0x72];
+
+    /// The RFC 8032 TEST 2 (public key, signature) pair, rebuilt from the RFC
+    /// secret key. Asserts the derived public key matches the published one so
+    /// the vector is pinned to the RFC, then returns the deterministic signature.
+    fn rfc8032_test2_pk_sig() -> (Vec<u8>, Vec<u8>) {
+        use ed25519_dalek::Signer;
+        let sk = ed25519_dalek::SigningKey::from_bytes(
+            &rfc8032_test2_secret_key().try_into().expect("32-byte seed"),
+        );
+        let pk = sk.verifying_key().to_bytes().to_vec();
+        assert_eq!(pk, rfc8032_test2_public_key(), "RFC 8032 TEST 2 public key mismatch");
+        let sig = sk.sign(RFC8032_TEST2_MESSAGE).to_bytes().to_vec();
+        (pk, sig)
+    }
+
+    #[test]
+    fn ed25519_verifies_the_rfc8032_test2_vector() {
+        let (pk, sig) = rfc8032_test2_pk_sig();
+        assert_eq!(ed25519_verify(&pk, RFC8032_TEST2_MESSAGE, &sig), Ok(()));
+    }
+
+    #[test]
+    fn ed25519_rejects_a_tampered_message() {
+        // The RFC 8032 TEST 2 signature is over `0x72`; verifying it over any
+        // other message must fail.
+        let (pk, sig) = rfc8032_test2_pk_sig();
+        assert_eq!(ed25519_verify(&pk, &[0x73], &sig), Err(CertVerifyError::BadSignature));
+    }
+
+    #[test]
+    fn ed25519_rejects_a_tampered_signature() {
+        let (pk, mut sig) = rfc8032_test2_pk_sig();
+        sig[0] ^= 0x01;
+        assert_eq!(
+            ed25519_verify(&pk, RFC8032_TEST2_MESSAGE, &sig),
+            Err(CertVerifyError::BadSignature)
+        );
+    }
+
+    #[test]
+    fn ed25519_rejects_a_wrong_length_public_key() {
+        // Ed25519 keys are exactly 32 octets; anything else is malformed.
+        let (_, sig) = rfc8032_test2_pk_sig();
+        assert_eq!(
+            ed25519_verify(&[0u8; 31], RFC8032_TEST2_MESSAGE, &sig),
+            Err(CertVerifyError::MalformedPublicKey)
+        );
+        assert_eq!(
+            ed25519_verify(&[0u8; 33], RFC8032_TEST2_MESSAGE, &sig),
+            Err(CertVerifyError::MalformedPublicKey)
+        );
+    }
+
+    #[test]
+    fn ed25519_rejects_a_wrong_length_signature() {
+        // Ed25519 signatures are exactly 64 octets.
+        let (pk, _) = rfc8032_test2_pk_sig();
+        assert_eq!(
+            ed25519_verify(&pk, RFC8032_TEST2_MESSAGE, &[0u8; 63]),
+            Err(CertVerifyError::MalformedSignature)
+        );
+    }
+
+    // ── End-to-end Ed25519 CertificateVerify over a real transcript hash ───
+    //
+    // Sign a CertificateVerify content with a deterministic Ed25519 key (Ed25519
+    // is fully deterministic per RFC 8032), then check that
+    // verify_certificate_verify accepts it and rejects every tampering.
+
+    /// A deterministic Ed25519 signing key for the end-to-end tests (fixed seed).
+    fn ed25519_e2e_key() -> ed25519_dalek::SigningKey {
+        ed25519_dalek::SigningKey::from_bytes(
+            &hex("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20")
+                .try_into()
+                .expect("32-byte seed"),
+        )
+    }
+
+    #[test]
+    fn end_to_end_ed25519_server_certificate_verify_roundtrips() {
+        use ed25519_dalek::Signer;
+        let sk = ed25519_e2e_key();
+        let pk = sk.verifying_key().to_bytes().to_vec();
+        let th = e2e_transcript_hash();
+
+        let content = certificate_verify_content(CertVerifyRole::Server, &th);
+        let sig = sk.sign(&content).to_bytes().to_vec();
+
+        assert_eq!(
+            verify_certificate_verify(signature_scheme::ED25519, &pk, CertVerifyRole::Server, &th, &sig),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn end_to_end_ed25519_rejects_wrong_role_and_transcript() {
+        use ed25519_dalek::Signer;
+        let sk = ed25519_e2e_key();
+        let pk = sk.verifying_key().to_bytes().to_vec();
+        let th = e2e_transcript_hash();
+
+        let content = certificate_verify_content(CertVerifyRole::Server, &th);
+        let sig = sk.sign(&content).to_bytes().to_vec();
+
+        // A server signature must not verify as a client CertificateVerify.
+        assert_eq!(
+            verify_certificate_verify(signature_scheme::ED25519, &pk, CertVerifyRole::Client, &th, &sig),
+            Err(CertVerifyError::BadSignature)
+        );
+        // Nor over an altered transcript hash (MITM detection).
+        let mut altered = th.clone();
+        altered[0] ^= 0xff;
+        assert_eq!(
+            verify_certificate_verify(signature_scheme::ED25519, &pk, CertVerifyRole::Server, &altered, &sig),
+            Err(CertVerifyError::BadSignature)
+        );
+    }
+
     // ── End-to-end CertificateVerify over a real transcript hash ───────────
     //
     // Deterministically sign a CertificateVerify content with a fresh P-256 key
@@ -490,9 +689,9 @@ mod tests {
         let th = e2e_transcript_hash();
         for scheme in [
             signature_scheme::RSA_PSS_RSAE_SHA256,
-            signature_scheme::ED25519,
             signature_scheme::ECDSA_SECP384R1_SHA384,
             signature_scheme::RSA_PKCS1_SHA256,
+            signature_scheme::ED448,
         ] {
             assert_eq!(
                 verify_certificate_verify(scheme, &rfc6979_public_key_sec1(), CertVerifyRole::Server, &th, &[]),
