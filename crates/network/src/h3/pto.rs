@@ -188,6 +188,20 @@ impl LossDetection {
         }
     }
 
+    /// All three per-space registries borrowed mutably at once, in the fixed order
+    /// `[Initial, Handshake, ApplicationData]`.
+    ///
+    /// [`LossDetection::registry_mut`] hands back one registry at a time, which
+    /// cannot build the array of simultaneous per-space borrows the send-path flush
+    /// needs: [`send_path::flush`](super::send_path::flush) takes every space's send
+    /// state together so it can coalesce their packets into one datagram (RFC 9000
+    /// §12.2), and each space's [`SpaceFlush`](super::send_path::SpaceFlush) carries
+    /// its own `&mut SentPacketRegistry`. Splitting the disjoint struct-field borrows
+    /// in a single call is what lets those live at the same time.
+    pub fn registries_mut(&mut self) -> [&mut SentPacketRegistry; 3] {
+        [&mut self.initial, &mut self.handshake, &mut self.app_data]
+    }
+
     /// The RTT estimator, borrowed immutably.
     pub fn rtt(&self) -> &RttEstimator {
         &self.rtt
