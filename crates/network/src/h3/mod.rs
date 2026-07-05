@@ -213,11 +213,24 @@
 //!   `CertificateVerify` content with a generated RSA key and rejecting every
 //!   tampering. Out of scope: the P-384/P-521 ECDSA variants and the SHA-384/512
 //!   RSA-PSS variants (still [`tls_cert_verify::CertVerifyError::UnsupportedScheme`]).
-//! - Slice 22+ (planned) — the rest of the QUIC transport: UDP datagrams,
+//! - Slice 22 — the `rsa_pss_rsae_sha384` and `rsa_pss_rsae_sha512`
+//!   `CertificateVerify` schemes ([`tls_cert_verify::rsa_pss_sha384_verify`],
+//!   [`tls_cert_verify::rsa_pss_sha512_verify`], RFC 8446 §4.2.3, RFC 8017 §8.1):
+//!   the SHA-384/512 siblings of slice 21, identical but for the MGF1 and message
+//!   digest, commonly signed by 3072/4096-bit certificates. All three RSA-PSS
+//!   variants now share one generic verifier over `D: Digest`, reusing the `rsa`
+//!   crate and the `sha2` digests already in the tree — no new dependency.
+//!   [`tls_cert_verify::verify_certificate_verify`] now dispatches
+//!   `ecdsa_secp256r1_sha256`, `ed25519`, and `rsa_pss_rsae_sha256/384/512`. Pure
+//!   functions; validated end-to-end by signing a `CertificateVerify` content with
+//!   generated RSA keys and rejecting a cross-digest signature. Out of scope: the
+//!   P-384/P-521 ECDSA variants (still
+//!   [`tls_cert_verify::CertVerifyError::UnsupportedScheme`]).
+//! - Slice 23+ (planned) — the rest of the QUIC transport: UDP datagrams,
 //!   actually arming the PTO timer and assembling probe datagrams, the QPACK
 //!   encoder/decoder stream instruction wiring, the remaining `CertificateVerify`
-//!   schemes (P-384/P-521 ECDSA, SHA-384/512 RSA-PSS), and `h3_do_request`
-//!   dispatch alongside the existing H1/H2 paths.
+//!   schemes (P-384/P-521 ECDSA), and `h3_do_request` dispatch alongside the
+//!   existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
