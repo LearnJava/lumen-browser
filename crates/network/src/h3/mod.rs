@@ -424,7 +424,20 @@
 //!   connection-ID retirement ([`conn_id::RemoteConnIds::switch_to`]) and
 //!   congestion reset are the caller's job, and simultaneous multi-path use is out
 //!   of scope.
-//! - Slice 38+ (planned) — the rest of the QUIC transport: the UDP send/receive,
+//! - Slice 38 — QUIC client-side version negotiation ([`version_nego`],
+//!   RFC 9000 §6.2): the pure state a client runs on a received Version
+//!   Negotiation packet ([`packet::Packet::VersionNegotiation`]), mirroring
+//!   slice 33's [`retry`] handling of a Retry. [`version_nego::VersionNegotiator`]
+//!   holds the client's ordered version preferences and its attempted version,
+//!   validates the packet (echoed connection IDs, RFC 9000 §6.1), enforces the
+//!   §6.2 rules — process at most one and only before any other packet, discard a
+//!   packet that lists the attempted version (forged/erroneous), select the
+//!   most-preferred mutually supported version and abandon on an empty
+//!   intersection — and reports the [`version_nego::VersionNegotiationOutcome`]
+//!   (the version to restart with). Pure state machine, no IO; the caller
+//!   re-derives Initial keys and re-sends its Initial. Downgrade protection
+//!   proper (RFC 9000 §6.3) lives with [`transport_params`].
+//! - Slice 39+ (planned) — the rest of the QUIC transport: the UDP send/receive,
 //!   actually arming the PTO/ACK-delay timers and assembling probe datagrams, the
 //!   QPACK encoder/decoder stream instruction wiring, and `h3_do_request` dispatch
 //!   alongside the existing H1/H2 paths.
@@ -468,3 +481,4 @@ pub mod tls_message;
 pub mod tls_schedule;
 pub mod transport_params;
 pub mod varint;
+pub mod version_nego;
