@@ -315,7 +315,20 @@
 //!   packet. AES suite only, matching [`packet_protect`]. Pure functions over
 //!   byte buffers and a supplied key set; the round-trip and the in-the-clear
 //!   header layout are validated against the RFC 9001 Appendix A.2 client Initial.
-//! - Slice 30+ (planned) — the rest of the QUIC transport: the UDP send/receive,
+//! - Slice 31 — the QUIC CRYPTO stream ([`crypto_stream`], RFC 9000 §7.5,
+//!   §19.6): the per-encryption-level reassembly of the TLS handshake byte
+//!   stream carried in CRYPTO frames ([`quic_frame::Frame::Crypto`], RFC 9001
+//!   §4), the bridge between the decoded transport frames and the [`tls_message`]
+//!   handshake codec. Unlike [`stream`] it has no stream ID, no flow-control
+//!   window, and no FIN. [`crypto_stream::CryptoRecvStream`] merges out-of-order
+//!   / overlapping / duplicated CRYPTO frames into the contiguous handshake
+//!   prefix, enforcing a reassembly bound
+//!   ([`crypto_stream::CryptoStreamError::BufferExceeded`] →
+//!   `CRYPTO_BUFFER_EXCEEDED`, RFC 9000 §7.5); [`crypto_stream::CryptoSendStream`]
+//!   buffers the handshake bytes TLS emits, hands them back as CRYPTO frames
+//!   bounded by a size cap, and tracks the acknowledged ranges. Pure state
+//!   machine driven by decoded frames; no retransmission, no IO.
+//! - Slice 32+ (planned) — the rest of the QUIC transport: the UDP send/receive,
 //!   actually arming the PTO/ACK-delay timers and assembling probe datagrams, the
 //!   QPACK encoder/decoder stream instruction wiring, and `h3_do_request` dispatch
 //!   alongside the existing H1/H2 paths.
@@ -329,6 +342,7 @@
 pub mod ack;
 pub mod alt_svc;
 pub mod conn_flow;
+pub mod crypto_stream;
 pub mod datagram;
 pub mod frame;
 pub mod h3_stream;
