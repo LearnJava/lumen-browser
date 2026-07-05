@@ -2301,7 +2301,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (726 symbols)
+## lumen-network  (750 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -2651,6 +2651,30 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/packet_protect.rs:181` **fn** `aes_128_hp_mask` — Derive the 5-byte header-protection mask from a ciphertext sample
 `crates/network/src/h3/packet_protect.rs:221` **fn** `apply_header_protection` — Apply header protection to an assembled packet in place (RFC 9001 §5.4.1, the
 `crates/network/src/h3/packet_protect.rs:249` **fn** `remove_header_protection` — Remove header protection from a received packet in place (RFC 9001 §5.4.1,
+`crates/network/src/h3/path_migration.rs:66` **fn** `is_probing_frame` — Whether `frame` is a *probing frame* (RFC 9000 §9.1). A packet built only from
+`crates/network/src/h3/path_migration.rs:81` **fn** `is_probing_packet` — Whether the frames of a packet make it a *probing packet* (RFC 9000 §9.1):
+`crates/network/src/h3/path_migration.rs:98` **struct** `NewPath` — A description of the new path a migration targets, controlling the two
+`crates/network/src/h3/path_migration.rs:141` **enum** `MigrationError` — Why a migration could not be initiated (RFC 9000 §9)
+`crates/network/src/h3/path_migration.rs:169` **enum** `MigrationState` — The state of the connection's migration machinery (RFC 9000 §9)
+`crates/network/src/h3/path_migration.rs:183` **struct** `MigrationOutcome` — The result of a migration completing successfully (RFC 9000 §9.4, §9.5). The
+`crates/network/src/h3/path_migration.rs:207` **struct** `ConnectionMigration` — The connection migration state machine (RFC 9000 §9)
+`crates/network/src/h3/path_migration.rs:237` **fn** `new` — Create a migration state machine in the [`Stable`](MigrationState::Stable)
+`crates/network/src/h3/path_migration.rs:249` **fn** `confirm_handshake` — Mark the handshake as confirmed (RFC 9000 §9), permitting migration
+`crates/network/src/h3/path_migration.rs:255` **fn** `is_handshake_confirmed` — Whether the handshake has been confirmed
+`crates/network/src/h3/path_migration.rs:261` **fn** `state` — The current migration state
+`crates/network/src/h3/path_migration.rs:267` **fn** `is_migrating` — Whether a migration to a new path is in progress (RFC 9000 §9.3)
+`crates/network/src/h3/path_migration.rs:273` **fn** `probe_state` — The state of the new-path validation, or `None` when not migrating
+`crates/network/src/h3/path_migration.rs:280` **fn** `probing_cid_seq` — The peer connection-ID sequence in use on the path being probed
+`crates/network/src/h3/path_migration.rs:288` **fn** `deadline` — The instant the in-progress migration's validation is abandoned, or `None`
+`crates/network/src/h3/path_migration.rs:308` **fn** `initiate` — Begin migrating to a new path (RFC 9000 §9.2), emitting the first
+`crates/network/src/h3/path_migration.rs:347` **fn** `send_challenge` — Record and return a fresh `PATH_CHALLENGE` retransmission on the path being
+`crates/network/src/h3/path_migration.rs:361` **fn** `on_received` — Record `bytes` received on the path being probed, raising its
+`crates/network/src/h3/path_migration.rs:370` **fn** `on_sent` — Record `bytes` sent on the path being probed, lowering its
+`crates/network/src/h3/path_migration.rs:380` **fn** `send_allowance` — How many more bytes may be sent on the path being probed right now
+`crates/network/src/h3/path_migration.rs:390` **fn** `can_send` — Whether a datagram of `bytes` bytes may be sent on the path being probed
+`crates/network/src/h3/path_migration.rs:401` **fn** `is_blocked` — Whether the endpoint is blocked from sending on the path being probed by
+`crates/network/src/h3/path_migration.rs:416` **fn** `on_path_response` — Process the data of a received `PATH_RESPONSE` on the path being probed
+`crates/network/src/h3/path_migration.rs:435` **fn** `on_timeout` — Abandon the in-progress migration if its validation deadline has been
 `crates/network/src/h3/path_mtu.rs:67` **enum** `PmtuState` — The phase of the DPLPMTUD search (RFC 8899 §5.2)
 `crates/network/src/h3/path_mtu.rs:98` **struct** `PathMtuDiscovery` — The QUIC DPLPMTUD state machine (RFC 9000 §14.2–14.4, RFC 8899)
 `crates/network/src/h3/path_mtu.rs:126` **fn** `new` — Creates a discovery machine that first confirms the [`QUIC_MIN_PLPMTU`]
@@ -4808,4 +4832,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4737 symbols in 22 crates*
+*Total: 4761 symbols in 22 crates*
