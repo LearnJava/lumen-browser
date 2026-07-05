@@ -187,10 +187,188 @@
 //!   the RFC 6979 Appendix A.2.5 P-256/SHA-256 vector. Out of scope:
 //!   `rsa_pss_rsae_sha256` / `ed25519` verifiers and X.509 `SubjectPublicKeyInfo`
 //!   extraction (the caller passes the SEC1 EC point).
-//! - Slice 20+ (planned) — the rest of the QUIC transport: UDP datagrams,
-//!   actually arming the PTO timer and assembling probe datagrams, the QPACK
-//!   encoder/decoder stream instruction wiring, the remaining `CertificateVerify`
-//!   schemes, and `h3_do_request` dispatch alongside the existing H1/H2 paths.
+//! - Slice 20 — the `ed25519` `CertificateVerify` scheme
+//!   ([`tls_cert_verify::ed25519_verify`], RFC 8446 §4.2.3, RFC 8032): EdDSA over
+//!   Curve25519, which (unlike the ECDSA schemes) signs the signed content
+//!   directly with no prehash and carries the signature raw with no DER wrapper.
+//!   [`tls_cert_verify::verify_certificate_verify`] now dispatches
+//!   `ecdsa_secp256r1_sha256` and `ed25519`; the public key is the raw 32-octet
+//!   Ed25519 point (RFC 8410 §4). The verifier comes from `ed25519-dalek`, which
+//!   reuses the `curve25519-dalek` already in the tree via `x25519-dalek` (same
+//!   dalek family, constant-time). Pure functions; validated against the RFC 8032
+//!   §7.1 TEST 1 vector. Out of scope: `rsa_pss_rsae_sha256` and the P-384/P-521
+//!   variants (still [`tls_cert_verify::CertVerifyError::UnsupportedScheme`]).
+//! - Slice 21 — the `rsa_pss_rsae_sha256` `CertificateVerify` scheme
+//!   ([`tls_cert_verify::rsa_pss_sha256_verify`], RFC 8446 §4.2.3, RFC 8017 §8.1):
+//!   RSASSA-PSS with the MGF1-SHA-256 mask and SHA-256 message hash — the
+//!   signature the great majority of real server certificates carry.
+//!   [`tls_cert_verify::verify_certificate_verify`] now dispatches
+//!   `ecdsa_secp256r1_sha256`, `ed25519`, and `rsa_pss_rsae_sha256`; the public key
+//!   is the PKCS#1 DER `RSAPublicKey` (the `subjectPublicKey` of an rsaEncryption
+//!   `SubjectPublicKeyInfo`) and the signature is the raw big-endian integer TLS
+//!   carries. The verifier comes from the `rsa` crate (pure-Rust RustCrypto,
+//!   reusing the `sha2` already in the tree); the PSS salt length is recovered
+//!   during EMSA-PSS-VERIFY, so RFC 8446's salt-equals-digest-length signatures
+//!   verify interoperably. Pure functions; validated end-to-end by signing a
+//!   `CertificateVerify` content with a generated RSA key and rejecting every
+//!   tampering. Out of scope: the P-384/P-521 ECDSA variants and the SHA-384/512
+//!   RSA-PSS variants (still [`tls_cert_verify::CertVerifyError::UnsupportedScheme`]).
+//! - Slice 22 — the `rsa_pss_rsae_sha384` and `rsa_pss_rsae_sha512`
+//!   `CertificateVerify` schemes ([`tls_cert_verify::rsa_pss_sha384_verify`],
+//!   [`tls_cert_verify::rsa_pss_sha512_verify`], RFC 8446 §4.2.3, RFC 8017 §8.1):
+//!   the SHA-384/512 siblings of slice 21, identical but for the MGF1 and message
+//!   digest, commonly signed by 3072/4096-bit certificates. All three RSA-PSS
+//!   variants now share one generic verifier over `D: Digest`, reusing the `rsa`
+//!   crate and the `sha2` digests already in the tree — no new dependency.
+//!   [`tls_cert_verify::verify_certificate_verify`] now dispatches
+//!   `ecdsa_secp256r1_sha256`, `ed25519`, and `rsa_pss_rsae_sha256/384/512`. Pure
+//!   functions; validated end-to-end by signing a `CertificateVerify` content with
+//!   generated RSA keys and rejecting a cross-digest signature. Out of scope: the
+//!   P-384/P-521 ECDSA variants (still
+//!   [`tls_cert_verify::CertVerifyError::UnsupportedScheme`]).
+//! - Slice 24 — QUIC datagram coalescing ([`datagram`], RFC 9000 §12.2, §14.1):
+//!   the pure layer over [`packet`] that splits one received UDP datagram into
+//!   its ordered sequence of coalesced packets ([`datagram::parse_datagram`]) and
+//!   assembles a sequence back into one datagram ([`datagram::encode_datagram`]).
+//!   Only the length-delimited long-header forms (Initial / 0-RTT / Handshake)
+//!   can be followed by another packet, so a short-header / Retry / Version
+//!   Negotiation packet may appear only last — enforced on encode
+//!   ([`datagram::DatagramError::UnterminatedCoalescing`]) and automatic on parse
+//!   (those forms consume the datagram tail). [`datagram::initial_padding_shortfall`]
+//!   reports how far below the [`datagram::MIN_INITIAL_DATAGRAM_LEN`] (RFC 9000
+//!   §14.1) a client Initial datagram is, for the frame layer to pad inside the
+//!   packet before encryption. Pure functions, no IO.
+//! - Slice 25 — the QUIC transport parameters codec ([`transport_params`],
+//!   RFC 9000 §18, §7.4): the pure parse/serialize of the
+//!   `quic_transport_parameters` TLS extension body (RFC 9001 §8.2) — a bare
+//!   sequence of `(id, length, value)` entries over [`varint`] — into a typed
+//!   [`transport_params::TransportParameters`], with the RFC 9000 §18.2
+//!   validation (single occurrence per id, the `max_udp_payload_size` /
+//!   `ack_delay_exponent` / `max_ack_delay` / `active_connection_id_limit`
+//!   ranges, the fixed-width `stateless_reset_token` and preferred-address
+//!   fields) and default resolution. These are the values that configure the
+//!   connection state machines built above — the peer's `initial_max_data`
+//!   seeds [`conn_flow::SendConnFlow`], its `initial_max_stream_data_*` bound
+//!   [`stream::SendStream`], its `initial_max_streams_*` seed the [`conn_flow`]
+//!   stream limits, its `max_udp_payload_size` clamps the [`recovery`] datagram
+//!   size, and its `ack_delay_exponent` / `max_ack_delay` scale the ACK-delay
+//!   handling in [`loss`] / [`pto`]. Unknown / reserved (GREASE, RFC 9000 §18.1)
+//!   ids are preserved verbatim so the round-trip is byte-stable. Pure
+//!   functions, no IO; wiring the values into a live connection is a later slice.
+//! - Slice 26 — the QUIC packet number encoding/decoding ([`packet_number`],
+//!   RFC 9000 §17.1, Appendix A): the truncation codec between the packet header
+//!   codec [`packet`] — which carries the packet number inside its opaque
+//!   `protected` region and its two-bit Packet Number Length in the
+//!   header-protected first byte — and the loss-recovery layer [`loss`] /
+//!   [`recovery`], which reasons in full 62-bit packet numbers. On send,
+//!   [`packet_number::packet_number_length`] picks the fewest bytes `b ∈ 1..=4`
+//!   with `2^(8·b − 1) ≥ num_unacked` (Appendix A.2) and
+//!   [`packet_number::encode_packet_number`] appends that many least-significant
+//!   big-endian bytes, with [`packet_number::encode_pn_length_bits`] supplying the
+//!   header's length field. On receive, [`packet_number::decode_packet_number`]
+//!   reconstructs the full number nearest `largest_pn + 1` from the truncation and
+//!   its width (Appendix A.3), with [`packet_number::pn_length_from_first_byte`]
+//!   and [`packet_number::read_truncated_packet_number`] recovering what the
+//!   header codec left opaque. Pure functions; validated against the RFC 9000
+//!   Appendix A.2/A.3 examples. No IO — wiring this into the header-protection /
+//!   AEAD path ([`packet_protect`]) is the connection layer's job.
+//! - Slice 27 — QUIC Path MTU Discovery ([`path_mtu`], RFC 9000 §14.2–14.4,
+//!   RFC 8899): the pure DPLPMTUD state machine that finds the largest UDP
+//!   payload a path can carry — the *max datagram size* that bounds the
+//!   congestion window in [`recovery`] and the size of the packets the sender
+//!   builds. [`path_mtu::PathMtuDiscovery`] confirms the
+//!   [`path_mtu::QUIC_MIN_PLPMTU`] base size (RFC 8899 §5.2; a completed
+//!   handshake already proves it, so
+//!   [`path_mtu::PathMtuDiscovery::with_confirmed_base`] skips straight to the
+//!   search), then binary-searches upward: [`path_mtu::PathMtuDiscovery::next_probe`]
+//!   proposes the next probe size, an acknowledged probe raises the confirmed
+//!   size, and a probe lost [`path_mtu::MAX_PROBES`] times lowers the upper bound
+//!   (RFC 8899 §5.3). [`path_mtu::PathMtuDiscovery::on_black_hole`] drops back to
+//!   the base and restarts when ordinary datagrams at the current size disappear
+//!   (RFC 8899 §5.4). Pure state machine driven by probe acknowledgement / loss;
+//!   no IO, no probe-packet assembly, and the caller must keep a lost probe out
+//!   of the congestion controller (RFC 9000 §14.4).
+//! - Slice 28 — QUIC ACK generation ([`ack`], RFC 9000 §13.2, §19.3): the
+//!   receiver-side mirror of [`loss`]. [`ack::AckGenerator`] (one per
+//!   [`loss::PacketNumberSpace`]) records the packet numbers *we received* as a set
+//!   of disjoint inclusive ranges, decides when an acknowledgement is owed —
+//!   immediately on a reordered/gap-filling packet, on reaching the ack-eliciting
+//!   threshold (RFC 9000 §13.2.2), on an ECN-CE mark, or in the Initial/Handshake
+//!   spaces that never delay, else within the peer's `max_ack_delay` — and builds the
+//!   [`quic_frame::Frame::Ack`] reporting those ranges largest-first with the scaled
+//!   ACK Delay and ECN counts. [`ack::AckGenerator::on_ack_of_ack`] bounds the range
+//!   set once the peer acknowledges one of our ACKs (RFC 9000 §13.2.4). Pure state
+//!   machine driven by a caller-supplied clock; no IO, no timer arming, no packet
+//!   assembly.
+//! - Slice 29 — the QUIC packet protection pipeline ([`packet_crypt`], RFC 9001
+//!   §5.3, §5.4): the single place that ties the header codec [`packet`], the
+//!   packet-number truncation codec [`packet_number`], the AEAD + header
+//!   protection transforms [`packet_protect`], and the [`key_schedule`] key set
+//!   into the two end-to-end operations the connection layer runs on every
+//!   1-RTT-bearing packet. [`packet_crypt::encrypt_packet`] assembles the header,
+//!   places the clear packet number, AEAD-seals the payload with the unprotected
+//!   header as associated data, and applies header protection, returning the
+//!   on-wire packet; [`packet_crypt::decrypt_packet`] is the inverse — it parses
+//!   the header, removes header protection, reconstructs the full 62-bit packet
+//!   number (Appendix A.3), and AEAD-opens the payload, reporting the bytes
+//!   consumed so a coalesced datagram (RFC 9000 §12.2) is walked packet by
+//!   packet. AES suite only, matching [`packet_protect`]. Pure functions over
+//!   byte buffers and a supplied key set; the round-trip and the in-the-clear
+//!   header layout are validated against the RFC 9001 Appendix A.2 client Initial.
+//! - Slice 31 — the QUIC CRYPTO stream ([`crypto_stream`], RFC 9000 §7.5,
+//!   §19.6): the per-encryption-level reassembly of the TLS handshake byte
+//!   stream carried in CRYPTO frames ([`quic_frame::Frame::Crypto`], RFC 9001
+//!   §4), the bridge between the decoded transport frames and the [`tls_message`]
+//!   handshake codec. Unlike [`stream`] it has no stream ID, no flow-control
+//!   window, and no FIN. [`crypto_stream::CryptoRecvStream`] merges out-of-order
+//!   / overlapping / duplicated CRYPTO frames into the contiguous handshake
+//!   prefix, enforcing a reassembly bound
+//!   ([`crypto_stream::CryptoStreamError::BufferExceeded`] →
+//!   `CRYPTO_BUFFER_EXCEEDED`, RFC 9000 §7.5); [`crypto_stream::CryptoSendStream`]
+//!   buffers the handshake bytes TLS emits, hands them back as CRYPTO frames
+//!   bounded by a size cap, and tracks the acknowledged ranges. Pure state
+//!   machine driven by decoded frames; no retransmission, no IO.
+//! - Slice 32 — QUIC connection-ID management ([`conn_id`], RFC 9000 §5.1): the
+//!   two connection-ID sets driven by the NEW_CONNECTION_ID (RFC 9000 §19.15) and
+//!   RETIRE_CONNECTION_ID (RFC 9000 §19.16) frames [`quic_frame`] already codecs.
+//!   [`conn_id::RemoteConnIds`] holds the IDs the peer issues for us to stamp on
+//!   the packets we send: seeded with the peer's handshake Source Connection ID
+//!   (sequence 0), it folds in each NEW_CONNECTION_ID frame — rejecting a
+//!   `Retire Prior To` past the sequence number or an out-of-range ID
+//!   ([`conn_id::ConnIdError::Malformed`] → `FRAME_ENCODING_ERROR`), a sequence
+//!   number reused for a different ID/token
+//!   ([`conn_id::ConnIdError::SequenceConflict`] → `PROTOCOL_VIOLATION`), and an
+//!   active-set overflow past the advertised `active_connection_id_limit`
+//!   ([`conn_id::ConnIdError::LimitExceeded`] → `CONNECTION_ID_LIMIT_ERROR`) —
+//!   honouring `Retire Prior To` (RFC 9000 §19.15) and reporting the sequence
+//!   numbers the connection layer must RETIRE_CONNECTION_ID, plus the
+//!   stateless-reset-token match (RFC 9000 §10.3.1) and voluntary migration.
+//!   [`conn_id::LocalConnIds`] holds the IDs we issue for the peer, assigning
+//!   monotonic sequence numbers, refusing to exceed the peer's limit, and dropping
+//!   an ID on RETIRE_CONNECTION_ID (a retire of an unissued ID is a
+//!   `PROTOCOL_VIOLATION`). Pure state machines driven by decoded frames; no IO,
+//!   no packet-level Destination-CID context.
+//! - Slice 33 — QUIC Retry packet integrity + token handling ([`retry`],
+//!   RFC 9000 §17.2.5, §8.1; RFC 9001 §5.8): the pure crypto + state a client
+//!   runs on a received Retry packet ([`packet::Packet::Retry`]). A stateless
+//!   server answers the client's first Initial with a Retry that carries an
+//!   address-validation Token to echo, a fresh Source Connection ID the client
+//!   adopts as its new Destination CID, and a 16-byte Retry Integrity Tag.
+//!   [`retry::retry_integrity_tag`] / [`retry::verify_retry_integrity`] compute
+//!   and check that tag — `AEAD_AES_128_GCM` over an empty plaintext with the
+//!   version-fixed [`retry::RETRY_KEY_V1`] / [`retry::RETRY_NONCE_V1`] (reusing
+//!   [`packet_protect::aes_128_gcm_seal`]), authenticating the *Retry
+//!   Pseudo-Packet*: the Original Destination CID the client chose for its first
+//!   Initial (length-prefixed) followed by the Retry packet up to the tag. Since
+//!   the ODCID is never on the wire, an off-path attacker cannot forge a Retry.
+//!   [`retry::RetryHandler`] is the client state machine: it verifies the tag,
+//!   enforces at-most-one-Retry-per-connection (RFC 9000 §17.2.5), and reports
+//!   the [`retry::RetryOutcome`] (new DCID + Token). Pure functions and state,
+//!   no IO; validated against the RFC 9001 Appendix A.4 vector.
+//! - Slice 34+ (planned) — the rest of the QUIC transport: the UDP send/receive,
+//!   actually arming the PTO/ACK-delay timers and assembling probe datagrams, the
+//!   QPACK encoder/decoder stream instruction wiring, and `h3_do_request` dispatch
+//!   alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -198,23 +376,32 @@
 //! block, [`qpack`] turns that block into header fields, and [`alt_svc`]
 //! decides when an origin is eligible for the QUIC path at all.
 
+pub mod ack;
 pub mod alt_svc;
 pub mod conn_flow;
+pub mod conn_id;
+pub mod crypto_stream;
+pub mod datagram;
 pub mod frame;
 pub mod h3_stream;
 pub mod key_agreement;
 pub mod key_schedule;
 pub mod loss;
 pub mod packet;
+pub mod packet_crypt;
+pub mod packet_number;
 pub mod packet_protect;
+pub mod path_mtu;
 pub mod pto;
 pub mod qpack;
 pub mod qpack_stream;
 pub mod quic_frame;
 pub mod recovery;
+pub mod retry;
 pub mod stream;
 pub mod tls_cert_verify;
 pub mod tls_finished;
 pub mod tls_message;
 pub mod tls_schedule;
+pub mod transport_params;
 pub mod varint;

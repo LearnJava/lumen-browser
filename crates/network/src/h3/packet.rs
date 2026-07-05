@@ -354,6 +354,16 @@ impl Packet {
         !matches!(self, Self::Short { .. })
     }
 
+    /// Whether this packet carries an explicit `Length` field (RFC 9000 §17.2)
+    /// and can therefore be followed by another coalesced packet in the same
+    /// datagram (RFC 9000 §12.2). True for Initial / 0-RTT / Handshake; false
+    /// for Retry, Version Negotiation, and the short header, which run to the
+    /// end of the datagram and so may appear only last.
+    #[must_use]
+    pub const fn is_length_delimited(&self) -> bool {
+        matches!(self, Self::Initial { .. } | Self::ZeroRtt { .. } | Self::Handshake { .. })
+    }
+
     /// Serialize this packet header and its protected region onto `out`.
     ///
     /// For an Initial / 0-RTT / Handshake packet the `Length` field is derived

@@ -27,6 +27,14 @@ brotli-decompressor = "5"
 # Pure-Rust RustCrypto, детерминированные RFC 6979 подписи (RNG не нужен для sign).
 # Своя реализация ECDSA — security antipattern.
 p256 = { version = "0.13", features = ["ecdsa"] }
+# Exception #3 (§5): crypto. ECDSA P-384/P-521 signature verification for the TLS 1.3
+# `ecdsa_secp384r1_sha384` / `ecdsa_secp521r1_sha512` CertificateVerify schemes
+# (RFC 8446 §4.2.3) in QUIC/HTTP/3 peer authentication — the larger NIST-curve siblings
+# of the p256 `ecdsa_secp256r1_sha256` scheme, signed by P-384/P-521 certificates. Same
+# RustCrypto `ecdsa`/`signature` v2 family as p256, pure-Rust, verify-only (no key
+# generation). Своя реализация ECDSA — security antipattern.
+p384 = { version = "0.13", features = ["ecdsa"] }
+p521 = { version = "0.13", features = ["ecdsa"] }
 # SHA-256 для clientDataHash и rpIdHash в WebAuthn (W3C WebAuthn L2 §6.1).
 sha2 = "0.10"
 # Exception #3 (§5): crypto. AES-128-GCM AEAD packet protection (RFC 9001 §5.3)
@@ -46,6 +54,19 @@ getrandom = "0.2"
 # Pure-Rust dalek-cryptography, constant-time скалярное умножение. Своя
 # реализация Curve25519 — security antipattern.
 x25519-dalek = "2"
+# Exception #3 (§5): crypto. Ed25519 (EdDSA over Curve25519) signature verification
+# for the TLS 1.3 `ed25519` CertificateVerify scheme (RFC 8446 §4.2.3, RFC 8032) in
+# QUIC/HTTP/3 peer authentication. Reuses curve25519-dalek 4.x already in the tree
+# (transitive via x25519-dalek); same dalek-cryptography family, pure-Rust,
+# constant-time. Verify-only (no signing key generation). Своя реализация Ed25519 —
+# security antipattern.
+ed25519-dalek = "2"
+# Exception #3 (§5): crypto. RSASSA-PSS with SHA-256 signature verification for the
+# TLS 1.3 `rsa_pss_rsae_sha256` CertificateVerify scheme (RFC 8446 §4.2.3, RFC 8017)
+# in QUIC/HTTP/3 peer authentication — the most widely deployed server-certificate
+# signature scheme. Pure-Rust RustCrypto, reuses the sha2 already in the tree;
+# verify-only (no key generation). Своя реализация RSA — security antipattern.
+rsa = "0.9"
 # HTTP Cache (RFC 7234): LRU cache with size-based eviction for HTTP responses.
 # Pure-Rust, no unsafe in logic. Trait-anchor: none (internal HTTP cache impl).
 lru = "0.12"
@@ -59,3 +80,10 @@ flate2 = { workspace = true }
 # Exception #6 (§5): regex — EasyList /regex/ pattern matching; same workspace entry used
 # by find-in-page. Trait-anchor: RequestFilter (easylist.rs /regex/ rule variant).
 regex = { workspace = true }
+
+[dev-dependencies]
+# Test-only: OS CSPRNG (rand_core 0.6 `OsRng`, the version `rsa` 0.9 signs with) to
+# supply the PSS salt when producing signature fixtures in the RSASSA-PSS
+# CertificateVerify round-trip tests. Verification is salt-length agnostic, so only
+# the signing side needs entropy; reuses the rand_core 0.6 already in the tree.
+rand_core = { version = "0.6", features = ["getrandom"] }

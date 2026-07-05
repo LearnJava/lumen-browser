@@ -37,26 +37,89 @@
 //! - [`signature_scheme`] — the `SignatureScheme` codepoints (RFC 8446 §4.2.3)
 //!   a `CertificateVerify` may name in [`super::tls_message::CertificateVerify::
 //!   algorithm`].
-//! - [`ecdsa_p256_sha256_verify`] — the raw `ecdsa_secp256r1_sha256` (P-256 /
-//!   SHA-256) signature verification primitive over an arbitrary message.
+//! - [`ecdsa_p256_sha256_verify`] / [`ecdsa_p384_sha384_verify`] /
+//!   [`ecdsa_p521_sha512_verify`] — the raw `ecdsa_secp256r1_sha256` /
+//!   `_secp384r1_sha384` / `_secp521r1_sha512` (P-256/384/521 with SHA-256/384/512)
+//!   signature verification primitives over an arbitrary message.
+//! - [`ed25519_verify`] — the raw `ed25519` (EdDSA / Curve25519) primitive.
+//! - [`rsa_pss_sha256_verify`] / [`rsa_pss_sha384_verify`] /
+//!   [`rsa_pss_sha512_verify`] — the raw `rsa_pss_rsae_sha256/384/512`
+//!   (RSASSA-PSS with SHA-256/384/512) signature verification primitives over an
+//!   arbitrary message, all thin wrappers over the generic [`rsa_pss_verify`].
 //! - [`verify_certificate_verify`] — the end-to-end check: build the signed
-//!   content for the role and transcript, then verify the DER-encoded signature
-//!   under the peer's public key for the named scheme.
+//!   content for the role and transcript, then verify the signature under the
+//!   peer's public key for the named scheme.
+//!
+//! ## Scheme coverage
+//!
+//! Seven schemes are verified here, all either TLS 1.3 mandatory-to-implement or
+//! ubiquitous in deployment, each reusing pure-Rust RustCrypto verifiers:
+//!
+//! - `ecdsa_secp256r1_sha256` (0x0403, [`ecdsa_p256_sha256_verify`]) — ECDSA over
+//!   NIST P-256 with SHA-256, an RFC 8446 §9.1 mandatory scheme, on the `p256`
+//!   crate (WebAuthn ES256). Public key is the SEC1 EC point; signature is DER.
+//! - `ecdsa_secp384r1_sha384` (0x0503, [`ecdsa_p384_sha384_verify`]) and
+//!   `ecdsa_secp521r1_sha512` (0x0603, [`ecdsa_p521_sha512_verify`]) — the P-384 /
+//!   SHA-384 and P-521 / SHA-512 siblings of the P-256 scheme above, on the `p384`
+//!   and `p521` crates of the same RustCrypto `ecdsa` family. Same SEC1 public key
+//!   and DER signature encoding; the verifier applies the curve's default digest.
+//! - `ed25519` (0x0807, [`ed25519_verify`]) — EdDSA over Curve25519 (RFC 8032),
+//!   signs the message directly with no prehash and no DER wrapper, on the
+//!   `ed25519-dalek` crate, which reuses the `curve25519-dalek` already in the
+//!   tree via `x25519-dalek`. Public key is the raw 32-octet Ed25519 point;
+//!   signature is the raw 64 octets.
+//! - `rsa_pss_rsae_sha256` (0x0804, [`rsa_pss_sha256_verify`]) — RSASSA-PSS with
+//!   an rsaEncryption key and SHA-256 (RFC 8446 §4.2.3, RFC 8017 §8.1), by far the
+//!   most common server-certificate signature in the wild, on the `rsa` crate.
+//!   Public key is the PKCS#1 DER `RSAPublicKey` (`SEQUENCE { modulus,
+//!   publicExponent }`) — i.e. the `subjectPublicKey` of an rsaEncryption
+//!   `SubjectPublicKeyInfo`; signature is the raw big-endian integer, one modulus
+//!   length wide, that TLS carries.
+//! - `rsa_pss_rsae_sha384` (0x0805, [`rsa_pss_sha384_verify`]) and
+//!   `rsa_pss_rsae_sha512` (0x0806, [`rsa_pss_sha512_verify`]) — the SHA-384 and
+//!   SHA-512 siblings of the SHA-256 scheme above, identical but for the MGF1 and
+//!   message hash, commonly signed by 3072/4096-bit certificates. Both reuse the
+//!   `rsa` crate and the `sha2` digests already in the tree — no new dependency —
+//!   through the shared generic [`rsa_pss_verify`]. Same key and signature
+//!   encoding as `rsa_pss_rsae_sha256`.
 //!
 //! ## Deferred
 //!
-//! Only `ecdsa_secp256r1_sha256` (0x0403) is verified here — it is one of the
-//! TLS 1.3 mandatory-to-implement `CertificateVerify` schemes (RFC 8446 §9.1)
-//! and reuses the `p256` crate already in this crate (WebAuthn ES256), so this
-//! slice adds no dependency. The other schemes named in [`signature_scheme`]
-//! (`rsa_pss_rsae_sha256`, `ed25519`, the P-384/P-521 and RSA-PKCS1 variants)
-//! return [`CertVerifyError::UnsupportedScheme`] until a later slice wires their
+//! The remaining schemes named in [`signature_scheme`] (the `rsa_pss_pss`
+//! variants and the RSA-PKCS1 / ed448 codepoints) return
+//! [`CertVerifyError::UnsupportedScheme`] until a later slice wires their
 //! verifiers. Extracting the public key from the end-entity certificate's
 //! `SubjectPublicKeyInfo` is the caller's job (X.509 parsing is delegated, see
-//! [`super::tls_message`]); this module takes the SEC1-encoded EC point directly.
+//! [`super::tls_message`]); this module takes the decoded key material directly
+//! (the SEC1 EC point for ECDSA, the raw 32-octet point for Ed25519, the PKCS#1
+//! DER `RSAPublicKey` for RSASSA-PSS).
 
-use p256::ecdsa::signature::Verifier;
-use p256::ecdsa::{Signature, VerifyingKey};
+// `signature::Verifier` is the shared trait behind every `.verify()` call below;
+// ed25519-dalek re-exports the very same trait p256/p384/p521 do, and `rsa` 0.9 rides
+// the same `signature` v2 crate, so this one import covers every scheme.
+use ed25519_dalek::{Signature as Ed25519Signature, Verifier, VerifyingKey as Ed25519VerifyingKey};
+// The three NIST-curve ECDSA schemes (`ecdsa_secp256r1_sha256` / `_secp384r1_sha384` /
+// `_secp521r1_sha512`) share one shape: a SEC1 public key, a DER `(r, s)` signature, and a
+// per-curve default digest the `Verifier` impl applies internally (SHA-256/384/512). Only
+// the concrete `VerifyingKey`/`Signature` types differ, so each is aliased by curve.
+use p256::ecdsa::{Signature as P256Signature, VerifyingKey as P256VerifyingKey};
+use p384::ecdsa::{Signature as P384Signature, VerifyingKey as P384VerifyingKey};
+use p521::ecdsa::{Signature as P521Signature, VerifyingKey as P521VerifyingKey};
+// RSASSA-PSS (`rsa_pss_rsae_sha256/384/512`): only the concrete key/signature types
+// and the message digest differ between the three variants, so a single generic
+// [`rsa_pss_verify`] over `D: Digest` covers all of them, verifying through the
+// shared `Verifier`. `Digest` is the trait bound that selects the hash.
+use rsa::RsaPublicKey;
+use rsa::pkcs1::DecodeRsaPublicKey as _;
+use rsa::pss::{Signature as RsaPssSignature, VerifyingKey as RsaPssVerifyingKey};
+use sha2::digest::FixedOutputReset;
+use sha2::{Digest, Sha256, Sha384, Sha512};
+
+/// The length in octets of a raw Ed25519 public key (RFC 8032 §5.1).
+pub const ED25519_PUBLIC_KEY_LEN: usize = 32;
+
+/// The length in octets of a raw Ed25519 signature (RFC 8032 §5.1).
+pub const ED25519_SIGNATURE_LEN: usize = 64;
 
 /// The number of `0x20` (ASCII space) octets that prefix the signed content
 /// (RFC 8446 §4.4.3).
@@ -71,9 +134,11 @@ pub const SERVER_CONTEXT: &[u8] = b"TLS 1.3, server CertificateVerify";
 pub const CLIENT_CONTEXT: &[u8] = b"TLS 1.3, client CertificateVerify";
 
 /// `SignatureScheme` codepoints (RFC 8446 §4.2.3) that may appear as a
-/// `CertificateVerify` algorithm. Only [`signature_scheme::ECDSA_SECP256R1_SHA256`]
-/// is verified by this slice; the rest are recognised for completeness and
-/// rejected with [`CertVerifyError::UnsupportedScheme`].
+/// `CertificateVerify` algorithm. The three ECDSA
+/// (`ECDSA_SECP256R1_SHA256/SECP384R1_SHA384/SECP521R1_SHA512`), `ED25519`, and the
+/// three `RSA_PSS_RSAE_SHA256/384/512` codepoints are verified; the rest are
+/// recognised for completeness and rejected with
+/// [`CertVerifyError::UnsupportedScheme`].
 pub mod signature_scheme {
     /// `ecdsa_secp256r1_sha256` — ECDSA over the NIST P-256 curve with SHA-256.
     pub const ECDSA_SECP256R1_SHA256: u16 = 0x0403;
@@ -190,11 +255,186 @@ pub fn ecdsa_p256_sha256_verify(
     der_signature: &[u8],
 ) -> Result<(), CertVerifyError> {
     let verifying_key =
-        VerifyingKey::from_sec1_bytes(public_key_sec1).map_err(|_| CertVerifyError::MalformedPublicKey)?;
-    let signature = Signature::from_der(der_signature).map_err(|_| CertVerifyError::MalformedSignature)?;
+        P256VerifyingKey::from_sec1_bytes(public_key_sec1).map_err(|_| CertVerifyError::MalformedPublicKey)?;
+    let signature = P256Signature::from_der(der_signature).map_err(|_| CertVerifyError::MalformedSignature)?;
     verifying_key
         .verify(message, &signature)
         .map_err(|_| CertVerifyError::BadSignature)
+}
+
+/// Verify an `ecdsa_secp384r1_sha384` signature (RFC 8446 §4.2.3): ECDSA over
+/// NIST P-384 with SHA-384, the DER-encoded `(r, s)` form TLS carries. The P-384
+/// sibling of [`ecdsa_p256_sha256_verify`] — the only differences are the larger
+/// curve and the SHA-384 digest the verifier applies internally.
+///
+/// `public_key_sec1` is the peer's public key as a SEC1-encoded EC point (the
+/// uncompressed `0x04 ‖ X ‖ Y`, 97 octets on P-384, as it appears in the
+/// end-entity certificate's `SubjectPublicKeyInfo`). `message` is the already-built
+/// signed content (see [`certificate_verify_content`]); it is SHA-384-hashed
+/// internally as ECDSA over P-384 requires. `der_signature` is the ASN.1 DER
+/// `SEQUENCE { r, s }`.
+///
+/// # Errors
+///
+/// [`CertVerifyError::MalformedPublicKey`] if the point is not a valid P-384
+/// public key, [`CertVerifyError::MalformedSignature`] if the DER does not
+/// decode, and [`CertVerifyError::BadSignature`] if the signature does not
+/// verify.
+pub fn ecdsa_p384_sha384_verify(
+    public_key_sec1: &[u8],
+    message: &[u8],
+    der_signature: &[u8],
+) -> Result<(), CertVerifyError> {
+    let verifying_key =
+        P384VerifyingKey::from_sec1_bytes(public_key_sec1).map_err(|_| CertVerifyError::MalformedPublicKey)?;
+    let signature = P384Signature::from_der(der_signature).map_err(|_| CertVerifyError::MalformedSignature)?;
+    verifying_key
+        .verify(message, &signature)
+        .map_err(|_| CertVerifyError::BadSignature)
+}
+
+/// Verify an `ecdsa_secp521r1_sha512` signature (RFC 8446 §4.2.3): ECDSA over
+/// NIST P-521 with SHA-512, the DER-encoded `(r, s)` form TLS carries. The P-521
+/// sibling of [`ecdsa_p256_sha256_verify`] — the only differences are the larger
+/// curve and the SHA-512 digest the verifier applies internally.
+///
+/// `public_key_sec1` is the peer's public key as a SEC1-encoded EC point (the
+/// uncompressed `0x04 ‖ X ‖ Y`, 133 octets on P-521, as it appears in the
+/// end-entity certificate's `SubjectPublicKeyInfo`). `message` is the already-built
+/// signed content (see [`certificate_verify_content`]); it is SHA-512-hashed
+/// internally as ECDSA over P-521 requires. `der_signature` is the ASN.1 DER
+/// `SEQUENCE { r, s }`.
+///
+/// # Errors
+///
+/// [`CertVerifyError::MalformedPublicKey`] if the point is not a valid P-521
+/// public key, [`CertVerifyError::MalformedSignature`] if the DER does not
+/// decode, and [`CertVerifyError::BadSignature`] if the signature does not
+/// verify.
+pub fn ecdsa_p521_sha512_verify(
+    public_key_sec1: &[u8],
+    message: &[u8],
+    der_signature: &[u8],
+) -> Result<(), CertVerifyError> {
+    let verifying_key =
+        P521VerifyingKey::from_sec1_bytes(public_key_sec1).map_err(|_| CertVerifyError::MalformedPublicKey)?;
+    let signature = P521Signature::from_der(der_signature).map_err(|_| CertVerifyError::MalformedSignature)?;
+    verifying_key
+        .verify(message, &signature)
+        .map_err(|_| CertVerifyError::BadSignature)
+}
+
+/// Verify an `ed25519` signature (RFC 8446 §4.2.3, RFC 8032): EdDSA over
+/// Curve25519, which signs the message directly (no prehash) and carries the
+/// signature raw (no DER wrapper), unlike the ECDSA schemes.
+///
+/// `public_key` is the peer's raw 32-octet Ed25519 public key (the
+/// `subjectPublicKey` bit string of the end-entity certificate's
+/// `SubjectPublicKeyInfo`, RFC 8410 §4). `message` is the already-built signed
+/// content (see [`certificate_verify_content`]); Ed25519 hashes it internally as
+/// part of the signature equation, so it is passed verbatim. `signature` is the
+/// raw 64-octet `R ‖ S` value.
+///
+/// # Errors
+///
+/// [`CertVerifyError::MalformedPublicKey`] if `public_key` is not a valid
+/// 32-octet Ed25519 point, [`CertVerifyError::MalformedSignature`] if `signature`
+/// is not 64 octets, and [`CertVerifyError::BadSignature`] if the signature does
+/// not verify over `message`.
+pub fn ed25519_verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<(), CertVerifyError> {
+    let key_bytes: &[u8; ED25519_PUBLIC_KEY_LEN] =
+        public_key.try_into().map_err(|_| CertVerifyError::MalformedPublicKey)?;
+    let verifying_key =
+        Ed25519VerifyingKey::from_bytes(key_bytes).map_err(|_| CertVerifyError::MalformedPublicKey)?;
+    let signature =
+        Ed25519Signature::from_slice(signature).map_err(|_| CertVerifyError::MalformedSignature)?;
+    verifying_key
+        .verify(message, &signature)
+        .map_err(|_| CertVerifyError::BadSignature)
+}
+
+/// Verify an `rsa_pss_rsae_*` signature (RFC 8446 §4.2.3, RFC 8017 §8.1) with the
+/// message digest `D`: RSASSA-PSS with the MGF1-`D` mask and `D` message hash.
+/// The three TLS 1.3 variants differ only in `D` (SHA-256/384/512), so each public
+/// wrapper below is one line over this generic core.
+///
+/// `public_key_pkcs1_der` is the peer's key as a PKCS#1 DER `RSAPublicKey`
+/// (`SEQUENCE { modulus INTEGER, publicExponent INTEGER }`) — the
+/// `subjectPublicKey` bit string of an rsaEncryption `SubjectPublicKeyInfo`.
+/// `message` is the already-built signed content (see [`certificate_verify_content`]);
+/// it is `D`-hashed internally as PSS requires. `signature` is the raw signature
+/// octets TLS carries: the big-endian integer, exactly one modulus length wide.
+///
+/// The salt length is recovered from the signature during EMSA-PSS-VERIFY
+/// (RFC 8017 §9.1.2), so this accepts the RFC 8446 §4.2.3 salt-equals-digest-length
+/// signatures interoperably without a fixed-length assumption.
+///
+/// # Errors
+///
+/// [`CertVerifyError::MalformedPublicKey`] if the PKCS#1 DER does not decode to a
+/// valid RSA public key, [`CertVerifyError::MalformedSignature`] if the signature
+/// octets are not a well-formed PSS signature, and [`CertVerifyError::BadSignature`]
+/// if the signature does not verify over `message`.
+fn rsa_pss_verify<D: Digest + FixedOutputReset>(
+    public_key_pkcs1_der: &[u8],
+    message: &[u8],
+    signature: &[u8],
+) -> Result<(), CertVerifyError> {
+    let public_key =
+        RsaPublicKey::from_pkcs1_der(public_key_pkcs1_der).map_err(|_| CertVerifyError::MalformedPublicKey)?;
+    let verifying_key = RsaPssVerifyingKey::<D>::new(public_key);
+    let signature = RsaPssSignature::try_from(signature).map_err(|_| CertVerifyError::MalformedSignature)?;
+    verifying_key
+        .verify(message, &signature)
+        .map_err(|_| CertVerifyError::BadSignature)
+}
+
+/// Verify an `rsa_pss_rsae_sha256` signature (RFC 8446 §4.2.3, RFC 8017 §8.1):
+/// RSASSA-PSS with MGF1-SHA-256 and a SHA-256 message hash, the scheme most
+/// real-world server certificates sign with. Thin wrapper over [`rsa_pss_verify`];
+/// see it for the argument encoding and errors.
+///
+/// # Errors
+///
+/// See [`rsa_pss_verify`].
+pub fn rsa_pss_sha256_verify(
+    public_key_pkcs1_der: &[u8],
+    message: &[u8],
+    signature: &[u8],
+) -> Result<(), CertVerifyError> {
+    rsa_pss_verify::<Sha256>(public_key_pkcs1_der, message, signature)
+}
+
+/// Verify an `rsa_pss_rsae_sha384` signature (RFC 8446 §4.2.3, RFC 8017 §8.1):
+/// RSASSA-PSS with MGF1-SHA-384 and a SHA-384 message hash, the SHA-384 sibling of
+/// [`rsa_pss_sha256_verify`]. Thin wrapper over [`rsa_pss_verify`]; see it for the
+/// argument encoding and errors.
+///
+/// # Errors
+///
+/// See [`rsa_pss_verify`].
+pub fn rsa_pss_sha384_verify(
+    public_key_pkcs1_der: &[u8],
+    message: &[u8],
+    signature: &[u8],
+) -> Result<(), CertVerifyError> {
+    rsa_pss_verify::<Sha384>(public_key_pkcs1_der, message, signature)
+}
+
+/// Verify an `rsa_pss_rsae_sha512` signature (RFC 8446 §4.2.3, RFC 8017 §8.1):
+/// RSASSA-PSS with MGF1-SHA-512 and a SHA-512 message hash, the SHA-512 sibling of
+/// [`rsa_pss_sha256_verify`]. Thin wrapper over [`rsa_pss_verify`]; see it for the
+/// argument encoding and errors.
+///
+/// # Errors
+///
+/// See [`rsa_pss_verify`].
+pub fn rsa_pss_sha512_verify(
+    public_key_pkcs1_der: &[u8],
+    message: &[u8],
+    signature: &[u8],
+) -> Result<(), CertVerifyError> {
+    rsa_pss_verify::<Sha512>(public_key_pkcs1_der, message, signature)
 }
 
 /// Verify a peer's `CertificateVerify` end to end (RFC 8446 §4.4.3): build the
@@ -202,17 +442,25 @@ pub fn ecdsa_p256_sha256_verify(
 /// under `public_key_sec1` for the named `scheme`.
 ///
 /// `scheme` is the [`super::tls_message::CertificateVerify::algorithm`] value;
-/// `public_key_sec1` is the SEC1 EC point from the end-entity certificate;
+/// `public_key` is the peer's key material from the end-entity certificate;
 /// `transcript_hash` is `Transcript-Hash(Handshake Context, Certificate)`;
 /// `signature` is [`super::tls_message::CertificateVerify::signature`].
+///
+/// `public_key` is the decoded key material for the scheme — the SEC1 EC point
+/// for `ecdsa_secp256r1_sha256`, the raw 32-octet point for `ed25519`, the PKCS#1
+/// DER `RSAPublicKey` for `rsa_pss_rsae_sha256`.
 ///
 /// # Errors
 ///
 /// [`CertVerifyError::UnsupportedScheme`] for any scheme other than
-/// `ecdsa_secp256r1_sha256`, plus the [`ecdsa_p256_sha256_verify`] errors.
+/// `ecdsa_secp256r1_sha256/384r1_sha384/521r1_sha512`, `ed25519`, or
+/// `rsa_pss_rsae_sha256/384/512`, plus the per-scheme verifier errors
+/// ([`ecdsa_p256_sha256_verify`], [`ecdsa_p384_sha384_verify`],
+/// [`ecdsa_p521_sha512_verify`], [`ed25519_verify`], [`rsa_pss_sha256_verify`],
+/// [`rsa_pss_sha384_verify`], [`rsa_pss_sha512_verify`]).
 pub fn verify_certificate_verify(
     scheme: u16,
-    public_key_sec1: &[u8],
+    public_key: &[u8],
     role: CertVerifyRole,
     transcript_hash: &[u8],
     signature: &[u8],
@@ -220,7 +468,31 @@ pub fn verify_certificate_verify(
     match scheme {
         signature_scheme::ECDSA_SECP256R1_SHA256 => {
             let content = certificate_verify_content(role, transcript_hash);
-            ecdsa_p256_sha256_verify(public_key_sec1, &content, signature)
+            ecdsa_p256_sha256_verify(public_key, &content, signature)
+        }
+        signature_scheme::ECDSA_SECP384R1_SHA384 => {
+            let content = certificate_verify_content(role, transcript_hash);
+            ecdsa_p384_sha384_verify(public_key, &content, signature)
+        }
+        signature_scheme::ECDSA_SECP521R1_SHA512 => {
+            let content = certificate_verify_content(role, transcript_hash);
+            ecdsa_p521_sha512_verify(public_key, &content, signature)
+        }
+        signature_scheme::ED25519 => {
+            let content = certificate_verify_content(role, transcript_hash);
+            ed25519_verify(public_key, &content, signature)
+        }
+        signature_scheme::RSA_PSS_RSAE_SHA256 => {
+            let content = certificate_verify_content(role, transcript_hash);
+            rsa_pss_sha256_verify(public_key, &content, signature)
+        }
+        signature_scheme::RSA_PSS_RSAE_SHA384 => {
+            let content = certificate_verify_content(role, transcript_hash);
+            rsa_pss_sha384_verify(public_key, &content, signature)
+        }
+        signature_scheme::RSA_PSS_RSAE_SHA512 => {
+            let content = certificate_verify_content(role, transcript_hash);
+            rsa_pss_sha512_verify(public_key, &content, signature)
         }
         other => Err(CertVerifyError::UnsupportedScheme(other)),
     }
@@ -229,8 +501,11 @@ pub fn verify_certificate_verify(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // `Signature`/`SigningKey` are the P-256 types the ECDSA fixtures sign with; the
+    // module's aliased `P256Signature` re-exports the same type but the tests below
+    // (and the RFC 6979 vector) name it `Signature`.
     use p256::ecdsa::signature::Signer;
-    use p256::ecdsa::SigningKey;
+    use p256::ecdsa::{Signature, SigningKey};
 
     /// Decode a hex string into bytes for comparing against RFC test vectors.
     fn hex(s: &str) -> Vec<u8> {
@@ -369,6 +644,324 @@ mod tests {
         );
     }
 
+    // ── Ed25519 primitive against the RFC 8032 §7.1 vector ─────────────────
+    //
+    // RFC 8032 §7.1 TEST 2 fixes a secret key, the public key it derives to, a
+    // one-octet message `0x72`, and the resulting signature. We rebuild the
+    // signature deterministically from the RFC secret key (Ed25519 signing is
+    // deterministic, RFC 8032 §5.1.6, so the produced bytes ARE the RFC
+    // signature) and first assert the derived public key equals the RFC public
+    // key — pinning the vector to the RFC before feeding it to `ed25519_verify`.
+
+    /// The RFC 8032 §7.1 TEST 2 secret key (seed).
+    fn rfc8032_test2_secret_key() -> Vec<u8> {
+        hex("4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb")
+    }
+
+    /// The RFC 8032 §7.1 TEST 2 public key (raw 32-octet Ed25519 point) the
+    /// secret key must derive to.
+    fn rfc8032_test2_public_key() -> Vec<u8> {
+        hex("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c")
+    }
+
+    /// The RFC 8032 §7.1 TEST 2 message (a single octet).
+    const RFC8032_TEST2_MESSAGE: &[u8] = &[0x72];
+
+    /// The RFC 8032 TEST 2 (public key, signature) pair, rebuilt from the RFC
+    /// secret key. Asserts the derived public key matches the published one so
+    /// the vector is pinned to the RFC, then returns the deterministic signature.
+    fn rfc8032_test2_pk_sig() -> (Vec<u8>, Vec<u8>) {
+        use ed25519_dalek::Signer;
+        let sk = ed25519_dalek::SigningKey::from_bytes(
+            &rfc8032_test2_secret_key().try_into().expect("32-byte seed"),
+        );
+        let pk = sk.verifying_key().to_bytes().to_vec();
+        assert_eq!(pk, rfc8032_test2_public_key(), "RFC 8032 TEST 2 public key mismatch");
+        let sig = sk.sign(RFC8032_TEST2_MESSAGE).to_bytes().to_vec();
+        (pk, sig)
+    }
+
+    #[test]
+    fn ed25519_verifies_the_rfc8032_test2_vector() {
+        let (pk, sig) = rfc8032_test2_pk_sig();
+        assert_eq!(ed25519_verify(&pk, RFC8032_TEST2_MESSAGE, &sig), Ok(()));
+    }
+
+    #[test]
+    fn ed25519_rejects_a_tampered_message() {
+        // The RFC 8032 TEST 2 signature is over `0x72`; verifying it over any
+        // other message must fail.
+        let (pk, sig) = rfc8032_test2_pk_sig();
+        assert_eq!(ed25519_verify(&pk, &[0x73], &sig), Err(CertVerifyError::BadSignature));
+    }
+
+    #[test]
+    fn ed25519_rejects_a_tampered_signature() {
+        let (pk, mut sig) = rfc8032_test2_pk_sig();
+        sig[0] ^= 0x01;
+        assert_eq!(
+            ed25519_verify(&pk, RFC8032_TEST2_MESSAGE, &sig),
+            Err(CertVerifyError::BadSignature)
+        );
+    }
+
+    #[test]
+    fn ed25519_rejects_a_wrong_length_public_key() {
+        // Ed25519 keys are exactly 32 octets; anything else is malformed.
+        let (_, sig) = rfc8032_test2_pk_sig();
+        assert_eq!(
+            ed25519_verify(&[0u8; 31], RFC8032_TEST2_MESSAGE, &sig),
+            Err(CertVerifyError::MalformedPublicKey)
+        );
+        assert_eq!(
+            ed25519_verify(&[0u8; 33], RFC8032_TEST2_MESSAGE, &sig),
+            Err(CertVerifyError::MalformedPublicKey)
+        );
+    }
+
+    #[test]
+    fn ed25519_rejects_a_wrong_length_signature() {
+        // Ed25519 signatures are exactly 64 octets.
+        let (pk, _) = rfc8032_test2_pk_sig();
+        assert_eq!(
+            ed25519_verify(&pk, RFC8032_TEST2_MESSAGE, &[0u8; 63]),
+            Err(CertVerifyError::MalformedSignature)
+        );
+    }
+
+    // ── End-to-end Ed25519 CertificateVerify over a real transcript hash ───
+    //
+    // Sign a CertificateVerify content with a deterministic Ed25519 key (Ed25519
+    // is fully deterministic per RFC 8032), then check that
+    // verify_certificate_verify accepts it and rejects every tampering.
+
+    /// A deterministic Ed25519 signing key for the end-to-end tests (fixed seed).
+    fn ed25519_e2e_key() -> ed25519_dalek::SigningKey {
+        ed25519_dalek::SigningKey::from_bytes(
+            &hex("0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20")
+                .try_into()
+                .expect("32-byte seed"),
+        )
+    }
+
+    #[test]
+    fn end_to_end_ed25519_server_certificate_verify_roundtrips() {
+        use ed25519_dalek::Signer;
+        let sk = ed25519_e2e_key();
+        let pk = sk.verifying_key().to_bytes().to_vec();
+        let th = e2e_transcript_hash();
+
+        let content = certificate_verify_content(CertVerifyRole::Server, &th);
+        let sig = sk.sign(&content).to_bytes().to_vec();
+
+        assert_eq!(
+            verify_certificate_verify(signature_scheme::ED25519, &pk, CertVerifyRole::Server, &th, &sig),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn end_to_end_ed25519_rejects_wrong_role_and_transcript() {
+        use ed25519_dalek::Signer;
+        let sk = ed25519_e2e_key();
+        let pk = sk.verifying_key().to_bytes().to_vec();
+        let th = e2e_transcript_hash();
+
+        let content = certificate_verify_content(CertVerifyRole::Server, &th);
+        let sig = sk.sign(&content).to_bytes().to_vec();
+
+        // A server signature must not verify as a client CertificateVerify.
+        assert_eq!(
+            verify_certificate_verify(signature_scheme::ED25519, &pk, CertVerifyRole::Client, &th, &sig),
+            Err(CertVerifyError::BadSignature)
+        );
+        // Nor over an altered transcript hash (MITM detection).
+        let mut altered = th.clone();
+        altered[0] ^= 0xff;
+        assert_eq!(
+            verify_certificate_verify(signature_scheme::ED25519, &pk, CertVerifyRole::Server, &altered, &sig),
+            Err(CertVerifyError::BadSignature)
+        );
+    }
+
+    // ── End-to-end RSASSA-PSS CertificateVerify over a real transcript hash ─
+    //
+    // RSA-PSS signing needs randomness for the salt (unlike the deterministic
+    // ECDSA/Ed25519 above), so a fresh 2048-bit key is generated and the salt is
+    // drawn from the OS CSPRNG. Verification recovers the salt (RFC 8017 §9.1.2),
+    // so a fresh salt each run still verifies — the test's pass/fail is
+    // deterministic even though the signature bytes are not. 2048 bits comfortably
+    // exceeds the PSS minimum for SHA-256 (hLen + sLen + 2 = 66 octets).
+
+    /// A freshly generated 2048-bit RSA signing key (digest `D`) plus its PKCS#1
+    /// DER public key. Generic over the PSS message digest so the SHA-256, SHA-384
+    /// and SHA-512 round-trips share one fixture; 2048 bits clears the PSS minimum
+    /// for all three (SHA-512 needs `hLen + sLen + 2 = 130` octets < 256).
+    fn rsa_e2e_key<D: Digest>() -> (rsa::pss::SigningKey<D>, Vec<u8>) {
+        use rand_core::OsRng;
+        use rsa::pkcs1::EncodeRsaPublicKey;
+        let private_key = rsa::RsaPrivateKey::new(&mut OsRng, 2048).expect("generate RSA key");
+        let public_der = private_key
+            .to_public_key()
+            .to_pkcs1_der()
+            .expect("encode RSA public key")
+            .as_bytes()
+            .to_vec();
+        (rsa::pss::SigningKey::<D>::new(private_key), public_der)
+    }
+
+    /// Produce an `rsa_pss_rsae_*` signature (digest `D`) over `content`.
+    fn rsa_sign<D>(signing_key: &rsa::pss::SigningKey<D>, content: &[u8]) -> Vec<u8>
+    where
+        D: Digest,
+        rsa::pss::SigningKey<D>: rsa::signature::RandomizedSigner<RsaPssSignature>,
+    {
+        use rand_core::OsRng;
+        use rsa::signature::{RandomizedSigner, SignatureEncoding};
+        signing_key.sign_with_rng(&mut OsRng, content).to_bytes().to_vec()
+    }
+
+    #[test]
+    fn end_to_end_rsa_pss_server_certificate_verify_roundtrips() {
+        let (signing_key, pk_der) = rsa_e2e_key::<Sha256>();
+        let th = e2e_transcript_hash();
+        let content = certificate_verify_content(CertVerifyRole::Server, &th);
+        let sig = rsa_sign(&signing_key, &content);
+
+        assert_eq!(
+            verify_certificate_verify(
+                signature_scheme::RSA_PSS_RSAE_SHA256,
+                &pk_der,
+                CertVerifyRole::Server,
+                &th,
+                &sig,
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn end_to_end_rsa_pss_sha384_and_sha512_roundtrip() {
+        // The SHA-384 and SHA-512 variants share the SHA-256 path but for the
+        // digest: a signature made with each verifies under its own scheme.
+        let (sk384, pk384) = rsa_e2e_key::<Sha384>();
+        let (sk512, pk512) = rsa_e2e_key::<Sha512>();
+        let th = e2e_transcript_hash();
+        let content = certificate_verify_content(CertVerifyRole::Server, &th);
+
+        let sig384 = rsa_sign(&sk384, &content);
+        assert_eq!(
+            verify_certificate_verify(
+                signature_scheme::RSA_PSS_RSAE_SHA384,
+                &pk384,
+                CertVerifyRole::Server,
+                &th,
+                &sig384,
+            ),
+            Ok(())
+        );
+
+        let sig512 = rsa_sign(&sk512, &content);
+        assert_eq!(
+            verify_certificate_verify(
+                signature_scheme::RSA_PSS_RSAE_SHA512,
+                &pk512,
+                CertVerifyRole::Server,
+                &th,
+                &sig512,
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn end_to_end_rsa_pss_digest_mismatch_is_rejected() {
+        // A signature made with SHA-384 must not verify under the SHA-512 scheme
+        // (or the reverse): the digest is bound into the PSS encoding.
+        let (sk384, pk384) = rsa_e2e_key::<Sha384>();
+        let th = e2e_transcript_hash();
+        let content = certificate_verify_content(CertVerifyRole::Server, &th);
+        let sig384 = rsa_sign(&sk384, &content);
+
+        assert_eq!(
+            verify_certificate_verify(
+                signature_scheme::RSA_PSS_RSAE_SHA512,
+                &pk384,
+                CertVerifyRole::Server,
+                &th,
+                &sig384,
+            ),
+            Err(CertVerifyError::BadSignature)
+        );
+    }
+
+    #[test]
+    fn end_to_end_rsa_pss_rejects_wrong_role_transcript_and_signature() {
+        let (signing_key, pk_der) = rsa_e2e_key::<Sha256>();
+        let th = e2e_transcript_hash();
+        let content = certificate_verify_content(CertVerifyRole::Server, &th);
+        let sig = rsa_sign(&signing_key, &content);
+
+        // Wrong role: a server signature must not verify as a client one.
+        assert_eq!(
+            verify_certificate_verify(
+                signature_scheme::RSA_PSS_RSAE_SHA256,
+                &pk_der,
+                CertVerifyRole::Client,
+                &th,
+                &sig,
+            ),
+            Err(CertVerifyError::BadSignature)
+        );
+        // Altered transcript hash (MITM detection).
+        let mut altered = th.clone();
+        altered[0] ^= 0xff;
+        assert_eq!(
+            verify_certificate_verify(
+                signature_scheme::RSA_PSS_RSAE_SHA256,
+                &pk_der,
+                CertVerifyRole::Server,
+                &altered,
+                &sig,
+            ),
+            Err(CertVerifyError::BadSignature)
+        );
+        // Tampered signature octet.
+        let mut bad_sig = sig.clone();
+        bad_sig[0] ^= 0x01;
+        assert_eq!(
+            verify_certificate_verify(
+                signature_scheme::RSA_PSS_RSAE_SHA256,
+                &pk_der,
+                CertVerifyRole::Server,
+                &th,
+                &bad_sig,
+            ),
+            Err(CertVerifyError::BadSignature)
+        );
+    }
+
+    #[test]
+    fn rsa_pss_rejects_malformed_key_and_signature() {
+        let (signing_key, pk_der) = rsa_e2e_key::<Sha256>();
+        let th = e2e_transcript_hash();
+        let content = certificate_verify_content(CertVerifyRole::Server, &th);
+        let sig = rsa_sign(&signing_key, &content);
+
+        // A public key that is not valid PKCS#1 DER.
+        assert_eq!(
+            rsa_pss_sha256_verify(&[0x30, 0x00, 0x01], &content, &sig),
+            Err(CertVerifyError::MalformedPublicKey)
+        );
+        // A signature that is not one modulus width wide fails (either the PSS
+        // representative is out of range or the octet string is ill-formed).
+        let short = &sig[..sig.len() / 2];
+        assert!(matches!(
+            rsa_pss_sha256_verify(&pk_der, &content, short),
+            Err(CertVerifyError::MalformedSignature | CertVerifyError::BadSignature)
+        ));
+    }
+
     // ── End-to-end CertificateVerify over a real transcript hash ───────────
     //
     // Deterministically sign a CertificateVerify content with a fresh P-256 key
@@ -485,14 +1078,206 @@ mod tests {
         );
     }
 
+    // ── End-to-end ECDSA P-384 / P-521 CertificateVerify over a real hash ──
+    //
+    // The larger NIST curves behave exactly like P-256: RustCrypto ECDSA signing
+    // is RFC 6979 deterministic, so a fixed per-curve scalar yields a fixed
+    // signature. Each curve is signed with its TLS digest (SHA-384 / SHA-512, the
+    // curve default the verifier applies), then verify_certificate_verify must
+    // accept it and reject a wrong role, an altered transcript, and a wrong key.
+
+    /// A deterministic P-384 signing key for the end-to-end tests (fixed 48-octet
+    /// scalar, well below the group order).
+    fn e2e_key_p384() -> p384::ecdsa::SigningKey {
+        p384::ecdsa::SigningKey::from_slice(&hex(
+            "0102030405060708090a0b0c0d0e0f10\
+             1112131415161718191a1b1c1d1e1f20\
+             2122232425262728292a2b2c2d2e2f30",
+        ))
+        .expect("valid P-384 scalar")
+    }
+
+    /// A deterministic P-521 signing key for the end-to-end tests (fixed 66-octet
+    /// scalar leading with `0x00` so it stays below the group order). The `p521`
+    /// crate exposes the public key via `VerifyingKey::from(&signing_key)` rather
+    /// than an inherent `verifying_key()` method (see [`p521_public_key`]).
+    fn e2e_key_p521() -> p521::ecdsa::SigningKey {
+        p521::ecdsa::SigningKey::from_slice(&hex(
+            "000102030405060708090a0b0c0d0e0f\
+             101112131415161718191a1b1c1d1e1f\
+             202122232425262728292a2b2c2d2e2f\
+             303132333435363738393a3b3c3d3e3f\
+             4041",
+        ))
+        .expect("valid P-521 scalar")
+    }
+
+    /// The SEC1 uncompressed public point for a P-521 signing key. Unlike P-256 /
+    /// P-384, the `p521` crate gates the inherent `SigningKey::verifying_key()`
+    /// behind an unset feature, so the public key is derived through the always-on
+    /// `From<&SigningKey>` conversion.
+    fn p521_public_key(sk: &p521::ecdsa::SigningKey) -> Vec<u8> {
+        P521VerifyingKey::from(sk).to_encoded_point(false).as_bytes().to_vec()
+    }
+
+    #[test]
+    fn end_to_end_ecdsa_p384_server_certificate_verify_roundtrips() {
+        let sk = e2e_key_p384();
+        let pk = sk.verifying_key().to_encoded_point(false).as_bytes().to_vec();
+        let th = e2e_transcript_hash();
+
+        let content = certificate_verify_content(CertVerifyRole::Server, &th);
+        let sig: P384Signature = sk.sign(&content);
+        let der = sig.to_der().as_bytes().to_vec();
+
+        assert_eq!(
+            verify_certificate_verify(
+                signature_scheme::ECDSA_SECP384R1_SHA384,
+                &pk,
+                CertVerifyRole::Server,
+                &th,
+                &der,
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn end_to_end_ecdsa_p384_rejects_wrong_role_transcript_and_key() {
+        let sk = e2e_key_p384();
+        let pk = sk.verifying_key().to_encoded_point(false).as_bytes().to_vec();
+        let th = e2e_transcript_hash();
+        let sig: P384Signature = sk.sign(&certificate_verify_content(CertVerifyRole::Server, &th));
+        let der = sig.to_der().as_bytes().to_vec();
+
+        // Wrong role.
+        assert_eq!(
+            verify_certificate_verify(
+                signature_scheme::ECDSA_SECP384R1_SHA384,
+                &pk,
+                CertVerifyRole::Client,
+                &th,
+                &der,
+            ),
+            Err(CertVerifyError::BadSignature)
+        );
+        // Altered transcript (MITM detection).
+        let mut altered = th.clone();
+        altered[0] ^= 0xff;
+        assert_eq!(
+            verify_certificate_verify(
+                signature_scheme::ECDSA_SECP384R1_SHA384,
+                &pk,
+                CertVerifyRole::Server,
+                &altered,
+                &der,
+            ),
+            Err(CertVerifyError::BadSignature)
+        );
+        // Wrong key: a P-256 SEC1 point is not a valid P-384 public key.
+        assert_eq!(
+            verify_certificate_verify(
+                signature_scheme::ECDSA_SECP384R1_SHA384,
+                &rfc6979_public_key_sec1(),
+                CertVerifyRole::Server,
+                &th,
+                &der,
+            ),
+            Err(CertVerifyError::MalformedPublicKey)
+        );
+    }
+
+    #[test]
+    fn end_to_end_ecdsa_p521_server_certificate_verify_roundtrips() {
+        let sk = e2e_key_p521();
+        let pk = p521_public_key(&sk);
+        let th = e2e_transcript_hash();
+
+        let content = certificate_verify_content(CertVerifyRole::Server, &th);
+        let sig: P521Signature = sk.sign(&content);
+        let der = sig.to_der().as_bytes().to_vec();
+
+        assert_eq!(
+            verify_certificate_verify(
+                signature_scheme::ECDSA_SECP521R1_SHA512,
+                &pk,
+                CertVerifyRole::Server,
+                &th,
+                &der,
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn end_to_end_ecdsa_p521_rejects_wrong_role_and_transcript() {
+        let sk = e2e_key_p521();
+        let pk = p521_public_key(&sk);
+        let th = e2e_transcript_hash();
+        let sig: P521Signature = sk.sign(&certificate_verify_content(CertVerifyRole::Server, &th));
+        let der = sig.to_der().as_bytes().to_vec();
+
+        assert_eq!(
+            verify_certificate_verify(
+                signature_scheme::ECDSA_SECP521R1_SHA512,
+                &pk,
+                CertVerifyRole::Client,
+                &th,
+                &der,
+            ),
+            Err(CertVerifyError::BadSignature)
+        );
+        let mut altered = th.clone();
+        altered[0] ^= 0xff;
+        assert_eq!(
+            verify_certificate_verify(
+                signature_scheme::ECDSA_SECP521R1_SHA512,
+                &pk,
+                CertVerifyRole::Server,
+                &altered,
+                &der,
+            ),
+            Err(CertVerifyError::BadSignature)
+        );
+    }
+
+    #[test]
+    fn ecdsa_p384_p521_primitives_reject_malformed_inputs() {
+        // A too-short SEC1 point and a non-DER signature fail at decode for both
+        // curves (mirrors the P-256 malformed-input checks).
+        let th = e2e_transcript_hash();
+        let content = certificate_verify_content(CertVerifyRole::Server, &th);
+
+        assert_eq!(
+            ecdsa_p384_sha384_verify(&[0x04, 0x00, 0x01], &content, &[0x30, 0x00]),
+            Err(CertVerifyError::MalformedPublicKey)
+        );
+        let sk384 = e2e_key_p384();
+        let pk384 = sk384.verifying_key().to_encoded_point(false).as_bytes().to_vec();
+        assert_eq!(
+            ecdsa_p384_sha384_verify(&pk384, &content, &[0xff, 0xff, 0xff]),
+            Err(CertVerifyError::MalformedSignature)
+        );
+
+        assert_eq!(
+            ecdsa_p521_sha512_verify(&[0x04, 0x00, 0x01], &content, &[0x30, 0x00]),
+            Err(CertVerifyError::MalformedPublicKey)
+        );
+        let sk521 = e2e_key_p521();
+        let pk521 = p521_public_key(&sk521);
+        assert_eq!(
+            ecdsa_p521_sha512_verify(&pk521, &content, &[0xff, 0xff, 0xff]),
+            Err(CertVerifyError::MalformedSignature)
+        );
+    }
+
     #[test]
     fn unsupported_schemes_are_reported() {
         let th = e2e_transcript_hash();
         for scheme in [
-            signature_scheme::RSA_PSS_RSAE_SHA256,
-            signature_scheme::ED25519,
-            signature_scheme::ECDSA_SECP384R1_SHA384,
             signature_scheme::RSA_PKCS1_SHA256,
+            signature_scheme::RSA_PSS_PSS_SHA256,
+            signature_scheme::ED448,
         ] {
             assert_eq!(
                 verify_certificate_verify(scheme, &rfc6979_public_key_sec1(), CertVerifyRole::Server, &th, &[]),
