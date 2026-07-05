@@ -2301,7 +2301,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (774 symbols)
+## lumen-network  (787 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -2744,32 +2744,45 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/qpack.rs:316` **fn** `value_str` — The value as UTF-8 (best-effort; non-UTF-8 yields `""`)
 `crates/network/src/h3/qpack.rs:417` **fn** `encode_field_section` — Encode a list of header fields into a QPACK field section (RFC 9204 §4.5),
 `crates/network/src/h3/qpack.rs:456` **fn** `decode_field_section` — Decode a QPACK field section (RFC 9204 §4.5) that references only the static
-`crates/network/src/h3/qpack.rs:649` **fn** `encode_field_section_dynamic` — Encode header fields into a field section (RFC 9204 §4.5), referencing the
-`crates/network/src/h3/qpack.rs:738` **fn** `decode_field_section_dynamic` — Decode a field section (RFC 9204 §4.5) that may reference the supplied
+`crates/network/src/h3/qpack.rs:639` **struct** `DynSectionInfo` — Metadata about a dynamic field section, produced alongside its bytes by
+`crates/network/src/h3/qpack.rs:665` **fn** `encode_field_section_dynamic` — Encode header fields into a field section (RFC 9204 §4.5), referencing the
+`crates/network/src/h3/qpack.rs:688` **fn** `encode_field_section_dynamic_bounded` — Encode a field section like [`encode_field_section_dynamic`], but reference a
+`crates/network/src/h3/qpack.rs:783` **fn** `decode_field_section_dynamic` — Decode a field section (RFC 9204 §4.5) that may reference the supplied
+`crates/network/src/h3/qpack_encoder.rs:55` **struct** `EncodedRequest` — The result of encoding one request's field section
+`crates/network/src/h3/qpack_encoder.rs:74` **struct** `QpackEncoder` — The connection-layer QPACK encoder: dynamic-table insertion policy, blocked-
+`crates/network/src/h3/qpack_encoder.rs:96` **fn** `new` — Create an encoder whose dynamic table may grow to `max_table_capacity`
+`crates/network/src/h3/qpack_encoder.rs:108` **fn** `without_huffman` — Disable Huffman coding of literal names/values (enabled by default)
+`crates/network/src/h3/qpack_encoder.rs:121` **fn** `set_capacity` — Raise (or lower) the dynamic table capacity, applying it to the local
+`crates/network/src/h3/qpack_encoder.rs:133` **fn** `capacity` — The current dynamic table capacity in bytes
+`crates/network/src/h3/qpack_encoder.rs:139` **fn** `insert_count` — The number of insertions performed so far (the table's Insert Count)
+`crates/network/src/h3/qpack_encoder.rs:145` **fn** `known_received_count` — The Known Received Count (RFC 9204 §2.1.4)
+`crates/network/src/h3/qpack_encoder.rs:153` **fn** `blocked_stream_count` — The number of streams currently blocked (RFC 9204 §2.1.2): distinct
+`crates/network/src/h3/qpack_encoder.rs:238` **fn** `encode_section` — Encode `fields` as a field section for `stream_id`, inserting beneficial
+`crates/network/src/h3/qpack_encoder.rs:313` **fn** `on_decoder_instruction` — Apply a decoder-stream instruction (RFC 9204 §4.4) received from the peer
 `crates/network/src/h3/qpack_stream.rs:62` **enum** `QpackStreamError` — An error decoding an instruction stream or mutating the dynamic table
-`crates/network/src/h3/qpack_stream.rs:166` **struct** `DynamicTable` — The QPACK dynamic table: a FIFO of `(name, value)` entries with a
-`crates/network/src/h3/qpack_stream.rs:184` **fn** `new` — Create an empty table whose capacity starts at 0 and may be raised up to
-`crates/network/src/h3/qpack_stream.rs:196` **fn** `entry_size` — The size in bytes an entry occupies (RFC 9204 §3.2.1)
-`crates/network/src/h3/qpack_stream.rs:202` **fn** `capacity` — The current capacity in bytes
-`crates/network/src/h3/qpack_stream.rs:208` **fn** `size` — The total size in bytes of all live entries
-`crates/network/src/h3/qpack_stream.rs:214` **fn** `len` — The number of entries currently in the table
-`crates/network/src/h3/qpack_stream.rs:220` **fn** `is_empty` — Whether the table currently holds no entries
-`crates/network/src/h3/qpack_stream.rs:228` **fn** `insert_count` — The Insert Count — the number of insertions performed so far, equal to
-`crates/network/src/h3/qpack_stream.rs:236` **fn** `max_entries` — `MaxEntries = floor(MaxTableCapacity / 32)` (RFC 9204 §3.2.2), the value
-`crates/network/src/h3/qpack_stream.rs:244` **fn** `find_absolute` — The absolute index of the most recent live entry whose name and value
-`crates/network/src/h3/qpack_stream.rs:254` **fn** `find_name_absolute` — The absolute index of the most recent live entry whose name matches, for
-`crates/network/src/h3/qpack_stream.rs:270` **fn** `get_absolute` — Look up an entry by its absolute index (RFC 9204 §3.2.4). Returns `None`
-`crates/network/src/h3/qpack_stream.rs:297` **fn** `set_capacity` — Set the table capacity (RFC 9204 §3.2.3 / the Set Dynamic Table Capacity
-`crates/network/src/h3/qpack_stream.rs:326` **fn** `insert` — Insert a `(name, value)` entry, evicting older entries to make room
-`crates/network/src/h3/qpack_stream.rs:349` **fn** `apply` — Apply a parsed [`EncoderInstruction`] to the table, resolving name and
-`crates/network/src/h3/qpack_stream.rs:389` **enum** `EncoderInstruction` — An instruction on the QPACK encoder stream (RFC 9204 §4.3)
-`crates/network/src/h3/qpack_stream.rs:417` **fn** `encode` — Serialize this instruction onto `out`. `use_huffman` enables Huffman
-`crates/network/src/h3/qpack_stream.rs:448` **fn** `decode` — Parse a single instruction from the front of `src`, returning it and the
-`crates/network/src/h3/qpack_stream.rs:478` **fn** `decode_encoder_stream` — Decode a full encoder-stream buffer into a list of instructions
-`crates/network/src/h3/qpack_stream.rs:495` **enum** `DecoderInstruction` — An instruction on the QPACK decoder stream (RFC 9204 §4.4)
-`crates/network/src/h3/qpack_stream.rs:506` **fn** `encode` — Serialize this instruction onto `out`
-`crates/network/src/h3/qpack_stream.rs:524` **fn** `decode` — Parse a single instruction from the front of `src`, returning it and the
-`crates/network/src/h3/qpack_stream.rs:544` **fn** `decode_decoder_stream` — Decode a full decoder-stream buffer into a list of instructions
+`crates/network/src/h3/qpack_stream.rs:189` **struct** `DynamicTable` — The QPACK dynamic table: a FIFO of `(name, value)` entries with a
+`crates/network/src/h3/qpack_stream.rs:207` **fn** `new` — Create an empty table whose capacity starts at 0 and may be raised up to
+`crates/network/src/h3/qpack_stream.rs:219` **fn** `entry_size` — The size in bytes an entry occupies (RFC 9204 §3.2.1)
+`crates/network/src/h3/qpack_stream.rs:225` **fn** `capacity` — The current capacity in bytes
+`crates/network/src/h3/qpack_stream.rs:231` **fn** `size` — The total size in bytes of all live entries
+`crates/network/src/h3/qpack_stream.rs:237` **fn** `len` — The number of entries currently in the table
+`crates/network/src/h3/qpack_stream.rs:243` **fn** `is_empty` — Whether the table currently holds no entries
+`crates/network/src/h3/qpack_stream.rs:251` **fn** `insert_count` — The Insert Count — the number of insertions performed so far, equal to
+`crates/network/src/h3/qpack_stream.rs:259` **fn** `max_entries` — `MaxEntries = floor(MaxTableCapacity / 32)` (RFC 9204 §3.2.2), the value
+`crates/network/src/h3/qpack_stream.rs:267` **fn** `find_absolute` — The absolute index of the most recent live entry whose name and value
+`crates/network/src/h3/qpack_stream.rs:277` **fn** `find_name_absolute` — The absolute index of the most recent live entry whose name matches, for
+`crates/network/src/h3/qpack_stream.rs:293` **fn** `get_absolute` — Look up an entry by its absolute index (RFC 9204 §3.2.4). Returns `None`
+`crates/network/src/h3/qpack_stream.rs:320` **fn** `set_capacity` — Set the table capacity (RFC 9204 §3.2.3 / the Set Dynamic Table Capacity
+`crates/network/src/h3/qpack_stream.rs:349` **fn** `insert` — Insert a `(name, value)` entry, evicting older entries to make room
+`crates/network/src/h3/qpack_stream.rs:372` **fn** `apply` — Apply a parsed [`EncoderInstruction`] to the table, resolving name and
+`crates/network/src/h3/qpack_stream.rs:412` **enum** `EncoderInstruction` — An instruction on the QPACK encoder stream (RFC 9204 §4.3)
+`crates/network/src/h3/qpack_stream.rs:440` **fn** `encode` — Serialize this instruction onto `out`. `use_huffman` enables Huffman
+`crates/network/src/h3/qpack_stream.rs:471` **fn** `decode` — Parse a single instruction from the front of `src`, returning it and the
+`crates/network/src/h3/qpack_stream.rs:501` **fn** `decode_encoder_stream` — Decode a full encoder-stream buffer into a list of instructions
+`crates/network/src/h3/qpack_stream.rs:518` **enum** `DecoderInstruction` — An instruction on the QPACK decoder stream (RFC 9204 §4.4)
+`crates/network/src/h3/qpack_stream.rs:529` **fn** `encode` — Serialize this instruction onto `out`
+`crates/network/src/h3/qpack_stream.rs:547` **fn** `decode` — Parse a single instruction from the front of `src`, returning it and the
+`crates/network/src/h3/qpack_stream.rs:567` **fn** `decode_decoder_stream` — Decode a full decoder-stream buffer into a list of instructions
 `crates/network/src/h3/quic_frame.rs:122` **enum** `QuicFrameError` — Frame-codec error. Every variant is a `FRAME_ENCODING_ERROR` at the QUIC
 `crates/network/src/h3/quic_frame.rs:174` **struct** `AckRange` — A single additional ACK range in an ACK frame (RFC 9000 §19.3.1). The first
 `crates/network/src/h3/quic_frame.rs:185` **struct** `EcnCounts` — ECN counts carried by an ACK frame of type `0x03` (RFC 9000 §19.3.2)
@@ -4856,4 +4869,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4785 symbols in 22 crates*
+*Total: 4798 symbols in 22 crates*

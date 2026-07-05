@@ -469,10 +469,22 @@
 //!   connection-specific fields). Pure functions over the static-only QPACK
 //!   codec; request bodies, trailers, the dynamic table, and the transport are
 //!   out of scope.
-//! - Slice 41+ (planned) — the rest of the QUIC transport: the UDP send/receive,
-//!   actually arming the PTO/ACK-delay timers and assembling probe datagrams, the
-//!   QPACK encoder/decoder stream instruction wiring, and `h3_do_request` dispatch
-//!   alongside the existing H1/H2 paths.
+//! - Slice 41 — the QPACK encoder driver ([`qpack_encoder`], RFC 9204 §2.1): the
+//!   request-path policy layer over the QPACK codecs — [`qpack_encoder::QpackEncoder`]
+//!   owns the encoder's mirror of the decoder's dynamic table, inserts beneficial
+//!   header fields (emitting the encoder-stream instructions of [`qpack_stream`],
+//!   the "instruction stream wiring" the plan called for), and encodes the field
+//!   section against the resulting table via
+//!   [`qpack::encode_field_section_dynamic_bounded`] — never referencing an entry
+//!   the decoder has not acknowledged unless `SETTINGS_QPACK_BLOCKED_STREAMS`
+//!   allows the blocked stream (§2.1.2). It tracks each outstanding section so a
+//!   referenced entry is not evicted before acknowledgment (§2.1.3) and advances
+//!   the Known Received Count on Section Acknowledgment / Insert Count Increment,
+//!   dropping references on Stream Cancellation (§2.1.4, §4.4). Pure state machine
+//!   over the two codecs; no IO.
+//! - Slice 42+ (planned) — the rest of the QUIC transport: the UDP send/receive,
+//!   actually arming the PTO/ACK-delay timers and assembling probe datagrams, and
+//!   `h3_do_request` dispatch alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -503,6 +515,7 @@ pub mod path_mtu;
 pub mod path_validation;
 pub mod pto;
 pub mod qpack;
+pub mod qpack_encoder;
 pub mod qpack_stream;
 pub mod quic_frame;
 pub mod recovery;

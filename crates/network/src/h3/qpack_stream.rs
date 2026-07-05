@@ -79,14 +79,31 @@ pub enum QpackStreamError {
     /// An insert produced an entry larger than the current table capacity
     /// (RFC 9204 §3.2.2) — it can never fit, so it is a stream error.
     EntryTooLarge,
+    /// A Section Acknowledgment named a stream with no unacknowledged field
+    /// section (RFC 9204 §4.4.1). Raised on the encoder while reading the
+    /// *decoder* stream; use [`QpackStreamError::decoder_code`].
+    UnexpectedSectionAck(u64),
+    /// An Insert Count Increment raised the Known Received Count beyond the
+    /// encoder's Insert Count (RFC 9204 §4.4.3). Raised on the encoder while
+    /// reading the *decoder* stream; use [`QpackStreamError::decoder_code`].
+    InsertCountIncrementOverflow(u64),
 }
 
 impl QpackStreamError {
     /// The RFC 9204 §6 wire error code when the failure arose on the **encoder**
     /// stream (the common case: every table-mutating instruction is read there).
+    /// The two encoder-side decoder-stream faults
+    /// ([`UnexpectedSectionAck`](Self::UnexpectedSectionAck),
+    /// [`InsertCountIncrementOverflow`](Self::InsertCountIncrementOverflow))
+    /// always originate on the decoder stream and so report the decoder code.
     #[must_use]
     pub const fn code(&self) -> u64 {
-        QPACK_ENCODER_STREAM_ERROR
+        match self {
+            Self::UnexpectedSectionAck(_) | Self::InsertCountIncrementOverflow(_) => {
+                QPACK_DECODER_STREAM_ERROR
+            }
+            _ => QPACK_ENCODER_STREAM_ERROR,
+        }
     }
 
     /// The RFC 9204 §6 wire error code when the failure arose on the **decoder**
@@ -113,6 +130,12 @@ impl core::fmt::Display for QpackStreamError {
                 write!(f, "QPACK stream: capacity {c} exceeds advertised maximum")
             }
             Self::EntryTooLarge => write!(f, "QPACK stream: entry larger than table capacity"),
+            Self::UnexpectedSectionAck(id) => {
+                write!(f, "QPACK stream: Section Acknowledgment for stream {id} with no outstanding section")
+            }
+            Self::InsertCountIncrementOverflow(n) => {
+                write!(f, "QPACK stream: Insert Count Increment {n} exceeds insert count")
+            }
         }
     }
 }
