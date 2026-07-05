@@ -27,6 +27,14 @@ brotli-decompressor = "5"
 # Pure-Rust RustCrypto, детерминированные RFC 6979 подписи (RNG не нужен для sign).
 # Своя реализация ECDSA — security antipattern.
 p256 = { version = "0.13", features = ["ecdsa"] }
+# Exception #3 (§5): crypto. ECDSA P-384/P-521 signature verification for the TLS 1.3
+# `ecdsa_secp384r1_sha384` / `ecdsa_secp521r1_sha512` CertificateVerify schemes
+# (RFC 8446 §4.2.3) in QUIC/HTTP/3 peer authentication — the larger NIST-curve siblings
+# of the p256 `ecdsa_secp256r1_sha256` scheme, signed by P-384/P-521 certificates. Same
+# RustCrypto `ecdsa`/`signature` v2 family as p256, pure-Rust, verify-only (no key
+# generation). Своя реализация ECDSA — security antipattern.
+p384 = { version = "0.13", features = ["ecdsa"] }
+p521 = { version = "0.13", features = ["ecdsa"] }
 # SHA-256 для clientDataHash и rpIdHash в WebAuthn (W3C WebAuthn L2 §6.1).
 sha2 = "0.10"
 # Exception #3 (§5): crypto. AES-128-GCM AEAD packet protection (RFC 9001 §5.3)
