@@ -272,10 +272,26 @@
 //!   header codec left opaque. Pure functions; validated against the RFC 9000
 //!   Appendix A.2/A.3 examples. No IO — wiring this into the header-protection /
 //!   AEAD path ([`packet_protect`]) is the connection layer's job.
-//! - Slice 27+ (planned) — the rest of the QUIC transport: the UDP send/receive
-//!   and Path MTU, actually arming the PTO timer and assembling probe datagrams,
-//!   the QPACK encoder/decoder stream instruction wiring, and `h3_do_request`
-//!   dispatch alongside the existing H1/H2 paths.
+//! - Slice 27 — QUIC Path MTU Discovery ([`path_mtu`], RFC 9000 §14.2–14.4,
+//!   RFC 8899): the pure DPLPMTUD state machine that finds the largest UDP
+//!   payload a path can carry — the *max datagram size* that bounds the
+//!   congestion window in [`recovery`] and the size of the packets the sender
+//!   builds. [`path_mtu::PathMtuDiscovery`] confirms the
+//!   [`path_mtu::QUIC_MIN_PLPMTU`] base size (RFC 8899 §5.2; a completed
+//!   handshake already proves it, so
+//!   [`path_mtu::PathMtuDiscovery::with_confirmed_base`] skips straight to the
+//!   search), then binary-searches upward: [`path_mtu::PathMtuDiscovery::next_probe`]
+//!   proposes the next probe size, an acknowledged probe raises the confirmed
+//!   size, and a probe lost [`path_mtu::MAX_PROBES`] times lowers the upper bound
+//!   (RFC 8899 §5.3). [`path_mtu::PathMtuDiscovery::on_black_hole`] drops back to
+//!   the base and restarts when ordinary datagrams at the current size disappear
+//!   (RFC 8899 §5.4). Pure state machine driven by probe acknowledgement / loss;
+//!   no IO, no probe-packet assembly, and the caller must keep a lost probe out
+//!   of the congestion controller (RFC 9000 §14.4).
+//! - Slice 28+ (planned) — the rest of the QUIC transport: the UDP send/receive,
+//!   actually arming the PTO timer and assembling probe datagrams, the QPACK
+//!   encoder/decoder stream instruction wiring, and `h3_do_request` dispatch
+//!   alongside the existing H1/H2 paths.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -294,6 +310,7 @@ pub mod loss;
 pub mod packet;
 pub mod packet_number;
 pub mod packet_protect;
+pub mod path_mtu;
 pub mod pto;
 pub mod qpack;
 pub mod qpack_stream;
