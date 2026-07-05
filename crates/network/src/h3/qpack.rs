@@ -41,12 +41,21 @@
 //! - Literal Field Line With Post-Base Name Reference (§4.5.5).
 //! - Any non-zero Required Insert Count in the section prefix (§4.5.1.1).
 //!
+//! ## Dynamic-table field sections
+//!
+//! [`encode_field_section_dynamic`] / [`decode_field_section_dynamic`] extend
+//! the codec with a caller-supplied [`DynamicTable`](super::qpack_stream::DynamicTable)
+//! (populated from the peer's encoder stream): they handle the Required Insert
+//! Count / Base prefix (§4.5.1) and the dynamic and Post-Base representations
+//! (§4.5.2–§4.5.5) that the static-only functions above reject. The dynamic
+//! table itself and the instruction streams that mutate it live in
+//! [`super::qpack_stream`].
+//!
 //! ## Out of scope (deferred to later slices)
 //!
-//! - The dynamic table and the encoder/decoder instruction streams
-//!   (RFC 9204 §4.3–§4.4).
 //! - IO, stream framing, and wiring into the request path.
 
+use super::qpack_stream::DynamicTable;
 use crate::h2::hpack::{HpackError, decode_int, encode_int, huffman_decode, huffman_encode};
 
 // ── Error ─────────────────────────────────────────────────────────────────
@@ -76,6 +85,15 @@ pub enum QpackError {
     /// The section prefix carried a non-zero Required Insert Count, which
     /// cannot occur with a zero-capacity dynamic table (RFC 9204 §4.5.1.1).
     NonZeroRequiredInsertCount(u64),
+    /// The encoded Required Insert Count in the field-section prefix could not
+    /// be reconstructed against the current table state (RFC 9204 §4.5.1.1):
+    /// it exceeds the wrap range, resolves to zero, or names more inserts than
+    /// the supplied dynamic table has received (the section is still blocked).
+    InvalidRequiredInsertCount(u64),
+    /// A dynamic-table reference (indexed or name reference, pre- or post-base)
+    /// resolved to an absolute index that is not live in the dynamic table —
+    /// either already evicted or never inserted (RFC 9204 §4.5.2–§4.5.5).
+    InvalidDynamicReference(u64),
 }
 
 impl QpackError {
@@ -99,6 +117,12 @@ impl core::fmt::Display for QpackError {
             Self::StringTooLong => write!(f, "QPACK: string length exceeds remaining input"),
             Self::NonZeroRequiredInsertCount(n) => {
                 write!(f, "QPACK: non-zero Required Insert Count {n} with zero capacity")
+            }
+            Self::InvalidRequiredInsertCount(n) => {
+                write!(f, "QPACK: encoded Required Insert Count {n} cannot be reconstructed")
+            }
+            Self::InvalidDynamicReference(i) => {
+                write!(f, "QPACK: dynamic-table reference to absent absolute index {i}")
             }
         }
     }
@@ -237,7 +261,7 @@ pub(crate) fn static_entry(index: u64) -> Result<(&'static str, &'static str), Q
 }
 
 /// First static index whose name and value both match, if any.
-fn find_static_full(name: &[u8], value: &[u8]) -> Option<u64> {
+pub(crate) fn find_static_full(name: &[u8], value: &[u8]) -> Option<u64> {
     STATIC_TABLE
         .iter()
         .position(|&(n, v)| n.as_bytes() == name && v.as_bytes() == value)
@@ -245,7 +269,7 @@ fn find_static_full(name: &[u8], value: &[u8]) -> Option<u64> {
 }
 
 /// First static index whose name matches, if any.
-fn find_static_name(name: &[u8]) -> Option<u64> {
+pub(crate) fn find_static_name(name: &[u8]) -> Option<u64> {
     STATIC_TABLE
         .iter()
         .position(|&(n, _)| n.as_bytes() == name)
@@ -482,6 +506,298 @@ pub fn decode_field_section(buf: &[u8]) -> Result<Vec<HeaderField>, QpackError> 
     Ok(fields)
 }
 
+// ── Dynamic-table field sections (RFC 9204 §4.5, full) ─────────────────────
+//
+// The functions above encode/decode a field section that references only the
+// static table (the zero-capacity wire behaviour). The pair below wires in a
+// caller-supplied [`DynamicTable`] (built from the peer's encoder stream by
+// [`DynamicTable::apply`]), so a field section can also reference dynamic
+// entries: the Required Insert Count / Base prefix (§4.5.1), the dynamic
+// Indexed / Literal-name-reference forms (`T = 0`, §4.5.2/§4.5.4) resolved
+// relative to Base, and the Post-Base Indexed / Post-Base-name-reference forms
+// (§4.5.3/§4.5.5) resolved forward of Base. These remain pure functions over
+// buffers; the table itself is not mutated (that happens on the encoder stream).
+
+/// Encode the Required Insert Count for the field-section prefix (RFC 9204
+/// §4.5.1.1): `0` when no dynamic entry is referenced, otherwise the count
+/// wrapped into `1..=2·MaxEntries` so it round-trips against a bounded table.
+fn encode_required_insert_count(ric: u64, max_entries: u64) -> u64 {
+    // A non-zero `ric` only arises from a live dynamic entry, which requires a
+    // non-empty table and hence `max_entries >= 1`; the guard just avoids a
+    // divide-by-zero on the impossible `ric > 0, max_entries == 0` path.
+    if ric == 0 || max_entries == 0 {
+        return 0;
+    }
+    ric % (2 * max_entries) + 1
+}
+
+/// Reconstruct the Required Insert Count from its encoded prefix value
+/// (RFC 9204 §4.5.1.1), given how many inserts the supplied table has seen.
+///
+/// # Errors
+///
+/// [`QpackError::InvalidRequiredInsertCount`] if the encoded value is out of
+/// the wrap range, resolves to zero, or names more inserts than the table has
+/// received (i.e. the section is still blocked on encoder-stream updates —
+/// which cannot happen for a synchronously-supplied, caught-up table).
+fn decode_required_insert_count(
+    enc: u64,
+    total_inserts: u64,
+    max_entries: u64,
+) -> Result<u64, QpackError> {
+    if enc == 0 {
+        return Ok(0);
+    }
+    let full_range = 2u64
+        .checked_mul(max_entries)
+        .filter(|&f| f != 0)
+        .ok_or(QpackError::InvalidRequiredInsertCount(enc))?;
+    if enc > full_range {
+        return Err(QpackError::InvalidRequiredInsertCount(enc));
+    }
+    let max_value = total_inserts + max_entries;
+    let max_wrapped = (max_value / full_range) * full_range;
+    let mut ric = max_wrapped + enc - 1;
+    if ric > max_value {
+        if ric <= full_range {
+            return Err(QpackError::InvalidRequiredInsertCount(enc));
+        }
+        ric -= full_range;
+    }
+    if ric == 0 || ric > total_inserts {
+        return Err(QpackError::InvalidRequiredInsertCount(enc));
+    }
+    Ok(ric)
+}
+
+/// Parse the field-section prefix in dynamic-aware mode: the encoded Required
+/// Insert Count (§4.5.1.1) and the signed Base (§4.5.1.2). Returns
+/// `(required_insert_count, base, consumed)`.
+fn decode_prefix_dynamic(buf: &[u8], table: &DynamicTable) -> Result<(u64, u64, usize), QpackError> {
+    let (enc_ric, n1) = decode_int(buf, 8).map_err(from_hpack)?;
+    let ric = decode_required_insert_count(enc_ric, table.insert_count(), table.max_entries())?;
+    let rest = &buf[n1..];
+    // Sign bit S (top bit of the Base byte); the 7-bit-prefix integer is the
+    // Delta Base. `decode_int(_, 7)` masks off the sign bit for us.
+    let sign = *rest.first().ok_or(QpackError::UnexpectedEof)? & 0x80 != 0;
+    let (delta_base, n2) = decode_int(rest, 7).map_err(from_hpack)?;
+    let base = if sign {
+        // S = 1: Base = ReqInsertCount − DeltaBase − 1 (RFC 9204 §4.5.1.2).
+        ric.checked_sub(delta_base)
+            .and_then(|v| v.checked_sub(1))
+            .ok_or(QpackError::InvalidRequiredInsertCount(enc_ric))?
+    } else {
+        // S = 0: Base = ReqInsertCount + DeltaBase.
+        ric.checked_add(delta_base).ok_or(QpackError::IntegerOverflow)?
+    };
+    Ok((ric, base, n1 + n2))
+}
+
+/// Resolve a pre-Base reference to an absolute index: `Base − Index − 1`
+/// (RFC 9204 §4.5.2/§4.5.4).
+fn pre_base_absolute(base: u64, index: u64) -> Result<u64, QpackError> {
+    base.checked_sub(index)
+        .and_then(|v| v.checked_sub(1))
+        .ok_or(QpackError::InvalidDynamicReference(index))
+}
+
+/// Resolve a Post-Base reference to an absolute index: `Base + Index`
+/// (RFC 9204 §4.5.3/§4.5.5).
+fn post_base_absolute(base: u64, index: u64) -> Result<u64, QpackError> {
+    base.checked_add(index).ok_or(QpackError::IntegerOverflow)
+}
+
+/// Look up a dynamic-table entry by absolute index, cloning its bytes, or fail
+/// with [`QpackError::InvalidDynamicReference`] if it is not live.
+fn dyn_entry(table: &DynamicTable, abs: u64) -> Result<(Vec<u8>, Vec<u8>), QpackError> {
+    table
+        .get_absolute(abs)
+        .map(|(n, v)| (n.to_vec(), v.to_vec()))
+        .ok_or(QpackError::InvalidDynamicReference(abs))
+}
+
+/// The representation chosen for one field when encoding against a dynamic
+/// table. `abs` values are absolute dynamic-table indices.
+#[derive(Clone, Copy)]
+enum Repr {
+    /// Indexed Field Line into the dynamic table (§4.5.2, `T = 0`).
+    DynIndexed(u64),
+    /// Indexed Field Line into the static table (§4.5.2, `T = 1`).
+    StaticIndexed(u64),
+    /// Literal Field Line with a dynamic-table name reference (§4.5.4, `T = 0`).
+    DynName(u64),
+    /// Literal Field Line with a static-table name reference (§4.5.4, `T = 1`).
+    StaticName(u64),
+    /// Literal Field Line with a literal name (§4.5.6).
+    Literal,
+}
+
+/// Encode header fields into a field section (RFC 9204 §4.5), referencing the
+/// supplied dynamic table where an entry matches and otherwise falling back to
+/// the static table / literals.
+///
+/// The Base is set equal to the Required Insert Count, so every referenced
+/// entry is addressed with the pre-Base forms (no Post-Base indices are
+/// emitted) and the prefix's Delta Base is zero. A `sensitive` field is never
+/// emitted as an Indexed Field Line and carries the "never index" (`N`) bit on
+/// its literal representation, exactly as in the static-only encoder.
+///
+/// The table is read but not mutated: choosing to *insert* new entries (and
+/// emitting the corresponding encoder-stream instructions) is a separate policy
+/// decision made by the connection layer, not by this codec.
+#[must_use]
+pub fn encode_field_section_dynamic(
+    fields: &[HeaderField],
+    table: &DynamicTable,
+    use_huffman: bool,
+) -> Vec<u8> {
+    // Pass 1: choose a representation per field and find the Required Insert
+    // Count = (highest referenced absolute index) + 1.
+    let mut plans = Vec::with_capacity(fields.len());
+    let mut ric = 0u64;
+    for field in fields {
+        let name = &field.name;
+        let value = &field.value;
+        let plan = if !field.sensitive {
+            if let Some(abs) = table.find_absolute(name, value) {
+                Repr::DynIndexed(abs)
+            } else if let Some(idx) = find_static_full(name, value) {
+                Repr::StaticIndexed(idx)
+            } else if let Some(abs) = table.find_name_absolute(name) {
+                Repr::DynName(abs)
+            } else if let Some(idx) = find_static_name(name) {
+                Repr::StaticName(idx)
+            } else {
+                Repr::Literal
+            }
+        } else if let Some(abs) = table.find_name_absolute(name) {
+            Repr::DynName(abs)
+        } else if let Some(idx) = find_static_name(name) {
+            Repr::StaticName(idx)
+        } else {
+            Repr::Literal
+        };
+        if let Repr::DynIndexed(abs) | Repr::DynName(abs) = plan {
+            ric = ric.max(abs + 1);
+        }
+        plans.push(plan);
+    }
+
+    // Base = Required Insert Count ⇒ Delta Base 0, and every dynamic reference
+    // is pre-Base (absolute index < Base).
+    let base = ric;
+
+    let mut out = Vec::new();
+    // §4.5.1.1 Required Insert Count (8-bit prefix), §4.5.1.2 Base with S = 0
+    // and Delta Base = 0.
+    out.extend_from_slice(&encode_int(encode_required_insert_count(ric, table.max_entries()), 8, 0x00));
+    out.extend_from_slice(&encode_int(0, 7, 0x00));
+
+    for (field, plan) in fields.iter().zip(&plans) {
+        match *plan {
+            Repr::DynIndexed(abs) => {
+                // §4.5.2: `1 T(=0) Index(6+)`, Index = Base − abs − 1.
+                out.extend_from_slice(&encode_int(base - abs - 1, 6, 0x80));
+            }
+            Repr::StaticIndexed(idx) => {
+                // §4.5.2: `1 T(=1) Index(6+)`.
+                out.extend_from_slice(&encode_int(idx, 6, 0xc0));
+            }
+            Repr::DynName(abs) => {
+                // §4.5.4: `0 1 N T(=0) NameIndex(4+)` (N at bit 5).
+                let n_bit = if field.sensitive { 0x20 } else { 0x00 };
+                out.extend_from_slice(&encode_int(base - abs - 1, 4, 0x40 | n_bit));
+                encode_string(&mut out, &field.value, 7, 0x00, use_huffman);
+            }
+            Repr::StaticName(idx) => {
+                // §4.5.4: `0 1 N T(=1) NameIndex(4+)`.
+                let n_bit = if field.sensitive { 0x20 } else { 0x00 };
+                out.extend_from_slice(&encode_int(idx, 4, 0x50 | n_bit));
+                encode_string(&mut out, &field.value, 7, 0x00, use_huffman);
+            }
+            Repr::Literal => {
+                // §4.5.6: `0 0 1 N H NameLen(3+)` (N at bit 4).
+                let n_bit = if field.sensitive { 0x10 } else { 0x00 };
+                encode_string(&mut out, &field.name, 3, 0x20 | n_bit, use_huffman);
+                encode_string(&mut out, &field.value, 7, 0x00, use_huffman);
+            }
+        }
+    }
+    out
+}
+
+/// Decode a field section (RFC 9204 §4.5) that may reference the supplied
+/// dynamic table, resolving every representation — static, dynamic (pre-Base),
+/// and Post-Base — against `table`.
+///
+/// # Errors
+///
+/// Returns [`QpackError`] on a malformed section, an out-of-range static index,
+/// a Huffman error, an unreconstructable Required Insert Count / Base, or a
+/// dynamic reference to an entry that is not live in `table`.
+pub fn decode_field_section_dynamic(
+    buf: &[u8],
+    table: &DynamicTable,
+) -> Result<Vec<HeaderField>, QpackError> {
+    let (_ric, base, mut pos) = decode_prefix_dynamic(buf, table)?;
+    let mut fields = Vec::new();
+
+    while pos < buf.len() {
+        let b = buf[pos];
+        if b & 0x80 != 0 {
+            // §4.5.2 Indexed Field Line: `1 T Index(6+)`.
+            let (idx, consumed) = decode_int(&buf[pos..], 6).map_err(from_hpack)?;
+            pos += consumed;
+            let (name, value) = if b & 0x40 != 0 {
+                let (n, v) = static_entry(idx)?;
+                (n.as_bytes().to_vec(), v.as_bytes().to_vec())
+            } else {
+                dyn_entry(table, pre_base_absolute(base, idx)?)?
+            };
+            fields.push(HeaderField { name, value, sensitive: false });
+        } else if b & 0x40 != 0 {
+            // §4.5.4 Literal With Name Reference: `0 1 N T NameIndex(4+)`.
+            let sensitive = b & 0x20 != 0;
+            let dynamic = b & 0x10 == 0;
+            let (idx, consumed) = decode_int(&buf[pos..], 4).map_err(from_hpack)?;
+            pos += consumed;
+            let name = if dynamic {
+                dyn_entry(table, pre_base_absolute(base, idx)?)?.0
+            } else {
+                static_entry(idx)?.0.as_bytes().to_vec()
+            };
+            let (value, adv) = decode_string(&buf[pos..], 7)?;
+            pos += adv;
+            fields.push(HeaderField { name, value, sensitive });
+        } else if b & 0x20 != 0 {
+            // §4.5.6 Literal With Literal Name: `0 0 1 N H NameLen(3+)`.
+            let sensitive = b & 0x10 != 0;
+            let (name, adv) = decode_string(&buf[pos..], 3)?;
+            pos += adv;
+            let (value, adv2) = decode_string(&buf[pos..], 7)?;
+            pos += adv2;
+            fields.push(HeaderField { name, value, sensitive });
+        } else if b & 0x10 != 0 {
+            // §4.5.3 Indexed Field Line With Post-Base Index: `0 0 0 1 Index(4+)`.
+            let (idx, consumed) = decode_int(&buf[pos..], 4).map_err(from_hpack)?;
+            pos += consumed;
+            let (name, value) = dyn_entry(table, post_base_absolute(base, idx)?)?;
+            fields.push(HeaderField { name, value, sensitive: false });
+        } else {
+            // §4.5.5 Literal With Post-Base Name Reference: `0 0 0 0 N Index(3+)`.
+            let sensitive = b & 0x08 != 0;
+            let (idx, consumed) = decode_int(&buf[pos..], 3).map_err(from_hpack)?;
+            pos += consumed;
+            let name = dyn_entry(table, post_base_absolute(base, idx)?)?.0;
+            let (value, adv) = decode_string(&buf[pos..], 7)?;
+            pos += adv;
+            fields.push(HeaderField { name, value, sensitive });
+        }
+    }
+
+    Ok(fields)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -674,5 +990,138 @@ mod tests {
         // Indexed: high bits 0xc0, 6-bit prefix all-ones then continuation.
         assert_eq!(encoded[2], 0xff); // 0xc0 | 0x3f
         assert_eq!(decode_field_section(&encoded).unwrap(), vec![f]);
+    }
+
+    // ── Dynamic-table field sections (RFC 9204 §4.5.1–§4.5.5) ──────────────
+
+    /// Build a dynamic table at `cap` bytes preloaded with `entries` (oldest
+    /// first, so the last one has the highest absolute index).
+    fn table_with(entries: &[(&str, &str)], cap: usize) -> DynamicTable {
+        let mut table = DynamicTable::new(cap);
+        table.set_capacity(cap as u64).expect("set capacity");
+        for (name, value) in entries {
+            table
+                .insert(name.as_bytes().to_vec(), value.as_bytes().to_vec())
+                .expect("insert");
+        }
+        table
+    }
+
+    #[test]
+    fn dynamic_roundtrip_indexed_and_name_ref() {
+        let table = table_with(&[("x-custom", "one"), ("x-shared", "a")], 4096);
+        for huff in [false, true] {
+            let fields = vec![
+                HeaderField::new("x-custom", "one"), // dynamic indexed (abs 0)
+                HeaderField::new("x-shared", "b"),    // dynamic name ref (abs 1)
+                HeaderField::new(":method", "GET"),   // static indexed
+                HeaderField::new("x-brand-new", "z"), // literal name
+            ];
+            let encoded = encode_field_section_dynamic(&fields, &table, huff);
+            let decoded = decode_field_section_dynamic(&encoded, &table).expect("decode");
+            assert_eq!(decoded, fields, "huffman={huff}");
+        }
+    }
+
+    #[test]
+    fn dynamic_prefix_encodes_required_insert_count() {
+        let table = table_with(&[("x-a", "1"), ("x-b", "2")], 4096);
+        // Reference the newest entry (abs 1) ⇒ Required Insert Count = 2.
+        let fields = vec![HeaderField::new("x-b", "2")];
+        let encoded = encode_field_section_dynamic(&fields, &table, false);
+        // MaxEntries = 128 ⇒ encoded RIC = 2 % 256 + 1 = 3; Base delta 0.
+        assert_eq!(encoded[0], 3);
+        assert_eq!(encoded[1], 0x00);
+        // Indexed dynamic `1 T(=0) Index`, Index = Base − abs − 1 = 2 − 1 − 1 = 0.
+        assert_eq!(encoded[2], 0x80);
+    }
+
+    #[test]
+    fn dynamic_encoder_without_refs_matches_static() {
+        let table = table_with(&[("x-a", "1")], 4096);
+        let fields = vec![HeaderField::new(":method", "GET")];
+        let encoded = encode_field_section_dynamic(&fields, &table, false);
+        // No dynamic reference ⇒ Required Insert Count 0, Base 0, static body.
+        assert_eq!(encoded[0], 0x00);
+        assert_eq!(encoded[1], 0x00);
+        assert_eq!(encoded, encode_field_section(&fields, false));
+    }
+
+    #[test]
+    fn dynamic_decodes_post_base_indexed() {
+        let table = table_with(&[("x-a", "1"), ("x-b", "2")], 4096);
+        // RIC = 2 (encoded 3), Base = 1 (S=1, DeltaBase 0 → 0x80),
+        // Post-Base Indexed index 0 → abs = Base + 0 = 1 = "x-b".
+        let buf = [0x03, 0x80, 0x10];
+        let decoded = decode_field_section_dynamic(&buf, &table).unwrap();
+        assert_eq!(decoded, vec![HeaderField::new("x-b", "2")]);
+    }
+
+    #[test]
+    fn dynamic_decodes_post_base_name_reference() {
+        let table = table_with(&[("x-a", "1"), ("x-b", "2")], 4096);
+        // RIC = 2, Base = 1, Post-Base Name Ref index 0 (abs 1 = "x-b"), value.
+        let mut buf = vec![0x03, 0x80, 0x00, 0x06];
+        buf.extend_from_slice(b"custom");
+        let decoded = decode_field_section_dynamic(&buf, &table).unwrap();
+        assert_eq!(decoded, vec![HeaderField::new("x-b", "custom")]);
+    }
+
+    #[test]
+    fn dynamic_sensitive_name_reference_round_trips() {
+        let table = table_with(&[("authorization", "old")], 4096);
+        let f = HeaderField::sensitive("authorization", "Bearer new");
+        let encoded = encode_field_section_dynamic(std::slice::from_ref(&f), &table, false);
+        // Field byte `0 1 N(=1) T(=0)` = 0x40 | 0x20 = 0x60.
+        assert_eq!(encoded[2] & 0xf0, 0x60);
+        let decoded = decode_field_section_dynamic(&encoded, &table).unwrap();
+        assert!(decoded[0].sensitive);
+        assert_eq!(decoded, vec![f]);
+    }
+
+    #[test]
+    fn dynamic_decode_rejects_absent_reference() {
+        let table = DynamicTable::new(4096);
+        // RIC 0, Base 0, dynamic Indexed index 0 → Base − 0 − 1 underflows.
+        let buf = [0x00, 0x00, 0x80];
+        assert_eq!(
+            decode_field_section_dynamic(&buf, &table),
+            Err(QpackError::InvalidDynamicReference(0))
+        );
+    }
+
+    #[test]
+    fn static_decoder_rejects_dynamic_encoder_output() {
+        let table = table_with(&[("x-a", "1")], 4096);
+        let fields = vec![HeaderField::new("x-a", "1")];
+        let encoded = encode_field_section_dynamic(&fields, &table, false);
+        // The static-only decoder sees a non-zero Required Insert Count first.
+        assert!(matches!(
+            decode_field_section(&encoded),
+            Err(QpackError::NonZeroRequiredInsertCount(_))
+        ));
+    }
+
+    #[test]
+    fn required_insert_count_wraps_and_reconstructs() {
+        // MaxEntries 2 ⇒ full range 4; a table with 10 inserts.
+        assert_eq!(encode_required_insert_count(9, 2), 2);
+        assert_eq!(decode_required_insert_count(2, 10, 2).unwrap(), 9);
+        assert_eq!(encode_required_insert_count(0, 2), 0);
+        assert_eq!(decode_required_insert_count(0, 10, 2).unwrap(), 0);
+    }
+
+    #[test]
+    fn required_insert_count_rejects_out_of_range() {
+        // Encoded value beyond the wrap range.
+        assert_eq!(
+            decode_required_insert_count(5, 10, 2),
+            Err(QpackError::InvalidRequiredInsertCount(5))
+        );
+        // A count naming more inserts than the table has received (blocked).
+        assert_eq!(
+            decode_required_insert_count(2, 0, 2),
+            Err(QpackError::InvalidRequiredInsertCount(2))
+        );
     }
 }

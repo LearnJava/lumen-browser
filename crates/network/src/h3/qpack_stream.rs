@@ -144,9 +144,12 @@ fn from_qpack(e: super::qpack::QpackError) -> QpackStreamError {
         QpackError::InvalidHuffman => QpackStreamError::InvalidHuffman,
         QpackError::StringTooLong => QpackStreamError::StringTooLong,
         QpackError::InvalidStaticIndex(i) => QpackStreamError::InvalidStaticIndex(i),
-        QpackError::DynamicUnsupported | QpackError::NonZeroRequiredInsertCount(_) => {
-            QpackStreamError::UnexpectedEof
-        }
+        // Field-section-only variants: unreachable from the string codec this
+        // mapping serves, so they collapse to a generic parse failure.
+        QpackError::DynamicUnsupported
+        | QpackError::NonZeroRequiredInsertCount(_)
+        | QpackError::InvalidRequiredInsertCount(_)
+        | QpackError::InvalidDynamicReference(_) => QpackStreamError::UnexpectedEof,
     }
 }
 
@@ -224,6 +227,35 @@ impl DynamicTable {
     #[must_use]
     pub fn insert_count(&self) -> u64 {
         self.insert_count
+    }
+
+    /// `MaxEntries = floor(MaxTableCapacity / 32)` (RFC 9204 §3.2.2), the value
+    /// the field-section prefix uses to encode the Required Insert Count in a
+    /// wrapped, bounded form (RFC 9204 §4.5.1.1).
+    #[must_use]
+    pub fn max_entries(&self) -> u64 {
+        (self.max_capacity / ENTRY_OVERHEAD) as u64
+    }
+
+    /// The absolute index of the most recent live entry whose name and value
+    /// both match, or `None`. Searching newest-first keeps the resulting
+    /// Required Insert Count for a field section as small as possible.
+    #[must_use]
+    pub fn find_absolute(&self, name: &[u8], value: &[u8]) -> Option<u64> {
+        self.entries
+            .iter()
+            .rposition(|(n, v)| n.as_slice() == name && v.as_slice() == value)
+            .map(|pos| self.dropped_count() + pos as u64)
+    }
+
+    /// The absolute index of the most recent live entry whose name matches, for
+    /// use as a name reference when no full match exists, or `None`.
+    #[must_use]
+    pub fn find_name_absolute(&self, name: &[u8]) -> Option<u64> {
+        self.entries
+            .iter()
+            .rposition(|(n, _)| n.as_slice() == name)
+            .map(|pos| self.dropped_count() + pos as u64)
     }
 
     /// The lowest absolute index still present (entries below this were
