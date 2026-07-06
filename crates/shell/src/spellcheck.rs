@@ -236,6 +236,44 @@ pub fn word_at_x(text: &str, x: f32, measure: &dyn Fn(&str) -> f32) -> Option<(u
     None
 }
 
+/// Locates the byte range of a word from one rendered (wrapped) visual line
+/// inside the field's full logical text (P3-spell slice 4).
+///
+/// A multi-line field (`<textarea>`, contenteditable) paints one `DrawText`
+/// per wrapped visual line, so a word's byte offset inside that single line
+/// is not its offset inside the field's full value — applying a correction
+/// with the line-local offset would corrupt everything after the first line.
+/// `prior_lines` are this field's rendered lines, in document order, that
+/// precede the line containing the word; `line_text` is that line itself.
+/// Each line is located inside `full_text` via a forward substring search
+/// starting right after the previous line's match, so wrap-induced whitespace
+/// differences don't shift the result as long as no line's text recurs
+/// verbatim before its real position.
+///
+/// Returns `None` if a line can't be found (e.g. `full_text` is stale).
+pub fn locate_line_word_in_full_text(
+    full_text: &str,
+    prior_lines: &[String],
+    line_text: &str,
+    word_start_in_line: usize,
+    word_end_in_line: usize,
+) -> Option<(usize, usize)> {
+    let mut cursor = 0usize;
+    for line in prior_lines {
+        if line.is_empty() {
+            continue;
+        }
+        let pos = full_text.get(cursor..)?.find(line.as_str())?;
+        cursor += pos + line.len();
+    }
+    let line_start = if line_text.is_empty() {
+        cursor
+    } else {
+        cursor + full_text.get(cursor..)?.find(line_text)?
+    };
+    Some((line_start + word_start_in_line, line_start + word_end_in_line))
+}
+
 /// Путь к пользовательскому словарю: `<exe_dir>/data/spell/user_words.txt`.
 pub fn user_words_path() -> PathBuf {
     spell_data_dir().join("user_words.txt")
@@ -489,6 +527,44 @@ lock/DU
         assert_eq!(word_at_x(text, 45.0, &measure), None);
         // Past the end → no word.
         assert_eq!(word_at_x(text, 200.0, &measure), None);
+    }
+
+    #[test]
+    fn locate_line_word_single_line() {
+        // Single-line field: prior_lines is empty, line_text == full_text.
+        let full = "hello wrold";
+        let found = locate_line_word_in_full_text(full, &[], "hello wrold", 6, 11);
+        assert_eq!(found, Some((6, 11)));
+    }
+
+    #[test]
+    fn locate_line_word_multi_line() {
+        // Wrapped textarea value: "one two\nthree wrold\nfour" rendered as
+        // three lines (wrap drops the newlines from each visual line's text).
+        // The word is on the second line; "one two" is the only prior line.
+        let full = "one two\nthree wrold\nfour";
+        let found = locate_line_word_in_full_text(full, &["one two".to_owned()], "three wrold", 6, 11);
+        let (s, e) = found.unwrap();
+        assert_eq!(&full[s..e], "wrold");
+    }
+
+    #[test]
+    fn locate_line_word_missing_line_returns_none() {
+        let full = "hello world";
+        let found = locate_line_word_in_full_text(full, &[], "not present", 0, 3);
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn locate_line_word_repeated_line_text_uses_forward_cursor() {
+        // "wrold" appears in two identical lines — the second line's word
+        // must resolve to the *second* occurrence, not the first.
+        let full = "say wrold\nsay wrold";
+        let prior = vec!["say wrold".to_owned()];
+        let found = locate_line_word_in_full_text(full, &prior, "say wrold", 4, 9);
+        let (s, e) = found.unwrap();
+        assert_eq!(&full[s..e], "wrold");
+        assert!(s > 9, "must resolve to the second line's occurrence, not the first");
     }
 
     #[test]

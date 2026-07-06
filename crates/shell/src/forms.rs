@@ -165,6 +165,21 @@ pub fn set_value(doc: &mut Document, id: NodeId, value: &str) {
     }
 }
 
+/// Replace a `<textarea>`'s text content (its direct text-node children) with
+/// `new_text` (P3-spell slice 4).
+///
+/// Unlike `<input>`, a textarea's rendered value comes from its text-node
+/// children, not a `value` attribute (HTML LS §4.10.11 — text content model).
+/// Existing children are detached and replaced by a single new text node.
+pub fn set_textarea_text(doc: &mut Document, id: NodeId, new_text: &str) {
+    let children: Vec<NodeId> = doc.get(id).children.clone();
+    for child in children {
+        doc.detach(child);
+    }
+    let text_node = doc.create_text(new_text.to_owned());
+    doc.append_child(id, text_node);
+}
+
 /// Update a range input's `value` attribute from a click at `click_x` within
 /// its bounding rect. Reads `min`/`max` from the DOM and clamps the result.
 ///
@@ -1331,6 +1346,40 @@ mod tests {
     #[test]
     fn make_get_url_strips_fragment() {
         assert_eq!(make_get_url("/page#sec", "x=1"), "/page?x=1");
+    }
+
+    #[test]
+    fn set_textarea_text_replaces_single_child() {
+        let mut doc = Document::new();
+        let ta = doc.create_element(QualName::html("textarea"));
+        let old_text = doc.create_text("old value");
+        doc.append_child(doc.root(), ta);
+        doc.append_child(ta, old_text);
+
+        set_textarea_text(&mut doc, ta, "new value");
+
+        let children = &doc.get(ta).children;
+        assert_eq!(children.len(), 1);
+        match &doc.get(children[0]).data {
+            NodeData::Text(s) => assert_eq!(s, "new value"),
+            _ => panic!("expected a text child"),
+        }
+    }
+
+    #[test]
+    fn set_textarea_text_on_empty_textarea() {
+        let mut doc = Document::new();
+        let ta = doc.create_element(QualName::html("textarea"));
+        doc.append_child(doc.root(), ta);
+
+        set_textarea_text(&mut doc, ta, "hello");
+
+        let children = &doc.get(ta).children;
+        assert_eq!(children.len(), 1);
+        match &doc.get(children[0]).data {
+            NodeData::Text(s) => assert_eq!(s, "hello"),
+            _ => panic!("expected a text child"),
+        }
     }
 
     #[test]
