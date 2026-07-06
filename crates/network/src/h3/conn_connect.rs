@@ -49,9 +49,10 @@
 //! certificate's private key over this handshake, that same certificate's
 //! `subjectAltName` must name the requested host
 //! ([`x509_hostname::verify_certificate_hostname`](super::x509_hostname::verify_certificate_hostname),
-//! RFC 6125 §6), that certificate must be valid at the caller's wall-clock now
-//! ([`x509_validity::verify_certificate_validity`](super::x509_validity::verify_certificate_validity),
-//! RFC 5280 §4.1.2.5), the whole presented `certificate_list` must form a
+//! RFC 6125 §6), every certificate in the presented list must be valid at the
+//! caller's wall-clock now
+//! ([`x509_validity::verify_validity_chain`](super::x509_validity::verify_validity_chain),
+//! RFC 5280 §4.1.2.5, §6.1.3(a)(2)), the whole presented `certificate_list` must form a
 //! self-consistent signature chain, each certificate signed by the next
 //! ([`x509_chain::verify_chain_signatures`](super::x509_chain::verify_chain_signatures),
 //! RFC 5280 §4.1.1.3, RFC 8446 §4.4.2), that same list must form a
@@ -115,7 +116,7 @@ use super::x509_hostname::{HostnameError, verify_certificate_hostname};
 use super::x509_key_usage::{KeyUsageWalkError, verify_cert_sign_usage};
 use super::x509_name_chain::{NameChainWalkError, verify_name_chain};
 use super::x509_trust_anchor::{TrustAnchor, TrustAnchorWalkError, verify_trust_anchor};
-use super::x509_validity::{ValidityError, verify_certificate_validity};
+use super::x509_validity::{ValidityWalkError, verify_validity_chain};
 
 /// One trust anchor a presented chain may terminate at (RFC 5280 §6.1): the anchor's
 /// `subject` and `subjectPublicKeyInfo`, owned so [`ConnectDriver`] need not carry the
@@ -213,14 +214,18 @@ pub enum ConnectError {
     /// Checked only after possession is proven; like [`CertAuth`](Self::CertAuth) it
     /// abandons the connection before the client Finished is flushed.
     Hostname(HostnameError),
-    /// The authenticated certificate is not valid at the current time (RFC 5280
-    /// §4.1.2.5): *now* falls outside its `[notBefore, notAfter]` window, or the
-    /// `validity` field could not be decoded
-    /// ([`ValidityError`](super::x509_validity::ValidityError)). Checked after
-    /// possession and identity against the wall-clock [`now_unix`](ConnectDriver) the
-    /// caller supplied; like the two before it, it abandons the connection before the
-    /// client Finished is flushed.
-    Validity(ValidityError),
+    /// Some certificate in the server-presented chain is not valid at the current time
+    /// (RFC 5280 §4.1.2.5, §6.1.3(a)(2)): *now* falls outside its
+    /// `[notBefore, notAfter]` window, or its `validity` field could not be decoded
+    /// ([`ValidityWalkError`](super::x509_validity::ValidityWalkError), naming the failing
+    /// certificate's index and the underlying
+    /// [`ValidityError`](super::x509_validity::ValidityError)). Checked after possession
+    /// and identity against the wall-clock [`now_unix`](ConnectDriver) the caller supplied,
+    /// over *every* certificate in the list — an expired intermediate is as fatal as an
+    /// expired leaf, since it can no longer be trusted to have issued the certificate below
+    /// it. Like the two before it, it abandons the connection before the client Finished is
+    /// flushed.
+    Validity(ValidityWalkError),
     /// The server-presented certificate chain is not internally self-consistent
     /// (RFC 5280 §4.1.1.3, RFC 8446 §4.4.2): some certificate in the `certificate_list`
     /// is not signed by the next one up, or an issuer certificate's
@@ -494,9 +499,10 @@ impl<T: DatagramTransport> ConnectDriver<T> {
     /// ([`authenticate_server_certificate`](super::conn_cert_auth::authenticate_server_certificate))
     /// verifies it names [`reference_host`](ConnectDriver)
     /// ([`verify_certificate_hostname`](super::x509_hostname::verify_certificate_hostname),
-    /// RFC 6125 §6), verifies it is valid at [`now_unix`](ConnectDriver)
-    /// ([`verify_certificate_validity`](super::x509_validity::verify_certificate_validity),
-    /// RFC 5280 §4.1.2.5), verifies the presented chain is internally self-consistent by
+    /// RFC 6125 §6), verifies every certificate in the presented list is valid at
+    /// [`now_unix`](ConnectDriver)
+    /// ([`verify_validity_chain`](super::x509_validity::verify_validity_chain),
+    /// RFC 5280 §4.1.2.5, §6.1.3(a)(2)), verifies the presented chain is internally self-consistent by
     /// signature ([`verify_chain_signatures`](super::x509_chain::verify_chain_signatures),
     /// RFC 5280 §4.1.1.3, RFC 8446 §4.4.2), and verifies it is self-consistent by name —
     /// each `issuer` matching the next `subject`
@@ -563,30 +569,31 @@ impl<T: DatagramTransport> ConnectDriver<T> {
                     .ok_or(ConnectError::CertAuth(CertAuthError::NoCertificate))?;
                 verify_certificate_hostname(&entry.cert_data, &self.reference_host)
                     .map_err(ConnectError::Hostname)?;
-                // Possession and identity hold; now check *time* (RFC 5280 §4.1.2.5):
-                // the same end-entity certificate must be valid at the wall-clock now the
-                // caller supplied — a certificate not yet valid or already expired is as
-                // fatal as a bad signature or a mis-named host, so abandon before the
-                // client Finished goes out. The loop's own clock is monotonic and says
-                // nothing about the calendar date, so the validity window is judged
-                // against `now_unix`, not the `Instant` timers run on.
-                verify_certificate_validity(&entry.cert_data, self.now_unix)
-                    .map_err(ConnectError::Validity)?;
-                // Possession, identity, and time hold for the end-entity certificate;
-                // now check that the *chain* the server presented is internally
-                // self-consistent (RFC 5280 §4.1.1.3, RFC 8446 §4.4.2): every
-                // certificate in the list must be signed by the next one up. A chain
-                // whose internal links do not verify is as fatal as a bad end-entity
-                // signature, a mis-named host, or an expired certificate — abandon
-                // before the client Finished goes out. A single-certificate list has no
-                // internal links and passes vacuously; terminating the chain at a trusted
-                // root (RFC 5280 §6.1) is the trust-anchor walk below.
+                // Possession and identity hold; now check *time* (RFC 5280 §4.1.2.5,
+                // §6.1.3(a)(2)): *every* certificate in the presented list — not just the
+                // end-entity leaf — must be valid at the wall-clock now the caller supplied.
+                // A certificate not yet valid or already expired is as fatal as a bad
+                // signature or a mis-named host; in particular an expired intermediate is as
+                // fatal as an expired leaf, since a certificate outside its validity window
+                // can no longer be trusted to have issued the one below it. The loop's own
+                // clock is monotonic and says nothing about the calendar date, so the
+                // validity window is judged against `now_unix`, not the `Instant` timers run
+                // on. The chain is assembled once here and reused by every walk below.
                 let chain: Vec<&[u8]> = complete
                     .server_certificate
                     .certificate_list
                     .iter()
                     .map(|e| e.cert_data.as_slice())
                     .collect();
+                verify_validity_chain(&chain, self.now_unix).map_err(ConnectError::Validity)?;
+                // Possession, identity, and time hold for the whole chain; now check that it
+                // is internally self-consistent (RFC 5280 §4.1.1.3, RFC 8446 §4.4.2): every
+                // certificate in the list must be signed by the next one up. A chain whose
+                // internal links do not verify is as fatal as a bad end-entity signature, a
+                // mis-named host, or an expired certificate — abandon before the client
+                // Finished goes out. A single-certificate list has no internal links and
+                // passes vacuously; terminating the chain at a trusted root (RFC 5280 §6.1)
+                // is the trust-anchor walk below.
                 verify_chain_signatures(&chain).map_err(ConnectError::Chain)?;
                 // The signatures link the chain; now check its *names* line up
                 // (RFC 5280 §4.1.2.4, §4.1.2.6, §6.1, RFC 8446 §4.4.2): every
@@ -707,6 +714,7 @@ impl<T: DatagramTransport> ConnectDriver<T> {
 mod tests {
     use super::*;
     use crate::h3::conn_handshake::PollOutcome;
+    use crate::h3::x509_validity::ValidityError;
     use crate::h3::conn_turn::{ConnectionTurn, DEFAULT_ACK_DELAY_EXPONENT};
     use crate::h3::connection::{ConnectionConfig, QuicConnection};
     use crate::h3::driver::ConnectionDriver;
@@ -932,6 +940,17 @@ mod tests {
         der_tlv(0x30, &[not_before.as_slice(), not_after.as_slice()].concat())
     }
 
+    /// A `validity` SEQUENCE already expired at [`SERVER_NOW`] (2025-01-01): `notBefore`
+    /// 2000-01-01, `notAfter` 2010-01-01, both `UTCTime` (RFC 5280 §4.1.2.5.1, `YY` 00–49
+    /// → 20YY). A certificate carrying it is outside its window at `SERVER_NOW`, so the
+    /// validity walk rejects it — used for the expired *intermediate* fixture, where the
+    /// leaf is still in date.
+    fn expired_validity_extension() -> Vec<u8> {
+        let not_before = der_tlv(0x17, b"000101000000Z"); // UTCTime notBefore = 2000-01-01
+        let not_after = der_tlv(0x17, b"100101000000Z"); // UTCTime notAfter = 2010-01-01
+        der_tlv(0x30, &[not_before.as_slice(), not_after.as_slice()].concat())
+    }
+
     /// A single `subjectAltName` Extension entry (OID 2.5.29.17) with one `dNSName`
     /// (`[2]`) naming `host`, exactly the shape
     /// [`x509_hostname`](super::super::x509_hostname) walks. One entry of the `extensions`
@@ -1016,6 +1035,19 @@ mod tests {
     /// so the CA-constraints walk admits it as a permitted issuer. A leaf passes `false`;
     /// an intermediate passes `true`.
     fn ed25519_tbs_ca(host: &str, subject_pubkey: &[u8; 32], is_ca: bool) -> Vec<u8> {
+        ed25519_tbs_ca_with_validity(host, subject_pubkey, is_ca, &validity_extension())
+    }
+
+    /// Like [`ed25519_tbs_ca`] but with an explicit `validity` SEQUENCE, so a fixture can
+    /// place a certificate outside its `[notBefore, notAfter]` window at [`SERVER_NOW`]
+    /// (RFC 5280 §4.1.2.5) — used to exercise the chain-wide validity walk on a certificate
+    /// other than the leaf.
+    fn ed25519_tbs_ca_with_validity(
+        host: &str,
+        subject_pubkey: &[u8; 32],
+        is_ca: bool,
+        validity: &[u8],
+    ) -> Vec<u8> {
         // id-Ed25519 OID 1.3.101.112 (RFC 8410 §3).
         let ed_oid = der_tlv(0x06, &[0x2B, 0x65, 0x70]);
         let alg_id = der_tlv(0x30, &ed_oid);
@@ -1027,7 +1059,6 @@ mod tests {
         let serial = der_tlv(0x02, &[0x01]);
         let sig_alg = der_tlv(0x30, &der_tlv(0x06, &[0x2B, 0x65, 0x70]));
         let empty = der_tlv(0x30, &[]);
-        let validity = validity_extension();
         let extensions = if is_ca { ca_extensions(host) } else { leaf_extensions(host) };
         der_tlv(
             0x30,
@@ -1035,9 +1066,9 @@ mod tests {
                 version.as_slice(),
                 serial.as_slice(),
                 sig_alg.as_slice(),
-                empty.as_slice(),    // issuer
-                validity.as_slice(), // validity
-                empty.as_slice(),    // subject
+                empty.as_slice(), // issuer
+                validity,         // validity
+                empty.as_slice(), // subject
                 spki.as_slice(),
                 extensions.as_slice(), // [3] subjectAltName
             ]
@@ -1147,6 +1178,42 @@ mod tests {
             ed25519_tbs_ca("intermediate.test", &intermediate_ed25519().verifying_key().to_bytes(), true);
         let signature = root_ed25519().sign(&tbs).to_bytes().to_vec();
         seal_certificate(&tbs, &signature)
+    }
+
+    /// Like [`intermediate_certificate_der`] but carrying a validity window already expired
+    /// at [`SERVER_NOW`] ([`expired_validity_extension`]). The leaf below it is in date, so
+    /// only the *chain-wide* validity walk (RFC 5280 §6.1.3(a)(2)) — which covers every
+    /// certificate, not just the leaf — rejects the chain.
+    fn intermediate_certificate_der_expired() -> Vec<u8> {
+        use ed25519_dalek::Signer;
+        let tbs = ed25519_tbs_ca_with_validity(
+            "intermediate.test",
+            &intermediate_ed25519().verifying_key().to_bytes(),
+            true,
+            &expired_validity_extension(),
+        );
+        let signature = root_ed25519().sign(&tbs).to_bytes().to_vec();
+        seal_certificate(&tbs, &signature)
+    }
+
+    /// A two-certificate `Certificate` message like [`certificate_bytes_chain`]`(true)` —
+    /// the end-entity signed by the intermediate whose key it carries — but whose
+    /// intermediate is *expired* at [`SERVER_NOW`]. The leaf is in date and the internal
+    /// link verifies, so the chain fails only on the chain-wide validity walk, at index 1.
+    fn certificate_bytes_chain_expired_intermediate() -> Vec<u8> {
+        enc(&Handshake::Certificate(Certificate {
+            certificate_request_context: Vec::new(),
+            certificate_list: vec![
+                CertificateEntry {
+                    cert_data: end_entity_signed_by(&intermediate_ed25519()),
+                    extensions: Vec::new(),
+                },
+                CertificateEntry {
+                    cert_data: intermediate_certificate_der_expired(),
+                    extensions: Vec::new(),
+                },
+            ],
+        }))
     }
 
     /// A DER `Name` (RDNSequence) carrying a single `commonName` attribute valued `cn` —
@@ -1732,7 +1799,13 @@ mod tests {
 
         cd.poll(now).expect("poll over the ServerHello");
         let err = cd.poll(now).expect_err("the certificate must be expired");
-        assert!(matches!(err, ConnectError::Validity(ValidityError::Expired { .. })));
+        assert!(matches!(
+            err,
+            ConnectError::Validity(ValidityWalkError::Certificate {
+                index: 0,
+                error: ValidityError::Expired { .. }
+            })
+        ));
         // The completion is never retained for an expired certificate, and the client
         // Finished — enqueued by the TLS advance — was not flushed.
         assert!(cd.completed().is_none());
@@ -1755,7 +1828,44 @@ mod tests {
 
         cd.poll(now).expect("poll over the ServerHello");
         let err = cd.poll(now).expect_err("the certificate must not yet be valid");
-        assert!(matches!(err, ConnectError::Validity(ValidityError::NotYetValid { .. })));
+        assert!(matches!(
+            err,
+            ConnectError::Validity(ValidityWalkError::Certificate {
+                index: 0,
+                error: ValidityError::NotYetValid { .. }
+            })
+        ));
+        assert!(cd.completed().is_none());
+        assert!(cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
+    }
+
+    // ---- poll: an expired *intermediate* aborts the connect ------------
+
+    #[test]
+    fn poll_rejects_a_chain_with_an_expired_intermediate() {
+        let now = base();
+        let ch = client_hello_bytes();
+        let sh = server_hello_bytes();
+        let mut t = transport();
+        // The leaf authenticates, names SERVER_HOSTNAME, and is in date at SERVER_NOW; only
+        // the intermediate above it is expired (notAfter 2010-01-01). A leaf-only validity
+        // check would let this chain through — the chain-wide walk (RFC 5280 §6.1.3(a)(2))
+        // catches the stale issuer and abandons before the client Finished.
+        let cert = certificate_bytes_chain_expired_intermediate();
+        t.push_inbound(server_initial(0, sh.clone()));
+        t.push_inbound(server_handshake(0, handshake_flight_with_cert(&ch, &sh, &cert), &ch, &sh));
+        let mut cd = connect_driver(t, now); // now_unix = SERVER_NOW, inside the leaf window
+
+        cd.poll(now).expect("poll over the ServerHello");
+        let err = cd.poll(now).expect_err("the intermediate must be expired");
+        // The walk names index 1 — the intermediate — not the in-date leaf at index 0.
+        assert!(matches!(
+            err,
+            ConnectError::Validity(ValidityWalkError::Certificate {
+                index: 1,
+                error: ValidityError::Expired { .. }
+            })
+        ));
         assert!(cd.completed().is_none());
         assert!(cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
     }
