@@ -49,21 +49,26 @@
 //! certificate's private key over this handshake, that same certificate's
 //! `subjectAltName` must name the requested host
 //! ([`x509_hostname::verify_certificate_hostname`](super::x509_hostname::verify_certificate_hostname),
-//! RFC 6125 §6), and — this slice — that certificate must be valid at the caller's
-//! wall-clock now
+//! RFC 6125 §6), that certificate must be valid at the caller's wall-clock now
 //! ([`x509_validity::verify_certificate_validity`](super::x509_validity::verify_certificate_validity),
-//! RFC 5280 §4.1.2.5) — all three *before* the client Finished goes on the wire. The
-//! verified completion is then retained ([`ConnectDriver::completed`]).
+//! RFC 5280 §4.1.2.5), and — this slice — the whole presented `certificate_list` must
+//! form a self-consistent signature chain, each certificate signed by the next
+//! ([`x509_chain::verify_chain_signatures`](super::x509_chain::verify_chain_signatures),
+//! RFC 5280 §4.1.1.3, RFC 8446 §4.4.2) — all four *before* the client Finished goes on
+//! the wire. The verified completion is then retained ([`ConnectDriver::completed`]).
 //!
 //! ## What it defers
 //!
-//! - **Trust-anchor chaining.** The loop now verifies the CertificateVerify signature
+//! - **Trust-anchor termination.** The loop now verifies the CertificateVerify signature
 //!   (the *possession* half of authentication), matches the certificate's
-//!   `subjectAltName` against the requested host (the *identity* half), and checks the
+//!   `subjectAltName` against the requested host (the *identity* half), checks the
 //!   certificate's `[notBefore, notAfter]` window against the caller-supplied wall-clock
-//!   now (the *time* half, RFC 5280 §4.1.2.5), but does not chain the end-entity
-//!   certificate to a trusted root or check intermediates. Those remain for a later
-//!   slice.
+//!   now (the *time* half, RFC 5280 §4.1.2.5), and — this slice — walks the presented
+//!   `certificate_list` confirming every certificate is signed by the next one up (the
+//!   *chain-signature* half, RFC 5280 §4.1.1.3, RFC 8446 §4.4.2). It does **not** yet
+//!   terminate that chain at a trusted root (RFC 5280 §6.1), match issuer/subject
+//!   distinguished names, or honour `basicConstraints`/`keyUsage` — those remain for a
+//!   later slice, exactly as the chain walk itself stops one link short of the anchor.
 //! - **Building the ClientHello.** The exact first-flight bytes and the ephemeral
 //!   X25519 private key are supplied to [`TlsConnState::new`](super::conn_tls::TlsConnState::new)
 //!   by the caller.
@@ -90,6 +95,7 @@ use super::conn_turn::{ConnectionTurn, TurnEffect};
 use super::send_path::FlushError;
 use super::tls_handshake::HandshakeComplete;
 use super::udp::DatagramTransport;
+use super::x509_chain::{ChainWalkError, verify_chain_signatures};
 use super::x509_hostname::{HostnameError, verify_certificate_hostname};
 use super::x509_validity::{ValidityError, verify_certificate_validity};
 
@@ -178,6 +184,16 @@ pub enum ConnectError {
     /// caller supplied; like the two before it, it abandons the connection before the
     /// client Finished is flushed.
     Validity(ValidityError),
+    /// The server-presented certificate chain is not internally self-consistent
+    /// (RFC 5280 §4.1.1.3, RFC 8446 §4.4.2): some certificate in the `certificate_list`
+    /// is not signed by the next one up, or an issuer certificate's
+    /// `SubjectPublicKeyInfo` could not be extracted
+    /// ([`ChainWalkError`](super::x509_chain::ChainWalkError)). Checked after
+    /// possession, identity, and time hold for the end-entity certificate; like the
+    /// three before it, it abandons the connection before the client Finished is
+    /// flushed. Verifying the chain's internal links does not yet terminate it at a
+    /// trusted root — that remains a later slice.
+    Chain(ChainWalkError),
 }
 
 impl core::fmt::Display for ConnectError {
@@ -189,6 +205,9 @@ impl core::fmt::Display for ConnectError {
             Self::CertAuth(e) => write!(f, "QUIC connect: certificate authentication failed: {e}"),
             Self::Hostname(e) => write!(f, "QUIC connect: certificate hostname check failed: {e}"),
             Self::Validity(e) => write!(f, "QUIC connect: certificate validity check failed: {e}"),
+            Self::Chain(e) => {
+                write!(f, "QUIC connect: certificate chain verification failed: {e}")
+            }
         }
     }
 }
@@ -202,6 +221,7 @@ impl std::error::Error for ConnectError {
             Self::CertAuth(e) => Some(e),
             Self::Hostname(e) => Some(e),
             Self::Validity(e) => Some(e),
+            Self::Chain(e) => Some(e),
         }
     }
 }
@@ -292,15 +312,18 @@ impl<T: DatagramTransport> ConnectDriver<T> {
     /// The completed handshake material, available once the TLS handshake completes
     /// (the server Finished verified), its server certificate authenticated (the
     /// CertificateVerify signature checked, RFC 8446 §4.4.3), that certificate verified
-    /// to name the requested host (RFC 6125 §6), *and* verified valid at the caller's
-    /// wall-clock now (RFC 5280 §4.1.2.5). `None` while the handshake is still in
-    /// progress; a completion whose certificate fails to authenticate, does not cover
-    /// [`reference_host`](ConnectDriver), or is outside its validity period never reaches
-    /// here — [`poll`](ConnectDriver::poll) returns [`ConnectError::CertAuth`],
-    /// [`ConnectError::Hostname`], or [`ConnectError::Validity`] instead.
+    /// to name the requested host (RFC 6125 §6), verified valid at the caller's
+    /// wall-clock now (RFC 5280 §4.1.2.5), *and* the presented chain verified internally
+    /// self-consistent (each certificate signed by the next, RFC 5280 §4.1.1.3). `None`
+    /// while the handshake is still in progress; a completion whose certificate fails to
+    /// authenticate, does not cover [`reference_host`](ConnectDriver), is outside its
+    /// validity period, or heads a chain whose links do not verify never reaches here —
+    /// [`poll`](ConnectDriver::poll) returns [`ConnectError::CertAuth`],
+    /// [`ConnectError::Hostname`], [`ConnectError::Validity`], or [`ConnectError::Chain`]
+    /// instead.
     ///
-    /// Trust-anchor chaining remains the caller's (or a later slice's) job before the
-    /// certificate is trusted for an origin.
+    /// Terminating the chain at a trusted root remains the caller's (or a later slice's)
+    /// job before the certificate is trusted for an origin.
     #[must_use]
     pub fn completed(&self) -> Option<&HandshakeComplete> {
         self.completed.as_deref()
@@ -346,21 +369,23 @@ impl<T: DatagramTransport> ConnectDriver<T> {
     /// ([`authenticate_server_certificate`](super::conn_cert_auth::authenticate_server_certificate))
     /// verifies it names [`reference_host`](ConnectDriver)
     /// ([`verify_certificate_hostname`](super::x509_hostname::verify_certificate_hostname),
-    /// RFC 6125 §6), and verifies it is valid at [`now_unix`](ConnectDriver)
+    /// RFC 6125 §6), verifies it is valid at [`now_unix`](ConnectDriver)
     /// ([`verify_certificate_validity`](super::x509_validity::verify_certificate_validity),
-    /// RFC 5280 §4.1.2.5) before flushing the client Finished the advance enqueued
-    /// (RFC 8446 §4.4.3, §4.4.4) and retaining the completion
+    /// RFC 5280 §4.1.2.5), and verifies the presented chain is internally self-consistent
+    /// ([`verify_chain_signatures`](super::x509_chain::verify_chain_signatures),
+    /// RFC 5280 §4.1.1.3, RFC 8446 §4.4.2) before flushing the client Finished the
+    /// advance enqueued (RFC 8446 §4.4.3, §4.4.4) and retaining the completion
     /// ([`completed`](ConnectDriver::completed)). A certificate that fails to
-    /// authenticate, that does not cover the requested host, or that is outside its
-    /// validity period abandons the connection before the client Finished goes out. On a
-    /// timer wake it advances no TLS.
+    /// authenticate, that does not cover the requested host, that is outside its validity
+    /// period, or that heads a chain whose links do not verify abandons the connection
+    /// before the client Finished goes out. On a timer wake it advances no TLS.
     ///
     /// # Errors
     ///
     /// [`ConnectError`] wrapping the failing step: a control-flow error from the poll,
     /// a TLS error from the advance, a server certificate that failed to authenticate,
-    /// does not name the requested host, or is outside its validity period, or a failed
-    /// flush of the client Finished.
+    /// does not name the requested host, is outside its validity period, or heads a
+    /// chain whose links do not verify, or a failed flush of the client Finished.
     pub fn poll(&mut self, now: Instant) -> Result<ConnectStep, ConnectError> {
         let poll = self.handshake.poll(now).map_err(ConnectError::Loop)?;
         let mut messages_processed = 0;
@@ -406,6 +431,22 @@ impl<T: DatagramTransport> ConnectDriver<T> {
                 // against `now_unix`, not the `Instant` timers run on.
                 verify_certificate_validity(&entry.cert_data, self.now_unix)
                     .map_err(ConnectError::Validity)?;
+                // Possession, identity, and time hold for the end-entity certificate;
+                // now check that the *chain* the server presented is internally
+                // self-consistent (RFC 5280 §4.1.1.3, RFC 8446 §4.4.2): every
+                // certificate in the list must be signed by the next one up. A chain
+                // whose internal links do not verify is as fatal as a bad end-entity
+                // signature, a mis-named host, or an expired certificate — abandon
+                // before the client Finished goes out. A single-certificate list has no
+                // internal links and passes vacuously; terminating the chain at a trusted
+                // root (RFC 5280 §6.1) remains a later slice.
+                let chain: Vec<&[u8]> = complete
+                    .server_certificate
+                    .certificate_list
+                    .iter()
+                    .map(|e| e.cert_data.as_slice())
+                    .collect();
+                verify_chain_signatures(&chain).map_err(ConnectError::Chain)?;
                 // The client Finished (RFC 8446 §4.4.4) was enqueued into the
                 // Handshake CRYPTO stream; put it — and any owed Handshake ACK the
                 // poll queued — on the wire now.
@@ -696,16 +737,17 @@ mod tests {
         der_tlv(0xA3, &extensions) // [3] EXPLICIT
     }
 
-    /// A minimal, structurally valid v3 end-entity certificate carrying the server's
-    /// Ed25519 public key in its `SubjectPublicKeyInfo` (RFC 5280 §4.1, RFC 8410) and a
-    /// `subjectAltName` naming `host`; every field before the SPKI is a placeholder the
-    /// extractor skips.
-    fn server_certificate_der_for(host: &str) -> Vec<u8> {
+    /// Build the `tbsCertificate` of a minimal, structurally valid v3 certificate
+    /// carrying `subject_pubkey` (an Ed25519 public key) in its `SubjectPublicKeyInfo`
+    /// (RFC 5280 §4.1, RFC 8410) and a `subjectAltName` naming `host`; every field
+    /// before the SPKI is a placeholder the extractor skips. Returned raw so a caller
+    /// can sign these exact bytes (RFC 5280 §4.1.1.3) and [`seal_certificate`] them.
+    fn ed25519_tbs(host: &str, subject_pubkey: &[u8; 32]) -> Vec<u8> {
         // id-Ed25519 OID 1.3.101.112 (RFC 8410 §3).
         let ed_oid = der_tlv(0x06, &[0x2B, 0x65, 0x70]);
         let alg_id = der_tlv(0x30, &ed_oid);
         let mut bit = vec![0x00];
-        bit.extend_from_slice(&server_ed25519().verifying_key().to_bytes());
+        bit.extend_from_slice(subject_pubkey);
         let spki = der_tlv(0x30, &[alg_id.as_slice(), der_tlv(0x03, &bit).as_slice()].concat());
 
         let version = der_tlv(0xA0, &der_tlv(0x02, &[0x02])); // [0] { v3 = 2 }
@@ -714,7 +756,7 @@ mod tests {
         let empty = der_tlv(0x30, &[]);
         let validity = validity_extension();
         let extensions = subject_alt_name_extension(host);
-        let tbs = der_tlv(
+        der_tlv(
             0x30,
             &[
                 version.as_slice(),
@@ -727,16 +769,63 @@ mod tests {
                 extensions.as_slice(), // [3] subjectAltName
             ]
             .concat(),
-        );
-        let outer_sig_alg = der_tlv(0x30, &der_tlv(0x06, &[0x2B, 0x65, 0x70]));
-        let signature = der_tlv(0x03, &[0x00, 0xDE, 0xAD]);
-        der_tlv(0x30, &[tbs.as_slice(), outer_sig_alg.as_slice(), signature.as_slice()].concat())
+        )
     }
 
-    /// The end-entity certificate naming [`SERVER_HOSTNAME`], used by every fixture
-    /// server flight.
+    /// Wrap a `tbsCertificate`, the id-Ed25519 `signatureAlgorithm`, and `signature`
+    /// (the raw signature octets, without the BIT STRING's zero unused-bits prefix) into
+    /// a DER `Certificate` (RFC 5280 §4.1).
+    fn seal_certificate(tbs: &[u8], signature: &[u8]) -> Vec<u8> {
+        let outer_sig_alg = der_tlv(0x30, &der_tlv(0x06, &[0x2B, 0x65, 0x70]));
+        let mut bits = vec![0x00]; // zero unused bits
+        bits.extend_from_slice(signature);
+        let sig_value = der_tlv(0x03, &bits);
+        der_tlv(0x30, &[tbs, outer_sig_alg.as_slice(), sig_value.as_slice()].concat())
+    }
+
+    /// A minimal end-entity certificate naming `host` and carrying the server's Ed25519
+    /// public key. Its own signature is a placeholder (`0xDEAD`): in a single-certificate
+    /// chain the walk has no internal link to check, so the value is never verified.
+    fn server_certificate_der_for(host: &str) -> Vec<u8> {
+        let tbs = ed25519_tbs(host, &server_ed25519().verifying_key().to_bytes());
+        seal_certificate(&tbs, &[0xDE, 0xAD])
+    }
+
+    /// The end-entity certificate naming [`SERVER_HOSTNAME`], used by the single-cert
+    /// fixture server flights.
     fn server_certificate_der() -> Vec<u8> {
         server_certificate_der_for(SERVER_HOSTNAME)
+    }
+
+    /// A fixed Ed25519 intermediate signing key: its public value goes into the
+    /// intermediate certificate, and it signs the end-entity certificate in the two-cert
+    /// chain fixtures so the chain's single internal link verifies.
+    const INTERMEDIATE_ED25519_SEED: [u8; 32] = [0x99; 32];
+
+    /// The intermediate's Ed25519 signing key.
+    fn intermediate_ed25519() -> ed25519_dalek::SigningKey {
+        ed25519_dalek::SigningKey::from_bytes(&INTERMEDIATE_ED25519_SEED)
+    }
+
+    /// The end-entity certificate naming [`SERVER_HOSTNAME`] (server key in its SPKI),
+    /// its `tbsCertificate` really signed by `issuer` under id-Ed25519 (RFC 5280
+    /// §4.1.1.3). With `issuer` the intermediate key the chain's link verifies; with any
+    /// other key it does not.
+    fn end_entity_signed_by(issuer: &ed25519_dalek::SigningKey) -> Vec<u8> {
+        use ed25519_dalek::Signer;
+        let tbs = ed25519_tbs(SERVER_HOSTNAME, &server_ed25519().verifying_key().to_bytes());
+        let signature = issuer.sign(&tbs).to_bytes().to_vec();
+        seal_certificate(&tbs, &signature)
+    }
+
+    /// A minimal intermediate certificate carrying the intermediate's Ed25519 public key
+    /// in its `SubjectPublicKeyInfo` — the key the chain walk extracts to verify the
+    /// end-entity's signature. Its own signature is a placeholder: it is the last
+    /// certificate in the fixture chain, whose issuer is a trust anchor outside the list,
+    /// so the walk does not check it.
+    fn intermediate_certificate_der() -> Vec<u8> {
+        let tbs = ed25519_tbs("intermediate.test", &intermediate_ed25519().verifying_key().to_bytes());
+        seal_certificate(&tbs, &[0xBE, 0xEF])
     }
 
     fn certificate_bytes() -> Vec<u8> {
@@ -791,11 +880,19 @@ mod tests {
     /// `ClientHello…CertificateVerify` transcript, exactly as a real server does, so
     /// the flight both authenticates (RFC 8446 §4.4.3) and completes (§4.4.4).
     fn handshake_flight(ch: &[u8], sh: &[u8]) -> Vec<u8> {
+        handshake_flight_with_cert(ch, sh, &certificate_bytes())
+    }
+
+    /// [`handshake_flight`] over an explicit Certificate handshake message `cert`, so a
+    /// test can drive the loop with a multi-certificate `certificate_list`. The
+    /// CertificateVerify signs the `ClientHello…Certificate` transcript *including*
+    /// `cert`, and the Finished MACs through it, so the flight stays self-consistent
+    /// whatever chain `cert` carries.
+    fn handshake_flight_with_cert(ch: &[u8], sh: &[u8], cert: &[u8]) -> Vec<u8> {
         let ee = encrypted_extensions_bytes();
-        let cert = certificate_bytes();
         // The CertificateVerify signs Transcript-Hash(ClientHello…Certificate).
         let mut transcript = ch.to_vec();
-        for m in [sh, &ee, &cert] {
+        for m in [sh, ee.as_slice(), cert] {
             transcript.extend_from_slice(m);
         }
         let cv = certificate_verify_bytes(&transcript);
@@ -804,10 +901,31 @@ mod tests {
         let hs_traffic = handshake_traffic(ch, sh);
         let sf = server_finished_bytes(&hs_traffic.server, &transcript);
         let mut flight = Vec::new();
-        for m in [&ee, &cert, &cv, &sf] {
+        for m in [ee.as_slice(), cert, cv.as_slice(), sf.as_slice()] {
             flight.extend_from_slice(m);
         }
         flight
+    }
+
+    /// A two-certificate `Certificate` message: the end-entity (naming
+    /// [`SERVER_HOSTNAME`], carrying the server key) followed by the intermediate whose
+    /// key signed it. `linked` decides the internal link: signed by the intermediate
+    /// (verifies) or by the server's own key (a broken link the walk rejects).
+    fn certificate_bytes_chain(linked: bool) -> Vec<u8> {
+        let issuer = if linked { intermediate_ed25519() } else { server_ed25519() };
+        enc(&Handshake::Certificate(Certificate {
+            certificate_request_context: Vec::new(),
+            certificate_list: vec![
+                CertificateEntry {
+                    cert_data: end_entity_signed_by(&issuer),
+                    extensions: Vec::new(),
+                },
+                CertificateEntry {
+                    cert_data: intermediate_certificate_der(),
+                    extensions: Vec::new(),
+                },
+            ],
+        }))
     }
 
     /// A server flight whose TLS handshake completes (the Finished MAC verifies) but
@@ -1078,6 +1196,60 @@ mod tests {
         cd.poll(now).expect("poll over the ServerHello");
         let err = cd.poll(now).expect_err("the certificate must not yet be valid");
         assert!(matches!(err, ConnectError::Validity(ValidityError::NotYetValid { .. })));
+        assert!(cd.completed().is_none());
+        assert!(cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
+    }
+
+    // ---- poll: a self-consistent chain lets the handshake complete ------
+
+    #[test]
+    fn poll_completes_when_the_certificate_chain_verifies() {
+        let now = base();
+        let ch = client_hello_bytes();
+        let sh = server_hello_bytes();
+        let mut t = transport();
+        // A two-cert chain whose end-entity is really signed by the intermediate: the
+        // end-entity still authenticates, names SERVER_HOSTNAME, and is in date, and the
+        // chain's single internal link verifies, so the handshake completes.
+        let cert = certificate_bytes_chain(true);
+        t.push_inbound(server_initial(0, sh.clone()));
+        t.push_inbound(server_handshake(0, handshake_flight_with_cert(&ch, &sh, &cert), &ch, &sh));
+        let mut cd = connect_driver(t, now);
+
+        cd.poll(now).expect("poll over the ServerHello");
+        let step = cd.poll(now).expect("poll over the flight");
+        assert!(step.completed);
+        let complete = cd.completed().expect("completion retained");
+        assert_eq!(complete.server_certificate.certificate_list.len(), 2, "end-entity + issuer");
+        // The client Finished was flushed: the Handshake CRYPTO queue drained.
+        assert!(!cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
+    }
+
+    // ---- poll: a broken chain link aborts the connect ------------------
+
+    #[test]
+    fn poll_rejects_a_certificate_chain_with_a_broken_link() {
+        let now = base();
+        let ch = client_hello_bytes();
+        let sh = server_hello_bytes();
+        let mut t = transport();
+        // The end-entity authenticates, names SERVER_HOSTNAME, and is in date, but its
+        // tbsCertificate is signed by the server's own key, not the intermediate whose
+        // key heads the chain — so possession, identity, and time pass and the failure
+        // is purely the chain-signature (link) check.
+        let cert = certificate_bytes_chain(false);
+        t.push_inbound(server_initial(0, sh.clone()));
+        t.push_inbound(server_handshake(0, handshake_flight_with_cert(&ch, &sh, &cert), &ch, &sh));
+        let mut cd = connect_driver(t, now);
+
+        cd.poll(now).expect("poll over the ServerHello");
+        let err = cd.poll(now).expect_err("the chain link must not verify");
+        assert!(matches!(
+            err,
+            ConnectError::Chain(ChainWalkError::Link { subject_index: 0, .. }),
+        ));
+        // The completion is never retained for a broken chain, and the client Finished —
+        // enqueued by the TLS advance — was not flushed.
         assert!(cd.completed().is_none());
         assert!(cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
     }
