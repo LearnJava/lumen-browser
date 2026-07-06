@@ -54,7 +54,7 @@
 //! RFC 5280 §4.1.2.5), the whole presented `certificate_list` must form a
 //! self-consistent signature chain, each certificate signed by the next
 //! ([`x509_chain::verify_chain_signatures`](super::x509_chain::verify_chain_signatures),
-//! RFC 5280 §4.1.1.3, RFC 8446 §4.4.2), and — this slice — that same list must form a
+//! RFC 5280 §4.1.1.3, RFC 8446 §4.4.2), that same list must form a
 //! self-consistent *name* chain, each certificate's `issuer` distinguished name equal to
 //! the next certificate's `subject`
 //! ([`x509_name_chain::verify_name_chain`](super::x509_name_chain::verify_name_chain),
@@ -62,30 +62,27 @@
 //! another must be a permitted CA, asserting `basicConstraints` `cA = TRUE` and honouring
 //! its `pathLenConstraint`
 //! ([`x509_basic_constraints::verify_ca_constraints`](super::x509_basic_constraints::verify_ca_constraints),
-//! RFC 5280 §4.2.1.9, §6.1.4), and — this slice — every issuing certificate that carries a
+//! RFC 5280 §4.2.1.9, §6.1.4), every issuing certificate that carries a
 //! `keyUsage` extension must assert `keyCertSign`
 //! ([`x509_key_usage::verify_cert_sign_usage`](super::x509_key_usage::verify_cert_sign_usage),
-//! RFC 5280 §4.2.1.3) — all seven *before* the client Finished goes on
+//! RFC 5280 §4.2.1.3), and — this slice — that same chain must actually *terminate* at a
+//! trust anchor the caller supplies: the topmost certificate's `issuer` must name one of
+//! [`ConnectDriver::new`]'s `trust_anchors`, and the topmost certificate must really be
+//! signed by that anchor's key
+//! ([`x509_trust_anchor::verify_trust_anchor`](super::x509_trust_anchor::verify_trust_anchor),
+//! RFC 5280 §6.1, §4.1.1.3) — all eight *before* the client Finished goes on
 //! the wire. The verified completion is then retained ([`ConnectDriver::completed`]).
 //!
 //! ## What it defers
 //!
-//! - **Trust-anchor termination.** The loop now verifies the CertificateVerify signature
-//!   (the *possession* half of authentication), matches the certificate's
-//!   `subjectAltName` against the requested host (the *identity* half), checks the
-//!   certificate's `[notBefore, notAfter]` window against the caller-supplied wall-clock
-//!   now (the *time* half, RFC 5280 §4.1.2.5), walks the presented `certificate_list`
-//!   confirming every certificate is signed by the next one up (the *chain-signature*
-//!   half, RFC 5280 §4.1.1.3, RFC 8446 §4.4.2), and — this slice — confirms every
-//!   certificate's `issuer` distinguished name matches the next certificate's `subject`
-//!   (the *name-chaining* half, RFC 5280 §4.1.2.4, §4.1.2.6, §6.1), confirms every
-//!   certificate that issues another is a permitted CA (the
-//!   *basicConstraints* half, `cA = TRUE` and any `pathLenConstraint` honoured, RFC 5280
-//!   §4.2.1.9, §6.1.4), and — this slice — confirms every issuing certificate that carries
-//!   a `keyUsage` extension asserts `keyCertSign` (the *keyUsage* half, RFC 5280 §4.2.1.3).
-//!   It does **not** yet terminate that chain at a trusted root (RFC
-//!   5280 §6.1) — that remains for a later slice, exactly
-//!   as all the chain walks stop one link short of the anchor.
+//! - **The production trust store.** [`ConnectDriver::new`] takes the caller's
+//!   `trust_anchors` as a plain parameter — the same shape
+//!   [`x509_trust_anchor::TrustAnchor`](super::x509_trust_anchor::TrustAnchor)
+//!   documents: the existing HTTP/1.1 / HTTP/2 TLS path already populates a
+//!   `rustls::RootCertStore` from `webpki_roots::TLS_SERVER_ROOTS`
+//!   (`crates/network/src/lib.rs`), and the slice that wires QUIC into `HttpClient` is
+//!   where the real Mozilla root list reaches this driver the same way. Nothing here
+//!   hard-codes a trust store.
 //! - **Building the ClientHello.** The exact first-flight bytes and the ephemeral
 //!   X25519 private key are supplied to [`TlsConnState::new`](super::conn_tls::TlsConnState::new)
 //!   by the caller.
@@ -117,7 +114,27 @@ use super::x509_chain::{ChainWalkError, verify_chain_signatures};
 use super::x509_hostname::{HostnameError, verify_certificate_hostname};
 use super::x509_key_usage::{KeyUsageWalkError, verify_cert_sign_usage};
 use super::x509_name_chain::{NameChainWalkError, verify_name_chain};
+use super::x509_trust_anchor::{TrustAnchor, TrustAnchorWalkError, verify_trust_anchor};
 use super::x509_validity::{ValidityError, verify_certificate_validity};
+
+/// One trust anchor a presented chain may terminate at (RFC 5280 §6.1): the anchor's
+/// `subject` and `subjectPublicKeyInfo`, owned so [`ConnectDriver`] need not carry the
+/// borrowed lifetime
+/// [`x509_trust_anchor::TrustAnchor`](super::x509_trust_anchor::TrustAnchor) itself
+/// requires. [`ConnectDriver::poll`] borrows both fields fresh each turn to build the
+/// borrowed `TrustAnchor` [`verify_trust_anchor`] takes — the caller only ever holds
+/// this owned form. Populated the same way the existing HTTP/1.1 / HTTP/2 TLS path
+/// populates its `rustls::RootCertStore` (`tls::build_client_config`): a real trust
+/// store is the caller's job, not a compiled-in list.
+#[derive(Clone, Debug)]
+pub struct OwnedTrustAnchor {
+    /// The anchor's `subject` distinguished name DER (RFC 5280 §4.1.2.6), including its
+    /// own outer `SEQUENCE` — comparable byte-for-byte against a certificate's `issuer`.
+    pub subject: Vec<u8>,
+    /// The anchor's `subjectPublicKeyInfo` DER (RFC 5280 §4.1.2.7), including its own
+    /// outer `SEQUENCE`.
+    pub subject_public_key_info: Vec<u8>,
+}
 
 /// What one [`ConnectDriver::poll`] turn did: the transport-level outcome of the
 /// [`HandshakeDriver::poll`](super::conn_handshake::HandshakeDriver::poll) plus a
@@ -211,8 +228,8 @@ pub enum ConnectError {
     /// ([`ChainWalkError`](super::x509_chain::ChainWalkError)). Checked after
     /// possession, identity, and time hold for the end-entity certificate; like the
     /// three before it, it abandons the connection before the client Finished is
-    /// flushed. Verifying the chain's internal links does not yet terminate it at a
-    /// trusted root — that remains a later slice.
+    /// flushed. Verifying the chain's internal links does not itself terminate it at a
+    /// trusted root — that is [`TrustAnchor`](Self::TrustAnchor), checked last.
     Chain(ChainWalkError),
     /// The server-presented certificate chain does not form a self-consistent *name*
     /// chain (RFC 5280 §4.1.2.4, §4.1.2.6, §6.1, RFC 8446 §4.4.2): some certificate's
@@ -223,7 +240,8 @@ pub enum ConnectError {
     /// next certificate and *named* after it. Checked after possession, identity, time,
     /// and the chain-signature walk hold; like the four before it, it abandons the
     /// connection before the client Finished is flushed. Confirming the name links does
-    /// not yet terminate the chain at a trusted root — that remains a later slice.
+    /// not itself terminate the chain at a trusted root — that is
+    /// [`TrustAnchor`](Self::TrustAnchor), checked last.
     NameChain(NameChainWalkError),
     /// The server-presented certificate chain is not a permitted issuance path (RFC 5280
     /// §4.2.1.9, §6.1.4, RFC 8446 §4.4.2): some certificate that *issues* another does not
@@ -236,8 +254,8 @@ pub enum ConnectError {
     /// certificates for any name beneath it. Checked after possession, identity, time, the
     /// chain-signature walk, and the name walk hold; like the five before it, it abandons
     /// the connection before the client Finished is flushed. Confirming the presented
-    /// certificates are permitted issuers does not yet terminate the chain at a trusted
-    /// root — that remains a later slice.
+    /// certificates are permitted issuers does not itself terminate the chain at a
+    /// trusted root — that is [`TrustAnchor`](Self::TrustAnchor), checked last.
     CaConstraints(CaConstraintsWalkError),
     /// The server-presented certificate chain uses a certificate for signing that is not
     /// permitted to sign certificates (RFC 5280 §4.2.1.3, §6.1.4, RFC 8446 §4.4.2): some
@@ -252,8 +270,23 @@ pub enum ConnectError {
     /// basicConstraints walk hold; like the six before it, it abandons the connection before
     /// the client Finished is flushed. An issuer that carries no `keyUsage` is unconstrained
     /// (§4.2.1.3) and passes. Confirming certificate-signing permission does not yet
-    /// terminate the chain at a trusted root (RFC 5280 §6.1) — that remains a later slice.
+    /// terminate the chain at a trusted root (RFC 5280 §6.1) — that is
+    /// [`TrustAnchor`](Self::TrustAnchor), checked next.
     KeyUsage(KeyUsageWalkError),
+    /// The server-presented certificate chain does not terminate at a trust anchor the
+    /// caller supplies (RFC 5280 §6.1, §4.1.1.3, RFC 8446 §4.4.2): the topmost
+    /// certificate's `issuer` does not name any [`OwnedTrustAnchor`] in
+    /// [`ConnectDriver::new`]'s trust store, or the topmost certificate is not really
+    /// signed by the matched anchor's key
+    /// ([`TrustAnchorWalkError`](super::x509_trust_anchor::TrustAnchorWalkError)). The
+    /// termination complement of [`Chain`](Self::Chain), [`NameChain`](Self::NameChain),
+    /// [`CaConstraints`](Self::CaConstraints), and [`KeyUsage`](Self::KeyUsage): those four
+    /// walks all stop one link short of the anchor, proving the chain is internally
+    /// self-consistent without proving it is *rooted* in anything the caller trusts.
+    /// Checked after possession, identity, time, and all four chain walks hold; like the
+    /// seven checks before it, it abandons the connection before the client Finished is
+    /// flushed.
+    TrustAnchor(TrustAnchorWalkError),
 }
 
 impl core::fmt::Display for ConnectError {
@@ -277,6 +310,9 @@ impl core::fmt::Display for ConnectError {
             Self::KeyUsage(e) => {
                 write!(f, "QUIC connect: certificate keyUsage verification failed: {e}")
             }
+            Self::TrustAnchor(e) => {
+                write!(f, "QUIC connect: certificate trust-anchor verification failed: {e}")
+            }
         }
     }
 }
@@ -294,6 +330,7 @@ impl std::error::Error for ConnectError {
             Self::NameChain(e) => Some(e),
             Self::CaConstraints(e) => Some(e),
             Self::KeyUsage(e) => Some(e),
+            Self::TrustAnchor(e) => Some(e),
         }
     }
 }
@@ -337,6 +374,11 @@ pub struct ConnectDriver<T: DatagramTransport> {
     /// `[notBefore, notAfter]` window against it (RFC 5280 §4.1.2.5) before the
     /// connection may carry application data.
     now_unix: i64,
+    /// The caller-supplied trust store a presented chain's topmost certificate must
+    /// terminate at (RFC 5280 §6.1). Owned rather than borrowed so this driver need not
+    /// carry the lifetime [`x509_trust_anchor::TrustAnchor`](super::x509_trust_anchor::TrustAnchor)
+    /// itself requires; [`poll`](ConnectDriver::poll) borrows from it fresh each turn.
+    trust_anchors: Vec<OwnedTrustAnchor>,
 }
 
 impl<T: DatagramTransport> ConnectDriver<T> {
@@ -350,12 +392,16 @@ impl<T: DatagramTransport> ConnectDriver<T> {
     /// handshake to complete. `now_unix` is the wall-clock instant the certificate's
     /// validity period is judged against (seconds since the Unix epoch): the end-entity
     /// certificate must be valid at it (RFC 5280 §4.1.2.5) for the handshake to complete.
+    /// `trust_anchors` is the trust store the presented chain's topmost certificate must
+    /// terminate at (RFC 5280 §6.1) — the caller's job to populate, the same way the
+    /// existing HTTP/1.1 / HTTP/2 TLS path populates its `rustls::RootCertStore`.
     #[must_use]
     pub fn new(
         handshake: HandshakeDriver<T>,
         tls: TlsConnState,
         reference_host: impl Into<String>,
         now_unix: i64,
+        trust_anchors: Vec<OwnedTrustAnchor>,
     ) -> Self {
         Self {
             handshake,
@@ -363,6 +409,7 @@ impl<T: DatagramTransport> ConnectDriver<T> {
             completed: None,
             reference_host: reference_host.into(),
             now_unix,
+            trust_anchors,
         }
     }
 
@@ -389,19 +436,19 @@ impl<T: DatagramTransport> ConnectDriver<T> {
     /// self-consistent — each certificate signed by the next (RFC 5280 §4.1.1.3), named
     /// after it (each `issuer` matching the next `subject`, RFC 5280 §4.1.2.4, §4.1.2.6,
     /// §6.1), permitted to issue it (each issuer a CA, `basicConstraints`
-    /// `cA = TRUE` with any `pathLenConstraint` honoured, RFC 5280 §4.2.1.9, §6.1.4), *and*
+    /// `cA = TRUE` with any `pathLenConstraint` honoured, RFC 5280 §4.2.1.9, §6.1.4),
     /// permitted to sign it (each issuer's `keyUsage`, when present, asserting `keyCertSign`,
-    /// RFC 5280 §4.2.1.3). `None` while the handshake is still in progress; a completion
-    /// whose certificate fails to authenticate, does not cover [`reference_host`](ConnectDriver),
-    /// is outside its validity period, or heads a chain whose signature, name, CA-permission,
-    /// or certificate-signing links do not verify never reaches here —
+    /// RFC 5280 §4.2.1.3), *and* really rooted in one of the caller's `trust_anchors`
+    /// (the topmost certificate's `issuer` names an anchor and its signature verifies
+    /// under that anchor's key, RFC 5280 §6.1, §4.1.1.3). `None` while the handshake is
+    /// still in progress; a completion whose certificate fails to authenticate, does not
+    /// cover [`reference_host`](ConnectDriver), is outside its validity period, heads a
+    /// chain whose signature, name, CA-permission, or certificate-signing links do not
+    /// verify, or does not terminate at a trusted anchor never reaches here —
     /// [`poll`](ConnectDriver::poll) returns [`ConnectError::CertAuth`],
     /// [`ConnectError::Hostname`], [`ConnectError::Validity`], [`ConnectError::Chain`],
-    /// [`ConnectError::NameChain`], [`ConnectError::CaConstraints`], or
-    /// [`ConnectError::KeyUsage`] instead.
-    ///
-    /// Terminating the chain at a trusted root remains the caller's (or a later slice's)
-    /// job before the certificate is trusted for an origin.
+    /// [`ConnectError::NameChain`], [`ConnectError::CaConstraints`],
+    /// [`ConnectError::KeyUsage`], or [`ConnectError::TrustAnchor`] instead.
     #[must_use]
     pub fn completed(&self) -> Option<&HandshakeComplete> {
         self.completed.as_deref()
@@ -457,24 +504,29 @@ impl<T: DatagramTransport> ConnectDriver<T> {
     /// RFC 5280 §4.1.2.4, §4.1.2.6, §6.1), and verifies every issuing certificate is a
     /// permitted CA — `basicConstraints` `cA = TRUE` with any `pathLenConstraint` honoured
     /// ([`verify_ca_constraints`](super::x509_basic_constraints::verify_ca_constraints),
-    /// RFC 5280 §4.2.1.9, §6.1.4) — and verifies every issuing certificate is permitted to
+    /// RFC 5280 §4.2.1.9, §6.1.4), verifies every issuing certificate is permitted to
     /// sign certificates — its `keyUsage`, when present, asserting `keyCertSign`
     /// ([`verify_cert_sign_usage`](super::x509_key_usage::verify_cert_sign_usage),
-    /// RFC 5280 §4.2.1.3) — before flushing the client Finished the
+    /// RFC 5280 §4.2.1.3) — and verifies that chain actually terminates at one of the
+    /// caller's [`trust_anchors`](ConnectDriver::new)
+    /// ([`verify_trust_anchor`](super::x509_trust_anchor::verify_trust_anchor),
+    /// RFC 5280 §6.1, §4.1.1.3) — before flushing the client Finished the
     /// advance enqueued (RFC 8446 §4.4.3, §4.4.4) and retaining the completion
     /// ([`completed`](ConnectDriver::completed)). A certificate that fails to
     /// authenticate, that does not cover the requested host, that is outside its validity
-    /// period, or that heads a chain whose signature, name, CA-permission, or
-    /// certificate-signing links do not verify abandons the connection before the client
-    /// Finished goes out. On a timer wake it advances no TLS.
+    /// period, that heads a chain whose signature, name, CA-permission, or
+    /// certificate-signing links do not verify, or that does not terminate at a trusted
+    /// anchor abandons the connection before the client Finished goes out. On a timer
+    /// wake it advances no TLS.
     ///
     /// # Errors
     ///
     /// [`ConnectError`] wrapping the failing step: a control-flow error from the poll,
     /// a TLS error from the advance, a server certificate that failed to authenticate,
-    /// does not name the requested host, is outside its validity period, or heads a
+    /// does not name the requested host, is outside its validity period, heads a
     /// chain whose signature, name, CA-permission, or certificate-signing links do not
-    /// verify, or a failed flush of the client Finished.
+    /// verify, does not terminate at a trusted anchor, or a failed flush of the client
+    /// Finished.
     pub fn poll(&mut self, now: Instant) -> Result<ConnectStep, ConnectError> {
         let poll = self.handshake.poll(now).map_err(ConnectError::Loop)?;
         let mut messages_processed = 0;
@@ -528,7 +580,7 @@ impl<T: DatagramTransport> ConnectDriver<T> {
                 // signature, a mis-named host, or an expired certificate — abandon
                 // before the client Finished goes out. A single-certificate list has no
                 // internal links and passes vacuously; terminating the chain at a trusted
-                // root (RFC 5280 §6.1) remains a later slice.
+                // root (RFC 5280 §6.1) is the trust-anchor walk below.
                 let chain: Vec<&[u8]> = complete
                     .server_certificate
                     .certificate_list
@@ -544,7 +596,7 @@ impl<T: DatagramTransport> ConnectDriver<T> {
                 // issuance path — as fatal as a broken signature link, so abandon before
                 // the client Finished goes out. Like the signature walk it passes a
                 // single-certificate list vacuously and stops one link short of the trust
-                // anchor (RFC 5280 §6.1), left to a later slice.
+                // anchor (RFC 5280 §6.1) — the trust-anchor walk below checks that link.
                 verify_name_chain(&chain).map_err(ConnectError::NameChain)?;
                 // The signatures link the chain and its names line up; now check every
                 // issuing certificate is *permitted* to issue (RFC 5280 §4.2.1.9, §6.1.4,
@@ -555,7 +607,8 @@ impl<T: DatagramTransport> ConnectDriver<T> {
                 // it — as fatal as a broken signature or name link, so abandon before the
                 // client Finished goes out. Like the two walks before it a single-certificate
                 // list has no issuer and passes vacuously, and it stops short of terminating
-                // the chain at a trust anchor (RFC 5280 §6.1), left to a later slice.
+                // the chain at a trust anchor (RFC 5280 §6.1) — the trust-anchor walk below
+                // checks that link.
                 verify_ca_constraints(&chain).map_err(ConnectError::CaConstraints)?;
                 // Each issuer is a permitted CA; now check every issuing certificate is also
                 // permitted to *sign certificates* specifically (RFC 5280 §4.2.1.3, §6.1.4,
@@ -567,8 +620,27 @@ impl<T: DatagramTransport> ConnectDriver<T> {
                 // goes out. An issuer carrying no `keyUsage` is unconstrained (§4.2.1.3) and
                 // passes; like the walks before it a single-certificate list has no issuer and
                 // passes vacuously, and it stops short of terminating the chain at a trust
-                // anchor (RFC 5280 §6.1), left to a later slice.
+                // anchor (RFC 5280 §6.1) — checked next.
                 verify_cert_sign_usage(&chain).map_err(ConnectError::KeyUsage)?;
+                // Every internal link, name, CA-permission, and signing-permission check
+                // holds; now check the chain actually *terminates* at a trust anchor the
+                // caller trusts (RFC 5280 §6.1, §4.1.1.3): the topmost certificate's
+                // `issuer` must name one of `self.trust_anchors`, and that certificate must
+                // really be signed by the matched anchor's key. Every walk above stops one
+                // link short of the anchor — a chain internally consistent in signature,
+                // name, CA-permission, and signing-permission could still be rooted in a
+                // certificate nobody asked this connection to trust, as fatal as any link
+                // before it, so abandon before the client Finished goes out. `TrustAnchor`
+                // borrows fresh from the owned `trust_anchors` store each turn.
+                let anchors: Vec<TrustAnchor<'_>> = self
+                    .trust_anchors
+                    .iter()
+                    .map(|a| TrustAnchor {
+                        subject: &a.subject,
+                        subject_public_key_info: &a.subject_public_key_info,
+                    })
+                    .collect();
+                verify_trust_anchor(&chain, &anchors).map_err(ConnectError::TrustAnchor)?;
                 // The client Finished (RFC 8446 §4.4.4) was enqueued into the
                 // Handshake CRYPTO stream; put it — and any owed Handshake ACK the
                 // poll queued — on the wire now.
@@ -718,20 +790,34 @@ mod tests {
     }
 
     /// A connect driver over the scripted transport `t` targeting `host` and judging
-    /// the certificate's validity period against `now_unix`, with the Initial space
-    /// installed on both halves and the TLS bridge seeded with the ClientHello.
+    /// the certificate's validity period against `now_unix`, seeded with
+    /// [`trust_anchors`] as its trust store, with the Initial space installed on both
+    /// halves and the TLS bridge seeded with the ClientHello.
     fn connect_driver_for_at(
         t: MockDatagramTransport,
         now: Instant,
         host: &str,
         now_unix: i64,
     ) -> ConnectDriver<MockDatagramTransport> {
+        connect_driver_with_anchors(t, now, host, now_unix, trust_anchors())
+    }
+
+    /// Like [`connect_driver_for_at`] but with an explicit trust store, so a fixture can
+    /// exercise the trust-anchor walk itself (an empty store, or one naming an anchor
+    /// under the wrong key).
+    fn connect_driver_with_anchors(
+        t: MockDatagramTransport,
+        now: Instant,
+        host: &str,
+        now_unix: i64,
+        anchors: Vec<OwnedTrustAnchor>,
+    ) -> ConnectDriver<MockDatagramTransport> {
         let mut send = ConnectionSendState::new(1, dcid(), scid(), 1200);
         send.install(PacketNumberSpace::Initial, initial_keys().client);
         let turn = ConnectionTurn::new(driver(t, now), send, 1200, DEFAULT_ACK_DELAY_EXPONENT);
         let handshake = HandshakeDriver::new(turn);
         let tls = TlsConnState::new(CLIENT_PRIV, client_hello_bytes());
-        ConnectDriver::new(handshake, tls, host, now_unix)
+        ConnectDriver::new(handshake, tls, host, now_unix, anchors)
     }
 
     /// A connect driver over `t` targeting `host` at [`SERVER_NOW`] — inside the fixture
@@ -970,12 +1056,55 @@ mod tests {
         der_tlv(0x30, &[tbs, outer_sig_alg.as_slice(), sig_value.as_slice()].concat())
     }
 
+    /// A fixed Ed25519 trust-anchor signing key: the root the trust-anchor walk
+    /// terminates every "completes" fixture chain at (RFC 5280 §6.1). Never appears in
+    /// any presented `certificate_list` — only its `subjectPublicKeyInfo` reaches the
+    /// [`trust_anchors`] store the connect driver checks against.
+    const ROOT_ED25519_SEED: [u8; 32] = [0x07; 32];
+
+    /// The trust anchor's Ed25519 signing key.
+    fn root_ed25519() -> ed25519_dalek::SigningKey {
+        ed25519_dalek::SigningKey::from_bytes(&ROOT_ED25519_SEED)
+    }
+
+    /// An Ed25519 `SubjectPublicKeyInfo` DER carrying `public` (RFC 5280 §4.1.2.7),
+    /// including its own outer `SEQUENCE` — the exact shape
+    /// [`OwnedTrustAnchor::subject_public_key_info`] carries and
+    /// [`x509_spki::parse_subject_public_key_info`](super::super::x509_spki::parse_subject_public_key_info)
+    /// decodes.
+    fn ed25519_spki_der(public: &[u8; 32]) -> Vec<u8> {
+        let ed_oid = der_tlv(0x06, &[0x2B, 0x65, 0x70]);
+        let alg_id = der_tlv(0x30, &ed_oid);
+        let mut bit = vec![0x00];
+        bit.extend_from_slice(public);
+        der_tlv(0x30, &[alg_id.as_slice(), der_tlv(0x03, &bit).as_slice()].concat())
+    }
+
+    /// The default trust store every [`connect_driver`]-family fixture is seeded with:
+    /// two anchors backed by the same [`root_ed25519`] key, one for each issuer shape
+    /// this module's fixtures use for a chain's topmost certificate — the empty-SEQUENCE
+    /// placeholder [`ed25519_tbs`]/[`ed25519_tbs_ca`] leave as `issuer`, and the explicit
+    /// `name_rdn("Lumen Test Root")` [`ed25519_tbs_named`]/[`ed25519_tbs_named_ext`]
+    /// fixtures carry. Every "completes" fixture in this module really terminates at one
+    /// of these two, so [`ConnectError::TrustAnchor`] never fires for a happy path.
+    fn trust_anchors() -> Vec<OwnedTrustAnchor> {
+        let spki = ed25519_spki_der(&root_ed25519().verifying_key().to_bytes());
+        vec![
+            OwnedTrustAnchor { subject: der_tlv(0x30, &[]), subject_public_key_info: spki.clone() },
+            OwnedTrustAnchor { subject: name_rdn("Lumen Test Root"), subject_public_key_info: spki },
+        ]
+    }
+
     /// A minimal end-entity certificate naming `host` and carrying the server's Ed25519
-    /// public key. Its own signature is a placeholder (`0xDEAD`): in a single-certificate
-    /// chain the walk has no internal link to check, so the value is never verified.
+    /// public key. Its `tbsCertificate` is really signed by the [`root_ed25519`] trust
+    /// anchor (RFC 5280 §4.1.1.3): in a single-certificate chain this is the *topmost*
+    /// certificate, the one [`verify_trust_anchor`] checks (RFC 5280 §6.1) — unlike the
+    /// internal chain-signature walk, which has no link to check here.
     fn server_certificate_der_for(host: &str) -> Vec<u8> {
+        use ed25519_dalek::Signer;
         let tbs = ed25519_tbs(host, &server_ed25519().verifying_key().to_bytes());
-        seal_certificate(&tbs, &[0xDE, 0xAD])
+        let signature = root_ed25519().sign(&tbs).to_bytes().to_vec();
+        seal_certificate(&tbs, &signature)
     }
 
     /// The end-entity certificate naming [`SERVER_HOSTNAME`], used by the single-cert
@@ -1008,13 +1137,16 @@ mod tests {
     /// A minimal intermediate certificate carrying the intermediate's Ed25519 public key
     /// in its `SubjectPublicKeyInfo` — the key the chain walk extracts to verify the
     /// end-entity's signature — and a `basicConstraints` `cA = TRUE` so the CA-constraints
-    /// walk admits it as a permitted issuer (RFC 5280 §4.2.1.9). Its own signature is a
-    /// placeholder: it is the last certificate in the fixture chain, whose issuer is a
-    /// trust anchor outside the list, so the walk does not check it.
+    /// walk admits it as a permitted issuer (RFC 5280 §4.2.1.9). It is the last
+    /// certificate in the fixture chain — the *topmost* one — so its `tbsCertificate` is
+    /// really signed by the [`root_ed25519`] trust anchor rather than a placeholder, and
+    /// [`verify_trust_anchor`] checks it (RFC 5280 §6.1).
     fn intermediate_certificate_der() -> Vec<u8> {
+        use ed25519_dalek::Signer;
         let tbs =
             ed25519_tbs_ca("intermediate.test", &intermediate_ed25519().verifying_key().to_bytes(), true);
-        seal_certificate(&tbs, &[0xBE, 0xEF])
+        let signature = root_ed25519().sign(&tbs).to_bytes().to_vec();
+        seal_certificate(&tbs, &signature)
     }
 
     /// A DER `Name` (RDNSequence) carrying a single `commonName` attribute valued `cn` —
@@ -1103,7 +1235,8 @@ mod tests {
         // Intermediate: its own key in its SPKI (the key the signature walk extracts to
         // check the end-entity), its subject the Name the end-entity names as issuer in
         // the matching case, and basicConstraints cA = TRUE so it is a permitted issuer.
-        // Last in the list, so its placeholder signature is unchecked.
+        // Last (topmost) in the list, so it is really signed by the trust-anchor root
+        // key rather than a placeholder, and names the anchor's subject as issuer.
         let int_tbs = ed25519_tbs_named(
             "intermediate.test",
             &intermediate_ed25519().verifying_key().to_bytes(),
@@ -1111,7 +1244,8 @@ mod tests {
             &intermediate_subject,
             true, // the intermediate issues the end-entity, so it must be a CA
         );
-        let intermediate = seal_certificate(&int_tbs, &[0xBE, 0xEF]);
+        let int_sig = root_ed25519().sign(&int_tbs).to_bytes().to_vec();
+        let intermediate = seal_certificate(&int_tbs, &int_sig);
 
         enc(&Handshake::Certificate(Certificate {
             certificate_request_context: Vec::new(),
@@ -1229,7 +1363,8 @@ mod tests {
         // Intermediate: a CA (basicConstraints cA = TRUE) whose key signed the end-entity
         // and whose subject matches the end-entity's issuer, additionally carrying a
         // keyUsage extension — with keyCertSign set or clear — so only the keyUsage leg
-        // decides. Last in the list, so its placeholder signature is unchecked.
+        // decides. Last (topmost) in the list, so it is really signed by the trust-anchor
+        // root key and names the anchor's subject as issuer.
         let issuer_extensions = extensions_field(&[
             subject_alt_name_entry("intermediate.test"),
             basic_constraints_ca_entry(),
@@ -1241,7 +1376,8 @@ mod tests {
             &intermediate_ed25519().verifying_key().to_bytes(),
             &issuer_extensions,
         );
-        let intermediate = seal_certificate(&int_tbs, &[0xBE, 0xEF]);
+        let int_sig = root_ed25519().sign(&int_tbs).to_bytes().to_vec();
+        let intermediate = seal_certificate(&int_tbs, &int_sig);
 
         enc(&Handshake::Certificate(Certificate {
             certificate_request_context: Vec::new(),
@@ -1840,6 +1976,75 @@ mod tests {
         ));
         // The completion is never retained for a non-signing issuer, and the client Finished —
         // enqueued by the TLS advance — was not flushed.
+        assert!(cd.completed().is_none());
+        assert!(cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
+    }
+
+    // ---- poll: an untrusted issuer aborts the connect ------------------
+
+    #[test]
+    fn poll_rejects_a_chain_whose_issuer_names_no_trusted_anchor() {
+        use crate::h3::x509_trust_anchor::TrustAnchorError;
+        let now = base();
+        let ch = client_hello_bytes();
+        let sh = server_hello_bytes();
+        let mut t = transport();
+        // The default single-cert fixture authenticates, names SERVER_HOSTNAME, is in
+        // date, and (vacuously) has no internal chain link to break — but the driver's
+        // trust store is empty, so the topmost (only) certificate's issuer names no
+        // anchor at all: possession, identity, time, and every chain walk pass and the
+        // failure is purely the trust-anchor termination check.
+        t.push_inbound(server_initial(0, sh.clone()));
+        t.push_inbound(server_handshake(0, handshake_flight(&ch, &sh), &ch, &sh));
+        let mut cd = connect_driver_with_anchors(t, now, SERVER_HOSTNAME, SERVER_NOW, Vec::new());
+
+        cd.poll(now).expect("poll over the ServerHello");
+        let err = cd.poll(now).expect_err("an empty trust store must not terminate the chain");
+        assert!(matches!(
+            err,
+            ConnectError::TrustAnchor(TrustAnchorWalkError::Untrusted {
+                index: 0,
+                error: TrustAnchorError::UnknownIssuer,
+            }),
+        ));
+        // The completion is never retained for an untrusted chain, and the client Finished —
+        // enqueued by the TLS advance — was not flushed.
+        assert!(cd.completed().is_none());
+        assert!(cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
+    }
+
+    #[test]
+    fn poll_rejects_a_chain_not_really_signed_by_the_named_anchor() {
+        use crate::h3::x509_chain::ChainError;
+        use crate::h3::x509_trust_anchor::TrustAnchorError;
+        let now = base();
+        let ch = client_hello_bytes();
+        let sh = server_hello_bytes();
+        let mut t = transport();
+        // The default single-cert fixture authenticates, names SERVER_HOSTNAME, is in
+        // date, and has no internal chain link to break — and the trust store carries an
+        // anchor whose subject matches its issuer, but under an impostor key that never
+        // signed it: possession, identity, time, and every chain walk pass and the
+        // failure is purely the trust-anchor signature check.
+        t.push_inbound(server_initial(0, sh.clone()));
+        t.push_inbound(server_handshake(0, handshake_flight(&ch, &sh), &ch, &sh));
+        let impostor_spki =
+            ed25519_spki_der(&intermediate_ed25519().verifying_key().to_bytes());
+        let anchors = vec![OwnedTrustAnchor {
+            subject: der_tlv(0x30, &[]),
+            subject_public_key_info: impostor_spki,
+        }];
+        let mut cd = connect_driver_with_anchors(t, now, SERVER_HOSTNAME, SERVER_NOW, anchors);
+
+        cd.poll(now).expect("poll over the ServerHello");
+        let err = cd.poll(now).expect_err("the impostor key must not verify the topmost signature");
+        assert!(matches!(
+            err,
+            ConnectError::TrustAnchor(TrustAnchorWalkError::Untrusted {
+                index: 0,
+                error: TrustAnchorError::Signature(ChainError::BadSignature),
+            }),
+        ));
         assert!(cd.completed().is_none());
         assert!(cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
     }
