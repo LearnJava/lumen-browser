@@ -2301,7 +2301,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (976 symbols)
+## lumen-network  (993 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -2527,6 +2527,22 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/conn_id.rs:420` **fn** `retire` — Drop one of our IDs because the peer sent RETIRE_CONNECTION_ID for it
 `crates/network/src/h3/conn_id.rs:432` **fn** `accepts` — Whether a peer-supplied Destination Connection ID matches one of the IDs
 `crates/network/src/h3/conn_id.rs:438` **fn** `active_count` — Number of IDs we currently have issued and active
+`crates/network/src/h3/conn_turn.rs:92` **enum** `TurnEffect` — The observable result of applying one [`DriverAction`] to the send state
+`crates/network/src/h3/conn_turn.rs:128` **fn** `is_terminal` — Whether this effect ends the connection: the owner must stop driving the turn
+`crates/network/src/h3/conn_turn.rs:136` **enum** `TurnError` — Something that stopped a [`DriverAction`] from being carried out against the send
+`crates/network/src/h3/conn_turn.rs:195` **struct** `ConnectionTurn` — One running QUIC connection's full turn: the receive-side driver joined to the
+`crates/network/src/h3/conn_turn.rs:215` **fn** `new` — Joins a receive-side `driver` and send-side `send` into one turn, flushing at
+`crates/network/src/h3/conn_turn.rs:226` **fn** `driver` — The receive-side driver, borrowed immutably (e.g. to read the lifecycle or the
+`crates/network/src/h3/conn_turn.rs:232` **fn** `driver_mut` — The receive-side driver, borrowed mutably: `wait`, `ingest`, key installs, and
+`crates/network/src/h3/conn_turn.rs:238` **fn** `send` — The send-side state, borrowed immutably (e.g. to check pending frames or a
+`crates/network/src/h3/conn_turn.rs:244` **fn** `send_mut` — The send-side state, borrowed mutably: installing send keys, enqueuing
+`crates/network/src/h3/conn_turn.rs:249` **fn** `max_datagram_len` — The maximum datagram payload a flush builds, in bytes (the current path MTU)
+`crates/network/src/h3/conn_turn.rs:255` **fn** `set_max_datagram_len` — Updates the maximum datagram payload a flush may build — e.g. after Path MTU
+`crates/network/src/h3/conn_turn.rs:273` **fn** `apply_action` — Carries out one [`DriverAction`] against the send state, reporting the
+`crates/network/src/h3/conn_turn.rs:335` **fn** `dispatch_and_apply` — Drives every timer elapsed at `now` into the driver
+`crates/network/src/h3/conn_turn.rs:357` **fn** `flush` — Flushes every installed space's queued frames onto the transport as coalesced
+`crates/network/src/h3/conn_turn.rs:374` **fn** `send_padded_initial` — Sends the client's first-flight Initial as its own padded datagram (RFC 9000
+`crates/network/src/h3/conn_turn.rs:381` **fn** `into_parts` — Splits the turn back into its receive-side driver and send-side state, e.g. to
 `crates/network/src/h3/connection.rs:57` **enum** `ProcessError` — A connection-level protocol violation surfaced while dispatching a packet's
 `crates/network/src/h3/connection.rs:114` **struct** `ConnectionConfig` — The configuration a [`QuicConnection`] needs at construction: the connection
 `crates/network/src/h3/connection.rs:146` **struct** `PacketEffects` — What the caller must do after [`QuicConnection::process_packet`] dispatched a
@@ -2620,11 +2636,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/driver.rs:205` **fn** `loss_mut` — The loss-detection / PTO state machine, borrowed mutably (e.g. to record
 `crates/network/src/h3/driver.rs:212` **fn** `recv_keys_mut` — The receive keys, borrowed mutably so the caller installs each encryption
 `crates/network/src/h3/driver.rs:218` **fn** `events_mut` — The event loop, borrowed mutably (e.g. to send an outgoing datagram over
-`crates/network/src/h3/driver.rs:223` **fn** `timers` — The unified timer scheduler as last refreshed, for inspection
-`crates/network/src/h3/driver.rs:236` **fn** `refresh_timers` — Refreshes the unified timer scheduler from both sources at `now`: folds the
-`crates/network/src/h3/driver.rs:255` **fn** `wait` — Blocks for one event-loop turn at `now`: refreshes the timers, arms the
-`crates/network/src/h3/driver.rs:277` **fn** `ingest` — Dispatches a datagram woken by [`Wakeup::Datagram(n)`](super::event_loop::Wakeup::Datagram):
-`crates/network/src/h3/driver.rs:310` **fn** `dispatch_timers` — Drives every timer that has elapsed at `now` into its owning state machine,
+`crates/network/src/h3/driver.rs:231` **fn** `send_flush_parts_mut` — The two halves the send-path flush needs in one borrow: the loss detection
+`crates/network/src/h3/driver.rs:236` **fn** `timers` — The unified timer scheduler as last refreshed, for inspection
+`crates/network/src/h3/driver.rs:249` **fn** `refresh_timers` — Refreshes the unified timer scheduler from both sources at `now`: folds the
+`crates/network/src/h3/driver.rs:268` **fn** `wait` — Blocks for one event-loop turn at `now`: refreshes the timers, arms the
+`crates/network/src/h3/driver.rs:290` **fn** `ingest` — Dispatches a datagram woken by [`Wakeup::Datagram(n)`](super::event_loop::Wakeup::Datagram):
+`crates/network/src/h3/driver.rs:323` **fn** `dispatch_timers` — Drives every timer that has elapsed at `now` into its owning state machine,
 `crates/network/src/h3/event_loop.rs:48` **enum** `Wakeup` — Why one [`DatagramEventLoop::wait`] returned
 `crates/network/src/h3/event_loop.rs:67` **fn** `next_read_timeout` — The read timeout the next [`DatagramTransport::recv`] should block for, derived
 `crates/network/src/h3/event_loop.rs:80` **struct** `DatagramEventLoop` — One turn's receive side of the QUIC connection event loop: a
@@ -5058,4 +5075,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 4987 symbols in 22 crates*
+*Total: 5004 symbols in 22 crates*

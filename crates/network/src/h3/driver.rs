@@ -219,6 +219,19 @@ impl<T: DatagramTransport> ConnectionDriver<T> {
         &mut self.events
     }
 
+    /// The two halves the send-path flush needs in one borrow: the loss detection
+    /// (owning the per-space sent-packet registries a flush records into) and the
+    /// datagram transport it writes over.
+    ///
+    /// [`send_state::ConnectionSendState::flush`](super::send_state::ConnectionSendState::flush)
+    /// takes `&mut LossDetection` and `&mut T` at once; splitting them off through
+    /// two separate accessors would borrow the whole driver twice, so this method
+    /// hands both out together. The receive-side state ([`connection()`](Self::connection),
+    /// timers, receive keys) stays untouched.
+    pub fn send_flush_parts_mut(&mut self) -> (&mut LossDetection, &mut T) {
+        (&mut self.loss, self.events.transport_mut())
+    }
+
     /// The unified timer scheduler as last refreshed, for inspection.
     pub fn timers(&self) -> &ConnectionTimers {
         &self.timers
