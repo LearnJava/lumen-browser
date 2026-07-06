@@ -238,6 +238,15 @@ impl RequestDispatch {
         }
     }
 
+    /// Retires the in-flight request on `stream_id` without a response — the
+    /// transport tore the stream down (the peer reset the response half with
+    /// RESET_STREAM, RFC 9000 §19.4). The mux identifier no longer routes; the
+    /// stream layer's receive state is left as the reset put it. Returns whether an
+    /// in-flight request was actually retired.
+    pub fn abort(&mut self, stream_id: u64) -> bool {
+        self.mux.abort(stream_id)
+    }
+
     /// Whether an in-flight request currently owns `stream_id`.
     #[must_use]
     pub fn is_active(&self, stream_id: u64) -> bool {
