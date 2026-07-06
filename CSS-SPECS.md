@@ -9,13 +9,13 @@ Legend: ✅ implemented · 🟡 parsed/stored, rendering deferred · ⬜ not sta
 
 ---
 
-## Quick stats (2026-07-02, recounted by table rows: `grep -c "^| .*<marker>"`)
+## Quick stats (2026-07-04, recounted by table rows: `grep -c "^| .*<marker>"`; rows may carry >1 marker in notes)
 
 | Status | Properties |
 |--------|-----------|
-| ✅ Fully implemented | ~237 |
-| 🟡 Partial (parsed, not rendered) | ~135 |
-| ⬜ Not started | ~114 |
+| ✅ Fully implemented | ~266 |
+| 🟡 Partial (parsed, not rendered) | ~132 |
+| ⬜ Not started | ~88 |
 | 🚫 Out of scope | ~20 (props in "Out of scope" modules) |
 
 ---
@@ -74,7 +74,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Intrinsic Sizing L3 | [css3-sizing](https://www.w3.org/TR/css3-sizing/) | ✅ | min-content/max-content/fit-content/fit-content(L) for width/height/min-max; 11 tests 2026-05-24 | **#21** |
 | CSS Overflow L3 (scroll) | [css-overflow-3](https://www.w3.org/TR/css-overflow-3/) | 🟡 | scrollable containers; overflow:scroll rendering | **#22** |
 | CSS Text L3/L4 | [css3-text](https://www.w3.org/TR/css3-text/) | 🟡 | text-align-last ✅ 2026-06-08; hyphens:auto ✅ (P1 2026-05-29, KnuthLiangHyphenation); white-space-collapse ✅ + break-spaces ✅ (p4-white-space-collapse 2026-07-04); line-break CJK / text-wrap-style ⬜ | **#23** |
-| CSS Transforms L2 | [css-transforms-2](https://www.w3.org/TR/css-transforms-2/) | 🟡 | individual translate/rotate/scale ✅ 2026-05-26; 3D matrix primitive + perspective-correct rendering ✅ 2026-05-29 (P2); `backface-visibility` culling ✅ (p4-backface-culling); `perspective`/`perspective-origin` projection wiring ⬜ (P4) | **#24** |
+| CSS Transforms L2 | [css-transforms-2](https://www.w3.org/TR/css-transforms-2/) | 🟡 | individual translate/rotate/scale ✅ 2026-05-26; 3D matrix primitive + perspective-correct rendering ✅ 2026-05-29 (P2); 3D function parsing ✅ (translate3d/rotateX/matrix3d…, property_trees.rs:773); `backface-visibility` culling ✅ (p4-backface-culling); `perspective`/`perspective-origin` projection wiring 🟡 (P4) | **#24** |
 | CSS Values L4/L5 | [css-values-4](https://www.w3.org/TR/css-values-4/) | 🟡 | env(); attr() with type; cq* units | **#25** |
 
 ### Tier 3 — Spec compliance (affect specific use-cases)
@@ -84,7 +84,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Scroll Snap L1 | [css-scroll-snap-1](https://www.w3.org/TR/css-scroll-snap-1/) | ✅ | scroll-snap-type (y/x/both mandatory+proximity), scroll-snap-align (start/end/center), scroll-snap-stop (always); shell integration: collect_snap_containers + find_snap_target wired to start_smooth_scroll/scroll_x_by with viewport snap-port 2026-06-03 | **#26** |
 | CSS Multi-column L1 | [css3-multicol](https://www.w3.org/TR/css3-multicol/) | 🟡 | column-rule rendering; column-span; column-fill | **#27** |
 | CSS Containment L2/L3 | [css-contain-2](https://www.w3.org/TR/css-contain-2/) | 🟡 | content-visibility skip-content; cq* units | **#28** |
-| CSS Counter Styles L3 | [css-counter-styles-3](https://www.w3.org/TR/css-counter-styles-3/) | 🟡 | counter-reset/increment resolution ✅ 2026-05-25; @counter-style ⬜ | **#29** |
+| CSS Counter Styles L3 | [css-counter-styles-3](https://www.w3.org/TR/css-counter-styles-3/) | ✅ | counter-reset/increment resolution ✅ 2026-05-25; @counter-style ✅ (CounterStyleRegistry) | **#29** |
 | CSS Box Alignment L3 | [css3-align](https://www.w3.org/TR/css3-align/) | 🟡 | justify-items/justify-self for grid | **#30** |
 | CSS Inline L3 | [css-inline-3](https://www.w3.org/TR/css-inline-3/) | 🟡 | line-height leading; baseline grid; `baseline-shift` ✅ 2026-06-21 (p4-baseline-shift: SVG 1.1 §10.9.2 / CSS Inline L3 §5.2 — non-inherited `SvgBaselineShift` enum Baseline/Sub/Super/Length/Percentage; presentational attribute + CSS property; CSS overrides attr; wired through `emit_svg_text` as vertical y-shift; `sub` lowers by 0.2×font-size, `super` raises by 0.4×font-size, positive length raises) | **#31** |
 | CSS Text Decoration L4 | [css-text-decor-4](https://www.w3.org/TR/css-text-decor-4/) | 🟡 | text-emphasis rendering; text-underline-offset ✅ 2026-06-10 | **#32** |
@@ -244,7 +244,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `hyphens` | ✅ | none/manual/auto; auto = KnuthLiangHyphenation (lumen-encoding, 11 locales) wired in shell via layout_measured_hyp (P1 2026-05-29) |
 | `tab-size` | ✅ | parsed; \t expanded in pre/pre-wrap; renderer advances cursor by tab_size |
 | `line-break` | 🟡 | parsed; CJK-aware breaking ⬜ |
-| `text-wrap-mode` / `text-wrap-style` | 🟡 | parsed; text-wrap-mode wired into effective white-space (nowrap disables wrap in layout, p4-white-space-collapse 2026-07-04); text-wrap-style (balance/pretty) line-breaker integration ⬜ |
+| `text-wrap-mode` / `text-wrap-style` | ✅ | text-wrap-mode → effective white-space (p4-white-space-collapse 2026-07-04); text-wrap-style balance/pretty in line-breaker (`balance_wrap`, box_tree.rs:9359) |
 | `text-underline-position` / `text-underline-offset` | ✅ | wired in push_text_decoration(); Under→fs*0.25; offset adds to base (p4-text-underline 2026-06-10) |
 | `text-emphasis` / `text-emphasis-*` | ✅ | per-char marks rendered (emit_text_emphasis_marks) |
 
@@ -259,15 +259,17 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `:hover`, `:active` | ✅ | shell hit-test wiring 2026-06-03; ancestor propagation per spec |
 | `:focus`, `:focus-within` | ✅ | shell click-focus wiring 2026-06-03 |
 | `:focus-visible` | ✅ | Phase 0: synonym for `:focus` 2026-06-03 |
-| `:link`, `:visited` | 🟡 | parsed; navigation state ⬜ |
-| `:target` | ⬜ | fragment navigation |
-| `:enabled`, `:disabled`, `:checked` | 🟡 | parsed; form state ⬜ |
-| `:is(S)`, `:where(S)`, `:has(S)` | 🟡 | Selectors L4; matching ⬜ |
+| `:link` | ✅ | `matches_any_link` (a/area/link with href), style.rs:8380 |
+| `:visited` | 🟡 | parsed; always `false` by design (privacy — needs history runtime, P3) |
+| `:target` | ✅ | `matches_target` (Document::target fragment ↔ id), style.rs:8463 |
+| `:enabled`, `:disabled`, `:checked` | ✅ | attribute-based form-state matching, style.rs:8004/8130 |
+| `:is(S)`, `:where(S)`, `:has(S)` | ✅ | full matching; `:where` zero-specificity; `:has` relative, style.rs:7690 |
 | `::before`, `::after` | ✅ | block-level ✅; inline ✅ (display:inline/inline-block in IFC) |
-| `::first-line`, `::first-letter` | ⬜ | Pseudo-Elements L4 |
-| `::marker`, `::selection` | ✅ | Pseudo-Elements L4 |
-| `::placeholder` | ✅ | Pseudo-Elements L4 §4.10 (p4-placeholder-pseudo) |
-| `:nth-child(An+B of S)` | ⬜ | Selectors L5 |
+| `::first-line`, `::first-letter` | 🟡 | parsed + `compute_pseudo_element_style`; segment style-override wiring ⬜ (box_tree.rs handoffs) |
+| `::marker` | 🟡 | parsed + default style; per-rule box styling ⬜ (list-style-image ✅) |
+| `::selection` | 🟡 | parsed; live selection highlight application ⬜ (Selection API, P3) |
+| `::placeholder` | ⬜ | Pseudo-Elements L4; no `PseudoElementKind::Placeholder` variant |
+| `:nth-child(An+B of S)` | ✅ | "of S" filter via `element_index_filtered`, style.rs:7664 |
 
 ### [T0] Flexbox
 
@@ -287,7 +289,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |----------|--------|-------|
 | `transform` | ✅ | all 2D functions |
 | `transform-origin` | ✅ | pivot via T(o)·M·T(-o) |
-| `transform-style` | 🟡 | flat/preserve-3d; 3D context ⬜ |
+| `transform-style` | ✅ | preserve-3d depth-sorts children back-to-front, display_list.rs:5538 |
 | `perspective` / `perspective-origin` | 🟡 | parsed; 3D projection ⬜ |
 | `backface-visibility` | ✅ | parsed → `ComputedStyle` (p4-backface-visibility, 2026-07-04); paint culling via `is_backface_hidden()` (display_list.rs) — sign of `forward_box_transform()`'s `m[10]` (p4-backface-culling) |
 | `translate` / `rotate` / `scale` | ✅ | individual props (Transforms L2); compose before `transform` ✅ 2026-05-26 |
@@ -362,7 +364,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `position: static/relative/absolute/fixed` | ✅ | |
 | `position: sticky` | 🟡 | parsed; scroll listener + layout ⬜ |
 | `top` / `right` / `bottom` / `left` / `inset` | ✅ | |
-| `z-index` | 🟡 | stacking context detection ✅; paint ordering ⬜ |
+| `z-index` | ✅ | stacking context + stable z-sort (neg/0/pos), stacking.rs:159 (CSS Painting Order L3) |
 
 ### [T1] Floats
 
@@ -376,12 +378,12 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `list-style` / `list-style-type` | 🟡 | disc/circle/square/decimal/roman parsed; marker render ⬜ |
+| `list-style` / `list-style-type` | ✅ | disc/circle/square → geometric marker boxes; decimal/roman/alpha → text glyphs; `emit_list_marker` display_list.rs:4927 |
 | `list-style-position` | 🟡 | inside/outside; positioning ⬜ |
 | `list-style-image` | ✅ | url() parsed; image marker rendered (DrawImage replaces bullet, CSS Lists L3 §2.3) |
 | `counter-reset` / `counter-increment` | 🟡 | Vec<(name,val)>; resolution ⬜ |
 | `counter-set` | ✅ | CSS Lists L3 §4; Vec<(name,val)>; apply_set после reset/increment; тест 97 2026-06-13 |
-| `@counter-style` | ⬜ | |
+| `@counter-style` | ✅ | `parse_counter_style_rule` + `CounterStyleRegistry` effective in counter formatting, counters.rs:26 |
 
 ### [T1] @layer / Cascade Layers
 
@@ -395,9 +397,9 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Selector | Status | Notes |
 |----------|--------|-------|
-| `:is(S)` | 🟡 | parsed; full matching ⬜ |
-| `:where(S)` | 🟡 | parsed; zero-specificity ⬜ |
-| `:has(S)` | 🟡 | parsed; relational matching ⬜ |
+| `:is(S)` | ✅ | full matching, style.rs:7690 |
+| `:where(S)` | ✅ | zero-specificity matching, style.rs:7690 |
+| `:has(S)` | ✅ | relational matching (`matches_relative`), style.rs:7696 |
 
 ### [T1] Media Queries
 
@@ -462,10 +464,10 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `background-origin` / `background-clip` | 🟡 | parsed; text clip ⬜ |
 | `image-rendering` | ✅ | bilinear/nearest sampler |
 | `object-fit` / `object-position` | ✅ | |
-| `image-set()` | ⬜ | CSS Images L4 |
+| `image-set()` | ✅ | CSS Images L4; `image_set.rs` module + DPR candidate selection (2026-06-02) |
 | `conic-gradient()` | ✅ | ParsedGradient::Conic + DrawConicGradient + GPU shader 2026-05-24 |
 | gradient `in <space>` (color-interpolation-method) | 🟡 | rectangular + hsl/hwb ✅ 2026-06-14 (dense-stop polyfill via color-mix); polar oklch/lch ⬜ BUG-154 |
-| `cross-fade()` | ⬜ | CSS Images L4 |
+| `cross-fade()` | 🟡 | CSS Images L4; parsed + stored (`BackgroundImage::CrossFade`, style.rs:17571); paint compositing ⬜ |
 
 ### [T2] CSS Grid
 
@@ -494,7 +496,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `perspective` / `perspective-origin` | 🟡 | parsed; 3D projection ⬜ |
-| `transform-style: preserve-3d` | 🟡 | parsed; 3D context ⬜ |
+| `transform-style: preserve-3d` | ✅ | 3D context; children depth-sorted (display_list.rs:5538) |
 | `backface-visibility` | ✅ | parsed → `ComputedStyle` (p4-backface-visibility, 2026-07-04); paint culling via `is_backface_hidden()` (display_list.rs) — sign of `forward_box_transform()`'s `m[10]` (p4-backface-culling) |
 | `translate` / `rotate` / `scale` (individual) | ✅ | CSS Transforms L2; compose before `transform` 2026-05-26 |
 
@@ -502,8 +504,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Value | Status | Notes |
 |-------|--------|-------|
-| `env()` | ⬜ | safe-area-inset-*, titlebar-area-* |
-| `attr()` with type | 🟡 | string only; type casting ⬜ |
+| `env()` | 🟡 | parsed + fallback (`expand_env_vars`, style.rs:11402); UA registry empty → safe-area-inset-*/titlebar-area-* always fall back ⬜ |
+| `attr()` with type | ✅ | `expand_attr_val` type casting (px/em/deg/%…), style.rs:11518 |
 | `cqw` / `cqh` / `cqi` / `cqb` / `cqmin` / `cqmax` | ✅ | container query units; thread-local CONTAINER_CQ; 4 tests 2026-05-25 |
 | `svh` / `dvh` / `lvh` / `svw` / `dvw` / `lvw` | ✅ | = vh/vw (Phase 0 fixed viewport) |
 | `svmin`/`dvmin`/`lvmin`, `svmax`/`dvmax`/`lvmax` | ✅ | = vmin/vmax |
@@ -547,7 +549,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |----------|--------|-------|
 | `counter-reset` / `counter-increment` | ✅ | precompute_counters() pre-order DOM walk 2026-05-25 |
 | `counter()` / `counters()` in `content` | ✅ | resolved in content_to_inline_segments 2026-05-25 |
-| `@counter-style` | ⬜ | custom counter symbols |
+| `@counter-style` | ✅ | custom counter symbols via `CounterStyleRegistry` (counters.rs) |
 
 ### [T3] Content & Pseudo-element content
 
@@ -568,7 +570,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `line-height` | 🟡 | parsed; leading in line box ⬜ |
+| `line-height` | ✅ | ratio/absolute; leading in line-box vertical metrics, box_tree.rs:2146 |
 | `line-height-step` | ✅ | CSS Rhythmic Sizing L1 §2 (p4-line-height-step 2026-06-19): inherited `line_height_step` px field; line boxes rounded up to nearest multiple in box_tree + paint; тест 122 |
 | `initial-letter` | 🟡 | CSS Inline L3 §5 (ph3-initialletter 2026-06-29): `normal \| <number> <integer>?` parsed → non-inherited `initial_letter_size`/`initial_letter_sink`; Phase 0 layout promotes the first-letter unit to an inline-start float drop cap spanning `size × line-height`, reserving `sink` (default `floor(size)`) text lines beside it; works on the element or via `::first-letter`. Deferred: precise cap-height/baseline alignment, raised-cap above first line (sink<size clipped), `initial-letter-align`, RTL inline-start. |
 
@@ -606,8 +608,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `@container` | ✅ | condition matching ✅; 2nd-pass re-layout ✅; cq* units ✅ 2026-05-25 |
 | `@color-profile` | ⬜ | CSS Color L5 |
 | `@font-palette-values` | 🟡 | parsed (name + font-family + base-palette + override-colors); matched by name/family in compute_style; rendering deferred with COLR |
-| `@counter-style` | ⬜ | CSS Counter Styles L3 |
-| `@scope` | ⬜ | CSS Scoping |
+| `@counter-style` | ✅ | CSS Counter Styles L3; `parse_counter_style_rule` (parser.rs:2336) |
+| `@scope` | ✅ | `parse_scope_rule` (parser.rs:2346) applied in cascade loop (style.rs:6357) |
 | `@function` | ⬜ | CSS Functions & Mixins |
 
 ### [T3] Units & Values
@@ -627,11 +629,11 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `svh`/`dvh`/`lvh`/`svw`/`dvw`/`lvw` | ✅ | = vh/vw (Phase 0 fixed viewport) |
 | `svmin`/`dvmin`/`lvmin`/`svmax`/`dvmax`/`lvmax` | ✅ | = vmin/vmax |
 | `cqw`/`cqh`/`cqi`/`cqb`/`cqmin`/`cqmax` | ✅ | container query units 2026-05-25 |
-| `env()` | ⬜ | |
-| `attr()` | 🟡 | string ✅ 2026-05-25 in content; type casting ⬜ |
+| `env()` | 🟡 | parsed + fallback; UA registry (safe-area-inset-*) empty ⬜ |
+| `attr()` | ✅ | string ✅ 2026-05-25 in content; type casting ✅ (`expand_attr_val`, style.rs:11518) |
 | `color-mix()` | ✅ | CSS Color L5; parse_color_mix() 2026-06-08 |
 | `counter()`/`counters()` | ✅ | in content; resolution 2026-05-25 |
-| `linear()` | ⬜ | CSS Easing L2 |
+| `linear()` | ✅ | CSS Easing L2 §2.4; `LinearStops` + `parse_linear_easing_stops` (style.rs:1811) |
 
 ---
 
@@ -678,7 +680,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |---------|--------|-------|
 | `color-mix()` | ✅ | parse_color_mix() 2026-06-08 |
 | `color-contrast()` | ✅ | `parse_color_contrast` (style.rs); WCAG 2.1 ratio pick; `to AA/AA-large/AAA/AAA-large`/`<number>` targets 2026-07-05 |
-| Relative color syntax `oklch(from ...)` | ⬜ | |
+| Relative color syntax `oklch(from ...)` | ✅ | `parse_relative_color` + `relative_origin_channels` (srgb/hsl/lab/lch/oklab/oklch), style.rs:19917 (p4-relative-color 2026-06-13) |
 | `@color-profile` | ⬜ | |
 
 ---
