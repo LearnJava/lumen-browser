@@ -51,10 +51,14 @@
 //! ([`x509_hostname::verify_certificate_hostname`](super::x509_hostname::verify_certificate_hostname),
 //! RFC 6125 §6), that certificate must be valid at the caller's wall-clock now
 //! ([`x509_validity::verify_certificate_validity`](super::x509_validity::verify_certificate_validity),
-//! RFC 5280 §4.1.2.5), and — this slice — the whole presented `certificate_list` must
-//! form a self-consistent signature chain, each certificate signed by the next
+//! RFC 5280 §4.1.2.5), the whole presented `certificate_list` must form a
+//! self-consistent signature chain, each certificate signed by the next
 //! ([`x509_chain::verify_chain_signatures`](super::x509_chain::verify_chain_signatures),
-//! RFC 5280 §4.1.1.3, RFC 8446 §4.4.2) — all four *before* the client Finished goes on
+//! RFC 5280 §4.1.1.3, RFC 8446 §4.4.2), and — this slice — that same list must form a
+//! self-consistent *name* chain, each certificate's `issuer` distinguished name equal to
+//! the next certificate's `subject`
+//! ([`x509_name_chain::verify_name_chain`](super::x509_name_chain::verify_name_chain),
+//! RFC 5280 §4.1.2.4, §4.1.2.6, §6.1) — all five *before* the client Finished goes on
 //! the wire. The verified completion is then retained ([`ConnectDriver::completed`]).
 //!
 //! ## What it defers
@@ -63,12 +67,14 @@
 //!   (the *possession* half of authentication), matches the certificate's
 //!   `subjectAltName` against the requested host (the *identity* half), checks the
 //!   certificate's `[notBefore, notAfter]` window against the caller-supplied wall-clock
-//!   now (the *time* half, RFC 5280 §4.1.2.5), and — this slice — walks the presented
-//!   `certificate_list` confirming every certificate is signed by the next one up (the
-//!   *chain-signature* half, RFC 5280 §4.1.1.3, RFC 8446 §4.4.2). It does **not** yet
-//!   terminate that chain at a trusted root (RFC 5280 §6.1), match issuer/subject
-//!   distinguished names, or honour `basicConstraints`/`keyUsage` — those remain for a
-//!   later slice, exactly as the chain walk itself stops one link short of the anchor.
+//!   now (the *time* half, RFC 5280 §4.1.2.5), walks the presented `certificate_list`
+//!   confirming every certificate is signed by the next one up (the *chain-signature*
+//!   half, RFC 5280 §4.1.1.3, RFC 8446 §4.4.2), and — this slice — confirms every
+//!   certificate's `issuer` distinguished name matches the next certificate's `subject`
+//!   (the *name-chaining* half, RFC 5280 §4.1.2.4, §4.1.2.6, §6.1). It does **not** yet
+//!   terminate that chain at a trusted root (RFC 5280 §6.1) or honour
+//!   `basicConstraints`/`keyUsage` — those remain for a later slice, exactly as both
+//!   chain walks stop one link short of the anchor.
 //! - **Building the ClientHello.** The exact first-flight bytes and the ephemeral
 //!   X25519 private key are supplied to [`TlsConnState::new`](super::conn_tls::TlsConnState::new)
 //!   by the caller.
@@ -97,6 +103,7 @@ use super::tls_handshake::HandshakeComplete;
 use super::udp::DatagramTransport;
 use super::x509_chain::{ChainWalkError, verify_chain_signatures};
 use super::x509_hostname::{HostnameError, verify_certificate_hostname};
+use super::x509_name_chain::{NameChainWalkError, verify_name_chain};
 use super::x509_validity::{ValidityError, verify_certificate_validity};
 
 /// What one [`ConnectDriver::poll`] turn did: the transport-level outcome of the
@@ -194,6 +201,17 @@ pub enum ConnectError {
     /// flushed. Verifying the chain's internal links does not yet terminate it at a
     /// trusted root — that remains a later slice.
     Chain(ChainWalkError),
+    /// The server-presented certificate chain does not form a self-consistent *name*
+    /// chain (RFC 5280 §4.1.2.4, §4.1.2.6, §6.1, RFC 8446 §4.4.2): some certificate's
+    /// `issuer` distinguished name does not match the `subject` distinguished name of the
+    /// next certificate in the `certificate_list`, or a certificate's Names could not be
+    /// extracted ([`NameChainWalkError`](super::x509_name_chain::NameChainWalkError)). The
+    /// name complement of [`Chain`](Self::Chain): a chain must be both *signed* by each
+    /// next certificate and *named* after it. Checked after possession, identity, time,
+    /// and the chain-signature walk hold; like the four before it, it abandons the
+    /// connection before the client Finished is flushed. Confirming the name links does
+    /// not yet terminate the chain at a trusted root — that remains a later slice.
+    NameChain(NameChainWalkError),
 }
 
 impl core::fmt::Display for ConnectError {
@@ -207,6 +225,9 @@ impl core::fmt::Display for ConnectError {
             Self::Validity(e) => write!(f, "QUIC connect: certificate validity check failed: {e}"),
             Self::Chain(e) => {
                 write!(f, "QUIC connect: certificate chain verification failed: {e}")
+            }
+            Self::NameChain(e) => {
+                write!(f, "QUIC connect: certificate name-chain verification failed: {e}")
             }
         }
     }
@@ -222,6 +243,7 @@ impl std::error::Error for ConnectError {
             Self::Hostname(e) => Some(e),
             Self::Validity(e) => Some(e),
             Self::Chain(e) => Some(e),
+            Self::NameChain(e) => Some(e),
         }
     }
 }
@@ -314,13 +336,15 @@ impl<T: DatagramTransport> ConnectDriver<T> {
     /// CertificateVerify signature checked, RFC 8446 §4.4.3), that certificate verified
     /// to name the requested host (RFC 6125 §6), verified valid at the caller's
     /// wall-clock now (RFC 5280 §4.1.2.5), *and* the presented chain verified internally
-    /// self-consistent (each certificate signed by the next, RFC 5280 §4.1.1.3). `None`
-    /// while the handshake is still in progress; a completion whose certificate fails to
-    /// authenticate, does not cover [`reference_host`](ConnectDriver), is outside its
-    /// validity period, or heads a chain whose links do not verify never reaches here —
+    /// self-consistent — each certificate both signed by the next (RFC 5280 §4.1.1.3) and
+    /// named after it (each `issuer` matching the next `subject`, RFC 5280 §4.1.2.4,
+    /// §4.1.2.6, §6.1). `None` while the handshake is still in progress; a completion
+    /// whose certificate fails to authenticate, does not cover
+    /// [`reference_host`](ConnectDriver), is outside its validity period, or heads a chain
+    /// whose signature or name links do not verify never reaches here —
     /// [`poll`](ConnectDriver::poll) returns [`ConnectError::CertAuth`],
-    /// [`ConnectError::Hostname`], [`ConnectError::Validity`], or [`ConnectError::Chain`]
-    /// instead.
+    /// [`ConnectError::Hostname`], [`ConnectError::Validity`], [`ConnectError::Chain`], or
+    /// [`ConnectError::NameChain`] instead.
     ///
     /// Terminating the chain at a trusted root remains the caller's (or a later slice's)
     /// job before the certificate is trusted for an origin.
@@ -371,21 +395,26 @@ impl<T: DatagramTransport> ConnectDriver<T> {
     /// ([`verify_certificate_hostname`](super::x509_hostname::verify_certificate_hostname),
     /// RFC 6125 §6), verifies it is valid at [`now_unix`](ConnectDriver)
     /// ([`verify_certificate_validity`](super::x509_validity::verify_certificate_validity),
-    /// RFC 5280 §4.1.2.5), and verifies the presented chain is internally self-consistent
-    /// ([`verify_chain_signatures`](super::x509_chain::verify_chain_signatures),
-    /// RFC 5280 §4.1.1.3, RFC 8446 §4.4.2) before flushing the client Finished the
+    /// RFC 5280 §4.1.2.5), verifies the presented chain is internally self-consistent by
+    /// signature ([`verify_chain_signatures`](super::x509_chain::verify_chain_signatures),
+    /// RFC 5280 §4.1.1.3, RFC 8446 §4.4.2), and verifies it is self-consistent by name —
+    /// each `issuer` matching the next `subject`
+    /// ([`verify_name_chain`](super::x509_name_chain::verify_name_chain),
+    /// RFC 5280 §4.1.2.4, §4.1.2.6, §6.1) — before flushing the client Finished the
     /// advance enqueued (RFC 8446 §4.4.3, §4.4.4) and retaining the completion
     /// ([`completed`](ConnectDriver::completed)). A certificate that fails to
     /// authenticate, that does not cover the requested host, that is outside its validity
-    /// period, or that heads a chain whose links do not verify abandons the connection
-    /// before the client Finished goes out. On a timer wake it advances no TLS.
+    /// period, or that heads a chain whose signature or name links do not verify abandons
+    /// the connection before the client Finished goes out. On a timer wake it advances no
+    /// TLS.
     ///
     /// # Errors
     ///
     /// [`ConnectError`] wrapping the failing step: a control-flow error from the poll,
     /// a TLS error from the advance, a server certificate that failed to authenticate,
     /// does not name the requested host, is outside its validity period, or heads a
-    /// chain whose links do not verify, or a failed flush of the client Finished.
+    /// chain whose signature or name links do not verify, or a failed flush of the client
+    /// Finished.
     pub fn poll(&mut self, now: Instant) -> Result<ConnectStep, ConnectError> {
         let poll = self.handshake.poll(now).map_err(ConnectError::Loop)?;
         let mut messages_processed = 0;
@@ -447,6 +476,16 @@ impl<T: DatagramTransport> ConnectDriver<T> {
                     .map(|e| e.cert_data.as_slice())
                     .collect();
                 verify_chain_signatures(&chain).map_err(ConnectError::Chain)?;
+                // The signatures link the chain; now check its *names* line up
+                // (RFC 5280 §4.1.2.4, §4.1.2.6, §6.1, RFC 8446 §4.4.2): every
+                // certificate's `issuer` distinguished name must equal the `subject`
+                // distinguished name of the next certificate up. A signed-but-mis-named
+                // chain is a spliced-together set of certificates rather than an ordered
+                // issuance path — as fatal as a broken signature link, so abandon before
+                // the client Finished goes out. Like the signature walk it passes a
+                // single-certificate list vacuously and stops one link short of the trust
+                // anchor (RFC 5280 §6.1), left to a later slice.
+                verify_name_chain(&chain).map_err(ConnectError::NameChain)?;
                 // The client Finished (RFC 8446 §4.4.4) was enqueued into the
                 // Handshake CRYPTO stream; put it — and any owed Handshake ACK the
                 // poll queued — on the wire now.
@@ -826,6 +865,106 @@ mod tests {
     fn intermediate_certificate_der() -> Vec<u8> {
         let tbs = ed25519_tbs("intermediate.test", &intermediate_ed25519().verifying_key().to_bytes());
         seal_certificate(&tbs, &[0xBE, 0xEF])
+    }
+
+    /// A DER `Name` (RDNSequence) carrying a single `commonName` attribute valued `cn` —
+    /// the shape the name-chain walk ([`x509_name_chain`](super::super::x509_name_chain))
+    /// compares byte-for-byte. Two Names built from the same `cn` are byte-identical;
+    /// two from different `cn`s are not.
+    fn name_rdn(cn: &str) -> Vec<u8> {
+        let oid_cn = der_tlv(0x06, &[0x55, 0x04, 0x03]); // id-at-commonName 2.5.4.3
+        let value = der_tlv(0x13, cn.as_bytes()); // PrintableString
+        let atv = der_tlv(0x30, &[oid_cn.as_slice(), value.as_slice()].concat());
+        let rdn = der_tlv(0x31, &atv); // RelativeDistinguishedName SET OF
+        der_tlv(0x30, &rdn) // RDNSequence SEQUENCE OF
+    }
+
+    /// Like [`ed25519_tbs`] but with explicit `issuer` and `subject` distinguished-name
+    /// DER in place of the empty-SEQUENCE placeholders, so a fixture can exercise the
+    /// name-chain walk ([`x509_name_chain`](super::super::x509_name_chain)). Every other
+    /// field — the SPKI carrying `subject_pubkey`, the validity window, the
+    /// `subjectAltName` naming `host` — matches [`ed25519_tbs`], so the certificate still
+    /// authenticates, names the host, and is in date; only its issuer/subject Names change.
+    fn ed25519_tbs_named(
+        host: &str,
+        subject_pubkey: &[u8; 32],
+        issuer: &[u8],
+        subject: &[u8],
+    ) -> Vec<u8> {
+        let ed_oid = der_tlv(0x06, &[0x2B, 0x65, 0x70]);
+        let alg_id = der_tlv(0x30, &ed_oid);
+        let mut bit = vec![0x00];
+        bit.extend_from_slice(subject_pubkey);
+        let spki = der_tlv(0x30, &[alg_id.as_slice(), der_tlv(0x03, &bit).as_slice()].concat());
+
+        let version = der_tlv(0xA0, &der_tlv(0x02, &[0x02])); // [0] { v3 = 2 }
+        let serial = der_tlv(0x02, &[0x01]);
+        let sig_alg = der_tlv(0x30, &der_tlv(0x06, &[0x2B, 0x65, 0x70]));
+        let validity = validity_extension();
+        let extensions = subject_alt_name_extension(host);
+        der_tlv(
+            0x30,
+            &[
+                version.as_slice(),
+                serial.as_slice(),
+                sig_alg.as_slice(),
+                issuer,              // issuer distinguished name
+                validity.as_slice(), // validity
+                subject,             // subject distinguished name
+                spki.as_slice(),
+                extensions.as_slice(), // [3] subjectAltName
+            ]
+            .concat(),
+        )
+    }
+
+    /// A two-certificate `Certificate` message whose end-entity is really signed by the
+    /// intermediate (the *signature* link always verifies) and whose issuer/subject Names
+    /// optionally line up. The end-entity carries the server key and names
+    /// [`SERVER_HOSTNAME`] in its `subjectAltName`, so possession, identity, and time all
+    /// pass and only the *name* link is under test. With `names_match` the end-entity's
+    /// `issuer` Name equals the intermediate's `subject` Name (the name walk passes);
+    /// otherwise they differ (a [`NameMismatch`](super::super::x509_name_chain::NameChainWalkError::NameMismatch)
+    /// the walk rejects).
+    fn certificate_bytes_named_chain(names_match: bool) -> Vec<u8> {
+        use ed25519_dalek::Signer;
+        let intermediate_subject = name_rdn("Lumen Test Intermediate");
+        let end_entity_issuer = if names_match {
+            name_rdn("Lumen Test Intermediate")
+        } else {
+            name_rdn("Impostor Intermediate")
+        };
+        let end_entity_subject = name_rdn(SERVER_HOSTNAME);
+
+        // End-entity: server key in its SPKI, its issuer/subject the Names above, its
+        // tbsCertificate really signed by the intermediate so the signature link holds.
+        let ee_tbs = ed25519_tbs_named(
+            SERVER_HOSTNAME,
+            &server_ed25519().verifying_key().to_bytes(),
+            &end_entity_issuer,
+            &end_entity_subject,
+        );
+        let ee_sig = intermediate_ed25519().sign(&ee_tbs).to_bytes().to_vec();
+        let end_entity = seal_certificate(&ee_tbs, &ee_sig);
+
+        // Intermediate: its own key in its SPKI (the key the signature walk extracts to
+        // check the end-entity) and its subject the Name the end-entity names as issuer
+        // in the matching case. Last in the list, so its placeholder signature is unchecked.
+        let int_tbs = ed25519_tbs_named(
+            "intermediate.test",
+            &intermediate_ed25519().verifying_key().to_bytes(),
+            &name_rdn("Lumen Test Root"),
+            &intermediate_subject,
+        );
+        let intermediate = seal_certificate(&int_tbs, &[0xBE, 0xEF]);
+
+        enc(&Handshake::Certificate(Certificate {
+            certificate_request_context: Vec::new(),
+            certificate_list: vec![
+                CertificateEntry { cert_data: end_entity, extensions: Vec::new() },
+                CertificateEntry { cert_data: intermediate, extensions: Vec::new() },
+            ],
+        }))
     }
 
     fn certificate_bytes() -> Vec<u8> {
@@ -1249,6 +1388,61 @@ mod tests {
             ConnectError::Chain(ChainWalkError::Link { subject_index: 0, .. }),
         ));
         // The completion is never retained for a broken chain, and the client Finished —
+        // enqueued by the TLS advance — was not flushed.
+        assert!(cd.completed().is_none());
+        assert!(cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
+    }
+
+    // ---- poll: a self-consistent name chain lets the handshake complete ----
+
+    #[test]
+    fn poll_completes_when_the_certificate_name_chain_verifies() {
+        let now = base();
+        let ch = client_hello_bytes();
+        let sh = server_hello_bytes();
+        let mut t = transport();
+        // A two-cert chain whose signature link verifies AND whose issuer/subject Names
+        // line up: the end-entity authenticates, names SERVER_HOSTNAME, is in date, is
+        // signed by the intermediate, and names the intermediate as its issuer — so every
+        // check passes and the handshake completes.
+        let cert = certificate_bytes_named_chain(true);
+        t.push_inbound(server_initial(0, sh.clone()));
+        t.push_inbound(server_handshake(0, handshake_flight_with_cert(&ch, &sh, &cert), &ch, &sh));
+        let mut cd = connect_driver(t, now);
+
+        cd.poll(now).expect("poll over the ServerHello");
+        let step = cd.poll(now).expect("poll over the flight");
+        assert!(step.completed);
+        let complete = cd.completed().expect("completion retained");
+        assert_eq!(complete.server_certificate.certificate_list.len(), 2, "end-entity + issuer");
+        // The client Finished was flushed: the Handshake CRYPTO queue drained.
+        assert!(!cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
+    }
+
+    // ---- poll: a broken name link aborts the connect -------------------
+
+    #[test]
+    fn poll_rejects_a_certificate_chain_with_a_mismatched_name() {
+        let now = base();
+        let ch = client_hello_bytes();
+        let sh = server_hello_bytes();
+        let mut t = transport();
+        // The end-entity authenticates, names SERVER_HOSTNAME, is in date, and is really
+        // signed by the intermediate — but it names a *different* issuer than the
+        // intermediate's subject, so possession, identity, time, and the signature walk
+        // all pass and the failure is purely the name-chaining check.
+        let cert = certificate_bytes_named_chain(false);
+        t.push_inbound(server_initial(0, sh.clone()));
+        t.push_inbound(server_handshake(0, handshake_flight_with_cert(&ch, &sh, &cert), &ch, &sh));
+        let mut cd = connect_driver(t, now);
+
+        cd.poll(now).expect("poll over the ServerHello");
+        let err = cd.poll(now).expect_err("the name link must not match");
+        assert!(matches!(
+            err,
+            ConnectError::NameChain(NameChainWalkError::NameMismatch { subject_index: 0 }),
+        ));
+        // The completion is never retained for a mis-named chain, and the client Finished —
         // enqueued by the TLS advance — was not flushed.
         assert!(cd.completed().is_none());
         assert!(cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
