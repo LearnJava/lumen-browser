@@ -111,6 +111,9 @@ use super::conn_cert_auth::{CertAuthError, authenticate_server_certificate};
 use super::conn_handshake::{HandshakeDriver, HandshakeError, PollOutcome};
 use super::conn_tls::{TlsConnError, TlsConnState};
 use super::conn_turn::{ConnectionTurn, TurnEffect};
+use super::request_driver::RequestDriver;
+use super::request_pump::RequestPump;
+use super::request_turn::RequestTurn;
 use super::send_path::FlushError;
 use super::tls_handshake::HandshakeComplete;
 use super::udp::DatagramTransport;
@@ -192,6 +195,33 @@ pub enum ConnectOutcome {
     /// fall back to the H2 / H1.1 path.
     Incomplete,
 }
+
+/// Why splicing a connect driver into the request phase was refused.
+///
+/// The single failure is trying to carry request/response traffic before the
+/// handshake has confirmed (RFC 9000 §19.20): [`ConnectDriver::into_request_driver`]
+/// guards against dispatching a request over a connection whose 1-RTT keys and peer
+/// confirmation are not both in place, so a caller cannot skip
+/// [`connect`](ConnectDriver::connect).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RequestSpliceError {
+    /// The peer has not confirmed the handshake yet (no HANDSHAKE_DONE received,
+    /// RFC 9000 §19.20): the connection is not ready for `h3_do_request` dispatch, so
+    /// the connect driver is left intact for the caller to keep driving or abandon.
+    NotConfirmed,
+}
+
+impl core::fmt::Display for RequestSpliceError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::NotConfirmed => {
+                write!(f, "HTTP/3 request splice: the handshake has not confirmed yet")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RequestSpliceError {}
 
 /// Why a step of the connect loop failed.
 #[derive(Debug)]
@@ -523,6 +553,43 @@ impl<T: DatagramTransport> ConnectDriver<T> {
         (self.handshake.into_turn(), self.completed)
     }
 
+    /// Splices a confirmed connect driver into the request phase, wiring the request
+    /// `pump` to the connection turn the handshake left behind and handing back the
+    /// [`RequestDriver`] that carries requests to completion over it — the
+    /// `ConnectDriver → RequestDriver` seam the `h3_do_request` dispatch is built on
+    /// (RFC 9114 §3.3, §4.1).
+    ///
+    /// The handshake must have confirmed first ([`is_confirmed`](ConnectDriver::is_confirmed),
+    /// HANDSHAKE_DONE received, RFC 9000 §19.20): only then are the 1-RTT keys installed
+    /// on both halves and the peer's address validated, so the connection may carry the
+    /// request/response STREAM frames (STREAM is 1-RTT only, RFC 9000 §12.5). The
+    /// server certificate the handshake authenticated
+    /// ([`completed`](ConnectDriver::completed)) has already gated confirmation — every
+    /// possession, identity, validity, chain, trust-anchor, and EKU check ran before the
+    /// client Finished went out — so it is dropped here rather than threaded on; the
+    /// request phase needs only the live transport.
+    ///
+    /// The per-frame stream budget is derived from the connection's datagram MTU
+    /// ([`RequestTurn::with_default_frame_len`]), so a staged STREAM frame always fits
+    /// one packet payload.
+    ///
+    /// # Errors
+    ///
+    /// [`RequestSpliceError::NotConfirmed`] if the handshake has not confirmed yet; the
+    /// driver is consumed either way, so a caller that needs to keep driving an
+    /// unconfirmed handshake must check [`is_confirmed`](ConnectDriver::is_confirmed)
+    /// before calling this.
+    pub fn into_request_driver(
+        self,
+        pump: RequestPump,
+    ) -> Result<RequestDriver<T>, RequestSpliceError> {
+        if !self.is_confirmed() {
+            return Err(RequestSpliceError::NotConfirmed);
+        }
+        let (turn, _completed) = self.into_parts();
+        Ok(RequestDriver::new(RequestTurn::with_default_frame_len(turn, pump)))
+    }
+
     /// Sends the client's first-flight ClientHello as its own padded Initial datagram
     /// (RFC 9000 §14.1, RFC 9001 §4.1). Idempotent: the enqueue is a no-op once the
     /// hello has been sent, and the padded-Initial flush sends nothing when the
@@ -805,9 +872,13 @@ mod tests {
     use crate::h3::loss::PacketNumberSpace;
     use crate::h3::packet_crypt::{ProtectedHeader, encrypt_packet};
     use crate::h3::pto::LossDetection;
+    use crate::h3::h3_request::H3Profile;
     use crate::h3::quic_frame::{self, Frame};
     use crate::h3::recv_path::RecvKeyRing;
+    use crate::h3::request_exchange::ClientRequest;
+    use crate::h3::request_pump::RequestPump;
     use crate::h3::send_state::ConnectionSendState;
+    use crate::h3::stream_manager::StreamManagerConfig;
     use crate::h3::tls_handshake::HandshakeState;
     use crate::h3::tls_cert_verify::{CertVerifyRole, certificate_verify_content, signature_scheme};
     use crate::h3::tls_message::{
@@ -2599,5 +2670,93 @@ mod tests {
         let err = cd.poll(now).expect_err("out-of-order TLS message");
         assert!(matches!(err, ConnectError::Tls(TlsConnError::Handshake(_))));
         assert_eq!(cd.tls().tls().state(), HandshakeState::Failed);
+    }
+
+    // ---- into_request_driver: the ConnectDriver → RequestDriver splice --
+
+    /// The stream-manager configuration a request pump is built with — generous
+    /// windows so the splice's wiring, not flow control, is what the tests exercise.
+    fn stream_config() -> StreamManagerConfig {
+        StreamManagerConfig {
+            initial_max_stream_data_bidi_local: 1 << 20,
+            initial_max_stream_data_bidi_remote: 1 << 20,
+            initial_max_stream_data_uni: 1 << 20,
+            initial_max_data: 1 << 20,
+            initial_max_streams_bidi: 100,
+            initial_max_streams_uni: 100,
+        }
+    }
+
+    fn pump() -> RequestPump {
+        RequestPump::new(stream_config(), 1 << 20)
+    }
+
+    fn get(path: &'static [u8]) -> ClientRequest<'static> {
+        ClientRequest {
+            profile: H3Profile::Chrome,
+            method: b"GET",
+            scheme: b"https",
+            authority: b"example.com",
+            path,
+            headers: &[],
+            body: b"",
+            use_huffman: true,
+        }
+    }
+
+    /// A connect driver whose peer has confirmed the handshake: HANDSHAKE_DONE is
+    /// processed directly into the connection (standing in for the encrypted 1-RTT
+    /// packet the transport would deliver), which is all
+    /// [`ConnectDriver::is_confirmed`] reads (RFC 9000 §19.20).
+    fn confirmed_driver(now: Instant) -> ConnectDriver<MockDatagramTransport> {
+        let mut cd = connect_driver(transport(), now);
+        cd.handshake
+            .turn_mut()
+            .driver_mut()
+            .connection_mut()
+            .process_packet(PacketNumberSpace::ApplicationData, 0, &[Frame::HandshakeDone], now)
+            .expect("handshake-done processes");
+        assert!(cd.is_confirmed(), "processing HANDSHAKE_DONE confirms the handshake");
+        cd
+    }
+
+    #[test]
+    fn into_request_driver_before_confirmation_is_refused() {
+        let now = base();
+        // A fresh connect driver has sent nothing and confirmed nothing.
+        let cd = connect_driver(transport(), now);
+        assert!(!cd.is_confirmed());
+        let err = cd.into_request_driver(pump()).expect_err("an unconfirmed splice is refused");
+        assert_eq!(err, RequestSpliceError::NotConfirmed);
+    }
+
+    #[test]
+    fn into_request_driver_after_confirmation_yields_a_ready_driver() {
+        let now = base();
+        let cd = confirmed_driver(now);
+        let rd = cd.into_request_driver(pump()).expect("a confirmed handshake splices");
+        // The request phase starts clean: nothing placed, nothing collected.
+        assert_eq!(rd.in_flight(), 0);
+        assert!(rd.is_done(), "a spliced driver with no request placed is trivially done");
+        assert!(rd.responses().is_empty());
+    }
+
+    #[test]
+    fn spliced_driver_places_a_request_on_the_first_client_stream() {
+        let now = base();
+        let cd = confirmed_driver(now);
+        let mut rd = cd.into_request_driver(pump()).expect("a confirmed handshake splices");
+        let sent = rd.send_request(&get(b"/index")).expect("the request builds");
+        assert_eq!(sent.stream_id, 0, "the first client bidi stream is 0 (RFC 9000 §2.1)");
+        assert_eq!(rd.in_flight(), 1);
+        assert!(!rd.is_done());
+    }
+
+    #[test]
+    fn request_splice_error_displays() {
+        assert_eq!(
+            RequestSpliceError::NotConfirmed.to_string(),
+            "HTTP/3 request splice: the handshake has not confirmed yet",
+        );
     }
 }
