@@ -43,16 +43,18 @@
 //! enqueuing the client Finished in a Handshake-level CRYPTO frame (RFC 8446 §4.4.4)
 //! — this slice flushes that outgoing CRYPTO the moment it appears. The
 //! [`HandshakeComplete`](super::tls_handshake::HandshakeComplete) the completion
-//! carries — the server certificate and CertificateVerify — is retained
-//! ([`ConnectDriver::completed`]) for the caller to authenticate with
-//! [`tls_cert_verify`](super::tls_cert_verify) before the connection carries
-//! application data.
+//! carries is authenticated the moment it appears
+//! ([`conn_cert_auth::authenticate_server_certificate`](super::conn_cert_auth::authenticate_server_certificate)):
+//! the CertificateVerify signature must prove the peer holds the end-entity
+//! certificate's private key over this handshake *before* the client Finished goes on
+//! the wire. The verified completion is then retained ([`ConnectDriver::completed`]).
 //!
 //! ## What it defers
 //!
-//! - **Certificate authentication.** Like the two slices below it, this loop hands
-//!   the server certificate back rather than chaining it to a trust anchor; the
-//!   caller (or a later slice) authenticates it.
+//! - **Trust-anchor chaining.** The loop now verifies the CertificateVerify signature
+//!   (the *possession* half of authentication) but does not chain the end-entity
+//!   certificate to a trusted root, check intermediates, honour validity dates, or
+//!   match the hostname (SNI). Those remain for a later slice.
 //! - **Building the ClientHello.** The exact first-flight bytes and the ephemeral
 //!   X25519 private key are supplied to [`TlsConnState::new`](super::conn_tls::TlsConnState::new)
 //!   by the caller.
@@ -72,6 +74,7 @@
 
 use std::time::Instant;
 
+use super::conn_cert_auth::{CertAuthError, authenticate_server_certificate};
 use super::conn_handshake::{HandshakeDriver, HandshakeError, PollOutcome};
 use super::conn_tls::{TlsConnError, TlsConnState};
 use super::conn_turn::{ConnectionTurn, TurnEffect};
@@ -143,6 +146,12 @@ pub enum ConnectError {
     /// Flushing the client Finished (and any owed Handshake acknowledgement) failed
     /// ([`FlushError`](super::send_path::FlushError)).
     Flush(FlushError),
+    /// The server certificate did not authenticate (RFC 8446 §4.4.3): the
+    /// CertificateVerify signature did not prove the peer holds the end-entity
+    /// certificate's private key over this handshake, or the certificate could not be
+    /// decoded ([`CertAuthError`](super::conn_cert_auth::CertAuthError)). The
+    /// connection is abandoned before the client Finished is flushed.
+    CertAuth(CertAuthError),
 }
 
 impl core::fmt::Display for ConnectError {
@@ -151,6 +160,7 @@ impl core::fmt::Display for ConnectError {
             Self::Loop(e) => write!(f, "QUIC connect: {e}"),
             Self::Tls(e) => write!(f, "QUIC connect: {e}"),
             Self::Flush(e) => write!(f, "QUIC connect: flush failed: {e}"),
+            Self::CertAuth(e) => write!(f, "QUIC connect: certificate authentication failed: {e}"),
         }
     }
 }
@@ -161,6 +171,7 @@ impl std::error::Error for ConnectError {
             Self::Loop(e) => Some(e),
             Self::Tls(e) => Some(e),
             Self::Flush(e) => Some(e),
+            Self::CertAuth(e) => Some(e),
         }
     }
 }
@@ -217,16 +228,15 @@ impl<T: DatagramTransport> ConnectDriver<T> {
         &self.tls
     }
 
-    /// The authenticated-pending server certificate material, available once the TLS
-    /// handshake completes (the server Finished verified). `None` while the handshake
-    /// is still in progress.
+    /// The completed handshake material, available once the TLS handshake completes
+    /// (the server Finished verified) *and* its server certificate authenticated (the
+    /// CertificateVerify signature checked, RFC 8446 §4.4.3). `None` while the
+    /// handshake is still in progress; a completion whose certificate fails to
+    /// authenticate never reaches here — [`poll`](ConnectDriver::poll) returns
+    /// [`ConnectError::CertAuth`] instead.
     ///
-    /// The caller authenticates
-    /// [`server_certificate`](super::tls_handshake::HandshakeComplete::server_certificate)
-    /// and
-    /// [`server_certificate_verify`](super::tls_handshake::HandshakeComplete::server_certificate_verify)
-    /// with [`tls_cert_verify`](super::tls_cert_verify) before the connection carries
-    /// application data.
+    /// Trust-anchor chaining and hostname matching remain the caller's (or a later
+    /// slice's) job before the certificate is trusted for an origin.
     #[must_use]
     pub fn completed(&self) -> Option<&HandshakeComplete> {
         self.completed.as_deref()
@@ -268,14 +278,18 @@ impl<T: DatagramTransport> ConnectDriver<T> {
     /// On a datagram wake the poll ingests and acknowledges the packet; this then
     /// drives the TLS state machine over the newly reassembled CRYPTO, installing the
     /// Handshake keys (on the ServerHello) or completing the handshake (on the server
-    /// Finished). When the handshake completes it retains the server certificate
-    /// ([`completed`](ConnectDriver::completed)) and flushes the client Finished the
-    /// advance enqueued (RFC 8446 §4.4.4). On a timer wake it advances no TLS.
+    /// Finished). When the handshake completes it authenticates the server certificate
+    /// ([`authenticate_server_certificate`](super::conn_cert_auth::authenticate_server_certificate))
+    /// before flushing the client Finished the advance enqueued (RFC 8446 §4.4.3,
+    /// §4.4.4) and retaining the completion ([`completed`](ConnectDriver::completed)).
+    /// A certificate that fails to authenticate abandons the connection before the
+    /// client Finished goes out. On a timer wake it advances no TLS.
     ///
     /// # Errors
     ///
-    /// [`ConnectError`] wrapping the failing step: a control-flow error from the
-    /// poll, a TLS error from the advance, or a failed flush of the client Finished.
+    /// [`ConnectError`] wrapping the failing step: a control-flow error from the poll,
+    /// a TLS error from the advance, a server certificate that failed to authenticate,
+    /// or a failed flush of the client Finished.
     pub fn poll(&mut self, now: Instant) -> Result<ConnectStep, ConnectError> {
         let poll = self.handshake.poll(now).map_err(ConnectError::Loop)?;
         let mut messages_processed = 0;
@@ -291,6 +305,13 @@ impl<T: DatagramTransport> ConnectDriver<T> {
             messages_processed = adv.messages_processed;
             handshake_keys_installed = adv.handshake_keys_installed;
             if let Some(complete) = adv.completed.take() {
+                // Authenticate the server certificate before completing (RFC 8446
+                // §4.4.3): the CertificateVerify must prove the peer holds the
+                // end-entity certificate's private key over the ClientHello…Certificate
+                // transcript. A failure abandons the connection *before* the client
+                // Finished is flushed, so we never signal a successful handshake to an
+                // unauthenticated peer.
+                authenticate_server_certificate(&complete).map_err(ConnectError::CertAuth)?;
                 // The client Finished (RFC 8446 §4.4.4) was enqueued into the
                 // Handshake CRYPTO stream; put it — and any owed Handshake ACK the
                 // poll queued — on the wire now.
@@ -370,6 +391,7 @@ mod tests {
     use crate::h3::recv_path::RecvKeyRing;
     use crate::h3::send_state::ConnectionSendState;
     use crate::h3::tls_handshake::HandshakeState;
+    use crate::h3::tls_cert_verify::{CertVerifyRole, certificate_verify_content, signature_scheme};
     use crate::h3::tls_message::{
         self, Certificate, CertificateEntry, ClientHello, Extension, Handshake, KeyShareEntry,
         ServerHello,
@@ -493,20 +515,91 @@ mod tests {
         enc(&Handshake::EncryptedExtensions(Vec::new()))
     }
 
+    /// A fixed Ed25519 server signing key: its public value goes into the end-entity
+    /// certificate, and it signs the CertificateVerify the connect loop authenticates.
+    const SERVER_ED25519_SEED: [u8; 32] = [0x42; 32];
+
+    /// The server's Ed25519 signing key.
+    fn server_ed25519() -> ed25519_dalek::SigningKey {
+        ed25519_dalek::SigningKey::from_bytes(&SERVER_ED25519_SEED)
+    }
+
+    /// Encode a DER definite length (short form under 128, long form otherwise).
+    fn der_len(len: usize, out: &mut Vec<u8>) {
+        if len < 0x80 {
+            out.push(len as u8);
+            return;
+        }
+        let mut octets = len.to_be_bytes().to_vec();
+        while octets.first() == Some(&0) {
+            octets.remove(0);
+        }
+        out.push(0x80 | octets.len() as u8);
+        out.extend_from_slice(&octets);
+    }
+
+    /// Build a `tag ‖ length ‖ contents` DER TLV.
+    fn der_tlv(tag: u8, contents: &[u8]) -> Vec<u8> {
+        let mut out = vec![tag];
+        der_len(contents.len(), &mut out);
+        out.extend_from_slice(contents);
+        out
+    }
+
+    /// A minimal, structurally valid v3 end-entity certificate carrying the server's
+    /// Ed25519 public key in its `SubjectPublicKeyInfo` (RFC 5280 §4.1, RFC 8410);
+    /// every field before the SPKI is a placeholder the extractor skips.
+    fn server_certificate_der() -> Vec<u8> {
+        // id-Ed25519 OID 1.3.101.112 (RFC 8410 §3).
+        let ed_oid = der_tlv(0x06, &[0x2B, 0x65, 0x70]);
+        let alg_id = der_tlv(0x30, &ed_oid);
+        let mut bit = vec![0x00];
+        bit.extend_from_slice(&server_ed25519().verifying_key().to_bytes());
+        let spki = der_tlv(0x30, &[alg_id.as_slice(), der_tlv(0x03, &bit).as_slice()].concat());
+
+        let version = der_tlv(0xA0, &der_tlv(0x02, &[0x02])); // [0] { v3 = 2 }
+        let serial = der_tlv(0x02, &[0x01]);
+        let sig_alg = der_tlv(0x30, &der_tlv(0x06, &[0x2B, 0x65, 0x70]));
+        let empty = der_tlv(0x30, &[]);
+        let tbs = der_tlv(
+            0x30,
+            &[
+                version.as_slice(),
+                serial.as_slice(),
+                sig_alg.as_slice(),
+                empty.as_slice(), // issuer
+                empty.as_slice(), // validity
+                empty.as_slice(), // subject
+                spki.as_slice(),
+            ]
+            .concat(),
+        );
+        let outer_sig_alg = der_tlv(0x30, &der_tlv(0x06, &[0x2B, 0x65, 0x70]));
+        let signature = der_tlv(0x03, &[0x00, 0xDE, 0xAD]);
+        der_tlv(0x30, &[tbs.as_slice(), outer_sig_alg.as_slice(), signature.as_slice()].concat())
+    }
+
     fn certificate_bytes() -> Vec<u8> {
         enc(&Handshake::Certificate(Certificate {
             certificate_request_context: Vec::new(),
             certificate_list: vec![CertificateEntry {
-                cert_data: vec![0x30, 0x03, 0x01, 0x02, 0x03],
+                cert_data: server_certificate_der(),
                 extensions: Vec::new(),
             }],
         }))
     }
 
-    fn certificate_verify_bytes() -> Vec<u8> {
+    /// The server CertificateVerify, signing the `Transcript-Hash(ClientHello…
+    /// Certificate)` of `transcript_ch_cert` with the server's Ed25519 key exactly as
+    /// a real server does (RFC 8446 §4.4.3), so the connect loop authenticates it.
+    fn certificate_verify_bytes(transcript_ch_cert: &[u8]) -> Vec<u8> {
+        use ed25519_dalek::Signer;
+        let th = tls_schedule::transcript_hash(transcript_ch_cert);
+        let content = certificate_verify_content(CertVerifyRole::Server, &th);
+        let signature = server_ed25519().sign(&content).to_bytes().to_vec();
         enc(&Handshake::CertificateVerify(tls_message::CertificateVerify {
-            algorithm: 0x0804,
-            signature: vec![0xDE, 0xAD, 0xBE, 0xEF],
+            algorithm: signature_scheme::ED25519,
+            signature,
         }))
     }
 
@@ -533,17 +626,47 @@ mod tests {
     }
 
     /// The full Handshake-level server flight (EE, Certificate, CertificateVerify,
-    /// Finished) as one concatenated CRYPTO payload.
+    /// Finished) as one concatenated CRYPTO payload. The CertificateVerify signs the
+    /// `ClientHello…Certificate` transcript and the Finished MACs the
+    /// `ClientHello…CertificateVerify` transcript, exactly as a real server does, so
+    /// the flight both authenticates (RFC 8446 §4.4.3) and completes (§4.4.4).
     fn handshake_flight(ch: &[u8], sh: &[u8]) -> Vec<u8> {
         let ee = encrypted_extensions_bytes();
         let cert = certificate_bytes();
-        let cv = certificate_verify_bytes();
-        let hs_traffic = handshake_traffic(ch, sh);
-        let mut transcript_ch_cv = ch.to_vec();
-        for m in [sh, &ee, &cert, &cv] {
-            transcript_ch_cv.extend_from_slice(m);
+        // The CertificateVerify signs Transcript-Hash(ClientHello…Certificate).
+        let mut transcript = ch.to_vec();
+        for m in [sh, &ee, &cert] {
+            transcript.extend_from_slice(m);
         }
-        let sf = server_finished_bytes(&hs_traffic.server, &transcript_ch_cv);
+        let cv = certificate_verify_bytes(&transcript);
+        // The server Finished MACs Transcript-Hash(ClientHello…CertificateVerify).
+        transcript.extend_from_slice(&cv);
+        let hs_traffic = handshake_traffic(ch, sh);
+        let sf = server_finished_bytes(&hs_traffic.server, &transcript);
+        let mut flight = Vec::new();
+        for m in [&ee, &cert, &cv, &sf] {
+            flight.extend_from_slice(m);
+        }
+        flight
+    }
+
+    /// A server flight whose TLS handshake completes (the Finished MAC verifies) but
+    /// whose CertificateVerify does *not* authenticate: it is a well-formed Ed25519
+    /// signature over the wrong transcript, so the peer has not proven possession of
+    /// the certificate's key over this handshake (RFC 8446 §4.4.3). The server
+    /// Finished is MAC'd over the transcript that includes this bad CertificateVerify,
+    /// so TLS completes and the failure surfaces only at certificate authentication.
+    fn unauthenticated_flight(ch: &[u8], sh: &[u8]) -> Vec<u8> {
+        let ee = encrypted_extensions_bytes();
+        let cert = certificate_bytes();
+        // Signed over unrelated bytes, not ClientHello…Certificate.
+        let cv = certificate_verify_bytes(b"a transcript this handshake never had");
+        let mut transcript = ch.to_vec();
+        for m in [sh, &ee, &cert, &cv] {
+            transcript.extend_from_slice(m);
+        }
+        let hs_traffic = handshake_traffic(ch, sh);
+        let sf = server_finished_bytes(&hs_traffic.server, &transcript);
         let mut flight = Vec::new();
         for m in [&ee, &cert, &cv, &sf] {
             flight.extend_from_slice(m);
@@ -675,6 +798,35 @@ mod tests {
         // Handshake CRYPTO queue drained).
         assert!(cd.handshake().turn().send().is_installed(PacketNumberSpace::ApplicationData));
         assert!(!cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
+    }
+
+    // ---- poll: an unauthenticated certificate aborts the connect -------
+
+    #[test]
+    fn poll_rejects_a_certificate_that_does_not_authenticate() {
+        use crate::h3::conn_cert_auth::CertAuthError;
+        use crate::h3::tls_cert_verify::CertVerifyError;
+
+        let now = base();
+        let ch = client_hello_bytes();
+        let sh = server_hello_bytes();
+        let mut t = transport();
+        // The TLS handshake completes, but the CertificateVerify signature is over the
+        // wrong transcript: the peer has not proven possession of the certificate.
+        t.push_inbound(server_initial(0, sh.clone()));
+        t.push_inbound(server_handshake(0, unauthenticated_flight(&ch, &sh), &ch, &sh));
+        let mut cd = connect_driver(t, now);
+
+        cd.poll(now).expect("poll over the ServerHello");
+        let err = cd.poll(now).expect_err("the certificate must not authenticate");
+        assert!(matches!(
+            err,
+            ConnectError::CertAuth(CertAuthError::Verify(CertVerifyError::BadSignature)),
+        ));
+        // The completion is never retained for an unauthenticated peer, and the client
+        // Finished — enqueued by the TLS advance — was not flushed.
+        assert!(cd.completed().is_none());
+        assert!(cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
     }
 
     // ---- connect: drive to confirmation --------------------------------
