@@ -770,6 +770,7 @@ pub mod qpack_stream;
 pub mod quic_frame;
 pub mod recovery;
 pub mod recv_path;
+pub mod request_exchange;
 pub mod retry;
 pub mod send;
 pub mod send_engine;
