@@ -788,6 +788,7 @@ pub mod varint;
 pub mod version_nego;
 pub mod x509_basic_constraints;
 pub mod x509_chain;
+pub mod x509_ext_key_usage;
 pub mod x509_hostname;
 pub mod x509_key_usage;
 pub mod x509_name_chain;
