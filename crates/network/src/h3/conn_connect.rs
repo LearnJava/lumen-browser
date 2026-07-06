@@ -46,19 +46,24 @@
 //! carries is authenticated the moment it appears
 //! ([`conn_cert_auth::authenticate_server_certificate`](super::conn_cert_auth::authenticate_server_certificate)):
 //! the CertificateVerify signature must prove the peer holds the end-entity
-//! certificate's private key over this handshake, and — this slice — that same
-//! certificate's `subjectAltName` must name the requested host
+//! certificate's private key over this handshake, that same certificate's
+//! `subjectAltName` must name the requested host
 //! ([`x509_hostname::verify_certificate_hostname`](super::x509_hostname::verify_certificate_hostname),
-//! RFC 6125 §6) — both *before* the client Finished goes on the wire. The verified
-//! completion is then retained ([`ConnectDriver::completed`]).
+//! RFC 6125 §6), and — this slice — that certificate must be valid at the caller's
+//! wall-clock now
+//! ([`x509_validity::verify_certificate_validity`](super::x509_validity::verify_certificate_validity),
+//! RFC 5280 §4.1.2.5) — all three *before* the client Finished goes on the wire. The
+//! verified completion is then retained ([`ConnectDriver::completed`]).
 //!
 //! ## What it defers
 //!
 //! - **Trust-anchor chaining.** The loop now verifies the CertificateVerify signature
-//!   (the *possession* half of authentication) and matches the certificate's
-//!   `subjectAltName` against the requested host (the *identity* half), but does not
-//!   chain the end-entity certificate to a trusted root, check intermediates, or honour
-//!   validity dates. Those remain for a later slice.
+//!   (the *possession* half of authentication), matches the certificate's
+//!   `subjectAltName` against the requested host (the *identity* half), and checks the
+//!   certificate's `[notBefore, notAfter]` window against the caller-supplied wall-clock
+//!   now (the *time* half, RFC 5280 §4.1.2.5), but does not chain the end-entity
+//!   certificate to a trusted root or check intermediates. Those remain for a later
+//!   slice.
 //! - **Building the ClientHello.** The exact first-flight bytes and the ephemeral
 //!   X25519 private key are supplied to [`TlsConnState::new`](super::conn_tls::TlsConnState::new)
 //!   by the caller.
@@ -86,6 +91,7 @@ use super::send_path::FlushError;
 use super::tls_handshake::HandshakeComplete;
 use super::udp::DatagramTransport;
 use super::x509_hostname::{HostnameError, verify_certificate_hostname};
+use super::x509_validity::{ValidityError, verify_certificate_validity};
 
 /// What one [`ConnectDriver::poll`] turn did: the transport-level outcome of the
 /// [`HandshakeDriver::poll`](super::conn_handshake::HandshakeDriver::poll) plus a
@@ -164,6 +170,14 @@ pub enum ConnectError {
     /// Checked only after possession is proven; like [`CertAuth`](Self::CertAuth) it
     /// abandons the connection before the client Finished is flushed.
     Hostname(HostnameError),
+    /// The authenticated certificate is not valid at the current time (RFC 5280
+    /// §4.1.2.5): *now* falls outside its `[notBefore, notAfter]` window, or the
+    /// `validity` field could not be decoded
+    /// ([`ValidityError`](super::x509_validity::ValidityError)). Checked after
+    /// possession and identity against the wall-clock [`now_unix`](ConnectDriver) the
+    /// caller supplied; like the two before it, it abandons the connection before the
+    /// client Finished is flushed.
+    Validity(ValidityError),
 }
 
 impl core::fmt::Display for ConnectError {
@@ -174,6 +188,7 @@ impl core::fmt::Display for ConnectError {
             Self::Flush(e) => write!(f, "QUIC connect: flush failed: {e}"),
             Self::CertAuth(e) => write!(f, "QUIC connect: certificate authentication failed: {e}"),
             Self::Hostname(e) => write!(f, "QUIC connect: certificate hostname check failed: {e}"),
+            Self::Validity(e) => write!(f, "QUIC connect: certificate validity check failed: {e}"),
         }
     }
 }
@@ -186,6 +201,7 @@ impl std::error::Error for ConnectError {
             Self::Flush(e) => Some(e),
             Self::CertAuth(e) => Some(e),
             Self::Hostname(e) => Some(e),
+            Self::Validity(e) => Some(e),
         }
     }
 }
@@ -221,6 +237,14 @@ pub struct ConnectDriver<T: DatagramTransport> {
     /// matches it against the certificate's `subjectAltName` before the connection may
     /// carry application data.
     reference_host: String,
+    /// The wall-clock instant the certificate's validity period is judged against —
+    /// seconds since the Unix epoch (1970-01-01T00:00:00Z). The loop reads only the
+    /// monotonic [`Instant`] clock for its timers (which says nothing about the calendar
+    /// date), so the caller supplies the wall-clock *now* here; once the handshake
+    /// completes, [`poll`](ConnectDriver::poll) checks the end-entity certificate's
+    /// `[notBefore, notAfter]` window against it (RFC 5280 §4.1.2.5) before the
+    /// connection may carry application data.
+    now_unix: i64,
 }
 
 impl<T: DatagramTransport> ConnectDriver<T> {
@@ -231,14 +255,23 @@ impl<T: DatagramTransport> ConnectDriver<T> {
     ///
     /// `reference_host` is the authority the request targets (the SNI the ClientHello
     /// carries): the server's end-entity certificate must name it (RFC 6125 §6) for the
-    /// handshake to complete.
+    /// handshake to complete. `now_unix` is the wall-clock instant the certificate's
+    /// validity period is judged against (seconds since the Unix epoch): the end-entity
+    /// certificate must be valid at it (RFC 5280 §4.1.2.5) for the handshake to complete.
     #[must_use]
     pub fn new(
         handshake: HandshakeDriver<T>,
         tls: TlsConnState,
         reference_host: impl Into<String>,
+        now_unix: i64,
     ) -> Self {
-        Self { handshake, tls, completed: None, reference_host: reference_host.into() }
+        Self {
+            handshake,
+            tls,
+            completed: None,
+            reference_host: reference_host.into(),
+            now_unix,
+        }
     }
 
     /// The control-flow loop, borrowed immutably (e.g. to read whether the handshake
@@ -258,12 +291,13 @@ impl<T: DatagramTransport> ConnectDriver<T> {
 
     /// The completed handshake material, available once the TLS handshake completes
     /// (the server Finished verified), its server certificate authenticated (the
-    /// CertificateVerify signature checked, RFC 8446 §4.4.3), *and* that certificate
-    /// verified to name the requested host (RFC 6125 §6). `None` while the handshake is
-    /// still in progress; a completion whose certificate fails to authenticate or does
-    /// not cover [`reference_host`](ConnectDriver) never reaches here —
-    /// [`poll`](ConnectDriver::poll) returns [`ConnectError::CertAuth`] or
-    /// [`ConnectError::Hostname`] instead.
+    /// CertificateVerify signature checked, RFC 8446 §4.4.3), that certificate verified
+    /// to name the requested host (RFC 6125 §6), *and* verified valid at the caller's
+    /// wall-clock now (RFC 5280 §4.1.2.5). `None` while the handshake is still in
+    /// progress; a completion whose certificate fails to authenticate, does not cover
+    /// [`reference_host`](ConnectDriver), or is outside its validity period never reaches
+    /// here — [`poll`](ConnectDriver::poll) returns [`ConnectError::CertAuth`],
+    /// [`ConnectError::Hostname`], or [`ConnectError::Validity`] instead.
     ///
     /// Trust-anchor chaining remains the caller's (or a later slice's) job before the
     /// certificate is trusted for an origin.
@@ -310,19 +344,23 @@ impl<T: DatagramTransport> ConnectDriver<T> {
     /// Handshake keys (on the ServerHello) or completing the handshake (on the server
     /// Finished). When the handshake completes it authenticates the server certificate
     /// ([`authenticate_server_certificate`](super::conn_cert_auth::authenticate_server_certificate))
-    /// and verifies it names [`reference_host`](ConnectDriver)
+    /// verifies it names [`reference_host`](ConnectDriver)
     /// ([`verify_certificate_hostname`](super::x509_hostname::verify_certificate_hostname),
-    /// RFC 6125 §6) before flushing the client Finished the advance enqueued (RFC 8446
-    /// §4.4.3, §4.4.4) and retaining the completion
+    /// RFC 6125 §6), and verifies it is valid at [`now_unix`](ConnectDriver)
+    /// ([`verify_certificate_validity`](super::x509_validity::verify_certificate_validity),
+    /// RFC 5280 §4.1.2.5) before flushing the client Finished the advance enqueued
+    /// (RFC 8446 §4.4.3, §4.4.4) and retaining the completion
     /// ([`completed`](ConnectDriver::completed)). A certificate that fails to
-    /// authenticate, or that does not cover the requested host, abandons the connection
-    /// before the client Finished goes out. On a timer wake it advances no TLS.
+    /// authenticate, that does not cover the requested host, or that is outside its
+    /// validity period abandons the connection before the client Finished goes out. On a
+    /// timer wake it advances no TLS.
     ///
     /// # Errors
     ///
     /// [`ConnectError`] wrapping the failing step: a control-flow error from the poll,
-    /// a TLS error from the advance, a server certificate that failed to authenticate
-    /// or does not name the requested host, or a failed flush of the client Finished.
+    /// a TLS error from the advance, a server certificate that failed to authenticate,
+    /// does not name the requested host, or is outside its validity period, or a failed
+    /// flush of the client Finished.
     pub fn poll(&mut self, now: Instant) -> Result<ConnectStep, ConnectError> {
         let poll = self.handshake.poll(now).map_err(ConnectError::Loop)?;
         let mut messages_processed = 0;
@@ -359,6 +397,15 @@ impl<T: DatagramTransport> ConnectDriver<T> {
                     .ok_or(ConnectError::CertAuth(CertAuthError::NoCertificate))?;
                 verify_certificate_hostname(&entry.cert_data, &self.reference_host)
                     .map_err(ConnectError::Hostname)?;
+                // Possession and identity hold; now check *time* (RFC 5280 §4.1.2.5):
+                // the same end-entity certificate must be valid at the wall-clock now the
+                // caller supplied — a certificate not yet valid or already expired is as
+                // fatal as a bad signature or a mis-named host, so abandon before the
+                // client Finished goes out. The loop's own clock is monotonic and says
+                // nothing about the calendar date, so the validity window is judged
+                // against `now_unix`, not the `Instant` timers run on.
+                verify_certificate_validity(&entry.cert_data, self.now_unix)
+                    .map_err(ConnectError::Validity)?;
                 // The client Finished (RFC 8446 §4.4.4) was enqueued into the
                 // Handshake CRYPTO stream; put it — and any owed Handshake ACK the
                 // poll queued — on the wire now.
@@ -507,24 +554,36 @@ mod tests {
         )
     }
 
-    /// A connect driver over the scripted transport `t` targeting `host`, with the
-    /// Initial space installed on both halves and the TLS bridge seeded with the
-    /// ClientHello.
-    fn connect_driver_for(
+    /// A connect driver over the scripted transport `t` targeting `host` and judging
+    /// the certificate's validity period against `now_unix`, with the Initial space
+    /// installed on both halves and the TLS bridge seeded with the ClientHello.
+    fn connect_driver_for_at(
         t: MockDatagramTransport,
         now: Instant,
         host: &str,
+        now_unix: i64,
     ) -> ConnectDriver<MockDatagramTransport> {
         let mut send = ConnectionSendState::new(1, dcid(), scid(), 1200);
         send.install(PacketNumberSpace::Initial, initial_keys().client);
         let turn = ConnectionTurn::new(driver(t, now), send, 1200, DEFAULT_ACK_DELAY_EXPONENT);
         let handshake = HandshakeDriver::new(turn);
         let tls = TlsConnState::new(CLIENT_PRIV, client_hello_bytes());
-        ConnectDriver::new(handshake, tls, host)
+        ConnectDriver::new(handshake, tls, host, now_unix)
     }
 
-    /// A connect driver targeting [`SERVER_HOSTNAME`] — the host the fixture
-    /// certificate names, so the hostname check passes.
+    /// A connect driver over `t` targeting `host` at [`SERVER_NOW`] — inside the fixture
+    /// certificate's validity window, so only the hostname differs from the passing case.
+    fn connect_driver_for(
+        t: MockDatagramTransport,
+        now: Instant,
+        host: &str,
+    ) -> ConnectDriver<MockDatagramTransport> {
+        connect_driver_for_at(t, now, host, SERVER_NOW)
+    }
+
+    /// A connect driver targeting [`SERVER_HOSTNAME`] at [`SERVER_NOW`] — the host the
+    /// fixture certificate names and a *now* inside its validity window, so both the
+    /// hostname and validity checks pass.
     fn connect_driver(
         t: MockDatagramTransport,
         now: Instant,
@@ -608,6 +667,22 @@ mod tests {
     /// connect loop matches one against the other (RFC 6125 §6).
     const SERVER_HOSTNAME: &str = "example.test";
 
+    /// A wall-clock *now* (seconds since the Unix epoch) inside the fixture
+    /// certificate's `[2020-01-01, 2030-01-01)` validity window: 2025-01-01T00:00:00Z.
+    /// The connect loop judges the certificate's validity period against it
+    /// (RFC 5280 §4.1.2.5), so with the fixture window it passes.
+    const SERVER_NOW: i64 = 1_735_689_600;
+
+    /// The `validity` SEQUENCE the fixture certificate carries: `notBefore`
+    /// 2020-01-01T00:00:00Z, `notAfter` 2030-01-01T00:00:00Z, both `UTCTime`
+    /// (RFC 5280 §4.1.2.5.1), the exact shape [`x509_validity`](super::super::x509_validity)
+    /// walks. [`SERVER_NOW`] sits inside it.
+    fn validity_extension() -> Vec<u8> {
+        let not_before = der_tlv(0x17, b"200101000000Z"); // UTCTime notBefore
+        let not_after = der_tlv(0x17, b"300101000000Z"); // UTCTime notAfter
+        der_tlv(0x30, &[not_before.as_slice(), not_after.as_slice()].concat())
+    }
+
     /// Build the `extensions [3]` field of a `TBSCertificate` carrying a single
     /// `subjectAltName` (OID 2.5.29.17) with one `dNSName` (`[2]`) entry naming `host`,
     /// exactly the shape [`x509_hostname`](super::super::x509_hostname) walks.
@@ -637,6 +712,7 @@ mod tests {
         let serial = der_tlv(0x02, &[0x01]);
         let sig_alg = der_tlv(0x30, &der_tlv(0x06, &[0x2B, 0x65, 0x70]));
         let empty = der_tlv(0x30, &[]);
+        let validity = validity_extension();
         let extensions = subject_alt_name_extension(host);
         let tbs = der_tlv(
             0x30,
@@ -644,9 +720,9 @@ mod tests {
                 version.as_slice(),
                 serial.as_slice(),
                 sig_alg.as_slice(),
-                empty.as_slice(), // issuer
-                empty.as_slice(), // validity
-                empty.as_slice(), // subject
+                empty.as_slice(),    // issuer
+                validity.as_slice(), // validity
+                empty.as_slice(),    // subject
                 spki.as_slice(),
                 extensions.as_slice(), // [3] subjectAltName
             ]
@@ -957,6 +1033,53 @@ mod tests {
         assert!(cd.completed().is_some());
         // The client Finished was flushed: the Handshake CRYPTO queue drained.
         assert!(!cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
+    }
+
+    // ---- poll: an expired certificate aborts the connect ---------------
+
+    #[test]
+    fn poll_rejects_an_expired_certificate() {
+        let now = base();
+        let ch = client_hello_bytes();
+        let sh = server_hello_bytes();
+        let mut t = transport();
+        // The fixture certificate authenticates and names SERVER_HOSTNAME cleanly; only
+        // the wall-clock now is past its notAfter (2030-01-01), so possession and
+        // identity pass and the failure is purely the validity (time) check.
+        t.push_inbound(server_initial(0, sh.clone()));
+        t.push_inbound(server_handshake(0, handshake_flight(&ch, &sh), &ch, &sh));
+        // 2035-01-01T00:00:00Z, past the fixture certificate's notAfter.
+        let after_expiry = 2_051_222_400;
+        let mut cd = connect_driver_for_at(t, now, SERVER_HOSTNAME, after_expiry);
+
+        cd.poll(now).expect("poll over the ServerHello");
+        let err = cd.poll(now).expect_err("the certificate must be expired");
+        assert!(matches!(err, ConnectError::Validity(ValidityError::Expired { .. })));
+        // The completion is never retained for an expired certificate, and the client
+        // Finished — enqueued by the TLS advance — was not flushed.
+        assert!(cd.completed().is_none());
+        assert!(cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
+    }
+
+    // ---- poll: a not-yet-valid certificate aborts the connect ----------
+
+    #[test]
+    fn poll_rejects_a_not_yet_valid_certificate() {
+        let now = base();
+        let ch = client_hello_bytes();
+        let sh = server_hello_bytes();
+        let mut t = transport();
+        t.push_inbound(server_initial(0, sh.clone()));
+        t.push_inbound(server_handshake(0, handshake_flight(&ch, &sh), &ch, &sh));
+        // 2015-01-01T00:00:00Z, before the fixture certificate's notBefore (2020-01-01).
+        let before_validity = 1_420_070_400;
+        let mut cd = connect_driver_for_at(t, now, SERVER_HOSTNAME, before_validity);
+
+        cd.poll(now).expect("poll over the ServerHello");
+        let err = cd.poll(now).expect_err("the certificate must not yet be valid");
+        assert!(matches!(err, ConnectError::Validity(ValidityError::NotYetValid { .. })));
+        assert!(cd.completed().is_none());
+        assert!(cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
     }
 
     // ---- connect: drive to confirmation --------------------------------
