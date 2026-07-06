@@ -753,6 +753,7 @@ pub mod key_agreement;
 pub mod key_schedule;
 pub mod lifecycle;
 pub mod loss;
+pub mod mozilla_roots;
 pub mod packet;
 pub mod packet_crypt;
 pub mod packet_number;
