@@ -732,6 +732,7 @@
 
 pub mod ack;
 pub mod alt_svc;
+pub mod conn_connect;
 pub mod conn_flow;
 pub mod conn_handshake;
 pub mod conn_id;
