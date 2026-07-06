@@ -184,6 +184,14 @@ pub struct HandshakeComplete {
     /// The server's CertificateVerify (RFC 8446 §4.4.3), the signature the caller
     /// checks with [`super::tls_cert_verify`] over the handshake transcript.
     pub server_certificate_verify: CertificateVerify,
+    /// `Transcript-Hash(ClientHello…Certificate)` — the SHA-256 hash of every
+    /// handshake message up to and including the server Certificate, captured the
+    /// moment that Certificate entered the transcript (RFC 8446 §4.4.3). This is the
+    /// exact input the server signed into [`server_certificate_verify`], so it is the
+    /// `transcript_hash` a caller passes to
+    /// [`verify_certificate_verify`](super::tls_cert_verify::verify_certificate_verify)
+    /// to authenticate the certificate.
+    pub certificate_transcript_hash: [u8; HASH_LEN],
 }
 
 impl core::fmt::Debug for HandshakeComplete {
@@ -199,6 +207,10 @@ impl core::fmt::Debug for HandshakeComplete {
             .field("resumption_master_secret", &format_args!("<{HASH_LEN} bytes redacted>"))
             .field("server_certificate", &self.server_certificate)
             .field("server_certificate_verify", &self.server_certificate_verify)
+            .field(
+                "certificate_transcript_hash",
+                &format_args!("<{HASH_LEN} bytes>"),
+            )
             .finish()
     }
 }
@@ -246,6 +258,11 @@ pub struct ClientHandshake {
     /// The server's CertificateVerify, held from its arrival until the handshake
     /// completes and it is handed to the caller.
     pending_certificate_verify: Option<CertificateVerify>,
+    /// `Transcript-Hash(ClientHello…Certificate)`, snapshotted when the server
+    /// Certificate enters the transcript (RFC 8446 §4.4.3): the input the server
+    /// signed into its CertificateVerify, held until completion so the caller can
+    /// authenticate the certificate. `None` until the Certificate arrives.
+    certificate_transcript_hash: Option<[u8; HASH_LEN]>,
 }
 
 impl core::fmt::Debug for ClientHandshake {
@@ -279,6 +296,7 @@ impl ClientHandshake {
             hs_traffic: None,
             server_certificate: None,
             pending_certificate_verify: None,
+            certificate_transcript_hash: None,
         }
     }
 
@@ -464,6 +482,10 @@ impl ClientHandshake {
     /// Record the server Certificate and advance to CertificateVerify.
     fn accept_certificate(&mut self, cert: Certificate, raw: &[u8]) {
         self.transcript.extend_from_slice(raw);
+        // Snapshot the transcript hash now, over ClientHello…Certificate: this is the
+        // exact input the server's CertificateVerify signs (RFC 8446 §4.4.3), so it
+        // must be captured before any later message extends the transcript.
+        self.certificate_transcript_hash = Some(tls_schedule::transcript_hash(&self.transcript));
         self.server_certificate = Some(cert);
         self.state = HandshakeState::ExpectCertificateVerify;
     }
@@ -548,6 +570,8 @@ impl ClientHandshake {
             self.server_certificate.take().ok_or(HandshakeError::Failed)?;
         let server_certificate_verify =
             self.pending_certificate_verify.take().ok_or(HandshakeError::Failed)?;
+        let certificate_transcript_hash =
+            self.certificate_transcript_hash.take().ok_or(HandshakeError::Failed)?;
 
         self.state = HandshakeState::Complete;
         Ok(HandshakeEvent::Complete(Box::new(HandshakeComplete {
@@ -559,6 +583,7 @@ impl ClientHandshake {
             resumption_master_secret,
             server_certificate,
             server_certificate_verify,
+            certificate_transcript_hash,
         })))
     }
 }
@@ -786,6 +811,18 @@ mod tests {
         assert_eq!(complete.server_certificate.certificate_list.len(), 1);
         assert_eq!(complete.server_certificate_verify.algorithm, 0x0804);
         assert_eq!(complete.server_certificate_verify.signature, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+
+        // The captured hash is Transcript-Hash(ClientHello…Certificate) — the input
+        // the server signs into its CertificateVerify (RFC 8446 §4.4.3), snapshotted
+        // before the CertificateVerify and Finished extend the transcript.
+        let mut transcript_ch_cert = client_hello_bytes();
+        transcript_ch_cert.extend_from_slice(&server_hello_bytes());
+        transcript_ch_cert.extend_from_slice(&encrypted_extensions_bytes());
+        transcript_ch_cert.extend_from_slice(&certificate_bytes());
+        assert_eq!(
+            complete.certificate_transcript_hash,
+            tls_schedule::transcript_hash(&transcript_ch_cert),
+        );
     }
 
     #[test]
