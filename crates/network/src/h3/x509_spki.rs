@@ -314,7 +314,39 @@ pub fn extract_end_entity_public_key(cert_der: &[u8]) -> Result<ServerPublicKey,
     tbs.read_tagged(TAG_SEQUENCE, "subject is not a SEQUENCE")?;
     let spki = tbs.read_tagged(TAG_SEQUENCE, "subjectPublicKeyInfo is not a SEQUENCE")?;
 
-    // SubjectPublicKeyInfo ::= SEQUENCE { algorithm AlgorithmIdentifier, subjectPublicKey BIT STRING }.
+    parse_spki_contents(spki)
+}
+
+/// Parse a bare `SubjectPublicKeyInfo` (RFC 5280 §4.1) directly, without a wrapping
+/// `Certificate`/`TBSCertificate` — the shape a trust anchor already carries (RFC 5280
+/// §6.1): a compiled-in root is trusted *as* a `subject` + `SubjectPublicKeyInfo` pair,
+/// with no surrounding certificate to navigate through.
+///
+/// `spki_der` is the full `SubjectPublicKeyInfo` DER, including its own outer
+/// `SEQUENCE` tag and length — exactly the shape
+/// [`x509_trust_anchor`](super::x509_trust_anchor) receives from a caller-supplied
+/// trust anchor's `subject_public_key_info` field. The result is the same
+/// [`ServerPublicKey`] shape [`extract_end_entity_public_key`] produces from a full
+/// certificate, so both feed
+/// [`verify_certificate_signature`](super::x509_chain::verify_certificate_signature)
+/// identically.
+///
+/// # Errors
+///
+/// [`SpkiError::Malformed`] if the DER is truncated or mis-structured, and
+/// [`SpkiError::UnsupportedAlgorithm`] for a key algorithm — or EC named curve —
+/// outside the P-256/P-384/P-521, Ed25519, and RSA set this slice verifies.
+pub fn parse_subject_public_key_info(spki_der: &[u8]) -> Result<ServerPublicKey, SpkiError> {
+    let spki = Der::new(spki_der).read_tagged(TAG_SEQUENCE, "SubjectPublicKeyInfo is not a SEQUENCE")?;
+    parse_spki_contents(spki)
+}
+
+/// Decode the contents of a `SubjectPublicKeyInfo SEQUENCE` (the outer tag already
+/// stripped) into a [`ServerPublicKey`]: `SEQUENCE { algorithm AlgorithmIdentifier,
+/// subjectPublicKey BIT STRING }`. Shared by [`extract_end_entity_public_key`] (which
+/// reaches this point by navigating a full certificate) and
+/// [`parse_subject_public_key_info`] (which strips only the bare SPKI's own wrapper).
+fn parse_spki_contents(spki: &[u8]) -> Result<ServerPublicKey, SpkiError> {
     let mut spki = Der::new(spki);
     let alg_id = spki.read_tagged(TAG_SEQUENCE, "SPKI algorithm is not a SEQUENCE")?;
     let subject_public_key = spki.read_tagged(TAG_BIT_STRING, "subjectPublicKey is not a BIT STRING")?;
