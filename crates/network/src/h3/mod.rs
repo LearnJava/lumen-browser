@@ -719,10 +719,22 @@
 //!   the long-header packets coalesce and the 1-RTT space seals the datagram (RFC
 //!   9000 §12.2); [`send_state::ConnectionSendState::send_padded_initial`] is the
 //!   client's first-flight path. Pure apart from the mockable transport write.
-//! - Slice 56+ (planned) — the driver ↔ send-state integration (turning a
-//!   [`driver::DriverAction`] and the receive path's
-//!   [`connection::PacketEffects`] into scheduled frames and a flush) and the
-//!   `h3_do_request` dispatch alongside the existing H1/H2 paths.
+//! - Slice 56 — the client connect bootstrap ([`client_bootstrap`], RFC 9000
+//!   §7.2/§7.3, RFC 9001 §5.2, RFC 9114 §3.2): the one place that turns a bare
+//!   `(transport, server name, trust store)` triple into a ready-to-drive
+//!   [`conn_connect::ConnectDriver`]. It invents the client's random Initial
+//!   Destination/Source Connection IDs, an ephemeral X25519 key pair, and a
+//!   real TLS 1.3 ClientHello (SNI, `h3` ALPN, a single X25519 key_share, the
+//!   mandatory extensions, and the `quic_transport_parameters` whose
+//!   `initial_source_connection_id` echoes the client SCID), derives the Initial
+//!   keys from the DCID (sending with the client secret, receiving with the
+//!   server secret), and wires the receive/loss/TLS stack into the driver. The
+//!   caller only has to [`connect`](conn_connect::ConnectDriver::connect).
+//! - Slice 57+ (planned) — the `h3_do_request` dispatch in `lib.rs` alongside
+//!   the existing H1/H2 paths: assembling the real [`udp::UdpDatagram`]
+//!   transport (DNS + trust anchors), driving [`client_bootstrap::connect_client`]
+//!   through the handshake, splicing into a [`request_driver::RequestDriver`],
+//!   and routing an origin onto QUIC from its [`alt_svc`] entry.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -732,6 +744,7 @@
 
 pub mod ack;
 pub mod alt_svc;
+pub mod client_bootstrap;
 pub mod conn_cert_auth;
 pub mod conn_connect;
 pub mod conn_flow;
