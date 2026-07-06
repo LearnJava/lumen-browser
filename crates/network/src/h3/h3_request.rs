@@ -27,6 +27,10 @@
 use super::frame::{Frame, FrameError};
 use super::qpack::{self, HeaderField, QpackError};
 
+/// A list of ordinary header/trailer fields as decoded `(name, value)` byte-string
+/// pairs, in received order.
+pub type FieldPairs = Vec<(Vec<u8>, Vec<u8>)>;
+
 /// The HTTP/2 (and thus HTTP/3) impersonation profile, selecting the pseudo-
 /// header order that forms part of the request fingerprint.
 ///
@@ -72,6 +76,10 @@ pub enum MessageError {
     ConnectionSpecificField(Vec<u8>),
     /// A field name was empty.
     EmptyName,
+    /// A trailer section carried a pseudo-header field (`:`-prefixed), which
+    /// RFC 9114 §4.1 forbids: the trailer section must contain only ordinary
+    /// fields.
+    PseudoInTrailer(Vec<u8>),
     /// The QPACK field section failed to decode.
     Qpack(QpackError),
     /// The `HEADERS` frame failed to encode/decode.
@@ -106,6 +114,11 @@ impl core::fmt::Display for MessageError {
                 String::from_utf8_lossy(n)
             ),
             Self::EmptyName => write!(f, "empty field name"),
+            Self::PseudoInTrailer(n) => write!(
+                f,
+                "pseudo-header {:?} in trailer section",
+                String::from_utf8_lossy(n)
+            ),
             Self::Qpack(e) => write!(f, "QPACK: {e}"),
             Self::Frame(e) => write!(f, "HEADERS frame: {e}"),
         }
@@ -305,6 +318,46 @@ pub fn validate_response_fields(fields: &[HeaderField]) -> Result<H3ResponseHead
 pub fn decode_response(block: &[u8]) -> Result<H3ResponseHead, MessageError> {
     let fields = qpack::decode_field_section(block)?;
     validate_response_fields(&fields)
+}
+
+/// Validate a decoded trailer field list (RFC 9114 §4.1) and return the ordinary
+/// header fields.
+///
+/// A trailer section is a header section that MUST NOT contain any pseudo-header
+/// field (RFC 9114 §4.1); every field is otherwise held to the same RFC 9114 §4.2
+/// rules as a regular header (lower-case, non-empty, no connection-specific
+/// field).
+///
+/// # Errors
+/// [`MessageError::PseudoInTrailer`] if a `:`-prefixed field is present, or any
+/// other [`MessageError`] variant for an RFC 9114 §4.2 violation.
+pub fn validate_trailer_fields(fields: &[HeaderField]) -> Result<FieldPairs, MessageError> {
+    let mut headers = Vec::with_capacity(fields.len());
+    for field in fields {
+        let name = field.name.as_slice();
+        if name.first() == Some(&b':') {
+            return Err(MessageError::PseudoInTrailer(name.to_vec()));
+        }
+        validate_regular_field(name, &field.value)?;
+        headers.push((field.name.clone(), field.value.clone()));
+    }
+    Ok(headers)
+}
+
+/// Decode a trailer `HEADERS` frame's QPACK field block into the ordinary trailer
+/// fields (RFC 9114 §4.1).
+///
+/// `block` is the field section carried by the trailing `HEADERS` frame — the
+/// payload of [`Frame::Headers`], i.e. the caller has already stripped the frame
+/// header.
+///
+/// # Errors
+/// [`MessageError`] if the QPACK block fails to decode or the trailer section is
+/// malformed (a pseudo-header, an upper-case or empty name, or a
+/// connection-specific field).
+pub fn decode_trailers(block: &[u8]) -> Result<FieldPairs, MessageError> {
+    let fields = qpack::decode_field_section(block)?;
+    validate_trailer_fields(&fields)
 }
 
 #[cfg(test)]
@@ -590,5 +643,51 @@ mod tests {
         let head = decode_response(&block).unwrap();
         assert_eq!(head.status, 404);
         assert_eq!(head.headers.len(), 1);
+    }
+
+    #[test]
+    fn decode_valid_trailers() {
+        let fields = vec![
+            HeaderField::new(b"x-checksum".to_vec(), b"abc123".to_vec()),
+            HeaderField::new(b"x-signature".to_vec(), b"deadbeef".to_vec()),
+        ];
+        let block = qpack::encode_field_section(&fields, true);
+        let trailers = decode_trailers(&block).unwrap();
+        assert_eq!(
+            trailers,
+            vec![
+                (b"x-checksum".to_vec(), b"abc123".to_vec()),
+                (b"x-signature".to_vec(), b"deadbeef".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn trailer_pseudo_header_is_malformed() {
+        let fields = vec![
+            HeaderField::new(b":status".to_vec(), b"200".to_vec()),
+            HeaderField::new(b"x-checksum".to_vec(), b"abc".to_vec()),
+        ];
+        assert_eq!(
+            validate_trailer_fields(&fields).unwrap_err(),
+            MessageError::PseudoInTrailer(b":status".to_vec())
+        );
+    }
+
+    #[test]
+    fn trailer_connection_specific_field_is_malformed() {
+        let fields = vec![HeaderField::new(
+            b"transfer-encoding".to_vec(),
+            b"chunked".to_vec(),
+        )];
+        assert_eq!(
+            validate_trailer_fields(&fields).unwrap_err(),
+            MessageError::ConnectionSpecificField(b"transfer-encoding".to_vec())
+        );
+    }
+
+    #[test]
+    fn empty_trailer_section_is_valid() {
+        assert!(validate_trailer_fields(&[]).unwrap().is_empty());
     }
 }

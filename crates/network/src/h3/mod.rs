@@ -747,6 +747,7 @@ pub mod datagram_build;
 pub mod driver;
 pub mod event_loop;
 pub mod frame;
+pub mod h3_exchange;
 pub mod h3_request;
 pub mod h3_stream;
 pub mod key_agreement;
