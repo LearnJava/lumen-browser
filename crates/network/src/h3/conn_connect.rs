@@ -116,6 +116,7 @@ use super::tls_handshake::HandshakeComplete;
 use super::udp::DatagramTransport;
 use super::x509_basic_constraints::{CaConstraintsWalkError, verify_ca_constraints};
 use super::x509_chain::{ChainWalkError, verify_chain_signatures};
+use super::x509_critical_ext::{CritExtWalkError, verify_no_unknown_critical_extensions};
 use super::x509_ext_key_usage::{ExtKeyUsageWalkError, verify_server_auth_eku};
 use super::x509_hostname::{HostnameError, verify_certificate_hostname};
 use super::x509_key_usage::{KeyUsageWalkError, verify_cert_sign_usage};
@@ -313,6 +314,21 @@ pub enum ConnectError {
     /// termination hold; like the eight checks before it, it abandons the connection
     /// before the client Finished is flushed.
     ExtKeyUsage(ExtKeyUsageWalkError),
+    /// Some certificate in the server-presented chain marks an extension `critical` that
+    /// this validator does not process (RFC 5280 §4.2, §6.1.4(n), RFC 8446 §4.4.2): the
+    /// `critical` flag is the issuer's demand that a relying party understand the extension,
+    /// and RFC 5280 §4.2 requires rejecting a certificate carrying a critical extension the
+    /// system cannot process ([`CritExtWalkError`](super::x509_critical_ext::CritExtWalkError)).
+    /// The relying-party complement of the eight interpreting checks before it: where each of
+    /// those *reads* one extension (`subjectAltName`, `keyUsage`, `basicConstraints`,
+    /// `extendedKeyUsage`), this confirms the validator recognizes *every* extension any
+    /// certificate insists upon — a critical extension it would otherwise ignore (say a
+    /// critical `nameConstraints` scoping an intermediate to one domain) must not be silently
+    /// dropped. Every certificate in the list is checked, leaf and issuers alike. Checked last,
+    /// after possession, identity, time, all four chain walks, the trust-anchor termination,
+    /// and the leaf's purpose hold; like the nine checks before it, it abandons the connection
+    /// before the client Finished is flushed.
+    CriticalExtension(CritExtWalkError),
 }
 
 impl core::fmt::Display for ConnectError {
@@ -342,6 +358,9 @@ impl core::fmt::Display for ConnectError {
             Self::ExtKeyUsage(e) => {
                 write!(f, "QUIC connect: certificate extendedKeyUsage verification failed: {e}")
             }
+            Self::CriticalExtension(e) => {
+                write!(f, "QUIC connect: unrecognized critical certificate extension: {e}")
+            }
         }
     }
 }
@@ -361,6 +380,7 @@ impl std::error::Error for ConnectError {
             Self::KeyUsage(e) => Some(e),
             Self::TrustAnchor(e) => Some(e),
             Self::ExtKeyUsage(e) => Some(e),
+            Self::CriticalExtension(e) => Some(e),
         }
     }
 }
@@ -565,7 +585,8 @@ impl<T: DatagramTransport> ConnectDriver<T> {
     /// does not name the requested host, is outside its validity period, heads a
     /// chain whose signature, name, CA-permission, or certificate-signing links do not
     /// verify, does not terminate at a trusted anchor, whose leaf is not authorised for
-    /// TLS server authentication, or a failed flush of the client Finished.
+    /// TLS server authentication, that marks an extension critical this validator cannot
+    /// process, or a failed flush of the client Finished.
     pub fn poll(&mut self, now: Instant) -> Result<ConnectStep, ConnectError> {
         let poll = self.handshake.poll(now).map_err(ConnectError::Loop)?;
         let mut messages_processed = 0;
@@ -693,6 +714,21 @@ impl<T: DatagramTransport> ConnectDriver<T> {
                 // the leaf is consulted, since RFC 5280 does not mandate EKU chaining up the
                 // path.
                 verify_server_auth_eku(&chain).map_err(ConnectError::ExtKeyUsage)?;
+                // The chain is signed, named, CA-permitted, signing-permitted, rooted, and its
+                // leaf is authorised for TLS server auth; the last gate is a *relying-party*
+                // check (RFC 5280 §4.2, §6.1.4(n)): no certificate in the list may mark an
+                // extension `critical` that this validator does not process. The `critical`
+                // flag is the issuer's demand that the extension be understood — a validator
+                // that silently ignored a critical extension it cannot process (say a critical
+                // `nameConstraints` restricting an intermediate to one domain) would defeat the
+                // issuer's intent, as fatal as any check before it, so abandon before the client
+                // Finished goes out. Only the four extensions the walks above interpret
+                // (`subjectAltName`, `keyUsage`, `basicConstraints`, `extendedKeyUsage`) are
+                // recognized; a non-critical unrecognized extension is permitted (§4.2). Every
+                // certificate is checked, leaf and issuers alike, since §6.1.4(n) processes each
+                // certificate in the path.
+                verify_no_unknown_critical_extensions(&chain)
+                    .map_err(ConnectError::CriticalExtension)?;
                 // The client Finished (RFC 8446 §4.4.4) was enqueued into the
                 // Handshake CRYPTO stream; put it — and any owed Handshake ACK the
                 // poll queued — on the wire now.
@@ -1549,6 +1585,56 @@ mod tests {
         }))
     }
 
+    /// A single non-recognized Extension entry (`id-ce-nameConstraints`, OID 2.5.29.30 — an
+    /// extension this validator does not process) marked `critical` when `critical` and
+    /// non-critical otherwise, with an empty `extnValue` the gate never decodes. Used to
+    /// exercise the unrecognized-critical-extension gate (RFC 5280 §4.2, §6.1.4(n)): a
+    /// critical instance must be rejected, a non-critical one tolerated.
+    fn unrecognized_extension_entry(critical: bool) -> Vec<u8> {
+        let nc_oid = der_tlv(0x06, &[0x55, 0x1D, 0x1E]); // id-ce-nameConstraints (2.5.29.30)
+        let extn_value = der_tlv(0x04, &[]); // extnValue OCTET STRING (empty; never decoded)
+        let body = if critical {
+            let crit = der_tlv(0x01, &[0xFF]); // critical BOOLEAN TRUE
+            [nc_oid.as_slice(), crit.as_slice(), extn_value.as_slice()].concat()
+        } else {
+            [nc_oid.as_slice(), extn_value.as_slice()].concat()
+        };
+        der_tlv(0x30, &body)
+    }
+
+    /// A single-certificate `Certificate` message whose end-entity leaf authenticates, names
+    /// [`SERVER_HOSTNAME`], is in date, is really signed by the [`root_ed25519`] trust anchor
+    /// with the empty-`SEQUENCE` placeholder issuer the default [`trust_anchors`] store
+    /// carries, and is authorised for TLS server authentication — but additionally carries an
+    /// unrecognized `nameConstraints` extension marked `critical` when `critical` (RFC 5280
+    /// §4.2, §6.1.4(n)). Possession, identity, time, every (vacuous) chain walk, the
+    /// trust-anchor termination, and the extendedKeyUsage leg all pass, so only the
+    /// unrecognized-critical-extension gate decides: the connect loop completes when the
+    /// extension is non-critical and rejects with
+    /// [`CritExtWalkError::UnrecognizedCritical`](super::super::x509_critical_ext::CritExtWalkError::UnrecognizedCritical)
+    /// at index 0 when it is critical.
+    fn certificate_bytes_leaf_unrecognized_critical(critical: bool) -> Vec<u8> {
+        use ed25519_dalek::Signer;
+        let empty = der_tlv(0x30, &[]);
+        let leaf_ext = extensions_field(&[
+            subject_alt_name_entry(SERVER_HOSTNAME),
+            ext_key_usage_entry(true),
+            unrecognized_extension_entry(critical),
+        ]);
+        let tbs = ed25519_tbs_named_ext(
+            &empty,
+            &empty,
+            &server_ed25519().verifying_key().to_bytes(),
+            &leaf_ext,
+        );
+        let signature = root_ed25519().sign(&tbs).to_bytes().to_vec();
+        let leaf = seal_certificate(&tbs, &signature);
+        enc(&Handshake::Certificate(Certificate {
+            certificate_request_context: Vec::new(),
+            certificate_list: vec![CertificateEntry { cert_data: leaf, extensions: Vec::new() }],
+        }))
+    }
+
     fn certificate_bytes() -> Vec<u8> {
         enc(&Handshake::Certificate(Certificate {
             certificate_request_context: Vec::new(),
@@ -2304,6 +2390,60 @@ mod tests {
         ));
         // The completion is never retained for an unauthorised leaf, and the client
         // Finished — enqueued by the TLS advance — was not flushed.
+        assert!(cd.completed().is_none());
+        assert!(cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
+    }
+
+    // ---- poll: an unrecognized critical extension aborts the connect ---
+
+    #[test]
+    fn poll_completes_when_an_unrecognized_extension_is_not_critical() {
+        let now = base();
+        let ch = client_hello_bytes();
+        let sh = server_hello_bytes();
+        let mut t = transport();
+        // The leaf carries an unrecognized nameConstraints extension, but it is *not* marked
+        // critical, so RFC 5280 §4.2 lets the relying party ignore it: possession, identity,
+        // time, every (vacuous) chain walk, the trust-anchor termination, the extendedKeyUsage
+        // leg, and the critical-extension gate all pass, so the handshake completes.
+        let cert = certificate_bytes_leaf_unrecognized_critical(false);
+        t.push_inbound(server_initial(0, sh.clone()));
+        t.push_inbound(server_handshake(0, handshake_flight_with_cert(&ch, &sh, &cert), &ch, &sh));
+        let mut cd = connect_driver(t, now);
+
+        cd.poll(now).expect("poll over the ServerHello");
+        let step = cd.poll(now).expect("poll over the flight");
+        assert!(step.completed);
+        assert!(cd.completed().is_some());
+        assert!(!cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
+    }
+
+    #[test]
+    fn poll_rejects_a_leaf_with_an_unrecognized_critical_extension() {
+        use crate::h3::x509_critical_ext::CritExtWalkError;
+        let now = base();
+        let ch = client_hello_bytes();
+        let sh = server_hello_bytes();
+        let mut t = transport();
+        // The leaf authenticates, names SERVER_HOSTNAME, is in date, terminates at a trusted
+        // anchor, and is authorised for serverAuth — but it marks an unrecognized
+        // nameConstraints extension critical, which this validator cannot process, so every
+        // earlier gate passes and the failure is purely the unrecognized-critical-extension
+        // check (RFC 5280 §4.2, §6.1.4(n)).
+        let cert = certificate_bytes_leaf_unrecognized_critical(true);
+        t.push_inbound(server_initial(0, sh.clone()));
+        t.push_inbound(server_handshake(0, handshake_flight_with_cert(&ch, &sh, &cert), &ch, &sh));
+        let mut cd = connect_driver(t, now);
+
+        cd.poll(now).expect("poll over the ServerHello");
+        let err = cd
+            .poll(now)
+            .expect_err("a critical extension the validator cannot process must abort the connect");
+        assert!(matches!(
+            err,
+            ConnectError::CriticalExtension(CritExtWalkError::UnrecognizedCritical { index: 0 }),
+        ));
+        // The completion is never retained, and the client Finished was not flushed.
         assert!(cd.completed().is_none());
         assert!(cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
     }
