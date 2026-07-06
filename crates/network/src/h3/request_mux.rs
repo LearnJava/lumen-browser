@@ -201,6 +201,15 @@ impl RequestMux {
         }
     }
 
+    /// Retires the exchange on `stream_id` without a response — the request was
+    /// abandoned by the transport (the peer reset the response half with
+    /// RESET_STREAM, RFC 9000 §19.4, or the stream was otherwise torn down). The
+    /// identifier no longer routes. Returns whether an in-flight request was
+    /// actually retired.
+    pub fn abort(&mut self, stream_id: u64) -> bool {
+        self.exchanges.remove(&stream_id).is_some()
+    }
+
     /// Whether an in-flight request currently owns `stream_id`.
     #[must_use]
     pub fn is_active(&self, stream_id: u64) -> bool {

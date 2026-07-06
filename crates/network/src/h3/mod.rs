@@ -773,6 +773,7 @@ pub mod recv_path;
 pub mod request_dispatch;
 pub mod request_exchange;
 pub mod request_mux;
+pub mod request_pump;
 pub mod retry;
 pub mod send;
 pub mod send_engine;

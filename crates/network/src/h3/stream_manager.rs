@@ -227,6 +227,15 @@ impl StreamManager {
         self.send.get_mut(&stream_id)
     }
 
+    /// The identifiers of every stream with a sending half, ascending. The send
+    /// path iterates these to drain each [`SendStream`] holding buffered data into
+    /// STREAM frames (RFC 9000 §19.8); a stream whose send half is quiescent (fully
+    /// transmitted, blocked, or reset) simply yields nothing when polled.
+    #[must_use]
+    pub fn send_stream_ids(&self) -> Vec<u64> {
+        self.send.keys().copied().collect()
+    }
+
     /// The connection-wide receive flow-control budget (RFC 9000 §4.1).
     #[must_use]
     pub fn recv_flow(&self) -> &RecvConnFlow {
