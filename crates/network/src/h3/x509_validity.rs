@@ -56,9 +56,10 @@
 //! it takes *now* as a parameter (seconds since the Unix epoch) rather than reading a
 //! clock, so it stays deterministic and testable, exactly as
 //! [`x509_spki`](super::x509_spki) and [`x509_hostname`](super::x509_hostname) are.
-//! Threading the real wall-clock time from the connect loop
-//! ([`conn_connect`](super::conn_connect)) into this check — as slice 63 did for the
-//! hostname verifier — is a later slice.
+//! The real wall-clock time is threaded in from the connect loop
+//! ([`conn_connect`](super::conn_connect)), which judges the end-entity certificate's
+//! validity period against a caller-supplied `now_unix` after possession and identity,
+//! as slice 63 did for the hostname verifier.
 
 /// The DER tag for `SEQUENCE` (and `SEQUENCE OF`), constructed universal.
 const TAG_SEQUENCE: u8 = 0x30;
