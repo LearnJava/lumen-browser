@@ -46,15 +46,19 @@
 //! carries is authenticated the moment it appears
 //! ([`conn_cert_auth::authenticate_server_certificate`](super::conn_cert_auth::authenticate_server_certificate)):
 //! the CertificateVerify signature must prove the peer holds the end-entity
-//! certificate's private key over this handshake *before* the client Finished goes on
-//! the wire. The verified completion is then retained ([`ConnectDriver::completed`]).
+//! certificate's private key over this handshake, and — this slice — that same
+//! certificate's `subjectAltName` must name the requested host
+//! ([`x509_hostname::verify_certificate_hostname`](super::x509_hostname::verify_certificate_hostname),
+//! RFC 6125 §6) — both *before* the client Finished goes on the wire. The verified
+//! completion is then retained ([`ConnectDriver::completed`]).
 //!
 //! ## What it defers
 //!
 //! - **Trust-anchor chaining.** The loop now verifies the CertificateVerify signature
-//!   (the *possession* half of authentication) but does not chain the end-entity
-//!   certificate to a trusted root, check intermediates, honour validity dates, or
-//!   match the hostname (SNI). Those remain for a later slice.
+//!   (the *possession* half of authentication) and matches the certificate's
+//!   `subjectAltName` against the requested host (the *identity* half), but does not
+//!   chain the end-entity certificate to a trusted root, check intermediates, or honour
+//!   validity dates. Those remain for a later slice.
 //! - **Building the ClientHello.** The exact first-flight bytes and the ephemeral
 //!   X25519 private key are supplied to [`TlsConnState::new`](super::conn_tls::TlsConnState::new)
 //!   by the caller.
@@ -81,6 +85,7 @@ use super::conn_turn::{ConnectionTurn, TurnEffect};
 use super::send_path::FlushError;
 use super::tls_handshake::HandshakeComplete;
 use super::udp::DatagramTransport;
+use super::x509_hostname::{HostnameError, verify_certificate_hostname};
 
 /// What one [`ConnectDriver::poll`] turn did: the transport-level outcome of the
 /// [`HandshakeDriver::poll`](super::conn_handshake::HandshakeDriver::poll) plus a
@@ -152,6 +157,13 @@ pub enum ConnectError {
     /// decoded ([`CertAuthError`](super::conn_cert_auth::CertAuthError)). The
     /// connection is abandoned before the client Finished is flushed.
     CertAuth(CertAuthError),
+    /// The authenticated certificate does not name the requested host (RFC 6125 §6,
+    /// RFC 9110 §4.3.4): its `subjectAltName` `dNSName` entries do not cover the
+    /// [`reference_host`](ConnectDriver) the client asked for, or the certificate
+    /// carried no DNS identifier at all ([`HostnameError`](super::x509_hostname::HostnameError)).
+    /// Checked only after possession is proven; like [`CertAuth`](Self::CertAuth) it
+    /// abandons the connection before the client Finished is flushed.
+    Hostname(HostnameError),
 }
 
 impl core::fmt::Display for ConnectError {
@@ -161,6 +173,7 @@ impl core::fmt::Display for ConnectError {
             Self::Tls(e) => write!(f, "QUIC connect: {e}"),
             Self::Flush(e) => write!(f, "QUIC connect: flush failed: {e}"),
             Self::CertAuth(e) => write!(f, "QUIC connect: certificate authentication failed: {e}"),
+            Self::Hostname(e) => write!(f, "QUIC connect: certificate hostname check failed: {e}"),
         }
     }
 }
@@ -172,6 +185,7 @@ impl std::error::Error for ConnectError {
             Self::Tls(e) => Some(e),
             Self::Flush(e) => Some(e),
             Self::CertAuth(e) => Some(e),
+            Self::Hostname(e) => Some(e),
         }
     }
 }
@@ -201,16 +215,30 @@ pub struct ConnectDriver<T: DatagramTransport> {
     /// the server certificate and CertificateVerify for the caller to authenticate,
     /// plus the 1-RTT key material. `None` until the handshake completes.
     completed: Option<Box<HandshakeComplete>>,
+    /// The host the client asked for — the SNI it put in its ClientHello and the URL
+    /// authority the request targets. The end-entity certificate must name this host
+    /// (RFC 6125 §6): once the handshake completes, [`poll`](ConnectDriver::poll)
+    /// matches it against the certificate's `subjectAltName` before the connection may
+    /// carry application data.
+    reference_host: String,
 }
 
 impl<T: DatagramTransport> ConnectDriver<T> {
     /// Joins a control-flow `handshake` loop and a `tls` bridge into one connect
-    /// driver. The handshake's turn should already have the Initial space installed
-    /// on both halves; the first flight is sent on the first turn of
-    /// [`connect`](ConnectDriver::connect).
+    /// driver targeting `reference_host`. The handshake's turn should already have the
+    /// Initial space installed on both halves; the first flight is sent on the first
+    /// turn of [`connect`](ConnectDriver::connect).
+    ///
+    /// `reference_host` is the authority the request targets (the SNI the ClientHello
+    /// carries): the server's end-entity certificate must name it (RFC 6125 §6) for the
+    /// handshake to complete.
     #[must_use]
-    pub fn new(handshake: HandshakeDriver<T>, tls: TlsConnState) -> Self {
-        Self { handshake, tls, completed: None }
+    pub fn new(
+        handshake: HandshakeDriver<T>,
+        tls: TlsConnState,
+        reference_host: impl Into<String>,
+    ) -> Self {
+        Self { handshake, tls, completed: None, reference_host: reference_host.into() }
     }
 
     /// The control-flow loop, borrowed immutably (e.g. to read whether the handshake
@@ -229,14 +257,16 @@ impl<T: DatagramTransport> ConnectDriver<T> {
     }
 
     /// The completed handshake material, available once the TLS handshake completes
-    /// (the server Finished verified) *and* its server certificate authenticated (the
-    /// CertificateVerify signature checked, RFC 8446 §4.4.3). `None` while the
-    /// handshake is still in progress; a completion whose certificate fails to
-    /// authenticate never reaches here — [`poll`](ConnectDriver::poll) returns
-    /// [`ConnectError::CertAuth`] instead.
+    /// (the server Finished verified), its server certificate authenticated (the
+    /// CertificateVerify signature checked, RFC 8446 §4.4.3), *and* that certificate
+    /// verified to name the requested host (RFC 6125 §6). `None` while the handshake is
+    /// still in progress; a completion whose certificate fails to authenticate or does
+    /// not cover [`reference_host`](ConnectDriver) never reaches here —
+    /// [`poll`](ConnectDriver::poll) returns [`ConnectError::CertAuth`] or
+    /// [`ConnectError::Hostname`] instead.
     ///
-    /// Trust-anchor chaining and hostname matching remain the caller's (or a later
-    /// slice's) job before the certificate is trusted for an origin.
+    /// Trust-anchor chaining remains the caller's (or a later slice's) job before the
+    /// certificate is trusted for an origin.
     #[must_use]
     pub fn completed(&self) -> Option<&HandshakeComplete> {
         self.completed.as_deref()
@@ -280,16 +310,19 @@ impl<T: DatagramTransport> ConnectDriver<T> {
     /// Handshake keys (on the ServerHello) or completing the handshake (on the server
     /// Finished). When the handshake completes it authenticates the server certificate
     /// ([`authenticate_server_certificate`](super::conn_cert_auth::authenticate_server_certificate))
-    /// before flushing the client Finished the advance enqueued (RFC 8446 §4.4.3,
-    /// §4.4.4) and retaining the completion ([`completed`](ConnectDriver::completed)).
-    /// A certificate that fails to authenticate abandons the connection before the
-    /// client Finished goes out. On a timer wake it advances no TLS.
+    /// and verifies it names [`reference_host`](ConnectDriver)
+    /// ([`verify_certificate_hostname`](super::x509_hostname::verify_certificate_hostname),
+    /// RFC 6125 §6) before flushing the client Finished the advance enqueued (RFC 8446
+    /// §4.4.3, §4.4.4) and retaining the completion
+    /// ([`completed`](ConnectDriver::completed)). A certificate that fails to
+    /// authenticate, or that does not cover the requested host, abandons the connection
+    /// before the client Finished goes out. On a timer wake it advances no TLS.
     ///
     /// # Errors
     ///
     /// [`ConnectError`] wrapping the failing step: a control-flow error from the poll,
-    /// a TLS error from the advance, a server certificate that failed to authenticate,
-    /// or a failed flush of the client Finished.
+    /// a TLS error from the advance, a server certificate that failed to authenticate
+    /// or does not name the requested host, or a failed flush of the client Finished.
     pub fn poll(&mut self, now: Instant) -> Result<ConnectStep, ConnectError> {
         let poll = self.handshake.poll(now).map_err(ConnectError::Loop)?;
         let mut messages_processed = 0;
@@ -312,6 +345,20 @@ impl<T: DatagramTransport> ConnectDriver<T> {
                 // Finished is flushed, so we never signal a successful handshake to an
                 // unauthenticated peer.
                 authenticate_server_certificate(&complete).map_err(ConnectError::CertAuth)?;
+                // Possession is proven; now check *identity* (RFC 6125 §6, RFC 9110
+                // §4.3.4): the same end-entity certificate must name the host the client
+                // asked for. A certificate whose subjectAltName does not cover
+                // `reference_host` is as fatal as a bad signature — abandon before the
+                // client Finished goes out. The first entry is the end-entity
+                // certificate (RFC 8446 §4.4.2); authentication above already proved it
+                // is present.
+                let entry = complete
+                    .server_certificate
+                    .certificate_list
+                    .first()
+                    .ok_or(ConnectError::CertAuth(CertAuthError::NoCertificate))?;
+                verify_certificate_hostname(&entry.cert_data, &self.reference_host)
+                    .map_err(ConnectError::Hostname)?;
                 // The client Finished (RFC 8446 §4.4.4) was enqueued into the
                 // Handshake CRYPTO stream; put it — and any owed Handshake ACK the
                 // poll queued — on the wire now.
@@ -460,18 +507,29 @@ mod tests {
         )
     }
 
-    /// A connect driver over the scripted transport `t`, with the Initial space
-    /// installed on both halves and the TLS bridge seeded with the ClientHello.
-    fn connect_driver(
+    /// A connect driver over the scripted transport `t` targeting `host`, with the
+    /// Initial space installed on both halves and the TLS bridge seeded with the
+    /// ClientHello.
+    fn connect_driver_for(
         t: MockDatagramTransport,
         now: Instant,
+        host: &str,
     ) -> ConnectDriver<MockDatagramTransport> {
         let mut send = ConnectionSendState::new(1, dcid(), scid(), 1200);
         send.install(PacketNumberSpace::Initial, initial_keys().client);
         let turn = ConnectionTurn::new(driver(t, now), send, 1200, DEFAULT_ACK_DELAY_EXPONENT);
         let handshake = HandshakeDriver::new(turn);
         let tls = TlsConnState::new(CLIENT_PRIV, client_hello_bytes());
-        ConnectDriver::new(handshake, tls)
+        ConnectDriver::new(handshake, tls, host)
+    }
+
+    /// A connect driver targeting [`SERVER_HOSTNAME`] — the host the fixture
+    /// certificate names, so the hostname check passes.
+    fn connect_driver(
+        t: MockDatagramTransport,
+        now: Instant,
+    ) -> ConnectDriver<MockDatagramTransport> {
+        connect_driver_for(t, now, SERVER_HOSTNAME)
     }
 
     // ---- TLS handshake message fixtures (mirroring conn_tls) ------------
@@ -546,10 +604,28 @@ mod tests {
         out
     }
 
+    /// The DNS host the server's certificate names and the client asks for; the
+    /// connect loop matches one against the other (RFC 6125 §6).
+    const SERVER_HOSTNAME: &str = "example.test";
+
+    /// Build the `extensions [3]` field of a `TBSCertificate` carrying a single
+    /// `subjectAltName` (OID 2.5.29.17) with one `dNSName` (`[2]`) entry naming `host`,
+    /// exactly the shape [`x509_hostname`](super::super::x509_hostname) walks.
+    fn subject_alt_name_extension(host: &str) -> Vec<u8> {
+        let dns_name = der_tlv(0x82, host.as_bytes()); // dNSName [2] IA5String
+        let general_names = der_tlv(0x30, &dns_name); // GeneralNames ::= SEQUENCE OF
+        let extn_value = der_tlv(0x04, &general_names); // extnValue OCTET STRING
+        let san_oid = der_tlv(0x06, &[0x55, 0x1D, 0x11]); // id-ce-subjectAltName
+        let extension = der_tlv(0x30, &[san_oid.as_slice(), extn_value.as_slice()].concat());
+        let extensions = der_tlv(0x30, &extension); // SEQUENCE OF Extension
+        der_tlv(0xA3, &extensions) // [3] EXPLICIT
+    }
+
     /// A minimal, structurally valid v3 end-entity certificate carrying the server's
-    /// Ed25519 public key in its `SubjectPublicKeyInfo` (RFC 5280 §4.1, RFC 8410);
-    /// every field before the SPKI is a placeholder the extractor skips.
-    fn server_certificate_der() -> Vec<u8> {
+    /// Ed25519 public key in its `SubjectPublicKeyInfo` (RFC 5280 §4.1, RFC 8410) and a
+    /// `subjectAltName` naming `host`; every field before the SPKI is a placeholder the
+    /// extractor skips.
+    fn server_certificate_der_for(host: &str) -> Vec<u8> {
         // id-Ed25519 OID 1.3.101.112 (RFC 8410 §3).
         let ed_oid = der_tlv(0x06, &[0x2B, 0x65, 0x70]);
         let alg_id = der_tlv(0x30, &ed_oid);
@@ -561,6 +637,7 @@ mod tests {
         let serial = der_tlv(0x02, &[0x01]);
         let sig_alg = der_tlv(0x30, &der_tlv(0x06, &[0x2B, 0x65, 0x70]));
         let empty = der_tlv(0x30, &[]);
+        let extensions = subject_alt_name_extension(host);
         let tbs = der_tlv(
             0x30,
             &[
@@ -571,12 +648,19 @@ mod tests {
                 empty.as_slice(), // validity
                 empty.as_slice(), // subject
                 spki.as_slice(),
+                extensions.as_slice(), // [3] subjectAltName
             ]
             .concat(),
         );
         let outer_sig_alg = der_tlv(0x30, &der_tlv(0x06, &[0x2B, 0x65, 0x70]));
         let signature = der_tlv(0x03, &[0x00, 0xDE, 0xAD]);
         der_tlv(0x30, &[tbs.as_slice(), outer_sig_alg.as_slice(), signature.as_slice()].concat())
+    }
+
+    /// The end-entity certificate naming [`SERVER_HOSTNAME`], used by every fixture
+    /// server flight.
+    fn server_certificate_der() -> Vec<u8> {
+        server_certificate_der_for(SERVER_HOSTNAME)
     }
 
     fn certificate_bytes() -> Vec<u8> {
@@ -827,6 +911,52 @@ mod tests {
         // Finished — enqueued by the TLS advance — was not flushed.
         assert!(cd.completed().is_none());
         assert!(cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
+    }
+
+    // ---- poll: a certificate that does not name the host aborts the connect ----
+
+    #[test]
+    fn poll_rejects_a_certificate_that_does_not_name_the_host() {
+        let now = base();
+        let ch = client_hello_bytes();
+        let sh = server_hello_bytes();
+        let mut t = transport();
+        // The fixture certificate names SERVER_HOSTNAME and authenticates cleanly (the
+        // CertificateVerify is valid); only the requested host differs, so possession
+        // passes and the failure is purely the hostname (identity) check.
+        t.push_inbound(server_initial(0, sh.clone()));
+        t.push_inbound(server_handshake(0, handshake_flight(&ch, &sh), &ch, &sh));
+        let mut cd = connect_driver_for(t, now, "wrong.example");
+
+        cd.poll(now).expect("poll over the ServerHello");
+        let err = cd.poll(now).expect_err("the certificate must not cover the host");
+        assert!(matches!(err, ConnectError::Hostname(HostnameError::NoMatch)));
+        // The completion is never retained for a mis-named certificate, and the client
+        // Finished — enqueued by the TLS advance — was not flushed.
+        assert!(cd.completed().is_none());
+        assert!(cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
+    }
+
+    // ---- poll: a matching hostname lets the handshake complete ---------
+
+    #[test]
+    fn poll_completes_when_the_certificate_names_the_host() {
+        let now = base();
+        let ch = client_hello_bytes();
+        let sh = server_hello_bytes();
+        let mut t = transport();
+        t.push_inbound(server_initial(0, sh.clone()));
+        t.push_inbound(server_handshake(0, handshake_flight(&ch, &sh), &ch, &sh));
+        // The default driver asks for SERVER_HOSTNAME, exactly what the certificate
+        // names, so the identity check passes and the handshake completes.
+        let mut cd = connect_driver(t, now);
+
+        cd.poll(now).expect("poll over the ServerHello");
+        let step = cd.poll(now).expect("poll over the flight");
+        assert!(step.completed);
+        assert!(cd.completed().is_some());
+        // The client Finished was flushed: the Handshake CRYPTO queue drained.
+        assert!(!cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
     }
 
     // ---- connect: drive to confirmation --------------------------------
