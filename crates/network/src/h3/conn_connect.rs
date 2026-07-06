@@ -66,12 +66,16 @@
 //! RFC 5280 §4.2.1.9, §6.1.4), every issuing certificate that carries a
 //! `keyUsage` extension must assert `keyCertSign`
 //! ([`x509_key_usage::verify_cert_sign_usage`](super::x509_key_usage::verify_cert_sign_usage),
-//! RFC 5280 §4.2.1.3), and — this slice — that same chain must actually *terminate* at a
+//! RFC 5280 §4.2.1.3), that same chain must actually *terminate* at a
 //! trust anchor the caller supplies: the topmost certificate's `issuer` must name one of
 //! [`ConnectDriver::new`]'s `trust_anchors`, and the topmost certificate must really be
 //! signed by that anchor's key
 //! ([`x509_trust_anchor::verify_trust_anchor`](super::x509_trust_anchor::verify_trust_anchor),
-//! RFC 5280 §6.1, §4.1.1.3) — all eight *before* the client Finished goes on
+//! RFC 5280 §6.1, §4.1.1.3), and — this slice — the end-entity leaf must be authorised
+//! for TLS server authentication: when it carries an `extendedKeyUsage` extension that
+//! extension must name `serverAuth` (or the catch-all `anyExtendedKeyUsage`)
+//! ([`x509_ext_key_usage::verify_server_auth_eku`](super::x509_ext_key_usage::verify_server_auth_eku),
+//! RFC 5280 §4.2.1.12) — all nine *before* the client Finished goes on
 //! the wire. The verified completion is then retained ([`ConnectDriver::completed`]).
 //!
 //! ## What it defers
@@ -112,6 +116,7 @@ use super::tls_handshake::HandshakeComplete;
 use super::udp::DatagramTransport;
 use super::x509_basic_constraints::{CaConstraintsWalkError, verify_ca_constraints};
 use super::x509_chain::{ChainWalkError, verify_chain_signatures};
+use super::x509_ext_key_usage::{ExtKeyUsageWalkError, verify_server_auth_eku};
 use super::x509_hostname::{HostnameError, verify_certificate_hostname};
 use super::x509_key_usage::{KeyUsageWalkError, verify_cert_sign_usage};
 use super::x509_name_chain::{NameChainWalkError, verify_name_chain};
@@ -292,6 +297,22 @@ pub enum ConnectError {
     /// seven checks before it, it abandons the connection before the client Finished is
     /// flushed.
     TrustAnchor(TrustAnchorWalkError),
+    /// The server-presented end-entity leaf is not authorised for TLS server
+    /// authentication (RFC 5280 §4.2.1.12, RFC 8446 §4.4.2): the leaf carries an
+    /// `extendedKeyUsage` extension that names neither `id-kp-serverAuth`
+    /// (1.3.6.1.5.5.7.3.1) nor the catch-all `anyExtendedKeyUsage` (2.5.29.37.0), or the
+    /// leaf's `extendedKeyUsage` could not be decoded
+    /// ([`ExtKeyUsageWalkError`](super::x509_ext_key_usage::ExtKeyUsageWalkError)). The
+    /// purpose-level complement of [`KeyUsage`](Self::KeyUsage): where `keyUsage` governs
+    /// what an *issuing* key may do, `extendedKeyUsage` governs the application purposes
+    /// the leaf's key is certified for — a leaf restricted to, say, `clientAuth` or
+    /// `codeSigning` must not authenticate a TLS *server*. A leaf that carries no
+    /// `extendedKeyUsage` extension is purpose-unrestricted (§4.2.1.12) and passes; only
+    /// the leaf is consulted, since RFC 5280 does not mandate EKU chaining. Checked last,
+    /// after possession, identity, time, all four chain walks, and the trust-anchor
+    /// termination hold; like the eight checks before it, it abandons the connection
+    /// before the client Finished is flushed.
+    ExtKeyUsage(ExtKeyUsageWalkError),
 }
 
 impl core::fmt::Display for ConnectError {
@@ -318,6 +339,9 @@ impl core::fmt::Display for ConnectError {
             Self::TrustAnchor(e) => {
                 write!(f, "QUIC connect: certificate trust-anchor verification failed: {e}")
             }
+            Self::ExtKeyUsage(e) => {
+                write!(f, "QUIC connect: certificate extendedKeyUsage verification failed: {e}")
+            }
         }
     }
 }
@@ -336,6 +360,7 @@ impl std::error::Error for ConnectError {
             Self::CaConstraints(e) => Some(e),
             Self::KeyUsage(e) => Some(e),
             Self::TrustAnchor(e) => Some(e),
+            Self::ExtKeyUsage(e) => Some(e),
         }
     }
 }
@@ -443,17 +468,21 @@ impl<T: DatagramTransport> ConnectDriver<T> {
     /// §6.1), permitted to issue it (each issuer a CA, `basicConstraints`
     /// `cA = TRUE` with any `pathLenConstraint` honoured, RFC 5280 §4.2.1.9, §6.1.4),
     /// permitted to sign it (each issuer's `keyUsage`, when present, asserting `keyCertSign`,
-    /// RFC 5280 §4.2.1.3), *and* really rooted in one of the caller's `trust_anchors`
+    /// RFC 5280 §4.2.1.3), really rooted in one of the caller's `trust_anchors`
     /// (the topmost certificate's `issuer` names an anchor and its signature verifies
-    /// under that anchor's key, RFC 5280 §6.1, §4.1.1.3). `None` while the handshake is
-    /// still in progress; a completion whose certificate fails to authenticate, does not
-    /// cover [`reference_host`](ConnectDriver), is outside its validity period, heads a
-    /// chain whose signature, name, CA-permission, or certificate-signing links do not
-    /// verify, or does not terminate at a trusted anchor never reaches here —
+    /// under that anchor's key, RFC 5280 §6.1, §4.1.1.3), *and* authorised for TLS server
+    /// authentication (the end-entity leaf's `extendedKeyUsage`, when present, naming
+    /// `serverAuth` or `anyExtendedKeyUsage`, RFC 5280 §4.2.1.12). `None` while the
+    /// handshake is still in progress; a completion whose certificate fails to
+    /// authenticate, does not cover [`reference_host`](ConnectDriver), is outside its
+    /// validity period, heads a chain whose signature, name, CA-permission, or
+    /// certificate-signing links do not verify, does not terminate at a trusted anchor,
+    /// or whose leaf is not authorised for TLS server authentication never reaches here —
     /// [`poll`](ConnectDriver::poll) returns [`ConnectError::CertAuth`],
     /// [`ConnectError::Hostname`], [`ConnectError::Validity`], [`ConnectError::Chain`],
     /// [`ConnectError::NameChain`], [`ConnectError::CaConstraints`],
-    /// [`ConnectError::KeyUsage`], or [`ConnectError::TrustAnchor`] instead.
+    /// [`ConnectError::KeyUsage`], [`ConnectError::TrustAnchor`], or
+    /// [`ConnectError::ExtKeyUsage`] instead.
     #[must_use]
     pub fn completed(&self) -> Option<&HandshakeComplete> {
         self.completed.as_deref()
@@ -513,17 +542,21 @@ impl<T: DatagramTransport> ConnectDriver<T> {
     /// RFC 5280 §4.2.1.9, §6.1.4), verifies every issuing certificate is permitted to
     /// sign certificates — its `keyUsage`, when present, asserting `keyCertSign`
     /// ([`verify_cert_sign_usage`](super::x509_key_usage::verify_cert_sign_usage),
-    /// RFC 5280 §4.2.1.3) — and verifies that chain actually terminates at one of the
+    /// RFC 5280 §4.2.1.3), verifies that chain actually terminates at one of the
     /// caller's [`trust_anchors`](ConnectDriver::new)
     /// ([`verify_trust_anchor`](super::x509_trust_anchor::verify_trust_anchor),
-    /// RFC 5280 §6.1, §4.1.1.3) — before flushing the client Finished the
+    /// RFC 5280 §6.1, §4.1.1.3) — and verifies the end-entity leaf is authorised for TLS
+    /// server authentication — its `extendedKeyUsage`, when present, naming `serverAuth`
+    /// or `anyExtendedKeyUsage`
+    /// ([`verify_server_auth_eku`](super::x509_ext_key_usage::verify_server_auth_eku),
+    /// RFC 5280 §4.2.1.12) — before flushing the client Finished the
     /// advance enqueued (RFC 8446 §4.4.3, §4.4.4) and retaining the completion
     /// ([`completed`](ConnectDriver::completed)). A certificate that fails to
     /// authenticate, that does not cover the requested host, that is outside its validity
     /// period, that heads a chain whose signature, name, CA-permission, or
-    /// certificate-signing links do not verify, or that does not terminate at a trusted
-    /// anchor abandons the connection before the client Finished goes out. On a timer
-    /// wake it advances no TLS.
+    /// certificate-signing links do not verify, that does not terminate at a trusted
+    /// anchor, or whose leaf is not authorised for TLS server authentication abandons the
+    /// connection before the client Finished goes out. On a timer wake it advances no TLS.
     ///
     /// # Errors
     ///
@@ -531,8 +564,8 @@ impl<T: DatagramTransport> ConnectDriver<T> {
     /// a TLS error from the advance, a server certificate that failed to authenticate,
     /// does not name the requested host, is outside its validity period, heads a
     /// chain whose signature, name, CA-permission, or certificate-signing links do not
-    /// verify, does not terminate at a trusted anchor, or a failed flush of the client
-    /// Finished.
+    /// verify, does not terminate at a trusted anchor, whose leaf is not authorised for
+    /// TLS server authentication, or a failed flush of the client Finished.
     pub fn poll(&mut self, now: Instant) -> Result<ConnectStep, ConnectError> {
         let poll = self.handshake.poll(now).map_err(ConnectError::Loop)?;
         let mut messages_processed = 0;
@@ -648,6 +681,18 @@ impl<T: DatagramTransport> ConnectDriver<T> {
                     })
                     .collect();
                 verify_trust_anchor(&chain, &anchors).map_err(ConnectError::TrustAnchor)?;
+                // The chain is signed, named, CA-permitted, signing-permitted, and rooted
+                // in a trusted anchor; the last check is *purpose* (RFC 5280 §4.2.1.12,
+                // RFC 8446 §4.4.2): the end-entity leaf must be authorised for TLS server
+                // authentication. If it carries an `extendedKeyUsage` extension that
+                // extension must name `serverAuth` (or the catch-all `anyExtendedKeyUsage`);
+                // a leaf restricted to another purpose (say `clientAuth` or `codeSigning`)
+                // must not authenticate a TLS server, as fatal as any check before it, so
+                // abandon before the client Finished goes out. A leaf carrying no
+                // `extendedKeyUsage` is purpose-unrestricted (§4.2.1.12) and passes; only
+                // the leaf is consulted, since RFC 5280 does not mandate EKU chaining up the
+                // path.
+                verify_server_auth_eku(&chain).map_err(ConnectError::ExtKeyUsage)?;
                 // The client Finished (RFC 8446 §4.4.4) was enqueued into the
                 // Handshake CRYPTO stream; put it — and any owed Handshake ACK the
                 // poll queued — on the wire now.
@@ -1455,6 +1500,55 @@ mod tests {
         }))
     }
 
+    /// A single `extendedKeyUsage` Extension entry (OID 2.5.29.37, RFC 5280 §4.2.1.12)
+    /// whose `SEQUENCE OF KeyPurposeId` names `id-kp-serverAuth` (1.3.6.1.5.5.7.3.1) when
+    /// `server_auth` and only `id-kp-clientAuth` (…3.2) otherwise — exactly the shape
+    /// [`x509_ext_key_usage`](super::super::x509_ext_key_usage) decodes. A leaf carrying the
+    /// `serverAuth` form is authorised for TLS server authentication; the `clientAuth`-only
+    /// form is not, which the extendedKeyUsage walk rejects (RFC 5280 §4.2.1.12).
+    fn ext_key_usage_entry(server_auth: bool) -> Vec<u8> {
+        let eku_oid = der_tlv(0x06, &[0x55, 0x1D, 0x25]); // id-ce-extKeyUsage
+        let purpose: &[u8] = if server_auth {
+            &[0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01] // id-kp-serverAuth
+        } else {
+            &[0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x02] // id-kp-clientAuth
+        };
+        let purposes = der_tlv(0x30, &der_tlv(0x06, purpose)); // SEQUENCE OF KeyPurposeId
+        let extn_value = der_tlv(0x04, &purposes); // extnValue OCTET STRING
+        der_tlv(0x30, &[eku_oid.as_slice(), extn_value.as_slice()].concat())
+    }
+
+    /// A single-certificate `Certificate` message whose end-entity leaf authenticates,
+    /// names [`SERVER_HOSTNAME`], is in date, and — as the topmost certificate — is really
+    /// signed by the [`root_ed25519`] trust anchor with the empty-`SEQUENCE` placeholder
+    /// issuer the default [`trust_anchors`] store carries, but whose `extendedKeyUsage`
+    /// names `serverAuth` when `server_auth` and only `clientAuth` otherwise (RFC 5280
+    /// §4.2.1.12). Possession, identity, time, every (vacuous) chain walk, and the
+    /// trust-anchor termination all pass, so only the *extendedKeyUsage* leg decides: the
+    /// connect loop completes when `server_auth` and rejects with
+    /// [`ExtKeyUsageWalkError::NotServerAuth`](super::super::x509_ext_key_usage::ExtKeyUsageWalkError::NotServerAuth)
+    /// at index 0 otherwise.
+    fn certificate_bytes_leaf_ext_key_usage(server_auth: bool) -> Vec<u8> {
+        use ed25519_dalek::Signer;
+        let empty = der_tlv(0x30, &[]);
+        let leaf_ext = extensions_field(&[
+            subject_alt_name_entry(SERVER_HOSTNAME),
+            ext_key_usage_entry(server_auth),
+        ]);
+        let tbs = ed25519_tbs_named_ext(
+            &empty,
+            &empty,
+            &server_ed25519().verifying_key().to_bytes(),
+            &leaf_ext,
+        );
+        let signature = root_ed25519().sign(&tbs).to_bytes().to_vec();
+        let leaf = seal_certificate(&tbs, &signature);
+        enc(&Handshake::Certificate(Certificate {
+            certificate_request_context: Vec::new(),
+            certificate_list: vec![CertificateEntry { cert_data: leaf, extensions: Vec::new() }],
+        }))
+    }
+
     fn certificate_bytes() -> Vec<u8> {
         enc(&Handshake::Certificate(Certificate {
             certificate_request_context: Vec::new(),
@@ -2155,6 +2249,61 @@ mod tests {
                 error: TrustAnchorError::Signature(ChainError::BadSignature),
             }),
         ));
+        assert!(cd.completed().is_none());
+        assert!(cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
+    }
+
+    // ---- poll: a leaf authorised for serverAuth completes --------------
+
+    #[test]
+    fn poll_completes_when_the_leaf_extended_key_usage_allows_server_auth() {
+        let now = base();
+        let ch = client_hello_bytes();
+        let sh = server_hello_bytes();
+        let mut t = transport();
+        // A single-cert leaf whose extendedKeyUsage names serverAuth: possession, identity,
+        // time, every (vacuous) chain walk, the trust-anchor termination, and the
+        // extendedKeyUsage walk all pass, so the handshake completes.
+        let cert = certificate_bytes_leaf_ext_key_usage(true);
+        t.push_inbound(server_initial(0, sh.clone()));
+        t.push_inbound(server_handshake(0, handshake_flight_with_cert(&ch, &sh, &cert), &ch, &sh));
+        let mut cd = connect_driver(t, now);
+
+        cd.poll(now).expect("poll over the ServerHello");
+        let step = cd.poll(now).expect("poll over the flight");
+        assert!(step.completed);
+        assert!(cd.completed().is_some());
+        // The client Finished was flushed: the Handshake CRYPTO queue drained.
+        assert!(!cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
+    }
+
+    // ---- poll: a leaf authorised only for clientAuth aborts the connect -
+
+    #[test]
+    fn poll_rejects_a_leaf_whose_extended_key_usage_forbids_server_auth() {
+        use crate::h3::x509_ext_key_usage::ExtKeyUsageWalkError;
+        let now = base();
+        let ch = client_hello_bytes();
+        let sh = server_hello_bytes();
+        let mut t = transport();
+        // The leaf authenticates, names SERVER_HOSTNAME, is in date, and terminates at a
+        // trusted anchor — but its extendedKeyUsage names only clientAuth, so possession,
+        // identity, time, every chain walk, and the trust-anchor termination all pass and
+        // the failure is purely the extendedKeyUsage (serverAuth) check.
+        let cert = certificate_bytes_leaf_ext_key_usage(false);
+        t.push_inbound(server_initial(0, sh.clone()));
+        t.push_inbound(server_handshake(0, handshake_flight_with_cert(&ch, &sh, &cert), &ch, &sh));
+        let mut cd = connect_driver(t, now);
+
+        cd.poll(now).expect("poll over the ServerHello");
+        let err =
+            cd.poll(now).expect_err("a clientAuth-only leaf may not authenticate a TLS server");
+        assert!(matches!(
+            err,
+            ConnectError::ExtKeyUsage(ExtKeyUsageWalkError::NotServerAuth { index: 0 }),
+        ));
+        // The completion is never retained for an unauthorised leaf, and the client
+        // Finished — enqueued by the TLS advance — was not flushed.
         assert!(cd.completed().is_none());
         assert!(cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
     }
