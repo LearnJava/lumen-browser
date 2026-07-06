@@ -60,6 +60,20 @@
 //! ([`conn_connect`](super::conn_connect)), which judges the end-entity certificate's
 //! validity period against a caller-supplied `now_unix` after possession and identity,
 //! as slice 63 did for the hostname verifier.
+//!
+//! ## The chain walk (RFC 5280 §6.1.3(a)(2))
+//!
+//! [`verify_certificate_validity`] checks one certificate; [`verify_validity_chain`]
+//! (slice 78) applies it to *every* certificate in the server-presented
+//! `certificate_list`. RFC 5280 §6.1.3(a)(2) requires each certificate in the path to be
+//! within its validity period, not just the leaf — an expired intermediate can no longer
+//! be trusted to have issued the certificate below it. This is the validity companion of
+//! the signature ([`x509_chain`](super::x509_chain)), name
+//! ([`x509_name_chain`](super::x509_name_chain)), `basicConstraints`
+//! ([`x509_basic_constraints`](super::x509_basic_constraints)), and `keyUsage`
+//! ([`x509_key_usage`](super::x509_key_usage)) walks — but unlike those issuer-only walks
+//! it covers the leaf too. Wiring it into the connect loop beside the single-certificate
+//! end-entity check is a later slice.
 
 /// The DER tag for `SEQUENCE` (and `SEQUENCE OF`), constructed universal.
 const TAG_SEQUENCE: u8 = 0x30;
@@ -267,6 +281,87 @@ pub fn certificate_validity(cert_der: &[u8]) -> Result<(i64, i64), ValidityError
     let not_after = parse_time(not_after_tag, not_after_bytes)?;
 
     Ok((not_before, not_after))
+}
+
+/// Why verifying an entire certificate chain's validity periods failed (RFC 5280
+/// §6.1.3(a)(2)). A sibling of the issuer-only walk errors
+/// [`x509_chain::ChainWalkError`](super::x509_chain::ChainWalkError),
+/// [`x509_name_chain::NameChainWalkError`](super::x509_name_chain::NameChainWalkError),
+/// [`x509_basic_constraints::CaConstraintsWalkError`](super::x509_basic_constraints::CaConstraintsWalkError),
+/// and [`x509_key_usage::KeyUsageWalkError`](super::x509_key_usage::KeyUsageWalkError).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ValidityWalkError {
+    /// The certificate list was empty. RFC 8446 §4.4.2 requires the end-entity
+    /// certificate first, so there is nothing to walk — a malformed `Certificate`
+    /// message.
+    EmptyChain,
+    /// The certificate at `index` failed its validity check: its DER did not decode to
+    /// a `validity` SEQUENCE, a `Time` value violated the RFC 5280 profile, or the
+    /// certificate was outside its `[notBefore, notAfter]` window at *now*.
+    Certificate {
+        /// Position, in the `certificate_list`, of the certificate that failed.
+        index: usize,
+        /// The underlying single-certificate validity failure.
+        error: ValidityError,
+    },
+}
+
+impl core::fmt::Display for ValidityWalkError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::EmptyChain => f.write_str("certificate chain is empty"),
+            Self::Certificate { index, error } => write!(f, "certificate #{index}: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for ValidityWalkError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Certificate { error, .. } => Some(error),
+            Self::EmptyChain => None,
+        }
+    }
+}
+
+/// Verify that *every* certificate in a server-presented chain is within its validity
+/// period at `now` (RFC 5280 §6.1.3(a)(2), RFC 8446 §4.4.2).
+///
+/// [`verify_certificate_validity`] checks a single certificate — the connect loop calls
+/// it on the end-entity leaf after possession and identity. But RFC 5280 §6.1.3(a)(2)
+/// requires the check for *each* certificate in the certification path: an expired
+/// intermediate is as fatal as an expired leaf, since a certificate outside its validity
+/// period can no longer be trusted to have issued the one below it. This walk is the
+/// validity companion of the signature walk
+/// ([`x509_chain::verify_chain_signatures`](super::x509_chain::verify_chain_signatures)),
+/// the name walk ([`x509_name_chain::verify_name_chain`](super::x509_name_chain::verify_name_chain)),
+/// and the `basicConstraints` / `keyUsage` walks — layered beside them over the same
+/// presented list.
+///
+/// `chain` is the ordered `certificate_list` from the server's `Certificate` message —
+/// the end-entity certificate first, then each issuing certificate. Unlike the
+/// issuer-only walks (which skip index 0 because a leaf issues nothing), *every*
+/// certificate must be time-valid, so the walk covers the whole list including the leaf.
+/// `now` is seconds since the Unix epoch, threaded in from the connect loop exactly as
+/// [`verify_certificate_validity`] takes it. It does **not** verify signatures, names,
+/// CA permission, or terminate the chain at a trust anchor — those are the sibling walks.
+///
+/// # Errors
+///
+/// [`ValidityWalkError::EmptyChain`] if `chain` is empty, or
+/// [`ValidityWalkError::Certificate`] naming the first certificate whose DER failed to
+/// decode or that was outside its validity window at `now`.
+pub fn verify_validity_chain(chain: &[&[u8]], now: i64) -> Result<(), ValidityWalkError> {
+    if chain.is_empty() {
+        return Err(ValidityWalkError::EmptyChain);
+    }
+    // Every certificate in the path — leaf and each issuer — must be within its own
+    // validity window; the walk stops at the first that is not.
+    for (index, cert_der) in chain.iter().enumerate() {
+        verify_certificate_validity(cert_der, now)
+            .map_err(|error| ValidityWalkError::Certificate { index, error })?;
+    }
+    Ok(())
 }
 
 /// Decode one `Time` value (RFC 5280 §4.1.2.5) — a `UTCTime` (`0x17`) or a
@@ -689,5 +784,106 @@ mod tests {
             certificate_validity(&[]),
             Err(ValidityError::Malformed(_)),
         ));
+    }
+
+    // ── chain walk (RFC 5280 §6.1.3(a)(2)) ─────────────────────────────────
+
+    #[test]
+    fn walk_accepts_a_chain_all_within_validity() {
+        let leaf = cert_with_validity(&validity(
+            &utc_time("200101000000Z"),
+            &utc_time("300101000000Z"),
+        ));
+        let intermediate = cert_with_validity(&validity(
+            &utc_time("150101000000Z"),
+            &utc_time("350101000000Z"),
+        ));
+        let chain = [leaf.as_slice(), intermediate.as_slice()];
+        // 2025-01-01 sits inside both windows.
+        let now = days_from_civil(2025, 1, 1) * 86_400;
+        assert_eq!(verify_validity_chain(&chain, now), Ok(()));
+    }
+
+    #[test]
+    fn walk_rejects_an_empty_chain() {
+        assert_eq!(
+            verify_validity_chain(&[], 0),
+            Err(ValidityWalkError::EmptyChain),
+        );
+    }
+
+    #[test]
+    fn walk_reports_an_expired_intermediate_by_index() {
+        // A valid leaf but an intermediate that expired in 2020.
+        let leaf = cert_with_validity(&validity(
+            &utc_time("200101000000Z"),
+            &utc_time("300101000000Z"),
+        ));
+        let intermediate = cert_with_validity(&validity(
+            &utc_time("100101000000Z"),
+            &utc_time("200101000000Z"),
+        ));
+        let chain = [leaf.as_slice(), intermediate.as_slice()];
+        let now = days_from_civil(2025, 1, 1) * 86_400;
+        let not_after = days_from_civil(2020, 1, 1) * 86_400;
+        assert_eq!(
+            verify_validity_chain(&chain, now),
+            Err(ValidityWalkError::Certificate {
+                index: 1,
+                error: ValidityError::Expired { not_after, now },
+            }),
+        );
+    }
+
+    #[test]
+    fn walk_covers_the_leaf_at_index_zero() {
+        // Unlike the issuer-only walks, the leaf itself must be time-valid.
+        let leaf = cert_with_validity(&validity(
+            &utc_time("300101000000Z"),
+            &utc_time("400101000000Z"),
+        ));
+        let intermediate = cert_with_validity(&validity(
+            &utc_time("100101000000Z"),
+            &utc_time("400101000000Z"),
+        ));
+        let chain = [leaf.as_slice(), intermediate.as_slice()];
+        let now = days_from_civil(2025, 1, 1) * 86_400;
+        let not_before = days_from_civil(2030, 1, 1) * 86_400;
+        assert_eq!(
+            verify_validity_chain(&chain, now),
+            Err(ValidityWalkError::Certificate {
+                index: 0,
+                error: ValidityError::NotYetValid { not_before, now },
+            }),
+        );
+    }
+
+    #[test]
+    fn walk_reports_a_malformed_certificate_by_index() {
+        let leaf = cert_with_validity(&validity(
+            &utc_time("200101000000Z"),
+            &utc_time("300101000000Z"),
+        ));
+        let not_a_cert = tlv(TAG_INTEGER, &[0x01]);
+        let chain = [leaf.as_slice(), not_a_cert.as_slice()];
+        let now = days_from_civil(2025, 1, 1) * 86_400;
+        assert!(matches!(
+            verify_validity_chain(&chain, now),
+            Err(ValidityWalkError::Certificate {
+                index: 1,
+                error: ValidityError::Malformed(_),
+            }),
+        ));
+    }
+
+    #[test]
+    fn walk_accepts_a_single_certificate_list() {
+        let leaf = cert_with_validity(&validity(
+            &utc_time("200101000000Z"),
+            &utc_time("300101000000Z"),
+        ));
+        let chain = [leaf.as_slice()];
+        let now = days_from_civil(2025, 1, 1) * 86_400;
+        assert_eq!(verify_validity_chain(&chain, now), Ok(()));
     }
 }
