@@ -51,20 +51,40 @@ pub enum SpellMenuAction {
     Ignore,
 }
 
+/// How a [`SpellTarget`] correction gets written back to the DOM (P3-spell
+/// slice 4) — the three control kinds [`crate::spell_target`] recognizes
+/// store their editable text differently, so applying a suggestion needs to
+/// know which one it's dealing with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpellTargetKind {
+    /// Single-line `<input>` — value lives in the `value` attribute.
+    Input,
+    /// `<textarea>` — value lives in direct text-node children.
+    Textarea,
+    /// A `contenteditable` host — content is arbitrary rich-text DOM, so only
+    /// the misspelled word's own text node is spliced in place.
+    ContentEditable,
+}
+
 /// Everything the shell needs to apply the chosen action: which control holds
 /// the word, the word's byte range inside that control's rendered text, and the
 /// word text itself.
 #[derive(Debug, Clone)]
 pub struct SpellTarget {
-    /// The focused form control (single-line `<input>`) whose value is edited.
+    /// The focused control whose text is edited: an `<input>`/`<textarea>`
+    /// node, or the `contenteditable` editing host.
     pub node: NodeId,
-    /// Full rendered text of the control (equals its `value` for single-line
-    /// inputs) — used to rebuild the value when applying a suggestion.
+    /// Full logical text of the control — its `value` for `<input>`, its
+    /// full (possibly multi-line) value for `<textarea>`, or the
+    /// concatenated `textContent` for a contenteditable host. Used to rebuild
+    /// the value / locate the word's text node when applying a suggestion.
     pub text: String,
     /// Start byte offset of the misspelled word inside `text`.
     pub word_start: usize,
     /// End byte offset (exclusive) of the misspelled word inside `text`.
     pub word_end: usize,
+    /// Which kind of control `node` is — determines how `Use` writes back.
+    pub kind: SpellTargetKind,
 }
 
 impl SpellTarget {
@@ -270,6 +290,7 @@ mod tests {
             text: "hello wrold".to_owned(),
             word_start: 6,
             word_end: 11,
+            kind: SpellTargetKind::Input,
         }
     }
 

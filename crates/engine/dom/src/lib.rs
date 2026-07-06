@@ -3013,6 +3013,54 @@ pub fn node_text_content(doc: &Document, node: NodeId) -> String {
     out
 }
 
+/// Locate the text node and local byte range covering `[start, end)` of
+/// `node`'s `textContent` (same traversal as [`node_text_content`]).
+///
+/// Returns `None` when the range crosses a text-node boundary (the target
+/// text spans two adjacent nodes) or falls outside the content — callers
+/// should treat that as "can't safely edit in place" and skip the edit rather
+/// than guess.
+pub fn locate_text_offset_range(
+    doc: &Document,
+    node: NodeId,
+    start: usize,
+    end: usize,
+) -> Option<(NodeId, u32, u32)> {
+    fn walk(
+        doc: &Document,
+        node: NodeId,
+        cursor: &mut usize,
+        start: usize,
+        end: usize,
+    ) -> Option<(NodeId, u32, u32)> {
+        for &child in &doc.get(node).children {
+            match &doc.get(child).data {
+                NodeData::Text(s) => {
+                    let node_start = *cursor;
+                    let node_end = node_start + s.len();
+                    *cursor = node_end;
+                    if start >= node_start && end <= node_end {
+                        return Some((
+                            child,
+                            (start - node_start) as u32,
+                            (end - node_start) as u32,
+                        ));
+                    }
+                }
+                NodeData::Element { .. } => {
+                    if let Some(found) = walk(doc, child, cursor, start, end) {
+                        return Some(found);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+    let mut cursor = 0usize;
+    walk(doc, node, &mut cursor, start, end)
+}
+
 /// Number of direct DOM children of `node`.
 ///
 /// For text nodes this is always 0. Used to validate child-index offsets in Range.
@@ -6424,5 +6472,61 @@ mod tests {
     fn draggable_case_insensitive() {
         let (doc, node) = make_elem("div", &[("DRAGGABLE", "TRUE")]);
         assert!(is_element_draggable(&doc, node));
+    }
+
+    // ──────── locate_text_offset_range ────────
+
+    #[test]
+    fn locate_text_offset_range_single_child() {
+        let mut doc = Document::new();
+        let host = doc.create_element(QualName::html("div"));
+        let text = doc.create_text("hello wrold");
+        doc.append_child(doc.root(), host);
+        doc.append_child(host, text);
+
+        let found = locate_text_offset_range(&doc, host, 6, 11).unwrap();
+        assert_eq!(found, (text, 6, 11));
+    }
+
+    #[test]
+    fn locate_text_offset_range_across_nested_elements() {
+        // <div>hello <b>wrold</b> there</div> — textContent = "hello wrold there".
+        let mut doc = Document::new();
+        let host = doc.create_element(QualName::html("div"));
+        let t1 = doc.create_text("hello ");
+        let bold = doc.create_element(QualName::html("b"));
+        let t2 = doc.create_text("wrold");
+        let t3 = doc.create_text(" there");
+        doc.append_child(doc.root(), host);
+        doc.append_child(host, t1);
+        doc.append_child(host, bold);
+        doc.append_child(bold, t2);
+        doc.append_child(host, t3);
+
+        assert_eq!(node_text_content(&doc, host), "hello wrold there");
+
+        // "wrold" sits at global offset 6..11, inside t2 (nested under <b>).
+        let found = locate_text_offset_range(&doc, host, 6, 11).unwrap();
+        assert_eq!(found, (t2, 0, 5));
+    }
+
+    #[test]
+    fn locate_text_offset_range_none_when_crossing_nodes() {
+        let mut doc = Document::new();
+        let host = doc.create_element(QualName::html("div"));
+        let t1 = doc.create_text("ab");
+        let t2 = doc.create_text("cd");
+        doc.append_child(doc.root(), host);
+        doc.append_child(host, t1);
+        doc.append_child(host, t2);
+
+        // Range 1..3 spans "b" (end of t1) + "c" (start of t2) — crosses a boundary.
+        assert!(locate_text_offset_range(&doc, host, 1, 3).is_none());
+    }
+
+    #[test]
+    fn locate_text_offset_range_out_of_bounds() {
+        let (doc, div, _text) = make_text_doc("abc");
+        assert!(locate_text_offset_range(&doc, div, 10, 12).is_none());
     }
 }
