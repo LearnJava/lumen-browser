@@ -1,5 +1,5 @@
-//! X.509 certificate signature verification (RFC 5280 §4.1.1.3, §4.1.2.3) — slice 66
-//! of the HTTP/3 sprint.
+//! X.509 certificate signature verification (RFC 5280 §4.1.1.3, §4.1.2.3) — slices 66
+//! and 67 of the HTTP/3 sprint.
 //!
 //! The three preceding X.509 slices each authenticate the *end-entity* certificate
 //! the server presents: possession ([`conn_cert_auth`](super::conn_cert_auth)) proves
@@ -9,9 +9,18 @@
 //! asks the remaining question of WebPKI: is that certificate itself signed by an
 //! authority the client trusts? A TLS 1.3 server sends a chain (RFC 8446 §4.4.2), and a
 //! chain is only meaningful if each certificate's signature verifies under the *next*
-//! certificate's public key, up to a trust anchor. This module is the atomic building
-//! block of that walk: it verifies one certificate's signature under one candidate
-//! issuer's public key.
+//! certificate's public key, up to a trust anchor.
+//!
+//! [`verify_certificate_signature`] (slice 66) is the atomic building block: it verifies
+//! one certificate's signature under one candidate issuer's public key.
+//! [`verify_chain_signatures`] (slice 67) is the walk over that block: it takes the
+//! server's whole `certificate_list`, extracts each certificate's own public key with
+//! [`x509_spki::extract_end_entity_public_key`](super::x509_spki::extract_end_entity_public_key)
+//! (slice 60), and checks that every certificate is signed by the one above it. A chain
+//! whose internal links all verify still needs its top certificate bound to a trust
+//! anchor — the walk deliberately stops one link short of that, leaving termination,
+//! name-chaining, and certificate constraints (RFC 5280 §6) to later slices, exactly as
+//! slice 66 leaves them to this one.
 //!
 //! ## What it verifies
 //!
@@ -89,7 +98,9 @@ use super::tls_cert_verify::{
     CertVerifyError, ecdsa_p256_sha256_verify, ecdsa_p384_sha384_verify, ecdsa_p521_sha512_verify,
     ed25519_verify,
 };
-use super::x509_spki::{ServerPublicKey, SpkiAlgorithm};
+use super::x509_spki::{
+    ServerPublicKey, SpkiAlgorithm, SpkiError, extract_end_entity_public_key,
+};
 
 /// The DER tag for `SEQUENCE` (and `SEQUENCE OF`), constructed universal.
 const TAG_SEQUENCE: u8 = 0x30;
@@ -399,10 +410,113 @@ fn verify(
     })
 }
 
+/// Why walking a certificate chain's internal signatures failed (RFC 5280 §4.1.1.3,
+/// RFC 8446 §4.4.2). Each variant pinpoints the certificate — by its position in the
+/// server's `certificate_list` — at which the walk broke, so the caller can log or
+/// alert precisely which link is bad.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChainWalkError {
+    /// The certificate list was empty. RFC 8446 §4.4.2 requires the end-entity
+    /// certificate first, so there is nothing to walk — a malformed `Certificate`
+    /// message.
+    EmptyChain,
+    /// The candidate issuer certificate (one step up from the certificate it should
+    /// have signed) did not yield a usable public key: its `SubjectPublicKeyInfo`
+    /// failed to decode or named an algorithm this build cannot extract.
+    IssuerKey {
+        /// Position, in the `certificate_list`, of the issuer certificate whose
+        /// `SubjectPublicKeyInfo` failed to extract.
+        issuer_index: usize,
+        /// The underlying `SubjectPublicKeyInfo`-extraction failure.
+        error: SpkiError,
+    },
+    /// The certificate at `subject_index` is not signed by the next certificate in the
+    /// list (its candidate issuer): the single-link check
+    /// ([`verify_certificate_signature`]) failed.
+    Link {
+        /// Position, in the `certificate_list`, of the certificate whose signature did
+        /// not verify under its candidate issuer's key.
+        subject_index: usize,
+        /// The underlying single-link verification failure.
+        error: ChainError,
+    },
+}
+
+impl core::fmt::Display for ChainWalkError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::EmptyChain => f.write_str("certificate chain is empty"),
+            Self::IssuerKey { issuer_index, error } => {
+                write!(f, "issuer certificate #{issuer_index}: {error}")
+            }
+            Self::Link { subject_index, error } => {
+                write!(f, "certificate #{subject_index} not signed by its issuer: {error}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ChainWalkError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::IssuerKey { error, .. } => Some(error),
+            Self::Link { error, .. } => Some(error),
+            Self::EmptyChain => None,
+        }
+    }
+}
+
+/// Verify that every certificate in a server-presented chain is signed by the next one
+/// up (RFC 5280 §4.1.1.3, RFC 8446 §4.4.2).
+///
+/// `chain` is the ordered `certificate_list` from the server's `Certificate` message —
+/// the end-entity certificate first, then each issuing intermediate. For every adjacent
+/// pair `(chain[i], chain[i + 1])` this extracts `chain[i + 1]`'s public key with
+/// [`extract_end_entity_public_key`](super::x509_spki::extract_end_entity_public_key)
+/// (the extractor reads any certificate's `SubjectPublicKeyInfo`, not only an
+/// end-entity's) and checks that it produced `chain[i]`'s signature with
+/// [`verify_certificate_signature`]. The last certificate has no successor in the list —
+/// its issuer is a trust anchor outside the chain — so its own signature is not checked
+/// here.
+///
+/// A single-element chain has no internal links and verifies vacuously: the presented
+/// end-entity certificate is self-consistent by definition, and binding it to a trust
+/// anchor is a separate concern. An empty chain is [`ChainWalkError::EmptyChain`].
+///
+/// This confirms only that the presented certificates form a self-consistent signature
+/// chain. It does **not** terminate the chain at a trusted root (RFC 5280 §6.1),
+/// match `issuer`/`subject` distinguished names (name chaining, §4.1.2.4/§4.1.2.6), or
+/// honour `basicConstraints`/`keyUsage` (§4.2.1.9/§4.2.1.3) — those are later slices,
+/// layered above this walk exactly as this walk layers above the single-link check.
+///
+/// # Errors
+///
+/// - [`ChainWalkError::EmptyChain`] if `chain` is empty.
+/// - [`ChainWalkError::IssuerKey`] if a certificate's `SubjectPublicKeyInfo` cannot be
+///   extracted, naming that certificate's position.
+/// - [`ChainWalkError::Link`] if a certificate's signature does not verify under the
+///   next certificate's key, naming that certificate's position.
+pub fn verify_chain_signatures(chain: &[&[u8]]) -> Result<(), ChainWalkError> {
+    if chain.is_empty() {
+        return Err(ChainWalkError::EmptyChain);
+    }
+
+    // Each certificate but the last (whose issuer is a trust anchor not in the list)
+    // must be signed by the certificate one step up.
+    for subject_index in 0..chain.len() - 1 {
+        let issuer_index = subject_index + 1;
+        let issuer_key = extract_end_entity_public_key(chain[issuer_index])
+            .map_err(|error| ChainWalkError::IssuerKey { issuer_index, error })?;
+        verify_certificate_signature(chain[subject_index], &issuer_key)
+            .map_err(|error| ChainWalkError::Link { subject_index, error })?;
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::h3::x509_spki::extract_end_entity_public_key;
 
     // ── DER construction helpers (test-only certificate builder) ───────────
 
@@ -729,5 +843,138 @@ mod tests {
         let cert = certificate(&tbs, &alg_id(OID_ECDSA_WITH_SHA256), signature.to_der().as_bytes());
 
         verify_certificate_signature(&cert, &issuer_key).expect("v1 certificate verifies");
+    }
+
+    // ── Chain walk (slice 67) ──────────────────────────────────────────────
+
+    /// Build a certificate whose own `subjectPublicKeyInfo` carries the SEC1 P-256 point
+    /// `subject_point` and whose `signatureValue` is `issuer_signing`'s ECDSA-with-SHA256
+    /// signature over the tbsCertificate. The subject SPKI makes the certificate usable
+    /// as an *issuer* for the certificate one link below it; the signature makes it a
+    /// *subject* verifiable under the certificate one link above.
+    fn p256_cert(subject_point: &[u8], issuer_signing: &p256::ecdsa::SigningKey) -> Vec<u8> {
+        use p256::ecdsa::Signature;
+        use p256::ecdsa::signature::Signer;
+
+        let spki_alg =
+            tlv(TAG_SEQUENCE, &cat(&[&tlv(TAG_OID, OID_EC_PUBLIC_KEY), &tlv(TAG_OID, OID_SECP256R1)]));
+        let spki_bits = tlv(TAG_BIT_STRING, &cat(&[&[0x00], subject_point]));
+        let spki = tlv(TAG_SEQUENCE, &cat(&[&spki_alg, &spki_bits]));
+
+        let version = tlv(TAG_CONTEXT_0, &tlv(TAG_INTEGER, &[0x02]));
+        let serial = tlv(TAG_INTEGER, &[0x2A]);
+        let sig_alg = alg_id(OID_ECDSA_WITH_SHA256);
+        let empty = tlv(TAG_SEQUENCE, &[]);
+        let tbs = tlv(
+            TAG_SEQUENCE,
+            &cat(&[&version, &serial, &sig_alg, &empty, &empty, &empty, &spki]),
+        );
+        let signature: Signature = issuer_signing.sign(&tbs);
+        certificate(&tbs, &alg_id(OID_ECDSA_WITH_SHA256), signature.to_der().as_bytes())
+    }
+
+    /// A P-256 signing key derived from a one-byte seed, plus its SEC1 public point.
+    fn keypair(seed: u8) -> (p256::ecdsa::SigningKey, Vec<u8>) {
+        let signing = p256::ecdsa::SigningKey::from_slice(&[seed; 32]).expect("valid P-256 scalar");
+        let point = signing.verifying_key().to_encoded_point(false).as_bytes().to_vec();
+        (signing, point)
+    }
+
+    #[test]
+    fn verifies_a_two_certificate_chain() {
+        // root signs the intermediate (root is NOT in the chain); the intermediate signs
+        // the leaf. Chain = [leaf, intermediate]; the walk checks the leaf under the
+        // intermediate's key and stops (the intermediate's own issuer is a trust anchor).
+        let (root, _) = keypair(0x01);
+        let (inter, inter_point) = keypair(0x02);
+        let (_, leaf_point) = keypair(0x03);
+
+        let intermediate = p256_cert(&inter_point, &root);
+        let leaf = p256_cert(&leaf_point, &inter);
+
+        verify_chain_signatures(&[&leaf, &intermediate]).expect("each link is signed by the next");
+    }
+
+    #[test]
+    fn verifies_a_three_certificate_chain() {
+        let (root, _) = keypair(0x01);
+        let (top, top_point) = keypair(0x02);
+        let (inter, inter_point) = keypair(0x03);
+        let (_, leaf_point) = keypair(0x04);
+
+        let top_cert = p256_cert(&top_point, &root);
+        let intermediate = p256_cert(&inter_point, &top);
+        let leaf = p256_cert(&leaf_point, &inter);
+
+        verify_chain_signatures(&[&leaf, &intermediate, &top_cert])
+            .expect("every internal link verifies");
+    }
+
+    #[test]
+    fn rejects_a_leaf_not_signed_by_its_issuer() {
+        // The leaf is signed by an unrelated key, not the intermediate's.
+        let (root, _) = keypair(0x01);
+        let (_, inter_point) = keypair(0x02);
+        let (impostor, _) = keypair(0x09);
+        let (_, leaf_point) = keypair(0x03);
+
+        let intermediate = p256_cert(&inter_point, &root);
+        let leaf = p256_cert(&leaf_point, &impostor);
+
+        assert_eq!(
+            verify_chain_signatures(&[&leaf, &intermediate]),
+            Err(ChainWalkError::Link { subject_index: 0, error: ChainError::BadSignature }),
+        );
+    }
+
+    #[test]
+    fn reports_the_broken_link_position_in_the_middle() {
+        // leaf←inter verifies, but inter is signed by an impostor rather than `top`, so
+        // the walk breaks at subject_index 1 (the intermediate).
+        let (root, _) = keypair(0x01);
+        let (_, top_point) = keypair(0x02);
+        let (inter, inter_point) = keypair(0x03);
+        let (impostor, _) = keypair(0x09);
+        let (_, leaf_point) = keypair(0x04);
+
+        let top_cert = p256_cert(&top_point, &root);
+        let intermediate = p256_cert(&inter_point, &impostor);
+        let leaf = p256_cert(&leaf_point, &inter);
+
+        assert_eq!(
+            verify_chain_signatures(&[&leaf, &intermediate, &top_cert]),
+            Err(ChainWalkError::Link { subject_index: 1, error: ChainError::BadSignature }),
+        );
+    }
+
+    #[test]
+    fn rejects_an_issuer_with_undecodable_spki() {
+        // The candidate issuer is not a certificate at all, so its public key cannot be
+        // extracted — reported against the issuer's position, not as a bad signature.
+        let (inter, _) = keypair(0x02);
+        let (_, leaf_point) = keypair(0x03);
+        let leaf = p256_cert(&leaf_point, &inter);
+        let garbage = tlv(TAG_INTEGER, &[0x01]);
+
+        assert!(matches!(
+            verify_chain_signatures(&[&leaf, &garbage]),
+            Err(ChainWalkError::IssuerKey { issuer_index: 1, error: SpkiError::Malformed(_) }),
+        ));
+    }
+
+    #[test]
+    fn rejects_an_empty_chain() {
+        assert_eq!(verify_chain_signatures(&[]), Err(ChainWalkError::EmptyChain));
+    }
+
+    #[test]
+    fn accepts_a_single_certificate_vacuously() {
+        // One certificate has no internal links; binding it to a trust anchor is a
+        // separate check, so the walk succeeds vacuously.
+        let (root, _) = keypair(0x01);
+        let (_, leaf_point) = keypair(0x03);
+        let leaf = p256_cert(&leaf_point, &root);
+
+        verify_chain_signatures(&[&leaf]).expect("a lone certificate has no links to break");
     }
 }
