@@ -1,5 +1,5 @@
-//! X.509 certificate signature verification (RFC 5280 §4.1.1.3, §4.1.2.3) — slices 66
-//! and 67 of the HTTP/3 sprint.
+//! X.509 certificate signature verification (RFC 5280 §4.1.1.3, §4.1.2.3) — slices 66,
+//! 67, and 77 (the RSASSA-PKCS1-v1_5 family, RFC 8017 §8.2) of the HTTP/3 sprint.
 //!
 //! The three preceding X.509 slices each authenticate the *end-entity* certificate
 //! the server presents: possession ([`conn_cert_auth`](super::conn_cert_auth)) proves
@@ -76,15 +76,26 @@
 //!   [`ecdsa_p521_sha512_verify`](super::tls_cert_verify::ecdsa_p521_sha512_verify).
 //! - **`id-Ed25519`** (1.3.101.112) under an Ed25519 issuer key →
 //!   [`ed25519_verify`](super::tls_cert_verify::ed25519_verify).
+//! - **`sha256WithRSAEncryption`** (1.2.840.113549.1.1.11), **`sha384WithRSAEncryption`**
+//!   (1.2.840.113549.1.1.12), **`sha512WithRSAEncryption`** (1.2.840.113549.1.1.13,
+//!   RFC 8017 Appendix A.2.4) under an `rsaEncryption` issuer key → the
+//!   RSASSA-PKCS1-v1_5 verifier this slice adds ([`rsa_pkcs1v15_verify`] and its three
+//!   digest-specific wrappers), *not* the RSASSA-PSS one
+//!   [`tls_cert_verify`](super::tls_cert_verify) exposes for TLS 1.3
+//!   `CertificateVerify` — the overwhelming majority of real X.509 certificates,
+//!   including most of the Mozilla root store, still sign with PKCS#1 v1.5, a scheme
+//!   TLS 1.3 itself forbids inside a `CertificateVerify` (RFC 8446 §4.2.3) but RFC 5280
+//!   never retired for certificates.
 //!
-//! Because those verifiers couple curve and digest, this slice pairs each ECDSA
+//! Because the ECDSA verifiers couple curve and digest, this slice pairs each ECDSA
 //! algorithm with its canonical curve (P-256/SHA-256, P-384/SHA-384, P-521/SHA-512).
 //! A non-canonical pairing (a P-384 issuer key presenting an `ecdsa-with-SHA256`
 //! signature) is rejected as [`ChainError::AlgorithmMismatch`] rather than silently
-//! accepted — fail-closed. **Deferred:** RSA (`sha256WithRSAEncryption` and the PKCS#1
-//! v1.5 family, plus RSASSA-PSS) certificate signatures, which need a PKCS#1 v1.5
-//! verifier this crate does not yet have — its only RSA primitive is the RSASSA-PSS one
-//! for TLS `CertificateVerify`. Until that lands, an RSA-signed certificate returns
+//! accepted — fail-closed; the three RSA algorithms are similarly bound to an
+//! `rsaEncryption` issuer key only. **Still deferred:** RSASSA-PSS *certificate*
+//! signatures (`RSASSA-PSS` `AlgorithmIdentifier`, RFC 4055 §3.2 — a distinct,
+//! parameterised OID from the three above) and any digest outside SHA-256/384/512
+//! (notably the legacy `sha1WithRSAEncryption`), which return
 //! [`ChainError::UnsupportedSignatureAlgorithm`].
 //!
 //! ## Purity
@@ -93,6 +104,13 @@
 //! allocation beyond the tiny signed-content borrow the verifiers take. A sibling of
 //! [`x509_spki`](super::x509_spki), [`x509_hostname`](super::x509_hostname), and
 //! [`x509_validity`](super::x509_validity).
+
+use rsa::RsaPublicKey;
+use rsa::pkcs1::DecodeRsaPublicKey as _;
+use rsa::pkcs1v15::{Signature as RsaPkcs1v15Signature, VerifyingKey as RsaPkcs1v15VerifyingKey};
+use rsa::pkcs8::AssociatedOid;
+use rsa::signature::Verifier as _;
+use sha2::{Digest, Sha256, Sha384, Sha512};
 
 use super::tls_cert_verify::{
     CertVerifyError, ecdsa_p256_sha256_verify, ecdsa_p384_sha384_verify, ecdsa_p521_sha512_verify,
@@ -123,10 +141,18 @@ const OID_ECDSA_WITH_SHA512: &[u8] = &[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03,
 /// `id-Ed25519` (1.3.101.112, RFC 8410 §3) — the Ed25519 signature algorithm (same OID
 /// as the Ed25519 *key* algorithm; EdDSA needs no separate digest identifier).
 const OID_ED25519: &[u8] = &[0x2B, 0x65, 0x70];
+/// `sha256WithRSAEncryption` (1.2.840.113549.1.1.11, RFC 8017 Appendix A.2.4) — RSA
+/// signatures under RSASSA-PKCS1-v1_5 with a SHA-256 digest.
+const OID_SHA256_WITH_RSA_ENCRYPTION: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B];
+/// `sha384WithRSAEncryption` (1.2.840.113549.1.1.12) — RSASSA-PKCS1-v1_5 with SHA-384.
+const OID_SHA384_WITH_RSA_ENCRYPTION: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0C];
+/// `sha512WithRSAEncryption` (1.2.840.113549.1.1.13) — RSASSA-PKCS1-v1_5 with SHA-512.
+const OID_SHA512_WITH_RSA_ENCRYPTION: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0D];
 
 /// The certificate signature algorithm this slice recognises, resolved from the
-/// `signatureAlgorithm` OID and paired with the [`tls_cert_verify`](super::tls_cert_verify)
-/// primitive that checks it.
+/// `signatureAlgorithm` OID and paired with the primitive that checks it: the
+/// [`tls_cert_verify`](super::tls_cert_verify) verifiers for ECDSA/Ed25519, or this
+/// module's own [`rsa_pkcs1v15_verify`] family for RSA.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ChainSignatureAlgorithm {
     /// `ecdsa-with-SHA256` — verified with an ECDSA P-256 issuer key.
@@ -137,6 +163,15 @@ enum ChainSignatureAlgorithm {
     EcdsaWithSha512,
     /// `id-Ed25519` — verified with an Ed25519 issuer key.
     Ed25519,
+    /// `sha256WithRSAEncryption` — verified with an `rsaEncryption` issuer key under
+    /// RSASSA-PKCS1-v1_5.
+    Sha256WithRsaEncryption,
+    /// `sha384WithRSAEncryption` — the SHA-384 sibling of
+    /// [`Self::Sha256WithRsaEncryption`].
+    Sha384WithRsaEncryption,
+    /// `sha512WithRSAEncryption` — the SHA-512 sibling of
+    /// [`Self::Sha256WithRsaEncryption`].
+    Sha512WithRsaEncryption,
 }
 
 /// Why verifying a certificate's signature against a candidate issuer's key failed.
@@ -153,8 +188,9 @@ pub enum ChainError {
     /// failure: the certificate is not honestly self-describing.
     AlgorithmMismatch(&'static str),
     /// The `signatureAlgorithm` named an algorithm this slice does not verify —
-    /// currently anything outside the ECDSA (SHA-256/384/512) and Ed25519 set, notably
-    /// the RSA families whose PKCS#1 v1.5 verifier is not yet implemented.
+    /// currently anything outside the ECDSA (SHA-256/384/512), Ed25519, and
+    /// PKCS#1-v1_5 RSA (SHA-256/384/512) set, notably RSASSA-PSS certificate
+    /// signatures and any RSA digest weaker than SHA-256.
     UnsupportedSignatureAlgorithm,
     /// The DER decoded and the algorithms agreed, but the signature did not verify over
     /// the `tbsCertificate` under the issuer's public key (RFC 5280 §4.1.1.3): the
@@ -293,7 +329,8 @@ impl<'a> Der<'a> {
 ///   the inner `tbsCertificate.signature`, or the issuer key type does not match the
 ///   signature algorithm.
 /// - [`ChainError::UnsupportedSignatureAlgorithm`] for a signature algorithm outside the
-///   ECDSA (SHA-256/384/512) and Ed25519 set this slice verifies.
+///   ECDSA (SHA-256/384/512), Ed25519, and PKCS#1-v1_5 RSA (SHA-256/384/512) set this
+///   slice verifies.
 /// - [`ChainError::BadSignature`] if the signature does not verify under the issuer key.
 pub fn verify_certificate_signature(
     cert_der: &[u8],
@@ -362,14 +399,36 @@ fn classify_signature_algorithm(oid: &[u8]) -> Result<ChainSignatureAlgorithm, C
         Ok(ChainSignatureAlgorithm::EcdsaWithSha512)
     } else if oid == OID_ED25519 {
         Ok(ChainSignatureAlgorithm::Ed25519)
+    } else if oid == OID_SHA256_WITH_RSA_ENCRYPTION {
+        Ok(ChainSignatureAlgorithm::Sha256WithRsaEncryption)
+    } else if oid == OID_SHA384_WITH_RSA_ENCRYPTION {
+        Ok(ChainSignatureAlgorithm::Sha384WithRsaEncryption)
+    } else if oid == OID_SHA512_WITH_RSA_ENCRYPTION {
+        Ok(ChainSignatureAlgorithm::Sha512WithRsaEncryption)
     } else {
         Err(ChainError::UnsupportedSignatureAlgorithm)
     }
 }
 
-/// Dispatch to the matching [`tls_cert_verify`](super::tls_cert_verify) primitive,
-/// pairing each ECDSA algorithm with its canonical issuer-key curve. A non-canonical
-/// pairing (or an Ed25519 signature with a non-Ed25519 key) is
+/// Collapse any [`CertVerifyError`] outcome to [`ChainError::BadSignature`]: a
+/// malformed key, a malformed signature, or a signature that does not check out all
+/// mean the same thing from the chain's perspective — this issuer did not sign this
+/// certificate.
+fn collapse_cert_verify_error(error: CertVerifyError) -> ChainError {
+    match error {
+        CertVerifyError::MalformedPublicKey
+        | CertVerifyError::MalformedSignature
+        | CertVerifyError::BadSignature
+        | CertVerifyError::UnsupportedScheme(_) => ChainError::BadSignature,
+    }
+}
+
+/// Dispatch to the matching verifier, pairing each algorithm with its canonical
+/// issuer-key type: the [`tls_cert_verify`](super::tls_cert_verify) primitives for
+/// ECDSA/Ed25519 (each ECDSA algorithm with its canonical curve), and this module's
+/// own [`rsa_pkcs1v15_verify`] family for the three RSA algorithms. A non-canonical
+/// pairing (a P-384 issuer key with `ecdsa-with-SHA256`, or any of these four
+/// algorithms with an issuer key of a different family) is
 /// [`ChainError::AlgorithmMismatch`]; any verifier failure — bad point, malformed
 /// signature, or a signature that does not check out — collapses to
 /// [`ChainError::BadSignature`], since from the chain's perspective the link simply did
@@ -381,33 +440,90 @@ fn verify(
     signature: &[u8],
 ) -> Result<(), ChainError> {
     let key = &issuer_public_key.key_material;
-    let result = match (algorithm, issuer_public_key.algorithm) {
+    match (algorithm, issuer_public_key.algorithm) {
         (ChainSignatureAlgorithm::EcdsaWithSha256, SpkiAlgorithm::EcdsaP256) => {
-            ecdsa_p256_sha256_verify(key, tbs_raw, signature)
+            ecdsa_p256_sha256_verify(key, tbs_raw, signature).map_err(collapse_cert_verify_error)
         }
         (ChainSignatureAlgorithm::EcdsaWithSha384, SpkiAlgorithm::EcdsaP384) => {
-            ecdsa_p384_sha384_verify(key, tbs_raw, signature)
+            ecdsa_p384_sha384_verify(key, tbs_raw, signature).map_err(collapse_cert_verify_error)
         }
         (ChainSignatureAlgorithm::EcdsaWithSha512, SpkiAlgorithm::EcdsaP521) => {
-            ecdsa_p521_sha512_verify(key, tbs_raw, signature)
+            ecdsa_p521_sha512_verify(key, tbs_raw, signature).map_err(collapse_cert_verify_error)
         }
         (ChainSignatureAlgorithm::Ed25519, SpkiAlgorithm::Ed25519) => {
-            ed25519_verify(key, tbs_raw, signature)
+            ed25519_verify(key, tbs_raw, signature).map_err(collapse_cert_verify_error)
         }
-        _ => {
-            return Err(ChainError::AlgorithmMismatch(
-                "issuer key type does not match signature algorithm",
-            ));
+        (ChainSignatureAlgorithm::Sha256WithRsaEncryption, SpkiAlgorithm::Rsa) => {
+            rsa_pkcs1v15_sha256_verify(key, tbs_raw, signature)
         }
-    };
-    result.map_err(|e| match e {
-        // Any verifier outcome that is not "verified" means this issuer did not sign
-        // this certificate; the chain cares only about that single verdict.
-        CertVerifyError::MalformedPublicKey
-        | CertVerifyError::MalformedSignature
-        | CertVerifyError::BadSignature
-        | CertVerifyError::UnsupportedScheme(_) => ChainError::BadSignature,
-    })
+        (ChainSignatureAlgorithm::Sha384WithRsaEncryption, SpkiAlgorithm::Rsa) => {
+            rsa_pkcs1v15_sha384_verify(key, tbs_raw, signature)
+        }
+        (ChainSignatureAlgorithm::Sha512WithRsaEncryption, SpkiAlgorithm::Rsa) => {
+            rsa_pkcs1v15_sha512_verify(key, tbs_raw, signature)
+        }
+        _ => Err(ChainError::AlgorithmMismatch(
+            "issuer key type does not match signature algorithm",
+        )),
+    }
+}
+
+/// Verify a `*WithRSAEncryption` certificate signature (RFC 5280 §4.1.1.2, Appendix
+/// A.2; RFC 8017 §8.2 RSASSA-PKCS1-v1_5) with the message digest `D`. This is *not*
+/// the RSASSA-PSS verifier [`tls_cert_verify::rsa_pss_verify`](super::tls_cert_verify)
+/// exposes for TLS 1.3 `CertificateVerify` — PKCS#1 v1.5 is the scheme the vast
+/// majority of deployed X.509 certificates, including most Mozilla root and
+/// intermediate CAs, still sign with (TLS 1.3 forbids it only inside
+/// `CertificateVerify` itself, RFC 8446 §4.2.3, not for certificates). The three
+/// `sha{256,384,512}WithRSAEncryption` OIDs differ only in `D`; each public wrapper
+/// below is one line over this generic core, mirroring
+/// [`tls_cert_verify::rsa_pss_verify`](super::tls_cert_verify)'s own shape.
+///
+/// `public_key_pkcs1_der` is the issuer's key as a PKCS#1 DER `RSAPublicKey`
+/// (`SEQUENCE { modulus INTEGER, publicExponent INTEGER }`) — exactly the
+/// `subjectPublicKey` bit string [`extract_end_entity_public_key`] hands back for an
+/// `rsaEncryption` `SubjectPublicKeyInfo`. `message` is the raw `tbsCertificate` DER
+/// (`D`-hashed internally per RFC 8017 §9.2 EMSA-PKCS1-v1_5-ENCODE). `signature` is
+/// the `signatureValue` BIT STRING contents: the big-endian integer, exactly one
+/// modulus length wide.
+///
+/// # Errors
+///
+/// [`ChainError::BadSignature`] if the PKCS#1 DER does not decode to a valid RSA
+/// public key, the signature octets are not a well-formed PKCS#1-v1_5 signature, or
+/// the signature does not verify over `message` — collapsed to one variant exactly as
+/// [`collapse_cert_verify_error`] collapses the ECDSA/Ed25519 outcomes, since none of
+/// those three failure modes distinguishes a real attack from a malformed input here.
+fn rsa_pkcs1v15_verify<D>(public_key_pkcs1_der: &[u8], message: &[u8], signature: &[u8]) -> Result<(), ChainError>
+where
+    D: Digest + AssociatedOid,
+{
+    let public_key =
+        RsaPublicKey::from_pkcs1_der(public_key_pkcs1_der).map_err(|_| ChainError::BadSignature)?;
+    let verifying_key = RsaPkcs1v15VerifyingKey::<D>::new(public_key);
+    let signature = RsaPkcs1v15Signature::try_from(signature).map_err(|_| ChainError::BadSignature)?;
+    verifying_key.verify(message, &signature).map_err(|_| ChainError::BadSignature)
+}
+
+/// Verify a `sha256WithRSAEncryption` certificate signature: RSASSA-PKCS1-v1_5 with a
+/// SHA-256 digest, the scheme most real-world CA certificates sign with. Thin wrapper
+/// over [`rsa_pkcs1v15_verify`]; see it for the argument encoding and errors.
+fn rsa_pkcs1v15_sha256_verify(public_key_pkcs1_der: &[u8], message: &[u8], signature: &[u8]) -> Result<(), ChainError> {
+    rsa_pkcs1v15_verify::<Sha256>(public_key_pkcs1_der, message, signature)
+}
+
+/// Verify a `sha384WithRSAEncryption` certificate signature — the SHA-384 sibling of
+/// [`rsa_pkcs1v15_sha256_verify`]. Thin wrapper over [`rsa_pkcs1v15_verify`]; see it
+/// for the argument encoding and errors.
+fn rsa_pkcs1v15_sha384_verify(public_key_pkcs1_der: &[u8], message: &[u8], signature: &[u8]) -> Result<(), ChainError> {
+    rsa_pkcs1v15_verify::<Sha384>(public_key_pkcs1_der, message, signature)
+}
+
+/// Verify a `sha512WithRSAEncryption` certificate signature — the SHA-512 sibling of
+/// [`rsa_pkcs1v15_sha256_verify`]. Thin wrapper over [`rsa_pkcs1v15_verify`]; see it
+/// for the argument encoding and errors.
+fn rsa_pkcs1v15_sha512_verify(public_key_pkcs1_der: &[u8], message: &[u8], signature: &[u8]) -> Result<(), ChainError> {
+    rsa_pkcs1v15_verify::<Sha512>(public_key_pkcs1_der, message, signature)
 }
 
 /// Why walking a certificate chain's internal signatures failed (RFC 5280 §4.1.1.3,
@@ -616,6 +732,10 @@ mod tests {
     const OID_SECP256R1: &[u8] = &[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07];
     /// `id-Ed25519` reused as the SPKI key-algorithm OID.
     const OID_ED25519_KEY: &[u8] = &[0x2B, 0x65, 0x70];
+    /// `rsaEncryption` (1.2.840.113549.1.1.1, RFC 8017 Appendix A.1) — the SPKI
+    /// key-algorithm OID for an RSA public key (shared by RSASSA-PSS and
+    /// RSASSA-PKCS1-v1_5 alike; the *signature* OID, not this one, picks the scheme).
+    const OID_RSA_ENCRYPTION_KEY: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01];
 
     // ── ECDSA P-256 / SHA-256 happy path ───────────────────────────────────
 
@@ -653,6 +773,84 @@ mod tests {
 
         verify_certificate_signature(&cert, &issuer_key)
             .expect("the Ed25519 issuer key verifies the certificate it signed");
+    }
+
+    // ── RSASSA-PKCS1-v1_5 happy path (slice 77) ────────────────────────────
+
+    // Unlike ECDSA/Ed25519, RSA signing needs a fresh keypair rather than a fixed
+    // scalar (there is no small fixed private key analogous to the P-256/Ed25519
+    // scalars above), so a fresh 2048-bit key is generated per test. PKCS1-v1_5
+    // signing is deterministic (unlike PSS), so no salt/RNG is needed for the
+    // signature itself — only key generation draws from the OS CSPRNG.
+
+    /// A freshly generated 2048-bit RSA signing key (digest `D`) plus its PKCS#1 DER
+    /// public key, for use as an issuer key in a `*WithRSAEncryption`-signed test
+    /// certificate.
+    fn rsa_pkcs1v15_e2e_key<D: Digest + AssociatedOid>() -> (rsa::pkcs1v15::SigningKey<D>, Vec<u8>) {
+        use rand_core::OsRng;
+        use rsa::pkcs1::EncodeRsaPublicKey;
+        let private_key = rsa::RsaPrivateKey::new(&mut OsRng, 2048).expect("generate RSA key");
+        let public_der = private_key
+            .to_public_key()
+            .to_pkcs1_der()
+            .expect("encode RSA public key")
+            .as_bytes()
+            .to_vec();
+        (rsa::pkcs1v15::SigningKey::<D>::new(private_key), public_der)
+    }
+
+    #[test]
+    fn verifies_an_rsa_pkcs1v15_sha256_signed_certificate() {
+        use rsa::signature::{Signer, SignatureEncoding};
+
+        let (signing_key, issuer_pkcs1_der) = rsa_pkcs1v15_e2e_key::<Sha256>();
+        let issuer_key = issuer_key_from(OID_RSA_ENCRYPTION_KEY, None, &issuer_pkcs1_der);
+
+        let tbs = tbs_certificate(&alg_id(OID_SHA256_WITH_RSA_ENCRYPTION));
+        let signature: rsa::pkcs1v15::Signature = signing_key.sign(&tbs);
+        let cert = certificate(&tbs, &alg_id(OID_SHA256_WITH_RSA_ENCRYPTION), &signature.to_bytes());
+
+        verify_certificate_signature(&cert, &issuer_key)
+            .expect("the RSA issuer key verifies the certificate it signed");
+    }
+
+    #[test]
+    fn verifies_rsa_pkcs1v15_sha384_and_sha512_signed_certificates() {
+        // The SHA-384 and SHA-512 siblings share the SHA-256 path but for the digest.
+        use rsa::signature::{Signer, SignatureEncoding};
+
+        let (sk384, pk384) = rsa_pkcs1v15_e2e_key::<Sha384>();
+        let tbs384 = tbs_certificate(&alg_id(OID_SHA384_WITH_RSA_ENCRYPTION));
+        let sig384: rsa::pkcs1v15::Signature = sk384.sign(&tbs384);
+        let cert384 = certificate(&tbs384, &alg_id(OID_SHA384_WITH_RSA_ENCRYPTION), &sig384.to_bytes());
+        let issuer384 = issuer_key_from(OID_RSA_ENCRYPTION_KEY, None, &pk384);
+        verify_certificate_signature(&cert384, &issuer384).expect("SHA-384 RSA signature verifies");
+
+        let (sk512, pk512) = rsa_pkcs1v15_e2e_key::<Sha512>();
+        let tbs512 = tbs_certificate(&alg_id(OID_SHA512_WITH_RSA_ENCRYPTION));
+        let sig512: rsa::pkcs1v15::Signature = sk512.sign(&tbs512);
+        let cert512 = certificate(&tbs512, &alg_id(OID_SHA512_WITH_RSA_ENCRYPTION), &sig512.to_bytes());
+        let issuer512 = issuer_key_from(OID_RSA_ENCRYPTION_KEY, None, &pk512);
+        verify_certificate_signature(&cert512, &issuer512).expect("SHA-512 RSA signature verifies");
+    }
+
+    #[test]
+    fn rejects_an_rsa_pkcs1v15_certificate_signed_by_a_different_key() {
+        use rsa::signature::{Signer, SignatureEncoding};
+
+        let (real_signer, _) = rsa_pkcs1v15_e2e_key::<Sha256>();
+        let tbs = tbs_certificate(&alg_id(OID_SHA256_WITH_RSA_ENCRYPTION));
+        let signature: rsa::pkcs1v15::Signature = real_signer.sign(&tbs);
+        let cert = certificate(&tbs, &alg_id(OID_SHA256_WITH_RSA_ENCRYPTION), &signature.to_bytes());
+
+        // A different (also validly generated) RSA key must not verify the signature.
+        let (_, other_pkcs1_der) = rsa_pkcs1v15_e2e_key::<Sha256>();
+        let wrong_issuer = issuer_key_from(OID_RSA_ENCRYPTION_KEY, None, &other_pkcs1_der);
+
+        assert_eq!(
+            verify_certificate_signature(&cert, &wrong_issuer),
+            Err(ChainError::BadSignature),
+        );
     }
 
     // ── Tampered TBS / wrong issuer → BadSignature ─────────────────────────
@@ -763,17 +961,52 @@ mod tests {
     // ── Unsupported / deferred algorithms ──────────────────────────────────
 
     #[test]
-    fn rejects_an_rsa_signature_as_unsupported() {
-        // sha256WithRSAEncryption (1.2.840.113549.1.1.11): a real, common signature
-        // algorithm this slice defers until a PKCS#1 v1.5 verifier exists.
-        let rsa_oid: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B];
-        let rsa_alg = tlv(TAG_SEQUENCE, &cat(&[&tlv(TAG_OID, rsa_oid), &tlv(0x05, &[])]));
-        let tbs = tbs_certificate(&rsa_alg);
-        let cert = certificate(&tbs, &rsa_alg, &[0xAB; 256]);
-        let issuer = issuer_key_from(OID_EC_PUBLIC_KEY, Some(OID_SECP256R1), &[0x04; 65]);
+    fn rejects_an_rsa_pss_certificate_signature_as_unsupported() {
+        // RSASSA-PSS (RFC 4055 §3.1, a parameterised id-RSASSA-PSS AlgorithmIdentifier,
+        // 1.2.840.113549.1.1.10): the scheme this crate already verifies for TLS 1.3
+        // `CertificateVerify` (tls_cert_verify::rsa_pss_verify), but not — this slice
+        // adds only the three plain RSASSA-PKCS1-v1_5 OIDs — as an X.509 *certificate*
+        // signature algorithm.
+        let rsa_pss_oid: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0A];
+        let rsa_pss_alg = tlv(TAG_SEQUENCE, &tlv(TAG_OID, rsa_pss_oid));
+        let tbs = tbs_certificate(&rsa_pss_alg);
+        let cert = certificate(&tbs, &rsa_pss_alg, &[0xAB; 256]);
+        let issuer = issuer_key_from(OID_RSA_ENCRYPTION_KEY, None, &[0x30, 0x00]);
         assert_eq!(
             verify_certificate_signature(&cert, &issuer),
             Err(ChainError::UnsupportedSignatureAlgorithm),
+        );
+    }
+
+    #[test]
+    fn rejects_an_rsa_sha1_certificate_signature_as_unsupported() {
+        // sha1WithRSAEncryption (1.2.840.113549.1.1.5): a real, deployed legacy
+        // signature algorithm outside the SHA-256/384/512 set this slice verifies.
+        let rsa_sha1_oid: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x05];
+        let rsa_sha1_alg = tlv(TAG_SEQUENCE, &cat(&[&tlv(TAG_OID, rsa_sha1_oid), &tlv(0x05, &[])]));
+        let tbs = tbs_certificate(&rsa_sha1_alg);
+        let cert = certificate(&tbs, &rsa_sha1_alg, &[0xAB; 256]);
+        let issuer = issuer_key_from(OID_RSA_ENCRYPTION_KEY, None, &[0x30, 0x00]);
+        assert_eq!(
+            verify_certificate_signature(&cert, &issuer),
+            Err(ChainError::UnsupportedSignatureAlgorithm),
+        );
+    }
+
+    #[test]
+    fn rejects_an_rsa_signature_with_a_non_rsa_issuer_key() {
+        // A validly-shaped sha256WithRSAEncryption signature, but the caller offers a
+        // P-256 issuer key — the pairing is impossible, so it must be an
+        // AlgorithmMismatch, not a bare BadSignature (mirrors
+        // rejects_issuer_key_type_that_does_not_match_signature_algorithm above).
+        let tbs = tbs_certificate(&alg_id(OID_SHA256_WITH_RSA_ENCRYPTION));
+        let cert = certificate(&tbs, &alg_id(OID_SHA256_WITH_RSA_ENCRYPTION), &[0xAB; 256]);
+        let ec_issuer = issuer_key_from(OID_EC_PUBLIC_KEY, Some(OID_SECP256R1), &[0x04; 65]);
+        assert_eq!(
+            verify_certificate_signature(&cert, &ec_issuer),
+            Err(ChainError::AlgorithmMismatch(
+                "issuer key type does not match signature algorithm",
+            )),
         );
     }
 
