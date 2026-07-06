@@ -58,7 +58,11 @@
 //! self-consistent *name* chain, each certificate's `issuer` distinguished name equal to
 //! the next certificate's `subject`
 //! ([`x509_name_chain::verify_name_chain`](super::x509_name_chain::verify_name_chain),
-//! RFC 5280 §4.1.2.4, §4.1.2.6, §6.1) — all five *before* the client Finished goes on
+//! RFC 5280 §4.1.2.4, §4.1.2.6, §6.1), and — this slice — every certificate that issues
+//! another must be a permitted CA, asserting `basicConstraints` `cA = TRUE` and honouring
+//! its `pathLenConstraint`
+//! ([`x509_basic_constraints::verify_ca_constraints`](super::x509_basic_constraints::verify_ca_constraints),
+//! RFC 5280 §4.2.1.9, §6.1.4) — all six *before* the client Finished goes on
 //! the wire. The verified completion is then retained ([`ConnectDriver::completed`]).
 //!
 //! ## What it defers
@@ -71,10 +75,12 @@
 //!   confirming every certificate is signed by the next one up (the *chain-signature*
 //!   half, RFC 5280 §4.1.1.3, RFC 8446 §4.4.2), and — this slice — confirms every
 //!   certificate's `issuer` distinguished name matches the next certificate's `subject`
-//!   (the *name-chaining* half, RFC 5280 §4.1.2.4, §4.1.2.6, §6.1). It does **not** yet
-//!   terminate that chain at a trusted root (RFC 5280 §6.1) or honour
-//!   `basicConstraints`/`keyUsage` — those remain for a later slice, exactly as both
-//!   chain walks stop one link short of the anchor.
+//!   (the *name-chaining* half, RFC 5280 §4.1.2.4, §4.1.2.6, §6.1), and — this slice —
+//!   confirms every certificate that issues another is a permitted CA (the
+//!   *basicConstraints* half, `cA = TRUE` and any `pathLenConstraint` honoured, RFC 5280
+//!   §4.2.1.9, §6.1.4). It does **not** yet terminate that chain at a trusted root (RFC
+//!   5280 §6.1) or honour `keyUsage` (§4.2.1.3) — those remain for a later slice, exactly
+//!   as all three chain walks stop one link short of the anchor.
 //! - **Building the ClientHello.** The exact first-flight bytes and the ephemeral
 //!   X25519 private key are supplied to [`TlsConnState::new`](super::conn_tls::TlsConnState::new)
 //!   by the caller.
@@ -101,6 +107,7 @@ use super::conn_turn::{ConnectionTurn, TurnEffect};
 use super::send_path::FlushError;
 use super::tls_handshake::HandshakeComplete;
 use super::udp::DatagramTransport;
+use super::x509_basic_constraints::{CaConstraintsWalkError, verify_ca_constraints};
 use super::x509_chain::{ChainWalkError, verify_chain_signatures};
 use super::x509_hostname::{HostnameError, verify_certificate_hostname};
 use super::x509_name_chain::{NameChainWalkError, verify_name_chain};
@@ -212,6 +219,20 @@ pub enum ConnectError {
     /// connection before the client Finished is flushed. Confirming the name links does
     /// not yet terminate the chain at a trusted root — that remains a later slice.
     NameChain(NameChainWalkError),
+    /// The server-presented certificate chain is not a permitted issuance path (RFC 5280
+    /// §4.2.1.9, §6.1.4, RFC 8446 §4.4.2): some certificate that *issues* another does not
+    /// assert `basicConstraints` `cA = TRUE`, or its `pathLenConstraint` is smaller than
+    /// the number of intermediates below it, or a certificate's `basicConstraints` could
+    /// not be extracted ([`CaConstraintsWalkError`](super::x509_basic_constraints::CaConstraintsWalkError)).
+    /// The CA-permission complement of [`Chain`](Self::Chain) and [`NameChain`](Self::NameChain):
+    /// a chain must be *signed* by, *named* after, and *issuable* by each next certificate.
+    /// Without it a valid leaf certificate could be presented as an intermediate to mint
+    /// certificates for any name beneath it. Checked after possession, identity, time, the
+    /// chain-signature walk, and the name walk hold; like the five before it, it abandons
+    /// the connection before the client Finished is flushed. Confirming the presented
+    /// certificates are permitted issuers does not yet terminate the chain at a trusted
+    /// root or honour `keyUsage` (§4.2.1.3) — those remain later slices.
+    CaConstraints(CaConstraintsWalkError),
 }
 
 impl core::fmt::Display for ConnectError {
@@ -229,6 +250,9 @@ impl core::fmt::Display for ConnectError {
             Self::NameChain(e) => {
                 write!(f, "QUIC connect: certificate name-chain verification failed: {e}")
             }
+            Self::CaConstraints(e) => {
+                write!(f, "QUIC connect: certificate basicConstraints verification failed: {e}")
+            }
         }
     }
 }
@@ -244,6 +268,7 @@ impl std::error::Error for ConnectError {
             Self::Validity(e) => Some(e),
             Self::Chain(e) => Some(e),
             Self::NameChain(e) => Some(e),
+            Self::CaConstraints(e) => Some(e),
         }
     }
 }
@@ -336,15 +361,17 @@ impl<T: DatagramTransport> ConnectDriver<T> {
     /// CertificateVerify signature checked, RFC 8446 §4.4.3), that certificate verified
     /// to name the requested host (RFC 6125 §6), verified valid at the caller's
     /// wall-clock now (RFC 5280 §4.1.2.5), *and* the presented chain verified internally
-    /// self-consistent — each certificate both signed by the next (RFC 5280 §4.1.1.3) and
-    /// named after it (each `issuer` matching the next `subject`, RFC 5280 §4.1.2.4,
-    /// §4.1.2.6, §6.1). `None` while the handshake is still in progress; a completion
-    /// whose certificate fails to authenticate, does not cover
-    /// [`reference_host`](ConnectDriver), is outside its validity period, or heads a chain
-    /// whose signature or name links do not verify never reaches here —
-    /// [`poll`](ConnectDriver::poll) returns [`ConnectError::CertAuth`],
-    /// [`ConnectError::Hostname`], [`ConnectError::Validity`], [`ConnectError::Chain`], or
-    /// [`ConnectError::NameChain`] instead.
+    /// self-consistent — each certificate signed by the next (RFC 5280 §4.1.1.3), named
+    /// after it (each `issuer` matching the next `subject`, RFC 5280 §4.1.2.4, §4.1.2.6,
+    /// §6.1), *and* permitted to issue it (each issuer a CA, `basicConstraints`
+    /// `cA = TRUE` with any `pathLenConstraint` honoured, RFC 5280 §4.2.1.9, §6.1.4).
+    /// `None` while the handshake is still in progress; a completion whose certificate
+    /// fails to authenticate, does not cover [`reference_host`](ConnectDriver), is outside
+    /// its validity period, or heads a chain whose signature, name, or CA-permission links
+    /// do not verify never reaches here — [`poll`](ConnectDriver::poll) returns
+    /// [`ConnectError::CertAuth`], [`ConnectError::Hostname`], [`ConnectError::Validity`],
+    /// [`ConnectError::Chain`], [`ConnectError::NameChain`], or
+    /// [`ConnectError::CaConstraints`] instead.
     ///
     /// Terminating the chain at a trusted root remains the caller's (or a later slice's)
     /// job before the certificate is trusted for an origin.
@@ -400,21 +427,24 @@ impl<T: DatagramTransport> ConnectDriver<T> {
     /// RFC 5280 §4.1.1.3, RFC 8446 §4.4.2), and verifies it is self-consistent by name —
     /// each `issuer` matching the next `subject`
     /// ([`verify_name_chain`](super::x509_name_chain::verify_name_chain),
-    /// RFC 5280 §4.1.2.4, §4.1.2.6, §6.1) — before flushing the client Finished the
+    /// RFC 5280 §4.1.2.4, §4.1.2.6, §6.1), and verifies every issuing certificate is a
+    /// permitted CA — `basicConstraints` `cA = TRUE` with any `pathLenConstraint` honoured
+    /// ([`verify_ca_constraints`](super::x509_basic_constraints::verify_ca_constraints),
+    /// RFC 5280 §4.2.1.9, §6.1.4) — before flushing the client Finished the
     /// advance enqueued (RFC 8446 §4.4.3, §4.4.4) and retaining the completion
     /// ([`completed`](ConnectDriver::completed)). A certificate that fails to
     /// authenticate, that does not cover the requested host, that is outside its validity
-    /// period, or that heads a chain whose signature or name links do not verify abandons
-    /// the connection before the client Finished goes out. On a timer wake it advances no
-    /// TLS.
+    /// period, or that heads a chain whose signature, name, or CA-permission links do not
+    /// verify abandons the connection before the client Finished goes out. On a timer wake
+    /// it advances no TLS.
     ///
     /// # Errors
     ///
     /// [`ConnectError`] wrapping the failing step: a control-flow error from the poll,
     /// a TLS error from the advance, a server certificate that failed to authenticate,
     /// does not name the requested host, is outside its validity period, or heads a
-    /// chain whose signature or name links do not verify, or a failed flush of the client
-    /// Finished.
+    /// chain whose signature, name, or CA-permission links do not verify, or a failed
+    /// flush of the client Finished.
     pub fn poll(&mut self, now: Instant) -> Result<ConnectStep, ConnectError> {
         let poll = self.handshake.poll(now).map_err(ConnectError::Loop)?;
         let mut messages_processed = 0;
@@ -486,6 +516,18 @@ impl<T: DatagramTransport> ConnectDriver<T> {
                 // single-certificate list vacuously and stops one link short of the trust
                 // anchor (RFC 5280 §6.1), left to a later slice.
                 verify_name_chain(&chain).map_err(ConnectError::NameChain)?;
+                // The signatures link the chain and its names line up; now check every
+                // issuing certificate is *permitted* to issue (RFC 5280 §4.2.1.9, §6.1.4,
+                // RFC 8446 §4.4.2): each certificate above the leaf must assert
+                // `basicConstraints` `cA = TRUE` and honour its `pathLenConstraint`.
+                // Without this a valid, correctly-signed, correctly-named *leaf* could be
+                // presented as an *intermediate* and mint certificates for any name beneath
+                // it — as fatal as a broken signature or name link, so abandon before the
+                // client Finished goes out. Like the two walks before it a single-certificate
+                // list has no issuer and passes vacuously, and it stops short of terminating
+                // the chain at a trust anchor (RFC 5280 §6.1) or honouring `keyUsage`
+                // (§4.2.1.3), left to later slices.
+                verify_ca_constraints(&chain).map_err(ConnectError::CaConstraints)?;
                 // The client Finished (RFC 8446 §4.4.4) was enqueued into the
                 // Handshake CRYPTO stream; put it — and any owed Handshake ACK the
                 // poll queued — on the wire now.
@@ -763,17 +805,51 @@ mod tests {
         der_tlv(0x30, &[not_before.as_slice(), not_after.as_slice()].concat())
     }
 
-    /// Build the `extensions [3]` field of a `TBSCertificate` carrying a single
-    /// `subjectAltName` (OID 2.5.29.17) with one `dNSName` (`[2]`) entry naming `host`,
-    /// exactly the shape [`x509_hostname`](super::super::x509_hostname) walks.
-    fn subject_alt_name_extension(host: &str) -> Vec<u8> {
+    /// A single `subjectAltName` Extension entry (OID 2.5.29.17) with one `dNSName`
+    /// (`[2]`) naming `host`, exactly the shape
+    /// [`x509_hostname`](super::super::x509_hostname) walks. One entry of the `extensions`
+    /// field [`extensions_field`] wraps.
+    fn subject_alt_name_entry(host: &str) -> Vec<u8> {
         let dns_name = der_tlv(0x82, host.as_bytes()); // dNSName [2] IA5String
         let general_names = der_tlv(0x30, &dns_name); // GeneralNames ::= SEQUENCE OF
         let extn_value = der_tlv(0x04, &general_names); // extnValue OCTET STRING
         let san_oid = der_tlv(0x06, &[0x55, 0x1D, 0x11]); // id-ce-subjectAltName
-        let extension = der_tlv(0x30, &[san_oid.as_slice(), extn_value.as_slice()].concat());
-        let extensions = der_tlv(0x30, &extension); // SEQUENCE OF Extension
-        der_tlv(0xA3, &extensions) // [3] EXPLICIT
+        der_tlv(0x30, &[san_oid.as_slice(), extn_value.as_slice()].concat())
+    }
+
+    /// A single `basicConstraints` Extension entry (OID 2.5.29.19) asserting `cA = TRUE`,
+    /// marked critical — exactly the shape
+    /// [`x509_basic_constraints`](super::super::x509_basic_constraints) decodes. An
+    /// issuing (intermediate/root) certificate carries it so the CA-constraints walk
+    /// admits it as a permitted issuer (RFC 5280 §4.2.1.9).
+    fn basic_constraints_ca_entry() -> Vec<u8> {
+        let bc_oid = der_tlv(0x06, &[0x55, 0x1D, 0x13]); // id-ce-basicConstraints
+        let critical = der_tlv(0x01, &[0xFF]); // critical BOOLEAN TRUE
+        let ca_seq = der_tlv(0x30, &der_tlv(0x01, &[0xFF])); // SEQUENCE { cA BOOLEAN TRUE }
+        let extn_value = der_tlv(0x04, &ca_seq); // extnValue OCTET STRING
+        der_tlv(0x30, &[bc_oid.as_slice(), critical.as_slice(), extn_value.as_slice()].concat())
+    }
+
+    /// Wrap a list of Extension entries in a `TBSCertificate`'s `[3] EXPLICIT SEQUENCE OF
+    /// Extension` field (RFC 5280 §4.1.2.9).
+    fn extensions_field(entries: &[Vec<u8>]) -> Vec<u8> {
+        let body: Vec<u8> = entries.iter().flat_map(|e| e.iter().copied()).collect();
+        let sequence = der_tlv(0x30, &body); // SEQUENCE OF Extension
+        der_tlv(0xA3, &sequence) // [3] EXPLICIT
+    }
+
+    /// The `extensions [3]` field a leaf certificate carries: just a `subjectAltName`
+    /// naming `host`. No `basicConstraints`, so the CA-constraints walk treats it as
+    /// `cA = FALSE` — fine, a leaf issues nothing.
+    fn leaf_extensions(host: &str) -> Vec<u8> {
+        extensions_field(&[subject_alt_name_entry(host)])
+    }
+
+    /// The `extensions [3]` field an issuing certificate carries: a `subjectAltName`
+    /// naming `host` *and* a `basicConstraints` asserting `cA = TRUE`, so the
+    /// CA-constraints walk admits it as a permitted issuer (RFC 5280 §4.2.1.9).
+    fn ca_extensions(host: &str) -> Vec<u8> {
+        extensions_field(&[subject_alt_name_entry(host), basic_constraints_ca_entry()])
     }
 
     /// Build the `tbsCertificate` of a minimal, structurally valid v3 certificate
@@ -782,6 +858,14 @@ mod tests {
     /// before the SPKI is a placeholder the extractor skips. Returned raw so a caller
     /// can sign these exact bytes (RFC 5280 §4.1.1.3) and [`seal_certificate`] them.
     fn ed25519_tbs(host: &str, subject_pubkey: &[u8; 32]) -> Vec<u8> {
+        ed25519_tbs_ca(host, subject_pubkey, false)
+    }
+
+    /// Like [`ed25519_tbs`] but with an explicit `is_ca` flag: when `true` the certificate
+    /// additionally carries a `basicConstraints` `cA = TRUE` extension (RFC 5280 §4.2.1.9),
+    /// so the CA-constraints walk admits it as a permitted issuer. A leaf passes `false`;
+    /// an intermediate passes `true`.
+    fn ed25519_tbs_ca(host: &str, subject_pubkey: &[u8; 32], is_ca: bool) -> Vec<u8> {
         // id-Ed25519 OID 1.3.101.112 (RFC 8410 §3).
         let ed_oid = der_tlv(0x06, &[0x2B, 0x65, 0x70]);
         let alg_id = der_tlv(0x30, &ed_oid);
@@ -794,7 +878,7 @@ mod tests {
         let sig_alg = der_tlv(0x30, &der_tlv(0x06, &[0x2B, 0x65, 0x70]));
         let empty = der_tlv(0x30, &[]);
         let validity = validity_extension();
-        let extensions = subject_alt_name_extension(host);
+        let extensions = if is_ca { ca_extensions(host) } else { leaf_extensions(host) };
         der_tlv(
             0x30,
             &[
@@ -859,11 +943,13 @@ mod tests {
 
     /// A minimal intermediate certificate carrying the intermediate's Ed25519 public key
     /// in its `SubjectPublicKeyInfo` — the key the chain walk extracts to verify the
-    /// end-entity's signature. Its own signature is a placeholder: it is the last
-    /// certificate in the fixture chain, whose issuer is a trust anchor outside the list,
-    /// so the walk does not check it.
+    /// end-entity's signature — and a `basicConstraints` `cA = TRUE` so the CA-constraints
+    /// walk admits it as a permitted issuer (RFC 5280 §4.2.1.9). Its own signature is a
+    /// placeholder: it is the last certificate in the fixture chain, whose issuer is a
+    /// trust anchor outside the list, so the walk does not check it.
     fn intermediate_certificate_der() -> Vec<u8> {
-        let tbs = ed25519_tbs("intermediate.test", &intermediate_ed25519().verifying_key().to_bytes());
+        let tbs =
+            ed25519_tbs_ca("intermediate.test", &intermediate_ed25519().verifying_key().to_bytes(), true);
         seal_certificate(&tbs, &[0xBE, 0xEF])
     }
 
@@ -879,17 +965,19 @@ mod tests {
         der_tlv(0x30, &rdn) // RDNSequence SEQUENCE OF
     }
 
-    /// Like [`ed25519_tbs`] but with explicit `issuer` and `subject` distinguished-name
+    /// Like [`ed25519_tbs_ca`] but with explicit `issuer` and `subject` distinguished-name
     /// DER in place of the empty-SEQUENCE placeholders, so a fixture can exercise the
     /// name-chain walk ([`x509_name_chain`](super::super::x509_name_chain)). Every other
     /// field — the SPKI carrying `subject_pubkey`, the validity window, the
-    /// `subjectAltName` naming `host` — matches [`ed25519_tbs`], so the certificate still
-    /// authenticates, names the host, and is in date; only its issuer/subject Names change.
+    /// `subjectAltName` naming `host`, and (when `is_ca`) the `basicConstraints`
+    /// `cA = TRUE` — matches [`ed25519_tbs_ca`], so the certificate still authenticates,
+    /// names the host, and is in date; only its issuer/subject Names change.
     fn ed25519_tbs_named(
         host: &str,
         subject_pubkey: &[u8; 32],
         issuer: &[u8],
         subject: &[u8],
+        is_ca: bool,
     ) -> Vec<u8> {
         let ed_oid = der_tlv(0x06, &[0x2B, 0x65, 0x70]);
         let alg_id = der_tlv(0x30, &ed_oid);
@@ -901,7 +989,7 @@ mod tests {
         let serial = der_tlv(0x02, &[0x01]);
         let sig_alg = der_tlv(0x30, &der_tlv(0x06, &[0x2B, 0x65, 0x70]));
         let validity = validity_extension();
-        let extensions = subject_alt_name_extension(host);
+        let extensions = if is_ca { ca_extensions(host) } else { leaf_extensions(host) };
         der_tlv(
             0x30,
             &[
@@ -943,18 +1031,64 @@ mod tests {
             &server_ed25519().verifying_key().to_bytes(),
             &end_entity_issuer,
             &end_entity_subject,
+            false, // the end-entity leaf is not a CA
         );
         let ee_sig = intermediate_ed25519().sign(&ee_tbs).to_bytes().to_vec();
         let end_entity = seal_certificate(&ee_tbs, &ee_sig);
 
         // Intermediate: its own key in its SPKI (the key the signature walk extracts to
-        // check the end-entity) and its subject the Name the end-entity names as issuer
-        // in the matching case. Last in the list, so its placeholder signature is unchecked.
+        // check the end-entity), its subject the Name the end-entity names as issuer in
+        // the matching case, and basicConstraints cA = TRUE so it is a permitted issuer.
+        // Last in the list, so its placeholder signature is unchecked.
         let int_tbs = ed25519_tbs_named(
             "intermediate.test",
             &intermediate_ed25519().verifying_key().to_bytes(),
             &name_rdn("Lumen Test Root"),
             &intermediate_subject,
+            true, // the intermediate issues the end-entity, so it must be a CA
+        );
+        let intermediate = seal_certificate(&int_tbs, &[0xBE, 0xEF]);
+
+        enc(&Handshake::Certificate(Certificate {
+            certificate_request_context: Vec::new(),
+            certificate_list: vec![
+                CertificateEntry { cert_data: end_entity, extensions: Vec::new() },
+                CertificateEntry { cert_data: intermediate, extensions: Vec::new() },
+            ],
+        }))
+    }
+
+    /// A two-certificate `Certificate` message whose signature and name links both verify
+    /// but whose issuing (intermediate) certificate is **not** a CA — it carries no
+    /// `basicConstraints` (RFC 5280 §4.2.1.9), so the CA-constraints walk rejects it as a
+    /// permitted issuer. The end-entity still authenticates, names [`SERVER_HOSTNAME`], is
+    /// in date, is signed by the intermediate, and names it as its issuer, so possession,
+    /// identity, time, the signature walk, and the name walk all pass and only the
+    /// basicConstraints check fails — isolating the CA-permission leg.
+    fn certificate_bytes_non_ca_issuer() -> Vec<u8> {
+        use ed25519_dalek::Signer;
+        let intermediate_subject = name_rdn("Lumen Test Intermediate");
+
+        // End-entity: really signed by the intermediate (signature link holds) and naming
+        // the intermediate's subject as its issuer (name link holds).
+        let ee_tbs = ed25519_tbs_named(
+            SERVER_HOSTNAME,
+            &server_ed25519().verifying_key().to_bytes(),
+            &name_rdn("Lumen Test Intermediate"),
+            &name_rdn(SERVER_HOSTNAME),
+            false,
+        );
+        let ee_sig = intermediate_ed25519().sign(&ee_tbs).to_bytes().to_vec();
+        let end_entity = seal_certificate(&ee_tbs, &ee_sig);
+
+        // Intermediate: subject matches the end-entity's issuer and its key signed the
+        // end-entity, but it is NOT a CA (is_ca = false, no basicConstraints).
+        let int_tbs = ed25519_tbs_named(
+            "intermediate.test",
+            &intermediate_ed25519().verifying_key().to_bytes(),
+            &name_rdn("Lumen Test Root"),
+            &intermediate_subject,
+            false, // the issuer masquerades as a CA without asserting cA = TRUE
         );
         let intermediate = seal_certificate(&int_tbs, &[0xBE, 0xEF]);
 
@@ -1443,6 +1577,61 @@ mod tests {
             ConnectError::NameChain(NameChainWalkError::NameMismatch { subject_index: 0 }),
         ));
         // The completion is never retained for a mis-named chain, and the client Finished —
+        // enqueued by the TLS advance — was not flushed.
+        assert!(cd.completed().is_none());
+        assert!(cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
+    }
+
+    // ---- poll: a permitted CA issuer lets the handshake complete -------
+
+    #[test]
+    fn poll_completes_when_the_issuer_is_a_ca() {
+        let now = base();
+        let ch = client_hello_bytes();
+        let sh = server_hello_bytes();
+        let mut t = transport();
+        // A two-cert chain whose signature and name links both verify AND whose issuing
+        // intermediate asserts basicConstraints cA = TRUE: possession, identity, time, the
+        // signature walk, the name walk, and the CA-constraints walk all pass, so the
+        // handshake completes.
+        let cert = certificate_bytes_named_chain(true);
+        t.push_inbound(server_initial(0, sh.clone()));
+        t.push_inbound(server_handshake(0, handshake_flight_with_cert(&ch, &sh, &cert), &ch, &sh));
+        let mut cd = connect_driver(t, now);
+
+        cd.poll(now).expect("poll over the ServerHello");
+        let step = cd.poll(now).expect("poll over the flight");
+        assert!(step.completed);
+        let complete = cd.completed().expect("completion retained");
+        assert_eq!(complete.server_certificate.certificate_list.len(), 2, "end-entity + CA issuer");
+        // The client Finished was flushed: the Handshake CRYPTO queue drained.
+        assert!(!cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
+    }
+
+    // ---- poll: a non-CA issuer aborts the connect ----------------------
+
+    #[test]
+    fn poll_rejects_a_chain_whose_issuer_is_not_a_ca() {
+        let now = base();
+        let ch = client_hello_bytes();
+        let sh = server_hello_bytes();
+        let mut t = transport();
+        // The end-entity authenticates, names SERVER_HOSTNAME, is in date, is really signed
+        // by the intermediate, and names it as issuer — but the intermediate carries no
+        // basicConstraints, so possession, identity, time, the signature walk, and the name
+        // walk all pass and the failure is purely the CA-constraints (basicConstraints) check.
+        let cert = certificate_bytes_non_ca_issuer();
+        t.push_inbound(server_initial(0, sh.clone()));
+        t.push_inbound(server_handshake(0, handshake_flight_with_cert(&ch, &sh, &cert), &ch, &sh));
+        let mut cd = connect_driver(t, now);
+
+        cd.poll(now).expect("poll over the ServerHello");
+        let err = cd.poll(now).expect_err("the issuer must not be a permitted CA");
+        assert!(matches!(
+            err,
+            ConnectError::CaConstraints(CaConstraintsWalkError::NotaCa { index: 1 }),
+        ));
+        // The completion is never retained for a non-CA issuer, and the client Finished —
         // enqueued by the TLS advance — was not flushed.
         assert!(cd.completed().is_none());
         assert!(cd.handshake().turn().send().pending_in(PacketNumberSpace::Handshake));
