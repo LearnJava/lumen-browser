@@ -15,6 +15,7 @@
     python scripts/orchestrator.py P1 --model haiku                     # сразу на Haiku (alias)
     python scripts/orchestrator.py P1 --fallback-model haiku            # резерв при лимите
     python scripts/orchestrator.py P1 --model sonnet --fallback-model haiku   # стартуем на Sonnet, резерв Haiku
+    python scripts/orchestrator.py P1 --coders team --max-tasks 1       # цикл: Claude-брифы → кодеры → Claude-ревью
     python scripts/orchestrator.py P5 --max-tasks 1                     # P5: один прогон ревизии
     python scripts/orchestrator.py --stop P1                            # мягкая остановка
     python scripts/orchestrator.py --stop-all                           # остановить всех
@@ -124,6 +125,17 @@ Fallback на резервную модель при rate limit
                        nano-omni сравнивает скриншоты с main (визуальная
                        приёмка, вердикт в worklog). Финальное ревью, одобрение
                        и влитие в main — за Claude-сессией разработчика.
+    --coders team    — полный конвейер одного цикла:
+                       (1) Claude-сессия «бригадир» берёт две первые задачи из
+                           STATUS, выделяет мелкие срезы и пишет по брифу на
+                           кодера в .tmp/briefs/ (+ манифест);
+                       (2) кодеры выполняют брифы (задача A — Step 3.7 Flash,
+                           задача B — Nemotron 3 Ultra) с воротами cargo и
+                           визуальной приёмкой nano-omni;
+                       (3) Claude-сессия «ревьюер» смотрит диффы, одобряет или
+                           отклоняет, вливает одобренное в main и чистит следы;
+                       все сессии завершаются, цикл повторяется, пока есть
+                       задачи. --max-tasks считает ЦИКЛЫ (1 цикл = до 2 задач).
 
 Нужен KILO_API_KEY (env или .tmp/kilo.env); SDK не нужен (urllib).
 ПРИВАТНОСТЬ: free-эндпоинты Kilo/NVIDIA — trial, запросы логируются на их
@@ -1479,6 +1491,31 @@ def _coder_initial_messages(developer: str, pointer: str, desc: str) -> list[dic
     ]
 
 
+def _coder_brief_messages(developer: str, pointer: str, brief: str) -> list[dict]:
+    """Стартовый диалог по брифу от Claude-бригадира (team-режим).
+
+    Бриф самодостаточен (точные файлы/строки/сигнатуры/критерии готовности) —
+    кодер не имеет доступа к диалогу бригадира. Скоуп ограничен брифом.
+    """
+    if len(brief) > 24000:
+        brief = brief[:24000] + "\n…(бриф обрезан)…"
+    return [
+        {"role": "system", "content": coder_solo_system_prompt(developer)},
+        {
+            "role": "user",
+            "content": (
+                f"Твоя задача — указатель `{pointer}` из STATUS-{developer}.md. "
+                "Ведущий разработчик подготовил тебе подробный бриф (ниже). "
+                "Следуй ему ТОЧНО; за пределы брифа не выходи.\n\n"
+                "=== БРИФ ===\n" + brief + "\n=== КОНЕЦ БРИФА ===\n\n"
+                "Начни с READ файлов, названных в брифе. Когда критерии готовности "
+                "выполнены и ворота (check + clippy -D warnings + test) зелёные — "
+                "DONE с осмысленным текстом коммита."
+            ),
+        },
+    ]
+
+
 # --- Визуальная приёмка (nano-omni) ---
 #
 # После зелёных ворот и коммита кодера оркестратор снимает headless
@@ -1645,15 +1682,28 @@ def run_vision_acceptance(
     return verdict
 
 
-def run_coder_solo(developer: str, task_number: int, coder_key: str) -> bool:
+def run_coder_solo(
+    developer: str,
+    task_number: int,
+    coder_key: str,
+    pointer: str | None = None,
+    brief: str | None = None,
+) -> dict:
     """Solo-режим: оркестратор ведёт агент-петлю поверх кодера Kilo без Claude.
 
     Работает в изолированном worktree (своя ветка p<N>-<кодер>-*). Задачу
     выбирает САМ оркестратор — первый непомеченный указатель из STATUS-PN.md
-    (`pick_coder_task`). Перед коммитом — жёсткие ворота: cargo check +
-    clippy -D warnings + test по затронутым crates. После коммита — визуальная
-    приёмка nano-omni (`run_vision_acceptance`, вердикт совещательный).
-    Возвращает True при успешном завершении (ворота зелёные + коммит).
+    (`pick_coder_task`) — либо её задаёт вызывающий код явными `pointer` +
+    `brief` (team-режим: бриф подготовлен Claude-бригадиром и целиком уходит
+    кодеру стартовым сообщением). Перед коммитом — жёсткие ворота: cargo
+    check + clippy -D warnings + test по затронутым crates; DONE без единого
+    WRITE отклоняется (урок прогона 2026-07-07: step37 заявил DONE после
+    чистой разведки, и ворота прошли на нетронутом дереве). После коммита —
+    визуальная приёмка nano-omni (`run_vision_acceptance`, совещательная).
+
+    Возвращает dict результата для worklog/ревью:
+    `{ok, coder, pointer, branch, worktree, commit, vision}` — ok=True только
+    при зелёных воротах + коммите.
 
     На успехе worktree/ветка ОСТАЮТСЯ для ревью, и оркестратор оставляет два
     следа для Claude-разработчика, который позже отревьюит и вольёт работу:
@@ -1678,7 +1728,8 @@ def run_coder_solo(developer: str, task_number: int, coder_key: str) -> bool:
     written: set[str] = set()
     messages: list[dict] = []
     start_iter = 1
-    pointer: str | None = None  # строка-указатель STATUS, над которой работаем
+    # pointer (параметр) — строка-указатель STATUS, над которой работаем;
+    # None → задачу выберет pick_coder_task ниже.
     pointer_desc: str = ""
 
     saved = load_coder_session(developer)
@@ -1708,35 +1759,51 @@ def run_coder_solo(developer: str, task_number: int, coder_key: str) -> bool:
             log(developer, "Найдено состояние solo-сессии, но worktree отсутствует/пуст — старт заново.")
             clear_coder_session(developer)
 
+    def _result(ok: bool, commit: str | None = None, vision: str | None = None) -> dict:
+        """Снимок результата попытки (для solo-цикла и team-ревью)."""
+        return {
+            "ok": ok,
+            "coder": CODERS.get(coder_key, {}).get("label", coder_key),
+            "pointer": pointer,
+            "branch": branch,
+            "worktree": str(work_dir) if work_dir else None,
+            "commit": commit,
+            "vision": vision,
+        }
+
     if coder_key not in CODERS:
         log(developer, f"Неизвестный кодер `{coder_key}` — останов.")
-        return False
+        return _result(False)
     coder = CODERS[coder_key]
 
     try:
         client = KiloClient(developer, coder["id"])
     except RuntimeError as e:
         log(developer, f"Kilo недоступен: {e}")
-        return False
+        return _result(False)
 
     if work_dir is None:
-        # Оркестратор сам выбирает задачу — первый непомеченный указатель из
-        # STATUS-PN.md. Это нужно, чтобы на успехе пометить именно её маркёром.
-        picked = pick_coder_task(developer)
-        if picked is None:
-            log(developer, f"В STATUS-{developer}.md нет непомеченных задач-указателей — solo нечего делать.")
-            return False
-        _, pointer = picked
+        if pointer is None:
+            # Оркестратор сам выбирает задачу — первый непомеченный указатель
+            # из STATUS-PN.md, чтобы на успехе пометить именно её маркёром.
+            picked = pick_coder_task(developer)
+            if picked is None:
+                log(developer, f"В STATUS-{developer}.md нет непомеченных задач-указателей — solo нечего делать.")
+                return _result(False)
+            _, pointer = picked
         pointer_desc = resolve_pointer_desc(pointer)
         log(developer, f"  Задача (указатель): {pointer} — {pointer_desc}")
-        log(developer, f"  Кодер: {coder['label']}")
+        log(developer, f"  Кодер: {coder['label']}" + ("  (по брифу)" if brief else ""))
 
         work_dir, branch, err = _create_solo_worktree(developer, task_number, coder_key)
         if work_dir is None:
             log(developer, f"Не удалось создать worktree для кодера: {err}")
-            return False
+            return _result(False)
         log(developer, f"  Worktree: {work_dir}  (ветка {branch})")
-        messages = _coder_initial_messages(developer, pointer, pointer_desc)
+        if brief:
+            messages = _coder_brief_messages(developer, pointer, brief)
+        else:
+            messages = _coder_initial_messages(developer, pointer, pointer_desc)
         start_iter = 1
 
     def _persist(cur_iter: int) -> None:
@@ -1779,7 +1846,7 @@ def run_coder_solo(developer: str, task_number: int, coder_key: str) -> bool:
                     f"  Kilo API: {net_fails} сбоев подряд — останов solo "
                     f"(сессия сохранена, резюмируется позже). "
                     f"Детали → scripts/coder-debug-{developer}.log")
-                return False
+                return _result(False)
             log(developer,
                 f"  Ошибка Kilo API: {type(e).__name__}: {e}. "
                 f"Сбой {net_fails}/{CODER_MAX_NET_FAILS}, пауза 30с. "
@@ -1813,6 +1880,15 @@ def run_coder_solo(developer: str, task_number: int, coder_key: str) -> bool:
             elif cmd == "DONE":
                 commit_msg = arg or f"{developer}: задача #{task_number} ({coder['label']})"
 
+        if commit_msg is not None and not written:
+            # Работа без единого WRITE не принимается: иначе ворота проходят
+            # на нетронутом дереве и «успех» оставляет пустую ветку.
+            feedback.append(
+                "DONE ОТКЛОНЁН — не записано ни одного файла (ни одного WRITE). "
+                "Задача без изменений кода не принимается: внеси правки и снова DONE."
+            )
+            commit_msg = None
+
         if commit_msg is not None:
             log(developer, f"  {coder['label']} заявил DONE — прогоняю ворота (check + clippy -D + test)...")
             ok, gate_out = _run_solo_gates(developer, work_dir, written)
@@ -1837,7 +1913,7 @@ def run_coder_solo(developer: str, task_number: int, coder_key: str) -> bool:
                 clear_coder_session(developer)
                 log(developer, f"{coder['label']} solo: ворота пройдены, закоммичено.")
                 log(developer, f"  Готово к ревью/влитию Claude: ветка {branch} @ {work_dir} (commit {commit_hash})")
-                return True
+                return _result(True, commit=commit_hash, vision=vision)
             feedback.append(
                 "DONE ОТКЛОНЁН — ворота не прошли:\n" + gate_out[:14000]
                 + "\nИсправь ошибки/варнинги и снова DONE."
@@ -1857,7 +1933,7 @@ def run_coder_solo(developer: str, task_number: int, coder_key: str) -> bool:
     log(developer, f"{coder['label']} solo: исчерпан лимит итераций ({CODER_MAX_ITERS}). Останов.")
     log(developer, f"  Worktree с незавершённой работой оставлен: {work_dir}")
     log(developer, f"  Убрать: git worktree remove {work_dir} --force && git branch -D {branch}")
-    return False
+    return _result(False)
 
 
 def coders_review_note(developer: str) -> str:
@@ -1886,6 +1962,118 @@ def coders_review_note(developer: str) -> str:
         "Если ворота красные или ревью выявило проблемы — НЕ вливай: оставь строку и worklog "
         "как есть, сообщи об этом. Только разобравшись со всеми наработками кодеров, "
         "приступай к своей задаче. "
+    )
+
+
+# --- Режим team: Claude-бригадир → два кодера → Claude-ревью ---
+#
+# Полный конвейер одного цикла (`--coders team`):
+#   1. Claude-сессия «бригадир» (team_prep_prompt): берёт две первые
+#      непомеченные задачи из STATUS-PN.md, для крупных выделяет мелкий срез,
+#      пишет самодостаточные брифы в .tmp/briefs/ + манифест JSON. Код не
+#      трогает. Сессия завершается.
+#   2. Оркестратор гонит кодеров по брифам (run_coder_solo с pointer+brief):
+#      задача A — Step 3.7 Flash, задача B — Nemotron 3 Ultra,
+#      последовательно (общий троттлинг ключа). Ворота + vision как в solo.
+#   3. Claude-сессия «ревьюер» (team_review_prompt): ревью диффов, ворота,
+#      одобряет → merge --no-ff в main + доксинк + чистка STATUS/worklog/
+#      vision/веток/worktree; отклоняет → сносит ветку без влития и пишет
+#      причину. Пустые провальные ветки сносит. Push. Сессия завершается.
+#   4. Цикл повторяется, пока есть задачи; --max-tasks считает циклы.
+#
+# Урок прогона 2026-07-07: кодерам нельзя давать сырой указатель на большую
+# roadmap-задачу — они тонут в разведке (24 итерации grep без единого WRITE).
+# Бриф от Claude с точными файлами/строками — обязательный вход.
+
+BRIEFS_DIR = PROJECT_DIR / ".tmp" / "briefs"
+
+
+def team_manifest_path(developer: str) -> Path:
+    """Путь к JSON-манифесту брифов, который пишет Claude-бригадир в фазе 1."""
+    return BRIEFS_DIR / f"{developer}-manifest.json"
+
+
+def team_prep_prompt(developer: str) -> str:
+    """Промпт фазы 1 team-цикла: Claude-бригадир готовит брифы двум кодерам."""
+    manifest = f".tmp/briefs/{developer}-manifest.json"
+    return (
+        f"Ты ведущий разработчик {developer} проекта Lumen. Этап: подготовка задач для двух "
+        "слабых AI-кодеров (Step 3.7 Flash и Nemotron 3 Ultra). САМ код движка НЕ пиши, "
+        f"ничего не коммить, STATUS/ROADMAP не менять. Прочитай STATUS-{developer}.md и возьми "
+        "ДВЕ первые строки-указателя формата `<файл>:NN` БЕЗ суффикса ` | ` (помеченные уже в "
+        "работе). Если непомеченных меньше двух — возьми сколько есть. Для каждой изучи "
+        "источник и код; если задача крупная или многосрезовая — выдели ОДИН маленький "
+        "самостоятельный срез (размер XS/S, один заход слабой модели). Напиши для каждой "
+        f"самодостаточный бриф в файл .tmp/briefs/{developer}-task-a.md (вторая — "
+        f"{developer}-task-b.md) по правилам разбивки для слабых моделей: точные пути файлов и "
+        "номера строк, полные сигнатуры, короткие выдержки существующего кода, что строго НЕ "
+        "трогать (тесты не ослаблять, graphic_tests/ неприкосновенны), стиль Lumen (edition "
+        "2024, без unwrap/panic в проде, /// на всех pub), критерии готовности (какие cargo-"
+        "команды по каким crate должны позеленеть). Кодер НЕ видит этот диалог — бриф должен "
+        f"быть полным сам по себе. Затем запиши манифест {manifest} строго вида: "
+        '{"tasks": [{"pointer": "<файл>:NN", "brief": ".tmp/briefs/' + developer + '-task-a.md", '
+        '"slice": "краткое имя среза"}, ...]}. Если непомеченных задач нет вообще — запиши '
+        '{"tasks": []}. После записи манифеста сразу заверши сессию.'
+    )
+
+
+def load_team_manifest(developer: str) -> list[dict]:
+    """Прочитать манифест фазы 1. Возвращает до двух валидных задач.
+
+    Валидная запись — dict с непустыми `pointer` и `brief`. Битый JSON или
+    отсутствие файла → пустой список (цикл останавливается с сообщением).
+    """
+    path = team_manifest_path(developer)
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    tasks = data.get("tasks", []) if isinstance(data, dict) else []
+    out: list[dict] = []
+    for t in tasks[:2]:
+        if isinstance(t, dict) and t.get("pointer") and t.get("brief"):
+            out.append(t)
+    return out
+
+
+def team_review_prompt(developer: str, results: list[dict]) -> str:
+    """Промпт фазы 3 team-цикла: Claude-ревьюер разбирает наработки кодеров.
+
+    `results` — список dict из run_coder_solo. Успешные ветки ревьюятся и
+    вливаются (или мотивированно отклоняются), провальные пустые — сносятся.
+    """
+    lines = []
+    for r in results:
+        status = (
+            "ворота пройдены, закоммичено"
+            if r.get("ok")
+            else "ПРОВАЛ (лимит итераций / ошибка) — ветка скорее всего пустая"
+        )
+        lines.append(
+            f"- кодер {r.get('coder')}; указатель {r.get('pointer')}; ветка {r.get('branch')}; "
+            f"worktree {r.get('worktree')}; commit {r.get('commit') or '—'}; "
+            f"vision: {r.get('vision') or '—'}; статус: {status}"
+        )
+    listing = "\n".join(lines) if lines else "(пусто)"
+    return (
+        f"Ты ведущий разработчик {developer} проекта Lumen. Этап: ревью наработок AI-кодеров "
+        f"этого цикла. Новые задачи НЕ бери. Результаты:\n{listing}\n\n"
+        "Для КАЖДОЙ успешной ветки: (1) посмотри дифф `git log -p main..<ветка>`, сверь с "
+        "брифом в .tmp/briefs/ и вердиктом vision (scripts/vision-reports/<ветка>.md, если "
+        "есть); проверь корректность, стиль Lumen, doc-комменты, что тесты не удалены и не "
+        "ослаблены; (2) прогони ворота в её worktree: cargo check + clippy --all-targets "
+        "-D warnings + test по затронутым crate; (3) ОДОБРЯЕШЬ → влей в main "
+        "(git merge --no-ff), сделай доксинк по матрице CLAUDE.md, удали строку-указатель "
+        f"задачи из STATUS-{developer}.md, её строку из scripts/coders-worklog.md и отчёт из "
+        "scripts/vision-reports/, удали ветку и worktree; НЕ одобряешь → НЕ вливай: верни "
+        f"строку-указатель в STATUS-{developer}.md к исходному виду `<файл>:NN` (сними "
+        "` | <ветка> | <маркёр>`), удали строку worklog, ветку и worktree, и в финальном "
+        "ответе объясни причину отказа. Для каждой ПРОВАЛЬНОЙ ветки: просто удали ветку и "
+        "worktree (git worktree remove --force + git branch -D; коммитов там нет). "
+        f"В конце: если было влито — git push origin main; удали файлы .tmp/briefs/{developer}-*; "
+        "коротко подведи итог цикла (что влито, что отклонено и почему) и заверши сессию."
     )
 
 
@@ -1945,7 +2133,10 @@ def run_task_loop(
       "assist" — Claude-водитель, но код пишет Step 3.7 Flash через
                  .tmp/kilo_client.py (добавка к промпту);
       "solo"   — Claude не используется: задачи гонит run_coder_solo(),
-                 кодеры чередуются (Step 3.7 Flash ↔ Nemotron 3 Ultra).
+                 кодеры чередуются (Step 3.7 Flash ↔ Nemotron 3 Ultra);
+      "team"   — цикл из трёх фаз: Claude-бригадир пишет брифы →
+                 кодеры выполняют их → Claude-ревьюер вливает одобренное
+                 (max_tasks считает циклы, 1 цикл = до 2 задач).
 
     Любая ошибка внутри задачи (rate limit, 403, ненулевой код выхода)
     не бросает задачу: сессия возобновляется через `claude --resume`
@@ -2124,6 +2315,54 @@ def run_task_loop(
         log(developer, f"=== Задача #{task_count} ===")
         set_jobstatus(developer, "работает", f"задача #{task_count}")
 
+        if coders_mode == "team":
+            # Team-цикл: Claude-брифы → кодеры → Claude-ревью и merge.
+            # task_count здесь = номер ЦИКЛА (1 цикл = до 2 задач).
+            log(developer, f"Team-цикл #{task_count}: фаза 1 — Claude готовит брифы...")
+            try:
+                team_manifest_path(developer).unlink(missing_ok=True)
+            except OSError:
+                pass
+            save_session_state(developer, task_count)
+            if not attempt_task(task_count, team_prep_prompt(developer), None):
+                task_count -= 1
+                break
+            team_tasks = load_team_manifest(developer)
+            if not team_tasks:
+                log(developer, "Манифест брифов пуст/не создан — непомеченных задач нет. Останов.")
+                task_count -= 1
+                break
+            results: list[dict] = []
+            for i, t in enumerate(team_tasks):
+                coder_key = CODER_ROTATION[i % len(CODER_ROTATION)]
+                brief_path = PROJECT_DIR / t["brief"]
+                try:
+                    brief_text = brief_path.read_text(encoding="utf-8")
+                except OSError as e:
+                    log(developer, f"Бриф {t['brief']} не читается ({e}) — задача пропущена.")
+                    continue
+                log(developer,
+                    f"Team-цикл #{task_count}: фаза 2 — кодер {CODERS[coder_key]['label']} "
+                    f"по брифу {t['brief']} ({t.get('slice', t['pointer'])})...")
+                results.append(run_coder_solo(
+                    developer, task_count, coder_key,
+                    pointer=t["pointer"], brief=brief_text,
+                ))
+            if not results:
+                log(developer, "Ни один бриф не ушёл кодерам — останов.")
+                task_count -= 1
+                break
+            ok_n = sum(1 for r in results if r.get("ok"))
+            log(developer,
+                f"Team-цикл #{task_count}: фаза 3 — Claude ревьюит "
+                f"({ok_n}/{len(results)} веток с коммитами)...")
+            save_session_state(developer, task_count)
+            if not attempt_task(task_count, team_review_prompt(developer, results), None):
+                task_count -= 1
+                break
+            log(developer, f"Team-цикл #{task_count} завершён (роздано задач: {len(results)}).")
+            continue
+
         if coders_mode == "solo":
             # Solo: оркестратор сам агент поверх кодера Kilo, без claude и без
             # .session-файла (нечего возобновлять через --resume). Кодеры
@@ -2131,7 +2370,7 @@ def run_task_loop(
             # восстановит своего кодера.
             coder_key = CODER_ROTATION[(task_count - 1) % len(CODER_ROTATION)]
             log(developer, f"Запуск кодера {CODERS[coder_key]['label']} (solo)...")
-            if not run_coder_solo(developer, task_count, coder_key):
+            if not run_coder_solo(developer, task_count, coder_key).get("ok"):
                 task_count -= 1  # задача не завершилась — останов цикла
                 break
             log(developer, f"Задача #{task_count} завершена (кодер solo).")
@@ -2360,8 +2599,9 @@ def run_wizard() -> None:
             ("Claude (обычный)", "сессии Claude Code"),
             ("Кодеры assist", "Claude-водитель, код пишет Step 3.7 Flash"),
             ("Кодеры solo", "без Claude: step37/nemotron чередуются, приёмка nano-omni"),
+            ("Кодеры team", "цикл: Claude-брифы -> кодеры -> Claude-ревью и merge"),
         ], default=1)
-        coders_mode = {1: None, 2: "assist", 3: "solo"}[mode_idx]
+        coders_mode = {1: None, 2: "assist", 3: "solo", 4: "team"}[mode_idx]
         if coders_mode:
             print("  (нужен KILO_API_KEY в env/.tmp/kilo.env)")
             if coders_mode == "solo":
@@ -2376,11 +2616,13 @@ def run_wizard() -> None:
                 fallback_preset = _wiz_model("Резервная модель:", allow_default=False)
 
         # Лимит задач.
-        recommend_one = "P5" in developers or coders_mode == "solo"
+        recommend_one = "P5" in developers or coders_mode in ("solo", "team")
         if "P5" in developers:
             print("\nP5 — ревизия рекуррентна, без лимита крутится бесконечно. Рекомендуется 1.")
         elif coders_mode == "solo":
             print("\nsolo — финиш по правилам делается вручную. Рекомендуется 1.")
+        elif coders_mode == "team":
+            print("\nteam — лимит считает ЦИКЛЫ (1 цикл = до 2 задач + ревью). Рекомендуется 1.")
         else:
             print("\nЛимит задач на разработчика (0 = без лимита).")
         max_tasks = _wiz_int("Макс. задач", 1 if recommend_one else 0)
@@ -2477,15 +2719,17 @@ def main():
         "--coders",
         type=str,
         default=None,
-        choices=["assist", "solo"],
+        choices=["assist", "solo", "team"],
         help=(
             "Делегировать задачи кодерам Kilo Gateway. "
             "assist — Claude остаётся водителем, но код пишет Step 3.7 Flash "
             "через .tmp/kilo_client.py; solo — оркестратор сам ведёт агент-петлю "
             "поверх кодеров без Claude (Step 3.7 Flash и Nemotron 3 Ultra "
-            "чередуются по задачам, визуальная приёмка — nano-omni; исходники и "
-            "скриншоты уходят на trial-эндпоинты). Требует KILO_API_KEY "
-            "(env или .tmp/kilo.env)."
+            "чередуются по задачам, визуальная приёмка — nano-omni); "
+            "team — полный цикл: Claude готовит брифы двум кодерам, кодеры "
+            "пишут, Claude ревьюит и вливает одобренное в main (--max-tasks "
+            "считает циклы, 1 цикл = до 2 задач). Исходники и скриншоты уходят "
+            "на trial-эндпоинты. Требует KILO_API_KEY (env или .tmp/kilo.env)."
         ),
     )
     parser.add_argument(
