@@ -2841,8 +2841,8 @@
   },
   "BUG-272": {
    "status": "open",
-   "title": "lenta.ru держит 1371 МБ WS / 1124 МБ private при ОДНОЙ загруженной картинке (baseline 328/138 МБ; Edge на полной странице ~530 МБ на все процессы). Нужен heap-п…",
-   "component": "shell/js/layout (память, потребитель не установлен)",
+   "title": "lenta.ru держала 1371 МБ WS при одной картинке. **Корень:** каждый Push{ClipRoundedRect,ClipPath,Opacity,Filter,Mask,Backdrop} создавал offscreen-текстуру разме…",
+   "component": "paint (femtovg, offscreen-слои)",
    "date": null,
    "debtor": false
   }
@@ -3089,6 +3089,9 @@
   "paint (build)": [
    "BUG-235"
   ],
+  "paint (femtovg, offscreen-слои)": [
+   "BUG-272"
+  ],
   "paint (font-metrics)": [
    "BUG-250"
   ],
@@ -3132,9 +3135,6 @@
   ],
   "shell/js": [
    "BUG-164"
-  ],
-  "shell/js/layout (память, потребитель не установлен)": [
-   "BUG-272"
   ],
   "shell/network": [
    "BUG-234"
