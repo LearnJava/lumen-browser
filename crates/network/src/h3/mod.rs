@@ -730,11 +730,20 @@
 //!   keys from the DCID (sending with the client secret, receiving with the
 //!   server secret), and wires the receive/loss/TLS stack into the driver. The
 //!   caller only has to [`connect`](conn_connect::ConnectDriver::connect).
-//! - Slice 57+ (planned) — the `h3_do_request` dispatch in `lib.rs` alongside
-//!   the existing H1/H2 paths: assembling the real [`udp::UdpDatagram`]
-//!   transport (DNS + trust anchors), driving [`client_bootstrap::connect_client`]
-//!   through the handshake, splicing into a [`request_driver::RequestDriver`],
-//!   and routing an origin onto QUIC from its [`alt_svc`] entry.
+//! - Slice 57 — the real-transport orchestrator ([`client_transport`], RFC 9114
+//!   §3.3/§4.1): [`client_transport::h3_do_request`] resolves the authority
+//!   through the injected [`lumen_core::ext::DnsResolver`], opens a real
+//!   [`udp::UdpDatagram`] socket to the first address, loads the bundled Mozilla
+//!   roots ([`mozilla_roots::mozilla_trust_anchors`]), and drives
+//!   [`client_bootstrap::connect_client`] → [`client_request::connect_and_fetch`]
+//!   to a single [`h3_exchange::H3Response`]. Its transport-generic core
+//!   `h3_exchange` runs the whole composition over a
+//!   [`udp::MockDatagramTransport`] in tests.
+//! - Slice 58+ (planned) — Alt-Svc dispatch in `lib.rs`: mapping the
+//!   [`h3_exchange::H3Response`] onto the crate's `Response`, routing an origin
+//!   onto [`client_transport::h3_do_request`] only after it advertised `h3`
+//!   (RFC 7838, [`alt_svc`]) from an H2/H1.1 response, and falling back when the
+//!   QUIC leg fails.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
@@ -746,6 +755,7 @@ pub mod ack;
 pub mod alt_svc;
 pub mod client_bootstrap;
 pub mod client_request;
+pub mod client_transport;
 pub mod conn_cert_auth;
 pub mod conn_connect;
 pub mod conn_flow;
