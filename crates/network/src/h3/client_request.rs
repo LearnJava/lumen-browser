@@ -39,7 +39,7 @@ use std::time::Instant;
 
 use super::conn_connect::{ConnectDriver, ConnectError, ConnectOutcome, RequestSpliceError};
 use super::conn_turn::TurnEffect;
-use super::h3_exchange::H3Response;
+use super::h3_exchange::{BodySink, H3Response};
 use super::request_dispatch::DispatchError;
 use super::request_driver::{RequestDriver, RequestDriverError, RequestOutcome};
 use super::request_exchange::ClientRequest;
@@ -136,6 +136,36 @@ pub fn fetch<T: DatagramTransport>(
     }
 }
 
+/// Identical to [`fetch`] but forwards body bytes to `sink` as DATA frames arrive.
+///
+/// `sink` is passed directly to [`RequestDriver::run_with_sink`]; it fires for
+/// every DATA chunk the peer sends, in order, before the final [`H3Response`]
+/// is returned.
+///
+/// # Errors
+///
+/// Same conditions as [`fetch`].
+pub fn fetch_with_sink<'s, T: DatagramTransport>(
+    driver: &mut RequestDriver<T>,
+    req: &ClientRequest,
+    clock: impl FnMut() -> Instant,
+    max_turns: usize,
+    sink: Option<BodySink<'s>>,
+) -> Result<H3Response, FetchError> {
+    driver.send_request(req).map_err(FetchError::Dispatch)?;
+    let outcome = driver.run_with_sink(clock, max_turns, sink).map_err(FetchError::Driver)?;
+
+    let mut responses = driver.take_responses();
+    if !responses.is_empty() {
+        return Ok(responses.remove(0));
+    }
+    match outcome {
+        RequestOutcome::Completed => Err(FetchError::NoResponse),
+        RequestOutcome::Terminated(effect) => Err(FetchError::Terminated(effect)),
+        RequestOutcome::Incomplete => Err(FetchError::Incomplete),
+    }
+}
+
 /// Why [`connect_and_fetch`] could not complete the request.
 #[derive(Debug)]
 pub enum ConnectFetchError {
@@ -220,6 +250,40 @@ pub fn connect_and_fetch<T: DatagramTransport>(
         .into_request_driver(pump)
         .map_err(ConnectFetchError::Splice)?;
     fetch(&mut driver, req, &mut clock, request_turns).map_err(ConnectFetchError::Fetch)
+}
+
+/// Identical to [`connect_and_fetch`] but forwards body bytes to `sink` as DATA
+/// frames arrive during the request phase.
+///
+/// `sink` is passed through to [`fetch_with_sink`] and ultimately to
+/// [`RequestDriver::run_with_sink`]; it fires for every DATA chunk in order before
+/// the final [`H3Response`] is returned.  The connect (handshake) phase is
+/// unaffected — no body flows there.
+///
+/// # Errors
+///
+/// Same conditions as [`connect_and_fetch`].
+pub fn connect_and_fetch_with_sink<'s, T: DatagramTransport>(
+    mut connect: ConnectDriver<T>,
+    pump: RequestPump,
+    req: &ClientRequest,
+    mut clock: impl FnMut() -> Instant,
+    connect_turns: usize,
+    request_turns: usize,
+    sink: Option<BodySink<'s>>,
+) -> Result<H3Response, ConnectFetchError> {
+    match connect
+        .connect(&mut clock, connect_turns)
+        .map_err(ConnectFetchError::Connect)?
+    {
+        ConnectOutcome::Confirmed => {}
+        other => return Err(ConnectFetchError::NotConfirmed(other)),
+    }
+    let mut driver = connect
+        .into_request_driver(pump)
+        .map_err(ConnectFetchError::Splice)?;
+    fetch_with_sink(&mut driver, req, &mut clock, request_turns, sink)
+        .map_err(ConnectFetchError::Fetch)
 }
 
 #[cfg(test)]

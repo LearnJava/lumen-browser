@@ -496,7 +496,7 @@ fn record_alt_svc(
 /// All `Mutex` locks are held only for HashMap / cache operations — never across
 /// I/O — so a slow QUIC exchange does not stall other requests.
 #[allow(clippy::too_many_arguments)]
-fn try_h3_dispatch(
+fn try_h3_dispatch<'s>(
     cache: &std::sync::Mutex<h3::alt_svc::AltSvcCache>,
     h3_pool: Option<&std::sync::Mutex<h3::client_pool::H3ConnectionPool>>,
     resolver: &dyn DnsResolver,
@@ -509,6 +509,7 @@ fn try_h3_dispatch(
     connect_turns: usize,
     request_turns: usize,
     now: std::time::Instant,
+    mut sink: Option<ChunkSink<'s>>,
 ) -> Option<Response> {
     let key = h3::alt_svc::origin_key(host, port);
     let (h3_host, h3_port) = {
@@ -523,7 +524,8 @@ fn try_h3_dispatch(
         && let Some(mut driver) = pool_guard.take(&key, now)
     {
         drop(pool_guard); // release the lock before I/O
-        match h3::client_transport::h3_fetch_on_driver(
+        let s = sink.as_mut().map(|f| &mut **f as ChunkSink<'_>);
+        match h3::client_transport::h3_fetch_on_driver_with_sink(
             &mut driver,
             &h3_host,
             h3_port,
@@ -532,6 +534,7 @@ fn try_h3_dispatch(
             headers,
             body,
             request_turns,
+            s,
         ) {
             Ok(resp) => {
                 // Store the driver back for the next request.
@@ -553,7 +556,8 @@ fn try_h3_dispatch(
     let config = h3::client_bootstrap::ClientConnectConfig::default();
     match h3::client_transport::h3_connect(resolver, &h3_host, h3_port, &config, connect_turns) {
         Ok(mut driver) => {
-            match h3::client_transport::h3_fetch_on_driver(
+            let s = sink.as_mut().map(|f| &mut **f as ChunkSink<'_>);
+            match h3::client_transport::h3_fetch_on_driver_with_sink(
                 &mut driver,
                 &h3_host,
                 h3_port,
@@ -562,6 +566,7 @@ fn try_h3_dispatch(
                 headers,
                 body,
                 request_turns,
+                s,
             ) {
                 Ok(resp) => {
                     // Store the live driver in the pool for next time.
@@ -1503,18 +1508,14 @@ fn fetch_single(
 
     // HTTP/3 dispatch (RFC 7838, RFC 9114): before any TCP work, a TLS origin
     // with a fresh cached `h3` alternative is tried over QUIC. Proxies don't
-    // carry QUIC. Streaming responses (stream_sink) are not yet supported over
-    // H3 (ResponseAssembler buffers the whole body) — requests with a sink
-    // fall through to H2/H1.1. A failed QUIC leg (broken alternative evicted
-    // inside `try_h3_dispatch`) also falls through to H2/H1.1 below.
-    //
-    // Range/If-Range (RFC 7233) and Authorization (RFC 7235) ARE supported:
-    // they are regular lowercase header fields in RFC 9114 §4.2.
+    // carry QUIC. A failed QUIC leg (broken alternative evicted inside
+    // `try_h3_dispatch`) falls through to H2/H1.1 below. Range/If-Range
+    // (RFC 7233) and Authorization (RFC 7235) ARE supported: they are regular
+    // lowercase header fields in RFC 9114 §4.2.
     if let Some(cache) = h3_alt_svc
         && is_tls
         && effective_proxy.is_none()
         && socks5_proxy.is_none()
-        && stream_sink.is_none()
     {
         // Fingerprint + extra header block for H3 (same set as H2, RFC 9114 §4.2).
         let h3_headers = build_h2_headers(http_profile, accept_encoding, extra_headers);
@@ -1541,6 +1542,7 @@ fn fetch_single(
             header_refs.push((b"authorization", auth.as_bytes()));
         }
 
+        let h3_sink = stream_sink.as_mut().map(|f| &mut **f as ChunkSink<'_>);
         if let Some(resp) = try_h3_dispatch(
             cache,
             h3_pool,
@@ -1554,6 +1556,7 @@ fn fetch_single(
             H3_CONNECT_TURNS,
             H3_REQUEST_TURNS,
             std::time::Instant::now(),
+            h3_sink,
         ) {
             return Ok(resp);
         }
@@ -4720,6 +4723,7 @@ mod tests {
             4,
             4,
             now,
+            None,
         );
         assert!(got.is_none(), "no fresh h3 alternative → fall through");
     }
@@ -4753,6 +4757,7 @@ mod tests {
             4,
             4,
             now,
+            None,
         );
         assert!(got.is_none(), "failed QUIC leg falls back to H2/H1.1");
         assert!(
@@ -4782,6 +4787,7 @@ mod tests {
             4,
             4,
             now,
+            None,
         );
         assert!(got.is_none(), "no h3 entry + empty pool → fall through (resolver not called)");
     }

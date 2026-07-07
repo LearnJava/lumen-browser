@@ -56,7 +56,7 @@
 use std::time::Instant;
 
 use super::conn_turn::ConnectionTurn;
-use super::h3_exchange::H3Response;
+use super::h3_exchange::{BodySink, H3Response};
 use super::loss::PacketNumberSpace;
 use super::quic_frame::Frame;
 use super::recv_path::{IngestError, IngestReport};
@@ -398,6 +398,52 @@ impl<T: DatagramTransport> RequestTurn<T> {
     ) -> Result<(IngestReport, RequestIngest), RequestTurnError> {
         let report = self.turn.driver_mut().ingest(n, now)?;
         let routed = self.route_deferred(&report.effects.deferred)?;
+        Ok((report, routed))
+    }
+
+    /// Routes `deferred` frames through the pump with an optional streaming sink.
+    ///
+    /// Identical to [`route_deferred`](Self::route_deferred) except that DATA-carrying
+    /// STREAM frames forward body bytes to `sink` before accumulating them.  `sink` is
+    /// reborrowed for each frame so ownership is not consumed by the iterator.
+    ///
+    /// # Errors
+    ///
+    /// Same conditions as [`route_deferred`](Self::route_deferred).
+    pub fn route_deferred_with_sink<'s>(
+        &mut self,
+        deferred: &[Frame],
+        mut sink: Option<BodySink<'s>>,
+    ) -> Result<RequestIngest, DispatchError> {
+        let mut events = Vec::new();
+        let mut residual = Vec::new();
+        for frame in deferred {
+            if is_request_frame(frame) {
+                let s = sink.as_mut().map(|f| &mut **f as &mut dyn FnMut(&[u8]));
+                events.push(self.pump.on_frame_with_sink(frame, s)?);
+            } else {
+                residual.push(frame.clone());
+            }
+        }
+        Ok(RequestIngest { events, residual })
+    }
+
+    /// Ingests one datagram and routes its deferred frames with an optional streaming sink.
+    ///
+    /// Identical to [`ingest`](Self::ingest) except that body bytes inside DATA-carrying
+    /// STREAM frames are forwarded to `sink` as they arrive.
+    ///
+    /// # Errors
+    ///
+    /// Same conditions as [`ingest`](Self::ingest).
+    pub fn ingest_with_sink<'s>(
+        &mut self,
+        n: usize,
+        now: Instant,
+        sink: Option<BodySink<'s>>,
+    ) -> Result<(IngestReport, RequestIngest), RequestTurnError> {
+        let report = self.turn.driver_mut().ingest(n, now)?;
+        let routed = self.route_deferred_with_sink(&report.effects.deferred, sink)?;
         Ok((report, routed))
     }
 }
