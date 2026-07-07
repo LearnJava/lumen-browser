@@ -58,7 +58,7 @@ use std::time::Instant;
 use super::conn_turn::{TurnEffect, TurnError};
 use super::driver::DriverAction;
 use super::event_loop::Wakeup;
-use super::h3_exchange::H3Response;
+use super::h3_exchange::{BodySink, H3Response};
 use super::loss::PacketNumberSpace;
 use super::request_dispatch::{DispatchError, SentRequest};
 use super::request_exchange::ClientRequest;
@@ -333,6 +333,103 @@ impl<T: DatagramTransport> RequestDriver<T> {
                 }
                 Ok(RequestPoll::Timers(effects))
             }
+        }
+    }
+
+    /// Identical to [`poll`](Self::poll) but forwards body bytes to `sink` as DATA
+    /// frames arrive inside ingested datagrams.
+    ///
+    /// The sink is reborrowed for the single `ingest_with_sink` call; on a timer wakeup
+    /// it is unused (timer ticks carry no body bytes).
+    ///
+    /// # Errors
+    ///
+    /// Same conditions as [`poll`](Self::poll).
+    pub fn poll_with_sink<'s>(
+        &mut self,
+        now: Instant,
+        sink: Option<BodySink<'s>>,
+    ) -> Result<RequestPoll, RequestDriverError> {
+        let wake = self
+            .turn
+            .turn_mut()
+            .driver_mut()
+            .wait(now)
+            .map_err(RequestDriverError::Wait)?;
+
+        match wake {
+            Wakeup::Datagram(n) => {
+                let (report, ingest) =
+                    self.turn.ingest_with_sink(n, now, sink).map_err(RequestDriverError::Ingest)?;
+                let mut responses = 0;
+                let mut resets = Vec::new();
+                for event in ingest.events {
+                    match event {
+                        PumpEvent::Response(resp) => {
+                            self.responses.push(resp);
+                            responses += 1;
+                        }
+                        PumpEvent::StopSending { reset, .. } => resets.push(reset),
+                        PumpEvent::Progress | PumpEvent::Aborted { .. } | PumpEvent::Ignored => {}
+                    }
+                }
+                for reset in resets {
+                    self.turn
+                        .turn_mut()
+                        .send_mut()
+                        .enqueue(PacketNumberSpace::ApplicationData, reset)
+                        .map_err(RequestDriverError::Enqueue)?;
+                }
+                let acks_queued = self.acknowledge(now)?;
+                self.turn.flush(now).map_err(RequestDriverError::Flush)?;
+                Ok(RequestPoll::Ingested { packets: report.packets_processed, responses, acks_queued })
+            }
+            Wakeup::TimerExpired => {
+                let effects = self
+                    .turn
+                    .turn_mut()
+                    .dispatch_and_apply(now)
+                    .map_err(RequestDriverError::Turn)?;
+                if !effects.iter().any(TurnEffect::is_terminal) {
+                    self.turn.flush(now).map_err(RequestDriverError::Flush)?;
+                }
+                Ok(RequestPoll::Timers(effects))
+            }
+        }
+    }
+
+    /// Identical to [`run`](Self::run) but forwards body bytes to `sink` as DATA
+    /// frames arrive.
+    ///
+    /// `sink` is reborrowed for each `poll_with_sink` call so the loop can iterate
+    /// without consuming the callback.
+    ///
+    /// # Errors
+    ///
+    /// Same conditions as [`run`](Self::run).
+    pub fn run_with_sink<'s>(
+        &mut self,
+        mut clock: impl FnMut() -> Instant,
+        max_turns: usize,
+        mut sink: Option<BodySink<'s>>,
+    ) -> Result<RequestOutcome, RequestDriverError> {
+        for _ in 0..max_turns {
+            if self.is_done() {
+                return Ok(RequestOutcome::Completed);
+            }
+            let now = clock();
+            self.transmit(now)?;
+            let s = sink.as_mut().map(|f| &mut **f as &mut dyn FnMut(&[u8]));
+            if let RequestPoll::Timers(effects) = self.poll_with_sink(now, s)?
+                && let Some(terminal) = effects.into_iter().find(TurnEffect::is_terminal)
+            {
+                return Ok(RequestOutcome::Terminated(terminal));
+            }
+        }
+        if self.is_done() {
+            Ok(RequestOutcome::Completed)
+        } else {
+            Ok(RequestOutcome::Incomplete)
         }
     }
 

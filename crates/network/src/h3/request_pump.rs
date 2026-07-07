@@ -65,7 +65,7 @@
 //! datagram IO, header protection, and loss recovery stay in the transport layers
 //! around it.
 
-use super::h3_exchange::H3Response;
+use super::h3_exchange::{BodySink, H3Response};
 use super::quic_frame::Frame;
 use super::request_dispatch::{DispatchError, RequestDispatch, SentRequest};
 use super::request_exchange::ClientRequest;
@@ -186,6 +186,9 @@ impl RequestPump {
     /// flow-control limit. A frame for a stream with no in-flight request, or any
     /// other frame type, is [`PumpEvent::Ignored`].
     ///
+    /// Equivalent to [`on_frame_with_sink`](Self::on_frame_with_sink) with
+    /// `sink = None`.
+    ///
     /// # Errors
     ///
     /// - [`DispatchError::Stream`] if the frame breaches QUIC flow control, the
@@ -194,11 +197,40 @@ impl RequestPump {
     /// - [`DispatchError::Mux`] if a STREAM frame targets a stream with no in-flight
     ///   request or completes a malformed response (RFC 9114 §4.1).
     pub fn on_frame(&mut self, frame: &Frame) -> Result<PumpEvent, DispatchError> {
+        self.on_frame_with_sink(frame, None)
+    }
+
+    /// Routes one inbound per-stream frame the connection deferred to us,
+    /// forwarding `DATA` frame payloads to `sink` for STREAM frames, returning
+    /// the [`PumpEvent`] it produced.
+    ///
+    /// STREAM frames route to
+    /// [`RequestDispatch::on_stream_frame_with_sink`](super::request_dispatch::RequestDispatch::on_stream_frame_with_sink);
+    /// all other frame types are processed identically to
+    /// [`on_frame`](Self::on_frame). `sink` receives each `DATA` payload
+    /// immediately as the QUIC stream layer delivers ordered bytes. Passing
+    /// `None` is equivalent to [`on_frame`](Self::on_frame).
+    ///
+    /// # Errors
+    ///
+    /// - [`DispatchError::Stream`] if the frame breaches QUIC flow control, the
+    ///   final-size invariants, or the stream-state rules (RFC 9000 §4.1, §4.5,
+    ///   §19.5, §19.10).
+    /// - [`DispatchError::Mux`] if a STREAM frame targets a stream with no in-flight
+    ///   request or completes a malformed response (RFC 9114 §4.1).
+    pub fn on_frame_with_sink(
+        &mut self,
+        frame: &Frame,
+        sink: Option<BodySink<'_>>,
+    ) -> Result<PumpEvent, DispatchError> {
         match frame {
             // Response data: the dispatch owns the "unknown stream" and "malformed
             // response" contracts, so route straight through and let it decide.
             Frame::Stream { stream_id, offset, fin, data } => {
-                match self.dispatch.on_stream_frame(*stream_id, *offset, data, *fin)? {
+                match self
+                    .dispatch
+                    .on_stream_frame_with_sink(*stream_id, *offset, data, *fin, sink)?
+                {
                     Some(response) => Ok(PumpEvent::Response(response)),
                     None => Ok(PumpEvent::Progress),
                 }

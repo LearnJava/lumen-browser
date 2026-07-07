@@ -42,9 +42,11 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use lumen_core::ext::DnsResolver;
 
 use super::client_bootstrap::{BootstrapError, ClientConnectConfig, connect_client};
-use super::client_request::{ConnectFetchError, connect_and_fetch, fetch};
+use super::client_request::{
+    ConnectFetchError, connect_and_fetch, connect_and_fetch_with_sink, fetch, fetch_with_sink,
+};
 use super::conn_connect::{ConnectOutcome, OwnedTrustAnchor};
-use super::h3_exchange::H3Response;
+use super::h3_exchange::{BodySink, H3Response};
 use super::h3_request::H3Profile;
 use super::mozilla_roots::mozilla_trust_anchors;
 use super::request_driver::RequestDriver;
@@ -200,6 +202,51 @@ fn h3_exchange<T: DatagramTransport>(
     .map_err(H3TransportError::Exchange)
 }
 
+/// Identical to [`h3_exchange`] but forwards body bytes to `sink` as DATA frames
+/// arrive during the request phase.
+#[allow(clippy::too_many_arguments)]
+fn h3_exchange_with_sink<'s, T: DatagramTransport>(
+    transport: T,
+    server_name: &str,
+    authority: &[u8],
+    trust_anchors: Vec<OwnedTrustAnchor>,
+    now: Instant,
+    now_unix: i64,
+    clock: impl FnMut() -> Instant,
+    method: &[u8],
+    path: &[u8],
+    headers: &[(&[u8], &[u8])],
+    body: &[u8],
+    config: &ClientConnectConfig,
+    connect_turns: usize,
+    request_turns: usize,
+    sink: Option<BodySink<'s>>,
+) -> Result<H3Response, H3TransportError> {
+    let connect = connect_client(transport, server_name, trust_anchors, now, now_unix, config)
+        .map_err(H3TransportError::Bootstrap)?;
+
+    let req = ClientRequest {
+        profile: H3Profile::default(),
+        method,
+        scheme: b"https",
+        authority,
+        path,
+        headers,
+        body,
+        use_huffman: true,
+    };
+    connect_and_fetch_with_sink(
+        connect,
+        config.request_pump(),
+        &req,
+        clock,
+        connect_turns,
+        request_turns,
+        sink,
+    )
+    .map_err(H3TransportError::Exchange)
+}
+
 /// Fetch `https://host:port{path}` over HTTP/3, opening a fresh QUIC connection
 /// (RFC 9114 §3.3): the real-transport `h3_do_request` alongside the H1/H2
 /// paths in `lib.rs`.
@@ -256,6 +303,52 @@ pub fn h3_do_request(
         config,
         connect_turns,
         request_turns,
+    )
+}
+
+/// Identical to [`h3_do_request`] but forwards body bytes to `sink` as DATA frames
+/// arrive during the request phase.
+///
+/// # Errors
+///
+/// Same conditions as [`h3_do_request`].
+#[allow(clippy::too_many_arguments)]
+pub fn h3_do_request_with_sink<'s>(
+    resolver: &dyn DnsResolver,
+    host: &str,
+    port: u16,
+    method: &[u8],
+    path: &[u8],
+    headers: &[(&[u8], &[u8])],
+    body: &[u8],
+    config: &ClientConnectConfig,
+    connect_turns: usize,
+    request_turns: usize,
+    sink: Option<BodySink<'s>>,
+) -> Result<H3Response, H3TransportError> {
+    let transport = open_transport(resolver, host, port)?;
+    let now = Instant::now();
+    let now_unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let authority = authority_for(host, port);
+    h3_exchange_with_sink(
+        transport,
+        host,
+        authority.as_bytes(),
+        mozilla_trust_anchors(),
+        now,
+        now_unix,
+        Instant::now,
+        method,
+        path,
+        headers,
+        body,
+        config,
+        connect_turns,
+        request_turns,
+        sink,
     )
 }
 
@@ -339,6 +432,39 @@ pub fn h3_fetch_on_driver(
         use_huffman: true,
     };
     fetch(driver, &req, Instant::now, request_turns)
+        .map_err(|e| H3TransportError::Exchange(ConnectFetchError::Fetch(e)))
+}
+
+/// Identical to [`h3_fetch_on_driver`] but forwards body bytes to `sink` as DATA
+/// frames arrive during the request phase.
+///
+/// # Errors
+///
+/// Same conditions as [`h3_fetch_on_driver`].
+#[allow(clippy::too_many_arguments)]
+pub fn h3_fetch_on_driver_with_sink<'s>(
+    driver: &mut RequestDriver<UdpDatagram>,
+    host: &str,
+    port: u16,
+    method: &[u8],
+    path: &[u8],
+    headers: &[(&[u8], &[u8])],
+    body: &[u8],
+    request_turns: usize,
+    sink: Option<BodySink<'s>>,
+) -> Result<H3Response, H3TransportError> {
+    let authority = authority_for(host, port);
+    let req = ClientRequest {
+        profile: H3Profile::default(),
+        method,
+        scheme: b"https",
+        authority: authority.as_bytes(),
+        path,
+        headers,
+        body,
+        use_huffman: true,
+    };
+    fetch_with_sink(driver, &req, Instant::now, request_turns, sink)
         .map_err(|e| H3TransportError::Exchange(ConnectFetchError::Fetch(e)))
 }
 

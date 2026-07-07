@@ -15,9 +15,9 @@
 //!   the trailer section, an ordinary field list).
 //!
 //! [`ResponseAssembler`] owns one client-side request/response stream. The caller
-//! feeds it the stream bytes as QUIC delivers them ([`ResponseAssembler::push_bytes`])
-//! and, once the peer signals the stream FIN, drains the finished response
-//! ([`ResponseAssembler::finish`]). It:
+//! feeds it the stream bytes as QUIC delivers them ([`ResponseAssembler::push_bytes`]
+//! or [`ResponseAssembler::push_bytes_with_sink`]) and, once the peer signals the
+//! stream FIN, drains the finished response ([`ResponseAssembler::finish`]). It:
 //!
 //! - parses each complete frame off the growing buffer, keeping the trailing
 //!   partial frame for the next chunk (RFC 9114 §7.1: a frame may span QUIC STREAM
@@ -28,7 +28,9 @@
 //! - classifies each `HEADERS` frame by the grammar phase it arrives in — a
 //!   response header section (interim `1xx` or the one final head) before the body,
 //!   or the trailer section after it (RFC 9114 §4.1) — and decodes it accordingly;
-//! - accumulates the `DATA` frame payloads into the response body.
+//! - accumulates the `DATA` frame payloads into the response body and, when a sink
+//!   is provided, calls it with each payload immediately so the caller can process
+//!   data before the stream FIN (progressive rendering, RFC 9114 §7.2.1).
 //!
 //! Like every slice below it, it is a pure state machine — no IO, no timers, no
 //! packet protection. The QUIC transport that actually carries the bytes and
@@ -38,6 +40,11 @@
 use super::frame::{Frame, FrameError};
 use super::h3_request::{self, H3ResponseHead, MessageError};
 use super::h3_stream::{RequestState, RequestStream, StreamLayerError};
+
+/// A callback that receives raw `DATA` frame payloads for progressive delivery
+/// (RFC 9114 §7.2.1). Each call carries one complete `DATA` payload in the
+/// order it was decoded off the HTTP/3 response stream.
+pub(crate) type BodySink<'a> = &'a mut dyn FnMut(&[u8]);
 
 /// A fully assembled HTTP/3 response: the final `:status`, its header fields, the
 /// body, any interim (`1xx`) responses that preceded it, and any trailer section.
@@ -149,11 +156,38 @@ impl ResponseAssembler {
     /// Feed the next chunk of request/response-stream bytes, processing every
     /// complete frame it completes and keeping any trailing partial frame.
     ///
+    /// Equivalent to [`push_bytes_with_sink`](Self::push_bytes_with_sink) with
+    /// `sink = None`.
+    ///
     /// # Errors
     ///
     /// [`AssembleError`] if a frame fails to decode, violates the RFC 9114 §4.1
     /// message grammar, or carries a malformed HTTP message.
     pub fn push_bytes(&mut self, data: &[u8]) -> Result<(), AssembleError> {
+        self.push_bytes_with_sink(data, None)
+    }
+
+    /// Feed the next chunk of request/response-stream bytes, calling `sink` with
+    /// each `DATA` frame payload immediately as it completes.
+    ///
+    /// `sink` receives the raw (possibly content-encoded) payload of every `DATA`
+    /// frame before it is appended to the internal body buffer, so the caller can
+    /// process data progressively without waiting for the stream FIN. The payload
+    /// is still accumulated in the assembler and appears in [`H3Response::body`]
+    /// on [`finish`](Self::finish), matching the behaviour of the HTTP/1.1
+    /// streaming path where both the raw bytes and the sink are fed together.
+    ///
+    /// Passing `None` for `sink` is equivalent to [`push_bytes`](Self::push_bytes).
+    ///
+    /// # Errors
+    ///
+    /// [`AssembleError`] if a frame fails to decode, violates the RFC 9114 §4.1
+    /// message grammar, or carries a malformed HTTP message.
+    pub fn push_bytes_with_sink(
+        &mut self,
+        data: &[u8],
+        mut sink: Option<BodySink<'_>>,
+    ) -> Result<(), AssembleError> {
         if self.finished {
             return Err(AssembleError::AfterFin);
         }
@@ -163,7 +197,10 @@ impl ResponseAssembler {
             Frame::parse(&self.buf[consumed_total..]).map_err(AssembleError::Frame)?
         {
             consumed_total += consumed;
-            self.process_frame(frame)?;
+            // Reborrow the sink for each frame: the mutable reference lives only
+            // for the duration of `process_frame`, then becomes available again.
+            let sink_ref = sink.as_mut().map(|f| &mut **f as &mut dyn FnMut(&[u8]));
+            self.process_frame(frame, sink_ref)?;
         }
         if consumed_total > 0 {
             self.buf.drain(..consumed_total);
@@ -172,8 +209,12 @@ impl ResponseAssembler {
     }
 
     /// Run one decoded frame through the grammar and fold its contents into the
-    /// response.
-    fn process_frame(&mut self, frame: Frame) -> Result<(), AssembleError> {
+    /// response, forwarding `DATA` payloads to `sink` before accumulating them.
+    fn process_frame(
+        &mut self,
+        frame: Frame,
+        sink: Option<BodySink<'_>>,
+    ) -> Result<(), AssembleError> {
         // The grammar phase *before* accepting classifies a HEADERS frame: a
         // header section (Init/Headers) versus the trailer section (Data).
         let phase = self.seq.state();
@@ -201,7 +242,14 @@ impl ResponseAssembler {
                     }
                 }
             }
-            Frame::Data(mut payload) => self.body.append(&mut payload),
+            Frame::Data(mut payload) => {
+                // Deliver the raw payload to the sink before accumulating so the
+                // caller sees data as early as possible (progressive rendering).
+                if let Some(s) = sink {
+                    s(&payload);
+                }
+                self.body.append(&mut payload);
+            }
             // PUSH_PROMISE and reserved/greased frames carry nothing for the
             // response head or body; the grammar has already validated their
             // ordering.
@@ -399,6 +447,71 @@ mod tests {
         // Feed all but the last byte, then FIN.
         a.push_bytes(&frame[..frame.len() - 1]).unwrap();
         assert_eq!(a.finish().unwrap_err(), AssembleError::IncompleteFrame);
+    }
+
+    // ── push_bytes_with_sink tests ───────────────────────────────────────────
+
+    #[test]
+    fn sink_called_once_per_data_frame_in_order() {
+        let mut a = ResponseAssembler::new();
+        let mut stream = headers_frame(&[HeaderField::new(b":status".to_vec(), b"200".to_vec())]);
+        stream.extend(data_frame(b"first"));
+        stream.extend(data_frame(b"second"));
+        stream.extend(data_frame(b"third"));
+        let mut chunks: Vec<Vec<u8>> = Vec::new();
+        a.push_bytes_with_sink(&stream, Some(&mut |chunk: &[u8]| chunks.push(chunk.to_vec())))
+            .unwrap();
+        assert_eq!(chunks, vec![b"first".as_slice(), b"second", b"third"]);
+    }
+
+    #[test]
+    fn sink_does_not_fire_for_headers_or_non_data_frames() {
+        let mut a = ResponseAssembler::new();
+        let stream = headers_frame(&[HeaderField::new(b":status".to_vec(), b"204".to_vec())]);
+        let mut fired = false;
+        a.push_bytes_with_sink(&stream, Some(&mut |_| fired = true))
+            .unwrap();
+        assert!(!fired, "HEADERS frame must not trigger the sink");
+    }
+
+    #[test]
+    fn sink_body_still_accumulated_in_response() {
+        // Even when a sink is provided, the full body lands in H3Response::body.
+        let mut a = ResponseAssembler::new();
+        let mut stream = headers_frame(&[HeaderField::new(b":status".to_vec(), b"200".to_vec())]);
+        stream.extend(data_frame(b"chunk-a"));
+        stream.extend(data_frame(b"chunk-b"));
+        a.push_bytes_with_sink(&stream, Some(&mut |_| {})).unwrap();
+        let resp = a.finish().unwrap();
+        assert_eq!(resp.body, b"chunk-achunk-b");
+    }
+
+    #[test]
+    fn sink_none_identical_to_push_bytes() {
+        let mut a1 = ResponseAssembler::new();
+        let mut a2 = ResponseAssembler::new();
+        let mut stream = headers_frame(&[HeaderField::new(b":status".to_vec(), b"200".to_vec())]);
+        stream.extend(data_frame(b"payload"));
+        a1.push_bytes(&stream).unwrap();
+        a2.push_bytes_with_sink(&stream, None).unwrap();
+        assert_eq!(a1.finish().unwrap(), a2.finish().unwrap());
+    }
+
+    #[test]
+    fn sink_called_across_partial_chunks() {
+        // Feed two DATA payloads byte-by-byte; the sink must collect them whole.
+        let mut a = ResponseAssembler::new();
+        let head = headers_frame(&[HeaderField::new(b":status".to_vec(), b"200".to_vec())]);
+        a.push_bytes(&head).unwrap();
+        let mut full_stream = data_frame(b"abc");
+        full_stream.extend(data_frame(b"xyz"));
+        let mut chunks: Vec<Vec<u8>> = Vec::new();
+        for byte in &full_stream {
+            a.push_bytes_with_sink(&[*byte], Some(&mut |c: &[u8]| chunks.push(c.to_vec())))
+                .unwrap();
+        }
+        assert_eq!(chunks, vec![b"abc".as_slice(), b"xyz"]);
+        assert_eq!(a.finish().unwrap().body, b"abcxyz");
     }
 
     #[test]

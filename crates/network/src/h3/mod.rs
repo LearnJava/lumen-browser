@@ -771,9 +771,9 @@
 //!   §2.1), and `fetch_single` consults `try_h3_dispatch` before any TCP work,
 //!   converting the request's header block into the `(name, value)` byte pairs
 //!   the dispatch takes (the same fingerprint-plus-extras set the H2 path
-//!   sends, RP-7). Only the plain request shape goes over QUIC: no proxies, no
-//!   Range/If-Range/Authorization, no streaming sink — everything else, and a
-//!   failed QUIC leg, falls through to H2/H1.1.
+//!   sends, RP-7). Only non-proxied requests go over QUIC (Range/If-Range,
+//!   Authorization, and streaming body sinks are all supported); a failed QUIC
+//!   leg falls through to H2/H1.1.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the

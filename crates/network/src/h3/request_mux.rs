@@ -25,7 +25,7 @@
 
 use std::collections::BTreeMap;
 
-use super::h3_exchange::H3Response;
+use super::h3_exchange::{BodySink, H3Response};
 use super::request_exchange::{ClientExchange, ClientRequest, ExchangeError};
 
 /// The identifier of the first client-initiated bidirectional stream and the
@@ -169,6 +169,9 @@ impl RequestMux {
     /// A failing exchange is retired too: its error is surfaced and its identifier
     /// no longer routes.
     ///
+    /// Equivalent to [`on_recv_with_sink`](Self::on_recv_with_sink) with
+    /// `sink = None`.
+    ///
     /// # Errors
     ///
     /// - [`MuxError::UnknownStream`] if no in-flight request owns `stream_id`.
@@ -180,11 +183,41 @@ impl RequestMux {
         data: &[u8],
         fin: bool,
     ) -> Result<Option<H3Response>, MuxError> {
+        self.on_recv_with_sink(stream_id, data, fin, None)
+    }
+
+    /// Feed response-stream bytes the transport delivered on `stream_id`,
+    /// forwarding `DATA` frame payloads to `sink` as they arrive.
+    ///
+    /// `data` is the received bytes (possibly empty), `fin` marks the server's
+    /// STREAM FIN. Returns `Ok(Some(response))` once that stream's response is
+    /// fully assembled (only on the call carrying its `fin`) — at which point the
+    /// exchange is retired from the mux — and `Ok(None)` while more is expected.
+    ///
+    /// When `sink` is `Some`, each `DATA` frame payload is forwarded to it
+    /// immediately as it completes. Passing `None` is equivalent to
+    /// [`on_recv`](Self::on_recv).
+    ///
+    /// A failing exchange is retired too: its error is surfaced and its identifier
+    /// no longer routes.
+    ///
+    /// # Errors
+    ///
+    /// - [`MuxError::UnknownStream`] if no in-flight request owns `stream_id`.
+    /// - [`MuxError::Exchange`] if the addressed exchange rejects the bytes
+    ///   (RFC 9114 §4.1); the failed stream is retired.
+    pub fn on_recv_with_sink(
+        &mut self,
+        stream_id: u64,
+        data: &[u8],
+        fin: bool,
+        sink: Option<BodySink<'_>>,
+    ) -> Result<Option<H3Response>, MuxError> {
         let exchange = self
             .exchanges
             .get_mut(&stream_id)
             .ok_or(MuxError::UnknownStream(stream_id))?;
-        match exchange.on_recv(data, fin) {
+        match exchange.on_recv_with_sink(data, fin, sink) {
             Ok(Some(response)) => {
                 // The exchange is complete; retire it so the identifier no longer
                 // routes and the response is yielded exactly once.
