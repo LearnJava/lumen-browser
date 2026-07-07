@@ -1007,6 +1007,91 @@
      "status": "planned",
      "size": "S",
      "note": "phases.md §Фаза 3: Download UI поверх существующего downloads storage (permission prompt UI уже готов). Бриф docs/tasks/ph3-permission-download-ui.md"
+    },
+    {
+     "id": "UPD",
+     "title": "UPD: Самообновление браузера",
+     "status": "planned",
+     "note": "Самообновление через GitHub Releases (свой сервер не нужен): подписанный манифест latest.json (ed25519, ключи в клиенте), zip → mini-ZIP reader → rename-трюк для 2 бинарников; пользовательские данные апдейтер не трогает — миграции выполняет новый бинарник (user_version + бэкап). Дизайн 2026-07-07, бриф docs/tasks/ph3-self-update.md",
+     "tasks": [
+      {
+       "id": "UPD-1",
+       "title": "UPD-1: Манифест + версии",
+       "status": "planned",
+       "size": "S",
+       "note": "Типы UpdateManifest (serde_json уже в shell) + парсер/компаратор версий x.y.z (без крейта semver)"
+      },
+      {
+       "id": "UPD-2",
+       "title": "UPD-2: Checker новой версии",
+       "status": "planned",
+       "size": "M",
+       "note": "Загрузка latest.json c releases/latest/download/ через fetch_conditional (ETag, редиректы есть), троттлинг 24 ч (state в data/update/), флаг auto_check_updates; строго фоновый поток (анти-паттерн adblock::refresh на UI-потоке); тесты на MockTransport"
+      },
+      {
+       "id": "UPD-3",
+       "title": "UPD-3: Проверка подписи",
+       "status": "planned",
+       "size": "S",
+       "note": "ed25519-подпись манифеста (ed25519-dalek уже в дереве): key_id + список доверенных ключей (ротация), sha256 бинарников, downgrade-отказ; негативные тесты (битая подпись, подмена хэша)"
+      },
+      {
+       "id": "UPD-4",
+       "title": "UPD-4: Схема-версии lumen-storage",
+       "status": "planned",
+       "size": "M",
+       "note": "PRAGMA user_version + общий helper миграций в lumen-storage (~25 хранилищ: CREATE IF NOT EXISTS → v1, ad-hoc ALTER profiles.rs:97 → v2), миграции в одной транзакции, отказ открывать базу с user_version из будущего. Ценен независимо от апдейтера"
+      },
+      {
+       "id": "UPD-5",
+       "title": "UPD-5: Бэкап перед миграцией",
+       "status": "planned",
+       "size": "S",
+       "note": "Детект первого запуска новой версии, бэкап data/*.db в data/update/backup/<ver>/ до открытия баз, ротация (1–2 версии), документация процедуры отката"
+      },
+      {
+       "id": "UPD-6",
+       "title": "UPD-6: Фоновая загрузка",
+       "status": "planned",
+       "size": "M",
+       "note": "Фоновый поток по паттерну download.rs (std::thread + mpsc → about_to_wait): скачать zip (in-memory, стриминга в lumen-network нет — ок до ~200 МБ), sha256, сложить в data/update/pending/<ver>/"
+      },
+      {
+       "id": "UPD-7",
+       "title": "UPD-7: Mini-ZIP reader",
+       "status": "planned",
+       "size": "M",
+       "note": "Собственный reader: central directory + stored/deflate поверх имеющегося flate2 (~200 строк, крейт zip не добавляем); whitelist путей назначения — reject data/, .., абсолютные (заодно zip-slip); тест на реальном артефакте release.yml"
+      },
+      {
+       "id": "UPD-8",
+       "title": "UPD-8: Применение обновления",
+       "status": "planned",
+       "size": "M",
+       "note": "Rename-трюк для lumen.exe + lumen-network-service.exe (атомарно: сначала все rename, потом все копии, откат при ошибке), перезапуск процесса, чистка .old и pending/ при старте"
+      },
+      {
+       "id": "UPD-9",
+       "title": "UPD-9: UI обновления",
+       "status": "planned",
+       "size": "M",
+       "note": "Инфобар «Доступна vX.Y.Z» (по образцу download-панели) + show_os_notification; после загрузки кнопка «Перезапустить и обновить»; ручная проверка из настроек"
+      },
+      {
+       "id": "UPD-10",
+       "title": "UPD-10: CI-подпись релизов",
+       "status": "planned",
+       "size": "M",
+       "note": "Ключевая пара (приватный ключ → GitHub Actions secret), signing-утилита scripts/sign_release на ed25519-dalek, шаг release.yml: собрать latest.json (version+sha256+size), подписать, загрузить как asset"
+      },
+      {
+       "id": "UPD-11",
+       "title": "UPD-11: Документация + ADR",
+       "status": "planned",
+       "size": "S",
+       "note": "ADR (канал+подпись+данные+privacy: проверка вкл. по умолчанию, ≤1 раза/24 ч, без cookies/идентификаторов, откл. флагом), CAPABILITIES.md, subsystems/shell+storage, docs/plan/privacy.md, README"
+      }
+     ]
     }
    ],
    "date": "36–48 мес"
