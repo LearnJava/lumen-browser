@@ -64,6 +64,35 @@ pub struct AltSvcEntry {
     pub persist: bool,
 }
 
+impl AltSvcEntry {
+    /// The concrete `(host, port)` the QUIC leg should connect to for this
+    /// alternative (RFC 7838 §3): the advertised `host` when present, otherwise
+    /// the origin's own `origin_host` (the empty-host form `h3=":443"` means
+    /// "same host, this UDP port"). The port is always the alternative's.
+    ///
+    /// The returned host feeds both DNS resolution and the TLS SNI /
+    /// certificate-verification name for the QUIC handshake. RFC 7838 §3.1
+    /// requires the alternative to present a certificate valid for the *origin*
+    /// host; Lumen (like browsers) uses the connect host as the SNI and lets the
+    /// certificate cover it — the finer origin-authentication nuance is out of
+    /// scope for this slice, which only routes the connection.
+    #[must_use]
+    pub fn connect_target(&self, origin_host: &str) -> (String, u16) {
+        let host = self.host.clone().unwrap_or_else(|| origin_host.to_owned());
+        (host, self.port)
+    }
+}
+
+/// The [`AltSvcCache`] key for an origin: its authority in `host:port` form
+/// (RFC 9110 §4.3.1), keyed on the *original* request's host and port — not the
+/// alternative's. Both the response-scan that inserts an advertisement and the
+/// dispatch that looks one up must derive the key the same way, so they share
+/// this one function.
+#[must_use]
+pub fn origin_key(host: &str, port: u16) -> String {
+    format!("{host}:{port}")
+}
+
 /// Parse an `Alt-Svc` header value into the HTTP/3 alternatives it advertises.
 ///
 /// Returns an empty vector when the value is the special `clear` token, when it
@@ -351,6 +380,32 @@ mod tests {
 
         cache.insert("example.com:443", &parse("clear"), t0);
         assert!(cache.get("example.com:443", t0).is_none());
+    }
+
+    /// The empty-host advertisement (`h3=":443"`) reuses the origin host; the
+    /// port is always the alternative's.
+    #[test]
+    fn connect_target_reuses_origin_host_when_absent() {
+        let entry = &parse(r#"h3=":8443""#)[0];
+        assert_eq!(entry.connect_target("example.com"), ("example.com".to_owned(), 8443));
+    }
+
+    /// An explicit alternative host overrides the origin host.
+    #[test]
+    fn connect_target_uses_explicit_host() {
+        let entry = &parse(r#"h3="quic.example.net:443""#)[0];
+        assert_eq!(
+            entry.connect_target("example.com"),
+            ("quic.example.net".to_owned(), 443)
+        );
+    }
+
+    /// The origin key is the `host:port` authority — the same string the insert
+    /// and lookup sides must agree on.
+    #[test]
+    fn origin_key_is_host_colon_port() {
+        assert_eq!(origin_key("example.com", 443), "example.com:443");
+        assert_eq!(origin_key("example.com", 8443), "example.com:8443");
     }
 
     /// `remove` drops an origin (the "broken" fallback path).

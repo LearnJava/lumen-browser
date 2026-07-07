@@ -416,6 +416,79 @@ impl From<h3::h3_exchange::H3Response> for Response {
     }
 }
 
+/// Route one request onto HTTP/3 when — and only when — the origin has a fresh
+/// `Alt-Svc: h3` advertisement (RFC 7838), returning the mapped [`Response`] on
+/// success or `None` to fall back to the H2 / H1.1 path.
+///
+/// This is the QUIC dispatch decision the H1/H2 branches in [`fetch_single`]
+/// consult before their own connect: it looks the origin up in the
+/// [`h3::alt_svc::AltSvcCache`] (keyed by [`h3::alt_svc::origin_key`]), resolves
+/// the cached entry to a concrete QUIC target
+/// ([`h3::alt_svc::AltSvcEntry::connect_target`]), and drives one exchange over a
+/// fresh QUIC connection ([`h3::client_transport::h3_do_request`]), mapping its
+/// [`h3::h3_exchange::H3Response`] onto the crate [`Response`].
+///
+/// `None` is returned — meaning "use the ordinary TCP path" — in every case the
+/// h3 leg does not produce a response:
+/// - `enabled` is `false` (h3 opted out entirely);
+/// - the origin has no fresh cached `h3` alternative;
+/// - the QUIC leg failed. Per RFC 7838 §2.4 a failed alternative is "broken",
+///   so its cache entry is removed and the origin is not retried over h3 until it
+///   re-advertises — the caller silently falls back.
+///
+/// `connect_turns` / `request_turns` bound the handshake and request event
+/// loops, threaded straight through to [`h3::client_transport::h3_do_request`].
+///
+/// Not yet called from [`fetch_single`]: the wiring that gives [`HttpClient`] the
+/// cache, scans responses for `Alt-Svc`, and converts the request's header block
+/// into the `(name, value)` byte pairs this takes is the next slice — the same
+/// way the [`From`] mapping above landed a slice before its caller.
+// Not yet wired into `fetch_single` (next slice); unused in the lib build until
+// then, exercised now only by the unit tests below.
+#[allow(dead_code, clippy::too_many_arguments)]
+fn try_h3_dispatch(
+    cache: &mut h3::alt_svc::AltSvcCache,
+    enabled: bool,
+    resolver: &dyn DnsResolver,
+    host: &str,
+    port: u16,
+    method: &str,
+    path: &str,
+    headers: &[(&[u8], &[u8])],
+    body: &[u8],
+    connect_turns: usize,
+    request_turns: usize,
+    now: std::time::Instant,
+) -> Option<Response> {
+    if !enabled {
+        return None;
+    }
+    let key = h3::alt_svc::origin_key(host, port);
+    let entry = cache.get(&key, now)?;
+    let (h3_host, h3_port) = entry.connect_target(host);
+    let config = h3::client_bootstrap::ClientConnectConfig::default();
+    match h3::client_transport::h3_do_request(
+        resolver,
+        &h3_host,
+        h3_port,
+        method.as_bytes(),
+        path.as_bytes(),
+        headers,
+        body,
+        &config,
+        connect_turns,
+        request_turns,
+    ) {
+        Ok(resp) => Some(resp.into()),
+        Err(_) => {
+            // RFC 7838 §2.4: the alternative is "broken" — drop it so the origin
+            // falls back to H2/H1.1 and is not retried over h3 until re-advertised.
+            cache.remove(&key);
+            None
+        }
+    }
+}
+
 fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
     let name_lc = name.to_ascii_lowercase();
     headers
@@ -4323,6 +4396,104 @@ mod tests {
         let resp = Response::from(h3);
         assert_eq!(resp.headers[0].0, "x-bin");
         assert_eq!(resp.headers[0].1, "\u{fffd}\u{fffd}");
+    }
+
+    /// A [`DnsResolver`] that panics if consulted — proves [`try_h3_dispatch`]
+    /// never reaches the QUIC leg when it should fall through immediately.
+    struct PanicResolver;
+    impl DnsResolver for PanicResolver {
+        fn resolve(&self, _host: &str, _port: u16) -> Result<Vec<std::net::SocketAddr>> {
+            panic!("resolver must not be consulted when h3 dispatch falls through");
+        }
+    }
+
+    /// A [`DnsResolver`] that always errors — drives the QUIC leg to fail at
+    /// resolution so the "broken alternative" fallback is exercised without a
+    /// real network.
+    struct ErrResolver;
+    impl DnsResolver for ErrResolver {
+        fn resolve(&self, _host: &str, _port: u16) -> Result<Vec<std::net::SocketAddr>> {
+            Err(Error::Network("no network in test".to_owned()))
+        }
+    }
+
+    #[test]
+    fn try_h3_dispatch_disabled_falls_through_without_resolving() {
+        // enabled = false: no cache lookup, no resolution, straight to fall-back.
+        let mut cache = h3::alt_svc::AltSvcCache::new();
+        let now = std::time::Instant::now();
+        let got = try_h3_dispatch(
+            &mut cache,
+            false,
+            &PanicResolver,
+            "example.com",
+            443,
+            "GET",
+            "/",
+            &[],
+            b"",
+            4,
+            4,
+            now,
+        );
+        assert!(got.is_none(), "disabled h3 dispatch must fall through");
+    }
+
+    #[test]
+    fn try_h3_dispatch_no_cache_entry_falls_through() {
+        // Enabled but the origin never advertised h3: fall through, and the
+        // absence of a cache entry means the resolver is never consulted.
+        let mut cache = h3::alt_svc::AltSvcCache::new();
+        let now = std::time::Instant::now();
+        let got = try_h3_dispatch(
+            &mut cache,
+            true,
+            &PanicResolver,
+            "example.com",
+            443,
+            "GET",
+            "/",
+            &[],
+            b"",
+            4,
+            4,
+            now,
+        );
+        assert!(got.is_none(), "no fresh h3 alternative → fall through");
+    }
+
+    #[test]
+    fn try_h3_dispatch_broken_alternative_is_evicted() {
+        // A fresh h3 entry routes the request onto QUIC, but the leg fails (the
+        // resolver errors). RFC 7838 §2.4: the alternative is "broken" — the
+        // dispatch returns None (fall back) and removes the entry so the next
+        // request does not retry over h3.
+        let mut cache = h3::alt_svc::AltSvcCache::new();
+        let now = std::time::Instant::now();
+        let alts = h3::alt_svc::parse(r#"h3=":443"; ma=3600"#);
+        let key = h3::alt_svc::origin_key("example.com", 443);
+        cache.insert(&key, &alts, now);
+        assert!(cache.get(&key, now).is_some(), "precondition: entry cached");
+
+        let got = try_h3_dispatch(
+            &mut cache,
+            true,
+            &ErrResolver,
+            "example.com",
+            443,
+            "GET",
+            "/",
+            &[],
+            b"",
+            4,
+            4,
+            now,
+        );
+        assert!(got.is_none(), "failed QUIC leg falls back to H2/H1.1");
+        assert!(
+            cache.get(&key, now).is_none(),
+            "broken alternative evicted (RFC 7838 §2.4)"
+        );
     }
 
     #[test]
