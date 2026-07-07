@@ -23,6 +23,7 @@
 //! platform            = "Win32"
 //! languages           = "en-US,en"      # comma-separated; first entry = navigator.language
 //! doh_url             = "https://cloudflare-dns.com/dns-query"  # DNS over HTTPS resolver (optional)
+//! http3               = true            # HTTP/3 (QUIC) via Alt-Svc discovery (default: false)
 //! ```
 //!
 //! Applied at startup: [`FingerprintProfile::install_navigator`] pushes the
@@ -186,6 +187,14 @@ pub struct FingerprintProfile {
     /// Automatically `true` when `http_profile = TorBrowser` and not
     /// overridden explicitly.
     pub no_persistent_state: bool,
+    /// Enable the HTTP/3 (QUIC) dispatch path (RFC 9114 / RFC 7838).
+    /// Off by default: every request goes over H2 / H1.1. When `true`,
+    /// [`apply_http`](Self::apply_http) builds the client with
+    /// `HttpClient::with_http3()`: https responses are scanned for
+    /// `Alt-Svc: h3` advertisements and a request to an origin with a fresh
+    /// cached `h3` alternative takes the QUIC leg before any TCP work, with a
+    /// transparent fallback to H2 / H1.1 on failure.
+    pub http3: bool,
 }
 
 impl Default for FingerprintProfile {
@@ -207,6 +216,7 @@ impl Default for FingerprintProfile {
             proxy: None,
             socks5_proxy: None,
             no_persistent_state: false,
+            http3: false,
         }
     }
 }
@@ -261,6 +271,13 @@ impl FingerprintProfile {
         client = client
             .with_fingerprint_profile(self.http_profile)
             .with_tls_profile(self.effective_tls_profile());
+
+        // Opt into the HTTP/3 (QUIC) dispatch path. Off by default — the
+        // absent handle keeps the fetch path from touching the Alt-Svc cache
+        // at all (see HttpClient::h3_alt_svc).
+        if self.http3 {
+            client = client.with_http3();
+        }
 
         // Wire DoH resolver if configured
         if let Some(doh_url) = &self.doh_url
@@ -471,6 +488,9 @@ fn apply_key(p: &mut FingerprintProfile, key: &str, value: &str) {
         }
         "no_persistent_state" => {
             p.no_persistent_state = matches!(value.to_ascii_lowercase().as_str(), "true" | "1" | "yes");
+        }
+        "http3" => {
+            p.http3 = matches!(value.to_ascii_lowercase().as_str(), "true" | "1" | "yes");
         }
         _ => {}
     }
@@ -778,6 +798,19 @@ mod tests {
         assert!(!p2.no_persistent_state);
         let p3 = parse("no_persistent_state = 1");
         assert!(p3.no_persistent_state);
+    }
+
+    #[test]
+    fn http3_off_by_default_and_parsed() {
+        // Absent key → the client stays on the H2 / H1.1 path.
+        assert!(!FingerprintProfile::default().http3);
+        assert!(!parse("").http3);
+        let p = parse("http3 = true");
+        assert!(p.http3);
+        let p2 = parse("http3 = false");
+        assert!(!p2.http3);
+        let p3 = parse("http3 = 1");
+        assert!(p3.http3);
     }
 
     #[test]
