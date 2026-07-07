@@ -760,18 +760,20 @@
 //!   scan that populates it. The client gains an `http3_enabled` opt-in
 //!   ([`crate::HttpClient::with_http3`], off by default) and a shared
 //!   `alt_svc_cache` ([`alt_svc::AltSvcCache`] behind a `Mutex`, since `fetch`
-//!   takes `&self`); [`crate::HttpClient::record_alt_svc`] scans a response's
+//!   takes `&self`); the `record_alt_svc` scan in `lib.rs` parses a response's
 //!   `Alt-Svc` header(s) (RFC 7838 §3, multiple occurrences merged per RFC 7230
-//!   §3.2.2), parses the `h3` alternatives, and caches them under the *origin's*
-//!   [`alt_svc::origin_key`] with the `ma` TTL. Not yet called from
-//!   `fetch_single` — threading the scan into the response flow and the dispatch
-//!   call is the next slice, the same way Slice 59a landed `try_h3_dispatch`
-//!   before its caller.
-//! - Slice 59c+ (planned) — wiring the scan + `try_h3_dispatch` into
-//!   `fetch_single`: calling [`crate::HttpClient::record_alt_svc`] on each H2/H1.1
-//!   response and consulting [`crate::try_h3_dispatch`] before the TCP connect,
-//!   converting the request's header block into the `(name, value)` byte pairs the
-//!   dispatch takes.
+//!   §3.2.2) and caches the `h3` alternatives under the *origin's*
+//!   [`alt_svc::origin_key`] with the `ma` TTL.
+//! - Slice 59c — the scan + `try_h3_dispatch` wired into the fetch path: the
+//!   client threads its cache handle (`Some` ⇔ `with_http3`) down
+//!   `fetch_with_redirect` → `fetch_single`; every https hop's response is
+//!   scanned by `record_alt_svc` (cleartext `Alt-Svc` is ignored, RFC 7838
+//!   §2.1), and `fetch_single` consults `try_h3_dispatch` before any TCP work,
+//!   converting the request's header block into the `(name, value)` byte pairs
+//!   the dispatch takes (the same fingerprint-plus-extras set the H2 path
+//!   sends, RP-7). Only the plain request shape goes over QUIC: no proxies, no
+//!   Range/If-Range/Authorization, no streaming sink — everything else, and a
+//!   failed QUIC leg, falls through to H2/H1.1.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the

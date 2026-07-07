@@ -416,6 +416,51 @@ impl From<h3::h3_exchange::H3Response> for Response {
     }
 }
 
+/// Turn bound for the QUIC handshake loop of the h3 leg ([`try_h3_dispatch`]).
+///
+/// A turn is one event-loop wait: a received datagram or a timer expiry
+/// (`h3::event_loop`). A clean handshake completes in a handful of turns (a few
+/// server flights plus timer wake-ups); the bound only exists so a peer that
+/// keeps the socket alive without progressing can never spin the loop forever.
+const H3_CONNECT_TURNS: usize = 1024;
+
+/// Turn bound for the request/response loop of the h3 leg ([`try_h3_dispatch`]).
+///
+/// Sized by the response body: each arriving datagram is one turn and carries at
+/// most ~1200 bytes of payload, so the bound must comfortably cover multi-MB
+/// resources (65536 turns ≈ 75 MB) while still cutting off a peer that trickles
+/// forever without completing the response.
+const H3_REQUEST_TURNS: usize = 65536;
+
+/// Scan one response's headers for `Alt-Svc` (RFC 7838 §3) and cache the
+/// advertised `h3` alternatives for the origin `host:port`.
+///
+/// `Alt-Svc` may occur multiple times (RFC 7230 §3.2.2); every occurrence is
+/// parsed and the alternatives merged. The entry is cached under the origin's
+/// [`h3::alt_svc::origin_key`] with the `ma` TTL taken from now. No-op when the
+/// response advertises no parseable `h3` alternative. The caller gates on the
+/// response having arrived over TLS — RFC 7838 §2.1 requires reasonable
+/// assurances of origin authority, so an `Alt-Svc` on a cleartext response must
+/// be ignored.
+fn record_alt_svc(
+    cache: &std::sync::Mutex<h3::alt_svc::AltSvcCache>,
+    host: &str,
+    port: u16,
+    headers: &[(String, String)],
+) {
+    let mut alternatives = Vec::new();
+    for value in all_header_values(headers, "alt-svc") {
+        alternatives.extend(h3::alt_svc::parse(value));
+    }
+    if alternatives.is_empty() {
+        return;
+    }
+    let key = h3::alt_svc::origin_key(host, port);
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(&key, &alternatives, std::time::Instant::now());
+    }
+}
+
 /// Route one request onto HTTP/3 when — and only when — the origin has a fresh
 /// `Alt-Svc: h3` advertisement (RFC 7838), returning the mapped [`Response`] on
 /// success or `None` to fall back to the H2 / H1.1 path.
@@ -430,7 +475,6 @@ impl From<h3::h3_exchange::H3Response> for Response {
 ///
 /// `None` is returned — meaning "use the ordinary TCP path" — in every case the
 /// h3 leg does not produce a response:
-/// - `enabled` is `false` (h3 opted out entirely);
 /// - the origin has no fresh cached `h3` alternative;
 /// - the QUIC leg failed. Per RFC 7838 §2.4 a failed alternative is "broken",
 ///   so its cache entry is removed and the origin is not retried over h3 until it
@@ -439,16 +483,13 @@ impl From<h3::h3_exchange::H3Response> for Response {
 /// `connect_turns` / `request_turns` bound the handshake and request event
 /// loops, threaded straight through to [`h3::client_transport::h3_do_request`].
 ///
-/// Not yet called from [`fetch_single`]: the wiring that gives [`HttpClient`] the
-/// cache, scans responses for `Alt-Svc`, and converts the request's header block
-/// into the `(name, value)` byte pairs this takes is the next slice — the same
-/// way the [`From`] mapping above landed a slice before its caller.
-// Not yet wired into `fetch_single` (next slice); unused in the lib build until
-// then, exercised now only by the unit tests below.
-#[allow(dead_code, clippy::too_many_arguments)]
+/// The cache sits behind a `Mutex` because `fetch` takes `&self` and subresource
+/// fetches run in parallel; the lock is held only for the lookup and the
+/// broken-alternative eviction, never across the QUIC exchange itself — a slow
+/// h3 leg must not stall other requests' Alt-Svc scans and lookups.
+#[allow(clippy::too_many_arguments)]
 fn try_h3_dispatch(
-    cache: &mut h3::alt_svc::AltSvcCache,
-    enabled: bool,
+    cache: &std::sync::Mutex<h3::alt_svc::AltSvcCache>,
     resolver: &dyn DnsResolver,
     host: &str,
     port: u16,
@@ -460,12 +501,12 @@ fn try_h3_dispatch(
     request_turns: usize,
     now: std::time::Instant,
 ) -> Option<Response> {
-    if !enabled {
-        return None;
-    }
     let key = h3::alt_svc::origin_key(host, port);
-    let entry = cache.get(&key, now)?;
-    let (h3_host, h3_port) = entry.connect_target(host);
+    let (h3_host, h3_port) = {
+        let mut guard = cache.lock().ok()?;
+        let entry = guard.get(&key, now)?;
+        entry.connect_target(host)
+    };
     let config = h3::client_bootstrap::ClientConnectConfig::default();
     match h3::client_transport::h3_do_request(
         resolver,
@@ -483,7 +524,9 @@ fn try_h3_dispatch(
         Err(_) => {
             // RFC 7838 §2.4: the alternative is "broken" — drop it so the origin
             // falls back to H2/H1.1 and is not retried over h3 until re-advertised.
-            cache.remove(&key);
+            if let Ok(mut guard) = cache.lock() {
+                guard.remove(&key);
+            }
             None
         }
     }
@@ -1383,6 +1426,9 @@ fn fetch_single(
     extra_headers: &str,
     proxy: Option<&HttpProxy>,
     socks5_proxy: Option<&socks5::Socks5Proxy>,
+    // Alt-Svc cache of the h3 dispatch path (RFC 7838); `Some` ⇔ HTTP/3 enabled
+    // ([`HttpClient::with_http3`]).
+    h3_alt_svc: Option<&std::sync::Mutex<h3::alt_svc::AltSvcCache>>,
     // PH1-2a: HTTP/1.1 streaming body sink. Only the direct (non-proxy) HTTP/1.1
     // path streams; the H2 and proxy-CONNECT paths buffer (sink unused there).
     mut stream_sink: Option<ChunkSink<'_>>,
@@ -1392,6 +1438,46 @@ fn fetch_single(
     // connect to the target host:port directly (the pool key uses the
     // real target, not the SOCKS5 server).
     let effective_proxy = if socks5_proxy.is_some() { None } else { proxy };
+
+    // HTTP/3 dispatch (RFC 7838, RFC 9114): before any TCP work, a TLS origin
+    // with a fresh cached `h3` alternative is tried over QUIC. Only the plain
+    // request shape goes: proxies don't carry QUIC, and the h3 leg builds no
+    // Range/If-Range/Authorization headers and buffers the whole body (no
+    // streaming sink). Everything else — including a failed QUIC leg (the
+    // "broken" alternative is evicted inside `try_h3_dispatch`) — falls
+    // through to the H2/H1.1 path below.
+    if let Some(cache) = h3_alt_svc
+        && is_tls
+        && effective_proxy.is_none()
+        && socks5_proxy.is_none()
+        && range.is_none()
+        && if_range.is_none()
+        && authorization.is_none()
+        && stream_sink.is_none()
+    {
+        // The h3 leg takes the header block as `(name, value)` byte pairs —
+        // the same fingerprint-plus-extras set the H2 path sends (RP-7).
+        let h3_headers = build_h2_headers(http_profile, accept_encoding, extra_headers);
+        let header_refs: Vec<(&[u8], &[u8])> = h3_headers
+            .iter()
+            .map(|(k, v)| (k.as_slice(), v.as_slice()))
+            .collect();
+        if let Some(resp) = try_h3_dispatch(
+            cache,
+            resolver,
+            host,
+            port,
+            method,
+            request_path,
+            &header_refs,
+            b"",
+            H3_CONNECT_TURNS,
+            H3_REQUEST_TURNS,
+            std::time::Instant::now(),
+        ) {
+            return Ok(resp);
+        }
+    }
 
     // Если HTTP-proxy используется, определяем актуальный host:port для подключения.
     let (connect_host, connect_port, connect_is_tls) = if let Some(p) = effective_proxy {
@@ -1916,6 +2002,10 @@ fn fetch_with_redirect(
     top_level_site: Option<&str>,
     proxy: Option<&HttpProxy>,
     socks5_proxy: Option<&socks5::Socks5Proxy>,
+    // Alt-Svc cache of the h3 dispatch path (RFC 7838); `Some` ⇔ HTTP/3 enabled.
+    // Threaded to `fetch_single` (the dispatch decision) and along redirect
+    // hops; every https hop's response is scanned into it (`record_alt_svc`).
+    h3_alt_svc: Option<&std::sync::Mutex<h3::alt_svc::AltSvcCache>>,
     // PH1-2a: streaming body sink for the final 2xx response (progressive HTML).
     // Threaded to the actual-request `fetch_single` and along redirect hops;
     // `None` for every fetch path except top-level navigation streaming.
@@ -2060,6 +2150,7 @@ fn fetch_with_redirect(
                 &preflight_extra,
                 proxy,
                 socks5_proxy,
+                h3_alt_svc,
                 None, // preflight OPTIONS body is never streamed
             ) {
                 Ok(r) => r,
@@ -2164,11 +2255,23 @@ fn fetch_with_redirect(
             &actual_extra_headers,
             proxy,
             socks5_proxy,
+            h3_alt_svc,
             stream_sink.as_mut().map(|f| &mut **f as ChunkSink<'_>),
         ) {
             Ok(r) => r,
             Err(e) => return Err(emit_request_failed(sink, tab_id, url, e)),
         };
+
+        // Alt-Svc scan (RFC 7838 §3): remember an `h3` advertisement so a later
+        // request to this origin routes onto QUIC. Only https responses count —
+        // RFC 7838 §2.1 requires reasonable assurances of origin authority, and
+        // a cleartext Alt-Svc could be attacker-injected. Per hop, like HSTS
+        // below: a 3xx response may advertise too.
+        if let Some(cache) = h3_alt_svc
+            && is_tls
+        {
+            record_alt_svc(cache, &host_ascii, port, &resp.headers);
+        }
 
         // HSTS: сохранить policy из header-а, если ответ пришёл по HTTPS и
         // server прислал Strict-Transport-Security. RFC 6797 §8.1 — STS на
@@ -2274,6 +2377,7 @@ fn fetch_with_redirect(
                     top_level_site,
                     proxy,
                     socks5_proxy,
+                    h3_alt_svc,
                     stream_sink,
                 );
             }
@@ -2615,46 +2719,23 @@ impl HttpClient {
 
     /// Включить путь диспетчеризации HTTP/3 (QUIC) — RFC 9114 / RFC 7838.
     /// По умолчанию выключен: все запросы идут по H2 / H1.1. С включённым
-    /// путём ответы сканируются на `Alt-Svc: h3` (заполняя
-    /// [`Self::alt_svc_cache`]), и запрос к origin-у со свежей кэшированной
-    /// `h3`-альтернативой становится кандидатом на QUIC-плечо
-    /// ([`try_h3_dispatch`]).
-    ///
-    /// Сам вызов диспетчеризации из `fetch_single` — следующий срез; здесь
-    /// только флаг и заполнение кэша.
+    /// путём https-ответы каждого hop-а сканируются на `Alt-Svc: h3`
+    /// ([`record_alt_svc`] заполняет [`Self::alt_svc_cache`]), и запрос к
+    /// origin-у со свежей кэшированной `h3`-альтернативой уходит на QUIC-плечо
+    /// ([`try_h3_dispatch`]) до любого TCP-соединения; при неудаче плеча —
+    /// прозрачный откат на H2 / H1.1.
     #[must_use]
     pub fn with_http3(mut self) -> Self {
         self.http3_enabled = true;
         self
     }
 
-    /// Просканировать заголовки одного ответа на `Alt-Svc` (RFC 7838 §3) и
-    /// занести объявленные `h3`-альтернативы для origin-а `host:port` в
-    /// [`Self::alt_svc_cache`]. No-op, если HTTP/3 не включён
-    /// ([`Self::with_http3`]) или в ответе нет разбираемых `h3`-альтернатив.
-    ///
-    /// `Alt-Svc` может встречаться несколько раз (RFC 7230 §3.2.2); значения
-    /// всех вхождений парсятся и объединяются. Запись кэшируется под ключом
-    /// [`h3::alt_svc::origin_key`] с TTL из `ma`, взятым от текущего момента.
-    /// Ещё не вызывается из `fetch_single` — проводка сканирования в поток
-    /// ответов идёт следующим срезом (как [`try_h3_dispatch`] приземлился до
-    /// своего вызова).
-    #[allow(dead_code)]
-    fn record_alt_svc(&self, host: &str, port: u16, headers: &[(String, String)]) {
-        if !self.http3_enabled {
-            return;
-        }
-        let mut alternatives = Vec::new();
-        for value in all_header_values(headers, "alt-svc") {
-            alternatives.extend(h3::alt_svc::parse(value));
-        }
-        if alternatives.is_empty() {
-            return;
-        }
-        let key = h3::alt_svc::origin_key(host, port);
-        if let Ok(mut cache) = self.alt_svc_cache.lock() {
-            cache.insert(&key, &alternatives, std::time::Instant::now());
-        }
+    /// Хэндл Alt-Svc-кэша для fetch-пути: `Some` только когда HTTP/3 включён
+    /// ([`Self::with_http3`]). Именно эта опциональность гейтит и скан ответов
+    /// ([`record_alt_svc`]), и QUIC-диспетчеризацию ([`try_h3_dispatch`]) —
+    /// выключенный h3 не трогает кэш вовсе.
+    fn h3_alt_svc(&self) -> Option<&std::sync::Mutex<h3::alt_svc::AltSvcCache>> {
+        self.http3_enabled.then_some(&*self.alt_svc_cache)
     }
 
     /// Сформировать значение `Accept-Encoding` из зарегистрированных декодеров,
@@ -2872,6 +2953,7 @@ impl HttpClient {
             self.top_level_site.as_deref(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
+                    self.h3_alt_svc(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
         )
         .map(|resp| resp.body)
@@ -2911,6 +2993,7 @@ impl HttpClient {
             self.top_level_site.as_deref(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
+                    self.h3_alt_svc(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
         )?;
         let content_range = if resp.status == 206 {
@@ -2984,6 +3067,7 @@ impl HttpClient {
             self.top_level_site.as_deref(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
+                    self.h3_alt_svc(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
         )?;
         Ok(parse_multi_range_response(resp))
@@ -3074,6 +3158,7 @@ impl HttpClient {
                     self.top_level_site.as_deref(),
                     self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
+                    self.h3_alt_svc(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                 )?;
                 if resp.status == 304 {
@@ -3110,6 +3195,7 @@ impl HttpClient {
             self.top_level_site.as_deref(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
+                    self.h3_alt_svc(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
         )?;
         if let Some(cache) = &self.http_cache {
@@ -3171,6 +3257,7 @@ impl HttpClient {
             self.top_level_site.as_deref(),
             self.proxy.as_deref(),
             self.socks5_proxy.as_deref(),
+            self.h3_alt_svc(),
             None, // PH1-2a: conditional GET is not streamed
         )?;
         if resp.status == 304 {
@@ -3233,6 +3320,7 @@ impl HttpClient {
                     self.mixed_content.as_ref(), destination, None, &snap.conditional_headers,
                     self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
                     self.proxy.as_deref(), self.socks5_proxy.as_deref(),
+                    self.h3_alt_svc(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                 )?;
                 if resp.status == 304 {
@@ -3251,6 +3339,7 @@ impl HttpClient {
             self.mixed_content.as_ref(), destination, None, "",
             self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
             self.proxy.as_deref(), self.socks5_proxy.as_deref(),
+            self.h3_alt_svc(),
             None, // PH1-2a: streaming sink — only fetch_page_streaming streams
         )?;
         if let Some(cache) = &self.http_cache {
@@ -3300,6 +3389,7 @@ impl HttpClient {
                     self.mixed_content.as_ref(), destination, None, &snap.conditional_headers,
                     self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
                     self.proxy.as_deref(), self.socks5_proxy.as_deref(),
+                    self.h3_alt_svc(),
                     Some(on_chunk),
                 )?;
                 if resp.status == 304 {
@@ -3321,6 +3411,7 @@ impl HttpClient {
             self.mixed_content.as_ref(), destination, None, "",
             self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
             self.proxy.as_deref(), self.socks5_proxy.as_deref(),
+            self.h3_alt_svc(),
             Some(on_chunk),
         )?;
         if let Some(cache) = &self.http_cache {
@@ -3382,6 +3473,7 @@ impl NetworkTransport for HttpClient {
                     self.top_level_site.as_deref(),
                     self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
+                    self.h3_alt_svc(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                 )?;
                 if resp.status == 304 {
@@ -3418,6 +3510,7 @@ impl NetworkTransport for HttpClient {
             self.top_level_site.as_deref(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
+                    self.h3_alt_svc(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
         )?;
         if let Some(cache) = &self.http_cache {
@@ -3494,6 +3587,7 @@ impl JsFetchProvider for HttpClient {
             self.top_level_site.as_deref(),
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
+                    self.h3_alt_svc(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
         )?;
         Ok(JsFetchResult {
@@ -4476,36 +4570,30 @@ mod tests {
     }
 
     #[test]
-    fn try_h3_dispatch_disabled_falls_through_without_resolving() {
-        // enabled = false: no cache lookup, no resolution, straight to fall-back.
-        let mut cache = h3::alt_svc::AltSvcCache::new();
-        let now = std::time::Instant::now();
-        let got = try_h3_dispatch(
-            &mut cache,
-            false,
-            &PanicResolver,
-            "example.com",
-            443,
-            "GET",
-            "/",
-            &[],
-            b"",
-            4,
-            4,
-            now,
+    fn h3_alt_svc_handle_gated_by_with_http3() {
+        // The Option-ness of the handle is the h3 on/off switch the fetch path
+        // threads down: None by default (no scan, no dispatch), Some after the
+        // with_http3 opt-in.
+        let client = HttpClient::new();
+        assert!(
+            client.h3_alt_svc().is_none(),
+            "h3 disabled by default → no cache handle, fetch path stays on TCP"
         );
-        assert!(got.is_none(), "disabled h3 dispatch must fall through");
+        let client = HttpClient::new().with_http3();
+        assert!(
+            client.h3_alt_svc().is_some(),
+            "with_http3 → cache handle present, fetch path scans and dispatches"
+        );
     }
 
     #[test]
     fn try_h3_dispatch_no_cache_entry_falls_through() {
-        // Enabled but the origin never advertised h3: fall through, and the
-        // absence of a cache entry means the resolver is never consulted.
-        let mut cache = h3::alt_svc::AltSvcCache::new();
+        // The origin never advertised h3: fall through, and the absence of a
+        // cache entry means the resolver is never consulted.
+        let cache = std::sync::Mutex::new(h3::alt_svc::AltSvcCache::new());
         let now = std::time::Instant::now();
         let got = try_h3_dispatch(
-            &mut cache,
-            true,
+            &cache,
             &PanicResolver,
             "example.com",
             443,
@@ -4526,16 +4614,18 @@ mod tests {
         // resolver errors). RFC 7838 §2.4: the alternative is "broken" — the
         // dispatch returns None (fall back) and removes the entry so the next
         // request does not retry over h3.
-        let mut cache = h3::alt_svc::AltSvcCache::new();
+        let cache = std::sync::Mutex::new(h3::alt_svc::AltSvcCache::new());
         let now = std::time::Instant::now();
         let alts = h3::alt_svc::parse(r#"h3=":443"; ma=3600"#);
         let key = h3::alt_svc::origin_key("example.com", 443);
-        cache.insert(&key, &alts, now);
-        assert!(cache.get(&key, now).is_some(), "precondition: entry cached");
+        cache.lock().unwrap().insert(&key, &alts, now);
+        assert!(
+            cache.lock().unwrap().get(&key, now).is_some(),
+            "precondition: entry cached"
+        );
 
         let got = try_h3_dispatch(
-            &mut cache,
-            true,
+            &cache,
             &ErrResolver,
             "example.com",
             443,
@@ -4549,41 +4639,26 @@ mod tests {
         );
         assert!(got.is_none(), "failed QUIC leg falls back to H2/H1.1");
         assert!(
-            cache.get(&key, now).is_none(),
+            cache.lock().unwrap().get(&key, now).is_none(),
             "broken alternative evicted (RFC 7838 §2.4)"
         );
     }
 
     #[test]
-    fn record_alt_svc_disabled_is_noop() {
-        // Without with_http3 the scan never touches the cache, even on a valid
-        // advertisement.
-        let client = HttpClient::new();
-        let headers = vec![("alt-svc".to_string(), r#"h3=":443"; ma=3600"#.to_string())];
-        client.record_alt_svc("example.com", 443, &headers);
-        let now = std::time::Instant::now();
-        let key = h3::alt_svc::origin_key("example.com", 443);
-        assert!(
-            client.alt_svc_cache.lock().unwrap().get(&key, now).is_none(),
-            "h3 disabled → no cache entry recorded"
-        );
-    }
-
-    #[test]
     fn record_alt_svc_populates_cache_for_dispatch() {
-        // Enabled: a response advertising h3 populates the cache under the
-        // origin's own host:port key (not the alternative's), so a later
-        // try_h3_dispatch for that origin finds a fresh entry.
-        let client = HttpClient::new().with_http3();
+        // A response advertising h3 populates the cache under the origin's own
+        // host:port key (not the alternative's), so a later try_h3_dispatch for
+        // that origin finds a fresh entry.
+        let cache = std::sync::Mutex::new(h3::alt_svc::AltSvcCache::new());
         let headers = vec![(
             "Alt-Svc".to_string(),
             r#"h3=":8443"; ma=3600"#.to_string(),
         )];
-        client.record_alt_svc("example.com", 443, &headers);
+        record_alt_svc(&cache, "example.com", 443, &headers);
 
         let now = std::time::Instant::now();
         let key = h3::alt_svc::origin_key("example.com", 443);
-        let mut guard = client.alt_svc_cache.lock().unwrap();
+        let mut guard = cache.lock().unwrap();
         let entry = guard.get(&key, now).expect("h3 alternative cached");
         // Empty-host form → same host as origin, advertised UDP port.
         assert_eq!(entry.connect_target("example.com"), ("example.com".to_string(), 8443));
@@ -4593,18 +4668,19 @@ mod tests {
     fn record_alt_svc_ignores_non_h3_and_missing_header() {
         // A response with no Alt-Svc, and one advertising only a non-h3
         // protocol, both leave the cache empty.
-        let client = HttpClient::new().with_http3();
+        let cache = std::sync::Mutex::new(h3::alt_svc::AltSvcCache::new());
         let now = std::time::Instant::now();
         let key = h3::alt_svc::origin_key("example.com", 443);
 
-        client.record_alt_svc("example.com", 443, &[]);
-        client.record_alt_svc(
+        record_alt_svc(&cache, "example.com", 443, &[]);
+        record_alt_svc(
+            &cache,
             "example.com",
             443,
             &[("alt-svc".to_string(), r#"h2=":443""#.to_string())],
         );
         assert!(
-            client.alt_svc_cache.lock().unwrap().get(&key, now).is_none(),
+            cache.lock().unwrap().get(&key, now).is_none(),
             "no h3 advertisement → nothing cached"
         );
     }
