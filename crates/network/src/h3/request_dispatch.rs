@@ -35,7 +35,7 @@
 //! [`SendStream::poll_transmit`](super::stream::SendStream::poll_transmit), receive
 //! via the connection's frame dispatch) stays in the transport layers around it.
 
-use super::h3_exchange::H3Response;
+use super::h3_exchange::{BodySink, H3Response};
 use super::request_exchange::ClientRequest;
 use super::request_mux::{MuxError, OpenError, RequestMux};
 use super::stream::SendState;
@@ -172,6 +172,9 @@ impl RequestDispatch {
     /// `Ok(Some(response))` on the frame that completes the response (retiring the
     /// stream from the mux) and `Ok(None)` while more is expected.
     ///
+    /// Equivalent to [`on_stream_frame_with_sink`](Self::on_stream_frame_with_sink)
+    /// with `sink = None`.
+    ///
     /// # Errors
     ///
     /// - [`DispatchError::Stream`] if the frame breaches QUIC flow control or the
@@ -187,6 +190,38 @@ impl RequestDispatch {
         data: &[u8],
         fin: bool,
     ) -> Result<Option<H3Response>, DispatchError> {
+        self.on_stream_frame_with_sink(stream_id, offset, data, fin, None)
+    }
+
+    /// Routes an inbound STREAM frame for a request stream, forwarding `DATA`
+    /// frame payloads to `sink` as they arrive.
+    ///
+    /// Reassembles the frame in the QUIC stream layer, drains the newly-contiguous
+    /// ordered prefix, and feeds it — with the receive-side FIN detected once the
+    /// whole response has been consumed — to the owning exchange. Returns
+    /// `Ok(Some(response))` on the frame that completes the response (retiring the
+    /// stream from the mux) and `Ok(None)` while more is expected.
+    ///
+    /// When `sink` is `Some`, each `DATA` frame payload is forwarded to it as the
+    /// QUIC stream layer delivers ordered bytes. Passing `None` is equivalent to
+    /// [`on_stream_frame`](Self::on_stream_frame).
+    ///
+    /// # Errors
+    ///
+    /// - [`DispatchError::Stream`] if the frame breaches QUIC flow control or the
+    ///   final-size invariants (RFC 9000 §4.1, §4.5).
+    /// - [`DispatchError::Mux`] with [`MuxError::UnknownStream`] if no in-flight
+    ///   request owns `stream_id` (never opened, or already completed and retired),
+    ///   or [`MuxError::Exchange`] if the response stream is malformed (RFC 9114
+    ///   §4.1) — the failed stream is retired.
+    pub fn on_stream_frame_with_sink(
+        &mut self,
+        stream_id: u64,
+        offset: u64,
+        data: &[u8],
+        fin: bool,
+        sink: Option<BodySink<'_>>,
+    ) -> Result<Option<H3Response>, DispatchError> {
         // Reject bytes for a stream with no in-flight request before touching the
         // reassembly, mirroring the mux's own contract (never opened, or completed
         // and retired). This keeps the two layers' views of "known stream" aligned
@@ -195,13 +230,17 @@ impl RequestDispatch {
             return Err(DispatchError::Mux(MuxError::UnknownStream(stream_id)));
         }
         self.streams.recv_stream(stream_id, offset, data, fin)?;
-        self.pump_recv(stream_id)
+        self.pump_recv_with_sink(stream_id, sink)
     }
 
     /// Drains every ordered byte the last frame made readable on `stream_id` into
     /// the owning exchange, detecting the receive STREAM FIN once the whole stream
     /// is consumed. Returns the response on completion.
-    fn pump_recv(&mut self, stream_id: u64) -> Result<Option<H3Response>, DispatchError> {
+    fn pump_recv_with_sink(
+        &mut self,
+        stream_id: u64,
+        mut sink: Option<BodySink<'_>>,
+    ) -> Result<Option<H3Response>, DispatchError> {
         loop {
             let chunk = self.streams.read(stream_id);
             // The receive half reaches `DataRead` the moment the read cursor passes
@@ -217,15 +256,16 @@ impl RequestDispatch {
             if chunk.is_empty() && !finished {
                 return Ok(None);
             }
-            match self.mux.on_recv(stream_id, &chunk, finished)? {
+            let sink_ref = sink.as_mut().map(|f| &mut **f as &mut dyn FnMut(&[u8]));
+            match self.mux.on_recv_with_sink(stream_id, &chunk, finished, sink_ref)? {
                 Some(response) => return Ok(Some(response)),
                 None => {
                     if finished {
                         // The QUIC stream ended, yet the mux did not complete the
                         // response. An HTTP/3 response always finishes on FIN, so
-                        // `on_recv` with `fin` would have errored on a truncated
-                        // message rather than returning `None`; there is nothing
-                        // more to feed, so stop.
+                        // `on_recv_with_sink` with `fin` would have errored on a
+                        // truncated message rather than returning `None`; there is
+                        // nothing more to feed, so stop.
                         return Ok(None);
                     }
                     if chunk.is_empty() {

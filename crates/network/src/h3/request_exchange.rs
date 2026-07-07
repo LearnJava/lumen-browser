@@ -24,7 +24,7 @@
 //! drives.
 
 use super::frame::{Frame, FrameError};
-use super::h3_exchange::{AssembleError, H3Response, ResponseAssembler};
+use super::h3_exchange::{AssembleError, BodySink, H3Response, ResponseAssembler};
 use super::h3_request::{self, H3Profile, MessageError};
 
 /// A client request to render onto an HTTP/3 request stream (RFC 9114 §4.1).
@@ -162,6 +162,9 @@ impl ClientExchange {
     /// After a call returns the response or an error the exchange is terminal;
     /// any further call returns [`ExchangeError::NotReceiving`].
     ///
+    /// Equivalent to [`on_recv_with_sink`](Self::on_recv_with_sink) with
+    /// `sink = None`.
+    ///
     /// # Errors
     ///
     /// - [`ExchangeError::Assemble`] if the response stream is malformed — a frame
@@ -173,10 +176,42 @@ impl ClientExchange {
         data: &[u8],
         fin: bool,
     ) -> Result<Option<H3Response>, ExchangeError> {
+        self.on_recv_with_sink(data, fin, None)
+    }
+
+    /// Feed the next chunk of response-stream bytes, forwarding `DATA` frame
+    /// payloads to `sink` as they arrive.
+    ///
+    /// `data` is the bytes the QUIC transport delivered on the request stream
+    /// (possibly empty); `fin` marks the server's STREAM FIN — the end of the
+    /// response. Returns `Ok(Some(response))` once the response is complete (only
+    /// on the call that carries `fin`), and `Ok(None)` while more is expected.
+    ///
+    /// When `sink` is `Some`, each `DATA` frame payload is forwarded to it
+    /// immediately before being accumulated in the response body, enabling
+    /// progressive delivery. The full body is still present in
+    /// [`H3Response::body`] on completion. Passing `None` is equivalent to
+    /// [`on_recv`](Self::on_recv).
+    ///
+    /// After a call returns the response or an error the exchange is terminal;
+    /// any further call returns [`ExchangeError::NotReceiving`].
+    ///
+    /// # Errors
+    ///
+    /// - [`ExchangeError::Assemble`] if the response stream is malformed — a frame
+    ///   decode error, an RFC 9114 §4.1 grammar violation, a malformed message, or
+    ///   (on `fin`) a stream that ended mid-frame or without a final response head.
+    /// - [`ExchangeError::NotReceiving`] if the exchange has already finished.
+    pub fn on_recv_with_sink(
+        &mut self,
+        data: &[u8],
+        fin: bool,
+        sink: Option<BodySink<'_>>,
+    ) -> Result<Option<H3Response>, ExchangeError> {
         if !matches!(self.state, ExchangeState::Receiving) {
             return Err(ExchangeError::NotReceiving);
         }
-        if let Err(e) = self.assembler.push_bytes(data) {
+        if let Err(e) = self.assembler.push_bytes_with_sink(data, sink) {
             self.state = ExchangeState::Failed;
             return Err(ExchangeError::Assemble(e));
         }
@@ -432,5 +467,54 @@ mod tests {
             err,
             ExchangeError::Assemble(AssembleError::NoFinalResponse)
         );
+    }
+
+    // ── on_recv_with_sink tests ──────────────────────────────────────────────
+
+    #[test]
+    fn on_recv_with_sink_forwards_data_chunks_before_fin() {
+        let (mut exchange, _) = ClientExchange::start(&get(b"/")).unwrap();
+        let mut head_stream = headers_frame(&[status(b"200")]);
+        head_stream.extend(data_frame(b"part1"));
+        let mut chunks: Vec<Vec<u8>> = Vec::new();
+        // No FIN yet: chunks are forwarded, no response returned.
+        let result = exchange
+            .on_recv_with_sink(&head_stream, false, Some(&mut |c: &[u8]| chunks.push(c.to_vec())))
+            .unwrap();
+        assert_eq!(result, None);
+        assert_eq!(chunks, vec![b"part1".to_vec()]);
+
+        // FIN on a later, empty delivery: response completes with accumulated body.
+        let result = exchange.on_recv_with_sink(&[], true, None).unwrap();
+        let resp = result.unwrap();
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.body, b"part1");
+    }
+
+    #[test]
+    fn on_recv_with_sink_body_accumulated_across_sink_calls() {
+        let (mut exchange, _) = ClientExchange::start(&get(b"/")).unwrap();
+        let mut stream = headers_frame(&[status(b"200")]);
+        stream.extend(data_frame(b"a"));
+        stream.extend(data_frame(b"b"));
+        stream.extend(data_frame(b"c"));
+        let mut chunks: Vec<Vec<u8>> = Vec::new();
+        let resp = exchange
+            .on_recv_with_sink(&stream, true, Some(&mut |c: &[u8]| chunks.push(c.to_vec())))
+            .unwrap()
+            .unwrap();
+        assert_eq!(chunks, vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
+        assert_eq!(resp.body, b"abc");
+    }
+
+    #[test]
+    fn on_recv_with_sink_none_identical_to_on_recv() {
+        let (mut e1, _) = ClientExchange::start(&get(b"/")).unwrap();
+        let (mut e2, _) = ClientExchange::start(&get(b"/")).unwrap();
+        let mut stream = headers_frame(&[status(b"200")]);
+        stream.extend(data_frame(b"same"));
+        let r1 = e1.on_recv(&stream, true).unwrap().unwrap();
+        let r2 = e2.on_recv_with_sink(&stream, true, None).unwrap().unwrap();
+        assert_eq!(r1, r2);
     }
 }
