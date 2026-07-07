@@ -42,7 +42,9 @@ use super::key_schedule::InitialKeys;
 use super::loss::PacketNumberSpace;
 use super::pto::LossDetection;
 use super::recv_path::RecvKeyRing;
+use super::request_pump::RequestPump;
 use super::send_state::ConnectionSendState;
+use super::stream_manager::StreamManagerConfig;
 use super::tls_cert_verify::signature_scheme;
 use super::tls_message::{self, ClientHello, Extension, Handshake, KeyShareEntry};
 use super::transport_params::{TransportParameterError, TransportParameters};
@@ -97,6 +99,46 @@ pub struct ClientConnectConfig {
     /// The probe-timeout seed handed to loss detection before any RTT sample is
     /// taken (RFC 9002 §6.2.1).
     pub initial_pto: Duration,
+}
+
+impl ClientConnectConfig {
+    /// The stream-manager receive limits this config advertises (RFC 9000 §18.2),
+    /// as the [`StreamManagerConfig`] the request phase's [`RequestPump`] needs.
+    ///
+    /// These mirror the `quic_transport_parameters` the ClientHello carries
+    /// ([`build_transport_parameters`]), so what the request pump believes it may
+    /// *receive* matches what the peer was told it may *send*.
+    #[must_use]
+    pub fn stream_manager_config(&self) -> StreamManagerConfig {
+        StreamManagerConfig {
+            initial_max_stream_data_bidi_local: self.initial_max_stream_data_bidi_local,
+            initial_max_stream_data_bidi_remote: self.initial_max_stream_data_bidi_remote,
+            initial_max_stream_data_uni: self.initial_max_stream_data_uni,
+            initial_max_data: self.initial_max_data,
+            initial_max_streams_bidi: self.initial_max_streams_bidi,
+            initial_max_streams_uni: self.initial_max_streams_uni,
+        }
+    }
+
+    /// Build the request phase's [`RequestPump`] from this config
+    /// ([`super::conn_connect::ConnectDriver::into_request_driver`] takes the pump
+    /// the caller assembles).
+    ///
+    /// The pump's per-stream *send* window seed — how many request-body bytes the
+    /// client may put on a stream before the server grows the window with a
+    /// MAX_STREAM_DATA (RFC 9000 §19.10) — is the peer's advertised
+    /// `initial_max_stream_data_bidi_remote`, which the client does not learn until
+    /// the server's own transport parameters arrive. Until a later slice surfaces
+    /// those from the completed handshake, it is seeded provisionally from this
+    /// config's symmetric receive limit, the same way [`connect_client`] seeds the
+    /// connection's peer flow-control limits before the handshake refines them. A
+    /// request with no (or a small) body — the common `GET` — never reaches the
+    /// seed, so the provisional value only matters for a large `POST` against a
+    /// server that advertises a tighter window than assumed.
+    #[must_use]
+    pub fn request_pump(&self) -> RequestPump {
+        RequestPump::new(self.stream_manager_config(), self.initial_max_stream_data_bidi_remote)
+    }
 }
 
 impl Default for ClientConnectConfig {
