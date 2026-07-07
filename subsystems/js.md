@@ -281,6 +281,17 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
 - **WebCodecs graceful degradation** (`web_codecs.rs`, U-4 stage 2). 2026-06-18. `VideoEncoder`/`VideoDecoder`/`AudioEncoder`/`AudioDecoder` `configure()` no longer throw synchronously (which white-screened SPAs not wrapping it in try/catch) — they transition to `configured` and report unsupported codecs through the spec async error callback. Added the missing `InvalidStateError` class. `isConfigSupported()` still resolves `false` for feature detection.
 - **Storage Buckets API** (`storage_buckets.rs`, P3-storagebuckets). 2026-06-26. Pure ES5 JS shim (`init_storage_buckets`), installed after the DOM so `Promise`/`navigator`/`DOMException` exist. `navigator.storageBuckets` is a `StorageBucketManager` with `open(name, options?)` (validates the name as `^[a-z0-9][a-z0-9_-]*$`, length 1..=64; rejects with `TypeError`; dedupes by name), `keys()` (sorted), `delete(name)`. Each `StorageBucket` carries a read-only `name` and the async surface `persisted()`/`persist()`/`estimate()` (`{usage:0, quota}`)/`durability()`/`setExpires(ms)`/`expires()`/`getDirectory()` (delegates to `navigator.storage.getDirectory` OPFS when present, else rejects `InvalidStateError`), plus `indexedDB`/`caches` accessors returning the global instances. Phase 0: buckets live in memory for the JS-context lifetime; quota/persistence advisory. 8 unit tests (`storage_buckets::tests::*`).
 
+- **Web Crypto SubtleCrypto — slice 2: AES-CBC/CTR + PBKDF2 + HKDF** (`crates/js/src/subtle_crypto.rs`, P3-webcrypto, P1 2026-07-08).
+  - **AES-CBC** (`cbc` crate, PKCS7 padding): `generateKey` (128/256-bit), `importKey` (raw + JWK), `exportKey` (raw + JWK), `encrypt`, `decrypt`. JWK `alg` = `A128CBC`/`A256CBC`.
+  - **AES-CTR** (`ctr` crate, Ctr128BE): `generateKey` (128/256-bit), `importKey` (raw + JWK), `exportKey` (raw + JWK), `encrypt`/`decrypt` (symmetric — same operation). Supports `length` bits 1–128 for the counter portion; `length=128` = full block counter increment.
+  - **PBKDF2** (RFC 2898 §5.2, manual HMAC over existing `hmac`+`sha2` — no new dep): `importKey` (raw password, always non-extractable), `deriveBits`, `deriveKey`. Supports SHA-256/384/512 PRF, arbitrary iteration count and output length.
+  - **HKDF** (RFC 5869 extract+expand, manual): `importKey` (raw IKM, non-extractable), `deriveBits`, `deriveKey`. Supports SHA-256/384/512, optional salt (defaults to zero block), info binding.
+  - JS shim updated: `subtle.encrypt`/`decrypt` dispatch by `algorithm.name` (AES-GCM/AES-CBC/AES-CTR); `deriveBits` and `deriveKey` replaced stubs with real calls to `_lumen_subtle_derive_bits`.
+  - 4 new native bindings: `_lumen_subtle_aes_cbc_encrypt`, `_lumen_subtle_aes_cbc_decrypt`, `_lumen_subtle_aes_ctr_crypt`, `_lumen_subtle_derive_bits`.
+  - 19 new Rust unit tests + 3 new JS-level tests (AES-CBC round-trip, PBKDF2 `deriveBits`, HKDF→AES-GCM round-trip). RFC known-vector tests: PBKDF2-HMAC-SHA256 (RFC 6070 §2), HKDF-SHA256 (RFC 5869 A.1).
+  - New deps: `aes = "0.8"` (explicit pin, already transitive via `aes-gcm`), `cbc = "0.1"`, `ctr = "0.9"`. All RustCrypto family, permanent.
+  - **Previously shipped (slice 1):** SHA-*/`digest`, HMAC-SHA256/384/512 (sign/verify), ECDSA-P256 (sign/verify), AES-GCM (encrypt/decrypt). **Remaining:** RSA-OAEP, RSA-PSS, RSASSA-PKCS1-v1_5, ECDH.
+
 ## Deferred
 
 - WebGL: GLSL execution (per-vertex colour / texture sampling — currently flat `uniform4f` fill), `drawElements` / indexed draws, real textures. Backend stub lives in `lumen_paint::webgl`.
