@@ -55,6 +55,17 @@ hmac = { version = "0.12", features = [] }
 # Provisional: AES-GCM 128/256 for SubtleCrypto.encrypt/decrypt/generateKey/importKey.
 # Standard AEAD for modern web crypto; pure-Rust via aes + ghash; no native code.
 aes-gcm = "0.10"
+# Permanent: AES block cipher for AES-CBC/CTR (SubtleCrypto). aes 0.8 is the
+# RustCrypto standard, already pulled transitively by aes-gcm 0.10; this pins it
+# explicitly so cbc/ctr can depend on the same version.
+# Why: permanent crypto dep; same RustCrypto family as aes-gcm; no alternatives.
+aes = { version = "0.8", features = ["zeroize"] }
+# Permanent: AES-CBC mode (PKCS7 padding) — SubtleCrypto AES-CBC encrypt/decrypt.
+# Why: permanent; small pure-Rust wrapper over aes 0.8; no alternatives in tree.
+cbc = { version = "0.1", features = ["alloc"] }
+# Permanent: AES-CTR stream cipher mode — SubtleCrypto AES-CTR encrypt/decrypt.
+# Why: permanent; same RustCrypto family as aes/cbc; used alongside AES-CBC.
+ctr = "0.9"
 # Import Maps (HTML LS §8.1.6.2) JSON parsing for <script type="importmap">.
 # Lightweight JSON parser; reuses serde which is already in the workspace.
 serde_json = "1.0"

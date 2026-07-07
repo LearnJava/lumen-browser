@@ -11409,17 +11409,29 @@ if (typeof _lumen_idb_load === 'function') {
             });
         },
 
-        // ── encrypt (AES-GCM) ────────────────────────────────────────────────
+        // ── encrypt (AES-GCM / AES-CBC / AES-CTR) ────────────────────────────
         encrypt: function (algorithm, key, data) {
             return new Promise(function (resolve, reject) {
                 try {
                     if (!(key instanceof CryptoKey)) {
                         reject(new TypeError('encrypt: argument is not a CryptoKey')); return;
                     }
-                    var iv  = _to_bytes(algorithm.iv || new Uint8Array(12));
-                    var aad = algorithm.additionalData ? _to_bytes(algorithm.additionalData) : [];
-                    var pt  = _to_bytes(data);
-                    var ct  = _lumen_subtle_encrypt(key.__ckid, iv, aad, pt);
+                    var algName = (algorithm && algorithm.name) ? algorithm.name.toUpperCase() : '';
+                    var pt = _to_bytes(data);
+                    var ct;
+                    if (algName === 'AES-CBC') {
+                        var iv = _to_bytes(algorithm.iv || new Uint8Array(16));
+                        ct = _lumen_subtle_aes_cbc_encrypt(key.__ckid, iv, pt);
+                    } else if (algName === 'AES-CTR') {
+                        var counter = _to_bytes(algorithm.counter || new Uint8Array(16));
+                        var len = (algorithm.length !== undefined) ? algorithm.length : 64;
+                        ct = _lumen_subtle_aes_ctr_crypt(key.__ckid, counter, len, pt);
+                    } else {
+                        // AES-GCM (default)
+                        var iv  = _to_bytes(algorithm.iv || new Uint8Array(12));
+                        var aad = algorithm.additionalData ? _to_bytes(algorithm.additionalData) : [];
+                        ct = _lumen_subtle_encrypt(key.__ckid, iv, aad, pt);
+                    }
                     if (!ct || ct.length === 0) {
                         reject(new DOMException('encrypt: operation failed', 'OperationError')); return;
                     }
@@ -11428,37 +11440,91 @@ if (typeof _lumen_idb_load === 'function') {
             });
         },
 
-        // ── decrypt (AES-GCM) ────────────────────────────────────────────────
+        // ── decrypt (AES-GCM / AES-CBC / AES-CTR) ────────────────────────────
         decrypt: function (algorithm, key, data) {
             return new Promise(function (resolve, reject) {
                 try {
                     if (!(key instanceof CryptoKey)) {
                         reject(new TypeError('decrypt: argument is not a CryptoKey')); return;
                     }
-                    var iv  = _to_bytes(algorithm.iv || new Uint8Array(12));
-                    var aad = algorithm.additionalData ? _to_bytes(algorithm.additionalData) : [];
-                    var ct  = _to_bytes(data);
-                    var pt  = _lumen_subtle_decrypt(key.__ckid, iv, aad, ct);
+                    var algName = (algorithm && algorithm.name) ? algorithm.name.toUpperCase() : '';
+                    var ct = _to_bytes(data);
+                    var pt;
+                    if (algName === 'AES-CBC') {
+                        var iv = _to_bytes(algorithm.iv || new Uint8Array(16));
+                        pt = _lumen_subtle_aes_cbc_decrypt(key.__ckid, iv, ct);
+                    } else if (algName === 'AES-CTR') {
+                        var counter = _to_bytes(algorithm.counter || new Uint8Array(16));
+                        var len = (algorithm.length !== undefined) ? algorithm.length : 64;
+                        pt = _lumen_subtle_aes_ctr_crypt(key.__ckid, counter, len, ct);
+                    } else {
+                        // AES-GCM (default)
+                        var iv  = _to_bytes(algorithm.iv || new Uint8Array(12));
+                        var aad = algorithm.additionalData ? _to_bytes(algorithm.additionalData) : [];
+                        pt = _lumen_subtle_decrypt(key.__ckid, iv, aad, ct);
+                    }
                     if (!pt || pt.length === 0) {
-                        reject(new DOMException('decrypt: authentication failed', 'OperationError')); return;
+                        reject(new DOMException('decrypt: operation failed', 'OperationError')); return;
                     }
                     resolve(new Uint8Array(pt).buffer);
                 } catch (e) { reject(e); }
             });
         },
 
-        // ── wrapKey / unwrapKey / deriveBits / deriveKey — stubs ─────────────
+        // ── deriveBits (PBKDF2 / HKDF) ───────────────────────────────────────
+        deriveBits: function (algorithm, key, length) {
+            return new Promise(function (resolve, reject) {
+                try {
+                    if (!(key instanceof CryptoKey)) {
+                        reject(new TypeError('deriveBits: argument is not a CryptoKey')); return;
+                    }
+                    var alg = (typeof algorithm === 'string') ? { name: algorithm } : algorithm;
+                    var hashName = (alg.hash && alg.hash.name) ? alg.hash.name : (alg.hash || 'SHA-256');
+                    var salt = alg.salt ? Array.from(_to_bytes(alg.salt)) : [];
+                    var info = alg.info ? Array.from(_to_bytes(alg.info)) : [];
+                    var algFull = JSON.stringify({
+                        name: alg.name,
+                        hash: hashName,
+                        salt: salt,
+                        info: info,
+                        iterations: alg.iterations || 100000
+                    });
+                    var bits = _lumen_subtle_derive_bits(algFull, key.__ckid, length || 256);
+                    if (!bits || bits.length === 0) {
+                        reject(new DOMException('deriveBits: operation failed', 'OperationError')); return;
+                    }
+                    resolve(new Uint8Array(bits).buffer);
+                } catch (e) { reject(e); }
+            });
+        },
+
+        // ── deriveKey (PBKDF2 / HKDF → any symmetric key) ────────────────────
+        deriveKey: function (algorithm, baseKey, derivedKeyAlgorithm, extractable, keyUsages) {
+            var self = this;
+            return new Promise(function (resolve, reject) {
+                try {
+                    var dkaName = (derivedKeyAlgorithm && derivedKeyAlgorithm.name)
+                        ? derivedKeyAlgorithm.name.toUpperCase() : '';
+                    // Determine how many bits are needed for the target key type.
+                    var length = derivedKeyAlgorithm.length
+                        || ((dkaName === 'AES-GCM' || dkaName === 'AES-CBC' || dkaName === 'AES-CTR')
+                            ? 256 : 256);
+                    self.deriveBits(algorithm, baseKey, length)
+                        .then(function (rawBits) {
+                            return self.importKey('raw', rawBits, derivedKeyAlgorithm, extractable, keyUsages);
+                        })
+                        .then(resolve)
+                        .catch(reject);
+                } catch (e) { reject(e); }
+            });
+        },
+
+        // ── wrapKey / unwrapKey — stubs ───────────────────────────────────────
         wrapKey: function() {
             return Promise.reject(new DOMException('wrapKey: not implemented', 'NotSupportedError'));
         },
         unwrapKey: function() {
             return Promise.reject(new DOMException('unwrapKey: not implemented', 'NotSupportedError'));
-        },
-        deriveBits: function() {
-            return Promise.reject(new DOMException('deriveBits: not implemented', 'NotSupportedError'));
-        },
-        deriveKey: function() {
-            return Promise.reject(new DOMException('deriveKey: not implemented', 'NotSupportedError'));
         }
     };
 
@@ -20616,6 +20682,121 @@ mod tests {
         rt.eval("_ck_ok").unwrap();
         let r = rt.eval("_ck_ok").unwrap();
         match r { lumen_core::JsValue::Bool(_) => {} other => panic!("{other:?}") }
+    }
+
+    #[test]
+    fn subtle_aes_cbc_encrypt_decrypt() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var _cbc_done = false; var _cbc_pt = null;
+             var _cbc_iv = new Uint8Array(16);
+             window.crypto.subtle.generateKey(
+                 {name:'AES-CBC', length:256},
+                 true,
+                 ['encrypt','decrypt']
+             ).then(function(k) {
+                 var plain = new TextEncoder().encode('AES-CBC test');
+                 return window.crypto.subtle.encrypt(
+                     {name:'AES-CBC', iv: _cbc_iv},
+                     k,
+                     plain
+                 ).then(function(ct) {
+                     return window.crypto.subtle.decrypt(
+                         {name:'AES-CBC', iv: _cbc_iv},
+                         k,
+                         ct
+                     );
+                 });
+             }).then(function(pt) {
+                 _cbc_pt = new TextDecoder().decode(pt);
+                 _cbc_done = true;
+             });"
+        ).unwrap();
+        rt.eval("_cbc_done").unwrap();
+        let r = rt.eval("_cbc_done ? _cbc_pt : null").unwrap();
+        match r {
+            lumen_core::JsValue::Null => {} // microtasks pending
+            lumen_core::JsValue::String(s) => assert_eq!(s, "AES-CBC test"),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn subtle_derive_bits_pbkdf2() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var _pbkdf2_done = false; var _pbkdf2_len = 0;
+             window.crypto.subtle.importKey(
+                 'raw',
+                 new TextEncoder().encode('password'),
+                 {name:'PBKDF2'},
+                 false,
+                 ['deriveBits']
+             ).then(function(k) {
+                 return window.crypto.subtle.deriveBits(
+                     {name:'PBKDF2', hash:'SHA-256',
+                      salt: new TextEncoder().encode('salt'),
+                      iterations: 1000},
+                     k,
+                     256
+                 );
+             }).then(function(bits) {
+                 _pbkdf2_len = new Uint8Array(bits).length;
+                 _pbkdf2_done = true;
+             });"
+        ).unwrap();
+        rt.eval("_pbkdf2_done").unwrap();
+        let r = rt.eval("_pbkdf2_done ? _pbkdf2_len : -1").unwrap();
+        match r {
+            lumen_core::JsValue::Number(n) if (n - (-1.0_f64)).abs() < f64::EPSILON => {} // microtasks pending
+            lumen_core::JsValue::Number(n) if (n - 32.0_f64).abs() < f64::EPSILON => {} // 256 bits = 32 bytes
+            other => panic!("expected 32 bytes, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn subtle_derive_key_hkdf_then_aes_gcm() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var _hkdf_done = false; var _hkdf_pt = null;
+             window.crypto.subtle.importKey(
+                 'raw',
+                 new TextEncoder().encode('input-keying-material'),
+                 {name:'HKDF'},
+                 false,
+                 ['deriveKey']
+             ).then(function(baseKey) {
+                 return window.crypto.subtle.deriveKey(
+                     {name:'HKDF', hash:'SHA-256',
+                      salt: new Uint8Array(16),
+                      info: new TextEncoder().encode('context')},
+                     baseKey,
+                     {name:'AES-GCM', length:256},
+                     false,
+                     ['encrypt','decrypt']
+                 );
+             }).then(function(aesKey) {
+                 var iv = new Uint8Array(12);
+                 var plain = new TextEncoder().encode('hkdf-derived');
+                 return window.crypto.subtle.encrypt(
+                     {name:'AES-GCM', iv: iv}, aesKey, plain
+                 ).then(function(ct) {
+                     return window.crypto.subtle.decrypt(
+                         {name:'AES-GCM', iv: iv}, aesKey, ct
+                     );
+                 });
+             }).then(function(pt) {
+                 _hkdf_pt = new TextDecoder().decode(pt);
+                 _hkdf_done = true;
+             });"
+        ).unwrap();
+        rt.eval("_hkdf_done").unwrap();
+        let r = rt.eval("_hkdf_done ? _hkdf_pt : null").unwrap();
+        match r {
+            lumen_core::JsValue::Null => {} // microtasks pending
+            lumen_core::JsValue::String(s) => assert_eq!(s, "hkdf-derived"),
+            other => panic!("unexpected {other:?}"),
+        }
     }
 
     #[test]
