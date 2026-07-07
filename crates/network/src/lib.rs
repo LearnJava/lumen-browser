@@ -377,6 +377,45 @@ struct Response {
     body: Vec<u8>,
 }
 
+/// Map an [`h3::h3_exchange::H3Response`] onto the crate's [`Response`] at the
+/// HTTP/3 dispatch boundary — the QUIC counterpart of the `Response { … }` the
+/// H2 path returns from [`h2_do_request`] (RFC 9114 §4.1).
+///
+/// The h3 module is deliberately free of the crate-private [`Response`] and
+/// returns its protocol-native [`h3::h3_exchange::H3Response`]; this conversion
+/// is the one place that bridges the two, so the QUIC dispatch slice that wires
+/// [`h3::client_transport::h3_do_request`] into [`fetch_single`] has the same
+/// `→ Response` shape the H1/H2 branches already produce.
+///
+/// HTTP/3 field names are lower-case ASCII and values are opaque octet strings
+/// (RFC 9114 §4.1.2, §4.2); the crate's `Response` carries headers as text, so
+/// each name and value is decoded losslessly-into-text with a UTF-8 lossy
+/// conversion — a non-UTF-8 header value keeps its bytes as replacement
+/// characters rather than failing the whole fetch, the same latitude the H1/H2
+/// paths already take with header text. The interim (`1xx`) responses and the
+/// trailer section the assembler collected have no slot in `Response` and are
+/// dropped, matching the H2 path which likewise surfaces only the final status,
+/// headers, and body.
+impl From<h3::h3_exchange::H3Response> for Response {
+    fn from(resp: h3::h3_exchange::H3Response) -> Self {
+        let headers = resp
+            .headers
+            .into_iter()
+            .map(|(name, value)| {
+                (
+                    String::from_utf8_lossy(&name).into_owned(),
+                    String::from_utf8_lossy(&value).into_owned(),
+                )
+            })
+            .collect();
+        Self {
+            status: resp.status,
+            headers,
+            body: resp.body,
+        }
+    }
+}
+
 fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
     let name_lc = name.to_ascii_lowercase();
     headers
@@ -4226,6 +4265,64 @@ mod tests {
     fn check_alpn_rejects_unknown_proto() {
         let err = check_negotiated_alpn(Some(b"h3")).unwrap_err();
         assert!(format!("{err:?}").contains("unexpected ALPN"));
+    }
+
+    #[test]
+    fn h3_response_maps_status_headers_and_body() {
+        let h3 = h3::h3_exchange::H3Response {
+            status: 200,
+            headers: vec![
+                (b"content-type".to_vec(), b"text/plain".to_vec()),
+                (b"content-length".to_vec(), b"5".to_vec()),
+            ],
+            body: b"hello".to_vec(),
+            informational: Vec::new(),
+            trailers: Vec::new(),
+        };
+        let resp = Response::from(h3);
+        assert_eq!(resp.status, 200);
+        assert_eq!(
+            resp.headers,
+            vec![
+                ("content-type".to_owned(), "text/plain".to_owned()),
+                ("content-length".to_owned(), "5".to_owned()),
+            ]
+        );
+        assert_eq!(resp.body, b"hello");
+    }
+
+    #[test]
+    fn h3_response_drops_informational_and_trailers() {
+        // The crate `Response` has no slot for 1xx responses or the trailer
+        // section — the mapping drops them, matching the H2 path.
+        let h3 = h3::h3_exchange::H3Response {
+            status: 204,
+            headers: Vec::new(),
+            body: Vec::new(),
+            informational: vec![100, 103],
+            trailers: vec![(b"x-checksum".to_vec(), b"deadbeef".to_vec())],
+        };
+        let resp = Response::from(h3);
+        assert_eq!(resp.status, 204);
+        assert!(resp.headers.is_empty());
+        assert!(resp.body.is_empty());
+    }
+
+    #[test]
+    fn h3_response_header_value_is_utf8_lossy() {
+        // A non-UTF-8 header value keeps its bytes as replacement characters
+        // rather than failing the conversion (RFC 9114 §4.2: values are opaque
+        // octets, but the crate `Response` carries text).
+        let h3 = h3::h3_exchange::H3Response {
+            status: 200,
+            headers: vec![(b"x-bin".to_vec(), vec![0xff, 0xfe])],
+            body: Vec::new(),
+            informational: Vec::new(),
+            trailers: Vec::new(),
+        };
+        let resp = Response::from(h3);
+        assert_eq!(resp.headers[0].0, "x-bin");
+        assert_eq!(resp.headers[0].1, "\u{fffd}\u{fffd}");
     }
 
     #[test]

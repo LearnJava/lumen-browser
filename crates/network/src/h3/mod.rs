@@ -739,11 +739,16 @@
 //!   to a single [`h3_exchange::H3Response`]. Its transport-generic core
 //!   `h3_exchange` runs the whole composition over a
 //!   [`udp::MockDatagramTransport`] in tests.
-//! - Slice 58+ (planned) — Alt-Svc dispatch in `lib.rs`: mapping the
-//!   [`h3_exchange::H3Response`] onto the crate's `Response`, routing an origin
-//!   onto [`client_transport::h3_do_request`] only after it advertised `h3`
-//!   (RFC 7838, [`alt_svc`]) from an H2/H1.1 response, and falling back when the
-//!   QUIC leg fails.
+//! - Slice 58 — the [`h3_exchange::H3Response`] → crate `Response` mapping at the
+//!   dispatch boundary in `lib.rs`: the one place that bridges the protocol-native
+//!   response this module returns onto the crate-private `Response` shape the H1/H2
+//!   branches produce (`impl From<H3Response> for Response`), decoding the opaque
+//!   header octets (RFC 9114 §4.2) into text with a UTF-8 lossy conversion and
+//!   dropping the interim (`1xx`) responses and trailer section the crate `Response`
+//!   has no slot for — the same surface the H2 path exposes.
+//! - Slice 59+ (planned) — the Alt-Svc dispatch in `lib.rs`: routing an origin onto
+//!   [`client_transport::h3_do_request`] only after it advertised `h3` (RFC 7838,
+//!   [`alt_svc`]) from an H2/H1.1 response, and falling back when the QUIC leg fails.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
