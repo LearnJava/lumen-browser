@@ -690,4 +690,101 @@ mod tests {
     fn empty_trailer_section_is_valid() {
         assert!(validate_trailer_fields(&[]).unwrap().is_empty());
     }
+
+    // ── Range / Authorization header fields (срез 101) ────────────────────────
+
+    /// `range` is a regular lowercase header field — RFC 9114 §4.2 allows any
+    /// field that passes `validate_regular_field`.
+    #[test]
+    fn range_header_accepted_as_regular_field() {
+        let fields = build_request_fields(
+            H3Profile::Chrome,
+            b"GET",
+            b"https",
+            b"example.com",
+            b"/file",
+            &[(b"range", b"bytes=0-1023")],
+        )
+        .unwrap();
+        assert_eq!(field(&fields, b"range"), Some(b"bytes=0-1023".as_slice()));
+    }
+
+    /// `if-range` is a regular lowercase header field (RFC 7233 §3.2).
+    #[test]
+    fn if_range_header_accepted_as_regular_field() {
+        let fields = build_request_fields(
+            H3Profile::Chrome,
+            b"GET",
+            b"https",
+            b"example.com",
+            b"/file",
+            &[
+                (b"range", b"bytes=0-499"),
+                (b"if-range", b"\"abc123\""),
+            ],
+        )
+        .unwrap();
+        assert_eq!(field(&fields, b"if-range"), Some(b"\"abc123\"".as_slice()));
+    }
+
+    /// `authorization` is a regular lowercase header field (RFC 7235 §4.2).
+    #[test]
+    fn authorization_header_accepted_as_regular_field() {
+        let fields = build_request_fields(
+            H3Profile::Chrome,
+            b"GET",
+            b"https",
+            b"example.com",
+            b"/secure",
+            &[(b"authorization", b"Bearer token123")],
+        )
+        .unwrap();
+        assert_eq!(
+            field(&fields, b"authorization"),
+            Some(b"Bearer token123".as_slice()),
+        );
+    }
+
+    /// Range + If-Range + Authorization together pass validation (all are
+    /// standard lowercase regular fields per RFC 9114 §4.2).
+    #[test]
+    fn range_if_range_authorization_combination_accepted() {
+        let fields = build_request_fields(
+            H3Profile::Chrome,
+            b"GET",
+            b"https",
+            b"example.com",
+            b"/resource",
+            &[
+                (b"range", b"bytes=100-199"),
+                (b"if-range", b"Tue, 01 Jan 2026 00:00:00 GMT"),
+                (b"authorization", b"Basic dXNlcjpwYXNz"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(field(&fields, b"range"), Some(b"bytes=100-199".as_slice()));
+        assert_eq!(
+            field(&fields, b"if-range"),
+            Some(b"Tue, 01 Jan 2026 00:00:00 GMT".as_slice()),
+        );
+        assert_eq!(
+            field(&fields, b"authorization"),
+            Some(b"Basic dXNlcjpwYXNz".as_slice()),
+        );
+    }
+
+    /// Suffix-range `bytes=-500` encodes and passes through.
+    #[test]
+    fn suffix_range_header_accepted() {
+        let fields = build_request_fields(
+            H3Profile::Chrome,
+            b"GET",
+            b"https",
+            b"example.com",
+            b"/tail",
+            &[(b"range", b"bytes=-500")],
+        )
+        .unwrap();
+        assert_eq!(field(&fields, b"range"), Some(b"bytes=-500".as_slice()));
+    }
 }

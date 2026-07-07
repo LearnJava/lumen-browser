@@ -1502,28 +1502,45 @@ fn fetch_single(
     let effective_proxy = if socks5_proxy.is_some() { None } else { proxy };
 
     // HTTP/3 dispatch (RFC 7838, RFC 9114): before any TCP work, a TLS origin
-    // with a fresh cached `h3` alternative is tried over QUIC. Only the plain
-    // request shape goes: proxies don't carry QUIC, and the h3 leg builds no
-    // Range/If-Range/Authorization headers and buffers the whole body (no
-    // streaming sink). Everything else — including a failed QUIC leg (the
-    // "broken" alternative is evicted inside `try_h3_dispatch`) — falls
-    // through to the H2/H1.1 path below.
+    // with a fresh cached `h3` alternative is tried over QUIC. Proxies don't
+    // carry QUIC. Streaming responses (stream_sink) are not yet supported over
+    // H3 (ResponseAssembler buffers the whole body) — requests with a sink
+    // fall through to H2/H1.1. A failed QUIC leg (broken alternative evicted
+    // inside `try_h3_dispatch`) also falls through to H2/H1.1 below.
+    //
+    // Range/If-Range (RFC 7233) and Authorization (RFC 7235) ARE supported:
+    // they are regular lowercase header fields in RFC 9114 §4.2.
     if let Some(cache) = h3_alt_svc
         && is_tls
         && effective_proxy.is_none()
         && socks5_proxy.is_none()
-        && range.is_none()
-        && if_range.is_none()
-        && authorization.is_none()
         && stream_sink.is_none()
     {
-        // The h3 leg takes the header block as `(name, value)` byte pairs —
-        // the same fingerprint-plus-extras set the H2 path sends (RP-7).
+        // Fingerprint + extra header block for H3 (same set as H2, RFC 9114 §4.2).
         let h3_headers = build_h2_headers(http_profile, accept_encoding, extra_headers);
-        let header_refs: Vec<(&[u8], &[u8])> = h3_headers
+        let mut header_refs: Vec<(&[u8], &[u8])> = h3_headers
             .iter()
             .map(|(k, v)| (k.as_slice(), v.as_slice()))
             .collect();
+
+        // Range / If-Range (RFC 7233): lowercase header names per RFC 9114 §4.2.
+        // If-Range is only meaningful when accompanied by a valid Range (RFC 7233 §3.2).
+        let range_value_owned: Option<String> = range.and_then(|r| r.header_value());
+        let if_range_value: Option<&str> = match (&range_value_owned, if_range) {
+            (Some(_), Some(v)) => Some(v.header_value()),
+            _ => None,
+        };
+        if let Some(rv) = &range_value_owned {
+            header_refs.push((b"range", rv.as_bytes()));
+        }
+        if let Some(irv) = if_range_value {
+            header_refs.push((b"if-range", irv.as_bytes()));
+        }
+        // Authorization (RFC 7235): lowercase per RFC 9114 §4.2.
+        if let Some(auth) = authorization {
+            header_refs.push((b"authorization", auth.as_bytes()));
+        }
+
         if let Some(resp) = try_h3_dispatch(
             cache,
             h3_pool,
