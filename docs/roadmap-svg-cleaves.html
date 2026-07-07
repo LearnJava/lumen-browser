@@ -57,12 +57,12 @@
 {
  "generated": "2026-07-07",
  "counts": {
-  "open": 18,
-  "fixed": 225,
+  "open": 19,
+  "fixed": 226,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 243,
+ "total_bugs": 245,
  "phases": [
   {
    "id": "P0",
@@ -2831,6 +2831,20 @@
    "component": "layout/shell (замещаемые элементы, aspect-ratio)",
    "date": "2026-07-04",
    "debtor": false
+  },
+  "BUG-271": {
+   "status": "fixed",
+   "title": "После загрузки JS-тяжёлой страницы (lenta.ru) процесс постоянно жёг ~1.6 ядра CPU при нуле отрисованных кадров. **Корень:** протухший `ControlFlow::WaitUntil` —…",
+   "component": "shell (event loop) + js (таймер-шим)",
+   "date": "2026-07-07",
+   "debtor": false
+  },
+  "BUG-272": {
+   "status": "open",
+   "title": "lenta.ru держит 1371 МБ WS / 1124 МБ private при ОДНОЙ загруженной картинке (baseline 328/138 МБ; Edge на полной странице ~530 МБ на все процессы). Нужен heap-п…",
+   "component": "shell/js/layout (память, потребитель не установлен)",
+   "date": null,
+   "debtor": false
   }
  },
  "unlinked": {
@@ -3110,11 +3124,17 @@
    "BUG-147",
    "BUG-148"
   ],
+  "shell (event loop) + js (таймер-шим)": [
+   "BUG-271"
+  ],
   "shell+font": [
    "BUG-170"
   ],
   "shell/js": [
    "BUG-164"
+  ],
+  "shell/js/layout (память, потребитель не установлен)": [
+   "BUG-272"
   ],
   "shell/network": [
    "BUG-234"

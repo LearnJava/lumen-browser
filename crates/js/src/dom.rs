@@ -6550,6 +6550,15 @@ navigator.permissions = {
 // ControlFlow::WaitUntil wakes the loop at the right time.
 var _lumen_timer_seq = 1;
 var _lumen_timers = [];
+// HTML LS §8.6 «timer nesting level»: callbacks scheduled from inside a timer
+// callback inherit nesting+1; past level 5 the timeout is clamped to >=4 ms
+// (BUG-271: without this, setTimeout(fn,0) chains and setInterval(fn,0) wake
+// the shell event loop as fast as it can spin — a full busy core per page).
+var _lumen_timer_nesting = 0;
+
+function _lumen_clamp_timeout(ms, nesting) {
+    return (nesting > 5 && ms < 4) ? 4 : ms;
+}
 
 function _lumen_tick_timers() {
     var now = _lumen_now_ms();
@@ -6568,13 +6577,19 @@ function _lumen_tick_timers() {
     for (var j = 0; j < ready.length; j++) {
         var r = ready[j];
         if (r.interval !== null) {
-            _lumen_timers.push({ id: r.id, fn: r.fn, deadline: now + r.interval, interval: r.interval });
+            var rn = (r.nesting || 1) + 1;
+            var riv = _lumen_clamp_timeout(r.interval, rn);
+            _lumen_timers.push({ id: r.id, fn: r.fn, deadline: now + riv, interval: r.interval, nesting: rn });
         }
     }
     // Run callbacks; errors are swallowed (HTML §8.6 step 17).
+    // The callback's nesting level is active while it runs so timers it
+    // schedules inherit level+1 (§8.6 step 3).
     for (var k = 0; k < ready.length; k++) {
+        _lumen_timer_nesting = ready[k].nesting || 1;
         try { ready[k].fn(); } catch(e) {}
     }
+    _lumen_timer_nesting = 0;
     // Notify shell of next wakeup if any timers remain.
     if (_lumen_timers.length > 0) {
         var next = _lumen_timers[0].deadline;
@@ -6587,10 +6602,12 @@ function _lumen_tick_timers() {
 
 function setTimeout(fn, delay) {
     if (typeof fn !== 'function') return 0;
+    var nesting = _lumen_timer_nesting + 1;
     var ms = (typeof delay === 'number' && delay > 0) ? delay : 0;
+    ms = _lumen_clamp_timeout(ms, nesting);
     var id = _lumen_timer_seq++;
     var deadline = _lumen_now_ms() + ms;
-    _lumen_timers.push({ id: id, fn: fn, deadline: deadline, interval: null });
+    _lumen_timers.push({ id: id, fn: fn, deadline: deadline, interval: null, nesting: nesting });
     _lumen_request_wakeup(deadline);
     return id;
 }
@@ -6603,10 +6620,12 @@ function clearTimeout(id) {
 
 function setInterval(fn, interval) {
     if (typeof fn !== 'function') return 0;
+    var nesting = _lumen_timer_nesting + 1;
     var ms = (typeof interval === 'number' && interval > 0) ? interval : 0;
+    var first = _lumen_clamp_timeout(ms, nesting);
     var id = _lumen_timer_seq++;
-    var deadline = _lumen_now_ms() + ms;
-    _lumen_timers.push({ id: id, fn: fn, deadline: deadline, interval: ms });
+    var deadline = _lumen_now_ms() + first;
+    _lumen_timers.push({ id: id, fn: fn, deadline: deadline, interval: ms, nesting: nesting });
     _lumen_request_wakeup(deadline);
     return id;
 }
@@ -13656,6 +13675,35 @@ mod tests {
         rt.eval("_lumen_tick_timers();").unwrap();
         let result = rt.eval("n").unwrap();
         assert_eq!(result, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn bug271_nested_timeout_clamped_to_4ms() {
+        // HTML LS §8.6: nesting level > 5 clamps timeout < 4 ms up to 4 ms.
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("_lumen_clamp_timeout(0, 6) === 4 && _lumen_clamp_timeout(0, 5) === 0 && _lumen_clamp_timeout(10, 7) === 10")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn bug271_timer_callback_inherits_nesting_level() {
+        // A timer scheduled from inside a timer callback records nesting+1,
+        // so deep setTimeout(fn,0) chains eventually hit the 4 ms clamp.
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("setTimeout(function() { setTimeout(function() {}, 0); }, 0);")
+            .unwrap();
+        let before = rt
+            .eval("_lumen_timers.some(function(t) { return t.nesting === 2; })")
+            .unwrap();
+        assert_eq!(before, lumen_core::JsValue::Bool(false));
+        rt.eval("_lumen_tick_timers();").unwrap();
+        // The inner timer scheduled from inside the fired callback carries nesting 2.
+        let after = rt
+            .eval("_lumen_timers.some(function(t) { return t.nesting === 2; })")
+            .unwrap();
+        assert_eq!(after, lumen_core::JsValue::Bool(true));
     }
 
     #[test]

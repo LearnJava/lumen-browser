@@ -8254,6 +8254,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // the next wakeup deadline to schedule ControlFlow::WaitUntil so that
         // winit wakes up exactly when the next timer fires (not only on OS events).
         // WebSocket pump runs here too so onopen/onmessage/onclose fire promptly.
+        //
+        // BUG-271: the WaitUntil deadline is the earliest of the JS-timer
+        // deadline and the rAF-pump deadline (set below), so neither wakeup
+        // source can starve the other.
+        let mut next_wakeup: Option<std::time::Instant> = None;
         if let Some(js) = &self.js_ctx {
             js.tick_timers();
             js.pump_websockets();
@@ -8272,8 +8277,60 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 let delay_ms = (wakeup_epoch_ms - now_epoch_ms).max(0.0);
                 let wakeup = std::time::Instant::now()
                     + std::time::Duration::from_millis(delay_ms as u64 + 1);
-                event_loop.set_control_flow(ControlFlow::WaitUntil(wakeup));
+                next_wakeup = Some(wakeup);
             }
+        }
+
+        // BUG-271: rAF pump — fire pending requestAnimationFrame batches from
+        // the parked event loop WITHOUT forcing a repaint. A page that keeps an
+        // rAF loop alive without touching DOM/canvas used to drive an
+        // unconditional `request_redraw` chain in `RedrawRequested`: full
+        // display-list rebuild + GPU paint at 60 fps (~1 busy core on a static
+        // page, see bugs/BUG-271-OPEN.md). Spec-wise a callback runs before the
+        // *next* repaint — but when nothing was invalidated there is no repaint
+        // to sync with, so batches fire here on a WaitUntil timer instead,
+        // sharing the vsync gate (`last_raf_batch_ms`, RAF_MIN_INTERVAL_MS)
+        // with `RedrawRequested` step 3.1 so the combined rate stays ≤60 Hz.
+        // If a callback mutates the DOM we relayout and request a real paint,
+        // so rAF-driven animations keep their 60 fps repaint cadence.
+        let raf_dom_dirty = if let Some(js) = &self.js_ctx {
+            let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+            if js.has_raf_pending() && now_ms - self.last_raf_batch_ms >= RAF_MIN_INTERVAL_MS {
+                js.take_raf_pending();
+                self.last_raf_batch_ms = now_ms;
+                let raf_ts = if self.deterministic { 0.0 } else { -1.0 };
+                js.run_animation_frame(raf_ts);
+                js.take_dom_dirty()
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if raf_dom_dirty {
+            // rAF callback changed the DOM — rebuild layout and paint for real.
+            self.relayout();
+            self.request_redraw();
+        }
+        if let Some(js) = &self.js_ctx
+            && js.has_raf_pending()
+        {
+            let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+            let due_in_ms = (self.last_raf_batch_ms + RAF_MIN_INTERVAL_MS - now_ms).max(0.0);
+            let raf_wakeup = std::time::Instant::now()
+                + std::time::Duration::from_millis(due_in_ms as u64 + 1);
+            next_wakeup = Some(next_wakeup.map_or(raf_wakeup, |t| t.min(raf_wakeup)));
+        }
+        match next_wakeup {
+            Some(wakeup) => event_loop.set_control_flow(ControlFlow::WaitUntil(wakeup)),
+            // BUG-271: no pending deadline — park the loop for real. Without
+            // this reset a stale `WaitUntil` whose instant is already in the
+            // past keeps waking the loop immediately (Poll-like spin): after
+            // the last JS timer fired, `take_timer_wakeup()` returned `None`,
+            // the old deadline stayed installed and the loop spun at ~20k
+            // iterations/s, each doing several blocking JS round-trips
+            // (~1.6 busy cores on lenta.ru with zero frames painted).
+            None => event_loop.set_control_flow(ControlFlow::Wait),
         }
 
         // ── Canvas 2D: upload dirty <canvas> bitmaps to the renderer ──────────
@@ -11093,10 +11150,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         let raf_ts = if self.deterministic { 0.0 } else { -1.0 };
                         js.run_animation_frame(raf_ts);
                     }
-                    // Schedule next redraw if callbacks remain queued (animation loop or deferred).
-                    if js.has_raf_pending() {
-                        self.request_redraw();
-                    }
+                    // BUG-271: callbacks that remain queued (animation loop or
+                    // deferred batch) are fired by the `about_to_wait` rAF pump
+                    // on a WaitUntil timer — NOT by an unconditional
+                    // `request_redraw` here. A pure rAF loop that never mutates
+                    // the DOM must not force a 60 fps repaint cycle; loops that
+                    // do mutate get a relayout + real paint from the pump.
                 }
 
                 // Step 4: layout invalidation — если rAF-callback изменил DOM
