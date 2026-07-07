@@ -30,11 +30,13 @@ last_session.db
 /scripts/.stop-*
 /scripts/.jobstatus-*
 /scripts/.session-*.json
-/scripts/.laguna-session-*.json
-# Laguna solo worklog: отчёт о наработках, ожидающих влития; чистится Claude после merge.
-/scripts/laguna-worklog.md
-# Laguna debug-логи обмена (тайминг/трейсбэки сетевых сбоев) — транзиентные.
-/scripts/laguna-debug-*.log
+/scripts/.coder-session-*.json
+# Coders solo worklog: отчёт о наработках, ожидающих влития; чистится Claude после merge.
+/scripts/coders-worklog.md
+# Kilo debug-логи обмена (тайминг/детали троттлинга) — транзиентные.
+/scripts/coder-debug-*.log
+# Отчёты визуальной приёмки nano-omni; чистятся Claude после merge ветки.
+/scripts/vision-reports/
 /.jobstatus-*
 __pycache__/
 
