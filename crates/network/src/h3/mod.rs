@@ -746,9 +746,20 @@
 //!   header octets (RFC 9114 §4.2) into text with a UTF-8 lossy conversion and
 //!   dropping the interim (`1xx`) responses and trailer section the crate `Response`
 //!   has no slot for — the same surface the H2 path exposes.
-//! - Slice 59+ (planned) — the Alt-Svc dispatch in `lib.rs`: routing an origin onto
-//!   [`client_transport::h3_do_request`] only after it advertised `h3` (RFC 7838,
-//!   [`alt_svc`]) from an H2/H1.1 response, and falling back when the QUIC leg fails.
+//! - Slice 59a — the Alt-Svc dispatch decision in `lib.rs` (`try_h3_dispatch`):
+//!   the QUIC leg the H1/H2 branches consult before their own connect. It routes
+//!   an origin onto [`client_transport::h3_do_request`] only when a fresh cached
+//!   `h3` alternative exists ([`alt_svc::AltSvcCache`], keyed by
+//!   [`alt_svc::origin_key`] and resolved to a concrete target through
+//!   [`alt_svc::AltSvcEntry::connect_target`]), maps the [`h3_exchange::H3Response`]
+//!   onto the crate `Response`, and on a failed leg evicts the "broken"
+//!   alternative (RFC 7838 §2.4) and returns `None` so the caller falls back to
+//!   H2/H1.1. Not yet called from `fetch_single` — the same deferred-caller step
+//!   Slice 58 took before it.
+//! - Slice 59b+ (planned) — wiring `try_h3_dispatch` into `fetch_single`: giving
+//!   the `HttpClient` the cache, scanning H2/H1.1 responses for `Alt-Svc` to
+//!   populate it, and converting the request's header block into the `(name,
+//!   value)` byte pairs the dispatch takes.
 //!
 //! The codecs here are the shared foundation: QUIC varints delimit both
 //! transport-layer fields and HTTP/3 frames, the QUIC frame codec carries the
