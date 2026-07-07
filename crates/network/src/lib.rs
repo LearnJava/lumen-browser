@@ -2426,6 +2426,18 @@ pub struct HttpClient {
     /// real target.  DNS is resolved by the proxy (not leaked locally) —
     /// required for Tor-mode operation.
     socks5_proxy: Option<Arc<Socks5Proxy>>,
+    /// Whether the HTTP/3 (QUIC) dispatch path is enabled (RFC 9114, RFC 7838).
+    /// Off by default — every request stays on the H2 / H1.1 path. When on,
+    /// responses are scanned for `Alt-Svc: h3` to populate [`Self::alt_svc_cache`],
+    /// and a request whose origin has a fresh cached `h3` alternative is eligible
+    /// for the QUIC leg ([`try_h3_dispatch`]).
+    http3_enabled: bool,
+    /// Per-origin `Alt-Svc: h3` advertisement cache (RFC 7838), shared across all
+    /// requests this client makes so an alternative learnt on one response routes
+    /// the next request onto QUIC. Wrapped in a `Mutex` because `fetch` takes
+    /// `&self`; the cache is looked up and TTL-expired on the fetch path and
+    /// populated from response `Alt-Svc` headers.
+    alt_svc_cache: Arc<std::sync::Mutex<h3::alt_svc::AltSvcCache>>,
 }
 
 impl HttpClient {
@@ -2450,6 +2462,8 @@ impl HttpClient {
             tls_profile: tls::TlsProfile::Standard,
             proxy: None,
             socks5_proxy: None,
+            http3_enabled: false,
+            alt_svc_cache: Arc::new(std::sync::Mutex::new(h3::alt_svc::AltSvcCache::new())),
         }
     }
 
@@ -2597,6 +2611,50 @@ impl HttpClient {
     pub fn with_content_decoder(mut self, decoder: Arc<dyn ContentDecoder>) -> Self {
         self.decoders.push(decoder);
         self
+    }
+
+    /// Включить путь диспетчеризации HTTP/3 (QUIC) — RFC 9114 / RFC 7838.
+    /// По умолчанию выключен: все запросы идут по H2 / H1.1. С включённым
+    /// путём ответы сканируются на `Alt-Svc: h3` (заполняя
+    /// [`Self::alt_svc_cache`]), и запрос к origin-у со свежей кэшированной
+    /// `h3`-альтернативой становится кандидатом на QUIC-плечо
+    /// ([`try_h3_dispatch`]).
+    ///
+    /// Сам вызов диспетчеризации из `fetch_single` — следующий срез; здесь
+    /// только флаг и заполнение кэша.
+    #[must_use]
+    pub fn with_http3(mut self) -> Self {
+        self.http3_enabled = true;
+        self
+    }
+
+    /// Просканировать заголовки одного ответа на `Alt-Svc` (RFC 7838 §3) и
+    /// занести объявленные `h3`-альтернативы для origin-а `host:port` в
+    /// [`Self::alt_svc_cache`]. No-op, если HTTP/3 не включён
+    /// ([`Self::with_http3`]) или в ответе нет разбираемых `h3`-альтернатив.
+    ///
+    /// `Alt-Svc` может встречаться несколько раз (RFC 7230 §3.2.2); значения
+    /// всех вхождений парсятся и объединяются. Запись кэшируется под ключом
+    /// [`h3::alt_svc::origin_key`] с TTL из `ma`, взятым от текущего момента.
+    /// Ещё не вызывается из `fetch_single` — проводка сканирования в поток
+    /// ответов идёт следующим срезом (как [`try_h3_dispatch`] приземлился до
+    /// своего вызова).
+    #[allow(dead_code)]
+    fn record_alt_svc(&self, host: &str, port: u16, headers: &[(String, String)]) {
+        if !self.http3_enabled {
+            return;
+        }
+        let mut alternatives = Vec::new();
+        for value in all_header_values(headers, "alt-svc") {
+            alternatives.extend(h3::alt_svc::parse(value));
+        }
+        if alternatives.is_empty() {
+            return;
+        }
+        let key = h3::alt_svc::origin_key(host, port);
+        if let Ok(mut cache) = self.alt_svc_cache.lock() {
+            cache.insert(&key, &alternatives, std::time::Instant::now());
+        }
     }
 
     /// Сформировать значение `Accept-Encoding` из зарегистрированных декодеров,
@@ -4493,6 +4551,61 @@ mod tests {
         assert!(
             cache.get(&key, now).is_none(),
             "broken alternative evicted (RFC 7838 §2.4)"
+        );
+    }
+
+    #[test]
+    fn record_alt_svc_disabled_is_noop() {
+        // Without with_http3 the scan never touches the cache, even on a valid
+        // advertisement.
+        let client = HttpClient::new();
+        let headers = vec![("alt-svc".to_string(), r#"h3=":443"; ma=3600"#.to_string())];
+        client.record_alt_svc("example.com", 443, &headers);
+        let now = std::time::Instant::now();
+        let key = h3::alt_svc::origin_key("example.com", 443);
+        assert!(
+            client.alt_svc_cache.lock().unwrap().get(&key, now).is_none(),
+            "h3 disabled → no cache entry recorded"
+        );
+    }
+
+    #[test]
+    fn record_alt_svc_populates_cache_for_dispatch() {
+        // Enabled: a response advertising h3 populates the cache under the
+        // origin's own host:port key (not the alternative's), so a later
+        // try_h3_dispatch for that origin finds a fresh entry.
+        let client = HttpClient::new().with_http3();
+        let headers = vec![(
+            "Alt-Svc".to_string(),
+            r#"h3=":8443"; ma=3600"#.to_string(),
+        )];
+        client.record_alt_svc("example.com", 443, &headers);
+
+        let now = std::time::Instant::now();
+        let key = h3::alt_svc::origin_key("example.com", 443);
+        let mut guard = client.alt_svc_cache.lock().unwrap();
+        let entry = guard.get(&key, now).expect("h3 alternative cached");
+        // Empty-host form → same host as origin, advertised UDP port.
+        assert_eq!(entry.connect_target("example.com"), ("example.com".to_string(), 8443));
+    }
+
+    #[test]
+    fn record_alt_svc_ignores_non_h3_and_missing_header() {
+        // A response with no Alt-Svc, and one advertising only a non-h3
+        // protocol, both leave the cache empty.
+        let client = HttpClient::new().with_http3();
+        let now = std::time::Instant::now();
+        let key = h3::alt_svc::origin_key("example.com", 443);
+
+        client.record_alt_svc("example.com", 443, &[]);
+        client.record_alt_svc(
+            "example.com",
+            443,
+            &[("alt-svc".to_string(), r#"h2=":443""#.to_string())],
+        );
+        assert!(
+            client.alt_svc_cache.lock().unwrap().get(&key, now).is_none(),
+            "no h3 advertisement → nothing cached"
         );
     }
 
