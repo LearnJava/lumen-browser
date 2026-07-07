@@ -1644,6 +1644,14 @@ impl QuickJsRuntime {
         });
     }
 
+    /// TEMP BUG-272 diagnostics: QuickJS heap usage in bytes (malloc_size).
+    pub fn debug_memory_used(&self) -> (i64, i64) {
+        self.run(|inner| {
+            let mu = inner._rt.memory_usage();
+            (mu.malloc_size, mu.memory_used_size)
+        })
+    }
+
     /// Consume any navigation request that JS placed via `location.href =` etc.
     /// Returns `None` if no navigation was requested during script execution.
     /// Must be called before `drop(runtime)` to avoid losing the request.

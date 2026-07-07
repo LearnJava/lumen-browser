@@ -723,6 +723,7 @@ fn run_window_mode(
         scroll_containers: Vec::new(),
         epoch: std::time::Instant::now(),
         last_raf_batch_ms: -RAF_MIN_INTERVAL_MS,
+        last_mem_report_s: 0.0,
         find: find::FindState::default(),
         address_bar: address_bar::AddressBarState::default(),
         hint: hints::HintState::default(),
@@ -2000,6 +2001,11 @@ pub(crate) trait PersistentJs: Send {
     /// Called after each rAF pass in `RedrawRequested`; when `true`, a relayout
     /// must happen before the next paint to reflect DOM changes.
     fn take_dom_dirty(&self) -> bool;
+    /// TEMP BUG-272 diagnostics: QuickJS heap (malloc_size, memory_used_size);
+    /// `(-1, -1)` when the runtime does not expose it.
+    fn debug_js_heap(&self) -> (i64, i64) {
+        (-1, -1)
+    }
     /// Run all pending `requestAnimationFrame` callbacks with `timestamp_ms`.
     ///
     /// Called in `RedrawRequested` before paint. Callbacks may register new rAF
@@ -2413,6 +2419,9 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn take_dom_dirty(&self) -> bool {
         self.rt.take_dom_dirty()
+    }
+    fn debug_js_heap(&self) -> (i64, i64) {
+        self.rt.debug_memory_used()
     }
     fn run_animation_frame(&self, timestamp_ms: f64) {
         self.eval_js(&format!("_lumen_run_raf_callbacks({timestamp_ms})"));
@@ -5783,6 +5792,8 @@ struct Lumen {
     /// (~16.67 ms, 60 Hz). Initialized to `-RAF_MIN_INTERVAL_MS` so the first frame
     /// fires immediately.
     last_raf_batch_ms: f64,
+    /// TEMP BUG-272 diagnostics: epoch seconds of the last memory report.
+    last_mem_report_s: f64,
     /// Состояние Ctrl+F. Открыт ли bar, текущий query и индекс активного
     /// совпадения. Содержимое поиска не сохраняется между reload-ами
     /// (close() полностью очищает state); это сознательно: после reload
@@ -8219,6 +8230,34 @@ impl ApplicationHandler<LoadEvent> for Lumen {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // TEMP BUG-272 diagnostics: dump known-store sizes every ~10 s.
+        if std::env::var("LUMEN_MEM_REPORT").is_ok() {
+            let now_s = self.epoch.elapsed().as_secs_f64();
+            if now_s - self.last_mem_report_s >= 10.0 {
+                self.last_mem_report_s = now_s;
+                let wf_bytes: usize = self.web_fonts.iter().map(|f| f.bytes.len()).sum();
+                let gif_bytes: usize = self
+                    .animated_gifs
+                    .values()
+                    .map(|g| g.frames.iter().map(|f| f.image.data.len()).sum::<usize>())
+                    .sum();
+                let (img_n, img_b) = image_cache::IMAGE_CACHE.debug_stats();
+                let (pf_n, pf_b) = prefetch::PREFETCH_CACHE.debug_stats();
+                let js_heap = self.js_ctx.as_ref().map_or((-1, -1), |j| j.debug_js_heap());
+                eprintln!(
+                    "MEM_REPORT dl_cmds={} prev_styles={} dl_cache={:.1}MB img_cache={}/{:.1}MB prefetch={}/{:.1}MB web_fonts={}/{:.1}MB gifs={}/{:.1}MB js_malloc={:.1}MB js_used={:.1}MB {}",
+                    self.display_list.len(),
+                    self.prev_styles.len(),
+                    self.display_list_cache.used_bytes() as f64 / 1e6,
+                    img_n, img_b as f64 / 1e6,
+                    pf_n, pf_b as f64 / 1e6,
+                    self.web_fonts.len(), wf_bytes as f64 / 1e6,
+                    self.animated_gifs.len(), gif_bytes as f64 / 1e6,
+                    js_heap.0 as f64 / 1e6, js_heap.1 as f64 / 1e6,
+                    self.renderer.as_ref().map_or(String::new(), |r| r.debug_mem_report()),
+                );
+            }
+        }
         // HTML §8.1.4.2 «Processing model»: между событиями event-loop-а
         // дренируем накопившиеся task-и. Каждый step выполняет одну task +
         // microtask checkpoint. Дренируем все pending tasks за один проход,

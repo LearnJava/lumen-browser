@@ -63,6 +63,18 @@ impl PrefetchCache {
         Self { inner: Mutex::new(Inner { generation: 0, slots: HashMap::new() }) }
     }
 
+    /// TEMP BUG-272 diagnostics: (entries, cached body bytes) currently held.
+    pub fn debug_stats(&self) -> (usize, usize) {
+        let inner = self.inner.lock().unwrap();
+        let mut bytes = 0usize;
+        for slot in inner.slots.values() {
+            if let Some(Ok(body)) = slot.state.lock().unwrap().as_ref() {
+                bytes += body.len();
+            }
+        }
+        (inner.slots.len(), bytes)
+    }
+
     /// Drop all cached entries and adopt navigation `generation`.
     ///
     /// Called on the UI thread at navigation start (before the streaming thread is

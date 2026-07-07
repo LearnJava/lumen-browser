@@ -464,6 +464,22 @@ pub struct FemtovgBackend {
     /// gradient LUT (which quantizes repeating-stop boundaries); the texture is
     /// blitted with `fill_path`, whose draw command holds the ImageId until flush.
     gradient_pending_delete: Vec<femtovg::ImageId>,
+    /// BUG-272: pool of reusable full-framebuffer offscreen layer textures
+    /// (`offscreen_layer_image_flags()`, device-pixel `width × height`).
+    ///
+    /// Every Push{ClipRoundedRect,ClipPath,Opacity,Filter,Mask,BackdropFilter}
+    /// used to `create_image_empty` a fresh full-framebuffer texture and queue
+    /// it for after-flush deletion — so all layers of a frame were alive at
+    /// once (a page with ~150 layer commands held ~750 MB of GPU memory that
+    /// the driver never returned to the OS). Layers released on Pop are reused
+    /// by the next Push in the same frame: femtovg executes its command queue
+    /// strictly in submission order, so overwriting a released layer's pixels
+    /// is safe where deleting its ImageId mid-frame would not be. Peak layer
+    /// memory is now bounded by the nesting depth, not the per-frame count.
+    layer_pool: Vec<femtovg::ImageId>,
+    /// Device-pixel size `layer_pool` textures were created for; a mismatch
+    /// (window resize) retires pooled textures via the pending-delete queue.
+    layer_pool_size: (u32, u32),
 }
 
 // SAFETY: FemtovgBackend используется только из одного потока одновременно
@@ -1224,12 +1240,54 @@ impl FemtovgBackend {
             clip_stack: Vec::new(),
             active_rt_image: None,
             gradient_pending_delete: Vec::new(),
+            layer_pool: Vec::new(),
+            layer_pool_size: (0, 0),
         })
     }
 
     // ─── Render target helpers ────────────────────────────────────────────────
 
     /// Returns the current femtovg render target (Screen or an offscreen Image).
+    /// BUG-272: take a full-framebuffer offscreen layer texture from the pool,
+    /// creating one only when the pool is empty. Pooled textures created for a
+    /// different framebuffer size are retired via the pending-delete queue
+    /// (deleting mid-frame is unsafe — queued draw commands may reference them).
+    ///
+    /// The caller MUST clear the texture (`clear_rect` to transparent) before
+    /// drawing: a reused texture holds the previous layer's pixels.
+    fn acquire_layer(&mut self) -> Option<femtovg::ImageId> {
+        if self.layer_pool_size != (self.width, self.height) {
+            self.filter_layer_pending_delete.append(&mut self.layer_pool);
+            self.layer_pool_size = (self.width, self.height);
+        }
+        if let Some(id) = self.layer_pool.pop() {
+            return Some(id);
+        }
+        self.canvas
+            .create_image_empty(
+                self.width as usize,
+                self.height as usize,
+                femtovg::PixelFormat::Rgba8,
+                offscreen_layer_image_flags(),
+            )
+            .ok()
+    }
+
+    /// BUG-272: return a layer texture acquired via [`Self::acquire_layer`] to
+    /// the pool for reuse by the next Push in this or a later frame. Overflow
+    /// beyond the cap is retired via the after-flush pending-delete queue.
+    fn release_layer(&mut self, id: femtovg::ImageId) {
+        /// Deeper simultaneous layer nesting than this is not worth pooling.
+        const MAX_POOLED_LAYERS: usize = 8;
+        if self.layer_pool_size == (self.width, self.height)
+            && self.layer_pool.len() < MAX_POOLED_LAYERS
+        {
+            self.layer_pool.push(id);
+        } else {
+            self.filter_layer_pending_delete.push(id);
+        }
+    }
+
     fn current_rt(&self) -> femtovg::RenderTarget {
         match self.active_rt_image {
             Some(id) => femtovg::RenderTarget::Image(id),
@@ -1674,6 +1732,10 @@ impl FemtovgBackend {
 
         // current_id tracks which image has the latest filtered content.
         let mut current_id = src_id;
+        // BUG-272: whether current_id came from the layer pool (the Push layer
+        // and blur destinations do; the colour-matrix re-upload creates a
+        // one-off PREMULTIPLIED image that must NOT be pooled).
+        let mut current_pooled = true;
 
         // ── Step 1: GPU Gaussian blur (no CPU round-trip needed) ─────────────
         if has_blur {
@@ -1689,19 +1751,16 @@ impl FemtovgBackend {
                 // rows regardless of flags.
                 if let lumen_layout::FilterFn::Blur(sigma) = f
                     && *sigma > 0.0
-                    && let Ok(dst) = self.canvas.create_image_empty(
-                        self.width as usize,
-                        self.height as usize,
-                        femtovg::PixelFormat::Rgba8,
-                        offscreen_layer_image_flags(),
-                    )
+                    && let Some(dst) = self.acquire_layer()
                 {
                     self.canvas.filter_image(
                         dst,
                         femtovg::ImageFilter::GaussianBlur { sigma: *sigma },
                         current_id,
                     );
-                    self.filter_layer_pending_delete.push(current_id);
+                    // BUG-272: the previous stage is pooled (Push layer or an
+                    // earlier blur destination) — recycle it.
+                    self.release_layer(current_id);
                     current_id = dst;
                 }
             }
@@ -1743,8 +1802,11 @@ impl FemtovgBackend {
                     img_src,
                     femtovg::ImageFlags::PREMULTIPLIED,
                 ) {
-                    self.filter_layer_pending_delete.push(current_id);
+                    // BUG-272: recycle the pooled source; the re-uploaded image
+                    // is a one-off (wrong flags for the pool).
+                    self.release_layer(current_id);
                     current_id = dst;
+                    current_pooled = false;
                 }
             }
         }
@@ -1763,8 +1825,13 @@ impl FemtovgBackend {
         self.canvas.fill_path(&path, &paint);
         self.canvas.restore();
 
-        // Delete after flush (pending, not immediate — fill_path still holds the id).
-        self.filter_layer_pending_delete.push(current_id);
+        // BUG-272: pooled layers are recycled; one-off colour-matrix images are
+        // deleted after flush (pending — fill_path still holds the id).
+        if current_pooled {
+            self.release_layer(current_id);
+        } else {
+            self.filter_layer_pending_delete.push(current_id);
+        }
     }
 
     /// Composites an opacity group layer (BUG-133) onto the previous render target.
@@ -1832,8 +1899,10 @@ impl FemtovgBackend {
             .with_fill_rule(fill_rule);
         self.canvas.fill_path(path, &paint);
         self.canvas.restore();
-        // Delete after flush — pending GPU commands still reference the id.
-        self.filter_layer_pending_delete.push(src_id);
+        // BUG-272: back to the pool — femtovg executes queued commands in
+        // submission order, so a later reuse overwrites pixels only after the
+        // compositing fill_path above has been recorded.
+        self.release_layer(src_id);
     }
 
     fn composite_opacity_layer(
@@ -1852,8 +1921,8 @@ impl FemtovgBackend {
         path.rect(0.0, 0.0, css_w, css_h);
         self.canvas.fill_path(&path, &paint);
         self.canvas.restore();
-        // Delete after flush — pending GPU commands still reference the id.
-        self.filter_layer_pending_delete.push(src_id);
+        // BUG-272: back to the pool (see composite_clip_layer).
+        self.release_layer(src_id);
     }
 
     /// CSS Masking L1 §4 (BUG-183) — opens an offscreen layer for a gradient
@@ -1863,13 +1932,8 @@ impl FemtovgBackend {
     /// On FBO-allocation failure falls back to a rect scissor (mask no-op).
     fn push_mask_gradient_layer(&mut self, rect: lumen_core::geom::Rect, gradient: MaskGradient) {
         let prev_rt = self.current_rt();
-        match self.canvas.create_image_empty(
-            self.width as usize,
-            self.height as usize,
-            femtovg::PixelFormat::Rgba8,
-            offscreen_layer_image_flags(),
-        ) {
-            Ok(img_id) => {
+        match self.acquire_layer() {
+            Some(img_id) => {
                 self.switch_render_target(femtovg::RenderTarget::Image(img_id));
                 self.canvas.clear_rect(
                     0, 0, self.width, self.height,
@@ -1882,7 +1946,7 @@ impl FemtovgBackend {
                     prev_render_target: prev_rt,
                 });
             }
-            Err(_) => {
+            None => {
                 // Fallback: rect scissor (gradient mask becomes a hard rect clip).
                 self.canvas.save();
                 self.canvas.scissor(rect.x, rect.y, rect.width, rect.height);
@@ -2180,7 +2244,9 @@ impl FemtovgBackend {
         self.canvas.restore();
 
         self.backdrop_filter_pending_delete.push(filtered_backdrop_id);
-        self.backdrop_filter_pending_delete.push(elem_image_id);
+        // BUG-272: the element-content layer is pooled; the filtered backdrop
+        // is a one-off CPU upload and stays on the after-flush delete queue.
+        self.release_layer(elem_image_id);
     }
 
     /// Рисует изображение из зарегистрированного URL в content box `rect`
@@ -2608,13 +2674,8 @@ impl FemtovgBackend {
                 // расходясь с Edge (TEST-101). Subtree рендерится в FBO, а
                 // PopClip композитит его одним fill_path по скруглённому контуру.
                 let prev_rt = self.current_rt();
-                let entry = match self.canvas.create_image_empty(
-                    self.width as usize,
-                    self.height as usize,
-                    femtovg::PixelFormat::Rgba8,
-                    offscreen_layer_image_flags(),
-                ) {
-                    Ok(img_id) => {
+                let entry = match self.acquire_layer() {
+                    Some(img_id) => {
                         self.switch_render_target(femtovg::RenderTarget::Image(img_id));
                         self.canvas.clear_rect(
                             0, 0, self.width, self.height,
@@ -2628,7 +2689,7 @@ impl FemtovgBackend {
                             prev_render_target: prev_rt,
                         }
                     }
-                    Err(_) => {
+                    None => {
                         // Fallback при сбое аллокации слоя — прямоугольный scissor
                         // (углы острые, но содержимое всё равно обрезано по боксу).
                         self.canvas.save();
@@ -2646,13 +2707,8 @@ impl FemtovgBackend {
             // внутри PushTransform).
             DisplayCommand::PushClipPath { shape } => {
                 let prev_rt = self.current_rt();
-                let entry = match self.canvas.create_image_empty(
-                    self.width as usize,
-                    self.height as usize,
-                    femtovg::PixelFormat::Rgba8,
-                    offscreen_layer_image_flags(),
-                ) {
-                    Ok(img_id) => {
+                let entry = match self.acquire_layer() {
+                    Some(img_id) => {
                         self.switch_render_target(femtovg::RenderTarget::Image(img_id));
                         self.canvas.clear_rect(
                             0, 0, self.width, self.height,
@@ -2665,7 +2721,7 @@ impl FemtovgBackend {
                             prev_render_target: prev_rt,
                         }
                     }
-                    Err(_) => {
+                    None => {
                         // Fallback: scissor по bounding box формы (поведение
                         // до BUG-140). Scissor задан в текущем transform-
                         // пространстве — переносится transform-ом сам.
@@ -2986,13 +3042,8 @@ impl FemtovgBackend {
             // replaces (not multiplies) the outer alpha.
             DisplayCommand::PushOpacity { alpha } => {
                 let prev_rt = self.current_rt();
-                let entry = match self.canvas.create_image_empty(
-                    self.width as usize,
-                    self.height as usize,
-                    femtovg::PixelFormat::Rgba8,
-                    offscreen_layer_image_flags(),
-                ) {
-                    Ok(img_id) => {
+                let entry = match self.acquire_layer() {
+                    Some(img_id) => {
                         // Redirect subtree draws into the transparent offscreen layer.
                         self.switch_render_target(femtovg::RenderTarget::Image(img_id));
                         self.canvas.clear_rect(
@@ -3005,7 +3056,7 @@ impl FemtovgBackend {
                             prev_render_target: prev_rt,
                         }
                     }
-                    Err(_) => {
+                    None => {
                         // Fallback: per-draw alpha (pre-BUG-133 behaviour).
                         self.canvas.save();
                         self.canvas.set_global_alpha(alpha.clamp(0.0, 1.0));
@@ -3143,25 +3194,18 @@ impl FemtovgBackend {
                     // bounds-sized layer (BUG-076 attempt) captured the page's
                     // top-left corner and stretched it across the viewport
                     // (TEST-30 30.68%, TEST-103 49.59%).
-                    let (img_w, img_h) = (self.width as usize, self.height as usize);
-
                     // BUG-146: FLIP_Y so the rare direct GPU composite of this
                     // layer (no blur, no colour-matrix — e.g. `blur(0px)`, or
                     // blur-destination allocation failure) samples it upright.
                     // The blur pass ignores the flag; the colour-matrix
                     // screenshot round-trip flips rows regardless of it.
-                    match self.canvas.create_image_empty(
-                        img_w,
-                        img_h,
-                        femtovg::PixelFormat::Rgba8,
-                        offscreen_layer_image_flags(),
-                    ) {
-                        Ok(img_id) => {
+                    match self.acquire_layer() {
+                        Some(img_id) => {
                             // Redirect draws into the offscreen image.
                             self.switch_render_target(femtovg::RenderTarget::Image(img_id));
                             // Clear to transparent so content composites correctly.
                             self.canvas.clear_rect(
-                                0, 0, img_w as u32, img_h as u32,
+                                0, 0, self.width, self.height,
                                 femtovg::Color::rgba(0, 0, 0, 0),
                             );
                             self.filter_layer_stack.push(FilterLayerEntry {
@@ -3171,7 +3215,7 @@ impl FemtovgBackend {
                             });
                             self.layer_stack_depth += 1;
                         }
-                        Err(_) => {
+                        None => {
                             // Fallback: no-op save (content draws to screen without filter).
                             self.canvas.save();
                             self.layer_stack_depth += 1;
@@ -3226,13 +3270,8 @@ impl FemtovgBackend {
                     // landed in the wrong row, `viewport_h - bounds.bottom`).
                     // `filtered_backdrop_id` is a CPU pixel upload (top-down) and
                     // correctly stays flag-free per `offscreen_layer_image_flags`.
-                    match self.canvas.create_image_empty(
-                        self.width as usize,
-                        self.height as usize,
-                        femtovg::PixelFormat::Rgba8,
-                        offscreen_layer_image_flags(),
-                    ) {
-                        Ok(elem_id) => {
+                    match self.acquire_layer() {
+                        Some(elem_id) => {
                             self.switch_render_target(femtovg::RenderTarget::Image(elem_id));
                             self.canvas.clear_rect(
                                 0, 0, self.width, self.height,
@@ -3245,7 +3284,7 @@ impl FemtovgBackend {
                                 prev_render_target: prev_rt,
                             });
                         }
-                        Err(_) => {
+                        None => {
                             // Fallback: queue filtered_id for deletion, draw to prev_rt.
                             self.backdrop_filter_pending_delete.push(filt_id);
                             self.canvas.save();
@@ -3374,6 +3413,17 @@ impl FemtovgBackend {
 // ─── RenderBackend impl ───────────────────────────────────────────────────────
 
 impl RenderBackend for FemtovgBackend {
+    fn debug_mem_report(&self) -> String {
+        let raw_bytes: usize = self.raw_images.values().map(|i| i.data.len()).sum();
+        format!(
+            "femtovg: raw_images={} ({:.1} MB), gpu_images={}, layer_pool={}",
+            self.raw_images.len(),
+            raw_bytes as f64 / 1e6,
+            self.images.len(),
+            self.layer_pool.len()
+        )
+    }
+
     fn render(
         &mut self,
         content: &[DisplayCommand],

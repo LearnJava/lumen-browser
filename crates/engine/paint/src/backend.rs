@@ -77,6 +77,12 @@ impl std::error::Error for RenderError {}
 ///
 /// [`ThreadedCompositor`]: crate::compositor::ThreadedCompositor
 pub trait RenderBackend: Send {
+    /// TEMP BUG-272 diagnostics: human-readable summary of backend-owned
+    /// memory (image caches, atlases). Default: empty string.
+    fn debug_mem_report(&self) -> String {
+        String::new()
+    }
+
     /// Рисует один кадр.
     ///
     /// - `content` — команды страницы (прокрученные на `scroll_x`/`scroll_y`).

@@ -92,6 +92,24 @@ impl DecodedImageCache {
         Self { inner: Mutex::new(Inner { generation: 0, slots: HashMap::new() }) }
     }
 
+    /// TEMP BUG-272 diagnostics: (entries, decoded pixel bytes) currently held.
+    pub fn debug_stats(&self) -> (usize, usize) {
+        let inner = self.inner.lock().unwrap();
+        let mut bytes = 0usize;
+        for slot in inner.slots.values() {
+            if let Some(Some(img)) = slot.state.lock().unwrap().as_ref() {
+                bytes += match img {
+                    DecodedImage::Static(i) => i.data.len(),
+                    DecodedImage::Animated { first, gif } => {
+                        first.data.len()
+                            + gif.frames.iter().map(|f| f.image.data.len()).sum::<usize>()
+                    }
+                };
+            }
+        }
+        (inner.slots.len(), bytes)
+    }
+
     /// Drop all cached entries and adopt navigation `generation`.
     ///
     /// Called on the UI thread at navigation start (alongside
