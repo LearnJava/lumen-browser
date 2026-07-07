@@ -42,11 +42,12 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use lumen_core::ext::DnsResolver;
 
 use super::client_bootstrap::{BootstrapError, ClientConnectConfig, connect_client};
-use super::client_request::{ConnectFetchError, connect_and_fetch};
-use super::conn_connect::OwnedTrustAnchor;
+use super::client_request::{ConnectFetchError, connect_and_fetch, fetch};
+use super::conn_connect::{ConnectOutcome, OwnedTrustAnchor};
 use super::h3_exchange::H3Response;
 use super::h3_request::H3Profile;
 use super::mozilla_roots::mozilla_trust_anchors;
+use super::request_driver::RequestDriver;
 use super::request_exchange::ClientRequest;
 use super::udp::{DatagramTransport, UdpDatagram};
 
@@ -256,6 +257,89 @@ pub fn h3_do_request(
         connect_turns,
         request_turns,
     )
+}
+
+/// Resolve `host:port`, open a UDP socket, run the TLS 1.3 / QUIC handshake,
+/// and return a confirmed [`RequestDriver<UdpDatagram>`](RequestDriver) ready for
+/// sequential requests — the connection-reuse entry point (RFC 9114 §3.3).
+///
+/// Unlike [`h3_do_request`] (which opens, fetches, and drops the connection in one
+/// call), this function keeps the connection alive in the returned driver. The caller
+/// is responsible for storing the driver in a
+/// [`H3ConnectionPool`](super::client_pool::H3ConnectionPool) and for dropping it
+/// when it is no longer needed.
+///
+/// # Errors
+///
+/// [`H3TransportError::Resolve`] or [`H3TransportError::Socket`] if the transport
+/// cannot be opened, [`H3TransportError::Bootstrap`] if the first flight fails,
+/// [`H3TransportError::Exchange`] if the handshake stalled or the splice failed.
+pub fn h3_connect(
+    resolver: &dyn DnsResolver,
+    host: &str,
+    port: u16,
+    config: &ClientConnectConfig,
+    connect_turns: usize,
+) -> Result<RequestDriver<UdpDatagram>, H3TransportError> {
+    let transport = open_transport(resolver, host, port)?;
+    let now = Instant::now();
+    let now_unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let mut connect =
+        connect_client(transport, host, mozilla_trust_anchors(), now, now_unix, config)
+            .map_err(H3TransportError::Bootstrap)?;
+    match connect
+        .connect(&mut Instant::now, connect_turns)
+        .map_err(|e| H3TransportError::Exchange(ConnectFetchError::Connect(e)))?
+    {
+        ConnectOutcome::Confirmed => {}
+        other => {
+            return Err(H3TransportError::Exchange(ConnectFetchError::NotConfirmed(other)));
+        }
+    }
+    connect
+        .into_request_driver(config.request_pump())
+        .map_err(|e| H3TransportError::Exchange(ConnectFetchError::Splice(e)))
+}
+
+/// Fetch one HTTP/3 request on `driver` (already confirmed, from the pool or from
+/// [`h3_connect`]) and return the [`H3Response`] — the per-request leg for the
+/// connection-reuse path (RFC 9114 §4.1).
+///
+/// The caller retains `driver` after the call; on success the driver can be put
+/// back into the [`H3ConnectionPool`](super::client_pool::H3ConnectionPool).
+/// On any error the driver should be discarded — the connection state is unknown.
+///
+/// # Errors
+///
+/// [`H3TransportError::Exchange`] wrapping a [`ConnectFetchError::Fetch`] if the
+/// request turn fails or exhausts its budget.
+#[allow(clippy::too_many_arguments)]
+pub fn h3_fetch_on_driver(
+    driver: &mut RequestDriver<UdpDatagram>,
+    host: &str,
+    port: u16,
+    method: &[u8],
+    path: &[u8],
+    headers: &[(&[u8], &[u8])],
+    body: &[u8],
+    request_turns: usize,
+) -> Result<H3Response, H3TransportError> {
+    let authority = authority_for(host, port);
+    let req = ClientRequest {
+        profile: H3Profile::default(),
+        method,
+        scheme: b"https",
+        authority: authority.as_bytes(),
+        path,
+        headers,
+        body,
+        use_huffman: true,
+    };
+    fetch(driver, &req, Instant::now, request_turns)
+        .map_err(|e| H3TransportError::Exchange(ConnectFetchError::Fetch(e)))
 }
 
 #[cfg(test)]

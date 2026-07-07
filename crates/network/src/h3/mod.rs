@@ -784,6 +784,7 @@
 pub mod ack;
 pub mod alt_svc;
 pub mod client_bootstrap;
+pub mod client_pool;
 pub mod client_request;
 pub mod client_transport;
 pub mod conn_cert_auth;

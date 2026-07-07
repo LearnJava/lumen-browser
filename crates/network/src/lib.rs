@@ -469,9 +469,22 @@ fn record_alt_svc(
 /// consult before their own connect: it looks the origin up in the
 /// [`h3::alt_svc::AltSvcCache`] (keyed by [`h3::alt_svc::origin_key`]), resolves
 /// the cached entry to a concrete QUIC target
-/// ([`h3::alt_svc::AltSvcEntry::connect_target`]), and drives one exchange over a
-/// fresh QUIC connection ([`h3::client_transport::h3_do_request`]), mapping its
-/// [`h3::h3_exchange::H3Response`] onto the crate [`Response`].
+/// ([`h3::alt_svc::AltSvcEntry::connect_target`]), and drives one request over the
+/// QUIC path, mapping the [`h3::h3_exchange::H3Response`] onto the crate
+/// [`Response`].
+///
+/// ## Connection reuse
+///
+/// When `h3_pool` is `Some`, the function first tries to reuse a pooled
+/// [`RequestDriver`](h3::request_driver::RequestDriver) from a previous request to
+/// the same origin (RFC 9000 §10.1.2). On pool hit the QUIC connection is already
+/// confirmed and the handshake RTT is skipped; only the request/response turns run.
+/// On pool miss or if the pooled driver fails (the server closed the connection
+/// while it was idle), a fresh connection is established via
+/// [`h3::client_transport::h3_connect`] and the request runs on that. On success
+/// the driver is stored back in the pool; on failure it is discarded.
+///
+/// ## Fallback
 ///
 /// `None` is returned — meaning "use the ordinary TCP path" — in every case the
 /// h3 leg does not produce a response:
@@ -480,16 +493,12 @@ fn record_alt_svc(
 ///   so its cache entry is removed and the origin is not retried over h3 until it
 ///   re-advertises — the caller silently falls back.
 ///
-/// `connect_turns` / `request_turns` bound the handshake and request event
-/// loops, threaded straight through to [`h3::client_transport::h3_do_request`].
-///
-/// The cache sits behind a `Mutex` because `fetch` takes `&self` and subresource
-/// fetches run in parallel; the lock is held only for the lookup and the
-/// broken-alternative eviction, never across the QUIC exchange itself — a slow
-/// h3 leg must not stall other requests' Alt-Svc scans and lookups.
+/// All `Mutex` locks are held only for HashMap / cache operations — never across
+/// I/O — so a slow QUIC exchange does not stall other requests.
 #[allow(clippy::too_many_arguments)]
 fn try_h3_dispatch(
     cache: &std::sync::Mutex<h3::alt_svc::AltSvcCache>,
+    h3_pool: Option<&std::sync::Mutex<h3::client_pool::H3ConnectionPool>>,
     resolver: &dyn DnsResolver,
     host: &str,
     port: u16,
@@ -507,23 +516,73 @@ fn try_h3_dispatch(
         let entry = guard.get(&key, now)?;
         entry.connect_target(host)
     };
+
+    // Pool reuse: try a cached driver before opening a fresh connection.
+    if let Some(pool_mutex) = h3_pool
+        && let Ok(mut pool_guard) = pool_mutex.lock()
+        && let Some(mut driver) = pool_guard.take(&key, now)
+    {
+        drop(pool_guard); // release the lock before I/O
+        match h3::client_transport::h3_fetch_on_driver(
+            &mut driver,
+            &h3_host,
+            h3_port,
+            method.as_bytes(),
+            path.as_bytes(),
+            headers,
+            body,
+            request_turns,
+        ) {
+            Ok(resp) => {
+                // Store the driver back for the next request.
+                if let Ok(mut pool_guard) = pool_mutex.lock() {
+                    pool_guard.put(key, driver, std::time::Instant::now());
+                }
+                return Some(resp.into());
+            }
+            Err(_) => {
+                // Driver is broken (server closed the connection while idle).
+                // Fall through to a fresh connection; do not evict the Alt-Svc
+                // entry — the alternative is still valid, just this connection
+                // instance died.
+            }
+        }
+    }
+
+    // Fresh connection path (pool miss or stale driver fallback).
     let config = h3::client_bootstrap::ClientConnectConfig::default();
-    match h3::client_transport::h3_do_request(
-        resolver,
-        &h3_host,
-        h3_port,
-        method.as_bytes(),
-        path.as_bytes(),
-        headers,
-        body,
-        &config,
-        connect_turns,
-        request_turns,
-    ) {
-        Ok(resp) => Some(resp.into()),
+    match h3::client_transport::h3_connect(resolver, &h3_host, h3_port, &config, connect_turns) {
+        Ok(mut driver) => {
+            match h3::client_transport::h3_fetch_on_driver(
+                &mut driver,
+                &h3_host,
+                h3_port,
+                method.as_bytes(),
+                path.as_bytes(),
+                headers,
+                body,
+                request_turns,
+            ) {
+                Ok(resp) => {
+                    // Store the live driver in the pool for next time.
+                    if let Some(pool_mutex) = h3_pool
+                        && let Ok(mut pool_guard) = pool_mutex.lock()
+                    {
+                        pool_guard.put(key, driver, std::time::Instant::now());
+                    }
+                    Some(resp.into())
+                }
+                Err(_) => {
+                    // RFC 7838 §2.4: fetch failed → broken alternative, evict.
+                    if let Ok(mut guard) = cache.lock() {
+                        guard.remove(&key);
+                    }
+                    None
+                }
+            }
+        }
         Err(_) => {
-            // RFC 7838 §2.4: the alternative is "broken" — drop it so the origin
-            // falls back to H2/H1.1 and is not retried over h3 until re-advertised.
+            // RFC 7838 §2.4: could not connect → broken alternative, evict.
             if let Ok(mut guard) = cache.lock() {
                 guard.remove(&key);
             }
@@ -1429,6 +1488,9 @@ fn fetch_single(
     // Alt-Svc cache of the h3 dispatch path (RFC 7838); `Some` ⇔ HTTP/3 enabled
     // ([`HttpClient::with_http3`]).
     h3_alt_svc: Option<&std::sync::Mutex<h3::alt_svc::AltSvcCache>>,
+    // QUIC connection pool for reuse across sequential h3 requests; `Some` ⇔
+    // HTTP/3 enabled ([`HttpClient::with_http3`]).
+    h3_pool: Option<&std::sync::Mutex<h3::client_pool::H3ConnectionPool>>,
     // PH1-2a: HTTP/1.1 streaming body sink. Only the direct (non-proxy) HTTP/1.1
     // path streams; the H2 and proxy-CONNECT paths buffer (sink unused there).
     mut stream_sink: Option<ChunkSink<'_>>,
@@ -1464,6 +1526,7 @@ fn fetch_single(
             .collect();
         if let Some(resp) = try_h3_dispatch(
             cache,
+            h3_pool,
             resolver,
             host,
             port,
@@ -2006,6 +2069,9 @@ fn fetch_with_redirect(
     // Threaded to `fetch_single` (the dispatch decision) and along redirect
     // hops; every https hop's response is scanned into it (`record_alt_svc`).
     h3_alt_svc: Option<&std::sync::Mutex<h3::alt_svc::AltSvcCache>>,
+    // QUIC connection pool for reuse; `Some` ⇔ HTTP/3 enabled. Threaded to
+    // `fetch_single` alongside `h3_alt_svc`.
+    h3_pool: Option<&std::sync::Mutex<h3::client_pool::H3ConnectionPool>>,
     // PH1-2a: streaming body sink for the final 2xx response (progressive HTML).
     // Threaded to the actual-request `fetch_single` and along redirect hops;
     // `None` for every fetch path except top-level navigation streaming.
@@ -2151,6 +2217,7 @@ fn fetch_with_redirect(
                 proxy,
                 socks5_proxy,
                 h3_alt_svc,
+                h3_pool,
                 None, // preflight OPTIONS body is never streamed
             ) {
                 Ok(r) => r,
@@ -2256,6 +2323,7 @@ fn fetch_with_redirect(
             proxy,
             socks5_proxy,
             h3_alt_svc,
+            h3_pool,
             stream_sink.as_mut().map(|f| &mut **f as ChunkSink<'_>),
         ) {
             Ok(r) => r,
@@ -2378,6 +2446,7 @@ fn fetch_with_redirect(
                     proxy,
                     socks5_proxy,
                     h3_alt_svc,
+                    h3_pool,
                     stream_sink,
                 );
             }
@@ -2542,6 +2611,11 @@ pub struct HttpClient {
     /// `&self`; the cache is looked up and TTL-expired on the fetch path and
     /// populated from response `Alt-Svc` headers.
     alt_svc_cache: Arc<std::sync::Mutex<h3::alt_svc::AltSvcCache>>,
+    /// Pool of confirmed QUIC connections for reuse across sequential requests
+    /// (RFC 9000 §10.1.2, RFC 9114 §3.3). `None` when HTTP/3 is disabled;
+    /// `Some` when [`Self::with_http3`] was called. The `Mutex` is held only
+    /// during the HashMap lookup / insert — never across I/O.
+    h3_pool: Option<Arc<std::sync::Mutex<h3::client_pool::H3ConnectionPool>>>,
 }
 
 impl HttpClient {
@@ -2568,6 +2642,7 @@ impl HttpClient {
             socks5_proxy: None,
             http3_enabled: false,
             alt_svc_cache: Arc::new(std::sync::Mutex::new(h3::alt_svc::AltSvcCache::new())),
+            h3_pool: None,
         }
     }
 
@@ -2723,10 +2798,14 @@ impl HttpClient {
     /// ([`record_alt_svc`] заполняет [`Self::alt_svc_cache`]), и запрос к
     /// origin-у со свежей кэшированной `h3`-альтернативой уходит на QUIC-плечо
     /// ([`try_h3_dispatch`]) до любого TCP-соединения; при неудаче плеча —
-    /// прозрачный откат на H2 / H1.1.
+    /// прозрачный откат на H2 / H1.1. Также включает пул QUIC-соединений
+    /// ([`Self::h3_pool`]) для переиспользования соединений между запросами.
     #[must_use]
     pub fn with_http3(mut self) -> Self {
         self.http3_enabled = true;
+        self.h3_pool = Some(Arc::new(std::sync::Mutex::new(
+            h3::client_pool::H3ConnectionPool::new(),
+        )));
         self
     }
 
@@ -2736,6 +2815,12 @@ impl HttpClient {
     /// выключенный h3 не трогает кэш вовсе.
     fn h3_alt_svc(&self) -> Option<&std::sync::Mutex<h3::alt_svc::AltSvcCache>> {
         self.http3_enabled.then_some(&*self.alt_svc_cache)
+    }
+
+    /// Хэндл пула QUIC-соединений: `Some` только когда HTTP/3 включён
+    /// ([`Self::with_http3`]).
+    fn h3_pool(&self) -> Option<&std::sync::Mutex<h3::client_pool::H3ConnectionPool>> {
+        self.h3_pool.as_deref()
     }
 
     /// Сформировать значение `Accept-Encoding` из зарегистрированных декодеров,
@@ -2954,6 +3039,7 @@ impl HttpClient {
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
+                    self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
         )
         .map(|resp| resp.body)
@@ -2994,6 +3080,7 @@ impl HttpClient {
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
+                    self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
         )?;
         let content_range = if resp.status == 206 {
@@ -3068,6 +3155,7 @@ impl HttpClient {
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
+                    self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
         )?;
         Ok(parse_multi_range_response(resp))
@@ -3159,6 +3247,7 @@ impl HttpClient {
                     self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
+                    self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                 )?;
                 if resp.status == 304 {
@@ -3196,6 +3285,7 @@ impl HttpClient {
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
+                    self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
         )?;
         if let Some(cache) = &self.http_cache {
@@ -3258,6 +3348,7 @@ impl HttpClient {
             self.proxy.as_deref(),
             self.socks5_proxy.as_deref(),
             self.h3_alt_svc(),
+            self.h3_pool(),
             None, // PH1-2a: conditional GET is not streamed
         )?;
         if resp.status == 304 {
@@ -3321,6 +3412,7 @@ impl HttpClient {
                     self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
                     self.proxy.as_deref(), self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
+                    self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                 )?;
                 if resp.status == 304 {
@@ -3340,6 +3432,7 @@ impl HttpClient {
             self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
             self.proxy.as_deref(), self.socks5_proxy.as_deref(),
             self.h3_alt_svc(),
+            self.h3_pool(),
             None, // PH1-2a: streaming sink — only fetch_page_streaming streams
         )?;
         if let Some(cache) = &self.http_cache {
@@ -3390,6 +3483,7 @@ impl HttpClient {
                     self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
                     self.proxy.as_deref(), self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
+                    self.h3_pool(),
                     Some(on_chunk),
                 )?;
                 if resp.status == 304 {
@@ -3412,6 +3506,7 @@ impl HttpClient {
             self.cookie_jar.as_deref(), self.top_level_site.as_deref(),
             self.proxy.as_deref(), self.socks5_proxy.as_deref(),
             self.h3_alt_svc(),
+            self.h3_pool(),
             Some(on_chunk),
         )?;
         if let Some(cache) = &self.http_cache {
@@ -3474,6 +3569,7 @@ impl NetworkTransport for HttpClient {
                     self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
+                    self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
                 )?;
                 if resp.status == 304 {
@@ -3511,6 +3607,7 @@ impl NetworkTransport for HttpClient {
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
+                    self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
         )?;
         if let Some(cache) = &self.http_cache {
@@ -3588,6 +3685,7 @@ impl JsFetchProvider for HttpClient {
             self.proxy.as_deref(),
                     self.socks5_proxy.as_deref(),
                     self.h3_alt_svc(),
+                    self.h3_pool(),
                     None, // PH1-2a: streaming sink — only fetch_page_streaming streams
         )?;
         Ok(JsFetchResult {
@@ -4594,6 +4692,7 @@ mod tests {
         let now = std::time::Instant::now();
         let got = try_h3_dispatch(
             &cache,
+            None, // no connection pool in this unit test
             &PanicResolver,
             "example.com",
             443,
@@ -4626,6 +4725,7 @@ mod tests {
 
         let got = try_h3_dispatch(
             &cache,
+            None, // no connection pool in this unit test
             &ErrResolver,
             "example.com",
             443,
@@ -4642,6 +4742,31 @@ mod tests {
             cache.lock().unwrap().get(&key, now).is_none(),
             "broken alternative evicted (RFC 7838 §2.4)"
         );
+    }
+
+    #[test]
+    fn try_h3_dispatch_empty_pool_behaves_like_no_pool() {
+        // An empty connection pool (no cached driver) is transparent — the
+        // dispatch behaves exactly as with `h3_pool = None`: no cache entry
+        // means it falls through without consulting the resolver.
+        let cache = std::sync::Mutex::new(h3::alt_svc::AltSvcCache::new());
+        let pool = std::sync::Mutex::new(h3::client_pool::H3ConnectionPool::new());
+        let now = std::time::Instant::now();
+        let got = try_h3_dispatch(
+            &cache,
+            Some(&pool), // pool present but empty
+            &PanicResolver,
+            "example.com",
+            443,
+            "GET",
+            "/",
+            &[],
+            b"",
+            4,
+            4,
+            now,
+        );
+        assert!(got.is_none(), "no h3 entry + empty pool → fall through (resolver not called)");
     }
 
     #[test]
