@@ -745,6 +745,7 @@
 pub mod ack;
 pub mod alt_svc;
 pub mod client_bootstrap;
+pub mod client_request;
 pub mod conn_cert_auth;
 pub mod conn_connect;
 pub mod conn_flow;
