@@ -31,6 +31,19 @@ cargo run --example preview -p lumen-font
 
 # Pipeline benchmark (decode → parse → layout → paint). Default 100 iters; override with LUMEN_BENCH_ITERS=...
 cargo run -p lumen-bench --release
+
+# Per-frame paint profiling in the live window (diagnostics, zero cost when off).
+#   LUMEN_FRAME_LOG=1 — per-frame summary to stderr: `[frame] paint …` (femtovg:
+#                       content/overlay/flush/swap timings + command counts) and
+#                       `[frame] total …` (shell: whole RedrawRequested pass).
+#   LUMEN_FRAME_LOG=2 — additionally `[frame] top: …` — top-8 DisplayCommand
+#                       variants by time per frame (finds the expensive command type).
+LUMEN_FRAME_LOG=1 cargo run -p lumen-shell -- samples/page.html
+
+# Scroll smoothness benchmark: spawns a live window via --mcp-live-port, emulates
+# mouse-wheel scrolling down/up, collects the [frame] log and prints avg/p50/max
+# frame time + effective FPS. Honors an external LUMEN_FRAME_LOG=2.
+python scripts/scroll_perf.py graphic_tests/1000000-final.html --ticks 25
 ```
 
 ---

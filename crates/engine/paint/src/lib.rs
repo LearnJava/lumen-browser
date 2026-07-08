@@ -48,6 +48,29 @@ pub mod cpu_raster;
 
 pub use atlas::{GlyphAtlas, GlyphEntry};
 pub use backend::{RenderBackend, RenderError};
+
+/// Уровень покадрового лога производительности (`LUMEN_FRAME_LOG`).
+///
+/// Диагностический инструмент: бэкенды печатают в stderr строки `[frame] …`
+/// с временем paint-фазы и размером display list на каждый кадр.
+/// `0` — выключен (по умолчанию), `1` — сводка по кадру, `2` — дополнительно
+/// разбивка времени по типам DisplayCommand (top-8 за кадр). Значение читается
+/// из окружения один раз за процесс (нулевая стоимость в горячем цикле).
+pub fn frame_log_level() -> u8 {
+    use std::sync::OnceLock;
+    static LEVEL: OnceLock<u8> = OnceLock::new();
+    *LEVEL.get_or_init(|| {
+        std::env::var("LUMEN_FRAME_LOG")
+            .ok()
+            .and_then(|v| v.parse::<u8>().ok())
+            .unwrap_or(0)
+    })
+}
+
+/// `true`, если включён покадровый лог производительности (`LUMEN_FRAME_LOG>=1`).
+pub fn frame_log_enabled() -> bool {
+    frame_log_level() >= 1
+}
 pub use color_management::detect_color_space_from_icc;
 #[cfg(feature = "backend-wgpu")]
 pub use backends::WgpuBackend;

@@ -3431,6 +3431,10 @@ impl RenderBackend for FemtovgBackend {
         scroll_y: f32,
         scroll_x: f32,
     ) -> Result<(), RenderError> {
+        // Диагностика производительности кадра (LUMEN_FRAME_LOG=1): время
+        // paint-фазы и размер display list. Флаг читается один раз за процесс.
+        let frame_log = crate::frame_log_enabled();
+        let frame_t0 = frame_log.then(std::time::Instant::now);
         // Обновляем scroll context для sticky-вычислений.
         self.scroll_y = scroll_y;
         self.scroll_x = scroll_x;
@@ -3450,17 +3454,43 @@ impl RenderBackend for FemtovgBackend {
         // Контент — с учётом scroll.
         self.canvas.save();
         self.canvas.translate(-scroll_x, -scroll_y);
-        for cmd in content {
-            self.render_command(cmd);
+        if crate::frame_log_level() >= 2 {
+            // Уровень 2: разбивка времени по типам команд (top-8 за кадр).
+            let mut per_variant: HashMap<&'static str, (std::time::Duration, u32)> =
+                HashMap::new();
+            for cmd in content {
+                let t = std::time::Instant::now();
+                self.render_command(cmd);
+                let e = per_variant.entry(cmd.variant_name()).or_default();
+                e.0 += t.elapsed();
+                e.1 += 1;
+            }
+            let mut rows: Vec<_> = per_variant.into_iter().collect();
+            rows.sort_by_key(|&(_, (dur, _))| std::cmp::Reverse(dur));
+            let top: Vec<String> = rows
+                .iter()
+                .take(8)
+                .map(|(name, (dur, n))| {
+                    format!("{name} {:.2}ms/{n}", dur.as_secs_f64() * 1000.0)
+                })
+                .collect();
+            eprintln!("[frame] top: {}", top.join(", "));
+        } else {
+            for cmd in content {
+                self.render_command(cmd);
+            }
         }
         self.canvas.restore();
+        let t_content = frame_t0.map(|t0| t0.elapsed());
 
         // Overlay — без scroll (tab bar, панели).
         for cmd in overlay {
             self.render_command(cmd);
         }
 
+        let t_before_flush = frame_t0.map(|t0| t0.elapsed());
         self.canvas.flush();
+        let t_after_flush = frame_t0.map(|t0| t0.elapsed());
 
         // Delete offscreen images queued during the frame. Must happen AFTER flush
         // so pending fill_path commands that reference the ImageIds are executed.
@@ -3482,9 +3512,28 @@ impl RenderBackend for FemtovgBackend {
             self.canvas.delete_image(id);
         }
 
-        self.gl_surface
+        let swap_result = self
+            .gl_surface
             .swap_buffers(&self.gl_context)
-            .map_err(|e| RenderError::Other(e.to_string()))
+            .map_err(|e| RenderError::Other(e.to_string()));
+
+        if let (Some(t0), Some(tc), Some(tbf), Some(taf)) =
+            (frame_t0, t_content, t_before_flush, t_after_flush)
+        {
+            let total = t0.elapsed();
+            eprintln!(
+                "[frame] paint {:6.2}ms  (content {:6.2}ms / {} cmds, overlay {:5.2}ms / {} cmds, flush {:6.2}ms, swap {:6.2}ms)",
+                total.as_secs_f64() * 1000.0,
+                tc.as_secs_f64() * 1000.0,
+                content.len(),
+                (tbf - tc).as_secs_f64() * 1000.0,
+                overlay.len(),
+                (taf - tbf).as_secs_f64() * 1000.0,
+                (total - taf).as_secs_f64() * 1000.0,
+            );
+        }
+
+        swap_result
     }
 
     fn set_canvas_background(&mut self, color: Option<Color>) {

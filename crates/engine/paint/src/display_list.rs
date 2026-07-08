@@ -903,6 +903,59 @@ pub enum DisplayCommand {
     },
 }
 
+impl DisplayCommand {
+    /// Имя варианта команды для диагностики (`LUMEN_FRAME_LOG=2`:
+    /// разбивка времени paint-фазы по типам команд).
+    pub fn variant_name(&self) -> &'static str {
+        match self {
+            Self::FillRect { .. } => "FillRect",
+            Self::FillRoundedRect { .. } => "FillRoundedRect",
+            Self::DrawBorder { .. } => "DrawBorder",
+            Self::DrawOutline { .. } => "DrawOutline",
+            Self::DrawText { .. } => "DrawText",
+            Self::DrawImage { .. } => "DrawImage",
+            Self::LazyImageSlot { .. } => "LazyImageSlot",
+            Self::DrawBackgroundImage { .. } => "DrawBackgroundImage",
+            Self::DrawLinearGradient { .. } => "DrawLinearGradient",
+            Self::DrawRadialGradient { .. } => "DrawRadialGradient",
+            Self::DrawConicGradient { .. } => "DrawConicGradient",
+            Self::PushClipRect { .. } => "PushClipRect",
+            Self::PushClipRoundedRect { .. } => "PushClipRoundedRect",
+            Self::PushClipPath { .. } => "PushClipPath",
+            Self::PopClip => "PopClip",
+            Self::PushOpacity { .. } => "PushOpacity",
+            Self::PopOpacity => "PopOpacity",
+            Self::PushBlendMode { .. } => "PushBlendMode",
+            Self::PopBlendMode => "PopBlendMode",
+            Self::DrawLayerSnapshot { .. } => "DrawLayerSnapshot",
+            Self::PushMaskImage { .. } => "PushMaskImage",
+            Self::PushMaskLinearGradient { .. } => "PushMaskLinearGradient",
+            Self::PushMaskRadialGradient { .. } => "PushMaskRadialGradient",
+            Self::PushMaskConicGradient { .. } => "PushMaskConicGradient",
+            Self::PushMaskLayer { .. } => "PushMaskLayer",
+            Self::PopMaskLayer => "PopMaskLayer",
+            Self::PopMask => "PopMask",
+            Self::PushTransform { .. } => "PushTransform",
+            Self::PopTransform => "PopTransform",
+            Self::PushFilter { .. } => "PushFilter",
+            Self::PopFilter => "PopFilter",
+            Self::PushBackdropFilter { .. } => "PushBackdropFilter",
+            Self::PopBackdropFilter => "PopBackdropFilter",
+            Self::BeginStickyLayer { .. } => "BeginStickyLayer",
+            Self::EndStickyLayer => "EndStickyLayer",
+            Self::PushScrollLayer { .. } => "PushScrollLayer",
+            Self::PopScrollLayer => "PopScrollLayer",
+            Self::DrawSvgPath { .. } => "DrawSvgPath",
+            Self::DrawSvgFill { .. } => "DrawSvgFill",
+            Self::DrawSvgStroke { .. } => "DrawSvgStroke",
+            Self::BoxModelOverlay { .. } => "BoxModelOverlay",
+            Self::DrawScrollbar { .. } => "DrawScrollbar",
+            Self::DrawCrossFade { .. } => "DrawCrossFade",
+            Self::PageBreak => "PageBreak",
+        }
+    }
+}
+
 pub type DisplayList = Vec<DisplayCommand>;
 
 fn object_fit_name(f: ObjectFit) -> &'static str {
