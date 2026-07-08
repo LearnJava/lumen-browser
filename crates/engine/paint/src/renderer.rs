@@ -1667,13 +1667,24 @@ impl Renderer {
         // OpenGL-HAL. На Intel Iris Plus это самый дешёвый по CPU вариант
         // (idle 156 мс/10 с против ~1500 у DX12) с корректной картинкой —
         // замеры в bugs/BUG-274-OPEN.md; включается WGPU_BACKEND=gl.
-        let backend_prefs: &[wgpu::Backends] = if cfg!(target_os = "windows") {
+        // Ярус 0 (эксперимент): авто-проба бэкенда пробным кадром + двойным
+        // сигналом (texture readback + PrintWindow-захват презентации) —
+        // выбирает Vulkan там, где драйвер презентует честно (ловит BUG-275),
+        // иначе GL, DX12 — резерв. Возвращает None, если WGPU_BACKEND задан,
+        // LUMEN_NO_BACKEND_PROBE=1, не Windows или все кандидаты провалились —
+        // тогда работает статическая цепочка ниже.
+        let probed = crate::backend_probe::pick_backend(&window).await;
+        let static_prefs: &[wgpu::Backends] = if cfg!(target_os = "windows") {
             &[wgpu::Backends::DX12, wgpu::Backends::VULKAN, wgpu::Backends::GL]
         } else {
             &[wgpu::Backends::PRIMARY, wgpu::Backends::GL]
         };
+        let backend_prefs: Vec<wgpu::Backends> = probed
+            .into_iter()
+            .chain(static_prefs.iter().copied().filter(|b| Some(*b) != probed))
+            .collect();
         let mut picked = None;
-        for &backends in backend_prefs {
+        for &backends in &backend_prefs {
             let instance = wgpu::Instance::new(
                 &wgpu::InstanceDescriptor { backends, ..Default::default() }.with_env(),
             );

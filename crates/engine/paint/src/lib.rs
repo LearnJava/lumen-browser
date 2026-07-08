@@ -31,6 +31,8 @@ pub mod fingerprint;
 pub mod hit_test;
 pub mod layer_cache;
 #[cfg(feature = "backend-wgpu")]
+pub mod backend_probe;
+#[cfg(feature = "backend-wgpu")]
 pub mod renderer;
 pub mod scroll_snap;
 pub mod svg_path;

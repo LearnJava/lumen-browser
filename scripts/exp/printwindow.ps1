@@ -9,7 +9,7 @@ public class PW {
 }
 "@ -ReferencedAssemblies System.Drawing
 Add-Type -AssemblyName System.Drawing
-$env:WGPU_BACKEND = $Backend
+if ($Backend -ne "auto") { $env:WGPU_BACKEND = $Backend } # auto = ярус-0 проба выбирает сама
 $p = Start-Process -FilePath "target\dev-release\lumen.exe" -ArgumentList $Page -PassThru
 Start-Sleep -Seconds 8
 $h = (Get-Process -Id $p.Id).MainWindowHandle
