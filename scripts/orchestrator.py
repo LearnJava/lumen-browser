@@ -2139,6 +2139,21 @@ def team_review_prompt(developer: str, results: list[dict]) -> str:
     )
 
 
+# Дисциплина прогонов cargo (добавка к промптам сессий). Родилась из аудита
+# лога 2026-07-08: сессии перезапускали clippy/test ради другого grep-фильтра,
+# гоняли ворота в фоне (пустой буферизованный output → минуты поллинга +
+# повторный прогон) и дублировали per-crate ворота перед /lumen-task-finish.
+# Полные правила — docs/commands.md «Gate discipline».
+GATE_DISCIPLINE_NOTE = (
+    " Дисциплина прогонов: пока пишешь код — только cargo check -p; "
+    "clippy -p и точечные тесты (cargo test -p <crate> -- <module>) — ОДИН раз "
+    "перед коммитом; полные ворота (workspace clippy + scoped-test) гоняет "
+    "/lumen-task-finish один раз, СИНХРОННО (foreground Bash, timeout 600000), "
+    "не в фоне. Вывод cargo пиши в .tmp/<имя>.log и фильтруй grep-ом по файлу — "
+    "НЕ перезапускай cargo ради другого фильтра вывода."
+)
+
+
 def task_prompt(developer: str, coders_mode: str | None = None) -> str:
     """Стандартный промпт для старта задачи с чистым диалогом."""
     note = CODERS_ASSIST_NOTE if coders_mode == "assist" else ""
@@ -2153,14 +2168,16 @@ def task_prompt(developer: str, coders_mode: str | None = None) -> str:
             "Если нет — возьми ПЕРВЫЙ баг из 'Next' (только один, не больше). "
             "Когда баг исправлен — вызови /lumen-task-finish. "
             "ВАЖНО: после /lumen-task-finish немедленно заверши сессию. "
-            "Не бери следующий баг. Один баг = одна сессия." + note
+            "Не бери следующий баг. Один баг = одна сессия." +
+            GATE_DISCIPLINE_NOTE + note
         )
     return (
         f"Ты разработчик {developer}." + review +
         f" Прочитай STATUS-{developer}.md. "
         f"Если есть 'In progress' — продолжи эту задачу. "
         f"Если нет — возьми первую задачу из 'Next'. "
-        f"Когда задача завершена — вызови /lumen-task-finish." + note
+        f"Когда задача завершена — вызови /lumen-task-finish." +
+        GATE_DISCIPLINE_NOTE + note
     )
 
 
@@ -2171,6 +2188,7 @@ def resume_after_error_prompt(developer: str, coders_mode: str | None = None) ->
         "Сессия была прервана ошибкой (rate limit / auth error / сбой CLI). "
         "Выполни git status, сверься с историей диалога выше и продолжи текущую "
         "задачу с места остановки. Когда задача завершена — вызови /lumen-task-finish."
+        + GATE_DISCIPLINE_NOTE
     )
     if developer == "P3":
         return base + (

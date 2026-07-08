@@ -109,6 +109,8 @@ cargo run -p lumen-shell -- --dump-display-list samples/page.html  # headless pa
 
 **Cargo output rules:** always `-p <crate>`, never `--workspace` (exception: P5). Success → 1 line. Errors → full `error[...]` block, skip all warnings. Test failure → test name + first 10 lines.
 
+**Run discipline (details in `docs/commands.md`):** one cargo run — one log file (`> .tmp/<name>.log 2>&1`, then grep the file; never re-run cargo just to re-filter output). During iteration `cargo check -p` only; one `clippy -p` + targeted tests before the commit; full gates (workspace clippy + scoped-test) run exactly once inside `/lumen-task-finish`, synchronously in the foreground — never as background tasks.
+
 ---
 
 ## Graphic tests
