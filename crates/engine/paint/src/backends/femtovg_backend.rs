@@ -434,8 +434,13 @@ pub struct FemtovgBackend {
     filter_layer_pending_delete: Vec<femtovg::ImageId>,
     /// Offscreen blend mode layer stack (PA-3). Each entry captures the backdrop
     /// snapshot and the source-layer image for CPU mix_blend_rgba compositing.
+    /// `src_image_id` comes from `layer_pool` (BUG-272) and is recycled via
+    /// `release_layer` in `composite_blend_layer` — it is never GPU-sampled,
+    /// only used as a render target and read back via `screenshot()`.
     blend_layer_stack: Vec<BlendLayerEntry>,
-    /// Images from blend layers queued for deletion after the next flush.
+    /// One-off CPU-composited blend result images queued for deletion after
+    /// the next flush (created via `create_image` from raw pixels — wrong
+    /// shape for the render-target `layer_pool`).
     blend_layer_pending_delete: Vec<femtovg::ImageId>,
     /// Offscreen opacity group layer stack (BUG-133). Each entry holds an
     /// offscreen ImageId that subtree draws render into; PopOpacity composites
@@ -467,7 +472,7 @@ pub struct FemtovgBackend {
     /// BUG-272: pool of reusable full-framebuffer offscreen layer textures
     /// (`offscreen_layer_image_flags()`, device-pixel `width × height`).
     ///
-    /// Every Push{ClipRoundedRect,ClipPath,Opacity,Filter,Mask,BackdropFilter}
+    /// Every Push{ClipRoundedRect,ClipPath,Opacity,Filter,Mask,BackdropFilter,BlendMode}
     /// used to `create_image_empty` a fresh full-framebuffer texture and queue
     /// it for after-flush deletion — so all layers of a frame were alive at
     /// once (a page with ~150 layer commands held ~750 MB of GPU memory that
@@ -2111,7 +2116,9 @@ impl FemtovgBackend {
                 self.blend_layer_pending_delete.push(result_id);
             }
         }
-        self.blend_layer_pending_delete.push(src_image_id);
+        // BUG-272: src_image_id came from acquire_layer() — recycle it
+        // instead of queuing a delete.
+        self.release_layer(src_image_id);
     }
 
     /// Applies `filters` to a full-canvas snapshot of the current render target.
@@ -3112,13 +3119,15 @@ impl FemtovgBackend {
                         } else {
                             (vec![], 0, 0)
                         };
-                    match self.canvas.create_image_empty(
-                        self.width as usize,
-                        self.height as usize,
-                        femtovg::PixelFormat::Rgba8,
-                        femtovg::ImageFlags::PREMULTIPLIED,
-                    ) {
-                        Ok(src_id) => {
+                    // BUG-272: acquire from the shared layer pool instead of a
+                    // fresh create_image_empty — this src image is only ever
+                    // used as a render target and later read back via
+                    // screenshot() (never GPU-sampled with Paint::image), so
+                    // the pool's FLIP_Y sampler flag is a no-op here, same as
+                    // the acquire_layer() blur destinations in
+                    // composite_filter_layer.
+                    match self.acquire_layer() {
+                        Some(src_id) => {
                             self.switch_render_target(femtovg::RenderTarget::Image(src_id));
                             self.canvas.clear_rect(
                                 0, 0, self.width, self.height,
@@ -3133,7 +3142,7 @@ impl FemtovgBackend {
                                 prev_render_target: prev_rt,
                             });
                         }
-                        Err(_) => {
+                        None => {
                             // Fallback: draw without blend (content goes to prev_rt directly).
                             self.canvas.save();
                         }
