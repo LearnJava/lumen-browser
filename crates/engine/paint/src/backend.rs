@@ -8,7 +8,6 @@
 //! | Feature flag | Тип | Статус |
 //! |---|---|---|
 //! | `backend-wgpu` | `WgpuBackend` | Phase 1 (текущий) |
-//! | `backend-femtovg` | `FemtovgBackend` | Phase 2 default |
 //! | `backend-vello` | `VelloBackend` | Phase 3 default |
 //! | `backend-cpu` | `CpuBackend` | CI / no-GPU |
 //! | `compare` | `CompareBackend` | только тесты |

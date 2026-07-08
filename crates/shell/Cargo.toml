@@ -12,21 +12,15 @@ name = "lumen"
 path = "src/main.rs"
 
 [features]
-# Phase 2 defaults: femtovg primary + wgpu fallback (ADR-010 RB-9).
-# Both must be in default so that #[cfg(feature = "backend-*")] guards in
-# backend_factory.rs compile the real backends, not the stub error paths.
-default = ["backend-femtovg", "backend-wgpu", "quickjs"]
+# Experimental branch (p1-exp-wgpu-only): wgpu is the only windowed backend,
+# OpenGL (femtovg/glutin) removed entirely.
+default = ["backend-wgpu", "quickjs"]
 
 # Enable QuickJS JavaScript engine (rquickjs). Without this feature the shell
 # falls back to NullJsRuntime which silently ignores all inline scripts.
 quickjs = ["dep:lumen-js", "lumen-js/webgpu"]
 
-# femtovg rendering backend — Phase 2 default (ADR-010 RB-9).
-backend-femtovg = ["lumen-paint/backend-femtovg"]
-
-# wgpu rendering backend — Phase 1 / Phase 2 fallback (ADR-010 §Migration path).
-# Use when femtovg is unavailable or LUMEN_BACKEND=wgpu is set.
-# cargo run -p lumen-shell --no-default-features --features backend-wgpu,quickjs
+# wgpu rendering backend — единственный оконный бэкенд (эксперимент, ex-ADR-010).
 backend-wgpu = ["lumen-paint/backend-wgpu"]
 
 [dependencies]

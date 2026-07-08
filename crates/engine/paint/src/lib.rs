@@ -15,7 +15,6 @@ pub mod gradient_math;
 pub mod matrix_util;
 #[cfg(any(
     feature = "backend-wgpu",
-    feature = "backend-femtovg",
     feature = "backend-vello",
     feature = "backend-cpu",
     feature = "compare"
@@ -74,8 +73,6 @@ pub fn frame_log_enabled() -> bool {
 pub use color_management::detect_color_space_from_icc;
 #[cfg(feature = "backend-wgpu")]
 pub use backends::WgpuBackend;
-#[cfg(feature = "backend-femtovg")]
-pub use backends::FemtovgBackend;
 #[cfg(feature = "backend-vello")]
 pub use backends::VelloBackend;
 #[cfg(feature = "backend-cpu")]

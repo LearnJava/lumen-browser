@@ -1040,11 +1040,11 @@ fn fit_with_ratio(iw: f32, ih: f32, bw: f32, bh: f32, cover: bool) -> (f32, f32)
 /// repeat flags. The caller tiles from `(tile_x_start, tile_y_start)` across the
 /// painting area, stepping by `(tile_w, tile_h)` while the corresponding repeat
 /// flag is set, clipping to the painting rect.
-// BUG-235: only the femtovg window and the tiny-skia CPU snapshot tile
-// backgrounds via this helper; the wgpu renderer tiles on the GPU. Gate it to
-// its consumers so a wgpu-only build (e.g. lumen-driver default features) does
-// not flag it as dead code under `-D warnings`.
-#[cfg(any(feature = "backend-femtovg", feature = "cpu-render"))]
+// BUG-235: only the tiny-skia CPU snapshot tiles backgrounds via this helper;
+// the wgpu renderer tiles on the GPU. Gate it to its consumer so a wgpu-only
+// build (e.g. lumen-driver default features) does not flag it as dead code
+// under `-D warnings`. (femtovg window consumer removed with OpenGL.)
+#[cfg(feature = "cpu-render")]
 #[allow(clippy::too_many_arguments)]
 #[must_use]
 pub(crate) fn bg_tile_geometry(
