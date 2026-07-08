@@ -1,5 +1,14 @@
 # CLAUDE.md
 
+> **THIS WORKTREE = EXPERIMENTAL BRANCH `p1-exp-wgpu-only` — NEVER MERGE INTO `main`.**
+> Performance experimentation ground (target: 100–1000× speedups); any technology
+> or algorithm may be tested here, main-branch invariants may be broken.
+> Read [`EXPERIMENT.md`](EXPERIMENT.md) FIRST every session: status, measurements,
+> work queue, measurement scripts (`scripts/exp/`), known pitfalls.
+> Successful findings are ported to `main` as separate clean branches, never by
+> merging this one. OpenGL (femtovg/glutin) is deleted here; wgpu is the only
+> renderer (HAL: DX12 default → Vulkan → GL fallback, see BUGS 274/275).
+
 Project context for Claude Code. Auto-loaded each session. Keeps the assistant oriented without re-asking questions answerable from code or adjacent docs.
 
 **This file is English-only.** All edits — including gotchas added by other sessions — must be written in English. Translate before committing.
