@@ -11045,6 +11045,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 let timestamp_ms =
                     self.epoch.elapsed().as_secs_f64() * 1000.0;
 
+                // Диагностика кадра (LUMEN_FRAME_LOG=1): полное время
+                // RedrawRequested (шаги 1–6). Paint-фаза отдельно логируется
+                // бэкендом строкой `[frame] paint …`.
+                let frame_log_t0 =
+                    lumen_paint::frame_log_enabled().then(std::time::Instant::now);
+
                 // Step 1: scroll update.
                 if self.advance_scroll_anim() {
                     self.request_redraw();
@@ -12060,6 +12066,15 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             eprintln!("Ошибка рендера: {err:?}");
                         }
                     }
+                }
+
+                if let Some(t0) = frame_log_t0 {
+                    eprintln!(
+                        "[frame] total {:6.2}ms  (scroll_y {:.0}, dl {} cmds)",
+                        t0.elapsed().as_secs_f64() * 1000.0,
+                        self.scroll_y,
+                        self.display_list.len(),
+                    );
                 }
             }
             _ => {}
