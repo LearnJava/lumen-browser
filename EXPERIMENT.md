@@ -60,23 +60,134 @@ DX12 → Vulkan → GL осталась резервом (`LUMEN_NO_BACKEND_PROB
 кандидаты отклонены). Вопрос «GL дефолтом» снят: проба сама берёт Vulkan,
 когда он презентует честно (сейчас — да), и GL, когда Vulkan белеет.
 
+## Чужие решения — карта заимствований (обзор успешных Rust-проектов, 2026-07-09)
+
+Обзор WebRender/Servo, Zed GPUI, egui, Vello, rerun, Bevy, Slint, alacritty,
+wezterm, smithay/niri, iced, cosmic-text/swash/glyphon. Сгруппировано по нашим
+проблемам; у каждого приёма — конкретные имена типов для поиска в исходниках.
+
+### Проблема «~270 render pass'ов на кадр» (корень BUG-274) → 2–5 пассов
+
+- **WebRender**: display list → **RenderTaskGraph**; топологическая сортировка
+  (`RenderTaskGraphBuilder`, `render_on: PassId`) сливает все независимые
+  offscreen-задачи в ОДИН пасс — число пассов ≈ глубине вложенности эффектов
+  (типично 2–5), не числу эффектов. Offscreen-задачи размером с **bbox**
+  (клип по viewport, кламп blur ≤300px), пакуются `GuillotineAllocator`-атласом
+  в общие таргеты ~2048×2048 из **пула** (`return_render_target_to_pool`).
+  Плюс opaque pass front-to-back с z-буфером + alpha pass back-to-front;
+  цель «≤100 draw calls на кадр».
+- **GPUI (Zed)**: вообще без offscreen-слоёв на эффект — фиксированные
+  примитивы (shadows → quads → paths → glyphs → sprites → images), каждый тип =
+  один instanced draw call. Скругления/рамки — SDF в шейдере квада; box-shadow —
+  замкнутая формула Эвана Уоллеса (erf-аппроксимация гаусса) прямо в шейдере,
+  никаких blur-пассов; один общий MSAA-таргет на все пути кадра. Показательно:
+  Windows-бэкенд Zed — **DX11, не DX12** («сложность не окупается») — наш
+  wgpu-GL-фолбэк идейно то же самое.
+- **WebRender, opacity**: простая `opacity` — «opacity collapse» в модуляцию
+  alpha вершинных данных, слоя нет вовсе; маски — только сегменты с углами
+  (`BrushSegment`) в общий alpha-атлас с кэшем между кадрами (`RenderTaskCache`);
+  mix-blend читает backdrop из тайла кэша, а не копирует кадр.
+- **re_renderer (rerun)**: фиксированные draw phases, фаза ≈ один пасс,
+  drawable ≈ один draw call — число пассов константно и не зависит от сцены.
+
+### Проблема «скролл/GIF перерисовывают весь кадр» (ярус 1)
+
+- **WebRender picture caching**: контент растеризуется в крупные тайлы
+  (~2048×512) в координатах **scroll root** (`TileCacheInstance`) — скролл =
+  сдвиг offset'а при композиции, рисуются только въехавшие тайлы. Инвалидация:
+  per-tile списки зависимостей (примитивы/клипы/image keys/opacity bindings) +
+  интернинг примитивов → сравнение по id кадр-к-кадру → dirty rect + scissor
+  внутри тайла. GIF в углу инвалидирует один тайл. Итог Mozilla: скролл
+  16.4 Вт → 9.4 Вт.
+- **smithay `OutputDamageTracker`** — каноничный damage-алгоритм: элементы с
+  commit-счётчиками; damage = изменившиеся + появившиеся/сдвинувшиеся (старый
+  И новый rect); **накопление damage по возрасту буфера** (при double/triple
+  buffering перерисовывается union damage последних age-1 кадров); при
+  фрагментации регион упрощается до extents.
+- **alacritty**: построчный damage (`LineDamageBounds`), damage двух кадров,
+  старый курсор/выделение добавляются в damage. **iced-урок**: их GPU-путь до
+  сих пор без damage, но софтверный `iced_tiny_skia` диффит примитивы — диффинг
+  display-list'а работает без реактивной системы свойств (наш
+  `diff_display_lists` уже есть — его надо ПОДКЛЮЧИТЬ к рендеру).
+- **Slint**: `PropertyTracker` → `DirtyRegion` (до 3 прямоугольников, старая +
+  новая геометрия), история damage на 3 буфера.
+
+### Проблема «Font::parse всех face каждый кадр» (ярус 1)
+
+- **cosmic-text `FontSystem`** — эталон: fontdb парсит метаданные ОДИН раз при
+  загрузке, данные в `Arc`; кэш `Font`-объектов по font_id (внутри распарсенный
+  Face), кэши font-matching и codepoint→face (fallback). Поверх —
+  `ShapeRunCache` (кэш шейпинга целых run'ов, Bevy получил 82→90–100 fps) и
+  `SwashCache` (растр глифа по ключу face_id+glyph+size+subpixel).
+- **GPUI/egui/glyphon**: глиф-атлас персистентный, alpha-only, тонирование
+  цветом в шейдере; glyphon разделяет `prepare()` (CPU) и `render()` (один
+  instanced draw в чужом пассе — middleware-паттерн wgpu).
+
+### Проблема «idle ≠ 0» (BUG-271/274)
+
+- **alacritty / niri / Slint / egui reactive mode** — общий принцип: нет
+  таймера кадров вообще; redraw только от источников изменений (ввод, сеть,
+  анимации, GIF-таймер); статичная страница = ноль wakeup'ов. Continuous-режим
+  существует только как debug-флаг. Наш skip-identical-frame — полумера:
+  кадр всё ещё СТРОИТСЯ и хэшируется; цель — не строить.
+
+### Рендер вне UI-потока (ярус 2)
+
+- **WebRender**: 3 потока — scene builder (тяжёлый CPU: picture/spatial/clip
+  tree, интернинг) / render backend (culling, task graph, батчи) / renderer
+  (единственный трогает GPU). Скролл и анимируемые свойства — property
+  bindings в render backend, минуя пересборку сцены.
+- **Bevy pipelined rendering**: фазы Extract → Prepare → Queue → Render; Extract —
+  единственная точка синхронизации (копирование в render-мир), render-поток
+  рисует кадр N, пока main считает N+1. **GPUI**: пул instance-буферов с triple
+  buffering и асинхронным возвратом — нет CPU↔GPU stall'ов.
+
+### Ярус 3 (Vello) — статус
+
+Vello classic: клипы/слои/блэнды — команды PTCL внутри compute-конвейера
+(вложенные эффекты не порождают пассов), но на конец 2025 — **alpha**:
+worst-case GPU-память, conflation-артефакты, фильтры не доделаны. Зреет ветка
+sparse strips: `vello_cpu` (быстрейший CPU-рендерер в Rust) и `vello_hybrid`
+(CPU-геометрия + лёгкий GPU-финал, до WebGL2). Servo взял Vello для canvas.
+Вердикт: **следить, не брать**; наш порядок ярусов подтверждается.
+
+### Порядок внедрения (как шла Mozilla)
+
+1. Граф задач + bbox-слои в атласе из пула → схлопывает 270 пассов;
+2. тайловый кэш на scroll root → скролл почти бесплатен;
+3. per-tile/damage инвалидация → GIF стоит свой прямоугольник;
+4. вынос рендера в поток (extract-паттерн Bevy) — последним, когда кадр уже дёшев.
+
 ## Очередь работ (по приоритету, цель 100–1000×)
 
 1. ~~Ярус 0 — авто-проба бэкенда~~ **СДЕЛАНО 2026-07-08** (см. «Что уже
    сделано» п.8): idle-CPU 3×, память −273 МБ, BUG-275 обезврежен пробой.
-2. **Ярус 1 — не рисовать лишнее** (главный рычаг):
+2. **Ярус 1 — не рисовать лишнее** (главный рычаг; приёмы — см. «Карта
+   заимствований» выше):
+   - кэш `parsed_faces`: сейчас `Font::parse` ВСЕХ face — каждый кадр
+     (204 мс холодный, 2–4 мс тёплый); парсить при регистрации face
+     (образец: cosmic-text `FontSystem` — Arc + кэши matching/fallback).
+     Самый дешёвый срез — начать с него;
    - dirty-rect до конца: `TileGrid`/`diff_display_lists` пишутся, но не
      читаются рендером — подключить scissor-ограниченную перерисовку
      изменившегося региона (GIF перерисовывает свои 200×150, не весь кадр);
-   - кэш `parsed_faces`: сейчас `Font::parse` ВСЕХ face — каждый кадр
-     (204 мс холодный, 2–4 мс тёплый); парсить при регистрации face;
-   - скролл-композитор страницы: контент в persistent-текстуру с запасом,
-     скролл = сдвиг матрицей.
+     union damage по возрасту буфера — как smithay `OutputDamageTracker`;
+   - **пасс-схлопывание**: offscreen-слои эффектов по bbox (не full-frame),
+     независимые — в общий атлас-таргет одним пассом (WebRender
+     RenderTaskGraph); простая opacity — модуляция alpha без слоя (opacity
+     collapse); скругления/тени — SDF/формула Уоллеса в шейдере (GPUI).
+     Это добивает остаток BUG-274 на любом бэкенде;
+   - скролл-композитор страницы: тайлы в координатах scroll root, скролл =
+     сдвиг offset'а, рисуются только въехавшие тайлы (WebRender picture
+     caching); минимум — persistent-текстура с запасом + сдвиг матрицей.
 3. **Ярус 2 — параллелизм**: рендер вон из UI-потока (скелет
-   `ThreadedCompositor` есть; максимум пользы на Vulkan/DX12 — GL
-   сериализуется локами); параллельный style/layout (rayon, Servo-style).
+   `ThreadedCompositor` есть; паттерн — Bevy Extract: UI строит только
+   display list, render-поток владеет GPU и рисует кадр N, пока UI считает
+   N+1; максимум пользы на Vulkan/DX12 — GL сериализуется локами);
+   параллельный style/layout (rayon, Servo-style).
 4. **Ярус 3 — Vello** (compute-растеризатор поверх wgpu; заглушка
    `vello_backend.rs` есть) — только после ярусов 0–2 и по замерам.
+   Статус 2025: alpha, «следить, не брать»; смотреть также vello_hybrid.
 5. Профиль боевой сборки: release + thin-LTO + PGO + mimalloc (10–20% всюду).
 6. BUG-275: обновить драйвер Intel / проверить на другой машине.
 
