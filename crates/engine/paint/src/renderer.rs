@@ -1553,6 +1553,7 @@ pub struct Renderer {
 /// Creates a `Depth32Float` texture + view sized `width×height` for GPU depth testing.
 /// Called once in `init_pipelines` and on every `resize`.
 fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
+    count_texture_created();
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("depth-texture"),
         size: wgpu::Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 },
@@ -1601,6 +1602,17 @@ fn select_surface_format(
     }
 }
 
+/// BUG-274 diagnostics: total number of `create_texture` calls in this
+/// process (all `Renderer`s). Printed by the `LUMEN_FRAME_LOG=2` phase log
+/// to correlate pass-end cost with live-resource growth.
+pub static TEXTURES_CREATED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// BUG-274 diagnostics: bump [`TEXTURES_CREATED`].
+fn count_texture_created() {
+    TEXTURES_CREATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 impl Renderer {
     pub fn new(window: Arc<Window>, font_bytes: Vec<u8>, target_color_space: ColorSpace) -> Result<Self, Box<dyn Error>> {
         // Валидируем шрифт сразу, чтобы при битом файле не падать в первом кадре.
@@ -1623,27 +1635,43 @@ impl Renderer {
         // ScaleFactorChanged-event-е через `set_scale_factor`.
         let scale_factor = window.scale_factor();
 
-        // BUG-057: on Windows the Vulkan backend causes a double-panic on the first
-        // rendered frame (encoder invalidated, then Surface drop races SurfaceTexture).
-        // DX12 does not exhibit this issue. Default to DX12 on Windows; allow the
-        // WGPU_BACKEND env-var to override for debugging / fallback.
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: if cfg!(target_os = "windows") {
-                wgpu::Backends::DX12
-            } else {
-                wgpu::Backends::PRIMARY
-            },
-            ..Default::default()
+        // BUG-274: на wgpu/DX12 (Intel Iris Plus, Windows 10) закрытие каждого
+        // render pass стоит ~2.3 мс CPU и не амортизируется — кадр с ~270 пассами
+        // жёг 0.5–1.2 с CPU, плюс разовый скачок памяти ~+500 МБ. Тот же адаптер
+        // через Vulkan: idle-CPU в 9 раз ниже, прогретый кадр 7 мс, скачка нет.
+        // Поэтому на Windows пробуем Vulkan первым, DX12 — как fallback.
+        // BUG-057 (двойная паника Vulkan на первом кадре) на wgpu 26 не
+        // воспроизводится. WGPU_BACKEND env-var по-прежнему переопределяет выбор.
+        let backend_prefs: &[wgpu::Backends] = if cfg!(target_os = "windows") {
+            &[wgpu::Backends::VULKAN, wgpu::Backends::DX12]
+        } else {
+            &[wgpu::Backends::PRIMARY]
+        };
+        let mut picked = None;
+        for &backends in backend_prefs {
+            let instance = wgpu::Instance::new(
+                &wgpu::InstanceDescriptor { backends, ..Default::default() }.with_env(),
+            );
+            let Ok(surface) = instance.create_surface(window.clone()) else {
+                continue;
+            };
+            match instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::LowPower,
+                    compatible_surface: Some(&surface),
+                    force_fallback_adapter: false,
+                })
+                .await
+            {
+                Ok(adapter) => {
+                    picked = Some((surface, adapter));
+                    break;
+                }
+                Err(_) => continue,
+            }
         }
-        .with_env());
-        let surface = instance.create_surface(window)?;
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::LowPower,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })
-            .await?;
+        let (surface, adapter) =
+            picked.ok_or("нет GPU-адаптера ни под одним из бэкендов (Vulkan/DX12)")?;
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("lumen-device"),
@@ -1669,6 +1697,14 @@ impl Renderer {
         surface.configure(&device, &config);
 
         let adapter_info = adapter.get_info();
+        // BUG-274: имя адаптера в stderr — диагностика «не WARP ли это»
+        // (программный растеризатор объясняет аномальный CPU/память).
+        if crate::frame_log_enabled() {
+            eprintln!(
+                "[wgpu] adapter: {} ({:?}, {:?})",
+                adapter_info.name, adapter_info.device_type, adapter_info.backend
+            );
+        }
         let gpu_fingerprint = GpuFingerprint::from_adapter_info(&adapter_info);
 
         Self::init_pipelines(
@@ -1708,24 +1744,36 @@ impl Renderer {
         height: u32,
         target_color_space: ColorSpace,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        // Mirror the windowed-mode backend choice (BUG-057).
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: if cfg!(target_os = "windows") {
-                wgpu::Backends::DX12
-            } else {
-                wgpu::Backends::PRIMARY
-            },
-            ..Default::default()
-        }
-        .with_env());
+        // Mirror the windowed-mode backend choice (BUG-274): Vulkan first on
+        // Windows (DX12 pass-end pathology), DX12 as fallback.
+        let backend_prefs: &[wgpu::Backends] = if cfg!(target_os = "windows") {
+            &[wgpu::Backends::VULKAN, wgpu::Backends::DX12]
+        } else {
+            &[wgpu::Backends::PRIMARY]
+        };
         // No surface needed — request adapter without compatible_surface constraint.
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::LowPower,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            })
-            .await?;
+        let mut picked = None;
+        for &backends in backend_prefs {
+            let instance = wgpu::Instance::new(
+                &wgpu::InstanceDescriptor { backends, ..Default::default() }.with_env(),
+            );
+            match instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::LowPower,
+                    compatible_surface: None,
+                    force_fallback_adapter: false,
+                })
+                .await
+            {
+                Ok(adapter) => {
+                    picked = Some(adapter);
+                    break;
+                }
+                Err(_) => continue,
+            }
+        }
+        let adapter =
+            picked.ok_or("нет GPU-адаптера ни под одним из бэкендов (Vulkan/DX12)")?;
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("lumen-headless-device"),
@@ -1807,6 +1855,7 @@ impl Renderer {
         });
 
         // ── Atlas texture + sampler + bind group ───────────────────────────
+        count_texture_created();
         let atlas_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("glyph-atlas"),
             size: wgpu::Extent3d {
@@ -3351,6 +3400,7 @@ impl Renderer {
     /// Создаёт `GpuImage` из RGBA8-буфера заданного размера.
     /// `&self` достаточно — мутировать нужно только `images`, это делает caller.
     fn make_gpu_image_entry(&self, rgba: &[u8], width: u32, height: u32) -> GpuImage {
+        count_texture_created();
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("lumen-image-texture"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -3458,6 +3508,7 @@ impl Renderer {
             });
         }
 
+        count_texture_created();
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("layer-snapshot"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -3779,6 +3830,7 @@ impl Renderer {
         }
 
         // Pool miss: allocate a new texture.
+        count_texture_created();
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("opacity-layer"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -3821,6 +3873,7 @@ impl Renderer {
             .as_ref()
             .is_none_or(|s| s.width != width || s.height != height);
         if needs_create {
+            count_texture_created();
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("blend-scratch-layer"),
                 size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -3888,6 +3941,7 @@ impl Renderer {
         if !needs_create {
             return false;
         }
+        count_texture_created();
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("backdrop-cache-layer"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -3942,6 +3996,12 @@ impl Renderer {
         scroll_y: f32,
         scroll_x: f32,
     ) -> Result<(), wgpu::SurfaceError> {
+        // BUG-274: пофазный тайминг кадра (LUMEN_FRAME_LOG=2) — разбивка
+        // wgpu-кадра на faces/collect/prep/acquire/encode/submit, чтобы
+        // диагностировать, какая фаза жжёт CPU в простое.
+        let phase_log = crate::frame_log_level() >= 2;
+        let t_frame0 = std::time::Instant::now();
+
         // CSS Filter Effects L1 §2 — backdrop-filter result cache.
         // Compute one content hash per frame, but only when the display list
         // actually contains a backdrop-filter (pages without one pay nothing).
@@ -4008,6 +4068,7 @@ impl Renderer {
                 Some(ParsedFace { font, head, hhea, cmap, hmtx })
             })
             .collect();
+        let t_after_faces = t_frame0.elapsed();
 
         // ── Сбор вершин ────────────────────────────────────────────────────
         let mut fill_vertices: Vec<FillVertex> = Vec::new();
@@ -5558,6 +5619,7 @@ impl Renderer {
         }
         flush_batch!();
         let _ = (batch_start, current_scissor); // terminal flush — values not needed after
+        let t_after_collect = t_frame0.elapsed();
 
         // ── Atlas upload (если изменился) ─────────────────────────────────
         if self.atlas.dirty() {
@@ -5770,6 +5832,7 @@ impl Renderer {
         // Windowed: get the next swapchain image from the surface.
         // Headless: create a temporary RGBA8 RENDER_ATTACHMENT|COPY_SRC texture so
         //   render_to_image() can read it back after this call.
+        let t_after_prep = t_frame0.elapsed();
         let windowed_frame: Option<wgpu::SurfaceTexture>;
         let headless_tex: Option<wgpu::Texture>;
         let frame_view: wgpu::TextureView;
@@ -5779,6 +5842,7 @@ impl Renderer {
             windowed_frame = Some(f);
             headless_tex = None;
         } else {
+            count_texture_created();
             let tex = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("headless-frame"),
                 size: wgpu::Extent3d {
@@ -5797,6 +5861,7 @@ impl Renderer {
             windowed_frame = None;
             headless_tex = Some(tex);
         }
+        let t_after_acquire = t_frame0.elapsed();
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -5893,7 +5958,23 @@ impl Renderer {
         // value (wgpu batches all write_buffer calls before any encoder commands run).
         let mut filter_param_bufs: Vec<wgpu::Buffer> = Vec::new();
 
+        // BUG-274: поэлементный CPU-учёт encode-фазы (LUMEN_FRAME_LOG=2) —
+        // суммарное время и число элементов по каждому типу RenderPlanItem.
+        let mut t_plan: [std::time::Duration; 6] = Default::default();
+        let mut n_plan: [u32; 6] = [0; 6];
+        // BUG-274: разбивка Draw-пасса — begin_render_pass / запись ops / drop(pass).
+        let mut t_draw_sub: [std::time::Duration; 3] = Default::default();
+
         for item in &render_plan {
+            let t_item0 = std::time::Instant::now();
+            let plan_kind = match item {
+                RenderPlanItem::Draw(_) => 0,
+                RenderPlanItem::Composite(_) => 1,
+                RenderPlanItem::MaskComposite(_) => 2,
+                RenderPlanItem::FilterComposite(_) => 3,
+                RenderPlanItem::BackdropFilterComposite(_) => 4,
+                RenderPlanItem::MaskLayerComposite(_) => 5,
+            };
             match item {
                 RenderPlanItem::Draw(batch) => {
                     let target_view = if batch.target_level == 0 {
@@ -5932,6 +6013,7 @@ impl Renderer {
                         }),
                         stencil_ops: None,
                     });
+                    let t_d0 = std::time::Instant::now();
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("draw-pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -5944,7 +6026,13 @@ impl Renderer {
                         timestamp_writes: None,
                         occlusion_query_set: None,
                     });
+                    let t_d1 = t_d0.elapsed();
                     run_draw_ops!(pass, batch.ops_start, batch.ops_end);
+                    let t_d2 = t_d0.elapsed();
+                    drop(pass);
+                    t_draw_sub[0] += t_d1;
+                    t_draw_sub[1] += t_d2 - t_d1;
+                    t_draw_sub[2] += t_d0.elapsed() - t_d2;
                 }
                 RenderPlanItem::Composite(comp) => {
                     if let Some(cvb) = &comp_vbuf {
@@ -6080,6 +6168,7 @@ impl Renderer {
                             MaskGradientSpec::Radial { params, rect } => (params, rect),
                             MaskGradientSpec::Conic  { params, rect } => (params, rect),
                         };
+                        count_texture_created();
                         let temp_tex = self.device.create_texture(&wgpu::TextureDescriptor {
                             label: Some("mask-grad-tex"),
                             size: wgpu::Extent3d {
@@ -6750,11 +6839,43 @@ impl Renderer {
                     }
                 }
             }
+            t_plan[plan_kind] += t_item0.elapsed();
+            n_plan[plan_kind] += 1;
         }
 
+        let t_after_encode = t_frame0.elapsed();
         self.queue.submit([encoder.finish()]);
         if let Some(frame) = windowed_frame {
             frame.present();
+        }
+        if phase_log {
+            let t_total = t_frame0.elapsed();
+            eprintln!(
+                "[frame:wgpu] total {:7.2}ms | faces {:6.2} collect {:6.2} prep {:6.2} \
+                 acquire {:6.2} encode {:6.2} submit {:6.2} | ops {} layers {}",
+                t_total.as_secs_f64() * 1e3,
+                t_after_faces.as_secs_f64() * 1e3,
+                (t_after_collect - t_after_faces).as_secs_f64() * 1e3,
+                (t_after_prep - t_after_collect).as_secs_f64() * 1e3,
+                (t_after_acquire - t_after_prep).as_secs_f64() * 1e3,
+                (t_after_encode - t_after_acquire).as_secs_f64() * 1e3,
+                (t_total - t_after_encode).as_secs_f64() * 1e3,
+                draw_ops.len(),
+                max_level,
+            );
+            let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+            eprintln!(
+                "[frame:wgpu]   plan: draw {}x{:.1}ms comp {}x{:.1}ms mask {}x{:.1}ms \
+                 filt {}x{:.1}ms bdrop {}x{:.1}ms mlayer {}x{:.1}ms",
+                n_plan[0], ms(t_plan[0]), n_plan[1], ms(t_plan[1]), n_plan[2], ms(t_plan[2]),
+                n_plan[3], ms(t_plan[3]), n_plan[4], ms(t_plan[4]), n_plan[5], ms(t_plan[5]),
+            );
+            eprintln!(
+                "[frame:wgpu]   draw-sub: begin {:.1}ms ops {:.1}ms end {:.1}ms |                  textures_created {} pool {}",
+                ms(t_draw_sub[0]), ms(t_draw_sub[1]), ms(t_draw_sub[2]),
+                TEXTURES_CREATED.load(std::sync::atomic::Ordering::Relaxed),
+                self.texture_pool.len(),
+            );
         }
         // In headless mode, keep the rendered texture alive for render_to_image().
         self.pending_readback = headless_tex;
