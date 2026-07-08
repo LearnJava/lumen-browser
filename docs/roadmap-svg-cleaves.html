@@ -55,7 +55,7 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-07",
+ "generated": "2026-07-08",
  "counts": {
   "open": 19,
   "fixed": 226,
@@ -508,7 +508,7 @@
      "title": "Переход на V8 (rusty_v8) + Tier 2 Web APIs",
      "status": "planned",
      "size": "XL",
-     "note": "Разблокирован (v0.5.0 вышел). Единственное лекарство для тяжёлых SPA: аудит 2026-07-02 — github.com не дорендерился за 280 с (ресурсы загружены к 6.6 с, затык в QuickJS-интерпретаторе без JIT). Рекомендация: делать ПОСЛЕ дешёвых RP-5…RP-9 (они закрывают бо́льшую часть «не как в Edge» и не зависят от JS-движка), затем V8 как флагман Phase 3. Опц. промежуточный митигейт — watchdog/бюджет исполнения JS, чтобы страницы падали graceful, а не висли. Бриф docs/tasks/ph3-v8-migration.md"
+     "note": "Разблокирован (v0.5.0 вышел). Единственное лекарство для тяжёлых SPA: аудит 2026-07-02 — github.com не дорендерился за 280 с (ресурсы загружены к 6.6 с, затык в QuickJS-интерпретаторе без JIT). Рекомендация: делать ПОСЛЕ дешёвых RP-5…RP-9 (они закрывают бо́льшую часть «не как в Edge» и не зависят от JS-движка), затем V8 как флагман Phase 3. Опц. промежуточный митигейт — watchdog/бюджет исполнения JS, чтобы страницы падали graceful, а не висли. Бриф docs/tasks/ph3-v8-migration.md. Сюда же перенесён уровень 2 bfcache — JS-куча переживает заморозку через ValueSerializer (docs/tasks/ph3-bfcache.md, DoD Level 2)"
     },
     {
      "id": "P3-idb",
@@ -562,7 +562,8 @@
      "id": "P3-bfcache",
      "title": "Back/forward cache (bfcache)",
      "status": "active",
-     "note": "Незавершённая работа в ветке `p1-ph3-bfcache` (не на main, см. HEALTH-LOG 2026-07-01); lifecycle-срез (freeze/thaw) уже влит в main отдельно"
+     "size": "M",
+     "note": "DOM freeze/thaw влит в main 2026-07-02 (ветка p1-ph3-bfcache удалена). DoD разбит на 2 уровня (2026-07-08, docs/tasks/ph3-bfcache.md): уровень 1 = eligibility-фильтры (WS/SSE/no-store/unload) + бенчмарк bfcache_restore_ms + деградация T2→T3, ~3 сессии — закрывает задачу; уровень 2 (JS-куча переживает заморозку) перенесён в P3-v8 (10C.2 заблокирован rquickjs)"
     },
     {
      "id": "P3-navapi",
@@ -726,8 +727,8 @@
     {
      "id": "P3-webcrypto",
      "title": "Web Crypto SubtleCrypto (полный набор алгоритмов)",
-     "status": "planned",
-     "note": "PARTIAL (сверка с кодом 2026-07-02): ECDSA-P256 + HMAC-SHA* + AES-GCM (subtle_crypto.rs); дошить — RSA/Ed25519/PBKDF2/HKDF/AES-CBC-CTR/standalone digest (~20 алгоритмов спека)"
+     "status": "active",
+     "note": "срез 1 ✅ AES-GCM+ECDSA-P256+HMAC-SHA* (2026-07-02); срез 2 ✅ 2026-07-08 AES-CBC+AES-CTR+PBKDF2+HKDF (subtle_crypto.rs); дошить — RSA-OAEP/RSA-PSS/RSASSA-PKCS1-v1_5/ECDH"
     },
     {
      "id": "P3-weblocks",
