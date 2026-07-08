@@ -7941,6 +7941,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             // веб-контент получал ровно 720 CSS px, как ожидают graphic tests.
             (1024.0, 720.0 + tabs::strip::TAB_BAR_HEIGHT)
         };
+        // BUG-274 диагностика: LUMEN_WINDOW=WxH переопределяет размер окна
+        // (проверка масштабирования стоимости render pass по площади кадра).
+        let (win_w, win_h) = match std::env::var("LUMEN_WINDOW") {
+            Ok(v) => {
+                if let Some((w, h)) = v.split_once('x')
+                    && let (Ok(w), Ok(h)) = (w.parse::<f32>(), h.parse::<f32>())
+                {
+                    (w, h)
+                } else {
+                    (win_w, win_h)
+                }
+            }
+            Err(_) => (win_w, win_h),
+        };
         let attrs = Window::default_attributes()
             .with_title(window_title(self.title.as_deref()))
             .with_inner_size(LogicalSize::new(win_w, win_h))

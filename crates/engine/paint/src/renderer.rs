@@ -1663,10 +1663,14 @@ impl Renderer {
         // opt-in через WGPU_BACKEND=vulkan (BUG-275: на Intel Iris Plus Vulkan-окно
         // презентует белым, хотя рендер и submit проходят без ошибок; на исправных
         // драйверах Vulkan в ~12 раз дешевле по CPU — см. bugs/BUG-274-FIXED.md).
+        // GL — последний резерв цепочки: тот же wgpu-рендер (WGSL) поверх
+        // OpenGL-HAL. На Intel Iris Plus это самый дешёвый по CPU вариант
+        // (idle 156 мс/10 с против ~1500 у DX12) с корректной картинкой —
+        // замеры в bugs/BUG-274-OPEN.md; включается WGPU_BACKEND=gl.
         let backend_prefs: &[wgpu::Backends] = if cfg!(target_os = "windows") {
-            &[wgpu::Backends::DX12, wgpu::Backends::VULKAN]
+            &[wgpu::Backends::DX12, wgpu::Backends::VULKAN, wgpu::Backends::GL]
         } else {
-            &[wgpu::Backends::PRIMARY]
+            &[wgpu::Backends::PRIMARY, wgpu::Backends::GL]
         };
         let mut picked = None;
         for &backends in backend_prefs {
@@ -1782,11 +1786,11 @@ impl Renderer {
         target_color_space: ColorSpace,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Mirror the windowed-mode backend choice: DX12 first (BUG-275 — Vulkan
-        // presents white on Intel Iris Plus), Vulkan as fallback / env opt-in.
+        // presents white on Intel Iris Plus), Vulkan then GL as fallbacks.
         let backend_prefs: &[wgpu::Backends] = if cfg!(target_os = "windows") {
-            &[wgpu::Backends::DX12, wgpu::Backends::VULKAN]
+            &[wgpu::Backends::DX12, wgpu::Backends::VULKAN, wgpu::Backends::GL]
         } else {
-            &[wgpu::Backends::PRIMARY]
+            &[wgpu::Backends::PRIMARY, wgpu::Backends::GL]
         };
         // No surface needed — request adapter without compatible_surface constraint.
         let mut picked = None;

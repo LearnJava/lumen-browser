@@ -39,7 +39,8 @@ Windows 10, либо несовместимость wgpu 26 Vulkan-swapchain с 
 - Проверить на машине с другим GPU/драйвером — если Vulkan там рисует корректно,
   завести whitelist/blacklist по adapter_info или probe с readback первого кадра.
 - Обновить драйвер Intel и перепроверить.
-- Попробовать `wgpu::Backends::GL` (OpenGL через wgpu-hal) как третий вариант для
-  сравнения презентации (не как возврат к glutin/femtovg).
+- ~~Попробовать `wgpu::Backends::GL`~~ — проверено 2026-07-08: GL-HAL рисует
+  корректно и даёт лучший idle-CPU из всех (156 мс/10 с); добавлен в конец
+  fallback-цепочки, opt-in `WGPU_BACKEND=gl` (см. BUG-274).
 - Если Vulkan заработает — вернуть Vulkan-first: это снимает ~12× CPU-разницу DX12
   (BUG-274) без единой строчки в рендер-коде.
