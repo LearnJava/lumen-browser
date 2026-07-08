@@ -1659,8 +1659,12 @@ impl Renderer {
         // Поэтому на Windows пробуем Vulkan первым, DX12 — как fallback.
         // BUG-057 (двойная паника Vulkan на первом кадре) на wgpu 26 не
         // воспроизводится. WGPU_BACKEND env-var по-прежнему переопределяет выбор.
+        // Порядок: DX12 первым (корректные пиксели везде), Vulkan — fallback и
+        // opt-in через WGPU_BACKEND=vulkan (BUG-275: на Intel Iris Plus Vulkan-окно
+        // презентует белым, хотя рендер и submit проходят без ошибок; на исправных
+        // драйверах Vulkan в ~12 раз дешевле по CPU — см. bugs/BUG-274-FIXED.md).
         let backend_prefs: &[wgpu::Backends] = if cfg!(target_os = "windows") {
-            &[wgpu::Backends::VULKAN, wgpu::Backends::DX12]
+            &[wgpu::Backends::DX12, wgpu::Backends::VULKAN]
         } else {
             &[wgpu::Backends::PRIMARY]
         };
@@ -1701,12 +1705,23 @@ impl Renderer {
 
         let caps = surface.get_capabilities(&adapter);
         let format = select_surface_format(&caps, target_color_space);
+        // LUMEN_PRESENT=mailbox|immediate|fifo — эксперимент BUG-274/Vulkan-white:
+        // выбор present mode из поддерживаемых драйвером (дефолт Fifo).
+        let present_mode = match std::env::var("LUMEN_PRESENT").as_deref() {
+            Ok("mailbox") if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) => {
+                wgpu::PresentMode::Mailbox
+            }
+            Ok("immediate") if caps.present_modes.contains(&wgpu::PresentMode::Immediate) => {
+                wgpu::PresentMode::Immediate
+            }
+            _ => wgpu::PresentMode::Fifo,
+        };
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             width,
             height,
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode,
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
@@ -1720,6 +1735,11 @@ impl Renderer {
             eprintln!(
                 "[wgpu] adapter: {} ({:?}, {:?})",
                 adapter_info.name, adapter_info.device_type, adapter_info.backend
+            );
+            eprintln!(
+                "[wgpu] surface: format {:?} (of {:?}) alpha {:?} (of {:?}) present {:?}",
+                config.format, caps.formats, config.alpha_mode, caps.alpha_modes,
+                config.present_mode,
             );
         }
         let gpu_fingerprint = GpuFingerprint::from_adapter_info(&adapter_info);
@@ -1761,10 +1781,10 @@ impl Renderer {
         height: u32,
         target_color_space: ColorSpace,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        // Mirror the windowed-mode backend choice (BUG-274): Vulkan first on
-        // Windows (DX12 pass-end pathology), DX12 as fallback.
+        // Mirror the windowed-mode backend choice: DX12 first (BUG-275 — Vulkan
+        // presents white on Intel Iris Plus), Vulkan as fallback / env opt-in.
         let backend_prefs: &[wgpu::Backends] = if cfg!(target_os = "windows") {
-            &[wgpu::Backends::VULKAN, wgpu::Backends::DX12]
+            &[wgpu::Backends::DX12, wgpu::Backends::VULKAN]
         } else {
             &[wgpu::Backends::PRIMARY]
         };
