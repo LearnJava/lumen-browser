@@ -1516,6 +1516,14 @@ pub struct Renderer {
     /// Cache GPU-снимков слоёв per-id. Заполняется compositor-ом через
     /// [`Renderer::upload_layer_snapshot`] для кеширования неизменных слоёв.
     layer_snapshots: HashMap<u64, GpuLayerSnapshot>,
+    /// Skip-identical-frame: поколение контента, не входящего в display list
+    /// (картинки/GIF-кадры/снапшоты/шрифты/canvas-bg/промо-слои). Бампается
+    /// каждой мутирующей операцией; входит в хэш кадра.
+    content_generation: u64,
+    /// Хэш последнего успешно отрисованного оконного кадра
+    /// (display list + overlay + scroll + размер + `content_generation`).
+    /// Совпадение со следующим кадром ⇒ пиксели идентичны ⇒ кадр пропускается.
+    last_frame_hash: Option<u64>,
     /// GPU layer cache with LRU eviction (ADR-008 Phase 2).
     /// Tracks layer textures by stacking context ID + size for off-viewport eviction.
     layer_cache: crate::layer_cache::LayerCache,
@@ -1611,6 +1619,15 @@ pub static TEXTURES_CREATED: std::sync::atomic::AtomicU64 =
 /// BUG-274 diagnostics: bump [`TEXTURES_CREATED`].
 fn count_texture_created() {
     TEXTURES_CREATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// `true`, если пропуск идентичных кадров отключён (`LUMEN_NO_FRAME_SKIP=1`).
+fn frame_skip_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("LUMEN_NO_FRAME_SKIP").is_ok_and(|v| v == "1")
+    })
 }
 
 impl Renderer {
@@ -3134,6 +3151,8 @@ impl Renderer {
             raw_images: HashMap::new(),
             images: HashMap::new(),
             layer_snapshots: HashMap::new(),
+            content_generation: 0,
+            last_frame_hash: None,
             layer_cache: crate::layer_cache::LayerCache::new(),
             composite_pipeline,
             composite_bgl,
@@ -3185,6 +3204,7 @@ impl Renderer {
     /// чтобы передать `FontRegistry` с @font-face шрифтами после загрузки
     /// страницы (Renderer уже создан, builder-паттерн недоступен).
     pub fn set_font_provider(&mut self, provider: Option<Arc<dyn FontProvider>>) {
+        self.content_generation = self.content_generation.wrapping_add(1);
         self.font_provider = provider;
     }
 
@@ -3225,6 +3245,7 @@ impl Renderer {
     /// скриптов. Вызывается shell-ом один раз после `Renderer::new_async`.
     /// Идемпотентен (preload_fallback_chain → resolve_face_id cache).
     pub fn preload_curated_fallbacks(&mut self) {
+        self.content_generation = self.content_generation.wrapping_add(1);
         self.preload_fallback_chain(crate::fallback::CURATED_FALLBACK_FAMILIES);
     }
 
@@ -3310,6 +3331,7 @@ impl Renderer {
         src: String,
         image: &Image,
     ) -> Result<(), ImageRegisterError> {
+        self.content_generation = self.content_generation.wrapping_add(1);
         if image.width == 0 || image.height == 0 {
             return Err(ImageRegisterError::EmptyImage);
         }
@@ -3462,6 +3484,7 @@ impl Renderer {
     /// Снимает регистрацию всех картинок (например, при переходе на новую
     /// страницу). GPU-память освобождается при drop-е `GpuImage.texture`.
     pub fn clear_images(&mut self) {
+        self.content_generation = self.content_generation.wrapping_add(1);
         self.raw_images.clear();
         self.images.clear();
     }
@@ -3493,6 +3516,7 @@ impl Renderer {
         width: u32,
         height: u32,
     ) -> Result<(), SnapshotUploadError> {
+        self.content_generation = self.content_generation.wrapping_add(1);
         if width == 0 || height == 0 {
             return Err(SnapshotUploadError::EmptySnapshot);
         }
@@ -3555,11 +3579,13 @@ impl Renderer {
 
     /// Удаляет снимок с `id`. GPU-память освобождается при drop-е.
     pub fn evict_layer_snapshot(&mut self, id: u64) {
+        self.content_generation = self.content_generation.wrapping_add(1);
         self.layer_snapshots.remove(&id);
     }
 
     /// Удаляет все снимки (например, при переходе на новую страницу).
     pub fn clear_layer_snapshots(&mut self) {
+        self.content_generation = self.content_generation.wrapping_add(1);
         self.layer_snapshots.clear();
     }
 
@@ -3605,6 +3631,7 @@ impl Renderer {
         &mut self,
         level: lumen_core::ext::MemoryPressureLevel,
     ) {
+        self.content_generation = self.content_generation.wrapping_add(1);
         for ord in self.backdrop_cache.on_memory_pressure(level) {
             self.backdrop_cache_textures.remove(&ord);
         }
@@ -3614,6 +3641,7 @@ impl Renderer {
     /// cached entries (ADR-008 §10H).  Medium: evict ~50% LRU glyphs.
     /// High: clear entirely.  Wire into the shell's `MemoryPressureSource` poll loop.
     pub fn atlas_on_memory_pressure(&mut self, level: lumen_core::ext::MemoryPressureLevel) {
+        self.content_generation = self.content_generation.wrapping_add(1);
         self.atlas.on_memory_pressure(level);
     }
 
@@ -3659,6 +3687,7 @@ impl Renderer {
         width: u32,
         height: u32,
     ) -> crate::layer_cache::LayerKey {
+        self.content_generation = self.content_generation.wrapping_add(1);
         self.layer_cache.promote_layer(node_id, width, height)
     }
 
@@ -3669,6 +3698,7 @@ impl Renderer {
 
     /// Remove the promoted GPU layer for a node, freeing its cache entry.
     pub fn demote_layer(&mut self, node_id: u32) {
+        self.content_generation = self.content_generation.wrapping_add(1);
         self.layer_cache.demote_layer(node_id);
     }
 
@@ -3702,6 +3732,7 @@ impl Renderer {
     /// Resizes the render target. For windowed mode, reconfigures the wgpu surface.
     /// For headless mode, updates the stored physical dimensions.
     pub fn resize(&mut self, width: u32, height: u32) {
+        self.content_generation = self.content_generation.wrapping_add(1);
         if width > 0 && height > 0 {
             if let (Some(surface), Some(config)) =
                 (self.surface.as_ref(), self.config.as_mut())
@@ -3731,6 +3762,7 @@ impl Renderer {
     /// размер surface превращается в logical viewport для shader-а.
     /// Значения ≤ 0 игнорируются (защита от broken winit-backend-а).
     pub fn set_scale_factor(&mut self, scale_factor: f64) {
+        self.content_generation = self.content_generation.wrapping_add(1);
         if scale_factor > 0.0 {
             self.scale_factor = scale_factor;
         }
@@ -3759,7 +3791,10 @@ impl Renderer {
     /// the conversion to the current `target_color_space` happens lazily at the
     /// start of each `render()` call inside `flush_batch` (ph3-color-management Step 5).
     pub fn set_canvas_background(&mut self, color: Option<Color>) {
-        self.canvas_bg = color;
+        if self.canvas_bg != color {
+            self.content_generation = self.content_generation.wrapping_add(1);
+            self.canvas_bg = color;
+        }
     }
 
     fn wgpu_color_for_canvas_bg(color: &Color, target: ColorSpace) -> [f32; 4] {
@@ -4002,19 +4037,45 @@ impl Renderer {
         let phase_log = crate::frame_log_level() >= 2;
         let t_frame0 = std::time::Instant::now();
 
+        // Skip-identical-frame (p1-exp-wgpu-only): тотальный хэш кадра —
+        // display list + overlay + scroll + размер поверхности (Debug-представление
+        // каждой команды, см. hash_display_list) — складывается с поколением
+        // контента (register_image / GIF-кадры / снапшоты / шрифты / canvas-bg
+        // бампают content_generation). Совпадение с последним успешно
+        // отрисованным кадром гарантирует пиксельную идентичность: кадр не
+        // рисуется вовсе, на экране остаётся последний present. Только для
+        // оконного режима — headless обязан рисовать для readback.
+        // LUMEN_NO_FRAME_SKIP=1 отключает пропуск (диагностика).
+        let (sw0, sh0) = self.surface_dims();
+        let base_hash = crate::display_list::hash_display_list(
+            content, overlay, scroll_x, scroll_y, sw0, sh0,
+        );
+        let frame_hash = {
+            use std::hash::Hasher;
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            h.write_u64(base_hash);
+            h.write_u64(self.content_generation);
+            h.finish()
+        };
+        if self.surface.is_some()
+            && !frame_skip_disabled()
+            && self.last_frame_hash == Some(frame_hash)
+        {
+            if phase_log {
+                eprintln!("[frame:wgpu] skip (identical frame)");
+            }
+            return Ok(());
+        }
+
         // CSS Filter Effects L1 §2 — backdrop-filter result cache.
-        // Compute one content hash per frame, but only when the display list
-        // actually contains a backdrop-filter (pages without one pay nothing).
-        // Two consecutive frames hashing identically guarantees every backdrop
+        // Two consecutive frames hashing identically guarantee every backdrop
         // element's filtered output is identical, so the composite step can
         // reuse the cached texture and skip the expensive blur passes.
+        // Reuses the skip-frame base hash (identical inputs).
         let backdrop_frame_hash: Option<u64> = if self.backdrop_cache.is_enabled()
             && crate::display_list::contains_backdrop_filter(content, overlay)
         {
-            let (sw, sh) = self.surface_dims();
-            Some(crate::display_list::hash_display_list(
-                content, overlay, scroll_x, scroll_y, sw, sh,
-            ))
+            Some(base_hash)
         } else {
             None
         };
@@ -6877,6 +6938,8 @@ impl Renderer {
                 self.texture_pool.len(),
             );
         }
+        // Кадр успешно отрисован и показан — фиксируем хэш для skip-identical.
+        self.last_frame_hash = Some(frame_hash);
         // In headless mode, keep the rendered texture alive for render_to_image().
         self.pending_readback = headless_tex;
         Ok(())
