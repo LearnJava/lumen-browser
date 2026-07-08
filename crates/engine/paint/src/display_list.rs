@@ -4248,6 +4248,151 @@ fn emit_scrollbars(
     }
 }
 
+/// Геометрия scroll-слоя overflow-контейнера — зеркало вычислений
+/// `box_layer_ops`, которыми заполняются `PushScrollLayer` и `emit_scrollbars`
+/// на ordered-пути. Дрейф с `box_layer_ops` ловят equivalence-тесты
+/// `patch_scroll_layer_*` (патч против полной пересборки).
+struct ScrollLayerGeometry {
+    /// Значение `PushScrollLayer.clip_rect` (может содержать BIG-сентинели).
+    clip_rect: Rect,
+    /// Padding-box `(px, py, pw, ph)` — вход `emit_scrollbars`.
+    padding_box: (f32, f32, f32, f32),
+    /// `overflow-x` ∈ {scroll, auto}.
+    is_scroll_x: bool,
+    /// `overflow-y` ∈ {scroll, auto}.
+    is_scroll_y: bool,
+}
+
+/// `None`, если бокс не открывает scroll-слой (не скроллится, `contain: paint`,
+/// анонимный бокс).
+fn scroll_layer_geometry(b: &LayoutBox) -> Option<ScrollLayerGeometry> {
+    if !box_can_own_stacking_context(b) {
+        return None;
+    }
+    let s = &b.style;
+    let paint_contain = s.contain.0 & ContainFlags::PAINT.0 != 0;
+    let clip_x = overflow_clips(s.overflow_x) || paint_contain;
+    let clip_y = overflow_clips(s.overflow_y) || paint_contain;
+    if !(clip_x || clip_y) {
+        return None;
+    }
+    const BIG: f32 = 1_000_000.0;
+    let px = b.rect.x + s.border_left_width;
+    let py = b.rect.y + s.border_top_width;
+    let pw = (b.rect.width - s.border_left_width - s.border_right_width).max(0.0);
+    let ph = (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0);
+    let cr = Rect::new(
+        if clip_x { px } else { -BIG },
+        if clip_y { py } else { -BIG },
+        if clip_x { pw } else { 2.0 * BIG },
+        if clip_y { ph } else { 2.0 * BIG },
+    );
+    let is_scroll_x = matches!(s.overflow_x, Overflow::Scroll | Overflow::Auto);
+    let is_scroll_y = matches!(s.overflow_y, Overflow::Scroll | Overflow::Auto);
+    if (is_scroll_x || is_scroll_y) && !paint_contain {
+        Some(ScrollLayerGeometry {
+            clip_rect: cr,
+            padding_box: (px, py, pw, ph),
+            is_scroll_x,
+            is_scroll_y,
+        })
+    } else {
+        None
+    }
+}
+
+/// In-place патч скролл-позиции overflow-контейнера в готовом display list —
+/// быстрый путь скролла без полной пересборки (`build_display_list_ordered`).
+///
+/// Полная пересборка после `lumen_layout::set_scroll_position` отличается от
+/// старого списка ровно двумя вещами (layout детей не меняется — мутируются
+/// только `scroll_x`/`scroll_y` контейнера): значениями скролла в
+/// `PushScrollLayer` контейнера (включая BUG-159-переустановленные копии
+/// вокруг дочерних stacking context'ов — у них тот же `clip_rect`) и
+/// thumb-прямоугольниками его `DrawScrollbar`. Патч выполняет обе правки теми
+/// же хелперами, что и построитель (`scroll_layer_geometry` /
+/// `emit_scrollbars`), поэтому результат побайтно совпадает с пересборкой.
+///
+/// Возвращает `false`, если ожидания не сошлись (контейнер не найден,
+/// найденные слои несут разные старые значения скролла, набор скроллбаров не
+/// совпал по числу) — вызывающий обязан выполнить полную пересборку.
+pub fn patch_scroll_layer(dl: &mut DisplayList, b: &LayoutBox) -> bool {
+    let Some(g) = scroll_layer_geometry(b) else {
+        return false;
+    };
+    let cr = g.clip_rect;
+    let same_rect = |r: &Rect| {
+        r.x.to_bits() == cr.x.to_bits()
+            && r.y.to_bits() == cr.y.to_bits()
+            && r.width.to_bits() == cr.width.to_bits()
+            && r.height.to_bits() == cr.height.to_bits()
+    };
+    // Все PushScrollLayer контейнера: оригинал + переустановленные (BUG-159).
+    // Они — клоны одной команды, поэтому старые значения скролла обязаны
+    // совпадать; расхождение значит, что clip_rect делят разные контейнеры.
+    let mut push_idxs: Vec<usize> = Vec::new();
+    let mut old_scroll: Option<(u32, u32)> = None;
+    for (i, cmd) in dl.iter().enumerate() {
+        if let DisplayCommand::PushScrollLayer { clip_rect, scroll_x, scroll_y } = cmd
+            && same_rect(clip_rect)
+        {
+            let sxy = (scroll_x.to_bits(), scroll_y.to_bits());
+            match old_scroll {
+                None => old_scroll = Some(sxy),
+                Some(prev) if prev == sxy => {}
+                Some(_) => return false,
+            }
+            push_idxs.push(i);
+        }
+    }
+    let Some(&first_push) = push_idxs.first() else {
+        return false;
+    };
+    // Балансирующий PopScrollLayer оригинального (первого) слоя.
+    let mut depth = 0usize;
+    let mut pop_idx = None;
+    for (i, cmd) in dl.iter().enumerate().skip(first_push) {
+        match cmd {
+            DisplayCommand::PushScrollLayer { .. } => depth += 1,
+            DisplayCommand::PopScrollLayer => {
+                depth -= 1;
+                if depth == 0 {
+                    pop_idx = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(pop_idx) = pop_idx else {
+        return false;
+    };
+    // Скроллбары контейнера лежат подряд сразу после PopScrollLayer
+    // (`box_layer_ops` кладёт их в overflow_post). Состав баров не зависит от
+    // скролла (только от геометрии контента), поэтому пересобранный тем же
+    // хелпером набор обязан совпасть по числу команд.
+    let mut fresh: DisplayList = Vec::new();
+    emit_scrollbars(b, g.padding_box, g.is_scroll_x, g.is_scroll_y, &mut fresh);
+    let bars_start = pop_idx + 1;
+    let mut bars_end = bars_start;
+    while bars_end < dl.len() && matches!(dl[bars_end], DisplayCommand::DrawScrollbar { .. }) {
+        bars_end += 1;
+    }
+    if bars_end - bars_start != fresh.len() {
+        return false;
+    }
+    for (slot, new_cmd) in dl[bars_start..bars_end].iter_mut().zip(fresh) {
+        *slot = new_cmd;
+    }
+    for &i in &push_idxs {
+        if let DisplayCommand::PushScrollLayer { scroll_x, scroll_y, .. } = &mut dl[i] {
+            *scroll_x = b.scroll_x;
+            *scroll_y = b.scroll_y;
+        }
+    }
+    true
+}
+
 fn emit_outline(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     let s = &b.style;
     if !s.outline_style.is_visible() || s.outline_width <= 0.0 {
@@ -10069,6 +10214,132 @@ mod tests {
         let stacking_tree = lumen_layout::StackingTree::build(&tree);
         let order = lumen_layout::PaintOrder::from_tree(&stacking_tree);
         build_display_list_ordered(&tree, &stacking_tree, &order)
+    }
+
+    // ── patch_scroll_layer: эквивалентность полной пересборке ─────────────
+
+    fn layout_for(html: &str, css: &str) -> lumen_layout::LayoutBox {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        lumen_layout::layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8)
+    }
+
+    fn ordered_of(tree: &lumen_layout::LayoutBox) -> DisplayList {
+        let stacking_tree = lumen_layout::StackingTree::build(tree);
+        let order = lumen_layout::PaintOrder::from_tree(&stacking_tree);
+        build_display_list_ordered(tree, &stacking_tree, &order)
+    }
+
+    fn assert_dl_eq(a: &[DisplayCommand], b: &[DisplayCommand]) {
+        assert_eq!(a.len(), b.len(), "длины display list различаются");
+        for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
+            assert_eq!(format!("{x:?}"), format!("{y:?}"), "команда #{i} различается");
+        }
+    }
+
+    /// Скроллит единственный overflow-контейнер страницы в (x, y) и сверяет
+    /// патч старого DL с полной пересборкой.
+    fn check_patch_equals_rebuild(html: &str, css: &str, x: f32, y: f32) {
+        let mut tree = layout_for(html, css);
+        let containers = lumen_layout::collect_scroll_containers(&tree);
+        assert_eq!(containers.len(), 1, "тест ожидает ровно один scroll-контейнер");
+        let node = containers[0].node;
+        let mut dl = ordered_of(&tree);
+        assert!(
+            lumen_layout::set_scroll_position(&mut tree, node, x, y),
+            "set_scroll_position должен найти контейнер"
+        );
+        let truth = ordered_of(&tree);
+        let b = lumen_layout::find_box_by_node(&tree, node).expect("бокс контейнера");
+        assert!(patch_scroll_layer(&mut dl, b), "патч должен пройти");
+        assert_dl_eq(&dl, &truth);
+    }
+
+    #[test]
+    fn patch_scroll_layer_equals_rebuild_vertical() {
+        check_patch_equals_rebuild(
+            "<div class='s'><div class='tall'>x</div></div>",
+            "body { margin: 0; }              .s { overflow-y: auto; overflow-x: hidden; width: 100px; height: 80px; }              .tall { height: 400px; }",
+            0.0,
+            40.0,
+        );
+    }
+
+    #[test]
+    fn patch_scroll_layer_equals_rebuild_both_axes_with_border() {
+        check_patch_equals_rebuild(
+            "<div class='s'><div class='big'>x</div></div>",
+            "body { margin: 0; }              .s { overflow: scroll; width: 120px; height: 90px;                   border: 3px solid #0f3460; }              .big { width: 500px; height: 400px; }",
+            35.0,
+            60.0,
+        );
+    }
+
+    #[test]
+    fn patch_scroll_layer_equals_rebuild_zindexed_child_reestablished() {
+        // BUG-159: z-indexed ребёнок плоского overflow:auto контейнера получает
+        // переустановленный PushScrollLayer в отдельном painting-слоте — патч
+        // обязан обновить обе копии.
+        check_patch_equals_rebuild(
+            "<div class='s'><div class='inner'></div></div>",
+            "body { margin: 0; }              .s { width: 100px; height: 100px; overflow: auto; }              .inner { position: relative; z-index: 1; width: 50px; height: 200px;                       background: #0000ff; }",
+            0.0,
+            30.0,
+        );
+    }
+
+    #[test]
+    fn patch_scroll_layer_scrollbar_none_no_bars() {
+        check_patch_equals_rebuild(
+            "<div class='s'><div class='tall'>x</div></div>",
+            "body { margin: 0; }              .s { overflow-y: auto; overflow-x: hidden; width: 100px; height: 80px;                   scrollbar-width: none; }              .tall { height: 300px; }",
+            0.0,
+            25.0,
+        );
+    }
+
+    /// Микробенч (не гейт): выигрыш патча против полной пересборки.
+    /// `cargo test -p lumen-paint --release patch_scroll_layer_bench -- --ignored --nocapture`
+    #[test]
+    #[ignore = "бенч, запускается вручную"]
+    fn patch_scroll_layer_bench() {
+        let rows: String = (0..400)
+            .map(|i| format!("<div class='r c{}'>row</div>", i % 7))
+            .collect();
+        let html = format!("<div class='s'>{rows}</div>");
+        let css = "body { margin: 0; }              .s { overflow-y: auto; overflow-x: hidden; width: 300px; height: 200px; }              .r { height: 24px; border: 1px solid #333; }              .c0 { background: #123; } .c1 { background: #234; } .c2 { background: #345; }              .c3 { background: #456; } .c4 { background: #567; } .c5 { background: #678; }              .c6 { background: #789; }";
+        let mut tree = layout_for(&html, css);
+        let node = lumen_layout::collect_scroll_containers(&tree)[0].node;
+        let dl0 = ordered_of(&tree);
+        let n = 200;
+        let t0 = std::time::Instant::now();
+        for i in 0..n {
+            lumen_layout::set_scroll_position(&mut tree, node, 0.0, i as f32);
+            let _ = ordered_of(&tree);
+        }
+        let rebuild = t0.elapsed();
+        let t1 = std::time::Instant::now();
+        for i in 0..n {
+            lumen_layout::set_scroll_position(&mut tree, node, 0.0, i as f32);
+            let mut dl = dl0.clone();
+            let b = lumen_layout::find_box_by_node(&tree, node).unwrap();
+            assert!(patch_scroll_layer(&mut dl, b));
+        }
+        let patch = t1.elapsed();
+        println!(
+            "DL {} команд: rebuild {:.3} мс/тик, patch(+clone) {:.3} мс/тик",
+            dl0.len(),
+            rebuild.as_secs_f64() * 1e3 / n as f64,
+            patch.as_secs_f64() * 1e3 / n as f64,
+        );
+    }
+
+    #[test]
+    fn patch_scroll_layer_rejects_non_scroll_box() {
+        let tree = layout_for("<div>x</div>", "div { width: 50px; height: 50px; }");
+        let mut dl = ordered_of(&tree);
+        // Корень дерева — не scroll-контейнер: патч обязан отказаться.
+        assert!(!patch_scroll_layer(&mut dl, &tree));
     }
 
     #[test]
