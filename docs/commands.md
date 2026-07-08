@@ -54,6 +54,17 @@ python scripts/scroll_perf.py graphic_tests/1000000-final.html --ticks 25
 
 **No verification reads after edits.** Don't ask to re-read a file after Edit/Write — the tool reports failure if something went wrong. Verify correctness with `cargo check`, not by re-reading.
 
+**One cargo run — one log file.** Never re-run a cargo command just to apply a different filter to its output — every re-run pays the full check/test again. Run once, redirect to the project `.tmp/` dir (gitignored), then grep the file as many times as needed:
+
+```bash
+mkdir -p .tmp
+cargo clippy -p lumen-layout --all-targets -- -D warnings > .tmp/clippy.log 2>&1
+tail -5 .tmp/clippy.log
+grep -E "^error" .tmp/clippy.log      # re-filter for free
+```
+
+**Gate discipline — when to run what.** During iteration: `cargo check -p <crate>` only. Right before the commit: one `cargo clippy -p <crate> --all-targets -- -D warnings` + targeted tests (`cargo test -p <crate> -- <module>`). Full gates — workspace clippy + `scripts/scoped-test.sh` — run exactly **once**, inside `/lumen-task-finish`; don't run them manually before or after it. Run gates **synchronously in the foreground** (Bash `timeout: 600000`), never as background tasks: background output files buffer through pipes, look empty for the whole run, and provoke minutes of polling plus a duplicate run of the same command.
+
 **Precise task descriptions upfront.** Before describing a bug or task, grep/read to find the exact location first. Include file:line so the next session doesn't re-search:
 
 ```

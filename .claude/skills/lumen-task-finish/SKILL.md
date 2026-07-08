@@ -22,19 +22,25 @@ $ARGUMENTS — имя ветки/задачи (например `font-fallback`)
 > перед его вызовом — это двойная оплата за те же крейты. В процессе работы
 > достаточно `cargo check`; полную проверку делает скилл один раз ниже.
 
+> **Оба гейта (шаги 1–2) гони СИНХРОННО** — обычный Bash-вызов с
+> `timeout: 600000`, НЕ `run_in_background`. Фоновые output-файлы буферизуются
+> через пайпы, выглядят пустыми и провоцируют минуты поллинга + повторный
+> прогон той же команды (двойная оплата). Вывод пиши в `.tmp/` и фильтруй
+> grep-ом по файлу — никогда не перезапускай cargo ради другого фильтра.
+
 ## Шаг 1 — Финальный clippy
 
 ```bash
 export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
-cargo clippy --workspace --all-targets -- -D warnings
+mkdir -p .tmp
+cargo clippy --workspace --all-targets -- -D warnings > .tmp/gate-clippy.log 2>&1
+tail -5 .tmp/gate-clippy.log            # детали ошибок: grep -E "^error" .tmp/gate-clippy.log
 ```
 
 > sccache + rust-lld уже включены глобально в `.cargo/config.toml` — отдельно
 > прокидывать не нужно. Профиль `dev` (по умолчанию) быстрее компилируется,
 > чем `dev-release`, для корректностного гейта — НЕ навешивай `--profile dev-release`
 > на clippy/test (он оправдан только в `graphic_tests/run.py`, где важен рантайм рендера).
-
-!`export PATH="/c/Users/konstantin/.cargo/bin:$PATH" && cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tail -5`
 
 Если есть warnings — исправь их **до** продолжения. Не делай `#[allow(...)]`
 без явной причины.
@@ -49,9 +55,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ```bash
 export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
-bash scripts/scoped-test.sh          # база = main; иная база: bash scripts/scoped-test.sh <ref>
+bash scripts/scoped-test.sh > .tmp/gate-test.log 2>&1   # база = main; иная: scoped-test.sh <ref>
+tail -20 .tmp/gate-test.log             # упавшие тесты: grep -B2 "FAILED\|panicked" .tmp/gate-test.log
 ```
 
+Тоже синхронно (timeout 600000), не в фоне — см. правило перед шагом 1.
 Скрипт сам берёт затронутые пакеты из `git diff` (коммиты ветки + рабочее дерево)
 и считает замыкание обратных зависимостей. Правки только в доках/конфигах → тестов нет.
 
