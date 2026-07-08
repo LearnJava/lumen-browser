@@ -115,7 +115,10 @@ impl TileGrid {
             let new_cmd = new_dl.get(i);
 
             let changed = match (old_cmd, new_cmd) {
-                (Some(o), Some(n)) => format!("{o:?}") != format!("{n:?}"),
+                (Some(o), Some(n)) => {
+                    crate::display_list::hash_one_command(o)
+                        != crate::display_list::hash_one_command(n)
+                }
                 (None, Some(_)) | (Some(_), None) => true,
                 (None, None) => false,
             };
