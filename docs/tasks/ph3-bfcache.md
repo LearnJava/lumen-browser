@@ -35,6 +35,12 @@ runtime. Eligibility filters (open WebSocket/EventSource, `Cache-Control:
 no-store`, unload handlers) are still `bfcache_eligible() == true` for all pages.
 `bfcache_restore_ms` benchmark (step 9) not yet added.
 
+**2026-07-08 — DoD split into two levels.** Level 1 (bfcache v1: eligibility
+filters + benchmark + hibernation degradation, ~3 sessions) closes the ROADMAP
+task `P3-bfcache`. Level 2 (JS heap survives the freeze) is re-homed under the
+V8 migration (`P3-v8`) since 10C.2 is blocked by rquickjs bindings. See
+"Definition of done" below.
+
 ---
 
 ## Goal
@@ -357,14 +363,44 @@ Lines marked **[PROPOSED]** do not exist yet; all others are real file:line refs
 
 ## Definition of done
 
-- [ ] `BfCacheEntry` carries `FrozenPage` (DOM bytes + JS heap + layout tree).
-- [ ] `navigate_to()` fires `pagehide(persisted=true)` before freezing eligible pages.
-- [ ] `navigate_back()` / `navigate_forward()` thaw `FrozenPage` without calling
+Split into two levels (2026-07-08). **Level 1 closes the ROADMAP task** (`P3-bfcache`
+→ done); Level 2 is re-homed under the V8 migration track because QuickJS heap
+serialization (10C.2) is blocked by rquickjs bindings — no number of P1 sessions
+unblocks it.
+
+### Level 1 — bfcache v1 (DOM freeze/thaw, no JS heap)
+
+Done on main (merged 2026-07-02):
+
+- [x] `BfCacheEntry` carries `FrozenPage` (DOM bytes; layout re-built on thaw,
+      JS heap deferred to Level 2).
+- [x] `navigate_to()` fires `pagehide(persisted=true)` before freezing eligible pages.
+- [x] `navigate_back()` / `navigate_forward()` thaw `FrozenPage` without calling
       `reload()`.
-- [ ] `pageshow(persisted=true)` fires after thaw; `pageshow(persisted=false)` fires on
+- [x] `pageshow(persisted=true)` fires after thaw; `pageshow(persisted=false)` fires on
       normal load.
-- [ ] HTML-snapshot fallback still works for ineligible pages (no regression).
-- [ ] WebSocket-open pages fall back to HTML snapshot.
-- [ ] `bfcache_restore_ms` benchmark added; P50 ≤ 50 ms on `samples/page.html`.
+- [x] HTML-snapshot fallback still works for ineligible pages (no regression).
+
+Remaining (~3 sessions, see Steps 7–10):
+
+- [ ] WebSocket-open pages fall back to HTML snapshot (step 7).
+- [ ] `beforeunload`/`unload` handler detection → ineligible (step 10).
+- [ ] `Cache-Control: no-store` + open EventSource → ineligible.
+- [ ] `bfcache_restore_ms` benchmark added; P50 ≤ 50 ms on `samples/page.html` (step 9).
+- [ ] T2→T3 degradation: `degrade_bfcache_entries(tab_id)` on tab hibernation (step 8).
 - [ ] `cargo clippy -p lumen-shell -p lumen-js -p lumen-storage --all-targets -D warnings` clean.
 - [ ] All existing back/forward shell tests pass.
+
+### Level 2 — live JS state survives the freeze (gated on 10C.2 / V8)
+
+Not part of the ROADMAP `P3-bfcache` task. Lands with the V8 migration
+(`P3-v8`, `docs/tasks/ph3-v8-migration.md` — ValueSerializer), or earlier if
+10C.2 (QuickJS heap serialization) is ever unblocked in rquickjs.
+
+- [ ] `FrozenPage.js_heap` is populated on freeze (currently `Vec::new()`,
+      `crates/shell/src/main.rs` freeze block in `navigate_to()`).
+- [ ] Thaw resumes the suspended heap instead of installing a fresh runtime —
+      listeners and globals survive back/forward (timers may be dropped per spec:
+      paused while cached).
+- [ ] Heap > 5 MB compressed → fall back to HTML snapshot (same cap as tab
+      hibernation, ADR-008).
