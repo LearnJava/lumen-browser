@@ -728,51 +728,111 @@ pub fn resize_area_avg(src: &Image, dst_w: u32, dst_h: u32) -> Image {
     let dw = dst_w as usize;
     let dh = dst_h as usize;
 
-    let scale_x = sw as f64 / dw as f64;
-    let scale_y = sh as f64 / dh as f64;
+    // Box-фильтр сепарабелен (вес пикселя = wx·wy), поэтому фильтруем в два
+    // прохода — горизонталь, затем вертикаль — с весами, предвычисленными
+    // один раз на ось (они одинаковы для каждой строки/столбца). Это
+    // O(N·k) вместо O(N·k²) наивного 2D-прохода и без повторного счёта
+    // весов на каждый пиксель: даунскейл 1024²→1000² ~147 мс → единицы мс.
+    let x_spans = area_axis_spans(sw, dw);
+    let y_spans = area_axis_spans(sh, dh);
 
-    let mut out = vec![0u8; dw * dh * 4];
-
-    for dy in 0..dh {
-        let sy0 = dy as f64 * scale_y;
-        let sy1 = sy0 + scale_y;
-        let iy0 = sy0 as usize;
-        let iy1 = (sy1.ceil() as usize).min(sh);
-
+    // Проход 1: горизонталь, (sw×sh) → (dw×sh), аккумулятор f32 без
+    // промежуточного округления. Строка предконвертируется в f32 один раз
+    // (u8→f32 векторизуется), madd-циклы — по слайсам без bounds-check-ов.
+    let mut tmp = vec![0.0f32; dw * sh * 4];
+    let mut rowf = vec![0.0f32; sw * 4];
+    for y in 0..sh {
+        for (f, b) in rowf.iter_mut().zip(&src_rgba[y * sw * 4..(y + 1) * sw * 4]) {
+            *f = f32::from(*b);
+        }
+        let out_row = &mut tmp[y * dw * 4..(y + 1) * dw * 4];
         for dx in 0..dw {
-            let sx0 = dx as f64 * scale_x;
-            let sx1 = sx0 + scale_x;
-            let ix0 = sx0 as usize;
-            let ix1 = (sx1.ceil() as usize).min(sw);
-
-            let mut acc = [0.0f64; 4];
-            let mut total_w = 0.0f64;
-
-            for py in iy0..iy1 {
-                let wy = (py as f64 + 1.0).min(sy1) - (py as f64).max(sy0);
-                if wy <= 0.0 { continue; }
-                for px in ix0..ix1 {
-                    let wx = (px as f64 + 1.0).min(sx1) - (px as f64).max(sx0);
-                    if wx <= 0.0 { continue; }
-                    let w = wx * wy;
-                    let base = (py * sw + px) * 4;
-                    for c in 0..4 {
-                        acc[c] += src_rgba[base + c] as f64 * w;
-                    }
-                    total_w += w;
-                }
+            let (start, len) = x_spans.spans[dx];
+            let ws = &x_spans.weights[x_spans.offsets[dx]..x_spans.offsets[dx] + len];
+            let mut acc = [0.0f32; 4];
+            for (k, &w) in ws.iter().enumerate() {
+                let p: &[f32] = &rowf[(start + k) * 4..(start + k) * 4 + 4];
+                acc[0] += p[0] * w;
+                acc[1] += p[1] * w;
+                acc[2] += p[2] * w;
+                acc[3] += p[3] * w;
             }
+            let inv = x_spans.inv_sums[dx];
+            out_row[dx * 4..dx * 4 + 4]
+                .copy_from_slice(&[acc[0] * inv, acc[1] * inv, acc[2] * inv, acc[3] * inv]);
+        }
+    }
 
-            let o = (dy * dw + dx) * 4;
-            if total_w > 0.0 {
-                for c in 0..4 {
-                    out[o + c] = (acc[c] / total_w).round().clamp(0.0, 255.0) as u8;
-                }
+    // Проход 2: вертикаль, (dw×sh) → (dw×dh). Внешний цикл — по тапам,
+    // внутренний — линейный zip по всей строке (автовекторизация); финальное
+    // квантование `+0.5` + saturating cast вместо `round()` (roundf = вызов
+    // libm на каждый из 4·dw·dh байтов — главный тормоз старой версии).
+    let mut out = vec![0u8; dw * dh * 4];
+    let mut acc_row = vec![0.0f32; dw * 4];
+    for dy in 0..dh {
+        let (start, len) = y_spans.spans[dy];
+        let ws = &y_spans.weights[y_spans.offsets[dy]..y_spans.offsets[dy] + len];
+        let inv = y_spans.inv_sums[dy];
+        acc_row.fill(0.0);
+        for (k, &w) in ws.iter().enumerate() {
+            let src_row = &tmp[(start + k) * dw * 4..(start + k + 1) * dw * 4];
+            for (a, s) in acc_row.iter_mut().zip(src_row) {
+                *a += s * w;
             }
+        }
+        let out_row = &mut out[dy * dw * 4..(dy + 1) * dw * 4];
+        for (o, a) in out_row.iter_mut().zip(&acc_row) {
+            // `as u8` — saturating cast (значения ≥ 0 по построению).
+            *o = (a * inv + 0.5) as u8;
         }
     }
 
     Image { width: dst_w, height: dst_h, format: PixelFormat::Rgba8, data: out, icc_profile: None }
+}
+
+/// Предвычисленные span-ы box-фильтра одной оси: для каждого выходного
+/// индекса — начало покрываемого интервала в источнике, длина и веса
+/// (доли перекрытия пикселей), плюс обратная сумма весов для нормировки.
+/// Веса не зависят от позиции по второй оси, поэтому считаются один раз.
+struct AreaAxisSpans {
+    /// `(начальный индекс источника, число весов)` на каждый выходной индекс.
+    spans: Vec<(usize, usize)>,
+    /// Смещение начала span-а в [`Self::weights`] на каждый выходной индекс.
+    offsets: Vec<usize>,
+    /// Флэт-массив весов; span-ы лежат подряд в порядке выходных индексов.
+    weights: Vec<f32>,
+    /// `1 / Σ весов` span-а (нормировка обрезанных у края интервалов).
+    inv_sums: Vec<f32>,
+}
+
+/// Строит [`AreaAxisSpans`] для масштабирования оси `src_len` → `dst_len`
+/// усреднением по площади: выходной индекс `d` покрывает интервал
+/// `[d·scale, (d+1)·scale)`, вес пикселя = длина перекрытия с ним.
+fn area_axis_spans(src_len: usize, dst_len: usize) -> AreaAxisSpans {
+    let scale = src_len as f64 / dst_len as f64;
+    let mut spans = Vec::with_capacity(dst_len);
+    let mut offsets = Vec::with_capacity(dst_len);
+    let mut weights = Vec::new();
+    let mut inv_sums = Vec::with_capacity(dst_len);
+    for d in 0..dst_len {
+        let s0 = d as f64 * scale;
+        let s1 = s0 + scale;
+        let i0 = s0 as usize;
+        let i1 = (s1.ceil() as usize).min(src_len);
+        offsets.push(weights.len());
+        let mut sum = 0.0f64;
+        for i in i0..i1 {
+            // Клампим к нулю (float-край у ceil-границы): нулевой вес
+            // безвреден для аккумулятора, зато span остаётся непрерывным
+            // и индексация `start + k` корректна.
+            let w = ((i as f64 + 1.0).min(s1) - (i as f64).max(s0)).max(0.0);
+            weights.push(w as f32);
+            sum += w;
+        }
+        spans.push((i0, i1 - i0));
+        inv_sums.push(if sum > 0.0 { (1.0 / sum) as f32 } else { 0.0 });
+    }
+    AreaAxisSpans { spans, offsets, weights, inv_sums }
 }
 
 /// Формат пикселя декодированного изображения. Все варианты — 8 бит на канал.
@@ -1037,6 +1097,23 @@ mod tests {
         let dst = resize_area_avg(&src, 0, 0);
         assert_eq!(dst.width, 1);
         assert_eq!(dst.height, 1);
+    }
+
+    /// Бенч горячего пути image pre-pass (p1-exp-wgpu-only):
+    /// `cargo test -p lumen-image --profile dev-release area_avg_bench -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn area_avg_bench() {
+        let src = solid_image(1024, 1024, 120, 130, 140, 255);
+        for (dw, dh) in [(1000u32, 1000u32), (480, 480), (100, 75)] {
+            let t0 = std::time::Instant::now();
+            let dst = resize_area_avg(&src, dw, dh);
+            eprintln!(
+                "resize_area_avg 1024x1024 -> {dw}x{dh}: {:.1}ms",
+                t0.elapsed().as_secs_f64() * 1000.0
+            );
+            assert_eq!(dst.width, dw);
+        }
     }
 
     // ── ICC gamut detection ───────────────────────────────────────────────
