@@ -97,6 +97,62 @@ impl<'a> Cmap<'a> {
             CmapSubtable::Format12(f12) => f12.glyph_index(codepoint),
         }
     }
+
+    /// Копирует выбранную subtable в owned-представление, не привязанное
+    /// временем жизни к байтам шрифта. Используется для кэшей «на весь срок
+    /// жизни face-а» (метрики face в рендере), где заново парсить шрифт
+    /// каждый кадр слишком дорого.
+    pub fn to_owned_cmap(&self) -> OwnedCmap {
+        match &self.subtable {
+            CmapSubtable::Format4(f4) => OwnedCmap {
+                // Копируем subtable целиком (от начала subtable до конца
+                // таблицы cmap): idRangeOffset-арифметика format 4 адресует
+                // glyphIdArray относительно начала subtable, поэтому нужен
+                // весь хвост — как и в borrow-варианте.
+                subtable: OwnedSubtable::Format4(f4.subtable_data.into()),
+            },
+            CmapSubtable::Format12(f12) => OwnedCmap {
+                subtable: OwnedSubtable::Format12 {
+                    num_groups: f12.num_groups,
+                    groups: f12.groups_data.into(),
+                },
+            },
+        }
+    }
+}
+
+/// Owned-копия cmap subtable — результат [`Cmap::to_owned_cmap`].
+///
+/// Не держит ссылок на байты шрифта, поэтому может жить в долгоживущих
+/// кэшах. `glyph_index` для format 4 заново строит view поверх собственных
+/// байт — это O(1) слайсинг заголовка без копирования, стоимость на фоне
+/// самого lookup-а пренебрежима.
+pub struct OwnedCmap {
+    subtable: OwnedSubtable,
+}
+
+enum OwnedSubtable {
+    /// Полные байты subtable format 4 (включая хвост с glyphIdArray).
+    Format4(Box<[u8]>),
+    /// Массив SequentialMapGroup format 12 (12 байт на группу).
+    Format12 { num_groups: u32, groups: Box<[u8]> },
+}
+
+impl OwnedCmap {
+    /// Возвращает glyph index для codepoint, либо `None` если не отображён.
+    /// Семантика идентична [`Cmap::glyph_index`].
+    pub fn glyph_index(&self, codepoint: u32) -> Option<u16> {
+        match &self.subtable {
+            OwnedSubtable::Format4(data) => {
+                Format4::parse(data).ok()?.glyph_index(codepoint)
+            }
+            OwnedSubtable::Format12 { num_groups, groups } => Format12 {
+                num_groups: *num_groups,
+                groups_data: groups,
+            }
+            .glyph_index(codepoint),
+        }
+    }
 }
 
 // ── Format 12 ────────────────────────────────────────────────────────────────
@@ -585,6 +641,51 @@ mod tests {
         let cmap = Cmap::parse(&full).unwrap();
         // Format 12 выбран — emoji доступно
         assert_eq!(cmap.glyph_index(0x1F600), Some(500));
+    }
+
+    // ── OwnedCmap ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn owned_cmap_format4_matches_borrowed() {
+        let data = build_cmap_format4(
+            &[
+                (0x0041, 0x0043, 0, 4),
+                (0x0410, 0x044F, 100 - 0x0410, 0),
+                (0xFFFF, 0xFFFF, 1, 0),
+            ],
+            &[200, 201, 202],
+        );
+        let cmap = Cmap::parse(&data).unwrap();
+        let owned = cmap.to_owned_cmap();
+        drop(data); // owned не должен зависеть от исходных байт
+        for cp in [0x0041, 0x0042, 0x0043, 0x0410, 0x044F, 0x0060, 0x1F600] {
+            let expected = Cmap::parse(&build_cmap_format4(
+                &[
+                    (0x0041, 0x0043, 0, 4),
+                    (0x0410, 0x044F, 100 - 0x0410, 0),
+                    (0xFFFF, 0xFFFF, 1, 0),
+                ],
+                &[200, 201, 202],
+            ))
+            .unwrap()
+            .glyph_index(cp);
+            assert_eq!(owned.glyph_index(cp), expected, "cp {cp:#x}");
+        }
+    }
+
+    #[test]
+    fn owned_cmap_format12_matches_borrowed() {
+        let groups = [
+            (0x0041, 0x005A, 1),
+            (0x0410, 0x044F, 100),
+            (0x1F600, 0x1F64F, 500),
+        ];
+        let data = build_cmap_format12(&groups);
+        let cmap = Cmap::parse(&data).unwrap();
+        let owned = cmap.to_owned_cmap();
+        for cp in [0x0041u32, 0x005A, 0x0060, 0x0410, 0x1F600, 0x1F64F, 0x1F650] {
+            assert_eq!(owned.glyph_index(cp), cmap.glyph_index(cp), "cp {cp:#x}");
+        }
     }
 
     #[test]
