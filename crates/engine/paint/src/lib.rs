@@ -104,7 +104,10 @@ pub use fingerprint::GpuFingerprint;
 pub use hit_test::{hit_test, HitTestResult};
 pub use layer_cache::{LayerCache, LayerKey};
 #[cfg(feature = "backend-wgpu")]
-pub use renderer::{ImageRegisterError, Renderer, SnapshotUploadError};
+pub use renderer::{
+    load_counter, ImageRegisterError, Renderer, SnapshotUploadError, FRAMES_RENDERED,
+    FRAMES_SKIPPED,
+};
 pub use scroll_snap::{find_scroll_snap_y, find_scroll_snap_y_proximity};
 pub use webgl::SoftwareWebGl;
 

@@ -29,6 +29,7 @@ mod address_bar;
 mod animation_scheduler;
 mod click_log;
 mod backend_factory;
+mod bench_frames;
 use lumen_bidi_server::spawn as bidi_spawn;
 mod config;
 mod deterministic;
@@ -8244,6 +8245,32 @@ impl ApplicationHandler<LoadEvent> for Lumen {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Warm-frame bench (LUMEN_BENCH=hover:N | scroll:N). Drives redraws
+        // itself instead of waiting for a human, then exits. Placed first so a
+        // benched process never falls through into the idle paths below.
+        //
+        // Gated on `window.is_some()`: before `resumed()` there is nothing to
+        // redraw, and the first frame must come from the normal load path.
+        if let Some(cfg) = bench_frames::cfg()
+            && self.window.is_some()
+        {
+            if bench_frames::done() {
+                bench_frames::report();
+                event_loop.exit();
+                return;
+            }
+            bench_frames::log_geometry_once(
+                self.content_height,
+                self.viewport_height_css(),
+                self.max_scroll(),
+                self.display_list.len(),
+            );
+            if cfg.mode == bench_frames::BenchMode::Scroll {
+                self.scroll_y = bench_frames::next_scroll(self.scroll_y, self.max_scroll());
+            }
+            self.request_redraw();
+        }
+
         // TEMP BUG-272 diagnostics: dump known-store sizes every ~10 s.
         if std::env::var("LUMEN_MEM_REPORT").is_ok() {
             let now_s = self.epoch.elapsed().as_secs_f64();
@@ -11065,6 +11092,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 let frame_log_t0 =
                     lumen_paint::frame_log_enabled().then(std::time::Instant::now);
 
+                // Warm-frame bench (LUMEN_BENCH): таймер всего RedrawRequested,
+                // включая skip-путь — на нём как раз и меряется цена решения
+                // «не рисовать» (см. crates/shell/src/bench_frames.rs).
+                let bench_t0 = bench_frames::active().then(std::time::Instant::now);
+
                 // Step 1: scroll update.
                 if self.advance_scroll_anim() {
                     self.request_redraw();
@@ -12089,6 +12121,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         self.scroll_y,
                         self.display_list.len(),
                     );
+                }
+                if let Some(t0) = bench_t0 {
+                    bench_frames::record_frame(t0.elapsed().as_secs_f64() * 1e3);
                 }
             }
             _ => {}

@@ -1708,6 +1708,40 @@ fn count_texture_created() {
     TEXTURES_CREATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// BUG-274 diagnostics: wall time spent inside `create_texture` +
+/// `create_view` + `create_bind_group` for offscreen layers, in nanoseconds.
+///
+/// Separates *allocating* a render target from *using* it: if the cold-frame
+/// `encode` cost lived in allocation, this counter would carry it. It does not
+/// — which is the whole point of measuring before optimizing.
+pub static TEXTURE_CREATE_NANOS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// BUG-274 diagnostics: offscreen-layer texture pool hits.
+pub static TEXTURE_POOL_HITS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// BUG-274 diagnostics: offscreen-layer texture pool misses (→ fresh allocation).
+pub static TEXTURE_POOL_MISSES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Frames that reached the GPU (`render` ran to completion and presented).
+pub static FRAMES_RENDERED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Frames dropped by skip-identical-frame (hash matched the last presented frame).
+///
+/// A benchmark that claims to measure repaints must prove it caused repaints.
+/// Without this counter a harness that silently perturbs nothing reports the
+/// skip path's timing and looks like a spectacular optimization.
+pub static FRAMES_SKIPPED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Reads a diagnostics counter.
+pub fn load_counter(c: &std::sync::atomic::AtomicU64) -> u64 {
+    c.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// `true`, если пропуск идентичных кадров отключён (`LUMEN_NO_FRAME_SKIP=1`).
 fn frame_skip_disabled() -> bool {
     use std::sync::OnceLock;
@@ -4250,8 +4284,11 @@ impl Renderer {
     }
 
     fn create_layer_texture(&mut self, width: u32, height: u32) -> OffscreenLayer {
+        use std::sync::atomic::Ordering::Relaxed;
+
         // Try to acquire a texture from the pool before creating a new one (Phase 2).
         if let Some(pooled) = self.texture_pool.acquire(width, height) {
+            TEXTURE_POOL_HITS.fetch_add(1, Relaxed);
             return OffscreenLayer {
                 texture: pooled.texture,
                 view: pooled.view,
@@ -4262,7 +4299,9 @@ impl Renderer {
         }
 
         // Pool miss: allocate a new texture.
+        TEXTURE_POOL_MISSES.fetch_add(1, Relaxed);
         count_texture_created();
+        let t_alloc0 = std::time::Instant::now();
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("opacity-layer"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -4291,6 +4330,10 @@ impl Renderer {
                 },
             ],
         });
+        TEXTURE_CREATE_NANOS.fetch_add(
+            u64::try_from(t_alloc0.elapsed().as_nanos()).unwrap_or(u64::MAX),
+            Relaxed,
+        );
         self.texture_pool.update_size(1); // Track new allocation.
         OffscreenLayer { texture, view, bind_group, width, height }
     }
@@ -4434,6 +4477,14 @@ impl Renderer {
         let phase_log = crate::frame_log_level() >= 2;
         let t_frame0 = std::time::Instant::now();
 
+        // BUG-274: снимки диагностических счётчиков на входе в кадр — печатаем
+        // дельту за кадр, а не процессный итог (кумулятивные числа не отвечают
+        // на вопрос «сколько текстур родилось именно в этом кадре»).
+        let tex_created_at_entry = load_counter(&TEXTURES_CREATED);
+        let tex_nanos_at_entry = load_counter(&TEXTURE_CREATE_NANOS);
+        let pool_hits_at_entry = load_counter(&TEXTURE_POOL_HITS);
+        let pool_misses_at_entry = load_counter(&TEXTURE_POOL_MISSES);
+
         // Skip-identical-frame (p1-exp-wgpu-only): тотальный хэш кадра —
         // display list + overlay + scroll + размер поверхности (Debug-представление
         // каждой команды, см. hash_display_list) — складывается с поколением
@@ -4458,6 +4509,7 @@ impl Renderer {
             && !frame_skip_disabled()
             && self.last_frame_hash == Some(frame_hash)
         {
+            FRAMES_SKIPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if phase_log {
                 eprintln!("[frame:wgpu] skip (identical frame)");
             }
@@ -6437,8 +6489,24 @@ impl Renderer {
         // BUG-274: разбивка Draw-пасса — begin_render_pass / запись ops / drop(pass).
         let mut t_draw_sub: [std::time::Duration; 3] = Default::default();
 
+        // BUG-274 (LUMEN_FRAME_LOG=3): пер-элементный профиль encode.
+        // Средние по типу пасса скрывают форму распределения: «161 пасс по
+        // 0.62 мс» и «146 пассов по 0.02 мс + 15 по 6.5 мс» дают одну и ту же
+        // сумму, но требуют противоположных решений (схлопывать пассы против
+        // переиспользовать текстуры). Пишем каждый элемент, печатаем топ.
+        let item_log = crate::frame_log_level() >= 3;
+        // (plan_kind, target_level, длительность, drop(pass) для Draw)
+        let mut items_prof: Vec<(usize, usize, std::time::Duration, std::time::Duration)> =
+            if item_log { Vec::with_capacity(render_plan.len()) } else { Vec::new() };
+
         for item in &render_plan {
             let t_item0 = std::time::Instant::now();
+            // usize::MAX = «уровень неприменим к этому типу элемента».
+            let item_level = match item {
+                RenderPlanItem::Draw(batch) => batch.target_level,
+                _ => usize::MAX,
+            };
+            let mut item_pass_end = std::time::Duration::ZERO;
             let plan_kind = match item {
                 RenderPlanItem::Draw(_) => 0,
                 RenderPlanItem::Composite(_) => 1,
@@ -6502,9 +6570,11 @@ impl Renderer {
                     run_draw_ops!(pass, batch.ops_start, batch.ops_end);
                     let t_d2 = t_d0.elapsed();
                     drop(pass);
+                    let t_d3 = t_d0.elapsed();
                     t_draw_sub[0] += t_d1;
                     t_draw_sub[1] += t_d2 - t_d1;
-                    t_draw_sub[2] += t_d0.elapsed() - t_d2;
+                    t_draw_sub[2] += t_d3 - t_d2;
+                    item_pass_end = t_d3 - t_d2;
                 }
                 RenderPlanItem::Composite(comp) => {
                     if let Some(cvb) = &comp_vbuf {
@@ -7311,8 +7381,12 @@ impl Renderer {
                     }
                 }
             }
-            t_plan[plan_kind] += t_item0.elapsed();
+            let t_item = t_item0.elapsed();
+            t_plan[plan_kind] += t_item;
             n_plan[plan_kind] += 1;
+            if item_log {
+                items_prof.push((plan_kind, item_level, t_item, item_pass_end));
+            }
         }
 
         let t_after_encode = t_frame0.elapsed();
@@ -7348,8 +7422,69 @@ impl Renderer {
                 TEXTURES_CREATED.load(std::sync::atomic::Ordering::Relaxed),
                 self.texture_pool.len(),
             );
+
+            // LUMEN_FRAME_LOG=3 — распределение, а не среднее.
+            if item_log {
+                let d_created = load_counter(&TEXTURES_CREATED) - tex_created_at_entry;
+                let d_nanos = load_counter(&TEXTURE_CREATE_NANOS) - tex_nanos_at_entry;
+                let d_hits = load_counter(&TEXTURE_POOL_HITS) - pool_hits_at_entry;
+                let d_misses = load_counter(&TEXTURE_POOL_MISSES) - pool_misses_at_entry;
+                eprintln!(
+                    "[frame:wgpu]   alloc: this frame created {d_created} tex in {:.2}ms | \
+                     pool hit {d_hits} miss {d_misses}",
+                    d_nanos as f64 / 1e6,
+                );
+
+                const KIND: [&str; 6] =
+                    ["draw", "comp", "mask", "filt", "bdrop", "mlayer"];
+
+                // Гистограмма по длительности: «дорог каждый пасс» против
+                // «дороги единицы пассов» различаются здесь и только здесь.
+                let mut buckets = [0u32; 5]; // <0.05, <0.2, <1, <5, >=5 ms
+                for (_, _, dur, _) in &items_prof {
+                    let m = ms(*dur);
+                    let b = if m < 0.05 {
+                        0
+                    } else if m < 0.2 {
+                        1
+                    } else if m < 1.0 {
+                        2
+                    } else if m < 5.0 {
+                        3
+                    } else {
+                        4
+                    };
+                    buckets[b] += 1;
+                }
+                eprintln!(
+                    "[frame:wgpu]   items {} | hist <0.05ms {} <0.2ms {} <1ms {} <5ms {} >=5ms {}",
+                    items_prof.len(),
+                    buckets[0], buckets[1], buckets[2], buckets[3], buckets[4],
+                );
+
+                let mut top = items_prof.clone();
+                top.sort_unstable_by_key(|i| std::cmp::Reverse(i.2));
+                let shown = top.len().min(12);
+                let top_sum: f64 = top[..shown].iter().map(|i| ms(i.2)).sum();
+                let all_sum: f64 = top.iter().map(|i| ms(i.2)).sum();
+                eprintln!(
+                    "[frame:wgpu]   top {shown} items = {top_sum:.1}ms of {all_sum:.1}ms encode"
+                );
+                for (kind, level, dur, pass_end) in &top[..shown] {
+                    let lvl = if *level == usize::MAX {
+                        "-".to_string()
+                    } else {
+                        level.to_string()
+                    };
+                    eprintln!(
+                        "[frame:wgpu]     {:<6} lvl {:<3} {:7.2}ms  (drop(pass) {:6.2}ms)",
+                        KIND[*kind], lvl, ms(*dur), ms(*pass_end),
+                    );
+                }
+            }
         }
         // Кадр успешно отрисован и показан — фиксируем хэш для skip-identical.
+        FRAMES_RENDERED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.last_frame_hash = Some(frame_hash);
         // In headless mode, keep the rendered texture alive for render_to_image().
         self.pending_readback = headless_tex;
