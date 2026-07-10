@@ -1286,6 +1286,12 @@ struct PageBandCache {
     w_px: u32,
     /// Высота текстуры полосы в device px (surface + 2×запас).
     h_px: u32,
+    /// Depth-текстура Band-рендера (обязана совпадать размером с полосой).
+    /// Кэшируется вместе с полосой: раньше создавалась заново на каждый
+    /// miss (7+ МБ Depth32 на band-размере — чистый churn VRAM).
+    depth_t: wgpu::Texture,
+    /// View depth-текстуры полосы.
+    depth_v: wgpu::TextureView,
 }
 
 /// Одноразовая инъекция blit-квада полосы в начало draw-плана level 0
@@ -4608,7 +4614,12 @@ impl Renderer {
         }
         for i in 0..count {
             if self.layer_textures[i].width != width || self.layer_textures[i].height != height {
-                self.layer_textures[i] = self.create_layer_texture(width, height);
+                // Band↔window флап размеров на каждом miss полосы: вытесняемую
+                // текстуру вернуть в пул, а не дропать — следующий кадр другого
+                // режима возьмёт её обратно (классов размера всего два).
+                let t = self.create_layer_texture(width, height);
+                let old = std::mem::replace(&mut self.layer_textures[i], t);
+                self.release_layer_to_pool(old);
             }
         }
     }
@@ -4774,6 +4785,7 @@ impl Renderer {
                     view_formats: &[],
                 });
                 let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                let (depth_t, depth_v) = create_depth_texture(&self.device, sw, band_h_px);
                 self.page_band = Some(PageBandCache {
                     _texture: texture,
                     view,
@@ -4781,6 +4793,8 @@ impl Renderer {
                     band_top_css,
                     w_px: sw,
                     h_px: band_h_px,
+                    depth_t,
+                    depth_v,
                 });
             }
             let Some(view) = self.page_band.as_ref().map(|b| b.view.clone()) else {
@@ -4802,8 +4816,12 @@ impl Renderer {
             };
             // Depth-attachment обязан совпадать по размеру с целью пасса —
             // на время Band-рендера подменяем оконную depth-текстуру
-            // полосной (и возвращаем обратно, включая случай ошибки).
-            let (band_depth_t, band_depth_v) = create_depth_texture(&self.device, sw, band_h_px);
+            // полосной из кэша (и возвращаем обратно, включая случай ошибки).
+            let (band_depth_t, band_depth_v) = self
+                .page_band
+                .as_ref()
+                .map(|b| (b.depth_t.clone(), b.depth_v.clone()))
+                .unwrap_or_else(|| create_depth_texture(&self.device, sw, band_h_px));
             let saved_depth_t = self.depth_texture.replace(band_depth_t);
             let saved_depth_v = self.depth_view.replace(band_depth_v);
             let band_result = self.render_impl(
