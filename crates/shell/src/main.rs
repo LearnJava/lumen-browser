@@ -724,6 +724,7 @@ fn run_window_mode(
         epoch: std::time::Instant::now(),
         last_raf_batch_ms: -RAF_MIN_INTERVAL_MS,
         last_mem_report_s: 0.0,
+        frame_stats: lumen_paint::FrameStats::new(),
         find: find::FindState::default(),
         address_bar: address_bar::AddressBarState::default(),
         hint: hints::HintState::default(),
@@ -5794,6 +5795,10 @@ struct Lumen {
     last_raf_batch_ms: f64,
     /// TEMP BUG-272 diagnostics: epoch seconds of the last memory report.
     last_mem_report_s: f64,
+    /// Сессионный аккумулятор времён кадров (`LUMEN_FRAME_LOG`, M0.1 ADR-016).
+    /// Наполняется только при включённом frame-log; сводка p50/p95/p99
+    /// печатается по кадансу `LUMEN_MEM_REPORT` и один раз на выходе.
+    frame_stats: lumen_paint::FrameStats,
     /// Состояние Ctrl+F. Открыт ли bar, текущий query и индекс активного
     /// совпадения. Содержимое поиска не сохраняется между reload-ами
     /// (close() полностью очищает state); это сознательно: после reload
@@ -8229,6 +8234,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         }
     }
 
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        // M0.1 (ADR-016): финальная сессионная сводка времён кадров. Печатается
+        // только если frame-log что-то накопил (`LUMEN_FRAME_LOG>=1`).
+        if let Some(summary) = self.frame_stats.summary() {
+            eprintln!("{summary} (session exit)");
+        }
+    }
+
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // TEMP BUG-272 diagnostics: dump known-store sizes every ~10 s.
         if std::env::var("LUMEN_MEM_REPORT").is_ok() {
@@ -8256,6 +8269,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     js_heap.0 as f64 / 1e6, js_heap.1 as f64 / 1e6,
                     self.renderer.as_ref().map_or(String::new(), |r| r.debug_mem_report()),
                 );
+                // M0.1 (ADR-016): периодическая сводка времён кадров — базовые
+                // числа, на которые будут ссылаться последующие стадии MT-рендера.
+                if let Some(summary) = self.frame_stats.summary() {
+                    eprintln!("{summary}");
+                }
             }
         }
         // HTML §8.1.4.2 «Processing model»: между событиями event-loop-а
@@ -12069,9 +12087,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
 
                 if let Some(t0) = frame_log_t0 {
+                    let frame_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                    self.frame_stats.record(frame_ms as f32);
                     eprintln!(
-                        "[frame] total {:6.2}ms  (scroll_y {:.0}, dl {} cmds)",
-                        t0.elapsed().as_secs_f64() * 1000.0,
+                        "[frame] total {frame_ms:6.2}ms  (scroll_y {:.0}, dl {} cmds)",
                         self.scroll_y,
                         self.display_list.len(),
                     );
