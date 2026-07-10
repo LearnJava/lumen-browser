@@ -33,6 +33,7 @@ use lumen_bidi_server::spawn as bidi_spawn;
 mod config;
 mod deterministic;
 mod devtools;
+mod engine_thread;
 mod download;
 mod find;
 mod forms;
@@ -554,6 +555,27 @@ fn automation_ax_node(ax: &lumen_a11y::AXNode) -> lumen_driver::A11yNode {
 /// загрузки `get()` возвращает `None` и спелл-чек молчит.
 static SPELL_DICTS: std::sync::OnceLock<spellcheck::MultiDictionary> = std::sync::OnceLock::new();
 
+/// ADR-016 M2.1 (каркас): поднимает движковый поток, только если задан
+/// `LUMEN_ENGINE_THREAD=1` (по умолчанию `None` → поведение shell неизменно). В
+/// M2.1 через поток ещё ничего не маршрутизируется — он лишь паркуется на
+/// `recv()`; маршрутизация relayout — это M2.2. При сбое старта потока
+/// логируем и откатываемся на `None` (как обычно, без движкового потока).
+fn spawn_engine_thread_if_enabled() -> Option<engine_thread::EngineThread> {
+    if std::env::var("LUMEN_ENGINE_THREAD").as_deref() != Ok("1") {
+        return None;
+    }
+    match engine_thread::EngineThread::spawn() {
+        Ok(engine) => {
+            eprintln!("[engine-thread] запущен (LUMEN_ENGINE_THREAD=1, каркас M2.1)");
+            Some(engine)
+        }
+        Err(e) => {
+            eprintln!("[engine-thread] не удалось запустить: {e}; продолжаем без него");
+            None
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_window_mode(
     source: PageSource,
@@ -762,6 +784,7 @@ fn run_window_mode(
         pending_restore_scroll: None,
         pending_pageshow_persisted: false,
         load_generation: 0,
+        engine_thread: spawn_engine_thread_if_enabled(),
         ime_composing: None,
         bfcache: BfCache::new(16),
         frozen_styles: HashMap::new(),
@@ -5984,6 +6007,14 @@ struct Lumen {
     /// `user_event` drops events whose generation is stale (a superseded
     /// navigation), so a slow earlier load can't paint over a newer page.
     load_generation: u64,
+    /// ADR-016 M2.1 (каркас): долгоживущий движковый поток. `Some` только при
+    /// `LUMEN_ENGINE_THREAD=1`; иначе `None` и поведение shell неизменно. В M2.1
+    /// поток лишь паркуется на `recv()` — ни один relayout через него ещё не
+    /// маршрутизируется (это M2.2). Дроп при завершении шлёт `Shutdown` и джойнит.
+    // M2.1 каркас: по имени поле ещё не читается (его использует M2.2); Drop при
+    // завершении Lumen срабатывает независимо. Снять allow при выполнении M2.2.
+    #[allow(dead_code)]
+    engine_thread: Option<engine_thread::EngineThread>,
     /// Текущий IME preedit-текст. `Some` — composition-сессия активна,
     /// `None` — нет активного IME ввода.
     ime_composing: Option<String>,
