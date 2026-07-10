@@ -391,6 +391,23 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
       sites (DOM mutation → geometry read, hover/focus, form input, resize, theme,
       `content-visibility` expansion, rAF DOM-dirty) still need per-site
       async-vs-sync analysis and stay synchronous. No new deps, no `unsafe`.
+    - **M2.2b-3 — off-thread layout for async-safe side-panel toggles.** ✅
+      (branch `p1-mt-m2-2b-3-panels`, merged into `zcode`, 2026-07-11). Continues
+      the M2.2b-2 chrome-inset batch with the two remaining side panels whose
+      toggle shifts the content viewport width but is **not** followed by a
+      synchronous page-geometry read: the AI panel (`ToggleAiPanel` keybinding +
+      `Escape` close in `handle_ai_panel_key`) and the accessibility panel
+      (`ToggleA11y` close path, which also re-styles under the newly-applied
+      forced-colors preference). All three now call the existing
+      `Lumen::relayout_chrome()` helper, so with the flag off (default) they are
+      byte-identical to the previous synchronous `relayout()`; under
+      `LUMEN_ENGINE_THREAD=1` the page reflow lands a few frames later via
+      `poll_engine_commit` while the panel chrome draws from its own state on the
+      immediately-requested redraw. 3 sites converted (38 → 35 sync callers). The
+      remaining sync-geometry sites (DOM mutation → geometry read, hover/focus,
+      form input, resize, theme, `content-visibility` expansion, rAF DOM-dirty)
+      still need per-site async-vs-sync analysis and stay synchronous. No new
+      deps, no `unsafe`.
 - **M2.3 — synchronous readback + acceptance.** `--screenshot`, `run.py --ipc`,
   CDP `Page.captureScreenshot` become `Request::Readback { reply }` messages
   (audit all `screenshot_*` sites first — most are already CPU per the M1.1
