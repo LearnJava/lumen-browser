@@ -158,13 +158,42 @@ impl FrameStats {
     }
 }
 
-impl std::fmt::Display for FrameSummary {
+impl FrameSummary {
+    /// Оборачивает сводку в [`Display`] с произвольным префиксом-меткой вместо
+    /// жёсткого `FRAME_SUMMARY`.
+    ///
+    /// Разные подсистемы MT-рендера (ADR-016) печатают одну и ту же
+    /// перцентильную сводку под своей меткой: кадры — `FRAME_SUMMARY`
+    /// (см. [`Display`] ниже), время relayout на UI-потоке — `ENGINE_SUMMARY`
+    /// (M2.0). Формат и арифметика едины, различается только префикс.
+    pub fn display_with<'a>(&'a self, label: &'a str) -> LabeledSummary<'a> {
+        LabeledSummary { summary: self, label }
+    }
+}
+
+/// [`Display`]-обёртка над [`FrameSummary`] с произвольной меткой-префиксом
+/// (см. [`FrameSummary::display_with`]).
+pub struct LabeledSummary<'a> {
+    /// Сводка, чьи перцентили печатаются.
+    summary: &'a FrameSummary,
+    /// Префикс строки (напр. `FRAME_SUMMARY` / `ENGINE_SUMMARY`).
+    label: &'a str,
+}
+
+impl std::fmt::Display for LabeledSummary<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = self.summary;
         write!(
             f,
-            "FRAME_SUMMARY count={} min={:.2}ms p50={:.2}ms p95={:.2}ms p99={:.2}ms max={:.2}ms",
-            self.count, self.min_ms, self.p50_ms, self.p95_ms, self.p99_ms, self.max_ms
+            "{} count={} min={:.2}ms p50={:.2}ms p95={:.2}ms p99={:.2}ms max={:.2}ms",
+            self.label, s.count, s.min_ms, s.p50_ms, s.p95_ms, s.p99_ms, s.max_ms
         )
+    }
+}
+
+impl std::fmt::Display for FrameSummary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.display_with("FRAME_SUMMARY"), f)
     }
 }
 
@@ -218,6 +247,22 @@ mod frame_stats_tests {
         assert_eq!(sum.p95_ms, 95.0);
         assert_eq!(sum.p99_ms, 99.0);
         assert_eq!(sum.max_ms, 100.0);
+    }
+
+    #[test]
+    fn display_with_uses_custom_label_same_numbers() {
+        let mut s = FrameStats::new();
+        s.record(12.5);
+        let sum = s.summary().expect("one sample");
+        // Default Display keeps the FRAME_SUMMARY prefix.
+        assert!(format!("{sum}").starts_with("FRAME_SUMMARY count=1"));
+        // A custom label swaps only the prefix; the percentile tail is identical.
+        let engine = format!("{}", sum.display_with("ENGINE_SUMMARY"));
+        assert!(engine.starts_with("ENGINE_SUMMARY count=1"));
+        assert_eq!(
+            engine.trim_start_matches("ENGINE_SUMMARY"),
+            format!("{sum}").trim_start_matches("FRAME_SUMMARY"),
+        );
     }
 
     #[test]
