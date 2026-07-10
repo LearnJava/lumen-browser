@@ -889,6 +889,8 @@ fn run_window_mode(
         },
         fallbacks_preloaded: false,
         zoom_factor: zoom::ZOOM_DEFAULT,
+        laid_out_zoom_factor: zoom::ZOOM_DEFAULT,
+        pending_zoom_relayout: None,
         display_url: None,
         current_history_state_json: String::from("null"),
         fullscreen_nid: None,
@@ -5850,6 +5852,21 @@ struct Lumen {
     /// layout viewport: `effective = physical / (meta_scale * zoom_factor)`.
     /// Resets to 1.0 on tab switch (stored in `PageSnapshot` for background tabs).
     zoom_factor: f32,
+    /// Zoom factor the current display list was laid out at (ADR-016 M0.3).
+    ///
+    /// Transform-first zoom lets `zoom_factor` diverge from this between a
+    /// Ctrl+/-/0 press and the debounced relayout; the backend previews the gap
+    /// via `set_preview_scale(zoom_factor / laid_out_zoom_factor)`. Every
+    /// `relayout()` re-syncs it to `zoom_factor` (the display list then matches
+    /// the requested zoom, so no preview scale is needed).
+    laid_out_zoom_factor: f32,
+    /// Pending debounced relayout deadline for transform-first zoom (M0.3).
+    ///
+    /// Set on each Ctrl+/-/0 press to `now + ZOOM_RELAYOUT_DEBOUNCE_MS`; a fresh
+    /// press pushes it later so a burst reflows only once. `about_to_wait`
+    /// folds it into the `WaitUntil` deadline and runs `relayout()` when it
+    /// elapses. `None` when no zoom preview is in flight.
+    pending_zoom_relayout: Option<std::time::Instant>,
     /// Последняя известная позиция курсора в **physical** пикселях (от winit).
     /// `None` пока курсор не вошёл в окно. Конвертируется в CSS px через
     /// `scale_factor()` непосредственно в hit-test / drag callback-ах.
@@ -6693,6 +6710,25 @@ impl Lumen {
         }
     }
 
+    /// Transform-first zoom step (ADR-016 M0.3).
+    ///
+    /// Called after `zoom_factor` changed via Ctrl+/-/0. Instead of an immediate
+    /// (expensive) relayout, scale the retained display list by
+    /// `zoom_factor / laid_out_zoom_factor` on the backend for an instant
+    /// response, then arm a debounced relayout so a burst of key presses reflows
+    /// only once — `ZOOM_RELAYOUT_DEBOUNCE_MS` after the last press.
+    fn begin_zoom_preview(&mut self) {
+        let scale = zoom::preview_scale(self.zoom_factor, self.laid_out_zoom_factor);
+        if let Some(r) = self.renderer.as_mut() {
+            r.set_preview_scale(scale);
+        }
+        self.pending_zoom_relayout = Some(
+            std::time::Instant::now()
+                + std::time::Duration::from_millis(zoom::ZOOM_RELAYOUT_DEBOUNCE_MS),
+        );
+        self.request_redraw();
+    }
+
     /// Повторный layout+paint при изменении размера viewport.
     /// Использует сохранённый `LayoutSource`; парсинг не повторяется.
     fn relayout(&mut self) {
@@ -6794,6 +6830,16 @@ impl Lumen {
         // CSS: will-change — P4 wires ComputedStyle.will_change to promote_layer calls here.
         if let (Some(lb_ref), Some(r)) = (self.layout_box.as_ref(), self.renderer.as_mut()) {
             promote_will_change_layers(lb_ref, r.as_mut());
+        }
+        // ADR-016 M0.3: the fresh display list is now laid out at the current
+        // zoom, so any transform-first zoom preview is complete — clear the
+        // debounce and reset the backend to 1:1. Done for every relayout
+        // (resize, DOM mutation, tab switch), not just the debounced zoom one,
+        // so a relayout from another source also lands the pending zoom.
+        self.laid_out_zoom_factor = self.zoom_factor;
+        self.pending_zoom_relayout = None;
+        if let Some(r) = self.renderer.as_mut() {
+            r.set_preview_scale(1.0);
         }
         self.update_snap_containers();
         self.update_scroll_containers();
@@ -8377,6 +8423,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             let raf_wakeup = std::time::Instant::now()
                 + std::time::Duration::from_millis(due_in_ms as u64 + 1);
             next_wakeup = Some(next_wakeup.map_or(raf_wakeup, |t| t.min(raf_wakeup)));
+        }
+        // ADR-016 M0.3: run the debounced transform-first-zoom relayout when its
+        // deadline elapses; otherwise fold the deadline into the wakeup so the
+        // parked loop wakes exactly then. `relayout()` clears the pending state
+        // and resets the backend preview scale to 1:1.
+        if let Some(deadline) = self.pending_zoom_relayout {
+            if std::time::Instant::now() >= deadline {
+                self.relayout();
+            } else {
+                next_wakeup = Some(next_wakeup.map_or(deadline, |t| t.min(deadline)));
+            }
         }
         match next_wakeup {
             Some(wakeup) => event_loop.set_control_flow(ControlFlow::WaitUntil(wakeup)),
@@ -13460,15 +13517,15 @@ impl Lumen {
             }
             KeyCommand::ZoomIn => {
                 self.zoom_factor = zoom::zoom_in(self.zoom_factor);
-                self.relayout();
+                self.begin_zoom_preview();
             }
             KeyCommand::ZoomOut => {
                 self.zoom_factor = zoom::zoom_out(self.zoom_factor);
-                self.relayout();
+                self.begin_zoom_preview();
             }
             KeyCommand::ZoomReset => {
                 self.zoom_factor = zoom::zoom_reset();
-                self.relayout();
+                self.begin_zoom_preview();
             }
         }
     }

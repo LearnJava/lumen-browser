@@ -88,10 +88,20 @@ No threads yet; reduces the work every later stage will move/parallelize.
   femtovg `[frame]` log now reports `culled N/M leaf`. 4 unit tests on
   `cull_rect`. Expected: scroll frame cost on long pages drops by the off-screen
   share (audit pages: 90%+).
-- **M0.3 Transform-first zoom.** Ctrl+/- applies an immediate scale transform
-  to the retained display list (femtovg `canvas.scale`); full relayout is
-  debounced ~150–200 ms after the last zoom step. Pinch/anim zoom follows the
-  same path.
+- **M0.3 Transform-first zoom.** ✅ (branch `p1-mt-m0-3`). Ctrl+/-/0 now updates
+  `zoom_factor` and calls `App::begin_zoom_preview` instead of relayouting: the
+  backend scales the retained display list by
+  `zoom::preview_scale(zoom_factor, laid_out_zoom_factor)` via the new
+  `RenderBackend::set_preview_scale` (femtovg applies `canvas.scale` before the
+  scroll translate, so a doc point maps to `s·(p − scroll)` — scaled about the
+  viewport top-left; culling stays correct because `is_command_culled` maps AABBs
+  through the live CTM, which now includes `s`). A debounce
+  (`ZOOM_RELAYOUT_DEBOUNCE_MS` = 180 ms) armed on each press folds into the
+  `about_to_wait` `WaitUntil` deadline; when it elapses `relayout()` runs once,
+  re-syncing `laid_out_zoom_factor = zoom_factor` and resetting the preview to
+  1:1 — so a burst of key presses reflows only once. Pinch/anim zoom will follow
+  the same `set_preview_scale` path. Unit tests: `preview_scale` identity/ratio/
+  degenerate-guard in `zoom.rs`.
 - **M0.4 Kill the per-frame `prev_content` clone.** Keep `Arc<DisplayList>`
   (or double-buffer swap) for the dirty-rect diff.
 - **M0.5 Content hash excludes scroll.** Hash content and offset separately so

@@ -424,6 +424,12 @@ pub struct FemtovgBackend {
     /// ADR-016 M0.2 per-frame culling counters `(culled, total_leaf)` for the
     /// `LUMEN_FRAME_LOG` line. Reset at the start of every `render()`.
     cull_stats: (u32, u32),
+    /// ADR-016 M0.3 превью-масштаб зума. Отношение текущего `zoom_factor` к
+    /// тому, при котором свёрстан `content` (`new_zoom / laid_out_zoom`). `1.0`
+    /// — превью выключено. Применяется как `canvas.scale` вокруг верхнего-левого
+    /// угла вьюпорта до scroll-трансляции, чтобы Ctrl+/-/0 давал мгновенный
+    /// визуальный отклик до дебаунс-relayout. Задаётся `set_preview_scale`.
+    preview_scale: f32,
     /// Фон канвы (CSS Backgrounds §3.11.1): цвет, которым заливается весь кадр
     /// перед отрисовкой content. `None` → UA-дефолт (белый). Устанавливается
     /// shell-ом через `set_canvas_background` из фона корневого элемента.
@@ -1237,6 +1243,7 @@ impl FemtovgBackend {
             viewport_css_w: size.width as f32 / scale as f32,
             viewport_css_h: size.height as f32 / scale as f32,
             cull_stats: (0, 0),
+            preview_scale: 1.0,
             canvas_bg: None,
             filter_layer_stack: Vec::new(),
             filter_layer_pending_delete: Vec::new(),
@@ -3527,6 +3534,15 @@ impl RenderBackend for FemtovgBackend {
 
         // Контент — с учётом scroll.
         self.canvas.save();
+        // ADR-016 M0.3: превью-масштаб зума применяется ДО scroll-трансляции,
+        // поэтому точка документа p отображается в s·(p − scroll) — масштаб
+        // вокруг верхнего-левого угла вьюпорта. `s == 1.0` — превью выключено
+        // (identity, стоит почти ничего). Culling остаётся корректным: он
+        // мапит AABB через актуальный CTM (`self.canvas.transform()`), который
+        // уже включает этот scale.
+        if (self.preview_scale - 1.0).abs() > f32::EPSILON {
+            self.canvas.scale(self.preview_scale, self.preview_scale);
+        }
         self.canvas.translate(-scroll_x, -scroll_y);
         if crate::frame_log_level() >= 2 {
             // Уровень 2: разбивка времени по типам команд (top-8 за кадр).
@@ -3614,6 +3630,14 @@ impl RenderBackend for FemtovgBackend {
 
     fn set_canvas_background(&mut self, color: Option<Color>) {
         self.canvas_bg = color;
+    }
+
+    fn set_preview_scale(&mut self, scale: f32) {
+        // Защита от вырожденных значений: неположительный масштаб схлопнул бы
+        // кадр в ноль. `zoom_factor` всегда в [0.25, 4.0], а превью — их
+        // отношение, поэтому реально сюда приходит [~0.06, ~16], но клемпим на
+        // всякий случай.
+        self.preview_scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
     }
 
     fn resize(&mut self, width: u32, height: u32) {
