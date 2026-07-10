@@ -200,6 +200,11 @@ impl RenderBackend for CompareBackend {
         self.secondary.set_scale_factor(scale);
     }
 
+    fn set_preview_scale(&mut self, scale: f32) {
+        self.primary.set_preview_scale(scale);
+        self.secondary.set_preview_scale(scale);
+    }
+
     fn register_image(&mut self, src: String, image: &Image) -> Result<(), String> {
         // Регистрируем в обоих бэкендах; вторая ошибка побеждает.
         let r1 = self.primary.register_image(src.clone(), image);
