@@ -1380,6 +1380,118 @@ pub fn hash_display_list(
     hasher.finish()
 }
 
+/// Content-only frame hash (ADR-016 M0.5).
+///
+/// Unlike [`hash_display_list`], this folds **only** the page-content commands
+/// and the surface size into the hash — the scroll offset and the fixed page
+/// offset are deliberately excluded. Two frames that differ only in how far the
+/// page is scrolled therefore hash identically, which is exactly what lets the
+/// compositor tell "same content, new offset" (a blit — M3's fast path) apart
+/// from "content changed" (a full re-raster).
+///
+/// Overlay commands (scrollbar thumb, docked panels, find-bar) are intentionally
+/// **not** passed here: they are viewport-locked and cheap to repaint every
+/// frame, and the scrollbar thumb in particular is rebuilt from `scroll_y` each
+/// frame, so folding it in would make every scroll frame look like a content
+/// change and defeat the content/offset split.
+///
+/// Allocation-free: each command's `Debug` output is streamed straight into the
+/// hasher via [`HashFmt`], preserving `hash_display_list`'s totality guarantee
+/// (a new `DisplayCommand` variant or field can never silently collide).
+#[must_use]
+pub fn hash_content(content: &[DisplayCommand], surface_w: u32, surface_h: u32) -> u64 {
+    use std::fmt::Write as _;
+    use std::hash::Hasher;
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    hasher.write_u32(surface_w);
+    hasher.write_u32(surface_h);
+    hasher.write_usize(content.len());
+    {
+        let mut hf = HashFmt(&mut hasher);
+        for cmd in content {
+            // Errors are impossible: HashFmt::write_str never fails.
+            let _ = write!(hf, "{cmd:?}");
+        }
+    }
+    hasher.finish()
+}
+
+/// How a frame differs from the previously presented one (ADR-016 M0.5).
+///
+/// Produced by [`FrameFingerprint::delta_from`]. The variants map directly onto
+/// the render strategies the staged multithreaded pipeline will pick between:
+/// `Identical` → skip, `OffsetOnly` → blit (M3), `ContentChanged` → re-raster.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameDelta {
+    /// Page content, scroll and page offset are all unchanged — the previously
+    /// presented framebuffer is still correct and the frame can be skipped.
+    Identical,
+    /// Page content is unchanged but the scroll and/or fixed page offset moved —
+    /// the M3 blit fast path can shift the retained content instead of
+    /// re-rasterizing it.
+    OffsetOnly,
+    /// Page content changed (or the surface was resized) — a full re-raster is
+    /// required.
+    ContentChanged,
+}
+
+/// Split fingerprint of a presented frame (ADR-016 M0.5).
+///
+/// Separates the content hash (page commands + surface size, scroll excluded)
+/// from the raw scroll and page offsets. Keeping the offsets out of the hash —
+/// as plain copyable values rather than folded into it — is what lets
+/// [`FrameFingerprint::delta_from`] return [`FrameDelta::OffsetOnly`] for a
+/// scroll-only frame; those same offsets are also the input the M3 blit needs to
+/// know how far to shift the retained content.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrameFingerprint {
+    /// Hash of the page-content commands and surface size — scroll excluded
+    /// (see [`hash_content`]).
+    pub content_hash: u64,
+    /// Scroll offset `(x, y)`, in the same units the render backend receives.
+    pub scroll: (f32, f32),
+    /// Fixed page offset `(x, y)` — the left-docked sidebar width and tab-bar
+    /// height applied render-side since M0.4.
+    pub offset: (f32, f32),
+}
+
+impl FrameFingerprint {
+    /// Build a fingerprint for the current frame from its page content, surface
+    /// size and the two offsets.
+    #[must_use]
+    pub fn new(
+        content: &[DisplayCommand],
+        surface_w: u32,
+        surface_h: u32,
+        scroll: (f32, f32),
+        offset: (f32, f32),
+    ) -> Self {
+        Self {
+            content_hash: hash_content(content, surface_w, surface_h),
+            scroll,
+            offset,
+        }
+    }
+
+    /// Classify how this frame differs from the previously presented `prev`.
+    ///
+    /// A differing `content_hash` always wins (`ContentChanged`) — a resize or
+    /// any command edit forces a re-raster. Only when the content hash matches do
+    /// the offsets decide between `OffsetOnly` (something moved) and `Identical`
+    /// (nothing moved).
+    #[must_use]
+    pub fn delta_from(&self, prev: &FrameFingerprint) -> FrameDelta {
+        if self.content_hash != prev.content_hash {
+            FrameDelta::ContentChanged
+        } else if self.scroll != prev.scroll || self.offset != prev.offset {
+            FrameDelta::OffsetOnly
+        } else {
+            FrameDelta::Identical
+        }
+    }
+}
+
 /// Результат сравнения двух display-list-ов.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DiffResult {
@@ -14121,6 +14233,55 @@ mod tests {
         let split = hash_display_list(&[red_fill(5.0)], &[red_fill(9.0)], 0.0, 0.0, 1024, 720);
         assert_eq!(two_content, split, "lanes fold in sequence (content then overlay)");
         let _ = in_overlay;
+    }
+
+    // ── ADR-016 M0.5: content-only hash + frame-delta classification ──────
+
+    #[test]
+    fn content_hash_excludes_scroll() {
+        // hash_content takes no scroll argument, so a frame that only scrolled
+        // must hash identically — this is the whole point of the split.
+        let content = vec![red_fill(5.0)];
+        let a = hash_content(&content, 1024, 720);
+        let b = hash_content(&content, 1024, 720);
+        assert_eq!(a, b, "same content + size hashes identically");
+        // A surface resize DOES change the content hash (blit can't cover it).
+        assert_ne!(a, hash_content(&content, 800, 720), "width folds in");
+        assert_ne!(a, hash_content(&content, 1024, 600), "height folds in");
+        // A command edit changes the hash.
+        assert_ne!(a, hash_content(&[red_fill(6.0)], 1024, 720), "command edit");
+    }
+
+    #[test]
+    fn frame_delta_offset_only_on_scroll() {
+        let content = vec![red_fill(5.0)];
+        let prev = FrameFingerprint::new(&content, 1024, 720, (0.0, 0.0), (0.0, 40.0));
+        // Same content, scrolled down → OffsetOnly (the M3 blit trigger).
+        let scrolled = FrameFingerprint::new(&content, 1024, 720, (0.0, 120.0), (0.0, 40.0));
+        assert_eq!(scrolled.delta_from(&prev), FrameDelta::OffsetOnly);
+        // Same content, page offset changed (sidebar docked) → OffsetOnly too.
+        let docked = FrameFingerprint::new(&content, 1024, 720, (0.0, 0.0), (260.0, 40.0));
+        assert_eq!(docked.delta_from(&prev), FrameDelta::OffsetOnly);
+    }
+
+    #[test]
+    fn frame_delta_identical_when_nothing_moves() {
+        let content = vec![red_fill(5.0)];
+        let a = FrameFingerprint::new(&content, 1024, 720, (0.0, 30.0), (0.0, 40.0));
+        let b = FrameFingerprint::new(&content, 1024, 720, (0.0, 30.0), (0.0, 40.0));
+        assert_eq!(b.delta_from(&a), FrameDelta::Identical);
+    }
+
+    #[test]
+    fn frame_delta_content_changed_wins_over_offset() {
+        // Content edit AND a scroll: content change must dominate — a re-raster
+        // is required, not a blit.
+        let prev = FrameFingerprint::new(&[red_fill(5.0)], 1024, 720, (0.0, 0.0), (0.0, 40.0));
+        let next = FrameFingerprint::new(&[red_fill(6.0)], 1024, 720, (0.0, 90.0), (0.0, 40.0));
+        assert_eq!(next.delta_from(&prev), FrameDelta::ContentChanged);
+        // A resize (content_hash folds size) also classifies as ContentChanged.
+        let resized = FrameFingerprint::new(&[red_fill(5.0)], 800, 720, (0.0, 0.0), (0.0, 40.0));
+        assert_eq!(resized.delta_from(&prev), FrameDelta::ContentChanged);
     }
 
     // ── Тесты table rendering Phase 1 ─────────────────────────────────────

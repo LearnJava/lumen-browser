@@ -118,9 +118,23 @@ No threads yet; reduces the work every later stage will move/parallelize.
   `PushTransform`-wrapper path — no regression, no extra memory. The wrapper also
   survives for the rare devtools-inspector-overlay frame (it must ride inside the
   page transform). Trait-default contract test in `backend.rs`.
-- **M0.5 Content hash excludes scroll.** Hash content and offset separately so
-  the identical-frame skip can distinguish "same content, new offset" (becomes
-  the blit fast-path trigger in M3).
+- **M0.5 Content hash excludes scroll.** ✅ (branch `p1-mt-m0-5`). New
+  `lumen_paint::hash_content(content, surface_w, surface_h)` folds **only** the
+  page-content commands + surface size into the hash (scroll and the fixed page
+  offset excluded), reusing the allocation-free `HashFmt` Debug-streaming of
+  `hash_display_list`. `FrameFingerprint { content_hash, scroll, offset }` pairs
+  that hash with the two offsets kept as raw copyable values, and
+  `FrameFingerprint::delta_from` classifies a frame as `FrameDelta::Identical` /
+  `OffsetOnly` (the M3 blit trigger — same content, new offset) / `ContentChanged`
+  (content edit or resize wins). Overlay commands are deliberately excluded from
+  the hash: the scrollbar thumb is rebuilt from `scroll_y` every frame and would
+  otherwise make every scroll look like a content change. The shell records the
+  previous frame's fingerprint (`last_frame_fp`) and, **only under
+  `LUMEN_FRAME_LOG`**, logs `[frame] delta {Identical|OffsetOnly|ContentChanged}`
+  so the scroll-vs-content frame mix is measurable before M3 acts on it; normal
+  runs pay nothing. No skip/blit yet — that is M3. 4 unit tests in
+  `display_list.rs` (content-hash excludes scroll, offset-only on scroll/dock,
+  identical, content-change-wins).
 
 ### M1 — render thread (the core of this task, M–L)
 

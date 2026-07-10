@@ -725,6 +725,7 @@ fn run_window_mode(
         last_raf_batch_ms: -RAF_MIN_INTERVAL_MS,
         last_mem_report_s: 0.0,
         frame_stats: lumen_paint::FrameStats::new(),
+        last_frame_fp: None,
         find: find::FindState::default(),
         address_bar: address_bar::AddressBarState::default(),
         hint: hints::HintState::default(),
@@ -5801,6 +5802,13 @@ struct Lumen {
     /// Наполняется только при включённом frame-log; сводка p50/p95/p99
     /// печатается по кадансу `LUMEN_MEM_REPORT` и один раз на выходе.
     frame_stats: lumen_paint::FrameStats,
+    /// ADR-016 M0.5: split fingerprint (content-hash + scroll/page offset) of the
+    /// previously presented frame. Used only when `LUMEN_FRAME_LOG` is on: each
+    /// frame is classified against it (`Identical`/`OffsetOnly`/`ContentChanged`)
+    /// and the delta is logged, so the scroll-vs-content frame mix is measurable
+    /// before M3 turns `OffsetOnly` into an actual blit fast path. `None` until
+    /// the first logged frame.
+    last_frame_fp: Option<lumen_paint::FrameFingerprint>,
     /// Состояние Ctrl+F. Открыт ли bar, текущий query и индекс активного
     /// совпадения. Содержимое поиска не сохраняется между reload-ами
     /// (close() полностью очищает state); это сознательно: после reload
@@ -12170,6 +12178,33 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         self.scroll_y,
                         self.display_list.len(),
                     );
+                    // ADR-016 M0.5: classify this frame against the previous one
+                    // via the split fingerprint (content hash ⟂ scroll/page
+                    // offset). Split-view bakes scroll into the display list, so
+                    // the content/offset split does not apply there — skip it.
+                    // Costs an O(n) content hash, but only under LUMEN_FRAME_LOG.
+                    if self.split_view.is_none() {
+                        let base: &[lumen_paint::DisplayCommand] = anim_dl
+                            .as_deref()
+                            .or(page_buf.as_deref())
+                            .unwrap_or(&self.display_list);
+                        let (sw, sh) = self.window.as_ref().map_or((1024, 720), |w| {
+                            let s = w.inner_size();
+                            (s.width, s.height)
+                        });
+                        let fp = lumen_paint::FrameFingerprint::new(
+                            base,
+                            sw,
+                            sh,
+                            (self.scroll_x, self.scroll_y),
+                            (page_x_offset, tabs::strip::TAB_BAR_HEIGHT),
+                        );
+                        match self.last_frame_fp.map(|p| fp.delta_from(&p)) {
+                            Some(d) => eprintln!("[frame] delta {d:?}"),
+                            None => eprintln!("[frame] delta first"),
+                        }
+                        self.last_frame_fp = Some(fp);
+                    }
                 }
             }
             _ => {}
