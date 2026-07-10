@@ -726,6 +726,7 @@ fn run_window_mode(
         last_raf_batch_ms: -RAF_MIN_INTERVAL_MS,
         last_mem_report_s: 0.0,
         frame_stats: lumen_paint::FrameStats::new(),
+        engine_stats: lumen_paint::FrameStats::new(),
         last_frame_fp: None,
         find: find::FindState::default(),
         address_bar: address_bar::AddressBarState::default(),
@@ -5803,6 +5804,15 @@ struct Lumen {
     /// Наполняется только при включённом frame-log; сводка p50/p95/p99
     /// печатается по кадансу `LUMEN_MEM_REPORT` и один раз на выходе.
     frame_stats: lumen_paint::FrameStats,
+    /// ADR-016 M2.0: сессионный аккумулятор времени `relayout()` на UI-потоке
+    /// (стиль + layout + сборка display-list + доставка JS-observer'ов). Каждый
+    /// интерактивный relayout (DOM-мутация из JS, hover/focus, resize, тик
+    /// анимации, content-visibility) сегодня блокирует UI-поток — это и есть та
+    /// работа, которую M2 уносит на отдельный engine-поток. Наполняется только
+    /// при включённом `LUMEN_FRAME_LOG` (как `frame_stats`), сводка
+    /// `ENGINE_SUMMARY` печатается по кадансу `LUMEN_MEM_REPORT` и один раз на
+    /// выходе — даёт before/after числа, на которые сошлются следующие срезы M2.
+    engine_stats: lumen_paint::FrameStats,
     /// ADR-016 M0.5: split fingerprint (content-hash + scroll/page offset) of the
     /// previously presented frame. Used only when `LUMEN_FRAME_LOG` is on: each
     /// frame is classified against it (`Identical`/`OffsetOnly`/`ContentChanged`)
@@ -6757,6 +6767,11 @@ impl Lumen {
         if vp_w <= 0.0 || vp_h <= 0.0 {
             return;
         }
+        // ADR-016 M2.0: time the UI-thread relayout (style + layout + display-list
+        // build + JS-observer delivery) — the work M2 moves to an engine thread.
+        // Only under `LUMEN_FRAME_LOG`, so a normal run pays nothing (Instant is
+        // `None` and no histogram push happens). Folded in at the end of the method.
+        let engine_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
         // Apply <meta viewport initial-scale> + user zoom to derive the CSS layout viewport.
         let meta_scale = meta_initial_scale(src);
         let (css_w, css_h) =
@@ -6891,6 +6906,19 @@ impl Lumen {
             if !lazy_reqs.is_empty() {
                 self.fetch_and_register_lazy_images(lazy_reqs);
             }
+        }
+        // ADR-016 M2.0: fold this relayout's UI-thread cost into the session
+        // engine histogram (`ENGINE_SUMMARY`, printed on the `LUMEN_MEM_REPORT`
+        // cadence / at exit) and emit a per-relayout line. `prev_styles` now holds
+        // the just-computed styles, so its length is the styled-node count.
+        if let Some(t0) = engine_t0 {
+            let engine_ms = t0.elapsed().as_secs_f32() * 1000.0;
+            self.engine_stats.record(engine_ms);
+            eprintln!(
+                "[engine] relayout {engine_ms:.2}ms dl={} styled={}",
+                self.display_list.len(),
+                self.prev_styles.len(),
+            );
         }
         if let Some(w) = self.window.as_ref() {
             w.request_redraw();
@@ -8297,6 +8325,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         if let Some(summary) = self.frame_stats.summary() {
             eprintln!("{summary} (session exit)");
         }
+        // ADR-016 M2.0: session-final UI-thread relayout-cost summary.
+        if let Some(summary) = self.engine_stats.summary() {
+            eprintln!("{} (session exit)", summary.display_with("ENGINE_SUMMARY"));
+        }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -8330,6 +8362,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // числа, на которые будут ссылаться последующие стадии MT-рендера.
                 if let Some(summary) = self.frame_stats.summary() {
                     eprintln!("{summary}");
+                }
+                // ADR-016 M2.0: periodic UI-thread relayout-cost summary alongside
+                // the frame summary — the baseline M2's engine-thread move improves.
+                if let Some(summary) = self.engine_stats.summary() {
+                    eprintln!("{}", summary.display_with("ENGINE_SUMMARY"));
                 }
             }
         }

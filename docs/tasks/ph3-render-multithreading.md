@@ -259,6 +259,56 @@ input forwarding. This is what makes *input* independent of engine stalls.
 Details of the load pipeline belong to the existing BUG-171 notes; this stage
 must land after M1 so commits have somewhere to go.
 
+**Where the boundary is (audit 2026-07-10, branch `zcode`).** BUG-171 stage 2
+already moved the *initial* load off the UI thread: `LoadDone` → one-shot
+`std::thread::spawn(render_bytes)` → `RenderDone` → `apply_loaded_page`
+(`main.rs` ~:8184/8254). What is **still on the UI thread** is every *ongoing*
+relayout: `fn relayout()` (`main.rs:6743`) runs style + layout
+(`relayout_page` → `layout_measured_hyp`) + display-list build (`paint_ordered`)
++ transition/`@starting-style` sync + JS-observer delivery, all synchronously.
+It has **~40 call sites** — DOM mutation from JS, hover/focus/active, form input,
+panel toggles, resize, theme, debounced zoom, `content-visibility` expansion
+(`maybe_expand_cv_relevant`), and the rAF DOM-dirty path. `relayout()` is the
+single boundary function M2 replaces with an engine-thread commit. Note: the
+QuickJS runtime already lives on its own `lumen-js` thread (ADR-014) but every
+call from the UI thread is a *blocking* round-trip, so JS execution still stalls
+the UI thread today — M2 keeps JS on the engine side and stops shipping the
+handle back to the UI thread.
+
+Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
+
+- **M2.0 — measure the UI-thread relayout cost.** ✅ (branch `p1-mt-m2-0`).
+  Prerequisite (like M0.1 for M0): before moving `relayout()` off the UI thread
+  we need before/after numbers. `FrameSummary::display_with(label)` in
+  `lumen-paint` lets the same tested percentile summary print under a second
+  label; the shell gains `engine_stats: FrameStats` and times the whole
+  `relayout()` body (style + layout + DL build + JS-observer delivery), recording
+  it **only under `LUMEN_FRAME_LOG`** (zero cost otherwise — the `Instant` is
+  `None` and no histogram push happens). Each relayout logs
+  `[engine] relayout <ms>ms dl=<n> styled=<n>` and an `ENGINE_SUMMARY
+  count/min/p50/p95/p99/max` prints on the `LUMEN_MEM_REPORT` cadence and once at
+  session exit — the baseline every later M2 slice cites. Unit test on the
+  labeled summary in `lumen-paint`.
+- **M2.1 — persistent engine-thread boundary (scaffold).** Replace the per-nav
+  one-shot `spawn` with a long-lived, named engine thread (mirror
+  `render_thread.rs`: ordered control channel + latest-wins commit slot +
+  idle-park on blocking `recv`, generation-guarded). Behind `LUMEN_ENGINE_THREAD`
+  (default off → zero behavior change). No relayout moved yet; this is the
+  channel + `EngineCommit { content: Arc<DisplayList>, generation, dims }`
+  snapshot type (invariant 1) that M2.2+ commits over. Unit-test the
+  coalescing/generation-guard logic in isolation.
+- **M2.2 — route `relayout()` through the engine thread.** Turn the ~40 direct
+  `self.relayout()` calls into a message send; the engine thread owns
+  `LayoutSource`/`Document`/`js_ctx`, runs style+layout, and commits an
+  `EngineCommit`. `content-visibility` expansion becomes a *visible-range*
+  message to the engine (never a render-thread → layout call — see gotcha).
+- **M2.3 — synchronous readback + acceptance.** `--screenshot`, `run.py --ipc`,
+  CDP `Page.captureScreenshot` become `Request::Readback { reply }` messages
+  (audit all `screenshot_*` sites first — most are already CPU per the M1.1
+  discovery). Acceptance: a 200 ms JS busy-loop no longer freezes input/scroll;
+  `ENGINE_SUMMARY` p95 off the UI thread; graphic tests green; idle CPU
+  unchanged (BUG-271); no new `unsafe`.
+
 ### M3 — tiles + blit scroll (`TileGrid` revival, L)
 
 - Content renders into pooled tile textures (reuse `layer_pool` texture-pool
