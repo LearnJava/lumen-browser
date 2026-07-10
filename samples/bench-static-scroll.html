@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<!-- Static-content scroll benchmark page (p1-exp-wgpu-only, EXPERIMENT.md p.2).
+
+     Purpose: measure the page scroll compositor on content that does NOT
+     change between frames. graphic_tests/1000000-final.html is animation-
+     dominated (~86% of frames mutate the display list, measured 2026-07-10),
+     which exercises the monolith fallback, not the compositor. This page has
+     comparable per-frame paint weight (filters, gradients, shadows, text)
+     but zero animations and zero scripts, so a scrolling frame is a pure
+     translation.
+
+     NOT a graphic test: no magenta frame, not registered in run.py.
+     Fully static markup (no document.write - the JS shim must not matter). -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; background: #f4f4f8; font-family: sans-serif; }
+  .row { display: flex; gap: 16px; padding: 16px; }
+  .card {
+    width: 180px; height: 120px; border-radius: 12px;
+    background: linear-gradient(135deg, #4a90d9, #d94a90);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  }
+  .blurred { filter: blur(6px); }
+  .bright { filter: brightness(1.2) saturate(1.4); }
+  .faded { opacity: 0.7; }
+  .ring {
+    width: 120px; height: 120px; border-radius: 50%;
+    border: 12px solid #2a9d8f; background: radial-gradient(circle, #e9c46a, #f4a261);
+  }
+  .txt { max-width: 640px; padding: 0 16px; color: #222; }
+</style>
+</head>
+<body>
+<h2 style="padding-left:16px">Section 1</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 2</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 3</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 4</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 5</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 6</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 7</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 8</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 9</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 10</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 11</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 12</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 13</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 14</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 15</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 16</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 17</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 18</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 19</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 20</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 21</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 22</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 23</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 24</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 25</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 26</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 27</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 28</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 29</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 30</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 31</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 32</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 33</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 34</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 35</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 36</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 37</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 38</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 39</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+<h2 style="padding-left:16px">Section 40</h2>
+<div class="row">
+  <div class="card"></div>
+  <div class="card blurred"></div>
+  <div class="card bright"></div>
+  <div class="ring"></div>
+  <div class="card faded"></div>
+</div>
+<p class="txt">Static scroll benchmark section. The quick brown fox jumps
+over the lazy dog, painting gradients, borders, rounded corners, shadows
+and one gaussian blur per row while the page scrolls underneath a fixed
+viewport. 0123456789 &amp;#%@ - text shaping and the glyph atlas are part
+of the per-frame cost being cached.</p>
+</body>
+</html>

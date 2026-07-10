@@ -1265,6 +1265,65 @@ struct GpuImage {
     height: u32,
 }
 
+/// Скролл-композитор страницы (EXPERIMENT.md §2, срез 1): персистентная
+/// текстура «полосы» документа — вьюпорт плюс запас сверху и снизу,
+/// растеризованная в документных координатах (scroll-инвариантно). Пока
+/// вьюпорт остаётся внутри полосы и содержимое не меняется, кадр скролла =
+/// один blit этой текстуры со сдвигом + overlay, без перерисовки страницы.
+struct PageBandCache {
+    /// Держит GPU-память полосы (wgpu освобождает её при дропе последней
+    /// ссылки; view её не удерживает — как `GpuImage::_texture`).
+    _texture: wgpu::Texture,
+    /// View полосы — источник blit-а и цель Band-рендера.
+    view: wgpu::TextureView,
+    /// Scroll-инвариантный ключ содержимого: хэш content-полосы display
+    /// list-а при scroll (0,0) + `content_generation` + геометрия полосы.
+    /// Урок EXPERIMENT.md п.15: скролл в ключе = промах каждый кадр.
+    key: u64,
+    /// Y верхнего края полосы в документных CSS px (≥ 0).
+    band_top_css: f32,
+    /// Ширина текстуры полосы в device px (= ширине surface).
+    w_px: u32,
+    /// Высота текстуры полосы в device px (surface + 2×запас).
+    h_px: u32,
+}
+
+/// Одноразовая инъекция blit-квада полосы в начало draw-плана level 0
+/// следующего `render_impl`-вызова (Compose-путь скролл-композитора).
+struct PendingBaseBlit {
+    /// Bind group `image_bgl` поверх текстуры полосы (linear sampler).
+    bind_group: wgpu::BindGroup,
+    /// Смещение полосы относительно viewport-а: `band_top_css - scroll_y` (≤ 0).
+    dy_css: f32,
+    /// Ширина квада в CSS px (= ширине viewport-а).
+    w_css: f32,
+    /// Высота квада в CSS px (= высоте полосы).
+    h_css: f32,
+}
+
+/// Финальная цель одного `render_impl`-вызова.
+enum RenderPassMode {
+    /// Обычный кадр: present, `FRAMES_RENDERED`, обновление `last_frame_hash`.
+    Normal {
+        /// Тотальный хэш кадра, посчитанный в `render()` (для skip-identical).
+        frame_hash: u64,
+    },
+    /// Оффскрин-рендер полосы страницы: без present, без счётчиков кадров,
+    /// без `last_frame_hash`; размеры «поверхности» = размеры полосы.
+    Band {
+        /// Цель рендера (view текстуры полосы).
+        view: wgpu::TextureView,
+        /// Ширина полосы в device px.
+        w_px: u32,
+        /// Высота полосы в device px.
+        h_px: u32,
+    },
+    /// Композиция кадра из готовой полосы (через `pending_base_blit`) +
+    /// overlay: present и `FRAMES_RENDERED`, но `last_frame_hash` обновляет
+    /// вызывающий (`render()`) — хэш Compose-аргументов не описывает кадр.
+    Compose,
+}
+
 /// GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
 /// `ensure_layer_textures`; переиспользуется пока размер surface не меняется.
 /// `texture` хранится pub чтобы можно было использовать в
@@ -1603,6 +1662,18 @@ pub struct Renderer {
     /// (display list + overlay + scroll + размер + `content_generation`).
     /// Совпадение со следующим кадром ⇒ пиксели идентичны ⇒ кадр пропускается.
     last_frame_hash: Option<u64>,
+    /// Скролл-композитор страницы (EXPERIMENT.md §2): персистентная полоса
+    /// документа. `None` — ещё не рисовалась (или сброшена сменой геометрии).
+    page_band: Option<PageBandCache>,
+    /// Blit-квад полосы для следующего Compose-рендера. Ставится только
+    /// `try_page_compose`, снимается `take()`-ом в начале сбора вершин.
+    pending_base_blit: Option<PendingBaseBlit>,
+    /// Scroll-инвариантный ключ контента ПРОШЛОГО кадра. Полоса рисуется
+    /// только по стабильному контенту (ключ совпал два кадра подряд):
+    /// анимация/GIF/стриминг парсера меняют ключ каждый кадр, и рендер
+    /// полосы (1.7× выше вьюпорта) там был бы дороже монолита — замерено
+    /// 2026-07-10: 511 промахов из 629 кадров, медиана 10.7 → 21 мс.
+    last_content_key: Option<u64>,
     /// GPU layer cache with LRU eviction (ADR-008 Phase 2).
     /// Tracks layer textures by stacking context ID + size for off-viewport eviction.
     layer_cache: crate::layer_cache::LayerCache,
@@ -1748,6 +1819,17 @@ fn frame_skip_disabled() -> bool {
     static DISABLED: OnceLock<bool> = OnceLock::new();
     *DISABLED.get_or_init(|| {
         std::env::var("LUMEN_NO_FRAME_SKIP").is_ok_and(|v| v == "1")
+    })
+}
+
+/// `true`, если скролл-композитор страницы отключён
+/// (`LUMEN_NO_SCROLL_COMPOSITOR=1`). Диагностика: A/B картинки и скорости
+/// на одном бинарнике (как `LUMEN_NO_BBOX_SCISSOR`).
+fn scroll_compositor_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("LUMEN_NO_SCROLL_COMPOSITOR").is_ok_and(|v| v == "1")
     })
 }
 
@@ -3319,6 +3401,9 @@ impl Renderer {
             layer_snapshots: HashMap::new(),
             content_generation: 0,
             last_frame_hash: None,
+            page_band: None,
+            pending_base_blit: None,
+            last_content_key: None,
             layer_cache: crate::layer_cache::LayerCache::new(),
             composite_pipeline,
             composite_bgl,
@@ -4473,6 +4558,181 @@ impl Renderer {
     ///   scroll-смещения. Делает overlay viewport-locked даже когда страница
     ///   прокручена.
     ///
+    /// Скролл-композитор страницы, срез 1 (EXPERIMENT.md §2): пробует собрать
+    /// кадр из персистентной полосы документа вместо перерисовки контента.
+    ///
+    /// Применим, когда кадр — чистая трансляция контента: оконный рендер,
+    /// нет горизонтального скролла, скролл ДВИЖЕТСЯ (кадры «DL изменился,
+    /// скролл тот же» — анимация, ввод — идут монолитом) и в контенте нет
+    /// `BeginStickyLayer` — единственной команды, чей результат зависит от
+    /// scroll_y нелинейно (sticky-кламп); всё остальное транслируется
+    /// равномерно, включая fixed (см. BUG-159: fixed не получает спец-
+    /// обработки в рендере — полоса воспроизводит его поведение бит-в-бит).
+    ///
+    /// Ключ полосы scroll-инвариантен — хэш контента при scroll (0,0) +
+    /// `content_generation` + геометрия (урок п.15: скролл в ключе = промах
+    /// каждый кадр = 30× регрессия). Промах стоит ОДИН рендер контента
+    /// (в полосу) + дешёвую композицию (blit + overlay) — урок п.15 №2.
+    ///
+    /// Возвращает `Ok(true)`, если кадр показан этим путём.
+    fn try_page_compose(
+        &mut self,
+        content: &[DisplayCommand],
+        overlay: &[DisplayCommand],
+        scroll_y: f32,
+        scroll_x: f32,
+    ) -> Result<bool, wgpu::SurfaceError> {
+        if self.surface.is_none()
+            || scroll_compositor_disabled()
+            || scroll_x != 0.0
+            || content.is_empty()
+            || content
+                .iter()
+                .any(|c| matches!(c, DisplayCommand::BeginStickyLayer { .. }))
+        {
+            return Ok(false);
+        }
+        let (sw, sh) = self.surface_dims();
+        let dpr = self.scale_factor.max(1e-6) as f32;
+        let vp_h_css = sh as f32 / dpr;
+        // Запас полосы: по 3/4 вьюпорта сверху и снизу, но не больше 768 CSS px.
+        let margin_css = (vp_h_css * 0.75).min(768.0).floor();
+        let band_h_px = sh + 2 * (margin_css * dpr).round() as u32;
+        if band_h_px > self.device.limits().max_texture_dimension_2d {
+            return Ok(false);
+        }
+        let band_h_css = band_h_px as f32 / dpr;
+
+        // Scroll-инвариантный ключ содержимого полосы.
+        let key = {
+            use std::hash::Hasher;
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            h.write_u64(crate::display_list::hash_display_list(
+                content, &[], 0.0, 0.0, sw, band_h_px,
+            ));
+            h.write_u64(self.content_generation);
+            h.finish()
+        };
+
+        // Контент стабилен, если его ключ совпал с ключом прошлого кадра.
+        // Нестабильный контент (анимация, GIF, стриминг парсера) в полосу не
+        // рисуем: промах на КАЖДОМ кадре при полосе 1.7× вьюпорта дороже
+        // монолита (замер 2026-07-10: медиана 10.7 → 21 мс). После первого
+        // же стабильного кадра полоса легализуется, а редкие тики (GIF
+        // 10 fps под 60 fps скроллом) дают band-рендер раз в тик + hit-ы
+        // между тиками — это всё ещё выигрыш.
+        let content_stable = self.last_content_key == Some(key);
+        self.last_content_key = Some(key);
+
+        let fits = self.page_band.as_ref().is_some_and(|b| {
+            b.key == key
+                && b.w_px == sw
+                && b.h_px == band_h_px
+                && scroll_y >= b.band_top_css
+                && scroll_y + vp_h_css <= b.band_top_css + band_h_css
+        });
+        if !fits {
+            if !content_stable {
+                return Ok(false);
+            }
+            // Промах: перерисовать полосу — один рендер контента. Верх полосы
+            // выравнен на целый CSS px, чтобы blit был texel-точным при целых
+            // scroll_y (при dpr=1).
+            let band_top_css = (scroll_y - margin_css).max(0.0).floor();
+            let recreate = self
+                .page_band
+                .as_ref()
+                .is_none_or(|b| b.w_px != sw || b.h_px != band_h_px);
+            if recreate {
+                count_texture_created();
+                let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("page-band"),
+                    size: wgpu::Extent3d {
+                        width: sw,
+                        height: band_h_px,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: self.surface_format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                });
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                self.page_band = Some(PageBandCache {
+                    _texture: texture,
+                    view,
+                    key: 0, // невалиден, пока рендер полосы ниже не пройдёт
+                    band_top_css,
+                    w_px: sw,
+                    h_px: band_h_px,
+                });
+            }
+            let Some(view) = self.page_band.as_ref().map(|b| b.view.clone()) else {
+                return Ok(false);
+            };
+            // Depth-attachment обязан совпадать по размеру с целью пасса —
+            // на время Band-рендера подменяем оконную depth-текстуру
+            // полосной (и возвращаем обратно, включая случай ошибки).
+            let (band_depth_t, band_depth_v) = create_depth_texture(&self.device, sw, band_h_px);
+            let saved_depth_t = self.depth_texture.replace(band_depth_t);
+            let saved_depth_v = self.depth_view.replace(band_depth_v);
+            let band_result = self.render_impl(
+                content,
+                &[],
+                band_top_css,
+                0.0,
+                RenderPassMode::Band { view, w_px: sw, h_px: band_h_px },
+            );
+            self.depth_texture = saved_depth_t;
+            self.depth_view = saved_depth_v;
+            band_result?;
+            if let Some(b) = self.page_band.as_mut() {
+                b.key = key;
+                b.band_top_css = band_top_css;
+            }
+            if crate::frame_log_level() >= 2 {
+                eprintln!(
+                    "[frame:wgpu] page-compose MISS: band y={band_top_css:.0}..{:.0} css ({sw}x{band_h_px} px)",
+                    band_top_css + band_h_css,
+                );
+            }
+        } else if crate::frame_log_level() >= 2 {
+            eprintln!("[frame:wgpu] page-compose HIT");
+        }
+
+        // Композиция: blit полосы со сдвигом + overlay поверх.
+        let Some((band_top_css, band_view)) =
+            self.page_band.as_ref().map(|b| (b.band_top_css, b.view.clone()))
+        else {
+            return Ok(false);
+        };
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("page-band-bg"),
+            layout: &self.image_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&band_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.image_sampler),
+                },
+            ],
+        });
+        self.pending_base_blit = Some(PendingBaseBlit {
+            bind_group,
+            dy_css: band_top_css - scroll_y,
+            w_css: sw as f32 / dpr,
+            h_css: band_h_css,
+        });
+        self.render_impl(&[], overlay, 0.0, 0.0, RenderPassMode::Compose)?;
+        Ok(true)
+    }
+
     /// `scroll_y ≥ 0`, `scroll_x ≥ 0`. Negatives caller обязан клампить до 0.
     pub fn render(
         &mut self,
@@ -4481,29 +4741,18 @@ impl Renderer {
         scroll_y: f32,
         scroll_x: f32,
     ) -> Result<(), wgpu::SurfaceError> {
-        // BUG-274: пофазный тайминг кадра (LUMEN_FRAME_LOG=2) — разбивка
-        // wgpu-кадра на faces/collect/prep/acquire/encode/submit, чтобы
-        // диагностировать, какая фаза жжёт CPU в простое.
-        let phase_log = crate::frame_log_level() >= 2;
-        let t_frame0 = std::time::Instant::now();
-
-        // BUG-274: снимки диагностических счётчиков на входе в кадр — печатаем
-        // дельту за кадр, а не процессный итог (кумулятивные числа не отвечают
-        // на вопрос «сколько текстур родилось именно в этом кадре»).
-        let tex_created_at_entry = load_counter(&TEXTURES_CREATED);
-        let tex_nanos_at_entry = load_counter(&TEXTURE_CREATE_NANOS);
-        let pool_hits_at_entry = load_counter(&TEXTURE_POOL_HITS);
-        let pool_misses_at_entry = load_counter(&TEXTURE_POOL_MISSES);
-
         // Skip-identical-frame (p1-exp-wgpu-only): тотальный хэш кадра —
-        // display list + overlay + scroll + размер поверхности (Debug-представление
-        // каждой команды, см. hash_display_list) — складывается с поколением
+        // display list + overlay + scroll + размер поверхности (структурный
+        // фолд команд, см. hash_display_list) — складывается с поколением
         // контента (register_image / GIF-кадры / снапшоты / шрифты / canvas-bg
         // бампают content_generation). Совпадение с последним успешно
         // отрисованным кадром гарантирует пиксельную идентичность: кадр не
         // рисуется вовсе, на экране остаётся последний present. Только для
         // оконного режима — headless обязан рисовать для readback.
         // LUMEN_NO_FRAME_SKIP=1 отключает пропуск (диагностика).
+        // Живёт в оркестраторе, а не в render_impl: скролл-композитор ниже
+        // разбивает кадр на band/compose-вызовы, чьи собственные хэши кадр
+        // не описывают.
         let (sw0, sh0) = self.surface_dims();
         let base_hash = crate::display_list::hash_display_list(
             content, overlay, scroll_x, scroll_y, sw0, sh0,
@@ -4520,21 +4769,73 @@ impl Renderer {
             && self.last_frame_hash == Some(frame_hash)
         {
             FRAMES_SKIPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            if phase_log {
+            if crate::frame_log_level() >= 2 {
                 eprintln!("[frame:wgpu] skip (identical frame)");
             }
             return Ok(());
         }
 
+        // Скролл-композитор страницы (EXPERIMENT.md §2): при попадании кадр
+        // собирается из персистентной полосы + overlay, минуя перерисовку
+        // контента. `false` — путь неприменим, рисуем монолитом как раньше.
+        if self.try_page_compose(content, overlay, scroll_y, scroll_x)? {
+            self.last_frame_hash = Some(frame_hash);
+            return Ok(());
+        }
+
+        self.render_impl(
+            content,
+            overlay,
+            scroll_y,
+            scroll_x,
+            RenderPassMode::Normal { frame_hash },
+        )
+    }
+
+    /// Тело рендера одного пасса-цели (см. [`RenderPassMode`]). Общий для
+    /// обычного кадра, оффскрин-рендера полосы скролл-композитора и
+    /// композиции полоса+overlay; отличия сведены к выбору целевого view,
+    /// размеров «поверхности» и финализации (present / счётчики / хэш).
+    fn render_impl(
+        &mut self,
+        content: &[DisplayCommand],
+        overlay: &[DisplayCommand],
+        scroll_y: f32,
+        scroll_x: f32,
+        mode: RenderPassMode,
+    ) -> Result<(), wgpu::SurfaceError> {
+        // BUG-274: пофазный тайминг кадра (LUMEN_FRAME_LOG=2) — разбивка
+        // wgpu-кадра на faces/collect/prep/acquire/encode/submit, чтобы
+        // диагностировать, какая фаза жжёт CPU в простое.
+        let phase_log = crate::frame_log_level() >= 2;
+        let t_frame0 = std::time::Instant::now();
+
+        // BUG-274: снимки диагностических счётчиков на входе в кадр — печатаем
+        // дельту за кадр, а не процессный итог (кумулятивные числа не отвечают
+        // на вопрос «сколько текстур родилось именно в этом кадре»).
+        let tex_created_at_entry = load_counter(&TEXTURES_CREATED);
+        let tex_nanos_at_entry = load_counter(&TEXTURE_CREATE_NANOS);
+        let pool_hits_at_entry = load_counter(&TEXTURE_POOL_HITS);
+        let pool_misses_at_entry = load_counter(&TEXTURE_POOL_MISSES);
+
+        // Размеры цели: для Band — полоса, иначе — поверхность окна/headless.
+        let (sw0, sh0) = match &mode {
+            RenderPassMode::Band { w_px, h_px, .. } => (*w_px, *h_px),
+            _ => self.surface_dims(),
+        };
+
         // CSS Filter Effects L1 §2 — backdrop-filter result cache.
         // Two consecutive frames hashing identically guarantee every backdrop
         // element's filtered output is identical, so the composite step can
         // reuse the cached texture and skip the expensive blur passes.
-        // Reuses the skip-frame base hash (identical inputs).
+        // (Хэш считается только при наличии backdrop-filter — после переезда
+        // skip-identical в render() дешёвого готового base_hash здесь нет.)
         let backdrop_frame_hash: Option<u64> = if self.backdrop_cache.is_enabled()
             && crate::display_list::contains_backdrop_filter(content, overlay)
         {
-            Some(base_hash)
+            Some(crate::display_list::hash_display_list(
+                content, overlay, scroll_x, scroll_y, sw0, sh0,
+            ))
         } else {
             None
         };
@@ -4813,7 +5114,8 @@ impl Renderer {
         // Текущий выставленный scissor (для дедупликации SetScисsor-команд).
         // None = не выставлен (первый SetScissor нужен в любом случае).
         let mut current_scissor: Option<DeviceScissor> = None;
-        let (surface_w, surface_h) = self.surface_dims();
+        // Размеры цели пасса (для Band — полосы), не поверхности окна.
+        let (surface_w, surface_h) = (sw0, sh0);
 
         let dpr_f32 = self.scale_factor.max(1e-6) as f32;
 
@@ -4884,6 +5186,24 @@ impl Renderer {
         let viewport_css_h = surface_h as f32 / dpr_f32;
         let viewport_css_w = surface_w as f32 / dpr_f32;
         let mut sticky_stack: Vec<(f32, f32)> = Vec::new();
+
+        // Compose-путь скролл-композитора: полоса страницы рисуется первым
+        // op-ом level 0 (после LoadOp::Clear того же пасса) — под overlay,
+        // на месте контента, который она заменяет. Обычный image-квад:
+        // painter's order и батчинг не нарушаются.
+        if let Some(blit) = self.pending_base_blit.take() {
+            let v_start = image_vertices.len() as u32;
+            push_image_quad(
+                &mut image_vertices,
+                Rect { x: 0.0, y: blit.dy_css, width: blit.w_css, height: blit.h_css },
+                [0.0, 0.0],
+                [1.0, 1.0],
+                1.0,
+            );
+            let image_batch_idx = image_bind_groups.len() as u32;
+            image_bind_groups.push(blit.bind_group);
+            draw_ops.push(DrawOp::Image { v_start, v_count: 6, image_batch_idx });
+        }
 
         let iter_content = content.iter().map(|c| (c, false));
         let iter_overlay = overlay.iter().map(|c| (c, true));
@@ -6479,7 +6799,7 @@ impl Renderer {
         // 200% scaling, 16-px CSS текст рендерится на 32 device px.
         // f32 cast терпит небольшую потерю точности — DPR редко > 4.0.
         let dpr = self.scale_factor.max(1e-6) as f32;
-        let (dims_w, dims_h) = self.surface_dims();
+        let (dims_w, dims_h) = (surface_w, surface_h);
         let viewport = [
             dims_w as f32 / dpr,
             dims_h as f32 / dpr,
@@ -6662,7 +6982,13 @@ impl Renderer {
         let windowed_frame: Option<wgpu::SurfaceTexture>;
         let headless_tex: Option<wgpu::Texture>;
         let frame_view: wgpu::TextureView;
-        if let Some(ref surface) = self.surface {
+        if let RenderPassMode::Band { view, .. } = &mode {
+            // Оффскрин-рендер полосы: цель задана вызывающим, swapchain не
+            // трогаем (клон view — дешёвый Arc-хэндл wgpu).
+            frame_view = view.clone();
+            windowed_frame = None;
+            headless_tex = None;
+        } else if let Some(ref surface) = self.surface {
             let f = surface.get_current_texture()?;
             frame_view = f.texture.create_view(&wgpu::TextureViewDescriptor::default());
             windowed_frame = Some(f);
@@ -7794,9 +8120,20 @@ impl Renderer {
                 }
             }
         }
-        // Кадр успешно отрисован и показан — фиксируем хэш для skip-identical.
-        FRAMES_RENDERED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.last_frame_hash = Some(frame_hash);
+        // Финализация по режиму: Band — служебный оффскрин-проход, не кадр
+        // (не считаем и хэш не трогаем); Compose — настоящий кадр, но его
+        // хэш фиксирует вызывающий render() (хэш Compose-аргументов кадр не
+        // описывает); Normal — кадр и хэш, как раньше.
+        match mode {
+            RenderPassMode::Band { .. } => {}
+            RenderPassMode::Compose => {
+                FRAMES_RENDERED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            RenderPassMode::Normal { frame_hash } => {
+                FRAMES_RENDERED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.last_frame_hash = Some(frame_hash);
+            }
+        }
         // In headless mode, keep the rendered texture alive for render_to_image().
         self.pending_readback = headless_tex;
         Ok(())
