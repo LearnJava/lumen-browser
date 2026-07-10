@@ -1,7 +1,9 @@
 # CLAUDE.md
 
 > **THIS WORKTREE = EXPERIMENTAL BRANCH `p1-exp-wgpu-only` — NEVER MERGE INTO `main`.**
-> Performance experimentation ground (target: 100–1000× speedups); any technology
+> Performance experimentation ground (target, user decision 2026-07-10: match
+> and beat Chrome on the same pages and metrics — the earlier "100–1000×" was
+> figurative); any technology
 > or algorithm may be tested here, main-branch invariants may be broken.
 > Read [`EXPERIMENT.md`](EXPERIMENT.md) FIRST every session: status, measurements,
 > work queue, measurement scripts (`scripts/exp/`), known pitfalls.
