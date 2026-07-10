@@ -141,10 +141,41 @@ No threads yet; reduces the work every later stage will move/parallelize.
 Move the render backend + present off the main thread; reuse
 `CompositorThread`/`VsyncNotifier`.
 
-- **Ownership:** the render thread creates and exclusively owns the GL context
-  and femtovg `Canvas` (`!Send` — it must be *created* on that thread, not
-  moved). Main thread keeps the winit window; resize/scale-factor/DPI events
-  are forwarded as messages.
+Sub-sliced like M0 (each independently shippable into `zcode`):
+
+- **M1.1 — threaded backend infra + GL-threading spike.** ✅ (branch
+  `p1-mt-m1`, merged into `zcode`). `ThreadedRenderBackend`
+  (`crates/shell/src/render_thread.rs`) implements `RenderBackend` and proxies
+  to a real backend on a dedicated `lumen-render` thread: ordered control
+  channel + latest-wins frame coalescing (drain-per-batch, only the newest
+  `Frame` renders), on-demand parking via blocking `recv()` (invariant 6), and
+  a startup handshake caching `supports_page_offset` / initial scale+viewport so
+  the proxy answers those synchronously. Enabled behind `LUMEN_RENDER_THREAD=1`
+  (default off); the whole cutover is one factory branch —
+  **zero changes to the 12k-line `RedrawRequested` block** (the trait *is* the
+  boundary). Key discovery — the screenshot/IPC/CDP readback paths are all CPU
+  (`render_to_image_cpu`), never the windowed GL backend, so **M1 needs no GL
+  readback** (the brief's "Synchronous readback" bullet below is moot). 4 unit
+  tests on the coalescing rule. **Spike result (Windows):** creating the backend
+  *on* the render thread fails — winit exposes the Win32 window handle only on
+  the thread that created the window (`the underlying handle is not available`);
+  the proxy then falls back to in-process with no regression. So the Ownership
+  bullet below is corrected: the context must be **created on main and handed
+  off**, not created on the thread.
+- **M1.2 — GL-context handoff (next, `lumen-paint`).** Create the femtovg
+  backend on main (handle valid), `make_not_current` there, move it into the
+  render thread, `make_current` on the thread once, then render/present there.
+  This is the femtovg-side change `FemtovgBackend`'s manual `unsafe impl Send`
+  was written for. Only after this does `LUMEN_RENDER_THREAD=1` actually present
+  off-main; then measure acceptance and consider making it default.
+
+- **Ownership:** ~~the render thread creates and exclusively owns~~ **[M1.1 spike
+  correction]** — on Windows the GL context/`Canvas` **cannot** be created on
+  the render thread (window handle unavailable off the main thread). It must be
+  created on main and the context handed off (`make_not_current`→move→
+  `make_current`). The render thread then exclusively owns and drives it. Main
+  thread keeps the winit window; resize/scale-factor/DPI events are forwarded as
+  messages.
 - **Commit protocol:** main (later: engine thread) sends
   `Commit { content: Arc<DisplayList>, overlay: Arc<DisplayList>, scroll: (f32,f32), zoom: f32, viewport, commit_id }`
   via a latest-wins slot (Mutex<Option<Commit>> + the existing
