@@ -112,6 +112,38 @@ pub trait RenderBackend: Send {
     /// продолжают рисовать в масштабе 1:1).
     fn set_preview_scale(&mut self, _scale: f32) {}
 
+    /// Устанавливает фиксированное смещение страницы в CSS px (ADR-016 M0.4).
+    ///
+    /// Это неизменный сдвиг контента, накладываемый **поверх** прокрутки: он
+    /// опускает страницу ниже tab bar-а (`TAB_BAR_HEIGHT`) и сдвигает её вправо
+    /// от левой docked-панели. Раньше shell оборачивал весь display-list в
+    /// `PushTransform(translate(offset))` каждый кадр, копируя список целиком.
+    /// Теперь смещение применяется рендер-стороной как дополнительная
+    /// трансляция после scroll-трансляции — display-list рисуется по ссылке без
+    /// per-frame клона (главный источник работы на горячем пути скролла).
+    ///
+    /// Порядок трансформаций сохраняется прежним: `scale(preview) ·
+    /// translate(-scroll) · translate(offset)`, поэтому sticky-вычисления
+    /// (использующие истинный `scroll`) и zoom-превью не меняются.
+    ///
+    /// Дефолт — no-op; бэкенды без поддержки продолжают ожидать смещение внутри
+    /// самого display-list (см. [`supports_page_offset`]).
+    ///
+    /// [`supports_page_offset`]: RenderBackend::supports_page_offset
+    fn set_page_offset(&mut self, _x: f32, _y: f32) {}
+
+    /// Сообщает, применяет ли бэкенд смещение из [`set_page_offset`] сам.
+    ///
+    /// `true` — shell может рисовать display-list по ссылке (быстрый путь без
+    /// per-frame клона). `false` (дефолт) — shell обязан по-прежнему оборачивать
+    /// контент в `PushTransform(translate(offset))`, иначе страница нарисуется
+    /// поверх tab bar-а. Femtovg (Phase 2 default) возвращает `true`.
+    ///
+    /// [`set_page_offset`]: RenderBackend::set_page_offset
+    fn supports_page_offset(&self) -> bool {
+        false
+    }
+
     /// Обновляет размер поверхности рендеринга (физические пиксели).
     ///
     /// Вызывается при изменении размера окна или изменении DPI.
@@ -337,6 +369,17 @@ mod tests {
         let mut b: Box<dyn RenderBackend> = Box::new(NullBackend);
         assert!(b.register_snapshot(7, &img).is_ok());
         b.clear_snapshots(); // no-op, must not panic
+    }
+
+    #[test]
+    fn null_backend_page_offset_default_unsupported() {
+        // ADR-016 M0.4: бэкенд без поддержки page-offset сообщает об этом
+        // (`false`), а `set_page_offset` — безопасный no-op. Shell по `false`
+        // остаётся на пути с `PushTransform`-обёрткой, так что страница не
+        // нарисуется поверх tab bar-а.
+        let mut b: Box<dyn RenderBackend> = Box::new(NullBackend);
+        assert!(!b.supports_page_offset(), "дефолт — page-offset не поддерживается");
+        b.set_page_offset(16.0, 36.0); // no-op, must not panic
     }
 
     #[test]

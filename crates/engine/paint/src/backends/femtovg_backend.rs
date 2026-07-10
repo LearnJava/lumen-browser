@@ -417,6 +417,11 @@ pub struct FemtovgBackend {
     scroll_y: f32,
     /// Текущий scroll_x, обновляется в `render()` перед обходом content.
     scroll_x: f32,
+    /// Фиксированное смещение страницы (tab bar + левая docked-панель) в CSS px
+    /// (ADR-016 M0.4). Накладывается рендер-стороной после scroll-трансляции,
+    /// заменяя per-frame `PushTransform`-обёртку всего display-list. `(0, 0)` —
+    /// смещения нет.
+    page_offset: (f32, f32),
     /// CSS ширина viewport (width / scale), нужна для sticky-вычислений.
     viewport_css_w: f32,
     /// CSS высота viewport (height / scale), нужна для sticky-вычислений.
@@ -1240,6 +1245,7 @@ impl FemtovgBackend {
             sticky_stack: Vec::new(),
             scroll_y: 0.0,
             scroll_x: 0.0,
+            page_offset: (0.0, 0.0),
             viewport_css_w: size.width as f32 / scale as f32,
             viewport_css_h: size.height as f32 / scale as f32,
             cull_stats: (0, 0),
@@ -3544,6 +3550,17 @@ impl RenderBackend for FemtovgBackend {
             self.canvas.scale(self.preview_scale, self.preview_scale);
         }
         self.canvas.translate(-scroll_x, -scroll_y);
+        // ADR-016 M0.4: фиксированное смещение страницы (tab bar + левая
+        // docked-панель) накладывается ПОСЛЕ scroll-трансляции — ровно там, где
+        // раньше стоял `PushTransform(translate(offset))` во главе display-list.
+        // Итоговый CTM `scale · translate(-scroll) · translate(offset)` и
+        // порядок вложения sticky-слоёв не меняются, поэтому смещение так же
+        // масштабируется zoom-превью, а sticky-компенсация (`+scroll`) корректна.
+        // Culling остаётся верным: `is_command_culled` мапит AABB через
+        // актуальный CTM, который уже включает это смещение.
+        if self.page_offset != (0.0, 0.0) {
+            self.canvas.translate(self.page_offset.0, self.page_offset.1);
+        }
         if crate::frame_log_level() >= 2 {
             // Уровень 2: разбивка времени по типам команд (top-8 за кадр).
             let mut per_variant: HashMap<&'static str, (std::time::Duration, u32)> =
@@ -3638,6 +3655,15 @@ impl RenderBackend for FemtovgBackend {
         // отношение, поэтому реально сюда приходит [~0.06, ~16], но клемпим на
         // всякий случай.
         self.preview_scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+    }
+
+    fn set_page_offset(&mut self, x: f32, y: f32) {
+        // Нефинитные значения (NaN/inf) сломали бы CTM — падаем на «без смещения».
+        self.page_offset = if x.is_finite() && y.is_finite() { (x, y) } else { (0.0, 0.0) };
+    }
+
+    fn supports_page_offset(&self) -> bool {
+        true
     }
 
     fn resize(&mut self, width: u32, height: u32) {
