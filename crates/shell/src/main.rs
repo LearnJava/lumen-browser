@@ -100,7 +100,10 @@ use lumen_layout::{collect_scroll_containers, collect_snap_containers, find_scro
 use lumen_layout::collect_computed_styles;
 use lumen_layout::style::{ComputedStyle, ScrollBehavior};
 use lumen_layout::computed_style_to_map;
-use lumen_paint::{build_display_list_ordered, build_display_list_ordered_with_anim, hit_test, DisplayList, RenderBackend};
+use lumen_paint::{
+    build_display_list_ordered, build_display_list_ordered_with_anim_split, hit_test, DisplayList,
+    RenderBackend,
+};
 use lumen_layout::Cursor as CssCursor;
 use lumen_driver::{AutomationCommand, AutomationHandle, AutomationReply, AutomationRequest, WaitCondition};
 use winit::application::ApplicationHandler;
@@ -11477,13 +11480,33 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Compositor offload: если есть активные анимации с opacity/transform/
                 // color/background-color — пересобираем display list из layout_box с
                 // overrides, минуя relayout (BUG-231 распространил offload на цвета).
+                // Static/animated split (EXPERIMENT.md §2): вместе со списком строятся
+                // диапазоны анимируемых сегментов — скролл-композитор кэширует полосу
+                // по статике, сегменты рисует поверх. Позднейшие append-ы в anim_dl
+                // (cue, squiggles) идут в конец списка и диапазоны не сдвигают.
+                let mut anim_ranges: Vec<std::ops::Range<usize>> = Vec::new();
                 let mut anim_dl: Option<lumen_paint::DisplayList> =
                     if let (Some(frame), Some(lb)) = (&self.anim_frame, &self.layout_box) {
                         let comp = frame.to_compositor_frame();
                         if !comp.is_empty() {
                             let tree = StackingTree::build(lb);
                             let order = PaintOrder::from_tree(&tree);
-                            Some(build_display_list_ordered_with_anim(lb, &tree, &order, Some(&comp)))
+                            let (dl, ranges) = build_display_list_ordered_with_anim_split(
+                                lb,
+                                &tree,
+                                &order,
+                                Some(&comp),
+                            );
+                            if std::env::var("LUMEN_FRAME_LOG").is_ok_and(|v| v != "0") {
+                                eprintln!(
+                                    "[frame] anim_dl: {} cmds, {} ranges, {} overrides",
+                                    dl.len(),
+                                    ranges.len(),
+                                    comp.overrides.len(),
+                                );
+                            }
+                            anim_ranges = ranges;
+                            Some(dl)
                         } else {
                             None
                         }
@@ -12178,7 +12201,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         // Inspector box-model overlay rides inside the page transform.
                         shifted.extend_from_slice(&inspector_box_dl);
                         shifted.push(lumen_paint::DisplayCommand::PopTransform);
-                        if let Err(err) = r.render(&shifted, &overlay_buf, scroll_y, scroll_x) {
+                        // Split-диапазоны валидны только когда base == anim_dl;
+                        // +1 — сдвиг на prepended PushTransform страницы.
+                        let shifted_ranges: Vec<std::ops::Range<usize>> =
+                            if anim_dl.is_some() {
+                                anim_ranges
+                                    .iter()
+                                    .map(|rr| rr.start + 1..rr.end + 1)
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            };
+                        if let Err(err) = r.render_with_anim(
+                            &shifted,
+                            &overlay_buf,
+                            scroll_y,
+                            scroll_x,
+                            &shifted_ranges,
+                        ) {
                             eprintln!("Ошибка рендера: {err:?}");
                         }
                     }

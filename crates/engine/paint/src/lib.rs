@@ -91,6 +91,7 @@ pub use compositor::{
 pub use display_list::{
     build_display_list, build_display_list_ordered, build_display_list_ordered_dpr,
     build_display_list_ordered_with_anim, build_display_list_ordered_with_anim_dpr,
+    build_display_list_ordered_with_anim_split,
     build_display_list_with_anim, build_print_display_list, contains_backdrop_filter,
     cull_display_list, hash_display_list, is_image_set, patch_scroll_layer,
     point_on_resize_grip,

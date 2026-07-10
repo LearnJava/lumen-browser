@@ -138,6 +138,19 @@ impl RenderBackend for WgpuBackend {
             .map_err(surface_error_to_render_error)
     }
 
+    fn render_with_anim(
+        &mut self,
+        content: &[DisplayCommand],
+        overlay: &[DisplayCommand],
+        scroll_y: f32,
+        scroll_x: f32,
+        anim_ranges: &[std::ops::Range<usize>],
+    ) -> Result<(), RenderError> {
+        self.renderer
+            .render_with_anim(content, overlay, scroll_y, scroll_x, anim_ranges)
+            .map_err(surface_error_to_render_error)
+    }
+
     fn resize(&mut self, width: u32, height: u32) {
         self.renderer.resize(width, height);
     }

@@ -1833,6 +1833,18 @@ fn scroll_compositor_disabled() -> bool {
     })
 }
 
+/// `true`, если static/animated split скролл-композитора отключён
+/// (`LUMEN_NO_ANIM_SPLIT=1`). Диагностика: A/B картинки и скорости на одном
+/// бинарнике; при выключенном split анимируемые кадры рисуются монолитом,
+/// как до среза.
+fn anim_split_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("LUMEN_NO_ANIM_SPLIT").is_ok_and(|v| v == "1")
+    })
+}
+
 /// `true`, если bbox-scissor фильтр-пассов отключён (`LUMEN_NO_BBOX_SCISSOR=1`).
 /// Диагностика: A/B-сравнение картинки и скорости на одном бинарнике.
 fn bbox_scissor_disabled() -> bool {
@@ -4574,6 +4586,20 @@ impl Renderer {
     /// каждый кадр = 30× регрессия). Промах стоит ОДИН рендер контента
     /// (в полосу) + дешёвую композицию (blit + overlay) — урок п.15 №2.
     ///
+    /// Static/animated split (EXPERIMENT.md §2): при непустых `anim_ranges`
+    /// (диапазоны анимируемых сегментов от
+    /// [`build_display_list_ordered_with_anim_split`]) полоса строится и
+    /// хэшируется ТОЛЬКО по статичной части списка, а сегменты рисуются
+    /// поверх blit-а каждым кадром (реплей их transform/clip-контекста —
+    /// `anim_split_compose_plan`). Так медленный скролл анимированной
+    /// страницы попадает в полосу, хотя display list меняется каждый кадр.
+    /// Painter's-order guard: если статичная команда позже сегмента
+    /// пересекает его bbox — split небезопасен, кадр идёт монолитом.
+    /// Kill-switch: `LUMEN_NO_ANIM_SPLIT=1`.
+    ///
+    /// [`build_display_list_ordered_with_anim_split`]: crate::display_list::build_display_list_ordered_with_anim_split
+    /// [`anim_split_compose_plan`]: crate::display_list::anim_split_compose_plan
+    ///
     /// Возвращает `Ok(true)`, если кадр показан этим путём.
     fn try_page_compose(
         &mut self,
@@ -4581,6 +4607,7 @@ impl Renderer {
         overlay: &[DisplayCommand],
         scroll_y: f32,
         scroll_x: f32,
+        anim_ranges: &[std::ops::Range<usize>],
     ) -> Result<bool, wgpu::SurfaceError> {
         if self.surface.is_none()
             || scroll_compositor_disabled()
@@ -4603,12 +4630,39 @@ impl Renderer {
         }
         let band_h_css = band_h_px as f32 / dpr;
 
-        // Scroll-инвариантный ключ содержимого полосы.
+        // Static/animated split: план оверлея сегментов. При конфликте
+        // painter's order план сам расширяет диапазоны tail-split-ом —
+        // хэш/полосу дальше считаем по ЕГО effective-диапазонам. Полный
+        // отказ (нереплеябельный контекст и т.п.) — split выключается на
+        // кадр, ключ считается по полному списку (= поведение до среза).
+        let mut ranges: &[std::ops::Range<usize>] = if anim_split_disabled() {
+            &[]
+        } else {
+            anim_ranges
+        };
+        let effective_ranges: Vec<std::ops::Range<usize>>;
+        let seg_plan: Option<crate::display_list::DisplayList> = if ranges.is_empty() {
+            None
+        } else {
+            match crate::display_list::anim_split_compose_plan(content, ranges) {
+                Some((p, eff)) => {
+                    effective_ranges = eff;
+                    ranges = &effective_ranges;
+                    Some(p)
+                }
+                None => {
+                    ranges = &[];
+                    None
+                }
+            }
+        };
+
+        // Scroll-инвариантный ключ содержимого полосы (по статике при split-е).
         let key = {
             use std::hash::Hasher;
             let mut h = std::collections::hash_map::DefaultHasher::new();
-            h.write_u64(crate::display_list::hash_display_list(
-                content, &[], 0.0, 0.0, sw, band_h_px,
+            h.write_u64(crate::display_list::hash_display_list_skipping(
+                content, ranges, &[], 0.0, 0.0, sw, band_h_px,
             ));
             h.write_u64(self.content_generation);
             h.finish()
@@ -4623,6 +4677,14 @@ impl Renderer {
         // между тиками — это всё ещё выигрыш.
         let content_stable = self.last_content_key == Some(key);
         self.last_content_key = Some(key);
+        if !content_stable && crate::frame_log_level() >= 2 {
+            eprintln!(
+                "[frame:wgpu] page-compose unstable-key: gen {} ranges {} dl {}",
+                self.content_generation,
+                ranges.len(),
+                content.len(),
+            );
+        }
 
         let fits = self.page_band.as_ref().is_some_and(|b| {
             b.key == key
@@ -4673,6 +4735,20 @@ impl Renderer {
             let Some(view) = self.page_band.as_ref().map(|b| b.view.clone()) else {
                 return Ok(false);
             };
+            // Split: в полосу идёт только статичная часть списка — сегменты
+            // выколоты (они рисуются поверх blit-а каждым кадром).
+            let static_content: std::borrow::Cow<'_, [DisplayCommand]> = if ranges.is_empty() {
+                std::borrow::Cow::Borrowed(content)
+            } else {
+                let mut v = Vec::with_capacity(content.len());
+                let mut prev = 0usize;
+                for r in ranges {
+                    v.extend_from_slice(&content[prev..r.start]);
+                    prev = r.end;
+                }
+                v.extend_from_slice(&content[prev..]);
+                std::borrow::Cow::Owned(v)
+            };
             // Depth-attachment обязан совпадать по размеру с целью пасса —
             // на время Band-рендера подменяем оконную depth-текстуру
             // полосной (и возвращаем обратно, включая случай ошибки).
@@ -4680,7 +4756,7 @@ impl Renderer {
             let saved_depth_t = self.depth_texture.replace(band_depth_t);
             let saved_depth_v = self.depth_view.replace(band_depth_v);
             let band_result = self.render_impl(
-                content,
+                &static_content,
                 &[],
                 band_top_css,
                 0.0,
@@ -4695,12 +4771,13 @@ impl Renderer {
             }
             if crate::frame_log_level() >= 2 {
                 eprintln!(
-                    "[frame:wgpu] page-compose MISS: band y={band_top_css:.0}..{:.0} css ({sw}x{band_h_px} px)",
+                    "[frame:wgpu] page-compose MISS: band y={band_top_css:.0}..{:.0} css ({sw}x{band_h_px} px, {} anim segs)",
                     band_top_css + band_h_css,
+                    ranges.len(),
                 );
             }
         } else if crate::frame_log_level() >= 2 {
-            eprintln!("[frame:wgpu] page-compose HIT");
+            eprintln!("[frame:wgpu] page-compose HIT ({} anim segs)", ranges.len());
         }
 
         // Композиция: blit полосы со сдвигом + overlay поверх.
@@ -4729,7 +4806,10 @@ impl Renderer {
             w_css: sw as f32 / dpr,
             h_css: band_h_css,
         });
-        self.render_impl(&[], overlay, 0.0, 0.0, RenderPassMode::Compose)?;
+        // Split: анимируемые сегменты рисуются как content-полоса Compose-кадра
+        // (получают штатный сдвиг -scroll_y) — поверх blit-а, под overlay.
+        let seg_content: &[DisplayCommand] = seg_plan.as_deref().unwrap_or(&[]);
+        self.render_impl(seg_content, overlay, scroll_y, 0.0, RenderPassMode::Compose)?;
         Ok(true)
     }
 
@@ -4740,6 +4820,20 @@ impl Renderer {
         overlay: &[DisplayCommand],
         scroll_y: f32,
         scroll_x: f32,
+    ) -> Result<(), wgpu::SurfaceError> {
+        self.render_with_anim(content, overlay, scroll_y, scroll_x, &[])
+    }
+
+    /// Как [`render`](Self::render), но с диапазонами анимируемых сегментов
+    /// `content` (static/animated split скролл-композитора, EXPERIMENT.md §2).
+    /// Пустые `anim_ranges` — поведение идентично `render`.
+    pub fn render_with_anim(
+        &mut self,
+        content: &[DisplayCommand],
+        overlay: &[DisplayCommand],
+        scroll_y: f32,
+        scroll_x: f32,
+        anim_ranges: &[std::ops::Range<usize>],
     ) -> Result<(), wgpu::SurfaceError> {
         // Skip-identical-frame (p1-exp-wgpu-only): тотальный хэш кадра —
         // display list + overlay + scroll + размер поверхности (структурный
@@ -4778,7 +4872,7 @@ impl Renderer {
         // Скролл-композитор страницы (EXPERIMENT.md §2): при попадании кадр
         // собирается из персистентной полосы + overlay, минуя перерисовку
         // контента. `false` — путь неприменим, рисуем монолитом как раньше.
-        if self.try_page_compose(content, overlay, scroll_y, scroll_x)? {
+        if self.try_page_compose(content, overlay, scroll_y, scroll_x, anim_ranges)? {
             self.last_frame_hash = Some(frame_hash);
             return Ok(());
         }
