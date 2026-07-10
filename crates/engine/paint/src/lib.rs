@@ -257,10 +257,10 @@ pub use display_list::{
     build_display_list, build_display_list_ordered, build_display_list_ordered_dpr,
     build_display_list_ordered_with_anim, build_display_list_ordered_with_anim_dpr,
     build_display_list_with_anim, build_print_display_list, contains_backdrop_filter,
-    cull_display_list, hash_display_list, is_image_set, point_on_resize_grip,
+    cull_display_list, hash_content, hash_display_list, is_image_set, point_on_resize_grip,
     select_image_set_url, split_at_page_breaks, serialize_display_list, strip_background_graphics,
     BlendMode, CornerRadii,
-    DisplayCommand, DisplayList,
+    DisplayCommand, DisplayList, FrameDelta, FrameFingerprint,
 };
 pub use gap_decorations::{emit_gap_rules, GapDecorationContext, GapSegment};
 pub use tile_grid::{TileDirty, TileGrid, DEFAULT_TILE_SIZE};

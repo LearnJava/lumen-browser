@@ -521,7 +521,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/devtools/src/ws.rs:104` **fn** `read_text_frame` — Прочитать один WebSocket фрейм (RFC 6455 §5.2)
 `crates/devtools/src/ws.rs:125` **fn** `write_text_frame` — Отправить text фрейм (server→client, без маски)
 
-## lumen-dom  (225 symbols)
+## lumen-dom  (226 symbols)
 
 `crates/engine/dom/src/contenteditable.rs:10` **enum** `DomCommand` — A single, reversible DOM modification
 `crates/engine/dom/src/contenteditable.rs:40` **struct** `PasteData` — Data from a paste operation (clipboard or drag-drop)
@@ -733,9 +733,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/dom/src/lib.rs:2927` **fn** `delete_range` — Delete the content of `range` from the document, returning a collapsed
 `crates/engine/dom/src/lib.rs:2981` **fn** `insert_paragraph_break`
 `crates/engine/dom/src/lib.rs:3010` **fn** `node_text_content` — Returns the full text content of `node` — concatenation of all descendant text nodes
-`crates/engine/dom/src/lib.rs:3019` **fn** `node_child_count` — Number of direct DOM children of `node`
-`crates/engine/dom/src/lib.rs:3028` **fn** `node_length` — DOM-spec "length" of `node`: UTF-16 code-unit count for text nodes, child
-`crates/engine/dom/src/lib.rs:3040` **fn** `range_text` — Extracts the text covered by `range` (WHATWG DOM §4.6 `stringification`)
+`crates/engine/dom/src/lib.rs:3023` **fn** `locate_text_offset_range` — Locate the text node and local byte range covering `[start, end)` of
+`crates/engine/dom/src/lib.rs:3067` **fn** `node_child_count` — Number of direct DOM children of `node`
+`crates/engine/dom/src/lib.rs:3076` **fn** `node_length` — DOM-spec "length" of `node`: UTF-16 code-unit count for text nodes, child
+`crates/engine/dom/src/lib.rs:3088` **fn** `range_text` — Extracts the text covered by `range` (WHATWG DOM §4.6 `stringification`)
 `crates/engine/dom/src/vtt.rs:7` **struct** `VttCueSettings` — Настройки позиционирования cue (WebVTT §6.3). Phase 0: сырые строки значений
 `crates/engine/dom/src/vtt.rs:16` **struct** `VttCue`
 `crates/engine/dom/src/vtt.rs:28` **enum** `VttError`
@@ -1229,7 +1230,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/ipc/src/lib.rs:251` **fn** `connect` — Connect to the network service listening on `127.0.0.1:port`
 `crates/ipc/src/lib.rs:261` **fn** `request` — Send a request and block until the matching response arrives
 
-## lumen-js  (365 symbols)
+## lumen-js  (366 symbols)
 
 `crates/js/src/async_context.rs:32` **fn** `install_async_context` — Install the `AsyncContext` global (Variable + Snapshot) into the context
 `crates/js/src/attribution_reporting.rs:23` **fn** `install_attribution_reporting_api` — Install Attribution Reporting API bindings into the JS context
@@ -1359,47 +1360,48 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/lib.rs:1591` **fn** `flush_canvas_updates` — Drain dirty Canvas 2D buffers for upload to the renderer
 `crates/js/src/lib.rs:1604` **fn** `pump_broadcast_channels` — Deliver messages posted to this page's `BroadcastChannel` instances
 `crates/js/src/lib.rs:1630` **fn** `pump_shared_workers` — Deliver messages posted by `SharedWorker` threads to this page's ports
-`crates/js/src/lib.rs:1650` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
-`crates/js/src/lib.rs:1660` **fn** `update_nav_state` — Update the authoritative navigation state from the shell
-`crates/js/src/lib.rs:1669` **fn** `take_nav_updates` — Drain all Navigation API update requests queued by `_lumen_navigation_request`
-`crates/js/src/lib.rs:1678` **fn** `take_nav_intercept_result` — Drain `NavigateEvent` intercept results queued by `_lumen_navigation_report_intercept`
-`crates/js/src/lib.rs:1683` **fn** `push_nav_update` — Push a Navigation API update into the queue (called by `_lumen_navigation_request`)
-`crates/js/src/lib.rs:1696` **fn** `take_history_url_updates` — Drain `history.pushState` / `history.replaceState` URL-update notifications
-`crates/js/src/lib.rs:1706` **fn** `take_history_traversals` — Drain all `history.go(n)` / `back` / `forward` traversal deltas queued by
-`crates/js/src/lib.rs:1717` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()` and
-`crates/js/src/lib.rs:1725` **fn** `take_view_transition_events` — Drain all View Transition events queued by `document.startViewTransition`
-`crates/js/src/lib.rs:1733` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
-`crates/js/src/lib.rs:1742` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
-`crates/js/src/lib.rs:1750` **fn** `has_raf_pending` — Non-consuming peek: `true` if `requestAnimationFrame` callbacks are queued
-`crates/js/src/lib.rs:1759` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
-`crates/js/src/lib.rs:1768` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
-`crates/js/src/lib.rs:1776` **fn** `update_viewport_size` — Update the viewport dimensions
-`crates/js/src/lib.rs:1785` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
-`crates/js/src/lib.rs:1797` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
-`crates/js/src/lib.rs:1806` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
-`crates/js/src/lib.rs:1813` **fn** `take_page_scroll_requests` — Drain JS page-level scroll requests from `window.scrollTo/scrollBy/scroll`
-`crates/js/src/lib.rs:1819` **fn** `set_page_scroll_y` — Update the page scroll Y exposed to JS `window.scrollY / pageYOffset`
-`crates/js/src/lib.rs:1828` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
-`crates/js/src/lib.rs:1839` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
-`crates/js/src/lib.rs:1848` **fn** `take_print_requests` — Drain all print requests queued by JS `window.print()` (W-2)
-`crates/js/src/lib.rs:1857` **fn** `pointer_capture_nid` — Returns the DOM node nid that currently holds pointer capture (pointer_id=1)
-`crates/js/src/lib.rs:1865` **fn** `take_pointer_capture` — Release the active pointer capture, returning the former capture target nid
-`crates/js/src/lib.rs:1874` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
-`crates/js/src/lib.rs:1883` **fn** `take_focus_requests` — Drain JS dialog focus requests queued by `_lumen_request_focus` / `_lumen_request_blur`
-`crates/js/src/lib.rs:1892` **fn** `fire_dialog_close` — Close a `<dialog>` as the result of a `<form method="dialog">` submission
-`crates/js/src/lib.rs:1910` **fn** `notify_focus_changed` — Notify the JS runtime that the shell moved keyboard focus to a new node
-`crates/js/src/lib.rs:1927` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
-`crates/js/src/lib.rs:1937` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
-`crates/js/src/lib.rs:1956` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
-`crates/js/src/lib.rs:1969` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
-`crates/js/src/lib.rs:1983` **fn** `register_img_bitmaps` — Register decoded RGBA8 bitmaps for `<img>` elements, keyed by node id
-`crates/js/src/lib.rs:1998` **fn** `deliver_scroll_progress` — Push viewport scroll progress into all active root-viewport `ScrollTimeline` instances
-`crates/js/src/lib.rs:2017` **fn** `fire_element_scroll` — Fire a non-bubbling `scroll` Event on the DOM element identified by `nid`
-`crates/js/src/lib.rs:2033` **fn** `fire_window_scroll` — Fire a non-bubbling `scroll` Event on the `window` object (page scroll)
-`crates/js/src/lib.rs:2055` **fn** `fire_snap_changing` — Fire a CSS Scroll Snap L2 `snapchanging` event on a scroll container
-`crates/js/src/lib.rs:2065` **fn** `fire_snap_changed` — Fire a CSS Scroll Snap L2 `snapchanged` event on a scroll container
-`crates/js/src/lib.rs:2101` **fn** `deliver_long_animation_frame` — Deliver a Long Animation Frame (LoAF) entry to PerformanceObserver subscribers
-`crates/js/src/lib.rs:2139` **fn** `run_gc_pass` — Tune the QuickJS GC based on the tab's lifecycle tier (10L)
+`crates/js/src/lib.rs:1648` **fn** `debug_memory_used` — TEMP BUG-272 diagnostics: QuickJS heap usage in bytes (malloc_size)
+`crates/js/src/lib.rs:1658` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
+`crates/js/src/lib.rs:1668` **fn** `update_nav_state` — Update the authoritative navigation state from the shell
+`crates/js/src/lib.rs:1677` **fn** `take_nav_updates` — Drain all Navigation API update requests queued by `_lumen_navigation_request`
+`crates/js/src/lib.rs:1686` **fn** `take_nav_intercept_result` — Drain `NavigateEvent` intercept results queued by `_lumen_navigation_report_intercept`
+`crates/js/src/lib.rs:1691` **fn** `push_nav_update` — Push a Navigation API update into the queue (called by `_lumen_navigation_request`)
+`crates/js/src/lib.rs:1704` **fn** `take_history_url_updates` — Drain `history.pushState` / `history.replaceState` URL-update notifications
+`crates/js/src/lib.rs:1714` **fn** `take_history_traversals` — Drain all `history.go(n)` / `back` / `forward` traversal deltas queued by
+`crates/js/src/lib.rs:1725` **fn** `take_fullscreen_requests` — Drain all fullscreen requests queued by `element.requestFullscreen()` and
+`crates/js/src/lib.rs:1733` **fn** `take_view_transition_events` — Drain all View Transition events queued by `document.startViewTransition`
+`crates/js/src/lib.rs:1741` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
+`crates/js/src/lib.rs:1750` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
+`crates/js/src/lib.rs:1758` **fn** `has_raf_pending` — Non-consuming peek: `true` if `requestAnimationFrame` callbacks are queued
+`crates/js/src/lib.rs:1767` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
+`crates/js/src/lib.rs:1776` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
+`crates/js/src/lib.rs:1784` **fn** `update_viewport_size` — Update the viewport dimensions
+`crates/js/src/lib.rs:1793` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
+`crates/js/src/lib.rs:1805` **fn** `update_scroll_states` — Replace the scroll-state table with a fresh snapshot from the layout tree
+`crates/js/src/lib.rs:1814` **fn** `take_scroll_requests` — Drain JS-initiated scroll requests queued by `_lumen_request_scroll`
+`crates/js/src/lib.rs:1821` **fn** `take_page_scroll_requests` — Drain JS page-level scroll requests from `window.scrollTo/scrollBy/scroll`
+`crates/js/src/lib.rs:1827` **fn** `set_page_scroll_y` — Update the page scroll Y exposed to JS `window.scrollY / pageYOffset`
+`crates/js/src/lib.rs:1836` **fn** `take_notification_requests` — Drain all OS notification requests queued by `new Notification(...)` in JS
+`crates/js/src/lib.rs:1847` **fn** `take_window_open_requests` — Drain all popup window requests queued by JS `window.open(...)`
+`crates/js/src/lib.rs:1856` **fn** `take_print_requests` — Drain all print requests queued by JS `window.print()` (W-2)
+`crates/js/src/lib.rs:1865` **fn** `pointer_capture_nid` — Returns the DOM node nid that currently holds pointer capture (pointer_id=1)
+`crates/js/src/lib.rs:1873` **fn** `take_pointer_capture` — Release the active pointer capture, returning the former capture target nid
+`crates/js/src/lib.rs:1882` **fn** `take_console_messages` — Drain all `console.log/warn/error` messages queued since the last call
+`crates/js/src/lib.rs:1891` **fn** `take_focus_requests` — Drain JS dialog focus requests queued by `_lumen_request_focus` / `_lumen_request_blur`
+`crates/js/src/lib.rs:1900` **fn** `fire_dialog_close` — Close a `<dialog>` as the result of a `<form method="dialog">` submission
+`crates/js/src/lib.rs:1918` **fn** `notify_focus_changed` — Notify the JS runtime that the shell moved keyboard focus to a new node
+`crates/js/src/lib.rs:1935` **fn** `update_computed_styles` — Push a fresh snapshot of computed CSS styles into the JS runtime
+`crates/js/src/lib.rs:1945` **fn** `set_document_visibility` — Update `document.hidden` / `document.visibilityState` and fire
+`crates/js/src/lib.rs:1964` **fn** `notify_dom_content_loaded` — Transition `document.readyState` → `'interactive'` and fire
+`crates/js/src/lib.rs:1977` **fn** `notify_window_loaded` — Transition `document.readyState` → `'complete'` and fire
+`crates/js/src/lib.rs:1991` **fn** `register_img_bitmaps` — Register decoded RGBA8 bitmaps for `<img>` elements, keyed by node id
+`crates/js/src/lib.rs:2006` **fn** `deliver_scroll_progress` — Push viewport scroll progress into all active root-viewport `ScrollTimeline` instances
+`crates/js/src/lib.rs:2025` **fn** `fire_element_scroll` — Fire a non-bubbling `scroll` Event on the DOM element identified by `nid`
+`crates/js/src/lib.rs:2041` **fn** `fire_window_scroll` — Fire a non-bubbling `scroll` Event on the `window` object (page scroll)
+`crates/js/src/lib.rs:2063` **fn** `fire_snap_changing` — Fire a CSS Scroll Snap L2 `snapchanging` event on a scroll container
+`crates/js/src/lib.rs:2073` **fn** `fire_snap_changed` — Fire a CSS Scroll Snap L2 `snapchanged` event on a scroll container
+`crates/js/src/lib.rs:2109` **fn** `deliver_long_animation_frame` — Deliver a Long Animation Frame (LoAF) entry to PerformanceObserver subscribers
+`crates/js/src/lib.rs:2147` **fn** `run_gc_pass` — Tune the QuickJS GC based on the tab's lifecycle tier (10L)
 `crates/js/src/local_font_access.rs:19` **fn** `install_local_font_access_api` — Install Local Font Access API shim into the JS context
 `crates/js/src/long_animation_frames.rs:24` **fn** `install_long_animation_frames_bindings` — Install Long Animation Frames API into the QuickJS context
 `crates/js/src/media_capabilities.rs:8` **fn** `install_media_capabilities_bindings` — Install Media Capabilities API bindings into the JS context
@@ -2301,7 +2303,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/mcp/src/transport.rs:127` **fn** `push_incoming` — Поставить в очередь входящее JSON сообщение
 `crates/mcp/src/transport.rs:132` **fn** `take_outgoing` — Забрать все исходящие сообщения (очищает буфер)
 
-## lumen-network  (993 symbols)
+## lumen-network  (1195 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -2463,14 +2465,52 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/ack.rs:316` **fn** `on_ack_of_ack` — Discards received ranges the peer no longer needs acknowledged, given that it
 `crates/network/src/h3/ack.rs:339` **fn** `ecn_counts` — The cumulative ECN counts observed for this space (RFC 9000 §13.4)
 `crates/network/src/h3/alt_svc.rs:54` **struct** `AltSvcEntry` — One parsed alternative service entry (RFC 7838 §3) for the `h3` protocol
-`crates/network/src/h3/alt_svc.rs:75` **fn** `parse` — Parse an `Alt-Svc` header value into the HTTP/3 alternatives it advertises
-`crates/network/src/h3/alt_svc.rs:191` **struct** `AltSvcCache` — Per-origin memory of advertised HTTP/3 alternatives (RFC 7838 §3)
-`crates/network/src/h3/alt_svc.rs:198` **fn** `new` — Create an empty cache
-`crates/network/src/h3/alt_svc.rs:207` **fn** `insert` — Record the first `h3` alternative from a parsed `Alt-Svc` header for
-`crates/network/src/h3/alt_svc.rs:224` **fn** `get` — Look up a still-fresh HTTP/3 alternative for `origin` as of `now`
-`crates/network/src/h3/alt_svc.rs:236` **fn** `remove` — Clear any cached alternative for `origin` (RFC 7838 §2.4 "broken":
-`crates/network/src/h3/alt_svc.rs:241` **fn** `insert_now` — [`insert`](Self::insert) using the current wall clock
-`crates/network/src/h3/alt_svc.rs:246` **fn** `get_now` — [`get`](Self::get) using the current wall clock
+`crates/network/src/h3/alt_svc.rs:80` **fn** `connect_target` — The concrete `(host, port)` the QUIC leg should connect to for this
+`crates/network/src/h3/alt_svc.rs:92` **fn** `origin_key` — The [`AltSvcCache`] key for an origin: its authority in `host:port` form
+`crates/network/src/h3/alt_svc.rs:104` **fn** `parse` — Parse an `Alt-Svc` header value into the HTTP/3 alternatives it advertises
+`crates/network/src/h3/alt_svc.rs:220` **struct** `AltSvcCache` — Per-origin memory of advertised HTTP/3 alternatives (RFC 7838 §3)
+`crates/network/src/h3/alt_svc.rs:227` **fn** `new` — Create an empty cache
+`crates/network/src/h3/alt_svc.rs:236` **fn** `insert` — Record the first `h3` alternative from a parsed `Alt-Svc` header for
+`crates/network/src/h3/alt_svc.rs:253` **fn** `get` — Look up a still-fresh HTTP/3 alternative for `origin` as of `now`
+`crates/network/src/h3/alt_svc.rs:265` **fn** `remove` — Clear any cached alternative for `origin` (RFC 7838 §2.4 "broken":
+`crates/network/src/h3/alt_svc.rs:270` **fn** `insert_now` — [`insert`](Self::insert) using the current wall clock
+`crates/network/src/h3/alt_svc.rs:275` **fn** `get_now` — [`get`](Self::get) using the current wall clock
+`crates/network/src/h3/client_bootstrap.rs:68` **struct** `ClientConnectConfig` — The endpoint-tunable knobs the bootstrap folds into the ClientHello's
+`crates/network/src/h3/client_bootstrap.rs:112` **fn** `stream_manager_config` — The stream-manager receive limits this config advertises (RFC 9000 §18.2),
+`crates/network/src/h3/client_bootstrap.rs:139` **fn** `request_pump` — Build the request phase's [`RequestPump`] from this config
+`crates/network/src/h3/client_bootstrap.rs:164` **enum** `BootstrapError` — Why [`connect_client`] could not assemble the first flight
+`crates/network/src/h3/client_bootstrap.rs:347` **fn** `connect_client` — Assemble a ready-to-drive [`ConnectDriver`] for `server_name` over
+`crates/network/src/h3/client_pool.rs:54` **struct** `H3ConnectionPool` — A pool of live QUIC / HTTP-3 [`RequestDriver`](super::request_driver::RequestDriver)s
+`crates/network/src/h3/client_pool.rs:61` **fn** `new` — Create an empty pool
+`crates/network/src/h3/client_request.rs:51` **enum** `FetchError` — Why [`fetch`] could not obtain the response for the request it placed
+`crates/network/src/h3/client_request.rs:116` **fn** `fetch` — Place `req` on `driver`, drive it to completion, and return its single
+`crates/network/src/h3/client_request.rs:148` **fn** `fetch_with_sink` — Identical to [`fetch`] but forwards body bytes to `sink` as DATA frames arrive
+`crates/network/src/h3/client_request.rs:171` **enum** `ConnectFetchError` — Why [`connect_and_fetch`] could not complete the request
+`crates/network/src/h3/client_request.rs:234` **fn** `connect_and_fetch` — Open `connect`'s connection, splice in the request phase over `pump`, and fetch
+`crates/network/src/h3/client_request.rs:266` **fn** `connect_and_fetch_with_sink` — Identical to [`connect_and_fetch`] but forwards body bytes to `sink` as DATA
+`crates/network/src/h3/client_transport.rs:62` **enum** `H3TransportError` — Why [`h3_do_request`] could not obtain the response over QUIC
+`crates/network/src/h3/client_transport.rs:272` **fn** `h3_do_request` — Fetch `https://host:port{path}` over HTTP/3, opening a fresh QUIC connection
+`crates/network/src/h3/client_transport.rs:316` **fn** `h3_do_request_with_sink` — Identical to [`h3_do_request`] but forwards body bytes to `sink` as DATA frames
+`crates/network/src/h3/client_transport.rs:370` **fn** `h3_connect` — Resolve `host:port`, open a UDP socket, run the TLS 1.3 / QUIC handshake,
+`crates/network/src/h3/client_transport.rs:413` **fn** `h3_fetch_on_driver` — Fetch one HTTP/3 request on `driver` (already confirmed, from the pool or from
+`crates/network/src/h3/client_transport.rs:445` **fn** `h3_fetch_on_driver_with_sink` — Identical to [`h3_fetch_on_driver`] but forwards body bytes to `sink` as DATA
+`crates/network/src/h3/conn_cert_auth.rs:63` **enum** `CertAuthError` — Why authenticating the server certificate failed (RFC 8446 §4.4.2, §4.4.3). Every
+`crates/network/src/h3/conn_cert_auth.rs:142` **fn** `authenticate_server_certificate` — Authenticate a completed handshake's server certificate (RFC 8446 §4.4.3): prove
+`crates/network/src/h3/conn_connect.rs:140` **struct** `OwnedTrustAnchor` — One trust anchor a presented chain may terminate at (RFC 5280 §6.1): the anchor's
+`crates/network/src/h3/conn_connect.rs:157` **struct** `ConnectStep` — What one [`ConnectDriver::poll`] turn did: the transport-level outcome of the
+`crates/network/src/h3/conn_connect.rs:182` **enum** `ConnectOutcome` — Why [`ConnectDriver::connect`] stopped opening the connection
+`crates/network/src/h3/conn_connect.rs:207` **enum** `RequestSpliceError` — Why splicing a connect driver into the request phase was refused
+`crates/network/src/h3/conn_connect.rs:228` **enum** `ConnectError` — Why a step of the connect loop failed
+`crates/network/src/h3/conn_connect.rs:432` **struct** `ConnectDriver` — Drives one QUIC connection through its opening handshake to confirmation by
+`crates/network/src/h3/conn_connect.rs:479` **fn** `new` — Joins a control-flow `handshake` loop and a `tls` bridge into one connect
+`crates/network/src/h3/conn_connect.rs:499` **fn** `handshake` — The control-flow loop, borrowed immutably (e.g. to read whether the handshake
+`crates/network/src/h3/conn_connect.rs:507` **fn** `tls` — The TLS bridge, borrowed immutably (e.g. to read the handshake
+`crates/network/src/h3/conn_connect.rs:537` **fn** `completed` — The completed handshake material, available once the TLS handshake completes
+`crates/network/src/h3/conn_connect.rs:544` **fn** `is_confirmed` — Whether the peer has confirmed the handshake (HANDSHAKE_DONE received,
+`crates/network/src/h3/conn_connect.rs:552` **fn** `into_parts` — Splits the driver into the connection turn it drove and the server
+`crates/network/src/h3/conn_connect.rs:582` **fn** `into_request_driver` — Splices a confirmed connect driver into the request phase, wiring the request
+`crates/network/src/h3/conn_connect.rs:657` **fn** `poll` — Runs one turn of the connect loop at `now`: one control-flow poll, then — when
+`crates/network/src/h3/conn_connect.rs:833` **fn** `connect` — Drives the connect loop until the peer confirms the handshake, a terminal
 `crates/network/src/h3/conn_flow.rs:46` **enum** `StreamDir` — A stream's directionality, the axis `MAX_STREAMS` accounts on separately
 `crates/network/src/h3/conn_flow.rs:77` **enum** `ConnError` — A connection-level protocol violation. Each variant maps to a single QUIC
 `crates/network/src/h3/conn_flow.rs:131` **struct** `SendConnFlow` — Our view of the peer's connection-level flow-control limit: the sum of stream
@@ -2510,6 +2550,17 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/conn_flow.rs:417` **fn** `record_open` — Records that the peer opened a stream whose cumulative count is `count`
 `crates/network/src/h3/conn_flow.rs:427` **fn** `record_closed` — Records that `delta` more streams of this direction have finished
 `crates/network/src/h3/conn_flow.rs:435` **fn** `window_update` — Re-advertises the limit as `closed + concurrency` and returns the new
+`crates/network/src/h3/conn_handshake.rs:86` **enum** `PollOutcome` — What one [`HandshakeDriver::poll`] turn did
+`crates/network/src/h3/conn_handshake.rs:104` **enum** `HandshakeOutcome` — Why [`HandshakeDriver::run`] stopped driving the handshake
+`crates/network/src/h3/conn_handshake.rs:121` **enum** `HandshakeError` — Something that stopped a handshake turn
+`crates/network/src/h3/conn_handshake.rs:169` **struct** `HandshakeDriver` — Drives one QUIC connection's [`ConnectionTurn`] through its opening handshake:
+`crates/network/src/h3/conn_handshake.rs:181` **fn** `new` — Wraps a [`ConnectionTurn`] in a handshake-driving loop. The turn should
+`crates/network/src/h3/conn_handshake.rs:187` **fn** `turn` — The connection turn, borrowed immutably (e.g. to read the connection
+`crates/network/src/h3/conn_handshake.rs:194` **fn** `turn_mut` — The connection turn, borrowed mutably: installing handshake / 1-RTT keys,
+`crates/network/src/h3/conn_handshake.rs:200` **fn** `is_confirmed` — Whether the peer has confirmed the handshake (HANDSHAKE_DONE received,
+`crates/network/src/h3/conn_handshake.rs:206` **fn** `into_turn` — Splits the loop back into the connection turn it drove, e.g. to hand it to
+`crates/network/src/h3/conn_handshake.rs:227` **fn** `poll` — Runs exactly one turn of the loop at `now`: blocks for the next event, then
+`crates/network/src/h3/conn_handshake.rs:302` **fn** `run` — Drives the loop until the handshake confirms, a terminal timer ends the
 `crates/network/src/h3/conn_id.rs:59` **enum** `ConnIdError` — A connection-ID protocol violation. Each variant maps to a single QUIC
 `crates/network/src/h3/conn_id.rs:117` **struct** `ConnIdEntry` — One issued connection ID together with the 16-byte stateless reset token
 `crates/network/src/h3/conn_id.rs:144` **struct** `RemoteConnIds` — The set of connection IDs the peer has issued for us to use as the
@@ -2527,6 +2578,15 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/conn_id.rs:420` **fn** `retire` — Drop one of our IDs because the peer sent RETIRE_CONNECTION_ID for it
 `crates/network/src/h3/conn_id.rs:432` **fn** `accepts` — Whether a peer-supplied Destination Connection ID matches one of the IDs
 `crates/network/src/h3/conn_id.rs:438` **fn** `active_count` — Number of IDs we currently have issued and active
+`crates/network/src/h3/conn_tls.rs:88` **struct** `TlsAdvance` — What one [`TlsConnState::advance`] accomplished
+`crates/network/src/h3/conn_tls.rs:104` **enum** `TlsConnError` — Why a step of the TLS-to-QUIC wiring failed
+`crates/network/src/h3/conn_tls.rs:151` **struct** `TlsConnState` — Bridges a client [`ClientHandshake`] to a QUIC connection's CRYPTO streams and
+`crates/network/src/h3/conn_tls.rs:181` **fn** `new` — Start the TLS-to-QUIC wiring for a client
+`crates/network/src/h3/conn_tls.rs:197` **fn** `tls` — The underlying TLS handshake state machine, borrowed immutably (e.g. to read
+`crates/network/src/h3/conn_tls.rs:205` **fn** `is_complete` — Whether the TLS handshake has completed (the server Finished verified and the
+`crates/network/src/h3/conn_tls.rs:211` **fn** `client_hello_sent` — Whether the first-flight ClientHello has been enqueued
+`crates/network/src/h3/conn_tls.rs:226` **fn** `send_client_hello` — Enqueue the ClientHello into the Initial-level CRYPTO stream, sending the
+`crates/network/src/h3/conn_tls.rs:261` **fn** `advance` — Advance the TLS handshake by consuming any newly-reassembled CRYPTO at the
 `crates/network/src/h3/conn_turn.rs:92` **enum** `TurnEffect` — The observable result of applying one [`DriverAction`] to the send state
 `crates/network/src/h3/conn_turn.rs:128` **fn** `is_terminal` — Whether this effect ends the connection: the owner must stop driving the turn
 `crates/network/src/h3/conn_turn.rs:136` **enum** `TurnError` — Something that stopped a [`DriverAction`] from being carried out against the send
@@ -2655,13 +2715,23 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/frame.rs:132` **enum** `Frame` — A parsed HTTP/3 frame (RFC 9114 §7.2). Field sections in `Headers` /
 `crates/network/src/h3/frame.rs:196` **fn** `parse` — Parse one frame from the front of `buf`
 `crates/network/src/h3/frame.rs:254` **fn** `encode` — Serialize this frame (type · length · payload) onto `out`
-`crates/network/src/h3/h3_request.rs:37` **enum** `H3Profile` — The HTTP/2 (and thus HTTP/3) impersonation profile, selecting the pseudo-
-`crates/network/src/h3/h3_request.rs:54` **enum** `MessageError` — An error translating between an HTTP message and its QPACK field section
-`crates/network/src/h3/h3_request.rs:143` **struct** `H3ResponseHead` — A decoded HTTP/3 response head: the `:status` code and the ordinary header
-`crates/network/src/h3/h3_request.rs:185` **fn** `build_request_fields` — Build the ordered request field list: the four request pseudo-headers in the
-`crates/network/src/h3/h3_request.rs:221` **fn** `encode_request` — Encode a request into a complete `HEADERS` frame (RFC 9114 §4.1, §7.2.2):
-`crates/network/src/h3/h3_request.rs:263` **fn** `validate_response_fields` — Validate a decoded response field list (RFC 9114 §4.1.2, §4.2, §4.3.2) and
-`crates/network/src/h3/h3_request.rs:305` **fn** `decode_response` — Decode a response `HEADERS` frame's QPACK field block into an
+`crates/network/src/h3/h3_exchange.rs:52` **struct** `H3Response` — A fully assembled HTTP/3 response: the final `:status`, its header fields, the
+`crates/network/src/h3/h3_exchange.rs:71` **enum** `AssembleError` — An error assembling a response from a request/response stream
+`crates/network/src/h3/h3_exchange.rs:118` **struct** `ResponseAssembler` — Assembles a single client-side HTTP/3 request/response stream (RFC 9114 §4.1)
+`crates/network/src/h3/h3_exchange.rs:144` **fn** `new` — A fresh assembler for a request/response stream awaiting its first frame
+`crates/network/src/h3/h3_exchange.rs:166` **fn** `push_bytes` — Feed the next chunk of request/response-stream bytes, processing every
+`crates/network/src/h3/h3_exchange.rs:186` **fn** `push_bytes_with_sink` — Feed the next chunk of request/response-stream bytes, calling `sink` with
+`crates/network/src/h3/h3_exchange.rs:273` **fn** `finish` — Consume the assembler at the stream FIN and return the finished response
+`crates/network/src/h3/h3_request.rs:32` **type** `FieldPairs` — A list of ordinary header/trailer fields as decoded `(name, value)` byte-string
+`crates/network/src/h3/h3_request.rs:41` **enum** `H3Profile` — The HTTP/2 (and thus HTTP/3) impersonation profile, selecting the pseudo-
+`crates/network/src/h3/h3_request.rs:58` **enum** `MessageError` — An error translating between an HTTP message and its QPACK field section
+`crates/network/src/h3/h3_request.rs:156` **struct** `H3ResponseHead` — A decoded HTTP/3 response head: the `:status` code and the ordinary header
+`crates/network/src/h3/h3_request.rs:198` **fn** `build_request_fields` — Build the ordered request field list: the four request pseudo-headers in the
+`crates/network/src/h3/h3_request.rs:234` **fn** `encode_request` — Encode a request into a complete `HEADERS` frame (RFC 9114 §4.1, §7.2.2):
+`crates/network/src/h3/h3_request.rs:276` **fn** `validate_response_fields` — Validate a decoded response field list (RFC 9114 §4.1.2, §4.2, §4.3.2) and
+`crates/network/src/h3/h3_request.rs:318` **fn** `decode_response` — Decode a response `HEADERS` frame's QPACK field block into an
+`crates/network/src/h3/h3_request.rs:334` **fn** `validate_trailer_fields` — Validate a decoded trailer field list (RFC 9114 §4.1) and return the ordinary
+`crates/network/src/h3/h3_request.rs:358` **fn** `decode_trailers` — Decode a trailer `HEADERS` frame's QPACK field block into the ordinary trailer
 `crates/network/src/h3/h3_stream.rs:94` **enum** `StreamLayerError` — A stream-layer protocol violation. Each variant maps to exactly one RFC 9114
 `crates/network/src/h3/h3_stream.rs:140` **enum** `UniStreamType` — The decoded type of a unidirectional stream (RFC 9114 §6.2)
 `crates/network/src/h3/h3_stream.rs:165` **fn** `parse` — Parse the stream-type prefix from the front of `buf`
@@ -2725,6 +2795,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/loss.rs:240` **fn** `on_ack_received` — Processes an ACK frame's acknowledged ranges (RFC 9002 §A.7)
 `crates/network/src/h3/loss.rs:302` **fn** `detect_and_remove_lost_packets` — Declares and removes lost packets (RFC 9002 §A.10
 `crates/network/src/h3/loss.rs:413` **fn** `establishes_persistent_congestion` — Whether a run of lost packets establishes persistent congestion (RFC 9002
+`crates/network/src/h3/mozilla_roots.rs:92` **fn** `mozilla_trust_anchors` — Build the real Mozilla trust store as a `Vec<`[`OwnedTrustAnchor`]`>`, ready to hand
 `crates/network/src/h3/packet.rs:90` **enum** `PacketError` — Packet-header codec error. The connection layer maps these to the
 `crates/network/src/h3/packet.rs:141` **enum** `Packet` — A parsed QUIC packet header plus its opaque protected region (RFC 9000 §17)
 `crates/network/src/h3/packet.rs:261` **fn** `parse` — Parse one QUIC packet header (and its protected remainder) from the
@@ -2927,6 +2998,88 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/recv_path.rs:175` **enum** `IngestError` — A connection error raised by an *authenticated* packet's content, which the
 `crates/network/src/h3/recv_path.rs:195` **fn** `code` — The QUIC transport error code to close the connection with (RFC 9000 §20.1)
 `crates/network/src/h3/recv_path.rs:292` **fn** `ingest_datagram` — Ingest one received UDP datagram into `conn`, decrypting and dispatching each of
+`crates/network/src/h3/request_dispatch.rs:49` **enum** `DispatchError` — An error dispatching a client request onto, or a response frame off of, a QUIC
+`crates/network/src/h3/request_dispatch.rs:100` **struct** `SentRequest` — A request placed onto a QUIC stream: the client-initiated bidirectional stream
+`crates/network/src/h3/request_dispatch.rs:113` **struct** `RequestDispatch` — Dispatches HTTP/3 client requests over QUIC streams: the join of the request
+`crates/network/src/h3/request_dispatch.rs:130` **fn** `new` — Builds a dispatch advertising the receive windows and stream-count limits in
+`crates/network/src/h3/request_dispatch.rs:156` **fn** `send_request` — Places `req` onto a fresh client-initiated bidirectional stream: allocate the
+`crates/network/src/h3/request_dispatch.rs:186` **fn** `on_stream_frame` — Routes an inbound STREAM frame for a request stream: `offset`/`data` is the
+`crates/network/src/h3/request_dispatch.rs:217` **fn** `on_stream_frame_with_sink` — Routes an inbound STREAM frame for a request stream, forwarding `DATA`
+`crates/network/src/h3/request_dispatch.rs:286` **fn** `abort` — Retires the in-flight request on `stream_id` without a response — the
+`crates/network/src/h3/request_dispatch.rs:292` **fn** `is_active` — Whether an in-flight request currently owns `stream_id`
+`crates/network/src/h3/request_dispatch.rs:298` **fn** `active_count` — The number of in-flight requests (sent, response not yet complete or failed)
+`crates/network/src/h3/request_dispatch.rs:305` **fn** `streams` — The QUIC stream manager, for the transport loop to drain send streams into
+`crates/network/src/h3/request_dispatch.rs:311` **fn** `streams_mut` — The QUIC stream manager, mutably — the transport loop's handle to poll send
+`crates/network/src/h3/request_dispatch.rs:319` **fn** `request_flushed` — Whether the request stream `stream_id` has emitted its whole message and FIN
+`crates/network/src/h3/request_driver.rs:81` **enum** `RequestDriverError` — Something that stopped one turn of the request driver
+`crates/network/src/h3/request_driver.rs:135` **enum** `RequestPoll` — What one [`RequestDriver::poll`] turn did
+`crates/network/src/h3/request_driver.rs:156` **enum** `RequestOutcome` — Why [`RequestDriver::run`] stopped
+`crates/network/src/h3/request_driver.rs:181` **struct** `RequestDriver` — A [`RequestTurn`] driven over the connection's event loop, accumulating the
+`crates/network/src/h3/request_driver.rs:193` **fn** `new` — Wraps a live request `turn` (its connection already handshake-complete, with
+`crates/network/src/h3/request_driver.rs:199` **fn** `turn` — The request turn, borrowed immutably
+`crates/network/src/h3/request_driver.rs:204` **fn** `turn_mut` — The request turn, borrowed mutably
+`crates/network/src/h3/request_driver.rs:210` **fn** `responses` — The responses completed so far, in completion order
+`crates/network/src/h3/request_driver.rs:216` **fn** `take_responses` — Takes the completed responses out of the driver, leaving it empty
+`crates/network/src/h3/request_driver.rs:222` **fn** `into_parts` — Splits the driver into its request turn and the responses it collected
+`crates/network/src/h3/request_driver.rs:229` **fn** `in_flight` — The number of requests still in flight — placed but not yet completed or
+`crates/network/src/h3/request_driver.rs:236` **fn** `is_done` — Whether every placed request has completed (no request is in flight). Note a
+`crates/network/src/h3/request_driver.rs:251` **fn** `send_request` — Places `req` onto a fresh client-initiated bidirectional stream, finishing its
+`crates/network/src/h3/request_driver.rs:264` **fn** `transmit` — Stages the request pump's send half and flushes it — a pass-through to
+`crates/network/src/h3/request_driver.rs:284` **fn** `poll` — Runs exactly one turn of the loop at `now`: blocks for the next event, then
+`crates/network/src/h3/request_driver.rs:348` **fn** `poll_with_sink` — Identical to [`poll`](Self::poll) but forwards body bytes to `sink` as DATA
+`crates/network/src/h3/request_driver.rs:410` **fn** `run_with_sink` — Identical to [`run`](Self::run) but forwards body bytes to `sink` as DATA
+`crates/network/src/h3/request_driver.rs:477` **fn** `run` — Drives the loop until every in-flight request completes, a terminal timer ends
+`crates/network/src/h3/request_exchange.rs:38` **struct** `ClientRequest` — A client request to render onto an HTTP/3 request stream (RFC 9114 §4.1)
+`crates/network/src/h3/request_exchange.rs:59` **enum** `ExchangeState` — The lifecycle state of a [`ClientExchange`]
+`crates/network/src/h3/request_exchange.rs:72` **enum** `ExchangeError` — An error rendering a request or assembling its response
+`crates/network/src/h3/request_exchange.rs:104` **struct** `ClientExchange` — The client side of one HTTP/3 request/response exchange (RFC 9114 §4.1, §6.1):
+`crates/network/src/h3/request_exchange.rs:126` **fn** `start` — Render the request onto request-stream bytes and return a receiving
+`crates/network/src/h3/request_exchange.rs:174` **fn** `on_recv` — Feed the next chunk of response-stream bytes
+`crates/network/src/h3/request_exchange.rs:205` **fn** `on_recv_with_sink` — Feed the next chunk of response-stream bytes, forwarding `DATA` frame
+`crates/network/src/h3/request_mux.rs:45` **enum** `MuxError` — An error routing response-stream bytes through the multiplexer
+`crates/network/src/h3/request_mux.rs:80` **enum** `OpenError` — An error allocating a stream for a new request
+`crates/network/src/h3/request_mux.rs:107` **struct** `OpenedRequest` — A newly opened request: the client-initiated bidirectional stream it occupies
+`crates/network/src/h3/request_mux.rs:119` **struct** `RequestMux` — Multiplexes many concurrent HTTP/3 client requests over one connection
+`crates/network/src/h3/request_mux.rs:132` **fn** `new` — A fresh multiplexer with no in-flight requests, ready to hand out stream
+`crates/network/src/h3/request_mux.rs:151` **fn** `open` — Open a new request: allocate the next client-initiated bidirectional
+`crates/network/src/h3/request_mux.rs:180` **fn** `on_recv` — Feed response-stream bytes the transport delivered on `stream_id`
+`crates/network/src/h3/request_mux.rs:209` **fn** `on_recv_with_sink` — Feed response-stream bytes the transport delivered on `stream_id`,
+`crates/network/src/h3/request_mux.rs:242` **fn** `abort` — Retires the exchange on `stream_id` without a response — the request was
+`crates/network/src/h3/request_mux.rs:248` **fn** `is_active` — Whether an in-flight request currently owns `stream_id`
+`crates/network/src/h3/request_mux.rs:254` **fn** `active_count` — The number of in-flight requests (opened, not yet completed or failed)
+`crates/network/src/h3/request_pump.rs:76` **enum** `PumpEvent` — What routing one inbound per-stream frame through the pump produced
+`crates/network/src/h3/request_pump.rs:117` **struct** `RequestPump` — Translates a [`RequestDispatch`]'s stream operations to and from QUIC per-stream
+`crates/network/src/h3/request_pump.rs:128` **fn** `new` — Builds a pump over a fresh [`RequestDispatch`] advertising `stream_config`'s
+`crates/network/src/h3/request_pump.rs:147` **fn** `send_request` — Places `req` onto a fresh client-initiated bidirectional stream and finishes
+`crates/network/src/h3/request_pump.rs:160` **fn** `poll_transmit` — Drains every request send stream into QUIC STREAM frames (RFC 9000 §19.8),
+`crates/network/src/h3/request_pump.rs:199` **fn** `on_frame` — Routes one inbound per-stream frame the connection deferred to us, returning
+`crates/network/src/h3/request_pump.rs:221` **fn** `on_frame_with_sink` — Routes one inbound per-stream frame the connection deferred to us,
+`crates/network/src/h3/request_pump.rs:292` **fn** `is_active` — Whether an in-flight request currently owns `stream_id`
+`crates/network/src/h3/request_pump.rs:298` **fn** `active_count` — The number of in-flight requests (sent, response not yet complete or failed)
+`crates/network/src/h3/request_pump.rs:305` **fn** `request_flushed` — Whether the request on `stream_id` has emitted its whole message and FIN —
+`crates/network/src/h3/request_pump.rs:312` **fn** `dispatch` — The wrapped request dispatch, for the transport loop to reach the stream
+`crates/network/src/h3/request_pump.rs:317` **fn** `dispatch_mut` — The wrapped request dispatch, mutably
+`crates/network/src/h3/request_turn.rs:89` **enum** `RequestTurnError` — Something that stopped a request turn from staging or transmitting a request, or
+`crates/network/src/h3/request_turn.rs:158` **struct** `RequestIngest` — The result of routing the per-stream frames a datagram deferred through the request
+`crates/network/src/h3/request_turn.rs:175` **fn** `into_responses` — Extracts every completed [`H3Response`] from the routed events, consuming the
+`crates/network/src/h3/request_turn.rs:209` **struct** `RequestTurn` — The `h3_do_request` seam: a [`RequestPump`] wired to a live [`ConnectionTurn`]
+`crates/network/src/h3/request_turn.rs:227` **fn** `new` — Joins a live `turn` and a request `pump`, segmenting each staged STREAM frame's
+`crates/network/src/h3/request_turn.rs:234` **fn** `with_default_frame_len` — Joins a live `turn` and a request `pump`, deriving the per-frame stream budget
+`crates/network/src/h3/request_turn.rs:245` **fn** `turn` — The live connection turn, borrowed immutably (e.g. to read the lifecycle, or
+`crates/network/src/h3/request_turn.rs:251` **fn** `turn_mut` — The live connection turn, borrowed mutably: waiting for events, dispatching
+`crates/network/src/h3/request_turn.rs:257` **fn** `pump` — The request pump, borrowed immutably (e.g. to count in-flight requests)
+`crates/network/src/h3/request_turn.rs:262` **fn** `pump_mut` — The request pump, borrowed mutably
+`crates/network/src/h3/request_turn.rs:268` **fn** `max_request_frame_len` — The maximum stream-data bytes one staged STREAM frame carries
+`crates/network/src/h3/request_turn.rs:273` **fn** `set_max_request_frame_len` — Sets the per-frame stream budget (see [`RequestTurn::new`])
+`crates/network/src/h3/request_turn.rs:279` **fn** `into_parts` — Splits the request turn back into its connection turn and request pump
+`crates/network/src/h3/request_turn.rs:293` **fn** `send_request` — Places `req` onto a fresh client-initiated bidirectional stream, finishing its
+`crates/network/src/h3/request_turn.rs:313` **fn** `stage_requests` — Drains the pump's request send streams
+`crates/network/src/h3/request_turn.rs:333` **fn** `flush` — Flushes every queued frame — staged request STREAM frames alongside any ACKs or
+`crates/network/src/h3/request_turn.rs:344` **fn** `transmit` — Stages the pump's request STREAM frames ([`RequestTurn::stage_requests`]) and
+`crates/network/src/h3/request_turn.rs:364` **fn** `route_deferred` — Routes the per-stream frames among `deferred` through the request pump
+`crates/network/src/h3/request_turn.rs:394` **fn** `ingest` — Ingests one datagram woken on the connection's driver
+`crates/network/src/h3/request_turn.rs:413` **fn** `route_deferred_with_sink` — Routes `deferred` frames through the pump with an optional streaming sink
+`crates/network/src/h3/request_turn.rs:439` **fn** `ingest_with_sink` — Ingests one datagram and routes its deferred frames with an optional streaming sink
 `crates/network/src/h3/retry.rs:48` **enum** `RetryError` — Failure processing a Retry packet
 `crates/network/src/h3/retry.rs:119` **fn** `retry_integrity_tag` — Compute the Retry Integrity Tag for `packet` given the `odcid` the client used
 `crates/network/src/h3/retry.rs:144` **fn** `verify_retry_integrity` — Verify a received Retry packet's Integrity Tag against the `odcid` the client
@@ -3020,16 +3173,17 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/stream_manager.rs:215` **fn** `recv_stream_ref` — The receiving half of `stream_id`, if one exists
 `crates/network/src/h3/stream_manager.rs:221` **fn** `send_stream` — The sending half of `stream_id`, if one exists
 `crates/network/src/h3/stream_manager.rs:226` **fn** `send_stream_mut` — The sending half of `stream_id`, mutably, if one exists
-`crates/network/src/h3/stream_manager.rs:232` **fn** `recv_flow` — The connection-wide receive flow-control budget (RFC 9000 §4.1)
-`crates/network/src/h3/stream_manager.rs:238` **fn** `recv_stream_limit` — The receive-side stream-count limit for `dir` (RFC 9000 §4.6)
-`crates/network/src/h3/stream_manager.rs:259` **fn** `recv_stream` — Dispatches a received STREAM frame (RFC 9000 §19.8), delivering `data` at
-`crates/network/src/h3/stream_manager.rs:292` **fn** `recv_reset` — Dispatches a received RESET_STREAM frame (RFC 9000 §19.4): the peer aborts
-`crates/network/src/h3/stream_manager.rs:318` **fn** `recv_stop_sending` — Dispatches a received STOP_SENDING frame (RFC 9000 §19.5): the peer requests
-`crates/network/src/h3/stream_manager.rs:346` **fn** `recv_max_stream_data` — Dispatches a received MAX_STREAM_DATA frame (RFC 9000 §19.10): raises the
-`crates/network/src/h3/stream_manager.rs:370` **fn** `recv_stream_data_blocked` — Dispatches a received STREAM_DATA_BLOCKED frame (RFC 9000 §19.13): the peer
-`crates/network/src/h3/stream_manager.rs:381` **fn** `read` — Pops and returns the contiguous readable prefix of `stream_id`, advancing
-`crates/network/src/h3/stream_manager.rs:395` **fn** `connection_window_update` — Re-advertises the connection-wide receive limit as `read + window` and
-`crates/network/src/h3/stream_manager.rs:483` **fn** `recv_stream_finished` — The number of a stream's halves that have fully closed, for the caller to feed
+`crates/network/src/h3/stream_manager.rs:235` **fn** `send_stream_ids` — The identifiers of every stream with a sending half, ascending. The send
+`crates/network/src/h3/stream_manager.rs:241` **fn** `recv_flow` — The connection-wide receive flow-control budget (RFC 9000 §4.1)
+`crates/network/src/h3/stream_manager.rs:247` **fn** `recv_stream_limit` — The receive-side stream-count limit for `dir` (RFC 9000 §4.6)
+`crates/network/src/h3/stream_manager.rs:268` **fn** `recv_stream` — Dispatches a received STREAM frame (RFC 9000 §19.8), delivering `data` at
+`crates/network/src/h3/stream_manager.rs:301` **fn** `recv_reset` — Dispatches a received RESET_STREAM frame (RFC 9000 §19.4): the peer aborts
+`crates/network/src/h3/stream_manager.rs:327` **fn** `recv_stop_sending` — Dispatches a received STOP_SENDING frame (RFC 9000 §19.5): the peer requests
+`crates/network/src/h3/stream_manager.rs:355` **fn** `recv_max_stream_data` — Dispatches a received MAX_STREAM_DATA frame (RFC 9000 §19.10): raises the
+`crates/network/src/h3/stream_manager.rs:379` **fn** `recv_stream_data_blocked` — Dispatches a received STREAM_DATA_BLOCKED frame (RFC 9000 §19.13): the peer
+`crates/network/src/h3/stream_manager.rs:390` **fn** `read` — Pops and returns the contiguous readable prefix of `stream_id`, advancing
+`crates/network/src/h3/stream_manager.rs:404` **fn** `connection_window_update` — Re-advertises the connection-wide receive limit as `read + window` and
+`crates/network/src/h3/stream_manager.rs:492` **fn** `recv_stream_finished` — The number of a stream's halves that have fully closed, for the caller to feed
 `crates/network/src/h3/timer.rs:72` **enum** `TimerKind` — Which of the connection's timers a deadline belongs to
 `crates/network/src/h3/timer.rs:113` **struct** `ArmedTimer` — A single armed timer: the instant it is due and which timer it is
 `crates/network/src/h3/timer.rs:129` **struct** `ConnectionTimers` — The multiplexer over a connection's individual timer deadlines
@@ -3067,12 +3221,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/tls_handshake.rs:54` **enum** `HandshakeError` — Failure processing a step of the client handshake (RFC 8446 §4)
 `crates/network/src/h3/tls_handshake.rs:138` **enum** `HandshakeState` — The client handshake's progress through the server's flight (RFC 8446 §4),
 `crates/network/src/h3/tls_handshake.rs:161` **struct** `HandshakeComplete` — The 1-RTT key material and secrets produced when the server Finished verifies
-`crates/network/src/h3/tls_handshake.rs:208` **enum** `HandshakeEvent` — What processing one server handshake message accomplished
-`crates/network/src/h3/tls_handshake.rs:229` **struct** `ClientHandshake` — Client-side TLS 1.3 handshake flow state machine (RFC 8446 §4, RFC 9001 §4)
-`crates/network/src/h3/tls_handshake.rs:270` **fn** `new` — Start a client handshake
-`crates/network/src/h3/tls_handshake.rs:287` **fn** `state` — The current handshake state
-`crates/network/src/h3/tls_handshake.rs:293` **fn** `is_complete` — Whether the handshake has completed successfully
-`crates/network/src/h3/tls_handshake.rs:309` **fn** `handle_message` — Process exactly one complete server handshake message
+`crates/network/src/h3/tls_handshake.rs:220` **enum** `HandshakeEvent` — What processing one server handshake message accomplished
+`crates/network/src/h3/tls_handshake.rs:241` **struct** `ClientHandshake` — Client-side TLS 1.3 handshake flow state machine (RFC 8446 §4, RFC 9001 §4)
+`crates/network/src/h3/tls_handshake.rs:287` **fn** `new` — Start a client handshake
+`crates/network/src/h3/tls_handshake.rs:305` **fn** `state` — The current handshake state
+`crates/network/src/h3/tls_handshake.rs:311` **fn** `is_complete` — Whether the handshake has completed successfully
+`crates/network/src/h3/tls_handshake.rs:327` **fn** `handle_message` — Process exactly one complete server handshake message
 `crates/network/src/h3/tls_message.rs:124` **enum** `TlsError` — Codec error. [`Handshake::parse`] signals "need more bytes" out of band with
 `crates/network/src/h3/tls_message.rs:161` **struct** `Extension` — A single TLS extension: a 2-byte type and an opaque `<0..2^16-1>` body
 `crates/network/src/h3/tls_message.rs:171` **fn** `new` — Construct an extension from its type code and raw body
@@ -3142,6 +3296,55 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/h3/version_nego.rs:143` **fn** `attempted_version` — The version the client used in its first Initial packet
 `crates/network/src/h3/version_nego.rs:150` **fn** `has_processed` — Whether a Version Negotiation packet has already been processed on this
 `crates/network/src/h3/version_nego.rs:178` **fn** `process` — Process a received Version Negotiation packet against the connection IDs
+`crates/network/src/h3/x509_basic_constraints.rs:106` **struct** `BasicConstraints` — The decoded `basicConstraints` extension of one certificate (RFC 5280 §4.2.1.9)
+`crates/network/src/h3/x509_basic_constraints.rs:133` **enum** `BasicConstraintsError` — Why extracting a certificate's `basicConstraints` extension failed
+`crates/network/src/h3/x509_basic_constraints.rs:254` **fn** `certificate_basic_constraints` — Extract a certificate's `basicConstraints` extension (RFC 5280 §4.2.1.9)
+`crates/network/src/h3/x509_basic_constraints.rs:385` **enum** `CaConstraintsWalkError` — Why enforcing `basicConstraints` across a certificate chain failed (RFC 5280
+`crates/network/src/h3/x509_basic_constraints.rs:473` **fn** `verify_ca_constraints` — Verify that every issuing certificate in a server-presented chain is a permitted CA
+`crates/network/src/h3/x509_chain.rs:179` **enum** `ChainError` — Why verifying a certificate's signature against a candidate issuer's key failed
+`crates/network/src/h3/x509_chain.rs:335` **fn** `verify_certificate_signature` — Verify one certificate's signature under a candidate issuer's public key (RFC 5280
+`crates/network/src/h3/x509_chain.rs:534` **enum** `ChainWalkError` — Why walking a certificate chain's internal signatures failed (RFC 5280 §4.1.1.3,
+`crates/network/src/h3/x509_chain.rs:615` **fn** `verify_chain_signatures` — Verify that every certificate in a server-presented chain is signed by the next one
+`crates/network/src/h3/x509_critical_ext.rs:131` **enum** `CritExtError` — Why extracting a certificate's critical extensions failed
+`crates/network/src/h3/x509_critical_ext.rs:260` **fn** `certificate_has_unrecognized_critical_extension` — Whether one certificate carries an extension it marks `critical` whose `extnID` this
+`crates/network/src/h3/x509_critical_ext.rs:341` **enum** `CritExtWalkError` — Why enforcing the unrecognized-critical-extension rule over a server-presented chain
+`crates/network/src/h3/x509_critical_ext.rs:420` **fn** `verify_no_unknown_critical_extensions` — Verify that no certificate in a server-presented chain marks an extension `critical` that
+`crates/network/src/h3/x509_ext_key_usage.rs:119` **struct** `ExtKeyUsage` — The decoded `extendedKeyUsage` extension of one certificate (RFC 5280 §4.2.1.12): which
+`crates/network/src/h3/x509_ext_key_usage.rs:141` **fn** `allows_server_auth` — Whether this certificate is authorised for TLS server authentication (RFC 5280
+`crates/network/src/h3/x509_ext_key_usage.rs:148` **enum** `ExtKeyUsageError` — Why extracting a certificate's `extendedKeyUsage` extension failed
+`crates/network/src/h3/x509_ext_key_usage.rs:270` **fn** `certificate_ext_key_usage` — Extract a certificate's `extendedKeyUsage` extension (RFC 5280 §4.2.1.12)
+`crates/network/src/h3/x509_ext_key_usage.rs:369` **enum** `ExtKeyUsageWalkError` — Why enforcing `extendedKeyUsage` on a server-presented chain failed (RFC 5280 §4.2.1.12,
+`crates/network/src/h3/x509_ext_key_usage.rs:445` **fn** `verify_server_auth_eku` — Verify that a server-presented chain's end-entity leaf is authorised for TLS server
+`crates/network/src/h3/x509_hostname.rs:112` **enum** `HostnameError` — Why verifying a certificate against a reference hostname failed
+`crates/network/src/h3/x509_hostname.rs:264` **fn** `verify_certificate_hostname` — Verify that an end-entity certificate covers a reference hostname (RFC 6125 §6,
+`crates/network/src/h3/x509_key_usage.rs:113` **enum** `KeyUsageBit` — A named bit of the `keyUsage` `BIT STRING` (RFC 5280 §4.2.1.3). The associated value is
+`crates/network/src/h3/x509_key_usage.rs:142` **struct** `KeyUsage` — The decoded `keyUsage` extension of one certificate (RFC 5280 §4.2.1.3): the set of
+`crates/network/src/h3/x509_key_usage.rs:162` **fn** `allows` — Whether the given named bit is asserted (RFC 5280 §4.2.1.3). Always `false` when the
+`crates/network/src/h3/x509_key_usage.rs:169` **fn** `key_cert_sign` — Whether `keyCertSign` (bit 5) is asserted — the permission an issuing certificate's
+`crates/network/src/h3/x509_key_usage.rs:176` **enum** `KeyUsageError` — Why extracting a certificate's `keyUsage` extension failed
+`crates/network/src/h3/x509_key_usage.rs:299` **fn** `certificate_key_usage` — Extract a certificate's `keyUsage` extension (RFC 5280 §4.2.1.3)
+`crates/network/src/h3/x509_key_usage.rs:405` **enum** `KeyUsageWalkError` — Why enforcing `keyUsage` across a certificate chain failed (RFC 5280 §4.2.1.3, §6.1.4,
+`crates/network/src/h3/x509_key_usage.rs:479` **fn** `verify_cert_sign_usage` — Verify that every issuing certificate in a server-presented chain is permitted by its
+`crates/network/src/h3/x509_name_chain.rs:83` **enum** `NameChainError` — Why extracting a certificate's `issuer` and `subject` Names failed
+`crates/network/src/h3/x509_name_chain.rs:208` **fn** `certificate_names` — Extract the raw DER of a certificate's `issuer` and `subject` Names (RFC 5280
+`crates/network/src/h3/x509_name_chain.rs:238` **enum** `NameChainWalkError` — Why walking a certificate chain's name links failed (RFC 5280 §4.1.2.4, §4.1.2.6,
+`crates/network/src/h3/x509_name_chain.rs:314` **fn** `verify_name_chain` — Verify that every certificate in a server-presented chain names the next one up as
+`crates/network/src/h3/x509_spki.rs:114` **enum** `SpkiAlgorithm` — The public-key algorithm identified in a certificate's `SubjectPublicKeyInfo`,
+`crates/network/src/h3/x509_spki.rs:136` **struct** `ServerPublicKey` — A server's end-entity public key, extracted from the certificate's
+`crates/network/src/h3/x509_spki.rs:158` **fn** `accepts_scheme` — Whether `scheme` (a `SignatureScheme` codepoint, RFC 8446 §4.2.3) is a legal
+`crates/network/src/h3/x509_spki.rs:176` **enum** `SpkiError` — Why extracting the `SubjectPublicKeyInfo` from a certificate failed
+`crates/network/src/h3/x509_spki.rs:298` **fn** `extract_end_entity_public_key` — Extract the end-entity certificate's public key from its DER (RFC 5280 §4.1)
+`crates/network/src/h3/x509_spki.rs:339` **fn** `parse_subject_public_key_info` — Parse a bare `SubjectPublicKeyInfo` (RFC 5280 §4.1) directly, without a wrapping
+`crates/network/src/h3/x509_trust_anchor.rs:109` **struct** `TrustAnchor` — A trust anchor a certificate chain may terminate at (RFC 5280 §6.1): the anchor's
+`crates/network/src/h3/x509_trust_anchor.rs:123` **enum** `TrustAnchorError` — Why terminating one certificate at a trust anchor failed
+`crates/network/src/h3/x509_trust_anchor.rs:161` **enum** `TrustAnchorWalkError` — Why [`verify_trust_anchor`] failed to terminate a presented chain
+`crates/network/src/h3/x509_trust_anchor.rs:203` **fn** `find_trust_anchor` — Find the trust anchor in `anchors` whose `subject` equals `issuer`, byte-for-byte
+`crates/network/src/h3/x509_trust_anchor.rs:238` **fn** `verify_trust_anchor` — Verify that the topmost certificate of a server-presented chain terminates at a
+`crates/network/src/h3/x509_validity.rs:91` **enum** `ValidityError` — Why verifying a certificate's validity period failed
+`crates/network/src/h3/x509_validity.rs:239` **fn** `verify_certificate_validity` — Verify that an end-entity certificate is valid at `now` (RFC 5280 §4.1.2.5)
+`crates/network/src/h3/x509_validity.rs:261` **fn** `certificate_validity` — Decode a certificate's `notBefore` and `notAfter` as seconds since the Unix epoch
+`crates/network/src/h3/x509_validity.rs:293` **enum** `ValidityWalkError` — Why verifying an entire certificate chain's validity periods failed (RFC 5280
+`crates/network/src/h3/x509_validity.rs:354` **fn** `verify_validity_chain` — Verify that *every* certificate in a server-presented chain is within its validity
 `crates/network/src/hsts_preload.rs:23` **struct** `HstsPreloadList` — HSTS Preload List: быстрый поиск по eTLD+1
 `crates/network/src/hsts_preload.rs:36` **fn** `load` — Создать preload list из встроенного JSON (Chromium формат)
 `crates/network/src/hsts_preload.rs:100` **fn** `is_preloaded` — Проверить, есть ли хост в preload list
@@ -3186,42 +3389,43 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/lib.rs:100` **fn** `set_global_adblock_enabled` — Enable or disable the process-global ad-block filter
 `crates/network/src/lib.rs:106` **fn** `global_adblock_enabled` — Whether the process-global ad-block filter is currently enabled
 `crates/network/src/lib.rs:115` **fn** `install_global_adblock_filter` — Install (or replace) the process-global ad-block filter
-`crates/network/src/lib.rs:2217` **struct** `HttpProxy` — HTTP proxy configuration (RFC 7230 proxy behavior)
-`crates/network/src/lib.rs:2229` **fn** `new` — Создать новый прокси без аутентификации
-`crates/network/src/lib.rs:2238` **fn** `with_basic_auth` — Создать прокси с базовой аутентификацией (username:password)
-`crates/network/src/lib.rs:2281` **struct** `HttpClient` — HTTP/1.1 + HTTPS клиент
-`crates/network/src/lib.rs:2320` **fn** `new`
-`crates/network/src/lib.rs:2346` **fn** `with_sink` — Подключить EventSink. По умолчанию sink-а нет (события не эмитятся)
-`crates/network/src/lib.rs:2357` **fn** `with_filter` — Подключить RequestFilter. По умолчанию фильтра нет — `fetch` всегда
-`crates/network/src/lib.rs:2369` **fn** `with_interceptor` — Подключить Service Worker перехватчик fetch-запросов. Проверяется
-`crates/network/src/lib.rs:2378` **fn** `with_pool` — Подключить shared `ConnectionPool`. По умолчанию у каждого `HttpClient`
-`crates/network/src/lib.rs:2388` **fn** `with_h2_pool` — Подключить shared `H2Pool` (RFC 9113 §9.1.1). По умолчанию HTTP/2
-`crates/network/src/lib.rs:2397` **fn** `with_dns_resolver` — Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
-`crates/network/src/lib.rs:2414` **fn** `with_hsts` — Подключить HSTS-store (RFC 6797). По умолчанию — нет:
-`crates/network/src/lib.rs:2430` **fn** `with_credentials` — Подключить credential-провайдер для HTTP authentication (RFC 7235 /
-`crates/network/src/lib.rs:2441` **fn** `with_tab` — Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
-`crates/network/src/lib.rs:2461` **fn** `with_mixed_content_policy` — Подключить mixed-content policy (W3C Mixed Content §5). По умолчанию
-`crates/network/src/lib.rs:2485` **fn** `with_content_decoder` — Зарегистрировать `ContentDecoder` для одного encoding. Декодер попадает
-`crates/network/src/lib.rs:2531` **fn** `with_cors_cache` — Запросить только диапазон байт ресурса (RFC 7233). Если сервер
-`crates/network/src/lib.rs:2543` **fn** `with_cookie_jar` — Attach a cookie store. The provider receives `Cookie:` injection
-`crates/network/src/lib.rs:2567` **fn** `with_http_cache` — Подключить HTTP response cache (RFC 7234)
-`crates/network/src/lib.rs:2578` **fn** `with_proxy` — Подключить HTTP прокси (RFC 7230). По умолчанию прокси не подключён — запросы
-`crates/network/src/lib.rs:2591` **fn** `with_socks5_proxy` — Подключить SOCKS5 прокси (RFC 1928) для туннелирования всех TCP-соединений
-`crates/network/src/lib.rs:2602` **fn** `with_fingerprint_profile` — Установить HTTP fingerprinting profile (Standard/Strict/Tor) для Chrome-matching
-`crates/network/src/lib.rs:2610` **fn** `fingerprint_profile` — Получить текущий HTTP fingerprinting profile
-`crates/network/src/lib.rs:2621` **fn** `with_tls_profile` — Override the TLS fingerprint profile independently of the HTTP profile
-`crates/network/src/lib.rs:2627` **fn** `tls_profile` — Получить текущий TLS fingerprinting profile
-`crates/network/src/lib.rs:2661` **fn** `fetch_cors` — CORS-enabled fetch для cross-origin subresource (Fetch §3-§4)
-`crates/network/src/lib.rs:2710` **fn** `fetch_range`
-`crates/network/src/lib.rs:2778` **fn** `fetch_multi_range` — Multi-range запрос (RFC 7233 §4.1). Один request на несколько
-`crates/network/src/lib.rs:2865` **fn** `fetch_subresource` — Загрузить подресурс с проверкой mixed-content по подключённой
-`crates/network/src/lib.rs:2965` **fn** `fetch_conditional` — Perform a **conditional GET** (RFC 7232) and report whether the resource
-`crates/network/src/lib.rs:3021` **enum** `ConditionalFetch` — Outcome of [`HttpClient::fetch_conditional`]
-`crates/network/src/lib.rs:3041` **fn** `fetch_page` — Fetch a top-level page and return the response body together with all
-`crates/network/src/lib.rs:3102` **fn** `fetch_page_streaming` — Как [`HttpClient::fetch_page`], но тело финального 2xx-ответа стримится
-`crates/network/src/lib.rs:3702` **struct** `InMemoryFetchInterceptor` — In-memory реализация `FetchInterceptor` для тестов без SQLite
-`crates/network/src/lib.rs:3708` **fn** `new`
-`crates/network/src/lib.rs:3715` **fn** `insert` — Добавить запись: ответ для (origin, url) берётся из кэша без сети
+`crates/network/src/lib.rs:2522` **struct** `HttpProxy` — HTTP proxy configuration (RFC 7230 proxy behavior)
+`crates/network/src/lib.rs:2534` **fn** `new` — Создать новый прокси без аутентификации
+`crates/network/src/lib.rs:2543` **fn** `with_basic_auth` — Создать прокси с базовой аутентификацией (username:password)
+`crates/network/src/lib.rs:2586` **struct** `HttpClient` — HTTP/1.1 + HTTPS клиент
+`crates/network/src/lib.rs:2642` **fn** `new`
+`crates/network/src/lib.rs:2671` **fn** `with_sink` — Подключить EventSink. По умолчанию sink-а нет (события не эмитятся)
+`crates/network/src/lib.rs:2682` **fn** `with_filter` — Подключить RequestFilter. По умолчанию фильтра нет — `fetch` всегда
+`crates/network/src/lib.rs:2694` **fn** `with_interceptor` — Подключить Service Worker перехватчик fetch-запросов. Проверяется
+`crates/network/src/lib.rs:2703` **fn** `with_pool` — Подключить shared `ConnectionPool`. По умолчанию у каждого `HttpClient`
+`crates/network/src/lib.rs:2713` **fn** `with_h2_pool` — Подключить shared `H2Pool` (RFC 9113 §9.1.1). По умолчанию HTTP/2
+`crates/network/src/lib.rs:2722` **fn** `with_dns_resolver` — Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
+`crates/network/src/lib.rs:2739` **fn** `with_hsts` — Подключить HSTS-store (RFC 6797). По умолчанию — нет:
+`crates/network/src/lib.rs:2755` **fn** `with_credentials` — Подключить credential-провайдер для HTTP authentication (RFC 7235 /
+`crates/network/src/lib.rs:2766` **fn** `with_tab` — Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
+`crates/network/src/lib.rs:2786` **fn** `with_mixed_content_policy` — Подключить mixed-content policy (W3C Mixed Content §5). По умолчанию
+`crates/network/src/lib.rs:2810` **fn** `with_content_decoder` — Зарегистрировать `ContentDecoder` для одного encoding. Декодер попадает
+`crates/network/src/lib.rs:2824` **fn** `with_http3` — Включить путь диспетчеризации HTTP/3 (QUIC) — RFC 9114 / RFC 7838
+`crates/network/src/lib.rs:2887` **fn** `with_cors_cache` — Запросить только диапазон байт ресурса (RFC 7233). Если сервер
+`crates/network/src/lib.rs:2899` **fn** `with_cookie_jar` — Attach a cookie store. The provider receives `Cookie:` injection
+`crates/network/src/lib.rs:2923` **fn** `with_http_cache` — Подключить HTTP response cache (RFC 7234)
+`crates/network/src/lib.rs:2934` **fn** `with_proxy` — Подключить HTTP прокси (RFC 7230). По умолчанию прокси не подключён — запросы
+`crates/network/src/lib.rs:2947` **fn** `with_socks5_proxy` — Подключить SOCKS5 прокси (RFC 1928) для туннелирования всех TCP-соединений
+`crates/network/src/lib.rs:2958` **fn** `with_fingerprint_profile` — Установить HTTP fingerprinting profile (Standard/Strict/Tor) для Chrome-matching
+`crates/network/src/lib.rs:2966` **fn** `fingerprint_profile` — Получить текущий HTTP fingerprinting profile
+`crates/network/src/lib.rs:2977` **fn** `with_tls_profile` — Override the TLS fingerprint profile independently of the HTTP profile
+`crates/network/src/lib.rs:2983` **fn** `tls_profile` — Получить текущий TLS fingerprinting profile
+`crates/network/src/lib.rs:3017` **fn** `fetch_cors` — CORS-enabled fetch для cross-origin subresource (Fetch §3-§4)
+`crates/network/src/lib.rs:3068` **fn** `fetch_range`
+`crates/network/src/lib.rs:3138` **fn** `fetch_multi_range` — Multi-range запрос (RFC 7233 §4.1). Один request на несколько
+`crates/network/src/lib.rs:3227` **fn** `fetch_subresource` — Загрузить подресурс с проверкой mixed-content по подключённой
+`crates/network/src/lib.rs:3331` **fn** `fetch_conditional` — Perform a **conditional GET** (RFC 7232) and report whether the resource
+`crates/network/src/lib.rs:3389` **enum** `ConditionalFetch` — Outcome of [`HttpClient::fetch_conditional`]
+`crates/network/src/lib.rs:3409` **fn** `fetch_page` — Fetch a top-level page and return the response body together with all
+`crates/network/src/lib.rs:3474` **fn** `fetch_page_streaming` — Как [`HttpClient::fetch_page`], но тело финального 2xx-ответа стримится
+`crates/network/src/lib.rs:4084` **struct** `InMemoryFetchInterceptor` — In-memory реализация `FetchInterceptor` для тестов без SQLite
+`crates/network/src/lib.rs:4090` **fn** `new`
+`crates/network/src/lib.rs:4097` **fn** `insert` — Добавить запись: ответ для (origin, url) берётся из кэша без сети
 `crates/network/src/mixed_content.rs:33` **enum** `RequestDestination` — Назначение подресурса по Fetch spec §3.2.7 «request destination» —
 `crates/network/src/mixed_content.rs:59` **enum** `MixedContentLevel` — Mixed-content уровень для запроса в secure-контексте
 `crates/network/src/mixed_content.rs:75` **fn** `is_strict_blocked` — Должны ли мы блокировать запрос по строгому режиму. По умолчанию
@@ -3297,7 +3501,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/webauthn.rs:69` **fn** `new` — Create an empty authenticator with no registered credentials
 `crates/network/src/webauthn.rs:74` **fn** `credential_count` — Number of credentials currently registered (test / introspection helper)
 
-## lumen-paint  (355 symbols)
+## lumen-paint  (371 symbols)
 
 `crates/engine/paint/src/atlas.rs:35` **struct** `AtlasKey` — Композитный ключ glyph-кэша. См. module-level docs
 `crates/engine/paint/src/atlas.rs:43` **fn** `new`
@@ -3346,7 +3550,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/backends/cpu_backend.rs:44` **fn** `new` — Создаёт headless CPU-бэкенд с заданным размером поверхности
 `crates/engine/paint/src/backends/cpu_backend.rs:49` **fn** `last_image` — Возвращает Image из последнего рендера, если он был выполнен
 `crates/engine/paint/src/backends/femtovg_backend.rs:373` **struct** `FemtovgBackend` — femtovg/OpenGL рендер-бэкенд (Phase 2, ADR-010)
-`crates/engine/paint/src/backends/femtovg_backend.rs:1125` **fn** `new` — Создаёт оконный femtovg-бэкенд из winit-окна
+`crates/engine/paint/src/backends/femtovg_backend.rs:1160` **fn** `new` — Создаёт оконный femtovg-бэкенд из winit-окна
 `crates/engine/paint/src/backends/vello_backend.rs:43` **struct** `VelloBackend` — Phase 3 рендер-бэкенд на базе Vello (ADR-010, RB-7 заглушка)
 `crates/engine/paint/src/backends/vello_backend.rs:57` **fn** `new` — Создаёт заглушку `VelloBackend` с начальным размером поверхности
 `crates/engine/paint/src/backends/wgpu_backend.rs:52` **struct** `WgpuBackend` — wgpu-бэкенд: тонкая обёртка над [`Renderer`], реализующая [`RenderBackend`]
@@ -3404,31 +3608,38 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/display_list.rs:265` **enum** `ResolvedClipShape` — BUG-140: `clip-path` basic-shape, разрешённая эмиттером в page-координаты
 `crates/engine/paint/src/display_list.rs:301` **fn** `bounding_rect` — Axis-aligned bounding box формы (page px, до transform). Используется
 `crates/engine/paint/src/display_list.rs:330` **enum** `DisplayCommand`
-`crates/engine/paint/src/display_list.rs:906` **type** `DisplayList`
-`crates/engine/paint/src/display_list.rs:935` **fn** `fit_image_rect` — CSS Images L3 §5.5 — `object-fit` placement: где располагается
-`crates/engine/paint/src/display_list.rs:1077` **fn** `fit_image_quad` — Финальный GPU-quad для `<img>`: пересечение «полного» placement-rect
-`crates/engine/paint/src/display_list.rs:1150` **fn** `cull_display_list` — Returns `true` if the display list contains any `backdrop-filter` element
-`crates/engine/paint/src/display_list.rs:1181` **fn** `contains_backdrop_filter` — Cheap pre-check the renderer uses to decide whether computing a frame
-`crates/engine/paint/src/display_list.rs:1217` **fn** `hash_display_list` — Computes a content hash over a frame's display list plus the viewport state
-`crates/engine/paint/src/display_list.rs:1245` **struct** `DiffResult` — Результат сравнения двух display-list-ов
-`crates/engine/paint/src/display_list.rs:1257` **fn** `identical` — Создаёт DiffResult для идентичных display list-ов
-`crates/engine/paint/src/display_list.rs:1271` **fn** `changed` — Создаёт DiffResult для изменённых display list-ов с заданным bounding rect
-`crates/engine/paint/src/display_list.rs:1287` **fn** `diff_display_lists` — Сравнивает два display list-а по Debug hash каждой команды
-`crates/engine/paint/src/display_list.rs:1405` **fn** `serialize_display_list`
-`crates/engine/paint/src/display_list.rs:1845` **fn** `build_display_list`
-`crates/engine/paint/src/display_list.rs:1861` **fn** `build_display_list_with_selection` — Like [`build_display_list`] but applies `::selection` CSS highlight styles
-`crates/engine/paint/src/display_list.rs:1879` **fn** `build_display_list_with_anim` — Like `build_display_list` but applies compositor animation overrides per node
-`crates/engine/paint/src/display_list.rs:1915` **fn** `build_display_list_ordered` — Билдер display list-а, **уважающий painting order** (CSS 2.1 Appendix E)
-`crates/engine/paint/src/display_list.rs:1926` **fn** `build_display_list_ordered_dpr` — Like [`build_display_list_ordered`] but resolves `image-set()` background
-`crates/engine/paint/src/display_list.rs:1975` **fn** `build_display_list_ordered_with_anim` — Like [`build_display_list_ordered`] but applies compositor animation overrides per node
-`crates/engine/paint/src/display_list.rs:1986` **fn** `build_display_list_ordered_with_anim_dpr` — Like [`build_display_list_ordered_with_anim`] but resolves `image-set()`
-`crates/engine/paint/src/display_list.rs:2040` **fn** `build_print_display_list` — Builds a print display list from paginated layout
-`crates/engine/paint/src/display_list.rs:2105` **fn** `split_at_page_breaks` — Splits a print display list at `PageBreak` markers
-`crates/engine/paint/src/display_list.rs:2132` **fn** `strip_background_graphics` — Removes background-graphics paint commands from each print page when the
-`crates/engine/paint/src/display_list.rs:3258` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
-`crates/engine/paint/src/display_list.rs:3387` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
-`crates/engine/paint/src/display_list.rs:4247` **fn** `point_on_resize_grip` — Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента
-`crates/engine/paint/src/display_list.rs:15055` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
+`crates/engine/paint/src/display_list.rs:909` **fn** `variant_name` — Имя варианта команды для диагностики (`LUMEN_FRAME_LOG=2`:
+`crates/engine/paint/src/display_list.rs:974` **fn** `cull_rect` — Axis-aligned bounding box of everything this command paints, in
+`crates/engine/paint/src/display_list.rs:1046` **type** `DisplayList`
+`crates/engine/paint/src/display_list.rs:1075` **fn** `fit_image_rect` — CSS Images L3 §5.5 — `object-fit` placement: где располагается
+`crates/engine/paint/src/display_list.rs:1217` **fn** `fit_image_quad` — Финальный GPU-quad для `<img>`: пересечение «полного» placement-rect
+`crates/engine/paint/src/display_list.rs:1290` **fn** `cull_display_list` — Returns `true` if the display list contains any `backdrop-filter` element
+`crates/engine/paint/src/display_list.rs:1321` **fn** `contains_backdrop_filter` — Cheap pre-check the renderer uses to decide whether computing a frame
+`crates/engine/paint/src/display_list.rs:1357` **fn** `hash_display_list` — Computes a content hash over a frame's display list plus the viewport state
+`crates/engine/paint/src/display_list.rs:1402` **fn** `hash_content` — Content-only frame hash (ADR-016 M0.5)
+`crates/engine/paint/src/display_list.rs:1426` **enum** `FrameDelta` — How a frame differs from the previously presented one (ADR-016 M0.5)
+`crates/engine/paint/src/display_list.rs:1448` **struct** `FrameFingerprint` — Split fingerprint of a presented frame (ADR-016 M0.5)
+`crates/engine/paint/src/display_list.rs:1463` **fn** `new` — Build a fingerprint for the current frame from its page content, surface
+`crates/engine/paint/src/display_list.rs:1484` **fn** `delta_from` — Classify how this frame differs from the previously presented `prev`
+`crates/engine/paint/src/display_list.rs:1497` **struct** `DiffResult` — Результат сравнения двух display-list-ов
+`crates/engine/paint/src/display_list.rs:1509` **fn** `identical` — Создаёт DiffResult для идентичных display list-ов
+`crates/engine/paint/src/display_list.rs:1523` **fn** `changed` — Создаёт DiffResult для изменённых display list-ов с заданным bounding rect
+`crates/engine/paint/src/display_list.rs:1539` **fn** `diff_display_lists` — Сравнивает два display list-а по Debug hash каждой команды
+`crates/engine/paint/src/display_list.rs:1657` **fn** `serialize_display_list`
+`crates/engine/paint/src/display_list.rs:2097` **fn** `build_display_list`
+`crates/engine/paint/src/display_list.rs:2113` **fn** `build_display_list_with_selection` — Like [`build_display_list`] but applies `::selection` CSS highlight styles
+`crates/engine/paint/src/display_list.rs:2131` **fn** `build_display_list_with_anim` — Like `build_display_list` but applies compositor animation overrides per node
+`crates/engine/paint/src/display_list.rs:2167` **fn** `build_display_list_ordered` — Билдер display list-а, **уважающий painting order** (CSS 2.1 Appendix E)
+`crates/engine/paint/src/display_list.rs:2178` **fn** `build_display_list_ordered_dpr` — Like [`build_display_list_ordered`] but resolves `image-set()` background
+`crates/engine/paint/src/display_list.rs:2227` **fn** `build_display_list_ordered_with_anim` — Like [`build_display_list_ordered`] but applies compositor animation overrides per node
+`crates/engine/paint/src/display_list.rs:2238` **fn** `build_display_list_ordered_with_anim_dpr` — Like [`build_display_list_ordered_with_anim`] but resolves `image-set()`
+`crates/engine/paint/src/display_list.rs:2292` **fn** `build_print_display_list` — Builds a print display list from paginated layout
+`crates/engine/paint/src/display_list.rs:2357` **fn** `split_at_page_breaks` — Splits a print display list at `PageBreak` markers
+`crates/engine/paint/src/display_list.rs:2384` **fn** `strip_background_graphics` — Removes background-graphics paint commands from each print page when the
+`crates/engine/paint/src/display_list.rs:3510` **fn** `is_image_set` — CSS Images L4 §5 — is `value` an `image-set()` / `-webkit-image-set()` expression?
+`crates/engine/paint/src/display_list.rs:3639` **fn** `select_image_set_url` — CSS Images L4 §5 — selects the best `image-set()` candidate URL for `dpr`
+`crates/engine/paint/src/display_list.rs:4499` **fn** `point_on_resize_grip` — Возвращает `true`, если точка (`px`, `py`) попадает в resize-grip элемента
+`crates/engine/paint/src/display_list.rs:15411` **fn** `emit_text_with_highlights` — CSS Custom Highlight API L1 — helper to emit DrawText with highlight name
 `crates/engine/paint/src/display_list_cache.rs:21` **struct** `CachedDisplayLayer` — Cached display list for a stacking context or page subtree
 `crates/engine/paint/src/display_list_cache.rs:45` **struct** `DisplayListCache` — LRU cache that maps `NodeId` (u32) to a pre-built `Vec<DisplayCommand>`
 `crates/engine/paint/src/display_list_cache.rs:59` **fn** `new` — Create a cache with the default 32 MB budget
@@ -3496,14 +3707,23 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/layer_cache.rs:218` **fn** `sync_promoted_layers` — Remove promoted layers for nodes NOT in `current_nodes`
 `crates/engine/paint/src/layer_cache.rs:231` **fn** `promoted_count` — Number of nodes currently promoted to their own GPU layer
 `crates/engine/paint/src/layer_cache.rs:240` **fn** `on_memory_pressure` — React to an OS memory pressure event by evicting GPU layer textures
-`crates/engine/paint/src/lib.rs:101` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
-`crates/engine/paint/src/lib.rs:111` **fn** `new`
-`crates/engine/paint/src/lib.rs:310` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
-`crates/engine/paint/src/lib.rs:320` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
-`crates/engine/paint/src/lib.rs:334` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family` без unicode-range ограничений
-`crates/engine/paint/src/lib.rs:348` **fn** `register_family_with_ranges` — Регистрирует @font-face шрифт с `unicode-range` ограничением
-`crates/engine/paint/src/lib.rs:364` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
-`crates/engine/paint/src/lib.rs:379` **fn** `resolve_font_stretch` — Resolves `font-stretch` percentage for the first matching family
+`crates/engine/paint/src/lib.rs:59` **fn** `frame_log_level` — Уровень покадрового лога производительности (`LUMEN_FRAME_LOG`)
+`crates/engine/paint/src/lib.rs:71` **fn** `frame_log_enabled` — `true`, если включён покадровый лог производительности (`LUMEN_FRAME_LOG>=1`)
+`crates/engine/paint/src/lib.rs:87` **struct** `FrameStats` — Аккумулятор времён кадров для сессионной сводки (`LUMEN_FRAME_LOG`)
+`crates/engine/paint/src/lib.rs:94` **struct** `FrameSummary` — Перцентильная сводка по временам кадров за сессию (миллисекунды)
+`crates/engine/paint/src/lib.rs:111` **fn** `new` — Создаёт пустой аккумулятор
+`crates/engine/paint/src/lib.rs:117` **fn** `record` — Учитывает время одного кадра (мс). Значения NaN/inf/отрицательные
+`crates/engine/paint/src/lib.rs:124` **fn** `len` — Количество учтённых кадров
+`crates/engine/paint/src/lib.rs:129` **fn** `is_empty` — `true`, если ни одного кадра ещё не учтено
+`crates/engine/paint/src/lib.rs:138` **fn** `summary` — Считает перцентильную сводку. Возвращает `None` для пустой выборки
+`crates/engine/paint/src/lib.rs:288` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
+`crates/engine/paint/src/lib.rs:298` **fn** `new`
+`crates/engine/paint/src/lib.rs:497` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
+`crates/engine/paint/src/lib.rs:507` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
+`crates/engine/paint/src/lib.rs:521` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family` без unicode-range ограничений
+`crates/engine/paint/src/lib.rs:535` **fn** `register_family_with_ranges` — Регистрирует @font-face шрифт с `unicode-range` ограничением
+`crates/engine/paint/src/lib.rs:551` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
+`crates/engine/paint/src/lib.rs:566` **fn** `resolve_font_stretch` — Resolves `font-stretch` percentage for the first matching family
 `crates/engine/paint/src/matrix_util.rs:19` **fn** `mat4_to_2d_affine` — Извлекает 2D-аффинные компоненты `[a, b, c, d, e, f]` из column-major
 `crates/engine/paint/src/renderer.rs:1272` **struct** `OffscreenLayer` — GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
 `crates/engine/paint/src/renderer.rs:1303` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
@@ -3549,10 +3769,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/renderer.rs:3710` **fn** `set_canvas_background` — Updates the root-element canvas background used as the framebuffer clear colour
 `crates/engine/paint/src/renderer.rs:3753` **fn** `viewport_size` — Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`
 `crates/engine/paint/src/renderer.rs:3938` **fn** `render` — Рендерит две полосы display list-а одним кадром:
-`crates/engine/paint/src/renderer.rs:6772` **fn** `render_to_image_cpu` — CPU-based rasterization using tiny-skia (feature="cpu-render" only)
-`crates/engine/paint/src/renderer.rs:6798` **fn** `render_tile`
-`crates/engine/paint/src/renderer.rs:6837` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
-`crates/engine/paint/src/renderer.rs:6940` **fn** `render_print_pages` — Renders a print display list into one `Image` per page
+`crates/engine/paint/src/renderer.rs:6788` **fn** `render_to_image_cpu` — CPU-based rasterization using tiny-skia (feature="cpu-render" only)
+`crates/engine/paint/src/renderer.rs:6814` **fn** `render_tile`
+`crates/engine/paint/src/renderer.rs:6853` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
+`crates/engine/paint/src/renderer.rs:6956` **fn** `render_print_pages` — Renders a print display list into one `Image` per page
 `crates/engine/paint/src/scroll_snap.rs:33` **fn** `find_scroll_snap_y` — CSS Scroll Snap L1 — returns the Y scroll offset to snap to, or `None`
 `crates/engine/paint/src/scroll_snap.rs:54` **fn** `find_scroll_snap_y_proximity` — CSS Scroll Snap L1 — same as [`find_scroll_snap_y`] but restricts candidates
 `crates/engine/paint/src/svg_path.rs:16` **enum** `PathSegment` — One SVG path command (absolute coords, after normalization)
@@ -3655,7 +3875,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgpu_compute.rs:980` **enum** `GpuOp` — Одна записанная операция command-encoder для исполнения на `queue.submit`
 `crates/engine/paint/src/webgpu_compute.rs:1035` **fn** `submit` — Исполняет набор операций в одном `CommandEncoder` и сабмитит на очередь
 
-## lumen-shell  (902 symbols)
+## lumen-shell  (908 symbols)
 
 `crates/shell/src/adblock.rs:44` **fn** `browser_data_dir` — Root of all browser user data (portable): `<exe_dir>/data`
 `crates/shell/src/adblock.rs:52` **fn** `adblock_dir` — `<data>/adblock` — root of the ad-block subsystem's files
@@ -3705,18 +3925,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/click_log.rs:181` **fn** `log_fragment` — Скроллинг к фрагменту (#id) без перезагрузки страницы
 `crates/shell/src/click_log.rs:188` **fn** `log_js_nav` — Навигация из JS (location.href=, history.pushState, window.open …)
 `crates/shell/src/click_log.rs:194` **fn** `log_page_ready` — Страница полностью применена (apply_loaded_page завершён)
-`crates/shell/src/config.rs:48` **fn** `init_global` — Install the process-global fingerprint profile. Idempotent: the first call
-`crates/shell/src/config.rs:54` **fn** `global` — Return the process-global fingerprint profile, or the default if unset
-`crates/shell/src/config.rs:120` **fn** `init_adblock` — Initialise the ad-block subsystem and install the process-global filter
-`crates/shell/src/config.rs:149` **struct** `FingerprintProfile` — User-configurable fingerprint identity (9F.1)
-`crates/shell/src/config.rs:218` **fn** `effective_tls_profile` — Resolve the effective TLS profile: explicit override, else derived from
-`crates/shell/src/config.rs:230` **fn** `navigator_profile` — Build the JS-side [`lumen_js::NavigatorProfile`] from this config
-`crates/shell/src/config.rs:254` **fn** `install_navigator` — Install the navigator/screen/timezone values into the process-global JS
-`crates/shell/src/config.rs:260` **fn** `apply_http` — Stamp the HTTP and TLS fingerprint onto an [`HttpClient`] builder
-`crates/shell/src/config.rs:316` **fn** `effective_socks5_proxy` — Resolve the effective SOCKS5 proxy: explicit override first, then
-`crates/shell/src/config.rs:339` **fn** `config_path` — Resolve the path to the portable `fingerprint.toml`
-`crates/shell/src/config.rs:348` **fn** `load` — Load and parse the fingerprint profile from the default config path
-`crates/shell/src/config.rs:360` **fn** `parse` — Parse a flat `key = value` TOML subset into a [`FingerprintProfile`]
+`crates/shell/src/config.rs:49` **fn** `init_global` — Install the process-global fingerprint profile. Idempotent: the first call
+`crates/shell/src/config.rs:55` **fn** `global` — Return the process-global fingerprint profile, or the default if unset
+`crates/shell/src/config.rs:121` **fn** `init_adblock` — Initialise the ad-block subsystem and install the process-global filter
+`crates/shell/src/config.rs:150` **struct** `FingerprintProfile` — User-configurable fingerprint identity (9F.1)
+`crates/shell/src/config.rs:228` **fn** `effective_tls_profile` — Resolve the effective TLS profile: explicit override, else derived from
+`crates/shell/src/config.rs:240` **fn** `navigator_profile` — Build the JS-side [`lumen_js::NavigatorProfile`] from this config
+`crates/shell/src/config.rs:264` **fn** `install_navigator` — Install the navigator/screen/timezone values into the process-global JS
+`crates/shell/src/config.rs:270` **fn** `apply_http` — Stamp the HTTP and TLS fingerprint onto an [`HttpClient`] builder
+`crates/shell/src/config.rs:333` **fn** `effective_socks5_proxy` — Resolve the effective SOCKS5 proxy: explicit override first, then
+`crates/shell/src/config.rs:356` **fn** `config_path` — Resolve the path to the portable `fingerprint.toml`
+`crates/shell/src/config.rs:365` **fn** `load` — Load and parse the fingerprint profile from the default config path
+`crates/shell/src/config.rs:377` **fn** `parse` — Parse a flat `key = value` TOML subset into a [`FingerprintProfile`]
 `crates/shell/src/deterministic.rs:15` **struct** `DetConfig` — Parsed deterministic-mode configuration from CLI args
 `crates/shell/src/deterministic.rs:27` **fn** `extract_deterministic` — Extract all deterministic-mode flags from CLI args
 `crates/shell/src/devtools/console_panel.rs:49` **enum** `ConsoleLevel` — Severity level of a console message
@@ -3831,41 +4051,42 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/forms.rs:132` **fn** `toggle_details_open` — Toggle the `open` attribute on a `<details>` element in the live DOM
 `crates/shell/src/forms.rs:145` **fn** `toggle_checkbox` — Toggle the `checked` attribute on a checkbox input in the live DOM
 `crates/shell/src/forms.rs:157` **fn** `set_value` — Set `value` attribute of an input / textarea in the DOM
-`crates/shell/src/forms.rs:173` **fn** `apply_range_value` — Update a range input's `value` attribute from a click at `click_x` within
-`crates/shell/src/forms.rs:198` **fn** `find_validation_error` — Depth-first walk: find the first form control that fails HTML5 constraint
-`crates/shell/src/forms.rs:209` **fn** `find_control_rect_and_error` — Find rect and error message for a specific invalid control
-`crates/shell/src/forms.rs:220` **fn** `find_all_validation_errors` — Collect all form controls that fail HTML5 constraint validation
-`crates/shell/src/forms.rs:345` **fn** `find_box_rect` — Find the bounding rect of the LayoutBox for `node`. Returns `None` if the
-`crates/shell/src/forms.rs:358` **fn** `find_layout_box` — Find the LayoutBox subtree for `node`. Returns `None` if the node has no box
-`crates/shell/src/forms.rs:373` **fn** `collect_modal_dialogs` — Walk `doc` and collect all NodeIds with `data-lumen-modal` attribute
-`crates/shell/src/forms.rs:397` **fn** `build_dialog_overlay` — Build a `::backdrop` + translated dialog overlay for a modal `<dialog>`
-`crates/shell/src/forms.rs:438` **fn** `build_validation_tooltip` — Build a validation tooltip anchored below `anchor` (document coordinates)
-`crates/shell/src/forms.rs:498` **fn** `collect_form_entries` — Собрать данные формы для submit — DOM-значения, поверх которых наложен
-`crates/shell/src/forms.rs:541` **fn** `build_form_submit_event` — Построить параметры отправки формы: `(action, method, body)`
-`crates/shell/src/forms.rs:551` **fn** `encode_form_fields` — Encode form fields for submission. Wraps a FormSubmitEvent::Valid variant
-`crates/shell/src/forms.rs:564` **fn** `encode_form_fields_multipart` — Encode form fields as `multipart/form-data` (RFC 7578)
-`crates/shell/src/forms.rs:576` **fn** `get_form_enctype` — Return the `enctype` attribute of the `<form>` ancestor of `submit_node`,
-`crates/shell/src/forms.rs:594` **fn** `build_form_submit`
-`crates/shell/src/forms.rs:626` **fn** `make_get_url` — Построить итоговый URL для GET-формы: добавить `?body` к action URL
-`crates/shell/src/forms.rs:666` **fn** `build_color_picker` — Build a color-swatch picker anchored below `anchor` (document coordinates)
-`crates/shell/src/forms.rs:703` **fn** `hit_color_swatch` — If viewport-space point `(px, py)` lands on a swatch, return its `[r, g, b]`
-`crates/shell/src/forms.rs:724` **fn** `swatch_to_css_color` — Format `[r, g, b]` as CSS `#rrggbb`
-`crates/shell/src/forms.rs:734` **struct** `SelectOption` — One entry in a `<select>` dropdown list
-`crates/shell/src/forms.rs:757` **fn** `collect_select_options` — Collect all direct `<option>` children of a `<select>` DOM node
-`crates/shell/src/forms.rs:794` **fn** `build_select_dropdown` — Build a dropdown overlay anchored below (or above if near the bottom of the
-`crates/shell/src/forms.rs:880` **fn** `hit_select_option` — If viewport-space point `(px, py)` lands on an option row, return its index
-`crates/shell/src/forms.rs:917` **fn** `apply_select_choice` — Apply the selection of option at `opt_idx` to the `<select>` DOM node:
-`crates/shell/src/forms.rs:938` **enum** `DatePickerHit` — What a viewport-space click hit inside an open date picker
-`crates/shell/src/forms.rs:967` **fn** `is_leap_year` — True if `year` is a leap year
-`crates/shell/src/forms.rs:972` **fn** `days_in_month` — Number of days in the given month (1-based month, Gregorian calendar)
-`crates/shell/src/forms.rs:983` **fn** `first_weekday_of_month` — ISO weekday (0=Mon … 6=Sun) of the first day of the given month
-`crates/shell/src/forms.rs:998` **fn** `month_name` — English month name, 1-based
-`crates/shell/src/forms.rs:1010` **fn** `parse_date_value` — Parse an ISO 8601 date string `YYYY-MM-DD` → `(year, month, day)`
-`crates/shell/src/forms.rs:1021` **fn** `format_date_value` — Format `(year, month, day)` as `YYYY-MM-DD`
-`crates/shell/src/forms.rs:1027` **fn** `today_year_month` — Return the current year and month derived from the system clock
-`crates/shell/src/forms.rs:1051` **fn** `build_date_picker` — Build a calendar date-picker overlay anchored below `anchor` (document coords)
-`crates/shell/src/forms.rs:1209` **fn** `hit_date_picker` — Hit-test a viewport-space click `(px, py)` against an open date picker
-`crates/shell/src/forms.rs:1271` **fn** `advance_month` — Advance display month by `delta` months (positive = forward, negative = backward)
+`crates/shell/src/forms.rs:174` **fn** `set_textarea_text` — Replace a `<textarea>`'s text content (its direct text-node children) with
+`crates/shell/src/forms.rs:188` **fn** `apply_range_value` — Update a range input's `value` attribute from a click at `click_x` within
+`crates/shell/src/forms.rs:213` **fn** `find_validation_error` — Depth-first walk: find the first form control that fails HTML5 constraint
+`crates/shell/src/forms.rs:224` **fn** `find_control_rect_and_error` — Find rect and error message for a specific invalid control
+`crates/shell/src/forms.rs:235` **fn** `find_all_validation_errors` — Collect all form controls that fail HTML5 constraint validation
+`crates/shell/src/forms.rs:360` **fn** `find_box_rect` — Find the bounding rect of the LayoutBox for `node`. Returns `None` if the
+`crates/shell/src/forms.rs:373` **fn** `find_layout_box` — Find the LayoutBox subtree for `node`. Returns `None` if the node has no box
+`crates/shell/src/forms.rs:388` **fn** `collect_modal_dialogs` — Walk `doc` and collect all NodeIds with `data-lumen-modal` attribute
+`crates/shell/src/forms.rs:412` **fn** `build_dialog_overlay` — Build a `::backdrop` + translated dialog overlay for a modal `<dialog>`
+`crates/shell/src/forms.rs:453` **fn** `build_validation_tooltip` — Build a validation tooltip anchored below `anchor` (document coordinates)
+`crates/shell/src/forms.rs:513` **fn** `collect_form_entries` — Собрать данные формы для submit — DOM-значения, поверх которых наложен
+`crates/shell/src/forms.rs:556` **fn** `build_form_submit_event` — Построить параметры отправки формы: `(action, method, body)`
+`crates/shell/src/forms.rs:566` **fn** `encode_form_fields` — Encode form fields for submission. Wraps a FormSubmitEvent::Valid variant
+`crates/shell/src/forms.rs:579` **fn** `encode_form_fields_multipart` — Encode form fields as `multipart/form-data` (RFC 7578)
+`crates/shell/src/forms.rs:591` **fn** `get_form_enctype` — Return the `enctype` attribute of the `<form>` ancestor of `submit_node`,
+`crates/shell/src/forms.rs:609` **fn** `build_form_submit`
+`crates/shell/src/forms.rs:641` **fn** `make_get_url` — Построить итоговый URL для GET-формы: добавить `?body` к action URL
+`crates/shell/src/forms.rs:681` **fn** `build_color_picker` — Build a color-swatch picker anchored below `anchor` (document coordinates)
+`crates/shell/src/forms.rs:718` **fn** `hit_color_swatch` — If viewport-space point `(px, py)` lands on a swatch, return its `[r, g, b]`
+`crates/shell/src/forms.rs:739` **fn** `swatch_to_css_color` — Format `[r, g, b]` as CSS `#rrggbb`
+`crates/shell/src/forms.rs:749` **struct** `SelectOption` — One entry in a `<select>` dropdown list
+`crates/shell/src/forms.rs:772` **fn** `collect_select_options` — Collect all direct `<option>` children of a `<select>` DOM node
+`crates/shell/src/forms.rs:809` **fn** `build_select_dropdown` — Build a dropdown overlay anchored below (or above if near the bottom of the
+`crates/shell/src/forms.rs:895` **fn** `hit_select_option` — If viewport-space point `(px, py)` lands on an option row, return its index
+`crates/shell/src/forms.rs:932` **fn** `apply_select_choice` — Apply the selection of option at `opt_idx` to the `<select>` DOM node:
+`crates/shell/src/forms.rs:953` **enum** `DatePickerHit` — What a viewport-space click hit inside an open date picker
+`crates/shell/src/forms.rs:982` **fn** `is_leap_year` — True if `year` is a leap year
+`crates/shell/src/forms.rs:987` **fn** `days_in_month` — Number of days in the given month (1-based month, Gregorian calendar)
+`crates/shell/src/forms.rs:998` **fn** `first_weekday_of_month` — ISO weekday (0=Mon … 6=Sun) of the first day of the given month
+`crates/shell/src/forms.rs:1013` **fn** `month_name` — English month name, 1-based
+`crates/shell/src/forms.rs:1025` **fn** `parse_date_value` — Parse an ISO 8601 date string `YYYY-MM-DD` → `(year, month, day)`
+`crates/shell/src/forms.rs:1036` **fn** `format_date_value` — Format `(year, month, day)` as `YYYY-MM-DD`
+`crates/shell/src/forms.rs:1042` **fn** `today_year_month` — Return the current year and month derived from the system clock
+`crates/shell/src/forms.rs:1066` **fn** `build_date_picker` — Build a calendar date-picker overlay anchored below `anchor` (document coords)
+`crates/shell/src/forms.rs:1224` **fn** `hit_date_picker` — Hit-test a viewport-space click `(px, py)` against an open date picker
+`crates/shell/src/forms.rs:1286` **fn** `advance_month` — Advance display month by `delta` months (positive = forward, negative = backward)
 `crates/shell/src/gc_tick.rs:20` **struct** `GcTick` — Throttled idle GC poller
 `crates/shell/src/gc_tick.rs:27` **fn** `new` — Create a new `GcTick`. The first poll fires after [`GC_INTERVAL`] elapses
 `crates/shell/src/gc_tick.rs:42` **fn** `poll` — Poll the GC scheduler
@@ -3881,11 +4102,12 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/hints.rs:172` **fn** `build_hints_overlay` — Build the viewport-locked overlay display list for all active hint badges
 `crates/shell/src/image_cache.rs:44` **enum** `DecodedImage` — Decoded image payload shared between the streaming progressive loader and the
 `crates/shell/src/image_cache.rs:86` **struct** `DecodedImageCache` — Shared, generation-scoped decoded-image cache for page `<img>` resources
-`crates/shell/src/image_cache.rs:100` **fn** `reset` — Drop all cached entries and adopt navigation `generation`
-`crates/shell/src/image_cache.rs:112` **fn** `reset_new` — Drop all cached entries and bump to a fresh generation
-`crates/shell/src/image_cache.rs:119` **fn** `current_generation` — The navigation generation the cache is currently scoped to
-`crates/shell/src/image_cache.rs:130` **fn** `get_or_decode` — Decode `src` through the cache for navigation `generation`
-`crates/shell/src/image_cache.rs:173` **fn** `get_or_decode_current` — Convenience for the UI-thread consumer ([`fetch_and_decode_images`]): decode
+`crates/shell/src/image_cache.rs:96` **fn** `debug_stats` — TEMP BUG-272 diagnostics: (entries, decoded pixel bytes) currently held
+`crates/shell/src/image_cache.rs:118` **fn** `reset` — Drop all cached entries and adopt navigation `generation`
+`crates/shell/src/image_cache.rs:130` **fn** `reset_new` — Drop all cached entries and bump to a fresh generation
+`crates/shell/src/image_cache.rs:137` **fn** `current_generation` — The navigation generation the cache is currently scoped to
+`crates/shell/src/image_cache.rs:148` **fn** `get_or_decode` — Decode `src` through the cache for navigation `generation`
+`crates/shell/src/image_cache.rs:191` **fn** `get_or_decode_current` — Convenience for the UI-thread consumer ([`fetch_and_decode_images`]): decode
 `crates/shell/src/input/gesture.rs:36` **enum** `GestureDir` — Six-way gesture direction code
 `crates/shell/src/input/gesture.rs:55` **enum** `GestureAction` — Shell action emitted when a completed gesture matches a binding
 `crates/shell/src/input/gesture.rs:81` **struct** `GestureMap` — Configurable mapping from [`GestureDir`] to [`GestureAction`]
@@ -3954,17 +4176,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/omnibox/mod.rs:20` **enum** `AliasAction` — Action produced by resolving a raw omnibox input against the alias table
 `crates/shell/src/omnibox/mod.rs:39` **fn** `resolve` — Resolve `input` against the alias table and built-in `@` actions
 `crates/shell/src/page_context_menu.rs:45` **enum** `SpellMenuAction` — An action the user can pick from the spell suggestion menu
-`crates/shell/src/page_context_menu.rs:58` **struct** `SpellTarget` — Everything the shell needs to apply the chosen action: which control holds
-`crates/shell/src/page_context_menu.rs:72` **fn** `word` — The misspelled word slice
-`crates/shell/src/page_context_menu.rs:77` **fn** `apply` — Rebuild the control's value with the word replaced by `replacement`
-`crates/shell/src/page_context_menu.rs:88` **struct** `PageContextMenu` — State of the page-level spell suggestion menu. One menu is open at a time
-`crates/shell/src/page_context_menu.rs:107` **fn** `open_for` — Open the menu at cursor `(x, y)` for `target`, offering `suggestions`
-`crates/shell/src/page_context_menu.rs:121` **fn** `close` — Hide the menu and drop its context
-`crates/shell/src/page_context_menu.rs:129` **fn** `is_open` — `true` while the menu is visible
-`crates/shell/src/page_context_menu.rs:134` **fn** `target` — The target context (word + control), if the menu is open
-`crates/shell/src/page_context_menu.rs:158` **fn** `item_at` — Map a CSS-px `(x, y)` to the row index under it, or `None`
-`crates/shell/src/page_context_menu.rs:176` **fn** `action_at` — Map a CSS-px `(x, y)` to the [`SpellMenuAction`] under it, or `None`
-`crates/shell/src/page_context_menu.rs:181` **fn** `build_overlay` — Build a viewport-locked display list for the open menu; empty when closed
+`crates/shell/src/page_context_menu.rs:59` **enum** `SpellTargetKind` — How a [`SpellTarget`] correction gets written back to the DOM (P3-spell
+`crates/shell/src/page_context_menu.rs:73` **struct** `SpellTarget` — Everything the shell needs to apply the chosen action: which control holds
+`crates/shell/src/page_context_menu.rs:92` **fn** `word` — The misspelled word slice
+`crates/shell/src/page_context_menu.rs:97` **fn** `apply` — Rebuild the control's value with the word replaced by `replacement`
+`crates/shell/src/page_context_menu.rs:108` **struct** `PageContextMenu` — State of the page-level spell suggestion menu. One menu is open at a time
+`crates/shell/src/page_context_menu.rs:127` **fn** `open_for` — Open the menu at cursor `(x, y)` for `target`, offering `suggestions`
+`crates/shell/src/page_context_menu.rs:141` **fn** `close` — Hide the menu and drop its context
+`crates/shell/src/page_context_menu.rs:149` **fn** `is_open` — `true` while the menu is visible
+`crates/shell/src/page_context_menu.rs:154` **fn** `target` — The target context (word + control), if the menu is open
+`crates/shell/src/page_context_menu.rs:178` **fn** `item_at` — Map a CSS-px `(x, y)` to the row index under it, or `None`
+`crates/shell/src/page_context_menu.rs:196` **fn** `action_at` — Map a CSS-px `(x, y)` to the [`SpellMenuAction`] under it, or `None`
+`crates/shell/src/page_context_menu.rs:201` **fn** `build_overlay` — Build a viewport-locked display list for the open menu; empty when closed
 `crates/shell/src/panel_layout.rs:46` **enum** `Dock` — Which window edge a docked sidebar hugs
 `crates/shell/src/panel_layout.rs:58` **fn** `width_from_cursor` — Resolve the dragged cursor x-position into a panel width for this dock,
 `crates/shell/src/panel_layout.rs:67` **fn** `opposite` — The opposite window edge (used by cross-dock "move to other side")
@@ -4282,10 +4505,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/platform/wake_lock.rs:25` **struct** `PlatformWakeLock` — Platform-backed wake-lock provider
 `crates/shell/src/platform/wake_lock.rs:32` **fn** `new` — Create a new provider with no lock held initially
 `crates/shell/src/prefetch.rs:57` **struct** `PrefetchCache` — Shared, generation-scoped byte cache for page subresources. See module docs
-`crates/shell/src/prefetch.rs:71` **fn** `reset` — Drop all cached entries and adopt navigation `generation`
-`crates/shell/src/prefetch.rs:78` **fn** `current_generation` — The navigation generation the cache is currently scoped to
-`crates/shell/src/prefetch.rs:93` **fn** `fetch` — Fetch `url` through the cache for navigation `generation`
-`crates/shell/src/prefetch.rs:138` **fn** `fetch_current` — Convenience for the UI-thread consumer (`parse_and_layout`): fetch using the
+`crates/shell/src/prefetch.rs:67` **fn** `debug_stats` — TEMP BUG-272 diagnostics: (entries, cached body bytes) currently held
+`crates/shell/src/prefetch.rs:83` **fn** `reset` — Drop all cached entries and adopt navigation `generation`
+`crates/shell/src/prefetch.rs:90` **fn** `current_generation` — The navigation generation the cache is currently scoped to
+`crates/shell/src/prefetch.rs:105` **fn** `fetch` — Fetch `url` through the cache for navigation `generation`
+`crates/shell/src/prefetch.rs:150` **fn** `fetch_current` — Convenience for the UI-thread consumer (`parse_and_layout`): fetch using the
 `crates/shell/src/reader_view.rs:18` **struct** `ArticleContent` — Article content extracted from a raw HTML page
 `crates/shell/src/reader_view.rs:37` **fn** `extract_article` — Parse `html` and extract the main article content
 `crates/shell/src/reader_view.rs:52` **fn** `build_reader_html` — Wrap an [`ArticleContent`] in the reader template and return a
@@ -4363,10 +4587,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/spellcheck.rs:168` **fn** `extract_words` — Извлекает байтовые диапазоны слов в `text`
 `crates/shell/src/spellcheck.rs:210` **fn** `misspelled_ranges_with` — Возвращает диапазоны слов, для которых `checker.check` вернул `false`, при
 `crates/shell/src/spellcheck.rs:228` **fn** `word_at_x` — Находит байтовый диапазон слова в `text`, чья горизонтальная проекция
-`crates/shell/src/spellcheck.rs:240` **fn** `user_words_path` — Путь к пользовательскому словарю: `<exe_dir>/data/spell/user_words.txt`
-`crates/shell/src/spellcheck.rs:246` **fn** `load_user_words` — Загружает пользовательский словарь: по одному слову в строке, lowercase
-`crates/shell/src/spellcheck.rs:259` **fn** `add_user_word` — Добавляет слово (lowercase) в файл пользовательского словаря, дописывая
-`crates/shell/src/spellcheck.rs:270` **fn** `build_spell_overlay` — Строит команды отрисовки волнистого подчёркивания для ошибочных диапазонов
+`crates/shell/src/spellcheck.rs:254` **fn** `locate_line_word_in_full_text` — Locates the byte range of a word from one rendered (wrapped) visual line
+`crates/shell/src/spellcheck.rs:278` **fn** `user_words_path` — Путь к пользовательскому словарю: `<exe_dir>/data/spell/user_words.txt`
+`crates/shell/src/spellcheck.rs:284` **fn** `load_user_words` — Загружает пользовательский словарь: по одному слову в строке, lowercase
+`crates/shell/src/spellcheck.rs:297` **fn** `add_user_word` — Добавляет слово (lowercase) в файл пользовательского словаря, дописывая
+`crates/shell/src/spellcheck.rs:308` **fn** `build_spell_overlay` — Строит команды отрисовки волнистого подчёркивания для ошибочных диапазонов
 `crates/shell/src/surface/ctx.rs:22` **struct** `PaintCtx` — Read-only context for [`super::Panel::paint`]
 `crates/shell/src/surface/ctx.rs:39` **fn** `new` — Build a paint context with default (non-focused, non-hovered) hints
 `crates/shell/src/surface/ctx.rs:56` **struct** `EventCtx` — Side effects a panel may request while handling an event
@@ -4558,7 +4783,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/zoom.rs:21` **fn** `zoom_in` — Increase zoom by one step, clamped to [`ZOOM_MAX`]
 `crates/shell/src/zoom.rs:26` **fn** `zoom_out` — Decrease zoom by one step, clamped to [`ZOOM_MIN`]
 `crates/shell/src/zoom.rs:31` **fn** `zoom_reset` — Reset zoom to 100%
-`crates/shell/src/zoom.rs:40` **fn** `effective_viewport` — Compute the CSS layout viewport size from the physical window size
+`crates/shell/src/zoom.rs:48` **fn** `preview_scale` — Preview scale for transform-first zoom (ADR-016 M0.3)
+`crates/shell/src/zoom.rs:64` **fn** `effective_viewport` — Compute the CSS layout viewport size from the physical window size
 
 ## lumen-storage  (511 symbols)
 
@@ -5075,4 +5301,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5004 symbols in 22 crates*
+*Total: 5230 symbols in 22 crates*
