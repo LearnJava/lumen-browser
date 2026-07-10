@@ -205,6 +205,18 @@ Sub-sliced like M0 (each independently shippable into `zcode`):
   bottom / done-on-decay / continue-from-anchor). Full input independence
   (events arriving *during* a stall) remains M2. Acceptance (interactive 200 ms
   busy-loop) to be smoke-verified via `LUMEN_FRAME_LOG` before flipping default.
+- **M1.4 — cross-thread frame-log tags.** ✅ (branch `p1-mt-m1-log`, merged into
+  `zcode`). Instrumentation prerequisite for the M1 acceptance step and M2
+  debugging (closes the "Frame logs across threads" gotcha below). A third
+  no-op-default `RenderBackend` method `set_frame_commit_id(commit_id, self_tick)`
+  is called by the render thread before each present; the femtovg backend appends
+  `[thr <name> commit <id>[ self-tick]]` to its `[frame] paint …` line
+  (`std::thread::current().name()` → `lumen-render` off the UI thread, `main`
+  otherwise). Self-tick presents (momentum continuing *while main is stalled*,
+  M1.3) are now visible in the log with the retained frame's commit id — this is
+  the "frame log proves presentation continued" evidence the acceptance needs.
+  Single-threaded path (`LUMEN_RENDER_THREAD` off) never sets it → line unchanged
+  bar the `[thr main]` tag. No new deps, no `unsafe`.
 
 - **Ownership:** ~~the render thread creates and exclusively owns~~ **[M1.1 spike
   correction]** — on Windows the GL context/`Canvas` **cannot** be created on
@@ -285,7 +297,8 @@ must land after M1 so commits have somewhere to go.
   M1 render loop is where the fixed wgpu/vello backend will later slot in
   (ADR-010 phase 3).
 - **Frame logs across threads:** carry `commit_id` + thread tag in
-  `LUMEN_FRAME_LOG` lines or debugging becomes guesswork.
+  `LUMEN_FRAME_LOG` lines or debugging becomes guesswork. ✅ done in M1.4:
+  `[frame] paint …` lines end with `[thr <name> commit <id>[ self-tick]]`.
 - **content-visibility expansion** (`maybe_expand_cv_relevant`, `main.rs`
   ~:16157) is a scroll→relayout backchannel; in M1+ it becomes a message from
   render thread (visible-range changed) to the engine side — do not let the
