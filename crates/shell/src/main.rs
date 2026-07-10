@@ -6894,11 +6894,12 @@ impl Lumen {
     /// [`Self::relayout`] otherwise (the default, so behavior is byte-identical
     /// unless `LUMEN_ENGINE_THREAD=1`).
     ///
-    /// "Async-safe" means the caller only changed *chrome* geometry — a docked
+    /// "Async-safe" means the caller changed only *chrome* geometry — a docked
     /// panel's side/width, the workspace bar, vertical/tree tabs, sidebar
-    /// visibility, or the AI / accessibility side panels (M2.2b-3) — which shifts
-    /// the content viewport but is **not** followed by a synchronous read of page
-    /// layout geometry. The reflowed content may
+    /// visibility, or the AI / accessibility side panels (M2.2b-3) — or triggered a
+    /// whole-page *restyle* with no geometry read of its own (an OS/settings theme
+    /// flip, M2.2b-4), and is in either case **not** followed by a synchronous read
+    /// of page layout geometry. The reflowed content may
     /// therefore land a few frames later via [`Self::poll_engine_commit`], the
     /// same contract as the debounced zoom (M2.2a). The chrome itself is drawn
     /// from its own state, so it updates on the immediately-requested redraw; only
@@ -9532,13 +9533,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
             WindowEvent::ThemeChanged(theme) => {
                 // OS switched light↔dark. Update the stored preference and re-run
-                // layout: relayout() re-evaluates `@media (prefers-color-scheme)`
-                // and pushes the new value to JS matchMedia listeners via
-                // deliver_media_query_changes(.., self.dark_mode).
+                // layout: it re-evaluates `@media (prefers-color-scheme)` and pushes
+                // the new value to JS matchMedia listeners via
+                // deliver_media_query_changes(.., self.dark_mode). ADR-016 M2.2b-4:
+                // an OS theme flip is async-safe (a whole-page restyle with no
+                // synchronous read of page geometry afterwards — matchMedia delivery
+                // rides `apply_relayout_result`, and `dark_mode` is captured by the
+                // off-thread job), so route it through `relayout_chrome()`.
                 let dark = platform::dark_mode::theme_prefers_dark(Some(theme));
                 if dark != self.dark_mode {
                     self.dark_mode = dark;
-                    self.relayout();
+                    self.relayout_chrome();
                     if let Some(w) = self.window.as_ref() {
                         w.request_redraw();
                     }
@@ -10678,7 +10683,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 let new_dark = self.shell_theme.is_dark(self.dark_mode);
                                 if new_dark != self.dark_mode {
                                     self.dark_mode = new_dark;
-                                    self.relayout();
+                                    // ADR-016 M2.2b-4: an explicit dark/light lock is
+                                    // async-safe like the OS theme flip — a whole-page
+                                    // restyle with no synchronous geometry read here
+                                    // (only chrome state follows), so route it off-thread.
+                                    self.relayout_chrome();
                                 }
                                 let _ = self.settings_store.apply_snapshot(&draft);
                                 self.settings_panel.visible = false;

@@ -408,6 +408,23 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
       form input, resize, theme, `content-visibility` expansion, rAF DOM-dirty)
       still need per-site async-vs-sync analysis and stay synchronous. No new
       deps, no `unsafe`.
+    - **M2.2b-4 — off-thread layout for async-safe theme changes.** ✅ (branch
+      `p1-mt-m2-2b-4-theme`, merged into `zcode`, 2026-07-11). Extends the
+      async-safe batch beyond chrome-inset shifts to the `prefers-color-scheme`
+      restyle: the OS theme flip (`WindowEvent::ThemeChanged`) and the settings-panel
+      explicit dark/light lock (`SettingsHit::Close`, `shell_theme.is_dark`) both set
+      `self.dark_mode` and re-run layout to re-evaluate `@media (prefers-color-scheme)`
+      + push the new value to JS `matchMedia` listeners. Neither reads page geometry
+      synchronously afterwards (OS path → `request_redraw`; settings path → chrome
+      state only), and the off-thread job captures `dark_mode` at submit while
+      `apply_relayout_result` delivers the `matchMedia` change on the UI thread — so
+      routing both through `Lumen::relayout_chrome()` is byte-identical with the flag
+      off (default) and lands the reflow a few frames later under
+      `LUMEN_ENGINE_THREAD=1`. The helper's doc comment now covers "restyle with no
+      geometry read" alongside chrome-inset shifts. 2 sites converted (35 → 33 sync
+      callers). Remaining sync-geometry sites (DOM mutation → geometry read,
+      hover/focus, form input, resize, `content-visibility` expansion, rAF DOM-dirty)
+      still need per-site analysis and stay synchronous. No new deps, no `unsafe`.
 - **M2.3 — synchronous readback + acceptance.** `--screenshot`, `run.py --ipc`,
   CDP `Page.captureScreenshot` become `Request::Readback { reply }` messages
   (audit all `screenshot_*` sites first — most are already CPU per the M1.1
