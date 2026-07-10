@@ -4792,11 +4792,16 @@ impl Renderer {
         let mut level_bounds: Vec<LevelBounds> = vec![LevelBounds::Unbounded];
 
         let mut current_level: usize = 0;
-        let mut level_alpha_stack: Vec<f32> = Vec::new();
+        // (alpha, метка render_plan.len() на момент Push) — метка позволяет
+        // выбросить из плана ВСЕ пассы слоя (viewport-cull невидимых слоёв):
+        // offscreen-текстуры имеют размер окна, контент за его пределами
+        // физически не попадает ни в одну текстуру, так что отсечение
+        // эквивалентно сегодняшнему клиппингу растеризацией.
+        let mut level_alpha_stack: Vec<(f32, usize)> = Vec::new();
         // Tracks blend mode per opened offscreen level (for non-Normal PushBlendMode).
-        let mut level_blend_mode_stack: Vec<BlendMode> = Vec::new();
+        let mut level_blend_mode_stack: Vec<(BlendMode, usize)> = Vec::new();
         // Tracks filter list per opened offscreen level (for CSS filter compositing).
-        let mut filter_stack: Vec<Vec<FilterFn>> = Vec::new();
+        let mut filter_stack: Vec<(Vec<FilterFn>, usize)> = Vec::new();
         // Stack for backdrop-filter: (filter_list, element_bounds_css_px).
         let mut backdrop_filter_stack: Vec<(Vec<FilterFn>, lumen_core::geom::Rect)> = Vec::new();
         // Monotonic counter assigning a stable ordinal to each backdrop element
@@ -5395,7 +5400,7 @@ impl Renderer {
                 }
                 DisplayCommand::PushOpacity { alpha } => {
                     flush_batch!();
-                    level_alpha_stack.push(*alpha);
+                    level_alpha_stack.push((*alpha, render_plan.len()));
                     current_level += 1;
                     while level_first.len() <= current_level {
                         level_first.push(true);
@@ -5409,7 +5414,34 @@ impl Renderer {
                 DisplayCommand::PopOpacity => {
                     if !level_alpha_stack.is_empty() {
                         flush_batch!();
-                        let layer_alpha = level_alpha_stack.pop().unwrap();
+                        let (layer_alpha, plan_mark) = level_alpha_stack.pop().unwrap();
+                        // viewport-cull: слой с alpha=0, пустой или целиком вне
+                        // поверхности не виден — выбросить из плана и его
+                        // контент, и композит.
+                        let child_now = if bbox_scissor_disabled() {
+                            LevelBounds::Unbounded
+                        } else {
+                            level_bounds
+                                .get(current_level)
+                                .copied()
+                                .unwrap_or(LevelBounds::Unbounded)
+                        };
+                        let invisible = layer_alpha <= 0.0
+                            || match child_now {
+                                LevelBounds::Empty => true,
+                                LevelBounds::Rect { x0, y0, x1, y1 } => {
+                                    x1 * dpr_f32 <= 0.0
+                                        || y1 * dpr_f32 <= 0.0
+                                        || x0 * dpr_f32 >= surface_w as f32
+                                        || y0 * dpr_f32 >= surface_h as f32
+                                }
+                                LevelBounds::Unbounded => false,
+                            };
+                        if invisible {
+                            render_plan.truncate(plan_mark);
+                            current_level -= 1;
+                            continue;
+                        }
                         let comp_v_start = composite_vertices.len() as u32;
                         push_composite_quad(&mut composite_vertices, layer_alpha);
                         render_plan.push(RenderPlanItem::Composite(CompositePlan {
@@ -5442,7 +5474,7 @@ impl Renderer {
                     blend_mode_stack.push(*mode);
                     if *mode != BlendMode::Normal {
                         flush_batch!();
-                        level_blend_mode_stack.push(*mode);
+                        level_blend_mode_stack.push((*mode, render_plan.len()));
                         current_level += 1;
                         while level_first.len() <= current_level {
                             level_first.push(true);
@@ -5456,8 +5488,34 @@ impl Renderer {
                 }
                 DisplayCommand::PopBlendMode => {
                     blend_mode_stack.pop();
-                    if let Some(mode) = level_blend_mode_stack.pop() {
+                    if let Some((mode, plan_mark)) = level_blend_mode_stack.pop() {
                         flush_batch!();
+                        // viewport-cull: для всех CSS-блэндов прозрачный src
+                        // оставляет backdrop неизменным (co = cs + cb·(1−as)),
+                        // поэтому пустой/за-экранный слой невидим целиком.
+                        let child_now = if bbox_scissor_disabled() {
+                            LevelBounds::Unbounded
+                        } else {
+                            level_bounds
+                                .get(current_level)
+                                .copied()
+                                .unwrap_or(LevelBounds::Unbounded)
+                        };
+                        let invisible = match child_now {
+                            LevelBounds::Empty => true,
+                            LevelBounds::Rect { x0, y0, x1, y1 } => {
+                                x1 * dpr_f32 <= 0.0
+                                    || y1 * dpr_f32 <= 0.0
+                                    || x0 * dpr_f32 >= surface_w as f32
+                                    || y0 * dpr_f32 >= surface_h as f32
+                            }
+                            LevelBounds::Unbounded => false,
+                        };
+                        if invisible {
+                            render_plan.truncate(plan_mark);
+                            current_level -= 1;
+                            continue;
+                        }
                         let comp_v_start = composite_vertices.len() as u32;
                         // alpha=1.0: blend shader handles all compositing math.
                         push_composite_quad(&mut composite_vertices, 1.0);
@@ -5965,7 +6023,7 @@ impl Renderer {
                 // PopFilter composites it onto the parent with filter applied.
                 DisplayCommand::PushFilter { filters, bounds: _ } => {
                     flush_batch!();
-                    filter_stack.push(filters.clone());
+                    filter_stack.push((filters.clone(), render_plan.len()));
                     current_level += 1;
                     while level_first.len() <= current_level {
                         level_first.push(true);
@@ -5977,7 +6035,7 @@ impl Renderer {
                     level_bounds[current_level] = LevelBounds::Empty;
                 }
                 DisplayCommand::PopFilter => {
-                    if let Some(filters) = filter_stack.pop() {
+                    if let Some((filters, plan_mark)) = filter_stack.pop() {
                         flush_batch!();
                         let content = if bbox_scissor_disabled() {
                             LevelBounds::Unbounded
@@ -6005,7 +6063,9 @@ impl Renderer {
                             LevelBounds::Unbounded => (None, None),
                             LevelBounds::Empty => {
                                 // Слой пуст: composite прозрачной текстуры —
-                                // визуальный no-op, все три пасса пропускаются.
+                                // визуальный no-op; выбросить из плана и
+                                // отрисовку контента слоя (viewport-cull).
+                                render_plan.truncate(plan_mark);
                                 current_level -= 1;
                                 continue;
                             }
@@ -6018,7 +6078,10 @@ impl Renderer {
                                 let sx1 = ((ix1 * dpr_f32).ceil().max(0.0) as u32).min(surface_w);
                                 let sy1 = ((iy1 * dpr_f32).ceil().max(0.0) as u32).min(surface_h);
                                 if sx1 <= sx0 || sy1 <= sy0 {
-                                    // Контент целиком за пределами surface.
+                                    // Контент целиком за пределами surface —
+                                    // фильтр не виден, его контент-пассы тоже
+                                    // выбрасываются (viewport-cull).
+                                    render_plan.truncate(plan_mark);
                                     current_level -= 1;
                                     continue;
                                 }
