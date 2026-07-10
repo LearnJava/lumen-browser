@@ -88,6 +88,9 @@ pub struct BenchCfg {
     pub frames: u32,
     /// Frames to render and discard before measuring.
     pub warmup: u32,
+    /// CSS px of page scroll per frame in `Scroll` mode (4th field, default 1).
+    /// Large steps model a fast fling — the fast-scroll degradation workload.
+    pub step: f32,
 }
 
 /// Mutable per-run state. The winit event loop is single-threaded, so a
@@ -136,11 +139,17 @@ pub fn cfg() -> Option<BenchCfg> {
         };
         let frames = parts.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(600);
         let warmup = parts.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(30);
+        let step = parts.next().and_then(|s| s.parse::<f32>().ok()).unwrap_or(1.0);
         if frames == 0 {
             eprintln!("LUMEN_BENCH: frames must be > 0");
             std::process::exit(2);
         }
-        Some(BenchCfg { mode, frames, warmup })
+        // NaN проваливается сюда же — бенч с мусорным шагом не имеет смысла.
+        if step <= 0.0 || step.is_nan() {
+            eprintln!("LUMEN_BENCH: step must be > 0");
+            std::process::exit(2);
+        }
+        Some(BenchCfg { mode, frames, warmup, step })
     })
 }
 
@@ -251,11 +260,12 @@ pub fn log_geometry_once(
 /// Bounces rather than wrapping: a wrap to 0 would make one frame in every
 /// `max_scroll` a full-viewport jump, and that outlier lands in p95.
 pub fn next_scroll(current: f32, max_scroll: f32) -> f32 {
+    let step = cfg().map_or(1.0, |c| c.step);
     with_run(|run| {
         if max_scroll <= 0.0 {
             return 0.0;
         }
-        let next = current + run.dir;
+        let next = current + run.dir * step;
         if next >= max_scroll {
             run.dir = -1.0;
             max_scroll

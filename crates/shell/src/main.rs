@@ -296,6 +296,16 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{CursorGrabMode, CursorIcon, Window, WindowId};
 
+/// `true`, если fast-scroll деградация отключена
+/// (`LUMEN_NO_FAST_SCROLL_DEGRADE=1`). Диагностика: A/B поведения и скорости
+/// на одном бинарнике (паттерн `LUMEN_NO_SCROLL_COMPOSITOR`).
+fn fast_scroll_degrade_disabled() -> bool {
+    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("LUMEN_NO_FAST_SCROLL_DEGRADE").is_ok_and(|v| v == "1")
+    })
+}
+
 fn main() -> ExitCode {
     // Anchor for launch->first-frame timing (§4 score table) — before any work.
     bench_frames::mark_process_start();
@@ -721,6 +731,9 @@ fn run_window_mode(
         prev_styles: HashMap::new(),
         anim_frame: None,
         layout_box: None,
+        last_frame_scroll_y: 0.0,
+        scroll_velocity: 0.0,
+        fast_scroll: false,
         page_tracks: tracks::PageTracks::default(),
         snap_containers: Vec::new(),
         scroll_containers: Vec::new(),
@@ -5817,6 +5830,14 @@ struct Lumen {
     /// Растёт вправо, клампится в `[0, max(0, content_width − viewport_width)]`.
     /// На load/reload сбрасывается в 0.
     scroll_x: f32,
+    /// `scroll_y` предыдущего `RedrawRequested` — для оценки скорости скролла
+    /// (fast-scroll деградация, EXPERIMENT.md §2 срез 2).
+    last_frame_scroll_y: f32,
+    /// EMA-скорость скролла в CSS px/кадр (сглаживает разовые wheel-рывки).
+    scroll_velocity: f32,
+    /// Режим быстрого скролла: тики CSS-анимаций/GIF/video-GIF заморожены,
+    /// контент scroll-стабилен, кадры уходят в page-compose HIT.
+    fast_scroll: bool,
     /// Полная высота контента в CSS px — `max(rect.y + rect.height)` по
     /// текущему display list-у. Обновляется после load/reload. 0 — нет контента.
     content_height: f32,
@@ -11117,6 +11138,39 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // вошёл в расширенный viewport → ratchet relevant + relayout.
                 self.maybe_expand_cv_relevant();
 
+                // Fast-scroll деградация (EXPERIMENT.md §2 срез 2, принцип
+                // пользователя 2026-07-10: чем быстрее скролл, тем меньше
+                // пользователю важно содержимое). При быстром скролле
+                // замораживаются ИСТОЧНИКИ изменений контента — тики
+                // CSS-анимаций/transitions (Step 2), GIF (Step 2.5) и
+                // video-GIF (Step 2.6). Display list становится
+                // scroll-стабильным, и кадр скролла уходит в page-compose HIT
+                // (~2 мс) вместо монолитной перерисовки. Анимации time-based:
+                // при выходе из режима они сами догоняют текущее время,
+                // «пауза» видна только во время быстрой прокрутки.
+                // Гистерезис по EMA-скорости: вход ≥48 CSS px/кадр (полный
+                // wheel-notch за кадр), выход <12. Разовая прокрутка колёсиком
+                // даёт одну-две замороженных пары кадров, плавный трекпад не
+                // входит в режим вовсе. LUMEN_NO_FAST_SCROLL_DEGRADE=1 — выкл.
+                let scroll_step = (self.scroll_y - self.last_frame_scroll_y).abs();
+                self.last_frame_scroll_y = self.scroll_y;
+                self.scroll_velocity = 0.6 * self.scroll_velocity + 0.4 * scroll_step;
+                self.fast_scroll = !fast_scroll_degrade_disabled()
+                    && if self.fast_scroll {
+                        self.scroll_velocity >= 12.0
+                    } else {
+                        self.scroll_velocity >= 48.0
+                    };
+                let freeze_content_ticks = self.fast_scroll;
+                if freeze_content_ticks
+                    && (self.anim_frame.is_some() || !self.animated_gifs.is_empty())
+                {
+                    // Замороженным источникам нужен живой цикл кадров: на
+                    // кадре, где скорость упадёт ниже порога, тики
+                    // возобновятся и анимации продолжатся.
+                    self.request_redraw();
+                }
+
                 // Step 1.5: CSS Scroll-Driven Animations — update ScrollTimeline.currentTime.
                 // Spec §8.1.5.1 step «update scroll-linked animations» precedes CSS animations.
                 // Compute root-viewport block/inline progress and deliver to JS.
@@ -11149,7 +11203,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Step 2: CSS Animations + Transitions tick (spec order: before rAF).
                 // Both schedulers are ticked once per frame and merged into a single
                 // AnimationFrame. Transition values override @keyframes when both apply.
-                if let (Some(lb), Some(src)) = (&self.layout_box, &self.layout_source) {
+                // При fast-scroll тик пропускается: anim_frame остаётся с прошлыми
+                // значениями → пересобранный anim_dl идентичен → ключ полосы стабилен.
+                if !freeze_content_ticks
+                    && let (Some(lb), Some(src)) = (&self.layout_box, &self.layout_source)
+                {
                     let vp = lumen_layout::Viewport {
                         width: self.viewport_width_css(),
                         height: self.viewport_height_css(),
@@ -11174,7 +11232,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Step 2.5: GIF animation — update GPU textures for frames that changed.
                 // Uses the same `epoch` as rAF timestamps so GIF timing is consistent
                 // with CSS animations and JS. Runs before rAF so JS can read correct img.
-                if !self.animated_gifs.is_empty() {
+                // При fast-scroll кадры GIF не обновляются (register_image бампает
+                // content_generation и убивал бы ключ полосы каждый тик).
+                if !freeze_content_ticks && !self.animated_gifs.is_empty() {
                     let elapsed_ms = self.epoch.elapsed().as_millis() as u64;
 
                     // Collect (url, frame_idx, frame_image) for frames that changed.
@@ -11220,8 +11280,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
 
                 // Step 2.6: Video GIF animation — drain pending loads, advance frames.
-                let video_elapsed_ms = self.epoch.elapsed().as_millis() as u64;
-                self.tick_video_gifs(video_elapsed_ms);
+                // Заморожено при fast-scroll по той же причине, что и Step 2.5.
+                if !freeze_content_ticks {
+                    let video_elapsed_ms = self.epoch.elapsed().as_millis() as u64;
+                    self.tick_video_gifs(video_elapsed_ms);
+                }
 
                 // Step 3: rAF callbacks + microtask checkpoint.
                 self.runtime.run_rendering_step(timestamp_ms);
