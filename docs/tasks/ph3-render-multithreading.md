@@ -72,10 +72,22 @@ No threads yet; reduces the work every later stage will move/parallelize.
   `FRAME_SUMMARY count/min/p50/p95/p99/max` on the `LUMEN_MEM_REPORT` cadence
   and once from `ApplicationHandler::exiting`. Every later stage cites
   before/after numbers.
-- **M0.2 Viewport culling.** Give display commands (or a prepass index)
-  bounding rects; skip commands fully outside `viewport ∪ slop` during
-  execution in both femtovg and wgpu backends. Expected: scroll frame cost on
-  long pages drops by the off-screen share (audit pages: 90%+).
+- **M0.2 Viewport culling.** ✅ (branch `p1-mt-m0-2`).
+  [`DisplayCommand::cull_rect`](../../crates/engine/paint/src/display_list.rs)
+  returns the document-space AABB of every self-contained leaf draw (fills,
+  text, images, gradients, borders, outline grown by offset+width, SVG
+  geometry, scrollbar) and `None` for all structural `Push*`/`Pop*` (which must
+  never be culled). Both backends map that box through the current CTM (scroll +
+  nested transforms) and skip it when its transformed AABB is fully outside the
+  viewport expanded by a 256 CSS px slop: femtovg via `is_command_culled` at the
+  top of `render_command` (offscreen clip/filter/mask layers are full-surface
+  FBOs with an unchanged transform, so culling stays valid inside them); wgpu
+  via `leaf_is_offscreen` at the top of the `render` command loop (3D/perspective
+  transforms disable culling — conservative). AABB-of-transformed-corners is a
+  superset under rotation/scale, so no visible pixel is ever dropped. The
+  femtovg `[frame]` log now reports `culled N/M leaf`. 4 unit tests on
+  `cull_rect`. Expected: scroll frame cost on long pages drops by the off-screen
+  share (audit pages: 90%+).
 - **M0.3 Transform-first zoom.** Ctrl+/- applies an immediate scale transform
   to the retained display list (femtovg `canvas.scale`); full relayout is
   debounced ~150–200 ms after the last zoom step. Pinch/anim zoom follows the

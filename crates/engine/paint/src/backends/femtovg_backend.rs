@@ -421,6 +421,9 @@ pub struct FemtovgBackend {
     viewport_css_w: f32,
     /// CSS высота viewport (height / scale), нужна для sticky-вычислений.
     viewport_css_h: f32,
+    /// ADR-016 M0.2 per-frame culling counters `(culled, total_leaf)` for the
+    /// `LUMEN_FRAME_LOG` line. Reset at the start of every `render()`.
+    cull_stats: (u32, u32),
     /// Фон канвы (CSS Backgrounds §3.11.1): цвет, которым заливается весь кадр
     /// перед отрисовкой content. `None` → UA-дефолт (белый). Устанавливается
     /// shell-ом через `set_canvas_background` из фона корневого элемента.
@@ -1233,6 +1236,7 @@ impl FemtovgBackend {
             scroll_x: 0.0,
             viewport_css_w: size.width as f32 / scale as f32,
             viewport_css_h: size.height as f32 / scale as f32,
+            cull_stats: (0, 0),
             canvas_bg: None,
             filter_layer_stack: Vec::new(),
             filter_layer_pending_delete: Vec::new(),
@@ -2590,7 +2594,66 @@ impl FemtovgBackend {
 
     /// Обрабатывает одну команду display list.
     #[allow(clippy::too_many_lines)]
+    /// ADR-016 M0.2: extra margin (CSS px) added around the viewport before
+    /// culling. Absorbs anti-alias fringe and sub-pixel rounding, and keeps a
+    /// small band of just-off-screen content live so a fast scroll step never
+    /// exposes an un-drawn edge (the display list is re-culled every frame, so
+    /// this need only cover one frame's travel plus overhang).
+    const CULL_SLOP_CSS_PX: f32 = 256.0;
+
+    /// ADR-016 M0.2 viewport culling. Returns `true` when `local` (a leaf
+    /// command's bounding box in document-space CSS px, from
+    /// [`DisplayCommand::cull_rect`]) maps — through the current canvas
+    /// transform (the scroll translate plus any nested `PushTransform` /
+    /// `PushScrollLayer`) — fully outside the viewport expanded by
+    /// [`Self::CULL_SLOP_CSS_PX`]. Such a leaf paints nothing visible this
+    /// frame and can be skipped.
+    ///
+    /// Because we test the AABB of the four *transformed* corners, the result
+    /// is a conservative superset under rotation/scale: we only ever cull a
+    /// command whose entire transformed footprint is off-screen, so culling
+    /// can never drop a visible pixel.
+    fn is_command_culled(&self, local: Rect) -> bool {
+        // Degenerate boxes carry no pixels but are sometimes used as markers —
+        // cheap to keep, and skipping the math avoids surprises.
+        if local.width <= 0.0 || local.height <= 0.0 {
+            return false;
+        }
+        let t = self.canvas.transform();
+        let (x0, y0) = (local.x, local.y);
+        let (x1, y1) = (local.x + local.width, local.y + local.height);
+        let corners = [
+            t.transform_point(x0, y0),
+            t.transform_point(x1, y0),
+            t.transform_point(x0, y1),
+            t.transform_point(x1, y1),
+        ];
+        let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
+        let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
+        for (sx, sy) in corners {
+            min_x = min_x.min(sx);
+            min_y = min_y.min(sy);
+            max_x = max_x.max(sx);
+            max_y = max_y.max(sy);
+        }
+        let slop = Self::CULL_SLOP_CSS_PX;
+        max_x < -slop
+            || max_y < -slop
+            || min_x > self.viewport_css_w + slop
+            || min_y > self.viewport_css_h + slop
+    }
+
     fn render_command(&mut self, cmd: &DisplayCommand) {
+        // ADR-016 M0.2: skip self-contained leaf draws whose box is fully
+        // off-screen under the current transform. Structural commands return
+        // `None` from `cull_rect` and always execute (stack balance).
+        if let Some(local) = cmd.cull_rect() {
+            self.cull_stats.1 += 1;
+            if self.is_command_culled(local) {
+                self.cull_stats.0 += 1;
+                return;
+            }
+        }
         match cmd {
             // ── Базовые команды (RB-5) ──────────────────────────────────────
             DisplayCommand::FillRect { rect, color } => {
@@ -3447,6 +3510,8 @@ impl RenderBackend for FemtovgBackend {
         // Обновляем scroll context для sticky-вычислений.
         self.scroll_y = scroll_y;
         self.scroll_x = scroll_x;
+        // ADR-016 M0.2: reset per-frame culling counters.
+        self.cull_stats = (0, 0);
         self.viewport_css_w = (self.width as f64 / self.scale) as f32;
         self.viewport_css_h = (self.height as f64 / self.scale) as f32;
 
@@ -3531,7 +3596,7 @@ impl RenderBackend for FemtovgBackend {
         {
             let total = t0.elapsed();
             eprintln!(
-                "[frame] paint {:6.2}ms  (content {:6.2}ms / {} cmds, overlay {:5.2}ms / {} cmds, flush {:6.2}ms, swap {:6.2}ms)",
+                "[frame] paint {:6.2}ms  (content {:6.2}ms / {} cmds, overlay {:5.2}ms / {} cmds, flush {:6.2}ms, swap {:6.2}ms, culled {}/{} leaf)",
                 total.as_secs_f64() * 1000.0,
                 tc.as_secs_f64() * 1000.0,
                 content.len(),
@@ -3539,6 +3604,8 @@ impl RenderBackend for FemtovgBackend {
                 overlay.len(),
                 (taf - tbf).as_secs_f64() * 1000.0,
                 (total - taf).as_secs_f64() * 1000.0,
+                self.cull_stats.0,
+                self.cull_stats.1,
             );
         }
 

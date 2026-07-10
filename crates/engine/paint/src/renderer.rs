@@ -4221,6 +4221,22 @@ impl Renderer {
             } else {
                 sticky_stack.last().copied().unwrap_or((-scroll_y, -scroll_x))
             };
+            // ADR-016 M0.2 viewport culling: skip self-contained leaf draws
+            // whose box — shifted by the scroll/sticky offset and mapped
+            // through the current accumulated transform — lands fully outside
+            // the viewport (+ slop). `cull_rect` returns `None` for every
+            // structural `Push*`/`Pop*`, which must always run to keep the
+            // level/clip/transform stacks balanced.
+            if let Some(local) = cmd.cull_rect()
+                && leaf_is_offscreen(
+                    translate_rect(local, dx, dy),
+                    transform_stack.last(),
+                    viewport_css_w,
+                    viewport_css_h,
+                )
+            {
+                continue;
+            }
             match cmd {
                 DisplayCommand::FillRect { rect, color } => {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
@@ -7019,6 +7035,50 @@ fn sticky_offset_dx(
 /// `dy = 0`. Без mutation — Rect: Copy.
 fn translate_rect(rect: Rect, dx: f32, dy: f32) -> Rect {
     Rect::new(rect.x + dx, rect.y + dy, rect.width, rect.height)
+}
+
+/// ADR-016 M0.2: extra margin (CSS px) around the viewport before culling in
+/// the wgpu renderer. Mirrors the femtovg backend's `CULL_SLOP_CSS_PX` —
+/// absorbs anti-alias fringe / rounding and keeps a small off-screen band
+/// live so a fast scroll step never exposes an un-drawn edge.
+const WGPU_CULL_SLOP_CSS_PX: f32 = 256.0;
+
+/// ADR-016 M0.2 viewport culling. Returns `true` when `screen_rect` (a leaf
+/// command's box from [`DisplayCommand::cull_rect`], already shifted by the
+/// scroll / sticky offset), after the current accumulated transform `m`,
+/// lands fully outside the viewport (`vw`×`vh` CSS px) expanded by
+/// [`WGPU_CULL_SLOP_CSS_PX`]. Because it tests the AABB of the four
+/// transformed corners, the result is a conservative superset under
+/// rotation/scale — a command is only culled when its entire footprint is
+/// off-screen. A missing or non-affine (3D/perspective) transform disables
+/// culling (`false`), so no visible pixel is ever dropped.
+fn leaf_is_offscreen(screen_rect: Rect, m: Option<&Mat4>, vw: f32, vh: f32) -> bool {
+    if screen_rect.width <= 0.0 || screen_rect.height <= 0.0 {
+        return false;
+    }
+    let (x0, y0) = (screen_rect.x, screen_rect.y);
+    let (x1, y1) = (screen_rect.x + screen_rect.width, screen_rect.y + screen_rect.height);
+    let corners = match m {
+        None => [(x0, y0), (x1, y0), (x0, y1), (x1, y1)],
+        Some(mat) if mat.is_2d_affine() => [
+            mat.transform_point_2d(x0, y0),
+            mat.transform_point_2d(x1, y0),
+            mat.transform_point_2d(x0, y1),
+            mat.transform_point_2d(x1, y1),
+        ],
+        // 3D / perspective transform in effect — do not cull (conservative).
+        Some(_) => return false,
+    };
+    let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
+    let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
+    for (sx, sy) in corners {
+        min_x = min_x.min(sx);
+        min_y = min_y.min(sy);
+        max_x = max_x.max(sx);
+        max_y = max_y.max(sy);
+    }
+    let slop = WGPU_CULL_SLOP_CSS_PX;
+    max_x < -slop || max_y < -slop || min_x > vw + slop || min_y > vh + slop
 }
 
 /// Применяет 2D-аффинную матрицу к `pos` вершинам в диапазоне `verts`.

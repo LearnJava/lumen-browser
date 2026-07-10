@@ -954,6 +954,93 @@ impl DisplayCommand {
             Self::PageBreak => "PageBreak",
         }
     }
+
+    /// Axis-aligned bounding box of everything this command paints, in
+    /// document-space CSS px (the same coordinate system the command's own
+    /// rects already use — *before* the scroll/transform translation a backend
+    /// applies at draw time).
+    ///
+    /// Returns `Some(rect)` only for **self-contained leaf draws**: commands
+    /// that paint nothing outside the returned box and have no effect on the
+    /// clip / transform / layer stack. Backends use it for viewport culling
+    /// (ADR-016 M0.2) — a leaf whose box, mapped through the current CTM, lands
+    /// fully outside the viewport can be skipped without changing the picture.
+    ///
+    /// Returns `None` for every structural command (`Push*` / `Pop*`, the
+    /// sticky / scroll layer markers, `PageBreak`): those must always execute
+    /// to keep the render stack balanced and must never be culled. `None` is
+    /// the safe default — an unrecognised or non-leaf command is simply never
+    /// skipped.
+    pub fn cull_rect(&self) -> Option<Rect> {
+        /// Inflate a rect by `d` CSS px on every side.
+        fn grow(r: Rect, d: f32) -> Rect {
+            Rect::new(r.x - d, r.y - d, r.width + 2.0 * d, r.height + 2.0 * d)
+        }
+        /// AABB of a flat `[x, y]` vertex list, or `None` if empty.
+        fn verts_bounds(pts: &[[f32; 2]]) -> Option<Rect> {
+            let (mut mn_x, mut mn_y) = (f32::MAX, f32::MAX);
+            let (mut mx_x, mut mx_y) = (f32::MIN, f32::MIN);
+            for p in pts {
+                mn_x = mn_x.min(p[0]);
+                mn_y = mn_y.min(p[1]);
+                mx_x = mx_x.max(p[0]);
+                mx_y = mx_y.max(p[1]);
+            }
+            (mn_x <= mx_x).then(|| {
+                Rect::new(mn_x, mn_y, (mx_x - mn_x).max(0.0), (mx_y - mn_y).max(0.0))
+            })
+        }
+        match self {
+            Self::FillRect { rect, .. }
+            | Self::FillRoundedRect { rect, .. }
+            | Self::DrawBorder { rect, .. }
+            | Self::DrawText { rect, .. }
+            | Self::DrawImage { rect, .. }
+            | Self::LazyImageSlot { rect, .. }
+            | Self::DrawBackgroundImage { rect, .. }
+            | Self::DrawLinearGradient { rect, .. }
+            | Self::DrawRadialGradient { rect, .. }
+            | Self::DrawConicGradient { rect, .. }
+            | Self::DrawLayerSnapshot { rect, .. } => Some(*rect),
+
+            Self::DrawCrossFade { dest, .. } => Some(*dest),
+            Self::BoxModelOverlay { margin, .. } => Some(*margin),
+
+            // `outline` paints *outside* the box by `offset` then `width`.
+            Self::DrawOutline { rect, width, offset, .. } => {
+                Some(grow(*rect, offset.max(0.0) + width.max(0.0)))
+            }
+
+            // Scrollbar spans both track and thumb.
+            Self::DrawScrollbar { track_rect, thumb_rect, .. } => Some(Rect::new(
+                track_rect.x.min(thumb_rect.x),
+                track_rect.y.min(thumb_rect.y),
+                (track_rect.x + track_rect.width)
+                    .max(thumb_rect.x + thumb_rect.width)
+                    - track_rect.x.min(thumb_rect.x),
+                (track_rect.y + track_rect.height)
+                    .max(thumb_rect.y + thumb_rect.height)
+                    - track_rect.y.min(thumb_rect.y),
+            )),
+
+            // SVG geometry: bound the raw contour / triangle vertices. Stroke
+            // paints `half_width` outside the path centreline, so inflate by it
+            // times the miter limit (a conservative bound on miter spikes).
+            Self::DrawSvgPath { vertices, .. } => verts_bounds(vertices),
+            Self::DrawSvgFill { contours, .. } => {
+                let all: Vec<[f32; 2]> = contours.iter().flatten().copied().collect();
+                verts_bounds(&all)
+            }
+            Self::DrawSvgStroke { contours, params, .. } => {
+                let all: Vec<[f32; 2]> = contours.iter().flatten().copied().collect();
+                let out = params.half_width.max(0.0) * params.miterlimit.max(1.0);
+                verts_bounds(&all).map(|r| grow(r, out))
+            }
+
+            // Structural / stack-affecting / no-op commands — never cull.
+            _ => None,
+        }
+    }
 }
 
 pub type DisplayList = Vec<DisplayCommand>;
@@ -7513,6 +7600,61 @@ fn emit_table_cell_content(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f3
 mod tests {
     use super::*;
     use lumen_core::geom::Size;
+
+    // ── ADR-016 M0.2: DisplayCommand::cull_rect ────────────────────────────
+    #[test]
+    fn cull_rect_leaf_returns_own_box() {
+        let cmd = DisplayCommand::FillRect {
+            rect: Rect::new(10.0, 20.0, 30.0, 40.0),
+            color: Color { r: 0, g: 0, b: 0, a: 255 },
+        };
+        let r = cmd.cull_rect().expect("leaf must report a box");
+        assert_eq!((r.x, r.y, r.width, r.height), (10.0, 20.0, 30.0, 40.0));
+    }
+
+    #[test]
+    fn cull_rect_structural_is_none() {
+        // Push/Pop must never be culled — they keep the render stack balanced.
+        for cmd in [
+            DisplayCommand::PushClipRect { rect: Rect::new(0.0, 0.0, 1.0, 1.0) },
+            DisplayCommand::PopClip,
+            DisplayCommand::PushTransform { matrix: Mat4::translation_2d(0.0, 0.0) },
+            DisplayCommand::PopTransform,
+            DisplayCommand::PushOpacity { alpha: 0.5 },
+            DisplayCommand::PopOpacity,
+            DisplayCommand::PopScrollLayer,
+            DisplayCommand::PageBreak,
+        ] {
+            assert!(cmd.cull_rect().is_none(), "structural cmd must be un-cullable: {}", cmd.variant_name());
+        }
+    }
+
+    #[test]
+    fn cull_rect_outline_grows_by_offset_plus_width() {
+        let cmd = DisplayCommand::DrawOutline {
+            rect: Rect::new(100.0, 100.0, 50.0, 50.0),
+            width: 4.0,
+            style: OutlineStyle::Solid,
+            color: Color { r: 0, g: 0, b: 0, a: 255 },
+            offset: 6.0,
+        };
+        let r = cmd.cull_rect().unwrap();
+        // grown by offset(6) + width(4) = 10 on every side.
+        assert_eq!((r.x, r.y, r.width, r.height), (90.0, 90.0, 70.0, 70.0));
+    }
+
+    #[test]
+    fn cull_rect_scrollbar_unions_track_and_thumb() {
+        let cmd = DisplayCommand::DrawScrollbar {
+            track_rect: Rect::new(200.0, 0.0, 12.0, 400.0),
+            thumb_rect: Rect::new(200.0, 120.0, 12.0, 80.0),
+            vertical: true,
+            thumb_color: [0.0; 4],
+            track_color: [0.0; 4],
+        };
+        let r = cmd.cull_rect().unwrap();
+        assert_eq!((r.x, r.y, r.width, r.height), (200.0, 0.0, 12.0, 400.0));
+    }
 
     /// BUG-175: inner border radius = outer − adjacent side width, floored at 0.
     /// Horizontal radii drop by the left/right border, vertical by top/bottom.
