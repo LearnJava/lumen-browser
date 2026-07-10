@@ -1628,6 +1628,12 @@ pub struct Renderer {
     /// Reused across frames on a cache hit; the color-filter pass still runs at
     /// blit time so only the expensive blur is skipped.
     backdrop_cache_textures: HashMap<u32, OffscreenLayer>,
+    /// Кэш depth-текстур под bbox-офскрины (регион ≠ размеру окна/полосы):
+    /// пасс с маленьким color-attachment обязан иметь depth того же размера
+    /// (валидация wgpu). Ключ — (w, h) в device px; размеры регионов
+    /// выровнены до 64 px, так что классов мало. Чистится при переполнении
+    /// (> 16 записей) — обычная страница держит 1-3 размера.
+    small_depth_cache: HashMap<(u32, u32), wgpu::TextureView>,
     /// CSS Images L3 §3.3 — linear/radial gradient pipeline.
     gradient_bgl: wgpu::BindGroupLayout,
     gradient_pipeline: wgpu::RenderPipeline,
@@ -1852,6 +1858,18 @@ fn bbox_scissor_disabled() -> bool {
     static DISABLED: OnceLock<bool> = OnceLock::new();
     *DISABLED.get_or_init(|| {
         std::env::var("LUMEN_NO_BBOX_SCISSOR").is_ok_and(|v| v == "1")
+    })
+}
+
+/// `true`, если bbox-офскрины backdrop-фильтра отключены
+/// (`LUMEN_NO_BBOX_BACKDROP=1`): ping-pong/кэш-текстуры backdrop-пути
+/// создаются размером с родителя, как до среза. Диагностика: A/B-сравнение
+/// картинки и скорости на одном бинарнике.
+fn bbox_backdrop_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("LUMEN_NO_BBOX_BACKDROP").is_ok_and(|v| v == "1")
     })
 }
 
@@ -3433,6 +3451,7 @@ impl Renderer {
             blur_uniform,
             backdrop_blit_pipeline,
             backdrop_layer: None,
+            small_depth_cache: HashMap::new(),
             backdrop_cache: crate::backdrop_cache::BackdropCache::new(),
             backdrop_cache_textures: HashMap::new(),
             gradient_bgl,
@@ -4417,9 +4436,12 @@ impl Renderer {
             dimension: wgpu::TextureDimension::D2,
             format: self.surface_format,
             // COPY_SRC needed for encoder.copy_texture_to_texture in blend compositing.
+            // COPY_DST added for the backdrop bbox path: pooled ping-pong
+            // textures receive the parent-region copy (copy_texture_to_texture).
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -4443,6 +4465,35 @@ impl Renderer {
         );
         self.texture_pool.update_size(1); // Track new allocation.
         OffscreenLayer { texture, view, bind_group, width, height }
+    }
+
+    /// Возвращает offscreen-слой в texture_pool для переиспользования.
+    /// Безопасно сразу после записи команд: команды исполняются в порядке
+    /// encoder-а, повторное использование той же текстуры позже в кадре
+    /// упорядочено записью (та же дисциплина, что у слотов layer_textures).
+    fn release_layer_to_pool(&mut self, layer: OffscreenLayer) {
+        self.texture_pool.release(crate::texture_pool::PooledTexture {
+            texture: layer.texture,
+            view: layer.view,
+            bind_group: layer.bind_group,
+            width: layer.width,
+            height: layer.height,
+        });
+    }
+
+    /// Depth-текстура под пасс с bbox-офскрином (регион меньше окна/полосы).
+    /// Кэшируется по размеру: blur-пассы backdrop-фильтра гоняются каждый
+    /// кадр, а классов размеров мало (выравнивание до 64 px).
+    fn small_depth_view(&mut self, width: u32, height: u32) -> wgpu::TextureView {
+        if let Some(v) = self.small_depth_cache.get(&(width, height)) {
+            return v.clone();
+        }
+        if self.small_depth_cache.len() > 16 {
+            self.small_depth_cache.clear();
+        }
+        let (_t, v) = create_depth_texture(&self.device, width, height);
+        self.small_depth_cache.insert((width, height), v.clone());
+        v
     }
 
     /// Создаёт или пересоздаёт `scratch_layer` нужного размера.
@@ -5108,6 +5159,15 @@ impl Renderer {
             /// Stable index among backdrop elements in this frame (paint order).
             /// Cache key for [`Renderer::backdrop_cache`] and the matching texture.
             ordinal: u32,
+            /// bbox-офскрины backdrop-фильтра (EXPERIMENT.md §2): рабочая
+            /// область `[x, y, w, h]` в device px родительской текстуры —
+            /// element bounds + радиус ядра блюра (формула шейдера), ширина/
+            /// высота выровнены вверх до 64 px (стабильность texture_pool).
+            /// Ping-pong/кэш-текстуры создаются этого размера, а не размера
+            /// родителя; UV bounds-квада запечены относительно региона.
+            /// `None` — фолбэк на полноразмерный путь (kill-switch, вырожденные
+            /// bounds или регион ≈ весь родитель).
+            region: Option<[u32; 4]>,
         }
         // CSS Masking L1 §5 — mask-layer composite plan.
         // `from_level`   = offscreen level where mask content was rendered.
@@ -6555,6 +6615,59 @@ impl Renderer {
                         flush_batch!();
                         let comp_v_start = composite_vertices.len() as u32;
                         push_composite_quad(&mut composite_vertices, 1.0);
+                        // bbox-офскрины backdrop: рабочая область = bounds +
+                        // радиус ядра блюра (формула BLUR_SHADER_SRC:
+                        // min(ceil(3σ),32) + 2 запас), клип по родителю,
+                        // ширина/высота выровнены вверх до 64 px — чтобы
+                        // texture_pool стабильно попадал при движении bounds.
+                        // Пиксельная эквивалентность: blit читает только
+                        // bounds, а все выборки блюра для пикселей bounds
+                        // лежат внутри региона (та же математика, что у
+                        // bbox-scissor п.16).
+                        let region: Option<[u32; 4]> = if bbox_backdrop_disabled() {
+                            None
+                        } else {
+                            let blur_pad = filters
+                                .iter()
+                                .find_map(|f| match f {
+                                    FilterFn::Blur(s) if *s > 0.0 => {
+                                        Some((3.0 * *s).ceil().min(32.0))
+                                    }
+                                    _ => None,
+                                })
+                                .unwrap_or(0.0)
+                                + 2.0;
+                            let pad_css = blur_pad / dpr_f32;
+                            let rx0 = (((bounds.x - pad_css) * dpr_f32).floor().max(0.0) as u32)
+                                .min(surface_w);
+                            let ry0 = (((bounds.y - pad_css) * dpr_f32).floor().max(0.0) as u32)
+                                .min(surface_h);
+                            let rx1 = (((bounds.x + bounds.width + pad_css) * dpr_f32)
+                                .ceil()
+                                .max(0.0) as u32)
+                                .min(surface_w);
+                            let ry1 = (((bounds.y + bounds.height + pad_css) * dpr_f32)
+                                .ceil()
+                                .max(0.0) as u32)
+                                .min(surface_h);
+                            if rx1 <= rx0 || ry1 <= ry0 {
+                                // Элемент целиком вне surface — blit невидим,
+                                // но пассы должны отработать как раньше
+                                // (полноразмерный фолбэк, нулевой регион
+                                // ломал бы копию/кэш).
+                                None
+                            } else {
+                                let rw = (rx1 - rx0).div_ceil(64) * 64;
+                                let rh = (ry1 - ry0).div_ceil(64) * 64;
+                                // Регион ≈ весь родитель — выигрыша нет,
+                                // остаёмся на старом пути (и его кэш-хэшах).
+                                if rw >= surface_w && rh >= surface_h {
+                                    None
+                                } else {
+                                    Some([rx0, ry0, rw, rh])
+                                }
+                            }
+                        };
                         let bounds_v_start = composite_vertices.len() as u32;
                         push_bounded_quad(
                             &mut composite_vertices,
@@ -6563,6 +6676,7 @@ impl Renderer {
                             surface_h as f32,
                             dpr_f32,
                             1.0,
+                            region,
                         );
                         let ordinal = backdrop_ordinal;
                         backdrop_ordinal += 1;
@@ -6573,6 +6687,7 @@ impl Renderer {
                                 comp_v_start,
                                 bounds_v_start,
                                 ordinal,
+                                region,
                             },
                         ));
                         current_level -= 1;
@@ -7786,14 +7901,63 @@ impl Renderer {
                     let parent_idx = plan.from_level - 2;
                     let parent_w = self.layer_textures[parent_idx].width;
                     let parent_h = self.layer_textures[parent_idx].height;
-                    self.ensure_scratch_layer(parent_w, parent_h);
-                    self.ensure_backdrop_layer(parent_w, parent_h);
+                    // bbox-офскрины backdrop-фильтра (EXPERIMENT.md §2):
+                    // ping-pong и кэш живут в размере региона (bounds + ядро
+                    // блюра), а не родителя. region=None — прежний
+                    // полноразмерный путь (kill-switch/фолбэк).
+                    let (rx, ry, rw, rh) = match plan.region {
+                        Some([x, y, w, h]) => (x, y, w, h),
+                        None => (0, 0, parent_w, parent_h),
+                    };
+                    let use_region = plan.region.is_some();
+                    // Копия из родителя не может выйти за его края: текстуры
+                    // выровнены до 64 px и бывают шире остатка родителя.
+                    // Копия всегда покрывает невыровненный (логический)
+                    // регион — все выборки блюра для читаемых blit-ом
+                    // пикселей лежат в скопированной области.
+                    let copy_w = rw.min(parent_w.saturating_sub(rx)).max(1);
+                    let copy_h = rh.min(parent_h.saturating_sub(ry)).max(1);
+                    let mut pooled_ping: Option<OffscreenLayer> = None;
+                    let mut pooled_pong: Option<OffscreenLayer> = None;
+                    if use_region {
+                        pooled_ping = Some(self.create_layer_texture(rw, rh));
+                        pooled_pong = Some(self.create_layer_texture(rw, rh));
+                    } else {
+                        self.ensure_scratch_layer(parent_w, parent_h);
+                        self.ensure_backdrop_layer(parent_w, parent_h);
+                    }
+                    // Depth-attachment обязан совпадать по размеру с
+                    // color-attachment (валидация wgpu).
+                    let bd_depth_view: Option<wgpu::TextureView> = if use_region {
+                        Some(self.small_depth_view(rw, rh))
+                    } else {
+                        self.depth_view.clone()
+                    };
                     // The per-ordinal cache texture is the blit source (always), and on a
                     // cache hit it already holds the previous frame's filtered backdrop.
-                    if self.ensure_backdrop_cache_texture(plan.ordinal, parent_w, parent_h) {
+                    if self.ensure_backdrop_cache_texture(plan.ordinal, rw, rh) {
                         // A resize discarded the cached pixels — drop the stale hash so it
                         // cannot produce a hit against the fresh (uninitialised) texture.
                         self.backdrop_cache.invalidate(plan.ordinal);
+                    }
+                    // Ping = вход блюра (копия родителя), pong = выход H-пасса.
+                    let ping_tex: wgpu::Texture;
+                    let ping_view: wgpu::TextureView;
+                    let pong_view: wgpu::TextureView;
+                    if let (Some(a), Some(b)) = (pooled_ping.as_ref(), pooled_pong.as_ref()) {
+                        ping_tex = a.texture.clone();
+                        ping_view = a.view.clone();
+                        pong_view = b.view.clone();
+                    } else {
+                        let s = self.scratch_layer.as_ref().unwrap();
+                        ping_tex = s.texture.clone();
+                        ping_view = s.view.clone();
+                        pong_view = self.backdrop_layer.as_ref().unwrap().view.clone();
+                    }
+                    if use_region && crate::frame_log_level() >= 2 {
+                        eprintln!(
+                            "[frame:wgpu]   bdrop region {rw}x{rh} @({rx},{ry}) of {parent_w}x{parent_h}"
+                        );
                     }
                     // Cache HIT: the cached texture is unchanged → skip the copy + blur
                     // passes entirely. Disabled cache (`backdrop_frame_hash == None`)
@@ -7810,26 +7974,25 @@ impl Renderer {
 
                     if !cache_hit {
                         if let Some(sigma) = blur_sigma {
-                            // Step 1: copy parent layer → scratch (blur H-pass input).
-                            // parent has COPY_SRC, scratch has COPY_DST.
-                            let parent_copy = self.layer_textures[parent_idx].texture.as_image_copy();
-                            let scratch_copy = self.scratch_layer.as_ref().unwrap().texture.as_image_copy();
+                            // Step 1: copy parent-region → ping (blur H-pass input).
+                            // parent has COPY_SRC, ping (pooled/scratch) has COPY_DST.
+                            let mut parent_copy = self.layer_textures[parent_idx].texture.as_image_copy();
+                            parent_copy.origin = wgpu::Origin3d { x: rx, y: ry, z: 0 };
+                            let ping_copy = ping_tex.as_image_copy();
                             encoder.copy_texture_to_texture(
                                 parent_copy,
-                                scratch_copy,
-                                wgpu::Extent3d { width: parent_w, height: parent_h, depth_or_array_layers: 1 },
+                                ping_copy,
+                                wgpu::Extent3d { width: copy_w, height: copy_h, depth_or_array_layers: 1 },
                             );
 
-                            // Step 2 H pass: scratch → backdrop_layer (REPLACE).
+                            // Step 2 H pass: ping → pong (REPLACE).
                             let blur_h = BlurParamsCpu { sigma, direction: 0, _p0: 0, _p1: 0 };
                             self.queue.write_buffer(&self.blur_uniform, 0, as_bytes(&[blur_h]));
-                            let scratch_view_h = &self.scratch_layer.as_ref().unwrap().view;
-                            let backdrop_view_h = &self.backdrop_layer.as_ref().unwrap().view;
                             let blur_bg_h = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                                 label: Some("backdrop-blur-h-bg"),
                                 layout: &self.blur_bgl,
                                 entries: &[
-                                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(scratch_view_h) },
+                                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&ping_view) },
                                     wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
                                     wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform.as_entire_binding() },
                                 ],
@@ -7838,12 +8001,12 @@ impl Renderer {
                                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                                     label: Some("backdrop-blur-h-pass"),
                                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                        view: backdrop_view_h,
+                                        view: &pong_view,
                                         resolve_target: None,
                                         depth_slice: None,
                                         ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                                     })],
-                                    depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                                    depth_stencil_attachment: bd_depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
                             view: dv,
                             depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
                             stencil_ops: None,
@@ -7856,17 +8019,16 @@ impl Renderer {
                                 pass.set_vertex_buffer(0, cvb.slice(..));
                                 pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
                             }
-                            // Step 2 V pass: backdrop_layer → CACHE texture (REPLACE).
+                            // Step 2 V pass: pong → CACHE texture (REPLACE).
                             // The blurred result lands in the cache, ready for reuse next frame.
                             let blur_v = BlurParamsCpu { sigma, direction: 1, _p0: 0, _p1: 0 };
                             self.queue.write_buffer(&self.blur_uniform, 0, as_bytes(&[blur_v]));
-                            let backdrop_view_v = &self.backdrop_layer.as_ref().unwrap().view;
                             let cache_view_v = &self.backdrop_cache_textures[&plan.ordinal].view;
                             let blur_bg_v = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                                 label: Some("backdrop-blur-v-bg"),
                                 layout: &self.blur_bgl,
                                 entries: &[
-                                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(backdrop_view_v) },
+                                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&pong_view) },
                                     wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
                                     wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform.as_entire_binding() },
                                 ],
@@ -7880,7 +8042,7 @@ impl Renderer {
                                         depth_slice: None,
                                         ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                                     })],
-                                    depth_stencil_attachment: self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                                    depth_stencil_attachment: bd_depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
                             view: dv,
                             depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
                             stencil_ops: None,
@@ -7894,21 +8056,22 @@ impl Renderer {
                                 pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
                             }
                         } else {
-                            // Filter-only backdrop (no blur): copy parent → cache directly.
+                            // Filter-only backdrop (no blur): copy parent-region → cache directly.
                             // parent has COPY_SRC, cache has COPY_DST.
-                            let parent_copy = self.layer_textures[parent_idx].texture.as_image_copy();
+                            let mut parent_copy = self.layer_textures[parent_idx].texture.as_image_copy();
+                            parent_copy.origin = wgpu::Origin3d { x: rx, y: ry, z: 0 };
                             let cache_copy = self.backdrop_cache_textures[&plan.ordinal].texture.as_image_copy();
                             encoder.copy_texture_to_texture(
                                 parent_copy,
                                 cache_copy,
-                                wgpu::Extent3d { width: parent_w, height: parent_h, depth_or_array_layers: 1 },
+                                wgpu::Extent3d { width: copy_w, height: copy_h, depth_or_array_layers: 1 },
                             );
                         }
 
                         // Record the freshly produced backdrop in the cache (skipped when
                         // caching is disabled — `backdrop_frame_hash == None`).
                         if let Some(fh) = backdrop_frame_hash {
-                            let bytes = parent_w as usize * parent_h as usize * 4;
+                            let bytes = rw as usize * rh as usize * 4;
                             evicted_ordinals = self.backdrop_cache.store(plan.ordinal, fh, bytes);
                         }
                     }
@@ -7966,6 +8129,16 @@ impl Renderer {
                         pass.draw(plan.bounds_v_start..plan.bounds_v_start + 6, 0..1);
                     }
 
+                    // bbox-офскрины: ping-pong вернуть в пул (кэш-текстура
+                    // остаётся жить у ordinal-а — её читают blit и след. кадры).
+                    // Переиспользование в этом же кадре безопасно: команды
+                    // исполняются в порядке encoder-а.
+                    if let Some(l) = pooled_ping.take() {
+                        self.release_layer_to_pool(l);
+                    }
+                    if let Some(l) = pooled_pong.take() {
+                        self.release_layer_to_pool(l);
+                    }
                     } // end if !skip_backdrop
 
                     // Step 4: composite element layer → parent (ALPHA_BLENDING).
@@ -8887,6 +9060,10 @@ fn push_composite_quad(out: &mut Vec<CompositeVertex>, alpha: f32) {
 /// NDC x = css_x / vw * 2 - 1; NDC y = 1 - css_y / vh * 2 (Y flipped).
 /// UV  x = css_x / vw;         UV  y = css_y / vh.
 /// `vw = surf_w / dpr`, `vh = surf_h / dpr`.
+///
+/// `src_region = Some([rx, ry, rw, rh])` (device px) — источник не
+/// полноразмерная текстура, а bbox-офскрин региона: UV считается
+/// относительно региона (`(css·dpr − r0) / rдлина`), NDC не меняется.
 fn push_bounded_quad(
     out: &mut Vec<CompositeVertex>,
     bounds: lumen_core::geom::Rect,
@@ -8894,6 +9071,7 @@ fn push_bounded_quad(
     surf_h: f32,
     dpr: f32,
     alpha: f32,
+    src_region: Option<[u32; 4]>,
 ) {
     let vw = surf_w / dpr;
     let vh = surf_h / dpr;
@@ -8901,10 +9079,23 @@ fn push_bounded_quad(
     let x1 = (bounds.x + bounds.width) / vw * 2.0 - 1.0;
     let y0 = 1.0 - bounds.y / vh * 2.0;
     let y1 = 1.0 - (bounds.y + bounds.height) / vh * 2.0;
-    let u0 = bounds.x / vw;
-    let u1 = (bounds.x + bounds.width) / vw;
-    let v0 = bounds.y / vh;
-    let v1 = (bounds.y + bounds.height) / vh;
+    let (u0, u1, v0, v1) = match src_region {
+        Some([rx, ry, rw, rh]) => {
+            let (rx, ry, rw, rh) = (rx as f32, ry as f32, (rw as f32).max(1.0), (rh as f32).max(1.0));
+            (
+                (bounds.x * dpr - rx) / rw,
+                ((bounds.x + bounds.width) * dpr - rx) / rw,
+                (bounds.y * dpr - ry) / rh,
+                ((bounds.y + bounds.height) * dpr - ry) / rh,
+            )
+        }
+        None => (
+            bounds.x / vw,
+            (bounds.x + bounds.width) / vw,
+            bounds.y / vh,
+            (bounds.y + bounds.height) / vh,
+        ),
+    };
     out.extend_from_slice(&[
         CompositeVertex { pos: [x0, y0], uv: [u0, v0], alpha },
         CompositeVertex { pos: [x1, y0], uv: [u1, v0], alpha },
