@@ -373,6 +373,24 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
       the owned `frozen_styles` map (`(*ls.stylesheet).clone()`), so freeze/thaw
       behavior is byte-identical. No new deps, no `unsafe`, no behavior change —
       pure allocation win on the M2.2a off-thread path.
+    - **M2.2b-2 — off-thread layout for async-safe chrome-inset toggles.** ✅
+      (branch `p1-mt-m2-2b-2-chrome`, merged into `zcode`, 2026-07-11). Routes the
+      next batch of async-safe triggers off the UI thread: the ones that shift only
+      *chrome* geometry (content viewport width/height) and are **not** followed by
+      a synchronous read of page geometry — vertical-tabs toggle (keyboard +
+      palette), tree-tabs toggle, workspace-bar toggle, active-sidebar dock flip
+      (`flip_active_sidebar_dock`), docked-panel resize drag (`drag_panel_resize`)
+      and web-sidebar open (`open_sidebar_page`, `!was_visible` reflow). New helper
+      `Lumen::relayout_chrome()` = `if !submit_relayout_job() { relayout() }`, the
+      same fall-back-to-sync pattern the M2.2a zoom path uses, so with the flag off
+      (default) it is byte-identical to the previous synchronous `relayout()`. When
+      `LUMEN_ENGINE_THREAD=1` the reflow lands a few frames later via the existing
+      `poll_engine_commit` + generic in-flight poll-wakeup; the chrome itself draws
+      from its own state on the immediately-requested redraw. 7 sites converted
+      (45 → 38 sync callers + the one inside the helper). The remaining sync-geometry
+      sites (DOM mutation → geometry read, hover/focus, form input, resize, theme,
+      `content-visibility` expansion, rAF DOM-dirty) still need per-site
+      async-vs-sync analysis and stay synchronous. No new deps, no `unsafe`.
 - **M2.3 — synchronous readback + acceptance.** `--screenshot`, `run.py --ipc`,
   CDP `Page.captureScreenshot` become `Request::Readback { reply }` messages
   (audit all `screenshot_*` sites first — most are already CPU per the M1.1
