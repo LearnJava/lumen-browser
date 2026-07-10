@@ -299,6 +299,20 @@ pub trait RenderBackend: Send {
     ///
     /// [`start_render_momentum`]: RenderBackend::start_render_momentum
     fn stop_render_momentum(&mut self) {}
+
+    /// Аннотирует следующий кадр в `LUMEN_FRAME_LOG` (ADR-016 M1).
+    ///
+    /// Рендер-поток вызывает это перед каждым [`render`](RenderBackend::render):
+    /// `commit_id` — монотонный идентификатор коммита UI-потока, `self_tick` —
+    /// `true`, когда кадр перерисован самим рендер-потоком при застопорившемся
+    /// UI-потоке (momentum self-tick, M1.3). Аннотация попадает в строку
+    /// `[frame] paint …` вместе с тегом потока, чтобы покадровый лог разных
+    /// потоков не сливался в кашу (см. риск «Frame logs across threads» в плане)
+    /// и было видно, что презентация продолжалась *во время* стойла.
+    ///
+    /// Дефолт — no-op: однопоточный путь (`LUMEN_RENDER_THREAD` выкл) рисует на
+    /// UI-потоке, все кадры оттуда, аннотация не нужна.
+    fn set_frame_commit_id(&mut self, _commit_id: u64, _self_tick: bool) {}
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -409,6 +423,15 @@ mod tests {
         let mut b: Box<dyn RenderBackend> = Box::new(NullBackend);
         assert!(!b.supports_page_offset(), "дефолт — page-offset не поддерживается");
         b.set_page_offset(16.0, 36.0); // no-op, must not panic
+    }
+
+    #[test]
+    fn null_backend_set_frame_commit_id_default_noop() {
+        // ADR-016 M1.4: аннотация frame-log — no-op по умолчанию (однопоточный
+        // путь), вызов с любым `self_tick` не должен паниковать.
+        let mut b: Box<dyn RenderBackend> = Box::new(NullBackend);
+        b.set_frame_commit_id(42, false);
+        b.set_frame_commit_id(42, true);
     }
 
     #[test]

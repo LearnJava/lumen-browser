@@ -454,6 +454,10 @@ struct RenderState {
     anchor_scroll_x: f32,
     /// Время последнего кадра (ms от старта рендер-потока).
     anchor_t_ms: f64,
+    /// `commit_id` последнего закоммиченного кадра — для аннотации self-tick
+    /// презентаций в `LUMEN_FRAME_LOG` (ADR-016 M1): self-tick перерисовывает
+    /// именно этот удержанный кадр, поэтому его id и логируется.
+    anchor_commit_id: u64,
     /// Активный momentum, если есть.
     momentum: Option<RenderMomentum>,
 }
@@ -467,6 +471,7 @@ impl RenderState {
             anchor_scroll_y: 0.0,
             anchor_scroll_x: 0.0,
             anchor_t_ms: 0.0,
+            anchor_commit_id: 0,
             momentum: None,
         }
     }
@@ -564,6 +569,9 @@ fn self_tick_momentum(
         state.anchor_t_ms,
         now_ms,
     );
+    // ADR-016 M1: помечаем кадр как self-tick — презентация продолжается, пока
+    // UI-поток стоит; в LUMEN_FRAME_LOG это видно как `commit N self-tick`.
+    backend.set_frame_commit_id(state.anchor_commit_id, true);
     if let Err(err) = backend.render(&state.last_content, &state.last_overlay, scroll_y, scroll_x) {
         eprintln!("[render-thread] ошибка self-tick momentum: {err:?}");
     }
@@ -592,6 +600,8 @@ fn process_batch(
             RenderMsg::Frame(frame) => {
                 // Рисуем только последний кадр пачки; ранние отброшены (latest-wins).
                 if Some(i) == last_frame_idx {
+                    // ADR-016 M1: аннотируем кадр в LUMEN_FRAME_LOG (не self-tick).
+                    backend.set_frame_commit_id(frame.commit_id, false);
                     if let Err(err) = backend.render(
                         &frame.content,
                         &frame.overlay,
@@ -611,6 +621,7 @@ fn process_batch(
                     state.anchor_scroll_y = frame.scroll_y;
                     state.anchor_scroll_x = frame.scroll_x;
                     state.anchor_t_ms = now_ms;
+                    state.anchor_commit_id = frame.commit_id;
                 }
             }
             RenderMsg::StartRenderMomentum { vel_y, vel_x, max_scroll_y, max_scroll_x } => {

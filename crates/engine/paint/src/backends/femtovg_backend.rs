@@ -448,6 +448,12 @@ pub struct FemtovgBackend {
     /// ADR-016 M0.2 per-frame culling counters `(culled, total_leaf)` for the
     /// `LUMEN_FRAME_LOG` line. Reset at the start of every `render()`.
     cull_stats: (u32, u32),
+    /// ADR-016 M1 frame-log annotation set by the render thread before each
+    /// `render()`: `(commit_id, self_tick)`. Appended to the `[frame] paint …`
+    /// line so cross-thread logs are distinguishable and self-tick presents
+    /// (momentum during a UI-thread stall, M1.3) are visible. `None` on the
+    /// single-threaded path (`LUMEN_RENDER_THREAD` off). Consumed each frame.
+    frame_commit_id: Option<(u64, bool)>,
     /// ADR-016 M0.3 превью-масштаб зума. Отношение текущего `zoom_factor` к
     /// тому, при котором свёрстан `content` (`new_zoom / laid_out_zoom`). `1.0`
     /// — превью выключено. Применяется как `canvas.scale` вокруг верхнего-левого
@@ -1268,6 +1274,7 @@ impl FemtovgBackend {
             viewport_css_w: size.width as f32 / scale as f32,
             viewport_css_h: size.height as f32 / scale as f32,
             cull_stats: (0, 0),
+            frame_commit_id: None,
             preview_scale: 1.0,
             canvas_bg: None,
             filter_layer_stack: Vec::new(),
@@ -3724,8 +3731,18 @@ impl RenderBackend for FemtovgBackend {
             (frame_t0, t_content, t_before_flush, t_after_flush)
         {
             let total = t0.elapsed();
+            // ADR-016 M1: tag the line with the presenting thread and, when the
+            // render thread annotated it, the commit id + self-tick flag — so
+            // cross-thread frame logs stay legible and momentum self-ticks
+            // (presentation continuing *during* a UI-thread stall) are visible.
+            let thread_tag = std::thread::current().name().unwrap_or("main").to_owned();
+            let commit_tag = match self.frame_commit_id {
+                Some((id, true)) => format!(" commit {id} self-tick"),
+                Some((id, false)) => format!(" commit {id}"),
+                None => String::new(),
+            };
             eprintln!(
-                "[frame] paint {:6.2}ms  (content {:6.2}ms / {} cmds, overlay {:5.2}ms / {} cmds, flush {:6.2}ms, swap {:6.2}ms, culled {}/{} leaf)",
+                "[frame] paint {:6.2}ms  (content {:6.2}ms / {} cmds, overlay {:5.2}ms / {} cmds, flush {:6.2}ms, swap {:6.2}ms, culled {}/{} leaf) [thr {thread_tag}{commit_tag}]",
                 total.as_secs_f64() * 1000.0,
                 tc.as_secs_f64() * 1000.0,
                 content.len(),
@@ -3737,8 +3754,14 @@ impl RenderBackend for FemtovgBackend {
                 self.cull_stats.1,
             );
         }
+        // Аннотация одноразовая: следующий кадр без явного вызова снова без неё.
+        self.frame_commit_id = None;
 
         swap_result
+    }
+
+    fn set_frame_commit_id(&mut self, commit_id: u64, self_tick: bool) {
+        self.frame_commit_id = Some((commit_id, self_tick));
     }
 
     fn set_canvas_background(&mut self, color: Option<Color>) {
