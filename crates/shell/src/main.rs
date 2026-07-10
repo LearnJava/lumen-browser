@@ -4100,7 +4100,11 @@ struct LayoutSource {
     /// DOM — shared with the persistent JS runtime via Arc<Mutex> so that
     /// JS event handlers can mutate it between repaints.
     document: Arc<Mutex<Document>>,
-    stylesheet: lumen_css_parser::Stylesheet,
+    /// Parsed stylesheet, shared as an immutable `Arc` snapshot (ADR-016 M2.2b):
+    /// off-thread relayout jobs clone the handle (`Arc::clone`) instead of deep-
+    /// cloning the whole `Stylesheet` on every submit. Replaced wholesale on
+    /// reload/thaw, never mutated in place.
+    stylesheet: Arc<lumen_css_parser::Stylesheet>,
     /// Decoded HTML source captured after encoding detection. Used by bfcache
     /// to restore the page without a network round-trip.
     #[allow(dead_code)]
@@ -5079,7 +5083,7 @@ fn render_bytes(
     let layout_box = parsed.layout;
     let layout_source = LayoutSource {
         document: Arc::clone(&parsed.document),
-        stylesheet: parsed.stylesheet,
+        stylesheet: Arc::new(parsed.stylesheet),
         html_source: Some(parsed.html_source),
     };
     Ok((
@@ -7063,10 +7067,10 @@ impl Lumen {
         self.engine_job_generation = self.engine_job_generation.wrapping_add(1);
         let generation = self.engine_job_generation;
         // Immutable snapshots captured by the job (ADR-016 invariant 1). The
-        // stylesheet is cloned into an `Arc` here (rare — debounced zoom only);
-        // the document + fonts + hyphenation provider are already shareable.
+        // stylesheet is now an `Arc` in `LayoutSource` (M2.2b), so the job clones
+        // only the handle — no per-submit deep clone of the whole `Stylesheet`.
         let document = Arc::clone(&src.document);
-        let stylesheet = Arc::new(src.stylesheet.clone());
+        let stylesheet = Arc::clone(&src.stylesheet);
         let hp = Arc::clone(&self.hyp_provider);
         let web_fonts = self.web_fonts.clone();
         let dark_mode = self.dark_mode;
@@ -14098,7 +14102,7 @@ impl Lumen {
         let doc_arc = Arc::new(Mutex::new(doc));
         self.layout_source = Some(LayoutSource {
             document: Arc::clone(&doc_arc),
-            stylesheet,
+            stylesheet: Arc::new(stylesheet),
             html_source: None,
         });
         #[cfg(feature = "quickjs")]
@@ -14205,7 +14209,9 @@ impl Lumen {
             && let Ok(dom_bytes) = guard.to_bytes()
         {
             drop(guard);
-            self.frozen_styles.insert(url.to_owned(), ls.stylesheet.clone());
+            // `frozen_styles` keeps an owned `Stylesheet` (cold freeze path), so
+            // deep-clone out of the `Arc` snapshot here.
+            self.frozen_styles.insert(url.to_owned(), (*ls.stylesheet).clone());
             // Lazy prune: if we have too many stylesheets, drop those whose
             // corresponding bfcache entries are no longer frozen.
             if self.frozen_styles.len() > 32 {
@@ -15827,7 +15833,7 @@ impl Lumen {
         let doc_arc = Arc::new(Mutex::new(doc));
         let src = LayoutSource {
             document: doc_arc,
-            stylesheet: sheet,
+            stylesheet: Arc::new(sheet),
             html_source: None,
         };
 
@@ -17330,7 +17336,7 @@ impl Lumen {
 
         let layout_source = LayoutSource {
             document: Arc::clone(&document_arc),
-            stylesheet,
+            stylesheet: Arc::new(stylesheet),
             html_source: None,
         };
 
