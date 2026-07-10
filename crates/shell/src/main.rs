@@ -297,6 +297,8 @@ use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{CursorGrabMode, CursorIcon, Window, WindowId};
 
 fn main() -> ExitCode {
+    // Anchor for launch->first-frame timing (§4 score table) — before any work.
+    bench_frames::mark_process_start();
     // Load the fingerprint profile (9F.1) once, before any network or JS setup.
     // Absent config → engine defaults, so behaviour is unchanged out of the box.
     config::init_global(config::load().unwrap_or_default());
@@ -11256,6 +11258,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 if self.js_ctx.as_ref().is_some_and(|j| j.take_dom_dirty()) {
                     self.relayout();
                 }
+
+                // Launch->first-frame metric (§4 score table): fires on the
+                // first frame that has page content, present happens at the
+                // end of this same handler (±1 frame accuracy is enough).
+                bench_frames::log_first_frame_once(self.display_list.len());
 
                 // Step 5: PerformancePaintTiming (W3C Paint Timing §2).
                 // Delivered once per page load; subsequent frames skip this block.

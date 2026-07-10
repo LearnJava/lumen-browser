@@ -39,6 +39,37 @@
 use std::cell::RefCell;
 use std::sync::OnceLock;
 
+/// Wall-clock anchor for [`log_first_frame_once`], set by [`mark_process_start`]
+/// from the first line of `main()`.
+static PROCESS_START: OnceLock<std::time::Instant> = OnceLock::new();
+
+/// Anchors "time since launch" measurements. Call once, first thing in `main()`.
+pub fn mark_process_start() {
+    let _ = PROCESS_START.set(std::time::Instant::now());
+}
+
+/// Prints `launch -> first non-empty frame` once per process.
+///
+/// Counterpart of the Chromium baseline's `launch->FCP` (Paint Timing API +
+/// process spawn wall clock, `scripts/exp/chromium_baseline.py`): both anchor
+/// at process creation and stop at the first frame with page content. Not
+/// gated on `LUMEN_BENCH` — one stderr line per run, and startup time is a §4
+/// score-table metric that every launch should report.
+pub fn log_first_frame_once(dl_len: usize) {
+    if dl_len == 0 {
+        return;
+    }
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        if let Some(t0) = PROCESS_START.get() {
+            eprintln!(
+                "[bench] first non-empty frame: {:.0}ms since process start",
+                t0.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    });
+}
+
 /// What the harness perturbs between frames.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BenchMode {
