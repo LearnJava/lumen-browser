@@ -382,6 +382,36 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// Mip-каскад картинок (p1-exp-wgpu-only): fullscreen-triangle blit
+/// «mip N−1 → mip N». Bilinear-выборка ровно между четырьмя текселями
+/// источника = 2×2 box-фильтр — стандартный GPU-даунскейл (так же строит
+/// mip-ы Chromium). Bind group — `image_bgl` (texture + sampler).
+const MIPGEN_SHADER_SRC: &str = r#"
+@group(0) @binding(0) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var src_smp: sampler;
+
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32) -> VOut {
+    // Fullscreen triangle: (-1,-1), (3,-1), (-1,3); uv (0,1), (2,1), (0,-1).
+    let x = f32(vi & 1u) * 4.0 - 1.0;
+    let y = f32((vi >> 1u) & 1u) * 4.0 - 1.0;
+    var out: VOut;
+    out.clip = vec4<f32>(x, y, 0.0, 1.0);
+    out.uv = vec2<f32>(x, -y) * 0.5 + 0.5;
+    return out;
+}
+
+@fragment
+fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    return textureSample(src_tex, src_smp, in.uv);
+}
+"#;
+
 /// CSS Images L4 §4 — `cross-fade(A, B, p)` shader.
 ///
 /// Bindings:
@@ -1584,6 +1614,9 @@ pub struct Renderer {
     rrect_pipeline: wgpu::RenderPipeline,
     text_pipeline: wgpu::RenderPipeline,
     image_pipeline: wgpu::RenderPipeline,
+    /// Blit-каскад mip-цепочки картинок: пасс «mip N−1 → mip N» при
+    /// `register_image` (fullscreen triangle, bilinear = 2×2 box).
+    mipgen_pipeline: wgpu::RenderPipeline,
     /// CSS Images L4 §4 — `cross-fade(A, B, p)` two-texture blend pipeline.
     /// Uses `CrossFadeVertex` layout (pos+uv). Bind group 0 = viewport uniform
     /// (shared with `image_pipeline`); bind group 1 = `cross_fade_bgl`
@@ -1876,6 +1909,18 @@ fn bbox_backdrop_disabled() -> bool {
     static DISABLED: OnceLock<bool> = OnceLock::new();
     *DISABLED.get_or_init(|| {
         std::env::var("LUMEN_NO_BBOX_BACKDROP").is_ok_and(|v| v == "1")
+    })
+}
+
+/// `true`, если mip-цепочка картинок отключена (`LUMEN_NO_IMAGE_MIPS=1`):
+/// возврат к CPU-ресайзу под каждый placed-размер (`src@WxH`-зоопарк) и
+/// nearest-выбору mip-уровня в сэмплере. Диагностика: A/B-сравнение картинки,
+/// скорости и памяти на одном бинарнике.
+fn image_mips_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("LUMEN_NO_IMAGE_MIPS").is_ok_and(|v| v == "1")
     })
 }
 
@@ -2538,7 +2583,15 @@ impl Renderer {
             label: Some("image-sampler-linear"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            // Трилинейный выбор mip-уровня: даунскейл картинок делает GPU по
+            // mip-цепочке (см. make_gpu_image_entry_mipped). На 1-mip
+            // текстурах (снапшоты, полоса) LOD клампится в 0 — поведение
+            // не меняется.
+            mipmap_filter: if image_mips_disabled() {
+                wgpu::FilterMode::Nearest
+            } else {
+                wgpu::FilterMode::Linear
+            },
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
@@ -2617,6 +2670,46 @@ impl Renderer {
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // ── Mipgen pipeline (mip-цепочка картинок) ────────────────────────
+        // Пасс «mip N−1 → mip N» без depth и без блендинга: fullscreen
+        // triangle пишет bilinear-выборку источника (2×2 box-даунскейл).
+        let mipgen_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("mipgen-shader"),
+            source: wgpu::ShaderSource::Wgsl(MIPGEN_SHADER_SRC.into()),
+        });
+        let mipgen_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("mipgen-layout"),
+            bind_group_layouts: &[&image_bgl],
+            push_constant_ranges: &[],
+        });
+        let mipgen_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("mipgen-pipeline"),
+            layout: Some(&mipgen_layout),
+            vertex: wgpu::VertexState {
+                module: &mipgen_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &mipgen_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    // Картинки всегда Rgba8Unorm (см. make_gpu_image_entry),
+                    // не surface format.
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -3423,6 +3516,7 @@ impl Renderer {
             rrect_pipeline,
             text_pipeline,
             image_pipeline,
+            mipgen_pipeline,
             cross_fade_pipeline,
             cross_fade_bgl,
             uniform_buffer,
@@ -3804,19 +3898,28 @@ impl Renderer {
             });
         }
 
-        // Храним декодированный образ для on-demand resize при DrawImage.
-        self.raw_images.insert(src.clone(), image.clone());
+        // CPU-копия декода нужна только старому пути (on-demand resize при
+        // DrawImage). Mip-путь читает исключительно GPU-текстуру — не платим
+        // RAM за второй экземпляр каждой картинки.
+        if image_mips_disabled() {
+            self.raw_images.insert(src.clone(), image.clone());
+        }
 
-        // Загружаем оригинал в GPU (без resize — используется только когда
-        // layout-size == intrinsic-size, т.е. для object-fit:none / scale-down
-        // на маленьких картинках).
+        // Загружаем оригинал в GPU с mip-цепочкой (blit-каскад): даунскейл
+        // под любой placed-размер делает сэмплер по mip-ам, CPU-ресайзы и
+        // текстуры "src@WxH" не нужны. Kill-switch LUMEN_NO_IMAGE_MIPS=1
+        // возвращает старый путь (1 mip + CPU-ресайзы в ensure/prefetch).
         let mut rgba = convert_to_rgba(image);
         // Apply ICC colour correction before GPU upload so wide-gamut (Display P3,
         // Rec2020) photos render correctly on sRGB displays.
         if let Some(ref profile) = image.icc_profile {
             correct_rgba_pixels(&mut rgba, profile);
         }
-        let gi = self.make_gpu_image_entry(&rgba, image.width, image.height);
+        let gi = if image_mips_disabled() {
+            self.make_gpu_image_entry(&rgba, image.width, image.height)
+        } else {
+            self.make_gpu_image_entry_mipped(&rgba, image.width, image.height)
+        };
         self.images.insert(src, gi);
         Ok(())
     }
@@ -3825,6 +3928,11 @@ impl Renderer {
     /// render-цикла, где `parsed_faces` держит `&self.faces`.
     /// Предполагается, что нужная текстура уже создана через `ensure_image_gpu_key`.
     fn compute_image_gpu_key(&self, src: &str, box_rect: Rect, fit: ObjectFit, pos: ObjectPosition) -> String {
+        // Mip-путь: текстура одна (оригинал с mip-цепочкой), ключ всегда src;
+        // масштабирование делает трилинейный сэмплер.
+        if !image_mips_disabled() {
+            return src.to_owned();
+        }
         self.raw_images.get(src).map(|raw| {
             let placed = fit_image_rect(box_rect, (raw.width, raw.height), fit, pos);
             let tw = placed.width.round().max(1.0) as u32;
@@ -3849,6 +3957,11 @@ impl Renderer {
         fit: ObjectFit,
         pos: ObjectPosition,
     ) {
+        // Mip-путь: ресайз-текстуры не создаются, оригинал уже загружен
+        // с mip-цепочкой в register_image.
+        if !image_mips_disabled() {
+            return;
+        }
         let resize_target = self.raw_images.get(src).map(|raw| {
             let placed = fit_image_rect(box_rect, (raw.width, raw.height), fit, pos);
             let tw = placed.width.round().max(1.0) as u32;
@@ -3895,6 +4008,10 @@ impl Renderer {
         content: &[DisplayCommand],
         overlay: &[DisplayCommand],
     ) {
+        // Mip-путь: CPU-ресайзов нет вовсе — pre-pass не нужен.
+        if !image_mips_disabled() {
+            return;
+        }
         // (gpu_key, src, tw, th) — уникальные недостающие ресайзы кадра.
         let mut jobs: Vec<(String, String, u32, u32)> = Vec::new();
         let mut scheduled: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -4013,6 +4130,119 @@ impl Renderer {
             },
             wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
         );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let make_bg = |sampler: &wgpu::Sampler| {
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("image-bg"),
+                layout: &self.image_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                ],
+            })
+        };
+        let bind_group_linear = make_bg(&self.image_sampler);
+        let bind_group_nearest = make_bg(&self.image_sampler_nearest);
+        GpuImage { bind_group_linear, bind_group_nearest, view, _texture: texture, width, height }
+    }
+
+    /// Создаёт `GpuImage` с полной mip-цепочкой: mip 0 заливается с CPU,
+    /// остальные уровни строятся GPU blit-каскадом (`mipgen_pipeline`,
+    /// bilinear = 2×2 box на пасс). Замена CPU-ресайзов под каждый
+    /// placed-размер: одна текстура на `src`, даунскейл при отрисовке делает
+    /// трилинейный сэмплер (как в Chromium). Стоимость каскада — по одному
+    /// крошечному пассу на уровень, один раз на `register_image`.
+    fn make_gpu_image_entry_mipped(&self, rgba: &[u8], width: u32, height: u32) -> GpuImage {
+        count_texture_created();
+        // floor(log2(max(w,h))) + 1; width/height ≥ 1 гарантированы caller-ом.
+        let mip_level_count = 32 - width.max(height).leading_zeros();
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("lumen-image-texture-mipped"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            // Не sRGB — как make_gpu_image_entry (surface тоже non-sRGB).
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        if mip_level_count > 1 {
+            let mut encoder = self.device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor { label: Some("lumen-image-mipgen") },
+            );
+            let mip_view = |level: u32| {
+                texture.create_view(&wgpu::TextureViewDescriptor {
+                    label: Some("lumen-image-mip-level"),
+                    base_mip_level: level,
+                    mip_level_count: Some(1),
+                    ..Default::default()
+                })
+            };
+            let mut src_view = mip_view(0);
+            for level in 1..mip_level_count {
+                let dst_view = mip_view(level);
+                let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("mipgen-bg"),
+                    layout: &self.image_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&src_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.image_sampler),
+                        },
+                    ],
+                });
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("mipgen-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &dst_view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            // Fullscreen triangle перекрывает уровень целиком.
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                pass.set_pipeline(&self.mipgen_pipeline);
+                pass.set_bind_group(0, &bg, &[]);
+                pass.draw(0..3, 0..1);
+                drop(pass);
+                src_view = dst_view;
+            }
+            self.queue.submit(Some(encoder.finish()));
+        }
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let make_bg = |sampler: &wgpu::Sampler| {
             self.device.create_bind_group(&wgpu::BindGroupDescriptor {
