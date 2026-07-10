@@ -1751,6 +1751,16 @@ fn frame_skip_disabled() -> bool {
     })
 }
 
+/// `true`, если bbox-scissor фильтр-пассов отключён (`LUMEN_NO_BBOX_SCISSOR=1`).
+/// Диагностика: A/B-сравнение картинки и скорости на одном бинарнике.
+fn bbox_scissor_disabled() -> bool {
+    use std::sync::OnceLock;
+    static DISABLED: OnceLock<bool> = OnceLock::new();
+    *DISABLED.get_or_init(|| {
+        std::env::var("LUMEN_NO_BBOX_SCISSOR").is_ok_and(|v| v == "1")
+    })
+}
+
 impl Renderer {
     pub fn new(window: Arc<Window>, font_bytes: Vec<u8>, target_color_space: ColorSpace) -> Result<Self, Box<dyn Error>> {
         // Валидируем шрифт сразу, чтобы при битом файле не падать в первом кадре.
@@ -4681,6 +4691,14 @@ impl Renderer {
             from_level: usize,
             filters: Vec<FilterFn>,
             comp_v_start: u32,
+            /// Ограничение закрашиваемой области всех трёх фильтр-пассов
+            /// (blur H / blur V / composite): bbox контента уровня, раздутый
+            /// на радиус блюра (= min(ceil(3σ),32) текселей — как в шейдере,
+            /// и как BLUR_SAMPLE_SCALE=3.0 в WebRender). None = контент
+            /// уровня не удалось ограничить → полноэкранные пассы, как раньше.
+            /// Корректность чтений за пределами scissor гарантирована полными
+            /// LoadOp::Clear этих текстур (clear не подчиняется scissor).
+            scissor: Option<DeviceScissor>,
         }
         // CSS Filter Effects L1 §2 / Compositing §13 — backdrop-filter plan.
         // `from_level` = element's offscreen layer (content rendered here).
@@ -4736,6 +4754,43 @@ impl Renderer {
         // Stack for PushMaskLayer: (rect, mode). Popped by PopMaskLayer.
         let mut mask_layer_stack: Vec<(Rect, MaskMode)> = Vec::new();
 
+        /// Фактически закрашенная область offscreen-уровня в CSS px
+        /// (эксперимент bbox-scissor, EXPERIMENT.md §2). `Empty` — в уровень
+        /// ещё ничего не нарисовано; `Rect` — объединение вершин всех draw-ops
+        /// уровня плюс области дочерних композитов; `Unbounded` — состав
+        /// уровня не удалось ограничить (маска/backdrop) → пассы уровня
+        /// остаются полноэкранными. Безопасность по построению: любой
+        /// не-учтённый источник пикселей обязан помечать уровень Unbounded.
+        #[derive(Clone, Copy)]
+        enum LevelBounds {
+            Empty,
+            Rect { x0: f32, y0: f32, x1: f32, y1: f32 },
+            Unbounded,
+        }
+        impl LevelBounds {
+            fn add_point(&mut self, x: f32, y: f32) {
+                if !x.is_finite() || !y.is_finite() {
+                    *self = LevelBounds::Unbounded;
+                    return;
+                }
+                match self {
+                    LevelBounds::Empty => *self = LevelBounds::Rect { x0: x, y0: y, x1: x, y1: y },
+                    LevelBounds::Rect { x0, y0, x1, y1 } => {
+                        *x0 = x0.min(x);
+                        *y0 = y0.min(y);
+                        *x1 = x1.max(x);
+                        *y1 = y1.max(y);
+                    }
+                    LevelBounds::Unbounded => {}
+                }
+            }
+            fn add_rect(&mut self, rx0: f32, ry0: f32, rx1: f32, ry1: f32) {
+                self.add_point(rx0, ry0);
+                self.add_point(rx1, ry1);
+            }
+        }
+        let mut level_bounds: Vec<LevelBounds> = vec![LevelBounds::Unbounded];
+
         let mut current_level: usize = 0;
         let mut level_alpha_stack: Vec<f32> = Vec::new();
         // Tracks blend mode per opened offscreen level (for non-Normal PushBlendMode).
@@ -4757,8 +4812,36 @@ impl Renderer {
 
         let dpr_f32 = self.scale_factor.max(1e-6) as f32;
 
+        // Объединяет позиции вершин диапазона draw-op-а в bbox уровня.
+        // Вершины уже в CSS px, после transform/scroll — bbox финальный.
+        macro_rules! union_op_verts {
+            ($lb:expr, $vec:ident, $start:expr, $count:expr) => {
+                for v in &$vec[*$start as usize..(*$start + *$count) as usize] {
+                    $lb.add_point(v.pos[0], v.pos[1]);
+                }
+            };
+        }
+
         macro_rules! flush_batch {
             () => {{
+                // bbox-scissor: перед сбросом батча учесть его вершины в
+                // границах текущего offscreen-уровня (уровень 0 не считаем).
+                if current_level > 0 && batch_start < draw_ops.len() {
+                    if let Some(lb) = level_bounds.get_mut(current_level) {
+                        for op in &draw_ops[batch_start..] {
+                            match op {
+                                DrawOp::SetScissor(_) => {}
+                                DrawOp::Fill { v_start, v_count } => union_op_verts!(lb, fill_vertices, v_start, v_count),
+                                DrawOp::Circle { v_start, v_count } => union_op_verts!(lb, circle_vertices, v_start, v_count),
+                                DrawOp::RRect { v_start, v_count } => union_op_verts!(lb, rrect_vertices, v_start, v_count),
+                                DrawOp::Text { v_start, v_count } => union_op_verts!(lb, text_vertices, v_start, v_count),
+                                DrawOp::Image { v_start, v_count, .. } => union_op_verts!(lb, image_vertices, v_start, v_count),
+                                DrawOp::Gradient { v_start, v_count, .. } => union_op_verts!(lb, grad_vertices, v_start, v_count),
+                                DrawOp::CrossFade { v_start, v_count, .. } => union_op_verts!(lb, cross_fade_vertices, v_start, v_count),
+                            }
+                        }
+                    }
+                }
                 let first = level_first.get(current_level).copied().unwrap_or(false);
                 let load_op = if first {
                     if current_level == 0 {
@@ -5318,6 +5401,10 @@ impl Renderer {
                         level_first.push(true);
                     }
                     level_first[current_level] = true;
+                    while level_bounds.len() <= current_level {
+                        level_bounds.push(LevelBounds::Empty);
+                    }
+                    level_bounds[current_level] = LevelBounds::Empty;
                 }
                 DisplayCommand::PopOpacity => {
                     if !level_alpha_stack.is_empty() {
@@ -5330,7 +5417,22 @@ impl Renderer {
                             comp_v_start,
                             mode: BlendMode::Normal,
                         }));
+                        let child = level_bounds
+                            .get(current_level)
+                            .copied()
+                            .unwrap_or(LevelBounds::Unbounded);
                         current_level -= 1;
+                        // Composite переносит контент дочернего уровня 1:1 —
+                        // границы родителя расширяются на bbox ребёнка.
+                        if current_level > 0
+                            && let Some(lb) = level_bounds.get_mut(current_level)
+                        {
+                            match child {
+                                LevelBounds::Empty => {}
+                                LevelBounds::Rect { x0, y0, x1, y1 } => lb.add_rect(x0, y0, x1, y1),
+                                LevelBounds::Unbounded => *lb = LevelBounds::Unbounded,
+                            }
+                        }
                     }
                 }
                 // CSS Compositing & Blending L1 §5 — mix-blend-mode compositing.
@@ -5346,6 +5448,10 @@ impl Renderer {
                             level_first.push(true);
                         }
                         level_first[current_level] = true;
+                        while level_bounds.len() <= current_level {
+                            level_bounds.push(LevelBounds::Empty);
+                        }
+                        level_bounds[current_level] = LevelBounds::Empty;
                     }
                 }
                 DisplayCommand::PopBlendMode => {
@@ -5360,7 +5466,22 @@ impl Renderer {
                             comp_v_start,
                             mode,
                         }));
+                        let child = level_bounds
+                            .get(current_level)
+                            .copied()
+                            .unwrap_or(LevelBounds::Unbounded);
                         current_level -= 1;
+                        // Blend-composite тоже красит родителя только в bbox
+                        // ребёнка (за его пределами src прозрачен).
+                        if current_level > 0
+                            && let Some(lb) = level_bounds.get_mut(current_level)
+                        {
+                            match child {
+                                LevelBounds::Empty => {}
+                                LevelBounds::Rect { x0, y0, x1, y1 } => lb.add_rect(x0, y0, x1, y1),
+                                LevelBounds::Unbounded => *lb = LevelBounds::Unbounded,
+                            }
+                        }
                     }
                 }
                 // CSS Backgrounds L3 §3.3/3.4/3.5 — background-size/position/repeat.
@@ -5626,6 +5747,10 @@ impl Renderer {
                         level_first.push(true);
                     }
                     level_first[current_level] = true;
+                    while level_bounds.len() <= current_level {
+                        level_bounds.push(LevelBounds::Empty);
+                    }
+                    level_bounds[current_level] = LevelBounds::Empty;
                 }
                 // CSS Masking L1 §4 — gradient masks: build GradParamsCpu at plan time;
                 // render-time pass renders gradient → surface-size temp texture → use as mask.
@@ -5648,6 +5773,10 @@ impl Renderer {
                         level_first.push(true);
                     }
                     level_first[current_level] = true;
+                    while level_bounds.len() <= current_level {
+                        level_bounds.push(LevelBounds::Empty);
+                    }
+                    level_bounds[current_level] = LevelBounds::Empty;
                 }
                 DisplayCommand::PushMaskRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating } => {
                     flush_batch!();
@@ -5668,6 +5797,10 @@ impl Renderer {
                         level_first.push(true);
                     }
                     level_first[current_level] = true;
+                    while level_bounds.len() <= current_level {
+                        level_bounds.push(LevelBounds::Empty);
+                    }
+                    level_bounds[current_level] = LevelBounds::Empty;
                 }
                 DisplayCommand::PushMaskConicGradient { rect, center_x_pct, center_y_pct, from_angle_deg, stops, repeating } => {
                     flush_batch!();
@@ -5690,6 +5823,10 @@ impl Renderer {
                         level_first.push(true);
                     }
                     level_first[current_level] = true;
+                    while level_bounds.len() <= current_level {
+                        level_bounds.push(LevelBounds::Empty);
+                    }
+                    level_bounds[current_level] = LevelBounds::Empty;
                 }
                 DisplayCommand::PopMask => {
                     flush_batch!();
@@ -5816,6 +5953,13 @@ impl Renderer {
                         mask_gradient,
                     }));
                     current_level -= 1;
+                    // bbox-scissor v1: mask-композит не отслеживаем — родитель
+                    // помечается неограниченным (безопасный фолбэк).
+                    if current_level > 0
+                        && let Some(lb) = level_bounds.get_mut(current_level)
+                    {
+                        *lb = LevelBounds::Unbounded;
+                    }
                 }
                 // CSS Filter Effects L1 — PushFilter opens an offscreen level;
                 // PopFilter composites it onto the parent with filter applied.
@@ -5827,18 +5971,91 @@ impl Renderer {
                         level_first.push(true);
                     }
                     level_first[current_level] = true;
+                    while level_bounds.len() <= current_level {
+                        level_bounds.push(LevelBounds::Empty);
+                    }
+                    level_bounds[current_level] = LevelBounds::Empty;
                 }
                 DisplayCommand::PopFilter => {
                     if let Some(filters) = filter_stack.pop() {
                         flush_batch!();
+                        let content = if bbox_scissor_disabled() {
+                            LevelBounds::Unbounded
+                        } else {
+                            level_bounds
+                                .get(current_level)
+                                .copied()
+                                .unwrap_or(LevelBounds::Unbounded)
+                        };
+                        // Радиус блюра в текселях — та же формула, что в
+                        // BLUR_SHADER_SRC: min(ceil(3σ),32); шейпер шагает по
+                        // 1 текселю surface-текстуры. + 2 px запас на bilinear.
+                        let blur_pad = filters
+                            .iter()
+                            .find_map(|f| match f {
+                                FilterFn::Blur(s) if *s > 0.0 => {
+                                    Some((3.0 * *s).ceil().min(32.0))
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or(0.0)
+                            + 2.0;
+                        // (scissor пассов, раздутый bbox в CSS px для родителя)
+                        let (scissor, parent_rect) = match content {
+                            LevelBounds::Unbounded => (None, None),
+                            LevelBounds::Empty => {
+                                // Слой пуст: composite прозрачной текстуры —
+                                // визуальный no-op, все три пасса пропускаются.
+                                current_level -= 1;
+                                continue;
+                            }
+                            LevelBounds::Rect { x0, y0, x1, y1 } => {
+                                let pad_css = blur_pad / dpr_f32;
+                                let (ix0, iy0) = (x0 - pad_css, y0 - pad_css);
+                                let (ix1, iy1) = (x1 + pad_css, y1 + pad_css);
+                                let sx0 = ((ix0 * dpr_f32).floor().max(0.0) as u32).min(surface_w);
+                                let sy0 = ((iy0 * dpr_f32).floor().max(0.0) as u32).min(surface_h);
+                                let sx1 = ((ix1 * dpr_f32).ceil().max(0.0) as u32).min(surface_w);
+                                let sy1 = ((iy1 * dpr_f32).ceil().max(0.0) as u32).min(surface_h);
+                                if sx1 <= sx0 || sy1 <= sy0 {
+                                    // Контент целиком за пределами surface.
+                                    current_level -= 1;
+                                    continue;
+                                }
+                                let full = sx0 == 0
+                                    && sy0 == 0
+                                    && sx1 >= surface_w
+                                    && sy1 >= surface_h;
+                                (
+                                    (!full).then_some(DeviceScissor {
+                                        x: sx0,
+                                        y: sy0,
+                                        width: sx1 - sx0,
+                                        height: sy1 - sy0,
+                                    }),
+                                    Some((ix0, iy0, ix1, iy1)),
+                                )
+                            }
+                        };
                         let comp_v_start = composite_vertices.len() as u32;
                         push_composite_quad(&mut composite_vertices, 1.0);
                         render_plan.push(RenderPlanItem::FilterComposite(FilterCompositePlan {
                             from_level: current_level,
                             filters,
                             comp_v_start,
+                            scissor,
                         }));
                         current_level -= 1;
+                        // Композит фильтра красит родителя в пределах
+                        // раздутого bbox — учесть в границах родителя.
+                        if current_level > 0
+                            && let Some(lb) = level_bounds.get_mut(current_level)
+                        {
+                            match parent_rect {
+                                Some((rx0, ry0, rx1, ry1)) => lb.add_rect(rx0, ry0, rx1, ry1),
+                                None => *lb = LevelBounds::Unbounded,
+                            }
+                        }
                     }
                 }
                 // CSS Filter Effects L1 §2 — backdrop-filter.
@@ -5851,6 +6068,10 @@ impl Renderer {
                         level_first.push(true);
                     }
                     level_first[current_level] = true;
+                    while level_bounds.len() <= current_level {
+                        level_bounds.push(LevelBounds::Empty);
+                    }
+                    level_bounds[current_level] = LevelBounds::Empty;
                 }
                 DisplayCommand::PopBackdropFilter => {
                     if let Some((filters, bounds)) = backdrop_filter_stack.pop() {
@@ -5878,6 +6099,13 @@ impl Renderer {
                             },
                         ));
                         current_level -= 1;
+                        // bbox-scissor v1: backdrop-композит не отслеживаем —
+                        // родитель помечается неограниченным (безопасный фолбэк).
+                        if current_level > 0
+                            && let Some(lb) = level_bounds.get_mut(current_level)
+                        {
+                            *lb = LevelBounds::Unbounded;
+                        }
                     }
                 }
                 DisplayCommand::DrawSvgPath { vertices, color } => {
@@ -5977,6 +6205,10 @@ impl Renderer {
                         level_first.resize(current_level + 1, true);
                     }
                     level_first[current_level] = true;
+                    while level_bounds.len() <= current_level {
+                        level_bounds.push(LevelBounds::Empty);
+                    }
+                    level_bounds[current_level] = LevelBounds::Empty;
                 }
                 // CSS Masking L1 §5 — PopMaskLayer: composite mask layer onto parent.
                 // Algorithm:
@@ -6010,6 +6242,13 @@ impl Renderer {
                         ml_v_end,
                     }));
                     current_level -= 1;
+                    // bbox-scissor v1: mask-layer-композит не отслеживаем —
+                    // родитель помечается неограниченным (безопасный фолбэк).
+                    if current_level > 0
+                        && let Some(lb) = level_bounds.get_mut(current_level)
+                    {
+                        *lb = LevelBounds::Unbounded;
+                    }
                 }
                 // Scrollbar track + thumb: two fill quads drawn with the current
                 // clip/transform stack (parent's, NOT scroll layer's).
@@ -6933,6 +7172,9 @@ impl Renderer {
                                 occlusion_query_set: None,
                             });
                             pass.set_pipeline(&self.blur_pipeline);
+                            if let Some(s) = plan.scissor {
+                                pass.set_scissor_rect(s.x, s.y, s.width, s.height);
+                            }
                             pass.set_bind_group(0, &blur_bg_h, &[]);
                             pass.set_vertex_buffer(0, cvb.slice(..));
                             pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
@@ -6970,6 +7212,9 @@ impl Renderer {
                                 occlusion_query_set: None,
                             });
                             pass.set_pipeline(&self.blur_pipeline);
+                            if let Some(s) = plan.scissor {
+                                pass.set_scissor_rect(s.x, s.y, s.width, s.height);
+                            }
                             pass.set_bind_group(0, &blur_bg_v, &[]);
                             pass.set_vertex_buffer(0, cvb.slice(..));
                             pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
@@ -7026,6 +7271,9 @@ impl Renderer {
                             occlusion_query_set: None,
                         });
                         pass.set_pipeline(&self.filter_pipeline);
+                        if let Some(s) = plan.scissor {
+                            pass.set_scissor_rect(s.x, s.y, s.width, s.height);
+                        }
                         pass.set_bind_group(0, &filter_bg, &[]);
                         pass.set_vertex_buffer(0, cvb.slice(..));
                         pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
