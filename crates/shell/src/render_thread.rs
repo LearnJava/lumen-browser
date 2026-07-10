@@ -31,8 +31,10 @@
 //!
 //! # Известные ограничения этого среза (честно, до дальнейших M1/M2)
 //!
-//! - Momentum/anim по-прежнему тикают на main (кадры производит main-поток);
-//!   полная независимость ввода — M2. Present уже вне main.
+//! - Momentum-скролл (M1.3) рендер-поток продолжает сам, когда UI-поток
+//!   застопорился (см. ниже). Прочие анимации (CSS/GIF/rAF) по-прежнему тикают
+//!   на main, и события ввода, пришедшие во время застоя, обрабатываются только
+//!   после него — полная независимость ввода — M2.
 //! - `register_image` / `register_snapshot` — fire-and-forget: результат
 //!   загрузки в GPU не возвращается синхронно (round-trip на каждый пиксель
 //!   дорог), прокси всегда отдаёт `Ok`; настоящий бэкенд логирует ошибку сам.
@@ -57,16 +59,44 @@
 //! `backend_factory::create_threaded_femtovg`. Если что-то не удалось —
 //! прокси корректно **откатывается на in-process** путь (сообщение в stderr,
 //! регрессии нет — окно рисует как обычно).
+//!
+//! # Render-side momentum (M1.3, 2026-07-10)
+//!
+//! Даже с present-ом вне UI-потока (M1.2) инерция замерзала при застое main:
+//! кадры производит main, и долгий JS-тик/relayout останавливал их поток. M1.3
+//! отдаёт momentum рендер-потоку. UI-поток при `TouchPhase::Ended` шлёт
+//! [`RenderMsg::StartRenderMomentum`] (скорость + экстенты клампа) и продолжает
+//! слать кадры как обычно. Рендер-поток удерживает последний закоммиченный кадр
+//! ([`RenderState`]) и, если при активном momentum за `MOMENTUM_TICK` от main
+//! не пришло ни одного сообщения (таймаут `recv_timeout` = UI-поток
+//! застопорился), **сам** пересчитывает скролл из последнего якоря и повторно
+//! презентует кадр — плавность держится на vsync. Пока main жив и шлёт кадры,
+//! они (latest-wins) ведут презентацию и обновляют якорь; self-tick включается
+//! только на голодание. Физика momentum вычисляется stateless-функциями
+//! [`momentum_anim::velocity_at`]/[`displacement_since`] по локальным часам
+//! потока, поэтому UI- и рендер-сторона не расходятся. Инвариант 6 сохранён:
+//! без активного momentum поток по-прежнему паркуется на блокирующем `recv()`.
+//! Полная независимость ввода (события во время застоя) — по-прежнему M2.
+//!
+//! [`displacement_since`]: momentum_anim::displacement_since
 
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use lumen_core::ext::{FontProvider, MemoryPressureLevel};
 use lumen_core::geom::Size;
 use lumen_image::Image;
 use lumen_layout::Color;
 use lumen_paint::{DisplayCommand, RenderBackend, RenderError};
+
+use crate::momentum_anim;
+
+/// Бюджет кадра для self-tick momentum (~60 fps). При активном render-side
+/// momentum поток ждёт сообщения не дольше этого; таймаут = UI-поток ничего не
+/// прислал за интервал → он застопорился → продолжаем инерцию сами.
+const MOMENTUM_TICK: Duration = Duration::from_millis(16);
 
 /// Один кадр, переданный рендер-потоку. Владеющая копия — снапшот, который
 /// поток рисует независимо от main (ADR-016 инвариант 1).
@@ -118,6 +148,20 @@ enum RenderMsg {
     PromoteLayer { node_id: u32, width: u32, height: u32 },
     /// Demote узла обратно.
     DemoteLayer { node_id: u32 },
+    /// Старт render-side momentum (ADR-016 M1.3): поток сам продолжает инерцию
+    /// при застопорившемся UI-потоке.
+    StartRenderMomentum {
+        /// Вертикальная скорость, CSS px/ms.
+        vel_y: f32,
+        /// Горизонтальная скорость, CSS px/ms.
+        vel_x: f32,
+        /// Максимальный вертикальный скролл (клампинг).
+        max_scroll_y: f32,
+        /// Максимальный горизонтальный скролл (клампинг).
+        max_scroll_x: f32,
+    },
+    /// Отмена render-side momentum (новый жест / навигация).
+    StopRenderMomentum,
     /// Завершение потока (шлётся из `Drop`).
     Shutdown,
 }
@@ -319,6 +363,20 @@ impl RenderBackend for ThreadedRenderBackend {
         self.send(RenderMsg::DemoteLayer { node_id });
     }
 
+    fn start_render_momentum(
+        &mut self,
+        vel_y: f32,
+        vel_x: f32,
+        max_scroll_y: f32,
+        max_scroll_x: f32,
+    ) {
+        self.send(RenderMsg::StartRenderMomentum { vel_y, vel_x, max_scroll_y, max_scroll_x });
+    }
+
+    fn stop_render_momentum(&mut self) {
+        self.send(RenderMsg::StopRenderMomentum);
+    }
+
     fn debug_mem_report(&self) -> String {
         "threaded backend (mem report on render thread)".to_owned()
     }
@@ -366,57 +424,205 @@ fn render_thread_main<F>(
     run_render_loop(&mut backend, &rx);
 }
 
-/// Цикл рендер-потока: блокирующий `recv()` (idle-park, инвариант 6), затем
-/// дренаж всей пачки с коалесцингом кадров (latest-wins) и строгим порядком
-/// управляющих сообщений.
-fn run_render_loop(backend: &mut Box<dyn RenderBackend>, rx: &Receiver<RenderMsg>) {
-    loop {
-        // Паркуемся до первого сообщения (без polling).
-        let Ok(first) = rx.recv() else {
-            return; // канал закрыт — прокси дропнут
-        };
-        let mut batch = vec![first];
-        // Дренируем всё, что уже в очереди, одним махом.
-        loop {
-            match rx.try_recv() {
-                Ok(m) => batch.push(m),
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => break,
-            }
-        }
-        if process_batch(backend, batch) {
-            return; // получен Shutdown
+/// Активный render-side momentum (ADR-016 M1.3). Все времена — по локальным
+/// часам рендер-потока (`Instant`), поэтому вычисления самосогласованы и не
+/// зависят от epoch UI-потока.
+struct RenderMomentum {
+    /// Начальная вертикальная скорость (CSS px/ms).
+    v0_y: f32,
+    /// Начальная горизонтальная скорость (CSS px/ms).
+    v0_x: f32,
+    /// Время старта momentum (ms от старта рендер-потока).
+    t0_ms: f64,
+    /// Максимальный вертикальный скролл (клампинг).
+    max_y: f32,
+    /// Максимальный горизонтальный скролл (клампинг).
+    max_x: f32,
+}
+
+/// Удержанное между пачками состояние рендер-потока (ADR-016 M1.3). Позволяет
+/// продолжать momentum-презентацию из последнего закоммиченного кадра, когда
+/// UI-поток застопорился и новых кадров нет.
+struct RenderState {
+    /// Последний закоммиченный контент страницы (для повторной презентации).
+    last_content: Vec<DisplayCommand>,
+    /// Последний закоммиченный overlay.
+    last_overlay: Vec<DisplayCommand>,
+    /// Вертикальный скролл последнего кадра — якорь momentum.
+    anchor_scroll_y: f32,
+    /// Горизонтальный скролл последнего кадра — якорь momentum.
+    anchor_scroll_x: f32,
+    /// Время последнего кадра (ms от старта рендер-потока).
+    anchor_t_ms: f64,
+    /// Активный momentum, если есть.
+    momentum: Option<RenderMomentum>,
+}
+
+impl RenderState {
+    /// Пустое состояние: кадров ещё не было, momentum неактивен.
+    fn new() -> Self {
+        Self {
+            last_content: Vec::new(),
+            last_overlay: Vec::new(),
+            anchor_scroll_y: 0.0,
+            anchor_scroll_x: 0.0,
+            anchor_t_ms: 0.0,
+            momentum: None,
         }
     }
 }
 
+/// Абсолютный скролл под momentum в момент `now_ms`: якорный скролл плюс
+/// смещение со скоростью, корректно затухшей от старта до якоря. Закламплено в
+/// `[0, max]`. Возвращает `(scroll_y, scroll_x, done)`; `done` — скорость упала
+/// ниже порога остановки (тот же критерий, что на UI-стороне).
+fn momentum_scroll_at(
+    m: &RenderMomentum,
+    anchor_y: f32,
+    anchor_x: f32,
+    anchor_t_ms: f64,
+    now_ms: f64,
+) -> (f32, f32, bool) {
+    let vel_y = momentum_anim::velocity_at(m.v0_y, m.t0_ms, anchor_t_ms);
+    let vel_x = momentum_anim::velocity_at(m.v0_x, m.t0_ms, anchor_t_ms);
+    let dy = momentum_anim::displacement_since(vel_y, anchor_t_ms, now_ms);
+    let dx = momentum_anim::displacement_since(vel_x, anchor_t_ms, now_ms);
+    let scroll_y = (anchor_y + dy).clamp(0.0, m.max_y.max(0.0));
+    let scroll_x = (anchor_x + dx).clamp(0.0, m.max_x.max(0.0));
+    let cur_v = momentum_anim::velocity_at(m.v0_y, m.t0_ms, now_ms).abs()
+        + momentum_anim::velocity_at(m.v0_x, m.t0_ms, now_ms).abs();
+    let done = cur_v < momentum_anim::MIN_VELOCITY_PX_MS;
+    (scroll_y, scroll_x, done)
+}
+
+/// Цикл рендер-потока: блокирующий `recv()` (idle-park, инвариант 6) без
+/// momentum; с активным momentum — `recv_timeout(MOMENTUM_TICK)`, и таймаут
+/// (UI-поток ничего не прислал за интервал → застопорился) запускает self-tick
+/// момента (ADR-016 M1.3). Полученная пачка коалесцируется (latest-wins) с
+/// строгим порядком управляющих сообщений.
+fn run_render_loop(backend: &mut Box<dyn RenderBackend>, rx: &Receiver<RenderMsg>) {
+    let clock = Instant::now();
+    let mut state = RenderState::new();
+    loop {
+        let first = if state.momentum.is_some() {
+            match rx.recv_timeout(MOMENTUM_TICK) {
+                Ok(m) => Some(m),
+                Err(mpsc::RecvTimeoutError::Timeout) => None,
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            }
+        } else {
+            // Паркуемся до первого сообщения (без polling).
+            match rx.recv() {
+                Ok(m) => Some(m),
+                Err(_) => return, // канал закрыт — прокси дропнут
+            }
+        };
+
+        match first {
+            Some(first) => {
+                let mut batch = vec![first];
+                // Дренируем всё, что уже в очереди, одним махом.
+                loop {
+                    match rx.try_recv() {
+                        Ok(m) => batch.push(m),
+                        Err(mpsc::TryRecvError::Empty) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => break,
+                    }
+                }
+                let now_ms = clock.elapsed().as_secs_f64() * 1000.0;
+                if process_batch(backend, batch, &mut state, now_ms) {
+                    return; // получен Shutdown
+                }
+            }
+            None => {
+                // Таймаут при активном momentum: UI-поток молчит — тикаем сами.
+                let now_ms = clock.elapsed().as_secs_f64() * 1000.0;
+                self_tick_momentum(backend, &mut state, now_ms);
+            }
+        }
+    }
+}
+
+/// Self-tick momentum при застопорившемся UI-потоке (ADR-016 M1.3):
+/// пересчитывает скролл из удержанного якоря и повторно презентует последний
+/// закоммиченный кадр. Завершившийся momentum сбрасывается.
+fn self_tick_momentum(
+    backend: &mut Box<dyn RenderBackend>,
+    state: &mut RenderState,
+    now_ms: f64,
+) {
+    let Some(m) = state.momentum.as_ref() else {
+        return;
+    };
+    if state.last_content.is_empty() {
+        return; // кадров ещё не было — нечего презентовать
+    }
+    let (scroll_y, scroll_x, done) = momentum_scroll_at(
+        m,
+        state.anchor_scroll_y,
+        state.anchor_scroll_x,
+        state.anchor_t_ms,
+        now_ms,
+    );
+    if let Err(err) = backend.render(&state.last_content, &state.last_overlay, scroll_y, scroll_x) {
+        eprintln!("[render-thread] ошибка self-tick momentum: {err:?}");
+    }
+    if done {
+        state.momentum = None;
+    }
+}
+
 /// Обрабатывает одну пачку сообщений: применяет управляющие в порядке, рисует
-/// только последний кадр пачки (устаревшие кадры отброшены). Возвращает `true`,
-/// если в пачке был `Shutdown` (поток должен выйти).
+/// только последний кадр пачки (устаревшие кадры отброшены) и обновляет
+/// удержанное состояние (M1.3-якорь momentum). Возвращает `true`, если в пачке
+/// был `Shutdown` (поток должен выйти).
 ///
 /// Порядок строго сохраняется: кадр рисуется на своей позиции в пачке, поэтому
 /// управляющие сообщения до кадра (canvas_bg / page_offset / scale) применяются
 /// раньше него, а пришедшие после — уже к следующему кадру.
-fn process_batch(backend: &mut Box<dyn RenderBackend>, batch: Vec<RenderMsg>) -> bool {
+fn process_batch(
+    backend: &mut Box<dyn RenderBackend>,
+    batch: Vec<RenderMsg>,
+    state: &mut RenderState,
+    now_ms: f64,
+) -> bool {
     let last_frame_idx = last_frame_index(&batch);
     for (i, msg) in batch.into_iter().enumerate() {
         match msg {
             RenderMsg::Frame(frame) => {
                 // Рисуем только последний кадр пачки; ранние отброшены (latest-wins).
-                if Some(i) == last_frame_idx
-                    && let Err(err) = backend.render(
+                if Some(i) == last_frame_idx {
+                    if let Err(err) = backend.render(
                         &frame.content,
                         &frame.overlay,
                         frame.scroll_y,
                         frame.scroll_x,
-                    )
-                {
-                    eprintln!(
-                        "[render-thread] ошибка рендера (commit {}): {err:?}",
-                        frame.commit_id
-                    );
+                    ) {
+                        eprintln!(
+                            "[render-thread] ошибка рендера (commit {}): {err:?}",
+                            frame.commit_id
+                        );
+                    }
+                    // Удерживаем кадр как якорь momentum (M1.3): UI-поток жив и
+                    // ведёт презентацию — обновляем базу, чтобы при последующем
+                    // застое продолжить инерцию с актуальной позиции.
+                    state.last_content = frame.content;
+                    state.last_overlay = frame.overlay;
+                    state.anchor_scroll_y = frame.scroll_y;
+                    state.anchor_scroll_x = frame.scroll_x;
+                    state.anchor_t_ms = now_ms;
                 }
             }
+            RenderMsg::StartRenderMomentum { vel_y, vel_x, max_scroll_y, max_scroll_x } => {
+                state.momentum = Some(RenderMomentum {
+                    v0_y: vel_y,
+                    v0_x: vel_x,
+                    t0_ms: now_ms,
+                    max_y: max_scroll_y,
+                    max_x: max_scroll_x,
+                });
+            }
+            RenderMsg::StopRenderMomentum => state.momentum = None,
             RenderMsg::Resize { width, height } => backend.resize(width, height),
             RenderMsg::SetScaleFactor(s) => backend.set_scale_factor(s),
             RenderMsg::SetCanvasBackground(c) => backend.set_canvas_background(c),
@@ -499,5 +705,53 @@ mod tests {
         // Десять кадров подряд без управляющих — рисуется только последний.
         let batch: Vec<RenderMsg> = (0..10).map(frame).collect();
         assert_eq!(last_frame_index(&batch), Some(9));
+    }
+
+    fn momentum(v0_y: f32, max_y: f32) -> RenderMomentum {
+        RenderMomentum { v0_y, v0_x: 0.0, t0_ms: 0.0, max_y, max_x: 0.0 }
+    }
+
+    #[test]
+    fn momentum_scroll_advances_downward() {
+        // Инерция вниз из позиции 100 продвигает скролл вперёд.
+        let m = momentum(1.0, 10_000.0);
+        let (y0, _, _) = momentum_scroll_at(&m, 100.0, 0.0, 0.0, 0.0);
+        let (y1, _, _) = momentum_scroll_at(&m, 100.0, 0.0, 0.0, 100.0);
+        assert!((y0 - 100.0).abs() < 0.01, "y0={y0}");
+        assert!(y1 > y0, "y1={y1} должно быть > y0={y0}");
+    }
+
+    #[test]
+    fn momentum_scroll_clamps_at_bottom() {
+        // Клампится в max, не улетает за край.
+        let m = momentum(5.0, 50.0);
+        let (y, _, _) = momentum_scroll_at(&m, 40.0, 0.0, 0.0, 1000.0);
+        assert!(y <= 50.0 + f32::EPSILON, "y={y}");
+    }
+
+    #[test]
+    fn momentum_scroll_clamps_at_top_for_negative_velocity() {
+        // Инерция вверх не уводит скролл ниже нуля.
+        let m = RenderMomentum { v0_y: -5.0, v0_x: 0.0, t0_ms: 0.0, max_y: 1000.0, max_x: 0.0 };
+        let (y, _, _) = momentum_scroll_at(&m, 20.0, 0.0, 0.0, 1000.0);
+        assert!(y >= 0.0, "y={y}");
+    }
+
+    #[test]
+    fn momentum_scroll_reports_done_when_decayed() {
+        // За большое время скорость падает ниже порога → done.
+        let m = momentum(1.0, 10_000.0);
+        let (_, _, done_early) = momentum_scroll_at(&m, 0.0, 0.0, 0.0, 1.0);
+        let (_, _, done_late) = momentum_scroll_at(&m, 0.0, 0.0, 0.0, 5_000.0);
+        assert!(!done_early);
+        assert!(done_late);
+    }
+
+    #[test]
+    fn momentum_scroll_continues_from_anchor() {
+        // Якорь позже старта: скорость уже затухла, но смещение всё ещё вперёд.
+        let m = momentum(2.0, 100_000.0);
+        let (y, _, _) = momentum_scroll_at(&m, 500.0, 0.0, 200.0, 250.0);
+        assert!(y > 500.0, "y={y} должно продолжать от якоря 500");
     }
 }

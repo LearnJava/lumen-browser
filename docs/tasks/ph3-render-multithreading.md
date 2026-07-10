@@ -181,6 +181,30 @@ Sub-sliced like M0 (each independently shippable into `zcode`):
   existing `femtovg_backend_is_send` test guards the `Send` invariant the handoff
   relies on. Next: measure acceptance (200 ms JS busy-loop keeps momentum at
   60 fps) and consider making the render thread default.
+- **M1.3 — render-side momentum.** ✅ (branch `p1-mt-m1-3`, merged into `zcode`).
+  With M1.2 present ran off the UI thread, but momentum still *froze* on a main
+  stall because main produces the frames. M1.3 hands momentum ownership to the
+  render thread. Two new no-op-default `RenderBackend` methods
+  (`start_render_momentum { vel_y, vel_x, max_scroll_y, max_scroll_x }` /
+  `stop_render_momentum`) — the single-threaded path ignores them, so
+  `LUMEN_RENDER_THREAD` off is unchanged. The shell forwards `start` on
+  `TouchPhase::Ended` (with the scroll extents) and `stop` on new gesture / wheel
+  / navigation / natural end, while keeping its own `advance_momentum`
+  (authoritative `window.scrollY`). `ThreadedRenderBackend` retains the last
+  committed frame (`RenderState`) and, when momentum is active, waits on
+  `recv_timeout(MOMENTUM_TICK≈16 ms)` instead of blocking `recv()`: a timeout
+  means main sent nothing this vsync → it stalled → the render thread self-ticks,
+  recomputing scroll from the last anchor and re-presenting the retained frame.
+  While main is alive its frames (latest-wins) keep driving and re-anchor
+  momentum; self-tick fires **only** on starvation, so no double-render in the
+  common case and invariant 6 (park on `recv()` while idle) holds when no
+  momentum is active. Momentum physics is deterministic and cadence-free via new
+  stateless `momentum_anim::velocity_at` / `displacement_since`, so UI- and
+  render-side never drift. Unit tests: 4 on the stateless helpers (match the
+  stateful `advance` to <0.5 %), 5 on `momentum_scroll_at` (advance / clamp top &
+  bottom / done-on-decay / continue-from-anchor). Full input independence
+  (events arriving *during* a stall) remains M2. Acceptance (interactive 200 ms
+  busy-loop) to be smoke-verified via `LUMEN_FRAME_LOG` before flipping default.
 
 - **Ownership:** ~~the render thread creates and exclusively owns~~ **[M1.1 spike
   correction]** — on Windows the GL context/`Canvas` **cannot** be created on

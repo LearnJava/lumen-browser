@@ -7352,6 +7352,7 @@ impl Lumen {
                 // Активные анимации старой страницы сбрасываем.
                 self.scroll_anim = None;
                 self.momentum_anim = None;
+                self.forward_momentum_stop();
                 self.touchpad_vel = (0.0, 0.0);
                 // Reset CPU image cache for the reloaded page (10E.4 scroll-discard).
                 self.image_cache.clear();
@@ -7738,6 +7739,7 @@ impl Lumen {
         self.scroll_drag = None;
         self.scroll_anim = None;
         self.momentum_anim = None;
+        self.forward_momentum_stop();
         self.touchpad_vel = (0.0, 0.0);
         self.form_state.clear();
         self.validation_tooltip = None;
@@ -10998,6 +11000,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     MouseScrollDelta::LineDelta(cols, lines) => {
                         // Mouse wheel: дискретные тики, momentum не нужен.
                         self.momentum_anim = None;
+                        self.forward_momentum_stop();
                         self.touchpad_vel = (0.0, 0.0);
                         let dx = -cols * 40.0;
                         let dy = -lines * 40.0;
@@ -11046,6 +11049,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                         let now = self.epoch.elapsed().as_secs_f64() * 1000.0;
                                         self.momentum_anim =
                                             Some(momentum_anim::MomentumAnim::new(vy, vx, now));
+                                        // ADR-016 M1.3: рендер-поток продолжит
+                                        // инерцию сам, если UI-поток застопорится.
+                                        self.forward_momentum_start(vy, vx);
                                         self.request_redraw();
                                     }
                                 }
@@ -11054,6 +11060,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             TouchPhase::Started => {
                                 // Новый жест: сбросить momentum и velocity.
                                 self.momentum_anim = None;
+                                self.forward_momentum_stop();
                                 self.touchpad_vel = (0.0, 0.0);
                                 let now = self.epoch.elapsed().as_secs_f64() * 1000.0;
                                 self.touchpad_vel_time_ms = now;
@@ -16330,6 +16337,26 @@ impl Lumen {
         }
     }
 
+    /// ADR-016 M1.3: передать активную инерцию рендер-потоку, чтобы презентация
+    /// продолжалась на vsync, даже если UI-поток застопорится (долгий JS-тик).
+    /// No-op на однопоточном бэкенде (метод трейта по умолчанию пустой), поэтому
+    /// при выключенном `LUMEN_RENDER_THREAD` поведение не меняется.
+    fn forward_momentum_start(&mut self, vel_y: f32, vel_x: f32) {
+        let max_y = self.max_scroll();
+        let max_x = self.max_scroll_x();
+        if let Some(r) = self.renderer.as_mut() {
+            r.start_render_momentum(vel_y, vel_x, max_y, max_x);
+        }
+    }
+
+    /// ADR-016 M1.3: отменить render-side инерцию (новый жест, навигация, конец
+    /// анимации). No-op на однопоточном бэкенде.
+    fn forward_momentum_stop(&mut self) {
+        if let Some(r) = self.renderer.as_mut() {
+            r.stop_render_momentum();
+        }
+    }
+
     /// Тик momentum-анимации. Обновляет `scroll_y` / `scroll_x` напрямую
     /// (без smooth-scroll анимации). Возвращает `true` пока анимация жива.
     fn advance_momentum(&mut self, now_ms: f64) -> bool {
@@ -16351,6 +16378,9 @@ impl Lumen {
         }
         if done {
             self.momentum_anim = None;
+            // Инерция иссякла — снять владение с рендер-потока (он также
+            // самозавершается по тому же порогу, но явная отмена детерминирует).
+            self.forward_momentum_stop();
             false
         } else {
             true
@@ -17445,6 +17475,7 @@ impl Lumen {
         // Cancel in-flight scroll animations.
         self.scroll_anim = None;
         self.momentum_anim = None;
+        self.forward_momentum_stop();
         self.scroll_drag = None;
     }
 
