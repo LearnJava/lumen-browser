@@ -102,8 +102,22 @@ No threads yet; reduces the work every later stage will move/parallelize.
   1:1 — so a burst of key presses reflows only once. Pinch/anim zoom will follow
   the same `set_preview_scale` path. Unit tests: `preview_scale` identity/ratio/
   degenerate-guard in `zoom.rs`.
-- **M0.4 Kill the per-frame `prev_content` clone.** Keep `Arc<DisplayList>`
-  (or double-buffer swap) for the dirty-rect diff.
+- **M0.4 Kill the per-frame display-list clone.** ✅ (branch `p1-mt-m0-4`). The
+  original `prev_content` clone from the audit (femtovg dirty-rect diff) was
+  already removed in the M0.2 render rewrite. The remaining per-frame full-list
+  clone was in the shell: every `RedrawRequested` copied the whole display list
+  into a `PushTransform(translate(page_offset))`-wrapped buffer just to shift the
+  page below the tab bar / right of a docked sidebar — an O(n) deep clone of
+  every `DisplayCommand` on each momentum-scroll frame. Replaced by a render-side
+  `RenderBackend::set_page_offset` (+ `supports_page_offset` capability query,
+  default no-op/`false` — same pattern as M0.3's `set_preview_scale`): femtovg
+  applies the fixed offset as a `translate` right after the scroll translate
+  (CTM `scale · translate(-scroll) · translate(offset)` and sticky/zoom behavior
+  unchanged), so the shell renders the display list **by reference**. Backends
+  that don't support it (wgpu/vello/cpu window path) keep the old
+  `PushTransform`-wrapper path — no regression, no extra memory. The wrapper also
+  survives for the rare devtools-inspector-overlay frame (it must ride inside the
+  page transform). Trait-default contract test in `backend.rs`.
 - **M0.5 Content hash excludes scroll.** Hash content and offset separately so
   the identical-frame skip can distinguish "same content, new offset" (becomes
   the blit fast-path trigger in M3).

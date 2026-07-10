@@ -12115,6 +12115,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     r.set_canvas_background(canvas_bg);
                     if let Some(combined) = split_combined {
                         // Split-view mode: combined DL with baked scroll; renderer gets 0,0.
+                        r.set_page_offset(0.0, 0.0);
                         if let Err(err) = r.render(&combined, &overlay_buf, 0.0, 0.0) {
                             eprintln!("Ошибка рендера (split): {err:?}");
                         }
@@ -12125,20 +12126,38 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             .as_deref()
                             .or(page_buf.as_deref())
                             .unwrap_or(&self.display_list);
-                        let mut shifted: lumen_paint::DisplayList =
-                            Vec::with_capacity(base.len() + 2);
-                        shifted.push(lumen_paint::DisplayCommand::PushTransform {
-                            matrix: Mat4::translation_2d(
-                                page_x_offset,
-                                tabs::strip::TAB_BAR_HEIGHT,
-                            ),
-                        });
-                        shifted.extend_from_slice(base);
-                        // Inspector box-model overlay rides inside the page transform.
-                        shifted.extend_from_slice(&inspector_box_dl);
-                        shifted.push(lumen_paint::DisplayCommand::PopTransform);
-                        if let Err(err) = r.render(&shifted, &overlay_buf, scroll_y, scroll_x) {
-                            eprintln!("Ошибка рендера: {err:?}");
+                        // ADR-016 M0.4 fast path: когда единственная обёртка вокруг
+                        // страницы — фиксированный page-offset (нет inspector-оверлея,
+                        // который обязан ехать ВНУТРИ page-трансформа), а бэкенд умеет
+                        // накладывать смещение сам, рисуем display-list ПО ССЫЛКЕ.
+                        // Раньше каждый кадр (в т.ч. на каждом кадре инерционного
+                        // скролла) сюда копировался весь список ради одного
+                        // `PushTransform` — O(n) глубокий клон команд.
+                        if inspector_box_dl.is_empty() && r.supports_page_offset() {
+                            r.set_page_offset(page_x_offset, tabs::strip::TAB_BAR_HEIGHT);
+                            if let Err(err) = r.render(base, &overlay_buf, scroll_y, scroll_x) {
+                                eprintln!("Ошибка рендера: {err:?}");
+                            }
+                        } else {
+                            // Fallback: активен inspector-оверлей или бэкенд не
+                            // поддерживает page-offset — оборачиваем контент в
+                            // `PushTransform`, как раньше.
+                            r.set_page_offset(0.0, 0.0);
+                            let mut shifted: lumen_paint::DisplayList =
+                                Vec::with_capacity(base.len() + 2);
+                            shifted.push(lumen_paint::DisplayCommand::PushTransform {
+                                matrix: Mat4::translation_2d(
+                                    page_x_offset,
+                                    tabs::strip::TAB_BAR_HEIGHT,
+                                ),
+                            });
+                            shifted.extend_from_slice(base);
+                            // Inspector box-model overlay rides inside the page transform.
+                            shifted.extend_from_slice(&inspector_box_dl);
+                            shifted.push(lumen_paint::DisplayCommand::PopTransform);
+                            if let Err(err) = r.render(&shifted, &overlay_buf, scroll_y, scroll_x) {
+                                eprintln!("Ошибка рендера: {err:?}");
+                            }
                         }
                     }
                 }
