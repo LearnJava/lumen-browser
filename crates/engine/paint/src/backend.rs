@@ -270,6 +270,35 @@ pub trait RenderBackend: Send {
     fn screenshot_rgba(&mut self) -> Option<Vec<u8>> {
         None
     }
+
+    /// Передаёт владение momentum-скроллом рендер-потоку (ADR-016 M1.3).
+    ///
+    /// UI-поток вызывает это при `TouchPhase::Ended` с ненулевой скоростью
+    /// (`vel_y`/`vel_x` — CSS px/ms, `max_scroll_y`/`max_scroll_x` — экстенты
+    /// для клампа). Пока UI-поток жив и шлёт кадры, они (latest-wins) ведут
+    /// презентацию; но если UI-поток застопорился (долгий JS-тик, relayout),
+    /// рендер-поток **сам** продолжает momentum на vsync из последнего
+    /// закоммиченного кадра — презентация не замерзает.
+    ///
+    /// Дефолт — no-op: однопоточные бэкенды momentum-ом не владеют (его тикает
+    /// сам shell в `RedrawRequested`), поэтому при выключенном рендер-потоке
+    /// поведение не меняется.
+    fn start_render_momentum(
+        &mut self,
+        _vel_y: f32,
+        _vel_x: f32,
+        _max_scroll_y: f32,
+        _max_scroll_x: f32,
+    ) {
+    }
+
+    /// Отменяет momentum-скролл, которым владеет рендер-поток (ADR-016 M1.3).
+    ///
+    /// Вызывается shell-ом при новом жесте, навигации или иной причине сбросить
+    /// инерцию немедленно. Дефолт — no-op (см. [`start_render_momentum`]).
+    ///
+    /// [`start_render_momentum`]: RenderBackend::start_render_momentum
+    fn stop_render_momentum(&mut self) {}
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
