@@ -359,9 +359,20 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
     panel toggles, resize, theme, `content-visibility` expansion, rAF DOM-dirty)
     need the async-vs-sync contract worked out per site (which may read layout
     synchronously afterwards) and `content-visibility` expansion turned into a
-    visible-range message (never render-thread → layout). Migrating
-    `LayoutSource.stylesheet` to `Arc<Stylesheet>` removes the per-job stylesheet
-    clone. This is where the bulk of the ~40-site conversion lands.
+    visible-range message (never render-thread → layout). This is where the bulk
+    of the ~40-site conversion lands.
+    - **M2.2b-1 — `LayoutSource.stylesheet` → `Arc<Stylesheet>`.** ✅ (branch
+      `p1-mt-m2-2b-arc-stylesheet`, merged into `zcode`, 2026-07-11). Prerequisite
+      slice: `LayoutSource.stylesheet` is now an immutable `Arc` snapshot, so
+      `submit_relayout_job` clones only the handle (`Arc::clone(&src.stylesheet)`)
+      instead of deep-cloning the whole `Stylesheet` on every off-thread submit —
+      the per-job clone the audit flagged is gone. All read sites (starting-style
+      check, `resolve_starting_style`, `animation_scheduler.tick`,
+      `matched_rules_for_node`, `compute_layout`) are unchanged (deref coercion /
+      auto-deref of `Arc`). The cold bfcache-freeze path still deep-clones into
+      the owned `frozen_styles` map (`(*ls.stylesheet).clone()`), so freeze/thaw
+      behavior is byte-identical. No new deps, no `unsafe`, no behavior change —
+      pure allocation win on the M2.2a off-thread path.
 - **M2.3 — synchronous readback + acceptance.** `--screenshot`, `run.py --ipc`,
   CDP `Page.captureScreenshot` become `Request::Readback { reply }` messages
   (audit all `screenshot_*` sites first — most are already CPU per the M1.1
