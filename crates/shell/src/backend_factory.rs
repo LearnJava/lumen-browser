@@ -50,23 +50,59 @@ pub fn create_backend(
     font_bytes: Vec<u8>,
     target_color_space: ColorSpace,
 ) -> Result<Box<dyn RenderBackend>, Box<dyn std::error::Error>> {
-    // ADR-016 M1: опциональный рендер-поток за env-флагом (дефолт — выключен).
+    // ADR-016 M1.2: опциональный рендер-поток за env-флагом (дефолт — выключен).
+    // На femtovg бэкенд создаётся на ГЛАВНОМ потоке (winit отдаёт window handle
+    // только там — M1.1 spike), контекст открепляется (`make_not_current`) и
+    // переносится на рендер-поток, где привязывается обратно (`make_current`).
     if render_thread_enabled() {
-        // Конструктор бэкенда выполняется НА рендер-потоке (femtovg Canvas +
-        // GL-контекст `!Send` создаются там, где будут использоваться).
-        let win = Arc::clone(&window);
-        let font = font_bytes.clone();
-        let ctor = move || {
-            create_backend_inprocess(win, font, target_color_space).map_err(|e| e.to_string())
-        };
-        match ThreadedRenderBackend::new(ctor) {
-            Ok(b) => return Ok(Box::new(b)),
-            Err(e) => eprintln!(
-                "LUMEN_RENDER_THREAD=1: рендер-поток не стартовал ({e}), откат на in-process"
-            ),
+        #[cfg(feature = "backend-femtovg")]
+        {
+            match create_threaded_femtovg(Arc::clone(&window), font_bytes.clone()) {
+                Ok(b) => return Ok(b),
+                Err(e) => eprintln!(
+                    "LUMEN_RENDER_THREAD=1: рендер-поток не стартовал ({e}), откат на in-process"
+                ),
+            }
         }
+        #[cfg(not(feature = "backend-femtovg"))]
+        eprintln!(
+            "LUMEN_RENDER_THREAD=1: собрано без backend-femtovg, рендер-поток недоступен, \
+             откат на in-process"
+        );
     }
     create_backend_inprocess(window, font_bytes, target_color_space)
+}
+
+/// ADR-016 M1.2: создаёт `FemtovgBackend` на текущем (главном) потоке, открепляет
+/// его GL-контекст и передаёт рендер-потоку через [`ThreadedRenderBackend`].
+///
+/// Порядок: `FemtovgBackend::new` (handle окна валиден только на main) →
+/// `detach_gl_context` (`make_not_current` на main) → перенос конкретного
+/// бэкенда в замыкание (`FemtovgBackend: Send`) → на рендер-потоке
+/// `attach_gl_context` (`make_current`) → цикл present вне UI-потока.
+///
+/// # Errors
+/// Возвращает `Err`, если `FemtovgBackend::new` не смог создать контекст,
+/// `detach_gl_context` не удался, или рендер-поток не прошёл handshake (тогда
+/// вызывающая сторона откатывается на однопоточный in-process путь).
+#[cfg(feature = "backend-femtovg")]
+fn create_threaded_femtovg(
+    window: Arc<Window>,
+    font_bytes: Vec<u8>,
+) -> Result<Box<dyn RenderBackend>, String> {
+    // Создаём бэкенд на главном потоке (window handle доступен только здесь).
+    let mut backend = FemtovgBackend::new(window, font_bytes).map_err(|e| e.to_string())?;
+    // Открепляем контекст на main, чтобы его можно было привязать на рендер-потоке.
+    backend.detach_gl_context()?;
+    // Замыкание захватывает КОНКРЕТНЫЙ `FemtovgBackend` (Send через ручной
+    // `unsafe impl`), поэтому оно `Send` без Send-супертрейта на `RenderBackend`.
+    let ctor = move || {
+        let mut backend = backend;
+        backend.attach_gl_context()?;
+        Ok(Box::new(backend) as Box<dyn RenderBackend>)
+    };
+    let proxy = ThreadedRenderBackend::new(ctor)?;
+    Ok(Box::new(proxy))
 }
 
 /// Читает `LUMEN_RENDER_THREAD` — `1`/`true`/`on` включают рендер-поток.

@@ -33,7 +33,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use glutin::config::ConfigTemplateBuilder;
-use glutin::context::{ContextAttributesBuilder, NotCurrentGlContext, PossiblyCurrentContext};
+use glutin::context::{
+    ContextAttributesBuilder, NotCurrentContext, NotCurrentGlContext, PossiblyCurrentContext,
+};
 use glutin::display::{Display, DisplayApiPreference, GlDisplay};
 use glutin::prelude::*;
 use glutin::surface::{GlSurface, Surface, SurfaceAttributesBuilder, WindowSurface};
@@ -368,13 +370,30 @@ fn blend_to_composite(mode: BlendMode) -> femtovg::CompositeOperation {
 
 /// femtovg/OpenGL рендер-бэкенд (Phase 2, ADR-010).
 ///
+/// Состояние glutin GL-контекста внутри [`FemtovgBackend`].
+///
+/// Обе операции перехода glutin (`make_current` / `make_not_current`) забирают
+/// контекст по значению, поэтому он хранится в перечислении, а не как готовый
+/// `PossiblyCurrentContext`. `Current` — контекст привязан к текущему потоку,
+/// можно рисовать и `swap_buffers`; `NotCurrent` — контекст откреплён и его
+/// безопасно передавать другому потоку (ADR-016 M1.2: create-on-main →
+/// `make_not_current` → move → `make_current` на рендер-потоке).
+enum GlContextState {
+    /// Контекст current на потоке-владельце.
+    Current(PossiblyCurrentContext),
+    /// Контекст откреплён (`make_not_current`) — переносим между потоками.
+    NotCurrent(NotCurrentContext),
+}
+
 /// Реализует [`RenderBackend`] через femtovg 2D Canvas API поверх OpenGL.
 /// Создаётся из winit-окна через [`FemtovgBackend::new`].
 pub struct FemtovgBackend {
     /// femtovg Canvas — основной 2D-API.
     canvas: femtovg::Canvas<femtovg::renderer::OpenGl>,
-    /// Текущий OpenGL контекст. Должен быть current перед любым вызовом canvas.
-    gl_context: PossiblyCurrentContext,
+    /// OpenGL контекст в одном из двух состояний glutin (см. [`GlContextState`]).
+    /// Должен быть `Current` на этом потоке перед любым вызовом canvas/swap.
+    /// `None` — только транзиентно во время перехода current↔not-current.
+    gl_context: Option<GlContextState>,
     /// Surface для swap buffers.
     gl_surface: Surface<WindowSurface>,
     /// Ширина viewport в физических пикселях.
@@ -1229,7 +1248,7 @@ impl FemtovgBackend {
 
         Ok(Self {
             canvas,
-            gl_context,
+            gl_context: Some(GlContextState::Current(gl_context)),
             gl_surface,
             width: size.width,
             height: size.height,
@@ -1265,6 +1284,80 @@ impl FemtovgBackend {
             layer_pool: Vec::new(),
             layer_pool_size: (0, 0),
         })
+    }
+
+    // ─── GL context handoff (ADR-016 M1.2) ────────────────────────────────────
+
+    /// Ссылка на current-контекст для `swap_buffers`/`resize`.
+    ///
+    /// Возвращает [`RenderError`], если контекст не в состоянии `Current` — это
+    /// значит, что бэкенд используют на потоке, где [`Self::attach_gl_context`]
+    /// ещё не вызван (передача контекста рендер-потоку не завершена). В обычном
+    /// однопоточном пути контекст всегда `Current` со времени `new`.
+    fn current_ctx(&self) -> Result<&PossiblyCurrentContext, RenderError> {
+        match self.gl_context.as_ref() {
+            Some(GlContextState::Current(ctx)) => Ok(ctx),
+            _ => Err(RenderError::Other(
+                "femtovg: GL-контекст не current на этом потоке (attach_gl_context не вызван)"
+                    .to_owned(),
+            )),
+        }
+    }
+
+    /// Открепляет GL-контекст от текущего потока (`make_not_current`).
+    ///
+    /// ADR-016 M1.2: вызывается **на главном потоке** сразу после `new` — окно и
+    /// его handle доступны только там, поэтому контекст создаётся на main, а
+    /// затем открепляется, чтобы его можно было безопасно перенести на
+    /// рендер-поток. Идемпотентна: повторный вызов на уже откреплённом контексте
+    /// — no-op.
+    ///
+    /// # Errors
+    /// Возвращает строку с описанием, если glutin `make_not_current` не удался
+    /// или контекст отсутствует (транзиентное `None`).
+    pub fn detach_gl_context(&mut self) -> Result<(), String> {
+        match self.gl_context.take() {
+            Some(GlContextState::Current(ctx)) => {
+                let not_current = ctx
+                    .make_not_current()
+                    .map_err(|e| format!("femtovg make_not_current: {e}"))?;
+                self.gl_context = Some(GlContextState::NotCurrent(not_current));
+                Ok(())
+            }
+            Some(already @ GlContextState::NotCurrent(_)) => {
+                self.gl_context = Some(already);
+                Ok(())
+            }
+            None => Err("femtovg: GL-контекст отсутствует (detach во время перехода)".to_owned()),
+        }
+    }
+
+    /// Привязывает GL-контекст к текущему потоку (`make_current`).
+    ///
+    /// ADR-016 M1.2: вызывается **один раз на рендер-потоке** после переноса
+    /// откреплённого бэкенда — после этого все `render`/`swap_buffers` идут с
+    /// этого потока. Идемпотентна: повторный вызов на уже current-контексте —
+    /// no-op.
+    ///
+    /// # Errors
+    /// Возвращает строку с описанием, если glutin `make_current` не удался
+    /// (например, контекст всё ещё current на другом потоке) или контекст
+    /// отсутствует.
+    pub fn attach_gl_context(&mut self) -> Result<(), String> {
+        match self.gl_context.take() {
+            Some(GlContextState::NotCurrent(ctx)) => {
+                let current = ctx
+                    .make_current(&self.gl_surface)
+                    .map_err(|e| format!("femtovg make_current: {e}"))?;
+                self.gl_context = Some(GlContextState::Current(current));
+                Ok(())
+            }
+            Some(already @ GlContextState::Current(_)) => {
+                self.gl_context = Some(already);
+                Ok(())
+            }
+            None => Err("femtovg: GL-контекст отсутствует (attach во время перехода)".to_owned()),
+        }
     }
 
     // ─── Render target helpers ────────────────────────────────────────────────
@@ -3619,10 +3712,13 @@ impl RenderBackend for FemtovgBackend {
             self.canvas.delete_image(id);
         }
 
-        let swap_result = self
-            .gl_surface
-            .swap_buffers(&self.gl_context)
-            .map_err(|e| RenderError::Other(e.to_string()));
+        let swap_result = match self.current_ctx() {
+            Ok(ctx) => self
+                .gl_surface
+                .swap_buffers(ctx)
+                .map_err(|e| RenderError::Other(e.to_string())),
+            Err(e) => Err(e),
+        };
 
         if let (Some(t0), Some(tc), Some(tbf), Some(taf)) =
             (frame_t0, t_content, t_before_flush, t_after_flush)
@@ -3671,7 +3767,10 @@ impl RenderBackend for FemtovgBackend {
         self.width = width;
         self.height = height;
         if let (Some(w), Some(h)) = (NonZeroU32::new(width), NonZeroU32::new(height)) {
-            self.gl_surface.resize(&self.gl_context, w, h);
+            match self.current_ctx() {
+                Ok(ctx) => self.gl_surface.resize(ctx, w, h),
+                Err(e) => eprintln!("femtovg resize: {e:?}"),
+            }
         }
     }
 

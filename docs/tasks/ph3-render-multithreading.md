@@ -162,12 +162,25 @@ Sub-sliced like M0 (each independently shippable into `zcode`):
   the proxy then falls back to in-process with no regression. So the Ownership
   bullet below is corrected: the context must be **created on main and handed
   off**, not created on the thread.
-- **M1.2 — GL-context handoff (next, `lumen-paint`).** Create the femtovg
-  backend on main (handle valid), `make_not_current` there, move it into the
-  render thread, `make_current` on the thread once, then render/present there.
-  This is the femtovg-side change `FemtovgBackend`'s manual `unsafe impl Send`
-  was written for. Only after this does `LUMEN_RENDER_THREAD=1` actually present
-  off-main; then measure acceptance and consider making it default.
+- **M1.2 — GL-context handoff.** ✅ (branch `p1-mt-m1-2`, merged into `zcode`).
+  `FemtovgBackend` now stores its glutin context as a two-state enum
+  (`GlContextState::{Current(PossiblyCurrentContext), NotCurrent(NotCurrentContext)}`
+  in an `Option`, since both glutin transitions consume by value) plus inherent
+  `detach_gl_context` (`make_not_current`) / `attach_gl_context`
+  (`make_current`, idempotent). `backend_factory::create_threaded_femtovg`
+  builds the backend **on main** (window handle valid there — M1.1 spike),
+  detaches the context, then moves the concrete `FemtovgBackend` (`Send` via its
+  manual `unsafe impl`) into the `ThreadedRenderBackend` ctor closure, which
+  `attach_gl_context`es on the render thread and drives present there — no
+  `RenderBackend: Send` supertrait needed. `swap_buffers`/`resize` go through a
+  `current_ctx()` accessor that errors if the context is detached (used off the
+  owning thread before attach). Any failure (create/detach/handshake) falls back
+  to the single-threaded in-process path with no regression. **Verified
+  (Windows, `LUMEN_RENDER_THREAD=1`):** `[frame] paint … swap` succeeds with zero
+  fallback/`make_current` errors — present now runs off the UI thread. The
+  existing `femtovg_backend_is_send` test guards the `Send` invariant the handoff
+  relies on. Next: measure acceptance (200 ms JS busy-loop keeps momentum at
+  60 fps) and consider making the render thread default.
 
 - **Ownership:** ~~the render thread creates and exclusively owns~~ **[M1.1 spike
   correction]** — on Windows the GL context/`Canvas` **cannot** be created on
