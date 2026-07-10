@@ -6895,9 +6895,10 @@ impl Lumen {
     /// unless `LUMEN_ENGINE_THREAD=1`).
     ///
     /// "Async-safe" means the caller only changed *chrome* geometry — a docked
-    /// panel's side/width, the workspace bar, vertical/tree tabs, or sidebar
-    /// visibility — which shifts the content viewport but is **not** followed by
-    /// a synchronous read of page layout geometry. The reflowed content may
+    /// panel's side/width, the workspace bar, vertical/tree tabs, sidebar
+    /// visibility, or the AI / accessibility side panels (M2.2b-3) — which shifts
+    /// the content viewport but is **not** followed by a synchronous read of page
+    /// layout geometry. The reflowed content may
     /// therefore land a few frames later via [`Self::poll_engine_commit`], the
     /// same contract as the debounced zoom (M2.2a). The chrome itself is drawn
     /// from its own state, so it updates on the immediately-requested redraw; only
@@ -13753,8 +13754,11 @@ impl Lumen {
             KeyCommand::ToggleAiPanel => {
                 self.ai_panel.toggle();
                 // AI panel occupies right PANEL_WIDTH — relayout so main content
-                // width adjusts accordingly.
-                self.relayout();
+                // width adjusts accordingly. ADR-016 M2.2b-3: async-safe chrome
+                // toggle (only the content viewport width shifts, no synchronous
+                // geometry read follows), so route off-thread when the engine
+                // thread is enabled; the panel itself draws on the redraw below.
+                self.relayout_chrome();
                 self.request_redraw();
             }
             KeyCommand::ToggleBookmarks => {
@@ -13777,7 +13781,11 @@ impl Lumen {
                     self.a11y_panel.visible = false;
                     self.deliver_a11y_media_changes();
                     // Re-style with the (possibly toggled) forced-colors pref.
-                    self.relayout();
+                    // ADR-016 M2.2b-3: async-safe — closing the a11y panel widens
+                    // the content viewport and re-styles under the new
+                    // forced-colors preference, but nothing reads page geometry
+                    // synchronously afterwards, so route off-thread when enabled.
+                    self.relayout_chrome();
                 } else {
                     self.a11y_panel.load_draft(self.a11y_store.snapshot());
                     self.a11y_panel.visible = true;
@@ -15225,7 +15233,10 @@ impl Lumen {
         match code {
             KeyCode::Escape if !key_event.repeat => {
                 self.ai_panel.close();
-                self.relayout();
+                // ADR-016 M2.2b-3: closing the AI panel is an async-safe chrome
+                // toggle (content viewport widens, no synchronous geometry read),
+                // so route off-thread when the engine thread is enabled.
+                self.relayout_chrome();
                 self.request_redraw();
                 true
             }
