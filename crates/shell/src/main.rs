@@ -218,6 +218,8 @@ struct PendingWebFont {
 /// `MultiFontMeasurer` при каждом relayout — иначе resize/scroll-reflow
 /// теряет web-метрики и откатывается к Inter.
 // weight/style хранятся для будущего CSS font-matching (по weight/style дескрипторам @font-face).
+// Clone: ADR-016 M2.2 — off-thread relayout захватывает владеющий снимок web-шрифтов.
+#[derive(Clone)]
 #[allow(dead_code)]
 struct LoadedWebFont {
     /// CSS `font-family` дескриптор.
@@ -555,18 +557,20 @@ fn automation_ax_node(ax: &lumen_a11y::AXNode) -> lumen_driver::A11yNode {
 /// загрузки `get()` возвращает `None` и спелл-чек молчит.
 static SPELL_DICTS: std::sync::OnceLock<spellcheck::MultiDictionary> = std::sync::OnceLock::new();
 
-/// ADR-016 M2.1 (каркас): поднимает движковый поток, только если задан
+/// ADR-016 M2.2: поднимает движковый поток, только если задан
 /// `LUMEN_ENGINE_THREAD=1` (по умолчанию `None` → поведение shell неизменно). В
-/// M2.1 через поток ещё ничего не маршрутизируется — он лишь паркуется на
-/// `recv()`; маршрутизация relayout — это M2.2. При сбое старта потока
-/// логируем и откатываемся на `None` (как обычно, без движкового потока).
-fn spawn_engine_thread_if_enabled() -> Option<engine_thread::EngineThread> {
+/// M2.2 через поток маршрутизируется off-thread layout для async-триггеров
+/// (пока — debounce-зум): [`Lumen::submit_relayout_job`] шлёт задание, поток
+/// считает [`EngineCommit`] и кладёт в latest-wins слот, откуда его забирает
+/// [`Lumen::poll_engine_commit`]. При сбое старта потока логируем и откатываемся
+/// на `None` (как обычно, без движкового потока — синхронный `relayout()`).
+fn spawn_engine_thread_if_enabled() -> Option<engine_thread::EngineThread<EngineCommit>> {
     if std::env::var("LUMEN_ENGINE_THREAD").as_deref() != Ok("1") {
         return None;
     }
-    match engine_thread::EngineThread::spawn() {
+    match engine_thread::EngineThread::<EngineCommit>::spawn() {
         Ok(engine) => {
-            eprintln!("[engine-thread] запущен (LUMEN_ENGINE_THREAD=1, каркас M2.1)");
+            eprintln!("[engine-thread] запущен (LUMEN_ENGINE_THREAD=1, M2.2 off-thread layout)");
             Some(engine)
         }
         Err(e) => {
@@ -785,6 +789,8 @@ fn run_window_mode(
         pending_pageshow_persisted: false,
         load_generation: 0,
         engine_thread: spawn_engine_thread_if_enabled(),
+        engine_job_generation: 0,
+        engine_applied_generation: 0,
         ime_composing: None,
         bfcache: BfCache::new(16),
         frozen_styles: HashMap::new(),
@@ -4795,6 +4801,27 @@ fn content_layout_viewport(surface: Size, has_window: bool, workspace_visible: b
     (surface.width, (surface.height - chrome_h).max(0.0))
 }
 
+/// ADR-016 M2.2: результат off-thread relayout, который движковый поток
+/// коммитит UI-стороне через [`engine_thread::EngineThread`]. Всё содержимое —
+/// владеющие значения (`Send`); после коммита UI и движок не делят мутабельное
+/// состояние (инвариант 1). Применяется на UI-потоке через
+/// [`Lumen::apply_relayout_result`] — та же логика, что у синхронного
+/// `relayout()`, только layout уже посчитан вне UI-потока.
+struct EngineCommit {
+    /// Готовый display-list страницы.
+    content: DisplayList,
+    /// Layout-дерево, из которого построен `content` — нужно UI-стороне для
+    /// transitions / JS-observers / scroll-контейнеров.
+    layout_box: lumen_layout::LayoutBox,
+    /// CSS layout-viewport, под который построен коммит.
+    viewport: Size,
+    /// Номер relayout-задания (generation-guard в [`Lumen::poll_engine_commit`]).
+    generation: u64,
+    /// Время off-thread вычисления (style + layout + DL build) в мс — для
+    /// `ENGINE_SUMMARY` / `[engine] relayout … (off-thread)`.
+    compute_ms: f32,
+}
+
 /// Повторный layout+paint по сохранённому `LayoutSource` с новым viewport.
 /// Возвращает `(DisplayList, LayoutBox)` — LayoutBox нужен для animation scheduler.
 /// `dark_mode` is forwarded to `layout_measured_hyp` so `@media (prefers-color-scheme: dark)`
@@ -4806,11 +4833,31 @@ fn relayout_page(
     dark_mode: bool,
     web_fonts: &[LoadedWebFont],
 ) -> (DisplayList, lumen_layout::LayoutBox) {
+    compute_layout(&src.document, &src.stylesheet, viewport, hp, dark_mode, web_fonts)
+}
+
+/// Ядро style+layout+display-list по immutable-снапшоту документа и стилей.
+///
+/// Вынесено из [`relayout_page`], чтобы одну и ту же работу можно было вызвать и
+/// на UI-потоке (синхронный `relayout()`), и на движковом потоке (ADR-016 M2.2,
+/// [`Lumen::submit_relayout_job`]) — второму `LayoutSource` недоступен, у него на
+/// руках только `Arc`-снимки `document`/`stylesheet`. Интерактивное состояние
+/// (`:hover`/`:focus`/`forced-colors`/`content-visibility` scroll) — thread-local
+/// (`lumen_layout::set_*`), поэтому вызывающая сторона обязана выставить его на
+/// **том же** потоке до вызова и сбросить после.
+fn compute_layout(
+    document: &Mutex<Document>,
+    stylesheet: &lumen_css_parser::Stylesheet,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    web_fonts: &[LoadedWebFont],
+) -> (DisplayList, lumen_layout::LayoutBox) {
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
     if web_fonts.is_empty() {
         let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
-        let doc = src.document.lock().unwrap();
-        let layout = lumen_layout::layout_measured_hyp(&doc, &src.stylesheet, viewport, &measurer, hp, dark_mode);
+        let doc = document.lock().unwrap();
+        let layout = lumen_layout::layout_measured_hyp(&doc, stylesheet, viewport, &measurer, hp, dark_mode);
         drop(doc);
         let dl = paint_ordered(&layout);
         return (dl, layout);
@@ -4825,8 +4872,8 @@ fn relayout_page(
             wf.unicode_range.clone(),
         );
     }
-    let doc = src.document.lock().unwrap();
-    let layout = lumen_layout::layout_measured_hyp(&doc, &src.stylesheet, viewport, &measurer, hp, dark_mode);
+    let doc = document.lock().unwrap();
+    let layout = lumen_layout::layout_measured_hyp(&doc, stylesheet, viewport, &measurer, hp, dark_mode);
     drop(doc);
     let dl = paint_ordered(&layout);
     (dl, layout)
@@ -6007,14 +6054,27 @@ struct Lumen {
     /// `user_event` drops events whose generation is stale (a superseded
     /// navigation), so a slow earlier load can't paint over a newer page.
     load_generation: u64,
-    /// ADR-016 M2.1 (каркас): долгоживущий движковый поток. `Some` только при
-    /// `LUMEN_ENGINE_THREAD=1`; иначе `None` и поведение shell неизменно. В M2.1
-    /// поток лишь паркуется на `recv()` — ни один relayout через него ещё не
-    /// маршрутизируется (это M2.2). Дроп при завершении шлёт `Shutdown` и джойнит.
-    // M2.1 каркас: по имени поле ещё не читается (его использует M2.2); Drop при
-    // завершении Lumen срабатывает независимо. Снять allow при выполнении M2.2.
-    #[allow(dead_code)]
-    engine_thread: Option<engine_thread::EngineThread>,
+    /// ADR-016 M2.2: долгоживущий движковый поток. `Some` только при
+    /// `LUMEN_ENGINE_THREAD=1`; иначе `None` и поведение shell неизменно (весь
+    /// relayout синхронный). Через него маршрутизируется off-thread layout
+    /// async-триггеров (пока — debounce-зум): `submit_relayout_job` шлёт задание,
+    /// `poll_engine_commit` забирает готовый [`EngineCommit`]. Дроп при завершении
+    /// шлёт `Shutdown` и джойнит.
+    engine_thread: Option<engine_thread::EngineThread<EngineCommit>>,
+    /// ADR-016 M2.2: generation последнего **применённого** relayout-результата.
+    /// Off-thread задание считается «в полёте» (нужен poll-будильник), пока
+    /// `engine_job_generation != engine_applied_generation`. Синхронный
+    /// `relayout()` выставляет их равными (off-thread задание не ждётся);
+    /// `poll_engine_commit` продвигает это поле применённым `commit.generation`.
+    engine_applied_generation: u64,
+    /// ADR-016 M2.2: монотонный номер async-relayout задания. Растёт при каждой
+    /// постановке off-thread задания (`submit_relayout_job`) **и** при каждом
+    /// синхронном `relayout()` — так результат уже поставленного, но ещё не
+    /// применённого off-thread задания опознаётся как устаревший
+    /// (`commit.generation != engine_job_generation`) и роняется в
+    /// `poll_engine_commit`. Latest-wins/generation-guard на стороне потока —
+    /// [`engine_thread`].
+    engine_job_generation: u64,
     /// Текущий IME preedit-текст. `Some` — composition-сессия активна,
     /// `None` — нет активного IME ввода.
     ime_composing: Option<String>,
@@ -6782,32 +6842,20 @@ impl Lumen {
     /// Повторный layout+paint при изменении размера viewport.
     /// Использует сохранённый `LayoutSource`; парсинг не повторяется.
     fn relayout(&mut self) {
-        let Some(src) = self.layout_source.as_ref() else { return };
-        let Some(r) = self.renderer.as_ref() else { return };
-        let vp_size = r.viewport_size();
-        // RP-2: lay out against the live page content region, not the full
-        // window. In an interactive window the page sits below the tab strip
-        // (+ workspace switcher), so the layout viewport must exclude that
-        // chrome to match scroll clamping (`viewport_height_css`) and the
-        // PushTransform that shifts content down. Headless surfaces have no
-        // chrome and use the full surface. Tracks live `inner_size` because
-        // `viewport_size()` reflects the last `r.resize()` on `Resized`.
-        let (vp_w, vp_h) =
-            content_layout_viewport(vp_size, self.window.is_some(), self.workspace_panel.visible);
-        // Guard against degenerate viewport (renderer not yet configured or minimized).
-        if vp_w <= 0.0 || vp_h <= 0.0 {
-            return;
-        }
-        // ADR-016 M2.0: time the UI-thread relayout (style + layout + display-list
-        // build + JS-observer delivery) — the work M2 moves to an engine thread.
-        // Only under `LUMEN_FRAME_LOG`, so a normal run pays nothing (Instant is
-        // `None` and no histogram push happens). Folded in at the end of the method.
+        let Some(viewport) = self.relayout_viewport() else { return };
+        // ADR-016 M2.2: a synchronous relayout is authoritative — advance the
+        // applied generation to `job_generation` so any off-thread commit still
+        // in flight (older generation) is dropped by `poll_engine_commit`'s
+        // guard, and no poll-wakeup is armed for a job that no longer matters.
+        self.engine_job_generation = self.engine_job_generation.wrapping_add(1);
+        self.engine_applied_generation = self.engine_job_generation;
+        // ADR-016 M2.0: time the whole UI-thread relayout (style + layout +
+        // display-list build + JS-observer delivery) — the work M2 moves to an
+        // engine thread. Only under `LUMEN_FRAME_LOG`, so a normal run pays
+        // nothing. Recorded after `apply_relayout_result` so the state it reports
+        // (display list / styled nodes) is the freshly-applied one.
         let engine_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
-        // Apply <meta viewport initial-scale> + user zoom to derive the CSS layout viewport.
-        let meta_scale = meta_initial_scale(src);
-        let (css_w, css_h) =
-            zoom::effective_viewport(vp_w, vp_h, meta_scale, self.zoom_factor);
-        let viewport = Size::new(css_w, css_h);
+        let Some(src) = self.layout_source.as_ref() else { return };
         // Set interactive hover/focus/active state for this layout pass so that
         // :hover / :focus / :active / :focus-within CSS rules evaluate correctly.
         lumen_layout::set_interactive_state(self.hovered_nid, self.focused_node, self.active_nid);
@@ -6825,6 +6873,58 @@ impl Lumen {
         lumen_layout::clear_interactive_state();
         lumen_layout::set_cv_scroll(0.0, 0.0);
         lumen_layout::set_cv_relevant(std::collections::HashSet::new());
+        self.apply_relayout_result(new_dl, lb, viewport);
+        if let Some(t0) = engine_t0 {
+            let engine_ms = t0.elapsed().as_secs_f32() * 1000.0;
+            self.engine_stats.record(engine_ms);
+            eprintln!(
+                "[engine] relayout {engine_ms:.2}ms dl={} styled={}",
+                self.display_list.len(),
+                self.prev_styles.len(),
+            );
+        }
+    }
+
+    /// Derive the CSS layout viewport for a relayout (shared by the synchronous
+    /// [`Self::relayout`] and the off-thread [`Self::submit_relayout_job`]).
+    ///
+    /// Returns `None` — skip relayout — when there is no `LayoutSource`/renderer
+    /// yet or the content region is degenerate (minimized window). Applies the
+    /// live chrome inset (RP-2), `<meta viewport initial-scale>` and the user
+    /// zoom, matching scroll clamping and the content `PushTransform`.
+    fn relayout_viewport(&self) -> Option<Size> {
+        let src = self.layout_source.as_ref()?;
+        let r = self.renderer.as_ref()?;
+        let vp_size = r.viewport_size();
+        // RP-2: lay out against the live page content region, not the full
+        // window. In an interactive window the page sits below the tab strip
+        // (+ workspace switcher), so the layout viewport must exclude that
+        // chrome to match scroll clamping (`viewport_height_css`) and the
+        // PushTransform that shifts content down. Headless surfaces have no
+        // chrome and use the full surface. Tracks live `inner_size` because
+        // `viewport_size()` reflects the last `r.resize()` on `Resized`.
+        let (vp_w, vp_h) =
+            content_layout_viewport(vp_size, self.window.is_some(), self.workspace_panel.visible);
+        // Guard against degenerate viewport (renderer not yet configured or minimized).
+        if vp_w <= 0.0 || vp_h <= 0.0 {
+            return None;
+        }
+        // Apply <meta viewport initial-scale> + user zoom to derive the CSS layout viewport.
+        let meta_scale = meta_initial_scale(src);
+        let (css_w, css_h) = zoom::effective_viewport(vp_w, vp_h, meta_scale, self.zoom_factor);
+        Some(Size::new(css_w, css_h))
+    }
+
+    /// ADR-016 M2.2: post-layout UI-thread work shared by the synchronous
+    /// [`Self::relayout`] and the off-thread commit path
+    /// ([`Self::poll_engine_commit`]). Takes an already-computed
+    /// `(DisplayList, LayoutBox)` (built either inline or on the engine thread)
+    /// and applies everything that touches `&mut self`: caches, transitions /
+    /// `@starting-style` sync, `will-change` layer promotion, zoom-preview reset,
+    /// scroll clamping and JS-observer delivery. Kept identical for both callers
+    /// so an off-thread relayout is byte-for-byte equivalent to a synchronous one.
+    fn apply_relayout_result(&mut self, new_dl: DisplayList, lb: lumen_layout::LayoutBox, viewport: Size) {
+        let Some(src) = self.layout_source.as_ref() else { return };
         self.content_height = content_height_of(&new_dl);
         self.content_width = content_width_of(&new_dl);
         self.tile_grid.update_from_diff(&self.display_list, &new_dl);
@@ -6938,21 +7038,95 @@ impl Lumen {
                 self.fetch_and_register_lazy_images(lazy_reqs);
             }
         }
-        // ADR-016 M2.0: fold this relayout's UI-thread cost into the session
-        // engine histogram (`ENGINE_SUMMARY`, printed on the `LUMEN_MEM_REPORT`
-        // cadence / at exit) and emit a per-relayout line. `prev_styles` now holds
-        // the just-computed styles, so its length is the styled-node count.
-        if let Some(t0) = engine_t0 {
-            let engine_ms = t0.elapsed().as_secs_f32() * 1000.0;
-            self.engine_stats.record(engine_ms);
+        if let Some(w) = self.window.as_ref() {
+            w.request_redraw();
+        }
+    }
+
+    /// ADR-016 M2.2: route a relayout to the persistent engine thread (off the
+    /// UI thread). Returns `true` if a job was submitted; `false` when the engine
+    /// thread is absent (`LUMEN_ENGINE_THREAD` off) or there is nothing to lay out
+    /// — the caller then falls back to the synchronous [`Self::relayout`].
+    ///
+    /// Only for **async-safe** triggers: no caller may read layout geometry
+    /// synchronously after this returns, because the commit lands a few frames
+    /// later via [`Self::poll_engine_commit`]. Today the sole caller is the
+    /// debounced transform-first zoom (M0.3), whose visual is already covered by
+    /// `set_preview_scale`. The job captures immutable `Arc` snapshots of the
+    /// document + stylesheet + web-fonts (invariant 1) and re-establishes the
+    /// interactive/forced-colors/content-visibility thread-local state **on the
+    /// engine thread** before computing layout.
+    fn submit_relayout_job(&mut self) -> bool {
+        let Some(engine) = self.engine_thread.as_ref() else { return false };
+        let Some(viewport) = self.relayout_viewport() else { return false };
+        let Some(src) = self.layout_source.as_ref() else { return false };
+        self.engine_job_generation = self.engine_job_generation.wrapping_add(1);
+        let generation = self.engine_job_generation;
+        // Immutable snapshots captured by the job (ADR-016 invariant 1). The
+        // stylesheet is cloned into an `Arc` here (rare — debounced zoom only);
+        // the document + fonts + hyphenation provider are already shareable.
+        let document = Arc::clone(&src.document);
+        let stylesheet = Arc::new(src.stylesheet.clone());
+        let hp = Arc::clone(&self.hyp_provider);
+        let web_fonts = self.web_fonts.clone();
+        let dark_mode = self.dark_mode;
+        let hovered = self.hovered_nid;
+        let focused = self.focused_node;
+        let active = self.active_nid;
+        let forced_colors = self.a11y_store.forced_colors();
+        let (cv_x, cv_y) = (self.scroll_x, self.scroll_y);
+        let cv_relevant = self.cv_relevant.clone();
+        engine.submit(generation, move || {
+            let t0 = std::time::Instant::now();
+            // Interactive state is thread-local — set it on THIS (engine) thread.
+            lumen_layout::set_interactive_state(hovered, focused, active);
+            lumen_layout::set_forced_colors(forced_colors);
+            lumen_layout::set_cv_scroll(cv_x, cv_y);
+            lumen_layout::set_cv_relevant(cv_relevant);
+            let (content, layout_box) =
+                compute_layout(&document, &stylesheet, viewport, &*hp, dark_mode, &web_fonts);
+            lumen_layout::clear_interactive_state();
+            lumen_layout::set_cv_scroll(0.0, 0.0);
+            lumen_layout::set_cv_relevant(std::collections::HashSet::new());
+            EngineCommit {
+                content,
+                layout_box,
+                viewport,
+                generation,
+                compute_ms: t0.elapsed().as_secs_f32() * 1000.0,
+            }
+        });
+        true
+    }
+
+    /// ADR-016 M2.2: consume the newest off-thread layout result, if the engine
+    /// thread produced one, and apply it on the UI thread. A no-op when the engine
+    /// thread is off or nothing is ready. The commit is dropped when its
+    /// `generation` no longer matches `engine_job_generation` — a newer job or a
+    /// synchronous `relayout()` has superseded it (generation-guard, invariant 2).
+    fn poll_engine_commit(&mut self) {
+        // Take the commit and release the `engine_thread` borrow before the
+        // `&mut self` apply below.
+        let Some(commit) = self.engine_thread.as_ref().and_then(|e| e.take_committed()) else {
+            return;
+        };
+        if commit.generation != self.engine_job_generation {
+            return; // superseded — drop the stale result.
+        }
+        self.engine_applied_generation = commit.generation;
+        let EngineCommit { content, layout_box, viewport, compute_ms, .. } = commit;
+        self.apply_relayout_result(content, layout_box, viewport);
+        // ADR-016 M2.0/M2.2: record the off-thread compute cost. Unlike the
+        // synchronous path this excludes the UI-thread apply (observers etc.),
+        // and is tagged `(off-thread)` so the summary reflects the work moved off
+        // the UI thread.
+        self.engine_stats.record(compute_ms);
+        if lumen_paint::frame_log_enabled() {
             eprintln!(
-                "[engine] relayout {engine_ms:.2}ms dl={} styled={}",
+                "[engine] relayout {compute_ms:.2}ms (off-thread) dl={} styled={}",
                 self.display_list.len(),
                 self.prev_styles.len(),
             );
-        }
-        if let Some(w) = self.window.as_ref() {
-            w.request_redraw();
         }
     }
 
@@ -8503,16 +8677,38 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 + std::time::Duration::from_millis(due_in_ms as u64 + 1);
             next_wakeup = Some(next_wakeup.map_or(raf_wakeup, |t| t.min(raf_wakeup)));
         }
-        // ADR-016 M0.3: run the debounced transform-first-zoom relayout when its
-        // deadline elapses; otherwise fold the deadline into the wakeup so the
-        // parked loop wakes exactly then. `relayout()` clears the pending state
-        // and resets the backend preview scale to 1:1.
+        // ADR-016 M2.2: apply any off-thread layout result the engine thread has
+        // committed since the last iteration (no-op when the engine thread is off).
+        self.poll_engine_commit();
+        // ADR-016 M0.3 + M2.2: run the debounced transform-first-zoom relayout when
+        // its deadline elapses; otherwise fold the deadline into the wakeup so the
+        // parked loop wakes exactly then. When the engine thread is enabled, route
+        // the (inherently async, no synchronous geometry consumer) zoom relayout
+        // off the UI thread; otherwise fall back to the synchronous path. Either
+        // path clears the pending state and (on apply) resets the preview to 1:1.
         if let Some(deadline) = self.pending_zoom_relayout {
             if std::time::Instant::now() >= deadline {
-                self.relayout();
+                // Consume the debounce regardless of path so it fires once per
+                // burst; the async path leaves the preview scale until the commit
+                // lands, the sync path resets it immediately inside `relayout`.
+                self.pending_zoom_relayout = None;
+                if !self.submit_relayout_job() {
+                    self.relayout();
+                }
             } else {
                 next_wakeup = Some(next_wakeup.map_or(deadline, |t| t.min(deadline)));
             }
+        }
+        // ADR-016 M2.2: while an off-thread job is in flight (submitted but not yet
+        // applied), the parked winit loop would not wake on its own to pick up the
+        // commit — arm a short poll deadline. Bounded by the always-landing newest
+        // job (coalescing) so this clears promptly. A future slice can replace this
+        // with an `EventLoopProxy` wake on commit.
+        if self.engine_thread.is_some()
+            && self.engine_job_generation != self.engine_applied_generation
+        {
+            let poll = std::time::Instant::now() + std::time::Duration::from_millis(4);
+            next_wakeup = Some(next_wakeup.map_or(poll, |t| t.min(poll)));
         }
         match next_wakeup {
             Some(wakeup) => event_loop.set_control_flow(ControlFlow::WaitUntil(wakeup)),

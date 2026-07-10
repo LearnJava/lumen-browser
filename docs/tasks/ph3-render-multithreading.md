@@ -314,6 +314,54 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
   `LayoutSource`/`Document`/`js_ctx`, runs style+layout, and commits an
   `EngineCommit`. `content-visibility` expansion becomes a *visible-range*
   message to the engine (never a render-thread → layout call — see gotcha).
+  Sub-sliced further (the full "engine owns `js_ctx`" is really the M2 endgame —
+  `js_ctx` is used by dozens of main-thread event paths — so only the *pure
+  layout computation* moves off-thread; JS/observer delivery stays on main):
+  - **M2.2a — off-thread layout for async-safe triggers.** ✅ (branch
+    `p1-mt-m2-2`, merged into `zcode`, 2026-07-11). Made the M2.1 scaffold live.
+    `engine_thread.rs` is now a **generic latest-wins executor**
+    `EngineThread<C>`: `submit(generation, job)` sends a `FnOnce() -> C` closure,
+    the thread runs **only the newest** valid job of each drained batch (`Shutdown`
+    aside → `newest_job_index` + `run_batch`, coalescing + generation-guard —
+    invariants 2/6) and deposits the result into the queue-depth-1 slot for
+    `take_committed()`. `relayout_page` was split into a pure
+    `compute_layout(document, stylesheet, viewport, hp, dark_mode, web_fonts)`
+    callable off-thread from `Arc` snapshots; `relayout()` split into
+    `relayout_viewport()` (shared viewport derivation) + `apply_relayout_result()`
+    (all `&mut self` post-work: caches, transitions/`@starting-style`, will-change
+    promotion, zoom-preview reset, scroll clamp, JS-observer delivery). The shell
+    defines `EngineCommit { content: DisplayList, layout_box, viewport, generation,
+    compute_ms }` (owned/`Send`, invariant 1) and uses `EngineThread<EngineCommit>`.
+    `submit_relayout_job()` captures `Arc` snapshots (document/stylesheet-clone/
+    web-fonts/hyphenation) + interactive/forced-colors/cv thread-local state and,
+    on the engine thread, re-establishes that thread-local state, runs
+    `compute_layout` and returns the commit; `poll_engine_commit()` (in
+    `about_to_wait`) applies the newest commit via `apply_relayout_result` under a
+    generation-guard (`commit.generation != engine_job_generation` → dropped — a
+    newer job or a synchronous `relayout()` superseded it). A synchronous
+    `relayout()` bumps `engine_job_generation` **and** sets
+    `engine_applied_generation` equal, so an in-flight off-thread result is dropped
+    and no poll-wakeup is armed for it. **Wired for the one inherently-async trigger
+    only — the debounced transform-first zoom** (M0.3; its visual is already
+    covered by `set_preview_scale`, no caller reads geometry synchronously after
+    it). All other ~44 `relayout()` sites stay synchronous. Gated by
+    `LUMEN_ENGINE_THREAD=1`; **off by default → byte-identical behavior**
+    (`compute_layout`/`apply_relayout_result` are the same code the sync path
+    runs). Wakeup: while a job is in flight the parked winit loop arms a 4 ms poll
+    deadline (a future slice can replace this with an `EventLoopProxy` wake on
+    commit). Known limitation (behind the flag): a rapid re-zoom during the ~180 ms
+    debounce can briefly show the previous-zoom layout before the new job's commit
+    lands. 12 executor unit tests (`newest_job_index` × 6, `run_batch` × 5 incl.
+    "only newest closure runs", spawn/submit/shutdown lifecycle). No new deps, no
+    `unsafe`.
+  - **M2.2b (remaining) — route the sync-geometry sites.** The ~44 remaining
+    `relayout()` callers (DOM mutation → geometry read, hover/focus, form input,
+    panel toggles, resize, theme, `content-visibility` expansion, rAF DOM-dirty)
+    need the async-vs-sync contract worked out per site (which may read layout
+    synchronously afterwards) and `content-visibility` expansion turned into a
+    visible-range message (never render-thread → layout). Migrating
+    `LayoutSource.stylesheet` to `Arc<Stylesheet>` removes the per-job stylesheet
+    clone. This is where the bulk of the ~40-site conversion lands.
 - **M2.3 — synchronous readback + acceptance.** `--screenshot`, `run.py --ipc`,
   CDP `Page.captureScreenshot` become `Request::Readback { reply }` messages
   (audit all `screenshot_*` sites first — most are already CPU per the M1.1

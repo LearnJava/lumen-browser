@@ -1,102 +1,85 @@
-// ADR-016 M2.1 — каркас: коммит-путь (`EngineThread::commit` /
-// `take_committed`), variant `Commit` и поля снапшота ещё не потребляются shell
-// — их включает M2.2 (маршрутизация `relayout()` через движковый поток). До тех
-// пор каркас помечен `allow(dead_code)`, чтобы `clippy -D warnings` был зелёным;
-// снять этот атрибут при выполнении M2.2, когда путь станет живым.
-#![allow(dead_code)]
-
-//! Persistent engine thread — scaffold (ADR-016 M2).
+//! Persistent engine thread — off-UI-thread layout executor (ADR-016 M2.2).
 //!
-//! # Что это (M2.1)
+//! # Что это
 //!
-//! Каркас движкового потока, зеркальный [`crate::render_thread`]. M2 переносит
-//! тяжёлый конвейер (style → layout → сборка display-list) с UI-потока на
-//! долгоживущий фоновый поток, который **коммитит снапшоты** обратно. Этот срез
-//! (M2.1) ставит только *каркас*: именованный поток `lumen-engine`, упорядоченный
-//! управляющий канал, latest-wins слот коммита с generation-guard и тип-снапшот
-//! [`EngineCommit`], над которым будут работать M2.2+. **Ни один relayout ещё не
-//! перенесён** — при `LUMEN_ENGINE_THREAD` (по умолчанию выкл) поток просто
-//! паркуется на `recv()` и ничего не делает; поведение shell не меняется.
+//! Долгоживущий фоновый поток `lumen-engine`, которому UI-сторона отдаёт
+//! **задание** (замыкание, считающее layout+display-list по immutable-снапшоту),
+//! а он возвращает готовый **коммит** обратно через latest-wins слот. M2 переносит
+//! тяжёлый конвейер (style → layout → сборка display-list) с UI-потока сюда.
 //!
-//! Сегодняшний конвейер использует одноразовый `std::thread::spawn(render_bytes)`
-//! на каждую навигацию (`main.rs`, `LoadEvent::RawBytes`); M2.2 заменит его на
-//! коммит через этот долгоживущий поток.
+//! M2.1 поставил каркас (поток парковался и ничего не делал). M2.2 делает поток
+//! живым: [`EngineThread::submit`] шлёт задание, поток исполняет **только
+//! новейшее** валидное задание пачки (coalescing) и кладёт результат в слот;
+//! [`EngineThread::take_committed`] забирает его на UI-стороне. Исполнитель
+//! обобщён по типу коммита `C`, поэтому этот модуль не зависит от layout-типов —
+//! конкретный `EngineCommit` (с `LayoutBox`) и само задание живут в `main.rs`.
 //!
-//! # Инварианты ADR-016, которые закладывает каркас
+//! # Инварианты ADR-016
 //!
-//! - **Cross-thread data = immutable snapshots (инвариант 1).** Движок коммитит
-//!   [`EngineCommit`] с `Arc<DisplayList>`; UI-сторона забирает готовый снапшот,
-//!   без разделяемого мутабельного состояния.
-//! - **Latest-wins, queue depth 1, coalescing (инвариант 2).** Дренаж канала
-//!   оставляет только новейший *валидный* коммит пачки; выходной слот держит
-//!   ровно один коммит — медленный потребитель роняет устаревшие, а не копит их.
-//! - **Generation-guard.** Коммит с `generation` старше уже применённого — это
-//!   отменённая (устаревшая) навигация; он отбрасывается (тот же принцип, что
-//!   `RenderDone`-гвард `generation != load_generation` в `main.rs`).
+//! - **Cross-thread data = immutable snapshots (инвариант 1).** Задание захватывает
+//!   `Arc`-снимки (документ, стили, шрифты); коммит `C` — владеющий результат.
+//! - **Latest-wins, queue depth 1, coalescing (инвариант 2).** Из дренированной
+//!   пачки исполняется только задание с наибольшим `generation` (старее —
+//!   отменённые), результат кладётся в слот на один элемент; непрочитанный
+//!   перезаписывается новее пришедшим.
+//! - **Generation-guard.** Задание с `generation` старше уже исполненного —
+//!   устаревшая (отменённая) навигация/relayout; отбрасывается без исполнения
+//!   (тот же принцип, что `RenderDone`-гвард `generation != load_generation`).
 //! - **Idle = parked on condvar (инвариант 6).** Поток спит на блокирующем
-//!   `recv()`; без коммитов CPU не тратится (сохраняем ~0% idle из BUG-271).
+//!   `recv()`; без заданий CPU не тратится (сохраняем ~0% idle из BUG-271).
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
-use lumen_core::geom::Size;
-use lumen_paint::DisplayList;
-
-/// Неизменяемый снапшот, который движковый поток коммитит UI-стороне
-/// (ADR-016 инвариант 1). Всё содержимое — владеющая копия / `Arc`, поэтому
-/// после коммита UI и движок не делят мутабельное состояние.
-pub struct EngineCommit {
-    /// Готовый display-list страницы (immutable, разделяемый через `Arc`).
-    pub content: Arc<DisplayList>,
-    /// Монотонный номер навигации, под которым построен коммит. Коммит с
-    /// `generation` старше уже применённого отбрасывается как устаревший.
-    pub generation: u64,
-    /// Размеры layout-viewport, под которые построен `content` (CSS px).
-    pub dims: Size,
-}
-
-/// Сообщение движковому потоку. Коммиты коалесцируются (latest-wins с
+/// Задание/сигнал движковому потоку. Задания коалесцируются (latest-wins с
 /// generation-guard); `Shutdown` завершает поток (шлётся из [`EngineThread`]'s
 /// `Drop`).
-enum EngineMsg {
-    /// Новый снапшот страницы (latest-wins).
-    Commit(EngineCommit),
+enum EngineMsg<C> {
+    /// Считать коммит `C` (замыкание исполняется на движковом потоке).
+    /// `generation` — монотонный номер relayout/навигации, под которым задание
+    /// поставлено; используется для coalescing и generation-guard.
+    Run {
+        /// Монотонный номер relayout/навигации задания.
+        generation: u64,
+        /// Работа, считающая коммит (style + layout + display-list) off-thread.
+        job: Box<dyn FnOnce() -> C + Send>,
+    },
     /// Завершение потока.
     Shutdown,
 }
 
 /// Выходной слот коммита: latest-wins, queue depth 1 (ADR-016 инвариант 2).
-/// Движок кладёт новейший валидный коммит, UI-сторона забирает его через
-/// [`EngineThread::take_committed`]; непрочитанный коммит перезаписывается
-/// новее пришедшим (устаревший роняется, а не копится).
-type CommitSlot = Arc<Mutex<Option<EngineCommit>>>;
+/// Поток кладёт новейший исполненный коммит, UI-сторона забирает его через
+/// [`EngineThread::take_committed`]; непрочитанный перезаписывается новее
+/// пришедшим (устаревший роняется, а не копится).
+type CommitSlot<C> = Arc<Mutex<Option<C>>>;
 
-/// Хэндл долгоживущего движкового потока (ADR-016 M2.1, каркас).
+/// Хэндл долгоживущего движкового потока (ADR-016 M2.2).
 ///
-/// Владеет управляющим каналом и слотом коммита; при `Drop` шлёт `Shutdown` и
-/// джойнит поток. В M2.1 через него ещё ничего не маршрутизируется — это
-/// «место, куда будут коммитить» M2.2+.
-pub struct EngineThread {
-    /// Упорядоченный канал сообщений движковому потоку.
-    tx: Sender<EngineMsg>,
-    /// Latest-wins слот, куда поток кладёт новейший валидный коммит.
-    latest: CommitSlot,
+/// Обобщён по типу коммита `C` (в shell — `crate::EngineCommit`), поэтому модуль
+/// не зависит от layout-типов. Владеет управляющим каналом и слотом коммита; при
+/// `Drop` шлёт `Shutdown` и джойнит поток.
+pub struct EngineThread<C: Send + 'static> {
+    /// Упорядоченный канал заданий движковому потоку.
+    tx: Sender<EngineMsg<C>>,
+    /// Latest-wins слот, куда поток кладёт новейший исполненный коммит.
+    latest: CommitSlot<C>,
     /// Handle потока для join при shutdown.
     join: Option<JoinHandle<()>>,
 }
 
-impl EngineThread {
+impl<C: Send + 'static> EngineThread<C> {
     /// Запускает именованный движковый поток и возвращает хэндл.
     ///
     /// Поток немедленно паркуется на блокирующем `recv()` (инвариант 6) и ждёт
-    /// первый коммит — до появления консьюмеров (M2.2+) он не потребляет CPU.
+    /// первое задание — до появления консьюмеров он не потребляет CPU.
     ///
     /// # Errors
     /// Возвращает [`std::io::Error`], если ОС не смогла создать поток.
     pub fn spawn() -> std::io::Result<Self> {
-        let (tx, rx) = mpsc::channel::<EngineMsg>();
-        let latest: CommitSlot = Arc::new(Mutex::new(None));
+        let (tx, rx) = mpsc::channel::<EngineMsg<C>>();
+        let latest: CommitSlot<C> = Arc::new(Mutex::new(None));
         let slot = Arc::clone(&latest);
         let join = thread::Builder::new()
             .name("lumen-engine".to_owned())
@@ -104,21 +87,23 @@ impl EngineThread {
         Ok(Self { tx, latest, join: Some(join) })
     }
 
-    /// Коммитит снапшот движковому потоку (fire-and-forget). Молча игнорирует,
-    /// если поток уже завершён (штатно при shutdown).
-    pub fn commit(&self, commit: EngineCommit) {
-        let _ = self.tx.send(EngineMsg::Commit(commit));
+    /// Ставит задание движковому потоку (fire-and-forget). `generation` —
+    /// монотонный номер relayout/навигации; задание с меньшим `generation`, чем
+    /// уже исполненное, отбрасывается. Молча игнорирует, если поток уже завершён
+    /// (штатно при shutdown).
+    pub fn submit(&self, generation: u64, job: impl FnOnce() -> C + Send + 'static) {
+        let _ = self.tx.send(EngineMsg::Run { generation, job: Box::new(job) });
     }
 
-    /// Забирает новейший применённый коммит из слота, если он есть (latest-wins:
+    /// Забирает новейший исполненный коммит из слота, если он есть (latest-wins:
     /// вернёт самый свежий, промежуточные уже перезаписаны). Оставляет слот
     /// пустым до следующего коммита.
-    pub fn take_committed(&self) -> Option<EngineCommit> {
+    pub fn take_committed(&self) -> Option<C> {
         self.latest.lock().ok().and_then(|mut slot| slot.take())
     }
 }
 
-impl Drop for EngineThread {
+impl<C: Send + 'static> Drop for EngineThread<C> {
     fn drop(&mut self) {
         let _ = self.tx.send(EngineMsg::Shutdown);
         if let Some(join) = self.join.take() {
@@ -128,9 +113,9 @@ impl Drop for EngineThread {
 }
 
 /// Тело движкового потока: паркуется на блокирующем `recv()` (инвариант 6),
-/// дренирует пришедшую пачку и применяет её ([`apply_batch`]) — latest-wins с
+/// дренирует пришедшую пачку и исполняет её ([`run_batch`]) — latest-wins с
 /// generation-guard. Выходит при `Shutdown` или закрытии канала (хэндл дропнут).
-fn engine_thread_main(rx: &Receiver<EngineMsg>, latest: &CommitSlot) {
+fn engine_thread_main<C: Send + 'static>(rx: &Receiver<EngineMsg<C>>, latest: &CommitSlot<C>) {
     let mut applied_generation: u64 = 0;
     loop {
         // Idle-park до первого сообщения (без polling — инвариант 6).
@@ -145,28 +130,40 @@ fn engine_thread_main(rx: &Receiver<EngineMsg>, latest: &CommitSlot) {
         while let Ok(m) = rx.try_recv() {
             batch.push(m);
         }
-        if apply_batch(batch, &mut applied_generation, latest) {
+        if run_batch(batch, &mut applied_generation, latest) {
             return; // получен Shutdown
         }
     }
 }
 
-/// Применяет одну дренированную пачку: при наличии `Shutdown` — сигналит выход;
-/// иначе выбирает новейший валидный коммит (latest-wins + generation-guard) и
-/// кладёт его в `latest`, продвигая `applied_generation`. Устаревшие коммиты
-/// (generation старше применённого) и все, кроме победившего, отбрасываются.
-/// Возвращает `true`, если в пачке был `Shutdown` (поток должен выйти).
+/// Исполняет одну дренированную пачку: при наличии `Shutdown` — сигналит выход;
+/// иначе выбирает новейшее валидное задание (latest-wins + generation-guard),
+/// исполняет **только его** замыкание (остальные роняются без исполнения —
+/// экономия layout-работы) и кладёт результат в `latest`, продвигая
+/// `applied_generation`. Возвращает `true`, если в пачке был `Shutdown`.
 ///
-/// Вынесено из цикла ради модульного теста логики коалесцинга/gen-guard без
+/// Вынесено из цикла ради модульного теста логики coalescing/gen-guard без
 /// поднятия потока.
-fn apply_batch(batch: Vec<EngineMsg>, applied_generation: &mut u64, latest: &CommitSlot) -> bool {
+fn run_batch<C: Send + 'static>(
+    batch: Vec<EngineMsg<C>>,
+    applied_generation: &mut u64,
+    latest: &CommitSlot<C>,
+) -> bool {
     if batch.iter().any(|m| matches!(m, EngineMsg::Shutdown)) {
         return true;
     }
-    if let Some(idx) = newest_commit_index(&batch, *applied_generation)
-        && let Some(EngineMsg::Commit(commit)) = batch.into_iter().nth(idx)
+    let gens: Vec<Option<u64>> = batch
+        .iter()
+        .map(|m| match m {
+            EngineMsg::Run { generation, .. } => Some(*generation),
+            EngineMsg::Shutdown => None,
+        })
+        .collect();
+    if let Some(idx) = newest_job_index(&gens, *applied_generation)
+        && let Some(EngineMsg::Run { generation, job }) = batch.into_iter().nth(idx)
     {
-        *applied_generation = commit.generation;
+        *applied_generation = generation;
+        let commit = job();
         if let Ok(mut slot) = latest.lock() {
             *slot = Some(commit);
         }
@@ -174,25 +171,25 @@ fn apply_batch(batch: Vec<EngineMsg>, applied_generation: &mut u64, latest: &Com
     false
 }
 
-/// Индекс коммита, который должен победить в дренированной пачке (latest-wins +
-/// generation-guard). Среди всех `Commit` с `generation >= min_generation`
-/// (более старые — отменённая навигация, отбрасываются) возвращает индекс
-/// коммита с наибольшим `generation`; при равенстве побеждает более поздний
-/// индекс (latest-wins). Не-коммиты и устаревшие коммиты игнорируются.
-/// `None`, если валидного коммита в пачке нет.
-fn newest_commit_index(batch: &[EngineMsg], min_generation: u64) -> Option<usize> {
+/// Индекс задания, которое должно победить в дренированной пачке (latest-wins +
+/// generation-guard). `gens[i]` — `Some(generation)` для задания `Run`, `None`
+/// для управляющих сообщений (игнорируются). Среди заданий с
+/// `generation >= min_generation` (более старые — отменённый relayout,
+/// отбрасываются) возвращает индекс с наибольшим `generation`; при равенстве
+/// побеждает более поздний индекс (latest-wins). `None`, если валидного задания
+/// в пачке нет.
+fn newest_job_index(gens: &[Option<u64>], min_generation: u64) -> Option<usize> {
     let mut best: Option<(usize, u64)> = None;
-    for (i, msg) in batch.iter().enumerate() {
-        if let EngineMsg::Commit(c) = msg {
-            if c.generation < min_generation {
-                continue; // устаревшая навигация — отбрасываем
-            }
-            match best {
-                // Строго меньший generation проигрывает — оставляем текущий best.
-                Some((_, g)) if c.generation < g => {}
-                // Больший или равный generation побеждает (равный → поздний индекс).
-                _ => best = Some((i, c.generation)),
-            }
+    for (i, g) in gens.iter().enumerate() {
+        let Some(g) = *g else { continue };
+        if g < min_generation {
+            continue; // устаревший relayout — отбрасываем
+        }
+        match best {
+            // Строго меньший generation проигрывает — оставляем текущий best.
+            Some((_, bg)) if g < bg => {}
+            // Больший или равный побеждает (равный → поздний индекс).
+            _ => best = Some((i, g)),
         }
     }
     best.map(|(i, _)| i)
@@ -202,112 +199,126 @@ fn newest_commit_index(batch: &[EngineMsg], min_generation: u64) -> Option<usize
 mod tests {
     use super::*;
 
-    /// Коммит-сообщение с указанным `generation` и пустым content.
-    fn commit(generation: u64) -> EngineMsg {
-        EngineMsg::Commit(EngineCommit {
-            content: Arc::new(DisplayList::new()),
-            generation,
-            dims: Size::new(1024.0, 720.0),
-        })
+    /// Задание с указанным `generation`, возвращающее это же число коммитом.
+    /// Тестовый тип коммита — `u64`, поэтому layout-типы здесь не нужны.
+    fn run(generation: u64) -> EngineMsg<u64> {
+        EngineMsg::Run { generation, job: Box::new(move || generation) }
     }
 
     #[test]
-    fn newest_commit_index_picks_latest_of_equal_generation() {
-        // Три коммита одной навигации подряд — побеждает последний (latest-wins).
-        let batch = vec![commit(1), commit(1), commit(1)];
-        assert_eq!(newest_commit_index(&batch, 0), Some(2));
+    fn newest_job_index_picks_latest_of_equal_generation() {
+        // Три задания одного relayout подряд — побеждает последнее (latest-wins).
+        let gens = [Some(1), Some(1), Some(1)];
+        assert_eq!(newest_job_index(&gens, 0), Some(2));
     }
 
     #[test]
-    fn newest_commit_index_ignores_control_messages() {
-        // Между коммитами есть Shutdown-подобные управляющие — они не влияют
-        // на выбор (здесь эмулируем произвольный порядок коммитов).
-        let batch = vec![commit(2), commit(5)];
-        assert_eq!(newest_commit_index(&batch, 0), Some(1));
+    fn newest_job_index_ignores_control_messages() {
+        // `None` (Shutdown-подобные) не влияют на выбор.
+        let gens = [Some(2), None, Some(5)];
+        assert_eq!(newest_job_index(&gens, 0), Some(2));
     }
 
     #[test]
-    fn newest_commit_index_prefers_highest_generation_over_position() {
+    fn newest_job_index_prefers_highest_generation_over_position() {
         // Более высокий generation побеждает, даже если он раньше по позиции.
-        let batch = vec![commit(7), commit(5)];
-        assert_eq!(newest_commit_index(&batch, 0), Some(0));
+        let gens = [Some(7), Some(5)];
+        assert_eq!(newest_job_index(&gens, 0), Some(0));
     }
 
     #[test]
-    fn newest_commit_index_drops_stale_generations() {
-        // min_generation=5: коммит gen 3 устарел; gen 6 — валиден.
-        let batch = vec![commit(3), commit(6)];
-        assert_eq!(newest_commit_index(&batch, 5), Some(1));
+    fn newest_job_index_drops_stale_generations() {
+        // min_generation=5: задание gen 3 устарело; gen 6 — валидно.
+        let gens = [Some(3), Some(6)];
+        assert_eq!(newest_job_index(&gens, 5), Some(1));
     }
 
     #[test]
-    fn newest_commit_index_none_when_all_stale() {
-        // Все коммиты старше уже применённого поколения → нечего применять.
-        let batch = vec![commit(2), commit(4)];
-        assert_eq!(newest_commit_index(&batch, 5), None);
+    fn newest_job_index_none_when_all_stale() {
+        // Все задания старше уже исполненного поколения → нечего исполнять.
+        let gens = [Some(2), Some(4)];
+        assert_eq!(newest_job_index(&gens, 5), None);
     }
 
     #[test]
-    fn newest_commit_index_none_without_commits() {
-        let batch = vec![EngineMsg::Shutdown];
-        assert_eq!(newest_commit_index(&batch, 0), None);
+    fn newest_job_index_none_without_jobs() {
+        let gens = [None];
+        assert_eq!(newest_job_index(&gens, 0), None);
     }
 
     #[test]
-    fn apply_batch_deposits_newest_and_advances_generation() {
-        let latest: CommitSlot = Arc::new(Mutex::new(None));
+    fn run_batch_executes_newest_and_advances_generation() {
+        let latest: CommitSlot<u64> = Arc::new(Mutex::new(None));
         let mut applied = 0;
-        // Пачка навигаций 1 и 2 — в слот ложится gen 2, поколение продвигается.
-        let shutdown = apply_batch(vec![commit(1), commit(2)], &mut applied, &latest);
+        // Пачка relayout 1 и 2 — исполняется gen 2, поколение продвигается.
+        let shutdown = run_batch(vec![run(1), run(2)], &mut applied, &latest);
         assert!(!shutdown);
         assert_eq!(applied, 2);
-        let deposited = latest.lock().unwrap().take();
-        assert_eq!(deposited.map(|c| c.generation), Some(2));
+        assert_eq!(latest.lock().unwrap().take(), Some(2));
     }
 
     #[test]
-    fn apply_batch_drops_stale_commit_and_keeps_generation() {
-        let latest: CommitSlot = Arc::new(Mutex::new(None));
+    fn run_batch_drops_stale_job_and_keeps_generation() {
+        let latest: CommitSlot<u64> = Arc::new(Mutex::new(None));
         let mut applied = 5;
-        // Единственный коммит устарел (gen 3 < 5) — слот пуст, поколение не падает.
-        let shutdown = apply_batch(vec![commit(3)], &mut applied, &latest);
+        // Единственное задание устарело (gen 3 < 5) — слот пуст, поколение не падает.
+        let shutdown = run_batch(vec![run(3)], &mut applied, &latest);
         assert!(!shutdown);
         assert_eq!(applied, 5);
         assert!(latest.lock().unwrap().is_none());
     }
 
     #[test]
-    fn apply_batch_coalesces_to_single_latest_commit() {
-        let latest: CommitSlot = Arc::new(Mutex::new(None));
+    fn run_batch_coalesces_to_single_newest_job() {
+        let latest: CommitSlot<u64> = Arc::new(Mutex::new(None));
         let mut applied = 0;
-        // Десять коммитов подряд — в слот попадает ровно один, новейший (queue depth 1).
-        let batch: Vec<EngineMsg> = (1..=10).map(commit).collect();
-        apply_batch(batch, &mut applied, &latest);
+        // Десять заданий подряд — исполняется ровно одно, новейшее (queue depth 1).
+        let batch: Vec<EngineMsg<u64>> = (1..=10).map(run).collect();
+        run_batch(batch, &mut applied, &latest);
         assert_eq!(applied, 10);
-        assert_eq!(latest.lock().unwrap().as_ref().map(|c| c.generation), Some(10));
+        assert_eq!(latest.lock().unwrap().take(), Some(10));
     }
 
     #[test]
-    fn apply_batch_reports_shutdown() {
-        let latest: CommitSlot = Arc::new(Mutex::new(None));
+    fn run_batch_only_newest_closure_runs() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        // Счётчик исполнений: из пачки должно исполниться ровно одно замыкание,
+        // остальные — дропнуться без вызова (экономия layout-работы).
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mk = |generation: u64| {
+            let c = Arc::clone(&calls);
+            EngineMsg::Run {
+                generation,
+                job: Box::new(move || {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    generation
+                }),
+            }
+        };
+        let latest: CommitSlot<u64> = Arc::new(Mutex::new(None));
         let mut applied = 0;
-        // Shutdown в пачке — сигнал выхода; коммит при этом не применяется.
-        let shutdown = apply_batch(vec![commit(1), EngineMsg::Shutdown], &mut applied, &latest);
+        run_batch(vec![mk(1), mk(2), mk(3)], &mut applied, &latest);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(latest.lock().unwrap().take(), Some(3));
+    }
+
+    #[test]
+    fn run_batch_reports_shutdown() {
+        let latest: CommitSlot<u64> = Arc::new(Mutex::new(None));
+        let mut applied = 0;
+        // Shutdown в пачке — сигнал выхода; задание при этом не исполняется.
+        let shutdown = run_batch(vec![run(1), EngineMsg::Shutdown], &mut applied, &latest);
         assert!(shutdown);
         assert!(latest.lock().unwrap().is_none());
     }
 
     #[test]
-    fn spawn_commit_and_shutdown_lifecycle() {
-        // Полный жизненный цикл: поток стартует, принимает коммит, чисто
+    fn spawn_submit_and_shutdown_lifecycle() {
+        // Полный жизненный цикл: поток стартует, исполняет задание, чисто
         // завершается на Drop (Shutdown + join). Коммит забираем спином с
         // yield — детерминированно без завязки на часы.
-        let engine = EngineThread::spawn().expect("spawn engine thread");
-        engine.commit(EngineCommit {
-            content: Arc::new(DisplayList::new()),
-            generation: 1,
-            dims: Size::new(800.0, 600.0),
-        });
+        let engine = EngineThread::<u64>::spawn().expect("spawn engine thread");
+        engine.submit(1, || 42);
         let mut got = None;
         for _ in 0..100_000 {
             if let Some(c) = engine.take_committed() {
@@ -316,7 +327,7 @@ mod tests {
             }
             thread::yield_now();
         }
-        assert_eq!(got.map(|c| c.generation), Some(1));
+        assert_eq!(got, Some(42));
         // Drop здесь: шлёт Shutdown и джойнит поток без паники.
     }
 }
