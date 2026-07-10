@@ -6889,6 +6889,25 @@ impl Lumen {
         }
     }
 
+    /// ADR-016 M2.2b: route an **async-safe chrome-inset relayout** off the UI
+    /// thread when the engine thread is enabled, falling back to the synchronous
+    /// [`Self::relayout`] otherwise (the default, so behavior is byte-identical
+    /// unless `LUMEN_ENGINE_THREAD=1`).
+    ///
+    /// "Async-safe" means the caller only changed *chrome* geometry — a docked
+    /// panel's side/width, the workspace bar, vertical/tree tabs, or sidebar
+    /// visibility — which shifts the content viewport but is **not** followed by
+    /// a synchronous read of page layout geometry. The reflowed content may
+    /// therefore land a few frames later via [`Self::poll_engine_commit`], the
+    /// same contract as the debounced zoom (M2.2a). The chrome itself is drawn
+    /// from its own state, so it updates on the immediately-requested redraw; only
+    /// the page reflow underneath it is deferred.
+    fn relayout_chrome(&mut self) {
+        if !self.submit_relayout_job() {
+            self.relayout();
+        }
+    }
+
     /// Derive the CSS layout viewport for a relayout (shared by the synchronous
     /// [`Self::relayout`] and the off-thread [`Self::submit_relayout_job`]).
     ///
@@ -13693,14 +13712,16 @@ impl Lumen {
             }
             KeyCommand::ToggleVerticalTabs => {
                 self.vertical_tabs.toggle();
-                // Viewport width changes — re-layout the current page.
-                self.relayout();
+                // Viewport width changes — re-layout the current page (ADR-016
+                // M2.2b: chrome-inset change, off-thread when the engine is on).
+                self.relayout_chrome();
                 self.request_redraw();
             }
             KeyCommand::ToggleTreeTabs => {
                 self.tree_tabs.toggle();
-                // Viewport width changes when switching to/from tree view.
-                self.relayout();
+                // Viewport width changes when switching to/from tree view
+                // (ADR-016 M2.2b: async-safe chrome-inset relayout).
+                self.relayout_chrome();
                 self.request_redraw();
             }
             KeyCommand::FlipActiveDock => {
@@ -13712,8 +13733,9 @@ impl Lumen {
             }
             KeyCommand::ToggleWorkspaces => {
                 self.workspace_panel.toggle();
-                // Viewport height changes — re-layout so content doesn't hide under bar.
-                self.relayout();
+                // Viewport height changes — re-layout so content doesn't hide
+                // under bar (ADR-016 M2.2b: async-safe chrome-inset relayout).
+                self.relayout_chrome();
                 self.request_redraw();
             }
             KeyCommand::ToggleShields => {
@@ -15736,7 +15758,8 @@ impl Lumen {
         }
         self.panel_layout.set_dock(id, target);
         self.panel_layout.save();
-        self.relayout();
+        // ADR-016 M2.2b: dock side flip shifts the content viewport; async-safe.
+        self.relayout_chrome();
         true
     }
 
@@ -15800,7 +15823,10 @@ impl Lumen {
         };
         let new_w = dock.width_from_cursor(x_css, self.viewport_width_css());
         if self.panel_layout.set_width(id, new_w) {
-            self.relayout();
+            // ADR-016 M2.2b: docked-panel resize changes the content viewport
+            // width; async-safe (the drag edge itself follows the cursor via the
+            // immediate redraw, only the page reflow underneath is deferred).
+            self.relayout_chrome();
             true
         } else {
             false
@@ -15850,7 +15876,9 @@ impl Lumen {
         self.sidebar_source = Some(src);
 
         if !was_visible {
-            self.relayout();
+            // ADR-016 M2.2b: the sidebar becoming visible narrows the main page's
+            // content viewport; async-safe chrome-inset relayout.
+            self.relayout_chrome();
         }
         self.request_redraw();
     }
@@ -16180,7 +16208,8 @@ impl Lumen {
                 PaletteAction::BookmarkCurrentPage => self.bookmark_current_page(),
                 PaletteAction::ToggleVerticalTabs => {
                     self.vertical_tabs.toggle();
-                    self.relayout();
+                    // ADR-016 M2.2b: async-safe chrome-inset relayout.
+                    self.relayout_chrome();
                 }
                 PaletteAction::ToggleDevConsole => self.devtools_console.toggle(),
                 PaletteAction::ToggleShields => self.shields.toggle(),
