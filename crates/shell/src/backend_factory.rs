@@ -15,6 +15,7 @@
 use lumen_core::ColorSpace;
 use std::sync::Arc;
 
+use crate::render_thread::ThreadedRenderBackend;
 use lumen_paint::RenderBackend;
 #[cfg(feature = "backend-wgpu")]
 use lumen_paint::WgpuBackend;
@@ -34,10 +35,62 @@ use winit::window::Window;
 /// При `LUMEN_BACKEND=femtovg` создаёт `FemtovgBackend` с fallback на wgpu.
 /// При `LUMEN_BACKEND=vello` создаёт `VelloBackend` (RB-7 заглушка, ADR-010 Phase 3).
 ///
+/// # ADR-016 M1 (spike): рендер-поток
+/// Если задан `LUMEN_RENDER_THREAD=1`, настоящий бэкенд создаётся и живёт на
+/// выделенном рендер-потоке, а окну возвращается [`ThreadedRenderBackend`]-прокси
+/// (present уходит с UI-потока). При сбое создания бэкенда на потоке (например,
+/// GL-контекст не создался вне главного потока) — автоматический откат на обычный
+/// однопоточный путь. Значение по умолчанию — однопоточный in-process бэкенд.
+///
 /// # Errors
 /// Возвращает `Err` если GPU-адаптер недоступен или инициализация всех бэкендов
 /// завершилась ошибкой.
 pub fn create_backend(
+    window: Arc<Window>,
+    font_bytes: Vec<u8>,
+    target_color_space: ColorSpace,
+) -> Result<Box<dyn RenderBackend>, Box<dyn std::error::Error>> {
+    // ADR-016 M1: опциональный рендер-поток за env-флагом (дефолт — выключен).
+    if render_thread_enabled() {
+        // Конструктор бэкенда выполняется НА рендер-потоке (femtovg Canvas +
+        // GL-контекст `!Send` создаются там, где будут использоваться).
+        let win = Arc::clone(&window);
+        let font = font_bytes.clone();
+        let ctor = move || {
+            create_backend_inprocess(win, font, target_color_space).map_err(|e| e.to_string())
+        };
+        match ThreadedRenderBackend::new(ctor) {
+            Ok(b) => return Ok(Box::new(b)),
+            Err(e) => eprintln!(
+                "LUMEN_RENDER_THREAD=1: рендер-поток не стартовал ({e}), откат на in-process"
+            ),
+        }
+    }
+    create_backend_inprocess(window, font_bytes, target_color_space)
+}
+
+/// Читает `LUMEN_RENDER_THREAD` — `1`/`true`/`on` включают рендер-поток.
+fn render_thread_enabled() -> bool {
+    matches!(
+        std::env::var("LUMEN_RENDER_THREAD")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "on" | "yes"
+    )
+}
+
+/// Однопоточный in-process выбор бэкенда (историческое поведение `create_backend`).
+///
+/// Читает `LUMEN_BACKEND` env var и создаёт нужный [`RenderBackend`] прямо на
+/// вызывающем потоке. Вызывается как напрямую (дефолт), так и с рендер-потока
+/// внутри замыкания-конструктора [`ThreadedRenderBackend`].
+///
+/// # Errors
+/// Возвращает `Err` если GPU-адаптер недоступен или инициализация всех бэкендов
+/// завершилась ошибкой.
+fn create_backend_inprocess(
     window: Arc<Window>,
     font_bytes: Vec<u8>,
     target_color_space: ColorSpace,

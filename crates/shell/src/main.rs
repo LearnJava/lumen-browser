@@ -52,6 +52,7 @@ mod panels;
 mod platform;
 mod prefetch;
 mod reader_view;
+mod render_thread;
 mod source_view;
 mod spellcheck;
 mod svg_image;
