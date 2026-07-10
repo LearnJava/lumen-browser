@@ -66,9 +66,12 @@ Each stage is independently shippable and measurable. Do them in order.
 
 No threads yet; reduces the work every later stage will move/parallelize.
 
-- **M0.1 Frame-time histogram.** Extend `LUMEN_FRAME_LOG` with a session
-  summary (p50/p95/p99 frame ms, count) printed on exit and on
-  `LUMEN_MEM_REPORT` cadence. Every later stage cites before/after numbers.
+- **M0.1 Frame-time histogram.** ✅ (branch `p1-mt-m0`). `FrameStats`/
+  `FrameSummary` in `lumen-paint` (`lib.rs`, nearest-rank percentiles, 5 unit
+  tests) accumulate frame ms; the shell records each `[frame]` time and prints
+  `FRAME_SUMMARY count/min/p50/p95/p99/max` on the `LUMEN_MEM_REPORT` cadence
+  and once from `ApplicationHandler::exiting`. Every later stage cites
+  before/after numbers.
 - **M0.2 Viewport culling.** Give display commands (or a prepass index)
   bounding rects; skip commands fully outside `viewport ∪ slop` during
   execution in both femtovg and wgpu backends. Expected: scroll frame cost on
