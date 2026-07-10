@@ -289,14 +289,26 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
   count/min/p50/p95/p99/max` prints on the `LUMEN_MEM_REPORT` cadence and once at
   session exit — the baseline every later M2 slice cites. Unit test on the
   labeled summary in `lumen-paint`.
-- **M2.1 — persistent engine-thread boundary (scaffold).** Replace the per-nav
-  one-shot `spawn` with a long-lived, named engine thread (mirror
-  `render_thread.rs`: ordered control channel + latest-wins commit slot +
-  idle-park on blocking `recv`, generation-guarded). Behind `LUMEN_ENGINE_THREAD`
-  (default off → zero behavior change). No relayout moved yet; this is the
-  channel + `EngineCommit { content: Arc<DisplayList>, generation, dims }`
-  snapshot type (invariant 1) that M2.2+ commits over. Unit-test the
-  coalescing/generation-guard logic in isolation.
+- **M2.1 — persistent engine-thread boundary (scaffold).** ✅ (branch
+  `p1-mt-m2-1`, merged into `zcode`). New `crates/shell/src/engine_thread.rs`
+  mirrors `render_thread.rs`: a long-lived named `lumen-engine` thread with an
+  ordered control channel, an `EngineCommit { content: Arc<DisplayList>,
+  generation, dims }` snapshot (invariant 1) and a latest-wins output slot
+  (`Arc<Mutex<Option<EngineCommit>>>`, queue depth 1 — invariant 2). The loop
+  idle-parks on blocking `recv()` (invariant 6), drains each batch and applies
+  the newest **valid** commit via `newest_commit_index` + `apply_batch`: the
+  generation-guard drops commits whose `generation` is older than the last
+  applied (superseded navigation — same rule as `main.rs`'s `RenderDone` guard
+  `generation != load_generation`), ties break to the later index (latest-wins).
+  Gated by `LUMEN_ENGINE_THREAD=1` (default off → `Lumen.engine_thread` is `None`
+  and shell behavior is byte-identical; on failure to spawn, falls back to `None`
+  with a log). **No relayout moved yet** — the thread just parks; M2.2 routes the
+  ~40 `relayout()` sites through it. The scaffold API is `allow(dead_code)` until
+  M2.2 consumes it (documented, to be removed then). 11 unit tests: 6 on
+  `newest_commit_index` (latest-wins, generation-guard drops stale/all-stale,
+  highest-gen-beats-position, none-without-commits), 4 on `apply_batch`
+  (deposit+advance, stale-drop keeps generation, coalesce-to-one, shutdown), 1
+  spawn/commit/take/shutdown lifecycle. No new deps, no `unsafe`.
 - **M2.2 — route `relayout()` through the engine thread.** Turn the ~40 direct
   `self.relayout()` calls into a message send; the engine thread owns
   `LayoutSource`/`Document`/`js_ctx`, runs style+layout, and commits an
