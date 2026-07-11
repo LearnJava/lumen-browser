@@ -1055,6 +1055,25 @@ Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
         `.take()` и присваивания поля (lifecycle снапшота) → следующий шаг 2d: снятие
         самого поля `js_ctx` с UI-потока (перенос его lifecycle + snapshot save/restore
         на движковую сторону).
+        ✅ **Девятнадцатый под-срез готов** (branch `p1-mt-m22d-19`, 2026-07-11):
+        **декаплинг `.is_some()`-гейтов от владения `Arc`** — пролог к переносу
+        самого хэндла на движковый поток. Введено UI-поле `js_present: bool`
+        (`main.rs` ~:6316), которое держится в связке с `self.js_ctx` через новый
+        централизованный сеттер `set_js_ctx` (`main.rs` ~:7366): все ~10 сайтов
+        присваивания `self.js_ctx = …` (load, apply_loaded_page, bfcache-thaw,
+        restore-path, restore_page_snapshot, reset_for_fresh_tab) переведены на
+        `set_js_ctx(handle)`, а `save_page_snapshot` сбрасывает `js_present = false`
+        рядом с `js_ctx.take()`. Все 8 боевых гейтов `if self.js_ctx.is_some()`
+        (drag&drop token-register, layout-observer push ×2, void-dispatch,
+        lazy-images collect, first-paint delivery, contenteditable-eval, resize-eval)
+        читают теперь `self.js_present`. Пока `Arc` ещё на UI-стороне значение
+        тождественно `self.js_ctx.is_some()` в **обоих** режимах флага, поэтому срез
+        **байт-идентичен** (чистый рефактор, маршрутизация не менялась —
+        покрыт существующими `route_*`-тестами). No new deps, no `unsafe`. Теперь
+        решение «есть ли JS?» отвязано от факта держания хэндла: следующий срез 2d
+        сможет под флагом перенести сам `Arc` в `EngineJsState.js` (сеттер — в
+        `engine.task`, save/restore снапшота — через `query.take()`/`task`), оставив
+        `self.js_ctx == None`, а `js_present` останется верным сигналом для гейтов.
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any
