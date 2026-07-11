@@ -17,7 +17,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
-use crate::color_mix::{MixColorSpace, mix_colors};
+use crate::color_mix::{HueInterpolationMethod, MixColorSpace, mix_colors_hue};
 use crate::font_palette::{resolve_font_palette_overrides, ResolvedFontPalette};
 use crate::mathml::MathStyle;
 use crate::rule_index::RuleIndex;
@@ -18112,11 +18112,13 @@ pub fn parse_background_gradient(s: &str) -> ParsedGradient {
     // with the direction/shape. Strip it so the direction parsers see a clean
     // prelude, and apply the resulting space to the stop list.
     let first_seg = segments.first().map(|s| s.trim()).unwrap_or("");
-    let (clean_first, interp_space) = extract_gradient_interpolation(first_seg);
+    let (clean_first, interp_space, hue_method) = extract_gradient_interpolation(first_seg);
 
     let interp = |stops: Vec<GradientStop>| -> Vec<GradientStop> {
         match interp_space {
-            Some(sp) if sp != MixColorSpace::Srgb => densify_gradient_stops_for_space(&stops, sp),
+            Some(sp) if sp != MixColorSpace::Srgb => {
+                densify_gradient_stops_for_space(&stops, sp, hue_method)
+            }
             _ => stops,
         }
     };
@@ -18156,18 +18158,22 @@ pub fn parse_background_gradient(s: &str) -> ParsedGradient {
 /// CSS Images L4 §3.1 — parse and strip the `<color-interpolation-method>`
 /// (`in <space> [<hue> hue]?`) from a gradient prelude segment.
 ///
-/// Returns the prelude with the clause removed plus the parsed interpolation
-/// space (`None` if absent). The hue-interpolation method keyword (for polar
-/// spaces) is parsed and dropped — [`mix_colors`](crate::color_mix::mix_colors)
-/// always interpolates hue over the shortest arc, the CSS default.
+/// Returns the prelude with the clause removed, the parsed interpolation space
+/// (`None` if absent), and the `<hue-interpolation-method>` (defaults to
+/// [`HueInterpolationMethod::Shorter`], the CSS default, when absent or for
+/// non-polar spaces).
 ///
 /// Tokens that are not part of the interpolation clause (direction, `to <side>`,
 /// `circle`/`ellipse`, `from <angle>`, `at <x> <y>`) are preserved in order, so
 /// `linear-gradient(45deg in oklch, …)` and `linear-gradient(in oklch 45deg, …)`
-/// both yield `("45deg", Some(Oklch))`.
-fn extract_gradient_interpolation(prelude: &str) -> (String, Option<MixColorSpace>) {
+/// both yield `("45deg", Some(Oklch), Shorter)`, while
+/// `linear-gradient(in oklch longer hue, …)` yields `Longer`.
+fn extract_gradient_interpolation(
+    prelude: &str,
+) -> (String, Option<MixColorSpace>, HueInterpolationMethod) {
     let tokens: Vec<&str> = prelude.split_whitespace().collect();
     let mut space = None;
+    let mut hue = HueInterpolationMethod::Shorter;
     let mut kept: Vec<&str> = Vec::with_capacity(tokens.len());
     let mut i = 0;
     while i < tokens.len() {
@@ -18179,12 +18185,10 @@ fn extract_gradient_interpolation(prelude: &str) -> (String, Option<MixColorSpac
             i += 2;
             // Optional `<hue-interpolation-method> hue` for polar spaces.
             if let (Some(h), Some(hue_kw)) = (tokens.get(i), tokens.get(i + 1))
-                && matches!(
-                    h.to_ascii_lowercase().as_str(),
-                    "shorter" | "longer" | "increasing" | "decreasing"
-                )
+                && let Some(m) = HueInterpolationMethod::from_css(h)
                 && hue_kw.eq_ignore_ascii_case("hue")
             {
+                hue = m;
                 i += 2;
             }
             continue;
@@ -18192,7 +18196,7 @@ fn extract_gradient_interpolation(prelude: &str) -> (String, Option<MixColorSpac
         kept.push(tokens[i]);
         i += 1;
     }
-    (kept.join(" "), space)
+    (kept.join(" "), space, hue)
 }
 
 /// CSS Images L4 §3.1 — approximate gradient color interpolation in a non-sRGB
@@ -18207,7 +18211,14 @@ fn extract_gradient_interpolation(prelude: &str) -> (String, Option<MixColorSpac
 /// Returns the stops unchanged when there are fewer than two, or when any stop
 /// uses a non-percentage (`px`) position — px positions need the gradient line
 /// length, which is unknown at parse time.
-fn densify_gradient_stops_for_space(stops: &[GradientStop], space: MixColorSpace) -> Vec<GradientStop> {
+///
+/// `hue` selects the `<hue-interpolation-method>` (CSS Color L4 §12.4) for polar
+/// spaces; non-polar spaces ignore it.
+fn densify_gradient_stops_for_space(
+    stops: &[GradientStop],
+    space: MixColorSpace,
+    hue: HueInterpolationMethod,
+) -> Vec<GradientStop> {
     if stops.len() < 2 {
         return stops.to_vec();
     }
@@ -18289,7 +18300,7 @@ fn densify_gradient_stops_for_space(stops: &[GradientStop], space: MixColorSpace
         for j in 1..SEGMENTS {
             let t = j as f32 / SEGMENTS as f32;
             out.push(GradientStop {
-                color: from_f(mix_colors(space, a, 1.0 - t, b, t)),
+                color: from_f(mix_colors_hue(space, a, 1.0 - t, b, t, hue)),
                 color_space: stops[w].color_space,
                 position: Some(Length::Percent(p0 + (p1 - p0) * t)),
             });
@@ -30717,26 +30728,57 @@ mod tests {
     // ── gradient color-interpolation-method (CSS Images L4 §3.1) ──────────────
 
     /// `extract_gradient_interpolation` strips the `in <space>` clause and
-    /// returns the parsed space, preserving an accompanying angle in any order.
+    /// returns the parsed space + hue method, preserving an accompanying angle
+    /// in any order.
     #[test]
     fn gradient_interp_extract_space_and_angle() {
-        let (clean, sp) = extract_gradient_interpolation("45deg in oklch");
+        let (clean, sp, hue) = extract_gradient_interpolation("45deg in oklch");
         assert_eq!(clean, "45deg");
         assert_eq!(sp, Some(MixColorSpace::Oklch));
+        assert_eq!(hue, HueInterpolationMethod::Shorter, "default hue method");
 
-        let (clean, sp) = extract_gradient_interpolation("in oklch 45deg");
+        let (clean, sp, hue) = extract_gradient_interpolation("in oklch 45deg");
         assert_eq!(clean, "45deg");
         assert_eq!(sp, Some(MixColorSpace::Oklch));
+        assert_eq!(hue, HueInterpolationMethod::Shorter);
 
-        // Polar hue-interpolation keyword is parsed and dropped.
-        let (clean, sp) = extract_gradient_interpolation("to right in hsl longer hue");
+        // Polar hue-interpolation keyword is parsed and captured.
+        let (clean, sp, hue) = extract_gradient_interpolation("to right in hsl longer hue");
         assert_eq!(clean, "to right");
         assert_eq!(sp, Some(MixColorSpace::Hsl));
+        assert_eq!(hue, HueInterpolationMethod::Longer);
 
-        // No interpolation clause — prelude untouched, no space.
-        let (clean, sp) = extract_gradient_interpolation("to bottom right");
+        // `increasing hue` likewise captured.
+        let (_, sp, hue) = extract_gradient_interpolation("in oklch increasing hue");
+        assert_eq!(sp, Some(MixColorSpace::Oklch));
+        assert_eq!(hue, HueInterpolationMethod::Increasing);
+
+        // No interpolation clause — prelude untouched, no space, default hue.
+        let (clean, sp, hue) = extract_gradient_interpolation("to bottom right");
         assert_eq!(clean, "to bottom right");
         assert_eq!(sp, None);
+        assert_eq!(hue, HueInterpolationMethod::Shorter);
+    }
+
+    /// `longer hue` must produce a visibly different densified stop list than the
+    /// default `shorter hue` for the same polar-space gradient (the long arc
+    /// sweeps through intermediate hues the short arc skips).
+    #[test]
+    fn gradient_hue_longer_differs_from_shorter() {
+        let short = parse_background_gradient("linear-gradient(in oklch, red, blue)");
+        let long = parse_background_gradient("linear-gradient(in oklch longer hue, red, blue)");
+        let stops_of = |g: ParsedGradient| match g {
+            ParsedGradient::Linear { stops, .. } => stops,
+            other => panic!("expected linear, got {other:?}"),
+        };
+        let s = stops_of(short);
+        let l = stops_of(long);
+        assert!(s.len() > 2 && l.len() > 2, "both should be densified");
+        // Same endpoints, but at least one interior stop must differ.
+        let differs = s.iter().zip(l.iter()).any(|(a, b)| {
+            a.color.r != b.color.r || a.color.g != b.color.g || a.color.b != b.color.b
+        });
+        assert!(differs, "longer-hue arc must yield different intermediate colours");
     }
 
     /// A plain `linear-gradient(red, blue)` (no `in <space>`) keeps exactly two

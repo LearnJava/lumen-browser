@@ -82,6 +82,37 @@ impl MixColorSpace {
     }
 }
 
+/// CSS Color L4 §12.4 — `<hue-interpolation-method>`: how the hue angle is
+/// interpolated across the shortest/longest arc of the colour wheel for polar
+/// spaces (`hsl`/`hwb`/`lch`/`oklch`). Non-polar spaces ignore this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HueInterpolationMethod {
+    /// `shorter hue` — interpolate over the arc ≤ 180° (CSS default).
+    #[default]
+    Shorter,
+    /// `longer hue` — interpolate over the arc ≥ 180° (the long way round).
+    Longer,
+    /// `increasing hue` — force the hue to increase (wrap past 360° if needed).
+    Increasing,
+    /// `decreasing hue` — force the hue to decrease (wrap below 0° if needed).
+    Decreasing,
+}
+
+impl HueInterpolationMethod {
+    /// Parse a CSS `<hue-interpolation-method>` keyword (case-insensitive).
+    /// Recognises the four method keywords; the trailing `hue` token is handled
+    /// by the caller. Returns `None` for anything else.
+    pub fn from_css(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "shorter" => Some(Self::Shorter),
+            "longer" => Some(Self::Longer),
+            "increasing" => Some(Self::Increasing),
+            "decreasing" => Some(Self::Decreasing),
+            _ => None,
+        }
+    }
+}
+
 /// CSS Color L5 §10.2 — mix two sRGB colors in the given interpolation space.
 ///
 /// Both `c1` and `c2` are sRGB [r, g, b, a] with each component in `[0.0, 1.0]`.
@@ -91,6 +122,10 @@ impl MixColorSpace {
 ///
 /// Returns the mixed color in sRGB `[r, g, b, a]`.
 ///
+/// Hue (for polar spaces) is interpolated over the shorter arc — the CSS
+/// default. Callers that need `longer`/`increasing`/`decreasing` hue must use
+/// [`mix_colors_hue`].
+///
 /// # CSS spec reference
 /// CSS Color Level 5 §10.2 "Mixing Colors: the color-mix() Function"
 pub fn mix_colors(
@@ -99,6 +134,22 @@ pub fn mix_colors(
     w1: f32,
     c2: [f32; 4],
     w2: f32,
+) -> [f32; 4] {
+    mix_colors_hue(space, c1, w1, c2, w2, HueInterpolationMethod::Shorter)
+}
+
+/// CSS Color L5 §10.2 + §12.4 — like [`mix_colors`], but with an explicit
+/// `<hue-interpolation-method>` for polar spaces. Non-polar spaces ignore `hue`.
+///
+/// Used by the gradient `<color-interpolation-method>` polyfill so
+/// `linear-gradient(in oklch longer hue, red, blue)` sweeps the long arc.
+pub fn mix_colors_hue(
+    space: MixColorSpace,
+    c1: [f32; 4],
+    w1: f32,
+    c2: [f32; 4],
+    w2: f32,
+    hue: HueInterpolationMethod,
 ) -> [f32; 4] {
     // Normalize weights. If both are 0, return transparent.
     let total = w1 + w2;
@@ -132,7 +183,7 @@ pub fn mix_colors(
             let h1 = srgb_to_hsl(pre1);
             let h2 = srgb_to_hsl(pre2);
             // HSL stores the hue at component 0.
-            let mixed = mix_polar(h1, h2, p2, 0);
+            let mixed = mix_polar(h1, h2, p2, 0, hue);
             hsl_to_srgb(mixed)
         }
 
@@ -140,7 +191,7 @@ pub fn mix_colors(
             let h1 = srgb_to_hwb(pre1);
             let h2 = srgb_to_hwb(pre2);
             // HWB stores the hue at component 0.
-            let mixed = mix_polar(h1, h2, p2, 0);
+            let mixed = mix_polar(h1, h2, p2, 0, hue);
             hwb_to_srgb(mixed)
         }
 
@@ -155,7 +206,7 @@ pub fn mix_colors(
             let l1 = srgb_to_lch(pre1);
             let l2 = srgb_to_lch(pre2);
             // LCH stores the hue at component 2 ([L, C, h, a]).
-            let mixed = mix_polar(l1, l2, p2, 2);
+            let mixed = mix_polar(l1, l2, p2, 2, hue);
             lch_to_srgb(mixed)
         }
 
@@ -170,7 +221,7 @@ pub fn mix_colors(
             let l1 = srgb_to_oklch(pre1);
             let l2 = srgb_to_oklch(pre2);
             // Oklch stores the hue at component 2 ([L, C, h, a]).
-            let mixed = mix_polar(l1, l2, p2, 2);
+            let mixed = mix_polar(l1, l2, p2, 2, hue);
             oklch_to_srgb(mixed)
         }
 
@@ -197,33 +248,70 @@ pub fn mix_colors(
 // ─── Hue interpolation (shortest path per CSS Color L5 §12.4) ────────────────
 
 /// For polar spaces: interpolate a 4-component color where `hue_idx` selects
-/// which component holds the hue (in degrees). The hue uses the "shorter" arc
-/// interpolation method (CSS default, §12.4); all other components — including
-/// alpha — are interpolated linearly.
+/// which component holds the hue (in degrees). The hue arc follows `method`
+/// (CSS Color L4 §12.4); all other components — including alpha — are
+/// interpolated linearly.
 ///
 /// `hue_idx` differs by space: HSL/HWB store the hue at component 0
 /// (`[h, …]`), whereas LCH/Oklch store it at component 2 (`[L, C, h, a]`).
 /// Passing the wrong index makes the hue interpolate linearly while a
 /// non-hue component is wrapped on the circle — see BUG-154.
-fn mix_polar(from: [f32; 4], to: [f32; 4], t: f32, hue_idx: usize) -> [f32; 4] {
+fn mix_polar(
+    from: [f32; 4],
+    to: [f32; 4],
+    t: f32,
+    hue_idx: usize,
+    method: HueInterpolationMethod,
+) -> [f32; 4] {
     let mut out = lerp4(from, to, t);
 
-    // Shortest arc on the hue circle for the hue component only.
-    let delta = normalize_hue(to[hue_idx] - from[hue_idx]);
-    out[hue_idx] = from[hue_idx] + t * delta;
+    // Fix up the two hue endpoints per §12.4, then interpolate linearly between
+    // them. The result may leave [0, 360); the `*_to_srgb` conversions treat the
+    // hue as an angle (sin/cos), so an out-of-range hue is handled correctly.
+    let (h1, h2) = adjust_hue_endpoints(from[hue_idx], to[hue_idx], method);
+    out[hue_idx] = h1 + t * (h2 - h1);
 
     out
 }
 
-/// Normalize hue delta to [-180, 180] for shortest-arc interpolation.
-fn normalize_hue(mut delta: f32) -> f32 {
-    delta %= 360.0;
-    if delta > 180.0 {
-        delta -= 360.0;
-    } else if delta < -180.0 {
-        delta += 360.0;
+/// CSS Color L4 §12.4 — fix up two hue angles so a plain linear interpolation
+/// between the returned pair traverses the arc selected by `method`. Both inputs
+/// are first reduced to `[0, 360)`; the outputs may exceed that range.
+fn adjust_hue_endpoints(
+    from: f32,
+    to: f32,
+    method: HueInterpolationMethod,
+) -> (f32, f32) {
+    let mut h1 = from.rem_euclid(360.0);
+    let mut h2 = to.rem_euclid(360.0);
+    let diff = h2 - h1;
+    match method {
+        HueInterpolationMethod::Shorter => {
+            if diff > 180.0 {
+                h1 += 360.0;
+            } else if diff < -180.0 {
+                h2 += 360.0;
+            }
+        }
+        HueInterpolationMethod::Longer => {
+            if (0.0..180.0).contains(&diff) {
+                h1 += 360.0;
+            } else if diff > -180.0 && diff <= 0.0 {
+                h2 += 360.0;
+            }
+        }
+        HueInterpolationMethod::Increasing => {
+            if diff < 0.0 {
+                h2 += 360.0;
+            }
+        }
+        HueInterpolationMethod::Decreasing => {
+            if diff > 0.0 {
+                h1 += 360.0;
+            }
+        }
     }
-    delta
+    (h1, h2)
 }
 
 // ─── Alpha pre/un-multiplication ─────────────────────────────────────────────
@@ -690,6 +778,77 @@ mod tests {
         assert!(!MixColorSpace::Srgb.is_polar());
         assert!(!MixColorSpace::Oklab.is_polar());
         assert!(!MixColorSpace::Lab.is_polar());
+    }
+
+    // ── HueInterpolationMethod::from_css ─────────────────────────────────────
+
+    #[test]
+    fn parse_hue_methods() {
+        assert_eq!(HueInterpolationMethod::from_css("shorter"), Some(HueInterpolationMethod::Shorter));
+        assert_eq!(HueInterpolationMethod::from_css("LONGER"), Some(HueInterpolationMethod::Longer));
+        assert_eq!(HueInterpolationMethod::from_css("increasing"), Some(HueInterpolationMethod::Increasing));
+        assert_eq!(HueInterpolationMethod::from_css("decreasing"), Some(HueInterpolationMethod::Decreasing));
+        assert_eq!(HueInterpolationMethod::from_css("nonsense"), None);
+        assert_eq!(HueInterpolationMethod::default(), HueInterpolationMethod::Shorter);
+    }
+
+    // ── adjust_hue_endpoints (CSS Color L4 §12.4) ────────────────────────────
+
+    fn mid_hue(from: f32, to: f32, m: HueInterpolationMethod) -> f32 {
+        let (h1, h2) = adjust_hue_endpoints(from, to, m);
+        h1 + 0.5 * (h2 - h1)
+    }
+
+    #[test]
+    fn hue_shorter_takes_short_arc() {
+        // 350°→10° short arc crosses 360° → midpoint 0° (mod 360).
+        assert!(approx_eq(mid_hue(350.0, 10.0, HueInterpolationMethod::Shorter), 360.0));
+        // 30°→60° short arc → 45°.
+        assert!(approx_eq(mid_hue(30.0, 60.0, HueInterpolationMethod::Shorter), 45.0));
+    }
+
+    #[test]
+    fn hue_longer_takes_long_arc() {
+        // 30°→60° the long way → midpoint 225°.
+        assert!(approx_eq(mid_hue(30.0, 60.0, HueInterpolationMethod::Longer), 225.0));
+        // 350°→10° the long way (backwards through 180°) → midpoint 180°.
+        assert!(approx_eq(mid_hue(350.0, 10.0, HueInterpolationMethod::Longer), 180.0));
+    }
+
+    #[test]
+    fn hue_increasing_forces_increase() {
+        // 350°→10° increasing crosses 360° → midpoint 360°.
+        assert!(approx_eq(mid_hue(350.0, 10.0, HueInterpolationMethod::Increasing), 360.0));
+        // 30°→60° already increasing → 45°.
+        assert!(approx_eq(mid_hue(30.0, 60.0, HueInterpolationMethod::Increasing), 45.0));
+    }
+
+    #[test]
+    fn hue_decreasing_forces_decrease() {
+        // 30°→60° decreasing wraps down → midpoint 225°.
+        assert!(approx_eq(mid_hue(30.0, 60.0, HueInterpolationMethod::Decreasing), 225.0));
+        // 350°→10° already decreasing → midpoint 180°.
+        assert!(approx_eq(mid_hue(350.0, 10.0, HueInterpolationMethod::Decreasing), 180.0));
+    }
+
+    #[test]
+    fn mix_colors_hue_shorter_longer_differ() {
+        // red→blue in oklch: shorter vs longer arc must yield different colours.
+        let red = [1.0_f32, 0.0, 0.0, 1.0];
+        let blue = [0.0_f32, 0.0, 1.0, 1.0];
+        let short = mix_colors_hue(MixColorSpace::Oklch, red, 0.5, blue, 0.5, HueInterpolationMethod::Shorter);
+        let long = mix_colors_hue(MixColorSpace::Oklch, red, 0.5, blue, 0.5, HueInterpolationMethod::Longer);
+        assert!(!approx_eq4(short, long), "shorter {short:?} and longer {long:?} arcs must differ");
+    }
+
+    #[test]
+    fn mix_colors_delegates_to_shorter() {
+        // The legacy `mix_colors` entry point must equal `mix_colors_hue(.., Shorter)`.
+        let red = [1.0_f32, 0.0, 0.0, 1.0];
+        let blue = [0.0_f32, 0.0, 1.0, 1.0];
+        let a = mix_colors(MixColorSpace::Oklch, red, 0.5, blue, 0.5);
+        let b = mix_colors_hue(MixColorSpace::Oklch, red, 0.5, blue, 0.5, HueInterpolationMethod::Shorter);
+        assert!(approx_eq4(a, b));
     }
 
     // ── mix_colors: sRGB ─────────────────────────────────────────────────────

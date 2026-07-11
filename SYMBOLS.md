@@ -1661,7 +1661,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/knowledge/src/store.rs:77` **fn** `read_later` — Direct access to the read-later store for status / touch operations
 `crates/knowledge/src/store.rs:83` **fn** `notes` — Direct access to the notes store for URL-based note listing and
 
-## lumen-layout  (611 symbols)
+## lumen-layout  (614 symbols)
 
 `crates/engine/layout/src/anchor.rs:44` **enum** `AnchorSide` — Which edge or point of an anchor element the `anchor()` function references
 `crates/engine/layout/src/anchor.rs:73` **enum** `InsetAreaKeyword` — Single-axis `inset-area` keyword, as defined in §5.2 of the spec
@@ -1749,8 +1749,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/color_mix.rs:38` **enum** `MixColorSpace` — CSS Color L5 §10.2 — interpolation color space for `color-mix()`
 `crates/engine/layout/src/color_mix.rs:63` **fn** `from_css` — Parse a CSS `color-mix()` interpolation space identifier (case-insensitive)
 `crates/engine/layout/src/color_mix.rs:80` **fn** `is_polar` — Returns `true` if this space has a hue (polar) axis
-`crates/engine/layout/src/color_mix.rs:96` **fn** `mix_colors` — CSS Color L5 §10.2 — mix two sRGB colors in the given interpolation space
-`crates/engine/layout/src/color_mix.rs:630` **fn** `relative_origin_channels` — CSS Color L5 §4.1 — channel values of a relative-color origin color
+`crates/engine/layout/src/color_mix.rs:89` **enum** `HueInterpolationMethod` — CSS Color L4 §12.4 — `<hue-interpolation-method>`: how the hue angle is
+`crates/engine/layout/src/color_mix.rs:105` **fn** `from_css` — Parse a CSS `<hue-interpolation-method>` keyword (case-insensitive)
+`crates/engine/layout/src/color_mix.rs:131` **fn** `mix_colors` — CSS Color L5 §10.2 — mix two sRGB colors in the given interpolation space
+`crates/engine/layout/src/color_mix.rs:146` **fn** `mix_colors_hue` — CSS Color L5 §10.2 + §12.4 — like [`mix_colors`], but with an explicit
+`crates/engine/layout/src/color_mix.rs:718` **fn** `relative_origin_channels` — CSS Color L5 §4.1 — channel values of a relative-color origin color
 `crates/engine/layout/src/content_visibility.rs:50` **fn** `set_cv_scroll` — Set the root scroll offset used by the relevance check for the next layout
 `crates/engine/layout/src/content_visibility.rs:56` **fn** `set_cv_relevant` — Install the set of nodes the shell considers relevant (ratchet set)
 `crates/engine/layout/src/content_visibility.rs:69` **fn** `take_cv_skipped` — Drain the skip records of the last layout pass: `(node, collapsed_top_y)`,
@@ -2256,9 +2259,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/style.rs:16769` **fn** `parse_transform_list` — Парсит `<transform-list>` — последовательность `func(args)` через
 `crates/engine/layout/src/style.rs:18003` **fn** `parse_grid_template_areas` — CSS Grid L1 §7.3 — parse `grid-template-areas` value
 `crates/engine/layout/src/style.rs:18083` **fn** `parse_background_gradient` — CSS Images L3/L4 §3.3/§3.7 — parses color stops from a CSS gradient string
-`crates/engine/layout/src/style.rs:18481` **fn** `parse_gradient_stops` — The leading direction / angle / shape argument (e.g. `to right`,
-`crates/engine/layout/src/style.rs:19352` **fn** `parse_color`
-`crates/engine/layout/src/style.rs:19515` **fn** `system_color` — CSS Color Module Level 4 §6.2 — резолв системных цветовых ключевых слов
+`crates/engine/layout/src/style.rs:18492` **fn** `parse_gradient_stops` — The leading direction / angle / shape argument (e.g. `to right`,
+`crates/engine/layout/src/style.rs:19363` **fn** `parse_color`
+`crates/engine/layout/src/style.rs:19526` **fn** `system_color` — CSS Color Module Level 4 §6.2 — резолв системных цветовых ключевых слов
 `crates/engine/layout/src/subgrid.rs:24` **struct** `SubgridContext` — Resolved track sizes and cumulative offsets for one grid axis (columns or rows)
 `crates/engine/layout/src/subgrid.rs:35` **fn** `from_parent_tracks` — Build from a slice of parent track sizes and the gap value used between them
 `crates/engine/layout/src/subgrid.rs:46` **fn** `total_size` — Total span width/height occupied by all inherited tracks (including inter-track gaps)
@@ -3501,7 +3504,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/webauthn.rs:69` **fn** `new` — Create an empty authenticator with no registered credentials
 `crates/network/src/webauthn.rs:74` **fn** `credential_count` — Number of credentials currently registered (test / introspection helper)
 
-## lumen-paint  (371 symbols)
+## lumen-paint  (375 symbols)
 
 `crates/engine/paint/src/atlas.rs:35` **struct** `AtlasKey` — Композитный ключ glyph-кэша. См. module-level docs
 `crates/engine/paint/src/atlas.rs:43` **fn** `new`
@@ -3549,8 +3552,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/backends/cpu_backend.rs:31` **struct** `CpuBackend` — Headless CPU-бэкенд на tiny-skia: детерминированный рендер без GPU
 `crates/engine/paint/src/backends/cpu_backend.rs:44` **fn** `new` — Создаёт headless CPU-бэкенд с заданным размером поверхности
 `crates/engine/paint/src/backends/cpu_backend.rs:49` **fn** `last_image` — Возвращает Image из последнего рендера, если он был выполнен
-`crates/engine/paint/src/backends/femtovg_backend.rs:373` **struct** `FemtovgBackend` — femtovg/OpenGL рендер-бэкенд (Phase 2, ADR-010)
-`crates/engine/paint/src/backends/femtovg_backend.rs:1160` **fn** `new` — Создаёт оконный femtovg-бэкенд из winit-окна
+`crates/engine/paint/src/backends/femtovg_backend.rs:390` **struct** `FemtovgBackend` — Реализует [`RenderBackend`] через femtovg 2D Canvas API поверх OpenGL
+`crates/engine/paint/src/backends/femtovg_backend.rs:1185` **fn** `new` — Создаёт оконный femtovg-бэкенд из winit-окна
+`crates/engine/paint/src/backends/femtovg_backend.rs:1325` **fn** `detach_gl_context` — Открепляет GL-контекст от текущего потока (`make_not_current`)
+`crates/engine/paint/src/backends/femtovg_backend.rs:1353` **fn** `attach_gl_context` — Привязывает GL-контекст к текущему потоку (`make_current`)
 `crates/engine/paint/src/backends/vello_backend.rs:43` **struct** `VelloBackend` — Phase 3 рендер-бэкенд на базе Vello (ADR-010, RB-7 заглушка)
 `crates/engine/paint/src/backends/vello_backend.rs:57` **fn** `new` — Создаёт заглушку `VelloBackend` с начальным размером поверхности
 `crates/engine/paint/src/backends/wgpu_backend.rs:52` **struct** `WgpuBackend` — wgpu-бэкенд: тонкая обёртка над [`Renderer`], реализующая [`RenderBackend`]
@@ -3716,14 +3721,16 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/lib.rs:124` **fn** `len` — Количество учтённых кадров
 `crates/engine/paint/src/lib.rs:129` **fn** `is_empty` — `true`, если ни одного кадра ещё не учтено
 `crates/engine/paint/src/lib.rs:138` **fn** `summary` — Считает перцентильную сводку. Возвращает `None` для пустой выборки
-`crates/engine/paint/src/lib.rs:288` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
-`crates/engine/paint/src/lib.rs:298` **fn** `new`
-`crates/engine/paint/src/lib.rs:497` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
-`crates/engine/paint/src/lib.rs:507` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
-`crates/engine/paint/src/lib.rs:521` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family` без unicode-range ограничений
-`crates/engine/paint/src/lib.rs:535` **fn** `register_family_with_ranges` — Регистрирует @font-face шрифт с `unicode-range` ограничением
-`crates/engine/paint/src/lib.rs:551` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
-`crates/engine/paint/src/lib.rs:566` **fn** `resolve_font_stretch` — Resolves `font-stretch` percentage for the first matching family
+`crates/engine/paint/src/lib.rs:169` **fn** `display_with` — Оборачивает сводку в [`Display`] с произвольным префиксом-меткой вместо
+`crates/engine/paint/src/lib.rs:176` **struct** `LabeledSummary` — [`Display`]-обёртка над [`FrameSummary`] с произвольной меткой-префиксом
+`crates/engine/paint/src/lib.rs:333` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
+`crates/engine/paint/src/lib.rs:343` **fn** `new`
+`crates/engine/paint/src/lib.rs:542` **struct** `MultiFontMeasurer` — Многошрифтовый измеритель: поддерживает @font-face-загруженные шрифты
+`crates/engine/paint/src/lib.rs:552` **fn** `new` — Создаёт измеритель с bundled-шрифтом как fallback
+`crates/engine/paint/src/lib.rs:566` **fn** `register_family` — Регистрирует @font-face шрифт под именем `family` без unicode-range ограничений
+`crates/engine/paint/src/lib.rs:580` **fn** `register_family_with_ranges` — Регистрирует @font-face шрифт с `unicode-range` ограничением
+`crates/engine/paint/src/lib.rs:596` **fn** `family_count` — Количество зарегистрированных семей (для тестов)
+`crates/engine/paint/src/lib.rs:611` **fn** `resolve_font_stretch` — Resolves `font-stretch` percentage for the first matching family
 `crates/engine/paint/src/matrix_util.rs:19` **fn** `mat4_to_2d_affine` — Извлекает 2D-аффинные компоненты `[a, b, c, d, e, f]` из column-major
 `crates/engine/paint/src/renderer.rs:1272` **struct** `OffscreenLayer` — GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
 `crates/engine/paint/src/renderer.rs:1303` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
@@ -3875,7 +3882,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/webgpu_compute.rs:980` **enum** `GpuOp` — Одна записанная операция command-encoder для исполнения на `queue.submit`
 `crates/engine/paint/src/webgpu_compute.rs:1035` **fn** `submit` — Исполняет набор операций в одном `CommandEncoder` и сабмитит на очередь
 
-## lumen-shell  (908 symbols)
+## lumen-shell  (920 symbols)
 
 `crates/shell/src/adblock.rs:44` **fn** `browser_data_dir` — Root of all browser user data (portable): `<exe_dir>/data`
 `crates/shell/src/adblock.rs:52` **fn** `adblock_dir` — `<data>/adblock` — root of the ad-block subsystem's files
@@ -3911,7 +3918,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/animation_scheduler.rs:121` **fn** `new`
 `crates/shell/src/animation_scheduler.rs:133` **fn** `tick` — Тик планировщика: обходит layout-дерево, для каждой активной анимации
 `crates/shell/src/animation_scheduler.rs:157` **fn** `clear` — Удалить все записи для элементов, которых больше нет в дереве
-`crates/shell/src/backend_factory.rs:40` **fn** `create_backend` — Создаёт windowed рендер-бэкенд для окна `window`
+`crates/shell/src/backend_factory.rs:48` **fn** `create_backend` — Создаёт windowed рендер-бэкенд для окна `window`
 `crates/shell/src/click_log.rs:27` **fn** `init` — Вызвать один раз при старте с результатом разбора флага --activity-log
 `crates/shell/src/click_log.rs:43` **fn** `is_enabled`
 `crates/shell/src/click_log.rs:97` **struct** `ClickInfo` — Клик мышью: window-координаты и что под курсором
@@ -4013,6 +4020,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/download.rs:349` **fn** `close` — Hide the panel
 `crates/shell/src/download.rs:725` **fn** `hit_test` — Hit-test a click at `(x, y)` (CSS px) against the download panel
 `crates/shell/src/download.rs:755` **fn** `build_download_bar` — Build the viewport-locked download panel overlay
+`crates/shell/src/engine_thread.rs:118` **struct** `EngineThread` — Хэндл долгоживущего движкового потока (ADR-016 M2.2)
+`crates/shell/src/engine_thread.rs:142` **fn** `spawn_with_state` — Запускает именованный движковый поток с состоянием `initial` и возвращает
+`crates/shell/src/engine_thread.rs:156` **fn** `submit` — Ставит задание движковому потоку (fire-and-forget). `generation` —
+`crates/shell/src/engine_thread.rs:163` **fn** `take_committed` — Забирает новейший исполненный коммит из слота, если он есть (latest-wins:
+`crates/shell/src/engine_thread.rs:184` **fn** `readback` — Request/reply: ставит задание и **блокируется**, пока движковый поток не
+`crates/shell/src/engine_thread.rs:203` **fn** `task` — Ставит упорядоченное задание над персистентным состоянием `S` движкового
+`crates/shell/src/engine_thread.rs:222` **fn** `query` — Request/reply над персистентным состоянием `S`: ставит упорядоченное
+`crates/shell/src/engine_thread.rs:251` **fn** `spawn` — Запускает именованный движковый поток c состоянием по умолчанию
 `crates/shell/src/extensions/mod.rs:33` **struct** `ContentScript` — A single content-script entry from `manifest.json`
 `crates/shell/src/extensions/mod.rs:42` **struct** `ExtensionManifest` — A parsed `manifest.json` for one extension
 `crates/shell/src/extensions/mod.rs:69` **struct** `ExtensionRegistry` — Registry of all installed extensions for the current profile
@@ -4168,6 +4183,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/momentum_anim.rs:26` **struct** `MomentumAnim` — Velocity-based momentum анимация. Хранится в `Lumen.momentum_anim`
 `crates/shell/src/momentum_anim.rs:36` **fn** `new`
 `crates/shell/src/momentum_anim.rs:43` **fn** `advance` — Прогнать анимацию до `now_ms`. Возвращает `(Δy, Δx, done)`
+`crates/shell/src/momentum_anim.rs:70` **fn** `velocity_at` — Скорость момента в момент `t_ms`, если в `t0_ms` она была `v0`
+`crates/shell/src/momentum_anim.rs:83` **fn** `displacement_since` — Полное смещение (CSS px) от точки отсчёта за интервал `[t0_ms, t_ms]`,
 `crates/shell/src/network_service.rs:26` **struct** `NetworkServiceHandle` — Хендл живого подпроцесса `lumen-network-service`
 `crates/shell/src/network_service.rs:38` **fn** `spawn` — Запустить `lumen-network-service` из той же директории, что и текущий исполняемый файл
 `crates/shell/src/newtab.rs:23` **struct** `TopSite` — Одна плитка speed dial: целевой URL и отображаемый заголовок
@@ -4513,6 +4530,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/reader_view.rs:18` **struct** `ArticleContent` — Article content extracted from a raw HTML page
 `crates/shell/src/reader_view.rs:37` **fn** `extract_article` — Parse `html` and extract the main article content
 `crates/shell/src/reader_view.rs:52` **fn** `build_reader_html` — Wrap an [`ArticleContent`] in the reader template and return a
+`crates/shell/src/render_thread.rs:181` **struct** `ThreadedRenderBackend` — Прокси-бэкенд: реализует [`RenderBackend`], но настоящий GPU-бэкенд живёт на
+`crates/shell/src/render_thread.rs:213` **fn** `new` — Запускает рендер-поток и возвращает прокси
 `crates/shell/src/runtime.rs:39` **enum** `TaskSource` — Источник task-а — HTML §8.1.4.3 «Task sources». Каждому источнику —
 `crates/shell/src/runtime.rs:91` **struct** `Task` — Task — отложенное действие, выполняемое за пределами текущего call-stack-а
 `crates/shell/src/runtime.rs:97` **fn** `new`
@@ -5301,4 +5320,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 5230 symbols in 22 crates*
+*Total: 5249 symbols in 22 crates*

@@ -466,7 +466,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `object-fit` / `object-position` | ✅ | |
 | `image-set()` | ✅ | CSS Images L4; `image_set.rs` module + DPR candidate selection (2026-06-02) |
 | `conic-gradient()` | ✅ | ParsedGradient::Conic + DrawConicGradient + GPU shader 2026-05-24 |
-| gradient `in <space>` (color-interpolation-method) | 🟡 | rectangular + hsl/hwb ✅ 2026-06-14 (dense-stop polyfill via color-mix); polar oklch/lch ⬜ BUG-154 |
+| gradient `in <space>` (color-interpolation-method) | ✅ | dense-stop polyfill via color-mix; rectangular + polar (hsl/hwb/lch/oklch, BUG-154 FIXED); `<hue-interpolation-method>` shorter/longer/increasing/decreasing (CSS Color L4 §12.4) 2026-07-12 |
 | `cross-fade()` | 🟡 | CSS Images L4; parsed + stored (`BackgroundImage::CrossFade`, style.rs:17571); paint compositing ⬜ |
 
 ### [T2] CSS Grid
