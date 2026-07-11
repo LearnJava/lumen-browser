@@ -9367,17 +9367,26 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         }
 
         // Web Notifications API: deliver pending OS notifications queued by JS.
-        if let Some(js) = &self.js_ctx {
-            for (title, body) in js.take_notification_requests() {
-                notification::show_os_notification(&title, &body);
-            }
+        // ADR-016 M2.2d: value-drain через `route_query_js` (под флагом — off-UI-thread
+        // `query`; без флага — байт-идентично прежнему `js.take_notification_requests()`).
+        for (title, body) in
+            route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_notification_requests()
+            })
+            .unwrap_or_default()
+        {
+            notification::show_os_notification(&title, &body);
         }
 
         // window.open() popup requests: each entry opens a new tab and navigates it
         // to the requested URL.  Executed after the page render so the current tab
         // stays visible while the new tab loads.
-        if let Some(js) = &self.js_ctx {
-            let popups = js.take_window_open_requests();
+        // ADR-016 M2.2d: value-drain через `route_query_js`.
+        {
+            let popups = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_window_open_requests()
+            })
+            .unwrap_or_default();
             for (url, _target, _width, _height) in popups {
                 self.open_new_tab();
                 let url = if url.is_empty() {
@@ -9390,25 +9399,29 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         }
 
         // Fullscreen API: apply OS fullscreen on requestFullscreen() / exitFullscreen().
+        // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(feature = "quickjs")]
-        if let Some(js) = &self.js_ctx {
-            for (enter, nid) in js.take_fullscreen_requests() {
-                self.fullscreen_nid = if enter { Some(nid) } else { None };
-                let target = if enter {
-                    Some(winit::window::Fullscreen::Borderless(None))
-                } else {
-                    None
-                };
-                // Apply the OS mode and capture the pre-toggle physical size; the
-                // borrow of `self.window` ends with the `map`, so the &mut call
-                // to `arm_fullscreen_resize` below does not conflict.
-                let prev = self.window.as_ref().map(|w| {
-                    w.set_fullscreen(target);
-                    w.inner_size()
-                });
-                if let Some(prev) = prev {
-                    self.arm_fullscreen_resize(prev);
-                }
+        for (enter, nid) in
+            route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_fullscreen_requests()
+            })
+            .unwrap_or_default()
+        {
+            self.fullscreen_nid = if enter { Some(nid) } else { None };
+            let target = if enter {
+                Some(winit::window::Fullscreen::Borderless(None))
+            } else {
+                None
+            };
+            // Apply the OS mode and capture the pre-toggle physical size; the
+            // borrow of `self.window` ends with the `map`, so the &mut call
+            // to `arm_fullscreen_resize` below does not conflict.
+            let prev = self.window.as_ref().map(|w| {
+                w.set_fullscreen(target);
+                w.inner_size()
+            });
+            if let Some(prev) = prev {
+                self.arm_fullscreen_resize(prev);
             }
         }
 
@@ -9454,19 +9467,25 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         }
 
         // Print API: window.print() exports current document as PDF (W-2).
+        // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(feature = "quickjs")]
-        if let Some(js) = &self.js_ctx {
-            let print_reqs = js.take_print_requests();
-            for req in print_reqs {
-                self.handle_print_request(&req);
-            }
+        for req in route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            j.take_print_requests()
+        })
+        .unwrap_or_default()
+        {
+            self.handle_print_request(&req);
         }
 
         // Dialog focus management (HTML LS §6.6.3): apply focus changes requested by
         // showModal() / close() in JS via _lumen_request_focus / _lumen_request_blur.
+        // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(feature = "quickjs")]
-        if let Some(js) = &self.js_ctx {
-            let focus_reqs = js.take_focus_requests();
+        {
+            let focus_reqs = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_focus_requests()
+            })
+            .unwrap_or_default();
             if !focus_reqs.is_empty() {
                 // Only the last request in the batch matters.
                 if let Some(last_req) = focus_reqs.into_iter().last() {
@@ -9487,9 +9506,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         }
 
         // CSS View Transitions API: drain snapshot/animation events from JS.
+        // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(feature = "quickjs")]
-        if let Some(js) = &self.js_ctx {
-            for event in js.take_view_transition_events() {
+        {
+            let events = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_view_transition_events()
+            })
+            .unwrap_or_default();
+            for event in events {
                 match event {
                     ViewTransitionEvent::Begin => {
                         // Capture current display list as the "before" snapshot.
@@ -9521,8 +9545,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         }
 
         // DevTools console: drain JS console.log/warn/error messages into the panel.
-        if let Some(js) = &self.js_ctx {
-            let msgs = js.take_console_messages();
+        // ADR-016 M2.2d: value-drain через `route_query_js`.
+        {
+            let msgs = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_console_messages()
+            })
+            .unwrap_or_default();
             if !msgs.is_empty() {
                 self.devtools_console.push_batch(msgs);
                 if self.devtools_console.visible {
@@ -9579,15 +9607,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // Page-level scroll requests from JS window.scrollTo / window.scrollBy.
         // Smooth requests go through the rAF-based animation; instant ones set
         // scroll_y directly (CSS Scroll Behavior L1 §3).
+        // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(feature = "quickjs")]
-        if let Some(js) = &self.js_ctx {
-            let page_reqs = js.take_page_scroll_requests();
-            for (target_y, smooth) in page_reqs {
-                if smooth {
-                    self.start_smooth_scroll(target_y);
-                } else {
-                    self.scroll_to(target_y);
-                }
+        for (target_y, smooth) in
+            route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_page_scroll_requests()
+            })
+            .unwrap_or_default()
+        {
+            if smooth {
+                self.start_smooth_scroll(target_y);
+            } else {
+                self.scroll_to(target_y);
             }
         }
 
