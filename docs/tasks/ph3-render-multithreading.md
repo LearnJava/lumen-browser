@@ -979,6 +979,30 @@ Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
         No new deps, no `unsafe`. Остаются прямые `self.js_ctx`-чтения (lazy-images/pageshow
         setup, focus/scroll-states/hashchange void-eval, tab park/unpark) — следующие
         под-срезы 2d перед снятием самого поля.
+        ✅ **Шестнадцатый под-срез готов** (branch `p1-mt-m22d-16`, 2026-07-11):
+        класс **focus/scroll-states/hashchange void-eval** — 3 сайта
+        `if let Some(js) = &self.js_ctx { js.<void>() }` переведены на маршрутизаторы,
+        все чистый fire-and-forget void без синхронного чтения результата следом.
+        (1) **hashchange fragment-nav** (`navigate_to_fragment`, `main.rs` ~:7632) — два
+        `_lumen_dispatch_navigate('fragment', …)` + `_lumen_navigate_or_fragment(…)`
+        через `route_eval_js` (двумя `task` в FIFO, dispatch→navigate сохранён);
+        `location`/`hashchange` фиксируются JS-стороной, а `HistoryUrlUpdate` дренится
+        позже через `take_nav_updates` — read-after-eval нет. Гейт `if let Some(js)`
+        заменён на `if self.js_ctx.is_some()` (эскейп-строка строится только при JS).
+        (2) **focus-changed** (`main.rs` ~:13357) — `notify_focus_changed(focus_idx)`
+        через `route_task_js`; `focus_idx` (owned `Option<u32>`) вычисляется до
+        маршрутизации, гейт снят (route-хелпер сам обрабатывает `None`). (3)
+        **overflow-container element-scroll** (`try_scroll_overflow_container`,
+        `main.rs` ~:17022) — `update_scroll_states(states)` push → `fire_element_scroll(target_nid)`
+        одним `route_task_js`; `states` (owned `HashMap`) и `target_nid` (`u32`, Copy)
+        переезжают в `move`-замыкание, порядок push→dispatch сохранён внутри одного
+        `task`. Под флагом (`LUMEN_ENGINE_THREAD=1`) все три уходят off-UI-thread; без
+        флага (по умолчанию) — синхронные вызовы по UI-хэндлу, **байт-идентично** прежним
+        `js.eval_js`/`js.<method>`. No new deps, no `unsafe`. Механизм не менялся —
+        покрыт существующими route/engine_thread тестами (`route_eval_js_without_handle_is_noop`,
+        `route_task_js_without_handle_is_noop`). Остаются прямые `self.js_ctx`-чтения
+        (lazy-images/pageshow setup, tab park/unpark — зависит от bg-tab snapshot) —
+        следующие под-срезы 2d перед снятием самого поля.
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any
