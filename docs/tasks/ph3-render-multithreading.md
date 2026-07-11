@@ -7,7 +7,7 @@ User decision 2026-07-09: multithreading is **mandatory and urgent**.
 
 ---
 
-## Problem (audit 2026-07-09, branch `zcode`)
+## Problem (audit 2026-07-09)
 
 Everything — input, JS dispatch, style, layout, display-list build, raster,
 present — runs on the single UI/winit thread. Concrete costs, with code refs:
@@ -141,10 +141,10 @@ No threads yet; reduces the work every later stage will move/parallelize.
 Move the render backend + present off the main thread; reuse
 `CompositorThread`/`VsyncNotifier`.
 
-Sub-sliced like M0 (each independently shippable into `zcode`):
+Sub-sliced like M0 (each independently shippable into `main`):
 
 - **M1.1 — threaded backend infra + GL-threading spike.** ✅ (branch
-  `p1-mt-m1`, merged into `zcode`). `ThreadedRenderBackend`
+  `p1-mt-m1`, merged into `main`). `ThreadedRenderBackend`
   (`crates/shell/src/render_thread.rs`) implements `RenderBackend` and proxies
   to a real backend on a dedicated `lumen-render` thread: ordered control
   channel + latest-wins frame coalescing (drain-per-batch, only the newest
@@ -162,7 +162,7 @@ Sub-sliced like M0 (each independently shippable into `zcode`):
   the proxy then falls back to in-process with no regression. So the Ownership
   bullet below is corrected: the context must be **created on main and handed
   off**, not created on the thread.
-- **M1.2 — GL-context handoff.** ✅ (branch `p1-mt-m1-2`, merged into `zcode`).
+- **M1.2 — GL-context handoff.** ✅ (branch `p1-mt-m1-2`, merged into `main`).
   `FemtovgBackend` now stores its glutin context as a two-state enum
   (`GlContextState::{Current(PossiblyCurrentContext), NotCurrent(NotCurrentContext)}`
   in an `Option`, since both glutin transitions consume by value) plus inherent
@@ -181,7 +181,7 @@ Sub-sliced like M0 (each independently shippable into `zcode`):
   existing `femtovg_backend_is_send` test guards the `Send` invariant the handoff
   relies on. Next: measure acceptance (200 ms JS busy-loop keeps momentum at
   60 fps) and consider making the render thread default.
-- **M1.3 — render-side momentum.** ✅ (branch `p1-mt-m1-3`, merged into `zcode`).
+- **M1.3 — render-side momentum.** ✅ (branch `p1-mt-m1-3`, merged into `main`).
   With M1.2 present ran off the UI thread, but momentum still *froze* on a main
   stall because main produces the frames. M1.3 hands momentum ownership to the
   render thread. Two new no-op-default `RenderBackend` methods
@@ -206,7 +206,7 @@ Sub-sliced like M0 (each independently shippable into `zcode`):
   (events arriving *during* a stall) remains M2. Acceptance (interactive 200 ms
   busy-loop) to be smoke-verified via `LUMEN_FRAME_LOG` before flipping default.
 - **M1.4 — cross-thread frame-log tags.** ✅ (branch `p1-mt-m1-log`, merged into
-  `zcode`). Instrumentation prerequisite for the M1 acceptance step and M2
+  `main`). Instrumentation prerequisite for the M1 acceptance step and M2
   debugging (closes the "Frame logs across threads" gotcha below). A third
   no-op-default `RenderBackend` method `set_frame_commit_id(commit_id, self_tick)`
   is called by the render thread before each present; the femtovg backend appends
@@ -259,7 +259,7 @@ input forwarding. This is what makes *input* independent of engine stalls.
 Details of the load pipeline belong to the existing BUG-171 notes; this stage
 must land after M1 so commits have somewhere to go.
 
-**Where the boundary is (audit 2026-07-10, branch `zcode`).** BUG-171 stage 2
+**Where the boundary is (audit 2026-07-10).** BUG-171 stage 2
 already moved the *initial* load off the UI thread: `LoadDone` → one-shot
 `std::thread::spawn(render_bytes)` → `RenderDone` → `apply_loaded_page`
 (`main.rs` ~:8184/8254). What is **still on the UI thread** is every *ongoing*
@@ -275,7 +275,7 @@ call from the UI thread is a *blocking* round-trip, so JS execution still stalls
 the UI thread today — M2 keeps JS on the engine side and stops shipping the
 handle back to the UI thread.
 
-Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
+Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
 
 - **M2.0 — measure the UI-thread relayout cost.** ✅ (branch `p1-mt-m2-0`).
   Prerequisite (like M0.1 for M0): before moving `relayout()` off the UI thread
@@ -290,7 +290,7 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
   session exit — the baseline every later M2 slice cites. Unit test on the
   labeled summary in `lumen-paint`.
 - **M2.1 — persistent engine-thread boundary (scaffold).** ✅ (branch
-  `p1-mt-m2-1`, merged into `zcode`). New `crates/shell/src/engine_thread.rs`
+  `p1-mt-m2-1`, merged into `main`). New `crates/shell/src/engine_thread.rs`
   mirrors `render_thread.rs`: a long-lived named `lumen-engine` thread with an
   ordered control channel, an `EngineCommit { content: Arc<DisplayList>,
   generation, dims }` snapshot (invariant 1) and a latest-wins output slot
@@ -318,7 +318,7 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
   `js_ctx` is used by dozens of main-thread event paths — so only the *pure
   layout computation* moves off-thread; JS/observer delivery stays on main):
   - **M2.2a — off-thread layout for async-safe triggers.** ✅ (branch
-    `p1-mt-m2-2`, merged into `zcode`, 2026-07-11). Made the M2.1 scaffold live.
+    `p1-mt-m2-2`, merged into `main`, 2026-07-11). Made the M2.1 scaffold live.
     `engine_thread.rs` is now a **generic latest-wins executor**
     `EngineThread<C>`: `submit(generation, job)` sends a `FnOnce() -> C` closure,
     the thread runs **only the newest** valid job of each drained batch (`Shutdown`
@@ -362,7 +362,7 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
     visible-range message (never render-thread → layout). This is where the bulk
     of the ~40-site conversion lands.
     - **M2.2b-1 — `LayoutSource.stylesheet` → `Arc<Stylesheet>`.** ✅ (branch
-      `p1-mt-m2-2b-arc-stylesheet`, merged into `zcode`, 2026-07-11). Prerequisite
+      `p1-mt-m2-2b-arc-stylesheet`, merged into `main`, 2026-07-11). Prerequisite
       slice: `LayoutSource.stylesheet` is now an immutable `Arc` snapshot, so
       `submit_relayout_job` clones only the handle (`Arc::clone(&src.stylesheet)`)
       instead of deep-cloning the whole `Stylesheet` on every off-thread submit —
@@ -374,7 +374,7 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
       behavior is byte-identical. No new deps, no `unsafe`, no behavior change —
       pure allocation win on the M2.2a off-thread path.
     - **M2.2b-2 — off-thread layout for async-safe chrome-inset toggles.** ✅
-      (branch `p1-mt-m2-2b-2-chrome`, merged into `zcode`, 2026-07-11). Routes the
+      (branch `p1-mt-m2-2b-2-chrome`, merged into `main`, 2026-07-11). Routes the
       next batch of async-safe triggers off the UI thread: the ones that shift only
       *chrome* geometry (content viewport width/height) and are **not** followed by
       a synchronous read of page geometry — vertical-tabs toggle (keyboard +
@@ -392,7 +392,7 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
       `content-visibility` expansion, rAF DOM-dirty) still need per-site
       async-vs-sync analysis and stay synchronous. No new deps, no `unsafe`.
     - **M2.2b-3 — off-thread layout for async-safe side-panel toggles.** ✅
-      (branch `p1-mt-m2-2b-3-panels`, merged into `zcode`, 2026-07-11). Continues
+      (branch `p1-mt-m2-2b-3-panels`, merged into `main`, 2026-07-11). Continues
       the M2.2b-2 chrome-inset batch with the two remaining side panels whose
       toggle shifts the content viewport width but is **not** followed by a
       synchronous page-geometry read: the AI panel (`ToggleAiPanel` keybinding +
@@ -409,7 +409,7 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
       still need per-site async-vs-sync analysis and stay synchronous. No new
       deps, no `unsafe`.
     - **M2.2b-4 — off-thread layout for async-safe theme changes.** ✅ (branch
-      `p1-mt-m2-2b-4-theme`, merged into `zcode`, 2026-07-11). Extends the
+      `p1-mt-m2-2b-4-theme`, merged into `main`, 2026-07-11). Extends the
       async-safe batch beyond chrome-inset shifts to the `prefers-color-scheme`
       restyle: the OS theme flip (`WindowEvent::ThemeChanged`) and the settings-panel
       explicit dark/light lock (`SettingsHit::Close`, `shell_theme.is_dark`) both set
@@ -426,7 +426,7 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
       hover/focus, form input, resize, `content-visibility` expansion, rAF DOM-dirty)
       still need per-site analysis and stay synchronous. No new deps, no `unsafe`.
     - **M2.2b-5 — off-thread layout for async-safe interactive pseudo-class
-      restyles.** ✅ (branch `p1-mt-m2-2b-5-pseudo`, merged into `zcode`,
+      restyles.** ✅ (branch `p1-mt-m2-2b-5-pseudo`, merged into `main`,
       2026-07-11). Extends the async-safe restyle batch (M2.2b-4) from theme flips
       to the interactive pointer pseudo-classes: the `:hover` change on
       `CursorMoved` (`hovered_nid` flip) and the `:active` set-on-press /
@@ -449,7 +449,7 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
       expansion, rAF DOM-dirty) still need per-site analysis and stay synchronous.
       No new deps, no `unsafe`.
     - **M2.2b-6 — off-thread layout for async-safe mouse-click panel-close paths.**
-      ✅ (branch `p1-mt-m2-2b-6-panel-close`, merged into `zcode`, 2026-07-11).
+      ✅ (branch `p1-mt-m2-2b-6-panel-close`, merged into `main`, 2026-07-11).
       Routes the **mouse-click** close paths of the AI, sidebar and accessibility
       panels — the pointer-driven counterparts of the keyboard toggles already moved
       off-thread in M2.2b-2 (`open_sidebar_page`) and M2.2b-3 (`ToggleAiPanel`,
@@ -469,7 +469,7 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
       `content-visibility` expansion, rAF DOM-dirty) still need per-site analysis and
       stay synchronous. No new deps, no `unsafe`.
     - **M2.2b-7 — off-thread layout for async-safe `:focus` restyles.** ✅ (branch
-      `p1-mt-m2-2b-7-focus`, merged into `zcode`, 2026-07-11). Extends the async-safe
+      `p1-mt-m2-2b-7-focus`, merged into `main`, 2026-07-11). Extends the async-safe
       restyle batch (M2.2b-5's `:hover`/`:active`) to the two focus-change sites that
       re-evaluate `:focus`/`:focus-within`: the JS focus request drained from
       `showModal()`/`close()` (`take_focus_requests` → `focused_node` flip) and the
@@ -492,7 +492,7 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
       `content-visibility` expansion, rAF DOM-dirty) still need per-site analysis and
       stay synchronous. No new deps, no `unsafe`.
     - **M2.2b-8 — off-thread layout for the last async-safe stragglers.** ✅ (branch
-      `p1-mt-m2-2b-8-strays`, merged into `zcode`, 2026-07-11). Routes the final three
+      `p1-mt-m2-2b-8-strays`, merged into `main`, 2026-07-11). Routes the final three
       async-safe triggers through `Lumen::relayout_chrome()`: the web-font FOUT→FOIT
       swap (`LoadEvent::FontFace` — whole-page restyle, the just-pushed font is in the
       `web_fonts` snapshot the job captures, so the off-thread reflow sees it); the
@@ -534,10 +534,10 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
     handle to the engine thread so DOM-mutation → style → layout → observer delivery
     all happen off the UI thread and the UI thread shrinks to OS events + input
     forwarding + chrome. Proposed sub-slices (each independently shippable into
-    `zcode`, mirroring M0/M1/M2.2a-b; **measure first**, then move one site class at a
+    `main`, mirroring M0/M1/M2.2a-b; **measure first**, then move one site class at a
     time behind `LUMEN_ENGINE_THREAD`):
     - **M2.2c-0 — acceptance baseline (measure). ✅ (branch `p1-mt-m2-2c-0`,
-      merged into `zcode`, 2026-07-11).** Prerequisite like M2.0/M0.1. Deliverables:
+      merged into `main`, 2026-07-11).** Prerequisite like M2.0/M0.1. Deliverables:
       - `samples/mt-busy-loop.html` — a tall page whose rAF loop burns `BUSY_MS`
         (200) ms of CPU *synchronously* per animation frame on the UI/winit thread.
         `BUSY_MS = 0` (edit in place) is the non-stalled control on the identical
@@ -560,7 +560,7 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
         (target: ~16 ms / 60 fps, scroll unaffected by the burn). No Rust changes, no
         new deps.
     - **M2.2c-1 — request/reply geometry readback. ✅ (branch `p1-mt-m2-2c-1`,
-      merged into `zcode`, 2026-07-11).** Added `EngineMsg::Readback { job, reply:
+      merged into `main`, 2026-07-11).** Added `EngineMsg::Readback { job, reply:
       SyncSender }` + `EngineThread::readback(job) -> Option<C>` in
       `crates/shell/src/engine_thread.rs`: a UI-thread caller that needs fresh
       geometry right after a relayout (hit-test, caret, scrollIntoView) can block
@@ -584,7 +584,7 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
       references in `crates/shell/src/main.rs` alone). Introduce an engine-side owner
       + a typed message for each UI→JS call currently done inline, so the UI thread
       stops holding the JS handle. Because this is L-sized and cross-cutting, split
-      into independently-shippable sub-slices (each merged into `zcode`, mechanism
+      into independently-shippable sub-slices (each merged into `main`, mechanism
       before wiring, byte-identical with the flag off — mirroring M0/M1/M2.2c-0/-1):
       - **M2.2c-2a — engine-thread persistent-state primitive. ✅ (branch
         `p1-mt-m2-2c-2a`, 2026-07-11).** Gave the engine thread the ability to
@@ -608,7 +608,7 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
         Run, end-to-end task+query, default-state). No behavior change with the flag
         off, no new deps.
       - **M2.2c-2b — move `js_ctx` into engine-side `S` behind `LUMEN_ENGINE_THREAD`.**
-        ✅ (branch `p1-mt-m2-2c-2b`, merged into `zcode`, 2026-07-11). Сделал
+        ✅ (branch `p1-mt-m2-2c-2b`, merged into `main`, 2026-07-11). Сделал
         JS-хэндл **разделяемым** и посадил его на движковый поток. `PersistentJs`
         теперь `Send + Sync` (`QuickJsRuntime` уже `Send+Sync` по ADR-014 — все
         вызовы туннелируются на `lumen-js`-поток через `SyncSender`), а поле `js_ctx`
@@ -640,7 +640,7 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
       - **M2.2c-2c — shim value-returning UI→JS calls to `query()`** (`take_dom_dirty`,
         `take_raf_pending`, `eval_js_value`, timer wakeup / nav-update drains), one
         call class at a time, each byte-identical with the flag off.
-        🟡 **Первый под-срез готов** (branch `p1-mt-m2-2c-2c`, merged into `zcode`,
+        🟡 **Первый под-срез готов** (branch `p1-mt-m2-2c-2c`, merged into `main`,
         2026-07-11): свободная функция `route_query_js` (аналог `route_eval_js`, но
         поверх [`EngineThread::query`] — блокирующий request/reply) маршрутизирует
         три value-returning класса чтений — `take_dom_dirty` (2 сайта: rAF-pump в
@@ -672,7 +672,7 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
       - **M2.2c-2d — retire the UI-thread `js_ctx` field under the flag.** Once every
         call site routes through `task`/`query`, the UI thread stops holding the JS
         handle entirely (flag on); the flag-off legacy field is removed last.
-        🟡 **Первый под-срез готов** (branch `p1-mt-m2-2c-2d-1`, merged into `zcode`,
+        🟡 **Первый под-срез готов** (branch `p1-mt-m2-2c-2d-1`, merged into `main`,
         2026-07-11): обобщил `route_eval_js` (частный случай `|js| js.eval_js(&script)`)
         новой свободной функцией `route_task_js(engine, js, action)` — маршрутизатор
         любого fire-and-forget void-действия над `&Arc<dyn PersistentJs>`; сам
@@ -689,7 +689,7 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
         подтверждает исполнение task). No new deps, no `unsafe`. Оставшиеся синхронные
         UI→JS чтения (`take_nav_intercept_result`, canvas/history drains) — следующие
         под-срезы 2d, затем снятие самого поля.
-        🟡 **Второй под-срез готов** (branch `p1-mt-m2-2c-2d-2`, merged into `zcode`,
+        🟡 **Второй под-срез готов** (branch `p1-mt-m2-2c-2d-2`, merged into `main`,
         2026-07-11): перевёл оставшиеся per-tick value-returning дренажи в
         `about_to_wait` — canvas (`flush_canvas_updates`, `main.rs` ~:8965), history
         pushState/replaceState (`take_history_url_updates`) и history.go/back/forward
@@ -705,7 +705,7 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
         `take_nav_intercept_result` (4 сайта в `navigate_to`/`_replace`/`_back`/
         `_forward`, read-after-eval цепочка) — следующий под-срез 2d, затем снятие
         самого поля `js_ctx` под флагом.
-        ✅ **Третий под-срез готов** (branch `p1-mt-m2-2c-2d-3`, merged into `zcode`,
+        ✅ **Третий под-срез готов** (branch `p1-mt-m2-2c-2d-3`, merged into `main`,
         2026-07-11): последнее синхронное read-after-eval UI→JS чтение —
         `take_nav_intercept_result` в `navigate_to`/`_replace`/`_back`/`_forward` —
         переведено на маршрутизаторы. В каждом из 4 сайтов nav-dispatch eval
@@ -721,7 +721,7 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
         пропущен). No new deps, no `unsafe`. **Все value-returning UI→JS чтения
         зашимлены** — следующий под-срез 2d снимает само поле `js_ctx` с UI-потока
         под флагом.
-        ✅ **Четвёртый под-срез готов** (branch `p1-mt-m22d`, merged into `zcode`,
+        ✅ **Четвёртый под-срез готов** (branch `p1-mt-m22d`, merged into `main`,
         2026-07-11): пост-рендер блок дренажей JS-очередей в `RedrawRequested`
         (`main.rs` ~:9370) переведён с прямых `if let Some(js) = &self.js_ctx { …
         js.take_*() … }` на `route_query_js`. 8 value-drain сайтов: Web Notifications
@@ -740,7 +740,7 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
         write-back-сайты в том же блоке (element-scroll `update_scroll_states`/
         `fire_element_scroll`, GC `gc_collect`) и синхронные fire-and-forget
         event-dispatch сайты — следующие под-срезы 2d перед снятием самого поля.
-        ✅ **Пятый под-срез готов** (branch `p1-mt-m22d-5`, merged into `zcode`,
+        ✅ **Пятый под-срез готов** (branch `p1-mt-m22d-5`, merged into `main`,
         2026-07-11): navigation/lifecycle fire-and-forget void-сайты переведены с
         прямых `if let Some(js) = &self.js_ctx { … }` на `route_eval_js`/
         `route_task_js`. 6 сайтов: `deliver_a11y_media_changes`
