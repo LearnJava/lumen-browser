@@ -687,8 +687,24 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
         байт-идентично. 2 новых теста (`route_task_js` без хэндла = no-op;
         флаг-он без зеркалированного хэндла → действие пропущено, барьер-`query`
         подтверждает исполнение task). No new deps, no `unsafe`. Оставшиеся синхронные
-        UI→JS чтения (`take_nav_intercept_result`, canvas/worker drains) — следующие
+        UI→JS чтения (`take_nav_intercept_result`, canvas/history drains) — следующие
         под-срезы 2d, затем снятие самого поля.
+        🟡 **Второй под-срез готов** (branch `p1-mt-m2-2c-2d-2`, merged into `zcode`,
+        2026-07-11): перевёл оставшиеся per-tick value-returning дренажи в
+        `about_to_wait` — canvas (`flush_canvas_updates`, `main.rs` ~:8965), history
+        pushState/replaceState (`take_history_url_updates`) и history.go/back/forward
+        (`take_history_traversals`) — с прямого `js_ctx.map(<drain>).unwrap_or_default()`
+        на `route_query_js`. Под флагом (`LUMEN_ENGINE_THREAD=1`) читаются блокирующим
+        `query`, встающим в очередь **после** уже отправленного pump-`task` (2d-1), —
+        read-after-write порядок сохранён; без флага (по умолчанию) — прежний `js.map`,
+        байт-идентично. History-дренажи собираются в локальный `Vec` **до**
+        `&mut self`-мутаций стека навигации (disjoint-borrow полей `engine_thread`/
+        `js_ctx` уживается с последующими `self.nav_back.push`/`navigate_by`). 1 новый
+        тест (canvas/history дренажи без хэндла → пустой `Vec`). No new deps, no
+        `unsafe`. Единственное оставшееся синхронное UI→JS чтение —
+        `take_nav_intercept_result` (4 сайта в `navigate_to`/`_replace`/`_back`/
+        `_forward`, read-after-eval цепочка) — следующий под-срез 2d, затем снятие
+        самого поля `js_ctx` под флагом.
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any
