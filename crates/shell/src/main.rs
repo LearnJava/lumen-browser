@@ -9721,10 +9721,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         #[cfg(feature = "quickjs")]
         if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event
             && lumen_js::pointer_lock::is_pointer_locked()
-            && let (Some(ctx), Some(nid)) = (
-                &self.js_ctx,
-                lumen_js::pointer_lock::get_locked_element_nid(),
-            )
+            && let Some(nid) = lumen_js::pointer_lock::get_locked_element_nid()
         {
             let (cx, cy) = self
                 .cursor_position
@@ -9746,7 +9743,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 dy as i32,
                 self.mod_flags(),
             );
-            ctx.eval_js(&script);
+            // ADR-016 M2.2c-2d: fire-and-forget void eval уходит через
+            // маршрутизатор — под флагом off-UI-thread, без флага байт-идентично
+            // прежнему `ctx.eval_js(&script)` (script построен до маршрутизации).
+            route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
         }
     }
 
@@ -9766,14 +9766,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.close_pip_os();
                     self.pip_controller.on_exit();
                     // Mirror the close into JS so `leavepictureinpicture` fires
-                    // and `document.pictureInPictureElement` clears.
+                    // and `document.pictureInPictureElement` clears. ADR-016
+                    // M2.2c-2d: fire-and-forget void eval через маршрутизатор —
+                    // под флагом off-UI-thread, без флага байт-идентично.
                     #[cfg(feature = "quickjs")]
-                    if let Some(js) = &self.js_ctx {
-                        js.eval_js(
-                            "if(typeof document!=='undefined'&&document.pictureInPictureElement)\
-                             {try{document.exitPictureInPicture();}catch(e){}}",
-                        );
-                    }
+                    route_eval_js(
+                        self.engine_thread.as_ref(),
+                        self.js_ctx.as_ref(),
+                        "if(typeof document!=='undefined'&&document.pictureInPictureElement)\
+                         {try{document.exitPictureInPicture();}catch(e){}}"
+                            .to_string(),
+                    );
                 }
                 WindowEvent::Resized(size) => {
                     if size.width == 0 || size.height == 0 {
@@ -13828,10 +13831,14 @@ impl Lumen {
                 let _ = window.set_cursor_grab(CursorGrabMode::None);
                 window.set_cursor_visible(true);
             }
-            // Dispatch pointerlockchange so document.pointerLockElement clears in JS.
-            if let Some(js) = &self.js_ctx {
-                js.eval_js("document.dispatchEvent(new Event('pointerlockchange'))");
-            }
+            // Dispatch pointerlockchange so document.pointerLockElement clears in
+            // JS. ADR-016 M2.2c-2d: fire-and-forget void eval через маршрутизатор —
+            // под флагом off-UI-thread, без флага байт-идентично.
+            route_eval_js(
+                self.engine_thread.as_ref(),
+                self.js_ctx.as_ref(),
+                "document.dispatchEvent(new Event('pointerlockchange'))".to_string(),
+            );
             return;
         }
 
