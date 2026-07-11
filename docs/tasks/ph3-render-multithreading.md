@@ -829,6 +829,29 @@ Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
         engine_thread тестами. Остаток категории sync event-dispatch (keyboard/input-
         обработчики, click-диспатч, ~20 прямых `self.js_ctx`-сайтов) — следующие под-срезы
         2d перед снятием самого поля.
+        ✅ **Десятый под-срез готов** (branch `p1-mt-m22d-10`, merged into `main`,
+        2026-07-11): **read-after-eval click + keyboard event-dispatch** — 4 сайта с
+        идентичным паттерном «`_lumen_dispatch_*` void-eval, затем
+        `take_navigate_request`» — переведены с прямых `if let Some(ctx) = &self.js_ctx {
+        … ctx.eval_js(…); ctx.take_navigate_request() … }` на `route_eval_js` +
+        `route_query_js`. Сайты: (1) **mouse click** (`handle_mouse_input`, `main.rs`
+        ~:13259) — `_lumen_dispatch_mouse_event('click', …)`; (2) **inject_special_key**
+        (`main.rs` ~:13616) — `_lumen_dispatch_key_event` keydown→keyup; (3) **inject_char**
+        (`main.rs` ~:13634) — keydown→input→keyup; (4) **activate_node** (hint-mode click,
+        `main.rs` ~:15936) — тот же click-eval. В каждом: сам `_lumen_dispatch_*` уходит
+        fire-and-forget через `route_eval_js`, а последующий `take_navigate_request`
+        (навигация, что handler мог поставить) — через `route_query_js` (`Option<Option<
+        JsNavigateRequest>>`; внешний `None` = ветка «без JS», как прежний early-`return`/
+        несматчившийся `Some(ctx)`). Под флагом (`LUMEN_ENGINE_THREAD=1`) dispatch уходит
+        off-UI-thread одним `task`, блокирующий `query` встаёт в очередь **после** него —
+        read-after-eval порядок сохранён; без флага (по умолчанию) — прежние синхронные
+        вызовы по UI-хэндлу, байт-идентично. `script` строится до маршрутизации, борроу
+        `engine_thread`/`js_ctx` — раздельный. Прямых `self.js_ctx` read-after-eval
+        event-dispatch сайтов не осталось. No new deps, no `unsafe`. Механизм не менялся —
+        покрыт существующими route/engine_thread тестами (`route_eval_js_without_handle_is_noop`,
+        `route_query_js_nav_reads_without_handle_default_to_no_op`). Остаток категории sync
+        event-dispatch (чистые fire-and-forget void-eval формо-действий: `toggle`/dialog-close,
+        ~15 сайтов) — следующие под-срезы 2d перед снятием самого поля.
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any

@@ -13256,9 +13256,7 @@ impl Lumen {
         // Dispatch JS click event (bubbles from hit node to document).
         // Passes viewport coordinates and modifier key state so
         // handlers can read event.clientX/clientY/ctrlKey/etc.
-        if let (Some(result), Some(ctx)) =
-            (hit_result.as_ref(), self.js_ctx.as_ref())
-        {
+        if let Some(result) = hit_result.as_ref() {
             let mod_flags: u8 =
                 (self.modifiers.control_key() as u8)
                 | ((self.modifiers.shift_key()  as u8) << 1)
@@ -13271,8 +13269,21 @@ impl Lumen {
                 y_css as i32,
                 mod_flags,
             );
-            ctx.eval_js(&script);
-            if let Some(nav) = ctx.take_navigate_request() {
+            // ADR-016 M2.2c-2d (10): read-after-eval click dispatch — сам
+            // `_lumen_dispatch_mouse_event('click', …)` уходит fire-and-forget через
+            // `route_eval_js`, а последующий `take_navigate_request` (навигация, что
+            // handler мог поставить) — через `route_query_js`. Под флагом
+            // (`LUMEN_ENGINE_THREAD=1`) блокирующий `query` встаёт в очередь **после**
+            // отправленного `task`, восстанавливая read-after-eval порядок; без флага
+            // (по умолчанию) — прежние синхронные вызовы по UI-хэндлу, байт-идентично
+            // (`js_ctx == None` → `None` → навигация не ставится, как прежняя
+            // ветка `Some(ctx)` не сматчилась).
+            route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
+            if let Some(Some(nav)) = route_query_js(
+                self.engine_thread.as_ref(),
+                self.js_ctx.as_ref(),
+                |j| j.take_navigate_request(),
+            ) {
                 self.pending_js_navigate = Some(nav);
             }
         }
@@ -13614,17 +13625,27 @@ impl Lumen {
     /// (`"Space"` → `" "`, everything else passes through unchanged).
     /// Events have `isTrusted=true`; JS `dispatchEvent()` is never used.
     fn inject_special_key(&mut self, code: &str) {
-        let Some(ctx) = self.js_ctx.as_ref() else { return };
         let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
         let key = input::native::code_to_key(code);
+        // ADR-016 M2.2c-2d (10): keyboard injection — `_lumen_dispatch_key_event`
+        // (keydown → keyup) уходит fire-and-forget через `route_eval_js`, а
+        // последующий `take_navigate_request` — через `route_query_js`. Под флагом
+        // (`LUMEN_ENGINE_THREAD=1`) блокирующий `query` встаёт в очередь после
+        // отправленных `task`, восстанавливая read-after-eval порядок; без флага
+        // (по умолчанию) — прежние синхронные вызовы, байт-идентично (`js_ctx == None`
+        // → `route_eval_js` no-op + `route_query_js` → `None`, как прежний early-`return`).
         for event_type in &["keydown", "keyup"] {
             let script = format!(
                 "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, false, false)",
                 node_id, event_type, key, code,
             );
-            ctx.eval_js(&script);
+            route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
         }
-        if let Some(nav) = ctx.take_navigate_request() {
+        if let Some(Some(nav)) = route_query_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            |j| j.take_navigate_request(),
+        ) {
             self.pending_js_navigate = Some(nav);
         }
     }
@@ -13632,17 +13653,24 @@ impl Lumen {
     /// Fires `keydown` → `input` → `keyup` JS events via `_lumen_dispatch_key_event`
     /// on the last-focused node so events have `isTrusted=true`.
     fn inject_char(&mut self, ch: char) {
-        let Some(ctx) = self.js_ctx.as_ref() else { return };
         let node_id = self.focused_node.map(|n| n.index()).unwrap_or(0);
         let key = escape_js_string_char(ch);
+        // ADR-016 M2.2c-2d (10): same read-after-eval routing as `inject_special_key`
+        // — keydown → input → keyup dispatch off-UI-thread under the flag, then the
+        // `take_navigate_request` read ordered after via `route_query_js`; byte-identical
+        // off-flag.
         for event_type in &["keydown", "input", "keyup"] {
             let script = format!(
                 "_lumen_dispatch_key_event({}, '{}', '{}', '{}', false, false, false, false)",
                 node_id, event_type, key, key,
             );
-            ctx.eval_js(&script);
+            route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
         }
-        if let Some(nav) = ctx.take_navigate_request() {
+        if let Some(Some(nav)) = route_query_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            |j| j.take_navigate_request(),
+        ) {
             self.pending_js_navigate = Some(nav);
         }
     }
@@ -15908,14 +15936,22 @@ impl Lumen {
     fn activate_node(&mut self, node_id: NodeId) {
         // JS click dispatch (bubbling от узла до document).
         // Hint-mode activations have no real mouse coordinates, so x/y are 0.
+        // ADR-016 M2.2c-2d (10): same read-after-eval routing as the mouse click
+        // dispatch — `_lumen_dispatch_mouse_event('click', …)` fire-and-forget via
+        // `route_eval_js`, then `take_navigate_request` ordered after via
+        // `route_query_js`; byte-identical off-flag.
         #[cfg(feature = "quickjs")]
-        if let Some(ctx) = self.js_ctx.as_ref() {
+        {
             let script = format!(
                 "_lumen_dispatch_mouse_event({}, 'click', 0, 0, 0, 1, 0)",
                 node_id.index()
             );
-            ctx.eval_js(&script);
-            if let Some(nav) = ctx.take_navigate_request() {
+            route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
+            if let Some(Some(nav)) = route_query_js(
+                self.engine_thread.as_ref(),
+                self.js_ctx.as_ref(),
+                |j| j.take_navigate_request(),
+            ) {
                 self.pending_js_navigate = Some(nav);
             }
         }
