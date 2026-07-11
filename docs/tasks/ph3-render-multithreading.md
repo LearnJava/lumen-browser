@@ -640,6 +640,27 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
       - **M2.2c-2c — shim value-returning UI→JS calls to `query()`** (`take_dom_dirty`,
         `take_raf_pending`, `eval_js_value`, timer wakeup / nav-update drains), one
         call class at a time, each byte-identical with the flag off.
+        🟡 **Первый под-срез готов** (branch `p1-mt-m2-2c-2c`, merged into `zcode`,
+        2026-07-11): свободная функция `route_query_js` (аналог `route_eval_js`, но
+        поверх [`EngineThread::query`] — блокирующий request/reply) маршрутизирует
+        три value-returning класса чтений — `take_dom_dirty` (2 сайта: rAF-pump в
+        `about_to_wait` + Step 4 в `RedrawRequested`), `take_raf_pending` (2 сайта,
+        результат отбрасывается — очистка флага, но обязана лечь **перед**
+        синхронным `run_animation_frame`, что блокирующий `query` и гарантирует под
+        флагом) и `eval_js_value` (`AutomationCommand::Eval`). Под флагом чтение
+        встаёт **в очередь после** уже отправленных `task` (восстанавливает
+        read-after-eval порядок 2b); без флага (`engine = None`) — `js.map(read)`,
+        байт-идентично прежним прямым вызовам. `query` вернул `None`
+        (хэндл не зеркалирован / поток завершён при shutdown) → вызывающая сторона
+        подставляет ветку «без JS» (`unwrap_or(false)` / «JS context not available»).
+        Снял `#[allow(dead_code)]` с `EngineThread::query` (появились живые
+        вызывающие). 3 новых теста (`route_query_js(None, None)` → `None`;
+        `route_query_js(Some(engine), None)` под флагом без зеркалированного хэндла
+        → `None`, `read` не исполняется). No new deps, no `unsafe`.
+        **Остаток 2c** (следующий под-срез): timer wakeup (`take_timer_wakeup`) и
+        nav-update drains (`take_navigate_request` / `take_nav_updates`) — те самые
+        read-after-eval цепочки, оставленные синхронными в 2b, но с более сложными
+        типами возврата и потоком управления.
       - **M2.2c-2d — retire the UI-thread `js_ctx` field under the flag.** Once every
         call site routes through `task`/`query`, the UI thread stops holding the JS
         handle entirely (flag on); the flag-off legacy field is removed last.

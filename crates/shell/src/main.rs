@@ -4902,6 +4902,42 @@ fn route_eval_js(
     }
 }
 
+/// ADR-016 M2.2c-2c: маршрутизатор **value-returning** UI→JS чтения.
+///
+/// Дополняет [`route_eval_js`] (fire-and-forget) для вызовов, чей результат нужен
+/// UI-стороне **сейчас** (`take_dom_dirty` → `bool`, `take_raf_pending` → `bool`,
+/// `eval_js_value` → `Result<String, String>`). Как и `route_eval_js` — свободная
+/// функция ради disjoint-borrow полей `engine_thread`/`js_ctx`.
+///
+/// - движковый поток есть (`LUMEN_ENGINE_THREAD=1`) → чтение идёт через
+///   [`engine_thread::EngineThread::query`] (блокирующий request/reply). Это
+///   ставит чтение **в очередь после** любого уже отправленного `task` (напр.
+///   маршрутизированного `eval_js`) — тем самым восстанавливая read-after-eval
+///   порядок, намеренно оставленный синхронным в M2.2c-2b;
+/// - потока нет (флаг выключен, по умолчанию) → синхронный вызов по UI-хэндлу —
+///   **байт-идентично** прежнему прямому `js.<read>()`.
+///
+/// Возвращает `None`, когда JS-контекста нет вовсе (нет UI-хэндла / состояние
+/// движкового потока ещё не зеркалировано / поток завершён при shutdown); в этом
+/// случае вызывающая сторона подставляет значение-по-умолчанию своей ветки «без
+/// JS» (напр. `unwrap_or(false)` для `take_dom_dirty`) — как и без флага, где
+/// `js_ctx == None` даёт ту же ветку.
+fn route_query_js<R: Send + 'static>(
+    engine: Option<&engine_thread::EngineThread<EngineCommit, EngineJsState>>,
+    js: Option<&Arc<dyn PersistentJs>>,
+    read: impl FnOnce(&Arc<dyn PersistentJs>) -> R + Send + 'static,
+) -> Option<R> {
+    match engine {
+        // `query` вернёт `Some(inner)`, где `inner` — результат `read`, либо `None`
+        // если хэндл ещё не зеркалирован в состояние; двойной `Option` схлопываем
+        // `flatten`. `query` целиком вернёт `None` при завершённом потоке → тоже `None`.
+        Some(engine) => engine
+            .query(move |state| state.js.as_ref().map(read))
+            .flatten(),
+        None => js.map(read),
+    }
+}
+
 /// Повторный layout+paint по сохранённому `LayoutSource` с новым viewport.
 /// Возвращает `(DisplayList, LayoutBox)` — LayoutBox нужен для animation scheduler.
 /// `dark_mode` is forwarded to `layout_measured_hyp` so `@media (prefers-color-scheme: dark)`
@@ -8797,11 +8833,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         let raf_dom_dirty = if let Some(js) = &self.js_ctx {
             let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
             if js.has_raf_pending() && now_ms - self.last_raf_batch_ms >= RAF_MIN_INTERVAL_MS {
-                js.take_raf_pending();
+                // ADR-016 M2.2c-2c: value-returning UI→JS чтения через `route_query_js`.
+                // `take_raf_pending` здесь очищает флаг (результат отбрасывается), но
+                // обязано завершиться **до** синхронного `run_animation_frame` (иначе
+                // очистка обгонит перевзвод флага из вложенного rAF) — блокирующий
+                // `query` сохраняет этот порядок под флагом; без флага — прежний вызов.
+                route_query_js(self.engine_thread.as_ref(), Some(js), |j| j.take_raf_pending());
                 self.last_raf_batch_ms = now_ms;
                 let raf_ts = if self.deterministic { 0.0 } else { -1.0 };
                 js.run_animation_frame(raf_ts);
-                js.take_dom_dirty()
+                route_query_js(self.engine_thread.as_ref(), Some(js), |j| j.take_dom_dirty())
+                    .unwrap_or(false)
             } else {
                 false
             }
@@ -9100,17 +9142,27 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
                 AutomationCommand::Eval(js) => {
-                    if let Some(js_ctx) = &self.js_ctx {
-                        match js_ctx.eval_js_value(&js) {
-                            Ok(json) => {
-                                let _ = reply_tx.send(AutomationReply::Eval(json));
-                            }
-                            Err(e) => {
-                                let _ = reply_tx.send(AutomationReply::Error(e));
-                            }
+                    // ADR-016 M2.2c-2c: value-returning `eval_js_value` через
+                    // `route_query_js`. Под флагом чтение упорядочено за уже
+                    // отправленными `task`; без флага байт-идентично: `Some(js_ctx)`
+                    // → `Some(result)`, отсутствие хэндла → `None` → «JS context
+                    // not available».
+                    match route_query_js(
+                        self.engine_thread.as_ref(),
+                        self.js_ctx.as_ref(),
+                        move |j| j.eval_js_value(&js),
+                    ) {
+                        Some(Ok(json)) => {
+                            let _ = reply_tx.send(AutomationReply::Eval(json));
                         }
-                    } else {
-                        let _ = reply_tx.send(AutomationReply::Error("JS context not available".to_string()));
+                        Some(Err(e)) => {
+                            let _ = reply_tx.send(AutomationReply::Error(e));
+                        }
+                        None => {
+                            let _ = reply_tx.send(AutomationReply::Error(
+                                "JS context not available".to_string(),
+                            ));
+                        }
                     }
                 }
                 AutomationCommand::Screenshot => {
@@ -11738,8 +11790,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 if let Some(js) = &self.js_ctx {
                     let raf_due = timestamp_ms - self.last_raf_batch_ms >= RAF_MIN_INTERVAL_MS;
                     if raf_due && js.has_raf_pending() {
-                        // Consume the flag and fire the batch.
-                        js.take_raf_pending();
+                        // Consume the flag and fire the batch. ADR-016 M2.2c-2c:
+                        // `take_raf_pending` через `route_query_js` (результат
+                        // отбрасывается) — блокирующий `query` под флагом держит
+                        // очистку **перед** синхронным `run_animation_frame`; без
+                        // флага — прежний прямой вызов.
+                        route_query_js(self.engine_thread.as_ref(), Some(js), |j| {
+                            j.take_raf_pending()
+                        });
                         self.last_raf_batch_ms = timestamp_ms;
                         let raf_ts = if self.deterministic { 0.0 } else { -1.0 };
                         js.run_animation_frame(raf_ts);
@@ -11756,7 +11814,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // (setAttribute/textContent/appendChild/etc.), делаем relayout
                 // прежде чем красить, чтобы paint отражал актуальный DOM.
                 // relayout() also delivers ResizeObserver + IntersectionObserver.
-                if self.js_ctx.as_ref().is_some_and(|j| j.take_dom_dirty()) {
+                // ADR-016 M2.2c-2c: `take_dom_dirty` через `route_query_js` — под
+                // флагом чтение упорядочено за уже отправленными `task`; без флага
+                // (`unwrap_or(false)`) байт-идентично прежнему `is_some_and`.
+                if route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                    j.take_dom_dirty()
+                })
+                .unwrap_or(false)
+                {
                     self.relayout();
                 }
 
@@ -18970,6 +19035,28 @@ mod tests {
         // Флаг выключен и хэндла нет: маршрутизатор не должен паниковать и просто
         // ничего не делает (байт-идентично прежнему `if let Some(js) = … {}`).
         route_eval_js(None, None, "_lumen_run_navigate_handler()".to_owned());
+    }
+
+    #[test]
+    fn route_query_js_without_handle_is_none() {
+        // Флаг выключен (`engine = None`) и хэндла нет (`js = None`): value-returning
+        // маршрутизатор возвращает `None` → вызывающая сторона подставит ветку
+        // «без JS» (напр. `unwrap_or(false)`), байт-идентично `js_ctx == None`.
+        let r: Option<bool> = route_query_js(None, None, |j| j.take_dom_dirty());
+        assert_eq!(r, None);
+    }
+
+    #[test]
+    fn route_query_js_flag_on_without_synced_handle_is_none() {
+        // Флаг включён (движковый поток есть), но `EngineJsState.js` ещё не
+        // зеркалирован (`sync_engine_js_state` не вызывался) → внутренний
+        // `state.js.map(read)` даёт `None`, `flatten` схлопывает до `None`.
+        // Замыкание `read` при этом НЕ исполняется — хэндла нет.
+        let engine = engine_thread::EngineThread::<EngineCommit, EngineJsState>::spawn()
+            .expect("spawn engine thread");
+        let r: Option<bool> =
+            route_query_js(Some(&engine), None, |j| j.take_dom_dirty());
+        assert_eq!(r, None);
     }
 
     // ── Fullscreen viewport reconciliation (BUG-167) ────────────────────────
