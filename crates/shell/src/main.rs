@@ -14517,18 +14517,30 @@ impl Lumen {
     /// затем загрузить `source` как новую страницу.
     /// Очищает `nav_fwd` (аналог браузера при навигации вперёд из середины истории).
     fn navigate_to(&mut self, source: PageSource) {
-        if let Some(js) = &self.js_ctx {
-            let url = source.url_str().unwrap_or("");
-            js.eval_js(&format!("_lumen_dispatch_navigate('push', '{url}', true, false)"));
+        // ADR-016 M2.2c-2d: nav dispatch (fire-and-forget) через `route_task_js` +
+        // read-after-eval intercept-чтение через `route_query_js`. Под флагом
+        // (`LUMEN_ENGINE_THREAD=1`) dispatch уходит off-UI-thread одним `task`, а
+        // блокирующий `query` встаёт в очередь **после** него — read-after-eval
+        // порядок сохранён; без флага — прежние синхронные вызовы, байт-идентично.
+        {
+            let url = source.url_str().unwrap_or("").to_string();
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                j.eval_js(&format!("_lumen_dispatch_navigate('push', '{url}', true, false)"));
+            });
         }
-        if let Some(js) = &self.js_ctx {
-            let intercept = js.take_nav_intercept_result();
+        if let Some(intercept) = route_query_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            |j| j.take_nav_intercept_result(),
+        ) {
             if let Some(&(true, false)) = intercept.last() {
                 self.pending_intercepted = Some(PendingIntercepted::Push {
                     url: source.url_str().unwrap_or("").to_string(),
                     handler_started: false,
                 });
-                js.eval_js("_lumen_run_navigate_handler()");
+                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                    j.eval_js("_lumen_run_navigate_handler()");
+                });
                 if let Some(PendingIntercepted::Push { handler_started, .. }) =
                     self.pending_intercepted.as_mut()
                 {
@@ -14623,18 +14635,27 @@ impl Lumen {
     /// Перейти на `source`, заменяя текущую запись истории (без push в back-stack).
     /// Аналог `history.replaceState` / `location.replace()` в браузере.
     fn navigate_replace(&mut self, source: PageSource) {
-        if let Some(js) = &self.js_ctx {
-            let url = source.url_str().unwrap_or("");
-            js.eval_js(&format!("_lumen_dispatch_navigate('replace', '{url}', true, false)"));
+        // ADR-016 M2.2c-2d: см. `navigate_to` — dispatch через `route_task_js`,
+        // intercept-чтение через `route_query_js` (read-after-eval порядок под флагом).
+        {
+            let url = source.url_str().unwrap_or("").to_string();
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                j.eval_js(&format!("_lumen_dispatch_navigate('replace', '{url}', true, false)"));
+            });
         }
-        if let Some(js) = &self.js_ctx {
-            let intercept = js.take_nav_intercept_result();
+        if let Some(intercept) = route_query_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            |j| j.take_nav_intercept_result(),
+        ) {
             if let Some(&(true, false)) = intercept.last() {
                 self.pending_intercepted = Some(PendingIntercepted::Replace {
                     url: source.url_str().unwrap_or("").to_string(),
                     handler_started: false,
                 });
-                js.eval_js("_lumen_run_navigate_handler()");
+                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                    j.eval_js("_lumen_run_navigate_handler()");
+                });
                 if let Some(PendingIntercepted::Replace { handler_started, .. }) =
                     self.pending_intercepted.as_mut()
                 {
@@ -14657,16 +14678,23 @@ impl Lumen {
 
     /// Перейти на предыдущую страницу в истории (Alt+Left).
     fn navigate_back(&mut self) {
-        if let Some(js) = &self.js_ctx {
-            js.eval_js("_lumen_dispatch_navigate('traverse', '', true, false)");
-        }
-        if let Some(js) = &self.js_ctx {
-            let intercept = js.take_nav_intercept_result();
+        // ADR-016 M2.2c-2d: см. `navigate_to` — dispatch через `route_task_js`,
+        // intercept-чтение через `route_query_js` (read-after-eval порядок под флагом).
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            j.eval_js("_lumen_dispatch_navigate('traverse', '', true, false)");
+        });
+        if let Some(intercept) = route_query_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            |j| j.take_nav_intercept_result(),
+        ) {
             if let Some(&(true, false)) = intercept.last() {
                 self.pending_intercepted = Some(PendingIntercepted::Back {
                     handler_started: false,
                 });
-                js.eval_js("_lumen_run_navigate_handler()");
+                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                    j.eval_js("_lumen_run_navigate_handler()");
+                });
                 if let Some(PendingIntercepted::Back { handler_started }) =
                     self.pending_intercepted.as_mut()
                 {
@@ -14776,16 +14804,23 @@ impl Lumen {
 
     /// Перейти на следующую страницу в истории (Alt+Right).
     fn navigate_forward(&mut self) {
-        if let Some(js) = &self.js_ctx {
-            js.eval_js("_lumen_dispatch_navigate('traverse', '', true, false)");
-        }
-        if let Some(js) = &self.js_ctx {
-            let intercept = js.take_nav_intercept_result();
+        // ADR-016 M2.2c-2d: см. `navigate_to` — dispatch через `route_task_js`,
+        // intercept-чтение через `route_query_js` (read-after-eval порядок под флагом).
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            j.eval_js("_lumen_dispatch_navigate('traverse', '', true, false)");
+        });
+        if let Some(intercept) = route_query_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            |j| j.take_nav_intercept_result(),
+        ) {
             if let Some(&(true, false)) = intercept.last() {
                 self.pending_intercepted = Some(PendingIntercepted::Forward {
                     handler_started: false,
                 });
-                js.eval_js("_lumen_run_navigate_handler()");
+                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                    j.eval_js("_lumen_run_navigate_handler()");
+                });
                 if let Some(PendingIntercepted::Forward { handler_started }) =
                     self.pending_intercepted.as_mut()
                 {
@@ -19164,6 +19199,19 @@ mod tests {
         assert!(hist_url.is_empty());
         let hist_go = route_query_js(None, None, |j| j.take_history_traversals()).unwrap_or_default();
         assert!(hist_go.is_empty());
+    }
+
+    #[test]
+    fn route_query_js_nav_intercept_without_handle_defaults_to_no_op() {
+        // ADR-016 M2.2c-2d: последнее синхронное read-after-eval чтение —
+        // `take_nav_intercept_result` в nav-методах (`navigate_to`/`_replace`/
+        // `_back`/`_forward`) — маршрутизируется тем же `route_query_js`. Без хэндла
+        // (`engine = None`, `js = None`) внешний `Option` = `None`, поэтому вызывающий
+        // `if let Some(intercept) = …` пропускает весь intercept-блок — та же ветка
+        // «без JS», что и прежний `if let Some(js) = &self.js_ctx { … }`.
+        let intercept: Option<Vec<(bool, bool)>> =
+            route_query_js(None, None, |j| j.take_nav_intercept_result());
+        assert!(intercept.is_none());
     }
 
     // ── ADR-016 M2.2c-2d: generic void-action router (pump/tick batch) ──────
