@@ -7101,6 +7101,48 @@ impl Lumen {
         }
     }
 
+    /// ADR-016 M2.2c-3: route the **async-safe rAF DOM-dirty flush** off the UI
+    /// thread when the engine thread is enabled, falling back to the synchronous
+    /// [`Self::relayout`] otherwise (the default, so behavior is byte-identical
+    /// unless `LUMEN_ENGINE_THREAD=1`).
+    ///
+    /// This is the `about_to_wait` rAF pump: a `requestAnimationFrame` callback ran
+    /// (engine-side under the flag) and mutated the DOM, so the shared
+    /// `Arc<Mutex<Document>>` already carries the mutation the off-thread job's
+    /// snapshot will observe (invariant 1). The caller only requests a redraw
+    /// afterwards — it does **not** read page geometry synchronously — so the
+    /// reflow may land a few frames later via [`Self::poll_engine_commit`], the same
+    /// async contract as the debounced zoom (M2.2a) and the form-input toggles
+    /// ([`Self::relayout_form`]). The `RedrawRequested` counterpart *does* read a
+    /// layout product synchronously (Step 5 PerformancePaintTiming) and therefore
+    /// uses the blocking [`Self::readback_relayout_job`] path instead.
+    fn relayout_raf_dirty(&mut self) {
+        if !self.submit_relayout_job() {
+            self.relayout();
+        }
+    }
+
+    /// ADR-016 M2.2c-3: route the **rAF DOM-dirty flush that is followed by a
+    /// synchronous read of a layout product** off the UI thread via the blocking
+    /// request/reply [`engine_thread::EngineThread::readback`], falling back to the
+    /// synchronous [`Self::relayout`] otherwise (the default, so behavior is
+    /// byte-identical unless `LUMEN_ENGINE_THREAD=1`).
+    ///
+    /// This is the `RedrawRequested` Step 4 site: a `requestAnimationFrame` callback
+    /// mutated the DOM and the very next Step 5 reads `self.display_list.is_empty()`
+    /// to latch PerformancePaintTiming (W3C Paint Timing §2). That read must see the
+    /// freshly-reflowed display list, so — unlike the async [`Self::relayout_form`] /
+    /// [`Self::relayout_raf_dirty`] — the relayout cannot be deferred to a later
+    /// commit. [`Self::readback_relayout_job`] computes the layout **on the engine
+    /// thread** (which owns the mutable `Document` + `js_ctx` under the flag) and
+    /// blocks for exactly that one commit, applying it synchronously so Step 5 sees
+    /// the current display list.
+    fn relayout_raf_dirty_readback(&mut self) {
+        if !self.readback_relayout_job() {
+            self.relayout();
+        }
+    }
+
     /// Derive the CSS layout viewport for a relayout (shared by the synchronous
     /// [`Self::relayout`] and the off-thread [`Self::submit_relayout_job`]).
     ///
@@ -7282,23 +7324,28 @@ impl Lumen {
         }
     }
 
-    /// ADR-016 M2.2: route a relayout to the persistent engine thread (off the
-    /// UI thread). Returns `true` if a job was submitted; `false` when the engine
-    /// thread is absent (`LUMEN_ENGINE_THREAD` off) or there is nothing to lay out
-    /// — the caller then falls back to the synchronous [`Self::relayout`].
+    /// ADR-016 M2.2: build the immutable-snapshot relayout job that the engine
+    /// thread runs off the UI thread — shared by the fire-and-forget
+    /// [`Self::submit_relayout_job`] (latest-wins) and the blocking
+    /// [`Self::readback_relayout_job`] (request/reply), so both produce a
+    /// byte-identical [`EngineCommit`] for the same DOM state.
     ///
-    /// Only for **async-safe** triggers: no caller may read layout geometry
-    /// synchronously after this returns, because the commit lands a few frames
-    /// later via [`Self::poll_engine_commit`]. Today the sole caller is the
-    /// debounced transform-first zoom (M0.3), whose visual is already covered by
-    /// `set_preview_scale`. The job captures immutable `Arc` snapshots of the
-    /// document + stylesheet + web-fonts (invariant 1) and re-establishes the
-    /// interactive/forced-colors/content-visibility thread-local state **on the
-    /// engine thread** before computing layout.
-    fn submit_relayout_job(&mut self) -> bool {
-        let Some(engine) = self.engine_thread.as_ref() else { return false };
-        let Some(viewport) = self.relayout_viewport() else { return false };
-        let Some(src) = self.layout_source.as_ref() else { return false };
+    /// Returns `None` — nothing to lay out — when there is no `LayoutSource`/renderer
+    /// or the viewport is degenerate. On success bumps `engine_job_generation` and
+    /// returns `(generation, job)`; the caller decides whether to `submit` it
+    /// (deferred, latest-wins) or `readback` it (blocking). Because the generation is
+    /// bumped here, callers must gate on the engine thread being present **before**
+    /// calling this (both wrappers do) so a flag-off run never advances the counter.
+    ///
+    /// The job captures immutable `Arc` snapshots of the document + stylesheet +
+    /// web-fonts (invariant 1) and re-establishes the interactive/forced-colors/
+    /// content-visibility thread-local state **on the engine thread** before
+    /// computing layout.
+    fn make_relayout_job(
+        &mut self,
+    ) -> Option<(u64, impl FnOnce() -> EngineCommit + Send + 'static)> {
+        let viewport = self.relayout_viewport()?;
+        let src = self.layout_source.as_ref()?;
         self.engine_job_generation = self.engine_job_generation.wrapping_add(1);
         let generation = self.engine_job_generation;
         // Immutable snapshots captured by the job (ADR-016 invariant 1). The
@@ -7315,7 +7362,7 @@ impl Lumen {
         let forced_colors = self.a11y_store.forced_colors();
         let (cv_x, cv_y) = (self.scroll_x, self.scroll_y);
         let cv_relevant = self.cv_relevant.clone();
-        engine.submit(generation, move || {
+        let job = move || {
             let t0 = std::time::Instant::now();
             // Interactive state is thread-local — set it on THIS (engine) thread.
             lumen_layout::set_interactive_state(hovered, focused, active);
@@ -7334,7 +7381,68 @@ impl Lumen {
                 generation,
                 compute_ms: t0.elapsed().as_secs_f32() * 1000.0,
             }
-        });
+        };
+        Some((generation, job))
+    }
+
+    /// ADR-016 M2.2: route a relayout to the persistent engine thread (off the
+    /// UI thread). Returns `true` if a job was submitted; `false` when the engine
+    /// thread is absent (`LUMEN_ENGINE_THREAD` off) or there is nothing to lay out
+    /// — the caller then falls back to the synchronous [`Self::relayout`].
+    ///
+    /// Only for **async-safe** triggers: no caller may read layout geometry
+    /// synchronously after this returns, because the commit lands a few frames
+    /// later via [`Self::poll_engine_commit`]. Callers are the debounced
+    /// transform-first zoom (M0.3), the chrome-inset toggles ([`Self::relayout_chrome`],
+    /// M2.2b), the form-input toggles ([`Self::relayout_form`], M2.2c-3) and the
+    /// `about_to_wait` rAF DOM-dirty flush ([`Self::relayout_raf_dirty`], M2.2c-3) —
+    /// none reads geometry synchronously afterward.
+    fn submit_relayout_job(&mut self) -> bool {
+        if self.engine_thread.is_none() {
+            return false;
+        }
+        let Some((generation, job)) = self.make_relayout_job() else { return false };
+        let Some(engine) = self.engine_thread.as_ref() else { return false };
+        engine.submit(generation, job);
+        true
+    }
+
+    /// ADR-016 M2.2c-3: run a relayout **on the engine thread but block** for its
+    /// commit (request/reply via [`engine_thread::EngineThread::readback`]), then
+    /// apply it synchronously — for sites that read a layout product in the same
+    /// tick. Returns `true` if the readback ran and was applied; `false` when the
+    /// engine thread is absent (`LUMEN_ENGINE_THREAD` off), there is nothing to lay
+    /// out, or the thread was shutting down (`readback` → `None`) — the caller then
+    /// falls back to the synchronous [`Self::relayout`].
+    ///
+    /// The sole caller today is the `RedrawRequested` rAF DOM-dirty flush
+    /// ([`Self::relayout_raf_dirty_readback`]), whose next step reads
+    /// `self.display_list.is_empty()` for PerformancePaintTiming. Unlike
+    /// [`Self::submit_relayout_job`] the commit is **not** deposited in the
+    /// latest-wins slot; it comes straight back and is applied here, so like the
+    /// synchronous [`Self::relayout`] this is authoritative — `engine_applied_generation`
+    /// advances to the just-bumped `engine_job_generation`, dropping any older
+    /// in-flight async commit in [`Self::poll_engine_commit`]'s guard.
+    fn readback_relayout_job(&mut self) -> bool {
+        if self.engine_thread.is_none() {
+            return false;
+        }
+        let Some((_generation, job)) = self.make_relayout_job() else { return false };
+        let Some(engine) = self.engine_thread.as_ref() else { return false };
+        let Some(commit) = engine.readback(job) else { return false };
+        // Authoritative like `relayout()`: mark the just-bumped generation applied so
+        // a stale in-flight async commit is dropped by `poll_engine_commit`.
+        self.engine_applied_generation = self.engine_job_generation;
+        let EngineCommit { content, layout_box, viewport, compute_ms, .. } = commit;
+        self.apply_relayout_result(content, layout_box, viewport);
+        if lumen_paint::frame_log_enabled() {
+            self.engine_stats.record(compute_ms);
+            eprintln!(
+                "[engine] relayout {compute_ms:.2}ms (readback) dl={} styled={}",
+                self.display_list.len(),
+                self.prev_styles.len(),
+            );
+        }
         true
     }
 
@@ -9103,7 +9211,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         };
         if raf_dom_dirty {
             // rAF callback changed the DOM — rebuild layout and paint for real.
-            self.relayout();
+            // ADR-016 M2.2c-3: async-safe (no synchronous geometry read follows —
+            // only `request_redraw`), so route the reflow off the UI thread under
+            // the flag; falls back to the synchronous `relayout` off the flag.
+            self.relayout_raf_dirty();
             self.request_redraw();
         }
         if route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
@@ -12195,7 +12306,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 })
                 .unwrap_or(false)
                 {
-                    self.relayout();
+                    // ADR-016 M2.2c-3: Step 5 below reads `display_list.is_empty()`
+                    // synchronously (PerformancePaintTiming), so this reflow cannot be
+                    // deferred. Under the flag it runs on the engine thread via a
+                    // blocking `readback` (Bucket B); off the flag it is the former
+                    // synchronous `relayout`.
+                    self.relayout_raf_dirty_readback();
                 }
 
                 // Step 5: PerformancePaintTiming (W3C Paint Timing §2).
