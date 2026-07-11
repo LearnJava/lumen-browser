@@ -4848,22 +4848,23 @@ struct EngineCommit {
 /// (тип `S` в [`engine_thread::EngineThread`]); UI-сторона его не разделяет —
 /// общается через [`engine_thread::EngineThread::task`]/`query` (инвариант 1).
 ///
-/// На срезе M2.2c-2b поле `js` заполняется зеркальным `Arc`-клоном UI-хэндла при
-/// каждой смене страницы ([`Lumen::sync_engine_js_state`]), а маршрутизируются на
-/// поток пока только простейшие fire-and-forget void-вызовы `eval_js`
-/// (см. [`route_eval_js`]). Остальные UI→JS вызовы всё ещё идут по UI-хэндлу
-/// `Lumen::js_ctx`; их перенос (`query`-путь для значений, DOM-мутации) —
-/// M2.2c-2c/-2d/-3. `document` держится как будущее «сиденье» для владения DOM;
-/// пока читается только как зеркальный снимок и в layout-вычислении не участвует.
+/// С M2.2c-2d (21) поле `js` — **единственный** владелец JS-хэндла под флагом:
+/// [`Lumen::set_js_ctx`] переносит `Arc` сюда через
+/// [`engine_thread::EngineThread::task`], оставляя UI-сторонний `Lumen::js_ctx`
+/// пустым (`None`). Все UI→JS вызовы маршрутизируются на поток
+/// ([`route_task_js`]/[`route_query_js`]/[`route_eval_js`]) и читают `state.js`.
+/// `document` держится как будущее «сиденье» для владения DOM; пока читается
+/// только как зеркальный снимок и в layout-вычислении не участвует.
 #[derive(Default)]
 struct EngineJsState {
     /// Разделяемый DOM (тот же `Arc`, что у `LayoutSource::document`). Будущее
     /// «сиденье» владения DOM движковым потоком (M2.2c-3); пока — зеркальный
     /// снимок для готовности инфраструктуры, layout его не использует.
     document: Option<Arc<Mutex<Document>>>,
-    /// Хэндл персистентного JS-рантайма. На время миграции (M2.2c-2b…2c) это
-    /// зеркальный `Arc`-клон UI-хэндла `Lumen::js_ctx`; UI-сторонний клон
-    /// удаляется в M2.2c-2d, когда все call-site'ы уйдут в `task`/`query`.
+    /// Хэндл персистентного JS-рантайма. С M2.2c-2d (21) под флагом это
+    /// **единственный** экземпляр `Arc`-хэндла (UI-сторонний `Lumen::js_ctx` —
+    /// `None`); [`Lumen::set_js_ctx`] кладёт его сюда, а `save_page_snapshot`
+    /// вынимает через [`Lumen::take_js_ctx`]. Без флага поле не используется.
     js: Option<Arc<dyn PersistentJs>>,
 }
 
@@ -6300,19 +6301,19 @@ struct Lumen {
     /// no scripts were registered. Must be dropped before `layout_source` on
     /// navigation to release Arc clones held in JS closures.
     ///
-    /// ADR-016 M2.2c-2b: `Arc` (не `Box`) — тот же хэндл держит движковый поток
-    /// (`EngineJsState`) на время миграции UI→JS вызовов на него. UI-сторонний
-    /// клон уходит в M2.2c-2d, когда все call-site'ы маршрутизируются в поток.
+    /// ADR-016 M2.2c-2d (21): `Arc` (не `Box`), потому что хэндлом теперь владеет
+    /// **либо** UI-сторона, **либо** движковый поток. Под флагом
+    /// (`LUMEN_ENGINE_THREAD=1`) `Arc` живёт в [`EngineJsState::js`], а это поле —
+    /// `None`; без флага (по умолчанию) `Arc` здесь, как прежде. Владение задаёт
+    /// [`Self::set_js_ctx`], снимает — [`Self::take_js_ctx`]. «Есть ли JS?» читайте
+    /// из [`Self::js_present`], а не из `self.js_ctx.is_some()`.
     js_ctx: Option<Arc<dyn PersistentJs>>,
-    /// ADR-016 M2.2d: UI-сторонний флаг «активная вкладка имеет JS-рантайм»,
-    /// сопровождающий каждое присваивание [`Self::js_ctx`] (через
-    /// [`Self::set_js_ctx`] и snapshot save/restore). Отделяет решение «есть ли
-    /// JS?» от факта владения `Arc`-хэндлом: гейты (`if self.js_present`) читают
-    /// его вместо `self.js_ctx.is_some()`, поэтому остаются верны, когда
-    /// следующий срез 2d перенесёт сам `Arc` на движковый поток (`state.js`) и
-    /// оставит `self.js_ctx == None` под флагом. Пока `Arc` ещё на UI-стороне
-    /// значение тождественно `self.js_ctx.is_some()` в обоих режимах флага —
-    /// перевод гейтов байт-идентичен.
+    /// ADR-016 M2.2c-2d: UI-сторонний флаг «активная вкладка имеет JS-рантайм»,
+    /// сопровождающий каждое присваивание хэндла (через [`Self::set_js_ctx`] и
+    /// snapshot save/restore). Отделяет решение «есть ли JS?» от того, какая
+    /// сторона держит `Arc`: гейты (`if self.js_present`) читают его вместо
+    /// `self.js_ctx.is_some()`, поэтому остаются верны и когда под флагом сам `Arc`
+    /// уехал на движковый поток (`state.js`), оставив `self.js_ctx == None`.
     js_present: bool,
     /// When true the vertical scrollbar overlay is suppressed entirely.
     /// Set by `--no-scrollbar` CLI flag; used by graphic test pipeline to
@@ -7345,37 +7346,71 @@ impl Lumen {
         }
     }
 
-    /// ADR-016 M2.2c-2b: зеркалит текущий хэндл `js_ctx` + разделяемый `Document`
-    /// в персистентное состояние [`EngineJsState`] движкового потока.
+    /// ADR-016 M2.2c-2d (21): назначить JS-хэндл активной вкладки, держа
+    /// [`Self::js_present`] в связке с фактическим владельцем `Arc`.
+    ///
+    /// **Это единственная точка владения хэндлом.** Куда садится `Arc` зависит от
+    /// того, поднят ли движковый поток:
+    /// - поток есть (`LUMEN_ENGINE_THREAD=1`) → `Arc` **переезжает на движковый
+    ///   поток** в [`EngineJsState::js`] через [`engine_thread::EngineThread::task`],
+    ///   а UI-сторонний [`Self::js_ctx`] остаётся `None`. Маршрутизаторы
+    ///   ([`route_task_js`]/[`route_query_js`]/[`route_eval_js`]) под флагом и так
+    ///   игнорируют переданный UI-клон и читают `state.js`, поэтому все call-site'ы
+    ///   остаются корректны, а сам рантайм всё равно живёт на своём `lumen-js`-потоке
+    ///   (ADR-014) — это перенос владения хэндлом, а не разделение мутабельного
+    ///   состояния (инвариант 1);
+    /// - потока нет (флаг выключен, по умолчанию, либо spawn не удался) → `Arc`
+    ///   хранится в UI-стороннем [`Self::js_ctx`] как прежде — **байт-идентично**.
+    ///
+    /// [`Self::js_present`] отделяет решение «есть ли JS?» от того, какая сторона
+    /// держит `Arc`: все гейты (`if self.js_present`) читают его, поэтому остаются
+    /// верны в обоих режимах флага.
+    fn set_js_ctx(&mut self, handle: Option<Arc<dyn PersistentJs>>) {
+        self.js_present = handle.is_some();
+        match self.engine_thread.as_ref() {
+            // Flag on: the handle lives engine-side; deposit it into
+            // `EngineJsState.js` and leave the UI field empty.
+            Some(engine) => {
+                self.js_ctx = None;
+                engine.task(move |state| state.js = handle);
+            }
+            // Flag off (default): the UI thread owns the handle, exactly as before.
+            None => self.js_ctx = handle,
+        }
+    }
+
+    /// ADR-016 M2.2c-2b: зеркалит разделяемый `Document` активной вкладки в
+    /// персистентное состояние [`EngineJsState`] движкового потока.
     ///
     /// No-op, когда движкового потока нет (`LUMEN_ENGINE_THREAD` выключен, по
     /// умолчанию) — тогда поведение shell байт-идентично. Вызывается при каждой
-    /// смене страницы (после установки `self.js_ctx`), чтобы `task`/`query`-вызовы
-    /// на движковый поток видели актуальный рантайм. `Arc`-клоны дёшевы, а сам
-    /// рантайм всё равно живёт на своём `lumen-js`-потоке (ADR-014) — так что это
-    /// разделение хэндла, а не мутабельного состояния (инвариант 1). UI-сторонний
-    /// клон `Lumen::js_ctx` уходит в M2.2c-2d.
-    /// ADR-016 M2.2d: назначить JS-хэндл активной вкладки, держа
-    /// [`Self::js_present`] в связке с [`Self::js_ctx`].
+    /// смене страницы (после [`Self::set_js_ctx`] + установки `layout_source`),
+    /// чтобы `task`/`query`-вызовы видели актуальный DOM. `Arc`-клон дёшев.
     ///
-    /// Пока это парное присваивание — байт-идентично прежнему голому
-    /// `self.js_ctx = handle` (значение флага тождественно `handle.is_some()`).
-    /// Следующий срез 2d превратит его в перенос `Arc` на движковый поток под
-    /// флагом, оставив `self.js_ctx == None`, тогда как `js_present` останется
-    /// UI-сторонним сигналом наличия JS для гейтов.
-    fn set_js_ctx(&mut self, handle: Option<Arc<dyn PersistentJs>>) {
-        self.js_present = handle.is_some();
-        self.js_ctx = handle;
-    }
-
+    /// Владение JS-хэндлом сюда больше не входит — с M2.2c-2d (21) его переносит
+    /// сам [`Self::set_js_ctx`]; здесь остаётся только зеркало `document`
+    /// («сиденье» будущего владения DOM движковым потоком, M2.2c-3).
     fn sync_engine_js_state(&self) {
         let Some(engine) = self.engine_thread.as_ref() else { return };
-        let js = self.js_ctx.clone();
         let document = self.layout_source.as_ref().map(|ls| Arc::clone(&ls.document));
-        engine.task(move |state| {
-            state.js = js;
-            state.document = document;
-        });
+        engine.task(move |state| state.document = document);
+    }
+
+    /// ADR-016 M2.2c-2d (21): извлечь JS-хэндл активной вкладки для снапшота
+    /// (`save_page_snapshot`).
+    ///
+    /// Под флагом (`LUMEN_ENGINE_THREAD=1`) `Arc` живёт в [`EngineJsState::js`] на
+    /// движковом потоке, поэтому его вынимает блокирующий `query`, `take`-ающий его
+    /// из состояния (встаёт в очередь после уже отправленных `task`, так что видит
+    /// последний зеркалированный хэндл); без флага (по умолчанию) — `take` прямо из
+    /// UI-стороннего [`Self::js_ctx`], **байт-идентично** прежнему `self.js_ctx.take()`.
+    /// Возвращённый `Arc` кладётся в [`PageSnapshot::js_ctx`] и остаётся реальным
+    /// хэндлом даже под флагом (bg-tab GC и restore читают его напрямую).
+    fn take_js_ctx(&mut self) -> Option<Arc<dyn PersistentJs>> {
+        match self.engine_thread.as_ref() {
+            Some(engine) => engine.query(|state| state.js.take()).flatten(),
+            None => self.js_ctx.take(),
+        }
     }
 
     /// Fetch, decode and register lazy images whose node IDs were queued by JS.
@@ -18350,7 +18385,7 @@ impl Lumen {
                     lumen_storage::store::InMemoryStorage::new(),
                 )),
             ),
-            js_ctx: self.js_ctx.take(),
+            js_ctx: self.take_js_ctx(),
             first_paint_delivered: self.first_paint_delivered,
             first_contentful_paint_delivered: self.first_contentful_paint_delivered,
             nav_start: self.nav_start.take(),
@@ -19548,6 +19583,28 @@ mod tests {
         engine.task(move |s| s.document = Some(doc));
         // query исполняется после task (упорядоченный канал) → DOM на месте.
         assert_eq!(engine.query(|s| s.document.is_some()), Some(true));
+    }
+
+    #[test]
+    fn engine_thread_query_take_extracts_and_clears_state() {
+        // ADR-016 M2.2c-2d (21): механизм, на котором стоит `Lumen::take_js_ctx` —
+        // `save_page_snapshot` вынимает хэндл из движкового состояния блокирующим
+        // `query`, `take`-ающим поле (state → snapshot). Проверяем на `document`
+        // (тот же generic-путь, что и `state.js.take()`, но без mock-хэндла): после
+        // депозита `task`-ом `query`-take возвращает значение и оставляет состояние
+        // пустым, а повторный take — `None` (как `js_ctx` уехал в снапшот).
+        let engine = engine_thread::EngineThread::<u64, EngineJsState>::spawn()
+            .expect("spawn engine thread");
+        let doc = Arc::new(Mutex::new(lumen_html_parser::parse("<p>hi</p>")));
+        engine.task(move |s| s.document = Some(doc));
+        // Первый take извлекает депонированный Arc, состояние очищается.
+        assert_eq!(
+            engine.query(|s| s.document.take().map(|d| Arc::strong_count(&d))),
+            Some(Some(1))
+        );
+        // Состояние теперь пусто — повторный take даёт `None` (`flatten` в
+        // `take_js_ctx` схлопнет `Some(None)` → `None`).
+        assert_eq!(engine.query(|s| s.document.take().is_some()), Some(false));
     }
 
     #[test]
