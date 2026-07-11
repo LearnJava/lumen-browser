@@ -6896,7 +6896,8 @@ impl Lumen {
     ///
     /// "Async-safe" means the caller changed only *chrome* geometry — a docked
     /// panel's side/width, the workspace bar, vertical/tree tabs, sidebar
-    /// visibility, or the AI / accessibility side panels (M2.2b-3) — or triggered a
+    /// visibility, the AI / accessibility side panels (M2.2b-3), or a mouse-click
+    /// *close* of the AI / sidebar / accessibility panels (M2.2b-6) — or triggered a
     /// whole-page *restyle* with no geometry read of its own (an OS/settings theme
     /// flip, M2.2b-4; an interactive `:hover`/`:active` pseudo-class flip, M2.2b-5),
     /// and is in either case **not** followed by a synchronous read
@@ -10558,7 +10559,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 self.a11y_panel.visible = false;
                                 self.deliver_a11y_media_changes();
                                 // Re-style with the (possibly toggled) forced-colors pref.
-                                self.relayout();
+                                // Async-safe (M2.2b-6): closing the panel only shifts
+                                // chrome + re-evaluates forced-colors; no page-geometry
+                                // read follows (just `request_redraw` + `return`).
+                                self.relayout_chrome();
                             }
                             A11yHit::FontMultiplier(v) => {
                                 self.a11y_panel.draft.font_size_multiplier = v as f64;
@@ -10580,7 +10584,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 self.a11y_panel.visible = false;
                                 self.deliver_a11y_media_changes();
                                 // Re-style with the (possibly toggled) forced-colors pref.
-                                self.relayout();
+                                // Async-safe (M2.2b-6): closing the panel only shifts
+                                // chrome + re-evaluates forced-colors; no page-geometry
+                                // read follows (just `request_redraw` + `return`).
+                                self.relayout_chrome();
                             }
                         }
                         self.request_redraw();
@@ -10907,7 +10914,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             match hit {
                                 panels::ai_panel::AiHit::Close => {
                                     self.ai_panel.close();
-                                    self.relayout();
+                                    // Async-safe (M2.2b-6): mouse-click close is the
+                                    // counterpart of the `ToggleAiPanel` keyboard toggle
+                                    // routed off-thread in M2.2b-3 — chrome-inset shift,
+                                    // no page-geometry read (just redraw + `return`).
+                                    self.relayout_chrome();
                                     self.request_redraw();
                                 }
                                 panels::ai_panel::AiHit::Input
@@ -10939,7 +10950,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             match hit {
                                 panels::sidebar_panel::SidebarHit::Close => {
                                     self.sidebar.close();
-                                    self.relayout();
+                                    // Async-safe (M2.2b-6): mouse-click close is the
+                                    // counterpart of `open_sidebar_page` routed off-thread
+                                    // in M2.2b-2 — chrome-inset shift, no page-geometry
+                                    // read (just redraw + `return`).
+                                    self.relayout_chrome();
                                     self.request_redraw();
                                 }
                                 panels::sidebar_panel::SidebarHit::Content

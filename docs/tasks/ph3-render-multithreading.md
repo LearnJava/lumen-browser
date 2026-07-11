@@ -448,6 +448,26 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
       (DOM mutation → geometry read, focus, form input, resize, `content-visibility`
       expansion, rAF DOM-dirty) still need per-site analysis and stay synchronous.
       No new deps, no `unsafe`.
+    - **M2.2b-6 — off-thread layout for async-safe mouse-click panel-close paths.**
+      ✅ (branch `p1-mt-m2-2b-6-panel-close`, merged into `zcode`, 2026-07-11).
+      Routes the **mouse-click** close paths of the AI, sidebar and accessibility
+      panels — the pointer-driven counterparts of the keyboard toggles already moved
+      off-thread in M2.2b-2 (`open_sidebar_page`) and M2.2b-3 (`ToggleAiPanel`,
+      `ToggleA11y`). On a `MouseInput` press the panel hit-test fires: the AI panel's
+      `AiHit::Close` and the sidebar's `SidebarHit::Close` shift chrome inset
+      (`ai_panel.close()` / `sidebar.close()` removes a docked panel → content
+      viewport widens), while the accessibility panel's `A11yHit::Close` /
+      `A11yHit::Outside` apply the draft, hide the panel and re-style under the
+      (possibly toggled) forced-colors pref. None of the four reads page geometry
+      after the relayout — each does `request_redraw()` then `return`, and the
+      panel hit-test's `win_w`/`win_h` are read *before* the relayout — so routing
+      all four through the existing `Lumen::relayout_chrome()` helper is
+      byte-identical with the flag off (default) and lands the reflow a few frames
+      later under `LUMEN_ENGINE_THREAD=1`. The helper's doc comment now lists the
+      mouse-click-close case. 4 sites converted (30 → 26 sync callers). Remaining
+      sync-geometry sites (DOM mutation → geometry read, focus, form input, resize,
+      `content-visibility` expansion, rAF DOM-dirty) still need per-site analysis and
+      stay synchronous. No new deps, no `unsafe`.
 - **M2.3 — synchronous readback + acceptance.** `--screenshot`, `run.py --ipc`,
   CDP `Page.captureScreenshot` become `Request::Readback { reply }` messages
   (audit all `screenshot_*` sites first — most are already CPU per the M1.1
