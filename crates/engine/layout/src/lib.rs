@@ -53,7 +53,7 @@ pub use counters::{
     CounterMap, CounterSnapshot, CounterStyleDef, CounterStyleRegistry,
     CounterSystem, CounterRange, QuoteSlot, RangeBound,
 };
-pub use color_mix::{MixColorSpace, mix_colors};
+pub use color_mix::{HueInterpolationMethod, MixColorSpace, mix_colors, mix_colors_hue};
 pub use field_sizing::field_sizing_content_intrinsic;
 pub use hyphenation::{collect_hyphen_points, SoftHyphenPoint};
 pub use image_gating::gate_image_requests;
