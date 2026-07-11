@@ -580,10 +580,44 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
       their observable semantics.
     - **M2.2c-2 — move `js_ctx` ownership to the engine thread.** The hard core:
       `js_ctx` is touched by dozens of UI-thread event paths (scroll-Y sync, event
-      dispatch, observer delivery, matchMedia, lazy-image drain). Introduce an
-      engine-side owner + a typed message for each UI→JS call currently done inline,
-      so the UI thread stops holding the JS handle. Do this incrementally: shim each
-      call site to a message, keep behavior identical with the flag off.
+      dispatch, observer delivery, matchMedia, lazy-image drain — ~119 `js_ctx`
+      references in `crates/shell/src/main.rs` alone). Introduce an engine-side owner
+      + a typed message for each UI→JS call currently done inline, so the UI thread
+      stops holding the JS handle. Because this is L-sized and cross-cutting, split
+      into independently-shippable sub-slices (each merged into `zcode`, mechanism
+      before wiring, byte-identical with the flag off — mirroring M0/M1/M2.2c-0/-1):
+      - **M2.2c-2a — engine-thread persistent-state primitive. ✅ (branch
+        `p1-mt-m2-2c-2a`, 2026-07-11).** Gave the engine thread the ability to
+        **own** long-lived engine-side state `S` (the future seat for the mutable
+        `Document` + `js_ctx` handle) and run **ordered, non-coalesced** jobs against
+        it. In `crates/shell/src/engine_thread.rs`: `EngineThread<C, S = ()>` +
+        `EngineMsg::Task(Box<dyn FnOnce(&mut S) + Send>)`, executed in-order in
+        `run_batch` (never coalesced, never touches `latest`/`applied_generation`);
+        `spawn_with_state(initial)` owns `S` on the thread, `spawn()` keeps working
+        via `S: Default`. UI-side helpers `task()` (fire-and-forget void UI→JS calls:
+        `eval_js`, `tick_timers`, `run_animation_frame`, observer delivery) and
+        `query()` (request/reply for value-returning calls: `take_dom_dirty` → bool,
+        `eval_js_value`, `take_raf_pending` — built atop `Task` with a captured
+        reply channel, like `readback`). State `S` is owned **solely** by the engine
+        thread (UI never shares it — talks via messages), so ADR-016 invariant 1
+        ("no shared mutable state") holds. Default `S = ()` → the existing stateless
+        `Run`/`Readback` path (`EngineThread<EngineCommit>`) is byte-identical; the
+        primitive is `#[allow(dead_code)]` until 2b. Covered by 8 new `run_batch_*`/
+        `task_*`/`query_*`/`spawn_*` unit tests (execute-against-state, in-order/
+        not-coalesced, positional order, shutdown-skips-task, task-alongside-newest-
+        Run, end-to-end task+query, default-state). No behavior change with the flag
+        off, no new deps.
+      - **M2.2c-2b — move `js_ctx` into engine-side `S` behind `LUMEN_ENGINE_THREAD`.**
+        Define the concrete engine state (`Document` + `Box<dyn PersistentJs>`),
+        `spawn_with_state` it when the flag is on, and shim the **simplest** UI→JS
+        call class (fire-and-forget void calls: `eval_js`/`tick_timers`) to `task()`.
+        Keep the UI-thread `js_ctx` as the flag-off path unchanged.
+      - **M2.2c-2c — shim value-returning UI→JS calls to `query()`** (`take_dom_dirty`,
+        `take_raf_pending`, `eval_js_value`, timer wakeup / nav-update drains), one
+        call class at a time, each byte-identical with the flag off.
+      - **M2.2c-2d — retire the UI-thread `js_ctx` field under the flag.** Once every
+        call site routes through `task`/`query`, the UI thread stops holding the JS
+        handle entirely (flag on); the flag-off legacy field is removed last.
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any
