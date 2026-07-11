@@ -425,6 +425,29 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
       callers). Remaining sync-geometry sites (DOM mutation → geometry read,
       hover/focus, form input, resize, `content-visibility` expansion, rAF DOM-dirty)
       still need per-site analysis and stay synchronous. No new deps, no `unsafe`.
+    - **M2.2b-5 — off-thread layout for async-safe interactive pseudo-class
+      restyles.** ✅ (branch `p1-mt-m2-2b-5-pseudo`, merged into `zcode`,
+      2026-07-11). Extends the async-safe restyle batch (M2.2b-4) from theme flips
+      to the interactive pointer pseudo-classes: the `:hover` change on
+      `CursorMoved` (`hovered_nid` flip) and the `:active` set-on-press /
+      clear-on-release (`active_nid` flip). A pseudo-class flip restyles appearance
+      (color/background/border) but essentially never moves layout, and none of the
+      three sites reads the *resulting* page geometry synchronously: the `:hover`
+      site dispatches the follow-up JS pointer/mouse events against
+      `old_nid`/`new_hovered` (node ids, not the reflow); the `:active`-press site's
+      subsequent click hit-test reads the pre-`:active` `layout_box` (the geometry
+      the user actually pressed on — correct); the `:active`-release site fires
+      mouseup/pointerup against `hovered_nid`. All three now call the existing
+      `Lumen::relayout_chrome()` helper, so with the flag off (default) they are
+      byte-identical to the previous synchronous `relayout()`; under
+      `LUMEN_ENGINE_THREAD=1` the highlight lands a few frames later via
+      `poll_engine_commit`, and any DOM mutation from those JS events takes its own
+      generation-guarded relayout (the rAF DOM-dirty path), superseding the stale
+      pseudo-class job. The helper's doc comment now lists the `:hover`/`:active`
+      case. 3 sites converted (33 → 30 sync callers). Remaining sync-geometry sites
+      (DOM mutation → geometry read, focus, form input, resize, `content-visibility`
+      expansion, rAF DOM-dirty) still need per-site analysis and stay synchronous.
+      No new deps, no `unsafe`.
 - **M2.3 — synchronous readback + acceptance.** `--screenshot`, `run.py --ipc`,
   CDP `Page.captureScreenshot` become `Request::Readback { reply }` messages
   (audit all `screenshot_*` sites first — most are already CPU per the M1.1

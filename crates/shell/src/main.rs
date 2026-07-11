@@ -6898,7 +6898,8 @@ impl Lumen {
     /// panel's side/width, the workspace bar, vertical/tree tabs, sidebar
     /// visibility, or the AI / accessibility side panels (M2.2b-3) — or triggered a
     /// whole-page *restyle* with no geometry read of its own (an OS/settings theme
-    /// flip, M2.2b-4), and is in either case **not** followed by a synchronous read
+    /// flip, M2.2b-4; an interactive `:hover`/`:active` pseudo-class flip, M2.2b-5),
+    /// and is in either case **not** followed by a synchronous read
     /// of page layout geometry. The reflowed content may
     /// therefore land a few frames later via [`Self::poll_engine_commit`], the
     /// same contract as the debounced zoom (M2.2a). The chrome itself is drawn
@@ -9773,7 +9774,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         #[cfg(feature = "quickjs")]
                         let old_nid = self.hovered_nid;
                         self.hovered_nid = new_hovered;
-                        self.relayout();
+                        // ADR-016 M2.2b-5: :hover restyle is async-safe (no
+                        // geometry read of its own; the JS pointer events below
+                        // target `old_nid`/`new_hovered`, not this reflow).
+                        self.relayout_chrome();
                         self.request_redraw();
                         // Dispatch hover-change events per W3C UI Events §17.5 / Pointer Events L2 §10.
                         #[cfg(feature = "quickjs")]
@@ -9947,7 +9951,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // CSS :active — set immediately on press so :active rules apply.
                     if self.active_nid != self.hovered_nid {
                         self.active_nid = self.hovered_nid;
-                        self.relayout();
+                        // ADR-016 M2.2b-5: :active restyle is async-safe — the
+                        // click hit-test below reads the pre-:active layout (the
+                        // geometry the user pressed on), which is correct.
+                        self.relayout_chrome();
                         self.request_redraw();
                     }
                     let Some(cursor) = self.cursor_position else {
@@ -11060,7 +11067,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // CSS :active — clear on release.
                     if self.active_nid.is_some() {
                         self.active_nid = None;
-                        self.relayout();
+                        // ADR-016 M2.2b-5: :active clear is async-safe — the
+                        // mouseup/pointerup JS events below target `hovered_nid`,
+                        // not this reflow's geometry.
+                        self.relayout_chrome();
                         self.request_redraw();
                     }
                     // Fire mouseup + pointerup on the hovered DOM element.
