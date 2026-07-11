@@ -426,7 +426,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `clip-path` | ✅ | inset/circle/ellipse/polygon/path() rendered; `<fill-rule>` (nonzero/evenodd) in path()/polygon() ✅ 2026-06-14 |
-| `clip-rule` | ⬜ | evenodd/nonzero (SVG-only; CSS clip-path uses path()/polygon() fill-rule ✅ 2026-06-14) |
+| `clip-rule` | 🟡 | evenodd/nonzero parsed + inherited + cascaded (`svg_clip_rule`, SVG §14.3.4) 2026-07-12; rendering deferred to SVG `clip-path: url(#id)` refs. CSS clip-path uses path()/polygon() fill-rule ✅ 2026-06-14 |
 | `mask` (shorthand) | 🟡 | |
 | `mask-image` | 🟡 | GPU mask composite pipeline ✅ (PushMask/PopMask + PushMaskLayer/PopMaskLayer); alpha compositing ✅; luminance mode ✅ 2026-05-29 |
 | `mask-repeat` / `mask-size` / `mask-position` | 🟡 | parsed; `mask-position` wired into `PushMaskImage` (initial `center`, CSS Masking L1 §4.4) 2026-06-22; `mask-repeat` tiling ⬜ |

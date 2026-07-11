@@ -3125,6 +3125,11 @@ pub struct ComputedStyle {
     pub svg_stroke_width: f32,
     /// SVG §11.3 — `fill-rule`. Inherited. Initial: `NonZero`.
     pub svg_fill_rule: FillRule,
+    /// SVG §14.3.4 — `clip-rule`. Inherited. Initial: `NonZero`.
+    /// Fill rule used for the interior of a `<clipPath>` child shape (reuses
+    /// [`FillRule`]). Parsed and cascaded; consumed once SVG `clip-path:
+    /// url(#id)` references land.
+    pub svg_clip_rule: FillRule,
     /// SVG §11.4 — `stroke-linecap`. Inherited. Initial: `Butt`.
     pub svg_stroke_linecap: StrokeLinecap,
     /// SVG §11.4 — `stroke-linejoin`. Inherited. Initial: `Miter`.
@@ -5656,6 +5661,7 @@ impl ComputedStyle {
             svg_stroke_opacity: 1.0,
             svg_stroke_width: 1.0,
             svg_fill_rule: FillRule::NonZero,
+            svg_clip_rule: FillRule::NonZero,
             svg_stroke_linecap: StrokeLinecap::Butt,
             svg_stroke_linejoin: StrokeLinejoin::Miter,
             svg_stroke_miterlimit: 4.0,
@@ -6018,6 +6024,7 @@ pub fn compute_style(
         svg_stroke_opacity: inherited.svg_stroke_opacity,
         svg_stroke_width: inherited.svg_stroke_width,
         svg_fill_rule: inherited.svg_fill_rule,
+        svg_clip_rule: inherited.svg_clip_rule,
         svg_stroke_linecap: inherited.svg_stroke_linecap,
         svg_stroke_linejoin: inherited.svg_stroke_linejoin,
         svg_stroke_miterlimit: inherited.svg_stroke_miterlimit,
@@ -9212,6 +9219,7 @@ fn apply_svg_presentational_hints(
         "fill",
         "fill-opacity",
         "fill-rule",
+        "clip-rule",
         "stroke",
         "stroke-opacity",
         "stroke-width",
@@ -14206,6 +14214,14 @@ fn apply_declaration(
                 style.svg_fill_rule = FillRule::NonZero;
             }
         }
+        "clip-rule" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("evenodd") {
+                style.svg_clip_rule = FillRule::EvenOdd;
+            } else if v.eq_ignore_ascii_case("nonzero") {
+                style.svg_clip_rule = FillRule::NonZero;
+            }
+        }
         "stroke-linecap" => {
             let v = val.trim();
             if v.eq_ignore_ascii_case("round") {
@@ -15958,6 +15974,9 @@ fn apply_css_wide_keyword(
         }
         "fill-rule" => {
             style.svg_fill_rule = if inh_only_inherit { inherited.svg_fill_rule } else { init.svg_fill_rule };
+        }
+        "clip-rule" => {
+            style.svg_clip_rule = if inh_only_inherit { inherited.svg_clip_rule } else { init.svg_clip_rule };
         }
         "stroke-linecap" => {
             style.svg_stroke_linecap = if inh_only_inherit { inherited.svg_stroke_linecap } else { init.svg_stroke_linecap };
@@ -25201,6 +25220,63 @@ mod tests {
         let vp = Size::new(800.0, 600.0);
         apply_declaration(&mut s, &decl, 16.0, vp, FontWeight::NORMAL, &ComputedStyle::root(), false, false);
         s
+    }
+
+    // === clip-rule parsing (SVG §14.3.4) ===
+
+    #[test]
+    fn clip_rule_default_is_nonzero() {
+        assert_eq!(ComputedStyle::root().svg_clip_rule, FillRule::NonZero);
+    }
+
+    #[test]
+    fn clip_rule_parses_evenodd_and_nonzero() {
+        assert_eq!(ts_prop("clip-rule", "evenodd").svg_clip_rule, FillRule::EvenOdd);
+        // Case-insensitive per CSS keyword matching.
+        assert_eq!(ts_prop("clip-rule", "EvenOdd").svg_clip_rule, FillRule::EvenOdd);
+        assert_eq!(ts_prop("clip-rule", "nonzero").svg_clip_rule, FillRule::NonZero);
+    }
+
+    #[test]
+    fn clip_rule_invalid_keeps_default() {
+        // Unknown keyword leaves the initial value untouched.
+        assert_eq!(ts_prop("clip-rule", "bogus").svg_clip_rule, FillRule::NonZero);
+    }
+
+    #[test]
+    fn clip_rule_is_independent_of_fill_rule() {
+        // The two share FillRule but are distinct properties.
+        let s = ts_prop("clip-rule", "evenodd");
+        assert_eq!(s.svg_clip_rule, FillRule::EvenOdd);
+        assert_eq!(s.svg_fill_rule, FillRule::NonZero);
+    }
+
+    #[test]
+    fn clip_rule_explicit_inherit_takes_parent_value() {
+        // clip-rule is inherited (SVG §14.3.4): `clip-rule: inherit` copies the
+        // parent's value; `initial` resets to nonzero.
+        let mut parent = ComputedStyle::root();
+        parent.svg_clip_rule = FillRule::EvenOdd;
+        let vp = Size::new(800.0, 600.0);
+
+        let mut child = ComputedStyle::root();
+        let inherit = Declaration {
+            property: "clip-rule".to_string(),
+            value: "inherit".to_string(),
+            important: false,
+        };
+        apply_declaration(&mut child, &inherit, 16.0, vp, FontWeight::NORMAL, &parent, false, false);
+        assert_eq!(child.svg_clip_rule, FillRule::EvenOdd);
+
+        let mut child2 = ComputedStyle::root();
+        child2.svg_clip_rule = FillRule::EvenOdd;
+        let initial = Declaration {
+            property: "clip-rule".to_string(),
+            value: "initial".to_string(),
+            important: false,
+        };
+        apply_declaration(&mut child2, &initial, 16.0, vp, FontWeight::NORMAL, &parent, false, false);
+        assert_eq!(child2.svg_clip_rule, FillRule::NonZero);
     }
 
     // === paint-order parsing (CSS Fill & Stroke L3 §6 / SVG 2 §13.7) ===
