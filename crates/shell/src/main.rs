@@ -14244,15 +14244,21 @@ impl Lumen {
     /// Called when the a11y panel closes so `prefers-reduced-motion` MQLs fire.
     fn deliver_a11y_media_changes(&self) {
         #[cfg(feature = "quickjs")]
-        if let Some(js) = &self.js_ctx {
+        {
             let w = self.viewport_width_css();
             let h = self.viewport_height_css();
             let dark = if self.dark_mode { "true" } else { "false" };
             let rm = if self.a11y_store.reduced_motion() { "true" } else { "false" };
-            js.eval_js(&format!(
-                "if(typeof _lumen_deliver_media_changes==='function')\
-                 _lumen_deliver_media_changes({w},{h},{dark},{rm});"
-            ));
+            // ADR-016 M2.2d: fire-and-forget eval via route_eval_js (off-UI-thread
+            // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
+            route_eval_js(
+                self.engine_thread.as_ref(),
+                self.js_ctx.as_ref(),
+                format!(
+                    "if(typeof _lumen_deliver_media_changes==='function')\
+                     _lumen_deliver_media_changes({w},{h},{dark},{rm});"
+                ),
+            );
         }
     }
 
@@ -14424,33 +14430,41 @@ impl Lumen {
             }));
         }
         let state = serde_json::json!({ "entries": entries, "index": idx });
-        if let Some(js) = &self.js_ctx {
-            // The native binding takes a String argument, so the JSON text must
-            // be embedded as a JS string literal (double encoding) — passing a
-            // bare object literal makes the arg conversion fail and the state
-            // silently never reaches the runtime.
-            let Ok(json) = serde_json::to_string(&state) else { return };
-            let Ok(quoted) = serde_json::to_string(&json) else { return };
-            js.eval_js(&format!("_lumen_navigation_set_state({quoted})"));
-        }
+        // The native binding takes a String argument, so the JSON text must
+        // be embedded as a JS string literal (double encoding) — passing a
+        // bare object literal makes the arg conversion fail and the state
+        // silently never reaches the runtime.
+        let Ok(json) = serde_json::to_string(&state) else { return };
+        let Ok(quoted) = serde_json::to_string(&json) else { return };
+        // ADR-016 M2.2d: fire-and-forget eval via route_eval_js (off-UI-thread
+        // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
+        route_eval_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            format!("_lumen_navigation_set_state({quoted})"),
+        );
     }
 
     fn fire_navigate_success(&self) {
-        if let Some(js) = &self.js_ctx {
-            js.fire_navigate_success();
-        }
+        // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
+        // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            j.fire_navigate_success();
+        });
     }
 
     fn fire_navigate_error(&self) {
-        if let Some(js) = &self.js_ctx {
-            js.fire_navigate_error();
-        }
+        // ADR-016 M2.2d: fire-and-forget void via route_task_js.
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            j.fire_navigate_error();
+        });
     }
 
     fn fire_current_entry_change(&self) {
-        if let Some(js) = &self.js_ctx {
-            js.fire_current_entry_change();
-        }
+        // ADR-016 M2.2d: fire-and-forget void via route_task_js.
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            j.fire_current_entry_change();
+        });
     }
 
     /// Whether the current page may be stored as a full bfcache freeze.
@@ -14533,9 +14547,13 @@ impl Lumen {
         if let Some(w) = self.window.as_ref() {
             w.set_title(&window_title(self.title.as_deref()));
         }
-        if let Some(js) = &self.js_ctx {
-            js.eval_js("_lumen_fire_page_lifecycle('pageshow', true)");
-        }
+        // ADR-016 M2.2d: fire-and-forget eval via route_eval_js (off-UI-thread
+        // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
+        route_eval_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            "_lumen_fire_page_lifecycle('pageshow', true)".to_string(),
+        );
         self.request_redraw();
         self.commit_nav_state();
         true

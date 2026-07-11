@@ -740,6 +740,20 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
         write-back-сайты в том же блоке (element-scroll `update_scroll_states`/
         `fire_element_scroll`, GC `gc_collect`) и синхронные fire-and-forget
         event-dispatch сайты — следующие под-срезы 2d перед снятием самого поля.
+        ✅ **Пятый под-срез готов** (branch `p1-mt-m22d-5`, merged into `zcode`,
+        2026-07-11): navigation/lifecycle fire-and-forget void-сайты переведены с
+        прямых `if let Some(js) = &self.js_ctx { … }` на `route_eval_js`/
+        `route_task_js`. 6 сайтов: `deliver_a11y_media_changes`
+        (`_lumen_deliver_media_changes` eval), `commit_nav_state`
+        (`_lumen_navigation_set_state` eval), `fire_navigate_success`,
+        `fire_navigate_error`, `fire_current_entry_change` (Navigation API
+        события) и `bfcache_thaw` pageshow-lifecycle eval. Все — чистый void без
+        чтения результата следом; под флагом (`LUMEN_ENGINE_THREAD=1`) уходят
+        off-UI-thread одним `task`, без флага (по умолчанию) — синхронный вызов по
+        UI-хэндлу, байт-идентично. Сериализация payload в `commit_nav_state`
+        вынесена перед маршрутизацией (ранние `return` на ошибке сериализации
+        сохранены). No new deps, no `unsafe`. Механизм не менялся — покрыт
+        существующими route/engine_thread тестами.
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any
