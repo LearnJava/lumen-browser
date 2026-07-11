@@ -705,6 +705,22 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
         `take_nav_intercept_result` (4 сайта в `navigate_to`/`_replace`/`_back`/
         `_forward`, read-after-eval цепочка) — следующий под-срез 2d, затем снятие
         самого поля `js_ctx` под флагом.
+        ✅ **Третий под-срез готов** (branch `p1-mt-m2-2c-2d-3`, merged into `zcode`,
+        2026-07-11): последнее синхронное read-after-eval UI→JS чтение —
+        `take_nav_intercept_result` в `navigate_to`/`_replace`/`_back`/`_forward` —
+        переведено на маршрутизаторы. В каждом из 4 сайтов nav-dispatch eval
+        (`_lumen_dispatch_navigate`) и intercept-handler eval
+        (`_lumen_run_navigate_handler`) ушли на `route_task_js`, а само
+        `take_nav_intercept_result` → `route_query_js` (возврат `Option<Vec<(bool,
+        bool)>>`; внешний `None` = ветка «без JS», как прежний `if let Some(js) =
+        &self.js_ctx`). Под флагом (`LUMEN_ENGINE_THREAD=1`) dispatch уходит
+        off-UI-thread одним `task`, блокирующий `query` встаёт в очередь **после**
+        него — read-after-eval порядок сохранён; без флага (по умолчанию) — прежние
+        синхронные вызовы, байт-идентично. Прямых `self.js_ctx`-чтений в nav-методах
+        не осталось. 1 новый тест (nav-intercept без хэндла → `None` → intercept-блок
+        пропущен). No new deps, no `unsafe`. **Все value-returning UI→JS чтения
+        зашимлены** — следующий под-срез 2d снимает само поле `js_ctx` с UI-потока
+        под флагом.
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any
