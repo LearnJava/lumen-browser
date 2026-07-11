@@ -71,7 +71,7 @@ pub(crate) fn restore_js_context(
     cookie_banner_dismiss: bool,
     deterministic: bool,
     cookie_jar: Option<Arc<lumen_storage::CookieJar>>,
-) -> (Arc<Mutex<Document>>, Option<Box<dyn PersistentJs>>) {
+) -> (Arc<Mutex<Document>>, Option<Arc<dyn PersistentJs>>) {
     let base = resource_base_from_url(url);
 
     // BUG-164: re-collect classic + module scripts in document order and

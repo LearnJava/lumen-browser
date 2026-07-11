@@ -179,7 +179,7 @@ enum LoadEvent {
 /// Готовый результат финального pipeline: display-list-страница, источник для
 /// relayout и живой JS-хэндл (если включён QuickJS). Тип-алиас, чтобы вынести
 /// сложную тройку из сигнатур (`render_bytes`, `RenderOutcome`).
-type RenderedPage = (LoadedPage, LayoutSource, Option<Box<dyn PersistentJs>>);
+type RenderedPage = (LoadedPage, LayoutSource, Option<Arc<dyn PersistentJs>>);
 
 /// BUG-171 этап 2: результат финального off-UI-thread рендера (`render_bytes`),
 /// пересылаемый назад на UI-поток через `LoadEvent::RenderDone`.
@@ -564,11 +564,15 @@ static SPELL_DICTS: std::sync::OnceLock<spellcheck::MultiDictionary> = std::sync
 /// считает [`EngineCommit`] и кладёт в latest-wins слот, откуда его забирает
 /// [`Lumen::poll_engine_commit`]. При сбое старта потока логируем и откатываемся
 /// на `None` (как обычно, без движкового потока — синхронный `relayout()`).
-fn spawn_engine_thread_if_enabled() -> Option<engine_thread::EngineThread<EngineCommit>> {
+fn spawn_engine_thread_if_enabled()
+-> Option<engine_thread::EngineThread<EngineCommit, EngineJsState>> {
     if std::env::var("LUMEN_ENGINE_THREAD").as_deref() != Ok("1") {
         return None;
     }
-    match engine_thread::EngineThread::<EngineCommit>::spawn() {
+    // ADR-016 M2.2c-2b: поток владеет `EngineJsState` (будущее сиденье `Document`
+    // + `js_ctx`); стартует пустым (`EngineJsState::default()` через `spawn()`),
+    // заполняется `sync_engine_js_state` при первой загрузке страницы.
+    match engine_thread::EngineThread::<EngineCommit, EngineJsState>::spawn() {
         Ok(engine) => {
             eprintln!("[engine-thread] запущен (LUMEN_ENGINE_THREAD=1, M2.2 off-thread layout)");
             Some(engine)
@@ -2005,7 +2009,14 @@ enum JsNavigateRequest {
 // BUG-171 этап 2: `Send` нужен, чтобы готовый JS-хэндл (`QuickJsRuntime` —
 // `Send + Sync` по ADR-014/B-1), созданный финальным pipeline на фоновом потоке,
 // пересылался обратно на UI-поток внутри `LoadEvent::RenderDone`.
-pub(crate) trait PersistentJs: Send {
+//
+// ADR-016 M2.2c-2b: `Sync` добавлен, чтобы хэндл можно было держать за
+// `Arc<dyn PersistentJs>` и **разделять** между UI-потоком и движковым потоком на
+// время миграции `js_ctx` на движковый поток (см. `EngineJsState`). Все методы
+// уже берут `&self`, а `QuickJsRuntime` — `Send + Sync` (все вызовы туннелируются
+// на выделенный JS-поток через `SyncSender`, ADR-014), поэтому `Sync` держится
+// без `unsafe`. UI-сторонний `Arc`-клон удаляется в M2.2c-2d.
+pub(crate) trait PersistentJs: Send + Sync {
     /// Evaluate a JS script (event handler dispatch, rAF tick, etc.).
     fn eval_js(&self, script: &str);
     /// Evaluate `script` and return its result as a JSON string (SDC-1b
@@ -2904,7 +2915,7 @@ impl PageSource {
         sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
         hp: &dyn HyphenationProvider,
         cookie_banner_dismiss: bool,
-    ) -> Result<(LoadedPage, Option<LayoutSource>, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
+    ) -> Result<(LoadedPage, Option<LayoutSource>, Option<Arc<dyn PersistentJs>>), Box<dyn Error>> {
         if matches!(self, PageSource::Empty | PageSource::AboutBlank) {
             return Ok((LoadedPage::empty(), None, None));
         }
@@ -4089,7 +4100,10 @@ struct ParsedPage {
     /// Persistent JS context (QuickJS) kept alive after page load so that
     /// event handlers registered via `addEventListener` continue to work.
     /// `None` when the quickjs feature is disabled or script init failed.
-    js_ctx: Option<Box<dyn PersistentJs>>,
+    ///
+    /// ADR-016 M2.2c-2b: `Arc` (не `Box`), чтобы хэндл можно было разделить с
+    /// движковым потоком (`EngineJsState`) на время миграции `js_ctx` на него.
+    js_ctx: Option<Arc<dyn PersistentJs>>,
     /// P3-webvtt срез 3: WebVTT-cues, загруженные из `<track>` каждого `<video>`.
     page_tracks: tracks::PageTracks,
 }
@@ -4174,7 +4188,8 @@ struct PageSnapshot {
     /// tab's `idb_dir` when saving a snapshot; restored on tab switch-back.
     idb_dir: Option<std::path::PathBuf>,
     sw_backend: Arc<Mutex<dyn lumen_core::ext::StorageBackend>>,
-    js_ctx: Option<Box<dyn PersistentJs>>,
+    /// ADR-016 M2.2c-2b: `Arc` (не `Box`) — общий тип хэндла с активной вкладкой.
+    js_ctx: Option<Arc<dyn PersistentJs>>,
     first_paint_delivered: bool,
     first_contentful_paint_delivered: bool,
     /// Instant at which the current navigation began (set in `reload()`).
@@ -4824,6 +4839,67 @@ struct EngineCommit {
     /// Время off-thread вычисления (style + layout + DL build) в мс — для
     /// `ENGINE_SUMMARY` / `[engine] relayout … (off-thread)`.
     compute_ms: f32,
+}
+
+/// ADR-016 M2.2c-2b: персистентное состояние движкового потока `S` — «место»
+/// для мутабельного `Document` и хэндла `lumen-js` (`js_ctx`), которые M2.2c
+/// целиком переносит на движковый поток. Владеет им **только** движковый поток
+/// (тип `S` в [`engine_thread::EngineThread`]); UI-сторона его не разделяет —
+/// общается через [`engine_thread::EngineThread::task`]/`query` (инвариант 1).
+///
+/// На срезе M2.2c-2b поле `js` заполняется зеркальным `Arc`-клоном UI-хэндла при
+/// каждой смене страницы ([`Lumen::sync_engine_js_state`]), а маршрутизируются на
+/// поток пока только простейшие fire-and-forget void-вызовы `eval_js`
+/// (см. [`route_eval_js`]). Остальные UI→JS вызовы всё ещё идут по UI-хэндлу
+/// `Lumen::js_ctx`; их перенос (`query`-путь для значений, DOM-мутации) —
+/// M2.2c-2c/-2d/-3. `document` держится как будущее «сиденье» для владения DOM;
+/// пока читается только как зеркальный снимок и в layout-вычислении не участвует.
+#[derive(Default)]
+struct EngineJsState {
+    /// Разделяемый DOM (тот же `Arc`, что у `LayoutSource::document`). Будущее
+    /// «сиденье» владения DOM движковым потоком (M2.2c-3); пока — зеркальный
+    /// снимок для готовности инфраструктуры, layout его не использует.
+    document: Option<Arc<Mutex<Document>>>,
+    /// Хэндл персистентного JS-рантайма. На время миграции (M2.2c-2b…2c) это
+    /// зеркальный `Arc`-клон UI-хэндла `Lumen::js_ctx`; UI-сторонний клон
+    /// удаляется в M2.2c-2d, когда все call-site'ы уйдут в `task`/`query`.
+    js: Option<Arc<dyn PersistentJs>>,
+}
+
+/// ADR-016 M2.2c-2b: маршрутизатор fire-and-forget void-вызова `eval_js`.
+///
+/// Свободная функция (а не метод `Lumen`), чтобы на call-site'е заимствовать поля
+/// `engine_thread`/`js_ctx` **раздельно** (disjoint borrow) и не конфликтовать с
+/// уже удерживаемыми `&mut`-заимствованиями других полей `self`.
+///
+/// - движковый поток есть (`LUMEN_ENGINE_THREAD=1`) → `eval_js` уходит **off-UI-thread**
+///   через [`engine_thread::EngineThread::task`] (не блокирует UI-поток на
+///   JS-round-trip; исполнится по порядку среди прочих `Task`);
+/// - потока нет (флаг выключен, по умолчанию) → синхронный вызов по UI-хэндлу
+///   `js` — **байт-идентично** прежнему `js.eval_js(script)`.
+///
+/// Известное ограничение под флагом (паттерн M2.2a): вызов становится
+/// асинхронным, поэтому синхронное чтение результатов JS в том же тике (напр.
+/// `take_navigate_request`) может увидеть их на кадр позже — такие
+/// read-after-eval-цепочки переносятся на `query`-путь в M2.2c-2c. Поэтому
+/// маршрутизируются только заведомо изолированные void-вызовы без чтения следом.
+fn route_eval_js(
+    engine: Option<&engine_thread::EngineThread<EngineCommit, EngineJsState>>,
+    js: Option<&Arc<dyn PersistentJs>>,
+    script: String,
+) {
+    match engine {
+        Some(engine) => engine.task(move |state| {
+            if let Some(js) = &state.js {
+                js.eval_js(&script);
+            }
+        }),
+        None => {
+            if let Some(js) = js {
+                js.eval_js(&script);
+            }
+        }
+    }
 }
 
 /// Повторный layout+paint по сохранённому `LayoutSource` с новым viewport.
@@ -5519,7 +5595,7 @@ fn apply_iframe_sandbox_gates(doc: &Document) -> usize {
 ///
 /// Принимает `doc` по значению, оборачивает в `Arc<Mutex<>>` на время выполнения
 /// Выполняет inline `<script>` блоки через QuickJS (если feature включён),
-/// возвращает `(Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Box<dyn PersistentJs>>)`.
+/// возвращает `(Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Arc<dyn PersistentJs>>)`.
 ///
 /// Документ оборачивается в `Arc<Mutex>` чтобы JS-замыкания и layout-код
 /// могли разделить доступ без лишних клонов. Persistent runtime возвращается
@@ -5557,7 +5633,7 @@ fn run_scripts_with_dom(
     extra_scripts: &[String],
     scripts: Vec<String>,
     module_scripts: Vec<String>,
-) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Box<dyn PersistentJs>>) {
+) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Arc<dyn PersistentJs>>) {
     // `scripts` / `module_scripts` are already resolved by the caller in
     // document order, including fetched external `<script src>` bodies (BUG-164).
     // Import map must be captured before `doc` moves into the Arc and applied
@@ -5641,7 +5717,7 @@ fn run_scripts_with_dom(
                     lumen_js::NavigateRequest::Reload     => JsNavigateRequest::Reload,
                 });
                 // Keep rt alive: return as PersistentJs so event handlers work after load.
-                let ctx: Box<dyn PersistentJs> = Box::new(QuickPersistentJs { rt });
+                let ctx: Arc<dyn PersistentJs> = Arc::new(QuickPersistentJs { rt });
                 return (doc_arc, nav_req, Some(ctx));
             }
             Err(e) => {
@@ -6064,7 +6140,11 @@ struct Lumen {
     /// async-триггеров (пока — debounce-зум): `submit_relayout_job` шлёт задание,
     /// `poll_engine_commit` забирает готовый [`EngineCommit`]. Дроп при завершении
     /// шлёт `Shutdown` и джойнит.
-    engine_thread: Option<engine_thread::EngineThread<EngineCommit>>,
+    ///
+    /// ADR-016 M2.2c-2b: поток также владеет персистентным состоянием
+    /// [`EngineJsState`] (`Document` + хэндл `js_ctx`) — сиденье для переноса JS на
+    /// движковый поток. Заполняется через `sync_engine_js_state` при смене страницы.
+    engine_thread: Option<engine_thread::EngineThread<EngineCommit, EngineJsState>>,
     /// ADR-016 M2.2: generation последнего **применённого** relayout-результата.
     /// Off-thread задание считается «в полёте» (нужен poll-будильник), пока
     /// `engine_job_generation != engine_applied_generation`. Синхронный
@@ -6155,7 +6235,11 @@ struct Lumen {
     /// initial script execution. `None` when `quickjs` feature is disabled or
     /// no scripts were registered. Must be dropped before `layout_source` on
     /// navigation to release Arc clones held in JS closures.
-    js_ctx: Option<Box<dyn PersistentJs>>,
+    ///
+    /// ADR-016 M2.2c-2b: `Arc` (не `Box`) — тот же хэндл держит движковый поток
+    /// (`EngineJsState`) на время миграции UI→JS вызовов на него. UI-сторонний
+    /// клон уходит в M2.2c-2d, когда все call-site'ы маршрутизируются в поток.
+    js_ctx: Option<Arc<dyn PersistentJs>>,
     /// When true the vertical scrollbar overlay is suppressed entirely.
     /// Set by `--no-scrollbar` CLI flag; used by graphic test pipeline to
     /// avoid scrollbar pixels contaminating the diff against Edge headless.
@@ -7160,6 +7244,26 @@ impl Lumen {
         }
     }
 
+    /// ADR-016 M2.2c-2b: зеркалит текущий хэндл `js_ctx` + разделяемый `Document`
+    /// в персистентное состояние [`EngineJsState`] движкового потока.
+    ///
+    /// No-op, когда движкового потока нет (`LUMEN_ENGINE_THREAD` выключен, по
+    /// умолчанию) — тогда поведение shell байт-идентично. Вызывается при каждой
+    /// смене страницы (после установки `self.js_ctx`), чтобы `task`/`query`-вызовы
+    /// на движковый поток видели актуальный рантайм. `Arc`-клоны дёшевы, а сам
+    /// рантайм всё равно живёт на своём `lumen-js`-потоке (ADR-014) — так что это
+    /// разделение хэндла, а не мутабельного состояния (инвариант 1). UI-сторонний
+    /// клон `Lumen::js_ctx` уходит в M2.2c-2d.
+    fn sync_engine_js_state(&self) {
+        let Some(engine) = self.engine_thread.as_ref() else { return };
+        let js = self.js_ctx.clone();
+        let document = self.layout_source.as_ref().map(|ls| Arc::clone(&ls.document));
+        engine.task(move |state| {
+            state.js = js;
+            state.document = document;
+        });
+    }
+
     /// Fetch, decode and register lazy images whose node IDs were queued by JS.
     ///
     /// Called from `relayout()` after `_lumen_deliver_lazy_images()` fires load
@@ -7559,6 +7663,8 @@ impl Lumen {
                 self.js_ctx = None;
                 self.layout_source = new_layout_source;
                 self.js_ctx = new_js_ctx;
+                // ADR-016 M2.2c-2b: зеркалим новый хэндл + DOM в движковый поток.
+                self.sync_engine_js_state();
                 // The new runtime starts empty; re-seed it with the current Navigation state.
                 self.commit_nav_state();
                 self.content_height = content_height_of(&page.display_list);
@@ -7958,11 +8064,14 @@ impl Lumen {
     /// Применить результат полного pipeline (fetch + parse + CSS + images).
     /// Используется и при streaming `LoadDone`, и может быть переиспользован
     /// в будущем для других путей загрузки.
-    fn apply_loaded_page(&mut self, page: LoadedPage, new_layout_source: Option<LayoutSource>, new_js_ctx: Option<Box<dyn PersistentJs>>) {
+    fn apply_loaded_page(&mut self, page: LoadedPage, new_layout_source: Option<LayoutSource>, new_js_ctx: Option<Arc<dyn PersistentJs>>) {
         // Drop JS closures before layout_source to release Arc clones in QuickJS.
         self.js_ctx = None;
         self.layout_source = new_layout_source;
         self.js_ctx = new_js_ctx;
+        // ADR-016 M2.2c-2b: зеркалим новый хэндл + DOM в состояние движкового
+        // потока (no-op при выключенном `LUMEN_ENGINE_THREAD`).
+        self.sync_engine_js_state();
         // The new runtime starts empty; re-seed it with the current Navigation state.
         self.commit_nav_state();
         self.content_height = content_height_of(&page.display_list);
@@ -8846,9 +8955,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 | PendingIntercepted::Forward { handler_started, .. } => *handler_started,
             };
             if !started {
-                if let Some(js) = &self.js_ctx {
-                    js.eval_js("_lumen_run_navigate_handler()");
-                }
+                // ADR-016 M2.2c-2b: изолированный fire-and-forget void-вызов
+                // (следом — только мутация `pending`, без синхронного чтения JS),
+                // поэтому маршрутизируем его off-UI-thread при включённом движковом
+                // потоке; при выключенном (по умолчанию) — байт-идентичный
+                // синхронный `js.eval_js`. Disjoint-borrow полей `engine_thread`/
+                // `js_ctx` уживается с активным `&mut self.pending_intercepted`.
+                route_eval_js(
+                    self.engine_thread.as_ref(),
+                    self.js_ctx.as_ref(),
+                    "_lumen_run_navigate_handler()".to_owned(),
+                );
                 *pending = match pending {
                     PendingIntercepted::Push { url, .. } => PendingIntercepted::Push {
                         url: url.clone(),
@@ -14227,7 +14344,7 @@ impl Lumen {
                     ) {
                         eprintln!("bfcache thaw: JS DOM init failed: {e}");
                     }
-                    self.js_ctx = Some(Box::new(QuickPersistentJs { rt }) as Box<dyn PersistentJs>);
+                    self.js_ctx = Some(Arc::new(QuickPersistentJs { rt }) as Arc<dyn PersistentJs>);
                 }
                 Err(e) => {
                     eprintln!("bfcache thaw: QuickJS init failed: {e}");
@@ -14239,6 +14356,9 @@ impl Lumen {
         {
             self.js_ctx = None;
         }
+        // ADR-016 M2.2c-2b: зеркалим восстановленный (или сброшенный) хэндл + DOM
+        // в движковый поток после bfcache-thaw.
+        self.sync_engine_js_state();
         self.relayout();
         self.scroll_x = entry.scroll_x;
         self.scroll_y = entry.scroll_y;
@@ -17471,6 +17591,8 @@ impl Lumen {
         self.cv_skipped.clear();
         self.refresh_cv_state();
         self.js_ctx = js_ctx;
+        // ADR-016 M2.2c-2b: зеркалим восстановленный хэндл + DOM в движковый поток.
+        self.sync_engine_js_state();
         self.scroll_x = data.scroll_x;
         self.scroll_y = data.scroll_y;
         self.content_height = content_height_of(&self.display_list);
@@ -17776,6 +17898,8 @@ impl Lumen {
         self.current_history_state_json = snap.current_history_state_json;
         self.reader_original_source = snap.reader_original_source;
         self.cert_info = snap.cert_info;
+        // ADR-016 M2.2c-2b: зеркалим хэндл + DOM восстановленной вкладки в поток.
+        self.sync_engine_js_state();
         // Notify platform bridge with the restored tab's accessibility tree.
         self.update_platform_ax_tree();
     }
@@ -17850,6 +17974,8 @@ impl Lumen {
         self.momentum_anim = None;
         self.forward_momentum_stop();
         self.scroll_drag = None;
+        // ADR-016 M2.2c-2b: очищаем хэндл + DOM в движковом потоке для чистой вкладки.
+        self.sync_engine_js_state();
     }
 
     /// Open a new blank tab.
@@ -18789,22 +18915,61 @@ mod tests {
     // Финальный render (`render_bytes`) уезжает на фоновый поток, а готовый
     // результат пересылается назад через `LoadEvent::RenderDone`. Это работает
     // только если весь груз — `Send`: `RenderOutcome` (включая JS-хэндл за
-    // `Box<dyn PersistentJs>`), сам `LoadEvent` и proxy. Регрессионная защита:
+    // `Arc<dyn PersistentJs>`), сам `LoadEvent` и proxy. Регрессионная защита:
     // если кто-то добавит `!Send`-поле в `LoadedPage`/`LayoutSource` или снимет
-    // `Send` с `PersistentJs`, эти ассерты перестанут компилироваться.
+    // `Send`/`Sync` с `PersistentJs`, эти ассерты перестанут компилироваться.
 
     fn _assert_send<T: Send>() {}
+    fn _assert_sync<T: Sync>() {}
 
     #[test]
     fn render_pipeline_payload_is_send() {
         // Груз, пересекающий границу рендер-поток → UI-поток.
         _assert_send::<RenderOutcome>();
         _assert_send::<LoadEvent>();
-        _assert_send::<Box<dyn PersistentJs>>();
+        _assert_send::<Arc<dyn PersistentJs>>();
         _assert_send::<EventLoopProxy<LoadEvent>>();
         // Аргументы, уезжающие в рендер-поток.
         _assert_send::<Arc<KnuthLiangHyphenation>>();
         _assert_send::<RawPage>();
+        // ADR-016 M2.2c-2b: хэндл разделяется между UI- и движковым потоком за
+        // `Arc<dyn PersistentJs>`, поэтому обязан быть `Send + Sync`. Если кто-то
+        // снимет `Sync` с `PersistentJs`, эта строка перестанет компилироваться.
+        _assert_sync::<Arc<dyn PersistentJs>>();
+    }
+
+    // ── ADR-016 M2.2c-2b: engine-thread owns EngineJsState ──────────────────
+
+    #[test]
+    fn engine_js_state_default_is_empty() {
+        // Свежее состояние движкового потока — без хэндла и без DOM (заполняется
+        // `sync_engine_js_state` при первой загрузке страницы).
+        let state = EngineJsState::default();
+        assert!(state.js.is_none());
+        assert!(state.document.is_none());
+    }
+
+    #[test]
+    fn engine_thread_carries_and_mutates_js_state() {
+        // Реальный тип состояния shell (`EngineJsState`) живёт на движковом потоке:
+        // `task` кладёт разделяемый `Document` (как это делает `sync_engine_js_state`),
+        // `query` читает его обратно — end-to-end проверка, что зеркалирование
+        // хэндла/DOM в состояние работает через настоящий `EngineThread<_, S>`.
+        let engine = engine_thread::EngineThread::<u64, EngineJsState>::spawn()
+            .expect("spawn engine thread");
+        // Пусто до первого task (аналог движкового потока сразу после старта).
+        assert_eq!(engine.query(|s| s.document.is_some()), Some(false));
+        let doc = Arc::new(Mutex::new(lumen_html_parser::parse("<p>hi</p>")));
+        engine.task(move |s| s.document = Some(doc));
+        // query исполняется после task (упорядоченный канал) → DOM на месте.
+        assert_eq!(engine.query(|s| s.document.is_some()), Some(true));
+    }
+
+    #[test]
+    fn route_eval_js_without_handle_is_noop() {
+        // Флаг выключен и хэндла нет: маршрутизатор не должен паниковать и просто
+        // ничего не делает (байт-идентично прежнему `if let Some(js) = … {}`).
+        route_eval_js(None, None, "_lumen_run_navigate_handler()".to_owned());
     }
 
     // ── Fullscreen viewport reconciliation (BUG-167) ────────────────────────
