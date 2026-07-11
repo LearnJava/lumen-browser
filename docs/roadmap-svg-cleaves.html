@@ -55,14 +55,14 @@
 
 <script id="roadmap-data" type="application/json">
 {
- "generated": "2026-07-08",
+ "generated": "2026-07-11",
  "counts": {
-  "open": 19,
+  "open": 21,
   "fixed": 226,
   "inprogress": 0,
   "wontfix": 0
  },
- "total_bugs": 245,
+ "total_bugs": 247,
  "phases": [
   {
    "id": "P0",
@@ -508,7 +508,130 @@
      "title": "Переход на V8 (rusty_v8) + Tier 2 Web APIs",
      "status": "planned",
      "size": "XL",
-     "note": "Разблокирован (v0.5.0 вышел). Единственное лекарство для тяжёлых SPA: аудит 2026-07-02 — github.com не дорендерился за 280 с (ресурсы загружены к 6.6 с, затык в QuickJS-интерпретаторе без JIT). Рекомендация: делать ПОСЛЕ дешёвых RP-5…RP-9 (они закрывают бо́льшую часть «не как в Edge» и не зависят от JS-движка), затем V8 как флагман Phase 3. Опц. промежуточный митигейт — watchdog/бюджет исполнения JS, чтобы страницы падали graceful, а не висли. Бриф docs/tasks/ph3-v8-migration.md. Сюда же перенесён уровень 2 bfcache — JS-куча переживает заморозку через ValueSerializer (docs/tasks/ph3-bfcache.md, DoD Level 2)"
+     "note": "Срезы S0–S12 — подзадачами ниже (истина в docs/tasks/ph3-v8-migration.md). Разблокирован (v0.5.0 вышел). Единственное лекарство для тяжёлых SPA: аудит 2026-07-02 — github.com не дорендерился за 280 с (ресурсы загружены к 6.6 с, затык в QuickJS-интерпретаторе без JIT). Рекомендация: делать ПОСЛЕ дешёвых RP-5…RP-9 (они закрывают бо́льшую часть «не как в Edge» и не зависят от JS-движка), затем V8 как флагман Phase 3. Опц. промежуточный митигейт — watchdog/бюджет исполнения JS, чтобы страницы падали graceful, а не висли. Бриф docs/tasks/ph3-v8-migration.md. Сюда же перенесён уровень 2 bfcache — JS-куча переживает заморозку через ValueSerializer (docs/tasks/ph3-bfcache.md, DoD Level 2)",
+     "tasks": [
+      {
+       "id": "P3-v8-s0",
+       "title": "V8 S0: build spike (go/no-go)",
+       "status": "planned",
+       "size": "M",
+       "note": "S0: v8 как optional dep за feature v8-backend; smoke-тест init platform + isolate + eval 1+1; go/no-go гейт — до зелёного никакого портирования; бриф docs/tasks/ph3-v8-migration.md"
+      },
+      {
+       "id": "P3-v8-s1",
+       "title": "V8 S1: скелет рантайма",
+       "status": "planned",
+       "size": "M",
+       "note": "S1: v8_runtime.rs — V8JsRuntime/V8Inner/V8Command/v8_thread_main, impl JsRuntime (eval/set_global/get_global/call_function), конвертеры JsValue"
+      },
+      {
+       "id": "P3-v8-s2",
+       "title": "V8 S2: compat-слой",
+       "status": "planned",
+       "size": "M",
+       "note": "S2: свой IntoJsFn (arity 0..7) + reg!-двойник поверх V8 с эргономикой rquickjs; 3 console-нативы как доказательство — де-рискует всё после"
+      },
+      {
+       "id": "P3-v8-s3",
+       "title": "V8 S3: core DOM",
+       "status": "planned",
+       "size": "M",
+       "note": "S3: порт install_primitives (184 reg!-натива, dom.rs) через compat-слой; WEB_API_SHIM без изменений; samples/page.html рендерится e2e под --features v8-backend"
+      },
+      {
+       "id": "P3-v8-s4",
+       "title": "V8 S4: shell-адаптер",
+       "status": "planned",
+       "size": "S",
+       "note": "S4: V8PersistentJs в шелле (~50 методов, механически), ветка конструирования; запуск с --features backend-femtovg,v8 интерактивно"
+      },
+      {
+       "id": "P3-v8-s57",
+       "title": "V8 S5–S7: батчи простых модулей",
+       "status": "planned",
+       "size": "L",
+       "note": "S5–S7: ~90 простых модулей батчами по ~30 через compat-слой; чеклист ported/pending в брифе; параллельные субагенты уместны"
+      },
+      {
+       "id": "P3-v8-s8",
+       "title": "V8 S8: canvas2d + webgl_canvas",
+       "status": "planned",
+       "size": "M",
+       "note": "S8: ручной порт canvas2d + webgl_canvas (горячий путь, 85 упоминаний rquickjs; пиксельные очереди flush_canvas_updates); canvas-графтесты под v8"
+      },
+      {
+       "id": "P3-v8-s9",
+       "title": "V8 S9: wasm + webgpu",
+       "status": "planned",
+       "size": "M",
+       "note": "S9: wasm + webgpu — Persistent<Function> GC-корни → v8::Global<Function>, паттерн wasm::clear_registry() сохранить; webgpu-тест флачит под нагрузкой — ре-ран"
+      },
+      {
+       "id": "P3-v8-s10",
+       "title": "V8 S10: workers",
+       "status": "planned",
+       "size": "M",
+       "note": "S10: worker/shared_worker/sw_worker — per-thread Runtime+Context → per-thread OwnedIsolate, тот же канальный протокол"
+      },
+      {
+       "id": "P3-v8-s11",
+       "title": "V8 S11: suspend/resume",
+       "status": "planned",
+       "size": "S",
+       "note": "S11: suspend/resume (частичный 10C.2) — ValueSerializer для data-глобалей (zstd ≤5МБ); замыкания несериализуемы (F1) — re-run-scripts fallback остаётся"
+      },
+      {
+       "id": "P3-v8-s12",
+       "title": "V8 S12: cutover + cleanup",
+       "status": "planned",
+       "size": "M",
+       "note": "S12: дефолт shell quickjs→v8; выпилить rquickjs + __lum_args__; ADR-004→Superseded, ADR-015; React 18 CRA грузится без JS-ошибок; полный графтест-прогон"
+      }
+     ]
+    },
+    {
+     "id": "P3-mt",
+     "title": "Многопоточный рендер-конвейер (ADR-016)",
+     "status": "active",
+     "size": "XL",
+     "note": "ADR-016 (мандат пользователя 2026-07-09): многопоточный рендер-конвейер; бриф docs/tasks/ph3-render-multithreading.md; M0, M1, M2.0–M2.2c СДЕЛАНЫ на ветке zcode (см. память/бриф); ниже — остаток",
+     "tasks": [
+      {
+       "id": "P3-mt-m22d",
+       "title": "MT M2.2d: js_ctx прочь с UI-потока",
+       "status": "planned",
+       "size": "M",
+       "note": "M2.2d: снять поле js_ctx с UI-потока под флагом — все call-site'ы уже зашимлены в task/query (2c закрыт 2026-07-10)"
+      },
+      {
+       "id": "P3-mt-m22c3",
+       "title": "MT M2.2c-3: форм-relayout off-thread",
+       "status": "planned",
+       "size": "M",
+       "note": "M2.2c-3: relayout форм-инпута / DOM-мутаций off-thread (через route_query_js/readback, механизм готов в 2c-1)"
+      },
+      {
+       "id": "P3-mt-m23",
+       "title": "MT M2.3: sync readback + приёмка",
+       "status": "planned",
+       "size": "M",
+       "note": "M2.3: синхронный readback + приёмка — --screenshot, run.py --ipc; критерий = mt_stall_bench обязан побить baseline 2.4fps/404мс gap (M2.2c-0)"
+      },
+      {
+       "id": "P3-mt-m3",
+       "title": "MT M3: тайлы + blit-скролл (TileGrid)",
+       "status": "planned",
+       "size": "L",
+       "note": "M3: контент в пул тайловых текстур (опыт layer_pool BUG-272), скролл = blit готовых тайлов + растр только въехавших полос; checkerboarding-инвариант: нет тайла → фон страницы, не блок кадра"
+      },
+      {
+       "id": "P3-mt-m4",
+       "title": "MT M4: параллельный style/layout",
+       "status": "planned",
+       "size": "M",
+       "note": "M4: сперва lay_out_incremental + DirtyBits в живой шелл-путь JS-мутаций, потом rayon по независимым dirty-поддеревьям; полное дерево НЕ параллелить"
+      }
+     ]
     },
     {
      "id": "P3-idb",
@@ -2842,8 +2965,22 @@
   },
   "BUG-272": {
    "status": "open",
-   "title": "lenta.ru держала 1371 МБ WS при одной картинке. **Корень:** каждый Push{ClipRoundedRect,ClipPath,Opacity,Filter,Mask,Backdrop} создавал offscreen-текстуру разме…",
+   "title": "lenta.ru держала 1371 МБ WS при одной картинке. **Корень:** каждый Push{ClipRoundedRect,ClipPath,Opacity,Filter,Mask,Backdrop,BlendMode} создавал offscreen-текс…",
    "component": "paint (femtovg, offscreen-слои)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-273": {
+   "status": "open",
+   "title": "Прокрутка страниц с mix-blend-mode/filter/backdrop-filter — слайдшоу: 1000000-final.html ~660 мс/кадр (1.5 FPS), baseline без них 4.6 мс. **Корень (профиль LUME…",
+   "component": "paint (femtovg, blend/filter-композитинг)",
+   "date": null,
+   "debtor": false
+  },
+  "BUG-274": {
+   "status": "open",
+   "title": "Сравнение `LUMEN_BACKEND=femtovg` vs `=wgpu` на 1000000-final.html: в простое (10с, без ввода) wgpu жжёт ~1422 мс CPU против 375 мс у femtovg (~4×) — похоже на…",
+   "component": "paint (WgpuBackend) / shell (event loop, wgpu-путь)",
    "date": null,
    "debtor": false
   }
@@ -3087,8 +3224,14 @@
    "BUG-226",
    "BUG-227"
   ],
+  "paint (WgpuBackend) / shell (event loop, wgpu-путь)": [
+   "BUG-274"
+  ],
   "paint (build)": [
    "BUG-235"
+  ],
+  "paint (femtovg, blend/filter-композитинг)": [
+   "BUG-273"
   ],
   "paint (femtovg, offscreen-слои)": [
    "BUG-272"
