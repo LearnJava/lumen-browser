@@ -880,6 +880,30 @@ Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
         Остаётся категория sync event-dispatch (contenteditable-key input-eval, fullscreen-exit
         lifecycle, per-frame scroll/rAF/paint-timing вызовы в `RedrawRequested`) —
         следующие под-срезы 2d перед снятием самого поля.
+        ✅ **Двенадцатый под-срез готов** (branch `p1-mt-m22d-12`, 2026-07-11):
+        **per-frame scroll + paint-timing fire-and-forget void-dispatch** — 4 сайта
+        переведены с прямых `if let Some(js) = &self.js_ctx { js.<void>() }` на
+        `route_task_js`. Сайты: (1) **wheel `fire_window_scroll`** (`MouseScrollDelta::
+        LineDelta` arm, `main.rs` ~:11669) — window `scroll`-событие после smooth-скролла;
+        (2) **`set_page_scroll_y`** (Step 1 `RedrawRequested`, `main.rs` ~:11791) —
+        синхронизация `window.scrollY` (`scroll_y` считывается в локаль **до**
+        маршрутизации, чтобы `move`-замыкание не заимствовало `self` повторно); (3)
+        **`deliver_scroll_progress`** (Step 1.5 scroll-driven анимации, `main.rs`
+        ~:11824) — `p_y`/`p_x` (уже локали) переезжают в `move`-замыкание; (4)
+        **`deliver_paint_timing`** ×2 (Step 5 Paint Timing, `main.rs` ~:11962) —
+        first-paint / first-contentful-paint; здесь гейт `if let Some(js)` заменён на
+        `if self.js_ctx.is_some()`, чтобы флаги `first_*_delivered` защёлкивались
+        **только** при наличии JS-контекста (байт-идентично прежнему поведению — при
+        `js_ctx == None` флаги не выставлялись), а сами void-вызовы уходят через
+        `route_task_js`. Все четыре — чистый fire-and-forget void без синхронного
+        чтения результата следом. Под флагом (`LUMEN_ENGINE_THREAD=1`) уходят
+        off-UI-thread одним `task` (порядок FIFO среди прочих `Task`); без флага (по
+        умолчанию) — синхронный вызов по UI-хэндлу, **байт-идентично** прежним
+        `js.<method>()`. No new deps, no `unsafe`. Механизм не менялся — покрыт
+        существующими route/engine_thread тестами (`route_task_js_without_handle_is_noop`).
+        Остаётся категория sync event-dispatch (contenteditable-key input-eval,
+        fullscreen-exit lifecycle, rAF `run_animation_frame` + `has_raf_pending`) —
+        следующие под-срезы 2d перед снятием самого поля.
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any
