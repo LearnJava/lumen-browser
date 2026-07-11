@@ -6904,7 +6904,7 @@ impl Lumen {
             return;
         }
         #[cfg(feature = "quickjs")]
-        if let Some(js) = self.js_ctx.as_ref() {
+        if self.js_ctx.is_some() {
             // Register each path with an opaque token before delivering to JS.
             // JS never receives raw filesystem paths — only tokens.
             let tokens: Vec<u64> = entries
@@ -6912,7 +6912,11 @@ impl Lumen {
                 .map(|e| lumen_js::file_input::register_file_token(&e.path))
                 .collect();
             let json = platform::file_dialog::entries_to_json_with_tokens(&entries, &tokens);
-            js.eval_js(&format!("_lumen_deliver_file_list({}, {})", id.index(), json));
+            // ADR-016 M2.2c-2d: fire-and-forget file-list delivery через маршрутизатор —
+            // токены регистрируются на UI-потоке (до постановки в очередь), сам `eval_js`
+            // под флагом уходит off-UI-thread, без флага байт-идентично прежнему `js.eval_js`.
+            let script = format!("_lumen_deliver_file_list({}, {})", id.index(), json);
+            route_eval_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), script);
         }
         #[cfg(not(feature = "quickjs"))]
         let _ = entries;
@@ -13420,13 +13424,17 @@ impl Lumen {
                     forms::toggle_details_open(&mut src.document.lock().unwrap(), id);
                 }
                 // Fire HTML5 §4.11.1 `toggle` event on the <details> element.
+                // ADR-016 M2.2c-2d: fire-and-forget `toggle` event через
+                // маршрутизатор — под флагом off-UI-thread, без флага байт-идентично.
                 #[cfg(feature = "quickjs")]
-                if let Some(ctx) = &self.js_ctx {
-                    ctx.eval_js(&format!(
+                route_eval_js(
+                    self.engine_thread.as_ref(),
+                    self.js_ctx.as_ref(),
+                    format!(
                         "_lumen_make_element({}).dispatchEvent(new Event('toggle'))",
                         id.index()
-                    ));
-                }
+                    ),
+                );
                 self.relayout();
             }
             forms::FormClickAction::SlideRange(id) => {
@@ -13479,8 +13487,17 @@ impl Lumen {
                                             .unwrap_or("");
                                         let dialog_nid = lumen_dom::find_ancestor_dialog(&doc, submit_node);
                                         drop(doc);
-                                        if let (Some(dnid), Some(js)) = (dialog_nid, &self.js_ctx) {
-                                            js.fire_dialog_close(dnid.index() as u32, rv);
+                                        if let Some(dnid) = dialog_nid {
+                                            let dnid_idx = dnid.index() as u32;
+                                            let rv = rv.to_string();
+                                            // ADR-016 M2.2c-2d: fire-and-forget dialog-close через
+                                            // маршрутизатор — под флагом off-UI-thread, без флага
+                                            // байт-идентично прежнему `js.fire_dialog_close`.
+                                            route_task_js(
+                                                self.engine_thread.as_ref(),
+                                                self.js_ctx.as_ref(),
+                                                move |j| j.fire_dialog_close(dnid_idx, &rv),
+                                            );
                                         }
                                     }
                                     "get" => {
@@ -16008,13 +16025,17 @@ impl Lumen {
                 if let Some(src) = self.layout_source.as_mut() {
                     forms::toggle_details_open(&mut src.document.lock().unwrap(), id);
                 }
+                // ADR-016 M2.2c-2d: fire-and-forget `toggle` event через
+                // маршрутизатор — под флагом off-UI-thread, без флага байт-идентично.
                 #[cfg(feature = "quickjs")]
-                if let Some(ctx) = &self.js_ctx {
-                    ctx.eval_js(&format!(
+                route_eval_js(
+                    self.engine_thread.as_ref(),
+                    self.js_ctx.as_ref(),
+                    format!(
                         "_lumen_make_element({}).dispatchEvent(new Event('toggle'))",
                         id.index()
-                    ));
-                }
+                    ),
+                );
                 self.relayout();
             }
             // Range slide via keyboard activation: no-op (no position known).
