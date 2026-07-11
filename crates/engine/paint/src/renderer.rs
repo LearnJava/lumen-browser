@@ -1764,7 +1764,7 @@ pub struct Renderer {
 /// Creates a `Depth32Float` texture + view sized `width×height` for GPU depth testing.
 /// Called once in `init_pipelines` and on every `resize`.
 fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
-    count_texture_created();
+    count_texture_created_labeled("depth-texture", width, height);
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("depth-texture"),
         size: wgpu::Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 },
@@ -1822,6 +1822,25 @@ pub static TEXTURES_CREATED: std::sync::atomic::AtomicU64 =
 /// BUG-274 diagnostics: bump [`TEXTURES_CREATED`].
 fn count_texture_created() {
     TEXTURES_CREATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Перепись созданных текстур по `(label, w, h)` — отвечает на вопрос п.23
+/// «кто создаёт ~350 текстур за флинг». Заполняется только при
+/// `LUMEN_FRAME_LOG=3`; в обычном режиме — один branch поверх счётчика.
+type TextureCensusMap = HashMap<(&'static str, u32, u32), u64>;
+static TEXTURE_CENSUS: std::sync::OnceLock<std::sync::Mutex<TextureCensusMap>> =
+    std::sync::OnceLock::new();
+
+/// Как [`count_texture_created`], но при `LUMEN_FRAME_LOG=3` дополнительно
+/// пишет `(label, w, h)` в [`TEXTURE_CENSUS`] (печатается в `alloc:`-блоке).
+fn count_texture_created_labeled(label: &'static str, width: u32, height: u32) {
+    count_texture_created();
+    if crate::frame_log_level() >= 3 {
+        let census = TEXTURE_CENSUS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+        if let Ok(mut m) = census.lock() {
+            *m.entry((label, width, height)).or_insert(0) += 1;
+        }
+    }
 }
 
 /// BUG-274 diagnostics: wall time spent inside `create_texture` +
@@ -2201,7 +2220,7 @@ impl Renderer {
         });
 
         // ── Atlas texture + sampler + bind group ───────────────────────────
-        count_texture_created();
+        count_texture_created_labeled("glyph-atlas", ATLAS_DIM, ATLAS_DIM);
         let atlas_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("glyph-atlas"),
             size: wgpu::Extent3d {
@@ -4102,7 +4121,7 @@ impl Renderer {
     /// Создаёт `GpuImage` из RGBA8-буфера заданного размера.
     /// `&self` достаточно — мутировать нужно только `images`, это делает caller.
     fn make_gpu_image_entry(&self, rgba: &[u8], width: u32, height: u32) -> GpuImage {
-        count_texture_created();
+        count_texture_created_labeled("image", width, height);
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("lumen-image-texture"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -4159,7 +4178,7 @@ impl Renderer {
     /// трилинейный сэмплер (как в Chromium). Стоимость каскада — по одному
     /// крошечному пассу на уровень, один раз на `register_image`.
     fn make_gpu_image_entry_mipped(&self, rgba: &[u8], width: u32, height: u32) -> GpuImage {
-        count_texture_created();
+        count_texture_created_labeled("image-mipped", width, height);
         // floor(log2(max(w,h))) + 1; width/height ≥ 1 гарантированы caller-ом.
         let mip_level_count = 32 - width.max(height).leading_zeros();
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -4325,7 +4344,7 @@ impl Renderer {
             });
         }
 
-        count_texture_created();
+        count_texture_created_labeled("layer-snapshot", width, height);
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("layer-snapshot"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -4662,7 +4681,7 @@ impl Renderer {
 
         // Pool miss: allocate a new texture.
         TEXTURE_POOL_MISSES.fetch_add(1, Relaxed);
-        count_texture_created();
+        count_texture_created_labeled("opacity-layer", width, height);
         let t_alloc0 = std::time::Instant::now();
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("opacity-layer"),
@@ -4742,7 +4761,7 @@ impl Renderer {
             .as_ref()
             .is_none_or(|s| s.width != width || s.height != height);
         if needs_create {
-            count_texture_created();
+            count_texture_created_labeled("blend-scratch-layer", width, height);
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("blend-scratch-layer"),
                 size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -4810,7 +4829,7 @@ impl Renderer {
         if !needs_create {
             return false;
         }
-        count_texture_created();
+        count_texture_created_labeled("backdrop-cache-layer", width, height);
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("backdrop-cache-layer"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -4998,7 +5017,7 @@ impl Renderer {
                 .as_ref()
                 .is_none_or(|b| b.w_px != sw || b.h_px != band_h_px);
             if recreate {
-                count_texture_created();
+                count_texture_created_labeled("page-band", sw, band_h_px);
                 let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                     label: Some("page-band"),
                     size: wgpu::Extent3d {
@@ -7425,11 +7444,26 @@ impl Renderer {
             self.ensure_layer_textures(max_level, surface_w, surface_h);
         }
 
-        // CSS Masking L1 §4 — gradient mask temp textures.
-        // Kept alive until after encoder.submit() so GPU commands can safely read them.
-        // Each entry corresponds to one MaskComposite plan item with mask_gradient.
-        // Populated lazily during the render loop (see MaskComposite handler below).
-        let mut temp_grad_textures: Vec<(wgpu::Texture, wgpu::TextureView)> = Vec::new();
+        // CSS Masking L1 §4 — gradient mask temp textures ИЗ ПУЛА.
+        // Раньше на каждый кадр на каждый MaskComposite с градиентом
+        // создавалась свежая текстура размером с target и дропалась после
+        // submit — 196 из 237 созданий за флинг-прогон (перепись п.23/24,
+        // 1024×1800 ≈ 7.4 МБ каждая). Пред-захват до цикла (внутри цикла
+        // живут заимствования &self), возврат в пул после submit.
+        let grad_mask_count = render_plan
+            .iter()
+            .filter(|item| {
+                matches!(item, RenderPlanItem::MaskComposite(c)
+                    if c.mask_gradient.is_some()
+                        && c.mask_src.as_ref().is_none_or(|src| !self.images.contains_key(src)))
+            })
+            .count();
+        let mut temp_grad_layers: Vec<OffscreenLayer> = Vec::with_capacity(grad_mask_count);
+        for _ in 0..grad_mask_count {
+            let layer = self.create_layer_texture(surface_w, surface_h);
+            temp_grad_layers.push(layer);
+        }
+        let mut temp_grad_next = 0usize;
 
         // ── Frame ─────────────────────────────────────────────────────────
         // Windowed: get the next swapchain image from the surface.
@@ -7451,7 +7485,7 @@ impl Renderer {
             windowed_frame = Some(f);
             headless_tex = None;
         } else {
-            count_texture_created();
+            count_texture_created_labeled("headless-frame", surface_w, surface_h);
             let tex = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("headless-frame"),
                 size: wgpu::Extent3d {
@@ -7795,20 +7829,13 @@ impl Renderer {
                             MaskGradientSpec::Radial { params, rect } => (params, rect),
                             MaskGradientSpec::Conic  { params, rect } => (params, rect),
                         };
-                        count_texture_created();
-                        let temp_tex = self.device.create_texture(&wgpu::TextureDescriptor {
-                            label: Some("mask-grad-tex"),
-                            size: wgpu::Extent3d {
-                                width: surface_w, height: surface_h, depth_or_array_layers: 1,
-                            },
-                            mip_level_count: 1, sample_count: 1,
-                            dimension: wgpu::TextureDimension::D2,
-                            format: self.surface_format,
-                            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                                 | wgpu::TextureUsages::TEXTURE_BINDING,
-                            view_formats: &[],
-                        });
-                        let temp_view = temp_tex.create_view(&wgpu::TextureViewDescriptor::default());
+                        // Пул-текстура пред-захвачена до цикла (temp_grad_layers);
+                        // LoadOp::Clear ниже гарантирует чистый старт при reuse.
+                        let Some(grad_layer) = temp_grad_layers.get(temp_grad_next) else {
+                            continue;
+                        };
+                        temp_grad_next += 1;
+                        let temp_view = &grad_layer.view;
                         // Write gradient params uniform and build bind group.
                         let grad_ubuf = self.device.create_buffer(&wgpu::BufferDescriptor {
                             label: Some("mask-grad-ubuf"),
@@ -7848,7 +7875,7 @@ impl Renderer {
                             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                                 label: Some("mask-grad-render"),
                                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                    view: &temp_view,
+                                    view: temp_view,
                                     resolve_target: None,
                                     depth_slice: None,
                                     ops: wgpu::Operations {
@@ -7870,9 +7897,7 @@ impl Renderer {
                             pass.set_vertex_buffer(0, grad_vbuf_m.slice(..));
                             pass.draw(0..6, 0..1);
                         }
-                        // Store temp texture so it lives until encoder.submit().
-                        temp_grad_textures.push((temp_tex, temp_view));
-                        Some(&temp_grad_textures.last().unwrap().1)
+                        Some(temp_view)
                     } else {
                         None
                     };
@@ -8543,6 +8568,11 @@ impl Renderer {
 
         let t_after_encode = t_frame0.elapsed();
         self.queue.submit([encoder.finish()]);
+        // Градиент-маски: временные текстуры обратно в пул (команды уже
+        // сабмичены; wgpu удерживает ресурсы до исполнения сам).
+        for layer in temp_grad_layers.drain(..) {
+            self.release_layer_to_pool(layer);
+        }
         if let Some(frame) = windowed_frame {
             frame.present();
         }
@@ -8586,6 +8616,21 @@ impl Renderer {
                      pool hit {d_hits} miss {d_misses}",
                     d_nanos as f64 / 1e6,
                 );
+                // Перепись «кто создаёт текстуры» (суммарно за процесс,
+                // вопрос п.23): топ-8 по количеству, с размерами.
+                if let Some(census) = TEXTURE_CENSUS.get()
+                    && let Ok(m) = census.lock()
+                {
+                    let mut rows: Vec<_> = m.iter().map(|(k, n)| (*k, *n)).collect();
+                    rows.sort_by_key(|&(_, n)| std::cmp::Reverse(n));
+                    let s = rows
+                        .iter()
+                        .take(8)
+                        .map(|((l, w, h), n)| format!("{l} {w}x{h} x{n}"))
+                        .collect::<Vec<_>>()
+                        .join(" | ");
+                    eprintln!("[frame:wgpu]   alloc-census (total): {s}");
+                }
 
                 const KIND: [&str; 6] =
                     ["draw", "comp", "mask", "filt", "bdrop", "mlayer"];
