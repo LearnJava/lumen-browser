@@ -18935,9 +18935,17 @@ impl Lumen {
         let old_id = self.tab_strip.tabs[old_active].id;
         self.tab_strip.set_tab_state(old_active, TabState::BackgroundRecent);
         // T0 → T1: fire visibilitychange(hidden=true) before parking.
-        if let Some(js) = &self.js_ctx {
-            js.pause_event_loop();
-        }
+        // ADR-016 M2.2d (18): снимаем прямое `self.js_ctx`-обращение park-сайта —
+        // fire-and-forget void через `route_task_js` (disjoint borrow полей
+        // `engine_thread`/`js_ctx`). Под флагом (`LUMEN_ENGINE_THREAD=1`) уходит
+        // `task`-ом на движковый поток, где `state.js` ещё зеркалит уходящую в фон
+        // вкладку (ре-зеркалирование `sync_engine_js_state` встанет в очередь позже,
+        // при загрузке/восстановлении новой) — pause исполняется на верном хэндле.
+        // Без флага (по умолчанию) — синхронный вызов по UI-хэндлу, байт-идентично
+        // прежнему `js.pause_event_loop()`.
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            j.pause_event_loop();
+        });
         let snap = self.save_page_snapshot();
         self.bg_tabs.insert(old_id, snap);
         // GC tuning (10L): run one moderate collection on the tab that just
@@ -18967,12 +18975,18 @@ impl Lumen {
             // T1/T2: fast in-memory restore.
             self.restore_page_snapshot(snap);
             // T1 → T0: fire visibilitychange(hidden=false) after restore.
-            if let Some(js) = &self.js_ctx {
-                js.unpause_event_loop();
+            // ADR-016 M2.2d (18): снимаем прямое `self.js_ctx`-обращение unpark-сайта —
+            // fire-and-forget void через `route_task_js`. `restore_page_snapshot` выше
+            // уже вызвал `sync_engine_js_state()` (зеркалит восстановленный хэндл
+            // `task`-ом), а этот `task` встаёт в очередь **после** него — под флагом
+            // unpause+GC исполняются на верном (восстановленном) хэндле. Без флага —
+            // синхронно по UI-хэндлу, байт-идентично прежним `js.<method>()`.
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.unpause_event_loop();
                 // GC tuning (10L): reset threshold to active level so the heap
                 // can grow freely now that this tab is in the foreground.
-                js.run_gc_pass(0);
-            }
+                j.run_gc_pass(0);
+            });
         } else if self.t2_store.exists(new_id as i64).unwrap_or(false) {
             // T2 crash-recovery: bg_tabs was lost (process restart) but SQLite
             // checkpoint exists — restore scroll + form state from it.
@@ -19610,6 +19624,30 @@ mod tests {
             ran2.store(true, std::sync::atomic::Ordering::SeqCst);
         });
         route_eval_js(None, None, "_lumen_apply_resize(0, 0, 0);".to_string());
+        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn route_tab_park_unpark_without_handle_default_to_no_op() {
+        // ADR-016 M2.2d (18): tab park/unpark в `switch_tab`. Park
+        // (`pause_event_loop` перед `save_page_snapshot`) и unpark
+        // (`unpause_event_loop` + `run_gc_pass(0)` после `restore_page_snapshot`) —
+        // последние прямые `self.js_ctx`-обращения, переведённые на `route_task_js`.
+        // Без хэндла (`engine = None`, `js = None`) оба — no-op: void-действия не
+        // исполняются, паники нет — та же ветка «без JS», что и прежние прямые
+        // `if let Some(js) = &self.js_ctx { … }`.
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let park = Arc::clone(&ran);
+        route_task_js(None, None, move |j| {
+            j.pause_event_loop();
+            park.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let unpark = Arc::clone(&ran);
+        route_task_js(None, None, move |j| {
+            j.unpause_event_loop();
+            j.run_gc_pass(0);
+            unpark.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
         assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
     }
 
