@@ -904,6 +904,32 @@ Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
         Остаётся категория sync event-dispatch (contenteditable-key input-eval,
         fullscreen-exit lifecycle, rAF `run_animation_frame` + `has_raf_pending`) —
         следующие под-срезы 2d перед снятием самого поля.
+        ✅ **Тринадцатый под-срез готов** (branch `p1-mt-m22d-13`, 2026-07-11):
+        последняя категория sync event-dispatch переведена с прямых `if let Some(js) =
+        &self.js_ctx { js.<method>() }` на маршрутизаторы. 4 сайта в двух классах:
+        (1) **rAF-батч** ×2 — `about_to_wait` rAF-памп (`main.rs` ~:8886) и
+        `RedrawRequested` Step 3.1 (`main.rs` ~:11930): прямые `js.has_raf_pending()`
+        (value read) → `route_query_js`, `js.run_animation_frame(raf_ts)` (void) →
+        `route_task_js`; порядок `has_raf_pending` → `take_raf_pending` →
+        `run_animation_frame` → `take_dom_dirty` сохранён (под флагом чтения —
+        блокирующий `query`, батч — `task` в очередь между ними; последующий Step 4
+        `take_dom_dirty`-query встаёт после батч-`task`). (2) **fullscreen-exit**
+        (`_lumen_notify_fullscreen_exit` на Escape, `main.rs` ~:13920) — fire-and-forget
+        void `eval_js` → `route_eval_js`. (3) **contenteditable-key** (`main.rs` ~:13970)
+        — `_lumen_handle_contenteditable_key`-вызовы (backspace/delete/enter/insertText)
+        → `route_eval_js`; DOM-read `find_editing_host` остаётся на UI-потоке (читает
+        разделяемый `src.document`, не JS-хэндл), гейт заменён с `if let Some(js)` на
+        `if self.js_ctx.is_some()` (editing-host detection + eval только при наличии
+        JS-контекста). Все — чистый fire-and-forget void без синхронного чтения
+        результата следом. Под флагом (`LUMEN_ENGINE_THREAD=1`) уходят off-UI-thread;
+        без флага (по умолчанию) — прежние синхронные вызовы, **байт-идентично**.
+        No new deps, no `unsafe`. Механизм не менялся — покрыт существующими
+        route/engine_thread тестами (`route_eval_js_without_handle_is_noop`,
+        `route_task_js_without_handle_is_noop`, `route_query_js_without_handle_is_none`).
+        **Все категории event-dispatch зашимлены** — единственное оставшееся прямое
+        `self.js_ctx`-чтение — `WaitCondition::JsIdle` (`has_raf_pending`) в
+        automation/IPC wait-poll (`main.rs` ~:18606, не event-dispatch); следующий
+        под-срез 2d снимает его и само поле `js_ctx` с UI-потока под флагом.
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any
