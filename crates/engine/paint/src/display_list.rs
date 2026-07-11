@@ -954,6 +954,93 @@ impl DisplayCommand {
             Self::PageBreak => "PageBreak",
         }
     }
+
+    /// Axis-aligned bounding box of everything this command paints, in
+    /// document-space CSS px (the same coordinate system the command's own
+    /// rects already use — *before* the scroll/transform translation a backend
+    /// applies at draw time).
+    ///
+    /// Returns `Some(rect)` only for **self-contained leaf draws**: commands
+    /// that paint nothing outside the returned box and have no effect on the
+    /// clip / transform / layer stack. Backends use it for viewport culling
+    /// (ADR-016 M0.2) — a leaf whose box, mapped through the current CTM, lands
+    /// fully outside the viewport can be skipped without changing the picture.
+    ///
+    /// Returns `None` for every structural command (`Push*` / `Pop*`, the
+    /// sticky / scroll layer markers, `PageBreak`): those must always execute
+    /// to keep the render stack balanced and must never be culled. `None` is
+    /// the safe default — an unrecognised or non-leaf command is simply never
+    /// skipped.
+    pub fn cull_rect(&self) -> Option<Rect> {
+        /// Inflate a rect by `d` CSS px on every side.
+        fn grow(r: Rect, d: f32) -> Rect {
+            Rect::new(r.x - d, r.y - d, r.width + 2.0 * d, r.height + 2.0 * d)
+        }
+        /// AABB of a flat `[x, y]` vertex list, or `None` if empty.
+        fn verts_bounds(pts: &[[f32; 2]]) -> Option<Rect> {
+            let (mut mn_x, mut mn_y) = (f32::MAX, f32::MAX);
+            let (mut mx_x, mut mx_y) = (f32::MIN, f32::MIN);
+            for p in pts {
+                mn_x = mn_x.min(p[0]);
+                mn_y = mn_y.min(p[1]);
+                mx_x = mx_x.max(p[0]);
+                mx_y = mx_y.max(p[1]);
+            }
+            (mn_x <= mx_x).then(|| {
+                Rect::new(mn_x, mn_y, (mx_x - mn_x).max(0.0), (mx_y - mn_y).max(0.0))
+            })
+        }
+        match self {
+            Self::FillRect { rect, .. }
+            | Self::FillRoundedRect { rect, .. }
+            | Self::DrawBorder { rect, .. }
+            | Self::DrawText { rect, .. }
+            | Self::DrawImage { rect, .. }
+            | Self::LazyImageSlot { rect, .. }
+            | Self::DrawBackgroundImage { rect, .. }
+            | Self::DrawLinearGradient { rect, .. }
+            | Self::DrawRadialGradient { rect, .. }
+            | Self::DrawConicGradient { rect, .. }
+            | Self::DrawLayerSnapshot { rect, .. } => Some(*rect),
+
+            Self::DrawCrossFade { dest, .. } => Some(*dest),
+            Self::BoxModelOverlay { margin, .. } => Some(*margin),
+
+            // `outline` paints *outside* the box by `offset` then `width`.
+            Self::DrawOutline { rect, width, offset, .. } => {
+                Some(grow(*rect, offset.max(0.0) + width.max(0.0)))
+            }
+
+            // Scrollbar spans both track and thumb.
+            Self::DrawScrollbar { track_rect, thumb_rect, .. } => Some(Rect::new(
+                track_rect.x.min(thumb_rect.x),
+                track_rect.y.min(thumb_rect.y),
+                (track_rect.x + track_rect.width)
+                    .max(thumb_rect.x + thumb_rect.width)
+                    - track_rect.x.min(thumb_rect.x),
+                (track_rect.y + track_rect.height)
+                    .max(thumb_rect.y + thumb_rect.height)
+                    - track_rect.y.min(thumb_rect.y),
+            )),
+
+            // SVG geometry: bound the raw contour / triangle vertices. Stroke
+            // paints `half_width` outside the path centreline, so inflate by it
+            // times the miter limit (a conservative bound on miter spikes).
+            Self::DrawSvgPath { vertices, .. } => verts_bounds(vertices),
+            Self::DrawSvgFill { contours, .. } => {
+                let all: Vec<[f32; 2]> = contours.iter().flatten().copied().collect();
+                verts_bounds(&all)
+            }
+            Self::DrawSvgStroke { contours, params, .. } => {
+                let all: Vec<[f32; 2]> = contours.iter().flatten().copied().collect();
+                let out = params.half_width.max(0.0) * params.miterlimit.max(1.0);
+                verts_bounds(&all).map(|r| grow(r, out))
+            }
+
+            // Structural / stack-affecting / no-op commands — never cull.
+            _ => None,
+        }
+    }
 }
 
 pub type DisplayList = Vec<DisplayCommand>;
@@ -1291,6 +1378,118 @@ pub fn hash_display_list(
         }
     }
     hasher.finish()
+}
+
+/// Content-only frame hash (ADR-016 M0.5).
+///
+/// Unlike [`hash_display_list`], this folds **only** the page-content commands
+/// and the surface size into the hash — the scroll offset and the fixed page
+/// offset are deliberately excluded. Two frames that differ only in how far the
+/// page is scrolled therefore hash identically, which is exactly what lets the
+/// compositor tell "same content, new offset" (a blit — M3's fast path) apart
+/// from "content changed" (a full re-raster).
+///
+/// Overlay commands (scrollbar thumb, docked panels, find-bar) are intentionally
+/// **not** passed here: they are viewport-locked and cheap to repaint every
+/// frame, and the scrollbar thumb in particular is rebuilt from `scroll_y` each
+/// frame, so folding it in would make every scroll frame look like a content
+/// change and defeat the content/offset split.
+///
+/// Allocation-free: each command's `Debug` output is streamed straight into the
+/// hasher via [`HashFmt`], preserving `hash_display_list`'s totality guarantee
+/// (a new `DisplayCommand` variant or field can never silently collide).
+#[must_use]
+pub fn hash_content(content: &[DisplayCommand], surface_w: u32, surface_h: u32) -> u64 {
+    use std::fmt::Write as _;
+    use std::hash::Hasher;
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    hasher.write_u32(surface_w);
+    hasher.write_u32(surface_h);
+    hasher.write_usize(content.len());
+    {
+        let mut hf = HashFmt(&mut hasher);
+        for cmd in content {
+            // Errors are impossible: HashFmt::write_str never fails.
+            let _ = write!(hf, "{cmd:?}");
+        }
+    }
+    hasher.finish()
+}
+
+/// How a frame differs from the previously presented one (ADR-016 M0.5).
+///
+/// Produced by [`FrameFingerprint::delta_from`]. The variants map directly onto
+/// the render strategies the staged multithreaded pipeline will pick between:
+/// `Identical` → skip, `OffsetOnly` → blit (M3), `ContentChanged` → re-raster.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameDelta {
+    /// Page content, scroll and page offset are all unchanged — the previously
+    /// presented framebuffer is still correct and the frame can be skipped.
+    Identical,
+    /// Page content is unchanged but the scroll and/or fixed page offset moved —
+    /// the M3 blit fast path can shift the retained content instead of
+    /// re-rasterizing it.
+    OffsetOnly,
+    /// Page content changed (or the surface was resized) — a full re-raster is
+    /// required.
+    ContentChanged,
+}
+
+/// Split fingerprint of a presented frame (ADR-016 M0.5).
+///
+/// Separates the content hash (page commands + surface size, scroll excluded)
+/// from the raw scroll and page offsets. Keeping the offsets out of the hash —
+/// as plain copyable values rather than folded into it — is what lets
+/// [`FrameFingerprint::delta_from`] return [`FrameDelta::OffsetOnly`] for a
+/// scroll-only frame; those same offsets are also the input the M3 blit needs to
+/// know how far to shift the retained content.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrameFingerprint {
+    /// Hash of the page-content commands and surface size — scroll excluded
+    /// (see [`hash_content`]).
+    pub content_hash: u64,
+    /// Scroll offset `(x, y)`, in the same units the render backend receives.
+    pub scroll: (f32, f32),
+    /// Fixed page offset `(x, y)` — the left-docked sidebar width and tab-bar
+    /// height applied render-side since M0.4.
+    pub offset: (f32, f32),
+}
+
+impl FrameFingerprint {
+    /// Build a fingerprint for the current frame from its page content, surface
+    /// size and the two offsets.
+    #[must_use]
+    pub fn new(
+        content: &[DisplayCommand],
+        surface_w: u32,
+        surface_h: u32,
+        scroll: (f32, f32),
+        offset: (f32, f32),
+    ) -> Self {
+        Self {
+            content_hash: hash_content(content, surface_w, surface_h),
+            scroll,
+            offset,
+        }
+    }
+
+    /// Classify how this frame differs from the previously presented `prev`.
+    ///
+    /// A differing `content_hash` always wins (`ContentChanged`) — a resize or
+    /// any command edit forces a re-raster. Only when the content hash matches do
+    /// the offsets decide between `OffsetOnly` (something moved) and `Identical`
+    /// (nothing moved).
+    #[must_use]
+    pub fn delta_from(&self, prev: &FrameFingerprint) -> FrameDelta {
+        if self.content_hash != prev.content_hash {
+            FrameDelta::ContentChanged
+        } else if self.scroll != prev.scroll || self.offset != prev.offset {
+            FrameDelta::OffsetOnly
+        } else {
+            FrameDelta::Identical
+        }
+    }
 }
 
 /// Результат сравнения двух display-list-ов.
@@ -7513,6 +7712,61 @@ fn emit_table_cell_content(b: &LayoutBox, out: &mut Vec<DisplayCommand>, dpr: f3
 mod tests {
     use super::*;
     use lumen_core::geom::Size;
+
+    // ── ADR-016 M0.2: DisplayCommand::cull_rect ────────────────────────────
+    #[test]
+    fn cull_rect_leaf_returns_own_box() {
+        let cmd = DisplayCommand::FillRect {
+            rect: Rect::new(10.0, 20.0, 30.0, 40.0),
+            color: Color { r: 0, g: 0, b: 0, a: 255 },
+        };
+        let r = cmd.cull_rect().expect("leaf must report a box");
+        assert_eq!((r.x, r.y, r.width, r.height), (10.0, 20.0, 30.0, 40.0));
+    }
+
+    #[test]
+    fn cull_rect_structural_is_none() {
+        // Push/Pop must never be culled — they keep the render stack balanced.
+        for cmd in [
+            DisplayCommand::PushClipRect { rect: Rect::new(0.0, 0.0, 1.0, 1.0) },
+            DisplayCommand::PopClip,
+            DisplayCommand::PushTransform { matrix: Mat4::translation_2d(0.0, 0.0) },
+            DisplayCommand::PopTransform,
+            DisplayCommand::PushOpacity { alpha: 0.5 },
+            DisplayCommand::PopOpacity,
+            DisplayCommand::PopScrollLayer,
+            DisplayCommand::PageBreak,
+        ] {
+            assert!(cmd.cull_rect().is_none(), "structural cmd must be un-cullable: {}", cmd.variant_name());
+        }
+    }
+
+    #[test]
+    fn cull_rect_outline_grows_by_offset_plus_width() {
+        let cmd = DisplayCommand::DrawOutline {
+            rect: Rect::new(100.0, 100.0, 50.0, 50.0),
+            width: 4.0,
+            style: OutlineStyle::Solid,
+            color: Color { r: 0, g: 0, b: 0, a: 255 },
+            offset: 6.0,
+        };
+        let r = cmd.cull_rect().unwrap();
+        // grown by offset(6) + width(4) = 10 on every side.
+        assert_eq!((r.x, r.y, r.width, r.height), (90.0, 90.0, 70.0, 70.0));
+    }
+
+    #[test]
+    fn cull_rect_scrollbar_unions_track_and_thumb() {
+        let cmd = DisplayCommand::DrawScrollbar {
+            track_rect: Rect::new(200.0, 0.0, 12.0, 400.0),
+            thumb_rect: Rect::new(200.0, 120.0, 12.0, 80.0),
+            vertical: true,
+            thumb_color: [0.0; 4],
+            track_color: [0.0; 4],
+        };
+        let r = cmd.cull_rect().unwrap();
+        assert_eq!((r.x, r.y, r.width, r.height), (200.0, 0.0, 12.0, 400.0));
+    }
 
     /// BUG-175: inner border radius = outer − adjacent side width, floored at 0.
     /// Horizontal radii drop by the left/right border, vertical by top/bottom.
@@ -13979,6 +14233,55 @@ mod tests {
         let split = hash_display_list(&[red_fill(5.0)], &[red_fill(9.0)], 0.0, 0.0, 1024, 720);
         assert_eq!(two_content, split, "lanes fold in sequence (content then overlay)");
         let _ = in_overlay;
+    }
+
+    // ── ADR-016 M0.5: content-only hash + frame-delta classification ──────
+
+    #[test]
+    fn content_hash_excludes_scroll() {
+        // hash_content takes no scroll argument, so a frame that only scrolled
+        // must hash identically — this is the whole point of the split.
+        let content = vec![red_fill(5.0)];
+        let a = hash_content(&content, 1024, 720);
+        let b = hash_content(&content, 1024, 720);
+        assert_eq!(a, b, "same content + size hashes identically");
+        // A surface resize DOES change the content hash (blit can't cover it).
+        assert_ne!(a, hash_content(&content, 800, 720), "width folds in");
+        assert_ne!(a, hash_content(&content, 1024, 600), "height folds in");
+        // A command edit changes the hash.
+        assert_ne!(a, hash_content(&[red_fill(6.0)], 1024, 720), "command edit");
+    }
+
+    #[test]
+    fn frame_delta_offset_only_on_scroll() {
+        let content = vec![red_fill(5.0)];
+        let prev = FrameFingerprint::new(&content, 1024, 720, (0.0, 0.0), (0.0, 40.0));
+        // Same content, scrolled down → OffsetOnly (the M3 blit trigger).
+        let scrolled = FrameFingerprint::new(&content, 1024, 720, (0.0, 120.0), (0.0, 40.0));
+        assert_eq!(scrolled.delta_from(&prev), FrameDelta::OffsetOnly);
+        // Same content, page offset changed (sidebar docked) → OffsetOnly too.
+        let docked = FrameFingerprint::new(&content, 1024, 720, (0.0, 0.0), (260.0, 40.0));
+        assert_eq!(docked.delta_from(&prev), FrameDelta::OffsetOnly);
+    }
+
+    #[test]
+    fn frame_delta_identical_when_nothing_moves() {
+        let content = vec![red_fill(5.0)];
+        let a = FrameFingerprint::new(&content, 1024, 720, (0.0, 30.0), (0.0, 40.0));
+        let b = FrameFingerprint::new(&content, 1024, 720, (0.0, 30.0), (0.0, 40.0));
+        assert_eq!(b.delta_from(&a), FrameDelta::Identical);
+    }
+
+    #[test]
+    fn frame_delta_content_changed_wins_over_offset() {
+        // Content edit AND a scroll: content change must dominate — a re-raster
+        // is required, not a blit.
+        let prev = FrameFingerprint::new(&[red_fill(5.0)], 1024, 720, (0.0, 0.0), (0.0, 40.0));
+        let next = FrameFingerprint::new(&[red_fill(6.0)], 1024, 720, (0.0, 90.0), (0.0, 40.0));
+        assert_eq!(next.delta_from(&prev), FrameDelta::ContentChanged);
+        // A resize (content_hash folds size) also classifies as ContentChanged.
+        let resized = FrameFingerprint::new(&[red_fill(5.0)], 800, 720, (0.0, 0.0), (0.0, 40.0));
+        assert_eq!(resized.delta_from(&prev), FrameDelta::ContentChanged);
     }
 
     // ── Тесты table rendering Phase 1 ─────────────────────────────────────

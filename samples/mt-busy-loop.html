@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MT busy-loop stall baseline (ADR-016 M2.2c-0)</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #ffffff; }
+  #hud {
+    position: fixed; top: 0; left: 0; right: 0;
+    background: #202020; color: #f0f0f0;
+    font: 13px/20px monospace; padding: 6px 12px; z-index: 10;
+  }
+  #content { margin-top: 34px; }
+  .row {
+    height: 56px; box-sizing: border-box;
+    border-bottom: 1px solid #d0d0d0;
+    font: 15px/40px system-ui, sans-serif;
+    padding: 8px 16px; color: #222222;
+  }
+  .row:nth-child(odd) { background: #f4f4f4; }
+</style>
+</head>
+<body>
+<div id="hud">busy-loop baseline — burning <span id="ms">200</span> ms per animation frame</div>
+<div id="content"></div>
+<script>
+  // ADR-016 M2.2c-0 — acceptance baseline for the M2 endgame (engine owns js_ctx).
+  //
+  // A tall page so mouse-wheel scroll has somewhere to travel, plus a rAF loop
+  // that burns a fixed slice of CPU *synchronously* on every animation frame.
+  // Because JS runs on the UI/winit thread today, this loop blocks input
+  // dispatch and presentation: a scroll started while it runs freezes. M2.2c
+  // (moving js_ctx + Document ownership off the UI thread) must let scroll keep
+  // moving through the loop. This page is the "before" measured by
+  // scripts/mt_stall_bench.py.
+  //
+  // Per-frame CPU burn, in milliseconds. Kept a plain constant on purpose: a
+  // local `file://` load can't carry a URL query/fragment (the loader keeps it
+  // as part of the path and fails to open the file), and the `eval` MCP tool is
+  // not wired to the live JS context, so there is no runtime channel to flip it.
+  // For the non-stalled control, edit this to 0 and re-run the harness on this
+  // same page — that isolates the stall (identical layout/paint cost) far more
+  // cleanly than switching to another page, which brings its own paint cost.
+  var BUSY_MS = 200;
+  document.getElementById('ms').textContent = String(BUSY_MS);
+
+  (function build() {
+    var html = '';
+    for (var i = 0; i < 300; i++) html += '<div class="row">row ' + i + '</div>';
+    document.getElementById('content').innerHTML = html;
+  })();
+
+  function burn() {
+    if (BUSY_MS > 0) {
+      var start = performance.now();
+      // Pure CPU spin — no allocation, no DOM work. Holds the UI thread for
+      // BUSY_MS so nothing else (input, present) can run until it yields.
+      while (performance.now() - start < BUSY_MS) { /* spin the UI thread */ }
+    }
+    requestAnimationFrame(burn);
+  }
+  requestAnimationFrame(burn);
+</script>
+</body>
+</html>

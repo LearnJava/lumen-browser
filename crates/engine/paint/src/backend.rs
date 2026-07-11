@@ -99,6 +99,51 @@ pub trait RenderBackend: Send {
         scroll_x: f32,
     ) -> Result<(), RenderError>;
 
+    /// Устанавливает превью-масштаб зума (ADR-016 M0.3).
+    ///
+    /// Позволяет мгновенно масштабировать уже отрисованный display-list
+    /// вокруг верхнего-левого угла вьюпорта без полного relayout. Значение
+    /// `scale` — это отношение нового `zoom_factor` к тому, при котором был
+    /// свёрстан текущий display-list (`new_zoom / laid_out_zoom`). `1.0`
+    /// означает «превью выключено», рендер идёт как обычно. Shell выставляет
+    /// его на Ctrl+/-/0 и сбрасывает в `1.0` после дебаунс-relayout.
+    ///
+    /// Дефолт — no-op (бэкенды без поддержки превью игнорируют вызов и
+    /// продолжают рисовать в масштабе 1:1).
+    fn set_preview_scale(&mut self, _scale: f32) {}
+
+    /// Устанавливает фиксированное смещение страницы в CSS px (ADR-016 M0.4).
+    ///
+    /// Это неизменный сдвиг контента, накладываемый **поверх** прокрутки: он
+    /// опускает страницу ниже tab bar-а (`TAB_BAR_HEIGHT`) и сдвигает её вправо
+    /// от левой docked-панели. Раньше shell оборачивал весь display-list в
+    /// `PushTransform(translate(offset))` каждый кадр, копируя список целиком.
+    /// Теперь смещение применяется рендер-стороной как дополнительная
+    /// трансляция после scroll-трансляции — display-list рисуется по ссылке без
+    /// per-frame клона (главный источник работы на горячем пути скролла).
+    ///
+    /// Порядок трансформаций сохраняется прежним: `scale(preview) ·
+    /// translate(-scroll) · translate(offset)`, поэтому sticky-вычисления
+    /// (использующие истинный `scroll`) и zoom-превью не меняются.
+    ///
+    /// Дефолт — no-op; бэкенды без поддержки продолжают ожидать смещение внутри
+    /// самого display-list (см. [`supports_page_offset`]).
+    ///
+    /// [`supports_page_offset`]: RenderBackend::supports_page_offset
+    fn set_page_offset(&mut self, _x: f32, _y: f32) {}
+
+    /// Сообщает, применяет ли бэкенд смещение из [`set_page_offset`] сам.
+    ///
+    /// `true` — shell может рисовать display-list по ссылке (быстрый путь без
+    /// per-frame клона). `false` (дефолт) — shell обязан по-прежнему оборачивать
+    /// контент в `PushTransform(translate(offset))`, иначе страница нарисуется
+    /// поверх tab bar-а. Femtovg (Phase 2 default) возвращает `true`.
+    ///
+    /// [`set_page_offset`]: RenderBackend::set_page_offset
+    fn supports_page_offset(&self) -> bool {
+        false
+    }
+
     /// Обновляет размер поверхности рендеринга (физические пиксели).
     ///
     /// Вызывается при изменении размера окна или изменении DPI.
@@ -225,6 +270,49 @@ pub trait RenderBackend: Send {
     fn screenshot_rgba(&mut self) -> Option<Vec<u8>> {
         None
     }
+
+    /// Передаёт владение momentum-скроллом рендер-потоку (ADR-016 M1.3).
+    ///
+    /// UI-поток вызывает это при `TouchPhase::Ended` с ненулевой скоростью
+    /// (`vel_y`/`vel_x` — CSS px/ms, `max_scroll_y`/`max_scroll_x` — экстенты
+    /// для клампа). Пока UI-поток жив и шлёт кадры, они (latest-wins) ведут
+    /// презентацию; но если UI-поток застопорился (долгий JS-тик, relayout),
+    /// рендер-поток **сам** продолжает momentum на vsync из последнего
+    /// закоммиченного кадра — презентация не замерзает.
+    ///
+    /// Дефолт — no-op: однопоточные бэкенды momentum-ом не владеют (его тикает
+    /// сам shell в `RedrawRequested`), поэтому при выключенном рендер-потоке
+    /// поведение не меняется.
+    fn start_render_momentum(
+        &mut self,
+        _vel_y: f32,
+        _vel_x: f32,
+        _max_scroll_y: f32,
+        _max_scroll_x: f32,
+    ) {
+    }
+
+    /// Отменяет momentum-скролл, которым владеет рендер-поток (ADR-016 M1.3).
+    ///
+    /// Вызывается shell-ом при новом жесте, навигации или иной причине сбросить
+    /// инерцию немедленно. Дефолт — no-op (см. [`start_render_momentum`]).
+    ///
+    /// [`start_render_momentum`]: RenderBackend::start_render_momentum
+    fn stop_render_momentum(&mut self) {}
+
+    /// Аннотирует следующий кадр в `LUMEN_FRAME_LOG` (ADR-016 M1).
+    ///
+    /// Рендер-поток вызывает это перед каждым [`render`](RenderBackend::render):
+    /// `commit_id` — монотонный идентификатор коммита UI-потока, `self_tick` —
+    /// `true`, когда кадр перерисован самим рендер-потоком при застопорившемся
+    /// UI-потоке (momentum self-tick, M1.3). Аннотация попадает в строку
+    /// `[frame] paint …` вместе с тегом потока, чтобы покадровый лог разных
+    /// потоков не сливался в кашу (см. риск «Frame logs across threads» в плане)
+    /// и было видно, что презентация продолжалась *во время* стойла.
+    ///
+    /// Дефолт — no-op: однопоточный путь (`LUMEN_RENDER_THREAD` выкл) рисует на
+    /// UI-потоке, все кадры оттуда, аннотация не нужна.
+    fn set_frame_commit_id(&mut self, _commit_id: u64, _self_tick: bool) {}
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -324,6 +412,26 @@ mod tests {
         let mut b: Box<dyn RenderBackend> = Box::new(NullBackend);
         assert!(b.register_snapshot(7, &img).is_ok());
         b.clear_snapshots(); // no-op, must not panic
+    }
+
+    #[test]
+    fn null_backend_page_offset_default_unsupported() {
+        // ADR-016 M0.4: бэкенд без поддержки page-offset сообщает об этом
+        // (`false`), а `set_page_offset` — безопасный no-op. Shell по `false`
+        // остаётся на пути с `PushTransform`-обёрткой, так что страница не
+        // нарисуется поверх tab bar-а.
+        let mut b: Box<dyn RenderBackend> = Box::new(NullBackend);
+        assert!(!b.supports_page_offset(), "дефолт — page-offset не поддерживается");
+        b.set_page_offset(16.0, 36.0); // no-op, must not panic
+    }
+
+    #[test]
+    fn null_backend_set_frame_commit_id_default_noop() {
+        // ADR-016 M1.4: аннотация frame-log — no-op по умолчанию (однопоточный
+        // путь), вызов с любым `self_tick` не должен паниковать.
+        let mut b: Box<dyn RenderBackend> = Box::new(NullBackend);
+        b.set_frame_commit_id(42, false);
+        b.set_frame_commit_id(42, true);
     }
 
     #[test]

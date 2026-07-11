@@ -33,7 +33,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use glutin::config::ConfigTemplateBuilder;
-use glutin::context::{ContextAttributesBuilder, NotCurrentGlContext, PossiblyCurrentContext};
+use glutin::context::{
+    ContextAttributesBuilder, NotCurrentContext, NotCurrentGlContext, PossiblyCurrentContext,
+};
 use glutin::display::{Display, DisplayApiPreference, GlDisplay};
 use glutin::prelude::*;
 use glutin::surface::{GlSurface, Surface, SurfaceAttributesBuilder, WindowSurface};
@@ -368,13 +370,30 @@ fn blend_to_composite(mode: BlendMode) -> femtovg::CompositeOperation {
 
 /// femtovg/OpenGL рендер-бэкенд (Phase 2, ADR-010).
 ///
+/// Состояние glutin GL-контекста внутри [`FemtovgBackend`].
+///
+/// Обе операции перехода glutin (`make_current` / `make_not_current`) забирают
+/// контекст по значению, поэтому он хранится в перечислении, а не как готовый
+/// `PossiblyCurrentContext`. `Current` — контекст привязан к текущему потоку,
+/// можно рисовать и `swap_buffers`; `NotCurrent` — контекст откреплён и его
+/// безопасно передавать другому потоку (ADR-016 M1.2: create-on-main →
+/// `make_not_current` → move → `make_current` на рендер-потоке).
+enum GlContextState {
+    /// Контекст current на потоке-владельце.
+    Current(PossiblyCurrentContext),
+    /// Контекст откреплён (`make_not_current`) — переносим между потоками.
+    NotCurrent(NotCurrentContext),
+}
+
 /// Реализует [`RenderBackend`] через femtovg 2D Canvas API поверх OpenGL.
 /// Создаётся из winit-окна через [`FemtovgBackend::new`].
 pub struct FemtovgBackend {
     /// femtovg Canvas — основной 2D-API.
     canvas: femtovg::Canvas<femtovg::renderer::OpenGl>,
-    /// Текущий OpenGL контекст. Должен быть current перед любым вызовом canvas.
-    gl_context: PossiblyCurrentContext,
+    /// OpenGL контекст в одном из двух состояний glutin (см. [`GlContextState`]).
+    /// Должен быть `Current` на этом потоке перед любым вызовом canvas/swap.
+    /// `None` — только транзиентно во время перехода current↔not-current.
+    gl_context: Option<GlContextState>,
     /// Surface для swap buffers.
     gl_surface: Surface<WindowSurface>,
     /// Ширина viewport в физических пикселях.
@@ -417,10 +436,30 @@ pub struct FemtovgBackend {
     scroll_y: f32,
     /// Текущий scroll_x, обновляется в `render()` перед обходом content.
     scroll_x: f32,
+    /// Фиксированное смещение страницы (tab bar + левая docked-панель) в CSS px
+    /// (ADR-016 M0.4). Накладывается рендер-стороной после scroll-трансляции,
+    /// заменяя per-frame `PushTransform`-обёртку всего display-list. `(0, 0)` —
+    /// смещения нет.
+    page_offset: (f32, f32),
     /// CSS ширина viewport (width / scale), нужна для sticky-вычислений.
     viewport_css_w: f32,
     /// CSS высота viewport (height / scale), нужна для sticky-вычислений.
     viewport_css_h: f32,
+    /// ADR-016 M0.2 per-frame culling counters `(culled, total_leaf)` for the
+    /// `LUMEN_FRAME_LOG` line. Reset at the start of every `render()`.
+    cull_stats: (u32, u32),
+    /// ADR-016 M1 frame-log annotation set by the render thread before each
+    /// `render()`: `(commit_id, self_tick)`. Appended to the `[frame] paint …`
+    /// line so cross-thread logs are distinguishable and self-tick presents
+    /// (momentum during a UI-thread stall, M1.3) are visible. `None` on the
+    /// single-threaded path (`LUMEN_RENDER_THREAD` off). Consumed each frame.
+    frame_commit_id: Option<(u64, bool)>,
+    /// ADR-016 M0.3 превью-масштаб зума. Отношение текущего `zoom_factor` к
+    /// тому, при котором свёрстан `content` (`new_zoom / laid_out_zoom`). `1.0`
+    /// — превью выключено. Применяется как `canvas.scale` вокруг верхнего-левого
+    /// угла вьюпорта до scroll-трансляции, чтобы Ctrl+/-/0 давал мгновенный
+    /// визуальный отклик до дебаунс-relayout. Задаётся `set_preview_scale`.
+    preview_scale: f32,
     /// Фон канвы (CSS Backgrounds §3.11.1): цвет, которым заливается весь кадр
     /// перед отрисовкой content. `None` → UA-дефолт (белый). Устанавливается
     /// shell-ом через `set_canvas_background` из фона корневого элемента.
@@ -1215,7 +1254,7 @@ impl FemtovgBackend {
 
         Ok(Self {
             canvas,
-            gl_context,
+            gl_context: Some(GlContextState::Current(gl_context)),
             gl_surface,
             width: size.width,
             height: size.height,
@@ -1231,8 +1270,12 @@ impl FemtovgBackend {
             sticky_stack: Vec::new(),
             scroll_y: 0.0,
             scroll_x: 0.0,
+            page_offset: (0.0, 0.0),
             viewport_css_w: size.width as f32 / scale as f32,
             viewport_css_h: size.height as f32 / scale as f32,
+            cull_stats: (0, 0),
+            frame_commit_id: None,
+            preview_scale: 1.0,
             canvas_bg: None,
             filter_layer_stack: Vec::new(),
             filter_layer_pending_delete: Vec::new(),
@@ -1248,6 +1291,80 @@ impl FemtovgBackend {
             layer_pool: Vec::new(),
             layer_pool_size: (0, 0),
         })
+    }
+
+    // ─── GL context handoff (ADR-016 M1.2) ────────────────────────────────────
+
+    /// Ссылка на current-контекст для `swap_buffers`/`resize`.
+    ///
+    /// Возвращает [`RenderError`], если контекст не в состоянии `Current` — это
+    /// значит, что бэкенд используют на потоке, где [`Self::attach_gl_context`]
+    /// ещё не вызван (передача контекста рендер-потоку не завершена). В обычном
+    /// однопоточном пути контекст всегда `Current` со времени `new`.
+    fn current_ctx(&self) -> Result<&PossiblyCurrentContext, RenderError> {
+        match self.gl_context.as_ref() {
+            Some(GlContextState::Current(ctx)) => Ok(ctx),
+            _ => Err(RenderError::Other(
+                "femtovg: GL-контекст не current на этом потоке (attach_gl_context не вызван)"
+                    .to_owned(),
+            )),
+        }
+    }
+
+    /// Открепляет GL-контекст от текущего потока (`make_not_current`).
+    ///
+    /// ADR-016 M1.2: вызывается **на главном потоке** сразу после `new` — окно и
+    /// его handle доступны только там, поэтому контекст создаётся на main, а
+    /// затем открепляется, чтобы его можно было безопасно перенести на
+    /// рендер-поток. Идемпотентна: повторный вызов на уже откреплённом контексте
+    /// — no-op.
+    ///
+    /// # Errors
+    /// Возвращает строку с описанием, если glutin `make_not_current` не удался
+    /// или контекст отсутствует (транзиентное `None`).
+    pub fn detach_gl_context(&mut self) -> Result<(), String> {
+        match self.gl_context.take() {
+            Some(GlContextState::Current(ctx)) => {
+                let not_current = ctx
+                    .make_not_current()
+                    .map_err(|e| format!("femtovg make_not_current: {e}"))?;
+                self.gl_context = Some(GlContextState::NotCurrent(not_current));
+                Ok(())
+            }
+            Some(already @ GlContextState::NotCurrent(_)) => {
+                self.gl_context = Some(already);
+                Ok(())
+            }
+            None => Err("femtovg: GL-контекст отсутствует (detach во время перехода)".to_owned()),
+        }
+    }
+
+    /// Привязывает GL-контекст к текущему потоку (`make_current`).
+    ///
+    /// ADR-016 M1.2: вызывается **один раз на рендер-потоке** после переноса
+    /// откреплённого бэкенда — после этого все `render`/`swap_buffers` идут с
+    /// этого потока. Идемпотентна: повторный вызов на уже current-контексте —
+    /// no-op.
+    ///
+    /// # Errors
+    /// Возвращает строку с описанием, если glutin `make_current` не удался
+    /// (например, контекст всё ещё current на другом потоке) или контекст
+    /// отсутствует.
+    pub fn attach_gl_context(&mut self) -> Result<(), String> {
+        match self.gl_context.take() {
+            Some(GlContextState::NotCurrent(ctx)) => {
+                let current = ctx
+                    .make_current(&self.gl_surface)
+                    .map_err(|e| format!("femtovg make_current: {e}"))?;
+                self.gl_context = Some(GlContextState::Current(current));
+                Ok(())
+            }
+            Some(already @ GlContextState::Current(_)) => {
+                self.gl_context = Some(already);
+                Ok(())
+            }
+            None => Err("femtovg: GL-контекст отсутствует (attach во время перехода)".to_owned()),
+        }
     }
 
     // ─── Render target helpers ────────────────────────────────────────────────
@@ -2590,7 +2707,66 @@ impl FemtovgBackend {
 
     /// Обрабатывает одну команду display list.
     #[allow(clippy::too_many_lines)]
+    /// ADR-016 M0.2: extra margin (CSS px) added around the viewport before
+    /// culling. Absorbs anti-alias fringe and sub-pixel rounding, and keeps a
+    /// small band of just-off-screen content live so a fast scroll step never
+    /// exposes an un-drawn edge (the display list is re-culled every frame, so
+    /// this need only cover one frame's travel plus overhang).
+    const CULL_SLOP_CSS_PX: f32 = 256.0;
+
+    /// ADR-016 M0.2 viewport culling. Returns `true` when `local` (a leaf
+    /// command's bounding box in document-space CSS px, from
+    /// [`DisplayCommand::cull_rect`]) maps — through the current canvas
+    /// transform (the scroll translate plus any nested `PushTransform` /
+    /// `PushScrollLayer`) — fully outside the viewport expanded by
+    /// [`Self::CULL_SLOP_CSS_PX`]. Such a leaf paints nothing visible this
+    /// frame and can be skipped.
+    ///
+    /// Because we test the AABB of the four *transformed* corners, the result
+    /// is a conservative superset under rotation/scale: we only ever cull a
+    /// command whose entire transformed footprint is off-screen, so culling
+    /// can never drop a visible pixel.
+    fn is_command_culled(&self, local: Rect) -> bool {
+        // Degenerate boxes carry no pixels but are sometimes used as markers —
+        // cheap to keep, and skipping the math avoids surprises.
+        if local.width <= 0.0 || local.height <= 0.0 {
+            return false;
+        }
+        let t = self.canvas.transform();
+        let (x0, y0) = (local.x, local.y);
+        let (x1, y1) = (local.x + local.width, local.y + local.height);
+        let corners = [
+            t.transform_point(x0, y0),
+            t.transform_point(x1, y0),
+            t.transform_point(x0, y1),
+            t.transform_point(x1, y1),
+        ];
+        let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
+        let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
+        for (sx, sy) in corners {
+            min_x = min_x.min(sx);
+            min_y = min_y.min(sy);
+            max_x = max_x.max(sx);
+            max_y = max_y.max(sy);
+        }
+        let slop = Self::CULL_SLOP_CSS_PX;
+        max_x < -slop
+            || max_y < -slop
+            || min_x > self.viewport_css_w + slop
+            || min_y > self.viewport_css_h + slop
+    }
+
     fn render_command(&mut self, cmd: &DisplayCommand) {
+        // ADR-016 M0.2: skip self-contained leaf draws whose box is fully
+        // off-screen under the current transform. Structural commands return
+        // `None` from `cull_rect` and always execute (stack balance).
+        if let Some(local) = cmd.cull_rect() {
+            self.cull_stats.1 += 1;
+            if self.is_command_culled(local) {
+                self.cull_stats.0 += 1;
+                return;
+            }
+        }
         match cmd {
             // ── Базовые команды (RB-5) ──────────────────────────────────────
             DisplayCommand::FillRect { rect, color } => {
@@ -3447,6 +3623,8 @@ impl RenderBackend for FemtovgBackend {
         // Обновляем scroll context для sticky-вычислений.
         self.scroll_y = scroll_y;
         self.scroll_x = scroll_x;
+        // ADR-016 M0.2: reset per-frame culling counters.
+        self.cull_stats = (0, 0);
         self.viewport_css_w = (self.width as f64 / self.scale) as f32;
         self.viewport_css_h = (self.height as f64 / self.scale) as f32;
 
@@ -3462,7 +3640,27 @@ impl RenderBackend for FemtovgBackend {
 
         // Контент — с учётом scroll.
         self.canvas.save();
+        // ADR-016 M0.3: превью-масштаб зума применяется ДО scroll-трансляции,
+        // поэтому точка документа p отображается в s·(p − scroll) — масштаб
+        // вокруг верхнего-левого угла вьюпорта. `s == 1.0` — превью выключено
+        // (identity, стоит почти ничего). Culling остаётся корректным: он
+        // мапит AABB через актуальный CTM (`self.canvas.transform()`), который
+        // уже включает этот scale.
+        if (self.preview_scale - 1.0).abs() > f32::EPSILON {
+            self.canvas.scale(self.preview_scale, self.preview_scale);
+        }
         self.canvas.translate(-scroll_x, -scroll_y);
+        // ADR-016 M0.4: фиксированное смещение страницы (tab bar + левая
+        // docked-панель) накладывается ПОСЛЕ scroll-трансляции — ровно там, где
+        // раньше стоял `PushTransform(translate(offset))` во главе display-list.
+        // Итоговый CTM `scale · translate(-scroll) · translate(offset)` и
+        // порядок вложения sticky-слоёв не меняются, поэтому смещение так же
+        // масштабируется zoom-превью, а sticky-компенсация (`+scroll`) корректна.
+        // Culling остаётся верным: `is_command_culled` мапит AABB через
+        // актуальный CTM, который уже включает это смещение.
+        if self.page_offset != (0.0, 0.0) {
+            self.canvas.translate(self.page_offset.0, self.page_offset.1);
+        }
         if crate::frame_log_level() >= 2 {
             // Уровень 2: разбивка времени по типам команд (top-8 за кадр).
             let mut per_variant: HashMap<&'static str, (std::time::Duration, u32)> =
@@ -3521,17 +3719,30 @@ impl RenderBackend for FemtovgBackend {
             self.canvas.delete_image(id);
         }
 
-        let swap_result = self
-            .gl_surface
-            .swap_buffers(&self.gl_context)
-            .map_err(|e| RenderError::Other(e.to_string()));
+        let swap_result = match self.current_ctx() {
+            Ok(ctx) => self
+                .gl_surface
+                .swap_buffers(ctx)
+                .map_err(|e| RenderError::Other(e.to_string())),
+            Err(e) => Err(e),
+        };
 
         if let (Some(t0), Some(tc), Some(tbf), Some(taf)) =
             (frame_t0, t_content, t_before_flush, t_after_flush)
         {
             let total = t0.elapsed();
+            // ADR-016 M1: tag the line with the presenting thread and, when the
+            // render thread annotated it, the commit id + self-tick flag — so
+            // cross-thread frame logs stay legible and momentum self-ticks
+            // (presentation continuing *during* a UI-thread stall) are visible.
+            let thread_tag = std::thread::current().name().unwrap_or("main").to_owned();
+            let commit_tag = match self.frame_commit_id {
+                Some((id, true)) => format!(" commit {id} self-tick"),
+                Some((id, false)) => format!(" commit {id}"),
+                None => String::new(),
+            };
             eprintln!(
-                "[frame] paint {:6.2}ms  (content {:6.2}ms / {} cmds, overlay {:5.2}ms / {} cmds, flush {:6.2}ms, swap {:6.2}ms)",
+                "[frame] paint {:6.2}ms  (content {:6.2}ms / {} cmds, overlay {:5.2}ms / {} cmds, flush {:6.2}ms, swap {:6.2}ms, culled {}/{} leaf) [thr {thread_tag}{commit_tag}]",
                 total.as_secs_f64() * 1000.0,
                 tc.as_secs_f64() * 1000.0,
                 content.len(),
@@ -3539,14 +3750,39 @@ impl RenderBackend for FemtovgBackend {
                 overlay.len(),
                 (taf - tbf).as_secs_f64() * 1000.0,
                 (total - taf).as_secs_f64() * 1000.0,
+                self.cull_stats.0,
+                self.cull_stats.1,
             );
         }
+        // Аннотация одноразовая: следующий кадр без явного вызова снова без неё.
+        self.frame_commit_id = None;
 
         swap_result
     }
 
+    fn set_frame_commit_id(&mut self, commit_id: u64, self_tick: bool) {
+        self.frame_commit_id = Some((commit_id, self_tick));
+    }
+
     fn set_canvas_background(&mut self, color: Option<Color>) {
         self.canvas_bg = color;
+    }
+
+    fn set_preview_scale(&mut self, scale: f32) {
+        // Защита от вырожденных значений: неположительный масштаб схлопнул бы
+        // кадр в ноль. `zoom_factor` всегда в [0.25, 4.0], а превью — их
+        // отношение, поэтому реально сюда приходит [~0.06, ~16], но клемпим на
+        // всякий случай.
+        self.preview_scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+    }
+
+    fn set_page_offset(&mut self, x: f32, y: f32) {
+        // Нефинитные значения (NaN/inf) сломали бы CTM — падаем на «без смещения».
+        self.page_offset = if x.is_finite() && y.is_finite() { (x, y) } else { (0.0, 0.0) };
+    }
+
+    fn supports_page_offset(&self) -> bool {
+        true
     }
 
     fn resize(&mut self, width: u32, height: u32) {
@@ -3554,7 +3790,10 @@ impl RenderBackend for FemtovgBackend {
         self.width = width;
         self.height = height;
         if let (Some(w), Some(h)) = (NonZeroU32::new(width), NonZeroU32::new(height)) {
-            self.gl_surface.resize(&self.gl_context, w, h);
+            match self.current_ctx() {
+                Ok(ctx) => self.gl_surface.resize(ctx, w, h),
+                Err(e) => eprintln!("femtovg resize: {e:?}"),
+            }
         }
     }
 

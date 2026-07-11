@@ -71,6 +71,215 @@ pub fn frame_log_level() -> u8 {
 pub fn frame_log_enabled() -> bool {
     frame_log_level() >= 1
 }
+
+/// Аккумулятор времён кадров для сессионной сводки (`LUMEN_FRAME_LOG`).
+///
+/// Собирает миллисекунды кадра (полное время цикла redraw) и по запросу считает
+/// перцентили p50/p95/p99, min/max и число кадров. Прослойка M0.1 плана
+/// многопоточного рендера (ADR-016): каждая последующая стадия ссылается на
+/// before/after числа этой сводки, поэтому сводка живёт в `lumen-paint`, а не в
+/// шелле, и покрыта юнит-тестами перцентильной арифметики.
+///
+/// [`record`][FrameStats::record] дёшев (push в `Vec`); сортировка происходит
+/// только в [`summary`][FrameStats::summary], который дёргается по кадансу
+/// `LUMEN_MEM_REPORT` и один раз на выходе.
+#[derive(Debug, Default)]
+pub struct FrameStats {
+    /// Времена всех учтённых кадров, мс, в порядке поступления.
+    samples: Vec<f32>,
+}
+
+/// Перцентильная сводка по временам кадров за сессию (миллисекунды).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrameSummary {
+    /// Количество учтённых кадров.
+    pub count: usize,
+    /// Минимальное время кадра, мс.
+    pub min_ms: f32,
+    /// Медиана (p50), мс.
+    pub p50_ms: f32,
+    /// 95-й перцентиль, мс.
+    pub p95_ms: f32,
+    /// 99-й перцентиль, мс.
+    pub p99_ms: f32,
+    /// Максимальное время кадра, мс.
+    pub max_ms: f32,
+}
+
+impl FrameStats {
+    /// Создаёт пустой аккумулятор.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Учитывает время одного кадра (мс). Значения NaN/inf/отрицательные
+    /// игнорируются, чтобы не портить перцентили.
+    pub fn record(&mut self, ms: f32) {
+        if ms.is_finite() && ms >= 0.0 {
+            self.samples.push(ms);
+        }
+    }
+
+    /// Количество учтённых кадров.
+    pub fn len(&self) -> usize {
+        self.samples.len()
+    }
+
+    /// `true`, если ни одного кадра ещё не учтено.
+    pub fn is_empty(&self) -> bool {
+        self.samples.is_empty()
+    }
+
+    /// Считает перцентильную сводку. Возвращает `None` для пустой выборки.
+    ///
+    /// Перцентиль берётся методом «ближайшего ранга» (nearest-rank) по
+    /// отсортированной копии выборки; исходный `samples` не мутируется, чтобы
+    /// [`record`][FrameStats::record] оставался дешёвым.
+    pub fn summary(&self) -> Option<FrameSummary> {
+        if self.samples.is_empty() {
+            return None;
+        }
+        let mut sorted = self.samples.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let n = sorted.len();
+        // nearest-rank: индекс = ceil(p/100 * N) - 1, зажатый в [0, N-1].
+        let pct = |p: f32| -> f32 {
+            let rank = ((p / 100.0) * n as f32).ceil() as usize;
+            sorted[rank.saturating_sub(1).min(n - 1)]
+        };
+        Some(FrameSummary {
+            count: n,
+            min_ms: sorted[0],
+            p50_ms: pct(50.0),
+            p95_ms: pct(95.0),
+            p99_ms: pct(99.0),
+            max_ms: sorted[n - 1],
+        })
+    }
+}
+
+impl FrameSummary {
+    /// Оборачивает сводку в [`Display`] с произвольным префиксом-меткой вместо
+    /// жёсткого `FRAME_SUMMARY`.
+    ///
+    /// Разные подсистемы MT-рендера (ADR-016) печатают одну и ту же
+    /// перцентильную сводку под своей меткой: кадры — `FRAME_SUMMARY`
+    /// (см. [`Display`] ниже), время relayout на UI-потоке — `ENGINE_SUMMARY`
+    /// (M2.0). Формат и арифметика едины, различается только префикс.
+    pub fn display_with<'a>(&'a self, label: &'a str) -> LabeledSummary<'a> {
+        LabeledSummary { summary: self, label }
+    }
+}
+
+/// [`Display`]-обёртка над [`FrameSummary`] с произвольной меткой-префиксом
+/// (см. [`FrameSummary::display_with`]).
+pub struct LabeledSummary<'a> {
+    /// Сводка, чьи перцентили печатаются.
+    summary: &'a FrameSummary,
+    /// Префикс строки (напр. `FRAME_SUMMARY` / `ENGINE_SUMMARY`).
+    label: &'a str,
+}
+
+impl std::fmt::Display for LabeledSummary<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = self.summary;
+        write!(
+            f,
+            "{} count={} min={:.2}ms p50={:.2}ms p95={:.2}ms p99={:.2}ms max={:.2}ms",
+            self.label, s.count, s.min_ms, s.p50_ms, s.p95_ms, s.p99_ms, s.max_ms
+        )
+    }
+}
+
+impl std::fmt::Display for FrameSummary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.display_with("FRAME_SUMMARY"), f)
+    }
+}
+
+#[cfg(test)]
+mod frame_stats_tests {
+    use super::FrameStats;
+
+    #[test]
+    fn empty_has_no_summary() {
+        let s = FrameStats::new();
+        assert!(s.is_empty());
+        assert_eq!(s.len(), 0);
+        assert!(s.summary().is_none());
+    }
+
+    #[test]
+    fn ignores_non_finite_and_negative() {
+        let mut s = FrameStats::new();
+        s.record(f32::NAN);
+        s.record(f32::INFINITY);
+        s.record(-1.0);
+        assert!(s.is_empty());
+        s.record(5.0);
+        assert_eq!(s.len(), 1);
+    }
+
+    #[test]
+    fn single_sample_all_percentiles_equal() {
+        let mut s = FrameStats::new();
+        s.record(12.5);
+        let sum = s.summary().expect("one sample");
+        assert_eq!(sum.count, 1);
+        assert_eq!(sum.min_ms, 12.5);
+        assert_eq!(sum.p50_ms, 12.5);
+        assert_eq!(sum.p95_ms, 12.5);
+        assert_eq!(sum.p99_ms, 12.5);
+        assert_eq!(sum.max_ms, 12.5);
+    }
+
+    #[test]
+    fn percentiles_nearest_rank_1_to_100() {
+        // Выборка 1..=100; nearest-rank: p50→50, p95→95, p99→99, max→100.
+        let mut s = FrameStats::new();
+        for i in 1..=100 {
+            s.record(i as f32);
+        }
+        let sum = s.summary().expect("100 samples");
+        assert_eq!(sum.count, 100);
+        assert_eq!(sum.min_ms, 1.0);
+        assert_eq!(sum.p50_ms, 50.0);
+        assert_eq!(sum.p95_ms, 95.0);
+        assert_eq!(sum.p99_ms, 99.0);
+        assert_eq!(sum.max_ms, 100.0);
+    }
+
+    #[test]
+    fn display_with_uses_custom_label_same_numbers() {
+        let mut s = FrameStats::new();
+        s.record(12.5);
+        let sum = s.summary().expect("one sample");
+        // Default Display keeps the FRAME_SUMMARY prefix.
+        assert!(format!("{sum}").starts_with("FRAME_SUMMARY count=1"));
+        // A custom label swaps only the prefix; the percentile tail is identical.
+        let engine = format!("{}", sum.display_with("ENGINE_SUMMARY"));
+        assert!(engine.starts_with("ENGINE_SUMMARY count=1"));
+        assert_eq!(
+            engine.trim_start_matches("ENGINE_SUMMARY"),
+            format!("{sum}").trim_start_matches("FRAME_SUMMARY"),
+        );
+    }
+
+    #[test]
+    fn summary_does_not_mutate_insertion_order() {
+        let mut s = FrameStats::new();
+        for v in [30.0, 10.0, 20.0] {
+            s.record(v);
+        }
+        let _ = s.summary();
+        // Повторный вызов даёт тот же результат (samples не отсортированы на месте).
+        let a = s.summary().unwrap();
+        let b = s.summary().unwrap();
+        assert_eq!(a, b);
+        assert_eq!(a.min_ms, 10.0);
+        assert_eq!(a.max_ms, 30.0);
+    }
+}
 pub use color_management::detect_color_space_from_icc;
 #[cfg(feature = "backend-wgpu")]
 pub use backends::WgpuBackend;
@@ -93,10 +302,10 @@ pub use display_list::{
     build_display_list, build_display_list_ordered, build_display_list_ordered_dpr,
     build_display_list_ordered_with_anim, build_display_list_ordered_with_anim_dpr,
     build_display_list_with_anim, build_print_display_list, contains_backdrop_filter,
-    cull_display_list, hash_display_list, is_image_set, point_on_resize_grip,
+    cull_display_list, hash_content, hash_display_list, is_image_set, point_on_resize_grip,
     select_image_set_url, split_at_page_breaks, serialize_display_list, strip_background_graphics,
     BlendMode, CornerRadii,
-    DisplayCommand, DisplayList,
+    DisplayCommand, DisplayList, FrameDelta, FrameFingerprint,
 };
 pub use gap_decorations::{emit_gap_rules, GapDecorationContext, GapSegment};
 pub use tile_grid::{TileDirty, TileGrid, DEFAULT_TILE_SIZE};

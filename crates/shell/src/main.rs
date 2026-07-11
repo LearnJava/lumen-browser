@@ -33,6 +33,7 @@ use lumen_bidi_server::spawn as bidi_spawn;
 mod config;
 mod deterministic;
 mod devtools;
+mod engine_thread;
 mod download;
 mod find;
 mod forms;
@@ -52,6 +53,7 @@ mod panels;
 mod platform;
 mod prefetch;
 mod reader_view;
+mod render_thread;
 mod source_view;
 mod spellcheck;
 mod svg_image;
@@ -177,7 +179,7 @@ enum LoadEvent {
 /// Готовый результат финального pipeline: display-list-страница, источник для
 /// relayout и живой JS-хэндл (если включён QuickJS). Тип-алиас, чтобы вынести
 /// сложную тройку из сигнатур (`render_bytes`, `RenderOutcome`).
-type RenderedPage = (LoadedPage, LayoutSource, Option<Box<dyn PersistentJs>>);
+type RenderedPage = (LoadedPage, LayoutSource, Option<Arc<dyn PersistentJs>>);
 
 /// BUG-171 этап 2: результат финального off-UI-thread рендера (`render_bytes`),
 /// пересылаемый назад на UI-поток через `LoadEvent::RenderDone`.
@@ -216,6 +218,8 @@ struct PendingWebFont {
 /// `MultiFontMeasurer` при каждом relayout — иначе resize/scroll-reflow
 /// теряет web-метрики и откатывается к Inter.
 // weight/style хранятся для будущего CSS font-matching (по weight/style дескрипторам @font-face).
+// Clone: ADR-016 M2.2 — off-thread relayout захватывает владеющий снимок web-шрифтов.
+#[derive(Clone)]
 #[allow(dead_code)]
 struct LoadedWebFont {
     /// CSS `font-family` дескриптор.
@@ -553,6 +557,33 @@ fn automation_ax_node(ax: &lumen_a11y::AXNode) -> lumen_driver::A11yNode {
 /// загрузки `get()` возвращает `None` и спелл-чек молчит.
 static SPELL_DICTS: std::sync::OnceLock<spellcheck::MultiDictionary> = std::sync::OnceLock::new();
 
+/// ADR-016 M2.2: поднимает движковый поток, только если задан
+/// `LUMEN_ENGINE_THREAD=1` (по умолчанию `None` → поведение shell неизменно). В
+/// M2.2 через поток маршрутизируется off-thread layout для async-триггеров
+/// (пока — debounce-зум): [`Lumen::submit_relayout_job`] шлёт задание, поток
+/// считает [`EngineCommit`] и кладёт в latest-wins слот, откуда его забирает
+/// [`Lumen::poll_engine_commit`]. При сбое старта потока логируем и откатываемся
+/// на `None` (как обычно, без движкового потока — синхронный `relayout()`).
+fn spawn_engine_thread_if_enabled()
+-> Option<engine_thread::EngineThread<EngineCommit, EngineJsState>> {
+    if std::env::var("LUMEN_ENGINE_THREAD").as_deref() != Ok("1") {
+        return None;
+    }
+    // ADR-016 M2.2c-2b: поток владеет `EngineJsState` (будущее сиденье `Document`
+    // + `js_ctx`); стартует пустым (`EngineJsState::default()` через `spawn()`),
+    // заполняется `sync_engine_js_state` при первой загрузке страницы.
+    match engine_thread::EngineThread::<EngineCommit, EngineJsState>::spawn() {
+        Ok(engine) => {
+            eprintln!("[engine-thread] запущен (LUMEN_ENGINE_THREAD=1, M2.2 off-thread layout)");
+            Some(engine)
+        }
+        Err(e) => {
+            eprintln!("[engine-thread] не удалось запустить: {e}; продолжаем без него");
+            None
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_window_mode(
     source: PageSource,
@@ -724,6 +755,9 @@ fn run_window_mode(
         epoch: std::time::Instant::now(),
         last_raf_batch_ms: -RAF_MIN_INTERVAL_MS,
         last_mem_report_s: 0.0,
+        frame_stats: lumen_paint::FrameStats::new(),
+        engine_stats: lumen_paint::FrameStats::new(),
+        last_frame_fp: None,
         find: find::FindState::default(),
         address_bar: address_bar::AddressBarState::default(),
         hint: hints::HintState::default(),
@@ -758,6 +792,9 @@ fn run_window_mode(
         pending_restore_scroll: None,
         pending_pageshow_persisted: false,
         load_generation: 0,
+        engine_thread: spawn_engine_thread_if_enabled(),
+        engine_job_generation: 0,
+        engine_applied_generation: 0,
         ime_composing: None,
         bfcache: BfCache::new(16),
         frozen_styles: HashMap::new(),
@@ -888,6 +925,8 @@ fn run_window_mode(
         },
         fallbacks_preloaded: false,
         zoom_factor: zoom::ZOOM_DEFAULT,
+        laid_out_zoom_factor: zoom::ZOOM_DEFAULT,
+        pending_zoom_relayout: None,
         display_url: None,
         current_history_state_json: String::from("null"),
         fullscreen_nid: None,
@@ -1970,7 +2009,14 @@ enum JsNavigateRequest {
 // BUG-171 этап 2: `Send` нужен, чтобы готовый JS-хэндл (`QuickJsRuntime` —
 // `Send + Sync` по ADR-014/B-1), созданный финальным pipeline на фоновом потоке,
 // пересылался обратно на UI-поток внутри `LoadEvent::RenderDone`.
-pub(crate) trait PersistentJs: Send {
+//
+// ADR-016 M2.2c-2b: `Sync` добавлен, чтобы хэндл можно было держать за
+// `Arc<dyn PersistentJs>` и **разделять** между UI-потоком и движковым потоком на
+// время миграции `js_ctx` на движковый поток (см. `EngineJsState`). Все методы
+// уже берут `&self`, а `QuickJsRuntime` — `Send + Sync` (все вызовы туннелируются
+// на выделенный JS-поток через `SyncSender`, ADR-014), поэтому `Sync` держится
+// без `unsafe`. UI-сторонний `Arc`-клон удаляется в M2.2c-2d.
+pub(crate) trait PersistentJs: Send + Sync {
     /// Evaluate a JS script (event handler dispatch, rAF tick, etc.).
     fn eval_js(&self, script: &str);
     /// Evaluate `script` and return its result as a JSON string (SDC-1b
@@ -2869,7 +2915,7 @@ impl PageSource {
         sw_backend: Option<Arc<dyn lumen_core::ext::SwBackend>>,
         hp: &dyn HyphenationProvider,
         cookie_banner_dismiss: bool,
-    ) -> Result<(LoadedPage, Option<LayoutSource>, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
+    ) -> Result<(LoadedPage, Option<LayoutSource>, Option<Arc<dyn PersistentJs>>), Box<dyn Error>> {
         if matches!(self, PageSource::Empty | PageSource::AboutBlank) {
             return Ok((LoadedPage::empty(), None, None));
         }
@@ -4054,7 +4100,10 @@ struct ParsedPage {
     /// Persistent JS context (QuickJS) kept alive after page load so that
     /// event handlers registered via `addEventListener` continue to work.
     /// `None` when the quickjs feature is disabled or script init failed.
-    js_ctx: Option<Box<dyn PersistentJs>>,
+    ///
+    /// ADR-016 M2.2c-2b: `Arc` (не `Box`), чтобы хэндл можно было разделить с
+    /// движковым потоком (`EngineJsState`) на время миграции `js_ctx` на него.
+    js_ctx: Option<Arc<dyn PersistentJs>>,
     /// P3-webvtt срез 3: WebVTT-cues, загруженные из `<track>` каждого `<video>`.
     page_tracks: tracks::PageTracks,
 }
@@ -4065,7 +4114,11 @@ struct LayoutSource {
     /// DOM — shared with the persistent JS runtime via Arc<Mutex> so that
     /// JS event handlers can mutate it between repaints.
     document: Arc<Mutex<Document>>,
-    stylesheet: lumen_css_parser::Stylesheet,
+    /// Parsed stylesheet, shared as an immutable `Arc` snapshot (ADR-016 M2.2b):
+    /// off-thread relayout jobs clone the handle (`Arc::clone`) instead of deep-
+    /// cloning the whole `Stylesheet` on every submit. Replaced wholesale on
+    /// reload/thaw, never mutated in place.
+    stylesheet: Arc<lumen_css_parser::Stylesheet>,
     /// Decoded HTML source captured after encoding detection. Used by bfcache
     /// to restore the page without a network round-trip.
     #[allow(dead_code)]
@@ -4135,7 +4188,8 @@ struct PageSnapshot {
     /// tab's `idb_dir` when saving a snapshot; restored on tab switch-back.
     idb_dir: Option<std::path::PathBuf>,
     sw_backend: Arc<Mutex<dyn lumen_core::ext::StorageBackend>>,
-    js_ctx: Option<Box<dyn PersistentJs>>,
+    /// ADR-016 M2.2c-2b: `Arc` (не `Box`) — общий тип хэндла с активной вкладкой.
+    js_ctx: Option<Arc<dyn PersistentJs>>,
     first_paint_delivered: bool,
     first_contentful_paint_delivered: bool,
     /// Instant at which the current navigation began (set in `reload()`).
@@ -4766,6 +4820,151 @@ fn content_layout_viewport(surface: Size, has_window: bool, workspace_visible: b
     (surface.width, (surface.height - chrome_h).max(0.0))
 }
 
+/// ADR-016 M2.2: результат off-thread relayout, который движковый поток
+/// коммитит UI-стороне через [`engine_thread::EngineThread`]. Всё содержимое —
+/// владеющие значения (`Send`); после коммита UI и движок не делят мутабельное
+/// состояние (инвариант 1). Применяется на UI-потоке через
+/// [`Lumen::apply_relayout_result`] — та же логика, что у синхронного
+/// `relayout()`, только layout уже посчитан вне UI-потока.
+struct EngineCommit {
+    /// Готовый display-list страницы.
+    content: DisplayList,
+    /// Layout-дерево, из которого построен `content` — нужно UI-стороне для
+    /// transitions / JS-observers / scroll-контейнеров.
+    layout_box: lumen_layout::LayoutBox,
+    /// CSS layout-viewport, под который построен коммит.
+    viewport: Size,
+    /// Номер relayout-задания (generation-guard в [`Lumen::poll_engine_commit`]).
+    generation: u64,
+    /// Время off-thread вычисления (style + layout + DL build) в мс — для
+    /// `ENGINE_SUMMARY` / `[engine] relayout … (off-thread)`.
+    compute_ms: f32,
+}
+
+/// ADR-016 M2.2c-2b: персистентное состояние движкового потока `S` — «место»
+/// для мутабельного `Document` и хэндла `lumen-js` (`js_ctx`), которые M2.2c
+/// целиком переносит на движковый поток. Владеет им **только** движковый поток
+/// (тип `S` в [`engine_thread::EngineThread`]); UI-сторона его не разделяет —
+/// общается через [`engine_thread::EngineThread::task`]/`query` (инвариант 1).
+///
+/// На срезе M2.2c-2b поле `js` заполняется зеркальным `Arc`-клоном UI-хэндла при
+/// каждой смене страницы ([`Lumen::sync_engine_js_state`]), а маршрутизируются на
+/// поток пока только простейшие fire-and-forget void-вызовы `eval_js`
+/// (см. [`route_eval_js`]). Остальные UI→JS вызовы всё ещё идут по UI-хэндлу
+/// `Lumen::js_ctx`; их перенос (`query`-путь для значений, DOM-мутации) —
+/// M2.2c-2c/-2d/-3. `document` держится как будущее «сиденье» для владения DOM;
+/// пока читается только как зеркальный снимок и в layout-вычислении не участвует.
+#[derive(Default)]
+struct EngineJsState {
+    /// Разделяемый DOM (тот же `Arc`, что у `LayoutSource::document`). Будущее
+    /// «сиденье» владения DOM движковым потоком (M2.2c-3); пока — зеркальный
+    /// снимок для готовности инфраструктуры, layout его не использует.
+    document: Option<Arc<Mutex<Document>>>,
+    /// Хэндл персистентного JS-рантайма. На время миграции (M2.2c-2b…2c) это
+    /// зеркальный `Arc`-клон UI-хэндла `Lumen::js_ctx`; UI-сторонний клон
+    /// удаляется в M2.2c-2d, когда все call-site'ы уйдут в `task`/`query`.
+    js: Option<Arc<dyn PersistentJs>>,
+}
+
+/// ADR-016 M2.2c-2b: маршрутизатор fire-and-forget void-вызова `eval_js`.
+///
+/// Свободная функция (а не метод `Lumen`), чтобы на call-site'е заимствовать поля
+/// `engine_thread`/`js_ctx` **раздельно** (disjoint borrow) и не конфликтовать с
+/// уже удерживаемыми `&mut`-заимствованиями других полей `self`.
+///
+/// - движковый поток есть (`LUMEN_ENGINE_THREAD=1`) → `eval_js` уходит **off-UI-thread**
+///   через [`engine_thread::EngineThread::task`] (не блокирует UI-поток на
+///   JS-round-trip; исполнится по порядку среди прочих `Task`);
+/// - потока нет (флаг выключен, по умолчанию) → синхронный вызов по UI-хэндлу
+///   `js` — **байт-идентично** прежнему `js.eval_js(script)`.
+///
+/// Известное ограничение под флагом (паттерн M2.2a): вызов становится
+/// асинхронным, поэтому синхронное чтение результатов JS в том же тике (напр.
+/// `take_navigate_request`) может увидеть их на кадр позже — такие
+/// read-after-eval-цепочки переносятся на `query`-путь в M2.2c-2c. Поэтому
+/// маршрутизируются только заведомо изолированные void-вызовы без чтения следом.
+fn route_eval_js(
+    engine: Option<&engine_thread::EngineThread<EngineCommit, EngineJsState>>,
+    js: Option<&Arc<dyn PersistentJs>>,
+    script: String,
+) {
+    route_task_js(engine, js, move |js| js.eval_js(&script));
+}
+
+/// ADR-016 M2.2c-2d: обобщённый маршрутизатор fire-and-forget void-*действия*
+/// над JS-хэндлом.
+///
+/// Обобщает [`route_eval_js`] (частный случай `|js| js.eval_js(&script)`) на
+/// любое void-действие над `&Arc<dyn PersistentJs>` — нужно для батча
+/// per-tick pump-вызовов (`tick_timers`/`pump_websockets`/`pump_sse`/
+/// `pump_workers`/`pump_broadcast_channels`/`pump_shared_workers`), которые не
+/// сводятся к одному `eval_js` (часть — прямые методы рантайма). Свободная
+/// функция (а не метод `Lumen`), чтобы на call-site'е заимствовать поля
+/// `engine_thread`/`js_ctx` **раздельно** (disjoint borrow).
+///
+/// - движковый поток есть (`LUMEN_ENGINE_THREAD=1`) → действие уходит
+///   **off-UI-thread** через [`engine_thread::EngineThread::task`] (не блокирует
+///   UI-поток; исполнится по порядку среди прочих `Task` — так что последующий
+///   `query` встаёт в очередь **после** него, сохраняя read-after-write порядок);
+/// - потока нет (флаг выключен, по умолчанию) → синхронный вызов по UI-хэндлу
+///   `js` — **байт-идентично** прежним прямым `js.<method>()`.
+fn route_task_js(
+    engine: Option<&engine_thread::EngineThread<EngineCommit, EngineJsState>>,
+    js: Option<&Arc<dyn PersistentJs>>,
+    action: impl FnOnce(&Arc<dyn PersistentJs>) + Send + 'static,
+) {
+    match engine {
+        Some(engine) => engine.task(move |state| {
+            if let Some(js) = &state.js {
+                action(js);
+            }
+        }),
+        None => {
+            if let Some(js) = js {
+                action(js);
+            }
+        }
+    }
+}
+
+/// ADR-016 M2.2c-2c: маршрутизатор **value-returning** UI→JS чтения.
+///
+/// Дополняет [`route_eval_js`] (fire-and-forget) для вызовов, чей результат нужен
+/// UI-стороне **сейчас**: `take_dom_dirty` → `bool`, `take_raf_pending` → `bool`,
+/// `eval_js_value` → `Result<String, String>`, а также (остаток 2c) nav/timer-чтения
+/// `take_navigate_request` → `Option<JsNavigateRequest>`, `take_timer_wakeup` →
+/// `Option<f64>` и nav-update drain `take_nav_updates` → `Vec<_>`. Как и `route_eval_js`
+/// — свободная функция ради disjoint-borrow полей `engine_thread`/`js_ctx`.
+///
+/// - движковый поток есть (`LUMEN_ENGINE_THREAD=1`) → чтение идёт через
+///   [`engine_thread::EngineThread::query`] (блокирующий request/reply). Это
+///   ставит чтение **в очередь после** любого уже отправленного `task` (напр.
+///   маршрутизированного `eval_js`) — тем самым восстанавливая read-after-eval
+///   порядок, намеренно оставленный синхронным в M2.2c-2b;
+/// - потока нет (флаг выключен, по умолчанию) → синхронный вызов по UI-хэндлу —
+///   **байт-идентично** прежнему прямому `js.<read>()`.
+///
+/// Возвращает `None`, когда JS-контекста нет вовсе (нет UI-хэндла / состояние
+/// движкового потока ещё не зеркалировано / поток завершён при shutdown); в этом
+/// случае вызывающая сторона подставляет значение-по-умолчанию своей ветки «без
+/// JS» (напр. `unwrap_or(false)` для `take_dom_dirty`) — как и без флага, где
+/// `js_ctx == None` даёт ту же ветку.
+fn route_query_js<R: Send + 'static>(
+    engine: Option<&engine_thread::EngineThread<EngineCommit, EngineJsState>>,
+    js: Option<&Arc<dyn PersistentJs>>,
+    read: impl FnOnce(&Arc<dyn PersistentJs>) -> R + Send + 'static,
+) -> Option<R> {
+    match engine {
+        // `query` вернёт `Some(inner)`, где `inner` — результат `read`, либо `None`
+        // если хэндл ещё не зеркалирован в состояние; двойной `Option` схлопываем
+        // `flatten`. `query` целиком вернёт `None` при завершённом потоке → тоже `None`.
+        Some(engine) => engine
+            .query(move |state| state.js.as_ref().map(read))
+            .flatten(),
+        None => js.map(read),
+    }
+}
+
 /// Повторный layout+paint по сохранённому `LayoutSource` с новым viewport.
 /// Возвращает `(DisplayList, LayoutBox)` — LayoutBox нужен для animation scheduler.
 /// `dark_mode` is forwarded to `layout_measured_hyp` so `@media (prefers-color-scheme: dark)`
@@ -4777,11 +4976,31 @@ fn relayout_page(
     dark_mode: bool,
     web_fonts: &[LoadedWebFont],
 ) -> (DisplayList, lumen_layout::LayoutBox) {
+    compute_layout(&src.document, &src.stylesheet, viewport, hp, dark_mode, web_fonts)
+}
+
+/// Ядро style+layout+display-list по immutable-снапшоту документа и стилей.
+///
+/// Вынесено из [`relayout_page`], чтобы одну и ту же работу можно было вызвать и
+/// на UI-потоке (синхронный `relayout()`), и на движковом потоке (ADR-016 M2.2,
+/// [`Lumen::submit_relayout_job`]) — второму `LayoutSource` недоступен, у него на
+/// руках только `Arc`-снимки `document`/`stylesheet`. Интерактивное состояние
+/// (`:hover`/`:focus`/`forced-colors`/`content-visibility` scroll) — thread-local
+/// (`lumen_layout::set_*`), поэтому вызывающая сторона обязана выставить его на
+/// **том же** потоке до вызова и сбросить после.
+fn compute_layout(
+    document: &Mutex<Document>,
+    stylesheet: &lumen_css_parser::Stylesheet,
+    viewport: Size,
+    hp: &dyn HyphenationProvider,
+    dark_mode: bool,
+    web_fonts: &[LoadedWebFont],
+) -> (DisplayList, lumen_layout::LayoutBox) {
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
     if web_fonts.is_empty() {
         let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
-        let doc = src.document.lock().unwrap();
-        let layout = lumen_layout::layout_measured_hyp(&doc, &src.stylesheet, viewport, &measurer, hp, dark_mode);
+        let doc = document.lock().unwrap();
+        let layout = lumen_layout::layout_measured_hyp(&doc, stylesheet, viewport, &measurer, hp, dark_mode);
         drop(doc);
         let dl = paint_ordered(&layout);
         return (dl, layout);
@@ -4796,8 +5015,8 @@ fn relayout_page(
             wf.unicode_range.clone(),
         );
     }
-    let doc = src.document.lock().unwrap();
-    let layout = lumen_layout::layout_measured_hyp(&doc, &src.stylesheet, viewport, &measurer, hp, dark_mode);
+    let doc = document.lock().unwrap();
+    let layout = lumen_layout::layout_measured_hyp(&doc, stylesheet, viewport, &measurer, hp, dark_mode);
     drop(doc);
     let dl = paint_ordered(&layout);
     (dl, layout)
@@ -5003,7 +5222,7 @@ fn render_bytes(
     let layout_box = parsed.layout;
     let layout_source = LayoutSource {
         document: Arc::clone(&parsed.document),
-        stylesheet: parsed.stylesheet,
+        stylesheet: Arc::new(parsed.stylesheet),
         html_source: Some(parsed.html_source),
     };
     Ok((
@@ -5439,7 +5658,7 @@ fn apply_iframe_sandbox_gates(doc: &Document) -> usize {
 ///
 /// Принимает `doc` по значению, оборачивает в `Arc<Mutex<>>` на время выполнения
 /// Выполняет inline `<script>` блоки через QuickJS (если feature включён),
-/// возвращает `(Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Box<dyn PersistentJs>>)`.
+/// возвращает `(Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Arc<dyn PersistentJs>>)`.
 ///
 /// Документ оборачивается в `Arc<Mutex>` чтобы JS-замыкания и layout-код
 /// могли разделить доступ без лишних клонов. Persistent runtime возвращается
@@ -5477,7 +5696,7 @@ fn run_scripts_with_dom(
     extra_scripts: &[String],
     scripts: Vec<String>,
     module_scripts: Vec<String>,
-) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Box<dyn PersistentJs>>) {
+) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Arc<dyn PersistentJs>>) {
     // `scripts` / `module_scripts` are already resolved by the caller in
     // document order, including fetched external `<script src>` bodies (BUG-164).
     // Import map must be captured before `doc` moves into the Arc and applied
@@ -5561,7 +5780,7 @@ fn run_scripts_with_dom(
                     lumen_js::NavigateRequest::Reload     => JsNavigateRequest::Reload,
                 });
                 // Keep rt alive: return as PersistentJs so event handlers work after load.
-                let ctx: Box<dyn PersistentJs> = Box::new(QuickPersistentJs { rt });
+                let ctx: Arc<dyn PersistentJs> = Arc::new(QuickPersistentJs { rt });
                 return (doc_arc, nav_req, Some(ctx));
             }
             Err(e) => {
@@ -5794,6 +6013,26 @@ struct Lumen {
     last_raf_batch_ms: f64,
     /// TEMP BUG-272 diagnostics: epoch seconds of the last memory report.
     last_mem_report_s: f64,
+    /// Сессионный аккумулятор времён кадров (`LUMEN_FRAME_LOG`, M0.1 ADR-016).
+    /// Наполняется только при включённом frame-log; сводка p50/p95/p99
+    /// печатается по кадансу `LUMEN_MEM_REPORT` и один раз на выходе.
+    frame_stats: lumen_paint::FrameStats,
+    /// ADR-016 M2.0: сессионный аккумулятор времени `relayout()` на UI-потоке
+    /// (стиль + layout + сборка display-list + доставка JS-observer'ов). Каждый
+    /// интерактивный relayout (DOM-мутация из JS, hover/focus, resize, тик
+    /// анимации, content-visibility) сегодня блокирует UI-поток — это и есть та
+    /// работа, которую M2 уносит на отдельный engine-поток. Наполняется только
+    /// при включённом `LUMEN_FRAME_LOG` (как `frame_stats`), сводка
+    /// `ENGINE_SUMMARY` печатается по кадансу `LUMEN_MEM_REPORT` и один раз на
+    /// выходе — даёт before/after числа, на которые сошлются следующие срезы M2.
+    engine_stats: lumen_paint::FrameStats,
+    /// ADR-016 M0.5: split fingerprint (content-hash + scroll/page offset) of the
+    /// previously presented frame. Used only when `LUMEN_FRAME_LOG` is on: each
+    /// frame is classified against it (`Identical`/`OffsetOnly`/`ContentChanged`)
+    /// and the delta is logged, so the scroll-vs-content frame mix is measurable
+    /// before M3 turns `OffsetOnly` into an actual blit fast path. `None` until
+    /// the first logged frame.
+    last_frame_fp: Option<lumen_paint::FrameFingerprint>,
     /// Состояние Ctrl+F. Открыт ли bar, текущий query и индекс активного
     /// совпадения. Содержимое поиска не сохраняется между reload-ами
     /// (close() полностью очищает state); это сознательно: после reload
@@ -5845,6 +6084,21 @@ struct Lumen {
     /// layout viewport: `effective = physical / (meta_scale * zoom_factor)`.
     /// Resets to 1.0 on tab switch (stored in `PageSnapshot` for background tabs).
     zoom_factor: f32,
+    /// Zoom factor the current display list was laid out at (ADR-016 M0.3).
+    ///
+    /// Transform-first zoom lets `zoom_factor` diverge from this between a
+    /// Ctrl+/-/0 press and the debounced relayout; the backend previews the gap
+    /// via `set_preview_scale(zoom_factor / laid_out_zoom_factor)`. Every
+    /// `relayout()` re-syncs it to `zoom_factor` (the display list then matches
+    /// the requested zoom, so no preview scale is needed).
+    laid_out_zoom_factor: f32,
+    /// Pending debounced relayout deadline for transform-first zoom (M0.3).
+    ///
+    /// Set on each Ctrl+/-/0 press to `now + ZOOM_RELAYOUT_DEBOUNCE_MS`; a fresh
+    /// press pushes it later so a burst reflows only once. `about_to_wait`
+    /// folds it into the `WaitUntil` deadline and runs `relayout()` when it
+    /// elapses. `None` when no zoom preview is in flight.
+    pending_zoom_relayout: Option<std::time::Instant>,
     /// Последняя известная позиция курсора в **physical** пикселях (от winit).
     /// `None` пока курсор не вошёл в окно. Конвертируется в CSS px через
     /// `scale_factor()` непосредственно в hit-test / drag callback-ах.
@@ -5943,6 +6197,31 @@ struct Lumen {
     /// `user_event` drops events whose generation is stale (a superseded
     /// navigation), so a slow earlier load can't paint over a newer page.
     load_generation: u64,
+    /// ADR-016 M2.2: долгоживущий движковый поток. `Some` только при
+    /// `LUMEN_ENGINE_THREAD=1`; иначе `None` и поведение shell неизменно (весь
+    /// relayout синхронный). Через него маршрутизируется off-thread layout
+    /// async-триггеров (пока — debounce-зум): `submit_relayout_job` шлёт задание,
+    /// `poll_engine_commit` забирает готовый [`EngineCommit`]. Дроп при завершении
+    /// шлёт `Shutdown` и джойнит.
+    ///
+    /// ADR-016 M2.2c-2b: поток также владеет персистентным состоянием
+    /// [`EngineJsState`] (`Document` + хэндл `js_ctx`) — сиденье для переноса JS на
+    /// движковый поток. Заполняется через `sync_engine_js_state` при смене страницы.
+    engine_thread: Option<engine_thread::EngineThread<EngineCommit, EngineJsState>>,
+    /// ADR-016 M2.2: generation последнего **применённого** relayout-результата.
+    /// Off-thread задание считается «в полёте» (нужен poll-будильник), пока
+    /// `engine_job_generation != engine_applied_generation`. Синхронный
+    /// `relayout()` выставляет их равными (off-thread задание не ждётся);
+    /// `poll_engine_commit` продвигает это поле применённым `commit.generation`.
+    engine_applied_generation: u64,
+    /// ADR-016 M2.2: монотонный номер async-relayout задания. Растёт при каждой
+    /// постановке off-thread задания (`submit_relayout_job`) **и** при каждом
+    /// синхронном `relayout()` — так результат уже поставленного, но ещё не
+    /// применённого off-thread задания опознаётся как устаревший
+    /// (`commit.generation != engine_job_generation`) и роняется в
+    /// `poll_engine_commit`. Latest-wins/generation-guard на стороне потока —
+    /// [`engine_thread`].
+    engine_job_generation: u64,
     /// Текущий IME preedit-текст. `Some` — composition-сессия активна,
     /// `None` — нет активного IME ввода.
     ime_composing: Option<String>,
@@ -6019,7 +6298,11 @@ struct Lumen {
     /// initial script execution. `None` when `quickjs` feature is disabled or
     /// no scripts were registered. Must be dropped before `layout_source` on
     /// navigation to release Arc clones held in JS closures.
-    js_ctx: Option<Box<dyn PersistentJs>>,
+    ///
+    /// ADR-016 M2.2c-2b: `Arc` (не `Box`) — тот же хэндл держит движковый поток
+    /// (`EngineJsState`) на время миграции UI→JS вызовов на него. UI-сторонний
+    /// клон уходит в M2.2c-2d, когда все call-site'ы маршрутизируются в поток.
+    js_ctx: Option<Arc<dyn PersistentJs>>,
     /// When true the vertical scrollbar overlay is suppressed entirely.
     /// Set by `--no-scrollbar` CLI flag; used by graphic test pipeline to
     /// avoid scrollbar pixels contaminating the diff against Edge headless.
@@ -6688,30 +6971,42 @@ impl Lumen {
         }
     }
 
+    /// Transform-first zoom step (ADR-016 M0.3).
+    ///
+    /// Called after `zoom_factor` changed via Ctrl+/-/0. Instead of an immediate
+    /// (expensive) relayout, scale the retained display list by
+    /// `zoom_factor / laid_out_zoom_factor` on the backend for an instant
+    /// response, then arm a debounced relayout so a burst of key presses reflows
+    /// only once — `ZOOM_RELAYOUT_DEBOUNCE_MS` after the last press.
+    fn begin_zoom_preview(&mut self) {
+        let scale = zoom::preview_scale(self.zoom_factor, self.laid_out_zoom_factor);
+        if let Some(r) = self.renderer.as_mut() {
+            r.set_preview_scale(scale);
+        }
+        self.pending_zoom_relayout = Some(
+            std::time::Instant::now()
+                + std::time::Duration::from_millis(zoom::ZOOM_RELAYOUT_DEBOUNCE_MS),
+        );
+        self.request_redraw();
+    }
+
     /// Повторный layout+paint при изменении размера viewport.
     /// Использует сохранённый `LayoutSource`; парсинг не повторяется.
     fn relayout(&mut self) {
+        let Some(viewport) = self.relayout_viewport() else { return };
+        // ADR-016 M2.2: a synchronous relayout is authoritative — advance the
+        // applied generation to `job_generation` so any off-thread commit still
+        // in flight (older generation) is dropped by `poll_engine_commit`'s
+        // guard, and no poll-wakeup is armed for a job that no longer matters.
+        self.engine_job_generation = self.engine_job_generation.wrapping_add(1);
+        self.engine_applied_generation = self.engine_job_generation;
+        // ADR-016 M2.0: time the whole UI-thread relayout (style + layout +
+        // display-list build + JS-observer delivery) — the work M2 moves to an
+        // engine thread. Only under `LUMEN_FRAME_LOG`, so a normal run pays
+        // nothing. Recorded after `apply_relayout_result` so the state it reports
+        // (display list / styled nodes) is the freshly-applied one.
+        let engine_t0 = lumen_paint::frame_log_enabled().then(std::time::Instant::now);
         let Some(src) = self.layout_source.as_ref() else { return };
-        let Some(r) = self.renderer.as_ref() else { return };
-        let vp_size = r.viewport_size();
-        // RP-2: lay out against the live page content region, not the full
-        // window. In an interactive window the page sits below the tab strip
-        // (+ workspace switcher), so the layout viewport must exclude that
-        // chrome to match scroll clamping (`viewport_height_css`) and the
-        // PushTransform that shifts content down. Headless surfaces have no
-        // chrome and use the full surface. Tracks live `inner_size` because
-        // `viewport_size()` reflects the last `r.resize()` on `Resized`.
-        let (vp_w, vp_h) =
-            content_layout_viewport(vp_size, self.window.is_some(), self.workspace_panel.visible);
-        // Guard against degenerate viewport (renderer not yet configured or minimized).
-        if vp_w <= 0.0 || vp_h <= 0.0 {
-            return;
-        }
-        // Apply <meta viewport initial-scale> + user zoom to derive the CSS layout viewport.
-        let meta_scale = meta_initial_scale(src);
-        let (css_w, css_h) =
-            zoom::effective_viewport(vp_w, vp_h, meta_scale, self.zoom_factor);
-        let viewport = Size::new(css_w, css_h);
         // Set interactive hover/focus/active state for this layout pass so that
         // :hover / :focus / :active / :focus-within CSS rules evaluate correctly.
         lumen_layout::set_interactive_state(self.hovered_nid, self.focused_node, self.active_nid);
@@ -6729,6 +7024,84 @@ impl Lumen {
         lumen_layout::clear_interactive_state();
         lumen_layout::set_cv_scroll(0.0, 0.0);
         lumen_layout::set_cv_relevant(std::collections::HashSet::new());
+        self.apply_relayout_result(new_dl, lb, viewport);
+        if let Some(t0) = engine_t0 {
+            let engine_ms = t0.elapsed().as_secs_f32() * 1000.0;
+            self.engine_stats.record(engine_ms);
+            eprintln!(
+                "[engine] relayout {engine_ms:.2}ms dl={} styled={}",
+                self.display_list.len(),
+                self.prev_styles.len(),
+            );
+        }
+    }
+
+    /// ADR-016 M2.2b: route an **async-safe chrome-inset relayout** off the UI
+    /// thread when the engine thread is enabled, falling back to the synchronous
+    /// [`Self::relayout`] otherwise (the default, so behavior is byte-identical
+    /// unless `LUMEN_ENGINE_THREAD=1`).
+    ///
+    /// "Async-safe" means the caller changed only *chrome* geometry — a docked
+    /// panel's side/width, the workspace bar, vertical/tree tabs, sidebar
+    /// visibility, the AI / accessibility side panels (M2.2b-3), or a mouse-click
+    /// *close* of the AI / sidebar / accessibility panels (M2.2b-6) — or triggered a
+    /// whole-page *restyle* with no geometry read of its own (an OS/settings theme
+    /// flip, M2.2b-4; an interactive `:hover`/`:active` pseudo-class flip, M2.2b-5,
+    /// including the `:hover` clear on cursor-leave, M2.2b-8; a `:focus`/`:focus-within`
+    /// change from a JS focus request or a click, M2.2b-7; a web-font FOUT→FOIT swap,
+    /// M2.2b-8) — or opened the web sidebar's error-placeholder panel (M2.2b-8) —
+    /// and is in either case **not** followed by a synchronous read
+    /// of page layout geometry. The reflowed content may
+    /// therefore land a few frames later via [`Self::poll_engine_commit`], the
+    /// same contract as the debounced zoom (M2.2a). The chrome itself is drawn
+    /// from its own state, so it updates on the immediately-requested redraw; only
+    /// the page reflow underneath it is deferred.
+    fn relayout_chrome(&mut self) {
+        if !self.submit_relayout_job() {
+            self.relayout();
+        }
+    }
+
+    /// Derive the CSS layout viewport for a relayout (shared by the synchronous
+    /// [`Self::relayout`] and the off-thread [`Self::submit_relayout_job`]).
+    ///
+    /// Returns `None` — skip relayout — when there is no `LayoutSource`/renderer
+    /// yet or the content region is degenerate (minimized window). Applies the
+    /// live chrome inset (RP-2), `<meta viewport initial-scale>` and the user
+    /// zoom, matching scroll clamping and the content `PushTransform`.
+    fn relayout_viewport(&self) -> Option<Size> {
+        let src = self.layout_source.as_ref()?;
+        let r = self.renderer.as_ref()?;
+        let vp_size = r.viewport_size();
+        // RP-2: lay out against the live page content region, not the full
+        // window. In an interactive window the page sits below the tab strip
+        // (+ workspace switcher), so the layout viewport must exclude that
+        // chrome to match scroll clamping (`viewport_height_css`) and the
+        // PushTransform that shifts content down. Headless surfaces have no
+        // chrome and use the full surface. Tracks live `inner_size` because
+        // `viewport_size()` reflects the last `r.resize()` on `Resized`.
+        let (vp_w, vp_h) =
+            content_layout_viewport(vp_size, self.window.is_some(), self.workspace_panel.visible);
+        // Guard against degenerate viewport (renderer not yet configured or minimized).
+        if vp_w <= 0.0 || vp_h <= 0.0 {
+            return None;
+        }
+        // Apply <meta viewport initial-scale> + user zoom to derive the CSS layout viewport.
+        let meta_scale = meta_initial_scale(src);
+        let (css_w, css_h) = zoom::effective_viewport(vp_w, vp_h, meta_scale, self.zoom_factor);
+        Some(Size::new(css_w, css_h))
+    }
+
+    /// ADR-016 M2.2: post-layout UI-thread work shared by the synchronous
+    /// [`Self::relayout`] and the off-thread commit path
+    /// ([`Self::poll_engine_commit`]). Takes an already-computed
+    /// `(DisplayList, LayoutBox)` (built either inline or on the engine thread)
+    /// and applies everything that touches `&mut self`: caches, transitions /
+    /// `@starting-style` sync, `will-change` layer promotion, zoom-preview reset,
+    /// scroll clamping and JS-observer delivery. Kept identical for both callers
+    /// so an off-thread relayout is byte-for-byte equivalent to a synchronous one.
+    fn apply_relayout_result(&mut self, new_dl: DisplayList, lb: lumen_layout::LayoutBox, viewport: Size) {
+        let Some(src) = self.layout_source.as_ref() else { return };
         self.content_height = content_height_of(&new_dl);
         self.content_width = content_width_of(&new_dl);
         self.tile_grid.update_from_diff(&self.display_list, &new_dl);
@@ -6790,6 +7163,16 @@ impl Lumen {
         if let (Some(lb_ref), Some(r)) = (self.layout_box.as_ref(), self.renderer.as_mut()) {
             promote_will_change_layers(lb_ref, r.as_mut());
         }
+        // ADR-016 M0.3: the fresh display list is now laid out at the current
+        // zoom, so any transform-first zoom preview is complete — clear the
+        // debounce and reset the backend to 1:1. Done for every relayout
+        // (resize, DOM mutation, tab switch), not just the debounced zoom one,
+        // so a relayout from another source also lands the pending zoom.
+        self.laid_out_zoom_factor = self.zoom_factor;
+        self.pending_zoom_relayout = None;
+        if let Some(r) = self.renderer.as_mut() {
+            r.set_preview_scale(1.0);
+        }
         self.update_snap_containers();
         self.update_scroll_containers();
         self.animation_scheduler.clear();
@@ -6835,6 +7218,113 @@ impl Lumen {
         if let Some(w) = self.window.as_ref() {
             w.request_redraw();
         }
+    }
+
+    /// ADR-016 M2.2: route a relayout to the persistent engine thread (off the
+    /// UI thread). Returns `true` if a job was submitted; `false` when the engine
+    /// thread is absent (`LUMEN_ENGINE_THREAD` off) or there is nothing to lay out
+    /// — the caller then falls back to the synchronous [`Self::relayout`].
+    ///
+    /// Only for **async-safe** triggers: no caller may read layout geometry
+    /// synchronously after this returns, because the commit lands a few frames
+    /// later via [`Self::poll_engine_commit`]. Today the sole caller is the
+    /// debounced transform-first zoom (M0.3), whose visual is already covered by
+    /// `set_preview_scale`. The job captures immutable `Arc` snapshots of the
+    /// document + stylesheet + web-fonts (invariant 1) and re-establishes the
+    /// interactive/forced-colors/content-visibility thread-local state **on the
+    /// engine thread** before computing layout.
+    fn submit_relayout_job(&mut self) -> bool {
+        let Some(engine) = self.engine_thread.as_ref() else { return false };
+        let Some(viewport) = self.relayout_viewport() else { return false };
+        let Some(src) = self.layout_source.as_ref() else { return false };
+        self.engine_job_generation = self.engine_job_generation.wrapping_add(1);
+        let generation = self.engine_job_generation;
+        // Immutable snapshots captured by the job (ADR-016 invariant 1). The
+        // stylesheet is now an `Arc` in `LayoutSource` (M2.2b), so the job clones
+        // only the handle — no per-submit deep clone of the whole `Stylesheet`.
+        let document = Arc::clone(&src.document);
+        let stylesheet = Arc::clone(&src.stylesheet);
+        let hp = Arc::clone(&self.hyp_provider);
+        let web_fonts = self.web_fonts.clone();
+        let dark_mode = self.dark_mode;
+        let hovered = self.hovered_nid;
+        let focused = self.focused_node;
+        let active = self.active_nid;
+        let forced_colors = self.a11y_store.forced_colors();
+        let (cv_x, cv_y) = (self.scroll_x, self.scroll_y);
+        let cv_relevant = self.cv_relevant.clone();
+        engine.submit(generation, move || {
+            let t0 = std::time::Instant::now();
+            // Interactive state is thread-local — set it on THIS (engine) thread.
+            lumen_layout::set_interactive_state(hovered, focused, active);
+            lumen_layout::set_forced_colors(forced_colors);
+            lumen_layout::set_cv_scroll(cv_x, cv_y);
+            lumen_layout::set_cv_relevant(cv_relevant);
+            let (content, layout_box) =
+                compute_layout(&document, &stylesheet, viewport, &*hp, dark_mode, &web_fonts);
+            lumen_layout::clear_interactive_state();
+            lumen_layout::set_cv_scroll(0.0, 0.0);
+            lumen_layout::set_cv_relevant(std::collections::HashSet::new());
+            EngineCommit {
+                content,
+                layout_box,
+                viewport,
+                generation,
+                compute_ms: t0.elapsed().as_secs_f32() * 1000.0,
+            }
+        });
+        true
+    }
+
+    /// ADR-016 M2.2: consume the newest off-thread layout result, if the engine
+    /// thread produced one, and apply it on the UI thread. A no-op when the engine
+    /// thread is off or nothing is ready. The commit is dropped when its
+    /// `generation` no longer matches `engine_job_generation` — a newer job or a
+    /// synchronous `relayout()` has superseded it (generation-guard, invariant 2).
+    fn poll_engine_commit(&mut self) {
+        // Take the commit and release the `engine_thread` borrow before the
+        // `&mut self` apply below.
+        let Some(commit) = self.engine_thread.as_ref().and_then(|e| e.take_committed()) else {
+            return;
+        };
+        if commit.generation != self.engine_job_generation {
+            return; // superseded — drop the stale result.
+        }
+        self.engine_applied_generation = commit.generation;
+        let EngineCommit { content, layout_box, viewport, compute_ms, .. } = commit;
+        self.apply_relayout_result(content, layout_box, viewport);
+        // ADR-016 M2.0/M2.2: record the off-thread compute cost. Unlike the
+        // synchronous path this excludes the UI-thread apply (observers etc.),
+        // and is tagged `(off-thread)` so the summary reflects the work moved off
+        // the UI thread.
+        self.engine_stats.record(compute_ms);
+        if lumen_paint::frame_log_enabled() {
+            eprintln!(
+                "[engine] relayout {compute_ms:.2}ms (off-thread) dl={} styled={}",
+                self.display_list.len(),
+                self.prev_styles.len(),
+            );
+        }
+    }
+
+    /// ADR-016 M2.2c-2b: зеркалит текущий хэндл `js_ctx` + разделяемый `Document`
+    /// в персистентное состояние [`EngineJsState`] движкового потока.
+    ///
+    /// No-op, когда движкового потока нет (`LUMEN_ENGINE_THREAD` выключен, по
+    /// умолчанию) — тогда поведение shell байт-идентично. Вызывается при каждой
+    /// смене страницы (после установки `self.js_ctx`), чтобы `task`/`query`-вызовы
+    /// на движковый поток видели актуальный рантайм. `Arc`-клоны дёшевы, а сам
+    /// рантайм всё равно живёт на своём `lumen-js`-потоке (ADR-014) — так что это
+    /// разделение хэндла, а не мутабельного состояния (инвариант 1). UI-сторонний
+    /// клон `Lumen::js_ctx` уходит в M2.2c-2d.
+    fn sync_engine_js_state(&self) {
+        let Some(engine) = self.engine_thread.as_ref() else { return };
+        let js = self.js_ctx.clone();
+        let document = self.layout_source.as_ref().map(|ls| Arc::clone(&ls.document));
+        engine.task(move |state| {
+            state.js = js;
+            state.document = document;
+        });
     }
 
     /// Fetch, decode and register lazy images whose node IDs were queued by JS.
@@ -7236,6 +7726,8 @@ impl Lumen {
                 self.js_ctx = None;
                 self.layout_source = new_layout_source;
                 self.js_ctx = new_js_ctx;
+                // ADR-016 M2.2c-2b: зеркалим новый хэндл + DOM в движковый поток.
+                self.sync_engine_js_state();
                 // The new runtime starts empty; re-seed it with the current Navigation state.
                 self.commit_nav_state();
                 self.content_height = content_height_of(&page.display_list);
@@ -7292,6 +7784,7 @@ impl Lumen {
                 // Активные анимации старой страницы сбрасываем.
                 self.scroll_anim = None;
                 self.momentum_anim = None;
+                self.forward_momentum_stop();
                 self.touchpad_vel = (0.0, 0.0);
                 // Reset CPU image cache for the reloaded page (10E.4 scroll-discard).
                 self.image_cache.clear();
@@ -7634,11 +8127,14 @@ impl Lumen {
     /// Применить результат полного pipeline (fetch + parse + CSS + images).
     /// Используется и при streaming `LoadDone`, и может быть переиспользован
     /// в будущем для других путей загрузки.
-    fn apply_loaded_page(&mut self, page: LoadedPage, new_layout_source: Option<LayoutSource>, new_js_ctx: Option<Box<dyn PersistentJs>>) {
+    fn apply_loaded_page(&mut self, page: LoadedPage, new_layout_source: Option<LayoutSource>, new_js_ctx: Option<Arc<dyn PersistentJs>>) {
         // Drop JS closures before layout_source to release Arc clones in QuickJS.
         self.js_ctx = None;
         self.layout_source = new_layout_source;
         self.js_ctx = new_js_ctx;
+        // ADR-016 M2.2c-2b: зеркалим новый хэндл + DOM в состояние движкового
+        // потока (no-op при выключенном `LUMEN_ENGINE_THREAD`).
+        self.sync_engine_js_state();
         // The new runtime starts empty; re-seed it with the current Navigation state.
         self.commit_nav_state();
         self.content_height = content_height_of(&page.display_list);
@@ -7678,6 +8174,7 @@ impl Lumen {
         self.scroll_drag = None;
         self.scroll_anim = None;
         self.momentum_anim = None;
+        self.forward_momentum_stop();
         self.touchpad_vel = (0.0, 0.0);
         self.form_state.clear();
         self.validation_tooltip = None;
@@ -8114,7 +8611,13 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
                 self.web_fonts.push(LoadedWebFont { family, weight, style, unicode_range, bytes });
                 // Relayout with the now-registered web font (FOUT → FOIT swap).
-                self.relayout();
+                // ADR-016 M2.2b-8: the swap is a whole-page restyle (font metrics
+                // change) with no synchronous geometry read of its own — the same
+                // async-safe shape as the theme flip (M2.2b-4). The just-pushed
+                // font is captured by `submit_relayout_job`'s `web_fonts` snapshot,
+                // so the off-thread reflow sees it. Route it off-thread when the
+                // engine thread is enabled.
+                self.relayout_chrome();
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
                 }
@@ -8229,6 +8732,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         }
     }
 
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        // M0.1 (ADR-016): финальная сессионная сводка времён кадров. Печатается
+        // только если frame-log что-то накопил (`LUMEN_FRAME_LOG>=1`).
+        if let Some(summary) = self.frame_stats.summary() {
+            eprintln!("{summary} (session exit)");
+        }
+        // ADR-016 M2.0: session-final UI-thread relayout-cost summary.
+        if let Some(summary) = self.engine_stats.summary() {
+            eprintln!("{} (session exit)", summary.display_with("ENGINE_SUMMARY"));
+        }
+    }
+
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // TEMP BUG-272 diagnostics: dump known-store sizes every ~10 s.
         if std::env::var("LUMEN_MEM_REPORT").is_ok() {
@@ -8256,6 +8771,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     js_heap.0 as f64 / 1e6, js_heap.1 as f64 / 1e6,
                     self.renderer.as_ref().map_or(String::new(), |r| r.debug_mem_report()),
                 );
+                // M0.1 (ADR-016): периодическая сводка времён кадров — базовые
+                // числа, на которые будут ссылаться последующие стадии MT-рендера.
+                if let Some(summary) = self.frame_stats.summary() {
+                    eprintln!("{summary}");
+                }
+                // ADR-016 M2.0: periodic UI-thread relayout-cost summary alongside
+                // the frame summary — the baseline M2's engine-thread move improves.
+                if let Some(summary) = self.engine_stats.summary() {
+                    eprintln!("{}", summary.display_with("ENGINE_SUMMARY"));
+                }
             }
         }
         // HTML §8.1.4.2 «Processing model»: между событиями event-loop-а
@@ -8299,16 +8824,38 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // source can starve the other.
         let mut next_wakeup: Option<std::time::Instant> = None;
         if let Some(js) = &self.js_ctx {
-            js.tick_timers();
-            js.pump_websockets();
-            js.pump_sse();
-            js.pump_workers();
-            js.pump_broadcast_channels();
-            js.pump_shared_workers();
-            if let Some(nav) = js.take_navigate_request() {
+            // ADR-016 M2.2c-2d: per-tick pump-батч (fire-and-forget void) через
+            // `route_task_js`. Под флагом (`LUMEN_ENGINE_THREAD=1`) уходит off-UI-thread
+            // одним `task` (порядок вызовов внутри сохранён), а последующие
+            // `route_query_js`-чтения nav/timer встают в очередь **после** него —
+            // read-after-write порядок восстановлен, как для routed `eval_js` в 2b/2c.
+            // Без флага (по умолчанию) — синхронные прямые вызовы, байт-идентично.
+            route_task_js(self.engine_thread.as_ref(), Some(js), |j| {
+                j.tick_timers();
+                j.pump_websockets();
+                j.pump_sse();
+                j.pump_workers();
+                j.pump_broadcast_channels();
+                j.pump_shared_workers();
+            });
+            // ADR-016 M2.2c-2c (остаток): value-returning nav/timer чтения через
+            // `route_query_js` (тот же паттерн, что `take_dom_dirty`/`take_raf_pending`
+            // выше). Под флагом (`LUMEN_ENGINE_THREAD=1`) читаются блокирующим `query`
+            // — в очереди после уже отправленных `task`, восстанавливая read-after-eval
+            // порядок, оставленный синхронным в 2b; без флага (по умолчанию) — `js.map`,
+            // байт-идентично прежнему прямому `js.<read>()`. `flatten` схлопывает
+            // `Option<Option<_>>` (внешний = «есть ли JS-контекст», внутренний = сам
+            // результат чтения) в `Option<_>`.
+            if let Some(nav) =
+                route_query_js(self.engine_thread.as_ref(), Some(js), |j| j.take_navigate_request())
+                    .flatten()
+            {
                 self.pending_js_navigate = Some(nav);
             }
-            if let Some(wakeup_epoch_ms) = js.take_timer_wakeup() {
+            if let Some(wakeup_epoch_ms) =
+                route_query_js(self.engine_thread.as_ref(), Some(js), |j| j.take_timer_wakeup())
+                    .flatten()
+            {
                 let now_epoch_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs_f64() * 1000.0)
@@ -8335,11 +8882,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         let raf_dom_dirty = if let Some(js) = &self.js_ctx {
             let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
             if js.has_raf_pending() && now_ms - self.last_raf_batch_ms >= RAF_MIN_INTERVAL_MS {
-                js.take_raf_pending();
+                // ADR-016 M2.2c-2c: value-returning UI→JS чтения через `route_query_js`.
+                // `take_raf_pending` здесь очищает флаг (результат отбрасывается), но
+                // обязано завершиться **до** синхронного `run_animation_frame` (иначе
+                // очистка обгонит перевзвод флага из вложенного rAF) — блокирующий
+                // `query` сохраняет этот порядок под флагом; без флага — прежний вызов.
+                route_query_js(self.engine_thread.as_ref(), Some(js), |j| j.take_raf_pending());
                 self.last_raf_batch_ms = now_ms;
                 let raf_ts = if self.deterministic { 0.0 } else { -1.0 };
                 js.run_animation_frame(raf_ts);
-                js.take_dom_dirty()
+                route_query_js(self.engine_thread.as_ref(), Some(js), |j| j.take_dom_dirty())
+                    .unwrap_or(false)
             } else {
                 false
             }
@@ -8360,6 +8913,39 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 + std::time::Duration::from_millis(due_in_ms as u64 + 1);
             next_wakeup = Some(next_wakeup.map_or(raf_wakeup, |t| t.min(raf_wakeup)));
         }
+        // ADR-016 M2.2: apply any off-thread layout result the engine thread has
+        // committed since the last iteration (no-op when the engine thread is off).
+        self.poll_engine_commit();
+        // ADR-016 M0.3 + M2.2: run the debounced transform-first-zoom relayout when
+        // its deadline elapses; otherwise fold the deadline into the wakeup so the
+        // parked loop wakes exactly then. When the engine thread is enabled, route
+        // the (inherently async, no synchronous geometry consumer) zoom relayout
+        // off the UI thread; otherwise fall back to the synchronous path. Either
+        // path clears the pending state and (on apply) resets the preview to 1:1.
+        if let Some(deadline) = self.pending_zoom_relayout {
+            if std::time::Instant::now() >= deadline {
+                // Consume the debounce regardless of path so it fires once per
+                // burst; the async path leaves the preview scale until the commit
+                // lands, the sync path resets it immediately inside `relayout`.
+                self.pending_zoom_relayout = None;
+                if !self.submit_relayout_job() {
+                    self.relayout();
+                }
+            } else {
+                next_wakeup = Some(next_wakeup.map_or(deadline, |t| t.min(deadline)));
+            }
+        }
+        // ADR-016 M2.2: while an off-thread job is in flight (submitted but not yet
+        // applied), the parked winit loop would not wake on its own to pick up the
+        // commit — arm a short poll deadline. Bounded by the always-landing newest
+        // job (coalescing) so this clears promptly. A future slice can replace this
+        // with an `EventLoopProxy` wake on commit.
+        if self.engine_thread.is_some()
+            && self.engine_job_generation != self.engine_applied_generation
+        {
+            let poll = std::time::Instant::now() + std::time::Duration::from_millis(4);
+            next_wakeup = Some(next_wakeup.map_or(poll, |t| t.min(poll)));
+        }
         match next_wakeup {
             Some(wakeup) => event_loop.set_control_flow(ControlFlow::WaitUntil(wakeup)),
             // BUG-271: no pending deadline — park the loop for real. Without
@@ -8376,11 +8962,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // JS Canvas 2D draws into per-node CPU buffers (lumen_canvas::Context2D).
         // Each frame we drain the dirty buffers and register them under the same
         // `canvas:{nid}` key the display list emits, then request a repaint.
-        let canvas_updates = self
-            .js_ctx
-            .as_ref()
-            .map(|js| js.flush_canvas_updates())
-            .unwrap_or_default();
+        // ADR-016 M2.2c-2d: canvas drain (value-returning) через `route_query_js`
+        // (тот же паттерн, что nav/timer/nav-update выше). Под флагом
+        // (`LUMEN_ENGINE_THREAD=1`) — блокирующий `query`, встающий в очередь
+        // **после** уже отправленного pump-`task` (read-after-write сохранён);
+        // без флага (по умолчанию) — `js.map(read)`, байт-идентично прежнему
+        // `js_ctx.map(flush_canvas_updates)`. `unwrap_or_default` на `None` (нет
+        // хэндла / состояние не зеркалировано / поток завершён) даёт пустой дренаж.
+        let canvas_updates = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            j.flush_canvas_updates()
+        })
+        .unwrap_or_default();
         if !canvas_updates.is_empty() {
             if let Some(r) = self.renderer.as_mut() {
                 for (nid, w, h, rgba) in &canvas_updates {
@@ -8405,9 +8997,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // Drain URL-update notifications from history.pushState/replaceState.
         // pushState adds a same-document back-stack entry; replaceState updates
         // the displayed URL only.  Neither triggers a page load.
+        // ADR-016 M2.2c-2d: history pushState/replaceState drain через
+        // `route_query_js` — собираем `updates` до `&mut self`-мутаций стека
+        // навигации. Под флагом — `query` после pump-`task`; без флага —
+        // байт-идентично прежнему `js.take_history_url_updates()`; `None` →
+        // `unwrap_or_default` = пустой дренаж (как ветка `js_ctx == None`).
         #[cfg(feature = "quickjs")]
-        if let Some(js) = &self.js_ctx {
-            let updates = js.take_history_url_updates();
+        {
+            let updates = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_history_url_updates()
+            })
+            .unwrap_or_default();
             for (is_push, url, new_state_json) in updates {
                 if is_push {
                     // pushState: save current state to nav_back as same-doc entry.
@@ -8439,13 +9039,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // Drain JS-initiated traversal deltas and apply them to the real
         // nav_back/nav_fwd stacks (single authority). Collect first so the
         // immutable `js_ctx` borrow is released before the `&mut self` calls.
+        // ADR-016 M2.2c-2d: history.go/back/forward traversal drain через
+        // `route_query_js` — те же гарантии (query после pump-`task` под флагом;
+        // байт-идентично `js_ctx.map(take_history_traversals)` без него), `None` →
+        // пустой дренаж. Собираем до `&mut self`-мутаций (`navigate_by`).
         #[cfg(feature = "quickjs")]
         {
-            let traversals = self
-                .js_ctx
-                .as_ref()
-                .map(|js| js.take_history_traversals())
-                .unwrap_or_default();
+            let traversals = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_history_traversals()
+            })
+            .unwrap_or_default();
             for delta in traversals {
                 self.navigate_by(delta);
             }
@@ -8460,9 +9063,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 | PendingIntercepted::Forward { handler_started, .. } => *handler_started,
             };
             if !started {
-                if let Some(js) = &self.js_ctx {
-                    js.eval_js("_lumen_run_navigate_handler()");
-                }
+                // ADR-016 M2.2c-2b: изолированный fire-and-forget void-вызов
+                // (следом — только мутация `pending`, без синхронного чтения JS),
+                // поэтому маршрутизируем его off-UI-thread при включённом движковом
+                // потоке; при выключенном (по умолчанию) — байт-идентичный
+                // синхронный `js.eval_js`. Disjoint-borrow полей `engine_thread`/
+                // `js_ctx` уживается с активным `&mut self.pending_intercepted`.
+                route_eval_js(
+                    self.engine_thread.as_ref(),
+                    self.js_ctx.as_ref(),
+                    "_lumen_run_navigate_handler()".to_owned(),
+                );
                 *pending = match pending {
                     PendingIntercepted::Push { url, .. } => PendingIntercepted::Push {
                         url: url.clone(),
@@ -8487,11 +9098,16 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // `forward()` / `traverseTo()`. Each entry is `(action_code, url, key, data)`.
         #[cfg(feature = "quickjs")]
         {
-            let navs = self
-                .js_ctx
-                .as_ref()
-                .map(|js| js.take_nav_updates())
-                .unwrap_or_default();
+            // ADR-016 M2.2c-2c (остаток): nav-update drain через `route_query_js`
+            // (тот же паттерн, что nav/timer в `about_to_wait`). Под флагом —
+            // блокирующий `query` после уже отправленных `task`; без флага —
+            // байт-идентично прежнему `js_ctx.map(take_nav_updates)`. `None`
+            // (нет UI-хэндла / состояние не зеркалировано / поток завершён) →
+            // `unwrap_or_default` даёт пустой дренаж, как и прежняя ветка `None`.
+            let navs = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_nav_updates()
+            })
+            .unwrap_or_default();
             for (action_code, url, key, data) in navs {
                 match action_code {
                     0 if !url.is_empty() => self.navigate_to(PageSource::Url(url)),
@@ -8597,17 +9213,27 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     let _ = reply_tx.send(AutomationReply::Ack);
                 }
                 AutomationCommand::Eval(js) => {
-                    if let Some(js_ctx) = &self.js_ctx {
-                        match js_ctx.eval_js_value(&js) {
-                            Ok(json) => {
-                                let _ = reply_tx.send(AutomationReply::Eval(json));
-                            }
-                            Err(e) => {
-                                let _ = reply_tx.send(AutomationReply::Error(e));
-                            }
+                    // ADR-016 M2.2c-2c: value-returning `eval_js_value` через
+                    // `route_query_js`. Под флагом чтение упорядочено за уже
+                    // отправленными `task`; без флага байт-идентично: `Some(js_ctx)`
+                    // → `Some(result)`, отсутствие хэндла → `None` → «JS context
+                    // not available».
+                    match route_query_js(
+                        self.engine_thread.as_ref(),
+                        self.js_ctx.as_ref(),
+                        move |j| j.eval_js_value(&js),
+                    ) {
+                        Some(Ok(json)) => {
+                            let _ = reply_tx.send(AutomationReply::Eval(json));
                         }
-                    } else {
-                        let _ = reply_tx.send(AutomationReply::Error("JS context not available".to_string()));
+                        Some(Err(e)) => {
+                            let _ = reply_tx.send(AutomationReply::Error(e));
+                        }
+                        None => {
+                            let _ = reply_tx.send(AutomationReply::Error(
+                                "JS context not available".to_string(),
+                            ));
+                        }
                     }
                 }
                 AutomationCommand::Screenshot => {
@@ -8741,17 +9367,26 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         }
 
         // Web Notifications API: deliver pending OS notifications queued by JS.
-        if let Some(js) = &self.js_ctx {
-            for (title, body) in js.take_notification_requests() {
-                notification::show_os_notification(&title, &body);
-            }
+        // ADR-016 M2.2d: value-drain через `route_query_js` (под флагом — off-UI-thread
+        // `query`; без флага — байт-идентично прежнему `js.take_notification_requests()`).
+        for (title, body) in
+            route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_notification_requests()
+            })
+            .unwrap_or_default()
+        {
+            notification::show_os_notification(&title, &body);
         }
 
         // window.open() popup requests: each entry opens a new tab and navigates it
         // to the requested URL.  Executed after the page render so the current tab
         // stays visible while the new tab loads.
-        if let Some(js) = &self.js_ctx {
-            let popups = js.take_window_open_requests();
+        // ADR-016 M2.2d: value-drain через `route_query_js`.
+        {
+            let popups = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_window_open_requests()
+            })
+            .unwrap_or_default();
             for (url, _target, _width, _height) in popups {
                 self.open_new_tab();
                 let url = if url.is_empty() {
@@ -8764,25 +9399,29 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         }
 
         // Fullscreen API: apply OS fullscreen on requestFullscreen() / exitFullscreen().
+        // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(feature = "quickjs")]
-        if let Some(js) = &self.js_ctx {
-            for (enter, nid) in js.take_fullscreen_requests() {
-                self.fullscreen_nid = if enter { Some(nid) } else { None };
-                let target = if enter {
-                    Some(winit::window::Fullscreen::Borderless(None))
-                } else {
-                    None
-                };
-                // Apply the OS mode and capture the pre-toggle physical size; the
-                // borrow of `self.window` ends with the `map`, so the &mut call
-                // to `arm_fullscreen_resize` below does not conflict.
-                let prev = self.window.as_ref().map(|w| {
-                    w.set_fullscreen(target);
-                    w.inner_size()
-                });
-                if let Some(prev) = prev {
-                    self.arm_fullscreen_resize(prev);
-                }
+        for (enter, nid) in
+            route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_fullscreen_requests()
+            })
+            .unwrap_or_default()
+        {
+            self.fullscreen_nid = if enter { Some(nid) } else { None };
+            let target = if enter {
+                Some(winit::window::Fullscreen::Borderless(None))
+            } else {
+                None
+            };
+            // Apply the OS mode and capture the pre-toggle physical size; the
+            // borrow of `self.window` ends with the `map`, so the &mut call
+            // to `arm_fullscreen_resize` below does not conflict.
+            let prev = self.window.as_ref().map(|w| {
+                w.set_fullscreen(target);
+                w.inner_size()
+            });
+            if let Some(prev) = prev {
+                self.arm_fullscreen_resize(prev);
             }
         }
 
@@ -8828,26 +9467,38 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         }
 
         // Print API: window.print() exports current document as PDF (W-2).
+        // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(feature = "quickjs")]
-        if let Some(js) = &self.js_ctx {
-            let print_reqs = js.take_print_requests();
-            for req in print_reqs {
-                self.handle_print_request(&req);
-            }
+        for req in route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            j.take_print_requests()
+        })
+        .unwrap_or_default()
+        {
+            self.handle_print_request(&req);
         }
 
         // Dialog focus management (HTML LS §6.6.3): apply focus changes requested by
         // showModal() / close() in JS via _lumen_request_focus / _lumen_request_blur.
+        // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(feature = "quickjs")]
-        if let Some(js) = &self.js_ctx {
-            let focus_reqs = js.take_focus_requests();
+        {
+            let focus_reqs = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_focus_requests()
+            })
+            .unwrap_or_default();
             if !focus_reqs.is_empty() {
                 // Only the last request in the batch matters.
                 if let Some(last_req) = focus_reqs.into_iter().last() {
                     let new_nid = last_req.map(|n| lumen_dom::NodeId::from_index(n as usize));
                     if new_nid != self.focused_node {
                         self.focused_node = new_nid;
-                        self.relayout();
+                        // ADR-016 M2.2b-7: `focused_node` is set synchronously above,
+                        // so `:focus`/`:focus-within` re-evaluates correctly on any
+                        // later relayout (it feeds `set_interactive_state` at the top
+                        // of every pass). This is a pure restyle with no synchronous
+                        // page-geometry read afterwards (the follow-up only notifies
+                        // the accessibility bridge), so route it off-thread.
+                        self.relayout_chrome();
                         self.platform_bridge.focused_node_changed(new_nid);
                     }
                 }
@@ -8855,9 +9506,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         }
 
         // CSS View Transitions API: drain snapshot/animation events from JS.
+        // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(feature = "quickjs")]
-        if let Some(js) = &self.js_ctx {
-            for event in js.take_view_transition_events() {
+        {
+            let events = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_view_transition_events()
+            })
+            .unwrap_or_default();
+            for event in events {
                 match event {
                     ViewTransitionEvent::Begin => {
                         // Capture current display list as the "before" snapshot.
@@ -8889,8 +9545,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         }
 
         // DevTools console: drain JS console.log/warn/error messages into the panel.
-        if let Some(js) = &self.js_ctx {
-            let msgs = js.take_console_messages();
+        // ADR-016 M2.2d: value-drain через `route_query_js`.
+        {
+            let msgs = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_console_messages()
+            })
+            .unwrap_or_default();
             if !msgs.is_empty() {
                 self.devtools_console.push_batch(msgs);
                 if self.devtools_console.visible {
@@ -8947,15 +9607,18 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // Page-level scroll requests from JS window.scrollTo / window.scrollBy.
         // Smooth requests go through the rAF-based animation; instant ones set
         // scroll_y directly (CSS Scroll Behavior L1 §3).
+        // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(feature = "quickjs")]
-        if let Some(js) = &self.js_ctx {
-            let page_reqs = js.take_page_scroll_requests();
-            for (target_y, smooth) in page_reqs {
-                if smooth {
-                    self.start_smooth_scroll(target_y);
-                } else {
-                    self.scroll_to(target_y);
-                }
+        for (target_y, smooth) in
+            route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                j.take_page_scroll_requests()
+            })
+            .unwrap_or_default()
+        {
+            if smooth {
+                self.start_smooth_scroll(target_y);
+            } else {
+                self.scroll_to(target_y);
             }
         }
 
@@ -9158,13 +9821,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             }
             WindowEvent::ThemeChanged(theme) => {
                 // OS switched light↔dark. Update the stored preference and re-run
-                // layout: relayout() re-evaluates `@media (prefers-color-scheme)`
-                // and pushes the new value to JS matchMedia listeners via
-                // deliver_media_query_changes(.., self.dark_mode).
+                // layout: it re-evaluates `@media (prefers-color-scheme)` and pushes
+                // the new value to JS matchMedia listeners via
+                // deliver_media_query_changes(.., self.dark_mode). ADR-016 M2.2b-4:
+                // an OS theme flip is async-safe (a whole-page restyle with no
+                // synchronous read of page geometry afterwards — matchMedia delivery
+                // rides `apply_relayout_result`, and `dark_mode` is captured by the
+                // off-thread job), so route it through `relayout_chrome()`.
                 let dark = platform::dark_mode::theme_prefers_dark(Some(theme));
                 if dark != self.dark_mode {
                     self.dark_mode = dark;
-                    self.relayout();
+                    self.relayout_chrome();
                     if let Some(w) = self.window.as_ref() {
                         w.request_redraw();
                     }
@@ -9394,7 +10061,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         #[cfg(feature = "quickjs")]
                         let old_nid = self.hovered_nid;
                         self.hovered_nid = new_hovered;
-                        self.relayout();
+                        // ADR-016 M2.2b-5: :hover restyle is async-safe (no
+                        // geometry read of its own; the JS pointer events below
+                        // target `old_nid`/`new_hovered`, not this reflow).
+                        self.relayout_chrome();
                         self.request_redraw();
                         // Dispatch hover-change events per W3C UI Events §17.5 / Pointer Events L2 §10.
                         #[cfg(feature = "quickjs")]
@@ -9502,7 +10172,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         self.js_mouse_event(nid,   "mouseleave",   0.0, 0.0, 0, 0);
                     }
                     self.hovered_nid = None;
-                    self.relayout();
+                    // ADR-016 M2.2b-8: clearing `:hover` on cursor-leave is the
+                    // same async-safe restyle as the in-window hover flip
+                    // (M2.2b-5) — no synchronous geometry read; the leave events
+                    // above target the old node, not this reflow. Route off-thread.
+                    self.relayout_chrome();
                     self.request_redraw();
                 }
                 self.gesture.cancel();
@@ -9568,7 +10242,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // CSS :active — set immediately on press so :active rules apply.
                     if self.active_nid != self.hovered_nid {
                         self.active_nid = self.hovered_nid;
-                        self.relayout();
+                        // ADR-016 M2.2b-5: :active restyle is async-safe — the
+                        // click hit-test below reads the pre-:active layout (the
+                        // geometry the user pressed on), which is correct.
+                        self.relayout_chrome();
                         self.request_redraw();
                     }
                     let Some(cursor) = self.cursor_position else {
@@ -10172,7 +10849,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 self.a11y_panel.visible = false;
                                 self.deliver_a11y_media_changes();
                                 // Re-style with the (possibly toggled) forced-colors pref.
-                                self.relayout();
+                                // Async-safe (M2.2b-6): closing the panel only shifts
+                                // chrome + re-evaluates forced-colors; no page-geometry
+                                // read follows (just `request_redraw` + `return`).
+                                self.relayout_chrome();
                             }
                             A11yHit::FontMultiplier(v) => {
                                 self.a11y_panel.draft.font_size_multiplier = v as f64;
@@ -10194,7 +10874,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 self.a11y_panel.visible = false;
                                 self.deliver_a11y_media_changes();
                                 // Re-style with the (possibly toggled) forced-colors pref.
-                                self.relayout();
+                                // Async-safe (M2.2b-6): closing the panel only shifts
+                                // chrome + re-evaluates forced-colors; no page-geometry
+                                // read follows (just `request_redraw` + `return`).
+                                self.relayout_chrome();
                             }
                         }
                         self.request_redraw();
@@ -10304,7 +10987,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 let new_dark = self.shell_theme.is_dark(self.dark_mode);
                                 if new_dark != self.dark_mode {
                                     self.dark_mode = new_dark;
-                                    self.relayout();
+                                    // ADR-016 M2.2b-4: an explicit dark/light lock is
+                                    // async-safe like the OS theme flip — a whole-page
+                                    // restyle with no synchronous geometry read here
+                                    // (only chrome state follows), so route it off-thread.
+                                    self.relayout_chrome();
                                 }
                                 let _ = self.settings_store.apply_snapshot(&draft);
                                 self.settings_panel.visible = false;
@@ -10517,7 +11204,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             match hit {
                                 panels::ai_panel::AiHit::Close => {
                                     self.ai_panel.close();
-                                    self.relayout();
+                                    // Async-safe (M2.2b-6): mouse-click close is the
+                                    // counterpart of the `ToggleAiPanel` keyboard toggle
+                                    // routed off-thread in M2.2b-3 — chrome-inset shift,
+                                    // no page-geometry read (just redraw + `return`).
+                                    self.relayout_chrome();
                                     self.request_redraw();
                                 }
                                 panels::ai_panel::AiHit::Input
@@ -10549,7 +11240,11 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             match hit {
                                 panels::sidebar_panel::SidebarHit::Close => {
                                     self.sidebar.close();
-                                    self.relayout();
+                                    // Async-safe (M2.2b-6): mouse-click close is the
+                                    // counterpart of `open_sidebar_page` routed off-thread
+                                    // in M2.2b-2 — chrome-inset shift, no page-geometry
+                                    // read (just redraw + `return`).
+                                    self.relayout_chrome();
                                     self.request_redraw();
                                 }
                                 panels::sidebar_panel::SidebarHit::Content
@@ -10677,7 +11372,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     // CSS :active — clear on release.
                     if self.active_nid.is_some() {
                         self.active_nid = None;
-                        self.relayout();
+                        // ADR-016 M2.2b-5: :active clear is async-safe — the
+                        // mouseup/pointerup JS events below target `hovered_nid`,
+                        // not this reflow's geometry.
+                        self.relayout_chrome();
                         self.request_redraw();
                     }
                     // Fire mouseup + pointerup on the hovered DOM element.
@@ -10914,6 +11612,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     MouseScrollDelta::LineDelta(cols, lines) => {
                         // Mouse wheel: дискретные тики, momentum не нужен.
                         self.momentum_anim = None;
+                        self.forward_momentum_stop();
                         self.touchpad_vel = (0.0, 0.0);
                         let dx = -cols * 40.0;
                         let dy = -lines * 40.0;
@@ -10962,6 +11661,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                         let now = self.epoch.elapsed().as_secs_f64() * 1000.0;
                                         self.momentum_anim =
                                             Some(momentum_anim::MomentumAnim::new(vy, vx, now));
+                                        // ADR-016 M1.3: рендер-поток продолжит
+                                        // инерцию сам, если UI-поток застопорится.
+                                        self.forward_momentum_start(vy, vx);
                                         self.request_redraw();
                                     }
                                 }
@@ -10970,6 +11672,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             TouchPhase::Started => {
                                 // Новый жест: сбросить momentum и velocity.
                                 self.momentum_anim = None;
+                                self.forward_momentum_stop();
                                 self.touchpad_vel = (0.0, 0.0);
                                 let now = self.epoch.elapsed().as_secs_f64() * 1000.0;
                                 self.touchpad_vel_time_ms = now;
@@ -11189,8 +11892,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 if let Some(js) = &self.js_ctx {
                     let raf_due = timestamp_ms - self.last_raf_batch_ms >= RAF_MIN_INTERVAL_MS;
                     if raf_due && js.has_raf_pending() {
-                        // Consume the flag and fire the batch.
-                        js.take_raf_pending();
+                        // Consume the flag and fire the batch. ADR-016 M2.2c-2c:
+                        // `take_raf_pending` через `route_query_js` (результат
+                        // отбрасывается) — блокирующий `query` под флагом держит
+                        // очистку **перед** синхронным `run_animation_frame`; без
+                        // флага — прежний прямой вызов.
+                        route_query_js(self.engine_thread.as_ref(), Some(js), |j| {
+                            j.take_raf_pending()
+                        });
                         self.last_raf_batch_ms = timestamp_ms;
                         let raf_ts = if self.deterministic { 0.0 } else { -1.0 };
                         js.run_animation_frame(raf_ts);
@@ -11207,7 +11916,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // (setAttribute/textContent/appendChild/etc.), делаем relayout
                 // прежде чем красить, чтобы paint отражал актуальный DOM.
                 // relayout() also delivers ResizeObserver + IntersectionObserver.
-                if self.js_ctx.as_ref().is_some_and(|j| j.take_dom_dirty()) {
+                // ADR-016 M2.2c-2c: `take_dom_dirty` через `route_query_js` — под
+                // флагом чтение упорядочено за уже отправленными `task`; без флага
+                // (`unwrap_or(false)`) байт-идентично прежнему `is_some_and`.
+                if route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                    j.take_dom_dirty()
+                })
+                .unwrap_or(false)
+                {
                     self.relayout();
                 }
 
@@ -12040,6 +12756,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     r.set_canvas_background(canvas_bg);
                     if let Some(combined) = split_combined {
                         // Split-view mode: combined DL with baked scroll; renderer gets 0,0.
+                        r.set_page_offset(0.0, 0.0);
                         if let Err(err) = r.render(&combined, &overlay_buf, 0.0, 0.0) {
                             eprintln!("Ошибка рендера (split): {err:?}");
                         }
@@ -12050,31 +12767,77 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             .as_deref()
                             .or(page_buf.as_deref())
                             .unwrap_or(&self.display_list);
-                        let mut shifted: lumen_paint::DisplayList =
-                            Vec::with_capacity(base.len() + 2);
-                        shifted.push(lumen_paint::DisplayCommand::PushTransform {
-                            matrix: Mat4::translation_2d(
-                                page_x_offset,
-                                tabs::strip::TAB_BAR_HEIGHT,
-                            ),
-                        });
-                        shifted.extend_from_slice(base);
-                        // Inspector box-model overlay rides inside the page transform.
-                        shifted.extend_from_slice(&inspector_box_dl);
-                        shifted.push(lumen_paint::DisplayCommand::PopTransform);
-                        if let Err(err) = r.render(&shifted, &overlay_buf, scroll_y, scroll_x) {
-                            eprintln!("Ошибка рендера: {err:?}");
+                        // ADR-016 M0.4 fast path: когда единственная обёртка вокруг
+                        // страницы — фиксированный page-offset (нет inspector-оверлея,
+                        // который обязан ехать ВНУТРИ page-трансформа), а бэкенд умеет
+                        // накладывать смещение сам, рисуем display-list ПО ССЫЛКЕ.
+                        // Раньше каждый кадр (в т.ч. на каждом кадре инерционного
+                        // скролла) сюда копировался весь список ради одного
+                        // `PushTransform` — O(n) глубокий клон команд.
+                        if inspector_box_dl.is_empty() && r.supports_page_offset() {
+                            r.set_page_offset(page_x_offset, tabs::strip::TAB_BAR_HEIGHT);
+                            if let Err(err) = r.render(base, &overlay_buf, scroll_y, scroll_x) {
+                                eprintln!("Ошибка рендера: {err:?}");
+                            }
+                        } else {
+                            // Fallback: активен inspector-оверлей или бэкенд не
+                            // поддерживает page-offset — оборачиваем контент в
+                            // `PushTransform`, как раньше.
+                            r.set_page_offset(0.0, 0.0);
+                            let mut shifted: lumen_paint::DisplayList =
+                                Vec::with_capacity(base.len() + 2);
+                            shifted.push(lumen_paint::DisplayCommand::PushTransform {
+                                matrix: Mat4::translation_2d(
+                                    page_x_offset,
+                                    tabs::strip::TAB_BAR_HEIGHT,
+                                ),
+                            });
+                            shifted.extend_from_slice(base);
+                            // Inspector box-model overlay rides inside the page transform.
+                            shifted.extend_from_slice(&inspector_box_dl);
+                            shifted.push(lumen_paint::DisplayCommand::PopTransform);
+                            if let Err(err) = r.render(&shifted, &overlay_buf, scroll_y, scroll_x) {
+                                eprintln!("Ошибка рендера: {err:?}");
+                            }
                         }
                     }
                 }
 
                 if let Some(t0) = frame_log_t0 {
+                    let frame_ms = t0.elapsed().as_secs_f64() * 1000.0;
+                    self.frame_stats.record(frame_ms as f32);
                     eprintln!(
-                        "[frame] total {:6.2}ms  (scroll_y {:.0}, dl {} cmds)",
-                        t0.elapsed().as_secs_f64() * 1000.0,
+                        "[frame] total {frame_ms:6.2}ms  (scroll_y {:.0}, dl {} cmds)",
                         self.scroll_y,
                         self.display_list.len(),
                     );
+                    // ADR-016 M0.5: classify this frame against the previous one
+                    // via the split fingerprint (content hash ⟂ scroll/page
+                    // offset). Split-view bakes scroll into the display list, so
+                    // the content/offset split does not apply there — skip it.
+                    // Costs an O(n) content hash, but only under LUMEN_FRAME_LOG.
+                    if self.split_view.is_none() {
+                        let base: &[lumen_paint::DisplayCommand] = anim_dl
+                            .as_deref()
+                            .or(page_buf.as_deref())
+                            .unwrap_or(&self.display_list);
+                        let (sw, sh) = self.window.as_ref().map_or((1024, 720), |w| {
+                            let s = w.inner_size();
+                            (s.width, s.height)
+                        });
+                        let fp = lumen_paint::FrameFingerprint::new(
+                            base,
+                            sw,
+                            sh,
+                            (self.scroll_x, self.scroll_y),
+                            (page_x_offset, tabs::strip::TAB_BAR_HEIGHT),
+                        );
+                        match self.last_frame_fp.map(|p| fp.delta_from(&p)) {
+                            Some(d) => eprintln!("[frame] delta {d:?}"),
+                            None => eprintln!("[frame] delta first"),
+                        }
+                        self.last_frame_fp = Some(fp);
+                    }
                 }
             }
             _ => {}
@@ -12463,7 +13226,13 @@ impl Lumen {
         self.focused_node = new_focused;
         // Trigger relayout if :focus state changed so :focus / :focus-within rules update.
         if focus_changed {
-            self.relayout();
+            // ADR-016 M2.2b-7: `focused_node` is set synchronously above, so
+            // `:focus`/`:focus-within` re-evaluates on any later relayout. The
+            // subsequent JS click dispatch reads the pre-`:focus` `hit_result`
+            // (the geometry the user clicked on — correct), and any DOM mutation
+            // from those handlers takes its own generation-guarded relayout, so
+            // this pure restyle has no synchronous geometry read and goes off-thread.
+            self.relayout_chrome();
             // Notify platform accessibility bridge so screen readers can track focus.
             self.platform_bridge.focused_node_changed(new_focused);
             // Keep JS _lumen_last_focused_nid in sync so showModal() can save/restore it.
@@ -13287,14 +14056,16 @@ impl Lumen {
             }
             KeyCommand::ToggleVerticalTabs => {
                 self.vertical_tabs.toggle();
-                // Viewport width changes — re-layout the current page.
-                self.relayout();
+                // Viewport width changes — re-layout the current page (ADR-016
+                // M2.2b: chrome-inset change, off-thread when the engine is on).
+                self.relayout_chrome();
                 self.request_redraw();
             }
             KeyCommand::ToggleTreeTabs => {
                 self.tree_tabs.toggle();
-                // Viewport width changes when switching to/from tree view.
-                self.relayout();
+                // Viewport width changes when switching to/from tree view
+                // (ADR-016 M2.2b: async-safe chrome-inset relayout).
+                self.relayout_chrome();
                 self.request_redraw();
             }
             KeyCommand::FlipActiveDock => {
@@ -13306,8 +14077,9 @@ impl Lumen {
             }
             KeyCommand::ToggleWorkspaces => {
                 self.workspace_panel.toggle();
-                // Viewport height changes — re-layout so content doesn't hide under bar.
-                self.relayout();
+                // Viewport height changes — re-layout so content doesn't hide
+                // under bar (ADR-016 M2.2b: async-safe chrome-inset relayout).
+                self.relayout_chrome();
                 self.request_redraw();
             }
             KeyCommand::ToggleShields => {
@@ -13325,8 +14097,11 @@ impl Lumen {
             KeyCommand::ToggleAiPanel => {
                 self.ai_panel.toggle();
                 // AI panel occupies right PANEL_WIDTH — relayout so main content
-                // width adjusts accordingly.
-                self.relayout();
+                // width adjusts accordingly. ADR-016 M2.2b-3: async-safe chrome
+                // toggle (only the content viewport width shifts, no synchronous
+                // geometry read follows), so route off-thread when the engine
+                // thread is enabled; the panel itself draws on the redraw below.
+                self.relayout_chrome();
                 self.request_redraw();
             }
             KeyCommand::ToggleBookmarks => {
@@ -13349,7 +14124,11 @@ impl Lumen {
                     self.a11y_panel.visible = false;
                     self.deliver_a11y_media_changes();
                     // Re-style with the (possibly toggled) forced-colors pref.
-                    self.relayout();
+                    // ADR-016 M2.2b-3: async-safe — closing the a11y panel widens
+                    // the content viewport and re-styles under the new
+                    // forced-colors preference, but nothing reads page geometry
+                    // synchronously afterwards, so route off-thread when enabled.
+                    self.relayout_chrome();
                 } else {
                     self.a11y_panel.load_draft(self.a11y_store.snapshot());
                     self.a11y_panel.visible = true;
@@ -13441,15 +14220,15 @@ impl Lumen {
             }
             KeyCommand::ZoomIn => {
                 self.zoom_factor = zoom::zoom_in(self.zoom_factor);
-                self.relayout();
+                self.begin_zoom_preview();
             }
             KeyCommand::ZoomOut => {
                 self.zoom_factor = zoom::zoom_out(self.zoom_factor);
-                self.relayout();
+                self.begin_zoom_preview();
             }
             KeyCommand::ZoomReset => {
                 self.zoom_factor = zoom::zoom_reset();
-                self.relayout();
+                self.begin_zoom_preview();
             }
         }
     }
@@ -13465,15 +14244,21 @@ impl Lumen {
     /// Called when the a11y panel closes so `prefers-reduced-motion` MQLs fire.
     fn deliver_a11y_media_changes(&self) {
         #[cfg(feature = "quickjs")]
-        if let Some(js) = &self.js_ctx {
+        {
             let w = self.viewport_width_css();
             let h = self.viewport_height_css();
             let dark = if self.dark_mode { "true" } else { "false" };
             let rm = if self.a11y_store.reduced_motion() { "true" } else { "false" };
-            js.eval_js(&format!(
-                "if(typeof _lumen_deliver_media_changes==='function')\
-                 _lumen_deliver_media_changes({w},{h},{dark},{rm});"
-            ));
+            // ADR-016 M2.2d: fire-and-forget eval via route_eval_js (off-UI-thread
+            // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
+            route_eval_js(
+                self.engine_thread.as_ref(),
+                self.js_ctx.as_ref(),
+                format!(
+                    "if(typeof _lumen_deliver_media_changes==='function')\
+                     _lumen_deliver_media_changes({w},{h},{dark},{rm});"
+                ),
+            );
         }
     }
 
@@ -13645,33 +14430,41 @@ impl Lumen {
             }));
         }
         let state = serde_json::json!({ "entries": entries, "index": idx });
-        if let Some(js) = &self.js_ctx {
-            // The native binding takes a String argument, so the JSON text must
-            // be embedded as a JS string literal (double encoding) — passing a
-            // bare object literal makes the arg conversion fail and the state
-            // silently never reaches the runtime.
-            let Ok(json) = serde_json::to_string(&state) else { return };
-            let Ok(quoted) = serde_json::to_string(&json) else { return };
-            js.eval_js(&format!("_lumen_navigation_set_state({quoted})"));
-        }
+        // The native binding takes a String argument, so the JSON text must
+        // be embedded as a JS string literal (double encoding) — passing a
+        // bare object literal makes the arg conversion fail and the state
+        // silently never reaches the runtime.
+        let Ok(json) = serde_json::to_string(&state) else { return };
+        let Ok(quoted) = serde_json::to_string(&json) else { return };
+        // ADR-016 M2.2d: fire-and-forget eval via route_eval_js (off-UI-thread
+        // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
+        route_eval_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            format!("_lumen_navigation_set_state({quoted})"),
+        );
     }
 
     fn fire_navigate_success(&self) {
-        if let Some(js) = &self.js_ctx {
-            js.fire_navigate_success();
-        }
+        // ADR-016 M2.2d: fire-and-forget void via route_task_js (off-UI-thread
+        // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            j.fire_navigate_success();
+        });
     }
 
     fn fire_navigate_error(&self) {
-        if let Some(js) = &self.js_ctx {
-            js.fire_navigate_error();
-        }
+        // ADR-016 M2.2d: fire-and-forget void via route_task_js.
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            j.fire_navigate_error();
+        });
     }
 
     fn fire_current_entry_change(&self) {
-        if let Some(js) = &self.js_ctx {
-            js.fire_current_entry_change();
-        }
+        // ADR-016 M2.2d: fire-and-forget void via route_task_js.
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            j.fire_current_entry_change();
+        });
     }
 
     /// Whether the current page may be stored as a full bfcache freeze.
@@ -13696,7 +14489,7 @@ impl Lumen {
         let doc_arc = Arc::new(Mutex::new(doc));
         self.layout_source = Some(LayoutSource {
             document: Arc::clone(&doc_arc),
-            stylesheet,
+            stylesheet: Arc::new(stylesheet),
             html_source: None,
         });
         #[cfg(feature = "quickjs")]
@@ -13732,7 +14525,7 @@ impl Lumen {
                     ) {
                         eprintln!("bfcache thaw: JS DOM init failed: {e}");
                     }
-                    self.js_ctx = Some(Box::new(QuickPersistentJs { rt }) as Box<dyn PersistentJs>);
+                    self.js_ctx = Some(Arc::new(QuickPersistentJs { rt }) as Arc<dyn PersistentJs>);
                 }
                 Err(e) => {
                     eprintln!("bfcache thaw: QuickJS init failed: {e}");
@@ -13744,6 +14537,9 @@ impl Lumen {
         {
             self.js_ctx = None;
         }
+        // ADR-016 M2.2c-2b: зеркалим восстановленный (или сброшенный) хэндл + DOM
+        // в движковый поток после bfcache-thaw.
+        self.sync_engine_js_state();
         self.relayout();
         self.scroll_x = entry.scroll_x;
         self.scroll_y = entry.scroll_y;
@@ -13751,9 +14547,13 @@ impl Lumen {
         if let Some(w) = self.window.as_ref() {
             w.set_title(&window_title(self.title.as_deref()));
         }
-        if let Some(js) = &self.js_ctx {
-            js.eval_js("_lumen_fire_page_lifecycle('pageshow', true)");
-        }
+        // ADR-016 M2.2d: fire-and-forget eval via route_eval_js (off-UI-thread
+        // under LUMEN_ENGINE_THREAD=1; byte-identical sync call when off).
+        route_eval_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            "_lumen_fire_page_lifecycle('pageshow', true)".to_string(),
+        );
         self.request_redraw();
         self.commit_nav_state();
         true
@@ -13766,18 +14566,30 @@ impl Lumen {
     /// затем загрузить `source` как новую страницу.
     /// Очищает `nav_fwd` (аналог браузера при навигации вперёд из середины истории).
     fn navigate_to(&mut self, source: PageSource) {
-        if let Some(js) = &self.js_ctx {
-            let url = source.url_str().unwrap_or("");
-            js.eval_js(&format!("_lumen_dispatch_navigate('push', '{url}', true, false)"));
+        // ADR-016 M2.2c-2d: nav dispatch (fire-and-forget) через `route_task_js` +
+        // read-after-eval intercept-чтение через `route_query_js`. Под флагом
+        // (`LUMEN_ENGINE_THREAD=1`) dispatch уходит off-UI-thread одним `task`, а
+        // блокирующий `query` встаёт в очередь **после** него — read-after-eval
+        // порядок сохранён; без флага — прежние синхронные вызовы, байт-идентично.
+        {
+            let url = source.url_str().unwrap_or("").to_string();
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                j.eval_js(&format!("_lumen_dispatch_navigate('push', '{url}', true, false)"));
+            });
         }
-        if let Some(js) = &self.js_ctx {
-            let intercept = js.take_nav_intercept_result();
+        if let Some(intercept) = route_query_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            |j| j.take_nav_intercept_result(),
+        ) {
             if let Some(&(true, false)) = intercept.last() {
                 self.pending_intercepted = Some(PendingIntercepted::Push {
                     url: source.url_str().unwrap_or("").to_string(),
                     handler_started: false,
                 });
-                js.eval_js("_lumen_run_navigate_handler()");
+                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                    j.eval_js("_lumen_run_navigate_handler()");
+                });
                 if let Some(PendingIntercepted::Push { handler_started, .. }) =
                     self.pending_intercepted.as_mut()
                 {
@@ -13803,7 +14615,9 @@ impl Lumen {
             && let Ok(dom_bytes) = guard.to_bytes()
         {
             drop(guard);
-            self.frozen_styles.insert(url.to_owned(), ls.stylesheet.clone());
+            // `frozen_styles` keeps an owned `Stylesheet` (cold freeze path), so
+            // deep-clone out of the `Arc` snapshot here.
+            self.frozen_styles.insert(url.to_owned(), (*ls.stylesheet).clone());
             // Lazy prune: if we have too many stylesheets, drop those whose
             // corresponding bfcache entries are no longer frozen.
             if self.frozen_styles.len() > 32 {
@@ -13870,18 +14684,27 @@ impl Lumen {
     /// Перейти на `source`, заменяя текущую запись истории (без push в back-stack).
     /// Аналог `history.replaceState` / `location.replace()` в браузере.
     fn navigate_replace(&mut self, source: PageSource) {
-        if let Some(js) = &self.js_ctx {
-            let url = source.url_str().unwrap_or("");
-            js.eval_js(&format!("_lumen_dispatch_navigate('replace', '{url}', true, false)"));
+        // ADR-016 M2.2c-2d: см. `navigate_to` — dispatch через `route_task_js`,
+        // intercept-чтение через `route_query_js` (read-after-eval порядок под флагом).
+        {
+            let url = source.url_str().unwrap_or("").to_string();
+            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                j.eval_js(&format!("_lumen_dispatch_navigate('replace', '{url}', true, false)"));
+            });
         }
-        if let Some(js) = &self.js_ctx {
-            let intercept = js.take_nav_intercept_result();
+        if let Some(intercept) = route_query_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            |j| j.take_nav_intercept_result(),
+        ) {
             if let Some(&(true, false)) = intercept.last() {
                 self.pending_intercepted = Some(PendingIntercepted::Replace {
                     url: source.url_str().unwrap_or("").to_string(),
                     handler_started: false,
                 });
-                js.eval_js("_lumen_run_navigate_handler()");
+                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                    j.eval_js("_lumen_run_navigate_handler()");
+                });
                 if let Some(PendingIntercepted::Replace { handler_started, .. }) =
                     self.pending_intercepted.as_mut()
                 {
@@ -13904,16 +14727,23 @@ impl Lumen {
 
     /// Перейти на предыдущую страницу в истории (Alt+Left).
     fn navigate_back(&mut self) {
-        if let Some(js) = &self.js_ctx {
-            js.eval_js("_lumen_dispatch_navigate('traverse', '', true, false)");
-        }
-        if let Some(js) = &self.js_ctx {
-            let intercept = js.take_nav_intercept_result();
+        // ADR-016 M2.2c-2d: см. `navigate_to` — dispatch через `route_task_js`,
+        // intercept-чтение через `route_query_js` (read-after-eval порядок под флагом).
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            j.eval_js("_lumen_dispatch_navigate('traverse', '', true, false)");
+        });
+        if let Some(intercept) = route_query_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            |j| j.take_nav_intercept_result(),
+        ) {
             if let Some(&(true, false)) = intercept.last() {
                 self.pending_intercepted = Some(PendingIntercepted::Back {
                     handler_started: false,
                 });
-                js.eval_js("_lumen_run_navigate_handler()");
+                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                    j.eval_js("_lumen_run_navigate_handler()");
+                });
                 if let Some(PendingIntercepted::Back { handler_started }) =
                     self.pending_intercepted.as_mut()
                 {
@@ -14023,16 +14853,23 @@ impl Lumen {
 
     /// Перейти на следующую страницу в истории (Alt+Right).
     fn navigate_forward(&mut self) {
-        if let Some(js) = &self.js_ctx {
-            js.eval_js("_lumen_dispatch_navigate('traverse', '', true, false)");
-        }
-        if let Some(js) = &self.js_ctx {
-            let intercept = js.take_nav_intercept_result();
+        // ADR-016 M2.2c-2d: см. `navigate_to` — dispatch через `route_task_js`,
+        // intercept-чтение через `route_query_js` (read-after-eval порядок под флагом).
+        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+            j.eval_js("_lumen_dispatch_navigate('traverse', '', true, false)");
+        });
+        if let Some(intercept) = route_query_js(
+            self.engine_thread.as_ref(),
+            self.js_ctx.as_ref(),
+            |j| j.take_nav_intercept_result(),
+        ) {
             if let Some(&(true, false)) = intercept.last() {
                 self.pending_intercepted = Some(PendingIntercepted::Forward {
                     handler_started: false,
                 });
-                js.eval_js("_lumen_run_navigate_handler()");
+                route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                    j.eval_js("_lumen_run_navigate_handler()");
+                });
                 if let Some(PendingIntercepted::Forward { handler_started }) =
                     self.pending_intercepted.as_mut()
                 {
@@ -14436,7 +15273,11 @@ impl Lumen {
                         eprintln!("sidebar: не удалось загрузить {sidebar_url}: {err}");
                         // Open panel with placeholder so user sees feedback.
                         self.sidebar.open(sidebar_url);
-                        self.relayout();
+                        // ADR-016 M2.2b-8: the sidebar becoming visible narrows the
+                        // main page's content viewport — the same async-safe
+                        // chrome-inset relayout the success path already routes off
+                        // the UI thread (`open_sidebar_page`, M2.2b-3).
+                        self.relayout_chrome();
                         self.request_redraw();
                     }
                 }
@@ -14795,7 +15636,10 @@ impl Lumen {
         match code {
             KeyCode::Escape if !key_event.repeat => {
                 self.ai_panel.close();
-                self.relayout();
+                // ADR-016 M2.2b-3: closing the AI panel is an async-safe chrome
+                // toggle (content viewport widens, no synchronous geometry read),
+                // so route off-thread when the engine thread is enabled.
+                self.relayout_chrome();
                 self.request_redraw();
                 true
             }
@@ -15328,7 +16172,8 @@ impl Lumen {
         }
         self.panel_layout.set_dock(id, target);
         self.panel_layout.save();
-        self.relayout();
+        // ADR-016 M2.2b: dock side flip shifts the content viewport; async-safe.
+        self.relayout_chrome();
         true
     }
 
@@ -15392,7 +16237,10 @@ impl Lumen {
         };
         let new_w = dock.width_from_cursor(x_css, self.viewport_width_css());
         if self.panel_layout.set_width(id, new_w) {
-            self.relayout();
+            // ADR-016 M2.2b: docked-panel resize changes the content viewport
+            // width; async-safe (the drag edge itself follows the cursor via the
+            // immediate redraw, only the page reflow underneath is deferred).
+            self.relayout_chrome();
             true
         } else {
             false
@@ -15425,7 +16273,7 @@ impl Lumen {
         let doc_arc = Arc::new(Mutex::new(doc));
         let src = LayoutSource {
             document: doc_arc,
-            stylesheet: sheet,
+            stylesheet: Arc::new(sheet),
             html_source: None,
         };
 
@@ -15442,7 +16290,9 @@ impl Lumen {
         self.sidebar_source = Some(src);
 
         if !was_visible {
-            self.relayout();
+            // ADR-016 M2.2b: the sidebar becoming visible narrows the main page's
+            // content viewport; async-safe chrome-inset relayout.
+            self.relayout_chrome();
         }
         self.request_redraw();
     }
@@ -15772,7 +16622,8 @@ impl Lumen {
                 PaletteAction::BookmarkCurrentPage => self.bookmark_current_page(),
                 PaletteAction::ToggleVerticalTabs => {
                     self.vertical_tabs.toggle();
-                    self.relayout();
+                    // ADR-016 M2.2b: async-safe chrome-inset relayout.
+                    self.relayout_chrome();
                 }
                 PaletteAction::ToggleDevConsole => self.devtools_console.toggle(),
                 PaletteAction::ToggleShields => self.shields.toggle(),
@@ -16199,6 +17050,26 @@ impl Lumen {
         }
     }
 
+    /// ADR-016 M1.3: передать активную инерцию рендер-потоку, чтобы презентация
+    /// продолжалась на vsync, даже если UI-поток застопорится (долгий JS-тик).
+    /// No-op на однопоточном бэкенде (метод трейта по умолчанию пустой), поэтому
+    /// при выключенном `LUMEN_RENDER_THREAD` поведение не меняется.
+    fn forward_momentum_start(&mut self, vel_y: f32, vel_x: f32) {
+        let max_y = self.max_scroll();
+        let max_x = self.max_scroll_x();
+        if let Some(r) = self.renderer.as_mut() {
+            r.start_render_momentum(vel_y, vel_x, max_y, max_x);
+        }
+    }
+
+    /// ADR-016 M1.3: отменить render-side инерцию (новый жест, навигация, конец
+    /// анимации). No-op на однопоточном бэкенде.
+    fn forward_momentum_stop(&mut self) {
+        if let Some(r) = self.renderer.as_mut() {
+            r.stop_render_momentum();
+        }
+    }
+
     /// Тик momentum-анимации. Обновляет `scroll_y` / `scroll_x` напрямую
     /// (без smooth-scroll анимации). Возвращает `true` пока анимация жива.
     fn advance_momentum(&mut self, now_ms: f64) -> bool {
@@ -16220,6 +17091,9 @@ impl Lumen {
         }
         if done {
             self.momentum_anim = None;
+            // Инерция иссякла — снять владение с рендер-потока (он также
+            // самозавершается по тому же порогу, но явная отмена детерминирует).
+            self.forward_momentum_stop();
             false
         } else {
             true
@@ -16905,7 +17779,7 @@ impl Lumen {
 
         let layout_source = LayoutSource {
             document: Arc::clone(&document_arc),
-            stylesheet,
+            stylesheet: Arc::new(stylesheet),
             html_source: None,
         };
 
@@ -16937,6 +17811,8 @@ impl Lumen {
         self.cv_skipped.clear();
         self.refresh_cv_state();
         self.js_ctx = js_ctx;
+        // ADR-016 M2.2c-2b: зеркалим восстановленный хэндл + DOM в движковый поток.
+        self.sync_engine_js_state();
         self.scroll_x = data.scroll_x;
         self.scroll_y = data.scroll_y;
         self.content_height = content_height_of(&self.display_list);
@@ -17242,6 +18118,8 @@ impl Lumen {
         self.current_history_state_json = snap.current_history_state_json;
         self.reader_original_source = snap.reader_original_source;
         self.cert_info = snap.cert_info;
+        // ADR-016 M2.2c-2b: зеркалим хэндл + DOM восстановленной вкладки в поток.
+        self.sync_engine_js_state();
         // Notify platform bridge with the restored tab's accessibility tree.
         self.update_platform_ax_tree();
     }
@@ -17314,7 +18192,10 @@ impl Lumen {
         // Cancel in-flight scroll animations.
         self.scroll_anim = None;
         self.momentum_anim = None;
+        self.forward_momentum_stop();
         self.scroll_drag = None;
+        // ADR-016 M2.2c-2b: очищаем хэндл + DOM в движковом потоке для чистой вкладки.
+        self.sync_engine_js_state();
     }
 
     /// Open a new blank tab.
@@ -18254,22 +19135,163 @@ mod tests {
     // Финальный render (`render_bytes`) уезжает на фоновый поток, а готовый
     // результат пересылается назад через `LoadEvent::RenderDone`. Это работает
     // только если весь груз — `Send`: `RenderOutcome` (включая JS-хэндл за
-    // `Box<dyn PersistentJs>`), сам `LoadEvent` и proxy. Регрессионная защита:
+    // `Arc<dyn PersistentJs>`), сам `LoadEvent` и proxy. Регрессионная защита:
     // если кто-то добавит `!Send`-поле в `LoadedPage`/`LayoutSource` или снимет
-    // `Send` с `PersistentJs`, эти ассерты перестанут компилироваться.
+    // `Send`/`Sync` с `PersistentJs`, эти ассерты перестанут компилироваться.
 
     fn _assert_send<T: Send>() {}
+    fn _assert_sync<T: Sync>() {}
 
     #[test]
     fn render_pipeline_payload_is_send() {
         // Груз, пересекающий границу рендер-поток → UI-поток.
         _assert_send::<RenderOutcome>();
         _assert_send::<LoadEvent>();
-        _assert_send::<Box<dyn PersistentJs>>();
+        _assert_send::<Arc<dyn PersistentJs>>();
         _assert_send::<EventLoopProxy<LoadEvent>>();
         // Аргументы, уезжающие в рендер-поток.
         _assert_send::<Arc<KnuthLiangHyphenation>>();
         _assert_send::<RawPage>();
+        // ADR-016 M2.2c-2b: хэндл разделяется между UI- и движковым потоком за
+        // `Arc<dyn PersistentJs>`, поэтому обязан быть `Send + Sync`. Если кто-то
+        // снимет `Sync` с `PersistentJs`, эта строка перестанет компилироваться.
+        _assert_sync::<Arc<dyn PersistentJs>>();
+    }
+
+    // ── ADR-016 M2.2c-2b: engine-thread owns EngineJsState ──────────────────
+
+    #[test]
+    fn engine_js_state_default_is_empty() {
+        // Свежее состояние движкового потока — без хэндла и без DOM (заполняется
+        // `sync_engine_js_state` при первой загрузке страницы).
+        let state = EngineJsState::default();
+        assert!(state.js.is_none());
+        assert!(state.document.is_none());
+    }
+
+    #[test]
+    fn engine_thread_carries_and_mutates_js_state() {
+        // Реальный тип состояния shell (`EngineJsState`) живёт на движковом потоке:
+        // `task` кладёт разделяемый `Document` (как это делает `sync_engine_js_state`),
+        // `query` читает его обратно — end-to-end проверка, что зеркалирование
+        // хэндла/DOM в состояние работает через настоящий `EngineThread<_, S>`.
+        let engine = engine_thread::EngineThread::<u64, EngineJsState>::spawn()
+            .expect("spawn engine thread");
+        // Пусто до первого task (аналог движкового потока сразу после старта).
+        assert_eq!(engine.query(|s| s.document.is_some()), Some(false));
+        let doc = Arc::new(Mutex::new(lumen_html_parser::parse("<p>hi</p>")));
+        engine.task(move |s| s.document = Some(doc));
+        // query исполняется после task (упорядоченный канал) → DOM на месте.
+        assert_eq!(engine.query(|s| s.document.is_some()), Some(true));
+    }
+
+    #[test]
+    fn route_eval_js_without_handle_is_noop() {
+        // Флаг выключен и хэндла нет: маршрутизатор не должен паниковать и просто
+        // ничего не делает (байт-идентично прежнему `if let Some(js) = … {}`).
+        route_eval_js(None, None, "_lumen_run_navigate_handler()".to_owned());
+    }
+
+    #[test]
+    fn route_query_js_without_handle_is_none() {
+        // Флаг выключен (`engine = None`) и хэндла нет (`js = None`): value-returning
+        // маршрутизатор возвращает `None` → вызывающая сторона подставит ветку
+        // «без JS» (напр. `unwrap_or(false)`), байт-идентично `js_ctx == None`.
+        let r: Option<bool> = route_query_js(None, None, |j| j.take_dom_dirty());
+        assert_eq!(r, None);
+    }
+
+    #[test]
+    fn route_query_js_flag_on_without_synced_handle_is_none() {
+        // Флаг включён (движковый поток есть), но `EngineJsState.js` ещё не
+        // зеркалирован (`sync_engine_js_state` не вызывался) → внутренний
+        // `state.js.map(read)` даёт `None`, `flatten` схлопывает до `None`.
+        // Замыкание `read` при этом НЕ исполняется — хэндла нет.
+        let engine = engine_thread::EngineThread::<EngineCommit, EngineJsState>::spawn()
+            .expect("spawn engine thread");
+        let r: Option<bool> =
+            route_query_js(Some(&engine), None, |j| j.take_dom_dirty());
+        assert_eq!(r, None);
+    }
+
+    #[test]
+    fn route_query_js_nav_reads_without_handle_default_to_no_op() {
+        // ADR-016 M2.2c-2c (остаток): nav/timer/nav-update чтения используют тот же
+        // `route_query_js`, но с более богатыми типами возврата (`Option<_>` и `Vec<_>`).
+        // Без хэндла (`engine = None`, `js = None`) внешний `Option` = `None`, поэтому
+        // `flatten`/`unwrap_or_default` в вызывающих сайтах дают ту же ветку «без JS»,
+        // что и прежние прямые вызовы: нет навигации, нет wakeup, пустой дренаж.
+        let nav: Option<Option<JsNavigateRequest>> =
+            route_query_js(None, None, |j| j.take_navigate_request());
+        assert!(nav.flatten().is_none());
+        let wakeup: Option<Option<f64>> =
+            route_query_js(None, None, |j| j.take_timer_wakeup());
+        assert!(wakeup.flatten().is_none());
+        let navs: Option<Vec<(u8, String, String, String)>> =
+            route_query_js(None, None, |j| j.take_nav_updates());
+        assert!(navs.unwrap_or_default().is_empty());
+    }
+
+    #[test]
+    fn route_query_js_canvas_history_drains_without_handle_default_to_empty() {
+        // ADR-016 M2.2c-2d: canvas/history per-tick дренажи в `about_to_wait`
+        // маршрутизируются тем же `route_query_js`. Без хэндла (`engine = None`,
+        // `js = None`) внешний `Option` = `None`, поэтому `unwrap_or_default` в
+        // вызывающих сайтах даёт пустой `Vec` — та же ветка «без JS», что и прежние
+        // прямые `js_ctx.map(<drain>).unwrap_or_default()`.
+        // Тип `R` выводится из возвращаемого значения замыкания — явную аннотацию
+        // не пишем (сложный кортеж `flush_canvas_updates` иначе триггерит
+        // clippy::type_complexity); цепляем `unwrap_or_default` сразу.
+        let canvas = route_query_js(None, None, |j| j.flush_canvas_updates()).unwrap_or_default();
+        assert!(canvas.is_empty());
+        let hist_url = route_query_js(None, None, |j| j.take_history_url_updates()).unwrap_or_default();
+        assert!(hist_url.is_empty());
+        let hist_go = route_query_js(None, None, |j| j.take_history_traversals()).unwrap_or_default();
+        assert!(hist_go.is_empty());
+    }
+
+    #[test]
+    fn route_query_js_nav_intercept_without_handle_defaults_to_no_op() {
+        // ADR-016 M2.2c-2d: последнее синхронное read-after-eval чтение —
+        // `take_nav_intercept_result` в nav-методах (`navigate_to`/`_replace`/
+        // `_back`/`_forward`) — маршрутизируется тем же `route_query_js`. Без хэндла
+        // (`engine = None`, `js = None`) внешний `Option` = `None`, поэтому вызывающий
+        // `if let Some(intercept) = …` пропускает весь intercept-блок — та же ветка
+        // «без JS», что и прежний `if let Some(js) = &self.js_ctx { … }`.
+        let intercept: Option<Vec<(bool, bool)>> =
+            route_query_js(None, None, |j| j.take_nav_intercept_result());
+        assert!(intercept.is_none());
+    }
+
+    // ── ADR-016 M2.2c-2d: generic void-action router (pump/tick batch) ──────
+
+    #[test]
+    fn route_task_js_without_handle_is_noop() {
+        // Флаг выключен и хэндла нет: обобщённый void-маршрутизатор не паникует и
+        // действие не исполняется (байт-идентично прежнему `if let Some(js) = … {}`).
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ran2 = Arc::clone(&ran);
+        route_task_js(None, None, move |_j| {
+            ran2.store(true, std::sync::atomic::Ordering::SeqCst)
+        });
+        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn route_task_js_flag_on_without_synced_handle_skips_action() {
+        // Флаг включён (движковый поток есть), но `EngineJsState.js` ещё не
+        // зеркалирован → задача исполняется на потоке, но `state.js == None`, поэтому
+        // само действие (pump-батч) пропускается. Барьер-`query` упорядочен после
+        // `task`, так что к моменту проверки задача гарантированно отработала.
+        let engine = engine_thread::EngineThread::<EngineCommit, EngineJsState>::spawn()
+            .expect("spawn engine thread");
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let ran2 = Arc::clone(&ran);
+        route_task_js(Some(&engine), None, move |_j| {
+            ran2.store(true, std::sync::atomic::Ordering::SeqCst)
+        });
+        let _ = engine.query(|_s| ());
+        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     // ── Fullscreen viewport reconciliation (BUG-167) ────────────────────────

@@ -61,6 +61,34 @@ impl MomentumAnim {
     }
 }
 
+/// Скорость момента в момент `t_ms`, если в `t0_ms` она была `v0`
+/// (CSS px/ms). Чисто-функциональный сэмпл экспоненциального затухания
+/// `v0 · exp(−k·Δt)` — без внутреннего состояния, поэтому одинаково
+/// вычислим на UI- и на рендер-потоке (ADR-016 M1.3).
+///
+/// `Δt` клампится в `≥ 0`, так что «время в прошлом» возвращает `v0`.
+pub fn velocity_at(v0: f32, t0_ms: f64, t_ms: f64) -> f32 {
+    let dt = (t_ms - t0_ms).max(0.0);
+    v0 * (-DECAY_K * dt).exp() as f32
+}
+
+/// Полное смещение (CSS px) от точки отсчёта за интервал `[t0_ms, t_ms]`,
+/// если в `t0_ms` скорость равнялась `v0`: `Δp = v0/k · (1 − exp(−k·Δt))`.
+///
+/// Stateless-аналог [`MomentumAnim::advance`], но без побочных эффектов и без
+/// зависимости от каденции тиков — рендер-поток (ADR-016 M1.3) продолжает
+/// momentum из последнего закоммиченного кадра, вычисляя абсолютное смещение,
+/// а не аккумулируя пошаговые дельты (иначе накапливался бы дрейф).
+/// `Δt` клампится в `≥ 0`.
+pub fn displacement_since(v0: f32, t0_ms: f64, t_ms: f64) -> f32 {
+    let dt = (t_ms - t0_ms).max(0.0);
+    if dt <= 0.0 {
+        return 0.0;
+    }
+    let exp_decay = (-DECAY_K * dt).exp() as f32;
+    v0 * (1.0 - exp_decay) / DECAY_K as f32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,5 +165,46 @@ mod tests {
         assert!(dx > 0.0);
         // dx должен быть примерно вдвое больше dy (v_x = 2×v_y).
         assert!((dx / dy - 2.0).abs() < 0.01, "dx/dy={}", dx / dy);
+    }
+
+    #[test]
+    fn velocity_at_matches_half_life() {
+        // Через один half-life скорость вдвое меньше.
+        assert!((velocity_at(1.0, 0.0, HALF_LIFE_MS) - 0.5).abs() < 0.01);
+        // «Время в прошлом» клампится — возвращает v0.
+        assert_eq!(velocity_at(1.0, 100.0, 50.0), 1.0);
+    }
+
+    #[test]
+    fn displacement_since_matches_stateful_advance() {
+        // Stateless-сэмпл должен совпасть с суммой пошаговых advance() до 0.5%
+        // — это гарант, что рендер-сторона (M1.3) не расходится с UI-стороной.
+        let v0 = 1.5_f32;
+        let mut m = MomentumAnim::new(v0, 0.0, 0.0);
+        let mut stepwise = 0.0_f32;
+        let mut t = 0.0_f64;
+        for _ in 0..60 {
+            t += 16.0;
+            let (dy, _, _) = m.advance(t);
+            stepwise += dy;
+        }
+        let stateless = displacement_since(v0, 0.0, t);
+        let diff = (stepwise - stateless).abs() / stateless.abs();
+        assert!(diff < 0.005, "stepwise={stepwise}, stateless={stateless}");
+    }
+
+    #[test]
+    fn displacement_since_zero_dt_is_zero() {
+        assert_eq!(displacement_since(2.0, 100.0, 100.0), 0.0);
+        assert_eq!(displacement_since(2.0, 100.0, 50.0), 0.0);
+    }
+
+    #[test]
+    fn displacement_since_total_bounded() {
+        // За «бесконечное» время смещение стремится к v0/k.
+        let v0 = 1.0_f32;
+        let total = displacement_since(v0, 0.0, 1_000_000.0);
+        let expected = v0 / (std::f64::consts::LN_2 / HALF_LIFE_MS) as f32;
+        assert!((total - expected).abs() / expected < 0.001, "total={total}");
     }
 }

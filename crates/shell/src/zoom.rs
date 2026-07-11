@@ -32,6 +32,30 @@ pub fn zoom_reset() -> f32 {
     ZOOM_DEFAULT
 }
 
+/// Debounce delay before a transform-first zoom step triggers a full relayout
+/// (ADR-016 M0.3). Ctrl+/-/0 applies an immediate scale transform to the
+/// retained display list; the expensive relayout runs once, this long after the
+/// *last* zoom step, so a rapid burst of key presses reflows only once.
+pub const ZOOM_RELAYOUT_DEBOUNCE_MS: u64 = 180;
+
+/// Preview scale for transform-first zoom (ADR-016 M0.3).
+///
+/// The retained display list was laid out at `laid_out_zoom`; the user has since
+/// moved zoom to `zoom_factor`. Until the debounced relayout runs, the backend
+/// scales the existing display list by this ratio so the change is visible
+/// immediately. Returns `1.0` (no preview) when either factor is non-positive or
+/// non-finite.
+pub fn preview_scale(zoom_factor: f32, laid_out_zoom: f32) -> f32 {
+    if !zoom_factor.is_finite()
+        || !laid_out_zoom.is_finite()
+        || zoom_factor <= 0.0
+        || laid_out_zoom <= 0.0
+    {
+        return 1.0;
+    }
+    zoom_factor / laid_out_zoom
+}
+
 /// Compute the CSS layout viewport size from the physical window size.
 ///
 /// `meta_initial_scale` comes from `<meta name=viewport initial-scale=N>` (default 1.0).
@@ -64,6 +88,28 @@ mod tests {
     #[test]
     fn zoom_reset_returns_default() {
         assert_eq!(zoom_reset(), ZOOM_DEFAULT);
+    }
+
+    #[test]
+    fn preview_scale_identity_when_unchanged() {
+        assert!((preview_scale(1.0, 1.0) - 1.0).abs() < 1e-6);
+        assert!((preview_scale(2.0, 2.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn preview_scale_ratio() {
+        // laid out at 1.0, zoomed to 1.1 → preview by 1.1×.
+        assert!((preview_scale(1.1, 1.0) - 1.1).abs() < 1e-6);
+        // laid out at 2.0, zoomed back to 1.0 → shrink by half.
+        assert!((preview_scale(1.0, 2.0) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn preview_scale_guards_degenerate() {
+        assert_eq!(preview_scale(0.0, 1.0), 1.0);
+        assert_eq!(preview_scale(1.0, 0.0), 1.0);
+        assert_eq!(preview_scale(f32::NAN, 1.0), 1.0);
+        assert_eq!(preview_scale(f32::INFINITY, 1.0), 1.0);
     }
 
     #[test]

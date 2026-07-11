@@ -44,6 +44,14 @@ LUMEN_FRAME_LOG=1 cargo run -p lumen-shell -- samples/page.html
 # mouse-wheel scrolling down/up, collects the [frame] log and prints avg/p50/max
 # frame time + effective FPS. Honors an external LUMEN_FRAME_LOG=2.
 python scripts/scroll_perf.py graphic_tests/1000000-final.html --ticks 25
+
+# MT stall baseline (ADR-016 M2.2c-0): does a JS busy-loop freeze scroll today?
+# Scrolls samples/mt-busy-loop.html (200ms CPU burn per rAF) and timestamps each
+# [frame] line as it arrives, reporting the DELIVERED cadence — inter-frame gap
+# p50/p95/max, delivered FPS, scroll_y travel — which scroll_perf.py's paint-bound
+# FPS ceiling can't see. Baseline today: ~2.4 fps, ~404ms gaps (frozen). Control:
+# edit BUSY_MS=0 in the page → ~28 fps. This is the number M2.2c must beat.
+python scripts/mt_stall_bench.py --secs 6
 ```
 
 ---
