@@ -491,6 +491,74 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
       Remaining sync-geometry sites (DOM mutation → geometry read, form input, resize,
       `content-visibility` expansion, rAF DOM-dirty) still need per-site analysis and
       stay synchronous. No new deps, no `unsafe`.
+    - **M2.2b-8 — off-thread layout for the last async-safe stragglers.** ✅ (branch
+      `p1-mt-m2-2b-8-strays`, merged into `zcode`, 2026-07-11). Routes the final three
+      async-safe triggers through `Lumen::relayout_chrome()`: the web-font FOUT→FOIT
+      swap (`LoadEvent::FontFace` — whole-page restyle, the just-pushed font is in the
+      `web_fonts` snapshot the job captures, so the off-thread reflow sees it); the
+      `:hover` clear on `CursorLeft` (same async-safe restyle as the in-window hover
+      flip of M2.2b-5, leave-events target the old node not this reflow); and the
+      sidebar error-placeholder open (content-viewport narrowing identical to the
+      success path `open_sidebar_page` already routed in M2.2b-3). Flag off (default)
+      → byte-identical synchronous `relayout()`. 3 sites converted (24 → 21 sync
+      callers at merge time). No new deps, no `unsafe`.
+    - **M2.2b — CLOSED (async-safe routing exhausted, 2026-07-11).** After M2.2b-8
+      every *async-safe* `relayout()` trigger (all interactive restyles + all
+      chrome-inset shifts) runs off-thread through `relayout_chrome()`. The ~22
+      `self.relayout()` sites that remain are **synchronous by design** — each was
+      audited and reads page geometry in the same tick or depends on `js_ctx`, so it
+      cannot use `submit_relayout_job`'s "no synchronous geometry read after" contract:
+      - **resize** (`WindowEvent::Resized`, `poll_fullscreen_resize`) — followed
+        immediately by `deliver_observer_records(Resize)`, which reports the *new*
+        element sizes; deferral would fire ResizeObserver against stale geometry.
+      - **content-visibility expansion** (`maybe_expand_cv_relevant`) — the very next
+        `about_to_wait` step reads `self.layout_box` for ScrollTimeline block/inline
+        progress; deferral staleness the brief's gotcha flags. Becomes a visible-range
+        message in M3, not a plain `relayout_chrome` swap.
+      - **`:target` cascade + navigation scroll** (`self.relayout()` before
+        scroll-into-view of the fragment target) — reads the target's post-layout box.
+      - **form control input / clicks** (color/date/select commit, checkbox/radio
+        toggle, textarea/contenteditable edit) — direct-manipulation; caret/hit-test
+        and follow-up JS read the fresh geometry synchronously.
+      - **rAF DOM-dirty** (`raf_dom_dirty`, observer DOM-dirty) and **js_ctx teardown**
+        — bound to `js_ctx` on the UI thread; these are the M2.2c endgame, not M2.2b.
+
+      The one arguable exception (spellcheck-replace, `SpellMenuAction::Replace`) is a
+      rare context-menu action off any hot path, so routing it off-thread buys no
+      stall reduction and is intentionally left synchronous. **Conclusion: no further
+      trivial `relayout_chrome` slice exists; the remaining conversions require M2.2c.**
+  - **M2.2c — engine owns `Document` + `js_ctx` (the M2 endgame, L).** The remaining
+    sync sites cannot move with the M2.2a/b pattern (capture-`Arc`-snapshot → compute
+    → apply) because they mutate the DOM through `js_ctx` and/or read geometry in the
+    same tick. This slice moves ownership of the mutable `Document` and the `lumen-js`
+    handle to the engine thread so DOM-mutation → style → layout → observer delivery
+    all happen off the UI thread and the UI thread shrinks to OS events + input
+    forwarding + chrome. Proposed sub-slices (each independently shippable into
+    `zcode`, mirroring M0/M1/M2.2a-b; **measure first**, then move one site class at a
+    time behind `LUMEN_ENGINE_THREAD`):
+    - **M2.2c-0 — acceptance baseline (measure).** Prerequisite like M2.0/M0.1: a
+      test page running a 200 ms JS busy-loop per rAF + a documented `LUMEN_FRAME_LOG`
+      recipe; record that today input/scroll *does* freeze during the busy-loop
+      (JS is a blocking round-trip on the UI thread) — the number M2.2c must beat.
+    - **M2.2c-1 — request/reply geometry readback.** Add `Request::Readback { reply:
+      SyncSender }` so a UI-thread caller that needs fresh geometry right after a
+      relayout (hit-test, caret, scrollIntoView) can block for exactly that one
+      result instead of running layout inline. Unblocks routing the geometry-reading
+      sites without changing their observable semantics.
+    - **M2.2c-2 — move `js_ctx` ownership to the engine thread.** The hard core:
+      `js_ctx` is touched by dozens of UI-thread event paths (scroll-Y sync, event
+      dispatch, observer delivery, matchMedia, lazy-image drain). Introduce an
+      engine-side owner + a typed message for each UI→JS call currently done inline,
+      so the UI thread stops holding the JS handle. Do this incrementally: shim each
+      call site to a message, keep behavior identical with the flag off.
+    - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
+      `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
+      engine-thread jobs (mutate DOM → layout → deliver observers there), with any
+      synchronous geometry read served by M2.2c-1's readback.
+    - **M2.2c-4 — content-visibility as a visible-range message.** Replace
+      `maybe_expand_cv_relevant`'s direct `relayout()` with a visible-range message to
+      the engine (never a render-thread → layout call, per the brief gotcha); make
+      the ScrollTimeline step tolerate a one-frame-late cv layout.
 - **M2.3 — synchronous readback + acceptance.** `--screenshot`, `run.py --ipc`,
   CDP `Page.captureScreenshot` become `Request::Readback { reply }` messages
   (audit all `screenshot_*` sites first — most are already CPU per the M1.1
