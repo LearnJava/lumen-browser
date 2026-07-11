@@ -266,7 +266,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `:is(S)`, `:where(S)`, `:has(S)` | ✅ | full matching; `:where` zero-specificity; `:has` relative, style.rs:7690 |
 | `::before`, `::after` | ✅ | block-level ✅; inline ✅ (display:inline/inline-block in IFC) |
 | `::first-line`, `::first-letter` | 🟡 | parsed + `compute_pseudo_element_style`; segment style-override wiring ⬜ (box_tree.rs handoffs) |
-| `::marker` | 🟡 | parsed + default style; per-rule box styling ⬜ (list-style-image ✅) |
+| `::marker` | ✅ | per-rule box styling ✅ (color/font/content override + content:none suppress); list-style-image ✅; property set restricted to §5.5 (font/color/white-space/direction/unicode-bidi/text-combine-upright/content/animation) |
 | `::selection` | 🟡 | parsed; live selection highlight application ⬜ (Selection API, P3) |
 | `::placeholder` | ⬜ | Pseudo-Elements L4; no `PseudoElementKind::Placeholder` variant |
 | `:nth-child(An+B of S)` | ✅ | "of S" filter via `element_index_filtered`, style.rs:7664 |
