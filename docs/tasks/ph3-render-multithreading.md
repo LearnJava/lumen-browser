@@ -559,11 +559,25 @@ Sub-sliced (each independently shippable into `zcode`), mirroring M0/M1:
         on the UI thread) — the **~404 ms gap / ~2.4 fps** is the number M2.2c must beat
         (target: ~16 ms / 60 fps, scroll unaffected by the burn). No Rust changes, no
         new deps.
-    - **M2.2c-1 — request/reply geometry readback.** Add `Request::Readback { reply:
-      SyncSender }` so a UI-thread caller that needs fresh geometry right after a
-      relayout (hit-test, caret, scrollIntoView) can block for exactly that one
-      result instead of running layout inline. Unblocks routing the geometry-reading
-      sites without changing their observable semantics.
+    - **M2.2c-1 — request/reply geometry readback. ✅ (branch `p1-mt-m2-2c-1`,
+      merged into `zcode`, 2026-07-11).** Added `EngineMsg::Readback { job, reply:
+      SyncSender }` + `EngineThread::readback(job) -> Option<C>` in
+      `crates/shell/src/engine_thread.rs`: a UI-thread caller that needs fresh
+      geometry right after a relayout (hit-test, caret, scrollIntoView) can block
+      for exactly that one result instead of running layout inline. Readback is
+      **not coalesced** and **skips the generation-guard** (the caller is blocking
+      on it), replies directly over a `sync_channel(1)` — never through the
+      latest-wins slot — and never touches `applied_generation`. In a batch it runs
+      in order (after any earlier `submit`), so it observes consistent thread state;
+      a `Shutdown` in the batch drops its `reply` sender → caller unblocks with
+      `None` → falls back to sync. Mechanism-only, mirroring how M2.1 shipped the
+      parked-thread skeleton: the variant/method are `#[allow(dead_code)]` until
+      **M2.2c-3** wires live callers (which needs **M2.2c-2** to move `js_ctx`
+      engine-side first). Covered by 5 new `run_batch_*`/`readback_*` unit tests
+      (execute-and-reply, run-alongside-newest-`Run`, never-coalesce, shutdown-drops-reply,
+      end-to-end block-and-return). No Rust behavior change with the flag off, no new deps.
+      **Unblocks routing** the geometry-reading sites (M2.2c-3) without changing
+      their observable semantics.
     - **M2.2c-2 — move `js_ctx` ownership to the engine thread.** The hard core:
       `js_ctx` is touched by dozens of UI-thread event paths (scroll-Y sync, event
       dispatch, observer delivery, matchMedia, lazy-image drain). Introduce an
