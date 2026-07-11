@@ -1131,6 +1131,40 @@ Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any
       synchronous geometry read served by M2.2c-1's readback.
+      **Site audit (2026-07-11):** the 11 direct form-input `relayout()` callers
+      (`handle_click_at`, `activate_node`, `exec_spell_menu_action`) all mutate the
+      shared layout `Document` directly then relayout with **no** synchronous
+      geometry read afterward — Bucket A, routable exactly like M2.2b's async-safe
+      `relayout_chrome`; the pre-relayout `find_box_rect` reads (color/date/select
+      anchor, range-slider x→value) are against the *old* layout, which is correct.
+      **Bucket B (needs the M2.2c-1 blocking `readback`) is empty for form input:**
+      text typing / contenteditable / `<input>` edits never call `relayout()` inline
+      — they dispatch JS events and the reflow lands in the rAF DOM-dirty flush; the
+      caret is paint-derived, not read back in the handler. The one DOM-mutation site
+      that *does* read a layout product synchronously after its rAF flush is
+      `RedrawRequested` Step 4 (`take_dom_dirty` → Step 5 reads
+      `display_list.is_empty()` for PerformancePaintTiming) — a later sub-slice
+      wiring `readback` there.
+      ✅ **Первый под-срез готов** (branch `p1-mt-m22c3-1`, 2026-07-11): новый
+      хелпер `Lumen::relayout_form()` = `if !submit_relayout_job() { relayout() }`
+      (сиблинг `relayout_chrome`, но с form-control-семантикой в доке) маршрутизирует
+      **7 mouse-click form-control DOM-mutation** сайтов в `handle_click_at` с
+      прямого `self.relayout()` на off-thread: checkbox/radio toggle, color-picker
+      swatch commit, date-picker day commit, `<select>` option choice, `<details>`
+      open toggle, range-slider value. Все семь уже применили мутацию к
+      разделяемому `Arc<Mutex<Document>>` на UI-потоке (виден снимку off-thread
+      job'а, инвариант 1) и **не** читают геометрию следом. Под флагом
+      (`LUMEN_ENGINE_THREAD=1`) reflow уходит на движковый поток и садится через
+      `poll_engine_commit` на несколько кадров позже (тот же контракт, что зум M2.2a
+      и chrome-тогглы M2.2b); без флага (по умолчанию) `submit_relayout_job` → `false`
+      → синхронный `relayout()`, **байт-идентично**. `<details>`-тоггл уже шлёт
+      `toggle`-событие через `route_eval_js` (M2.2c-2d) — оно независимо от layout
+      job'а. No new deps, no `unsafe`. Как и `relayout_chrome` в M2.2b, хелпер —
+      чистая делегация в уже покрытые тестами `submit_relayout_job`/`relayout`
+      (executor-тесты submit/take_committed/generation-guard), собственного
+      unit-теста не требует (нет тест-харнесса `Lumen`). Остаток M2.2c-3:
+      `activate_node`/`exec_spell_menu_action` form-тогглы (Bucket A, слайс 2), затем
+      rAF DOM-dirty flush + paint-timing readback (Bucket B-сайт 12175).
     - **M2.2c-4 — content-visibility as a visible-range message.** Replace
       `maybe_expand_cv_relevant`'s direct `relayout()` with a visible-range message to
       the engine (never a render-thread → layout call, per the brief gotcha); make

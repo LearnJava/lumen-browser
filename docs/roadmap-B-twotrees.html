@@ -617,16 +617,16 @@
       {
        "id": "P3-mt-m22d",
        "title": "MT M2.2d: js_ctx прочь с UI-потока",
-       "status": "planned",
+       "status": "done",
        "size": "M",
-       "note": "M2.2d: снять поле js_ctx с UI-потока под флагом — все call-site'ы уже зашимлены в task/query (2c закрыт 2026-07-10)"
+       "note": "M2.2c-2d ЗАКРЫТ 2026-07-11 (21 под-срез, влиты в main): поле js_ctx под флагом на UI-потоке пусто, Arc живёт в EngineJsState.js; история — docs/tasks/ph3-render-multithreading.md"
       },
       {
        "id": "P3-mt-m22c3",
        "title": "MT M2.2c-3: форм-relayout off-thread",
-       "status": "planned",
+       "status": "active",
        "size": "M",
-       "note": "M2.2c-3: relayout форм-инпута / DOM-мутаций off-thread (через route_query_js/readback, механизм готов в 2c-1)"
+       "note": "M2.2c-3: relayout форм-инпута / DOM-мутаций off-thread. Срез 1 влит 2026-07-11 (p1-mt-m22c3-1): relayout_form() маршрутизирует 7 mouse-click form-control сайтов в handle_click_at. Аудит: Bucket B (readback) для форм-инпута пуст; остаток = activate_node/spell-replace тогглы + rAF paint-timing readback. Механизм readback готов в 2c-1"
       },
       {
        "id": "P3-mt-m23",
