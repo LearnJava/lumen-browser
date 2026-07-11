@@ -7078,6 +7078,29 @@ impl Lumen {
         }
     }
 
+    /// ADR-016 M2.2c-3: route an **async-safe form-control DOM-mutation relayout**
+    /// off the UI thread when the engine thread is enabled, falling back to the
+    /// synchronous [`Self::relayout`] otherwise (the default, so behavior is
+    /// byte-identical unless `LUMEN_ENGINE_THREAD=1`).
+    ///
+    /// "Async-safe" here means the caller already mutated the shared layout
+    /// `Document` (a checkbox/radio `checked` flip, a `<details>` open toggle, a
+    /// range-slider value change, …) directly on the UI thread and is **not**
+    /// followed by a synchronous read of page layout geometry. The mutation is
+    /// therefore visible in the immutable `Arc<Mutex<Document>>` snapshot the
+    /// off-thread job captures, and the reflowed content lands a few frames later
+    /// via [`Self::poll_engine_commit`] — the same contract as the debounced zoom
+    /// (M2.2a) and the chrome-inset toggles ([`Self::relayout_chrome`], M2.2b).
+    ///
+    /// Sites that read geometry synchronously right after the mutation (caret
+    /// placement, `scrollIntoView`, hit-test) cannot use this — they belong to the
+    /// blocking-readback path (`EngineThread::readback`, M2.2c-1) instead.
+    fn relayout_form(&mut self) {
+        if !self.submit_relayout_job() {
+            self.relayout();
+        }
+    }
+
     /// Derive the CSS layout viewport for a relayout (shared by the synchronous
     /// [`Self::relayout`] and the off-thread [`Self::submit_relayout_job`]).
     ///
@@ -13332,7 +13355,8 @@ impl Lumen {
                 forms::set_value(&mut src.document.lock().unwrap(), pn, &css_color);
             }
             self.form_state.entry(pn).or_default().value = css_color;
-            self.relayout();
+            // ADR-016 M2.2c-3: value already in the document; no post-read → off-thread.
+            self.relayout_form();
             return;
         }
         // Any click outside the picker closes it.
@@ -13371,7 +13395,8 @@ impl Lumen {
                         forms::set_value(&mut src.document.lock().unwrap(), dn, &date_str);
                     }
                     self.form_state.entry(dn).or_default().value = date_str;
-                    self.relayout();
+                    // ADR-016 M2.2c-3: async-safe form mutation — see color picker.
+                    self.relayout_form();
                     return;
                 }
                 forms::DatePickerHit::None => {}
@@ -13407,7 +13432,8 @@ impl Lumen {
                         self.form_state.entry(sn).or_default().value = chosen.value.clone();
                     }
                     drop(doc);
-                    self.relayout();
+                    // ADR-016 M2.2c-3: async-safe <select> choice — see color picker.
+                    self.relayout_form();
                 }
             }
             return;
@@ -13622,7 +13648,9 @@ impl Lumen {
                 if let Some(src) = self.layout_source.as_mut() {
                     forms::toggle_checkbox(&mut src.document.lock().unwrap(), id);
                 }
-                self.relayout();
+                // ADR-016 M2.2c-3: the `checked` flip is already in the shared
+                // document; no geometry is read after → route the reflow off-thread.
+                self.relayout_form();
             }
             forms::FormClickAction::ToggleRadio {
                 clicked,
@@ -13631,7 +13659,8 @@ impl Lumen {
                 if let Some(src) = self.layout_source.as_mut() {
                     forms::toggle_checkbox(&mut src.document.lock().unwrap(), clicked);
                 }
-                self.relayout();
+                // ADR-016 M2.2c-3: async-safe form mutation — see ToggleCheckbox.
+                self.relayout_form();
             }
             forms::FormClickAction::OpenColorPicker(id) => {
                 self.color_picker_node = Some(id);
@@ -13679,7 +13708,10 @@ impl Lumen {
                         id.index()
                     ),
                 );
-                self.relayout();
+                // ADR-016 M2.2c-3: <details> open flip already applied to the
+                // document (the routed `toggle` event above only notifies JS); no
+                // geometry is read after → route the reflow off-thread.
+                self.relayout_form();
             }
             forms::FormClickAction::SlideRange(id) => {
                 if let (Some(src), Some(lb)) =
@@ -13693,7 +13725,10 @@ impl Lumen {
                         page_x,
                     );
                 }
-                self.relayout();
+                // ADR-016 M2.2c-3: range value applied to the document (the
+                // pre-relayout `find_box_rect` read is against the old layout to map
+                // the click x → value); no post-relayout read → off-thread.
+                self.relayout_form();
             }
             forms::FormClickAction::SubmitForm(submit_node) => {
                 // Phase 3: HTML5 form submission algorithm integration.
