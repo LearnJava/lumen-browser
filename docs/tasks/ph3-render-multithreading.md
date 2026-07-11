@@ -852,6 +852,34 @@ Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
         `route_query_js_nav_reads_without_handle_default_to_no_op`). Остаток категории sync
         event-dispatch (чистые fire-and-forget void-eval формо-действий: `toggle`/dialog-close,
         ~15 сайтов) — следующие под-срезы 2d перед снятием самого поля.
+        ✅ **Одиннадцатый под-срез готов** (branch `p1-mt-m22d-11`, 2026-07-11):
+        **form-action fire-and-forget void-dispatch** — 4 сайта переведены с прямых
+        `if let Some(ctx) = &self.js_ctx { … }` на `route_eval_js`/`route_task_js`.
+        Сайты: (1) **file-input change** (`open_file_picker`, `main.rs` ~:6907) —
+        `_lumen_deliver_file_list(id, json)`: токены (`register_file_token`) и JSON
+        строятся **на UI-потоке** (регистрация в глобальном реестре happens-before
+        постановки в очередь), сам `eval_js` — через `route_eval_js`; гейт заменён
+        с `if let Some(js)` на `if self.js_ctx.is_some()`, чтобы токены регистрировались
+        только при наличии JS-контекста (байт-идентично флаг-офф). (2) **`<details>`
+        toggle** ×2 — mouse-click `handle_form_click` (`main.rs` ~:13418) и
+        keyboard-`activate_node` (`main.rs` ~:16007) — `dispatchEvent(new Event('toggle'))`
+        (HTML §4.11.1); за каждым идёт синхронный `self.relayout()`, читающий
+        `layout_source.document` (открытость `<details>` уже применена `toggle_details_open`
+        **до** маршрутизации, событие лишь уведомляет JS — read-after-write сохранён).
+        (3) **dialog-close** (`method="dialog"` form-submit, `main.rs` ~:13482) —
+        `fire_dialog_close(dnid, rv)` через `route_task_js`; гейт `(Some(dnid), Some(js))`
+        разбит на внешний `if let Some(dnid)` (ancestor-`<dialog>` обязателен) + owned
+        `rv.to_string()`/`dnid_idx`, переезжающие в `move`-замыкание. Все четыре — чистый
+        void без синхронного чтения результата диспатча следом. Под флагом
+        (`LUMEN_ENGINE_THREAD=1`) диспатч уходит off-UI-thread одним `task`; без флага
+        (по умолчанию) — синхронный вызов по UI-хэндлу, **байт-идентично** прежним
+        `ctx.eval_js`/`js.fire_dialog_close`. `script`/owned-аргументы строятся до
+        маршрутизации, борроу `engine_thread`/`js_ctx` — раздельный. No new deps, no
+        `unsafe`. Механизм не менялся — покрыт существующими route/engine_thread тестами
+        (`route_eval_js_without_handle_is_noop`, `route_task_js_without_handle_is_noop`).
+        Остаётся категория sync event-dispatch (contenteditable-key input-eval, fullscreen-exit
+        lifecycle, per-frame scroll/rAF/paint-timing вызовы в `RedrawRequested`) —
+        следующие под-срезы 2d перед снятием самого поля.
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any
