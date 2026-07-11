@@ -1031,6 +1031,30 @@ Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
         (`switch_tab`: `pause_event_loop`/`unpause_event_loop`, `main.rs` ~:18909/18941
         — завязаны на bg-tab snapshot save/restore) — следующий под-срез 2d, затем
         снятие самого поля `js_ctx` с UI-потока.
+        ✅ **Восемнадцатый под-срез готов** (branch `p1-mt-m22d-18`, 2026-07-11):
+        класс **tab park/unpark** в `switch_tab` — 2 последних прямых
+        `if let Some(js) = &self.js_ctx { … }`-обращения переведены на `route_task_js`.
+        (1) **park** (T0→T1, `main.rs` ~:18938) — `pause_event_loop()` перед
+        `save_page_snapshot()`; под флагом уходит `task`-ом, где `state.js` ещё
+        зеркалит уходящую в фон вкладку (ре-зеркалирование `sync_engine_js_state`
+        встанет в очередь только при загрузке/восстановлении новой) — pause на верном
+        хэндле. (2) **unpark** (T1→T0, `main.rs` ~:18970) — `unpause_event_loop()` +
+        `run_gc_pass(0)` после `restore_page_snapshot()`; последний уже вызвал
+        `sync_engine_js_state()` (зеркалит восстановленный хэндл `task`-ом), а этот
+        `task` встаёт **после** него — unpause+GC на восстановленном хэндле. Оба —
+        fire-and-forget void; disjoint borrow полей `engine_thread`/`js_ctx`. Без флага
+        (по умолчанию) — синхронные вызовы по UI-хэндлу, **байт-идентично** прежним
+        `js.pause_event_loop()`/`js.unpause_event_loop()`/`js.run_gc_pass(0)`.
+        **Не тронут** bg-tab-side `run_gc_pass(1)` (`main.rs` ~:18945) — он читает
+        `bg_tabs[old_id].js_ctx` (снимок запаркованной вкладки), а не `self.js_ctx`;
+        `state.js` движкового потока зеркалит **активную** вкладку, поэтому его нельзя
+        маршрутизировать — остаётся прямым. 1 новый тест
+        (`route_tab_park_unpark_without_handle_default_to_no_op`). No new deps, no
+        `unsafe`. **Прямых `self.js_ctx`-обращений с вызовом методов больше нет** —
+        остаются только `.is_some()`-гейты, `.as_ref()` в маршрутизаторах, `.clone()`/
+        `.take()` и присваивания поля (lifecycle снапшота) → следующий шаг 2d: снятие
+        самого поля `js_ctx` с UI-потока (перенос его lifecycle + snapshot save/restore
+        на движковую сторону).
     - **M2.2c-3 — route form-input / DOM-mutation relayouts off-thread.** Once
       `js_ctx` lives engine-side, the form-control and rAF-DOM-dirty sites become
       engine-thread jobs (mutate DOM → layout → deliver observers there), with any
