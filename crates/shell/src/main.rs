@@ -822,6 +822,10 @@ fn run_window_mode(
         ),
         js_ctx: None,
         js_present: false,
+        raf_pending_flag: None,
+        dom_dirty_flag: None,
+        raf_task_inflight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        raf_drain_gate: false,
         no_scrollbar,
         first_paint_delivered: false,
         first_contentful_paint_delivered: false,
@@ -2069,6 +2073,20 @@ pub(crate) trait PersistentJs: Send + Sync {
     /// Used by the vsync gate: check without consuming so the signal is not lost
     /// when the gate defers firing to the next frame.
     fn has_raf_pending(&self) -> bool;
+    /// ADR-016 M2.3: shared, lock-free handle to the rAF-pending flag.
+    ///
+    /// Returns `None` for runtimes that do not expose it (default). The
+    /// `quickjs` runtime returns a clone of its `Arc<AtomicBool>`, letting the
+    /// UI thread read the flag without a blocking engine-thread `query` — the
+    /// scheduling read must never serialize behind an in-flight (long) JS turn.
+    fn raf_pending_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        None
+    }
+    /// ADR-016 M2.3: shared, lock-free handle to the DOM-dirty flag (companion
+    /// to [`Self::raf_pending_flag`]). `None` when unsupported (default).
+    fn dom_dirty_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        None
+    }
     /// Push a fresh snapshot of layout bounding rects into the JS runtime.
     ///
     /// Called after every `relayout_page`. The JS side uses this for
@@ -2478,6 +2496,12 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn has_raf_pending(&self) -> bool {
         self.rt.has_raf_pending()
+    }
+    fn raf_pending_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        Some(self.rt.raf_pending_flag())
+    }
+    fn dom_dirty_flag(&self) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        Some(self.rt.dom_dirty_flag())
     }
     fn update_layout_rects(&self, rects: HashMap<u32, [f32; 4]>) {
         self.rt.update_layout_rects(rects);
@@ -6315,6 +6339,35 @@ struct Lumen {
     /// `self.js_ctx.is_some()`, поэтому остаются верны и когда под флагом сам `Arc`
     /// уехал на движковый поток (`state.js`), оставив `self.js_ctx == None`.
     js_present: bool,
+    /// ADR-016 M2.3: UI-side lock-free clone of the JS runtime's rAF-pending
+    /// flag (`Some` only when the active tab has a `quickjs` handle **and** the
+    /// engine thread is enabled — the only mode that needs it). Read directly on
+    /// the UI thread to schedule rAF turns without a blocking engine `query`
+    /// that would serialize the winit thread behind an in-flight JS turn.
+    /// Kept in lockstep with the handle by [`Self::set_js_ctx`]; `None` off the
+    /// flag, so the byte-identical single-thread path never consults it.
+    raf_pending_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// ADR-016 M2.3: UI-side lock-free clone of the JS runtime's DOM-dirty flag
+    /// (companion to [`Self::raf_pending_flag`]). Consumed on the UI thread to
+    /// trigger an asynchronous relayout after an off-thread rAF turn mutated the
+    /// DOM, instead of a synchronous read blocked behind that turn.
+    dom_dirty_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// ADR-016 M2.3: `true` while a `run_animation_frame` batch dispatched to the
+    /// engine thread is still executing. Set by the UI thread before firing the
+    /// (fire-and-forget) rAF `task`, cleared by that task on completion. Guards
+    /// against piling a fresh 200 ms rAF turn onto the engine FIFO every 16 ms
+    /// scroll frame: while set, the scroll/redraw path presents the retained
+    /// display list and skips the JS pump, keeping the UI thread responsive.
+    /// Only ever set under `LUMEN_ENGINE_THREAD=1`; stays `false` off the flag.
+    raf_task_inflight: Arc<std::sync::atomic::AtomicBool>,
+    /// ADR-016 M2.3: reserve one `about_to_wait` pass for draining the deferred
+    /// value-returning JS queues after each rAF turn completes, before firing the
+    /// next one. Set when a turn is fired, consumed on the first non-inflight pass
+    /// afterwards (which then runs the [`Self::drain_query_js`] drains with the
+    /// engine free). Without it a continuous rAF loop would re-fire every pass and
+    /// permanently starve notifications/popups/console. UI-thread only, flag-on
+    /// only (stays `false` off the flag).
+    raf_drain_gate: bool,
     /// When true the vertical scrollbar overlay is suppressed entirely.
     /// Set by `--no-scrollbar` CLI flag; used by graphic test pipeline to
     /// avoid scrollbar pixels contaminating the diff against Edge headless.
@@ -7122,6 +7175,130 @@ impl Lumen {
         }
     }
 
+    /// ADR-016 M2.3: `true` while a `run_animation_frame` batch dispatched to the
+    /// engine thread has not yet completed (engine thread present + inflight flag
+    /// set). While inflight the UI thread must not enqueue new blocking JS work —
+    /// it would serialize the winit thread behind the (possibly 200 ms) turn,
+    /// freezing scroll. Always `false` off the flag (no engine thread).
+    fn raf_turn_inflight(&self) -> bool {
+        self.engine_thread.is_some()
+            && self
+                .raf_task_inflight
+                .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// ADR-016 M2.3: consume (clear + return) the rAF-pending flag lock-free via
+    /// the cached UI-side atomic. `false` when no flag is cached (JS-less tab /
+    /// off the flag). No engine `query`, so it never blocks behind an in-flight
+    /// turn — unlike [`route_query_js`]`(… take_raf_pending)`.
+    fn take_raf_pending_lockfree(&self) -> bool {
+        self.raf_pending_flag
+            .as_ref()
+            .is_some_and(|f| f.swap(false, std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// ADR-016 M2.3: value-returning JS drain that is **deferred** (returns
+    /// `None`) while a rAF turn is in flight on the engine thread. The parked
+    /// `about_to_wait` loop issues several blocking `route_query_js` drains each
+    /// pass (canvas bitmaps, history/pushState, traversals, navigation updates);
+    /// under the flag every one of them would otherwise FIFO-serialize behind the
+    /// in-flight (up to ~200 ms) `run_animation_frame` task and freeze the loop —
+    /// exactly the stall M2.3 removes. Skipping a drain merely defers it to the
+    /// next pass after the turn finishes (the short rAF wakeup keeps the loop
+    /// warm). Off the flag `raf_turn_inflight()` is always `false`, so this is
+    /// byte-identical to calling [`route_query_js`] directly.
+    fn drain_query_js<R: Send + 'static>(
+        &self,
+        read: impl FnOnce(&Arc<dyn PersistentJs>) -> R + Send + 'static,
+    ) -> Option<R> {
+        if self.raf_turn_inflight() {
+            return None;
+        }
+        route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), read)
+    }
+
+    /// ADR-016 M2.3: non-consuming peek at the rAF-pending flag lock-free (the
+    /// [`Self::take_raf_pending_lockfree`] counterpart of `has_raf_pending`).
+    /// Used to decide the next parked-loop wakeup without clearing the signal.
+    fn raf_pending_lockfree(&self) -> bool {
+        self.raf_pending_flag
+            .as_ref()
+            .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// ADR-016 M2.3: consume (clear + return) the DOM-dirty flag lock-free via the
+    /// cached UI-side atomic (companion to [`Self::take_raf_pending_lockfree`]).
+    fn take_dom_dirty_lockfree(&self) -> bool {
+        self.dom_dirty_flag
+            .as_ref()
+            .is_some_and(|f| f.swap(false, std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// ADR-016 M2.3: dispatch one `run_animation_frame(raf_ts)` batch to the
+    /// engine thread as a **non-blocking** `task`, marking `raf_task_inflight`
+    /// for its whole duration so the scroll/redraw path presents the retained
+    /// display list (and skips the JS pump) until it finishes. The caller must
+    /// have already consumed the pending flag and updated `last_raf_batch_ms`.
+    /// Only reached under `LUMEN_ENGINE_THREAD=1` (engine thread present).
+    fn fire_raf_turn_async(&self, raf_ts: f64) {
+        let Some(engine) = self.engine_thread.as_ref() else {
+            return;
+        };
+        let inflight = Arc::clone(&self.raf_task_inflight);
+        inflight.store(true, std::sync::atomic::Ordering::Release);
+        engine.task(move |state| {
+            if let Some(js) = &state.js {
+                js.run_animation_frame(raf_ts);
+            }
+            inflight.store(false, std::sync::atomic::Ordering::Release);
+        });
+    }
+
+    /// ADR-016 M2.3: engine-thread rAF pump step shared by `RedrawRequested`
+    /// Step 3.1/4 and the `about_to_wait` parked pump. Runs **only** under the
+    /// flag (`self.engine_thread.is_some()`); the single-thread path keeps its
+    /// original synchronous sequence for byte-identical behavior.
+    ///
+    /// Non-blocking by construction: (1) when a rAF batch is due and none is
+    /// already running, consume the pending flag lock-free and fire the turn
+    /// async ([`Self::fire_raf_turn_async`]); (2) when no turn is running,
+    /// consume the DOM-dirty flag lock-free and, if a completed turn mutated the
+    /// DOM, submit an **async** relayout ([`Self::relayout_raf_dirty`]) whose
+    /// result lands via [`Self::poll_engine_commit`]. Neither step issues a
+    /// blocking engine `query`, so the winit thread never stalls behind the JS
+    /// turn and scroll stays smooth. Returns `true` if a relayout was submitted
+    /// (caller requests a redraw).
+    fn pump_raf_engine_thread(&mut self, raf_due: bool, timestamp_ms: f64) -> bool {
+        // A turn still running hasn't finished its DOM mutations and holds the
+        // engine FIFO — leave both the dirty check and the next fire to a later
+        // pass (the flag is not cleared, so the pending signal survives).
+        if self.raf_turn_inflight() {
+            return false;
+        }
+        // Consume a completed turn's DOM mutations first (before any re-fire) so a
+        // continuous rAF-DOM loop still relayouts each cycle.
+        let mut submitted = false;
+        if self.take_dom_dirty_lockfree() {
+            self.relayout_raf_dirty();
+            submitted = true;
+        }
+        // Drain gate: the first non-inflight pass after a turn completes is
+        // reserved for the deferred `drain_query_js` queues (which run this pass,
+        // engine now free) — hold off firing the next turn until the following
+        // pass so a continuous rAF loop can't starve notifications/popups/console.
+        if self.raf_drain_gate {
+            self.raf_drain_gate = false;
+            return submitted;
+        }
+        if raf_due && self.take_raf_pending_lockfree() {
+            self.last_raf_batch_ms = timestamp_ms;
+            let raf_ts = if self.deterministic { 0.0 } else { -1.0 };
+            self.fire_raf_turn_async(raf_ts);
+            self.raf_drain_gate = true;
+        }
+        submitted
+    }
+
     /// ADR-016 M2.2c-3: route the **rAF DOM-dirty flush that is followed by a
     /// synchronous read of a layout product** off the UI thread via the blocking
     /// request/reply [`engine_thread::EngineThread::readback`], falling back to the
@@ -7502,6 +7679,12 @@ impl Lumen {
             // Flag on: the handle lives engine-side; deposit it into
             // `EngineJsState.js` and leave the UI field empty.
             Some(engine) => {
+                // ADR-016 M2.3: before the handle moves engine-side, cache
+                // lock-free clones of its rAF-pending / DOM-dirty flags so the
+                // UI thread can schedule + consume rAF turns without a blocking
+                // engine `query`. `None` clears them (blank/JS-less tab).
+                self.raf_pending_flag = handle.as_ref().and_then(|h| h.raf_pending_flag());
+                self.dom_dirty_flag = handle.as_ref().and_then(|h| h.dom_dirty_flag());
                 self.js_ctx = None;
                 engine.task(move |state| state.js = handle);
             }
@@ -9046,10 +9229,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // ADR-016 M2.2c-2d (20): direct `self.js_ctx` read → `route_query_js`.
                 // Flag-off (default) `js.map(...).unwrap_or((-1,-1))` = the old
                 // `map_or((-1,-1), ...)`; under the flag it is a blocking `query`.
-                let js_heap = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-                    j.debug_js_heap()
-                })
-                .unwrap_or((-1, -1));
+                let js_heap = self.drain_query_js(|j| j.debug_js_heap()).unwrap_or((-1, -1));
                 eprintln!(
                     "MEM_REPORT dl_cmds={} prev_styles={} dl_cache={:.1}MB img_cache={}/{:.1}MB prefetch={}/{:.1}MB web_fonts={}/{:.1}MB gifs={}/{:.1}MB js_malloc={:.1}MB js_used={:.1}MB {}",
                     self.display_list.len(),
@@ -9120,7 +9300,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // in lockstep with `self.js_ctx` by `set_js_ctx`, so this is byte-identical to
         // the old gate in both modes; the routed calls below already ignored the passed
         // clone under the flag.
-        if self.js_present {
+        //
+        // ADR-016 M2.3: under the flag, skip the whole pump while a rAF turn is
+        // still running on the engine thread — its `route_query_js` reads would
+        // otherwise block behind the in-flight `run_animation_frame` task and
+        // freeze the parked loop. The timer/nav work simply runs one pass later
+        // (the engine thread + `lumen-js` thread are busy anyway). Off the flag
+        // `raf_turn_inflight()` is always `false`, so the gate is byte-identical.
+        if self.js_present && !self.raf_turn_inflight() {
             // ADR-016 M2.2c-2d: per-tick pump-батч (fire-and-forget void) через
             // `route_task_js`. Под флагом (`LUMEN_ENGINE_THREAD=1`) уходит off-UI-thread
             // одним `task` (порядок вызовов внутри сохранён), а последующие
@@ -9185,48 +9372,56 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // (при отсутствующем хэндле `route_query_js` → `None` → `unwrap_or(false)`,
         // как прежняя ветка `js_ctx == None`).
         let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
-        let raf_due =
-            route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-                j.has_raf_pending()
-            })
-            .unwrap_or(false);
-        let raf_dom_dirty = if raf_due && now_ms - self.last_raf_batch_ms >= RAF_MIN_INTERVAL_MS {
-            // `take_raf_pending` очищает флаг (результат отбрасывается), но обязано
-            // завершиться **до** `run_animation_frame` (иначе очистка обгонит перевзвод
-            // флага из вложенного rAF) — блокирующий `query` держит этот порядок под флагом.
-            route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-                j.take_raf_pending()
-            });
-            self.last_raf_batch_ms = now_ms;
-            let raf_ts = if self.deterministic { 0.0 } else { -1.0 };
-            route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                j.run_animation_frame(raf_ts);
-            });
-            route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-                j.take_dom_dirty()
-            })
-            .unwrap_or(false)
+        if self.engine_thread.is_some() {
+            // ADR-016 M2.3 (flag on): async parked-loop rAF pump — the
+            // counterpart of `RedrawRequested` Step 3.1/4. `pump_raf_engine_thread`
+            // fires the batch off-thread (at most one turn in flight) and submits
+            // an async relayout on a completed DOM-dirty turn, all lock-free —
+            // never a blocking engine `query` that would stall the parked loop
+            // behind the JS turn.
+            let raf_due = now_ms - self.last_raf_batch_ms >= RAF_MIN_INTERVAL_MS;
+            if self.pump_raf_engine_thread(raf_due, now_ms) {
+                self.request_redraw();
+            }
+            // Keep the loop warm while rAF work remains: a batch is queued, or a
+            // turn is still running whose dom-dirty must be re-checked when it
+            // finishes. Peek lock-free (does not consume the pending flag).
+            if self.raf_pending_lockfree() || self.raf_turn_inflight() {
+                let due_in_ms = (self.last_raf_batch_ms + RAF_MIN_INTERVAL_MS - now_ms).max(0.0);
+                let raf_wakeup = std::time::Instant::now()
+                    + std::time::Duration::from_millis(due_in_ms as u64 + 1);
+                next_wakeup = Some(next_wakeup.map_or(raf_wakeup, |t| t.min(raf_wakeup)));
+            }
         } else {
-            false
-        };
-        if raf_dom_dirty {
-            // rAF callback changed the DOM — rebuild layout and paint for real.
-            // ADR-016 M2.2c-3: async-safe (no synchronous geometry read follows —
-            // only `request_redraw`), so route the reflow off the UI thread under
-            // the flag; falls back to the synchronous `relayout` off the flag.
-            self.relayout_raf_dirty();
-            self.request_redraw();
-        }
-        if route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-            j.has_raf_pending()
-        })
-        .unwrap_or(false)
-        {
-            let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
-            let due_in_ms = (self.last_raf_batch_ms + RAF_MIN_INTERVAL_MS - now_ms).max(0.0);
-            let raf_wakeup = std::time::Instant::now()
-                + std::time::Duration::from_millis(due_in_ms as u64 + 1);
-            next_wakeup = Some(next_wakeup.map_or(raf_wakeup, |t| t.min(raf_wakeup)));
+            // Flag off (default): original synchronous pump, byte-identical.
+            let raf_due = self
+                .js_ctx
+                .as_ref()
+                .is_some_and(|j| j.has_raf_pending());
+            let raf_dom_dirty = if raf_due && now_ms - self.last_raf_batch_ms >= RAF_MIN_INTERVAL_MS {
+                if let Some(j) = self.js_ctx.as_ref() {
+                    j.take_raf_pending();
+                }
+                self.last_raf_batch_ms = now_ms;
+                let raf_ts = if self.deterministic { 0.0 } else { -1.0 };
+                if let Some(j) = self.js_ctx.as_ref() {
+                    j.run_animation_frame(raf_ts);
+                }
+                self.js_ctx.as_ref().is_some_and(|j| j.take_dom_dirty())
+            } else {
+                false
+            };
+            if raf_dom_dirty {
+                // rAF callback changed the DOM — rebuild layout and paint for real.
+                self.relayout_raf_dirty();
+                self.request_redraw();
+            }
+            if self.js_ctx.as_ref().is_some_and(|j| j.has_raf_pending()) {
+                let due_in_ms = (self.last_raf_batch_ms + RAF_MIN_INTERVAL_MS - now_ms).max(0.0);
+                let raf_wakeup = std::time::Instant::now()
+                    + std::time::Duration::from_millis(due_in_ms as u64 + 1);
+                next_wakeup = Some(next_wakeup.map_or(raf_wakeup, |t| t.min(raf_wakeup)));
+            }
         }
         // ADR-016 M2.2: apply any off-thread layout result the engine thread has
         // committed since the last iteration (no-op when the engine thread is off).
@@ -9284,10 +9479,10 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // без флага (по умолчанию) — `js.map(read)`, байт-идентично прежнему
         // `js_ctx.map(flush_canvas_updates)`. `unwrap_or_default` на `None` (нет
         // хэндла / состояние не зеркалировано / поток завершён) даёт пустой дренаж.
-        let canvas_updates = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-            j.flush_canvas_updates()
-        })
-        .unwrap_or_default();
+        // ADR-016 M2.3: `drain_query_js` defers this blocking read while a rAF
+        // turn is inflight (would freeze the parked loop behind it); off the flag
+        // it is byte-identical to the former direct `route_query_js`.
+        let canvas_updates = self.drain_query_js(|j| j.flush_canvas_updates()).unwrap_or_default();
         if !canvas_updates.is_empty() {
             if let Some(r) = self.renderer.as_mut() {
                 for (nid, w, h, rgba) in &canvas_updates {
@@ -9319,10 +9514,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // `unwrap_or_default` = пустой дренаж (как ветка `js_ctx == None`).
         #[cfg(feature = "quickjs")]
         {
-            let updates = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-                j.take_history_url_updates()
-            })
-            .unwrap_or_default();
+            let updates = self.drain_query_js(|j| j.take_history_url_updates()).unwrap_or_default();
             for (is_push, url, new_state_json) in updates {
                 if is_push {
                     // pushState: save current state to nav_back as same-doc entry.
@@ -9360,10 +9552,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // пустой дренаж. Собираем до `&mut self`-мутаций (`navigate_by`).
         #[cfg(feature = "quickjs")]
         {
-            let traversals = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-                j.take_history_traversals()
-            })
-            .unwrap_or_default();
+            let traversals = self.drain_query_js(|j| j.take_history_traversals()).unwrap_or_default();
             for delta in traversals {
                 self.navigate_by(delta);
             }
@@ -9419,10 +9608,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             // байт-идентично прежнему `js_ctx.map(take_nav_updates)`. `None`
             // (нет UI-хэндла / состояние не зеркалировано / поток завершён) →
             // `unwrap_or_default` даёт пустой дренаж, как и прежняя ветка `None`.
-            let navs = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-                j.take_nav_updates()
-            })
-            .unwrap_or_default();
+            let navs = self.drain_query_js(|j| j.take_nav_updates()).unwrap_or_default();
             for (action_code, url, key, data) in navs {
                 match action_code {
                     0 if !url.is_empty() => self.navigate_to(PageSource::Url(url)),
@@ -9684,11 +9870,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // Web Notifications API: deliver pending OS notifications queued by JS.
         // ADR-016 M2.2d: value-drain через `route_query_js` (под флагом — off-UI-thread
         // `query`; без флага — байт-идентично прежнему `js.take_notification_requests()`).
-        for (title, body) in
-            route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-                j.take_notification_requests()
-            })
-            .unwrap_or_default()
+        for (title, body) in self.drain_query_js(|j| j.take_notification_requests()).unwrap_or_default()
         {
             notification::show_os_notification(&title, &body);
         }
@@ -9698,10 +9880,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // stays visible while the new tab loads.
         // ADR-016 M2.2d: value-drain через `route_query_js`.
         {
-            let popups = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-                j.take_window_open_requests()
-            })
-            .unwrap_or_default();
+            let popups = self.drain_query_js(|j| j.take_window_open_requests()).unwrap_or_default();
             for (url, _target, _width, _height) in popups {
                 self.open_new_tab();
                 let url = if url.is_empty() {
@@ -9716,11 +9895,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // Fullscreen API: apply OS fullscreen on requestFullscreen() / exitFullscreen().
         // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(feature = "quickjs")]
-        for (enter, nid) in
-            route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-                j.take_fullscreen_requests()
-            })
-            .unwrap_or_default()
+        for (enter, nid) in self.drain_query_js(|j| j.take_fullscreen_requests()).unwrap_or_default()
         {
             self.fullscreen_nid = if enter { Some(nid) } else { None };
             let target = if enter {
@@ -9784,10 +9959,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // Print API: window.print() exports current document as PDF (W-2).
         // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(feature = "quickjs")]
-        for req in route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-            j.take_print_requests()
-        })
-        .unwrap_or_default()
+        for req in self.drain_query_js(|j| j.take_print_requests()).unwrap_or_default()
         {
             self.handle_print_request(&req);
         }
@@ -9797,10 +9969,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(feature = "quickjs")]
         {
-            let focus_reqs = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-                j.take_focus_requests()
-            })
-            .unwrap_or_default();
+            let focus_reqs = self.drain_query_js(|j| j.take_focus_requests()).unwrap_or_default();
             if !focus_reqs.is_empty() {
                 // Only the last request in the batch matters.
                 if let Some(last_req) = focus_reqs.into_iter().last() {
@@ -9824,10 +9993,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(feature = "quickjs")]
         {
-            let events = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-                j.take_view_transition_events()
-            })
-            .unwrap_or_default();
+            let events = self.drain_query_js(|j| j.take_view_transition_events()).unwrap_or_default();
             for event in events {
                 match event {
                     ViewTransitionEvent::Begin => {
@@ -9862,10 +10028,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // DevTools console: drain JS console.log/warn/error messages into the panel.
         // ADR-016 M2.2d: value-drain через `route_query_js`.
         {
-            let msgs = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-                j.take_console_messages()
-            })
-            .unwrap_or_default();
+            let msgs = self.drain_query_js(|j| j.take_console_messages()).unwrap_or_default();
             if !msgs.is_empty() {
                 self.devtools_console.push_batch(msgs);
                 if self.devtools_console.visible {
@@ -9888,10 +10051,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // байт-идентично.
         #[cfg(feature = "quickjs")]
         {
-            let scroll_reqs = route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-                j.take_scroll_requests()
-            })
-            .unwrap_or_default();
+            let scroll_reqs = self.drain_query_js(|j| j.take_scroll_requests()).unwrap_or_default();
             if !scroll_reqs.is_empty()
                 && let Some(lb) = self.layout_box.as_mut()
             {
@@ -9936,11 +10096,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // scroll_y directly (CSS Scroll Behavior L1 §3).
         // ADR-016 M2.2d: value-drain через `route_query_js`.
         #[cfg(feature = "quickjs")]
-        for (target_y, smooth) in
-            route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-                j.take_page_scroll_requests()
-            })
-            .unwrap_or_default()
+        for (target_y, smooth) in self.drain_query_js(|j| j.take_page_scroll_requests()).unwrap_or_default()
         {
             if smooth {
                 self.start_smooth_scroll(target_y);
@@ -12269,49 +12425,57 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // последующий Step 4 `take_dom_dirty`-query встаёт после батч-`task`);
                 // без флага (по умолчанию) — прежние синхронные вызовы, байт-идентично.
                 let raf_due = timestamp_ms - self.last_raf_batch_ms >= RAF_MIN_INTERVAL_MS;
-                if raf_due
-                    && route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-                        j.has_raf_pending()
+                if self.engine_thread.is_some() {
+                    // ADR-016 M2.3 (flag on): async rAF pump — never block the
+                    // redraw on the JS turn. `pump_raf_engine_thread` fires the
+                    // batch off-thread (guarded so at most one 200 ms turn is in
+                    // flight, regardless of scroll cadence) and, when a completed
+                    // turn left the DOM dirty, submits an **async** relayout whose
+                    // result lands via `poll_engine_commit`. Step 5's
+                    // `display_list.is_empty()` read may then latch paint-timing a
+                    // frame late (acceptable under the async contract) — the
+                    // decisive win is that scroll no longer stalls behind the turn.
+                    if self.pump_raf_engine_thread(raf_due, timestamp_ms) {
+                        self.request_redraw();
+                    }
+                } else {
+                    // Flag off (default): byte-identical synchronous path.
+                    if raf_due
+                        && route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                            j.has_raf_pending()
+                        })
+                        .unwrap_or(false)
+                    {
+                        // Consume the flag and fire the batch (former direct call).
+                        route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                            j.take_raf_pending()
+                        });
+                        self.last_raf_batch_ms = timestamp_ms;
+                        let raf_ts = if self.deterministic { 0.0 } else { -1.0 };
+                        route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
+                            j.run_animation_frame(raf_ts);
+                        });
+                    }
+                    // BUG-271: callbacks that remain queued (animation loop or deferred
+                    // batch) are fired by the `about_to_wait` rAF pump on a WaitUntil timer
+                    // — NOT by an unconditional `request_redraw` here. A pure rAF loop that
+                    // never mutates the DOM must not force a 60 fps repaint cycle; loops that
+                    // do mutate get a relayout + real paint from the pump.
+
+                    // Step 4: layout invalidation — если rAF-callback изменил DOM
+                    // (setAttribute/textContent/appendChild/etc.), делаем relayout
+                    // прежде чем красить, чтобы paint отражал актуальный DOM.
+                    // relayout() also delivers ResizeObserver + IntersectionObserver.
+                    // Step 5 below reads `display_list.is_empty()` synchronously
+                    // (PerformancePaintTiming), so this reflow is the synchronous
+                    // `relayout` (no engine thread to defer to).
+                    if route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
+                        j.take_dom_dirty()
                     })
                     .unwrap_or(false)
-                {
-                    // Consume the flag and fire the batch. `take_raf_pending` via the
-                    // blocking `query` keeps the clear ordered **before**
-                    // `run_animation_frame` under the flag; off the flag it is the
-                    // former direct call.
-                    route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-                        j.take_raf_pending()
-                    });
-                    self.last_raf_batch_ms = timestamp_ms;
-                    let raf_ts = if self.deterministic { 0.0 } else { -1.0 };
-                    route_task_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), move |j| {
-                        j.run_animation_frame(raf_ts);
-                    });
-                }
-                // BUG-271: callbacks that remain queued (animation loop or deferred
-                // batch) are fired by the `about_to_wait` rAF pump on a WaitUntil timer
-                // — NOT by an unconditional `request_redraw` here. A pure rAF loop that
-                // never mutates the DOM must not force a 60 fps repaint cycle; loops that
-                // do mutate get a relayout + real paint from the pump.
-
-                // Step 4: layout invalidation — если rAF-callback изменил DOM
-                // (setAttribute/textContent/appendChild/etc.), делаем relayout
-                // прежде чем красить, чтобы paint отражал актуальный DOM.
-                // relayout() also delivers ResizeObserver + IntersectionObserver.
-                // ADR-016 M2.2c-2c: `take_dom_dirty` через `route_query_js` — под
-                // флагом чтение упорядочено за уже отправленными `task`; без флага
-                // (`unwrap_or(false)`) байт-идентично прежнему `is_some_and`.
-                if route_query_js(self.engine_thread.as_ref(), self.js_ctx.as_ref(), |j| {
-                    j.take_dom_dirty()
-                })
-                .unwrap_or(false)
-                {
-                    // ADR-016 M2.2c-3: Step 5 below reads `display_list.is_empty()`
-                    // synchronously (PerformancePaintTiming), so this reflow cannot be
-                    // deferred. Under the flag it runs on the engine thread via a
-                    // blocking `readback` (Bucket B); off the flag it is the former
-                    // synchronous `relayout`.
-                    self.relayout_raf_dirty_readback();
+                    {
+                        self.relayout_raf_dirty_readback();
+                    }
                 }
 
                 // Step 5: PerformancePaintTiming (W3C Paint Timing §2).

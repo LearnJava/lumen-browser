@@ -16861,6 +16861,37 @@ mod tests {
     }
 
     #[test]
+    fn raf_pending_flag_clone_observes_and_clears() {
+        // ADR-016 M2.3: the UI thread reads a cloned `Arc<AtomicBool>` of the
+        // rAF-pending flag lock-free (no engine-thread round-trip). The clone
+        // must reflect both the mark (requestAnimationFrame) and the clear
+        // (take_raf_pending) since it aliases the same atomic.
+        use std::sync::atomic::Ordering;
+        let rt = runtime_with_dom(make_doc());
+        let flag = rt.raf_pending_flag();
+        assert!(!flag.load(Ordering::Relaxed), "clean at start");
+        rt.eval("requestAnimationFrame(function(){})").unwrap();
+        assert!(flag.load(Ordering::Relaxed), "clone observes the mark");
+        assert!(rt.take_raf_pending());
+        assert!(!flag.load(Ordering::Relaxed), "clone observes the clear");
+    }
+
+    #[test]
+    fn dom_dirty_flag_clone_observes_and_clears() {
+        // ADR-016 M2.3: companion lock-free clone of the DOM-dirty flag, used to
+        // trigger an async relayout after an off-thread rAF turn mutated the DOM.
+        use std::sync::atomic::Ordering;
+        let rt = runtime_with_dom(make_doc());
+        let flag = rt.dom_dirty_flag();
+        let _ = rt.take_dom_dirty(); // clear any load-time dirtiness
+        assert!(!flag.load(Ordering::Relaxed), "clean after initial take");
+        rt.eval("document.body.setAttribute('data-x', '1')").unwrap();
+        assert!(flag.load(Ordering::Relaxed), "clone observes the DOM mutation");
+        assert!(rt.take_dom_dirty());
+        assert!(!flag.load(Ordering::Relaxed), "clone observes the clear");
+    }
+
+    #[test]
     fn raf_run_calls_callback_with_timestamp() {
         let rt = runtime_with_dom(make_doc());
         rt.eval("var _raf_ts = -1; requestAnimationFrame(function(t){ _raf_ts = t; })").unwrap();

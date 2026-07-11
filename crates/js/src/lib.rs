@@ -1759,6 +1759,31 @@ impl QuickJsRuntime {
         self.raf_pending.load(Ordering::Relaxed)
     }
 
+    /// ADR-016 M2.3: shared handle to the `requestAnimationFrame`-pending flag.
+    ///
+    /// The flag is a plain `AtomicBool` (set by the `_lumen_mark_raf_pending`
+    /// primitive on the JS thread, cleared by [`Self::take_raf_pending`]), so a
+    /// clone of the `Arc` can be read **lock-free from any thread** — in
+    /// particular the UI/winit thread, even when the runtime handle itself lives
+    /// on the engine thread (`LUMEN_ENGINE_THREAD=1`). The shell uses this to
+    /// schedule rAF turns without a blocking `query` round-trip that would
+    /// serialize the UI thread behind an in-flight (possibly long) JS turn.
+    pub fn raf_pending_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.raf_pending)
+    }
+
+    /// ADR-016 M2.3: shared handle to the DOM-dirty flag (companion to
+    /// [`Self::raf_pending_flag`]).
+    ///
+    /// Set on the JS thread whenever a DOM mutation invalidates layout, cleared
+    /// by [`Self::take_dom_dirty`]. A cloned `Arc` lets the UI thread observe /
+    /// consume the flag lock-free, so a rAF turn's DOM mutations trigger an
+    /// asynchronous relayout on a later loop pass instead of a synchronous read
+    /// blocked behind the turn.
+    pub fn dom_dirty_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.dom_dirty)
+    }
+
     /// Take the next timer wakeup as Unix epoch ms, clearing the stored value.
     ///
     /// Called by the shell event loop in `about_to_wait` to schedule

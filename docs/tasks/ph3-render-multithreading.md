@@ -1219,12 +1219,51 @@ Sub-sliced (each independently shippable into `main`), mirroring M0/M1:
       `maybe_expand_cv_relevant`'s direct `relayout()` with a visible-range message to
       the engine (never a render-thread → layout call, per the brief gotcha); make
       the ScrollTimeline step tolerate a one-frame-late cv layout.
-- **M2.3 — synchronous readback + acceptance.** `--screenshot`, `run.py --ipc`,
-  CDP `Page.captureScreenshot` become `Request::Readback { reply }` messages
-  (audit all `screenshot_*` sites first — most are already CPU per the M1.1
-  discovery). Acceptance: a 200 ms JS busy-loop no longer freezes input/scroll;
-  `ENGINE_SUMMARY` p95 off the UI thread; graphic tests green; idle CPU
-  unchanged (BUG-271); no new `unsafe`.
+- **M2.3 — synchronous readback + acceptance. ✅ (branch `p1-mt-m23`, 2026-07-12).**
+  - **Screenshot readback audit — no code needed (confirms M1.1).** Every
+    readback surface (`--screenshot`/`run_screenshot`, the live `--ipc`/SDC-1b
+    `render_current_page_to_png`, CDP `Page.captureScreenshot`) renders the
+    UI-side `self.display_list` through `Renderer::render_to_image_cpu`, never
+    the windowed GL backend. So the brief's `Request::Readback` wiring is moot —
+    the CPU path already reads consistent committed state on the UI thread.
+  - **Acceptance root-cause + fix.** The measured freeze (baseline flag-on
+    ~2.4 fps / ~404 ms gap — the same as single-thread) was **not** the busy JS
+    thread but the UI thread issuing blocking engine `query`s (rAF scheduling
+    reads + the ~13 value-returning `about_to_wait` drains) that FIFO-serialize
+    behind the in-flight 200 ms `run_animation_frame` **task** on the engine
+    thread, plus the `RedrawRequested` Step 4 blocking `readback`. Fix (flag-on
+    only; the single-thread path keeps its exact synchronous sequence, so
+    behavior is byte-identical off the flag):
+    - Lock-free UI-side clones of the JS `raf_pending` / `dom_dirty`
+      `Arc<AtomicBool>` (`QuickJsRuntime::raf_pending_flag`/`dom_dirty_flag`,
+      cached in `set_js_ctx`) — scheduling reads never round-trip the engine.
+    - `raf_task_inflight` guard: `run_animation_frame` is fired as a
+      **fire-and-forget** `task` (`fire_raf_turn_async`) that marks the flag for
+      its whole duration; at most one 200 ms turn is queued regardless of scroll
+      cadence. Both `RedrawRequested` Step 3.1/4 and the `about_to_wait` pump go
+      through `pump_raf_engine_thread`: dom-dirty relayout is **async**
+      (`relayout_raf_dirty` submit, not `readback`) so Step 5 paint-timing may
+      latch a frame late (acceptable under the async contract).
+    - `drain_query_js` defers every value-returning `about_to_wait` drain
+      (canvas/history/traversals/navs/notifications/popups/fullscreen/print/
+      focus/view-transition/console/scroll — all read shared state, so they
+      block only on the FIFO) while a turn is inflight; a `raf_drain_gate`
+      reserves the first post-turn pass to flush them so a continuous rAF loop
+      can't starve them.
+  - **Measured (Windows, dev-release, 6 s, 30 wheel ticks/s, `samples/mt-busy-loop.html`,
+    `LUMEN_ENGINE_THREAD=1 LUMEN_RENDER_THREAD=1`):** **~25.8 fps**, gap
+    **p50 34.6 / p95 80.6 / max 116.6 ms**, scroll travels **46 200 px** — vs
+    the frozen baseline **~2.4 fps / 404 ms / 4 200 px**, and matching the
+    non-stalled control (`BUSY_MS=0`, ~28 fps / 36 ms). Flag **off** re-measured
+    identical to baseline (**~2.3 fps / 411 ms**) — byte-identical single-thread
+    path preserved. `no new unsafe`; idle CPU unaffected (no new polling — the
+    parked-loop wakeup logic is unchanged for the no-rAF case, BUG-271). 2 new
+    `lumen-js` unit tests (`raf_pending_flag`/`dom_dirty_flag` clone observes
+    mark+clear); clippy `-p lumen-js -p lumen-shell` green.
+  - **Remaining (not this slice):** the parked loop still iterates while a turn
+    runs (WaitUntil ~16 ms) rather than sleeping until the turn commits — a
+    later slice can wake on an `EventLoopProxy` from the engine thread. `M3` blit
+    scroll is the next milestone.
 
 ### M3 — tiles + blit scroll (`TileGrid` revival, L)
 
