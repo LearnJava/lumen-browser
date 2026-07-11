@@ -626,7 +626,7 @@
        "title": "MT M2.2c-3: форм-relayout off-thread",
        "status": "active",
        "size": "M",
-       "note": "M2.2c-3: relayout форм-инпута / DOM-мутаций off-thread. Срез 1 влит 2026-07-11 (p1-mt-m22c3-1): relayout_form() маршрутизирует 7 mouse-click form-control сайтов в handle_click_at. Аудит: Bucket B (readback) для форм-инпута пуст; остаток = activate_node/spell-replace тогглы + rAF paint-timing readback. Механизм readback готов в 2c-1"
+       "note": "M2.2c-3: relayout форм-инпута / DOM-мутаций off-thread. Срезы 1-2 влиты 2026-07-11 (p1-mt-m22c3-1/-2): relayout_form() маршрутизирует все 11 form-input сайтов — 7 mouse-click в handle_click_at (срез 1) + 3 keyboard-activate в activate_node + spellcheck-replace в exec_spell_menu_action (срез 2). Bucket A form-input исчерпан. Остаток = rAF DOM-dirty flush + paint-timing readback (Bucket B-сайт 12175). Механизм readback готов в 2c-1"
       },
       {
        "id": "P3-mt-m23",
